@@ -55,7 +55,7 @@ function expand(title: string): void {
   fireEvent.click(within(card).getByRole("button", { name: /Details/ }));
 }
 
-describe("Diagnostics (B2 contract)", () => {
+describe("Diagnostics", () => {
   it("guidance-only problems show the objects and a copyable command, and no Fix button", async () => {
     stubApi({ "/api/diagnostics": result([guidance, pods]) });
     renderPage(<TroubleshootingPage />);
@@ -123,7 +123,7 @@ describe("Diagnostics (B2 contract)", () => {
     expect(screen.getByRole("button", { name: "Fix" })).toHaveAttribute("aria-disabled", "true");
   });
 
-  it("a teammate's running operation disables Fix with the reason (R4b c, N1)", async () => {
+  it("a teammate's running operation disables Fix with the reason", async () => {
     stubApi({ "/api/diagnostics": result([fixable]) });
     renderPage(<TroubleshootingPage />, "/", {
       operation: async () => ({ inProgress: true, operation: { id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: new Date().toISOString() } }),
@@ -136,7 +136,7 @@ describe("Diagnostics (B2 contract)", () => {
     expect(await screen.findByRole("tooltip")).toHaveTextContent(/alice is running "Update to nightly"/);
   });
 
-  it("an expired session disables Fix at once (R4b c)", async () => {
+  it("an expired session disables Fix at once", async () => {
     stubApi({
       "/api/diagnostics": result([fixable]),
       "/api/user/permissions": () => new Response("<html>Log In</html>", { status: 403, headers: { "Content-Type": "text/html" } }),

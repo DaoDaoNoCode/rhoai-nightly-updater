@@ -55,7 +55,7 @@ describe("operationReducer", () => {
     expect(operationReducer(s, { type: "dismissTimeout" }).reconcile.timedOut).toBe(false);
   });
 
-  it("never finishes a detached run on the old CSV's Succeeded while the server may still run it (R4b a)", () => {
+  it("never finishes a detached run on the old CSV's Succeeded while the server may still run it", () => {
     let s = operationReducer(initialOperationState(), { type: "start", id: 1, kind: "update", source: "stream", now: 100, baseline: "rhods-operator.3.6.0|old|sha256:old" });
     s = operationReducer(s, { type: "bindServerId", id: 1, serverId: "op-1" });
     s = operationReducer(s, { type: "end", id: 1, outcome: { status: "detached", reason: "connection_lost", message: "lost" }, now: 500 });
@@ -71,14 +71,14 @@ describe("operationReducer", () => {
     expect(done.reconcile).toMatchObject({ active: false, finished: true, sawChange: true, result: "succeeded" });
   });
 
-  it("turns a detached run into a failed one when the server reports the operation failed (N4)", () => {
+  it("turns a detached run into a failed one when the server reports the operation failed", () => {
     let s = operationReducer(started(), { type: "end", id: 1, outcome: { status: "detached", reason: "stalled", message: "x" }, now: 500 });
     s = operationReducer(s, { type: "serverSettled", now: 600, result: { success: false, message: "CSV failed; previous operator restored" } });
     expect(s.reconcile).toMatchObject({ active: false, finished: false, awaitingServer: false });
     expect(s.run?.outcome).toMatchObject({ status: "failed", message: "CSV failed; previous operator restored", rejected: false });
   });
 
-  it("shows a failed run when a reloaded tab learns the operation failed (R7 M1)", () => {
+  it("shows a failed run when a reloaded tab learns the operation failed", () => {
     // restoreReconcile after a reload: tracking only, no run.
     let s: OperationState = { ...initialOperationState(), reconcile: { ...initialOperationState().reconcile, active: true, startTime: 100, kind: "reinstall", awaitingServer: true, result: "unknown" as const, serverId: "op-7" } };
     s = operationReducer(s, { type: "serverSettled", now: 600, result: { success: false, message: "The CSV did not become ready", type: "reinstall", target: "stable" } });
@@ -115,7 +115,7 @@ describe("operationReducer", () => {
     expect(next.reconcile).toMatchObject({ active: false, finished: false, timedOut: false });
   });
 
-  it("retargets a server run whose kind changed (N5) and binds a server id once", () => {
+  it("retargets a server run whose kind changed and binds a server id once", () => {
     let s = operationReducer(initialOperationState(), { type: "start", id: 1, kind: "reinstall_nightly", source: "server", now: 1, serverId: "op-3" });
     s = operationReducer(s, { type: "retarget", id: 1, kind: "reinstall_stable", detail: "stable" });
     expect(s.run).toMatchObject({ kind: "reinstall_stable", detail: "stable" });

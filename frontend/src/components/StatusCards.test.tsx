@@ -26,7 +26,7 @@ function renderCard(status: StatusResponse, opts: { latest?: LatestNightlyRespon
 const installedRow = () => screen.getByText("Installed").closest(".pf-v6-c-description-list__group") as HTMLElement;
 const latestRow = () => screen.getByText(/^Latest/).closest(".pf-v6-c-description-list__group") as HTMLElement;
 
-describe("InstalledBuildCard (A07-1)", () => {
+describe("InstalledBuildCard", () => {
   it("shows installed vs latest by tag, short digest, build date and dashboard commit, and offers Update", () => {
     const { onUpdate } = renderCard(nightlyStatus());
     expect(screen.getByText("Update available")).toBeInTheDocument();
@@ -89,13 +89,13 @@ describe("InstalledBuildCard (A07-1)", () => {
     expect(screen.getByText("Finish the cluster setup above first.")).toBeInTheDocument();
   });
 
-  it("keeps Update available from a Failed CSV and recommends it (A07-5)", () => {
+  it("keeps Update available from a Failed CSV and recommends it", () => {
     renderCard(nightlyStatus({ csv: { name: "rhods-operator.3.6.0", version: "3.6.0", phase: "Failed" } }));
     expect(screen.getByText("The operator is Failed")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Update to latest" })).not.toHaveAttribute("aria-disabled", "true");
   });
 
-  it("says the Subscription is missing instead of calling it a stable release (E4)", () => {
+  it("says the Subscription is missing instead of calling it a stable release", () => {
     const s = nightlyStatus({
       subscription: { name: "", source: "", channel: "", state: "Not Installed" },
       csv: { name: "rhods-operator.3.6.0", version: "3.6.0", phase: "Succeeded" },
@@ -127,7 +127,7 @@ describe("InstalledBuildCard (A07-1)", () => {
     expect(catalogRow.textContent).toContain("No Subscription and no nightly catalog");
   });
 
-  it("never says Up to date next to a Failed or installing operator (E4)", () => {
+  it("never says Up to date next to a Failed or installing operator", () => {
     const failed = nightlyStatus({ csv: { name: "rhods-operator.3.6.0", version: "3.6.0", phase: "Failed" } });
     failed.nightly = { ...failed.nightly!, latest: failed.nightly!.installed, updateAvailable: false };
     renderCard(failed);
@@ -143,14 +143,14 @@ describe("InstalledBuildCard (A07-1)", () => {
     expect(screen.getAllByText("Installing").length).toBe(2); // the verdict and the operator row
   });
 
-  it("disables Update with the reason while another operation runs (A07-9)", () => {
+  it("disables Update with the reason while another operation runs", () => {
     renderCard(nightlyStatus(), { blocker: 'alice is running "Update to nightly". Wait for it to finish.' });
     expect(screen.getByRole("button", { name: "Update to latest" })).toHaveAttribute("aria-disabled", "true");
   });
 });
 
 describe("GlobalBanners", () => {
-  it("shows who is running what, and the step, on every page (A07-3)", async () => {
+  it("shows who is running what, and the step, on every page", async () => {
     renderWithApp(<GlobalBanners />, {
       operation: async () => ({ inProgress: true, operation: { id: "1", type: "update", label: "Update to nightly", user: "alice", startedAt: new Date().toISOString(), step: "detect_channel", target: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + "a".repeat(64) } }),
     }, "/components");
@@ -183,7 +183,7 @@ describe("GlobalBanners", () => {
     await waitFor(() => expect(screen.queryByText('"Update to nightly" was interrupted')).not.toBeInTheDocument());
   });
 
-  it("shows a paused dashboard-operator with who, what and the RHOAI update warning (A04-1)", async () => {
+  it("shows a paused dashboard-operator with who, what and the RHOAI update warning", async () => {
     renderWithApp(<GlobalBanners />, {
       dashboard: async () => ({
         override: {
@@ -199,14 +199,14 @@ describe("GlobalBanners", () => {
     expect(screen.getByRole("button", { name: "Open Dashboard Dev" })).toBeInTheDocument();
   });
 
-  it("tells admins to run make upgrade when the template is outdated (A09-4)", async () => {
+  it("tells admins to run make upgrade when the template is outdated", async () => {
     renderWithApp(<GlobalBanners />, { version: async () => ({ version: "4503bb7d", commit: "x", buildDate: "d", templateRevision: "1", expectedTemplateRevision: "2", templateOutdated: true }) });
     expect(await screen.findByText(/this updater's deployment is out of date/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Info alert details/ }));
     expect(screen.getByText("make upgrade")).toBeInTheDocument();
   });
 
-  it("explains unknown permissions with a Retry (503 is read-only, A02-3)", async () => {
+  it("explains unknown permissions with a Retry (503 is read-only)", async () => {
     renderWithApp(<GlobalBanners />, { permissions: async () => { throw Object.assign(new Error("x"), { name: "ApiError", status: 503, errorCode: "authorization_unavailable", message: "Cannot verify mutation permissions" }); } });
     expect(await screen.findByText("Your permissions could not be checked; changes are disabled")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();

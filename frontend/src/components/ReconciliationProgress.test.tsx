@@ -27,7 +27,7 @@ const renderStuck = () => renderWithApp(
   <ReconciliationProgress status={nightlyStatus({ csv: { name: "rhods-operator.3.6.0", version: "3.6.0", phase: "Installing" } })} active startTime={Date.now() - 600_000} timedOut operationType="update" />,
 );
 
-describe("ReconciliationProgress stuck guidance (B2 contract)", () => {
+describe("ReconciliationProgress stuck guidance", () => {
   it("sends every fix, including assist-rollout:<ns>/<name>, to /api/diagnostics/fix and shows nothing_to_do as information", async () => {
     const fixBodies = stubDiagnostics([{
       id: "pod-unschedulable-redhat-ods-applications-foo", severity: "critical", title: "foo: 1 pod can't be scheduled", description: "Insufficient cpu",
@@ -47,7 +47,7 @@ describe("ReconciliationProgress stuck guidance (B2 contract)", () => {
     expect(result.closest(".pf-v6-c-alert")).toHaveClass("pf-m-info");
   });
 
-  it("a cluster_busy refusal is a 'Cluster busy' warning, and the problems are scanned again (N8)", async () => {
+  it("a cluster_busy refusal is a 'Cluster busy' warning, and the problems are scanned again", async () => {
     let scans = 0;
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       if (url === "/api/diagnostics") {
@@ -82,7 +82,7 @@ describe("ReconciliationProgress stuck guidance (B2 contract)", () => {
   });
 });
 
-describe("Reconcile completion after a reload (A07-8)", () => {
+describe("Reconcile completion after a reload", () => {
   beforeEach(() => {
     sessionStorage.setItem("rhoai-reconciling", "true");
     sessionStorage.setItem("rhoai-reconcile-start", String(Date.now() - 60_000));
@@ -100,7 +100,7 @@ describe("Reconcile completion after a reload (A07-8)", () => {
     await waitFor(() => expect(screen.queryByText("Re-deploy complete")).not.toBeInTheDocument());
   });
 
-  it("does not claim success when the result was never seen (N4), unless the server reports it", async () => {
+  it("does not claim success when the result was never seen, unless the server reports it", async () => {
     const view = renderWithApp(<OperationProgress />);
     expect(await screen.findByText("Re-deploy finished (outcome unknown, see the activity log)")).toBeInTheDocument();
     expect(screen.queryByText("Re-deploy complete")).not.toBeInTheDocument();
@@ -117,7 +117,7 @@ describe("Reconcile completion after a reload (A07-8)", () => {
   });
 });
 
-describe("ActivityLog (A07-13)", () => {
+describe("ActivityLog", () => {
   const entries = [
     { timestamp: "2026-10-01T10:00:00Z", user: "alice", action: "update", detail: "x", success: true, label: "Updated to nightly", category: "operator", build: "rhoai-3.6 · 4eff06d60bd1" },
     { timestamp: "2026-10-02T10:00:00Z", user: "bob", action: "deploy-dashboard-pr", detail: "PR #1", success: true, label: "Dashboard PR deployed", category: "dashboard-dev" },

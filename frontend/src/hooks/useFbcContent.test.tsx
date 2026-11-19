@@ -35,7 +35,7 @@ function stubContent() {
   return { slowLabelsForA, signals };
 }
 
-describe("useFbcContent (A06-8)", () => {
+describe("useFbcContent", () => {
   it("never shows labels from a previous image", async () => {
     const { slowLabelsForA, signals } = stubContent();
     const { result, rerender } = renderHook(({ image }) => useFbcContent(image), { initialProps: { image: A as string | null } });

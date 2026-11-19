@@ -99,7 +99,7 @@ describe("an operation another updater pod runs (remote)", () => {
   });
 });
 
-describe("isOwnFinishedRun (R4b b: match by backend id, not a time window)", () => {
+describe("isOwnFinishedRun (match by backend id, not a time window)", () => {
   const started = Date.parse(aliceUpdate.startedAt);
   const base: OperationRun = { id: 1, kind: "update", source: "stream", startedAt: started, steps: [], endedAt: started + 120_000, outcome: { status: "succeeded", message: "" }, serverId: "op1" };
   it("hides only the operation with this run's backend id", () => {
@@ -125,7 +125,7 @@ describe("isOwnFinishedRun (R4b b: match by backend id, not a time window)", () 
   });
 });
 
-describe("GET /api/operation drives the operation store (A07-3, A06-3)", () => {
+describe("GET /api/operation drives the operation store", () => {
   it("shows a teammate's running update after a reload, disables changes, and hands over when it ends", async () => {
     let answer: OperationStatusResponse = { inProgress: true, operation: aliceUpdate };
     const fetchOperation = vi.fn(async () => answer);
@@ -171,7 +171,7 @@ describe("GET /api/operation drives the operation store (A07-3, A06-3)", () => {
   });
 });
 
-describe("a detached stream is followed on the server (R4b a, b)", () => {
+describe("a detached stream is followed on the server", () => {
   it("keeps the lock and the banner while the backend runs it, and never reports success from the old CSV", async () => {
     const sse = sseResponse();
     vi.stubGlobal("fetch", vi.fn(async () => sse.response));
@@ -228,7 +228,7 @@ describe("a detached stream is followed on the server (R4b a, b)", () => {
   });
 });
 
-describe("the outcome of an operation followed from the server (N4)", () => {
+describe("the outcome of an operation followed from the server", () => {
   const followAlice = async (last: OperationStatusResponse["lastCompleted"]) => {
     let answer: OperationStatusResponse = { inProgress: true, operation: aliceUpdate };
     renderWithApp(<><Probe /><RefreshButton /></>, { operation: async () => answer });
@@ -255,7 +255,7 @@ describe("the outcome of an operation followed from the server (N4)", () => {
   });
 });
 
-describe("GET /api/operation answers are applied in order (N6)", () => {
+describe("GET /api/operation answers are applied in order", () => {
   it("drops an idle answer that lands after a newer busy one", async () => {
     const first = deferred<OperationStatusResponse>();
     const calls: Array<Promise<OperationStatusResponse>> = [first.promise, Promise.resolve({ inProgress: true, operation: aliceUpdate })];
@@ -269,7 +269,7 @@ describe("GET /api/operation answers are applied in order (N6)", () => {
   });
 });
 
-describe("a reinstall whose target arrives after the first poll (N5)", () => {
+describe("a reinstall whose target arrives after the first poll", () => {
   it("switches the run to the stable reinstall steps", async () => {
     let answer: OperationStatusResponse = { inProgress: true, operation: { ...aliceUpdate, id: "r1", type: "reinstall", label: "Reinstall", target: undefined, step: "save_snapshot" } };
     renderWithApp(<><Probe /><RefreshButton /></>, { operation: async () => answer });
