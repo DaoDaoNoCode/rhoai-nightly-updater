@@ -245,7 +245,11 @@ func TestServiceAccountWritesAreNamedOrItsOwnRecords(t *testing.T) {
 				switch res {
 				case "secrets", "roles", "rolebindings", "clusterroles", "clusterrolebindings", "serviceaccounts", "namespaces",
 					"deployments", "pods", "jobs", "subscriptions", "installplans", "clusterserviceversions", "catalogsources",
-					"validatingwebhookconfigurations", "mutatingwebhookconfigurations", "customresourcedefinitions", "datascienceclusters":
+					"validatingwebhookconfigurations", "mutatingwebhookconfigurations", "customresourcedefinitions", "datascienceclusters",
+					// The OAuth client users sign in with, and their tokens:
+					// only install.sh and the chart's short-lived hooks write
+					// them (SECURITY.md, The OAuthClient).
+					"oauthclients", "oauthaccesstokens", "useroauthaccesstokens":
 					t.Errorf("%s: %s on %s", g.source, v, res)
 				}
 			}
