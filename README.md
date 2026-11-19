@@ -47,6 +47,18 @@ The same page has one-time cluster setup (pull secret, image mirror), **Update t
 1. The DataScienceCluster state (**Ready** or **Not Ready**).
 2. For each failing component, the operator's message and a short **Cause**, with a link to the fix on Diagnostics.
 
+#### Components and sub-components: change them without the OpenShift console
+
+<img src="docs/images/components-tree.png" alt="The component tree: each component and sub-component with its value in the DSC, the release default and what the operator reports, and the differences from the release default with Fix" width="760">
+
+The tree is read from the installed DataScienceCluster CRD, so it follows whatever the release defines (`dashboard.standard`, `kserve.nim`, `aigateway.modelsAsAService`, ...). Each row shows the value in the DSC (a select limited to the values the CRD accepts), the **release default** (the example the installed operator's CSV ships in `alm-examples`) and what the operator reports.
+
+- **Change a component**: pick a value. The confirmation lists exactly what changes and what is deployed or removed; removing a component first checks that it can be cleaned up (the same checks as Diagnostics' disable fix) and refuses otherwise. A sub-component set to Managed under a parent that is not Managed is offered together with its parent. Only that one field is patched (a JSON Patch that fails if the field changed since you looked, after a server-side dry run).
+- **Differences from the release default** lists only real problems: something the release default sets that your DSC leaves unset (the operator treats it as Removed), and Managed sub-components under a parent that is not Managed. Values you chose and values the API server fills in are not listed. **Fix** sets the missing ones to the release default.
+- **Reset to the release default…**: a **soft reset** (recommended) changes in place only what differs, keeping the workbench and AI hub namespaces. A **hard reset** deletes the DSC and creates the release default in its place: every component is torn down and comes back, which can clear stuck deployments. It needs the DSC's name typed, and stops without creating anything if the old DSC is not gone within 10 minutes. See [RUNBOOK §11.9](RUNBOOK.md#119-change-or-reset-the-datasciencecluster).
+
+Changes are off with the reason when Argo CD or an ACM policy manages the DSC, in the gitops profile, or without cluster-admin.
+
 Below it, the Deployments table lists problems first, with pod details, git provenance and what changed since the last update.
 
 ### Build Explorer: which build has my change?
