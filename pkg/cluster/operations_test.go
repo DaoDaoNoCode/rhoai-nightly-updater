@@ -195,7 +195,7 @@ func TestRollback_AlreadyOnStable(t *testing.T) {
 	})
 	defer cleanup()
 
-	result, err := Rollback(client)
+	result, err := Reinstall(client, "stable", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

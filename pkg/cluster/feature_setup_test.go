@@ -228,7 +228,7 @@ func runPrereqs(t *testing.T, c *Client, feature string) (*types.OperationRespon
 
 func prereqStatus(t *testing.T, c *Client, feature string) types.FeaturePrerequisites {
 	t.Helper()
-	st, err := GetPrerequisitesStatus(c)
+	st, err := GetPrerequisitesStatusFor(c, "")
 	if err != nil {
 		t.Fatal(err)
 	}

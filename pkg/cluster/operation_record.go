@@ -137,16 +137,6 @@ func decodeRecordValue[T any](data map[string]string, key string) *T {
 	return &v
 }
 
-// GetOperationState returns the running-operation marker and the last
-// completed operation; either is nil when none is recorded.
-func GetOperationState(c *Client) (*types.OperationMarker, *types.CompletedOperation, error) {
-	rec, err := ReadOperationRecord(c)
-	if err != nil {
-		return nil, nil, err
-	}
-	return rec.Marker, rec.LastCompleted, nil
-}
-
 // SaveOperationMarker records the running operation in a ConfigMap, or
 // clears the record when marker is nil.
 func SaveOperationMarker(c *Client, marker *types.OperationMarker) error {

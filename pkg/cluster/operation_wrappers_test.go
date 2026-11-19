@@ -9,12 +9,6 @@ import (
 // Thin wrappers and accessors that only tests use; production code calls
 // the underlying functions directly.
 
-// Rollback removes the nightly catalog and restores the stable operator subscription.
-// Deprecated: Use Reinstall instead. Kept for backward compatibility.
-func Rollback(c *Client) (*types.OperationResponse, error) {
-	return Reinstall(c, "stable", "", "")
-}
-
 // Reinstall performs the full uninstall/cleanup/reinstall flow.
 // If targetType is "stable", it reinstalls from the stable catalog (same as the old Rollback).
 // If targetType is "nightly", it reinstalls with the specified FBC image.
@@ -105,4 +99,19 @@ func (c *lruCache[K, V]) Purge() {
 	defer c.mu.Unlock()
 	c.ll.Init()
 	c.items = make(map[K]*list.Element)
+}
+
+// GetOperationState returns the running-operation marker and the last
+// completed operation; either is nil when none is recorded.
+func GetOperationState(c *Client) (*types.OperationMarker, *types.CompletedOperation, error) {
+	rec, err := ReadOperationRecord(c)
+	if err != nil {
+		return nil, nil, err
+	}
+	return rec.Marker, rec.LastCompleted, nil
+}
+
+// redactURL is redactDBSecrets for one connection URL.
+func redactURL(msg, connURL string, passwords ...string) string {
+	return redactDBSecrets(msg, []string{connURL}, passwords)
 }

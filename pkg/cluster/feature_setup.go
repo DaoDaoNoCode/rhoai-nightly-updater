@@ -669,13 +669,9 @@ func (p *featurePlan) status() types.FeaturePrerequisites {
 	return out
 }
 
-// GetPrerequisitesStatus reads what every feature needs on the cluster.
-func GetPrerequisitesStatus(c *Client) (*types.PrerequisitesStatus, error) {
-	return GetPrerequisitesStatusFor(c, "")
-}
-
-// GetPrerequisitesStatusFor is GetPrerequisitesStatus with Models planned
-// for how its model is reached (featureSetupFor).
+// GetPrerequisitesStatusFor reads what every feature needs on the cluster,
+// with Models planned for how its model is reached (featureSetupFor; "" is
+// the default).
 func GetPrerequisitesStatusFor(c *Client, modelsExposure string) (*types.PrerequisitesStatus, error) {
 	r := readClusterForPrerequisites(c)
 	out := &types.PrerequisitesStatus{Features: map[string]types.FeaturePrerequisites{}, ModelsExposure: modelsExposure}
