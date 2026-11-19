@@ -87,7 +87,7 @@ Under the table, **Clean up everything** deletes what this tool created (first t
 1. The feature's state in the selected project. Without `?project=` the tab opens the first project with a ready pipeline server.
 2. The project picker (type to filter; each project says what it has).
 3. Each part shows its health, its actions and its details inline: the S3 endpoint (`http://seaweedfs-s3.seaweedfs.svc:8333`), the bucket and the admin UI user.
-4. The S3 access key and secret key are masked: the eye shows one and the copy button copies it; **Copy as environment variables** copies the whole connection (`AWS_ENDPOINT_URL`, the keys, region, bucket). The admin UI (user `admin`) has a password of its own, shown the same way. Each is read from the server only then (cluster-admins only), and gone when you hide it or leave the tab.
+4. The S3 access key and secret key are masked: the eye shows one and the copy button copies it; **Copy as environment variables** copies the whole connection (`AWS_ENDPOINT_URL`, the keys, region, bucket) as shell assignments with single-quoted values, to paste into a shell or `source`. The admin UI (user `admin`) has a password of its own, shown the same way. Each is read from the server only then (cluster-admins only), and gone when you hide it or leave the tab.
 5. The pipeline server is set up as the dashboard sets one up: named `dspa` (the only name workbench pipelines find), with the dashboard's settings, its S3 Secret owned by it, and a dashboard S3 **Connection** `rhoai-nightly-updater-s3` ("Shared S3 storage (RHOAI Nightly Updater)") that workbenches and model deployments in the project can use. The Connection carries the in-cluster address, so it works from pods only. Deleting the pipeline server, here or in the dashboard, deletes both.
 6. **Open pipelines** (and **Open admin UI**). Each part's menu (⋮) has **Delete** (and **Repair** when it applies), only for what this tool created; a disabled entry says why.
 
@@ -352,10 +352,12 @@ Environment variables of the `app` container. The template sets the first group;
 | `LOG_LEVEL` | `info` | `debug`, `warn`, `error` |
 | `SHUTDOWN_DRAIN_TIMEOUT` | 980s | how long a terminating pod waits for a running operation; keep it below the grace period |
 
-To set `GITHUB_TOKEN`, keep the token in a Secret. The Deployment restarts afterwards:
+To set `GITHUB_TOKEN`, keep the token in a Secret. It is read without echo, so it stays out of your shell history and the terminal. The Deployment restarts afterwards:
 
 ```bash
-oc create secret generic github-token -n rhoai-nightly-updater --from-literal=GITHUB_TOKEN=<token>
+printf 'GitHub token: ' && read -rs GITHUB_TOKEN && echo
+oc create secret generic github-token -n rhoai-nightly-updater --from-literal="GITHUB_TOKEN=$GITHUB_TOKEN"
+unset GITHUB_TOKEN
 oc set env deployment/rhoai-nightly-updater -n rhoai-nightly-updater -c app --from=secret/github-token
 ```
 

@@ -203,7 +203,13 @@ describe("S3SecretField: the admin UI password", () => {
 describe("s3EnvText", () => {
   it("is what an S3 client reads, with the endpoint and both keys", () => {
     expect(s3EnvText("http://seaweedfs-s3.seaweedfs.svc:8333", { accessKey: "AK", secretKey: "SK" })).toBe(
-      "AWS_ENDPOINT_URL=http://seaweedfs-s3.seaweedfs.svc:8333\nAWS_ACCESS_KEY_ID=AK\nAWS_SECRET_ACCESS_KEY=SK\nAWS_DEFAULT_REGION=us-east-1\nAWS_S3_BUCKET=pipelines\n");
+      "AWS_ENDPOINT_URL='http://seaweedfs-s3.seaweedfs.svc:8333'\nAWS_ACCESS_KEY_ID='AK'\nAWS_SECRET_ACCESS_KEY='SK'\nAWS_DEFAULT_REGION='us-east-1'\nAWS_S3_BUCKET='pipelines'\n");
+  });
+
+  it("single-quotes every value, so a pasted key never runs or splits", () => {
+    const text = s3EnvText("http://s3:8333", { accessKey: "a b", secretKey: "x$(id)`y`'z" });
+    expect(text).toContain("AWS_ACCESS_KEY_ID='a b'\n");
+    expect(text).toContain("AWS_SECRET_ACCESS_KEY='x$(id)`y`'\\''z'\n");
   });
 });
 

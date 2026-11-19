@@ -99,6 +99,20 @@ describe("ComponentsPage Deployments table (A08-14, A08-11)", () => {
       .filter(Boolean);
   }
 
+  it("links a commit only for a github.com https repository (the image labels choose it)", async () => {
+    const sha = "a3b6b581b465f97f8701f220efadcf8787879dde";
+    stubApi({ "/api/components": present([
+      dep("agent-ops-ui", { gitCommit: sha, gitURL: "https://github.com/red-hat-data-services/odh-dashboard" }),
+      dep("gen-ai-ui", { gitCommit: sha, gitURL: "javascript:alert(document.cookie)//" }),
+    ]) });
+    renderPage();
+    const table = await screen.findByRole("grid", { name: "Deployments" });
+    const links = within(table).getAllByRole("link", { name: `Commit ${sha} on GitHub` });
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute("href", `https://github.com/red-hat-data-services/odh-dashboard/commit/${sha}`);
+    expect(within(table).getAllByText(sha.slice(0, 7))).toHaveLength(2);
+  });
+
   it("shows problems first with their cause, and filters by status and text", async () => {
     stubApi({ "/api/components": present(deployments) });
     renderPage();

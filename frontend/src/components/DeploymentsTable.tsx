@@ -42,6 +42,7 @@ import { InlineItems } from "./InlineItems";
 import { RowActions } from "./RowActions";
 import { NotRecorded, RelativeTime } from "./RelativeTime";
 import { StatusLabel, TagLabel, type StatusKind } from "./StatusLabel";
+import { commitURL as githubCommitURL } from "../build";
 import {
   activePods,
   deploymentHealth,
@@ -308,7 +309,8 @@ export const DeploymentsTable: React.FC<DeploymentsTableProps> = ({
           const health = deploymentHealth(dep);
           const shortSha = dep.gitCommit ? dep.gitCommit.slice(0, 7) : "";
           const notRecorded = isBuildImage(dep.image) ? undefined : NOT_A_BUILD_IMAGE;
-          const commitURL = dep.gitCommit && dep.gitURL ? `${dep.gitURL}/commit/${dep.gitCommit}` : "";
+          // The image labels name the repository: only a github.com https URL becomes a link.
+          const commitURL = githubCommitURL(dep.gitURL, dep.gitCommit);
           const pods = dep.pods ?? [];
           const canUnblock = unschedulableRollout(dep);
           const result = results[key];

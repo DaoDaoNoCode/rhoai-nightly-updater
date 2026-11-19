@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -58,9 +59,21 @@ var (
 	commitFlight    flightGroup[string]
 )
 
-// isRHOAIImage checks whether an image reference is an RHOAI component image.
+// isHTTPSURL reports whether s is an absolute https URL with a host and no
+// user info.
+func isHTTPSURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil
+}
+
+// isRHOAIImage checks whether an image reference is an RHOAI component
+// image: registry.redhat.io/rhoai/ or its quay.io mirror, quay.io/rhoai/.
+// The registry is matched as a prefix, not anywhere in the reference: labels
+// are always read from quay.io (imageLabelsWithAuth), so
+// "evil.example/x/rhoai/y" would otherwise read quay.io/x/rhoai/y.
 func isRHOAIImage(imageRef string) bool {
-	return strings.Contains(imageRef, "rhoai/")
+	ref := strings.TrimPrefix(imageRef, "docker-pullable://")
+	return strings.HasPrefix(ref, "registry.redhat.io/rhoai/") || strings.HasPrefix(ref, "quay.io/rhoai/")
 }
 
 // extractRepoAndDigest parses an imageID like
@@ -472,8 +485,10 @@ func parseImageLabels(labels map[string]string, created string) *ImageLabels {
 		result.GitCommit = v
 	}
 
+	// Whoever builds an image chooses its labels, and the UI links the
+	// repository: only an https URL is kept (no javascript:, no http).
 	for _, key := range []string{"git.url", "vcs-url", "io.openshift.build.source-location"} {
-		if v := labels[key]; v != "" {
+		if v := labels[key]; isHTTPSURL(v) {
 			result.GitURL = v
 			break
 		}

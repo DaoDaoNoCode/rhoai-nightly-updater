@@ -22,7 +22,7 @@
 #                                      then move :vMAJOR and :latest
 #   release.sh promote-latest VERSION  CI, manual: move :latest to VERSION
 #   release.sh publish-main            CI, main: push the image tarball as the
-#                                      commit tag (written once) and move :main
+#                                      commit tag (written once) and as :main
 #   release.sh wait-image VERSION      wait (bounded) until IMAGE:VERSION exists,
 #                                      built from the commit of tag VERSION
 #   release.sh gitlab-release VERSION  CI: create the GitLab Release
@@ -413,10 +413,12 @@ cmd_publish() {
 	info "Published $ref as :$version."
 }
 
-# commit_tag REF DIGEST: the 8-character commit tag is written once, by
-# whichever pipeline (main or release) publishes first. An existing tag is
-# kept when it is the same image or another build of the same commit; one
-# from another commit stops the job.
+# commit_tag REF DIGEST (release pipeline): the 8-character commit tag is
+# written once, by whichever pipeline (main or release) publishes first. An
+# existing tag is kept when it is the same image or another build of the
+# same commit (normally main's: its VERSION differs, so its digest does);
+# one from another commit stops the job. Nothing is moved to it here: the
+# release tags point at this pipeline's own image.
 commit_tag() {
 	ref=$1 digest=$2 short=$CI_COMMIT_SHORT_SHA
 	if ! has_tag "$short"; then
@@ -447,29 +449,62 @@ default_branch_tip() {
 		sed -n "s|^[0-9a-f]\{4\}\([0-9a-f]\{40\}\) refs/heads/$CI_DEFAULT_BRANCH\$|\1|p"
 }
 
+# push_tarball TAG DIGEST: push IMAGE_TARBALL as IMAGE:TAG and check that the
+# registry holds DIGEST under it.
+push_tarball() {
+	crane_cmd push "$IMAGE_TARBALL" "$IMAGE:$1" >/dev/null
+	pushed=$(crane_cmd digest "$IMAGE:$1") || die "Cannot read the digest of $IMAGE:$1."
+	[ "$pushed" = "$2" ] || die "$IMAGE:$1 is $pushed after the push, not $2 (the image this pipeline built)."
+}
+
+# main_commit_tag DIGEST (main pipeline): the commit tag is this pipeline's
+# image (DIGEST), pushed when the tag does not exist. An existing tag is kept
+# only when it is that same image, or the release image of this commit that
+# a tag pipeline published first (its :vX.Y.Z has the same digest; release
+# tags are written by CI only). Anything else, such as a workstation push or
+# an earlier build of this commit, stops the job: publish-main adopts no
+# image it did not build.
+main_commit_tag() {
+	digest=$1 short=$CI_COMMIT_SHORT_SHA
+	if ! has_tag "$short"; then
+		push_tarball "$short" "$digest"
+		info "Pushed $IMAGE:$short ($digest)."
+		return 0
+	fi
+	existing=$(crane_cmd digest "$IMAGE:$short") || die "Cannot read the digest of $IMAGE:$short."
+	if [ "$existing" = "$digest" ]; then
+		info ":$short unchanged (already this image)"
+		return 0
+	fi
+	built_from=$(image_label "$IMAGE:$short" 'org\.opencontainers\.image\.revision')
+	[ "$built_from" = "$CI_COMMIT_SHA" ] ||
+		die "$IMAGE:$short exists from ${built_from:-an unknown commit}, not $CI_COMMIT_SHA; commit tags are written once."
+	release=$(version_label "$IMAGE:$short")
+	if is_release "$release" && has_tag "$release" &&
+		[ "$(crane_cmd digest "$IMAGE:$release" || true)" = "$existing" ]; then
+		info ":$short unchanged (the $release image of this commit, published first by its tag pipeline)"
+		return 0
+	fi
+	die "$IMAGE:$short exists ($existing, version label '${release:-none}') but is not the image this pipeline built ($digest) nor a release image of this commit. publish-main adopts no image it did not build: if it is a workstation push or an earlier build of this commit, check it, delete the tag in the registry and retry this job. :main was not moved."
+}
+
 # cmd_publish_main: a main pipeline publishes its image tarball as the
-# write-once commit tag, and moves :main only while the commit is still the
-# tip of the default branch, so a late or retried pipeline of an older
-# commit cannot move :main back. Never :latest.
+# write-once commit tag (main_commit_tag), and pushes the same image as :main
+# only while the commit is still the tip of the default branch, so a late or
+# retried pipeline of an older commit cannot move :main back. :main is always
+# this pipeline's own image, never one found in the registry. Never :latest.
 cmd_publish_main() {
 	require_publish_env
 	: "${CI_COMMIT_SHA:?}" "${CI_COMMIT_SHORT_SHA:?}" "${IMAGE_TARBALL:?IMAGE_TARBALL is not set}"
 	[ -f "$IMAGE_TARBALL" ] || die "No image tarball at $IMAGE_TARBALL."
 	TAGS=$(list_tags)
-	short=$CI_COMMIT_SHORT_SHA
-	if has_tag "$short"; then
-		new=$(crane_cmd digest --tarball "$IMAGE_TARBALL") || die "Cannot read the digest of $IMAGE_TARBALL."
-		commit_tag "$IMAGE@$new" "$new"
-	else
-		crane_cmd push "$IMAGE_TARBALL" "$IMAGE:$short" >/dev/null
-		info "Pushed $IMAGE:$short."
-	fi
-	digest=$(crane_cmd digest "$IMAGE:$short") || die "Cannot read the digest of $IMAGE:$short."
+	built=$(crane_cmd digest --tarball "$IMAGE_TARBALL") || die "Cannot read the digest of $IMAGE_TARBALL."
+	main_commit_tag "$built"
 	tip=$(default_branch_tip) || true
 	[ -n "$tip" ] || die "Cannot read the tip of ${CI_DEFAULT_BRANCH:-the default branch}; :main was not moved (a retry checks again)."
 	if [ "$tip" = "$CI_COMMIT_SHA" ]; then
-		crane_cmd tag "$IMAGE@$digest" main >/dev/null
-		info ":main -> $short ($digest)"
+		push_tarball main "$built"
+		info ":main -> $CI_COMMIT_SHORT_SHA ($built)"
 	else
 		info "$CI_COMMIT_SHA is no longer the tip ($tip); :main unchanged."
 	fi

@@ -283,8 +283,12 @@ function useUpdateNotice(): Notice | null {
   const latest = update.latest;
   const gitRoute = <code>git checkout {latest} &amp;&amp; make upgrade</code>;
   // The no-clone installer of exactly that release (scripts/install.sh, attached to every release).
-  // The backend only sends URLs without shell syntax; quote it anyway.
-  const installer = update.installerURL ? `curl -fsSLO '${update.installerURL}' && less install.sh && bash install.sh` : "";
+  // The backend only sends URLs without shell syntax; quote it anyway. With
+  // the release notes' SHA-256 the command checks the download before
+  // anything runs: a different file stops it at sha256sum.
+  const sum = update.installerSHA256 && /^[0-9a-f]{64}$/.test(update.installerSHA256) ? update.installerSHA256 : "";
+  const check = sum ? ` && echo '${sum}  install.sh' | sha256sum -c -` : "";
+  const installer = update.installerURL ? `curl -fsSLO '${update.installerURL}'${check} && less install.sh && bash install.sh` : "";
   return {
     key: "update",
     priority: 10,
@@ -323,6 +327,9 @@ function useUpdateNotice(): Notice | null {
             >
               {installer}
             </ClipboardCopy>
+            {sum
+              ? <>The command checks install.sh against the SHA-256 in the {latest} release notes (on macOS without <code>sha256sum</code>, use <code>shasum -a 256 -c -</code>). </>
+              : <>Before running it, check install.sh against the SHA-256 in the {latest} release notes. </>}
             Pass the options this install was made with (for example <code>--namespace</code>, <code>--app-name</code>,{" "}
             <code>--image-repo</code>); see {update.majorUpgrade ? "" : <>&quot;Patch and minor releases&quot; in </>}<code>docs/UPGRADING.md</code>.
             {/* A GitLab release asset of a non-public project redirects anonymous downloads to its sign-in page. */}

@@ -205,6 +205,56 @@ only accepts a tag whose version is the top dated section. See
   pinned by digest. A project variable `DOCKER_HUB` points it elsewhere
   (`docker.io`, or GitLab's Dependency Proxy).
 
+### Security
+
+- CI, GitLab: kaniko no longer gets the Quay push credentials
+  (`QUAY_USER`/`QUAY_TOKEN`). `build-main` built only a tarball but was
+  logged in, and the build's `RUN` steps (`npm ci` install scripts,
+  `go mod download`) could read that login. The manual `build-branch` job
+  no longer pushes with the release credentials either: it pushes to a
+  repository of its own (`BRANCH_IMAGE`, with `QUAY_BRANCH_USER` and
+  `QUAY_BRANCH_TOKEN`), or builds only. The release credentials can now be
+  protected variables; CONTRIBUTING.md lists the GitLab and Quay settings
+  that keep `:main`, `:latest` and the release tags safe.
+- CI: `:main` is always the main pipeline's own image. `publish-main` kept
+  an existing commit tag whose revision label named the same commit and
+  moved `:main` to it, so a workstation build (`make push` pushed the same
+  8-character tag, even from a tree with uncommitted changes) could become
+  `:main`. It now pushes its own image as `:main`, and stops when the
+  commit tag holds anything but its own image or the release image of the
+  same commit. `make build` and `make push` use `dev-<commit>` tags
+  (`-dirty` with uncommitted changes), `make push` refuses a tree with
+  uncommitted changes, and a commit-like `TAG` is not pushed.
+- Commit links on the Components page (Deployments) and in a build's
+  components (Build Explorer, catalog contents) come from the image's
+  labels, which whoever builds the image chooses. They are now links only
+  for `https://github.com/<owner>/<repo>`, as elsewhere in the app; before,
+  a `javascript:` URL in a label became a clickable link. The backend keeps
+  only https repository URLs from labels, and reads labels only for
+  images whose reference starts with `registry.redhat.io/rhoai/`,
+  `quay.io/rhoai/` or `quay.io/opendatahub/` (it matched those anywhere in
+  the reference, and labels are always read from quay.io).
+- The update notice's install command checks the download before anything
+  runs: `curl ... && echo '<sha256>  install.sh' | sha256sum -c - && less
+  install.sh && bash install.sh`. The backend reads the SHA-256 from the
+  new release's own notes (the `install.sh SHA-256` line), through the
+  GitHub or GitLab releases API, anonymously and cached like the release
+  list. Without it, the notice asks you to compare with the release notes.
+- The oauth-proxy container runs with a read-only root filesystem, as the
+  app container already did (part of template revision 7). oauth-proxy
+  writes no files.
+- The Content-Security-Policy adds `base-uri 'none'`, `form-action 'self'`,
+  `frame-ancestors 'none'` and `object-src 'none'`, which `default-src`
+  does not cover.
+- S3 storage, **Copy as environment variables**: every value is
+  single-quoted (`AWS_SECRET_ACCESS_KEY='...'`), so keys set at a first
+  setup with `$`, backticks or spaces cannot run or split when pasted
+  into a shell.
+- **Log out** now ends the updater's session: it opens oauth-proxy's
+  `/oauth/sign_out`, which clears the session cookie. Before, it opened
+  the sign-in page and the session stayed. The OpenShift login itself
+  stays (SECURITY.md, Sessions): log out of the console to end it.
+
 ## [3.0.0] - 2026-11-18
 
 ### Added

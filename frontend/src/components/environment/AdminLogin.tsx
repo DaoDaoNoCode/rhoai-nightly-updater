@@ -14,6 +14,7 @@ import EyeIcon from "@patternfly/react-icons/dist/esm/icons/eye-icon";
 import EyeSlashIcon from "@patternfly/react-icons/dist/esm/icons/eye-slash-icon";
 import { getS3AdminLogin, toApiError } from "../../services/api";
 import { TooltipButton } from "../TooltipButton";
+import { shellQuote } from "./UseIt";
 
 /**
  * Copies text that the server returns to the clipboard, from a click.
@@ -118,15 +119,19 @@ export const S3SecretField: React.FC<{ id: string; field: S3CredentialField; lab
  * The storage's connection as environment variables, fetched on click and
  * copied, never shown: what an S3 client (boto3, rclone, the AWS CLI)
  * reads, plus AWS_S3_BUCKET as the dashboard's data connections name it.
+ * Every value is single-quoted: the keys may be set at a first setup
+ * (SEAWEEDFS_SECRET_ACCESS_KEY) and hold any character, and the lines are
+ * pasted into a shell (or sourced), where $(...) or a space would run or
+ * split.
  */
 export function s3EnvText(endpoint: string, keys: { accessKey: string; secretKey: string }): string {
   return [
-    `AWS_ENDPOINT_URL=${endpoint}`,
-    `AWS_ACCESS_KEY_ID=${keys.accessKey}`,
-    `AWS_SECRET_ACCESS_KEY=${keys.secretKey}`,
-    "AWS_DEFAULT_REGION=us-east-1",
-    "AWS_S3_BUCKET=pipelines",
-  ].join("\n") + "\n";
+    ["AWS_ENDPOINT_URL", endpoint],
+    ["AWS_ACCESS_KEY_ID", keys.accessKey],
+    ["AWS_SECRET_ACCESS_KEY", keys.secretKey],
+    ["AWS_DEFAULT_REGION", "us-east-1"],
+    ["AWS_S3_BUCKET", "pipelines"],
+  ].map(([name, value]) => `${name}=${shellQuote(value)}`).join("\n") + "\n";
 }
 
 export const CopyS3EnvButton: React.FC<{ endpoint: string; disabledReason: string | null }> = ({ endpoint, disabledReason }) => {

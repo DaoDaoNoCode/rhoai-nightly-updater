@@ -70,4 +70,18 @@ describe("App shell", () => {
       expect(within(menu).getByRole("menuitem", { name: /RHOAI dashboard/ })).toHaveAttribute("href", dashboardURL);
     }
   });
+
+  // oauth-proxy's sign_out clears its session cookie; sign_in only showed
+  // the sign-in page and left the session in place.
+  it("logs out through oauth-proxy's sign_out", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const body = String(url).includes("/api/status") ? nightlyStatus()
+        : String(url).includes("/api/permissions") ? { canMutate: true, user: "me" }
+        : {};
+      return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^User menu for / }));
+    expect(await screen.findByRole("menuitem", { name: "Log out" })).toHaveAttribute("href", "/oauth/sign_out");
+  });
 });

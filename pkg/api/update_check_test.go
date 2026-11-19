@@ -333,13 +333,18 @@ func TestUpdateCheckerCaches(t *testing.T) {
 }
 
 func TestHandleUpdateCheck(t *testing.T) {
-	oldVersion, oldChecker := Version, defaultUpdateChecker
-	t.Cleanup(func() { Version, defaultUpdateChecker = oldVersion, oldChecker })
+	oldVersion, oldChecker, oldSums := Version, defaultUpdateChecker, defaultChecksums
+	t.Cleanup(func() { Version, defaultUpdateChecker, defaultChecksums = oldVersion, oldChecker, oldSums })
 	var calls int
 	defaultUpdateChecker = &updateChecker{
 		now:   time.Now,
 		fetch: func(context.Context, string) ([]string, error) { calls++; return []string{"v1.0.0", "v2.0.0"}, nil },
 	}
+	var notesRead []string
+	defaultChecksums = &checksumCache{now: time.Now, fetch: func(_ context.Context, apiURL, field string) (string, error) {
+		notesRead = append(notesRead, apiURL+" "+field)
+		return "Install:\n\ninstall.sh SHA-256: `" + strings.Repeat("ab", 32) + "`\n", nil
+	}}
 	t.Setenv("IMAGE_REPOSITORY", "quay.io/example/app")
 	t.Setenv("RELEASES_URL", "https://gitlab.example.com/group/app/-/releases")
 
@@ -355,13 +360,16 @@ func TestHandleUpdateCheck(t *testing.T) {
 
 	Version = "v1.0.0"
 	want := UpdateInfo{Current: "v1.0.0", Latest: "v2.0.0", UpdateAvailable: true, MajorUpgrade: true, ReleaseNotesURL: "https://gitlab.example.com/group/app/-/releases/v2.0.0",
-		InstallerURL: "https://gitlab.example.com/group/app/-/releases/v2.0.0/downloads/install.sh"}
+		InstallerURL: "https://gitlab.example.com/group/app/-/releases/v2.0.0/downloads/install.sh", InstallerSHA256: strings.Repeat("ab", 32)}
 	if got := get(); got != want {
 		t.Fatalf("v1.0.0: %+v", got)
 	}
+	if want := []string{"https://gitlab.example.com/api/v4/projects/group%2Fapp/releases/v2.0.0 description"}; strings.Join(notesRead, "|") != strings.Join(want, "|") {
+		t.Fatalf("release notes read: %q, want %q", notesRead, want)
+	}
 
 	Version = "2cdcb42d"
-	if got := get(); got != (UpdateInfo{}) || calls != 1 {
+	if got := get(); got != (UpdateInfo{}) || calls != 1 || len(notesRead) != 1 {
 		t.Fatalf("a commit build gets no check: %+v (%d registry reads)", got, calls)
 	}
 
@@ -369,6 +377,102 @@ func TestHandleUpdateCheck(t *testing.T) {
 	t.Setenv("IMAGE_REPOSITORY", "")
 	if got := get(); got != (UpdateInfo{Current: "v2.0.0"}) {
 		t.Fatalf("no repository configured: %+v", got)
+	}
+}
+
+// The installer's checksum is read from the release's API: GitHub's release
+// by tag (body), GitLab's release by tag (description, the project path
+// URL-encoded). Anything else has no API to read.
+func TestReleaseAPIURL(t *testing.T) {
+	for _, c := range []struct{ releases, tag, url, field string }{
+		{"https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases", "v3.0.0", "https://api.github.com/repos/DaoDaoNoCode/rhoai-nightly-updater/releases/tags/v3.0.0", "body"},
+		{"https://github.com/o/r/releases/", "v1.2.3", "https://api.github.com/repos/o/r/releases/tags/v1.2.3", "body"},
+		{"https://gitlab.com/redhat/ai/team/app/-/releases", "v3.0.0", "https://gitlab.com/api/v4/projects/redhat%2Fai%2Fteam%2Fapp/releases/v3.0.0", "description"},
+		{"https://gitlab.example.com:8443/g/app/-/releases", "v1.0.0", "https://gitlab.example.com:8443/api/v4/projects/g%2Fapp/releases/v1.0.0", "description"},
+		{"http://github.com/o/r/releases", "v1.0.0", "", ""},
+		{"https://user@github.com/o/r/releases", "v1.0.0", "", ""},
+		{"https://github.com/o/r/releases?x=1", "v1.0.0", "", ""},
+		{"https://example.com/releases", "v1.0.0", "", ""},
+		{"https://github.com/o/r/releases", "main", "", ""},
+		{"https://github.com/o/r/releases", "v1.0.0/../../x", "", ""},
+	} {
+		u, f := releaseAPIURL(c.releases, c.tag)
+		if u != c.url || f != c.field {
+			t.Errorf("releaseAPIURL(%q, %q) = %q, %q; want %q, %q", c.releases, c.tag, u, f, c.url, c.field)
+		}
+	}
+}
+
+// The checksum is the notes' own line, cached like the release list; a
+// failed read is retried after the shorter error TTL, and notes without the
+// line (or with something that is not 64 hex) give none.
+func TestInstallerSHA256(t *testing.T) {
+	sum := strings.Repeat("0f", 32)
+	now := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
+	var reads int
+	notes, fail := "x\ninstall.sh SHA-256: `"+sum+"`\ny", false
+	c := &checksumCache{now: func() time.Time { return now }, fetch: func(context.Context, string, string) (string, error) {
+		reads++
+		if fail {
+			return "", errors.New("HTTP 403")
+		}
+		return notes, nil
+	}}
+	const page = "https://github.com/o/r/releases"
+	if got := c.installerSHA256(page, "v2.0.0"); got != sum || reads != 1 {
+		t.Fatalf("first read: %q after %d reads", got, reads)
+	}
+	if got := c.installerSHA256(page, "v2.0.0"); got != sum || reads != 1 {
+		t.Fatalf("cached: %q after %d reads", got, reads)
+	}
+	fail = true
+	if got := c.installerSHA256(page, "v2.0.1"); got != "" || reads != 2 {
+		t.Fatalf("failed read: %q after %d reads", got, reads)
+	}
+	now = now.Add(updateCheckErrorTTL - time.Second)
+	if c.installerSHA256(page, "v2.0.1"); reads != 2 {
+		t.Fatalf("a failure is remembered for the error TTL: %d reads", reads)
+	}
+	now = now.Add(2 * time.Second)
+	fail = false
+	if got := c.installerSHA256(page, "v2.0.1"); got != sum || reads != 3 {
+		t.Fatalf("retried after the error TTL: %q after %d reads", got, reads)
+	}
+	for _, n := range []string{"no checksum here", "install.sh SHA-256: `" + strings.Repeat("0F", 32) + "`", "install.sh SHA-256: `" + sum[:63] + "`", "install.sh SHA-256: `$(id)`"} {
+		notes = n
+		if got := c.installerSHA256(page, "v9.0.0"); got != "" {
+			t.Errorf("notes %q gave %q", n, got)
+		}
+		delete(c.entries, "https://api.github.com/repos/o/r/releases/tags/v9.0.0")
+	}
+	if got := c.installerSHA256("https://example.com/releases", "v2.0.0"); got != "" || reads != 7 {
+		t.Fatalf("no API for the page: %q after %d reads", got, reads)
+	}
+}
+
+// fetchReleaseNotes reads the named field of the release JSON, over https,
+// and fails on other answers.
+func TestFetchReleaseNotes(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ok":
+			_, _ = w.Write([]byte(`{"tag_name":"v2.0.0","body":"install.sh SHA-256: x","description":7}`))
+		default:
+			http.Error(w, "rate limited", http.StatusForbidden)
+		}
+	}))
+	defer srv.Close()
+	old := registryHTTPClient
+	t.Cleanup(func() { registryHTTPClient = old })
+	registryHTTPClient = srv.Client()
+	if got, err := fetchReleaseNotes(context.Background(), srv.URL+"/ok", "body"); err != nil || got != "install.sh SHA-256: x" {
+		t.Fatalf("body: %q, %v", got, err)
+	}
+	if _, err := fetchReleaseNotes(context.Background(), srv.URL+"/ok", "description"); err == nil {
+		t.Fatal("a non-string field is an error")
+	}
+	if _, err := fetchReleaseNotes(context.Background(), srv.URL+"/limited", "body"); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("HTTP 403: %v", err)
 	}
 }
 

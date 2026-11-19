@@ -85,6 +85,10 @@ type UpdateInfo struct {
 	// the installer's releases page (installerReleasesURL) is a GitHub or
 	// GitLab releases page.
 	InstallerURL string `json:"installerURL,omitempty"`
+	// InstallerSHA256 is the SHA-256 of that install.sh as Latest's release
+	// notes publish it (release.sh notes: "install.sh SHA-256: `<hex>`"),
+	// read from the releases page's API; empty when it cannot be read.
+	InstallerSHA256 string `json:"installerSHA256,omitempty"`
 	// PinnedInGit: the gitops profile does not check the registry; the
 	// chart pins the release in Git (HandleUpdateCheckGitOps).
 	PinnedInGit bool `json:"pinnedInGit,omitempty"`
@@ -239,12 +243,121 @@ func (c *updateChecker) latestRelease(repository string) string {
 	return c.latest
 }
 
+// --- The installer's checksum ------------------------------------------------
+
+// releaseAPIURL is the API address of one release of a releases page, and
+// the JSON field holding its notes: GitHub's "Get a release by tag name"
+// (GET /repos/{owner}/{repo}/releases/tags/{tag}, field body) and GitLab's
+// "Get a release by a tag name" (GET /projects/:id/releases/:tag_name, id
+// the URL-encoded project path, field description). "" for any other page.
+func releaseAPIURL(releasesURL, tag string) (apiURL, field string) {
+	if _, ok := parseRelease(tag); !ok {
+		return "", ""
+	}
+	u, err := url.Parse(strings.TrimRight(releasesURL, "/"))
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", ""
+	}
+	segs := strings.Split(strings.Trim(u.Path, "/"), "/")
+	switch {
+	case u.Host == "github.com" && len(segs) == 3 && segs[2] == "releases":
+		return "https://api.github.com/repos/" + url.PathEscape(segs[0]) + "/" + url.PathEscape(segs[1]) + "/releases/tags/" + tag, "body"
+	case len(segs) >= 3 && segs[len(segs)-2] == "-" && segs[len(segs)-1] == "releases":
+		project := strings.Join(segs[:len(segs)-2], "/")
+		return "https://" + u.Host + "/api/v4/projects/" + url.PathEscape(project) + "/releases/" + tag, "description"
+	}
+	return "", ""
+}
+
+// installerSumRe is the checksum line of the release notes (scripts/release.sh notes).
+var installerSumRe = regexp.MustCompile("install\\.sh SHA-256: `([0-9a-f]{64})`")
+
+// checksumCache keeps the installer checksum per release API URL.
+type checksumCache struct {
+	fetch func(ctx context.Context, apiURL, field string) (string, error)
+	now   func() time.Time
+
+	mu      sync.Mutex
+	entries map[string]checksumEntry
+}
+
+type checksumEntry struct {
+	sum     string
+	expires time.Time
+}
+
+var defaultChecksums = &checksumCache{fetch: fetchReleaseNotes, now: time.Now}
+
+// installerSHA256 returns the install.sh checksum the release notes of tag
+// publish, or "" (no supported releases page, no such line, or the API could
+// not be read: the notice then points at the release notes). Answers are
+// cached like the release list; failures for a shorter time.
+func (c *checksumCache) installerSHA256(releasesURL, tag string) string {
+	apiURL, field := releaseAPIURL(releasesURL, tag)
+	if apiURL == "" {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.entries[apiURL]; ok && c.now().Before(e.expires) {
+		return e.sum
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), updateCheckTimeout)
+	defer cancel()
+	notes, err := c.fetch(ctx, apiURL, field)
+	ttl := updateCheckTTL
+	sum := ""
+	if err != nil {
+		slog.Debug("update check: cannot read the release notes", "url", apiURL, "error", err)
+		ttl = updateCheckErrorTTL
+	} else if m := installerSumRe.FindStringSubmatch(notes); m != nil {
+		sum = m[1]
+	}
+	if c.entries == nil {
+		c.entries = map[string]checksumEntry{}
+	}
+	c.entries[apiURL] = checksumEntry{sum: sum, expires: c.now().Add(ttl)}
+	return sum
+}
+
+// fetchReleaseNotes reads one release's notes from its API, anonymously.
+func fetchReleaseNotes(ctx context.Context, apiURL, field string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := withSameHostRedirects(registryHTTPClient).Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer drain(resp)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("release notes: HTTP %d", resp.StatusCode)
+	}
+	var body map[string]json.RawMessage
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
+		return "", fmt.Errorf("release notes: %w", err)
+	}
+	var notes string
+	if raw, ok := body[field]; ok {
+		if err := json.Unmarshal(raw, &notes); err != nil {
+			return "", fmt.Errorf("release notes: %s: %w", field, err)
+		}
+	}
+	return notes, nil
+}
+
 // HandleUpdateCheck reports whether a newer release of the updater exists.
 func HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	info := compareReleases(Version, "", "", "")
 	if repository := strings.TrimSpace(os.Getenv("IMAGE_REPOSITORY")); info.Current != "" && repository != "" {
 		releases := os.Getenv("RELEASES_URL")
-		info = compareReleases(Version, defaultUpdateChecker.latestRelease(repository), releases, installerReleasesURL(releases))
+		installerReleases := installerReleasesURL(releases)
+		info = compareReleases(Version, defaultUpdateChecker.latestRelease(repository), releases, installerReleases)
+		if info.InstallerURL != "" {
+			info.InstallerSHA256 = defaultChecksums.installerSHA256(strings.TrimRight(installerReleases, "/"), info.Latest)
+		}
 	}
 	writeJSON(w, info, "update-check")
 }

@@ -115,6 +115,8 @@ const scenarios = {
       current: "v2.0.0", latest: "v2.0.1", updateAvailable: true, majorUpgrade: false,
       releaseNotesURL: "https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases/v2.0.1",
       installerURL: "https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/v2.0.1/install.sh",
+      // The v2.0.1 release notes' own line (GitHub mirror, read 2026-11-18).
+      installerSHA256: "c642197caae4feaed7994375fa68532cab386cc0b63629923914343017ce2346",
     };
   },
   "template-outdated": (w) => { w.version = F.versionInfo({ templateRevision: "3", templateOutdated: true }); },

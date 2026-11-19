@@ -455,7 +455,7 @@ func labelImageRef(dep types.DeploymentInfo) string {
 // repository, so its labels carry a commit: registry.redhat.io/rhoai (and
 // its quay.io mirror) or quay.io/opendatahub.
 func isBuildImage(imageRef string) bool {
-	return isRHOAIImage(imageRef) || strings.Contains(imageRef, "quay.io/opendatahub/")
+	return isRHOAIImage(imageRef) || strings.HasPrefix(strings.TrimPrefix(imageRef, "docker-pullable://"), "quay.io/opendatahub/")
 }
 
 // imageRepoOf is the repository path of a reference with a tag and no

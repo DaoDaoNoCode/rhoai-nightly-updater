@@ -277,7 +277,9 @@ const AppLayout: React.FC = () => {
                     <Divider className="pf-v6-u-display-none-on-lg" />
                     <DropdownGroup label={`Signed in as ${status.cluster.user}`} labelHeadingLevel="h2">
                       <DropdownList>
-                        <DropdownItem key="logout" onClick={() => { window.location.href = "/oauth/sign_in"; }}>
+                        {/* oauth-proxy's sign_out clears its session cookie (/oauth/sign_in only showed the
+                            sign-in page and kept it). The OpenShift OAuth session stays: SECURITY.md. */}
+                        <DropdownItem key="logout" to="/oauth/sign_out">
                           Log out
                         </DropdownItem>
                       </DropdownList>

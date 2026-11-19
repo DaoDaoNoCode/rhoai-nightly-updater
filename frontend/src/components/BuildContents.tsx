@@ -23,6 +23,7 @@ import { NotRecorded, RelativeTime } from "./RelativeTime";
 import { TruncatedText } from "./LongText";
 import { useFbcContent } from "../hooks/useFbcContent";
 import { ImageRef } from "./ImageRef";
+import { commitURL as githubCommitURL } from "../build";
 
 export const CATEGORY_LABELS: Record<string, string> = {
   core: "Core",
@@ -106,7 +107,8 @@ export const ComponentImagesTable: React.FC<{
     <Tbody>
       {images.map((ri) => {
         const shortSha = ri.gitCommit ? ri.gitCommit.slice(0, 7) : "";
-        const commitURL = ri.gitCommit && ri.gitURL ? `${ri.gitURL}/commit/${ri.gitCommit}` : "";
+        // The image labels name the repository: only a github.com https URL becomes a link.
+        const commitURL = githubCommitURL(ri.gitURL, ri.gitCommit);
         return (
           <Tr key={ri.name || ri.image}>
             <Td dataLabel="Component">

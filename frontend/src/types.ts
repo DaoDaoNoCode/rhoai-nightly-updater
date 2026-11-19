@@ -1024,6 +1024,8 @@ export interface UpdateCheck {
   releaseNotesURL?: string;
   /** Where latest's install.sh is downloaded from, when the releases host is known. */
   installerURL?: string;
+  /** That install.sh's SHA-256 as latest's release notes publish it, when the backend could read them. */
+  installerSHA256?: string;
   /** The gitops profile: no registry check; the chart pins the release in Git. */
   pinnedInGit?: boolean;
 }
