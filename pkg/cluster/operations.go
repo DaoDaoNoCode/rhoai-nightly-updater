@@ -629,7 +629,7 @@ func updateCheckCluster(c *Client, image string, opts OperationOptions, chk *upd
 
 	currentCSV, csvCheckErr := getCSV(c)
 	if csvCheckErr != nil {
-		return fail("Cannot identify installed CSV: "+csvCheckErr.Error(), "prerequisites")
+		return fail("Cannot identify installed CSV: "+csvCheckErr.Error(), errorCodeOr(csvCheckErr, "prerequisites"))
 	}
 
 	gitOps, channelOverride, gitOpsProblem, gitOpsErr := updateGitOpsPlan(c, image, currentCSV, logs)
@@ -679,7 +679,7 @@ func updateVerifyTarget(c *Client, image string, chk *updateChecks, logs *[]stri
 	// Dashboard Dev session, so "Nothing was changed" stays true.
 	captured, recoveryErr := captureOperatorRecovery(c)
 	if recoveryErr != nil {
-		return fail(recoveryErr.Error()+". Nothing was changed.", "prerequisites")
+		return fail(recoveryErr.Error()+". Nothing was changed.", errorCodeOr(recoveryErr, "prerequisites"))
 	}
 	if blocked := foreignSubscriptionRefusal(c); blocked != "" {
 		return fail(blocked, "prerequisites")
@@ -1324,7 +1324,7 @@ func reinstallResolveTarget(c *Client, targetType, image string, rs *reinstallCh
 
 	csv, csvErr := getCSV(c)
 	if csvErr != nil {
-		return fail("Cannot identify installed CSV: "+csvErr.Error(), "prerequisites")
+		return fail("Cannot identify installed CSV: "+csvErr.Error(), errorCodeOr(csvErr, "prerequisites"))
 	}
 
 	// Already on the stable target: nothing to do when that install is
@@ -1425,7 +1425,7 @@ func reinstallCaptureRecovery(c *Client, rs *reinstallChecks, logs *[]string, em
 	// Dashboard Dev session, so "Nothing was changed" stays true.
 	captured, recoveryErr := captureOperatorRecovery(c)
 	if recoveryErr != nil {
-		return fail(recoveryErr.Error()+". Nothing was changed.", "prerequisites")
+		return fail(recoveryErr.Error()+". Nothing was changed.", errorCodeOr(recoveryErr, "prerequisites"))
 	}
 	if blocked := foreignSubscriptionRefusal(c); blocked != "" {
 		return fail(blocked, "prerequisites")
@@ -1928,7 +1928,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	// reinstalls the operator, as Update and Reinstall do.
 	captured, recoveryErr := captureOperatorRecovery(c)
 	if recoveryErr != nil {
-		return fail(recoveryErr.Error()+". Nothing was changed.", "prerequisites")
+		return fail(recoveryErr.Error()+". Nothing was changed.", errorCodeOr(recoveryErr, "prerequisites"))
 	}
 
 	// Refresh re-deploys the installed version, so it must not become an

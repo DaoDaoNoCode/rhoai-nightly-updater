@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -1071,6 +1072,36 @@ func TestReinstall_ActivityRecord(t *testing.T) {
 			t.Fatalf("activity writes = %v", w)
 		}
 	})
+}
+
+// A failed cluster read before the first change (here the CSV list the
+// recovery record needs) carries the request's own code (CONTRIBUTING
+// "Errors and operation results"), as the dry run and Refresh already did:
+// a 403 is "forbidden", not "prerequisites".
+func TestOperations_UnreadableCSVsCarryTheRequestsCode(t *testing.T) {
+	for _, op := range []string{"update", "reinstall"} {
+		t.Run(op, func(t *testing.T) {
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+			f.intercept = func(_ *fakeOLM, w http.ResponseWriter, r *http.Request) bool {
+				if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/clusterserviceversions") {
+					w.WriteHeader(http.StatusForbidden)
+					_, _ = io.WriteString(w, `{"kind":"Status","status":"Failure","message":"denied","code":403}`)
+					return true
+				}
+				return false
+			}
+			c := f.client(context.Background())
+			var r *types.OperationResponse
+			if op == "update" {
+				r, _ = UpdateStream(c, testNightlyImage, func(UpdateStepEvent) {})
+			} else {
+				r, _ = Reinstall(c, "nightly", testNightlyImage, "")
+			}
+			if r == nil || r.Success || r.ErrorCode != "forbidden" || !strings.Contains(r.Message, "list CSVs") || !strings.Contains(r.Message, "Nothing was changed") {
+				t.Fatalf("result = %+v", r)
+			}
+		})
+	}
 }
 
 // With "end the Dashboard Dev session first" confirmed and nothing to

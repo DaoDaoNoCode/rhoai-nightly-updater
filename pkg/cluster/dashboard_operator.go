@@ -1033,7 +1033,7 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 	defer dashboardDevMu.Unlock()
 	operator, err := readDashboardOperator(c)
 	if err != nil {
-		return fail("Cannot read dashboard-operator: "+err.Error(), "prerequisites")
+		return fail("Cannot read dashboard-operator: "+err.Error(), errorCodeOr(err, "prerequisites"))
 	}
 	if operator == nil {
 		return fail("Latest-main deployment requires dashboard-operator.", "prerequisites")
@@ -1055,7 +1055,7 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 	// Pausing while a Dashboard CR deletion is pending would block that
 	// deletion on the finalizer only dashboard-operator removes (D1).
 	if deleting, err := dashboardCRDeleting(c); err != nil {
-		return fail("Cannot check whether the Dashboard is being deleted: "+err.Error()+". No changes were made.", "prerequisites")
+		return fail("Cannot check whether the Dashboard is being deleted: "+err.Error()+". No changes were made.", errorCodeOr(err, "prerequisites"))
 	} else if deleting {
 		return fail("The Dashboard CR is being deleted (dashboard removal or RHOAI uninstall in progress). Pausing dashboard-operator now would block that deletion. No changes were made.", "prerequisites")
 	}
