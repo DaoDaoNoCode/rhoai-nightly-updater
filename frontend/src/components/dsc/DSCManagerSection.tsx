@@ -7,6 +7,7 @@ import {
   CardBody,
   CardHeader,
   CardTitle,
+  Checkbox,
   CodeBlock,
   CodeBlockCode,
   Content,
@@ -70,6 +71,11 @@ export function changeText(ch: DSCChange): React.ReactNode {
   }
   return <><code>{ch.path}</code>: {from} → {to}{effect}</>;
 }
+
+/** Paths as a comma-separated list of code. */
+const PathList: React.FC<{ paths: string[] }> = ({ paths }) => (
+  <>{paths.map((p, i) => <React.Fragment key={p}>{i > 0 && ", "}<code>{p}</code></React.Fragment>)}</>
+);
 
 /** The blocked removals and warnings of a plan. */
 const PlanAlerts: React.FC<{ plan: DSCPlan }> = ({ plan }) => (
@@ -187,6 +193,12 @@ const ResetModal: React.FC<{
 }> = ({ name, disabledReason, onClose, onDone }) => {
   const titleId = React.useId();
   const [kind, setKind] = useState<"soft-reset" | "hard-reset">("soft-reset");
+  // Keep the components the user turned on: checked by default; the plan is
+  // made again when it changes.
+  const [keep, setKeep] = useState(true);
+  // The toggles the user turned on, from the last plan (kept while a new
+  // plan loads, so the option does not flicker).
+  const [turnedOn, setTurnedOn] = useState<string[]>([]);
   const [plan, setPlan] = useState<DSCPlan | null>(null);
   const [planError, setPlanError] = useState("");
   const [typed, setTyped] = useState("");
@@ -202,9 +214,11 @@ const ResetModal: React.FC<{
     let active = true;
     setPlan(null);
     setPlanError("");
-    getDSCPlan(kind).then((p) => { if (active) setPlan(p); }).catch((e) => { if (active) setPlanError(toApiError(e).message); });
+    getDSCPlan(kind, undefined, { keepEnabled: keep })
+      .then((p) => { if (active) { setPlan(p); setTurnedOn(p.turnedOn ?? []); } })
+      .catch((e) => { if (active) setPlanError(toApiError(e).message); });
     return () => { active = false; };
-  }, [kind]);
+  }, [kind, keep]);
 
   const blocked = !plan || !!plan.refusal || (plan.blocked?.length ?? 0) > 0;
   const confirm = async () => {
@@ -244,6 +258,9 @@ const ResetModal: React.FC<{
 
   const removals = plan?.changes.filter((c) => c.effect === "removes") ?? [];
   const deploys = plan?.changes.filter((c) => c.effect === "deploys") ?? [];
+  const kept = plan?.kept ?? [];
+  // A blocked removal of a component the user turned on: keeping them avoids it.
+  const keepWouldHelp = !keep && (plan?.blocked ?? []).some((b) => turnedOn.includes(b.component));
   return (
     <Modal aria-labelledby={titleId} variant={ModalVariant.medium} isOpen onClose={() => !busy && onClose()}>
       <ModalHeader title="Reset to the release default" labelId={titleId} titleIconVariant={kind === "hard-reset" ? "warning" : undefined} />
@@ -260,16 +277,22 @@ const ResetModal: React.FC<{
                     label="Hard reset"
                     description={<>Deletes <code>{name}</code> and creates the release default in its place. Use it when components are stuck and a soft reset does not help.</>} />
                 </FormGroup>
+                {turnedOn.length > 0 && (
+                  <Checkbox id="dsc-reset-keep" isChecked={keep} onChange={(_e, v) => setKeep(v)}
+                    label={<>Keep the components you turned on ({turnedOn.length}): <PathList paths={turnedOn} /></>}
+                    description="Enabled now, but off in the release default. Unchecked, the reset turns them off." />
+                )}
               </Form>
             </StackItem>
           )}
           {planError && <StackItem><Alert component="p" variant="danger" isInline title="Could not work out the reset">{planError}</Alert></StackItem>}
           {!plan && !planError && <StackItem><Spinner size="md" aria-label="Working out the reset" /></StackItem>}
-          {plan?.refusal && <StackItem><Alert component="p" variant="warning" isInline title="Not possible now">{plan.refusal}</Alert></StackItem>}
+          {plan?.refusal && <StackItem><Alert component="p" variant={plan.code === "nothing_to_do" ? "info" : "warning"} isInline title={plan.code === "nothing_to_do" ? "Nothing to change" : "Not possible now"}>{plan.refusal}</Alert></StackItem>}
           {plan && !plan.refusal && !started && kind === "soft-reset" && (
             <StackItem>
               <Content component="p">This changes the shared cluster:</Content>
-              <List>{plan.changes.map((c) => <ListItem key={c.path}>{changeText(c)}</ListItem>)}</List>
+              <List aria-label="Changes of the reset">{plan.changes.map((c) => <ListItem key={c.path}>{changeText(c)}</ListItem>)}</List>
+              {kept.length > 0 && <Content component="p" className="pf-v6-u-mt-sm">Kept: <PathList paths={kept} /> (you turned these on).</Content>}
             </StackItem>
           )}
           {plan && !plan.refusal && !started && kind === "hard-reset" && (
@@ -280,8 +303,9 @@ const ResetModal: React.FC<{
                     <ListItem>The operator removes every component ({(plan.tornDown ?? []).join(", ") || "none enabled"}), then the release default brings back what it enables. This takes minutes; RHOAI is unavailable meanwhile.</ListItem>
                     <ListItem>Your resources (notebooks, pipeline servers, models, model registries) are kept, but stop working until their components are back.</ListItem>
                     {(plan.stayRemoved?.length ?? 0) > 0 && (
-                      <ListItem>Enabled now, but Removed in the release default, so they stay Removed: {plan.stayRemoved!.map((p, i) => <React.Fragment key={p}>{i > 0 && ", "}<code>{p}</code></React.Fragment>)}. Turn them on again afterwards if you need them.</ListItem>
+                      <ListItem>Enabled now, but Removed in the release default, so they stay Removed: <PathList paths={plan.stayRemoved!} />. Turn them on again afterwards if you need them.</ListItem>
                     )}
+                    {kept.length > 0 && <ListItem>Kept: <PathList paths={kept} /> (you turned these on). They come back as they are now.</ListItem>}
                     <ListItem>If the old DataScienceCluster is not gone within 10 minutes, nothing is created and the reset stops; the finalizer is never removed by hand. Once it is gone, this page offers to finish the reset with the same object.</ListItem>
                   </List>
                 </Alert>
@@ -300,6 +324,11 @@ const ResetModal: React.FC<{
             </>
           )}
           {plan && !started && <StackItem><PlanAlerts plan={plan} /></StackItem>}
+          {plan && !started && keepWouldHelp && (
+            <StackItem>
+              <Content component="p">Check <strong>Keep the components you turned on</strong> to reset everything else and keep these as they are.</Content>
+            </StackItem>
+          )}
           {plan && !plan.refusal && !started && kind === "hard-reset" && !blocked && (
             <StackItem>
               <Form onSubmit={(e) => e.preventDefault()}>

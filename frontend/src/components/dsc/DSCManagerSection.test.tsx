@@ -139,7 +139,7 @@ describe("DSCManagerSection", () => {
   });
 
   it("hard reset needs the typed name and streams its steps", async () => {
-    const hard = plan({ action: "hard-reset", tornDown: ["aigateway", "ray"], stayRemoved: ["aigateway"], newObject: "kind: DataScienceCluster\n", changes: [] });
+    const hard = plan({ action: "hard-reset", tornDown: ["aigateway", "ray"], stayRemoved: ["aigateway"], newObject: "kind: DataScienceCluster\n", changes: [], keepEnabled: true });
     const stream = sseResponse();
     const api = stubApi({
       "GET /api/components/dsc": manager,
@@ -157,7 +157,7 @@ describe("DSCManagerSection", () => {
     fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "default-dsc" } });
     await waitFor(() => expect(isOff(confirm)).toBe(false));
     fireEvent.click(confirm);
-    await waitFor(() => expect(api.bodies["POST /api/components/dsc/hard-reset/stream"]).toEqual([{ name: "default-dsc", uid: "u-1", token: hard.token, confirm: "default-dsc" }]));
+    await waitFor(() => expect(api.bodies["POST /api/components/dsc/hard-reset/stream"]).toEqual([{ name: "default-dsc", uid: "u-1", token: hard.token, confirm: "default-dsc", keepEnabled: true }]));
     stream.push(sseEvent("check", "success", "ok"));
     stream.push(sseEvent("delete", "running", "Deleting"));
     expect(await within(dialog).findByText("Deleting")).toBeInTheDocument();
@@ -214,5 +214,107 @@ describe("DSCManagerSection", () => {
     const { container } = render(<DSCManagerSection refreshKey={1} mutateReason={null} onResult={() => {}} onChanged={() => {}} />);
     await waitFor(() => expect(api.calls).toContain("GET /api/components/dsc"));
     expect(container).toBeEmptyDOMElement();
+  });
+
+  // The live scenario: MaaS set up and a model published; a reset keeps
+  // aigateway and MaaS by default, and the plan without them is blocked.
+  describe("keep the components you turned on", () => {
+    const turnedOn = ["aigateway", "aigateway.modelsAsAService"];
+    const maasReason = "MaaS is in use (published model proj/qwen25-05b-instruct; subscription models-as-a-service/rhoai-nightly-updater-subscription). Removing aigateway takes MaaS away: maas-api and the gateway's policies go, so every published model and every API key stops working. Remove MaaS on the MaaS tab first (Clean up MaaS unpublishes and removes it in order), or keep aigateway Managed";
+    const keepPlan = plan({ action: "soft-reset", keepEnabled: true, turnedOn, kept: turnedOn, token: "aaaaaaaaaaaaaaaaaaaaaaaa",
+      changes: [{ path: "kserve.rawDeploymentServiceConfig", from: "Headed", fromSet: true, toSet: false, toggle: false }] });
+    const pureDefault = plan({ action: "soft-reset", turnedOn, token: "bbbbbbbbbbbbbbbbbbbbbbbb",
+      changes: [
+        { path: "aigateway", from: "Managed", fromSet: true, to: "Removed", toSet: true, toggle: true, effect: "removes" },
+        { path: "aigateway.modelsAsAService", from: "Managed", fromSet: true, to: "Removed", toSet: true, toggle: true, effect: "removes" },
+      ],
+      blocked: [{ component: "aigateway", reasons: [maasReason] }] });
+    const resetPlans = (url: string) => new Response(JSON.stringify(url.includes("keepEnabled=true") ? keepPlan : pureDefault), { headers: { "Content-Type": "application/json" } });
+
+    it("is checked by default, lists them, and resets everything else", async () => {
+      const api = stubApi({
+        "GET /api/components/dsc": manager,
+        "GET /api/components/dsc/plan": resetPlans,
+        "POST /api/components/dsc/reset": { success: true, message: "Changed 1 field. Kept: aigateway, aigateway.modelsAsAService (you turned these on).", logs: [] },
+      });
+      renderSection();
+      fireEvent.click(await screen.findByRole("button", { name: "Reset to the release default…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Reset to the release default" });
+      const keep = await within(dialog).findByRole("checkbox", { name: /Keep the components you turned on \(2\): aigateway, aigateway\.modelsAsAService/ });
+      expect(keep).toBeChecked();
+      expect(api.calls).toContain("GET /api/components/dsc/plan?action=soft-reset&keepEnabled=true");
+      expect(await within(dialog).findByText(/\(you turned these on\)/)).toBeInTheDocument();
+      const changes = within(dialog).getByRole("list", { name: "Changes of the reset" });
+      expect(within(changes).queryByText("aigateway")).not.toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Reset" }));
+      await waitFor(() => expect(api.bodies["POST /api/components/dsc/reset"]).toEqual([{ name: "default-dsc", uid: "u-1", token: keepPlan.token, keepEnabled: true }]));
+    });
+
+    it("unchecked, plans the pure release default again and shows why it is blocked", async () => {
+      const api = stubApi({ "GET /api/components/dsc": manager, "GET /api/components/dsc/plan": resetPlans });
+      renderSection();
+      fireEvent.click(await screen.findByRole("button", { name: "Reset to the release default…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Reset to the release default" });
+      await within(dialog).findByText(/\(you turned these on\)/);
+      fireEvent.click(within(dialog).getByRole("checkbox", { name: /Keep the components you turned on/ }));
+      expect(await within(dialog).findByText(/MaaS is in use/)).toBeInTheDocument();
+      expect(api.calls).toContain("GET /api/components/dsc/plan?action=soft-reset&keepEnabled=false");
+      const changes = within(dialog).getByRole("list", { name: "Changes of the reset" });
+      expect(within(changes).getAllByText(/Managed → Removed \(removes it\)/)).toHaveLength(2);
+      expect(within(dialog).getByText(/Clean up MaaS unpublishes and removes it in order/)).toBeInTheDocument();
+      expect(within(dialog).getByText(/to reset everything else and keep these as they are/)).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: "Reset" })).toBeDisabled();
+      // Checked again: the plan that keeps them, and Reset is possible.
+      fireEvent.click(within(dialog).getByRole("checkbox", { name: /Keep the components you turned on/ }));
+      await waitFor(() => expect(within(dialog).queryByText(/MaaS is in use/)).not.toBeInTheDocument());
+      await waitFor(() => expect(within(dialog).getByRole("button", { name: "Reset" })).toBeEnabled());
+    });
+
+    it("hard reset keeps them too and says so", async () => {
+      const hardKeep = plan({ action: "hard-reset", keepEnabled: true, turnedOn, kept: turnedOn, tornDown: ["aigateway", "ray"], newObject: "kind: DataScienceCluster\n", changes: [],
+        warnings: ["While aigateway is down, MaaS does not serve (published model proj/qwen25-05b-instruct): every published model and every API key stops working until the new DataScienceCluster brings it back."] });
+      const hardPure = plan({ action: "hard-reset", turnedOn, tornDown: ["aigateway", "ray"], stayRemoved: turnedOn, newObject: "kind: DataScienceCluster\n", changes: [], blocked: [{ component: "aigateway", reasons: [maasReason] }] });
+      const api = stubApi({
+        "GET /api/components/dsc": manager,
+        "GET /api/components/dsc/plan": (url: string) => new Response(JSON.stringify(!url.includes("hard-reset") ? keepPlan : url.includes("keepEnabled=true") ? hardKeep : hardPure), { headers: { "Content-Type": "application/json" } }),
+      });
+      renderSection();
+      fireEvent.click(await screen.findByRole("button", { name: "Reset to the release default…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Reset to the release default" });
+      fireEvent.click(within(dialog).getByLabelText("Hard reset"));
+      expect(await within(dialog).findByText(/They come back as they are now/)).toBeInTheDocument();
+      expect(within(dialog).getByText(/While aigateway is down, MaaS does not serve/)).toBeInTheDocument();
+      expect(api.calls).toContain("GET /api/components/dsc/plan?action=hard-reset&keepEnabled=true");
+      fireEvent.click(within(dialog).getByRole("checkbox", { name: /Keep the components you turned on/ }));
+      expect(await within(dialog).findByText(/MaaS is in use/)).toBeInTheDocument();
+      expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
+      expect(isOff(within(dialog).getByRole("button", { name: "Hard reset" }))).toBe(true);
+    });
+
+    it("has no option when nothing was turned on", async () => {
+      stubApi({ "GET /api/components/dsc": manager, "GET /api/components/dsc/plan": plan({ action: "soft-reset", keepEnabled: true, changes: [] }) });
+      renderSection();
+      fireEvent.click(await screen.findByRole("button", { name: "Reset to the release default…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Reset to the release default" });
+      await within(dialog).findByText("This changes the shared cluster:");
+      expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
+    });
+  });
+
+  it("blocks turning aigateway off while MaaS is in use, with the way to remove MaaS", async () => {
+    stubApi({
+      "GET /api/components/dsc": manager,
+      "GET /api/components/dsc/plan": plan({
+        changes: [{ path: "aigateway", from: "Managed", fromSet: true, to: "Removed", toSet: true, toggle: true, effect: "removes" }],
+        blocked: [{ component: "aigateway", reasons: ["MaaS is in use (published model proj/qwen25-05b-instruct). Removing aigateway takes MaaS away: maas-api and the gateway's policies go, so every published model and every API key stops working. Remove MaaS on the MaaS tab first (Clean up MaaS unpublishes and removes it in order), or keep aigateway Managed"] }],
+      }),
+    });
+    renderSection();
+    await screen.findByRole("treegrid");
+    fireEvent.change(screen.getByRole("combobox", { name: "Set aigateway" }), { target: { value: "Removed" } });
+    const dialog = await screen.findByRole("dialog", { name: "Set aigateway to Removed?" });
+    expect(await within(dialog).findByText(/published model proj\/qwen25-05b-instruct/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Remove MaaS on the MaaS tab first/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Set to Removed" })).toBeDisabled();
   });
 });

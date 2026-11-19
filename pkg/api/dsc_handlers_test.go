@@ -20,8 +20,15 @@ func TestDSCChangeRoutesValidateTheirRequest(t *testing.T) {
 	var toggled []types.DSCToggleRequest
 	var reset []types.DSCPlanRequest
 	var finished []types.DSCFinishRequest
-	prevSet, prevHard, prevFinish := setDSCManagementState, hardResetDSC, finishDSCHardReset
-	t.Cleanup(func() { setDSCManagementState, hardResetDSC, finishDSCHardReset = prevSet, prevHard, prevFinish })
+	var soft []types.DSCPlanRequest
+	prevSet, prevHard, prevFinish, prevSoft := setDSCManagementState, hardResetDSC, finishDSCHardReset, softResetDSC
+	t.Cleanup(func() {
+		setDSCManagementState, hardResetDSC, finishDSCHardReset, softResetDSC = prevSet, prevHard, prevFinish, prevSoft
+	})
+	softResetDSC = func(_ *cluster.Client, req types.DSCPlanRequest) (*types.OperationResponse, error) {
+		soft = append(soft, req)
+		return &types.OperationResponse{Success: true, Message: "ok"}, nil
+	}
 	finishDSCHardReset = func(_ *cluster.Client, req types.DSCFinishRequest) (*types.OperationResponse, error) {
 		finished = append(finished, req)
 		return &types.OperationResponse{Success: true, Message: "ok"}, nil
@@ -47,7 +54,10 @@ func TestDSCChangeRoutesValidateTheirRequest(t *testing.T) {
 		{"/api/components/dsc/management", `{"name":"Bad Name","path":"ray","from":"","to":"Managed"}`, http.StatusBadRequest},
 		{"/api/components/dsc/hard-reset/stream", `{"name":"default-dsc","uid":"u-1","token":"` + token + `","confirm":"default"}`, http.StatusBadRequest},
 		{"/api/components/dsc/hard-reset/stream", `{"name":"default-dsc","uid":"u-1","token":"short","confirm":"default-dsc"}`, http.StatusBadRequest},
-		{"/api/components/dsc/hard-reset/stream", `{"name":"default-dsc","uid":"u-1","token":"` + token + `","confirm":"default-dsc"}`, http.StatusOK},
+		{"/api/components/dsc/hard-reset/stream", `{"name":"default-dsc","uid":"u-1","token":"` + token + `","confirm":"default-dsc"}`, http.StatusBadRequest},
+		{"/api/components/dsc/hard-reset/stream", `{"name":"default-dsc","uid":"u-1","token":"` + token + `","confirm":"default-dsc","keepEnabled":true}`, http.StatusOK},
+		{"/api/components/dsc/reset", `{"name":"default-dsc","uid":"u-1","token":"` + token + `"}`, http.StatusBadRequest},
+		{"/api/components/dsc/reset", `{"name":"default-dsc","uid":"u-1","token":"` + token + `","keepEnabled":false}`, http.StatusOK},
 		{"/api/components/dsc/fix", `{"name":"default-dsc","uid":"u-1"}`, http.StatusBadRequest},
 		{"/api/components/dsc/hard-reset/finish", `{"name":"default-dsc"}`, http.StatusBadRequest},
 		{"/api/components/dsc/hard-reset/finish", `{"name":"default-dsc","token":"` + token + `"}`, http.StatusOK},
@@ -62,8 +72,11 @@ func TestDSCChangeRoutesValidateTheirRequest(t *testing.T) {
 	if len(toggled) != 1 || toggled[0].Path != "kserve.nim" || toggled[0].From != "Managed" || toggled[0].To != "Removed" || toggled[0].Token != token || toggled[0].UID != "u-1" {
 		t.Fatalf("toggled = %+v", toggled)
 	}
-	if len(reset) != 1 || reset[0].Confirm != "default-dsc" || reset[0].Token != token {
+	if len(reset) != 1 || reset[0].Confirm != "default-dsc" || reset[0].Token != token || reset[0].KeepEnabled == nil || !*reset[0].KeepEnabled {
 		t.Fatalf("reset = %+v", reset)
+	}
+	if len(soft) != 1 || soft[0].KeepEnabled == nil || *soft[0].KeepEnabled {
+		t.Fatalf("soft reset = %+v", soft)
 	}
 	if len(finished) != 1 || finished[0].Name != "default-dsc" || finished[0].Token != token {
 		t.Fatalf("finished = %+v", finished)
@@ -80,11 +93,11 @@ func TestDSCPlanNeedsClusterAdmin(t *testing.T) {
 	called := false
 	prev := planDSCChange
 	t.Cleanup(func() { planDSCChange = prev })
-	planDSCChange = func(*cluster.Client, string, string, string, bool) (*types.DSCPlan, error) {
+	planDSCChange = func(*cluster.Client, string, string, string, bool, bool) (*types.DSCPlan, error) {
 		called = true
 		return &types.DSCPlan{}, nil
 	}
-	r := httptest.NewRequest(http.MethodGet, "/api/components/dsc/plan?action=hard-reset", nil)
+	r := httptest.NewRequest(http.MethodGet, "/api/components/dsc/plan?action=hard-reset&keepEnabled=true", nil)
 	r.Header.Set("X-Forwarded-Access-Token", "user:reader")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, r)
@@ -103,5 +116,54 @@ func TestDSCPlanNeedsClusterAdmin(t *testing.T) {
 	mux.ServeHTTP(w, r)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("bad path: %d", w.Code)
+	}
+}
+
+// A reset's plan says whether it keeps the components the user turned on:
+// keepEnabled is required for soft-reset and hard-reset, and passed on.
+func TestDSCResetPlanNeedsKeepEnabled(t *testing.T) {
+	setupDevMode(t)
+	allowMutations(t)
+	mux := http.NewServeMux()
+	Register(mux)
+	type call struct {
+		action string
+		keep   bool
+	}
+	var calls []call
+	prev := planDSCChange
+	t.Cleanup(func() { planDSCChange = prev })
+	planDSCChange = func(_ *cluster.Client, action, _, _ string, _, keep bool) (*types.DSCPlan, error) {
+		calls = append(calls, call{action, keep})
+		return &types.DSCPlan{}, nil
+	}
+	for _, tc := range []struct {
+		query string
+		want  int
+	}{
+		{"action=soft-reset", http.StatusBadRequest},
+		{"action=hard-reset&keepEnabled=yes", http.StatusBadRequest},
+		{"action=soft-reset&keepEnabled=true", http.StatusOK},
+		{"action=hard-reset&keepEnabled=false", http.StatusOK},
+		{"action=fix", http.StatusOK},
+		{"action=fix&keepEnabled=true", http.StatusOK},
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/api/components/dsc/plan?"+tc.query, nil)
+		r.Header.Set("X-Forwarded-Access-Token", "user:admin")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Errorf("%s: %d %s", tc.query, w.Code, w.Body.String())
+		}
+		resetPackageState(t)
+	}
+	want := []call{{"soft-reset", true}, {"hard-reset", false}, {"fix", false}, {"fix", false}}
+	if len(calls) != len(want) {
+		t.Fatalf("calls = %+v", calls)
+	}
+	for i := range want {
+		if calls[i] != want[i] {
+			t.Fatalf("calls = %+v, want %+v", calls, want)
+		}
 	}
 }

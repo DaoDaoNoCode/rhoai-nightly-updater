@@ -39,7 +39,7 @@ func TestToggleOfAConversionWebhookComponentIsRefusedInThePlanAsInTheChange(t *t
 	})
 	putConversionCRD(f, "sparkapplications.sparkoperator.k8s.io", "redhat-ods-applications", "spark-operator-webhook-service")
 	putConversionCRD(f, "scheduledsparkapplications.sparkoperator.k8s.io", "redhat-ods-applications", "spark-operator-webhook-service")
-	plan, err := PlanDSCChange(c, "toggle", "sparkoperator", "Removed", false)
+	plan, err := PlanDSCChange(c, "toggle", "sparkoperator", "Removed", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestToggleOfAConversionWebhookComponentIsRefusedInThePlanAsInTheChange(t *t
 // A toggle runs only with the token of the plan the user reviewed.
 func TestToggleNeedsTheReviewedPlan(t *testing.T) {
 	f, c := managerWorld(t, nil)
-	plan, _ := PlanDSCChange(c, "toggle", "ray", "Removed", false)
+	plan, _ := PlanDSCChange(c, "toggle", "ray", "Removed", false, false)
 	for _, req := range []types.DSCToggleRequest{
 		{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed", UID: plan.UID},
 		{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed", UID: plan.UID, Token: strings.Repeat("0", 24)},
@@ -89,7 +89,7 @@ func TestUnsetStateIsTheCRDDefault(t *testing.T) {
 		t.Fatalf("node = %+v", n)
 	}
 	f.put(rhodsOperator, map[string]interface{}{"status": map[string]interface{}{"readyReplicas": 0}})
-	plan, _ := PlanDSCChange(c, "toggle", "aipipelines.argoWorkflowsControllers", "Removed", false)
+	plan, _ := PlanDSCChange(c, "toggle", "aipipelines.argoWorkflowsControllers", "Removed", false, false)
 	if len(plan.Changes) != 1 || plan.Changes[0].Effect != "removes" || plan.Changes[0].FromSet {
 		t.Fatalf("changes = %+v", plan.Changes)
 	}
@@ -99,7 +99,7 @@ func TestUnsetStateIsTheCRDDefault(t *testing.T) {
 	// Unset with no schema default stays Removed: setting it Removed
 	// changes the field, not what is deployed.
 	_, c = managerWorld(t, func(dsc map[string]interface{}) { setPath(t, dsc, "spec.components.databaseservice", nil) })
-	plan, _ = PlanDSCChange(c, "toggle", "databaseservice", "Removed", false)
+	plan, _ = PlanDSCChange(c, "toggle", "databaseservice", "Removed", false, false)
 	if len(plan.Changes) != 1 || plan.Changes[0].Effect != "" || len(plan.Blocked) != 0 {
 		t.Fatalf("databaseservice plan = %+v", plan)
 	}
@@ -116,7 +116,7 @@ func TestHelmManagedDSCIsReadOnly(t *testing.T) {
 		t.Fatalf("read-only reason = %q", m.ReadOnlyReason)
 	}
 	for _, action := range []string{"toggle", "fix", "soft-reset", "hard-reset"} {
-		if plan, _ := PlanDSCChange(c, action, "ray", "Removed", false); plan.Code != ErrorCodeGitOpsManaged {
+		if plan, _ := PlanDSCChange(c, action, "ray", "Removed", false, false); plan.Code != ErrorCodeGitOpsManaged {
 			t.Fatalf("%s plan = %+v", action, plan)
 		}
 	}
@@ -288,7 +288,7 @@ func TestHardResetStoppedWhileWaitingCanBeFinished(t *testing.T) {
 	f, c := managerWorld(t, func(dsc map[string]interface{}) {
 		setPath(t, dsc, "spec.components.workbenches.workbenchNamespace", "my-notebooks")
 	})
-	plan, _ := PlanDSCChange(c, "hard-reset", "", "", false)
+	plan, _ := PlanDSCChange(c, "hard-reset", "", "", false, false)
 	ctx, cancel := context.WithCancelCause(context.Background())
 	stopping := &Client{baseURL: c.baseURL, token: c.token, httpClient: c.httpClient, ctx: ctx}
 	f.beforeServe = func(method, p string) {
@@ -296,7 +296,7 @@ func TestHardResetStoppedWhileWaitingCanBeFinished(t *testing.T) {
 			cancel(ErrOperationLockLost)
 		}
 	}
-	res, err := HardResetDSC(stopping, types.DSCPlanRequest{Name: plan.Name, UID: plan.UID, Token: plan.Token, Confirm: plan.Name}, func(UpdateStepEvent) {})
+	res, err := HardResetDSC(stopping, types.DSCPlanRequest{Name: plan.Name, UID: plan.UID, Token: plan.Token, Confirm: plan.Name, KeepEnabled: boolPtr(false)}, func(UpdateStepEvent) {})
 	if err != nil || res.Success || res.ErrorCode != "interrupted" || !strings.Contains(res.Message, ErrOperationLockLost.Error()) ||
 		!strings.Contains(res.Message, "Finish the hard reset") || !strings.Contains(res.Message, "workbenchNamespace: my-notebooks") {
 		t.Fatalf("result = %+v, %v", res, err)
@@ -485,7 +485,7 @@ func TestHardResetChecksModulesThatStayRemovedAsRemovals(t *testing.T) {
 	f, c := managerWorld(t, nil)
 	putConversionCRD(f, "gateways.aigateway.opendatahub.io", "redhat-ods-applications", "ai-gateway-webhook-service")
 	putConversionCRD(f, "guardrails.trustyai.opendatahub.io", "redhat-ods-applications", "trustyai-webhook-service")
-	plan, _ := PlanDSCChange(c, "hard-reset", "", "", false)
+	plan, _ := PlanDSCChange(c, "hard-reset", "", "", false, false)
 	if why := blockReasons(plan, "aigateway"); !strings.Contains(why, "oc get gateways.aigateway.opendatahub.io -A") {
 		t.Fatalf("aigateway stays Removed and serves a conversion webhook: blocked = %+v", plan.Blocked)
 	}

@@ -1444,12 +1444,18 @@ export function dscManager(overrides = {}) {
 // The plan's binding (a hash in the real backend); the mock never checks it.
 const DSC_PLAN_BINDING = "0".repeat(24);
 
+// The mock cluster's MaaS is in use (a published model, the tool's
+// subscription and access policy), as on the live cluster the guard was
+// written for (dsc_maas_guard.go).
+const DSC_MAAS_IN_USE = "MaaS is in use (published model team-a/qwen25-05b-instruct; subscription models-as-a-service/rhoai-nightly-updater-subscription; access policy models-as-a-service/rhoai-nightly-updater-access; this tool set MaaS up (MaaS tab)).";
+
 /** What a change would do (GET /api/components/dsc/plan), for the mock's manager m. */
-export function dscPlan(m, action, path, to, withParent) {
+export function dscPlan(m, action, path, to, withParent, keepEnabled = false) {
   const base = { action, name: m.name, uid: m.uid, apiVersion: m.apiVersion, token: DSC_PLAN_BINDING, changes: [] };
   const node = m.nodes.find((n) => n.path === path);
   const change = (n, value) => ({ path: n.path, from: n.spec, fromSet: n.specSet, to: value, toSet: true, toggle: true,
     effect: value === "Managed" && n.spec !== "Managed" ? "deploys" : value !== "Managed" && n.spec === "Managed" ? "removes" : "" });
+  const maasBlock = (p) => ({ component: p, reasons: [`${DSC_MAAS_IN_USE} Removing ${p} takes MaaS away: maas-api and the gateway's policies go, so every published model and every API key stops working. Remove MaaS on the MaaS tab first (Clean up MaaS unpublishes and removes it in order), or keep ${p} Managed`] });
   if (action === "toggle" && node) {
     const parent = m.nodes.find((n) => n.path === node.parent);
     if (to === "Managed" && parent?.toggle && parent.spec !== "Managed") {
@@ -1460,18 +1466,31 @@ export function dscPlan(m, action, path, to, withParent) {
     if (to !== "Managed") {
       for (const c of m.nodes.filter((n) => n.parent === path && n.spec === "Managed")) changes.push({ path: c.path, from: "Managed", fromSet: true, to: "Managed", toSet: true, toggle: true, effect: "removes" });
     }
-    return { ...base, changes };
+    const takesMaaS = to !== "Managed" && node.spec === "Managed" && ["aigateway", "aigateway.modelsAsAService"].includes(path);
+    return { ...base, changes, ...(takesMaaS ? { blocked: [maasBlock(path)] } : {}) };
   }
   if (action === "fix") {
     return { ...base, changes: m.mismatches.filter((x) => x.kind === "unset").map((x) => ({ path: x.path, fromSet: false, to: x.default, toSet: true, toggle: true, effect: x.default === "Managed" ? "deploys" : "" })) };
   }
-  const differing = m.nodes.filter((n) => n.toggle && n.defaultSet && n.spec !== n.default).map((n) => change(n, n.default));
-  if (action === "soft-reset") return { ...base, changes: differing };
+  // Resets: what the user turned on (Managed or Unmanaged and deployed,
+  // off in the release default) is kept with keepEnabled.
+  const byPath = Object.fromEntries(m.nodes.map((n) => [n.path, n]));
+  const deployed = (n) => (n.spec === "Managed" || n.spec === "Unmanaged") && (!byPath[n.parent]?.toggle || byPath[n.parent].spec === "Managed");
+  const turnedOn = m.nodes.filter((n) => n.toggle && n.specSet && deployed(n) && (n.default || n.schemaDefault || "Removed") === "Removed").map((n) => n.path);
+  const kept = keepEnabled ? turnedOn : [];
+  const differing = m.nodes.filter((n) => n.toggle && n.defaultSet && n.spec !== n.default && !kept.includes(n.path)).map((n) => change(n, n.default));
+  const takesMaaS = differing.some((c) => c.path === "aigateway" && c.effect === "removes");
+  const reset = { ...base, keepEnabled, turnedOn, kept, ...(takesMaaS ? { blocked: [maasBlock("aigateway")] } : {}) };
+  if (action === "soft-reset" && differing.length === 0 && kept.length > 0) {
+    return { ...reset, refusal: `The DataScienceCluster already matches the release default, apart from the components you turned on, which the reset keeps (${kept.join(", ")}). Nothing to change.`, code: "nothing_to_do" };
+  }
+  if (action === "soft-reset") return { ...reset, changes: differing };
   return {
-    ...base, changes: differing,
+    ...reset, changes: differing,
     tornDown: m.nodes.filter((n) => n.depth === 0 && (n.toggle ? n.spec === "Managed" : n.actual === "Managed")).map((n) => n.path),
     stayRemoved: differing.filter((c) => c.effect === "removes").map((c) => c.path),
-    warnings: ["Until aipipelines is back, these stop working: pipeline server team-a/dspa."],
-    newObject: "apiVersion: datasciencecluster.opendatahub.io/v3\nkind: DataScienceCluster\nmetadata:\n  labels:\n    app.kubernetes.io/name: datasciencecluster\n  name: default-dsc\nspec:\n  components:\n    aiHub:\n      instancesNamespace: rhoai-model-registries\n      managementState: Managed\n    aigateway:\n      managementState: Removed\n    ...\n",
+    warnings: ["Until aipipelines is back, these stop working: pipeline server team-a/dspa.",
+      ...(kept.includes("aigateway") ? ["While aigateway is down, MaaS does not serve (published model team-a/qwen25-05b-instruct): every published model and every API key stops working until the new DataScienceCluster brings it back."] : [])],
+    newObject: `apiVersion: datasciencecluster.opendatahub.io/v3\nkind: DataScienceCluster\nmetadata:\n  labels:\n    app.kubernetes.io/name: datasciencecluster\n  name: default-dsc\nspec:\n  components:\n    aiHub:\n      instancesNamespace: rhoai-model-registries\n      managementState: Managed\n    aigateway:\n      managementState: ${kept.includes("aigateway") ? "Managed" : "Removed"}\n    ...\n`,
   };
 }

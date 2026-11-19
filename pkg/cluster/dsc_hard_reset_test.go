@@ -14,11 +14,11 @@ import (
 // collecting the steps.
 func runHardReset(t *testing.T, c *Client, mutate func(*types.DSCPlanRequest)) (*types.OperationResponse, []UpdateStepEvent) {
 	t.Helper()
-	plan, err := PlanDSCChange(c, "hard-reset", "", "", false)
+	plan, err := PlanDSCChange(c, "hard-reset", "", "", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := types.DSCPlanRequest{Name: plan.Name, UID: plan.UID, Token: plan.Token, Confirm: plan.Name}
+	req := types.DSCPlanRequest{Name: plan.Name, UID: plan.UID, Token: plan.Token, Confirm: plan.Name, KeepEnabled: boolPtr(false)}
 	if mutate != nil {
 		mutate(&req)
 	}
@@ -78,7 +78,7 @@ func TestHardResetDeletesWaitsAndCreatesTheReleaseDefault(t *testing.T) {
 		setPath(t, dsc, "spec.components.aiHub.instancesNamespace", "my-registries")
 	})
 	operatorRemovesDSCAfter(f, 3)
-	plan, _ := PlanDSCChange(c, "hard-reset", "", "", false)
+	plan, _ := PlanDSCChange(c, "hard-reset", "", "", false, false)
 	if plan.Refusal != "" || len(plan.Blocked) != 0 || !strings.Contains(plan.NewObject, "my-notebooks") {
 		t.Fatalf("plan = %+v", plan)
 	}
@@ -243,7 +243,7 @@ func TestNewDefaultObjectIsTheReleaseDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	obj := v.newDefaultObject()
+	obj := v.newDefaultObject(v.resetTarget(&types.DSCPlan{}, false))
 	raw, _ := json.Marshal(obj)
 	if !strings.Contains(string(raw), `"name":"default-dsc"`) || strings.Contains(string(raw), "workbenchNamespace") {
 		t.Fatalf("object = %s", raw)
