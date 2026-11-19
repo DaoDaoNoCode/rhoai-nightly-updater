@@ -27,8 +27,8 @@ type rateLimiter struct {
 	now    func() time.Time // clk.Now when the limiter was made
 }
 
-func newRateLimiter(window time.Duration) *rateLimiter {
-	return &rateLimiter{users: map[string]time.Time{}, window: window, now: clk.Now}
+func newRateLimiter() *rateLimiter {
+	return &rateLimiter{users: map[string]time.Time{}, window: mutationWindow, now: clk.Now}
 }
 
 // retryAfter is how long until key's slot frees, rounded up to whole
@@ -41,8 +41,12 @@ func (rl *rateLimiter) retryAfter(key string) int {
 	return max(1, min(secs, int(rl.window/time.Second)))
 }
 
+// mutationWindow is the rate limit's window: one accepted change per user
+// and endpoint per window.
+const mutationWindow = 30 * time.Second
+
 // mutationLimiter is the package-level rate limiter for mutation endpoints.
-var mutationLimiter = newRateLimiter(30 * time.Second)
+var mutationLimiter = newRateLimiter()
 
 // tryAcquire takes the slot for key unless it was taken within the window.
 // It returns the slot's timestamp for release.

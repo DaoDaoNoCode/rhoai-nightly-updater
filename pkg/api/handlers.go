@@ -133,7 +133,7 @@ func (sw *statusWriter) Unwrap() http.ResponseWriter {
 func writeError(w http.ResponseWriter, msg string, code int, errorCode ...string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	ec := ""
+	var ec string
 	if len(errorCode) > 0 && errorCode[0] != "" {
 		ec = errorCode[0]
 	} else {

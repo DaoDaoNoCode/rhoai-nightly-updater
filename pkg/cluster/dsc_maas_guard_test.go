@@ -94,7 +94,7 @@ func assertMaaSBlock(t *testing.T, plan *types.DSCPlan, component string) {
 
 func assertNoDSCPatch(t *testing.T, f *resourceFake) {
 	t.Helper()
-	if dry, real := patchesTo(f, dscV3Path); len(dry)+len(real) != 0 {
+	if dry, real := patchesTo(f); len(dry)+len(real) != 0 {
 		t.Fatalf("patched the DSC: %d dry runs, %d patches", len(dry), len(real))
 	}
 }

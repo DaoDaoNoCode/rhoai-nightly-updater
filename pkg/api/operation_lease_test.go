@@ -241,7 +241,7 @@ func TestExpiredLeaseIsTakenOver(t *testing.T) {
 	allowMutations(t)
 	f := installFakeRecord(t)
 	f.setLease(otherPodLease(time.Now().Add(-2 * leaseTTL)))
-	refreshResult(&types.OperationResponse{Success: true, Message: "refreshed"}, nil)
+	refreshResult(&types.OperationResponse{Success: true, Message: "refreshed"})
 	w := httptest.NewRecorder()
 	HandleRefreshStream(w, postJSON("/api/refresh/stream", "user:bob", "{}"))
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "operation_complete") {
@@ -475,7 +475,7 @@ func TestLastCompletedFreshness(t *testing.T) {
 	saveCompletedOperation = func(*cluster.Client, *types.CompletedOperation, *cluster.LeaseOwner) error {
 		return errors.New("unavailable")
 	}
-	refreshResult(&types.OperationResponse{Success: true, Message: "refreshed"}, nil)
+	refreshResult(&types.OperationResponse{Success: true, Message: "refreshed"})
 	HandleRefreshStream(httptest.NewRecorder(), postJSON("/api/refresh/stream", "user:carol", "{}"))
 	if status, _ := getOperation(t); status.LastCompleted == nil || status.LastCompleted.User != "carol" {
 		t.Fatalf("own newer operation not preferred: %+v", status.LastCompleted)

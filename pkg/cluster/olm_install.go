@@ -272,7 +272,8 @@ const installDeadlineReserve = 10 * time.Second
 // Anything else OLM proposes is reported and left for an administrator:
 // Manual approval is how admins hold back upgrades, and OLM cannot undo an
 // approved upgrade (RHOAI operator notes §1.3, §1.4).
-func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), logs *[]string, recovery *operatorRecovery, expectedCSV string) installOutcome {
+func waitForOperatorInstall(c *Client, emit func(UpdateStepEvent), logs *[]string, recovery *operatorRecovery, expectedCSV string) installOutcome {
+	const step = "verify_installplan"
 	// waitStart is compared with the cluster's condition times (adminAckNote).
 	waitStart := time.Now()
 	deadline := clk.Now().Add(OperatorInstallTimeout)

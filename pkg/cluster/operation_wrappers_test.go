@@ -112,6 +112,6 @@ func GetOperationState(c *Client) (*types.OperationMarker, *types.CompletedOpera
 }
 
 // redactURL is redactDBSecrets for one connection URL.
-func redactURL(msg, connURL string, passwords ...string) string {
-	return redactDBSecrets(msg, []string{connURL}, passwords)
+func redactURL(msg, connURL string) string {
+	return redactDBSecrets(msg, []string{connURL}, nil)
 }

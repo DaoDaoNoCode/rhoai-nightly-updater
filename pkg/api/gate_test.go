@@ -462,7 +462,7 @@ func TestRateLimitIsTheToolsOwnWithTheRealWait(t *testing.T) {
 	allowMutations(t)
 	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
 	orig := mutationLimiter
-	mutationLimiter = newRateLimiter(30 * time.Second)
+	mutationLimiter = newRateLimiter()
 	mutationLimiter.now = func() time.Time { return now }
 	t.Cleanup(func() { mutationLimiter = orig })
 	h := withMutationAuth(func(_ *cluster.Client, w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -484,7 +484,7 @@ func TestRateLimitIsTheToolsOwnWithTheRealWait(t *testing.T) {
 
 func TestRateLimiterWindow(t *testing.T) {
 	fc := clocktest.NewFake()
-	rl := newRateLimiter(30 * time.Second)
+	rl := newRateLimiter()
 	rl.now = fc.Now
 	slot, ok := rl.tryAcquire("a")
 	if !ok {

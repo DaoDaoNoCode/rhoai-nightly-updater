@@ -133,7 +133,7 @@ func TestHardResetTimesOutWithoutCreating(t *testing.T) {
 		t.Fatalf("created after a timeout: %+v", posts)
 	}
 	// Only the pre-delete validation, a dry run; never a finalizer.
-	if _, real := patchesTo(f, dscV3Path); len(real) != 0 {
+	if _, real := patchesTo(f); len(real) != 0 {
 		t.Fatalf("patched the DSC (finalizer?): %+v", real)
 	}
 	if !strings.Contains(res.Message, "Finish the hard reset") || !strings.Contains(res.Message, "kind: DataScienceCluster") {

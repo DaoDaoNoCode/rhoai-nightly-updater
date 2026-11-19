@@ -83,6 +83,11 @@ func listModuleCRs(c *Client, discover func() (componentAPI, error), module stri
 	if err != nil {
 		return nil, err
 	}
+	return listModuleCRsIn(c, api, module)
+}
+
+// listModuleCRsIn is listModuleCRs with the API already discovered.
+func listModuleCRsIn(c *Client, api componentAPI, module string) ([]moduleCRItem, error) {
 	resource, ok := api.resourceForModule(module)
 	if !ok {
 		return nil, nil

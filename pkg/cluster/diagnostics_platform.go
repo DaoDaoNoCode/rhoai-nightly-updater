@@ -180,10 +180,9 @@ func stuckModuleCRs(c *Client, now time.Time) ([]stuckModule, error) {
 		items []moduleCRItem
 		err   error
 	}
-	discovered := func() (componentAPI, error) { return api, nil }
 	results := make([]listResult, len(api.Kinds))
 	parallelFor(len(api.Kinds), 6, func(i int) {
-		results[i].items, results[i].err = listModuleCRs(c, discovered, strings.ToLower(api.Kinds[i].Kind))
+		results[i].items, results[i].err = listModuleCRsIn(c, api, strings.ToLower(api.Kinds[i].Kind))
 	})
 	var out []stuckModule
 	var errs []string

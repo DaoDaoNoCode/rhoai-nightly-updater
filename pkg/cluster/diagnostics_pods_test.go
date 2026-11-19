@@ -195,7 +195,7 @@ func observabilityCluster(t *testing.T, eventsForbidden bool) (*fakeAPI, *Client
 			"reason": "Error", "exitCode": 1, "finishedAt": time.Now().Add(-time.Minute).UTC().Format(time.RFC3339),
 		}}
 	}
-	f.obj("GET", "/api/v1/namespaces/"+ns+"/pods", map[string]interface{}{"items": pods})
+	f.obj("/api/v1/namespaces/"+ns+"/pods", map[string]interface{}{"items": pods})
 	if eventsForbidden {
 		f.status("GET", "/api/v1/namespaces/"+ns+"/events", http.StatusForbidden, "Forbidden")
 	} else {
@@ -268,7 +268,7 @@ func TestOperatorPods_CrashLoopIsCritical(t *testing.T) {
 	pod := makePod(SubNS, "rhods-operator", "75bd6cd964", "abcde", time.Hour,
 		waiting("manager", "CrashLoopBackOff", "", 12), lastTerminated("Error", 2, time.Minute))
 	pod["metadata"].(map[string]interface{})["creationTimestamp"] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
-	f.obj("GET", "/api/v1/namespaces/"+SubNS+"/pods", map[string]interface{}{"items": []interface{}{pod}})
+	f.obj("/api/v1/namespaces/"+SubNS+"/pods", map[string]interface{}{"items": []interface{}{pod}})
 	out := checkOperatorPods(c)
 	if len(out.problems) != 1 || out.problems[0].Severity != "critical" || out.problems[0].AutoFixable {
 		t.Fatalf("out = %+v", out)

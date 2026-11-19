@@ -68,13 +68,13 @@ func addMCP(t *mlflowTarget, log func(string)) (string, error) {
 		// by the same caller, is the tool's.
 		if err := t.confirmNewParent("MCP server '"+mcpSampleName+"'", mcpServerPath(""), mcpServerPath("/versions"), "mcp_server_versions", mcpSampleVersion, created.CreatedBy); err != nil {
 			if delErr := t.api.sendJSON("DELETE", mcpServerPath("/versions/"+url.PathEscape(mcpSampleVersion)), nil, nil, nil); delErr != nil {
-				return "", fmt.Errorf("%w; the version this tool added could not be deleted again (%v): delete version %s of MCP server %s in MLflow", err, delErr, mcpSampleVersion, mcpSampleName)
+				return "", fmt.Errorf("%w; the version this tool added could not be deleted again (%w): delete version %s of MCP server %s in MLflow", err, delErr, mcpSampleVersion, mcpSampleName)
 			}
 			return "", err
 		}
 		if err := t.api.sendJSON("POST", mcpServerPath("/tags"), nil, map[string]string{"key": sampleMarkerKey, "value": SampleMCPServer}, nil); err != nil {
 			if delErr := t.api.sendJSON("DELETE", mcpServerPath(""), nil, nil, nil); delErr != nil {
-				return "", fmt.Errorf("%w; the new draft server could not be deleted again (%v): delete MCP server %s in MLflow", err, delErr, mcpSampleName)
+				return "", fmt.Errorf("%w; the new draft server could not be deleted again (%w): delete MCP server %s in MLflow", err, delErr, mcpSampleName)
 			}
 			return "", err
 		}
@@ -228,13 +228,13 @@ func addSkill(t *mlflowTarget, log func(string)) (string, error) {
 		// As for MCP: a skill someone created since the read is theirs.
 		if err := t.confirmNewParent("skill '"+skillSampleName+"'", skillPath(""), skillPath("/versions"), "skill_versions", created.id(), created.CreatedBy); err != nil {
 			if delErr := t.api.sendJSON("DELETE", skillPath("/versions/"+url.PathEscape(created.id())), nil, nil, nil); delErr != nil {
-				return "", fmt.Errorf("%w; the version this tool added could not be deleted again (%v): delete version %s of skill %s in MLflow", err, delErr, created.id(), skillSampleName)
+				return "", fmt.Errorf("%w; the version this tool added could not be deleted again (%w): delete version %s of skill %s in MLflow", err, delErr, created.id(), skillSampleName)
 			}
 			return "", err
 		}
 		if err := t.api.sendJSON("POST", skillPath("/tags"), nil, map[string]string{"key": sampleMarkerKey, "value": SampleSkill}, nil); err != nil {
 			if delErr := t.api.sendJSON("DELETE", skillPath(""), nil, nil, nil); delErr != nil {
-				return "", fmt.Errorf("%w; the new skill could not be deleted again (%v): delete skill %s in MLflow", err, delErr, skillSampleName)
+				return "", fmt.Errorf("%w; the new skill could not be deleted again (%w): delete skill %s in MLflow", err, delErr, skillSampleName)
 			}
 			return "", err
 		}

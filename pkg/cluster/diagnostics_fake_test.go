@@ -74,7 +74,8 @@ func (f *fakeAPI) json(method, path string, status int, body string) {
 	f.handle(method, path, func(*http.Request, []byte) (int, string) { return status, body })
 }
 
-func (f *fakeAPI) obj(method, path string, v interface{}) {
+func (f *fakeAPI) obj(path string, v interface{}) {
+	method := "GET"
 	b, err := json.Marshal(v)
 	if err != nil {
 		panic(err)

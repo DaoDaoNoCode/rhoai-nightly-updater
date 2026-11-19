@@ -100,7 +100,7 @@ func TestMutationClientActsAsTheUser(t *testing.T) {
 			t.Errorf("%s: no lease or marker write", tc.name)
 		}
 		mu.Unlock()
-		mutationLimiter = newRateLimiter(30 * time.Second)
+		mutationLimiter = newRateLimiter()
 	}
 }
 
@@ -261,7 +261,7 @@ func TestUserTokenIsNeverLoggedOrEchoed(t *testing.T) {
 		if strings.Contains(w.Body.String(), secret) {
 			t.Fatalf("response shows the token: %s", w.Body.String())
 		}
-		mutationLimiter = newRateLimiter(30 * time.Second)
+		mutationLimiter = newRateLimiter()
 	}
 	fakeSession(t, fullToken(sessionNow), nil)
 	runRefreshStream = func(c *cluster.Client, _ cluster.OperationOptions, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {

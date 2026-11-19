@@ -193,10 +193,9 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	}
 	// A managed Subscription's startingCSV pin from Git must be the verified
 	// head; the new Subscription pins that head in any case (below).
-	startingCSV := ""
 	if g.subscriptionApp != "" {
 		prevSpec, _ := recovery.subscriptionBase()["spec"].(map[string]interface{})
-		startingCSV, _ = prevSpec["startingCSV"].(string)
+		startingCSV, _ := prevSpec["startingCSV"].(string)
 		if startingCSV != "" && startingCSV != target.HeadCSV {
 			return fail(fmt.Sprintf("The Subscription pins startingCSV %s in Git, but the catalog serves %s on channel %s. Change the pin in Git, or the catalog image, so they agree. Nothing was changed.", startingCSV, target.HeadCSV, target.Channel), ErrorCodeGitOpsManaged)
 		}

@@ -245,7 +245,8 @@ func registryAsked(s string) bool {
 	return found
 }
 
-func mergedPR(sha string) map[string]interface{} {
+func mergedPR() map[string]interface{} {
+	sha := mergeSHA
 	return map[string]interface{}{"state": "closed", "merged": true, "merged_at": "2026-10-05T21:16:13Z", "merge_commit_sha": sha,
 		"title": "Fix the thing", "html_url": "https://github.com/opendatahub-io/odh-dashboard/pull/9938"}
 }
@@ -320,7 +321,7 @@ func resultsByTag(resp *types.PRContainsResponse) map[string]types.PRContainsBui
 func TestFindBuildsContainingPR_Verdicts(t *testing.T) {
 	g := newFakeGitHub()
 	installFakeGitHub(t, g)
-	g.prs[9938] = mergedPR(mergeSHA)
+	g.prs[9938] = mergedPR()
 	g.compare[mergeSHA+"..."+commitNew] = "ahead"
 	g.compare[mergeSHA+"..."+commitOld] = "diverged"
 	g.compare[mergeSHA+"..."+mergeSHA] = "identical"
@@ -450,7 +451,7 @@ func TestFindBuildsContainingPR_StableBranch(t *testing.T) {
 		t.Helper()
 		g := newFakeGitHub()
 		installFakeGitHub(t, g)
-		g.prs[9938] = mergedPR(mergeSHA)
+		g.prs[9938] = mergedPR()
 		g.compare[mergeSHA+"..."+commitOld] = "diverged"
 		g.branches[DefaultPRSearchRepo+":stable"] = stableHead
 		g.commits[DefaultPRSearchRepo+"|"+stableHead] = "Merge main into stable"
@@ -514,7 +515,7 @@ func TestFindBuildsContainingPR_AnyRepository(t *testing.T) {
 	const dspFork = "red-hat-data-services/data-science-pipelines"
 	g.prRepos[dspRepo] = true
 	g.compareRepos[dspFork] = true
-	g.prs[777] = mergedPR(mergeSHA)
+	g.prs[777] = mergedPR()
 	g.compare[mergeSHA+"..."+commitNew] = "ahead"
 	g.compare[mergeSHA+"..."+commitOld] = "diverged"
 	kserveURL := "https://github.com/red-hat-data-services/kserve"
@@ -582,7 +583,7 @@ func TestFindBuildsContainingPR_AnyRepository(t *testing.T) {
 func TestFindBuildsContainingPR_BuiltBeforeMerge(t *testing.T) {
 	g := newFakeGitHub()
 	registryReads := installFakeGitHub(t, g)
-	g.prs[9938] = mergedPR(mergeSHA) // merged 2026-10-05T21:16:13Z
+	g.prs[9938] = mergedPR() // merged 2026-10-05T21:16:13Z
 	g.compare[mergeSHA+"..."+commitNew] = "ahead"
 
 	// Only the build date is known about the old build: its catalog is not
@@ -817,7 +818,7 @@ func TestFindBuildsContainingPR_RateLimits(t *testing.T) {
 	t.Run("compare rate limited (429 Retry-After): the rest are still answered", func(t *testing.T) {
 		g := newFakeGitHub()
 		installFakeGitHub(t, g)
-		g.prs[9938] = mergedPR(mergeSHA)
+		g.prs[9938] = mergedPR()
 		g.compare[mergeSHA+"..."+commitNew] = "ahead"
 		// Answered first and cached, so the second build is checked from the cache.
 		if _, err := compareContains(context.Background(), forkRepo, mergeSHA, commitNew); err != nil {
@@ -848,7 +849,7 @@ func TestFindBuildsContainingPR_RateLimits(t *testing.T) {
 func TestFindBuildsContainingPR_UnknownBuilds(t *testing.T) {
 	g := newFakeGitHub()
 	installFakeGitHub(t, g)
-	g.prs[9938] = mergedPR(mergeSHA)
+	g.prs[9938] = mergedPR()
 	g.compare[mergeSHA+"..."+commitNew] = "ahead"
 	errSHA := "2222222222222222222222222222222222222222"
 
@@ -958,7 +959,7 @@ func TestFindBuildsContainingPR_RepositoryAllowlist(t *testing.T) {
 	})
 	t.Run("the owner's case does not matter", func(t *testing.T) {
 		g.prRepos["OpenDataHub-io/odh-dashboard"] = true
-		g.prs[9938] = mergedPR(mergeSHA)
+		g.prs[9938] = mergedPR()
 		g.compare[mergeSHA+"..."+commitNew] = "ahead"
 		resp, err := findBuildsContainingPR(context.Background(), "", "OpenDataHub-io/odh-dashboard", 9938, staticBuilds(prBuild{image: seedBuild(t, 1, "rhoai-3.6", forkURL, commitNew)}))
 		if err != nil {
@@ -979,7 +980,7 @@ func TestFindBuildsContainingPR_BoundedConcurrencyAndToken(t *testing.T) {
 		g := newFakeGitHub()
 		g.gate = newCallGate()
 		installFakeGitHub(t, g)
-		g.prs[9938] = mergedPR(mergeSHA)
+		g.prs[9938] = mergedPR()
 		var builds []prBuild
 		for i := 0; i < 12; i++ {
 			commit := fmt.Sprintf("%040d", i+1)
@@ -1015,7 +1016,7 @@ func TestFindBuildsContainingPR_BoundedConcurrencyAndToken(t *testing.T) {
 func TestFindBuildsContainingPR_Timeout(t *testing.T) {
 	g := newFakeGitHub()
 	installFakeGitHub(t, g)
-	g.prs[9938] = mergedPR(mergeSHA)
+	g.prs[9938] = mergedPR()
 	ctx, cancel := context.WithCancel(context.Background())
 	image := seedBuild(t, 1, "rhoai-3.6", forkURL, commitNew)
 	resp, err := findBuildsContainingPR(ctx, "", DefaultPRSearchRepo, 9938, func(context.Context) ([]prBuild, error) {

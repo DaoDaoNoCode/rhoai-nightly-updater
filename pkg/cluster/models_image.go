@@ -308,7 +308,7 @@ func planModelImage(c *Client, presetImage string, wantReleased bool, existing *
 		}
 		img, err := lookupReleasedImage(c.ctx, strings.TrimPrefix(repo, redHatRegistry))
 		if err != nil {
-			return imagePlan{}, fmt.Errorf("cannot find the newest released Red Hat image of %s: %v. Set %s to an image the cluster can pull, or retry", repo, err, vllmImageEnv)
+			return imagePlan{}, fmt.Errorf("cannot find the newest released Red Hat image of %s: %w. Set %s to an image the cluster can pull, or retry", repo, err, vllmImageEnv)
 		}
 		plan.Image, plan.Version = img.Ref, img.Version
 		return plan, nil

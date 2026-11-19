@@ -783,7 +783,7 @@ func verifyUpdateInstall(c *Client, target catalogTarget, recovery *operatorReco
 	// --- Step 8: verify_installplan (wait for OLM's result) ---
 	emit(UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Waiting for OLM to install the operator..."})
 	*logs = append(*logs, "Waiting for OLM to install the operator...")
-	outcome := waitForOperatorInstall(c, "verify_installplan", emit, logs, recovery, target.HeadCSV)
+	outcome := waitForOperatorInstall(c, emit, logs, recovery, target.HeadCSV)
 	if !outcome.succeeded {
 		recovery.keepNewInstall = outcome.keepNewInstall
 		return &types.OperationResponse{Success: false, Message: outcome.message, Logs: *logs, ErrorCode: outcome.errorCode}, nil
@@ -1478,7 +1478,7 @@ func createSubscriptionAndWait(c *Client, source, channel, kind, approveCSV stri
 	// --- verify_installplan: wait for OLM's result ---
 	emit(UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Waiting for OLM to install the operator..."})
 	logs = append(logs, "Waiting for OLM to install the operator...")
-	outcome := waitForOperatorInstall(c, "verify_installplan", emit, &logs, recovery, approveCSV)
+	outcome := waitForOperatorInstall(c, emit, &logs, recovery, approveCSV)
 	if !outcome.succeeded {
 		recovery.keepNewInstall = outcome.keepNewInstall
 		return &types.OperationResponse{Success: false, Message: outcome.message, Logs: logs, ErrorCode: outcome.errorCode}, nil
@@ -1862,7 +1862,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	// --- Step 8: verify_installplan (wait for OLM's result) ---
 	emit(UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Waiting for OLM to reinstall the operator..."})
 	logs = append(logs, "Waiting for OLM to reinstall the operator...")
-	outcome := waitForOperatorInstall(c, "verify_installplan", emit, &logs, recovery, target)
+	outcome := waitForOperatorInstall(c, emit, &logs, recovery, target)
 	if !outcome.succeeded {
 		recovery.keepNewInstall = outcome.keepNewInstall
 		return &types.OperationResponse{Success: false, Message: outcome.message, Logs: logs, ErrorCode: outcome.errorCode}, nil

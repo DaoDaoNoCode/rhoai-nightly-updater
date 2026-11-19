@@ -98,7 +98,7 @@ func TestRenewalFailuresStopTheOperationOnlyPastTheThreshold(t *testing.T) {
 	}
 
 	// Every renewal fails: stopped once leaseTTL-interval has passed.
-	mutationLimiter = newRateLimiter(30 * time.Second)
+	mutationLimiter = newRateLimiter()
 	started, cause, _ = refreshUntilStopped()
 	done = runRefreshInBackground()
 	<-started

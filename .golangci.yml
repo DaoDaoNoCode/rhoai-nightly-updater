@@ -9,6 +9,10 @@ linters:
   default: standard # errcheck, govet, ineffassign, staticcheck, unused
   enable:
     - bodyclose
+    - errorlint
+    - unconvert
+    - unparam
+    - wastedassign
     - misspell
   settings:
     errcheck:

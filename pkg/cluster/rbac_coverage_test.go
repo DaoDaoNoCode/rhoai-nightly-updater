@@ -657,7 +657,7 @@ func toRequests(method, path, site string) ([]rbacRequest, error) {
 	default:
 		return nil, fmt.Errorf("unrecognised API path %q", path)
 	}
-	ns, resource, name := "", "", ""
+	var ns, resource, name string
 	switch {
 	case len(segs) >= 3 && segs[0] == "namespaces":
 		ns, resource = segs[1], segs[2]

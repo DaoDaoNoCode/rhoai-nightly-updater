@@ -643,7 +643,8 @@ func TestDashboardInterruptedDeployCanBeRetried(t *testing.T) {
 	}
 }
 
-func dashboardTestPod(name, container, image string, ready bool, status map[string]interface{}) map[string]interface{} {
+func dashboardTestPod(name, image string, ready bool, status map[string]interface{}) map[string]interface{} {
+	container := "notebooks-ui"
 	cs := map[string]interface{}{"name": container, "ready": ready, "restartCount": 0, "state": map[string]interface{}{"running": map[string]interface{}{}}}
 	for k, v := range status {
 		cs[k] = v
@@ -692,16 +693,16 @@ func TestDashboardStuckRolloutReportsReasons(t *testing.T) {
 			}
 			f.workloads["notebooks-ui"] = d
 			newImage := d.Spec.Template.Spec.Containers[0].Image
-			oldPod := dashboardTestPod("notebooks-old", "notebooks-ui", "release-notebooks", true, nil)
-			newPod := dashboardTestPod("notebooks-new", "notebooks-ui", newImage, false, tc.status)
+			oldPod := dashboardTestPod("notebooks-old", "release-notebooks", true, nil)
+			newPod := dashboardTestPod("notebooks-new", newImage, false, tc.status)
 			if tc.conditions != nil {
 				newPod["status"] = map[string]interface{}{"conditions": tc.conditions}
 			}
-			other := dashboardTestPod("other", "notebooks-ui", newImage, false, nil)
+			other := dashboardTestPod("other", newImage, false, nil)
 			other["metadata"].(map[string]interface{})["labels"] = map[string]string{"app": "other"}
 			// Same labels as the Deployment's pods, newer and not ready, but
 			// owned by another Deployment's ReplicaSet: never this one's pod.
-			foreign := dashboardTestPod("foreign", "notebooks-ui", newImage, false, map[string]interface{}{"state": map[string]interface{}{"waiting": map[string]interface{}{"reason": "ErrImagePull"}}})
+			foreign := dashboardTestPod("foreign", newImage, false, map[string]interface{}{"state": map[string]interface{}{"waiting": map[string]interface{}{"reason": "ErrImagePull"}}})
 			foreign["metadata"].(map[string]interface{})["creationTimestamp"] = "2026-10-06T10:00:00Z"
 			foreign["metadata"].(map[string]interface{})["ownerReferences"] = []map[string]interface{}{{"kind": "ReplicaSet", "name": "other-deployment-foreign", "controller": true}}
 			f.pods = []map[string]interface{}{oldPod, newPod, other, foreign}

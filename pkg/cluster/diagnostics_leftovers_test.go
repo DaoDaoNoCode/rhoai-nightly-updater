@@ -162,7 +162,7 @@ func (w *leftoverWorld) serveCRD(manager string, schema map[string]interface{}) 
 		}},
 		"spec": map[string]interface{}{"versions": []interface{}{map[string]interface{}{"name": "v1alpha1", "served": true, "storage": true, "schema": map[string]interface{}{"openAPIV3Schema": schema}}}},
 	}
-	w.f.obj("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", map[string]interface{}{"items": []interface{}{crd}})
+	w.f.obj("/apis/apiextensions.k8s.io/v1/customresourcedefinitions", map[string]interface{}{"items": []interface{}{crd}})
 }
 
 func (w *leftoverWorld) scan() checkOutput {

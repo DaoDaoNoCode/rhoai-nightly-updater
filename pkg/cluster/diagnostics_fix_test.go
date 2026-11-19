@@ -33,7 +33,7 @@ func svcPath(ns, name string) string { return "/api/v1/namespaces/" + ns + "/ser
 // webhooks, a KServe component webhook whose Service exists, and webhooks
 // whose Service was deleted.
 func setupWebhookFixtures(f *fakeAPI) {
-	f.obj("GET", vwcPath, map[string]interface{}{"items": []interface{}{
+	f.obj(vwcPath, map[string]interface{}{"items": []interface{}{
 		// Stale: operator Service is gone.
 		webhookConfig("datasciencecluster-v2-validator.opendatahub.io-nfzvz", map[string]string{"olm.owner": "rhods-operator.3.6.0"}, "redhat-ods-operator", "rhods-operator-service"),
 		// Serving: Service exists (the webhook the old fix deleted).
@@ -41,7 +41,7 @@ func setupWebhookFixtures(f *fakeAPI) {
 		// Not RHOAI: never touched even though its Service is missing.
 		webhookConfig("some-other-operator.example.com", nil, "other", "gone-service"),
 	}})
-	f.obj("GET", mwcPath, map[string]interface{}{"items": []interface{}{
+	f.obj(mwcPath, map[string]interface{}{"items": []interface{}{
 		webhookConfig("servicemonitor-injector.opendatahub.io-7vqqf", map[string]string{"olm.owner": "rhods-operator.3.6.0"}, "redhat-ods-operator", "rhods-operator-service"),
 	}})
 	f.json("GET", svcPath("redhat-ods-applications", "odh-model-controller-webhook-service"), http.StatusOK, `{"kind":"Service"}`)
@@ -144,7 +144,7 @@ func TestStaleWebhookCheck_ServingWebhooksDuringUpgradeAreNotStale(t *testing.T)
 	f, c := newFakeAPI(t)
 	setupWebhookFixtures(f)
 	f.json("GET", svcPath("redhat-ods-operator", "rhods-operator-service"), http.StatusOK, `{"kind":"Service"}`)
-	f.obj("GET", "/apis/operators.coreos.com/v1alpha1/namespaces/"+SubNS+"/clusterserviceversions", map[string]interface{}{
+	f.obj("/apis/operators.coreos.com/v1alpha1/namespaces/"+SubNS+"/clusterserviceversions", map[string]interface{}{
 		"items": []interface{}{map[string]interface{}{"metadata": map[string]interface{}{"name": "rhods-operator.3.6.0"}, "spec": map[string]interface{}{"version": "3.6.0"}, "status": map[string]interface{}{"phase": "Installing"}}},
 	})
 	out := checkStaleWebhooks(c)
@@ -165,7 +165,7 @@ const ipListPath = "/apis/operators.coreos.com/v1alpha1/namespaces/redhat-ods-op
 
 func TestDeleteStaleInstallPlans_DeletesOnlyFailedPlansWithPreconditions(t *testing.T) {
 	f, c := newFakeAPI(t)
-	f.obj("GET", ipListPath, map[string]interface{}{"items": []interface{}{
+	f.obj(ipListPath, map[string]interface{}{"items": []interface{}{
 		installPlan("install-complete", "Complete", "u1", "11", "2026-10-01T00:00:00Z"),
 		installPlan("install-new", "", "u2", "12", "2026-10-05T00:00:00Z"),
 		installPlan("install-running", "Installing", "u3", "13", "2026-10-04T00:00:00Z"),
@@ -207,7 +207,7 @@ func TestDeleteStaleInstallPlans_ReferencedPlan(t *testing.T) {
 	}{{"UpgradePending", true}, {"AtLatestKnown", false}, {"UpgradeFailed", false}} {
 		t.Run(tt.state, func(t *testing.T) {
 			f, c := newFakeAPI(t)
-			f.obj("GET", ipListPath, plans)
+			f.obj(ipListPath, plans)
 			f.json("GET", "/apis/operators.coreos.com/v1alpha1/namespaces/redhat-ods-operator/subscriptions/rhods-operator", http.StatusOK, sub(tt.state))
 			f.json("DELETE", ipListPath+"/install-failed", http.StatusOK, `{}`)
 			res, _ := ApplyFix(c, "delete-stale-installplans")
@@ -256,7 +256,7 @@ func TestDeleteStaleInstallPlans_Outcomes(t *testing.T) {
 			if tt.listStatus != 0 {
 				f.status("GET", ipListPath, tt.listStatus, http.StatusText(tt.listStatus))
 			} else {
-				f.obj("GET", ipListPath, tt.list)
+				f.obj(ipListPath, tt.list)
 			}
 			if tt.deleteCode != 0 {
 				f.status("DELETE", ipListPath+"/install-failed", tt.deleteCode, http.StatusText(tt.deleteCode))
@@ -277,7 +277,7 @@ func TestDeleteStaleInstallPlans_Outcomes(t *testing.T) {
 
 func TestInstallPlanCheck_FailedPlanConfirmNamesThePlans(t *testing.T) {
 	f, c := newFakeAPI(t)
-	f.obj("GET", ipListPath, map[string]interface{}{"items": []interface{}{
+	f.obj(ipListPath, map[string]interface{}{"items": []interface{}{
 		installPlan("install-old", "Complete", "u1", "1", "2026-10-01T00:00:00Z"),
 		installPlan("install-bad", "Failed", "u2", "2", "2026-10-02T00:00:00Z"),
 	}})

@@ -58,19 +58,19 @@ func parseTag(tag string) (parsedTag, bool) {
 		return parsedTag{}, false
 	}
 	// The regex only captures digits, so Atoi fails only on overflow.
-	num := func(s string, fallback int) (int, bool) {
+	num := func(s string) (int, bool) {
 		if s == "" {
-			return fallback, true
+			return 0, true
 		}
 		n, err := strconv.Atoi(s)
 		return n, err == nil
 	}
-	major, ok1 := num(m[1], 0)
-	minor, ok2 := num(m[2], 0)
-	patch, ok3 := num(m[3], 0)
+	major, ok1 := num(m[1])
+	minor, ok2 := num(m[2])
+	patch, ok3 := num(m[3])
 	ea, ok4 := -1, true
 	if m[4] != "" {
-		ea, ok4 = num(m[5], 0)
+		ea, ok4 = num(m[5])
 	}
 	if !ok1 || !ok2 || !ok3 || !ok4 {
 		return parsedTag{}, false

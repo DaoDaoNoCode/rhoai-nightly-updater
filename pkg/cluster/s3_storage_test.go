@@ -925,7 +925,7 @@ func TestWaitS3Ready_StalledAPIDoesNotOverrunDeadline(t *testing.T) {
 	c := stallServer(t, 0)
 	start := clk.Now()
 	_, err := waitS3Ready(c, seaweedfsDefaultImage)
-	if err != errS3NotReady {
+	if !errors.Is(err, errS3NotReady) {
 		t.Fatalf("err = %v, want errS3NotReady", err)
 	}
 	if d := clk.Since(start); d != 200*time.Millisecond {

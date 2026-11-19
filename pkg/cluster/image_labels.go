@@ -408,17 +408,21 @@ func extractConfigDigest(manifestBody []byte) (string, error) {
 	return manifest.Config.Digest, nil
 }
 
+// stripAuthOnRedirect is the blob client's CheckRedirect: it follows the
+// redirect without the registry's Authorization header.
+func stripAuthOnRedirect(req *http.Request, _ []*http.Request) error {
+	req.Header.Del("Authorization")
+	return nil
+}
+
 // fetchConfigLabels fetches the config blob and extracts image labels.
 func fetchConfigLabels(ctx context.Context, httpClient *http.Client, bearerToken, blobURL string) (*ImageLabels, error) {
 	// Use a client that strips the Authorization header on redirect.
 	// Quay returns a 302 to an S3 pre-signed URL which rejects extra auth headers.
 	blobClient := &http.Client{
-		Timeout:   httpClient.Timeout,
-		Transport: httpClient.Transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			req.Header.Del("Authorization")
-			return nil
-		},
+		Timeout:       httpClient.Timeout,
+		Transport:     httpClient.Transport,
+		CheckRedirect: stripAuthOnRedirect,
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", blobURL, nil)

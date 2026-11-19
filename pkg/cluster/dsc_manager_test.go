@@ -94,7 +94,8 @@ func setPath(t *testing.T, obj map[string]interface{}, path string, value interf
 }
 
 // patchesTo returns the JSON patches sent to path, dry runs separately.
-func patchesTo(f *resourceFake, path string) (dry, real []fakeCall) {
+func patchesTo(f *resourceFake) (dry, real []fakeCall) {
+	path := dscV3Path
 	for _, c := range f.callsTo(http.MethodPatch, path) {
 		if c.Query.Get("dryRun") == "All" {
 			dry = append(dry, c)
@@ -453,7 +454,7 @@ func TestToggleReplacesOnlyThatFieldAfterADryRun(t *testing.T) {
 	if err != nil || !res.Success {
 		t.Fatalf("result = %+v, %v", res, err)
 	}
-	dry, real := patchesTo(f, dscV3Path)
+	dry, real := patchesTo(f)
 	if len(dry) != 1 || len(real) != 1 {
 		t.Fatalf("patches: dry %d, real %d", len(dry), len(real))
 	}
@@ -484,7 +485,7 @@ func TestToggleAddsMissingObjectsWithATestOfTheirParent(t *testing.T) {
 	if err != nil || !res.Success {
 		t.Fatalf("result = %+v, %v", res, err)
 	}
-	_, real := patchesTo(f, dscV3Path)
+	_, real := patchesTo(f)
 	ops := decodeOps(t, real[0].Body)
 	if len(ops) != 2 || ops[0]["op"] != "test" || ops[0]["path"] != "/spec/components" || !jsonEqual(ops[0]["value"], before) ||
 		ops[1]["op"] != "add" || ops[1]["path"] != "/spec/components/databaseservice" || !jsonEqual(ops[1]["value"], map[string]interface{}{"managementState": "Managed"}) {
@@ -496,7 +497,7 @@ func TestToggleAddsMissingObjectsWithATestOfTheirParent(t *testing.T) {
 	if err != nil || !res.Success {
 		t.Fatalf("result = %+v, %v", res, err)
 	}
-	_, real = patchesTo(f, dscV3Path)
+	_, real = patchesTo(f)
 	ops = decodeOps(t, real[1].Body)
 	if len(ops) != 2 || ops[0]["path"] != "/spec/components/dashboard" || !jsonEqual(ops[0]["value"], dashboard) ||
 		ops[1]["op"] != "add" || ops[1]["path"] != "/spec/components/dashboard/maasPortal" {
@@ -529,7 +530,7 @@ func TestToggleRefusesWhenTheFieldChangedMeanwhile(t *testing.T) {
 	if res.Success || res.ErrorCode != "conflict" {
 		t.Fatalf("stale from = %+v", res)
 	}
-	if dry, real := patchesTo(f, dscV3Path); len(dry)+len(real) != 0 {
+	if dry, real := patchesTo(f); len(dry)+len(real) != 0 {
 		t.Fatal("a stale from was sent")
 	}
 }
@@ -543,7 +544,7 @@ func TestToggleShowsAWebhookRejectionVerbatim(t *testing.T) {
 	if err != nil || res.Success || !strings.Contains(res.Message, denial) || !strings.Contains(res.Message, "dry run") {
 		t.Fatalf("result = %+v, %v", res, err)
 	}
-	if _, real := patchesTo(f, dscV3Path); len(real) != 0 {
+	if _, real := patchesTo(f); len(real) != 0 {
 		t.Fatal("patched after the dry run was refused")
 	}
 }
@@ -562,7 +563,7 @@ func TestToggleValidatesAgainstTheSchema(t *testing.T) {
 			t.Errorf("%s to %s: %+v, %v", tc.path, tc.to, res, err)
 		}
 	}
-	if dry, real := patchesTo(f, dscV3Path); len(dry)+len(real) != 0 {
+	if dry, real := patchesTo(f); len(dry)+len(real) != 0 {
 		t.Fatal("an invalid toggle was sent")
 	}
 	// Kueue accepts Unmanaged.
@@ -585,7 +586,7 @@ func TestToggleToManagedUnderARemovedParent(t *testing.T) {
 	if res.Success || res.ErrorCode != "parent_removed" {
 		t.Fatalf("without parent: %+v", res)
 	}
-	if dry, real := patchesTo(f, dscV3Path); len(dry)+len(real) != 0 {
+	if dry, real := patchesTo(f); len(dry)+len(real) != 0 {
 		t.Fatal("patched without the parent")
 	}
 	plan, _ = PlanDSCChange(c, "toggle", "aigateway.batchGateway", "Managed", true, false)
@@ -600,7 +601,7 @@ func TestToggleToManagedUnderARemovedParent(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("with parent: %+v", res)
 	}
-	_, real := patchesTo(f, dscV3Path)
+	_, real := patchesTo(f)
 	if ops := decodeOps(t, real[0].Body); len(ops) != 4 || ops[0]["op"] != "test" || ops[1]["op"] != "test" || ops[2]["op"] != "replace" || ops[3]["op"] != "replace" {
 		t.Fatalf("ops = %v", ops)
 	}
@@ -635,7 +636,7 @@ func TestToggleToRemovedFailsClosed(t *testing.T) {
 	if res.Success || !strings.Contains(res.Message, "DSPAs") {
 		t.Fatalf("aipipelines: %+v", res)
 	}
-	if dry, real := patchesTo(f, dscV3Path); len(dry)+len(real) != 0 {
+	if dry, real := patchesTo(f); len(dry)+len(real) != 0 {
 		t.Fatal("patched a blocked removal")
 	}
 	delete(f.fail, "GET /apis/components.platform.opendatahub.io")
@@ -699,7 +700,7 @@ func TestFixAddsExactlyThePreviewedToggles(t *testing.T) {
 	if res.Success || res.ErrorCode != "conflict" {
 		t.Fatalf("stale token: %+v", res)
 	}
-	if dry, real := patchesTo(f, dscV3Path); len(dry)+len(real) != 0 {
+	if dry, real := patchesTo(f); len(dry)+len(real) != 0 {
 		t.Fatal("patched a stale plan")
 	}
 	res, err = FixDSC(c, types.DSCPlanRequest{Name: "default-dsc", UID: plan.UID, Token: plan.Token})
@@ -747,7 +748,7 @@ func TestSoftResetChangesOnlyWhatDiffersAndKeepsProtectedFields(t *testing.T) {
 	if err != nil || !res.Success {
 		t.Fatalf("reset = %+v, %v", res, err)
 	}
-	_, real := patchesTo(f, dscV3Path)
+	_, real := patchesTo(f)
 	body := real[0].Body
 	for _, kept := range []string{"workbenchNamespace", "instancesNamespace", "defaultLocalQueueName", "airGapped", "mcpGuardrailsMode"} {
 		if strings.Contains(body, kept) {
@@ -780,7 +781,7 @@ func TestSoftResetRefusesWhileARemovalIsBlocked(t *testing.T) {
 	if res.Success || res.ErrorCode != "prerequisites" {
 		t.Fatalf("reset = %+v", res)
 	}
-	if dry, real := patchesTo(f, dscV3Path); len(dry)+len(real) != 0 {
+	if dry, real := patchesTo(f); len(dry)+len(real) != 0 {
 		t.Fatal("patched a blocked reset")
 	}
 }

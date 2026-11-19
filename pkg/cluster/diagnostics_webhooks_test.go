@@ -39,7 +39,7 @@ func TestStaleWebhooks_NothingDeletedDuringOperatorUpgrade(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			f, c := newFakeAPI(t)
 			setupWebhookFixtures(f)
-			f.obj("GET", csvBase, map[string]interface{}{"items": []interface{}{map[string]interface{}{
+			f.obj(csvBase, map[string]interface{}{"items": []interface{}{map[string]interface{}{
 				"metadata": map[string]interface{}{"name": "rhods-operator.3.7.0"}, "status": map[string]interface{}{"phase": phase},
 			}}})
 			res, _ := ApplyFix(c, "delete-stale-webhooks")
@@ -54,7 +54,7 @@ func TestStaleWebhooks_NothingDeletedDuringOperatorUpgrade(t *testing.T) {
 const vwcRuntime = "inferenceservice.serving.kserve.io"
 
 func runtimeWebhookFixture(f *fakeAPI) {
-	f.obj("GET", vwcPath, map[string]interface{}{"items": []interface{}{
+	f.obj(vwcPath, map[string]interface{}{"items": []interface{}{
 		map[string]interface{}{
 			"metadata": map[string]interface{}{"name": vwcRuntime, "uid": "w1", "resourceVersion": "7", "labels": map[string]string{"platform.opendatahub.io/part-of": "kserve"}},
 			"webhooks": []interface{}{map[string]interface{}{"name": "x", "clientConfig": map[string]interface{}{"service": map[string]interface{}{"namespace": "redhat-ods-applications", "name": "kserve-webhook-server-service"}}}},
@@ -106,7 +106,7 @@ func TestStaleWebhooks_RuntimeConfigDependsOnModuleCR(t *testing.T) {
 
 func TestStaleWebhooks_PartlyServingConfigIsNotStale(t *testing.T) {
 	f, c := newFakeAPI(t)
-	f.obj("GET", vwcPath, map[string]interface{}{"items": []interface{}{map[string]interface{}{
+	f.obj(vwcPath, map[string]interface{}{"items": []interface{}{map[string]interface{}{
 		"metadata": map[string]interface{}{"name": "mixed.opendatahub.io", "labels": map[string]string{"olm.owner": "rhods-operator.3.5.0"}},
 		"webhooks": []interface{}{
 			map[string]interface{}{"name": "a", "clientConfig": map[string]interface{}{"service": map[string]interface{}{"namespace": "redhat-ods-operator", "name": "gone"}}},

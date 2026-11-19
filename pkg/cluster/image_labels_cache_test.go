@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -110,7 +111,7 @@ func TestImageLabels_NoLabelsIsCachedBrieflyErrorsAreNot(t *testing.T) {
 	installFakeRegistry(t, f)
 	ref := "quay.io/rhoai/nolabels@" + digestOf(1)
 	for i := 0; i < 2; i++ {
-		if _, err := imageLabelsWithAuth(context.Background(), "a", ref, false); err != errNoImageLabels {
+		if _, err := imageLabelsWithAuth(context.Background(), "a", ref, false); !errors.Is(err, errNoImageLabels) {
 			t.Fatalf("want errNoImageLabels, got %v", err)
 		}
 	}

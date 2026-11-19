@@ -68,8 +68,8 @@ func serveWebhooks(f *fakeAPI, configs []whFixture, csvPhase string, liveService
 			v = append(v, w.object())
 		}
 	}
-	f.obj("GET", vwcPath, map[string]interface{}{"items": v})
-	f.obj("GET", mwcPath, map[string]interface{}{"items": m})
+	f.obj(vwcPath, map[string]interface{}{"items": v})
+	f.obj(mwcPath, map[string]interface{}{"items": m})
 	f.json("GET", csvBase, http.StatusOK, fmt.Sprintf(`{"items":[{"metadata":{"name":"rhods-operator.3.6.0"},"status":{"phase":%q}}]}`, csvPhase))
 	f.json("GET", csvBase+"/rhods-operator.3.6.0", http.StatusOK, `{"metadata":{"name":"rhods-operator.3.6.0"}}`)
 	for _, s := range liveServices {

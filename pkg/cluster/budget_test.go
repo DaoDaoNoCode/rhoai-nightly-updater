@@ -86,7 +86,7 @@ func TestInstallWaitEndsBeforeTheOperationDeadline(t *testing.T) {
 	defer cancel()
 	var logs []string
 	start := clk.Now()
-	out := waitForOperatorInstall(f.client(ctx), "verify_installplan", func(UpdateStepEvent) {}, &logs, &operatorRecovery{}, "")
+	out := waitForOperatorInstall(f.client(ctx), func(UpdateStepEvent) {}, &logs, &operatorRecovery{}, "")
 	if out.errorCode != "install_timeout" || !strings.Contains(out.message, "time budget") || clk.Since(start) > 300*time.Millisecond+InstallPlanPollInterval {
 		t.Fatalf("outcome = %+v after %s", out, clk.Since(start))
 	}

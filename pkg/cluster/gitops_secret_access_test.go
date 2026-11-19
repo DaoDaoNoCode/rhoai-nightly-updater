@@ -12,7 +12,8 @@ import (
 
 // rbacObjects returns the Template's objects of kind in namespace (the
 // parameter as written), by name.
-func rbacObjects(t *testing.T, path, kind, namespace string) map[string]map[string]interface{} {
+func rbacObjects(t *testing.T, path, kind string) map[string]map[string]interface{} {
+	const namespace = "${PULL_SECRET_NAMESPACE}"
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -41,8 +42,8 @@ func rbacObjects(t *testing.T, path, kind, namespace string) map[string]map[stri
 // sync empties it.
 func TestGitOpsRBACEmptiesTheInstallShPullSecretRole(t *testing.T) {
 	const ns = "${PULL_SECRET_NAMESPACE}"
-	full := rbacObjects(t, templateRel, "Role", ns)
-	gitops := rbacObjects(t, rbacGitOpsRel, "Role", ns)
+	full := rbacObjects(t, templateRel, "Role")
+	gitops := rbacObjects(t, rbacGitOpsRel, "Role")
 	if len(full) == 0 {
 		t.Fatal("deploy/template.yaml has no Role in the pull secret's namespace any more; this test is stale")
 	}
@@ -55,8 +56,8 @@ func TestGitOpsRBACEmptiesTheInstallShPullSecretRole(t *testing.T) {
 			t.Fatalf("Role %s in %s grants %v; the gitops profile reads no Secret", name, ns, rules)
 		}
 	}
-	for name := range rbacObjects(t, templateRel, "RoleBinding", ns) {
-		if _, ok := rbacObjects(t, rbacGitOpsRel, "RoleBinding", ns)[name]; !ok {
+	for name := range rbacObjects(t, templateRel, "RoleBinding") {
+		if _, ok := rbacObjects(t, rbacGitOpsRel, "RoleBinding")[name]; !ok {
 			t.Fatalf("deploy/rbac-gitops.yaml does not render RoleBinding %s in %s", name, ns)
 		}
 	}

@@ -162,16 +162,16 @@ func applyFailuresWorld(t *testing.T) (*Client, *[]string) {
 	f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1", 200,
 		`{"resources":[{"name":"rays","kind":"Ray"},{"name":"rays/status","kind":"Ray"},{"name":"trustyais","kind":"TrustyAI"},{"name":"aihubs","kind":"AIHub"},{"name":"newmodules","kind":"NewModule"}]}`)
 	// The DSC aggregates the module messages: each object is reported once.
-	f.obj("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", map[string]interface{}{
+	f.obj("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", map[string]interface{}{
 		"items": []interface{}{applyFailureCR("default-dsc", "False", msgImmutableLabels, msgSchemaMismatch)},
 	})
-	f.obj("GET", "/apis/config.opendatahub.io/v1alpha1/platforms", map[string]interface{}{
+	f.obj("/apis/config.opendatahub.io/v1alpha1/platforms", map[string]interface{}{
 		"items": []interface{}{applyFailureCR("default", "True", msgTwoControllers)},
 	})
-	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/rays", map[string]interface{}{"items": []interface{}{applyFailureCR("default-ray", "False", msgImmutableLabels)}})
-	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/trustyais", map[string]interface{}{"items": []interface{}{applyFailureCR("default-trustyai", "True", msgSchemaMismatch)}})
-	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/aihubs", map[string]interface{}{"items": []interface{}{applyFailureCR("default-aihub", "True")}})
-	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/newmodules", map[string]interface{}{"items": []interface{}{
+	f.obj("/apis/components.platform.opendatahub.io/v1alpha1/rays", map[string]interface{}{"items": []interface{}{applyFailureCR("default-ray", "False", msgImmutableLabels)}})
+	f.obj("/apis/components.platform.opendatahub.io/v1alpha1/trustyais", map[string]interface{}{"items": []interface{}{applyFailureCR("default-trustyai", "True", msgSchemaMismatch)}})
+	f.obj("/apis/components.platform.opendatahub.io/v1alpha1/aihubs", map[string]interface{}{"items": []interface{}{applyFailureCR("default-aihub", "True")}})
+	f.obj("/apis/components.platform.opendatahub.io/v1alpha1/newmodules", map[string]interface{}{"items": []interface{}{
 		applyFailureCR("default-newmodule", "True", strings.ReplaceAll(msgImmutableLabels, "kuberay-operator", "new-operator"))}})
 	crdLookups := new([]string)
 	f.handle("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", func(r *http.Request, _ []byte) (int, string) {
@@ -237,10 +237,10 @@ func TestApplyFailuresOneProblemPerObject(t *testing.T) {
 	immutable2 := strings.ReplaceAll(msgImmutableSelector, "kuberay-operator", "shared")
 	owner := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(msgTwoControllers, "aihub-controller-manager-metrics-monitor", "shared"),
 		"monitoring.coreos.com/v1, Kind=ServiceMonitor", "apps/v1, Kind=Deployment"), "ServiceMonitor.monitoring.coreos.com", "Deployment.apps")
-	f.obj("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", map[string]interface{}{
+	f.obj("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", map[string]interface{}{
 		"items": []interface{}{applyFailureCR("default-dsc", "True", immutable, owner)},
 	})
-	f.obj("GET", "/apis/config.opendatahub.io/v1alpha1/platforms", map[string]interface{}{
+	f.obj("/apis/config.opendatahub.io/v1alpha1/platforms", map[string]interface{}{
 		"items": []interface{}{applyFailureCR("default", "False", immutable2)},
 	})
 	out := checkApplyFailures(c.WithContext(context.Background()))
@@ -259,7 +259,7 @@ func TestApplyFailuresOneProblemPerObject(t *testing.T) {
 
 func TestCheckApplyFailuresHealthyAndUnreadable(t *testing.T) {
 	f, c := newFakeAPI(t)
-	f.obj("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", map[string]interface{}{
+	f.obj("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", map[string]interface{}{
 		"items": []interface{}{applyFailureCR("default-dsc", "False", "Some modules are not ready: trainer")},
 	})
 	out := checkApplyFailures(c.WithContext(context.Background()))

@@ -69,7 +69,7 @@ func resetPackageState(t *testing.T) {
 	origSession, origSessionClock := readSessionToken, sessionClock
 	checkGitOpsPolicy = func(*cluster.Client) error { return nil }
 	setGitOpsPolicyState("")
-	mutationLimiter = newRateLimiter(30 * time.Second)
+	mutationLimiter = newRateLimiter()
 	identities.reset()
 	apiReady.reset()
 	inflight.reset()

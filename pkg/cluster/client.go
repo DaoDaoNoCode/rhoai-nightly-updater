@@ -291,7 +291,8 @@ func (c *Client) do(method, path, contentType string, body []byte, query url.Val
 	}
 	if resp.StatusCode >= 400 {
 		err := parseK8sError(respBody, resp.StatusCode)
-		if k, ok := err.(*K8sError); ok {
+		var k *K8sError
+		if errors.As(err, &k) {
 			k.User = c.asUser
 		}
 		return respBody, resp.StatusCode, err

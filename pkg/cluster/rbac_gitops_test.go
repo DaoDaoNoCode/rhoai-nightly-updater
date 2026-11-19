@@ -77,7 +77,7 @@ func exportData(t *testing.T) map[string]string {
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()
 		if err != nil {
-			exportErr = fmt.Errorf("go list -export: %v: %s", err, stderr.String())
+			exportErr = fmt.Errorf("go list -export: %w: %s", err, stderr.String())
 			return
 		}
 		exportFiles = map[string]string{}

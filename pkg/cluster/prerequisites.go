@@ -960,7 +960,7 @@ func planInstall(c *Client, p catalogPackage, operand *almExample) (prerequisite
 	}
 	var plan prerequisiteInstall
 	var objects []string
-	ns := ""
+	var ns string
 	switch {
 	case p.supports("OwnNamespace"):
 		ns = p.SuggestedNS

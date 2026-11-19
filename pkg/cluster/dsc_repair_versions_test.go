@@ -110,7 +110,7 @@ func v3RepairWorld(t *testing.T, defaults string) (*fakeAPI, *Client) {
 	for _, k := range []string{"aiHub", "aigateway", "dashboard", "data", "kserve", "trainer", "workbenches"} {
 		props[k] = open
 	}
-	f.obj("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io", map[string]interface{}{
+	f.obj("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io", map[string]interface{}{
 		"spec": map[string]interface{}{"versions": []interface{}{map[string]interface{}{"name": "v3", "served": true, "schema": map[string]interface{}{"openAPIV3Schema": map[string]interface{}{
 			"properties": map[string]interface{}{"spec": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
 				"components": map[string]interface{}{"type": "object", "properties": props}}}}}}}}},
@@ -296,7 +296,7 @@ func strictDashboardSchema(f *fakeAPI) {
 	for _, k := range []string{"aiHub", "aigateway", "data", "kserve", "trainer", "workbenches"} {
 		props[k] = open
 	}
-	f.obj("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io", map[string]interface{}{
+	f.obj("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io", map[string]interface{}{
 		"spec": map[string]interface{}{"versions": []interface{}{map[string]interface{}{"name": "v3", "served": true, "schema": map[string]interface{}{"openAPIV3Schema": map[string]interface{}{
 			"properties": map[string]interface{}{"spec": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
 				"components": map[string]interface{}{"type": "object", "properties": props}}}}}}}}},

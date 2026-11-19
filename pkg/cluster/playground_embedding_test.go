@@ -47,7 +47,7 @@ func TestPlayground_SetupAddsTheToolsEmbeddingModel(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.g.models["proj"] = testQwenAndGranite
 	e.putGranite(true)
-	res, steps := e.run(t, setup("proj"))
+	res, steps := e.run(t, setup())
 	if !res.Success {
 		t.Fatalf("got %+v", res)
 	}
@@ -70,7 +70,7 @@ func TestPlayground_LeavesOutAnEmbeddingModelItDidNotCreate(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.g.models["proj"] = testQwenAndGranite
 	e.putGranite(false)
-	if res, _ := e.run(t, setup("proj")); !res.Success {
+	if res, _ := e.run(t, setup()); !res.Success {
 		t.Fatalf("got %+v", res)
 	}
 	if got := installedModels(t, e); strings.Contains(got, "granite") {
@@ -91,7 +91,7 @@ func TestPlayground_StatusAndChoiceOfTheToolsEmbeddingModel(t *testing.T) {
 	if len(st.Models) != 2 || st.Models[1].Chat || st.Models[1].EmbeddingDimension != 768 || st.Models[0].EmbeddingDimension != 0 {
 		t.Fatalf("models %+v", st.Models)
 	}
-	req := setup("proj")
+	req := setup()
 	req.Models = []types.PlaygroundModelRef{{Name: "granite-embedding-125m-english", Source: "namespace"}}
 	if res, _ := e.run(t, req); res.Success || res.ErrorCode != "no_model" {
 		t.Fatalf("an embedding model alone: %+v", res)

@@ -1230,7 +1230,7 @@ func waitObjectStore(c *Client, project, name string, generation int64) (dspaInf
 	for {
 		list, err := listDSPAs(cc, project)
 		if err != nil && ctx.Err() == nil && !IsNetworkError(err) {
-			return last, fmt.Errorf("its status cannot be read: %v", err)
+			return last, fmt.Errorf("its status cannot be read: %w", err)
 		}
 		for _, d := range list {
 			if d.Meta.Name != name {

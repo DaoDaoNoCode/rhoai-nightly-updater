@@ -78,7 +78,7 @@ func TestOnlyTheProxySessionTokenIsTrusted(t *testing.T) {
 				if tc.status == 401 && decodeError(t, w)["errorCode"] != "unauthorized" {
 					t.Errorf("%s: %s", wrapper, w.Body.String())
 				}
-				mutationLimiter = newRateLimiter(30 * time.Second)
+				mutationLimiter = newRateLimiter()
 			}
 		})
 	}

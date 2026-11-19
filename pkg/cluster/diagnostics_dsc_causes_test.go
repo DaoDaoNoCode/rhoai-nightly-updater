@@ -32,11 +32,11 @@ func newDSCWorld(t *testing.T, dscConds []dcond) *dscWorld {
 	t.Helper()
 	f, c := newFakeAPI(t)
 	dsc := map[string]interface{}{"metadata": map[string]interface{}{"name": "default-dsc"}, "status": map[string]interface{}{"conditions": dscConds}}
-	f.obj("GET", dscV2List, map[string]interface{}{"items": []interface{}{dsc}})
-	f.obj("GET", dsciV2List, map[string]interface{}{"items": []interface{}{map[string]interface{}{
+	f.obj(dscV2List, map[string]interface{}{"items": []interface{}{dsc}})
+	f.obj(dsciV2List, map[string]interface{}{"items": []interface{}{map[string]interface{}{
 		"metadata": map[string]string{"name": "default-dsci"}, "spec": map[string]string{"applicationsNamespace": "redhat-ods-applications"}, "status": map[string]string{"phase": "Ready"},
 	}}})
-	f.obj("GET", packageManifestsPath, map[string]interface{}{"items": liveCatalog()})
+	f.obj(packageManifestsPath, map[string]interface{}{"items": liveCatalog()})
 	f.json("GET", clusterCSVsPath, 200, `{"items":[]}`)
 	serveComponentGroup(f)
 	f.json("GET", componentV1alpha1, 200, `{"resources":[{"name":"trainers","kind":"Trainer"},{"name":"trainers/status","kind":"Trainer"},{"name":"rays","kind":"Ray"}]}`)
@@ -45,7 +45,7 @@ func newDSCWorld(t *testing.T, dscConds []dcond) *dscWorld {
 	for _, r := range []string{"validatingwebhookconfigurations", "mutatingwebhookconfigurations"} {
 		f.json("GET", "/apis/admissionregistration.k8s.io/v1/"+r, 200, `{"items":[]}`)
 	}
-	f.obj("GET", trainerOperatorPath, operatorDeploymentJSON("trainer-operator-controller-manager", "RollingUpdate", 1))
+	f.obj(trainerOperatorPath, operatorDeploymentJSON("trainer-operator-controller-manager", "RollingUpdate", 1))
 	f.json("GET", "/apis/operator.openshift.io/v1", 200, `{"resources":[{"name":"jobsetoperators","kind":"JobSetOperator"},{"name":"jobsetoperators/status","kind":"JobSetOperator"}]}`)
 	return &dscWorld{f: f, c: c}
 }
@@ -60,9 +60,11 @@ func operatorDeploymentJSON(name, strategy string, available int) map[string]int
 	}
 }
 
-// installedCSV serves one installed CSV. The JobSet CSV carries its own
-// alm-examples and owned CRD, as on the live cluster.
-func (w *dscWorld) installedCSV(name, ns, display, phase string, since time.Duration, pkg string) {
+// installedCSV serves the Job Set operator's CSV, Succeeded since the given
+// time. It carries its own alm-examples and owned CRD, as on the live
+// cluster.
+func (w *dscWorld) installedCSV(since time.Duration) {
+	name, ns, display, phase, pkg := "jobset-operator.v1.0.1", "openshift-jobset-operator", "Job Set Operator", "Succeeded", "job-set"
 	w.installedCSVs(csvItem(name, ns, display, phase, since, pkg, jobSetExamples, []ownedCRD{{Name: "jobsetoperators.operator.openshift.io", Kind: "JobSetOperator", Version: "v1"}}))
 }
 
@@ -80,11 +82,11 @@ func (w *dscWorld) installedCSVs(items ...map[string]interface{}) {
 	for _, it := range items {
 		list = append(list, it)
 	}
-	w.f.obj("GET", clusterCSVsPath, map[string]interface{}{"items": list})
+	w.f.obj(clusterCSVsPath, map[string]interface{}{"items": list})
 }
 
 func (w *dscWorld) trainerCR(conds []dcond, generation, observed int) {
-	w.f.obj("GET", componentV1alpha1+"/trainers", map[string]interface{}{"items": []interface{}{map[string]interface{}{
+	w.f.obj(componentV1alpha1+"/trainers", map[string]interface{}{"items": []interface{}{map[string]interface{}{
 		"metadata": map[string]interface{}{"name": "default-trainer", "generation": generation},
 		"status":   map[string]interface{}{"observedGeneration": observed, "conditions": conds},
 	}}})
@@ -178,8 +180,8 @@ func TestDSCCheck_MissingPrerequisitesGetCommandsAndClassification(t *testing.T)
 // the commands stay for reference.
 func TestDSCCheck_MissingPrerequisiteUnderGitOps(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs())
-	w.f.obj("GET", subscriptionPath(), map[string]interface{}{"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "annotations": trackingID("Subscription", SubNS, SubName)}})
-	w.f.obj("GET", namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName), map[string]interface{}{"metadata": map[string]interface{}{"name": CatalogName, "namespace": CatalogNS, "annotations": trackingID("CatalogSource", CatalogNS, CatalogName)}})
+	w.f.obj(subscriptionPath(), map[string]interface{}{"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "annotations": trackingID("Subscription", SubNS, SubName)}})
+	w.f.obj(namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName), map[string]interface{}{"metadata": map[string]interface{}{"name": CatalogName, "namespace": CatalogNS, "annotations": trackingID("CatalogSource", CatalogNS, CatalogName)}})
 	out := checkDataScienceCluster(w.c)
 	js, ok := problemsByID(out)["prerequisite-missing-job-set"]
 	if !ok {
@@ -217,7 +219,7 @@ func TestDSCCheck_HealthyClusterReadsNoCatalog(t *testing.T) {
 
 func TestDSCCheck_InstalledButOperandMissing(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs()[:2])
-	w.installedCSV("jobset-operator.v1.0.1", "openshift-jobset-operator", "Job Set Operator", "Succeeded", time.Hour, "job-set")
+	w.installedCSV(time.Hour)
 	out := checkDataScienceCluster(w.c)
 	byID := problemsByID(out)
 	p, ok := byID["prerequisite-operand-job-set"]
@@ -235,7 +237,7 @@ func TestDSCCheck_InstalledButOperandMissing(t *testing.T) {
 
 func TestDSCCheck_SatisfiedDependencyOffersRestart(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs()[:2])
-	w.installedCSV("jobset-operator.v1.0.1", "openshift-jobset-operator", "Job Set Operator", "Succeeded", time.Hour, "job-set")
+	w.installedCSV(time.Hour)
 	w.f.json("GET", jobSetOperandPath, 200, `{"metadata":{"name":"cluster"}}`)
 	w.trainerCR([]dcond{{"type": "Ready", "status": "False", "reason": "Error", "message": msgTrainerJobSet, "lastTransitionTime": ago(time.Hour)}}, 3, 3)
 	out := checkDataScienceCluster(w.c)
@@ -296,7 +298,7 @@ func TestDSCCheck_OperandFromInstalledCSVPackage(t *testing.T) {
 
 func TestDSCCheck_JustInstalledDependencyIsNotBackoff(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs()[:2])
-	w.installedCSV("jobset-operator.v1.0.1", "openshift-jobset-operator", "Job Set Operator", "Succeeded", 30*time.Second, "job-set")
+	w.installedCSV(30 * time.Second)
 	w.f.json("GET", jobSetOperandPath, 200, `{}`)
 	out := checkDataScienceCluster(w.c)
 	if _, ok := problemsByID(out)["module-operator-backoff-trainer"]; ok {
@@ -309,7 +311,7 @@ func TestDSCCheck_JustInstalledDependencyIsNotBackoff(t *testing.T) {
 
 func TestDSCCheck_OperandForbiddenSaysMakeUpgrade(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs()[:2])
-	w.installedCSV("jobset-operator.v1.0.1", "openshift-jobset-operator", "Job Set Operator", "Succeeded", time.Hour, "job-set")
+	w.installedCSV(time.Hour)
 	w.f.status("GET", jobSetOperandPath, http.StatusForbidden, "Forbidden")
 	out := checkDataScienceCluster(w.c)
 	byID := problemsByID(out)
@@ -345,13 +347,13 @@ func TestDSCCheck_StaleModuleIsBackoffOnlyAcrossScans(t *testing.T) {
 		{"type": "RayReady", "status": "False", "reason": "NotReady", "message": msgRayStale, "lastTransitionTime": ago(time.Hour)},
 	})
 	ray := func(generation int) {
-		w.f.obj("GET", componentV1alpha1+"/rays", map[string]interface{}{"items": []interface{}{map[string]interface{}{
+		w.f.obj(componentV1alpha1+"/rays", map[string]interface{}{"items": []interface{}{map[string]interface{}{
 			"metadata": map[string]interface{}{"name": "default-ray", "uid": "ray-uid", "generation": generation},
 			"status":   map[string]interface{}{"observedGeneration": 3, "conditions": []dcond{{"type": "Ready", "status": "True", "lastTransitionTime": ago(time.Hour)}}},
 		}}})
 	}
 	ray(4)
-	w.f.obj("GET", "/apis/apps/v1/namespaces/redhat-ods-applications/deployments/ray-module-operator-controller-manager", operatorDeploymentJSON("ray-module-operator-controller-manager", "RollingUpdate", 1))
+	w.f.obj("/apis/apps/v1/namespaces/redhat-ods-applications/deployments/ray-module-operator-controller-manager", operatorDeploymentJSON("ray-module-operator-controller-manager", "RollingUpdate", 1))
 	backoff := func() (Problem, bool) {
 		p, ok := problemsByID(checkDataScienceCluster(w.c))["module-operator-backoff-ray"]
 		return p, ok
@@ -423,7 +425,7 @@ func TestRestartAssessment(t *testing.T) {
 			if tt.webhook {
 				webhookOn(w.f)
 			}
-			w.f.obj("GET", trainerOperatorPath, operatorDeploymentJSON("trainer-operator-controller-manager", tt.strategy, tt.available))
+			w.f.obj(trainerOperatorPath, operatorDeploymentJSON("trainer-operator-controller-manager", tt.strategy, tt.available))
 			d, why := findModuleOperator(w.c, "trainer", "redhat-ods-applications")
 			if d == nil {
 				t.Fatal(why)
@@ -465,7 +467,7 @@ func TestRestartAssessment_SurgeZeroWithFailWebhookRefuses(t *testing.T) {
 	w := newDSCWorld(t, nil)
 	dep := operatorDeploymentJSON("trainer-operator-controller-manager", "RollingUpdate", 1)
 	dep["spec"].(map[string]interface{})["strategy"] = map[string]interface{}{"type": "RollingUpdate", "rollingUpdate": map[string]interface{}{"maxSurge": 0, "maxUnavailable": "25%"}}
-	w.f.obj("GET", trainerOperatorPath, dep)
+	w.f.obj(trainerOperatorPath, dep)
 	w.f.json("GET", "/apis/admissionregistration.k8s.io/v1/validatingwebhookconfigurations", 200, `{"items":[{"metadata":{"name":"trainer-webhook","labels":{"platform.opendatahub.io/part-of":"trainer"}},
 		"webhooks":[{"name":"vtrainer.kb.io","failurePolicy":"Fail","clientConfig":{"service":{"namespace":"redhat-ods-applications","name":"svc"}}}]}]}`)
 	w.f.json("GET", "/api/v1/namespaces/redhat-ods-applications/services/svc", 200, `{"spec":{"selector":{"app.kubernetes.io/name":"trainer-operator-controller-manager"}}}`)
@@ -485,7 +487,7 @@ func TestFindModuleOperator_GenericPlatformOwnedDeployment(t *testing.T) {
 		operatorDeploymentJSON("newmod-controller-manager", "RollingUpdate", 1),
 		operatorDeploymentJSON("unrelated", "RollingUpdate", 1),
 	}
-	f.obj("GET", "/apis/apps/v1/namespaces/opendatahub/deployments", map[string]interface{}{"items": items})
+	f.obj("/apis/apps/v1/namespaces/opendatahub/deployments", map[string]interface{}{"items": items})
 	d, why := findModuleOperator(c, "newmod", "opendatahub")
 	if d == nil || d.Name != "newmod-controller-manager" || !strings.Contains(d.Via, "named after module newmod") {
 		t.Fatalf("d = %+v, why = %s", d, why)
@@ -498,7 +500,7 @@ func TestFindModuleOperator_GenericPlatformOwnedDeployment(t *testing.T) {
 func TestApplyFixRestartModuleOperator(t *testing.T) {
 	setup := func(t *testing.T) *dscWorld {
 		w := newDSCWorld(t, liveMissingPrereqs()[:2])
-		w.installedCSV("jobset-operator.v1.0.1", "openshift-jobset-operator", "Job Set Operator", "Succeeded", time.Hour, "job-set")
+		w.installedCSV(time.Hour)
 		w.f.json("GET", jobSetOperandPath, 200, `{}`)
 		return w
 	}
@@ -541,7 +543,7 @@ func TestApplyFixRestartModuleOperator(t *testing.T) {
 	})
 	t.Run("refuses when the restart would drop a Fail webhook", func(t *testing.T) {
 		w := setup(t)
-		w.f.obj("GET", trainerOperatorPath, operatorDeploymentJSON("trainer-operator-controller-manager", "Recreate", 1))
+		w.f.obj(trainerOperatorPath, operatorDeploymentJSON("trainer-operator-controller-manager", "Recreate", 1))
 		w.f.json("GET", "/apis/admissionregistration.k8s.io/v1/validatingwebhookconfigurations", 200, `{"items":[{"metadata":{"name":"trainer-webhook","labels":{"platform.opendatahub.io/part-of":"trainer"}},
 			"webhooks":[{"name":"vtrainer.kb.io","failurePolicy":"Fail","clientConfig":{"service":{"namespace":"redhat-ods-applications","name":"svc"}}}]}]}`)
 		w.f.json("GET", "/api/v1/namespaces/redhat-ods-applications/services/svc", 200, `{"spec":{"selector":{"app.kubernetes.io/name":"trainer-operator-controller-manager"}}}`)

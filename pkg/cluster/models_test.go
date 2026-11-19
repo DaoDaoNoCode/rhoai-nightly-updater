@@ -1030,7 +1030,9 @@ func putModelPod(mc *modelsCluster, name, image, status string) {
 // putModelDeploymentImage stores the model's Deployment with its pod
 // template's main image, its generation and observed generation, and the
 // given replica counts.
-func putModelDeploymentImage(mc *modelsCluster, image string, generation, observed, replicas, updated, available int) {
+func putModelDeploymentImage(mc *modelsCluster, generation, observed, replicas, available int) {
+	updated := 1
+	image := "quay.io/new/vllm:1"
 	mc.f.putJSON(testModelDeployment, fmt.Sprintf(`{"metadata":{"name":"qwen25-05b-instruct-kserve","generation":%d,
 		"labels":{"app.kubernetes.io/name":"qwen25-05b-instruct","app.kubernetes.io/component":"llminferenceservice-workload"}},
 		"spec":{"replicas":1,"template":{"spec":{"containers":[{"name":"main","image":%q}]}}},
@@ -1056,12 +1058,12 @@ func onModelRead(mc *modelsCluster, fn func(n int)) {
 func TestModelsSetup_OldRevisionPodDoesNotFailTheChange(t *testing.T) {
 	mc := newModelsCluster(t)
 	mc.readyAfter = 8
-	putModelDeploymentImage(mc, "quay.io/new/vllm:1", 3, 3, 2, 1, 0)
+	putModelDeploymentImage(mc, 3, 3, 2, 0)
 	putModelPod(mc, "qwen25-05b-instruct-kserve-old", testPresetImage, testOldPullFailure)
 	putModelPod(mc, "qwen25-05b-instruct-kserve-new", "quay.io/new/vllm:1", `{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ContainerCreating"}}}]}`)
 	onModelRead(mc, func(n int) {
 		if n == 8 {
-			putModelDeploymentImage(mc, "quay.io/new/vllm:1", 3, 3, 1, 1, 1)
+			putModelDeploymentImage(mc, 3, 3, 1, 1)
 		}
 	})
 	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
@@ -1075,14 +1077,14 @@ func TestModelsSetup_OldRevisionPodDoesNotFailTheChange(t *testing.T) {
 func TestModelsSetup_PodProblemsWaitForTheObservedGeneration(t *testing.T) {
 	mc := newModelsCluster(t)
 	mc.readyAfter = 8
-	putModelDeploymentImage(mc, "quay.io/new/vllm:1", 4, 3, 1, 1, 0)
+	putModelDeploymentImage(mc, 4, 3, 1, 0)
 	putModelPod(mc, "qwen25-05b-instruct-kserve-old", "quay.io/new/vllm:1", testOldPullFailure)
 	onModelRead(mc, func(n int) {
 		if n == 8 {
 			mc.f.mu.Lock()
 			delete(mc.f.objects, fakeKey{gv: "v1", ns: "proj", plural: "pods", name: "qwen25-05b-instruct-kserve-old"})
 			mc.f.mu.Unlock()
-			putModelDeploymentImage(mc, "quay.io/new/vllm:1", 4, 4, 1, 1, 1)
+			putModelDeploymentImage(mc, 4, 4, 1, 1)
 		}
 	})
 	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
@@ -1103,7 +1105,7 @@ func TestModelsSetup_PodProblemsWaitForTheObservedGeneration(t *testing.T) {
 func TestModelsSetup_RolloutStopsOnAFailingNewPod(t *testing.T) {
 	mc := newModelsCluster(t)
 	mc.readyAfter = 1
-	putModelDeploymentImage(mc, "quay.io/new/vllm:1", 3, 3, 2, 1, 1)
+	putModelDeploymentImage(mc, 3, 3, 2, 1)
 	putModelPod(mc, "qwen25-05b-instruct-kserve-old", testPresetImage, `{"containerStatuses":[{"name":"main","ready":true,"state":{"running":{}}}]}`)
 	putModelPod(mc, "qwen25-05b-instruct-kserve-new", "quay.io/new/vllm:1", `{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}`)
 	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})

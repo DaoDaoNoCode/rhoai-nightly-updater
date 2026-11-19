@@ -13,7 +13,8 @@ import (
 
 // conversionCRD stores a RHOAI CRD whose conversion webhook is served by
 // Service ns/svc, labelled as the RHOAI operator labels its CRDs.
-func putConversionCRD(f *resourceFake, name, ns, svc string) {
+func putConversionCRD(f *resourceFake, name, svc string) {
+	ns := "redhat-ods-applications"
 	f.put("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/"+name, map[string]interface{}{
 		"metadata": map[string]interface{}{"name": name, "labels": map[string]interface{}{"platform.opendatahub.io/part-of": "platform"}},
 		"spec": map[string]interface{}{"conversion": map[string]interface{}{"strategy": "Webhook", "webhook": map[string]interface{}{
@@ -37,8 +38,8 @@ func TestToggleOfAConversionWebhookComponentIsRefusedInThePlanAsInTheChange(t *t
 	f, c := managerWorld(t, func(dsc map[string]interface{}) {
 		setPath(t, dsc, "spec.components.sparkoperator.managementState", "Managed")
 	})
-	putConversionCRD(f, "sparkapplications.sparkoperator.k8s.io", "redhat-ods-applications", "spark-operator-webhook-service")
-	putConversionCRD(f, "scheduledsparkapplications.sparkoperator.k8s.io", "redhat-ods-applications", "spark-operator-webhook-service")
+	putConversionCRD(f, "sparkapplications.sparkoperator.k8s.io", "spark-operator-webhook-service")
+	putConversionCRD(f, "scheduledsparkapplications.sparkoperator.k8s.io", "spark-operator-webhook-service")
 	plan, err := PlanDSCChange(c, "toggle", "sparkoperator", "Removed", false, false)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +54,7 @@ func TestToggleOfAConversionWebhookComponentIsRefusedInThePlanAsInTheChange(t *t
 	if res.Success || res.ErrorCode != "prerequisites" || !reflect.DeepEqual(res.Logs, []string{"sparkoperator: " + why}) {
 		t.Fatalf("change = %+v, plan said %q", res, why)
 	}
-	if dry, real := patchesTo(f, dscV3Path); len(dry)+len(real) != 0 {
+	if dry, real := patchesTo(f); len(dry)+len(real) != 0 {
 		t.Fatal("patched a blocked change")
 	}
 }
@@ -71,7 +72,7 @@ func TestToggleNeedsTheReviewedPlan(t *testing.T) {
 			t.Fatalf("%+v: %+v", req, res)
 		}
 	}
-	if dry, real := patchesTo(f, dscV3Path); len(dry)+len(real) != 0 {
+	if dry, real := patchesTo(f); len(dry)+len(real) != 0 {
 		t.Fatal("patched without the reviewed plan")
 	}
 }
@@ -197,7 +198,7 @@ func TestHardResetDeletesInTheForegroundAndClearsItsRecord(t *testing.T) {
 		}
 	}
 	// The new spec was validated against the live DSC before the delete.
-	dry, real := patchesTo(f, dscV3Path)
+	dry, real := patchesTo(f)
 	if len(real) != 0 || len(dry) != 1 || dry[0].Query.Get("fieldValidation") != "Strict" {
 		t.Fatalf("patches = %+v %+v", dry, real)
 	}
@@ -483,8 +484,8 @@ func TestRemovalChecksFailClosedOnModulesTheToolCannotCheck(t *testing.T) {
 // conversion webhook blocks); one it brings back only warns.
 func TestHardResetChecksModulesThatStayRemovedAsRemovals(t *testing.T) {
 	f, c := managerWorld(t, nil)
-	putConversionCRD(f, "gateways.aigateway.opendatahub.io", "redhat-ods-applications", "ai-gateway-webhook-service")
-	putConversionCRD(f, "guardrails.trustyai.opendatahub.io", "redhat-ods-applications", "trustyai-webhook-service")
+	putConversionCRD(f, "gateways.aigateway.opendatahub.io", "ai-gateway-webhook-service")
+	putConversionCRD(f, "guardrails.trustyai.opendatahub.io", "trustyai-webhook-service")
 	plan, _ := PlanDSCChange(c, "hard-reset", "", "", false, false)
 	if why := blockReasons(plan, "aigateway"); !strings.Contains(why, "oc get gateways.aigateway.opendatahub.io -A") {
 		t.Fatalf("aigateway stays Removed and serves a conversion webhook: blocked = %+v", plan.Blocked)

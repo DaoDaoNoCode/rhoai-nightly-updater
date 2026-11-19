@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -377,7 +378,7 @@ func downloadAndParseLayer(ctx context.Context, client *http.Client, token, laye
 
 	for {
 		header, err := tarReader.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -541,7 +542,7 @@ func highestBundle(bundles []fbcBundleInfo) *fbcBundleInfo {
 	bestVersion, bestOK := parseCSVVersion(best.name)
 	for i := 1; i < len(bundles); i++ {
 		version, ok := parseCSVVersion(bundles[i].name)
-		better := false
+		var better bool
 		switch {
 		case ok != bestOK:
 			better = ok // a parseable version beats an unparseable name

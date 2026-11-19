@@ -299,14 +299,14 @@ type gatewayPolicy struct {
 // "Phase 4: Manual Cleanup of Old Tier Resources": AuthPolicy
 // gateway-auth-policy and TokenRateLimitPolicy gateway-tier-rate-limits in
 // openshift-ingress); only those names, so the RBAC delete rule names them.
-func legacyTierPolicyPath(kind, version string) (string, bool) {
+func legacyTierPolicyPath(kind, version string) string {
 	switch kind {
 	case "AuthPolicy":
-		return "/apis/kuadrant.io/" + version + "/namespaces/openshift-ingress/authpolicies/gateway-auth-policy", true
+		return "/apis/kuadrant.io/" + version + "/namespaces/openshift-ingress/authpolicies/gateway-auth-policy"
 	case "TokenRateLimitPolicy":
-		return "/apis/kuadrant.io/" + version + "/namespaces/openshift-ingress/tokenratelimitpolicies/gateway-tier-rate-limits", true
+		return "/apis/kuadrant.io/" + version + "/namespaces/openshift-ingress/tokenratelimitpolicies/gateway-tier-rate-limits"
 	}
-	return "", false
+	return ""
 }
 
 // legacyTierPolicy: a documented tier-era policy this tool may remove.

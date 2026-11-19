@@ -57,9 +57,9 @@ func recordMarkerWrites(t *testing.T) (*sync.Mutex, *[]*types.OperationMarker, *
 	return &mu, &saved, &completed
 }
 
-func refreshResult(result *types.OperationResponse, err error) {
+func refreshResult(result *types.OperationResponse) {
 	runRefreshStream = func(*cluster.Client, cluster.OperationOptions, func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
-		return result, err
+		return result, nil
 	}
 }
 
@@ -74,7 +74,7 @@ func TestLastCompletedContract(t *testing.T) {
 		t.Fatalf("lastCompleted before any operation: %+v", status.LastCompleted)
 	}
 
-	refreshResult(&types.OperationResponse{Success: false, Message: "The CSV did not become ready"}, nil)
+	refreshResult(&types.OperationResponse{Success: false, Message: "The CSV did not become ready"})
 	w := httptest.NewRecorder()
 	HandleRefreshStream(w, postJSON("/api/refresh/stream", "user:alice", "{}"))
 	if w.Code != 200 {
@@ -114,8 +114,8 @@ func TestLastCompletedContract(t *testing.T) {
 	mu.Unlock()
 
 	// A later success replaces it.
-	refreshResult(&types.OperationResponse{Success: true, Message: "Operator refreshed"}, nil)
-	mutationLimiter = newRateLimiter(30 * time.Second)
+	refreshResult(&types.OperationResponse{Success: true, Message: "Operator refreshed"})
+	mutationLimiter = newRateLimiter()
 	HandleRefreshStream(httptest.NewRecorder(), postJSON("/api/refresh/stream", "user:carol", "{}"))
 	if status, _ := getOperation(t); status.LastCompleted == nil || !status.LastCompleted.Success ||
 		status.LastCompleted.User != "carol" || status.LastCompleted.ID == last.ID {
@@ -240,7 +240,7 @@ func TestFailedMarkerClearIsRetried(t *testing.T) {
 		return &cluster.OperationRecord{Marker: marker}, nil
 	}
 
-	refreshResult(&types.OperationResponse{Success: true, Message: "refreshed"}, nil)
+	refreshResult(&types.OperationResponse{Success: true, Message: "refreshed"})
 	HandleRefreshStream(httptest.NewRecorder(), postJSON("/api/refresh/stream", "user:alice", "{}"))
 	// The marker of this process is not an interruption, even while the
 	// clear is still failing.
@@ -271,7 +271,7 @@ func TestFailedMarkerClearIsRetried(t *testing.T) {
 	mu.Lock()
 	attempts, failures = 0, 100
 	mu.Unlock()
-	mutationLimiter = newRateLimiter(30 * time.Second)
+	mutationLimiter = newRateLimiter()
 	HandleRefreshStream(httptest.NewRecorder(), postJSON("/api/refresh/stream", "user:alice", "{}"))
 	runRetries := func() {
 		for _, d := range []time.Duration{time.Second, 2 * time.Second, 5 * time.Second} {
@@ -325,7 +325,7 @@ func TestNewOperationSupersedesPendingClear(t *testing.T) {
 		completedIDs = append(completedIDs, done.ID)
 		return nil
 	}
-	refreshResult(&types.OperationResponse{Success: true, Message: "first"}, nil)
+	refreshResult(&types.OperationResponse{Success: true, Message: "first"})
 	HandleRefreshStream(httptest.NewRecorder(), postJSON("/api/refresh/stream", "user:alice", "{}"))
 	first := inflight.lastCompleted().ID
 

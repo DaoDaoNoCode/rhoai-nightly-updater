@@ -42,7 +42,7 @@ func defaultRollout() rolloutFixture {
 // owned by another Deployment.
 func (fx rolloutFixture) install(f *fakeAPI) {
 	ctrl := true
-	f.obj("GET", depPath, map[string]interface{}{
+	f.obj(depPath, map[string]interface{}{
 		"metadata": map[string]interface{}{"name": "rhods-operator", "uid": "dep-uid", "resourceVersion": "100", "generation": 5, "managedFields": fx.managedFields},
 		"spec": map[string]interface{}{
 			"replicas": fx.replicas,
@@ -282,7 +282,7 @@ func TestRestoreRolloutStrategy(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f, c := newFakeAPI(t)
-			f.obj("GET", depPath, tt.dep)
+			f.obj(depPath, tt.dep)
 			f.json("PATCH", depPath, http.StatusOK, `{}`)
 			res, err := ApplyFix(c, "restore-rollout-strategy:"+rolloutNS+"/rhods-operator")
 			if err != nil || res.Success != tt.wantOK || res.ErrorCode != tt.wantCode {

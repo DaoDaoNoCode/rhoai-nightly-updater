@@ -46,7 +46,7 @@ func liveOperandConds() []dcond {
 
 func TestDSCCheck_OperandMessage_InstalledOperatorMissingOperand(t *testing.T) {
 	w := newDSCWorld(t, liveOperandConds())
-	w.installedCSV("jobset-operator.v1.0.1", "openshift-jobset-operator", "Job Set Operator", "Succeeded", time.Hour, "job-set")
+	w.installedCSV(time.Hour)
 	out := checkDataScienceCluster(w.c)
 	byID := problemsByID(out)
 	p, ok := byID["prerequisite-operand-job-set"]
@@ -75,7 +75,7 @@ func TestDSCCheck_OperandMessage_InstalledOperatorMissingOperand(t *testing.T) {
 func TestDSCCheck_ModulesReadyRollupLinksModuleCauses(t *testing.T) {
 	conds := append(liveOperandConds(), dcond{"type": "ModulesReady", "status": "False", "reason": "NotReady", "message": "Some modules are not ready: trainer"})
 	w := newDSCWorld(t, conds)
-	w.installedCSV("jobset-operator.v1.0.1", "openshift-jobset-operator", "Job Set Operator", "Succeeded", time.Hour, "job-set")
+	w.installedCSV(time.Hour)
 	dsc := problemsByID(checkDataScienceCluster(w.c))["dsc-not-ready"]
 	ev := strings.Join(dsc.Evidence, "\n")
 	if !strings.Contains(ev, "ModulesReady=False (NotReady): Some modules are not ready: trainer → cause: module trainer: Job Set Operator is installed, but JobSetOperator/cluster does not exist") ||
@@ -90,7 +90,7 @@ func TestDSCCheck_ModulesReadyRollupLinksModuleCauses(t *testing.T) {
 
 func TestDSCCheck_OperandMessage_OperandBackOffersRestart(t *testing.T) {
 	w := newDSCWorld(t, liveOperandConds())
-	w.installedCSV("jobset-operator.v1.0.1", "openshift-jobset-operator", "Job Set Operator", "Succeeded", time.Hour, "job-set")
+	w.installedCSV(time.Hour)
 	w.f.json("GET", jobSetOperandPath, 200, `{"metadata":{"name":"cluster"}}`)
 	out := checkDataScienceCluster(w.c)
 	b, ok := problemsByID(out)["module-operator-backoff-trainer"]
@@ -106,7 +106,7 @@ func TestDSCCheck_OperandMessage_OperatorNotInstalled(t *testing.T) {
 	ch["currentCSVDesc"].(map[string]interface{})["customresourcedefinitions"] = map[string]interface{}{
 		"owned": []interface{}{map[string]string{"name": "jobsetoperators.operator.openshift.io", "kind": "JobSetOperator", "version": "v1"}},
 	}
-	w.f.obj("GET", packageManifestsPath, map[string]interface{}{"items": cat})
+	w.f.obj(packageManifestsPath, map[string]interface{}{"items": cat})
 	out := checkDataScienceCluster(w.c)
 	p, ok := problemsByID(out)["prerequisite-missing-job-set"]
 	if !ok || !strings.Contains(p.TechnicalCmd, "name: job-set") || !strings.Contains(p.TechnicalCmd, "oc get jobsetoperator.operator.openshift.io/cluster") {
