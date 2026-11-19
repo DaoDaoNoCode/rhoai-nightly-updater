@@ -756,7 +756,7 @@ async (page) => {
         notes: [
           { at: part("Database (PostgreSQL) and maas-db-config"), n: 1, pos: "r" },
           { at: part("Authorino TLS"), n: 2, pos: "r" },
-          { at: panel().getByRole("button", { name: "Unpublish" }), n: 3, pos: "l" },
+          { at: panel().getByRole("button", { name: "Unpublish" }), n: 3, pos: "r" },
         ],
         pad: 24,
       });
