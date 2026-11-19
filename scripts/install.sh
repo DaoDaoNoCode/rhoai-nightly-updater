@@ -381,14 +381,26 @@ ensure_client_secret() {
 # oauth_client_manifest HOST SECRET: OAuthClient $INSTANCE, as RHOAI's
 # operator makes its own (data-science): grantMethod auto (no "Authorize
 # Access" page), one redirect URI on the Route's host (the OAuth server
-# matches scheme and host exactly), the client secret, and no scope
-# restriction, so oauth-proxy can request user:full. Its labels name the
-# install's app and namespace apart (oauth_client_owner reads them): the
+# matches scheme and host exactly), and the client secret. Its labels name
+# the install's app and namespace apart (oauth_client_owner reads them): the
 # name alone is the same for app a-b in namespace c and app a in namespace
-# b-c. The chart's hook applies the same object (scripts/test-chart.sh
-# compares them).
+# b-c.
+#
+# The OAuth server also answers the implicit flow (response_type=token)
+# for any client, so with grantMethod auto whoever later serves the
+# redirect URI's host (a project admin's Route with that host, once the
+# namespace is gone) could collect a signed-in user's token from a crafted
+# link; the client secret does not stop that. Hence:
+#   - scopeRestrictions: exactly the scope oauth-proxy asks for, so the
+#     client's id cannot get any other scope;
+#   - an ownerReference to the install's namespace (cluster-scoped, like
+#     the client): deleting the namespace by hand lets Kubernetes' garbage
+#     collector delete the client with it. Uninstall and rollback delete it
+#     themselves (remove_oauth_client).
+# The chart's hook applies the same object (scripts/test-chart.sh compares
+# them).
 oauth_client_manifest() {
-	local host=$1 secret=$2
+	local host=$1 secret=$2 ns_uid=$3
 	printf '%s\n' \
 		'apiVersion: oauth.openshift.io/v1' \
 		'kind: OAuthClient' \
@@ -398,9 +410,17 @@ oauth_client_manifest() {
 		"    app.kubernetes.io/instance: $INSTANCE" \
 		"    app.kubernetes.io/name: \"$APP_NAME\"" \
 		"    rhoai-nightly-updater/namespace: \"$NAMESPACE\"" \
+		'  ownerReferences:' \
+		'    - apiVersion: v1' \
+		'      kind: Namespace' \
+		"      name: \"$NAMESPACE\"" \
+		"      uid: \"$ns_uid\"" \
 		'grantMethod: auto' \
 		'redirectURIs:' \
-		"  - https://$host/oauth/callback"
+		"  - https://$host/oauth/callback" \
+		'scopeRestrictions:' \
+		'  - literals:' \
+		'      - user:full'
 	printf 'secret: %s\n' "$secret"
 }
 
@@ -464,22 +484,24 @@ route_host() {
 # object with the API server (a placeholder secret, and a placeholder host
 # when the Route does not exist yet).
 oauth_client() {
-	local host secret
+	local host secret ns_uid
 	host=$(route_host)
 	# Checked again right before the apply (also before anything changed).
 	oauth_client_owner "$host"
 	[ "$CLIENT_OWNER" != foreign ] ||
 		die "OAuthClient $INSTANCE is not this install's ($CLIENT_FOREIGN), so it was not changed; users cannot sign in to this install until it is. See: oc get oauthclient $INSTANCE --show-labels"
+	ns_uid=$(oc get namespace "$NAMESPACE" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)
 	if [ -n "$DRY" ]; then
-		oauth_client_manifest "${host:-$APP_NAME-$NAMESPACE.apps.example.com}" dry-run-placeholder |
+		oauth_client_manifest "${host:-$APP_NAME-$NAMESPACE.apps.example.com}" dry-run-placeholder "${ns_uid:-00000000-0000-0000-0000-000000000000}" |
 			oc apply --server-side --field-manager=rhoai-nightly-updater-install --force-conflicts --dry-run=server -f - >/dev/null
 		err "Validated OAuthClient $INSTANCE."
 		return 0
 	fi
 	[ -n "$host" ] || die "Route $APP_NAME has no host yet; users cannot sign in until OAuthClient $INSTANCE exists. Re-run this command."
+	[ -n "$ns_uid" ] || die "Cannot read the UID of namespace $NAMESPACE, which owns OAuthClient $INSTANCE; users cannot sign in until it exists. Re-run this command."
 	secret=$(oc get secret "$CLIENT_SECRET" -n "$NAMESPACE" -o jsonpath='{.data.client-secret}' | base64 -d)
 	[ -n "$secret" ] || die "Secret $CLIENT_SECRET has no client-secret; delete it and re-run this command."
-	oauth_client_manifest "$host" "$secret" |
+	oauth_client_manifest "$host" "$secret" "$ns_uid" |
 		oc apply --server-side --field-manager=rhoai-nightly-updater-install --force-conflicts -f - >/dev/null
 	unset secret
 	err "OAuthClient $INSTANCE signs users in at https://$host (redirect https://$host/oauth/callback)."
@@ -688,8 +710,10 @@ rollback() {
 	fi
 	git show "$rev:deploy/template.yaml" >"$TMP/rollback-template.yaml"
 	# A template that signs users in through OAuthClient $INSTANCE needs its
-	# secret and the client; an older one uses the ServiceAccount and leaves
-	# them unused (uninstall removes them).
+	# secret and the client; an older one signs in through the ServiceAccount,
+	# so once it runs this install's client is deleted and its sign-ins
+	# revoked (an unused client with grantMethod auto is only a risk). The
+	# client Secret stays for a roll forward.
 	local client=""
 	! uses_oauth_client "$TMP/rollback-template.yaml" || client=1
 	[ -z "$client" ] || refuse_foreign_client "$(route_host)"
@@ -699,11 +723,20 @@ rollback() {
 	apply_template "$TMP/rollback-template.yaml" "$REF"
 	[ -z "$client" ] || oauth_client
 	if [ -n "$DRY" ]; then
+		[ -n "$client" ] || remove_oauth_client || true
 		err "Dry run only; nothing was changed."
 		return 0
 	fi
 	err "Note: a running cluster operation delays the restart until it finishes (up to ~17 minutes)."
 	wait_rollout
+	if [ -z "$client" ]; then
+		if ! remove_oauth_client; then
+			err "ERROR: rolled back, but OAuthClient $INSTANCE, which the rolled-back build does not use, could not be deleted. Delete it and revoke its sign-ins:"
+			err "  oc delete oauthclient $INSTANCE"
+			die "  oc delete oauthaccesstokens --field-selector clientName=$INSTANCE"
+		fi
+		[ -n "$REVOKED" ] || die "ERROR: rolled back and OAuthClient $INSTANCE deleted, but its sign-ins could not be revoked: oc delete oauthaccesstokens --field-selector clientName=$INSTANCE"
+	fi
 	err "Rolled back. Roll forward again with: make upgrade"
 }
 

@@ -102,7 +102,12 @@ case "$1 $2" in
 "get rs")
 	# The current ReplicaSet, an old one of this Deployment, one of another owner.
 	printf '%s\n' "rs-old 2 uid-1 0 0" "rs-cur 3 uid-1 1 1" "rs-foreign 1 uid-2 0 0" ;;
-"get namespace" | "get project") [ -n "${FAKE_NS:-}" ] ;;
+"get namespace" | "get project")
+	# The namespace's UID (the OAuthClient's owner) once it exists.
+	case "$*" in
+	*metadata.uid*) printf '%s' "${FAKE_NS_UID-ns-uid-1}" ;;
+	*) [ -n "${FAKE_NS:-}" ] ;;
+	esac ;;
 "get secret")
 	# The OAuth client secret's value, as oc prints a Secret's data (base64).
 	if [[ " $* " == *"{.data.client-secret}"* ]]; then
@@ -277,6 +282,26 @@ expect_eq "rollback dry run changes nothing" "" "$(mutations)"
 FAKE_INSTALLED=1 FAKE_NS=1 TAG=v9.8.7 FAKE_CLIENT=theirs \
 	expect_fail "rollback to a template with the OAuthClient: another install's client" "is not this install's" run bash "$CLONE" rollback
 expect_eq "rollback, another install's OAuthClient: nothing changed" "" "$(mutations)"
+# Rolling back to a template from before the OAuthClient (3.x signs in
+# through the ServiceAccount): after the rollout this install's client is
+# deleted and its sign-ins revoked; another install's is kept.
+# shellcheck disable=SC2016 # the template's own ${PARAM} placeholders
+sed '/--client-id=\${APP_NAME}-\${NAMESPACE}$/d' "$SRC/deploy/template.yaml" >"$REPO/deploy/template.yaml"
+git -C "$REPO" commit -qam three-x
+OLD=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" reset -q --hard HEAD~1
+FAKE_INSTALLED=1 FAKE_NS=1 FAKE_SECRET=1 FAKE_REVISION=$OLD TAG=$OLD FAKE_CLIENT=ours FAKE_CLIENT_NS=rhoai-nightly-updater expect_ok "rollback to 3.x" run bash "$CLONE" rollback
+expect_eq "rollback to 3.x: the client goes after the rollout" "$(printf '%s\n' \
+	"oc rollout status deployment/rhoai-nightly-updater -n rhoai-nightly-updater --timeout=20m" \
+	"oc delete oauthclient rhoai-nightly-updater-rhoai-nightly-updater --ignore-not-found" \
+	"oc delete oauthaccesstokens --field-selector clientName=rhoai-nightly-updater-rhoai-nightly-updater")" \
+	"$(grep -E '^oc (rollout|delete|apply --server-side)' "$LOG" || true)"
+FAKE_INSTALLED=1 FAKE_NS=1 FAKE_SECRET=1 FAKE_REVISION=$OLD TAG=$OLD FAKE_CLIENT=theirs expect_ok "rollback to 3.x next to another install's client" run bash "$CLONE" rollback
+expect_eq "rollback to 3.x: another install's client kept" "" "$(grep '^oc delete oauth' "$LOG" || true)"
+FAKE_INSTALLED=1 FAKE_NS=1 FAKE_SECRET=1 FAKE_REVISION=$OLD TAG=$OLD FAKE_CLIENT=ours FAKE_CLIENT_NS=rhoai-nightly-updater FAKE_CLIENT_DELETE_FAIL=1 \
+	expect_fail "rollback to 3.x: the client cannot be deleted" "oc delete oauthclient rhoai-nightly-updater-rhoai-nightly-updater" run bash "$CLONE" rollback
+FAKE_INSTALLED=1 FAKE_NS=1 FAKE_SECRET=1 FAKE_REVISION=$OLD TAG=$OLD FAKE_CLIENT=ours FAKE_CLIENT_NS=rhoai-nightly-updater expect_ok "rollback to 3.x, dry run" run bash "$CLONE" rollback --dry-run
+expect_eq "rollback to 3.x, dry run: changes nothing" "" "$(mutations)"
 expect_ok "asset: uninstall dry run" run bash "$ASSET" uninstall --dry-run --namespace scratch-ns
 deletes=$(grep -c '^oc delete' "$LOG" || true)
 expect_eq "uninstall: every delete is a dry run" "$deletes" "$(grep '^oc delete' "$LOG" | grep -c -- '--dry-run=server' || true)"
@@ -326,12 +351,23 @@ expect_eq "fresh install: the OAuthClient" "$(printf '%s\n' \
 	'    app.kubernetes.io/instance: rhoai-nightly-updater-scratch-ns' \
 	'    app.kubernetes.io/name: "rhoai-nightly-updater"' \
 	'    rhoai-nightly-updater/namespace: "scratch-ns"' \
+	'  ownerReferences:' \
+	'    - apiVersion: v1' \
+	'      kind: Namespace' \
+	'      name: "scratch-ns"' \
+	'      uid: "ns-uid-1"' \
 	'grantMethod: auto' \
 	'redirectURIs:' \
 	'  - https://app.example.com/oauth/callback' \
+	'scopeRestrictions:' \
+	'  - literals:' \
+	'      - user:full' \
 	'secret: secret-from-the-cluster')" "$(cat "$LOG.oauthclient")"
 grep -q "secret-from-the-cluster\|c2VjcmV0LWZyb20tdGhlLWNsdXN0ZXI=" "$LOG" && fail "the OAuth client secret is on an oc command line" || pass
-grep -q "scopeRestrictions\|accessTokenMaxAgeSeconds" "$LOG.oauthclient" && fail "the OAuthClient restricts the scope oauth-proxy requests" || pass
+grep -q "accessTokenMaxAgeSeconds" "$LOG.oauthclient" && fail "the OAuthClient shortens the sign-in" || pass
+# Without the namespace's UID there is no owner: nothing is applied.
+FAKE_INSTALLED=1 FAKE_NS=1 FAKE_SECRET=1 FAKE_NS_UID="" expect_fail "upgrade: no namespace UID" "Cannot read the UID of namespace scratch-ns" run bash "$ASSET" --namespace scratch-ns
+[ ! -s "$LOG.oauthclient" ] && pass || fail "upgrade without the namespace UID applied the OAuthClient"
 
 # An upgrade from a release whose ServiceAccount was the OAuth client: the
 # installed Secrets are kept, the OAuthClient is created, the new template

@@ -281,18 +281,37 @@ in through the app's ServiceAccount as with 3.x
 - A `PostSync` hook (Job `<APP_NAME>-oauthclient`) reads Route
   `<APP_NAME>`'s host and the Secret, and server-side-applies the OAuthClient
   (`grantMethod: auto`, one redirect URI `https://<host>/oauth/callback`, the
-  secret, label `app.kubernetes.io/instance`), the same object as
-  `install.sh`'s (`scripts/test-chart.sh` compares them). The secret goes to
+  secret, `scopeRestrictions` of exactly `user:full`, labels naming the
+  install's app and namespace, and an ownerReference to the namespace), the
+  same object as `install.sh`'s (`scripts/test-chart.sh` compares them). It
+  fails without changing anything when a client of that name belongs to
+  another install (the name `<APP_NAME>-<NAMESPACE>` is ambiguous;
+  [SECURITY.md](../SECURITY.md#the-oauthclient-400)). The secret goes to
   `oc` on stdin and is never printed. RBAC: `get` on that Route and Secret (a
   Role), and `get`/`patch` on that one OAuthClient plus `create` on
-  OAuthClients (ClusterRole `<APP_NAME>-<NAMESPACE>-oauthclient`). `create`
+  OAuthClients and `get` on the namespace (ClusterRole
+  `<APP_NAME>-<NAMESPACE>-oauthclient`). `create`
   cannot be limited to a name, so while the hook runs its ServiceAccount
   could register any OAuth client; it exists only for the hook's run
   ([SECURITY.md](../SECURITY.md#the-oauthclient-400)). The app's own
   ServiceAccount gets no right on OAuthClients.
+- A `PostDelete` hook (Job `<APP_NAME>-oauthclient-removal`) runs when the
+  Application is deleted with a cascading deletion: it deletes the
+  OAuthClient when its labels name this install, then revokes the sign-ins
+  issued under its name (`oc delete oauthaccesstokens --field-selector
+  clientName=...`), as `install.sh uninstall` does. RBAC: ClusterRole
+  `<APP_NAME>-<NAMESPACE>-oauthclient-removal`, `get`/`delete` on that
+  OAuthClient and `list`/`delete` on OAuthAccessTokens. PostDelete hooks
+  need **Argo CD 2.10 or later** (OpenShift GitOps 1.12 or later); older
+  versions never run it, and then the client stays until you delete it
+  ([section 7](#7-removing-it)). While the hook fails (a read or delete
+  refused), Argo CD keeps the Application; to give up, remove its
+  `post-delete-finalizer.argocd.argoproj.io` finalizer and run the
+  commands of section 7.
 
 Until the PostSync hook ran, signing in fails with `unauthorized_client`.
-Argo CD never prunes the OAuthClient ([section 7](#7-removing-it)). With
+Argo CD never prunes the OAuthClient; the PostDelete hook and the namespace
+(its owner) remove it ([section 7](#7-removing-it)). With
 `gitops.oauthClient.enabled: false`, create both before the first sync
 (the secret never in Git):
 
@@ -301,9 +320,13 @@ secret=$(head -c 64 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)
 printf '%s' "$secret" >client-secret && oc create secret generic <APP_NAME>-oauth-client -n <NAMESPACE> --from-file=client-secret=client-secret && rm client-secret
 # after the first sync, when the Route has its host:
 host=$(oc get route <APP_NAME> -n <NAMESPACE> -o jsonpath='{.spec.host}')
+uid=$(oc get namespace <NAMESPACE> -o jsonpath='{.metadata.uid}')
 printf '%s\n' 'apiVersion: oauth.openshift.io/v1' 'kind: OAuthClient' 'metadata:' '  name: <APP_NAME>-<NAMESPACE>' \
-  '  labels:' '    app.kubernetes.io/instance: <APP_NAME>-<NAMESPACE>' 'grantMethod: auto' 'redirectURIs:' \
-  "  - https://$host/oauth/callback" "secret: $secret" | oc apply --server-side -f -
+  '  labels:' '    app.kubernetes.io/instance: <APP_NAME>-<NAMESPACE>' '    app.kubernetes.io/name: "<APP_NAME>"' \
+  '    rhoai-nightly-updater/namespace: "<NAMESPACE>"' '  ownerReferences:' '    - apiVersion: v1' '      kind: Namespace' \
+  '      name: "<NAMESPACE>"' "      uid: \"$uid\"" 'grantMethod: auto' 'redirectURIs:' \
+  "  - https://$host/oauth/callback" 'scopeRestrictions:' '  - literals:' '      - user:full' \
+  "secret: $secret" | oc apply --server-side -f -
 ```
 
 ## 5. The namespace
@@ -387,7 +410,15 @@ What stays even then:
   not deleted with the application. With it stay Secret `<APP_NAME>-proxy`
   and the app's ConfigMaps (activity log, snapshot, operation marker);
 - ConsoleLink `<APP_NAME>-<NAMESPACE>`, created by a Job;
-- OAuthClient `<APP_NAME>-<NAMESPACE>`, created by a Job, and the sign-ins it issued, and Secret `<APP_NAME>-oauth-client`;
+- with `profile: full`: Secret `<APP_NAME>-oauth-client`, and, where the
+  PostDelete hook did not run (Argo CD before 2.10, a non-cascading
+  deletion, `gitops.oauthClient.enabled: false`), OAuthClient
+  `<APP_NAME>-<NAMESPACE>` and the sign-ins it issued. Remove that client:
+  with `grantMethod: auto` and the OAuth server's implicit flow, whoever
+  later serves its redirect host (a Route with that host, once the namespace
+  is gone) could collect a signed-in user's token from a crafted link
+  ([SECURITY.md](../SECURITY.md#the-oauthclient-400)). Deleting the
+  namespace deletes the client too (it owns it), but not its sign-ins;
 - the hook objects of a failed last run.
 
 Remove those, or after a non-cascading deletion the whole app, once the
@@ -397,7 +428,7 @@ which deletes the cluster-scoped objects and the Roles in other namespaces
 by the instance label, then the namespace, or by hand:
 
 ```bash
-oc delete oauthclient -l app.kubernetes.io/instance=<APP_NAME>-<NAMESPACE>
+oc delete oauthclient <APP_NAME>-<NAMESPACE>   # check its labels name this install: oc get oauthclient <APP_NAME>-<NAMESPACE> --show-labels
 oc delete oauthaccesstokens --field-selector clientName=<APP_NAME>-<NAMESPACE>   # deleting the client does not end its sign-ins
 oc delete consolelink,clusterrole,clusterrolebinding -l app.kubernetes.io/instance=<APP_NAME>-<NAMESPACE>
 # profile gitops only (install.sh uninstall does not know these):

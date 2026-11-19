@@ -1,0 +1,146 @@
+{{- /*
+Removes the OAuthClient the PostSync hook applied (oauth-client.yaml) when
+the Application is deleted: an Argo CD PostDelete hook (Argo CD 2.10 or
+later, OpenShift GitOps 1.12 or later; older versions never run it). It
+runs after a cascading deletion has removed the app's objects, and does
+what `install.sh uninstall` does first: delete OAuthClient
+<APP_NAME>-<NAMESPACE> when its labels name this install, then revoke the
+access tokens issued under that name (deleting a client does not
+invalidate them). Why it matters: the OAuth server also answers the
+implicit flow, so with grantMethod auto whoever later serves the client's
+redirect host (a Route a project admin creates with that host once this
+one is gone) could collect a signed-in user's full token from a crafted
+link. The namespace's ownerReference on the client covers a namespace
+deleted by hand; this covers the namespace Argo CD leaves behind
+(CreateNamespace creates it untracked).
+
+A client without this install's labels is left alone (another install's,
+or one applied before the labels), and the hook says so; reading or
+deleting failing fails the hook (Argo CD keeps the Application until it
+succeeds, docs/GITOPS.md section 7).
+
+RBAC, a ClusterRole that exists only while the hook runs: get and delete
+on the one OAuthClient; list and delete on OAuthAccessTokens, which cannot
+be limited to names (each is a hash of its token).
+
+Profile full only, with gitops.oauthClient.enabled: the gitops profile has
+no OAuthClient, and without the hooks an admin manages the client.
+*/ -}}
+{{- if and .Values.gitops.oauthClient.enabled (eq (.Values.profile | default "gitops") "full") }}
+{{- $p := include "rnu.params" . | fromJson }}
+{{- $instance := printf "%s-%s" $p.APP_NAME $p.NAMESPACE }}
+{{- $name := printf "%s-oauthclient-removal" $p.APP_NAME }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name | quote }}
+  namespace: {{ $p.NAMESPACE | quote }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "PostDelete" "wave" "-2") | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ printf "%s-oauthclient-removal" $instance | quote }}
+  labels:
+    app.kubernetes.io/instance: {{ $instance | quote }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "PostDelete" "wave" "-2") | nindent 4 }}
+rules:
+  - apiGroups: ["oauth.openshift.io"]
+    resources: ["oauthclients"]
+    resourceNames: [{{ $instance | quote }}]
+    verbs: ["get", "delete"]
+  - apiGroups: ["oauth.openshift.io"]
+    resources: ["oauthaccesstokens"]
+    verbs: ["list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ printf "%s-oauthclient-removal" $instance | quote }}
+  labels:
+    app.kubernetes.io/instance: {{ $instance | quote }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "PostDelete" "wave" "-2") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ printf "%s-oauthclient-removal" $instance | quote }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name | quote }}
+    namespace: {{ $p.NAMESPACE | quote }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name | quote }}
+  namespace: {{ $p.NAMESPACE | quote }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "PostDelete" "wave" "-1") | nindent 4 }}
+spec:
+  backoffLimit: 4
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      # Not the app's "app" label: the Service and NetworkPolicy select it.
+      labels:
+        app.kubernetes.io/part-of: {{ $p.APP_NAME | quote }}
+        app.kubernetes.io/component: oauthclient-removal
+    spec:
+      serviceAccountName: {{ $name | quote }}
+      restartPolicy: Never
+      securityContext:
+        {{- include "rnu.hookPodSecurity" . | nindent 8 }}
+      containers:
+        - name: oauthclient-removal
+          image: {{ .Values.gitops.cliImage | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NAMESPACE
+              value: {{ $p.NAMESPACE | quote }}
+            - name: APP_NAME
+              value: {{ $p.APP_NAME | quote }}
+            - name: INSTANCE
+              value: {{ $instance | quote }}
+            # oc writes its cache under HOME; the root filesystem is read-only.
+            - name: HOME
+              value: /tmp
+          # The hook's ClusterRoleBinding is created with the Job, so the
+          # first attempt may be refused; the Job retries (backoffLimit).
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              if out=$(oc get oauthclient "$INSTANCE" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/name}{"|"}{.metadata.labels.rhoai-nightly-updater/namespace}{"\n"}' 2>&1); then
+                IFS='|' read -r app ns _ <<<"$out" || true
+                if [ "$app" != "$APP_NAME" ] || [ "$ns" != "$NAMESPACE" ]; then
+                  echo "Keeping OAuthClient $INSTANCE and its sign-ins: its labels name app ${app:-(none)} in namespace ${ns:-(none)}, not this install. If it is this install's, delete it: oc delete oauthclient $INSTANCE; oc delete oauthaccesstokens --field-selector clientName=$INSTANCE"
+                  exit 0
+                fi
+                oc delete oauthclient "$INSTANCE" --ignore-not-found
+              else
+                case "$out" in
+                *NotFound* | *"not found"*) echo "OAuthClient $INSTANCE does not exist." ;;
+                *)
+                  echo "Cannot read OAuthClient $INSTANCE: $out" >&2
+                  exit 1
+                  ;;
+                esac
+              fi
+              oc delete oauthaccesstokens --field-selector "clientName=$INSTANCE"
+              echo "Removed OAuthClient $INSTANCE and revoked its sign-ins."
+          resources:
+            {{- include "rnu.hookResources" . | nindent 12 }}
+          securityContext:
+            {{- include "rnu.hookContainerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+{{- end }}

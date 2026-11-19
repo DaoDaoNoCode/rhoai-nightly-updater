@@ -330,6 +330,27 @@ only accepts a tag whose version is the top dated section. See
   `--cookie-refresh` (broken in openshift/oauth-proxy, and it can log the
   token); the token is never logged, stored or shown
   ([SECURITY.md: Threat model](SECURITY.md#threat-model-of-the-user-token-400)).
+- **The OAuthClient does not outlive the install.** The OAuth server
+  answers the implicit flow for any client, so with `grantMethod: auto` a
+  client left behind would hand a signed-in user's `user:full` token to
+  whoever later serves its redirect host (a project admin's Route with the
+  freed host); the client secret does not stop that. The client now
+  allows exactly the scope `user:full` (`scopeRestrictions`), is owned by
+  the install's Namespace (deleting the namespace deletes it; not yet
+  checked live), and is deleted with its sign-ins revoked by `install.sh
+  uninstall` (which now stops before deleting the namespace when it cannot
+  delete the client), by `make rollback` to a 3.x template, and by a new
+  PostDelete hook when the chart's Argo CD Application is deleted (Argo CD
+  2.10 or later). Deleting the namespace by hand still leaves the sign-ins:
+  `oc delete oauthaccesstokens --field-selector clientName=<APP_NAME>-<NAMESPACE>`
+  ([SECURITY.md](SECURITY.md#the-oauthclient-400)).
+- **One install no longer takes over another's OAuthClient.** Its name
+  `<APP_NAME>-<NAMESPACE>` is the same for app `a-b` in namespace `c` and app
+  `a` in namespace `b-c`, and the apply forced its fields over. The client
+  now carries the app name and namespace as labels; install, upgrade,
+  rollback and the chart's hook refuse, before any change, a client of that
+  name that is not this install's, and uninstall leaves it and its sign-ins
+  alone.
 
 - **Models' copy-paste commands could run what a project editor wrote.**
   The name a model serves (`spec.model.name`), which anyone who can edit

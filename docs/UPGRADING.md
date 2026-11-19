@@ -514,11 +514,22 @@ the app's, get the OAuthClient rights, only while they run. With
 OAuthClient: `install.sh uninstall` removes it.
 
 **Rolling back to 3.x** (`make rollback TAG=v3.0.1`): the 3.x template
-signs users in through the ServiceAccount again and re-grants its RBAC. The
-OAuthClient and its Secret stay unused; `install.sh uninstall` removes them,
-or by hand: `oc delete oauthclient $APP-$NS`, `oc delete oauthaccesstokens
---field-selector clientName=$APP-$NS`, `oc delete secret $APP-oauth-client
--n $NS`.
+signs users in through the ServiceAccount again and re-grants its RBAC.
+Once the rollout finished, `make rollback` deletes OAuthClient `$APP-$NS`
+(unused, and with `grantMethod: auto` only a risk) and revokes its sign-ins;
+it keeps Secret `$APP-oauth-client` for the roll forward. A rollback with
+an older clone's `install.sh` does not know the client: delete it by hand,
+`oc delete oauthclient $APP-$NS` and `oc delete oauthaccesstokens
+--field-selector clientName=$APP-$NS`.
+
+**Removing it.** Use `install.sh uninstall` (or `make undeploy`): it deletes
+the OAuthClient and revokes its sign-ins before the namespace. Deleting the
+namespace by hand leaves the sign-ins and possibly the client (the
+namespace owns it, but that is not yet checked live); a client left behind
+lets whoever later claims its redirect host with a Route collect a
+signed-in user's token ([SECURITY.md](../SECURITY.md#the-oauthclient-400)).
+Delete it with `oc delete oauthclient $APP-$NS` and revoke with
+`oc delete oauthaccesstokens --field-selector clientName=$APP-$NS`.
 
 ## 6. Roll back
 

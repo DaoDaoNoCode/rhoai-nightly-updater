@@ -124,7 +124,9 @@ expected_objects() {
 			printf '%s\n' "ServiceAccount/$app-oauth-secret/$ns" "Role/$app-oauth-secret/$ns" \
 				"RoleBinding/$app-oauth-secret/$ns" "Job/$app-oauth-secret/$ns" \
 				"ServiceAccount/$app-oauthclient/$ns" "Role/$app-oauthclient/$ns" "RoleBinding/$app-oauthclient/$ns" \
-				"ClusterRole/$app-$ns-oauthclient/" "ClusterRoleBinding/$app-$ns-oauthclient/" "Job/$app-oauthclient/$ns"
+				"ClusterRole/$app-$ns-oauthclient/" "ClusterRoleBinding/$app-$ns-oauthclient/" "Job/$app-oauthclient/$ns" \
+				"ServiceAccount/$app-oauthclient-removal/$ns" "ClusterRole/$app-$ns-oauthclient-removal/" \
+				"ClusterRoleBinding/$app-$ns-oauthclient-removal/" "Job/$app-oauthclient-removal/$ns"
 		fi
 		if [ "$link" = 1 ]; then
 			printf '%s\n' "ServiceAccount/$app-consolelink/$ns" "Role/$app-consolelink/$ns" \
@@ -495,7 +497,7 @@ grep -qF 'resourceNames: ["upd"]' "$OUT" && pass || fail "OAuthClient: the Role 
 oauth_role=$(doc ClusterRole/'"upd-ns1-oauthclient"')
 [ -n "$oauth_role" ] || oauth_role=$(awk '/^---/ { if (keep) exit; buf = ""; next } { buf = buf $0 "\n" } /name: "upd-ns1-oauthclient"/ { keep = 1 } END { if (keep) printf "%s", buf }' "$OUT")
 grep -qF 'resources: ["oauthclients"]' <<<"$oauth_role" && pass || fail "OAuthClient: no ClusterRole on oauthclients: $oauth_role"
-expect_eq "OAuthClient: the hook's verbs on OAuthClients" '["get", "patch"] ["create"]' \
+expect_eq "OAuthClient: the hook's verbs (OAuthClients, and get on its namespace)" '["get", "patch"] ["create"] ["get"]' \
 	"$(grep -oE 'verbs: \[[^]]*\]' <<<"$oauth_role" | sed 's/^verbs: //' | tr '\n' ' ' | sed 's/ $//')"
 grep -E '^ *(resources|verbs): ' "$OUT" | grep -qE 'oauthaccesstokens|"delete"|impersonate|escalate|bind' && fail "OAuthClient: a hook gets more than it needs" || pass
 grep -qF 'app.kubernetes.io/instance: "upd-ns1"' <<<"$oauth_role" && pass || fail "OAuthClient: the ClusterRole lacks install.sh's instance label"
@@ -660,6 +662,9 @@ case "$1 $2" in
 	*) echo "Error from server: cannot create secrets" >&2; exit 1 ;;
 	esac ;;
 "get route") [ -n "${FAKE_NO_HOST:-}" ] || printf 'app.example.com' ;;
+"get namespace") printf '%s' "${FAKE_NS_UID-ns-uid-1}" ;;
+"delete oauthclient") [ -z "${FAKE_DELETE_FAIL:-}" ] || { echo "Error from server: cannot delete oauthclients" >&2; exit 1; } ;;
+"delete oauthaccesstokens") [ -z "${FAKE_REVOKE_FAIL:-}" ] || { echo "Error from server: cannot delete oauthaccesstokens" >&2; exit 1; } ;;
 "get oauthclient")
 	# FAKE_CLIENT: absent (default), ours, theirs (another install's labels),
 	# unlabelled-ours (no labels, this Route's callback), unlabelled-theirs,
@@ -707,8 +712,10 @@ run_oauth "$OCLIENT_SH"
 expect_eq "OAuthClient applied: success" 0 "$HOOK_RC"
 expect_eq "OAuthClient applied: the object" "$(printf '%s\n' 'apiVersion: oauth.openshift.io/v1' 'kind: OAuthClient' 'metadata:' \
 	'  name: app-ns1' '  labels:' '    app.kubernetes.io/instance: app-ns1' '    app.kubernetes.io/name: "app"' \
-	'    rhoai-nightly-updater/namespace: "ns1"' 'grantMethod: auto' 'redirectURIs:' \
-	'  - https://app.example.com/oauth/callback' 'secret: client-secret-value')" "$(cat "$HOOKLOG.applied")"
+	'    rhoai-nightly-updater/namespace: "ns1"' '  ownerReferences:' '    - apiVersion: v1' '      kind: Namespace' \
+	'      name: "ns1"' '      uid: "ns-uid-1"' 'grantMethod: auto' 'redirectURIs:' \
+	'  - https://app.example.com/oauth/callback' 'scopeRestrictions:' '  - literals:' '      - user:full' \
+	'secret: client-secret-value')" "$(cat "$HOOKLOG.applied")"
 grep -qx 'oc apply --server-side --field-manager=rhoai-nightly-updater-gitops --force-conflicts -f -' "$HOOKLOG" && pass || fail "OAuthClient: not server-side applied: $(cat "$HOOKLOG")"
 grep -qF 'client-secret-value' "$HOOKOUT" "$HOOKLOG" && fail "OAuthClient: the secret was printed or passed as an argument" || pass
 # Only this install's client is applied over: its labels, or without labels
@@ -735,5 +742,43 @@ run_oauth "$OCLIENT_SH" FAKE_NO_HOST=1
 [ "$HOOK_RC" -ne 0 ] && [ ! -e "$HOOKLOG.applied" ] && pass || fail "OAuthClient, no host: applied anyway"
 run_oauth "$OCLIENT_SH" FAKE_APPLY=fail
 [ "$HOOK_RC" -ne 0 ] && pass || fail "OAuthClient, apply fails: the Job succeeded"
+run_oauth "$OCLIENT_SH" FAKE_NS_UID=""
+[ "$HOOK_RC" -ne 0 ] && [ ! -e "$HOOKLOG.applied" ] && pass || fail "OAuthClient, no namespace UID: applied anyway"
+
+# The PostDelete hook: deleting the Application removes this install's
+# OAuthClient and revokes its sign-ins (an orphaned client with
+# grantMethod auto hands a user's token to whoever later serves its host).
+# Profile full with the OAuth client hooks only; never run during a sync.
+expect_render "OAuthClient removal hook" --namespace ns1 "${BASE[@]}" --set profile=full --set parameters.APP_NAME=upd --show-only templates/oauth-client-removal.yaml
+expect_eq "OAuthClient removal: four PostDelete hooks" 4 "$(grep -c 'argocd.argoproj.io/hook: "PostDelete"' "$OUT")"
+expect_eq "OAuthClient removal: no other hook phase" "" "$(grep 'argocd.argoproj.io/hook: ' "$OUT" | grep -v PostDelete || true)"
+removal_role=$(awk '/^---/ { if (keep) exit; buf = ""; next } { buf = buf $0 "\n" } /name: "upd-ns1-oauthclient-removal"/ && /^  name/ { keep = 1 } END { if (keep) printf "%s", buf }' "$OUT")
+expect_eq "OAuthClient removal: the rules" "$(printf '%s\n' 'resources: ["oauthclients"]' 'resourceNames: ["upd-ns1"]' 'verbs: ["get", "delete"]' \
+	'resources: ["oauthaccesstokens"]' 'verbs: ["list", "delete"]')" "$(grep -E '^ *(resources|resourceNames|verbs): ' <<<"$removal_role" | sed 's/^ *//; s/^- //')"
+for off in "--set profile=gitops" "--set profile=full --set gitops.oauthClient.enabled=false"; do
+	# shellcheck disable=SC2086 # two flags
+	expect_render "OAuthClient removal hook: $off" --namespace ns1 "${BASE[@]}" $off
+	grep -q 'PostDelete' "$OUT" && fail "OAuthClient removal hook rendered with $off" || pass
+done
+REMOVAL_SH="$WORK/oauthclient-removal.sh"
+helm template rnu "$CHART" --namespace ns1 "${BASE[@]}" --set profile=full --show-only templates/oauth-client-removal.yaml 2>&1 |
+	awk '/^            - \|$/ { f = 1; next } f && /^          [a-z]/ { exit } f' | sed -e 's/^              //' >"$REMOVAL_SH"
+bash -n "$REMOVAL_SH" && grep -q 'oc delete oauthaccesstokens' "$REMOVAL_SH" && pass || fail "OAuthClient removal: script not extracted"
+deletes() { grep '^oc delete' "$HOOKLOG" || true; }
+run_oauth "$REMOVAL_SH" FAKE_CLIENT=ours
+expect_eq "OAuthClient removal, ours: deleted, then its sign-ins revoked" "0 $(printf '%s\n' 'oc delete oauthclient app-ns1 --ignore-not-found' \
+	'oc delete oauthaccesstokens --field-selector clientName=app-ns1')" "$HOOK_RC $(deletes)"
+run_oauth "$REMOVAL_SH"
+expect_eq "OAuthClient removal, no client: its sign-ins revoked" "0 oc delete oauthaccesstokens --field-selector clientName=app-ns1" "$HOOK_RC $(deletes)"
+for client in theirs unlabelled-ours; do
+	run_oauth "$REMOVAL_SH" FAKE_CLIENT=$client
+	expect_eq "OAuthClient removal, $client: kept with its sign-ins" "0 " "$HOOK_RC $(deletes)"
+	grep -qF 'Keeping OAuthClient app-ns1' "$HOOKOUT" && pass || fail "OAuthClient removal, $client: $(cat "$HOOKOUT")"
+done
+for f in FAKE_CLIENT=error "FAKE_CLIENT=ours FAKE_DELETE_FAIL=1" "FAKE_CLIENT=ours FAKE_REVOKE_FAIL=1"; do
+	# shellcheck disable=SC2086 # one or two assignments
+	run_oauth "$REMOVAL_SH" $f
+	[ "$HOOK_RC" -ne 0 ] && pass || fail "OAuthClient removal, $f: the Job succeeded"
+done
 
 finish
