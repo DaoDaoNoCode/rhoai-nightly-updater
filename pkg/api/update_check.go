@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 )
 
 // The update check compares the running release with the highest vX.Y.Z
@@ -239,15 +241,17 @@ func (c *updateChecker) latestRelease(repository string) string {
 	return c.latest
 }
 
-// HandleUpdateCheck reports whether a newer release of the updater exists.
-func HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+// HandleUpdateCheck reports whether a newer release of the updater exists,
+// to a signed-in user (withAuth), as every other API read: the answer
+// reads the registry, which an anonymous request must not trigger.
+var HandleUpdateCheck = withAuth(func(_ *cluster.Client, w http.ResponseWriter, _ *http.Request) {
 	info := compareReleases(Version, "", "", "")
 	if repository := strings.TrimSpace(os.Getenv("IMAGE_REPOSITORY")); info.Current != "" && repository != "" {
 		releases := os.Getenv("RELEASES_URL")
 		info = compareReleases(Version, defaultUpdateChecker.latestRelease(repository), releases, installerReleasesURL(releases))
 	}
 	writeJSON(w, info, "update-check")
-}
+})
 
 // HandleUpdateCheckGitOps is HandleUpdateCheck in the gitops profile: no
 // registry is read. The chart pins the updater's release in Git, so a newer
