@@ -198,7 +198,7 @@ func nodeSetupPlatform(c *Client, action string) (cp, refusal, code string) {
 	mirror := action == NodeSetupMirrorCreate || action == NodeSetupMirrorRemove
 	hosted, err := readTopologyHosted(c)
 	if err != nil {
-		return "", "The updater cannot read whether this cluster has a hosted control plane (" + err.Error() + "). On a hosted control plane this would not reach the nodes, so nothing is changed; use the instructions instead.", "unknown_topology"
+		return "", "The updater cannot read whether this cluster has a hosted control plane (" + err.Error() + "). On a hosted control plane this would not reach the nodes, so it is not done. Nothing was changed; use the instructions instead.", "unknown_topology"
 	}
 	if hosted {
 		if mirror {
