@@ -85,8 +85,10 @@ async (page) => {
 
   /**
    * Draws numbered callouts and highlight boxes over the page. notes:
-   * [{ at: locator, n?: number, box?: false, pos?: "tl"|"tr"|"l"|"r"|"b" }].
+   * [{ at: locator, n?: number, box?: false, pos?: "tl"|"tr"|"l"|"r"|"b", pad?: number }].
    * "b" sits just under the middle of the bottom edge, for a target with text on both sides.
+   * pad is how far the box reaches past the target (5 px); a negative pad keeps the boxes of
+   * adjacent targets (two options of one list) apart.
    * Returns the rectangles drawn, so a crop can include them.
    */
   async function annotate(notes, name = "") {
@@ -94,16 +96,15 @@ async (page) => {
     for (const nt of notes) {
       const b = await nt.at.boundingBox().catch(notFound(name, `callout ${nt.n}`, nt.at));
       if (!b) throw new Error(`${name}: callout ${nt.n} target not visible: ${nt.at}`);
-      items.push({ b, n: nt.n, box: nt.box !== false, pos: nt.pos || "tl" });
+      items.push({ b, n: nt.n, box: nt.box !== false, pos: nt.pos || "tl", pad: nt.pad ?? 5 });
     }
     return page.evaluate(({ items, RED }) => {
       const layer = document.createElement("div");
       layer.id = "docs-annotations";
       layer.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2147483647";
       const rects = [];
-      const pad = 5;
       const R = 15;
-      for (const { b, n, box, pos } of items) {
+      for (const { b, n, box, pos, pad } of items) {
         const x = b.x - pad, y = b.y - pad, w = b.width + 2 * pad, h = b.height + 2 * pad;
         if (box) {
           const r = document.createElement("div");
@@ -600,13 +601,32 @@ async (page) => {
         pad: 24,
       });
 
-      // The component tree with the differences from the release default,
-      // and a toggle's confirmation.
+      // The comparison with the release default when nothing needs fixing:
+      // the summary and the first rows, with their labels.
+      await open("/components", "healthy");
+      const okTree = card("Components and sub-components");
+      await okTree.getByText("Nothing to fix compared with the release default").waitFor();
+      await settle();
+      // The card's header down to the end of a row (no pad: the next row stays out).
+      await crop("components-summary-ok", [okTree.locator(".pf-v6-c-card__header").first(), okTree.getByRole("row").filter({ has: page.locator("code", { hasText: /^modelsAsAService$/ }) })], { pad: 0 });
+
+      // The differences: the summary with Fix, Show only differences on,
+      // and each row with its labels. Then a toggle's confirmation.
       await open("/components", "components-differences");
       const tree = card("Components and sub-components");
-      await tree.scrollIntoViewIfNeeded();
+      await tree.getByRole("switch", { name: "Show only differences" }).check({ force: true });
       await settle();
-      await crop("components-tree", tree);
+      await crop("components-differences", tree, {
+        notes: [
+          { at: tree.locator(".pf-v6-c-alert").first(), n: 1, box: false, pos: "l" },
+          { at: tree.getByRole("button", { name: "Fix", exact: true }), n: 2, pos: "l" },
+          { at: tree.getByRole("switch", { name: "Show only differences" }).locator("xpath=ancestor::label[1]"), n: 3, pos: "b" },
+          { at: tree.getByRole("button", { name: "Deploys nothing — parent Removed" }), n: 4, pos: "r" },
+        ],
+        pad: 24,
+      });
+      await tree.getByRole("switch", { name: "Show only differences" }).uncheck({ force: true });
+      await settle();
       await tree.getByRole("combobox", { name: "Set ray" }).selectOption("Removed");
       await page.getByRole("dialog").getByText(/removes it/).waitFor();
       await settle();
@@ -658,13 +678,23 @@ async (page) => {
     async signin() {
       await open("/", "session-expired");
       await crop("signin-session-expired", page.locator(".pf-v6-c-empty-state"), { pad: 0 });
+      // The page from the masthead down: the banner with Log out, the user
+      // menu it points to, and a disabled change with the same reason.
       await open("/", "sign-in-before-4");
       const rhoai = card("RHOAI on this cluster");
+      const banner = alert("Sign in again to make changes");
+      await banner.waitFor();
       await rhoai.getByRole("button", { name: "Update to latest" }).hover({ force: true });
       const tip = page.getByRole("tooltip").filter({ hasText: "Your sign-in cannot make changes" });
       await tip.waitFor();
       await wait(300);
-      await crop("signin-before-4", [rhoai, tip], { noFit: true });
+      await crop("signin-before-4", [page.locator(".pf-v6-c-masthead"), rhoai, tip], {
+        notes: [
+          { at: banner.getByRole("link", { name: "Log out" }), n: 1, pos: "r" },
+          { at: rhoai.getByRole("button", { name: "Update to latest" }), n: 2, pos: "tl" },
+        ],
+        noFit: true, pad: 0,
+      });
     },
 
     async builds() {
@@ -722,7 +752,8 @@ async (page) => {
       await crop("environment-pipelines", [panel().getByRole("heading", { name: "Pipelines", level: 2 }), part("Pipeline server")], {
         notes: [
           { at: label(panel(), "Ready in dev-project"), n: 1, pos: "r" },
-          { at: page.getByRole("combobox"), n: 2, pos: "r" },
+          // The whole picker (text field and toggle), the badge on its top-right corner: on its right it covered the toggle.
+          { at: panel().locator(".pf-v6-c-menu-toggle").filter({ has: page.getByRole("combobox") }), n: 2, pos: "tr" },
           { at: row(storage, "Endpoint"), n: 3, pos: "l" },
           { at: storage.getByRole("button", { name: "Show the S3 secret key" }), n: 4, pos: "r" },
           { at: part("Pipeline server").getByRole("link", { name: /Open pipelines/ }), n: 6, pos: "l" },
@@ -783,8 +814,9 @@ async (page) => {
       const options = page.getByRole("listbox", { name: "Models this tool can set up" });
       await crop("environment-models-picker", [picker, options], {
         notes: [
-          { at: options.getByRole("option", { name: /Granite Embedding/ }), n: 1, pos: "r" },
-          { at: options.getByRole("option", { name: /Qwen3 1.7B/ }), n: 2, pos: "r" },
+          // Adjacent options: the boxes stay inside them, so they do not touch.
+          { at: options.getByRole("option", { name: /Granite Embedding/ }), n: 1, pos: "r", pad: -3 },
+          { at: options.getByRole("option", { name: /Qwen3 1.7B/ }), n: 2, pos: "r", pad: -3 },
         ],
         pad: 24,
       });
