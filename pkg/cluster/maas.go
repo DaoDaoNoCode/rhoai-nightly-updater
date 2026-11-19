@@ -1080,16 +1080,47 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		return nil, err
 	}
 	dsc, dscErr := readMaaSDSC(c)
-	infra := maasInfraNamespace(c)
+	r := &maasStatusRun{c: c, st: st, rec: rec, infra: maasInfraNamespace(c)}
 	domain, _ := clusterAppsDomain(c)
 	if u := "https://" + maasHostPrefix + domain; domain != "" && snippetURL(u) {
 		st.URL = u
 	}
-	part := func(p types.MaaSPart) { st.Parts = append(st.Parts, p) }
-	plan := func(s string) { st.SetupPlan = append(st.SetupPlan, s) }
-	var blockers []string
-	denyNote := ""
+	rhcl, cnpg, cnpgReadErr, kVersion, kvErr := r.statusRHCL()
+	kq := r.statusKuadrant(rhcl)
+	r.statusDatabase(cnpg, cnpgReadErr)
+	r.statusGateway()
+	r.statusAuthorinoTLS(kq)
+	r.statusTierPolicies(kVersion, kvErr)
+	r.statusDSC(dsc, dscErr)
+	if r.denyNote != "" && len(st.SetupPlan) > 0 {
+		r.plan(r.denyNote)
+	}
+	r.statusPlatform(dsc)
+	r.statusModels()
+	return st, nil
+}
 
+// maasStatusRun builds GetMaaSStatus's answer: each method reads one part
+// of the platform and appends it, in setup order.
+type maasStatusRun struct {
+	c     *Client
+	st    *types.MaaSStatus
+	rec   maasRecord
+	infra string
+	// blockers are the reasons Set up cannot run, the first one shown.
+	blockers []string
+	// denyNote is the Connectivity Link part's own offer, added to the
+	// plan when Set up changes anything.
+	denyNote string
+}
+
+func (r *maasStatusRun) part(p types.MaaSPart) { r.st.Parts = append(r.st.Parts, p) }
+func (r *maasStatusRun) plan(s string)         { r.st.SetupPlan = append(r.st.SetupPlan, s) }
+
+// statusRHCL is Red Hat Connectivity Link's part. It returns the operators
+// and Kuadrant API the later parts use.
+func (r *maasStatusRun) statusRHCL() (rhcl, cnpg operatorState, cnpgReadErr error, kVersion string, kvErr error) {
+	c, rec, part, plan := r.c, r.rec, r.part, r.plan
 	// Red Hat Connectivity Link (platform-setup.md "Install Gateway API
 	// Controller", RHOAI tab).
 	csvs, csvErr := listClusterCSVs(c)
@@ -1097,13 +1128,12 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	if csvErr == nil {
 		subs, csvErr = listSubscriptions(c, "")
 	}
-	var rhcl, cnpg operatorState
 	rhclErr, cnpgReadErr := csvErr, csvErr
 	if csvErr == nil {
 		rhcl, rhclErr = readOperatorIn(c, rhclOperator, csvs, subs)
 		cnpg, cnpgReadErr = readOperatorIn(c, cnpgOperator, csvs, subs)
 	}
-	kVersion, kvErr := kuadrantServedVersion(c)
+	kVersion, kvErr = kuadrantServedVersion(c)
 	// Kuadrant's API alone is not an installed operator: its CRDs stay
 	// after an uninstall (controllerDeployed).
 	kRuns, kRunsErr := kVersion != "", error(nil)
@@ -1144,7 +1174,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 			}
 			rhclPart.Warning = strings.TrimSpace(rhclPart.Warning + " " + note)
 			rhclPart.Commands = strings.TrimSpace(rhclPart.Commands + "\n" + cmd)
-			denyNote = fmt.Sprintf("Not changed: Subscription %s/%s, which this tool did not create, does not deny traffic when rate limiting fails (the MaaS docs recommend it); the Connectivity Link part offers that change on its own", rhcl.sub.Metadata.Namespace, rhcl.sub.Metadata.Name)
+			r.denyNote = fmt.Sprintf("Not changed: Subscription %s/%s, which this tool did not create, does not deny traffic when rate limiting fails (the MaaS docs recommend it); the Connectivity Link part offers that change on its own", rhcl.sub.Metadata.Namespace, rhcl.sub.Metadata.Name)
 		}
 		if action, note := rhclMemoryOffer(c, rhcl); action != nil {
 			rhclPart.Actions = append(rhclPart.Actions, *action)
@@ -1165,7 +1195,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		rhclPart.State = "missing"
 		if p, msg, _ := planOperatorInstall(c, rhclOperator); msg != "" {
 			rhclPart.State, rhclPart.Message = "problem", "Not installed, and Set up cannot install it: "+msg
-			blockers = append(blockers, rhclPart.Message)
+			r.blockers = append(r.blockers, rhclPart.Message)
 		} else {
 			rhclPart.Message = fmt.Sprintf("Not installed. Set up installs version %s from redhat-operators (channel %s), as the MaaS docs' platform setup does.", p.head, p.channel)
 			rhclPart.Commands = rhclInstallCommands(p.channel)
@@ -1173,7 +1203,12 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		}
 	}
 	part(rhclPart)
+	return rhcl, cnpg, cnpgReadErr, kVersion, kvErr
+}
 
+// statusKuadrant is the Kuadrant CR's part.
+func (r *maasStatusRun) statusKuadrant(rhcl operatorState) kuadrantState {
+	c, rec, part, plan := r.c, r.rec, r.part, r.plan
 	// The Kuadrant CR (platform-setup.md: "Once the RHCL operator is
 	// ready, create a Kuadrant instance").
 	kq, kErr := readKuadrant(c)
@@ -1197,7 +1232,12 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		kPart.NotManaged = !kPart.ManagedByTool
 	}
 	part(kPart)
+	return kq
+}
 
+// statusDatabase is the database's parts (maas_database.go).
+func (r *maasStatusRun) statusDatabase(cnpg operatorState, cnpgReadErr error) {
+	c, rec, infra, st, part := r.c, r.rec, r.infra, r.st, r.part
 	// The database, as chosen (maas_database.go), and CloudNativePG while
 	// it is the database.
 	dbs := maasDatabaseStatus(c, rec, infra, cnpg, cnpgReadErr)
@@ -1205,9 +1245,13 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		part(p)
 	}
 	st.SetupPlan = append(st.SetupPlan, dbs.plan...)
-	blockers = append(blockers, dbs.blockers...)
+	r.blockers = append(r.blockers, dbs.blockers...)
 	st.Database = dbs.db
+}
 
+// statusGateway is the MaaS gateway's part.
+func (r *maasStatusRun) statusGateway() {
+	c, rec, infra, st, part, plan := r.c, r.rec, r.infra, r.st, r.part, r.plan
 	// The gateway.
 	gwPart := types.MaaSPart{ID: "gateway", Title: "MaaS gateway", DocURL: maasDocsBase + "install/maas-setup.md#create-gateway"}
 	gw, gwErr := readMaaSGateway(c)
@@ -1254,7 +1298,11 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		gwPart.Warning = strings.Join(warnings, " ")
 	}
 	part(gwPart)
+}
 
+// statusAuthorinoTLS is Authorino TLS's part, on Kuadrant's Authorino.
+func (r *maasStatusRun) statusAuthorinoTLS(kq kuadrantState) {
+	c, rec, part, plan := r.c, r.rec, r.part, r.plan
 	// Authorino TLS (maas-setup.md "Authorino TLS",
 	// scripts/setup-authorino-tls.sh), on Kuadrant's Authorino.
 	tlsPart := types.MaaSPart{ID: "authorino-tls", Title: "Authorino TLS", DocURL: maasDocsBase + "configuration-and-management/tls-configuration.md"}
@@ -1267,7 +1315,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 			cmds, why := authorinoTLSCommands(kq.namespace, secret)
 			if why != "" {
 				tlsPart.State, tlsPart.Message = "problem", "Not configured: "+missing+". "+why+". Without it, API keys are refused."
-				blockers = append(blockers, tlsPart.Message)
+				r.blockers = append(r.blockers, tlsPart.Message)
 				break
 			}
 			tlsPart.State = "missing"
@@ -1286,7 +1334,12 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		plan(tlsPlan)
 	}
 	part(tlsPart)
+}
 
+// statusTierPolicies is the part of the old gateway policies, shown only
+// when there are any (or they cannot be listed).
+func (r *maasStatusRun) statusTierPolicies(kVersion string, kvErr error) {
+	c, part := r.c, r.part
 	// Gateway policies maas-controller does not manage: a tier-based MaaS
 	// left them (migration/upgrade-to-3.4.md).
 	if kvErr == nil && kVersion != "" {
@@ -1319,7 +1372,12 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 			part(polPart)
 		}
 	}
+}
 
+// statusDSC is the parts of MaaS in the DataScienceCluster, maas-api and
+// the default tenant.
+func (r *maasStatusRun) statusDSC(dsc maasDSC, dscErr error) {
+	c, rec, infra, st, part, plan := r.c, r.rec, r.infra, r.st, r.part, r.plan
 	// The DataScienceCluster: the AI gateway and MaaS in it, last.
 	dscPart := types.MaaSPart{ID: "dsc", Title: "MaaS in the DataScienceCluster", DocURL: maasDocsBase + "install/maas-setup.md#configure-datasciencecluster"}
 	switch {
@@ -1351,7 +1409,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		if dsc.argoApp != "" {
 			dscPart.State = "problem"
 			dscPart.Message = gitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning on Models as a Service") + " Set " + strings.Join(fields, " and ") + " in Git."
-			blockers = append(blockers, dscPart.Message)
+			r.blockers = append(r.blockers, dscPart.Message)
 		} else {
 			plan(fmt.Sprintf("DataScienceCluster %s: %s (the values before are recorded, and Remove restores them)", dsc.name, strings.Join(fields, ", ")))
 		}
@@ -1391,11 +1449,11 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	part(dscPart)
 	part(apiPart)
 	part(tenantPart)
+}
 
-	if denyNote != "" && len(st.SetupPlan) > 0 {
-		plan(denyNote)
-	}
-
+// statusPlatform sums the parts up for the platform as a whole.
+func (r *maasStatusRun) statusPlatform(dsc maasDSC) {
+	rec, infra, st := r.rec, r.infra, r.st
 	// The platform as a whole. The shared pieces (Connectivity Link, its
 	// Kuadrant CR and Authorino TLS, CloudNativePG) do not make the
 	// platform this tool's to remove: Remove leaves them.
@@ -1432,13 +1490,18 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	switch {
 	case st.Blocked != nil:
 		p.SetupBlockedReason = st.Blocked.Reason
-	case len(blockers) > 0:
-		p.SetupBlockedReason = blockers[0]
+	case len(r.blockers) > 0:
+		p.SetupBlockedReason = r.blockers[0]
 	}
 	if !p.ManagedByTool {
 		p.TeardownBlockedReason = "No part of the MaaS platform was set up by this tool, so there is nothing for it to remove."
 	}
+}
 
+// statusModels lists this tool's models with their publication, and the
+// recorded publications whose model is gone.
+func (r *maasStatusRun) statusModels() {
+	c, st := r.c, r.st
 	// This tool's models and their publication.
 	models, err := listLLMInferenceServices(c)
 	if err != nil && !errors.Is(err, errLLMISvcAPIMissing) {
@@ -1463,96 +1526,18 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	if ownedErr != nil {
 		slog.Debug("cannot read the models record for MaaS", "error", ownedErr)
 	}
+	v := maasModelsView{rec: rec, recErr: recErr, authPhase: authPhase, subPhase: subPhase, toolSub: toolSub, subErr: subErr}
 	for _, m := range models {
 		entry, _ := catalogEntry(m.Metadata.Name)
 		if _, ok := toolModelPath(m.Metadata.Namespace, m.Metadata.Name); !ok || !owned.owns(m.Metadata) {
 			continue
 		}
-		item := types.MaaSModel{ResourceState: types.ResourceState{Namespace: m.Metadata.Namespace, Name: m.Metadata.Name, ManagedByTool: true}}
-		// The catalog's name: the object's annotation is the project's to change.
-		item.DisplayName = entry.DisplayName
-		if cond, ok := findCondition(m.Status.Conditions, "Ready"); ok && cond.Status == "True" {
-			item.ModelReady = true
-		}
-		if entry.Type != modelTypeChat {
-			item.Message = "Not offered for MaaS"
-			item.SetupBlockedReason = maasEmbeddingReason
-			st.Items = append(st.Items, item)
-			continue
-		}
-		ref, found, _ := readMaaSModelRef(c, m.Metadata.Namespace, m.Metadata.Name)
-		if found && toolOwned(ref.Metadata) {
-			item.Published, item.Deployed = true, true
-			item.Phase, item.Endpoint = ref.Status.Phase, ref.Status.Endpoint
-			item.Access, item.Subscription = authPhase, subPhase
-			if subErr == nil && toolSub.found && toolSub.owned {
-				item.Limit = toolSub.limitOf(maasPub{m.Metadata.Namespace, m.Metadata.Name}).api()
-			}
-			item.Ready = item.Phase == "Ready" && authPhase == "Active" && subPhase == "Active"
-			_, recordedRefs := rec.modelRefs(m.Metadata.Namespace, m.Metadata.Name)
-			switch refs := m.gatewayRefNames(); {
-			case modelHasMaaSRef(m) && len(refs) > 1 && recErr == nil && recordedRefs:
-				// This build published it MaaS-only (its refs are recorded):
-				// someone added a gateway since, and Unpublish and Publish
-				// refuse until the refs are set (refsChangedRefusal).
-				item.Ready, item.Partly = false, true
-				item.Message = refsAddedStatus(m.Metadata.Namespace, m.Metadata.Name, refs)
-			case modelHasMaaSRef(m) && len(refs) > 1:
-				// An earlier build kept the other gateways (maas_routing.go):
-				// the rate limit fails every call on them.
-				item.Ready, item.Partly = false, true
-				item.Message = fmt.Sprintf("Partly published: the model routes through %s, as an earlier build of this tool published it, so calls to its direct address fail with 500. Unpublish, then Publish again.", strings.Join(refs, " and "))
-			case item.Ready:
-				item.Message = "Published"
-			default:
-				item.Message = fmt.Sprintf("Published; waiting (model reference %s, access %s, subscription %s)", firstNonEmpty(item.Phase, "pending"), firstNonEmpty(authPhase, "pending"), firstNonEmpty(subPhase, "pending"))
-			}
-		} else if left := maasLeftovers(c, m, recErr == nil && rec.published(m.Metadata.Namespace, m.Metadata.Name)); !found && len(left) > 0 {
-			// A publication undone half-way (live: Unpublish deleted the
-			// model reference, then failed on the model): Unpublish again
-			// finishes it, so the tab must still offer it.
-			item.Published, item.Deployed, item.Partly = true, true, true
-			item.Message = "Partly published: " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it."
-		} else {
-			item.Message = "Not published"
-			if found {
-				item.Message = "A MaaSModelRef of this name exists that this tool did not create"
-				item.SetupBlockedReason = item.Message + "; it is left alone."
-			}
-			if !p.Ready {
-				item.SetupBlockedReason = firstNonEmpty(item.SetupBlockedReason, maasNotReadyRowReason(st))
-			} else if !item.ModelReady {
-				item.SetupBlockedReason = firstNonEmpty(item.SetupBlockedReason, "The model is not ready yet.")
-			}
-		}
-		if recorded, ok := rec.routeBefore(m.Metadata.Namespace, m.Metadata.Name, modelGatewayRefsOf(m)); item.Published && recErr == nil && ok {
-			item.MaaSOnlySetup = recorded.NoRoute
-		}
-		st.Items = append(st.Items, item)
+		st.Items = append(st.Items, r.modelRow(m, entry, v))
 	}
 	// A recorded publication whose model is gone (the model or its project
 	// was deleted elsewhere): a row, so Unpublish can clear what is left.
 	if recErr == nil {
-		for _, p := range rec.pubs() {
-			shown := false
-			for _, it := range st.Items {
-				shown = shown || (it.Namespace == p.project && it.Name == p.model)
-			}
-			if shown {
-				continue
-			}
-			left := []string{"this tool's record of the publication"}
-			if ref, found, _ := readMaaSModelRef(c, p.project, p.model); found && toolOwned(ref.Metadata) {
-				left = append([]string{"MaaSModelRef " + p.model}, left...)
-			}
-			st.Items = append(st.Items, types.MaaSModel{
-				ResourceState: types.ResourceState{Namespace: p.project, Name: p.model, ManagedByTool: true, Deployed: true,
-					Message: "Partly published: no model of this name is in project " + p.project + " any more (it was deleted there, or the project was); " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it."},
-				DisplayName: p.model,
-				Published:   true,
-				Partly:      true,
-			})
-		}
+		r.goneRows(rec)
 	}
 	sort.Slice(st.Items, func(i, j int) bool {
 		if st.Items[i].Namespace != st.Items[j].Namespace {
@@ -1560,7 +1545,107 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		}
 		return st.Items[i].Name < st.Items[j].Name
 	})
-	return st, nil
+}
+
+// maasModelsView is what every row of statusModels reads.
+type maasModelsView struct {
+	rec                 maasRecord
+	recErr              error
+	authPhase, subPhase string
+	toolSub             maasToolSub
+	subErr              error
+}
+
+// modelRow is the row of one of this tool's models.
+func (r *maasStatusRun) modelRow(m llmisvcObject, entry catalogModel, v maasModelsView) types.MaaSModel {
+	c, st := r.c, r.st
+	p := &st.Platform
+	rec, recErr, authPhase, subPhase, toolSub, subErr := v.rec, v.recErr, v.authPhase, v.subPhase, v.toolSub, v.subErr
+	item := types.MaaSModel{ResourceState: types.ResourceState{Namespace: m.Metadata.Namespace, Name: m.Metadata.Name, ManagedByTool: true}}
+	// The catalog's name: the object's annotation is the project's to change.
+	item.DisplayName = entry.DisplayName
+	if cond, ok := findCondition(m.Status.Conditions, "Ready"); ok && cond.Status == "True" {
+		item.ModelReady = true
+	}
+	if entry.Type != modelTypeChat {
+		item.Message = "Not offered for MaaS"
+		item.SetupBlockedReason = maasEmbeddingReason
+		return item
+	}
+	ref, found, _ := readMaaSModelRef(c, m.Metadata.Namespace, m.Metadata.Name)
+	if found && toolOwned(ref.Metadata) {
+		item.Published, item.Deployed = true, true
+		item.Phase, item.Endpoint = ref.Status.Phase, ref.Status.Endpoint
+		item.Access, item.Subscription = authPhase, subPhase
+		if subErr == nil && toolSub.found && toolSub.owned {
+			item.Limit = toolSub.limitOf(maasPub{m.Metadata.Namespace, m.Metadata.Name}).api()
+		}
+		item.Ready = item.Phase == "Ready" && authPhase == "Active" && subPhase == "Active"
+		_, recordedRefs := rec.modelRefs(m.Metadata.Namespace, m.Metadata.Name)
+		switch refs := m.gatewayRefNames(); {
+		case modelHasMaaSRef(m) && len(refs) > 1 && recErr == nil && recordedRefs:
+			// This build published it MaaS-only (its refs are recorded):
+			// someone added a gateway since, and Unpublish and Publish
+			// refuse until the refs are set (refsChangedRefusal).
+			item.Ready, item.Partly = false, true
+			item.Message = refsAddedStatus(m.Metadata.Namespace, m.Metadata.Name, refs)
+		case modelHasMaaSRef(m) && len(refs) > 1:
+			// An earlier build kept the other gateways (maas_routing.go):
+			// the rate limit fails every call on them.
+			item.Ready, item.Partly = false, true
+			item.Message = fmt.Sprintf("Partly published: the model routes through %s, as an earlier build of this tool published it, so calls to its direct address fail with 500. Unpublish, then Publish again.", strings.Join(refs, " and "))
+		case item.Ready:
+			item.Message = "Published"
+		default:
+			item.Message = fmt.Sprintf("Published; waiting (model reference %s, access %s, subscription %s)", firstNonEmpty(item.Phase, "pending"), firstNonEmpty(authPhase, "pending"), firstNonEmpty(subPhase, "pending"))
+		}
+	} else if left := maasLeftovers(c, m, recErr == nil && rec.published(m.Metadata.Namespace, m.Metadata.Name)); !found && len(left) > 0 {
+		// A publication undone half-way (live: Unpublish deleted the
+		// model reference, then failed on the model): Unpublish again
+		// finishes it, so the tab must still offer it.
+		item.Published, item.Deployed, item.Partly = true, true, true
+		item.Message = "Partly published: " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it."
+	} else {
+		item.Message = "Not published"
+		if found {
+			item.Message = "A MaaSModelRef of this name exists that this tool did not create"
+			item.SetupBlockedReason = item.Message + "; it is left alone."
+		}
+		if !p.Ready {
+			item.SetupBlockedReason = firstNonEmpty(item.SetupBlockedReason, maasNotReadyRowReason(st))
+		} else if !item.ModelReady {
+			item.SetupBlockedReason = firstNonEmpty(item.SetupBlockedReason, "The model is not ready yet.")
+		}
+	}
+	if recorded, ok := rec.routeBefore(m.Metadata.Namespace, m.Metadata.Name, modelGatewayRefsOf(m)); item.Published && recErr == nil && ok {
+		item.MaaSOnlySetup = recorded.NoRoute
+	}
+	return item
+}
+
+// goneRows adds a row for each recorded publication whose model is gone.
+func (r *maasStatusRun) goneRows(rec maasRecord) {
+	c, st := r.c, r.st
+	for _, p := range rec.pubs() {
+		shown := false
+		for _, it := range st.Items {
+			shown = shown || (it.Namespace == p.project && it.Name == p.model)
+		}
+		if shown {
+			continue
+		}
+		left := []string{"this tool's record of the publication"}
+		if ref, found, _ := readMaaSModelRef(c, p.project, p.model); found && toolOwned(ref.Metadata) {
+			left = append([]string{"MaaSModelRef " + p.model}, left...)
+		}
+		st.Items = append(st.Items, types.MaaSModel{
+			ResourceState: types.ResourceState{Namespace: p.project, Name: p.model, ManagedByTool: true, Deployed: true,
+				Message: "Partly published: no model of this name is in project " + p.project + " any more (it was deleted there, or the project was); " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it."},
+			DisplayName: p.model,
+			Published:   true,
+			Partly:      true,
+		})
+	}
 }
 
 // maasLeftovers names what is left of a publication of the tool's model
