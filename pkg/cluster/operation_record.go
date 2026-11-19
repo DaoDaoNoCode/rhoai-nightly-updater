@@ -59,7 +59,7 @@ func clearDSCHardResetRecord(c *Client) {
 // readDSCHardResetRecord returns the recorded hard reset, nil when there is
 // none. A record that cannot be parsed is an error: it is never guessed at.
 func readDSCHardResetRecord(c *Client) (*types.DSCHardResetRecord, error) {
-	body, _, err := c.get(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
+	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
 	if IsK8sError(err, 404) {
 		return nil, nil
 	}
