@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -140,7 +140,7 @@ func checkDSCCompatibilityFor(c *Client, read dscRead, op *installedOperator, op
 	result.ResetRemovals = schemaComponents(schema, removedComponents(currentSpec, defaultSpec, nested))
 	candidates := append([]string{}, result.ResetRemovals...)
 	for _, name := range schemaComponents(schema, removedComponents(currentSpec, withoutComponents(currentSpec, result.ExtraComponents), nested)) {
-		if !containsString(candidates, name) {
+		if !slices.Contains(candidates, name) {
 			candidates = append(candidates, name)
 		}
 	}
@@ -357,7 +357,7 @@ func withoutComponents(spec map[string]interface{}, names []string) map[string]i
 	components, _ := spec["components"].(map[string]interface{})
 	kept := make(map[string]interface{}, len(components))
 	for k, v := range components {
-		if !containsString(names, k) {
+		if !slices.Contains(names, k) {
 			kept[k] = v
 		}
 	}
@@ -562,6 +562,6 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 	if _, _, err := c.patch(path, patch); err != nil {
 		return nil, err
 	}
-	RecordActivity(c, types.ActivityEntry{Timestamp: time.Now().UTC().Format(time.RFC3339), User: getUser(c), Action: "repair-dsc", Detail: name + ": " + detail, Success: true})
+	RecordActivity(c, types.ActivityEntry{Timestamp: nowRFC3339(), User: getUser(c), Action: "repair-dsc", Detail: name + ": " + detail, Success: true})
 	return &types.OperationResponse{Success: true, Message: detail, Logs: []string{detail}}, nil
 }

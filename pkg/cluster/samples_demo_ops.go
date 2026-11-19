@@ -3,6 +3,7 @@ package cluster
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -122,7 +123,7 @@ func (t *mlflowTarget) createDemoExperiment(log func(string)) (*mlflowExperiment
 func (t *mlflowTarget) dropStaleDemoVersions(e *mlflowExperiment, zero []string, res demoGenerateResult, log func(string)) error {
 	var stale []string
 	for _, f := range zero {
-		if res.Status == "exists" || !containsString(res.FeaturesGenerated, f) {
+		if res.Status == "exists" || !slices.Contains(res.FeaturesGenerated, f) {
 			stale = append(stale, f)
 		}
 	}

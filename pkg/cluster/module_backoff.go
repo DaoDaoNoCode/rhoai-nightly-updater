@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -119,8 +120,8 @@ func readOperatorDeployment(c *Client, namespace, name, via string) (*operatorDe
 // (defaults 25%), and when both resolve to 0, maxUnavailable becomes 1. ok
 // is false when a value does not parse, so the caller assumes the worst.
 func (d operatorDeployment) maxUnavailablePods() (int, bool) {
-	surge, _, err1 := resolveIntOrPercent(d.MaxSurge, d.Replicas, true, "25%")
-	unavailable, _, err2 := resolveIntOrPercent(d.MaxUnavailable, d.Replicas, false, "25%")
+	surge, _, err1 := resolveIntOrPercent(d.MaxSurge, d.Replicas, true)
+	unavailable, _, err2 := resolveIntOrPercent(d.MaxUnavailable, d.Replicas, false)
 	if surge == 0 && unavailable == 0 {
 		unavailable = 1
 	}
@@ -157,7 +158,7 @@ func findModuleOperator(c *Client, module, appNS string) (*operatorDeployment, s
 			j.Metadata.Namespace = appNS
 		}
 		d := j.toOperatorDeployment("")
-		if !containsString(d.OwnerKinds, "Platform") {
+		if !slices.Contains(d.OwnerKinds, "Platform") {
 			continue
 		}
 		switch {
@@ -266,7 +267,7 @@ func webhooksServedBy(c *Client, d operatorDeployment) ([]string, error) {
 			}
 			if sel {
 				ref := fmt.Sprintf("%s (%s)", wh.Name, cfg.ref())
-				if !containsString(out, ref) {
+				if !slices.Contains(out, ref) {
 					out = append(out, ref)
 				}
 			}
@@ -387,7 +388,7 @@ func applyFixRestartModuleOperator(c *Client, module string) (*types.OperationRe
 	patch, _ := json.Marshal(map[string]interface{}{
 		"metadata": map[string]interface{}{"uid": d.UID, "resourceVersion": d.ResourceVersion},
 		"spec": map[string]interface{}{"template": map[string]interface{}{"metadata": map[string]interface{}{
-			"annotations": map[string]string{restartAnnotation: time.Now().UTC().Format(time.RFC3339)},
+			"annotations": map[string]string{restartAnnotation: nowRFC3339()},
 		}}},
 	})
 	_, _, err = c.patch(namespacedPath("apps/v1", "deployments", d.Namespace, d.Name), patch)
@@ -401,7 +402,7 @@ func applyFixRestartModuleOperator(c *Client, module string) (*types.OperationRe
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Could not restart %s: %v.%s", d.ref(), err, templateHint(err)), Logs: logs, ErrorCode: errorCodeFromK8sErr(err)}, nil
 	}
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "fix-restart-module-operator",
 		Detail:    fmt.Sprintf("restarted %s (module %s)", d.ref(), module),

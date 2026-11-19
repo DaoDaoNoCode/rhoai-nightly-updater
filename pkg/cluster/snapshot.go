@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -35,7 +34,7 @@ func SaveDeploymentSnapshot(c *Client) error {
 	}
 
 	snap := deploymentSnapshot{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		Images:    images,
 	}
 
@@ -153,7 +152,7 @@ func saveSubscriptionSnapshot(c *Client, sub map[string]interface{}) error {
 	}
 	status, _ := sub["status"].(map[string]interface{})
 	installed, _ := status["installedCSV"].(string)
-	data, err := json.Marshal(subscriptionSnapshot{RecordedAt: time.Now().UTC().Format(time.RFC3339), Spec: spec, InstalledCSV: installed})
+	data, err := json.Marshal(subscriptionSnapshot{RecordedAt: nowRFC3339(), Spec: spec, InstalledCSV: installed})
 	if err != nil {
 		return err
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -372,9 +373,9 @@ func matchExpressions(exprs []json.RawMessage, namespace string, labels map[stri
 		var ok bool
 		switch e.Operator {
 		case "In":
-			ok = has && containsString(e.Values, v)
+			ok = has && slices.Contains(e.Values, v)
 		case "NotIn":
-			ok = !has || !containsString(e.Values, v)
+			ok = !has || !slices.Contains(e.Values, v)
 		case "Exists":
 			ok = has
 		case "DoesNotExist":
@@ -398,16 +399,16 @@ func gatewayOwned(meta objectMeta) bool {
 // gatewayObjectPath returns the path of an inference gateway object this
 // tool creates, by kind; only these names, so teardown cannot reach
 // another object and the RBAC rules stay limited to them.
-func gatewayObjectPath(kind string) (string, bool) {
+func gatewayObjectPath(kind string) string {
 	switch kind {
 	case "GatewayClass":
-		return clusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "openshift-ai-inference"), true
+		return clusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "openshift-ai-inference")
 	case "ConfigMap":
-		return namespacedPath("v1", "configmaps", "openshift-ingress", "openshift-ai-inference-options"), true
+		return namespacedPath("v1", "configmaps", "openshift-ingress", "openshift-ai-inference-options")
 	case "Gateway":
-		return namespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", "openshift-ai-inference"), true
+		return namespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", "openshift-ai-inference")
 	}
-	return "", false
+	return ""
 }
 
 // gatewayCreatePath returns the collection an inference gateway object is
@@ -439,12 +440,12 @@ func gatewayDesc(kind string) string {
 }
 
 func readGatewayObject(c *Client, kind string) (objectMeta, bool, error) {
-	path, _ := gatewayObjectPath(kind)
+	path := gatewayObjectPath(kind)
 	return readObjectMeta(c, path)
 }
 
 func readInferenceGateway(c *Client) (gatewayObject, bool, error) {
-	path, _ := gatewayObjectPath("Gateway")
+	path := gatewayObjectPath("Gateway")
 	body, _, err := c.get(path)
 	if IsK8sError(err, 404) {
 		return gatewayObject{}, false, nil
@@ -569,7 +570,7 @@ func inferenceGatewayObjects(domain, certificate string, namespaces []string) ma
 // gatewayClassController reads the controller of the GatewayClass named
 // openshift-ai-inference, when it exists.
 func gatewayClassController(c *Client) (string, error) {
-	path, _ := gatewayObjectPath("GatewayClass")
+	path := gatewayObjectPath("GatewayClass")
 	body, _, err := c.get(path)
 	if err != nil {
 		return "", err
@@ -894,7 +895,7 @@ func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr erro
 	case state.Terminating:
 		state.Message = "Terminating"
 	case hasAccepted && accepted.Status == "False":
-		state.Message = firstNonEmpty(truncateMessage(accepted.Message), accepted.Reason, "Not accepted by the gateway controller")
+		state.Message = firstNonEmpty(truncateText(accepted.Message, 300), accepted.Reason, "Not accepted by the gateway controller")
 		state.WaitingReason = firstNonEmpty(accepted.Reason, "NotAccepted")
 		state.TerminalError = true
 	case hasProgrammed && programmed.Status == "True" && state.Address != "":
@@ -903,7 +904,7 @@ func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr erro
 	case hasProgrammed && programmed.Status == "True":
 		state.Message = "Programmed, waiting for an address"
 	case hasProgrammed:
-		state.Message = firstNonEmpty(truncateMessage(programmed.Message), programmed.Reason, "Not programmed yet")
+		state.Message = firstNonEmpty(truncateText(programmed.Message, 300), programmed.Reason, "Not programmed yet")
 	case state.ManagedByTool:
 		state.Message = "Waiting for the gateway controller"
 	default:
@@ -1103,16 +1104,16 @@ func planInferenceGatewayList(c *Client, add, remove []string) (*gatewayPlan, st
 	all := gatewayNamespaceList(listed, routed, add)
 	plan.names = all[:0:0]
 	for _, n := range all {
-		if n == inferenceGatewayNamespace || !containsString(remove, n) {
+		if n == inferenceGatewayNamespace || !slices.Contains(remove, n) {
 			plan.names = append(plan.names, n)
 		}
 	}
 	plan.listChanges = !found || !shaped
 	for _, n := range plan.names {
-		plan.listChanges = plan.listChanges || !containsString(listed, n)
+		plan.listChanges = plan.listChanges || !slices.Contains(listed, n)
 	}
 	for _, n := range listed {
-		plan.listChanges = plan.listChanges || !containsString(plan.names, n)
+		plan.listChanges = plan.listChanges || !slices.Contains(plan.names, n)
 	}
 	for _, kind := range gatewayKinds {
 		meta, ok, err := gw.Metadata, found, error(nil)
@@ -1209,7 +1210,7 @@ func applyInferenceGateway(c *Client, plan *gatewayPlan, dryRun bool, logf func(
 		if kind == "GatewayClass" && plan.classForeign || plan.gatewayOnly && kind != "Gateway" {
 			continue
 		}
-		path, _ := gatewayObjectPath(kind)
+		path := gatewayObjectPath(kind)
 		createPath, _ := gatewayCreatePath(kind)
 		k := kind
 		read := func() (objectMeta, bool, error) { return readGatewayObject(c, k) }
@@ -1323,7 +1324,7 @@ func waitInferenceGateway(c *Client, host string, progress func(string)) (ready 
 func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		recordModelsActivity(c, "teardown-inference-gateway", activity, false)
+		recordActivity(c, "teardown-inference-gateway", activity, false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 	type current struct {
@@ -1411,7 +1412,7 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 				continue
 			}
 		}
-		path, _ := gatewayObjectPath(kind)
+		path := gatewayObjectPath(kind)
 		logs = append(logs, fmt.Sprintf("Deleting %s...", gatewayDesc(kind)))
 		if _, err := deleteWithUID(c, path, cur.meta.UID); err != nil && !IsK8sError(err, 404) {
 			done := ""
@@ -1436,13 +1437,13 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 		}
 	}
 	// The list went with the Gateway: nothing recorded is on a list any more.
-	if containsString(deleted, gatewayDesc("Gateway")) {
+	if slices.Contains(deleted, gatewayDesc("Gateway")) {
 		if err := writeGatewayProjects(c, nil); err != nil {
 			slog.Warn("cannot clear the gateway projects record", "error", err)
 		}
 	}
 	slog.Info("inference gateway teardown", "user", getUser(c))
-	recordModelsActivity(c, "teardown-inference-gateway", strings.Join(deleted, ", "), true)
+	recordActivity(c, "teardown-inference-gateway", strings.Join(deleted, ", "), true)
 	return &types.OperationResponse{
 		Success: true,
 		Message: strings.TrimSpace("Inference gateway deleted: " + joinTitles(deleted) + ". OpenShift removes its load balancer and the ingress operator its DNS record. " + strings.Join(kept, " ")),

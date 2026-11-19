@@ -73,10 +73,7 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 	var mu sync.Mutex
 	var errs []string
 
-	user, server, err := getClusterInfo(c)
-	if err != nil {
-		return nil, fmt.Errorf("cluster info: %w", err)
-	}
+	user, server := getClusterInfo(c)
 	status.Cluster = types.ClusterInfo{Server: server, User: user}
 
 	status.StableSource = getStableSource()
@@ -343,7 +340,9 @@ func cachedDashboardURL(c *Client) string {
 	return u
 }
 
-func getClusterInfo(c *Client) (string, string, error) {
+// getClusterInfo is the signed-in user's name ("unknown" when it cannot be
+// read) and the API server's address.
+func getClusterInfo(c *Client) (string, string) {
 	// Use the username set from OAuth headers (production)
 	user := c.username
 	if user == "" || user == "unknown" {
@@ -363,7 +362,7 @@ func getClusterInfo(c *Client) (string, string, error) {
 	if user == "" {
 		user = "unknown"
 	}
-	return user, c.baseURL, nil
+	return user, c.baseURL
 }
 
 func getClusterVersion(c *Client) (string, error) {
@@ -661,7 +660,7 @@ func readPullSecret(c *Client) (types.PullSecretInfo, string, error) {
 	}
 
 	// Validate the same credential that registry calls use.
-	basicAuth, _ := selectQuayAuth(auths)
+	basicAuth := selectQuayAuth(auths)
 	if basicAuth == "" {
 		return types.PullSecretInfo{Exists: true, Detail: "No quay.io/rhoai entry found in auths"}, "", nil
 	}

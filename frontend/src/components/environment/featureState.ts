@@ -355,19 +355,6 @@ export function modelOptionReason(status: ResourcesStatus | null, project: strin
 }
 
 /**
- * Whether the inference gateway lets the project's routes attach: "yes",
- * "no", or "unknown" (not there, or it chooses projects by labels).
- */
-export function gatewayAllows(status: ResourcesStatus | null | undefined, project: string): "yes" | "no" | "unknown" {
-  const gw = status?.inferenceGateway;
-  if (!gw?.deployed) return "unknown";
-  if ((gw.notAllowedModelProjects ?? []).includes(project)) return "no";
-  if (gw.allProjectsAllowed) return "yes";
-  if (!gw.allowedProjects) return "unknown";
-  return gw.allowedProjects.includes(project) ? "yes" : "no";
-}
-
-/**
  * A model (anyone's, such as one deployed from the dashboard) that routes
  * through this tool's gateway from a project the gateway does not list
  * (in project, when given): its route is rejected, so it never becomes

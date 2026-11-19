@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -153,7 +154,7 @@ func TestRepairDSC_V3PartRemovalsArePreviewedAndGuarded(t *testing.T) {
 			var dsc map[string]interface{}
 			_ = json.Unmarshal([]byte(`{"apiVersion":"datasciencecluster.opendatahub.io/v3","spec":{"components":`+v3Components+`}}`), &dsc)
 			compat := checkDSCCompatibility(c, dsc)
-			if !containsString(compat.ResetRemovals, tc.wantPath) {
+			if !slices.Contains(compat.ResetRemovals, tc.wantPath) {
 				t.Fatalf("resetRemovals %v, compat %+v", compat.ResetRemovals, compat)
 			}
 			blocked := false

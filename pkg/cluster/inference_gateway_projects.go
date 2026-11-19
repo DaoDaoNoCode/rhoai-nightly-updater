@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 
@@ -83,7 +84,7 @@ func recordGatewayProject(c *Client, project string) error {
 	if err != nil {
 		return err
 	}
-	if containsString(projects, project) {
+	if slices.Contains(projects, project) {
 		return nil
 	}
 	return writeGatewayProjects(c, append(projects, project))
@@ -147,7 +148,7 @@ func planGatewayRemove(c *Client, project string) (*gatewayPlan, string, string)
 	case !gatewayOwned(gw.Metadata):
 		return nil, fmt.Sprintf("Gateway %s/%s was not created by this tool, so this tool does not change its list.", inferenceGatewayNamespace, inferenceGatewayName), "not_managed"
 	}
-	if listed, _ := gw.listedNamespaces(); !containsString(listed, project) {
+	if listed, _ := gw.listedNamespaces(); !slices.Contains(listed, project) {
 		return nil, "", ""
 	}
 	// The plan checks that no model in project routes through the gateway
@@ -191,7 +192,7 @@ func releaseGatewayProject(c *Client, project string) string {
 	if err != nil {
 		return fmt.Sprintf(" %s stays on the inference gateway's list: %v. Remove it from the list on the Models tab.", project, err)
 	}
-	if !containsString(recorded, project) {
+	if !slices.Contains(recorded, project) {
 		return ""
 	}
 	gw, found, err := readInferenceGateway(c)
@@ -200,7 +201,7 @@ func releaseGatewayProject(c *Client, project string) string {
 		return ""
 	}
 	if err == nil {
-		if listed, _ := gw.listedNamespaces(); !containsString(listed, project) {
+		if listed, _ := gw.listedNamespaces(); !slices.Contains(listed, project) {
 			_ = forgetGatewayProject(c, project)
 			return ""
 		}
@@ -286,7 +287,7 @@ func (m *modelsRun) disallow(project string) (*types.OperationResponse, error) {
 	}
 	done := fmt.Sprintf("The inference gateway no longer allows %s: routes from it no longer attach.", project)
 	m.step("gateway", "success", done)
-	recordModelsActivity(c, m.activity, m.target, true)
+	recordActivity(c, m.activity, m.target, true)
 	return &types.OperationResponse{Success: true, Message: done, Logs: m.logs}, nil
 }
 
@@ -300,7 +301,7 @@ func listedProjectsState(c *Client, state *types.InferenceGatewayState, gw gatew
 	}
 	if recorded, err := readGatewayProjects(c); err == nil {
 		for _, p := range recorded {
-			if containsString(listed, p) {
+			if slices.Contains(listed, p) {
 				state.AddedProjects = append(state.AddedProjects, p)
 			}
 		}

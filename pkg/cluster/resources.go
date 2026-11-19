@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -98,7 +99,7 @@ var toolManagers = []string{toolFieldManager, legacyPostManager}
 // does not break when the tool updates the object again.
 func (m objectMeta) ownsFieldPath(managers []string, path ...string) bool {
 	for _, e := range m.ManagedFields {
-		if e.Subresource != "" || !containsString(managers, e.Manager) || len(path) == 0 {
+		if e.Subresource != "" || !slices.Contains(managers, e.Manager) || len(path) == 0 {
 			continue
 		}
 		raw, ok := e.FieldsV1[path[0]]
@@ -124,7 +125,7 @@ func (m objectMeta) ownsFieldPath(managers []string, path ...string) bool {
 // any time (any operation, not a subresource).
 func (m objectMeta) hasManager(managers []string) bool {
 	for _, e := range m.ManagedFields {
-		if e.Subresource == "" && containsString(managers, e.Manager) {
+		if e.Subresource == "" && slices.Contains(managers, e.Manager) {
 			return true
 		}
 	}
@@ -638,15 +639,16 @@ func applyPodIssue(state *types.ResourceState, issue workloadPodIssue) {
 	state.TerminalError = issue.Terminal
 	state.Message = issue.Reason
 	if issue.Message != "" {
-		state.Message = issue.Reason + ": " + truncateMessage(issue.Message)
+		state.Message = issue.Reason + ": " + truncateText(issue.Message, 300)
 	}
 }
 
-func truncateMessage(s string) string {
+// truncateText trims s and cuts it to its first n characters (runes, so a
+// multi-byte character is never split), marking the cut with an ellipsis.
+func truncateText(s string, n int) string {
 	s = strings.TrimSpace(s)
-	const maxLen = 300
-	if r := []rune(s); len(r) > maxLen {
-		return string(r[:maxLen]) + "…"
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
 	}
 	return s
 }

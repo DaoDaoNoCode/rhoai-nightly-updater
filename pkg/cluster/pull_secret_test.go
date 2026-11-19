@@ -34,7 +34,6 @@ func TestSelectQuayAuth_PrefersMostSpecificDeterministically(t *testing.T) {
 		name     string
 		auths    map[string]interface{}
 		wantAuth string
-		wantKey  string
 	}{
 		{
 			name: "quay.io/rhoai beats generic quay.io",
@@ -43,7 +42,7 @@ func TestSelectQuayAuth_PrefersMostSpecificDeterministically(t *testing.T) {
 				"quay.io/rhoai": map[string]interface{}{"auth": exampleAuth("rhoai:y")},
 				"docker.io":     map[string]interface{}{"auth": exampleAuth("docker:z")},
 			},
-			wantAuth: exampleAuth("rhoai:y"), wantKey: "quay.io/rhoai",
+			wantAuth: exampleAuth("rhoai:y"),
 		},
 		{
 			name: "scheme and trailing slash are normalized",
@@ -51,7 +50,7 @@ func TestSelectQuayAuth_PrefersMostSpecificDeterministically(t *testing.T) {
 				"quay.io":                map[string]interface{}{"auth": exampleAuth("generic:x")},
 				"https://quay.io/rhoai/": map[string]interface{}{"auth": exampleAuth("rhoai:y")},
 			},
-			wantAuth: exampleAuth("rhoai:y"), wantKey: "https://quay.io/rhoai/",
+			wantAuth: exampleAuth("rhoai:y"),
 		},
 		{
 			name: "repository-scoped entry beats generic quay.io",
@@ -59,21 +58,21 @@ func TestSelectQuayAuth_PrefersMostSpecificDeterministically(t *testing.T) {
 				"quay.io":                          map[string]interface{}{"auth": exampleAuth("generic:x")},
 				"quay.io/rhoai/rhoai-fbc-fragment": map[string]interface{}{"auth": exampleAuth("repo:z")},
 			},
-			wantAuth: exampleAuth("repo:z"), wantKey: "quay.io/rhoai/rhoai-fbc-fragment",
+			wantAuth: exampleAuth("repo:z"),
 		},
 		{
 			name: "generic quay.io is used when nothing more specific exists",
 			auths: map[string]interface{}{
 				"quay.io": map[string]interface{}{"auth": exampleAuth("generic:x")},
 			},
-			wantAuth: exampleAuth("generic:x"), wantKey: "quay.io",
+			wantAuth: exampleAuth("generic:x"),
 		},
 		{
 			name: "username and password entries are accepted",
 			auths: map[string]interface{}{
 				"quay.io/rhoai": map[string]interface{}{"username": "robot", "password": "secret"},
 			},
-			wantAuth: base64.StdEncoding.EncodeToString([]byte("robot:secret")), wantKey: "quay.io/rhoai",
+			wantAuth: base64.StdEncoding.EncodeToString([]byte("robot:secret")),
 		},
 		{
 			name: "empty specific entry falls back to generic quay.io",
@@ -81,23 +80,22 @@ func TestSelectQuayAuth_PrefersMostSpecificDeterministically(t *testing.T) {
 				"quay.io":       map[string]interface{}{"auth": exampleAuth("generic:x")},
 				"quay.io/rhoai": map[string]interface{}{"auth": ""},
 			},
-			wantAuth: exampleAuth("generic:x"), wantKey: "quay.io",
+			wantAuth: exampleAuth("generic:x"),
 		},
 		{
 			name: "similarly named repositories do not match",
 			auths: map[string]interface{}{
 				"quay.io/rhoai-dev": map[string]interface{}{"auth": exampleAuth("dev:w")},
 			},
-			wantAuth: "", wantKey: "",
+			wantAuth: "",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Map iteration order is random; repeat to prove determinism.
 			for i := 0; i < 200; i++ {
-				auth, key := selectQuayAuth(tc.auths)
-				if auth != tc.wantAuth || key != tc.wantKey {
-					t.Fatalf("iteration %d: got (%q, %q), want (%q, %q)", i, auth, key, tc.wantAuth, tc.wantKey)
+				if auth := selectQuayAuth(tc.auths); auth != tc.wantAuth {
+					t.Fatalf("iteration %d: got %q, want %q", i, auth, tc.wantAuth)
 				}
 			}
 		})
@@ -297,8 +295,8 @@ func TestCreatePullSecret_PreservesOtherRegistries(t *testing.T) {
 	if _, ok := auths["https://quay.io/rhoai/"]; ok {
 		t.Errorf("old equivalent quay.io/rhoai key should be replaced: %v", auths)
 	}
-	if auth, key := selectQuayAuth(auths); auth != "bmV3OnBhc3M=" || key != "quay.io/rhoai" {
-		t.Errorf("new credential not selected: (%q, %q)", auth, key)
+	if auth := selectQuayAuth(auths); auth != "bmV3OnBhc3M=" {
+		t.Errorf("new credential not selected: %q", auth)
 	}
 }
 

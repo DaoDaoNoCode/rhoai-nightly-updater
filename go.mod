@@ -2,6 +2,16 @@ module github.com/juntwang/rhoai-nightly-updater
 
 go 1.27.0
 
+// The toolchain CI and the Containerfile build with (golang 1.27.4): with
+// GOTOOLCHAIN=auto (the default) an older local go switches to it. The go
+// line stays 1.27.0: golangci-lint refuses a go line newer than the Go it
+// was built with.
+toolchain go1.27.4
+
+// frontend/node_modules holds a Go package of an npm dependency (flatted);
+// ./... must not vet, lint or test it.
+ignore ./frontend/node_modules
+
 require (
 	github.com/google/cel-go v0.31.0
 	gopkg.in/yaml.v3 v3.0.1

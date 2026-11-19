@@ -177,7 +177,7 @@ func joinTitles(titles []string) string {
 
 func recordCleanupActivity(c *Client, detail string, success bool) {
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "cleanup",
 		Detail:    detail,

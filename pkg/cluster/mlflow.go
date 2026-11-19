@@ -223,7 +223,7 @@ func getMLflowStatus(c *Client) types.ResourceState {
 				state.Ready = true
 				state.Message = "Running"
 			} else {
-				state.Message = firstNonEmpty(truncateMessage(cond.Message), cond.Reason, "Not ready")
+				state.Message = firstNonEmpty(truncateText(cond.Message, 300), cond.Reason, "Not ready")
 			}
 			break
 		}
@@ -268,16 +268,6 @@ func getMLflowStatus(c *Client) types.ResourceState {
 	return state
 }
 
-func recordMLflowActivity(c *Client, action, detail string, success bool) {
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		User:      getUser(c),
-		Action:    action,
-		Detail:    detail,
-		Success:   success,
-	})
-}
-
 // SetupMLflow creates the MLflow CR in redhat-ods-applications. It leaves
 // spec.image unset so the operator deploys its platform default
 // (RELATED_IMAGE_ODH_MLFLOW_IMAGE, the RHOAI build, falling back to
@@ -296,7 +286,7 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 	// A component that is not Managed leaves its CRD behind: the CR would
 	// be created and never start.
 	if block := setupComponentBlock(c, mlflowComponent); block != nil {
-		recordMLflowActivity(c, "setup-mlflow", "component not managed", false)
+		recordActivity(c, "setup-mlflow", "component not managed", false)
 		return &types.OperationResponse{Success: false, Message: block.Reason + " Nothing was changed.", Logs: logs, ErrorCode: "prerequisites"}, nil
 	}
 
@@ -347,13 +337,13 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 			msg = "MLflow was created by someone else in the meantime. Refresh the status."
 			code = "conflict"
 		}
-		recordMLflowActivity(c, "setup-mlflow", fmt.Sprintf("CR creation failed: %v", err), false)
+		recordActivity(c, "setup-mlflow", fmt.Sprintf("CR creation failed: %v", err), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 	logs = append(logs, "OK: MLflow CR created")
 
 	slog.Info("mlflow setup", "user", getUser(c))
-	recordMLflowActivity(c, "setup-mlflow", "MLflow CR created in "+mlflowNamespace, true)
+	recordActivity(c, "setup-mlflow", "MLflow CR created in "+mlflowNamespace, true)
 
 	return &types.OperationResponse{
 		Success: true, Message: "MLflow CR created. The operator will deploy MLflow shortly.",
@@ -367,7 +357,7 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		recordMLflowActivity(c, "teardown-mlflow", activity, false)
+		recordActivity(c, "teardown-mlflow", activity, false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
@@ -404,7 +394,7 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 		dataNote = fmt.Sprintf(" %s %v (tracking database, model registry and artifacts) %s garbage-collected with it.", verb(len(pvcs), "PVC", "PVCs"), pvcs, verb(len(pvcs), "is", "are"))
 	}
 	slog.Info("mlflow teardown", "user", getUser(c))
-	recordMLflowActivity(c, "teardown-mlflow", mlflowNamespace, true)
+	recordActivity(c, "teardown-mlflow", mlflowNamespace, true)
 
 	gone, waitErr := waitForDeletion(c, crPath, MLflowDeleteTimeout, MLflowDeletePoll)
 	if waitErr != nil {
@@ -453,7 +443,7 @@ func imageSpec(image interface{}) map[string]interface{} {
 func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		recordMLflowActivity(c, "deploy-mlflow-pr", fmt.Sprintf("PR #%d (%s)", prNumber, activity), false)
+		recordActivity(c, "deploy-mlflow-pr", fmt.Sprintf("PR #%d (%s)", prNumber, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
@@ -488,7 +478,7 @@ func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 
 	if cr.image() == image {
 		logs = append(logs, "MLflow already runs this build")
-		recordMLflowActivity(c, "deploy-mlflow-pr", fmt.Sprintf("PR #%d (%s, unchanged)", prNumber, image), true)
+		recordActivity(c, "deploy-mlflow-pr", fmt.Sprintf("PR #%d (%s, unchanged)", prNumber, image), true)
 		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("MLflow already runs the latest PR #%d build.", prNumber), Logs: logs}, nil
 	}
 
@@ -516,7 +506,7 @@ func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 	logs = append(logs, "OK: MLflow CR patched with PR image")
 
 	slog.Info("mlflow PR deployed", "pr", prNumber, "image", image, "user", getUser(c))
-	recordMLflowActivity(c, "deploy-mlflow-pr", fmt.Sprintf("PR #%d (%s)", prNumber, image), true)
+	recordActivity(c, "deploy-mlflow-pr", fmt.Sprintf("PR #%d (%s)", prNumber, image), true)
 
 	return &types.OperationResponse{
 		Success: true, Message: fmt.Sprintf("MLflow PR #%d image deployed.", prNumber),
@@ -529,7 +519,7 @@ func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 func RevertMLflowImage(c *Client) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		recordMLflowActivity(c, "revert-mlflow", activity, false)
+		recordActivity(c, "revert-mlflow", activity, false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
@@ -576,7 +566,7 @@ func RevertMLflowImage(c *Client) (*types.OperationResponse, error) {
 	logs = append(logs, fmt.Sprintf("OK: Image reverted to %s", target))
 
 	slog.Info("mlflow image reverted", "target", target, "user", getUser(c))
-	recordMLflowActivity(c, "revert-mlflow", target, true)
+	recordActivity(c, "revert-mlflow", target, true)
 
 	return &types.OperationResponse{
 		Success: true, Message: fmt.Sprintf("MLflow image reverted to %s.", target),

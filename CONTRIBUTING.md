@@ -6,7 +6,7 @@ This guide covers how to develop, test, and deploy changes to the RHOAI Nightly 
 
 ### Required Versions
 
-- **Go**: 1.27 (`go.mod`; CI and the Containerfile use golang 1.27.4)
+- **Go**: 1.27; `go.mod` names toolchain go1.27.4, the version CI and the Containerfile use, so an older local Go 1.21+ downloads and runs it (`GOTOOLCHAIN=auto`, the default)
 - **Node.js**: 22.x, ≥ 22.13 for the test tooling (CI uses `node:22-alpine`)
 - **TypeScript**: 5.x
 
@@ -261,11 +261,12 @@ GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release t
   - `go`: gofmt, `go mod verify`, `go vet`, `go test -race`, govulncheck;
   - `golangci-lint`;
   - `frontend-checks` (typecheck, ESLint, `npm audit`), `frontend-test` (tests) and `frontend-build` (production build), in parallel, each after its own `npm ci`;
-  - `release-scripts`: `scripts/test-release.sh`, `scripts/test-install.sh` and `scripts/test-node-pull-secret.sh` (skipped in GitLab, whose Go image has no `jq`; GitHub runs it with `jq` and `REQUIRE_JQ=1`, so there it cannot skip);
+  - `release-scripts`: `scripts/test-release.sh`, `scripts/test-install.sh` and `scripts/test-node-pull-secret.sh` (the job installs Debian's `jq` 1.7.1 into the Go image; both CIs set `REQUIRE_JQ=1`, so the test fails instead of skipping without `jq`);
   - `chart`: `scripts/test-chart.sh` with Helm `HELM_VERSION`, downloaded from get.helm.sh and checked against `HELM_SHA256` (both in `.gitlab-ci.yml` and `.github/workflows/ci.yml`; change them together);
+  - `docs`: `make docs-check` and shellcheck 0.11.0 on `scripts/*.sh`, `dev.sh`, `docs/tools/*.sh` and `pkg/cluster/node_pull_secret.sh` (as bash: it is a pasted command, so it carries no shell directive); GitHub runs the same with the shellcheck release tarball, checked against `SHELLCHECK_SHA256`;
   - `release-guard` (tags only): `scripts/release.sh check`, see [Releases](#releases);
-  - the Go jobs keep Go's module and build caches (and golangci-lint's) in `.cache/`, one GitLab cache per job keyed on `go.sum`.
-- **Image jobs** (`build-main`, `build-branch`, `release-build`) `need` the Go and frontend test jobs of their pipeline and build with `RUN_CHECKS=false`, so the Containerfile does not run those checks a second time.
+  - the Go jobs keep Go's module and build caches (and golangci-lint's) in `.cache/`, one GitLab cache per job keyed on `go.sum`; the crane jobs share one keyed on `CRANE_VERSION`, so `go install` of crane reuses it.
+- **Image jobs** (`build-main`, `build-branch`, `release-build`) `need` every test job of their pipeline and build with `RUN_CHECKS=false`, so the Containerfile does not run those checks a second time.
 - **main**: `build-main` builds the image to a tarball; `publish-main` pushes it as the write-once `:$CI_COMMIT_SHORT_SHA` (8 characters) and as `:main`, the latter only while the commit is still the tip of `main`. `:main` is always the pipeline's own image. An existing commit tag is kept only when it is that same image, or the release image of the same commit (a tag pipeline that published first: its `:vX.Y.Z` has the same digest); anything else (another commit, an earlier build, a workstation push) stops the job before `:main` moves. Delete such a tag in Quay after checking it, then retry the job. It never touches `:latest`.
 - **Other branches**: the manual `build-branch` job builds the image. It pushes it as `$BRANCH_IMAGE:$CI_COMMIT_REF_SLUG` only when the project has the variables `BRANCH_IMAGE`, `QUAY_BRANCH_USER` and `QUAY_BRANCH_TOKEN` (below); without them it builds and pushes nothing. It never uses `QUAY_USER`/`QUAY_TOKEN`.
 - **Release tags**: `release-build` builds the image (`VERSION=<tag>`) to a tarball; `release-installer` generates `install.sh`; `release-publish` pushes `:vX.Y.Z` and moves `:vN` and `:latest` (every tag-writing job, main or release, holds the one resource group `publish-latest`); `release-notes` creates the GitLab Release. `promote-latest` is manual.
@@ -514,7 +515,7 @@ make undeploy          # install.sh uninstall: the app namespace, its ClusterRol
 Create a `.env` file to persist custom configuration:
 
 ```bash
-make env               # Create .env from defaults
+make env               # Create .env from .env.example (an existing .env is kept)
 ```
 
 Edit `.env` with your values:
@@ -561,5 +562,5 @@ make help              # Show all targets and current configuration
 
 - All `Makefile` variables can be overridden via environment, command line, or `.env` file.
 - The `.env` file is not committed (listed in `.gitignore`).
-- Use `make env` to create a `.env` file from defaults.
+- Use `make env` to create a `.env` file from `.env.example`.
 - The container build runs `go vet`, the Go tests, the frontend typecheck, ESLint and tests; any failure stops the build.

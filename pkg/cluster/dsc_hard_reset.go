@@ -248,23 +248,23 @@ func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent
 		}
 		return r.fail("delete", "Deleting the DataScienceCluster failed: "+conversionMessage(err)+". Nothing was changed.", errorCodeFromK8sErr(err)), nil
 	}
-	recordDSCActivity(c, "hard-reset-dsc", v.name+": deleted (uid "+v.uid+") for a hard reset", true)
+	recordActivity(c, "hard-reset-dsc", v.name+": deleted (uid "+v.uid+") for a hard reset", true)
 	r.step("delete", "success", "The operator is removing every component of DataScienceCluster "+v.name)
 
 	r.step("wait_deleted", "running", "Waiting for the operator to clean up and remove the DataScienceCluster")
 	if res := waitDSCGone(c, path, v, r, createYAML); res != nil {
-		recordDSCActivity(c, "hard-reset-dsc", v.name+": "+firstLine(res.Message), false)
+		recordActivity(c, "hard-reset-dsc", v.name+": "+firstLine(res.Message), false)
 		return res, nil
 	}
 
 	r.step("create", "running", "Creating the release default DataScienceCluster "+v.name)
 	if msg, code := createPlannedDSC(c, v.version, obj); msg != "" {
 		res := r.fail("create", "The old DataScienceCluster was deleted, but "+msg+" "+finishHelp(createYAML), code)
-		recordDSCActivity(c, "hard-reset-dsc", v.name+": deleted, creating the release default failed", false)
+		recordActivity(c, "hard-reset-dsc", v.name+": deleted, creating the release default failed", false)
 		return res, nil
 	}
 	clearDSCHardResetRecord(c)
-	recordDSCActivity(c, "hard-reset-dsc", v.name+": the release default of operator "+v.op.Version+" created", true)
+	recordActivity(c, "hard-reset-dsc", v.name+": the release default of operator "+v.op.Version+" created", true)
 	r.step("create", "success", "Created the release default DataScienceCluster "+v.name)
 
 	r.step("wait_ready", "running", "Waiting for the components to be ready")
@@ -424,7 +424,7 @@ func deletionProgress(st dscWaitState) string {
 func modulesNote(st dscWaitState) string {
 	for _, cd := range st.conditions {
 		if cd.Type == "ModulesReady" && cd.Message != "" {
-			return "ModulesReady: " + truncate(cd.Message, 300)
+			return "ModulesReady: " + truncateText(cd.Message, 300)
 		}
 	}
 	return ""
@@ -557,7 +557,7 @@ func FinishDSCHardReset(c *Client, req types.DSCFinishRequest) (*types.Operation
 		return refuse("The hard reset is not finished: "+msg, code)
 	}
 	clearDSCHardResetRecord(c)
-	recordDSCActivity(c, "finish-hard-reset-dsc", rec.Name+": the release default of operator "+rec.OperatorVersion+" created (hard reset finished)", true)
+	recordActivity(c, "finish-hard-reset-dsc", rec.Name+": the release default of operator "+rec.OperatorVersion+" created (hard reset finished)", true)
 	slog.Info("dsc hard reset finished", "dsc", rec.Name, "user", getUser(c))
 	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Created DataScienceCluster %s: the hard reset is finished. The operator brings the components up; this page shows each as it comes up.", rec.Name)}, nil
 }

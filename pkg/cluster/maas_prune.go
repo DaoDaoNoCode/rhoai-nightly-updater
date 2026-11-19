@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -336,10 +335,10 @@ func PruneGoneMaaSPublicationsInBackground(c *Client) {
 		detail += " Not finished: " + err.Error()
 	}
 	recordPruneActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "prune-maas-publications",
-		Detail:    truncateMessage(detail),
+		Detail:    truncateText(detail, 300),
 		Success:   err == nil,
 	})
 }

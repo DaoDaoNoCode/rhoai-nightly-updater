@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -93,7 +94,7 @@ type apiGroupDoc struct {
 func (g apiGroupDoc) orderedVersions() []string {
 	var rest []string
 	for _, v := range g.Versions {
-		if v.Version != "" && v.Version != g.PreferredVersion.Version && !containsString(rest, v.Version) {
+		if v.Version != "" && v.Version != g.PreferredVersion.Version && !slices.Contains(rest, v.Version) {
 			rest = append(rest, v.Version)
 		}
 	}

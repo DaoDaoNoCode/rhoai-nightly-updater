@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -762,7 +763,7 @@ type upgradeGate struct {
 }
 
 func (g upgradeGate) String() string {
-	return fmt.Sprintf("%s %s=%s (%s): %s", g.where, g.cond.Type, g.cond.Status, g.cond.Reason, truncate(g.cond.Message, 300))
+	return fmt.Sprintf("%s %s=%s (%s): %s", g.where, g.cond.Type, g.cond.Status, g.cond.Reason, truncateText(g.cond.Message, 300))
 }
 
 // isUpgradeGateCondition: reason AdminAckRequired, or a message about
@@ -937,7 +938,7 @@ func foreignSubscriptionRefusal(c *Client) string {
 			continue
 		}
 		for _, o := range ip.Metadata.OwnerReferences {
-			if o.Kind == "Subscription" && o.Name != SubName && !containsString(found, o.Name) {
+			if o.Kind == "Subscription" && o.Name != SubName && !slices.Contains(found, o.Name) {
 				found = append(found, o.Name)
 			}
 		}

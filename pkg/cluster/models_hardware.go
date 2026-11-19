@@ -3,6 +3,7 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -92,7 +93,7 @@ func (p hardwareProfileObject) visibleForModelServing() bool {
 	if json.Unmarshal([]byte(raw), &in) != nil || len(in) == 0 {
 		return true
 	}
-	return containsString(in, "model-serving")
+	return slices.Contains(in, "model-serving")
 }
 
 // fits says why the profile cannot hold the model, or "" when it can: it

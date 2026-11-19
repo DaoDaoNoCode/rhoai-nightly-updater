@@ -150,10 +150,10 @@ func (m *maasRun) waitAccessActive(doneMsg string, withAuth bool) (*types.Operat
 	m.step("ready", "running", "Waiting for MaaS to apply it...")
 	last := ""
 	ready, err := waitForGone(c, MaaSPublishTimeout, MaaSPoll, func(cc *Client) (bool, error) {
-		s, _ := maasPhase(cc, maasAccessPath(c, "MaaSSubscription"))
+		s := maasPhase(cc, maasAccessPath(c, "MaaSSubscription"))
 		a := "Active"
 		if withAuth {
-			a, _ = maasPhase(cc, maasAccessPath(c, "MaaSAuthPolicy"))
+			a = maasPhase(cc, maasAccessPath(c, "MaaSAuthPolicy"))
 		}
 		msg := fmt.Sprintf("subscription: %s; access: %s", firstNonEmpty(s, "pending"), firstNonEmpty(a, "pending"))
 		if msg != last {

@@ -19,7 +19,7 @@ describe("ageSeconds", () => {
   });
 });
 
-describe("deploymentHealth (A08-14)", () => {
+describe("deploymentHealth", () => {
   it("healthy, scaled down", () => {
     expect(deploymentHealth(dep("a")).kind).toBe("healthy");
     expect(deploymentHealth(dep("a", { desired: 0, ready: 0, pods: [] })).kind).toBe("scaled-down");

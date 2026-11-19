@@ -13,9 +13,6 @@ export function isGitOpsProfile(version: VersionInfo | null | undefined): boolea
 /** The pages that exist in the gitops profile. */
 export const GITOPS_PROFILE_PAGES: ReadonlySet<string> = new Set(["/", "/components", "/diagnostics"]);
 
-/** The backend's error code for a route the gitops profile refuses. */
-export const PROFILE_GITOPS_ERROR = "profile_gitops";
-
 const WHY = "this updater runs the gitops profile, where Argo CD or an ACM policy manages RHOAI from Git and the updater only installs the build the managed catalog serves.";
 
 /** Why a feature is missing in the gitops profile. */

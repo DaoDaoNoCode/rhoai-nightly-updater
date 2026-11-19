@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -300,7 +301,7 @@ func cleanNames(in []string) []string {
 	var out []string
 	for _, n := range in {
 		n = strings.TrimSpace(n)
-		if n != "" && !containsString(out, n) {
+		if n != "" && !slices.Contains(out, n) {
 			out = append(out, n)
 		}
 	}

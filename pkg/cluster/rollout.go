@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -112,10 +111,11 @@ func notApplicable(a rolloutAssessment, reason string) rolloutAssessment {
 	return a
 }
 
-// resolveIntOrPercent mirrors intstr.GetScaledValueFromIntOrPercent.
-func resolveIntOrPercent(v interface{}, total int, roundUp bool, def string) (int, string, error) {
+// resolveIntOrPercent mirrors intstr.GetScaledValueFromIntOrPercent; an
+// unset value is the Deployment default, 25%.
+func resolveIntOrPercent(v interface{}, total int, roundUp bool) (int, string, error) {
 	if v == nil {
-		v = def
+		v = "25%"
 	}
 	switch val := v.(type) {
 	case float64:
@@ -204,11 +204,11 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 	if applier := strategyApplier(dep.Metadata.ManagedFields); applier != "" {
 		return notApplicable(a, fmt.Sprintf("%s manages its rollout strategy and would undo the change", applier)), nil
 	}
-	unavailable, unavailableStr, err := resolveIntOrPercent(rawUnavailable, a.Replicas, false, "25%")
+	unavailable, unavailableStr, err := resolveIntOrPercent(rawUnavailable, a.Replicas, false)
 	if err != nil {
 		return notApplicable(a, "cannot read maxUnavailable: "+err.Error()), nil
 	}
-	surge, _, err := resolveIntOrPercent(rawSurge, a.Replicas, true, "25%")
+	surge, _, err := resolveIntOrPercent(rawSurge, a.Replicas, true)
 	if err != nil {
 		return notApplicable(a, "cannot read maxSurge: "+err.Error()), nil
 	}
@@ -452,7 +452,7 @@ func patchMaxUnavailable(c *Client, namespace, name string) (rolloutAssessment, 
 	if !a.Applicable {
 		return a, false, ""
 	}
-	record, _ := json.Marshal(assistRecord{MaxUnavailable: a.OriginalMaxUnavailable, PatchedAt: time.Now().UTC().Format(time.RFC3339)})
+	record, _ := json.Marshal(assistRecord{MaxUnavailable: a.OriginalMaxUnavailable, PatchedAt: nowRFC3339()})
 	patch, _ := json.Marshal(map[string]interface{}{
 		"metadata": map[string]interface{}{
 			"resourceVersion": a.ResourceVersion,
@@ -540,7 +540,7 @@ func assistTargets(c *Client, targets []string, logs []string) (*types.Operation
 
 	if len(patched) > 0 {
 		RecordActivity(c, types.ActivityEntry{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			Timestamp: nowRFC3339(),
 			User:      getUser(c),
 			Action:    "assist-rollout",
 			Detail:    "maxUnavailable=1 on " + strings.Join(patched, ", "),
@@ -636,7 +636,7 @@ func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.Operation
 		msg = fmt.Sprintf("maxUnavailable on %s is already %s (changed by its owner), so it was left as is; the saved note was removed.", target, nonEmpty(current, "unset"))
 	}
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "restore-rollout-strategy",
 		Detail:    msg,

@@ -298,6 +298,10 @@ only accepts a tag whose version is the top dated section. See
   waited on, but once the wait ends the setup and the Models tab offer
   **Use the newest released Red Hat image** again, worded as a
   possibility ("may not be published").
+- **Check that the nodes can pull nightly images** no longer says the pull
+  secret is missing or the image mirror (IDMS) is not configured when it
+  could not read them (403, a server error, the network): it says the read
+  failed and why.
 
 ### Changed
 

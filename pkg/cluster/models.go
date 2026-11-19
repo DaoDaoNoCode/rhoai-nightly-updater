@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -379,12 +380,12 @@ func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) type
 		s.Message = "Running"
 		return s
 	case hasPresets && presets.Status == "False":
-		s.Message = firstNonEmpty(truncateMessage(presets.Message), presets.Reason, "Its preset cannot be resolved")
+		s.Message = firstNonEmpty(truncateText(presets.Message, 300), presets.Reason, "Its preset cannot be resolved")
 		s.WaitingReason = firstNonEmpty(presets.Reason, "PresetsCombined")
 		s.TerminalError = true
 		return s
 	case hasReady:
-		s.Message = firstNonEmpty(truncateMessage(ready.Message), ready.Reason, "Not ready")
+		s.Message = firstNonEmpty(truncateText(ready.Message, 300), ready.Reason, "Not ready")
 	case s.ManagedByTool:
 		s.Message = "Starting"
 	default:
@@ -721,16 +722,6 @@ func projectNamespace(c *Client, project string) (map[string]string, string, str
 	return ns.Metadata.Labels, "", ""
 }
 
-func recordModelsActivity(c *Client, action, detail string, success bool) {
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		User:      getUser(c),
-		Action:    action,
-		Detail:    detail,
-		Success:   success,
-	})
-}
-
 // modelsRun is one streamed Models operation.
 type modelsRun struct {
 	c        *Client
@@ -765,7 +756,7 @@ func (m *modelsRun) fail(id, msg, code, activity string) (*types.OperationRespon
 	}
 	m.logs = append(m.logs, msg)
 	slog.Warn("models operation stopped", "step", id, "reason", activity, "user", getUser(m.c))
-	recordModelsActivity(m.c, m.activity, fmt.Sprintf("%s (%s)", m.target, activity), false)
+	recordActivity(m.c, m.activity, fmt.Sprintf("%s (%s)", m.target, activity), false)
 	return &types.OperationResponse{Success: false, Message: msg, Logs: m.logs, ErrorCode: code}, nil
 }
 
@@ -912,7 +903,7 @@ func (m *modelsRun) callable(project, name string, rec modelsRecord) (*types.Ope
 	default:
 		return m.fail("callable", callFailureWords("The model is set up", check), "not_callable", "model not callable ("+check.Result+")")
 	}
-	recordModelsActivity(m.c, m.activity, m.target, true)
+	recordActivity(m.c, m.activity, m.target, true)
 	return &types.OperationResponse{Success: true, Message: check.Message, Logs: m.logs}, nil
 }
 
@@ -962,7 +953,7 @@ func (m *modelsRun) allow(project string) (*types.OperationResponse, error) {
 	done := fmt.Sprintf("The inference gateway now allows %s; models there attach to it. Projects it allows: %s.", project, strings.Join(written.names, ", "))
 	m.step("gateway", "success", done)
 	slog.Info("models allow", "project", project, "user", getUser(c))
-	recordModelsActivity(c, m.activity, m.target, true)
+	recordActivity(c, m.activity, m.target, true)
 	return &types.OperationResponse{Success: true, Message: done, Logs: m.logs}, nil
 }
 
@@ -1133,7 +1124,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 			summary = append(summary, "The existing inference gateway is used.")
 		} else {
 			m.step("gateway", "running", "Creating the inference gateway...")
-			if listed, _ := gw.gateway.listedNamespaces(); req.Project != "" && !containsString(listed, req.Project) {
+			if listed, _ := gw.gateway.listedNamespaces(); req.Project != "" && !slices.Contains(listed, req.Project) {
 				if err := recordGatewayProject(c, req.Project); err != nil {
 					return m.fail("gateway", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
 				}
@@ -1153,7 +1144,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 			case !ready:
 				why := ""
 				if pending != "" {
-					why = " The gateway controller says: " + truncateMessage(pending) + "."
+					why = " The gateway controller says: " + truncateText(pending, 300) + "."
 				}
 				m.step("gateway-ready", "success", fmt.Sprintf("Created, but not programmed after %s. It may still come up; the Models tab shows its state.%s", clockText(InferenceGatewayReadyTimeout), why))
 			case dns == "published":
@@ -1244,7 +1235,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 		}
 	}
 	slog.Info("models setup", "target", m.target, "user", getUser(c))
-	recordModelsActivity(c, "setup-models", m.target, true)
+	recordActivity(c, "setup-models", m.target, true)
 	return &types.OperationResponse{Success: true, Message: strings.Join(summary, " "), Logs: m.logs}, nil
 }
 
@@ -1267,7 +1258,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 			m.step("check", "running", fmt.Sprintf("The DataScienceCluster does not report %s; continuing (unknown is not a failure).", llmDependenciesCondition))
 		}
 	}
-	if v := servedVersions(c, llmisvcGroup, nil); v.Discovered && !containsString(v.Versions, "v1alpha2") {
+	if v := servedVersions(c, llmisvcGroup, nil); v.Discovered && !slices.Contains(v.Versions, "v1alpha2") {
 		return nil, fmt.Sprintf("This cluster's KServe does not serve LLMInferenceService %s (served: %s), which is the shape this tool writes. Nothing was changed.", llmisvcAPIVersion, strings.Join(v.Versions, ", ")), "prerequisites"
 	}
 	ns := appsNamespace(c)
@@ -1418,12 +1409,12 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 		detail += " model=" + strings.Join(names, ",")
 	}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		recordModelsActivity(c, "teardown-model", fmt.Sprintf("%s (%s)", detail, activity), false)
+		recordActivity(c, "teardown-model", fmt.Sprintf("%s (%s)", detail, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 	var entries []catalogModel
 	for _, entry := range modelCatalog {
-		if len(names) == 0 || containsString(names, entry.Name) {
+		if len(names) == 0 || slices.Contains(names, entry.Name) {
 			entries = append(entries, entry)
 		}
 	}
@@ -1491,7 +1482,7 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 	if len(deleted) == 0 && len(kept) > 0 {
 		return fail(fmt.Sprintf("The model %s in %s was not created by this tool, so it was not deleted.", strings.Join(kept, ", "), project), "not_managed", "not managed")
 	}
-	recordModelsActivity(c, "teardown-model", detail, true)
+	recordActivity(c, "teardown-model", detail, true)
 	if len(deleted) == 0 {
 		what := "No model of this tool"
 		if len(names) > 0 {
@@ -1632,7 +1623,7 @@ func readModelProgress(c *Client, project, name string, w modelWorkload) (modelP
 func describeModelPods(pods []modelPod, newest *modelEvent) modelProgress {
 	event := ""
 	if newest != nil && newest.Reason != "" {
-		event = fmt.Sprintf(" (%s: %s)", newest.Reason, truncateMessage(newest.Message))
+		event = fmt.Sprintf(" (%s: %s)", newest.Reason, truncateText(newest.Message, 300))
 	}
 	var first *modelProgress
 	for _, p := range pods {
@@ -1656,20 +1647,20 @@ func describeModelPods(pods []modelPod, newest *modelEvent) modelProgress {
 // describeModelPod is one live pod's progress; event is its newest event, in words.
 func describeModelPod(p modelPod, event string) modelProgress {
 	if cond, ok := findCondition(p.Status.Conditions, "PodScheduled"); ok && cond.Status == "False" {
-		return modelProgress{message: fmt.Sprintf("Waiting for a worker with room for the model: %s", firstNonEmpty(truncateMessage(cond.Message), cond.Reason))}
+		return modelProgress{message: fmt.Sprintf("Waiting for a worker with room for the model: %s", firstNonEmpty(truncateText(cond.Message, 300), cond.Reason))}
 	}
 	check := func(s modelContainerStat, init bool) (modelProgress, bool) {
 		if w := s.State.Waiting; w != nil {
 			switch w.Reason {
 			case "ErrImagePull", "ImagePullBackOff":
 				if manifestUnknown(w.Message) {
-					return modelProgress{problem: fmt.Sprintf("%s: %s", w.Reason, truncateMessage(w.Message)), imageMissing: true}, true
+					return modelProgress{problem: fmt.Sprintf("%s: %s", w.Reason, truncateText(w.Message, 300)), imageMissing: true}, true
 				}
 				// Credentials can reach a new node a few minutes after it
 				// joins (ROSA HCP, seen live): the wait gives it time.
 				return modelProgress{
-					message:         fmt.Sprintf("Pulling the image of %s failed (%s: %s); the node keeps retrying.", s.Name, w.Reason, truncateMessage(w.Message)),
-					pullFailure:     fmt.Sprintf("the image of container %s cannot be pulled (%s: %s)", s.Name, w.Reason, truncateMessage(w.Message)),
+					message:         fmt.Sprintf("Pulling the image of %s failed (%s: %s); the node keeps retrying.", s.Name, w.Reason, truncateText(w.Message, 300)),
+					pullFailure:     fmt.Sprintf("the image of container %s cannot be pulled (%s: %s)", s.Name, w.Reason, truncateText(w.Message, 300)),
 					node:            p.Spec.NodeName,
 					mentionsMissing: manifestUnknownMentioned(w.Message),
 				}, true
@@ -1683,7 +1674,7 @@ func describeModelPod(p modelPod, event string) modelProgress {
 				}
 				return modelProgress{problem: fmt.Sprintf("container %s keeps crashing.%s Its logs say why.", s.Name, last)}, true
 			case "CreateContainerConfigError", "CreateContainerError", "InvalidImageName":
-				return modelProgress{problem: fmt.Sprintf("container %s cannot be created (%s: %s).", s.Name, w.Reason, truncateMessage(w.Message))}, true
+				return modelProgress{problem: fmt.Sprintf("container %s cannot be created (%s: %s).", s.Name, w.Reason, truncateText(w.Message, 300))}, true
 			case "ContainerCreating", "PodInitializing":
 				if init {
 					return modelProgress{}, false

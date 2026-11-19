@@ -62,7 +62,7 @@ afterEach(() => {
 /** The dialog footer's Close button (the header's X is also named Close). */
 const footerClose = (dialog: HTMLElement) => within(dialog).getAllByRole("button", { name: "Close" }).find((b) => b.textContent === "Close")!;
 
-describe("terminal states (A08-3, A06-5)", () => {
+describe("terminal states (A06-5)", () => {
   it("S3 storage in ImagePullBackOff reads Error, says it in words with Repair in the alert, raw reasons in Technical details; Delete says why it is off", async () => {
     setup(live());
     renderAt();

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -827,7 +828,7 @@ func TestBuildJSONPatchGroupsMissingObjects(t *testing.T) {
 func TestHardResetDeleteRule(t *testing.T) {
 	has := func(path string) bool {
 		for _, g := range templateGrantsFrom(t, path) {
-			if containsString(g.rule.APIGroups, dscGroup) && containsString(g.rule.Resources, "datascienceclusters") && containsString(g.rule.Verbs, "delete") {
+			if slices.Contains(g.rule.APIGroups, dscGroup) && slices.Contains(g.rule.Resources, "datascienceclusters") && slices.Contains(g.rule.Verbs, "delete") {
 				return true
 			}
 		}

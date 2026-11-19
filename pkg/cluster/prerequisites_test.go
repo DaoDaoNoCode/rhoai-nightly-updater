@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -69,7 +70,7 @@ const (
 func pkgManifest(name, catalog, provider, channel, csv, display, suggestedNS string, modes []string, examples string, monitoring bool) map[string]interface{} {
 	var installModes []map[string]interface{}
 	for _, m := range []string{"OwnNamespace", "SingleNamespace", "MultiNamespace", "AllNamespaces"} {
-		installModes = append(installModes, map[string]interface{}{"type": m, "supported": containsString(modes, m)})
+		installModes = append(installModes, map[string]interface{}{"type": m, "supported": slices.Contains(modes, m)})
 	}
 	ann := map[string]string{"alm-examples": examples}
 	if suggestedNS != "" {

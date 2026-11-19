@@ -163,8 +163,7 @@ func authFromEntry(val interface{}) string {
 // quay.io/rhoai images: the most specific matching registry key wins, so an
 // exact quay.io/rhoai entry is preferred over repository-scoped entries, which
 // are preferred over a generic quay.io login. The choice is deterministic.
-// It returns the credential and the auths key it came from.
-func selectQuayAuth(auths map[string]interface{}) (string, string) {
+func selectQuayAuth(auths map[string]interface{}) string {
 	keys := make([]string, 0, len(auths))
 	for key := range auths {
 		keys = append(keys, key)
@@ -182,17 +181,17 @@ func selectQuayAuth(auths map[string]interface{}) (string, string) {
 			return -1
 		}
 	}
-	bestAuth, bestKey, bestRank := "", "", 3
+	bestAuth, bestRank := "", 3
 	for _, key := range keys {
 		r := rank(key)
 		if r < 0 || r >= bestRank {
 			continue
 		}
 		if auth := authFromEntry(auths[key]); auth != "" {
-			bestAuth, bestKey, bestRank = auth, key, r
+			bestAuth, bestRank = auth, r
 		}
 	}
-	return bestAuth, bestKey
+	return bestAuth
 }
 
 // getQuayAuth extracts the quay.io/rhoai auth credential from the cluster pull secret.
@@ -209,7 +208,7 @@ func getQuayAuth(c *Client) string {
 		return ""
 	}
 	auths, _ := dockerCfg["auths"].(map[string]interface{})
-	auth, _ := selectQuayAuth(auths)
+	auth := selectQuayAuth(auths)
 	if auth == "" {
 		slog.Warn("quay auth: no quay.io/rhoai or quay.io entry found in pull secret auths")
 	}

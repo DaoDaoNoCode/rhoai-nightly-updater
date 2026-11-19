@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -219,7 +220,7 @@ func newServiceHealthCache(c *Client, grace time.Duration) *serviceHealthCache {
 func (s *serviceHealthCache) prefetch(refs []string) {
 	var todo []string
 	for _, ref := range refs {
-		if _, ok := s.results[ref]; !ok && !containsString(todo, ref) {
+		if _, ok := s.results[ref]; !ok && !slices.Contains(todo, ref) {
 			todo = append(todo, ref)
 		}
 	}
@@ -309,7 +310,7 @@ func (a admissionConfig) services() []string {
 	for _, wh := range a.Webhooks {
 		if svc := wh.ClientConfig.Service; svc != nil && svc.Name != "" && svc.Namespace != "" {
 			ref := svc.Namespace + "/" + svc.Name
-			if !containsString(out, ref) {
+			if !slices.Contains(out, ref) {
 				out = append(out, ref)
 			}
 		}
@@ -606,7 +607,7 @@ func scanStaleWebhooks(c *Client) webhookScan {
 	// configuration (it is never deletable), and is reported so the check
 	// says it could not verify it instead of passing.
 	for _, ref := range refs {
-		if h := env.health.lookup(ref); h.state == serviceUnknown && !containsString(scan.Errors, h.describe(ref)) {
+		if h := env.health.lookup(ref); h.state == serviceUnknown && !slices.Contains(scan.Errors, h.describe(ref)) {
 			scan.Errors = append(scan.Errors, h.describe(ref))
 		}
 	}

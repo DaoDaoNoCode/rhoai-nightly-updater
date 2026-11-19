@@ -56,11 +56,11 @@ That totals 1020 s, which is `terminationGracePeriodSeconds`.
 
 ## 5. ServiceAccount Token
 
-**What:** The SA token is mounted at `/var/run/secrets/kubernetes.io/serviceaccount/token`. On OpenShift 4.x, this is a projected volume token with automatic rotation (default 1 hour, auto-refreshed).
+**What:** The ServiceAccount token is a projected volume at `/var/run/secrets/kubernetes.io/serviceaccount/token`. The kubelet rewrites the file before the token expires (once 80% of its lifetime has passed), so a reader must read the file again rather than keep the first token.
 
-**Impact:** The token file changes on disk periodically. Reading it on every request (as we do in dev mode via `getClusterToken()`) is correct — caching it for too long risks using an expired token.
+**Current behavior:** `getClusterToken()` (`pkg/api/handlers.go`) reads the file and keeps the token for 5 minutes (`tokenCacheTTL`), then reads it again: far inside the token's lifetime, and one file read per 5 minutes instead of one per request. The app's own reads, its records and the MaaS prune job use this token; changes run with the signed-in user's token (Section 2).
 
-**Current behavior:** Cached for 5 minutes with auto-refresh.
+**Dev mode:** with `DEV_MODE=true` and no mounted token (`./dev.sh` on a workstation), the ServiceAccount token is `DEV_TOKEN` (your `oc whoami -t`), cached the same way; the same variable also stands in for the user's token, since there is no oauth-proxy.
 
 ## 6. CatalogSource Readiness
 
@@ -76,7 +76,7 @@ This typically takes 10-30 seconds depending on image size and pull speed.
 
 **Fix:** CatalogSource readiness is a step in the SSE pipeline. The pipeline polls the CatalogSource state and emits SSE events to show live progress.
 
-**Note:** Check the source code for current poll interval and timeout values. Tests override these to minimal values for speed.
+**Values:** `CatalogReadyTimeout` (120 s) and `CatalogPollInterval` (5 s) in `pkg/cluster/operations.go`.
 
 ## 7. OLM Version Pinning
 
@@ -102,13 +102,9 @@ The exact sequences are in [CLUSTER_CHANGES.md](CLUSTER_CHANGES.md#4-operator-li
 
 ## 9. DSPA API Version
 
-**What:** The DataSciencePipelinesApplication CRD is registered at different API versions depending on the RHOAI version:
-- RHOAI 2.x: `datasciencepipelinesapplications.opendatahub.io/v1alpha1`
-- RHOAI 3.x: `datasciencepipelinesapplications.opendatahub.io/v1`
+**What:** The tool reads and writes DataSciencePipelinesApplications at `datasciencepipelinesapplications.opendatahub.io/v1` only (`dspaAPIGroup` in `pkg/cluster/pipeline_server.go`), the version the RHOAI 3.x data-science-pipelines-operator serves.
 
-**Impact:** Using the wrong version returns 404. Must check the cluster's actual CRD version.
-
-**Current:** Hardcoded to `v1` (RHOAI 3.x). If the tool is used on RHOAI 2.x clusters, this will break.
+**Fields:** before writing a pipeline server, Set up reads the served `v1` schema of the installed CRD (`dspaSpecSchema`) and sets the optional settings (managed pipelines, the MLflow integration) only when that schema declares them; when the CRD cannot be read, it says so in the log and leaves them to the operator's defaults.
 
 ## 10. MLflow CRD Scope
 
@@ -145,17 +141,12 @@ These headers are set by the SSEWriter before the first event is flushed. The re
 
 **Flushing:** The SSEWriter calls `http.Flusher.Flush()` after each event to ensure it is sent immediately rather than buffered. Go's `http.ResponseWriter` supports `Flusher` when not wrapped in buffering middleware.
 
-## 13. Configurable Timing Constants
+## 13. Timing in Tests
 
-**What:** Operation timing is controlled by package-level variables. These are `var` (not `const`) so tests can override them for speed.
+**What:** Every wait in `pkg/cluster` (polls, retry backoffs, grace periods, and the deadlines that bound them) goes through the package clock `clk` (`pkg/cluster/clock.go`, interface in `pkg/clock`). Production uses the wall clock.
 
-**Examples of timing constants:**
-- CatalogSource readiness timeouts and poll intervals
-- Resource propagation wait periods
-- Retry backoff durations
+**Tests:** `TestMain` (`pkg/cluster/testmain_test.go`) replaces `clk` with `clocktest.NewAutoFake()`, a fake clock that moves forward whenever the code sleeps, so no test waits in real time. Caches tell their entries' ages by a clock of their own, which a test replaces with a `clocktest.Fake` and moves with `Advance` (`fakeCacheClock`). The timing values are package-level `var`s (for example `CatalogReadyTimeout`, `CatalogPollInterval`, `SubRetryBackoffs` in `operations.go`): `TestMain` shortens them so a fake-clock loop runs few iterations, and a test may set one to choose which deadline is reached first.
 
-**Test overrides:** Tests set these to minimal values to avoid slow test suites.
+**Not on the clock:** timestamps that are recorded or compared with the cluster's own (activity entries, object ages) come from the `time` package.
 
-**Why `var` not `const`:** a Go `const` can hold a `time.Duration` (`const d = 5 * time.Second`), but it cannot be reassigned, and the tests reassign these values. Package-level `var` is the usual Go pattern for timings that tests override.
-
-**Note:** Check the source code for current timeout values. Production values are designed for real cluster latencies; test values are designed for speed.
+**Production values:** read them in the source (`operations.go`, `PrerequisiteReadyTimeout` in `feature_setup.go`, and the other `*Timeout`/`*Poll*` variables); they are sized for real cluster latencies.

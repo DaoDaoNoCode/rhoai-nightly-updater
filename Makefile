@@ -35,7 +35,7 @@ ROLLOUT_TIMEOUT ?= 20m
 RELEASES_URL ?=
 
 .PHONY: all build push deploy upgrade rollback resolve-image release undeploy dev lint lint-go lint-frontend \
-	test test-go test-frontend test-scripts test-chart chart check-chart vuln clean help env docs-fixtures docs-mock \
+	test test-go test-frontend test-scripts test-chart chart check-chart vuln clean help env docs-fixtures docs-mock frontend-lock \
 	docs-screenshots docs-check
 
 .DEFAULT_GOAL := help
@@ -175,16 +175,9 @@ clean:  ## Remove build artifacts
 	rm -rf frontend/dist
 	rm -rf frontend/node_modules
 
-env:  ## Create .env file from example for local config
+env:  ## Create .env from .env.example for local config (an existing .env is kept)
 	@if [ -f .env ]; then echo ".env already exists"; else \
-	echo "# Nightly Updater — local config (not committed to git)" > .env; \
-	echo "# IMAGE=quay.io/your-org/rhoai-nightly-updater" >> .env; \
-	echo "# TAG=v2.0.0" >> .env; \
-	echo "# NAMESPACE=rhoai-nightly-updater" >> .env; \
-	echo "# APP_NAME=rhoai-nightly-updater" >> .env; \
-	echo "# RUNTIME=podman" >> .env; \
-	echo "# PLATFORM=linux/amd64" >> .env; \
-	echo "Created .env — edit it with your values"; fi
+	cp .env.example .env && echo "Created .env from .env.example — edit it with your values"; fi
 
 help:  ## Show this help
 	@echo "RHOAI Nightly Updater"

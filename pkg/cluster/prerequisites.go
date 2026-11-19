@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -69,7 +70,7 @@ func parseMissingDependencies(msg string) []string {
 			if name == "" || len(name) > 80 || len(strings.Fields(name)) > 8 {
 				continue
 			}
-			if !containsString(out, name) {
+			if !slices.Contains(out, name) {
 				out = append(out, name)
 			}
 		}
@@ -220,7 +221,7 @@ func (p catalogPackage) rank() int {
 	}
 }
 
-func (p catalogPackage) supports(mode string) bool { return containsString(p.InstallModes, mode) }
+func (p catalogPackage) supports(mode string) bool { return slices.Contains(p.InstallModes, mode) }
 
 func (p catalogPackage) describe() string {
 	return fmt.Sprintf("package %s in catalog %s (provider %s), default channel %s, head %s",
@@ -231,7 +232,7 @@ func (p catalogPackage) describe() string {
 func (p catalogPackage) matchKeys() []string {
 	var keys []string
 	for _, s := range []string{p.Name, p.DisplayName, csvBaseName(p.CurrentCSV)} {
-		if k := normalizeOperatorName(s); k != "" && !containsString(keys, k) {
+		if k := normalizeOperatorName(s); k != "" && !slices.Contains(keys, k) {
 			keys = append(keys, k)
 		}
 	}
@@ -259,7 +260,7 @@ func singletonFrom(examples []almExample, names []string) *almExample {
 		return &singletons[0]
 	}
 	for i, e := range singletons {
-		if containsString(names, normalizeOperatorName(e.Kind)) {
+		if slices.Contains(names, normalizeOperatorName(e.Kind)) {
 			return &singletons[i]
 		}
 	}
@@ -398,7 +399,7 @@ func parseALMExamples(raw string) []almExample {
 func matchPackages(pkgs []catalogPackage, key string) []catalogPackage {
 	var out []catalogPackage
 	for _, p := range pkgs {
-		if containsString(p.matchKeys(), key) {
+		if slices.Contains(p.matchKeys(), key) {
 			out = append(out, p)
 		}
 	}
@@ -434,7 +435,7 @@ type ownedCRD struct {
 func (csv clusterCSV) matchNames() []string {
 	var out []string
 	for _, s := range append([]string{csv.DisplayName, csvBaseName(csv.Name)}, csv.packages()...) {
-		if n := normalizeOperatorName(s); n != "" && !containsString(out, n) {
+		if n := normalizeOperatorName(s); n != "" && !slices.Contains(out, n) {
 			out = append(out, n)
 		}
 	}
@@ -516,10 +517,10 @@ func findInstalledCSV(csvs []clusterCSV, pkg *catalogPackage, key string) *clust
 	for i, csv := range csvs {
 		match := false
 		if pkg != nil {
-			match = containsString(csv.packages(), pkg.Name) || (pkg.CurrentCSV != "" && csvBaseName(csv.Name) == csvBaseName(pkg.CurrentCSV))
+			match = slices.Contains(csv.packages(), pkg.Name) || (pkg.CurrentCSV != "" && csvBaseName(csv.Name) == csvBaseName(pkg.CurrentCSV))
 		}
 		if !match {
-			match = containsString(csv.matchNames(), key)
+			match = slices.Contains(csv.matchNames(), key)
 		}
 		if match && (best == nil || (best.Phase != "Succeeded" && csv.Phase == "Succeeded")) {
 			best = &csvs[i]
@@ -781,7 +782,7 @@ func resolveOperandMention(c *Client, d *dependency, pkgs []catalogPackage, csvs
 		examples = d.CSV.Examples
 	} else {
 		for i, p := range pkgs {
-			if containsString(p.OwnedKinds, d.OperandKind) && (d.Package == nil || p.rank() < d.Package.rank()) {
+			if slices.Contains(p.OwnedKinds, d.OperandKind) && (d.Package == nil || p.rank() < d.Package.rank()) {
 				d.Package = &pkgs[i]
 			}
 		}

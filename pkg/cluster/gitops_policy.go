@@ -6,6 +6,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -103,7 +104,7 @@ func gitOpsSubscriptionProblem(namespace, name string, spec map[string]interface
 		if !isString {
 			return "an entry of spec.config.env has no name"
 		}
-		if !containsString(allowedEnv, n) {
+		if !slices.Contains(allowedEnv, n) {
 			return fmt.Sprintf("its spec.config.env sets %q, which is not in %s (%s)", n, SubscriptionEnvAllowlistEnv, strings.Join(allowedEnv, ","))
 		}
 	}

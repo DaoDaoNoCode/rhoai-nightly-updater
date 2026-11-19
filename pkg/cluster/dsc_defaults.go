@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -280,7 +281,7 @@ func defaultsOrder(versions apiVersions, examples map[string]dscExample, want st
 		return order
 	}
 	for v := range examples {
-		if !containsString(order, v) {
+		if !slices.Contains(order, v) {
 			order = append(order, v)
 		}
 	}

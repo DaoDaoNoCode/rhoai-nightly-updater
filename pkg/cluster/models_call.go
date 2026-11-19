@@ -287,7 +287,7 @@ func lastCallCheck(c *Client, project, name, uid string) *types.ModelCallCheck {
 // checkModelCall runs the check on the tool's model (read fresh) and
 // remembers it. progress gets each retry, in words.
 func checkModelCall(c *Client, project, name string, rec modelsRecord, progress func(string)) types.ModelCallCheck {
-	now := func() string { return time.Now().UTC().Format(time.RFC3339) }
+	now := func() string { return nowRFC3339() }
 	model, found, err := readToolModel(c, project, name)
 	if err != nil || !found {
 		why := "it does not exist"

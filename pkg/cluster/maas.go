@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -224,7 +225,7 @@ func readMaaSRecord(c *Client) (maasRecord, error) {
 
 // writeMaaSRecord applies the record (operations hold the cluster lock).
 func writeMaaSRecord(c *Client, rec maasRecord) error {
-	rec.At, rec.By = time.Now().UTC().Format(time.RFC3339), getUser(c)
+	rec.At, rec.By = nowRFC3339(), getUser(c)
 	sort.Strings(rec.Published)
 	data, err := json.Marshal(rec)
 	if err != nil {
@@ -274,7 +275,7 @@ func (r maasRecord) pubs() []maasPub {
 }
 
 func (r maasRecord) published(project, model string) bool {
-	return containsString(r.Published, maasPub{project, model}.key())
+	return slices.Contains(r.Published, maasPub{project, model}.key())
 }
 
 // modelRefs are the refs publish recorded for model in project; none
@@ -320,7 +321,7 @@ func (r *maasRecord) setPublished(project, model string, on bool) {
 func (r maasRecord) projects() []string {
 	var out []string
 	for _, p := range r.pubs() {
-		if !containsString(out, p.project) {
+		if !slices.Contains(out, p.project) {
 			out = append(out, p.project)
 		}
 	}
@@ -650,7 +651,7 @@ func maasNamespaceRefusal(c *Client, infra string) (string, string) {
 func maasGatewayNamespaces(infraNS string, published []string) []string {
 	out := []string{infraNS, maasTenantNamespace}
 	for _, p := range published {
-		if !containsString(out, p) {
+		if !slices.Contains(out, p) {
 			out = append(out, p)
 		}
 	}
@@ -1049,10 +1050,10 @@ func authorinoTrustsServiceCA(deployment []byte) bool {
 // substitution is shell-quoted as well.
 func authorinoTLSCommands(ns, secret string) (cmds, why string) {
 	if len(ns) > 63 || !dns1123Label.MatchString(ns) {
-		return "", fmt.Sprintf("Connectivity Link's namespace %s is not a valid Kubernetes name", strconv.Quote(truncateMessage(ns)))
+		return "", fmt.Sprintf("Connectivity Link's namespace %s is not a valid Kubernetes name", strconv.Quote(truncateText(ns, 300)))
 	}
 	if len(secret) > 253 || !dns1123Subdomain.MatchString(secret) {
-		return "", fmt.Sprintf("Authorino's CR names its certificate Secret %s (spec.listener.tls.certSecretRef.name), which is not a valid Kubernetes name, so no commands are shown. A cluster-admin checks Authorino authorino in %s", strconv.Quote(truncateMessage(secret)), ns)
+		return "", fmt.Sprintf("Authorino's CR names its certificate Secret %s (spec.listener.tls.certSecretRef.name), which is not a valid Kubernetes name, so no commands are shown. A cluster-admin checks Authorino authorino in %s", strconv.Quote(truncateText(secret, 300)), ns)
 	}
 	patch, _ := json.Marshal(map[string]interface{}{"spec": map[string]interface{}{"listener": map[string]interface{}{"tls": map[string]interface{}{
 		"enabled": true, "certSecretRef": map[string]interface{}{"name": secret}}}}})
@@ -1227,7 +1228,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 			gwPart.Message = "This gateway, which this tool did not create, admits routes from every namespace, so any project editor could put a route on MaaS's gateway. The MaaS docs' gateway (setup-gateway.sh) lists the namespaces instead. This tool publishes nothing through it until its owner applies the command below; it does not change a gateway it did not create."
 			gwPart.Commands = gatewayAllowedRoutesCommand(gw.gw, maasGatewayNamespaces(infra, rec.projects()))
 		case gw.acceptedErr != "":
-			gwPart.State, gwPart.Message = "problem", "Not accepted: "+truncateMessage(gw.acceptedErr)
+			gwPart.State, gwPart.Message = "problem", "Not accepted: "+truncateText(gw.acceptedErr, 300)
 		case gw.programmed && gw.address != "":
 			gwPart.State, gwPart.Message = "ready", fmt.Sprintf("%s in %s, programmed at %s", maasGatewayName, inferenceGatewayNamespace, gw.address)
 		default:
@@ -1331,7 +1332,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		dscPart.ManagedByTool, dscPart.NotManaged = rec.DSCChanged, !rec.DSCChanged
 		switch dsc.ready {
 		case "False":
-			dscPart.State, dscPart.Message = "waiting", "modelsAsAService is Managed; not ready: "+truncateMessage(dsc.readyMsg)
+			dscPart.State, dscPart.Message = "waiting", "modelsAsAService is Managed; not ready: "+truncateText(dsc.readyMsg, 300)
 		default:
 			dscPart.State, dscPart.Message = "ready", "aigateway and modelsAsAService are Managed"
 		}
@@ -1377,7 +1378,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		case ai == "True" && tc == "True" && auth == "enforced":
 			tenantPart.State, tenantPart.Message = "ready", "Tenant models-as-a-service is Ready; the gateway's authentication is enforced"
 		case ai == "False" || tc == "False":
-			tenantPart.State, tenantPart.Message = "waiting", "Tenant not ready: "+truncateMessage(firstNonEmpty(aiMsg, tcMsg, "no message"))
+			tenantPart.State, tenantPart.Message = "waiting", "Tenant not ready: "+truncateText(firstNonEmpty(aiMsg, tcMsg, "no message"), 300)
 		case ai == "" || tc == "" || auth == "":
 			tenantPart.State, tenantPart.Message = "unknown", "Not reported yet"
 		default:
@@ -1444,8 +1445,8 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		slog.Debug("cannot list models for MaaS", "error", err)
 	}
 	rec, recErr := readMaaSRecord(c)
-	authPhase, _ := maasPhase(c, namespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access"))
-	subPhase, _ := maasPhase(c, namespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription"))
+	authPhase := maasPhase(c, namespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access"))
+	subPhase := maasPhase(c, namespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription"))
 	// Who may use the published models, and each one's limit: the
 	// subscription's (one an earlier build wrote reads as the free sample).
 	st.NoUnlimited = maasNoUnlimited(c)
@@ -1572,7 +1573,7 @@ func maasLeftovers(c *Client, m llmisvcObject, recorded bool) []string {
 		left = append(left, "the model's route through "+maasGatewayName)
 	} else if recorded {
 		parents, _, err := readModelRoute(c, m.Metadata.Namespace, m.Metadata.Name)
-		if err == nil && containsString(parents, inferenceGatewayNamespace+"/"+maasGatewayName) {
+		if err == nil && slices.Contains(parents, inferenceGatewayNamespace+"/"+maasGatewayName) {
 			left = append(left, "the model's route through "+maasGatewayName+" (KServe has not moved it yet)")
 		}
 	}
@@ -1644,12 +1645,12 @@ func readMaaSObject(c *Client, path string) (maasModelRefObject, bool, error) {
 }
 
 // maasPhase is a MaaS object's status.phase ("" when absent).
-func maasPhase(c *Client, path string) (string, bool) {
+func maasPhase(c *Client, path string) string {
 	obj, found, err := readMaaSObject(c, path)
 	if err != nil || !found {
-		return "", false
+		return ""
 	}
-	return obj.Status.Phase, true
+	return obj.Status.Phase
 }
 
 // MaaSPublishedIn reports whether anything of a publication of this tool's

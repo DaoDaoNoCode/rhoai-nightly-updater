@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -41,13 +42,13 @@ func (m *maasRun) fail(id, msg, code, activity string) (*types.OperationResponse
 	}
 	m.logs = append(m.logs, msg)
 	slog.Warn("maas operation stopped", "step", id, "reason", activity, "user", getUser(m.c))
-	recordModelsActivity(m.c, m.activity, fmt.Sprintf("%s (%s)", m.target, activity), false)
+	recordActivity(m.c, m.activity, fmt.Sprintf("%s (%s)", m.target, activity), false)
 	return &types.OperationResponse{Success: false, Message: msg, Logs: m.logs, ErrorCode: code}, nil
 }
 
 func (m *maasRun) done(msg string) (*types.OperationResponse, error) {
 	slog.Info("maas operation", "action", m.activity, "target", m.target, "user", getUser(m.c))
-	recordModelsActivity(m.c, m.activity, m.target, true)
+	recordActivity(m.c, m.activity, m.target, true)
 	return &types.OperationResponse{Success: true, Message: msg, Logs: m.logs}, nil
 }
 
@@ -1020,8 +1021,8 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 		if err != nil {
 			return false, err
 		}
-		a, _ := maasPhase(cc, maasAccessPath(c, "MaaSAuthPolicy"))
-		s, _ := maasPhase(cc, maasAccessPath(c, "MaaSSubscription"))
+		a := maasPhase(cc, maasAccessPath(c, "MaaSAuthPolicy"))
+		s := maasPhase(cc, maasAccessPath(c, "MaaSSubscription"))
 		msg := fmt.Sprintf("Model reference: %s; access: %s; subscription: %s", firstNonEmpty(r.Status.Phase, "pending"), firstNonEmpty(a, "pending"), firstNonEmpty(s, "pending"))
 		if msg != last {
 			last = msg
@@ -1153,7 +1154,7 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 		// maas-controller removes its finalizer after deleting the policies it
 		// generated for the model. Without maas-controller nothing would:
 		// the tool takes it off its own reference and says what may be left.
-		if meta, found, err := readObjectMeta(c, path); err == nil && found && meta.terminating() && containsString(meta.Finalizers, maasModelFinalizer) {
+		if meta, found, err := readObjectMeta(c, path); err == nil && found && meta.terminating() && slices.Contains(meta.Finalizers, maasModelFinalizer) {
 			if why := maasControllerGone(c); why != "" {
 				var rest []string
 				for _, f := range meta.Finalizers {
@@ -1211,7 +1212,7 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 		say("gateway", "success", "The gateway someone else made is not changed.")
 	case !gwPlan.found["Gateway"]:
 		say("gateway", "success", "There is no MaaS gateway to update.")
-	case containsString(rec.projects(), project):
+	case slices.Contains(rec.projects(), project):
 		say("gateway", "success", fmt.Sprintf("The MaaS gateway still admits routes from %s: another model of this tool is published there.", project))
 	default:
 		gwPlan.classMissing = false // only the gateway changes

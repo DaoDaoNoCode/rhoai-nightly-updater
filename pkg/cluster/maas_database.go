@@ -26,8 +26,8 @@ import (
 //
 //   - "external": the user's PostgreSQL. Only Secret maas-db-config is
 //     written, with the URL the user gives; the URL holds a password and is
-//     never returned, logged or recorded (redactURL on every message that
-//     could carry it).
+//     never returned, logged or recorded (maasDBPlan.redact on every
+//     message that could carry it).
 //   - "development": scripts/setup-database.sh as the docs' Development
 //     note runs it (maas-setup.md l.86-103; the script at
 //     opendatahub-io/models-as-a-service 08cf031, 2026-11-18): Secret
@@ -189,15 +189,6 @@ func secretForms(urls, passwords []string) []string {
 	return out
 }
 
-// redactURL replaces every form of a connection URL and of the passwords
-// in msg (secretForms) with [redacted]: an API server's error could quote
-// what was sent. Any non-empty password counts, however short: the
-// message may become hard to read, never revealing. Overlapping finds are
-// redacted as one.
-func redactURL(msg, connURL string, passwords ...string) string {
-	return redactDBSecrets(msg, []string{connURL}, passwords)
-}
-
 // redact removes every secret the plan holds from msg: the URL given, and
 // the development database's password with its URL.
 func (p *maasDBPlan) redact(msg string, more ...string) string {
@@ -209,7 +200,10 @@ func (p *maasDBPlan) redact(msg string, more ...string) string {
 }
 
 // redactDBSecrets replaces every form of the URLs and passwords
-// (secretForms) in msg; overlapping finds become one [redacted].
+// (secretForms) in msg with [redacted]: an API server's error could quote
+// what was sent. Any non-empty password counts, however short: the
+// message may become hard to read, never revealing. Overlapping finds
+// become one [redacted].
 func redactDBSecrets(msg string, urls, passwords []string) string {
 	covered := make([]bool, len(msg))
 	any := false
@@ -785,7 +779,7 @@ func maasDatabaseStatus(c *Client, rec maasRecord, infra string, cnpg operatorSt
 			part.State, part.Message = "waiting", "The development database is starting"
 		}
 	case maasDBCNPG:
-		out.parts = append(out.parts, cnpgStatusPart(c, rec, cnpg, cr))
+		out.parts = append(out.parts, cnpgStatusPart(rec, cnpg, cr))
 		part.ManagedByTool = true
 		switch {
 		case st.clusterFound && !toolOwned(st.cluster):
@@ -827,7 +821,7 @@ func maasDatabaseStatus(c *Client, rec maasRecord, infra string, cnpg operatorSt
 
 // cnpgStatusPart is the CloudNativePG operator's part, while the database
 // is a CloudNativePG one.
-func cnpgStatusPart(c *Client, rec maasRecord, cnpg operatorState, cr cnpgReadiness) types.MaaSPart {
+func cnpgStatusPart(rec maasRecord, cnpg operatorState, cr cnpgReadiness) types.MaaSPart {
 	p := types.MaaSPart{ID: "cnpg", Title: "CloudNativePG operator", DocURL: maasDocsBase + "install/maas-setup.md#database-setup"}
 	_, byTool := rec.Shared["cnpg"]
 	switch {

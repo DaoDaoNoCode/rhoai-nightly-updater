@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -228,7 +229,7 @@ func runPrereqs(t *testing.T, c *Client, feature string) (*types.OperationRespon
 
 func prereqStatus(t *testing.T, c *Client, feature string) types.FeaturePrerequisites {
 	t.Helper()
-	st, err := GetPrerequisitesStatus(c)
+	st, err := GetPrerequisitesStatusFor(c, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +319,7 @@ func TestPrerequisites_FreshClusterPerFeature(t *testing.T) {
 			// Nothing else of the cluster is touched: the other features'
 			// components stay Removed.
 			for _, other := range []string{"aipipelines", "mlflowoperator", "kserve", "ogx", "dashboard"} {
-				if !containsString(tc.components, other) && componentState(pc.f, other) != "Removed" {
+				if !slices.Contains(tc.components, other) && componentState(pc.f, other) != "Removed" {
 					t.Errorf("%s changed", other)
 				}
 			}

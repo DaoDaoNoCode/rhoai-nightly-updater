@@ -299,18 +299,6 @@ export function getDashboardState(signal?: AbortSignal): Promise<DashboardState>
   return request('/api/dashboard/state', { signal });
 }
 
-export function deployPR(pr: number): Promise<OperationResponse> {
-  return request('/api/dashboard/deploy-pr', {
-    method: 'POST',
-    body: JSON.stringify({ pr }),
-    acceptStatuses: [422],
-  });
-}
-
-export function deployDashboardMain(): Promise<OperationResponse> {
-  return request('/api/dashboard/deploy-main', { method: 'POST', acceptStatuses: [422] });
-}
-
 export function revertDashboard(): Promise<OperationResponse> {
   return request('/api/dashboard/revert', {
     method: 'POST',
@@ -810,19 +798,6 @@ export function getPipelineSampleSpec(): Promise<PipelineSampleSpec> {
   return request('/api/resources/samples/pipeline/spec');
 }
 
-/**
- * Unblock stuck rollouts. With a target only that Deployment is changed.
- * "Nothing to do" is a 422 with errorCode nothing_to_do, returned as a
- * result rather than thrown.
- */
-export function assistRollout(target?: { namespace: string; deployment: string }): Promise<OperationResponse> {
-  return request('/api/assist-rollout', {
-    method: 'POST',
-    body: target ? JSON.stringify(target) : undefined,
-    acceptStatuses: [422],
-  });
-}
-
 export function getDiagnostics(): Promise<DiagnosticResult> {
   return request('/api/diagnostics');
 }
@@ -923,8 +898,7 @@ export function streamDSCHardReset(
 }
 
 // ---------------------------------------------------------------------------
-// Secondary pages (Components, Dashboard Dev, Diagnostics): additive helpers
-// for the backend contracts of B2 and B4.
+// Secondary pages: Components, Dashboard Dev, Diagnostics.
 // ---------------------------------------------------------------------------
 
 export interface DSCPreviewResponse {
@@ -934,9 +908,9 @@ export interface DSCPreviewResponse {
 }
 
 /**
- * Assist one stuck rollout (B2). With a target, only that Deployment is
- * patched; "nothing to do" and refusals come back as 422 OperationResponse
- * bodies with an errorCode.
+ * Unblock stuck rollouts. With a target, only that Deployment is patched;
+ * "nothing to do" (errorCode nothing_to_do) and refusals come back as 422
+ * OperationResponse bodies with an errorCode, returned rather than thrown.
  */
 export function assistRolloutFor(target?: { namespace: string; deployment: string }): Promise<OperationResponse> {
   return request('/api/assist-rollout', {
@@ -946,7 +920,7 @@ export function assistRolloutFor(target?: { namespace: string; deployment: strin
   });
 }
 
-/** Deploy a dashboard PR build of the given flavor ("rhoai" default, or "odh") (B4). */
+/** Deploy a dashboard PR build of the given flavor ("rhoai" default, or "odh"). */
 export function deployDashboardPR(pr: number, flavor?: string): Promise<OperationResponse> {
   return request('/api/dashboard/deploy-pr', {
     method: 'POST',
@@ -986,7 +960,7 @@ export function getDashboardBuilds(signal?: AbortSignal): Promise<DashboardBuild
   return request('/api/dashboard/builds', { signal });
 }
 
-/** Deploy the latest main dashboard build of the given flavor (B4). */
+/** Deploy the latest main dashboard build of the given flavor. */
 export function deployDashboardLatestMain(flavor?: string): Promise<OperationResponse> {
   return request('/api/dashboard/deploy-main', {
     method: 'POST',

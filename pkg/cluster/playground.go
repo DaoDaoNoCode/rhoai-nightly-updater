@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -232,7 +233,7 @@ func genAIInstallAllowedWith(in interface{}, sources ...string) bool {
 	}
 	for _, m := range models {
 		src, _ := m["model_source_type"].(string)
-		if !containsString(sources, src) {
+		if !slices.Contains(sources, src) {
 			return false
 		}
 		for k := range m {
@@ -554,7 +555,7 @@ func maasSubscriptionsByModel(c *Client) map[string][]string {
 	for _, s := range list.Items {
 		for _, ref := range s.Spec.ModelRefs {
 			k := ref.Namespace + "/" + ref.Name
-			if !containsString(out[k], s.Metadata.Name) {
+			if !slices.Contains(out[k], s.Metadata.Name) {
 				out[k] = append(out[k], s.Metadata.Name)
 			}
 		}
@@ -879,7 +880,7 @@ func GetPlaygroundStatus(c *Client, project string) (*types.PlaygroundStatus, er
 	if err != nil {
 		return nil, err
 	}
-	if project != "" && !containsString(projects, project) {
+	if project != "" && !slices.Contains(projects, project) {
 		return nil, fmt.Errorf("project '%s' is not a data science project", project)
 	}
 	records, err := readPlaygroundRecords(c)
@@ -926,7 +927,7 @@ func GetPlaygroundStatus(c *Client, project string) (*types.PlaygroundStatus, er
 		}()
 	}
 	fo := readPlaygroundFanOut(c, api, projects, records)
-	if project != "" && !containsString(fo.projects, project) {
+	if project != "" && !slices.Contains(fo.projects, project) {
 		// Past the bound: the selected project is read on its own.
 		fo = fo.with(c, api, project, records)
 	}
@@ -953,7 +954,7 @@ func GetPlaygroundStatus(c *Client, project string) (*types.PlaygroundStatus, er
 		}
 	}
 	for p := range records {
-		if !seen[p] && containsString(fo.projects, p) {
+		if !seen[p] && slices.Contains(fo.projects, p) {
 			if _, read := fo.servers[p]; !read {
 				// Its state could not be read: unknown, not absent.
 				item := playgroundItem(p, &genAIServer{}, true)
@@ -1121,7 +1122,7 @@ func (p *playgroundRun) fail(id, msg, code, activity string) (*types.OperationRe
 
 func (p *playgroundRun) record(detail string, success bool) {
 	RecordActivity(p.c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(p.c),
 		Action:    p.action + "-playground",
 		Detail:    detail,

@@ -213,29 +213,29 @@ func dashboardBuildTags(mode string, pr int, flavor string) []string {
 }
 
 // parseDashboardBuild classifies an image of repo as a PR or main build and
-// returns its flavor and tag. A main build may run under its floating tag or
-// the commit tag Deploy pins it to. Other images (release builds) return kind "".
-func parseDashboardBuild(repo, image string) (kind string, pr int, flavor, tag string) {
+// returns its flavor. A main build may run under its floating tag or the
+// commit tag Deploy pins it to. Other images (release builds) return kind "".
+func parseDashboardBuild(repo, image string) (kind string, pr int, flavor string) {
 	prefix := "quay.io/" + repo + ":"
 	if !strings.HasPrefix(image, prefix) {
-		return "", 0, "", ""
+		return "", 0, ""
 	}
-	tag = strings.SplitN(strings.TrimPrefix(image, prefix), "@", 2)[0]
+	tag := strings.SplitN(strings.TrimPrefix(image, prefix), "@", 2)[0]
 	switch {
 	case tag == "odh-stable", dashboardCommitSHAPattern.MatchString(tag):
-		return "main", 0, DashboardFlavorRHOAI, tag
+		return "main", 0, DashboardFlavorRHOAI
 	case tag == "main", dashboardODHCommitTagPattern.MatchString(tag):
-		return "main", 0, DashboardFlavorODH, tag
+		return "main", 0, DashboardFlavorODH
 	case strings.HasPrefix(tag, "odh-pr-"):
 		if n, err := strconv.Atoi(strings.TrimPrefix(tag, "odh-pr-")); err == nil && n > 0 {
-			return "pr", n, DashboardFlavorRHOAI, tag
+			return "pr", n, DashboardFlavorRHOAI
 		}
 	case strings.HasPrefix(tag, "pr-"):
 		if n, err := strconv.Atoi(strings.TrimPrefix(tag, "pr-")); err == nil && n > 0 {
-			return "pr", n, DashboardFlavorODH, tag
+			return "pr", n, DashboardFlavorODH
 		}
 	}
-	return "", 0, "", ""
+	return "", 0, ""
 }
 
 func dashboardOwner(d dashboardDeployment) string {
@@ -615,7 +615,7 @@ func populateDashboardDevStateWithOperator(c *Client, state *types.DashboardStat
 		if image.CurrentImage != image.DefaultImage {
 			state.DefaultImagesRestored = false
 		}
-		kind, n, flavor, _ := parseDashboardBuild(image.Repository, image.CurrentImage)
+		kind, n, flavor := parseDashboardBuild(image.Repository, image.CurrentImage)
 		switch {
 		case image.CurrentImage == image.DefaultImage:
 			image.Running = "release"
@@ -968,25 +968,25 @@ func pinDashboardMainBuild(ctx context.Context, repo, floatingTag, image string)
 	labels, err := imageLabelsWithAuth(labelsCtx, "", image, false)
 	cancel()
 	if err != nil {
-		slog.Debug("dashboard main build keeps its floating tag: labels unreadable", "image", truncateForLog(image), "error", err)
+		slog.Debug("dashboard main build keeps its floating tag: labels unreadable", "image", truncateText(image, 80), "error", err)
 		return image
 	}
 	commitTag := dashboardCommitTag(floatingTag, labels.GitCommit)
 	if commitTag == "" {
-		slog.Debug("dashboard main build keeps its floating tag: no commit label", "image", truncateForLog(image), "commit", labels.GitCommit)
+		slog.Debug("dashboard main build keeps its floating tag: no commit label", "image", truncateText(image, 80), "commit", labels.GitCommit)
 		return image
 	}
 	pinned, found, err := resolveDashboardBuild(ctx, repo, commitTag)
 	switch {
 	case err != nil:
-		slog.Debug("dashboard main build keeps its floating tag: commit tag lookup failed", "image", truncateForLog(image), "tag", commitTag, "error", err)
+		slog.Debug("dashboard main build keeps its floating tag: commit tag lookup failed", "image", truncateText(image, 80), "tag", commitTag, "error", err)
 		return image
 	case !found:
-		slog.Debug("dashboard main build keeps its floating tag: commit tag not published", "image", truncateForLog(image), "tag", commitTag)
+		slog.Debug("dashboard main build keeps its floating tag: commit tag not published", "image", truncateText(image, 80), "tag", commitTag)
 		return image
 	}
 	if _, pinnedDigest, _ := extractRepoAndDigest(pinned); pinnedDigest != digest {
-		slog.Debug("dashboard main build keeps its floating tag: commit tag has another digest", "image", truncateForLog(image), "tag", commitTag, "tagDigest", pinnedDigest)
+		slog.Debug("dashboard main build keeps its floating tag: commit tag has another digest", "image", truncateText(image, 80), "tag", commitTag, "tagDigest", pinnedDigest)
 		return image
 	}
 	return pinned
@@ -1042,7 +1042,7 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 	if err != nil {
 		return fail(err.Error()+". Click Revert to default to restore operator management, then deploy again.", "prerequisites")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	user := getUser(c)
 	newSession := session == nil
 	if newSession {
@@ -1352,7 +1352,7 @@ func revertDashboardOperatorTo(c *Client) (*types.OperationResponse, int) {
 		if len(failures) > 0 {
 			keep = session
 		}
-		now := time.Now().UTC().Format(time.RFC3339)
+		now := nowRFC3339()
 		detail := fmt.Sprintf("Resumed dashboard-operator (%d replicas)", replicas)
 		action := &types.DashboardDevAction{Action: "revert", By: getUser(c), At: now, Detail: detail}
 		if err := patchDashboardOperator(c, operator, replicas, keep, action); err != nil {
@@ -1419,7 +1419,7 @@ func legacyDashboardDevActive(c *Client) (bool, error) {
 	}
 	for _, ct := range d.Spec.Template.Spec.Containers {
 		if repo, ok := prContainerRepos[ct.Name]; ok {
-			if kind, _, _, _ := parseDashboardBuild(repo, ct.Image); kind != "" {
+			if kind, _, _ := parseDashboardBuild(repo, ct.Image); kind != "" {
 				return true, nil
 			}
 		}

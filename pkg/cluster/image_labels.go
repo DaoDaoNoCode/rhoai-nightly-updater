@@ -218,7 +218,7 @@ func resolveImageLabels(ctx context.Context, basicAuth string, refs []string, wi
 			labels, err := imageLabelsWithAuth(imageCtx, basicAuth, ref, withCommitDate)
 			if err != nil {
 				if !errors.Is(err, errNoImageLabels) {
-					slog.Warn("failed to fetch image labels", "image", truncateForLog(ref), "error", err)
+					slog.Warn("failed to fetch image labels", "image", truncateText(ref, 80), "error", err)
 				}
 				return
 			}
@@ -651,12 +651,4 @@ func requestCommitDate(ctx context.Context, key string) (string, error) {
 	}
 	commitDateCache.Add(key, date, 0)
 	return date, nil
-}
-
-// truncateForLog shortens an image reference for log output.
-func truncateForLog(s string) string {
-	if len(s) > 80 {
-		return s[:77] + "..."
-	}
-	return s
 }

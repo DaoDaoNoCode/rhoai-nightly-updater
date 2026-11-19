@@ -19,7 +19,7 @@ test('Dashboard Dev sends main, PR and revert requests and retains partial-failu
       return new Response(JSON.stringify(partial), { status: 422, headers: { 'Content-Type': 'application/json' } });
     },
   });
-  for (const result of [await exports.deployDashboardMain(), await exports.deployPR(123), await exports.revertDashboard()]) {
+  for (const result of [await exports.deployDashboardLatestMain(), await exports.deployDashboardPR(123), await exports.revertDashboard()]) {
     assert.deepEqual(result, partial);
   }
   assert.deepEqual(calls.map(c => c.url), ['/api/dashboard/deploy-main', '/api/dashboard/deploy-pr', '/api/dashboard/revert']);

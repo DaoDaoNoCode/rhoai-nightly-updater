@@ -34,4 +34,3 @@ export const TooltipButton: React.FC<TooltipButtonProps> = ({ disabledReason, is
 };
 
 export const NO_PERMISSION_REASON = "You don't have permission to change this cluster. Contact a cluster admin.";
-export const OPERATION_RUNNING_REASON = "Another operation is in progress. Wait for it to finish.";

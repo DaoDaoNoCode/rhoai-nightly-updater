@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -69,7 +70,7 @@ func packageManifestStatus(pkg string, p fakePackage) string {
 		if len(p.installModes) > 0 {
 			var modes []interface{}
 			for _, m := range []string{"OwnNamespace", "SingleNamespace", "MultiNamespace", "AllNamespaces"} {
-				modes = append(modes, map[string]interface{}{"type": m, "supported": containsString(p.installModes, m)})
+				modes = append(modes, map[string]interface{}{"type": m, "supported": slices.Contains(p.installModes, m)})
 			}
 			desc["installModes"] = modes
 		}

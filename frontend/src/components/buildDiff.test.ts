@@ -36,7 +36,7 @@ describe("installedBuild", () => {
   });
 });
 
-describe("compareBuilds (A08-5)", () => {
+describe("compareBuilds", () => {
   const from = [
     ri("odh_dashboard_image", "r/dash@sha256:1", "aaaaaaa1"),
     ri("odh_dashboard_operator_image", "r/dop@sha256:1", "aaaaaaa1"),
