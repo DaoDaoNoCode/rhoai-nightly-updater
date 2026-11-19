@@ -25,9 +25,8 @@ FROM ${DOCKER_HUB}/library/golang:1.27.4-alpine@sha256:0a5f7fe796599ff4876059874
 ARG GIT_SHA=unknown
 ARG VERSION=dev
 ARG BUILD_DATE=unknown
-# Set by podman/buildah and BuildKit from --platform. Kaniko (GitLab CI)
-# does not set it (v1.23.2 has no automatic platform ARGs), so amd64 is the
-# default.
+# Set by podman/buildah (GitLab CI passes --platform linux/amd64) and
+# BuildKit from --platform; amd64 when a builder does not set it.
 ARG TARGETARCH
 WORKDIR /app
 COPY go.mod go.sum* ./

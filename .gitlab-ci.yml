@@ -11,7 +11,7 @@
 # pull :latest stay on their major line until someone upgrades on purpose.
 # Release logic lives in scripts/release.sh (tested by scripts/test-release.sh).
 # Every image job needs the Go and frontend test jobs of its pipeline and
-# builds the Containerfile with RUN_CHECKS=false (see .kaniko-build).
+# builds the Containerfile with RUN_CHECKS=false (see .image-build).
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -51,9 +51,9 @@ variables:
   GO_IMAGE: $DOCKER_HUB/library/golang:1.27.4@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d
   NODE_IMAGE: $DOCKER_HUB/library/node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
   GOLANGCI_IMAGE: $DOCKER_HUB/golangci/golangci-lint:v2.14.0@sha256:ad862ba6b3798cbe0fd9fd7408d498fd74fbd2623a92406b2fd3898faf0bf98f
-  # Kaniko is archived upstream; it is kept pinned until a replacement
-  # (for example buildah) is validated on these runners.
-  KANIKO_IMAGE: gcr.io/kaniko-project/executor:v1.23.2-debug@sha256:c3109d5926a997b100c4343944e06c6b30a6804b2f9abe0994d3de6ef92b028e
+  # buildah builds the image (scripts/ci-build-image.sh); the multi-arch
+  # index of the upstream image, which rebuilds the tag: the digest pins it.
+  BUILDAH_IMAGE: quay.io/buildah/stable:v1.46.1@sha256:12132e724a8a5c7e6970c3fced03f3db6c8077d9afa08803df274df4cf3de846
   # crane (go-containerregistry) moves and reads tags in release jobs; it is
   # installed with `go install`, which checks the module against the
   # checksum database, from a Go cache of its own (.crane).
@@ -213,56 +213,39 @@ release-guard:
 # the test jobs of this pipeline, which ran those checks (and more: -race,
 # govulncheck, golangci-lint) on this same commit; a failing check stops the
 # pipeline before any image is built. `make build` keeps them on.
-.kaniko-build:
+#
+# The build is scripts/ci-build-image.sh: buildah, chroot isolation, vfs
+# storage, linux/amd64, no layer cache (each job starts from an empty
+# storage, as kaniko did without --cache). buildah's RUN isolation needs
+# mounts in a user namespace, which Docker's default seccomp profile
+# refuses: the job needs a runner that allows them, such as GitLab.com's
+# hosted saas-linux-* runners (privileged, one ephemeral VM per job), where
+# untagged jobs run. On a runner with Docker's default profile the build
+# fails at the first RUN ("unshare(CLONE_NEWUSER): Operation not
+# permitted"); it needs no privileged mode of its own, only
+# --security-opt seccomp=unconfined plus apparmor=unconfined (or
+# label=disable under SELinux) in that runner's configuration.
+#
+# The build never gets the release credentials (QUAY_USER/QUAY_TOKEN): the
+# script does not read them, and build-main and release-build log in to no
+# registry but the Dependency Proxy (when DOCKER_HUB points at it); the crane
+# jobs below push their tarballs. build-branch logs in to BRANCH_IMAGE's
+# registry only after the build. The RUN steps (npm ci with its packages'
+# install scripts, go mod download) run chrooted with buildah's default
+# capabilities: they do not see the auth file and cannot read the job's
+# process environments in /proc.
+.image-build:
   stage: build
-  image:
-    name: $KANIKO_IMAGE
-    entrypoint: [""]
-  variables:
-    # Set to "true" by build-branch only: kaniko logs in to BRANCH_IMAGE's
-    # registry with QUAY_BRANCH_USER/QUAY_BRANCH_TOKEN, when all three are
-    # set.
-    BRANCH_PUSH: "false"
-  # Kaniko never gets the release credentials (QUAY_USER/QUAY_TOKEN): the
-  # build's RUN steps (npm ci with its packages' install scripts, go mod
-  # download) can read /kaniko/.docker/config.json. build-main and
-  # release-build push nothing; the crane jobs below push their tarballs.
-  # Kaniko's logins: build-branch's own registry (BRANCH_PUSH), and the
-  # Dependency Proxy when DOCKER_HUB points at it (the Containerfile's
-  # Docker Hub bases come through it), with the job's proxy credentials.
-  before_script:
-    - |
-      login() { printf '"%s":{"auth":"%s"}' "$1" "$(printf '%s:%s' "$2" "$3" | base64 -w0)"; }
-      auths=""
-      if [ "$BRANCH_PUSH" = true ] && [ -n "${BRANCH_IMAGE:-}" ] && [ -n "${QUAY_BRANCH_USER:-}" ] && [ -n "${QUAY_BRANCH_TOKEN:-}" ]; then
-        auths=$(login "${BRANCH_IMAGE%%/*}" "$QUAY_BRANCH_USER" "$QUAY_BRANCH_TOKEN")
-      fi
-      hub=${DOCKER_HUB%%/*}
-      if [ -n "${CI_DEPENDENCY_PROXY_SERVER:-}" ] && { [ "$hub" = "$CI_DEPENDENCY_PROXY_SERVER" ] || [ "$hub" = "${CI_DEPENDENCY_PROXY_SERVER%:443}" ]; }; then
-        auths="${auths:+$auths,}$(login "$hub" "$CI_DEPENDENCY_PROXY_USER" "$CI_DEPENDENCY_PROXY_PASSWORD")"
-      fi
-      mkdir -p /kaniko/.docker
-      printf '{"auths":{%s}}\n' "$auths" > /kaniko/.docker/config.json
+  image: $BUILDAH_IMAGE
 
 # Push to main → an image tarball; publish-main pushes it as the write-once
 # 8-character commit tag (CI_COMMIT_SHORT_SHA) and moves :main. Never
 # :latest: that only moves with releases.
 build-main:
-  extends: .kaniko-build
+  extends: .image-build
   needs: [go, golangci-lint, frontend-checks, frontend-test, frontend-build, release-scripts, chart, docs]
   script:
-    - >-
-      /kaniko/executor
-      --context=$CI_PROJECT_DIR
-      --dockerfile=Containerfile
-      --build-arg GIT_SHA=$CI_COMMIT_SHA
-      --build-arg VERSION=$CI_COMMIT_SHORT_SHA
-      --build-arg BUILD_DATE=$CI_COMMIT_TIMESTAMP
-      --build-arg RUN_CHECKS=false
-      --build-arg DOCKER_HUB=$DOCKER_HUB
-      --destination=$IMAGE:$CI_COMMIT_SHORT_SHA
-      --no-push
-      --tar-path=image.tar
+    - sh scripts/ci-build-image.sh tarball "$CI_COMMIT_SHORT_SHA" image.tar
   artifacts:
     paths: [image.tar]
     expire_in: 1 day
@@ -277,32 +260,10 @@ build-main:
 # uses QUAY_USER/QUAY_TOKEN, which can push the release tags: anyone who
 # can push a branch can run this job with code of their own.
 build-branch:
-  extends: .kaniko-build
+  extends: .image-build
   needs: [go, golangci-lint, frontend-checks, frontend-test, frontend-build, release-scripts, chart, docs]
-  variables:
-    BRANCH_PUSH: "true"
   script:
-    - |
-      if [ -n "${BRANCH_IMAGE:-}" ] && [ -n "${QUAY_BRANCH_USER:-}" ] && [ -n "${QUAY_BRANCH_TOKEN:-}" ]; then
-        case "$BRANCH_IMAGE" in
-        "$IMAGE" | *@* | */*:*)
-          echo "BRANCH_IMAGE must be a repository of its own, without a tag or digest, not $BRANCH_IMAGE (IMAGE is $IMAGE)."
-          exit 1 ;;
-        esac
-        set -- "--destination=$BRANCH_IMAGE:$CI_COMMIT_REF_SLUG"
-      else
-        echo "BRANCH_IMAGE, QUAY_BRANCH_USER or QUAY_BRANCH_TOKEN is not set: the image is built, not pushed (CONTRIBUTING.md, Automatic Image Publishing)."
-        set -- --no-push
-      fi
-      /kaniko/executor \
-        "--context=$CI_PROJECT_DIR" \
-        --dockerfile=Containerfile \
-        --build-arg "GIT_SHA=$CI_COMMIT_SHA" \
-        --build-arg "VERSION=$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA" \
-        --build-arg "BUILD_DATE=$CI_COMMIT_TIMESTAMP" \
-        --build-arg RUN_CHECKS=false \
-        --build-arg "DOCKER_HUB=$DOCKER_HUB" \
-        "$@"
+    - sh scripts/ci-build-image.sh branch "$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA"
   rules:
     - if: $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
       when: manual
@@ -312,21 +273,10 @@ build-branch:
 # pushes it under the publish lock, so the "tag already exists" check and
 # the push cannot interleave with another release job.
 release-build:
-  extends: .kaniko-build
+  extends: .image-build
   needs: [go, golangci-lint, frontend-checks, frontend-test, frontend-build, release-scripts, chart, docs, release-guard]
   script:
-    - >-
-      /kaniko/executor
-      --context=$CI_PROJECT_DIR
-      --dockerfile=Containerfile
-      --build-arg GIT_SHA=$CI_COMMIT_SHA
-      --build-arg VERSION=$CI_COMMIT_TAG
-      --build-arg BUILD_DATE=$CI_COMMIT_TIMESTAMP
-      --build-arg RUN_CHECKS=false
-      --build-arg DOCKER_HUB=$DOCKER_HUB
-      --destination=$IMAGE:$CI_COMMIT_TAG
-      --no-push
-      --tar-path=image.tar
+    - sh scripts/ci-build-image.sh tarball "$CI_COMMIT_TAG" image.tar
   artifacts:
     paths: [image.tar]
     expire_in: 1 day
