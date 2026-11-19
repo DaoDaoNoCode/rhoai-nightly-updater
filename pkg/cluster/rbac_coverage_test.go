@@ -625,7 +625,87 @@ func (r resolver) resolveSelector(x *ast.SelectorExpr) []string {
 		return true
 	})
 	if len(out) == 0 {
+		out = r.resolveStepField(base.Name, x.Sel.Name)
+	}
+	if len(out) == 0 {
 		return []string{unknownPart}
+	}
+	return out
+}
+
+// resolveStepField resolves base.field where base is a parameter of type *T,
+// the state a run's steps share (maasPublish, maasUnpublish, ...): one step
+// sets the field (base.field = v) and a later one reads it. It resolves v
+// in every scanned function that takes a *T and assigns the field.
+func (r resolver) resolveStepField(base, field string) []string {
+	typ := pointerParamType(r.fn, base)
+	if typ == "" || r.depth > rbacResolveDepth {
+		return nil
+	}
+	var out []string
+	for fn := range r.p.fileOf {
+		if fn.Body == nil || !r.p.scans(fn) {
+			continue
+		}
+		params := pointerParamsOf(fn, typ)
+		if len(params) == 0 {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			s, ok := n.(*ast.AssignStmt)
+			if !ok || len(s.Lhs) != len(s.Rhs) {
+				return true
+			}
+			for i, lhs := range s.Lhs {
+				sel, ok := lhs.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != field {
+					continue
+				}
+				if id, ok := sel.X.(*ast.Ident); ok && params[id.Name] {
+					out = append(out, resolver{r.p, fn, r.depth + 1}.resolve(s.Rhs[i])...)
+				}
+			}
+			return true
+		})
+	}
+	return out
+}
+
+// pointerParamType is T when fn's parameter name has type *T, else "".
+func pointerParamType(fn *ast.FuncDecl, name string) string {
+	if fn == nil {
+		return ""
+	}
+	for _, f := range fn.Type.Params.List {
+		for _, n := range f.Names {
+			if n.Name != name {
+				continue
+			}
+			if star, ok := f.Type.(*ast.StarExpr); ok {
+				if id, ok := star.X.(*ast.Ident); ok {
+					return id.Name
+				}
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+// pointerParamsOf names fn's parameters of type *typ.
+func pointerParamsOf(fn *ast.FuncDecl, typ string) map[string]bool {
+	var out map[string]bool
+	for _, f := range fn.Type.Params.List {
+		if star, ok := f.Type.(*ast.StarExpr); ok {
+			if id, ok := star.X.(*ast.Ident); ok && id.Name == typ {
+				for _, n := range f.Names {
+					if out == nil {
+						out = map[string]bool{}
+					}
+					out[n.Name] = true
+				}
+			}
+		}
 	}
 	return out
 }
