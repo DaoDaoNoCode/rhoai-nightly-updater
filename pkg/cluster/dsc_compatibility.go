@@ -299,6 +299,9 @@ func (g *removalGuard) blockers(path string) []string {
 		reasons = g.rc.blockers(module)
 		g.byName[module] = reasons
 	}
+	if why := g.rc.maasBlocker(path); why != "" {
+		return append(append([]string{}, reasons...), why)
+	}
 	return reasons
 }
 

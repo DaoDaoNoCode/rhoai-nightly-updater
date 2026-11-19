@@ -358,7 +358,32 @@ func dscMaaSOwned(d maasDSC) bool {
 // MaaSSubscriptions and MaaSAuthPolicies (in models-as-a-service), that
 // this tool did not create. An API that is not served lists nothing.
 func foreignMaaSObjects(c *Client) ([]string, error) {
+	objs, err := listMaaSObjects(c)
+	if err != nil {
+		return nil, err
+	}
 	var out []string
+	for _, o := range objs {
+		if !toolOwned(o.meta) {
+			out = append(out, fmt.Sprintf("%s %s/%s", o.kind, o.meta.Namespace, o.meta.Name))
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// maasObject is one MaaS object listMaaSObjects found.
+type maasObject struct {
+	kind string
+	meta objectMeta
+}
+
+// listMaaSObjects lists the MaaSModelRefs (cluster-wide), and the
+// MaaSSubscriptions and MaaSAuthPolicies (in models-as-a-service, where
+// maas-controller reads them), whoever made them. An API that is not
+// served lists nothing; any other failure is returned.
+func listMaaSObjects(c *Client) ([]maasObject, error) {
+	var out []maasObject
 	for _, l := range []struct{ kind, path string }{
 		{"MaaSModelRef", "/apis/" + maasAPI(c) + "/maasmodelrefs"},
 		{"MaaSSubscription", namespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, "")},
@@ -380,12 +405,9 @@ func foreignMaaSObjects(c *Client) ([]string, error) {
 			return nil, fmt.Errorf("parse the %s list: %w", l.kind, err)
 		}
 		for _, it := range list.Items {
-			if !toolOwned(it.Metadata) {
-				out = append(out, fmt.Sprintf("%s %s/%s", l.kind, it.Metadata.Namespace, it.Metadata.Name))
-			}
+			out = append(out, maasObject{kind: l.kind, meta: it.Metadata})
 		}
 	}
-	sort.Strings(out)
 	return out, nil
 }
 

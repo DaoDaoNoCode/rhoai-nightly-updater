@@ -117,7 +117,7 @@ func decodeOps(t *testing.T, body string) []map[string]interface{} {
 // the plan's UID and token.
 func reviewedToggle(t *testing.T, c *Client, req types.DSCToggleRequest) (*types.OperationResponse, error) {
 	t.Helper()
-	plan, err := PlanDSCChange(c, "toggle", req.Path, req.To, req.WithParent)
+	plan, err := PlanDSCChange(c, "toggle", req.Path, req.To, req.WithParent, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +419,7 @@ func TestToggleToManagedUnderARemovedParent(t *testing.T) {
 		setPath(t, dsc, "spec.components.aigateway.managementState", "Removed")
 		setPath(t, dsc, "spec.components.aigateway.modelsAsAService.managementState", "Removed")
 	})
-	plan, err := PlanDSCChange(c, "toggle", "aigateway.batchGateway", "Managed", false)
+	plan, err := PlanDSCChange(c, "toggle", "aigateway.batchGateway", "Managed", false, false)
 	if err != nil || plan.Code != "parent_removed" || plan.ParentPath != "aigateway" {
 		t.Fatalf("plan = %+v, %v", plan, err)
 	}
@@ -430,7 +430,7 @@ func TestToggleToManagedUnderARemovedParent(t *testing.T) {
 	if dry, real := patchesTo(f, dscV3Path); len(dry)+len(real) != 0 {
 		t.Fatal("patched without the parent")
 	}
-	plan, _ = PlanDSCChange(c, "toggle", "aigateway.batchGateway", "Managed", true)
+	plan, _ = PlanDSCChange(c, "toggle", "aigateway.batchGateway", "Managed", true, false)
 	effects := map[string]string{}
 	for _, ch := range plan.Changes {
 		effects[ch.Path] = ch.Effect
@@ -457,7 +457,7 @@ func TestToggleToManagedUnderARemovedParent(t *testing.T) {
 func TestToggleToRemovedFailsClosed(t *testing.T) {
 	f, c := managerWorld(t, nil)
 	f.put(rhodsOperator, map[string]interface{}{"status": map[string]interface{}{"readyReplicas": 0}})
-	plan, err := PlanDSCChange(c, "toggle", "ray", "Removed", false)
+	plan, err := PlanDSCChange(c, "toggle", "ray", "Removed", false, false)
 	if err != nil || len(plan.Blocked) != 1 || plan.Blocked[0].Component != "ray" || !strings.Contains(strings.Join(plan.Blocked[0].Reasons, " "), "RHOAI operator must be running to apply the change and clean up after it: Deployment redhat-ods-operator/rhods-operator has no ready pod") {
 		t.Fatalf("plan = %+v, %v", plan, err)
 	}
@@ -507,7 +507,7 @@ func TestDSCChangesRefusedUnderArgoCDAndACM(t *testing.T) {
 				t.Fatalf("toggle = %+v", res)
 			}
 			for _, action := range []string{"fix", "soft-reset", "hard-reset"} {
-				if p, _ := PlanDSCChange(c, action, "", "", false); p.Code != ErrorCodeGitOpsManaged {
+				if p, _ := PlanDSCChange(c, action, "", "", false, false); p.Code != ErrorCodeGitOpsManaged {
 					t.Fatalf("%s plan = %+v", action, p)
 				}
 			}
@@ -525,7 +525,7 @@ func TestFixAddsExactlyThePreviewedToggles(t *testing.T) {
 		setPath(t, dsc, "spec.components.dashboard.standard", nil)
 		setPath(t, dsc, "spec.components.databaseservice", nil)
 	})
-	plan, err := PlanDSCChange(c, "fix", "", "", false)
+	plan, err := PlanDSCChange(c, "fix", "", "", false, false)
 	if err != nil || plan.Refusal != "" || plan.Token == "" {
 		t.Fatalf("plan = %+v, %v", plan, err)
 	}
@@ -559,7 +559,7 @@ func TestFixAddsExactlyThePreviewedToggles(t *testing.T) {
 		t.Fatalf("still mismatched: %+v", m.Mismatches)
 	}
 	// The DSC changed after the preview: refused.
-	plan2, _ := PlanDSCChange(c, "fix", "", "", false)
+	plan2, _ := PlanDSCChange(c, "fix", "", "", false, false)
 	if plan2.Code != "nothing_to_do" {
 		t.Fatalf("plan after fix = %+v", plan2)
 	}
@@ -573,7 +573,7 @@ func TestSoftResetChangesOnlyWhatDiffersAndKeepsProtectedFields(t *testing.T) {
 		setPath(t, dsc, "spec.components.aiHub.instancesNamespace", "my-registries")
 		setPath(t, dsc, "spec.components.kserve.rawDeploymentServiceConfig", "Headed")
 	})
-	plan, err := PlanDSCChange(c, "soft-reset", "", "", false)
+	plan, err := PlanDSCChange(c, "soft-reset", "", "", false, false)
 	if err != nil || plan.Refusal != "" || len(plan.Blocked) != 0 {
 		t.Fatalf("plan = %+v, %v", plan, err)
 	}
@@ -585,7 +585,7 @@ func TestSoftResetChangesOnlyWhatDiffersAndKeepsProtectedFields(t *testing.T) {
 	if !reflect.DeepEqual(paths, want) {
 		t.Fatalf("changes = %v, want %v", paths, want)
 	}
-	res, err := SoftResetDSC(c, types.DSCPlanRequest{Name: "default-dsc", UID: plan.UID, Token: plan.Token})
+	res, err := SoftResetDSC(c, types.DSCPlanRequest{Name: "default-dsc", UID: plan.UID, Token: plan.Token, KeepEnabled: boolPtr(false)})
 	if err != nil || !res.Success {
 		t.Fatalf("reset = %+v, %v", res, err)
 	}
@@ -614,11 +614,11 @@ func TestSoftResetChangesOnlyWhatDiffersAndKeepsProtectedFields(t *testing.T) {
 func TestSoftResetRefusesWhileARemovalIsBlocked(t *testing.T) {
 	f, c := managerWorld(t, nil)
 	f.put(rhodsOperator, map[string]interface{}{"status": map[string]interface{}{"readyReplicas": 0}})
-	plan, _ := PlanDSCChange(c, "soft-reset", "", "", false)
+	plan, _ := PlanDSCChange(c, "soft-reset", "", "", false, false)
 	if len(plan.Blocked) == 0 || plan.Blocked[0].Component != "aigateway" {
 		t.Fatalf("plan = %+v", plan)
 	}
-	res, _ := SoftResetDSC(c, types.DSCPlanRequest{Name: "default-dsc", UID: plan.UID, Token: plan.Token})
+	res, _ := SoftResetDSC(c, types.DSCPlanRequest{Name: "default-dsc", UID: plan.UID, Token: plan.Token, KeepEnabled: boolPtr(false)})
 	if res.Success || res.ErrorCode != "prerequisites" {
 		t.Fatalf("reset = %+v", res)
 	}

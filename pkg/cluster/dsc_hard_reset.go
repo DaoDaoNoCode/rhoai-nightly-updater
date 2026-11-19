@@ -77,12 +77,15 @@ func managedPlatformRefusal(platform string) string {
 }
 
 // newDefaultObject is the DataScienceCluster a hard reset creates: the
-// release default (alm-examples) with the old DSC's name and the values of
+// release default (alm-examples) with components (resetTarget: the release
+// default's, with the toggles kept), the old DSC's name and the values of
 // its protected fields (the workbench and AI Hub namespaces), where the
 // default has the object that holds them.
-func (v *dscView) newDefaultObject() map[string]interface{} {
+func (v *dscView) newDefaultObject(comps map[string]interface{}) map[string]interface{} {
 	spec, _ := normalizeJSON(v.defaults).(map[string]interface{})
-	comps, _ := spec["components"].(map[string]interface{})
+	if comps, _ = normalizeJSON(comps).(map[string]interface{}); len(comps) > 0 {
+		spec["components"] = comps
+	}
 	fields := make([]string, 0, len(v.protected))
 	for f := range v.protected {
 		fields = append(fields, f)
@@ -106,8 +109,11 @@ func (v *dscView) newDefaultObject() map[string]interface{} {
 	return map[string]interface{}{"apiVersion": v.apiVersion, "kind": "DataScienceCluster", "metadata": meta, "spec": spec}
 }
 
-func (v *dscView) planHardReset(c *Client) *dscPlanned {
+// planHardReset plans the hard reset; keep keeps the components the user
+// turned on (resetTarget).
+func (v *dscView) planHardReset(c *Client, keep bool) *dscPlanned {
 	p := v.newPlan("hard-reset")
+	p.plan.KeepEnabled = keep
 	if msg, code := v.readOnlyReason(); msg != "" {
 		return p.refuse(msg, code)
 	}
@@ -120,7 +126,7 @@ func (v *dscView) planHardReset(c *Client) *dscPlanned {
 	if why := operatorDeploymentsBlocker(c); why != "" {
 		return p.refuse("The RHOAI operator removes the DataScienceCluster's finalizer, so the deletion would hang: "+why+". Nothing was changed.", "prerequisites")
 	}
-	obj := v.newDefaultObject()
+	obj := v.newDefaultObject(v.resetTarget(p.plan, keep))
 	text, err := yaml.Marshal(obj)
 	if err != nil {
 		return p.refuse("Cannot build the new DataScienceCluster: "+err.Error(), "internal")
@@ -138,7 +144,7 @@ func (v *dscView) planHardReset(c *Client) *dscPlanned {
 		}
 	}
 	p.plan.Blocked, p.plan.Warnings = v.removalBlocks(c, v.components(), newComps, true)
-	p.plan.Token = planToken("hard-reset", v.uid, v.apiVersion, obj)
+	p.plan.Token = planToken("hard-reset", v.uid, v.apiVersion, obj, keep)
 	return p
 }
 
@@ -184,11 +190,15 @@ func finishHelp(yamlText string) string {
 func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent)) (*types.OperationResponse, error) {
 	r := &hardResetRun{emit: emit}
 	r.step("check", "running", "Checking the DataScienceCluster, the operator and every component")
+	if req.KeepEnabled == nil {
+		res := keepEnabledMissing()
+		return r.fail("check", res.Message, res.ErrorCode), nil
+	}
 	v, err := readDSCView(c)
 	if err != nil {
 		return r.fail("check", "Cannot read the DataScienceCluster: "+err.Error()+". Nothing was changed.", errorCodeFromK8sErr(err)), nil
 	}
-	p := v.planHardReset(c)
+	p := v.planHardReset(c, *req.KeepEnabled)
 	if p.plan.Refusal != "" || len(p.plan.Blocked) > 0 {
 		res := refusedResult(p.plan)
 		r.step("check", "failed", res.Message)
@@ -205,7 +215,7 @@ func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent
 	if _, _, err := c.do(http.MethodDelete, path, "application/json", dscDeleteBody(v.uid), url.Values{"dryRun": {"All"}}); err != nil {
 		return r.fail("check", "The API server refused deleting the DataScienceCluster in its dry run: "+conversionMessage(err)+". Nothing was changed.", nonEmpty(errorCodeFromK8sErr(err), "validation")), nil
 	}
-	obj := v.newDefaultObject()
+	obj := v.newDefaultObject(v.resetTarget(&types.DSCPlan{}, *req.KeepEnabled))
 	// The new spec in a dry run against the live DSC: the schema
 	// (fieldValidation=Strict), the CRD's validation rules and the
 	// operator's validating webhook see it before anything is deleted. The
@@ -224,7 +234,11 @@ func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent
 	if err := SaveDSCHardResetRecord(c, rec); err != nil {
 		return r.fail("check", "Cannot record the DataScienceCluster this reset creates, so the reset could not be finished after a failure: "+err.Error()+". Nothing was changed.", nonEmpty(errorCodeFromK8sErr(err), "internal")), nil
 	}
-	r.step("check", "success", fmt.Sprintf("DataScienceCluster %s can be reset: %d components are torn down and the release default of operator %s is created", v.name, len(p.plan.TornDown), v.op.Version))
+	kept := ""
+	if len(p.plan.Kept) > 0 {
+		kept = ", keeping " + strings.Join(p.plan.Kept, ", ")
+	}
+	r.step("check", "success", fmt.Sprintf("DataScienceCluster %s can be reset: %d components are torn down and the release default of operator %s is created%s", v.name, len(p.plan.TornDown), v.op.Version, kept))
 
 	r.step("delete", "running", "Deleting DataScienceCluster "+v.name)
 	if _, _, err := c.do(http.MethodDelete, path, "application/json", dscDeleteBody(v.uid), nil); err != nil {

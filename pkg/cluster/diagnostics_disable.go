@@ -90,6 +90,10 @@ type removalChecker struct {
 	convErr     error
 	svcOwner    map[string]string
 	svcOwnerErr map[string]error
+	// What uses MaaS (maasUse), read once.
+	maasLoaded bool
+	maas       maasUse
+	maasErr    error
 }
 
 func newRemovalChecker(c *Client) *removalChecker {

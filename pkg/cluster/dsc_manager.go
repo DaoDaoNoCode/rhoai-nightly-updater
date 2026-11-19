@@ -505,7 +505,7 @@ func (v *dscView) finish(c *Client, p *dscPlanned, teardown bool) *dscPlanned {
 	p.plan.Changes = v.changesBetween(v.components(), afterComps)
 	p.plan.Blocked, p.plan.Warnings = v.removalBlocks(c, v.components(), afterComps, teardown)
 	p.plan.Warnings = append(p.plan.Warnings, v.orphanWarnings(v.components(), afterComps)...)
-	p.plan.Token = planToken(p.plan.Action, v.uid, v.apiVersion, p.ops)
+	p.plan.Token = planToken(p.plan.Action, v.uid, v.apiVersion, p.ops, p.plan.KeepEnabled)
 	return p
 }
 
@@ -699,6 +699,12 @@ func (v *dscView) removalBlocks(c *Client, before, after map[string]interface{},
 			}
 		}
 	}
+	// What uses MaaS, beyond the module checks (dsc_maas_guard.go).
+	if b, w := v.maasBlocks(rc, before, after, teardown); b != nil {
+		blocks = addBlock(blocks, *b)
+	} else if w != "" {
+		warnings = append(warnings, w)
+	}
 	return blocks, uniqueInOrder(warnings)
 }
 
@@ -716,8 +722,8 @@ func uniqueInOrder(in []string) []string {
 
 // PlanDSCChange computes, from a fresh read, what a change would do.
 // action is "toggle" (path, to, withParent), "fix", "soft-reset" or
-// "hard-reset".
-func PlanDSCChange(c *Client, action, path, to string, withParent bool) (*types.DSCPlan, error) {
+// "hard-reset" (keepEnabled: keep the components the user turned on).
+func PlanDSCChange(c *Client, action, path, to string, withParent, keepEnabled bool) (*types.DSCPlan, error) {
 	v, err := readDSCView(c)
 	if err != nil {
 		return nil, err
@@ -728,9 +734,9 @@ func PlanDSCChange(c *Client, action, path, to string, withParent bool) (*types.
 	case "fix":
 		return v.planFix(c).plan, nil
 	case "soft-reset":
-		return v.planSoftReset(c).plan, nil
+		return v.planSoftReset(c, keepEnabled).plan, nil
 	case "hard-reset":
-		return v.planHardReset(c).plan, nil
+		return v.planHardReset(c, keepEnabled).plan, nil
 	}
 	return nil, fmt.Errorf("unknown action %q", action)
 }
@@ -846,24 +852,119 @@ func fieldPathKeys(path string) []string {
 
 // planSoftReset makes spec.components the release default in place: only
 // what differs, keeping protected fields (dscProtectedFields) and values
-// the API server's defaulting would put back anyway.
-func (v *dscView) planSoftReset(c *Client) *dscPlanned {
+// the API server's defaulting would put back anyway, and with keep the
+// components the user turned on (resetTarget).
+func (v *dscView) planSoftReset(c *Client, keep bool) *dscPlanned {
 	p := v.newPlan("soft-reset")
+	p.plan.KeepEnabled = keep
 	if msg, code := v.readOnlyReason(); msg != "" {
 		return p.refuse(msg, code)
 	}
 	if v.defaults == nil {
 		return p.refuse(v.defaultsErr, "prerequisites")
 	}
+	target := v.resetTarget(p.plan, keep)
 	var removes [][]string
 	compSchema := schemaChild(v.spec, "components")
-	v.resetDiff(compSchema, v.components(), v.defaultComponents(), nil, &p.sets, &removes)
+	v.resetDiff(compSchema, v.components(), target, nil, &p.sets, &removes)
 	ops, err := buildJSONPatch(v.obj, p.sets, removes)
 	if err != nil {
 		return p.refuse("Cannot build the change: "+err.Error(), "internal")
 	}
+	if len(ops) == 0 && len(p.plan.Kept) > 0 {
+		return p.refuse(fmt.Sprintf("The DataScienceCluster already matches the release default, apart from the components you turned on, which the reset keeps (%s). Nothing to change.", strings.Join(p.plan.Kept, ", ")), "nothing_to_do")
+	}
 	p.ops = ops
 	return v.finish(c, p, false)
+}
+
+// turnedOn returns the toggles the user turned on: set to Managed (or
+// Unmanaged, where the CRD allows it) in the DataScienceCluster and
+// deployed, while the release default leaves them off (Removed, or unset
+// without a CRD default that enables them).
+func (v *dscView) turnedOn() []dscToggle {
+	if v.defaults == nil {
+		return nil
+	}
+	live, def := v.components(), v.defaultComponents()
+	var out []dscToggle
+	for _, t := range v.tree {
+		if !t.Toggle {
+			continue
+		}
+		s, set := lookupState(live, t.Path)
+		if !set || (s != "Managed" && s != "Unmanaged") || !containsString(t.Allowed, s) || !v.deployed(live, t.Path) {
+			continue
+		}
+		if ds, _ := v.stateOf(def, t.Path); ds == "Managed" || ds == "Unmanaged" {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// resetTarget is spec.components a reset makes: the release default's,
+// and with keep every toggle the user turned on at its live value, with the
+// toggles above it Managed (it is deployed only through them). It fills
+// in the plan's TurnedOn (always, so the dialog can offer the option) and
+// Kept (with keep).
+func (v *dscView) resetTarget(plan *types.DSCPlan, keep bool) map[string]interface{} {
+	target, _ := normalizeJSON(v.defaultComponents()).(map[string]interface{})
+	if target == nil {
+		target = map[string]interface{}{}
+	}
+	live, def := v.components(), v.defaultComponents()
+	assign := map[string]string{}
+	add := func(t dscToggle, state string) {
+		if _, done := assign[t.key()]; !done {
+			assign[t.key()] = state
+		}
+	}
+	for _, t := range v.turnedOn() {
+		for i := 1; i < len(t.Path); i++ {
+			anc, ok := v.byKey[strings.Join(t.Path[:i], ".")]
+			if !ok || !anc.Toggle {
+				continue
+			}
+			if ds, _ := v.stateOf(def, anc.Path); ds != "Managed" {
+				add(anc, "Managed")
+			}
+		}
+		s, _ := lookupState(live, t.Path)
+		add(t, s)
+	}
+	// Tree order: parents before their children.
+	var ordered []string
+	for _, t := range v.tree {
+		if _, ok := assign[t.key()]; ok {
+			ordered = append(ordered, t.key())
+		}
+	}
+	plan.TurnedOn = ordered
+	if !keep {
+		return target
+	}
+	plan.Kept = ordered
+	for _, key := range ordered {
+		setStateIn(target, v.byKey[key].Path, assign[key])
+	}
+	return target
+}
+
+// setStateIn sets the managementState at path in components, making the
+// objects that hold it.
+func setStateIn(components map[string]interface{}, path []string, state string) {
+	m := components
+	for _, k := range path {
+		next, ok := m[k].(map[string]interface{})
+		if !ok {
+			next = map[string]interface{}{}
+			m[k] = next
+		}
+		m = next
+	}
+	m["managementState"] = state
 }
 
 // resetDiff collects the sets and removals that turn live into target.
@@ -1021,7 +1122,7 @@ func refusedResult(p *types.DSCPlan) *types.OperationResponse {
 		reasons = append(reasons, fmt.Sprintf("%s: %s", b.Component, strings.Join(b.Reasons, "; ")))
 	}
 	return &types.OperationResponse{Success: false, ErrorCode: "prerequisites", Logs: reasons,
-		Message: fmt.Sprintf("Not changing the DataScienceCluster: removing %s now could leave it stuck in deletion. Nothing was changed. %s", strings.Join(names, ", "), strings.Join(reasons, " "))}
+		Message: fmt.Sprintf("Not changing the DataScienceCluster: %s must not be removed now. Nothing was changed. %s", strings.Join(names, ", "), strings.Join(reasons, " "))}
 }
 
 func recordDSCActivity(c *Client, action, detail string, success bool) {
@@ -1089,7 +1190,10 @@ func runPlanned(c *Client, req types.DSCPlanRequest, action, activity string) (*
 	case "fix":
 		p = v.planFix(c)
 	case "soft-reset":
-		p = v.planSoftReset(c)
+		if req.KeepEnabled == nil {
+			return keepEnabledMissing(), nil
+		}
+		p = v.planSoftReset(c, *req.KeepEnabled)
 	default:
 		return nil, fmt.Errorf("unknown action %q", action)
 	}
@@ -1104,9 +1208,27 @@ func runPlanned(c *Client, req types.DSCPlanRequest, action, activity string) (*
 		return res, nil
 	}
 	detail := v.name + ": " + changeSummary(p.plan.Changes)
+	if len(p.plan.Kept) > 0 {
+		detail += "; kept " + strings.Join(p.plan.Kept, ", ")
+	}
 	recordDSCActivity(c, activity, detail, true)
 	slog.Info("dsc changed", "action", action, "dsc", v.name, "user", getUser(c))
-	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Changed %s.", changeSummary(p.plan.Changes)), Logs: []string{detail}}, nil
+	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Changed %s.%s", changeSummary(p.plan.Changes), keptText(p.plan.Kept)), Logs: []string{detail}}, nil
+}
+
+// keptText words the components a reset kept ("" when none).
+func keptText(kept []string) string {
+	if len(kept) == 0 {
+		return ""
+	}
+	return " Kept: " + strings.Join(kept, ", ") + " (you turned these on)."
+}
+
+// keepEnabledMissing refuses a reset that does not say whether to keep
+// the components the user turned on: the plan differs either way.
+func keepEnabledMissing() *types.OperationResponse {
+	return &types.OperationResponse{Success: false, ErrorCode: "validation",
+		Message: "Say whether the reset keeps the components you turned on (keepEnabled true or false), as in the plan you reviewed. Nothing was changed."}
 }
 
 // FixDSC adds the toggles the release default sets and the DSC leaves

@@ -513,6 +513,15 @@ type DSCPlan struct {
 	TornDown    []string `json:"tornDown,omitempty"`
 	StayRemoved []string `json:"stayRemoved,omitempty"`
 	NewObject   string   `json:"newObject,omitempty"`
+	// Resets: KeepEnabled is the option the plan was made with (part of
+	// the token). TurnedOn are the toggles the user turned on: Managed (or
+	// Unmanaged) in the DataScienceCluster and deployed, while the release
+	// default leaves them off, with the parents they need. Kept are those
+	// the reset keeps at their live value (TurnedOn with KeepEnabled, else
+	// none).
+	KeepEnabled bool     `json:"keepEnabled,omitempty"`
+	TurnedOn    []string `json:"turnedOn,omitempty"`
+	Kept        []string `json:"kept,omitempty"`
 	Token       string   `json:"token,omitempty"`
 }
 
@@ -554,6 +563,10 @@ type DSCPlanRequest struct {
 	Token string `json:"token"`
 	// Confirm is the DSC name typed by the user (hard reset only).
 	Confirm string `json:"confirm,omitempty"`
+	// KeepEnabled (soft and hard reset, required there): keep the
+	// components the user turned on (DSCPlan.Kept), as the reviewed plan
+	// was made.
+	KeepEnabled *bool `json:"keepEnabled,omitempty"`
 }
 
 // DSCCompatibility reports invalid field names and differences from version-matched component defaults.

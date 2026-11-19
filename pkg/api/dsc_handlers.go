@@ -26,6 +26,7 @@ var (
 	dscUIDRegex            = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 	dscPlanTokenRegex      = regexp.MustCompile(`^[a-f0-9]{24}$`)
 	dscPlanActions         = map[string]bool{"toggle": true, "fix": true, "soft-reset": true, "hard-reset": true}
+	dscResetActions        = map[string]bool{"soft-reset": true, "hard-reset": true}
 	dscChangeRequestMaxLen = int64(4096)
 )
 
@@ -43,9 +44,11 @@ var HandleDSCManager = withAuth(func(c *cluster.Client, w http.ResponseWriter, r
 })
 
 // HandleDSCPlan returns what a change would do, computed from a fresh read:
-// ?action=toggle&path=kserve.nim&to=Removed[&withParent=true], or
-// action=fix, soft-reset, hard-reset. Only cluster-admins, who may make the
-// change, get a plan: it names what uses each component across projects.
+// ?action=toggle&path=kserve.nim&to=Removed[&withParent=true], action=fix,
+// or action=soft-reset / hard-reset with keepEnabled=true or false (keep
+// the components the user turned on; required, as it changes the plan).
+// Only cluster-admins, who may make the change, get a plan: it names what
+// uses each component across projects.
 var HandleDSCPlan = withAdminRead(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	action, path, to := q.Get("action"), q.Get("path"), q.Get("to")
@@ -53,7 +56,12 @@ var HandleDSCPlan = withAdminRead(func(c *cluster.Client, w http.ResponseWriter,
 		writeError(w, "Give action=toggle with path and to, or action=fix, soft-reset or hard-reset", http.StatusBadRequest, "validation")
 		return
 	}
-	plan, err := planDSCChange(c, action, path, to, q.Get("withParent") == "true")
+	keep := q.Get("keepEnabled")
+	if dscResetActions[action] && keep != "true" && keep != "false" {
+		writeError(w, "Give keepEnabled=true or false: whether the reset keeps the components you turned on", http.StatusBadRequest, "validation")
+		return
+	}
+	plan, err := planDSCChange(c, action, path, to, q.Get("withParent") == "true", dscResetActions[action] && keep == "true")
 	if err != nil {
 		code, errorCode := cluster.HTTPStatusForError(err)
 		writeError(w, "Could not work out the change: "+err.Error(), code, errorCode)
@@ -87,12 +95,17 @@ var HandleDSCManagement = withMutationAuth(func(c *cluster.Client, w http.Respon
 	writeOperationResult(w, result, "dsc-management")
 })
 
-// decodePlanRequest reads the body of a reviewed-plan change.
-func decodePlanRequest(w http.ResponseWriter, r *http.Request) (types.DSCPlanRequest, bool) {
+// decodePlanRequest reads the body of a reviewed-plan change; a reset
+// must say whether it keeps the components the user turned on.
+func decodePlanRequest(w http.ResponseWriter, r *http.Request, reset bool) (types.DSCPlanRequest, bool) {
 	r.Body = http.MaxBytesReader(w, r.Body, dscChangeRequestMaxLen)
 	var req types.DSCPlanRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !dscNameRegex.MatchString(req.Name) || !dscUIDRegex.MatchString(req.UID) || !dscPlanTokenRegex.MatchString(req.Token) {
 		writeError(w, "Give the DataScienceCluster's name and UID and the token of the change you reviewed", http.StatusBadRequest, "validation")
+		return req, false
+	}
+	if reset && req.KeepEnabled == nil {
+		writeError(w, "Give keepEnabled (true or false) as in the reset you reviewed", http.StatusBadRequest, "validation")
 		return req, false
 	}
 	return req, true
@@ -106,7 +119,7 @@ var HandleDSCFix = withMutationAuth(func(c *cluster.Client, w http.ResponseWrite
 		return
 	}
 	defer releaseClusterMutationLock()
-	req, ok := decodePlanRequest(w, r)
+	req, ok := decodePlanRequest(w, r, false)
 	if !ok {
 		return
 	}
@@ -127,12 +140,12 @@ var HandleDSCSoftReset = withMutationAuth(func(c *cluster.Client, w http.Respons
 		return
 	}
 	defer releaseClusterMutationLock()
-	req, ok := decodePlanRequest(w, r)
+	req, ok := decodePlanRequest(w, r, true)
 	if !ok {
 		return
 	}
 	beginOperation(w, req.Name)
-	slog.Info("mutation", "op", "dsc-soft-reset", "dsc", req.Name)
+	slog.Info("mutation", "op", "dsc-soft-reset", "dsc", req.Name, "keepEnabled", *req.KeepEnabled)
 	result, err := softResetDSC(c, req)
 	if err != nil {
 		code, errorCode := cluster.HTTPStatusForError(err)
@@ -149,7 +162,7 @@ var HandleDSCHardResetStream = withMutationAuth(func(c *cluster.Client, w http.R
 		return
 	}
 	defer releaseClusterMutationLock()
-	req, ok := decodePlanRequest(w, r)
+	req, ok := decodePlanRequest(w, r, true)
 	if !ok {
 		return
 	}
@@ -173,7 +186,7 @@ var HandleDSCHardResetStream = withMutationAuth(func(c *cluster.Client, w http.R
 	go sseHeartbeat(sseWriter, done)
 
 	beginOperation(w, req.Name)
-	slog.Info("mutation", "op", "dsc-hard-reset", "dsc", req.Name)
+	slog.Info("mutation", "op", "dsc-hard-reset", "dsc", req.Name, "keepEnabled", *req.KeepEnabled)
 	result, runErr := hardResetDSC(c, req, forwardSteps(sseWriter))
 	sendOperationResult(sseWriter, result, runErr)
 	if runErr != nil {
