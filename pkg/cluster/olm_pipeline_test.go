@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1007,6 +1008,53 @@ func TestOperationsRefuseBeforeEndingDashboardDev(t *testing.T) {
 				if !strings.Contains(w, "-verify-") {
 					t.Fatalf("changed the cluster (the Dashboard Dev session must stay): %v", f.writes())
 				}
+			}
+		})
+	}
+}
+
+// With "end the Dashboard Dev session first" confirmed and nothing to
+// refuse, every operation ends the session after its checks and before its
+// first change to OLM's objects, then runs to the end.
+func TestOperationsEndDashboardDevBeforeTheFirstChange(t *testing.T) {
+	const dashboardOpPath = "/apis/apps/v1/namespaces/redhat-ods-applications/deployments/dashboard-operator"
+	for _, op := range []string{"update", "reinstall", "refresh"} {
+		t.Run(op, func(t *testing.T) {
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+			f.onSubscribe = olmInstalls("rhods-operator.3.6.0")
+			f.dashboardOp = `{"metadata":{"uid":"u1","annotations":{"` + dashboardDevAnnotation + `":"{}"}},"spec":{"replicas":0}}`
+			// Ending the session resumes dashboard-operator.
+			f.intercept = func(f *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
+				if r.Method != http.MethodGet && r.URL.Path == dashboardOpPath {
+					f.dashboardOp = `{"metadata":{"uid":"u1"},"spec":{"replicas":1},"status":{"replicas":1,"readyReplicas":1,"availableReplicas":1,"updatedReplicas":1}}`
+				}
+				return false
+			}
+			c := f.client(context.Background())
+			opts := OperationOptions{RevertDashboardDev: true}
+			var r *types.OperationResponse
+			switch op {
+			case "update":
+				r, _ = UpdateStreamWithOptions(c, testNightlyImage, opts, func(UpdateStepEvent) {})
+			case "reinstall":
+				r, _ = ReinstallStreamWithOptions(c, "nightly", testNightlyImage, "", opts, func(UpdateStepEvent) {})
+			case "refresh":
+				r, _ = RefreshOperatorStreamWithOptions(c, opts, func(UpdateStepEvent) {})
+			}
+			if r == nil || !r.Success || !slices.Contains(r.Logs, "OK: Dashboard Dev session ended; dashboard-operator is running again") {
+				t.Fatalf("result = %+v", r)
+			}
+			ended := false
+			for _, w := range f.writes() {
+				switch {
+				case strings.HasSuffix(w, " "+dashboardOpPath):
+					ended = true
+				case !strings.Contains(w, "-verify-") && !ended:
+					t.Fatalf("%s before the session was ended: %v", w, f.writes())
+				}
+			}
+			if !ended {
+				t.Fatalf("the session was not ended: %v", f.writes())
 			}
 		})
 	}
