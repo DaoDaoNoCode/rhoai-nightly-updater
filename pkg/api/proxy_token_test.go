@@ -84,6 +84,55 @@ func TestOnlyTheProxySessionTokenIsTrusted(t *testing.T) {
 	}
 }
 
+// Every container of the Deployment, oauth-proxy included, runs with a
+// read-only root filesystem and no privilege escalation.
+func TestDeploymentContainersAreReadOnly(t *testing.T) {
+	data, err := os.ReadFile("../../deploy/template.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type securityContext struct {
+		ReadOnlyRootFilesystem   *bool `yaml:"readOnlyRootFilesystem"`
+		AllowPrivilegeEscalation *bool `yaml:"allowPrivilegeEscalation"`
+	}
+	var tmpl struct {
+		Objects []struct {
+			Kind string `yaml:"kind"`
+			Spec struct {
+				Template struct {
+					Spec struct {
+						Containers []struct {
+							Name            string          `yaml:"name"`
+							SecurityContext securityContext `yaml:"securityContext"`
+						} `yaml:"containers"`
+					} `yaml:"spec"`
+				} `yaml:"template"`
+			} `yaml:"spec"`
+		} `yaml:"objects"`
+	}
+	if err := yaml.Unmarshal(data, &tmpl); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, o := range tmpl.Objects {
+		if o.Kind != "Deployment" {
+			continue
+		}
+		for _, c := range o.Spec.Template.Spec.Containers {
+			seen[c.Name] = true
+			if sc := c.SecurityContext; sc.ReadOnlyRootFilesystem == nil || !*sc.ReadOnlyRootFilesystem {
+				t.Errorf("container %s: readOnlyRootFilesystem is not true", c.Name)
+			}
+			if sc := c.SecurityContext; sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
+				t.Errorf("container %s: allowPrivilegeEscalation is not false", c.Name)
+			}
+		}
+	}
+	if !seen["app"] || !seen["oauth-proxy"] {
+		t.Fatalf("containers found: %v, want app and oauth-proxy", seen)
+	}
+}
+
 // TestOAuthProxyForwardsOnlyItsOwnSessionToken pins the oauth-proxy flags
 // that the mutation gate relies on (see checkPermission): the proxy passes
 // the session's token, and accepts no client bearer tokens.

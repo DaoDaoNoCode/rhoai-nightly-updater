@@ -1076,8 +1076,13 @@ objects:
                 limits:
                   cpu: 100m
                   memory: 64Mi
+              # oauth-proxy writes no files: sessions are cookies, and it
+              # parses only url-encoded forms (openshift/oauth-proxy
+              # oauthproxy.go; manual sign-in, the one multipart reader, is
+              # off without --htpasswd-file). No /tmp volume needed.
               securityContext:
                 allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
                 runAsNonRoot: true
                 capabilities:
                   drop: ["ALL"]

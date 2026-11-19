@@ -240,6 +240,9 @@ only accepts a tag whose version is the top dated section. See
   new release's own notes (the `install.sh SHA-256` line), through the
   GitHub or GitLab releases API, anonymously and cached like the release
   list. Without it, the notice asks you to compare with the release notes.
+- The oauth-proxy container runs with a read-only root filesystem, as the
+  app container already did (part of template revision 7). oauth-proxy
+  writes no files.
 
 ## [3.0.0] - 2026-11-18
 
