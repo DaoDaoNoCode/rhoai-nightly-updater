@@ -643,6 +643,20 @@ export interface DSCManager {
   upgradeGates?: string[];
   nodes: DSCNode[];
   mismatches: DSCMismatch[];
+  /** A hard reset that deleted the DSC and did not create its replacement; only while no DSC exists. */
+  pendingHardReset?: DSCPendingHardReset;
+  pendingHardResetError?: string;
+}
+
+/** The DataScienceCluster a stopped hard reset recorded; "Finish the hard reset" creates exactly it. */
+export interface DSCPendingHardReset {
+  name: string;
+  apiVersion: string;
+  newObject: string;
+  operatorVersion?: string;
+  user?: string;
+  startedAt: string;
+  token: string;
 }
 
 /** One change of a plan (pkg/types DSCChange). */

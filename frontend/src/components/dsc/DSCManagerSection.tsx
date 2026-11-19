@@ -33,8 +33,8 @@ import {
   Title,
 } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, TreeRowWrapper, Tr } from "@patternfly/react-table";
-import type { DSCChange, DSCManager, DSCNode, DSCPlan, OperationResponse, UpdateStep } from "../../types";
-import { getDSCManager, getDSCPlan, runDSCPlan, setDSCManagementState, streamDSCHardReset, toApiError } from "../../services/api";
+import type { DSCChange, DSCManager, DSCNode, DSCPendingHardReset, DSCPlan, OperationResponse, UpdateStep } from "../../types";
+import { finishDSCHardReset, getDSCManager, getDSCPlan, runDSCPlan, setDSCManagementState, streamDSCHardReset, toApiError } from "../../services/api";
 import { ConfirmActionModal } from "../ConfirmActionModal";
 import { StatusLabel, TagLabel, type StatusKind } from "../StatusLabel";
 import { TooltipButton } from "../TooltipButton";
@@ -148,7 +148,7 @@ const ComponentTree: React.FC<{
                       <FormSelect aria-label={`Set ${n.path}`} id={`dsc-set-${n.path}`} value={n.specSet ? n.spec : ""}
                         isDisabled={!!rowReason || pending !== null}
                         onChange={(_e, v) => { if (v && !(n.specSet && n.spec === v)) onSet(n, v); }}>
-                        {!n.specSet && <FormSelectOption value="" label="Not set (Removed)" isDisabled />}
+                        {!n.specSet && <FormSelectOption value="" label={n.schemaDefault ? `Not set (CRD default ${n.schemaDefault})` : "Not set (Removed)"} isDisabled />}
                         {allowed.map((v) => <FormSelectOption key={v} value={v} label={v} />)}
                       </FormSelect>
                     </FlexItem>
@@ -282,10 +282,16 @@ const ResetModal: React.FC<{
                     {(plan.stayRemoved?.length ?? 0) > 0 && (
                       <ListItem>Enabled now, but Removed in the release default, so they stay Removed: {plan.stayRemoved!.map((p, i) => <React.Fragment key={p}>{i > 0 && ", "}<code>{p}</code></React.Fragment>)}. Turn them on again afterwards if you need them.</ListItem>
                     )}
-                    <ListItem>If the old DataScienceCluster is not gone within 10 minutes, nothing is created and the reset stops; the finalizer is never removed by hand.</ListItem>
+                    <ListItem>If the old DataScienceCluster is not gone within 10 minutes, nothing is created and the reset stops; the finalizer is never removed by hand. Once it is gone, this page offers to finish the reset with the same object.</ListItem>
                   </List>
                 </Alert>
               </StackItem>
+              {plan.changes.length > 0 && (
+                <StackItem>
+                  <Content component="p">Compared with now, the new DataScienceCluster differs in:</Content>
+                  <List aria-label="Differences of the new DataScienceCluster">{plan.changes.map((c) => <ListItem key={c.path}>{changeText(c)}</ListItem>)}</List>
+                </StackItem>
+              )}
               <StackItem>
                 <ExpandableSection toggleText="The DataScienceCluster it creates" isExpanded={yamlOpen} onToggle={(_e, v) => setYamlOpen(v)}>
                   <CodeBlock><CodeBlockCode>{plan.newObject}</CodeBlockCode></CodeBlock>
@@ -338,6 +344,85 @@ const ResetModal: React.FC<{
         )}
       </ModalFooter>
     </Modal>
+  );
+};
+
+/** A hard reset that deleted the DataScienceCluster and did not create its replacement, while none exists. */
+const FinishHardReset: React.FC<{
+  pending?: DSCPendingHardReset;
+  error?: string;
+  disabledReason: string | null;
+  onDone: (res: OperationResponse) => void;
+}> = ({ pending, error, disabledReason, onDone }) => {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [yamlOpen, setYamlOpen] = useState(false);
+  const finish = async () => {
+    if (!pending) return;
+    setBusy(true);
+    let res: OperationResponse;
+    try {
+      res = await finishDSCHardReset(pending.name, pending.token);
+    } catch (e) {
+      res = errorResult(e, "Could not finish the hard reset");
+    }
+    setBusy(false);
+    setConfirming(false);
+    onDone(res);
+  };
+  return (
+    <PageSection>
+      <Card>
+        <CardHeader actions={pending ? {
+          actions: (
+            <TooltipButton variant="primary" onClick={() => setConfirming(true)} isDisabled={!!disabledReason || busy} disabledReason={disabledReason}>
+              Finish the hard reset…
+            </TooltipButton>
+          ),
+          hasNoOffset: false,
+        } : undefined}>
+          <CardTitle><Title headingLevel="h2" size="lg">A hard reset did not finish</Title></CardTitle>
+        </CardHeader>
+        <CardBody>
+          <Stack hasGutter>
+            {error && <StackItem><Alert component="p" variant="danger" isInline title="Could not read the recorded hard reset">{error}</Alert></StackItem>}
+            {pending && (
+              <>
+                <StackItem>
+                  <Content component="p">
+                    A hard reset{pending.user ? <> by {pending.user}</> : null} at {pending.startedAt} deleted DataScienceCluster <code>{pending.name}</code> and did not create its replacement.
+                    Finish it to create exactly the object it planned: the release default of operator {pending.operatorVersion || "(unknown)"}, with the old name and namespaces.
+                    Create DataScienceCluster would create the release default without the old name and namespaces instead.
+                  </Content>
+                </StackItem>
+                <StackItem>
+                  <ExpandableSection toggleText="The DataScienceCluster it creates" isExpanded={yamlOpen} onToggle={(_e, v) => setYamlOpen(v)}>
+                    <CodeBlock><CodeBlockCode>{pending.newObject}</CodeBlockCode></CodeBlock>
+                  </ExpandableSection>
+                </StackItem>
+              </>
+            )}
+          </Stack>
+        </CardBody>
+      </Card>
+      {pending && confirming && (
+        <ConfirmActionModal
+          isOpen
+          title="Finish the hard reset?"
+          changes={[<>Creates DataScienceCluster <code>{pending.name}</code> ({pending.apiVersion}) exactly as the hard reset planned it.</>]}
+          changesOpen
+          confirmLabel={`Create ${pending.name}`}
+          isLoading={busy}
+          confirmDisabled={busy || !!disabledReason}
+          onConfirm={finish}
+          onCancel={() => !busy && setConfirming(false)}
+        >
+          <Content component="p" className="pf-v6-u-text-color-subtle">
+            The server checks again that no DataScienceCluster exists and that the operator is the one the reset planned for, then runs a dry run first.
+          </Content>
+        </ConfirmActionModal>
+      )}
+    </PageSection>
   );
 };
 
@@ -401,7 +486,11 @@ export const DSCManagerSection: React.FC<{
       </PageSection>
     );
   }
-  if (!manager || !manager.exists) return null;
+  if (!manager) return null;
+  if (!manager.exists) {
+    if (!manager.pendingHardReset && !manager.pendingHardResetError) return null;
+    return <FinishHardReset pending={manager.pendingHardReset} error={manager.pendingHardResetError} disabledReason={mutateReason} onDone={changed} />;
+  }
 
   const disabledReason = mutateReason ?? (manager.readOnlyReason || null);
   const fixable = manager.mismatches.filter((m) => m.fixable);
@@ -415,7 +504,7 @@ export const DSCManagerSection: React.FC<{
     try {
       if (p.toggle) {
         setRunning(p.toggle.node.path);
-        res = await setDSCManagementState({ name: manager.name, path: p.toggle.node.path, from: p.toggle.node.specSet ? p.toggle.node.spec ?? "" : "", to: p.toggle.to, withParent: p.toggle.withParent });
+        res = await setDSCManagementState({ name: manager.name, path: p.toggle.node.path, from: p.toggle.node.specSet ? p.toggle.node.spec ?? "" : "", to: p.toggle.to, withParent: p.toggle.withParent, uid: p.plan!.uid ?? "", token: p.plan!.token ?? "" });
       } else {
         setRunning("fix");
         res = await runDSCPlan("fix", p.plan!);

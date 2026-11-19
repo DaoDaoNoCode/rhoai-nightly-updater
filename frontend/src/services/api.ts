@@ -880,9 +880,14 @@ export function getDSCPlan(action: DSCPlanAction, toggle?: { path: string; to: s
   return request<DSCPlan>(`/api/components/dsc/plan?${q.toString()}`);
 }
 
-/** Sets one managementState; refused (422) when the DSC no longer holds `from`. */
-export function setDSCManagementState(req: { name: string; path: string; from: string; to: string; withParent?: boolean }): Promise<OperationResponse> {
+/** Sets one managementState as the reviewed plan (uid, token); refused (422) when the DSC no longer holds `from` or the plan changed. */
+export function setDSCManagementState(req: { name: string; path: string; from: string; to: string; withParent?: boolean; uid: string; token: string }): Promise<OperationResponse> {
   return request('/api/components/dsc/management', { method: 'POST', body: JSON.stringify(req), acceptStatuses: [422] });
+}
+
+/** Creates the DataScienceCluster a stopped hard reset recorded, while none exists. */
+export function finishDSCHardReset(name: string, token: string): Promise<OperationResponse> {
+  return request('/api/components/dsc/hard-reset/finish', { method: 'POST', body: JSON.stringify({ name, token }), acceptStatuses: [422] });
 }
 
 /** Runs the reviewed fix or soft reset; refused when the plan changed since. */
