@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
@@ -1011,6 +1012,50 @@ func TestOperationsRefuseBeforeEndingDashboardDev(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Install a different build records its activity under the target it
+// resolved (the GA release's source and channel), and records nothing for
+// a request it refuses before running.
+func TestReinstall_ActivityRecord(t *testing.T) {
+	t.Setenv("STABLE_SOURCE", "redhat-operators")
+	t.Setenv("STABLE_CHANNEL", "")
+	activityWrites := func(f *fakeOLM) []string {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		var out []string
+		for _, r := range f.requests {
+			// Created by a POST to the collection, then updated by name.
+			body, _ := json.Marshal(r.Body)
+			if r.Method != http.MethodGet && strings.Contains(r.Path, "/configmaps") && strings.Contains(string(body), activityConfigMapName) {
+				out = append(out, string(body))
+			}
+		}
+		return out
+	}
+	t.Run("stable", func(t *testing.T) {
+		f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"source": CatalogName})
+		f.stableChans = `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.6.1","currentCSVDesc":{"version":"3.6.1"}}]`
+		f.onSubscribe = olmInstalls("rhods-operator.3.6.1")
+		r, err := Reinstall(f.client(context.Background()), "stable", "", "")
+		if err != nil || !r.Success {
+			t.Fatalf("result = %+v, %v", r, err)
+		}
+		w := activityWrites(f)
+		if len(w) != 1 || !strings.Contains(w[0], `to redhat-operators/stable-3.x`) || !strings.Contains(w[0], `reinstall`) {
+			t.Fatalf("activity writes = %v", w)
+		}
+	})
+	t.Run("refused request", func(t *testing.T) {
+		f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+		r, _ := Reinstall(f.client(context.Background()), "beta", "", "")
+		if r.Success || r.ErrorCode != "validation" {
+			t.Fatalf("result = %+v", r)
+		}
+		if w := activityWrites(f); len(w) != 0 {
+			t.Fatalf("activity writes = %v", w)
+		}
+	})
 }
 
 // With "end the Dashboard Dev session first" confirmed and nothing to
