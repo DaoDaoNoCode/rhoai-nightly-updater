@@ -49,14 +49,17 @@ func TestMaaSPublish_PresetAndAudience(t *testing.T) {
 	}
 	warned := false
 	for _, e := range events {
-		warned = warned || strings.Contains(e.Message, "Group nobody-yet does not exist")
+		warned = warned || strings.Contains(e.Message, "nobody-yet is not a group on this cluster. Nobody is in it unless your identity provider adds it at sign-in.")
 	}
 	if !warned {
 		t.Error("no warning for a group without an OpenShift Group")
 	}
 	st, _ := GetMaaSStatus(mc.c)
-	if st.Access == nil || st.Access.Everyone || len(st.Access.Warnings) != 1 {
+	if st.Access == nil || st.Access.Everyone || len(st.Access.GroupProblems) != 1 {
 		t.Fatalf("access %+v", st.Access)
+	}
+	if p := st.Access.GroupProblems[0]; p.Name != "nobody-yet" || !p.Missing || p.Commands != "oc adm groups new nobody-yet\noc adm groups add-users nobody-yet <user>" {
+		t.Fatalf("group problem %+v", p)
 	}
 	for _, it := range st.Items {
 		if it.Published && (it.Limit == nil || it.Limit.Preset != "premium") {
@@ -220,7 +223,8 @@ func TestValidateMaaSRequest_NewFields(t *testing.T) {
 		{types.MaaSRequest{Action: "change-limit", Project: "p"}, "give the model's new limit"},
 		{types.MaaSRequest{Action: "change-limit", Project: "p", Limit: &types.MaaSLimit{Preset: "custom", Rates: []types.MaaSTokenRate{{Limit: 1, Window: "1d"}}}}, "window"},
 		{types.MaaSRequest{Action: "change-access"}, "say who can use"},
-		{types.MaaSRequest{Action: "change-access", Access: &types.MaaSAudience{Groups: []string{"a:b"}}}, `":"`},
+		{types.MaaSRequest{Action: "change-access", Access: &types.MaaSAudience{Groups: []string{"oidc:ml", "/admins"}}}, ""},
+		{types.MaaSRequest{Action: "change-access", Access: &types.MaaSAudience{Groups: []string{"a\nb"}}}, "control character"},
 		{types.MaaSRequest{Action: "publish", Project: "p", Access: &types.MaaSAudience{Everyone: true}, Limit: &types.MaaSLimit{Preset: "premium"}}, ""},
 	} {
 		got := ValidateMaaSRequest(tc.req)

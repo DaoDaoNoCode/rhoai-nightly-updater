@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   audienceProblem, audienceRequest, audienceText, connectionUrlProblem, databaseProblem, databaseRequest, defaultDatabaseForm,
-  defaultLimitForm, limitProblem, limitRequest, limitText, windowText,
+  defaultLimitForm, limitProblem, limitRequest, limitText, openShiftGroupName, windowText,
 } from "./maasForms";
 import type { MaaSDatabase } from "../../types";
 
@@ -72,19 +72,23 @@ describe("the limit form", () => {
 });
 
 describe("the audience form", () => {
-  it("sends everyone, or the names one per line or comma", () => {
+  it("sends everyone, or the names one per line (a name may have commas)", () => {
     expect(audienceRequest({ everyone: true, groups: "x", users: "" })).toEqual({ everyone: true });
-    expect(audienceRequest({ everyone: false, groups: "ml-team\n data , ml-team", users: "system:serviceaccount:ci:runner" }))
-      .toEqual({ everyone: false, groups: ["ml-team", "data"], users: ["system:serviceaccount:ci:runner"] });
+    expect(audienceRequest({ everyone: false, groups: "ml-team\r\n data \nml-team\ncn=admins,ou=groups", users: "system:serviceaccount:ci:runner" }))
+      .toEqual({ everyone: false, groups: ["ml-team", "data", "cn=admins,ou=groups"], users: ["system:serviceaccount:ci:runner"] });
   });
 
-  it("checks names by OpenShift's rules", () => {
+  it("takes names as MaaS matches them: exactly, as the identity provider sends them", () => {
     expect(audienceProblem({ everyone: false, groups: "", users: "" })).toContain("at least one");
     expect(audienceProblem({ everyone: false, groups: "system:authenticated", users: "" })).toContain("Everyone signed in");
-    expect(audienceProblem({ everyone: false, groups: "a/b", users: "" })).toContain('"/"');
-    expect(audienceProblem({ everyone: false, groups: "", users: "alice:bob" })).toContain("service accounts");
-    expect(audienceProblem({ everyone: false, groups: "", users: "system:serviceaccount:Bad:x" })).toContain("not a service account");
-    expect(audienceProblem({ everyone: false, groups: "ml", users: "kube:admin\nb64:YQ==" })).toBeNull();
+    expect(audienceProblem({ everyone: false, groups: "/admins\noidc:ml\na%b\n~", users: "alice:bob\nsystem:serviceaccount:Bad:x" })).toBeNull();
+    expect(audienceProblem({ everyone: false, groups: "a\tb", users: "" })).toContain("control character");
+    expect(audienceProblem({ everyone: false, groups: "", users: "x".repeat(254) })).toContain("253");
+  });
+
+  it("knows which names can be OpenShift groups", () => {
+    for (const n of ["ml-team", "ML Team", "team.a"]) expect(openShiftGroupName(n), n).toBe(true);
+    for (const n of ["/admins", "oidc:ml", "a%b", "..", ".", "~"]) expect(openShiftGroupName(n), n).toBe(false);
   });
 
   it("says the audience in words", () => {

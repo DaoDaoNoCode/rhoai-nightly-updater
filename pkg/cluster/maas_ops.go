@@ -872,8 +872,8 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 	limits[maasPub{project, name}.key()] = limit
 	sub, auth := maasAccessObjects(c, live, limits, aud, priority)
 	if !aud.everyone {
-		for _, warning := range maasGroupWarnings(c, aud.groups) {
-			m.step("check", "running", warning)
+		for _, p := range maasGroupProblems(c, aud.groups) {
+			m.step("check", "running", p.Message)
 		}
 	}
 	// The catalog's display name and description (the text setup writes on

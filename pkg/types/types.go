@@ -1110,8 +1110,10 @@ type MaaSAudience struct {
 	// Everyone: group system:authenticated (every signed-in user); Groups
 	// and Users are then empty.
 	Everyone bool `json:"everyone"`
-	// Groups are OpenShift group names; Users are user names or service
-	// accounts (system:serviceaccount:<namespace>:<name>).
+	// Groups and Users are names as the identity provider sends them, which
+	// MaaS matches exactly (an OpenShift group, an OIDC group like /admins;
+	// a user name or a service account,
+	// system:serviceaccount:<namespace>:<name>).
 	Groups []string `json:"groups,omitempty"`
 	Users  []string `json:"users,omitempty"`
 }
@@ -1119,9 +1121,20 @@ type MaaSAudience struct {
 // MaaSAudienceState is the audience of this tool's subscription as read.
 type MaaSAudienceState struct {
 	MaaSAudience
-	// Warnings: groups that have no OpenShift Group, or that could not be
-	// checked.
-	Warnings []string `json:"warnings,omitempty"`
+	// GroupProblems: groups that have no OpenShift Group, or that could not
+	// be checked.
+	GroupProblems []MaaSGroupProblem `json:"groupProblems,omitempty"`
+}
+
+// MaaSGroupProblem is a group of the audience that has no OpenShift Group
+// (Missing), or whose Group could not be read (Message says why).
+type MaaSGroupProblem struct {
+	Name    string `json:"name"`
+	Missing bool   `json:"missing,omitempty"`
+	Message string `json:"message"`
+	// Commands create the Group and add a user ("" when the name cannot
+	// be an OpenShift Group's: only the identity provider has it).
+	Commands string `json:"commands,omitempty"`
 }
 
 // MaaSLimit is a published model's token limit in this tool's

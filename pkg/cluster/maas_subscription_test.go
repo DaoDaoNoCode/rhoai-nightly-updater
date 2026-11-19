@@ -98,16 +98,14 @@ func TestParseMaaSAudience(t *testing.T) {
 		{"everyone names nobody else", &types.MaaSAudience{Everyone: true, Groups: []string{"a"}}, maasAudience{}, "Everyone"},
 		{"specific needs a name", &types.MaaSAudience{Groups: []string{" "}}, maasAudience{}, "at least one"},
 		{"everyone's group is Everyone", &types.MaaSAudience{Groups: []string{"system:authenticated"}}, maasAudience{}, "Everyone signed in"},
-		{"a group name with a colon", &types.MaaSAudience{Groups: []string{"system:masters"}}, maasAudience{}, `":"`},
-		{"a group name with a slash", &types.MaaSAudience{Groups: []string{"a/b"}}, maasAudience{}, `"/"`},
-		{"a group name with a percent", &types.MaaSAudience{Groups: []string{"a%b"}}, maasAudience{}, `"%"`},
-		{"a group named ..", &types.MaaSAudience{Groups: []string{".."}}, maasAudience{}, "not a valid"},
-		{"a group named ~", &types.MaaSAudience{Groups: []string{"~"}}, maasAudience{}, "not a valid"},
-		{"a control character", &types.MaaSAudience{Groups: []string{"a\tb"}}, maasAudience{}, "control"},
+		// MaaS matches names exactly, as the identity provider sends them:
+		// OIDC groups and user names are not OpenShift object names.
+		{"identity-provider names as they are", &types.MaaSAudience{Groups: []string{"/admins", "oidc:ml", "a%b", "..", "~"}, Users: []string{"alice:bob", "https://idp.example.com#alice", "system:serviceaccount:ci"}},
+			maasAudience{groups: []string{"/admins", "oidc:ml", "a%b", "..", "~"}, users: []string{"alice:bob", "https://idp.example.com#alice", "system:serviceaccount:ci"}}, ""},
+		{"a control character in a group", &types.MaaSAudience{Groups: []string{"a\tb"}}, maasAudience{}, "control"},
+		{"a control character in a user", &types.MaaSAudience{Users: []string{"a\x00b"}}, maasAudience{}, "control"},
 		{"a long group name", &types.MaaSAudience{Groups: []string{strings.Repeat("g", 254)}}, maasAudience{}, "253"},
-		{"a user name with a colon", &types.MaaSAudience{Users: []string{"alice:bob"}}, maasAudience{}, "b64:"},
-		{"a malformed service account", &types.MaaSAudience{Users: []string{"system:serviceaccount:Bad_NS:runner"}}, maasAudience{}, "service account"},
-		{"a service account without a name", &types.MaaSAudience{Users: []string{"system:serviceaccount:ci"}}, maasAudience{}, "service account"},
+		{"a long user name", &types.MaaSAudience{Users: []string{strings.Repeat("u", 254)}}, maasAudience{}, "253"},
 		{"too many groups", &types.MaaSAudience{Groups: strings.Split("a b c d e f g h i j k l m n o p q r s t u", " ")}, maasAudience{}, "at most 20"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -170,5 +168,40 @@ func TestMaaSSubscriptionDescription(t *testing.T) {
 	twoProjects := maasSubscriptionDescription([]maasPub{{"a", "qwen25-05b-instruct"}, {"b", "qwen25-05b-instruct"}}, map[string]maasLimit{"a/qwen25-05b-instruct": free, "b/qwen25-05b-instruct": {unlimited: true}}, everyone)
 	if !strings.Contains(twoProjects, "Qwen2.5 0.5B Instruct (CPU) in a: 100 tokens a minute") || !strings.Contains(twoProjects, "Qwen2.5 0.5B Instruct (CPU) in b: unlimited") {
 		t.Errorf("the same model in two projects: %q", twoProjects)
+	}
+}
+
+// A group without an OpenShift Group is a warning with the commands that
+// make it; a name that cannot be an OpenShift Group's is not looked up and
+// has no commands; one that cannot be read says so.
+func TestMaaSGroupProblems(t *testing.T) {
+	f, c := newResourceFake(t)
+	f.putJSON("/apis/user.openshift.io/v1/groups/ml-team", `{}`)
+	f.fail["GET /apis/user.openshift.io/v1/groups/secret-team"] = 403
+	got := maasGroupProblems(c, []string{"ml-team", "nobody-yet", "/admins", "oidc:ml", "secret-team"})
+	if len(got) != 4 {
+		t.Fatalf("problems %+v", got)
+	}
+	want := []types.MaaSGroupProblem{
+		{Name: "nobody-yet", Missing: true, Message: "nobody-yet is not a group on this cluster. Nobody is in it unless your identity provider adds it at sign-in.", Commands: "oc adm groups new nobody-yet\noc adm groups add-users nobody-yet <user>"},
+		{Name: "/admins", Missing: true, Message: "/admins is not a group on this cluster. Nobody is in it unless your identity provider adds it at sign-in."},
+		{Name: "oidc:ml", Missing: true, Message: "oidc:ml is not a group on this cluster. Nobody is in it unless your identity provider adds it at sign-in."},
+	}
+	if !reflect.DeepEqual(got[:3], want) {
+		t.Errorf("got %+v\nwant %+v", got[:3], want)
+	}
+	if got[3].Name != "secret-team" || got[3].Missing || !strings.Contains(got[3].Message, "Cannot check whether group secret-team exists") {
+		t.Errorf("unreadable: %+v", got[3])
+	}
+	for _, r := range f.requests {
+		if strings.Contains(r, "admins") || strings.Contains(r, "oidc") {
+			t.Errorf("looked up a name that cannot be an OpenShift Group: %s", r)
+		}
+	}
+	if _, problem := CheckMaaSGroups(c, []string{"system:authenticated"}); !strings.Contains(problem, "Everyone signed in") {
+		t.Errorf("dialog check of system:authenticated: %q", problem)
+	}
+	if out, problem := CheckMaaSGroups(c, []string{"ml-team"}); problem != "" || out == nil || len(out) != 0 {
+		t.Errorf("dialog check of an existing group: %+v %q", out, problem)
 	}
 }

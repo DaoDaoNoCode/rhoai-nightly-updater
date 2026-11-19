@@ -115,29 +115,33 @@ export function databaseProblem(f: DatabaseForm, db: MaaSDatabase | undefined): 
   return f.kind === "external" ? connectionUrlProblem(f.connectionUrl.trim()) : null;
 }
 
-const names = (text: string) => [...new Set(text.split(/[\n,]/).map((n) => n.trim()).filter(Boolean))];
+/** One name per line: a name may have commas (an LDAP-style group). */
+const names = (text: string) => [...new Set(text.split("\n").map((n) => n.trim()).filter(Boolean))];
 
-/** A name's problem, by OpenShift's rules (apiserver-library-go uservalidation.go), or null. */
-export function groupNameProblem(n: string): string | null {
-  if (n.length > 253) return `Group "${n.slice(0, 40)}…" is longer than 253 characters.`;
-  if (n === "system:authenticated") return "system:authenticated is everyone signed in: choose Everyone signed in.";
-  if (n === "." || n === ".." || n === "~") return `"${n}" is not a valid OpenShift group name.`;
-  const bad = ["/", "%", ":"].find((c) => n.includes(c));
-  return bad ? `Group "${n}" may not contain "${bad}" (OpenShift group names).` : null;
-}
+/*
+ * Group and user names are matched exactly by MaaS, as the identity
+ * provider sends them (an OIDC group like /admins or oidc:ml is valid), so
+ * only what cannot be a name is refused (pkg/cluster parseMaaSAudience).
+ * Whether a group has an OpenShift Group is a warning, not a refusal.
+ */
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 
-export function userNameProblem(n: string): string | null {
-  if (n.length > 253) return `User "${n.slice(0, 40)}…" is longer than 253 characters.`;
-  if (n.startsWith("system:serviceaccount:")) {
-    return /^system:serviceaccount:[a-z0-9]([-a-z0-9]*[a-z0-9])?:[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$/.test(n)
-      ? null : `"${n}" is not a service account (system:serviceaccount:<namespace>:<name>).`;
-  }
-  if (n === "kube:admin") return null;
-  if (n === "." || n === ".." || n === "~") return `"${n}" is not a valid OpenShift user name.`;
-  if (/[/%]/.test(n)) return `User "${n}" may not contain "/" or "%".`;
-  if (n.includes(":") && !n.startsWith("b64:")) return `User "${n}" has ":": service accounts are system:serviceaccount:<namespace>:<name>.`;
+const nameProblem = (what: "Group" | "User", n: string): string | null => {
+  if (CONTROL.test(n)) return `${what} names cannot have a control character (a tab or a line break inside a name).`;
+  if (n.length > 253) return `${what} "${n.slice(0, 40)}…" is longer than 253 characters.`;
   return null;
+};
+
+export function groupNameProblem(n: string): string | null {
+  if (n === "system:authenticated") return "system:authenticated is everyone signed in: choose Everyone signed in.";
+  return nameProblem("Group", n);
 }
+
+export const userNameProblem = (n: string): string | null => nameProblem("User", n);
+
+/** The name can be an OpenShift Group's (apiserver-library-go uservalidation.go); one that cannot has no Group object. */
+export const openShiftGroupName = (n: string): boolean => n !== "." && n !== ".." && n !== "~" && !/[/%:]/.test(n);
 
 export function audienceRequest(f: AudienceForm): MaaSAudience {
   return f.everyone ? { everyone: true } : { everyone: false, groups: names(f.groups), users: names(f.users) };

@@ -69,14 +69,15 @@ describe("MaaS dialogs", () => {
   it("Change limit takes custom rates by the CRD's rules", async () => {
     const api = stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] },
       "/api/resources/maas": maas({ parts: [{ id: "dsc", title: "MaaS in the DataScienceCluster", state: "ready" }], platform: { deployed: true, ready: true, managedByTool: true },
-        access: { everyone: false, groups: ["ml-team"], warnings: ["Group ml-team does not exist on this cluster"] },
+        access: { everyone: false, groups: ["ml-team"], groupProblems: [{ name: "ml-team", missing: true, message: "ml-team is not a group on this cluster.", commands: "oc adm groups new ml-team" }] },
         items: [{ namespace: "dev", name: "qwen3-1-7b", displayName: "Qwen3 1.7B", deployed: true, ready: true, managedByTool: true, modelReady: true, published: true, limit: { preset: "free", rates: [{ limit: 100, window: "1m" }] } }] }),
       "POST /api/resources/maas/stream": done });
     open();
     const row = (await screen.findByText("Qwen3 1.7B")).closest("tr")!;
     expect(within(row).getByText("100 tokens a minute")).toBeInTheDocument();
     expect(screen.getAllByText("Only group ml-team").length).toBeGreaterThan(0);
-    expect(screen.getByText("Group ml-team does not exist on this cluster")).toBeInTheDocument();
+    expect(screen.getByText("Group ml-team does not exist")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy the commands that create group ml-team" })).toBeInTheDocument();
     fireEvent.click(within(row).getByRole("button", { name: "Change limit" }));
     const dialog = await screen.findByRole("dialog", { name: /Change the limit of qwen3-1-7b in dev\?/ });
     fireEvent.click(within(dialog).getByRole("radio", { name: /Custom/ }));

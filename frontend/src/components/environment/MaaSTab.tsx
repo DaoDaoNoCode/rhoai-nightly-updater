@@ -12,14 +12,12 @@ import {
   DescriptionListTerm,
   Flex,
   FlexItem,
-  HelperText,
-  HelperTextItem,
   Label,
   Stack,
   StackItem,
 } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
-import type { MaaSModel, MaaSPart, MaaSRequest, MaaSStatus } from "../../types";
+import type { MaaSGroupProblem, MaaSModel, MaaSPart, MaaSRequest, MaaSStatus } from "../../types";
 import { AudienceFields, DatabaseChoice, KeysLostCheck, LimitFields } from "./MaaSDialogFields";
 import {
   audienceProblem, audienceRequest, audienceText, databaseLabel, databaseProblem, databaseRequest, defaultAudienceForm, defaultDatabaseForm,
@@ -133,6 +131,20 @@ const PlatformPart: React.FC<{ part: MaaSPart; readOnly: boolean; reason: string
   );
 };
 
+/** A group of the audience with no OpenShift Group, or one that could not be checked, with the commands that make it. */
+export const GroupProblemAlert: React.FC<{ problem: MaaSGroupProblem; idPrefix: string }> = ({ problem, idPrefix }) => (
+  <Alert variant="warning" isInline component="p" title={problem.missing ? `Group ${problem.name} does not exist` : `Cannot check group ${problem.name}`}>
+    <Stack hasGutter>
+      <StackItem>{problem.message}{problem.commands ? " A cluster-admin creates it and adds people to it:" : ""}</StackItem>
+      {problem.commands && (
+        <StackItem>
+          <CopyableCode id={`${idPrefix}-group-${problem.name.replace(/[^A-Za-z0-9_-]/g, "_")}`} label={`the commands that create group ${problem.name}`} code={problem.commands} />
+        </StackItem>
+      )}
+    </Stack>
+  </Alert>
+);
+
 /** The words for a model's publication. */
 export function maasPublication(i: MaaSModel): string {
   if (!i.published) return "Not published";
@@ -158,7 +170,7 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
               {!readOnly && <FlexItem><Button variant="link" isInline isAriaDisabled={!!baseReason} onClick={() => setPending({ kind: "maas-access" })}>Change who can use them</Button></FlexItem>}
             </Flex>
           </StackItem>
-          {(maas.access.warnings ?? []).map((w) => <StackItem key={w}><HelperText><HelperTextItem variant="warning">{w}</HelperTextItem></HelperText></StackItem>)}
+          {(maas.access.groupProblems ?? []).map((p) => <StackItem key={p.name}><GroupProblemAlert problem={p} idPrefix="maas-access" /></StackItem>)}
         </Stack>
       )}
       {maas && items.length === 0 ? (

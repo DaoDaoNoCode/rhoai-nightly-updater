@@ -1433,7 +1433,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	} else if toolSub.found && toolSub.owned {
 		st.Access = &types.MaaSAudienceState{MaaSAudience: toolSub.audience.api()}
 		if !toolSub.audience.everyone {
-			st.Access.Warnings = maasGroupWarnings(c, toolSub.audience.groups)
+			st.Access.GroupProblems = maasGroupProblems(c, toolSub.audience.groups)
 		}
 	}
 	owned, ownedErr := readModelsRecord(c)
