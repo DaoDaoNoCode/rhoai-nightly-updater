@@ -32,14 +32,19 @@ describe("MaaS dialogs", () => {
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Set up MaaS" }));
     const dialog = await screen.findByRole("dialog", { name: "Set up Models as a Service?" });
-    expect(within(dialog).getByRole("radio", { name: /Development database, as the MaaS docs set it up/ })).toBeChecked();
-    expect(within(dialog).getByText(/Not part of the MaaS or RHOAI docs/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("radio", { name: /^Development database/ })).toBeChecked();
+    // The development database warns while it is chosen.
+    expect(within(dialog).getByText("API keys are lost whenever this database restarts")).toBeInTheDocument();
+    expect(within(dialog).getByText("Not in the MaaS docs")).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("radio", { name: /Your PostgreSQL/ }));
     const setUp = within(dialog).getByRole("button", { name: "Set up" });
     expect(setUp).toBeDisabled();
     const url = within(dialog).getByLabelText(/Connection URL/);
     expect(url).toHaveAttribute("type", "password");
     fireEvent.change(url, { target: { value: "mysql://u:S3cret@db/maas" } });
+    // Checked when the field is left, not at every keystroke.
+    expect(within(dialog).queryByText(/must begin with postgresql:\/\//)).toBeNull();
+    fireEvent.blur(url);
     expect(within(dialog).getByText(/must begin with postgresql:\/\//)).toBeInTheDocument();
     expect(dialog.textContent).not.toContain("S3cret");
     fireEvent.change(url, { target: { value: "postgresql://u:S3cret@db.example.com:5432/maas?sslmode=require" } });
@@ -57,11 +62,11 @@ describe("MaaS dialogs", () => {
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Publish" }));
     const dialog = await screen.findByRole("dialog", { name: /Publish qwen3-1-7b in dev to MaaS\?/ });
-    fireEvent.click(within(dialog).getByRole("radio", { name: /Premium sample: 100,000 tokens a day/ }));
+    fireEvent.click(within(dialog).getByRole("radio", { name: /Premium example: 100,000 tokens a day/ }));
     fireEvent.click(within(dialog).getByRole("radio", { name: /Specific groups and users/ }));
     const publish = within(dialog).getByRole("button", { name: "Publish" });
     expect(publish).toBeDisabled();
-    fireEvent.change(within(dialog).getByLabelText("OpenShift groups"), { target: { value: "ml-team\ndata" } });
+    fireEvent.change(within(dialog).getByLabelText("Groups"), { target: { value: "ml-team\ndata" } });
     fireEvent.click(publish);
     await screen.findByRole("dialog", { name: "Publish qwen3-1-7b in dev" });
     expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "publish", project: "dev", model: "qwen3-1-7b", limit: { preset: "premium" }, access: { everyone: false, groups: ["ml-team", "data"], users: [] } }]);
@@ -79,7 +84,7 @@ describe("MaaS dialogs", () => {
     fireEvent.click(within(dialog).getByRole("radio", { name: /Specific groups and users/ }));
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      fireEvent.change(within(dialog).getByLabelText("OpenShift groups"), { target: { value: "ml-team\nnobody-yet\n/admins" } });
+      fireEvent.change(within(dialog).getByLabelText("Groups"), { target: { value: "ml-team\nnobody-yet\n/admins" } });
       // A name that cannot be an OpenShift Group's is said at once, without asking.
       expect(within(dialog).getByText("/admins is not a group on this cluster. Nobody is in it unless your identity provider adds it at sign-in.")).toBeInTheDocument();
       expect(api.calls.filter((c) => c.includes("/maas/groups"))).toEqual([]);
@@ -109,9 +114,11 @@ describe("MaaS dialogs", () => {
     fireEvent.click(within(row).getByRole("button", { name: "Change limit" }));
     const dialog = await screen.findByRole("dialog", { name: /Change the limit of qwen3-1-7b in dev\?/ });
     fireEvent.click(within(dialog).getByRole("radio", { name: /Custom/ }));
-    fireEvent.change(within(dialog).getByLabelText("Rate 1: tokens"), { target: { value: "0" } });
+    fireEvent.change(within(dialog).getByLabelText("Limit 1: tokens"), { target: { value: "0" } });
+    expect(within(dialog).getByLabelText("Limit 1: tokens")).toHaveAttribute("aria-invalid", "true");
+    expect(within(dialog).getByText(/Enter a whole number of tokens from 1 to 1,000,000,000/)).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Change limit" })).toBeDisabled();
-    fireEvent.change(within(dialog).getByLabelText("Rate 1: tokens"), { target: { value: "500" } });
+    fireEvent.change(within(dialog).getByLabelText("Limit 1: tokens"), { target: { value: "500" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Change limit" }));
     await screen.findByRole("dialog", { name: "Change the limit of qwen3-1-7b in dev" });
     expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "change-limit", project: "dev", model: "qwen3-1-7b", limit: { preset: "custom", rates: [{ limit: 500, window: "1m" }] } }]);
@@ -127,6 +134,11 @@ describe("MaaS dialogs", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Change database" }));
     const dialog = await screen.findByRole("dialog", { name: /Change the MaaS database\?/ });
     expect(within(dialog).queryByRole("radio", { name: /Development database/ })).toBeNull();
+    // Nothing preselected, no "Default", and the loss shown as the data-loss alert.
+    expect(within(dialog).getAllByRole("radio").filter((r) => (r as HTMLInputElement).checked)).toEqual([]);
+    expect(within(dialog).queryByText("Default")).toBeNull();
+    expect(within(dialog).getByText("Data is deleted and cannot be recovered")).toBeInTheDocument();
+    expect(within(dialog).getByText(/permanently deletes the current one \(Development database\)/)).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("radio", { name: /CloudNativePG/ }));
     const confirm = within(dialog).getByRole("button", { name: "Change database" });
     expect(confirm).toBeDisabled();

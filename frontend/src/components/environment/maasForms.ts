@@ -10,9 +10,12 @@ import type { MaaSAudience, MaaSDatabase, MaaSDatabaseKind, MaaSDatabaseRequest,
  */
 
 export interface DatabaseForm {
-  kind: MaaSDatabaseKind;
+  /** "": none chosen yet (Change database preselects nothing). */
+  kind: MaaSDatabaseKind | "";
   connectionUrl: string;
   showUrl?: boolean;
+  /** The URL field was left (or Set up tried): its problem shows from then on, not at every keystroke. */
+  urlTouched?: boolean;
 }
 
 export type LimitPreset = MaaSLimit["preset"];
@@ -43,37 +46,38 @@ export const MAX_TOKENS = 1_000_000_000;
 
 /** The docs' presets (quota-and-access-configuration.md), in the order the dialogs list them. */
 export const LIMIT_PRESETS: { id: Exclude<LimitPreset, "custom">; label: string; description: string }[] = [
-  { id: "free", label: "Free sample: 100 tokens a minute", description: "The MaaS docs' free sample, and what Publish did before." },
-  { id: "premium", label: "Premium sample: 100,000 tokens a day", description: "The MaaS docs' premium sample." },
-  { id: "unlimited", label: "Unlimited (usage still metered)", description: "No token budget; usage still shows in MaaS's metrics. Needs RHOAI 3.6 or later." },
+  { id: "free", label: "Free example: 100 tokens a minute", description: "The MaaS docs' free example: about one short answer a minute. The playground reaches it quickly." },
+  { id: "premium", label: "Premium example: 100,000 tokens a day", description: "The MaaS docs' premium example." },
+  { id: "unlimited", label: "Unlimited", description: "No cap: calls are never refused for usage. Usage is still counted and shows in MaaS's metrics." },
 ];
 
-/** Where MaaS keeps its API keys: what each choice is, in the dialog's words. */
-export const DATABASE_CHOICES: { id: MaaSDatabaseKind; label: string; description: string }[] = [
+/** Where MaaS keeps its API keys: what each choice is, in the dialog's words, in the dialog's order. */
+export const DATABASE_CHOICES: { id: MaaSDatabaseKind; label: string; description: string; notInDocs?: boolean }[] = [
+  { id: "development", label: "Development database",
+    description: "One PostgreSQL pod with no storage, set up like the MaaS docs' setup-database.sh. For trying MaaS out." },
+  { id: "cnpg", label: "Persistent development database (CloudNativePG)", notInDocs: true,
+    description: "Keeps API keys across restarts on a 1 GiB volume. Installs the CloudNativePG operator from certified-operators; it stays after Remove. Not for production." },
   { id: "external", label: "Your PostgreSQL",
-    description: "For anything whose API keys must last. Enter its connection URL: it goes only into Secret maas-db-config and is never shown again. This tool never changes or deletes your database." },
-  { id: "development", label: "Development database, as the MaaS docs set it up",
-    description: "One PostgreSQL pod without a volume (the docs' scripts/setup-database.sh). Ephemeral: API keys are lost when its pod restarts, and maas-api must then be restarted. Nothing else is installed." },
-  { id: "cnpg", label: "Persistent development database (CloudNativePG)",
-    description: "Not part of the MaaS or RHOAI docs: this tool's own option. Installs the CloudNativePG operator from certified-operators (it stays after Remove) and runs one instance with a 1 GiB volume, so keys survive restarts. Not for production." },
+    description: "For API keys that must last. This tool never changes or deletes your database." },
 ];
 
 export const databaseLabel = (kind: string): string =>
   kind === "adopted" ? "A database of someone else's (maas-db-config not written by this tool)" : DATABASE_CHOICES.find((c) => c.id === kind)?.label ?? "None yet";
 
 export const defaultDatabaseForm = (db: MaaSDatabase | undefined, except?: string): DatabaseForm => {
+  if (except !== undefined) return { kind: "", connectionUrl: "" };
   const usable = (db?.choices ?? []).filter((c) => !c.blockedReason && c.id !== except).map((c) => c.id);
   const kind = db && usable.includes(db.default) ? db.default : usable[0] ?? db?.default ?? "development";
   return { kind, connectionUrl: "" };
 };
 
 export const defaultLimitForm = (limit?: MaaSLimit): LimitForm => {
-  if (!limit) return { preset: "free", rows: [{ limit: "1000", amount: "1", unit: "m" }] };
+  if (!limit) return { preset: "premium", rows: [{ limit: "10000", amount: "1", unit: "h" }] };
   const rows = (limit.rates ?? []).map((r) => {
     const m = /^(\d+)([smh])$/.exec(r.window);
     return { limit: String(r.limit), amount: m?.[1] ?? "1", unit: (m?.[2] ?? "m") as WindowUnit };
   });
-  return { preset: limit.preset, rows: rows.length > 0 ? rows : [{ limit: "1000", amount: "1", unit: "m" }] };
+  return { preset: limit.preset, rows: rows.length > 0 ? rows : [{ limit: "10000", amount: "1", unit: "h" }] };
 };
 
 export const defaultAudienceForm = (a?: MaaSAudience): AudienceForm => ({
@@ -106,12 +110,13 @@ export function connectionUrlProblem(raw: string): string | null {
 }
 
 export function databaseRequest(f: DatabaseForm): MaaSDatabaseRequest {
-  return f.kind === "external" ? { kind: "external", connectionUrl: f.connectionUrl.trim() } : { kind: f.kind };
+  return f.kind === "external" ? { kind: "external", connectionUrl: f.connectionUrl.trim() } : { kind: f.kind || "development" };
 }
 
 export function databaseProblem(f: DatabaseForm, db: MaaSDatabase | undefined): string | null {
   const blocked = db?.choices.find((c) => c.id === f.kind)?.blockedReason;
   if (blocked) return blocked;
+  if (!f.kind) return "Choose a database.";
   return f.kind === "external" ? connectionUrlProblem(f.connectionUrl.trim()) : null;
 }
 
@@ -169,20 +174,34 @@ export function limitRequest(f: LimitForm): MaaSLimit {
   return { preset: "custom", rates: f.rows.map((r) => ({ limit: Number(r.limit), window: `${Number(r.amount)}${r.unit}` })) };
 }
 
-/** The limit's problem (the CRD's rules: 1 to 1,000,000,000 tokens; 1 to 9999 s, m or h), or null. */
-export function limitProblem(f: LimitForm): string | null {
+/** Row i's problem (the CRD's rules: 1 to 1,000,000,000 tokens; 1 to 9999 s, m or h; each window once), or null. */
+export function rateRowProblem(f: LimitForm, i: number): string | null {
+  const r = f.rows[i];
+  if (!/^\d+$/.test(r.limit) || Number(r.limit) < 1 || Number(r.limit) > MAX_TOKENS) return "Enter a whole number of tokens from 1 to 1,000,000,000. For no cap choose Unlimited.";
+  if (!/^\d+$/.test(r.amount) || Number(r.amount) < 1 || Number(r.amount) > 9999) return "Enter a period of 1 to 9999 seconds, minutes or hours.";
+  const w = `${Number(r.amount)}${r.unit}`;
+  if (f.rows.slice(0, i).some((o) => `${Number(o.amount)}${o.unit}` === w)) return `Another limit is per ${windowText(w).replace(/^(a|an|every) /, "")} already.`;
+  return null;
+}
+
+/** The limit's problem, or null. */
+export function limitProblem(f: LimitForm, noUnlimited = false): string | null {
+  if (f.preset === "unlimited" && noUnlimited) return "This cluster's MaaS has no unlimited option.";
   if (f.preset !== "custom") return null;
-  if (f.rows.length === 0) return "Add at least one rate.";
-  if (f.rows.length > MAX_RATES) return `At most ${MAX_RATES} rates.`;
-  const seen = new Set<string>();
-  for (const r of f.rows) {
-    if (!/^\d+$/.test(r.limit) || Number(r.limit) < 1 || Number(r.limit) > MAX_TOKENS) return "Each rate's tokens must be a whole number from 1 to 1,000,000,000. For no budget choose Unlimited.";
-    if (!/^\d+$/.test(r.amount) || Number(r.amount) < 1 || Number(r.amount) > 9999) return "Each window must be 1 to 9999 seconds, minutes or hours.";
-    const w = `${Number(r.amount)}${r.unit}`;
-    if (seen.has(w)) return `The window ${windowText(w)} is given twice.`;
-    seen.add(w);
+  if (f.rows.length === 0) return "Add at least one token rate limit.";
+  if (f.rows.length > MAX_RATES) return `At most ${MAX_RATES} token rate limits.`;
+  for (let i = 0; i < f.rows.length; i++) {
+    const p = rateRowProblem(f, i);
+    if (p) return p;
   }
   return null;
+}
+
+/** A valid custom limit in words: "Each user: 100,000 tokens a day and 10,000 tokens an hour; whichever runs out first stops them." */
+export function limitSummary(f: LimitForm): string | null {
+  if (f.preset !== "custom" || limitProblem(f)) return null;
+  const parts = f.rows.map((r) => `${Number(r.limit).toLocaleString("en-US")} ${Number(r.limit) === 1 ? "token" : "tokens"} ${windowText(`${Number(r.amount)}${r.unit}`)}`);
+  return parts.length === 1 ? `Each user: ${parts[0]}.` : `Each user: ${joinWords(parts)}; whichever runs out first stops them.`;
 }
 
 /** "a minute", "an hour", "a day", "every 30 seconds" (pkg/cluster windowText). */

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   audienceProblem, audienceRequest, audienceText, connectionUrlProblem, databaseProblem, databaseRequest, defaultDatabaseForm,
-  defaultLimitForm, limitProblem, limitRequest, limitText, openShiftGroupName, windowText,
+  defaultLimitForm, limitProblem, limitRequest, limitSummary, limitText, openShiftGroupName, windowText,
 } from "./maasForms";
 import type { MaaSDatabase } from "../../types";
 
@@ -14,7 +14,9 @@ describe("the database form", () => {
   it("preselects the server's default, or the first usable choice", () => {
     expect(defaultDatabaseForm(db).kind).toBe("development");
     expect(defaultDatabaseForm({ ...db, choices: [db.choices[0], { id: "development", plan: [], blockedReason: "taken" }, db.choices[2]] }).kind).toBe("external");
-    expect(defaultDatabaseForm(db, "development").kind).toBe("external");
+    // Change database preselects nothing.
+    expect(defaultDatabaseForm(db, "development").kind).toBe("");
+    expect(databaseProblem({ kind: "", connectionUrl: "" }, db)).toBe("Choose a database.");
   });
 
   it("checks the URL as the server does, without quoting it", () => {
@@ -53,13 +55,18 @@ describe("the limit form", () => {
     expect(one("1000000001", "1")).toContain("Unlimited");
     expect(one("1.5", "1")).toContain("whole number");
     expect(one("5", "10000", "s")).toContain("9999");
-    expect(limitProblem({ preset: "custom", rows: [{ limit: "1", amount: "1", unit: "m" }, { limit: "2", amount: "1", unit: "m" }] })).toContain("twice");
+    expect(limitProblem({ preset: "custom", rows: [{ limit: "1", amount: "1", unit: "m" }, { limit: "2", amount: "1", unit: "m" }] })).toBe("Another limit is per minute already.");
     expect(limitProblem({ preset: "custom", rows: [] })).toContain("at least one");
   });
 
   it("reads an existing limit back into the form", () => {
     expect(defaultLimitForm({ preset: "custom", rates: [{ limit: 7, window: "30s" }] })).toEqual({ preset: "custom", rows: [{ limit: "7", amount: "30", unit: "s" }] });
-    expect(defaultLimitForm().preset).toBe("free");
+    expect(defaultLimitForm().preset).toBe("premium");
+    expect(limitSummary({ preset: "custom", rows: [{ limit: "100000", amount: "24", unit: "h" }, { limit: "10000", amount: "1", unit: "h" }] }))
+      .toBe("Each user: 100,000 tokens a day and 10,000 tokens an hour; whichever runs out first stops them.");
+    expect(limitSummary({ preset: "custom", rows: [{ limit: "0", amount: "1", unit: "h" }] })).toBeNull();
+    expect(limitProblem({ preset: "unlimited", rows: [] }, true)).toBe("This cluster's MaaS has no unlimited option.");
+    expect(limitProblem({ preset: "unlimited", rows: [] })).toBeNull();
   });
 
   it("says limits in words", () => {
