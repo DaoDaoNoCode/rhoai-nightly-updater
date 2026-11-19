@@ -660,6 +660,18 @@ case "$1 $2" in
 	*) echo "Error from server: cannot create secrets" >&2; exit 1 ;;
 	esac ;;
 "get route") [ -n "${FAKE_NO_HOST:-}" ] || printf 'app.example.com' ;;
+"get oauthclient")
+	# FAKE_CLIENT: absent (default), ours, theirs (another install's labels),
+	# unlabelled-ours (no labels, this Route's callback), unlabelled-theirs,
+	# error. Printed as the hook's jsonpath asks: app, namespace, URIs.
+	case "${FAKE_CLIENT:-absent}" in
+	ours) printf 'app\tns1\thttps://app.example.com/oauth/callback\n' ;;
+	theirs) printf 'app-x\tns1\thttps://app.example.com/oauth/callback\n' ;;
+	unlabelled-ours) printf '\t\thttps://app.example.com/oauth/callback\n' ;;
+	unlabelled-theirs) printf '\t\thttps://old.example.com/oauth/callback\n' ;;
+	error) echo "Error from server (Forbidden): oauthclients.oauth.openshift.io \"$3\" is forbidden" >&2; exit 1 ;;
+	*) echo "Error from server (NotFound): oauthclients.oauth.openshift.io \"$3\" not found" >&2; exit 1 ;;
+	esac ;;
 "apply --server-side")
 	cat >"$FAKE_LOG.applied"
 	[ "${FAKE_APPLY:-ok}" = ok ] || { echo "Error from server: cannot apply oauthclients" >&2; exit 1; } ;;
@@ -694,8 +706,26 @@ expect_eq "OAuth client Secret created meanwhile: success" 0 "$HOOK_RC"
 run_oauth "$OCLIENT_SH"
 expect_eq "OAuthClient applied: success" 0 "$HOOK_RC"
 expect_eq "OAuthClient applied: the object" "$(printf '%s\n' 'apiVersion: oauth.openshift.io/v1' 'kind: OAuthClient' 'metadata:' \
-	'  name: app-ns1' '  labels:' '    app.kubernetes.io/instance: app-ns1' 'grantMethod: auto' 'redirectURIs:' \
+	'  name: app-ns1' '  labels:' '    app.kubernetes.io/instance: app-ns1' '    app.kubernetes.io/name: "app"' \
+	'    rhoai-nightly-updater/namespace: "ns1"' 'grantMethod: auto' 'redirectURIs:' \
 	'  - https://app.example.com/oauth/callback' 'secret: client-secret-value')" "$(cat "$HOOKLOG.applied")"
+# Only this install's client is applied over: its labels, or without labels
+# this Route's callback. Another install's (the name <APP_NAME>-<NAMESPACE>
+# is ambiguous) or an unreadable one fails the hook before anything is
+# applied.
+for client in ours unlabelled-ours; do
+	run_oauth "$OCLIENT_SH" FAKE_CLIENT=$client
+	expect_eq "OAuthClient $client: applied" "0 1" "$HOOK_RC $(grep -c '^oc apply' "$HOOKLOG")"
+done
+for client in theirs unlabelled-theirs error; do
+	run_oauth "$OCLIENT_SH" FAKE_CLIENT=$client
+	[ "$HOOK_RC" -ne 0 ] && [ ! -e "$HOOKLOG.applied" ] && [ "$(grep -c '^oc get secret' "$HOOKLOG" || true)" = 0 ] && pass ||
+		fail "OAuthClient $client: applied, or the secret read: $HOOK_RC $(cat "$HOOKLOG")"
+done
+run_oauth "$OCLIENT_SH" FAKE_CLIENT=theirs
+grep -qF 'OAuthClient app-ns1 belongs to app app-x in namespace ns1, not to this install; it was not changed' "$HOOKOUT" && pass || fail "OAuthClient theirs: $(cat "$HOOKOUT")"
+run_oauth "$OCLIENT_SH" FAKE_CLIENT=unlabelled-theirs
+grep -qF 'redirects to https://old.example.com/oauth/callback, not to https://app.example.com/oauth/callback; it was not changed' "$HOOKOUT" && pass || fail "OAuthClient unlabelled-theirs: $(cat "$HOOKOUT")"
 grep -qx 'oc apply --server-side --field-manager=rhoai-nightly-updater-gitops --force-conflicts -f -' "$HOOKLOG" && pass || fail "OAuthClient: not server-side applied: $(cat "$HOOKLOG")"
 grep -qF 'client-secret-value' "$HOOKOUT" "$HOOKLOG" && fail "OAuthClient: the secret was printed or passed as an argument" || pass
 run_oauth "$OCLIENT_SH" FAKE_DATA=""

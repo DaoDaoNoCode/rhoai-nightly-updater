@@ -280,7 +280,14 @@ spec:
           # short wait is enough. The secret goes to oc on stdin, never on
           # a command line or into the log; server-side apply keeps it out of
           # a last-applied annotation. --force-conflicts takes over the
-          # fields of a client that install.sh applied.
+          # fields of a client that install.sh applied, and only of this
+          # install's: the name <APP_NAME>-<NAMESPACE> is the same for app
+          # a-b in namespace c and app a in namespace b-c, so a client is
+          # this install's only when its labels name this app and
+          # namespace, or, without them (applied before the labels), when
+          # its only redirect URI is this Route's (install.sh's
+          # oauth_client_owner, the same rule). Otherwise the hook fails
+          # without changing it.
           command:
             - /bin/bash
             - -c
@@ -296,6 +303,26 @@ spec:
                 echo "Route $APP_NAME has no host yet" >&2
                 exit 1
               fi
+              if out=$(oc get oauthclient "$INSTANCE" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/name}{"\t"}{.metadata.labels.rhoai-nightly-updater/namespace}{"\t"}{.redirectURIs[*]}{"\n"}' 2>&1); then
+                IFS=$'\t' read -r app ns uris <<<"$out" || true
+                if [ -n "$app" ] || [ -n "$ns" ]; then
+                  if [ "$app" != "$APP_NAME" ] || [ "$ns" != "$NAMESPACE" ]; then
+                    echo "OAuthClient $INSTANCE belongs to app ${app:-?} in namespace ${ns:-?}, not to this install; it was not changed. Use another APP_NAME, or delete it if that install is gone (oc delete oauthclient $INSTANCE; oc delete oauthaccesstokens --field-selector clientName=$INSTANCE)." >&2
+                    exit 1
+                  fi
+                elif [ "$uris" != "https://$host/oauth/callback" ]; then
+                  echo "OAuthClient $INSTANCE has no labels of an install and redirects to ${uris:-nothing}, not to https://$host/oauth/callback; it was not changed. Delete it if it is left from an install that is gone (oc delete oauthclient $INSTANCE; oc delete oauthaccesstokens --field-selector clientName=$INSTANCE)." >&2
+                  exit 1
+                fi
+              else
+                case "$out" in
+                *NotFound* | *"not found"*) ;;
+                *)
+                  echo "Cannot read OAuthClient $INSTANCE: $out" >&2
+                  exit 1
+                  ;;
+                esac
+              fi
               secret=$(oc get secret "$SECRET" -n "$NAMESPACE" -o jsonpath='{.data.client-secret}' | base64 -d)
               if [ -z "$secret" ]; then
                 echo "Secret $SECRET has no client-secret; delete it and sync again" >&2
@@ -309,6 +336,8 @@ spec:
                   "  name: $INSTANCE" \
                   '  labels:' \
                   "    app.kubernetes.io/instance: $INSTANCE" \
+                  "    app.kubernetes.io/name: \"$APP_NAME\"" \
+                  "    rhoai-nightly-updater/namespace: \"$NAMESPACE\"" \
                   'grantMethod: auto' \
                   'redirectURIs:' \
                   "  - https://$host/oauth/callback"
