@@ -15,6 +15,8 @@ import {
   FlexItem,
   Form,
   FormGroup,
+  FormSelect,
+  FormSelectOption,
   List,
   ListItem,
   Modal,
@@ -29,8 +31,6 @@ import {
   StackItem,
   TextInput,
   Title,
-  ToggleGroup,
-  ToggleGroupItem,
 } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, TreeRowWrapper, Tr } from "@patternfly/react-table";
 import type { DSCChange, DSCManager, DSCNode, DSCPlan, OperationResponse, UpdateStep } from "../../types";
@@ -113,11 +113,10 @@ const ComponentTree: React.FC<{
     <Table isTreeTable aria-label="Components of the DataScienceCluster" variant="compact">
       <Thead>
         <Tr>
-          <Th width={25}>Component</Th>
-          <Th width={15}>In the DSC</Th>
-          <Th width={15}>Release default</Th>
-          <Th width={15}>Operator reports</Th>
-          <Th>Set to</Th>
+          <Th modifier="wrap">Component</Th>
+          <Th modifier="wrap">In the DSC</Th>
+          <Th modifier="wrap">Release default</Th>
+          <Th modifier="wrap">Operator reports</Th>
         </Tr>
       </Thead>
       <Tbody>
@@ -143,8 +142,17 @@ const ComponentTree: React.FC<{
               </Td>
               <Td dataLabel="In the DSC">
                 {!n.toggle ? <span className="pf-v6-u-text-color-subtle">Group</span> : (
-                  <Flex gap={{ default: "gapXs" }} flexWrap={{ default: "wrap" }}>
-                    <FlexItem>{n.specSet ? <StatusLabel status={stateKind(n.spec)}>{n.spec}</StatusLabel> : <span className="pf-v6-u-text-color-subtle">Not set (Removed)</span>}</FlexItem>
+                  <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
+                    {/* The value in the DSC, and the control that changes it (the CRD's values only). */}
+                    <FlexItem className="pf-v6-u-min-width" style={{ "--pf-v6-u-min-width--MinWidth": "16ch" } as React.CSSProperties}>
+                      <FormSelect aria-label={`Set ${n.path}`} id={`dsc-set-${n.path}`} value={n.specSet ? n.spec : ""}
+                        isDisabled={!!rowReason || pending !== null}
+                        onChange={(_e, v) => { if (v && !(n.specSet && n.spec === v)) onSet(n, v); }}>
+                        {!n.specSet && <FormSelectOption value="" label="Not set (Removed)" isDisabled />}
+                        {allowed.map((v) => <FormSelectOption key={v} value={v} label={v} />)}
+                      </FormSelect>
+                    </FlexItem>
+                    {pending === n.path && <FlexItem><Spinner size="sm" aria-label={`Changing ${n.path}`} /></FlexItem>}
                     {n.changed && <FlexItem><TagLabel color="blue">Changed from the default</TagLabel></FlexItem>}
                   </Flex>
                 )}
@@ -153,22 +161,6 @@ const ComponentTree: React.FC<{
                 {!n.toggle ? null : n.defaultSet ? n.default : <span className="pf-v6-u-text-color-subtle">{n.schemaDefault ? `Not set (CRD default ${n.schemaDefault})` : "Not set"}</span>}
               </Td>
               <Td dataLabel="Operator reports"><ActualCell node={n} /></Td>
-              <Td dataLabel="Set to">
-                {n.toggle && (
-                  <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "nowrap" }}>
-                    <FlexItem>
-                      <ToggleGroup isCompact aria-label={`Set ${n.path}`}>
-                        {allowed.map((v) => (
-                          <ToggleGroupItem key={v} text={v} buttonId={`dsc-${n.path}-${v}`} isSelected={n.specSet && n.spec === v}
-                            isDisabled={!!rowReason || pending !== null}
-                            onChange={() => { if (!(n.specSet && n.spec === v)) onSet(n, v); }} />
-                        ))}
-                      </ToggleGroup>
-                    </FlexItem>
-                    {pending === n.path && <FlexItem><Spinner size="sm" aria-label={`Changing ${n.path}`} /></FlexItem>}
-                  </Flex>
-                )}
-              </Td>
             </TreeRowWrapper>
           );
         })}

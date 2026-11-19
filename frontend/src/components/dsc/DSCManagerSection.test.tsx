@@ -68,7 +68,7 @@ describe("DSCManagerSection", () => {
     });
     const onChanged = renderSection();
     await screen.findByRole("treegrid");
-    fireEvent.click(within(screen.getByRole("group", { name: "Set ray" })).getByRole("button", { name: "Removed" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Set ray" }), { target: { value: "Removed" } });
     const dialog = await screen.findByRole("dialog", { name: "Set ray to Removed?" });
     expect(api.calls).toContain("GET /api/components/dsc/plan?action=toggle&path=ray&to=Removed");
     expect(await within(dialog).findByText(/Managed → Removed \(removes it\)/)).toBeInTheDocument();
@@ -89,7 +89,7 @@ describe("DSCManagerSection", () => {
     });
     renderSection();
     await screen.findByRole("treegrid");
-    fireEvent.click(within(screen.getByRole("group", { name: "Set aigateway.batchGateway" })).getByRole("button", { name: "Managed" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Set aigateway.batchGateway" }), { target: { value: "Managed" } });
     let dialog = await screen.findByRole("dialog");
     expect(await within(dialog).findByText(/would deploy nothing/)).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Set to Managed" })).toBeDisabled();
@@ -108,7 +108,7 @@ describe("DSCManagerSection", () => {
     });
     renderSection();
     await screen.findByRole("treegrid");
-    fireEvent.click(within(screen.getByRole("group", { name: "Set ray" })).getByRole("button", { name: "Removed" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Set ray" }), { target: { value: "Removed" } });
     const dialog = await screen.findByRole("dialog");
     expect(await within(dialog).findByText(/rhods-operator must be running/)).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Set to Removed" })).toBeDisabled();
@@ -133,7 +133,7 @@ describe("DSCManagerSection", () => {
     stubApi({ "GET /api/components/dsc": { ...manager, readOnlyReason: "DataScienceCluster default-dsc is managed by Argo CD application \"rhoai\"." } });
     renderSection();
     expect(await screen.findByText(/managed by Argo CD application/)).toBeInTheDocument();
-    for (const b of within(screen.getByRole("group", { name: "Set ray" })).getAllByRole("button")) expect(b).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Set ray" })).toBeDisabled();
     expect(isOff(screen.getByRole("button", { name: "Fix" }))).toBe(true);
     expect(isOff(screen.getByRole("button", { name: "Reset to the release default…" }))).toBe(true);
   });
