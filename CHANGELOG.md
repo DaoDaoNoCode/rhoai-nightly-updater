@@ -307,6 +307,12 @@ only accepts a tag whose version is the top dated section. See
   credentials" and to check the ServiceAccount. It now says "Your sign-in
   ended during the change": part of it may have run; sign in again, check
   the result, then run it again if it is not complete (`sign_in_ended`).
+- Update, Install a different build, Refresh and Deploy a dashboard build
+  titled a read they could not make before changing anything (the
+  installed CSVs, the Subscription, dashboard-operator) "Blocked:
+  prerequisites not met" whatever the cause. A denied read now says so
+  (`forbidden`), and a sign-in that ended says that; other failures keep
+  `prerequisites`.
 - Diagnostics no longer reports a module operator's own Deployment as
   "last applied for version ..." (live: the MCP lifecycle operator's
   manager, stamped `platform.opendatahub.io/type=OpenDataHub` and
