@@ -30,6 +30,30 @@ describe("Models review fixes", () => {
     expect(gatewayListRelease(status({ ...gw, addedProjects: [] }), "dev", ["qwen25-05b-instruct"])).toBe(false);
   });
 
+  it("deleting a model set up through MaaS only says it is unpublished first", () => {
+    const st = status(gw, [model({ exposure: "maas", maasPublished: true, maasOnlySetup: true })]);
+    const spec = modelsConfirm({ kind: "teardown-model", project: "dev", model: "qwen25-05b-instruct", unpublish: true }, st)!;
+    render(<>{spec.summary}{spec.changes}</>);
+    expect(screen.getByText(/Unpublishes it from Models as a Service first \(its subscription entry and model reference go\)\./)).toBeInTheDocument();
+    expect(screen.getByText(/which was set up to be reached through MaaS only, so it is unpublished first/)).toBeInTheDocument();
+  });
+
+  it("deleting any other model says nothing about MaaS", () => {
+    const spec = modelsConfirm({ kind: "teardown-model", project: "dev", model: "qwen25-05b-instruct" }, status(gw))!;
+    render(<>{spec.summary}{spec.changes}</>);
+    expect(screen.queryByText(/Models as a Service/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/unpublished first/)).not.toBeInTheDocument();
+  });
+
+  it("a model set up through MaaS only has no direct address to get back", () => {
+    const m = model({ exposure: "maas", maasPublished: true, maasOnlySetup: true, servedName: "qwen25-05b-instruct" });
+    render(<MemoryRouter><UseModel model={m} catalog={qwen} project="dev" onMaaS={() => {}} readOnly={false} baseReason={null} onSetUpAgain={() => {}} /></MemoryRouter>);
+    expect(screen.getByText(/it has no direct address\./)).toBeInTheDocument();
+    expect(screen.getByText(/leaves it with no outside route, as it was set up/)).toBeInTheDocument();
+    expect(screen.queryByText(/To call its direct address again/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/answers 404 until it is unpublished/)).not.toBeInTheDocument();
+  });
+
   it("a model reached only inside the cluster has its own next steps", () => {
     const m = model({ exposure: "internal", internalUrl: "https://qwen25-05b-instruct-kserve-workload-svc.dev.svc.cluster.local", servedName: "qwen25-05b-instruct" });
     render(<MemoryRouter><UseModel model={m} catalog={qwen} project="dev" onMaaS={() => {}} readOnly={false} baseReason={null} onSetUpAgain={() => {}} /></MemoryRouter>);

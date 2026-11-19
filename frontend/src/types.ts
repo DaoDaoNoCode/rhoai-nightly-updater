@@ -874,6 +874,8 @@ export interface ModelState extends ResourceState {
   presetImageMissing?: boolean;
   /** Routes through the MaaS gateway (published on the MaaS tab): used through MaaS, and its direct address answers 404. */
   maasPublished?: boolean;
+  /** Set up on the Models tab "Through MaaS only", published as part of that setup: Delete unpublishes it first, and Unpublish leaves it with no route (only inside the cluster). */
+  maasOnlySetup?: boolean;
   /** The model's token Secret and ServiceAccount, made as the dashboard's "Require token authentication" does; absent for a model set up before (set it up again). */
   tokenSecret?: string;
   tokenServiceAccount?: string;
@@ -1167,6 +1169,8 @@ export interface MaaSModel extends ResourceState {
   displayName?: string;
   modelReady: boolean;
   published: boolean;
+  /** Set up on the Models tab "Through MaaS only": Unpublish leaves it with no route (only inside the cluster). */
+  maasOnlySetup?: boolean;
   /** What is left of a publication undone half-way (message says what); Unpublish finishes it. */
   partly?: boolean;
   phase?: string;

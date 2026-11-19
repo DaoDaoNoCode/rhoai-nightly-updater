@@ -582,15 +582,19 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
         ],
       };
     }
-    case "unpublish-maas":
+    case "unpublish-maas": {
+      const maasOnly = !!m?.items?.find((i) => i.namespace === pending.project && i.name === pending.model)?.maasOnlySetup;
       return {
         title: `Unpublish ${pending.model} in ${pending.project}?`, confirm: "Unpublish", danger: true, runTitle: `Unpublish ${pending.model} in ${pending.project}`,
         summary: <Content component="p">MaaS stops offering the model; API keys can no longer call it. The model keeps running in {pending.project}.</Content>,
         changes: [
           <>Deleted: MaaSModelRef <code>{pending.model}</code> in {pending.project}, and the model&apos;s entries in the subscription and access policy (both are deleted when no model is left).</>,
-          <>The model routes through the gateways it used before publishing, so its direct address answers again; the MaaS gateway stops admitting {pending.project} unless another model of this tool is published there.</>,
+          maasOnly
+            ? <>The model was set up to be reached through MaaS only, so its route is removed: it then answers only at its in-cluster address, as a model set up &quot;Only inside the cluster&quot;. The MaaS gateway stops admitting {pending.project} unless another model of this tool is published there; the inference gateway is not changed.</>
+            : <>The model routes through the gateways it used before publishing, so its direct address answers again; the MaaS gateway stops admitting {pending.project} unless another model of this tool is published there.</>,
         ],
       };
+    }
     default:
       return null;
   }

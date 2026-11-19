@@ -135,6 +135,8 @@ describe("Models runs and clean-up", () => {
     expect(modelsSteps({ kind: "disallow-gateway-project", project: "e2e", gone: true }).map((s) => s.id)).toEqual(["check", "gateway"]);
     expect(modelsSteps({ kind: "setup-models", gateway: false, project: "dev", model: "qwen3-1-7b", releasedImage: true }).map((s) => s.title)).toContain("Switch qwen3-1-7b in dev to the released image");
     expect(modelsSteps({ kind: "teardown-model", project: "dev", model: "smollm2-135m-instruct" }).map((s) => s.title)).toEqual(["Delete smollm2-135m-instruct in dev"]);
+    // A model set up through MaaS only is unpublished first, in the same run.
+    expect(modelsSteps({ kind: "teardown-model", project: "dev", model: "qwen3-1-7b", unpublish: true }).map((s) => s.id)).toEqual(["unpublish", "model"]);
     expect(cleanupSteps({ mlflow: true, models: ["a"], inferenceGateway: true }).map((s) => s.id)).toEqual(["mlflow", "model:a", "inference-gateway"]);
   });
 

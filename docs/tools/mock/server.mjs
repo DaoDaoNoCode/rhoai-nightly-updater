@@ -348,6 +348,13 @@ const scenarios = {
     w.resources.inferenceGateway = F.gatewayStates.none;
     w.resources.models = F.modelsStatus({ items: [F.routed(F.modelStates.released("dev-project"), { exposure: "internal", check: undefined })] });
   },
+  // Set up on the Models tab through MaaS only: published as part of its setup.
+  "env-models-maas-only": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.none;
+    w.resources.models = F.modelsStatus({ items: [F.routed(F.modelStates.released("dev-project"), { exposure: "maas", check: undefined })] });
+    F.setMaaSPublished(w.resources, "dev-project", "qwen25-05b-instruct", true, { maasOnlySetup: true });
+    w.maas = F.maasWorld("ready", { items: [F.maasModel(true, { maasOnlySetup: true })] });
+  },
   "env-models-stale-projects": (w) => {
     w.resources.inferenceGateway = { ...F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]), allowedProjects: ["openshift-ingress", "dev-project", "e2e-v300", "llm-eval"], unusedProjects: ["e2e-v300", "llm-eval"], goneProjects: ["e2e-v300"] };
     w.resources.models = F.modelsStatus({ items: [F.routed(F.modelStates.released("dev-project"))] });
@@ -685,6 +692,15 @@ async function modelsStream(req, res) {
     send({ step: "gateway", status: "success", message: msg });
     done.push(msg);
   } else if (action === "teardown") {
+    // A model set up through MaaS only is unpublished first, in the same
+    // operation (pkg/cluster unpublishMaaSOnly).
+    if (project && (m.items ?? []).some((i) => i.namespace === project && i.name === model && i.maasOnlySetup)) {
+      send({ step: "unpublish", status: "running", message: "The model was set up to be reached through MaaS only, so it is unpublished first..." });
+      await nextStep();
+      F.setMaaSPublished(world.resources, project, model, false);
+      world.maas = { ...world.maas, items: (world.maas.items ?? []).map((i) => (i.namespace === project && i.name === model ? F.maasModel(false, { name: model }) : i)) };
+      send({ step: "unpublish", status: "success", message: `${model} in '${project}' is unpublished from MaaS.` });
+    }
     if (project) {
       send({ step: "model", status: "running", message: `Deleting ${model} in '${project}'...` });
       await nextStep();
@@ -727,11 +743,24 @@ async function modelsStream(req, res) {
       m.items = [...m.items.filter(others), model !== "qwen25-05b-instruct" ? F.modelStates.readyAs(model, project) : releasedImage || m.imagePlan === "released" ? F.modelStates.released(project) : F.modelStates.ready(project)];
       const users = m.items.filter((i) => i.managedByTool !== false).map((i) => `${i.namespace}/${i.name}`);
       if (world.resources.inferenceGateway?.managedByTool) world.resources.inferenceGateway = F.gatewayStates.ready(users);
-      send({ step: "model-ready", status: "success", message: `Ready at https://inference.apps.example-cluster.example.com/${project}/${model}.` });
+      if (exposure === "maas") {
+        // Published as part of its setup (pkg/cluster publishToMaaS).
+        send({ step: "model-ready", status: "success", message: "The model's server runs; publishing it to MaaS gives it its route." });
+        send({ step: "publish", status: "running", message: "Publishing the model to MaaS (its route is on the MaaS gateway alone)..." });
+        await nextStep();
+        send({ step: "publish", status: "success", message: `${model} in '${project}' is published to MaaS under subscription rhoai-nightly-updater-subscription.` });
+      } else {
+        send({ step: "model-ready", status: "success", message: `Ready at https://inference.apps.example-cluster.example.com/${project}/${model}.` });
+      }
       send({ step: "callable", status: "running", message: "Calling the model once, as a user would..." });
       await nextStep();
       const msg = `Answers requests: a request for model "${model}" got 200.`;
       m.items = m.items.map((i) => (i.namespace === project && i.name === model ? F.routed(i, { exposure }) : i));
+      if (exposure === "maas") {
+        F.setMaaSPublished(world.resources, project, model, true, { maasOnlySetup: true });
+        const others = (world.maas.items ?? []).filter((i) => i.namespace !== project || i.name !== model);
+        world.maas = { ...world.maas, items: [...others, { ...F.maasModel(true, { name: model, maasOnlySetup: true }), namespace: project }] };
+      }
       send({ step: "callable", status: "success", message: msg });
       done.push(`${display} is ready in ${project}. ${msg}`);
     }
@@ -807,6 +836,8 @@ async function maasStream(req, res) {
     res.end();
     return;
   }
+  // A model set up through MaaS only goes back to no route (pkg/cluster removeModelRoute).
+  const noRoute = action === "unpublish" && (world.maas.items ?? []).some((i) => i.namespace === project && i.name === model && i.maasOnlySetup);
   const steps = {
     setup: [["check", "Everything the platform needs is there."], ["database", `The database runs, and Secret ${F.MAAS_INFRA}/maas-db-config holds its connection URL (sslmode=require).`],
       ["gateway", "Programmed; https://maas.apps.example.com is published in DNS."], ["authorino-tls", "Authorino serves TLS and trusts the service CA."],
@@ -816,7 +847,7 @@ async function maasStream(req, res) {
     publish: [["check", "The platform is ready and the model can be published."], ["gateway", `The MaaS gateway admits routes from '${project}'.`],
       ["model", "The model routes through maas-default-gateway alone. While it is published, the model is used through MaaS (with an API key) and the dashboard's playground; its direct address answers 404 until it is unpublished."],
       ["maas", "MaaSModelRef, MaaSSubscription and MaaSAuthPolicy are applied."], ["ready", "MaaS lists the model."]],
-    unpublish: [["check", "Unpublishing, in reverse order of publishing."], ["maas", "The model reference is deleted."], ["model", "The model routes as before publishing: KServe's default gateway (no refs)."],
+    unpublish: [["check", "Unpublishing, in reverse order of publishing."], ["maas", "The model reference is deleted."], ["model", noRoute ? "The model has no outside route now, as it was set up (through MaaS only): it answers only at its in-cluster address." : "The model routes as before publishing: KServe's default gateway (no refs)."],
       ["gateway", `The MaaS gateway no longer admits routes from '${project}'.`]],
     "change-limit": [["check", "The model's limit can change."], ["limit", "The subscription lists the model with its new limit."], ["ready", "MaaS applies it."]],
     "change-access": [["check", "Who can use the published models can change."], ["access", "The subscription and the access policy name the new audience."], ["ready", "MaaS applies it."]],

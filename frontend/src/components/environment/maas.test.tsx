@@ -5,7 +5,7 @@ import { QuickResourceCreator } from "../QuickResourceCreator";
 import { stubApi } from "../../test/apiStub";
 import type { MaaSStatus } from "../../types";
 import { IDLE, maasState } from "./featureState";
-import { maasCurl, maasPublication, maasSettling, maasSteps } from "./MaaSTab";
+import { maasConfirm, maasCurl, maasPublication, maasSettling, maasSteps } from "./MaaSTab";
 import { cleanupBlocked, cleanupCandidates, cleanupSteps } from "./CleanupModal";
 import type { ResourcesStatus } from "../../types";
 
@@ -84,6 +84,25 @@ describe("MaaS use and steps", () => {
     expect(maasSteps({ kind: "teardown-maas" }).map((s) => s.id)).toEqual(["check", "unpublish", "dsc", "gateway", "database"]);
     expect(maasSteps({ kind: "publish-maas", project: "p", model: "qwen3-1-7b" }).map((s) => s.id)).toEqual(["check", "gateway", "model", "maas", "ready"]);
     expect(maasSteps({ kind: "unpublish-maas", project: "p", model: "qwen3-1-7b" }).map((s) => s.title)).toContain("Remove qwen3-1-7b from MaaS");
+  });
+});
+
+describe("Unpublish of a model set up through MaaS only", () => {
+  const item = { namespace: "p", name: "qwen3-1-7b", deployed: true, ready: true, managedByTool: true, modelReady: true, published: true };
+  const confirmOf = (maasOnlySetup: boolean) => {
+    const m = base([{ id: "dsc", title: "DSC", state: "ready" }], { platform: { deployed: true, ready: true, managedByTool: true }, items: [{ ...item, maasOnlySetup }] });
+    return maasConfirm({ kind: "unpublish-maas", project: "p", model: "qwen3-1-7b" }, m)!;
+  };
+
+  it("says the model is left with no route, not that its direct address answers again", () => {
+    render(<>{confirmOf(true).changes}</>);
+    expect(screen.getByText(/so its route is removed: it then answers only at its in-cluster address/)).toBeInTheDocument();
+    expect(screen.queryByText(/its direct address answers again/)).not.toBeInTheDocument();
+  });
+
+  it("a model published on the MaaS tab goes back to the gateways it used before", () => {
+    render(<>{confirmOf(false).changes}</>);
+    expect(screen.getByText(/its direct address answers again/)).toBeInTheDocument();
   });
 });
 

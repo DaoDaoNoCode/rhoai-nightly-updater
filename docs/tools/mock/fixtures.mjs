@@ -1130,12 +1130,17 @@ function maasSetupPlan(parts, { fresh }) {
   return plan;
 }
 
-/** This tool's model in dev-project (qwen25 unless named): published or not. */
-export function maasModel(published, { ready = true, name = "qwen25-05b-instruct" } = {}) {
+/**
+ * This tool's model in dev-project (qwen25 unless named): published or not.
+ * maasOnlySetup: set up on the Models tab through MaaS only, so Unpublish
+ * leaves it with no route (pkg/cluster MaaSModel.MaaSOnlySetup).
+ */
+export function maasModel(published, { ready = true, name = "qwen25-05b-instruct", maasOnlySetup = false } = {}) {
   return {
     namespace: "dev-project", name, displayName: displayOf(name), managedByTool: true, modelReady: true,
     deployed: published, ready: published && ready, published, message: published ? (ready ? "Published" : "Published; waiting") : "Not published",
     ...(published ? { phase: ready ? "Ready" : "Pending", endpoint: `https://maas.${APPS}/dev-project/${name}`, access: ready ? "Active" : "Pending", subscription: ready ? "Active" : "Pending" } : {}),
+    ...(published && maasOnlySetup ? { maasOnlySetup: true } : {}),
   };
 }
 
@@ -1163,20 +1168,30 @@ export function maasSeveral(qwen25 = maasModel(true), qwen3 = maasModel(false, {
  * Routes the Models tab's model in project through the MaaS gateway alone
  * (ModelState.maasPublished), or back: the inference gateway then no longer
  * lists it under Used by (pkg/cluster gatewayUsers). Other models of the
- * project keep their routes.
+ * project keep their routes. maasOnlySetup: the Models tab set it up
+ * through MaaS only (ModelState.maasOnlySetup); unpublished, such a model
+ * has no route at all (reached only inside the cluster) and never goes on
+ * the inference gateway.
  */
-export function setMaaSPublished(resources, project, model, published) {
+export function setMaaSPublished(resources, project, model, published, { maasOnlySetup = false } = {}) {
   const ref = `${project}/${model}`;
-  for (const m of resources?.models?.items ?? []) {
+  let noRoute = false;
+  const items = resources?.models?.items ?? [];
+  for (const [i, m] of items.entries()) {
     if (m.namespace !== project || m.name !== model) continue;
-    if (published) m.maasPublished = true;
-    else delete m.maasPublished;
+    if (published) {
+      items[i] = { ...m, maasPublished: true, ...(maasOnlySetup ? { maasOnlySetup: true } : {}) };
+      continue;
+    }
+    noRoute = !!m.maasOnlySetup;
+    const { maasPublished: _p, maasOnlySetup: _o, ...rest } = m;
+    items[i] = noRoute ? routed(rest, { exposure: "internal", check: undefined }) : rest;
   }
   const gw = resources?.inferenceGateway;
   if (!gw?.deployed || !gw.managedByTool) return;
   const others = (gw.usedBy ?? []).filter((u) => u !== ref);
   const { usedBy: _list, teardownBlockedReason: _reason, ...rest } = gw;
-  resources.inferenceGateway = { ...rest, ...usedBy(published ? others : [...others, ref].sort()) };
+  resources.inferenceGateway = { ...rest, ...usedBy(published || noRoute ? others : [...others, ref].sort()) };
 }
 
 /** This tool's embedding model in MaaS's list: never offered (pkg/cluster maasEmbeddingReason). */
