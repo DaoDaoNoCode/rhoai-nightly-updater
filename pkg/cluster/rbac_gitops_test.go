@@ -345,9 +345,10 @@ func (pg *profileGraph) roots() []string {
 }
 
 // gitOpsReach is what the gitops profile reaches: api.Register is replaced
-// by the handlers of api.gitOpsRoutes.
+// by the handlers of api.gitOpsRoutes, and api.StartMaaSPruneJob returns at
+// once in that profile (TestMaaSPruneJob_RunsAtStartAndEveryInterval).
 func (pg *profileGraph) gitOpsReach() map[string]bool {
-	return pg.graph.reach(append(pg.roots(), "var "+apiPkg+".gitOpsRoutes"), map[string]bool{apiPkg + ".Register": true})
+	return pg.graph.reach(append(pg.roots(), "var "+apiPkg+".gitOpsRoutes"), map[string]bool{apiPkg + ".Register": true, apiPkg + ".StartMaaSPruneJob": true})
 }
 
 // fullReach is what the full profile reaches.
