@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"testing"
@@ -29,6 +30,52 @@ func TestTemplateHintOnlyForTheServiceAccountsRefusals(t *testing.T) {
 		if h := templateHint(err); h != "" {
 			t.Errorf("%v: hint %q", err, h)
 		}
+	}
+}
+
+// A 401 to the user's own token while an operation runs is their sign-in
+// ending mid-change ("sign_in_ended"), not the app's credentials
+// ("unauthorized"), which the UI would send to the ServiceAccount.
+func TestErrorCodeFromK8sErr(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("patch: %w", &K8sError{Status: 401, Reason: "Unauthorized", User: true}), "sign_in_ended"},
+		{&K8sError{Status: 401, Reason: "Unauthorized"}, "unauthorized"},
+		{fmt.Errorf("patch: %w", &K8sError{Status: 403, User: true}), "forbidden"},
+		{&K8sError{Status: 403}, "forbidden"},
+		{wrapNetworkError(errors.New("connection refused")), "network"},
+		{&K8sError{Status: 500}, ""},
+		{errors.New("x"), ""},
+	} {
+		if got := errorCodeFromK8sErr(tc.err); got != tc.want {
+			t.Errorf("%v: %q, want %q", tc.err, got, tc.want)
+		}
+	}
+}
+
+// End to end through an operation: creating the DSC with the user's token
+// answered 401 reports sign_in_ended, and the message says what to do.
+func TestUserTokenRejectedMidOperationIsSignInEnded(t *testing.T) {
+	mockDSCSamples(t, func(*http.Request) (int, string) { return 200, testDSCSample })
+	dscListPathV2 := "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters"
+	dscListPathV1 := "/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters"
+	client, _, cleanup := newRecordingMockClient(map[string]mockResponse{
+		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""): csvListMock("3.6.0"),
+		"GET " + dscListPathV2:  {body: `{"items":[]}`},
+		dscListPathV1:           {body: `{"items":[]}`},
+		"POST " + dscListPathV2: {body: `{"kind":"Status","status":"Failure","reason":"Unauthorized","code":401,"message":"Unauthorized"}`, statusCode: 401},
+	})
+	defer cleanup()
+	client.asUser = true
+
+	result, err := CreateDefaultDSC(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Success || result.ErrorCode != "sign_in_ended" || !strings.Contains(result.Message, "log in again") {
+		t.Fatalf("result = %+v", result)
 	}
 }
 

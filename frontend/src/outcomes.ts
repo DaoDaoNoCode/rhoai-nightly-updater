@@ -43,6 +43,7 @@ export function outcomeTitle(res: Pick<OperationResponse, "success" | "errorCode
     case "partial_failure": return "Partly done";
     case "cluster_busy": return "Cluster busy";
     case "lock_lost": return "Stopped: another updater pod took over";
+    case "sign_in_ended": return "Stopped: your sign-in ended";
     case "lock_unavailable": return "Not started: try again in a few seconds";
     case "user_rate_limited": return "Not started: wait before repeating this change";
     case "terminating": return "Still being deleted";

@@ -3,6 +3,7 @@ package cluster
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -345,6 +346,15 @@ func applySubscriptionWithRetry(c *Client, path string, sub map[string]interface
 func errorCodeFromK8sErr(err error) string {
 	if IsNetworkError(err) {
 		return "network"
+	}
+	var k8sErr *K8sError
+	if errors.As(err, &k8sErr) && k8sErr.Status == 401 && k8sErr.User {
+		// The signed-in user's token, which a change acts with, was
+		// rejected while the operation ran: their sign-in ended (expired or
+		// revoked), and part of the change may have run. Not the app's
+		// credentials ("unauthorized"); a sign-in that ends before anything
+		// runs is refused by the gate with "session_expired".
+		return "sign_in_ended"
 	}
 	if IsK8sError(err, 401) {
 		return "unauthorized"
