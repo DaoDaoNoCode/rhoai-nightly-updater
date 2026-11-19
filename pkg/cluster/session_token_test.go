@@ -33,10 +33,15 @@ func TestReadSessionToken(t *testing.T) {
 	name, _ := accessTokenObjectName(token)
 	created := time.Date(2026, 11, 19, 8, 0, 0, 0, time.UTC)
 	var status int
-	var gotAuth, gotPath string
+	var gotAuth, gotPath, notFound string
 	fakeAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotAuth, gotPath = r.Header.Get("Authorization"), r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
+		if status == http.StatusNotFound {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(notFound))
+			return
+		}
 		if status != 0 {
 			w.WriteHeader(status)
 			fmt.Fprintf(w, `{"kind":"Status","status":"Failure","code":%d,"reason":"x","message":"useroauthaccesstokens %q is refused"}`, status, name)
@@ -69,6 +74,25 @@ func TestReadSessionToken(t *testing.T) {
 	if !errors.Is(err, ErrUnauthenticated) || strings.Contains(err.Error(), "secret-token-value") {
 		t.Fatalf("401: %v", err)
 	}
+	// A 404 about this very object (live body: details.kind
+	// useroauthaccesstokens, details.name the object's name): revoked.
+	notFound = fmt.Sprintf(`{"kind":"Status","status":"Failure","code":404,"reason":"NotFound","details":{"name":%q,"group":"oauth.openshift.io","kind":"useroauthaccesstokens"}}`, name)
+	status = http.StatusNotFound
+	if _, err = ReadSessionToken(context.Background(), token); !errors.Is(err, ErrSessionTokenGone) {
+		t.Fatalf("own object gone: %v", err)
+	}
+	// A 404 without details (live: the resource type is not served), or
+	// about another object, says nothing about the sign-in.
+	for _, body := range []string{
+		`{"kind":"Status","status":"Failure","code":404,"reason":"NotFound","details":{}}`,
+		`{"kind":"Status","status":"Failure","code":404,"reason":"NotFound","details":{"name":"sha256~other","kind":"useroauthaccesstokens"}}`,
+	} {
+		notFound = body
+		if _, err = ReadSessionToken(context.Background(), token); errors.Is(err, ErrSessionTokenGone) || !IsK8sError(err, http.StatusNotFound) {
+			t.Fatalf("404 %s: %v", body, err)
+		}
+	}
+	notFound = ""
 	status = http.StatusForbidden
 	_, err = ReadSessionToken(context.Background(), token)
 	if !IsK8sError(err, http.StatusForbidden) || errors.Is(err, ErrUnauthenticated) || strings.Contains(err.Error(), "secret-token-value") {

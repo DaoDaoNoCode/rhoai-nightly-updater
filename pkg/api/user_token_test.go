@@ -127,7 +127,8 @@ func TestMutationRefusedWhenTheSignInCannotCarryIt(t *testing.T) {
 		{"scoped token", &cluster.SessionToken{Created: sessionNow, ExpiresIn: 86400, Scopes: []string{"user:info", "user:check-access"}}, nil, 401, signInAgainCode, "Log out and log in again"},
 		{"its own object is forbidden (scoped)", nil, &cluster.K8sError{Status: 403, Reason: "Forbidden", User: true}, 401, signInAgainCode, "cannot make changes"},
 		{"rejected", nil, fmt.Errorf("x: %w", cluster.ErrUnauthenticated), 401, "session_expired", "Log in again"},
-		{"not found: go ahead", nil, &cluster.K8sError{Status: 404, Reason: "NotFound", User: true}, 200, "", ""},
+		{"its own object is gone (revoked)", nil, fmt.Errorf("x: %w", cluster.ErrSessionTokenGone), 401, "session_expired", "revoked or has ended"},
+		{"not found without details (type not served): go ahead", nil, &cluster.K8sError{Status: 404, Reason: "NotFound", User: true}, 200, "", ""},
 		{"API unreachable: go ahead", nil, errors.New("dial tcp: connection refused"), 200, "", ""},
 		{"not an OAuth token: go ahead", nil, cluster.ErrNotAnOAuthToken, 200, "", ""},
 	} {

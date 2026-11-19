@@ -96,6 +96,8 @@ func sessionProblem(ctx context.Context, token string) (string, string, int) {
 	switch {
 	case errors.Is(err, cluster.ErrUnauthenticated):
 		return "Your OpenShift session has expired. Log in again.", "session_expired", http.StatusUnauthorized
+	case errors.Is(err, cluster.ErrSessionTokenGone):
+		return "Your OpenShift sign-in was revoked or has ended. Log in again.", "session_expired", http.StatusUnauthorized
 	case cluster.IsK8sError(err, http.StatusForbidden):
 		return scopeRefusal, signInAgainCode, http.StatusUnauthorized
 	case err != nil:

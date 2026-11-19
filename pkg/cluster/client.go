@@ -102,6 +102,11 @@ type K8sError struct {
 	Status     int
 	Reason     string
 	K8sMessage string
+	// DetailsKind and DetailsName are the Status's details: the object a
+	// 404 is about ("useroauthaccesstokens", "sha256~…"), empty when the
+	// resource type itself is not served.
+	DetailsKind string
+	DetailsName string
 	// User: the request carried the signed-in user's own token
 	// (NewUserClient), so a 401 or 403 is about that user's sign-in or
 	// permissions, not the app's RBAC.
@@ -138,12 +143,18 @@ func parseK8sError(body []byte, statusCode int) error {
 		Message string `json:"message"`
 		Reason  string `json:"reason"`
 		Code    int    `json:"code"`
+		Details struct {
+			Name string `json:"name"`
+			Kind string `json:"kind"`
+		} `json:"details"`
 	}
 	if err := json.Unmarshal(body, &status); err == nil && status.Kind == "Status" && status.Status == "Failure" {
 		return &K8sError{
-			Status:     statusCode,
-			Reason:     status.Reason,
-			K8sMessage: status.Message,
+			Status:      statusCode,
+			Reason:      status.Reason,
+			K8sMessage:  status.Message,
+			DetailsKind: status.Details.Kind,
+			DetailsName: status.Details.Name,
 		}
 	}
 	return &K8sError{

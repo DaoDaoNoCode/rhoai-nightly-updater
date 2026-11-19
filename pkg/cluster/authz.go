@@ -95,6 +95,13 @@ func (s *SessionToken) Remaining(now time.Time) (time.Duration, bool) {
 // read (a ServiceAccount token, or a developer's token in dev mode).
 var ErrNotAnOAuthToken = errors.New("not an OpenShift OAuth access token")
 
+// ErrSessionTokenGone: the API server answered that the caller's own access
+// token object does not exist. A token that oauth-proxy got from the OAuth
+// server always has one, so it was revoked (oc delete oauthaccesstokens) or
+// removed with its user or OAuthClient; the API server may still accept the
+// token for a while from its cache (live: about a minute).
+var ErrSessionTokenGone = errors.New("the sign-in's access token no longer exists")
+
 const sha256TokenPrefix = "sha256~"
 
 // accessTokenObjectName is the name of the object of an OAuth access
@@ -124,6 +131,12 @@ func ReadSessionToken(ctx context.Context, userToken string) (*SessionToken, err
 	}
 	userClient := NewUserClient(ctx, userToken)
 	body, _, err := userClient.get("/apis/oauth.openshift.io/v1/useroauthaccesstokens/" + name)
+	// Only a 404 about this very object says the sign-in is gone; a 404
+	// without details (the resource type is not served) says nothing.
+	var ke *K8sError
+	if errors.As(err, &ke) && ke.Status == 404 && ke.DetailsKind == "useroauthaccesstokens" && ke.DetailsName == name {
+		return nil, ErrSessionTokenGone
+	}
 	if err != nil {
 		return nil, wrapUserTokenError("read the sign-in's token", err)
 	}
