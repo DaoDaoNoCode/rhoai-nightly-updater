@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { AppStateProvider } from "../state/AppState";
 import { AppInfoProvider } from "../state/AppInfo";
 import { LiveAnnouncerProvider } from "../state/LiveAnnouncer";
+import { ProgressViewsProvider } from "../components/ProgressViews";
 import { getUserPermissions } from "../services/api";
 import type { DashboardState, OperationStatusResponse, StatusResponse, UpdateCheck, UserPermissions, VersionInfo } from "../types";
 
@@ -76,7 +77,7 @@ export function renderWithApp(ui: React.ReactNode, fetchers: AppFetchers = {}, r
       <MemoryRouter initialEntries={[route]}>
         <AppStateProvider fetchStatus={status} fetchOperation={operation}>
           <AppInfoProvider fetchPermissions={permissions} fetchVersion={version} fetchUpdateCheck={update} fetchDashboardState={dashboard}>
-            {ui}
+            <ProgressViewsProvider>{ui}</ProgressViewsProvider>
           </AppInfoProvider>
         </AppStateProvider>
       </MemoryRouter>

@@ -25,12 +25,24 @@ export interface MigrateStepState {
   message: string;
 }
 
+/** Each run's dialog title. */
+export const MIGRATE_TITLES: Record<MigrateKind, string> = { migrate: "Migrate storage", remove: "Delete the old storage" };
+
 export interface MigrateRun {
   kind: MigrateKind;
+  /** When it started (epoch ms). */
+  startedAt: number;
   steps: Record<string, MigrateStepState>;
   running: boolean;
   /** The outcome, once the run ended (or the connection to it was lost). */
   result: { success: boolean; message: string; errorCode?: string } | null;
+}
+
+/** The step a run is on now, for the alert shown while its dialog is closed. */
+export function migrateStepNow(run: MigrateRun): { title: string; index: number; count: number } | null {
+  const steps = MIGRATE_STEPS[run.kind];
+  const i = steps.findIndex((s) => run.steps[s.id]?.status === "running");
+  return i < 0 ? null : { title: steps[i].title, index: i + 1, count: steps.length };
 }
 
 /**
@@ -45,7 +57,7 @@ export function useMigrateStorage(onFinished: () => void) {
 
   const start = useCallback((kind: MigrateKind, options: MigrateStorageOptions) => {
     trackFeature(kind === "migrate" ? "migrate-storage" : "remove-old-storage");
-    setRun({ kind, steps: {}, running: true, result: null });
+    setRun({ kind, startedAt: Date.now(), steps: {}, running: true, result: null });
     let finalMessage = "";
     const finish = (success: boolean, message: string, errorCode?: string) => {
       controller.current = null;

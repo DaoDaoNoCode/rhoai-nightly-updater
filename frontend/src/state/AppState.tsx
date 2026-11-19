@@ -96,6 +96,8 @@ export interface ServerOperationState {
   inProgress: boolean;
   operation: ServerOperation | null;
   interrupted: OperationStatusResponse["interrupted"] | null;
+  /** The most recently finished operation, when the backend reports one. */
+  lastCompleted?: CompletedOperation | null;
 }
 
 export interface OperationContextValue {
@@ -630,6 +632,7 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
       inProgress: res.inProgress && !ownFinishedRun,
       operation: ownFinishedRun ? null : op,
       interrupted: res.interrupted ?? null,
+      lastCompleted: res.lastCompleted ?? null,
     };
     serverRef.current = next;
     setServer(next);

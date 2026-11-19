@@ -24,6 +24,7 @@ import { isRunning } from "../state/operation";
 import { OPERATION_NAMES, STEP_SETS, operationKindForServerType, stepLabel } from "../operationSteps";
 import { formatElapsed, formatRelativeTime } from "../utils";
 import { sentence, shortTarget } from "../build";
+import { BackgroundRunAlert, ViewProgressLink, useBackgroundRun, useViewServerOperation } from "./ProgressViews";
 
 const INTERRUPTED_DISMISS_KEY = "rhoai-interrupted-dismissed";
 const TEMPLATE_DISMISS_KEY = "rhoai-template-hint-dismissed";
@@ -94,6 +95,9 @@ function useOperationNotice(onStatusPage: boolean, pathname = ""): Notice | null
   const ownStream = isRunning(run) && run.source === "stream" ? run : null;
   const op: ServerOperation | null = server.inProgress ? server.operation : null;
   const now = useNow(!!ownStream || !!op);
+  // A run of this tab with a progress dialog (the Environment page), and the read-only view for the others.
+  const background = useBackgroundRun();
+  const viewServerOperation = useViewServerOperation();
 
   if (ownStream) {
     // The Status page shows this tab's own run in full.
@@ -119,6 +123,7 @@ function useOperationNotice(onStatusPage: boolean, pathname = ""): Notice | null
       ),
     };
   }
+  if (background) return { key: "operation", priority: 1, element: <BackgroundRunAlert run={background} /> };
   if (!server.inProgress) return null;
   if (!op) {
     return {
@@ -140,6 +145,8 @@ function useOperationNotice(onStatusPage: boolean, pathname = ""): Notice | null
   // No link to the page the user is on (the Environment page shows its own progress).
   const followed = followLink(op.type);
   const link = followed && followed[0] !== pathname ? followed : null;
+  // Streamed operator operations have their full progress on the Status page (the link); the others, what the server records.
+  const view = !kind && viewServerOperation ? <ViewProgressLink onOpen={() => viewServerOperation(op)} /> : null;
   return {
     key: "operation",
     priority: 1,
@@ -150,7 +157,7 @@ function useOperationNotice(onStatusPage: boolean, pathname = ""): Notice | null
         component="p"
         customIcon={<InProgressIcon />}
         title={`${describeServerOperation(op, status?.cluster.user)}${step ? `: ${step}` : ""}${elapsed}`}
-        actionLinks={link ? <AlertActionLink onClick={() => navigate(link[0])}>{link[1]}</AlertActionLink> : undefined}
+        actionLinks={link || view ? <>{view}{link && <AlertActionLink onClick={() => navigate(link[0])}>{link[1]}</AlertActionLink>}</> : undefined}
       >
         {op.target && <>Target: <BuildId target={op.target} />. </>}
         {op.remote && op.message && <>Latest progress: {sentence(op.message)} </>}
