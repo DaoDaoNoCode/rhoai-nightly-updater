@@ -67,6 +67,7 @@ import { GITOPS_PROFILE_UNMANAGED_CATALOG, gitOpsPolicyProblem } from "../profil
 import { GITOPS_UPDATE_STEPS, STEP_SETS } from "../operationSteps";
 import { catalogImageSetter, catalogManaged, catalogManagedByACM, catalogSpecFrom, gitOpsInstallState, gitOpsInstallWaitReason, operatorGitOpsApp, operatorManaged } from "../gitops";
 import { buildFromImage, compareTagToInstalled, formatBuildDate, parseImageRef } from "../build";
+import { dashboardOperatorLabel } from "./dashboardOperator";
 
 // ---------------------------------------------------------------------------
 // Shared confirmation dialog (hero "Update to latest" and the form below)
@@ -211,7 +212,7 @@ export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, 
             {dashboardActive && (
               <StackItem>
                 <Alert variant="warning" isInline component="p" title="A Dashboard Dev session is active">
-                  dashboard-operator is paused ({describeDashboardSession(override)}). The update ends that session first, or the
+                  {dashboardOperatorLabel(override?.operatorName)} is paused ({describeDashboardSession(override)}). The update ends that session first, or the
                   dashboard would stay on its old images. {REVERT_DASHBOARD_EXPLANATION}
                 </Alert>
               </StackItem>

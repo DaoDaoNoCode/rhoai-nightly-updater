@@ -57,7 +57,7 @@ function permissionReason(status: PermissionStatus, sessionExpired: boolean, den
 }
 
 // ---------------------------------------------------------------------------
-// Dashboard Dev override (paused dashboard-operator)
+// Dashboard Dev override (paused dashboard module operator)
 // ---------------------------------------------------------------------------
 
 export interface DashboardOverrideValue {

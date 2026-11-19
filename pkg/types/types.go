@@ -118,10 +118,13 @@ type ClusterInfo struct {
 
 // SubscriptionInfo describes the OLM Subscription resource for the RHOAI operator.
 type SubscriptionInfo struct {
-	Name    string `json:"name"`
-	Source  string `json:"source"`
-	Channel string `json:"channel"`
-	State   string `json:"state"`
+	Name string `json:"name"`
+	// Namespace is where the tool installs and reads RHOAI's Subscription
+	// (SubNS); the operator runs there.
+	Namespace string `json:"namespace,omitempty"`
+	Source    string `json:"source"`
+	Channel   string `json:"channel"`
+	State     string `json:"state"`
 	// ManagedBy is the Argo CD application that tracks the Subscription.
 	ManagedBy string `json:"managedBy,omitempty"`
 }

@@ -567,6 +567,7 @@ export const ComponentsPage: React.FC = () => {
                 deployments={data.deployments}
                 labelsLoading={labelsLoading}
                 consoleURL={data.consoleURL}
+                applicationsNamespace={data.applicationsNamespace}
                 mutateBlocker={fixReason}
                 onResult={onResult}
                 onRefresh={handleRefresh}

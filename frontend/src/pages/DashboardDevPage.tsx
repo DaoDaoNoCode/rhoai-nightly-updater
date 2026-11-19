@@ -60,6 +60,7 @@ import { COMPONENTS_POLL_MS } from "../constants";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { formatRelativeTime } from "../utils";
 import { useClusterBusyHandler, useDashboardOverride, useMutationBlocker } from "../state/AppInfo";
+import { dashboardOperatorLabel } from "../components/dashboardOperator";
 
 /**
  * Container states that do not clear without a change (image, config or
@@ -76,8 +77,6 @@ export function blockedDashboardImages(state: DashboardState | null): DashboardD
 }
 
 type Action = "pr" | "main" | "revert" | "assist";
-
-const DASHBOARD_NS = "redhat-ods-applications";
 
 /** The override for a 404 dashboard_not_deployed body (B4 sends it while the operator is paused). */
 function overrideFromError(err: ApiError): DashboardOverride | undefined {
@@ -201,7 +200,7 @@ export const DashboardDevPage: React.FC = () => {
     } else if (waitingFor === "revert" && (dashState.operatorAvailable ? !dashState.operatorPaused && dashState.defaultImagesRestored : !dashState.isCustomPR)) {
       setWaitingFor(null);
       setPrNumber("");
-      setResult((prev) => ({ success: true, message: "The dashboard runs the installed release again, and dashboard-operator manages it.", logs: prev?.logs ?? [] }));
+      setResult((prev) => ({ success: true, message: "The dashboard runs the installed release again, and the dashboard operator manages it.", logs: prev?.logs ?? [] }));
     }
   }, [waitingFor, dashState, running, parsedPR]);
 
@@ -224,6 +223,13 @@ export const DashboardDevPage: React.FC = () => {
   const chosenFlavor = flavor ?? dashState?.defaultFlavor ?? "rhoai";
   const containers = dashState?.devImages?.length ?? 0;
   const legacy = !!dashState && !dashState.operatorAvailable;
+  // Both are discovered by the backend: the applications namespace from the
+  // DSCInitialization, the operator from its RBAC (dashboard-operator on 3.6).
+  const appsNS = dashState?.namespace || override?.operatorNamespace || "";
+  const nsLabel = appsNS || "the applications namespace";
+  const operatorName = dashState?.operatorName ?? override?.operatorName;
+  const operatorLabel = dashboardOperatorLabel(operatorName);
+  const operatorRef = operatorName ? `${dashState?.operatorNamespace ?? override?.operatorNamespace ?? nsLabel}/${operatorName}` : operatorLabel;
 
   const run = async (action: Action) => {
     setConfirm(null);
@@ -243,7 +249,7 @@ export const DashboardDevPage: React.FC = () => {
         res = await revertDashboard();
       } else {
         trackFeature("assist_rollout");
-        res = await assistRolloutFor({ namespace: DASHBOARD_NS, deployment: "rhods-dashboard" });
+        res = await assistRolloutFor({ namespace: appsNS, deployment: "rhods-dashboard" });
       }
     } catch (e) {
       res = errorResult(e, "The request failed");
@@ -262,7 +268,7 @@ export const DashboardDevPage: React.FC = () => {
     if (blocker) return blocker;
     if (running) return "Another Dashboard Dev action is running.";
     if (waitingFor) return "Waiting for the last change to roll out.";
-    if (needsOperator && dashState?.operatorError) return "The state of dashboard-operator cannot be read.";
+    if (needsOperator && dashState?.operatorError) return `The state of ${operatorLabel} cannot be read.`;
     if (needsOperator && override?.dashboardDeleting) return "A Dashboard CR is being deleted. Revert first.";
     if (needsOperator && !dashState) return "The dashboard state is not loaded.";
     return null;
@@ -277,9 +283,9 @@ export const DashboardDevPage: React.FC = () => {
   };
 
   const deployChanges = (kind: "pr" | "main"): React.ReactNode[] => legacy ? [
-    <>Deployment <code>{DASHBOARD_NS}/rhods-dashboard</code> runs the <code>{tagsFor(kind)}</code> image and is marked <code>opendatahub.io/managed: &quot;false&quot;</code> so the operator leaves it alone until you revert.</>,
+    <>Deployment <code>{nsLabel}/rhods-dashboard</code> runs the <code>{tagsFor(kind)}</code> image and is marked <code>opendatahub.io/managed: &quot;false&quot;</code> so the operator leaves it alone until you revert.</>,
   ] : [
-    <>Deployment <code>{DASHBOARD_NS}/dashboard-operator</code> is scaled to 0 so it stops resetting the dashboard images. The original replica count is saved for Revert.</>,
+    <>Deployment <code>{operatorRef}</code> is scaled to 0 so it stops resetting the dashboard images. The original replica count is saved for Revert.</>,
     <>All {containers || "the"} dashboard containers are updated: those with a <code>{tagsFor(kind)}</code> build run it (pinned by digest); the others run their release image.</>,
     ...(sessionActive ? [<>This replaces {sessionOwner}.</>] : []),
   ];
@@ -313,7 +319,7 @@ export const DashboardDevPage: React.FC = () => {
       )}
       {!dashState && !error && loading && <PageLoading title="Loading the dashboard state" />}
 
-      {/* A paused dashboard-operator is shown (with Revert) even when the dashboard itself is gone. */}
+      {/* A paused dashboard operator is shown (with Revert) even when the dashboard itself is gone. */}
       {override?.active && (
         <PageSection>
           <DashboardSessionPanel
@@ -399,7 +405,7 @@ export const DashboardDevPage: React.FC = () => {
                     </StackItem>
                     {dashState.operatorError && (
                       <StackItem>
-                        <Alert variant="warning" title="Cannot read dashboard-operator" isInline component="p">
+                        <Alert variant="warning" title={`Cannot read ${operatorLabel}`} isInline component="p">
                           <TruncatedText>{dashState.operatorError}</TruncatedText>
                         </Alert>
                       </StackItem>
@@ -443,7 +449,7 @@ export const DashboardDevPage: React.FC = () => {
                         </FormGroup>
                         <Flex gap={{ default: "gapSm" }} flexWrap={{ default: "wrap" }}>
                           <TooltipButton variant="secondary" onClick={() => setConfirm("main")} isLoading={running === "main"}
-                            disabledReason={mutateReason(true) ?? (!dashState.operatorAvailable ? "Latest main needs dashboard-operator (RHOAI 3.5 or later)." : null)}>
+                            disabledReason={mutateReason(true) ?? (!dashState.operatorAvailable ? `Latest main needs the dashboard module's operator (RHOAI 3.5 or later); this cluster has none${dashState.noOperatorReason ? ` (${dashState.noOperatorReason})` : ""}.` : null)}>
                             Deploy latest main
                           </TooltipButton>
                           {sessionActive && !override?.active && (
@@ -483,7 +489,7 @@ export const DashboardDevPage: React.FC = () => {
                     {legacy && (
                       <StackItem>
                         <HelperText>
-                          <HelperTextItem>This cluster has no dashboard-operator (RHOAI 3.4 or earlier): only <code>rhods-dashboard</code> is changed.</HelperTextItem>
+                          <HelperTextItem>This cluster has no dashboard module operator (RHOAI 3.4 or earlier{dashState.noOperatorReason ? `: ${dashState.noOperatorReason}` : ""}): only <code>rhods-dashboard</code> is changed.</HelperTextItem>
                         </HelperText>
                       </StackItem>
                     )}
@@ -524,11 +530,11 @@ export const DashboardDevPage: React.FC = () => {
         isOpen={confirm === "revert"}
         title="Revert the dashboard to the installed release?"
         changes={legacy ? [
-          <>Deployment <code>{DASHBOARD_NS}/rhods-dashboard</code>: the operator takes it back and restores the release image.</>,
+          <>Deployment <code>{nsLabel}/rhods-dashboard</code>: the operator takes it back and restores the release image.</>,
         ] : [
-          <>Deployment <code>{DASHBOARD_NS}/dashboard-operator</code> is scaled back to its saved replica count (1 when it is unknown).</>,
-          <>dashboard-operator then puts the release images back on all {containers || "the"} dashboard containers.</>,
-          <>The saved session on dashboard-operator is removed{override?.startedBy ? `, ending ${sessionOwner}` : ""}.</>,
+          <>Deployment <code>{operatorRef}</code> is scaled back to its saved replica count (1 when it is unknown).</>,
+          <>{operatorLabel} then puts the release images back on all {containers || "the"} dashboard containers.</>,
+          <>The saved session on {operatorLabel} is removed{override?.startedBy ? `, ending ${sessionOwner}` : ""}.</>,
         ]}
         confirmLabel="Revert to default"
         isLoading={running === "revert"}
@@ -542,7 +548,7 @@ export const DashboardDevPage: React.FC = () => {
         isOpen={confirm === "assist"}
         title="Assist the dashboard rollout?"
         changes={[
-          <>Deployment <code>{DASHBOARD_NS}/rhods-dashboard</code>: <code>spec.strategy.rollingUpdate.maxUnavailable</code> is set to 1, so one old pod stops and frees room for the new one.</>,
+          <>Deployment <code>{nsLabel}/rhods-dashboard</code>: <code>spec.strategy.rollingUpdate.maxUnavailable</code> is set to 1, so one old pod stops and frees room for the new one.</>,
         ]}
         confirmLabel="Assist rollout"
         isLoading={running === "assist"}

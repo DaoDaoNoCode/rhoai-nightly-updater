@@ -396,7 +396,7 @@ func readSubscription(c *Client) (subscriptionDetails, error) {
 	body, _, err := c.get(path)
 	if err != nil {
 		if IsK8sError(err, 404) {
-			return subscriptionDetails{info: types.SubscriptionInfo{State: "Not Installed"}}, nil
+			return subscriptionDetails{info: types.SubscriptionInfo{State: "Not Installed", Namespace: SubNS}}, nil
 		}
 		return subscriptionDetails{}, fmt.Errorf("request failed: %w", err)
 	}
@@ -424,6 +424,7 @@ func readSubscription(c *Client) (subscriptionDetails, error) {
 	}
 	return subscriptionDetails{
 		info: types.SubscriptionInfo{
+			Namespace: SubNS,
 			Name:      SubName,
 			Source:    sub.Spec.Source,
 			Channel:   sub.Spec.Channel,

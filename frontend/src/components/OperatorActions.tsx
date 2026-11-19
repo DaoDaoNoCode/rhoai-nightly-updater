@@ -21,6 +21,7 @@ import { useDashboardOverride } from "../state/AppInfo";
 import { formatRelativeTime } from "../utils";
 import { describeOutcomeError } from "../errors";
 import { sentence } from "../build";
+import { dashboardOperatorLabel } from "./dashboardOperator";
 
 export type ReinstallTargetType = "stable" | "nightly" | "custom";
 
@@ -39,7 +40,7 @@ const ACTION_NAMES: Record<OperatorRequest["kind"], string> = {
 /** "PR #222 (RHOAI build) by alice, 2h ago" */
 export function describeDashboardSession(o: DashboardOverride | null): string {
   if (!o) return "a Dashboard Dev session";
-  if (!o.sessionRecorded) return "dashboard-operator, scaled down outside this tool";
+  if (!o.sessionRecorded) return `${dashboardOperatorLabel(o.operatorName)}, scaled down outside this tool`;
   const what = o.mode === "pr" && o.prNumber ? `PR #${o.prNumber}` : o.mode === "main" ? "the main branch" : "a dashboard build";
   const by = o.startedBy ? ` by ${o.startedBy}` : "";
   const when = o.startedAt ? `, ${formatRelativeTime(o.startedAt)}` : "";
@@ -48,10 +49,10 @@ export function describeDashboardSession(o: DashboardOverride | null): string {
 
 /**
  * What reverting the Dashboard Dev session does (B4 RevertDashboardDevForOperation:
- * resume dashboard-operator, which puts the release images back).
+ * resume the dashboard module's operator, which puts the release images back).
  */
 export const REVERT_DASHBOARD_EXPLANATION =
-  "Reverting resumes dashboard-operator, which puts the release dashboard images back; the Dashboard Dev deployment ends. You can deploy it again afterwards.";
+  "Reverting resumes the dashboard operator, which puts the release dashboard images back; the Dashboard Dev deployment ends. You can deploy it again afterwards.";
 
 interface PendingFollowUp {
   request: OperatorRequest;
@@ -153,7 +154,7 @@ export function useOperatorActions(): {
           <Stack hasGutter>
             <StackItem>
               <Content component="p">
-                A Dashboard Dev session is active ({describeDashboardSession(override)}), so dashboard-operator is paused.
+                A Dashboard Dev session is active ({describeDashboardSession(override)}), so {dashboardOperatorLabel(override?.operatorName)} is paused.
                 The {action} would keep the dashboard paused under the new operator, so it did not start and nothing was changed.
               </Content>
             </StackItem>

@@ -112,6 +112,8 @@ interface DeploymentsTableProps {
   deployments: DeploymentInfo[];
   labelsLoading: boolean;
   consoleURL?: string;
+  /** RHOAI's applications namespace (from the API); rows in it do not repeat it. */
+  applicationsNamespace?: string;
   /** Why cluster changes are disabled now (useMutationBlocker), or null. */
   mutateBlocker: string | null;
   /** Sees every unblock result (e.g. to pick up a cluster_busy refusal). */
@@ -129,6 +131,7 @@ export const DeploymentsTable: React.FC<DeploymentsTableProps> = ({
   deployments,
   labelsLoading,
   consoleURL: rawConsoleURL,
+  applicationsNamespace,
   mutateBlocker,
   onResult,
   onRefresh,
@@ -334,7 +337,7 @@ export const DeploymentsTable: React.FC<DeploymentsTableProps> = ({
                     {dep.changeStatus === "updated" && <TagLabel color="blue">Changed</TagLabel>}
                     {dep.changeStatus === "new" && <TagLabel color="teal">New</TagLabel>}
                   </Flex>
-                  {dep.namespace !== "redhat-ods-applications" && <div className="pf-v6-u-font-size-sm pf-v6-u-text-color-subtle">{dep.namespace}</div>}
+                  {dep.namespace !== applicationsNamespace && <div className="pf-v6-u-font-size-sm pf-v6-u-text-color-subtle">{dep.namespace}</div>}
                 </Td>
                 <Td dataLabel="Status">
                   <HealthLabel health={health} />
