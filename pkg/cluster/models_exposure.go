@@ -124,14 +124,14 @@ func gatewayProblem(g gatewayObject) string {
 		return "it is being deleted"
 	}
 	if cond, ok := findCondition(g.Status.Conditions, "Accepted"); ok && cond.Status == "False" {
-		return "its gateway controller does not accept it (" + firstNonEmpty(truncateMessage(cond.Message), cond.Reason) + ")"
+		return "its gateway controller does not accept it (" + firstNonEmpty(truncateText(cond.Message, 300), cond.Reason) + ")"
 	}
 	cond, ok := findCondition(g.Status.Conditions, "Programmed")
 	switch {
 	case !ok:
 		return "it does not report Programmed yet"
 	case cond.Status != "True":
-		return "it is not programmed (" + firstNonEmpty(truncateMessage(cond.Message), cond.Reason, "no reason given") + ")"
+		return "it is not programmed (" + firstNonEmpty(truncateText(cond.Message, 300), cond.Reason, "no reason given") + ")"
 	}
 	return ""
 }

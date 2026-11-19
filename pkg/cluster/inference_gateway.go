@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -372,9 +373,9 @@ func matchExpressions(exprs []json.RawMessage, namespace string, labels map[stri
 		var ok bool
 		switch e.Operator {
 		case "In":
-			ok = has && containsString(e.Values, v)
+			ok = has && slices.Contains(e.Values, v)
 		case "NotIn":
-			ok = !has || !containsString(e.Values, v)
+			ok = !has || !slices.Contains(e.Values, v)
 		case "Exists":
 			ok = has
 		case "DoesNotExist":
@@ -894,7 +895,7 @@ func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr erro
 	case state.Terminating:
 		state.Message = "Terminating"
 	case hasAccepted && accepted.Status == "False":
-		state.Message = firstNonEmpty(truncateMessage(accepted.Message), accepted.Reason, "Not accepted by the gateway controller")
+		state.Message = firstNonEmpty(truncateText(accepted.Message, 300), accepted.Reason, "Not accepted by the gateway controller")
 		state.WaitingReason = firstNonEmpty(accepted.Reason, "NotAccepted")
 		state.TerminalError = true
 	case hasProgrammed && programmed.Status == "True" && state.Address != "":
@@ -903,7 +904,7 @@ func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr erro
 	case hasProgrammed && programmed.Status == "True":
 		state.Message = "Programmed, waiting for an address"
 	case hasProgrammed:
-		state.Message = firstNonEmpty(truncateMessage(programmed.Message), programmed.Reason, "Not programmed yet")
+		state.Message = firstNonEmpty(truncateText(programmed.Message, 300), programmed.Reason, "Not programmed yet")
 	case state.ManagedByTool:
 		state.Message = "Waiting for the gateway controller"
 	default:
@@ -1103,16 +1104,16 @@ func planInferenceGatewayList(c *Client, add, remove []string) (*gatewayPlan, st
 	all := gatewayNamespaceList(listed, routed, add)
 	plan.names = all[:0:0]
 	for _, n := range all {
-		if n == inferenceGatewayNamespace || !containsString(remove, n) {
+		if n == inferenceGatewayNamespace || !slices.Contains(remove, n) {
 			plan.names = append(plan.names, n)
 		}
 	}
 	plan.listChanges = !found || !shaped
 	for _, n := range plan.names {
-		plan.listChanges = plan.listChanges || !containsString(listed, n)
+		plan.listChanges = plan.listChanges || !slices.Contains(listed, n)
 	}
 	for _, n := range listed {
-		plan.listChanges = plan.listChanges || !containsString(plan.names, n)
+		plan.listChanges = plan.listChanges || !slices.Contains(plan.names, n)
 	}
 	for _, kind := range gatewayKinds {
 		meta, ok, err := gw.Metadata, found, error(nil)
@@ -1436,7 +1437,7 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 		}
 	}
 	// The list went with the Gateway: nothing recorded is on a list any more.
-	if containsString(deleted, gatewayDesc("Gateway")) {
+	if slices.Contains(deleted, gatewayDesc("Gateway")) {
 		if err := writeGatewayProjects(c, nil); err != nil {
 			slog.Warn("cannot clear the gateway projects record", "error", err)
 		}

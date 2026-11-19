@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -318,7 +319,7 @@ func TestPrerequisites_FreshClusterPerFeature(t *testing.T) {
 			// Nothing else of the cluster is touched: the other features'
 			// components stay Removed.
 			for _, other := range []string{"aipipelines", "mlflowoperator", "kserve", "ogx", "dashboard"} {
-				if !containsString(tc.components, other) && componentState(pc.f, other) != "Removed" {
+				if !slices.Contains(tc.components, other) && componentState(pc.f, other) != "Removed" {
 					t.Errorf("%s changed", other)
 				}
 			}

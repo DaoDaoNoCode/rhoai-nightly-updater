@@ -170,7 +170,7 @@ func dashboardContainerBuild(ctx context.Context, image types.DashboardDevImage,
 		if isContextError(err) {
 			message = what + " timed out."
 		}
-		slog.Warn("dashboard builds: registry read failed", "image", truncateForLog(image.CurrentImage), "error", err)
+		slog.Warn("dashboard builds: registry read failed", "image", truncateText(image.CurrentImage, 80), "error", err)
 		out.Reason, out.Message = "registry_error", message
 		return out
 	}
@@ -255,7 +255,7 @@ func dashboardContainerBuild(ctx context.Context, image types.DashboardDevImage,
 				}
 			}
 		} else if !errors.Is(err, errNoImageLabels) {
-			slog.Warn("dashboard builds: cannot read the newer build's labels", "image", truncateForLog(resolved.image), "error", err)
+			slog.Warn("dashboard builds: cannot read the newer build's labels", "image", truncateText(resolved.image, 80), "error", err)
 		}
 		out.Newer = newer
 	}

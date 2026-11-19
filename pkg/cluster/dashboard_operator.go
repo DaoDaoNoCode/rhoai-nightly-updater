@@ -968,25 +968,25 @@ func pinDashboardMainBuild(ctx context.Context, repo, floatingTag, image string)
 	labels, err := imageLabelsWithAuth(labelsCtx, "", image, false)
 	cancel()
 	if err != nil {
-		slog.Debug("dashboard main build keeps its floating tag: labels unreadable", "image", truncateForLog(image), "error", err)
+		slog.Debug("dashboard main build keeps its floating tag: labels unreadable", "image", truncateText(image, 80), "error", err)
 		return image
 	}
 	commitTag := dashboardCommitTag(floatingTag, labels.GitCommit)
 	if commitTag == "" {
-		slog.Debug("dashboard main build keeps its floating tag: no commit label", "image", truncateForLog(image), "commit", labels.GitCommit)
+		slog.Debug("dashboard main build keeps its floating tag: no commit label", "image", truncateText(image, 80), "commit", labels.GitCommit)
 		return image
 	}
 	pinned, found, err := resolveDashboardBuild(ctx, repo, commitTag)
 	switch {
 	case err != nil:
-		slog.Debug("dashboard main build keeps its floating tag: commit tag lookup failed", "image", truncateForLog(image), "tag", commitTag, "error", err)
+		slog.Debug("dashboard main build keeps its floating tag: commit tag lookup failed", "image", truncateText(image, 80), "tag", commitTag, "error", err)
 		return image
 	case !found:
-		slog.Debug("dashboard main build keeps its floating tag: commit tag not published", "image", truncateForLog(image), "tag", commitTag)
+		slog.Debug("dashboard main build keeps its floating tag: commit tag not published", "image", truncateText(image, 80), "tag", commitTag)
 		return image
 	}
 	if _, pinnedDigest, _ := extractRepoAndDigest(pinned); pinnedDigest != digest {
-		slog.Debug("dashboard main build keeps its floating tag: commit tag has another digest", "image", truncateForLog(image), "tag", commitTag, "tagDigest", pinnedDigest)
+		slog.Debug("dashboard main build keeps its floating tag: commit tag has another digest", "image", truncateText(image, 80), "tag", commitTag, "tagDigest", pinnedDigest)
 		return image
 	}
 	return pinned

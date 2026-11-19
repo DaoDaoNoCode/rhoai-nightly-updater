@@ -223,7 +223,7 @@ func getMLflowStatus(c *Client) types.ResourceState {
 				state.Ready = true
 				state.Message = "Running"
 			} else {
-				state.Message = firstNonEmpty(truncateMessage(cond.Message), cond.Reason, "Not ready")
+				state.Message = firstNonEmpty(truncateText(cond.Message, 300), cond.Reason, "Not ready")
 			}
 			break
 		}

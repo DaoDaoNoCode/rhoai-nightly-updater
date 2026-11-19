@@ -424,7 +424,7 @@ func deletionProgress(st dscWaitState) string {
 func modulesNote(st dscWaitState) string {
 	for _, cd := range st.conditions {
 		if cd.Type == "ModulesReady" && cd.Message != "" {
-			return "ModulesReady: " + truncate(cd.Message, 300)
+			return "ModulesReady: " + truncateText(cd.Message, 300)
 		}
 	}
 	return ""

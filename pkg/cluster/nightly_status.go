@@ -256,12 +256,12 @@ func warmDashboardCommit(basicAuth, fbcImage string) {
 		defer dashboardWarmAttempts.Add(fbcImage, true, 10*time.Minute)
 		content, err := extractFBCContentWithAuth(ctx, basicAuth, fbcImage)
 		if err != nil {
-			slog.Debug("dashboard commit: reading FBC catalog failed", "image", truncateForLog(fbcImage), "error", err)
+			slog.Debug("dashboard commit: reading FBC catalog failed", "image", truncateText(fbcImage, 80), "error", err)
 			return false, nil
 		}
 		if dashboard := dashboardRelatedImage(content); dashboard != "" {
 			if _, err := imageLabelsWithAuth(ctx, basicAuth, dashboard, false); err != nil {
-				slog.Debug("dashboard commit: reading labels failed", "image", truncateForLog(dashboard), "error", err)
+				slog.Debug("dashboard commit: reading labels failed", "image", truncateText(dashboard, 80), "error", err)
 			}
 		}
 		return true, nil

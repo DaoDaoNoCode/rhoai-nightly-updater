@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -117,7 +118,7 @@ func ownedCRDVersions(entry map[string]interface{}) map[string][]string {
 		m, _ := o.(map[string]interface{})
 		name, _ := m["name"].(string)
 		version, _ := m["version"].(string)
-		if name != "" && version != "" && !containsString(out[name], version) {
+		if name != "" && version != "" && !slices.Contains(out[name], version) {
 			out[name] = append(out[name], version)
 		}
 	}
@@ -430,7 +431,7 @@ func storedVersionConflicts(c *Client, owned map[string][]string) ([]string, err
 			continue
 		}
 		for _, stored := range crd.Status.StoredVersions {
-			if !containsString(versions, stored) {
+			if !slices.Contains(versions, stored) {
 				out = append(out, fmt.Sprintf("CRD %s stores objects as %s, which the target lists only as %s", crd.Metadata.Name, stored, strings.Join(versions, ", ")))
 			}
 		}

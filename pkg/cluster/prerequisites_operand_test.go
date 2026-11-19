@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -60,7 +61,7 @@ func TestDSCCheck_OperandMessage_InstalledOperatorMissingOperand(t *testing.T) {
 	dsc := byID["dsc-not-ready"]
 	ev := strings.Join(dsc.Evidence, "\n")
 	if strings.Contains(ev, "cause not classified") || !strings.Contains(ev, "→ cause: Job Set Operator is installed, but JobSetOperator/cluster does not exist") ||
-		!containsString(dsc.RelatedProblems, "prerequisite-operand-job-set") {
+		!slices.Contains(dsc.RelatedProblems, "prerequisite-operand-job-set") {
 		t.Fatalf("dsc-not-ready = %+v", dsc)
 	}
 	// The kind is resolved through the installed CSV's owned CRDs, not the catalog.
@@ -78,7 +79,7 @@ func TestDSCCheck_ModulesReadyRollupLinksModuleCauses(t *testing.T) {
 	dsc := problemsByID(checkDataScienceCluster(w.c))["dsc-not-ready"]
 	ev := strings.Join(dsc.Evidence, "\n")
 	if !strings.Contains(ev, "ModulesReady=False (NotReady): Some modules are not ready: trainer → cause: module trainer: Job Set Operator is installed, but JobSetOperator/cluster does not exist") ||
-		strings.Contains(ev, "cause not classified") || !containsString(dsc.RelatedProblems, "prerequisite-operand-job-set") {
+		strings.Contains(ev, "cause not classified") || !slices.Contains(dsc.RelatedProblems, "prerequisite-operand-job-set") {
 		t.Fatalf("dsc-not-ready = %s / %v", ev, dsc.RelatedProblems)
 	}
 

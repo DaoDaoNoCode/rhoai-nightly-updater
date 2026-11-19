@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -139,7 +140,7 @@ func checkDSCCompatibilityFor(c *Client, read dscRead, op *installedOperator, op
 	result.ResetRemovals = schemaComponents(schema, removedComponents(currentSpec, defaultSpec, nested))
 	candidates := append([]string{}, result.ResetRemovals...)
 	for _, name := range schemaComponents(schema, removedComponents(currentSpec, withoutComponents(currentSpec, result.ExtraComponents), nested)) {
-		if !containsString(candidates, name) {
+		if !slices.Contains(candidates, name) {
 			candidates = append(candidates, name)
 		}
 	}
@@ -356,7 +357,7 @@ func withoutComponents(spec map[string]interface{}, names []string) map[string]i
 	components, _ := spec["components"].(map[string]interface{})
 	kept := make(map[string]interface{}, len(components))
 	for k, v := range components {
-		if !containsString(names, k) {
+		if !slices.Contains(names, k) {
 			kept[k] = v
 		}
 	}

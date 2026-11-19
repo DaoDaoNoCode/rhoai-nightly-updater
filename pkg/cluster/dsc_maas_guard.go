@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -28,7 +29,7 @@ import (
 // (readMaaSDSC).
 var dscMaaSPaths = []string{"aigateway", "aigateway.modelsAsAService"}
 
-func takesMaaSAway(path string) bool { return containsString(dscMaaSPaths, path) }
+func takesMaaSAway(path string) bool { return slices.Contains(dscMaaSPaths, path) }
 
 // maasUse is what uses MaaS on the cluster.
 type maasUse struct {

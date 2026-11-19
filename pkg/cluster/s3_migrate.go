@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -519,7 +520,7 @@ func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo, confirmed 
 		return m.fail("check", fmt.Sprintf("Cannot read this tool's record of its pipeline servers, so which ones are this tool's is unknown; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "pipeline record unreadable")
 	}
 	owned := func(d dspaInfo) bool {
-		return d.managedByTool() && (rec.owns(d.Meta) || containsString(confirmed, d.Meta.Namespace))
+		return d.managedByTool() && (rec.owns(d.Meta) || slices.Contains(confirmed, d.Meta.Namespace))
 	}
 	m.step("check", "success", fmt.Sprintf("OK: %s in namespace %s is running", legacy.server, legacyNamespace))
 
@@ -708,7 +709,7 @@ func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, oldK
 	switch {
 	case errors.Is(err, errS3CannotStart):
 		m.deleteMigrateJob(job)
-		return fail(fmt.Sprintf("The copy Job's pod cannot start (%s: %s). Nothing else was changed. Fix the cause (for example set RCLONE_IMAGE to a pullable rclone image), then run %s again.", issue.Reason, truncateMessage(issue.Message), m.op), "not_ready", "job cannot start")
+		return fail(fmt.Sprintf("The copy Job's pod cannot start (%s: %s). Nothing else was changed. Fix the cause (for example set RCLONE_IMAGE to a pullable rclone image), then run %s again.", issue.Reason, truncateText(issue.Message, 300), m.op), "not_ready", "job cannot start")
 	case errors.Is(err, errS3NotReady) && fresh:
 		return fail(fmt.Sprintf("The final copy and check are still running after %s, so %s. The copy keeps running: run %s again to keep waiting for it; the old storage is deleted only once it has passed.", timeout.Round(time.Second), m.kept, m.op), "in_progress", "final copy still running")
 	case errors.Is(err, errS3NotReady):
@@ -1214,7 +1215,7 @@ func objectStoreText(d dspaInfo) string {
 	case d.ObjectStore.ObservedGeneration < d.Meta.Generation:
 		return "the data-science-pipelines operator has not checked the change yet"
 	}
-	return fmt.Sprintf("ObjectStoreAvailable is %s: %s", d.ObjectStore.Status, firstNonEmpty(truncateMessage(d.ObjectStore.Message), d.ObjectStore.Reason))
+	return fmt.Sprintf("ObjectStoreAvailable is %s: %s", d.ObjectStore.Status, firstNonEmpty(truncateText(d.ObjectStore.Message, 300), d.ObjectStore.Reason))
 }
 
 // waitObjectStore waits, bounded by MigrateRepointTimeout, until DSPO

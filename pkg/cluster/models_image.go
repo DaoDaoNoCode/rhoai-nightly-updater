@@ -543,10 +543,10 @@ func roomWarning(entry catalogModel, free map[string]*nodeRoom) string {
 	}
 	if diskOnly != "" {
 		return fmt.Sprintf("No worker seems to have room for the model's download: it needs %s of ephemeral storage free for it (the model is downloaded to the node's disk), and %s has %.1f GB.",
-			entry.ephemeralStorage, diskOnly, maxFloat(free[diskOnly].eph, 0)/1e9)
+			entry.ephemeralStorage, diskOnly, max(free[diskOnly].eph, 0)/1e9)
 	}
 	return fmt.Sprintf("No worker seems to have room for the model: it needs %s CPUs and %s of memory free (up to %s); the worker with the most free CPU, %s, has %.1f CPUs and %.1f GiB free.",
-		entry.CPU, memoryWords(entry.MemoryRequest), memoryWords(entry.Memory), best, maxFloat(free[best].cpu, 0), maxFloat(free[best].mem, 0)/(1<<30))
+		entry.CPU, memoryWords(entry.MemoryRequest), memoryWords(entry.Memory), best, max(free[best].cpu, 0), max(free[best].mem, 0)/(1<<30))
 }
 
 // memoryWords writes a Kubernetes memory quantity in words ("4Gi": "4
@@ -558,13 +558,6 @@ func memoryWords(q string) string {
 		}
 	}
 	return q
-}
-
-func maxFloat(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // --- status -----------------------------------------------------------------

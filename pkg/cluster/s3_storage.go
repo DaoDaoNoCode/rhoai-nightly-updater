@@ -1265,7 +1265,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 			if issue.Reason != "" {
 				reason = issue.Reason
 				if issue.Message != "" {
-					reason += ": " + truncateMessage(issue.Message)
+					reason += ": " + truncateText(issue.Message, 300)
 				}
 			}
 			log.add("SeaweedFS is not ready: " + reason)
@@ -1274,7 +1274,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 		if errors.Is(err, errS3CannotStart) {
 			msg := issue.Reason
 			if issue.Message != "" {
-				msg += ": " + truncateMessage(issue.Message)
+				msg += ": " + truncateText(issue.Message, 300)
 			}
 			log.add("SeaweedFS cannot start: " + msg)
 			return fail(fmt.Sprintf("SeaweedFS was deployed but its pod cannot start (%s). Fix the cause (for example set SEAWEEDFS_IMAGE to a pullable image) and %s, or delete the storage.", msg, retry.again), "not_ready", issue.Reason)
@@ -1770,7 +1770,7 @@ func namespaceDeletionDetail(c *Client, namespace string) string {
 	var details []string
 	for _, cond := range ns.Status.Conditions {
 		if cond.Status == "True" && cond.Message != "" {
-			details = append(details, cond.Type+": "+truncateMessage(cond.Message))
+			details = append(details, cond.Type+": "+truncateText(cond.Message, 300))
 		}
 	}
 	if len(details) == 0 {

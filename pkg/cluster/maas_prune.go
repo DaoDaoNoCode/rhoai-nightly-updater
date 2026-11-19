@@ -338,7 +338,7 @@ func PruneGoneMaaSPublicationsInBackground(c *Client) {
 		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "prune-maas-publications",
-		Detail:    truncateMessage(detail),
+		Detail:    truncateText(detail, 300),
 		Success:   err == nil,
 	})
 }

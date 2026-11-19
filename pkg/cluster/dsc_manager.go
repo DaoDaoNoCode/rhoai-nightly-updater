@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 
@@ -371,7 +372,7 @@ func (v *dscView) model() *types.DSCManager {
 	}
 	for _, cd := range conds {
 		if isUpgradeGateCondition(dscCondition{Type: cd.Type, Status: cd.Status, Reason: cd.Reason, Message: cd.Message}) && cd.Status != "True" {
-			out.UpgradeGates = append(out.UpgradeGates, fmt.Sprintf("%s (%s): %s", cd.Type, cd.Reason, truncate(cd.Message, 300)))
+			out.UpgradeGates = append(out.UpgradeGates, fmt.Sprintf("%s (%s): %s", cd.Type, cd.Reason, truncateText(cd.Message, 300)))
 		}
 	}
 	statusComps, _ := st["components"].(map[string]interface{})
@@ -821,7 +822,7 @@ func (v *dscView) planToggle(c *Client, path, to string, withParent bool) *dscPl
 	if len(t.Allowed) == 0 {
 		return p.refuse(fmt.Sprintf("The CRD lists no values for spec.components.%s.managementState, so this page does not change it.", path), "validation")
 	}
-	if !containsString(t.Allowed, to) {
+	if !slices.Contains(t.Allowed, to) {
 		return p.refuse(fmt.Sprintf("spec.components.%s.managementState accepts %s, not %q.", path, strings.Join(t.Allowed, ", "), to), "validation")
 	}
 	comps := v.components()
@@ -850,7 +851,7 @@ func (v *dscView) planToggle(c *Client, path, to string, withParent bool) *dscPl
 				return p.refuse(fmt.Sprintf("%s is %s, so setting %s to Managed would deploy nothing. Set %s to Managed in the same change, or set it first.", parent.key(), state, path, parent.key()), "parent_removed")
 			}
 			for _, anc := range parents {
-				if !containsString(anc.Allowed, "Managed") {
+				if !slices.Contains(anc.Allowed, "Managed") {
 					return p.refuse(fmt.Sprintf("%s does not accept Managed, so %s cannot be deployed.", anc.key(), path), "validation")
 				}
 				p.sets = append(p.sets, dscAssign{Path: componentsPath(append(append([]string{}, anc.Path...), "managementState")...), Value: "Managed"})
@@ -961,7 +962,7 @@ func (v *dscView) turnedOn() []dscToggle {
 			continue
 		}
 		s, set := lookupState(live, t.Path)
-		if !set || (s != "Managed" && s != "Unmanaged") || !containsString(t.Allowed, s) || !v.deployed(live, t.Path) {
+		if !set || (s != "Managed" && s != "Unmanaged") || !slices.Contains(t.Allowed, s) || !v.deployed(live, t.Path) {
 			continue
 		}
 		if ds, _ := v.stateOf(def, t.Path); ds == "Managed" || ds == "Unmanaged" {

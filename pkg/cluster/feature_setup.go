@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -386,7 +387,7 @@ func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
 				pt.Commands = dscComponentCommand(p.dscName, key, "Managed")
 				p.plan = append(p.plan, fmt.Sprintf("DataScienceCluster %s: set %s to Managed (it is %s; Clean up can turn it back while nothing else uses it)", p.dscName, key, firstNonEmpty(state, "not set")))
 			case cp.ready == "False":
-				pt.State, pt.Message = "waiting", "Managed; RHOAI's operator reports it not ready: "+truncateMessage(firstNonEmpty(cp.msg, "no message"))
+				pt.State, pt.Message = "waiting", "Managed; RHOAI's operator reports it not ready: "+truncateText(firstNonEmpty(cp.msg, "no message"), 300)
 			default:
 				pt.State, pt.Message = "ready", "Managed in DataScienceCluster "+p.dscName
 				if pt.ManagedByTool {
@@ -442,7 +443,7 @@ func planKuadrantPart(c *Client, p *featurePlan) types.MaaSPart {
 		pt.State, pt.Message, pt.NotManaged = "ready", k.namespace+"/kuadrant is ready", !toolOwned(k.meta)
 		pt.ManagedByTool = toolOwned(k.meta)
 	case k.found:
-		pt.State, pt.Message = "waiting", "Kuadrant "+k.namespace+"/kuadrant is not Ready yet: "+truncateMessage(firstNonEmpty(k.message, "no message"))
+		pt.State, pt.Message = "waiting", "Kuadrant "+k.namespace+"/kuadrant is not Ready yet: "+truncateText(firstNonEmpty(k.message, "no message"), 300)
 	default:
 		pt.State, pt.Message = "missing", "Not created yet. Set up creates it once Connectivity Link serves its API; it starts Authorino, which checks each call's token."
 		pt.Commands = kuadrantCommands(rhclOperator.namespace)
@@ -567,7 +568,7 @@ func dependencyPart(p *featurePlan) types.MaaSPart {
 		names := strings.Join(missing, " and ")
 		pt.State, pt.Message = "waiting", fmt.Sprintf("Waits for %s: KServe reports %s. Set up installs %s, then waits until KServe sees %s.", names, verb(len(missing), "it isn't installed", "they aren't installed"), verb(len(missing), "it", "them"), verb(len(missing), "it", "them"))
 	default:
-		pt.State, pt.Message = "waiting", "KServe reports: "+truncateMessage(firstNonEmpty(p.depMsg, "not met"))+". Set up installs what it names, then waits until KServe sees it."
+		pt.State, pt.Message = "waiting", "KServe reports: "+truncateText(firstNonEmpty(p.depMsg, "not met"), 300)+". Set up installs what it names, then waits until KServe sees it."
 	}
 	return pt
 }
@@ -892,7 +893,7 @@ func (m *maasRun) waitPrerequisitesReady(p *featurePlan) (*types.OperationRespon
 		var waiting []string
 		for _, cp := range p.components {
 			if s, msg := componentReadyCondition(r.Object, []string{cp.key}); s != "True" && (s == "False" || cp.turnOn) {
-				waiting = append(waiting, fmt.Sprintf("%s: %s", cp.key, firstNonEmpty(truncateMessage(msg), map[string]string{"False": "not ready", "": "not reported yet"}[s])))
+				waiting = append(waiting, fmt.Sprintf("%s: %s", cp.key, firstNonEmpty(truncateText(msg, 300), map[string]string{"False": "not ready", "": "not reported yet"}[s])))
 			}
 		}
 		if p.fs.dependency != "" {
@@ -937,7 +938,7 @@ func (m *maasRun) waitPrerequisitesReady(p *featurePlan) (*types.OperationRespon
 	note := ""
 	if p.fs.dependency != "" {
 		if s, msg := dscConditionStatus(dsc.Object, p.fs.dependency); s == "False" {
-			note = " KServe still reports missing: " + truncateMessage(msg) + "."
+			note = " KServe still reports missing: " + truncateText(msg, 300) + "."
 		}
 	}
 	slog.Info("prerequisites set up", "feature", p.fs.id, "user", getUser(c))
@@ -951,7 +952,7 @@ func (m *maasRun) waitPrerequisitesReady(p *featurePlan) (*types.OperationRespon
 func RestorableComponentKey(key string) bool {
 	for _, fs := range featureSetups {
 		for _, fc := range fs.components {
-			if containsString(fc.keys, key) || (fc.v1Key != "" && fc.v1Key == key) {
+			if slices.Contains(fc.keys, key) || (fc.v1Key != "" && fc.v1Key == key) {
 				return true
 			}
 		}

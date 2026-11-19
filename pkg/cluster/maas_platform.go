@@ -201,7 +201,7 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 	}
 	secret := firstNonEmpty(cr.Spec.Listener.TLS.CertSecretRef.Name, authorinoDefaultSecret)
 	if len(secret) > 253 || !dns1123Subdomain.MatchString(secret) {
-		return nil, fmt.Errorf("authorino's CR names its certificate Secret %q, which is not a valid Kubernetes name", truncateMessage(secret))
+		return nil, fmt.Errorf("authorino's CR names its certificate Secret %q, which is not a valid Kubernetes name", truncateText(secret, 300))
 	}
 	query := url.Values{"fieldManager": {toolFieldManager}}
 	if dryRun {

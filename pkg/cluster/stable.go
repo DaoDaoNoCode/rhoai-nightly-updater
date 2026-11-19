@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -40,7 +41,7 @@ func (ch stablePackageChannel) ownedCRDs() map[string][]string {
 	}
 	out := map[string][]string{}
 	for _, o := range ch.CurrentCSVDesc.CustomResourceDefinitions.Owned {
-		if o.Name != "" && o.Version != "" && !containsString(out[o.Name], o.Version) {
+		if o.Name != "" && o.Version != "" && !slices.Contains(out[o.Name], o.Version) {
 			out[o.Name] = append(out[o.Name], o.Version)
 		}
 	}

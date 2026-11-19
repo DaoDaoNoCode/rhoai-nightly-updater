@@ -345,7 +345,7 @@ func pipelineServerState(d dspaInfo, dashboardURL string) types.ResourceState {
 	default:
 		// The Ready reason is often a success-sounding word such as
 		// "MinimumReplicasAvailable"; the message carries the cause.
-		state.Message = firstNonEmpty(truncateMessage(d.Ready.Message), d.Ready.Reason, "Not ready")
+		state.Message = firstNonEmpty(truncateText(d.Ready.Message, 300), d.Ready.Reason, "Not ready")
 	}
 	// Stuck, like the dashboard's hasServerTimedOut: the API server is not
 	// ready 5 minutes after creation. Ready=False with a ready API server

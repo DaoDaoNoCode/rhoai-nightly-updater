@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -271,7 +272,7 @@ func waitForModelRoute(c *Client, project, name string, published bool) (string,
 			return false, err
 		}
 		if !published {
-			if found && containsString(parents, maas) {
+			if found && slices.Contains(parents, maas) {
 				why = fmt.Sprintf("the model's route (%s) still goes through %s", route, strings.Join(parents, " and "))
 				return false, nil
 			}
@@ -299,7 +300,7 @@ func waitForModelRoute(c *Client, project, name string, published bool) (string,
 		if cond, ok := findCondition(model.Status.Conditions, "Ready"); !ok || cond.Status != "True" {
 			why = "the model is not Ready"
 			if ok {
-				why += " (" + firstNonEmpty(truncateMessage(cond.Message), cond.Reason) + ")"
+				why += " (" + firstNonEmpty(truncateText(cond.Message, 300), cond.Reason) + ")"
 			}
 			return false, nil
 		}

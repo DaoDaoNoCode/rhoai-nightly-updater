@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -535,7 +536,7 @@ func splitLegacyDashboardTargets(c *Client, images map[string]string, logs *[]st
 			case moduleErr != nil:
 				*logs = append(*logs, fmt.Sprintf("  %s: cannot read module deployment (%v)", name, moduleErr))
 				failed = append(failed, name)
-			case !containsString(moduleNames, name):
+			case !slices.Contains(moduleNames, name):
 				*logs = append(*logs, fmt.Sprintf("  %s: container not found in its deployment; unchanged", name))
 			default:
 				modules[name] = images[name]
@@ -551,13 +552,10 @@ func splitLegacyDashboardTargets(c *Client, images map[string]string, logs *[]st
 	return core, modules, failed, nil
 }
 
+// containsString is slices.Contains, for the diagnostics files that still
+// call it.
 func containsString(values []string, want string) bool {
-	for _, v := range values {
-		if v == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, want)
 }
 
 // RevertDashboardImage reverts ALL dashboard containers to their operator-managed images.
@@ -599,7 +597,7 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	// Revert the main dashboard deployment
 	var containerPatches []map[string]interface{}
 	for _, name := range coreNames {
-		logs = append(logs, fmt.Sprintf("  %s: %s", name, truncateForLog(coreImages[name])))
+		logs = append(logs, fmt.Sprintf("  %s: %s", name, truncateText(coreImages[name], 80)))
 		containerPatches = append(containerPatches, map[string]interface{}{
 			"name":  name,
 			"image": coreImages[name],
@@ -659,7 +657,7 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 			failedModules = append(failedModules, name)
 		} else {
 			totalReverted++
-			logs = append(logs, fmt.Sprintf("  %s: %s", name, truncateForLog(image)))
+			logs = append(logs, fmt.Sprintf("  %s: %s", name, truncateText(image, 80)))
 		}
 	}
 

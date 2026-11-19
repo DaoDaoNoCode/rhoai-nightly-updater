@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -228,7 +229,7 @@ func readOperator(c *Client, op operatorSpec) (operatorState, error) {
 func readOperatorIn(c *Client, op operatorSpec, csvs []clusterCSV, subs []*olmSubscription) (operatorState, error) {
 	var st operatorState
 	for _, csv := range csvs {
-		if !containsString(csv.packages(), op.pkg) && csvBaseName(csv.Name) != op.pkg {
+		if !slices.Contains(csv.packages(), op.pkg) && csvBaseName(csv.Name) != op.pkg {
 			continue
 		}
 		v := csvVersion(csv.Name)
@@ -594,7 +595,7 @@ func readSubscriptionProgress(c *Client, ns, name string) (subscriptionProgress,
 	}
 	p := subscriptionProgress{installedCSV: sub.Status.InstalledCSV, currentCSV: sub.Status.CurrentCSV, state: sub.Status.State}
 	if cond, ok := findCondition(sub.Status.Conditions, "ResolutionFailed"); ok && cond.Status == "True" {
-		p.failed = "OLM cannot resolve it: " + truncateMessage(firstNonEmpty(cond.Message, cond.Reason))
+		p.failed = "OLM cannot resolve it: " + truncateText(firstNonEmpty(cond.Message, cond.Reason), 300)
 	}
 	if p.installedCSV == "" {
 		p.text = "OLM is resolving the Subscription (" + firstNonEmpty(p.state, "no state yet") + ")"
@@ -607,7 +608,7 @@ func readSubscriptionProgress(c *Client, ns, name string) (subscriptionProgress,
 	p.phase = phase
 	switch {
 	case phase == "Failed":
-		p.failed = fmt.Sprintf("CSV %s failed: %s", p.installedCSV, truncateMessage(firstNonEmpty(msg, "no message")))
+		p.failed = fmt.Sprintf("CSV %s failed: %s", p.installedCSV, truncateText(firstNonEmpty(msg, "no message"), 300))
 	case phase == "Succeeded" && (p.currentCSV == "" || p.currentCSV == p.installedCSV):
 		p.done = true
 	}

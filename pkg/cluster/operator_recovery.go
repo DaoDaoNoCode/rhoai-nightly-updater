@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -249,7 +250,7 @@ func (r *operatorRecovery) noteCSVRemoved(name string) {
 		return
 	}
 	r.csvRemoved = true
-	if name != "" && !containsString(r.removedCSVs, name) {
+	if name != "" && !slices.Contains(r.removedCSVs, name) {
 		r.removedCSVs = append(r.removedCSVs, name)
 	}
 }
@@ -552,7 +553,7 @@ func (r *operatorRecovery) attemptCSVsToRemove(c *Client) ([]rhoaiCSV, error) {
 		case !existed || preUID != csv.UID:
 			return true
 		default:
-			return containsString(r.removedCSVs, csv.Name)
+			return slices.Contains(r.removedCSVs, csv.Name)
 		}
 	}
 	var out []rhoaiCSV

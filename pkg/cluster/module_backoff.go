@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -157,7 +158,7 @@ func findModuleOperator(c *Client, module, appNS string) (*operatorDeployment, s
 			j.Metadata.Namespace = appNS
 		}
 		d := j.toOperatorDeployment("")
-		if !containsString(d.OwnerKinds, "Platform") {
+		if !slices.Contains(d.OwnerKinds, "Platform") {
 			continue
 		}
 		switch {
@@ -266,7 +267,7 @@ func webhooksServedBy(c *Client, d operatorDeployment) ([]string, error) {
 			}
 			if sel {
 				ref := fmt.Sprintf("%s (%s)", wh.Name, cfg.ref())
-				if !containsString(out, ref) {
+				if !slices.Contains(out, ref) {
 					out = append(out, ref)
 				}
 			}

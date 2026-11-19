@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -1153,7 +1154,7 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 		// maas-controller removes its finalizer after deleting the policies it
 		// generated for the model. Without maas-controller nothing would:
 		// the tool takes it off its own reference and says what may be left.
-		if meta, found, err := readObjectMeta(c, path); err == nil && found && meta.terminating() && containsString(meta.Finalizers, maasModelFinalizer) {
+		if meta, found, err := readObjectMeta(c, path); err == nil && found && meta.terminating() && slices.Contains(meta.Finalizers, maasModelFinalizer) {
 			if why := maasControllerGone(c); why != "" {
 				var rest []string
 				for _, f := range meta.Finalizers {
@@ -1211,7 +1212,7 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 		say("gateway", "success", "The gateway someone else made is not changed.")
 	case !gwPlan.found["Gateway"]:
 		say("gateway", "success", "There is no MaaS gateway to update.")
-	case containsString(rec.projects(), project):
+	case slices.Contains(rec.projects(), project):
 		say("gateway", "success", fmt.Sprintf("The MaaS gateway still admits routes from %s: another model of this tool is published there.", project))
 	default:
 		gwPlan.classMissing = false // only the gateway changes
