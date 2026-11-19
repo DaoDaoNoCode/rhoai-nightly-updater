@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -395,6 +396,44 @@ func TestModelsSetup_PresetImageMissingStopsWithItsFix(t *testing.T) {
 	}
 	if len(st.Models.Items) != 1 || !st.Models.Items[0].PresetImageMissing || !st.Models.Items[0].TerminalError || !st.Models.Items[0].ManagedByTool {
 		t.Fatalf("status: %+v", st.Models.Items)
+	}
+}
+
+// A mirrored pull where one source answers "manifest unknown" and another
+// refuses the credentials is waited on (it may be a node without its pull
+// secret yet); once the window ends, the released image is offered again,
+// as a possibility, in the setup's failure and in the status.
+func TestModelsSetup_MaybeMissingPresetImageOffersItsFixAfterTheWindow(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.readyAfter = 0
+	mixed := `(Mirrors also failed: [quay.io/rhoai/vllm-cpu@sha256:a: unauthorized: access to the requested resource is not authorized]): registry.redhat.io/rhaii/vllm-cpu@sha256:a: reading manifest sha256:a in registry.redhat.io/rhaii/vllm-cpu: manifest unknown`
+	mc.f.putJSON("/api/v1/nodes/node-a", `{"metadata":{"creationTimestamp":"`+clk.Now().Add(-3*time.Hour).UTC().Format(time.RFC3339)+`"}}`)
+	pod := map[string]interface{}{
+		"metadata": map[string]interface{}{"labels": map[string]interface{}{"app.kubernetes.io/name": "qwen25-05b-instruct", "app.kubernetes.io/component": "llminferenceservice-workload"}},
+		"spec":     map[string]interface{}{"nodeName": "node-a"},
+		"status": map[string]interface{}{"containerStatuses": []interface{}{map[string]interface{}{"name": "main",
+			"state": map[string]interface{}{"waiting": map[string]interface{}{"reason": "ImagePullBackOff", "message": mixed}}}}},
+	}
+	mc.f.put(testModelPodsPath, pod)
+	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if res.Success || res.ErrorCode != "image_unavailable" || !strings.Contains(res.Message, "for 2:00") || !strings.Contains(res.Message, "if this nightly build's runtime image is not published yet, use the newest released Red Hat image") {
+		t.Fatalf("got %+v", res)
+	}
+	if !strings.Contains(strings.Join(eventMessages(events, "model-ready"), "\n"), "Waiting up to 2:00") {
+		t.Errorf("not waited on: %v", eventMessages(events, "model-ready"))
+	}
+	// The status: not while the model is younger than the longest window
+	// (a young node may still get its pull secret), then offered.
+	st, _ := GetResourcesStatus(mc.c)
+	if m := st.Models.Items[0]; m.PresetImageMissing || m.PresetImageUncertain {
+		t.Fatalf("young model: %+v", m)
+	}
+	obj := mc.f.get(testModelPath)
+	ensureMap(obj, "metadata")["creationTimestamp"] = time.Now().Add(-ModelImagePullGraceYoungNode - time.Minute).UTC().Format(time.RFC3339)
+	mc.f.put(testModelPath, obj)
+	st, _ = GetResourcesStatus(mc.c)
+	if m := st.Models.Items[0]; !m.PresetImageMissing || !m.PresetImageUncertain || m.TerminalError != true {
+		t.Fatalf("old model: %+v", m)
 	}
 }
 

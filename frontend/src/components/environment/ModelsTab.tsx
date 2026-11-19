@@ -570,10 +570,15 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
           ? <Content component="p">{modelPurpose(c)} It runs on vLLM on CPU in {project} and reserves {modelNeeds(c)}. The dashboard lists it with the project&apos;s deployments{c?.type === "embedding" ? "." : ", and its Gen AI playground can chat with it."}{model.ready && href && !isTerminating(model) ? <> <ExternalLink href={href} isInline>Open {project} in the dashboard</ExternalLink></> : null}</Content>
           : <Content component="p">{modelPurpose(c)} Not set up in {project} yet: it needs {modelNeeds(c)} on one worker, downloads about {c?.downloadSize ?? "1 GB"}, and takes 3 to 5 minutes the first time.</Content>}
       {model?.presetImageMissing && managed && (
-        <Alert variant="danger" isInline component="div" title="The cluster preset's image is not published yet"
+        <Alert variant="danger" isInline component="div" title={model.presetImageUncertain ? "The cluster preset's image may not be published" : "The cluster preset's image is not published yet"}
           actionLinks={!readOnly && !baseReason ? <AlertActionLink onClick={useReleased}>Use the newest released Red Hat image</AlertActionLink> : undefined}>
+          {model.presetImageUncertain && (
+            <Content component="p">
+              The image pull has failed for several minutes. One registry answered that the image does not exist, and another refused the node&apos;s credentials, so either the image is not published or the node lacks the pull secret. Details: {model.message}
+            </Content>
+          )}
           <Content component="p">
-            This cluster runs a nightly RHOAI build, whose CPU preset names a runtime image Red Hat has not published, so the model cannot start.
+            {model.presetImageUncertain ? "If it is not published: this" : "This"} cluster runs a nightly RHOAI build, whose CPU preset names a runtime image Red Hat has not published, so the model cannot start.
             Use the newest released Red Hat vLLM CPU image instead: only the model&apos;s image changes. To use the preset&apos;s own image, the cluster needs a mirror of <code>registry.redhat.io/rhaii</code> to <code>registry.stage.redhat.io/rhaii</code> and a credential for that registry.
           </Content>
           {readOnly ? <Content component="p">A cluster-admin makes this change.</Content> : baseReason && <Content component="p">Not available now: {baseReason}</Content>}

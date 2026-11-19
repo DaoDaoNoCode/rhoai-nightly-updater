@@ -790,6 +790,11 @@ type ModelState struct {
 	// yet); setting the model up again with the newest released image
 	// fixes it.
 	PresetImageMissing bool `json:"presetImageMissing,omitempty"`
+	// PresetImageUncertain (with PresetImageMissing): the pull has failed
+	// for longer than a setup waits, and a registry answered that the image
+	// does not exist while another refused the node's credentials, so the
+	// image may be missing or the node may lack the pull secret.
+	PresetImageUncertain bool `json:"presetImageUncertain,omitempty"`
 	// MaaSPublished: the model routes through the MaaS gateway (published
 	// on the MaaS tab), so it is used through MaaS and its direct address
 	// answers 404.

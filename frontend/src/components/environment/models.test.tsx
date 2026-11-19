@@ -582,6 +582,17 @@ describe("Models tab", () => {
     expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "setup", project: "dev", model: "qwen25-05b-instruct", releasedImage: true }]);
   });
 
+  it("a preset image that may be missing offers the released image as a possibility", async () => {
+    stubApi({
+      "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev", { ready: false, terminalError: true, presetImageMissing: true, presetImageUncertain: true, waitingReason: "ImagePullBackOff", message: "ImagePullBackOff: unauthorized ... manifest unknown" })] }) }),
+      "/api/resources/projects": { projects: ["dev"] },
+    });
+    renderAt("/test-resources?tab=models&project=dev");
+    expect(await screen.findByText("The cluster preset's image may not be published")).toBeInTheDocument();
+    expect(screen.getByText(/either the image is not published or the node lacks the pull secret/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Use the newest released Red Hat image" })).toBeInTheDocument();
+  });
+
   it("the Overview lists Models with the same state as its tab", async () => {
     stubApi({ "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev")] }) }), "/api/resources/projects": { projects: ["dev"] } });
     renderAt("/test-resources");

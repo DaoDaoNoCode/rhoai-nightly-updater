@@ -319,6 +319,23 @@ func manifestUnknown(msg string) bool {
 	return true
 }
 
+// manifestUnknownMentioned: some source of the pull answered that the image
+// does not exist, though another may have refused the credentials (which
+// manifestUnknown waits on). Once that pull has failed for the whole grace
+// window, the image may be missing after all, so the released image is
+// offered again, worded as a possibility.
+func manifestUnknownMentioned(msg string) bool {
+	m := strings.ToLower(msg)
+	return strings.Contains(m, "manifest unknown") || strings.Contains(m, "manifest_unknown")
+}
+
+// olderThan: the object was created more than d ago (false when its
+// creation time cannot be read).
+func olderThan(meta objectMeta, d time.Duration) bool {
+	t, err := time.Parse(time.RFC3339, meta.CreationTimestamp)
+	return err == nil && time.Since(t) > d
+}
+
 // modelState reports one model. inspect reads its pods when it is not
 // ready. rec is the tool's record of its models (nil: it could not be
 // read, so no model counts as the tool's).
@@ -377,9 +394,15 @@ func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) type
 	if inspect {
 		if issue, err := inspectPods(c, m.Metadata.Namespace, modelPodSelector(m.Metadata.Name), ""); err == nil {
 			applyPodIssue(&s.ResourceState, issue)
-			if s.ImageKind == "preset" && (issue.Reason == "ErrImagePull" || issue.Reason == "ImagePullBackOff") && manifestUnknown(issue.Message) {
-				s.PresetImageMissing = true
-				s.TerminalError = true
+			if s.ImageKind == "preset" && (issue.Reason == "ErrImagePull" || issue.Reason == "ImagePullBackOff") {
+				switch {
+				case manifestUnknown(issue.Message):
+					s.PresetImageMissing = true
+					s.TerminalError = true
+				case manifestUnknownMentioned(issue.Message) && olderThan(m.Metadata, ModelImagePullGraceYoungNode):
+					// Past the longest grace window a setup waits on.
+					s.PresetImageMissing, s.PresetImageUncertain = true, true
+				}
 			}
 		}
 	}
@@ -1185,6 +1208,8 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 			return m.fail("model-ready", fmt.Sprintf("Stopped waiting for the model: %v. It was created; the Models tab shows its state.", res.err), firstNonEmpty(errorCodeFromK8sErr(res.err), "cancelled"), "model wait failed")
 		case res.imageMissing:
 			return m.fail("model-ready", "The model cannot start: the cluster preset's image is not in the registry (this nightly build's runtime image is not published yet). Use the newest released Red Hat image instead: the Models tab offers it, and it replaces only the model's image. Technical details: "+res.problem, "image_unavailable", "preset image missing")
+		case res.imageMaybeMissing:
+			return m.fail("model-ready", "The model cannot start: "+res.problem+" A registry answered that the image does not exist (\"manifest unknown\"): if this nightly build's runtime image is not published yet, use the newest released Red Hat image instead: the Models tab offers it, and it replaces only the model's image.", "image_unavailable", "preset image may be missing")
 		case res.problem != "":
 			return m.fail("model-ready", "The model cannot start: "+res.problem+" It was created; delete it from the Models tab, or fix the cause and set it up again.", "not_ready", "model not starting")
 		case !res.ready && res.pulling != "":
@@ -1553,6 +1578,9 @@ type modelProgress struct {
 	// than a missing image (credentials, network), in words; node is the
 	// pod's node. The wait gives it a grace window (modelPullGrace).
 	pullFailure, node string
+	// mentionsMissing: a source of that pull answered "manifest unknown"
+	// (manifestUnknownMentioned).
+	mentionsMissing bool
 }
 
 // readModelProgress reads the progress of the model's pods of the current
@@ -1637,9 +1665,10 @@ func describeModelPod(p modelPod, event string) modelProgress {
 				// Credentials can reach a new node a few minutes after it
 				// joins (ROSA HCP, seen live): the wait gives it time.
 				return modelProgress{
-					message:     fmt.Sprintf("Pulling the image of %s failed (%s: %s); the node keeps retrying.", s.Name, w.Reason, truncateMessage(w.Message)),
-					pullFailure: fmt.Sprintf("the image of container %s cannot be pulled (%s: %s)", s.Name, w.Reason, truncateMessage(w.Message)),
-					node:        p.Spec.NodeName,
+					message:         fmt.Sprintf("Pulling the image of %s failed (%s: %s); the node keeps retrying.", s.Name, w.Reason, truncateMessage(w.Message)),
+					pullFailure:     fmt.Sprintf("the image of container %s cannot be pulled (%s: %s)", s.Name, w.Reason, truncateMessage(w.Message)),
+					node:            p.Spec.NodeName,
+					mentionsMissing: manifestUnknownMentioned(w.Message),
 				}, true
 			case "CrashLoopBackOff":
 				last := ""
@@ -1691,6 +1720,9 @@ type modelWait struct {
 	url          string
 	problem      string
 	imageMissing bool
+	// imageMaybeMissing: the preset's image pull failed for the whole
+	// grace window, and a source answered that the image does not exist.
+	imageMaybeMissing bool
 	// pulling is the image pull failure the wait ended in, with what to
 	// check ("" when no pull was failing when it ended).
 	pulling string
@@ -1866,6 +1898,7 @@ func waitModelReady(c *Client, project, name string, presetImage, workloadOnly b
 			}
 			if clk.Since(pullSince) >= pullGrace {
 				res.problem = fmt.Sprintf("%s, for %s.%s Check that the cluster's pull secret can read it (on ROSA, the additional pull secret), that a mirror covers its registry if the cluster uses one, and that the image exists.", pr.pullFailure, clockText(pullGrace), pullNote)
+				res.imageMaybeMissing = pr.mentionsMissing && presetImage
 				return true, nil
 			}
 			res.pulling = fmt.Sprintf("%s.%s Check that the cluster's pull secret can read it (on ROSA, the additional pull secret), that a mirror covers its registry if the cluster uses one, and that the image exists.", pr.pullFailure, pullNote)

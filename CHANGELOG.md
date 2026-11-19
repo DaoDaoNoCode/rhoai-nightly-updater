@@ -189,6 +189,11 @@ only accepts a tag whose version is the top dated section. See
   again after a route removal that stopped waiting says the model has no
   route. Models' Delete and Set up keep the log lines of the unpublish or
   publish they run.
+- A model's image pull through a mirror where one source answers
+  "manifest unknown" and another refuses the node's credentials is still
+  waited on, but once the wait ends the setup and the Models tab offer
+  **Use the newest released Red Hat image** again, worded as a
+  possibility ("may not be published").
 
 ### Changed
 
