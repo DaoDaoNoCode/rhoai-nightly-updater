@@ -100,6 +100,33 @@ jobs:
       # test would be skipped.
       - run: REQUIRE_JQ=1 bash scripts/test-node-pull-secret.sh
 
+  # The docs' links, anchors and images, and shellcheck on every shell
+  # script (node_pull_secret.sh is a pasted command: shellcheck is told the
+  # shell). The release tarball of shellcheck, checked against its SHA-256
+  # (the GitLab job uses Alpine's package of the same version); the runner's
+  # own shellcheck is older.
+  docs:
+    runs-on: ubuntu-latest
+    env:
+      SHELLCHECK_VERSION: v0.11.0
+      SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - name: Install shellcheck
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/shellcheck.tar.xz" "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/shellcheck-$SHELLCHECK_VERSION.linux.x86_64.tar.xz"
+          echo "$SHELLCHECK_SHA256  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/shellcheck"
+          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP/shellcheck" --strip-components=1 "shellcheck-$SHELLCHECK_VERSION/shellcheck"
+          echo "$RUNNER_TEMP/shellcheck" >> "$GITHUB_PATH"
+      - run: shellcheck --version
+      - run: make docs-check
+      - run: shellcheck scripts/*.sh dev.sh docs/tools/*.sh
+      - run: shellcheck --shell=bash pkg/cluster/node_pull_secret.sh
+
   chart:
     runs-on: ubuntu-latest
     env:
