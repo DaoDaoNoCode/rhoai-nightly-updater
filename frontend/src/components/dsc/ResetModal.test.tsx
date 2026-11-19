@@ -94,16 +94,15 @@ describe("ResetModal", () => {
   it("names the fields a reset keeps from the plan, not a fixed list", async () => {
     const dialog = open({});
     expect(await within(dialog).findByRole("button", { name: "What a soft reset would do" })).toHaveAttribute("aria-expanded", "true");
-    const radio = within(dialog).getByLabelText("Soft reset (recommended)");
-    const description = radio.closest(".pf-v6-c-radio")!;
-    expect(description).toHaveTextContent("Keeps the value of aiHub.instancesNamespace, workbenches.workbenchNamespace.");
+    const choices = within(dialog).getByRole("radiogroup");
+    expect(choices).toHaveTextContent("Both keep the value of aiHub.instancesNamespace, workbenches.workbenchNamespace.");
     expect(dialog).not.toHaveTextContent(/Namespaces of workbenches and the AI hub/);
   });
 
   it("says nothing about kept fields when the DataScienceCluster sets none", async () => {
     const dialog = open({ soft: { ...soft, protectedFields: [] } });
     await within(dialog).findByRole("list", { name: "Changes of the reset" });
-    expect(dialog).not.toHaveTextContent(/Keeps the value of/);
+    expect(dialog).not.toHaveTextContent(/keep the value of/);
   });
 });
 

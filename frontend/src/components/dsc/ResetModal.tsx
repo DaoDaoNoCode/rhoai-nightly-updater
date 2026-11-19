@@ -13,6 +13,9 @@ import {
   ExpandableSection,
   Form,
   FormGroup,
+  FormHelperText,
+  HelperText,
+  HelperTextItem,
   List,
   ListItem,
   Modal,
@@ -125,7 +128,6 @@ export const ResetModal: React.FC<{
   const kept = plan?.kept ?? [];
   // A blocked removal of a component the user turned on: keeping them avoids it.
   const keepWouldHelp = !keep && (plan?.blocked ?? []).some((b) => turnedOn.includes(b.component));
-  const keptFields = protectedFields.length > 0 ? <> Keeps the value of <PathList paths={protectedFields} />.</> : null;
   return (
     <Modal aria-labelledby={titleId} variant={ModalVariant.medium} isOpen onClose={() => !busy && onClose()}>
       <ModalHeader title="Reset to the release default" labelId={titleId} titleIconVariant={kind === "hard-reset" ? "warning" : undefined} />
@@ -137,10 +139,15 @@ export const ResetModal: React.FC<{
                 <FormGroup role="radiogroup" isStack fieldId="dsc-reset-kind" label="How">
                   <Radio id="dsc-reset-soft" name="dsc-reset-kind" isChecked={kind === "soft-reset"} onChange={() => setKind("soft-reset")}
                     label="Soft reset (recommended)"
-                    description={<>Changes <code>{name}</code> in place: only the components and settings that differ from the release default.{keptFields}</>} />
+                    description={<>Changes <code>{name}</code> in place: only the components and settings that differ from the release default.</>} />
                   <Radio id="dsc-reset-hard" name="dsc-reset-kind" isChecked={kind === "hard-reset"} onChange={() => setKind("hard-reset")}
                     label="Hard reset"
-                    description={<>Deletes <code>{name}</code> and creates the release default in its place.{keptFields} Use it when components are stuck and a soft reset does not help.</>} />
+                    description={<>Deletes <code>{name}</code> and creates the release default in its place. Use it when components are stuck and a soft reset does not help.</>} />
+                  {protectedFields.length > 0 && (
+                    <FormHelperText>
+                      <HelperText><HelperTextItem>Both keep the value of <PathList paths={protectedFields} />.</HelperTextItem></HelperText>
+                    </FormHelperText>
+                  )}
                 </FormGroup>
                 {turnedOn.length > 0 && (
                   <Checkbox id="dsc-reset-keep" isChecked={keep} onChange={(_e, v) => setKeep(v)}
@@ -343,38 +350,43 @@ const HardResetDetails: React.FC<{ plan: DSCPlan; name: string; kept: string[] }
           {kept.length > 0 && <Content component="p">Kept: <PathList paths={kept} /> (you turned these on). They come back as they are now.</Content>}
         </StackItem>
       )}
-      {stops.length > 0 && (
-        <StackItem>
-          <Details title={`Stops working until its component is back (${stops.length})`}>
-            <List aria-label="What stops working until its component is back">
-              {stops.map((s) => <ListItem key={s.resource}>{s.resource}: needs <PathList paths={s.components} /></ListItem>)}
-            </List>
-          </Details>
-        </StackItem>
-      )}
-      {crds.length > 0 && (
-        <StackItem>
-          <Details title={`CRDs that cannot be read at another version meanwhile (${crds.length})`}>
-            <List aria-label="CRDs that cannot be read at another version meanwhile">
-              {crds.map((c) => <ListItem key={c.crd}><code>{c.crd}</code>: served by <code>{c.component}</code></ListItem>)}
-            </List>
-          </Details>
-        </StackItem>
-      )}
       {(plan.warnings?.length ?? 0) > 0 && <StackItem><WarningsAlert plan={plan} /></StackItem>}
       <StackItem>
-        {plan.changes.length > 0 ? (
-          <Details title={`Changes in the new DataScienceCluster (${plan.changes.length})`}>
-            <List aria-label="Differences of the new DataScienceCluster">{plan.changes.map((c) => <ListItem key={c.path}>{changeText(c)}</ListItem>)}</List>
-          </Details>
-        ) : (
-          <Content component="p">Changes in the new DataScienceCluster: none; it has the same settings as now.</Content>
-        )}
-      </StackItem>
-      <StackItem>
-        <Details title="The DataScienceCluster it creates">
-          <CodeBlock><CodeBlockCode>{plan.newObject}</CodeBlockCode></CodeBlock>
-        </Details>
+        {/* The details, collapsed: one toggle under the other. */}
+        <Stack>
+          {stops.length > 0 && (
+            <StackItem>
+              <Details title={`Stops working until its component is back (${stops.length})`}>
+                <List aria-label="What stops working until its component is back">
+                  {stops.map((s) => <ListItem key={s.resource}>{s.resource}: needs <PathList paths={s.components} /></ListItem>)}
+                </List>
+              </Details>
+            </StackItem>
+          )}
+          {crds.length > 0 && (
+            <StackItem>
+              <Details title={`CRDs that cannot be read at another version meanwhile (${crds.length})`}>
+                <List aria-label="CRDs that cannot be read at another version meanwhile">
+                  {crds.map((c) => <ListItem key={c.crd}><code>{c.crd}</code>: served by <code>{c.component}</code></ListItem>)}
+                </List>
+              </Details>
+            </StackItem>
+          )}
+          <StackItem>
+            {plan.changes.length > 0 ? (
+              <Details title={`Changes in the new DataScienceCluster (${plan.changes.length})`}>
+                <List aria-label="Differences of the new DataScienceCluster">{plan.changes.map((c) => <ListItem key={c.path}>{changeText(c)}</ListItem>)}</List>
+              </Details>
+            ) : (
+              <Content component="p">Changes in the new DataScienceCluster: none; it has the same settings as now.</Content>
+            )}
+          </StackItem>
+          <StackItem>
+            <Details title="The DataScienceCluster it creates">
+              <CodeBlock><CodeBlockCode>{plan.newObject}</CodeBlockCode></CodeBlock>
+            </Details>
+          </StackItem>
+        </Stack>
       </StackItem>
     </Stack>
   );
