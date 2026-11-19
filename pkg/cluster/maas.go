@@ -237,9 +237,14 @@ func writeMaaSRecord(c *Client, rec maasRecord) error {
 }
 
 // maasModelRefs are a model's gateway refs as read; none is KServe's
-// default gateway (spec.router.gateway {}).
+// default gateway (spec.router.gateway {}). NoRoute: the model had no route
+// before it was published: the Models tab set it up to be reached through
+// MaaS only, and publishing was part of that setup (publishToMaaS), so
+// Unpublish leaves it with no route at all (only inside the cluster), never
+// on a gateway nobody chose.
 type maasModelRefs struct {
-	Refs gatewayRefs `json:"refs,omitempty"`
+	Refs    gatewayRefs `json:"refs,omitempty"`
+	NoRoute bool        `json:"noRoute,omitempty"`
 }
 
 // maasPub is one publication: a catalog model in a project.
@@ -1506,6 +1511,9 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 				item.SetupBlockedReason = firstNonEmpty(item.SetupBlockedReason, "The model is not ready yet.")
 			}
 		}
+		if recorded, ok := rec.modelRefs(m.Metadata.Namespace, m.Metadata.Name); item.Published && recErr == nil && ok {
+			item.MaaSOnlySetup = recorded.NoRoute
+		}
 		st.Items = append(st.Items, item)
 	}
 	// A recorded publication whose model is gone (the model or its project
@@ -1664,4 +1672,22 @@ func MaaSPublishedIn(c *Client, project, name string) (bool, error) {
 		return false, nil
 	}
 	return ownsModel(c, model.Metadata)
+}
+
+// maasOnlySetup reports whether this tool's model name in project is
+// published as part of its own setup: the Models tab set it up to be
+// reached through MaaS only, so the MaaS record says it had no route before
+// (maasModelRefs.NoRoute). The Models teardown unpublishes such a model
+// itself; a model published on the MaaS tab is unpublished there.
+func maasOnlySetup(c *Client, project, name string) (bool, error) {
+	published, err := MaaSPublishedIn(c, project, name)
+	if err != nil || !published {
+		return false, err
+	}
+	rec, err := readMaaSRecord(c)
+	if err != nil {
+		return false, err
+	}
+	refs, ok := rec.modelRefs(project, name)
+	return ok && refs.NoRoute, nil
 }

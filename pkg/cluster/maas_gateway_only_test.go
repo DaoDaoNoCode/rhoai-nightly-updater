@@ -31,7 +31,8 @@ var (
 // (opendatahub kserve rhoai-3.6 router.go expectedHTTPRoute): a model's
 // HTTPRoute <name>-kserve-route names the gateways of
 // spec.router.gateway.refs, or KServe's default gateway
-// (openshift-ai-inference) when there are none, and KServe rewrites an
+// (openshift-ai-inference) when there are none (no spec.router.route: no
+// route), and KServe rewrites an
 // existing route only when those parents are not a prefix of the route's
 // (semanticHTTPRouteIsEqual: equality.Semantic.DeepDerivative), so a parent
 // dropped from the end stays. It reconciles whenever the route is read;
@@ -72,6 +73,14 @@ func simulateKServeRoute(mc *modelsCluster) *kserveRouteSim {
 		}
 		spec, _ := model["spec"].(map[string]interface{})
 		router, _ := spec["router"].(map[string]interface{})
+		if _, route := router["route"]; !route {
+			// No spec.router.route: KServe makes no HTTPRoute, and
+			// deletes the one it made.
+			if !frozen {
+				delete(f.objects, rk)
+			}
+			return
+		}
 		gw, _ := router["gateway"].(map[string]interface{})
 		refs, _ := gw["refs"].([]interface{})
 		var want []interface{}

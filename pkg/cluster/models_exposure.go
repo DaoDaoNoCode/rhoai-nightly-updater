@@ -512,7 +512,7 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 		// KServe has made it (withServicePort).
 		Warning: "Calls to the in-cluster address are not authenticated: any pod on the cluster whose network can reach the project can use the model."}
 	ep := exposurePlan{exposure: exposureInternal}
-	if !r.auth && r.authErr == nil {
+	if internalAuthOff(r.auth, r.authErr) {
 		ep.authOff = true
 		e.Warning += " Red Hat Connectivity Link is not installed, so the model's token authentication is turned off (security.opendatahub.io/enable-auth: \"false\"): with it on, KServe would not start the model until Connectivity Link's AuthPolicy API exists."
 	}
@@ -545,6 +545,14 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 		}
 	}
 	return out, plans
+}
+
+// internalAuthOff is the "Only inside the cluster" exposure's choice of
+// token authentication: off (security.opendatahub.io/enable-auth "false")
+// only while Connectivity Link is known to be missing, since KServe would
+// not start the model with it on; on when that cannot be read.
+func internalAuthOff(auth bool, authErr error) bool {
+	return !auth && authErr == nil
 }
 
 // exposureKey is the option key of a request's exposure.

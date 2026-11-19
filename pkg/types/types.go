@@ -794,6 +794,11 @@ type ModelState struct {
 	// on the MaaS tab), so it is used through MaaS and its direct address
 	// answers 404.
 	MaaSPublished bool `json:"maasPublished,omitempty"`
+	// MaaSOnlySetup: the model was set up on the Models tab to be reached
+	// through MaaS only, and is published as part of that setup. Deleting
+	// it unpublishes it first; Unpublish leaves it with no route (only
+	// inside the cluster).
+	MaaSOnlySetup bool `json:"maasOnlySetup,omitempty"`
 	// TokenSecret is the model's token Secret, which this tool made with
 	// ServiceAccount TokenServiceAccount as the dashboard's "Require token
 	// authentication" does; "" when it has none (set up by an earlier
@@ -1038,6 +1043,9 @@ type MaaSModel struct {
 	ModelReady bool `json:"modelReady"`
 	// Published: this tool published it (its MaaSModelRef exists).
 	Published bool `json:"published"`
+	// MaaSOnlySetup: the Models tab set it up to be reached through MaaS
+	// only, so Unpublish leaves it with no route (only inside the cluster).
+	MaaSOnlySetup bool `json:"maasOnlySetup,omitempty"`
 	// Partly: what is left of a publication undone half-way (Message says
 	// what); Unpublish finishes it. Nothing about it settles on its own.
 	Partly bool `json:"partly,omitempty"`

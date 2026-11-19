@@ -391,6 +391,9 @@ func modelItems(c *Client, models []llmisvcObject, visible map[string]bool, rec 
 	var out []types.ModelState
 	def, _ := readKServeGateway(c)
 	auth := map[string]string{}
+	// The MaaS record, read once for the first model of this tool: which
+	// models were set up through MaaS only (unreadable: none is said to be).
+	var maas *maasRecord
 	for _, m := range models {
 		if !visible[m.Metadata.Namespace] {
 			continue
@@ -400,6 +403,18 @@ func modelItems(c *Client, models []llmisvcObject, visible map[string]bool, rec 
 		}
 		s := modelState(c, m, true, rec)
 		addModelRouting(c, &s, m, def, auth)
+		if s.ManagedByTool {
+			if maas == nil {
+				r, err := readMaaSRecord(c)
+				if err != nil {
+					slog.Debug("cannot read the MaaS record for the models", "error", err)
+					r = maasRecord{}
+				}
+				maas = &r
+			}
+			refs, ok := maas.modelRefs(m.Metadata.Namespace, m.Metadata.Name)
+			s.MaaSOnlySetup = ok && refs.NoRoute
+		}
 		out = append(out, s)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -773,7 +788,8 @@ func ValidateModelsRequest(req types.ModelsRequest) string {
 // operation with a streamed step per part: setup "check", "gateway",
 // "gateway-ready", "model", "model-ready", "publish" (a model reached
 // through MaaS), "callable" (the gateway steps only with Gateway, the
-// model steps only with a Project); teardown "model", then "gateway";
+// model steps only with a Project); teardown "unpublish" (a model set up
+// through MaaS only), "model", then "gateway";
 // check "callable". Setup checks everything it writes, and dry-runs every
 // write, before it writes anything.
 func RunModels(c *Client, req types.ModelsRequest, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
@@ -913,6 +929,9 @@ func (m *modelsRun) teardown(req types.ModelsRequest) (*types.OperationResponse,
 	var done []string
 	if req.Project != "" {
 		entry, _ := catalogEntry(req.Model)
+		if res, err := m.unpublishMaaSOnly(req.Project, entry.Name); res != nil || err != nil {
+			return res, err
+		}
 		m.step("model", "running", fmt.Sprintf("Deleting %s in %s...", entry.Name, req.Project))
 		res, _ := TeardownModels(m.c, req.Project, entry.Name)
 		m.logs = append(m.logs, res.Logs...)
@@ -943,6 +962,39 @@ func (m *modelsRun) teardown(req types.ModelsRequest) (*types.OperationResponse,
 		done = append(done, res.Message)
 	}
 	return &types.OperationResponse{Success: true, Message: strings.Join(done, " "), Logs: m.logs}, nil
+}
+
+// unpublishMaaSOnly is the teardown's step "unpublish" for a model set up
+// to be reached through MaaS only (maasOnlySetup): its publication was part
+// of its setup, so deleting it unpublishes it first, with the MaaS tab's
+// own unpublish, in the same operation. Any other published model is left
+// to TeardownModels, which refuses it. Fail closed: a check or an
+// unpublish that does not succeed stops the teardown before the model is
+// deleted.
+func (m *modelsRun) unpublishMaaSOnly(project, name string) (*types.OperationResponse, error) {
+	only, err := maasOnlySetup(m.c, project, name)
+	if err != nil {
+		return m.fail("unpublish", fmt.Sprintf("Cannot check whether %s in %s is published to MaaS; nothing was deleted: %v.", name, project, err), errorCodeFromK8sErr(err), "maas check failed")
+	}
+	if !only {
+		return nil, nil
+	}
+	m.step("unpublish", "running", "The model was set up to be reached through MaaS only, so it is unpublished first...")
+	pub := &maasRun{c: m.c, activity: "unpublish-maas", target: fmt.Sprintf("model %s in %s", name, project)}
+	pub.emit = func(e UpdateStepEvent) {
+		if e.Status != "failed" {
+			m.step("unpublish", "running", e.Message)
+		}
+	}
+	res, err := pub.unpublish(project, name, true)
+	if err != nil {
+		return nil, err
+	}
+	if !res.Success {
+		return m.fail("unpublish", res.Message+" The model was not deleted.", firstNonEmpty(res.ErrorCode, "partial_failure"), "unpublish failed")
+	}
+	m.step("unpublish", "success", res.Message)
+	return nil, nil
 }
 
 // modelPlan is what a model setup will write, decided before any write.

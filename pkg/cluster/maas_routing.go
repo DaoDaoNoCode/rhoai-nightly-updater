@@ -333,9 +333,10 @@ func (m *maasRun) routeModelThroughMaaS(project, name string, original maasModel
 
 // restoreModelRoute is unpublish's "model" step on the tool's model: the
 // refs publish recorded are written back (KServe's default when none were
-// recorded, or what a publication by an earlier build replaced), unless
-// someone added a gateway meanwhile; then it waits for the route to leave
-// the MaaS gateway. It returns a failure message and code, or "".
+// recorded, or what a publication by an earlier build replaced; no route
+// for a model set up through MaaS only), unless someone added a gateway
+// meanwhile; then it waits for the route to leave the MaaS gateway. It
+// returns a failure message and code, or "".
 func (m *maasRun) restoreModelRoute(project, name string, recorded maasModelRefs, hasRecord bool, say func(id, status, msg string)) (string, string) {
 	c := m.c
 	refs, rv, err := readModelGatewayRefs(c, project, name)
@@ -349,6 +350,8 @@ func (m *maasRun) restoreModelRoute(project, name string, recorded maasModelRefs
 		// its refs stay as they are.
 	case hasRecord && !refs.maasOnly():
 		return refsChangedRefusal(project, name, refs, recorded, "Then Unpublish again: it leaves the model's gateways as you set them."), "conflict"
+	case hasRecord && recorded.NoRoute:
+		return m.removeModelRoute(project, name, rv, say)
 	case hasRecord:
 		target = recorded.Refs
 	case refs.maasOnly():
@@ -371,6 +374,59 @@ func (m *maasRun) restoreModelRoute(project, name string, recorded maasModelRefs
 	}
 	say("model", "success", fmt.Sprintf("The model routes as before publishing: %s.", target))
 	return "", ""
+}
+
+// removeModelRoute is restoreModelRoute for a model the Models tab set up
+// to be reached through MaaS only (its record says NoRoute): it had no
+// route before publishing, so it goes back to none. The model gets the spec
+// the "Only inside the cluster" exposure writes: no spec.router, and token
+// authentication as that exposure decides it (internalAuthOff). Never
+// KServe's default gateway, which nobody chose for it. rv is the
+// resourceVersion read with the refs (MaaS gateway alone). It returns a
+// failure message and code, or "".
+func (m *maasRun) removeModelRoute(project, name, rv string, say func(id, status, msg string)) (string, string) {
+	c := m.c
+	auth, _, authErr := authReadiness(c)
+	internal := exposurePlan{exposure: exposureInternal, authOff: internalAuthOff(auth, authErr)}
+	if err := writeModelRouter(c, project, name, rv, internal); err != nil {
+		return fmt.Sprintf("Failed to remove the model's route: %v. Unpublish again to retry.", err), maasWriteCode(err)
+	}
+	say("model", "running", "Waiting for KServe to remove the model's route...")
+	why, err := waitForModelRoute(c, project, name, false)
+	if err != nil {
+		return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish again to check.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled")
+	}
+	if why != "" {
+		return fmt.Sprintf("Partly published: %s. The model is no longer in MaaS; Unpublish again to check the route.", why), "partial_failure"
+	}
+	msg := "The model has no outside route now, as it was set up (through MaaS only): it answers only at its in-cluster address."
+	if internal.authOff {
+		msg += " Its token authentication is off (security.opendatahub.io/enable-auth: \"false\"), as for any model reached only inside the cluster while Red Hat Connectivity Link is not installed."
+	}
+	say("model", "success", msg)
+	return "", ""
+}
+
+// writeModelRouter writes the spec.router of exposure exp on the tool's
+// model name in project (none for "Only inside the cluster": the router is
+// removed, as modelManifest leaves it out), with the enable-auth annotation
+// that exposure writes, if the model is still at resourceVersion rv.
+func writeModelRouter(c *Client, project, name, rv string, exp exposurePlan) error {
+	path, _ := toolModelPath(project, name)
+	meta := map[string]interface{}{"resourceVersion": rv}
+	if exp.authOff {
+		meta["annotations"] = map[string]interface{}{enableAuthAnnot: "false"}
+	}
+	var router interface{}
+	if r := exp.router(); r != nil {
+		router = r
+	}
+	patch, _ := json.Marshal(map[string]interface{}{
+		"metadata": meta,
+		"spec":     map[string]interface{}{"router": router},
+	})
+	_, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", patch, url.Values{"fieldManager": {maasModelManager}})
+	return err
 }
 
 // directRouteNote says, after Unpublish put the model's route back, that
@@ -409,7 +465,15 @@ func directRouteNote(c *Client, project, name string) string {
 // then says what the operation does once the user has set the refs.
 func refsChangedRefusal(project, name string, refs gatewayRefs, recorded maasModelRefs, then string) string {
 	return fmt.Sprintf("%s in '%s' routes through %s: someone added a gateway since it was published, which set only %s. Writing back what the model had before, %s, would drop that gateway. Nothing was changed. %s. %s",
-		name, project, refs, maasGatewayName, recorded.Refs, setRefsYourself(project, name), then)
+		name, project, refs, maasGatewayName, recorded, setRefsYourself(project, name), then)
+}
+
+// String names what the model had before it was published.
+func (r maasModelRefs) String() string {
+	if r.NoRoute {
+		return "no route (it was set up through MaaS only)"
+	}
+	return r.Refs.String()
 }
 
 // setRefsYourself is the remedy for a gateway someone added to a published

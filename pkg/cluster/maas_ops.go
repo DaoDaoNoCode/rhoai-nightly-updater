@@ -816,8 +816,10 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 		return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record read failed")
 	}
 	// The refs Unpublish writes back: the model's own while it has no MaaS
-	// gateway, else what this build recorded when it published, else (a
-	// publication by an earlier build) what that one replaced.
+	// gateway, else what this build recorded when it published, else no
+	// route for a model the Models tab just set up through MaaS only (it
+	// was created on the MaaS gateway alone), else (a publication by an
+	// earlier build) what that one replaced.
 	refs, _, err := readModelGatewayRefs(c, project, name)
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot read %s in '%s': %v. Nothing was changed.", name, project, err), errorCodeFromK8sErr(err), "model read failed")
@@ -828,6 +830,8 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 		original = maasModelRefs{Refs: refs}
 	case recorded && !refs.maasOnly():
 		return m.fail("check", refsChangedRefusal(project, name, refs, original, "Then Publish again: it records them and routes the model through "+maasGatewayName+" alone."), "conflict", "model refs changed")
+	case !recorded && m.newModel && refs.maasOnly():
+		original = maasModelRefs{NoRoute: true}
 	case !recorded:
 		original = maasModelRefs{Refs: refs.earlierBuildOriginal()}
 	}
@@ -1160,7 +1164,8 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 		say("gateway", "success", fmt.Sprintf("The MaaS gateway no longer admits routes from '%s'.", project))
 	}
 	note := ""
-	if modelFound && modelOwned {
+	// A model set up through MaaS only has no direct address to note.
+	if modelFound && modelOwned && !recordedRefs.NoRoute {
 		if note = directRouteNote(c, project, name); note != "" {
 			m.logs = append(m.logs, strings.TrimSpace(note))
 		}
