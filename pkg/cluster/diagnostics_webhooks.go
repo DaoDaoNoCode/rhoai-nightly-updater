@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -387,7 +386,7 @@ func applyFixDeleteStaleWebhooks(c *Client) (*types.OperationResponse, error) {
 
 	if len(d.Deleted) > 0 {
 		RecordActivity(c, types.ActivityEntry{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			Timestamp: nowRFC3339(),
 			User:      getUser(c),
 			Action:    "fix-delete-stale-webhooks",
 			Detail:    "deleted leftover webhook configurations: " + strings.Join(d.Deleted, ", "),

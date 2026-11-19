@@ -552,12 +552,6 @@ func splitLegacyDashboardTargets(c *Client, images map[string]string, logs *[]st
 	return core, modules, failed, nil
 }
 
-// containsString is slices.Contains, for the diagnostics files that still
-// call it.
-func containsString(values []string, want string) bool {
-	return slices.Contains(values, want)
-}
-
 // RevertDashboardImage reverts ALL dashboard containers to their operator-managed images.
 func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	operator, err := readDashboardOperator(c)

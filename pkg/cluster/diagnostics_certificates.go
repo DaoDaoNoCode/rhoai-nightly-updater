@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -372,7 +373,7 @@ func certificateProblem(c *Client, ci certificateItem, cause certificateCause, c
 	}
 	switch {
 	case rc != nil && rc.Status == "False" && rc.Message != "":
-		p.Title = fmt.Sprintf("Certificate %s is not issued: %s", ci.ref(), truncate(rc.Message, 120))
+		p.Title = fmt.Sprintf("Certificate %s is not issued: %s", ci.ref(), truncateText(rc.Message, 120))
 		p.Fix = "Fix what the Certificate's Ready condition names (for example a missing Issuer); cert-manager retries on its own."
 	case cause.runErr != nil:
 		p.Title = subject
@@ -448,17 +449,17 @@ var severityRank = map[string]int{"critical": 0, "warning": 1, "info": 2}
 // checks).
 func mergeProblem(dst *Problem, src Problem) {
 	for _, e := range src.Evidence {
-		if !containsString(dst.Evidence, e) {
+		if !slices.Contains(dst.Evidence, e) {
 			dst.Evidence = append(dst.Evidence, e)
 		}
 	}
 	for _, o := range src.AffectedObjects {
-		if !containsString(dst.AffectedObjects, o) {
+		if !slices.Contains(dst.AffectedObjects, o) {
 			dst.AffectedObjects = append(dst.AffectedObjects, o)
 		}
 	}
 	for _, id := range src.RelatedProblems {
-		if !containsString(dst.RelatedProblems, id) {
+		if !slices.Contains(dst.RelatedProblems, id) {
 			dst.RelatedProblems = append(dst.RelatedProblems, id)
 		}
 	}
@@ -487,9 +488,9 @@ func linkProblems(problems []Problem) []Problem {
 			}
 			all := true
 			for _, o := range pj.AffectedObjects {
-				all = all && containsString(problems[i].explains, o)
+				all = all && slices.Contains(problems[i].explains, o)
 			}
-			if all && !containsString(pj.RelatedProblems, problems[i].ID) {
+			if all && !slices.Contains(pj.RelatedProblems, problems[i].ID) {
 				pj.RelatedProblems = append(pj.RelatedProblems, problems[i].ID)
 				pj.Evidence = append(pj.Evidence, fmt.Sprintf("Likely caused by %q", problems[i].Title))
 			}
@@ -544,7 +545,7 @@ func linkProblems(problems []Problem) []Problem {
 	for i := range out {
 		var kept []string
 		for _, id := range out[i].RelatedProblems {
-			if ids[id] && id != out[i].ID && !containsString(kept, id) {
+			if ids[id] && id != out[i].ID && !slices.Contains(kept, id) {
 				kept = append(kept, id)
 			}
 		}

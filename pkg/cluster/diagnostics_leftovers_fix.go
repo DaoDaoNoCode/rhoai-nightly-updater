@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -117,7 +116,7 @@ func fixLeftoverStoredFields(c *Client, target string, acknowledged bool) *types
 	}
 	logs = append(logs, "Patched "+st.ref()+": "+strings.Join(summary, ", "))
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "fix-leftover-fields",
 		Detail:    fmt.Sprintf("%s: %s", st.ref(), strings.Join(summary, ", ")),
@@ -195,7 +194,7 @@ func fixLeftoverRetryDSC(c *Client, name string) *types.OperationResponse {
 	if !strings.HasSuffix(path, "/"+name) {
 		return leftoverRefused(fmt.Sprintf("DataScienceCluster %s is not the cluster's DataScienceCluster. Nothing was changed.", name), "validation", nil)
 	}
-	stamp := time.Now().UTC().Format(time.RFC3339)
+	stamp := nowRFC3339()
 	add, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{"uid": uid, "annotations": map[string]interface{}{leftoverRetryAnno: stamp}}})
 	if _, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", add, url.Values{"fieldManager": {leftoverManager}}); err != nil {
 		return leftoverWriteError(err, "DataScienceCluster "+name, false)
@@ -204,7 +203,7 @@ func fixLeftoverRetryDSC(c *Client, name string) *types.OperationResponse {
 	remove, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{"annotations": map[string]interface{}{leftoverRetryAnno: nil}}})
 	_, _, rmErr := c.do(http.MethodPatch, path, "application/merge-patch+json", remove, url.Values{"fieldManager": {leftoverManager}})
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "fix-retry-dsc-reconcile",
 		Detail:    fmt.Sprintf("annotated DataScienceCluster %s to retry %s", name, waiting),
@@ -305,7 +304,7 @@ func fixLeftoverRecreateWorkload(c *Client, target string, acknowledged bool) *t
 	}
 	logs = append(logs, fmt.Sprintf("Deleted %s (UID %s, propagation Background)", r.ref(), uid))
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "fix-recreate-leftover",
 		Detail:    fmt.Sprintf("deleted %s (selector changed; owned by %s) for its operator to recreate", r.ref(), r.Owner),

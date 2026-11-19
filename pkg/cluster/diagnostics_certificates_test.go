@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -156,20 +157,20 @@ func TestLinkProblems_FoldsSymptomsIntoRootCause(t *testing.T) {
 	if strings.Join(got, ",") != "dsc-not-ready,certificate-not-ready-x,prerequisite-missing-a,pod-crashloop-ns-q,pod-crashloop-ns-p,webhook-service-missing" {
 		t.Fatalf("ids = %v", got)
 	}
-	if !containsString(out[1].Evidence, "Also explains: p: 2 pods stuck") || strings.Join(out[1].RelatedProblems, ",") != "prerequisite-missing-a" {
+	if !slices.Contains(out[1].Evidence, "Also explains: p: 2 pods stuck") || strings.Join(out[1].RelatedProblems, ",") != "prerequisite-missing-a" {
 		t.Fatalf("root = %+v", out[1])
 	}
 	if strings.Join(out[0].RelatedProblems, ",") != "prerequisite-missing-a" {
 		t.Fatalf("related = %v", out[0].RelatedProblems)
 	}
 	wh := out[5]
-	if !strings.Contains(strings.Join(wh.Evidence, "\n"), `Explained by "Certificate x is not issued": ValidatingWebhookConfiguration hook-a`) || !containsString(wh.RelatedProblems, root.ID) {
+	if !strings.Contains(strings.Join(wh.Evidence, "\n"), `Explained by "Certificate x is not issued": ValidatingWebhookConfiguration hook-a`) || !slices.Contains(wh.RelatedProblems, root.ID) {
 		t.Fatalf("webhook problem = %+v", wh)
 	}
 
 	// Fully covered webhook guidance is folded too.
 	out = linkProblems([]Problem{root, {ID: "webhook-service-missing", Title: "1 webhook", AffectedObjects: []string{"ValidatingWebhookConfiguration hook-a"}}})
-	if len(out) != 1 || !containsString(out[0].Evidence, "Also explains: 1 webhook") {
+	if len(out) != 1 || !slices.Contains(out[0].Evidence, "Also explains: 1 webhook") {
 		t.Fatalf("out = %+v", out)
 	}
 }
@@ -224,7 +225,7 @@ func TestDiagnoseCluster_CertificateRootCause(t *testing.T) {
 		t.Fatalf("merged prerequisite evidence = %s", ev)
 	}
 	dsc := findProblem(resp, "dsc-not-ready")
-	if dsc == nil || !containsString(dsc.RelatedProblems, pre.ID) {
+	if dsc == nil || !slices.Contains(dsc.RelatedProblems, pre.ID) {
 		t.Fatalf("dsc-not-ready = %+v", dsc)
 	}
 }

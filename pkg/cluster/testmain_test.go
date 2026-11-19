@@ -29,7 +29,8 @@ func TestMain(m *testing.M) {
 	CatalogImagePullGrace = 30 * time.Millisecond
 
 	// Every wait runs on a fake clock that moves when the code sleeps, so
-	// no test waits in real time (see useFakeClock for a fresh one).
+	// no test waits in real time (a cache's entries age on their own fake
+	// clock: fakeCacheClock).
 	clk = clocktest.NewAutoFake()
 
 	// Skip real Quay credential verification in tests.

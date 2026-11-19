@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -101,7 +102,7 @@ func listableResources(c *Client, group, version string) ([]conversionProbe, err
 	}
 	var out []conversionProbe
 	for _, r := range list.Resources {
-		if strings.Contains(r.Name, "/") || !containsString(r.Verbs, "list") {
+		if strings.Contains(r.Name, "/") || !slices.Contains(r.Verbs, "list") {
 			continue
 		}
 		out = append(out, conversionProbe{Group: group, Version: version, Resource: r.Name, Kind: r.Kind})
@@ -281,7 +282,7 @@ func conversionProblem(group, resource, kind string, failed, working []conversio
 	failedVersions := joinVersions(failed)
 	evidence := []string{}
 	for _, p := range failed {
-		evidence = append(evidence, fmt.Sprintf("GET %s?limit=1: HTTP %d: %s", p.path(), k8sStatus(p.Err), truncate(conversionMessage(p.Err), 400)))
+		evidence = append(evidence, fmt.Sprintf("GET %s?limit=1: HTTP %d: %s", p.path(), k8sStatus(p.Err), truncateText(conversionMessage(p.Err), 400)))
 	}
 	for _, p := range working {
 		evidence = append(evidence, fmt.Sprintf("GET %s?limit=1: OK", p.path()))

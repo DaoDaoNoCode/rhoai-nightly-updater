@@ -729,7 +729,7 @@ func (st *storedLeftover) problem() Problem {
 	reporters := reportersText(rf)
 	evidence := []string{"Reported by " + reporters}
 	for _, d := range rf.details {
-		evidence = append(evidence, "Operator error: "+truncate(d, 500))
+		evidence = append(evidence, "Operator error: "+truncateText(d, 500))
 	}
 	for _, lf := range st.Fields {
 		line := fmt.Sprintf("Field %s: ", lf.Path)
@@ -761,7 +761,7 @@ func (st *storedLeftover) problem() Problem {
 	if st.Crash != nil {
 		line := fmt.Sprintf("Module operator %s is crash-looping (%d restarts)", st.Crash.Deployment, st.Crash.Restarts)
 		if st.Crash.Confirmed {
-			line += ": its last exit says it cannot sync its informer for " + st.Kind + ": " + truncate(st.Crash.Message, 300)
+			line += ": its last exit says it cannot sync its informer for " + st.Kind + ": " + truncateText(st.Crash.Message, 300)
 			description += " Its module operator crash-loops because it cannot read the object either."
 		} else {
 			line += fmt.Sprintf("; its last exit message is not available here. If `oc logs --previous` shows \"failed waiting for *<version>.%s Informer to sync\", this object is the cause", st.Kind)
@@ -1046,7 +1046,7 @@ func (r *recreateLeftover) problem() Problem {
 	reporters := reportersText(rf)
 	evidence := []string{"Reported by " + reporters}
 	for _, d := range rf.details {
-		evidence = append(evidence, "Operator error: "+truncate(d, 500))
+		evidence = append(evidence, "Operator error: "+truncateText(d, 500))
 	}
 	p := Problem{
 		ID:              leftoverRecreateID(f.Kind, f.Namespace, f.Name),

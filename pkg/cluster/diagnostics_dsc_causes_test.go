@@ -3,6 +3,7 @@ package cluster
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -169,7 +170,7 @@ func TestDSCCheck_MissingPrerequisitesGetCommandsAndClassification(t *testing.T)
 		t.Fatalf("dsc-not-ready = %+v", dsc)
 	}
 	for _, id := range []string{"prerequisite-missing-job-set", "prerequisite-missing-openshift-cert-manager-operator"} {
-		if !containsString(dsc.RelatedProblems, id) {
+		if !slices.Contains(dsc.RelatedProblems, id) {
 			t.Fatalf("related = %v", dsc.RelatedProblems)
 		}
 	}
@@ -260,7 +261,7 @@ func TestDSCCheck_SatisfiedDependencyOffersRestart(t *testing.T) {
 		t.Fatal("an installed prerequisite is reported missing")
 	}
 	dsc := byID["dsc-not-ready"]
-	if !containsString(dsc.RelatedProblems, "module-operator-backoff-trainer") ||
+	if !slices.Contains(dsc.RelatedProblems, "module-operator-backoff-trainer") ||
 		!strings.Contains(strings.Join(dsc.Evidence, "\n"), "the trainer module operator has not retried") {
 		t.Fatalf("dsc-not-ready = %+v", dsc)
 	}
@@ -581,7 +582,7 @@ func TestDSCCheck_UpgradeGates(t *testing.T) {
 		t.Fatalf("gate = %+v", g)
 	}
 	dsc := byID["dsc-not-ready"]
-	if !containsString(dsc.RelatedProblems, dscGateProblemID) || !strings.Contains(strings.Join(dsc.Evidence, "\n"), "ModulesReady=False (AdminAckRequired): Waiting for upgrade gates to be acknowledged → cause: an upgrade gate holds provisioning") {
+	if !slices.Contains(dsc.RelatedProblems, dscGateProblemID) || !strings.Contains(strings.Join(dsc.Evidence, "\n"), "ModulesReady=False (AdminAckRequired): Waiting for upgrade gates to be acknowledged → cause: an upgrade gate holds provisioning") {
 		t.Fatalf("dsc = %+v", dsc)
 	}
 }

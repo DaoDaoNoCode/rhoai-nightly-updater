@@ -63,7 +63,7 @@ func checkPlatformModules(c *Client) checkOutput {
 				switch cond.Reason {
 				case "AdminAckRequired":
 					out.check.Status = "fail"
-					evidence := []string{fmt.Sprintf("Platform %s: ProvisioningProgress=False (AdminAckRequired): %s", pl.Metadata.Name, truncate(cond.Message, 400))}
+					evidence := []string{fmt.Sprintf("Platform %s: ProvisioningProgress=False (AdminAckRequired): %s", pl.Metadata.Name, truncateText(cond.Message, 400))}
 					keys, values, keysErr := pendingUpgradeAckKeys(c)
 					cmd := upgradeAckCommand("<key>")
 					fix := "Read what the gate is about, then acknowledge it in the OpenShift console or with the command below (replace <key>)."
@@ -98,7 +98,7 @@ func checkPlatformModules(c *Client) checkOutput {
 						Severity:    "warning",
 						Title:       "Some modules were provisioned before the modules they wait for became ready",
 						Description: "The operator provisions modules in run levels and waits up to 10 minutes for each level. It moved on because a module of an earlier level did not become ready; modules that depend on it may not work.",
-						Evidence:    []string{fmt.Sprintf("Platform %s: ProvisioningProgress=False (RunlevelTimeoutExceeded): %s", pl.Metadata.Name, truncate(cond.Message, 400))},
+						Evidence:    []string{fmt.Sprintf("Platform %s: ProvisioningProgress=False (RunlevelTimeoutExceeded): %s", pl.Metadata.Name, truncateText(cond.Message, 400))},
 						Fix:         "Fix the module named in the message (see the DataScienceCluster and RHOAI pods results).",
 					})
 				}

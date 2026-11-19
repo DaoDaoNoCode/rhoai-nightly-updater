@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -119,7 +120,7 @@ func (f applyFailure) leftover() bool {
 // selectorChanged: an immutable spec.selector of a workload kind.
 func (f applyFailure) selectorChanged() bool {
 	group, ok := leftoverWorkloads[f.Kind]
-	return ok && f.group() == group && containsString(f.Fields, "spec.selector")
+	return ok && f.group() == group && slices.Contains(f.Fields, "spec.selector")
 }
 
 // leftover decides per object: the "Left over from an earlier release"
@@ -232,7 +233,7 @@ func parseApplyFailures(msg string) []applyFailure {
 		case strings.Contains(f.Detail, "field is immutable"):
 			f.Class = applyImmutable
 			for _, m := range invalidFieldPattern.FindAllStringSubmatch(f.Detail, -1) {
-				if !containsString(f.Fields, m[1]) {
+				if !slices.Contains(f.Fields, m[1]) {
 					f.Fields = append(f.Fields, m[1])
 				}
 			}
@@ -240,7 +241,7 @@ func parseApplyFailures(msg string) []applyFailure {
 			f.Class = applyStoredType
 			for _, m := range typedFieldPattern.FindAllStringSubmatch(f.Detail, -1) {
 				field := fmt.Sprintf("%s: expected %s, got %s", m[1], m[2], m[3])
-				if !containsString(f.Fields, field) {
+				if !slices.Contains(f.Fields, field) {
 					f.Fields = append(f.Fields, field)
 				}
 			}
@@ -251,7 +252,7 @@ func parseApplyFailures(msg string) []applyFailure {
 			f.Class = applySchemaMismatch
 			for _, m := range typedFieldPattern.FindAllStringSubmatch(f.Detail, -1) {
 				field := fmt.Sprintf("%s: expected %s, got %s", m[1], m[2], m[3])
-				if !containsString(f.Fields, field) {
+				if !slices.Contains(f.Fields, field) {
 					f.Fields = append(f.Fields, field)
 				}
 			}
@@ -291,14 +292,14 @@ func (rf *reportedApplyFailure) add(f applyFailure) {
 		rf.classes = append(rf.classes, f.Class)
 	}
 	for _, field := range f.Fields {
-		if !containsString(rf.fields[f.Class], field) {
+		if !slices.Contains(rf.fields[f.Class], field) {
 			rf.fields[f.Class] = append(rf.fields[f.Class], field)
 		}
 	}
 	if rf.owners == "" {
 		rf.owners = f.Owners
 	}
-	if !containsString(rf.details, f.Detail) {
+	if !slices.Contains(rf.details, f.Detail) {
 		rf.details = append(rf.details, f.Detail)
 	}
 }
@@ -490,7 +491,7 @@ func applyFailureProblem(c *Client, api componentAPI, rf *reportedApplyFailure) 
 	f := rf.applyFailure
 	evidence := []string{fmt.Sprintf("Reported by %s", strings.Join(names, ", "))}
 	for _, d := range rf.details {
-		evidence = append(evidence, fmt.Sprintf("Failure deploying %s (%s): %s", f.object(), f.GroupVersion, truncate(d, 500)))
+		evidence = append(evidence, fmt.Sprintf("Failure deploying %s (%s): %s", f.object(), f.GroupVersion, truncateText(d, 500)))
 	}
 	p := Problem{
 		ID:              f.genericProblemID(),

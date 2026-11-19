@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -246,7 +247,7 @@ func TestLeftoverStoredFieldsScan(t *testing.T) {
 	pods := checkRHOAIPods(w.c)
 	linked := linkProblems(append(pods.problems, p))
 	crash := findProblem(&DiagnosticsResponse{Problems: linked}, "pod-crashloop-redhat-ods-applications-trustyai-operator-module-controller-manager")
-	if crash == nil || !containsString(crash.RelatedProblems, p.ID) || !strings.Contains(strings.Join(crash.Evidence, "\n"), "Likely caused by") {
+	if crash == nil || !slices.Contains(crash.RelatedProblems, p.ID) || !strings.Contains(strings.Join(crash.Evidence, "\n"), "Likely caused by") {
 		t.Errorf("crash problem %+v", crash)
 	}
 	// The apply-failures check leaves the object to this check.
