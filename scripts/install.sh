@@ -416,7 +416,7 @@ oauth_client_manifest() {
 oauth_client_owner() {
 	local host=$1 out rc=0 app ns uris
 	CLIENT_OWNER="" CLIENT_FOREIGN=""
-	out=$(oc get oauthclient "$INSTANCE" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/name}{"\t"}{.metadata.labels.rhoai-nightly-updater/namespace}{"\t"}{.redirectURIs[*]}{"\n"}' 2>&1) || rc=$?
+	out=$(oc get oauthclient "$INSTANCE" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/name}{"|"}{.metadata.labels.rhoai-nightly-updater/namespace}{"|"}{.redirectURIs[*]}{"\n"}' 2>&1) || rc=$?
 	if [ "$rc" -ne 0 ]; then
 		case "$out" in
 		*NotFound* | *"not found"*)
@@ -426,7 +426,7 @@ oauth_client_owner() {
 		esac
 		die "Cannot read OAuthClient $INSTANCE, so this install cannot tell whether it is its own: $out"
 	fi
-	IFS=$'\t' read -r app ns uris <<<"$out" || true
+	IFS='|' read -r app ns uris <<<"$out" || true
 	if [ -n "$app" ] || [ -n "$ns" ]; then
 		if [ "$app" = "$APP_NAME" ] && [ "$ns" = "$NAMESPACE" ]; then
 			CLIENT_OWNER=ours
@@ -663,7 +663,6 @@ rollback() {
 	preflight
 	detect_oauth_proxy_image
 	installed || die "No deployment $APP_NAME in $NAMESPACE; run 'make deploy' first."
-	[ -n "$DRY" ] || ensure_proxy_secret
 	local rev short8 short7 img_tag="" t label
 	rev=$(git rev-parse --verify --quiet "$TAG^{commit}") || die "Commit $TAG is not in this clone; run 'git fetch origin --tags' and retry."
 	git cat-file -e "$rev:deploy/template.yaml" 2>/dev/null || die "Commit $rev has no deploy/template.yaml."
@@ -694,6 +693,7 @@ rollback() {
 	local client=""
 	! uses_oauth_client "$TMP/rollback-template.yaml" || client=1
 	[ -z "$client" ] || refuse_foreign_client "$(route_host)"
+	[ -n "$DRY" ] || ensure_proxy_secret
 	[ -n "$DRY" ] || [ -z "$client" ] || ensure_client_secret
 	err "$([ -n "$DRY" ] && echo Validating || echo Applying) $REF with the template of commit $rev..."
 	apply_template "$TMP/rollback-template.yaml" "$REF"

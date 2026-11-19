@@ -303,8 +303,8 @@ spec:
                 echo "Route $APP_NAME has no host yet" >&2
                 exit 1
               fi
-              if out=$(oc get oauthclient "$INSTANCE" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/name}{"\t"}{.metadata.labels.rhoai-nightly-updater/namespace}{"\t"}{.redirectURIs[*]}{"\n"}' 2>&1); then
-                IFS=$'\t' read -r app ns uris <<<"$out" || true
+              if out=$(oc get oauthclient "$INSTANCE" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/name}{"|"}{.metadata.labels.rhoai-nightly-updater/namespace}{"|"}{.redirectURIs[*]}{"\n"}' 2>&1); then
+                IFS='|' read -r app ns uris <<<"$out" || true
                 if [ -n "$app" ] || [ -n "$ns" ]; then
                   if [ "$app" != "$APP_NAME" ] || [ "$ns" != "$NAMESPACE" ]; then
                     echo "OAuthClient $INSTANCE belongs to app ${app:-?} in namespace ${ns:-?}, not to this install; it was not changed. Use another APP_NAME, or delete it if that install is gone (oc delete oauthclient $INSTANCE; oc delete oauthaccesstokens --field-selector clientName=$INSTANCE)." >&2

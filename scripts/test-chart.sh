@@ -497,7 +497,7 @@ oauth_role=$(doc ClusterRole/'"upd-ns1-oauthclient"')
 grep -qF 'resources: ["oauthclients"]' <<<"$oauth_role" && pass || fail "OAuthClient: no ClusterRole on oauthclients: $oauth_role"
 expect_eq "OAuthClient: the hook's verbs on OAuthClients" '["get", "patch"] ["create"]' \
 	"$(grep -oE 'verbs: \[[^]]*\]' <<<"$oauth_role" | sed 's/^verbs: //' | tr '\n' ' ' | sed 's/ $//')"
-grep -qE 'oauthaccesstokens|"delete"|impersonate|escalate|bind' "$OUT" && fail "OAuthClient: a hook gets more than it needs" || pass
+grep -E '^ *(resources|verbs): ' "$OUT" | grep -qE 'oauthaccesstokens|"delete"|impersonate|escalate|bind' && fail "OAuthClient: a hook gets more than it needs" || pass
 grep -qF 'app.kubernetes.io/instance: "upd-ns1"' <<<"$oauth_role" && pass || fail "OAuthClient: the ClusterRole lacks install.sh's instance label"
 grep -qF -- '--from-file=client-secret=' "$OUT" && pass || fail "OAuthClient: the Secret's key is not client-secret"
 grep -qF 'medium: Memory' "$OUT" && pass || fail "OAuthClient: the generated value is not kept in memory"
@@ -665,10 +665,10 @@ case "$1 $2" in
 	# unlabelled-ours (no labels, this Route's callback), unlabelled-theirs,
 	# error. Printed as the hook's jsonpath asks: app, namespace, URIs.
 	case "${FAKE_CLIENT:-absent}" in
-	ours) printf 'app\tns1\thttps://app.example.com/oauth/callback\n' ;;
-	theirs) printf 'app-x\tns1\thttps://app.example.com/oauth/callback\n' ;;
-	unlabelled-ours) printf '\t\thttps://app.example.com/oauth/callback\n' ;;
-	unlabelled-theirs) printf '\t\thttps://old.example.com/oauth/callback\n' ;;
+	ours) printf 'app|ns1|https://app.example.com/oauth/callback\n' ;;
+	theirs) printf 'app-x|ns1|https://app.example.com/oauth/callback\n' ;;
+	unlabelled-ours) printf '||https://app.example.com/oauth/callback\n' ;;
+	unlabelled-theirs) printf '||https://old.example.com/oauth/callback\n' ;;
 	error) echo "Error from server (Forbidden): oauthclients.oauth.openshift.io \"$3\" is forbidden" >&2; exit 1 ;;
 	*) echo "Error from server (NotFound): oauthclients.oauth.openshift.io \"$3\" not found" >&2; exit 1 ;;
 	esac ;;
@@ -709,6 +709,8 @@ expect_eq "OAuthClient applied: the object" "$(printf '%s\n' 'apiVersion: oauth.
 	'  name: app-ns1' '  labels:' '    app.kubernetes.io/instance: app-ns1' '    app.kubernetes.io/name: "app"' \
 	'    rhoai-nightly-updater/namespace: "ns1"' 'grantMethod: auto' 'redirectURIs:' \
 	'  - https://app.example.com/oauth/callback' 'secret: client-secret-value')" "$(cat "$HOOKLOG.applied")"
+grep -qx 'oc apply --server-side --field-manager=rhoai-nightly-updater-gitops --force-conflicts -f -' "$HOOKLOG" && pass || fail "OAuthClient: not server-side applied: $(cat "$HOOKLOG")"
+grep -qF 'client-secret-value' "$HOOKOUT" "$HOOKLOG" && fail "OAuthClient: the secret was printed or passed as an argument" || pass
 # Only this install's client is applied over: its labels, or without labels
 # this Route's callback. Another install's (the name <APP_NAME>-<NAMESPACE>
 # is ambiguous) or an unreadable one fails the hook before anything is
@@ -726,8 +728,6 @@ run_oauth "$OCLIENT_SH" FAKE_CLIENT=theirs
 grep -qF 'OAuthClient app-ns1 belongs to app app-x in namespace ns1, not to this install; it was not changed' "$HOOKOUT" && pass || fail "OAuthClient theirs: $(cat "$HOOKOUT")"
 run_oauth "$OCLIENT_SH" FAKE_CLIENT=unlabelled-theirs
 grep -qF 'redirects to https://old.example.com/oauth/callback, not to https://app.example.com/oauth/callback; it was not changed' "$HOOKOUT" && pass || fail "OAuthClient unlabelled-theirs: $(cat "$HOOKOUT")"
-grep -qx 'oc apply --server-side --field-manager=rhoai-nightly-updater-gitops --force-conflicts -f -' "$HOOKLOG" && pass || fail "OAuthClient: not server-side applied: $(cat "$HOOKLOG")"
-grep -qF 'client-secret-value' "$HOOKOUT" "$HOOKLOG" && fail "OAuthClient: the secret was printed or passed as an argument" || pass
 run_oauth "$OCLIENT_SH" FAKE_DATA=""
 [ "$HOOK_RC" -ne 0 ] && [ ! -e "$HOOKLOG.applied" ] && pass || fail "OAuthClient, empty secret: applied anyway"
 grep -qF 'has no client-secret' "$HOOKOUT" && pass || fail "OAuthClient, empty secret: $(cat "$HOOKOUT")"
