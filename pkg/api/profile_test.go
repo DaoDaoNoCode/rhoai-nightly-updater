@@ -63,7 +63,7 @@ func TestEveryRouteHasAGitOpsProfileDecision(t *testing.T) {
 // of the profile's permissions (deploy/rbac-gitops.yaml) and of the docs.
 func TestGitOpsProfileAllowlist(t *testing.T) {
 	want := []string{
-		"GET /api/activity", "GET /api/components", "GET /api/diagnostics", "GET /api/operation", "GET /api/status",
+		"GET /api/activity", "GET /api/components", "GET /api/components/dsc", "GET /api/diagnostics", "GET /api/operation", "GET /api/status",
 		"GET /api/update-check", "GET /api/user/permissions", "POST /api/pageview", "POST /api/update", "POST /api/update/stream",
 	}
 	if len(gitOpsRoutes) != len(want) {

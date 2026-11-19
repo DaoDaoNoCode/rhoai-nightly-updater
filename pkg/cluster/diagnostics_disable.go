@@ -91,10 +91,66 @@ func disableBlockers(c *Client, component string) []string {
 // platform deletes the module operator and the Services it serves (RHOAI
 // operator notes §2.3), but never the CRDs (CRDs get no owner references).
 func (rc *removalChecker) blockers(component string) []string {
-	c := rc.c
 	if reason, refused := refusedComponents[component]; refused {
 		return []string{reason}
 	}
+	blockers := rc.moduleBlockers(component)
+	if b := rc.conversionBlocker(component); b != "" {
+		blockers = append(blockers, b)
+	}
+	return blockers
+}
+
+// teardownBlockers are the preconditions for a hard reset, which removes
+// every module and brings them back: the module and its operator must be
+// able to clean up (moduleBlockers). The standing refusals do not apply
+// (their reasons are checked one by one: dashboard-operator by
+// moduleBlockers, MLflow by its in-use check, pipeline servers only stop
+// working meanwhile), and a conversion webhook only fails while the module
+// is down, so it is a warning.
+func (rc *removalChecker) teardownBlockers(component string) (blockers, warnings []string) {
+	blockers = rc.moduleBlockers(component)
+	crds, err := rc.conversionCRDsOf(component)
+	switch {
+	case err != nil:
+		blockers = append(blockers, fmt.Sprintf("could not check which CRD conversion webhooks %s serves: %v", component, err))
+	case len(crds) > 0:
+		warnings = append(warnings, fmt.Sprintf("While %s is down, %s %s cannot be read at another version (%s serves the conversion webhook); this works again once %s is back.",
+			component, verb(len(crds), "CRD", "CRDs"), strings.Join(crds, ", "), component, component))
+	}
+	return blockers, warnings
+}
+
+// partBlockers are the preconditions for removing a sub-component while its
+// module stays (kserve.nim while kserve stays Managed): the module CR is not
+// deleted, so only the operators that act on the change must run, and the
+// module CR must not be deleting already. Read errors block.
+func (rc *removalChecker) partBlockers(component string) []string {
+	c := rc.c
+	var blockers []string
+	if ok, why := deploymentReady(c, SubNS, "rhods-operator"); !ok {
+		blockers = append(blockers, "rhods-operator must be running to apply the change: "+why)
+	}
+	_, deleting, found, err := moduleCR(c, component)
+	switch {
+	case err != nil:
+		blockers = append(blockers, fmt.Sprintf("could not read the %s module CR: %v", component, err))
+	case deleting:
+		blockers = append(blockers, fmt.Sprintf("the %s module CR is already being deleted; see the Platform modules check", component))
+	case found:
+		if op, known := moduleOperators[component]; known && op.name != "rhods-operator" {
+			if ok, why := deploymentReady(c, op.namespace, op.name); !ok {
+				blockers = append(blockers, fmt.Sprintf("its operator %s/%s cleans up the sub-component, but %s; fix that operator first", op.namespace, op.name, why))
+			}
+		}
+	}
+	return blockers
+}
+
+// moduleBlockers are the preconditions about the module CR and the
+// operators that remove it.
+func (rc *removalChecker) moduleBlockers(component string) []string {
+	c := rc.c
 	var blockers []string
 	if ok, why := deploymentReady(c, SubNS, "rhods-operator"); !ok {
 		blockers = append(blockers, "rhods-operator must be running to clean up a removed component: "+why)
@@ -123,15 +179,21 @@ func (rc *removalChecker) blockers(component string) []string {
 			blockers = append(blockers, fmt.Sprintf("its operator %s/%s removes the finalizers of the %s, but %s; fix that operator first or the removal hangs", op.namespace, op.name, what, why))
 		}
 	}
+	return blockers
+}
+
+// conversionBlocker refuses removing a component that serves a CRD
+// conversion webhook ("" when it serves none).
+func (rc *removalChecker) conversionBlocker(component string) string {
 	crds, convErr := rc.conversionCRDsOf(component)
 	switch {
 	case convErr != nil:
-		blockers = append(blockers, fmt.Sprintf("could not check which CRD conversion webhooks %s serves: %v", component, convErr))
+		return fmt.Sprintf("could not check which CRD conversion webhooks %s serves: %v", component, convErr)
 	case len(crds) > 0:
-		blockers = append(blockers, fmt.Sprintf("%s %s %s objects through a webhook Service of %s. Removing the component deletes that Service but not the %s, so reading those objects at another version, garbage collection and namespace deletion would fail (the dead mcpservers conversion on this cluster is the same case). "+
-			"Delete those objects first (the tool cannot list them), then change the component in the OpenShift console", verb(len(crds), "CRD", "CRDs"), strings.Join(crds, ", "), verb(len(crds), "converts its", "convert their"), component, verb(len(crds), "CRD", "CRDs")))
+		return fmt.Sprintf("%s %s %s objects through a webhook Service of %s. Removing the component deletes that Service but not the %s, so reading those objects at another version, garbage collection and namespace deletion would fail (the dead mcpservers conversion on this cluster is the same case). "+
+			"Delete those objects first (the tool cannot list them), then change the component in the OpenShift console", verb(len(crds), "CRD", "CRDs"), strings.Join(crds, ", "), verb(len(crds), "converts its", "convert their"), component, verb(len(crds), "CRD", "CRDs"))
 	}
-	return blockers
+	return ""
 }
 
 // conversionCRDsOf returns the RHOAI CRDs whose conversion webhook Service

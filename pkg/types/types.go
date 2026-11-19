@@ -342,6 +342,170 @@ type DeploymentInfo struct {
 	Version             string            `json:"version,omitempty"`
 }
 
+// DSCManager is the Components page's view of the DataScienceCluster
+// (GET /api/components/dsc): every component and sub-component the
+// installed CRD defines, with the value in the DSC, the release default
+// and what the operator reports, and the differences from the release
+// default that are real problems.
+type DSCManager struct {
+	// Exists is false when there is no DataScienceCluster (State says why:
+	// "no-dsc" or "no-crd"); nothing else is filled then.
+	Exists bool   `json:"exists"`
+	State  string `json:"state"`
+	Name   string `json:"name,omitempty"`
+	UID    string `json:"uid,omitempty"`
+	// APIVersion is the version the DSC was read at
+	// ("datasciencecluster.opendatahub.io/v3"); StorageVersion is the CRD's
+	// storage version ("v3"). Changes are made only when they match.
+	APIVersion     string `json:"apiVersion,omitempty"`
+	StorageVersion string `json:"storageVersion,omitempty"`
+	// DSCCount is the number of DataScienceClusters (the operator allows one).
+	DSCCount int    `json:"dscCount"`
+	Phase    string `json:"phase,omitempty"`
+	// Release is status.release: the platform ("OpenShift AI Self-Managed")
+	// and version the operator reports.
+	ReleaseName    string `json:"releaseName,omitempty"`
+	ReleaseVersion string `json:"releaseVersion,omitempty"`
+	// OperatorVersion is the installed CSV's version, whose alm-examples
+	// hold the release default.
+	OperatorVersion string `json:"operatorVersion,omitempty"`
+	DefaultsSource  string `json:"defaultsSource,omitempty"`
+	// DefaultsError says why there is no release default to compare with;
+	// SchemaError why the CRD schema could not be read.
+	DefaultsError string `json:"defaultsError,omitempty"`
+	SchemaError   string `json:"schemaError,omitempty"`
+	// ReadOnlyReason says why this page changes nothing in the DSC now
+	// (Argo CD, an ACM policy, a deletion, a version the CRD does not
+	// store, ...); "" when changes are possible.
+	ReadOnlyReason string   `json:"readOnlyReason,omitempty"`
+	ManagedBy      string   `json:"managedBy,omitempty"` // Argo CD application
+	ACMEnforced    bool     `json:"acmEnforced,omitempty"`
+	Deleting       bool     `json:"deleting,omitempty"`
+	Finalizers     []string `json:"finalizers,omitempty"`
+	// Conditions are the DSC's overall conditions (Ready,
+	// ProvisioningSucceeded, ComponentsReady, ModulesReady).
+	Conditions []DSCConditionView `json:"conditions"`
+	// UpgradeGates are conditions that hold provisioning for an admin
+	// acknowledgement (ConfigMap odh-upgrade-acks).
+	UpgradeGates []string      `json:"upgradeGates,omitempty"`
+	Nodes        []DSCNode     `json:"nodes"`
+	Mismatches   []DSCMismatch `json:"mismatches"`
+}
+
+// DSCConditionView is one status condition of the DataScienceCluster.
+type DSCConditionView struct {
+	Type    string `json:"type"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// DSCNode is a component, or a sub-component nested at any depth, of
+// spec.components as the installed CRD defines it.
+type DSCNode struct {
+	Path   string `json:"path"`   // "kserve.nim"
+	Name   string `json:"name"`   // "nim"
+	Parent string `json:"parent"` // "kserve"; "" for a component
+	Depth  int    `json:"depth"`  // 0 for a component
+	// Toggle: the object has its own managementState. A group without one
+	// (dashboard, data) only holds sub-components.
+	Toggle bool `json:"toggle"`
+	// Allowed are the managementState values the CRD accepts (its enum).
+	Allowed       []string `json:"allowed,omitempty"`
+	SchemaDefault string   `json:"schemaDefault,omitempty"`
+	// Spec is the value in the DSC ("" when unset; SpecSet false).
+	Spec    string `json:"spec,omitempty"`
+	SpecSet bool   `json:"specSet"`
+	// Default is the release default's value (alm-examples).
+	Default    string `json:"default,omitempty"`
+	DefaultSet bool   `json:"defaultSet"`
+	// Actual is status.components' managementState for it, when the
+	// operator reports one (sub-components appear there as top-level keys).
+	Actual    string            `json:"actual,omitempty"`
+	Condition *DSCConditionView `json:"condition,omitempty"`
+	// Changed: a value the user chose that differs from the release default.
+	Changed bool `json:"changed,omitempty"`
+}
+
+// DSCMismatch is a difference from the release default that is a real
+// problem.
+type DSCMismatch struct {
+	// Kind: "unset" (the release default sets it, the DSC does not: the
+	// operator treats it as Removed), "parent-removed" (Managed under a
+	// parent that is not Managed: it deploys nothing) or "unknown-field"
+	// (the installed CRD does not define it).
+	Kind    string `json:"kind"`
+	Path    string `json:"path"`
+	Default string `json:"default,omitempty"`
+	Parent  string `json:"parent,omitempty"`
+	Message string `json:"message"`
+	// Fixable: Fix adds (or removes) it.
+	Fixable bool `json:"fixable"`
+}
+
+// DSCPlan is what a change to the DataScienceCluster would do, computed
+// from a fresh read (GET /api/components/dsc/plan). Token binds the
+// change: the server refuses it when the plan computed again differs.
+type DSCPlan struct {
+	Action     string `json:"action"` // "toggle", "fix", "soft-reset", "hard-reset"
+	Name       string `json:"name"`
+	UID        string `json:"uid,omitempty"`
+	APIVersion string `json:"apiVersion,omitempty"`
+	// Refusal says why the change is not possible; Code classifies it
+	// ("gitops_managed", "parent_removed", "nothing_to_do", ...).
+	Refusal string `json:"refusal,omitempty"`
+	Code    string `json:"code,omitempty"`
+	// ParentPath is the parent to set to Managed too (toggle to Managed
+	// under a parent that is not Managed).
+	ParentPath string      `json:"parentPath,omitempty"`
+	Changes    []DSCChange `json:"changes"`
+	// Blocked are the components whose removal must not happen now; the
+	// change is refused while any is listed.
+	Blocked  []DSCRemovalBlock `json:"blocked,omitempty"`
+	Warnings []string          `json:"warnings,omitempty"`
+	// Hard reset: the enabled components, those the default leaves
+	// Removed, and the object it creates (YAML).
+	TornDown    []string `json:"tornDown,omitempty"`
+	StayRemoved []string `json:"stayRemoved,omitempty"`
+	NewObject   string   `json:"newObject,omitempty"`
+	Token       string   `json:"token,omitempty"`
+}
+
+// DSCChange is one change of a plan.
+type DSCChange struct {
+	Path string `json:"path"`
+	// From and To are the values ("" with FromSet/ToSet false: unset).
+	From    string `json:"from,omitempty"`
+	FromSet bool   `json:"fromSet"`
+	To      string `json:"to,omitempty"`
+	ToSet   bool   `json:"toSet"`
+	// Toggle: a managementState. Effect: "deploys" or "removes" when what
+	// the operator deploys changes (also through a parent), else "".
+	Toggle bool   `json:"toggle"`
+	Effect string `json:"effect,omitempty"`
+}
+
+// DSCToggleRequest is the body of POST /api/components/dsc/management.
+type DSCToggleRequest struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+	// From is the value the user saw ("" unset); To the value to set.
+	From string `json:"from"`
+	To   string `json:"to"`
+	// WithParent also sets the parents that are not Managed to Managed.
+	WithParent bool `json:"withParent"`
+}
+
+// DSCPlanRequest is the body of POST /api/components/dsc/fix, /reset and
+// /hard-reset/stream: the plan the user reviewed.
+type DSCPlanRequest struct {
+	Name  string `json:"name"`
+	UID   string `json:"uid"`
+	Token string `json:"token"`
+	// Confirm is the DSC name typed by the user (hard reset only).
+	Confirm string `json:"confirm,omitempty"`
+}
+
 // DSCCompatibility reports invalid field names and differences from version-matched component defaults.
 type DSCCompatibility struct {
 	OperatorVersion   string   `json:"operatorVersion,omitempty"`
