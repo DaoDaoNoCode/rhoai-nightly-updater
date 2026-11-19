@@ -7,7 +7,9 @@ import type { CatalogModel, InferenceGatewayState, ModelExposureOption, ModelExp
 import { IDLE, modelsState } from "./featureState";
 import { cleanupBlocked, cleanupCandidates, cleanupSteps } from "./CleanupModal";
 import { envStatus } from "./resourceStatus";
-import { UseModel, embeddingCurl, internalCurl, modelCurl, modelTokenLine, modelsConfirm, modelsSteps, thinkingCurl, toolCurl } from "./ModelsTab";
+import { UseModel } from "./UseModel";
+import { embeddingCurl, internalCurl, modelCurl, modelTokenLine, thinkingCurl, toolCurl } from "./modelCommands";
+import { modelsConfirm, modelsSteps } from "./modelsConfirm";
 
 const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };
 const gateway: InferenceGatewayState = {
