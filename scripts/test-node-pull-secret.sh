@@ -98,10 +98,11 @@ run() {
 	printf '%s' "$2" | in_shell "$1" "$(cat "$CMD_FILE")" >"$WORK/out" 2>&1 || true
 }
 
-# run_remove SHELL: runs the removal command file in SHELL.
+# run_remove SHELL [ANSWER]: runs the removal command file in SHELL, typing
+# ANSWER (default yes) at its prompt.
 run_remove() {
 	rm -f "$WORK/replaced.json" "$WORK/oc.log" "$WORK/jq-args.log"
-	in_shell "$1" "$(cat "$REMOVE_FILE")" </dev/null >"$WORK/out" 2>&1 || true
+	printf '%s\n' "${2-yes}" | in_shell "$1" "$(cat "$REMOVE_FILE")" >"$WORK/out" 2>&1 || true
 }
 
 # auths prints the .auths of the replaced Secret's .dockerconfigjson.
@@ -170,17 +171,28 @@ for sh in $SHELLS; do
 echo "left=[${QUAY_AUTH-}]"' >"$WORK/out" 2>&1 || true
 	grep -qF 'left=[]' "$WORK/out" && pass || fail "$sh: QUAY_AUTH left set: $(cat "$WORK/out")"
 
-	# The removal command (node_pull_secret_remove.sh): drops only the
+	# The removal command (node_pull_secret_remove.sh): says that it removes
+	# whatever entry is there and runs only after "yes"; drops only the
 	# quay.io/rhoai entry, keeps the rest, and changes nothing on a missing
 	# or garbled Secret or a conflict.
 	secret "$(b64 "$OTHERS")"
 	run_remove "$sh"
+	grep -qF 'whoever added it' "$WORK/out" && pass || fail "$sh: remove: no caution: $(cat "$WORK/out")"
 	if [ -f "$WORK/replaced.json" ]; then
 		expect_eq "$sh: remove: entry gone, others kept" "$(jq -cS '.auths | del(."quay.io/rhoai")' <<<"$OTHERS")" "$(auths | jq -cS .)"
 		expect_eq "$sh: remove: resourceVersion kept" 42 "$(jq -r .metadata.resourceVersion "$WORK/replaced.json")"
 	else
 		fail "$sh: remove: nothing was replaced: $(cat "$WORK/out")"
 	fi
+	for answer in "" no y YES; do
+		secret "$(b64 "$OTHERS")"
+		run_remove "$sh" "$answer"
+		[ ! -e "$WORK/oc.log" ] && pass || fail "$sh: remove: oc ran after the answer '$answer': $(cat "$WORK/oc.log")"
+	done
+	secret "$(b64 "$OTHERS")"
+	rm -f "$WORK/replaced.json" "$WORK/oc.log"
+	in_shell "$sh" "$(cat "$REMOVE_FILE")" </dev/null >"$WORK/out" 2>&1 || true
+	[ ! -e "$WORK/oc.log" ] && pass || fail "$sh: remove: oc ran at end of input"
 	rm -f "$WORK/secret.json"
 	run_remove "$sh"
 	[ ! -e "$WORK/replaced.json" ] && pass || fail "$sh: remove: replaced without a Secret"

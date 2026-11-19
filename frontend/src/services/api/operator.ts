@@ -48,23 +48,28 @@ export function checkNodePull(image: string): Promise<OperationResponse> {
 }
 
 /** What a one-click setup action would do: read with your own token, checked by a server-side dry run; changes nothing. */
-export function planNodeSetup(action: NodeSetupAction): Promise<NodeSetupPlan> {
+export function planNodeSetup(action: NodeSetupAction, replaceExisting = false): Promise<NodeSetupPlan> {
   return request('/api/setup/nodes/plan', {
     method: 'POST',
-    body: JSON.stringify({ action }),
+    body: JSON.stringify(replaceExisting ? { action, replaceExisting } : { action }),
   });
 }
 
-/** Runs a reviewed setup action, streaming "check", "dry_run", "apply" and "verify"; sends back the plan's object version. */
+/**
+ * Runs a reviewed setup action, streaming "check", "dry_run", "apply" and
+ * "verify"; sends back the plan's object version, and replaceExisting when
+ * the user acknowledged replacing an entry this tool did not add.
+ */
 export function streamNodeSetup(
-  plan: Pick<NodeSetupPlan, 'action' | 'resourceVersion' | 'uid'>,
+  plan: Pick<NodeSetupPlan, 'action' | 'resourceVersion' | 'uid' | 'replacing'>,
   onStep: (step: UpdateStep) => void,
   onDone: StreamDoneHandler,
   onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
-  const body: Record<string, string> = { action: plan.action };
+  const body: Record<string, string | boolean> = { action: plan.action };
   if (plan.resourceVersion) body.resourceVersion = plan.resourceVersion;
   if (plan.uid) body.uid = plan.uid;
+  if (plan.replacing) body.replaceExisting = true;
   return streamSSE('/api/setup/nodes/stream', body, onStep, onDone, onConnectionDrop);
 }
 

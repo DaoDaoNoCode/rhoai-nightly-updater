@@ -170,6 +170,24 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 		mu.Unlock()
 	})
 
+	// The tool's record of the entry it added to the nodes' pull secret
+	// (node_pull_record.go), for the nodes' part below. An unreadable
+	// record shows none, so the removal is not offered.
+	var nodeRecord *nodePullRecord
+	run(func() {
+		if reads.controlPlane == nil {
+			return
+		}
+		rec, err := readNodePullRecord(c)
+		if err != nil {
+			slog.Debug("node pull secret record unreadable", "error", err)
+			return
+		}
+		mu.Lock()
+		nodeRecord = rec
+		mu.Unlock()
+	})
+
 	run(func() {
 		if idms, err := getIDMS(c); err != nil {
 			addErr(fmt.Sprintf("image mirror: %v", err))
@@ -248,6 +266,9 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 	if reads.controlPlane != nil {
 		status.Cluster.ControlPlane = controlPlane
 		status.PullSecret.Nodes = nodePullInfo(controlPlane, status.CatalogSource)
+		if status.PullSecret.Nodes != nil {
+			status.PullSecret.Nodes.AddedByTool = nodePullRecordInfo(nodeRecord, quayAuth)
+		}
 	}
 
 	// Cached per installed catalog image; only the first poll after an image

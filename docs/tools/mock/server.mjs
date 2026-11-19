@@ -146,8 +146,8 @@ const minioSetup = () => {
 // The one-click setup's run: the plan's steps, then the mock cluster
 // changes as the backend's would.
 async function nodeSetupStream(req, res) {
-  const { action = "" } = await body(req);
-  const plan = F.nodeSetupPlan(world, action);
+  const { action = "", replaceExisting = false } = await body(req);
+  const plan = F.nodeSetupPlan(world, action, replaceExisting);
   beginOperation("node-setup", "One-time cluster setup", action);
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   const steps = plan.ready ? F.nodeSetupSteps(plan) : [
@@ -163,8 +163,17 @@ async function nodeSetupStream(req, res) {
       if (plan.ready) {
         if (action === "mirror-create") world.status.imageMirror = { exists: true, name: "rhoai-quay-mirror", source: "registry.redhat.io/rhoai" };
         if (action === "mirror-remove") world.status.imageMirror = { exists: false, name: "", source: "" };
-        if (action === "pull-secret-add") world.nodes = { pullEntry: "same" };
-        if (action === "pull-secret-remove") world.nodes = { pullEntry: "none" };
+        // The backend records the entry it wrote, and clears the record
+        // when it removes it (pkg/cluster/node_pull_record.go).
+        const nodes = world.status.pullSecret.nodes;
+        if (action === "pull-secret-add") {
+          world.nodes = { pullEntry: "same" };
+          if (nodes) nodes.addedByTool = F.NODE_PULL_RECORD;
+        }
+        if (action === "pull-secret-remove") {
+          world.nodes = { pullEntry: "none" };
+          if (nodes) delete nodes.addedByTool;
+        }
       }
       endOperation(step.status === "success", step.message);
     }
@@ -599,8 +608,8 @@ async function api(req, res, u) {
     return json(res, 403, { error: "Read-only access: changing the cluster through this tool requires the cluster-admin role.", errorCode: "forbidden" });
   }
   if (key === "POST /api/setup/nodes/plan") {
-    const { action = "" } = await body(req);
-    return json(res, 200, F.nodeSetupPlan(world, action));
+    const { action = "", replaceExisting = false } = await body(req);
+    return json(res, 200, F.nodeSetupPlan(world, action, replaceExisting));
   }
   if (key === "POST /api/setup/nodes/stream") return nodeSetupStream(req, res);
   if (key === "POST /api/update/stream") return updateStream(req, res);

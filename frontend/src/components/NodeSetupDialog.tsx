@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Button,
+  Checkbox,
   Content,
   List,
   ListItem,
@@ -47,6 +48,10 @@ function refusalTitle(plan: NodeSetupPlan): string {
       return "The cluster does not allow this change here";
     case "foreign":
       return "Someone else's object is in the way";
+    case "foreign_entry":
+      return "An entry this tool did not add is already there";
+    case "not_owned":
+      return "Not added by this tool";
     case "conflict":
       return "It changed meanwhile";
     case "no_token":
@@ -73,25 +78,38 @@ export const NodeSetupDialog: React.FC<{
   onClose: () => void;
   /** After a run that may have changed the cluster: refresh the status. */
   onChanged: () => void;
-}> = ({ action, onClose, onChanged }) => {
+  /**
+   * Closes the dialog and runs Check that the nodes can pull: offered when
+   * Add finds an entry this tool did not add (if it works, nothing is needed).
+   */
+  onCheck?: () => void;
+}> = ({ action, onClose, onChanged, onCheck }) => {
   const titleId = React.useId();
-  const text = NODE_SETUP_TEXT[action];
+  const replaceId = React.useId();
   const onBusy = useClusterBusyHandler();
   const [phase, setPhase] = useState<Phase>("planning");
   const [plan, setPlan] = useState<NodeSetupPlan | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
   const [states, setStates] = useState<Record<string, StepState>>({});
   const [result, setResult] = useState<OperationResponse | null>(null);
+  // Add found an entry this tool did not add: the acknowledgement to
+  // replace it, unticked; ticking it asks for the plan that replaces it.
+  const [replaceOffered, setReplaceOffered] = useState(false);
+  const [replace, setReplace] = useState(false);
   const stream = useRef<AbortController | null>(null);
   // The run's outcome in the backend's words (its operation_complete step).
   const finalMessage = useRef<string | null>(null);
+  const replacing = !!plan?.replacing;
+  const text = replacing ? { title: "Replace the entry in the nodes' pull secret", confirm: "Replace the entry", danger: true } : NODE_SETUP_TEXT[action];
 
-  const loadPlan = useCallback(async () => {
+  const loadPlan = useCallback(async (replaceExisting: boolean) => {
     setPhase("planning");
     setPlan(null);
     setPlanError(null);
     try {
-      setPlan(await planNodeSetup(action));
+      const p = await planNodeSetup(action, replaceExisting);
+      if (p.replaceable) setReplaceOffered(true);
+      setPlan(p);
     } catch (e) {
       const err = toApiError(e, "Could not work out the change");
       setPlanError(err.message);
@@ -102,9 +120,14 @@ export const NodeSetupDialog: React.FC<{
   }, [action, onBusy]);
 
   useEffect(() => {
-    void loadPlan();
+    void loadPlan(false);
     return () => stream.current?.abort();
   }, [loadPlan]);
+
+  const onReplace = (checked: boolean) => {
+    setReplace(checked);
+    void loadPlan(checked);
+  };
 
   const confirm = () => {
     if (!plan) return;
@@ -137,6 +160,9 @@ export const NodeSetupDialog: React.FC<{
 
   const running = phase === "running";
   const ready = phase === "plan" && !!plan?.ready;
+  // Someone else's entry: if it works, nothing is needed, so the check is
+  // the first thing to try.
+  const checkOffered = phase === "plan" && plan?.refusalCode === "foreign_entry" && !!onCheck;
 
   return (
     <Modal aria-labelledby={titleId} variant={ModalVariant.medium} isOpen onClose={() => !running && onClose()}>
@@ -161,6 +187,18 @@ export const NodeSetupDialog: React.FC<{
           {plan && phase === "plan" && plan.refusal && (
             <StackItem>
               <Alert component="p" isInline variant="warning" title={refusalTitle(plan)}>{plan.refusal}</Alert>
+            </StackItem>
+          )}
+          {replaceOffered && (phase === "plan" || phase === "planning") && (
+            <StackItem>
+              <Checkbox
+                id={replaceId}
+                isChecked={replace}
+                isDisabled={phase === "planning"}
+                onChange={(_e, checked) => onReplace(checked)}
+                label="Replace it with the token saved under Pull secret"
+                description="The token it has now is not kept, and this tool cannot restore it: only whoever set the entry up has it."
+              />
             </StackItem>
           )}
           {plan && (phase === "plan" || running) && plan.ready && (
@@ -222,7 +260,8 @@ export const NodeSetupDialog: React.FC<{
           <Button variant={text.danger ? "danger" : "primary"} onClick={confirm}>{text.confirm}</Button>
         )}
         {running && <Button variant="primary" isLoading isDisabled>{text.confirm}</Button>}
-        <Button variant={ready || running ? "link" : "primary"} onClick={onClose} isDisabled={running}>{ready ? "Cancel" : "Close"}</Button>
+        {checkOffered && <Button variant="primary" onClick={onCheck}>Check that the nodes can pull</Button>}
+        <Button variant={ready || running || checkOffered ? "link" : "primary"} onClick={onClose} isDisabled={running}>{ready ? "Cancel" : "Close"}</Button>
       </ModalFooter>
     </Modal>
   );

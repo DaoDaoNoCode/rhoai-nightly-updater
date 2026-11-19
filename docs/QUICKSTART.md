@@ -128,7 +128,9 @@ Once the token is saved, the **Pull secret** item shows **Nodes not checked** an
 - The write carries the `resourceVersion` the review was made on, so a change made meanwhile stops it with a conflict instead of being overwritten.
 - What the nodes do: the Machine Config Operator writes the new pull secret to every node without a drain or a reboot; `oc get mcp` shows `UPDATED True` for every pool when done. A paused pool takes it once unpaused (the review names paused or degraded pools).
 
-**Remove from the nodes' pull secret** takes only that entry out again. After it, images already on a node stay and running pods keep running, but a new nightly, or a pod that starts on a node without its image, fails with an unauthorized pull error.
+The app never removes or overwrites a setup it did not make. When it adds the entry it records that in its own ConfigMap (the Secret's UID and a salted hash of the token, never the token). If `openshift-config/pull-secret` already has a `quay.io/rhoai` entry it did not add, for example one the cluster's provisioner put there, **Add to the nodes' pull secret** changes nothing: with the same token there is nothing to do; with another token it says so and offers **Check that the nodes can pull** (if that entry works, nothing more is needed), and replaces it only after you tick a box that says its token is not kept and the app cannot restore it. When the nodes can pull and the app added nothing, the button reads **Already set up (not by this tool)**. The item shows who set the entry: this tool, someone else, or not known (the app's ServiceAccount cannot read that Secret).
+
+**Remove from the nodes' pull secret** is offered only for the entry the app added, and takes only that entry out again (it checks its record, the Secret's UID and the token's hash first; anything else is refused, with the command below). After it, images already on a node stay and running pods keep running, but a new nightly, or a pod that starts on a node without its image, fails with an unauthorized pull error.
 
 <img src="images/status-cluster-setup-self-managed.png" alt="Self-managed cluster setup: Add to the nodes' pull secret, Check that the nodes can pull and its result, and Create the image mirror" width="760">
 
@@ -149,12 +151,13 @@ unset QUAY_AUTH
 - `oc get -o json` keeps the Secret's `resourceVersion`, so `oc replace` fails with a conflict if someone changed the Secret meanwhile. A missing or garbled Secret makes `jq` fail, so `oc replace` gets nothing and changes nothing. Nothing is written to disk.
 - The token must keep its `=` padding: CRI-O rejects an unpadded value.
 
-To remove the entry again:
+To remove the entry again. Unlike the button, this removes whatever `quay.io/rhoai` entry is there, also one the cluster was set up with, whose token the app cannot restore, so it asks you to type `yes` first:
 
 ```bash
-oc get secret pull-secret -n openshift-config -o json \
+printf 'This removes the quay.io/rhoai entry of openshift-config/pull-secret, whoever added it: also one the cluster was set up with, whose token the updater cannot restore. Type yes to remove it: ' && read -r ANSWER && [ "$ANSWER" = yes ] && oc get secret pull-secret -n openshift-config -o json \
   | jq '.data[".dockerconfigjson"] |= (@base64d | fromjson | del(.auths["quay.io/rhoai"]) | tojson | @base64)' \
   | oc replace -f -
+unset ANSWER
 ```
 
 Then click **Check that the nodes can pull**. It runs Update's own catalog check: a temporary CatalogSource with the newest nightly catalog image, which tells whether a node can pull it, and removes it again (up to two minutes). Until the check has passed the item reads **Nodes not checked**; if a node cannot pull the image it reads **Nodes can't pull**, with the reason under the button (add the entry again, wait for `oc get mcp`, then check again). The item says **Ready** once the check passes, and from then on while the nightly catalog runs its `quay.io/rhoai` image. Until then the setup card stays at the top of the page; **Install latest nightly** is not held back, and its own catalog check says the same if the nodes cannot pull.

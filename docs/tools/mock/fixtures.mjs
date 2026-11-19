@@ -161,19 +161,23 @@ export const NODE_PULL_SECRET_REMOVE_COMMAND = readFileSync(join(here, "../../..
  * not be read (controlPlane absent): the nodes pull with
  * openshift-config/pull-secret, so the status carries pullSecret.nodes.
  */
-export function selfManaged(s, { known = true, pulled = false, managed = false } = {}) {
+export function selfManaged(s, { known = true, pulled = false, managed = false, addedByTool } = {}) {
   if (known) s.cluster.controlPlane = managed ? "managed" : "self-managed";
   else delete s.cluster.controlPlane;
-  s.pullSecret = { ...s.pullSecret, nodes: { command: NODE_PULL_SECRET_COMMAND, removeCommand: NODE_PULL_SECRET_REMOVE_COMMAND, pulled } };
+  s.pullSecret = { ...s.pullSecret, nodes: { command: NODE_PULL_SECRET_COMMAND, removeCommand: NODE_PULL_SECRET_REMOVE_COMMAND, pulled, ...(addedByTool ? { addedByTool } : {}) } };
   return s;
 }
+
+/** The status's record of the entry this tool added (pullSecret.nodes.addedByTool). */
+export const NODE_PULL_RECORD = { at: "2026-11-18T10:00:00Z", by: "kube:admin", sameToken: true };
 
 /**
  * What POST /api/setup/nodes/plan answers (pkg/cluster/node_setup.go, its
  * words): w.nodes holds what the mock cluster has (pullEntry: "none",
- * "same" or "other"; the mirror is status.imageMirror).
+ * "same", the entry this tool added with the saved token, or "other",
+ * someone else's with another token; the mirror is status.imageMirror).
  */
-export function nodeSetupPlan(w, action) {
+export function nodeSetupPlan(w, action, replaceExisting = false) {
   const cp = w.status.cluster.controlPlane;
   const plan = { action, ready: false, state: "" };
   if (cp) plan.controlPlane = cp;
@@ -207,22 +211,35 @@ export function nodeSetupPlan(w, action) {
         nodeImpact: "The Machine Config Operator removes the mirror from every node. Removing a mirror drains each node first (its pods are evicted and start again on other nodes), then reloads CRI-O and makes the node schedulable again, without a reboot, one node at a time in each pool; a single-node cluster is not drained. After that, registry.redhat.io/rhoai images are pulled from registry.redhat.io again, where nightly builds do not exist: installing or updating a nightly fails until the mirror is back. Images already on a node stay.",
         undo: "Create the image mirror again (one click, no drain)." };
     case "pull-secret-add": {
-      if (entry === "same") return { ...plan, nothingToDo: true, state: "openshift-config/pull-secret already has the quay.io/rhoai entry with the updater's token, so the nodes have it (or get it as their pools update)." };
-      const other = entry === "other";
-      return { ...plan, ...pools, ready: true, resourceVersion: "48211",
-        state: other ? "openshift-config/pull-secret has a quay.io/rhoai entry with another token." : "openshift-config/pull-secret has no quay.io/rhoai entry.",
-        changes: [other
-          ? "Secret openshift-config/pull-secret: replace the token of its quay.io/rhoai entry with the one saved under Pull secret; the other 4 registry logins stay as they are."
-          : "Secret openshift-config/pull-secret: add a quay.io/rhoai entry with the token saved under Pull secret; the other 4 registry logins stay as they are."],
-        nodeImpact: "The Machine Config Operator writes the new cluster pull secret to every node, one node at a time in each machine config pool, without draining or rebooting them (OpenShift applies pull secret changes that way). oc get mcp shows UPDATED True for every pool once all nodes have it; the kubelet uses it for the next pulls.",
-        undo: other
-          ? "The token it has now is not kept. Remove from the nodes' pull secret takes the entry out; to go back to the earlier token, save it under Pull secret and add it again."
-          : "Remove from the nodes' pull secret (the same item offers it): it removes only the quay.io/rhoai entry." };
+      const keys = entry === "none" ? {} : { existingKeys: ["quay.io/rhoai"] };
+      if (entry === "same") return { ...plan, ...keys, entrySetBy: "tool", nothingToDo: true, state: "openshift-config/pull-secret already has the quay.io/rhoai entry this tool added on 2026-11-18T10:00:00Z by kube:admin, with the token saved under Pull secret, so the nodes have it (or get it as their pools update)." };
+      const kept = "the other 4 registry logins stay as they are";
+      const nodeImpact = "The Machine Config Operator writes the new cluster pull secret to every node, one node at a time in each machine config pool, without draining or rebooting them (OpenShift applies pull secret changes that way). oc get mcp shows UPDATED True for every pool once all nodes have it; the kubelet uses it for the next pulls.";
+      if (entry === "other" && !replaceExisting) {
+        return { ...plan, ...keys, entrySetBy: "other", replaceable: true, resourceVersion: "48211", uid: "7c2a9e10-mock", refusalCode: "foreign_entry",
+          refusal: "openshift-config/pull-secret already has a quay.io/rhoai entry (quay.io/rhoai) that this tool did not add (this tool has no record of adding it), with another token. It is not replaced: if that entry works, the nodes need nothing more, and Check that the nodes can pull tells. Nothing was changed. To replace it anyway, acknowledge that its token is not kept and that this tool cannot restore it." };
+      }
+      if (entry === "other") {
+        return { ...plan, ...pools, ...keys, entrySetBy: "other", replacing: true, ready: true, resourceVersion: "48211", uid: "7c2a9e10-mock",
+          state: "openshift-config/pull-secret has a quay.io/rhoai entry (quay.io/rhoai) that this tool did not add (this tool has no record of adding it), with another token.",
+          changes: [`Secret openshift-config/pull-secret: replace its quay.io/rhoai entry (quay.io/rhoai), which this tool did not add, with one that has the token saved under Pull secret; ${kept}.`],
+          nodeImpact,
+          undo: "The token it has now is not kept, and this tool cannot restore it: only whoever set it up has it (on a provisioned cluster, its provisioner). Remove from the nodes' pull secret then takes out the entry this tool added, which leaves the nodes without a quay.io/rhoai login." };
+      }
+      return { ...plan, ...pools, entrySetBy: "none", ready: true, resourceVersion: "48211", uid: "7c2a9e10-mock",
+        state: "openshift-config/pull-secret has no quay.io/rhoai entry.",
+        changes: [`Secret openshift-config/pull-secret: add a quay.io/rhoai entry with the token saved under Pull secret; ${kept}.`],
+        nodeImpact,
+        undo: "Remove from the nodes' pull secret (the same item offers it): it removes only the entry this tool added." };
     }
     default:
-      if (entry === "none") return { ...plan, nothingToDo: true, state: "openshift-config/pull-secret has no quay.io/rhoai entry." };
-      return { ...plan, ...pools, ready: true, resourceVersion: "48211", state: "openshift-config/pull-secret has a quay.io/rhoai entry.",
-        changes: ["Secret openshift-config/pull-secret: remove its quay.io/rhoai entry; the other 4 registry logins stay as they are."],
+      if (entry === "none") return { ...plan, entrySetBy: "none", nothingToDo: true, state: "openshift-config/pull-secret has no quay.io/rhoai entry." };
+      if (entry === "other") {
+        return { ...plan, entrySetBy: "other", existingKeys: ["quay.io/rhoai"], resourceVersion: "48211", uid: "7c2a9e10-mock", refusalCode: "not_owned",
+          refusal: "The quay.io/rhoai entry in openshift-config/pull-secret was not added by this tool (or was changed since), so it is not removed here (this tool has no record of adding it). Nothing was changed. To remove it by hand, as a cluster-admin, run the removal command under Do it yourself instead: it removes whatever quay.io/rhoai entry is there, so first make sure the nodes do not need it." };
+      }
+      return { ...plan, ...pools, entrySetBy: "tool", existingKeys: ["quay.io/rhoai"], ready: true, resourceVersion: "48211", uid: "7c2a9e10-mock", state: "openshift-config/pull-secret has the quay.io/rhoai entry this tool added on 2026-11-18T10:00:00Z by kube:admin.",
+        changes: ["Secret openshift-config/pull-secret: remove the quay.io/rhoai entry this tool added; the other 4 registry logins stay as they are."],
         nodeImpact: "The Machine Config Operator writes the new cluster pull secret to every node, one node at a time in each machine config pool, without draining or rebooting them (OpenShift applies pull secret changes that way). oc get mcp shows UPDATED True for every pool once all nodes have it; the kubelet uses it for the next pulls. After that the nodes cannot pull from quay.io/rhoai: images already on a node stay and running pods keep running, but a new nightly, or a pod that starts on a node without its image, fails with an unauthorized pull error.",
         undo: "Add to the nodes' pull secret again (it copies the token saved under Pull secret)." };
   }

@@ -421,6 +421,39 @@ async (page) => {
       }
     },
 
+    // Not a docs image: who set the nodes' quay.io/rhoai entry, on a
+    // cluster someone else provisioned (its own entry and mirror) and on
+    // one where this tool added it, with the review dialogs, light and dark
+    // (screenshots.sh node-ownership-review, THEMES_DIR).
+    async "node-ownership-review"() {
+      const setup = () => card("One-time cluster setup");
+      const modal = () => page.locator(".pf-v6-c-modal-box");
+      const shoot = async (name, dark, el) => {
+        await fit();
+        await el.screenshot({ path: `${out}/themes/node-ownership-${name}-${dark ? "dark" : "light"}.png` });
+      };
+      for (const dark of [false, true]) {
+        await open("/", "provisioned-by-someone-else", { dark, width: 1440 });
+        await page.locator("#cluster-setup-toggle").click();
+        await wait(300);
+        await shoot("1-provisioned-nodes-pull", dark, card("Cluster setup"));
+        await open("/", "provisioned-by-someone-else-unchecked", { dark, width: 1440 });
+        await shoot("2-provisioned-unchecked", dark, setup());
+        await setup().getByRole("button", { name: "Add to the nodes' pull secret" }).click();
+        await page.getByRole("dialog").getByRole("checkbox").waitFor();
+        await wait(300);
+        await shoot("3-add-refused", dark, modal());
+        await page.getByRole("dialog").getByRole("checkbox").click();
+        await page.getByRole("dialog").getByRole("button", { name: "Replace the entry" }).waitFor();
+        await wait(300);
+        await shoot("4-replace-acknowledged", dark, modal());
+        await open("/", "self-managed-installed", { dark, width: 1440 });
+        await page.locator("#cluster-setup-toggle").click();
+        await wait(300);
+        await shoot("5-added-by-this-tool", dark, card("Cluster setup"));
+      }
+    },
+
     // Not a docs image: the MaaS tab in every state, light and dark, to
     // check it by eye (screenshots.sh maas-review, THEMES_DIR).
     async "maas-review"() {
@@ -633,8 +666,8 @@ async (page) => {
       });
 
       // Self-managed OpenShift after step 1: one click for the nodes' pull
-      // secret and the image mirror, and the nodes' check.
-      await open("/", "self-managed-mirror");
+      // secret (added by this tool: its record) and the image mirror, and the nodes' check.
+      await open("/", "self-managed-mirror-added");
       const selfManaged = card("One-time cluster setup");
       await selfManaged.getByRole("button", { name: "Check that the nodes can pull" }).click();
       await selfManaged.locator(".pf-v6-c-alert__title", { hasText: "The nodes can pull from quay.io/rhoai" }).waitFor();

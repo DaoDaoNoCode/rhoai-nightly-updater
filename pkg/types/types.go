@@ -171,6 +171,24 @@ type NodePullSecretInfo struct {
 	// Pulled: the nightly CatalogSource is READY on its quay.io/rhoai image,
 	// so the nodes have pulled from quay.io/rhoai.
 	Pulled bool `json:"pulled"`
+	// AddedByTool is this tool's record that it added the quay.io/rhoai
+	// entry of openshift-config/pull-secret; absent when it has none (the
+	// entry, if any, was set by someone else, or the cluster has none).
+	// The record is read with the ServiceAccount, which cannot read that
+	// Secret: the one-click actions check the entry against it with the
+	// user's token before they change anything.
+	AddedByTool *NodePullSecretRecord `json:"addedByTool,omitempty"`
+}
+
+// NodePullSecretRecord is this tool's record of the quay.io/rhoai entry it
+// added to openshift-config/pull-secret. It never holds the token.
+type NodePullSecretRecord struct {
+	// At and By: when and by whom the entry was written.
+	At string `json:"at,omitempty"`
+	By string `json:"by,omitempty"`
+	// SameToken: the recorded entry has the token saved under Pull secret
+	// now (false: that token was replaced since, so Add updates the entry).
+	SameToken bool `json:"sameToken"`
 }
 
 // NodeSetupRequest is the JSON body of POST /api/setup/nodes/plan and
@@ -183,6 +201,11 @@ type NodeSetupRequest struct {
 	Action          string `json:"action"`
 	ResourceVersion string `json:"resourceVersion,omitempty"`
 	UID             string `json:"uid,omitempty"`
+	// ReplaceExisting: for "pull-secret-add", the user acknowledged that a
+	// quay.io/rhoai entry this tool did not add is replaced, its token is
+	// not kept and the tool cannot restore it. Without it such an entry is
+	// never replaced (RefusalCode "foreign_entry").
+	ReplaceExisting bool `json:"replaceExisting,omitempty"`
 }
 
 // NodeSetupPlan is what a one-click setup action would do, worked out with
@@ -211,14 +234,30 @@ type NodeSetupPlan struct {
 	// Refusal says why it cannot be done here; RefusalCode is "hosted",
 	// "managed", "unknown_topology", "forbidden" (RBAC or an admission
 	// webhook refused the dry run), "foreign" (an object of that name that
-	// is not this setup's), "unreadable", "external_secrets",
-	// "no_token" or "quay".
+	// is not this setup's), "foreign_entry" (Add: a quay.io/rhoai entry
+	// this tool did not add, with another token; Replaceable),
+	// "not_owned" (Remove: the entry is not the one this tool added),
+	// "unreadable", "external_secrets", "no_token" or "quay".
 	Refusal     string `json:"refusal,omitempty"`
 	RefusalCode string `json:"refusalCode,omitempty"`
 	// ResourceVersion and UID of the object the plan was made on, sent back
 	// with the stream request.
 	ResourceVersion string `json:"resourceVersion,omitempty"`
 	UID             string `json:"uid,omitempty"`
+	// EntrySetBy, for the pull secret actions once the Secret was read: who
+	// set its quay.io/rhoai entry, "tool" (this tool's record matches it),
+	// "other" (an entry this tool did not add, or one changed since) or
+	// "none" (no entry).
+	EntrySetBy string `json:"entrySetBy,omitempty"`
+	// ExistingKeys are the auths keys of the quay.io/rhoai entries there:
+	// registry names only, never their values.
+	ExistingKeys []string `json:"existingKeys,omitempty"`
+	// Replaceable: Add was refused for an entry this tool did not add
+	// ("foreign_entry"); a request with ReplaceExisting replaces it.
+	Replaceable bool `json:"replaceable,omitempty"`
+	// Replacing: the plan replaces an entry this tool did not add, as the
+	// request acknowledged.
+	Replacing bool `json:"replacing,omitempty"`
 }
 
 // NodePullCheckRequest is the JSON body of POST /api/setup/node-pull-check.

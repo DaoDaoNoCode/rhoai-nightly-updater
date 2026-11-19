@@ -46,6 +46,12 @@ import (
 //     changes; the write is a merge patch of .dockerconfigjson carrying the
 //     resourceVersion that was read (a change made meanwhile fails with a
 //     conflict);
+//   - the quay.io/rhoai entry is removed, or replaced without asking, only
+//     when it is the one this tool added (node_pull_record.go: its record,
+//     the Secret's UID and a hash of the token); an entry someone else set
+//     (a provisioner's, say) is never removed, and is replaced only when
+//     the user acknowledges that its token is not kept and cannot be
+//     restored; an unreadable record refuses both;
 //   - the token is the one the updater already holds in
 //     kube-system/additional-pull-secret, checked with Quay first; it never
 //     leaves the server, and every API error is redacted of every
@@ -130,6 +136,10 @@ type nodeSetupWork struct {
 	verify func(c *Client) error
 	// done says what was done, for the outcome and the activity log.
 	done string
+	// record, when set, updates the tool's own record after the write
+	// (node_pull_record.go); recordFailed says what its failure means.
+	record       func(c *Client) error
+	recordFailed string
 	// credentials to redact from every message.
 	credentials []string
 }
@@ -147,11 +157,11 @@ func (w *nodeSetupWork) redact(err error) string {
 	return redactSecrets(err.Error(), w.credentials...)
 }
 
-// PlanNodeSetup works out what action would do, with c (the user's
+// PlanNodeSetup works out what req's action would do, with c (the user's
 // client): the reads, the decision and a server-side dry run of the write.
 // It changes nothing.
-func PlanNodeSetup(c *Client, action string) (*types.NodeSetupPlan, error) {
-	w, err := prepareNodeSetup(c, action)
+func PlanNodeSetup(c *Client, req types.NodeSetupRequest) (*types.NodeSetupPlan, error) {
+	w, err := prepareNodeSetup(c, req)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +177,8 @@ func PlanNodeSetup(c *Client, action string) (*types.NodeSetupPlan, error) {
 // prepareNodeSetup does the reads and the decision of action. An error is
 // for a request that cannot be answered at all; every refusal is in the
 // plan.
-func prepareNodeSetup(c *Client, action string) (*nodeSetupWork, error) {
+func prepareNodeSetup(c *Client, req types.NodeSetupRequest) (*nodeSetupWork, error) {
+	action := req.Action
 	if !ValidNodeSetupAction(action) {
 		return nil, fmt.Errorf("unknown action %q", action)
 	}
@@ -183,7 +194,7 @@ func prepareNodeSetup(c *Client, action string) (*nodeSetupWork, error) {
 	case NodeSetupMirrorRemove:
 		prepareMirrorRemove(c, w)
 	case NodeSetupPullAdd, NodeSetupPullRemove:
-		preparePullSecret(c, w, action == NodeSetupPullAdd)
+		preparePullSecret(c, w, action == NodeSetupPullAdd, req.ReplaceExisting)
 	}
 	return w, nil
 }
@@ -399,18 +410,27 @@ func updaterQuayToken(c *Client) (string, string, string) {
 	if auth == "" {
 		return "", "no_token", "kube-system/additional-pull-secret has no quay.io/rhoai token: save it under Pull secret first. Nothing was changed."
 	}
+	auth = paddedAuth(auth)
 	decoded, err := base64.StdEncoding.DecodeString(auth)
 	if err != nil {
-		decoded, err = base64.RawStdEncoding.DecodeString(auth)
-		if err != nil {
-			return "", "no_token", "The updater's quay.io/rhoai token is not base64: replace it under Pull secret first. Nothing was changed."
-		}
-		auth = base64.StdEncoding.EncodeToString(decoded)
+		return "", "no_token", "The updater's quay.io/rhoai token is not base64: replace it under Pull secret first. Nothing was changed."
 	}
 	if user, pass, ok := strings.Cut(string(decoded), ":"); !ok || user == "" || pass == "" {
 		return "", "no_token", "The updater's quay.io/rhoai token does not decode to user:password: replace it under Pull secret first. Nothing was changed."
 	}
 	return auth, "", ""
+}
+
+// paddedAuth is auth with its base64 = padding, which CRI-O needs (auth
+// as it is when it is not base64 without padding).
+func paddedAuth(auth string) string {
+	if _, err := base64.StdEncoding.DecodeString(auth); err == nil {
+		return auth
+	}
+	if decoded, err := base64.RawStdEncoding.DecodeString(auth); err == nil {
+		return base64.StdEncoding.EncodeToString(decoded)
+	}
+	return auth
 }
 
 // clusterPullSecret is openshift-config/pull-secret as read.
@@ -502,7 +522,7 @@ func rhoaiKeys(auths map[string]any) []string {
 	return keys
 }
 
-func preparePullSecret(c *Client, w *nodeSetupWork, add bool) {
+func preparePullSecret(c *Client, w *nodeSetupWork, add, replaceExisting bool) {
 	token := ""
 	if add {
 		var code, msg string
@@ -530,47 +550,23 @@ func preparePullSecret(c *Client, w *nodeSetupWork, add bool) {
 		return
 	}
 	w.plan.ResourceVersion, w.plan.UID = ps.resourceVersion, ps.uid
-	keys := rhoaiKeys(ps.auths)
-	others := len(ps.auths) - len(keys)
-	current := ""
-	if len(keys) == 1 {
-		current = authFromEntry(ps.auths[keys[0]])
+	// Whose the entry is decides everything below: without the record the
+	// tool cannot tell, so it changes nothing.
+	rec, err := readNodePullRecord(c)
+	if err != nil {
+		w.refuse("unreadable", "Cannot read this tool's own record of the entry it added to "+clusterPullSecretRef+" ("+w.redact(err)+"), so it cannot tell who set the quay.io/rhoai entry there. Nothing was changed.")
+		return
 	}
-	newAuths := map[string]any{}
-	for k, v := range ps.auths {
-		if normalizeRegistryKey(k) != quayRHOAIRegistry {
-			newAuths[k] = v
-		}
-	}
-	kept := fmt.Sprintf("the other %s %s as %s", countNoun(others, "registry login", "registry logins"), verb(others, "stays", "stay"), verb(others, "it is", "they are"))
+	entries := classifyPullEntries(ps, rec)
+	w.plan.EntrySetBy, w.plan.ExistingKeys = entries.setBy(), entries.keys
+	var newAuths map[string]any
 	if add {
-		if len(keys) == 1 && keys[0] == quayRHOAIRegistry && current == token {
-			w.nothing(clusterPullSecretRef + " already has the quay.io/rhoai entry with the updater's token, so the nodes have it (or get it as their pools update).")
-			return
-		}
-		newAuths[quayRHOAIRegistry] = map[string]any{"auth": token}
-		switch {
-		case len(keys) == 0:
-			w.plan.State = clusterPullSecretRef + " has no quay.io/rhoai entry."
-			w.plan.Changes = []string{"Secret " + clusterPullSecretRef + ": add a quay.io/rhoai entry with the token saved under Pull secret; " + kept + "."}
-			w.plan.Undo = "Remove from the nodes' pull secret (the same item offers it): it removes only the quay.io/rhoai entry."
-		default:
-			w.plan.State = clusterPullSecretRef + " has a quay.io/rhoai entry with another token."
-			w.plan.Changes = []string{"Secret " + clusterPullSecretRef + ": replace the token of its quay.io/rhoai entry with the one saved under Pull secret; " + kept + "."}
-			w.plan.Undo = "The token it has now is not kept. Remove from the nodes' pull secret takes the entry out; to go back to the earlier token, save it under Pull secret and add it again."
-		}
-		w.plan.NodeImpact = pullSecretNodeImpact
-		w.done = "Added the quay.io/rhoai entry to " + clusterPullSecretRef + "."
+		newAuths = planPullAdd(w, ps, rec, entries, token, replaceExisting)
 	} else {
-		if len(keys) == 0 {
-			w.nothing(clusterPullSecretRef + " has no quay.io/rhoai entry.")
-			return
-		}
-		w.plan.State = clusterPullSecretRef + " has a quay.io/rhoai entry."
-		w.plan.Changes = []string{"Secret " + clusterPullSecretRef + ": remove its quay.io/rhoai entry; " + kept + "."}
-		w.plan.NodeImpact = pullRemoveNodeImpact
-		w.plan.Undo = "Add to the nodes' pull secret again (it copies the token saved under Pull secret)."
-		w.done = "Removed the quay.io/rhoai entry from " + clusterPullSecretRef + "."
+		newAuths = planPullRemove(w, ps, rec, entries)
+	}
+	if newAuths == nil {
+		return
 	}
 	cfg := map[string]any{}
 	for k, v := range ps.config {
@@ -596,6 +592,15 @@ func preparePullSecret(c *Client, w *nodeSetupWork, add bool) {
 		return err
 	}
 	w.plan.Ready = true
+	// The registry logins that are not quay.io/rhoai entries, and the
+	// quay.io/rhoai entries the change keeps: the read-back must show both.
+	others := len(ps.auths) - len(entries.keys)
+	keptRHOAI := map[string]bool{}
+	for k := range newAuths {
+		if normalizeRegistryKey(k) == quayRHOAIRegistry && (!add || k != quayRHOAIRegistry) {
+			keptRHOAI[k] = true
+		}
+	}
 	w.verify = func(c *Client) error {
 		got, _, code, msg := readClusterPullSecret(c)
 		if got == nil {
@@ -603,15 +608,143 @@ func preparePullSecret(c *Client, w *nodeSetupWork, add bool) {
 		}
 		keys := rhoaiKeys(got.auths)
 		switch {
-		case add && (len(keys) != 1 || authFromEntry(got.auths[keys[0]]) != token):
+		case add && (len(keys) != 1 || authFromEntry(got.auths[quayRHOAIRegistry]) != token):
 			return errors.New("the quay.io/rhoai entry is not the updater's token")
-		case !add && len(keys) != 0:
-			return errors.New("the quay.io/rhoai entry is still there")
+		case !add && got.auths[entries.own] != nil:
+			return errors.New("the quay.io/rhoai entry this tool added is still there")
+		case !add && len(keys) != len(keptRHOAI):
+			return fmt.Errorf("it has %d quay.io/rhoai entries, not %d", len(keys), len(keptRHOAI))
 		case len(got.auths)-len(keys) != others:
 			return fmt.Errorf("it has %d other registry logins, not %d", len(got.auths)-len(keys), others)
 		}
 		return nil
 	}
+}
+
+// keptLogins says that n other registry logins stay.
+func keptLogins(n int) string {
+	return fmt.Sprintf("the other %s %s as %s", countNoun(n, "registry login", "registry logins"), verb(n, "stays", "stay"), verb(n, "it is", "they are"))
+}
+
+// recordedWhen words when and by whom the record says the entry was added.
+func recordedWhen(rec *nodePullRecord) string {
+	if rec == nil {
+		return ""
+	}
+	s := ""
+	if rec.At != "" {
+		s += " on " + rec.At
+	}
+	if rec.By != "" && rec.By != "unknown" {
+		s += " by " + rec.By
+	}
+	return s
+}
+
+// planPullAdd decides Add to the nodes' pull secret: the new auths, or nil
+// with the plan saying why nothing is written.
+//   - no quay.io/rhoai entry: add one, and record it as the tool's;
+//   - every entry has the updater's token already: nothing to do, and the
+//     tool does not claim an entry it did not write;
+//   - the tool's own entry, with an earlier token: update it (no
+//     acknowledgement: it is the tool's), and record the new one;
+//   - an entry someone else set (or one changed since the tool wrote it),
+//     with another token: refused ("foreign_entry", Replaceable), unless the
+//     request acknowledges replacing it (ReplaceExisting); the replacement
+//     is then recorded as the tool's.
+func planPullAdd(w *nodeSetupWork, ps *clusterPullSecret, rec *nodePullRecord, entries pullEntries, token string, replaceExisting bool) map[string]any {
+	same := len(entries.keys) > 0
+	for _, k := range entries.keys {
+		if authFromEntry(ps.auths[k]) != token {
+			same = false
+		}
+	}
+	keyList := strings.Join(entries.foreign, ", ")
+	switch {
+	case same && entries.setBy() == EntrySetByTool:
+		w.nothing(clusterPullSecretRef + " already has the quay.io/rhoai entry this tool added" + recordedWhen(rec) + ", with the token saved under Pull secret, so the nodes have it (or get it as their pools update).")
+		return nil
+	case same:
+		w.nothing(clusterPullSecretRef + " already has a quay.io/rhoai entry with the token saved under Pull secret, so the nodes have it (or get it as their pools update). This tool did not add it, so it is not counted as this tool's: Remove from the nodes' pull secret leaves it.")
+		return nil
+	}
+	newAuths := map[string]any{}
+	for k, v := range ps.auths {
+		if normalizeRegistryKey(k) != quayRHOAIRegistry {
+			newAuths[k] = v
+		}
+	}
+	newAuths[quayRHOAIRegistry] = map[string]any{"auth": token}
+	kept := keptLogins(len(ps.auths) - len(entries.keys))
+	switch entries.setBy() {
+	case EntrySetByNone:
+		w.plan.State = clusterPullSecretRef + " has no quay.io/rhoai entry."
+		w.plan.Changes = []string{"Secret " + clusterPullSecretRef + ": add a quay.io/rhoai entry with the token saved under Pull secret; " + kept + "."}
+		w.plan.Undo = "Remove from the nodes' pull secret (the same item offers it): it removes only the entry this tool added."
+		w.done = "Added the quay.io/rhoai entry to " + clusterPullSecretRef + "."
+	case EntrySetByTool:
+		w.plan.State = clusterPullSecretRef + " has the quay.io/rhoai entry this tool added" + recordedWhen(rec) + ", with an earlier token than the one saved under Pull secret now."
+		w.plan.Changes = []string{"Secret " + clusterPullSecretRef + ": update the quay.io/rhoai entry this tool added to the token saved under Pull secret; " + kept + "."}
+		w.plan.Undo = "The earlier token is not kept: to go back to it, save it under Pull secret and update the entry again. Remove from the nodes' pull secret takes the entry out."
+		w.done = "Updated the quay.io/rhoai entry this tool added to " + clusterPullSecretRef + " to the token saved under Pull secret."
+	default:
+		why := ""
+		if entries.why != "" {
+			why = " (" + entries.why + ")"
+		}
+		if !replaceExisting {
+			w.plan.Replaceable = true
+			w.refuse("foreign_entry", clusterPullSecretRef+" already has a quay.io/rhoai entry ("+keyList+") that this tool did not add"+why+", with another token. It is not replaced: if that entry works, the nodes need nothing more, and Check that the nodes can pull tells. Nothing was changed. To replace it anyway, acknowledge that its token is not kept and that this tool cannot restore it.")
+			return nil
+		}
+		w.plan.Replacing = true
+		w.plan.State = clusterPullSecretRef + " has a quay.io/rhoai entry (" + keyList + ") that this tool did not add" + why + ", with another token."
+		w.plan.Changes = []string{"Secret " + clusterPullSecretRef + ": replace its quay.io/rhoai entry (" + keyList + "), which this tool did not add, with one that has the token saved under Pull secret; " + kept + "."}
+		w.plan.Undo = "The token it has now is not kept, and this tool cannot restore it: only whoever set it up has it (on a provisioned cluster, its provisioner). Remove from the nodes' pull secret then takes out the entry this tool added, which leaves the nodes without a quay.io/rhoai login."
+		w.done = "Replaced the quay.io/rhoai entry of " + clusterPullSecretRef + ", which this tool did not add, with one that has the token saved under Pull secret."
+	}
+	w.plan.NodeImpact = pullSecretNodeImpact
+	w.record = func(c *Client) error {
+		r, err := newNodePullRecord(c, ps.uid, token)
+		if err != nil {
+			return err
+		}
+		return writeNodePullRecord(c, r)
+	}
+	w.recordFailed = "This tool could not record that it added the entry, so it will not remove it: to take it out, use the removal command under Do it yourself instead"
+	return newAuths
+}
+
+// planPullRemove decides Remove from the nodes' pull secret: only the
+// entry the tool added (classifyPullEntries) goes; any other quay.io/rhoai
+// entry is left, and when there is no entry of the tool's at all, nothing
+// is written ("not_owned"), with how to remove it by hand.
+func planPullRemove(w *nodeSetupWork, ps *clusterPullSecret, rec *nodePullRecord, entries pullEntries) map[string]any {
+	if len(entries.keys) == 0 {
+		w.nothing(clusterPullSecretRef + " has no quay.io/rhoai entry.")
+		return nil
+	}
+	if entries.own == "" {
+		w.refuse("not_owned", "The quay.io/rhoai entry in "+clusterPullSecretRef+" was not added by this tool (or was changed since), so it is not removed here ("+entries.why+"). Nothing was changed. To remove it by hand, as a cluster-admin, run the removal command under Do it yourself instead: it removes whatever quay.io/rhoai entry is there, so first make sure the nodes do not need it.")
+		return nil
+	}
+	newAuths := map[string]any{}
+	for k, v := range ps.auths {
+		if k != entries.own {
+			newAuths[k] = v
+		}
+	}
+	w.plan.State = clusterPullSecretRef + " has the quay.io/rhoai entry this tool added" + recordedWhen(rec) + "."
+	if len(entries.foreign) > 0 {
+		w.plan.State += " " + strings.Join(entries.foreign, ", ") + ", which this tool did not add, stays."
+	}
+	w.plan.Changes = []string{"Secret " + clusterPullSecretRef + ": remove the quay.io/rhoai entry this tool added; " + keptLogins(len(ps.auths)-1) + "."}
+	w.plan.NodeImpact = pullRemoveNodeImpact
+	w.plan.Undo = "Add to the nodes' pull secret again (it copies the token saved under Pull secret)."
+	w.done = "Removed the quay.io/rhoai entry this tool added from " + clusterPullSecretRef + "."
+	w.record = clearNodePullRecord
+	w.recordFailed = "This tool could not clear its record of the entry; the record matches no entry now"
+	return newAuths
 }
 
 // refusalCodeFor maps a failed read to a plan's refusal code.
@@ -729,7 +862,7 @@ func RunNodeSetup(c *Client, req types.NodeSetupRequest, emit func(UpdateStepEve
 		return &types.OperationResponse{Success: false, Message: msg, ErrorCode: code, Logs: []string{}}, nil
 	}
 	emit(UpdateStepEvent{Step: "check", Status: "running", Message: "Reading what is on the cluster"})
-	w, err := prepareNodeSetup(c, req.Action)
+	w, err := prepareNodeSetup(c, req)
 	if err != nil {
 		return nil, err
 	}
@@ -757,12 +890,20 @@ func RunNodeSetup(c *Client, req types.NodeSetupRequest, emit func(UpdateStepEve
 		recordActivity(c, activity, msg, false)
 		return fail("apply", writeRefusalCode(err), msg)
 	}
-	emit(UpdateStepEvent{Step: "apply", Status: "success", Message: w.done})
-	recordActivity(c, activity, w.done, true)
+	done := w.done
+	// The tool's own record follows the write at once (with the
+	// ServiceAccount): the change is made, so it is the tool's from now on.
+	if w.record != nil {
+		if err := w.record(c); err != nil {
+			done += " " + w.recordFailed + " (" + w.redact(err) + ")."
+		}
+	}
+	emit(UpdateStepEvent{Step: "apply", Status: "success", Message: done})
+	recordActivity(c, activity, done, true)
 
 	emit(UpdateStepEvent{Step: "verify", Status: "running", Message: "Reading it back"})
 	if err := w.verify(c); err != nil {
-		msg := w.done + " Reading it back did not show the change: " + w.redact(err) + ". Check the Status page."
+		msg := done + " Reading it back did not show the change: " + w.redact(err) + ". Check the Status page."
 		emit(UpdateStepEvent{Step: "verify", Status: "failed", Message: msg})
 		return &types.OperationResponse{Success: false, Message: msg, ErrorCode: "verify", Logs: []string{}}, nil
 	}
@@ -771,5 +912,5 @@ func RunNodeSetup(c *Client, req types.NodeSetupRequest, emit func(UpdateStepEve
 		note = "These machine config pools will not take it until that is resolved: " + strings.Join(pools, ", ") + ". The others take it one node at a time (oc get mcp)."
 	}
 	emit(UpdateStepEvent{Step: "verify", Status: "success", Message: note})
-	return &types.OperationResponse{Success: true, Message: w.done + " " + note, Logs: []string{}}, nil
+	return &types.OperationResponse{Success: true, Message: done + " " + note, Logs: []string{}}, nil
 }

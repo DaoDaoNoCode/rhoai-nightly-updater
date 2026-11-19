@@ -79,6 +79,56 @@ describe("NodeSetupDialog", () => {
     expect(screen.getByText(/team-mirrors already redirects/)).toBeInTheDocument();
   });
 
+  it("leaves an entry this tool did not add: offers the check, and replaces it only after the acknowledgement", async () => {
+    const refused: NodeSetupPlan = {
+      action: "pull-secret-add", controlPlane: "self-managed", ready: false, state: "", refusalCode: "foreign_entry", replaceable: true,
+      entrySetBy: "other", existingKeys: ["quay.io/rhoai"], resourceVersion: "42",
+      refusal: "openshift-config/pull-secret already has a quay.io/rhoai entry (quay.io/rhoai) that this tool did not add (this tool has no record of adding it), with another token. It is not replaced.",
+    };
+    const replacing: NodeSetupPlan = {
+      ...READY_PLAN, entrySetBy: "other", replacing: true,
+      changes: ["Secret openshift-config/pull-secret: replace its quay.io/rhoai entry (quay.io/rhoai), which this tool did not add, with one that has the token saved under Pull secret; the other 2 registry logins stay as they are."],
+      undo: "The token it has now is not kept, and this tool cannot restore it.",
+    };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/setup/nodes/plan") {
+        const body = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify(body.replaceExisting ? replacing : refused), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url === "/api/setup/nodes/stream") return sse({ step: "operation_complete", status: "success", message: "Replaced." });
+      return new Response("{}", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onCheck = vi.fn();
+    renderWithApp(<NodeSetupDialog action="pull-secret-add" onClose={vi.fn()} onChanged={vi.fn()} onCheck={onCheck} />);
+    expect(await screen.findByText("An entry this tool did not add is already there")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add to the nodes' pull secret" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Check that the nodes can pull" }));
+    expect(onCheck).toHaveBeenCalled();
+
+    const ack = screen.getByRole("checkbox", { name: "Replace it with the token saved under Pull secret" });
+    expect(ack).not.toBeChecked();
+    expect(screen.getByText(/is not kept, and this tool cannot restore it/)).toBeInTheDocument();
+    fireEvent.click(ack);
+    const confirm = await screen.findByRole("button", { name: "Replace the entry" });
+    expect(confirm).toHaveClass("pf-m-danger");
+    const planCalls = fetchMock.mock.calls.filter(([u]) => u === "/api/setup/nodes/plan").map(([, i]) => JSON.parse(String(i?.body)));
+    expect(planCalls).toEqual([{ action: "pull-secret-add" }, { action: "pull-secret-add", replaceExisting: true }]);
+    fireEvent.click(confirm);
+    expect(await screen.findByText("Done")).toBeInTheDocument();
+    const streamCall = fetchMock.mock.calls.find(([u]) => u === "/api/setup/nodes/stream");
+    expect(JSON.parse(String(streamCall?.[1]?.body))).toEqual({ action: "pull-secret-add", resourceVersion: "42", replaceExisting: true });
+  });
+
+  it("refuses to remove an entry this tool did not add", async () => {
+    stubBackend({ action: "pull-secret-remove", ready: false, state: "", refusalCode: "not_owned", entrySetBy: "other",
+      refusal: "The quay.io/rhoai entry in openshift-config/pull-secret was not added by this tool (or was changed since), so it is not removed here (this tool has no record of adding it). Nothing was changed." });
+    renderWithApp(<NodeSetupDialog action="pull-secret-remove" onClose={vi.fn()} onChanged={vi.fn()} />);
+    expect(await screen.findByText("Not added by this tool")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove from the nodes' pull secret" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
   it("shows a failed run's message", async () => {
     stubBackend({ ...READY_PLAN, action: "pull-secret-remove" }, [
       { step: "check", status: "failed", errorCode: "conflict", message: "It changed since you reviewed it, so nothing was changed. Review it again." },

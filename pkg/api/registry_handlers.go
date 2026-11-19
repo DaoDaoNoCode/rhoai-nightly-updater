@@ -92,7 +92,7 @@ var HandleNodeSetupPlan = withMutationAuth(func(c *cluster.Client, w http.Respon
 	w.Header().Set("X-Skip-Rate-Limit", "true")
 	setOperationTarget(w, req.Action)
 	slog.Info("mutation", "op", "node-setup-plan", "action", req.Action)
-	plan, err := planNodeSetup(c, req.Action)
+	plan, err := planNodeSetup(c, req)
 	if err != nil {
 		code, errorCode := cluster.HTTPStatusForError(err)
 		writeError(w, "Could not work out the change: "+err.Error(), code, errorCode)

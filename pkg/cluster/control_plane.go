@@ -172,10 +172,16 @@ var NodePullSecretCommand = strings.TrimSpace(nodePullSecretScript)
 
 // node_pull_secret_remove.sh removes the quay.io/rhoai entry from
 // openshift-config/pull-secret, for a cluster-admin who prefers the CLI.
-// The same safeguards as node_pull_secret.sh: only that key changes, a
-// missing or garbled Secret gives oc replace no object, and the kept
-// resourceVersion makes a concurrent change fail with a conflict. It needs
-// no token. scripts/test-node-pull-secret.sh runs it against a stub oc.
+// Unlike Remove from the nodes' pull secret, which takes out only the entry
+// this tool recorded adding (node_pull_record.go), the command removes
+// whatever entry is there, also one the cluster was provisioned with: it
+// says so and runs only after the user types yes (printf and read, as in
+// node_pull_secret.sh; no comment line, which zsh does not take at an
+// interactive prompt by default). The same safeguards as
+// node_pull_secret.sh: only that key changes, a missing or garbled Secret
+// gives oc replace no object, and the kept resourceVersion makes a
+// concurrent change fail with a conflict. It needs no token.
+// scripts/test-node-pull-secret.sh runs it against a stub oc.
 //
 //go:embed node_pull_secret_remove.sh
 var nodePullSecretRemoveScript string

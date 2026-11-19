@@ -19,7 +19,7 @@ func TestNodeSetupValidatesTheRequest(t *testing.T) {
 	called := false
 	origPlan, origRun := planNodeSetup, runNodeSetup
 	t.Cleanup(func() { planNodeSetup, runNodeSetup = origPlan, origRun })
-	planNodeSetup = func(*cluster.Client, string) (*types.NodeSetupPlan, error) {
+	planNodeSetup = func(*cluster.Client, types.NodeSetupRequest) (*types.NodeSetupPlan, error) {
 		called = true
 		return &types.NodeSetupPlan{}, nil
 	}
@@ -71,8 +71,10 @@ func TestNodeSetupPlanThenStream(t *testing.T) {
 	allowMutations(t)
 	origPlan, origRun := planNodeSetup, runNodeSetup
 	t.Cleanup(func() { planNodeSetup, runNodeSetup = origPlan, origRun })
-	planNodeSetup = func(_ *cluster.Client, action string) (*types.NodeSetupPlan, error) {
-		return &types.NodeSetupPlan{Action: action, Ready: true, ResourceVersion: "42"}, nil
+	var planned types.NodeSetupRequest
+	planNodeSetup = func(_ *cluster.Client, req types.NodeSetupRequest) (*types.NodeSetupPlan, error) {
+		planned = req
+		return &types.NodeSetupPlan{Action: req.Action, Ready: true, ResourceVersion: "42"}, nil
 	}
 	var got types.NodeSetupRequest
 	runNodeSetup = func(_ *cluster.Client, req types.NodeSetupRequest, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
@@ -83,15 +85,43 @@ func TestNodeSetupPlanThenStream(t *testing.T) {
 	w := httptest.NewRecorder()
 	HandleNodeSetupPlan(w, postJSON("/api/setup/nodes/plan", "tok", `{"action":"pull-secret-add"}`))
 	var plan types.NodeSetupPlan
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &plan) != nil || plan.ResourceVersion != "42" {
-		t.Fatalf("plan: %d %s", w.Code, w.Body.String())
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &plan) != nil || plan.ResourceVersion != "42" || planned.ReplaceExisting {
+		t.Fatalf("plan: %d %s (%+v)", w.Code, w.Body.String(), planned)
 	}
 	w = httptest.NewRecorder()
 	HandleNodeSetupStream(w, postJSON("/api/setup/nodes/stream", "tok", `{"action":"pull-secret-add","resourceVersion":"42"}`))
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"step":"operation_complete"`) || !strings.Contains(w.Body.String(), `"status":"success"`) {
 		t.Fatalf("stream: %d %s", w.Code, w.Body.String())
 	}
-	if got.Action != "pull-secret-add" || got.ResourceVersion != "42" {
+	if got.Action != "pull-secret-add" || got.ResourceVersion != "42" || got.ReplaceExisting {
 		t.Fatalf("request %+v", got)
+	}
+}
+
+// The acknowledgement to replace an entry this tool did not add reaches
+// the plan and the run as the user gave it.
+func TestNodeSetupCarriesTheReplaceAcknowledgement(t *testing.T) {
+	setupDevMode(t)
+	allowMutations(t)
+	origPlan, origRun := planNodeSetup, runNodeSetup
+	t.Cleanup(func() { planNodeSetup, runNodeSetup = origPlan, origRun })
+	var planned, ran types.NodeSetupRequest
+	planNodeSetup = func(_ *cluster.Client, req types.NodeSetupRequest) (*types.NodeSetupPlan, error) {
+		planned = req
+		return &types.NodeSetupPlan{Action: req.Action, Ready: true, ResourceVersion: "42", Replacing: true}, nil
+	}
+	runNodeSetup = func(_ *cluster.Client, req types.NodeSetupRequest, _ func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		ran = req
+		return &types.OperationResponse{Success: true, Message: "Replaced."}, nil
+	}
+	w := httptest.NewRecorder()
+	HandleNodeSetupPlan(w, postJSON("/api/setup/nodes/plan", "tok", `{"action":"pull-secret-add","replaceExisting":true}`))
+	if w.Code != 200 || !planned.ReplaceExisting {
+		t.Fatalf("plan: %d %s (%+v)", w.Code, w.Body.String(), planned)
+	}
+	w = httptest.NewRecorder()
+	HandleNodeSetupStream(w, postJSON("/api/setup/nodes/stream", "tok", `{"action":"pull-secret-add","resourceVersion":"42","replaceExisting":true}`))
+	if w.Code != 200 || !ran.ReplaceExisting || ran.ResourceVersion != "42" {
+		t.Fatalf("stream: %d %s (%+v)", w.Code, w.Body.String(), ran)
 	}
 }
