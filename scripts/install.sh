@@ -172,57 +172,299 @@ detect_oauth_proxy_image() {
 
 # --- Image ----------------------------------------------------------------------
 
-# registry_digest REPO TAG: the manifest (list) digest from the registry's v2
-# API, anonymously (a bearer token from the registry's token service when it
-# asks for one). Prints nothing when the registry does not answer.
-registry_digest() {
-	local repo=$1 tag=$2 host path scheme=https url headers status www realm realm_host service token
-	host=${repo%%/*}
-	path=${repo#*/}
-	case "$host" in
+# The registry's v2 API, anonymously: a bearer token from the registry's
+# token service when it asks for one, never the local pull credentials. The
+# calls run in command substitutions, so a failing one says why in the file
+# $TMP/registry-why (why_text reads it); no token ever goes into it.
+
+# registry_endpoint REPO: sets REG_HOST, REG_PATH and REG_ORIGIN (scheme and
+# host) of REPO's registry, and clears REG_TOKEN and the last failure.
+registry_endpoint() {
+	REG_HOST=${1%%/*} REG_PATH=${1#*/} REG_TOKEN=""
+	case "$REG_HOST" in
 	*.* | *:* | localhost) ;;
-	*) host=docker.io path=$repo ;;
+	*) REG_HOST=docker.io REG_PATH=$1 ;;
 	esac
-	if [ "$host" = docker.io ]; then
-		host=registry-1.docker.io
-		[[ $path == */* ]] || path=library/$path
+	if [ "$REG_HOST" = docker.io ]; then
+		REG_HOST=registry-1.docker.io
+		[[ $REG_PATH == */* ]] || REG_PATH=library/$REG_PATH
 	fi
-	case "$host" in localhost | localhost:* | 127.0.0.1:*) scheme=http ;; esac
-	url="$scheme://$host/v2/$path/manifests/$tag"
-	local accept="application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json"
-	headers=$(curl -sS -I --max-time 20 -H "Accept: $accept" "$url" 2>/dev/null | tr -d '\r') || return 0
-	status=$(printf '%s\n' "$headers" | sed -n '1s/^HTTP[^ ]* \([0-9]*\).*/\1/p')
-	if [ "$status" = 401 ]; then
-		www=$(printf '%s\n' "$headers" | grep -i '^www-authenticate: *bearer' | head -1 || true)
-		realm=$(printf '%s\n' "$www" | sed -n 's/.*realm="\([^"]*\)".*/\1/p')
-		service=$(printf '%s\n' "$www" | sed -n 's/.*service="\([^"]*\)".*/\1/p')
-		[ -n "$realm" ] || return 0
-		# The token service must be https on the registry host (or Docker
-		# Hub's known token host), so a registry answer cannot send the
-		# request elsewhere.
-		realm_host=${realm#https://}
-		realm_host=${realm_host%%/*}
-		if [[ $realm != https://* ]] ||
-			{ [ "$realm_host" != "$host" ] && ! { [ "$host" = registry-1.docker.io ] && [ "$realm_host" = auth.docker.io ]; }; }; then
-			err "WARNING: ignoring the token service $realm of $host (not https on the registry host)."
-			return 0
-		fi
-		token=$(curl -sS --max-time 20 --max-filesize 1048576 -G "$realm" --data-urlencode "service=$service" \
-			--data-urlencode "scope=repository:$path:pull" 2>/dev/null |
-			sed -nE 's/.*"(token|access_token)" *: *"([^"]*)".*/\2/p' | head -1) || return 0
-		[ -n "$token" ] || return 0
-		headers=$(curl -sS -I --max-time 20 -H "Accept: $accept" -H "Authorization: Bearer $token" "$url" 2>/dev/null | tr -d '\r') || return 0
-		status=$(printf '%s\n' "$headers" | sed -n '1s/^HTTP[^ ]* \([0-9]*\).*/\1/p')
+	REG_ORIGIN=https://$REG_HOST
+	case "$REG_HOST" in localhost | localhost:* | 127.0.0.1:*) REG_ORIGIN=http://$REG_HOST ;; esac
+	REG_ACCEPT="application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json"
+	rm -f "$TMP/registry-why"
+}
+registry_why() { printf '%s\n' "$*" >"$TMP/registry-why"; }
+# one_line FILE: the text of FILE (an error message) on one line.
+one_line() {
+	local text
+	text=$(tr '\r\n' '  ' <"$1" | sed 's/  */ /g; s/^ //; s/ $//')
+	printf '%s\n' "${text:-no message}"
+}
+why_text() { if [ -s "$TMP/registry-why" ]; then one_line "$TMP/registry-why"; else echo "no answer"; fi; }
+
+# registry_token HEADERS: sets REG_TOKEN to a pull token for REG_PATH from the
+# token service that the Bearer challenge in a 401 answer's HEADERS names.
+registry_token() {
+	local www realm realm_host service out
+	www=$(printf '%s\n' "$1" | grep -i '^www-authenticate: *bearer' | head -1 || true)
+	realm=$(printf '%s\n' "$www" | sed -n 's/.*realm="\([^"]*\)".*/\1/p')
+	service=$(printf '%s\n' "$www" | sed -n 's/.*service="\([^"]*\)".*/\1/p')
+	if [ -z "$realm" ]; then
+		registry_why "$REG_HOST asks for credentials (HTTP 401) without naming a token service"
+		return 1
 	fi
-	[ "$status" = 200 ] || return 0
-	printf '%s\n' "$headers" | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: *\(sha256:[0-9a-f]\{64\}\).*/\1/p' | head -1
+	# The token service must be https on the registry host (or Docker Hub's
+	# known token host), so a registry answer cannot send the request
+	# elsewhere.
+	realm_host=${realm#https://}
+	realm_host=${realm_host%%[/?]*}
+	if [[ $realm != https://* ]] ||
+		{ [ "$realm_host" != "$REG_HOST" ] && ! { [ "$REG_HOST" = registry-1.docker.io ] && [ "$realm_host" = auth.docker.io ]; }; }; then
+		err "WARNING: ignoring the token service $realm of $REG_HOST (not https on the registry host)."
+		registry_why "$REG_HOST names the token service $realm, which is not https on the registry host"
+		return 1
+	fi
+	if ! out=$(curl -sS --max-time 20 --max-filesize 1048576 -G "$realm" --data-urlencode "service=$service" \
+		--data-urlencode "scope=repository:$REG_PATH:pull" 2>"$TMP/curl-err"); then
+		registry_why "token service $realm: $(one_line "$TMP/curl-err")"
+		return 1
+	fi
+	REG_TOKEN=$(printf '%s\n' "$out" | sed -nE 's/.*"(token|access_token)" *: *"([^"]*)".*/\2/p' | head -1)
+	if [ -z "$REG_TOKEN" ]; then
+		registry_why "the token service $realm gave no token for $REG_PATH"
+		return 1
+	fi
 }
 
-# image_revision REF: the org.opencontainers.image.revision label (a full
-# commit) of the image, read with oc and the local pull credentials.
+# registry_head URL: the headers of a HEAD request for URL (with REG_TOKEN
+# when set), carriage returns removed.
+registry_head() {
+	local -a auth=()
+	[ -z "$REG_TOKEN" ] || auth=(-H "Authorization: Bearer $REG_TOKEN")
+	if ! curl -sS -I --max-time 20 -H "Accept: $REG_ACCEPT" ${auth[@]+"${auth[@]}"} "$1" 2>"$TMP/curl-err" >"$TMP/registry-head"; then
+		registry_why "HEAD $1: $(one_line "$TMP/curl-err")"
+		return 1
+	fi
+	tr -d '\r' <"$TMP/registry-head"
+}
+
+# registry_digest REPO TAG: the manifest (list) digest of REPO:TAG. Prints
+# nothing when the registry does not give one.
+registry_digest() {
+	local url headers status digest
+	registry_endpoint "$1"
+	url="$REG_ORIGIN/v2/$REG_PATH/manifests/$2"
+	headers=$(registry_head "$url") || return 0
+	status=$(printf '%s\n' "$headers" | sed -n '1s/^HTTP[^ ]* \([0-9]*\).*/\1/p')
+	if [ "$status" = 401 ]; then
+		registry_token "$headers" || return 0
+		headers=$(registry_head "$url") || return 0
+		status=$(printf '%s\n' "$headers" | sed -n '1s/^HTTP[^ ]* \([0-9]*\).*/\1/p')
+	fi
+	if [ "$status" != 200 ]; then
+		registry_why "HTTP ${status:-?} from $url"
+		return 0
+	fi
+	digest=$(printf '%s\n' "$headers" | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: *\(sha256:[0-9a-f]\{64\}\).*/\1/p' | head -1)
+	[ -n "$digest" ] || registry_why "no Docker-Content-Digest header from $url"
+	printf '%s\n' "$digest"
+}
+
+# registry_fetch URL OUT: GETs URL into the file OUT; sets REG_STATUS to the
+# HTTP status. A 401 from the registry gets a token, once. Redirects are
+# followed here, not by curl -L: the token goes to the registry's own origin
+# only, never to the storage host a blob redirects to (Quay sends blobs to
+# its CDN), which curl -L with an -H header does on older curl versions.
+registry_fetch() {
+	local url=$1 out=$2 hops=0 w rest origin
+	local -a auth
+	while :; do
+		rest=${url#*://}
+		origin=${url%%://*}://${rest%%[/?#]*}
+		auth=()
+		[ -z "$REG_TOKEN" ] || [ "$origin" != "$REG_ORIGIN" ] || auth=(-H "Authorization: Bearer $REG_TOKEN")
+		if ! w=$(curl -sS --proto =http,https --max-time 30 --max-filesize 4194304 -o "$out" -D "$TMP/registry-headers" \
+			-w '%{http_code} %{redirect_url}' -H "Accept: $REG_ACCEPT" ${auth[@]+"${auth[@]}"} "$url" 2>"$TMP/curl-err"); then
+			# Without the query: a storage URL's is a signature.
+			registry_why "GET ${url%%\?*}: $(one_line "$TMP/curl-err")"
+			return 1
+		fi
+		REG_STATUS=${w%% *}
+		case "$REG_STATUS" in
+		301 | 302 | 303 | 307 | 308)
+			hops=$((hops + 1))
+			if [ "$hops" -gt 5 ] || [ -z "${w#* }" ]; then
+				registry_why "GET ${url%%\?*}: HTTP $REG_STATUS, too many redirects or no Location"
+				return 1
+			fi
+			url=${w#* }
+			;;
+		401)
+			[ -z "$REG_TOKEN" ] && [ "$origin" = "$REG_ORIGIN" ] || return 0
+			registry_token "$(tr -d '\r' <"$TMP/registry-headers")" || return 1
+			;;
+		*) return 0 ;;
+		esac
+	done
+}
+
+# json_flat: the JSON on stdin as "path<TAB>value" lines, one per scalar
+# value, the path's keys and array indexes joined by "/"
+# (config/Labels/version). With jq when there is one, else awk.
+json_flat() { if command -v jq >/dev/null 2>&1; then json_flat_jq; else json_flat_awk; fi; }
+json_flat_jq() {
+	jq -r 'paths(type != "object" and type != "array") as $p | [($p | map(tostring) | join("/")), (getpath($p) | tostring)] | @tsv'
+}
+# The same without jq, for compact and indented JSON alike; strings keep
+# their escapes but \" and \/ (as jq's @tsv prints them, for the values read
+# here: digests, platforms, commits).
+json_flat_awk() {
+	awk '
+	function emit(v,   p, i) {
+		p = key[1]
+		for (i = 2; i <= d; i++) p = p "/" key[i]
+		print p "\t" v
+	}
+	{
+		s = $0
+		while (s != "") {
+			if (match(s, /^[ \t\r]+/)) { s = substr(s, RLENGTH + 1); continue }
+			c = substr(s, 1, 1)
+			if (c == "\"") {
+				if (!match(s, /^"([^"\\]|\\.)*"/)) exit 1
+				t = substr(s, 2, RLENGTH - 2)
+				s = substr(s, RLENGTH + 1)
+				gsub(/\\"/, "\"", t)
+				gsub(/\\\//, "/", t)
+				if (type[d] == "o" && want[d]) { key[d] = t; want[d] = 0 } else emit(t)
+				continue
+			}
+			if (c == "{" || c == "[") { d++; type[d] = (c == "{") ? "o" : "a"; want[d] = 1; key[d] = 0 }
+			else if (c == "}" || c == "]") d--
+			else if (c == ",") { if (type[d] == "a") key[d]++; else want[d] = 1 }
+			else if (c != ":") {
+				if (!match(s, /^[-+.0-9A-Za-z]+/)) exit 1
+				emit(substr(s, 1, RLENGTH))
+				s = substr(s, RLENGTH + 1)
+				continue
+			}
+			s = substr(s, 2)
+		}
+	}'
+}
+
+# sha256_file FILE: the hex SHA-256 of FILE.
+sha256_file() {
+	local sum
+	if command -v sha256sum >/dev/null 2>&1; then
+		sum=$(sha256sum <"$1")
+	elif command -v shasum >/dev/null 2>&1; then
+		sum=$(shasum -a 256 <"$1")
+	elif command -v openssl >/dev/null 2>&1; then
+		sum=$(openssl dgst -sha256 -r <"$1")
+	else
+		return 1
+	fi
+	printf '%s\n' "${sum%% *}"
+}
+
+# registry_config_label REF LABEL: the value of the label LABEL of the image
+# REF (REPO@DIGEST or REPO:TAG; of a manifest list, its $PLATFORM image),
+# from the image's config blob; nothing when the image has no such label.
+# Fails, saying why, when the registry does not serve the image.
+registry_config_label() {
+	local ref=$1 label=$2 repo reference url flat config os arch variant sum n
+	if [[ $ref == *@* ]]; then
+		repo=${ref%@*} reference=${ref#*@}
+	elif [[ ${ref##*/} == *:* ]]; then
+		repo=${ref%:*} reference=${ref##*:}
+	else
+		repo=$ref reference=latest
+	fi
+	registry_endpoint "$repo"
+	os=${PLATFORM%%/*} arch=${PLATFORM#*/} variant=""
+	if [[ $arch == */* ]]; then variant=${arch#*/} arch=${arch%%/*}; fi
+	for n in 1 2; do
+		url="$REG_ORIGIN/v2/$REG_PATH/manifests/$reference"
+		registry_fetch "$url" "$TMP/manifest.json" || return 1
+		if [ "$REG_STATUS" != 200 ]; then
+			registry_why "HTTP $REG_STATUS from $url"
+			return 1
+		fi
+		flat=$(json_flat <"$TMP/manifest.json" || true)
+		config=$(printf '%s\n' "$flat" | awk -F'\t' '$1 == "config/digest" {print $2; exit}')
+		[ -z "$config" ] || break
+		# A manifest list (image index): its entry for $PLATFORM, as
+		# oc image info --filter-by-os picks it.
+		reference=$(printf '%s\n' "$flat" | awk -F'\t' -v os="$os" -v arch="$arch" -v variant="$variant" '
+			$1 ~ /^manifests\/[0-9]+\// {
+				split($1, p, "/")
+				i = p[2]
+				if (!(i in seen)) { seen[i] = 1; order[++n] = i }
+				v[i, substr($1, length(p[1]) + length(i) + 3)] = $2
+			}
+			END {
+				for (j = 1; j <= n; j++) {
+					i = order[j]
+					if (v[i, "platform/os"] == os && v[i, "platform/architecture"] == arch &&
+						(variant == "" || v[i, "platform/variant"] == variant)) { print v[i, "digest"]; exit }
+				}
+			}')
+		if [ "$n" = 2 ] || ! [[ $reference =~ ^sha256:[0-9a-f]{64}$ ]]; then
+			registry_why "$url is neither an image manifest nor a manifest list with a $PLATFORM image"
+			return 1
+		fi
+	done
+	if ! [[ $config =~ ^sha256:[0-9a-f]{64}$ ]]; then
+		registry_why "$url names no valid config digest"
+		return 1
+	fi
+	url="$REG_ORIGIN/v2/$REG_PATH/blobs/$config"
+	registry_fetch "$url" "$TMP/config.json" || return 1
+	if [ "$REG_STATUS" != 200 ]; then
+		registry_why "HTTP $REG_STATUS from $url"
+		return 1
+	fi
+	# It may come from another host (the registry's blob storage): it must
+	# be the content its digest names.
+	if ! sum=$(sha256_file "$TMP/config.json"); then
+		registry_why "no sha256sum, shasum or openssl to check the config blob of $url"
+		return 1
+	fi
+	if [ "sha256:$sum" != "$config" ]; then
+		registry_why "the config blob from $url does not match its digest"
+		return 1
+	fi
+	json_flat <"$TMP/config.json" | awk -F'\t' -v k="config/Labels/$label" '$1 == k {print $2; exit}'
+}
+
+# image_revision REF: sets REVISION to the org.opencontainers.image.revision
+# label (a full commit) of the image REF, empty when it has none: from the
+# registry's v2 API, else oc with the local pull credentials. When neither
+# can read the image, REVISION_ERROR says why, one line for each.
 image_revision() {
-	oc image info "$1" --filter-by-os="$PLATFORM" -o json 2>/dev/null |
-		sed -n 's/^ *"org.opencontainers.image.revision": *"\([0-9a-f]\{40\}\)".*/\1/p' | head -1 || true
+	local label info why
+	REVISION="" REVISION_ERROR=""
+	if ! label=$(registry_config_label "$1" org.opencontainers.image.revision); then
+		why="the registry API: $(why_text)"
+		if ! info=$(oc image info "$1" --filter-by-os="$PLATFORM" -o json 2>"$TMP/oc-err"); then
+			REVISION_ERROR="$why"$'\n'"oc image info: $(one_line "$TMP/oc-err")"
+			return 0
+		fi
+		label=$(printf '%s\n' "$info" | json_flat |
+			awk -F'\t' '$1 ~ /(^|\/)config\/Labels\/org\.opencontainers\.image\.revision$/ {print $2; exit}')
+	fi
+	if [[ $label =~ ^[0-9a-f]{40}$ ]]; then REVISION=$label; fi
+}
+
+# revision_help TRUST: why the revision label could not be read, and what to
+# do; TRUST says which revision the image must have.
+revision_help() {
+	printf '%s\n' "$REVISION_ERROR" | sed 's/^/  Tried /' >&2
+	err "  Check that this machine can reach the registry and read the image, for example:"
+	err "    oc image info $REF --filter-by-os=$PLATFORM | grep revision="
+	err "  Only if you trust the image ($1), set ALLOW_TEMPLATE_MISMATCH=1 to apply this template anyway."
 }
 
 # resolve_image: sets REF to IMAGE@sha256:... for IMAGE:TAG and checks that
@@ -231,12 +473,17 @@ image_revision() {
 # registry's v2 API, else oc with the local pull credentials. Without a
 # digest it stops, unless ALLOW_MUTABLE_TAG=1 (REF is then the tag).
 pin_image() {
-	local tag=$1 digest info
+	local tag=$1 digest info why=""
 	digest=$(registry_digest "$IMAGE" "$tag")
 	if [ -z "$digest" ]; then
-		info=$(oc image info "$IMAGE:$tag" --filter-by-os="$PLATFORM" -o json 2>/dev/null || true)
-		digest=$(printf '%s\n' "$info" | sed -n 's/^  "listDigest": *"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' | head -1)
-		[ -n "$digest" ] || digest=$(printf '%s\n' "$info" | sed -n 's/^  "digest": *"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' | head -1)
+		why="the registry API: $(why_text)"
+		if info=$(oc image info "$IMAGE:$tag" --filter-by-os="$PLATFORM" -o json 2>"$TMP/oc-err"); then
+			digest=$(printf '%s\n' "$info" | json_flat | awk -F'\t' '$1 == "listDigest" {l = $2} $1 == "digest" {d = $2} END {print (l != "" ? l : d)}')
+			[[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || digest=""
+			[ -n "$digest" ] || why+=$'\n'"oc image info: no digest in its answer"
+		else
+			why+=$'\n'"oc image info: $(one_line "$TMP/oc-err")"
+		fi
 	fi
 	if [ -n "$digest" ]; then
 		REF="$IMAGE@$digest"
@@ -246,6 +493,7 @@ pin_image() {
 		err "WARNING: ALLOW_MUTABLE_TAG=1: cannot resolve $IMAGE:$tag to a digest; deploying the tag, which may move before the pod pulls it."
 	else
 		err "ERROR: cannot resolve $IMAGE:$tag to a digest (no such tag, or the registry is unreachable). Nothing was changed."
+		printf '%s\n' "$why" | sed 's/^/  Tried /' >&2
 		err "  Image tags are releases (vX.Y.Z, vN), main, latest or an 8-character commit. Set ALLOW_MUTABLE_TAG=1 to deploy the tag itself."
 		exit 1
 	fi
@@ -276,8 +524,14 @@ resolve_image() {
 	# 2. The commit the image was built from: its revision label (set by the
 	#    Containerfile).
 	local label
-	label=$(image_revision "$REF")
+	image_revision "$REF"
+	label=$REVISION
 	if [ "$MODE" = release ]; then
+		if [ -n "$REVISION_ERROR" ]; then
+			err "ERROR: cannot read the revision label of $REF, so cannot check that it was built from $EMBEDDED_COMMIT, the commit of $EMBEDDED_VERSION whose template this installer holds. Nothing was changed."
+			revision_help "its revision must be $EMBEDDED_COMMIT"
+			exit 1
+		fi
 		if [ "$label" != "$EMBEDDED_COMMIT" ]; then
 			err "ERROR: $REF reports revision ${label:-<none>}, not $EMBEDDED_COMMIT, the commit of $EMBEDDED_VERSION whose template this installer holds."
 			err "  Set ALLOW_TEMPLATE_MISMATCH=1 to apply this template anyway."
@@ -303,10 +557,17 @@ resolve_image() {
 		exit 1
 	fi
 	local rev=${label:-$tagrev}
-	if [ -z "$rev" ]; then
+	if [ -z "$rev" ] && [ -n "$REVISION_ERROR" ]; then
+		err "ERROR: cannot read the revision label of $REF, so cannot tell which commit it was built from. Nothing was changed."
+		revision_help "its revision must be a commit whose deploy/template.yaml is this checkout's"
+		exit 1
+	elif [ -z "$rev" ]; then
 		err "ERROR: cannot tell which commit $REF was built from (no revision label of this repository; run 'git fetch origin' if it is newer than this clone)."
 		err "  Set ALLOW_TEMPLATE_MISMATCH=1 to apply this checkout's template anyway."
 		exit 1
+	elif [ -n "$REVISION_ERROR" ]; then
+		err "WARNING: cannot read the revision label of $REF; trusting that tag $TAG names commit $rev."
+		printf '%s\n' "$REVISION_ERROR" | sed 's/^/  Tried /' >&2
 	fi
 
 	# 3. The template: the working tree (uncommitted edits included) against
@@ -519,21 +780,36 @@ rollback() {
 	detect_oauth_proxy_image
 	installed || die "No deployment $APP_NAME in $NAMESPACE; run 'make deploy' first."
 	[ -n "$DRY" ] || ensure_proxy_secret
-	local rev short8 short7 img_tag="" t label
+	local rev short8 short7 img_tag="" t label tried=""
 	rev=$(git rev-parse --verify --quiet "$TAG^{commit}") || die "Commit $TAG is not in this clone; run 'git fetch origin --tags' and retry."
 	git cat-file -e "$rev:deploy/template.yaml" 2>/dev/null || die "Commit $rev has no deploy/template.yaml."
 	short8=${rev:0:8}
 	short7=${rev:0:7}
 	for t in "$TAG" "$short8" "$short7"; do
-		if oc image info "$IMAGE:$t" --filter-by-os="$PLATFORM" >/dev/null 2>&1; then
+		if [ -n "$(registry_digest "$IMAGE" "$t")" ]; then
 			img_tag=$t
 			break
 		fi
+		tried+="Tried $t: the registry API: $(why_text)"$'\n'
+		if oc image info "$IMAGE:$t" --filter-by-os="$PLATFORM" >/dev/null 2>"$TMP/oc-err"; then
+			img_tag=$t
+			break
+		fi
+		tried+="Tried $t: oc image info: $(one_line "$TMP/oc-err")"$'\n'
 	done
-	[ -n "$img_tag" ] || die "No image $IMAGE for commit $rev (tried the tags $TAG, $short8 and $short7)."
+	if [ -z "$img_tag" ]; then
+		err "No image $IMAGE for commit $rev (tried the tags $TAG, $short8 and $short7)."
+		printf '%s' "$tried" | sed 's/^/  /' >&2
+		exit 1
+	fi
 	# By digest, like deploy and upgrade: the checked image is the one applied.
 	pin_image "$img_tag"
-	label=$(image_revision "$REF")
+	image_revision "$REF"
+	label=$REVISION
+	if [ -n "$REVISION_ERROR" ]; then
+		err "WARNING: cannot read the revision label of $REF; trusting that tag $img_tag names commit $rev."
+		printf '%s\n' "$REVISION_ERROR" | sed 's/^/  Tried /' >&2
+	fi
 	if [ -n "$label" ] && [ "$label" != "$rev" ] && git cat-file -e "$label^{commit}" 2>/dev/null; then
 		if [ "${ALLOW_TEMPLATE_MISMATCH:-}" = 1 ]; then
 			err "WARNING: ALLOW_TEMPLATE_MISMATCH=1: $IMAGE:$img_tag reports revision $label, not $rev; applying the template of $rev anyway."

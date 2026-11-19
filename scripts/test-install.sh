@@ -83,6 +83,8 @@ case "$1 $2" in
 "auth can-i") echo "${FAKE_ADMIN:-yes}"; [ "${FAKE_ADMIN:-yes}" = yes ] ;;
 "version -o") echo "{\"openshiftVersion\": \"${FAKE_OCP_VERSION:-4.19.3}\"}" ;;
 "image info")
+	# FAKE_OC_ERROR: oc cannot read the image (a broken credential helper).
+	[ -z "${FAKE_OC_ERROR:-}" ] || { echo "$FAKE_OC_ERROR" >&2; exit 1; }
 	[ -n "${FAKE_REVISION:-}" ] || exit 1
 	# FAKE_NO_OC_DIGEST: oc reads the labels but no digest.
 	d="$(printf 'b%.0s' $(seq 64))"
@@ -127,18 +129,104 @@ esac
 FAKE
 cat >"$BIN/curl" <<'FAKE'
 #!/usr/bin/env bash
-# Fake curl: answers a manifest HEAD with FAKE_DIGEST, or 404. With
-# FAKE_REALM, an anonymous HEAD gets a Bearer challenge for that realm.
+# Fake curl: a registry v2 API; every call is logged.
+#   HEAD manifests/TAG: FAKE_DIGEST, or 404.
+#   GET manifests/REF: an image manifest naming the config blob (a tag
+#     only while FAKE_DIGEST is set). FAKE_INDEX=1: for a tag or FAKE_DIGEST,
+#     a manifest list whose linux/arm64 (sha256:ccc...) and linux/amd64
+#     (sha256:ddd...) entries are both that image.
+#   GET blobs/DIGEST: the config, compact JSON, its revision label
+#     FAKE_REVISION (none when empty); FAKE_BLOB_CORRUPT=1 serves other bytes.
+#     FAKE_BLOB_REDIRECT: a 307 to that URL instead (another host), which
+#     serves the config.
+#   FAKE_REALM: requests without a token get a Bearer challenge for that
+#     realm; -G (the token service) answers FAKE_TOKEN (anon).
+#   FAKE_GET_STATUS: the status of every GET of the registry.
+#   FAKE_REGISTRY_DOWN=1: every request fails as curl does.
 printf 'curl %s\n' "$*" >>"$FAKE_LOG"
-if [[ " $* " == *" -G "* ]]; then
-	echo '{"token": "anon"}'
-elif [ -n "${FAKE_REALM:-}" ] && [[ " $* " != *"Authorization: Bearer"* ]]; then
-	printf 'HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer realm="%s",service="quay.io"\r\n\r\n' "$FAKE_REALM"
-elif [ -n "${FAKE_DIGEST:-}" ]; then
-	printf 'HTTP/1.1 200 OK\r\nDocker-Content-Digest: %s\r\n\r\n' "$FAKE_DIGEST"
-else
-	printf 'HTTP/1.1 404 Not Found\r\n\r\n'
+out=/dev/stdout hdr="" fmt="" head="" token="" auth="" url=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-o) out=$2; shift ;;
+	-D) hdr=$2; shift ;;
+	-w) fmt=$2; shift ;;
+	-H) [[ $2 != Authorization:* ]] || auth=$2; shift ;;
+	--max-time | --max-filesize | --data-urlencode | --proto) shift ;;
+	-I) head=1 ;;
+	-G) token=1 ;;
+	-*) ;;
+	*) url=$1 ;;
+	esac
+	shift
+done
+if [ -n "${FAKE_REGISTRY_DOWN:-}" ]; then
+	host=${url#*://}
+	echo "curl: (7) Failed to connect to ${host%%/*} port 443 after 2 ms: Couldn't connect to server" >&2
+	exit 7
 fi
+if [ -n "$token" ]; then
+	echo "{\"token\": \"${FAKE_TOKEN:-anon}\"}"
+	exit 0
+fi
+# reply STATUS HEADERS BODY [LOCATION]: as curl prints it with -I, else
+# with -o, -D and -w.
+reply() {
+	if [ -n "$head" ]; then printf 'HTTP/1.1 %s\r\n%b\r\n' "$1" "$2"; exit 0; fi
+	[ -z "$hdr" ] || printf 'HTTP/1.1 %s\r\n%b\r\n' "$1" "$2" >"$hdr"
+	printf '%s' "$3" >"$out"
+	local f=${fmt//'%{http_code}'/${1%% *}}
+	printf '%s' "${f//'%{redirect_url}'/${4:-}}"
+	exit 0
+}
+config() {
+	local label=""
+	[ -z "${FAKE_REVISION:-}" ] || label="\"org.opencontainers.image.revision\":\"$FAKE_REVISION\","
+	# Other revisions where a careless parser would find one: the legacy
+	# container_config and the history.
+	printf '{"architecture":"amd64","config":{"Env":["PATH=/usr/bin"],"Labels":{%s"org.opencontainers.image.version":"v9.8.7"}},"container_config":{"Labels":{"org.opencontainers.image.revision":"2222222222222222222222222222222222222222"}},"created":"2026-11-19T00:00:00Z","history":[{"created_by":"LABEL \\"org.opencontainers.image.revision\\":\\"3333333333333333333333333333333333333333\\""}],"os":"linux","rootfs":{"type":"layers","diff_ids":[]}}' "$label"
+}
+case "$url" in https://cdn.example.net/*)
+	body=$(config)
+	[ -z "${FAKE_BLOB_CORRUPT:-}" ] || body="$body "
+	reply "200 OK" "" "$body"
+esac
+[ -z "${FAKE_REALM:-}" ] || [ -n "$auth" ] ||
+	reply "401 Unauthorized" "WWW-Authenticate: Bearer realm=\"$FAKE_REALM\",service=\"quay.io\"\r\n" '{"errors":[{"code":"UNAUTHORIZED"}]}'
+if [ -n "$head" ]; then
+	[ -z "${FAKE_DIGEST:-}" ] || reply "200 OK" "Docker-Content-Digest: $FAKE_DIGEST\r\n" ""
+	reply "404 Not Found" "" ""
+fi
+[ -z "${FAKE_GET_STATUS:-}" ] || reply "$FAKE_GET_STATUS" "" '{"errors":[{"code":"DENIED"}]}'
+ref=${url##*/}
+case "$url" in
+*/manifests/*)
+	[[ $ref == sha256:* ]] || [ -n "${FAKE_DIGEST:-}" ] || reply "404 Not Found" "" '{"errors":[{"code":"MANIFEST_UNKNOWN"}]}'
+	if [ -n "${FAKE_INDEX:-}" ] && [[ $ref != sha256:[cd]* ]]; then
+		# Built in steps: bash 3.2 (macOS) mangles escaped quotes in a
+		# command substitution nested in a quoted one.
+		c=$(printf 'c%.0s' $(seq 64))
+		d=$(printf 'd%.0s' $(seq 64))
+		m='"mediaType": "application/vnd.oci.image.manifest.v1+json"'
+		index=$(printf '%s\n' '{' '  "schemaVersion": 2,' \
+			'  "mediaType": "application/vnd.oci.image.index.v1+json",' '  "manifests": [' \
+			"    {$m, \"digest\": \"sha256:$c\", \"size\": 1," \
+			'      "platform": {"architecture": "arm64", "os": "linux", "variant": "v8"}},' \
+			'    {"platform": {"os": "linux", "architecture": "amd64"},' \
+			"      $m, \"digest\": \"sha256:$d\", \"size\": 1}" \
+			'  ]' '}')
+		reply "200 OK" "" "$index"
+	fi
+	if command -v sha256sum >/dev/null 2>&1; then sum=$(config | sha256sum); else sum=$(config | shasum -a 256); fi
+	reply "200 OK" "" "{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"config\":{\"mediaType\":\"application/vnd.oci.image.config.v1+json\",\"digest\":\"sha256:${sum%% *}\",\"size\":1},\"layers\":[{\"mediaType\":\"application/vnd.oci.image.layer.v1.tar+gzip\",\"digest\":\"sha256:$(printf 'e%.0s' $(seq 64))\",\"size\":1}]}"
+	;;
+*/blobs/*)
+	[ -z "${FAKE_BLOB_REDIRECT:-}" ] || reply "307 Temporary Redirect" "Location: $FAKE_BLOB_REDIRECT\r\n" "" "$FAKE_BLOB_REDIRECT"
+	body=$(config)
+	[ -z "${FAKE_BLOB_CORRUPT:-}" ] || body="$body "
+	reply "200 OK" "" "$body"
+	;;
+esac
+reply "404 Not Found" "" ""
 FAKE
 # template-objects TEMPLATE [PARAM_FILE]: "kind<TAB>namespace<TAB>instance
 # label<TAB>name" of each object of an OpenShift Template, its ${PARAM}s replaced by the param
@@ -198,6 +286,7 @@ FAKE_APPLY_OUT='Error from server (Forbidden): clusterroles is forbidden\n' FAKE
 	expect_fail "a real dry-run error fails" "forbidden" run bash "$ASSET" --dry-run --namespace scratch-ns
 FAKE_REVISION=1111111111111111111111111111111111111111 \
 	expect_fail "asset: image from another commit" "not $COMMIT, the commit of v9.8.7" run bash "$ASSET" --dry-run
+expect_eq "asset: the other commit read through the registry API, not oc" "" "$(grep '^oc image info' "$LOG" || true)"
 FAKE_REVISION=1111111111111111111111111111111111111111 ALLOW_TEMPLATE_MISMATCH=1 \
 	expect_ok "asset: ALLOW_TEMPLATE_MISMATCH" run bash "$ASSET" --dry-run
 FAKE_ADMIN=no expect_fail "not cluster-admin" "is not cluster-admin" run bash "$ASSET" --dry-run
@@ -260,6 +349,131 @@ FAKE_REALM=https://evil.example.com/token expect_fail "token realm elsewhere: wa
 	run sh -c "bash '$ASSET' resolve-image 2>&1; exit 1"
 FAKE_REALM=http://quay.io/v2/auth expect_fail "plain-http token realm: warning" "ignoring the token service" \
 	run sh -c "bash '$ASSET' resolve-image 2>&1; exit 1"
+
+# --- The revision label, from the registry's v2 API, else oc -------------------
+# 3.0.0 and 3.0.1 read it with oc only, and hid oc's error: where oc could
+# not read the image (a broken credential helper), they refused a correct
+# image with "reports revision <none>".
+oc_info() { grep '^oc image info' "$LOG" || true; }
+CCC="sha256:$(printf 'c%.0s' $(seq 64))"
+DDD="sha256:$(printf 'd%.0s' $(seq 64))"
+OK_LINE="OK: quay.io/example/app@$DIGEST was built from $COMMIT, the commit of v9.8.7."
+# The config blob as Quay serves it: compact JSON, one line, with other
+# revisions in container_config and the history. Nothing asks oc.
+out=$(FAKE_REALM=https://quay.io/v2/auth run bash "$ASSET" resolve-image 2>&1) || fail "label from the registry API: $out"
+grep -qxF "$OK_LINE" <<<"$out" && pass || fail "label from the registry API: $out"
+grep -q "^curl .*Authorization: Bearer anon.* https://quay.io/v2/example/app/blobs/sha256:" "$LOG" && pass || fail "label: the config blob was not fetched with the token"
+expect_eq "label from the registry API: oc not asked" "" "$(oc_info)"
+# The same without jq, through the awk parser: PATH with each directory
+# that has a jq replaced by links to its other commands (one ln each).
+NOJQ="" n=0
+IFS=: read -ra path_dirs <<<"$PATH"
+for d in "${path_dirs[@]}"; do
+	if [ -e "$d/jq" ]; then
+		n=$((n + 1))
+		mkdir "$WORK/nojq$n"
+		links=()
+		for f in "$d"/*; do [ "${f##*/}" = jq ] || links+=("$f"); done
+		ln -s "${links[@]}" "$WORK/nojq$n/"
+		d="$WORK/nojq$n"
+	fi
+	NOJQ+="${NOJQ:+:}$d"
+done
+PATH="$NOJQ" command -v jq >/dev/null && fail "the PATH without jq has a jq" || pass
+out=$(PATH="$NOJQ" run bash "$ASSET" resolve-image 2>&1) || fail "label without jq: $out"
+grep -qxF "$OK_LINE" <<<"$out" && pass || fail "label without jq: $out"
+expect_eq "label without jq: oc not asked" "" "$(oc_info)"
+# A manifest list: its $PLATFORM entry, as oc's --filter-by-os.
+FAKE_INDEX=1 expect_ok "label: manifest list" run bash "$ASSET" resolve-image
+grep -q "manifests/$DDD" "$LOG" && ! grep -q "manifests/$CCC" "$LOG" && pass || fail "manifest list: not the linux/amd64 entry: $(grep manifests "$LOG")"
+FAKE_INDEX=1 PLATFORM=linux/arm64 expect_ok "label: manifest list, PLATFORM=linux/arm64" run bash "$ASSET" resolve-image
+grep -q "manifests/$CCC" "$LOG" && ! grep -q "manifests/$DDD" "$LOG" && pass || fail "manifest list: not the linux/arm64 entry"
+FAKE_INDEX=1 PLATFORM=linux/s390x expect_ok "manifest list without PLATFORM: oc decides" run bash "$ASSET" resolve-image
+grep -q "^oc image info quay.io/example/app@$DIGEST --filter-by-os=linux/s390x" "$LOG" && pass || fail "manifest list without PLATFORM: oc not asked"
+# A blob redirected to storage on another host (Quay's CDN): the token
+# stays with the registry.
+FAKE_REALM=https://quay.io/v2/auth FAKE_BLOB_REDIRECT='https://cdn.example.net/sha256/aa?X-Amz-Signature=sig' \
+	expect_ok "label: blob redirected to another host" run bash "$ASSET" resolve-image
+grep -q '^curl .* https://cdn.example.net/sha256/aa?X-Amz-Signature=sig$' "$LOG" && pass || fail "redirect: the storage host was not asked"
+expect_eq "redirect: no Authorization to the storage host" "" "$(grep 'cdn.example.net' "$LOG" | grep -i 'authorization' || true)"
+grep -q '^curl .*Authorization: Bearer anon.* https://quay.io/v2/example/app/blobs/' "$LOG" && pass || fail "redirect: the registry's own blob request had no token"
+expect_eq "redirect: oc not asked" "" "$(oc_info)"
+# A blob that does not match its digest is not believed.
+out=$(FAKE_BLOB_REDIRECT='https://cdn.example.net/sha256/aa?X-Amz-Signature=sig' FAKE_BLOB_CORRUPT=1 FAKE_OC_ERROR="error: no route" \
+	run bash "$ASSET" resolve-image 2>&1) && fail "corrupt blob: accepted: $out" || pass
+grep -qF "Tried the registry API: the config blob from https://quay.io/v2/example/app/blobs/sha256:" <<<"$out" && grep -qF "does not match its digest" <<<"$out" &&
+	pass || fail "corrupt blob: no reason: $out"
+grep -q "X-Amz-Signature" <<<"$out" && fail "corrupt blob: the storage URL's signature printed: $out" || pass
+FAKE_BLOB_CORRUPT=1 expect_ok "corrupt blob: oc decides" run bash "$ASSET" resolve-image
+grep -q '^oc image info' "$LOG" && pass || fail "corrupt blob: oc not asked"
+# Neither the registry API (it refuses the manifest) nor oc (a broken
+# credential helper) can read the image: the installer says both reasons,
+# and never the token.
+OC_ERR='error: unable to read image quay.io/example/app@sha256:x: error getting credentials - err: exit status 1, out: ``'
+out=$(FAKE_REALM=https://quay.io/v2/auth FAKE_TOKEN=s3cr3t-pull-token FAKE_GET_STATUS="403 Forbidden" FAKE_OC_ERROR="$OC_ERR" \
+	run bash "$ASSET" resolve-image 2>&1) && fail "unreadable label: accepted: $out" || pass
+for want in "ERROR: cannot read the revision label of quay.io/example/app@$DIGEST, so cannot check that it was built from $COMMIT" \
+	"Tried the registry API: HTTP 403 from https://quay.io/v2/example/app/manifests/$DIGEST" \
+	"Tried oc image info: $OC_ERR" \
+	"oc image info quay.io/example/app@$DIGEST --filter-by-os=linux/amd64 | grep revision=" \
+	"Only if you trust the image (its revision must be $COMMIT), set ALLOW_TEMPLATE_MISMATCH=1"; do
+	grep -qF -- "$want" <<<"$out" && pass || fail "unreadable label: no '$want' in: $out"
+done
+grep -qiE 's3cr3t-pull-token|authorization|bearer' <<<"$out" && fail "unreadable label: the token or its header printed: $out" || pass
+grep -q "s3cr3t-pull-token" "$LOG" && pass || fail "unreadable label: the token was not used (the test proves nothing)"
+grep -qF "reports revision <none>" <<<"$out" && fail "unreadable label: still 'reports revision <none>'" || pass
+# The registry unreachable: oc reads the digest and the label.
+expect_eq "registry unreachable: oc's digest" "quay.io/example/app@sha256:$(printf 'b%.0s' $(seq 64))" \
+	"$(FAKE_REGISTRY_DOWN=1 run bash "$ASSET" resolve-image 2>/dev/null)"
+grep -q "^oc image info quay.io/example/app@sha256:b" "$LOG" && pass || fail "registry unreachable: oc did not read the label"
+# ... and oc fails too: no digest, both reasons.
+out=$(FAKE_REGISTRY_DOWN=1 FAKE_OC_ERROR="$OC_ERR" run bash "$ASSET" resolve-image 2>&1) && fail "no digest: accepted: $out" || pass
+for want in "ERROR: cannot resolve quay.io/example/app:v9.8.7 to a digest" \
+	"Tried the registry API: HEAD https://quay.io/v2/example/app/manifests/v9.8.7: curl: (7) Failed to connect to quay.io port 443" \
+	"Tried oc image info: $OC_ERR"; do
+	grep -qF -- "$want" <<<"$out" && pass || fail "no digest: no '$want' in: $out"
+done
+# A clone: a moving tag needs the label; a release tag names its commit,
+# with a warning.
+out=$(FAKE_GET_STATUS="403 Forbidden" FAKE_OC_ERROR="$OC_ERR" TAG=main run bash "$CLONE" resolve-image 2>&1) && fail "clone, unreadable label, TAG=main: accepted" || pass
+grep -qF "cannot read the revision label of quay.io/juntao_wang/rhoai-nightly-updater@$DIGEST, so cannot tell which commit" <<<"$out" &&
+	grep -qF "Tried oc image info: $OC_ERR" <<<"$out" && pass || fail "clone, unreadable label, TAG=main: $out"
+out=$(FAKE_GET_STATUS="403 Forbidden" FAKE_OC_ERROR="$OC_ERR" TAG=v9.8.7 run bash "$CLONE" resolve-image 2>&1) || fail "clone, unreadable label, release tag: $out"
+grep -qF "WARNING: cannot read the revision label of quay.io/juntao_wang/rhoai-nightly-updater@$DIGEST; trusting that tag v9.8.7 names commit $COMMIT." <<<"$out" &&
+	pass || fail "clone, unreadable label, release tag: no warning: $out"
+# Rollback: the tag probe and the label say why they fail.
+out=$(FAKE_INSTALLED=1 FAKE_NS=1 TAG=v9.8.7 FAKE_DIGEST="" FAKE_OC_ERROR="$OC_ERR" run bash "$CLONE" rollback --dry-run 2>&1) && fail "rollback, no image: accepted" || pass
+for want in "No image quay.io/juntao_wang/rhoai-nightly-updater for commit $COMMIT" \
+	"Tried v9.8.7: the registry API: HTTP 404 from https://quay.io/v2/juntao_wang/rhoai-nightly-updater/manifests/v9.8.7" \
+	"Tried v9.8.7: oc image info: $OC_ERR"; do
+	grep -qF -- "$want" <<<"$out" && pass || fail "rollback, no image: no '$want' in: $out"
+done
+out=$(FAKE_INSTALLED=1 FAKE_NS=1 TAG=v9.8.7 FAKE_GET_STATUS="403 Forbidden" FAKE_OC_ERROR="$OC_ERR" run bash "$CLONE" rollback --dry-run 2>&1) ||
+	fail "rollback, unreadable label: $out"
+grep -qF "WARNING: cannot read the revision label of quay.io/juntao_wang/rhoai-nightly-updater@$DIGEST; trusting that tag v9.8.7 names commit $COMMIT." <<<"$out" &&
+	pass || fail "rollback, unreadable label: no warning: $out"
+
+# json_flat: jq and the awk fallback read the same paths and values, from
+# compact and indented JSON.
+sed -n '/^json_flat_jq() {/,/^}/p; /^json_flat_awk() {/,/^}/p' "$SRC/scripts/install.sh" >"$WORK/json-flat.sh"
+FAKE_LOG=/dev/null FAKE_REVISION=$COMMIT "$BIN/curl" -o "$WORK/config.json" https://cdn.example.net/x
+FAKE_LOG=/dev/null FAKE_INDEX=1 FAKE_DIGEST=$DIGEST "$BIN/curl" -o "$WORK/index.json" https://quay.io/v2/example/app/manifests/v1
+FAKE_LOG=/dev/null FAKE_REVISION=$COMMIT "$BIN/oc" image info x >"$WORK/oc.json"
+for f in config index oc; do
+	awk_out=$(bash -c 'source "$1"; json_flat_awk <"$2"' _ "$WORK/json-flat.sh" "$WORK/$f.json")
+	case $f in
+	config) want=$(printf '%s\t%s\n' "config/Labels/org.opencontainers.image.revision" "$COMMIT" "container_config/Labels/org.opencontainers.image.revision" 2222222222222222222222222222222222222222 \
+		"history/0/created_by" 'LABEL "org.opencontainers.image.revision":"3333333333333333333333333333333333333333"' "rootfs/type" layers) ;;
+	index) want=$(printf '%s\t%s\n' "manifests/0/digest" "$CCC" "manifests/0/platform/variant" v8 "manifests/1/platform/architecture" amd64 "manifests/1/digest" "$DDD") ;;
+	oc) want=$(printf '%s\t%s\n' "config/config/Labels/org.opencontainers.image.revision" "$COMMIT") ;;
+	esac
+	while IFS= read -r line; do
+		grep -qxF -- "$line" <<<"$awk_out" && pass || fail "json_flat_awk $f: no '$line' in: $awk_out"
+	done <<<"$want"
+	if command -v jq >/dev/null 2>&1; then
+		expect_eq "json_flat: jq and awk agree on $f" "$(bash -c 'source "$1"; json_flat_jq <"$2"' _ "$WORK/json-flat.sh" "$WORK/$f.json")" "$awk_out"
+	fi
+done
 
 # --- The mutating paths (no dry run), against the fake oc ----------------------
 calls() { grep -E "^oc ($1)" "$LOG" | sed 's/ --from-env-file=.*//' || true; }
