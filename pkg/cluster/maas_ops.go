@@ -100,6 +100,9 @@ func RunMaaS(c *Client, req types.MaaSRequest, onStep func(UpdateStepEvent)) (*t
 	if problem := ValidateMaaSRequest(req); problem != "" {
 		return m.fail("check", problem, "validation", "invalid request")
 	}
+	// Projects of publications that are gone leave the MaaS gateway first
+	// (maas_prune.go).
+	m.logs = append(m.logs, releaseGoneMaaSProjects(c)...)
 	switch req.Action {
 	case "setup":
 		return m.setup()

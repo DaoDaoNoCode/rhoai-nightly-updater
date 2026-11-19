@@ -721,6 +721,9 @@ func RunModels(c *Client, req types.ModelsRequest, onStep func(UpdateStepEvent))
 	if problem := ValidateModelsRequest(req); problem != "" {
 		return m.fail("check", problem, "validation", "invalid request")
 	}
+	// Projects of MaaS publications that are gone leave the MaaS gateway
+	// (maas_prune.go).
+	m.logs = append(m.logs, releaseGoneMaaSProjects(c)...)
 	switch req.Action {
 	case "teardown":
 		return m.teardown(req)

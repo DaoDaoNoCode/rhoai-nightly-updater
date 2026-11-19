@@ -1292,6 +1292,12 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 				st.URL = "https://" + h
 			}
 		}
+		if gone := goneMaaSPublications(c, rec); len(gone) > 0 {
+			gwPart.Warning = "It still admits routes from published projects that are gone (" + goneMaaSText(gone) + "). Anyone who creates a project of such a name could attach routes to it. The next MaaS change, Models change or Clean up removes them."
+			if !gw.owned {
+				gwPart.Warning = "This tool's record names published projects that are gone (" + goneMaaSText(gone) + "). If this gateway, which this tool did not create, lists them, its owner removes them from its allowedRoutes: anyone who creates a project of such a name could attach routes to it."
+			}
+		}
 	}
 	part(gwPart)
 
