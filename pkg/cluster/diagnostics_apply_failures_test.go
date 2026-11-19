@@ -146,7 +146,12 @@ func TestCheckApplyFailures(t *testing.T) {
 	checkApplyFailureProblems(t, byID, *crdLookups)
 }
 
-// applyFailuresWorld serves four apply failures (an immutable selector, two
+// msgImmutableLabels is msgImmutableSelector for another immutable field:
+// a changed selector alone is the "Left over from an earlier release"
+// check's (diagnostics_leftovers.go), any other immutable field stays here.
+var msgImmutableLabels = strings.Replace(msgImmutableSelector, "spec.selector: Invalid value", "spec.template.metadata.labels: Invalid value", 1)
+
+// applyFailuresWorld serves four apply failures (an immutable field, two
 // controller owners, a CRD schema mismatch, a module the tool does not
 // know) and records the CRD lookups.
 func applyFailuresWorld(t *testing.T) (*Client, *[]string) {
@@ -157,16 +162,16 @@ func applyFailuresWorld(t *testing.T) (*Client, *[]string) {
 		`{"resources":[{"name":"rays","kind":"Ray"},{"name":"rays/status","kind":"Ray"},{"name":"trustyais","kind":"TrustyAI"},{"name":"aihubs","kind":"AIHub"},{"name":"newmodules","kind":"NewModule"}]}`)
 	// The DSC aggregates the module messages: each object is reported once.
 	f.obj("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", map[string]interface{}{
-		"items": []interface{}{applyFailureCR("default-dsc", "False", msgImmutableSelector, msgSchemaMismatch)},
+		"items": []interface{}{applyFailureCR("default-dsc", "False", msgImmutableLabels, msgSchemaMismatch)},
 	})
 	f.obj("GET", "/apis/config.opendatahub.io/v1alpha1/platforms", map[string]interface{}{
 		"items": []interface{}{applyFailureCR("default", "True", msgTwoControllers)},
 	})
-	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/rays", map[string]interface{}{"items": []interface{}{applyFailureCR("default-ray", "False", msgImmutableSelector)}})
+	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/rays", map[string]interface{}{"items": []interface{}{applyFailureCR("default-ray", "False", msgImmutableLabels)}})
 	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/trustyais", map[string]interface{}{"items": []interface{}{applyFailureCR("default-trustyai", "True", msgSchemaMismatch)}})
 	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/aihubs", map[string]interface{}{"items": []interface{}{applyFailureCR("default-aihub", "True")}})
 	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/newmodules", map[string]interface{}{"items": []interface{}{
-		applyFailureCR("default-newmodule", "True", strings.ReplaceAll(msgImmutableSelector, "kuberay-operator", "new-operator"))}})
+		applyFailureCR("default-newmodule", "True", strings.ReplaceAll(msgImmutableLabels, "kuberay-operator", "new-operator"))}})
 	crdLookups := new([]string)
 	f.handle("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", func(r *http.Request, _ []byte) (int, string) {
 		*crdLookups = append(*crdLookups, r.URL.Query().Get("fieldSelector"))
@@ -193,7 +198,7 @@ func checkApplyFailureProblems(t *testing.T, byID map[string]Problem, crdLookups
 	if imm.Severity != "critical" || !strings.Contains(imm.Evidence[0], "Reported by Ray default-ray, DataScienceCluster default-dsc") ||
 		!strings.Contains(imm.TechnicalCmd, "oc delete deployment.apps kuberay-operator -n redhat-ods-applications") ||
 		!strings.Contains(imm.TechnicalCmd, "oc rollout restart deployment/"+moduleOperators["ray"].name+" -n "+moduleOperators["ray"].namespace) ||
-		!strings.Contains(imm.Title, "spec.selector") || !strings.Contains(imm.Fix, "pods stop until the operator recreates it") {
+		!strings.Contains(imm.Title, "spec.template.metadata.labels") || !strings.Contains(imm.Fix, "pods stop until the operator recreates it") {
 		t.Errorf("immutable: %+v", imm)
 	}
 

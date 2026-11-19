@@ -330,7 +330,7 @@ func (lf *leftoverField) decide(obj map[string]interface{}, root map[string]inte
 		return
 	case lf.Schema.HasDefault && valueMatches(lf.Schema.Default, lf.Schema):
 		lf.Change, lf.After = "set-default", lf.Schema.Default
-		lf.Why = fmt.Sprintf("the installed CRD's default, which the operator gets when the field is not set")
+		lf.Why = "the installed CRD's default, which the operator gets when the field is not set"
 		if !zeroLike(lf.Value) {
 			lf.Review = true
 			lf.Why += fmt.Sprintf("; the stored %s may not mean the same as %s, so check what the field means", fieldJSON(lf.Value), fieldText(lf.Schema.Default))
@@ -961,7 +961,7 @@ func analyzeRecreate(c *Client, rf *reportedApplyFailure, appNS string, read wor
 		}
 		ownerText = fmt.Sprintf("controller owner %s %s (%s)", o.Kind, o.Name, o.APIVersion)
 		group, _, _ := strings.Cut(o.APIVersion, "/")
-		if group != componentAPIGroup && !(group == dscGroup && o.Kind == "DataScienceCluster") {
+		if group != componentAPIGroup && (group != dscGroup || o.Kind != "DataScienceCluster") {
 			continue
 		}
 		for i := range rf.reporters {
