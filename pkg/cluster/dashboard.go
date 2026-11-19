@@ -299,7 +299,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 	if prNumber > 0 {
 		operator, err := readDashboardOperator(c)
 		if err != nil {
-			return &types.OperationResponse{Success: false, Message: "Cannot verify dashboard-operator: " + err.Error(), ErrorCode: "prerequisites"}, nil
+			return &types.OperationResponse{Success: false, Message: "Cannot verify dashboard-operator: " + err.Error(), ErrorCode: nonEmpty(errorCodeFromK8sErr(err), "prerequisites")}, nil
 		}
 		if operator != nil {
 			return deployDashboardBuild(c, "pr", prNumber, flavor)
@@ -562,7 +562,7 @@ func containsString(values []string, want string) bool {
 func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	operator, err := readDashboardOperator(c)
 	if err != nil {
-		return &types.OperationResponse{Success: false, Message: "Cannot verify dashboard-operator: " + err.Error(), ErrorCode: "prerequisites"}, nil
+		return &types.OperationResponse{Success: false, Message: "Cannot verify dashboard-operator: " + err.Error(), ErrorCode: nonEmpty(errorCodeFromK8sErr(err), "prerequisites")}, nil
 	}
 	if operator != nil {
 		return revertDashboardOperator(c, operator)

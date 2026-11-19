@@ -713,7 +713,7 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 	logs = append(logs, "Creating default DataScienceCluster...")
 	defaults, fetchErr := fetchDefaultDSCSpec(c, "")
 	if fetchErr != nil {
-		return &types.OperationResponse{Success: false, Message: "Failed to fetch version-matched DSC defaults: " + fetchErr.Error(), Logs: logs, ErrorCode: "prerequisites"}, nil
+		return &types.OperationResponse{Success: false, Message: "Failed to fetch version-matched DSC defaults: " + fetchErr.Error(), Logs: logs, ErrorCode: nonEmpty(errorCodeFromK8sErr(fetchErr), "prerequisites")}, nil
 	}
 	logs = append(logs, fmt.Sprintf("DSC spec source: %s (%s)", defaults.SourceDescription, defaults.Version))
 

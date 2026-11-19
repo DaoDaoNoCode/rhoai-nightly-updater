@@ -934,7 +934,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 	// from the FBC image itself because a dry run creates no catalog.
 	dryRunCSV, dryRunCSVErr := getCSV(c)
 	if dryRunCSVErr != nil {
-		return &types.OperationResponse{Success: false, Message: "Cannot identify installed CSV: " + dryRunCSVErr.Error(), Logs: logs, ErrorCode: "prerequisites"}, nil
+		return &types.OperationResponse{Success: false, Message: "Cannot identify installed CSV: " + dryRunCSVErr.Error(), Logs: logs, ErrorCode: nonEmpty(errorCodeFromK8sErr(dryRunCSVErr), "prerequisites")}, nil
 	}
 	// Under Argo CD only the catalog's own image can be installed: refuse
 	// before reading any catalog content.

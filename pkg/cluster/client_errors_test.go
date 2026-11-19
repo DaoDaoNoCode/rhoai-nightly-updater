@@ -79,6 +79,23 @@ func TestUserTokenRejectedMidOperationIsSignInEnded(t *testing.T) {
 	}
 }
 
+// An operation that refuses because a cluster read failed reports the
+// read's own code (CONTRIBUTING "Errors and operation results"); a failure
+// that is not a cluster request keeps "prerequisites".
+func TestFailedReadKeepsItsErrorCode(t *testing.T) {
+	f, c := newFakeAPI(t)
+	f.status("GET", namespacedPath("apps/v1", "deployments", dashboardNamespace, dashboardOperatorName), http.StatusForbidden, "Forbidden")
+	res, err := RevertDashboardImage(c)
+	if err != nil || res.Success || res.ErrorCode != "forbidden" {
+		t.Fatalf("result %+v, err %v", res, err)
+	}
+	f.json("GET", namespacedPath("apps/v1", "deployments", dashboardNamespace, dashboardOperatorName), http.StatusOK, `{"metadata":{}}`)
+	res, err = RevertDashboardImage(c)
+	if err != nil || res.Success || res.ErrorCode != "prerequisites" {
+		t.Fatalf("result %+v, err %v", res, err)
+	}
+}
+
 func TestHTTPStatusForError(t *testing.T) {
 	cases := []struct {
 		name     string
