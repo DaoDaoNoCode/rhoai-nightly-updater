@@ -1106,6 +1106,10 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 			return m.fail("model-ready", "The model cannot start: the cluster preset's image is not in the registry (this nightly build's runtime image is not published yet). Use the newest released Red Hat image instead: the Models tab offers it, and it replaces only the model's image. Technical details: "+res.problem, "image_unavailable", "preset image missing")
 		case res.problem != "":
 			return m.fail("model-ready", "The model cannot start: "+res.problem+" It was created; delete it from the Models tab, or fix the cause and set it up again.", "not_ready", "model not starting")
+		case !res.ready && res.pulling != "":
+			// The wait ended while a failing pull was still in its grace
+			// window: what to check is not lost.
+			return m.fail("model-ready", fmt.Sprintf("Created, but not ready after %s: its image pull is still failing. %s It stays set up; it starts once the pull succeeds.", clockText(timeout), res.pulling), "not_ready", "image pull failing")
 		case !res.ready:
 			m.step("model-ready", "success", fmt.Sprintf("Created, but not ready after %s. It may still start; the Models tab shows its state and the reason if it cannot.", clockText(timeout)))
 			m.step("callable", "success", "Not checked: the model is not ready yet. Check again on the Models tab once it is.")
@@ -1596,7 +1600,10 @@ type modelWait struct {
 	url          string
 	problem      string
 	imageMissing bool
-	err          error
+	// pulling is the image pull failure the wait ended in, with what to
+	// check ("" when no pull was failing when it ended).
+	pulling string
+	err     error
 }
 
 // modelWorkload is the model's workload Deployments (found by the labels
@@ -1770,10 +1777,11 @@ func waitModelReady(c *Client, project, name string, presetImage, workloadOnly b
 				res.problem = fmt.Sprintf("%s, for %s.%s Check that the cluster's pull secret can read it (on ROSA, the additional pull secret), that a mirror covers its registry if the cluster uses one, and that the image exists.", pr.pullFailure, clockText(pullGrace), pullNote)
 				return true, nil
 			}
+			res.pulling = fmt.Sprintf("%s.%s Check that the cluster's pull secret can read it (on ROSA, the additional pull secret), that a mirror covers its registry if the cluster uses one, and that the image exists.", pr.pullFailure, pullNote)
 			say(fmt.Sprintf("%s%s Waiting up to %s for it to succeed...", pr.message, pullNote, clockText(pullGrace)))
 			return false, nil
 		}
-		pullSince = time.Time{}
+		pullSince, res.pulling = time.Time{}, ""
 		if ready {
 			say(w.message)
 		} else {

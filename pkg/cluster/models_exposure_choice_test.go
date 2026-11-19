@@ -3,6 +3,7 @@ package cluster
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -58,6 +59,24 @@ func TestModelsSetup_AGatewayThatAnswersWithoutATokenFailsTheCheck(t *testing.T)
 	mc2 := newModelsCluster(t)
 	if res, _ := runModels(t, mc2.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: exposureInternal}); !res.Success || mc2.calls.probes != 0 {
 		t.Fatalf("internal: %+v probes %d", res, mc2.calls.probes)
+	}
+}
+
+// The ready wait can end inside a young node's pull grace window: the
+// setup then fails with the pull failure and what to check, not "still
+// starting".
+func TestModelsSetup_ReadyWaitEndingDuringAFailingPullKeepsTheAdvice(t *testing.T) {
+	defer func(d time.Duration) { ModelReadyTimeout = d }(ModelReadyTimeout)
+	ModelReadyTimeout = ModelImagePullGraceYoungNode / 2
+	mc := newModelsCluster(t)
+	mc.readyAfter = 0
+	mc.f.putJSON("/api/v1/nodes/node-a", `{"metadata":{"creationTimestamp":"`+clk.Now().Add(-3*time.Minute).UTC().Format(time.RFC3339)+`"}}`)
+	mc.f.putJSON(testModelPodsPath, `{"metadata":{"labels":{"app.kubernetes.io/name":"qwen25-05b-instruct","app.kubernetes.io/component":"llminferenceservice-workload"}},
+		"spec":{"nodeName":"node-a"},
+		"status":{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ImagePullBackOff","message":"unauthorized: authentication required"}}}]}}`)
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if res.Success || res.ErrorCode != "not_ready" || !strings.Contains(res.Message, "image pull is still failing") || !strings.Contains(res.Message, "pull secret") || !strings.Contains(res.Message, "joined the cluster") {
+		t.Fatalf("got %+v", res)
 	}
 }
 
