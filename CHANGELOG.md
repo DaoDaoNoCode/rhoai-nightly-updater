@@ -309,6 +309,18 @@ only accepts a tag whose version is the top dated section. See
   3.6.0). A version is compared only on Deployments whose stamped
   platform type is the installed release's name (the DataScienceCluster's
   `status.release`), as the RHOAI operator stamps it.
+- Diagnostics' dead CRD conversion webhook problem named the component
+  once per CRD ("here: sparkoperator, sparkoperator, sparkoperator"), and
+  its advice (set the component to Managed, delete the objects, set it back
+  to Removed) led back to the same state: removing a component leaves its
+  CRDs, which get no owner, with the dead webhook (live: Spark's 3 CRDs, no
+  objects). Each such CRD is now checked for objects (one list of at most
+  one object; a list this app may not make says how to check with `oc`).
+  CRDs of a removed component that hold none can be deleted, with the exact
+  `oc delete crd ...` command (the operator applies them again when the
+  component is set to Managed); for CRDs with objects the advice brings the
+  Service back, then deletes the objects and the CRDs before the component
+  is set to Removed.
 
 ### Changed
 

@@ -665,6 +665,15 @@ type conversionCRD struct {
 		Name string `json:"name"`
 	} `json:"metadata"`
 	Spec struct {
+		Group string `json:"group"`
+		Names struct {
+			Plural string `json:"plural"`
+		} `json:"names"`
+		Versions []struct {
+			Name    string `json:"name"`
+			Served  bool   `json:"served"`
+			Storage bool   `json:"storage"`
+		} `json:"versions"`
 		Scope      string `json:"scope"`
 		Conversion *struct {
 			Strategy string `json:"strategy"`
@@ -697,11 +706,29 @@ func (crd conversionCRD) conversionService() string {
 	return svc.Namespace + "/" + svc.Name
 }
 
+// listPath is the path listing the CRD's objects in every namespace, at
+// its storage version when served (an object stored at the version read
+// needs no conversion), else at the first served version; "" when the
+// CRD serves none.
+func (crd conversionCRD) listPath() string {
+	version := ""
+	for _, v := range crd.Spec.Versions {
+		if v.Served && (version == "" || v.Storage) {
+			version = v.Name
+		}
+	}
+	if version == "" || crd.Spec.Group == "" || crd.Spec.Names.Plural == "" {
+		return ""
+	}
+	return "/apis/" + crd.Spec.Group + "/" + version + "/" + crd.Spec.Names.Plural
+}
+
 type deadConversion struct {
 	CRD            string
 	Service        string // ns/name
 	Health         serviceHealth
 	StoredVersions []string
+	ListPath       string // conversionCRD.listPath
 }
 
 // deadConversions returns the CRDs whose conversion Service is down. A
@@ -720,7 +747,7 @@ func deadConversions(crds []conversionCRD, health *serviceHealthCache) (dead []d
 			continue
 		}
 		h := health.lookup(ref)
-		d := deadConversion{CRD: crd.Metadata.Name, Service: ref, Health: h, StoredVersions: crd.Status.StoredVersions}
+		d := deadConversion{CRD: crd.Metadata.Name, Service: ref, Health: h, StoredVersions: crd.Status.StoredVersions, ListPath: crd.listPath()}
 		switch {
 		case h.down():
 			dead = append(dead, d)

@@ -170,6 +170,90 @@ func TestStaleCRDConversion_IsReportedAsGuidance(t *testing.T) {
 	}
 }
 
+// sparkCRDs are the Spark operator's CRDs as live on 2026-11-19 after
+// sparkoperator was set to Removed: the CRDs stay, their conversion
+// webhook Service is gone.
+func sparkCRDs(names ...string) string {
+	var items []string
+	for _, n := range names {
+		plural, group, _ := strings.Cut(n, ".")
+		items = append(items, `{"metadata":{"name":"`+n+`"},"spec":{"group":"`+group+`","names":{"plural":"`+plural+`"},`+
+			`"versions":[{"name":"v1beta2","served":true,"storage":true},{"name":"v1alpha1","served":true,"storage":false}],`+
+			`"conversion":{"strategy":"Webhook","webhook":{"clientConfig":{"service":{"namespace":"redhat-ods-applications","name":"spark-operator-webhook-svc"}}}}},`+
+			`"status":{"storedVersions":["v1beta2"]}}`)
+	}
+	return `{"items":[` + strings.Join(items, ",") + `]}`
+}
+
+// Live 2026-11-19: Spark's 3 CRDs, 0 objects, sparkoperator Removed. The
+// advice used to list the owner once per CRD and say to set the component
+// to Managed and back to Removed, which leaves the same CRDs behind. Empty
+// CRDs can be deleted; the operator applies them again with the component.
+func TestStaleCRDConversion_EmptyCRDsCanBeDeleted(t *testing.T) {
+	f, c := newFakeAPI(t)
+	names := []string{"scheduledsparkapplications.sparkoperator.k8s.io", "sparkapplications.sparkoperator.k8s.io", "sparkconnects.sparkoperator.k8s.io"}
+	f.json("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", http.StatusOK, sparkCRDs(names...))
+	for _, n := range names {
+		plural, _, _ := strings.Cut(n, ".")
+		f.handle("GET", "/apis/sparkoperator.k8s.io/v1beta2/"+plural, func(r *http.Request, _ []byte) (int, string) {
+			if r.URL.Query().Get("limit") != "1" {
+				t.Errorf("objects of %s listed without limit=1", n)
+			}
+			return http.StatusOK, `{"items":[]}`
+		})
+	}
+	f.json("GET", dscV2List, http.StatusOK, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
+	f.json("GET", dscV2List+"/default-dsc", http.StatusOK, `{"spec":{"components":{"sparkoperator":{"managementState":"Removed"}}}}`)
+
+	out := checkStaleWebhooks(c)
+	if len(out.problems) != 1 || out.problems[0].ID != "stale-crd-conversion" {
+		t.Fatalf("problems = %+v", out.problems)
+	}
+	p := out.problems[0]
+	cmd := "oc delete crd " + strings.Join(names, " ")
+	if !strings.Contains(p.Fix, "hold no objects, so they can be deleted: `"+cmd+"`") || strings.Count(p.Fix, "sparkoperator)") != 1 ||
+		strings.Contains(p.Fix, "sparkoperator, sparkoperator") || strings.Contains(p.Fix, "back to Removed") || p.TechnicalCmd != cmd {
+		t.Fatalf("fix = %q, cmd = %q", p.Fix, p.TechnicalCmd)
+	}
+	if ev := strings.Join(p.Evidence, "\n"); strings.Count(ev, "it holds no objects") != 3 {
+		t.Fatalf("evidence = %s", ev)
+	}
+	assertWrites(t, f)
+}
+
+// A CRD with objects keeps the bring-the-Service-back path (objects, then
+// CRDs, then Removed); one this app may not list gets the oc check.
+func TestStaleCRDConversion_ObjectsOrUnknown(t *testing.T) {
+	f, c := newFakeAPI(t)
+	f.json("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", http.StatusOK,
+		sparkCRDs("scheduledsparkapplications.sparkoperator.k8s.io", "sparkapplications.sparkoperator.k8s.io", "sparkconnects.sparkoperator.k8s.io"))
+	f.json("GET", "/apis/sparkoperator.k8s.io/v1beta2/sparkapplications", http.StatusOK, `{"items":[{"metadata":{"name":"pi","namespace":"team"}}]}`)
+	// An object stored at another version fails the list on the webhook.
+	f.json("GET", "/apis/sparkoperator.k8s.io/v1beta2/scheduledsparkapplications", http.StatusInternalServerError,
+		`{"kind":"Status","status":"Failure","reason":"InternalError","code":500,"message":"conversion webhook for sparkoperator.k8s.io/v1alpha1, Kind=ScheduledSparkApplication failed: service \"spark-operator-webhook-svc\" not found"}`)
+	f.status("GET", "/apis/sparkoperator.k8s.io/v1beta2/sparkconnects", http.StatusForbidden, "Forbidden")
+	f.json("GET", dscV2List, http.StatusOK, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
+	f.json("GET", dscV2List+"/default-dsc", http.StatusOK, `{"spec":{"components":{"sparkoperator":{"managementState":"Removed"}}}}`)
+
+	p := checkStaleWebhooks(c).problems[0]
+	for _, want := range []string{
+		"For CRDs scheduledsparkapplications.sparkoperator.k8s.io, sparkapplications.sparkoperator.k8s.io: bring back the Service",
+		"to Managed again (here: sparkoperator). Then, if you do not need the objects, delete them, then the CRDs, before you set the component back to Removed",
+		"could not check whether CRD sparkconnects.sparkoperator.k8s.io holds objects. Check with `oc get sparkconnects.sparkoperator.k8s.io -A`: if it lists none, delete it (`oc delete crd sparkconnects.sparkoperator.k8s.io`)",
+	} {
+		if !strings.Contains(p.Fix, want) {
+			t.Errorf("fix lacks %q:\n%s", want, p.Fix)
+		}
+	}
+	if strings.Contains(p.Fix, "sparkoperator, sparkoperator") || strings.Contains(p.Fix, "can be deleted") {
+		t.Errorf("fix = %s", p.Fix)
+	}
+	ev := strings.Join(p.Evidence, "\n")
+	if strings.Count(ev, "Removed; it holds objects") != 2 || !strings.Contains(ev, "could not check whether it holds objects: this app may not list them") {
+		t.Fatalf("evidence = %s", ev)
+	}
+}
+
 func TestStaleCRDConversion_ForbiddenListIsAWarning(t *testing.T) {
 	f, c := newFakeAPI(t)
 	f.status("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", http.StatusForbidden, "Forbidden")

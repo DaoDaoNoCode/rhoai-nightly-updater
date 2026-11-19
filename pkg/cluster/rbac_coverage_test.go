@@ -53,6 +53,7 @@ var rbacCallsNotUsingTheSAToken = map[string]string{
 // covered by the other call sites.
 var rbacBestEffortCalls = map[string]string{
 	"diagnostics_conversion.go:getDiscovered": "API versions check: one ?limit=1 list per resource and version of the multi-version *.opendatahub.io groups",
+	"diagnostics_webhooks.go:probeCRDObjects": "stale CRD conversions: one ?limit=1 list per RHOAI CRD whose conversion Service is down, to tell whether it holds objects",
 }
 
 // Calls only the gitops profile makes (api.StartGitOpsPolicyWatch and

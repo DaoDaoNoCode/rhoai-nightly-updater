@@ -676,9 +676,10 @@ oc get svc -n <namespace> <service>          # NotFound = stale
 ```
 
 Recovery (MANUAL ADMIN STEP), in order of preference:
-1. **Bring the producer back.** If the module was set to `Removed` in the DSC, set it to `Managed` again, wait for its operator and Service, migrate or delete the affected CRs, then remove the module again.
-2. **DSC/DSCI CRDs** while the RHOAI operator is not installed: Install a different build from the UI does this safely (it switches conversion to `None` only when no RHOAI CSV exists and the Service is missing).
-3. **Last resort, lossy:** `None` converts no fields; reads at another version return the stored shape. Only for CRDs whose objects you can lose, and the owning operator may revert it:
+1. **A CRD that holds no objects: delete it.** Removing a module leaves its CRDs (they get no owner) with the conversion webhook its operator served, so setting the module to `Managed` and back to `Removed` ends in the same state. Check with `oc get <crd-name> -A` (Diagnostics checks this itself when this app may list the kind and says so in the problem); when it lists nothing, `oc delete crd <crd-name>`. The operator applies the CRD again when the module is set to `Managed`.
+2. **A CRD with objects: bring the producer back.** If the module was set to `Removed` in the DSC, set it to `Managed` again, wait for its operator and Service, migrate or delete the affected CRs, delete the CRDs, then remove the module again.
+3. **DSC/DSCI CRDs** while the RHOAI operator is not installed: Install a different build from the UI does this safely (it switches conversion to `None` only when no RHOAI CSV exists and the Service is missing).
+4. **Last resort, lossy:** `None` converts no fields; reads at another version return the stored shape. Only for CRDs whose objects you can lose, and the owning operator may revert it:
    ```bash
    oc patch crd <name> --type=merge -p '{"spec":{"conversion":{"strategy":"None","webhook":null}}}'
    ```
