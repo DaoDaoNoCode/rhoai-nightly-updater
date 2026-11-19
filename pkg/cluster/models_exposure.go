@@ -661,10 +661,11 @@ func (m *modelsRun) publishToMaaS(project, name string) (*types.OperationRespons
 			m.step("publish", "running", e.Message)
 		}
 	}
-	// No audience or limit of its own: the subscription keeps who can use
-	// the published models (everyone signed in, when it is the first), and
-	// the model gets the free sample limit; both change on the MaaS tab.
-	res, err := pub.publish(project, name, nil, nil)
+	// No audience of its own: the subscription keeps who can use the
+	// published models (everyone signed in, when it is the first). The limit
+	// is the Publish dialog's default, the MaaS docs' premium example
+	// (100,000 tokens a day); both change on the MaaS tab.
+	res, err := pub.publish(project, name, nil, &types.MaaSLimit{Preset: "premium"})
 	if err != nil {
 		return nil, err
 	}
