@@ -3,6 +3,7 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -146,6 +147,40 @@ func gatewayAddress(g gatewayObject, project, model string) string {
 
 // internalAddress is the cluster-internal address KServe gives a model
 // without a route (status.addresses).
+// modelInClusterURL is the model's own in-cluster address among those
+// KServe reports (status.addresses). RHOAI 3.6 lists, for a model on a
+// gateway, the gateway's external and internal routing bases (".../")
+// and the model's paths on each ("/<project>/<model>" and
+// "/publishers/<project>/models/<model>"); a model with no route has its
+// own Service. The first in-cluster address is the internal routing base,
+// which is not the model's (seen live), so the address is chosen by what
+// it points at: an in-cluster address of the model's own path, else the
+// model's own Service; "" when KServe reports neither.
+func modelInClusterURL(m llmisvcObject) string {
+	ns, name := m.Metadata.Namespace, m.Metadata.Name
+	service := ""
+	for _, a := range m.Status.Addresses {
+		if !snippetURL(a.URL) {
+			continue
+		}
+		u, err := url.Parse(a.URL)
+		if err != nil {
+			continue
+		}
+		host := u.Hostname()
+		if !strings.HasSuffix(host, ".svc") && !strings.HasSuffix(host, ".svc.cluster.local") {
+			continue
+		}
+		switch path := strings.Trim(u.Path, "/"); {
+		case path == ns+"/"+name:
+			return a.URL
+		case path == "" && service == "" && strings.HasPrefix(host, name+"-") && strings.Contains(host, "."+ns+".svc"):
+			service = a.URL
+		}
+	}
+	return service
+}
+
 func internalAddress(project, model string) string {
 	return fmt.Sprintf("https://%s-kserve-workload-svc.%s.svc.cluster.local", model, project)
 }
@@ -683,12 +718,7 @@ func (m *modelsRun) publishToMaaS(project, name string) (*types.OperationRespons
 func addModelRouting(c *Client, s *types.ModelState, m llmisvcObject, def kserveGateway, auth map[string]string) {
 	s.Exposure, s.Gateway = modelExposureOf(m, def)
 	s.ServedName = firstNonEmpty(m.Spec.Model.Name, m.Metadata.Name)
-	for _, a := range m.Status.Addresses {
-		if snippetURL(a.URL) {
-			s.InternalURL = a.URL
-			break
-		}
-	}
+	s.InternalURL = modelInClusterURL(m)
 	switch s.Exposure {
 	case exposureMaaS:
 		s.GatewayAuth = "maas"

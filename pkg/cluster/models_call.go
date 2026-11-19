@@ -305,13 +305,7 @@ func checkModelCall(c *Client, project, name string, rec modelsRecord, progress 
 	case exposureMaaS:
 		check = maasCallCheck(c, project, name)
 	case exposureInternal:
-		target := internalAddress(project, name)
-		for _, a := range model.Status.Addresses {
-			if snippetURL(a.URL) {
-				target = a.URL
-				break
-			}
-		}
+		target := firstNonEmpty(modelInClusterURL(model), internalAddress(project, name))
 		check = runModelCall(c, target, served, entry.Type, "", true, progress)
 	default:
 		switch {
