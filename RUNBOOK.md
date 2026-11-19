@@ -974,7 +974,25 @@ ConfigMap `rhoai-nightly-updater-activity` holds the audit log (`data.entries`, 
 
 ## 13. Clusters managed by Argo CD
 
-On a cluster where Argo CD (OpenShift GitOps) installs RHOAI from Git, for example with the [odh-gitops](https://github.com/opendatahub-io/odh-gitops) chart, Argo CD keeps the CatalogSource, the Subscription and the DataScienceCluster as Git describes them. With `selfHeal`, it [syncs as soon as the cluster drifts from Git](https://argo-cd.readthedocs.io/en/stable/user-guide/auto_sync/), and it recreates what is deleted. Git is the source of truth, and the tool works with that: it notices Argo CD by its tracking annotation `argocd.argoproj.io/tracking-id` ([resource tracking](https://argo-cd.readthedocs.io/en/stable/user-guide/resource_tracking/)), shows a notice on the Status page, and only does what Argo CD keeps. **No change to the Argo CD Application is needed**: the tool keeps every field Git sets.
+On a cluster where Argo CD (OpenShift GitOps) installs RHOAI from Git, for example with the [odh-gitops](https://github.com/opendatahub-io/odh-gitops) chart, Argo CD keeps the CatalogSource, the Subscription and the DataScienceCluster as Git describes them. With `selfHeal`, it [syncs as soon as the cluster drifts from Git](https://argo-cd.readthedocs.io/en/stable/user-guide/auto_sync/), and it recreates what is deleted. Git is the source of truth, and the tool works with that: it notices Argo CD by its tracking annotation `argocd.argoproj.io/tracking-id` ([resource tracking](https://argo-cd.readthedocs.io/en/stable/user-guide/resource_tracking/)), confirms with Argo CD that the application still manages the object (below), shows a notice on the Status page, and only does what Argo CD keeps. **No change to the Argo CD Application is needed**: the tool keeps every field Git sets.
+
+**Is the annotation still Argo CD's? (4.0.0)** The annotation outlives the application that wrote it: an Application deleted without cascade, OpenShift GitOps uninstalled, a cluster set up from Git once and handed over, objects copied from another cluster. So the tool asks Argo CD on every status read and before every refused action, for the catalog, the Subscription and the DSC separately:
+
+| What the tool finds | Verdict | What you see |
+|---|---|---|
+| The Application the annotation names (in its namespace for `<namespace>_<name>`, else in any namespace) lists the object in `status.resources` | managed | The notice, naming the Application and its namespace; the actions in the table below are off |
+| Argo CD's Application API is not served on this cluster | left over | A small note: "... carry Argo CD tracking from application X, but Argo CD is not installed on this cluster; the tool treats them as not managed". Every action is on |
+| No Application of that name | left over | A note: "... left over from application X, which no longer exists" |
+| The Application exists, Argo CD compared it with Git, and it does not list the object | left over | A note: "... from application X (namespace N), which no longer lists them" |
+| A read error or a 403, an Application Argo CD has not compared yet (sync status `Unknown`) or reports `ComparisonError`, or (for the two cases above without Argo CD or without the Application) signs that an Argo CD on **another cluster** may manage this one: this cluster serves ACM's AppliedManifestWork API (an ACM managed cluster: a hub's GitOpsCluster can add it to the hub's Argo CD), or ClusterRoleBinding `argocd-manager-role-binding` exists (`argocd cluster add`) | not confirmed | The notice as for managed, plus "Couldn't confirm with Argo CD ... (the reason), so the tool treats them as managed"; refusals end with the same reason |
+
+The tool never treats an object as unmanaged on doubt: it must not fight an Argo CD. Known limit: an Argo CD on another cluster that reaches this one with credentials made by hand (any token in its cluster Secret) leaves no mark the tool can read; on such a cluster with Argo CD absent here, or without the Application here, the tool treats the objects as not managed. If an annotation is left over and the tool still says it could not confirm (an ACM managed cluster that no hub Argo CD manages, for example), remove the annotation; an Argo CD that does manage the object puts it back on its next sync:
+
+```bash
+oc annotate subscription rhods-operator -n redhat-ods-operator argocd.argoproj.io/tracking-id-
+oc annotate catalogsource rhoai-catalog-dev -n openshift-marketplace argocd.argoproj.io/tracking-id-
+oc annotate datasciencecluster default-dsc argocd.argoproj.io/tracking-id-
+```
 
 **Git picks the build; the tool installs it.** The catalog image in Git decides which nightly the cluster runs. OLM installs a new catalog's head CSV by itself only when that CSV *replaces* the installed one ([update graph](https://olm.operatorframework.io/docs/concepts/olm-architecture/operator-catalog/creating-an-update-graph/)). Nightly builds of the same version share the CSV name (for example `rhods-operator.3.6.0-ea.1`) with no `replaces` or `skipRange` between them, so after Git moves the catalog to a newer build of the same version the operator stays on the old one. The Status page then shows **Install pending**, the build Git set (*In Git*) and the installed CSV; *Install the build the catalog serves* removes the installed CSV and recreates the Subscription, so OLM installs the catalog's head.
 
@@ -1004,7 +1022,7 @@ The tool copies the annotations (Argo CD's tracking and `kubectl.kubernetes.io/l
 
 **"The catalog did not serve ... within ..."** after a change in Git: OLM replaces the catalog pod when the image changes; check the pod in `openshift-marketplace` (`oc get pods -n openshift-marketplace -l olm.catalogSource=rhoai-catalog-dev`) and [§6](#6-update--install-a-different-build-failed) (`catalog_image_pull`) for pull problems.
 
-**Checking what Argo CD tracks.** Which Application renders the catalog and the Subscription, and its sync policy:
+**Checking what Argo CD tracks.** Which Application renders the catalog and the Subscription, and its sync policy (the same `status.resources` the tool reads):
 
 ```bash
 oc get applications.argoproj.io -A -o json | jq -r '.items[] | select(any(.status.resources[]?; .kind=="CatalogSource" and .name=="rhoai-catalog-dev")) | "\(.metadata.namespace)/\(.metadata.name): syncPolicy=\(.spec.syncPolicy // {} | tostring)"'

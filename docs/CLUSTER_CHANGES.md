@@ -70,7 +70,7 @@ Common to Update, Re-deploy and Install a different build:
 | 5 | — | wait up to 8 min for the CSV to reach `Succeeded` |
 
 ### Update when Argo CD manages the operator
-When CatalogSource `rhoai-catalog-dev` or Subscription `rhods-operator` has Argo CD's tracking annotation (`argocd.argoproj.io/tracking-id`), Git is the source of truth: Argo CD puts back what differs from Git and recreates them as soon as they are deleted. Update then installs the build the catalog serves, writes nothing Argo CD manages, and deletes nothing it manages for longer than one request (see [RUNBOOK §13](../RUNBOOK.md#13-clusters-managed-by-argo-cd)):
+When CatalogSource `rhoai-catalog-dev` or Subscription `rhods-operator` has Argo CD's tracking annotation (`argocd.argoproj.io/tracking-id`) and Argo CD confirms it, or cannot be asked (a left-over annotation does not count: [RUNBOOK §13](../RUNBOOK.md#13-clusters-managed-by-argo-cd)), Git is the source of truth: Argo CD puts back what differs from Git and recreates them as soon as they are deleted. Update then installs the build the catalog serves, writes nothing Argo CD manages, and deletes nothing it manages for longer than one request (see [RUNBOOK §13](../RUNBOOK.md#13-clusters-managed-by-argo-cd)):
 
 | # | Object (ns) | Change |
 |---|---|---|
