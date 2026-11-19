@@ -155,10 +155,24 @@ export interface PullSecretInfo {
 export interface NodePullSecretInfo {
   /** Adds the quay.io/rhoai entry to openshift-config/pull-secret (a cluster-admin runs it; it prompts for the token). */
   command: string;
-  /** Removes that entry again. */
+  /** Removes whatever quay.io/rhoai entry is there (it asks first). */
   removeCommand: string;
   /** The nightly catalog is READY on its quay.io/rhoai image: the nodes have pulled from quay.io/rhoai. */
   pulled: boolean;
+  /**
+   * This tool's record that it added the quay.io/rhoai entry; absent when
+   * it has none (an entry, if any, was set by someone else). The one-click
+   * actions check the entry against it with the user's token.
+   */
+  addedByTool?: NodePullSecretRecord;
+}
+
+/** This tool's record of the quay.io/rhoai entry it added to openshift-config/pull-secret (never the token). */
+export interface NodePullSecretRecord {
+  at?: string;
+  by?: string;
+  /** The entry has the token saved under Pull secret now (false: Add updates it). */
+  sameToken: boolean;
 }
 
 /** The one-click setup actions on a cluster whose control plane runs on the cluster. */
@@ -177,9 +191,17 @@ export interface NodeSetupPlan {
   /** Machine config pools that will not take the change yet (paused or degraded). */
   pools?: string[];
   refusal?: string;
-  refusalCode?: "hosted" | "managed" | "unknown_topology" | "forbidden" | "foreign" | "unreadable" | "external_secrets" | "no_token" | "quay" | "conflict" | "failed";
+  refusalCode?: "hosted" | "managed" | "unknown_topology" | "forbidden" | "foreign" | "foreign_entry" | "not_owned" | "unreadable" | "external_secrets" | "no_token" | "quay" | "conflict" | "failed";
   resourceVersion?: string;
   uid?: string;
+  /** Pull secret actions: who set the quay.io/rhoai entry ("tool": this tool's record matches it). */
+  entrySetBy?: "tool" | "other" | "none";
+  /** The auths keys of the quay.io/rhoai entries there (registry names, never values). */
+  existingKeys?: string[];
+  /** Add was refused for an entry this tool did not add; a plan with replaceExisting replaces it. */
+  replaceable?: boolean;
+  /** The plan replaces an entry this tool did not add (the user acknowledged it). */
+  replacing?: boolean;
 }
 
 export interface ImageMirrorInfo {

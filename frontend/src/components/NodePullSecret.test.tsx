@@ -16,9 +16,10 @@ const COMMAND = `printf 'quay.io/rhoai token (the one you saved under Pull secre
 unset QUAY_AUTH`;
 const IMAGE = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + "0b3f9b4d".padEnd(64, "1");
 
-const REMOVE_COMMAND = `oc get secret pull-secret -n openshift-config -o json \\
+const REMOVE_COMMAND = `printf 'This removes the quay.io/rhoai entry of openshift-config/pull-secret, whoever added it: also one the cluster was set up with, whose token the updater cannot restore. Type yes to remove it: ' && read -r ANSWER && [ "$ANSWER" = yes ] && oc get secret pull-secret -n openshift-config -o json \\
   | jq '.data[".dockerconfigjson"] |= (@base64d | fromjson | del(.auths["quay.io/rhoai"]) | tojson | @base64)' \\
-  | oc replace -f -`;
+  | oc replace -f -
+unset ANSWER`;
 
 const saved = (nodes?: PullSecretInfo["nodes"]): PullSecretInfo => ({ exists: true, valid: true, nodes });
 const unchecked = { command: COMMAND, removeCommand: REMOVE_COMMAND, pulled: false };
@@ -59,7 +60,9 @@ describe("The pull secret's node part, by control plane", () => {
     expect(screen.queryByText("Ready")).not.toBeInTheDocument();
     expect(screen.getByText(/This cluster is self-managed: its nodes pull with the cluster pull secret, openshift-config\/pull-secret/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add to the nodes' pull secret" })).toHaveClass("pf-m-primary");
-    expect(screen.getByRole("button", { name: "Remove from the nodes' pull secret" })).toHaveClass("pf-m-danger");
+    // No record: the removal is not offered, and who set an entry is not known.
+    expect(screen.queryByRole("button", { name: "Remove from the nodes' pull secret" })).not.toBeInTheDocument();
+    expect(screen.getByText(/^Not known: this tool did not add one/)).toBeInTheDocument();
     expect(document.getElementById("node-pull-secret-command-code")).not.toBeVisible();
     const toggle = screen.getByRole("button", { name: "Do it yourself instead" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -110,12 +113,33 @@ describe("The pull secret's node part, by control plane", () => {
     expect(screen.getByText("Ready")).toBeInTheDocument();
     expect(screen.getByText(/The nightly catalog runs its quay.io\/rhoai image, so they can pull/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Check that the nodes can pull" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Add to the nodes' pull secret" })).toHaveClass("pf-m-secondary");
-    expect(screen.getByRole("button", { name: "Remove from the nodes' pull secret" })).toBeInTheDocument();
+    // The nodes pull and this tool has no record: someone else set it up.
+    const already = screen.getByRole("button", { name: "Already set up (not by this tool)" });
+    expect(already).toHaveAttribute("aria-disabled", "true");
+    expect(screen.queryByRole("button", { name: "Add to the nodes' pull secret" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove from the nodes' pull secret" })).not.toBeInTheDocument();
+    expect(screen.getByText("Someone else: the nodes can pull, and this tool did not add an entry")).toBeInTheDocument();
     const toggle = screen.getByRole("button", { name: "Do it yourself instead" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(toggle);
     expect(document.getElementById("node-pull-secret-command-code")?.textContent).toBe(COMMAND);
+    expect(document.getElementById("node-pull-secret-remove-command-code")?.textContent).toBe(REMOVE_COMMAND);
+    expect(screen.getByText(/Remove the quay.io\/rhoai entry, whoever added it \(it asks first\)/)).toBeInTheDocument();
+  });
+
+  it("offers the removal only for the entry this tool recorded adding, and says who added it", () => {
+    const own = { ...unchecked, pulled: true, addedByTool: { at: "2026-11-18T10:00:00Z", by: "admin", sameToken: true } };
+    renderWithApp(<PullSecretSetup pullSecret={saved(own)} controlPlane="self-managed" />);
+    expect(screen.getByText(/^This tool \(by admin, /)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add to the nodes' pull secret" })).toHaveClass("pf-m-secondary");
+    expect(screen.getByRole("button", { name: "Remove from the nodes' pull secret" })).toHaveClass("pf-m-danger");
+  });
+
+  it("offers to update the tool's own entry when the saved token changed since", () => {
+    const own = { ...unchecked, pulled: true, addedByTool: { at: "2026-11-18T10:00:00Z", by: "admin", sameToken: false } };
+    renderWithApp(<PullSecretSetup pullSecret={saved(own)} controlPlane="self-managed" />);
+    expect(screen.getByRole("button", { name: "Update the nodes' pull secret" })).toHaveClass("pf-m-primary");
+    expect(screen.getByText(/with an earlier token than the one saved above/)).toBeInTheDocument();
   });
 
   it("is not shown in the gitops profile", () => {

@@ -6,6 +6,10 @@ import {
   Alert,
   Button,
   Content,
+  DescriptionList,
+  DescriptionListDescription,
+  DescriptionListGroup,
+  DescriptionListTerm,
   ExpandableSection,
   Flex,
   Form,
@@ -27,7 +31,7 @@ import { NodeSetupDialog } from "./NodeSetupDialog";
 import { checkNodePull, createPullSecret, testPullSecret, toApiError } from "../services/api";
 import { CopyableCode } from "./environment/UseIt";
 import { describeError } from "../errors";
-import { sentence } from "../build";
+import { formatBuildDate, sentence } from "../build";
 import { TooltipButton } from "./TooltipButton";
 import { StatusLabel } from "./StatusLabel";
 import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
@@ -136,7 +140,10 @@ const NodePullSecret: React.FC<{
         </Content>
       </StackItem>
       <StackItem>
-        <Content component="p">Remove it again:</Content>
+        <Content component="p">
+          Remove the quay.io/rhoai entry, whoever added it (it asks first). An entry the cluster was set up with
+          cannot be restored by this tool, so remove one only when the nodes do not need it:
+        </Content>
       </StackItem>
       <StackItem>
         <CopyableCode id="node-pull-secret-remove-command" label="the removal command" code={nodes.removeCommand} />
@@ -153,16 +160,37 @@ const NodePullSecret: React.FC<{
         : "The updater could not read what kind of cluster this is. On ROSA HCP the nodes use the token saved above. If this cluster is self-managed, its nodes pull with the cluster pull secret, openshift-config/pull-secret: a cluster-admin adds the quay.io/rhoai entry with this command, or tries Add to the nodes' pull secret:";
 
   const checkReason = blocker ?? (checking ? null : checkImage ? null : checkImageReason ?? "Looking up the newest nightly build...");
-  // Primary until the nodes are known to pull (the catalog, or a passed check).
+  // Who set the quay.io/rhoai entry: this tool (its record), someone else
+  // (the nodes pull and the tool has no record), or not known (the
+  // updater cannot read openshift-config/pull-secret; the dialog reads it
+  // with the user's permissions).
+  const own = nodes.addedByTool;
+  const canPull = nodes.pulled || !!result?.success;
+  const setBy = own ? "tool" : canPull ? "other" : "unknown";
+  const ownWhen = own ? [own.by && own.by !== "unknown" ? `by ${own.by}` : "", formatBuildDate(own.at)].filter(Boolean).join(", ") : "";
+  const setByText = {
+    tool: `This tool${ownWhen ? ` (${ownWhen})` : ""}${own && !own.sameToken ? ", with an earlier token than the one saved above" : ""}`,
+    other: "Someone else: the nodes can pull, and this tool did not add an entry",
+    unknown: "Not known: this tool did not add one. Add to the nodes' pull secret reads the secret with your permissions first, and does not replace an entry it did not add without asking",
+  }[setBy];
+  // Primary until the nodes are known to pull (the catalog, or a passed
+  // check); "Update" when the tool's own entry has an earlier token. With
+  // someone else's working entry there is nothing to add.
+  const alreadyByOther = setBy === "other";
   const addButton = !managed && (
     <FlexItem>
-      <TooltipButton variant={selfManaged && !nodes.pulled && !result?.success ? "primary" : "secondary"} onClick={() => setDialog("pull-secret-add")} disabledReason={blocker}>
-        Add to the nodes&apos; pull secret
+      <TooltipButton
+        variant={(selfManaged && !canPull) || (own && !own.sameToken) ? "primary" : "secondary"}
+        onClick={() => setDialog("pull-secret-add")}
+        disabledReason={blocker ?? (alreadyByOther ? "The nodes can pull from quay.io/rhoai with an entry this tool did not add, so there is nothing to add. The commands under Do it yourself instead change it, if you choose to." : null)}
+      >
+        {alreadyByOther ? "Already set up (not by this tool)" : own && !own.sameToken ? "Update the nodes' pull secret" : "Add to the nodes' pull secret"}
       </TooltipButton>
     </FlexItem>
   );
-  // The removal comes last, apart from the actions that set up.
-  const removeButton = selfManaged && (
+  // The removal comes last, apart from the actions that set up, and only
+  // for the entry this tool added (the dialog checks it again).
+  const removeButton = selfManaged && own && (
     <FlexItem>
       <TooltipButton variant="secondary" isDanger onClick={() => setDialog("pull-secret-remove")} disabledReason={blocker}>
         Remove from the nodes&apos; pull secret
@@ -174,6 +202,16 @@ const NodePullSecret: React.FC<{
       <StackItem>
         <Content component="p">{intro}</Content>
       </StackItem>
+      {!managed && (
+        <StackItem>
+          <DescriptionList isCompact isHorizontal horizontalTermWidthModifier={{ default: "18ch" }}>
+            <DescriptionListGroup>
+              <DescriptionListTerm>quay.io/rhoai entry set by</DescriptionListTerm>
+              <DescriptionListDescription>{setByText}</DescriptionListDescription>
+            </DescriptionListGroup>
+          </DescriptionList>
+        </StackItem>
+      )}
       {unknown && <StackItem>{commands}</StackItem>}
       <StackItem>
         {/* Wraps on a narrow card: up to three long button labels. */}
@@ -232,6 +270,10 @@ const NodePullSecret: React.FC<{
         <NodeSetupDialog
           action={dialog}
           onClose={() => setDialog(null)}
+          onCheck={checkImage && !nodes.pulled ? () => {
+            setDialog(null);
+            void handleCheck();
+          } : undefined}
           onChanged={() => {
             onResult(null);
             onStatusRefresh?.();
