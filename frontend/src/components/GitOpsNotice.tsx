@@ -35,14 +35,14 @@ export const GitOpsNotice: React.FC<{ status: StatusResponse }> = ({ status }) =
       {apps && (
         <p>
           Argo CD application {apps} puts back anything that differs from Git, so this tool only does what Argo CD keeps.
+          {unconfirmed.map((g) => (
+            <React.Fragment key={g.objects}>
+              {" "}Couldn&apos;t confirm with Argo CD that application &quot;{g.tracking.application}&quot; still manages {g.objects} ({g.tracking.reason}),
+              so the tool treats {g.count > 1 ? "them" : "it"} as managed.
+            </React.Fragment>
+          ))}
         </p>
       )}
-      {unconfirmed.map((g) => (
-        <p key={g.objects}>
-          Couldn&apos;t confirm with Argo CD that application &quot;{g.tracking.application}&quot; still manages {g.objects} ({g.tracking.reason}), so
-          the tool treats {g.count > 1 ? "them" : "it"} as managed.
-        </p>
-      ))}
       {acmCatalog && (
         <p>
           An ACM policy (config-policy-controller) puts CatalogSource rhoai-catalog-dev back as the policy sets it, so this tool
