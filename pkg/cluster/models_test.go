@@ -761,7 +761,7 @@ func TestModelCapacityWarning(t *testing.T) {
 	mc.f.putJSON("/api/v1/nodes/m1", `{"metadata":{"labels":{"kubernetes.io/arch":"amd64"}},"spec":{"taints":[{"effect":"NoSchedule"}]},"status":{"allocatable":{"cpu":"64","memory":"256Gi"}}}`)
 	mc.f.putJSON("/api/v1/namespaces/a/pods/busy", `{"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"14","memory":"8Gi"}}}]},"status":{"phase":"Running"}}`)
 	w := modelCapacityWarning(mc.c, defaultEntry(), "")
-	if !strings.Contains(w, "the most CPU free is 1.5 CPUs and 53.0 GiB on w1") {
+	if !strings.Contains(w, "the worker with the most free CPU, w1, has 1.5 CPUs and 53.0 GiB free.") {
 		t.Fatalf("warning: %q", w)
 	}
 	capacityCache.Purge()

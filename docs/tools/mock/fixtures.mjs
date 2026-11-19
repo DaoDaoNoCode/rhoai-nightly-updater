@@ -699,7 +699,7 @@ export const modelsStatus = (over = {}) => {
 };
 
 /** The status's room check of one catalog model (pkg/cluster roomWarning). */
-export const CAPACITY_WARNING = "No worker seems to have room for the model: it needs 4 CPUs and 12Gi of memory free (up to 14Gi), and the most CPU free is 5.5 CPUs and 8.2 GiB on ip-10-0-1-23.ec2.internal.";
+export const CAPACITY_WARNING = "No worker seems to have room for the model: it needs 4 CPUs and 12 GiB of memory free (up to 14 GiB); the worker with the most free CPU, ip-10-0-1-23.ec2.internal, has 5.5 CPUs and 8.2 GiB free.";
 /** The catalog with that warning on Qwen3. */
 export const catalogWithoutRoom = (name = "qwen3-1-7b") => MODEL_CATALOG.map((c) => (c.name === name ? { ...c, capacityWarning: CAPACITY_WARNING } : c));
 

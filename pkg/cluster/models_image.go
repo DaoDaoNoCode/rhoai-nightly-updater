@@ -516,7 +516,7 @@ func freeRoom(c *Client, project, model string) (map[string]*nodeRoom, error) {
 // is "".
 func roomWarning(entry catalogModel, free map[string]*nodeRoom) string {
 	if len(free) == 0 {
-		return fmt.Sprintf("No schedulable amd64 worker was found; the model needs one with %s CPUs and %s of memory free.", entry.CPU, entry.MemoryRequest)
+		return fmt.Sprintf("No schedulable amd64 worker was found; the model needs one with %s CPUs and %s of memory free.", entry.CPU, memoryWords(entry.MemoryRequest))
 	}
 	cpu, _ := parseQuantity(entry.CPU)
 	mem, _ := parseQuantity(entry.MemoryRequest)
@@ -545,8 +545,19 @@ func roomWarning(entry catalogModel, free map[string]*nodeRoom) string {
 		return fmt.Sprintf("No worker seems to have room for the model's download: it needs %s of ephemeral storage free for it (the model is downloaded to the node's disk), and %s has %.1f GB.",
 			entry.ephemeralStorage, diskOnly, maxFloat(free[diskOnly].eph, 0)/1e9)
 	}
-	return fmt.Sprintf("No worker seems to have room for the model: it needs %s CPUs and %s of memory free (up to %s), and the most CPU free is %.1f CPUs and %.1f GiB on %s.",
-		entry.CPU, entry.MemoryRequest, entry.Memory, maxFloat(free[best].cpu, 0), maxFloat(free[best].mem, 0)/(1<<30), best)
+	return fmt.Sprintf("No worker seems to have room for the model: it needs %s CPUs and %s of memory free (up to %s); the worker with the most free CPU, %s, has %.1f CPUs and %.1f GiB free.",
+		entry.CPU, memoryWords(entry.MemoryRequest), memoryWords(entry.Memory), best, maxFloat(free[best].cpu, 0), maxFloat(free[best].mem, 0)/(1<<30))
+}
+
+// memoryWords writes a Kubernetes memory quantity in words ("4Gi": "4
+// GiB"); any other form is kept.
+func memoryWords(q string) string {
+	for _, unit := range []string{"Ki", "Mi", "Gi", "Ti"} {
+		if n, ok := strings.CutSuffix(q, unit); ok && n != "" {
+			return n + " " + unit[:1] + "iB"
+		}
+	}
+	return q
 }
 
 func maxFloat(a, b float64) float64 {
