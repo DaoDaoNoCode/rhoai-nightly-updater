@@ -88,7 +88,7 @@ import {
   unreadableState,
 } from "./environment/featureState";
 import { FeatureLoading, LoadFailed } from "./environment/Loading";
-import { PrerequisitesSection, prerequisitesConfirm, prerequisitesReason, prerequisitesSteps, usePrerequisites, withPrerequisites } from "./environment/Prerequisites";
+import { PrerequisitesSection, RECOMMENDED_EXPOSURE, headerWithPrerequisites, prerequisitesConfirm, prerequisitesReason, prerequisitesSteps, usePrerequisites, withPrerequisites } from "./environment/Prerequisites";
 import type { ModelExposureKind, PrerequisiteFeature } from "../types";
 
 export { nextStep, terminalReason } from "./environment/resourceRow";
@@ -342,7 +342,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   // Models' plan depends on how the model about to be set up is reached.
   const [prereqRefresh, setPrereqRefresh] = useState(0);
   const [modelsExposure, setModelsExposure] = useState<ModelExposureKind | null>(null);
-  const prereqRead = usePrerequisites(prereqRefresh, tab === "models" ? modelsExposure : null, tab !== "maas");
+  const prereqRead = usePrerequisites(prereqRefresh, tab === "models" ? modelsExposure : RECOMMENDED_EXPOSURE, tab !== "maas");
   const prereq = prereqRead.data;
   useEffect(() => {
     if (!searchParams.has("project")) setPlaygroundDefault(defaultPlaygroundProject(pg, null));
@@ -375,6 +375,30 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     }
   };
   const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, pipelineServers) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? maasConfirm(p, maas, setPending) ?? prerequisitesConfirm(p, prereq) ?? samplesConfirm(p);
+
+  /**
+   * Check again: it changes nothing on the cluster, so it runs in place,
+   * without a confirmation or the run dialog; the result appears on the
+   * model once the status is read again.
+   */
+  const [checking, setChecking] = useState<{ project: string; model: string } | null>(null);
+  const [checkError, setCheckError] = useState<string | null>(null);
+  const checkModel = (project: string, model: string) => {
+    if (checking || run.run?.running) return;
+    setChecking({ project, model });
+    setCheckError(null);
+    streamModels({ action: "check", project, model }, () => {}, (success, error, apiError) => {
+      // A model that does not answer is the check's result, shown on the
+      // model; only a check that could not run is an error here.
+      if (!success && apiError?.errorCode !== "not_callable") setCheckError(error ?? apiError?.message ?? "The check could not run.");
+      setChecking(null);
+      void fetchResources();
+    }, () => {
+      setCheckError("The connection ended before the check did. Check again.");
+      setChecking(null);
+      void fetchResources();
+    });
+  };
 
   /** A confirmed Models change: one streamed request whose steps the run dialog shows. */
   const startModels = (p: ModelsPending) => {
@@ -626,7 +650,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     wasRunning.current = now;
   }, [run.run?.running, runOpen]);
 
-  const runningSomething = !!resAction || migrating || !!run.run?.running;
+  const runningSomething = !!resAction || migrating || !!run.run?.running || !!checking;
   const busy: Busy = { resAction, actionProject, migrating, models: modelsOp, playground: playgroundOp, maas: maasOp };
   const baseReason = mutateBlocker ?? (runningSomething ? BUSY_REASON : null);
   // After a deletion the namespace stays (deployed:false, managedByTool:true).
@@ -792,7 +816,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   // One-click prerequisites on each feature's tab, above its parts.
   const prereqNode = (feature: PrerequisiteFeature, exposure?: ModelExposureKind | null) => (
     <PrerequisitesSection feature={feature} prereq={prereq?.features?.[feature]} error={prereqRead.error} onRetry={() => void prereqRead.reload()}
-      exposure={exposure ?? undefined} readOnly={readOnly} baseReason={baseReason} setPending={setPending} />
+      exposure={exposure ?? undefined} stale={feature === "models" && prereqRead.stale} readOnly={readOnly} baseReason={baseReason} setPending={setPending} />
   );
   const onModelsExposure = useCallback((e: ModelExposureKind | null) => setModelsExposure(e), []);
 
@@ -867,31 +891,31 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                 <PipelinesTab prerequisites={prereqNode("pipelines")} status={resStatus} project={project} projects={projectOptions} projectsLoaded={projectList !== null}
                   onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
                   connectionLoading={!!project && statusProject !== project}
-                  state={pipelines} busy={busy} baseReason={baseReason} readOnly={readOnly} readReason={readBlocker} minioLeftovers={minioLeftovers} consoleURL={consoleURL}
+                  state={headerWithPrerequisites(pipelines, prereq?.features?.pipelines)} prerequisitesReason={prerequisitesReason(prereq?.features?.pipelines, "pipelines")} busy={busy} baseReason={baseReason} readOnly={readOnly} readReason={readBlocker} minioLeftovers={minioLeftovers} consoleURL={consoleURL}
                   setPending={setPending} onMigrate={() => setMigrateKind("migrate")} onRemoveOldStorage={() => setMigrateKind("remove")}
                   onSetUp={(setup) => setUp("Pipelines", setup)} onCleanup={() => setCleanupScope("pipelines")}
                   sampleOp={sampleOp} samplesRefresh={samplesRefresh} />
               )}
               {tab === "mlflow" && resStatus && (
-                <MLflowTab prerequisites={prereqNode("mlflow")} status={resStatus} state={mlflowNow} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
+                <MLflowTab prerequisites={prereqNode("mlflow")} status={resStatus} state={headerWithPrerequisites(mlflowNow, prereq?.features?.mlflow)} prerequisitesReason={prerequisitesReason(prereq?.features?.mlflow, "mlflow")} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
                   project={project} projects={workspaceOptions} projectsLoaded={projectList !== null}
                   onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })}
                   setPending={setPending} onSetUp={(setup) => setUp("MLflow", setup)} onCleanup={() => setCleanupScope("mlflow")}
                   sampleOp={sampleOp} samplesRefresh={samplesRefresh} />
               )}
               {tab === "models" && resStatus && (
-                <ModelsTab prerequisites={prereqNode("models", modelsExposure)} prerequisitesReason={prerequisitesReason(prereq?.features?.models, "models")} onExposure={onModelsExposure} status={resStatus} project={modelsProject} projects={modelOptions} projectsLoaded={projectList !== null}
+                <ModelsTab prerequisites={prereqNode("models", modelsExposure)} prerequisitesReason={prereqRead.stale ? "Checking what this way to reach the model needs on the cluster..." : prerequisitesReason(prereq?.features?.models, "models")} onExposure={onModelsExposure} status={resStatus} project={modelsProject} projects={modelOptions} projectsLoaded={projectList !== null}
                   onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
                   model={modelsModel} onModel={chooseModel}
-                  state={models} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
+                  state={headerWithPrerequisites(models, prereq?.features?.models)} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
                   setPending={setPending} onSetUp={(setup) => setUp("Models", setup)} onCleanup={() => setCleanupScope("models")}
-                  onMaaS={() => navigate({ tab: "maas" })} />
+                  onMaaS={() => navigate({ tab: "maas" })} onCheckModel={checkModel} checking={checking} checkError={checkError} />
               )}
               {tab === "playground" && resStatus && (
                 <PlaygroundTab prerequisites={prereqNode("playground")} status={resStatus} playground={pg} playgroundError={playgroundRead.error} onRetry={() => void playgroundRead.reload()}
                   project={playgroundProject} projects={playgroundOptions} projectsLoaded={projectList !== null}
                   onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
-                  state={playgroundNow} busy={busy} baseReason={baseReason} readOnly={readOnly}
+                  state={headerWithPrerequisites(playgroundNow, prereq?.features?.playground)} prerequisitesReason={prerequisitesReason(prereq?.features?.playground, "playground")} busy={busy} baseReason={baseReason} readOnly={readOnly}
                   setPending={setPending} onSetUp={(setup) => setUp("Playground", setup)} onCleanup={() => setCleanupScope("playground")}
                   onModels={() => navigate({ tab: "models", ...(playgroundProject ? { project: playgroundProject } : {}) })} />
               )}
@@ -930,6 +954,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
           confirmLabel={modal.confirm}
           confirmVariant={modal.danger ? "danger" : "primary"}
           confirmDisabled={modal.confirmDisabled}
+          changesOpen={modal.changesOpen}
           onConfirm={() => pending && execute(pending)}
           onCancel={() => setPending(null)}
         >

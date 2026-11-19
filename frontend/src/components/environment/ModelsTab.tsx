@@ -21,8 +21,10 @@ import {
   Select,
   SelectList,
   SelectOption,
+  Skeleton,
   Stack,
   StackItem,
+  Tooltip,
 } from "@patternfly/react-core";
 import type { CatalogModel, InferenceGatewayState, ModelCallCheck, ModelExposureKind, ModelExposureOption, ModelExposures, ModelState, ResourcesStatus } from "../../types";
 import { getModelExposures, toApiError } from "../../services/api";
@@ -33,7 +35,7 @@ import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { envStatusText, notManaged } from "./resourceStatus";
 import { ComponentAlert, CopyableCode, NoProjectsAlert, shellQuote } from "./UseIt";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
-import { type Busy, type FeatureState, catalogModel, dashboardProjectHref, gatewayStatus, modelIn, modelOptionReason, modelStatus, modelTypeWords, foreignGatewayStep, shortModelName } from "./featureState";
+import { type Busy, type FeatureState, callCheckFailed, catalogModel, dashboardProjectHref, gatewayStatus, modelIn, modelOptionReason, modelStatus, modelTypeWords, foreignGatewayStep, shortModelName } from "./featureState";
 
 /** "6Gi" as "6 GiB". */
 const gib = (q: string) => q.replace(/^(\d+(?:\.\d+)?)Gi$/, "$1 GiB");
@@ -75,6 +77,12 @@ export interface ModelsTabProps {
   prerequisitesReason?: string | null;
   /** The chosen way to reach a new model (the prerequisites' plan depends on it). */
   onExposure?: (exposure: ModelExposureKind | null) => void;
+  /** Check again in place (no dialog: it changes nothing); without it, a confirmation. */
+  onCheckModel?: (project: string, model: string) => void;
+  /** The model Check again is calling now, or null. */
+  checking?: { project: string; model: string } | null;
+  /** Why the last Check again could not run, or null. */
+  checkError?: string | null;
 }
 
 const gatewayManaged = (gw: InferenceGatewayState | undefined) => gw?.managedByTool === true;
@@ -234,18 +242,17 @@ const UnusedProjectsAlert: React.FC<{ gw: InferenceGatewayState; reason: string 
   if (gone.length === 0 && unused.length === 0) return null;
   const row = (p: string, isGone: boolean) => (
     <StackItem key={p}>
-      <code>{p}</code>{isGone ? " (no longer exists)" : ""}{" "}
-      <Button variant="link" isInline isDanger isAriaDisabled={!!reason} onClick={() => setPending({ kind: "disallow-gateway-project", project: p, gone: isGone })}>Remove from the list</Button>
+      <code>{p}</code> — {isGone ? "deleted" : "no model uses the gateway"}{" "}
+      <Button variant="link" isInline isDanger isAriaDisabled={!!reason} aria-label={`Remove ${p} from the inference gateway`} onClick={() => setPending({ kind: "disallow-gateway-project", project: p, gone: isGone })}>Remove</Button>
     </StackItem>
   );
   return (
-    <Alert variant={gone.length > 0 ? "warning" : "info"} isInline component="div"
-      title={gone.length > 0 ? "The gateway still admits projects that no longer exist" : "The gateway admits projects no model uses"}>
+    <Alert variant={gone.length > 0 ? "warning" : "info"} isInline component="div" title="The gateway accepts projects that don't use it">
       <Stack hasGutter>
         <StackItem>
           <Content component="p">
             Anyone who can edit a project on the list can attach routes to this shared gateway, and a route there can take another model&apos;s calls and tokens.
-            {gone.length > 0 ? " A project created later with the same name would be admitted at once." : ""} No model routes through the gateway from these projects.
+            {gone.length > 0 ? " A project created later with a deleted project's name would be accepted at once." : ""}
           </Content>
         </StackItem>
         {gone.map((p) => row(p, true))}
@@ -420,24 +427,47 @@ export function exposureWords(m: Pick<ModelState, "exposure" | "gateway">): stri
  * means, the recommended one first chosen and why, and why the others
  * cannot be used now.
  */
-export const ExposureChooser: React.FC<{ exposures: ModelExposures | null; error: string | null; selected: string | null; onSelect: (key: string) => void }> = ({ exposures, error, selected, onSelect }) => {
+export const ExposureChooser: React.FC<{
+  exposures: ModelExposures | null; error: string | null; selected: string | null; onSelect: (key: string) => void;
+  /** Set up the inference gateway (null: not offered, for example read-only). */
+  onSetUpGateway?: (() => void) | null;
+  /** Open the MaaS tab. */
+  onMaaS?: () => void;
+}> = ({ exposures, error, selected, onSelect, onSetUpGateway, onMaaS }) => {
   if (!exposures) {
-    return error ? <Alert variant="warning" isInline component="p" title="Cannot read how the model can be reached">{error}</Alert> : <Content component="small">Reading the gateways on the cluster...</Content>;
+    return error ? <Alert variant="warning" isInline component="p" title="Cannot read how the model can be reached">{error}</Alert> : (
+      <Stack hasGutter>
+        {[0, 1, 2].map((i) => <StackItem key={i}><Skeleton width={i === 0 ? "60%" : "45%"} screenreaderText={i === 0 ? "Reading the gateways on the cluster" : undefined} /></StackItem>)}
+      </Stack>
+    );
   }
   const chosen = exposures.options.find((o) => o.key === selected);
+  const fixLink = (o: ModelExposureOption) => o.fix === "maas-tab" && onMaaS
+    ? <Button variant="link" isInline onClick={onMaaS}>Go to the MaaS tab</Button>
+    : o.fix === "inference-gateway" && onSetUpGateway
+      ? <Button variant="link" isInline onClick={onSetUpGateway}>Set up the inference gateway</Button>
+      : null;
   return (
     <Stack hasGutter>
       {exposures.defaultReason && <StackItem><Content component="small">Recommended: {exposures.defaultReason}</Content></StackItem>}
       {!exposures.default && exposures.recommendGateway && (
         <StackItem>
-          <Alert variant="info" isInline component="p" title="No gateway can carry this model yet">{exposures.recommendGatewayReason} Or choose to reach it only inside the cluster.</Alert>
+          <Alert variant="info" isInline component="div" title="No gateway can carry this model yet"
+            actionLinks={onSetUpGateway ? <AlertActionLink onClick={onSetUpGateway}>Set up the inference gateway</AlertActionLink> : undefined}>
+            <Content component="p">{exposures.recommendGatewayReason} Or choose Only inside the cluster.</Content>
+          </Alert>
         </StackItem>
       )}
       {exposures.options.map((o) => (
         <StackItem key={o.key}>
           <Radio id={`models-exposure-${o.key}`} name="models-exposure" isChecked={selected === o.key} isDisabled={!o.available} onChange={() => onSelect(o.key)}
             label={<>{o.title}{o.key === exposures.default ? <> <Label isCompact color="green">Recommended</Label></> : null}{o.needsAuth ? <> <Label isCompact color="orange">Needs Connectivity Link</Label></> : null}</>}
-            description={o.available ? o.description : `${o.description} Not available: ${o.reason ?? "unknown"}`} />
+            description={o.description}
+            body={!o.available ? (
+              <HelperText>
+                <HelperTextItem variant="warning">{o.reason ?? "Not available now."}{fixLink(o) ? <> {fixLink(o)}</> : null}</HelperTextItem>
+              </HelperText>
+            ) : undefined} />
         </StackItem>
       ))}
       {chosen?.warning && <StackItem><Alert variant="warning" isInline component="p" title="Before you choose this">{chosen.warning}</Alert></StackItem>}
@@ -452,13 +482,30 @@ function withExposure(setup: Pending[], option: ModelExposureOption | undefined)
 }
 
 /** "Can it be called?" in words, with its result. */
+/** How long ago an RFC 3339 time was, in words ("2 minutes ago"). */
+export function agoWords(at: string, now: number = Date.now()): string {
+  const s = Math.max(0, Math.round((now - new Date(at).getTime()) / 1000));
+  if (Number.isNaN(s)) return "at an unknown time";
+  if (s < 60) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} ${m === 1 ? "minute" : "minutes"} ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} ${h === 1 ? "hour" : "hours"} ago`;
+  const d = Math.round(h / 24);
+  return `${d} ${d === 1 ? "day" : "days"} ago`;
+}
+
 const CallCheckWords: React.FC<{ check: ModelCallCheck | undefined }> = ({ check }) => {
   if (!check) return <>Not checked since this app started. Check again calls the model once.</>;
-  const color = check.ok ? "green" : check.result === "not-checked" ? "grey" : "red";
-  const word = check.ok ? (check.result === "maas" ? "Listed by MaaS" : "Answers requests") : check.result === "not-checked" ? "Not checked" : "Cannot be called";
+  const color = check.ok ? "green" : check.result === "not-checked" ? "grey" : check.result === "unauthenticated" ? "orange" : "red";
+  const word = check.ok ? (check.result === "maas" ? "Listed by MaaS" : "Answers requests")
+    : check.result === "not-checked" ? "Not checked" : check.result === "unauthenticated" ? "Answers without a token" : "Cannot be called";
   return (
     <Stack>
-      <StackItem><Label isCompact color={color}>{word}</Label> <Content component="small">{new Date(check.at).toLocaleString()}</Content></StackItem>
+      <StackItem>
+        <Label isCompact color={color}>{word}</Label>{" "}
+        <Tooltip content={new Date(check.at).toLocaleString()}><Content component="small" tabIndex={0}>Checked {agoWords(check.at)}</Content></Tooltip>
+      </StackItem>
       <StackItem>{check.message}</StackItem>
     </Stack>
   );
@@ -473,7 +520,7 @@ function modelPurpose(c: CatalogModel | undefined): string {
 }
 
 /** The chosen model in the selected project, or a placeholder until a project is chosen. */
-const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, busy, baseReason, readOnly, setPending }) => {
+const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, busy, baseReason, readOnly, setPending, onCheckModel, checking, checkError }) => {
   const c = catalogModel(status, name);
   const title = c?.displayName ?? name;
   if (!project) {
@@ -492,14 +539,24 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
     : [];
   const useReleased = () => setPending({ kind: "setup-models", gateway: false, project, model: name, releasedImage: true });
   const s = modelStatus(status, project, busy, name);
+  const isChecking = !!checking && checking.project === project && checking.model === name;
+  const checkAgain = () => (onCheckModel ? onCheckModel(project, name) : setPending({ kind: "check-model", project, model: name }));
+  const checkButton = (
+    <Button variant="secondary" size="sm" isLoading={isChecking} isAriaDisabled={isChecking || !!baseReason} onClick={checkAgain}>{isChecking ? "Checking..." : "Check again"}</Button>
+  );
+  const shortName = shortModelName(status, name);
   return (
-    <PartItem id="model" title={model?.displayName || title} scope={`In project ${project}`} status={s} unmanaged={unmanaged}
-      actions={model?.ready && href && !isTerminating(model) ? <ActionListItem><ExternalLink href={href}>Open {project} in the dashboard</ExternalLink></ActionListItem> : undefined}
-      menu={menu}>
+    <PartItem id="model" title={model?.displayName || title} scope={`In project ${project}`} status={s} unmanaged={unmanaged} menu={menu}>
+      {managed && model?.ready && !isTerminating(model) && callCheckFailed(model) && (
+        <Alert variant="warning" isInline component="div" title={model.callCheck?.result === "unauthenticated" ? `${shortName} answers without a token` : `${shortName} is running but can't be called`}
+          actionLinks={!readOnly && !baseReason && !isChecking ? <AlertActionLink onClick={checkAgain}>Check again</AlertActionLink> : undefined}>
+          <Content component="p">{model.callCheck?.message}</Content>
+        </Alert>
+      )}
       {unmanaged
         ? <Content component="p">A model named <code>{model?.name}</code> was created outside this tool (for example in the dashboard); this tool leaves it alone.</Content>
         : model
-          ? <Content component="p">{modelPurpose(c)} It runs on vLLM on CPU in {project} and reserves {modelNeeds(c)}. The dashboard lists it with the project&apos;s deployments{c?.type === "embedding" ? "." : ", and its Gen AI playground can chat with it."}</Content>
+          ? <Content component="p">{modelPurpose(c)} It runs on vLLM on CPU in {project} and reserves {modelNeeds(c)}. The dashboard lists it with the project&apos;s deployments{c?.type === "embedding" ? "." : ", and its Gen AI playground can chat with it."}{model.ready && href && !isTerminating(model) ? <> <ExternalLink href={href}>Open {project} in the dashboard</ExternalLink></> : null}</Content>
           : <Content component="p">{modelPurpose(c)} Not set up in {project} yet: it needs {modelNeeds(c)} on one worker, downloads about {c?.downloadSize ?? "1 GB"}, and takes 3 to 5 minutes the first time.</Content>}
       {model?.presetImageMissing && managed && (
         <Alert variant="danger" isInline component="div" title="The cluster preset's image is not published yet"
@@ -557,7 +614,7 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
           <DescriptionListGroup>
             <DescriptionListTerm>Address</DescriptionListTerm>
             <DescriptionListDescription>
-              <ImageRef image={model.url} what="model address" isCode={false} />
+              <ImageRef image={model.url} what="model address" truncate={false} isCode={false} />
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}
@@ -565,7 +622,7 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
           <DescriptionListGroup>
             <DescriptionListTerm>In-cluster address</DescriptionListTerm>
             <DescriptionListDescription>
-              <ImageRef image={model.internalUrl} what="in-cluster address" isCode={false} />
+              <ImageRef image={model.internalUrl} what="in-cluster address" truncate={false} isCode={false} />
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}
@@ -587,7 +644,8 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
             <DescriptionListDescription>
               <Stack hasGutter>
                 <StackItem><CallCheckWords check={model.callCheck} /></StackItem>
-                {!readOnly && <StackItem><Button variant="secondary" size="sm" isAriaDisabled={!!baseReason} onClick={() => setPending({ kind: "check-model", project, model: name })}>Check again</Button></StackItem>}
+                {!readOnly && <StackItem>{checkButton}</StackItem>}
+                {!readOnly && checkError && !isChecking && <StackItem><HelperText><HelperTextItem variant="warning">{checkError}</HelperTextItem></HelperText></StackItem>}
               </Stack>
             </DescriptionListDescription>
           </DescriptionListGroup>
@@ -681,6 +739,11 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
   const ours = model.managedByTool === true;
   return (
     <TabSection title="Use it" id="models-use">
+      {callCheckFailed(model) && (
+        <HelperText><HelperTextItem variant="warning">{model.callCheck?.result === "unauthenticated"
+          ? "The last check found that the model also answers without a token: anyone who can reach its address can use it."
+          : "The last check got no answer; these commands will fail until it passes."}</HelperTextItem></HelperText>
+      )}
       <DescriptionList aria-label="How to use the model">
         <DescriptionListGroup>
           <DescriptionListTerm>From a terminal</DescriptionListTerm>
@@ -750,8 +813,8 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
               <Content component="p">
                 Open {project} in the dashboard to see the model with the project&apos;s deployments.
                 {embedding
-                  ? " In Gen AI studio it is listed under AI assets; the Playground tab here adds it to the playground as an embedding model."
-                  : " In Gen AI studio, the model is listed under AI assets, where you can try it in the playground."}
+                  ? " In Gen AI studio it is listed under AI asset endpoints; the Playground tab here adds it to the playground as an embedding model."
+                  : " In Gen AI studio, the model is listed under AI asset endpoints, where you can try it in the playground."}
               </Content>
             </DescriptionListDescription>
           </DescriptionListGroup>
@@ -759,13 +822,17 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
       </DescriptionList>
       <WhatNext id="models-next" items={published ? [
         <>Run the MaaS tab&apos;s commands: they get an API key and ask the model to say hello.</>,
-        <>Try it in the dashboard&apos;s Gen AI studio: AI assets, then the playground.</>,
+        <>Try it in the dashboard&apos;s Gen AI studio: AI asset endpoints, then the playground.</>,
         <>To call its direct address again, unpublish it on the MaaS tab.</>,
+      ] : internal ? [
+        <>Run the command above from a pod on the cluster (for example a workbench in {project}): it asks the model {embedding ? "for the vector of one sentence" : "to say hello"}.</>,
+        <>Point an OpenAI client that runs on the cluster at the in-cluster address, with <code>{name}</code> as the model. No token is needed.</>,
+        <>To reach it from outside the cluster, delete it and set it up again through a gateway.</>,
       ] : !token ? [
         ours
           ? <>Set it up again to create its token; this tab then shows the commands that call it.</>
           : <>Open {project} in the dashboard and copy the deployment&apos;s token under Token authentication.</>,
-        <>Try it in the dashboard&apos;s Gen AI studio: AI assets, then the playground.</>,
+        <>Try it in the dashboard&apos;s Gen AI studio: AI asset endpoints, then the playground.</>,
       ] : embedding ? [
         <>Copy the commands above and run them: they ask the model for the vector of one sentence.</>,
         <>Point an OpenAI client&apos;s embeddings call at the address, with the token as the API key and <code>{name}</code> as the model.</>,
@@ -773,7 +840,7 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
       ] : [
         <>Copy the commands above and run them: they read the token, list the model, then ask it to say hello.</>,
         <>Point an OpenAI client at the address, with the token as the API key and <code>{name}</code> as the model.</>,
-        <>Try it in the dashboard&apos;s Gen AI studio: AI assets, then the playground.</>,
+        <>Try it in the dashboard&apos;s Gen AI studio: AI asset endpoints, then the playground.</>,
       ]} />
     </TabSection>
   );
@@ -809,16 +876,17 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
   const { onExposure } = props;
   useEffect(() => { onExposure?.(choosing && option ? option.exposure : null); }, [choosing, option, onExposure]);
   const exposureReason = !choosing ? null : !ex ? "Reading how the model can be reached..." : !option ? "Choose how the model is reached." : !option.available ? option.reason ?? "This way cannot be used now." : option.needsAuth ? "Needs Red Hat Connectivity Link for this choice: Set up what Models needs (above) first." : null;
+  const setUpGateway = readOnly || baseReason || gw?.deployed ? null : () => props.setPending({ kind: "setup-models", gateway: true, project: null, model: "" });
+  // The inference gateway's card comes first only when the model uses it
+  // (or the choice is not known yet): otherwise the model's own card leads.
+  const toolGateway = `${GATEWAY_NS}/${GATEWAY}`;
+  const usesGateway = model?.deployed
+    ? model.exposure === "default-gateway" || (model.exposure === "gateway" && model.gateway === toolGateway)
+    : !option || option.exposure === "default-gateway" || option.gatewayRef === toolGateway;
+  const prerequisitesReason = props.prerequisitesReason ?? null;
   return (
     <Stack hasGutter>
       <StackItem><FeatureHeader title="Models" purpose={FEATURE_PURPOSE.models} state={state} /></StackItem>
-      {props.prerequisites && <StackItem>{props.prerequisites}</StackItem>}
-      {models?.blocked && <StackItem><ComponentAlert feature="Model serving" block={models.blocked} /></StackItem>}
-      {!models?.blocked && models?.presetProblem && (
-        <StackItem>
-          <Alert variant="warning" isInline component="p" title="No CPU preset was found for models">{models.presetProblem}</Alert>
-        </StackItem>
-      )}
       {noProjects && <StackItem><NoProjectsAlert dashboardUrl={status.dashboardUrl} /></StackItem>}
       {missingProject && (
         <StackItem>
@@ -842,21 +910,32 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
             </FormHelperText>
           </FormGroup>
           {choosing && (
-            <FormGroup label="How it is reached" fieldId="models-exposure" role="radiogroup" isStack>
-              <ExposureChooser exposures={ex} error={exposuresRead.error} selected={selectedKey} onSelect={setChoice} />
+            <FormGroup label="Model access" fieldId="models-exposure" role="radiogroup" isStack>
+              <ExposureChooser exposures={ex} error={exposuresRead.error} selected={selectedKey} onSelect={setChoice} onSetUpGateway={setUpGateway} onMaaS={onMaaS} />
+              <FormHelperText>
+                <HelperText><HelperTextItem>To change this later, delete the model and set it up again.</HelperTextItem></HelperText>
+              </FormHelperText>
             </FormGroup>
           )}
         </Form>
       </StackItem>
+      {/* What the cluster needs comes after the choice it depends on, so the choices never move when it changes. */}
+      {props.prerequisites && <StackItem>{props.prerequisites}</StackItem>}
+      {models?.blocked && <StackItem><ComponentAlert feature="Model serving" block={models.blocked} /></StackItem>}
+      {!models?.blocked && models?.presetProblem && (
+        <StackItem>
+          <Alert variant="warning" isInline component="p" title="No CPU preset was found for models">{models.presetProblem}</Alert>
+        </StackItem>
+      )}
       <StackItem>
         <PartList aria-label="What Models needs">
-          <GatewayPart {...props} />
-          <ModelPart {...props} />
+          {usesGateway ? <GatewayPart {...props} /> : <ModelPart {...props} />}
+          {usesGateway ? <ModelPart {...props} /> : <GatewayPart {...props} />}
         </PartList>
       </StackItem>
       {next?.kind === "set-up" && (
         <StackItem>
-          <PrimaryAction label={next.label} onClick={() => onSetUp(withExposure(next.setup, option))} reason={readOnly ? READ_ONLY_SETUP : baseReason ?? next.reason ?? props.prerequisitesReason ?? exposureReason} />
+          <PrimaryAction label={next.label} variant={prerequisitesReason ? "secondary" : "primary"} onClick={() => onSetUp(withExposure(next.setup, option))} reason={readOnly ? READ_ONLY_SETUP : baseReason ?? next.reason ?? prerequisitesReason ?? exposureReason} />
         </StackItem>
       )}
       {project && model?.ready && (model.url || model.internalUrl) && !isTerminating(model) && (
@@ -910,6 +989,25 @@ export function modelsSteps(p: ModelsPending): { id: string; title: string }[] {
   }
 }
 
+/**
+ * Whether deleting these models of project takes the project off this
+ * tool's gateway's list (pkg/cluster releaseGatewayProject): the tool
+ * added it, and no other model there routes through the gateway. The
+ * backend checks again and keeps it on any doubt.
+ */
+export function gatewayListRelease(status: ResourcesStatus | null, project: string, models?: string[]): boolean {
+  const gw = status?.inferenceGateway;
+  if (!gw?.deployed || gw.managedByTool !== true || !(gw.addedProjects ?? []).includes(project)) return false;
+  const users = (gw.usedBy ?? []).filter((u) => u.split("/")[0] === project);
+  const going = (u: string) => !models || models.includes(u.split("/")[1]);
+  return users.length > 0 && users.every(going);
+}
+
+/** The change line of a project going off the gateway's list. */
+export const gatewayReleaseLine = (project: string) => (
+  <>Gateway <code>{GATEWAY_NS}/{GATEWAY}</code>: <code>{project}</code> is taken off the gateway&apos;s projects; routes made by hand there stop attaching.</>
+);
+
 /** Whether a model setup in project adds it to this tool's gateway's list. */
 function setupAddsProject(status: ResourcesStatus | null, project: string | null, gateway: boolean, exposure?: ModelExposureKind): boolean {
   const gw = status?.inferenceGateway;
@@ -938,10 +1036,10 @@ export function modelsConfirm(pending: Pending, status: ResourcesStatus | null):
         summary: (
           <Stack hasGutter>
             {gateway && <StackItem><Content component="p">On the cluster: the inference gateway, the front door to models. It creates a cloud load balancer, which costs money while it exists.</Content></StackItem>}
-            {project && <StackItem><Content component="p">In {project}: {c?.displayName ?? name}, {c ? modelTypeWords(c).toLowerCase() : "a model"}. It needs {modelNeeds(c)} on one worker, downloads about {c?.downloadSize ?? "1 GB"}, and takes 3 to 5 minutes the first time (the runtime image and the model are downloaded).</Content></StackItem>}
-            {project && option && <StackItem><Content component="p">Reached: {option.title.charAt(0).toLowerCase() + option.title.slice(1)}. {option.description}{option.address ? <> It answers at <code>{option.address}</code>.</> : null}</Content></StackItem>}
+            {project && <StackItem><Content component="p">Creates {c?.displayName ?? name}, {c ? `a ${modelTypeWords(c).toLowerCase()} model` : "a model"}, in {project}. It needs {modelNeeds(c)} on one worker, downloads about {c?.downloadSize ?? "1 GB"}, and takes 3 to 5 minutes the first time (the runtime image and the model are downloaded).</Content></StackItem>}
+            {project && option && <StackItem><Content component="p">Reached: {option.title.charAt(0).toLowerCase() + option.title.slice(1)}. {option.description}{option.exposure === "maas" ? " Everyone signed in to the cluster will be able to call it." : null}{option.address && !option.description.includes(option.address) ? <> It answers at <code>{option.address}</code>.</> : null}</Content></StackItem>}
             {project && option?.warning && <StackItem><Alert variant="warning" isInline component="p" title="Before you set it up">{option.warning}</Alert></StackItem>}
-            {project && <StackItem><Content component="p">Once it runs, the tool calls it once, as a user would; the setup succeeds only when it answers.</Content></StackItem>}
+            {project && <StackItem><Content component="p">Once it runs, the tool calls it once, as a user would, and reports whether it answers.</Content></StackItem>}
           </Stack>
         ),
         changes: [
@@ -971,17 +1069,21 @@ export function modelsConfirm(pending: Pending, status: ResourcesStatus | null):
     }
     case "disallow-gateway-project":
       return {
-        title: `Remove ${pending.project} from the inference gateway's projects?`, confirm: "Remove from the list", danger: true, runTitle: `Remove ${pending.project} from the gateway's projects`,
-        summary: <Content component="p">{pending.gone ? `Project ${pending.project} no longer exists; a new project of that name would be admitted at once.` : `No model in ${pending.project} uses the gateway.`} Routes from {pending.project} then no longer attach. It is refused while a model there routes through the gateway; routes someone made by hand in {pending.project} are not visible to this tool and stop working too.</Content>,
+        title: `Remove ${pending.project} from the inference gateway's projects?`, confirm: `Remove ${pending.project}`, danger: true, runTitle: `Remove ${pending.project} from the gateway's projects`,
+        summary: <Content component="p">{pending.gone
+          ? `Project ${pending.project} was deleted, but the gateway still accepts it. If someone creates a project with that name, its routes could take other models' calls and tokens. Only the gateway's list of projects changes.`
+          : `Routes in ${pending.project} stop working on the gateway, including any someone made by hand (this tool can't see those). The tool refuses if a model in ${pending.project} still uses the gateway.`}</Content>,
         changes: [<>Gateway <code>{GATEWAY_NS}/{GATEWAY}</code>: <code>{pending.project}</code> is taken off the projects both listeners allow. The other projects stay; nothing else changes.</>],
       };
     case "teardown-model": {
       const short = shortModelName(status, pending.model);
+      const leaves = gatewayListRelease(status, pending.project, [pending.model]);
       return {
         title: `Delete ${short} in ${pending.project}?`, confirm: "Delete", danger: true, runTitle: `Delete ${short} in ${pending.project}`,
-        summary: <Content component="p">Deletes {short} in {pending.project}. The project, its other models, the inference gateway and everything else in the project stay. Set up brings it back (it is downloaded again).</Content>,
+        summary: <Content component="p">Deletes {short} in {pending.project}. The project, its other models, the inference gateway and everything else in the project stay{leaves ? `; ${pending.project} goes off the gateway's list of projects` : ""}. Set up brings it back (it is downloaded again).</Content>,
         changes: [
           <>Project <code>{pending.project}</code>: LLMInferenceService <code>{pending.model}</code> is deleted; KServe then removes its Deployment, Service and route.</>,
+          ...(leaves ? [gatewayReleaseLine(pending.project)] : []),
           <>A model of that name this tool did not create is kept.</>,
         ],
       };

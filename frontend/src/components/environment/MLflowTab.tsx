@@ -34,6 +34,8 @@ import type { SampleOp } from "./samples";
 export interface MLflowTabProps {
   /** What MLflow needs on the cluster (one-click prerequisites), above the parts. */
   prerequisites?: React.ReactNode;
+  /** Why the feature cannot be set up until its cluster prerequisites are, or null. */
+  prerequisitesReason?: string | null;
   status: ResourcesStatus;
   /** mlflowState: the same as the Overview's. */
   state: FeatureState;
@@ -205,7 +207,7 @@ export const MLflowTab: React.FC<MLflowTabProps> = (props) => {
       </StackItem>
       {next?.kind === "set-up" && (
         <StackItem>
-          <PrimaryAction label={next.label} onClick={() => onSetUp(next.setup)} reason={readOnly ? READ_ONLY_SETUP : baseReason ?? next.reason} />
+          <PrimaryAction label={next.label} variant={props.prerequisitesReason ? "secondary" : "primary"} onClick={() => onSetUp(next.setup)} reason={readOnly ? READ_ONLY_SETUP : baseReason ?? next.reason ?? props.prerequisitesReason ?? null} />
         </StackItem>
       )}
       {mlflow?.ready && mlflow.uiRoute && !isTerminating(mlflow) && <StackItem><UseMLflow url={mlflow.uiRoute} {...props} /></StackItem>}

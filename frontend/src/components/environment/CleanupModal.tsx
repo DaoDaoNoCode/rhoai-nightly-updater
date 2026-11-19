@@ -23,6 +23,7 @@ import type { CleanupRequest } from "../../services/api";
 import { TooltipButton } from "../TooltipButton";
 import { isTerminating } from "./resourceRow";
 import { S3_NAMESPACE, storageTeardownOffered } from "./PipelinesTab";
+import { gatewayListRelease } from "./ModelsTab";
 
 /** What a Clean up offers: one feature's parts, or everything. */
 export type CleanupScope = "pipelines" | "mlflow" | "models" | "playground" | "all";
@@ -226,7 +227,8 @@ export const CleanupModal: React.FC<{
                 {(offered.models.length > 0 || offered.gateway) && (
                   <FormGroup role="group" isStack label="Models" fieldId="cleanup-models">
                     {offered.models.map((p) => (
-                      <Checkbox key={p} id={`cleanup-model-${p}`} label={<>Models in {p}</>} description={(status.models?.items ?? []).filter((m) => m.namespace === p && m.managedByTool !== false).map((m) => m.name).join(", ")} isChecked={models.includes(p)} onChange={(_e, v) => toggleModel(p, v)} />
+                      <Checkbox key={p} id={`cleanup-model-${p}`} label={<>Models in {p}</>} isChecked={models.includes(p)} onChange={(_e, v) => toggleModel(p, v)}
+                        description={<>{(status.models?.items ?? []).filter((m) => m.namespace === p && m.managedByTool !== false).map((m) => m.name).join(", ")}{gatewayListRelease(status, p, (status.models?.items ?? []).filter((m) => m.namespace === p && m.managedByTool !== false).map((m) => m.name!)) ? <>. {p} is taken off the gateway&apos;s projects; routes made by hand there stop attaching.</> : null}</>} />
                     ))}
                     {offered.gateway && (
                       <Checkbox id="cleanup-gateway" label="Inference gateway" description="With its cloud load balancer and DNS record. Deleted after the models." isChecked={gateway} onChange={(_e, v) => setGateway(v)} />
@@ -242,7 +244,7 @@ export const CleanupModal: React.FC<{
                   <FormGroup role="group" isStack label="Cluster components this tool turned on" fieldId="cleanup-components">
                     {offeredComponents.map((r) => (
                       <Checkbox key={r.component} id={`cleanup-component-${r.component}`} label={<>Turn <code>{r.component}</code> back to {r.previous || "Removed"}</>}
-                        description="Last, and only while nothing on the cluster uses it and nobody has changed it since; the operators it needed stay." isChecked={chosenComponents.includes(r.component)} onChange={(_e, v) => toggleComponent(r.component, v)} />
+                        description="Last, and only while nothing on the cluster uses it and nobody has changed it since. Someone who only set it to Managed again is not noticed, so then the check that nothing uses it is what keeps it on. The operators it needed stay." isChecked={chosenComponents.includes(r.component)} onChange={(_e, v) => toggleComponent(r.component, v)} />
                     ))}
                   </FormGroup>
                 )}

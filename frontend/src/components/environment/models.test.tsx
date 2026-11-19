@@ -349,7 +349,8 @@ describe("Models tab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Set up Qwen2.5 0.5B Instruct in dev" }));
     const dialog = await screen.findByRole("dialog", { name: /Set up Qwen2.5 0.5B Instruct in dev\?/ });
     expect(within(dialog).getByText(/Reached: through the cluster's default inference gateway/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/the setup succeeds only when it answers/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/as a user would, and reports whether it answers/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Creates Qwen2.5 0.5B Instruct \(CPU\), a chat model, in dev\./)).toBeInTheDocument();
     expect(within(dialog).getByText(/Token authentication, as the dashboard makes it/)).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Set up" }));
     const run = await screen.findByRole("dialog", { name: "Set up Qwen2.5 0.5B Instruct in dev" });
@@ -372,8 +373,8 @@ describe("Models tab", () => {
     // Nothing chosen: Set up says why.
     const setUp = screen.getByRole("button", { name: "Set up Qwen2.5 0.5B Instruct in dev" });
     expect(setUp).toHaveAttribute("aria-disabled", "true");
-    // The gateway is its own part, with its own Set up.
-    expect(screen.getByRole("button", { name: "Set up the inference gateway" })).toBeInTheDocument();
+    // The gateway is its own part, with its own Set up; the alert offers it too.
+    expect(screen.getAllByRole("button", { name: "Set up the inference gateway" }).length).toBeGreaterThanOrEqual(2);
     fireEvent.click(screen.getByRole("radio", { name: /Only inside the cluster/ }));
     expect(screen.getByText("Calls to the in-cluster address are not authenticated.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Set up Qwen2.5 0.5B Instruct in dev" }));
@@ -397,12 +398,16 @@ describe("Models tab", () => {
     expect(within(part).getByText("Cannot be called")).toBeInTheDocument();
     expect(within(part).getByText(/send exactly this as/)).toBeInTheDocument();
     expect(screen.getByText(/A 404 means one of two things/)).toBeInTheDocument();
-    fireEvent.click(within(part).getByRole("button", { name: "Check again" }));
-    const dialog = await screen.findByRole("dialog", { name: /Check that Qwen2.5 0.5B Instruct in dev can be called/ });
-    expect(within(dialog).getByText(/never yours/)).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Check" }));
-    await screen.findByRole("dialog", { name: "Check Qwen2.5 0.5B Instruct in dev" });
-    expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "check", project: "dev", model: "qwen25-05b-instruct" }]);
+    // Not callable is not Ready: the card needs attention, says so on top, and Use it warns.
+    expect(within(part).getByText("Needs attention")).toBeInTheDocument();
+    expect(within(part).getByText("Qwen2.5 0.5B Instruct is running but can't be called")).toBeInTheDocument();
+    expect(screen.getByText("The last check got no answer; these commands will fail until it passes.")).toBeInTheDocument();
+    expect(within(part).getByText(/^Checked /)).toBeInTheDocument();
+    // Check again changes nothing: it runs in place, without a dialog.
+    const buttons = within(part).getAllByRole("button", { name: "Check again" });
+    fireEvent.click(buttons[buttons.length - 1]);
+    await vi.waitFor(() => expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "check", project: "dev", model: "qwen25-05b-instruct" }]));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("the gateway names projects no model uses or that no longer exist, and removes one after confirmation", async () => {
@@ -412,12 +417,13 @@ describe("Models tab", () => {
       "POST /api/resources/models/stream": sse({ step: "operation_complete", status: "success", message: "done", elapsedMs: 1 }),
     });
     renderAt("/test-resources?tab=models&project=dev");
-    const alert = await screen.findByText("The gateway still admits projects that no longer exist");
+    const alert = await screen.findByText("The gateway accepts projects that don't use it");
     expect(alert).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole("button", { name: "Remove from the list" })[0]);
+    expect(screen.getByRole("button", { name: "Remove old from the inference gateway" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove e2e-v300 from the inference gateway" }));
     const dialog = await screen.findByRole("dialog", { name: /Remove e2e-v300 from the inference gateway's projects\?/ });
-    expect(within(dialog).getByText(/no longer exists; a new project of that name would be admitted at once/)).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Remove from the list" }));
+    expect(within(dialog).getByText(/was deleted, but the gateway still accepts it/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove e2e-v300" }));
     await screen.findByRole("dialog", { name: "Remove e2e-v300 from the gateway's projects" });
     expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "disallow", project: "e2e-v300" }]);
   });

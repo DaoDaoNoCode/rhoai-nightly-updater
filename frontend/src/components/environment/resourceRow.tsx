@@ -227,7 +227,8 @@ export type Pending =
   /** Models routing: "Can it be called?" again. */
   | { kind: "check-model"; project: string; model: string }
   /** One-click prerequisites of a feature (Models: for how its model is reached). */
-  | { kind: "setup-prerequisites"; feature: PrerequisiteFeature; exposure?: ModelExposureKind }
+  /** recommended: planned for the recommended way to reach a model (the Overview), not a choice on the tab. */
+  | { kind: "setup-prerequisites"; feature: PrerequisiteFeature; exposure?: ModelExposureKind; recommended?: boolean }
   /** The Gen AI playground in a project, through the dashboard's API (one streamed operation). */
   | { kind: "setup-playground"; project: string; models?: PlaygroundModelRef[] }
   | { kind: "teardown-playground"; project: string }
@@ -277,6 +278,8 @@ export interface ConfirmSpec {
   danger?: boolean;
   /** Confirm stays disabled (a form in the dialog is not complete or valid yet). */
   confirmDisabled?: boolean;
+  /** Show the changes open after the summary, not under "Details" (a plan the user should read). */
+  changesOpen?: boolean;
   extra?: React.ReactNode;
   /** The run's title and its step's line once done ("Delete the pipeline server in x"). */
   runTitle?: string;

@@ -827,6 +827,8 @@ export interface InferenceGatewayState extends ResourceState {
   unusedProjects?: string[];
   /** Of those, the ones that no longer exist: a new project of that name would be admitted at once. */
   goneProjects?: string[];
+  /** The projects on the list this tool added: deleting their last model on the gateway takes them off. */
+  addedProjects?: string[];
 }
 
 /** A model the Models feature sets up (pkg/cluster modelCatalog). */
@@ -1271,6 +1273,8 @@ export interface ModelExposureOption {
   description: string;
   available: boolean;
   reason?: string;
+  /** Where an unavailable option is made available: set up the inference gateway (Models tab), or MaaS (its tab). */
+  fix?: "inference-gateway" | "maas-tab";
   /** Connectivity Link is not set up yet: Set up installs it first. */
   needsAuth?: boolean;
   warning?: string;
@@ -1294,7 +1298,7 @@ export interface ModelExposures {
 
 /** One "Can it be called?" check (pkg/types ModelCallCheck). */
 export interface ModelCallCheck {
-  result: "ok" | "model-name" | "route" | "auth" | "forbidden" | "server-error" | "unreachable" | "maas" | "not-checked" | "unexpected";
+  result: "ok" | "model-name" | "route" | "auth" | "forbidden" | "server-error" | "unreachable" | "unauthenticated" | "maas" | "not-checked" | "unexpected";
   ok: boolean;
   status?: number;
   message: string;
@@ -1330,6 +1334,8 @@ export type PrerequisiteFeature = "pipelines" | "mlflow" | "models" | "playgroun
 /** GET /api/resources/prerequisites. */
 export interface PrerequisitesStatus {
   features: Partial<Record<PrerequisiteFeature, FeaturePrerequisites>>;
+  /** The way to reach a model Models was planned for ("" none). */
+  modelsExposure?: string;
 }
 
 /** The body of POST /api/resources/prerequisites/stream. */

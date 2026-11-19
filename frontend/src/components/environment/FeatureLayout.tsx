@@ -117,8 +117,10 @@ export const PartItem: React.FC<{
   menu?: PartMenuItem[];
   /** Its status is still loading: a Skeleton instead of the status label. */
   loading?: boolean;
+  /** Words for the status label instead of the status word ("Waiting"). */
+  statusText?: string;
   children?: React.ReactNode;
-}> = ({ id, title, scope, status, unmanaged, actions, menu, loading, children }) => {
+}> = ({ id, title, scope, status, unmanaged, actions, menu, loading, statusText, children }) => {
   const hasMenu = !!menu && menu.length > 0;
   return (
     <CardListItem labelledBy={partTitleId(id)} actionsBesideFrom="lg" actions={actions || hasMenu ? (
@@ -135,7 +137,7 @@ export const PartItem: React.FC<{
         <StackItem>
           <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
             <FlexItem><Title headingLevel="h3" size="md" id={partTitleId(id)} tabIndex={-1}>{title}</Title></FlexItem>
-            <FlexItem>{loading ? <LabelSkeleton what={`the state of ${title}`} /> : <EnvStatusLabel status={status} />}</FlexItem>
+            <FlexItem>{loading ? <LabelSkeleton what={`the state of ${title}`} /> : <EnvStatusLabel status={status} text={statusText} />}</FlexItem>
             {unmanaged && <FlexItem><NotManagedLabel /></FlexItem>}
           </Flex>
           <Content component="small">{scope}</Content>

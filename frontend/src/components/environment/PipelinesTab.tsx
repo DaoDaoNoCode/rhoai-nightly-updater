@@ -69,6 +69,8 @@ const joinNodes = (nodes: React.ReactNode[]) => nodes.map((n, i) => <React.Fragm
 export interface PipelinesTabProps {
   /** What Pipelines needs on the cluster (one-click prerequisites), above the parts. */
   prerequisites?: React.ReactNode;
+  /** Why the feature cannot be set up until its cluster prerequisites are, or null. */
+  prerequisitesReason?: string | null;
   status: ResourcesStatus;
   /** The selected project (the URL's, else the default), or null. */
   project: string | null;
@@ -447,7 +449,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
       </StackItem>
       {next?.kind === "set-up" && (
         <StackItem>
-          <PrimaryAction label={next.label} onClick={() => onSetUp(next.setup)} reason={readOnly ? READ_ONLY_SETUP : baseReason ?? next.reason} />
+          <PrimaryAction label={next.label} variant={props.prerequisitesReason ? "secondary" : "primary"} onClick={() => onSetUp(next.setup)} reason={readOnly ? READ_ONLY_SETUP : baseReason ?? next.reason ?? props.prerequisitesReason ?? null} />
         </StackItem>
       )}
       {project && server?.ready && !isTerminating(server) && (

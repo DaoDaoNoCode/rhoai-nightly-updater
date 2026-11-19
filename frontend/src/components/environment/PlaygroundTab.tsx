@@ -42,6 +42,8 @@ import {
 export interface PlaygroundTabProps {
   /** What the playground needs on the cluster (one-click prerequisites), above the parts. */
   prerequisites?: React.ReactNode;
+  /** Why the feature cannot be set up until its cluster prerequisites are, or null. */
+  prerequisitesReason?: string | null;
   status: ResourcesStatus;
   /**
    * GET /api/resources/playground: null until it has been read; while
@@ -348,7 +350,7 @@ export const PlaygroundTab: React.FC<PlaygroundTabProps> = (props) => {
       </StackItem>
       {next?.kind === "set-up" && project && (
         <StackItem>
-          <PrimaryAction label={next.label} onClick={() => onSetUp([{ kind: "setup-playground", project, models }])} reason={readOnly ? READ_ONLY_SETUP : baseReason ?? next.reason ?? pickReason} />
+          <PrimaryAction label={next.label} onClick={() => onSetUp([{ kind: "setup-playground", project, models }])} variant={props.prerequisitesReason ? "secondary" : "primary"} reason={readOnly ? READ_ONLY_SETUP : baseReason ?? next.reason ?? props.prerequisitesReason ?? pickReason} />
         </StackItem>
       )}
       {project && item?.ready && <StackItem><UsePlayground dashboardUrl={status.dashboardUrl} project={project} model={chat[0]} /></StackItem>}

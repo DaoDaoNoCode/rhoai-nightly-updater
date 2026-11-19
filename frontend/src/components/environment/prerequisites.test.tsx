@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { QuickResourceCreator } from "../QuickResourceCreator";
 import { stubApi } from "../../test/apiStub";
 import type { FeaturePrerequisites, ResourceState, ResourcesStatus } from "../../types";
-import { prerequisitesSteps, withPrerequisites } from "./Prerequisites";
+import { prerequisitesConfirm, prerequisitesScript, prerequisitesSteps, withPrerequisites } from "./Prerequisites";
 
 const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };
 const status: ResourcesStatus = { minio: none, mlflow: none, pipelineServers: [], inferenceGateway: { ...none }, models: { catalog: [] } } as unknown as ResourcesStatus;
@@ -33,10 +33,35 @@ describe("one-click prerequisites", () => {
 
   it("the Overview's next step sets them up while the feature is not set up", () => {
     const state = { status: "not-set-up" as const, label: "Not set up in any project", next: { kind: "choose-project" as const }, project: null };
-    expect(withPrerequisites(state, models, "models")).toMatchObject({ label: "Needs cluster setup", next: { kind: "set-up", label: "Set up what Models needs", setup: [{ kind: "setup-prerequisites", feature: "models" }], reason: null } });
+    // Models: planned for the recommended way to reach a model (Connectivity Link included).
+    expect(withPrerequisites(state, models, "models")).toMatchObject({ label: "Needs cluster setup", next: { kind: "set-up", label: "Set up what Models needs", setup: [{ kind: "setup-prerequisites", feature: "models", exposure: "default-gateway", recommended: true }], reason: null } });
     expect(withPrerequisites(state, ready, "pipelines")).toBe(state);
+    // A feature that reads ready while its prerequisites are not needs attention.
     const readyState = { ...state, status: "ready" as const };
-    expect(withPrerequisites(readyState, models, "models")).toBe(readyState);
+    expect(withPrerequisites(readyState, models, "models")).toMatchObject({ status: "needs-attention", next: { kind: "set-up", label: "Set up what Models needs" } });
+  });
+
+  it("the confirmation shows the plan open and says Connectivity Link is for the recommended gateway", () => {
+    const st = { features: { models }, modelsExposure: "default-gateway" };
+    const spec = prerequisitesConfirm({ kind: "setup-prerequisites", feature: "models", exposure: "default-gateway", recommended: true }, st)!;
+    expect(spec.confirm).toBe("Install and turn on");
+    expect(spec.changesOpen).toBe(true);
+    expect(spec.confirmDisabled).toBe(false);
+    render(<>{spec.summary}</>);
+    expect(screen.getByText("Operators it installs stay installed after Clean up, because other features share them.")).toBeInTheDocument();
+    expect(screen.getByText(/Includes Red Hat Connectivity Link, for the recommended inference gateway\./)).toBeInTheDocument();
+    // An answer planned for another way to reach the model: Confirm waits.
+    const other = prerequisitesConfirm({ kind: "setup-prerequisites", feature: "models", exposure: "internal" }, st)!;
+    expect(other.confirmDisabled).toBe(true);
+  });
+
+  it("every missing part's commands are one ordered script", () => {
+    const script = prerequisitesScript([
+      { id: "dsc-kserve", title: "Model serving (KServe)", state: "missing", commands: "oc patch a" },
+      { id: "cert-manager", title: "cert-manager", state: "ready" },
+      { id: "kuadrant", title: "Connectivity Link instance (Kuadrant)", state: "missing", commands: "oc apply b" },
+    ]);
+    expect(script).toBe("# Model serving (KServe)\noc patch a\n\n# Connectivity Link instance (Kuadrant)\noc apply b");
   });
 
   it("a tab lists what is missing with the CLI alternative, confirms the plan and streams the setup", async () => {
@@ -48,7 +73,7 @@ describe("one-click prerequisites", () => {
       "POST /api/resources/prerequisites/stream": sse({ step: "prerequisites", status: "success", message: "Checked.", elapsedMs: 1 }, { step: "operation_complete", status: "success", message: "What Models needs on the cluster is set up.", elapsedMs: 2 }),
     });
     render(<MemoryRouter initialEntries={["/test-resources?tab=models&project=dev"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
-    expect(await screen.findByText("On the cluster first")).toBeInTheDocument();
+    expect(await screen.findByText("Needed on the cluster first")).toBeInTheDocument();
     expect(screen.getByRole("listitem", { name: "cert-manager Operator for Red Hat OpenShift" })).toBeInTheDocument();
     expect(screen.getAllByText("Do it from the CLI instead").length).toBeGreaterThan(0);
     // The plan follows the chosen way to reach the model.
@@ -57,7 +82,7 @@ describe("one-click prerequisites", () => {
     fireEvent.click(screen.getByRole("button", { name: "Set up what Models needs" }));
     const dialog = await screen.findByRole("dialog", { name: /Set up what Models needs on the cluster\?/ });
     expect(within(dialog).getByText(/set kserve to Managed/)).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Set up" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Install and turn on" }));
     expect(await screen.findByText("What Models needs on the cluster is set up.")).toBeInTheDocument();
     expect(api.bodies["POST /api/resources/prerequisites/stream"]).toEqual([{ feature: "models", exposure: "internal" }]);
     // The plan was read for the chosen way to reach the model.
@@ -71,6 +96,20 @@ describe("one-click prerequisites", () => {
       "/api/resources/prerequisites": { features: { pipelines: ready, mlflow: ready, models: ready, playground: ready } },
     });
     render(<MemoryRouter initialEntries={["/test-resources?tab=pipelines&project=dev"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
-    expect(await screen.findByText(/Everything Pipelines needs on the cluster is ready \(1 part\)/)).toBeInTheDocument();
+    expect(await screen.findByText("Cluster prerequisites for Pipelines: 1 of 1 ready")).toBeInTheDocument();
+  });
+
+  it("an answer for another way to reach the model is not shown, and Set up waits for the right one", async () => {
+    stubApi({
+      "/api/resources/status": status,
+      "/api/resources/projects": { projects: ["dev"] },
+      // The backend echoes the exposure it planned for: here never "internal".
+      "/api/resources/prerequisites": { features: { pipelines: ready, mlflow: ready, models, playground: ready }, modelsExposure: "default-gateway" },
+      "/api/resources/models/exposures": { project: "dev", model: "qwen25-05b-instruct", default: "internal", options: [{ key: "internal", exposure: "internal", title: "Only inside the cluster", description: "No route.", available: true }], authReady: false },
+    });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=models&project=dev"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
+    expect(await screen.findByRole("radio", { name: /Only inside the cluster/ })).toBeChecked();
+    await vi.waitFor(() => expect(screen.queryByText("Needed on the cluster first")).not.toBeInTheDocument());
+    expect(screen.getByText("Checking what this way to reach the model needs on the cluster...")).toBeInTheDocument();
   });
 });

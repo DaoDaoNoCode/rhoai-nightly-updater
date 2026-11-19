@@ -317,7 +317,8 @@ export function mlflowState(status: ResourcesStatus | null, busy: Busy = IDLE): 
 
 const modelsBusy = (busy: Busy, part: "gateway" | "model", project?: string, model?: string): "setting-up" | "deleting" | null => {
   const op = busy.models;
-  if (!op || (part === "gateway" ? !op.gateway : op.project !== project || (!!model && !!op.model && op.model !== model))) return null;
+  // Check again changes nothing: the model is not setting up meanwhile.
+  if (!op || op.action === "check" || (part === "gateway" ? !op.gateway : op.project !== project || (!!model && !!op.model && op.model !== model))) return null;
   return op.action === "teardown" ? "deleting" : "setting-up";
 };
 
@@ -411,8 +412,17 @@ export function modelNamesIn(status: ResourcesStatus | null, project: string): s
   return [...names].sort((a, b) => order.indexOf(a) - order.indexOf(b));
 }
 
+/** The model's last "Can it be called?" failed: a caller would not get an answer (or would without a token). */
+export function callCheckFailed(m: ModelState | undefined): boolean {
+  const check = m?.callCheck;
+  return !!check && !check.ok && check.result !== "not-checked";
+}
+
 export function modelStatus(status: ResourcesStatus | null, project: string, busy: Busy, name: string = DEFAULT_MODEL): EnvStatus {
-  return envStatus(modelIn(status, project, name), { busy: modelsBusy(busy, "model", project, name) });
+  const m = modelIn(status, project, name);
+  const s = envStatus(m, { busy: modelsBusy(busy, "model", project, name) });
+  // Ready but not callable is not Ready: its card says so too.
+  return s === "ready" && callCheckFailed(m) ? "needs-attention" : s;
 }
 
 /** The parts of Models in a project for one model, in dependency order. */
@@ -482,11 +492,8 @@ function modelsIn(status: ResourcesStatus | null, project: string, busy: Busy, n
   const notAllowed = notAllowedState(status, project);
   if (notAllowed) return notAllowed;
   const unmanaged = parts.some((p) => p.unmanaged);
-  // Ready but its last "Can it be called?" failed: a caller would not get an answer.
-  const check = modelIn(status, project, name)?.callCheck;
-  if (model.status === "ready" && check && !check.ok && check.result !== "not-checked") {
-    return { status: "needs-attention", label: `Needs attention in ${project}`, ...owner(unmanaged), next: { kind: "show-issue", part: "model" }, project };
-  }
+  // (A ready model whose last "Can it be called?" failed is a problem
+  // above: modelStatus reads it as needs-attention.)
   if (model.status === "ready") {
     const href = dashboardProjectHref(status?.dashboardUrl, project);
     return { status: "ready", label: `Ready in ${project}`, ...owner(unmanaged), next: href ? { kind: "open", label: "Open in dashboard", href } : null, project };

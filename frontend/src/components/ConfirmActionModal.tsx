@@ -36,6 +36,8 @@ export interface ConfirmActionModalProps {
   isLoading?: boolean;
   /** Disable Confirm (for example while the preconditions load). */
   confirmDisabled?: boolean;
+  /** With a summary, show the changes after it, open, instead of under "Details". */
+  changesOpen?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -46,7 +48,7 @@ export interface ConfirmActionModalProps {
  * of them; Cancel is always available and Escape closes the dialog.
  */
 export const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
-  isOpen, title, changes, summary, children, dataLoss, choice, confirmLabel, confirmVariant = "primary", isLoading, confirmDisabled, onConfirm, onCancel,
+  isOpen, title, changes, summary, children, dataLoss, choice, confirmLabel, confirmVariant = "primary", isLoading, confirmDisabled, changesOpen, onConfirm, onCancel,
 }) => {
   const titleId = React.useId();
   const [detailsOpen, setDetailsOpen] = React.useState(false);
@@ -71,7 +73,8 @@ export const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
             </StackItem>
           )}
           {children && <StackItem>{children}</StackItem>}
-          {summary && changes.length > 0 && (
+          {summary && changesOpen && changes.length > 0 && <StackItem>{changeList}</StackItem>}
+          {summary && !changesOpen && changes.length > 0 && (
             <StackItem>
               <ExpandableSection toggleText="Details" isExpanded={detailsOpen} onToggle={(_e, v) => setDetailsOpen(v)}>{changeList}</ExpandableSection>
             </StackItem>
