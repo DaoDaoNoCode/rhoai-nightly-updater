@@ -331,23 +331,64 @@ mainpub() { # SHA SHORT TIP
 	env FAKE_REGISTRY="$REG" CRANE="$CRANE" IMAGE=quay.io/example/app IMAGE_TARBALL="$WORK/image.tar" \
 		CI_COMMIT_SHA="$1" CI_COMMIT_SHORT_SHA="$2" CI_DEFAULT_BRANCH=main MAIN_TIP="$3" $SH "$RELEASE" publish-main
 }
+tarball_digest() { echo "sha256:$(cksum <"$WORK/image.tar" | cut -d' ' -f1)"; }
+commit_tag_pushes() { grep -c "^push .*:$1\$" "$REG/calls" || true; }
 reset_registry
 config 22222222 "$SHA2" >"$WORK/image.tar"
 expect_ok "publish-main" mainpub "$SHA2" 22222222 "$SHA2"
-expect_eq ":main is the commit" "$(tag_digest 22222222)" "$(tag_digest main)"
-first=$(tag_digest 22222222)
+first=$(tarball_digest)
+expect_eq "the commit tag is this pipeline's image" "$first" "$(tag_digest 22222222)"
+expect_eq ":main is this pipeline's image" "$first" "$(tag_digest main)"
 expect_ok "publish-main retried with the same image" mainpub "$SHA2" 22222222 "$SHA2"
-expect_eq "one push" 1 "$(grep -c '^push' "$REG/calls")"
+expect_eq "the commit tag is pushed once" 1 "$(commit_tag_pushes 22222222)"
+expect_eq ":main still this pipeline's image" "$first" "$(tag_digest main)"
+
+# Another image of the same commit under the commit tag (a rebuilt
+# build-main, or a workstation push before `make push` used dev- tags) is
+# not adopted: the job stops and :main stays where it was.
 printf 'rebuilt\n' >>"$WORK/image.tar"
-expect_ok "publish-main with a rebuild of the same commit" mainpub "$SHA2" 22222222 "$SHA2"
+expect_fail "publish-main with a rebuild of the same commit" "adopts no image it did not build" mainpub "$SHA2" 22222222 "$SHA2"
 expect_eq "the commit tag is written once" "$first" "$(tag_digest 22222222)"
-expect_eq "still one push" 1 "$(grep -c '^push' "$REG/calls")"
+expect_eq ":main not moved by a refused job" "$first" "$(tag_digest main)"
+SHA5=5555555555555555555555555555555555555555
+seed 55555555 "$(config 55555555 "$SHA5")"
+config 55555555 "$SHA5" >"$WORK/image.tar"
+expect_fail "a workstation push under the commit tag" "adopts no image it did not build" mainpub "$SHA5" 55555555 "$SHA5"
+expect_eq ":main not moved to the workstation image" "$first" "$(tag_digest main)"
+expect_eq "the workstation image is left for a person to check" "sha256:seed-55555555" "$(tag_digest 55555555)"
+# A workstation image labelled with a release version is not a release
+# image unless :vX.Y.Z is that same image.
+seed v7.0.0 "$(config v7.0.0 "$SHA5")"
+seed 55555555 "$(config v7.0.0 "$SHA5")"
+expect_fail "a commit tag that claims a release" "adopts no image it did not build" mainpub "$SHA5" 55555555 "$SHA5"
+expect_eq ":main still not moved" "$first" "$(tag_digest main)"
+
 config 33333333 "$SHA3" >"$WORK/image.tar"
 expect_ok "publish-main of a commit that is no longer the tip" mainpub "$SHA3" 33333333 "$SHA2"
 expect_eq ":main not moved back" "$first" "$(tag_digest main)"
 [ -f "$REG/tags/33333333" ] && pass || fail "the commit tag of a non-tip commit was not published"
 seed 44444444 "$(config 44444444 "$SHA3")"
 expect_fail "a commit tag from another commit" "commit tags are written once" mainpub "$SHA2" 44444444 "$SHA2"
+
+# The tag pipeline of the same commit published first: the commit tag is
+# its release image (the same digest as :v6.0.0) and is kept; :main is
+# still main's own build.
+SHA6=6666666666666666666666666666666666666666
+config v6.0.0 "$SHA6" >"$WORK/image.tar"
+expect_ok "release before main" env FAKE_REGISTRY="$REG" CRANE="$CRANE" IMAGE=quay.io/example/app IMAGE_TARBALL="$WORK/image.tar" \
+	CI_COMMIT_SHA="$SHA6" CI_COMMIT_SHORT_SHA=66666666 $SH "$RELEASE" publish v6.0.0
+release6=$(tag_digest v6.0.0)
+expect_eq "the release wrote the commit tag" "$release6" "$(tag_digest 66666666)"
+config 66666666 "$SHA6" >"$WORK/image.tar"
+expect_ok "main after the release of its commit" mainpub "$SHA6" 66666666 "$SHA6"
+expect_eq "the commit tag stays the release image" "$release6" "$(tag_digest 66666666)"
+expect_eq ":main is main's own build, not the release image" "$(tarball_digest)" "$(tag_digest main)"
+
+# Back to commit 22222222's image for the release-after-main check below.
+reset_registry
+config 22222222 "$SHA2" >"$WORK/image.tar"
+expect_ok "publish-main again" mainpub "$SHA2" 22222222 "$SHA2"
+first=$(tag_digest 22222222)
 expect_fail "unreadable tip" "Cannot read the tip" env FAKE_REGISTRY="$REG" CRANE="$CRANE" IMAGE=quay.io/example/app \
 	IMAGE_TARBALL="$WORK/image.tar" CI_COMMIT_SHA="$SHA3" CI_COMMIT_SHORT_SHA=33333333 CI_DEFAULT_BRANCH=main \
 	CI_SERVER_URL=http://127.0.0.1:9 CI_PROJECT_PATH=x CI_JOB_TOKEN=x $SH "$RELEASE" publish-main
@@ -361,6 +402,41 @@ expect_fail "registry unreachable" "Cannot list the tags" env FAKE_LS_ERROR="dia
 	IMAGE=quay.io/example/app IMAGE_TARBALL="$WORK/image.tar" CI_COMMIT_SHA="$SHA2" $SH "$RELEASE" publish v1.0.1
 expect_fail "IMAGE with a tag" "without a tag" env FAKE_REGISTRY="$REG" CRANE="$CRANE" IMAGE=quay.io/example/app:latest \
 	CI_COMMIT_SHA="$SHA2" $SH "$RELEASE" publish v1.0.1
+
+# --- make build / make push: local builds never take a CI tag -------------------
+# The Makefile, in a repository of its own, with a fake container runtime.
+if command -v make >/dev/null 2>&1; then
+	MK="$WORK/make"
+	git init -q -b main "$MK"
+	cp "$HERE/../Makefile" "$MK/Makefile"
+	printf '#!/bin/sh\necho "$*" >>"%s/runtime-calls"\n' "$WORK" >"$WORK/runtime"
+	chmod +x "$WORK/runtime"
+	(cd "$MK" && echo x >file && commit_all mk)
+	MKSHA=$(cd "$MK" && git rev-parse HEAD | cut -c1-8)
+	mk() { (cd "$MK" && make --no-print-directory RUNTIME="$WORK/runtime" IMAGE=quay.io/example/app "$@") }
+	rm -f "$WORK/runtime-calls"
+	expect_ok "make push: clean tree" mk push
+	expect_eq "make push: pushes dev-<commit>" "push quay.io/example/app:dev-$MKSHA" "$(cat "$WORK/runtime-calls")"
+	rm -f "$WORK/runtime-calls"
+	expect_ok "make push: a commit-like TAG" mk push TAG=1234abcd
+	expect_eq "make push: a commit-like TAG is not pushed" "push quay.io/example/app:dev-$MKSHA" "$(cat "$WORK/runtime-calls")"
+	rm -f "$WORK/runtime-calls"
+	expect_ok "make push: a TAG of your own" mk push TAG=my-test
+	expect_eq "make push: a TAG of your own is pushed too" "push quay.io/example/app:dev-$MKSHA
+push quay.io/example/app:my-test" "$(cat "$WORK/runtime-calls")"
+	build=$(mk -n build)
+	printf '%s\n' "$build" | grep -qF -- "-t quay.io/example/app:dev-$MKSHA " && pass || fail "make build: not tagged dev-<commit>: $build"
+	echo y >>"$MK/file"
+	rm -f "$WORK/runtime-calls"
+	expect_fail "make push: dirty tree" "uncommitted changes" mk push
+	[ ! -e "$WORK/runtime-calls" ] && pass || fail "make push pushed from a dirty tree: $(cat "$WORK/runtime-calls")"
+	build=$(mk -n build)
+	printf '%s\n' "$build" | grep -qF -- "-t quay.io/example/app:dev-$MKSHA-dirty " && pass || fail "make build: a dirty build is not tagged -dirty: $build"
+	(cd "$MK" && git checkout -q file && echo new >untracked)
+	expect_fail "make push: untracked files" "uncommitted changes" mk push
+else
+	echo "SKIP: make is not installed; the make build/push checks did not run" >&2
+fi
 
 # --- wait-image (GitHub release) ------------------------------------------------
 waitimg() { env FAKE_REGISTRY="$REG" CRANE="$CRANE" IMAGE=quay.io/example/app WAIT_SECONDS=1 WAIT_INTERVAL=1 $SH "$RELEASE" wait-image "$@"; }

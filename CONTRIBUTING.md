@@ -225,14 +225,14 @@ make build             # Build using podman or docker (auto-detected)
      - Copies frontend static files from frontend stage
      - Sets `STATIC_DIR=/app/static`, `PORT=8080`
      - Runs as non-root user `1001`
-3. Tags the image as `IMAGE:GIT_SHA`, plus `IMAGE:TAG` when `TAG` is a test tag of your own (never `latest`, `main`, `vN` or `vX.Y.Z`: CI publishes those)
+3. Tags the image as `IMAGE:dev-<GIT_SHA>` (`dev-<GIT_SHA>-dirty` when the tree has uncommitted changes), plus `IMAGE:TAG` when `TAG` is a test tag of your own (never `latest`, `main`, `vN`, `vX.Y.Z` or a commit-like 7 to 40 hex characters: CI publishes those). A local build never takes the bare commit tag that CI writes once
 
 **Build variables** (override via environment, command line, or `.env` file):
 
 - `IMAGE` — Registry and image name (default: `quay.io/juntao_wang/rhoai-nightly-updater`)
 - `TAG` — Image tag (default: the release tag HEAD is on, else none). `deploy`/`upgrade` install this tag
 - `BUILD_VERSION` — The version the binary reports (default: the release tag HEAD is on, else `GIT_SHA`)
-- `GIT_SHA` — 8-character commit tag (default: the first 8 characters of the HEAD commit, the same as GitLab's `CI_COMMIT_SHORT_SHA`)
+- `GIT_SHA` — the commit in local build tags (default: the first 8 characters of the HEAD commit, the same as GitLab's `CI_COMMIT_SHORT_SHA`); local builds are tagged `dev-<GIT_SHA>`
 - `RUNTIME` — Container runtime (default: auto-detected `podman` or `docker`)
 - `PLATFORM` — Target platform (default: `linux/amd64`)
 - `NO_CACHE` — Set to `1` to skip cache and force rebuild
@@ -248,10 +248,10 @@ make build NO_CACHE=1                       # Force full rebuild
 ### Push to Registry
 
 ```bash
-make push              # Push IMAGE:GIT_SHA (and IMAGE:TAG for a test tag of your own)
+make push              # Push IMAGE:dev-<GIT_SHA> (and IMAGE:TAG for a test tag of your own); refuses a tree with uncommitted changes
 ```
 
-Requires prior `docker login` or `podman login` to the registry. To test your build on a cluster: `make build push`, then `make upgrade TAG=<GIT_SHA>` (or `make all`, which deploys `:<GIT_SHA>`). For Docker, set `RUNTIME=docker`.
+Requires prior `docker login` or `podman login` to the registry. To test your build on a cluster: commit, `make build push`, then `make upgrade TAG=dev-<GIT_SHA>` (or `make all`, which deploys `:dev-<GIT_SHA>`). `make push` refuses a tree with uncommitted changes (untracked files too): the image's revision label names HEAD, and `make deploy`/`upgrade` pick the template by it. For Docker, set `RUNTIME=docker`.
 
 ### Automatic Image Publishing
 
@@ -266,7 +266,7 @@ GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release t
   - `release-guard` (tags only): `scripts/release.sh check`, see [Releases](#releases);
   - the Go jobs keep Go's module and build caches (and golangci-lint's) in `.cache/`, one GitLab cache per job keyed on `go.sum`.
 - **Image jobs** (`build-main`, `build-branch`, `release-build`) `need` the Go and frontend test jobs of their pipeline and build with `RUN_CHECKS=false`, so the Containerfile does not run those checks a second time.
-- **main**: `build-main` builds the image to a tarball; `publish-main` pushes it as the write-once `:$CI_COMMIT_SHORT_SHA` (8 characters; an existing tag is kept when it is a build of the same commit, and refused from another commit) and moves `:main` only while the commit is still the tip of `main`. It never touches `:latest`.
+- **main**: `build-main` builds the image to a tarball; `publish-main` pushes it as the write-once `:$CI_COMMIT_SHORT_SHA` (8 characters) and as `:main`, the latter only while the commit is still the tip of `main`. `:main` is always the pipeline's own image. An existing commit tag is kept only when it is that same image, or the release image of the same commit (a tag pipeline that published first: its `:vX.Y.Z` has the same digest); anything else (another commit, an earlier build, a workstation push) stops the job before `:main` moves. Delete such a tag in Quay after checking it, then retry the job. It never touches `:latest`.
 - **Other branches**: the manual `build-branch` job builds the image. It pushes it as `$BRANCH_IMAGE:$CI_COMMIT_REF_SLUG` only when the project has the variables `BRANCH_IMAGE`, `QUAY_BRANCH_USER` and `QUAY_BRANCH_TOKEN` (below); without them it builds and pushes nothing. It never uses `QUAY_USER`/`QUAY_TOKEN`.
 - **Release tags**: `release-build` builds the image (`VERSION=<tag>`) to a tarball; `release-installer` generates `install.sh`; `release-publish` pushes `:vX.Y.Z` and moves `:vN` and `:latest` (every tag-writing job, main or release, holds the one resource group `publish-latest`); `release-notes` creates the GitLab Release. `promote-latest` is manual.
 - The registry comes from the `IMAGE` variable (a project CI/CD variable overrides the default) with `QUAY_USER`/`QUAY_TOKEN` as its credentials. Only the crane jobs (`publish-main`, `release-publish`, `promote-latest`) read them, and those run only on `main` and on release tags. Kaniko never gets them: the build's `RUN` steps (`npm ci` with its packages' install scripts, `go mod download`) could read kaniko's registry login, so `build-main` and `release-build` build a tarball with no registry login and the crane job pushes it.
@@ -303,7 +303,7 @@ Image tags:
 | `:vN` | to the newest release of major N | the tag pipeline |
 | `:latest` | to a newer release of the **same** major only; an unlabelled `:latest` (from before releases) counts as v1 | the tag pipeline; across majors only the manual `promote-latest` job |
 | `:main` | to every new tip of `main` | `publish-main` |
-| `:<8-char commit>` | never: written once, by whichever pipeline publishes the commit first | `publish-main` or the tag pipeline |
+| `:<8-char commit>` | never: written once, by whichever pipeline publishes the commit first | `publish-main` or the tag pipeline (`make push` writes `:dev-<commit>`, never this) |
 
 How to cut a release:
 
@@ -480,16 +480,16 @@ make build
 #### 2. Push to Registry
 
 ```bash
-make push              # Pushes IMAGE:GIT_SHA (and a test TAG of your own)
+make push              # Pushes IMAGE:dev-<GIT_SHA> (and a test TAG of your own) of a clean tree
 ```
 
 #### 3. Deploy to OpenShift
 
 ```bash
-make deploy TAG=<GIT_SHA>   # first install; make upgrade afterwards. Requires cluster-admin and 'oc login'
+make deploy TAG=dev-<GIT_SHA>   # first install; make upgrade afterwards. Requires cluster-admin and 'oc login'
 ```
 
-Both run `scripts/install.sh` (the script every release attaches as `install.sh`): they resolve `IMAGE:TAG` to a digest, check that the image was built from a commit with this checkout's `deploy/template.yaml`, create the cookie Secret once, apply the template, wait for the rollout, then add the ConsoleLink, remove legacy objects and prune old ReplicaSets. `DRY_RUN=1` only validates. Overrides, rollback and the first-time `ALLOW_TEMPLATE_MISMATCH=1` are described in [RUNBOOK §2](RUNBOOK.md#2-upgrade-roll-back-or-remove-the-updater). To deploy an image you pushed yourself, push it first (`make build push`), then run `make upgrade TAG=<GIT_SHA>`. If you changed the template, commit it first.
+Both run `scripts/install.sh` (the script every release attaches as `install.sh`): they resolve `IMAGE:TAG` to a digest, check that the image was built from a commit with this checkout's `deploy/template.yaml`, create the cookie Secret once, apply the template, wait for the rollout, then add the ConsoleLink, remove legacy objects and prune old ReplicaSets. `DRY_RUN=1` only validates. Overrides, rollback and the first-time `ALLOW_TEMPLATE_MISMATCH=1` are described in [RUNBOOK §2](RUNBOOK.md#2-upgrade-roll-back-or-remove-the-updater). To deploy an image you pushed yourself, commit, push it (`make build push`), then run `make upgrade TAG=dev-<GIT_SHA>`.
 
 If you change `deploy/template.yaml` in a way the running code depends on, bump `TEMPLATE_REVISION` there and `api.ExpectedTemplateRevision` together; the UI then tells admins to upgrade. After any change to it, run `make chart` so the Helm chart renders the same template.
 
