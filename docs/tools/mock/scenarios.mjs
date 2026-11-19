@@ -69,6 +69,8 @@ export const scenarios = {
   // or OSD (the mirror allowed, the pull secret not), an unknown platform
   // whose admission webhook refuses the attempt, and ROSA HCP.
   "self-managed-mirror": (w) => { scenarios["self-managed-saved"](w); w.status.imageMirror = { exists: false, name: "", source: "" }; },
+  // After Add to the nodes' pull secret: the tool's record is in the status.
+  "self-managed-mirror-added": (w) => { scenarios["self-managed-mirror"](w); w.status.pullSecret.nodes.addedByTool = F.NODE_PULL_RECORD; w.nodes = { pullEntry: "same" }; },
   "self-managed-paused-pool": (w) => { scenarios["self-managed-mirror"](w); w.stuckPools = ["worker (paused)"]; },
   "managed-classic": (w) => { scenarios["ready-to-install"](w); w.status.imageMirror = { exists: false, name: "", source: "" }; F.selfManaged(w.status, { managed: true }); },
   "unknown-denied": (w) => { scenarios["self-managed-unknown"](w); w.status.imageMirror = { exists: false, name: "", source: "" }; w.nodeSetupDenied = true; },

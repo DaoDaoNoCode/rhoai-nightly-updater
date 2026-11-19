@@ -666,8 +666,8 @@ async (page) => {
       });
 
       // Self-managed OpenShift after step 1: one click for the nodes' pull
-      // secret and the image mirror, and the nodes' check.
-      await open("/", "self-managed-mirror");
+      // secret (added by this tool: its record) and the image mirror, and the nodes' check.
+      await open("/", "self-managed-mirror-added");
       const selfManaged = card("One-time cluster setup");
       await selfManaged.getByRole("button", { name: "Check that the nodes can pull" }).click();
       await selfManaged.locator(".pf-v6-c-alert__title", { hasText: "The nodes can pull from quay.io/rhoai" }).waitFor();
