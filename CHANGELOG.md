@@ -246,6 +246,10 @@ only accepts a tag whose version is the top dated section. See
 - The Content-Security-Policy adds `base-uri 'none'`, `form-action 'self'`,
   `frame-ancestors 'none'` and `object-src 'none'`, which `default-src`
   does not cover.
+- S3 storage, **Copy as environment variables**: every value is
+  single-quoted (`AWS_SECRET_ACCESS_KEY='...'`), so keys set at a first
+  setup with `$`, backticks or spaces cannot run or split when pasted
+  into a shell.
 
 ## [3.0.0] - 2026-11-18
 

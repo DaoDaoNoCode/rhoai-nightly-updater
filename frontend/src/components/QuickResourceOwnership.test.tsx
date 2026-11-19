@@ -344,7 +344,7 @@ describe("S3 storage (names, login, kept namespace)", () => {
     await waitFor(() => expect(key.value).toBe("AKEY"));
     await act(async () => { fireEvent.click(within(storage).getByRole("button", { name: "Copy as environment variables" })); });
     await waitFor(() => expect(writes).toHaveLength(1));
-    expect(writes[0]).toContain("AWS_ACCESS_KEY_ID=AKEY\nAWS_SECRET_ACCESS_KEY=s3cret-value\n");
+    expect(writes[0]).toContain("AWS_ACCESS_KEY_ID='AKEY'\nAWS_SECRET_ACCESS_KEY='s3cret-value'\n");
     expect(document.body).not.toHaveTextContent("s3cret-value");
     expect(api.calls.filter((c) => c.includes("admin-password"))).toHaveLength(2);
   });
