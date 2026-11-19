@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import ts from "typescript";
+import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -86,7 +87,9 @@ function typeErrors(source: string): Array<{ line: number; message: string }> {
   }));
 }
 
-describe("the docs mock", () => {
+// The image build (Containerfile) copies only frontend/, without the docs;
+// CI's test jobs run in the whole checkout, where they are.
+describe.skipIf(!existsSync(SCENARIOS))("the docs mock", () => {
   it("answers every read, in every scenario, in the shape the app's types say", () => {
     const all = answers();
     const lines = [`import type { ${IMPORTED.join(", ")} } from "../types";`, ...TYPE_GAPS.trim().split("\n")];
