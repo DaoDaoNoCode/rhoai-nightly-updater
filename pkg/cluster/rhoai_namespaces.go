@@ -78,8 +78,16 @@ func applicationsNamespace(c *Client) string {
 	return ns
 }
 
-// appsNamespaceProblem is the sentence a change refuses with when the
-// applications namespace is not known.
-func appsNamespaceProblem(err error) string {
-	return fmt.Sprintf("Cannot tell which namespace RHOAI's applications run in (%v). Nothing was changed.", err)
+// appsNamespaceOrPlaceholder is the applications namespace for a command a
+// person runs, or <applications-namespace> when it is not known.
+func appsNamespaceOrPlaceholder(c *Client) string {
+	if ns, err := appsNamespace(c); err == nil {
+		return ns
+	}
+	return "<applications-namespace>"
+}
+
+// podsCommand lists the pods of the operator and applications namespaces.
+func podsCommand(c *Client) string {
+	return shellCommand("oc", "get", "pods", "-n", SubNS) + "; " + shellCommand("oc", "get", "pods", "-n", appsNamespaceOrPlaceholder(c))
 }

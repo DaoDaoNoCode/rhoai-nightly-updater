@@ -72,13 +72,17 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	}
 	logs = append(logs, fmt.Sprintf("OK: %s manages CatalogSource %s", sentenceStart(g.catalogManager()), CatalogName))
 
-	active, err := DashboardDevActive(c)
+	active, operator, err := dashboardDevActive(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Cannot check for a Dashboard Dev session: %v. Nothing was changed.", err), errorCodeFromK8sErr(err))
 	}
 	if active {
-		return fail("A Dashboard Dev session is active (dashboard-operator is paused), and Update would keep the dashboard paused under the new operator. "+
-			"The gitops profile cannot end the session: end it with the full profile, or scale Deployment dashboard-operator in redhat-ods-applications back up. Nothing was changed.", errorCodeDashboardDevActive)
+		end := "end it with the full profile"
+		if operator != "" {
+			end += ", or scale Deployment " + operator + " back up"
+		}
+		return fail("A Dashboard Dev session is active ("+pausedOperatorText(operator)+"), and Update would keep the dashboard paused under the new operator. "+
+			"The gitops profile cannot end the session: "+end+". Nothing was changed.", errorCodeDashboardDevActive)
 	}
 
 	// No pull secret read: the profile reads no Secret and contacts no

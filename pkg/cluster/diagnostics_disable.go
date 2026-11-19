@@ -20,8 +20,8 @@ import (
 
 // refusedComponents are never disabled by the tool, with the reason shown.
 var refusedComponents = map[string]string{
-	"dashboard": "Removing the dashboard deletes the Dashboard CR, whose finalizer only dashboard-operator removes. If Dashboard Dev has paused " +
-		"dashboard-operator, the deletion hangs. Change it in the OpenShift console after reverting Dashboard Dev.",
+	"dashboard": "Removing the dashboard deletes the Dashboard CR, whose finalizer only the dashboard module's operator removes. If Dashboard Dev has paused " +
+		"that operator, the deletion hangs. Change it in the OpenShift console after reverting Dashboard Dev.",
 	"mlflowoperator": "The MLflowOperator CR cannot be deleted while any MLflow CR exists (its finalizer waits for them), so removing this " +
 		"component hangs. Delete MLflow first (Environment page), then change it in the OpenShift console.",
 	"aipipelines": "Pipeline servers (DSPAs) keep a finalizer that only the pipelines operator removes. Removing this component while DSPAs exist " +

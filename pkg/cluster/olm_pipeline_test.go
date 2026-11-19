@@ -1132,7 +1132,7 @@ func TestOperationsEndDashboardDevBeforeTheFirstChange(t *testing.T) {
 			case "refresh":
 				r, _ = RefreshOperatorStreamWithOptions(c, opts, func(UpdateStepEvent) {})
 			}
-			if r == nil || !r.Success || !slices.Contains(r.Logs, "OK: Dashboard Dev session ended; dashboard-operator is running again") {
+			if r == nil || !r.Success || !slices.Contains(r.Logs, "OK: Dashboard Dev session ended; the dashboard operator is running again") {
 				t.Fatalf("result = %+v", r)
 			}
 			ended := false

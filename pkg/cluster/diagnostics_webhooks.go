@@ -74,19 +74,26 @@ func findStaleConversions(c *Client) ([]staleConversion, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	// RHOAI's: a CRD of an opendatahub.io API group, or one whose Service
+	// runs in the operator, applications or monitoring namespace.
+	rhoaiNS, nsErr := rhoaiPodNamespaces(c)
+	rhoaiNS = append(rhoaiNS, SubNS)
 	var candidates []conversionCRD
 	for _, crd := range crds {
 		ref := crd.conversionService()
 		if ref == "" {
 			continue
 		}
-		if ns, _, _ := strings.Cut(ref, "/"); !strings.HasPrefix(ns, "redhat-ods") && !strings.Contains(crd.Metadata.Name, "opendatahub") {
+		if ns, _, _ := strings.Cut(ref, "/"); !slices.Contains(rhoaiNS, ns) && !strings.Contains(crd.Metadata.Name, "opendatahub") {
 			continue
 		}
 		candidates = append(candidates, crd)
 	}
 	dead, unknown := deadConversions(candidates, newServiceHealthCache(c, staleServiceGrace))
 	var errs []string
+	if nsErr != nil {
+		errs = append(errs, fmt.Sprintf("the applications and monitoring namespaces are not known, so CRDs whose conversion Service runs there may be missing: %v", nsErr))
+	}
 	for _, u := range unknown {
 		errs = append(errs, fmt.Sprintf("conversion Service of CRD %s: %v", u.CRD, u.Health.err))
 	}
@@ -218,7 +225,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 			Evidence:        evidence,
 			AffectedObjects: affected,
 			Fix:             "Get the owner running again: check the Operator pods and RHOAI pods results and the operator logs. During an operator upgrade, wait for it to finish.",
-			TechnicalCmd:    "oc get pods -n redhat-ods-operator; oc get pods -n redhat-ods-applications",
+			TechnicalCmd:    podsCommand(c),
 		})
 	}
 

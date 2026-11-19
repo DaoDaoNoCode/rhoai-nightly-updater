@@ -226,10 +226,14 @@ func podsBlockedOnSecret(c *Client, l *podLister, namespace, secret string) (blo
 func checkCertificates(c *Client) checkOutput {
 	const name = "Certificates"
 	out := checkOutput{check: CheckResult{Name: name, Status: "pass"}}
-	namespaces := append([]string{SubNS}, rhoaiPodNamespaces...)
+	rhoaiNS, nsErr := rhoaiPodNamespaces(c)
+	namespaces := append([]string{SubNS}, rhoaiNS...)
 	now := time.Now()
 	var certs []certificateItem
 	var errs []string
+	if nsErr != nil {
+		errs = append(errs, fmt.Sprintf("the applications and monitoring namespaces are not known, so their Certificates were not checked: %v", nsErr))
+	}
 	served := true
 	for _, ns := range namespaces {
 		body, _, err := c.get(namespacedPath("cert-manager.io/v1", "certificates", ns, ""))

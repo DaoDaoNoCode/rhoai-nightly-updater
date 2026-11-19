@@ -825,9 +825,17 @@ type DebugResponse struct {
 
 // DashboardState describes the current state of the rhods-dashboard deployment.
 type DashboardState struct {
-	OperatorAvailable       bool                `json:"operatorAvailable"`
-	OperatorPaused          bool                `json:"operatorPaused"`
-	OperatorError           string              `json:"operatorError,omitempty"`
+	OperatorAvailable bool   `json:"operatorAvailable"`
+	OperatorPaused    bool   `json:"operatorPaused"`
+	OperatorError     string `json:"operatorError,omitempty"`
+	// OperatorName and OperatorNamespace name the dashboard module's
+	// operator Deployment, discovered at run time (set when it is
+	// available). NoOperatorReason says why the cluster has no dashboard
+	// module (the legacy flow). Namespace is the applications namespace.
+	OperatorName            string              `json:"operatorName,omitempty"`
+	OperatorNamespace       string              `json:"operatorNamespace,omitempty"`
+	NoOperatorReason        string              `json:"noOperatorReason,omitempty"`
+	Namespace               string              `json:"namespace,omitempty"`
 	IsDevMode               bool                `json:"isDevMode"`
 	DevMode                 string              `json:"devMode,omitempty"`
 	DevImages               []DashboardDevImage `json:"devImages,omitempty"`
@@ -901,6 +909,10 @@ type DashboardOverride struct {
 	// session is recorded; the dashboard then does not follow RHOAI updates.
 	Active         bool `json:"active"`
 	OperatorPaused bool `json:"operatorPaused"`
+	// OperatorName and OperatorNamespace name the paused Deployment: the
+	// dashboard module's operator, discovered at run time.
+	OperatorName      string `json:"operatorName"`
+	OperatorNamespace string `json:"operatorNamespace"`
 	// SessionRecorded is false when the operator was paused outside the tool
 	// or the session annotation was lost; SessionError explains a corrupt one.
 	SessionRecorded bool   `json:"sessionRecorded"`
