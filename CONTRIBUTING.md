@@ -7,7 +7,7 @@ This guide covers how to develop, test, and deploy changes to the RHOAI Nightly 
 ### Required Versions
 
 - **Go**: 1.27; `go.mod` names toolchain go1.27.4, the version CI and the Containerfile use, so an older local Go 1.21+ downloads and runs it (`GOTOOLCHAIN=auto`, the default)
-- **Node.js**: 22.x, ≥ 22.13 for the test tooling (CI uses `node:22-alpine`)
+- **Node.js**: 26.x, the Active LTS line (CI and the image use `node:26-alpine`); Node 22.15+ and 24 also run the tooling
 - **TypeScript**: 5.x
 
 ### Required Tools
@@ -57,7 +57,7 @@ Open **http://127.0.0.1:9000** in your browser.
 
 ### Frontend Development
 
-**Changing frontend dependencies:** after editing `frontend/package.json`, run `make frontend-lock`. It updates `package-lock.json` with the npm of CI's pinned `node:22-alpine` image. A newer local npm (11) leaves out optional peer entries that npm 10 expects, and CI's `npm ci` then refuses the lock as out of sync.
+**Changing frontend dependencies:** after editing `frontend/package.json`, run `make frontend-lock`. It updates `package-lock.json` with the npm of CI's pinned `node:26-alpine` image (npm 11), so CI's `npm ci` accepts it. npm majors write the lock differently: when CI ran npm 10, it refused locks from a local npm 11 as out of sync (npm 11 leaves out optional peer entries npm 10 expects).
 
 The frontend uses:
 
@@ -210,7 +210,7 @@ make build             # Build using podman or docker (auto-detected)
 
 1. Auto-detects container runtime (`podman` or `docker`)
 2. Builds a multi-stage image from `Containerfile`:
-   - **Stage 1 (frontend)**: `node:22-alpine`
+   - **Stage 1 (frontend)**: `node:26-alpine`
      - Installs dependencies: `npm ci`
      - Type-checks, lints and tests: `npm run typecheck && npm run lint && npm test` (skipped with `--build-arg RUN_CHECKS=false`, which only GitLab's image jobs pass: their pipeline's test jobs have run these checks on the same commit)
      - Builds production bundle: `npm run build` → `frontend/dist/`
