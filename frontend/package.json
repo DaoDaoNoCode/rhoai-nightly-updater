@@ -3,10 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "test": "node --test tests/*.test.cjs && vitest run",
-    "test:unit": "vitest run",
-    "test:node": "node --test tests/*.test.cjs",
-    "test:streams": "node --test tests/stream-reader.test.cjs",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit -p .",
     "lint": "eslint .",
     "build": "webpack --mode production",

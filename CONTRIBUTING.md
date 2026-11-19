@@ -150,7 +150,7 @@ make test-go           # Runs: go test -race -count=1 ./...
 make test-frontend     # Runs: cd frontend && npm test
 ```
 
-Runs the Node test runner over `frontend/tests/*.test.cjs`, then Vitest (`npm run test:unit` runs Vitest only). No browser needed.
+Runs Vitest over `frontend/src/**/*.test.ts[x]` in jsdom. No browser needed.
 
 ### Script and chart tests
 
