@@ -186,6 +186,10 @@ describe("DSCManagerSection", () => {
       // aigateway and ray match the release default, but stay as the
       // parents of rows that differ; batchGateway matches and goes.
       expect(rowNames(screen.getByRole("treegrid"))).toEqual(["aigateway", "modelsAsAService", "dashboard", "standard", "databaseservice", "ray", "legacy", "codeflare"]);
+      // The row it leaves out stays in the table, collapsed, so the columns keep their widths.
+      const gone = within(screen.getByRole("treegrid")).getAllByRole("row", { hidden: true }).find((r) => r.querySelector("code")?.textContent === "batchGateway")!;
+      expect(gone).toHaveAttribute("aria-hidden", "true");
+      expect(gone).toHaveStyle({ visibility: "collapse" });
     });
 
     it("hides rows that match the release default", async () => {
@@ -207,6 +211,22 @@ describe("DSCManagerSection", () => {
       expect(screen.queryByRole("treegrid")).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Show all components" }));
       expect(screen.getByRole("treegrid")).toBeInTheDocument();
+    });
+
+    it("does not claim nothing differs without a release default", async () => {
+      stubApi({ "GET /api/components/dsc": {
+        ...matching, defaultsError: "No example.",
+        nodes: matching.nodes.map((n) => ({ ...n, changed: false, defaultSet: false, default: undefined })),
+        comparison: { ...matching.comparison!, defaultsRead: false, defaultComponents: [] },
+      } });
+      renderSection();
+      await screen.findByRole("treegrid");
+      expect(screen.getByText("No release default to compare with; no row has a problem the CRD shows")).toBeInTheDocument();
+      expect(within(screen.getByRole("treegrid")).getAllByText("Unknown")).toHaveLength(4);
+      expect(within(screen.getByRole("treegrid")).queryByText("Not set")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("switch", { name: "Show only differences" }));
+      expect(screen.getByRole("heading", { name: "No problems found" })).toBeInTheDocument();
+      expect(screen.queryByText("Nothing differs from the release default")).not.toBeInTheDocument();
     });
   });
 

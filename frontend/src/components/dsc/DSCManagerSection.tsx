@@ -201,8 +201,13 @@ const ComponentTree: React.FC<{
     }
     return false;
   };
-  const visible = shown.filter((n) => !hidden(n));
+  // Rows the filter leaves out stay in the table, collapsed (visibility:
+  // collapse, hidden from assistive technology): a collapsed row still counts
+  // for the column widths, so the columns do not move when the filter changes.
+  const rows = nodes.filter((n) => !hidden(n));
+  const visible = rows.filter((n) => !onlyDiffs || kept.has(n.path));
   const differing = nodes.filter((n) => differs(n, mismatches)).length;
+  const defaultsRead = !!manager.comparison?.defaultsRead;
   return (
     <>
       <Toolbar inset={{ default: "insetMd" }}>
@@ -212,15 +217,17 @@ const ComponentTree: React.FC<{
           </ToolbarItem>
           <ToolbarItem alignSelf="center">
             <span className="pf-v6-u-text-color-subtle pf-v6-u-font-size-sm">
-              {differing === 0 ? "No row differs from the release default" : `${differing} ${differing === 1 ? "row differs" : "rows differ"} from the release default`}
+              {!defaultsRead
+                ? `No release default to compare with; ${differing === 0 ? "no row has" : differing === 1 ? "1 row has" : `${differing} rows have`} a problem the CRD shows`
+                : differing === 0 ? "No row differs from the release default" : `${differing} ${differing === 1 ? "row differs" : "rows differ"} from the release default`}
             </span>
           </ToolbarItem>
         </ToolbarContent>
       </Toolbar>
       {visible.length === 0 ? (
-        <EmptyState headingLevel="h3" titleText="Nothing differs from the release default" variant="xs">
+        <EmptyState headingLevel="h3" titleText={defaultsRead ? "Nothing differs from the release default" : "No problems found"} variant="xs">
           <EmptyStateBody>
-            {manager.comparison?.defaultsRead
+            {defaultsRead
               ? "Every value in the DSC is the release default's, nothing is missing, and the DSC has no field the installed CRD does not define."
               : "There is no release default to compare with, so only fields the installed CRD does not define and Managed sub-components under a parent that is not Managed are looked for: there are none."}
           </EmptyStateBody>
@@ -243,7 +250,8 @@ const ComponentTree: React.FC<{
             </Tr>
           </Thead>
           <Tbody>
-            {visible.map((n, rowIndex) => {
+            {rows.map((n, rowIndex) => {
+              const filteredOut = onlyDiffs && !kept.has(n.path);
               const siblings = n.parent ? children(n.parent) : shown.filter((x) => x.depth === 0);
               const kids = children(n.path);
               const treeRow = {
@@ -259,7 +267,8 @@ const ComponentTree: React.FC<{
               const allowed = n.allowed ?? [];
               const rowReason = disabledReason ?? (allowed.length === 0 ? "The CRD lists no values for it, so this page does not change it." : null);
               return (
-                <TreeRowWrapper key={n.path} row={{ props: treeRow.props }}>
+                <TreeRowWrapper key={n.path} row={{ props: treeRow.props }}
+                  {...(filteredOut ? { "aria-hidden": true, style: { visibility: "collapse" } } : {})}>
                   <Td dataLabel="Component" treeRow={treeRow}>
                     <code>{n.name}</code>
                   </Td>
@@ -285,7 +294,7 @@ const ComponentTree: React.FC<{
                     )}
                   </Td>
                   <Td dataLabel="Release default">
-                    {!n.toggle ? null : n.defaultSet ? n.default : <span className="pf-v6-u-text-color-subtle">{n.schemaDefault ? `Not set (CRD default ${n.schemaDefault})` : "Not set"}</span>}
+                    {!n.toggle ? null : !defaultsRead ? <span className="pf-v6-u-text-color-subtle">Unknown</span> : n.defaultSet ? n.default : <span className="pf-v6-u-text-color-subtle">{n.schemaDefault ? `Not set (CRD default ${n.schemaDefault})` : "Not set"}</span>}
                   </Td>
                   <Td dataLabel="Operator reports"><ActualCell node={n} /></Td>
                 </TreeRowWrapper>
