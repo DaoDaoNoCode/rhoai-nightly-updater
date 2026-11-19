@@ -2,7 +2,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { App, DashboardDevRoute } from "./App";
+import { App, DashboardDevRoute, EnvironmentRoute } from "./App";
 import { nightlyStatus } from "./test/providers";
 import { NAV_ITEMS } from "./constants";
 
@@ -13,6 +13,7 @@ function renderAt(path: string) {
     <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/dashboard-dev" element={<DashboardDevRoute />} />
+        <Route path="/environment" element={<EnvironmentRoute />} />
         <Route path="/test-resources" element={<p>Environment page</p>} />
       </Routes>
       <Where />
@@ -30,6 +31,12 @@ describe("Environment route, /test-resources (A08-15)", () => {
     renderAt("/dashboard-dev?tab=resources");
     expect(await screen.findByText("Environment page")).toBeInTheDocument();
     expect(screen.getByTestId("where")).toHaveTextContent("/test-resources");
+  });
+
+  it("/environment, the page's name, opens it with the same tab and project", async () => {
+    renderAt("/environment?tab=models&project=dev");
+    expect(await screen.findByText("Environment page")).toBeInTheDocument();
+    expect(screen.getByTestId("where")).toHaveTextContent("/test-resources?tab=models&project=dev");
   });
 });
 
