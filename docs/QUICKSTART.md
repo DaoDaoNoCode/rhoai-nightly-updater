@@ -78,6 +78,7 @@ If it stops with an `ERROR:` line:
 - *"HEAD is not on a release tag"*: check out a release (`git checkout vX.Y.Z`), or pass `TAG=main` / `TAG=<commit>` to test a build.
 - *"deploy/template.yaml in this checkout differs"*: your checkout is not the release you install. *"uncommitted changes"* means you edited the template locally.
 - *"cannot resolve ... to a digest"*: the tag doesn't exist, or quay.io is unreachable.
+- *"reports revision &lt;none&gt;"* (installers up to 3.0.1) or *"cannot read the revision label"*: the installer could not read the image's labels from this machine. Read that entry in the [UPGRADING.md FAQ](UPGRADING.md#7-faq) before you override the check.
 - More in [UPGRADING.md](UPGRADING.md#7-faq).
 
 ## 2. Open the app
