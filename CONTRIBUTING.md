@@ -8,7 +8,7 @@ This guide covers how to develop, test, and deploy changes to the RHOAI Nightly 
 
 - **Go**: 1.27; `go.mod` names toolchain go1.27.4, the version CI and the Containerfile use, so an older local Go 1.21+ downloads and runs it (`GOTOOLCHAIN=auto`, the default)
 - **Node.js**: 26.x, the Active LTS line (CI and the image use `node:26-alpine`); Node 22.15+ and 24 also run the tooling
-- **TypeScript**: 5.x
+- **TypeScript**: 6.0 (installed by `npm ci`)
 
 ### Required Tools
 
@@ -61,7 +61,7 @@ Open **http://127.0.0.1:9000** in your browser.
 
 The frontend uses:
 
-- **React 19** with TypeScript 5.9
+- **React 19** with TypeScript 6.0
 - **PatternFly 6.x** for UI components (`@patternfly/react-core`, `@patternfly/react-table`)
 - **React Router 7** (`react-router-dom` ^7.18.4) for client-side routing
 - **Webpack 5** for bundling (configured in `frontend/webpack.config.js`)
