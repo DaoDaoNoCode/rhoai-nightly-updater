@@ -123,7 +123,8 @@ const PlatformPart: React.FC<{ part: MaaSPart; readOnly: boolean; reason: string
                 onClick={() => setPending((a.id as string) === "change-database" ? { kind: "maas-database" } : { kind: "maas-action", action: a.id })}>{a.label}</Button>
             </ActionListItem>
           ))}
-          {part.docUrl && <ActionListItem><ExternalLink href={part.docUrl}>Docs</ExternalLink></ActionListItem>}
+          {/* Inline: below the title (narrow pages) it lines up with the text, not indented by a button's padding. */}
+          {part.docUrl && <ActionListItem><ExternalLink href={part.docUrl} isInline>Docs</ExternalLink></ActionListItem>}
         </>
       ) : undefined}>
       {part.message && <Content component="p">{part.message}</Content>}
