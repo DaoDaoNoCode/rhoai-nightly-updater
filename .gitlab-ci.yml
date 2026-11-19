@@ -222,14 +222,16 @@ release-guard:
 # hosted saas-linux-* runners (privileged, one ephemeral VM per job), where
 # untagged jobs run. On a runner with Docker's default profile the build
 # fails at the first RUN ("unshare(CLONE_NEWUSER): Operation not
-# permitted"); it needs no privileged mode of its own, only
-# --security-opt seccomp=unconfined plus apparmor=unconfined (or
-# label=disable under SELinux) in that runner's configuration.
+# permitted"); such a runner needs seccomp=unconfined plus its host's MAC
+# exemption, not privileged mode (CONTRIBUTING.md, Automatic Image
+# Publishing).
 #
-# The build never gets the release credentials (QUAY_USER/QUAY_TOKEN): the
-# script does not read them, and build-main and release-build log in to no
-# registry but the Dependency Proxy (when DOCKER_HUB points at it); the crane
-# jobs below push their tarballs. build-branch logs in to BRANCH_IMAGE's
+# The build never uses the release credentials (QUAY_USER/QUAY_TOKEN; as
+# protected variables they are in the environment of every job of a main
+# or tag pipeline, SECURITY.md): the script does not read them, and
+# build-main and release-build log in to no registry but the Dependency
+# Proxy (when DOCKER_HUB points at it); the crane jobs below push their
+# tarballs. build-branch logs in to BRANCH_IMAGE's
 # registry only after the build. The RUN steps (npm ci with its packages'
 # install scripts, go mod download) run chrooted with buildah's default
 # capabilities: they do not see the auth file and cannot read the job's

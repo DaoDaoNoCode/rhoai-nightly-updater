@@ -382,6 +382,13 @@ only accepts a tag whose version is the top dated section. See
   messages no longer quote project names; the capacity warning uses GiB;
   the Overview's in-app step reads **Show issue in &lt;project&gt;**;
   `/environment` opens the Environment page.
+- CI, GitLab: the image jobs build with buildah (`quay.io/buildah/stable`,
+  pinned by digest; `scripts/ci-build-image.sh`) instead of kaniko, which
+  is archived upstream. Same build arguments, labels, platform
+  (`linux/amd64`), tags and publish rules; the tarball the crane jobs push
+  is a docker-archive (uncompressed layers, a larger artifact). buildah
+  needs a runner that allows user namespaces, as GitLab.com's hosted
+  runners do (CONTRIBUTING.md, Automatic Image Publishing).
 
 ### Security
 
