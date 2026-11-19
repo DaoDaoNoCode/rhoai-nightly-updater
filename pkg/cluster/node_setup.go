@@ -139,9 +139,8 @@ func (w *nodeSetupWork) refuse(code, msg string) *nodeSetupWork {
 	return w
 }
 
-func (w *nodeSetupWork) nothing(state string) *nodeSetupWork {
+func (w *nodeSetupWork) nothing(state string) {
 	w.plan.Ready, w.plan.NothingToDo, w.plan.State = false, true, state
-	return w
 }
 
 func (w *nodeSetupWork) redact(err error) string {
