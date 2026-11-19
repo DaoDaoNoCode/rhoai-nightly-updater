@@ -1,4 +1,50 @@
-import type { StatusResponse } from "./types";
+import type { ArgoCDTracking, StatusResponse } from "./types";
+
+// The backend trusts Argo CD's tracking annotation only once Argo CD confirms
+// it (pkg/cluster/argocd.go): managedBy is set for a confirmed application,
+// and for one Argo CD could not be asked about ("unconfirmed", treated as
+// managed); a left-over annotation ("stale") leaves managedBy empty and only
+// shows a note.
+
+/** The objects Argo CD may manage, with their tracking verdicts, in display order. */
+function argoTrackings(status: StatusResponse | null | undefined): { object: string; tracking: ArgoCDTracking }[] {
+  if (!status) return [];
+  return [
+    { object: "the operator Subscription", tracking: status.subscription.argoCD },
+    { object: "the nightly catalog", tracking: status.catalogSource.argoCD },
+    { object: "the DataScienceCluster", tracking: status.dscArgoCD },
+  ].filter((t): t is { object: string; tracking: ArgoCDTracking } => !!t.tracking);
+}
+
+/** "a", "a and b", "a, b and c". */
+function joinObjects(objects: string[]): string {
+  return objects.length > 1 ? `${objects.slice(0, -1).join(", ")} and ${objects[objects.length - 1]}` : objects[0] ?? "";
+}
+
+export interface ArgoTrackingGroup {
+  tracking: ArgoCDTracking;
+  /** The objects with this verdict, joined for a sentence ("the operator Subscription and the nightly catalog"). */
+  objects: string;
+  count: number;
+}
+
+/** Tracking verdicts in a state, grouped by application and reason. */
+export function argoTrackingGroups(status: StatusResponse | null | undefined, state: ArgoCDTracking["state"]): ArgoTrackingGroup[] {
+  const groups = new Map<string, { tracking: ArgoCDTracking; objects: string[] }>();
+  for (const { object, tracking } of argoTrackings(status)) {
+    if (tracking.state !== state) continue;
+    const key = [tracking.application, tracking.namespace, tracking.staleReason, tracking.reason].join("\u0000");
+    const g = groups.get(key) ?? { tracking, objects: [] };
+    g.objects.push(object);
+    groups.set(key, g);
+  }
+  return [...groups.values()].map((g) => ({ tracking: g.tracking, objects: joinObjects(g.objects), count: g.objects.length }));
+}
+
+/** How a sentence names the application: `"name"`, with its namespace when Argo CD answered. */
+export function argoApplicationLabel(t: ArgoCDTracking): string {
+  return t.namespace ? `"${t.application}" (namespace ${t.namespace})` : `"${t.application}"`;
+}
 
 // Argo CD (OpenShift GitOps) can manage the operator's CatalogSource and
 // Subscription, and the DataScienceCluster. Git is then the source of truth:

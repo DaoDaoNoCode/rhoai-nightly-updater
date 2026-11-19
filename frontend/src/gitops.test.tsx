@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { catalogImageSetter, catalogManaged, gitOpsCreateDSCReason, gitOpsDSCReason, gitOpsFixReason, gitOpsInstallState, gitOpsInstallWaitReason, gitOpsOperatorReason, operatorGitOpsApp, operatorManaged } from "./gitops";
-import { GitOpsNotice } from "./components/GitOpsNotice";
+import { ArgoCDLeftOverNote, GitOpsNotice } from "./components/GitOpsNotice";
 import { InstalledBuildCard } from "./components/StatusCards";
 import { UpdateConfirmModal, UpdatePanel } from "./components/UpdatePanel";
 import { pipelineStepsFor } from "./components/UpdatePipeline";
@@ -75,6 +75,43 @@ describe("GitOpsNotice", () => {
     render(<GitOpsNotice status={nightlyStatus({ dscManagedBy: "dsc-app" })} />);
     expect(screen.getByText("Argo CD manages the DataScienceCluster")).toBeInTheDocument();
     expect(screen.queryByText(/Re-deploy and Install a different build are off/)).not.toBeInTheDocument();
+  });
+
+  it("names the application's namespace once Argo CD confirmed it", () => {
+    const tracking = { application: "rhai-on-openshift", state: "managed" as const, namespace: "openshift-gitops", syncStatus: "Synced" };
+    render(<GitOpsNotice status={nightlyStatus({ ...managed, subscription: { ...managed.subscription, argoCD: tracking }, catalogSource: { ...managed.catalogSource, argoCD: tracking }, dscArgoCD: tracking })} />);
+    expect(screen.getByText(/Argo CD application "rhai-on-openshift" \(namespace openshift-gitops\) puts back anything/)).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't confirm/)).not.toBeInTheDocument();
+  });
+
+  it("says why when Argo CD could not confirm the application", () => {
+    const tracking = { application: "rhai-on-openshift", state: "unconfirmed" as const, reason: "reading Argo CD application \"rhai-on-openshift\" failed: k8s API error 403 (Forbidden)" };
+    render(<GitOpsNotice status={nightlyStatus({ ...managed, subscription: { ...managed.subscription, argoCD: tracking }, catalogSource: { ...managed.catalogSource, argoCD: tracking }, dscManagedBy: undefined })} />);
+    expect(screen.getByText(/Argo CD application "rhai-on-openshift" puts back anything/)).toBeInTheDocument();
+    expect(screen.getByText(/Couldn't confirm with Argo CD that application "rhai-on-openshift" still manages the operator Subscription and the nightly catalog \(reading .* 403 \(Forbidden\)\), so the tool treats them as managed\./)).toBeInTheDocument();
+  });
+});
+
+describe("ArgoCDLeftOverNote", () => {
+  const stale = (staleReason: "argo-cd-not-installed" | "application-missing" | "not-in-resources", namespace?: string) =>
+    ({ application: "rhoai-operators", state: "stale" as const, staleReason, namespace });
+
+  it("says the tracking is left over and nothing is off", () => {
+    const status = nightlyStatus({ subscription: { ...base.subscription, argoCD: stale("application-missing") }, catalogSource: { ...base.catalogSource, argoCD: stale("application-missing") }, dscArgoCD: stale("application-missing") });
+    expect(operatorManaged(status)).toBe(false);
+    render(<ArgoCDLeftOverNote status={status} />);
+    expect(screen.getByText(/The operator Subscription, the nightly catalog and the DataScienceCluster carry Argo CD tracking left over from application "rhoai-operators", which no longer exists; the tool treats them as not managed\./)).toBeInTheDocument();
+  });
+
+  it("words each reason", () => {
+    render(<ArgoCDLeftOverNote status={nightlyStatus({ subscription: { ...base.subscription, argoCD: stale("argo-cd-not-installed") }, dscArgoCD: stale("not-in-resources", "openshift-gitops") })} />);
+    expect(screen.getByText(/The operator Subscription carries Argo CD tracking from application "rhoai-operators", but Argo CD is not installed on this cluster; the tool treats it as not managed\./)).toBeInTheDocument();
+    expect(screen.getByText(/The DataScienceCluster carries Argo CD tracking from application "rhoai-operators" \(namespace openshift-gitops\), which no longer lists it/)).toBeInTheDocument();
+  });
+
+  it("renders nothing without left-over tracking", () => {
+    const { container } = render(<ArgoCDLeftOverNote status={managed} />);
+    expect(container).toBeEmptyDOMElement();
   });
 });
 
