@@ -26,12 +26,14 @@ type fakeRecord struct {
 	releases  []cluster.LeaseOwner
 	completed []*cluster.LeaseOwner
 	writeErr  error
-	failNext  int // the next lease writes that fail
+	failNext  int           // the next lease writes that fail
+	attempts  int           // lease writes asked for, failed ones included
+	attempted chan struct{} // closed and replaced on every attempt
 }
 
 func installFakeRecord(t *testing.T) *fakeRecord {
 	t.Helper()
-	f := &fakeRecord{}
+	f := &fakeRecord{attempted: make(chan struct{})}
 	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -40,6 +42,9 @@ func installFakeRecord(t *testing.T) *fakeRecord {
 	writeOperationLease = func(_ *cluster.Client, l *types.OperationLease, heldElsewhere func(*types.OperationLease) bool) (*types.OperationLease, error) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		f.attempts++
+		close(f.attempted)
+		f.attempted = make(chan struct{})
 		if f.writeErr != nil {
 			return nil, f.writeErr
 		}
@@ -82,6 +87,36 @@ func installFakeRecord(t *testing.T) *fakeRecord {
 		return nil
 	}
 	return f
+}
+
+// beat moves the fake clock one heartbeat interval on and waits for the
+// renewal it starts (the heartbeat's lease write, which may fail).
+func (f *fakeRecord) beat(t *testing.T) {
+	t.Helper()
+	f.mu.Lock()
+	n := f.attempts
+	f.mu.Unlock()
+	testClock.Advance(leaseHeartbeatInterval)
+	f.waitAttempts(t, n+1)
+}
+
+// waitAttempts waits until n lease writes were asked for. The timeout only
+// ends a test whose heartbeat stopped.
+func (f *fakeRecord) waitAttempts(t *testing.T, n int) {
+	t.Helper()
+	for {
+		f.mu.Lock()
+		got, ch := f.attempts, f.attempted
+		f.mu.Unlock()
+		if got >= n {
+			return
+		}
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("lease writes: %d, want %d", got, n)
+		}
+	}
 }
 
 func (f *fakeRecord) setLease(l *types.OperationLease) {
@@ -228,7 +263,6 @@ func TestLeaseRenewalCarriesTheStep(t *testing.T) {
 	setupDevMode(t)
 	allowMutations(t)
 	f := installFakeRecord(t)
-	leaseHeartbeatInterval = 5 * time.Millisecond
 	started, release := blockingRefresh()
 	done := make(chan struct{})
 	go func() {
@@ -240,11 +274,11 @@ func TestLeaseRenewalCarriesTheStep(t *testing.T) {
 	if first == nil || first.Step != "" {
 		t.Fatalf("initial lease %+v", first)
 	}
-	waitFor(t, func() bool {
-		l := f.currentLease()
-		return l != nil && l.Step == "verify_installplan" && l.StepStatus == "running" && strings.HasPrefix(l.Message, "Waiting for OLM")
-	})
+	f.beat(t)
 	renewed := f.currentLease()
+	if renewed == nil || renewed.Step != "verify_installplan" || renewed.StepStatus != "running" || !strings.HasPrefix(renewed.Message, "Waiting for OLM") {
+		t.Fatalf("renewed lease %+v", renewed)
+	}
 	if renewed.ID != first.ID || renewed.StartedAt != first.StartedAt || renewed.BootID != bootID {
 		t.Fatalf("renewal changed the lease identity: %+v -> %+v", first, renewed)
 	}
@@ -256,15 +290,16 @@ func TestLeaseRenewalCarriesTheStep(t *testing.T) {
 	if l := f.currentLease(); l != nil {
 		t.Fatalf("lease kept after the operation: %+v", l)
 	}
-	// No renewal after the release.
+	// No renewal after the release: the heartbeat ended (and stopped its
+	// ticker) before the handler returned, so time passing writes nothing.
 	f.mu.Lock()
-	n := len(f.writes)
+	n := f.attempts
 	f.mu.Unlock()
-	time.Sleep(30 * time.Millisecond)
+	testClock.Advance(3 * leaseHeartbeatInterval)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.writes) != n || f.lease != nil {
-		t.Fatalf("heartbeat after release: %d -> %d writes, lease %+v", n, len(f.writes), f.lease)
+	if f.attempts != n || f.lease != nil {
+		t.Fatalf("heartbeat after release: %d -> %d lease writes, lease %+v", n, f.attempts, f.lease)
 	}
 }
 
@@ -275,7 +310,6 @@ func TestDrainingProcessKeepsRenewing(t *testing.T) {
 	setupDevMode(t)
 	allowMutations(t)
 	f := installFakeRecord(t)
-	leaseHeartbeatInterval = 5 * time.Millisecond
 	t.Cleanup(func() {
 		mutations.mu.Lock()
 		mutations.draining, mutations.idle = false, nil
@@ -286,12 +320,20 @@ func TestDrainingProcessKeepsRenewing(t *testing.T) {
 	<-started
 
 	drained := make(chan int)
-	go func() { drained <- DrainMutations(context.Background()) }()
-	waitFor(t, mutations.isDraining)
+	wait := mutations.startDrain()
+	go func() { drained <- wait(context.Background()) }()
 	f.mu.Lock()
 	before := len(f.writes)
 	f.mu.Unlock()
-	waitFor(t, func() bool { f.mu.Lock(); defer f.mu.Unlock(); return len(f.writes) >= before+3 })
+	for range 3 {
+		f.beat(t)
+	}
+	f.mu.Lock()
+	renewed := len(f.writes) - before
+	f.mu.Unlock()
+	if renewed != 3 {
+		t.Fatalf("%d renewals while draining, want 3", renewed)
+	}
 	close(release)
 	if running := <-drained; running != 0 {
 		t.Fatalf("drain left %d running", running)

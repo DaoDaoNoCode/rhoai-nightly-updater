@@ -24,11 +24,11 @@ type rateLimiter struct {
 	mu     sync.Mutex
 	users  map[string]time.Time // key -> time the slot was taken
 	window time.Duration
-	now    func() time.Time // tests replace it
+	now    func() time.Time // clk.Now when the limiter was made
 }
 
 func newRateLimiter(window time.Duration) *rateLimiter {
-	return &rateLimiter{users: map[string]time.Time{}, window: window, now: time.Now}
+	return &rateLimiter{users: map[string]time.Time{}, window: window, now: clk.Now}
 }
 
 // retryAfter is how long until key's slot frees, rounded up to whole

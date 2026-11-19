@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/clock/clocktest"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -482,7 +483,9 @@ func TestRateLimitIsTheToolsOwnWithTheRealWait(t *testing.T) {
 }
 
 func TestRateLimiterWindow(t *testing.T) {
-	rl := newRateLimiter(20 * time.Millisecond)
+	fc := clocktest.NewFake()
+	rl := newRateLimiter(30 * time.Second)
+	rl.now = fc.Now
 	slot, ok := rl.tryAcquire("a")
 	if !ok {
 		t.Fatal("first acquire refused")
@@ -493,7 +496,11 @@ func TestRateLimiterWindow(t *testing.T) {
 	if _, ok := rl.tryAcquire("b"); !ok {
 		t.Fatal("other key limited")
 	}
-	time.Sleep(30 * time.Millisecond)
+	fc.Advance(30*time.Second - time.Nanosecond)
+	if _, ok := rl.tryAcquire("a"); ok {
+		t.Fatal("acquire before the window ended allowed")
+	}
+	fc.Advance(time.Nanosecond)
 	newSlot, ok := rl.tryAcquire("a")
 	if !ok {
 		t.Fatal("acquire after the window refused")

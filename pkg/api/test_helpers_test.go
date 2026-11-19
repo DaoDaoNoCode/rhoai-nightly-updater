@@ -29,7 +29,7 @@ func (rl *rateLimiter) isRateLimited(key string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	last, ok := rl.users[key]
-	return ok && time.Since(last) < rl.window
+	return ok && rl.now().Sub(last) < rl.window
 }
 
 func (a *apiReachability) reset() {
@@ -53,6 +53,19 @@ func (m *markerWriter) reset() {
 	m.delays = defaultMarkerRetryDelays
 	m.retrying = false
 	m.epoch++
+	if m.stopRetry != nil {
+		m.stopRetry() // a retry asleep on an earlier test's fake clock
+	}
+}
+
+// waitRetries waits until the background retries, if any run, have ended.
+func (m *markerWriter) waitRetries() {
+	m.mu.Lock()
+	done := m.retryDone
+	m.mu.Unlock()
+	if done != nil {
+		<-done
+	}
 }
 
 func (c *identityCache) reset() {

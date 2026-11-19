@@ -122,7 +122,7 @@ func TestEmitStep_CalculatesElapsedMs(t *testing.T) {
 	rec := httptest.NewRecorder()
 	sw, _ := NewSSEWriter(rec)
 
-	time.Sleep(10 * time.Millisecond)
+	sw.start = sw.start.Add(-10 * time.Millisecond) // made 10ms ago
 	sw.EmitStep("test_step", "running", "testing elapsed")
 
 	body := rec.Body.String()

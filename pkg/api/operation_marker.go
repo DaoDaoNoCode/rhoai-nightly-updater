@@ -45,8 +45,13 @@ type markerWriter struct {
 	owner    *cluster.LeaseOwner
 	client   *cluster.Client
 	retrying bool
-	delays   []time.Duration
-	epoch    int // tests reset the writer; a retry loop of an older epoch stops
+	// retryDone is closed when the running background retries end.
+	retryDone chan struct{}
+	// stopRetry ends the running background retries (tests reset the
+	// writer; production code never calls it).
+	stopRetry context.CancelFunc
+	delays    []time.Duration
+	epoch     int // tests reset the writer; a retry loop of an older epoch stops
 }
 
 var markers = &markerWriter{delays: defaultMarkerRetryDelays}
@@ -117,10 +122,18 @@ func (m *markerWriter) retryLaterLocked() {
 		return
 	}
 	m.retrying = true
-	delays, epoch := m.delays, m.epoch
+	delays, epoch, c := m.delays, m.epoch, clk
+	done := make(chan struct{})
+	m.retryDone = done
+	ctx, stop := context.WithCancel(context.Background())
+	m.stopRetry = stop
 	go func() {
+		defer close(done)
+		defer stop()
 		for _, d := range delays {
-			time.Sleep(d)
+			if c.Sleep(ctx, d) != nil {
+				return
+			}
 			m.mu.Lock()
 			if m.epoch != epoch {
 				m.mu.Unlock()

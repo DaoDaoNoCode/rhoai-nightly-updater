@@ -212,7 +212,7 @@ func TestFailedMarkerClearIsRetried(t *testing.T) {
 	setupDevMode(t)
 	allowMutations(t)
 	markers.mu.Lock()
-	markers.delays = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	markers.delays = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second}
 	markers.mu.Unlock()
 
 	var mu sync.Mutex
@@ -247,22 +247,24 @@ func TestFailedMarkerClearIsRetried(t *testing.T) {
 	if status, _ := getOperation(t); status.Interrupted != nil {
 		t.Fatalf("own leftover marker reported as interrupted: %+v", status.Interrupted)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		mu.Lock()
-		cleared, n := marker == nil, attempts
-		mu.Unlock()
-		if cleared {
-			if n != failures+1 {
-				t.Fatalf("attempts = %d", n)
-			}
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("marker not cleared after %d attempts", n)
-		}
-		time.Sleep(5 * time.Millisecond)
+	// The first retry (after 1s) fails, the second (2s later) clears it;
+	// none runs before its delay has passed.
+	testClock.WaitForSleepers(1)
+	testClock.Advance(time.Second - time.Millisecond)
+	if mu.Lock(); attempts != 1 {
+		t.Fatalf("retried early: attempts = %d", attempts)
 	}
+	mu.Unlock()
+	testClock.WaitForSleepers(1)
+	testClock.Advance(time.Millisecond)
+	testClock.WaitForSleepers(1) // the first retry failed and waits again
+	testClock.Advance(2 * time.Second)
+	markers.waitRetries()
+	mu.Lock()
+	if marker != nil || attempts != failures+1 {
+		t.Fatalf("marker %+v after %d attempts", marker, attempts)
+	}
+	mu.Unlock()
 
 	// Retries that run out are restarted by GET /api/operation, and the
 	// shutdown flush makes a last attempt.
@@ -271,11 +273,14 @@ func TestFailedMarkerClearIsRetried(t *testing.T) {
 	mu.Unlock()
 	mutationLimiter = newRateLimiter(30 * time.Second)
 	HandleRefreshStream(httptest.NewRecorder(), postJSON("/api/refresh/stream", "user:alice", "{}"))
-	waitFor(t, func() bool {
-		markers.mu.Lock()
-		defer markers.mu.Unlock()
-		return !markers.retrying
-	})
+	runRetries := func() {
+		for _, d := range []time.Duration{time.Second, 2 * time.Second, 5 * time.Second} {
+			testClock.WaitForSleepers(1)
+			testClock.Advance(d)
+		}
+		markers.waitRetries()
+	}
+	runRetries()
 	mu.Lock()
 	n := attempts
 	mu.Unlock()
@@ -283,12 +288,12 @@ func TestFailedMarkerClearIsRetried(t *testing.T) {
 		t.Fatalf("attempts before giving up = %d", n)
 	}
 	getOperation(t)
-	waitFor(t, func() bool { mu.Lock(); defer mu.Unlock(); return attempts > n })
-	waitFor(t, func() bool {
-		markers.mu.Lock()
-		defer markers.mu.Unlock()
-		return !markers.retrying
-	})
+	runRetries()
+	mu.Lock()
+	if attempts != n+3 {
+		t.Fatalf("attempts after GET /api/operation = %d, want %d", attempts, n+3)
+	}
+	mu.Unlock()
 	mu.Lock()
 	failures = 0
 	mu.Unlock()
@@ -300,24 +305,13 @@ func TestFailedMarkerClearIsRetried(t *testing.T) {
 	}
 }
 
-func waitFor(t *testing.T, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatal("condition not met in time")
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-}
-
 // TestNewOperationSupersedesPendingClear: a retry must never clear the
 // marker of a newer operation.
 func TestNewOperationSupersedesPendingClear(t *testing.T) {
 	setupDevMode(t)
 	allowMutations(t)
 	markers.mu.Lock()
-	markers.delays = []time.Duration{20 * time.Millisecond}
+	markers.delays = []time.Duration{time.Second}
 	markers.mu.Unlock()
 	var mu sync.Mutex
 	var completedIDs []string
@@ -350,7 +344,11 @@ func TestNewOperationSupersedesPendingClear(t *testing.T) {
 	mu.Lock()
 	fail = false
 	mu.Unlock()
-	time.Sleep(60 * time.Millisecond) // the retry of the first operation would run now
+	// The first operation's retry runs now and finds its completion
+	// superseded by the running operation's marker.
+	testClock.WaitForSleepers(1)
+	testClock.Advance(time.Second)
+	markers.waitRetries()
 	mu.Lock()
 	if len(completedIDs) != 0 {
 		t.Fatalf("a retry cleared the running operation's marker: %v (first %s)", completedIDs, first)

@@ -38,13 +38,10 @@ func TestDrainWaitsForRunningMutation(t *testing.T) {
 	<-started
 
 	drained := make(chan int)
-	go func() { drained <- DrainMutations(context.Background()) }()
+	wait := mutations.startDrain()
+	go func() { drained <- wait(context.Background()) }()
 
 	// New mutations are refused while draining, and readiness fails.
-	deadline := time.Now().Add(2 * time.Second)
-	for !mutations.isDraining() && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
 	called := false
 	refused := withMutationAuth(func(*cluster.Client, http.ResponseWriter, *http.Request) { called = true })
 	r := httptest.NewRequest("POST", "/api/drain-new", nil)
@@ -60,10 +57,11 @@ func TestDrainWaitsForRunningMutation(t *testing.T) {
 		t.Fatalf("readiness during drain = %d", ready.Code)
 	}
 
+	// The wait ends only when the mutation does (its context never ends).
 	select {
 	case <-drained:
 		t.Fatal("drain returned while a mutation was still running")
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 	close(release)
 	<-finished
@@ -82,8 +80,9 @@ func TestDrainTimeoutReportsRunningMutations(t *testing.T) {
 	if !tracker.begin() {
 		t.Fatal("begin refused before drain")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
+	// A drain whose time is up reports the mutation still running.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 	if n := tracker.drain(ctx); n != 1 {
 		t.Fatalf("drain = %d, want 1", n)
 	}
