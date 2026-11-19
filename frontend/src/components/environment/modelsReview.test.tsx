@@ -3,7 +3,10 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { CatalogModel, InferenceGatewayState, ModelState, ResourcesStatus } from "../../types";
 import { IDLE, modelsState } from "./featureState";
-import { UseModel, agoWords, exposureWords, gatewayListRelease, modelsConfirm } from "./ModelsTab";
+import { UseModel } from "./UseModel";
+import { agoWords } from "./ModelPart";
+import { exposureWords } from "./ExposureChooser";
+import { gatewayListRelease, modelsConfirm } from "./modelsConfirm";
 
 const gw: InferenceGatewayState = {
   deployed: true, ready: true, managedByTool: true, namespace: "openshift-ingress", name: "openshift-ai-inference", message: "Running",

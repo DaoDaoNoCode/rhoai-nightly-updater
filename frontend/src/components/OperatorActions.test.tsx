@@ -36,7 +36,7 @@ const Harness: React.FC<{ request: OperatorRequest }> = ({ request }) => {
   );
 };
 
-describe("dashboard_dev_active (D1 guard)", () => {
+describe("dashboard_dev_active", () => {
   it("offers to revert Dashboard Dev and continue, and resends with revertDashboardDev", async () => {
     const refusal = "A Dashboard Dev session is active (dashboard-operator is paused). Update would keep the dashboard paused under the new operator, so it was not started and nothing was changed.";
     const { bodies, urls } = stubStreams([
@@ -76,7 +76,8 @@ describe("dashboard_dev_active (D1 guard)", () => {
     };
     renderWithApp(<AlreadyReverting />);
     fireEvent.click(screen.getByText("go"));
-    await new Promise((r) => setTimeout(r, 50));
+    // The run's end is announced in the same render that would open the question.
+    await waitFor(() => expect(screen.getByTestId("live-region-assertive")).toHaveTextContent("Could not end the Dashboard Dev session"));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
@@ -93,7 +94,7 @@ describe("dashboard_dev_active (D1 guard)", () => {
   });
 });
 
-describe("Update confirmation (A07-1, A07-7)", () => {
+describe("Update confirmation", () => {
   it("names the target build and lists the backend's real steps with one primary button", async () => {
     renderWithApp(<UpdateConfirmModal target={{ image: IMAGE, tag: "rhoai-3.6", digest: "sha256:" + "b".repeat(64), buildDate: "2026-10-05T21:47:53Z" }} status={nightlyStatus()} onConfirm={vi.fn()} onClose={vi.fn()} />);
     const dialog = await screen.findByRole("dialog");
@@ -108,14 +109,14 @@ describe("Update confirmation (A07-1, A07-7)", () => {
     expect(within(dialog).getAllByRole("button").filter((b) => b.className.includes("pf-m-primary"))).toHaveLength(1);
   });
 
-  it("says Update is the usual fix when the CSV is Failed (A07-5)", async () => {
+  it("says Update is the usual fix when the CSV is Failed", async () => {
     renderWithApp(<UpdateConfirmModal target={{ image: IMAGE }} status={nightlyStatus({ csv: { name: "rhods-operator.3.6.0", version: "3.6.0", phase: "Failed" } })} onConfirm={vi.fn()} onClose={vi.fn()} />);
     expect(await screen.findByText("The installed operator is Failed.")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Update" })).not.toHaveAttribute("aria-disabled", "true"));
   });
 });
 
-describe("cluster_busy (A07-3)", () => {
+describe("cluster_busy", () => {
   it("tells the user their request did not run and who is running what", async () => {
     stubStreams([() => jsonResponse({ error: "alice is running \"Update to nightly\". Wait for it to finish.", errorCode: "cluster_busy", operation: { id: "x", type: "update", label: "Update to nightly", user: "alice", startedAt: new Date().toISOString() } }, 409)]);
     renderWithApp(<Harness request={{ kind: "update", image: IMAGE }} />);
@@ -125,7 +126,7 @@ describe("cluster_busy (A07-3)", () => {
   });
 });
 
-describe("Reinstall downgrades (A07-6, §8 #8)", () => {
+describe("Reinstall downgrades", () => {
   const status = nightlyStatus();
   const renderPanel = () => {
     const runOperator = vi.fn(() => true);

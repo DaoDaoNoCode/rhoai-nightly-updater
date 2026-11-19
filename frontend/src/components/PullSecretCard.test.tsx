@@ -29,7 +29,7 @@ async function saveButton(): Promise<HTMLElement> {
   return screen.getByRole("button", { name: "Create secret" });
 }
 
-describe("PullSecretSetup gating (R7 L6)", () => {
+describe("PullSecretSetup gating", () => {
   it("is enabled when nothing blocks it", async () => {
     renderWithApp(<PullSecretSetup pullSecret={missing} />);
     const save = await saveButton();

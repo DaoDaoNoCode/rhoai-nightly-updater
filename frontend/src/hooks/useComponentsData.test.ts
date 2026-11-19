@@ -36,7 +36,7 @@ describe("mergeDeploymentLabels", () => {
 });
 
 describe("useComponentsData", () => {
-  it("shows every poll in the deployments table and keeps the labels (A06-2)", async () => {
+  it("shows every poll in the deployments table and keeps the labels", async () => {
     const plain = [response([dep("a", "img1", 0)], "Polled")];
     const fetchMock = vi.fn(async (url: string) =>
       url.includes("labels=true") ? jsonResponse(response([dep("a", "img1", 1, true)])) : jsonResponse(plain[0]),

@@ -4,6 +4,8 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { EnvironmentPage } from "./EnvironmentPage";
 import type { ResourcesStatus, ResourceState } from "../types";
 import { jsonResponse, stubApi } from "../test/apiStub";
+import { RESOURCE_POLL_BASE_MS } from "../constants";
+import { READY_CHECK_MS } from "../components/environment/useGoalRun";
 
 vi.mock("../state/AppInfo", () => ({
   useMutationBlocker: () => null,
@@ -28,6 +30,7 @@ function renderPage(path: string) {
 const row = async (feature: string) => (await screen.findByRole("link", { name: feature })).closest("tr") as HTMLElement;
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -154,7 +157,9 @@ describe("Environment page", () => {
     expect(screen.getByRole("listitem", { name: "Pipeline server" })).toHaveTextContent("In the project you choose");
   });
 
-  it("Set up on the Pipelines tab sets up only what is missing, in order, after one confirmation, and succeeds only once it works", { timeout: 30000 }, async () => {
+  it("Set up on the Pipelines tab sets up only what is missing, in order, after one confirmation, and succeeds only once it works", async () => {
+    // A fake clock, so the page's status poll and the run's ready check run when the test says.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     let status: ResourcesStatus = { minio: notDeployed, mlflow: notDeployed, pipelineServers: [] };
     const api = stubApi({
       "/api/resources/status": () => jsonResponse(status),
@@ -163,7 +168,6 @@ describe("Environment page", () => {
       // Created, then starting: the run waits until the status says ready.
       "POST /api/resources/pipeline-server/setup": () => {
         status = { ...status, pipelineServers: [{ ...readyDspa("dev-project"), ready: false, message: "Starting (1/3 ready)", uiRoute: undefined }] };
-        setTimeout(() => { status = { ...status, pipelineServers: [readyDspa("dev-project")] }; }, 50);
         return jsonResponse({ success: true, message: "Pipeline server created.", logs: [] });
       },
     });
@@ -180,9 +184,15 @@ describe("Environment page", () => {
     fireEvent.click(within(confirm).getByRole("button", { name: "Set up" }));
     const progress = await screen.findByRole("dialog", { name: "Set up Pipelines in dev-project" });
     // Never a success before the part works: first "Starting", then ready, with the main action.
-    expect(await within(progress).findByText(/Created\. Starting \(typically 1 to 3 minutes\)/, {}, { timeout: 3000 })).toBeInTheDocument();
+    // The S3 storage is ready at the run's next ready check; then the pipeline server is created.
+    expect(await within(progress).findByText(/Created\. Starting \(typically under a minute\)/)).toBeInTheDocument();
+    await act(() => vi.advanceTimersByTimeAsync(READY_CHECK_MS));
+    expect(await within(progress).findByText(/Created\. Starting \(typically 1 to 3 minutes\)/)).toBeInTheDocument();
     expect(within(progress).queryByText("Pipelines are ready in dev-project.")).not.toBeInTheDocument();
-    expect(await within(progress).findByText("Pipelines are ready in dev-project.", {}, { timeout: 15000 })).toBeInTheDocument();
+    // The server comes up; the page's next status poll sees it, and the run's next ready check after that.
+    status = { ...status, pipelineServers: [readyDspa("dev-project")] };
+    await act(() => vi.advanceTimersByTimeAsync(RESOURCE_POLL_BASE_MS + READY_CHECK_MS));
+    expect(await within(progress).findByText("Pipelines are ready in dev-project.")).toBeInTheDocument();
     expect(within(progress).getByText("The pipeline server in dev-project is ready.", { exact: false })).toBeInTheDocument();
     expect(within(progress).getByRole("link", { name: /Open pipelines/ })).toHaveClass("pf-m-primary");
     expect(api.calls.filter((c) => c.startsWith("POST /api/resources")).map((c) => c.split(" ")[1])).toEqual(["/api/resources/minio/setup", "/api/resources/pipeline-server/setup"]);

@@ -1,0 +1,508 @@
+// The docs mock's scenarios: the world each one starts from. server.mjs
+// serves them; frontend/src/test/docsMockFixtures.test.ts checks their
+// answers against the frontend's API types.
+import * as F from "./fixtures.mjs";
+
+// --- Scenarios ------------------------------------------------------------------
+
+const REMOTE_POD = "rhoai-nightly-updater-7c9d5f8b64-k2x7q";
+
+export function baseWorld() {
+  return {
+    status: F.healthyStatus(),
+    operation: { inProgress: false, operation: null },
+    version: F.versionInfo(),
+    updateCheck: F.noUpdate,
+    components: F.healthyComponents(),
+    diagnostics: F.diagnostics("healthy"),
+    dashboard: F.dashboardIdle(),
+    // No PR or main build runs: nothing to describe.
+    dashboardBuilds: { builds: [] },
+    resources: { minio: F.s3States.running, mlflow: F.mlflowStates.none, pipelineServers: [F.pipelineServer] },
+    // The Gen AI playground (GET /api/resources/playground).
+    playground: F.playgroundWorld(),
+    // Models as a Service (GET /api/resources/maas).
+    maas: F.maasWorld("none"),
+    // Sample states by project; a project not named has none of the samples.
+    samples: { mlflow: {} },
+    // gated: update steps and mutations wait for /__docs/advance and /__docs/release.
+    gated: false,
+  };
+}
+
+export const scenarios = {
+  healthy: () => {},
+  "update-available": (w) => { w.status = F.updateAvailableStatus(); },
+  "operator-failed": (w) => { w.status = F.operatorFailedStatus(); },
+  "no-subscription": (w) => { w.status = F.noSubscriptionStatus(); },
+  fresh: (w) => {
+    w.status = F.freshStatus();
+    w.components = { components: [], deployments: [], dscName: "", dscExists: false, dscState: "no-crd", dscPhase: "", changedCount: 0 };
+    w.resources = { minio: F.s3States.none, mlflow: F.mlflowStates.none, pipelineServers: [] };
+  },
+  "ready-to-install": (w) => {
+    scenarios.fresh(w);
+    w.status = F.readyToInstallStatus();
+  },
+  // Self-managed OpenShift: the nodes pull with openshift-config/pull-secret.
+  // Before step 1, after it (nodes not checked; the check passes, or fails
+  // with -fails), with an unreadable topology, and once a nightly runs.
+  "self-managed": (w) => { scenarios.fresh(w); F.selfManaged(w.status); },
+  "self-managed-saved": (w) => { scenarios["ready-to-install"](w); F.selfManaged(w.status); },
+  "self-managed-saved-fails": (w) => { scenarios["self-managed-saved"](w); w.nodePullFails = true; },
+  "self-managed-unknown": (w) => { scenarios["ready-to-install"](w); F.selfManaged(w.status, { known: false }); },
+  "self-managed-installed": (w) => { F.selfManaged(w.status, { pulled: true }); },
+  // The update GIFs: steps wait for /__docs/advance.
+  "update-flow": (w) => { w.status = F.updateAvailableStatus(); w.gated = true; },
+  "install-flow": (w) => { scenarios["ready-to-install"](w); w.gated = true; w.afterUpdate = F.noDSCStatus; },
+  // Installed, no DataScienceCluster yet.
+  "no-dsc": (w) => {
+    w.status = F.noDSCStatus();
+    w.components = { components: [], deployments: [], dscName: "", dscExists: false, dscState: "no-dsc", operatorVersion: "3.6.0", operatorPhase: "Succeeded", dscPhase: "", changedCount: 0 };
+  },
+  "remote-operation": (w) => {
+    w.status = F.updateAvailableStatus();
+    w.operation = {
+      inProgress: true,
+      operation: {
+        id: "op-5f3a9c", type: "update", label: "Update to nightly", user: "qa-user", target: F.LATEST_IMAGE,
+        startedAt: F.ago(3), updatedAt: F.ago(0.2), step: "verify_installplan", stepStatus: "running",
+        message: "CSV rhods-operator.3.6.0: Installing (InstallWaiting)", pod: REMOTE_POD, remote: true,
+      },
+    };
+  },
+  // An Environment operation another user runs: the banner's View progress opens what the server records.
+  "env-operation-elsewhere": (w) => {
+    scenarios["env-models-ready"](w);
+    w.operation = {
+      inProgress: true,
+      operation: {
+        id: "op-2c81e0", type: "cleanup", label: "Clean up", user: "qa-user", startedAt: F.ago(2), updatedAt: F.ago(0.1),
+        step: "storage", stepStatus: "running", message: "Deleting the S3 storage (SeaweedFS)",
+      },
+    };
+  },
+  interrupted: (w) => {
+    w.status = F.updateAvailableStatus();
+    w.operation = {
+      inProgress: false, operation: null,
+      interrupted: { type: "update", label: "Update to nightly", user: "qa-user", target: F.LATEST_IMAGE, startedAt: F.ago(22), pod: REMOTE_POD, id: "op-1d7e42", bootId: "b-9a1c" },
+    };
+  },
+  "major-update": (w) => {
+    w.version = F.versionInfo({ version: "v1.0.0", commit: "5a0c7e3b9d1f4a6c8e2b0d4f6a8c1e3b5d7f9a2c", templateRevision: "3", expectedTemplateRevision: "3" });
+    w.updateCheck = {
+      current: "v1.0.0", latest: "v2.0.0", updateAvailable: true, majorUpgrade: true,
+      releaseNotesURL: "https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases/v2.0.0",
+      installerURL: "https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/v2.0.0/install.sh",
+    };
+  },
+  "patch-update": (w) => {
+    w.updateCheck = {
+      current: "v2.0.0", latest: "v2.0.1", updateAvailable: true, majorUpgrade: false,
+      releaseNotesURL: "https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases/v2.0.1",
+      installerURL: "https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/v2.0.1/install.sh",
+      // The v2.0.1 release notes' own line (GitHub mirror, read 2026-11-18).
+      installerSHA256: "c642197caae4feaed7994375fa68532cab386cc0b63629923914343017ce2346",
+    };
+  },
+  "template-outdated": (w) => { w.version = F.versionInfo({ templateRevision: "3", templateOutdated: true }); },
+  // The user's OpenShift token expired or was revoked: the identity check
+  // (GET /api/user/permissions) and every change answer 401 session_expired
+  // (pkg/api writeAuthError, sessionProblem).
+  "session-expired": (w) => { w.signIn = { status: 401, code: "session_expired", message: F.SESSION_EXPIRED_MESSAGE }; },
+  // A cluster-admin still signed in from before 4.0.0 (a user:info
+  // user:check-access token): GET /api/user/permissions says canMutate false
+  // with the reason, and every change answers 401 sign_in_again
+  // (pkg/api HandleUserPermissions, sessionProblem).
+  "sign-in-before-4": (w) => {
+    w.status = F.updateAvailableStatus();
+    w.signIn = { status: 401, code: "sign_in_again", message: F.SIGN_IN_SCOPE_MESSAGE };
+  },
+  "components-not-ready": (w) => { w.components = F.notReadyComponents(); },
+  // An upgraded DSC: things a later release added are not set,
+  // modelsAsAService is Managed under a Removed aigateway, and fields the
+  // installed CRD does not define (a v2 component, an old kserve setting).
+  "components-differences": (w) => {
+    w.dscManager = F.dscManager({ "workbenches.workbenchesV2": null, databaseservice: null, "dashboard.standard": null, aigateway: "Removed" },
+      { unknown: { codeflare: { managementState: "Removed" }, "kserve.serving": { managementState: "Managed" } } });
+  },
+  // The installed CSV ships no DataScienceCluster example: nothing to compare with.
+  "components-no-default": (w) => { w.dscManager = F.dscManager({}, { noDefault: true }); },
+  // MaaS set up and a model published (aigateway and modelsAsAService are
+  // Managed, off in the release default), ray Removed by hand, and a
+  // sub-component a later release added not set: the reset dialogs offer
+  // Keep the components you turned on, and the MaaS guard refuses turning
+  // aigateway off.
+  "components-turned-on": (w) => {
+    scenarios["env-maas-published"](w);
+    w.dscManager = F.dscManager({ ray: "Removed", "workbenches.workbenchesV2": null });
+  },
+  // The page compared the DSC as v2; when the reset dialog opens, the defaults are v3 (the conversion recovered).
+  "components-reset-stale": (w) => {
+    w.components.dscCompatibility = { ...w.components.dscCompatibility, missingComponents: ["sparkoperator"], resetRemovals: ["trainer"] };
+    w.previewAPIVersion = "datasciencecluster.opendatahub.io/v3";
+  },
+  // Argo CD manages the catalog, the Subscription and the DSC (RUNBOOK §13):
+  // Git moved the catalog to a build the operator does not run yet.
+  gitops: (w) => {
+    w.status = F.updateAvailableStatus();
+    w.status.subscription = { ...w.status.subscription, channel: "beta", managedBy: "rhoai" };
+    w.status.catalogSource = { ...w.status.catalogSource, managedBy: "rhoai" };
+    w.status.csv = { ...w.status.csv, name: "rhods-operator.3.6.0-ea.1", version: "3.6.0-ea.1" };
+    w.status.catalogServes = { channel: "beta", csv: "rhods-operator.3.6.0-ea.1", operatorImage: "registry.redhat.io/rhoai/odh-rhel9-operator@sha256:3f9e7b1c5d2a8e406b1f9c3d7a2e5b8f0c6d4a193f9e7b1c5d2a8e406b1f9c3d", built: "2026-10-05T21:47:53Z", installed: false };
+    w.status.dscManagedBy = "rhoai";
+  },
+  // Same, once the operator runs the build Git set; Quay has a newer one.
+  "gitops-synced": (w) => {
+    scenarios.gitops(w);
+    w.status.catalogServes = { ...w.status.catalogServes, installed: true };
+  },
+  // The operator Git set is Failed: the fix is to install it again, or change Git.
+  "gitops-failed": (w) => {
+    scenarios["gitops-synced"](w);
+    w.status.csv = { ...w.status.csv, phase: "Failed" };
+  },
+  // Argo CD created the catalog and the Subscription, nothing installed yet (OLM stuck or first sync).
+  "gitops-first-install": (w) => {
+    scenarios.gitops(w);
+    w.status.csv = { name: "", version: "", phase: "Not Found" };
+    w.status.subscription = { ...w.status.subscription, state: "UpgradePending" };
+    delete w.status.installPlan;
+    w.status.catalogServes = { ...w.status.catalogServes, installed: undefined };
+  },
+  // Git just moved the image: OLM is still replacing the catalog pod.
+  "gitops-updating": (w) => {
+    scenarios["gitops-synced"](w);
+    w.status.catalogServes = { ...w.status.catalogServes, installed: undefined, updating: true };
+  },
+  // Argo CD created the Subscription; OLM is running the first InstallPlan.
+  "gitops-installing": (w) => {
+    scenarios["gitops-first-install"](w);
+    w.status.installPlan = { name: "install-7xk2p", phase: "Installing", approved: true };
+  },
+  // The GitOps install, step by step (gated like update-flow).
+  "gitops-update-flow": (w) => {
+    scenarios.gitops(w);
+    w.gated = true;
+    // Once installed, the operator runs the build Git set.
+    w.afterUpdate = () => { const done = {}; scenarios["gitops-synced"](done); return done.status; };
+  },
+  // Components and Diagnostics while Argo CD manages the DSC.
+  "gitops-components": (w) => { scenarios["gitops-synced"](w); w.components = F.notReadyComponents(); w.components.dscCompatibility = { ...w.components.dscCompatibility, missingComponents: ["sparkoperator"], resetRemovals: ["trainer"] }; },
+  "gitops-diag": (w) => { scenarios["gitops-synced"](w); w.diagnostics = F.diagnostics("upgrade-gates"); w.components = F.notReadyComponents(); },
+  // The updater's gitops profile (PROFILE=gitops, docs/GITOPS.md "Profiles"):
+  // the backend refuses every route but Update and the reads with 403
+  // profile_gitops, and only cluster-admins may read.
+  "gitops-profile": (w) => { scenarios.gitops(w); w.profile = "gitops"; },
+  "gitops-profile-synced": (w) => { scenarios["gitops-synced"](w); w.profile = "gitops"; },
+  "gitops-profile-components": (w) => { scenarios["gitops-components"](w); w.profile = "gitops"; },
+  "gitops-profile-diag": (w) => { scenarios["gitops-diag"](w); w.profile = "gitops"; },
+  // The profile on a cluster whose catalog Argo CD does not manage: Update refuses.
+  "gitops-profile-unmanaged": (w) => { w.status = F.updateAvailableStatus(); w.profile = "gitops"; },
+  // The profile's admission policy is gone (Update is off until Argo CD syncs it).
+  "gitops-profile-no-policy": (w) => {
+    scenarios.gitops(w); w.profile = "gitops";
+    w.admissionPolicy = "The gitops profile's admission policy is not in place (read ValidatingAdmissionPolicy rhoai-nightly-updater-rhoai-nightly-updater-gitops: k8s API error 404 (NotFound)), so Update is off until Argo CD syncs it again (docs/GITOPS.md, section 11).";
+  },
+  // A signed-in user who is not a cluster-admin.
+  "gitops-profile-reader": (w) => { scenarios.gitops(w); w.profile = "gitops"; w.canMutate = false; },
+  "dashboard-session": (w) => { w.dashboard = F.dashboardSession(); w.dashboardBuilds = F.dashboardBuilds(w.dashboard); },
+  "s3-none": (w) => { w.resources = { minio: F.s3States.none, mlflow: F.mlflowStates.none, pipelineServers: [] }; w.gated = true; },
+  "s3-running": () => {},
+  "s3-migrate": (w) => {
+    w.resources = { minio: F.s3States.migrationNeeded, mlflow: F.mlflowStates.none, pipelineServers: [F.legacyPipelineServer], legacyStorage: F.legacyStorage("migrate") };
+    w.gated = true;
+  },
+  "s3-migrate-remove": (w) => {
+    w.resources = { minio: F.s3States.migrated, mlflow: F.mlflowStates.none, pipelineServers: [F.legacyPipelineServer], legacyStorage: F.legacyStorage("remove") };
+    w.gated = true;
+  },
+  "s3-incomplete": (w) => { w.resources.minio = F.s3States.incomplete; w.gated = true; },
+  mlflow: (w) => { w.resources.mlflow = F.mlflowStates.running; },
+  // The Environment page's other states, one scenario each.
+  "env-ready": (w) => { w.resources.mlflow = F.mlflowStates.running; },
+  // A pipeline server an earlier version set up as nightly-dspa: the workbench notice and Recreate.
+  "env-old-name": (w) => {
+    w.resources.pipelineServers = [F.pipelineServerOldName];
+    w.resources.minio = { ...w.resources.minio, teardownBlockedReason: "1 pipeline server uses this S3 storage: dev-project/nightly-dspa. Delete it first.", usedBy: ["dev-project/nightly-dspa"] };
+  },
+  "env-starting": (w) => { w.resources = { minio: F.s3States.starting, mlflow: F.mlflowStates.none, pipelineServers: [F.pipelineServerStarting] }; },
+  "env-error": (w) => {
+    w.resources = { minio: { ...F.s3States.imagePull, teardownBlockedReason: F.s3States.running.teardownBlockedReason, usedBy: F.s3States.running.usedBy }, mlflow: F.mlflowStates.prBroken, pipelineServers: [F.pipelineServer] };
+  },
+  "env-foreign": (w) => {
+    w.resources = {
+      minio: F.s3States.foreign, mlflow: F.mlflowStates.foreign, pipelineServers: [],
+      unmanagedPipelineProjects: ["fraud-detection"], unmanagedPipelineServers: [F.foreignPipelineServer],
+    };
+  },
+  // MLflow made in the dashboard (by the MLflow operator), running or broken; the rest is this tool's.
+  "env-mlflow-unmanaged": (w) => { w.resources.mlflow = F.mlflowStates.foreign; },
+  // The storage alone: its Tear down is not blocked, and offers the namespace.
+  "env-storage-only": (w) => {
+    w.resources = { minio: { ...F.s3States.running, teardownBlockedReason: undefined, usedBy: undefined, otherObjects: ["Deployment notes-app"] }, mlflow: F.mlflowStates.none, pipelineServers: [] };
+  },
+  "env-mlflow-unmanaged-broken": (w) => { w.resources.mlflow = F.mlflowStates.foreignBroken; },
+  // Like the live cluster on 2026-11-17: an empty project sorts first, the
+  // pipeline server is in a later one, and MLflow was made in the dashboard.
+  "env-live": (w) => {
+    w.projects = ["a-test-project", ...F.projects];
+    w.resources.mlflow = F.mlflowStates.foreign;
+  },
+  "env-reader": (w) => { w.resources.mlflow = F.mlflowStates.running; w.canMutate = false; },
+  // A fresh cluster whose DataScienceCluster turns pipelines and MLflow off.
+  "env-components-off": (w) => {
+    w.resources = {
+      minio: F.s3States.none, mlflow: F.mlflowStates.none, pipelineServers: [],
+      pipelinesBlocked: { component: "aipipelines", dsc: "default-dsc", state: "Removed", reason: "Data Science Pipelines is turned off on this cluster: component aipipelines is Removed in DataScienceCluster default-dsc, so nothing would run it. A cluster-admin turns it on by setting it to Managed." },
+      mlflowBlocked: { component: "mlflowoperator", dsc: "default-dsc", state: "Removed", reason: "MLflow is turned off on this cluster: component mlflowoperator is Removed in DataScienceCluster default-dsc, so nothing would run it. A cluster-admin turns it on by setting it to Managed." },
+    };
+  },
+  // No data science project yet.
+  "env-no-projects": (w) => { w.resources = { minio: F.s3States.none, mlflow: F.mlflowStates.none, pipelineServers: [] }; w.projects = []; },
+  // Samples in dev-project, every state at least once across these scenarios.
+  "env-samples": (w) => {
+    w.resources.mlflow = F.mlflowStates.running;
+    w.samples.mlflow["dev-project"] = F.mlflowSamples("dev-project", { "genai-demo": "present", training: "partial", "mcp-server": "foreign", skill: "unsupported" });
+  },
+  "env-samples-new": (w) => {
+    w.resources.mlflow = F.mlflowStates.running;
+    w.samples.mlflow["dev-project"] = F.mlflowSamples("dev-project", { training: "removed" });
+  },
+  "env-samples-busy": (w) => {
+    w.resources.mlflow = F.mlflowStates.running;
+    w.samples.mlflow["dev-project"] = F.mlflowSamples("dev-project", { "genai-demo": "partial", training: "present", "mcp-server": "present", skill: "unknown" });
+  },
+  "env-samples-failed": (w) => {
+    w.resources.mlflow = F.mlflowStates.running;
+    w.samples.mlflow["dev-project"] = F.mlflowSamples("dev-project", { "genai-demo": "present", training: "present", "mcp-server": "present", skill: "present" });
+  },
+  "env-samples-foreign": (w) => {
+    w.resources.mlflow = F.mlflowStates.running;
+    w.samples.mlflow["dev-project"] = F.mlflowSamples("dev-project", { training: "foreign", "mcp-server": "foreign", skill: "foreign" });
+  },
+  "env-samples-reader": (w) => { scenarios["env-samples"](w); w.canMutate = false; },
+  // The demo: an MLflow UI demo (foreign), the old 2Gi limit on this tool's
+  // MLflow and on someone else's, and the per-user limit on a change.
+  "env-samples-demo-foreign": (w) => {
+    w.resources.mlflow = F.mlflowStates.running;
+    w.samples.mlflow["dev-project"] = F.mlflowSamples("dev-project", { "genai-demo": "foreign", training: "present" });
+  },
+  "env-samples-demo-lowmem": (w) => {
+    w.resources.mlflow = F.mlflowStates.running;
+    const st = F.mlflowSamples("dev-project", { training: "present" });
+    st.samples[0] = { ...st.samples[0], ...F.DEMO_LOW_MEMORY };
+    w.samples.mlflow["dev-project"] = st;
+  },
+  "env-samples-demo-lowmem-foreign": (w) => {
+    w.resources.mlflow = F.mlflowStates.running;
+    w.samples.mlflow["dev-project"] = F.mlflowSamples("dev-project", { training: "present" });
+    w.samples.mlflow["dev-project"].samples[0] = F.sampleStatus("dev-project", "genai-demo", "unsupported", { message: F.DEMO_LOW_MEMORY_FOREIGN });
+  },
+  "env-samples-rate-limited": (w) => { scenarios["env-samples-new"](w); w.samplesRateLimited = true; },
+  // Models: every state of the gateway and the model, one scenario each.
+  "env-models-ready": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ items: [F.modelStates.released("dev-project")] });
+  },
+  // Several catalog models in one project: Qwen2.5, Qwen3 and the embedding model.
+  "env-models-several": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/granite-embedding-125m-english", "dev-project/qwen25-05b-instruct", "dev-project/qwen3-1-7b"]);
+    w.resources.models = F.modelsStatus({ items: [F.modelStates.released("dev-project"), F.modelStates.readyAs("qwen3-1-7b"), F.modelStates.readyAs("granite-embedding-125m-english")] });
+  },
+  "env-models-starting": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ items: [F.modelStates.starting("dev-project")] });
+  },
+  "env-models-image-missing": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ imagePlan: "preset", imagePlanReason: undefined, items: [F.modelStates.imageMissing("dev-project")] });
+  },
+  "env-models-foreign": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.foreign(["llm-eval/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ imagePlan: "preset", imagePlanReason: undefined, items: [F.modelStates.foreign("llm-eval")] });
+  },
+  // A model deployed from the dashboard in a project the gateway does not
+  // list: its route is rejected; Allow adds the project.
+  "env-models-not-allowed": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.notAllowed(F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]), ["fraud-detection/fraud-assistant"]);
+    w.resources.models = F.modelsStatus({ items: [F.modelStates.released("dev-project")] });
+  },
+  "env-models-unknown": (w) => { w.resources.inferenceGateway = F.gatewayStates.unknown; },
+  "env-models-gateway-starting": (w) => { w.resources.inferenceGateway = F.gatewayStates.starting; },
+  // The room check: no worker has room for Qwen3 now, so the picker disables it.
+  "env-models-capacity": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ catalog: F.catalogWithoutRoom(), items: [F.modelStates.released("dev-project")] });
+  },
+  "env-models-blocked": (w) => {
+    w.resources.models = F.modelsStatus({ imagePlan: undefined, imagePlanReason: undefined, preset: undefined, dependencies: "False",
+      blocked: { component: "kserve", reason: "KServe cannot serve LLMInferenceServices yet: DataScienceCluster default-dsc reports KserveLLMInferenceServiceDependencies=False (LeaderWorkerSet operator is not installed). A cluster-admin installs what it names; the Components page shows the details." } });
+  },
+  "env-models-reader": (w) => { scenarios["env-models-ready"](w); w.canMutate = false; },
+  // Models routing: how a new model is reached, and whether a ready one can be called.
+  "env-models-choose": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ items: [F.routed(F.modelStates.released("dev-project"))] });
+    w.routing = { maasReady: true, otherGateway: true };
+  },
+  "env-models-choose-none": (w) => { w.resources.inferenceGateway = F.gatewayStates.none; w.resources.models = F.modelsStatus(); w.routing = {}; },
+  "env-models-routed": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ items: [F.routed(F.modelStates.released("dev-project"))] });
+  },
+  "env-models-not-callable": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ items: [F.routed(F.modelStates.released("dev-project"), { check: "route" })] });
+  },
+  // The gateway answers a call without a token: the check fails as unauthenticated.
+  "env-models-unauthenticated": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ items: [F.routed(F.modelStates.released("dev-project"), { check: "unauthenticated" })] });
+  },
+  // A fresh cluster: the Overview's Models row needs cluster setup (planned for the recommended gateway).
+  "env-overview-prereq": (w) => { w.resources.inferenceGateway = F.gatewayStates.none; w.resources.models = F.modelsStatus(); w.prereq = { models: "missing", pipelines: "missing" }; w.routing = { authReady: false }; },
+  "env-models-internal": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.none;
+    w.resources.models = F.modelsStatus({ items: [F.routed(F.modelStates.released("dev-project"), { exposure: "internal", check: undefined })] });
+  },
+  // Set up on the Models tab through MaaS only: published as part of its setup.
+  "env-models-maas-only": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.none;
+    w.resources.models = F.modelsStatus({ items: [F.routed(F.modelStates.released("dev-project"), { exposure: "maas", check: undefined })] });
+    F.setMaaSPublished(w.resources, "dev-project", "qwen25-05b-instruct", true, { maasOnlySetup: true });
+    w.maas = F.maasWorld("ready", { items: [F.maasModel(true, { maasOnlySetup: true })] });
+  },
+  "env-models-stale-projects": (w) => {
+    w.resources.inferenceGateway = { ...F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]), allowedProjects: ["openshift-ingress", "dev-project", "e2e-v300", "llm-eval"], unusedProjects: ["e2e-v300", "llm-eval"], goneProjects: ["e2e-v300"] };
+    w.resources.models = F.modelsStatus({ items: [F.routed(F.modelStates.released("dev-project"))] });
+  },
+  "env-models-prereq": (w) => { w.resources.inferenceGateway = F.gatewayStates.ready([]); w.resources.models = F.modelsStatus(); w.prereq = { models: "missing" }; w.routing = { authReady: false }; },
+  "env-pipelines-prereq": (w) => { w.prereq = { pipelines: "missing" }; },
+  "env-models-gated": (w) => { w.resources.models = F.modelsStatus(); w.gated = true; },
+  // Playground: every state in dev-project, on a ready model.
+  // With this tool's embedding model, which Set up adds as one.
+  "env-playground-none": (w) => { scenarios["env-models-several"](w); w.playground.modelsByProject["dev-project"] = [F.playgroundModels.qwen, F.playgroundModels.granite, F.playgroundModels.maas, F.playgroundModels.opt]; },
+  // MaaS: the platform and this tool's model in dev-project.
+  "env-maas-none": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { items: [F.maasModel(false)] }); },
+  "env-maas-blocked": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { blocked: F.MAAS_BLOCKED, items: [F.maasModel(false)] }); },
+  "env-maas-no-cnpg": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { noCNPG: true, items: [F.maasModel(false)] }); },
+  // A cluster that never had MaaS: Set up installs and creates everything.
+  "env-maas-fresh": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { rhcl: "missing", items: [F.maasModel(false)] }); },
+  // Set up by this tool on Connectivity Link 1.4.3: Upgrade Connectivity Link is offered.
+  "env-maas-rhcl-143": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { rhcl: "1.4.3", items: [F.maasModel(false)] }); },
+  // A tier-based MaaS left its gateway policies: Remove the old tier policies is offered.
+  "env-maas-tier-policies": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { tierPolicies: true, items: [F.maasModel(false)] }); },
+  "env-maas-starting": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("starting", { items: [F.maasModel(false)] }); },
+  "env-maas-tls": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { tls: false, items: [F.maasModel(false)] }); },
+  // Authorino's CR names a certificate Secret that is not a Kubernetes name: no commands.
+  "env-maas-tls-invalid": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { tls: "invalid-secret", items: [F.maasModel(false)] }); },
+  "env-maas-ready": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(false)] }); },
+  "env-maas-publishing": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true, { ready: false })] }); },
+  // Three models in dev-project: Qwen2.5 published, Qwen3 not, the embedding model never offered.
+  "env-maas-published": (w) => { scenarios["env-models-several"](w); w.maas = F.maasWorld("ready", { items: F.maasSeveral() }); F.setMaaSPublished(w.resources, "dev-project", "qwen25-05b-instruct", true); },
+  // Two published models with different limits, for two groups (one without an OpenShift Group).
+  "env-maas-limits": (w) => {
+    scenarios["env-models-several"](w);
+    w.maas = F.maasWorld("ready", { access: { everyone: false, groups: ["ml-team", "data-science"], groupProblems: F.maasGroupProblems(["ml-team", "data-science"]) },
+      items: F.maasSeveral({ ...F.maasModel(true), limit: F.maasLimit("premium") }, { ...F.maasModel(true, { name: "qwen3-1-7b" }), limit: F.maasLimit("unlimited") }) });
+    F.setMaaSPublished(w.resources, "dev-project", "qwen25-05b-instruct", true);
+    F.setMaaSPublished(w.resources, "dev-project", "qwen3-1-7b", true);
+  },
+  // Ready on the MaaS docs' development database: Change database from it (to CloudNativePG or yours).
+  "env-maas-dev-db": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { dbCurrent: "development", items: [F.maasModel(false)] }); },
+  // Ready on the user's PostgreSQL: Change database to a new URL of theirs.
+  "env-maas-your-db": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { dbCurrent: "external", items: [F.maasModel(false)] }); },
+  // The cluster's MaaSSubscription API has no unlimited: Publish shows it disabled.
+  "env-maas-no-unlimited": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { noUnlimited: true, items: [F.maasModel(false)] }); },
+  // The same, on the Models tab: Use it of Qwen2.5 points at the MaaS tab's commands; Qwen3's keeps its curl.
+  "env-models-published": (w) => { scenarios["env-maas-published"](w); },
+  // A publication by an earlier build (the model also on the inference gateway): partly published.
+  "env-maas-earlier-build": (w) => { scenarios["env-models-several"](w); w.maas = F.maasWorld("ready", { items: F.maasSeveral(F.maasEarlierBuildPublication()) }); F.setMaaSPublished(w.resources, "dev-project", "qwen25-05b-instruct", true); },
+  // Qwen3 published by this build, then someone added the inference gateway to it: partly published, set the refs, then Unpublish.
+  "env-maas-someone-added": (w) => {
+    scenarios["env-models-several"](w);
+    w.maas = F.maasWorld("ready", { items: F.maasSeveral(F.maasModel(true), F.maasSomeoneAddedPublication({ name: "qwen3-1-7b" })) });
+    F.setMaaSPublished(w.resources, "dev-project", "qwen25-05b-instruct", true);
+    F.setMaaSPublished(w.resources, "dev-project", "qwen3-1-7b", true);
+  },
+  "env-maas-foreign": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("foreign", { items: [F.maasModel(false)] }); },
+  "env-maas-no-model": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready"); },
+  // Not turned on yet while Authorino TLS needs a cluster-admin: Set up is still offered.
+  "env-maas-new-tls": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { tls: false, items: [F.maasModel(false)] }); },
+  // A recorded publication whose model was deleted elsewhere: a row with Unpublish.
+  "env-maas-orphan": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true), F.maasOrphanPublication("old-project")] }); },
+  // Others publish through the platform: Remove refuses before changing anything.
+  "env-maas-in-use": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(false)] }); w.maasRefusal = F.MAAS_IN_USE; },
+  "env-playground-no-model": (w) => { w.playground.modelsByProject["dev-project"] = []; },
+  "env-playground-model-not-ready": (w) => {
+    scenarios["env-models-ready"](w);
+    w.playground.modelsByProject["dev-project"] = [F.playgroundModels.qwen, F.playgroundModels.deepseek, F.playgroundModels.maas];
+  },
+  "env-playground-starting": (w) => { scenarios["env-models-ready"](w); w.playground.items = [F.playgroundStates.starting()]; },
+  "env-playground-ready": (w) => { scenarios["env-models-ready"](w); w.playground.items = [F.playgroundStates.ready()]; },
+  "env-playground-foreign": (w) => { scenarios["env-models-ready"](w); w.playground.items = [F.playgroundStates.foreign()]; },
+  "env-playground-failed": (w) => { scenarios["env-models-ready"](w); w.playground.items = [F.playgroundStates.failed()]; },
+  "env-playground-api-differs": (w) => { scenarios["env-models-ready"](w); w.playground.apiProblem = F.PLAYGROUND_API_DIFFERS; w.playground.apiCode = "api_missing"; },
+  "env-playground-blocked": (w) => { scenarios["env-models-ready"](w); w.playground.blocked = F.PLAYGROUND_BLOCKED; },
+  // The Overview with features in several projects (overview-review).
+  // Pipelines, Models and Playground ready in all three projects.
+  "env-overview-three": (w) => {
+    w.resources.mlflow = F.mlflowStates.running;
+    w.resources.pipelineServers = F.projects.map((ns) => F.pipelineServerIn(ns));
+    w.resources.inferenceGateway = F.gatewayStates.ready(F.projects.map((ns) => `${ns}/qwen25-05b-instruct`));
+    w.resources.models = F.modelsStatus({ items: F.projects.map((ns) => F.modelStates.released(ns)) });
+    w.playground.items = F.projects.map((ns) => F.playgroundStates.ready(ns));
+    w.maas = F.maasWorld("ready", { items: [F.maasModel(true)] });
+  },
+  // The same, with one project failing in each: "Error in 1 of 3 projects".
+  "env-overview-mixed": (w) => {
+    scenarios["env-overview-three"](w);
+    w.resources.pipelineServers = [F.pipelineServerIn("dev-project"), F.pipelineServerStuck("fraud-detection"), F.pipelineServerIn("llm-eval")];
+    w.resources.models = F.modelsStatus({ imagePlan: "preset", imagePlanReason: undefined, items: [F.modelStates.released("dev-project"), F.modelStates.released("fraud-detection"), F.modelStates.imageMissing("llm-eval")] });
+    w.playground.items = [F.playgroundStates.ready("dev-project"), F.playgroundStates.failed("fraud-detection"), F.playgroundStates.ready("llm-eval")];
+  },
+  // A 40-character project name: alone (Pipelines, Playground) and as the project with the problem (Models).
+  "env-overview-long-name": (w) => {
+    const long = "customer-churn-prediction-experiments-v2";
+    w.projects = [long, ...F.projects];
+    w.resources.mlflow = F.mlflowStates.foreign;
+    w.resources.pipelineServers = [F.pipelineServerIn(long)];
+    w.resources.inferenceGateway = F.gatewayStates.ready([`${long}/qwen25-05b-instruct`, "dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ imagePlan: "preset", imagePlanReason: undefined, items: [F.modelStates.imageMissing(long), F.modelStates.released("dev-project")] });
+    w.playground.items = [F.playgroundStates.ready(long)];
+    w.maas = F.maasWorld("foreign", { items: [F.maasModel(false)] });
+  },
+  // Sample changes wait for /__docs/advance: a row shows its operation.
+  "env-samples-gated": (w) => { scenarios["env-samples-new"](w); w.gated = true; },
+};
+for (const name of ["healthy", "prerequisite-missing", "operand-missing", "module-backoff", "certificate-stale", "apply-failures", "upgrade-gates", "conversion-webhook", "leftovers"]) {
+  scenarios[`diag-${name}`] = (w) => {
+    w.diagnostics = F.diagnostics(name);
+    // The operator cannot convert the DSC to v3: the Components page reads it as v2.
+    if (name === "conversion-webhook") w.components = F.conversionFallbackComponents();
+    else if (name !== "healthy") w.components = F.notReadyComponents();
+    if (name === "module-backoff") w.gated = true;
+  };
+}
+// The leftover fixes refused: the module operator that recreates the
+// Deployment is not running (the backend's prerequisites refusal).
+scenarios["diag-leftovers-refused"] = (w) => { scenarios["diag-leftovers"](w); w.leftoverRefusal = true; };
+
+// The reads every page makes, as the server answers them; the frontend's
+// types check these (frontend/src/test/docsMockFixtures.test.ts).
+export const reads = {
+  "GET /api/status": (w) => w.status,
+  "GET /api/operation": (w) => w.operation,
+  "GET /api/user/permissions": (w) => ({ canMutate: w.canMutate !== false, user: F.USER }),
+  "GET /api/components": (w) => w.components,
+  // The DSC manager: none without a DataScienceCluster, else the scenario's.
+  "GET /api/components/dsc": (w) => (w.components.dscExists === false ? { exists: false, state: w.components.dscState || "no-dsc", dscCount: 0, conditions: [], nodes: [], mismatches: [] } : w.dscManager ?? F.dscManager()),
+  "GET /api/diagnostics": (w) => w.diagnostics,
+  "GET /api/dashboard/state": (w) => w.dashboard,
+  "GET /api/resources/status": (w) => ({ dashboardUrl: F.DASHBOARD_URL, inferenceGateway: F.gatewayStates.none, models: F.modelsStatus(), ...w.resources }),
+  "GET /api/resources/projects": (w) => ({ projects: w.projects ?? F.projects }),
+  "GET /api/resources/maas": (w) => w.maas,
+  "GET /api/activity": (w) => w.status.activity ?? [],
+};

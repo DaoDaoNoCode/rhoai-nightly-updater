@@ -50,7 +50,7 @@ function renderPage(canMutate = true) {
   return renderWithApp(<DashboardDevPage />, { permissions: async () => ({ canMutate, user: "me" }) }, "/dashboard-dev");
 }
 
-describe("Dashboard Dev session panel (A04-1)", () => {
+describe("Dashboard Dev session panel", () => {
   it("shows who, since when, the build, every warning and a Revert that confirms what changes", async () => {
     const api = stubApi({
       "/api/dashboard/state": active(),
@@ -76,7 +76,7 @@ describe("Dashboard Dev session panel (A04-1)", () => {
     expect(api.calls.filter((c) => c === "POST /api/dashboard/revert")).toHaveLength(1);
   });
 
-  it("a 404 with a paused operator still offers Revert and flags the blocked Dashboard deletion (D1, A04-9)", async () => {
+  it("a 404 with a paused operator still offers Revert and flags the blocked Dashboard deletion", async () => {
     stubApi({
       "/api/dashboard/state": () => jsonResponse({
         error: "failed to get dashboard state: deployment not found", errorCode: "dashboard_not_deployed",
@@ -93,7 +93,7 @@ describe("Dashboard Dev session panel (A04-1)", () => {
     [403, "forbidden", "Access denied"],
     [503, "network", "The updater cannot reach the cluster API"],
     [502, "unauthorized", "The cluster rejected the updater's credentials"],
-  ])("HTTP %i %s is an error, not 'not deployed' (A04-9)", async (status, errorCode, title) => {
+  ])("HTTP %i %s is an error, not 'not deployed'", async (status, errorCode, title) => {
     stubApi({ "/api/dashboard/state": () => jsonResponse({ error: "boom", errorCode }, status) });
     renderPage();
     expect(await screen.findByText(new RegExp(`^${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`))).toBeInTheDocument();
@@ -110,7 +110,7 @@ describe("Dashboard Dev session panel (A04-1)", () => {
   });
 });
 
-describe("Dashboard Dev deploy confirmations (A04-4) and flavor (A04-3)", () => {
+describe("Dashboard Dev deploy confirmations and flavor", () => {
   it("Deploy latest main asks first and says what changes", async () => {
     const api = stubApi({ "/api/dashboard/state": clean(), "POST /api/dashboard/deploy-main": { success: true, message: "Deploying main", logs: [] } });
     renderPage();
@@ -149,7 +149,7 @@ describe("Dashboard Dev deploy confirmations (A04-4) and flavor (A04-3)", () => 
     expect(api.bodies["POST /api/dashboard/deploy-main"]).toEqual([{ flavor: "rhoai" }]);
   });
 
-  it("a stuck rollout shows the server's reason and the container's waiting reason (A04-7)", async () => {
+  it("a stuck rollout shows the server's reason and the container's waiting reason", async () => {
     stubApi({
       "/api/dashboard/state": active({
         rolloutStuck: true, allDevImagesReady: false,
@@ -178,7 +178,7 @@ describe("Dashboard Dev deploy confirmations (A04-4) and flavor (A04-3)", () => 
     expect(api.bodies["POST /api/assist-rollout"]).toEqual([{ namespace: "redhat-ods-applications", deployment: "rhods-dashboard" }]);
   });
 
-  it("Assist rollout is available while the page waits for the rollout it rescues (R4b e)", async () => {
+  it("Assist rollout is available while the page waits for the rollout it rescues", async () => {
     let state = clean();
     stubApi({ "/api/dashboard/state": () => jsonResponse(state), "POST /api/dashboard/deploy-main": () => {
       state = active({ devMode: "main", rolloutPending: true, allDevImagesReady: false, schedulingFailureReason: "0/3 nodes are available: 3 Insufficient cpu.", canAssistRollout: true });
@@ -195,7 +195,7 @@ describe("Dashboard Dev deploy confirmations (A04-4) and flavor (A04-3)", () => 
     expect(screen.getByRole("button", { name: "Deploy latest main" })).toHaveAttribute("aria-disabled", "true");
   });
 
-  it("stops waiting as soon as a container reports a terminal waiting reason (R4b e)", async () => {
+  it("stops waiting as soon as a container reports a terminal waiting reason", async () => {
     let state = clean();
     stubApi({ "/api/dashboard/state": () => jsonResponse(state), "POST /api/dashboard/deploy-main": () => {
       state = active({ devMode: "main", allDevImagesReady: false, rolloutStuck: false,
@@ -211,7 +211,7 @@ describe("Dashboard Dev deploy confirmations (A04-4) and flavor (A04-3)", () => 
     expect(screen.getByRole("button", { name: "Deploy latest main" })).not.toHaveAttribute("aria-disabled");
   });
 
-  it("a teammate's running operation disables deploys with the reason (N1)", async () => {
+  it("a teammate's running operation disables deploys with the reason", async () => {
     stubApi({
       "/api/dashboard/state": clean(),
     });
@@ -225,7 +225,7 @@ describe("Dashboard Dev deploy confirmations (A04-4) and flavor (A04-3)", () => 
     expect(await screen.findByRole("tooltip")).toHaveTextContent(/alice is running "Update to nightly"/);
   });
 
-  it("refreshes the app-wide Dashboard Dev override after a change (N2)", async () => {
+  it("refreshes the app-wide Dashboard Dev override after a change", async () => {
     stubApi({ "/api/dashboard/state": clean(), "POST /api/dashboard/deploy-main": { success: true, message: "Deploying main", logs: [] } });
     const dashboard = vi.fn(async () => clean());
     renderWithApp(<DashboardDevPage />, { permissions: async () => ({ canMutate: true, user: "me" }), dashboard }, "/dashboard-dev");

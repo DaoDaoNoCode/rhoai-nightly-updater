@@ -46,7 +46,7 @@ describe("terminalReason", () => {
   });
 });
 
-describe("QuickResourceCreator polling (A06-5)", () => {
+describe("QuickResourceCreator polling", () => {
   it("backs off while a resource starts and stops once it is ready", async () => {
     let minio: ResourceState = { deployed: true, ready: false, message: "Provisioning" };
     const statusCalls = stubResources(() => statusWith(minio));
@@ -101,7 +101,7 @@ describe("QuickResourceCreator polling (A06-5)", () => {
   });
 });
 
-describe("disabled buttons explain themselves (A06-7)", () => {
+describe("disabled buttons explain themselves", () => {
   it("TooltipButton is focusable, shows the reason on focus and ignores clicks", async () => {
     const onClick = vi.fn();
     render(<TooltipButton onClick={onClick} disabledReason="You don't have permission">Dry Run</TooltipButton>);
@@ -115,7 +115,7 @@ describe("disabled buttons explain themselves (A06-7)", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent("You don't have permission");
   });
 
-  it("Set up stays focusable and explains why it is disabled (N10)", async () => {
+  it("Set up stays focusable and explains why it is disabled", async () => {
     const blocked = "Namespace 'seaweedfs' exists but was not created by this tool, so setup will not modify it.";
     stubResources(() => statusWith({ deployed: false, ready: false, managedByTool: false, setupBlockedReason: blocked }), ["dev-project"]);
     renderAt("/test-resources?tab=pipelines&project=dev-project");

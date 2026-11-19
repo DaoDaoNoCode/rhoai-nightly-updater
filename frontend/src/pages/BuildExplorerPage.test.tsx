@@ -1,6 +1,6 @@
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import type { FBCContentResponse, RelatedImage, StatusResponse } from "../types";
 import { stubApi, jsonResponse, type Handler } from "../test/apiStub";
@@ -212,7 +212,8 @@ describe("Build Explorer search", () => {
     // The PR is resolved with the first build alone, then the rest go a few at a time.
     expect(await screen.findByText(/Checked 0 of 4 builds for PR #9938/)).toBeInTheDocument();
     await waitFor(() => expect(containsCalls(api)).toHaveLength(1));
-    await new Promise((r) => setTimeout(r, 20));
+    // Whatever the page does while the first answer is pending (effects, promises) runs now.
+    await act(async () => {});
     expect(containsCalls(api)).toHaveLength(1);
     first.resolve();
     expect(await screen.findByText(/Checked 1 of 4 builds for PR #9938/)).toBeInTheDocument();

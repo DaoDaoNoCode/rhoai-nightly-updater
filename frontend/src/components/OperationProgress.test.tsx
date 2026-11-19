@@ -26,7 +26,7 @@ async function watchBobFinish(lastCompleted?: CompletedOperation) {
   fireEvent.click(screen.getByText("poll"));
 }
 
-describe("OperationProgress for an operation another user ran (N4)", () => {
+describe("OperationProgress for an operation another user ran", () => {
   it("does not claim success when the server sends no result (older backend)", async () => {
     await watchBobFinish(undefined);
     expect(await screen.findByText("Update finished (outcome unknown, see the activity log)")).toBeInTheDocument();

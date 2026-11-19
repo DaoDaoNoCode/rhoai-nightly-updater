@@ -145,7 +145,7 @@ describe("streamSSE lifecycle", () => {
     expect(steps.map((s) => s.step)).toEqual(["validate_prerequisites", "operation_complete"]);
   });
 
-  it("calls the end callback exactly once when the caller aborts mid-stream (A06-1)", async () => {
+  it("calls the end callback exactly once when the caller aborts mid-stream", async () => {
     const sse = sseResponse();
     vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
       init.signal?.addEventListener("abort", () => sse.fail());
@@ -186,7 +186,7 @@ describe("streamSSE lifecycle", () => {
     await vi.waitFor(() => expect(b.outcomes).toEqual([{ kind: "drop", reason: "ended_without_result" }]));
   });
 
-  it("parses JSON error bodies and exposes the errorCode (A06-6)", async () => {
+  it("parses JSON error bodies and exposes the errorCode", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: "Another cluster operation is in progress. Please wait.", errorCode: "cluster_busy" }, 409)));
     const { outcomes } = openStream();
     await vi.waitFor(() => expect(outcomes).toHaveLength(1));
