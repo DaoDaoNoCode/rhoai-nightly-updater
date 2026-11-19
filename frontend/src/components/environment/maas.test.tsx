@@ -95,8 +95,10 @@ describe("Unpublish of a model set up through MaaS only", () => {
   };
 
   it("says the model is left with no route, not that its direct address answers again", () => {
-    render(<>{confirmOf(true).changes.map((c, i) => <div key={i}>{c}</div>)}</>);
+    render(<>{confirmOf(true).summary}{confirmOf(true).changes.map((c, i) => <div key={i}>{c}</div>)}</>);
     expect(screen.getByText(/so its route is removed: it then answers only at its in-cluster address/)).toBeInTheDocument();
+    // The summary says it too, before the list of changes.
+    expect(screen.getByText(/afterwards it has no outside address: only programs inside the cluster can call it, without a token\./)).toBeInTheDocument();
     expect(screen.queryByText(/its direct address answers again/)).not.toBeInTheDocument();
   });
 

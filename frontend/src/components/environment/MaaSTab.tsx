@@ -594,7 +594,7 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
       const maasOnly = !!m?.items?.find((i) => i.namespace === pending.project && i.name === pending.model)?.maasOnlySetup;
       return {
         title: `Unpublish ${maasModelName(m, pending.project, pending.model)} in ${pending.project}?`, confirm: "Unpublish", danger: true, runTitle: `Unpublish ${maasModelName(m, pending.project, pending.model)} in ${pending.project}`,
-        summary: <Content component="p">MaaS stops offering the model; API keys can no longer call it. The model keeps running in {pending.project}.</Content>,
+        summary: <Content component="p">MaaS stops offering the model; API keys can no longer call it. The model keeps running in {pending.project}.{maasOnly ? " It had no outside route before it was published, so afterwards it has no outside address: only programs inside the cluster can call it, without a token." : ""}</Content>,
         changes: [
           <>Deleted: MaaSModelRef <code>{pending.model}</code> in {pending.project}, and the model&apos;s entries in the subscription and access policy (both are deleted when no model is left).</>,
           maasOnly
