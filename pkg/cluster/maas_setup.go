@@ -101,6 +101,78 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 
 	// Every write as a server-side dry run first, where its namespace and
 	// API exist already.
+	if r, err := m.setupDryRuns(maasSetupChecks{rhclPlan: rhclPlan, kq: kq, kVersion: kVersion, kuadrantNS: kuadrantNS,
+		infra: infra, infraFound: infraFound, dbPlan: dbPlan, gwPlan: gwPlan, foreignGW: foreignGW, needDSC: needDSC}); r != nil || err != nil {
+		return r, err
+	}
+	m.step("check", "success", "Everything Set up changes is checked.")
+
+	// 1. Connectivity Link (platform-setup.md, RHOAI tab).
+	if r, err := m.setupRHCL(&rec, rhcl, rhclPlan, kVersion); r != nil || err != nil {
+		return r, err
+	}
+
+	// 2. The Kuadrant CR.
+	if r, err := m.setupKuadrant(&rec, &kq, kVersion, kuadrantNS); r != nil || err != nil {
+		return r, err
+	}
+
+	// 3. CloudNativePG, when the database is a CloudNativePG one.
+	if r, err := m.ensureCNPG(&rec, dbPlan); r != nil || err != nil {
+		return r, err
+	}
+
+	// 4. The infrastructure namespace and the database (maas-setup.md
+	// "Database Setup").
+	if !infraFound {
+		if r, err := m.createMaaSInfraNamespace(&rec, infra); r != nil || err != nil {
+			return r, err
+		}
+	}
+	if r, err := m.makeDatabase(&rec, dbPlan, dsc.maas == "Managed", false); r != nil || err != nil {
+		return r, err
+	}
+
+	// 5. Create Gateway.
+	if r, err := m.setupGateway(gwPlan, foreignGW); r != nil || err != nil {
+		return r, err
+	}
+
+	// 6. Authorino TLS (setup-authorino-tls.sh), once Kuadrant has made
+	// Authorino.
+	if r, err := m.applyAuthorinoTLS(&rec, kq.namespace, "authorino-tls"); r != nil || err != nil {
+		return r, err
+	}
+
+	// 7. Configure DataScienceCluster.
+	if r, err := m.setupDSC(&rec, dsc, needDSC); r != nil || err != nil {
+		return r, err
+	}
+
+	// 8. Validation.
+	return m.waitPlatformReady(infra)
+}
+
+// maasSetupChecks is what setup's check step found, for the dry runs.
+type maasSetupChecks struct {
+	rhclPlan   *operatorInstallPlan
+	kq         kuadrantState
+	kVersion   string
+	kuadrantNS string
+	infra      string
+	infraFound bool
+	dbPlan     *maasDBPlan
+	gwPlan     *maasGatewayPlan
+	foreignGW  bool
+	needDSC    bool
+}
+
+// setupDryRuns runs every write of Set up as a server-side dry run, where
+// its namespace and API exist already. Nil, nil: all are accepted.
+func (m *maasRun) setupDryRuns(k maasSetupChecks) (*types.OperationResponse, error) {
+	c := m.c
+	rhclPlan, kq, kVersion, kuadrantNS, infra, infraFound := k.rhclPlan, k.kq, k.kVersion, k.kuadrantNS, k.infra, k.infraFound
+	dbPlan, gwPlan, foreignGW, needDSC := k.dbPlan, k.gwPlan, k.foreignGW, k.needDSC
 	dry := func(what string, err error) (*types.OperationResponse, error) {
 		return m.fail("check", fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", what, err, templateHint(err)), maasWriteCode(err), "dry run failed")
 	}
@@ -146,14 +218,18 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 			return dry("the DataScienceCluster change", err)
 		}
 	}
-	m.step("check", "success", "Everything Set up changes is checked.")
+	return nil, nil
+}
 
-	// 1. Connectivity Link (platform-setup.md, RHOAI tab).
+// setupRHCL is Set up's step 1: install Connectivity Link, or wait for an
+// install in progress. Nil, nil: done.
+func (m *maasRun) setupRHCL(rec *maasRecord, rhcl operatorState, rhclPlan *operatorInstallPlan, kVersion string) (*types.OperationResponse, error) {
+	c := m.c
 	switch {
 	case rhclPlan != nil:
 		m.step("rhcl", "running", fmt.Sprintf("Installing Red Hat Connectivity Link %s (channel %s) from redhat-operators...", rhclPlan.head, rhclPlan.channel))
 		rec.setShared("rhcl", fmt.Sprintf("Subscription %s/%s, channel %s", rhclOperator.namespace, rhclOperator.subName, rhclPlan.channel))
-		if err := writeMaaSRecord(c, rec); err != nil {
+		if err := writeMaaSRecord(c, *rec); err != nil {
 			return m.fail("rhcl", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
 		}
 		made, err := createOperatorObjects(c, rhclPlan, false)
@@ -177,8 +253,13 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 	default:
 		m.step("rhcl", "success", "Kuadrant's API is served (installed without an rhcl-operator CSV); MaaS uses it as it is.")
 	}
+	return nil, nil
+}
 
-	// 2. The Kuadrant CR.
+// setupKuadrant is Set up's step 2: the Kuadrant CR, and the wait until it
+// is Ready (kq is updated with what the wait read). Nil, nil: go on.
+func (m *maasRun) setupKuadrant(rec *maasRecord, kq *kuadrantState, kVersion, kuadrantNS string) (*types.OperationResponse, error) {
+	c := m.c
 	if kq.found {
 		m.step("kuadrant", "success", fmt.Sprintf("Kuadrant %s/kuadrant exists%s.", kq.namespace, byWhom(rec.Shared["kuadrant"] != "" && toolOwned(kq.meta))))
 	} else {
@@ -192,7 +273,7 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 			return m.fail("kuadrant", fmt.Sprintf("Connectivity Link's Kuadrant API is not served after %s%s. Set up again to continue; the MaaS tab shows Connectivity Link's state.", clockText(MaaSOperatorTimeout), errSuffix(err)), firstNonEmpty(errorCodeFromK8sErr(err), "not_ready"), "kuadrant api missing")
 		}
 		rec.setShared("kuadrant", "Kuadrant "+kuadrantNS+"/kuadrant")
-		if err := writeMaaSRecord(c, rec); err != nil {
+		if err := writeMaaSRecord(c, *rec); err != nil {
 			return m.fail("kuadrant", err.Error(), errorCodeFromK8sErr(err), "record write failed")
 		}
 		m.step("kuadrant", "running", fmt.Sprintf("Creating the Kuadrant CR %s/kuadrant...", kuadrantNS))
@@ -205,7 +286,7 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 	ready, err := waitForGone(c, MaaSKuadrantTimeout, MaaSPoll, func(cc *Client) (bool, error) {
 		k, err := readKuadrant(cc)
 		if err == nil && k.found {
-			kq = k
+			*kq = k
 		}
 		return k.ready, err
 	})
@@ -217,51 +298,40 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 	default:
 		m.step("kuadrant", "success", "Kuadrant "+kq.namespace+"/kuadrant is Ready.")
 	}
+	return nil, nil
+}
 
-	// 3. CloudNativePG, when the database is a CloudNativePG one.
-	if r, err := m.ensureCNPG(&rec, dbPlan); r != nil || err != nil {
-		return r, err
+// createMaaSInfraNamespace creates the AI gateway's infrastructure
+// namespace (Set up's step 4), recording it as this tool's unless someone
+// made it meanwhile. Nil, nil: go on.
+func (m *maasRun) createMaaSInfraNamespace(rec *maasRecord, infra string) (*types.OperationResponse, error) {
+	c := m.c
+	m.step("database", "running", fmt.Sprintf("Creating namespace %s, the AI gateway's infrastructure namespace, as the docs' setup-database.sh does...", infra))
+	rec.InfraNamespace = infra
+	if err := writeMaaSRecord(c, *rec); err != nil {
+		return m.fail("database", err.Error(), errorCodeFromK8sErr(err), "record write failed")
 	}
-
-	// 4. The infrastructure namespace and the database (maas-setup.md
-	// "Database Setup").
-	if !infraFound {
-		m.step("database", "running", fmt.Sprintf("Creating namespace %s, the AI gateway's infrastructure namespace, as the docs' setup-database.sh does...", infra))
-		rec.InfraNamespace = infra
-		if err := writeMaaSRecord(c, rec); err != nil {
+	if err := createInfraNamespace(c, infra, false); err != nil && !IsK8sError(err, 409) {
+		return m.fail("database", fmt.Sprintf("Failed to create namespace %s: %v. Set up again to retry.", infra, err), maasWriteCode(err), "namespace create failed")
+	} else if IsK8sError(err, 409) {
+		// Made meanwhile (by RHOAI, or someone): it is not this tool's.
+		rec.InfraNamespace = ""
+		if err := writeMaaSRecord(c, *rec); err != nil {
 			return m.fail("database", err.Error(), errorCodeFromK8sErr(err), "record write failed")
 		}
-		if err := createInfraNamespace(c, infra, false); err != nil && !IsK8sError(err, 409) {
-			return m.fail("database", fmt.Sprintf("Failed to create namespace %s: %v. Set up again to retry.", infra, err), maasWriteCode(err), "namespace create failed")
-		} else if IsK8sError(err, 409) {
-			// Made meanwhile (by RHOAI, or someone): it is not this tool's.
-			rec.InfraNamespace = ""
-			if err := writeMaaSRecord(c, rec); err != nil {
-				return m.fail("database", err.Error(), errorCodeFromK8sErr(err), "record write failed")
-			}
-			if msg, code := maasNamespaceRefusal(c, infra); msg != "" {
-				return m.fail("database", msg, code, "namespace not rhoai's")
-			}
-		} else {
-			m.logs = append(m.logs, "OK: Namespace "+infra+" created")
+		if msg, code := maasNamespaceRefusal(c, infra); msg != "" {
+			return m.fail("database", msg, code, "namespace not rhoai's")
 		}
+	} else {
+		m.logs = append(m.logs, "OK: Namespace "+infra+" created")
 	}
-	if r, err := m.makeDatabase(&rec, dbPlan, dsc.maas == "Managed", false); r != nil || err != nil {
-		return r, err
-	}
+	return nil, nil
+}
 
-	// 5. Create Gateway.
-	if r, err := m.setupGateway(gwPlan, foreignGW); r != nil || err != nil {
-		return r, err
-	}
-
-	// 6. Authorino TLS (setup-authorino-tls.sh), once Kuadrant has made
-	// Authorino.
-	if r, err := m.applyAuthorinoTLS(&rec, kq.namespace, "authorino-tls"); r != nil || err != nil {
-		return r, err
-	}
-
-	// 7. Configure DataScienceCluster.
+// setupDSC is Set up's step 7: aigateway and modelsAsAService to Managed,
+// recording the values before. Nil, nil: done.
+func (m *maasRun) setupDSC(rec *maasRecord, dsc maasDSC, needDSC bool) (*types.OperationResponse, error) {
+	c := m.c
 	if !needDSC {
 		m.step("dsc", "success", "aigateway and modelsAsAService are Managed"+byWhom(rec.DSCChanged)+".")
 	} else {
@@ -275,7 +345,7 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 			rec.DSCChanged, rec.PreviousModelsAsAService = true, dsc.maas
 		}
 		m.step("dsc", "running", fmt.Sprintf("Setting aigateway and its modelsAsAService to Managed in DataScienceCluster %s (it was %s; removal restores that)...", dsc.name, strings.Join(fields, ", ")))
-		if err := writeMaaSRecord(c, rec); err != nil {
+		if err := writeMaaSRecord(c, *rec); err != nil {
 			return m.fail("dsc", err.Error()+" The DataScienceCluster was not changed.", errorCodeFromK8sErr(err), "record write failed")
 		}
 		ag, maas := "", ""
@@ -290,9 +360,7 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 		}
 		m.step("dsc", "success", "aigateway and modelsAsAService are Managed.")
 	}
-
-	// 8. Validation.
-	return m.waitPlatformReady(infra)
+	return nil, nil
 }
 
 func byWhom(tool bool) string {
