@@ -24,19 +24,24 @@ only accepts a tag whose version is the top dated section. See
   Service gateway. The Playground's status and Set up called dashboard
   gen-ai endpoints that pass the caller's token on to the MaaS gateway,
   which the editors of published projects can attach routes to. The tab
-  now reads MaaS models from their MaaSModelRefs, and Set up adds only the
-  project's own models: add a MaaS model in the dashboard's playground,
-  signed in as yourself.
+  now reads MaaS models from their MaaSModelRefs (only those a
+  MaaSSubscription offers), and Set up adds only the project's own models,
+  with tracing, guardrails and vector stores off: add a MaaS model in the
+  dashboard's playground, signed in as yourself.
 - Migrate storage writes the storage's S3 keys only into the projects of
   pipeline servers this tool recorded, or whose project you confirm in the
   dialog. A pipeline server's label was enough before, and a project's
   editors can set it. Pipeline servers set up before 3.0.1 are listed for
   confirmation the first time.
 - The MaaS gateway stops admitting projects whose publication is gone (the
-  project was deleted, or the model is not the one published), at the next
-  MaaS, Models or Clean up operation; the MaaS tab names them until then.
-  A deleted project's name could otherwise be recreated by anyone allowed
-  to create projects.
+  project was deleted, or the model is not the one published): the
+  updater checks at start and every 5 minutes (while no other operation
+  runs) and at the start of every MaaS, Models or Clean up operation. The
+  tool's access policy and subscription stop listing them, and the tool's
+  model reference of a remade model is deleted; the MaaS tab names them
+  until then, and warns when its record of models cannot be read. A
+  deleted project's name could otherwise be recreated by anyone allowed to
+  create projects and given routes on the MaaS gateway.
 - Errors from writing the node pull secret no longer show the credential
   when the API server quotes what it was sent.
 - `GET /api/update-check` now requires a signed-in user, like every other
