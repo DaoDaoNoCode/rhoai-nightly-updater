@@ -682,6 +682,12 @@ export function maasPartStatus(part: MaaSPart): EnvStatus {
   }
 }
 
+/** A part's own label: a ready part with a warning needs attention (the platform's state is maasPlatformStatus's). */
+export function maasPartLabelStatus(part: MaaSPart): EnvStatus {
+  const s = maasPartStatus(part);
+  return s === "ready" && part.warning ? "needs-attention" : s;
+}
+
 /** The MaaS platform as a whole. */
 export function maasPlatformStatus(m: MaaSStatus | null, busy: Busy): EnvStatus {
   if (!m) return "unknown";

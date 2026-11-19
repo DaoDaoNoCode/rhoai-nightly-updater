@@ -175,6 +175,17 @@ export const ProblemAlerts: React.FC<{
   return alerts.length > 0 ? <Stack hasGutter>{alerts.map((a, i) => <StackItem key={i}>{a}</StackItem>)}</Stack> : null;
 };
 
+/** A warning whose first sentence (what is wrong) is the title and the rest (what to do) the body, as ProblemAlerts shows a resource's. */
+export const WarningAlert: React.FC<{ text: string }> = ({ text }) => {
+  const cut = text.indexOf(". ");
+  const [head, rest] = cut > 0 ? [text.slice(0, cut + 1), text.slice(cut + 2)] : [text, ""];
+  return (
+    <Alert variant="warning" isInline component="div" title={<span className="pf-v6-u-text-break-word">{head}</span>}>
+      {rest && <span className="pf-v6-u-text-break-word">{rest}</span>}
+    </Alert>
+  );
+};
+
 /**
  * A resource that exists but is not ready and not failing: it is starting.
  * Plain words, with the operator's own text under "Technical details".

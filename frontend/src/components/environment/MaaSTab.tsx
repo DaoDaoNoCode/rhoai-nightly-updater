@@ -27,13 +27,13 @@ import {
 import { getMaaS, toApiError } from "../../services/api";
 import { usePolling } from "../../hooks/usePolling";
 import { RESOURCE_SETTLE_MAX_MS } from "../../constants";
-import { type ConfirmSpec, type MaaSPending, type Pending, ExternalLink } from "./resourceRow";
+import { type ConfirmSpec, type MaaSPending, type Pending, ExternalLink, WarningAlert } from "./resourceRow";
 import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
 import { ComponentAlert, CopyableCode, shellQuote } from "./UseIt";
 import { LoadFailed, PartsSkeleton, RowsSkeleton } from "./Loading";
 import { EnvStatusLabel } from "./resourceStatus";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
-import { type Busy, type FeatureState, maasDashboardHref, maasPartStatus } from "./featureState";
+import { type Busy, type FeatureState, maasDashboardHref, maasPartLabelStatus } from "./featureState";
 
 export const MAAS_POLL_MS = 5_000;
 
@@ -107,7 +107,7 @@ const PlatformPart: React.FC<{ part: MaaSPart; readOnly: boolean; reason: string
   // A "manual" part has only the commands; the others can be done here, so the commands are an alternative.
   const onlyCommands = part.state === "manual" && fixes.length === 0;
   return (
-    <PartItem id={`maas-${part.id}`} title={part.title} scope="Shared by the cluster" status={maasPartStatus(part)} unmanaged={!!part.notManaged}
+    <PartItem id={`maas-${part.id}`} title={part.title} scope="Shared by the cluster" status={maasPartLabelStatus(part)} unmanaged={!!part.notManaged}
       actions={fixes.length > 0 || part.docUrl ? (
         <>
           {fixes.map((a) => (
@@ -120,7 +120,7 @@ const PlatformPart: React.FC<{ part: MaaSPart; readOnly: boolean; reason: string
         </>
       ) : undefined}>
       {part.message && <Content component="p">{part.message}</Content>}
-      {part.warning && <Alert variant="warning" isInline component="p" title="Needs attention">{part.warning}</Alert>}
+      {part.warning && <WarningAlert text={part.warning} />}
       {part.commands && (onlyCommands
         ? <CopyableCode id={`maas-${part.id}-commands`} label="the commands for a cluster-admin" code={part.commands} />
         : (
