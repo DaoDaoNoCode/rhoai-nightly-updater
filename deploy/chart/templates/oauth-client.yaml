@@ -21,9 +21,10 @@ install.sh's instance label and are deleted with the hook. Argo CD does not
 track the Secret or the OAuthClient and never prunes them; the PostDelete
 hook (oauth-client-removal.yaml) removes the OAuthClient and revokes the
 sign-ins it issued when the Application is deleted, as `install.sh
-uninstall` does, and the namespace owns the client (ownerReference), so
-deleting the namespace deletes it too (docs/GITOPS.md). With gitops.oauthClient.enabled=false, create both before
-the first sync.
+uninstall` does. Deleting the namespace by hand leaves the client
+(live-checked; it has no ownerReference, as the garbage collector did not
+collect it), so it is removed as docs/GITOPS.md says. With
+gitops.oauthClient.enabled=false, create both before the first sync.
 
 Profile full only: the gitops profile signs users in through the app's
 ServiceAccount, as 3.x did (rnu.gitopsSignIn in _helpers.tpl), and needs
@@ -205,7 +206,8 @@ subjects:
     namespace: {{ $p.NAMESPACE | quote }}
 ---
 # OAuthClients are cluster-scoped. Server-side apply reads and patches the
-# one client by name; "create" cannot be limited to a name. No delete: the
+# one client by name (the patch also drops a 4.0.0 test build's
+# ownerReference); "create" cannot be limited to a name. No delete: the
 # hook never removes a client.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -223,11 +225,6 @@ rules:
   - apiGroups: ["oauth.openshift.io"]
     resources: ["oauthclients"]
     verbs: ["create"]
-  # The namespace's UID, for the client's ownerReference.
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    resourceNames: [{{ $p.NAMESPACE | quote }}]
-    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -330,13 +327,6 @@ spec:
                   ;;
                 esac
               fi
-              # The namespace owns the client (install.sh's
-              # oauth_client_manifest): deleting it deletes the client.
-              ns_uid=$(oc get namespace "$NAMESPACE" -o jsonpath='{.metadata.uid}')
-              if [ -z "$ns_uid" ]; then
-                echo "Cannot read the UID of namespace $NAMESPACE" >&2
-                exit 1
-              fi
               secret=$(oc get secret "$SECRET" -n "$NAMESPACE" -o jsonpath='{.data.client-secret}' | base64 -d)
               if [ -z "$secret" ]; then
                 echo "Secret $SECRET has no client-secret; delete it and sync again" >&2
@@ -352,11 +342,6 @@ spec:
                   "    app.kubernetes.io/instance: $INSTANCE" \
                   "    app.kubernetes.io/name: \"$APP_NAME\"" \
                   "    rhoai-nightly-updater/namespace: \"$NAMESPACE\"" \
-                  '  ownerReferences:' \
-                  '    - apiVersion: v1' \
-                  '      kind: Namespace' \
-                  "      name: \"$NAMESPACE\"" \
-                  "      uid: \"$ns_uid\"" \
                   'grantMethod: auto' \
                   'redirectURIs:' \
                   "  - https://$host/oauth/callback" \
@@ -366,6 +351,18 @@ spec:
                 printf 'secret: %s\n' "$secret"
               } | oc apply --server-side --field-manager=rhoai-nightly-updater-gitops --force-conflicts -f - >/dev/null
               unset secret
+              # 4.0.0 test builds gave the client an ownerReference to the
+              # namespace, which the garbage collector did not act on; the
+              # apply drops it only when this field manager set it
+              # (install.sh's oauth_client, the same step).
+              if ! owners=$(oc get oauthclient "$INSTANCE" -o jsonpath='{.metadata.ownerReferences[*].uid}'); then
+                echo "Cannot read OAuthClient $INSTANCE after applying it" >&2
+                exit 1
+              fi
+              if [ -n "$owners" ]; then
+                oc patch oauthclient "$INSTANCE" --type=merge -p '{"metadata":{"ownerReferences":null}}' >/dev/null
+                echo "Removed the ownerReference a 4.0.0 test build put on OAuthClient $INSTANCE."
+              fi
               echo "OAuthClient $INSTANCE signs users in at https://$host"
           resources:
             {{- include "rnu.hookResources" . | nindent 12 }}

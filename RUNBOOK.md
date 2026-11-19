@@ -147,7 +147,8 @@ oc get oauthaccesstokens --field-selector clientName=$APP-$NS                   
 | oauth-proxy's "403 Permission Denied" with body `access_denied`, and `?error_description=scope+denied` in the address bar | The OAuthClient's `scopeRestrictions` do not allow `user:full` (someone changed them; the tool sets exactly `user:full`), or the pod still runs a template from before 4.0.0 with the ServiceAccount as the client. Re-run `install.sh upgrade`, or upgrade ([OPENSHIFT_INTEGRATION §2](docs/OPENSHIFT_INTEGRATION.md#2-oauth-proxy-token-scopes)) |
 | oauth-proxy logs `invalid_client` after login | The OAuthClient's secret differs from Secret `$APP-oauth-client` (one was replaced by hand). Re-run `install.sh upgrade`: it applies the Secret's value |
 | Rotate the client secret | `oc delete secret $APP-oauth-client -n $NS`, then `install.sh upgrade`: a new secret, the client updated, the pod restarted; everyone signs in again |
-| End every session of this install now | `oc delete oauthaccesstokens --field-selector clientName=$APP-$NS` (their cookies then fail and users sign in again) |
+| End every session of this install now | `oc delete oauthaccesstokens --field-selector clientName=$APP-$NS` (their cookies then fail and users sign in again). Not instant: live, the revoked tokens kept working for about a minute, then the app showed "Your session expired" ([SECURITY.md](SECURITY.md#revoking-a-sign-in)) |
+| OAuthClient `$APP-$NS` still there after `oc delete project $NS` | Expected: deleting the namespace does not delete the client (live-checked) or its sign-ins. Run `install.sh uninstall --app-name $APP --namespace $NS`, which works after the namespace is gone, or `oc delete oauthclient $APP-$NS` and `oc delete oauthaccesstokens --field-selector clientName=$APP-$NS` |
 
 ## 5. Operations: busy, stuck, interrupted
 

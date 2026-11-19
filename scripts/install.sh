@@ -393,14 +393,16 @@ ensure_client_secret() {
 # link; the client secret does not stop that. Hence:
 #   - scopeRestrictions: exactly the scope oauth-proxy asks for, so the
 #     client's id cannot get any other scope;
-#   - an ownerReference to the install's namespace (cluster-scoped, like
-#     the client): deleting the namespace by hand lets Kubernetes' garbage
-#     collector delete the client with it. Uninstall and rollback delete it
-#     themselves (remove_oauth_client).
+#   - uninstall and rollback delete it and revoke its sign-ins
+#     (remove_oauth_client). Nothing else removes it: deleting the
+#     namespace by hand leaves the client (live-checked: the garbage
+#     collector did not delete a client whose ownerReference named the
+#     deleted namespace, so it has none), and `install.sh uninstall`
+#     removes it even after the namespace is gone.
 # The chart's hook applies the same object (scripts/test-chart.sh compares
 # them).
 oauth_client_manifest() {
-	local host=$1 secret=$2 ns_uid=$3
+	local host=$1 secret=$2
 	printf '%s\n' \
 		'apiVersion: oauth.openshift.io/v1' \
 		'kind: OAuthClient' \
@@ -410,11 +412,6 @@ oauth_client_manifest() {
 		"    app.kubernetes.io/instance: $INSTANCE" \
 		"    app.kubernetes.io/name: \"$APP_NAME\"" \
 		"    rhoai-nightly-updater/namespace: \"$NAMESPACE\"" \
-		'  ownerReferences:' \
-		'    - apiVersion: v1' \
-		'      kind: Namespace' \
-		"      name: \"$NAMESPACE\"" \
-		"      uid: \"$ns_uid\"" \
 		'grantMethod: auto' \
 		'redirectURIs:' \
 		"  - https://$host/oauth/callback" \
@@ -484,26 +481,36 @@ route_host() {
 # object with the API server (a placeholder secret, and a placeholder host
 # when the Route does not exist yet).
 oauth_client() {
-	local host secret ns_uid
+	local host secret owners
 	host=$(route_host)
 	# Checked again right before the apply (also before anything changed).
 	oauth_client_owner "$host"
 	[ "$CLIENT_OWNER" != foreign ] ||
 		die "OAuthClient $INSTANCE is not this install's ($CLIENT_FOREIGN), so it was not changed; users cannot sign in to this install until it is. See: oc get oauthclient $INSTANCE --show-labels"
-	ns_uid=$(oc get namespace "$NAMESPACE" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)
 	if [ -n "$DRY" ]; then
-		oauth_client_manifest "${host:-$APP_NAME-$NAMESPACE.apps.example.com}" dry-run-placeholder "${ns_uid:-00000000-0000-0000-0000-000000000000}" |
+		oauth_client_manifest "${host:-$APP_NAME-$NAMESPACE.apps.example.com}" dry-run-placeholder |
 			oc apply --server-side --field-manager=rhoai-nightly-updater-install --force-conflicts --dry-run=server -f - >/dev/null
 		err "Validated OAuthClient $INSTANCE."
 		return 0
 	fi
 	[ -n "$host" ] || die "Route $APP_NAME has no host yet; users cannot sign in until OAuthClient $INSTANCE exists. Re-run this command."
-	[ -n "$ns_uid" ] || die "Cannot read the UID of namespace $NAMESPACE, which owns OAuthClient $INSTANCE; users cannot sign in until it exists. Re-run this command."
 	secret=$(oc get secret "$CLIENT_SECRET" -n "$NAMESPACE" -o jsonpath='{.data.client-secret}' | base64 -d)
 	[ -n "$secret" ] || die "Secret $CLIENT_SECRET has no client-secret; delete it and re-run this command."
-	oauth_client_manifest "$host" "$secret" "$ns_uid" |
+	oauth_client_manifest "$host" "$secret" |
 		oc apply --server-side --field-manager=rhoai-nightly-updater-install --force-conflicts -f - >/dev/null
 	unset secret
+	# 4.0.0 test builds gave the client an ownerReference to the namespace,
+	# which the garbage collector did not act on (live-checked: the client
+	# outlived its deleted namespace). The apply above drops it only when
+	# this field manager set it, not when the chart's hook did, so a client
+	# that still has one loses it here.
+	owners=$(oc get oauthclient "$INSTANCE" -o jsonpath='{.metadata.ownerReferences[*].uid}') ||
+		die "Cannot read OAuthClient $INSTANCE after applying it. Re-run this command."
+	if [ -n "$owners" ]; then
+		oc patch oauthclient "$INSTANCE" --type=merge -p '{"metadata":{"ownerReferences":null}}' >/dev/null ||
+			die "Cannot remove the ownerReference of OAuthClient $INSTANCE. Re-run this command."
+		err "Removed the ownerReference a 4.0.0 test build put on OAuthClient $INSTANCE."
+	fi
 	err "OAuthClient $INSTANCE signs users in at https://$host (redirect https://$host/oauth/callback)."
 }
 

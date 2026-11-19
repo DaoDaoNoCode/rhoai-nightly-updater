@@ -497,8 +497,9 @@ grep -qF 'resourceNames: ["upd"]' "$OUT" && pass || fail "OAuthClient: the Role 
 oauth_role=$(doc ClusterRole/'"upd-ns1-oauthclient"')
 [ -n "$oauth_role" ] || oauth_role=$(awk '/^---/ { if (keep) exit; buf = ""; next } { buf = buf $0 "\n" } /name: "upd-ns1-oauthclient"/ { keep = 1 } END { if (keep) printf "%s", buf }' "$OUT")
 grep -qF 'resources: ["oauthclients"]' <<<"$oauth_role" && pass || fail "OAuthClient: no ClusterRole on oauthclients: $oauth_role"
-expect_eq "OAuthClient: the hook's verbs (OAuthClients, and get on its namespace)" '["get", "patch"] ["create"] ["get"]' \
+expect_eq "OAuthClient: the hook's verbs (OAuthClients only)" '["get", "patch"] ["create"]' \
 	"$(grep -oE 'verbs: \[[^]]*\]' <<<"$oauth_role" | sed 's/^verbs: //' | tr '\n' ' ' | sed 's/ $//')"
+grep -qF 'resources: ["namespaces"]' <<<"$oauth_role" && fail "OAuthClient: the hook may read namespaces (no ownerReference needs it)" || pass
 grep -E '^ *(resources|verbs): ' "$OUT" | grep -qE 'oauthaccesstokens|"delete"|impersonate|escalate|bind' && fail "OAuthClient: a hook gets more than it needs" || pass
 grep -qF 'app.kubernetes.io/instance: "upd-ns1"' <<<"$oauth_role" && pass || fail "OAuthClient: the ClusterRole lacks install.sh's instance label"
 grep -qF -- '--from-file=client-secret=' "$OUT" && pass || fail "OAuthClient: the Secret's key is not client-secret"
@@ -662,10 +663,17 @@ case "$1 $2" in
 	*) echo "Error from server: cannot create secrets" >&2; exit 1 ;;
 	esac ;;
 "get route") [ -n "${FAKE_NO_HOST:-}" ] || printf 'app.example.com' ;;
-"get namespace") printf '%s' "${FAKE_NS_UID-ns-uid-1}" ;;
 "delete oauthclient") [ -z "${FAKE_DELETE_FAIL:-}" ] || { echo "Error from server: cannot delete oauthclients" >&2; exit 1; } ;;
 "delete oauthaccesstokens") [ -z "${FAKE_REVOKE_FAIL:-}" ] || { echo "Error from server: cannot delete oauthaccesstokens" >&2; exit 1; } ;;
+"patch oauthclient") [ -z "${FAKE_PATCH_FAIL:-}" ] || { echo "Error from server: cannot patch oauthclients" >&2; exit 1; } ;;
 "get oauthclient")
+	# After the apply: the UIDs of its ownerReferences (FAKE_OWNERS, as a
+	# 4.0.0 test build left them), or FAKE_OWNERS_READ_FAIL.
+	if [[ " $* " == *"ownerReferences"* ]]; then
+		[ -z "${FAKE_OWNERS_READ_FAIL:-}" ] || { echo "Error from server: cannot get oauthclients" >&2; exit 1; }
+		printf '%s' "${FAKE_OWNERS:-}"
+		exit 0
+	fi
 	# FAKE_CLIENT: absent (default), ours, theirs (another install's labels),
 	# unlabelled-ours (no labels, this Route's callback), unlabelled-theirs,
 	# error. Printed as the hook's jsonpath asks: app, namespace, URIs.
@@ -712,11 +720,23 @@ run_oauth "$OCLIENT_SH"
 expect_eq "OAuthClient applied: success" 0 "$HOOK_RC"
 expect_eq "OAuthClient applied: the object" "$(printf '%s\n' 'apiVersion: oauth.openshift.io/v1' 'kind: OAuthClient' 'metadata:' \
 	'  name: app-ns1' '  labels:' '    app.kubernetes.io/instance: app-ns1' '    app.kubernetes.io/name: "app"' \
-	'    rhoai-nightly-updater/namespace: "ns1"' '  ownerReferences:' '    - apiVersion: v1' '      kind: Namespace' \
-	'      name: "ns1"' '      uid: "ns-uid-1"' 'grantMethod: auto' 'redirectURIs:' \
+	'    rhoai-nightly-updater/namespace: "ns1"' 'grantMethod: auto' 'redirectURIs:' \
 	'  - https://app.example.com/oauth/callback' 'scopeRestrictions:' '  - literals:' '      - user:full' \
 	'secret: client-secret-value')" "$(cat "$HOOKLOG.applied")"
 grep -qx 'oc apply --server-side --field-manager=rhoai-nightly-updater-gitops --force-conflicts -f -' "$HOOKLOG" && pass || fail "OAuthClient: not server-side applied: $(cat "$HOOKLOG")"
+expect_eq "OAuthClient applied: no ownerReference to drop, no patch" "" "$(grep -E '^oc (get namespace|patch)' "$HOOKLOG" || true)"
+# A client a 4.0.0 test build gave an ownerReference (the garbage collector
+# did not act on it, live-checked) loses it after the apply.
+run_oauth "$OCLIENT_SH" FAKE_CLIENT=ours FAKE_OWNERS=ns-uid-1
+expect_eq "OAuthClient with a test build's ownerReference: removed after the apply" "0 $(printf '%s\n' \
+	'oc apply --server-side --field-manager=rhoai-nightly-updater-gitops --force-conflicts -f -' \
+	'oc get oauthclient app-ns1 -o jsonpath={.metadata.ownerReferences[*].uid}' \
+	'oc patch oauthclient app-ns1 --type=merge -p {"metadata":{"ownerReferences":null}}')" \
+	"$HOOK_RC $(grep -E '^oc (apply|get oauthclient .*ownerReferences|patch)' "$HOOKLOG")"
+for f in FAKE_OWNERS_READ_FAIL=1 FAKE_PATCH_FAIL=1; do
+	run_oauth "$OCLIENT_SH" FAKE_CLIENT=ours FAKE_OWNERS=ns-uid-1 "$f"
+	[ "$HOOK_RC" -ne 0 ] && pass || fail "OAuthClient, $f: the Job succeeded"
+done
 grep -qF 'client-secret-value' "$HOOKOUT" "$HOOKLOG" && fail "OAuthClient: the secret was printed or passed as an argument" || pass
 # Only this install's client is applied over: its labels, or without labels
 # this Route's callback. Another install's (the name <APP_NAME>-<NAMESPACE>
@@ -742,8 +762,6 @@ run_oauth "$OCLIENT_SH" FAKE_NO_HOST=1
 [ "$HOOK_RC" -ne 0 ] && [ ! -e "$HOOKLOG.applied" ] && pass || fail "OAuthClient, no host: applied anyway"
 run_oauth "$OCLIENT_SH" FAKE_APPLY=fail
 [ "$HOOK_RC" -ne 0 ] && pass || fail "OAuthClient, apply fails: the Job succeeded"
-run_oauth "$OCLIENT_SH" FAKE_NS_UID=""
-[ "$HOOK_RC" -ne 0 ] && [ ! -e "$HOOKLOG.applied" ] && pass || fail "OAuthClient, no namespace UID: applied anyway"
 
 # The PostDelete hook: deleting the Application removes this install's
 # OAuthClient and revokes its sign-ins (an orphaned client with
