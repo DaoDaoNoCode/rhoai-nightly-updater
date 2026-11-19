@@ -17,12 +17,13 @@ import (
 
 const mlflowAuthGroup = "mlflow.kubeflow.org"
 
-// otherServerRequests are the access reviews the samples' calls need to pass.
+// samplesReviewRequests are the access reviews the samples' calls need to pass
+// (with the ServiceAccount's token for the status, the user's for a change).
 // A rule with a name parser is checked without a name first and, when that
 // is denied, per name (auth/core.py:812-851); the named review is the one
 // the narrow grants answer, so it is listed. SearchRuns' fallback is a named
 // get (collection_filters.py:123-139).
-func otherServerRequests() []rbacRequest {
+func samplesReviewRequests() []rbacRequest {
 	var out []rbacRequest
 	for _, rule := range mlflowFakeRules {
 		for _, c := range rule.checks {
@@ -39,7 +40,7 @@ func otherServerRequests() []rbacRequest {
 			}
 		}
 	}
-	return append(out, playgroundServerRequests()...)
+	return out
 }
 
 // templateAllow decides an access review with deploy/template.yaml's rules.

@@ -40,21 +40,23 @@ func TestPlaygroundStream(t *testing.T) {
 		`{"action":"teardown","project":"p","models":[{"name":"m","source":"maas"}]}`,
 	} {
 		w := httptest.NewRecorder()
-		HandlePlaygroundStream(w, postJSON("/api/resources/playground/stream", "tok", body))
+		HandlePlaygroundStream(w, postJSON("/api/resources/playground/stream", "user-token", body))
 		if w.Code != http.StatusBadRequest || clusterMutationInProgress.Load() {
 			t.Errorf("%s: %d %s", body, w.Code, w.Body.String())
 		}
 	}
 	w := httptest.NewRecorder()
-	HandlePlaygroundStream(w, postJSON("/api/resources/playground/stream", "tok", `{"action":"setup","project":"p","models":[{"name":"m","source":"namespace"}]}`))
+	// A Models as a Service model is accepted again: Set up runs with the
+	// user's own token.
+	HandlePlaygroundStream(w, postJSON("/api/resources/playground/stream", "user-token", `{"action":"setup","project":"p","models":[{"name":"m","source":"namespace"},{"name":"gpt","source":"maas"}]}`))
 	out := w.Body.String()
 	if w.Code != http.StatusOK || !strings.Contains(out, `"step":"install"`) || !strings.Contains(out, `"step":"operation_complete"`) {
 		t.Errorf("%d %s", w.Code, out)
 	}
-	if got.Action != "setup" || got.Project != "p" || len(got.Models) != 1 || gotToken != "sa-token" {
+	if got.Action != "setup" || got.Project != "p" || len(got.Models) != 2 || gotToken != "user-token" {
 		t.Errorf("request %+v, token %q", got, gotToken)
 	}
-	if strings.Contains(out, "sa-token") {
+	if strings.Contains(out, "user-token") || strings.Contains(out, "sa-token") {
 		t.Error("the stream shows the token")
 	}
 	if clusterMutationInProgress.Load() {
@@ -84,13 +86,21 @@ func TestPlaygroundStatusHandler(t *testing.T) {
 	}
 }
 
-// The token for the gen-ai API is the ServiceAccount's (the cluster
-// token), never the user's session token.
-func TestGenAITokenIsTheClusterToken(t *testing.T) {
-	setupDevMode(t)
+// The status's gen-ai calls carry the ServiceAccount's token (the cluster
+// token), never the user's; a change's carry the user's own, never a
+// bearer token a client sends.
+func TestGenAITokens(t *testing.T) {
+	inCluster(t)
 	r := postJSON("/api/resources/playground/stream", "user-session-token", `{}`)
-	r.Header.Set("X-Forwarded-Access-Token", "user-session-token")
-	if got := genAIToken(r); got != getClusterToken() || got == "user-session-token" {
+	if got := genAIToken(r); got != "sa-token" {
 		t.Errorf("genAIToken = %q", got)
+	}
+	if got := genAIUserToken(r); got != "user-session-token" {
+		t.Errorf("genAIUserToken = %q", got)
+	}
+	r.Header.Del("X-Forwarded-Access-Token")
+	r.Header.Set("Authorization", "Bearer mallory")
+	if got := genAIUserToken(r); got != "" {
+		t.Errorf("genAIUserToken took the client's bearer token: %q", got)
 	}
 }

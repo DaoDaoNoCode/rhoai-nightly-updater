@@ -1,131 +1,180 @@
 # Security Model
 
-The updater runs as one pod with two containers: **oauth-proxy** (OpenShift sign-in) and **app** (the Go backend and the static UI). Users act through their own identity. Cluster changes are made with the app's ServiceAccount (SA) token, and only after the user's own token has proven that the user is a cluster-admin.
+The updater runs as one pod with two containers: **oauth-proxy** (OpenShift sign-in) and **app** (the Go backend and the static UI). Since 4.0.0 every change to the cluster is made **with the signed-in user's own OpenShift token**: the API server checks each change against that user's RBAC, and its audit log names them. The app's ServiceAccount (SA) only reads (for the pages every signed-in user sees), keeps the app's own records, and runs one background job that only takes away (the MaaS prune job). A leaked SA token is read-mostly; it can no longer create workloads, Secrets or RBAC anywhere.
 
 ## Who can do what
 
 | Who | Can |
 |---|---|
 | Anyone who signs in and can `list pods` in `redhat-ods-operator` (the oauth-proxy `--openshift-sar` gate) | Open the UI and read everything it shows (read-only) |
-| Users with the **cluster-admin** role | Also run every action that changes the cluster |
+| Users with the **cluster-admin** role | Also run every action that changes the cluster, with their own token |
 
-Changes require cluster-admin because the tool does cluster-admin work on the user's behalf. It installs an operator (OLM grants whatever the CSV asks for), writes the node pull secret in `kube-system`, deletes admission webhooks and patches CRDs. Namespace `admin`/`edit` and `dedicated-admin` are not enough.
+Changes require cluster-admin because the tool does cluster-admin work: it installs an operator (OLM grants whatever the CSV asks for), writes the node pull secret in `kube-system`, deletes admission webhooks and patches CRDs. Namespace `admin`/`edit` and `dedicated-admin` are not enough. The gate is checked before anything starts; the API server then checks every request of the change against the same user's RBAC.
 
 ## Which token is used where
 
-The rule: a user's full OpenShift token goes only to Red Hat platform services (the API server, MLflow, the dashboard and its gen-ai API), never to pods in user projects, which those projects' editors control (model servers, pipeline servers): they can make a pod answer at such an address and read what is sent to it. Nor to a platform service that passes it on to such an address: the dashboard's gen-ai API sends the caller's token on to the MaaS gateway for some calls ([below](#the-serviceaccount-token-and-models-as-a-service-301)), so the updater's ServiceAccount token goes only to the gen-ai calls that do not.
+The rule: a user's full OpenShift token goes only to Red Hat platform services (the API server, MLflow, the dashboard and its gen-ai API), never to pods in user projects, which those projects' editors control (model servers, pipeline servers): they can make a pod answer at such an address and read what is sent to it. The SA's token, which any signed-in user's reads use, never goes to a platform service that passes it on to such an address ([below](#the-serviceaccount-token-and-models-as-a-service-301)).
 
 | Token | Sent by | Sent to | For |
 |---|---|---|---|
-| The user's own token (oauth-proxy forwards it) | the updater's backend | the API server only | who the user is and whether they are a cluster-admin (SelfSubjectAccessReview), on every request that changes something |
-| The updater's ServiceAccount token (`DEV_TOKEN` in DEV_MODE) | the updater's backend | the API server; MLflow (samples) and the dashboard's gen-ai API (Playground: only `aaa/models` without `sources`, `lsd/status`, `lsd/install` with the project's own models, `lsd/delete`), both platform services in RHOAI's namespaces | all cluster work, after the check above. Never to a pipeline server's or a model's address, and never to a gen-ai call that reaches Models as a Service (3.0.1) |
+| The signed-in user's own token (oauth-proxy's session, scope `user:full`, forwarded as `X-Forwarded-Access-Token`) | the updater's backend | the API server; MLflow (adding and removing samples) and the dashboard's gen-ai API (Set up, delete and Clean up of a playground, which may add a Models as a Service model), both platform services in RHOAI's namespaces | who the user is and whether they are a cluster-admin (on every request), the expiry and scope of their sign-in (before a change), and **every cluster change** (4.0.0). Never to a pipeline server's or a model's address |
+| The updater's ServiceAccount token (`DEV_TOKEN` in DEV_MODE) | the updater's backend | the API server; MLflow (samples status) and the dashboard's gen-ai API (Playground status: only `aaa/models` without `sources` and `lsd/status`) | the reads every signed-in user's pages make, the app's own records (activity, snapshot, operation lease and marker), the readiness probe, the background MaaS prune job, and the gitops profile's Update. Never to a gen-ai call that reaches Models as a Service (3.0.1) |
 | The user's own token, from `oc whoami -t` | the user, with commands the UI shows | `oc` itself; MLflow (`MLFLOW_TRACKING_TOKEN`); the dashboard's gen-ai API (the Playground's chat request) | the user's own MLflow and playground calls |
 | A model's own token (Secret `default-name-<model>-sa`; it may only `get` that model) | the user, with the Models tab's commands | the model's address on the gateway it is reached through | calling that model. Shown only for this tool's model with its recorded token Secret; never the user's token |
-| The same model's own token, read by the updater's backend (4.0.0) | the updater's backend, for "Can it be called?" | that model's address as KServe reports it (`status.url`, `https` only, no redirects followed) | one minimal request after setup and on **Check again**. Read only from the Secret whose UID the tool recorded, of type `kubernetes.io/service-account-token` for `<model>-sa`; held for that one request, never logged, stored or shown. Never the user's token nor the updater's: a model's pod is in a project its editors control. A model reached only inside the cluster is called without a token; a MaaS model is not called (MaaS needs an API key, which the tool does not create) |
+| The same model's own token, read by the updater's backend (4.0.0) | the updater's backend, for "Can it be called?" (with the user's token, during the change; with the SA's, never: the SA cannot read token Secrets since 4.0.0) | that model's address as KServe reports it (`status.url`, `https` only, no redirects followed) | one minimal request after setup and on **Check again**. Read only from the Secret whose UID the tool recorded, of type `kubernetes.io/service-account-token` for `<model>-sa`; held for that one request, never logged, stored or shown. Never the user's token nor the updater's |
 | A ServiceAccount token that may only use one pipeline server's API, for 15 minutes (`oc create token pipeline-api`) | the user, with the Pipelines tab's commands and the KFP snippet | the pipeline server's Route | uploading and running pipelines. Never the user's token |
 | A MaaS API key | the user | MaaS models on `maas-default-gateway` | calling published models |
-| The user's own token, to create that key | the user (the MaaS tab's commands), and the dashboard's MaaS pages | maas-api at `maas.<apps domain>/maas-api`, through `maas-default-gateway` | minting the key for the user's identity |
+| The user's own token, to create that key | the user (the MaaS tab's commands), and the dashboard's MaaS pages; since 4.0.0 also the dashboard's gen-ai API when the user sets up a playground with a MaaS model through this tool | maas-api at `maas.<apps domain>/maas-api`, through `maas-default-gateway` | minting the key (or listing the MaaS models) for the user's identity |
 
-The last row breaks the rule, and the final review of 3.0.0 found no client-side way around it. maas-api trusts the identity headers the gateway's AuthPolicy sets and does not check a bearer token itself (models-as-a-service rhoai-3.6 `maas-api/cmd/main.go`, the `/v1/api-keys` routes behind `ExtractUserInfo`), so a key is minted through the gateway; the dashboard does the same: its MaaS backend asks maas-api's Service only for `/v1/tenants`, then calls `<maas-default-gateway externalUrl>/maas-api` with the user's token (odh-dashboard rhoai-3.6 `packages/maas/bff/internal/helpers/maas_discovery.go` `MaasApiURLFromTenantsResponse`, `integrations/maas/maas_client.go` `addIdentityHeaderToRequest`; `MAAS_API_URL` is not set in `manifests/modules/maas/deployment.yaml`). The gateway admits routes from every project that has a published model, and Gateway API ranks an `Exact` path above maas-api's prefix route, so an editor of such a project could attach a route for `/maas-api/v1/api-keys` and receive the token of whoever creates a key, from a terminal or from the dashboard. Publishing a project's model therefore trusts its editors with that; it is a property of RHOAI's MaaS design, not of this tool.
+The last row breaks the rule, and the final review of 3.0.0 found no client-side way around it. maas-api trusts the identity headers the gateway's AuthPolicy sets and does not check a bearer token itself (models-as-a-service rhoai-3.6 `maas-api/cmd/main.go`, the `/v1/api-keys` routes behind `ExtractUserInfo`), so a key is minted through the gateway; the dashboard does the same: its MaaS backend asks maas-api's Service only for `/v1/tenants`, then calls `<maas-default-gateway externalUrl>/maas-api` with the user's token (odh-dashboard rhoai-3.6 `packages/maas/bff/internal/helpers/maas_discovery.go` `MaasApiURLFromTenantsResponse`, `integrations/maas/maas_client.go` `addIdentityHeaderToRequest`; `MAAS_API_URL` is not set in `manifests/modules/maas/deployment.yaml`). The gateway admits routes from every project that has a published model, and Gateway API ranks an `Exact` path above maas-api's prefix route, so an editor of such a project could attach a route for `/maas-api/v1/api-keys` and receive the token of whoever creates a key, from a terminal or from the dashboard. Publishing a project's model therefore trusts its editors with that; it is a property of RHOAI's MaaS design, not of this tool. Since 4.0.0, setting up a playground with a MaaS model through this tool is the same exposure as doing it in the dashboard: the user's own token, by the user's choice.
 
 ### The ServiceAccount token and Models as a Service (3.0.1)
 
-Until 3.0.1 the Playground's status and Set up sent the updater's ServiceAccount token (near cluster-admin, [Worst case](#worst-case-cluster-wide-workload-create)) to gen-ai calls that the dashboard passes on to the MaaS gateway, so the token could reach the route a published project's editor attaches there, as the user's token can above. The status runs for any signed-in user's page, about every 10 seconds. The flows, in odh-dashboard rhoai-3.6 (`packages/gen-ai/bff/internal`, `packages/maas/bff/internal`):
+Until 3.0.1 the Playground's status and Set up sent the updater's ServiceAccount token to gen-ai calls that the dashboard passes on to the MaaS gateway, so the token could reach the route a published project's editor attaches there, as the user's token can above. The flows, in odh-dashboard rhoai-3.6 (`packages/gen-ai/bff/internal`, `packages/maas/bff/internal`):
 
 - *How the token travels.* The gen-ai API's `AttachBFFMaaSClient` (`api/middleware.go` L433, L469, L518) builds a MaaS client with the caller's token; `integrations/bffclient/client.go` L108-112 sends it as `x-forwarded-access-token` to the MaaS backend, whose `integrations/maas/maas_client.go` `addIdentityHeaderToRequest` (L365-368) sends `Authorization: Bearer <token>` to `<maas-default-gateway externalUrl>/maas-api/v1/...` (`helpers/maas_discovery.go` `MaasApiURLFromTenantsResponse` L216-243, `maas_client.go` `SetBaseURL` L93-109).
-- *`GET maas/models`* (`api/app.go` L554, `api/maas_models_handler.go` L39) calls the MaaS backend's `GET /models` (`maas/bff/internal/api/app.go` L300, `ListModelsHandler`): the token goes to `/maas-api/v1/models`. The tool called it from the status and from Set up's check.
-- *`POST lsd/install` with a MaaS model* (`api/app.go` L533, `api/lsd_install_handler.go` L36-71): `integrations/kubernetes/token_k8s_client.go` L1936-1946 passes the caller's token and `generateLlamaStackConfig` lists MaaS models through the MaaS backend (L2367-2386). An install with only the project's own models makes no MaaS call. The tool installed a MaaS model when one was chosen.
+- *`GET maas/models`* (`api/app.go` L554, `api/maas_models_handler.go` L39) calls the MaaS backend's `GET /models` (`maas/bff/internal/api/app.go` L300, `ListModelsHandler`): the token goes to `/maas-api/v1/models`.
+- *`POST lsd/install` with a MaaS model* (`api/app.go` L533, `api/lsd_install_handler.go` L36-71): `integrations/kubernetes/token_k8s_client.go` L1936-1946 passes the caller's token and `generateLlamaStackConfig` lists MaaS models through the MaaS backend (L2367-2386). An install with only the project's own models makes no MaaS call.
 - *`GET aaa/models`* (`api/app.go` L513) asks MaaS only for `sources=maas` (`api/aaa_models_handler.go` L96-110, L200); without `sources` it lists the project's own models and custom endpoints.
-- *`POST maas/tokens`* (`api/maas_tokens_handler.go` L106) and *`POST lsd/responses` with a MaaS model* (`api/lsd_responses_handler.go` `getMaaSTokenForModel` L979-1022, L1172) mint a MaaS key at `/maas-api/v1/api-keys` with the caller's token. The tool never called them; the Playground tab's "Use it" command for a MaaS model is run by the user with their own `oc whoami -t`, the same exposure as the dashboard's own playground.
+- *`POST maas/tokens`* (`api/maas_tokens_handler.go` L106) and *`POST lsd/responses` with a MaaS model* (`api/lsd_responses_handler.go` `getMaaSTokenForModel` L979-1022, L1172) mint a MaaS key at `/maas-api/v1/api-keys` with the caller's token. The tool never calls them.
 - `lsd/status` and `lsd/delete` make no MaaS call.
 
-Now (`pkg/cluster/playground.go` `genAICallAllowed`): the gen-ai client makes only `GET aaa/models` without `sources`, `GET lsd/status`, `DELETE lsd/delete` and `POST lsd/install` when every model is the project's own (`model_source_type: namespace`), with only the fields Set up sends (`enable_tracing` and `enable_guardrails` false, `vector_stores` empty, model fields `model_name`, `model_source_type`, `model_type`, `embedding_dimension`; any other key is refused); anything else is refused before a request is sent. The status lists MaaS models from their MaaSModelRefs (cluster-wide `list`) and the MaaSSubscriptions in `models-as-a-service` that offer them (`list`), and only those a subscription offers, with the Kubernetes API, both grants the ServiceAccount already had; the name shown is the one maas-api lists (models-as-a-service `maas-api/internal/models/maasmodelref.go` `maasModelRefToModel`). Set up adds only the project's own models; the tab says to add a MaaS model in the dashboard's playground, signed in as yourself. Tests: the fake gen-ai API fails a test on any of these calls (`TestPlayground_GenAIClientRefusesCallsThatReachMaaS`, `TestPlayground_SetupRefusesAMaaSModel`, `TestPlayground_StatusListsMaaSModelsFromTheirModelRefs`). No RBAC changed. Not yet checked live: that RHOAI 3.6's playground offers the MaaS model after it is added in the dashboard.
+Now (`pkg/cluster/playground.go`):
+
+- **With the SA's token** (the status, which any signed-in user's page polls; `genAICallAllowed`): only `GET aaa/models` without `sources`, `GET lsd/status`, `DELETE lsd/delete` and `POST lsd/install` with the project's own models are allowed, and the status makes only the first two; anything else is refused before a request is sent. The status lists MaaS models from their MaaSModelRefs and the MaaSSubscriptions that offer them with the Kubernetes API.
+- **With the user's own token** (Set up, delete, Clean up; 4.0.0, `genAIUserCallAllowed`): also `GET maas/models` and `POST lsd/install` with a MaaS model, so Set up can add a Models as a Service model again, listed and installed by the dashboard for that user, as in the dashboard itself. Every install still has only the fields Set up sends (`enable_tracing` and `enable_guardrails` false, `vector_stores` empty, model fields `model_name`, `model_source_type`, `model_type`, `embedding_dimension`); `maas/tokens`, `lsd/responses` and any other path stay refused. A client that is not the user's own (`Client.ActsAsUser` and the token is the client's) gets the SA rules.
+
+Tests: the fake gen-ai API fails a test on any MaaS call made with a token other than the user's (`TestPlayground_GenAIClientRefusesCallsThatReachMaaS`, `TestPlayground_SetupWithTheServiceAccountNeverAddsAMaaSModel`, `TestPlayground_SetupWithTheUsersTokenAddsAMaaSModel`, `TestPlayground_StatusListsMaaSModelsFromTheirModelRefs`). Not yet checked live: a playground set up through this tool with a MaaS model on RHOAI 3.6.
 
 ## Authentication and authorization flow
 
-1. The browser opens the Route. oauth-proxy runs the OpenShift OAuth flow and checks the SAR gate above.
+1. The browser opens the Route. oauth-proxy runs the OpenShift OAuth flow through the install's own **OAuthClient `<APP_NAME>-<NAMESPACE>`** (`grantMethod: auto`, so no "Authorize Access" page; one redirect URI, `https://<Route host>/oauth/callback`; no scope restriction) and requests `--scope=user:full`. It then checks the SAR gate above. Before 4.0.0 the SA was the OAuth client: the OAuth server allows an SA client only `user:info`, `user:check-access`, the list-projects scopes and roles in the SA's own namespace (library-go `oauthclientregistry.go` `getScopeRestrictionsFor`), so its session token could identify the user but never act.
 2. oauth-proxy forwards the request to the app on `127.0.0.1:8080` with `X-Forwarded-Access-Token` (the user's OAuth token from its own session) and `X-Forwarded-User`.
-3. The app resolves the user from the token (`GET user.openshift.io/v1/users/~`, cached for 1 minute per token). `X-Forwarded-User` is not trusted for identity. Every API request is authenticated this way, `/api/pageview` included, and `GET /api/update-check` since 3.0.1 (it read the registry for any request before).
-4. Every cluster-changing request (every non-GET route except `POST /api/pageview`, including the Update dry run) also runs a SubjectAccessReview **with the user's token** (`authorization.openshift.io` SAR, `scopes: []`) for verb `*`, resource `*`, group `*`, cluster-wide. That is the cluster-admin role's own rule. A denied user gets 403 "Read-only access". If the review cannot run, the user gets 503 and nothing changes. `TestEveryNonGetRouteIsGated` checks that every route is gated.
-5. Only then does the app act, with the SA token.
+3. The app resolves the user from the token (`GET user.openshift.io/v1/users/~`, cached for 1 minute per token). `X-Forwarded-User` is not trusted for identity. Every API request is authenticated this way, `/api/pageview` included.
+4. Every cluster-changing request (every non-GET route except `POST /api/pageview`, including the Update dry run) also runs a SubjectAccessReview **with the user's token** (`authorization.openshift.io` SAR, `scopes: []`) for verb `*`, resource `*`, group `*`, cluster-wide: the cluster-admin role's own rule. A denied user gets 403 "Read-only access". If the review cannot run, 503 and nothing changes. `TestEveryNonGetRouteIsGated` checks that every route is gated.
+5. **The sign-in must be able to carry the change** (4.0.0, `pkg/api` `sessionProblem`). The app reads the user's own OAuth access token object with that token (`GET oauth.openshift.io/v1/useroauthaccesstokens/sha256~<base64url(sha256(token))>`, the API server's own lookup name; every OAuth-signed-in user may read their own, ClusterRole `system:openshift:useroauthaccesstoken-manager`). It refuses with 401 `sign_in_again` ("Log out and log in again"), before anything changes, when the token lacks `user:full` or may not read its own object (a session from before 4.0.0: the cookie survives the upgrade, its token cannot act), or when it expires sooner than the change may take (the 15-minute operation deadline, the restore after a failure and 5 minutes). A rejected token is 401 `session_expired`. When the object cannot be read for another reason (not found, the API unreachable), the change goes ahead and the reason is logged: the API server still checks the token on every request, and a 401 mid-operation stops the operation with "Log out and log in again, then check what the operation changed". `GET /api/user/permissions` runs the same check, so the UI says why changes are off before the user tries.
+6. Only then does the app act, **with the user's token** (`cluster.NewUserClient`). The app's own records (activity log, snapshot, the operation lease and marker, which outlive the request) use a separate SA client (`Client.bookkeeping()`, `TestBookkeepingUsesTheServiceAccount`). In the gitops profile, Update acts with the SA: its admission policy (`deploy/rbac-gitops.yaml`) matches only the SA's username, so a user-token write would bypass it.
 
 Token rules (pkg/api/identity.go, handlers.go):
 
 - In the cluster, a request that carries `Authorization: Bearer` is refused with 401. oauth-proxy never forwards a client's bearer token, so such a request did not come through it. The `Authorization: Basic` header that oauth-proxy itself sets (`--pass-basic-auth`, default true) is ignored, not refused.
 - Bearer tokens are accepted only with `DEV_MODE=true` (local development, no proxy).
-- The template must not add `--openshift-delegate-urls` or `--pass-user-bearer-token` to oauth-proxy, because both accept client tokens. `TestOAuthProxyForwardsOnlyItsOwnSessionToken` pins this.
+- The template must not add `--openshift-delegate-urls` or `--pass-user-bearer-token` to oauth-proxy, because both accept client tokens. `TestOAuthProxyForwardsOnlyItsOwnSessionToken` pins this; `TestTemplateOAuthProxySignsInThroughTheOAuthClient` pins the client, the scope and that `--cookie-refresh` stays off.
+- The user's token is never logged, stored, put in an error, a streamed step, the activity log, the operation record or the lease (`TestUserTokenIsNeverLoggedOrEchoed`). It lives in the request and in the operation's client, in memory, until the operation ends.
+
+## Threat model of the user token (4.0.0)
+
+What changed: the session cookie oauth-proxy sets now carries a token that can act with the user's whole RBAC (most users of this tool are cluster-admins), for up to the cookie's lifetime (`--cookie-expire=23h`, below the 24h default token lifetime). Before, it carried a token that could only identify the user.
+
+| Exposure | Who could use it | Mitigation |
+|---|---|---|
+| A stolen session cookie | someone who also has the cookie secret (Secret `<APP_NAME>-proxy`, key `session_secret`): the cookie is AES-encrypted with it (openshift/oauth-proxy `providers/session_state.go`) | the cookie is `HttpOnly; Secure; SameSite=Strict`; only namespace admins of the app's namespace can read the Secret (treat that namespace's `admin` as privileged); no CORS; a strict CSP. Log out clears the cookie but does not revoke the token (see [Sessions and CSRF](#sessions-and-csrf)); `oc delete oauthaccesstokens --field-selector clientName=<APP_NAME>-<NAMESPACE>` revokes every sign-in of the install |
+| The OAuth client secret (Secret `<APP_NAME>-oauth-client`) | someone who can read it can complete an OAuth flow as this client, but only to its registered redirect URI on the app's own Route, so they still need the user to sign in and the code to reach them | readable only by admins of the app's namespace; rotate by deleting the Secret and re-running `install.sh` (all sign-ins of the install end) |
+| The app's memory and process | anyone who can `exec` into the app container sees the tokens of running operations | the same people (namespace admins) can already read the session secret; the container runs non-root, read-only, no privilege escalation |
+| A token passed on by a platform service | the dashboard's gen-ai API passes the caller's token to the MaaS gateway, which published projects' editors can attach routes to | only when the user sets up a playground with a MaaS model (their choice, the same as in the dashboard); the SA's token never takes that path |
+| `--cookie-refresh` | openshift/oauth-proxy validates a refresh by sending the token as a query parameter, which the API server ignores (so every refresh signs the user out) and which it logs on a network error | not set; `TestTemplateOAuthProxySignsInThroughTheOAuthClient` keeps it out |
+
+Hardening not applied (it would shorten every session): an `accessTokenMaxAgeSeconds` on the OAuthClient (for example 8h) with a matching `--cookie-expire`, or a role scope (`role:<writer-role>:*:!`) instead of `user:full`. The dashboard's gen-ai API expects a `user:full` token (it lists namespaces and runs SSARs with it), so a role scope would need its reads listed too.
+
+## The OAuthClient (4.0.0)
+
+`install.sh` creates Secret `<APP_NAME>-oauth-client` (32 random alphanumerics, no trailing newline, kept on re-apply) and server-side applies OAuthClient `<APP_NAME>-<NAMESPACE>` (label `app.kubernetes.io/instance`) after the Route exists and before the rollout; the secret goes to `oc` on stdin, never on a command line, and server-side apply keeps it out of a last-applied annotation. `install.sh uninstall` deletes the OAuthClient first (no new sign-ins), then revokes the access tokens it issued (`oc delete oauthaccesstokens --field-selector clientName=...`): deleting a client does not invalidate them, the API server does not check that a token's client still exists. When the revocation fails, uninstall still removes the rest and exits with the command to run.
+
+The Helm chart does the same with two hooks (`deploy/chart/templates/oauth-client.yaml`): a Sync hook Job creates the Secret, a PostSync hook Job applies the OAuthClient once the Route has a host. Argo CD does not track either object.
+
+| Rule (the hooks' own ServiceAccounts, never the app's) | What it allows | Worst case if the hook's token leaks | Why nothing narrower works |
+|---|---|---|---|
+| Sync hook, Role in the app's namespace: Secrets `create`; `get` on `<APP_NAME>-oauth-client` | create the client Secret once | create a Secret in the app's namespace, while the hook runs | `create` cannot be limited by name |
+| PostSync hook, Role: Route `<APP_NAME>` `get`; Secret `<APP_NAME>-oauth-client` `get` | read the host and the secret | read the client secret, which the app's namespace admins can read anyway | named |
+| PostSync hook, ClusterRole `<APP_NAME>-<NAMESPACE>-oauthclient`: OAuthClients `create`; `get patch` on `<APP_NAME>-<NAMESPACE>` | create and update this install's OAuthClient; no `delete` | register **any** OAuth client, for example one with `grantMethod: auto` and a redirect to an attacker's host: a token-phishing primitive, while the hook runs | `create` cannot be limited by name. The hook's objects carry `hook-delete-policy: BeforeHookCreation,HookSucceeded`, so the ServiceAccount, its bindings and the pod's token exist only while the Job runs; only Argo CD (or whoever can create Jobs in the app's namespace with that ServiceAccount during the sync) can use them. With `gitops.oauthClient.enabled=false` no hook gets the rule and an admin creates both objects |
+
+The app's ServiceAccount has no right on OAuthClients or OAuth tokens (`TestServiceAccountWritesAreNamedOrItsOwnRecords` and the RBAC coverage tests).
 
 ## ServiceAccount RBAC
 
-`deploy/template.yaml` holds exactly the requests the code makes. `pkg/cluster/rbac_coverage_test.go` derives every API call from the code and fails when a rule is missing or unused. Cluster-scoped names carry the namespace (`<APP_NAME>-<NAMESPACE>`), so two installs do not collide.
+`deploy/template.yaml` grants the SA exactly what its own entry points reach. `pkg/cluster/rbac_sa_split_test.go` builds the reference graph of the binary from `main`, leaves out the handlers built with `withMutationAuth` (their client is the user's) and the gitops profile's routes, and derives every API call the rest reaches (reads, probes, admin reads, the background prune job), plus every call through `c.bookkeeping()` (the app's records) and the access reviews the gen-ai status and MLflow samples status make with the SA's token; `rbac_coverage_test.go` fails when the template misses one or grants one no path uses. `TestMutationPathsActWithTheUsersToken` fails when a change can reach the SA's token (`getClusterToken`, `genAIToken`, `NewClientWithContext`); `TestServiceAccountWritesAreNamedOrItsOwnRecords` fails on an unnamed write outside the app's own ConfigMaps and on any write to Secrets, RBAC, ServiceAccounts, namespaces, workloads, OLM objects, webhooks, CRDs or DataScienceClusters. Cluster-scoped names carry the namespace (`<APP_NAME>-<NAMESPACE>`), so two installs do not collide.
 
 **Namespaced Roles:**
 
 | Namespace | Rules |
 |---|---|
-| the app's namespace | ConfigMaps: `create`; `get` on `rhoai-nightly-updater-{activity,snapshot,operation}`, `update` activity, `patch` snapshot and operation |
-| `kube-system` | Secret `additional-pull-secret`: `get`, `patch` |
-| `openshift-marketplace` | CatalogSources: `get list create patch delete`; PackageManifests: `list` |
-| `openshift-ingress` (`INGRESS_NAMESPACE`, fixed: the code uses this name) | Gateways: `create`; `get patch delete` on `openshift-ai-inference`. ConfigMaps: `create`; `get patch delete` on `openshift-ai-inference-options` and `maas-gateway-options`. DNSRecords: `list`. AuthPolicy `openshift-ai-inference-authn`: `get` (template revision 5, Models audit below). Gateway `maas-default-gateway`: `get patch delete`; AuthPolicies: `list` (template revision 5, MaaS audit below). TokenRateLimitPolicies, RateLimitPolicies: `list`; AuthPolicy `gateway-auth-policy` and TokenRateLimitPolicy `gateway-tier-rate-limits`: `delete` (Remove the old tier policies; MaaS one-click setup audit below) |
-| `openshift-ingress-operator` (`INGRESS_OPERATOR_NAMESPACE`, fixed) | IngressController `default`: `get` (template revision 5, Models audit below) |
+| the app's namespace | ConfigMaps: `create`; `get` on `rhoai-nightly-updater-{activity,snapshot,operation}`, `update` activity, `patch` snapshot and operation (the app's records) |
+| `kube-system` | Secret `additional-pull-secret`: `get` (status and Quay lookups; the setup writes it with the user's token) |
+| `openshift-marketplace` | CatalogSources: `get`; PackageManifests: `list` |
+| `openshift-ingress` (`INGRESS_NAMESPACE`, fixed) | Gateway `openshift-ai-inference` and ConfigMap `openshift-ai-inference-options`: `get`. Gateway `maas-default-gateway` and ConfigMap `maas-gateway-options`: `get patch` (the prune job narrows which projects the gateway admits; never create or delete). DNSRecords, AuthPolicies, TokenRateLimitPolicies, RateLimitPolicies: `list`; AuthPolicy `openshift-ai-inference-authn`: `get` |
+| `openshift-ingress-operator` (`INGRESS_OPERATOR_NAMESPACE`, fixed) | IngressController `default`: `get` |
 
-**Cluster-wide (ClusterRole).** The operator namespaces (`redhat-ods-*`, `seaweedfs`) and the user's pipeline projects do not exist when the template is applied, so these rules are cluster-wide. Wherever the API allows it, they are limited to fixed object names. `create` cannot be limited by name.
+**Cluster-wide (ClusterRole).** Reads, and the prune job's named writes.
 
 | What | Verbs | Limited to names? |
 |---|---|---|
-| Secrets | `create` | no (pipeline projects are user-chosen) |
-| Secrets | `get patch delete` | `seaweedfs-s3-credentials`; `seaweedfs-migrate-source` (Migrate storage's copy Job, owned by it); `nightly-dspa-s3` (`get delete patch`; `delete` is also what lets setup and Migrate storage make the pipeline server its owner: OwnerReferencesPermissionEnforcement allows changing `ownerReferences` only to who may delete the object); `rhoai-nightly-updater-s3` (`get patch delete`: the dashboard S3 Connection next to each pipeline server, same reasons); the earlier storage's `minio-secret` and legacy `dashboard-dspa-secret` (`get delete`); the models' token Secrets `default-name-<model>-sa` of the four catalog models (`get delete`; Models audits below); MaaS's `maas-db-config` (`get patch delete`) and `maas-db-app` (`get`), and the MaaS development database's `postgres-creds` (`delete` only, by the UID this tool recorded: never read or changed, 4.0.0) (MaaS audits below) |
-| Namespaces | `get list create`; `patch`; `delete` | `patch` only `redhat-ods-operator`; `delete` only `minio` (the earlier storage's namespace, at the end of Migrate storage) and `seaweedfs` (at the end of the storage's Tear down), each only when the user ticks it, offered only when it carries the tool label and the tool's managers wrote it (UID precondition); `delete` also `redhat-ai-gateway-infra` and `odh-ai-gateway-infra`, the AI gateway's infrastructure namespace, which MaaS Remove deletes only when this tool created it and nothing else is in it (MaaS one-click setup audit below) |
-| Deployments | `get list patch create`; `delete` | `delete` only `seaweedfs` (the S3 storage, and the SeaweedFS earlier versions ran in namespace `minio`) `minio` (MinIO of earlier versions) and `postgres` (the MaaS development database, 4.0.0) |
-| Services | `get create`; `patch delete`; `patch` | `patch delete` only `seaweedfs-s3` and `postgres` (the MaaS development database, 4.0.0); `delete` only `minio-service` (the earlier storage's); `patch` only `authorino-authorino-authorization` (Authorino TLS, MaaS one-click setup audit below) |
-| PVCs | `list create`; `patch delete` | `patch delete` only `seaweedfs-data`; `delete` only `seaweedfs-pvc` and `minio-pvc` (the earlier storage's data) |
-| Routes | `create`; `get` | `get` on `rhods-dashboard`, `mlflow`, `seaweedfs-admin`, `minio-api`, `minio-ui`; `patch delete` on `seaweedfs-admin`; `delete` on `minio-api`, `minio-ui` (the earlier storage's) |
-| NetworkPolicies | `create`; `get patch delete` | the second set only on `seaweedfs-ingress` (the name in both storage namespaces); `get delete` on `minio-ingress` (MinIO's policy of earlier versions) |
-| Pods, ReplicaSets, Events, EndpointSlices, Nodes | `list` | read-only |
-| Subscriptions | `create`; `get patch delete`; `get patch` | `get patch delete` only on `rhods-operator`; `get patch` only on `kuadrant-operator`, `rhcl-operator` and `cloudnative-pg` (the operators MaaS needs; never deleted; MaaS one-click setup audit below) |
-| OperatorGroups | `create list`; `patch` | `patch` only `rhods-operator` |
-| ClusterServiceVersions | `get list delete` | no |
-| InstallPlans | `get list patch delete` | no |
-| Validating/Mutating webhook configurations | `list delete` | no |
-| CRDs | `list`; `get patch` | `get patch` only the DSC and DSCI CRDs |
-| DataScienceClusters | `get list patch create`; `delete` | no: a cluster-wide singleton whose name its creator chose; `delete` only for the Components page's hard reset (template revision 7, hard reset audit below) |
-| DSCInitializations, Platforms | `list` (`get` Platform `default`) | read-only |
-| `components.platform.opendatahub.io/*` (module CRs) | `list patch` | no; the kinds change between releases and are discovered |
-| DSPAs | `list create`; `get patch delete` | only `dspa` (what setup creates since 3.0.0: the dashboard's name, which workbench pipelines need; also the earliest versions' name, which Migrate storage moves) and `nightly-dspa` (the name 2.x used: status, teardown, Migrate storage, and Recreate with the standard name, which deletes it) |
-| Jobs | `create`; `get delete` | `get delete` only `seaweedfs-migrate`, Migrate storage's copy Job in namespace `seaweedfs` |
-| MLflows | `create`; `get patch delete` | the second set only on `mlflow` |
-| ClusterVersion, Console, IDMS, ConfigMap `odh-upgrade-acks` | read | — |
-| Infrastructure | `get` | only `cluster`; read-only (template revision 5, node pull secret audit below) |
-| `operator.openshift.io/*` (prerequisite operands such as `JobSetOperator/cluster`) | `get` | only objects named `cluster`; the kind comes from the prerequisite's CSV. This group also holds OpenShift's own operator configs (`console/cluster`, …), which become readable; they hold no secrets (template revision 4) |
-| cert-manager `Certificates` | `list` | read-only; Certificates name Secrets but hold no key material (template revision 4) |
-| MLflow `mlflow.kubeflow.org` experiments, datasets, registeredmodels (checked by MLflow, not Kubernetes objects) | `create`; `get update` on experiment `MLflow Demo`; `get update delete` on experiment `nightly-sample-training` and model `nightly-sample-classifier` | `create` cannot be; everything else only the samples' names (template revision 5, samples audit below) |
-| MLflow `mcpservers`, `skills` | `get update delete` | only `com.deepwiki/rhoai-nightly-sample` and `nightly-sample-mcp-builder`; no `create` |
-| GatewayClasses | `create`; `get patch delete`; `get` | the second set only on `openshift-ai-inference` (template revision 5, Models audit below); `get` only on `openshift-default` (MaaS audit below); Gateways `list` cluster-wide, read-only, to keep that class while another Gateway uses it |
-| LLMInferenceServices | `create`; `get list`; `get patch delete` | the last set only on the catalog's four models, `smollm2-135m-instruct`, `qwen25-05b-instruct`, `qwen3-1-7b`, `granite-embedding-125m-english` (template revision 5, Models and Playground audits below) |
-| InferenceServices | `get list` | read-only; for the dashboard's gen-ai API acting as the SA (template revision 5, Playground audit below) |
-| OGXServers (`ogx.io`) | `list create`; `get delete` | the second set only on `lsd-genai-playground` (template revision 5, Playground audit below) |
-| ConfigMaps | `create`; `get update delete`; `get update`; `get` | create cannot be; the rest only on the playground's `llama-stack-config`, `ogx-office-mime-types`, `ogx-router-ca-bundle`, `ogx-trusted-ca-bundle`; `odh-trusted-ca-bundle`; `gen-ai-aa-custom-model-endpoints` (template revision 5, Playground audit below); `get` also on KServe's `inferenceservice-config` (template revision 5, Models audit below) |
-| LLMInferenceServiceConfigs | `get` | no: the CPU preset's name is found at run time (template revision 5) |
-| Ingress config `cluster`, ImageTagMirrorSets | `get`; `list` | read-only (template revision 5) |
-| ServiceAccounts; Roles, RoleBindings | `create`; `get delete` | `get delete` only on the four catalog models' token objects (`<model>-sa`, `<model>-view-role`, `<model>-view`; token authentication audit below) |
-| ResourceQuotas, HardwareProfiles | `list` | read-only (the model's room check and hardware profile; Models audits below) |
-| CloudNativePG Clusters | `create`; `get patch delete` | the second set only on `maas-db` (MaaS audit below) |
-| Kuadrants; Authorinos | `list create`; `get patch` | Kuadrants are never changed or deleted; Authorinos only `authorino` (MaaS one-click setup audit below) |
-| AITenants, MaaSTenantConfigs | `get` | only `models-as-a-service`, `default-tenant`; read-only (MaaS audit below) |
-| MaaSModelRefs, MaaSSubscriptions, MaaSAuthPolicies | `create list`; `get patch delete` | the second set only on the three chat models' MaaSModelRefs, `rhoai-nightly-updater-subscription` and `rhoai-nightly-updater-access` (MaaS audit below) |
-| HTTPRoutes | `get` | only the three chat models' `<model>-kserve-route`; read-only (MaaS audit below) |
+| Secrets | `get` | only `seaweedfs-s3-credentials`, `minio-secret`, `rhoai-nightly-updater-s3`, `maas-db-config` (ownership checks and status of the Environment page; the S3 keys answer only a cluster-admin) |
+| ConfigMaps | `get` | only `odh-upgrade-acks`, `inferenceservice-config`, `gen-ai-aa-custom-model-endpoints` |
+| Namespaces | `get list` | no |
+| Deployments | `get list` | no |
+| Services | `get` | no |
+| Pods, ReplicaSets, Events, EndpointSlices, Nodes, PVCs | `list` | read-only |
+| Routes | `get` | `rhods-dashboard`, `mlflow`, `seaweedfs-admin`, `minio-api`, `minio-ui` |
+| NetworkPolicies | `get` | `seaweedfs-ingress`, `minio-ingress` |
+| Subscriptions | `get`; `list` | `get` only `rhods-operator`, `kuadrant-operator`, `rhcl-operator`, `cloudnative-pg` |
+| OperatorGroups, InstallPlans | `list` | read-only |
+| ClusterServiceVersions | `get list` | read-only |
+| Validating/Mutating webhook configurations, CRDs, DSCInitializations, Platforms, DSPAs, cert-manager Certificates, Gateways, Kuadrants, ImageDigestMirrorSets, ImageTagMirrorSets | `list` | read-only; CRD `get` only the DSC's |
+| DataScienceClusters | `get list` | read-only: the hard reset's `delete` (template revision 7 before 4.0.0) now runs with the user's token |
+| `components.platform.opendatahub.io/*` (module CRs) | `list` | read-only; the kinds change between releases and are discovered |
+| `operator.openshift.io/*` | `get` | only objects named `cluster` |
+| ClusterVersion, Console, Infrastructure, Ingress config | `get` | only `version` / `cluster` |
+| MLflows | `get` | only `mlflow` |
+| MLflow `mlflow.kubeflow.org` (MLflow's access reviews, not Kubernetes objects) | `get` | only the samples' names: experiments `MLflow Demo`, `nightly-sample-training`; registeredmodels `nightly-sample-classifier`; mcpservers `com.deepwiki/rhoai-nightly-sample`; skills `nightly-sample-mcp-builder` (the samples status; adding and removing a sample use the user's token) |
+| GatewayClasses | `get` | only `openshift-ai-inference`, `openshift-default` |
+| InferenceServices, LLMInferenceServices | `get list` | no (the Playground status's `aaa/models` with the caller's token, the models that use a gateway) |
+| LLMInferenceServiceConfigs | `get` | no (the CPU preset's name is found at run time) |
+| OGXServers | `list`; `get` | `get` only `lsd-genai-playground` (the gen-ai API's access review, the playground's UID) |
+| CloudNativePG Clusters, Authorinos, AITenants, MaaSTenantConfigs | `get` | only `maas-db`, `authorino`, `models-as-a-service`, `default-tenant` |
+| HTTPRoutes | `get` | only the three chat models' `<model>-kserve-route` |
+| Groups (`user.openshift.io`) | `get` | no (the MaaS groups check, answered only to cluster-admins) |
+| MaaSModelRefs, MaaSSubscriptions, MaaSAuthPolicies | `list`; MaaSModelRefs `get delete`; MaaSSubscription and MaaSAuthPolicy `get patch delete` | the writes only on the three chat models' MaaSModelRefs, `rhoai-nightly-updater-subscription` and `rhoai-nightly-updater-access`: [the MaaS prune job](#the-maas-prune-job-400) |
 
-There is no cluster-wide `list` or general `get` on Secrets, so the code cannot read Secrets through the API beyond the names above. That is not a limit on a leaked token: a pod it creates can mount any Secret of its namespace (below).
+There is no `create` outside the app's own namespace, no write on Secrets, ServiceAccounts, RBAC, namespaces, workloads, OLM objects, webhooks, CRDs or DataScienceClusters, and no cluster-wide `list` or general `get` on Secrets.
+
+Before 4.0.0 (template revision 7 as first written): 130 rules with 123 write verb tuples, 42 of them unnamed, including cluster-wide `create` of Deployments, Jobs, LLMInferenceServices, OGXServers, CloudNativePG Clusters, Secrets, ServiceAccounts, Roles and RoleBindings: a leaked SA token had cluster-admin reach (a pod it creates can run as any ServiceAccount of its namespace and mount any Secret there). After: about 60 rules; writes are the app's own ConfigMaps (create, update, patch), and by name only, 8 verbs on 5 MaaS object names and 2 objects in `openshift-ingress`.
+
+### The MaaS prune job (4.0.0)
+
+The background job (`pkg/api` `StartMaaSPruneJob`, every 5 minutes, under the cluster lock and lease, off in the gitops profile) drops the publications whose project or model is gone, so a project made again with the same name cannot attach routes to the MaaS gateway. It runs with the SA because no user is there. Since 4.0.0 it only updates or deletes existing objects (`updateToolObject`: the ownership check, field-ownership upgrade and `resourceVersion` guard of every tool write, a server-side apply sent as a PATCH, never a create):
+
+| Rule | What it allows | Worst case if the SA token leaks |
+|---|---|---|
+| MaaSModelRefs `get delete` on the three chat models' names (any namespace) | delete the tool's reference of a gone publication, by UID | unpublish a model of one of those names from MaaS in any project |
+| MaaSSubscription `rhoai-nightly-updater-subscription`, MaaSAuthPolicy `rhoai-nightly-updater-access`: `get patch delete` | drop the gone publications from the tool's subscription and access policy, or delete them when none is left | change who may call the tool's published models and their limits, or remove them |
+| Gateway `maas-default-gateway`, ConfigMap `maas-gateway-options` (`openshift-ingress`): `get patch` | the gateway admits routes only from the projects still published | **widen `allowedRoutes`** (for example `from: All`), which is the route hijack the job exists to prevent: any project editor could then attach a route and receive callers' tokens. This is the most sensitive write left. Options to remove it: drop the background job (prune still runs at the start of every MaaS, Models and Clean up operation, with the user's token), or admit routes by a namespace label so a re-created project never matches (a decision for the maintainers) |
+
+Check on a cluster (replace `<ns>`; by default the ServiceAccount is `rhoai-nightly-updater`):
+
+```bash
+SA=system:serviceaccount:<ns>:rhoai-nightly-updater
+oc auth can-i create deployments -A --as=$SA                                          # no
+oc auth can-i create secrets -A --as=$SA                                              # no
+oc auth can-i create pods -A --as=$SA                                                 # no
+oc auth can-i create rolebindings -A --as=$SA                                         # no
+oc auth can-i delete datascienceclusters.datasciencecluster.opendatahub.io -A --as=$SA  # no
+oc auth can-i patch subscriptions.operators.coreos.com -n redhat-ods-operator --as=$SA  # no
+oc auth can-i patch secret/additional-pull-secret -n kube-system --as=$SA             # no
+oc auth can-i get secret/additional-pull-secret -n kube-system --as=$SA               # yes
+oc auth can-i list pods -A --as=$SA                                                   # yes
+oc auth can-i create oauthclients.oauth.openshift.io --as=$SA                         # no
+oc auth can-i patch gateway/maas-default-gateway -n openshift-ingress --as=$SA        # yes (the prune job)
+oc auth can-i create configmaps -n <ns> --as=$SA                                      # yes (its records)
+oc auth can-i create configmaps -n openshift-ingress --as=$SA                         # no
+```
+
+### Audits of earlier template revisions
+
+The audits below were written when the SA made every change (template revisions 4 to 7 before 4.0.0). Each table's "What it allows" still describes what the change does and how the code narrows it; since 4.0.0 the change runs with the signed-in user's token, so the API server checks it against that user's RBAC, and the "Worst case if the SA token leaks" column no longer applies: the SA no longer holds those write rules (tables above). The reasoning about which objects are the tool's (labels, field managers, recorded UIDs) is unchanged.
 
 ### Worst case: cluster-wide workload create
 
-The SA may create workloads in any namespace: Deployments (`create`, `patch`), Jobs, LLMInferenceServices (`spec.template` is a pod template), OGXServers (the OGX operator runs the image the spec names) and CloudNativePG Clusters. The rules for them are narrowed to what the code does, but these grants together are, for a leaked SA token, **cluster-admin reach**:
-
-- A pod spec may name any ServiceAccount of its namespace (`serviceAccountName`) and mount any Secret or ConfigMap of its namespace as a volume or environment variable. Admission does not check that the creator could read or use them, and SCC admission limits privileges (UID, capabilities, host access), not the ServiceAccount or the Secrets. So a pod created with the token can run as the most privileged ServiceAccount of any namespace (an operator's, for example) and read every Secret there, which includes tokens and credentials of cluster components.
-- A CloudNativePG Cluster's `spec.imageName` accepts any image, and its `externalClusters` connection parameters name Secrets (password, TLS keys) that the operator reads and mounts in the cluster's pods.
-- An LLMInferenceService's or OGXServer's workload runs as its operator builds it, with the image and environment the spec names.
-
-So the rule tables below say what the code uses each grant for; they do not make a leaked token less than cluster-admin. What protects the token: it exists only in the app container, is never logged or returned, is sent only to the API server, to MLflow through the cluster's gateway and to the dashboard's gen-ai API (the Playground, only the calls it does not pass on to Models as a Service, see [The ServiceAccount token and Models as a Service](#the-serviceaccount-token-and-models-as-a-service-301); both RHOAI platform services, as [Which token is used where](#which-token-is-used-where) says; never to a Service or Route in a user's project), and every change it makes is gated on the signed-in user's own cluster-admin check. The rows for these grants point here instead of repeating it.
+Before 4.0.0 the SA could create workloads in any namespace (Deployments, Jobs, LLMInferenceServices, OGXServers, CloudNativePG Clusters). A pod spec may name any ServiceAccount of its namespace and mount any Secret there, and admission does not check that the creator could read or use them, so those grants together gave a leaked SA token **cluster-admin reach**. Since 4.0.0 the SA has none of them; the rows below that point here describe that earlier exposure. The same reach now belongs to a signed-in cluster-admin's own token, which is why the session cookie and its secret are protected as the [threat model](#threat-model-of-the-user-token-400) says.
 
 **Audit: template revision 5 (3.0.0), the S3 storage's new names.** The storage moved from the MinIO-era names in namespace `minio` to its own names in namespace `seaweedfs`. Storage an earlier version left in `minio` is only detected, read for the migration, and deleted.
 
@@ -197,9 +246,9 @@ sar() {  # sar <verb> <resource> [<name>] -> true/false, as MLflow's access revi
  "resourceAttributes":{"namespace":"$P","group":"mlflow.kubeflow.org","resource":"$2","verb":"$1","name":"${3:-}"}}}
 EOF
 }
-sar create experiments                                    # true
-sar update experiments 'MLflow Demo'                      # true
-sar delete experiments nightly-sample-training            # true
+sar create experiments                                    # false since 4.0.0 (the user's token adds and removes samples)
+sar update experiments 'MLflow Demo'                      # false since 4.0.0 (the user's token adds and removes samples)
+sar delete experiments nightly-sample-training            # false since 4.0.0 (the user's token adds and removes samples)
 sar delete experiments 'MLflow Demo'                      # false
 sar delete experiments                                    # false
 sar delete registeredmodels some-other-model              # false
@@ -233,19 +282,19 @@ Reads that need no new rule: the controller's prefix (Deployment `llmisvc-contro
 
 ```bash
 SA=system:serviceaccount:<ns>:<sa>
-oc auth can-i create gateways.gateway.networking.k8s.io -n openshift-ingress --as=$SA                       # yes
-oc auth can-i delete gateways.gateway.networking.k8s.io/openshift-ai-inference -n openshift-ingress --as=$SA # yes
+oc auth can-i create gateways.gateway.networking.k8s.io -n openshift-ingress --as=$SA                       # no since 4.0.0 (the change runs with the user's token)
+oc auth can-i delete gateways.gateway.networking.k8s.io/openshift-ai-inference -n openshift-ingress --as=$SA # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i delete gateways.gateway.networking.k8s.io/other -n openshift-ingress --as=$SA                  # no
 oc auth can-i create gateways.gateway.networking.k8s.io -n default --as=$SA                                 # no
-oc auth can-i delete llminferenceservices.serving.kserve.io/smollm2-135m-instruct -n <project> --as=$SA      # yes
-oc auth can-i delete llminferenceservices.serving.kserve.io/qwen25-05b-instruct -n <project> --as=$SA        # yes
-oc auth can-i delete llminferenceservices.serving.kserve.io/qwen3-1-7b -n <project> --as=$SA                 # yes
-oc auth can-i delete llminferenceservices.serving.kserve.io/granite-embedding-125m-english -n <project> --as=$SA # yes
+oc auth can-i delete llminferenceservices.serving.kserve.io/smollm2-135m-instruct -n <project> --as=$SA      # no since 4.0.0 (the change runs with the user's token)
+oc auth can-i delete llminferenceservices.serving.kserve.io/qwen25-05b-instruct -n <project> --as=$SA        # no since 4.0.0 (the change runs with the user's token)
+oc auth can-i delete llminferenceservices.serving.kserve.io/qwen3-1-7b -n <project> --as=$SA                 # no since 4.0.0 (the change runs with the user's token)
+oc auth can-i delete llminferenceservices.serving.kserve.io/granite-embedding-125m-english -n <project> --as=$SA # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i delete llminferenceservices.serving.kserve.io/other-model -n <project> --as=$SA                # no
-oc auth can-i list hardwareprofiles.infrastructure.opendatahub.io -n redhat-ods-applications --as=$SA      # yes
+oc auth can-i list hardwareprofiles.infrastructure.opendatahub.io -n redhat-ods-applications --as=$SA      # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i create hardwareprofiles.infrastructure.opendatahub.io -n redhat-ods-applications --as=$SA    # no
 oc auth can-i get secrets/router-certs-default -n openshift-ingress --as=$SA                                # no
-oc auth can-i patch gateways.gateway.networking.k8s.io/openshift-ai-inference -n openshift-ingress --as=$SA  # yes
+oc auth can-i patch gateways.gateway.networking.k8s.io/openshift-ai-inference -n openshift-ingress --as=$SA  # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i patch namespaces/<project> --as=$SA                                                            # no
 ```
 
@@ -290,19 +339,19 @@ Check on a cluster (replace `<project>` with a data science project):
 
 ```bash
 SA=system:serviceaccount:<ns>:<sa>
-oc auth can-i create serviceaccounts -n <project> --as=$SA                                        # yes
-oc auth can-i delete serviceaccounts/qwen25-05b-instruct-sa -n <project> --as=$SA                   # yes
+oc auth can-i create serviceaccounts -n <project> --as=$SA                                        # no since 4.0.0 (the change runs with the user's token)
+oc auth can-i delete serviceaccounts/qwen25-05b-instruct-sa -n <project> --as=$SA                   # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i delete serviceaccounts/other -n <project> --as=$SA                                    # no
-oc auth can-i create roles.rbac.authorization.k8s.io -n <project> --as=$SA                          # yes
-oc auth can-i create rolebindings.rbac.authorization.k8s.io -n <project> --as=$SA                   # yes
-oc auth can-i delete roles.rbac.authorization.k8s.io/qwen25-05b-instruct-view-role -n <project> --as=$SA # yes
+oc auth can-i create roles.rbac.authorization.k8s.io -n <project> --as=$SA                          # no since 4.0.0 (the change runs with the user's token)
+oc auth can-i create rolebindings.rbac.authorization.k8s.io -n <project> --as=$SA                   # no since 4.0.0 (the change runs with the user's token)
+oc auth can-i delete roles.rbac.authorization.k8s.io/qwen25-05b-instruct-view-role -n <project> --as=$SA # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i delete rolebindings.rbac.authorization.k8s.io/other -n <project> --as=$SA             # no
 oc auth can-i bind roles.rbac.authorization.k8s.io -n <project> --as=$SA                            # no
 oc auth can-i bind clusterroles.rbac.authorization.k8s.io/admin --as=$SA                            # no
 oc auth can-i escalate roles.rbac.authorization.k8s.io -n <project> --as=$SA                        # no
 oc auth can-i escalate clusterroles.rbac.authorization.k8s.io --as=$SA                              # no
-oc auth can-i delete secrets/default-name-qwen25-05b-instruct-sa -n <project> --as=$SA              # yes
-oc auth can-i get secrets/default-name-qwen25-05b-instruct-sa -n <project> --as=$SA                 # yes (4.0.0, "Can it be called?")
+oc auth can-i delete secrets/default-name-qwen25-05b-instruct-sa -n <project> --as=$SA              # no since 4.0.0 (the change runs with the user's token)
+oc auth can-i get secrets/default-name-qwen25-05b-instruct-sa -n <project> --as=$SA                 # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i get secrets/other -n <project> --as=$SA                                               # no
 oc auth can-i get llminferenceservices.serving.kserve.io/qwen25-05b-instruct -n <project> --as=system:serviceaccount:<project>:qwen25-05b-instruct-sa # yes (the model's token)
 oc auth can-i delete llminferenceservices.serving.kserve.io/qwen25-05b-instruct -n <project> --as=system:serviceaccount:<project>:qwen25-05b-instruct-sa # no
@@ -311,8 +360,8 @@ oc auth can-i delete llminferenceservices.serving.kserve.io/qwen25-05b-instruct 
 **Audit: template revision 7 (4.0.0), the DataScienceCluster hard reset.** New rule: `delete` on `datascienceclusters` (`datasciencecluster.opendatahub.io`), cluster-wide, full profile only (`deploy/template.yaml` and its chart copy; `deploy/rbac-gitops.yaml` is unchanged, and `TestHardResetDeleteRule` fails if it gains it). What uses it: **Reset to the release default… → Hard reset** on the Components page, a gated, locked operation that deletes the one DSC with a UID precondition (the one the user reviewed, after typing its name), waits until the operator's finalizer has removed every component, and creates the release default in its place. Before the delete it validates the new spec with a server-side dry run against the live DSC (a JSON Patch `test` of the UID and `replace` of `/spec`, `dryRun=All`, `fieldValidation=Strict`: the existing `patch`), so a spec the CRD or the operator's webhook refuses never costs the DSC, and records the object it creates in the operation ConfigMap (key `dscHardReset`, the existing `get create patch` on that ConfigMap) so **Finish the hard reset** can create exactly that object after a failure or a restart (the same gates and lock; it only creates while no DSC exists). The delete uses `propagationPolicy: Foreground`, so the DSC stays until the objects it owns are gone and the new DSC never races their cleanup. Worst case if the token leaks: delete the DataScienceCluster, which tears down every RHOAI component cluster-wide until someone creates a DSC again (user resources such as notebooks and pipeline servers survive, but stop working). That is no larger than what the token could already do: `patch` on the DSC sets every component to Removed, with the same teardown, and `create` makes a new one. Why nothing narrower works: the DSC is cluster-scoped and a singleton (the operator's webhook allows one), and its name is whatever its creator chose (`default-dsc` from the console and this tool; other names on older clusters), so `resourceNames` would only refuse the reset on those clusters without reducing what a leaked token can delete; no RBAC rule can express "only with a UID precondition". The other Components page changes (one component, Fix, soft reset) use the existing `patch` (a JSON Patch with `test` operations, `dryRun=All` is authorized as `patch`) and `create`; the plans read the DSC, its CRD (`get` by name), the installed CSV, module CRs, Deployments, DSPAs, LLMInferenceServices, InferenceServices, OGXServers and the MLflow CR, all with existing rules; the hard reset also lists DSCInitializations (existing `list`) to tell Managed from self-managed RHOAI. Check on a cluster (`SA=system:serviceaccount:<ns>:<sa>`):
 
 ```bash
-oc auth can-i delete datascienceclusters.datasciencecluster.opendatahub.io --as=$SA                 # yes
-oc auth can-i delete datascienceclusters.datasciencecluster.opendatahub.io/default-dsc --as=$SA     # yes
+oc auth can-i delete datascienceclusters.datasciencecluster.opendatahub.io --as=$SA                 # no since 4.0.0 (the change runs with the user's token)
+oc auth can-i delete datascienceclusters.datasciencecluster.opendatahub.io/default-dsc --as=$SA     # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i deletecollection datascienceclusters.datasciencecluster.opendatahub.io --as=$SA       # no
 oc auth can-i delete dscinitializations.dscinitialization.opendatahub.io --as=$SA                  # no
 oc auth can-i delete customresourcedefinitions.apiextensions.k8s.io/datascienceclusters.datasciencecluster.opendatahub.io --as=$SA # no
@@ -350,11 +399,11 @@ Reads that need no new rule: the DataScienceCluster (the OGX component and its r
 ```bash
 SA=system:serviceaccount:<ns>:<sa>
 oc auth can-i list ogxservers.ogx.io -n <project> --as=$SA                                   # yes
-oc auth can-i delete ogxservers.ogx.io/lsd-genai-playground -n <project> --as=$SA            # yes
+oc auth can-i delete ogxservers.ogx.io/lsd-genai-playground -n <project> --as=$SA            # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i delete ogxservers.ogx.io/other -n <project> --as=$SA                           # no
-oc auth can-i delete configmaps/llama-stack-config -n <project> --as=$SA                     # yes
+oc auth can-i delete configmaps/llama-stack-config -n <project> --as=$SA                     # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i delete configmaps/odh-trusted-ca-bundle -n <project> --as=$SA                  # no
-oc auth can-i update configmaps/odh-trusted-ca-bundle -n <project> --as=$SA                  # yes
+oc auth can-i update configmaps/odh-trusted-ca-bundle -n <project> --as=$SA                  # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i update configmaps/other -n <project> --as=$SA                                  # no
 oc auth can-i list inferenceservices.serving.kserve.io -n <project> --as=$SA                 # yes
 oc auth can-i delete inferenceservices.serving.kserve.io/any -n <project> --as=$SA           # no
@@ -390,21 +439,21 @@ Reads and writes that need no new rule: the DataScienceCluster (`patch` existed;
 
 ```bash
 SA=system:serviceaccount:<ns>:<sa>
-oc auth can-i get secrets/maas-db-app -n redhat-ai-gateway-infra --as=$SA                                   # yes
+oc auth can-i get secrets/maas-db-app -n redhat-ai-gateway-infra --as=$SA                                   # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i get secrets/other -n redhat-ai-gateway-infra --as=$SA                                         # no
 oc auth can-i list secrets -n redhat-ai-gateway-infra --as=$SA                                              # no
-oc auth can-i delete clusters.postgresql.cnpg.io/maas-db -n redhat-ai-gateway-infra --as=$SA                 # yes
+oc auth can-i delete clusters.postgresql.cnpg.io/maas-db -n redhat-ai-gateway-infra --as=$SA                 # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i delete clusters.postgresql.cnpg.io/other -n redhat-ai-gateway-infra --as=$SA                   # no
-oc auth can-i patch authorinos.operator.authorino.kuadrant.io/authorino -n kuadrant-system --as=$SA         # yes (one-click setup, below)
-oc auth can-i patch services/authorino-authorino-authorization -n kuadrant-system --as=$SA                  # yes (one-click setup, below)
-oc auth can-i delete gateways.gateway.networking.k8s.io/maas-default-gateway -n openshift-ingress --as=$SA   # yes
+oc auth can-i patch authorinos.operator.authorino.kuadrant.io/authorino -n kuadrant-system --as=$SA         # no since 4.0.0 (the change runs with the user's token)
+oc auth can-i patch services/authorino-authorino-authorization -n kuadrant-system --as=$SA                  # no since 4.0.0 (the change runs with the user's token)
+oc auth can-i delete gateways.gateway.networking.k8s.io/maas-default-gateway -n openshift-ingress --as=$SA   # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i delete gatewayclasses.gateway.networking.k8s.io/openshift-default --as=$SA                    # no
 oc auth can-i list gateways.gateway.networking.k8s.io -A --as=$SA                                           # yes (read-only: the MaaS check lists them)
 oc auth can-i delete maassubscriptions.maas.opendatahub.io/other -n models-as-a-service --as=$SA            # no
 oc auth can-i list maasmodelrefs.maas.opendatahub.io -A --as=$SA                                            # yes
 oc auth can-i list maassubscriptions.maas.opendatahub.io -n models-as-a-service --as=$SA                    # yes
 oc auth can-i list maasauthpolicies.maas.opendatahub.io -n models-as-a-service --as=$SA                     # yes
-oc auth can-i patch maasmodelrefs.maas.opendatahub.io/qwen3-1-7b -n <project> --as=$SA                      # yes
+oc auth can-i patch maasmodelrefs.maas.opendatahub.io/qwen3-1-7b -n <project> --as=$SA                      # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i get maasmodelrefs.maas.opendatahub.io/granite-embedding-125m-english -n <project> --as=$SA     # no
 oc auth can-i patch maasmodelrefs.maas.opendatahub.io/other -n <project> --as=$SA                           # no
 oc auth can-i get httproutes.gateway.networking.k8s.io/qwen25-05b-instruct-kserve-route -n <project> --as=$SA # yes
@@ -435,16 +484,16 @@ None of the new rules is a new class of power. The ServiceAccount already had `c
 Changes with no new rule: the DataScienceCluster's `aigateway.managementState` is written with the existing `patch`, as field manager `rhoai-nightly-updater-maas-dsc`, recorded, and restored by Remove only while that manager still owns the field (`batchGateway` and `aiGrid` are never touched); the infrastructure namespace is created with the existing Namespace `create` (as the docs' `setup-database.sh` does; RHOAI's AI gateway operator creates it only once MaaS is Managed, so setup could not run without it), and a namespace someone requested under that name is still refused; the Authorino Deployment's `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` and restart use the existing Deployment `patch`; the OOM check lists the operator's pods with the existing `list`; package channels come from the existing PackageManifest `list` in `openshift-marketplace`, scoped by `catalog=` label and name. The tool's MaaSSubscription now takes a priority strictly below the lowest of the other MaaSSubscriptions (the docs' sample's 10 while it is alone), so a key minted without naming a subscription is never bound to the tool's `system:authenticated` one instead of the caller's own (api-key-authentication.md); with other subscriptions and Connectivity Link below 1.5, and on Connectivity Link 1.4.0 (silent gateway authentication bypass, prerequisites.md), Publish refuses. A `maas-default-gateway` someone else made that admits every namespace (`from: All`) is not published through; the tab shows the patch to the docs' namespace list.
 
 ```bash
-oc auth can-i patch subscriptions.operators.coreos.com/kuadrant-operator -n kuadrant-system --as=$SA       # yes
-oc auth can-i patch subscriptions.operators.coreos.com/rhcl-operator -n rh-connectivity-link --as=$SA      # yes
-oc auth can-i patch subscriptions.operators.coreos.com/cloudnative-pg -n cnpg-system --as=$SA             # yes
+oc auth can-i patch subscriptions.operators.coreos.com/kuadrant-operator -n kuadrant-system --as=$SA       # no since 4.0.0 (the change runs with the user's token)
+oc auth can-i patch subscriptions.operators.coreos.com/rhcl-operator -n rh-connectivity-link --as=$SA      # no since 4.0.0 (the change runs with the user's token)
+oc auth can-i patch subscriptions.operators.coreos.com/cloudnative-pg -n cnpg-system --as=$SA             # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i patch subscriptions.operators.coreos.com/other -n kuadrant-system --as=$SA                   # no
 oc auth can-i delete subscriptions.operators.coreos.com/kuadrant-operator -n kuadrant-system --as=$SA      # no
-oc auth can-i create kuadrants.kuadrant.io -n kuadrant-system --as=$SA                                     # yes
+oc auth can-i create kuadrants.kuadrant.io -n kuadrant-system --as=$SA                                     # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i patch services/other -n kuadrant-system --as=$SA                                            # no
-oc auth can-i delete namespaces/redhat-ai-gateway-infra --as=$SA                                          # yes
+oc auth can-i delete namespaces/redhat-ai-gateway-infra --as=$SA                                          # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i delete namespaces/redhat-ods-applications --as=$SA                                          # no
-oc auth can-i delete authpolicies.kuadrant.io/gateway-auth-policy -n openshift-ingress --as=$SA           # yes
+oc auth can-i delete authpolicies.kuadrant.io/gateway-auth-policy -n openshift-ingress --as=$SA           # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i delete authpolicies.kuadrant.io/maas-gateway-auth -n openshift-ingress --as=$SA             # no
 oc auth can-i delete tokenratelimitpolicies.kuadrant.io/gateway-default-deny -n openshift-ingress --as=$SA # no
 ```
@@ -491,18 +540,18 @@ Changes with no new rule: Deployment and Service `create`, Secret `create`, CSV 
 ```bash
 oc auth can-i get secrets/postgres-creds -n redhat-ai-gateway-infra --as=$SA         # no
 oc auth can-i patch secrets/postgres-creds -n redhat-ai-gateway-infra --as=$SA       # no
-oc auth can-i delete secrets/postgres-creds -n redhat-ai-gateway-infra --as=$SA      # yes
+oc auth can-i delete secrets/postgres-creds -n redhat-ai-gateway-infra --as=$SA      # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i get secrets/other -n redhat-ai-gateway-infra --as=$SA                  # no
-oc auth can-i delete deployments.apps/postgres -n redhat-ai-gateway-infra --as=$SA   # yes
+oc auth can-i delete deployments.apps/postgres -n redhat-ai-gateway-infra --as=$SA   # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i delete deployments.apps/maas-api -n redhat-ai-gateway-infra --as=$SA   # no
-oc auth can-i delete services/postgres -n redhat-ai-gateway-infra --as=$SA           # yes
+oc auth can-i delete services/postgres -n redhat-ai-gateway-infra --as=$SA           # no since 4.0.0 (the change runs with the user's token)
 oc auth can-i get groups.user.openshift.io/ml-team --as=$SA                          # yes
 oc auth can-i list groups.user.openshift.io --as=$SA                                 # no
 ```
 
 ### Residual risk
 
-The SA can still create Secrets anywhere, create Subscriptions (OLM then installs whatever the CSV requests), delete CSVs and webhook configurations, and patch any Deployment (the module-operator restart uses this existing grant; the API cannot limit `patch` to Deployments it discovers at run time without listing every module operator by name). Treat its token like an administrator credential: anyone who can read it (or `exec` into the pod) can act as the SA. Namespace `admin` on the app's namespace is therefore effectively privileged.
+Since 4.0.0 a leaked SA token is read-mostly. It can still read pod and Deployment specs cluster-wide (inline environment values), events, CSVs, and four named Secrets in any namespace (`seaweedfs-s3-credentials`, `minio-secret`, `rhoai-nightly-updater-s3`, `maas-db-config`: the S3 keys and the MaaS database connection) plus `kube-system/additional-pull-secret` (the Quay pull credential). These Secret reads are the top residual risk; they serve ownership checks and the status, and a follow-up could check the owning object or a recorded UID instead. Its writes are the app's own ConfigMaps and the prune job's named MaaS objects, of which `patch` on `maas-default-gateway` is the sensitive one ([The MaaS prune job](#the-maas-prune-job-400)). It can create nothing outside its namespace, so it has no escalation path. The session cookies now carry the signed-in users' full tokens instead ([Threat model](#threat-model-of-the-user-token-400)): namespace `admin` on the app's namespace (the cookie and client secrets, `exec` into the pod) is still effectively privileged.
 
 ## Network exposure
 
@@ -515,7 +564,7 @@ The SA can still create Secrets anywhere, create Subscriptions (OLM then install
 ## Sessions and CSRF
 
 - The cookie secret is in Secret `<APP_NAME>-proxy` (key `session_secret`), mounted with `--cookie-secret-file`. Re-applying the template keeps it, so sessions survive upgrades. `make deploy`/`make upgrade` create it once.
-- Cookies use `--cookie-expire=23h`, below the default OAuth access-token lifetime (24h), and `SameSite=Strict; Secure; HttpOnly`. An expired session shows a "Sign in again" banner.
+- Cookies use `--cookie-expire=23h`, below the default OAuth access-token lifetime (24h), and `SameSite=Strict; Secure; HttpOnly`. An expired session shows a "Sign in again" banner. Since 4.0.0 the cookie carries the user's `user:full` token (encrypted with the cookie secret), and a change is refused with "Log out and log in again" when the token expires before the change could finish, or when the session is one from before 4.0.0 whose token cannot act.
 - The Deployment's `revisionHistoryLimit` is 2. After a successful rollout, `make deploy`/`make upgrade` delete the app's old ReplicaSets: those created before the cookie Secret held the secret in plaintext env.
 - State-changing `/api/` requests must be `Content-Type: application/json` (otherwise 415). A browser cannot send that cross-site without a CORS preflight, and the backend never grants one.
 - **Log out** opens oauth-proxy's `/oauth/sign_out` (since 4.0.0; before, it opened `/oauth/sign_in`, which showed the sign-in page and kept the session). That clears the proxy's session cookie and shows the sign-in page. It does not end the OpenShift OAuth server's own login session, and the OAuth access token the cookie held stays valid until it expires (`--cookie-expire=23h`, below the 24h token lifetime): it is not revoked. So **Log in with OpenShift** signs the same user in again without a password while that session lasts. To end it, log out of the OpenShift web console too (it ends the OAuth server's session), or close the browser. oauth-proxy's `--logout-url` could send the browser on to the OAuth server's logout, but its address is cluster-specific (a template parameter install.sh would have to discover), so it is not set.
@@ -546,7 +595,7 @@ The SA can still create Secrets anywhere, create Subscriptions (OLM then install
 
 ## Local development (`DEV_MODE=true`)
 
-- Used by `dev.sh`. With no mounted SA token, every request runs with your own `oc` token (`DEV_TOKEN`) and **there is no cluster-admin gate**.
+- Used by `dev.sh`. With no mounted SA token, every request runs with your own `oc` token (`DEV_TOKEN`) and **there is no cluster-admin gate**: both the change client and the records client use that token, and the sign-in expiry check is skipped.
 - The server binds `127.0.0.1` by default. A non-loopback `BIND_ADDRESS` exits at startup unless `DEV_ALLOW_REMOTE=true` (not recommended: anyone who can reach it acts with your token).
 - Requests whose `Host` or `Origin` is not this machine on the API port or `DEV_FRONTEND_PORT` (default 9000) are refused. This blocks DNS rebinding.
 - API server TLS is verified, in this order: `KUBE_CA_FILE` if set (an unusable file fails closed), the in-pod SA CA, then the system trust store. Verification is skipped only with `DEV_MODE=true` **and** `DEV_INSECURE_TLS=true`, which logs a warning.
@@ -554,7 +603,7 @@ The SA can still create Secrets anywhere, create Subscriptions (OLM then install
 
 ## Where the updater's image comes from (trust root)
 
-Every install runs `quay.io/juntao_wang/rhoai-nightly-updater` (the `IMAGE` default), pinned by digest at install time. Whoever can push to that repository decides what code runs with the ServiceAccount above, on every cluster that installs or upgrades from it. That repository is in a **personal** Quay namespace (`juntao_wang`), so its owner's Quay account is part of the trust root; moving it to a team organisation is described in [CONTRIBUTING: Moving the image repository](CONTRIBUTING.md#moving-the-image-repository).
+Every install runs `quay.io/juntao_wang/rhoai-nightly-updater` (the `IMAGE` default), pinned by digest at install time. Whoever can push to that repository decides what code runs with the ServiceAccount above and with the token of every cluster-admin who signs in, on every cluster that installs or upgrades from it. That repository is in a **personal** Quay namespace (`juntao_wang`), so its owner's Quay account is part of the trust root; moving it to a team organisation is described in [CONTRIBUTING: Moving the image repository](CONTRIBUTING.md#moving-the-image-repository).
 
 | Tag | Written by | With | What protects it |
 |---|---|---|---|
@@ -568,7 +617,7 @@ Kaniko, which runs the Containerfile's `RUN` steps (npm and Go dependency instal
 
 ## Known limitations and residual risks
 
-- **SA token.** See [Residual risk](#residual-risk) above.
+- **SA token.** Read-mostly since 4.0.0; see [Residual risk](#residual-risk) above. The users' own tokens in session cookies: [Threat model](#threat-model-of-the-user-token-400).
 - **S3 storage (SeaweedFS).** The Environment page's S3 storage runs SeaweedFS 4.54 (`ghcr.io/chrislusf/seaweedfs`, Apache-2.0, pinned by digest), the object store upstream Kubeflow Pipelines uses by default. It replaced the bundled MinIO, whose open-source line ended (advisories such as GHSA-hv4r-mvr4-25vw are fixed only in the commercial AIStor). SeaweedFS is not supported by Red Hat, publishes advisories often (bump the digest when one applies), and `weed mini` opens many listeners: master, volume and filer HTTP/gRPC, Iceberg and Lance, plus the admin's worker gRPC on loopback, and the master and filer HTTP APIs need no authentication. Mitigations:
   - NetworkPolicy `seaweedfs-ingress`: only the S3 port 8333 from pods in any namespace and the admin UI port 12535 only from the router; every other port is unreachable from the pod network. The admin's compatibility listener on the old port 23646 is turned off (`-admin.port.legacy=0`);
   - no Route to the S3 API;

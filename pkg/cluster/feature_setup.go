@@ -179,7 +179,7 @@ func writePrereqRecord(c *Client, rec prereqRecord) error {
 // readSnapshotKey reads one key of this tool's snapshot ConfigMap ("" when
 // it or the ConfigMap is missing).
 func readSnapshotKey(c *Client, key string) (string, error) {
-	body, _, err := c.get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
+	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
 	if IsK8sError(err, 404) {
 		return "", nil
 	}
@@ -206,7 +206,7 @@ func writeSnapshotKey(c *Client, key, manager, value string) error {
 		"data":       map[string]interface{}{key: value},
 	})
 	query := url.Values{"fieldManager": {manager}, "force": {"true"}}
-	_, _, err := c.do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query)
+	_, _, err := c.bookkeeping().do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query)
 	return err
 }
 

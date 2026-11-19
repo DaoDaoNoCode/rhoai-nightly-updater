@@ -101,6 +101,17 @@ gitops:
     # Secret before the first sync: the Deployment does not start without it.
     enabled: true
 
+  oauthClient:
+    # The OAuth client users sign in with: a Sync hook Job creates Secret
+    # <APP_NAME>-oauth-client (32 random characters) when it does not exist,
+    # and a PostSync hook Job applies OAuthClient <APP_NAME>-<NAMESPACE> with
+    # that secret and the Route's host as its redirect URI. Only the hooks'
+    # own short-lived ServiceAccounts may write OAuthClients, never the
+    # app's. Argo CD does not prune the OAuthClient; `install.sh uninstall`
+    # removes it and revokes its sign-ins (docs/GITOPS.md). With false,
+    # create both before the first sync: nobody can sign in without them.
+    enabled: true
+
   consoleLink:
     # A PostSync hook Job that adds the app to the console's application
     # menu (ConsoleLink <APP_NAME>-<NAMESPACE>, linking to the Route's host).

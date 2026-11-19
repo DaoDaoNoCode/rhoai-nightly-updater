@@ -68,7 +68,7 @@ func ownsModel(c *Client, meta objectMeta) (bool, error) {
 
 // readModelsRecord reads the record (empty when nothing is recorded).
 func readModelsRecord(c *Client) (modelsRecord, error) {
-	body, _, err := c.get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
+	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
 	if IsK8sError(err, http.StatusNotFound) {
 		return modelsRecord{}, nil
 	}
@@ -105,7 +105,7 @@ func writeModelsRecord(c *Client, rec modelsRecord) error {
 		"data":       map[string]interface{}{modelsRecordKey: string(data)},
 	})
 	query := url.Values{"fieldManager": {modelsRecordManager}, "force": {"true"}}
-	if _, _, err := c.do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if _, _, err := c.bookkeeping().do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
 		return fmt.Errorf("record this tool's models: %w", err)
 	}
 	return nil

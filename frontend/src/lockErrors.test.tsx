@@ -21,6 +21,16 @@ describe("user_rate_limited (the tool's own one-change-per-30-seconds limit)", (
   });
 });
 
+describe("sign_in_again (the user's sign-in cannot carry a change)", () => {
+  it("says to log out and in again, and is not an expired session", () => {
+    const msg = "Your sign-in expires in 12 minutes, and a change may take up to 21 minutes. Log out and log in again, then retry. Nothing was changed.";
+    const d = describeError(new ApiError({ status: 401, errorCode: "sign_in_again", message: msg }));
+    expect(d).toMatchObject({ title: "Sign in again to make changes", variant: "warning" });
+    expect(d.body).toContain("expires in 12 minutes");
+    expect(d.hint).toMatch(/Log out in the user menu/);
+  });
+});
+
 describe("lock_unavailable (the backend fails closed on the cross-pod lock)", () => {
   it("is a retryable warning, never a success", () => {
     const d = describeError(new ApiError({ status: 503, errorCode: "lock_unavailable", message: MESSAGE }));

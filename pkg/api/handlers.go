@@ -170,10 +170,29 @@ func (rl *rateLimiter) release(key string, takenAt time.Time) {
 
 // withMutationAuth wraps a handler that performs a cluster mutation.
 // It verifies the user's identity and cluster-admin permission with the
-// user's own token before anything is done with the ServiceAccount token,
-// applies a per-user rate limit, and gives accepted work a bounded lifetime
-// independent of the browser.
+// user's own token, checks that the user's sign-in can carry the change
+// (sessionProblem), applies a per-user rate limit, and gives accepted work
+// a bounded lifetime independent of the browser. The handler's client
+// acts with the user's own token (X-Forwarded-Access-Token, which only
+// oauth-proxy sets; requestUser refuses a bearer token outside DEV_MODE),
+// so the API server checks every change against the user's own RBAC and
+// its audit log names them. The updater's own records use the
+// ServiceAccount (see bookkeeper below).
 func withMutationAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
+	return mutationAuth(true, fn)
+}
+
+// withGitOpsMutationAuth is withMutationAuth for the gitops profile's
+// Update, whose client acts with the ServiceAccount: that profile's
+// ValidatingAdmissionPolicy (deploy/rbac-gitops.yaml) bounds what the
+// ServiceAccount may write to the build the Git-managed catalog serves, and
+// it matches only the ServiceAccount's username, so a change made with the
+// user's token would bypass it.
+func withGitOpsMutationAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
+	return mutationAuth(false, fn)
+}
+
+func mutationAuth(asUser bool, fn func(c *cluster.Client, w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		RecordRequest()
 		username, r, ok := requestUser(w, r)
@@ -185,7 +204,8 @@ func withMutationAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.
 			writeError(w, "cluster token not available", http.StatusInternalServerError)
 			return
 		}
-		allowed, permissionErr := mutationPermission(r.Context(), extractUserToken(r))
+		userToken := extractUserToken(r)
+		allowed, permissionErr := mutationPermission(r.Context(), userToken)
 		if permissionErr != nil {
 			writeAuthError(w, permissionErr, "Cannot verify mutation permissions. No changes were made.")
 			return
@@ -193,6 +213,12 @@ func withMutationAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.
 		if !allowed {
 			writeError(w, readOnlyMessage, http.StatusForbidden, "forbidden")
 			return
+		}
+		if asUser {
+			if msg, code, status := sessionProblem(r.Context(), userToken); msg != "" {
+				writeError(w, msg+" Nothing was changed.", status, code)
+				return
+			}
 		}
 
 		rateLimitKey := username + ":" + r.URL.Path
@@ -225,10 +251,21 @@ func withMutationAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.
 		// cluster.ErrOperationLockLost when another pod takes the lock over.
 		opContext, cancelOp := context.WithCancelCause(opContext)
 		defer cancelOp(nil)
+		// The updater's own records (the cross-pod lease, the operation
+		// marker, the activity log and the snapshot) are always written
+		// with the ServiceAccount: they outlive the request (lease
+		// heartbeat, marker retries, the shutdown flush) and must not
+		// depend on the token the operation acts with.
+		bookkeeper := cluster.NewClientWithContext(opContext, clusterToken)
+		bookkeeper.SetUsername(username)
 		client := cluster.NewClientWithContext(opContext, clusterToken)
+		if asUser {
+			client = cluster.NewUserClient(opContext, userToken)
+		}
 		client.SetUsername(username)
+		client.SetBookkeeping(bookkeeper)
 
-		sw := &statusWriter{ResponseWriter: w, path: r.URL.Path, user: username, client: client, cancelOp: cancelOp}
+		sw := &statusWriter{ResponseWriter: w, path: r.URL.Path, user: username, bookkeeper: bookkeeper, cancelOp: cancelOp}
 		completed := false
 		defer func() {
 			// Rejected requests (4xx/5xx status, including 409 busy),
@@ -249,9 +286,11 @@ type statusWriter struct {
 	http.ResponseWriter
 	status int
 
-	path   string
-	user   string
-	client *cluster.Client
+	path string
+	user string
+	// bookkeeper is the ServiceAccount client of the operation's lease and
+	// marker (never the client the operation acts with).
+	bookkeeper *cluster.Client
 	// cancelOp ends the operation's context with a cause.
 	cancelOp context.CancelCauseFunc
 	opID     string // set by lockCluster
@@ -472,15 +511,22 @@ func withAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Request)
 // means the answer is unknown: clients must treat it as read-only.
 var HandleUserPermissions = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	username := resolveUsername(r)
-	allowed, err := mutationPermission(r.Context(), extractUserToken(r))
+	token := extractUserToken(r)
+	allowed, err := mutationPermission(r.Context(), token)
 	if err != nil {
 		writeAuthError(w, err, "Cannot verify mutation permissions")
 		return
 	}
-	writeJSON(w, map[string]interface{}{
-		"canMutate": allowed,
-		"user":      username,
-	}, "user-permissions")
+	resp := map[string]interface{}{"canMutate": allowed, "user": username}
+	// A cluster-admin whose sign-in cannot carry a change (an old session,
+	// or one about to expire) sees why before trying, as every change would
+	// be refused with the same reason.
+	if allowed && activeProfile != ProfileGitOps {
+		if msg, code, _ := sessionProblem(r.Context(), token); msg != "" {
+			resp["canMutate"], resp["reason"], resp["reasonCode"] = false, msg, code
+		}
+	}
+	writeJSON(w, resp, "user-permissions")
 })
 
 // HandleHealth returns a fast liveness check.
@@ -729,7 +775,7 @@ var HandleUpdateStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 // HandleUpdateGitOps is POST /api/update (the dry run) in the gitops profile:
 // the profile's own dry run (cluster.UpdateDryRunGitOpsProfile), which only
 // reads. Like HandleUpdate it refuses anything but a dry run.
-var HandleUpdateGitOps = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+var HandleUpdateGitOps = withGitOpsMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	if !lockCluster(w) {
 		return
 	}
@@ -766,7 +812,7 @@ var HandleUpdateGitOps = withMutationAuth(func(c *cluster.Client, w http.Respons
 // Dashboard Dev session (revertDashboardDev) is not part of the profile, so
 // an active session is a refusal there. It runs only while the profile's
 // admission policy is in place (refuseWithoutGitOpsPolicy).
-var HandleUpdateStreamGitOps = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+var HandleUpdateStreamGitOps = withGitOpsMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	if refuseWithoutGitOpsPolicy(c, w) {
 		return
 	}
@@ -1772,18 +1818,26 @@ var HandleModelsStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 	}
 })
 
-// genAIToken is the token every call to the RHOAI dashboard's gen-ai API
-// (the Playground feature) carries, and the only place that chooses it: the
-// app's ServiceAccount token (DEV_TOKEN in dev mode), as for the cluster
-// API. The user's own token is not used: oauth-proxy's session token is
-// scoped user:info user:check-access, which identifies the user and runs
-// access reviews but cannot act. The token goes only to the dashboard's
-// gen-ai API on this cluster, and only in the calls that the gen-ai API
-// does not pass on to Models as a Service (pkg/cluster genAICallAllowed):
-// the dashboard sends the caller's token on to the MaaS gateway, which
-// project editors can attach routes to. Never into logs, errors or
-// responses.
-var genAIToken = func(*http.Request) string { return getClusterToken() }
+// genAIToken and genAIUserToken are the tokens the calls to the RHOAI
+// dashboard's gen-ai API (the Playground feature) carry, and the only
+// places that choose them, as for the cluster API:
+//   - genAIToken, for the status a read shows any signed-in user: the
+//     app's ServiceAccount token (DEV_TOKEN in dev mode), and only in the
+//     calls that the gen-ai API does not pass on to Models as a Service
+//     (pkg/cluster genAICallAllowed): the dashboard sends the caller's
+//     token on to the MaaS gateway, which project editors can attach
+//     routes to.
+//   - genAIUserToken, for Set up, delete and Clean up (mutations): the
+//     signed-in user's own token, the one their client acts with, so the
+//     dashboard acts as them, as when they use it themselves. A MaaS model
+//     may then be added (genAIUserCallAllowed).
+//
+// The token goes only to the dashboard's gen-ai API on this cluster,
+// never into logs, errors or responses.
+var (
+	genAIToken     = func(*http.Request) string { return getClusterToken() }
+	genAIUserToken = extractUserToken
+)
 
 // runPlayground runs a Playground operation; tests replace it.
 var runPlayground = cluster.RunPlayground
@@ -1845,7 +1899,7 @@ var HandlePlaygroundStream = withMutationAuth(func(c *cluster.Client, w http.Res
 
 	beginOperation(w, req.Action+" playground in "+req.Project)
 	slog.Info("mutation", "op", "playground", "action", req.Action, "project", req.Project, "models", len(req.Models))
-	result, runErr := runPlayground(c, req, genAIToken(r), forwardSteps(sseWriter))
+	result, runErr := runPlayground(c, req, genAIUserToken(r), forwardSteps(sseWriter))
 	sendOperationResult(sseWriter, result, runErr)
 	if runErr != nil {
 		slog.Error("playground failed", "error", runErr)
@@ -2144,7 +2198,7 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 
 	token := ""
 	if len(req.Playgrounds) > 0 {
-		token = genAIToken(r)
+		token = genAIUserToken(r)
 	}
 	result, cleanupErr := runCleanUp(c, req, token, forwardSteps(sseWriter))
 	sendOperationResult(sseWriter, result, cleanupErr)

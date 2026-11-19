@@ -90,7 +90,7 @@
       "description": "The hooks that replace install.sh's imperative steps.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["cliImage", "sessionSecret", "consoleLink", "subscriptionEnvAllowlist"],
+      "required": ["cliImage", "sessionSecret", "oauthClient", "consoleLink", "subscriptionEnvAllowlist"],
       "properties": {
         "cliImage": {
           "description": "The image of the hook Jobs (they run oc), pinned by digest.",
@@ -99,6 +99,15 @@
         },
         "sessionSecret": {
           "description": "A Sync hook Job that creates Secret <APP_NAME>-proxy once.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        },
+        "oauthClient": {
+          "description": "A Sync hook Job that creates Secret <APP_NAME>-oauth-client once, and a PostSync hook Job that applies OAuthClient <APP_NAME>-<NAMESPACE> with it.",
           "type": "object",
           "additionalProperties": false,
           "required": ["enabled"],

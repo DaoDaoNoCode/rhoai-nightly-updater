@@ -102,13 +102,31 @@ type K8sError struct {
 	Status     int
 	Reason     string
 	K8sMessage string
+	// User: the request carried the signed-in user's own token
+	// (NewUserClient), so a 401 or 403 is about that user's sign-in or
+	// permissions, not the app's RBAC.
+	User bool
 }
 
+// Messages of a 401 and a 403 answered to the signed-in user's own token in
+// the middle of an operation (K8sError.Error).
+const (
+	UserTokenRejectedMessage = "your OpenShift sign-in is no longer accepted (it expired or was revoked), so the operation stopped here. Log out of the updater and log in again, then check what the operation changed before you retry"
+	UserForbiddenMessage     = "your OpenShift account is not allowed to do this: the updater makes every change with your own permissions"
+)
+
 func (e *K8sError) Error() string {
+	msg := fmt.Sprintf("k8s API error %d (%s)", e.Status, e.Reason)
 	if e.K8sMessage != "" {
-		return fmt.Sprintf("k8s API error %d (%s): %s", e.Status, e.Reason, e.K8sMessage)
+		msg += ": " + e.K8sMessage
 	}
-	return fmt.Sprintf("k8s API error %d (%s)", e.Status, e.Reason)
+	switch {
+	case e.User && e.Status == http.StatusUnauthorized:
+		msg += "; " + UserTokenRejectedMessage
+	case e.User && e.Status == http.StatusForbidden:
+		msg += "; " + UserForbiddenMessage
+	}
+	return msg
 }
 
 // parseK8sError tries to parse a Kubernetes Status object from the response body.
@@ -141,11 +159,57 @@ type Client struct {
 	httpClient *http.Client
 	ctx        context.Context
 	username   string // logged-in user identity (from OAuth headers)
+	// bookkeeper, when set, is the client of the updater's own records
+	// (see bookkeeping).
+	bookkeeper *Client
+	// asUser: the token is the signed-in user's own (NewUserClient), not
+	// the app's ServiceAccount's. Errors then say that the user's sign-in
+	// or permissions, not the app's RBAC, refused a request.
+	asUser bool
 }
+
+// NewUserClient is NewClientWithContext for the signed-in user's own token:
+// the client every cluster change is made with (pkg/api withMutationAuth).
+func NewUserClient(ctx context.Context, token string) *Client {
+	c := NewClientWithContext(ctx, token)
+	c.asUser = true
+	return c
+}
+
+// ActsAsUser reports whether the client carries the signed-in user's own
+// token (NewUserClient) rather than the app's ServiceAccount token.
+func (c *Client) ActsAsUser() bool { return c.asUser }
 
 // SetUsername sets the logged-in user identity for audit logging.
 func (c *Client) SetUsername(username string) {
 	c.username = username
+}
+
+// SetBookkeeping makes b (the ServiceAccount's client) the client of the
+// updater's own records: the activity, snapshot and operation ConfigMaps in
+// its namespace (see bookkeeping).
+func (c *Client) SetBookkeeping(b *Client) {
+	c.bookkeeper = b
+}
+
+// bookkeeping returns the client for the updater's own records in its
+// namespace (the activity log, the snapshot and the operation record): the
+// ServiceAccount's client set with SetBookkeeping, with this client's
+// context and user, or this client itself when none is set (a read, a
+// background job and dev mode run with that token anyway). The records are
+// the app's, not the user's: they must be written whatever the user's
+// token may do, and also when it stops working mid-operation. Every
+// request to those ConfigMaps goes through it (TestBookkeepingUsesTheServiceAccount).
+func (c *Client) bookkeeping() *Client {
+	if c.bookkeeper == nil {
+		return c
+	}
+	b := *c.bookkeeper
+	b.ctx, b.bookkeeper, b.asUser = c.ctx, nil, false
+	if b.username == "" {
+		b.username = c.username
+	}
+	return &b
 }
 
 // WithContext returns a shallow copy of the client with a different context.
@@ -215,7 +279,11 @@ func (c *Client) do(method, path, contentType string, body []byte, query url.Val
 		return nil, resp.StatusCode, err
 	}
 	if resp.StatusCode >= 400 {
-		return respBody, resp.StatusCode, parseK8sError(respBody, resp.StatusCode)
+		err := parseK8sError(respBody, resp.StatusCode)
+		if k, ok := err.(*K8sError); ok {
+			k.User = c.asUser
+		}
+		return respBody, resp.StatusCode, err
 	}
 	return respBody, resp.StatusCode, nil
 }
@@ -374,6 +442,9 @@ func HTTPStatusForError(err error) (int, string) {
 		return http.StatusServiceUnavailable, "canceled"
 	case errors.As(err, &k8sErr):
 		switch {
+		case k8sErr.Status == http.StatusUnauthorized && k8sErr.User:
+			// The user's own sign-in, not the app's credentials.
+			return http.StatusUnauthorized, "session_expired"
 		case k8sErr.Status == http.StatusUnauthorized:
 			return http.StatusUnauthorized, "unauthorized"
 		case k8sErr.Status == http.StatusForbidden:

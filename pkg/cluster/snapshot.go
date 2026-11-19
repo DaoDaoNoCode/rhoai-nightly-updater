@@ -58,7 +58,7 @@ func SaveDeploymentSnapshot(c *Client) error {
 		},
 	}
 
-	_, _, err = c.apply(cmPath, cm)
+	_, _, err = c.bookkeeping().apply(cmPath, cm)
 	if err != nil {
 		return fmt.Errorf("failed to save snapshot: %w", err)
 	}
@@ -70,7 +70,7 @@ func GetDeploymentSnapshot(c *Client) (map[string]string, string) {
 	ns := getActivityNamespace()
 	cmPath := namespacedPath("v1", "configmaps", ns, snapshotConfigMapName)
 
-	body, _, err := c.get(cmPath)
+	body, _, err := c.bookkeeping().get(cmPath)
 	if err != nil {
 		if !IsK8sError(err, 404) {
 			slog.Warn("snapshot: failed to read", "error", err)
@@ -165,7 +165,7 @@ func saveSubscriptionSnapshot(c *Client, sub map[string]interface{}) error {
 		"data":       map[string]interface{}{subscriptionSnapshotKey: string(data)},
 	})
 	query := url.Values{"fieldManager": {subscriptionSnapshotManager}, "force": {"true"}}
-	if _, _, err := c.do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if _, _, err := c.bookkeeping().do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
 		return fmt.Errorf("record the operator Subscription: %w", err)
 	}
 	return nil
@@ -174,7 +174,7 @@ func saveSubscriptionSnapshot(c *Client, sub map[string]interface{}) error {
 // loadSubscriptionSnapshot returns the recorded Subscription, or nil when
 // none was recorded.
 func loadSubscriptionSnapshot(c *Client) (*subscriptionSnapshot, error) {
-	body, _, err := c.get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
+	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
 	if IsK8sError(err, 404) {
 		return nil, nil
 	}

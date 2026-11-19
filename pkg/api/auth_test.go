@@ -59,6 +59,7 @@ func resetPackageState(t *testing.T) {
 	origU, origD, origR, origF := runUpdateStream, runUpdateDryRun, runReinstallStream, runRefreshStream
 	origUG, origUDG, origProfile := runUpdateStreamGitOps, runUpdateDryRunGitOps, activeProfile
 	origPolicyCheck := checkGitOpsPolicy
+	origSession, origSessionClock := readSessionToken, sessionClock
 	checkGitOpsPolicy = func(*cluster.Client) error { return nil }
 	setGitOpsPolicyState("")
 	mutationLimiter = newRateLimiter(30 * time.Second)
@@ -88,6 +89,7 @@ func resetPackageState(t *testing.T) {
 		runUpdateStream, runUpdateDryRun, runReinstallStream, runRefreshStream = origU, origD, origR, origF
 		runUpdateStreamGitOps, runUpdateDryRunGitOps, activeProfile = origUG, origUDG, origProfile
 		checkGitOpsPolicy = origPolicyCheck
+		readSessionToken, sessionClock = origSession, origSessionClock
 		setGitOpsPolicyState("")
 		identities.reset()
 		apiReady.reset()

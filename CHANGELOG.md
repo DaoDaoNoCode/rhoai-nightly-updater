@@ -20,6 +20,8 @@ only accepts a tag whose version is the top dated section. See
 
 - **Requires a full redeploy** (template revision 7; 3.0.0 has revision 5):
   `git checkout v4.0.0 && make upgrade`, or the release's `install.sh`.
+  It creates the OAuthClient users now sign in with; everyone signs in again
+  once to make changes (they run with your own token, see Changed).
 
 ### Added
 
@@ -55,9 +57,8 @@ only accepts a tag whose version is the top dated section. See
   refused under Argo CD, an ACM policy or Helm, in the gitops profile (which
   shows the tree read-only), and on Managed RHOAI for the hard reset.
   Diagnostics' **disable** fix now uses the same change for any component
-  the CRD defines, instead of a fixed list. **New RBAC**: `delete` on
-  `datascienceclusters` (full profile only; [SECURITY.md](SECURITY.md)
-  hard reset audit).
+  the CRD defines, instead of a fixed list. The hard reset deletes the DSC with your own token (no new
+  ServiceAccount RBAC).
 - **MaaS: choose the database.** PostgreSQL is customer-provided in the
   MaaS docs, so Set up asks: your PostgreSQL (only Secret
   `maas-db-config` is written; the URL is never shown, logged or kept),
@@ -244,6 +245,28 @@ only accepts a tag whose version is the top dated section. See
 
 ### Changed
 
+- **Every change runs with your own OpenShift token.** Users sign in
+  through the install's own OAuthClient `<APP_NAME>-<NAMESPACE>`
+  (`grantMethod: auto`, so no "Authorize Access" page; oauth-proxy
+  `--client-id`, `--client-secret-file`, `--scope=user:full`) instead of
+  through the app's ServiceAccount, which the OAuth server limits to
+  `user:info user:check-access`. `install.sh` creates the client and its
+  Secret `<APP_NAME>-oauth-client` (an upgrade from 3.x too; uninstall
+  deletes the client and revokes its sign-ins); the chart does it with a
+  Sync and a PostSync hook (`gitops.oauthClient.enabled`). The API server
+  checks each change against your RBAC and its audit log names you. Before
+  a change is accepted, the app checks that your sign-in can carry it (scope
+  `user:full`, not expiring within the operation's deadline); otherwise
+  "Log out and log in again". **After the upgrade everyone signs in again
+  once to make changes** (the old session's token can only identify you).
+  A 401 or 403 to your token mid-operation says your sign-in or your
+  permissions stopped it ([UPGRADING](docs/UPGRADING.md#upgrade-to-v400-changes-run-with-your-own-token),
+  [RUNBOOK §4](RUNBOOK.md#4-sign-in-and-permissions)).
+- **Playground: Set up can add Models as a Service models again**, with
+  your own token (as in the dashboard); 3.0.1 had turned that off because
+  it ran with the ServiceAccount's. The status still uses the
+  ServiceAccount's token and never reaches MaaS.
+
 - Final review of the Environment page's wording (before release): a
   model published on the MaaS tab reads **Through MaaS while published**
   and shows its **MaaS address**; a model that cannot be called says so
@@ -259,6 +282,28 @@ only accepts a tag whose version is the top dated section. See
   `/environment` opens the Environment page.
 
 ### Security
+
+- **The ServiceAccount is read-mostly.** It keeps the reads every
+  signed-in user's pages need, the app's own ConfigMaps, and the background
+  MaaS prune job's named writes (delete the tool's MaaSModelRefs, update or
+  delete its MaaSSubscription and MaaSAuthPolicy, patch the MaaS gateway and
+  its options; the job now only updates existing objects and never
+  creates). Gone: every create outside its namespace, every write on
+  Secrets, ServiceAccounts, RBAC, namespaces, workloads, Subscriptions,
+  CSVs, InstallPlans, CatalogSources, webhooks, CRDs and
+  DataScienceClusters (also 4.0.0's own `delete` for the hard reset), so a
+  leaked token no longer has cluster-admin reach (130 rules, 123 write verb
+  tuples before; about 60 rules after, writes by name only). Tests derive
+  the template from the ServiceAccount's own entry points and fail when a
+  change could reach its token ([SECURITY.md](SECURITY.md#serviceaccount-rbac)).
+  Residual: `get` on four named Secrets and the cluster pull secret, and
+  `patch` on `maas-default-gateway` (the prune job).
+- **The session cookie now carries a full user token** (encrypted with
+  the cookie secret, for up to 23 hours): Secrets `<APP_NAME>-proxy` and
+  `<APP_NAME>-oauth-client` are as sensitive as the users' sign-ins; no
+  `--cookie-refresh` (broken in openshift/oauth-proxy, and it can log the
+  token); the token is never logged, stored or shown
+  ([SECURITY.md: Threat model](SECURITY.md#threat-model-of-the-user-token-400)).
 
 - **Models' copy-paste commands could run what a project editor wrote.**
   The name a model serves (`spec.model.name`), which anyone who can edit

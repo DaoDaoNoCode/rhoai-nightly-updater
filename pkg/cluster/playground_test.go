@@ -52,6 +52,11 @@ type genAIFake struct {
 	installs          []map[string]interface{}
 	deletes           []string
 	auth              []string
+	// userToken is a signed-in user's own token: with it, and only with
+	// it, maas/models (answered with maasModels) and an install with a
+	// MaaS model are expected.
+	userToken  string
+	maasModels string
 }
 
 func newGenAIFake(t *testing.T) *genAIFake {
@@ -70,6 +75,11 @@ func (g *genAIFake) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if g.missing {
 		fail(http.StatusNotFound, "the requested resource could not be found")
+		return
+	}
+	asUser := g.userToken != "" && r.Header.Get("Authorization") == "Bearer "+g.userToken
+	if asUser && r.Method+" "+r.URL.Path == "GET /gen-ai/api/v1/maas/models" {
+		_, _ = io.WriteString(w, firstNonEmpty(g.maasModels, `{"data":[]}`))
 		return
 	}
 	for _, forwarding := range []string{"/gen-ai/api/v1/maas/", "/gen-ai/api/v1/lsd/responses", "/gen-ai/api/v1/genai-proxy/"} {
@@ -108,7 +118,7 @@ func (g *genAIFake) serve(w http.ResponseWriter, r *http.Request) {
 		g.installs = append(g.installs, body)
 		models, _ := body["models"].([]interface{})
 		for _, m := range models {
-			if mm, _ := m.(map[string]interface{}); mm["model_source_type"] != "namespace" {
+			if mm, _ := m.(map[string]interface{}); mm["model_source_type"] != "namespace" && (!asUser || mm["model_source_type"] != "maas") {
 				g.t.Errorf("install with model %v: the dashboard lists MaaS models with the caller's token", m)
 			}
 		}
@@ -283,21 +293,83 @@ func TestPlayground_SetupInstallsThroughTheDashboardAndWaitsForReady(t *testing.
 
 // A MaaS model is never installed with the ServiceAccount's token: the
 // dashboard's install would list MaaS models through the MaaS gateway with
-// it. The request is refused before any call, and says where to add one.
-func TestPlayground_SetupRefusesAMaaSModel(t *testing.T) {
+// it. The ServiceAccount's client never lists MaaS models through the
+// dashboard, so the model is not offered and nothing is installed.
+func TestPlayground_SetupWithTheServiceAccountNeverAddsAMaaSModel(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.putMaaSModels()
 	req := setup("proj")
 	req.Models = []types.PlaygroundModelRef{{Name: "qwen25-05b-instruct", Source: "namespace"}, {Name: "gpt-oss-20b", Source: "maas"}}
 	res, _ := e.run(t, req)
-	if res.Success || res.ErrorCode != "validation" || !strings.Contains(res.Message, "dashboard's playground, signed in as yourself") {
+	if res.Success || res.ErrorCode != "validation" || !strings.Contains(res.Message, "does not offer model gpt-oss-20b") {
 		t.Fatalf("got %+v", res)
 	}
-	if len(e.g.paths) != 0 || len(e.g.installs) != 0 {
-		t.Fatalf("the gen-ai API was called: %v", e.g.paths)
+	if len(e.g.installs) != 0 {
+		t.Fatalf("installed: %v", e.g.installs)
 	}
-	if _, ok := e.records(t)["proj"]; ok {
-		t.Error("a refused request was recorded")
+	for _, p := range e.g.paths {
+		if strings.Contains(p, "/maas/") {
+			t.Fatalf("the ServiceAccount's token went to %s", p)
+		}
+	}
+}
+
+// userPlaygroundClient is the env's client acting with a signed-in user's
+// own token, as a change's client does (NewUserClient).
+func (e *playgroundEnv) userPlaygroundClient(token string) *Client {
+	uc := *e.c
+	uc.token, uc.asUser = token, true
+	e.g.userToken = token
+	e.g.maasModels = `{"data":[{"id":"gpt-oss-20b","display_name":"GPT OSS 20B","ready":true,"capabilities":["text-generation"],"subscriptions":[{"name":"team-sub"}]}]}`
+	return &uc
+}
+
+// Set up with the user's own token (a change) may add a Models as a
+// Service model, as the user can in the dashboard: the dashboard lists the
+// MaaS models that user may use, and installs one with its subscription.
+// Every call carries the user's token, never the ServiceAccount's.
+func TestPlayground_SetupWithTheUsersTokenAddsAMaaSModel(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	const userToken = "sha256~user-own-token"
+	uc := e.userPlaygroundClient(userToken)
+	req := setup("proj")
+	req.Models = []types.PlaygroundModelRef{{Name: "qwen25-05b-instruct", Source: "namespace"}, {Name: "gpt-oss-20b", Source: "maas"}}
+	var steps []UpdateStepEvent
+	res, err := RunPlayground(uc, req, userToken, func(s UpdateStepEvent) { steps = append(steps, s) })
+	if err != nil || !res.Success {
+		t.Fatalf("got %+v, %v", res, err)
+	}
+	body, _ := json.Marshal(e.g.installs[0])
+	if want := `{"enable_guardrails":false,"enable_tracing":false,"models":[{"model_name":"qwen25-05b-instruct","model_source_type":"namespace","model_type":"llm"},{"model_name":"gpt-oss-20b","model_source_type":"maas","model_type":"llm"}],"vector_stores":[]}`; string(body) != want {
+		t.Errorf("install body\n got %s\nwant %s", body, want)
+	}
+	for _, a := range e.g.auth {
+		if a != "Bearer "+userToken {
+			t.Fatalf("authorization %q", a)
+		}
+	}
+	for _, s := range steps {
+		if strings.Contains(s.Message, userToken) {
+			t.Errorf("step %s shows the token", s.Step)
+		}
+	}
+	// The user's client with another token (not its own) is not the
+	// user's: the ServiceAccount allowlist applies.
+	api, _, _ := playgroundAPI(uc, testGenAIToken)
+	if api.asUser {
+		t.Fatal("a token other than the client's own is treated as the user's")
+	}
+	// Even with the user's token, the calls that are not the playground's
+	// own stay refused.
+	api, _, _ = playgroundAPI(uc, userToken)
+	for _, c := range []struct{ method, path string }{{http.MethodPost, "/maas/tokens"}, {http.MethodPost, "/lsd/responses"}, {http.MethodGet, "/genai-proxy/ns/proj/v1/models"}} {
+		if err := api.call(c.method, c.path, "proj", nil, nil); !errors.Is(err, errGenAINotAllowed) {
+			t.Errorf("%s %s with the user's token: %v", c.method, c.path, err)
+		}
+	}
+	traced := map[string]interface{}{"enable_guardrails": false, "enable_tracing": true, "vector_stores": []interface{}{}, "models": []map[string]interface{}{{"model_name": "m", "model_source_type": "maas"}}}
+	if err := api.call(http.MethodPost, "/lsd/install", "proj", traced, nil); !errors.Is(err, errGenAINotAllowed) {
+		t.Errorf("an install with tracing: %v", err)
 	}
 }
 
@@ -714,7 +786,9 @@ func TestValidatePlaygroundRequest(t *testing.T) {
 			t.Errorf("accepted %+v", req)
 		}
 	}
-	if p := ValidatePlaygroundRequest(types.PlaygroundRequest{Action: "setup", Project: "p", Models: []types.PlaygroundModelRef{{Name: "publishers/llm/models/x", Source: "maas"}}}); p != playgroundMaaSRefusal {
+	// A MaaS model is accepted: Set up runs with the user's own token, and
+	// the gen-ai client still refuses it with the ServiceAccount's.
+	if p := ValidatePlaygroundRequest(types.PlaygroundRequest{Action: "setup", Project: "p", Models: []types.PlaygroundModelRef{{Name: "publishers/llm/models/x", Source: "maas"}}}); p != "" {
 		t.Errorf("a MaaS model: %q", p)
 	}
 	if p := ValidatePlaygroundRequest(types.PlaygroundRequest{Action: "setup", Project: "p", Models: []types.PlaygroundModelRef{{Name: "qwen", Source: "namespace"}}}); p != "" {

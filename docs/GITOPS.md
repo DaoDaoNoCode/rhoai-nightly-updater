@@ -49,9 +49,10 @@ What `install.sh` does, and what replaces it here:
 | Detects the oauth-proxy tag from the cluster version | `parameters.OAUTH_PROXY_IMAGE`, set per cluster, by digest |
 | Resolves the image tag to a digest and checks the image's commit against the template | `parameters.IMAGE` by digest in Git; the chart refuses a tag without a digest, and a tag that names another release. Nothing checks the digest's commit: do it yourself when you change it ([section 3](#checking-that-the-image-matches-the-chart)) |
 | `oc new-project` | The Application's `CreateNamespace=true` sync option |
-| Creates the cookie Secret `<APP_NAME>-proxy` once | The session Secret hook ([section 4](#4-the-two-hook-jobs)) |
+| Creates the cookie Secret `<APP_NAME>-proxy` once | The session Secret hook ([section 4](#4-the-hook-jobs)) |
+| Creates Secret `<APP_NAME>-oauth-client` once and applies OAuthClient `<APP_NAME>-<NAMESPACE>` (4.0.0) | The OAuth client hooks ([section 4](#4-the-hook-jobs)) |
 | `oc process \| oc apply`, then waits for the rollout | Argo CD syncs the rendered objects and waits for them to be healthy |
-| Adds ConsoleLink `<APP_NAME>-<NAMESPACE>` | The ConsoleLink hook ([section 4](#4-the-two-hook-jobs)) |
+| Adds ConsoleLink `<APP_NAME>-<NAMESPACE>` | The ConsoleLink hook ([section 4](#4-the-hook-jobs)) |
 | Removes objects of installs from before v1.0.0 (`cleanup-legacy`) and prunes old ReplicaSets | Not done: they matter only when upgrading such an install. Upgrade it with `install.sh` first ([section 10](#10-moving-an-install-from-installsh-to-argo-cd)) |
 | `make rollback` | Revert the commit in Git ([section 6](#6-upgrading-and-rolling-back)) |
 | `install.sh uninstall` | Delete the Application, then the few objects it leaves ([section 7](#7-removing-it)) |
@@ -222,7 +223,7 @@ That catches an image and a chart of different template revisions (different
 MAJOR versions). Two releases with the same revision are not reported, even
 if other details of their templates differ.
 
-## 4. The two hook Jobs
+## 4. The hook Jobs
 
 Both are Argo CD hooks, so Argo CD does not track them as part of the
 application. Each has its own ServiceAccount and RBAC, created as hooks one
@@ -261,6 +262,46 @@ that one Route (a Role), and `get`/`patch` on that one ConsoleLink plus
 with the same instance label, so `install.sh uninstall` also removes it if a
 failed run left it). Argo CD does not prune the ConsoleLink, because a Job
 created it ([section 7](#7-removing-it)).
+
+**OAuth client** (4.0.0; `gitops.oauthClient.enabled`, on by default). Users
+sign in through OAuthClient `<APP_NAME>-<NAMESPACE>` (oauth-proxy
+`--client-id`, `--scope=user:full`), whose secret oauth-proxy reads from
+Secret `<APP_NAME>-oauth-client`. Neither can be in Git: the secret is
+random, and the client's redirect URI is the Route's host.
+
+- A `Sync` hook (Job `<APP_NAME>-oauth-secret`, wave -1) creates the Secret
+  with key `client-secret`, 32 random letters and digits without a trailing
+  newline, only when it does not exist, like the session Secret. Role: `get`
+  on that Secret, `create` on Secrets.
+- A `PostSync` hook (Job `<APP_NAME>-oauthclient`) reads Route
+  `<APP_NAME>`'s host and the Secret, and server-side-applies the OAuthClient
+  (`grantMethod: auto`, one redirect URI `https://<host>/oauth/callback`, the
+  secret, label `app.kubernetes.io/instance`), the same object as
+  `install.sh`'s (`scripts/test-chart.sh` compares them). The secret goes to
+  `oc` on stdin and is never printed. RBAC: `get` on that Route and Secret (a
+  Role), and `get`/`patch` on that one OAuthClient plus `create` on
+  OAuthClients (ClusterRole `<APP_NAME>-<NAMESPACE>-oauthclient`). `create`
+  cannot be limited to a name, so while the hook runs its ServiceAccount
+  could register any OAuth client; it exists only for the hook's run
+  ([SECURITY.md](../SECURITY.md#the-oauthclient-400)). The app's own
+  ServiceAccount gets no right on OAuthClients.
+
+Until the PostSync hook ran, signing in fails with `unauthorized_client`.
+Argo CD never prunes the OAuthClient ([section 7](#7-removing-it)). The
+gitops profile makes no change with the user's token (its Update keeps the
+ServiceAccount, which its admission policy binds), but users still sign in
+through this client. With `gitops.oauthClient.enabled: false`, create both
+before the first sync (the secret never in Git):
+
+```bash
+secret=$(head -c 64 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)
+printf '%s' "$secret" >client-secret && oc create secret generic <APP_NAME>-oauth-client -n <NAMESPACE> --from-file=client-secret=client-secret && rm client-secret
+# after the first sync, when the Route has its host:
+host=$(oc get route <APP_NAME> -n <NAMESPACE> -o jsonpath='{.spec.host}')
+printf '%s\n' 'apiVersion: oauth.openshift.io/v1' 'kind: OAuthClient' 'metadata:' '  name: <APP_NAME>-<NAMESPACE>' \
+  '  labels:' '    app.kubernetes.io/instance: <APP_NAME>-<NAMESPACE>' 'grantMethod: auto' 'redirectURIs:' \
+  "  - https://$host/oauth/callback" "secret: $secret" | oc apply --server-side -f -
+```
 
 ## 5. The namespace
 
@@ -343,6 +384,7 @@ What stays even then:
   not deleted with the application. With it stay Secret `<APP_NAME>-proxy`
   and the app's ConfigMaps (activity log, snapshot, operation marker);
 - ConsoleLink `<APP_NAME>-<NAMESPACE>`, created by a Job;
+- OAuthClient `<APP_NAME>-<NAMESPACE>`, created by a Job, and the sign-ins it issued, and Secret `<APP_NAME>-oauth-client`;
 - the hook objects of a failed last run.
 
 Remove those, or after a non-cascading deletion the whole app, once the
@@ -352,6 +394,8 @@ which deletes the cluster-scoped objects and the Roles in other namespaces
 by the instance label, then the namespace, or by hand:
 
 ```bash
+oc delete oauthclient -l app.kubernetes.io/instance=<APP_NAME>-<NAMESPACE>
+oc delete oauthaccesstokens --field-selector clientName=<APP_NAME>-<NAMESPACE>   # deleting the client does not end its sign-ins
 oc delete consolelink,clusterrole,clusterrolebinding -l app.kubernetes.io/instance=<APP_NAME>-<NAMESPACE>
 # profile gitops only (install.sh uninstall does not know these):
 oc delete validatingadmissionpolicy,validatingadmissionpolicybinding -l app.kubernetes.io/instance=<APP_NAME>-<NAMESPACE>

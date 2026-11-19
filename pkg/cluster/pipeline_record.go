@@ -49,7 +49,7 @@ func (r pipelineRecord) owns(meta objectMeta) bool {
 
 // readPipelineRecord reads the record (empty when nothing is recorded).
 func readPipelineRecord(c *Client) (pipelineRecord, error) {
-	body, _, err := c.get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
+	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
 	if IsK8sError(err, http.StatusNotFound) {
 		return pipelineRecord{}, nil
 	}
@@ -84,7 +84,7 @@ func writePipelineRecord(c *Client, rec pipelineRecord) error {
 		"data":       map[string]interface{}{pipelineRecordKey: string(data)},
 	})
 	query := url.Values{"fieldManager": {pipelineRecordManager}, "force": {"true"}}
-	if _, _, err := c.do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if _, _, err := c.bookkeeping().do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
 		return fmt.Errorf("record this tool's pipeline servers: %w", err)
 	}
 	return nil

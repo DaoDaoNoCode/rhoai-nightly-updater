@@ -4,7 +4,8 @@ For anyone who installed the updater before releases existed (before
 2026-10-06), or who wants to move between releases. Versions follow
 `vMAJOR.MINOR.PATCH`; a new MAJOR means the deployment template changed and
 needs a full redeploy ([CHANGELOG.md](../CHANGELOG.md)). From 2.x to 3.0.0:
-[section 5](#5-upgrade-to-v300).
+[section 5](#5-upgrade-to-v300); to 4.0.0 (changes run with your own token, sign in again once):
+[Upgrade to v4.0.0](#upgrade-to-v400-changes-run-with-your-own-token).
 
 Releases: [GitHub](https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases)
 and [GitLab](https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases)
@@ -465,6 +466,55 @@ a cluster):
   (the names are `<APP_NAME>-<NAMESPACE>`, here with the defaults). It is
   safe: only this tool uses that name, and the command deletes nothing
   else.
+
+## Upgrade to v4.0.0: changes run with your own token
+
+4.0.0 is a MAJOR release (template revision 7): run its `install.sh` (or
+`git checkout v4.0.0 && make upgrade`) as for 3.0.0. The installer handles
+an existing 3.x install:
+
+1. It keeps Secret `$APP-proxy` (sessions) and creates Secret
+   `$APP-oauth-client` (the OAuth client secret).
+2. It applies the template: oauth-proxy now signs users in through
+   OAuthClient `$APP-$NS` with `--scope=user:full` instead of through the
+   ServiceAccount, the ServiceAccount loses its OAuth redirect annotation
+   and almost all of its write rules (it only reads, keeps the app's records
+   and runs the MaaS prune job), and the Deployment rolls.
+3. Before the rollout finishes it creates OAuthClient `$APP-$NS` with the
+   Route's host as its redirect URI.
+
+What users notice:
+
+- No "Authorize Access" page any more (`grantMethod: auto`).
+- **Everyone signs in again once to make changes.** The old session cookie
+  still works for reading, but its token was issued to the ServiceAccount
+  client and can only identify the user, so a change is refused with "Your
+  sign-in cannot make changes ... Log out and log in again", and the UI says
+  so before they try. Log out from the user menu and log in again.
+- Changes are made with the user's own permissions and the API server's
+  audit log names the user, not the ServiceAccount. A change is also refused
+  ("Log out and log in again") when the sign-in expires before the change
+  could finish.
+- The Playground can add Models as a Service models again (3.0.1 had turned
+  that off because it ran with the ServiceAccount's token).
+
+Check it: `oc get oauthclient $APP-$NS` and the [RUNBOOK's sign-in
+section](../RUNBOOK.md#sign-in-and-the-oauthclient).
+
+**With Argo CD (the Helm chart).** The usual commit (`targetRevision: v4.0.0`
+and the v4.0.0 image by digest). The chart's new hooks create the Secret
+(Sync) and the OAuthClient (PostSync); their ServiceAccounts, not the
+app's, get the OAuthClient rights, only while they run. With
+`gitops.oauthClient.enabled: false`, create both before the sync
+([GITOPS §4](GITOPS.md#4-the-hook-jobs)). Argo CD never prunes the
+OAuthClient: `install.sh uninstall` removes it.
+
+**Rolling back to 3.x** (`make rollback TAG=v3.0.1`): the 3.x template
+signs users in through the ServiceAccount again and re-grants its RBAC. The
+OAuthClient and its Secret stay unused; `install.sh uninstall` removes them,
+or by hand: `oc delete oauthclient $APP-$NS`, `oc delete oauthaccesstokens
+--field-selector clientName=$APP-$NS`, `oc delete secret $APP-oauth-client
+-n $NS`.
 
 ## 6. Roll back
 

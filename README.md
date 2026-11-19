@@ -284,7 +284,7 @@ Each release attaches `install.sh` (its template embedded; it installs exactly t
 
 The updater changes a shared, stateful system (OLM and the RHOAI operator). These rules are built in. [docs/CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md) lists every object it touches.
 
-**Who can change things.** Anyone who can sign in sees everything read-only. Changes need the **cluster-admin** role, checked with your own token on every request ([SECURITY.md](SECURITY.md)). Which token goes where, and why your own token is never sent to a model or a pipeline server: [SECURITY.md, Which token is used where](SECURITY.md#which-token-is-used-where). Every change asks for confirmation and names what it will touch.
+**Who can change things.** Anyone who can sign in sees everything read-only. Changes need the **cluster-admin** role, checked with your own token on every request, and since 4.0.0 every change is made with your own OpenShift token: the cluster checks it against your permissions and its audit log names you ([SECURITY.md](SECURITY.md)). The updater's own ServiceAccount only reads, keeps its records and runs one background clean-up of gone MaaS publications. Which token goes where, and why your own token is never sent to a model or a pipeline server: [SECURITY.md, Which token is used where](SECURITY.md#which-token-is-used-where). Every change asks for confirmation and names what it will touch.
 
 **One operation at a time.** A running operation shows a banner on every page, with who started it and the current step. Everyone sees it, and action buttons stay disabled until it finishes. A second request gets `409 cluster_busy` and changes nothing. Closing the tab doesn't stop an operation: after a reload, the page reattaches to the running operation. If the connection was lost, the result says "outcome unknown, see the activity log" unless the server reports the final outcome.
 
@@ -383,7 +383,7 @@ flowchart LR
   B["Browser"] --> R["Route (TLS reencrypt)"]
   R --> P["oauth-proxy :8443"]
   P --> A["app 127.0.0.1:8080"]
-  A --> K["Kubernetes API (service account token)"]
+  A --> K["Kubernetes API (changes: your own token; reads: service account token)"]
   M["Probes, Prometheus"] --> A2["app :9090"]
 ```
 

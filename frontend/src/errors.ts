@@ -42,6 +42,9 @@ function describeErrorRaw(e: unknown, genericTitle: string): ErrorDescription {
   switch (err.errorCode) {
     case "session_expired":
       return SESSION_EXPIRED;
+    case "sign_in_again":
+      // pkg/api sessionProblem: the user's sign-in cannot carry a change (an old session, or one about to expire).
+      return { title: "Sign in again to make changes", body: err.message, hint: "Use Log out in the user menu, then log in again.", variant: "warning" };
     case "unauthorized":
       // pkg/api: no token at all; behind oauth-proxy that means signed out.
       return err.status === 401 ? SESSION_EXPIRED : { title: "The cluster rejected the updater's credentials", body: err.message, variant: "danger", hint: "Check the updater's ServiceAccount (oc get sa -n <namespace>) and redeploy it." };

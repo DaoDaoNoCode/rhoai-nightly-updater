@@ -41,12 +41,12 @@ func acquireClusterMutationLock() bool {
 // began is released on its own.
 func releaseClusterMutationLock() {
 	owner := leases.stop()
-	done, client := inflight.finish()
+	done, bookkeeper := inflight.finish()
 	switch {
 	case done != nil:
-		markers.complete(client, done, owner)
-	case owner != nil && client != nil:
-		leases.release(client, *owner)
+		markers.complete(bookkeeper, done, owner)
+	case owner != nil && bookkeeper != nil:
+		leases.release(bookkeeper, *owner)
 	}
 	clusterMutationInProgress.Store(false)
 }
@@ -66,10 +66,10 @@ func lockCluster(w http.ResponseWriter) bool {
 	}
 	op := inflight.start(sw)
 	sw.opID = op.ID
-	if sw.client == nil {
+	if sw.bookkeeper == nil {
 		return true
 	}
-	holder, err := leases.acquire(sw.client, op, sw.cancelOp)
+	holder, err := leases.acquire(sw.bookkeeper, op, sw.cancelOp)
 	if holder == nil && err == nil {
 		return true
 	}
@@ -127,16 +127,16 @@ func beginOperation(w http.ResponseWriter, target string) {
 		return
 	}
 	var marker *types.OperationMarker
-	var client *cluster.Client
+	var bookkeeper *cluster.Client
 	inflight.update(sw.opID, func(op *Operation) {
 		op.Target = truncateText(target, maxOperationTargetBytes)
 		if !op.begun {
 			op.begun = true
-			marker, client = operationMarker(op), op.client
+			marker, bookkeeper = operationMarker(op), op.bookkeeper
 		}
 	})
-	if marker != nil && client != nil {
-		markers.start(client, marker)
+	if marker != nil && bookkeeper != nil {
+		markers.start(bookkeeper, marker)
 	}
 }
 
@@ -167,9 +167,11 @@ type Operation struct {
 	// as of its last heartbeat (UpdatedAt).
 	Remote bool `json:"remote,omitempty"`
 
-	client *cluster.Client
-	sw     *statusWriter // the response, for the outcome of non-streaming operations
-	begun  bool          // set by beginOperation
+	// bookkeeper writes the operation's lease and marker: always the
+	// ServiceAccount's client, which may outlive the request.
+	bookkeeper *cluster.Client
+	sw         *statusWriter // the response, for the outcome of non-streaming operations
+	begun      bool          // set by beginOperation
 	// lockLost: the lease heartbeat stopped the operation because its lease
 	// was lost; its outcome is cluster.LockLostMessage.
 	lockLost bool
@@ -246,7 +248,7 @@ func (t *operationTracker) start(sw *statusWriter) *Operation {
 	now := time.Now().UTC()
 	op := &Operation{
 		ID: newOperationID(), Type: kind[0], Label: kind[1], User: sw.user,
-		StartedAt: now, UpdatedAt: now, Pod: os.Getenv("HOSTNAME"), client: sw.client, sw: sw,
+		StartedAt: now, UpdatedAt: now, Pod: os.Getenv("HOSTNAME"), bookkeeper: sw.bookkeeper, sw: sw,
 	}
 	t.mu.Lock()
 	t.current = op
@@ -256,12 +258,13 @@ func (t *operationTracker) start(sw *statusWriter) *Operation {
 
 // startBackground records an operation the updater runs on its own (no
 // request) as the one holding the lock, so the status shows it and the
-// lease heartbeat renews it. The caller holds the local lock.
+// lease heartbeat renews it. The caller holds the local lock; c is the
+// ServiceAccount's client.
 func (t *operationTracker) startBackground(typ, label, user string, c *cluster.Client) *Operation {
 	now := time.Now().UTC()
 	op := &Operation{
 		ID: newOperationID(), Type: typ, Label: label, User: user,
-		StartedAt: now, UpdatedAt: now, Pod: os.Getenv("HOSTNAME"), client: c,
+		StartedAt: now, UpdatedAt: now, Pod: os.Getenv("HOSTNAME"), bookkeeper: c,
 	}
 	t.mu.Lock()
 	t.current = op
@@ -288,8 +291,9 @@ func (t *operationTracker) recordStep(id string, step UpdateStep) {
 	})
 }
 
-// finish forgets the current operation and returns its client. When it had
-// begun, it becomes the last completed operation, which is returned too.
+// finish forgets the current operation and returns its bookkeeping client.
+// When it had begun, it becomes the last completed operation, which is
+// returned too.
 // It runs on the handler's goroutine after the response is written.
 func (t *operationTracker) finish() (*types.CompletedOperation, *cluster.Client) {
 	t.mu.Lock()
@@ -300,7 +304,7 @@ func (t *operationTracker) finish() (*types.CompletedOperation, *cluster.Client)
 		return nil, nil
 	}
 	if !op.begun {
-		return nil, op.client
+		return nil, op.bookkeeper
 	}
 	success, message := operationOutcome(op)
 	t.last = &types.CompletedOperation{
@@ -311,7 +315,7 @@ func (t *operationTracker) finish() (*types.CompletedOperation, *cluster.Client)
 		Message:    truncateText(message, maxOperationMessageBytes),
 	}
 	done := *t.last
-	return &done, op.client
+	return &done, op.bookkeeper
 }
 
 // lastCompleted returns a copy of the last completed operation, or nil.
@@ -366,7 +370,7 @@ func (t *operationTracker) snapshot() *Operation {
 		return nil
 	}
 	cp := *t.current
-	cp.client, cp.sw = nil, nil
+	cp.bookkeeper, cp.sw = nil, nil
 	return &cp
 }
 

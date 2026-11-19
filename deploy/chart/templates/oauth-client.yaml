@@ -1,0 +1,326 @@
+{{- /*
+The OAuth client users sign in with: Secret <APP_NAME>-oauth-client (key
+client-secret), which oauth-proxy reads, and the cluster-scoped OAuthClient
+<APP_NAME>-<NAMESPACE> with the same secret, which install.sh's
+oauth_client() applies (scripts/test-chart.sh compares the two). Neither
+can be in Git: the secret is random and the OAuthClient's redirect URI is
+the Route's host, which the API server assigns.
+
+- A Sync hook Job creates the Secret before the Template's objects (wave -1,
+  they are wave 0) when it does not exist, and leaves an existing one
+  alone, like the session secret (session-secret.yaml).
+- A PostSync hook Job reads the Route's host and the Secret, then
+  server-side-applies the OAuthClient. Until it exists, sign-in fails with
+  unauthorized_client.
+
+Only these short-lived hook ServiceAccounts get any right on OAuthClients,
+never the app's: create (which cannot be limited to a name, so for as long
+as the hook runs it could register any client; SECURITY.md audits it), and
+get and patch of this one name. The ClusterRole and its binding carry
+install.sh's instance label and are deleted with the hook. Argo CD does not
+track the Secret or the OAuthClient and never prunes them; `install.sh
+uninstall` removes the OAuthClient and revokes the sign-ins it issued
+(docs/GITOPS.md). With gitops.oauthClient.enabled=false, create both before
+the first sync.
+*/ -}}
+{{- if .Values.gitops.oauthClient.enabled }}
+{{- $p := include "rnu.params" . | fromJson }}
+{{- $secretName := printf "%s-oauth-client" $p.APP_NAME }}
+{{- $instance := printf "%s-%s" $p.APP_NAME $p.NAMESPACE }}
+{{- $sync := printf "%s-oauth-secret" $p.APP_NAME }}
+{{- $post := printf "%s-oauthclient" $p.APP_NAME }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $sync | quote }}
+  namespace: {{ $p.NAMESPACE | quote }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "Sync" "wave" "-2") | nindent 4 }}
+---
+# Read the one Secret by name; "create" cannot be limited to a name.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $sync | quote }}
+  namespace: {{ $p.NAMESPACE | quote }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "Sync" "wave" "-2") | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ $secretName | quote }}]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $sync | quote }}
+  namespace: {{ $p.NAMESPACE | quote }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "Sync" "wave" "-2") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $sync | quote }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sync | quote }}
+    namespace: {{ $p.NAMESPACE | quote }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $sync | quote }}
+  namespace: {{ $p.NAMESPACE | quote }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "Sync" "wave" "-1") | nindent 4 }}
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      # Not the app's "app" label: the Service and NetworkPolicy select it.
+      labels:
+        app.kubernetes.io/part-of: {{ $p.APP_NAME | quote }}
+        app.kubernetes.io/component: oauth-secret
+    spec:
+      serviceAccountName: {{ $sync | quote }}
+      restartPolicy: Never
+      securityContext:
+        {{- include "rnu.hookPodSecurity" . | nindent 8 }}
+      containers:
+        - name: oauth-secret
+          image: {{ .Values.gitops.cliImage | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NAMESPACE
+              value: {{ $p.NAMESPACE | quote }}
+            - name: SECRET
+              value: {{ $secretName | quote }}
+            # oc writes its cache under HOME; the root filesystem is read-only.
+            - name: HOME
+              value: /tmp
+          # The value is generated as install.sh does it (32 alphanumerics,
+          # no trailing newline: oauth-proxy reads the file raw), kept in a
+          # memory-backed volume, and never printed.
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              umask 077
+              if out=$(oc get secret "$SECRET" -n "$NAMESPACE" -o name 2>&1); then
+                echo "Secret $SECRET exists; keeping it."
+                exit 0
+              fi
+              case "$out" in
+              *NotFound* | *"not found"*) ;;
+              *)
+                echo "Cannot read Secret $SECRET: $out" >&2
+                exit 1
+                ;;
+              esac
+              secret=$(head -c 64 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)
+              if [ ${#secret} -ne 32 ]; then
+                echo "Could not produce a 32-character OAuth client secret" >&2
+                exit 1
+              fi
+              printf '%s' "$secret" >/secret/client-secret
+              unset secret
+              if out=$(oc create secret generic "$SECRET" -n "$NAMESPACE" --from-file=client-secret=/secret/client-secret -o name 2>&1); then
+                echo "Created Secret $SECRET."
+              elif [[ $out == *AlreadyExists* ]]; then
+                echo "Secret $SECRET was created meanwhile; keeping it."
+              else
+                echo "Cannot create Secret $SECRET: $out" >&2
+                exit 1
+              fi
+          resources:
+            {{- include "rnu.hookResources" . | nindent 12 }}
+          securityContext:
+            {{- include "rnu.hookContainerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: secret
+              mountPath: /secret
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: secret
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $post | quote }}
+  namespace: {{ $p.NAMESPACE | quote }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
+---
+# The Route's host and the client secret, each by its name.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $post | quote }}
+  namespace: {{ $p.NAMESPACE | quote }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
+rules:
+  - apiGroups: ["route.openshift.io"]
+    resources: ["routes"]
+    resourceNames: [{{ $p.APP_NAME | quote }}]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ $secretName | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $post | quote }}
+  namespace: {{ $p.NAMESPACE | quote }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $post | quote }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $post | quote }}
+    namespace: {{ $p.NAMESPACE | quote }}
+---
+# OAuthClients are cluster-scoped. Server-side apply reads and patches the
+# one client by name; "create" cannot be limited to a name. No delete: the
+# hook never removes a client.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ printf "%s-oauthclient" $instance | quote }}
+  labels:
+    app.kubernetes.io/instance: {{ $instance | quote }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
+rules:
+  - apiGroups: ["oauth.openshift.io"]
+    resources: ["oauthclients"]
+    resourceNames: [{{ $instance | quote }}]
+    verbs: ["get", "patch"]
+  - apiGroups: ["oauth.openshift.io"]
+    resources: ["oauthclients"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ printf "%s-oauthclient" $instance | quote }}
+  labels:
+    app.kubernetes.io/instance: {{ $instance | quote }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ printf "%s-oauthclient" $instance | quote }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $post | quote }}
+    namespace: {{ $p.NAMESPACE | quote }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $post | quote }}
+  namespace: {{ $p.NAMESPACE | quote }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-1") | nindent 4 }}
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      # Not the app's "app" label: the Service and NetworkPolicy select it.
+      labels:
+        app.kubernetes.io/part-of: {{ $p.APP_NAME | quote }}
+        app.kubernetes.io/component: oauthclient
+    spec:
+      serviceAccountName: {{ $post | quote }}
+      restartPolicy: Never
+      securityContext:
+        {{- include "rnu.hookPodSecurity" . | nindent 8 }}
+      containers:
+        - name: oauthclient
+          image: {{ .Values.gitops.cliImage | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NAMESPACE
+              value: {{ $p.NAMESPACE | quote }}
+            - name: APP_NAME
+              value: {{ $p.APP_NAME | quote }}
+            - name: INSTANCE
+              value: {{ $instance | quote }}
+            - name: SECRET
+              value: {{ $secretName | quote }}
+            # oc writes its cache under HOME; the root filesystem is read-only.
+            - name: HOME
+              value: /tmp
+          # The API server assigns the host when the Route is created, so a
+          # short wait is enough. The secret goes to oc on stdin, never on
+          # a command line or into the log; server-side apply keeps it out of
+          # a last-applied annotation. --force-conflicts takes over the
+          # fields of a client that install.sh applied.
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              host=""
+              for _ in $(seq 1 30); do
+                host=$(oc get route "$APP_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.host}' || true)
+                [ -z "$host" ] || break
+                sleep 2
+              done
+              if [ -z "$host" ]; then
+                echo "Route $APP_NAME has no host yet" >&2
+                exit 1
+              fi
+              secret=$(oc get secret "$SECRET" -n "$NAMESPACE" -o jsonpath='{.data.client-secret}' | base64 -d)
+              if [ -z "$secret" ]; then
+                echo "Secret $SECRET has no client-secret; delete it and sync again" >&2
+                exit 1
+              fi
+              {
+                printf '%s\n' \
+                  'apiVersion: oauth.openshift.io/v1' \
+                  'kind: OAuthClient' \
+                  'metadata:' \
+                  "  name: $INSTANCE" \
+                  '  labels:' \
+                  "    app.kubernetes.io/instance: $INSTANCE" \
+                  'grantMethod: auto' \
+                  'redirectURIs:' \
+                  "  - https://$host/oauth/callback"
+                printf 'secret: %s\n' "$secret"
+              } | oc apply --server-side --field-manager=rhoai-nightly-updater-gitops --force-conflicts -f - >/dev/null
+              unset secret
+              echo "OAuthClient $INSTANCE signs users in at https://$host"
+          resources:
+            {{- include "rnu.hookResources" . | nindent 12 }}
+          securityContext:
+            {{- include "rnu.hookContainerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+{{- end }}

@@ -103,9 +103,23 @@ case "$1 $2" in
 	# The current ReplicaSet, an old one of this Deployment, one of another owner.
 	printf '%s\n' "rs-old 2 uid-1 0 0" "rs-cur 3 uid-1 1 1" "rs-foreign 1 uid-2 0 0" ;;
 "get namespace" | "get project") [ -n "${FAKE_NS:-}" ] ;;
-"get secret") [ -n "${FAKE_SECRET:-}" ] ;;
+"get secret")
+	# The OAuth client secret's value, as oc prints a Secret's data (base64).
+	if [[ " $* " == *"{.data.client-secret}"* ]]; then
+		printf '%s' "${FAKE_CLIENT_SECRET-c2VjcmV0LWZyb20tdGhlLWNsdXN0ZXI=}"
+		exit 0
+	fi
+	[ -n "${FAKE_SECRET:-}" ] ;;
 "create secret")
-	for a in "$@"; do case "$a" in --from-env-file=*) cat "${a#--from-env-file=}" >"$FAKE_LOG.secret" ;; esac; done ;;
+	for a in "$@"; do case "$a" in
+		--from-env-file=*) cat "${a#--from-env-file=}" >"$FAKE_LOG.secret" ;;
+		--from-file=client-secret=*) cat "${a#--from-file=client-secret=}" >"$FAKE_LOG.client-secret" ;;
+	esac; done ;;
+"apply --server-side")
+	cat >>"$FAKE_LOG.oauthclient"
+	[ -z "${FAKE_SSA_FAIL:-}" ] || { echo "error: oauthclients is forbidden" >&2; exit 1; } ;;
+"delete oauthaccesstokens")
+	[ -z "${FAKE_REVOKE_FAIL:-}" ] || { echo "error: the server doesn't have a resource type" >&2; exit 1; } ;;
 "apply -f")
 	[ "$3" != - ] || cat >"$FAKE_LOG.stdin" ;;
 "process -f")
@@ -173,10 +187,10 @@ DIGEST="sha256:$(printf 'a%.0s' $(seq 64))"
 # run ARGS...: the given command with the fakes, a fresh log, and the
 # defaults of a cluster without the app.
 run() {
-	rm -f "$LOG" "$LOG.params"
+	rm -f "$LOG" "$LOG.params" "$LOG.oauthclient" "$LOG.client-secret"
 	env PATH="$BIN:$PATH" FAKE_LOG="$LOG" FAKE_DIGEST="${FAKE_DIGEST-$DIGEST}" FAKE_REVISION="${FAKE_REVISION-$COMMIT}" FAKE_OCP_VERSION="${FAKE_OCP_VERSION-4.19.3}" "$@"
 }
-mutations() { grep -E '^oc (create|new-project|delete|rollout|apply -f)' "$LOG" || true; }
+mutations() { grep -E '^oc (create|new-project|delete|rollout|apply -f|apply --server-side)' "$LOG" | grep -v -- '--dry-run=server' || true; }
 
 # Fresh install, dry run: the namespace does not exist, so the server
 # rejects only the objects in it.
@@ -262,13 +276,16 @@ FAKE_REALM=http://quay.io/v2/auth expect_fail "plain-http token realm: warning" 
 	run sh -c "bash '$ASSET' resolve-image 2>&1; exit 1"
 
 # --- The mutating paths (no dry run), against the fake oc ----------------------
-calls() { grep -E "^oc ($1)" "$LOG" | sed 's/ --from-env-file=.*//' || true; }
+calls() { grep -E "^oc ($1)" "$LOG" | sed 's/ --from-env-file=.*//; s/ --from-file=.*//' || true; }
 
 expect_ok "fresh install" run bash "$ASSET" --namespace scratch-ns
+SSA='oc apply --server-side --field-manager=rhoai-nightly-updater-install --force-conflicts -f -'
 expect_eq "fresh install: the steps in order" "$(printf '%s\n' \
 	'oc new-project scratch-ns' \
 	'oc create secret generic rhoai-nightly-updater-proxy -n scratch-ns' \
+	'oc create secret generic rhoai-nightly-updater-oauth-client -n scratch-ns' \
 	'oc apply -f' \
+	"$SSA" \
 	'oc rollout status deployment/rhoai-nightly-updater -n scratch-ns --timeout=20m' \
 	'oc apply -f -' \
 	'oc delete rs -n scratch-ns rs-old')" \
@@ -277,6 +294,47 @@ grep -Eqx 'session_secret=[a-zA-Z0-9]{32}' "$LOG.secret" && pass || fail "fresh 
 grep -q 'href: https://app.example.com' "$LOG.stdin" && pass || fail "fresh install: ConsoleLink without the Route host"
 grep -q 'name: rhoai-nightly-updater-scratch-ns' "$LOG.stdin" && pass || fail "fresh install: ConsoleLink name"
 grep -qx "IMAGE=quay.io/example/app@$DIGEST" "$LOG.params" && pass || fail "fresh install: not by digest"
+# The OAuth client secret: 32 alphanumerics with no trailing newline
+# (oauth-proxy reads the file raw), never on a command line.
+[[ $(cat "$LOG.client-secret") =~ ^[a-zA-Z0-9]{32}$ ]] && [ "$(wc -c <"$LOG.client-secret" | tr -d ' ')" = 32 ] && pass ||
+	fail "fresh install: the OAuth client secret is not 32 alphanumerics without a newline"
+# The OAuthClient: the instance's name and label, auto grant, the Route's
+# callback, the Secret's value (from the cluster, decoded), on stdin only.
+expect_eq "fresh install: the OAuthClient" "$(printf '%s\n' \
+	'apiVersion: oauth.openshift.io/v1' \
+	'kind: OAuthClient' \
+	'metadata:' \
+	'  name: rhoai-nightly-updater-scratch-ns' \
+	'  labels:' \
+	'    app.kubernetes.io/instance: rhoai-nightly-updater-scratch-ns' \
+	'grantMethod: auto' \
+	'redirectURIs:' \
+	'  - https://app.example.com/oauth/callback' \
+	'secret: secret-from-the-cluster')" "$(cat "$LOG.oauthclient")"
+grep -q "secret-from-the-cluster\|c2VjcmV0LWZyb20tdGhlLWNsdXN0ZXI=" "$LOG" && fail "the OAuth client secret is on an oc command line" || pass
+grep -q "scopeRestrictions\|accessTokenMaxAgeSeconds" "$LOG.oauthclient" && fail "the OAuthClient restricts the scope oauth-proxy requests" || pass
+
+# An upgrade from a release whose ServiceAccount was the OAuth client: the
+# installed Secrets are kept, the OAuthClient is created, the new template
+# rolls the Deployment.
+FAKE_INSTALLED=1 FAKE_NS=1 FAKE_SECRET=1 expect_ok "upgrade from 3.x" run bash "$ASSET" --namespace scratch-ns
+expect_eq "upgrade from 3.x: no Secret created, the OAuthClient before the rollout" "$(printf '%s\n' \
+	'oc apply -f' \
+	"$SSA" \
+	'oc rollout status deployment/rhoai-nightly-updater -n scratch-ns --timeout=20m' \
+	'oc apply -f -')" \
+	"$(calls 'create|apply|rollout' | sed 's|^oc apply -f /.*|oc apply -f|')"
+grep -q 'secret: secret-from-the-cluster' "$LOG.oauthclient" && pass || fail "upgrade: the OAuthClient does not carry the kept secret"
+# A Secret without the key fails the install before anything signs in with it.
+FAKE_INSTALLED=1 FAKE_NS=1 FAKE_SECRET=1 FAKE_CLIENT_SECRET="" \
+	expect_fail "upgrade: an empty client secret stops" "has no client-secret" run bash "$ASSET" --namespace scratch-ns
+FAKE_INSTALLED=1 FAKE_NS=1 FAKE_SECRET=1 FAKE_SSA_FAIL=1 \
+	expect_fail "upgrade: the OAuthClient cannot be applied" "forbidden" run bash "$ASSET" --namespace scratch-ns
+expect_eq "upgrade: no rollout without the OAuthClient" "" "$(calls rollout)"
+# A dry run validates the OAuthClient with a placeholder secret only.
+FAKE_INSTALLED=1 FAKE_NS=1 expect_ok "upgrade dry run validates the OAuthClient" run bash "$ASSET" --dry-run --namespace scratch-ns
+grep -q -- '--force-conflicts --dry-run=server -f -' "$LOG" && pass || fail "dry run: the OAuthClient is not validated with the server"
+grep -q 'secret: dry-run-placeholder' "$LOG.oauthclient" && pass || fail "dry run: the OAuthClient carries a real secret"
 
 LEGACY_COOKIE=abcdefghijklmnopqrstuvwxyz012345
 FAKE_INSTALLED=1 FAKE_NS=1 FAKE_COOKIE=$LEGACY_COOKIE FAKE_LEGACY=scratch-ns/rhoai-nightly-updater \
@@ -335,12 +393,19 @@ for ns in $rbac_ns; do
 done
 expect_eq "uninstall: no Role deletes in the app's namespace (deleted with it)" "" "$(grep '^oc delete rolebinding,role -n scratch-ns ' "$LOG" || true)"
 expect_eq "uninstall: the deletes in order" "$(
+	echo "oc delete oauthclient -l app.kubernetes.io/instance=$INST --ignore-not-found"
+	echo "oc delete oauthaccesstokens --field-selector clientName=$INST"
 	echo "oc delete consolelink,clusterrolebinding,clusterrole -l app.kubernetes.io/instance=$INST --ignore-not-found"
 	for ns in $rbac_ns; do
 		echo "oc delete rolebinding,role -n $ns -l app.kubernetes.io/instance=$INST --ignore-not-found"
 	done
 	echo "oc delete project scratch-ns --ignore-not-found"
 )" "$(calls delete)"
+# Tokens that cannot be revoked: the rest is still removed, and the command
+# fails with the revocation to run by hand.
+FAKE_REVOKE_FAIL=1 expect_fail "uninstall: the sign-ins cannot be revoked" "oc delete oauthaccesstokens --field-selector clientName=$INST" \
+	run bash "$ASSET" uninstall --namespace scratch-ns
+grep -q '^oc delete project scratch-ns' "$LOG" && pass || fail "uninstall: a failed revocation stopped the removal"
 # A namespace the template gains later is covered without touching install.sh.
 # shellcheck disable=SC2016 # the template's own ${PARAM} placeholders
 printf '%s\n' '  - apiVersion: rbac.authorization.k8s.io/v1' '    kind: Role' '    metadata:' \

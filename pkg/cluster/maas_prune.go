@@ -1,10 +1,12 @@
 package cluster
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -165,8 +167,8 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 			kind string
 			obj  map[string]interface{}
 		}{{"MaaSAuthPolicy", auth}, {"MaaSSubscription", sub}} {
-			path := maasAccessPath(c, w.kind)
-			meta, found, err := readObjectMeta(c, path)
+			accessPath := maasAccessPath(c, w.kind)
+			meta, found, err := readObjectMeta(c, accessPath)
 			if err != nil {
 				failed = append(failed, fmt.Errorf("read %s: %w", w.kind, err))
 				continue
@@ -175,7 +177,7 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 				continue
 			}
 			if len(live) == 0 {
-				if _, err := deleteWithUID(c, path, meta.UID); err != nil && !IsK8sError(err, http.StatusNotFound) {
+				if _, err := deleteWithUID(c, accessPath, meta.UID); err != nil && !IsK8sError(err, http.StatusNotFound) {
 					failed = append(failed, fmt.Errorf("delete %s: %w", w.kind, err))
 					continue
 				}
@@ -183,7 +185,8 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 				logs = append(logs, fmt.Sprintf("OK: %s deleted (no publication is left)", w.kind))
 				continue
 			}
-			if err := applyMaaSObject(c, w.kind, path, maasAccessCreatePath(c, w.kind), w.obj, false); err != nil {
+			read := func() (objectMeta, bool, error) { return readObjectMeta(c, accessPath) }
+			if err := updateToolObject(c, w.kind, accessPath, w.obj, meta, read, toolOwned); err != nil {
 				failed = append(failed, fmt.Errorf("update %s: %w", w.kind, err))
 				continue
 			}
@@ -201,9 +204,8 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 	case code == "foreign":
 		logs = append(logs, "The MaaS gateway someone else made is not changed; its owner removes the projects that are gone from its allowedRoutes.")
 	case gwPlan.found["Gateway"]:
-		gwPlan.classMissing = false // only the gateway changes
-		if msg, _ := m.applyGateway(gwPlan, false); msg != "" {
-			failed = append(failed, errors.New(strings.TrimSuffix(msg, ".")))
+		if err := narrowMaaSGateway(c, gwPlan); err != nil {
+			failed = append(failed, err)
 		} else {
 			changed = true
 			logs = append(logs, "OK: the MaaS gateway admits routes only from the projects still published")
@@ -218,6 +220,90 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 		return changed, logs, err
 	}
 	return true, logs, nil
+}
+
+// narrowMaaSGateway applies the gateway plan to the tool's existing MaaS
+// gateway and its options ConfigMap (when there is one), so the gateway
+// admits routes only from the projects still published. It never creates
+// either: pruning only takes away.
+func narrowMaaSGateway(c *Client, plan *maasGatewayPlan) error {
+	for _, kind := range []string{"ConfigMap", "Gateway"} {
+		if !plan.found[kind] {
+			continue
+		}
+		path := maasGatewayObjectPath(kind)
+		owned := gatewayOwned
+		if kind == "ConfigMap" {
+			owned = toolOwned
+		}
+		read := func() (objectMeta, bool, error) { return readObjectMeta(c, path) }
+		if err := updateToolObject(c, maasDesc(kind, ""), path, plan.objects[kind], plan.current[kind], read, owned); err != nil {
+			return fmt.Errorf("update %s: %w", maasDesc(kind, ""), err)
+		}
+	}
+	return nil
+}
+
+// maasGatewayObjectPath is the path of the MaaS gateway or its options
+// ConfigMap (maasObjectPath, for these two kinds only).
+func maasGatewayObjectPath(kind string) string {
+	if kind == "Gateway" {
+		return namespacedPath("gateway.networking.k8s.io/v1", "gateways", inferenceGatewayNamespace, maasGatewayName)
+	}
+	return namespacedPath("v1", "configmaps", inferenceGatewayNamespace, maasGatewayOptions)
+}
+
+// updateToolObject is the update half of ensureToolObject, for an object
+// that must exist: the same ownership check, field-ownership upgrade and
+// resourceVersion guard, and a server-side apply sent as a plain PATCH. It
+// never creates the object: on one that is gone the API server would check
+// create too, which the ServiceAccount does not have. The MaaS prune job
+// runs with the ServiceAccount, so the ServiceAccount needs only patch on
+// the tool's named MaaS objects (deploy/template.yaml).
+func updateToolObject(c *Client, desc, path string, obj map[string]interface{}, current objectMeta, read toolObjectReader, owned func(objectMeta) bool) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		if !owned(current) {
+			return &foreignObjectError{Desc: desc}
+		}
+		if current.terminating() {
+			return fmt.Errorf("%s is being deleted", desc)
+		}
+		upgraded, err := upgradeToolFieldOwnership(c, path, current)
+		if err == nil {
+			current = upgraded
+			guarded := make(map[string]interface{}, len(obj))
+			for k, v := range obj {
+				guarded[k] = v
+			}
+			meta := map[string]interface{}{}
+			if m, ok := obj["metadata"].(map[string]interface{}); ok {
+				for k, v := range m {
+					meta[k] = v
+				}
+			}
+			meta["resourceVersion"] = current.ResourceVersion
+			guarded["metadata"] = meta
+			data, mErr := json.Marshal(guarded)
+			if mErr != nil {
+				return mErr
+			}
+			_, _, err = c.do(http.MethodPatch, path, "application/apply-patch+yaml", data, url.Values{"fieldManager": {toolFieldManager}, "force": {"true"}})
+			if err == nil {
+				return nil
+			}
+		}
+		if !IsK8sError(err, http.StatusConflict) {
+			return err
+		}
+		var found bool
+		if current, found, err = read(); err != nil {
+			return err
+		}
+		if !found {
+			return fmt.Errorf("%s is gone", desc)
+		}
+	}
+	return fmt.Errorf("%s: %w", desc, errObjectChanged)
 }
 
 // releaseGoneMaaSProjects runs pruneGoneMaaSPublications for an operation

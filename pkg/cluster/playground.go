@@ -35,29 +35,36 @@ import (
 // (pkg/api genAIToken) and passes in as a plain string:
 //
 //	GET    /gen-ai/api/v1/aaa/models?namespace=<ns>   the project's models (no "sources": namespace and custom endpoints only)
+//	GET    /gen-ai/api/v1/maas/models?namespace=<ns>  Models as a Service (the user's token only)
 //	GET    /gen-ai/api/v1/lsd/status?namespace=<ns>   {"data":{"name","phase",...}} or {"data":null}
-//	POST   /gen-ai/api/v1/lsd/install?namespace=<ns>  {"models":[...],...}, the project's own models only
+//	POST   /gen-ai/api/v1/lsd/install?namespace=<ns>  {"models":[...],...}
 //	DELETE /gen-ai/api/v1/lsd/delete?namespace=<ns>   {"name":"<server>"}
 //
-// The dashboard's API acts with the caller's token, here the app's
-// ServiceAccount's: deploy/template.yaml grants what it needs for that
-// (SECURITY.md audits it). The tool records the projects it requested a
-// playground in, in its own namespace; a playground it did not request is
-// shown but never deleted.
+// The dashboard's API acts with the caller's token. Set up, delete and
+// Clean up are changes: they call it with the signed-in user's own token
+// (the client's, NewUserClient), so the dashboard acts as that user, as
+// when they use the playground themselves, and may add a Models as a
+// Service model (genAIUserCallAllowed). The status, which any signed-in
+// user sees, calls it with the app's ServiceAccount token, for which
+// deploy/template.yaml grants the reads (SECURITY.md audits them). The tool
+// records the projects it requested a playground in, in its own namespace;
+// a playground it did not request is shown but never deleted.
 //
-// No call may reach Models as a Service: the gen-ai API forwards the
-// caller's token to the MaaS API through the MaaS gateway (odh-dashboard
-// rhoai-3.6 packages/gen-ai/bff maas_models_handler.go, aaa_models_handler.go
-// fetchMaaSModels for sources=maas, token_k8s_client.go
-// generateLlamaStackConfig for an install with a MaaS model; packages/maas/bff
-// maas_client.go addIdentityHeaderToRequest), and that gateway admits routes
-// from every published project, whose editors could attach one for the
-// MaaS API's path and receive the ServiceAccount's token. So the tool never
-// calls maas/models or aaa/models with sources, never installs a MaaS
-// model (genAICallAllowed refuses anything else in call), and reads the MaaS
-// models it shows from their MaaSModelRefs with the Kubernetes API
-// (listMaaSPlaygroundModels). The user adds a MaaS model to the playground
-// in the dashboard, with their own login.
+// No call with the ServiceAccount's token may reach Models as a Service:
+// the gen-ai API forwards the caller's token to the MaaS API through the
+// MaaS gateway (odh-dashboard rhoai-3.6 packages/gen-ai/bff
+// maas_models_handler.go, aaa_models_handler.go fetchMaaSModels for
+// sources=maas, token_k8s_client.go generateLlamaStackConfig for an
+// install with a MaaS model; packages/maas/bff maas_client.go
+// addIdentityHeaderToRequest), and that gateway admits routes from every
+// published project, whose editors could attach one for the MaaS API's
+// path and receive the token. So with the ServiceAccount's token the tool
+// never calls maas/models or aaa/models with sources and never installs a
+// MaaS model (genAICallAllowed), and the status reads the MaaS models it
+// shows from their MaaSModelRefs with the Kubernetes API
+// (listMaaSPlaygroundModels). The user's own token goes there only when the
+// user sets up a playground with a MaaS model, the same exposure as doing
+// it in the dashboard.
 
 const genAIAPIPrefix = "/gen-ai/api/v1"
 
@@ -100,6 +107,9 @@ type genAIAPI struct {
 	ctx   context.Context
 	base  string
 	token string
+	// asUser: token is the signed-in user's own (a change's client), not
+	// the ServiceAccount's; it allows genAIUserCallAllowed.
+	asUser bool
 }
 
 func (a genAIAPI) with(ctx context.Context) genAIAPI {
@@ -193,6 +203,12 @@ func genAICallAllowed(method, path string, in interface{}) bool {
 // of those names further endpoints or providers the dashboard would wire
 // with the caller's token), and no key the tool does not know.
 func genAIInstallAllowed(in interface{}) bool {
+	return genAIInstallAllowedWith(in, "namespace")
+}
+
+// genAIInstallAllowedWith is genAIInstallAllowed for models of the given
+// sources.
+func genAIInstallAllowedWith(in interface{}, sources ...string) bool {
 	body, ok := in.(map[string]interface{})
 	if !ok {
 		return false
@@ -215,7 +231,8 @@ func genAIInstallAllowed(in interface{}) bool {
 		return false
 	}
 	for _, m := range models {
-		if m["model_source_type"] != "namespace" {
+		src, _ := m["model_source_type"].(string)
+		if !containsString(sources, src) {
 			return false
 		}
 		for k := range m {
@@ -229,9 +246,29 @@ func genAIInstallAllowed(in interface{}) bool {
 	return true
 }
 
+// genAIUserCallAllowed is the gen-ai calls a change makes with the
+// signed-in user's own token: those of genAICallAllowed, the MaaS models
+// the user may use (maas/models), and an install that may add them
+// (model_source_type "maas"), with the same narrow body otherwise. The
+// dashboard then sends the user's token to the MaaS gateway, as when the
+// user adds the model there.
+func genAIUserCallAllowed(method, path string, in interface{}) bool {
+	switch method + " " + path {
+	case "GET /maas/models":
+		return true
+	case "POST /lsd/install":
+		return genAIInstallAllowedWith(in, "namespace", "maas")
+	}
+	return genAICallAllowed(method, path, in)
+}
+
 // call makes one request to path (below /gen-ai/api/v1) in namespace ns.
 func (a genAIAPI) call(method, path, ns string, in, out interface{}) error {
-	if !genAICallAllowed(method, path, in) {
+	allowed := genAICallAllowed
+	if a.asUser {
+		allowed = genAIUserCallAllowed
+	}
+	if !allowed(method, path, in) {
 		return errGenAINotAllowed
 	}
 	u := a.base + genAIAPIPrefix + path + "?" + url.Values{"namespace": {ns}}.Encode()
@@ -341,9 +378,24 @@ func markToolEmbeddingModels(c *Client, project string, models []types.Playgroun
 	}
 }
 
+// maasModel is one entry of maas/models (unknown fields ignored).
+type maasModel struct {
+	ID            string `json:"id"`
+	Subscriptions []struct {
+		Name string `json:"name"`
+	} `json:"subscriptions"`
+	DisplayName  string   `json:"display_name"`
+	Ready        bool     `json:"ready"`
+	Capabilities []string `json:"capabilities"`
+	ModelType    string   `json:"model_type"`
+	Usecase      string   `json:"usecase"`
+}
+
 // listProjectModels lists the project's own models through the gen-ai API
-// (an error means the API cannot be used). It never asks for MaaS models
-// (genAICallAllowed).
+// (an error means the API cannot be used) and, with the user's own token
+// only, the Models as a Service that user may use (any error is none: MaaS
+// is optional and may be off). With the ServiceAccount's token it never
+// asks for MaaS models (genAICallAllowed).
 func (a genAIAPI) listProjectModels(ns string) ([]types.PlaygroundModel, error) {
 	var own struct {
 		Data []namespaceModel `json:"data"`
@@ -361,6 +413,33 @@ func (a genAIAPI) listProjectModels(ns string) ([]types.PlaygroundModel, error) 
 			Name: name, DisplayName: m.DisplayName, Source: "namespace", Status: firstNonEmpty(m.Status, "unknown"),
 			Ready: m.Status == "Running", Chat: chatModel(m.Capabilities, m.Usecase, m.ModelType),
 		})
+	}
+	if a.asUser {
+		var maas struct {
+			Data []maasModel `json:"data"`
+		}
+		if err := a.call(http.MethodGet, "/maas/models", ns, nil, &maas); err != nil {
+			slog.Debug("no Models as a Service for the playground", "project", ns, "error", err)
+		}
+		for _, m := range maas.Data {
+			if m.ID == "" {
+				continue
+			}
+			st := "Not ready"
+			if m.Ready {
+				st = "Ready"
+			}
+			var subs []string
+			for _, s := range m.Subscriptions {
+				if s.Name != "" {
+					subs = append(subs, s.Name)
+				}
+			}
+			out = append(out, types.PlaygroundModel{
+				Name: m.ID, DisplayName: m.DisplayName, Source: "maas", Status: st, Ready: m.Ready,
+				Chat: chatModel(m.Capabilities, m.Usecase, m.ModelType), Subscriptions: subs,
+			})
+		}
 	}
 	if len(out) > playgroundMaxModels {
 		out = out[:playgroundMaxModels]
@@ -558,7 +637,7 @@ func playgroundOwnership(c *Client, project string, rec playgroundRecord, has bo
 // readPlaygroundRecords returns the recorded projects (none when nothing is
 // recorded).
 func readPlaygroundRecords(c *Client) (map[string]playgroundRecord, error) {
-	body, _, err := c.get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
+	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
 	if IsK8sError(err, 404) {
 		return map[string]playgroundRecord{}, nil
 	}
@@ -595,7 +674,7 @@ func writePlaygroundRecords(c *Client, records map[string]playgroundRecord) erro
 		"data":       map[string]interface{}{playgroundRecordKey: string(data)},
 	})
 	query := url.Values{"fieldManager": {playgroundRecordManager}, "force": {"true"}}
-	if _, _, err := c.do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if _, _, err := c.bookkeeping().do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
 		return fmt.Errorf("record this tool's playgrounds: %w", err)
 	}
 	return nil
@@ -741,7 +820,8 @@ func playgroundAPI(c *Client, token string) (genAIAPI, string, string) {
 	if base == "" {
 		return genAIAPI{}, "The RHOAI dashboard's address is unknown (no Dashboard component reports one), so its gen-ai API cannot be called.", "no_dashboard"
 	}
-	return genAIAPI{ctx: c.ctx, base: base, token: token}, "", ""
+	// The user's own token only when it is the client's (a change's client).
+	return genAIAPI{ctx: c.ctx, base: base, token: token, asUser: c.asUser && token == c.token}, "", ""
 }
 
 // playgroundItem is a playground (srv, nil for none) in a project as the
@@ -972,12 +1052,6 @@ func sortPlaygrounds(items []types.PlaygroundState) {
 
 var playgroundProjectRegex = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
-// playgroundMaaSRefusal: Set up adds only the project's own models. The
-// dashboard's install of a MaaS model sends the caller's token to the MaaS
-// gateway (see the comment at the top), and the caller here would be the
-// updater's ServiceAccount.
-const playgroundMaaSRefusal = "this tool sets up the playground with the project's own models only. Add a Models as a Service model in the dashboard's playground, signed in as yourself: the dashboard would send the caller's token to the MaaS gateway, and here that would be the updater's ServiceAccount token"
-
 // ValidatePlaygroundRequest returns why req cannot run, or "".
 func ValidatePlaygroundRequest(req types.PlaygroundRequest) string {
 	switch req.Action {
@@ -996,11 +1070,8 @@ func ValidatePlaygroundRequest(req types.PlaygroundRequest) string {
 	}
 	seen := map[string]bool{}
 	for _, m := range req.Models {
-		if m.Source == "maas" {
-			return playgroundMaaSRefusal
-		}
-		if m.Source != "namespace" {
-			return "a model's source must be namespace (the project's own models)"
+		if m.Source != "namespace" && m.Source != "maas" {
+			return "a model's source must be namespace or maas"
 		}
 		if m.Name == "" || len(m.Name) > 253 || strings.ContainsAny(m.Name, " \t\n\"'\\") {
 			return "invalid model name"
@@ -1187,7 +1258,7 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 		}
 	}
 	if chat == 0 {
-		return stop(fmt.Sprintf("Project %s has no ready chat model for the playground to use. Set up a model on the Models tab first. Models as a Service models are added in the dashboard's playground, signed in as yourself.", p.project), "no_model", "no model")
+		return stop(fmt.Sprintf("Project %s has no ready chat model for the playground to use. Set up a model on the Models tab first (or choose a Models as a Service model, if you have a subscription).", p.project), "no_model", "no model")
 	}
 	names := make([]string, len(chosen))
 	for i, m := range chosen {
