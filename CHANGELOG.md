@@ -234,6 +234,12 @@ only accepts a tag whose version is the top dated section. See
   images whose reference starts with `registry.redhat.io/rhoai/`,
   `quay.io/rhoai/` or `quay.io/opendatahub/` (it matched those anywhere in
   the reference, and labels are always read from quay.io).
+- The update notice's install command checks the download before anything
+  runs: `curl ... && echo '<sha256>  install.sh' | sha256sum -c - && less
+  install.sh && bash install.sh`. The backend reads the SHA-256 from the
+  new release's own notes (the `install.sh SHA-256` line), through the
+  GitHub or GitLab releases API, anonymously and cached like the release
+  list. Without it, the notice asks you to compare with the release notes.
 
 ## [3.0.0] - 2026-11-18
 

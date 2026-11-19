@@ -1,6 +1,6 @@
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, getDefaultNormalizer, screen, waitFor } from "@testing-library/react";
 import { GlobalBanners } from "./GlobalBanners";
 import { HelpButton } from "./HelpModal";
 import { renderWithApp } from "../test/providers";
@@ -83,8 +83,33 @@ describe("update available notice", () => {
     expect(await screen.findByText(/v3.0.0 is a new major version and requires a full redeploy/)).toBeInTheDocument();
     expect(screen.getByText(/An admin redeploys with the v3.0.0 installer/)).toBeInTheDocument();
     expect(screen.getByText(`curl -fsSLO '${installerURL}' && less install.sh && bash install.sh`)).toBeInTheDocument();
+    // Without a checksum from the backend, the notice points at the release notes' one.
+    expect(screen.getByText(/Before running it, check install.sh against the SHA-256 in the v3.0.0 release notes/)).toBeInTheDocument();
     // A GitLab release asset may need a sign-in.
     expect(screen.getByText(/asks you to sign in/)).toBeInTheDocument();
+  });
+
+  it("checks the download against the release notes' SHA-256 before anything runs", async () => {
+    const installerURL = "https://github.com/example/app/releases/download/v2.0.1/install.sh";
+    const sum = "dbd0a201b85b0de368a8965a2acc9657a54101340cfd2f6d0d6b6b0b32e86a7a";
+    renderWithApp(<GlobalBanners />, {
+      version: release("v2.0.0"),
+      update: async () => ({ current: "v2.0.0", latest: "v2.0.1", updateAvailable: true, majorUpgrade: false, installerURL, installerSHA256: sum }),
+    });
+    // sha256sum -c reads "<sum><two spaces><file>": compare without collapsing whitespace.
+    expect(await screen.findByText(`curl -fsSLO '${installerURL}' && echo '${sum}  install.sh' | sha256sum -c - && less install.sh && bash install.sh`,
+      { normalizer: getDefaultNormalizer({ collapseWhitespace: false }) })).toBeInTheDocument();
+    expect(screen.getByText(/The command checks install.sh against the SHA-256 in the v2.0.1 release notes/)).toBeInTheDocument();
+  });
+
+  it("never puts a checksum that is not 64 hex characters into the command", async () => {
+    const installerURL = "https://github.com/example/app/releases/download/v2.0.1/install.sh";
+    renderWithApp(<GlobalBanners />, {
+      version: release("v2.0.0"),
+      update: async () => ({ current: "v2.0.0", latest: "v2.0.1", updateAvailable: true, majorUpgrade: false, installerURL, installerSHA256: "$(id)" }),
+    });
+    expect(await screen.findByText(`curl -fsSLO '${installerURL}' && less install.sh && bash install.sh`)).toBeInTheDocument();
+    expect(screen.queryByText(/\$\(id\)/)).not.toBeInTheDocument();
   });
 
   it("names the upgrade command for a minor release, without a redeploy warning", async () => {

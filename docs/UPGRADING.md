@@ -113,7 +113,14 @@ says it **requires a full redeploy**:
 A MINOR or PATCH release needs only that release's `install.sh` (or
 `make upgrade` from its checkout):
 
-<img src="images/banner-patch-update.png" alt="Notice: v2.0.1 is available. An admin upgrades with the v2.0.1 installer, a curl, less and bash command to copy; pass the options the install was made with; from a clone, git checkout v2.0.1 and make upgrade" width="760">
+<img src="images/banner-patch-update.png" alt="Notice: v2.0.1 is available. An admin upgrades with the v2.0.1 installer, a curl, sha256sum, less and bash command to copy; pass the options the install was made with; from a clone, git checkout v2.0.1 and make upgrade" width="760">
+
+The command checks the download against the SHA-256 in that release's notes
+(`echo '<sha256>  install.sh' | sha256sum -c -`) before anything runs; the
+app reads the checksum from the release's GitHub or GitLab API. When it
+cannot (no access to the API, a releases page of another kind), the command
+has no check and the notice asks you to compare with the release notes
+first.
 
 If the Deployment was created from an older template than the running image
 expects (typically an install on `:latest` that pulled a newer image), every
