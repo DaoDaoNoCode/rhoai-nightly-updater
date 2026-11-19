@@ -372,11 +372,17 @@ const scenarios = {
   // Two published models with different limits, for two groups (one without an OpenShift Group).
   "env-maas-limits": (w) => {
     scenarios["env-models-several"](w);
-    w.maas = F.maasWorld("ready", { access: { everyone: false, groups: ["ml-team", "data-science"], warnings: ["Group data-science does not exist on this cluster, so nobody is in it, unless your identity provider sends it in the sign-in token. A cluster-admin creates it: oc adm groups new data-science, then oc adm groups add-users data-science <user>."] },
+    w.maas = F.maasWorld("ready", { access: { everyone: false, groups: ["ml-team", "data-science"], groupProblems: F.maasGroupProblems(["ml-team", "data-science"]) },
       items: F.maasSeveral({ ...F.maasModel(true), limit: F.maasLimit("premium") }, { ...F.maasModel(true, { name: "qwen3-1-7b" }), limit: F.maasLimit("unlimited") }) });
     F.setMaaSPublished(w.resources, "dev-project", "qwen25-05b-instruct", true);
     F.setMaaSPublished(w.resources, "dev-project", "qwen3-1-7b", true);
   },
+  // Ready on the MaaS docs' development database: Change database from it (to CloudNativePG or yours).
+  "env-maas-dev-db": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { dbCurrent: "development", items: [F.maasModel(false)] }); },
+  // Ready on the user's PostgreSQL: Change database to a new URL of theirs.
+  "env-maas-your-db": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { dbCurrent: "external", items: [F.maasModel(false)] }); },
+  // The cluster's MaaSSubscription API has no unlimited: Publish shows it disabled.
+  "env-maas-no-unlimited": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { noUnlimited: true, items: [F.maasModel(false)] }); },
   // The same, on the Models tab: Use it of Qwen2.5 points at the MaaS tab's commands; Qwen3's keeps its curl.
   "env-models-published": (w) => { scenarios["env-maas-published"](w); },
   // A publication by an earlier build (the model also on the inference gateway): partly published.
@@ -821,9 +827,10 @@ async function maasStream(req, res) {
     world.maas = F.maasWorld("none", { items: (world.maas.items ?? []).map((i) => (i.published ? F.maasModel(false, { name: i.name }) : i)) });
   }
   const withLimit = (items) => items.map((i) => (i.namespace === project && i.name === model && i.published ? { ...i, limit: { ...limit, ...(limit?.preset && limit.preset !== "custom" ? F.maasLimit(limit.preset) : {}) } } : i));
-  if (action === "publish") world.maas = { ...world.maas, items: withLimit(item(true)), access: access ?? world.maas.access ?? { everyone: true } };
+  const withProblems = (a) => (a && !a.everyone ? { ...a, groupProblems: F.maasGroupProblems(a.groups ?? []) } : a);
+  if (action === "publish") world.maas = { ...world.maas, items: withLimit(item(true)), access: withProblems(access) ?? world.maas.access ?? { everyone: true } };
   if (action === "change-limit") world.maas = { ...world.maas, items: withLimit(world.maas.items ?? []) };
-  if (action === "change-access") world.maas = { ...world.maas, access };
+  if (action === "change-access") world.maas = { ...world.maas, access: { ...access, ...(access?.everyone ? {} : { groupProblems: F.maasGroupProblems(access?.groups ?? []) }) } };
   if (action === "unpublish") world.maas = { ...world.maas, items: item(false) };
   // The Models tab's model follows: published, it routes through the MaaS gateway alone.
   if (action === "publish" || action === "unpublish") F.setMaaSPublished(world.resources, project, model, action === "publish");
@@ -900,6 +907,7 @@ const routes = {
   "GET /api/resources/projects": () => ({ projects: world.projects ?? F.projects }),
   "GET /api/resources/playground": (u) => playgroundOf(u.searchParams.get("project") || ""),
   "GET /api/resources/maas": () => world.maas,
+  "GET /api/resources/maas/groups": (u) => F.maasGroupProblems(u.searchParams.getAll("name")),
   // Models routing and one-click prerequisites.
   "GET /api/resources/models/exposures": (u) => F.modelExposures(u.searchParams.get("project") || "", u.searchParams.get("model") || "qwen25-05b-instruct", world.resources.inferenceGateway ?? F.gatewayStates.none, world.routing ?? {}),
   "GET /api/resources/prerequisites": (u) => F.prerequisites({ ...(world.prereq ?? {}), ...(world.prereq?.models === "missing" && ["default-gateway", "gateway"].includes(u.searchParams.get("exposure") ?? "") ? { models: "missing-routing" } : {}) }),
