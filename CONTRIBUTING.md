@@ -261,7 +261,7 @@ GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release t
   - `go`: gofmt, `go mod verify`, `go vet`, `go test -race`, govulncheck;
   - `golangci-lint`;
   - `frontend-checks` (typecheck, ESLint, `npm audit`), `frontend-test` (tests) and `frontend-build` (production build), in parallel, each after its own `npm ci`;
-  - `release-scripts`: `scripts/test-release.sh`, `scripts/test-install.sh` and `scripts/test-node-pull-secret.sh` (skipped in GitLab, whose Go image has no `jq`; GitHub runs it with `jq` and `REQUIRE_JQ=1`, so there it cannot skip);
+  - `release-scripts`: `scripts/test-release.sh`, `scripts/test-install.sh` and `scripts/test-node-pull-secret.sh` (the job installs Debian's `jq` 1.7.1 into the Go image; both CIs set `REQUIRE_JQ=1`, so the test fails instead of skipping without `jq`);
   - `chart`: `scripts/test-chart.sh` with Helm `HELM_VERSION`, downloaded from get.helm.sh and checked against `HELM_SHA256` (both in `.gitlab-ci.yml` and `.github/workflows/ci.yml`; change them together);
   - `release-guard` (tags only): `scripts/release.sh check`, see [Releases](#releases);
   - the Go jobs keep Go's module and build caches (and golangci-lint's) in `.cache/`, one GitLab cache per job keyed on `go.sum`.

@@ -151,10 +151,17 @@ frontend-build:
 release-scripts:
   extends: .test
   image: $GO_IMAGE
+  variables:
+    # test-node-pull-secret.sh fails instead of skipping without jq.
+    REQUIRE_JQ: "1"
   script:
+    # The Go image (Debian) has no jq. Debian's jq 1.7.1, with whichever
+    # Debian security revision the pinned image's release serves.
+    - apt-get update -qq
+    - apt-get install -y -qq --no-install-recommends 'jq=1.7.1-*' >/dev/null
+    - jq --version
     - sh scripts/test-release.sh
     - bash scripts/test-install.sh
-    # Skipped without jq (this image has none); GitHub CI runs it with jq.
     - bash scripts/test-node-pull-secret.sh
 
 # The Helm chart for Argo CD (deploy/chart): its copy of the template is
