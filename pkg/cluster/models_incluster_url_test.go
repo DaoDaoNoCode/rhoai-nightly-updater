@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 func llmisvcWithAddresses(t *testing.T, ns, name string, urls ...string) llmisvcObject {
@@ -94,5 +96,28 @@ func TestWithServicePort(t *testing.T) {
 	}
 	if reads != 5 {
 		t.Errorf("read %d Services, want 5 (only port-less Service addresses)", reads)
+	}
+}
+
+// A model with no route has no outside address, though KServe keeps
+// status.url from the route it removed (live, after a MaaS-only unpublish).
+func TestAddModelRouting_NoRouteHasNoOutsideAddress(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/namespaces/p/services/m-kserve-workload-svc" {
+			_, _ = fmt.Fprint(w, `{"spec":{"ports":[{"name":"https","port":8000}]}}`)
+			return
+		}
+		w.WriteHeader(404)
+		_, _ = fmt.Fprint(w, `{"kind":"Status","code":404}`)
+	}))
+	defer srv.Close()
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	m := llmisvcWithAddresses(t, "p", "m", "https://m-kserve-workload-svc.p.svc.cluster.local")
+	m.Status.URL = "https://maas.apps.example.com/p/m"
+	s := types.ModelState{}
+	s.URL = m.Status.URL
+	addModelRouting(c, &s, m, kserveGateway{}, map[string]string{})
+	if s.Exposure != exposureInternal || s.URL != "" || s.InternalURL != "https://m-kserve-workload-svc.p.svc.cluster.local:8000" {
+		t.Fatalf("exposure %q, url %q, internal %q", s.Exposure, s.URL, s.InternalURL)
 	}
 }

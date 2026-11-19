@@ -782,6 +782,12 @@ func addModelRouting(c *Client, s *types.ModelState, m llmisvcObject, def kserve
 	s.Exposure, s.Gateway = modelExposureOf(m, def)
 	s.ServedName = firstNonEmpty(m.Spec.Model.Name, m.Metadata.Name)
 	s.InternalURL = withServicePort(c, modelInClusterURL(m))
+	if s.Exposure == exposureInternal {
+		// KServe keeps status.url from a route it has removed (live, RHOAI
+		// 3.6: after a MaaS-only model's unpublish it still named the MaaS
+		// route): a model with no route has no outside address.
+		s.URL = ""
+	}
 	switch s.Exposure {
 	case exposureMaaS:
 		s.GatewayAuth = "maas"
