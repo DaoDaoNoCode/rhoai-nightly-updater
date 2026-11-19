@@ -363,10 +363,20 @@ func VerifyNodeReadiness(c *Client) (*types.OperationResponse, error) {
 
 	// Step 1: Check pull secret exists and is valid
 	ps, err := getPullSecret(c)
-	if err != nil || !ps.Exists {
+	if err != nil {
+		// A read that failed (403, 5xx, network) says nothing about whether
+		// the Secret exists.
 		return &types.OperationResponse{
 			Success:   false,
-			Message:   "Pull secret is missing or invalid.",
+			Message:   "Could not read the pull secret kube-system/additional-pull-secret: " + err.Error(),
+			Logs:      []string{fmt.Sprintf("Reading kube-system/additional-pull-secret failed: %v", err)},
+			ErrorCode: errorCodeFromK8sErr(err),
+		}, nil
+	}
+	if !ps.Exists {
+		return &types.OperationResponse{
+			Success:   false,
+			Message:   "Pull secret is missing.",
 			Logs:      []string{"additional-pull-secret not found in kube-system"},
 			ErrorCode: "prerequisites",
 		}, nil
@@ -383,7 +393,15 @@ func VerifyNodeReadiness(c *Client) (*types.OperationResponse, error) {
 
 	// Step 2: Check IDMS exists
 	idms, err := getIDMS(c)
-	if err != nil || !idms.Exists {
+	if err != nil {
+		return &types.OperationResponse{
+			Success:   false,
+			Message:   "Could not read the image mirror (IDMS) configuration: " + err.Error(),
+			Logs:      append(logs, fmt.Sprintf("Listing ImageDigestMirrorSets failed: %v", err)),
+			ErrorCode: errorCodeFromK8sErr(err),
+		}, nil
+	}
+	if !idms.Exists {
 		return &types.OperationResponse{
 			Success:   false,
 			Message:   "Image mirror (IDMS) is not configured.",
