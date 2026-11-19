@@ -66,7 +66,7 @@ func newDashboardDevFixture(t *testing.T) (*dashboardDevFixture, *Client) {
 	f.workloads["unrelated"] = dashboardFixtureDeployment("unrelated", dashboardContainerName, "release-host", "different-owner")
 	f.workloads["proxy"] = dashboardFixtureDeployment("proxy", "kube-rbac-proxy", "release-proxy", "dashboard-owner")
 	isolateClusterCaches(t)
-	f.discovery = dashboardModuleDiscoveryRoutes(fixtureAppsNS, fixtureOperatorSA)
+	f.discovery = dashboardModuleDiscoveryRoutes(fixtureAppsNS)
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	return f, &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
@@ -93,7 +93,7 @@ func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
 			}
 			io.WriteString(w, `{"items":[{"metadata":{"name":"default-dashboard"`+deletion+`}}]}`)
 		case "deployments", "":
-			items := []any{dashboardModuleOperatorListItem(f.operator, fixtureOperatorSA)}
+			items := []any{dashboardModuleOperatorListItem(f.operator)}
 			for _, d := range f.workloads {
 				items = append(items, d)
 			}

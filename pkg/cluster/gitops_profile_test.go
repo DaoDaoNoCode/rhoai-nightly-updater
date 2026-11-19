@@ -127,7 +127,7 @@ func TestUpdateGitOpsProfile_RefusesADashboardDevSession(t *testing.T) {
 	f := servesGitOpsPolicy(t, gitOpsFake(t))
 	f.dashboardOp = `{"metadata":{"uid":"u1","annotations":{"` + dashboardDevAnnotation + `":"{}"}},"spec":{"replicas":0}}`
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != errorCodeDashboardDevActive || !strings.Contains(result.Message, "full profile") {
+	if err != nil || result.Success || result.ErrorCode != errorCodeDashboardDevActive || !strings.Contains(result.Message, "full profile") || !strings.Contains(result.Message, "scale Deployment "+fixtureAppsNS+"/"+fixtureOperatorName+" back up") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	if w := f.writes(); len(w) != 0 {

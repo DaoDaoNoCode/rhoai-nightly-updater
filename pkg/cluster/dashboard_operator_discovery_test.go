@@ -91,7 +91,7 @@ func TestDiscoverDashboardTarget(t *testing.T) {
 			a.Metadata.Name, a.Metadata.UID = "dm-a", "a"
 			b.Metadata.Name, b.Metadata.UID = "dm-b", "b"
 			f.obj("/apis/apps/v1/namespaces/"+fixtureAppsNS+"/deployments", map[string]any{"items": []any{
-				dashboardModuleOperatorListItem(a, fixtureOperatorSA), dashboardModuleOperatorListItem(b, fixtureOperatorSA)}})
+				dashboardModuleOperatorListItem(a), dashboardModuleOperatorListItem(b)}})
 		}, errContain: "several Deployments"},
 		{name: "Dashboard served, nobody may update it, CSV does not own it", setup: func(f *fakeAPI) {
 			serveInTreeDashboardCluster(f, nil)

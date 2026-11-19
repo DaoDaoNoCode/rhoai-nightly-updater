@@ -130,7 +130,7 @@ func readDashboardOperatorAt(c *Client, ns, name string) (*dashboardDeployment, 
 		return nil, err
 	}
 	if d.Metadata.UID == "" {
-		return nil, fmt.Errorf("Deployment %s/%s has no UID", ns, name)
+		return nil, fmt.Errorf("deployment %s/%s has no UID", ns, name)
 	}
 	// The path's namespace and name are what was discovered.
 	d.Metadata.Namespace, d.Metadata.Name = ns, name

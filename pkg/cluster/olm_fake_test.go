@@ -264,7 +264,15 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 		default:
 			writeJSON(w, ip)
 		}
-	case strings.HasSuffix(p, "/deployments/dashboard-operator"):
+	case f.dashboardOp != "" && r.Method == http.MethodGet && dashboardModuleDiscoveryRoutes(fixtureAppsNS)[p] != "":
+		// A dashboard module whose operator is dashboardOp.
+		_, _ = io.WriteString(w, dashboardModuleDiscoveryRoutes(fixtureAppsNS)[p])
+	case f.dashboardOp != "" && p == "/apis/apps/v1/namespaces/"+fixtureAppsNS+"/deployments":
+		var op dashboardDeployment
+		_ = json.Unmarshal([]byte(f.dashboardOp), &op)
+		op.Metadata.Name = fixtureOperatorName
+		writeJSON(w, map[string]any{"items": []any{dashboardModuleOperatorListItem(op)}})
+	case p == namespacedPath("apps/v1", "deployments", fixtureAppsNS, fixtureOperatorName):
 		if f.dashboardOp == "" {
 			notFound(w)
 			return
