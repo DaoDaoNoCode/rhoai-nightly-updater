@@ -286,10 +286,6 @@ func TestToggleReplacesOnlyThatFieldAfterADryRun(t *testing.T) {
 	if len(dry) != 1 || len(real) != 1 {
 		t.Fatalf("patches: dry %d, real %d", len(dry), len(real))
 	}
-	var order []string
-	for _, r := range f.mutations() {
-		order = append(order, r)
-	}
 	if i := strings.Join(f.requests, "\n"); strings.Index(i, "DRYRUN PATCH "+dscV3Path) > strings.Index(i, "\nPATCH "+dscV3Path) {
 		t.Fatalf("the dry run did not come first: %v", f.requests)
 	}

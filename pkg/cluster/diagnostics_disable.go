@@ -81,11 +81,6 @@ func newRemovalChecker(c *Client) *removalChecker {
 	return &removalChecker{c: c, svcOwner: map[string]string{}, svcOwnerErr: map[string]error{}}
 }
 
-// disableBlockers returns the reasons the component must not be removed now.
-func disableBlockers(c *Client, component string) []string {
-	return newRemovalChecker(c).blockers(component)
-}
-
 // blockers returns the reasons the component must not be set to Removed
 // now. Removing a component deletes its module CR; once the CR is gone the
 // platform deletes the module operator and the Services it serves (RHOAI

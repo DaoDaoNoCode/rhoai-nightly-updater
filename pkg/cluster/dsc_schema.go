@@ -99,17 +99,6 @@ func schemaChild(schema map[string]interface{}, key string) map[string]interface
 	return child
 }
 
-// schemaAt returns the schema at path under the spec schema, or nil.
-func schemaAt(spec map[string]interface{}, path []string) map[string]interface{} {
-	s := spec
-	for _, k := range path {
-		if s = schemaChild(s, k); s == nil {
-			return nil
-		}
-	}
-	return s
-}
-
 // dscToggle is an object under spec.components the CRD defines that has a
 // managementState (Toggle), or that holds such objects (a group).
 type dscToggle struct {
