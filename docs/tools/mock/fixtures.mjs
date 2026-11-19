@@ -1216,7 +1216,7 @@ export const maasEmbeddingModel = () => ({
 
 /** A recorded publication whose model is gone (GetMaaSStatus's extra row). */
 export function maasOrphanPublication(namespace) {
-  return { namespace, name: "qwen25-05b-instruct", displayName: "qwen25-05b-instruct", deployed: true, ready: false, managedByTool: true, published: true, partly: true,
+  return { namespace, name: "qwen25-05b-instruct", displayName: "qwen25-05b-instruct", deployed: true, ready: false, managedByTool: true, modelReady: false, published: true, partly: true,
     message: `Partly published: no model of this name is in project ${namespace} any more (it was deleted there, or the project was); this tool's record of the publication still in place. Unpublish to finish removing it.` };
 }
 
