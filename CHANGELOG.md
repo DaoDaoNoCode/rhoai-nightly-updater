@@ -357,7 +357,9 @@ only accepts a tag whose version is the top dated section. See
   oauthaccesstokens --field-selector clientName=...` the API server kept
   accepting the revoked token for about a minute (live; the same for `oc`
   and the dashboard), then the app answered 401 and showed "Your session
-  expired" ([SECURITY.md](SECURITY.md#revoking-a-sign-in)).
+  expired" ([SECURITY.md](SECURITY.md#revoking-a-sign-in)). Changes stop at
+  once: the session check now refuses a sign-in whose own token object is
+  gone, instead of treating it as unreadable and going ahead.
 - **One install no longer takes over another's OAuthClient.** Its name
   `<APP_NAME>-<NAMESPACE>` is the same for app `a-b` in namespace `c` and app
   `a` in namespace `b-c`, and the apply forced its fields over. The client
