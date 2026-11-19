@@ -45,6 +45,28 @@ fi
 SERVER=$(oc whoami --show-server)
 echo -e "${GREEN}Cluster:${NC} $SERVER"
 echo -e "${GREEN}User:${NC}    $(oc whoami)"
+
+# The backend verifies the API server's certificate as oc does. ROSA and OSD
+# API certificates are publicly trusted; a self-managed cluster's are signed
+# by the cluster's own CA, which only the kubeconfig carries. Pass that CA on
+# (KUBE_CA_FILE, see pkg/cluster/client.go); an explicit KUBE_CA_FILE wins.
+CA_TMP=""
+if [ -z "${KUBE_CA_FILE:-}" ]; then
+  kube_cluster_field() { oc config view --raw --minify -o "jsonpath={.clusters[0].cluster.$1}" 2>/dev/null || true; }
+  CA_DATA=$(kube_cluster_field certificate-authority-data)
+  CA_PATH=$(kube_cluster_field certificate-authority)
+  if [ -n "$CA_DATA" ]; then
+    CA_TMP=$(mktemp "${TMPDIR:-/tmp}/rhoai-updater-dev-ca.XXXXXX")
+    printf '%s' "$CA_DATA" | base64 -d > "$CA_TMP" 2>/dev/null || printf '%s' "$CA_DATA" | base64 -D > "$CA_TMP"
+    export KUBE_CA_FILE="$CA_TMP"
+  elif [ -n "$CA_PATH" ]; then
+    export KUBE_CA_FILE="$CA_PATH"
+  elif [ "$(kube_cluster_field insecure-skip-tls-verify)" = true ]; then
+    echo -e "${YELLOW}Your oc login skips TLS verification and has no CA, so the backend checks the API certificate"
+    echo -e "against the system trust store. That works for ROSA/OSD, but fails for a cluster with its own CA."
+    echo -e "Then log in with the cluster's CA (oc login --certificate-authority=FILE), or set KUBE_CA_FILE to it.${NC}"
+  fi
+fi
 echo ""
 
 # One dev server per checkout: a second one would fight over ports 8080,
@@ -88,6 +110,7 @@ cleanup() {
   kill_tree "$PF_PID"; kill_tree "$GO_PID"; kill_tree "$NPM_PID"
   wait 2>/dev/null || true
   rm -rf "$LOCK_DIR"
+  [ -n "$CA_TMP" ] && rm -f "$CA_TMP"
   echo -e "${GREEN}Done.${NC}"
 }
 trap cleanup EXIT
