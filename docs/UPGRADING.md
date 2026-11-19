@@ -490,10 +490,15 @@ What users notice:
   still works for reading, but its token was issued to the ServiceAccount
   client and can only identify the user, so a change is refused with "Your
   sign-in cannot make changes ... Log out and log in again", and the UI says
-  so before they try: changes are off, and each one says why. Log out from
-  the user menu and log in again.
+  so before they try: a banner on every page says to sign in again (not
+  "Read-only access", which is for users without the cluster-admin role),
+  changes are off, and each one says why. Log out from the banner or the
+  user menu and log in again.
 
-  <img src="images/signin-before-4.png" alt="A sign-in from before 4.0.0: Update to latest is disabled, its tooltip says Your sign-in cannot make changes: it was made before this updater acted with your own OpenShift permissions. Log out and log in again." width="760">
+  <img src="images/signin-before-4.png" alt="A sign-in from before 4.0.0: the banner Sign in again to make changes with the reason and Log out; Update to latest is disabled, its tooltip says Your sign-in cannot make changes: it was made before this updater acted with your own OpenShift permissions. Log out and log in again." width="760">
+
+  1. The banner with the reason and **Log out**.
+  2. Each change is disabled, with the same reason in its tooltip.
 
 - Changes are made with the user's own permissions and the API server's
   audit log names the user, not the ServiceAccount. A change is also refused
