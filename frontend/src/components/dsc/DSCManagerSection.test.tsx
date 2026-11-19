@@ -185,11 +185,12 @@ describe("DSCManagerSection", () => {
     expect(within(list).getByText(/team → not set/)).toBeInTheDocument();
   });
 
-  it("labels an unset state with its CRD default", async () => {
+  it("labels an unset state with the CRD default it takes", async () => {
     stubApi({ "GET /api/components/dsc": { ...manager, nodes: [...manager.nodes, node("ray.argo", { specSet: false, spec: undefined, defaultSet: false, default: undefined, schemaDefault: "Managed" })] } });
     renderSection();
     const table = await screen.findByRole("treegrid");
-    expect(within(table).getAllByText("Not set (CRD default Managed)").length).toBeGreaterThan(0);
+    expect(within(table).getByRole("option", { name: "Not set (Managed)" })).toBeInTheDocument();
+    expect(within(table).getByText("Not set (CRD default Managed)")).toBeInTheDocument();
   });
 
   it("offers to finish a hard reset that deleted the DataScienceCluster", async () => {

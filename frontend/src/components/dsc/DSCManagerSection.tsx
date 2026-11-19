@@ -148,7 +148,7 @@ const ComponentTree: React.FC<{
                       <FormSelect aria-label={`Set ${n.path}`} id={`dsc-set-${n.path}`} value={n.specSet ? n.spec : ""}
                         isDisabled={!!rowReason || pending !== null}
                         onChange={(_e, v) => { if (v && !(n.specSet && n.spec === v)) onSet(n, v); }}>
-                        {!n.specSet && <FormSelectOption value="" label={n.schemaDefault ? `Not set (CRD default ${n.schemaDefault})` : "Not set (Removed)"} isDisabled />}
+                        {!n.specSet && <FormSelectOption value="" label={`Not set (${n.schemaDefault || "Removed"})`} isDisabled />}
                         {allowed.map((v) => <FormSelectOption key={v} value={v} label={v} />)}
                       </FormSelect>
                     </FlexItem>
