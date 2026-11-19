@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,6 +65,31 @@ type resourceFake struct {
 	// produces (under the lock), for example to record managedFields.
 	onMergePatch func(r *http.Request, k fakeKey, patch, next map[string]interface{})
 	requests     []string
+	// failMessage is the message returned with fail or failDryRun for that
+	// key ("METHOD /path" or "DRYRUN METHOD /path"), as an admission
+	// webhook's or validation rule's own words.
+	failMessage map[string]string
+	// calls records every request with its query, content type and body.
+	calls []fakeCall
+}
+
+// fakeCall is one request to resourceFake.
+type fakeCall struct {
+	Method, Path, ContentType, Body string
+	Query                           url.Values
+}
+
+// callsTo returns the calls of method to path, in order.
+func (f *resourceFake) callsTo(method, path string) []fakeCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []fakeCall
+	for _, c := range f.calls {
+		if c.Method == method && c.Path == path {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 type fakeKey struct {
@@ -72,7 +99,7 @@ type fakeKey struct {
 func newResourceFake(t *testing.T) (*resourceFake, *Client) {
 	t.Helper()
 	isolateClusterCaches(t)
-	f := &resourceFake{t: t, objects: map[fakeKey]map[string]interface{}{}, fail: map[string]int{}, failDryRun: map[string]int{}, failEcho: map[string]int{}}
+	f := &resourceFake{t: t, objects: map[fakeKey]map[string]interface{}{}, fail: map[string]int{}, failDryRun: map[string]int{}, failEcho: map[string]int{}, failMessage: map[string]string{}}
 	srv := httptest.NewTLSServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	c := &Client{baseURL: srv.URL, token: "test-token", httpClient: srv.Client(), ctx: context.Background()}
@@ -271,16 +298,17 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 	if dryRun {
 		echoKey = "DRYRUN " + echoKey
 	}
+	f.calls = append(f.calls, fakeCall{Method: r.Method, Path: r.URL.Path, ContentType: r.Header.Get("Content-Type"), Body: string(body), Query: r.URL.Query()})
 	if dryRun {
 		f.requests = append(f.requests, "DRYRUN "+r.Method+" "+r.URL.Path)
 		if code, ok := f.failDryRun[r.Method+" "+r.URL.Path]; ok {
-			f.status(w, code, "injected dry-run failure")
+			f.status(w, code, firstNonEmpty(f.failMessage[echoKey], "injected dry-run failure"))
 			return
 		}
 	} else {
 		f.requests = append(f.requests, r.Method+" "+r.URL.Path)
 		if code, ok := f.fail[r.Method+" "+r.URL.Path]; ok {
-			f.status(w, code, "injected failure")
+			f.status(w, code, firstNonEmpty(f.failMessage[echoKey], "injected failure"))
 			return
 		}
 	}
@@ -379,7 +407,7 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPatch:
 		obj := f.objects[k]
 		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json-patch+json") {
-			f.serveJSONPatch(w, k, obj, body, dryRun)
+			f.serveJSONPatch(w, r, k, obj, body, dryRun)
 			return
 		}
 		var patch map[string]interface{}
@@ -537,53 +565,55 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// serveJSONPatch implements the JSON patch (RFC 6902) "replace" operations
-// on metadata.managedFields and metadata.resourceVersion, which is what a
-// field-ownership upgrade sends. Replacing resourceVersion with another
-// value than the stored one fails with 409, as the API server's update
-// precondition does.
-func (f *resourceFake) serveJSONPatch(w http.ResponseWriter, k fakeKey, obj map[string]interface{}, body []byte, dryRun bool) {
+// serveJSONPatch implements a JSON patch (RFC 6902: test, add, replace,
+// remove) as the API server does: the whole patch or nothing, a failed
+// "test" answering 422 with the API server's wording. Replacing
+// metadata.resourceVersion with another value than the stored one fails
+// with 409, as the API server's update precondition does (a field-ownership
+// upgrade sends that). A change to spec bumps metadata.generation, and the
+// fieldManager gets an Update entry in managedFields.
+func (f *resourceFake) serveJSONPatch(w http.ResponseWriter, r *http.Request, k fakeKey, obj map[string]interface{}, body []byte, dryRun bool) {
 	if obj == nil {
 		f.status(w, 404, "not found")
 		return
 	}
-	var ops []struct {
-		Op    string          `json:"op"`
-		Path  string          `json:"path"`
-		Value json.RawMessage `json:"value"`
-	}
+	var ops []jsonPatchOp
 	if err := json.Unmarshal(body, &ops); err != nil {
 		f.status(w, 400, "bad JSON patch")
 		return
 	}
-	next := deepCopyObject(obj)
-	meta := ensureMap(next, "metadata")
+	meta := ensureMap(obj, "metadata")
+	spec := false
 	for _, op := range ops {
-		if op.Op != "replace" {
-			f.status(w, 422, "unsupported op "+op.Op)
-			return
-		}
-		switch op.Path {
-		case "/metadata/resourceVersion":
+		if op.Path == "/metadata/resourceVersion" && op.Op == "replace" {
 			var rv string
 			_ = json.Unmarshal(op.Value, &rv)
 			if rv != meta["resourceVersion"] {
 				f.status(w, 409, "the object has been modified")
 				return
 			}
-		case "/metadata/managedFields":
-			var entries []interface{}
-			if err := json.Unmarshal(op.Value, &entries); err != nil {
-				f.status(w, 400, "bad managedFields")
-				return
-			}
-			meta["managedFields"] = entries
-		default:
-			f.status(w, 422, "unsupported path "+op.Path)
+		}
+		spec = spec || strings.HasPrefix(op.Path, "/spec") && op.Op != "test"
+	}
+	next, err := applyJSONPatch(obj, ops)
+	if err != nil {
+		var testErr *errJSONPatchTest
+		if errors.As(err, &testErr) {
+			f.status(w, 422, "the server rejected our request due to an error in our request: "+err.Error()+": test failed")
 			return
 		}
+		f.status(w, 422, err.Error())
+		return
 	}
-	f.bumpRV(meta)
+	nextMeta := ensureMap(next, "metadata")
+	f.bumpRV(nextMeta)
+	if spec {
+		n, _ := strconv.Atoi(fmt.Sprint(nextMeta["generation"]))
+		nextMeta["generation"] = n + 1
+		if manager := r.URL.Query().Get("fieldManager"); manager != "" {
+			f.addManagedField(nextMeta, manager, "Update")
+		}
+	}
 	if !dryRun {
 		f.objects[k] = next
 	}

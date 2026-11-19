@@ -160,6 +160,87 @@ func findCheck(resp *DiagnosticsResponse, name string) *CheckResult {
 
 // serveComponentGroup serves the API group discovery document of
 // components.platform.opendatahub.io (preferred version v1alpha1).
+// minimalDSCCRD is a DataScienceCluster CRD whose only (stored) version
+// defines these top-level components with managementState Managed or Removed.
+func minimalDSCCRD(version string, components ...string) string {
+	props := map[string]interface{}{}
+	for _, c := range components {
+		props[c] = map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+			"managementState": map[string]interface{}{"type": "string", "enum": []interface{}{"Managed", "Removed"}}}}
+	}
+	crd := map[string]interface{}{"spec": map[string]interface{}{"versions": []interface{}{map[string]interface{}{
+		"name": version, "served": true, "storage": true, "schema": map[string]interface{}{"openAPIV3Schema": map[string]interface{}{
+			"type": "object", "properties": map[string]interface{}{"spec": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+				"components": map[string]interface{}{"type": "object", "properties": props}}}}}}}}}}
+	raw, _ := json.Marshal(crd)
+	return string(raw)
+}
+
+// serveToggleDSC serves dsc as the cluster's only DataScienceCluster at
+// version (in its list, as an API server lists objects, and by name), a CRD
+// that defines components, and JSON patches of it: a dry run changes
+// nothing, a write is kept. patchBody, when set, is answered instead (an
+// API server that dropped the change).
+func serveToggleDSC(f *fakeAPI, version, dsc, patchBody string, components ...string) {
+	list := "/apis/datasciencecluster.opendatahub.io/" + version + "/datascienceclusters"
+	var obj map[string]interface{}
+	if err := json.Unmarshal([]byte(dsc), &obj); err != nil {
+		panic(err)
+	}
+	meta, _ := obj["metadata"].(map[string]interface{})
+	name, _ := meta["name"].(string)
+	var mu sync.Mutex
+	current := func() string {
+		raw, _ := json.Marshal(obj)
+		return string(raw)
+	}
+	f.handle("GET", list, func(*http.Request, []byte) (int, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		return 200, `{"items":[` + current() + `]}`
+	})
+	f.handle("GET", list+"/"+name, func(*http.Request, []byte) (int, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		return 200, current()
+	})
+	f.json("GET", dscCRDPath, 200, minimalDSCCRD(version, components...))
+	f.handle("PATCH", list+"/"+name, func(r *http.Request, body []byte) (int, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if patchBody != "" {
+			return 200, patchBody
+		}
+		var ops []jsonPatchOp
+		if err := json.Unmarshal(body, &ops); err != nil {
+			return 400, `{"kind":"Status","status":"Failure","code":400}`
+		}
+		next, err := applyJSONPatch(obj, ops)
+		if err != nil {
+			return 422, `{"kind":"Status","status":"Failure","code":422,"message":"` + err.Error() + `"}`
+		}
+		if r.URL.Query().Get("dryRun") != "All" {
+			obj = next
+		}
+		raw, _ := json.Marshal(next)
+		return 200, string(raw)
+	})
+}
+
+// realWrites are the writes that are not server-side dry runs.
+func (f *fakeAPI) realWrites() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, r := range f.reqs {
+		if r.Method == http.MethodGet || strings.Contains(r.Path, "/configmaps") || strings.Contains(r.Query, "dryRun=All") {
+			continue
+		}
+		out = append(out, r.Method+" "+r.Path)
+	}
+	return out
+}
+
 func serveComponentGroup(f *fakeAPI) {
 	f.json("GET", "/apis/components.platform.opendatahub.io", 200,
 		`{"kind":"APIGroup","name":"components.platform.opendatahub.io","preferredVersion":{"groupVersion":"components.platform.opendatahub.io/v1alpha1","version":"v1alpha1"}}`)

@@ -1,0 +1,621 @@
+{
+ "apiVersion": "datasciencecluster.opendatahub.io/v3",
+ "kind": "DataScienceCluster",
+ "metadata": {
+  "creationTimestamp": "2026-09-02T21:19:37Z",
+  "finalizers": [
+   "platform.opendatahub.io/finalizer"
+  ],
+  "generation": 43,
+  "labels": {
+   "app.kubernetes.io/name": "datasciencecluster"
+  },
+  "name": "default-dsc",
+  "resourceVersion": "166624435",
+  "uid": "ba54ddbf-ad4a-4257-9ab4-977eb541dc1c"
+ },
+ "spec": {
+  "components": {
+   "aiHub": {
+    "instancesNamespace": "rhoai-model-registries",
+    "managementState": "Managed"
+   },
+   "aigateway": {
+    "batchGateway": {
+     "managementState": "Removed"
+    },
+    "managementState": "Managed",
+    "modelsAsAService": {
+     "managementState": "Managed"
+    }
+   },
+   "aipipelines": {
+    "managementState": "Managed"
+   },
+   "dashboard": {
+    "maasPortal": {
+     "managementState": "Removed"
+    },
+    "standard": {
+     "managementState": "Managed"
+    }
+   },
+   "data": {
+    "featureStore": {
+     "managementState": "Managed"
+    }
+   },
+   "databaseservice": {
+    "managementState": "Removed"
+   },
+   "kserve": {
+    "managementState": "Managed",
+    "modelExpress": {
+     "managementState": "Removed"
+    },
+    "nim": {
+     "airGapped": false,
+     "managementState": "Managed"
+    },
+    "rawDeploymentServiceConfig": "Headless"
+   },
+   "kueue": {
+    "autoCreateQueues": false,
+    "defaultClusterQueueName": "default",
+    "defaultLocalQueueName": "default",
+    "managementState": "Removed"
+   },
+   "mcplifecycleoperator": {
+    "managementState": "Managed"
+   },
+   "mlflowoperator": {
+    "managementState": "Managed"
+   },
+   "ogx": {
+    "managementState": "Managed"
+   },
+   "ray": {
+    "managementState": "Managed"
+   },
+   "sparkoperator": {
+    "managementState": "Removed"
+   },
+   "trainer": {
+    "managementState": "Managed"
+   },
+   "trustyai": {
+    "managementState": "Managed",
+    "mcpGuardrailsMode": false
+   },
+   "workbenches": {
+    "managementState": "Managed",
+    "workbenchNamespace": "rhods-notebooks",
+    "workbenchesV2": {
+     "managementState": "Removed"
+    }
+   }
+  }
+ },
+ "status": {
+  "components": {
+   "aiGrid": {
+    "managementState": "Removed"
+   },
+   "aiHub": {
+    "instancesNamespace": "rhoai-model-registries",
+    "managementState": "Managed",
+    "releases": [
+     {
+      "name": "Kubeflow Model Registry",
+      "repoUrl": "https://github.com/kubeflow/model-registry",
+      "version": "v0.3.17"
+     },
+     {
+      "name": "Open Data Hub Model Registry Operator",
+      "repoUrl": "https://github.com/opendatahub-io/model-registry-operator",
+      "version": "v0.3.17"
+     },
+     {
+      "name": "platform",
+      "version": "3.6.0"
+     }
+    ]
+   },
+   "aigateway": {
+    "managementState": "Managed",
+    "releases": [
+     {
+      "name": "llm-d Batch Gateway",
+      "repoUrl": "https://github.com/llm-d/llm-d-batch-gateway",
+      "version": "v1.0.0"
+     },
+     {
+      "name": "llm-d Async Processor",
+      "repoUrl": "https://github.com/llm-d/llm-d-async",
+      "version": "v1.0.0"
+     },
+     {
+      "name": "Model as a service",
+      "repoUrl": "https://github.com/opendatahub-io/models-as-a-service",
+      "version": "v0.2.0"
+     },
+     {
+      "name": "Praxis AI Grid",
+      "repoUrl": "https://github.com/opendatahub-io/praxis-ai-grid-operator",
+      "version": "v0.3"
+     },
+     {
+      "name": "platform",
+      "version": "3.6.0"
+     }
+    ]
+   },
+   "aipipelines": {
+    "managementState": "Managed",
+    "releases": [
+     {
+      "name": "platform",
+      "version": "3.6.0"
+     },
+     {
+      "name": "Kubeflow Pipelines",
+      "repoUrl": "https://github.com/kubeflow/pipelines",
+      "version": "2.16.0"
+     }
+    ]
+   },
+   "batchGateway": {
+    "managementState": "Removed"
+   },
+   "dashboard": {
+    "managementState": "Managed"
+   },
+   "data": {
+    "managementState": "Managed",
+    "releases": [
+     {
+      "name": "Feast",
+      "repoUrl": "https://github.com/feast-dev/feast",
+      "version": "0.67.0"
+     },
+     {
+      "name": "platform",
+      "version": "3.6.0"
+     }
+    ]
+   },
+   "databaseservice": {
+    "managementState": "Removed"
+   },
+   "kserve": {
+    "managementState": "Managed",
+    "releases": [
+     {
+      "name": "KServe",
+      "repoUrl": "https://github.com/kserve/kserve/",
+      "version": "v0.21.0"
+     },
+     {
+      "name": "vLLM",
+      "repoUrl": "https://github.com/vllm-project/vllm",
+      "version": "v0.31.0"
+     },
+     {
+      "name": "llm-d-router",
+      "repoUrl": "https://github.com/llm-d/llm-d-router",
+      "version": "v0.11.0"
+     },
+     {
+      "name": "llm-d-autoscaling",
+      "repoUrl": "https://github.com/llm-d/llm-d-autoscaling",
+      "version": "v0.9.0"
+     },
+     {
+      "name": "llm-d Router",
+      "repoUrl": "https://github.com/llm-d/llm-d-router",
+      "version": "v1.0.0"
+     },
+     {
+      "name": "llm-d Batch Gateway",
+      "repoUrl": "https://github.com/llm-d/llm-d-batch-gateway",
+      "version": "v1.0.0"
+     },
+     {
+      "name": "llm-d Async Processor",
+      "repoUrl": "https://github.com/llm-d/llm-d-async",
+      "version": "v1.0.0"
+     },
+     {
+      "name": "vLLM omni",
+      "repoUrl": "https://github.com/vllm-project/vllm-omni",
+      "version": "v0.30.0"
+     },
+     {
+      "name": "Model Express",
+      "repoUrl": "https://github.com/ai-dynamo/modelexpress",
+      "version": "v0.8.0"
+     },
+     {
+      "name": "vLLM-Omni",
+      "repoUrl": "https://github.com/vllm-project/vllm-omni",
+      "version": "v0.26.0"
+     },
+     {
+      "name": "OpenVINO Model Server",
+      "repoUrl": "https://github.com/openvinotoolkit/model_server",
+      "version": "v2025.4"
+     },
+     {
+      "name": "MLServer",
+      "repoUrl": "https://github.com/SeldonIO/MLServer",
+      "version": "1.7.1"
+     },
+     {
+      "name": "Caikit",
+      "repoUrl": "https://github.com/caikit/caikit",
+      "version": "v0.27.7"
+     },
+     {
+      "name": "Caikit-nlp",
+      "repoUrl": "https://github.com/caikit/caikit-nlp",
+      "version": "v0.5.8"
+     },
+     {
+      "name": "AutoGluon",
+      "repoUrl": "https://github.com/kserve/kserve",
+      "version": "v0.1.0"
+     },
+     {
+      "name": "Text Generation Inference Server",
+      "repoUrl": "https://github.com/IBM/text-generation-inference/",
+      "version": "commit 8a8c55dd0884b8e4e420d22f10bcce6752455edf"
+     },
+     {
+      "name": "platform",
+      "version": "3.6.0"
+     }
+    ]
+   },
+   "kueue": {
+    "managementState": "Removed"
+   },
+   "maasPortal": {
+    "managementState": "Removed"
+   },
+   "mcplifecycleoperator": {
+    "managementState": "Managed",
+    "releases": [
+     {
+      "name": "mcplifecycleoperator",
+      "repoUrl": "https://github.com/opendatahub-io/mcp-lifecycle-module-operator",
+      "version": "0.0.1"
+     },
+     {
+      "name": "platform",
+      "version": "3.6.0"
+     }
+    ]
+   },
+   "mlflowoperator": {
+    "managementState": "Managed",
+    "releases": [
+     {
+      "name": "platform",
+      "version": "3.6.0"
+     },
+     {
+      "name": "MLflow",
+      "repoUrl": "https://github.com/mlflow/mlflow",
+      "version": "3.17.0"
+     }
+    ]
+   },
+   "modelsAsAService": {
+    "managementState": "Managed"
+   },
+   "ogx": {
+    "managementState": "Managed"
+   },
+   "ray": {
+    "managementState": "Managed",
+    "releases": [
+     {
+      "name": "KubeRay",
+      "repoUrl": "https://github.com/opendatahub-io/kuberay",
+      "version": "v1.7.1"
+     },
+     {
+      "name": "platform",
+      "version": "3.6.0"
+     }
+    ]
+   },
+   "sparkoperator": {
+    "managementState": "Removed"
+   },
+   "trainer": {
+    "managementState": "Managed",
+    "releases": [
+     {
+      "name": "Kubeflow Trainer",
+      "repoUrl": "https://github.com/kubeflow/trainer",
+      "version": "2.3.0"
+     },
+     {
+      "name": "platform",
+      "version": "3.6.0"
+     }
+    ]
+   },
+   "trustyai": {
+    "managementState": "Managed",
+    "releases": [
+     {
+      "name": "platform",
+      "version": "3.6.0"
+     },
+     {
+      "name": "TrustyAI operator",
+      "repoUrl": "https://github.com/trustyai-explainability/trustyai-service-operator",
+      "version": "v1.37.0"
+     },
+     {
+      "name": "TrustyAI service",
+      "repoUrl": "https://github.com/trustyai-explainability/trustyai-explainability",
+      "version": "v0.28.0"
+     },
+     {
+      "name": "TrustyAI LMEval driver",
+      "repoUrl": "https://github.com/trustyai-explainability/trustyai-service-operator",
+      "version": "v1.37.0"
+     },
+     {
+      "name": "TrustyAI LMEval job",
+      "repoUrl": "https://github.com/EleutherAI/lm-evaluation-harness",
+      "version": "v0.4.8"
+     },
+     {
+      "name": "TrustyAI Guardrails orchestrator",
+      "repoUrl": "https://github.com/foundation-model-stack/fms-guardrails-orchestrator",
+      "version": "0.9.4"
+     },
+     {
+      "name": "TrustyAI builtin detectors",
+      "repoUrl": "https://github.com/trustyai-explainability/guardrails-regex-detector",
+      "version": "v0.2.0"
+     },
+     {
+      "name": "TrustyAI sidecar gateway",
+      "repoUrl": "https://github.com/trustyai-explainability/vllm-orchestrator-gateway",
+      "version": "v0.2.1"
+     },
+     {
+      "name": "EvalHub",
+      "repoUrl": "https://github.com/eval-hub/eval-hub",
+      "version": "v0.3.0"
+     },
+     {
+      "name": "trustyai-operator-module",
+      "version": "1.26.3"
+     }
+    ]
+   },
+   "workbenches": {
+    "managementState": "Managed",
+    "releases": [
+     {
+      "name": "Kubeflow Notebook Controller",
+      "repoUrl": "https://github.com/kubeflow/kubeflow",
+      "version": "1.10.0"
+     },
+     {
+      "name": "platform",
+      "version": "3.6.0"
+     }
+    ],
+    "workbenchNamespace": "rhods-notebooks"
+   },
+   "workbenchesV2": {
+    "managementState": "Removed"
+   }
+  },
+  "conditions": [
+   {
+    "lastTransitionTime": "2026-10-13T14:00:30Z",
+    "message": "failure deploying resource /default-trustyai: apply failed components.platform.opendatahub.io/v1alpha1, Kind=TrustyAI: unable to patch components.platform.opendatahub.io/v1alpha1, Kind=TrustyAI default-trustyai: failed to create manager for existing fields: failed to convert new object (/default-trustyai; components.platform.opendatahub.io/v1alpha1, Kind=TrustyAI) to smd typed: errors:\n  .spec.eval.lmeval.permitCodeExecution: expected string, got &value.valueUnstructured{Value:false}\n  .spec.eval.lmeval.permitOnline: expected string, got &value.valueUnstructured{Value:false}",
+    "reason": "Error",
+    "status": "False",
+    "type": "Ready"
+   },
+   {
+    "lastTransitionTime": "2026-10-06T13:56:39Z",
+    "message": "All registered components have ManagementState Removed or are not configured",
+    "reason": "NoManagedComponents",
+    "severity": "Info",
+    "status": "True",
+    "type": "ComponentsReady"
+   },
+   {
+    "lastTransitionTime": "2026-11-18T23:09:14Z",
+    "status": "True",
+    "type": "ModulesReady"
+   },
+   {
+    "lastTransitionTime": "2026-10-16T13:19:38Z",
+    "message": "failure deploying resource /default-trustyai: apply failed components.platform.opendatahub.io/v1alpha1, Kind=TrustyAI: unable to patch components.platform.opendatahub.io/v1alpha1, Kind=TrustyAI default-trustyai: failed to create manager for existing fields: failed to convert new object (/default-trustyai; components.platform.opendatahub.io/v1alpha1, Kind=TrustyAI) to smd typed: errors:\n  .spec.eval.lmeval.permitCodeExecution: expected string, got &value.valueUnstructured{Value:false}\n  .spec.eval.lmeval.permitOnline: expected string, got &value.valueUnstructured{Value:false}",
+    "observedGeneration": 43,
+    "reason": "Error",
+    "status": "False",
+    "type": "ProvisioningSucceeded"
+   },
+   {
+    "lastTransitionTime": "2026-11-18T22:13:26Z",
+    "status": "True",
+    "type": "AIGatewayReady"
+   },
+   {
+    "lastTransitionTime": "2026-10-22T19:02:03Z",
+    "message": "Submodule ManagementState is set to Removed",
+    "reason": "Removed",
+    "severity": "Info",
+    "status": "False",
+    "type": "AIGridReady"
+   },
+   {
+    "lastTransitionTime": "2026-11-18T21:27:15Z",
+    "reason": "AllDependentsHealthy",
+    "status": "True",
+    "type": "AIHubReady"
+   },
+   {
+    "lastTransitionTime": "2026-10-16T15:35:36Z",
+    "message": "AIPipelines is ready",
+    "reason": "Ready",
+    "status": "True",
+    "type": "AIPipelinesReady"
+   },
+   {
+    "lastTransitionTime": "2026-10-06T13:56:40Z",
+    "message": "Submodule ManagementState is set to Removed",
+    "reason": "Removed",
+    "severity": "Info",
+    "status": "False",
+    "type": "BatchGatewayReady"
+   },
+   {
+    "lastTransitionTime": "2026-11-18T21:27:15Z",
+    "reason": "AllDependentsHealthy",
+    "status": "True",
+    "type": "DashboardReady"
+   },
+   {
+    "lastTransitionTime": "2026-11-13T20:03:17Z",
+    "status": "True",
+    "type": "DataReady"
+   },
+   {
+    "lastTransitionTime": "2026-10-13T14:00:21Z",
+    "message": "Module ManagementState is set to Removed",
+    "reason": "Removed",
+    "severity": "Info",
+    "status": "False",
+    "type": "DatabaseServiceReady"
+   },
+   {
+    "lastTransitionTime": "2026-11-08T16:42:52Z",
+    "message": "Confidential container RuntimeClass not ready (no RuntimeClass matching any of [\"kata\" \"ccruntime\" \"enclave-cc\"] and a runtime handler)",
+    "reason": "PreConditionFailed",
+    "severity": "Info",
+    "status": "False",
+    "type": "KserveConfidentialContainerDependencies"
+   },
+   {
+    "lastTransitionTime": "2026-11-18T21:27:15Z",
+    "severity": "Info",
+    "status": "True",
+    "type": "KserveLLMInferenceServiceDependencies"
+   },
+   {
+    "lastTransitionTime": "2026-10-08T13:17:40Z",
+    "message": "LeaderWorkerSet not installed",
+    "reason": "PreConditionFailed",
+    "severity": "Info",
+    "status": "False",
+    "type": "KserveLLMInferenceServiceWideEPDependencies"
+   },
+   {
+    "lastTransitionTime": "2026-11-18T23:09:14Z",
+    "status": "True",
+    "type": "KserveReady"
+   },
+   {
+    "lastTransitionTime": "2026-10-13T13:59:34Z",
+    "message": "Component ManagementState is set to Removed",
+    "reason": "Removed",
+    "severity": "Info",
+    "status": "False",
+    "type": "KueueReady"
+   },
+   {
+    "lastTransitionTime": "2026-11-14T05:25:14Z",
+    "reason": "Available",
+    "status": "True",
+    "type": "MCPLifecycleOperatorReady"
+   },
+   {
+    "lastTransitionTime": "2026-11-17T15:02:49Z",
+    "message": "MLflowOperator is ready to manage MLflow custom resources",
+    "reason": "Ready",
+    "status": "True",
+    "type": "MLflowOperatorReady"
+   },
+   {
+    "lastTransitionTime": "2026-10-07T20:19:03Z",
+    "message": "Submodule ManagementState is set to Removed",
+    "reason": "Removed",
+    "severity": "Info",
+    "status": "False",
+    "type": "MaaSPortalAvailable"
+   },
+   {
+    "lastTransitionTime": "2026-11-18T22:13:26Z",
+    "message": "modelsAsAService is Managed and deployments are available",
+    "reason": "Ready",
+    "status": "True",
+    "type": "ModelsAsAServiceReady"
+   },
+   {
+    "lastTransitionTime": "2026-11-16T18:49:49Z",
+    "reason": "AllDependentsHealthy",
+    "status": "True",
+    "type": "OGXReady"
+   },
+   {
+    "lastTransitionTime": "2026-11-14T05:25:14Z",
+    "status": "True",
+    "type": "RayReady"
+   },
+   {
+    "lastTransitionTime": "2026-10-06T13:56:40Z",
+    "message": "Module ManagementState is set to Removed",
+    "reason": "Removed",
+    "severity": "Info",
+    "status": "False",
+    "type": "SparkOperatorReady"
+   },
+   {
+    "lastTransitionTime": "2026-11-18T08:39:25Z",
+    "status": "True",
+    "type": "TrainerReady"
+   },
+   {
+    "lastTransitionTime": "2026-10-13T15:24:19Z",
+    "message": "All enabled services are healthy",
+    "reason": "AllServicesHealthy",
+    "status": "True",
+    "type": "TrustyAIReady"
+   },
+   {
+    "lastTransitionTime": "2026-11-14T05:25:14Z",
+    "message": "Workbenches component is ready. Warning: 4 ImageStream tag(s) failed to import: code-server-minimal-notebook:3.6 (Internal error occurred: [you may not have access to the container image \"quay.io/rhoai/odh-workbenc...); jupyter-universal-notebook:3.6 (Internal error occurred: [you may not have access to the container image \"quay.io/rhoai/odh-workbenc...); runtime-universal:universal (Internal error occurred: [you may not have access to the container image \"quay.io/rhoai/odh-workbenc...); jupyter-pytorch-llmcompressor:3.6 (Internal error occurred: [you may not have access to the container image \"quay.io/rhoai/odh-workbenc...)",
+    "reason": "ReconcileSuccess",
+    "status": "True",
+    "type": "WorkbenchesReady"
+   },
+   {
+    "lastTransitionTime": "2026-10-06T13:56:40Z",
+    "message": "Submodule ManagementState is set to Removed",
+    "reason": "Removed",
+    "severity": "Info",
+    "status": "False",
+    "type": "WorkbenchesV2Ready"
+   }
+  ],
+  "observedGeneration": 18,
+  "phase": "Not Ready",
+  "release": {
+   "name": "OpenShift AI Self-Managed",
+   "version": "3.6.0"
+  }
+ }
+}

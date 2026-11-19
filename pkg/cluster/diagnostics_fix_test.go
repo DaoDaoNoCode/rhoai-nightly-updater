@@ -333,27 +333,24 @@ func TestDisableComponent_PreconditionAndReadBack(t *testing.T) {
 		wantPatch bool
 		component string
 	}{
-		{"managed component is removed", dsc("Managed"), dsc("Removed"), "", true, true, "llamastackoperator"},
+		{"managed component is removed", dsc("Managed"), "", "", true, true, "llamastackoperator"},
 		{"already removed", dsc("Removed"), "", "nothing_to_do", false, false, "llamastackoperator"},
 		{"component absent", `{"metadata":{"name":"default-dsc"},"spec":{"components":{}}}`, "", "nothing_to_do", false, false, "llamastackoperator"},
-		{"patch silently pruned", dsc("Managed"), dsc("Managed"), "", false, true, "llamastackoperator"},
-		{"not a top-level component", dsc("Managed"), "", "validation", false, false, "modelsasservice"},
+		// The API server answers with the value unchanged: reported, not taken as done.
+		{"patch silently pruned", dsc("Managed"), dsc("Managed"), "internal", false, true, "llamastackoperator"},
+		{"not a component the CRD defines", dsc("Managed"), "", "validation", false, false, "modelsasservice"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f, c := newFakeAPI(t)
-			f.json("GET", dscV2List, http.StatusOK, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
-			f.json("GET", dscV2List+"/default-dsc", http.StatusOK, tt.current)
+			serveToggleDSC(f, "v2", tt.current, tt.patchResp, "llamastackoperator")
 			f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator", http.StatusOK, `{"status":{"readyReplicas":3}}`)
-			if tt.patchResp != "" {
-				f.json("PATCH", dscV2List+"/default-dsc", http.StatusOK, tt.patchResp)
-			}
 			res, err := ApplyFix(c, "disable-component:"+tt.component)
 			if err != nil || res.Success != tt.wantOK || res.ErrorCode != tt.wantCode {
 				t.Fatalf("ApplyFix = %+v, %v", res, err)
 			}
-			if got := len(f.writes()) == 1; got != tt.wantPatch {
-				t.Fatalf("writes = %v", f.writes())
+			if got := len(f.realWrites()) == 1; got != tt.wantPatch {
+				t.Fatalf("writes = %v", f.realWrites())
 			}
 		})
 	}
@@ -394,9 +391,7 @@ func TestDisableComponent_Preconditions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f, c := newFakeAPI(t)
-			f.json("GET", dscV2List, http.StatusOK, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
-			f.json("GET", dscV2List+"/default-dsc", http.StatusOK, `{"spec":{"components":{"`+tt.component+`":{"managementState":"Managed"}}}}`)
-			f.json("PATCH", dscV2List+"/default-dsc", http.StatusOK, `{"spec":{"components":{"`+tt.component+`":{"managementState":"Removed"}}}}`)
+			serveToggleDSC(f, "v2", `{"metadata":{"name":"default-dsc","uid":"u1"},"spec":{"components":{"`+tt.component+`":{"managementState":"Managed"}}}}`, "", tt.component)
 			serveComponentGroup(f)
 			f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1", http.StatusOK, `{"resources":[{"name":"rays","kind":"Ray"}]}`)
 			tt.setup(f)
@@ -404,8 +399,8 @@ func TestDisableComponent_Preconditions(t *testing.T) {
 			if err != nil || !strings.Contains(res.Message, tt.wantIn) {
 				t.Fatalf("ApplyFix = %+v, %v", res, err)
 			}
-			if got := len(f.writes()) == 1; got != tt.wantPatch || res.Success != tt.wantPatch {
-				t.Fatalf("writes = %v, result = %+v", f.writes(), res)
+			if got := len(f.realWrites()) == 1; got != tt.wantPatch || res.Success != tt.wantPatch {
+				t.Fatalf("writes = %v, result = %+v", f.realWrites(), res)
 			}
 		})
 	}

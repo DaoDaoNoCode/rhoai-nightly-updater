@@ -706,8 +706,7 @@ func TestDSCChangesRefusedUnderGitOps(t *testing.T) {
 	})
 	t.Run("disable-component", func(t *testing.T) {
 		f, c := newFakeAPI(t)
-		f.json("GET", dscV2List, http.StatusOK, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
-		f.json("GET", dscV2List+"/default-dsc", http.StatusOK, `{"metadata":{"name":"default-dsc","uid":"u1","resourceVersion":"7",`+tracked+`},"spec":{"components":{"ray":{"managementState":"Managed"}}}}`)
+		serveToggleDSC(f, "v2", `{"metadata":{"name":"default-dsc","uid":"u1","resourceVersion":"7",`+tracked+`},"spec":{"components":{"ray":{"managementState":"Managed"}}}}`, "", "ray")
 		res, err := ApplyFix(c, "disable-component:ray")
 		if err != nil || res.Success || res.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(res.Message, "Set ray to Removed in Git") {
 			t.Fatalf("result = %+v, %v", res, err)

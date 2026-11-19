@@ -1,0 +1,109 @@
+[
+ {
+  "apiVersion": "datasciencecluster.opendatahub.io/v3",
+  "kind": "DataScienceCluster",
+  "metadata": {
+   "labels": {
+    "app.kubernetes.io/name": "datasciencecluster"
+   },
+   "name": "default-dsc"
+  },
+  "spec": {
+   "components": {
+    "aiHub": {
+     "instancesNamespace": "rhoai-model-registries",
+     "managementState": "Managed"
+    },
+    "aigateway": {
+     "batchGateway": {
+      "managementState": "Removed"
+     },
+     "managementState": "Removed",
+     "modelsAsAService": {
+      "managementState": "Removed"
+     }
+    },
+    "aipipelines": {
+     "managementState": "Managed"
+    },
+    "dashboard": {
+     "maasPortal": {
+      "managementState": "Removed"
+     },
+     "standard": {
+      "managementState": "Managed"
+     }
+    },
+    "data": {
+     "featureStore": {
+      "managementState": "Managed"
+     }
+    },
+    "databaseservice": {
+     "managementState": "Removed"
+    },
+    "kserve": {
+     "managementState": "Managed",
+     "modelExpress": {
+      "managementState": "Removed"
+     },
+     "nim": {
+      "managementState": "Managed"
+     }
+    },
+    "kueue": {
+     "managementState": "Removed"
+    },
+    "mcplifecycleoperator": {
+     "managementState": "Managed"
+    },
+    "mlflowoperator": {
+     "managementState": "Managed"
+    },
+    "ogx": {
+     "managementState": "Managed"
+    },
+    "ray": {
+     "managementState": "Managed"
+    },
+    "sparkoperator": {
+     "managementState": "Removed"
+    },
+    "trainer": {
+     "managementState": "Managed"
+    },
+    "trustyai": {
+     "managementState": "Managed"
+    },
+    "workbenches": {
+     "managementState": "Managed",
+     "workbenchesV2": {
+      "managementState": "Removed"
+     }
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "dscinitialization.opendatahub.io/v2",
+  "kind": "DSCInitialization",
+  "metadata": {
+   "labels": {
+    "app.kubernetes.io/name": "dscinitialization"
+   },
+   "name": "default-dsci"
+  },
+  "spec": {
+   "applicationsNamespace": "redhat-ods-applications",
+   "monitoring": {
+    "managementState": "Managed",
+    "metrics": {},
+    "namespace": "redhat-ods-monitoring"
+   },
+   "trustedCABundle": {
+    "customCABundle": "",
+    "managementState": "Managed"
+   }
+  }
+ }
+]
