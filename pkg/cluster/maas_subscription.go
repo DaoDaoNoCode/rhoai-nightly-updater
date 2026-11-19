@@ -372,8 +372,15 @@ func maasAudienceFromOwner(owner map[string]interface{}) maasAudience {
 	return a
 }
 
+// equal: the same audience, in any order (MaaS matches names, not
+// positions).
 func (a maasAudience) equal(o maasAudience) bool {
-	return a.everyone == o.everyone && strings.Join(a.groups, "\n") == strings.Join(o.groups, "\n") && strings.Join(a.users, "\n") == strings.Join(o.users, "\n")
+	sorted := func(in []string) string {
+		s := append([]string(nil), in...)
+		sort.Strings(s)
+		return strings.Join(s, "\n")
+	}
+	return a.everyone == o.everyone && sorted(a.groups) == sorted(o.groups) && sorted(a.users) == sorted(o.users)
 }
 
 func (a maasAudience) api() types.MaaSAudience {

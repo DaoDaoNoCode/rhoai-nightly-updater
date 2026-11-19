@@ -171,6 +171,26 @@ func TestMaaSSubscriptionDescription(t *testing.T) {
 	}
 }
 
+// The same names in another order are the same audience: MaaS matches
+// names, not positions. Publish of a second model with the audience in
+// another order is then not a different audience, and Change who can use
+// them has nothing to change.
+func TestMaaSAudience_EqualIgnoresOrder(t *testing.T) {
+	a := maasAudience{groups: []string{"a", "b"}, users: []string{"x", "y"}}
+	b := maasAudience{groups: []string{"b", "a"}, users: []string{"y", "x"}}
+	if !a.equal(b) || !b.equal(a) {
+		t.Error("order changes the audience")
+	}
+	if a.groups[0] != "a" || b.groups[0] != "b" {
+		t.Error("equal sorted the audience it compared")
+	}
+	for _, o := range []maasAudience{{groups: []string{"a"}, users: []string{"x", "y"}}, {groups: []string{"a", "b"}, users: []string{"x"}}, {everyone: true}, {groups: []string{"a", "b", "x", "y"}}} {
+		if a.equal(o) {
+			t.Errorf("%+v equals %+v", a, o)
+		}
+	}
+}
+
 // A group without an OpenShift Group is a warning with the commands that
 // make it; a name that cannot be an OpenShift Group's is not looked up and
 // has no commands; one that cannot be read says so.
