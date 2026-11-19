@@ -850,7 +850,7 @@ async function maasStream(req, res) {
     unpublish: [["check", "Unpublishing, in reverse order of publishing."], ["maas", "The model reference is deleted."], ["model", noRoute ? "The model has no outside route now, as before it was published: it answers only at its in-cluster address." : "The model routes as before publishing: KServe's default gateway (no refs)."],
       ["gateway", `The MaaS gateway no longer admits routes from '${project}'.`]],
     "change-limit": [["check", "The model's limit can change."], ["limit", "The subscription lists the model with its new limit."], ["ready", "MaaS applies it."]],
-    "change-access": [["check", "Who can use the published models can change."], ["access", "The subscription and the access policy name the new audience."], ["ready", "MaaS applies it."]],
+    "change-access": [["check", "Who can use the published models can change."], ["access", "The subscription and the authorization policy name the new audience."], ["ready", "MaaS applies it."]],
     "change-database": [["check", "MaaS can switch databases."], ["cnpg", "Not needed."], ["database", `Secret ${F.MAAS_INFRA}/maas-db-config names the new database.`], ["cleanup", "Deleted the database before."]],
   }[action] ?? [];
   for (const [step, done] of steps) {

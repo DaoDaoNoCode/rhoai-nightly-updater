@@ -346,7 +346,7 @@ func (m *maasRun) routeModelThroughMaaS(project, name string, original maasModel
 			return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish to undo.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled")
 		}
 		if why != "" {
-			return fmt.Sprintf("Partly published: %s. The model reference, subscription and access policy were not made. Unpublish to undo.", why), "partial_failure"
+			return fmt.Sprintf("Partly published: %s. The model reference, subscription and authorization policy were not made. Unpublish to undo.", why), "partial_failure"
 		}
 		if refs, meta, spec, err = readModelGatewayRefsSpec(c, project, name); err != nil {
 			return fmt.Sprintf("Cannot read %s in %s: %v. Unpublish to undo.", name, project, err), errorCodeFromK8sErr(err)
@@ -376,7 +376,7 @@ func (m *maasRun) routeModelThroughMaaS(project, name string, original maasModel
 		return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish to undo.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled")
 	}
 	if why != "" {
-		return fmt.Sprintf("Partly published: %s. The model reference, subscription and access policy were not made. Unpublish to undo.", why), "partial_failure"
+		return fmt.Sprintf("Partly published: %s. The model reference, subscription and authorization policy were not made. Unpublish to undo.", why), "partial_failure"
 	}
 	m.step("model", "success", "The model routes through "+maasGatewayName+" alone. "+maasUseWords)
 	return "", ""

@@ -725,7 +725,7 @@ export function maasState(m: MaaSStatus | null, busy: Busy = IDLE): FeatureState
   if (status === "ready") {
     const what = published.length === 0 ? "no model of this tool published" : `${published.length} ${published.length === 1 ? "model" : "models"} published`;
     const href = maasDashboardHref(m.dashboardUrl);
-    return { status, label: `Ready, ${what}`, ...own, next: href ? { kind: "open", label: "Open MaaS", href } : null, project: null };
+    return { status, label: `Ready, ${what}`, ...own, next: href ? { kind: "open", label: "Open MaaS governance", href } : null, project: null };
   }
   if (MOVING.includes(status)) return { status, label: status === "deleting" ? "Removing" : "Setting up", next: null, project: null };
   if (PROBLEM.includes(status)) {

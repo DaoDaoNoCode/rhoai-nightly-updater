@@ -121,7 +121,7 @@ func TestMaaSUnpublish_SaysWhenTheGatewayWasNotUpdated(t *testing.T) {
 }
 
 // Finding 2: a recorded project whose model and reference are gone is not
-// put back into the shared subscription and access policy.
+// put back into the shared subscription and authorization policy.
 func TestMaaSPublish_LeavesStaleRecordsOutOfTheSubscription(t *testing.T) {
 	mc := newMaaSCluster(t)
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
@@ -189,7 +189,7 @@ func TestMaaSTeardown_RefusesWhileOthersUseMaaS(t *testing.T) {
 	for name, path := range map[string]string{
 		"model reference": "/apis/maas.opendatahub.io/v1alpha1/namespaces/team/maasmodelrefs/their-model",
 		"subscription":    "/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maassubscriptions/team-sub",
-		"access policy":   "/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maasauthpolicies/team-access",
+		"authorization policy":   "/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maasauthpolicies/team-access",
 	} {
 		t.Run(name, func(t *testing.T) {
 			mc := newMaaSCluster(t)

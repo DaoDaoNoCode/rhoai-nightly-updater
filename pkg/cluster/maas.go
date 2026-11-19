@@ -635,7 +635,7 @@ func maasNamespaceRefusal(c *Client, infra string) (string, string) {
 			continue
 		}
 		if who := meta.Annotations[projectRequesterAnnotation]; who != "" {
-			return fmt.Sprintf("Namespace %s was made through a project request by %s (annotation %s), not by RHOAI, and MaaS takes over a namespace of that name that exists. Its admins could attach routes to the MaaS gateway and change MaaS's subscriptions and access policies there, so this tool does not set up or publish MaaS while it exists. A cluster-admin checks it and, if it is not RHOAI's, deletes it; RHOAI makes it again. Nothing was changed.", ns, who, projectRequesterAnnotation), "not_managed"
+			return fmt.Sprintf("Namespace %s was made through a project request by %s (annotation %s), not by RHOAI, and MaaS takes over a namespace of that name that exists. Its admins could attach routes to the MaaS gateway and change MaaS's subscriptions and authorization policies there, so this tool does not set up or publish MaaS while it exists. A cluster-admin checks it and, if it is not RHOAI's, deletes it; RHOAI makes it again. Nothing was changed.", ns, who, projectRequesterAnnotation), "not_managed"
 		}
 	}
 	return "", ""
@@ -1644,7 +1644,7 @@ func maasPhase(c *Client, path string) (string, bool) {
 // model that is not publishable): its MaaSModelRef,
 // this tool's record of it, or the model's route through the MaaS gateway.
 // Unpublish removes all three (and the project from the shared
-// subscription, access policy and gateway), so the model goes after it.
+// subscription, authorization policy and gateway), so the model goes after it.
 func MaaSPublishedIn(c *Client, project, name string) (bool, error) {
 	refPath, ok := maasModelRefPath(c, project, name)
 	if !ok {

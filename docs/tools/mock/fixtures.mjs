@@ -1274,7 +1274,7 @@ export function modelExposures(project, model, gw, { maasReady = false, otherGat
     available: chat && maasReady, address: maasReady ? `https://maas.${APPS}` : undefined,
     reason: !chat ? "Only chat models are published to MaaS." : maasReady ? undefined : "MaaS isn't set up yet (Red Hat Connectivity Link is missing).",
     fix: chat && !maasReady ? "maas-tab" : undefined,
-    changes: chat && maasReady ? [`Gateway openshift-ingress/maas-default-gateway: admits routes from ${project}.`, `Published to MaaS: MaaSModelRef ${model} in ${project}, and this tool's subscription and access policy list the model.`] : undefined,
+    changes: chat && maasReady ? [`Gateway openshift-ingress/maas-default-gateway: admits routes from ${project}.`, `Published to MaaS: MaaSModelRef ${model} in ${project}, and this tool's subscription and authorization policy list the model.`] : undefined,
   };
   // Outside openshift-ingress: offered, never recommended (its token checks cannot be read).
   const other = otherGateway ? [{

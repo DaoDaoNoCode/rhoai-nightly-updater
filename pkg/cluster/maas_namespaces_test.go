@@ -13,7 +13,7 @@ const tUserProject = `{"metadata":{"annotations":{"openshift.io/requester":"mall
 // namespace) before MaaS runs: maas-controller adopts a namespace of that
 // name that exists, so that user would be an admin of the namespace the
 // MaaS gateway admits routes from and where this tool writes its
-// subscription and access policy. Setup refuses before any write.
+// subscription and authorization policy. Setup refuses before any write.
 func TestMaaSSetup_RefusesANamespaceAUserRequested(t *testing.T) {
 	for _, ns := range []string{maasTenantNamespace, "redhat-ai-gateway-infra"} {
 		t.Run(ns, func(t *testing.T) {

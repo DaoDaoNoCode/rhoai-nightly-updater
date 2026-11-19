@@ -45,7 +45,7 @@ describe("maasState", () => {
       items: [{ namespace: "p", deployed: true, ready: true, managedByTool: true, modelReady: true, published: true }],
     }), IDLE);
     expect(s.label).toBe("Ready, 1 model published");
-    expect(s.next).toEqual({ kind: "open", label: "Open MaaS", href: "https://rh-ai.apps.example.com/maas/maas-governance" });
+    expect(s.next).toEqual({ kind: "open", label: "Open MaaS governance", href: "https://rh-ai.apps.example.com/maas/maas-governance" });
   });
 
   it("a publication left half-way says what is left, is not counted, and does not keep the tab polling", () => {
@@ -178,6 +178,22 @@ describe("MaaS run dialog", () => {
     expect(await within(run).findByText(/publish a model to offer it through MaaS/)).toBeInTheDocument();
     expect(within(run).queryByText(/import a pipeline/)).toBeNull();
     expect(within(run).queryByRole("link", { name: /Open pipelines/ })).toBeNull();
+  });
+
+  it("Use it names the subscription and the dashboard's page as the dashboard does", async () => {
+    stubApi({
+      "/api/resources/status": status,
+      "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/maas": base([{ id: "dsc", title: "MaaS in the DataScienceCluster", state: "ready" }], {
+        platform: { deployed: true, ready: true, managedByTool: true }, url: "https://maas.apps.example.com", dashboardUrl: "https://rh-ai.apps.example.com",
+        items: [{ namespace: "dev", name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", deployed: true, ready: true, managedByTool: true, modelReady: true, published: true }],
+      }),
+    });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
+    const term = await screen.findByText("Subscription");
+    expect(term.closest(".pf-v6-c-description-list__group")?.textContent).toContain("rhoai-nightly-updater models (rhoai-nightly-updater-subscription)");
+    expect(screen.getByRole("link", { name: /MaaS governance/ })).toHaveAttribute("href", "https://rh-ai.apps.example.com/maas/maas-governance");
+    expect(screen.getByText(/: subscriptions, authorization policies and models/)).toBeInTheDocument();
   });
 
   it("Set up lists every change it will make before it runs", async () => {

@@ -951,7 +951,7 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 		return m.fail("model", err.Error()+". Publish again to retry, or Unpublish to undo.", maasWriteCode(err), "genai metadata failed")
 	}
 	m.logs = append(m.logs, "OK: the model left Gen AI studio's AI assets (label "+genAIAssetLabel+" and annotation "+genAIUseCaseAnnotation+" removed, as the dashboard's MaaS option does); MaaS lists it")
-	m.step("maas", "running", "Creating the model reference, the subscription and the access policy...")
+	m.step("maas", "running", "Creating the model reference, the subscription and the authorization policy...")
 	for _, w := range []struct {
 		desc, path, create string
 		obj                map[string]interface{}
@@ -996,7 +996,7 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 // --- unpublish ---------------------------------------------------------------------
 
 // unpublish removes the publication of the tool's model name in project, in
-// reverse order: the access policy and subscription entries (the objects
+// reverse order: the authorization policy and subscription entries (the objects
 // when no other project is left), the model reference, the model's gateway
 // ref, and the project from the gateway. stepped is false when it runs as
 // part of a removal.
@@ -1061,8 +1061,8 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 	}
 	rec.setPublished(project, name, false)
 
-	// The access policy and the subscription.
-	say("maas", "running", "Removing the model from the access policy and the subscription...")
+	// The authorization policy and the subscription.
+	say("maas", "running", "Removing the model from the authorization policy and the subscription...")
 	// The models left keep their limits and the audience (fail closed: a
 	// subscription that cannot be read is not rewritten with defaults).
 	cur, err := readMaaSToolSubscription(c)
@@ -1125,7 +1125,7 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 			return m.fail("maas", fmt.Sprintf("MaaSModelRef %s/%s is still being deleted (maas-controller removes its finalizer; it must be running). Unpublish again to check.", project, name), "in_progress", "ref still deleting")
 		}
 	}
-	say("maas", "success", "The model reference is deleted, and the access policy and subscription no longer list the model.")
+	say("maas", "success", "The model reference is deleted, and the authorization policy and subscription no longer list the model.")
 
 	// The model's gateway refs. The record keeps the publication until the
 	// route has left the MaaS gateway, so the tab shows a route that did not

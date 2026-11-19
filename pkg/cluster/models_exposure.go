@@ -472,7 +472,7 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 		b.Available = true
 		b.Changes = []string{
 			fmt.Sprintf("Gateway %s: admits routes from %s.", gatewayKey(inferenceGatewayNamespace, maasGatewayName), r.project),
-			fmt.Sprintf("Published to MaaS: MaaSModelRef %s in %s, and this tool's subscription and access policy list the model.", r.entry.Name, r.project),
+			fmt.Sprintf("Published to MaaS: MaaSModelRef %s in %s, and this tool's subscription and authorization policy list the model.", r.entry.Name, r.project),
 		}
 		if r.maasURL != "" {
 			b.Address = r.maasURL
