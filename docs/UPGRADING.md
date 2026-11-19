@@ -583,6 +583,49 @@ The image has no revision label of this repository (a build from before the
 label). Run the command once more with `ALLOW_TEMPLATE_MISMATCH=1`; later
 releases carry the label.
 
+**"reports revision \<none\>" or "cannot read the revision label"**
+
+```
+ERROR: quay.io/juntao_wang/rhoai-nightly-updater@sha256:... reports revision <none>, not 94e2cc72..., the commit of v3.0.1 whose template this installer holds.
+```
+
+Every release image carries its commit in the label
+`org.opencontainers.image.revision`. The 3.0.x installers read it only with
+`oc image info` on your machine and hid oc's error. Where oc cannot read the
+image (for example, a credential helper named in `~/.docker/config.json`
+fails, or `oc` is old), they report `<none>` for an image that is correct.
+See oc's own error with:
+
+```bash
+oc image info quay.io/juntao_wang/rhoai-nightly-updater@sha256:<digest> --filter-by-os=linux/amd64
+```
+
+From 4.0.0 the installer reads the label from the registry's API
+first, anonymously (needs only `curl`; `oc` is the fallback), and when
+neither works it stops with "cannot read the revision label" and the reason
+each way failed: the registry's HTTP status or curl's error, and oc's error.
+Fix what it names (network or proxy access to `quay.io`, the credential
+helper) and run it again.
+
+To install anyway, first check the label yourself. Use the digest from the
+installer's `Resolved ... to ...@sha256:<digest>` line. With the
+registry's API (anonymous; needs `curl` and `jq`):
+
+```bash
+REPO=juntao_wang/rhoai-nightly-updater
+DIGEST=sha256:<digest>
+CONFIG=$(curl -fsSL -H 'Accept: application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json' \
+  "https://quay.io/v2/$REPO/manifests/$DIGEST" | jq -r .config.digest)
+curl -fsSL "https://quay.io/v2/$REPO/blobs/$CONFIG" | jq -r '.config.Labels["org.opencontainers.image.revision"]'
+```
+
+Or, where oc works, `oc image info quay.io/juntao_wang/rhoai-nightly-updater@sha256:<digest> --filter-by-os=linux/amd64 | grep revision=`.
+Only if it prints exactly the commit that the error names (the release's
+commit), run the installer again with `ALLOW_TEMPLATE_MISMATCH=1 bash install.sh`.
+Release tags are never rewritten, so check that its `Resolved ... to` line
+shows the same digest. That variable turns off the check entirely, so
+never set it for an image you have not checked.
+
 **"This installer installs vX.Y.Z only"**
 Each `install.sh` installs its own release. Download the one of the release
 you want.

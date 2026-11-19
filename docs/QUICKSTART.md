@@ -59,6 +59,8 @@ bash install.sh             # namespace rhoai-nightly-updater; --namespace / --a
 
 **What you should see:** the last line is `App URL: https://...`. `bash install.sh --help` lists the options.
 
+**It stops with "reports revision &lt;none&gt;"** (the 3.0.x installers) or "cannot read the revision label": the installer could not read the image's labels from this machine. Read that entry in the [UPGRADING.md FAQ](UPGRADING.md#7-faq) before you override the check.
+
 <details>
 <summary>From a clone instead (contributors; also needed for <code>make rollback</code> and the smoke test)</summary>
 
