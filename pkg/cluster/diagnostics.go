@@ -980,8 +980,16 @@ func nodePullSecretHealth(c *Client, controlPlane string) checkOutput {
 	topology := "Infrastructure cluster: controlPlaneTopology is not External (self-managed)"
 	title := "The nodes may not have the quay.io/rhoai credentials"
 	description := "This cluster is self-managed: its nodes pull with the cluster pull secret, openshift-config/pull-secret, not with kube-system/additional-pull-secret, which the updater uses for its own Quay lookups. "
-	if controlPlane != ControlPlaneSelfManaged {
-		topology = "Infrastructure cluster could not be read, so the control plane topology is unknown"
+	fix := "Click Add to the nodes' pull secret under Pull secret in the cluster setup on the Status page: it copies the token saved there into openshift-config/pull-secret with your own permissions. Or a cluster-admin runs the command below in bash or zsh (jq 1.6 or later): it asks for the quay.io/rhoai token from the setup and adds only that entry. " +
+		"Then click Check that the nodes can pull there."
+	switch controlPlane {
+	case ControlPlaneSelfManaged:
+	case ControlPlaneManaged:
+		topology = "Infrastructure cluster: controlPlaneTopology is not External, and Red Hat SRE's managed-cluster webhooks (*.managed.openshift.io) are installed (ROSA Classic or OpenShift Dedicated)"
+		description = "Red Hat runs this cluster: its nodes pull with the cluster pull secret, openshift-config/pull-secret, not with kube-system/additional-pull-secret, which the updater uses for its own Quay lookups. Red Hat creates that secret and documents no procedure for changing it on these services, so the updater does not change it. "
+		fix = "If you choose to, a cluster-admin runs the command below in bash or zsh (jq 1.6 or later): it asks for the quay.io/rhoai token from the setup and adds only that entry. Then click Check that the nodes can pull under Pull secret in the cluster setup on the Status page."
+	default:
+		topology = "Infrastructure cluster or the validating webhook configurations could not be read, so the platform is unknown"
 		title = "The nodes may not have the quay.io/rhoai credentials (if this cluster is self-managed)"
 		description = "The updater could not read whether this cluster has a hosted control plane. On a self-managed cluster the nodes pull with the cluster pull secret, openshift-config/pull-secret, not with kube-system/additional-pull-secret, which the updater uses for its own Quay lookups. "
 	}
@@ -991,11 +999,10 @@ func nodePullSecretHealth(c *Client, controlPlane string) checkOutput {
 			ID:       "node-pull-secret-unchecked",
 			Severity: "warning",
 			Title:    title,
-			Description: description + "The updater has no access to openshift-config/pull-secret, which holds every registry credential of the cluster, so it cannot tell whether the quay.io/rhoai entry is there. " +
+			Description: description + "The updater's ServiceAccount has no access to openshift-config/pull-secret, which holds every registry credential of the cluster, so this check cannot tell whether the quay.io/rhoai entry is there. " +
 				"Without it, Update stops at the catalog check with ErrImagePull and changes nothing.",
-			Evidence: []string{topology, catalog},
-			Fix: "A cluster-admin runs the command below in bash or zsh (jq 1.6 or later): it asks for the quay.io/rhoai token from the setup and adds only that entry. " +
-				"Then click Check that the nodes can pull under Pull secret in the cluster setup on the Status page.",
+			Evidence:     []string{topology, catalog},
+			Fix:          fix,
 			LearnMore:    "The nodes pick up the change within a few minutes, without a reboot; oc get mcp shows UPDATED True for every pool when they all have it.",
 			TechnicalCmd: NodePullSecretCommand,
 		}},

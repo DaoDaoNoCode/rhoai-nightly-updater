@@ -192,6 +192,8 @@ var operationTypes = map[string][2]string{
 	"/api/assist-rollout":                     {"assist-rollout", "Assist stuck rollouts"},
 	"/api/setup/pull-secret":                  {"create-pull-secret", "Configure pull secret"},
 	"/api/setup/node-pull-check":              {"node-pull-check", "Check that the nodes can pull"},
+	"/api/setup/nodes/plan":                   {"node-setup-plan", "Review a cluster setup change"},
+	"/api/setup/nodes/stream":                 {"node-setup", "One-time cluster setup"},
 	"/api/setup/dsc":                          {"create-dsc", "Create DataScienceCluster"},
 	"/api/dashboard/deploy-pr":                {"deploy-dashboard-pr", "Deploy dashboard PR"},
 	"/api/dashboard/deploy-main":              {"deploy-dashboard-main", "Deploy dashboard main"},
