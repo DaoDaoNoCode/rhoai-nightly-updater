@@ -31,6 +31,10 @@ if ! command -v node &>/dev/null; then
   echo -e "${RED}ERROR: Node.js is not installed. Install it first.${NC}"
   exit 1
 fi
+if ! command -v curl &>/dev/null; then
+  echo -e "${RED}ERROR: curl is not installed (dev.sh waits for the backend with it).${NC}"
+  exit 1
+fi
 
 TOKEN=$(oc whoami -t 2>/dev/null || true)
 if [ -z "$TOKEN" ]; then
@@ -60,7 +64,7 @@ echo $$ > "$LOCK_DIR/pid"
 # Install frontend dependencies if needed
 if [ ! -d frontend/node_modules ]; then
   echo -e "${YELLOW}Installing frontend dependencies...${NC}"
-  (cd frontend && npm install)
+  (cd frontend && npm ci)
 fi
 
 # Cleanup on exit, Ctrl-C, kill or a closed terminal. Each child is stopped
@@ -82,7 +86,6 @@ cleanup() {
   # The watchdog first: it waits for this script, which waits below.
   kill_tree "$WATCHDOG_PID"
   kill_tree "$PF_PID"; kill_tree "$GO_PID"; kill_tree "$NPM_PID"
-  rm -f server
   wait 2>/dev/null || true
   rm -rf "$LOCK_DIR"
   echo -e "${GREEN}Done.${NC}"
@@ -122,8 +125,24 @@ DEV_S3_ENDPOINT="http://127.0.0.1:${S3_LOCAL_PORT}" \
 go run . &
 GO_PID=$!
 
-# Give the Go backend a moment to start
-sleep 1
+# Start the frontend once the backend answers (any HTTP status: a 503
+# "degraded" health is still a running server). go run compiles first, so
+# allow up to 3 minutes; stop if the backend exits (a build error).
+echo -e "${CYAN}Waiting for the Go backend...${NC}"
+for _ in $(seq 1 180); do
+  if curl -s -o /dev/null --max-time 2 http://127.0.0.1:8080/api/health; then
+    break
+  fi
+  if ! kill -0 "$GO_PID" 2>/dev/null; then
+    echo -e "${RED}ERROR: the Go backend exited; see its output above.${NC}"
+    exit 1
+  fi
+  sleep 1
+done
+if ! curl -s -o /dev/null --max-time 2 http://127.0.0.1:8080/api/health; then
+  echo -e "${RED}ERROR: the Go backend did not answer on 127.0.0.1:8080 within 3 minutes.${NC}"
+  exit 1
+fi
 
 # Start webpack dev server
 echo -e "${CYAN}Starting frontend dev server on :9000...${NC}"
