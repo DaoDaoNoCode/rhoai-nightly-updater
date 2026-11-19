@@ -183,10 +183,10 @@ func readModelGatewayRefsSpec(c *Client, project, name string) (gatewayRefs, obj
 		Spec map[string]interface{} `json:"spec"`
 	}
 	if err := json.Unmarshal(body, &model); err != nil {
-		return nil, objectMeta{}, nil, fmt.Errorf("parse %s in '%s': %w", name, project, err)
+		return nil, objectMeta{}, nil, fmt.Errorf("parse %s in %s: %w", name, project, err)
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, objectMeta{}, nil, fmt.Errorf("parse %s in '%s': %w", name, project, err)
+		return nil, objectMeta{}, nil, fmt.Errorf("parse %s in %s: %w", name, project, err)
 	}
 	return model.Spec.Router.Gateway.Refs, model.Metadata, raw.Spec, nil
 }
@@ -330,7 +330,7 @@ func (m *maasRun) routeModelThroughMaaS(project, name string, original maasModel
 	// someone else writes after it makes the write fail (409).
 	refs, meta, spec, err := readModelGatewayRefsSpec(c, project, name)
 	if err != nil {
-		return fmt.Sprintf("Cannot read %s in '%s': %v. Unpublish to undo.", name, project, err), errorCodeFromK8sErr(err)
+		return fmt.Sprintf("Cannot read %s in %s: %v. Unpublish to undo.", name, project, err), errorCodeFromK8sErr(err)
 	}
 	if d := expect.differences(spec); len(d) > 0 {
 		return specChangedRefusal(name, project, d, "Unpublish to undo what was done."), "conflict"
@@ -349,7 +349,7 @@ func (m *maasRun) routeModelThroughMaaS(project, name string, original maasModel
 			return fmt.Sprintf("Partly published: %s. The model reference, subscription and access policy were not made. Unpublish to undo.", why), "partial_failure"
 		}
 		if refs, meta, spec, err = readModelGatewayRefsSpec(c, project, name); err != nil {
-			return fmt.Sprintf("Cannot read %s in '%s': %v. Unpublish to undo.", name, project, err), errorCodeFromK8sErr(err)
+			return fmt.Sprintf("Cannot read %s in %s: %v. Unpublish to undo.", name, project, err), errorCodeFromK8sErr(err)
 		}
 		if d := expect.differences(spec); len(d) > 0 {
 			return specChangedRefusal(name, project, d, "Unpublish to undo what was done."), "conflict"
@@ -392,7 +392,7 @@ func (m *maasRun) restoreModelRoute(project, name string, recorded maasModelRefs
 	c := m.c
 	refs, meta, spec, err := readModelGatewayRefsSpec(c, project, name)
 	if err != nil {
-		return fmt.Sprintf("Cannot read %s in '%s': %v. Unpublish again to retry.", name, project, err), errorCodeFromK8sErr(err)
+		return fmt.Sprintf("Cannot read %s in %s: %v. Unpublish again to retry.", name, project, err), errorCodeFromK8sErr(err)
 	}
 	rv := meta.ResourceVersion
 	target, write := refs, refs.hasMaaS()
@@ -513,9 +513,9 @@ func directRouteNote(c *Client, project, name string) string {
 		return ""
 	}
 	if gatewayOwned(gw.Metadata) {
-		return fmt.Sprintf(" Its direct address does not answer yet: the inference gateway does not list '%s' among the projects it allows. Allow %s on the Models tab (a cluster-admin).", project, project)
+		return fmt.Sprintf(" Its direct address does not answer yet: the inference gateway does not list %s among the projects it allows. Allow %s on the Models tab (a cluster-admin).", project, project)
 	}
-	return fmt.Sprintf(" Its direct address does not answer: Gateway %s/%s, which this tool did not create, does not let routes from '%s' attach; a cluster admin adds '%s' to the values array of its listeners' allowedRoutes, as RHOAI documents it.", inferenceGatewayNamespace, inferenceGatewayName, project, project)
+	return fmt.Sprintf(" Its direct address does not answer: Gateway %s/%s, which this tool did not create, does not let routes from %s attach; a cluster admin adds %s to the values array of its listeners' allowedRoutes, as RHOAI documents it.", inferenceGatewayNamespace, inferenceGatewayName, project, project)
 }
 
 // refsChangedRefusal is why Unpublish (or Publish again) does not write
@@ -523,7 +523,7 @@ func directRouteNote(c *Client, project, name string) string {
 // while it was published, and writing the recorded list would drop it.
 // then says what the operation does once the user has set the refs.
 func refsChangedRefusal(project, name string, refs gatewayRefs, recorded maasModelRefs, then string) string {
-	return fmt.Sprintf("%s in '%s' routes through %s: someone added a gateway since it was published, which set only %s. Writing back what the model had before, %s, would drop that gateway. Nothing was changed. %s. %s",
+	return fmt.Sprintf("%s in %s routes through %s: someone added a gateway since it was published, which set only %s. Writing back what the model had before, %s, would drop that gateway. Nothing was changed. %s. %s",
 		name, project, refs, maasGatewayName, recorded, setRefsYourself(project, name), then)
 }
 

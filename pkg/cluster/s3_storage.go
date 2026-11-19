@@ -204,11 +204,11 @@ func S3AdminLogin(c *Client) (login S3Login, err error) {
 	case !ns.Exists:
 		return unavailable("The S3 storage is not set up.")
 	case !ns.Managed:
-		return unavailable(fmt.Sprintf("Namespace '%s' was not created by this tool, so it does not read the password there.", s3Namespace))
+		return unavailable(fmt.Sprintf("Namespace %s was not created by this tool, so it does not read the password there.", s3Namespace))
 	}
 	body, _, err := c.get(namespacedPath("v1", "secrets", s3Namespace, s3Secret))
 	if IsK8sError(err, 404) {
-		return unavailable(fmt.Sprintf("Secret '%s' does not exist in namespace '%s'. Repair re-creates it.", s3Secret, s3Namespace))
+		return unavailable(fmt.Sprintf("Secret %s does not exist in namespace %s. Repair re-creates it.", s3Secret, s3Namespace))
 	}
 	if err != nil {
 		return S3Login{}, fmt.Errorf("read Secret %s/%s: %w", s3Namespace, s3Secret, err)
@@ -221,14 +221,14 @@ func S3AdminLogin(c *Client) (login S3Login, err error) {
 		return S3Login{}, fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
 	}
 	if !storageObjectOwned(secret.Metadata) {
-		return unavailable(fmt.Sprintf("Secret '%s' in namespace '%s' was not created by this tool, so it does not read it.", s3Secret, s3Namespace))
+		return unavailable(fmt.Sprintf("Secret %s in namespace %s was not created by this tool, so it does not read it.", s3Secret, s3Namespace))
 	}
 	login = S3Login{
 		User: s3AdminUser, Password: decodeBase64Field(secret.Data[s3AdminPasswordField]),
 		AccessKey: decodeBase64Field(secret.Data[s3AccessKeyField]), SecretKey: decodeBase64Field(secret.Data[s3SecretKeyField]),
 	}
 	if login.SecretKey == "" {
-		return unavailable(fmt.Sprintf("Secret '%s' has no %s. Repair writes it again.", s3Secret, s3SecretKeyField))
+		return unavailable(fmt.Sprintf("Secret %s has no %s. Repair writes it again.", s3Secret, s3SecretKeyField))
 	}
 	// Password is "" on storage an earlier version set up (its admin UI
 	// used the S3 secret key) until its next Repair; the UI says so.
@@ -605,12 +605,12 @@ func s3StatusAndEndpoints(c *Client) (types.ResourceState, s3Endpoints, error) {
 	if ns.terminating() {
 		state.Terminating = true
 		state.Message = "Terminating"
-		state.SetupBlockedReason = fmt.Sprintf("Namespace '%s' is still being deleted.", s3Namespace)
+		state.SetupBlockedReason = fmt.Sprintf("Namespace %s is still being deleted.", s3Namespace)
 		return state, s3Endpoints{}, nil
 	}
 	if !ns.Managed {
-		state.SetupBlockedReason = fmt.Sprintf("Namespace '%s' exists but was not created by this tool, so setup will not modify it.", s3Namespace)
-		state.TeardownBlockedReason = fmt.Sprintf("Namespace '%s' was not created by this tool.", s3Namespace)
+		state.SetupBlockedReason = fmt.Sprintf("Namespace %s exists but was not created by this tool, so setup will not modify it.", s3Namespace)
+		state.TeardownBlockedReason = fmt.Sprintf("Namespace %s was not created by this tool.", s3Namespace)
 	}
 
 	var (
@@ -1068,7 +1068,7 @@ func legacyStorageSetupBlock(l *legacyStorage) string {
 	if l == nil {
 		return ""
 	}
-	return fmt.Sprintf("Storage from an earlier version of this tool is still in namespace '%s'. Use Migrate storage: it sets up the storage in namespace '%s' with new keys, copies every object and moves the pipeline servers this tool set up to the new storage and its keys. Anything else that uses the old keys, such as your own S3 clients, then needs the new keys from the Pipelines tab.", legacyNamespace, s3Namespace)
+	return fmt.Sprintf("Storage from an earlier version of this tool is still in namespace %s. Use Migrate storage: it sets up the storage in namespace %s with new keys, copies every object and moves the pipeline servers this tool set up to the new storage and its keys. Anything else that uses the old keys, such as your own S3 clients, then needs the new keys from the Pipelines tab.", legacyNamespace, s3Namespace)
 }
 
 // SetupS3Storage deploys the S3 storage (SeaweedFS) with a bucket for
@@ -1080,7 +1080,7 @@ func SetupS3Storage(c *Client) (*types.OperationResponse, error) {
 	legacy, err := readLegacyStorage(c)
 	if err != nil {
 		recordS3Activity(c, "setup-minio", fmt.Sprintf("namespace=%s (earlier storage check failed)", s3Namespace), false)
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot check for storage from an earlier version in namespace '%s'; nothing was changed: %v.%s", legacyNamespace, err, templateHint(err)), ErrorCode: errorCodeFromK8sErr(err)}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot check for storage from an earlier version in namespace %s; nothing was changed: %v.%s", legacyNamespace, err, templateHint(err)), ErrorCode: errorCodeFromK8sErr(err)}, nil
 	}
 	if reason := legacyStorageSetupBlock(legacy); reason != "" {
 		recordS3Activity(c, "setup-minio", fmt.Sprintf("namespace=%s (earlier storage present)", s3Namespace), false)
@@ -1140,7 +1140,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 	log.add(fmt.Sprintf("Creating namespace %s...", s3Namespace))
 	ns, err := lookupS3Namespace(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot check namespace '%s': %v.%s", s3Namespace, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace check failed")
+		return fail(fmt.Sprintf("Cannot check namespace %s: %v.%s", s3Namespace, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace check failed")
 	}
 	if !ns.Exists {
 		nsData, _ := json.Marshal(map[string]interface{}{
@@ -1156,19 +1156,19 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 		case IsK8sError(err, 409):
 			// Created concurrently: decide ownership again.
 			if ns, err = lookupS3Namespace(c); err != nil {
-				return fail(fmt.Sprintf("Cannot check namespace '%s': %v.%s", s3Namespace, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace check failed")
+				return fail(fmt.Sprintf("Cannot check namespace %s: %v.%s", s3Namespace, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace check failed")
 			}
 		default:
-			return fail(fmt.Sprintf("Failed to create namespace '%s': %v.%s", s3Namespace, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace creation failed")
+			return fail(fmt.Sprintf("Failed to create namespace %s: %v.%s", s3Namespace, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace creation failed")
 		}
 	} else if ns.Managed && !ns.terminating() {
 		log.add("Namespace already exists (created by this tool) — reusing")
 	}
 	if ns.terminating() {
-		return fail(fmt.Sprintf("Namespace '%s' is still being deleted. Wait until it is gone, then %s.", s3Namespace, retry.again), "terminating", "namespace terminating")
+		return fail(fmt.Sprintf("Namespace %s is still being deleted. Wait until it is gone, then %s.", s3Namespace, retry.again), "terminating", "namespace terminating")
 	}
 	if !ns.Managed {
-		return fail(fmt.Sprintf("Namespace '%s' already exists and was not created by this tool. Nothing was changed. Remove it yourself, or use a cluster without it.", s3Namespace), "not_managed", "namespace not managed")
+		return fail(fmt.Sprintf("Namespace %s already exists and was not created by this tool. Nothing was changed. Remove it yourself, or use a cluster without it.", s3Namespace), "not_managed", "namespace not managed")
 	}
 
 	// Step 2: Check every object the tool writes before writing any, so a
@@ -1196,10 +1196,10 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 		}
 	}
 	if len(foreign) > 0 {
-		return fail(fmt.Sprintf("Namespace '%s' already contains %s, not created by this tool. Nothing was changed. %s", s3Namespace, strings.Join(foreign, ", "), retry.foreignHint()), "not_managed", "foreign objects: "+strings.Join(foreign, ", "))
+		return fail(fmt.Sprintf("Namespace %s already contains %s, not created by this tool. Nothing was changed. %s", s3Namespace, strings.Join(foreign, ", "), retry.foreignHint()), "not_managed", "foreign objects: "+strings.Join(foreign, ", "))
 	}
 	if len(deleting) > 0 {
-		return fail(fmt.Sprintf("%s in namespace '%s' is still being deleted. Wait until it is gone, then %s.", strings.Join(deleting, ", "), s3Namespace, retry.again), "terminating", "objects terminating")
+		return fail(fmt.Sprintf("%s in namespace %s is still being deleted. Wait until it is gone, then %s.", strings.Join(deleting, ", "), s3Namespace, retry.again), "terminating", "objects terminating")
 	}
 
 	// Step 3: Create or update the server objects. The Service and the
@@ -1307,7 +1307,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 	// Step 6: Create the bucket through the Service, as pipeline servers
 	// reach it (try once, retry once if it fails). SeaweedFS also creates
 	// it on start (-bucket).
-	log.add(fmt.Sprintf("Creating bucket '%s'...", s3Bucket))
+	log.add(fmt.Sprintf("Creating bucket %s...", s3Bucket))
 	bucketErr := s3BucketCreator(c, s3Bucket)
 	if bucketErr != nil {
 		if clk.Sleep(c.ctx, s3BucketRetryDelay) == nil {
@@ -1316,15 +1316,15 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 	}
 	if bucketErr != nil {
 		log.add(fmt.Sprintf("Bucket creation failed: %v — you can create it from the SeaweedFS admin UI.", bucketErr))
-		return fail(fmt.Sprintf("SeaweedFS deployed but bucket creation failed: %v. %s to retry, or create bucket '%s' from the admin UI.", bucketErr, retry.Again, s3Bucket), "", "bucket failed")
+		return fail(fmt.Sprintf("SeaweedFS deployed but bucket creation failed: %v. %s to retry, or create bucket %s from the admin UI.", bucketErr, retry.Again, s3Bucket), "", "bucket failed")
 	}
-	log.add(fmt.Sprintf("OK: Bucket '%s' created", s3Bucket))
+	log.add(fmt.Sprintf("OK: Bucket %s created", s3Bucket))
 
 	slog.Info("s3 storage setup complete", "user", getUser(c))
 	recordS3Activity(c, "setup-minio", fmt.Sprintf("namespace=%s bucket=%s", s3Namespace, s3Bucket), true)
 	return &types.OperationResponse{
 		Success: true,
-		Message: fmt.Sprintf("S3 storage (SeaweedFS) deployed with bucket '%s'; pipeline servers reach it at %s. Sign in to the admin UI as '%s'; the password (the S3 secret key) and the S3 keys are in Secret '%s' in namespace '%s'.", s3Bucket, s3Endpoint(), s3AdminUser, s3Secret, s3Namespace),
+		Message: fmt.Sprintf("S3 storage (SeaweedFS) deployed with bucket %s; pipeline servers reach it at %s. Sign in to the admin UI as %s; the password (the S3 secret key) and the S3 keys are in Secret %s in namespace %s.", s3Bucket, s3Endpoint(), s3AdminUser, s3Secret, s3Namespace),
 		Logs:    log.lines,
 	}, nil
 }
@@ -1405,7 +1405,7 @@ func s3KeptNamespaceHint(namespaces []string) string {
 	}
 	quoted := make([]string, len(namespaces))
 	for i, n := range namespaces {
-		quoted[i] = "'" + n + "'"
+		quoted[i] = n
 	}
 	cmds := make([]string, len(namespaces))
 	for i, n := range namespaces {
@@ -1605,11 +1605,11 @@ func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.Operatio
 
 	ns, err := lookupS3Namespace(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot check namespace '%s'; nothing was deleted: %v.%s", s3Namespace, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace check failed")
+		return fail(fmt.Sprintf("Cannot check namespace %s; nothing was deleted: %v.%s", s3Namespace, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace check failed")
 	}
 	legacy, err := readLegacyStorage(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot check namespace '%s' for storage from an earlier version; nothing was deleted: %v.%s", legacyNamespace, err, templateHint(err)), errorCodeFromK8sErr(err), "earlier storage check failed")
+		return fail(fmt.Sprintf("Cannot check namespace %s for storage from an earlier version; nothing was deleted: %v.%s", legacyNamespace, err, templateHint(err)), errorCodeFromK8sErr(err), "earlier storage check failed")
 	}
 	current := ns.Exists && ns.Managed && !ns.terminating()
 	if !current && legacy == nil {
@@ -1618,10 +1618,10 @@ func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.Operatio
 			logs = append(logs, "Namespace already absent")
 			return &types.OperationResponse{Success: true, Message: "The S3 storage is not deployed; nothing to remove.", Logs: logs}, nil
 		case !ns.Managed:
-			return fail(fmt.Sprintf("Namespace '%s' was not created by this tool, so nothing in it was deleted.", s3Namespace), "not_managed", "not managed")
+			return fail(fmt.Sprintf("Namespace %s was not created by this tool, so nothing in it was deleted.", s3Namespace), "not_managed", "not managed")
 		default:
 			logs = append(logs, "Namespace is being deleted")
-			return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Namespace '%s' is being deleted.", s3Namespace) + namespaceDeletionDetail(c, s3Namespace), Logs: logs, ErrorCode: "in_progress"}, nil
+			return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Namespace %s is being deleted.", s3Namespace) + namespaceDeletionDetail(c, s3Namespace), Logs: logs, ErrorCode: "in_progress"}, nil
 		}
 	}
 
@@ -1647,7 +1647,7 @@ func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.Operatio
 	}
 	if legacy != nil {
 		if legacy.addressErr != nil && len(dspas) > 0 {
-			return fail(fmt.Sprintf("Cannot verify which pipeline servers use the storage in namespace '%s' (its Route hosts or service address could not be read); nothing was deleted: %v.%s", legacyNamespace, legacy.addressErr, templateHint(legacy.addressErr)), errorCodeFromK8sErr(legacy.addressErr), "dependency check failed")
+			return fail(fmt.Sprintf("Cannot verify which pipeline servers use the storage in namespace %s (its Route hosts or service address could not be read); nothing was deleted: %v.%s", legacyNamespace, legacy.addressErr, templateHint(legacy.addressErr)), errorCodeFromK8sErr(legacy.addressErr), "dependency check failed")
 		}
 		addresses = append(addresses, legacy.address)
 	}
@@ -1691,7 +1691,7 @@ func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.Operatio
 			d.forbidden = err
 		} else {
 			keptNamespaces = keptNamespaces[1:]
-			nsNote = fmt.Sprintf(" Namespace '%s' is being deleted, with everything else in it.", s3Namespace)
+			nsNote = fmt.Sprintf(" Namespace %s is being deleted, with everything else in it.", s3Namespace)
 			logs = append(logs, "OK: Namespace "+s3Namespace+" is being deleted")
 		}
 	}

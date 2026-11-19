@@ -80,7 +80,7 @@ func stripModelGenAI(c *Client, project, name string) error {
 		return nil
 	}
 	if err := patchModelGenAI(c, project, name, model.Metadata.ResourceVersion, labels, annotations); err != nil {
-		return fmt.Errorf("take %s in '%s' out of Gen AI studio's AI assets: %w", name, project, err)
+		return fmt.Errorf("take %s in %s out of Gen AI studio's AI assets: %w", name, project, err)
 	}
 	return nil
 }
@@ -103,7 +103,7 @@ func restoreModelGenAI(c *Client, project, name string, g maasGenAI) error {
 		return nil
 	}
 	if err := patchModelGenAI(c, project, name, model.Metadata.ResourceVersion, labels, annotations); err != nil {
-		return fmt.Errorf("put %s in '%s' back in Gen AI studio's AI assets: %w", name, project, err)
+		return fmt.Errorf("put %s in %s back in Gen AI studio's AI assets: %w", name, project, err)
 	}
 	return nil
 }

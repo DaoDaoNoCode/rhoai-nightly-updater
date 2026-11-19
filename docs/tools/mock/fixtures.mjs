@@ -495,9 +495,9 @@ export const s3States = {
   // Namespace seaweedfs exists, made by someone else: setup refuses.
   foreign: {
     deployed: false, ready: false, namespace: "seaweedfs", managedByTool: false,
-    message: "Namespace 'seaweedfs' exists but was not created by this tool, so setup will not modify it.",
-    setupBlockedReason: "Namespace 'seaweedfs' exists but was not created by this tool, so setup will not modify it.",
-    teardownBlockedReason: "Namespace 'seaweedfs' was not created by this tool.",
+    message: "Namespace seaweedfs exists but was not created by this tool, so setup will not modify it.",
+    setupBlockedReason: "Namespace seaweedfs exists but was not created by this tool, so setup will not modify it.",
+    teardownBlockedReason: "Namespace seaweedfs was not created by this tool.",
   },
   // Storage of an earlier version is still in namespace minio: nothing in
   // namespace seaweedfs yet, or (stage "remove") the new storage is running.
@@ -535,24 +535,24 @@ export function legacyStorage(stage) {
 export function migrateSteps(kind) {
   const rows = kind === "migrate"
     ? [
-      ["check", "running", "Checking the storage in namespace 'minio'..."],
-      ["check", "success", "OK: SeaweedFS in namespace 'minio' is running"],
-      ["storage", "running", "Setting up the storage in namespace 'seaweedfs' with new keys..."],
+      ["check", "running", "Checking the storage in namespace minio..."],
+      ["check", "success", "OK: SeaweedFS in namespace minio is running"],
+      ["storage", "running", "Setting up the storage in namespace seaweedfs with new keys..."],
       ["storage", "success", "OK: The new storage is ready"],
-      ["copy", "running", "Copying every bucket and object from 'minio' to 'seaweedfs' (Job seaweedfs-migrate)..."],
+      ["copy", "running", "Copying every bucket and object from minio to 'seaweedfs' (Job seaweedfs-migrate)..."],
       ["copy", "success", "OK: 37 objects (18204511 bytes) copied and checked byte for byte"],
       ["repoint", "running", "Moving pipeline server dev-project/dspa..."],
       ["repoint", "success", "OK: 1 pipeline server moved"],
-      ["operation_complete", "success", "Migrated 37 objects (18204511 bytes) to namespace 'seaweedfs'. 1 pipeline server now uses it: dev-project/dspa. The old storage in namespace 'minio' is kept: delete it later from the S3 storage's menu, once nothing else uses it."],
+      ["operation_complete", "success", "Migrated 37 objects (18204511 bytes) to namespace seaweedfs. 1 pipeline server now uses it: dev-project/dspa. The old storage in namespace minio is kept: delete it later from the S3 storage's menu, once nothing else uses it."],
     ]
     : [
       ["check", "success", "OK: Nothing of this tool uses the old storage"],
-      ["copy", "running", "Copying every bucket and object from 'minio' to 'seaweedfs' (Job seaweedfs-migrate)..."],
+      ["copy", "running", "Copying every bucket and object from minio to 'seaweedfs' (Job seaweedfs-migrate)..."],
       ["copy", "success", "OK: 37 objects (18204511 bytes) copied and checked byte for byte"],
-      ["remove", "running", "Deleting the old storage in namespace 'minio'..."],
+      ["remove", "running", "Deleting the old storage in namespace minio..."],
       ["remove", "success", "OK: The old storage is deleted"],
-      ["namespace", "success", "OK: Namespace 'minio' is being deleted, with everything else in it"],
-      ["operation_complete", "success", "The old storage in namespace 'minio' was removed; its 37 objects (18204511 bytes) are in namespace 'seaweedfs'. Namespace 'minio' is being deleted, with everything else in it."],
+      ["namespace", "success", "OK: Namespace minio is being deleted, with everything else in it"],
+      ["operation_complete", "success", "The old storage in namespace minio was removed; its 37 objects (18204511 bytes) are in namespace seaweedfs. Namespace minio is being deleted, with everything else in it."],
     ];
   return rows.map(([step, status, message]) => ({ step, status, message }));
 }

@@ -212,7 +212,7 @@ func TestMigrate_FullRunMovesDataAndToolPipelineServersOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("migrate failed: %s (%s)", msg, code)
 	}
-	for _, want := range []string{"4 objects (4330 bytes)", "2 pipeline servers now use it: juntao-test/dspa, team-a/nightly-dspa", "hand-made/dspa (not created by this tool)", "The old storage in namespace 'minio' is kept: delete it later from the S3 storage's menu, once nothing else uses it."} {
+	for _, want := range []string{"4 objects (4330 bytes)", "2 pipeline servers now use it: juntao-test/dspa, team-a/nightly-dspa", "hand-made/dspa (not created by this tool)", "The old storage in namespace minio is kept: delete it later from the S3 storage's menu, once nothing else uses it."} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message lacks %q: %s", want, msg)
 		}
@@ -846,7 +846,7 @@ func TestMigrate_Refusals(t *testing.T) {
 		putMigrationCase(f)
 		f.putJSON(legacyS3DeployPath, `{"metadata":{"labels":`+toolLabelJSON+`,"generation":1},"status":{"readyReplicas":0}}`)
 		ok, msg, code, _ := runMigrate(t, c, MigrateOptions{})
-		if ok || code != "prerequisites" || !strings.Contains(msg, "SeaweedFS in namespace 'minio' is not running") {
+		if ok || code != "prerequisites" || !strings.Contains(msg, "SeaweedFS in namespace minio is not running") {
 			t.Fatalf("got %v %s: %s", ok, code, msg)
 		}
 		if len(f.mutations()) != 0 {

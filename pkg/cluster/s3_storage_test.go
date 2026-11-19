@@ -225,7 +225,7 @@ func TestSetupS3Storage_FreshClusterUsesTheNewNamesLabelsEverythingAndWaitsForRe
 			t.Errorf("Secret lacks key %s: %s", key, secret)
 		}
 	}
-	if !strings.Contains(resp.Message, "Sign in to the admin UI as 'admin'") || !strings.Contains(resp.Message, "http://seaweedfs-s3.seaweedfs.svc:8333") {
+	if !strings.Contains(resp.Message, "Sign in to the admin UI as admin") || !strings.Contains(resp.Message, "http://seaweedfs-s3.seaweedfs.svc:8333") {
 		t.Errorf("message = %q", resp.Message)
 	}
 }
@@ -451,7 +451,7 @@ func TestSetupS3Storage_BucketFailureSaysReRunSetup(t *testing.T) {
 	readyAfterApply(f)
 	s3BucketCreator = func(*Client, string) error { return errors.New("connection refused") }
 	resp, _ := SetupS3Storage(c)
-	if resp.Success || !strings.Contains(resp.Message, "Re-run setup to retry, or create bucket 'pipelines' from the admin UI") || strings.Contains(resp.Message, "Migrate") {
+	if resp.Success || !strings.Contains(resp.Message, "Re-run setup to retry, or create bucket pipelines from the admin UI") || strings.Contains(resp.Message, "Migrate") {
 		t.Fatalf("setup = %+v", resp)
 	}
 }
@@ -732,7 +732,7 @@ func TestTeardownS3Storage(t *testing.T) {
 			t.Errorf("%s was not deleted", path)
 		}
 	}
-	if !f.has(s3NSPath) || !strings.Contains(resp.Message, "Namespace 'seaweedfs' was kept") || !strings.Contains(resp.Message, "seaweedfs/seaweedfs-data") {
+	if !f.has(s3NSPath) || !strings.Contains(resp.Message, "Namespace seaweedfs was kept") || !strings.Contains(resp.Message, "seaweedfs/seaweedfs-data") {
 		t.Errorf("teardown = %+v", resp)
 	}
 	// Re-running finds nothing left.
@@ -757,7 +757,7 @@ func TestTeardownS3Storage_DeleteNamespace(t *testing.T) {
 		putDeployedS3(f)
 		putToolNamespace(f)
 		resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{DeleteNamespace: true})
-		if !resp.Success || !deleted(f) || f.has(s3NSPath) || !strings.Contains(resp.Message, "Namespace 'seaweedfs' is being deleted, with everything else in it.") || strings.Contains(resp.Message, "oc delete project") {
+		if !resp.Success || !deleted(f) || f.has(s3NSPath) || !strings.Contains(resp.Message, "Namespace seaweedfs is being deleted, with everything else in it.") || strings.Contains(resp.Message, "oc delete project") {
 			t.Fatalf("teardown = %+v", resp)
 		}
 		if f.has(s3DeployPath) || f.has(s3SecretPath) {

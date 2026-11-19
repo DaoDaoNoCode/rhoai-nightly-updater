@@ -440,18 +440,24 @@ export function maasSteps(p: MaaSPending): { id: string; title: string }[] {
       return [
         { id: "check", title: "Check the platform and the model" },
         { id: "gateway", title: `Let the MaaS gateway admit ${p.project}` },
-        { id: "model", title: `Route ${p.model} through the MaaS gateway only` },
+        { id: "model", title: "Route the model through the MaaS gateway only" },
         { id: "maas", title: "Model reference, subscription and access policy" },
         { id: "ready", title: "Wait until MaaS lists the model" },
       ];
     default:
       return [
         { id: "check", title: "Check the publication" },
-        { id: "maas", title: `Remove ${p.model} from MaaS` },
-        { id: "model", title: `Route ${p.model} as before` },
+        { id: "maas", title: "Remove the model from MaaS" },
+        { id: "model", title: "Route the model as before" },
         { id: "gateway", title: `Stop admitting ${p.project}` },
       ];
   }
+}
+
+/** A model's short display name in MaaS's list (as the Models tab names it), or its resource name. */
+function maasModelName(m: MaaSStatus | null, project: string, model: string): string {
+  const d = m?.items?.find((i) => i.namespace === project && i.name === model)?.displayName;
+  return d ? d.replace(/\s*\([^)]*\)\s*$/, "") : model;
 }
 
 /** The confirmation of a MaaS change, or null for another feature's change. */
@@ -521,7 +527,7 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
       const item = (m?.items ?? []).find((i) => i.namespace === pending.project && i.name === pending.model);
       const form = pending.limit ?? defaultLimitForm(item?.limit);
       return {
-        title: `Change the limit of ${pending.model} in ${pending.project}?`, confirm: "Change limit", runTitle: `Change the limit of ${pending.model} in ${pending.project}`,
+        title: `Change the limit of ${maasModelName(m, pending.project, pending.model)} in ${pending.project}?`, confirm: "Change limit", runTitle: `Change the limit of ${maasModelName(m, pending.project, pending.model)} in ${pending.project}`,
         summary: <Content component="p">Now: {limitText(item?.limit)}. API keys keep working; MaaS applies the new limit within seconds.</Content>,
         choice: <LimitFields value={form} idPrefix="change" noUnlimited={m?.noUnlimited} onChange={(f) => setPending?.({ ...pending, limit: f })} />,
         confirmDisabled: !!limitProblem(form, m?.noUnlimited),
@@ -565,7 +571,7 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
       const limit = pending.limit ?? defaultLimitForm();
       const access = pending.access ?? defaultAudienceForm(m?.access);
       return {
-        title: `Publish ${pending.model} in ${pending.project} to MaaS?`, confirm: "Publish", runTitle: `Publish ${pending.model} in ${pending.project}`,
+        title: `Publish ${maasModelName(m, pending.project, pending.model)} in ${pending.project} to MaaS?`, confirm: "Publish", runTitle: `Publish ${maasModelName(m, pending.project, pending.model)} in ${pending.project}`,
         summary: <Content component="p">Who you choose can then call the model through MaaS with an API key, each up to the limit you choose. While it is published, the model is used through MaaS and the dashboard&apos;s playground; its direct address (the Models tab&apos;s commands) answers 404 until it is unpublished.</Content>,
         choice: (
           <Stack hasGutter>
@@ -585,7 +591,7 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
     case "unpublish-maas": {
       const maasOnly = !!m?.items?.find((i) => i.namespace === pending.project && i.name === pending.model)?.maasOnlySetup;
       return {
-        title: `Unpublish ${pending.model} in ${pending.project}?`, confirm: "Unpublish", danger: true, runTitle: `Unpublish ${pending.model} in ${pending.project}`,
+        title: `Unpublish ${maasModelName(m, pending.project, pending.model)} in ${pending.project}?`, confirm: "Unpublish", danger: true, runTitle: `Unpublish ${maasModelName(m, pending.project, pending.model)} in ${pending.project}`,
         summary: <Content component="p">MaaS stops offering the model; API keys can no longer call it. The model keeps running in {pending.project}.</Content>,
         changes: [
           <>Deleted: MaaSModelRef <code>{pending.model}</code> in {pending.project}, and the model&apos;s entries in the subscription and access policy (both are deleted when no model is left).</>,

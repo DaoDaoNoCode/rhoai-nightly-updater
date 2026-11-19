@@ -61,14 +61,14 @@ describe("MaaS dialogs", () => {
       "POST /api/resources/maas/stream": done });
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Publish" }));
-    const dialog = await screen.findByRole("dialog", { name: /Publish qwen3-1-7b in dev to MaaS\?/ });
+    const dialog = await screen.findByRole("dialog", { name: /Publish Qwen3 1.7B in dev to MaaS\?/ });
     fireEvent.click(within(dialog).getByRole("radio", { name: /Premium example: 100,000 tokens a day/ }));
     fireEvent.click(within(dialog).getByRole("radio", { name: /Specific groups and users/ }));
     const publish = within(dialog).getByRole("button", { name: "Publish" });
     expect(publish).toBeDisabled();
     fireEvent.change(within(dialog).getByLabelText("Groups"), { target: { value: "ml-team\ndata" } });
     fireEvent.click(publish);
-    await screen.findByRole("dialog", { name: "Publish qwen3-1-7b in dev" });
+    await screen.findByRole("dialog", { name: "Publish Qwen3 1.7B in dev" });
     expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "publish", project: "dev", model: "qwen3-1-7b", limit: { preset: "premium" }, access: { everyone: false, groups: ["ml-team", "data"], users: [] } }]);
   });
 
@@ -80,7 +80,7 @@ describe("MaaS dialogs", () => {
       "POST /api/resources/maas/stream": done });
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Publish" }));
-    const dialog = await screen.findByRole("dialog", { name: /Publish qwen3-1-7b in dev to MaaS\?/ });
+    const dialog = await screen.findByRole("dialog", { name: /Publish Qwen3 1.7B in dev to MaaS\?/ });
     fireEvent.click(within(dialog).getByRole("radio", { name: /Specific groups and users/ }));
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
@@ -112,7 +112,7 @@ describe("MaaS dialogs", () => {
     expect(screen.getByText("Group ml-team does not exist")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy the commands that create group ml-team" })).toBeInTheDocument();
     fireEvent.click(within(row).getByRole("button", { name: "Change limit" }));
-    const dialog = await screen.findByRole("dialog", { name: /Change the limit of qwen3-1-7b in dev\?/ });
+    const dialog = await screen.findByRole("dialog", { name: /Change the limit of Qwen3 1.7B in dev\?/ });
     fireEvent.click(within(dialog).getByRole("radio", { name: /Custom/ }));
     fireEvent.change(within(dialog).getByLabelText("Limit 1: tokens"), { target: { value: "0" } });
     expect(within(dialog).getByLabelText("Limit 1: tokens")).toHaveAttribute("aria-invalid", "true");
@@ -120,7 +120,7 @@ describe("MaaS dialogs", () => {
     expect(within(dialog).getByRole("button", { name: "Change limit" })).toBeDisabled();
     fireEvent.change(within(dialog).getByLabelText("Limit 1: tokens"), { target: { value: "500" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Change limit" }));
-    await screen.findByRole("dialog", { name: "Change the limit of qwen3-1-7b in dev" });
+    await screen.findByRole("dialog", { name: "Change the limit of Qwen3 1.7B in dev" });
     expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "change-limit", project: "dev", model: "qwen3-1-7b", limit: { preset: "custom", rates: [{ limit: 500, window: "1m" }] } }]);
   });
 

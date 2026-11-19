@@ -410,7 +410,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	if ok, err := isDSProject(c, project); err != nil {
 		return fail(fmt.Sprintf("Cannot list the projects; nothing was changed: %v", err), errorCodeFromK8sErr(err), "project list failed")
 	} else if !ok {
-		return fail(fmt.Sprintf("'%s' is not a Data Science project. Create it in the RHOAI dashboard first. Nothing was changed.", project), "validation", "not a Data Science project")
+		return fail(fmt.Sprintf("%s is not a Data Science project. Create it in the RHOAI dashboard first. Nothing was changed.", project), "validation", "not a Data Science project")
 	}
 
 	// Never add a second pipeline server next to one this tool did not
@@ -429,25 +429,25 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 		switch {
 		case d.Meta.Name == dspaName && d.Meta.hasToolLabel():
 			if d.Meta.terminating() {
-				return fail(fmt.Sprintf("The pipeline server in '%s' is still being deleted. Wait for it to finish, then retry.", project), "terminating", "terminating")
+				return fail(fmt.Sprintf("The pipeline server in %s is still being deleted. Wait for it to finish, then retry.", project), "terminating", "terminating")
 			}
 			dspaMeta, dspaFound = d.Meta, true
 		case d.Meta.Name == previousDSPAName && d.managedByTool():
 			if d.Meta.terminating() {
-				return fail(fmt.Sprintf("Pipeline server '%s' in '%s' is still being deleted. Wait for it to finish, then set up again. Nothing was changed.", d.Meta.Name, project), "terminating", "earlier name terminating")
+				return fail(fmt.Sprintf("Pipeline server %s in %s is still being deleted. Wait for it to finish, then set up again. Nothing was changed.", d.Meta.Name, project), "terminating", "earlier name terminating")
 			}
 			if !recreate {
-				return fail(fmt.Sprintf("Project '%s' already has pipeline server '%s', which an earlier version of this tool set up. Workbench pipelines need it to be named '%s': use Recreate with the standard name on the Pipelines tab (its run history is lost), or keep it as it is. Nothing was changed.", project, d.Meta.Name, dspaName), "validation", "earlier name exists")
+				return fail(fmt.Sprintf("Project %s already has pipeline server %s, which an earlier version of this tool set up. Workbench pipelines need it to be named %s: use Recreate with the standard name on the Pipelines tab (its run history is lost), or keep it as it is. Nothing was changed.", project, d.Meta.Name, dspaName), "validation", "earlier name exists")
 			}
 			old = &existing[i]
 		case d.managedByTool():
-			return fail(fmt.Sprintf("Project '%s' already has a pipeline server ('%s') created by an earlier version of this tool. Delete it first to recreate it.", project, d.Meta.Name), "validation", "legacy pipeline server exists")
+			return fail(fmt.Sprintf("Project %s already has a pipeline server (%s) created by an earlier version of this tool. Delete it first to recreate it.", project, d.Meta.Name), "validation", "legacy pipeline server exists")
 		default:
-			return fail(fmt.Sprintf("Project '%s' already has a pipeline server ('%s') that this tool did not create. It was left unchanged.", project, d.Meta.Name), "not_managed", "unmanaged pipeline server exists")
+			return fail(fmt.Sprintf("Project %s already has a pipeline server (%s) that this tool did not create. It was left unchanged.", project, d.Meta.Name), "not_managed", "unmanaged pipeline server exists")
 		}
 	}
 	if old != nil && dspaFound {
-		return fail(fmt.Sprintf("Project '%s' has both '%s' and '%s' from this tool; delete one of them first. Nothing was changed.", project, previousDSPAName, dspaName), "validation", "both names exist")
+		return fail(fmt.Sprintf("Project %s has both %s and %s from this tool; delete one of them first. Nothing was changed.", project, previousDSPAName, dspaName), "validation", "both names exist")
 	}
 
 	// Step 1: Read the S3 credentials
@@ -470,10 +470,10 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	}
 	for _, s := range secrets {
 		if err := readProjectSecret(s, projectSecretPath(project, s.name)); err != nil {
-			return fail(fmt.Sprintf("Cannot read secret '%s': %v", s.name, err), errorCodeFromK8sErr(err), s.what+" read failed")
+			return fail(fmt.Sprintf("Cannot read secret %s: %v", s.name, err), errorCodeFromK8sErr(err), s.what+" read failed")
 		}
 		if s.found && !s.meta.hasToolLabel() {
-			return fail(fmt.Sprintf("Secret '%s' already exists in '%s' and was not created by this tool. It was left unchanged.", s.name, project), "not_managed", s.what+" exists")
+			return fail(fmt.Sprintf("Secret %s already exists in %s and was not created by this tool. It was left unchanged.", s.name, project), "not_managed", s.what+" exists")
 		}
 		// Owned by the DSPA once it exists (below, or now on a re-run).
 		if dspaFound {
@@ -551,12 +551,12 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	logs = append(logs, "Checking the secrets and the pipeline server with the API server (dry run)...")
 	for _, s := range secrets {
 		if _, err := writeProjectSecret(s, projectSecretPath(project, s.name), withToolFieldManager(namespacedPath("v1", "secrets", project, "")), true); err != nil {
-			msg, code := pipelineWriteFailure(fmt.Sprintf("secret '%s'", s.name), project, err)
+			msg, code := pipelineWriteFailure(fmt.Sprintf("secret %s", s.name), project, err)
 			return fail(msg+" Nothing was changed.", code, s.what+" dry run failed")
 		}
 	}
 	if _, err := writeDSPA(true); err != nil {
-		msg, code := pipelineWriteFailure(fmt.Sprintf("pipeline server '%s'", dspaName), project, err)
+		msg, code := pipelineWriteFailure(fmt.Sprintf("pipeline server %s", dspaName), project, err)
 		return fail(msg+" Nothing was changed.", code, "DSPA dry run failed")
 	}
 	if old != nil {
@@ -565,7 +565,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	for _, s := range secrets {
 		action, err := writeProjectSecret(s, projectSecretPath(project, s.name), withToolFieldManager(namespacedPath("v1", "secrets", project, "")), false)
 		if err != nil {
-			msg, code := pipelineWriteFailure(fmt.Sprintf("secret '%s'", s.name), project, err)
+			msg, code := pipelineWriteFailure(fmt.Sprintf("secret %s", s.name), project, err)
 			return fail(msg, code, s.what+" write failed")
 		}
 		logs = append(logs, fmt.Sprintf("OK: Secret %s %s", s.name, action))
@@ -574,8 +574,8 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	logs = append(logs, "Creating pipeline server (DSPA)...")
 	dspaAction, err := writeDSPA(false)
 	if err != nil {
-		msg, code := pipelineWriteFailure(fmt.Sprintf("pipeline server '%s'", dspaName), project, err)
-		return fail(fmt.Sprintf("%s Secrets '%s' and '%s' are in place; re-run setup, or delete the pipeline server to clean up.", msg, dspaSecretName, connectionSecretName), code, "DSPA write failed")
+		msg, code := pipelineWriteFailure(fmt.Sprintf("pipeline server %s", dspaName), project, err)
+		return fail(fmt.Sprintf("%s Secrets %s and %s are in place; re-run setup, or delete the pipeline server to clean up.", msg, dspaSecretName, connectionSecretName), code, "DSPA write failed")
 	}
 	logs = append(logs, "OK: Pipeline server "+dspaAction)
 
@@ -584,13 +584,13 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	// deletes them with the DSPA, also when the dashboard deletes it.
 	if !secretsOwned {
 		for _, s := range secrets {
-			logs = append(logs, fmt.Sprintf("Making pipeline server '%s' the owner of secret '%s'...", dspaName, s.name))
+			logs = append(logs, fmt.Sprintf("Making pipeline server %s the owner of secret %s...", dspaName, s.name))
 			setDSPAOwner(s.obj, dspaName, dspaMeta.UID)
 			if _, err := writeProjectSecret(s, projectSecretPath(project, s.name), withToolFieldManager(namespacedPath("v1", "secrets", project, "")), false); err != nil {
 				recordPipelineActivity(c, "setup-pipeline-server", fmt.Sprintf("project=%s (%s owner not set: %v)", project, s.what, err), false)
 				return &types.OperationResponse{
 					Success: false, ErrorCode: "partial_failure", Logs: logs,
-					Message: fmt.Sprintf("Pipeline server created, but secret '%s' could not be linked to it: %v. Deleting the pipeline server in the RHOAI dashboard would leave the secret behind; Delete pipeline server in this tool removes it too.", s.name, err),
+					Message: fmt.Sprintf("Pipeline server created, but secret %s could not be linked to it: %v. Deleting the pipeline server in the RHOAI dashboard would leave the secret behind; Delete pipeline server in this tool removes it too.", s.name, err),
 				}, nil
 			}
 			logs = append(logs, "OK: Owned by the pipeline server")
@@ -613,7 +613,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 // sets up the new one from scratch, so every check runs again on what is
 // there now.
 func replacePipelineServer(c *Client, project string, old *dspaInfo, logs []string) (*types.OperationResponse, error) {
-	logs = append(logs, "OK: The API server accepts the new pipeline server", fmt.Sprintf("Deleting pipeline server '%s'...", old.Meta.Name))
+	logs = append(logs, "OK: The API server accepts the new pipeline server", fmt.Sprintf("Deleting pipeline server %s...", old.Meta.Name))
 	down, err := TeardownPipelineServer(c, project)
 	if err != nil {
 		return nil, err
@@ -623,7 +623,7 @@ func replacePipelineServer(c *Client, project string, old *dspaInfo, logs []stri
 		recordPipelineActivity(c, "recreate-pipeline-server", fmt.Sprintf("project=%s (teardown of %s: %s)", project, old.Meta.Name, down.ErrorCode), false)
 		msg := down.Message
 		if !strings.Contains(msg, "Nothing was deleted") {
-			msg += fmt.Sprintf(" Pipeline server '%s' was not created; once '%s' is gone, use Set up.", dspaName, old.Meta.Name)
+			msg += fmt.Sprintf(" Pipeline server %s was not created; once %s is gone, use Set up.", dspaName, old.Meta.Name)
 		}
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: down.ErrorCode}, nil
 	}
@@ -633,12 +633,12 @@ func replacePipelineServer(c *Client, project string, old *dspaInfo, logs []stri
 	}
 	up.Logs = append(logs, up.Logs...)
 	if !up.Success {
-		up.Message = fmt.Sprintf("Pipeline server '%s' was deleted, but '%s' could not be set up: %s Use Set up to try again.", old.Meta.Name, dspaName, up.Message)
+		up.Message = fmt.Sprintf("Pipeline server %s was deleted, but %s could not be set up: %s Use Set up to try again.", old.Meta.Name, dspaName, up.Message)
 		recordPipelineActivity(c, "recreate-pipeline-server", fmt.Sprintf("project=%s (setup failed)", project), false)
 		return up, nil
 	}
 	recordPipelineActivity(c, "recreate-pipeline-server", fmt.Sprintf("project=%s %s -> %s", project, old.Meta.Name, dspaName), true)
-	up.Message = fmt.Sprintf("Pipeline server '%s' replaced by '%s', which workbench pipelines use. It will take 1-3 minutes to become ready.", old.Meta.Name, dspaName)
+	up.Message = fmt.Sprintf("Pipeline server %s replaced by %s, which workbench pipelines use. It will take 1-3 minutes to become ready.", old.Meta.Name, dspaName)
 	return up, nil
 }
 
@@ -682,7 +682,7 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 		all, err = nil, nil
 	}
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot list pipeline servers in '%s'; nothing was deleted: %v", project, err), errorCodeFromK8sErr(err), "list failed")
+		return fail(fmt.Sprintf("Cannot list pipeline servers in %s; nothing was deleted: %v", project, err), errorCodeFromK8sErr(err), "list failed")
 	}
 	var target *dspaInfo
 	var unmanaged []string
@@ -697,24 +697,24 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 	}
 	if target == nil {
 		if len(unmanaged) > 0 {
-			return fail(fmt.Sprintf("The pipeline server in '%s' (%s) was not created by this tool, so it was not deleted.", project, strings.Join(unmanaged, ", ")), "not_managed", "not managed")
+			return fail(fmt.Sprintf("The pipeline server in %s (%s) was not created by this tool, so it was not deleted.", project, strings.Join(unmanaged, ", ")), "not_managed", "not managed")
 		}
 		logs = append(logs, "No pipeline server created by this tool in this project")
 		// A previous run may have removed the DSPA but not its secret.
 		orphan := &dspaInfo{Meta: objectMeta{UID: "none"}, SecretName: dspaSecretName}
 		note := deleteDSPASecret(c, project, orphan, all, &logs) + deleteConnection(c, project, &logs)
 		if note != "" {
-			return fail(fmt.Sprintf("No pipeline server created by this tool remains in '%s'.%s", project, note), "partial_failure", "orphan secret")
+			return fail(fmt.Sprintf("No pipeline server created by this tool remains in %s.%s", project, note), "partial_failure", "orphan secret")
 		}
-		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("No pipeline server created by this tool remains in '%s'.", project), Logs: logs}, nil
+		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("No pipeline server created by this tool remains in %s.", project), Logs: logs}, nil
 	}
 
 	dspaPath, ok := toolDSPAPath(project, target.Meta.Name)
 	if !ok {
-		return fail(fmt.Sprintf("Pipeline server '%s' does not have a name this tool creates, so it was not deleted.", target.Meta.Name), "not_managed", "unexpected DSPA name")
+		return fail(fmt.Sprintf("Pipeline server %s does not have a name this tool creates, so it was not deleted.", target.Meta.Name), "not_managed", "unexpected DSPA name")
 	}
 	if target.Meta.terminating() {
-		logs = append(logs, fmt.Sprintf("Pipeline server '%s' is already being deleted", target.Meta.Name))
+		logs = append(logs, fmt.Sprintf("Pipeline server %s is already being deleted", target.Meta.Name))
 	} else {
 		// The DSPA finalizer is removed only by the running operator. Deleting
 		// while it is down would leave the DSPA stuck in Terminating.
@@ -727,7 +727,7 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 				return fail("The data-science-pipelines operator is not running, so the pipeline server's finalizer could not complete and it would stay in Terminating. Nothing was deleted. Make sure the aipipelines component is Managed and its operator is ready, then retry.", "prerequisites", "operator not running")
 			}
 		}
-		logs = append(logs, fmt.Sprintf("Deleting pipeline server '%s'...", target.Meta.Name))
+		logs = append(logs, fmt.Sprintf("Deleting pipeline server %s...", target.Meta.Name))
 		if _, delErr := deleteWithUID(c, dspaPath, target.Meta.UID); delErr != nil && !IsK8sError(delErr, 404) {
 			code := errorCodeFromK8sErr(delErr)
 			if IsK8sError(delErr, 409) {
@@ -748,7 +748,7 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 		recordPipelineActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (cannot confirm deletion: %v)", project, waitErr), false)
 		return &types.OperationResponse{
 			Success:   false,
-			Message:   fmt.Sprintf("Deletion of pipeline server '%s' was requested, but whether it is gone cannot be checked: %v.%s", target.Meta.Name, waitErr, secretNote),
+			Message:   fmt.Sprintf("Deletion of pipeline server %s was requested, but whether it is gone cannot be checked: %v.%s", target.Meta.Name, waitErr, secretNote),
 			Logs:      logs,
 			ErrorCode: firstNonEmpty(errorCodeFromK8sErr(waitErr), "in_progress"),
 		}, nil
@@ -757,7 +757,7 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 		recordPipelineActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (still terminating)", project), false)
 		return &types.OperationResponse{
 			Success:   false,
-			Message:   fmt.Sprintf("Deletion of pipeline server '%s' was requested, but it is still terminating after %s (waiting for the data-science-pipelines operator to finish cleanup). The status shows it until it is gone.%s", target.Meta.Name, PipelineServerDeleteTimeout, secretNote),
+			Message:   fmt.Sprintf("Deletion of pipeline server %s was requested, but it is still terminating after %s (waiting for the data-science-pipelines operator to finish cleanup). The status shows it until it is gone.%s", target.Meta.Name, PipelineServerDeleteTimeout, secretNote),
 			Logs:      logs,
 			ErrorCode: "in_progress",
 		}, nil
@@ -767,7 +767,7 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 	slog.Info("pipeline server teardown", "project", project, "dspa", target.Meta.Name, "user", getUser(c))
 	recordPipelineActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s dspa=%s", project, target.Meta.Name), secretNote == "")
 
-	msg := fmt.Sprintf("Pipeline server removed from '%s'.", project)
+	msg := fmt.Sprintf("Pipeline server removed from %s.", project)
 	if !target.ExternalDB {
 		msg += fmt.Sprintf(" Its database PVC 'mariadb-%s' (pipeline runs and experiments) was deleted with it.", target.Meta.Name)
 	}
@@ -787,13 +787,13 @@ func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInf
 	}
 	for _, d := range all {
 		if d.Meta.UID != target.Meta.UID && !d.Meta.terminating() && d.SecretName == name {
-			*logs = append(*logs, fmt.Sprintf("Kept secret '%s': pipeline server '%s' also uses it", name, d.Meta.Name))
+			*logs = append(*logs, fmt.Sprintf("Kept secret %s: pipeline server %s also uses it", name, d.Meta.Name))
 			return ""
 		}
 	}
 	path, ok := toolDSPASecretPath(project, name)
 	if !ok {
-		*logs = append(*logs, fmt.Sprintf("Kept secret '%s': this tool never creates a secret with that name", name))
+		*logs = append(*logs, fmt.Sprintf("Kept secret %s: this tool never creates a secret with that name", name))
 		return ""
 	}
 	body, _, err := c.get(path)
@@ -802,22 +802,22 @@ func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInf
 		return ""
 	}
 	if err != nil {
-		*logs = append(*logs, fmt.Sprintf("Warning: cannot read secret '%s': %v", name, err))
-		return fmt.Sprintf(" The credentials secret '%s' could not be checked and was left in place: %v.", name, err)
+		*logs = append(*logs, fmt.Sprintf("Warning: cannot read secret %s: %v", name, err))
+		return fmt.Sprintf(" The credentials secret %s could not be checked and was left in place: %v.", name, err)
 	}
 	meta, err := parseObjectMeta(body)
 	if err != nil {
-		return fmt.Sprintf(" The credentials secret '%s' could not be parsed and was left in place.", name)
+		return fmt.Sprintf(" The credentials secret %s could not be parsed and was left in place.", name)
 	}
 	// The tool's label, or an earlier version's managers own its keys.
 	if !meta.hasToolLabel() && !meta.ownsFieldPath(toolManagers, "f:data") && !meta.ownsFieldPath(toolManagers, "f:stringData") {
-		*logs = append(*logs, fmt.Sprintf("Kept secret '%s': it was not created by this tool", name))
+		*logs = append(*logs, fmt.Sprintf("Kept secret %s: it was not created by this tool", name))
 		return ""
 	}
-	*logs = append(*logs, fmt.Sprintf("Deleting secret '%s'...", name))
+	*logs = append(*logs, fmt.Sprintf("Deleting secret %s...", name))
 	if _, err := deleteWithUID(c, path, meta.UID); err != nil && !IsK8sError(err, 404) {
 		*logs = append(*logs, fmt.Sprintf("Warning: failed to delete secret: %v", err))
-		return fmt.Sprintf(" The credentials secret '%s' could not be deleted: %v. Re-run teardown or delete it manually.", name, err)
+		return fmt.Sprintf(" The credentials secret %s could not be deleted: %v. Re-run teardown or delete it manually.", name, err)
 	}
 	*logs = append(*logs, "OK: Secret deleted")
 	return ""
@@ -1095,18 +1095,18 @@ func deleteConnection(c *Client, project string, logs *[]string) string {
 	meta, found, err := readObjectMeta(c, path)
 	switch {
 	case err != nil:
-		*logs = append(*logs, fmt.Sprintf("Warning: cannot read connection '%s': %v", connectionSecretName, err))
-		return fmt.Sprintf(" The dashboard connection '%s' could not be checked and was left in place: %v.", connectionSecretName, err)
+		*logs = append(*logs, fmt.Sprintf("Warning: cannot read connection %s: %v", connectionSecretName, err))
+		return fmt.Sprintf(" The dashboard connection %s could not be checked and was left in place: %v.", connectionSecretName, err)
 	case !found:
 		return ""
 	case !meta.hasToolLabel():
-		*logs = append(*logs, fmt.Sprintf("Kept secret '%s': it was not created by this tool", connectionSecretName))
+		*logs = append(*logs, fmt.Sprintf("Kept secret %s: it was not created by this tool", connectionSecretName))
 		return ""
 	}
-	*logs = append(*logs, fmt.Sprintf("Deleting dashboard connection '%s'...", connectionSecretName))
+	*logs = append(*logs, fmt.Sprintf("Deleting dashboard connection %s...", connectionSecretName))
 	if _, err := deleteWithUID(c, path, meta.UID); err != nil && !IsK8sError(err, 404) {
 		*logs = append(*logs, fmt.Sprintf("Warning: failed to delete connection: %v", err))
-		return fmt.Sprintf(" The dashboard connection '%s' could not be deleted: %v. Re-run teardown or delete it manually.", connectionSecretName, err)
+		return fmt.Sprintf(" The dashboard connection %s could not be deleted: %v. Re-run teardown or delete it manually.", connectionSecretName, err)
 	}
 	*logs = append(*logs, "OK: Connection deleted")
 	return ""
@@ -1118,11 +1118,11 @@ func pipelineWriteFailure(what, project string, err error) (string, string) {
 	var foreign *foreignObjectError
 	switch {
 	case errors.As(err, &foreign):
-		return fmt.Sprintf("A %s was created in '%s' by someone else while setup was running. It was left unchanged.", what, project), "not_managed"
+		return fmt.Sprintf("A %s was created in %s by someone else while setup was running. It was left unchanged.", what, project), "not_managed"
 	case errors.Is(err, errObjectChanged):
-		return fmt.Sprintf("The %s in '%s' kept changing while setup was updating it, so it was not changed. Re-run setup.", what, project), "conflict"
+		return fmt.Sprintf("The %s in %s kept changing while setup was updating it, so it was not changed. Re-run setup.", what, project), "conflict"
 	case IsK8sError(err, 409):
-		return fmt.Sprintf("The %s in '%s' changed while setup was updating it, so it was not changed. Re-run setup.", what, project), "conflict"
+		return fmt.Sprintf("The %s in %s changed while setup was updating it, so it was not changed. Re-run setup.", what, project), "conflict"
 	}
-	return fmt.Sprintf("Failed to create or update the %s in '%s': %v.", what, project, err), errorCodeFromK8sErr(err)
+	return fmt.Sprintf("Failed to create or update the %s in %s: %v.", what, project, err), errorCodeFromK8sErr(err)
 }

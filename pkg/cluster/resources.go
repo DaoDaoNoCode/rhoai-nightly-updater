@@ -755,7 +755,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	// and teardown removes it with the current storage.
 	switch {
 	case legacyErr != nil:
-		status.MinIO.Warning = strings.TrimSpace(fmt.Sprintf("Cannot check namespace '%s' for storage from an earlier version: %v. %s", legacyNamespace, legacyErr, status.MinIO.Warning))
+		status.MinIO.Warning = strings.TrimSpace(fmt.Sprintf("Cannot check namespace %s for storage from an earlier version: %v. %s", legacyNamespace, legacyErr, status.MinIO.Warning))
 	case legacy != nil:
 		newReady := status.MinIO.Ready && status.MinIO.ManagedByTool && status.MinIO.RepairNeeded == ""
 		// Unreadable counts as not copied: the stage stays "migrate".

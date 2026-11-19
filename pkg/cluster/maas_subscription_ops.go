@@ -59,12 +59,12 @@ func (m *maasRun) changeLimit(project, name string, req *types.MaaSLimit) (*type
 		listed = listed || p == pub
 	}
 	if !listed {
-		return m.fail("check", fmt.Sprintf("%s in '%s' is not published by this tool, so it has no limit to change. Nothing was changed.", name, project), "prerequisites", "not published")
+		return m.fail("check", fmt.Sprintf("%s in %s is not published by this tool, so it has no limit to change. Nothing was changed.", name, project), "prerequisites", "not published")
 	}
 	before := cur.limitOf(pub)
 	if before.equal(limit) {
-		m.step("check", "success", fmt.Sprintf("%s in '%s' has that limit already: %s.", name, project, limit.text()))
-		return m.done(fmt.Sprintf("%s in '%s' already has %s; nothing changed.", name, project, limit.text()))
+		m.step("check", "success", fmt.Sprintf("%s in %s has that limit already: %s.", name, project, limit.text()))
+		return m.done(fmt.Sprintf("%s in %s already has %s; nothing changed.", name, project, limit.text()))
 	}
 	limits := map[string]maasLimit{}
 	for _, p := range live {
@@ -79,13 +79,13 @@ func (m *maasRun) changeLimit(project, name string, req *types.MaaSLimit) (*type
 		}
 		return m.fail("check", fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.", desc, err), maasWriteCode(err), "dry run failed")
 	}
-	m.step("check", "success", fmt.Sprintf("%s in '%s' can change from %s to %s.", name, project, before.text(), limit.text()))
+	m.step("check", "success", fmt.Sprintf("%s in %s can change from %s to %s.", name, project, before.text(), limit.text()))
 	m.step("limit", "running", "Changing the model's entry in the subscription...")
 	if err := applyMaaSObject(c, desc, maasAccessPath(c, "MaaSSubscription"), maasAccessCreatePath(c, "MaaSSubscription"), sub, false); err != nil {
 		return m.fail("limit", fmt.Sprintf("Failed to update %s: %v. The limit is unchanged; run it again to retry.", desc, err), maasWriteCode(err), "apply failed")
 	}
-	m.step("limit", "success", fmt.Sprintf("%s lists %s in '%s' with %s.", desc, name, project, limit.text()))
-	return m.waitAccessActive(fmt.Sprintf("%s in '%s' now has %s.", name, project, limit.text()), false)
+	m.step("limit", "success", fmt.Sprintf("%s lists %s in %s with %s.", desc, name, project, limit.text()))
+	return m.waitAccessActive(fmt.Sprintf("%s in %s now has %s.", name, project, limit.text()), false)
 }
 
 // changeAccess sets who may use the published models: the subscription's

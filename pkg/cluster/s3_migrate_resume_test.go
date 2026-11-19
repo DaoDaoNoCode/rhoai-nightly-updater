@@ -94,7 +94,7 @@ func TestRemoveOldStorage_ResumesAfterTheServerIsDeleted(t *testing.T) {
 		delete(f.fail, "DELETE "+legacyS3NPPath)
 		jobs := jobsCreated(f)
 		ok, msg, _, steps := runMigrate(t, c, MigrateOptions{RemoveOldStorage: true})
-		if !ok || !strings.Contains(msg, "The rest of the old storage in namespace 'minio' was removed") || !strings.Contains(msg, "nothing was copied this time") {
+		if !ok || !strings.Contains(msg, "The rest of the old storage in namespace minio was removed") || !strings.Contains(msg, "nothing was copied this time") {
 			t.Fatalf("re-run: %v %s", ok, msg)
 		}
 		if jobsCreated(f) != jobs {
@@ -140,7 +140,7 @@ func TestRemoveOldStorage_StopsBeforeTheServerOnAnEarlierFailure(t *testing.T) {
 	releasePVCWhenServerGone(f, &stuck)
 	f.fail["DELETE "+legacySvcPath] = 403
 	ok, msg, _, _ := runMigrate(t, c, MigrateOptions{RemoveOldStorage: true})
-	if ok || !strings.Contains(msg, "Service minio/minio-service") || !strings.Contains(msg, "The server's Deployment in namespace 'minio' was not deleted") {
+	if ok || !strings.Contains(msg, "Service minio/minio-service") || !strings.Contains(msg, "The server's Deployment in namespace minio was not deleted") {
 		t.Fatalf("got %v: %s", ok, msg)
 	}
 	if hasExactMutation(f, "DELETE "+legacyS3DeployPath) || !f.has(legacyS3DeployPath) {
@@ -296,7 +296,7 @@ func TestMigrate_MessagesNeverPointAtTearDown(t *testing.T) {
 		delete(f.objects, fakeKey{gv: "apps/v1", ns: legacyNamespace, plural: "deployments", name: s3Deployment})
 		f.mu.Unlock()
 		ok, msg, _, _ := runMigrate(t, c, MigrateOptions{})
-		if ok || !strings.Contains(msg, "No server runs in namespace 'minio' any more") || !strings.Contains(msg, "a retry gives the same result") {
+		if ok || !strings.Contains(msg, "No server runs in namespace minio any more") || !strings.Contains(msg, "a retry gives the same result") {
 			t.Fatalf("got %v: %s", ok, msg)
 		}
 		noTearDownAdvice(t, msg)

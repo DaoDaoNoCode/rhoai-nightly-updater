@@ -83,7 +83,7 @@ describe("MaaS use and steps", () => {
     expect(maasSteps({ kind: "maas-action", action: "remove-tier-policies" }).map((s) => s.id)).toEqual(["check", "delete"]);
     expect(maasSteps({ kind: "teardown-maas" }).map((s) => s.id)).toEqual(["check", "unpublish", "dsc", "gateway", "database"]);
     expect(maasSteps({ kind: "publish-maas", project: "p", model: "qwen3-1-7b" }).map((s) => s.id)).toEqual(["check", "gateway", "model", "maas", "ready"]);
-    expect(maasSteps({ kind: "unpublish-maas", project: "p", model: "qwen3-1-7b" }).map((s) => s.title)).toContain("Remove qwen3-1-7b from MaaS");
+    expect(maasSteps({ kind: "unpublish-maas", project: "p", model: "qwen3-1-7b" }).map((s) => s.title)).toContain("Remove the model from MaaS");
   });
 });
 
@@ -152,7 +152,7 @@ describe("MaaS run dialog", () => {
     expect(await screen.findByText(/While published, the model.s direct address answers 404/)).toBeInTheDocument();
     expect(screen.queryByText(/keep working/)).toBeNull();
     fireEvent.click(await screen.findByRole("button", { name: "Publish" }));
-    const confirm = await screen.findByRole("dialog", { name: /Publish qwen25-05b-instruct in dev to MaaS\?/ });
+    const confirm = await screen.findByRole("dialog", { name: /Publish Qwen2.5 0.5B Instruct in dev to MaaS\?/ });
     expect(within(confirm).getByText(/its direct address \(the Models tab's commands\) answers 404 until it is unpublished/)).toBeInTheDocument();
     expect(within(confirm).getByText(/routes through the MaaS gateway only/)).toBeInTheDocument();
     expect(within(confirm).queryByText(/keep working/)).toBeNull();
@@ -237,9 +237,9 @@ describe("MaaS run dialog", () => {
     expect(within(granite).getByRole("button", { name: "Publish" })).toHaveAttribute("aria-disabled", "true");
     const qwen3 = screen.getByText("Qwen3 1.7B (CPU, tool calling)").closest("tr")!;
     fireEvent.click(within(qwen3).getByRole("button", { name: "Publish" }));
-    const confirm = await screen.findByRole("dialog", { name: /Publish qwen3-1-7b in dev to MaaS\?/ });
+    const confirm = await screen.findByRole("dialog", { name: /Publish Qwen3 1.7B in dev to MaaS\?/ });
     fireEvent.click(within(confirm).getByRole("button", { name: "Publish" }));
-    await screen.findByRole("dialog", { name: "Publish qwen3-1-7b in dev" });
+    await screen.findByRole("dialog", { name: "Publish Qwen3 1.7B in dev" });
     expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "publish", project: "dev", model: "qwen3-1-7b", limit: { preset: "premium" }, access: { everyone: true } }]);
   });
 
@@ -267,10 +267,10 @@ describe("MaaS run dialog", () => {
     expect(within(smollm2).getByText(added)).toBeInTheDocument();
     expect(within(smollm2).queryByText(/earlier build/)).toBeNull();
     fireEvent.click(within(smollm2).getByRole("button", { name: "Unpublish" }));
-    const confirm = await screen.findByRole("dialog", { name: /Unpublish smollm2-135m-instruct in dev\?/ });
+    const confirm = await screen.findByRole("dialog", { name: /Unpublish SmolLM2 135M Instruct in dev\?/ });
     expect(within(confirm).getByText(/unless another model of this tool is published there/)).toBeInTheDocument();
     fireEvent.click(within(confirm).getByRole("button", { name: "Unpublish" }));
-    await screen.findByRole("dialog", { name: "Unpublish smollm2-135m-instruct in dev" });
+    await screen.findByRole("dialog", { name: "Unpublish SmolLM2 135M Instruct in dev" });
     expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "unpublish", project: "dev", model: "smollm2-135m-instruct" }]);
   });
 });
