@@ -71,6 +71,9 @@ type installedOperator struct {
 	ContainerImage, CreatedAt string
 	// Deployments are the operator Deployments the CSV installs (in SubNS).
 	Deployments []string
+	// OwnedCRDs are the CRDs the CSV owns (spec.customresourcedefinitions.owned):
+	// the kinds the RHOAI operator itself reconciles.
+	OwnedCRDs []string
 }
 
 // csvForDefaults is the part of a CSV the DSC defaults read.
@@ -79,7 +82,12 @@ type csvForDefaults struct {
 		Annotations map[string]string `json:"annotations"`
 	} `json:"metadata"`
 	Spec struct {
-		Version string `json:"version"`
+		Version                   string `json:"version"`
+		CustomResourceDefinitions struct {
+			Owned []struct {
+				Name string `json:"name"`
+			} `json:"owned"`
+		} `json:"customresourcedefinitions"`
 		Install struct {
 			Spec struct {
 				Deployments []struct {
@@ -107,6 +115,11 @@ func readCSVForDefaults(c *Client, name string) (*installedOperator, error) {
 	for _, d := range csv.Spec.Install.Spec.Deployments {
 		if d.Name != "" {
 			op.Deployments = append(op.Deployments, d.Name)
+		}
+	}
+	for _, crd := range csv.Spec.CustomResourceDefinitions.Owned {
+		if crd.Name != "" {
+			op.OwnedCRDs = append(op.OwnedCRDs, crd.Name)
 		}
 	}
 	return op, nil
@@ -149,7 +162,7 @@ func getInstalledOperator(c *Client) (*installedOperator, error) {
 	// Read the CSV itself for alm-examples; without it the GitHub sample is used.
 	if full, err := readCSVForDefaults(c, csv.Name); err == nil && full.Version == csv.Version {
 		op.ALMExamples = full.ALMExamples
-		op.Deployments = full.Deployments
+		op.Deployments, op.OwnedCRDs = full.Deployments, full.OwnedCRDs
 		op.ContainerImage, op.CreatedAt = full.ContainerImage, full.CreatedAt
 	}
 	return op, nil

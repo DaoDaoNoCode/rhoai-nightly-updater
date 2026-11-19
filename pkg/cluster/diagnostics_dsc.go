@@ -318,7 +318,7 @@ func (cc *classifiedCondition) classify(deps map[string]*dependency, order *[]*d
 // analyzeDSC classifies the DSC's conditions and those of the module CRs,
 // resolves the prerequisites they name, and finds module operators in
 // back-off. appNS is the DSCInitialization's applications namespace.
-func analyzeDSC(c *Client, dsc dscObject, appNS string, now time.Time) *dscAnalysis {
+func analyzeDSC(c *Client, dsc dscObject, now time.Time) *dscAnalysis {
 	a := &dscAnalysis{Name: dsc.Metadata.Name}
 	deps := map[string]*dependency{}
 	api, apiErr := discoverComponentAPI(c)
@@ -423,9 +423,10 @@ func analyzeDSC(c *Client, dsc dscObject, appNS string, now time.Time) *dscAnaly
 		moduleNames = append(moduleNames, m)
 	}
 	sort.Strings(moduleNames)
+	operators := newModuleOperatorFinder(c, nil)
 	for _, m := range moduleNames {
 		b := &moduleBackoff{Module: m, Reasons: reasons[m], Blocking: blockingModule[m]}
-		b.Deployment, b.FindErr = findModuleOperator(c, m, appNS)
+		b.Deployment, b.FindErr = findModuleOperator(c, operators, m)
 		if b.Deployment != nil {
 			b.Restart = assessRestart(c, *b.Deployment)
 		}
@@ -456,7 +457,7 @@ func analyzeCurrentDSC(c *Client, now time.Time) (*dscAnalysis, error) {
 	if !apiFound || len(dscs) == 0 {
 		return nil, fmt.Errorf("no DataScienceCluster exists")
 	}
-	return analyzeDSC(c, dscs[0], applicationsNamespace(c), now), nil
+	return analyzeDSC(c, dscs[0], now), nil
 }
 
 // applicationsNamespace is the DSCInitialization's applications namespace
@@ -663,14 +664,11 @@ func checkDataScienceCluster(c *Client) checkOutput {
 	}
 
 	// The DSCI is read first: a DSCI in Error often explains why no DSC
-	// components deploy, so it is reported whatever the DSC state is, and
-	// its applications namespace locates the module operators.
+	// components deploy, so it is reported whatever the DSC state is.
 	dscis, dsciAPI, dsciErr := listFirstServed(c, dsciGroup, "/apis/dscinitialization.opendatahub.io/%s/dscinitializations", "dscinitializations", dsciFallbackVersions)
 	var dsciProblem *Problem
-	appNS := ""
 	if dsciErr == nil && dsciAPI && len(dscis) > 0 {
 		dsci := dscis[0]
-		appNS = dsci.Spec.ApplicationsNamespace
 		if dsci.Status.Phase == "Error" {
 			dsciProblem = &Problem{
 				ID:              "dsci-error",
@@ -702,7 +700,7 @@ func checkDataScienceCluster(c *Client) checkOutput {
 		})
 	default:
 		dsc := dscs[0]
-		a := analyzeDSC(c, dsc, appNS, time.Now())
+		a := analyzeDSC(c, dsc, time.Now())
 		titles := map[string]string{}
 		var causeProblems []Problem
 		for _, d := range a.Deps {

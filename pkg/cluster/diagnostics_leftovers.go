@@ -131,7 +131,7 @@ func leftoversCheck(c *Client, users usersReader) checkOutput {
 		switch {
 		case rf.has(applyStoredType):
 			st := analyzeStored(c, s, rf)
-			st.Crash = moduleOperatorCrash(c, st, appNS, time.Now())
+			st.Crash = moduleOperatorCrash(c, st, time.Now())
 			out.problems = append(out.problems, st.problem())
 		case rf.has(applyImmutable):
 			r := analyzeRecreate(c, rf, appNS, readDeploymentForScan, users)
@@ -638,11 +638,11 @@ type leftoverCrash struct {
 // Confirmed when a pod's last exit message says it could not sync the
 // informer of the leftover's kind (only there when the container writes
 // its log as the termination message; the pod log itself is not read).
-func moduleOperatorCrash(c *Client, st *storedLeftover, appNS string, now time.Time) *leftoverCrash {
+func moduleOperatorCrash(c *Client, st *storedLeftover, now time.Time) *leftoverCrash {
 	if st.Resource == "" {
 		return nil
 	}
-	d, _ := findModuleOperator(c, strings.ToLower(st.Kind), appNS)
+	d, _ := findModuleOperator(c, newModuleOperatorFinder(c, nil), strings.ToLower(st.Kind))
 	if d == nil || len(d.TemplateLabels) == 0 {
 		return nil
 	}
@@ -994,7 +994,7 @@ func analyzeRecreate(c *Client, rf *reportedApplyFailure, appNS string, read wor
 			r.Recreator = "the RHOAI operator"
 		}
 	} else {
-		d, why := findModuleOperator(c, r.Module, appNS)
+		d, why := findModuleOperator(c, newModuleOperatorFinder(c, nil), r.Module)
 		switch {
 		case d == nil:
 			r.Blockers = append(r.Blockers, fmt.Sprintf("the tool cannot tell which Deployment runs the %s module operator that would create it again (%s)", r.Module, why))

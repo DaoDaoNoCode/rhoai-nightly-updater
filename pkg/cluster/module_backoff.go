@@ -128,62 +128,23 @@ func (d operatorDeployment) maxUnavailablePods() (int, bool) {
 	return unavailable, err1 == nil && err2 == nil
 }
 
-// findModuleOperator returns the Deployment that runs a module's operator:
-// the known mapping first, else the Platform-owned Deployment in the
-// applications namespace labelled for the module or named after it.
-func findModuleOperator(c *Client, module, appNS string) (*operatorDeployment, string) {
-	if op, ok := moduleOperators[module]; ok {
-		d, err := readOperatorDeployment(c, op.namespace, op.name, "known operator of module "+module)
-		switch {
-		case err == nil:
-			return d, ""
-		case !IsK8sError(err, http.StatusNotFound):
-			return nil, fmt.Sprintf("could not read Deployment %s/%s: %v", op.namespace, op.name, err)
-		}
+// findModuleOperator returns the Deployment that runs a module's operator
+// (moduleOperatorFinder: the Platform-owned Deployment whose ServiceAccount
+// may update the module CR's finalizers, or the RHOAI operator for a kind
+// its CSV owns), or why it is not known.
+func findModuleOperator(c *Client, operators *moduleOperatorFinder, module string) (*operatorDeployment, string) {
+	op, why, err := operators.find(module, "")
+	switch {
+	case err != nil:
+		return nil, fmt.Sprintf("could not identify it: %v", err)
+	case op == nil:
+		return nil, why
 	}
-	appNS = nonEmpty(appNS, "redhat-ods-applications")
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", appNS, ""))
+	d, err := readOperatorDeployment(c, op.Namespace, op.Name, op.Via)
 	if err != nil {
-		return nil, fmt.Sprintf("could not list Deployments in %s: %v", appNS, err)
+		return nil, fmt.Sprintf("could not read Deployment %s: %v", op.ref(), err)
 	}
-	var list struct {
-		Items []deploymentJSON `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Sprintf("could not parse Deployments in %s", appNS)
-	}
-	var labelled, named []operatorDeployment
-	for _, j := range list.Items {
-		if j.Metadata.Namespace == "" {
-			j.Metadata.Namespace = appNS
-		}
-		d := j.toOperatorDeployment("")
-		if !slices.Contains(d.OwnerKinds, "Platform") {
-			continue
-		}
-		switch {
-		case d.PartOf == module:
-			d.Via = fmt.Sprintf("Platform-owned Deployment labelled platform.opendatahub.io/part-of=%s", module)
-			labelled = append(labelled, d)
-		case strings.Contains(strings.ReplaceAll(d.Name, "-", ""), module):
-			d.Via = "Platform-owned Deployment named after module " + module
-			named = append(named, d)
-		}
-	}
-	for _, set := range [][]operatorDeployment{labelled, named} {
-		if len(set) == 1 {
-			return &set[0], ""
-		}
-		if len(set) > 1 {
-			var names []string
-			for _, d := range set {
-				names = append(names, d.Name)
-			}
-			sort.Strings(names)
-			return nil, fmt.Sprintf("several Platform-owned Deployments in %s could be the %s operator: %s", appNS, module, strings.Join(names, ", "))
-		}
-	}
-	return nil, fmt.Sprintf("no Platform-owned Deployment in %s belongs to module %s", appNS, module)
+	return d, ""
 }
 
 // restartAssessment says whether the tool may restart the Deployment and

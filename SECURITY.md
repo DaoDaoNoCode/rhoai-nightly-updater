@@ -6,7 +6,7 @@ The updater runs as one pod with two containers: **oauth-proxy** (OpenShift sign
 
 1. [Threat model](#threat-model): who can do what, which token goes where, the user token's exposures, network exposure, known limitations
 2. [Sign-in and access policy (4.0.0)](#sign-in-and-access-policy-400): the flow, every authorization check, the OAuthClient, sessions, abuse limits, local development
-3. [ServiceAccount RBAC](#serviceaccount-rbac): what the app's own token may do, and the MaaS prune job
+3. [ServiceAccount RBAC](#serviceaccount-rbac): what the app's own token may do, the MaaS prune job, and the RBAC reads that find module operators
 4. [CI and release supply chain](#ci-and-release-supply-chain): where the image comes from
 5. [Per-feature notes](#per-feature-notes): credentials, S3 storage and pipelines, MLflow samples, models and the inference gateway, the playground, Models as a Service, prerequisites, the nodes' pull secret, the DataScienceCluster
 6. [History](#history): the RBAC audits of earlier template revisions ([docs/SECURITY_HISTORY.md](docs/SECURITY_HISTORY.md))
@@ -266,6 +266,7 @@ The app's ServiceAccount has no right on OAuthClients or OAuth tokens (`TestServ
 | Validating/Mutating webhook configurations, CRDs, DSCInitializations, Platforms, DSPAs, cert-manager Certificates, Gateways, Kuadrants, ImageDigestMirrorSets, ImageTagMirrorSets | `list` | read-only; CRD `get` only the DSC's |
 | DataScienceClusters | `get list` | read-only: the hard reset's `delete` (template revision 7 before 4.0.0) now runs with the user's token |
 | `components.platform.opendatahub.io/*` (module CRs) | `list` | read-only; the kinds change between releases and are discovered |
+| ClusterRoles, ClusterRoleBindings | `list` | read-only: [which operator cleans up a module](#reading-rbac-to-find-module-operators-400) |
 | `operator.openshift.io/*` | `get` | only objects named `cluster` |
 | ClusterVersion, Console, Infrastructure, Ingress config | `get` | only `version` / `cluster` |
 | MLflows | `get` | only `mlflow` |
@@ -280,6 +281,26 @@ The app's ServiceAccount has no right on OAuthClients or OAuth tokens (`TestServ
 | MaaSModelRefs, MaaSSubscriptions, MaaSAuthPolicies | `list`; MaaSModelRefs `get delete`; MaaSSubscription and MaaSAuthPolicy `get patch delete` | the writes only on the three chat models' MaaSModelRefs, `rhoai-nightly-updater-subscription` and `rhoai-nightly-updater-access`: [the MaaS prune job](#the-maas-prune-job-400) |
 
 There is no `create` outside the app's own namespace, no write on Secrets, ServiceAccounts, RBAC, namespaces, workloads, OLM objects, webhooks, CRDs or DataScienceClusters, and no cluster-wide `list` or general `get` on Secrets.
+
+### Reading RBAC to find module operators (4.0.0)
+
+Before removing a component (Components page, the hard reset, Diagnostics' disable fix) the tool checks that the operator which removes the module CR's finalizers is running, and refuses when it cannot tell which operator that is. Nothing on the module operators' Deployments names their module (RHOAI 3.6 labels them only `platform.opendatahub.io/part-of=platform`), and the modules change between releases (3.6 added `aigateway` and `mcplifecycleoperator`, which a fixed list of Deployment names did not know, so their removal was refused). Their RBAC names it: each module operator's ClusterRole grants `update` on its module CR and on `<plural>/finalizers` (`pkg/cluster/module_operators.go` explains the rule and its source). So the ServiceAccount (both profiles) may `list` ClusterRoles and ClusterRoleBindings.
+
+| Rule | What it allows | Worst case if the SA token leaks |
+|---|---|---|
+| ClusterRoles, ClusterRoleBindings: `list` | read who may do what cluster-wide | an attacker learns the cluster's permission layout: which ServiceAccounts, users and groups hold which rules, so which tokens are worth stealing. RBAC objects hold no credentials and grant nothing to the reader, so it cannot act on what it learns without another token |
+
+Kept narrow: `list` only (no `get`, `watch` or any write; the two lists are read once per check or per change and cached for it), cluster-scoped objects only. Roles and RoleBindings are not read: module CRs are cluster-scoped, and a RoleBinding grants only within its namespace, so it cannot let an operator update them. A `resourceNames` limit is not possible, as the role and binding names change with each module and release.
+
+The rule fails closed: a read error, no matching Deployment, several equally specific ones, or a grant that names no kind (`*` resources, as in `cluster-admin`, or a binding to a group of ServiceAccounts) leaves the operator unknown, and the removal is refused with the same message as before.
+
+```bash
+oc auth can-i list clusterroles.rbac.authorization.k8s.io --as=$SA         # yes
+oc auth can-i list clusterrolebindings.rbac.authorization.k8s.io --as=$SA  # yes
+oc auth can-i get clusterroles.rbac.authorization.k8s.io/admin --as=$SA    # no
+oc auth can-i list rolebindings.rbac.authorization.k8s.io -A --as=$SA      # no
+oc auth can-i update clusterroles.rbac.authorization.k8s.io --as=$SA       # no
+```
 
 ### The MaaS prune job (4.0.0)
 

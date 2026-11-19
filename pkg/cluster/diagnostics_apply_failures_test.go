@@ -173,6 +173,7 @@ func applyFailuresWorld(t *testing.T) (*Client, *[]string) {
 	f.obj("/apis/components.platform.opendatahub.io/v1alpha1/aihubs", map[string]any{"items": []any{applyFailureCR("default-aihub", "True")}})
 	f.obj("/apis/components.platform.opendatahub.io/v1alpha1/newmodules", map[string]any{"items": []any{
 		applyFailureCR("default-newmodule", "True", strings.ReplaceAll(msgImmutableLabels, "kuberay-operator", "new-operator"))}})
+	serveLive36ModuleOperators(f)
 	crdLookups := new([]string)
 	f.handle("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", func(r *http.Request, _ []byte) (int, string) {
 		*crdLookups = append(*crdLookups, r.URL.Query().Get("fieldSelector"))
@@ -198,7 +199,7 @@ func checkApplyFailureProblems(t *testing.T, byID map[string]Problem, crdLookups
 	// module CR first, and its module operator from the mapping.
 	if imm.Severity != "critical" || !strings.Contains(imm.Evidence[0], "Reported by Ray default-ray, DataScienceCluster default-dsc") ||
 		!strings.Contains(imm.TechnicalCmd, "oc delete deployment.apps kuberay-operator -n redhat-ods-applications") ||
-		!strings.Contains(imm.TechnicalCmd, "oc rollout restart deployment/"+moduleOperators["ray"].name+" -n "+moduleOperators["ray"].namespace) ||
+		!strings.Contains(imm.TechnicalCmd, "oc rollout restart deployment/"+liveOperator("ray").Deployment+" -n "+liveAppsNS) ||
 		!strings.Contains(imm.Title, "spec.template.metadata.labels") || !strings.Contains(imm.Fix, "pods stop until the operator recreates it") {
 		t.Errorf("immutable: %+v", imm)
 	}

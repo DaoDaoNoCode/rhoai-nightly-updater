@@ -47,6 +47,7 @@ func newDSCWorld(t *testing.T, dscConds []dcond) *dscWorld {
 		f.json("GET", "/apis/admissionregistration.k8s.io/v1/"+r, 200, `{"items":[]}`)
 	}
 	f.obj(trainerOperatorPath, operatorDeploymentJSON("trainer-operator-controller-manager", "RollingUpdate", 1))
+	serveLive36ModuleOperators(f)
 	f.json("GET", "/apis/operator.openshift.io/v1", 200, `{"resources":[{"name":"jobsetoperators","kind":"JobSetOperator"},{"name":"jobsetoperators/status","kind":"JobSetOperator"}]}`)
 	return &dscWorld{f: f, c: c}
 }
@@ -427,7 +428,7 @@ func TestRestartAssessment(t *testing.T) {
 				webhookOn(w.f)
 			}
 			w.f.obj(trainerOperatorPath, operatorDeploymentJSON("trainer-operator-controller-manager", tt.strategy, tt.available))
-			d, why := findModuleOperator(w.c, "trainer", "redhat-ods-applications")
+			d, why := findModuleOperator(w.c, newModuleOperatorFinder(w.c, nil), "trainer")
 			if d == nil {
 				t.Fatal(why)
 			}
@@ -472,7 +473,7 @@ func TestRestartAssessment_SurgeZeroWithFailWebhookRefuses(t *testing.T) {
 	w.f.json("GET", "/apis/admissionregistration.k8s.io/v1/validatingwebhookconfigurations", 200, `{"items":[{"metadata":{"name":"trainer-webhook","labels":{"platform.opendatahub.io/part-of":"trainer"}},
 		"webhooks":[{"name":"vtrainer.kb.io","failurePolicy":"Fail","clientConfig":{"service":{"namespace":"redhat-ods-applications","name":"svc"}}}]}]}`)
 	w.f.json("GET", "/api/v1/namespaces/redhat-ods-applications/services/svc", 200, `{"spec":{"selector":{"app.kubernetes.io/name":"trainer-operator-controller-manager"}}}`)
-	d, why := findModuleOperator(w.c, "trainer", "redhat-ods-applications")
+	d, why := findModuleOperator(w.c, newModuleOperatorFinder(w.c, nil), "trainer")
 	if d == nil {
 		t.Fatal(why)
 	}
@@ -482,18 +483,23 @@ func TestRestartAssessment_SurgeZeroWithFailWebhookRefuses(t *testing.T) {
 	}
 }
 
-func TestFindModuleOperator_GenericPlatformOwnedDeployment(t *testing.T) {
+// The operator is found from its RBAC, not its name: a Platform-owned
+// Deployment named after a module is not its operator without the grant.
+func TestFindModuleOperator_FromRBACNotName(t *testing.T) {
 	f, c := newFakeAPI(t)
-	items := []any{
-		operatorDeploymentJSON("newmod-controller-manager", "RollingUpdate", 1),
-		operatorDeploymentJSON("unrelated", "RollingUpdate", 1),
-	}
-	f.obj("/apis/apps/v1/namespaces/opendatahub/deployments", map[string]any{"items": items})
-	d, why := findModuleOperator(c, "newmod", "opendatahub")
-	if d == nil || d.Name != "newmod-controller-manager" || !strings.Contains(d.Via, "named after module newmod") {
+	serveLive36Kinds(f)
+	serveInstalledOperator(f)
+	w := newLive36ModuleOperatorWorld()
+	w.deployments = append(w.deployments, platformDeployment("newmodule-controller-manager", "newmodule-controller-manager", "config.opendatahub.io/v1alpha1", "Platform", "default"))
+	w.serve(f)
+	o := liveOperator("ray")
+	f.obj("/apis/apps/v1/namespaces/"+liveAppsNS+"/deployments/"+o.Deployment, operatorDeploymentJSON(o.Deployment, "RollingUpdate", 1))
+	finder := newModuleOperatorFinder(c, nil)
+	d, why := findModuleOperator(c, finder, "ray")
+	if d == nil || d.Name != o.Deployment || !strings.Contains(d.Via, "rays/finalizers") {
 		t.Fatalf("d = %+v, why = %s", d, why)
 	}
-	if d, why := findModuleOperator(c, "absent", "opendatahub"); d != nil || !strings.Contains(why, "no Platform-owned Deployment") {
+	if d, why := findModuleOperator(c, finder, "newmodule"); d != nil || !strings.Contains(why, "does not own CRD newmodules") {
 		t.Fatalf("d = %+v, why = %s", d, why)
 	}
 }

@@ -116,6 +116,11 @@ objects:
       - apiGroups: ["components.platform.opendatahub.io"]
         resources: ["*"]
         verbs: ["list"]
+      # Which Deployment cleans up a module CR (its ServiceAccount's
+      # ClusterRoleBinding; see deploy/template.yaml): read only
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["clusterroles", "clusterrolebindings"]
+        verbs: ["list"]
       # Prerequisite operators: their CSVs and OperatorGroups in any
       # namespace, and their singleton operand <Kind>/cluster
       - apiGroups: ["operators.coreos.com"]

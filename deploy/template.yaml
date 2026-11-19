@@ -245,6 +245,13 @@ objects:
       - apiGroups: ["components.platform.opendatahub.io"]
         resources: ["*"]
         verbs: ["list"]
+      # Which Deployment cleans up a module CR: the one whose ServiceAccount
+      # a ClusterRoleBinding lets update the CR's finalizers (module kinds
+      # change between releases, and nothing on the Deployment names its
+      # module). RBAC objects hold no secrets; read only (SECURITY.md)
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["clusterroles", "clusterrolebindings"]
+        verbs: ["list"]
       - apiGroups: ["datasciencepipelinesapplications.opendatahub.io"]
         resources: ["datasciencepipelinesapplications"]
         verbs: ["list"]

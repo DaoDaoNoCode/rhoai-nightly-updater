@@ -391,6 +391,7 @@ func TestDisableComponent_Preconditions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f, c := newFakeAPI(t)
+			serveLive36ModuleOperators(f)
 			serveToggleDSC(f, "v2", `{"metadata":{"name":"default-dsc","uid":"u1"},"spec":{"components":{"`+tt.component+`":{"managementState":"Managed"}}}}`, "", tt.component)
 			serveComponentGroup(f)
 			f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1", http.StatusOK, `{"resources":[{"name":"rays","kind":"Ray"}]}`)

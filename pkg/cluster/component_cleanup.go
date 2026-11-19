@@ -17,6 +17,8 @@ type componentKind struct {
 	Resource string // plural, e.g. "kserves"
 	Kind     string // e.g. "Kserve"
 	Verbs    []string
+	// Namespaced: the kind is namespaced (module kinds are cluster-scoped).
+	Namespaced bool
 }
 
 // componentAPI is the served version of components.platform.opendatahub.io
@@ -149,9 +151,10 @@ func discoverComponentAPI(c *Client) (componentAPI, error) {
 	}
 	var list struct {
 		Resources []struct {
-			Name  string   `json:"name"`
-			Kind  string   `json:"kind"`
-			Verbs []string `json:"verbs"`
+			Name       string   `json:"name"`
+			Kind       string   `json:"kind"`
+			Verbs      []string `json:"verbs"`
+			Namespaced bool     `json:"namespaced"`
 		} `json:"resources"`
 	}
 	if err := json.Unmarshal(body, &list); err != nil {
@@ -162,7 +165,7 @@ func discoverComponentAPI(c *Client) (componentAPI, error) {
 		if strings.Contains(r.Name, "/") {
 			continue // subresource such as kserves/status
 		}
-		api.Kinds = append(api.Kinds, componentKind{Resource: r.Name, Kind: r.Kind, Verbs: r.Verbs})
+		api.Kinds = append(api.Kinds, componentKind{Resource: r.Name, Kind: r.Kind, Verbs: r.Verbs, Namespaced: r.Namespaced})
 	}
 	return api, nil
 }
