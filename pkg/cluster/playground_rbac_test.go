@@ -63,7 +63,13 @@ func playgroundServerRequests() []rbacRequest {
 // parameter, which the API server ignores, so it signs users out (and can
 // log the token on a network error). Only deploy/template.yaml is read: the
 // image build copies just that file, and scripts/test-chart.sh (CI's chart
-// job) fails when the chart's copy differs from it.
+// job) fails when the chart's copy differs from it. This is the sign-in of
+// install.sh and of the chart's full profile; the chart's gitops profile,
+// where nothing acts with the user's token, replaces exactly these
+// arguments and the client Secret's volume with the ServiceAccount sign-in
+// of 3.x (scopes user:info user:check-access): scripts/test-chart.sh pins
+// both, and TestGitOpsProfileWorksWithAScopedSignIn (pkg/api) that the
+// gitops profile never needs more.
 func TestTemplateOAuthProxySignsInThroughTheOAuthClient(t *testing.T) {
 	data, err := os.ReadFile(templateRel)
 	if err != nil {

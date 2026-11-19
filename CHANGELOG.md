@@ -220,7 +220,10 @@ only accepts a tag whose version is the top dated section. See
   MaaSSubscription or MaaSAuthPolicy exists or this tool's MaaS record
   shows a setup or a publication, naming them and pointing at **Clean up
   MaaS** on the MaaS tab (or keep `aigateway` Managed); a read that fails
-  refuses too. A hard reset that brings MaaS back warns that it is down
+  refuses too, and so does a list that answers 404 while discovery serves
+  the MaaS API (the lists use the version discovery reports, never a
+  `v1alpha1` fallback). Clean up MaaS and Change database check others'
+  MaaS objects the same way. A hard reset that brings MaaS back warns that it is down
   meanwhile. No new RBAC: the lists Clean up MaaS already reads.
 - **Resets keep the components you turned on.** Both reset dialogs offer
   "Keep the components you turned on (N): ...", checked by default: what
@@ -273,8 +276,13 @@ only accepts a tag whose version is the top dated section. See
   through the app's ServiceAccount, which the OAuth server limits to
   `user:info user:check-access`. `install.sh` creates the client and its
   Secret `<APP_NAME>-oauth-client` (an upgrade from 3.x too; uninstall
-  deletes the client and revokes its sign-ins); the chart does it with a
-  Sync and a PostSync hook (`gitops.oauthClient.enabled`). The API server
+  deletes the client and revokes its sign-ins); the chart's `profile: full`
+  does it with a Sync and a PostSync hook (`gitops.oauthClient.enabled`).
+  The chart's gitops profile (its default) keeps the 3.x sign-in through
+  the ServiceAccount (`user:info user:check-access`, no OAuthClient):
+  nothing there acts with your token, so its session cannot change the
+  cluster and nobody signs in again
+  ([GITOPS §11](docs/GITOPS.md#sign-in-in-the-gitops-profile)). The API server
   checks each change against your RBAC and its audit log names you. Before
   a change is accepted, the app checks that your sign-in can carry it (scope
   `user:full`, not expiring within the operation's deadline); otherwise
@@ -325,6 +333,27 @@ only accepts a tag whose version is the top dated section. See
   `--cookie-refresh` (broken in openshift/oauth-proxy, and it can log the
   token); the token is never logged, stored or shown
   ([SECURITY.md: Threat model](SECURITY.md#threat-model-of-the-user-token-400)).
+- **The OAuthClient does not outlive the install.** The OAuth server
+  answers the implicit flow for any client, so with `grantMethod: auto` a
+  client left behind would hand a signed-in user's `user:full` token to
+  whoever later serves its redirect host (a project admin's Route with the
+  freed host); the client secret does not stop that. The client now
+  allows exactly the scope `user:full` (`scopeRestrictions`), is owned by
+  the install's Namespace (deleting the namespace deletes it; not yet
+  checked live), and is deleted with its sign-ins revoked by `install.sh
+  uninstall` (which now stops before deleting the namespace when it cannot
+  delete the client), by `make rollback` to a 3.x template, and by a new
+  PostDelete hook when the chart's Argo CD Application is deleted (Argo CD
+  2.10 or later). Deleting the namespace by hand still leaves the sign-ins:
+  `oc delete oauthaccesstokens --field-selector clientName=<APP_NAME>-<NAMESPACE>`
+  ([SECURITY.md](SECURITY.md#the-oauthclient-400)).
+- **One install no longer takes over another's OAuthClient.** Its name
+  `<APP_NAME>-<NAMESPACE>` is the same for app `a-b` in namespace `c` and app
+  `a` in namespace `b-c`, and the apply forced its fields over. The client
+  now carries the app name and namespace as labels; install, upgrade,
+  rollback and the chart's hook refuse, before any change, a client of that
+  name that is not this install's, and uninstall leaves it and its sign-ins
+  alone.
 
 - **Models' copy-paste commands could run what a project editor wrote.**
   The name a model serves (`spec.model.name`), which anyone who can edit

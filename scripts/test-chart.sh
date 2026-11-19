@@ -101,7 +101,9 @@ expect_eq "the Template's PROFILE defaults to full (empty)" "" "$(default_of PRO
 # Kind/name/namespace of every object a render should have, sorted: the
 # Template's with its placeholders replaced (without its RBAC objects in the
 # gitops profile, the default, which adds deploy/rbac-gitops.yaml's), then
-# the hooks that are on (1, the default).
+# the hooks that are on (1, the default). The OAuth client hooks exist in
+# the full profile only: the gitops profile signs in through the
+# ServiceAccount.
 expected_objects() {
 	local ns=$1 app=$2 session=${3:-1} link=${4:-1} profile=${5:-gitops} oauth=${6:-1} objects=$template_objects
 	if [ "$profile" = gitops ]; then
@@ -118,11 +120,13 @@ expected_objects() {
 			printf '%s\n' "ServiceAccount/$app-session-secret/$ns" "Role/$app-session-secret/$ns" \
 				"RoleBinding/$app-session-secret/$ns" "Job/$app-session-secret/$ns"
 		fi
-		if [ "$oauth" = 1 ]; then
+		if [ "$oauth" = 1 ] && [ "$profile" = full ]; then
 			printf '%s\n' "ServiceAccount/$app-oauth-secret/$ns" "Role/$app-oauth-secret/$ns" \
 				"RoleBinding/$app-oauth-secret/$ns" "Job/$app-oauth-secret/$ns" \
 				"ServiceAccount/$app-oauthclient/$ns" "Role/$app-oauthclient/$ns" "RoleBinding/$app-oauthclient/$ns" \
-				"ClusterRole/$app-$ns-oauthclient/" "ClusterRoleBinding/$app-$ns-oauthclient/" "Job/$app-oauthclient/$ns"
+				"ClusterRole/$app-$ns-oauthclient/" "ClusterRoleBinding/$app-$ns-oauthclient/" "Job/$app-oauthclient/$ns" \
+				"ServiceAccount/$app-oauthclient-removal/$ns" "ClusterRole/$app-$ns-oauthclient-removal/" \
+				"ClusterRoleBinding/$app-$ns-oauthclient-removal/" "Job/$app-oauthclient-removal/$ns"
 		fi
 		if [ "$link" = 1 ]; then
 			printf '%s\n' "ServiceAccount/$app-consolelink/$ns" "Role/$app-consolelink/$ns" \
@@ -239,6 +243,28 @@ expect_render_fail "an allowlist entry that is not a name (schema)" "subscriptio
 expect_render_fail "an allowlist entry that is not a name (template)" "is not an environment variable name" --skip-schema-validation --namespace ns1 "${BASE[@]}" --set "gitops.subscriptionEnvAllowlist={x'y}"
 expect_render_fail "parameters.SUBSCRIPTION_ENV_ALLOWLIST (template)" "parameters.SUBSCRIPTION_ENV_ALLOWLIST is set by the chart" --skip-schema-validation --namespace ns1 "${BASE[@]}" --set parameters.SUBSCRIPTION_ENV_ALLOWLIST=X
 
+# sign_in: the oauth-proxy arguments that choose the OAuth client and scope,
+# the OAuth client Secret's volume, and the ServiceAccount's redirect
+# reference, of the render in $OUT.
+sign_in() {
+	grep -E -e '^ *- --(client-id|client-secret|client-secret-file|scope|openshift-service-account)=' \
+		-e 'secretName: .*-oauth-client$' -e 'oauth-redirectreference' "$OUT" | sed 's/^ *//'
+}
+# The gitops profile signs in as 3.x did: the ServiceAccount is the OAuth
+# client (its token the secret, the Route its redirect), with the scopes an
+# OpenShift ServiceAccount client may have; nothing there acts with the
+# user's token. No OAuthClient, no client Secret, no hook with a right on
+# OAuthClients.
+expect_render "profile gitops: sign-in" --namespace ns1 "${BASE[@]}" --set parameters.APP_NAME=upd
+expect_eq "profile gitops: the ServiceAccount is the OAuth client" "$(printf '%s\n' \
+	"serviceaccounts.openshift.io/oauth-redirectreference.primary: '{\"kind\":\"OAuthRedirectReference\",\"apiVersion\":\"v1\",\"reference\":{\"kind\":\"Route\",\"name\":\"upd\"}}'" \
+	'- --openshift-service-account=upd' \
+	'- --scope=user:info user:check-access')" "$(sign_in)"
+grep -qE 'oauthclients|OAuthClient|user:full|oauth-client|/etc/proxy/oauth' "$OUT" && fail "profile gitops: something of the OAuthClient sign-in is left: $(grep -nE 'oauthclients|OAuthClient|user:full|oauth-client|/etc/proxy/oauth' "$OUT")" || pass
+expect_eq "profile gitops: the OAuth client hooks" "" "$(objects | grep -E 'oauth' || true)"
+expect_render "profile gitops: sign-in with gitops.oauthClient.enabled=false" --namespace ns1 "${BASE[@]}" --set parameters.APP_NAME=upd --set gitops.oauthClient.enabled=false
+grep -qF -- '- --openshift-service-account=upd' "$OUT" && pass || fail "profile gitops, oauthClient off: not the ServiceAccount sign-in"
+
 # profile full: the Template as install.sh applies it, RBAC included, no
 # admission policy.
 expect_render "profile full" --namespace ns1 "${BASE[@]}" --set profile=full
@@ -250,6 +276,11 @@ grep -qE '^ *- secrets$' <<<"$(doc ClusterRole/rhoai-nightly-updater-ns1)" && pa
 helm template rnu "$CHART" --namespace ns1 "${BASE[@]}" --set profile=full --show-only templates/objects.yaml >"$WORK/full.yaml" 2>&1 || true
 expect_eq "profile full: the Template's RBAC objects" "$(grep -cE '^kind: (ClusterRole|ClusterRoleBinding|Role|RoleBinding)$' "$WORK/full.yaml")" \
 	"$(grep -cE '^(ClusterRole|ClusterRoleBinding|Role|RoleBinding)/' <<<"$template_objects")"
+# The full profile signs in through the install's OAuthClient with user:full,
+# as install.sh's: the Template's arguments, unchanged.
+expect_render "profile full: sign-in" --namespace ns1 "${BASE[@]}" --set parameters.APP_NAME=upd --set profile=full
+expect_eq "profile full: the OAuthClient upd-ns1 with user:full" "$(printf '%s\n' \
+	'- --client-id=upd-ns1' '- --client-secret-file=/etc/proxy/oauth/client-secret' '- --scope=user:full' 'secretName: upd-oauth-client')" "$(sign_in)"
 
 expect_render_fail "an unknown profile (schema)" "profile" --namespace ns1 "${BASE[@]}" --set profile=readonly
 expect_render_fail "an unknown profile (template)" "profile must be gitops or full" --skip-schema-validation --namespace ns1 "${BASE[@]}" --set profile=readonly
@@ -271,8 +302,8 @@ expect_render "no session Secret hook" --namespace ns1 "${BASE[@]}" --set gitops
 expect_eq "no session Secret hook: the objects" "$(expected_objects ns1 rhoai-nightly-updater 0 1)" "$(objects)"
 expect_render "no ConsoleLink hook" --namespace ns1 "${BASE[@]}" --set gitops.consoleLink.enabled=false
 expect_eq "no ConsoleLink hook: the objects" "$(expected_objects ns1 rhoai-nightly-updater 1 0)" "$(objects)"
-expect_render "no OAuthClient hooks" --namespace ns1 "${BASE[@]}" --set gitops.oauthClient.enabled=false
-expect_eq "no OAuthClient hooks: the objects" "$(expected_objects ns1 rhoai-nightly-updater 1 1 gitops 0)" "$(objects)"
+expect_render "no OAuthClient hooks" --namespace ns1 "${BASE[@]}" --set profile=full --set gitops.oauthClient.enabled=false
+expect_eq "no OAuthClient hooks: the objects" "$(expected_objects ns1 rhoai-nightly-updater 1 1 full 0)" "$(objects)"
 expect_render "no hooks" --namespace ns1 "${BASE[@]}" --set gitops.sessionSecret.enabled=false --set gitops.consoleLink.enabled=false --set gitops.oauthClient.enabled=false
 expect_eq "no hooks: only the Template's objects" "$(expected_objects ns1 rhoai-nightly-updater 0 0 gitops 0)" "$(objects)"
 grep -q 'argocd.argoproj.io/hook' "$OUT" && fail "no hooks: a hook annotation is left" || pass
@@ -397,6 +428,21 @@ if helm template rnu "$WORK/chart" --namespace ns1 "${BASE[@]}" >"$OUT" 2>&1; th
 else
 	grep -qF 'non-string' "$OUT" && pass || fail "a \${{NAME}} parameter: $(cat "$OUT")"
 fi
+# The gitops profile's sign-in replaces exactly the Template's OAuthClient
+# arguments, mount and volume; a Template without one of them fails that
+# render instead of signing in half one way, half the other. The full
+# profile renders such a Template as it is.
+for change in 's/--scope=user:full$/--scope=user:info/' 's/--client-secret-file=\/etc\/proxy\/oauth\/client-secret$/--client-secret-file=\/x/' \
+	's/^\(                - name: \)oauth-client$/\1oauth-x/' \
+	's/secretName: ${APP_NAME}-oauth-client$/secretName: other/'; do
+	sed "$change" "$SRC/deploy/template.yaml" >"$WORK/chart/files/template.yaml"
+	cmp -s "$SRC/deploy/template.yaml" "$WORK/chart/files/template.yaml" && fail "gitops sign-in: '$change' changed nothing"
+	if helm template rnu "$WORK/chart" --namespace ns1 "${BASE[@]}" >"$OUT" 2>&1; then
+		fail "gitops sign-in, $change: the render succeeded"
+	else
+		grep -qF 'update rnu.gitopsSignIn' "$OUT" && pass || fail "gitops sign-in, $change: $(cat "$OUT")"
+	fi
+done
 rm "$WORK/chart/files/template.yaml"
 if helm template rnu "$WORK/chart" --namespace ns1 "${BASE[@]}" >"$OUT" 2>&1; then
 	fail "no files/template.yaml: the render succeeded"
@@ -441,7 +487,7 @@ expect_eq "ConsoleLink: the same object as install.sh's" "$install_link" "$(link
 # The OAuth client: a Sync hook for its Secret, a PostSync hook for the
 # OAuthClient. Only the hooks' own ServiceAccounts get OAuthClient rights:
 # get and patch of this instance's client, and create; never delete.
-expect_render "OAuthClient hooks" --namespace ns1 "${BASE[@]}" --set parameters.APP_NAME=upd --show-only templates/oauth-client.yaml
+expect_render "OAuthClient hooks" --namespace ns1 "${BASE[@]}" --set profile=full --set parameters.APP_NAME=upd --show-only templates/oauth-client.yaml
 expect_eq "OAuthClient: four Sync hooks" 4 "$(grep -c 'argocd.argoproj.io/hook: "Sync"' "$OUT")"
 expect_eq "OAuthClient: six PostSync hooks" 6 "$(grep -c 'argocd.argoproj.io/hook: "PostSync"' "$OUT")"
 expect_eq "OAuthClient: delete policy" 10 "$(grep -c 'hook-delete-policy: BeforeHookCreation,HookSucceeded' "$OUT")"
@@ -451,9 +497,9 @@ grep -qF 'resourceNames: ["upd"]' "$OUT" && pass || fail "OAuthClient: the Role 
 oauth_role=$(doc ClusterRole/'"upd-ns1-oauthclient"')
 [ -n "$oauth_role" ] || oauth_role=$(awk '/^---/ { if (keep) exit; buf = ""; next } { buf = buf $0 "\n" } /name: "upd-ns1-oauthclient"/ { keep = 1 } END { if (keep) printf "%s", buf }' "$OUT")
 grep -qF 'resources: ["oauthclients"]' <<<"$oauth_role" && pass || fail "OAuthClient: no ClusterRole on oauthclients: $oauth_role"
-expect_eq "OAuthClient: the hook's verbs on OAuthClients" '["get", "patch"] ["create"]' \
+expect_eq "OAuthClient: the hook's verbs (OAuthClients, and get on its namespace)" '["get", "patch"] ["create"] ["get"]' \
 	"$(grep -oE 'verbs: \[[^]]*\]' <<<"$oauth_role" | sed 's/^verbs: //' | tr '\n' ' ' | sed 's/ $//')"
-grep -qE 'oauthaccesstokens|"delete"|impersonate|escalate|bind' "$OUT" && fail "OAuthClient: a hook gets more than it needs" || pass
+grep -E '^ *(resources|verbs): ' "$OUT" | grep -qE 'oauthaccesstokens|"delete"|impersonate|escalate|bind' && fail "OAuthClient: a hook gets more than it needs" || pass
 grep -qF 'app.kubernetes.io/instance: "upd-ns1"' <<<"$oauth_role" && pass || fail "OAuthClient: the ClusterRole lacks install.sh's instance label"
 grep -qF -- '--from-file=client-secret=' "$OUT" && pass || fail "OAuthClient: the Secret's key is not client-secret"
 grep -qF 'medium: Memory' "$OUT" && pass || fail "OAuthClient: the generated value is not kept in memory"
@@ -465,7 +511,7 @@ install_client=$(client_lines "$SRC/scripts/install.sh")
 [ "$(wc -l <<<"$install_client")" -ge 10 ] && pass || fail "OAuthClient: cannot find install.sh's OAuthClient"
 expect_eq "OAuthClient: the same object as install.sh's" "$install_client" "$(client_lines "$CHART/templates/oauth-client.yaml")"
 # The Deployment reads the Secret the hook creates, under the key it writes.
-expect_render "OAuthClient: the Deployment" --namespace ns1 "${BASE[@]}" --set parameters.APP_NAME=upd --show-only templates/objects.yaml
+expect_render "OAuthClient: the Deployment" --namespace ns1 "${BASE[@]}" --set profile=full --set parameters.APP_NAME=upd --show-only templates/objects.yaml
 grep -qF -- '- --client-id=upd-ns1' "$OUT" && grep -qF -- '- --client-secret-file=/etc/proxy/oauth/client-secret' "$OUT" && grep -qx '          secretName: upd-oauth-client' "$OUT" && pass ||
 	fail "OAuthClient: the Deployment does not use the client upd-ns1 and Secret upd-oauth-client"
 
@@ -585,7 +631,7 @@ grep -qF 'consolelinks is forbidden' "$HOOKOUT" && pass || fail "ConsoleLink, ap
 # The two OAuth client hook scripts (the Sync one first), with their own
 # fake oc: the Secret's value comes back base64-encoded as oc prints it.
 oauth_script() {
-	helm template rnu "$CHART" --namespace ns1 "${BASE[@]}" --show-only templates/oauth-client.yaml 2>&1 |
+	helm template rnu "$CHART" --namespace ns1 "${BASE[@]}" --set profile=full --show-only templates/oauth-client.yaml 2>&1 |
 		awk -v want="$1" '/^            - \|$/ { n++; f = (n == want); next } f && /^          [a-z]/ { exit } f' |
 		sed -e 's/^              //' -e "s|/secret/|$WORK/secretvol/|g"
 }
@@ -616,6 +662,21 @@ case "$1 $2" in
 	*) echo "Error from server: cannot create secrets" >&2; exit 1 ;;
 	esac ;;
 "get route") [ -n "${FAKE_NO_HOST:-}" ] || printf 'app.example.com' ;;
+"get namespace") printf '%s' "${FAKE_NS_UID-ns-uid-1}" ;;
+"delete oauthclient") [ -z "${FAKE_DELETE_FAIL:-}" ] || { echo "Error from server: cannot delete oauthclients" >&2; exit 1; } ;;
+"delete oauthaccesstokens") [ -z "${FAKE_REVOKE_FAIL:-}" ] || { echo "Error from server: cannot delete oauthaccesstokens" >&2; exit 1; } ;;
+"get oauthclient")
+	# FAKE_CLIENT: absent (default), ours, theirs (another install's labels),
+	# unlabelled-ours (no labels, this Route's callback), unlabelled-theirs,
+	# error. Printed as the hook's jsonpath asks: app, namespace, URIs.
+	case "${FAKE_CLIENT:-absent}" in
+	ours) printf 'app|ns1|https://app.example.com/oauth/callback\n' ;;
+	theirs) printf 'app-x|ns1|https://app.example.com/oauth/callback\n' ;;
+	unlabelled-ours) printf '||https://app.example.com/oauth/callback\n' ;;
+	unlabelled-theirs) printf '||https://old.example.com/oauth/callback\n' ;;
+	error) echo "Error from server (Forbidden): oauthclients.oauth.openshift.io \"$3\" is forbidden" >&2; exit 1 ;;
+	*) echo "Error from server (NotFound): oauthclients.oauth.openshift.io \"$3\" not found" >&2; exit 1 ;;
+	esac ;;
 "apply --server-side")
 	cat >"$FAKE_LOG.applied"
 	[ "${FAKE_APPLY:-ok}" = ok ] || { echo "Error from server: cannot apply oauthclients" >&2; exit 1; } ;;
@@ -650,10 +711,30 @@ expect_eq "OAuth client Secret created meanwhile: success" 0 "$HOOK_RC"
 run_oauth "$OCLIENT_SH"
 expect_eq "OAuthClient applied: success" 0 "$HOOK_RC"
 expect_eq "OAuthClient applied: the object" "$(printf '%s\n' 'apiVersion: oauth.openshift.io/v1' 'kind: OAuthClient' 'metadata:' \
-	'  name: app-ns1' '  labels:' '    app.kubernetes.io/instance: app-ns1' 'grantMethod: auto' 'redirectURIs:' \
-	'  - https://app.example.com/oauth/callback' 'secret: client-secret-value')" "$(cat "$HOOKLOG.applied")"
+	'  name: app-ns1' '  labels:' '    app.kubernetes.io/instance: app-ns1' '    app.kubernetes.io/name: "app"' \
+	'    rhoai-nightly-updater/namespace: "ns1"' '  ownerReferences:' '    - apiVersion: v1' '      kind: Namespace' \
+	'      name: "ns1"' '      uid: "ns-uid-1"' 'grantMethod: auto' 'redirectURIs:' \
+	'  - https://app.example.com/oauth/callback' 'scopeRestrictions:' '  - literals:' '      - user:full' \
+	'secret: client-secret-value')" "$(cat "$HOOKLOG.applied")"
 grep -qx 'oc apply --server-side --field-manager=rhoai-nightly-updater-gitops --force-conflicts -f -' "$HOOKLOG" && pass || fail "OAuthClient: not server-side applied: $(cat "$HOOKLOG")"
 grep -qF 'client-secret-value' "$HOOKOUT" "$HOOKLOG" && fail "OAuthClient: the secret was printed or passed as an argument" || pass
+# Only this install's client is applied over: its labels, or without labels
+# this Route's callback. Another install's (the name <APP_NAME>-<NAMESPACE>
+# is ambiguous) or an unreadable one fails the hook before anything is
+# applied.
+for client in ours unlabelled-ours; do
+	run_oauth "$OCLIENT_SH" FAKE_CLIENT=$client
+	expect_eq "OAuthClient $client: applied" "0 1" "$HOOK_RC $(grep -c '^oc apply' "$HOOKLOG")"
+done
+for client in theirs unlabelled-theirs error; do
+	run_oauth "$OCLIENT_SH" FAKE_CLIENT=$client
+	[ "$HOOK_RC" -ne 0 ] && [ ! -e "$HOOKLOG.applied" ] && [ "$(grep -c '^oc get secret' "$HOOKLOG" || true)" = 0 ] && pass ||
+		fail "OAuthClient $client: applied, or the secret read: $HOOK_RC $(cat "$HOOKLOG")"
+done
+run_oauth "$OCLIENT_SH" FAKE_CLIENT=theirs
+grep -qF 'OAuthClient app-ns1 belongs to app app-x in namespace ns1, not to this install; it was not changed' "$HOOKOUT" && pass || fail "OAuthClient theirs: $(cat "$HOOKOUT")"
+run_oauth "$OCLIENT_SH" FAKE_CLIENT=unlabelled-theirs
+grep -qF 'redirects to https://old.example.com/oauth/callback, not to https://app.example.com/oauth/callback; it was not changed' "$HOOKOUT" && pass || fail "OAuthClient unlabelled-theirs: $(cat "$HOOKOUT")"
 run_oauth "$OCLIENT_SH" FAKE_DATA=""
 [ "$HOOK_RC" -ne 0 ] && [ ! -e "$HOOKLOG.applied" ] && pass || fail "OAuthClient, empty secret: applied anyway"
 grep -qF 'has no client-secret' "$HOOKOUT" && pass || fail "OAuthClient, empty secret: $(cat "$HOOKOUT")"
@@ -661,5 +742,43 @@ run_oauth "$OCLIENT_SH" FAKE_NO_HOST=1
 [ "$HOOK_RC" -ne 0 ] && [ ! -e "$HOOKLOG.applied" ] && pass || fail "OAuthClient, no host: applied anyway"
 run_oauth "$OCLIENT_SH" FAKE_APPLY=fail
 [ "$HOOK_RC" -ne 0 ] && pass || fail "OAuthClient, apply fails: the Job succeeded"
+run_oauth "$OCLIENT_SH" FAKE_NS_UID=""
+[ "$HOOK_RC" -ne 0 ] && [ ! -e "$HOOKLOG.applied" ] && pass || fail "OAuthClient, no namespace UID: applied anyway"
+
+# The PostDelete hook: deleting the Application removes this install's
+# OAuthClient and revokes its sign-ins (an orphaned client with
+# grantMethod auto hands a user's token to whoever later serves its host).
+# Profile full with the OAuth client hooks only; never run during a sync.
+expect_render "OAuthClient removal hook" --namespace ns1 "${BASE[@]}" --set profile=full --set parameters.APP_NAME=upd --show-only templates/oauth-client-removal.yaml
+expect_eq "OAuthClient removal: four PostDelete hooks" 4 "$(grep -c 'argocd.argoproj.io/hook: "PostDelete"' "$OUT")"
+expect_eq "OAuthClient removal: no other hook phase" "" "$(grep 'argocd.argoproj.io/hook: ' "$OUT" | grep -v PostDelete || true)"
+removal_role=$(awk '/^---/ { if (keep) exit; buf = ""; next } { buf = buf $0 "\n" } /name: "upd-ns1-oauthclient-removal"/ && /^  name/ { keep = 1 } END { if (keep) printf "%s", buf }' "$OUT")
+expect_eq "OAuthClient removal: the rules" "$(printf '%s\n' 'resources: ["oauthclients"]' 'resourceNames: ["upd-ns1"]' 'verbs: ["get", "delete"]' \
+	'resources: ["oauthaccesstokens"]' 'verbs: ["list", "delete"]')" "$(grep -E '^ *(resources|resourceNames|verbs): ' <<<"$removal_role" | sed 's/^ *//; s/^- //')"
+for off in "--set profile=gitops" "--set profile=full --set gitops.oauthClient.enabled=false"; do
+	# shellcheck disable=SC2086 # two flags
+	expect_render "OAuthClient removal hook: $off" --namespace ns1 "${BASE[@]}" $off
+	grep -q 'PostDelete' "$OUT" && fail "OAuthClient removal hook rendered with $off" || pass
+done
+REMOVAL_SH="$WORK/oauthclient-removal.sh"
+helm template rnu "$CHART" --namespace ns1 "${BASE[@]}" --set profile=full --show-only templates/oauth-client-removal.yaml 2>&1 |
+	awk '/^            - \|$/ { f = 1; next } f && /^          [a-z]/ { exit } f' | sed -e 's/^              //' >"$REMOVAL_SH"
+bash -n "$REMOVAL_SH" && grep -q 'oc delete oauthaccesstokens' "$REMOVAL_SH" && pass || fail "OAuthClient removal: script not extracted"
+deletes() { grep '^oc delete' "$HOOKLOG" || true; }
+run_oauth "$REMOVAL_SH" FAKE_CLIENT=ours
+expect_eq "OAuthClient removal, ours: deleted, then its sign-ins revoked" "0 $(printf '%s\n' 'oc delete oauthclient app-ns1 --ignore-not-found' \
+	'oc delete oauthaccesstokens --field-selector clientName=app-ns1')" "$HOOK_RC $(deletes)"
+run_oauth "$REMOVAL_SH"
+expect_eq "OAuthClient removal, no client: its sign-ins revoked" "0 oc delete oauthaccesstokens --field-selector clientName=app-ns1" "$HOOK_RC $(deletes)"
+for client in theirs unlabelled-ours; do
+	run_oauth "$REMOVAL_SH" FAKE_CLIENT=$client
+	expect_eq "OAuthClient removal, $client: kept with its sign-ins" "0 " "$HOOK_RC $(deletes)"
+	grep -qF 'Keeping OAuthClient app-ns1' "$HOOKOUT" && pass || fail "OAuthClient removal, $client: $(cat "$HOOKOUT")"
+done
+for f in FAKE_CLIENT=error "FAKE_CLIENT=ours FAKE_DELETE_FAIL=1" "FAKE_CLIENT=ours FAKE_REVOKE_FAIL=1"; do
+	# shellcheck disable=SC2086 # one or two assignments
+	run_oauth "$REMOVAL_SH" $f
+	[ "$HOOK_RC" -ne 0 ] && pass || fail "OAuthClient removal, $f: the Job succeeded"
+done
 
 finish

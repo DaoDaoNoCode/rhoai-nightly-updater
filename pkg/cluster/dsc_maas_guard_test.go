@@ -371,6 +371,52 @@ func TestMaaSGuardFailsClosed(t *testing.T) {
 	}
 }
 
+// Once discovery says the MaaS API is served, a list that answers 404
+// cannot tell whether MaaS is in use, so it blocks too (it used to read
+// as "no objects").
+func TestMaaSGuardBlocksWhenAServedListIsNotFound(t *testing.T) {
+	for _, list := range []string{guardModelRefList,
+		"/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maassubscriptions",
+		"/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maasauthpolicies"} {
+		f, c := managerWorld(t, nil)
+		maasServed(f)
+		f.fail["GET "+list] = http.StatusNotFound
+		plan := mustPlan(t, c, "toggle", "aigateway", "Removed", false)
+		if b := maasBlock(plan, "aigateway"); b == nil || !strings.Contains(strings.Join(b.Reasons, " "), "cannot tell whether MaaS is in use") {
+			t.Errorf("%s answers 404: %+v", list, plan)
+		}
+		if _, err := foreignMaaSObjects(c); err == nil {
+			t.Errorf("%s answers 404: Clean up MaaS's in-use check found nobody", list)
+		}
+	}
+}
+
+// The guard lists at the version discovery reports, never at the v1alpha1
+// fallback: a cluster serving only v1 has its objects there, and its
+// v1alpha1 lists answer 404.
+func TestMaaSGuardListsTheDiscoveredVersion(t *testing.T) {
+	f, c := managerWorld(t, nil)
+	f.groups["/apis/maas.opendatahub.io"] = `{"kind":"APIGroup","name":"maas.opendatahub.io","versions":[{"groupVersion":"maas.opendatahub.io/v1","version":"v1"}],"preferredVersion":{"groupVersion":"maas.opendatahub.io/v1","version":"v1"}}`
+	f.put("/apis/maas.opendatahub.io/v1/namespaces/team/maasmodelrefs/their-model", map[string]interface{}{
+		"metadata": map[string]interface{}{"name": "their-model", "namespace": "team"}})
+	for _, l := range []string{"maasmodelrefs", "namespaces/models-as-a-service/maassubscriptions", "namespaces/models-as-a-service/maasauthpolicies"} {
+		f.fail["GET /apis/maas.opendatahub.io/v1alpha1/"+l] = http.StatusNotFound
+	}
+	plan := mustPlan(t, c, "toggle", "aigateway", "Removed", false)
+	b := maasBlock(plan, "aigateway")
+	if b == nil || !strings.Contains(strings.Join(b.Reasons, " "), "published model team/their-model") {
+		t.Fatalf("plan = %+v", plan)
+	}
+}
+
+// A group that is not served has nothing in use: no list is read.
+func TestMaaSGuardWithoutTheMaaSAPI(t *testing.T) {
+	_, c := managerWorld(t, nil)
+	if plan := mustPlan(t, c, "toggle", "aigateway", "Removed", false); len(plan.Blocked) != 0 {
+		t.Fatalf("blocked without the MaaS API: %+v", plan.Blocked)
+	}
+}
+
 // Without MaaS in use (the API served, nothing in it, no record) the guard
 // stays out of the way.
 func TestMaaSGuardAllowsWhenMaaSIsNotInUse(t *testing.T) {

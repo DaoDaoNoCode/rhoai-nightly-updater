@@ -378,21 +378,43 @@ type maasObject struct {
 	meta objectMeta
 }
 
+// servedMaaSAPI is the MaaS group version the API server serves (its
+// preferred one), from discovery, and false when the group is not served
+// (404, or no versions). A discovery read that fails is an error: unlike
+// maasAPI it never falls back to v1alpha1, whose lists a cluster serving
+// only a newer version answers with 404.
+func servedMaaSAPI(c *Client) (string, bool, error) {
+	served, err := groupServed(c, maasGroup)
+	if err != nil || !served {
+		return "", served, err
+	}
+	v := servedVersions(c, maasGroup, nil)
+	if !v.Discovered || len(v.Versions) == 0 {
+		return "", true, fmt.Errorf("read the versions of the API group %s: discovery did not answer", maasGroup)
+	}
+	return maasGroup + "/" + v.Versions[0], true, nil
+}
+
 // listMaaSObjects lists the MaaSModelRefs (cluster-wide), and the
 // MaaSSubscriptions and MaaSAuthPolicies (in models-as-a-service, where
-// maas-controller reads them), whoever made them. An API that is not
-// served lists nothing; any other failure is returned.
+// maas-controller reads them), whoever made them, at the version
+// discovery reports. A group that is not served lists nothing. Once it is
+// served, every failure is returned, a 404 on a list included: the
+// callers decide whether MaaS is in use (the DataScienceCluster's MaaS
+// guard, Clean up MaaS and Change database), and "cannot tell" must not
+// read as "nobody uses it".
 func listMaaSObjects(c *Client) ([]maasObject, error) {
+	api, served, err := servedMaaSAPI(c)
+	if err != nil || !served {
+		return nil, err
+	}
 	var out []maasObject
 	for _, l := range []struct{ kind, path string }{
-		{"MaaSModelRef", "/apis/" + maasAPI(c) + "/maasmodelrefs"},
-		{"MaaSSubscription", namespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, "")},
-		{"MaaSAuthPolicy", namespacedPath(maasAPI(c), "maasauthpolicies", maasTenantNamespace, "")},
+		{"MaaSModelRef", "/apis/" + api + "/maasmodelrefs"},
+		{"MaaSSubscription", namespacedPath(api, "maassubscriptions", maasTenantNamespace, "")},
+		{"MaaSAuthPolicy", namespacedPath(api, "maasauthpolicies", maasTenantNamespace, "")},
 	} {
 		body, _, err := c.get(l.path)
-		if IsK8sError(err, 404) {
-			continue
-		}
 		if err != nil {
 			return nil, fmt.Errorf("list %ss: %w", l.kind, err)
 		}

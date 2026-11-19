@@ -71,8 +71,9 @@ func (r maasRecord) setUpByTool() bool {
 
 // readMaaSUse reads what uses MaaS with the MaaS tab's readers: this tool's
 // record (snapshot ConfigMap, key maas) and, when the MaaS API is served,
-// the MaaSModelRefs, MaaSSubscriptions and MaaSAuthPolicies. Any read that
-// fails is returned.
+// the MaaSModelRefs, MaaSSubscriptions and MaaSAuthPolicies at the version
+// discovery reports (listMaaSObjects). Any read that fails is returned,
+// a 404 on a list of a served group included.
 func readMaaSUse(c *Client) (maasUse, error) {
 	var u maasUse
 	rec, err := readMaaSRecord(c)
@@ -84,29 +85,23 @@ func readMaaSUse(c *Client) (maasUse, error) {
 	for _, p := range rec.pubs() {
 		models[p.key()] = true
 	}
-	served, err := groupServed(c, maasGroup)
+	objs, err := listMaaSObjects(c)
 	if err != nil {
 		return u, err
 	}
-	if served {
-		objs, err := listMaaSObjects(c)
-		if err != nil {
-			return u, err
+	for _, o := range objs {
+		name := o.meta.Namespace + "/" + o.meta.Name
+		if o.meta.terminating() {
+			name += " (being deleted)"
 		}
-		for _, o := range objs {
-			name := o.meta.Namespace + "/" + o.meta.Name
-			if o.meta.terminating() {
-				name += " (being deleted)"
-			}
-			switch o.kind {
-			case "MaaSModelRef":
-				delete(models, o.meta.Namespace+"/"+o.meta.Name)
-				u.models = append(u.models, name)
-			case "MaaSSubscription":
-				u.subscriptions = append(u.subscriptions, name)
-			case "MaaSAuthPolicy":
-				u.policies = append(u.policies, name)
-			}
+		switch o.kind {
+		case "MaaSModelRef":
+			delete(models, o.meta.Namespace+"/"+o.meta.Name)
+			u.models = append(u.models, name)
+		case "MaaSSubscription":
+			u.subscriptions = append(u.subscriptions, name)
+		case "MaaSAuthPolicy":
+			u.policies = append(u.policies, name)
 		}
 	}
 	for k := range models {

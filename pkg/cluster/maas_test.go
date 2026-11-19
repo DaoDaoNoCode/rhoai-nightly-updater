@@ -42,6 +42,8 @@ func newMaaSCluster(t *testing.T) *modelsCluster {
 	// serve it (the fake would answer an empty list).
 	f.fail["GET /apis/kuadrant.io/v1/kuadrants"] = 404
 	f.groups = map[string]string{"/apis/kuadrant.io": `{"kind":"APIGroup","name":"kuadrant.io","versions":[{"groupVersion":"kuadrant.io/v1","version":"v1"},{"groupVersion":"kuadrant.io/v1beta1","version":"v1beta1"},{"groupVersion":"kuadrant.io/v1alpha1","version":"v1alpha1"}],"preferredVersion":{"groupVersion":"kuadrant.io/v1","version":"v1"}}`,
+		// RHOAI serves the MaaS API (its in-use checks list it).
+		"/apis/maas.opendatahub.io": maasGroupDocV1alpha1,
 		// CloudNativePG is installed: its API group is served.
 		"/apis/postgresql.cnpg.io": `{"kind":"APIGroup","name":"postgresql.cnpg.io","versions":[{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}],"preferredVersion":{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}}`}
 	// The operators' controllers run (a served API alone is not an

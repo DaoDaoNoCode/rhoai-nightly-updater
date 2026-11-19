@@ -26,6 +26,82 @@ OPERATOR_NAMESPACE.
 {{- end -}}
 
 {{- /*
+The gitops profile's sign-in, applied to one object of the Template (in
+place, before its ${NAME}s are replaced): the sign-in of 3.x, with the app's
+ServiceAccount as the OAuth client. The OAuth server allows a ServiceAccount
+client only user:info, user:check-access, the list-projects scopes and roles
+in its own namespace, so its session token identifies the user and runs the
+cluster-admin gate's access review, and can change nothing: the gitops
+profile needs no more (its Update acts with the ServiceAccount, whose
+admission policy matches that username; its reads are the ServiceAccount's;
+pkg/api never asks it to sign in again). So no OAuthClient, no client
+Secret and no hook with a right on OAuthClients (templates/oauth-client.yaml
+renders only with profile full).
+- ServiceAccount ${APP_NAME}: the annotation that makes the Route's host its
+  redirect URI (serviceaccounts.openshift.io/oauth-redirectreference).
+- Deployment ${APP_NAME}, container oauth-proxy: --client-id and
+  --client-secret-file become --openshift-service-account (the client is
+  system:serviceaccount:<NAMESPACE>:<APP_NAME>, its secret the pod's token)
+  and --scope=user:full becomes --scope=user:info user:check-access;
+  the Secret ${APP_NAME}-oauth-client is no longer mounted.
+Each replaced argument, the mount and the volume must be there exactly
+once, or the render fails: a Template change cannot leave the gitops
+profile with half of the full profile's sign-in.
+*/ -}}
+{{- define "rnu.gitopsSignIn" -}}
+{{- if and (eq .kind "ServiceAccount") (eq .metadata.name "${APP_NAME}") -}}
+{{- $meta := .metadata -}}
+{{- $_ := set $meta "annotations" (merge (dict "serviceaccounts.openshift.io/oauth-redirectreference.primary" "{\"kind\":\"OAuthRedirectReference\",\"apiVersion\":\"v1\",\"reference\":{\"kind\":\"Route\",\"name\":\"${APP_NAME}\"}}") ($meta.annotations | default dict)) -}}
+{{- end -}}
+{{- if and (eq .kind "Deployment") (eq .metadata.name "${APP_NAME}") -}}
+{{- $pod := .spec.template.spec -}}
+{{- range $pod.containers -}}
+{{- if eq .name "oauth-proxy" -}}
+{{- $args := list -}}
+{{- $replaced := list -}}
+{{- range .args -}}
+{{- if eq . "--client-id=${APP_NAME}-${NAMESPACE}" -}}
+{{- $args = append $args "--openshift-service-account=${APP_NAME}" -}}
+{{- $replaced = append $replaced . -}}
+{{- else if eq . "--client-secret-file=/etc/proxy/oauth/client-secret" -}}
+{{- $replaced = append $replaced . -}}
+{{- else if eq . "--scope=user:full" -}}
+{{- $args = append $args "--scope=user:info user:check-access" -}}
+{{- $replaced = append $replaced . -}}
+{{- else -}}
+{{- $args = append $args . -}}
+{{- end -}}
+{{- end -}}
+{{- if or (ne (len $replaced) 3) (ne (len (uniq $replaced)) 3) -}}
+{{- fail (printf "profile gitops: the oauth-proxy container of deploy/template.yaml does not have --client-id=${APP_NAME}-${NAMESPACE}, --client-secret-file=/etc/proxy/oauth/client-secret and --scope=user:full once each (found %v); update rnu.gitopsSignIn in deploy/chart/templates/_helpers.tpl" $replaced) -}}
+{{- end -}}
+{{- $_ := set . "args" $args -}}
+{{- $mounts := list -}}
+{{- range .volumeMounts -}}
+{{- if ne .name "oauth-client" -}}
+{{- $mounts = append $mounts . -}}
+{{- end -}}
+{{- end -}}
+{{- if ne (len $mounts) (sub (len .volumeMounts) 1) -}}
+{{- fail "profile gitops: the oauth-proxy container of deploy/template.yaml does not mount volume oauth-client once; update rnu.gitopsSignIn in deploy/chart/templates/_helpers.tpl" -}}
+{{- end -}}
+{{- $_ := set . "volumeMounts" $mounts -}}
+{{- end -}}
+{{- end -}}
+{{- $volumes := list -}}
+{{- range $pod.volumes -}}
+{{- if not (and (eq .name "oauth-client") (eq (dig "secret" "secretName" "" .) "${APP_NAME}-oauth-client")) -}}
+{{- $volumes = append $volumes . -}}
+{{- end -}}
+{{- end -}}
+{{- if ne (len $volumes) (sub (len $pod.volumes) 1) -}}
+{{- fail "profile gitops: the Deployment of deploy/template.yaml has no volume oauth-client of Secret ${APP_NAME}-oauth-client; update rnu.gitopsSignIn in deploy/chart/templates/_helpers.tpl" -}}
+{{- end -}}
+{{- $_ := set $pod "volumes" $volumes -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
 The Template's parameters, as JSON, the way `oc process` would see them
 from install.sh: the Template's defaults, then the chart's own (NAMESPACE is
 the release namespace, which Argo CD sets to the destination namespace;

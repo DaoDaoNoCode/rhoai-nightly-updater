@@ -189,6 +189,51 @@ func TestUserPermissionsReportsTheSignIn(t *testing.T) {
 	}
 }
 
+// The gitops profile signs users in through the ServiceAccount, as 3.x
+// did (the chart's rnu.gitopsSignIn): their token has the scopes
+// user:info user:check-access only. Nothing in that profile acts with it,
+// so neither the read-only switch nor Update reads the sign-in or asks to
+// sign in again, and Update's client is the ServiceAccount's.
+func TestGitOpsProfileWorksWithAScopedSignIn(t *testing.T) {
+	inCluster(t)
+	allowMutations(t)
+	reads := fakeSession(t, &cluster.SessionToken{Created: sessionNow, ExpiresIn: 86400, Scopes: []string{"user:info", "user:check-access"}}, nil)
+	mux := gitOpsMux(t)
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, postJSONMethod(http.MethodGet, "/api/user/permissions", "sha256~alice-token", ""))
+	var body map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if w.Code != http.StatusOK || body["canMutate"] != true || body["reason"] != nil || body["reasonCode"] != nil {
+		t.Fatalf("permissions: %d %v", w.Code, body)
+	}
+
+	var asUser *bool
+	runUpdateDryRunGitOps = func(c *cluster.Client, _ string) (*types.OperationResponse, error) {
+		v := c.ActsAsUser()
+		asUser = &v
+		return &types.OperationResponse{Success: true, Message: "Dry run complete. No changes were made."}, nil
+	}
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, postJSON("/api/update", "sha256~alice-token", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","dryRun":true}`))
+	if w.Code != http.StatusOK || asUser == nil || *asUser {
+		t.Fatalf("update dry run: %d, acted as the user: %v: %s", w.Code, asUser, w.Body.String())
+	}
+	if *reads != 0 {
+		t.Fatalf("the gitops profile read the sign-in %d times", *reads)
+	}
+
+	// The same scoped sign-in in the full profile cannot change anything.
+	SetProfile(ProfileFull)
+	w = httptest.NewRecorder()
+	HandleUserPermissions(w, postJSONMethod(http.MethodGet, "/api/user/permissions", "sha256~alice-token", ""))
+	body = nil
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body["canMutate"] != false || body["reasonCode"] != signInAgainCode {
+		t.Fatalf("full profile: %v", body)
+	}
+}
+
 // The user's token never appears in a log line, a streamed step, an
 // error, the operation record, the lease or the activity, whatever the
 // operation reports; it reaches only the seams that call the API server.

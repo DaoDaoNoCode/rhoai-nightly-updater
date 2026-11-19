@@ -381,11 +381,26 @@ ensure_client_secret() {
 # oauth_client_manifest HOST SECRET: OAuthClient $INSTANCE, as RHOAI's
 # operator makes its own (data-science): grantMethod auto (no "Authorize
 # Access" page), one redirect URI on the Route's host (the OAuth server
-# matches scheme and host exactly), the client secret, and no scope
-# restriction, so oauth-proxy can request user:full. The chart's hook
-# applies the same object (scripts/test-chart.sh compares them).
+# matches scheme and host exactly), and the client secret. Its labels name
+# the install's app and namespace apart (oauth_client_owner reads them): the
+# name alone is the same for app a-b in namespace c and app a in namespace
+# b-c.
+#
+# The OAuth server also answers the implicit flow (response_type=token)
+# for any client, so with grantMethod auto whoever later serves the
+# redirect URI's host (a project admin's Route with that host, once the
+# namespace is gone) could collect a signed-in user's token from a crafted
+# link; the client secret does not stop that. Hence:
+#   - scopeRestrictions: exactly the scope oauth-proxy asks for, so the
+#     client's id cannot get any other scope;
+#   - an ownerReference to the install's namespace (cluster-scoped, like
+#     the client): deleting the namespace by hand lets Kubernetes' garbage
+#     collector delete the client with it. Uninstall and rollback delete it
+#     themselves (remove_oauth_client).
+# The chart's hook applies the same object (scripts/test-chart.sh compares
+# them).
 oauth_client_manifest() {
-	local host=$1 secret=$2
+	local host=$1 secret=$2 ns_uid=$3
 	printf '%s\n' \
 		'apiVersion: oauth.openshift.io/v1' \
 		'kind: OAuthClient' \
@@ -393,10 +408,73 @@ oauth_client_manifest() {
 		"  name: $INSTANCE" \
 		'  labels:' \
 		"    app.kubernetes.io/instance: $INSTANCE" \
+		"    app.kubernetes.io/name: \"$APP_NAME\"" \
+		"    rhoai-nightly-updater/namespace: \"$NAMESPACE\"" \
+		'  ownerReferences:' \
+		'    - apiVersion: v1' \
+		'      kind: Namespace' \
+		"      name: \"$NAMESPACE\"" \
+		"      uid: \"$ns_uid\"" \
 		'grantMethod: auto' \
 		'redirectURIs:' \
-		"  - https://$host/oauth/callback"
+		"  - https://$host/oauth/callback" \
+		'scopeRestrictions:' \
+		'  - literals:' \
+		'      - user:full'
 	printf 'secret: %s\n' "$secret"
+}
+
+# oauth_client_owner HOST: sets CLIENT_OWNER to whose OAuthClient $INSTANCE
+# is: "absent"; "ours" when its labels name this install's app and
+# namespace, or, without them (a client applied before the labels), when
+# its only redirect URI is this install's Route (HOST); else "foreign",
+# with CLIENT_FOREIGN saying why. Its name cannot tell: app a-b in
+# namespace c and app a in namespace b-c both use a-b-c, and applying ours
+# with --force-conflicts would take the other install's client over (its
+# users would sign in to this app). Stops on any other read error: nothing
+# may be applied or deleted without knowing.
+oauth_client_owner() {
+	local host=$1 out rc=0 app ns uris
+	CLIENT_OWNER="" CLIENT_FOREIGN=""
+	out=$(oc get oauthclient "$INSTANCE" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/name}{"|"}{.metadata.labels.rhoai-nightly-updater/namespace}{"|"}{.redirectURIs[*]}{"\n"}' 2>&1) || rc=$?
+	if [ "$rc" -ne 0 ]; then
+		case "$out" in
+		*NotFound* | *"not found"*)
+			CLIENT_OWNER=absent
+			return 0
+			;;
+		esac
+		die "Cannot read OAuthClient $INSTANCE, so this install cannot tell whether it is its own: $out"
+	fi
+	IFS='|' read -r app ns uris <<<"$out" || true
+	if [ -n "$app" ] || [ -n "$ns" ]; then
+		if [ "$app" = "$APP_NAME" ] && [ "$ns" = "$NAMESPACE" ]; then
+			CLIENT_OWNER=ours
+		else
+			CLIENT_OWNER=foreign CLIENT_FOREIGN="it belongs to app ${app:-?} in namespace ${ns:-?}"
+		fi
+	elif [ -n "$host" ] && [ "$uris" = "https://$host/oauth/callback" ]; then
+		CLIENT_OWNER=ours
+	else
+		CLIENT_OWNER=foreign CLIENT_FOREIGN="it has no labels of an install and redirects to ${uris:-nothing}, not to this install's Route${host:+ (https://$host/oauth/callback)}"
+	fi
+}
+
+# refuse_foreign_client HOST: stops, before anything is changed, when
+# OAuthClient $INSTANCE is another install's (oauth_client_owner).
+refuse_foreign_client() {
+	oauth_client_owner "$1"
+	[ "$CLIENT_OWNER" = foreign ] || return 0
+	err "ERROR: OAuthClient $INSTANCE exists and is not this install's: $CLIENT_FOREIGN."
+	err "  Its name, <APP_NAME>-<NAMESPACE>, is the same for app a-b in namespace c and app a in namespace b-c. Use another --app-name or --namespace."
+	err "  If it is left from an install that is gone, delete it and the sign-ins it issued, then re-run:"
+	err "    oc delete oauthclient $INSTANCE"
+	err "    oc delete oauthaccesstokens --field-selector clientName=$INSTANCE"
+	die "Nothing was changed."
+}
+
+route_host() {
+	oc get route "$APP_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null || true
 }
 
 # The OAuthClient needs the Route host, which the API server assigns when
@@ -406,18 +484,24 @@ oauth_client_manifest() {
 # object with the API server (a placeholder secret, and a placeholder host
 # when the Route does not exist yet).
 oauth_client() {
-	local host secret
-	host=$(oc get route "$APP_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null || true)
+	local host secret ns_uid
+	host=$(route_host)
+	# Checked again right before the apply (also before anything changed).
+	oauth_client_owner "$host"
+	[ "$CLIENT_OWNER" != foreign ] ||
+		die "OAuthClient $INSTANCE is not this install's ($CLIENT_FOREIGN), so it was not changed; users cannot sign in to this install until it is. See: oc get oauthclient $INSTANCE --show-labels"
+	ns_uid=$(oc get namespace "$NAMESPACE" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)
 	if [ -n "$DRY" ]; then
-		oauth_client_manifest "${host:-$APP_NAME-$NAMESPACE.apps.example.com}" dry-run-placeholder |
+		oauth_client_manifest "${host:-$APP_NAME-$NAMESPACE.apps.example.com}" dry-run-placeholder "${ns_uid:-00000000-0000-0000-0000-000000000000}" |
 			oc apply --server-side --field-manager=rhoai-nightly-updater-install --force-conflicts --dry-run=server -f - >/dev/null
 		err "Validated OAuthClient $INSTANCE."
 		return 0
 	fi
 	[ -n "$host" ] || die "Route $APP_NAME has no host yet; users cannot sign in until OAuthClient $INSTANCE exists. Re-run this command."
+	[ -n "$ns_uid" ] || die "Cannot read the UID of namespace $NAMESPACE, which owns OAuthClient $INSTANCE; users cannot sign in until it exists. Re-run this command."
 	secret=$(oc get secret "$CLIENT_SECRET" -n "$NAMESPACE" -o jsonpath='{.data.client-secret}' | base64 -d)
 	[ -n "$secret" ] || die "Secret $CLIENT_SECRET has no client-secret; delete it and re-run this command."
-	oauth_client_manifest "$host" "$secret" |
+	oauth_client_manifest "$host" "$secret" "$ns_uid" |
 		oc apply --server-side --field-manager=rhoai-nightly-updater-install --force-conflicts -f - >/dev/null
 	unset secret
 	err "OAuthClient $INSTANCE signs users in at https://$host (redirect https://$host/oauth/callback)."
@@ -555,6 +639,7 @@ deploy_or_upgrade() {
 		die "No deployment $APP_NAME in $NAMESPACE; install it first (make deploy, or install.sh deploy)."
 	fi
 	resolve_image
+	refuse_foreign_client "$(route_host)"
 	if [ -z "$DRY" ]; then
 		if [ "$action" = deploy ]; then
 			oc get project "$NAMESPACE" >/dev/null 2>&1 || oc new-project "$NAMESPACE" >/dev/null
@@ -600,7 +685,6 @@ rollback() {
 	preflight
 	detect_oauth_proxy_image
 	installed || die "No deployment $APP_NAME in $NAMESPACE; run 'make deploy' first."
-	[ -n "$DRY" ] || ensure_proxy_secret
 	local rev short8 short7 img_tag="" t label
 	rev=$(git rev-parse --verify --quiet "$TAG^{commit}") || die "Commit $TAG is not in this clone; run 'git fetch origin --tags' and retry."
 	git cat-file -e "$rev:deploy/template.yaml" 2>/dev/null || die "Commit $rev has no deploy/template.yaml."
@@ -626,20 +710,33 @@ rollback() {
 	fi
 	git show "$rev:deploy/template.yaml" >"$TMP/rollback-template.yaml"
 	# A template that signs users in through OAuthClient $INSTANCE needs its
-	# secret and the client; an older one uses the ServiceAccount and leaves
-	# them unused (uninstall removes them).
+	# secret and the client; an older one signs in through the ServiceAccount,
+	# so once it runs this install's client is deleted and its sign-ins
+	# revoked (an unused client with grantMethod auto is only a risk). The
+	# client Secret stays for a roll forward.
 	local client=""
 	! uses_oauth_client "$TMP/rollback-template.yaml" || client=1
+	[ -z "$client" ] || refuse_foreign_client "$(route_host)"
+	[ -n "$DRY" ] || ensure_proxy_secret
 	[ -n "$DRY" ] || [ -z "$client" ] || ensure_client_secret
 	err "$([ -n "$DRY" ] && echo Validating || echo Applying) $REF with the template of commit $rev..."
 	apply_template "$TMP/rollback-template.yaml" "$REF"
 	[ -z "$client" ] || oauth_client
 	if [ -n "$DRY" ]; then
+		[ -n "$client" ] || remove_oauth_client || true
 		err "Dry run only; nothing was changed."
 		return 0
 	fi
 	err "Note: a running cluster operation delays the restart until it finishes (up to ~17 minutes)."
 	wait_rollout
+	if [ -z "$client" ]; then
+		if ! remove_oauth_client; then
+			err "ERROR: rolled back, but OAuthClient $INSTANCE, which the rolled-back build does not use, could not be deleted. Delete it and revoke its sign-ins:"
+			err "  oc delete oauthclient $INSTANCE"
+			die "  oc delete oauthaccesstokens --field-selector clientName=$INSTANCE"
+		fi
+		[ -n "$REVOKED" ] || die "ERROR: rolled back and OAuthClient $INSTANCE deleted, but its sign-ins could not be revoked: oc delete oauthaccesstokens --field-selector clientName=$INSTANCE"
+	fi
 	err "Rolled back. Roll forward again with: make upgrade"
 }
 
@@ -659,18 +756,44 @@ rbac_namespaces() {
 # cluster-wide RBAC, its Roles in other namespaces, the ConsoleLink and the
 # namespace. RHOAI and everything the app created on the cluster (catalog,
 # pull secret, IDMS, test resources) stay.
+# remove_oauth_client: deletes OAuthClient $INSTANCE when it is this
+# install's (oauth_client_owner), so nobody signs in through it again, then
+# revokes the access tokens it issued: deleting a client does not invalidate
+# them (the API server does not check that a token's client still exists),
+# and each is a user's full token that would stay valid until it expires.
+# Another install's client and its sign-ins are left alone; when there is
+# no client, the tokens issued under its name are still revoked. Returns 1
+# when the client could not be deleted; REVOKED is empty when the
+# revocation failed.
+remove_oauth_client() {
+	REVOKED=1
+	oauth_client_owner "$(route_host)"
+	case "$CLIENT_OWNER" in
+	foreign)
+		err "Keeping OAuthClient $INSTANCE and its sign-ins: it is not this install's ($CLIENT_FOREIGN)."
+		return 0
+		;;
+	ours)
+		# shellcheck disable=SC2086 # DRY_FLAG is one word or nothing
+		oc delete oauthclient "$INSTANCE" --ignore-not-found $DRY_FLAG || return 1
+		;;
+	esac
+	# shellcheck disable=SC2086
+	oc delete oauthaccesstokens --field-selector "clientName=$INSTANCE" $DRY_FLAG || REVOKED=""
+}
+
 uninstall() {
 	preflight
-	local ns namespaces revoked=1
+	local ns namespaces
 	namespaces=$(rbac_namespaces) || die "Cannot render $TEMPLATE to find the namespaces of its Roles; nothing was deleted."
-	# First the OAuthClient, so nobody signs in again; then the access
-	# tokens it issued: deleting the client does not invalidate them (the
-	# API server does not check that a token's client still exists), and
-	# each is a user's full token that would stay valid until it expires.
-	# shellcheck disable=SC2086 # DRY_FLAG is one word or nothing
-	oc delete oauthclient -l "app.kubernetes.io/instance=$INSTANCE" --ignore-not-found $DRY_FLAG
-	# shellcheck disable=SC2086
-	oc delete oauthaccesstokens --field-selector "clientName=$INSTANCE" $DRY_FLAG || revoked=""
+	# First the OAuthClient. If it stays, so does everything else: while the
+	# namespace and its Route exist, nobody else can claim the Route's host
+	# and receive sign-ins through the client (a cluster-admin's full token
+	# with grantMethod auto).
+	if ! remove_oauth_client; then
+		err "ERROR: OAuthClient $INSTANCE could not be deleted, so nothing else was removed: the namespace keeps its Route's host, which the client's redirect URI names. Delete it, then run uninstall again:"
+		die "  oc delete oauthclient $INSTANCE"
+	fi
 	# shellcheck disable=SC2086
 	oc delete consolelink,clusterrolebinding,clusterrole -l "app.kubernetes.io/instance=$INSTANCE" --ignore-not-found $DRY_FLAG
 	for ns in $namespaces; do
@@ -681,7 +804,7 @@ uninstall() {
 	# shellcheck disable=SC2086
 	oc delete project "$NAMESPACE" --ignore-not-found $DRY_FLAG
 	if [ -n "$DRY" ]; then err "Dry run only; nothing was changed."; else err "Removed $APP_NAME from $NAMESPACE."; fi
-	if [ -z "$revoked" ]; then
+	if [ -z "$REVOKED" ]; then
 		err "ERROR: the sign-ins of OAuthClient $INSTANCE could not be revoked; each stays a valid OpenShift token until it expires. Revoke them with:"
 		die "  oc delete oauthaccesstokens --field-selector clientName=$INSTANCE"
 	fi

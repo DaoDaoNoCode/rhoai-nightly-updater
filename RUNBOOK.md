@@ -131,7 +131,7 @@ oc logs -n $NS deploy/$APP -c app --previous
 
 ### Sign-in and the OAuthClient
 
-Since 4.0.0 users sign in through the install's own OAuthClient `$APP-$NS` (`install.sh` creates it after the Route; the chart's PostSync hook in Argo CD). Check it:
+Since 4.0.0 users sign in through the install's own OAuthClient `$APP-$NS` (`install.sh` creates it after the Route; the chart's PostSync hook in Argo CD with `profile: full`). The chart's gitops profile has no OAuthClient: users sign in through the ServiceAccount as with 3.x ([GITOPS §11](docs/GITOPS.md#sign-in-in-the-gitops-profile)). Check it:
 
 ```bash
 oc get oauthclient $APP-$NS -o jsonpath='{.grantMethod} {.redirectURIs}{"\n"}'   # auto ["https://<route host>/oauth/callback"]
@@ -144,7 +144,7 @@ oc get oauthaccesstokens --field-selector clientName=$APP-$NS                   
 |---|---|
 | The OAuth server shows JSON `{"error":"unauthorized_client"}` | OAuthClient `$APP-$NS` is missing (an install interrupted before it, or a chart with `gitops.oauthClient.enabled=false`). Re-run `install.sh upgrade` (or sync Argo CD) |
 | JSON `{"error":"invalid_request"}` about the redirect URI | The Route's host changed after the OAuthClient was made. Re-run `install.sh upgrade`; it applies the client with the current host |
-| oauth-proxy's "403 Permission Denied" with body `access_denied`, and `?error_description=scope+denied` in the address bar | The OAuthClient restricts the scope (someone added `scopeRestrictions`), or the pod still runs a template from before 4.0.0 with the ServiceAccount as the client. Remove the restriction, or upgrade ([OPENSHIFT_INTEGRATION §2](docs/OPENSHIFT_INTEGRATION.md#2-oauth-proxy-token-scopes)) |
+| oauth-proxy's "403 Permission Denied" with body `access_denied`, and `?error_description=scope+denied` in the address bar | The OAuthClient's `scopeRestrictions` do not allow `user:full` (someone changed them; the tool sets exactly `user:full`), or the pod still runs a template from before 4.0.0 with the ServiceAccount as the client. Re-run `install.sh upgrade`, or upgrade ([OPENSHIFT_INTEGRATION §2](docs/OPENSHIFT_INTEGRATION.md#2-oauth-proxy-token-scopes)) |
 | oauth-proxy logs `invalid_client` after login | The OAuthClient's secret differs from Secret `$APP-oauth-client` (one was replaced by hand). Re-run `install.sh upgrade`: it applies the Secret's value |
 | Rotate the client secret | `oc delete secret $APP-oauth-client -n $NS`, then `install.sh upgrade`: a new secret, the client updated, the pod restarted; everyone signs in again |
 | End every session of this install now | `oc delete oauthaccesstokens --field-selector clientName=$APP-$NS` (their cookies then fail and users sign in again) |

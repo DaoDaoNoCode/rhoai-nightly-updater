@@ -18,12 +18,18 @@ never the app's: create (which cannot be limited to a name, so for as long
 as the hook runs it could register any client; SECURITY.md audits it), and
 get and patch of this one name. The ClusterRole and its binding carry
 install.sh's instance label and are deleted with the hook. Argo CD does not
-track the Secret or the OAuthClient and never prunes them; `install.sh
-uninstall` removes the OAuthClient and revokes the sign-ins it issued
-(docs/GITOPS.md). With gitops.oauthClient.enabled=false, create both before
+track the Secret or the OAuthClient and never prunes them; the PostDelete
+hook (oauth-client-removal.yaml) removes the OAuthClient and revokes the
+sign-ins it issued when the Application is deleted, as `install.sh
+uninstall` does, and the namespace owns the client (ownerReference), so
+deleting the namespace deletes it too (docs/GITOPS.md). With gitops.oauthClient.enabled=false, create both before
 the first sync.
+
+Profile full only: the gitops profile signs users in through the app's
+ServiceAccount, as 3.x did (rnu.gitopsSignIn in _helpers.tpl), and needs
+neither the client nor its Secret.
 */ -}}
-{{- if .Values.gitops.oauthClient.enabled }}
+{{- if and .Values.gitops.oauthClient.enabled (eq (.Values.profile | default "gitops") "full") }}
 {{- $p := include "rnu.params" . | fromJson }}
 {{- $secretName := printf "%s-oauth-client" $p.APP_NAME }}
 {{- $instance := printf "%s-%s" $p.APP_NAME $p.NAMESPACE }}
@@ -217,6 +223,11 @@ rules:
   - apiGroups: ["oauth.openshift.io"]
     resources: ["oauthclients"]
     verbs: ["create"]
+  # The namespace's UID, for the client's ownerReference.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    resourceNames: [{{ $p.NAMESPACE | quote }}]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -276,7 +287,14 @@ spec:
           # short wait is enough. The secret goes to oc on stdin, never on
           # a command line or into the log; server-side apply keeps it out of
           # a last-applied annotation. --force-conflicts takes over the
-          # fields of a client that install.sh applied.
+          # fields of a client that install.sh applied, and only of this
+          # install's: the name <APP_NAME>-<NAMESPACE> is the same for app
+          # a-b in namespace c and app a in namespace b-c, so a client is
+          # this install's only when its labels name this app and
+          # namespace, or, without them (applied before the labels), when
+          # its only redirect URI is this Route's (install.sh's
+          # oauth_client_owner, the same rule). Otherwise the hook fails
+          # without changing it.
           command:
             - /bin/bash
             - -c
@@ -292,6 +310,33 @@ spec:
                 echo "Route $APP_NAME has no host yet" >&2
                 exit 1
               fi
+              if out=$(oc get oauthclient "$INSTANCE" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/name}{"|"}{.metadata.labels.rhoai-nightly-updater/namespace}{"|"}{.redirectURIs[*]}{"\n"}' 2>&1); then
+                IFS='|' read -r app ns uris <<<"$out" || true
+                if [ -n "$app" ] || [ -n "$ns" ]; then
+                  if [ "$app" != "$APP_NAME" ] || [ "$ns" != "$NAMESPACE" ]; then
+                    echo "OAuthClient $INSTANCE belongs to app ${app:-?} in namespace ${ns:-?}, not to this install; it was not changed. Use another APP_NAME, or delete it if that install is gone (oc delete oauthclient $INSTANCE; oc delete oauthaccesstokens --field-selector clientName=$INSTANCE)." >&2
+                    exit 1
+                  fi
+                elif [ "$uris" != "https://$host/oauth/callback" ]; then
+                  echo "OAuthClient $INSTANCE has no labels of an install and redirects to ${uris:-nothing}, not to https://$host/oauth/callback; it was not changed. Delete it if it is left from an install that is gone (oc delete oauthclient $INSTANCE; oc delete oauthaccesstokens --field-selector clientName=$INSTANCE)." >&2
+                  exit 1
+                fi
+              else
+                case "$out" in
+                *NotFound* | *"not found"*) ;;
+                *)
+                  echo "Cannot read OAuthClient $INSTANCE: $out" >&2
+                  exit 1
+                  ;;
+                esac
+              fi
+              # The namespace owns the client (install.sh's
+              # oauth_client_manifest): deleting it deletes the client.
+              ns_uid=$(oc get namespace "$NAMESPACE" -o jsonpath='{.metadata.uid}')
+              if [ -z "$ns_uid" ]; then
+                echo "Cannot read the UID of namespace $NAMESPACE" >&2
+                exit 1
+              fi
               secret=$(oc get secret "$SECRET" -n "$NAMESPACE" -o jsonpath='{.data.client-secret}' | base64 -d)
               if [ -z "$secret" ]; then
                 echo "Secret $SECRET has no client-secret; delete it and sync again" >&2
@@ -305,9 +350,19 @@ spec:
                   "  name: $INSTANCE" \
                   '  labels:' \
                   "    app.kubernetes.io/instance: $INSTANCE" \
+                  "    app.kubernetes.io/name: \"$APP_NAME\"" \
+                  "    rhoai-nightly-updater/namespace: \"$NAMESPACE\"" \
+                  '  ownerReferences:' \
+                  '    - apiVersion: v1' \
+                  '      kind: Namespace' \
+                  "      name: \"$NAMESPACE\"" \
+                  "      uid: \"$ns_uid\"" \
                   'grantMethod: auto' \
                   'redirectURIs:' \
-                  "  - https://$host/oauth/callback"
+                  "  - https://$host/oauth/callback" \
+                  'scopeRestrictions:' \
+                  '  - literals:' \
+                  '      - user:full'
                 printf 'secret: %s\n' "$secret"
               } | oc apply --server-side --field-manager=rhoai-nightly-updater-gitops --force-conflicts -f - >/dev/null
               unset secret

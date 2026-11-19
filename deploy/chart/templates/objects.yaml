@@ -12,6 +12,13 @@ The policy and its binding go in sync wave -1, before the Deployment (wave
 0), so it holds before the updater runs
 (https://argo-cd.readthedocs.io/en/stable/user-guide/sync-waves/).
 
+The gitops profile also signs users in as 3.x did, through the app's
+ServiceAccount as the OAuth client ("rnu.gitopsSignIn" in _helpers.tpl):
+nothing in that profile acts with the user's token, so it needs neither
+user:full nor an OAuthClient. That changes the Template's oauth-proxy
+arguments, its OAuth client Secret volume and its ServiceAccount, and fails
+the render when the Template no longer has exactly what it replaces.
+
 Each object is substituted in its JSON form, with the value JSON-escaped,
 so a value can only ever change the string it is placed in. A placeholder
 left over (a parameter the Template does not declare) fails the render, and
@@ -24,7 +31,25 @@ so does the non-string form ${{NAME}}, which the Template does not use.
 {{- $objects := list -}}
 {{- range $t.objects -}}
 {{- if not (and $gitops (has .kind $rbacKinds)) -}}
+{{- if $gitops -}}
+{{- include "rnu.gitopsSignIn" . -}}
+{{- end -}}
 {{- $objects = append $objects . -}}
+{{- end -}}
+{{- end -}}
+{{- if $gitops -}}
+{{- $signIn := 0 -}}
+{{- range $objects -}}
+{{- if and (eq .kind "Deployment") (eq .metadata.name "${APP_NAME}") -}}
+{{- range .spec.template.spec.containers -}}
+{{- if and (eq .name "oauth-proxy") (has "--openshift-service-account=${APP_NAME}" .args) -}}
+{{- $signIn = add1 $signIn -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if ne $signIn 1 -}}
+{{- fail "profile gitops: deploy/template.yaml has no Deployment ${APP_NAME} with an oauth-proxy container to sign in through the ServiceAccount; update rnu.gitopsSignIn in deploy/chart/templates/_helpers.tpl" -}}
 {{- end -}}
 {{- end -}}
 {{- if $gitops -}}
