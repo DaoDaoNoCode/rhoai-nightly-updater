@@ -107,7 +107,7 @@ func writeAuthError(w http.ResponseWriter, err error, unavailableMsg string) {
 // requestUser authenticates the request's token. It writes the error
 // response and returns false when the request must not proceed.
 func requestUser(w http.ResponseWriter, r *http.Request) (string, *http.Request, bool) {
-	if _, ok := bearerToken(r); ok && os.Getenv("DEV_MODE") != "true" {
+	if _, ok := bearerToken(r); ok && !Dev().Mode {
 		// oauth-proxy never forwards a client's bearer token (see
 		// extractUserToken), so this request did not come through it.
 		slog.Warn("rejected a request with a bearer token", "path", r.URL.Path)
@@ -133,7 +133,7 @@ func requestUser(w http.ResponseWriter, r *http.Request) (string, *http.Request,
 // devModeWithoutServiceAccount is the local `dev.sh` setup: DEV_MODE with a
 // DEV_TOKEN and no mounted ServiceAccount token.
 func devModeWithoutServiceAccount() bool {
-	if os.Getenv("DEV_MODE") != "true" || os.Getenv("DEV_TOKEN") == "" {
+	if dev := Dev(); !dev.Mode || dev.Token == "" {
 		return false
 	}
 	_, err := os.Stat(serviceAccountTokenPath)

@@ -194,8 +194,8 @@ func resolveUsername(r *http.Request) string {
 	if u := r.Header.Get("X-Forwarded-User"); u != "" {
 		return u
 	}
-	if os.Getenv("DEV_MODE") == "true" {
-		if u := os.Getenv("DEV_USER"); u != "" {
+	if dev := Dev(); dev.Mode {
+		if u := dev.User; u != "" {
 			return u
 		}
 	}
@@ -216,11 +216,11 @@ func extractUserToken(r *http.Request) string {
 	if token := r.Header.Get("X-Forwarded-Access-Token"); token != "" {
 		return token
 	}
-	if os.Getenv("DEV_MODE") == "true" {
+	if dev := Dev(); dev.Mode {
 		if token, ok := bearerToken(r); ok {
 			return token
 		}
-		if token := os.Getenv("DEV_TOKEN"); token != "" {
+		if token := dev.Token; token != "" {
 			return token
 		}
 	}
@@ -265,8 +265,8 @@ func getClusterToken() string {
 		return cachedTokenValue
 	}
 	// Fall back to DEV_TOKEN only in dev mode (not in-cluster)
-	if os.Getenv("DEV_MODE") == "true" {
-		token := os.Getenv("DEV_TOKEN")
+	if dev := Dev(); dev.Mode {
+		token := dev.Token
 		cachedTokenValue = token
 		cachedTokenAt = time.Now()
 		return token

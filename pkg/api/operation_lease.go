@@ -69,7 +69,7 @@ func leaseHeldElsewhere(l *types.OperationLease) bool {
 	if l == nil || l.BootID == "" || l.BootID == bootID {
 		return false
 	}
-	if pod := os.Getenv("HOSTNAME"); pod != "" && l.Pod == pod && os.Getenv("DEV_MODE") != "true" {
+	if pod := os.Getenv("HOSTNAME"); pod != "" && l.Pod == pod && !Dev().Mode {
 		return false
 	}
 	return cluster.LeaseLive(l, time.Now(), leaseTTL)

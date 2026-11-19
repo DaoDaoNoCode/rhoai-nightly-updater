@@ -1,9 +1,29 @@
 package api
 
-import "time"
+import (
+	"testing"
+	"time"
+)
 
 // Thin wrappers and accessors that only tests use; production code calls
 // the underlying functions directly.
+
+// setDev replaces the development setup read at startup for one test.
+func setDev(t *testing.T, cfg DevConfig) {
+	t.Helper()
+	old := devConfig.Load()
+	devConfig.Store(&cfg)
+	t.Cleanup(func() { devConfig.Store(old) })
+}
+
+// setDevMode turns DEV_MODE on or off for one test, keeping DEV_TOKEN and
+// DEV_USER.
+func setDevMode(t *testing.T, on bool) {
+	t.Helper()
+	cfg := Dev()
+	cfg.Mode = on
+	setDev(t, cfg)
+}
 
 func (rl *rateLimiter) isRateLimited(key string) bool {
 	rl.mu.Lock()

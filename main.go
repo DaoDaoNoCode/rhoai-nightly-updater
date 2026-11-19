@@ -54,7 +54,7 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	devMode := os.Getenv("DEV_MODE") == "true"
+	devMode := api.Dev().Mode
 
 	staticDir := "./frontend/dist"
 	if dir := os.Getenv("STATIC_DIR"); dir != "" {

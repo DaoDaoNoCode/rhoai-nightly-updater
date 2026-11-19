@@ -19,8 +19,7 @@ import (
 func inCluster(t *testing.T) {
 	t.Helper()
 	setupDevMode(t)
-	t.Setenv("DEV_MODE", "")
-	t.Setenv("DEV_TOKEN", "")
+	setDev(t, DevConfig{})
 	cachedTokenMu.Lock()
 	cachedTokenValue, cachedTokenAt = "sa-token", time.Now()
 	cachedTokenMu.Unlock()

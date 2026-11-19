@@ -23,9 +23,7 @@ const (
 
 func setupDevMode(t *testing.T) {
 	t.Helper()
-	t.Setenv("DEV_MODE", "true")
-	t.Setenv("DEV_TOKEN", "test-cluster-token")
-	t.Setenv("DEV_USER", "test-user")
+	setDev(t, DevConfig{Mode: true, Token: "test-cluster-token", User: "test-user"})
 	// Clear the cached token so DEV_TOKEN takes effect
 	cachedTokenMu.Lock()
 	cachedTokenValue = ""

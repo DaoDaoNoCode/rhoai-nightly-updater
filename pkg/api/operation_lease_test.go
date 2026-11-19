@@ -166,7 +166,7 @@ func TestLiveForeignLeaseRefusesWithTheRemoteOperation(t *testing.T) {
 
 func TestLeaseHeldElsewhere(t *testing.T) {
 	t.Setenv("HOSTNAME", "updater-new-pod")
-	t.Setenv("DEV_MODE", "")
+	setDevMode(t, false)
 	now := time.Now()
 	live := otherPodLease(now.Add(-10 * time.Second))
 	expired := otherPodLease(now.Add(-time.Minute))
@@ -193,7 +193,7 @@ func TestLeaseHeldElsewhere(t *testing.T) {
 		}
 	}
 	// DEV_MODE processes share a host name: no shortcut there.
-	t.Setenv("DEV_MODE", "true")
+	setDevMode(t, true)
 	if !leaseHeldElsewhere(samePodEarlierContainer) {
 		t.Error("DEV_MODE: a live lease with the same host name was taken as dead")
 	}

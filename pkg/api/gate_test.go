@@ -55,8 +55,7 @@ func TestAuthGate(t *testing.T) {
 		for _, wrapper := range []string{"withAuth", "withMutationAuth"} {
 			t.Run(tc.name+"/"+wrapper, func(t *testing.T) {
 				setupDevMode(t)
-				t.Setenv("DEV_TOKEN", "") // no dev fallback for the user token
-				t.Setenv("DEV_MODE", "")
+				setDev(t, DevConfig{}) // in the cluster: no dev fallback for the user token
 				cachedTokenMu.Lock()
 				cachedTokenValue, cachedTokenAt = "sa-token", time.Now()
 				cachedTokenMu.Unlock()
@@ -132,7 +131,7 @@ func TestMutationPermissionErrorsMapToSessionExpiredOr503(t *testing.T) {
 // (pkg/cluster's authz tests pin the SubjectAccessReview body itself.)
 func TestMutationGateAsksForClusterAdmin(t *testing.T) {
 	setupDevMode(t)
-	t.Setenv("DEV_MODE", "")
+	setDevMode(t, false)
 	var got []string
 	checkPermission = func(_ context.Context, token, verb, resource, group, namespace string) (bool, error) {
 		got = []string{token, verb, resource, group, namespace}
