@@ -956,7 +956,7 @@ const routes = {
   "GET /api/components": () => world.components,
   // The DSC manager: none without a DataScienceCluster, else the scenario's.
   "GET /api/components/dsc": () => (world.components.dscExists === false ? { exists: false, state: world.components.dscState || "no-dsc", dscCount: 0, conditions: [], nodes: [], mismatches: [] } : world.dscManager ?? F.dscManager()),
-  "GET /api/components/dsc/plan": (u) => F.dscPlan(world.dscManager ?? F.dscManager(), u.searchParams.get("action"), u.searchParams.get("path"), u.searchParams.get("to"), u.searchParams.get("withParent") === "true"),
+  "GET /api/components/dsc/plan": (u) => F.dscPlan(world.dscManager ?? F.dscManager(), u.searchParams.get("action"), u.searchParams.get("path"), u.searchParams.get("to"), u.searchParams.get("withParent") === "true", u.searchParams.get("keepEnabled") === "true"),
   "GET /api/diagnostics": () => world.diagnostics,
   "GET /api/dashboard/state": () => world.dashboard,
   "GET /api/dashboard/builds": () => world.dashboardBuilds,

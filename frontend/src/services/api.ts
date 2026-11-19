@@ -870,13 +870,15 @@ export function getDSCManager(): Promise<DSCManager> {
 }
 
 /** What a change would do, from a fresh read: a toggle (path, to, withParent), fix, soft-reset or hard-reset. */
-export function getDSCPlan(action: DSCPlanAction, toggle?: { path: string; to: string; withParent?: boolean }): Promise<DSCPlan> {
+export function getDSCPlan(action: DSCPlanAction, toggle?: { path: string; to: string; withParent?: boolean }, reset?: { keepEnabled: boolean }): Promise<DSCPlan> {
   const q = new URLSearchParams({ action });
   if (toggle) {
     q.set('path', toggle.path);
     q.set('to', toggle.to);
     if (toggle.withParent) q.set('withParent', 'true');
   }
+  // A reset says whether it keeps the components the user turned on (required).
+  if (reset) q.set('keepEnabled', String(reset.keepEnabled));
   return request<DSCPlan>(`/api/components/dsc/plan?${q.toString()}`);
 }
 
@@ -890,10 +892,13 @@ export function finishDSCHardReset(name: string, token: string): Promise<Operati
   return request('/api/components/dsc/hard-reset/finish', { method: 'POST', body: JSON.stringify({ name, token }), acceptStatuses: [422] });
 }
 
-/** Runs the reviewed fix or soft reset; refused when the plan changed since. */
+/** Runs the reviewed fix or soft reset (with the keepEnabled it was planned with); refused when the plan changed since. */
 export function runDSCPlan(action: 'fix' | 'soft-reset', plan: DSCPlan): Promise<OperationResponse> {
+  const body = action === 'fix'
+    ? { name: plan.name, uid: plan.uid, token: plan.token }
+    : { name: plan.name, uid: plan.uid, token: plan.token, keepEnabled: plan.keepEnabled === true };
   return request(action === 'fix' ? '/api/components/dsc/fix' : '/api/components/dsc/reset', {
-    method: 'POST', body: JSON.stringify({ name: plan.name, uid: plan.uid, token: plan.token }), acceptStatuses: [422],
+    method: 'POST', body: JSON.stringify(body), acceptStatuses: [422],
   });
 }
 
@@ -905,7 +910,7 @@ export function streamDSCHardReset(
   onDone: StreamDoneHandler,
   onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
-  return streamSSE('/api/components/dsc/hard-reset/stream', { name: plan.name, uid: plan.uid, token: plan.token, confirm }, onStep, onDone, onConnectionDrop);
+  return streamSSE('/api/components/dsc/hard-reset/stream', { name: plan.name, uid: plan.uid, token: plan.token, confirm, keepEnabled: plan.keepEnabled === true }, onStep, onDone, onConnectionDrop);
 }
 
 // ---------------------------------------------------------------------------

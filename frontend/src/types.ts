@@ -688,6 +688,12 @@ export interface DSCPlan {
   tornDown?: string[] | null;
   stayRemoved?: string[] | null;
   newObject?: string;
+  /** Resets: the option the plan was made with (part of the token). */
+  keepEnabled?: boolean;
+  /** Resets: the toggles the user turned on (enabled now, off in the release default), with the parents they need. */
+  turnedOn?: string[] | null;
+  /** Resets: those the reset keeps at their live value (turnedOn with keepEnabled). */
+  kept?: string[] | null;
   token?: string;
 }
 
