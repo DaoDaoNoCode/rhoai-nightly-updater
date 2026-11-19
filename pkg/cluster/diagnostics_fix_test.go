@@ -377,7 +377,7 @@ func TestDisableComponent_Preconditions(t *testing.T) {
 		}, false, "ray-module-operator-controller-manager has no ready pod"},
 		{"rhods-operator down", "ray", func(f *fakeAPI) {
 			f.json("GET", rhods, http.StatusOK, `{"status":{"readyReplicas":0}}`)
-		}, false, "rhods-operator must be running"},
+		}, false, "RHOAI operator must be running to apply the change and clean up after it: Deployment redhat-ods-operator/rhods-operator has no ready pod"},
 		{"module CR already deleting", "ray", func(f *fakeAPI) {
 			f.json("GET", rhods, http.StatusOK, `{"status":{"readyReplicas":3}}`)
 			f.json("GET", rays, http.StatusOK, `{"items":[{"metadata":{"name":"default-ray","deletionTimestamp":"2026-10-05T00:00:00Z","finalizers":["x"]}}]}`)

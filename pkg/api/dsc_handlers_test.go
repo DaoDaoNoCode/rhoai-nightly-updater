@@ -34,7 +34,9 @@ func TestDSCChangeRoutesValidateTheirRequest(t *testing.T) {
 		path, body string
 		want       int
 	}{
-		{"/api/components/dsc/management", `{"name":"default-dsc","path":"kserve.nim","from":"Managed","to":"Removed"}`, http.StatusOK},
+		{"/api/components/dsc/management", `{"name":"default-dsc","path":"kserve.nim","from":"Managed","to":"Removed","uid":"u-1","token":"` + token + `"}`, http.StatusOK},
+		{"/api/components/dsc/management", `{"name":"default-dsc","path":"kserve.nim","from":"Managed","to":"Removed"}`, http.StatusBadRequest},
+		{"/api/components/dsc/management", `{"name":"default-dsc","path":"kserve.nim","from":"Managed","to":"Removed","uid":"u-1","token":"short"}`, http.StatusBadRequest},
 		{"/api/components/dsc/management", `{"name":"default-dsc","path":"kserve/nim","from":"Managed","to":"Removed"}`, http.StatusBadRequest},
 		{"/api/components/dsc/management", `{"name":"default-dsc","path":"kserve.nim","from":"","to":"Re moved"}`, http.StatusBadRequest},
 		{"/api/components/dsc/management", `{"name":"Bad Name","path":"ray","from":"","to":"Managed"}`, http.StatusBadRequest},
@@ -50,7 +52,7 @@ func TestDSCChangeRoutesValidateTheirRequest(t *testing.T) {
 		}
 		resetPackageState(t) // the rate limit is per user and route
 	}
-	if len(toggled) != 1 || toggled[0].Path != "kserve.nim" || toggled[0].From != "Managed" || toggled[0].To != "Removed" {
+	if len(toggled) != 1 || toggled[0].Path != "kserve.nim" || toggled[0].From != "Managed" || toggled[0].To != "Removed" || toggled[0].Token != token || toggled[0].UID != "u-1" {
 		t.Fatalf("toggled = %+v", toggled)
 	}
 	if len(reset) != 1 || reset[0].Confirm != "default-dsc" || reset[0].Token != token {

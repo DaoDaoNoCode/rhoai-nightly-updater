@@ -132,8 +132,12 @@ func TestHardResetTimesOutWithoutCreating(t *testing.T) {
 	if posts := f.callsTo(http.MethodPost, dscV3List); len(posts) != 0 {
 		t.Fatalf("created after a timeout: %+v", posts)
 	}
-	for _, p := range f.callsTo(http.MethodPatch, dscV3Path) {
-		t.Fatalf("patched the DSC (finalizer?): %s", p.Body)
+	// Only the pre-delete validation, a dry run; never a finalizer.
+	if _, real := patchesTo(f, dscV3Path); len(real) != 0 {
+		t.Fatalf("patched the DSC (finalizer?): %+v", real)
+	}
+	if !strings.Contains(res.Message, "Finish the hard reset") || !strings.Contains(res.Message, "kind: DataScienceCluster") {
+		t.Fatalf("no way to finish in %q", res.Message)
 	}
 	if obj := f.get(dscV3Path); obj == nil || ensureMap(obj, "metadata")["deletionTimestamp"] == nil {
 		t.Fatal("the DSC should still be terminating")
@@ -148,7 +152,7 @@ func TestHardResetExplainsHowToRecreateWhenCreateFails(t *testing.T) {
 	operatorRemovesDSCAfter(f, 1)
 	f.fail["POST "+dscV3List] = http.StatusInternalServerError
 	res, _ := runHardReset(t, c, nil)
-	if res.Success || !strings.Contains(res.Message, "Recreate it with Create DataScienceCluster") || !strings.Contains(res.Message, "kind: DataScienceCluster") {
+	if res.Success || !strings.Contains(res.Message, "Finish the hard reset") || !strings.Contains(res.Message, "oc create -f -") || !strings.Contains(res.Message, "kind: DataScienceCluster") {
 		t.Fatalf("result = %+v", res)
 	}
 }

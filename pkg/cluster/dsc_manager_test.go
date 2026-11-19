@@ -58,8 +58,9 @@ func managerWorld(t *testing.T, edit func(dsc map[string]interface{})) (*resourc
 	f.put(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), map[string]interface{}{"status": map[string]interface{}{"installedCSV": "rhods-operator.3.6.0"}})
 	f.put(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), map[string]interface{}{
 		"metadata": map[string]interface{}{"annotations": map[string]interface{}{"alm-examples": string(alm)}},
-		"spec":     map[string]interface{}{"version": "3.6.0"},
-		"status":   map[string]interface{}{"phase": "Succeeded"},
+		"spec": map[string]interface{}{"version": "3.6.0", "install": map[string]interface{}{"spec": map[string]interface{}{
+			"deployments": []interface{}{map[string]interface{}{"name": "rhods-operator"}}}}},
+		"status": map[string]interface{}{"phase": "Succeeded"},
 	})
 	f.put(rhodsOperator, map[string]interface{}{"status": map[string]interface{}{"readyReplicas": 1}})
 	return f, c
@@ -110,6 +111,18 @@ func decodeOps(t *testing.T, body string) []map[string]interface{} {
 		t.Fatalf("not a JSON patch: %s", body)
 	}
 	return ops
+}
+
+// reviewedToggle plans the toggle as the dialog does, then sends it with
+// the plan's UID and token.
+func reviewedToggle(t *testing.T, c *Client, req types.DSCToggleRequest) (*types.OperationResponse, error) {
+	t.Helper()
+	plan, err := PlanDSCChange(c, "toggle", req.Path, req.To, req.WithParent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.UID, req.Token = plan.UID, plan.Token
+	return SetDSCManagementState(c, req)
 }
 
 func TestDSCToggleTreeFromTheInstalledCRD(t *testing.T) {
@@ -278,7 +291,7 @@ func TestDSCManagerMismatches(t *testing.T) {
 
 func TestToggleReplacesOnlyThatFieldAfterADryRun(t *testing.T) {
 	f, c := managerWorld(t, nil)
-	res, err := SetDSCManagementState(c, types.DSCToggleRequest{Name: "default-dsc", Path: "kserve.modelExpress", From: "Removed", To: "Managed"})
+	res, err := reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "kserve.modelExpress", From: "Removed", To: "Managed"})
 	if err != nil || !res.Success {
 		t.Fatalf("result = %+v, %v", res, err)
 	}
@@ -309,7 +322,7 @@ func TestToggleAddsMissingObjectsWithATestOfTheirParent(t *testing.T) {
 		setPath(t, dsc, "spec.components.dashboard.maasPortal", nil)
 	})
 	before := comps(f.get(dscV3Path))
-	res, err := SetDSCManagementState(c, types.DSCToggleRequest{Name: "default-dsc", Path: "databaseservice", From: "", To: "Managed"})
+	res, err := reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "databaseservice", From: "", To: "Managed"})
 	if err != nil || !res.Success {
 		t.Fatalf("result = %+v, %v", res, err)
 	}
@@ -321,7 +334,7 @@ func TestToggleAddsMissingObjectsWithATestOfTheirParent(t *testing.T) {
 	}
 
 	dashboard, _ := comps(f.get(dscV3Path))["dashboard"].(map[string]interface{})
-	res, err = SetDSCManagementState(c, types.DSCToggleRequest{Name: "default-dsc", Path: "dashboard.maasPortal", From: "", To: "Managed"})
+	res, err = reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "dashboard.maasPortal", From: "", To: "Managed"})
 	if err != nil || !res.Success {
 		t.Fatalf("result = %+v, %v", res, err)
 	}
@@ -348,13 +361,13 @@ func TestToggleRefusesWhenTheFieldChangedMeanwhile(t *testing.T) {
 			})
 		}
 	}
-	res, err := SetDSCManagementState(c, types.DSCToggleRequest{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed"})
+	res, err := reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed"})
 	if err != nil || res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "changed since you looked") {
 		t.Fatalf("result = %+v, %v", res, err)
 	}
 	// And a stale "from" is refused before anything is sent.
 	f.calls = nil
-	res, _ = SetDSCManagementState(c, types.DSCToggleRequest{Name: "default-dsc", Path: "trainer", From: "Removed", To: "Managed"})
+	res, _ = reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "trainer", From: "Removed", To: "Managed"})
 	if res.Success || res.ErrorCode != "conflict" {
 		t.Fatalf("stale from = %+v", res)
 	}
@@ -368,7 +381,7 @@ func TestToggleShowsAWebhookRejectionVerbatim(t *testing.T) {
 	f.failDryRun["PATCH "+dscV3Path] = http.StatusForbidden
 	const denial = `admission webhook "datasciencecluster-v3-validator.opendatahub.io" denied the request: Kueue managementState Managed is no longer supported`
 	f.failMessage["DRYRUN PATCH "+dscV3Path] = denial
-	res, err := SetDSCManagementState(c, types.DSCToggleRequest{Name: "default-dsc", Path: "kueue", From: "Removed", To: "Managed"})
+	res, err := reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "kueue", From: "Removed", To: "Managed"})
 	if err != nil || res.Success || !strings.Contains(res.Message, denial) || !strings.Contains(res.Message, "dry run") {
 		t.Fatalf("result = %+v, %v", res, err)
 	}
@@ -386,7 +399,7 @@ func TestToggleValidatesAgainstTheSchema(t *testing.T) {
 		{"kueue", "Removed", "Removed", "nothing_to_do"}, // already
 		{"workbenches.workbenchesV2", "Removed", "Force", "validation"},
 	} {
-		res, err := SetDSCManagementState(c, types.DSCToggleRequest{Name: "default-dsc", Path: tc.path, From: tc.from, To: tc.to})
+		res, err := reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: tc.path, From: tc.from, To: tc.to})
 		if err != nil || res.Success || res.ErrorCode != tc.code {
 			t.Errorf("%s to %s: %+v, %v", tc.path, tc.to, res, err)
 		}
@@ -395,7 +408,7 @@ func TestToggleValidatesAgainstTheSchema(t *testing.T) {
 		t.Fatal("an invalid toggle was sent")
 	}
 	// Kueue accepts Unmanaged.
-	res, _ := SetDSCManagementState(c, types.DSCToggleRequest{Name: "default-dsc", Path: "kueue", From: "Removed", To: "Unmanaged"})
+	res, _ := reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "kueue", From: "Removed", To: "Unmanaged"})
 	if !res.Success {
 		t.Fatalf("kueue Unmanaged: %+v", res)
 	}
@@ -410,7 +423,7 @@ func TestToggleToManagedUnderARemovedParent(t *testing.T) {
 	if err != nil || plan.Code != "parent_removed" || plan.ParentPath != "aigateway" {
 		t.Fatalf("plan = %+v, %v", plan, err)
 	}
-	res, _ := SetDSCManagementState(c, types.DSCToggleRequest{Name: "default-dsc", Path: "aigateway.batchGateway", From: "Removed", To: "Managed"})
+	res, _ := reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "aigateway.batchGateway", From: "Removed", To: "Managed"})
 	if res.Success || res.ErrorCode != "parent_removed" {
 		t.Fatalf("without parent: %+v", res)
 	}
@@ -425,7 +438,7 @@ func TestToggleToManagedUnderARemovedParent(t *testing.T) {
 	if plan.Refusal != "" || effects["aigateway"] != "deploys" || effects["aigateway.batchGateway"] != "deploys" {
 		t.Fatalf("plan with parent = %+v", plan)
 	}
-	res, _ = SetDSCManagementState(c, types.DSCToggleRequest{Name: "default-dsc", Path: "aigateway.batchGateway", From: "Removed", To: "Managed", WithParent: true})
+	res, _ = reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "aigateway.batchGateway", From: "Removed", To: "Managed", WithParent: true})
 	if !res.Success {
 		t.Fatalf("with parent: %+v", res)
 	}
@@ -445,22 +458,22 @@ func TestToggleToRemovedFailsClosed(t *testing.T) {
 	f, c := managerWorld(t, nil)
 	f.put(rhodsOperator, map[string]interface{}{"status": map[string]interface{}{"readyReplicas": 0}})
 	plan, err := PlanDSCChange(c, "toggle", "ray", "Removed", false)
-	if err != nil || len(plan.Blocked) != 1 || plan.Blocked[0].Component != "ray" || !strings.Contains(strings.Join(plan.Blocked[0].Reasons, " "), "rhods-operator must be running") {
+	if err != nil || len(plan.Blocked) != 1 || plan.Blocked[0].Component != "ray" || !strings.Contains(strings.Join(plan.Blocked[0].Reasons, " "), "RHOAI operator must be running to apply the change and clean up after it: Deployment redhat-ods-operator/rhods-operator has no ready pod") {
 		t.Fatalf("plan = %+v, %v", plan, err)
 	}
-	res, _ := SetDSCManagementState(c, types.DSCToggleRequest{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed"})
+	res, _ := reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed"})
 	if res.Success || res.ErrorCode != "prerequisites" {
 		t.Fatalf("result = %+v", res)
 	}
 	// The module API cannot be discovered: refused, not skipped.
 	f.put(rhodsOperator, map[string]interface{}{"status": map[string]interface{}{"readyReplicas": 1}})
 	f.fail["GET /apis/components.platform.opendatahub.io"] = http.StatusServiceUnavailable
-	res, _ = SetDSCManagementState(c, types.DSCToggleRequest{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed"})
+	res, _ = reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed"})
 	if res.Success || !strings.Contains(res.Message, "could not read the ray module CR") {
 		t.Fatalf("discovery error: %+v", res)
 	}
 	// The tool's standing refusals still apply to a toggle.
-	res, _ = SetDSCManagementState(c, types.DSCToggleRequest{Name: "default-dsc", Path: "aipipelines", From: "Managed", To: "Removed"})
+	res, _ = reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "aipipelines", From: "Managed", To: "Removed"})
 	if res.Success || !strings.Contains(res.Message, "DSPAs") {
 		t.Fatalf("aipipelines: %+v", res)
 	}
@@ -468,7 +481,7 @@ func TestToggleToRemovedFailsClosed(t *testing.T) {
 		t.Fatal("patched a blocked removal")
 	}
 	delete(f.fail, "GET /apis/components.platform.opendatahub.io")
-	res, _ = SetDSCManagementState(c, types.DSCToggleRequest{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed"})
+	res, _ = reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed"})
 	if !res.Success {
 		t.Fatalf("preconditions met: %+v", res)
 	}
@@ -489,7 +502,7 @@ func TestDSCChangesRefusedUnderArgoCDAndACM(t *testing.T) {
 			if m.ReadOnlyReason == "" {
 				t.Fatal("no read-only reason")
 			}
-			res, _ := SetDSCManagementState(c, types.DSCToggleRequest{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed"})
+			res, _ := reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed"})
 			if res.Success || res.ErrorCode != ErrorCodeGitOpsManaged {
 				t.Fatalf("toggle = %+v", res)
 			}

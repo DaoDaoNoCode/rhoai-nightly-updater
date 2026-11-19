@@ -205,6 +205,7 @@ func serveToggleDSC(f *fakeAPI, version, dsc, patchBody string, components ...st
 		return 200, current()
 	})
 	f.json("GET", dscCRDPath, 200, minimalDSCCRD(version, components...))
+	serveInstalledOperator(f)
 	f.handle("PATCH", list+"/"+name, func(r *http.Request, body []byte) (int, string) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -239,6 +240,14 @@ func (f *fakeAPI) realWrites() []string {
 		out = append(out, r.Method+" "+r.Path)
 	}
 	return out
+}
+
+// serveInstalledOperator serves the Subscription and the installed CSV,
+// which names the operator's Deployment (rhods-operator).
+func serveInstalledOperator(f *fakeAPI) {
+	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
+	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), 200,
+		`{"metadata":{"name":"rhods-operator.3.6.0"},"spec":{"version":"3.6.0","install":{"spec":{"deployments":[{"name":"rhods-operator"}]}}},"status":{"phase":"Succeeded"}}`)
 }
 
 func serveComponentGroup(f *fakeAPI) {

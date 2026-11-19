@@ -16,7 +16,7 @@ import (
 // modules_controller_actions.go cleanupDisabledModules). If that operator is
 // not running, the CR, and then the Platform finalizer, wait forever
 // (RHOAI operator notes D1, D7, D8). So the tool only removes a component
-// whose finalizer owner is up.
+// whose finalizer owner is up, and refuses one it cannot check.
 
 // refusedComponents are never disabled by the tool, with the reason shown.
 var refusedComponents = map[string]string{
@@ -55,21 +55,36 @@ func deploymentReady(c *Client, namespace, name string) (bool, string) {
 
 // moduleCR returns the module CR of a component, or found=false. Discovery
 // and list errors are returned, so a precondition is never skipped because
-// the CR could not be read.
-func moduleCR(c *Client, component string) (finalizers []string, deleting bool, found bool, err error) {
-	items, err := listModuleCRs(c, cachedComponentAPI(c), component)
+// the CR could not be read. kindUnknown: the component API is served, but
+// none of its kinds is named after the module, so the tool cannot tell
+// which CR (if any) serves the module.
+func moduleCR(c *Client, discover func() (componentAPI, error), component string) (finalizers []string, deleting, found, kindUnknown bool, err error) {
+	api, err := discover()
+	if err != nil {
+		return nil, false, false, false, err
+	}
+	if api.Version != "" {
+		if _, ok := api.resourceForModule(component); !ok {
+			return nil, false, false, true, nil
+		}
+	}
+	items, err := listModuleCRs(c, discover, component)
 	if err != nil || len(items) == 0 {
-		return nil, false, false, err
+		return nil, false, false, false, err
 	}
 	m := items[0].Metadata
-	return m.Finalizers, m.DeletionTimestamp != "", true, nil
+	return m.Finalizers, m.DeletionTimestamp != "", true, false, nil
 }
 
 // removalChecker evaluates the preconditions for setting components to
-// Removed. It caches the RHOAI conversion CRDs and the Services behind them,
-// so a DSC repair that removes several components lists them once.
+// Removed. It caches the component API, the installed operator's
+// Deployments, the RHOAI conversion CRDs and the Services behind them, so a
+// change that removes several components reads them once.
 type removalChecker struct {
 	c           *Client
+	api         func() (componentAPI, error)
+	opLoaded    bool
+	opBlocker   string
 	convLoaded  bool
 	convCRDs    []conversionCRD
 	convErr     error
@@ -78,7 +93,42 @@ type removalChecker struct {
 }
 
 func newRemovalChecker(c *Client) *removalChecker {
-	return &removalChecker{c: c, svcOwner: map[string]string{}, svcOwnerErr: map[string]error{}}
+	return &removalChecker{c: c, api: cachedComponentAPI(c), svcOwner: map[string]string{}, svcOwnerErr: map[string]error{}}
+}
+
+// platformOperatorBlocker says why the RHOAI operator cannot apply a
+// change now ("" when it can), read once per checker.
+func (rc *removalChecker) platformOperatorBlocker() string {
+	if !rc.opLoaded {
+		rc.opLoaded = true
+		rc.opBlocker = operatorDeploymentsBlocker(rc.c)
+	}
+	return rc.opBlocker
+}
+
+// operatorDeploymentsBlocker says why the installed RHOAI operator is not
+// running ("" when it is): every Deployment the installed CSV installs
+// (spec.install.spec.deployments, read at runtime rather than assuming a
+// name) must have a ready pod. A CSV that cannot be read, or that lists no
+// Deployment, blocks (fail closed).
+func operatorDeploymentsBlocker(c *Client) string {
+	op, err := getInstalledOperator(c)
+	if err != nil {
+		return "the RHOAI operator must be running, but its installed CSV could not be read to find its Deployment: " + err.Error()
+	}
+	if len(op.Deployments) == 0 {
+		return fmt.Sprintf("the RHOAI operator must be running, but the installed CSV %s lists no Deployment, so the tool cannot check it", nonEmpty(op.Name, "(unknown)"))
+	}
+	var why []string
+	for _, d := range op.Deployments {
+		if ok, msg := deploymentReady(c, SubNS, d); !ok {
+			why = append(why, msg)
+		}
+	}
+	if len(why) > 0 {
+		return "the RHOAI operator must be running to apply the change and clean up after it: " + strings.Join(why, "; ")
+	}
+	return ""
 }
 
 // blockers returns the reasons the component must not be set to Removed
@@ -96,13 +146,13 @@ func (rc *removalChecker) blockers(component string) []string {
 	return blockers
 }
 
-// teardownBlockers are the preconditions for a hard reset, which removes
-// every module and brings them back: the module and its operator must be
-// able to clean up (moduleBlockers). The standing refusals do not apply
-// (their reasons are checked one by one: dashboard-operator by
-// moduleBlockers, MLflow by its in-use check, pipeline servers only stop
-// working meanwhile), and a conversion webhook only fails while the module
-// is down, so it is a warning.
+// teardownBlockers are the preconditions for a module a hard reset removes
+// and brings back: the module and its operator must be able to clean up
+// (moduleBlockers). The standing refusals do not apply (their reasons are
+// checked one by one: dashboard-operator by moduleBlockers, MLflow by its
+// in-use check, pipeline servers only stop working meanwhile), and a
+// conversion webhook only fails while the module is down, so it is a
+// warning. A module the reset leaves Removed gets blockers instead.
 func (rc *removalChecker) teardownBlockers(component string) (blockers, warnings []string) {
 	blockers = rc.moduleBlockers(component)
 	crds, err := rc.conversionCRDsOf(component)
@@ -116,24 +166,49 @@ func (rc *removalChecker) teardownBlockers(component string) (blockers, warnings
 	return blockers, warnings
 }
 
+// unknownModuleBlocker words a module the tool cannot check: no kind of the
+// component API is named after it, so the tool cannot tell which CR serves
+// it nor which operator cleans it up.
+func unknownModuleBlocker(component string) string {
+	return fmt.Sprintf("no %s kind is named after %s, so the tool cannot tell which module CR serves it nor check that its operator can clean it up; change it in the OpenShift console once you have checked that yourself", componentAPIGroup, component)
+}
+
+// unknownOperatorBlocker words a module CR whose operator the tool does not
+// know: it cannot check that the operator runs, so it refuses (fail closed)
+// rather than skip the check.
+func unknownOperatorBlocker(component string, finalizers []string) string {
+	what := "cleans up its operands"
+	if len(finalizers) > 0 {
+		what = fmt.Sprintf("removes its finalizer %s and cleans up its operands", strings.Join(finalizers, ", "))
+	}
+	return fmt.Sprintf("the %s module CR exists and the tool does not know which operator %s, so it cannot check that the operator runs; change it in the OpenShift console once you have checked that yourself", component, what)
+}
+
 // partBlockers are the preconditions for removing a sub-component while its
 // module stays (kserve.nim while kserve stays Managed): the module CR is not
 // deleted, so only the operators that act on the change must run, and the
-// module CR must not be deleting already. Read errors block.
+// module CR must not be deleting already. Read errors and modules the tool
+// cannot check block.
 func (rc *removalChecker) partBlockers(component string) []string {
 	c := rc.c
 	var blockers []string
-	if ok, why := deploymentReady(c, SubNS, "rhods-operator"); !ok {
-		blockers = append(blockers, "rhods-operator must be running to apply the change: "+why)
+	if why := rc.platformOperatorBlocker(); why != "" {
+		blockers = append(blockers, why)
 	}
-	_, deleting, found, err := moduleCR(c, component)
+	finalizers, deleting, found, kindUnknown, err := moduleCR(c, rc.api, component)
 	switch {
 	case err != nil:
 		blockers = append(blockers, fmt.Sprintf("could not read the %s module CR: %v", component, err))
+	case kindUnknown:
+		blockers = append(blockers, unknownModuleBlocker(component))
 	case deleting:
 		blockers = append(blockers, fmt.Sprintf("the %s module CR is already being deleted; see the Platform modules check", component))
 	case found:
-		if op, known := moduleOperators[component]; known && op.name != "rhods-operator" {
+		op, known := moduleOperators[component]
+		switch {
+		case !known:
+			blockers = append(blockers, unknownOperatorBlocker(component, finalizers))
+		case op.name != "rhods-operator":
 			if ok, why := deploymentReady(c, op.namespace, op.name); !ok {
 				blockers = append(blockers, fmt.Sprintf("its operator %s/%s cleans up the sub-component, but %s; fix that operator first", op.namespace, op.name, why))
 			}
@@ -147,24 +222,27 @@ func (rc *removalChecker) partBlockers(component string) []string {
 func (rc *removalChecker) moduleBlockers(component string) []string {
 	c := rc.c
 	var blockers []string
-	if ok, why := deploymentReady(c, SubNS, "rhods-operator"); !ok {
-		blockers = append(blockers, "rhods-operator must be running to clean up a removed component: "+why)
+	if why := rc.platformOperatorBlocker(); why != "" {
+		blockers = append(blockers, why)
 	}
-	finalizers, deleting, found, err := moduleCR(c, component)
+	finalizers, deleting, found, kindUnknown, err := moduleCR(c, rc.api, component)
 	op, knownOp := moduleOperators[component]
 	switch {
 	case err != nil:
 		blockers = append(blockers, fmt.Sprintf("could not read the %s module CR: %v", component, err))
+	case kindUnknown:
+		blockers = append(blockers, unknownModuleBlocker(component))
 	case deleting:
 		blockers = append(blockers, fmt.Sprintf("the %s module CR is already being deleted; see the Platform modules check", component))
-	case found && len(finalizers) > 0 && !knownOp:
-		blockers = append(blockers, fmt.Sprintf("the %s module CR has finalizer %s and the tool does not know which operator removes it", component, strings.Join(finalizers, ", ")))
+	case found && !knownOp:
+		blockers = append(blockers, unknownOperatorBlocker(component, finalizers))
 	}
 	// The module operator removes the finalizers of the module CR and of
 	// its operands (TrustyAIService, RayCluster, FeatureStore, TrainJob,
 	// ...). If it is not running, they wait forever (D1, D7, D8). The
 	// ServiceAccount cannot list those operands, so the operator must be
-	// running whether or not the module CR itself has finalizers.
+	// running whether or not the module CR itself has finalizers. The entry
+	// "rhods-operator" is the RHOAI operator itself, checked above.
 	if knownOp && op.name != "rhods-operator" && err == nil && found && !deleting {
 		if ok, why := deploymentReady(c, op.namespace, op.name); !ok {
 			what := "operands"
@@ -178,15 +256,25 @@ func (rc *removalChecker) moduleBlockers(component string) []string {
 }
 
 // conversionBlocker refuses removing a component that serves a CRD
-// conversion webhook ("" when it serves none).
+// conversion webhook ("" when it serves none). The tool cannot list the
+// objects of those CRDs (its ServiceAccount reads no arbitrary resources),
+// so the reason gives the commands that do, and what to do when there are
+// none.
 func (rc *removalChecker) conversionBlocker(component string) string {
 	crds, convErr := rc.conversionCRDsOf(component)
 	switch {
 	case convErr != nil:
 		return fmt.Sprintf("could not check which CRD conversion webhooks %s serves: %v", component, convErr)
 	case len(crds) > 0:
-		return fmt.Sprintf("%s %s %s objects through a webhook Service of %s. Removing the component deletes that Service but not the %s, so reading those objects at another version, garbage collection and namespace deletion would fail (the dead mcpservers conversion on this cluster is the same case). "+
-			"Delete those objects first (the tool cannot list them), then change the component in the OpenShift console", verb(len(crds), "CRD", "CRDs"), strings.Join(crds, ", "), verb(len(crds), "converts its", "convert their"), component, verb(len(crds), "CRD", "CRDs"))
+		cmds := make([]string, 0, len(crds))
+		for _, crd := range crds {
+			cmds = append(cmds, "oc get "+crd+" -A")
+		}
+		return fmt.Sprintf("%s serves the conversion webhook of %s %s. Removing it deletes that webhook's Service but not the %s, so objects of %s could then not be read at another version, garbage-collected or deleted with their namespace. "+
+			"This tool cannot list those objects, so it does not remove %s. Check for them with: %s. "+
+			"If any exist, delete them first. If none exist, set %s to Removed yourself in the OpenShift console (edit the DataScienceCluster)",
+			component, verb(len(crds), "CRD", "CRDs"), strings.Join(crds, ", "), verb(len(crds), "CRD", "CRDs"), verb(len(crds), "that CRD", "those CRDs"),
+			component, strings.Join(cmds, "; "), component)
 	}
 	return ""
 }
