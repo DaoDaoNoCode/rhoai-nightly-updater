@@ -665,7 +665,7 @@ func readCNPGReadiness(c *Client, cnpg operatorState, readErr error) cnpgReadine
 }
 
 func cnpgInstallPlanText(p *operatorInstallPlan) string {
-	return fmt.Sprintf("Install CloudNativePG %s: %sSubscription %s/%s (package %s, channel %s, from certified-operators; in its own namespace, not openshift-operators, where an install can pull an OSSM upgrade that breaks the gateway; it stays after Remove)", p.head, operatorPlanPrefix(p), cnpgOperator.namespace, cnpgOperator.subName, cnpgOperator.pkg, p.channel)
+	return fmt.Sprintf("Install CloudNativePG %s: %sSubscription %s/%s (package %s, channel %s, from certified-operators; in its own namespace, not openshift-operators, where an install can pull an OSSM upgrade that breaks the gateway; it stays after Clean up)", p.head, operatorPlanPrefix(p), cnpgOperator.namespace, cnpgOperator.subName, cnpgOperator.pkg, p.channel)
 }
 
 // maasDBChoices are the databases Set up (or Change database) can make in

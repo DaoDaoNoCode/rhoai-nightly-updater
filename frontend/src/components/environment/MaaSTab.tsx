@@ -322,10 +322,10 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
       <StackItem>
         <FeatureSection title="What this creates">
           <CreatesList items={[
-            <>Only what is missing, as the MaaS docs install it: Red Hat Connectivity Link from <code>redhat-operators</code> in <code>kuadrant-system</code>, set to deny traffic when rate limiting fails (the docs&apos; recommendation), and its Kuadrant instance; and Authorino TLS (the docs&apos; <code>setup-authorino-tls.sh</code>). These stay after Remove: other RHOAI features use them</>,
+            <>Only what is missing, as the MaaS docs install it: Red Hat Connectivity Link from <code>redhat-operators</code> in <code>kuadrant-system</code>, set to deny traffic when rate limiting fails (the docs&apos; recommendation), and its Kuadrant instance; and Authorino TLS (the docs&apos; <code>setup-authorino-tls.sh</code>). These stay after Clean up: other RHOAI features use them</>,
             <>The AI gateway&apos;s namespace (<code>{maas?.platform.namespace ?? "redhat-ai-gateway-infra"}</code>) when it does not exist yet; Remove deletes it when nothing else is in it</>,
-            <>MaaS&apos;s PostgreSQL, as you choose in Set up (the MaaS docs leave it to you): yours (only Secret <code>maas-db-config</code> is written), the docs&apos; development database (one pod, no volume: keys are lost when it restarts), or a persistent one on CloudNativePG, this tool&apos;s own option, which installs the CloudNativePG operator from <code>certified-operators</code> in <code>cnpg-system</code> (it stays after Remove). A <code>maas-db-config</code> someone else wrote is used as it is</>,
-            <>Gateway <code>maas-default-gateway</code> in <code>openshift-ingress</code> with an external load balancer at <code>maas.&lt;apps domain&gt;</code> (and GatewayClass <code>openshift-default</code> when the cluster has none; it stays after Remove, as OpenShift&apos;s shared class)</>,
+            <>MaaS&apos;s PostgreSQL, as you choose in Set up (the MaaS docs leave it to you): yours (only Secret <code>maas-db-config</code> is written), the docs&apos; development database (one pod, no volume: keys are lost when it restarts), or a persistent one on CloudNativePG, this tool&apos;s own option, which installs the CloudNativePG operator from <code>certified-operators</code> in <code>cnpg-system</code> (it stays after Clean up). A <code>maas-db-config</code> someone else wrote is used as it is</>,
+            <>Gateway <code>maas-default-gateway</code> in <code>openshift-ingress</code> with an external load balancer at <code>maas.&lt;apps domain&gt;</code> (and GatewayClass <code>openshift-default</code> when the cluster has none; it stays after Clean up, as OpenShift&apos;s shared class)</>,
             <>MaaS turned on in the DataScienceCluster (<code>aigateway</code> and <code>aigateway.modelsAsAService</code>); RHOAI&apos;s operator then runs maas-api and the default tenant</>,
             <>Publishing: the model routes through the MaaS gateway only, and a MaaSModelRef, the subscription <code>{maas?.subscription ?? "rhoai-nightly-updater-subscription"}</code> and the authorization policy <code>rhoai-nightly-updater-access</code> list it. The subscription&apos;s priority is below every other subscription&apos;s, so it never takes a key meant for someone else&apos;s</>,
           ]} />
@@ -333,7 +333,7 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
       </StackItem>
       {!readOnly && maas?.platform.managedByTool && (
         <StackItem>
-          <CleanupSection id="maas-cleanup" label="Remove MaaS..." onClick={() => setPending({ kind: "teardown-maas" })} reason={baseReason}
+          <CleanupSection id="maas-cleanup" label="Clean up MaaS..." onClick={() => setPending({ kind: "teardown-maas" })} reason={baseReason}
             text="Unpublishes this tool's models, puts the DataScienceCluster back as it was before, then deletes the gateway, the database and the namespace this tool created. A PostgreSQL of your own is never touched. Connectivity Link, Kuadrant, Authorino TLS and CloudNativePG stay, also if this tool installed them: other RHOAI features use them." />
         </StackItem>
       )}
@@ -561,7 +561,7 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
     }
     case "teardown-maas":
       return {
-        title: "Remove Models as a Service?", confirm: "Remove", danger: true, runTitle: "Remove Models as a Service",
+        title: "Clean up Models as a Service?", confirm: "Clean up", danger: true, runTitle: "Clean up Models as a Service",
         dataLoss: <>Every API key, with the database this tool created ({databaseLabel(m?.database?.current ?? "")}) and its data. A PostgreSQL of your own is never touched.</>,
         summary: <Content component="p">Removes what this tool set up, in reverse order. API keys stop working, and the database&apos;s data (the keys&apos; records) is deleted. It refuses, before changing anything, while others use MaaS: model references, subscriptions or authorization policies this tool did not create. It keeps the gateway while routes are attached to it.</Content>,
         changes: [

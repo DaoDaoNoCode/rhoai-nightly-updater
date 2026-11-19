@@ -56,7 +56,7 @@ export const DATABASE_CHOICES: { id: MaaSDatabaseKind; label: string; descriptio
   { id: "development", label: "Development database",
     description: "One PostgreSQL pod with no storage, set up like the MaaS docs' setup-database.sh. For trying MaaS out." },
   { id: "cnpg", label: "Persistent development database (CloudNativePG)", notInDocs: true,
-    description: "Keeps API keys across restarts on a 1 GiB volume. Installs the CloudNativePG operator from certified-operators; it stays after Remove. Not for production." },
+    description: "Keeps API keys across restarts on a 1 GiB volume. Installs the CloudNativePG operator from certified-operators; it stays after Clean up. Not for production." },
   { id: "external", label: "Your PostgreSQL",
     description: "For API keys that must last. This tool never changes or deletes your database." },
 ];

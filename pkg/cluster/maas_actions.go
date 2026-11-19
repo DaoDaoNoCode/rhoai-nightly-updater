@@ -118,7 +118,7 @@ func rhclMemoryOffer(c *Client, st operatorState) (*types.MaaSAction, string) {
 	return &types.MaaSAction{
 		ID: "rhcl-memory", Label: "Raise the memory limit",
 		Summary: "Gives the Connectivity Link operator a memory limit of " + rhclMemoryLimit + " through its Subscription, the way OLM lets a Subscription set an operator's resources (a change to the Deployment itself would be reverted). Its pod restarts once.",
-		Changes: []string{fmt.Sprintf("Subscription %s/%s: spec.config.resources %s (the CSV's values, with the memory limit %s); it stays after Remove.", st.sub.Metadata.Namespace, st.sub.Metadata.Name, resourcesText(resources), rhclMemoryLimit)},
+		Changes: []string{fmt.Sprintf("Subscription %s/%s: spec.config.resources %s (the CSV's values, with the memory limit %s); it stays after Clean up.", st.sub.Metadata.Namespace, st.sub.Metadata.Name, resourcesText(resources), rhclMemoryLimit)},
 	}, note
 }
 
@@ -142,7 +142,7 @@ func rhclDenyOffer(st operatorState) (*types.MaaSAction, string, string) {
 	return &types.MaaSAction{
 		ID: "rhcl-deny-on-failure", Label: "Deny traffic when rate limiting fails",
 		Summary: "Sets the two variables the MaaS docs give on the Connectivity Link Subscription, so that requests are refused rather than let through without rate limits while Limitador cannot be reached. OLM rolls the operator out again; its other settings stay.",
-		Changes: []string{fmt.Sprintf("Subscription %s/%s: spec.config.env RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny and RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny (other entries kept); it stays after Remove.", st.sub.Metadata.Namespace, st.sub.Metadata.Name)},
+		Changes: []string{fmt.Sprintf("Subscription %s/%s: spec.config.env RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny and RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny (other entries kept); it stays after Clean up.", st.sub.Metadata.Namespace, st.sub.Metadata.Name)},
 	}, note, cmd
 }
 
@@ -167,7 +167,7 @@ func resourcesText(res map[string]interface{}) string {
 func authorinoTLSAction(ns, secret, missing string) types.MaaSAction {
 	return types.MaaSAction{
 		ID: "authorino-tls", Label: "Configure Authorino TLS",
-		Summary: "Applies the steps of the MaaS docs' setup-authorino-tls.sh to Connectivity Link's Authorino in " + ns + " (missing: " + missing + "). Only what is not set yet changes; Authorino restarts. It stays after Remove: RHOAI's inference gateway uses Authorino too.",
+		Summary: "Applies the steps of the MaaS docs' setup-authorino-tls.sh to Connectivity Link's Authorino in " + ns + " (missing: " + missing + "). Only what is not set yet changes; Authorino restarts. It stays after Clean up: RHOAI's inference gateway uses Authorino too.",
 		Changes: []string{
 			"Service " + ns + "/authorino-authorino-authorization: annotation " + servingCertAnnotation + "=" + secret + " (service-ca makes the certificate)",
 			"Authorino " + ns + "/authorino: spec.listener.tls enabled, certSecretRef " + secret,

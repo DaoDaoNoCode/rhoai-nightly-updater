@@ -727,7 +727,7 @@ export function maasState(m: MaaSStatus | null, busy: Busy = IDLE): FeatureState
     const href = maasDashboardHref(m.dashboardUrl);
     return { status, label: `Ready, ${what}`, ...own, next: href ? { kind: "open", label: "Open MaaS governance", href } : null, project: null };
   }
-  if (MOVING.includes(status)) return { status, label: status === "deleting" ? "Removing" : "Setting up", next: null, project: null };
+  if (MOVING.includes(status)) return { status, label: status === "deleting" ? "Deleting" : "Setting up", next: null, project: null };
   if (PROBLEM.includes(status)) {
     const part = m.parts.find((p) => PROBLEM.includes(maasPartStatus(p)));
     return { status, label: envStatusText(status), ...own, next: { kind: "show-issue", part: `maas-${part?.id ?? "dsc"}` }, project: null };

@@ -7,6 +7,11 @@ describe("A platform part's own label", () => {
     expect(maasPartLabelStatus({ id: "rhcl", title: "Red Hat Connectivity Link", state: "ready", warning: "Version 1.4.3 is below the docs' 1.5. Upgrade it." })).toBe("needs-attention");
     expect(maasPartLabelStatus({ id: "rhcl", title: "Red Hat Connectivity Link", state: "ready" })).toBe("ready");
   });
+
+  it("MaaS being cleaned up reads Deleting, as the other features", () => {
+    const m = { platform: { deployed: true, ready: true, managedByTool: true }, parts: [], subscription: "s" };
+    expect(maasState(m, { ...IDLE, maas: { action: "teardown", project: null } }).label).toBe("Deleting");
+  });
 });
 
 const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };

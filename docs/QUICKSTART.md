@@ -263,7 +263,7 @@ Nothing has to be installed first: the tab lists every part MaaS needs and what 
 
 <img src="images/environment-maas.png" alt="MaaS tab: Ready, 1 model published; the platform's parts with their health, and the published models with their limit per user, Change limit and Unpublish" width="760">
 
-**What you should see:** MaaS **Ready**, and under **Use it** the commands to get an API key and call the model. **Remove MaaS** unpublishes and removes what the tool set up for MaaS alone (your own PostgreSQL is never touched); Connectivity Link, Kuadrant, Authorino TLS and CloudNativePG stay, since other RHOAI features use them. More: [README: MaaS](../README.md#maas-models-as-a-service), troubleshooting: [RUNBOOK §10.4](../RUNBOOK.md#104-maas-models-as-a-service).
+**What you should see:** MaaS **Ready**, and under **Use it** the commands to get an API key and call the model. **Clean up MaaS** unpublishes and removes what the tool set up for MaaS alone (your own PostgreSQL is never touched); Connectivity Link, Kuadrant, Authorino TLS and CloudNativePG stay, since other RHOAI features use them. More: [README: MaaS](../README.md#maas-models-as-a-service), troubleshooting: [RUNBOOK §10.4](../RUNBOOK.md#104-maas-models-as-a-service).
 
 Each tab has **Clean up** at the bottom, and the Overview has **Clean up everything**: one confirmed operation with a checkbox per part.
 

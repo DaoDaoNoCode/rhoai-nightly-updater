@@ -1006,7 +1006,7 @@ EOF
 oc wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/kuadrant-operator -n kuadrant-system --timeout=300s`;
 const AUTHORINO_ACTION = {
   id: "authorino-tls", label: "Configure Authorino TLS",
-  summary: "Applies the steps of the MaaS docs' setup-authorino-tls.sh to Connectivity Link's Authorino in kuadrant-system (missing: trust of the service CA (SSL_CERT_FILE)). Only what is not set yet changes; Authorino restarts. It stays after Remove: RHOAI's inference gateway uses Authorino too.",
+  summary: "Applies the steps of the MaaS docs' setup-authorino-tls.sh to Connectivity Link's Authorino in kuadrant-system (missing: trust of the service CA (SSL_CERT_FILE)). Only what is not set yet changes; Authorino restarts. It stays after Clean up: RHOAI's inference gateway uses Authorino too.",
   changes: [
     "Service kuadrant-system/authorino-authorino-authorization: annotation service.beta.openshift.io/serving-cert-secret-name=authorino-server-cert (service-ca makes the certificate)",
     "Authorino kuadrant-system/authorino: spec.listener.tls enabled, certSecretRef authorino-server-cert",
@@ -1082,7 +1082,7 @@ export function maasDatabase(state, { fresh = false, current: kind } = {}) {
     { id: "external", plan: [`Write Secret ${MAAS_INFRA}/maas-db-config (label app=maas-api) with the connection URL you enter; nothing else is created, and your database is never changed`] },
     { id: "development", plan: [`Run the MaaS docs' development PostgreSQL (scripts/setup-database.sh) in ${MAAS_INFRA}: Secret postgres-creds (a generated password), Deployment postgres (one pod, image registry.redhat.io/rhel9/postgresql-16@sha256:${"5".repeat(64)}, from the RHOAI operator's CSV (postgresql_16_image); no volume, so its data is lost when the pod restarts) and Service postgres, then Secret maas-db-config with its address (sslmode=disable, as the script does)`] },
     { id: "cnpg", plan: [
-      ...(fresh ? ["Install CloudNativePG 1.27.1: Namespace cnpg-system, OperatorGroup cnpg-system/cloudnative-pg, Subscription cnpg-system/cloudnative-pg (package cloudnative-pg, channel stable-v1, from certified-operators; in its own namespace, not openshift-operators, where an install can pull an OSSM upgrade that breaks the gateway; it stays after Remove)"] : []),
+      ...(fresh ? ["Install CloudNativePG 1.27.1: Namespace cnpg-system, OperatorGroup cnpg-system/cloudnative-pg, Subscription cnpg-system/cloudnative-pg (package cloudnative-pg, channel stable-v1, from certified-operators; in its own namespace, not openshift-operators, where an install can pull an OSSM upgrade that breaks the gateway; it stays after Clean up)"] : []),
       `Run a one-instance CloudNativePG database ${MAAS_INFRA}/maas-db (1 GiB volume, so keys survive restarts) and write Secret ${MAAS_INFRA}/maas-db-config with its address (sslmode=require)`] },
   ];
   const current = kind ?? (state === "none" ? "" : state === "foreign" ? "adopted" : "cnpg");

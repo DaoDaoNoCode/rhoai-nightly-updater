@@ -433,7 +433,7 @@ a commit build):
 you roll back, remove what 2.x cannot see, or it keeps running with no
 button to remove it: **Clean up everything** on the Overview, with the
 playgrounds, MaaS, the models and the inference gateway ticked (or
-**Remove MaaS** and each tab's Clean up). The inference gateway and the
+**Clean up MaaS** and each tab's Clean up). The inference gateway and the
 MaaS gateway each run a cloud load balancer, which costs money while it
 exists. By hand: the Rollback lines of
 [RUNBOOK §10.2 to §10.4](../RUNBOOK.md#102-models-the-inference-gateway-and-cpu-models).

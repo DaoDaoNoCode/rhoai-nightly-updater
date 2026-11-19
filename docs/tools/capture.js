@@ -358,13 +358,13 @@ async (page) => {
       await page.screenshot({ path: `${out}/themes/maas-overview-light.png` });
     },
 
-    // Not a docs image: Remove MaaS refused because others use MaaS, the
+    // Not a docs image: Clean up MaaS refused because others use MaaS, the
     // confirmation and then the run, light and dark (screenshots.sh
     // maas-remove-review, THEMES_DIR).
     async "maas-remove-review"() {
       for (const dark of [false, true]) {
         await open("/test-resources?tab=maas", "env-maas-in-use", { dark, width: 1440 });
-        await page.getByRole("button", { name: "Remove MaaS..." }).click();
+        await page.getByRole("button", { name: "Clean up MaaS..." }).click();
         await page.screenshot({ path: `${out}/themes/maas-remove-confirm-${dark ? "dark" : "light"}.png` });
         await page.getByRole("dialog").getByRole("button", { name: "Remove", exact: true }).click();
         await page.getByText("Others use this MaaS platform").first().waitFor();
