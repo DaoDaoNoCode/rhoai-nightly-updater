@@ -667,10 +667,6 @@ func TestCreatePullSecret_AcceptsValidAuth(t *testing.T) {
 }
 
 func TestUpdate_FullRefreshFlow(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping slow test in short mode")
-	}
-
 	testImage := "quay.io/rhoai/rhoai-fbc-fragment:nightly-test"
 
 	// Build mock pull secret response
@@ -958,10 +954,6 @@ func TestReinstall_StableCSVSucceeded(t *testing.T) {
 }
 
 func TestReinstall_NightlyCatalogAndChannel(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping slow test in short mode")
-	}
-
 	nightlyImage := "quay.io/rhoai/rhoai-fbc-fragment:nightly-20260101"
 
 	// Subscription pointing to nightly catalog (so it does not short-circuit on "already stable")
@@ -1140,10 +1132,6 @@ func buildRefreshMocks() (map[string]mockResponse, map[string]string) {
 }
 
 func TestRefreshOperator_Success(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping slow test in short mode")
-	}
-
 	responses, paths := buildRefreshMocks()
 
 	client, records, cleanup := newRecordingMockClient(responses)
@@ -1215,10 +1203,6 @@ func TestRefreshOperator_Success(t *testing.T) {
 }
 
 func TestRefreshOperator_RetriesSubscriptionCreation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping slow test in short mode")
-	}
-
 	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", SubNS)
 	csvDeletePath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions/%s", SubNS, "rhods-operator.v3.5.0")
 	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
@@ -1603,10 +1587,6 @@ func buildUpdateStreamMocks(testImage string) (map[string]mockResponse, map[stri
 }
 
 func TestUpdateStream(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping slow test in short mode")
-	}
-
 	testImage := "quay.io/rhoai/rhoai-fbc-fragment:nightly-test"
 	responses, _ := buildUpdateStreamMocks(testImage)
 
@@ -1690,10 +1670,6 @@ func TestUpdateStream(t *testing.T) {
 }
 
 func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping slow test in short mode")
-	}
-
 	testImage := "quay.io/rhoai/rhoai-fbc-fragment:nightly-timeout"
 
 	// Build pull secret
@@ -1877,10 +1853,6 @@ func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
 }
 
 func TestUpdateStream_BackwardCompat(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping slow test in short mode")
-	}
-
 	// This test verifies that the old Update() function still works correctly
 	// alongside the new UpdateStream() function.
 	testImage := "quay.io/rhoai/rhoai-fbc-fragment:nightly-compat"
