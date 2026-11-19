@@ -9,8 +9,6 @@ import {
   Form,
   FormGroup,
   FormHelperText,
-  FormSelect,
-  FormSelectOption,
   HelperText,
   HelperTextItem,
   InputGroup,
@@ -33,6 +31,7 @@ import {
   audienceProblem, audienceRequest, connectionUrlProblem, groupNameProblem, limitSummary, MAX_NAMES, openShiftGroupName, rateRowProblem,
 } from "./maasForms";
 import { FieldHelperText, NestedFields } from "../FormFields";
+import { SingleSelect } from "../SingleSelect";
 
 const Problem: React.FC<{ id: string; text: string | null }> = ({ id, text }) => text ? <FieldHelperText id={id} variant="error">{text}</FieldHelperText> : null;
 
@@ -95,6 +94,10 @@ export const DatabaseChoice: React.FC<{ db: MaaSDatabase; value: DatabaseForm; o
   );
 };
 
+const UNIT_WORDS: Record<WindowUnit, string> = { s: "seconds", m: "minutes", h: "hours" };
+
+const UNIT_OPTIONS = (Object.keys(UNIT_WORDS) as WindowUnit[]).map((u) => ({ value: u, label: UNIT_WORDS[u] }));
+
 /** A model's limit: the docs' examples, unlimited (when the cluster's MaaS has it), or custom token rate limits. */
 export const LimitFields: React.FC<{ value: LimitForm; onChange: (f: LimitForm) => void; idPrefix: string; noUnlimited?: boolean }> = ({ value, onChange, idPrefix, noUnlimited }) => {
   const summary = limitSummary(value);
@@ -137,13 +140,10 @@ export const LimitFields: React.FC<{ value: LimitForm; onChange: (f: LimitForm) 
                           <TextInput id={`${idPrefix}-rate-${i}-amount`} aria-label={`Limit ${i + 1}: period length`} type="text" inputMode="numeric" value={r.amount} style={{ width: "9ch" }}
                             validated={periodBad ? "error" : "default"} aria-describedby={problem ? helpId : undefined} onChange={(_e, v) => setRow(i, { amount: digits(v) })} />
                         </FlexItem>
-                        <FlexItem>
-                          <FormSelect id={`${idPrefix}-rate-${i}-unit`} aria-label={`Limit ${i + 1}: period unit`} value={r.unit} validated={periodBad ? "error" : "default"}
-                            onChange={(_e, v) => setRow(i, { unit: v as WindowUnit })}>
-                            <FormSelectOption value="s" label="seconds" />
-                            <FormSelectOption value="m" label="minutes" />
-                            <FormSelectOption value="h" label="hours" />
-                          </FormSelect>
+                        {/* One width for every unit, so the row does not move when the unit changes. Inline: the menu stays in the dialog's focus trap. */}
+                        <FlexItem style={{ width: "16ch" }}>
+                          <SingleSelect id={`${idPrefix}-rate-${i}-unit`} label={`Limit ${i + 1}: period unit`} selected={r.unit} text={UNIT_WORDS[r.unit]}
+                            options={UNIT_OPTIONS} invalid={periodBad} inline onSelect={(v) => setRow(i, { unit: v as WindowUnit })} />
                         </FlexItem>
                         <FlexItem>
                           <Button variant="plain" aria-label={`Remove limit ${i + 1}`} icon={<MinusCircleIcon />} isDisabled={value.rows.length === 1}

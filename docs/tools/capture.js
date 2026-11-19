@@ -672,7 +672,8 @@ async (page) => {
       });
       await tree.getByRole("switch", { name: "Show only differences" }).uncheck({ force: true });
       await settle();
-      await tree.getByRole("combobox", { name: "Set ray" }).selectOption("Removed");
+      await tree.getByRole("button", { name: "Set ray" }).click();
+      await page.getByRole("option", { name: "Removed" }).click();
       await page.getByRole("dialog").getByText(/removes it/).waitFor();
       await settle();
       await crop("components-toggle", page.locator(".pf-v6-c-modal-box"), { noFit: true, pad: 6 });
@@ -709,7 +710,8 @@ async (page) => {
       await crop("components-hard-reset", modal, { noFit: true, pad: 6 });
       await page.keyboard.press("Escape");
       await wait(400);
-      await turnedOn.getByRole("combobox", { name: "Set aigateway", exact: true }).selectOption("Removed");
+      await turnedOn.getByRole("button", { name: "Set aigateway", exact: true }).click();
+      await page.getByRole("option", { name: "Removed" }).click();
       await dialog.getByText("This change is not possible now").waitFor();
       await settle();
       await unfocus();

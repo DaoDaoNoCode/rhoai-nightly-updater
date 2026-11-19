@@ -70,6 +70,17 @@ describe("fields inside a radio's body get PatternFly's helper-text spacing", ()
     expect(inheritedMargin(helper)).toBe(BASE);
   });
 
+  it("custom token rate rows: a period problem marks the unit picker as PatternFly's danger status", () => {
+    render(<LimitFields idPrefix="change" onChange={() => {}} value={{ preset: "custom", rows: [{ limit: "5", amount: "1", unit: "h" }, { limit: "9", amount: "1", unit: "h" }] }} />);
+    const first = screen.getByRole("button", { name: "Limit 1: period unit" });
+    const second = screen.getByRole("button", { name: "Limit 2: period unit" });
+    expect(first).not.toHaveAttribute("aria-invalid");
+    expect(first).not.toHaveClass("pf-m-danger");
+    expect(second).toHaveAttribute("aria-invalid", "true");
+    expect(second).toHaveClass("pf-m-danger");
+    expect(second).toHaveAccessibleDescription("hours");
+  });
+
   it("specific groups and users: each field's help and the audience problem are spaced as standalone fields", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200 })));
     render(<AudienceFields idPrefix="change" onChange={() => {}} value={{ everyone: false, groups: "", users: "" }} />);

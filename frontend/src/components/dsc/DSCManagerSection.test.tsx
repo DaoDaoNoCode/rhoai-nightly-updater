@@ -73,6 +73,12 @@ function rowNames(table: HTMLElement): string[] {
 /** A button that is off: disabled, or aria-disabled (a TooltipButton with a reason). */
 const isOff = (el: HTMLElement) => el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true";
 
+/** Chooses a value in a row's state picker (PF Select): opens it, clicks the option. */
+async function choose(name: string, value: string) {
+  fireEvent.click(screen.getByRole("button", { name }));
+  fireEvent.click(await screen.findByRole("option", { name: value }));
+}
+
 const plan = (over: Partial<DSCPlan>): DSCPlan => ({ action: "toggle", name: "default-dsc", uid: "u-1", changes: [], token: "0123456789abcdef01234567", ...over });
 
 function renderSection(onChanged = vi.fn(), mutateReason: string | null = null) {
@@ -162,7 +168,7 @@ describe("DSCManagerSection", () => {
       expect(within(row("codeflare")).getByRole("button", { name: "Not in the installed CRD" })).toBeInTheDocument();
       expect(within(row("legacy")).getByRole("button", { name: "Not in the installed CRD" })).toBeInTheDocument();
       // A field the CRD does not define has no control.
-      expect(within(row("codeflare")).queryByRole("combobox")).not.toBeInTheDocument();
+      expect(within(row("codeflare")).queryByRole("button", { name: /^Set / })).not.toBeInTheDocument();
 
       fireEvent.click(within(row("standard")).getByRole("button", { name: "Missing — default Managed" }));
       const missing = await screen.findByRole("dialog", { name: "Missing in the DSC" });
@@ -258,7 +264,7 @@ describe("DSCManagerSection", () => {
     });
     const onChanged = renderSection();
     await screen.findByRole("treegrid");
-    fireEvent.change(screen.getByRole("combobox", { name: "Set ray" }), { target: { value: "Removed" } });
+    await choose("Set ray", "Removed");
     const dialog = await screen.findByRole("dialog", { name: "Set ray to Removed?" });
     expect(api.calls).toContain("GET /api/components/dsc/plan?action=toggle&path=ray&to=Removed");
     expect(await within(dialog).findByText(/Managed → Removed \(removes it\)/)).toBeInTheDocument();
@@ -267,6 +273,53 @@ describe("DSCManagerSection", () => {
     expect(api.bodies["POST /api/components/dsc/management"][0]).toEqual({ name: "default-dsc", path: "ray", from: "Managed", to: "Removed", withParent: false, uid: "u-1", token: "0123456789abcdef01234567" });
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     expect(await screen.findByText("Set ray Managed → Removed.")).toBeInTheDocument();
+  });
+
+  it("picks a row's state from a PatternFly menu: the DSC's value marked, the same value does nothing, Escape closes", async () => {
+    const api = stubApi({ "GET /api/components/dsc": manager });
+    renderSection();
+    await screen.findByRole("treegrid");
+    const toggle = screen.getByRole("button", { name: "Set ray" });
+    expect(toggle).toHaveAccessibleDescription("Managed");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const list = await screen.findByRole("listbox");
+    expect(within(list).getAllByRole("option").map((o) => o.textContent)).toEqual(["Managed", "Removed"]);
+    expect(within(list).getByRole("option", { name: "Managed" })).toHaveAttribute("aria-selected", "true");
+    expect(within(list).getByRole("option", { name: "Removed" })).toHaveAttribute("aria-selected", "false");
+    // The value it already has: the menu closes, nothing is planned.
+    fireEvent.click(within(list).getByRole("option", { name: "Managed" }));
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(api.calls.filter((c) => c.startsWith("GET /api/components/dsc/plan"))).toEqual([]);
+    expect(toggle).toHaveFocus();
+    // Escape closes the menu and leaves the focus on the toggle.
+    fireEvent.click(toggle);
+    await screen.findByRole("listbox");
+    fireEvent.keyDown(screen.getByRole("option", { name: "Removed" }), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+    expect(toggle).toHaveFocus();
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    // Open, the arrow keys go into the menu, not to the next row of the tree table.
+    fireEvent.click(toggle);
+    await screen.findByRole("listbox");
+    fireEvent.keyDown(toggle, { key: "ArrowDown" });
+    expect(screen.getByRole("option", { name: "Managed" })).toHaveFocus();
+    toggle.focus();
+    fireEvent.keyDown(toggle, { key: "ArrowUp" });
+    expect(screen.getByRole("option", { name: "Removed" })).toHaveFocus();
+  });
+
+  it("shows a value the DSC does not set on the toggle, with nothing marked", async () => {
+    stubApi({ "GET /api/components/dsc": manager });
+    renderSection();
+    await screen.findByRole("treegrid");
+    const toggle = screen.getByRole("button", { name: "Set dashboard.standard" });
+    expect(toggle).toHaveTextContent("Not set (Removed)");
+    fireEvent.click(toggle);
+    const list = await screen.findByRole("listbox");
+    expect(within(list).getAllByRole("option").every((o) => o.getAttribute("aria-selected") === "false")).toBe(true);
   });
 
   it("offers to set a parent that is not Managed in the same change", async () => {
@@ -279,7 +332,7 @@ describe("DSCManagerSection", () => {
     });
     renderSection();
     await screen.findByRole("treegrid");
-    fireEvent.change(screen.getByRole("combobox", { name: "Set aigateway.batchGateway" }), { target: { value: "Managed" } });
+    await choose("Set aigateway.batchGateway", "Managed");
     let dialog = await screen.findByRole("dialog");
     expect(await within(dialog).findByText(/would deploy nothing/)).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Set to Managed" })).toBeDisabled();
@@ -298,7 +351,7 @@ describe("DSCManagerSection", () => {
     });
     renderSection();
     await screen.findByRole("treegrid");
-    fireEvent.change(screen.getByRole("combobox", { name: "Set ray" }), { target: { value: "Removed" } });
+    await choose("Set ray", "Removed");
     const dialog = await screen.findByRole("dialog");
     expect(await within(dialog).findByText(/rhods-operator must be running/)).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Set to Removed" })).toBeDisabled();
@@ -323,7 +376,9 @@ describe("DSCManagerSection", () => {
     stubApi({ "GET /api/components/dsc": { ...manager, readOnlyReason: "DataScienceCluster default-dsc is managed by Argo CD application \"rhoai\"." } });
     renderSection();
     expect(await screen.findByText(/managed by Argo CD application/)).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Set ray" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Set ray" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Set ray" }));
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     expect(isOff(screen.getByRole("button", { name: "Fix" }))).toBe(true);
     expect(isOff(screen.getByRole("button", { name: "Reset to the release default…" }))).toBe(true);
   });
@@ -379,7 +434,7 @@ describe("DSCManagerSection", () => {
     stubApi({ "GET /api/components/dsc": { ...manager, nodes: [...manager.nodes, node("ray.argo", { specSet: false, spec: undefined, defaultSet: false, default: undefined, schemaDefault: "Managed" })] } });
     renderSection();
     const table = await screen.findByRole("treegrid");
-    expect(within(table).getByRole("option", { name: "Not set (Managed)" })).toBeInTheDocument();
+    expect(within(table).getByRole("button", { name: "Set ray.argo" })).toHaveTextContent("Not set (Managed)");
     expect(within(table).getByText("Not set (CRD default Managed)")).toBeInTheDocument();
   });
 
@@ -501,7 +556,7 @@ describe("DSCManagerSection", () => {
     });
     renderSection();
     await screen.findByRole("treegrid");
-    fireEvent.change(screen.getByRole("combobox", { name: "Set aigateway" }), { target: { value: "Removed" } });
+    await choose("Set aigateway", "Removed");
     const dialog = await screen.findByRole("dialog", { name: "Set aigateway to Removed?" });
     expect(await within(dialog).findByText(/published model proj\/qwen25-05b-instruct/)).toBeInTheDocument();
     expect(within(dialog).getByText(/Remove MaaS on the MaaS tab first/)).toBeInTheDocument();
