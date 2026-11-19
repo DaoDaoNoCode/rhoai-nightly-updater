@@ -194,6 +194,7 @@ describe("MaaS run dialog", () => {
     expect(term.closest(".pf-v6-c-description-list__group")?.textContent).toContain("rhoai-nightly-updater models (rhoai-nightly-updater-subscription)");
     expect(screen.getByRole("link", { name: /MaaS governance/ })).toHaveAttribute("href", "https://rh-ai.apps.example.com/maas/maas-governance");
     expect(screen.getByText(/: subscriptions, authorization policies and models/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy MaaS address https://maas.apps.example.com" })).toBeInTheDocument();
   });
 
   it("Set up lists every change it will make before it runs", async () => {

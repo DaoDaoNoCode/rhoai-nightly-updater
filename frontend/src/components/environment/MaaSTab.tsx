@@ -27,6 +27,7 @@ import {
 import { getMaaS, toApiError } from "../../services/api";
 import { usePolling } from "../../hooks/usePolling";
 import { RESOURCE_SETTLE_MAX_MS } from "../../constants";
+import { ImageRef } from "../ImageRef";
 import { type ConfirmSpec, type MaaSPending, type Pending, ExternalLink, WarningAlert } from "./resourceRow";
 import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
 import { ComponentAlert, CopyableCode, shellQuote } from "./UseIt";
@@ -241,7 +242,7 @@ const UseMaaS: React.FC<{ maas: MaaSStatus }> = ({ maas }) => {
       <DescriptionList aria-label="How to use MaaS">
         <DescriptionListGroup>
           <DescriptionListTerm>Address</DescriptionListTerm>
-          <DescriptionListDescription><code>{maas.url}</code></DescriptionListDescription>
+          <DescriptionListDescription>{maas.url ? <ImageRef image={maas.url} what="MaaS address" truncate={false} isCode={false} /> : "Not known yet"}</DescriptionListDescription>
         </DescriptionListGroup>
         <DescriptionListGroup>
           <DescriptionListTerm>Subscription</DescriptionListTerm>
