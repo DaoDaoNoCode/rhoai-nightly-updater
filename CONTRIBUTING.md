@@ -465,7 +465,7 @@ useEffect(() => {
 
 #### 3. API Calls
 
-API calls are centralized in `frontend/src/services/api.ts` (`getStatus`, `getUserPermissions`, `trackPageView`, ...); each component imports the calls it uses. `App.tsx`, for example:
+API calls are centralized in `frontend/src/services/api/`, one module per feature (`client.ts` has the request and `ApiError`, `stream.ts` the operation streams, then `operator.ts`, `components.ts`, `environment.ts`, ...); `index.ts` re-exports them, so components import from `services/api` (`getStatus`, `getUserPermissions`, `trackPageView`, ...). `App.tsx`, for example:
 
 ```tsx
 import { trackPageView } from "./services/api";

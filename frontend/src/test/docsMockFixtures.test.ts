@@ -23,7 +23,7 @@ const IMPORTED = ["StatusResponse", "OperationStatusResponse", "UserPermissions"
 // an entry once types.ts has it.
 const TYPE_GAPS = ``;
 
-/** The app's type for each read (services/api.ts), with the gaps above. */
+/** The app's type for each read (services/api), with the gaps above. */
 const TYPES: Record<string, string> = {
   "GET /api/status": "StatusResponse",
   "GET /api/operation": "OperationStatusResponse",
