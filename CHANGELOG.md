@@ -128,12 +128,10 @@ only accepts a tag whose version is the top dated section. See
   run; API keys keep working. Published models are adopted as they are
   (an earlier build's 100 tokens a minute reads as the free example). The
   subscription's description names the limits and the audience, so the
-  dashboard's API-key dialog reads right. New RBAC (template revision 7,
-  SECURITY.md audit): Secret `postgres-creds` delete (only by the UID
-  this tool recorded); Deployment `postgres` delete; Service `postgres`
-  patch, delete; Groups get (also behind the cluster-admin-only
-  `GET /api/resources/maas/groups` the dialog uses).
-
+  dashboard's API-key dialog reads right. New ServiceAccount RBAC: `get`
+  on Groups, for the cluster-admin-only `GET /api/resources/maas/groups`
+  the dialog uses; the database's objects are written with your own
+  token.
 - **Set up what a feature needs on the cluster, from its tab (backend).**
   `GET /api/resources/prerequisites` reports, per feature, the parts it
   needs on the cluster, every change Set up would make, and why it cannot;
@@ -150,12 +148,11 @@ only accepts a tag whose version is the top dated section. See
   the components back (`components`), last, each only while this tool
   still owns the field and nothing uses it; operators always stay.
 - Operator installs reuse the namespace's one OperatorGroup when it gives
-  an install mode the package supports (also own-namespace groups), and
-  find a Subscription of the package in any namespace before installing.
-- New RBAC: `list` on Subscriptions cluster-wide (SECURITY.md, "One-click
-  prerequisites").
-
-<!-- Models routing -->
+  an install mode the package supports (also own-namespace groups), plan
+  a new one only in an install mode the package supports, and find a
+  Subscription of the package in any namespace before installing.
+- New ServiceAccount RBAC: `list` on Subscriptions cluster-wide
+  ([SECURITY.md](SECURITY.md#feature-prerequisites)).
 - **Models: choose how a model is reached.** Through the cluster's default
   inference gateway (KServe's default route, as the dashboard deploys), through
   MaaS only (refs `maas-default-gateway`, published at setup; no inference
@@ -180,8 +177,9 @@ only accepts a tag whose version is the top dated section. See
   (Models tab, Clean up), fail closed; the tab names listed projects no model
   uses and projects that no longer exist, with a confirmed **Remove from the
   list** (models action `disallow`).
-- New RBAC: `get` on the four model token Secrets `default-name-<model>-sa`
-  (SECURITY.md, "Models routing and Can it be called?").
+- No new ServiceAccount RBAC for Models: "Can it be called?" reads the
+  model's token Secret with your own token, during the change
+  ([SECURITY.md](SECURITY.md#which-token-is-used-where)).
 - **View progress on the running-operation alert.** Closing a run's
   progress dialog left only an alert that something was running. While a
   run of the Environment page (a setup, a deletion, samples, Clean up, a
@@ -195,49 +193,81 @@ only accepts a tag whose version is the top dated section. See
   RHOAI update, install or re-deploy keeps its **View progress** link to
   its progress card on the Status page.
 
-### Fixed (Models routing)
+### Changed
 
-- A model's image pull that fails is waited on (2 minutes, 8 on a node that
-  joined in the last 15 minutes) before the setup fails: live, a new ROSA
-  node got its pull credentials a few minutes after it joined.
-- KServe reporting only Connectivity Link missing no longer blocks every
-  model: a model reached only inside the cluster does not need it.
-- Review of Models and the prerequisites (before release):
-  - Taking a project off the inference gateway's list checks, on every
-    plan of the write, that no model there uses the gateway (a write
-    planned again after a conflict skipped it). **Remove** runs every check
-    and the dry run before its write, says when the project is not on the
-    list, and refuses when the models, the Gateway or KServe's
-    configuration cannot be read. Projects this tool added whose namespace
-    was deleted go off the list at the next Models change or Clean up.
-  - Clean up turns a component back only with the `resourceVersion` of the
-    read its checks were made on, and checks again after a conflict. The
-    ownership check notices someone who *changed* the component, not one
-    who set it to Managed again; the dialog says the in-use check covers
-    that.
-  - Only gateways whose token checks the tool can read are recommended
-    (in `openshift-ingress`, not `opendatahub.io/managed=false`); others are
-    an explicit choice. KServe's default gateway is never assumed when its
-    configuration cannot be read or names none.
-  - **Can it be called?** also sends the request without a token through a
-    gateway: an answer fails the check (**Answers without a token**). A
-    model that cannot be called **Needs attention** on its card;
-    **Check again** runs in place; results read "Checked 2 minutes ago"
-    and no longer repeat themselves; older vLLM's 404 is recognised.
-  - A ready wait that ends during a failing image pull keeps the pull
-    advice. A new OperatorGroup is planned only in an install mode the
-    package supports.
-  - Plainer Models tab: **Model access** before the cluster checklist, each
-    way described for the caller, unavailable ways say why with a link to
-    fix it, its own next steps for a model reached only inside the cluster,
-    the model's card first when it does not use the gateway, and the
-    deletion and Clean up dialogs say when a project goes off the
-    gateway's list. Prerequisites on every tab: **Needed on the cluster
-    first** with Set up as the primary action, a grey Waiting, one ordered
-    CLI script, the plan open in **Install and turn on**; the Overview
-    plans Models for the recommended inference gateway, and a feature that
-    reads Ready while its prerequisites are not needs attention.
-<!-- /Models routing -->
+- **Every change runs with your own OpenShift token.** Users sign in
+  through the install's own OAuthClient `<APP_NAME>-<NAMESPACE>`
+  (`grantMethod: auto`, so no "Authorize Access" page; oauth-proxy
+  `--client-id`, `--client-secret-file`, `--scope=user:full`) instead of
+  through the app's ServiceAccount, which the OAuth server limits to
+  `user:info user:check-access`. `install.sh` creates the client and its
+  Secret `<APP_NAME>-oauth-client` (an upgrade from 3.x too; uninstall
+  deletes the client and revokes its sign-ins); the chart's `profile: full`
+  does it with a Sync and a PostSync hook (`gitops.oauthClient.enabled`).
+  The chart's gitops profile (its default) keeps the 3.x sign-in through
+  the ServiceAccount (`user:info user:check-access`, no OAuthClient):
+  nothing there acts with your token, so its session cannot change the
+  cluster and nobody signs in again
+  ([GITOPS §11](docs/GITOPS.md#sign-in-in-the-gitops-profile)). The API server
+  checks each change against your RBAC and its audit log names you. Before
+  a change is accepted, the app checks that your sign-in can carry it (scope
+  `user:full`, not expiring within the operation's deadline); otherwise
+  "Log out and log in again". **After the upgrade everyone signs in again
+  once to make changes** (the old session's token can only identify you).
+  A 401 or 403 to your token mid-operation says your sign-in or your
+  permissions stopped it ([UPGRADING](docs/UPGRADING.md#upgrade-to-v400-changes-run-with-your-own-token),
+  [RUNBOOK §4](RUNBOOK.md#4-sign-in-and-permissions)).
+- **Playground: Set up can add Models as a Service models again**, with
+  your own token (as in the dashboard); 3.0.1 had turned that off because
+  it ran with the ServiceAccount's. The status still uses the
+  ServiceAccount's token and never reaches MaaS.
+- API routes named after what they do: `/api/resources/minio/*` (the
+  SeaweedFS S3 storage) is `/api/resources/s3/*`, and `POST
+  /api/rollback/stream` (Install a different build) is `POST
+  /api/reinstall/stream`. The UI ships in the same image; a script that
+  called the old paths changes them. The S3 storage's activity entries are
+  `setup-s3` and `teardown-s3`; entries recorded as `setup-minio` and
+  `teardown-minio` read as the new names. The note that `MINIO_IMAGE`,
+  `MINIO_ROOT_USER` or `MINIO_ROOT_PASSWORD` is set but unused (retired in
+  3.0.0) is gone.
+- Diagnostics' "Objects the operator cannot update" no longer lists an
+  object whose only failure is a changed `spec.selector` of a workload: it
+  is under "Left over from an earlier release", with a Fix. An object with
+  other failures as well stays there, one problem per object.
+- Final review of the Environment page's wording (before release): a
+  model published on the MaaS tab reads **Through MaaS while published**
+  and shows its **MaaS address**; a model that cannot be called says so
+  once (the alert keeps the message and **Check again**); the MaaS words
+  are the dashboard's (**authorization policy**, **MaaS governance**,
+  the subscription's display name) and one name per shared part
+  (**Connectivity Link instance (Kuadrant)**, **MaaS gateway**,
+  **Database**); **Clean up MaaS** as on every other tab; a shared part
+  with a warning needs attention, and a part waiting for another is a
+  grey **Waiting**; MaaS dialogs name the model by its display name, and
+  messages no longer quote project names; the capacity warning uses GiB;
+  the Overview's in-app step reads **Show issue in &lt;project&gt;**;
+  `/environment` opens the Environment page.
+- Plainer Models tab: **Model access** before the cluster checklist, each
+  way described for the caller, unavailable ways say why with a link to
+  fix it, its own next steps for a model reached only inside the cluster,
+  the model's card first when it does not use the gateway, and the
+  deletion and Clean up dialogs say when a project goes off the
+  gateway's list. Prerequisites on every tab: **Needed on the cluster
+  first** with Set up as the primary action, a grey Waiting, one ordered
+  CLI script, the plan open in **Install and turn on**; the Overview
+  plans Models for the recommended inference gateway, and a feature that
+  reads Ready while its prerequisites are not needs attention.
+- CI, GitLab: the image jobs build with buildah (`quay.io/buildah/stable`,
+  pinned by digest; `scripts/ci-build-image.sh`) instead of kaniko, which
+  is archived upstream. Same build arguments, labels, platform
+  (`linux/amd64`), tags and publish rules; the tarball the crane jobs push
+  is a docker-archive (uncompressed layers, a larger artifact). buildah
+  needs a runner that allows user namespaces, as GitLab.com's hosted
+  runners do (CONTRIBUTING.md, Automatic Image Publishing).
+- Dependency updates: `renovate.json5` (weekly, grouped, never merged
+  automatically) and an inert scheduled `renovate` job; CONTRIBUTING.md,
+  Dependency updates, describes the Mend app and the self-hosted job.
+  Pipeline schedules run that job only.
 
 ### Fixed
 
@@ -298,6 +328,35 @@ only accepts a tag whose version is the top dated section. See
   waited on, but once the wait ends the setup and the Models tab offer
   **Use the newest released Red Hat image** again, worded as a
   possibility ("may not be published").
+- A model's image pull that fails is waited on (2 minutes, 8 on a node that
+  joined in the last 15 minutes) before the setup fails: live, a new ROSA
+  node got its pull credentials a few minutes after it joined.
+  A ready wait that ends during a failing image pull keeps the pull
+  advice.
+- KServe reporting only Connectivity Link missing no longer blocks every
+  model: a model reached only inside the cluster does not need it.
+- Review of Models and the prerequisites (before release):
+  - Taking a project off the inference gateway's list checks, on every
+    plan of the write, that no model there uses the gateway (a write
+    planned again after a conflict skipped it). **Remove** runs every check
+    and the dry run before its write, says when the project is not on the
+    list, and refuses when the models, the Gateway or KServe's
+    configuration cannot be read. Projects this tool added whose namespace
+    was deleted go off the list at the next Models change or Clean up.
+  - Clean up turns a component back only with the `resourceVersion` of the
+    read its checks were made on, and checks again after a conflict. The
+    ownership check notices someone who *changed* the component, not one
+    who set it to Managed again; the dialog says the in-use check covers
+    that.
+  - Only gateways whose token checks the tool can read are recommended
+    (in `openshift-ingress`, not `opendatahub.io/managed=false`); others are
+    an explicit choice. KServe's default gateway is never assumed when its
+    configuration cannot be read or names none.
+  - **Can it be called?** also sends the request without a token through a
+    gateway: an answer fails the check (**Answers without a token**). A
+    model that cannot be called **Needs attention** on its card;
+    **Check again** runs in place; results read "Checked 2 minutes ago"
+    and no longer repeat themselves; older vLLM's 404 is recognised.
 - **Check that the nodes can pull nightly images** no longer says the pull
   secret is missing or the image mirror (IDMS) is not configured when it
   could not read them (403, a server error, the network): it says the read
@@ -332,73 +391,6 @@ only accepts a tag whose version is the top dated section. See
   component is set to Managed); for CRDs with objects the advice brings the
   Service back, then deletes the objects and the CRDs before the component
   is set to Removed.
-
-### Changed
-
-- API routes named after what they do: `/api/resources/minio/*` (the
-  SeaweedFS S3 storage) is `/api/resources/s3/*`, and `POST
-  /api/rollback/stream` (Install a different build) is `POST
-  /api/reinstall/stream`. The UI ships in the same image; a script that
-  called the old paths changes them. The S3 storage's activity entries are
-  `setup-s3` and `teardown-s3`; entries recorded as `setup-minio` and
-  `teardown-minio` read as the new names. The note that `MINIO_IMAGE`,
-  `MINIO_ROOT_USER` or `MINIO_ROOT_PASSWORD` is set but unused (retired in
-  3.0.0) is gone.
-- Diagnostics' "Objects the operator cannot update" no longer lists an
-  object whose only failure is a changed `spec.selector` of a workload: it
-  is under "Left over from an earlier release", with a Fix. An object with
-  other failures as well stays there, one problem per object.
-- **Every change runs with your own OpenShift token.** Users sign in
-  through the install's own OAuthClient `<APP_NAME>-<NAMESPACE>`
-  (`grantMethod: auto`, so no "Authorize Access" page; oauth-proxy
-  `--client-id`, `--client-secret-file`, `--scope=user:full`) instead of
-  through the app's ServiceAccount, which the OAuth server limits to
-  `user:info user:check-access`. `install.sh` creates the client and its
-  Secret `<APP_NAME>-oauth-client` (an upgrade from 3.x too; uninstall
-  deletes the client and revokes its sign-ins); the chart's `profile: full`
-  does it with a Sync and a PostSync hook (`gitops.oauthClient.enabled`).
-  The chart's gitops profile (its default) keeps the 3.x sign-in through
-  the ServiceAccount (`user:info user:check-access`, no OAuthClient):
-  nothing there acts with your token, so its session cannot change the
-  cluster and nobody signs in again
-  ([GITOPS §11](docs/GITOPS.md#sign-in-in-the-gitops-profile)). The API server
-  checks each change against your RBAC and its audit log names you. Before
-  a change is accepted, the app checks that your sign-in can carry it (scope
-  `user:full`, not expiring within the operation's deadline); otherwise
-  "Log out and log in again". **After the upgrade everyone signs in again
-  once to make changes** (the old session's token can only identify you).
-  A 401 or 403 to your token mid-operation says your sign-in or your
-  permissions stopped it ([UPGRADING](docs/UPGRADING.md#upgrade-to-v400-changes-run-with-your-own-token),
-  [RUNBOOK §4](RUNBOOK.md#4-sign-in-and-permissions)).
-- **Playground: Set up can add Models as a Service models again**, with
-  your own token (as in the dashboard); 3.0.1 had turned that off because
-  it ran with the ServiceAccount's. The status still uses the
-  ServiceAccount's token and never reaches MaaS.
-
-- Final review of the Environment page's wording (before release): a
-  model published on the MaaS tab reads **Through MaaS while published**
-  and shows its **MaaS address**; a model that cannot be called says so
-  once (the alert keeps the message and **Check again**); the MaaS words
-  are the dashboard's (**authorization policy**, **MaaS governance**,
-  the subscription's display name) and one name per shared part
-  (**Connectivity Link instance (Kuadrant)**, **MaaS gateway**,
-  **Database**); **Clean up MaaS** as on every other tab; a shared part
-  with a warning needs attention, and a part waiting for another is a
-  grey **Waiting**; MaaS dialogs name the model by its display name, and
-  messages no longer quote project names; the capacity warning uses GiB;
-  the Overview's in-app step reads **Show issue in &lt;project&gt;**;
-  `/environment` opens the Environment page.
-- CI, GitLab: the image jobs build with buildah (`quay.io/buildah/stable`,
-  pinned by digest; `scripts/ci-build-image.sh`) instead of kaniko, which
-  is archived upstream. Same build arguments, labels, platform
-  (`linux/amd64`), tags and publish rules; the tarball the crane jobs push
-  is a docker-archive (uncompressed layers, a larger artifact). buildah
-  needs a runner that allows user namespaces, as GitLab.com's hosted
-  runners do (CONTRIBUTING.md, Automatic Image Publishing).
-- Dependency updates: `renovate.json5` (weekly, grouped, never merged
-  automatically) and an inert scheduled `renovate` job; CONTRIBUTING.md,
-  Dependency updates, describes the Mend app and the self-hosted job.
-  Pipeline schedules run that job only.
 
 ### Security
 
@@ -457,7 +449,6 @@ only accepts a tag whose version is the top dated section. See
   rollback and the chart's hook refuse, before any change, a client of that
   name that is not this install's, and uninstall leaves it and its sign-ins
   alone.
-
 - **Models' copy-paste commands could run what a project editor wrote.**
   The name a model serves (`spec.model.name`), which anyone who can edit
   its project sets on any model of a catalog name, went unquoted into the
@@ -515,7 +506,7 @@ only accepts a tag whose version is the top dated section. See
   own token. Pages read with each user's own token are planned after
   4.0.0.
 
-## [3.0.1] - unreleased
+## [3.0.1] - 2026-11-18
 
 ### Security
 
