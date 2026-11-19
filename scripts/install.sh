@@ -18,7 +18,8 @@
 #                      template (--version <release or commit>)
 #     resolve-image    print the digest reference that would be applied
 #     cleanup-legacy   remove this install's objects from before namespaced names
-#     uninstall        remove the app, its RBAC, ConsoleLink and namespace
+#     uninstall        remove the app, its RBAC, OAuthClient (revoking its
+#                      sign-ins), ConsoleLink and namespace
 #   Options (each also has an environment variable):
 #     --dry-run              validate with the API server only        DRY_RUN=1
 #     --namespace NAME       default rhoai-nightly-updater            NAMESPACE
@@ -105,6 +106,9 @@ case "${DRY_RUN:-}" in "" | 0 | false | no) DRY="" ;; *) DRY=1 ;; esac
 DRY_FLAG=${DRY:+--dry-run=server}
 INSTANCE="$APP_NAME-$NAMESPACE"
 PROXY_SECRET="$APP_NAME-proxy"
+# The OAuth client users sign in with is OAuthClient $INSTANCE (cluster-
+# scoped, so the namespace is in its name); its secret is in this Secret.
+CLIENT_SECRET="$APP_NAME-oauth-client"
 
 is_release() { [[ $1 =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; }
 
@@ -346,6 +350,79 @@ ensure_proxy_secret() {
 	err "Created Secret $PROXY_SECRET. Old ReplicaSets, which still hold the cookie secret in their pod template, are removed after the rollout."
 }
 
+# uses_oauth_client TEMPLATE: whether the template signs users in through
+# OAuthClient $INSTANCE (4.0.0 and later) rather than through the app's
+# ServiceAccount as the OAuth client (earlier releases, which a rollback
+# may apply).
+uses_oauth_client() {
+	# shellcheck disable=SC2016 # the template's own ${PARAM} placeholders
+	grep -qF -- '--client-id=${APP_NAME}-${NAMESPACE}' "$1"
+}
+
+# The OAuth client secret, Secret $CLIENT_SECRET (key client-secret): 32
+# random alphanumerics without a trailing newline (oauth-proxy reads the
+# file raw). Created once and kept, so re-applies keep the OAuthClient and
+# everyone's session; delete the Secret and re-run to rotate it.
+ensure_client_secret() {
+	if oc get secret "$CLIENT_SECRET" -n "$NAMESPACE" >/dev/null 2>&1; then
+		err "Secret $CLIENT_SECRET exists; keeping it."
+		return 0
+	fi
+	local secret
+	secret=$(head -c 64 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)
+	[ ${#secret} -eq 32 ] || die "Could not produce a 32-character OAuth client secret"
+	printf '%s' "$secret" >"$TMP/client-secret"
+	unset secret
+	oc create secret generic "$CLIENT_SECRET" -n "$NAMESPACE" --from-file=client-secret="$TMP/client-secret" >/dev/null
+	rm -f "$TMP/client-secret"
+	err "Created Secret $CLIENT_SECRET."
+}
+
+# oauth_client_manifest HOST SECRET: OAuthClient $INSTANCE, as RHOAI's
+# operator makes its own (data-science): grantMethod auto (no "Authorize
+# Access" page), one redirect URI on the Route's host (the OAuth server
+# matches scheme and host exactly), the client secret, and no scope
+# restriction, so oauth-proxy can request user:full. The chart's hook
+# applies the same object (scripts/test-chart.sh compares them).
+oauth_client_manifest() {
+	local host=$1 secret=$2
+	printf '%s\n' \
+		'apiVersion: oauth.openshift.io/v1' \
+		'kind: OAuthClient' \
+		'metadata:' \
+		"  name: $INSTANCE" \
+		'  labels:' \
+		"    app.kubernetes.io/instance: $INSTANCE" \
+		'grantMethod: auto' \
+		'redirectURIs:' \
+		"  - https://$host/oauth/callback"
+	printf 'secret: %s\n' "$secret"
+}
+
+# The OAuthClient needs the Route host, which the API server assigns when
+# the Route is created; the router does not have to admit it first. The
+# secret goes to oc on stdin, never on a command line. Server-side apply, so
+# no last-applied annotation repeats the secret. A dry run validates the
+# object with the API server (a placeholder secret, and a placeholder host
+# when the Route does not exist yet).
+oauth_client() {
+	local host secret
+	host=$(oc get route "$APP_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null || true)
+	if [ -n "$DRY" ]; then
+		oauth_client_manifest "${host:-$APP_NAME-$NAMESPACE.apps.example.com}" dry-run-placeholder |
+			oc apply --server-side --field-manager=rhoai-nightly-updater-install --force-conflicts --dry-run=server -f - >/dev/null
+		err "Validated OAuthClient $INSTANCE."
+		return 0
+	fi
+	[ -n "$host" ] || die "Route $APP_NAME has no host yet; users cannot sign in until OAuthClient $INSTANCE exists. Re-run this command."
+	secret=$(oc get secret "$CLIENT_SECRET" -n "$NAMESPACE" -o jsonpath='{.data.client-secret}' | base64 -d)
+	[ -n "$secret" ] || die "Secret $CLIENT_SECRET has no client-secret; delete it and re-run this command."
+	oauth_client_manifest "$host" "$secret" |
+		oc apply --server-side --field-manager=rhoai-nightly-updater-install --force-conflicts -f - >/dev/null
+	unset secret
+	err "OAuthClient $INSTANCE signs users in at https://$host (redirect https://$host/oauth/callback)."
+}
+
 # write_params IMAGE_REF: the template parameters this script sets, in
 # $TMP/params. OAUTH_PROXY_IMAGE is unset only when uninstall renders the
 # template (it needs no image), and then keeps the template's default.
@@ -485,9 +562,14 @@ deploy_or_upgrade() {
 			err "Note: a running cluster operation delays the restart until it finishes (up to ~17 minutes)."
 		fi
 		ensure_proxy_secret
+		ensure_client_secret
 	fi
 	err "$([ -n "$DRY" ] && echo Validating || echo Applying) $REF with the template of ${TAG}..."
 	apply_template "$TEMPLATE" "$REF"
+	# Before the rollout, so the new pod's sign-in works at once. An upgrade
+	# from a release whose ServiceAccount was the OAuth client gets the
+	# OAuthClient here; the Deployment rolls because its proxy args changed.
+	oauth_client
 	if [ -n "$DRY" ]; then
 		err "Dry run only; nothing was changed."
 		return 0
@@ -543,8 +625,15 @@ rollback() {
 		fi
 	fi
 	git show "$rev:deploy/template.yaml" >"$TMP/rollback-template.yaml"
+	# A template that signs users in through OAuthClient $INSTANCE needs its
+	# secret and the client; an older one uses the ServiceAccount and leaves
+	# them unused (uninstall removes them).
+	local client=""
+	! uses_oauth_client "$TMP/rollback-template.yaml" || client=1
+	[ -n "$DRY" ] || [ -z "$client" ] || ensure_client_secret
 	err "$([ -n "$DRY" ] && echo Validating || echo Applying) $REF with the template of commit $rev..."
 	apply_template "$TMP/rollback-template.yaml" "$REF"
+	[ -z "$client" ] || oauth_client
 	if [ -n "$DRY" ]; then
 		err "Dry run only; nothing was changed."
 		return 0
@@ -566,14 +655,23 @@ rbac_namespaces() {
 	awk -v ns="$NAMESPACE" '($1 == "Role" || $1 == "RoleBinding") && $2 != "" && $2 != ns {print $2}' "$TMP/kinds" | sort -u
 }
 
-# Removes the app, its cluster-wide RBAC, its Roles in other namespaces, the
-# ConsoleLink and the namespace. RHOAI and everything the app created on the
-# cluster (catalog, pull secret, IDMS, test resources) stay.
+# Removes the app's OAuthClient and the sign-ins it issued, the app, its
+# cluster-wide RBAC, its Roles in other namespaces, the ConsoleLink and the
+# namespace. RHOAI and everything the app created on the cluster (catalog,
+# pull secret, IDMS, test resources) stay.
 uninstall() {
 	preflight
-	local ns namespaces
+	local ns namespaces revoked=1
 	namespaces=$(rbac_namespaces) || die "Cannot render $TEMPLATE to find the namespaces of its Roles; nothing was deleted."
+	# First the OAuthClient, so nobody signs in again; then the access
+	# tokens it issued: deleting the client does not invalidate them (the
+	# API server does not check that a token's client still exists), and
+	# each is a user's full token that would stay valid until it expires.
 	# shellcheck disable=SC2086 # DRY_FLAG is one word or nothing
+	oc delete oauthclient -l "app.kubernetes.io/instance=$INSTANCE" --ignore-not-found $DRY_FLAG
+	# shellcheck disable=SC2086
+	oc delete oauthaccesstokens --field-selector "clientName=$INSTANCE" $DRY_FLAG || revoked=""
+	# shellcheck disable=SC2086
 	oc delete consolelink,clusterrolebinding,clusterrole -l "app.kubernetes.io/instance=$INSTANCE" --ignore-not-found $DRY_FLAG
 	for ns in $namespaces; do
 		# shellcheck disable=SC2086
@@ -583,6 +681,10 @@ uninstall() {
 	# shellcheck disable=SC2086
 	oc delete project "$NAMESPACE" --ignore-not-found $DRY_FLAG
 	if [ -n "$DRY" ]; then err "Dry run only; nothing was changed."; else err "Removed $APP_NAME from $NAMESPACE."; fi
+	if [ -z "$revoked" ]; then
+		err "ERROR: the sign-ins of OAuthClient $INSTANCE could not be revoked; each stays a valid OpenShift token until it expires. Revoke them with:"
+		die "  oc delete oauthaccesstokens --field-selector clientName=$INSTANCE"
+	fi
 }
 
 case "$ACTION" in

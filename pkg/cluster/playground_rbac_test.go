@@ -52,24 +52,43 @@ func playgroundServerRequests() []rbacRequest {
 	return out
 }
 
-// The session token oauth-proxy passes keeps its default scope (user:info
-// user:check-access): it identifies the user and runs access reviews, and
-// cannot act. A --scope flag would put a full token in every session
-// cookie; the Playground calls the dashboard with the ServiceAccount's
-// token instead. Only deploy/template.yaml is read: the image build copies
-// just that file, and scripts/test-chart.sh (CI's chart job) fails when the
-// chart's copy differs from it.
-func TestTemplateOAuthProxyKeepsTheDefaultScope(t *testing.T) {
-	for _, path := range []string{"../../deploy/template.yaml"} {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
+// oauth-proxy signs users in through the install's own OAuthClient
+// (${APP_NAME}-${NAMESPACE}, which install.sh and the chart's hook create)
+// with --scope=user:full, and passes that token on: the app makes every
+// change with it. A ServiceAccount as the OAuth client cannot get
+// user:full (the OAuth server refuses it with "scope denied" after the
+// login), so --openshift-service-account and the ServiceAccount's
+// oauth-redirectreference annotation must be gone. --cookie-refresh stays
+// off: openshift/oauth-proxy validates a refresh with the token in a query
+// parameter, which the API server ignores, so it signs users out (and can
+// log the token on a network error). Only deploy/template.yaml is read: the
+// image build copies just that file, and scripts/test-chart.sh (CI's chart
+// job) fails when the chart's copy differs from it.
+func TestTemplateOAuthProxySignsInThroughTheOAuthClient(t *testing.T) {
+	data, err := os.ReadFile(templateRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`--client-id=${APP_NAME}-${NAMESPACE}`,
+		`--client-secret-file=/etc/proxy/oauth/client-secret`,
+		`--scope=user:full`,
+		`--pass-access-token=true`,
+		`--cookie-secret-file=/etc/proxy/secrets/session_secret`,
+		`--cookie-samesite=strict`,
+	} {
+		if !regexp.MustCompile(`(?m)^\s*-\s*` + regexp.QuoteMeta(want) + `$`).Match(data) {
+			t.Errorf("deploy/template.yaml: oauth-proxy does not set %s", want)
 		}
-		if regexp.MustCompile(`(?m)^\s*-\s*--scope[= ]`).Match(data) {
-			t.Errorf("%s sets oauth-proxy's --scope; the session token must stay user:info user:check-access", path)
+	}
+	// Comments may name what is gone and why.
+	objects := regexp.MustCompile(`(?m)^\s*#.*$`).ReplaceAll(data, nil)
+	for _, gone := range []string{"--openshift-service-account", "oauth-redirectreference", "oauth-redirecturi", "--cookie-refresh", "--client-secret="} {
+		if regexp.MustCompile(regexp.QuoteMeta(gone)).Match(objects) {
+			t.Errorf("deploy/template.yaml still has %s", gone)
 		}
-		if !regexp.MustCompile(`(?m)^\s*-\s*--pass-access-token=true`).Match(data) {
-			t.Errorf("%s: oauth-proxy no longer passes the session token the app identifies users with", path)
-		}
+	}
+	if !regexp.MustCompile(`(?m)^\s*secretName: \$\{APP_NAME\}-oauth-client$`).Match(data) {
+		t.Error("deploy/template.yaml: the oauth-proxy container does not mount Secret ${APP_NAME}-oauth-client")
 	}
 }

@@ -5,11 +5,18 @@ metadata:
   annotations:
     description: >-
       RHOAI Nightly Updater. Requires cluster-admin to apply. Before the first
-      apply, create the oauth-proxy session secret once (it is kept across
-      re-applies, so sessions survive upgrades):
+      apply, create the oauth-proxy session secret and the OAuth client
+      secret once (both are kept across re-applies, so sessions survive
+      upgrades):
       oc create secret generic <APP_NAME>-proxy -n <NAMESPACE>
-      --from-literal=session_secret="$(head -c 64 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)".
-      `make deploy` / `make upgrade` do this for you.
+      --from-literal=session_secret="$(head -c 64 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)";
+      oc create secret generic <APP_NAME>-oauth-client -n <NAMESPACE>
+      --from-literal=client-secret="$(head -c 64 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)".
+      After the apply, create the OAuthClient <APP_NAME>-<NAMESPACE> that
+      users sign in with (grantMethod auto, redirect URI
+      https://<Route host>/oauth/callback, that client secret).
+      `make deploy` / `make upgrade` (scripts/install.sh) do all of this for
+      you.
 parameters:
   - name: IMAGE
     required: true
@@ -69,13 +76,16 @@ parameters:
     value: DISABLE_DSC_CONFIG
 objects:
 
+  # The app's own identity: the reads every signed-in user sees and the
+  # app's own records. It is not the OAuth client users sign in with (that
+  # is OAuthClient ${APP_NAME}-${NAMESPACE}, see the oauth-proxy container),
+  # and every change to the cluster is made with the signed-in user's own
+  # token (SECURITY.md, "Which token is used where").
   - apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: ${APP_NAME}
       namespace: ${NAMESPACE}
-      annotations:
-        serviceaccounts.openshift.io/oauth-redirectreference.primary: '{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"${APP_NAME}"}}'
 
   # RBAC: exactly the requests the backend makes with this ServiceAccount,
   # including the restore, revert and cleanup paths (webhook deletes, CRD
@@ -1030,7 +1040,21 @@ objects:
               args:
                 - --https-address=:8443
                 - --provider=openshift
-                - --openshift-service-account=${APP_NAME}
+                # Users sign in through the cluster-scoped OAuthClient
+                # ${APP_NAME}-${NAMESPACE} (install.sh, or the chart's
+                # hook, creates it after the Route has its host:
+                # grantMethod auto, redirect URI
+                # https://<Route host>/oauth/callback, the secret below).
+                # A ServiceAccount as the OAuth client cannot get user:full
+                # (the OAuth server allows it only user:info,
+                # user:check-access, the list-projects scopes and roles in
+                # its own namespace), and the app makes every change with
+                # the user's own token.
+                - --client-id=${APP_NAME}-${NAMESPACE}
+                # Read raw, without trimming: the Secret's value has no
+                # trailing newline.
+                - --client-secret-file=/etc/proxy/oauth/client-secret
+                - --scope=user:full
                 - --upstream=http://127.0.0.1:8080
                 - --upstream-timeout=960s
                 - --upstream-flush=200ms
@@ -1040,7 +1064,12 @@ objects:
                 - --cookie-secret-file=/etc/proxy/secrets/session_secret
                 # Below the OAuth access token lifetime (OAuth
                 # accessTokenMaxAgeSeconds, 86400s by default), so the session
-                # ends before the token it carries stops working.
+                # ends before the token it carries stops working. The cookie
+                # carries the user's full token, encrypted with the session
+                # secret (SECURITY.md, "Threat model"). No --cookie-refresh:
+                # openshift/oauth-proxy validates a refresh with the token in
+                # a query parameter, which the API server ignores, so it
+                # signs users out (and can log the token on a network error).
                 - --cookie-expire=23h
                 - --cookie-samesite=strict
                 # The app trusts only the token of this proxy's own OAuth
@@ -1077,6 +1106,9 @@ objects:
                 - name: proxy-secret
                   mountPath: /etc/proxy/secrets
                   readOnly: true
+                - name: oauth-client
+                  mountPath: /etc/proxy/oauth
+                  readOnly: true
               resources:
                 requests:
                   cpu: 10m
@@ -1104,6 +1136,13 @@ objects:
             - name: proxy-secret
               secret:
                 secretName: ${APP_NAME}-proxy
+            # The OAuth client secret (key client-secret), created once by
+            # install.sh or the chart's hook and kept on re-apply, like the
+            # session secret. OAuthClient ${APP_NAME}-${NAMESPACE} holds the
+            # same value.
+            - name: oauth-client
+              secret:
+                secretName: ${APP_NAME}-oauth-client
 
   - apiVersion: v1
     kind: Service

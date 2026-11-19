@@ -97,13 +97,13 @@ grep -q '^ValidatingAdmissionPolicy/' <<<"$gitops_objects" && grep -q '^Validati
 expect_eq "rbac-gitops.yaml: OPERATOR_NAMESPACE" "redhat-ods-operator" "$(sed -n 's/^# gitops-parameter OPERATOR_NAMESPACE //p' <<<"$INFO")"
 expect_eq "the Template's PROFILE defaults to full (empty)" "" "$(default_of PROFILE)"
 
-# expected_objects NAMESPACE APP_NAME [SESSION CONSOLELINK [PROFILE]]:
+# expected_objects NAMESPACE APP_NAME [SESSION CONSOLELINK [PROFILE [OAUTHCLIENT]]]:
 # Kind/name/namespace of every object a render should have, sorted: the
 # Template's with its placeholders replaced (without its RBAC objects in the
 # gitops profile, the default, which adds deploy/rbac-gitops.yaml's), then
 # the hooks that are on (1, the default).
 expected_objects() {
-	local ns=$1 app=$2 session=${3:-1} link=${4:-1} profile=${5:-gitops} objects=$template_objects
+	local ns=$1 app=$2 session=${3:-1} link=${4:-1} profile=${5:-gitops} oauth=${6:-1} objects=$template_objects
 	if [ "$profile" = gitops ]; then
 		objects=$(grep -vE '^(ClusterRole|ClusterRoleBinding|Role|RoleBinding)/' <<<"$template_objects"; printf '%s\n' "$gitops_objects")
 	fi
@@ -117,6 +117,12 @@ expected_objects() {
 		if [ "$session" = 1 ]; then
 			printf '%s\n' "ServiceAccount/$app-session-secret/$ns" "Role/$app-session-secret/$ns" \
 				"RoleBinding/$app-session-secret/$ns" "Job/$app-session-secret/$ns"
+		fi
+		if [ "$oauth" = 1 ]; then
+			printf '%s\n' "ServiceAccount/$app-oauth-secret/$ns" "Role/$app-oauth-secret/$ns" \
+				"RoleBinding/$app-oauth-secret/$ns" "Job/$app-oauth-secret/$ns" \
+				"ServiceAccount/$app-oauthclient/$ns" "Role/$app-oauthclient/$ns" "RoleBinding/$app-oauthclient/$ns" \
+				"ClusterRole/$app-$ns-oauthclient/" "ClusterRoleBinding/$app-$ns-oauthclient/" "Job/$app-oauthclient/$ns"
 		fi
 		if [ "$link" = 1 ]; then
 			printf '%s\n' "ServiceAccount/$app-consolelink/$ns" "Role/$app-consolelink/$ns" \
@@ -265,8 +271,10 @@ expect_render "no session Secret hook" --namespace ns1 "${BASE[@]}" --set gitops
 expect_eq "no session Secret hook: the objects" "$(expected_objects ns1 rhoai-nightly-updater 0 1)" "$(objects)"
 expect_render "no ConsoleLink hook" --namespace ns1 "${BASE[@]}" --set gitops.consoleLink.enabled=false
 expect_eq "no ConsoleLink hook: the objects" "$(expected_objects ns1 rhoai-nightly-updater 1 0)" "$(objects)"
-expect_render "no hooks" --namespace ns1 "${BASE[@]}" --set gitops.sessionSecret.enabled=false --set gitops.consoleLink.enabled=false
-expect_eq "no hooks: only the Template's objects" "$(expected_objects ns1 rhoai-nightly-updater 0 0)" "$(objects)"
+expect_render "no OAuthClient hooks" --namespace ns1 "${BASE[@]}" --set gitops.oauthClient.enabled=false
+expect_eq "no OAuthClient hooks: the objects" "$(expected_objects ns1 rhoai-nightly-updater 1 1 gitops 0)" "$(objects)"
+expect_render "no hooks" --namespace ns1 "${BASE[@]}" --set gitops.sessionSecret.enabled=false --set gitops.consoleLink.enabled=false --set gitops.oauthClient.enabled=false
+expect_eq "no hooks: only the Template's objects" "$(expected_objects ns1 rhoai-nightly-updater 0 0 gitops 0)" "$(objects)"
 grep -q 'argocd.argoproj.io/hook' "$OUT" && fail "no hooks: a hook annotation is left" || pass
 
 # A value is placed into its string only: quotes, a backslash, a newline
@@ -430,6 +438,37 @@ install_link=$(link_lines "$SRC/scripts/install.sh")
 [ "$(wc -l <<<"$install_link")" -ge 10 ] && pass || fail "ConsoleLink: cannot find install.sh's ConsoleLink"
 expect_eq "ConsoleLink: the same object as install.sh's" "$install_link" "$(link_lines "$CHART/templates/consolelink.yaml")"
 
+# The OAuth client: a Sync hook for its Secret, a PostSync hook for the
+# OAuthClient. Only the hooks' own ServiceAccounts get OAuthClient rights:
+# get and patch of this instance's client, and create; never delete.
+expect_render "OAuthClient hooks" --namespace ns1 "${BASE[@]}" --set parameters.APP_NAME=upd --show-only templates/oauth-client.yaml
+expect_eq "OAuthClient: four Sync hooks" 4 "$(grep -c 'argocd.argoproj.io/hook: "Sync"' "$OUT")"
+expect_eq "OAuthClient: six PostSync hooks" 6 "$(grep -c 'argocd.argoproj.io/hook: "PostSync"' "$OUT")"
+expect_eq "OAuthClient: delete policy" 10 "$(grep -c 'hook-delete-policy: BeforeHookCreation,HookSucceeded' "$OUT")"
+grep -qF 'resourceNames: ["upd-oauth-client"]' "$OUT" && pass || fail "OAuthClient: the Roles are not limited to the Secret's name"
+grep -qF 'resourceNames: ["upd-ns1"]' "$OUT" && pass || fail "OAuthClient: the ClusterRole is not limited to the client's name"
+grep -qF 'resourceNames: ["upd"]' "$OUT" && pass || fail "OAuthClient: the Role is not limited to the Route's name"
+oauth_role=$(doc ClusterRole/'"upd-ns1-oauthclient"')
+[ -n "$oauth_role" ] || oauth_role=$(awk '/^---/ { if (keep) exit; buf = ""; next } { buf = buf $0 "\n" } /name: "upd-ns1-oauthclient"/ { keep = 1 } END { if (keep) printf "%s", buf }' "$OUT")
+grep -qF 'resources: ["oauthclients"]' <<<"$oauth_role" && pass || fail "OAuthClient: no ClusterRole on oauthclients: $oauth_role"
+expect_eq "OAuthClient: the hook's verbs on OAuthClients" '["get", "patch"] ["create"]' \
+	"$(grep -oE 'verbs: \[[^]]*\]' <<<"$oauth_role" | sed 's/^verbs: //' | tr '\n' ' ' | sed 's/ $//')"
+grep -qE 'oauthaccesstokens|"delete"|impersonate|escalate|bind' "$OUT" && fail "OAuthClient: a hook gets more than it needs" || pass
+grep -qF 'app.kubernetes.io/instance: "upd-ns1"' <<<"$oauth_role" && pass || fail "OAuthClient: the ClusterRole lacks install.sh's instance label"
+grep -qF -- '--from-file=client-secret=' "$OUT" && pass || fail "OAuthClient: the Secret's key is not client-secret"
+grep -qF 'medium: Memory' "$OUT" && pass || fail "OAuthClient: the generated value is not kept in memory"
+grep -q '^ *app: ' "$OUT" && fail "OAuthClient: a Job pod has the app label the Service selects" || pass
+# The OAuthClient is install.sh's: the same printf lines, from apiVersion
+# to the secret.
+client_lines() { sed -n "/'apiVersion: oauth.openshift.io\/v1'/,/printf 'secret: /p" "$1" | sed -e 's/^[[:space:]]*//' -e 's/ |.*$//'; }
+install_client=$(client_lines "$SRC/scripts/install.sh")
+[ "$(wc -l <<<"$install_client")" -ge 10 ] && pass || fail "OAuthClient: cannot find install.sh's OAuthClient"
+expect_eq "OAuthClient: the same object as install.sh's" "$install_client" "$(client_lines "$CHART/templates/oauth-client.yaml")"
+# The Deployment reads the Secret the hook creates, under the key it writes.
+expect_render "OAuthClient: the Deployment" --namespace ns1 "${BASE[@]}" --set parameters.APP_NAME=upd --show-only templates/objects.yaml
+grep -qF -- '- --client-id=upd-ns1' "$OUT" && grep -qF -- '- --client-secret-file=/etc/proxy/oauth/client-secret' "$OUT" && grep -qx '          secretName: upd-oauth-client' "$OUT" && pass ||
+	fail "OAuthClient: the Deployment does not use the client upd-ns1 and Secret upd-oauth-client"
+
 # --- The hook scripts, run against a fake oc --------------------------------------
 
 # hook_script TEMPLATE: the shell script of that hook Job, as rendered. The
@@ -541,5 +580,86 @@ grep -qF 'has no host yet' "$HOOKOUT" && pass || fail "ConsoleLink, no host: $(c
 run_hook "$LINK_SH" FAKE_APPLY=forbidden
 [ "$HOOK_RC" -ne 0 ] && pass || fail "ConsoleLink, apply fails: the Job succeeded"
 grep -qF 'consolelinks is forbidden' "$HOOKOUT" && pass || fail "ConsoleLink, apply fails: $(cat "$HOOKOUT")"
+
+
+# The two OAuth client hook scripts (the Sync one first), with their own
+# fake oc: the Secret's value comes back base64-encoded as oc prints it.
+oauth_script() {
+	helm template rnu "$CHART" --namespace ns1 "${BASE[@]}" --show-only templates/oauth-client.yaml 2>&1 |
+		awk -v want="$1" '/^            - \|$/ { n++; f = (n == want); next } f && /^          [a-z]/ { exit } f' |
+		sed -e 's/^              //' -e "s|/secret/|$WORK/secretvol/|g"
+}
+OSECRET_SH="$WORK/oauth-secret.sh"
+OCLIENT_SH="$WORK/oauthclient.sh"
+oauth_script 1 >"$OSECRET_SH"
+oauth_script 2 >"$OCLIENT_SH"
+bash -n "$OSECRET_SH" && bash -n "$OCLIENT_SH" && pass || fail "OAuth hook scripts: not valid bash"
+grep -q 'oc create secret' "$OSECRET_SH" && grep -q 'OAuthClient' "$OCLIENT_SH" && pass || fail "OAuth hook scripts: not extracted"
+OAUTHBIN="$WORK/oauthbin"
+mkdir -p "$OAUTHBIN"
+cat >"$OAUTHBIN/oc" <<'FAKE'
+#!/usr/bin/env bash
+printf 'oc %s\n' "$*" >>"$FAKE_LOG"
+case "$1 $2" in
+"get secret")
+	if [[ " $* " == *"{.data.client-secret}"* ]]; then printf '%s' "${FAKE_DATA-Y2xpZW50LXNlY3JldC12YWx1ZQ==}"; exit 0; fi
+	case "${FAKE_SECRET:-missing}" in
+	exists) echo "secret/$3" ;;
+	unreadable) echo "Error from server: secrets \"$3\" cannot be read" >&2; exit 1 ;;
+	*) echo "Error from server (NotFound): secrets \"$3\" not found" >&2; exit 1 ;;
+	esac ;;
+"create secret")
+	for a in "$@"; do case "$a" in --from-file=client-secret=*) cp "${a#--from-file=client-secret=}" "$FAKE_LOG.value" ;; esac; done
+	case "${FAKE_CREATE:-ok}" in
+	ok) echo "secret/$4" ;;
+	exists) echo "Error from server (AlreadyExists): secrets \"$4\" already exists" >&2; exit 1 ;;
+	*) echo "Error from server: cannot create secrets" >&2; exit 1 ;;
+	esac ;;
+"get route") [ -n "${FAKE_NO_HOST:-}" ] || printf 'app.example.com' ;;
+"apply --server-side")
+	cat >"$FAKE_LOG.applied"
+	[ "${FAKE_APPLY:-ok}" = ok ] || { echo "Error from server: cannot apply oauthclients" >&2; exit 1; } ;;
+*) echo "fake oc: unexpected: $*" >&2; exit 2 ;;
+esac
+FAKE
+chmod +x "$OAUTHBIN/oc"
+# run_oauth SCRIPT [VAR=value ...]: like run_hook, with this fake oc (and
+# the no-op sleep).
+run_oauth() {
+	local script=$1
+	shift
+	rm -f "$HOOKLOG" "$HOOKLOG".* "$WORK/secretvol/"*
+	HOOK_RC=0
+	env PATH="$OAUTHBIN:$FAKEBIN:$PATH" FAKE_LOG="$HOOKLOG" NAMESPACE=ns1 SECRET=app-oauth-client APP_NAME=app INSTANCE=app-ns1 "$@" \
+		bash "$script" >"$HOOKOUT" 2>&1 || HOOK_RC=$?
+	touch "$HOOKLOG"
+}
+
+run_oauth "$OSECRET_SH" FAKE_SECRET=exists
+expect_eq "OAuth client Secret exists: kept" "0 0" "$HOOK_RC $(grep -c '^oc create' "$HOOKLOG" || true)"
+run_oauth "$OSECRET_SH"
+expect_eq "OAuth client Secret created: success" 0 "$HOOK_RC"
+[[ $(cat "$HOOKLOG.value") =~ ^[a-zA-Z0-9]{32}$ ]] && [ "$(wc -c <"$HOOKLOG.value" | tr -d ' ')" = 32 ] && pass ||
+	fail "OAuth client Secret created: not 32 alphanumerics without a newline"
+no_value "OAuth client Secret created"
+run_oauth "$OSECRET_SH" FAKE_SECRET=unreadable
+[ "$HOOK_RC" -ne 0 ] && [ "$(grep -c '^oc create' "$HOOKLOG" || true)" = 0 ] && pass || fail "OAuth client Secret unreadable: the Job went on"
+run_oauth "$OSECRET_SH" FAKE_CREATE=exists
+expect_eq "OAuth client Secret created meanwhile: success" 0 "$HOOK_RC"
+
+run_oauth "$OCLIENT_SH"
+expect_eq "OAuthClient applied: success" 0 "$HOOK_RC"
+expect_eq "OAuthClient applied: the object" "$(printf '%s\n' 'apiVersion: oauth.openshift.io/v1' 'kind: OAuthClient' 'metadata:' \
+	'  name: app-ns1' '  labels:' '    app.kubernetes.io/instance: app-ns1' 'grantMethod: auto' 'redirectURIs:' \
+	'  - https://app.example.com/oauth/callback' 'secret: client-secret-value')" "$(cat "$HOOKLOG.applied")"
+grep -qx 'oc apply --server-side --field-manager=rhoai-nightly-updater-gitops --force-conflicts -f -' "$HOOKLOG" && pass || fail "OAuthClient: not server-side applied: $(cat "$HOOKLOG")"
+grep -qF 'client-secret-value' "$HOOKOUT" "$HOOKLOG" && fail "OAuthClient: the secret was printed or passed as an argument" || pass
+run_oauth "$OCLIENT_SH" FAKE_DATA=""
+[ "$HOOK_RC" -ne 0 ] && [ ! -e "$HOOKLOG.applied" ] && pass || fail "OAuthClient, empty secret: applied anyway"
+grep -qF 'has no client-secret' "$HOOKOUT" && pass || fail "OAuthClient, empty secret: $(cat "$HOOKOUT")"
+run_oauth "$OCLIENT_SH" FAKE_NO_HOST=1
+[ "$HOOK_RC" -ne 0 ] && [ ! -e "$HOOKLOG.applied" ] && pass || fail "OAuthClient, no host: applied anyway"
+run_oauth "$OCLIENT_SH" FAKE_APPLY=fail
+[ "$HOOK_RC" -ne 0 ] && pass || fail "OAuthClient, apply fails: the Job succeeded"
 
 finish
