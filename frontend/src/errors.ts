@@ -42,6 +42,15 @@ function describeErrorRaw(e: unknown, genericTitle: string): ErrorDescription {
   switch (err.errorCode) {
     case "session_expired":
       return SESSION_EXPIRED;
+    case "sign_in_ended":
+      // pkg/cluster errorCodeFromK8sErr: the API server rejected the user's token (which changes act with) while the change ran.
+      return {
+        title: "Your sign-in ended during the change",
+        body: err.message,
+        hint: "Part of the change may have run. Sign in again, check the result, then run it again if it is not complete.",
+        variant: "danger",
+        reload: true,
+      };
     case "sign_in_again":
       // pkg/api sessionProblem: the user's sign-in cannot carry a change (an old session, or one about to expire).
       return { title: "Sign in again to make changes", body: err.message, hint: "Use Log out in the user menu, then log in again.", variant: "warning" };

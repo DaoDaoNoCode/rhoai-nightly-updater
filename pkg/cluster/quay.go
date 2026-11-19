@@ -58,19 +58,19 @@ func parseTag(tag string) (parsedTag, bool) {
 		return parsedTag{}, false
 	}
 	// The regex only captures digits, so Atoi fails only on overflow.
-	num := func(s string, fallback int) (int, bool) {
+	num := func(s string) (int, bool) {
 		if s == "" {
-			return fallback, true
+			return 0, true
 		}
 		n, err := strconv.Atoi(s)
 		return n, err == nil
 	}
-	major, ok1 := num(m[1], 0)
-	minor, ok2 := num(m[2], 0)
-	patch, ok3 := num(m[3], 0)
+	major, ok1 := num(m[1])
+	minor, ok2 := num(m[2])
+	patch, ok3 := num(m[3])
 	ea, ok4 := -1, true
 	if m[4] != "" {
-		ea, ok4 = num(m[5], 0)
+		ea, ok4 = num(m[5])
 	}
 	if !ok1 || !ok2 || !ok3 || !ok4 {
 		return parsedTag{}, false
@@ -112,7 +112,7 @@ const quayRHOAIRegistry = "quay.io/rhoai"
 // decodeDockerConfigSecret extracts the docker config from a
 // kubernetes.io/dockerconfigjson Secret API response. On failure it returns a
 // user-facing reason instead of a config.
-func decodeDockerConfigSecret(body []byte) (map[string]interface{}, string) {
+func decodeDockerConfigSecret(body []byte) (map[string]any, string) {
 	var secret struct {
 		Data map[string]string `json:"data"`
 	}
@@ -130,7 +130,7 @@ func decodeDockerConfigSecret(body []byte) (map[string]interface{}, string) {
 	if err != nil {
 		return nil, "Failed to decode .dockerconfigjson"
 	}
-	var dockerConfig map[string]interface{}
+	var dockerConfig map[string]any
 	if err := json.Unmarshal(dockerConfigBytes, &dockerConfig); err != nil || dockerConfig == nil {
 		return nil, "Invalid JSON in .dockerconfigjson"
 	}
@@ -146,8 +146,8 @@ func normalizeRegistryKey(key string) string {
 
 // authFromEntry returns the base64 "user:password" credential of a docker
 // config auth entry, accepting either the "auth" field or username/password.
-func authFromEntry(val interface{}) string {
-	entry, _ := val.(map[string]interface{})
+func authFromEntry(val any) string {
+	entry, _ := val.(map[string]any)
 	if auth, _ := entry["auth"].(string); auth != "" {
 		return auth
 	}
@@ -163,7 +163,7 @@ func authFromEntry(val interface{}) string {
 // quay.io/rhoai images: the most specific matching registry key wins, so an
 // exact quay.io/rhoai entry is preferred over repository-scoped entries, which
 // are preferred over a generic quay.io login. The choice is deterministic.
-func selectQuayAuth(auths map[string]interface{}) string {
+func selectQuayAuth(auths map[string]any) string {
 	keys := make([]string, 0, len(auths))
 	for key := range auths {
 		keys = append(keys, key)
@@ -207,7 +207,7 @@ func getQuayAuth(c *Client) string {
 		slog.Warn("quay auth: unusable pull secret", "reason", problem)
 		return ""
 	}
-	auths, _ := dockerCfg["auths"].(map[string]interface{})
+	auths, _ := dockerCfg["auths"].(map[string]any)
 	auth := selectQuayAuth(auths)
 	if auth == "" {
 		slog.Warn("quay auth: no quay.io/rhoai or quay.io entry found in pull secret auths")
@@ -243,11 +243,12 @@ const quayFBCRepo = "rhoai/rhoai-fbc-fragment"
 // honours repeated scope parameters (the Docker token protocol allows them),
 // so a single token can cover a whole batch of images.
 func fetchQuayToken(ctx context.Context, httpClient *http.Client, basicAuth string, repos []string) (string, error) {
-	authURL := "https://quay.io/v2/auth?service=quay.io"
+	var authURL strings.Builder
+	authURL.WriteString("https://quay.io/v2/auth?service=quay.io")
 	for _, repo := range repos {
-		authURL += "&scope=" + url.QueryEscape("repository:"+repo+":pull")
+		authURL.WriteString("&scope=" + url.QueryEscape("repository:"+repo+":pull"))
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", authURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", authURL.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("creating auth request: %w", err)
 	}
@@ -374,9 +375,7 @@ func prefetchQuayTokens(ctx context.Context, basicAuth string, repos []string) {
 	sem := make(chan struct{}, 4)
 	for start := 0; start < len(missing); start += quayTokenBatch {
 		batch := missing[start:min(start+quayTokenBatch, len(missing))]
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			token, err := fetchQuayToken(ctx, quayHTTPClient, basicAuth, batch)
@@ -387,7 +386,7 @@ func prefetchQuayTokens(ctx context.Context, basicAuth string, repos []string) {
 			for _, repo := range batch {
 				storeQuayToken(basicAuth, repo, token)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -495,10 +494,7 @@ func fetchNightlyTags(ctx context.Context, basicAuth string, limit int, buildDat
 	if limit == 0 {
 		topTags = parsed
 	} else {
-		start := len(parsed) - limit
-		if start < 0 {
-			start = 0
-		}
+		start := max(len(parsed)-limit, 0)
 		topTags = parsed[start:]
 	}
 
@@ -601,7 +597,7 @@ const (
 // error (after one retry) is an error, so the scan is not cached.
 func probeTag(ctx context.Context, httpClient *http.Client, bearerToken, tag string) (bool, error) {
 	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		if attempt > 0 {
 			if err := clk.Sleep(ctx, 500*time.Millisecond); err != nil {
 				return false, err
@@ -708,23 +704,18 @@ func (p *tagProber) series(suffix func(int) string, each func(tag string)) {
 // rhoai-3.6.1, ... each with its own EAs.
 func (p *tagProber) version(base string, patches bool) {
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		p.exists(base + "-ea")
 		p.series(func(n int) string { return fmt.Sprintf("%s-ea.%d", base, n) }, func(string) {})
-	}()
+	})
 	if patches {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			var inner sync.WaitGroup
 			p.series(func(n int) string { return fmt.Sprintf("%s.%d", base, n) }, func(tag string) {
-				inner.Add(1)
-				go func() { defer inner.Done(); p.version(tag, false) }()
+				inner.Go(func() { ; p.version(tag, false) })
 			})
 			inner.Wait()
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -752,8 +743,7 @@ func (p *tagProber) major(m int) bool {
 				ea.Wait()
 				hits[i] = ga || firstEA
 				if hits[i] {
-					p.background.Add(1)
-					go func() { defer p.background.Done(); p.version(tag, true) }()
+					p.background.Go(func() { ; p.version(tag, true) })
 				}
 			}(i)
 		}

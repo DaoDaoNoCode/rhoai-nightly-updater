@@ -170,7 +170,7 @@ func migrationCopied(c *Client) (bool, error) {
 // recordMigrationCopied sets migrationCopiedAnnotation (a merge patch of
 // one annotation: setup's server-side apply owns the rest of the Secret).
 func recordMigrationCopied(c *Client) error {
-	patch, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{"annotations": map[string]string{migrationCopiedAnnotation: clk.Now().UTC().Format(time.RFC3339)}}})
+	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{migrationCopiedAnnotation: clk.Now().UTC().Format(time.RFC3339)}}})
 	_, _, err := c.patch(namespacedPath("v1", "secrets", s3Namespace, s3Secret), patch)
 	return err
 }
@@ -226,13 +226,13 @@ func migrateJobCreatePath() string {
 // seaweedfs-ingress admits port 8333 from every pod in every namespace
 // (namespaceSelector {}), and the old storage's policies do the same for
 // its port.
-func migrateJob(oldServer, mode string, final bool) map[string]interface{} {
-	secretEnv := func(name, secret, key string) map[string]interface{} {
-		return map[string]interface{}{"name": name, "valueFrom": map[string]interface{}{"secretKeyRef": map[string]interface{}{"name": secret, "key": key}}}
+func migrateJob(oldServer, mode string, final bool) map[string]any {
+	secretEnv := func(name, secret, key string) map[string]any {
+		return map[string]any{"name": name, "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": secret, "key": key}}}
 	}
-	remote := func(name, provider, endpoint, secret string) []map[string]interface{} {
+	remote := func(name, provider, endpoint, secret string) []map[string]any {
 		prefix := "RCLONE_CONFIG_" + name + "_"
-		return []map[string]interface{}{
+		return []map[string]any{
 			{"name": prefix + "TYPE", "value": "s3"},
 			{"name": prefix + "PROVIDER", "value": provider},
 			{"name": prefix + "ENDPOINT", "value": endpoint},
@@ -243,29 +243,29 @@ func migrateJob(oldServer, mode string, final bool) map[string]interface{} {
 	}
 	env := append(remote("OLD", rcloneProvider(oldServer), "http://"+legacyS3Host(), migrateSourceSecret), remote("NEW", "SeaweedFS", s3Endpoint(), s3Secret)...)
 	// The assigned UID has no home directory in the image.
-	env = append(env, map[string]interface{}{"name": "HOME", "value": "/tmp"}, map[string]interface{}{"name": "COPY_MODE", "value": mode})
-	podLabels := map[string]interface{}{"app": migrateAppLabel, managedByLabelKey: managedByLabelValue}
-	return map[string]interface{}{
+	env = append(env, map[string]any{"name": "HOME", "value": "/tmp"}, map[string]any{"name": "COPY_MODE", "value": mode})
+	podLabels := map[string]any{"app": migrateAppLabel, managedByLabelKey: managedByLabelValue}
+	return map[string]any{
 		"apiVersion": "batch/v1", "kind": "Job",
 		"metadata": migrateJobMeta(final),
-		"spec": map[string]interface{}{
+		"spec": map[string]any{
 			"backoffLimit":            0,
 			"activeDeadlineSeconds":   migrateJobDeadline,
 			"ttlSecondsAfterFinished": migrateJobTTL,
-			"template": map[string]interface{}{
-				"metadata": map[string]interface{}{"labels": podLabels},
-				"spec": map[string]interface{}{
+			"template": map[string]any{
+				"metadata": map[string]any{"labels": podLabels},
+				"spec": map[string]any{
 					"restartPolicy": "Never",
 					// The copy needs no Kubernetes API access.
 					"automountServiceAccountToken": false,
-					"containers": []map[string]interface{}{{
+					"containers": []map[string]any{{
 						"name":    migrateContainer,
 						"image":   rcloneImage(),
 						"command": []string{"/bin/sh", "-c", migrateScript},
 						"env":     env,
-						"resources": map[string]interface{}{
-							"requests": map[string]interface{}{"cpu": "100m", "memory": "128Mi"},
-							"limits":   map[string]interface{}{"cpu": "500m", "memory": "512Mi"},
+						"resources": map[string]any{
+							"requests": map[string]any{"cpu": "100m", "memory": "128Mi"},
+							"limits":   map[string]any{"cpu": "500m", "memory": "512Mi"},
 						},
 						"securityContext":          restrictedSecurityContext(),
 						"terminationMessagePolicy": "File",
@@ -309,7 +309,7 @@ func (r copyResult) differPaths() []string {
 		return nil
 	}
 	var paths []string
-	for _, p := range strings.Split(strings.ToValidUTF8(string(raw), "?"), "\n") {
+	for p := range strings.SplitSeq(strings.ToValidUTF8(string(raw), "?"), "\n") {
 		if p = strings.TrimSpace(p); p != "" {
 			paths = append(paths, p)
 		}
@@ -760,10 +760,10 @@ func writeMigrateSource(c *Client, keys s3Keys) error {
 			return fmt.Errorf("delete an earlier run's copy: %w", err)
 		}
 	}
-	data, _ := json.Marshal(map[string]interface{}{
+	data, _ := json.Marshal(map[string]any{
 		"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-		"metadata":   map[string]interface{}{"name": migrateSourceSecret, "namespace": s3Namespace, "labels": toolLabels()},
-		"stringData": map[string]interface{}{s3AccessKeyField: keys.AccessKey, s3SecretKeyField: keys.SecretKey},
+		"metadata":   map[string]any{"name": migrateSourceSecret, "namespace": s3Namespace, "labels": toolLabels()},
+		"stringData": map[string]any{s3AccessKeyField: keys.AccessKey, s3SecretKeyField: keys.SecretKey},
 	})
 	_, _, err = c.post(withToolFieldManager(namespacedPath("v1", "secrets", s3Namespace, "")), data)
 	return err
@@ -782,9 +782,9 @@ func ownMigrateSource(c *Client, jobUID string) error {
 	if !found || !meta.hasToolLabel() {
 		return fmt.Errorf("secret %s/%s is gone or not this tool's", s3Namespace, migrateSourceSecret)
 	}
-	patch, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{
+	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{
 		"resourceVersion": meta.ResourceVersion,
-		"ownerReferences": []interface{}{map[string]interface{}{"apiVersion": "batch/v1", "kind": "Job", "name": migrateJobName, "uid": jobUID}},
+		"ownerReferences": []any{map[string]any{"apiVersion": "batch/v1", "kind": "Job", "name": migrateJobName, "uid": jobUID}},
 	}})
 	_, _, err = c.patch(migrateSourcePath(), patch)
 	return err
@@ -816,10 +816,10 @@ type migrateJobInfo struct {
 
 // migrateJobMeta is the copy Job's metadata; a removal's final copy carries
 // finalCopyAnnotation.
-func migrateJobMeta(final bool) map[string]interface{} {
-	meta := map[string]interface{}{"name": migrateJobName, "namespace": s3Namespace, "labels": toolLabels()}
+func migrateJobMeta(final bool) map[string]any {
+	meta := map[string]any{"name": migrateJobName, "namespace": s3Namespace, "labels": toolLabels()}
 	if final {
-		meta["annotations"] = map[string]interface{}{finalCopyAnnotation: "true"}
+		meta["annotations"] = map[string]any{finalCopyAnnotation: "true"}
 	}
 	return meta
 }
@@ -1096,12 +1096,12 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 				return failed(fmt.Sprintf("Secret %s/%s exists and was not created by this tool, so pipeline server %s/%s was not moved and nothing was changed.", project, s.name, project, d.Meta.Name), "not_managed", "foreign "+s.what)
 			}
 		}
-		patch, _ := json.Marshal(map[string]interface{}{
-			"metadata": map[string]interface{}{"resourceVersion": d.Meta.ResourceVersion, "labels": toolLabels(),
-				"annotations": map[string]interface{}{dspaConnectionAnnotation: connectionSecretName}},
-			"spec": map[string]interface{}{"objectStorage": map[string]interface{}{"externalStorage": map[string]interface{}{
+		patch, _ := json.Marshal(map[string]any{
+			"metadata": map[string]any{"resourceVersion": d.Meta.ResourceVersion, "labels": toolLabels(),
+				"annotations": map[string]any{dspaConnectionAnnotation: connectionSecretName}},
+			"spec": map[string]any{"objectStorage": map[string]any{"externalStorage": map[string]any{
 				"host": s3Host(),
-				"s3CredentialsSecret": map[string]interface{}{
+				"s3CredentialsSecret": map[string]any{
 					"secretName": dspaSecretName,
 					"accessKey":  s3AccessKeyField,
 					"secretKey":  s3SecretKeyField,
@@ -1156,7 +1156,7 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 		if len(moved) > 0 {
 			done = strings.Join(moved, ", ")
 		}
-		// The operation's deadline (15 minutes, pkg/api/handlers.go) can
+		// The operation's deadline (15 minutes, pkg/api/auth_handlers.go) can
 		// come before the last wait ends: setup, a copy wait of
 		// MigrateCopyTimeout and a MigrateRepointTimeout wait per server.
 		// A server is moved only when its whole wait fits, so a run never
@@ -1230,7 +1230,7 @@ func waitObjectStore(c *Client, project, name string, generation int64) (dspaInf
 	for {
 		list, err := listDSPAs(cc, project)
 		if err != nil && ctx.Err() == nil && !IsNetworkError(err) {
-			return last, fmt.Errorf("its status cannot be read: %v", err)
+			return last, fmt.Errorf("its status cannot be read: %w", err)
 		}
 		for _, d := range list {
 			if d.Meta.Name != name {
@@ -1483,8 +1483,8 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 	}
 
 	nsMsg := m.removeNamespace(deleteNamespace)
-	if strings.HasPrefix(nsMsg, "!") {
-		return m.fail("namespace", strings.TrimPrefix(nsMsg, "!"), "partial_failure", "namespace delete failed")
+	if after, ok := strings.CutPrefix(nsMsg, "!"); ok {
+		return m.fail("namespace", after, "partial_failure", "namespace delete failed")
 	}
 	var msg string
 	if resume {

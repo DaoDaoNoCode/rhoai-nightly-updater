@@ -36,14 +36,14 @@ func repairGuardMock(w http.ResponseWriter, r *http.Request) bool {
 // schema.
 func dscCRDWith(t *testing.T, names ...string) string {
 	t.Helper()
-	var crd map[string]interface{}
+	var crd map[string]any
 	if err := json.Unmarshal([]byte(testDSCCRD()), &crd); err != nil {
 		t.Fatal(err)
 	}
-	version := crd["spec"].(map[string]interface{})["versions"].([]interface{})[0].(map[string]interface{})
-	root := version["schema"].(map[string]interface{})["openAPIV3Schema"].(map[string]interface{})
-	spec := root["properties"].(map[string]interface{})["spec"].(map[string]interface{})
-	components := spec["properties"].(map[string]interface{})["components"].(map[string]interface{})["properties"].(map[string]interface{})
+	version := crd["spec"].(map[string]any)["versions"].([]any)[0].(map[string]any)
+	root := version["schema"].(map[string]any)["openAPIV3Schema"].(map[string]any)
+	spec := root["properties"].(map[string]any)["spec"].(map[string]any)
+	components := spec["properties"].(map[string]any)["components"].(map[string]any)["properties"].(map[string]any)
 	for _, n := range names {
 		components[n] = components["dashboard"]
 	}
@@ -122,7 +122,7 @@ func TestDSCCompatibility_PreviewFlagsBlockedRemovals(t *testing.T) {
 	patched := false
 	raw := `{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"my-dsc","resourceVersion":"42"},"spec":{"components":{"dashboard":{"managementState":"Managed"},"aipipelines":{"managementState":"Managed"},"mcplifecycleoperator":{"managementState":"Managed"},"trainingoperator":{"managementState":"Removed"}}}}`
 	c := dscRepairD3Server(t, raw, &patched, &mu)
-	var dsc map[string]interface{}
+	var dsc map[string]any
 	_ = json.Unmarshal([]byte(raw), &dsc)
 	result := checkDSCCompatibility(c, dsc)
 	if strings.Join(result.ResetRemovals, ",") != "mcplifecycleoperator" {

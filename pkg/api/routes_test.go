@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -80,12 +81,23 @@ func postJSONMethod(method, path, token, body string) *http.Request {
 // lastCompleted. Only the dry run, which changes nothing, uses
 // setOperationTarget instead.
 func TestEveryMutationHandlerBeginsItsOperation(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "handlers.go", nil, 0)
+	paths, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
+	var decls []ast.Decl
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decls = append(decls, file.Decls...)
+	}
 	checked := 0
-	for _, decl := range file.Decls {
+	for _, decl := range decls {
 		gen, ok := decl.(*ast.GenDecl)
 		if !ok || gen.Tok != token.VAR {
 			continue

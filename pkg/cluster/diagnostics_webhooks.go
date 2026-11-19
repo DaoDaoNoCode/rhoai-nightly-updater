@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -19,6 +20,48 @@ type staleConversion struct {
 	deadConversion
 	Module      string // DSC component the Service name points to, if any
 	ModuleState string
+	Objects     crdObjects
+	// ObjectsUnread says why Objects is crdObjectsUnknown.
+	ObjectsUnread string
+}
+
+// crdObjects is whether a CRD holds objects.
+type crdObjects int
+
+const (
+	crdObjectsUnknown crdObjects = iota
+	crdObjectsNone
+	crdObjectsPresent
+)
+
+// probeCRDObjects lists at most one object of the CRD in every namespace.
+// An empty list needs no conversion, so it answers even with the
+// conversion webhook down; a list that fails on the conversion webhook
+// proves an object exists (only objects are converted). This app may lack
+// the right to list the kind (403): then it cannot tell.
+func probeCRDObjects(c *Client, listPath string) (crdObjects, string) {
+	if listPath == "" {
+		return crdObjectsUnknown, "the CRD serves no version"
+	}
+	body, _, err := c.do(http.MethodGet, listPath, "", nil, url.Values{"limit": {"1"}})
+	switch {
+	case IsK8sError(err, http.StatusForbidden):
+		return crdObjectsUnknown, "this app may not list them"
+	case err != nil && strings.Contains(err.Error(), "conversion webhook"):
+		return crdObjectsPresent, ""
+	case err != nil:
+		return crdObjectsUnknown, err.Error()
+	}
+	var list struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return crdObjectsUnknown, "parse: " + err.Error()
+	}
+	if len(list.Items) == 0 {
+		return crdObjectsNone, ""
+	}
+	return crdObjectsPresent, ""
 }
 
 // findStaleConversions reports RHOAI CRDs whose conversion webhook Service is
@@ -63,6 +106,9 @@ func findStaleConversions(c *Client) ([]staleConversion, []string, error) {
 		}
 		out = append(out, sc)
 	}
+	parallelFor(len(out), 6, func(i int) {
+		out[i].Objects, out[i].ObjectsUnread = probeCRDObjects(c, out[i].ListPath)
+	})
 	return out, errs, nil
 }
 
@@ -178,23 +224,23 @@ func checkStaleWebhooks(c *Client) checkOutput {
 
 	if len(conversions) > 0 {
 		var evidence, affected []string
-		var hints []string
 		for _, sc := range conversions {
 			line := fmt.Sprintf("CRD %s: conversion Service %s (storedVersions %s)", sc.CRD, sc.Health.describe(sc.Service), strings.Join(sc.StoredVersions, ", "))
 			if sc.Module != "" {
 				line += fmt.Sprintf("; the Service belongs to DSC component %s, which is %s", sc.Module, nonEmpty(sc.ModuleState, "not set"))
-				if sc.ModuleState == "Removed" {
-					hints = append(hints, sc.Module)
-				}
+			}
+			switch sc.Objects {
+			case crdObjectsNone:
+				line += "; it holds no objects"
+			case crdObjectsPresent:
+				line += "; it holds objects"
+			default:
+				line += "; could not check whether it holds objects: " + sc.ObjectsUnread
 			}
 			evidence = append(evidence, line)
 			affected = append(affected, "CustomResourceDefinition "+sc.CRD)
 		}
-		fix := "Bring back the Service that serves the conversion, usually by setting the component that owns it to Managed again"
-		if len(hints) > 0 {
-			fix += fmt.Sprintf(" (here: %s)", strings.Join(hints, ", "))
-		}
-		fix += ". Then, if you do not need the objects, delete them and set the component back to Removed. Do not delete namespaces that contain these objects before this is fixed."
+		fix, technicalCmd := staleConversionFix(conversions)
 		out.problems = append(out.problems, Problem{
 			ID:       "stale-crd-conversion",
 			Severity: "critical",
@@ -205,7 +251,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 			AffectedObjects: affected,
 			Fix:             fix,
 			LearnMore:       "OLM's own source notes that a conversion webhook without its Service makes all requests for the CRD's objects fail and \"ultimately breaks kubernetes garbage collection\" (operator-lifecycle-manager olm/operator.go).",
-			TechnicalCmd:    "oc get crd -o custom-columns=NAME:.metadata.name,STRATEGY:.spec.conversion.strategy,SERVICE:.spec.conversion.webhook.clientConfig.service.name",
+			TechnicalCmd:    technicalCmd,
 		})
 	}
 
@@ -240,10 +286,75 @@ func checkStaleWebhooks(c *Client) checkOutput {
 	return out
 }
 
+// staleConversionFix is the stale-crd-conversion problem's advice and its
+// command. Removing a component leaves its CRDs (they get no owner) with
+// the conversion webhook its operator served, so setting the component to
+// Managed and back to Removed ends in the same state. A CRD that holds no
+// objects can be deleted instead: nothing uses it, and the operator
+// applies it again when its component is set to Managed. A CRD with
+// objects, whose component is on, or with no known component (the
+// operator's own CRDs, which OLM applies) needs its Service back.
+func staleConversionFix(conversions []staleConversion) (fix, technicalCmd string) {
+	var empty, unknown, held []string
+	var emptyOwners, heldOwners []string
+	for _, sc := range conversions {
+		on := sc.ModuleState == "Managed" || sc.ModuleState == "Unmanaged"
+		switch {
+		case on || sc.Module == "" || sc.Objects == crdObjectsPresent:
+			held = append(held, sc.CRD)
+			if sc.ModuleState == "Removed" && !slices.Contains(heldOwners, sc.Module) {
+				heldOwners = append(heldOwners, sc.Module)
+			}
+		case sc.Objects == crdObjectsNone:
+			empty = append(empty, sc.CRD)
+			if !slices.Contains(emptyOwners, sc.Module) {
+				emptyOwners = append(emptyOwners, sc.Module)
+			}
+		default:
+			unknown = append(unknown, sc.CRD)
+			if sc.ModuleState == "Removed" && !slices.Contains(heldOwners, sc.Module) {
+				heldOwners = append(heldOwners, sc.Module)
+			}
+		}
+	}
+	here := func(owners []string) string {
+		if len(owners) == 0 {
+			return ""
+		}
+		return " (here: " + strings.Join(owners, ", ") + ")"
+	}
+	restore := "bring back the Service that serves the conversion, usually by setting the component that owns it to Managed again" + here(heldOwners) +
+		". Then, if you do not need the objects, delete them, then the CRDs, before you set the component back to Removed: removing a component leaves its CRDs with this conversion webhook. " +
+		"Do not delete namespaces that contain these objects before this is fixed."
+	var parts []string
+	if len(empty) > 0 {
+		parts = append(parts, fmt.Sprintf("%s %s no objects, so %s can be deleted: `oc delete crd %s`. The operator applies %s again when the component%s is set to Managed again.",
+			verb(len(empty), "CRD", "CRDs")+" "+strings.Join(empty, ", "), verb(len(empty), "holds", "hold"), verb(len(empty), "it", "they"),
+			strings.Join(empty, " "), verb(len(empty), "it", "them"), here(emptyOwners)))
+	}
+	if len(unknown) > 0 {
+		parts = append(parts, fmt.Sprintf("This app could not check whether %s %s objects. Check with `oc get %s -A`: if it lists none, delete %s (`oc delete crd %s`); otherwise %s",
+			verb(len(unknown), "CRD", "CRDs")+" "+strings.Join(unknown, ", "), verb(len(unknown), "holds", "hold"), strings.Join(unknown, ","),
+			verb(len(unknown), "it", "them"), strings.Join(unknown, " "), restore))
+	}
+	if len(held) > 0 {
+		parts = append(parts, fmt.Sprintf("For %s: %s", verb(len(held), "CRD", "CRDs")+" "+strings.Join(held, ", "), restore))
+	}
+	switch {
+	case len(held) > 0:
+		technicalCmd = "oc get crd -o custom-columns=NAME:.metadata.name,STRATEGY:.spec.conversion.strategy,SERVICE:.spec.conversion.webhook.clientConfig.service.name"
+	case len(unknown) > 0:
+		technicalCmd = "oc get " + strings.Join(unknown, ",") + " -A"
+	default:
+		technicalCmd = "oc delete crd " + strings.Join(empty, " ")
+	}
+	return strings.Join(parts, " "), technicalCmd
+}
+
 // deleteExact deletes an object only if it still has the UID and
 // resourceVersion that were inspected (DeleteOptions preconditions).
 func deleteExact(c *Client, path, uid, resourceVersion string) error {
-	opts := map[string]interface{}{"apiVersion": "v1", "kind": "DeleteOptions"}
+	opts := map[string]any{"apiVersion": "v1", "kind": "DeleteOptions"}
 	pre := map[string]string{}
 	if uid != "" {
 		pre["uid"] = uid
@@ -275,7 +386,7 @@ func applyFixDeleteStaleWebhooks(c *Client) (*types.OperationResponse, error) {
 
 	if len(d.Deleted) > 0 {
 		RecordActivity(c, types.ActivityEntry{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			Timestamp: nowRFC3339(),
 			User:      getUser(c),
 			Action:    "fix-delete-stale-webhooks",
 			Detail:    "deleted leftover webhook configurations: " + strings.Join(d.Deleted, ", "),
@@ -354,7 +465,7 @@ func listOperatorCSVs(c *Client) ([]operatorCSV, error) {
 func parallelFor(n, limit int, fn func(i int)) {
 	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(i int) {

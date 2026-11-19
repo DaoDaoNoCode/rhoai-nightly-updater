@@ -45,10 +45,10 @@ func TestUpdateGitOpsProfile_InstallsWhatTheCatalogServes(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if spec := f.catalog["spec"].(map[string]interface{}); spec["image"] != gitOpsImage {
+	if spec := f.catalog["spec"].(map[string]any); spec["image"] != gitOpsImage {
 		t.Fatalf("catalog spec = %v", spec)
 	}
-	if ch := f.sub["spec"].(map[string]interface{})["channel"]; ch != gitOpsChannel {
+	if ch := f.sub["spec"].(map[string]any)["channel"]; ch != gitOpsChannel {
 		t.Fatalf("channel = %v, want Git's %s", ch, gitOpsChannel)
 	}
 	if lastStatus(events(), "verify_installplan") != "success" {
@@ -64,7 +64,7 @@ func TestUpdateGitOpsProfile_RefusesAnUnmanagedCatalog(t *testing.T) {
 		"nothing managed": func() *fakeOLM { return newFakeOLM(t).installed("rhods-operator.3.6.0", nil) },
 		"subscription only": func() *fakeOLM {
 			f := servesGitOpsPolicy(t, gitOpsFake(t))
-			f.catalog["metadata"] = map[string]interface{}{}
+			f.catalog["metadata"] = map[string]any{}
 			return f
 		},
 		"no catalog": func() *fakeOLM {
@@ -92,10 +92,10 @@ func TestUpdateGitOpsProfile_RefusesAMissingOperatorGroup(t *testing.T) {
 	for name, setup := range map[string]func(f *fakeOLM){
 		"no OperatorGroup": func(f *fakeOLM) { f.operatorGrps = nil },
 		"two OperatorGroups": func(f *fakeOLM) {
-			f.operatorGrps = append(f.operatorGrps, map[string]interface{}{"metadata": map[string]interface{}{"name": "other"}, "spec": map[string]interface{}{}})
+			f.operatorGrps = append(f.operatorGrps, map[string]any{"metadata": map[string]any{"name": "other"}, "spec": map[string]any{}})
 		},
 		"not global": func(f *fakeOLM) {
-			f.operatorGrps = []interface{}{map[string]interface{}{"metadata": map[string]interface{}{"name": "rhods-operator"}, "spec": map[string]interface{}{"targetNamespaces": []interface{}{SubNS}}}}
+			f.operatorGrps = []any{map[string]any{"metadata": map[string]any{"name": "rhods-operator"}, "spec": map[string]any{"targetNamespaces": []any{SubNS}}}}
 		},
 		"no namespace": func(f *fakeOLM) {
 			f.intercept = func(_ *fakeOLM, w http.ResponseWriter, r *http.Request) bool {
@@ -184,9 +184,9 @@ func TestUpdateDryRunGitOpsProfile(t *testing.T) {
 // the restore writes only what the profile may write.
 func TestUpdateGitOpsProfile_RestoreStaysInsideTheProfile(t *testing.T) {
 	f := servesGitOpsPolicy(t, gitOpsFake(t))
-	f.onSubscribe = func(f *fakeOLM, _ map[string]interface{}) {
-		f.installPlans["install-new"] = map[string]interface{}{"spec": map[string]interface{}{"clusterServiceVersionNames": []string{gitOpsCSV}}, "status": map[string]interface{}{"phase": "Failed"}}
-		f.sub["status"] = map[string]interface{}{"installPlanRef": map[string]interface{}{"name": "install-new"}, "state": "UpgradePending"}
+	f.onSubscribe = func(f *fakeOLM, _ map[string]any) {
+		f.installPlans["install-new"] = map[string]any{"spec": map[string]any{"clusterServiceVersionNames": []string{gitOpsCSV}}, "status": map[string]any{"phase": "Failed"}}
+		f.sub["status"] = map[string]any{"installPlanRef": map[string]any{"name": "install-new"}, "state": "UpgradePending"}
 	}
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success {
@@ -202,20 +202,20 @@ func TestUpdateGitOpsProfile_RestoreStaysInsideTheProfile(t *testing.T) {
 	if f.sub == nil {
 		t.Fatal("the Subscription was not restored")
 	}
-	if ann, _ := f.sub["metadata"].(map[string]interface{})["annotations"].(map[string]interface{}); ann[argoTrackingAnnotation] == nil {
+	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argoTrackingAnnotation] == nil {
 		t.Fatalf("the restored Subscription lost Argo CD's tracking: %v", f.sub["metadata"])
 	}
 }
 
 // gitOpsSubscriptionConfig sets the config of the fake's Subscription.
-func gitOpsSubscriptionConfig(f *fakeOLM, config map[string]interface{}) {
-	f.sub["spec"].(map[string]interface{})["config"] = config
+func gitOpsSubscriptionConfig(f *fakeOLM, config map[string]any) {
+	f.sub["spec"].(map[string]any)["config"] = config
 }
 
-func relatedImageConfig() map[string]interface{} {
-	return map[string]interface{}{"env": []interface{}{
-		map[string]interface{}{"name": "DISABLE_DSC_CONFIG", "value": "true"},
-		map[string]interface{}{"name": "RELATED_IMAGE_ODH_DASHBOARD_IMAGE", "value": "quay.io/evil/dashboard:1"},
+func relatedImageConfig() map[string]any {
+	return map[string]any{"env": []any{
+		map[string]any{"name": "DISABLE_DSC_CONFIG", "value": "true"},
+		map[string]any{"name": "RELATED_IMAGE_ODH_DASHBOARD_IMAGE", "value": "quay.io/evil/dashboard:1"},
 	}}
 }
 
@@ -227,17 +227,17 @@ func TestUpdateGitOpsProfile_RefusesWhatThePolicyWouldRefuse(t *testing.T) {
 	for name, setup := range map[string]func(f *fakeOLM){
 		"RELATED_IMAGE in Git's config": func(f *fakeOLM) { gitOpsSubscriptionConfig(f, relatedImageConfig()) },
 		"volumes in Git's config": func(f *fakeOLM) {
-			gitOpsSubscriptionConfig(f, map[string]interface{}{"volumes": []interface{}{map[string]interface{}{"name": "v"}}})
+			gitOpsSubscriptionConfig(f, map[string]any{"volumes": []any{map[string]any{"name": "v"}}})
 		},
 		// Argo CD manages only the catalog; the Subscription installs from
 		// redhat-operators, so the restore could not re-apply it.
 		"catalog only, Subscription on redhat-operators": func(f *fakeOLM) {
-			f.sub["metadata"].(map[string]interface{})["annotations"] = map[string]interface{}{}
-			f.sub["spec"].(map[string]interface{})["source"] = "redhat-operators"
+			f.sub["metadata"].(map[string]any)["annotations"] = map[string]any{}
+			f.sub["spec"].(map[string]any)["source"] = "redhat-operators"
 		},
 		"another sourceNamespace": func(f *fakeOLM) {
-			f.sub["metadata"].(map[string]interface{})["annotations"] = map[string]interface{}{}
-			f.sub["spec"].(map[string]interface{})["sourceNamespace"] = "other-catalogs"
+			f.sub["metadata"].(map[string]any)["annotations"] = map[string]any{}
+			f.sub["spec"].(map[string]any)["sourceNamespace"] = "other-catalogs"
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -259,7 +259,7 @@ func TestUpdateGitOpsProfile_RefusesWhatThePolicyWouldRefuse(t *testing.T) {
 // manages.
 func TestUpdateGitOpsProfile_CatalogOnlyManaged(t *testing.T) {
 	f := servesGitOpsPolicy(t, gitOpsFake(t))
-	f.sub["metadata"].(map[string]interface{})["annotations"] = map[string]interface{}{}
+	f.sub["metadata"].(map[string]any)["annotations"] = map[string]any{}
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || !result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
@@ -325,7 +325,7 @@ func TestUpdateGitOpsProfile_SubscriptionReplacedBeforeItsDeletion(t *testing.T)
 	subPath := subscriptionPath()
 	f.intercept = func(f *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
 		if r.Method == http.MethodDelete && r.URL.Path == subPath && f.sub != nil {
-			f.sub["metadata"].(map[string]interface{})["uid"] = "uid-sub-replacement"
+			f.sub["metadata"].(map[string]any)["uid"] = "uid-sub-replacement"
 		}
 		return false
 	}
@@ -334,9 +334,9 @@ func TestUpdateGitOpsProfile_SubscriptionReplacedBeforeItsDeletion(t *testing.T)
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	f.mu.Lock()
-	var uid interface{}
+	var uid any
 	if f.sub != nil {
-		uid = f.sub["metadata"].(map[string]interface{})["uid"]
+		uid = f.sub["metadata"].(map[string]any)["uid"]
 	}
 	f.mu.Unlock()
 	if uid != "uid-sub-replacement" {
@@ -354,7 +354,7 @@ func TestUpdateGitOpsProfile_PolicyChangesWhileUpdateRuns(t *testing.T) {
 		if !changed && r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/installplans") {
 			changed = true
 			p := f.admission[clusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicies", testGitOpsPolicyName)]
-			p["spec"].(map[string]interface{})["variables"] = []interface{}{map[string]interface{}{"name": "allowedEnv", "expression": "'OTHER'.split(',')"}}
+			p["spec"].(map[string]any)["variables"] = []any{map[string]any{"name": "allowedEnv", "expression": "'OTHER'.split(',')"}}
 		}
 		return false
 	}

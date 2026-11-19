@@ -92,17 +92,17 @@ func putReadyManagedS3(f *resourceFake) {
 // readyAfterApply makes the SeaweedFS deployment report a ready rollout of
 // the current generation, like the deployment controller would.
 func readyAfterApply(f *resourceFake) {
-	f.onGet = func(k fakeKey, obj map[string]interface{}) {
+	f.onGet = func(k fakeKey, obj map[string]any) {
 		if k.plural == "deployments" && k.ns == s3Namespace && k.name == s3Deployment {
-			obj["status"] = map[string]interface{}{"observedGeneration": 1, "replicas": 1, "readyReplicas": 1, "updatedReplicas": 1}
+			obj["status"] = map[string]any{"observedGeneration": 1, "replicas": 1, "readyReplicas": 1, "updatedReplicas": 1}
 		}
 	}
 }
 
 func notReadyAfterApply(f *resourceFake) {
-	f.onGet = func(k fakeKey, obj map[string]interface{}) {
+	f.onGet = func(k fakeKey, obj map[string]any) {
 		if k.plural == "deployments" && k.ns == s3Namespace && k.name == s3Deployment {
-			obj["status"] = map[string]interface{}{"observedGeneration": 1, "replicas": 1, "readyReplicas": 0, "updatedReplicas": 1}
+			obj["status"] = map[string]any{"observedGeneration": 1, "replicas": 1, "readyReplicas": 0, "updatedReplicas": 1}
 		}
 	}
 }
@@ -140,13 +140,13 @@ func TestSetupS3Storage_FreshClusterUsesTheNewNamesLabelsEverythingAndWaitsForRe
 		if obj == nil {
 			t.Fatalf("%s was not created", path)
 		}
-		labels, _ := obj["metadata"].(map[string]interface{})["labels"].(map[string]interface{})
+		labels, _ := obj["metadata"].(map[string]any)["labels"].(map[string]any)
 		if labels[managedByLabelKey] != managedByLabelValue {
 			t.Errorf("%s lacks the ownership label: %v", path, labels)
 		}
 	}
-	nsFields := f.get(s3NSPath)["metadata"].(map[string]interface{})["managedFields"].([]interface{})
-	if nsFields[0].(map[string]interface{})["manager"] != toolFieldManager {
+	nsFields := f.get(s3NSPath)["metadata"].(map[string]any)["managedFields"].([]any)
+	if nsFields[0].(map[string]any)["manager"] != toolFieldManager {
 		t.Errorf("namespace POST did not set fieldManager: %v", nsFields)
 	}
 	// A fresh install never touches, or names, the earlier storage.
@@ -162,16 +162,16 @@ func TestSetupS3Storage_FreshClusterUsesTheNewNamesLabelsEverythingAndWaitsForRe
 		Spec struct {
 			Template struct {
 				Spec struct {
-					SecurityContext map[string]interface{} `json:"securityContext"`
+					SecurityContext map[string]any `json:"securityContext"`
 					Volumes         []struct {
 						PVC struct {
 							ClaimName string `json:"claimName"`
 						} `json:"persistentVolumeClaim"`
 					} `json:"volumes"`
 					Containers []struct {
-						Image           string                 `json:"image"`
-						Args            []string               `json:"args"`
-						SecurityContext map[string]interface{} `json:"securityContext"`
+						Image           string         `json:"image"`
+						Args            []string       `json:"args"`
+						SecurityContext map[string]any `json:"securityContext"`
 						Env             []struct {
 							Name      string          `json:"name"`
 							Value     string          `json:"value"`
@@ -277,14 +277,14 @@ func TestSetupS3Storage_ImageOverride(t *testing.T) {
 	}
 }
 
-// Variables of earlier versions are not used any more; setup says so.
-func TestSetupS3Storage_NamesRetiredVariables(t *testing.T) {
+// Variables retired in 3.0.0 are not read.
+func TestSetupS3Storage_IgnoresRetiredVariables(t *testing.T) {
 	fastS3Timings(t)
 	t.Setenv("MINIO_ROOT_USER", "someone")
 	f, c := newResourceFake(t)
 	readyAfterApply(f)
 	resp, _ := SetupS3Storage(c)
-	if !resp.Success || !strings.Contains(strings.Join(resp.Logs, "\n"), "MINIO_ROOT_USER is set but no longer used") {
+	if !resp.Success {
 		t.Fatalf("setup = %+v", resp)
 	}
 	raw, _ := json.Marshal(f.get(s3SecretPath))
@@ -769,9 +769,9 @@ func TestTeardownS3Storage_DeleteNamespace(t *testing.T) {
 		f, c := newResourceFake(t)
 		putDeployedS3(f)
 		putToolNamespace(f)
-		f.onGet = func(k fakeKey, obj map[string]interface{}) {
+		f.onGet = func(k fakeKey, obj map[string]any) {
 			if k.plural == "namespaces" && k.name == s3Namespace {
-				obj["metadata"].(map[string]interface{})["uid"] = "uid-seen-by-check"
+				obj["metadata"].(map[string]any)["uid"] = "uid-seen-by-check"
 			}
 		}
 		resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{DeleteNamespace: true})
@@ -848,9 +848,9 @@ func TestTeardownS3Storage_DeleteUsesUIDPrecondition(t *testing.T) {
 	putDeployedS3(f)
 	// The ownership check sees a different object than the one the DELETE
 	// reaches, as if the Deployment had been recreated in between.
-	f.onGet = func(k fakeKey, obj map[string]interface{}) {
+	f.onGet = func(k fakeKey, obj map[string]any) {
 		if k.plural == "deployments" && k.name == s3Deployment {
-			obj["metadata"].(map[string]interface{})["uid"] = "uid-seen-by-check"
+			obj["metadata"].(map[string]any)["uid"] = "uid-seen-by-check"
 		}
 	}
 	resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{})
@@ -925,7 +925,7 @@ func TestWaitS3Ready_StalledAPIDoesNotOverrunDeadline(t *testing.T) {
 	c := stallServer(t, 0)
 	start := clk.Now()
 	_, err := waitS3Ready(c, seaweedfsDefaultImage)
-	if err != errS3NotReady {
+	if !errors.Is(err, errS3NotReady) {
 		t.Fatalf("err = %v, want errS3NotReady", err)
 	}
 	if d := clk.Since(start); d != 200*time.Millisecond {

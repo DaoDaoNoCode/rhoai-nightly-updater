@@ -17,34 +17,34 @@ func fakeTeardowns(t *testing.T, fail map[string]*types.OperationResponse) *[]st
 		cleanupPipelineServer, cleanupStorage, cleanupMLflow, cleanupModels, cleanupGateway, cleanupPlayground = ps, st, ml, md, gw, pg
 	})
 	var ran []string
-	result := func(id, msg string) (*types.OperationResponse, error) {
+	result := func(id, msg string) *types.OperationResponse {
 		ran = append(ran, id)
 		if r := fail[id]; r != nil {
-			return r, nil
+			return r
 		}
-		return &types.OperationResponse{Success: true, Message: msg}, nil
+		return &types.OperationResponse{Success: true, Message: msg}
 	}
 	cleanupPipelineServer = func(_ *Client, project string) (*types.OperationResponse, error) {
-		return result(CleanupStepID("pipeline-server", project), "Pipeline server removed from '"+project+"'.")
+		return result(CleanupStepID("pipeline-server", project), "Pipeline server removed from '"+project+"'."), nil
 	}
 	cleanupStorage = func(_ *Client, req types.S3TeardownRequest) (*types.OperationResponse, error) {
 		if req.DeleteNamespace {
-			return result("storage", "S3 storage and namespace removed.")
+			return result("storage", "S3 storage and namespace removed."), nil
 		}
-		return result("storage", "S3 storage removed.")
+		return result("storage", "S3 storage removed."), nil
 	}
-	cleanupMLflow = func(*Client) (*types.OperationResponse, error) { return result("mlflow", "MLflow removed.") }
+	cleanupMLflow = func(*Client) (*types.OperationResponse, error) { return result("mlflow", "MLflow removed."), nil }
 	cleanupPlayground = func(c *Client, project string) (*types.OperationResponse, error) {
 		if c == nil || !c.asUser {
 			t.Errorf("playground teardown of %s does not get the user's client", project)
 		}
-		return result(CleanupStepID("playground", project), "Playground deleted from '"+project+"'.")
+		return result(CleanupStepID("playground", project), "Playground deleted from '"+project+"'."), nil
 	}
 	cleanupModels = func(_ *Client, project string) (*types.OperationResponse, error) {
-		return result(CleanupStepID("model", project), "Model deleted from '"+project+"'.")
+		return result(CleanupStepID("model", project), "Model deleted from '"+project+"'."), nil
 	}
 	cleanupGateway = func(*Client, bool) (*types.OperationResponse, error) {
-		return result("inference-gateway", "Inference gateway deleted.")
+		return result("inference-gateway", "Inference gateway deleted."), nil
 	}
 	return &ran
 }

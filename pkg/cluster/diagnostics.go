@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -355,7 +356,7 @@ func checkRHOAIPods(c *Client) checkOutput {
 			nsErr = fmt.Errorf("parse namespace list: %w", err)
 		}
 		for _, item := range list.Items {
-			if item.Metadata.Name != SubNS && !containsString(namespaces, item.Metadata.Name) {
+			if item.Metadata.Name != SubNS && !slices.Contains(namespaces, item.Metadata.Name) {
 				namespaces = append(namespaces, item.Metadata.Name)
 			}
 		}
@@ -549,7 +550,7 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 			Severity:     fc.severity,
 			Title:        fmt.Sprintf("OLM reports %s for the operator Subscription", cond.Type),
 			Description:  fmt.Sprintf("Subscription %s (source %s, channel %s) has condition %s=True.", SubName, sub.Source, sub.Channel, cond.Type),
-			Evidence:     []string{fmt.Sprintf("%s (%s): %s", cond.Type, cond.Reason, truncate(cond.Message, 600))},
+			Evidence:     []string{fmt.Sprintf("%s (%s): %s", cond.Type, cond.Reason, truncateText(cond.Message, 600))},
 			Fix:          subscriptionConditionFix(cond.Type),
 			TechnicalCmd: "oc get subscription " + SubName + " -n " + SubNS + " -o jsonpath='{.status.conditions}'",
 		})
@@ -685,7 +686,7 @@ func checkCSVHealth(c *Client) checkOutput {
 				} `json:"status"`
 			}
 			if json.Unmarshal(body, &full) == nil && (full.Status.Reason != "" || full.Status.Message != "") {
-				evidence = append(evidence, fmt.Sprintf("Reason %s: %s", full.Status.Reason, truncate(full.Status.Message, 600)))
+				evidence = append(evidence, fmt.Sprintf("Reason %s: %s", full.Status.Reason, truncateText(full.Status.Message, 600)))
 			}
 		}
 		out.check = CheckResult{Name: name, Status: "fail", Detail: fmt.Sprintf("Operator installation failed (%s)", csv.Name)}
@@ -852,7 +853,7 @@ func checkInstallPlanHealth(c *Client) checkOutput {
 		sort.Strings(affected)
 		evidence = append(evidence, fmt.Sprintf("Install plan: %s, Phase: Failed, CSVs: %s", latest.Metadata.Name, strings.Join(latest.Spec.ClusterServiceVersionNames, ", ")))
 		if reason != "" {
-			evidence = append(evidence, fmt.Sprintf("Reason: %s", truncate(reason, 600)))
+			evidence = append(evidence, fmt.Sprintf("Reason: %s", truncateText(reason, 600)))
 		}
 		for _, k := range kept {
 			evidence = append(evidence, "Not deleted automatically: "+k)
@@ -861,7 +862,7 @@ func checkInstallPlanHealth(c *Client) checkOutput {
 			ID:           "installplan-failed",
 			Severity:     "critical",
 			Title:        "The install plan failed",
-			Description:  fmt.Sprintf("OLM could not execute install plan %s. %s", latest.Metadata.Name, truncate(reason, 300)),
+			Description:  fmt.Sprintf("OLM could not execute install plan %s. %s", latest.Metadata.Name, truncateText(reason, 300)),
 			Evidence:     evidence,
 			Fix:          "Update to a newer nightly or use Refresh operator. If the same build fails again, the build itself is broken.",
 			LearnMore:    "OLM documentation, \"Opting into UnsafeFailForward upgrades\": to recover from a failed InstallPlan, the user deletes it and a new InstallPlan is generated.",
@@ -1215,7 +1216,7 @@ func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error
 
 	if len(deleted) > 0 {
 		RecordActivity(c, types.ActivityEntry{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			Timestamp: nowRFC3339(),
 			User:      getUser(c),
 			Action:    "fix-delete-stale-installplans",
 			Detail:    "deleted Failed install plans: " + strings.Join(deleted, ", "),
@@ -1299,7 +1300,7 @@ func dataScienceClusterPath(c *Client) (string, error) {
 	if read.State == DSCStateNoCRD {
 		return "", fmt.Errorf("the DataScienceCluster API is not installed")
 	}
-	meta, _ := read.Object["metadata"].(map[string]interface{})
+	meta, _ := read.Object["metadata"].(map[string]any)
 	name, _ := meta["name"].(string)
 	if name == "" {
 		return "", fmt.Errorf("no DataScienceCluster exists")

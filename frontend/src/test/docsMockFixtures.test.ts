@@ -16,24 +16,17 @@ const here = dirname(fileURLToPath(import.meta.url));
 const SRC = resolve(here, "..");
 const SCENARIOS = resolve(SRC, "../../docs/tools/mock/scenarios.mjs");
 
-const IMPORTED = ["StatusResponse", "OperationStatusResponse", "UserPermissions", "ComponentsResponse", "DSCManager", "DiagnosticResult", "DashboardState", "ResourcesStatus", "MaaSStatus", "MaaSActionId"];
+const IMPORTED = ["StatusResponse", "OperationStatusResponse", "UserPermissions", "ComponentsResponse", "DSCManager", "DiagnosticResult", "DashboardState", "ResourcesStatus", "MaaSStatus"];
 
 // What the backend sends (pkg/types) and types.ts does not declare yet; the
 // app does not read it, and the mock sends it as the backend does. Remove
 // an entry once types.ts has it.
-const TYPE_GAPS = `
-/** pkg/types MaaSAction.ID: also "change-database" (pkg/cluster maas_database.go). */
-type WithChangeDatabase<T> = T extends MaaSActionId ? T | "change-database"
-  : T extends (infer U)[] ? WithChangeDatabase<U>[]
-  : T extends object ? { [K in keyof T]: WithChangeDatabase<T[K]> } : T;
-`;
+const TYPE_GAPS = ``;
 
-/** The app's type for each read (services/api.ts), with the gaps above. */
+/** The app's type for each read (services/api), with the gaps above. */
 const TYPES: Record<string, string> = {
-  // pkg/types StatusResponse.CatalogPod.
-  "GET /api/status": "StatusResponse & { catalogPod?: unknown }",
-  // pkg/types OperationMarker.ID and BootID.
-  "GET /api/operation": "OperationStatusResponse & { interrupted?: { id?: string; bootId?: string } }",
+  "GET /api/status": "StatusResponse",
+  "GET /api/operation": "OperationStatusResponse",
   "GET /api/user/permissions": "UserPermissions",
   "GET /api/components": "ComponentsResponse",
   "GET /api/components/dsc": "DSCManager",
@@ -41,7 +34,7 @@ const TYPES: Record<string, string> = {
   "GET /api/dashboard/state": "DashboardState",
   "GET /api/resources/status": "ResourcesStatus",
   "GET /api/resources/projects": "{ projects: string[] | null }",
-  "GET /api/resources/maas": "WithChangeDatabase<MaaSStatus>",
+  "GET /api/resources/maas": "MaaSStatus",
   "GET /api/activity": "NonNullable<StatusResponse[\"activity\"]>",
 };
 

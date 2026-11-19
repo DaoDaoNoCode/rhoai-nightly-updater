@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -37,14 +38,14 @@ func pullSecretCountingClient(t *testing.T) (*Client, *atomic.Int32) {
 
 func relatedImages(n int, prefix string) []types.RelatedImage {
 	var images []types.RelatedImage
-	for i := 0; i < n; i++ {
+	for i := range n {
 		images = append(images, types.RelatedImage{Name: fmt.Sprint(i), Image: fmt.Sprintf("registry.redhat.io/rhoai/%s%d@%s", prefix, i, digestOf(i))})
 	}
 	return images
 }
 
 func labelFixture(f *fakeRegistry, n int) {
-	for i := 0; i < n; i++ {
+	for i := range n {
 		f.labels[digestOf(i)] = map[string]string{"vcs-ref": fmt.Sprintf("%040d", i), "git.url": "https://github.com/o/r", "build-date": "2026-10-01"}
 	}
 }
@@ -94,7 +95,7 @@ func TestResolveRelatedImageLabels_ConcurrentIdenticalRequestsShareFetches(t *te
 
 		f.gate.releaseUntilDone(func() {
 			var wg sync.WaitGroup
-			for k := 0; k < 3; k++ {
+			for range 3 {
 				wg.Go(func() { ResolveRelatedImageLabels(context.Background(), c, relatedImages(10, "dup")) })
 			}
 			wg.Wait()
@@ -109,8 +110,8 @@ func TestImageLabels_NoLabelsIsCachedBrieflyErrorsAreNot(t *testing.T) {
 	f := newFakeRegistry()
 	installFakeRegistry(t, f)
 	ref := "quay.io/rhoai/nolabels@" + digestOf(1)
-	for i := 0; i < 2; i++ {
-		if _, err := imageLabelsWithAuth(context.Background(), "a", ref, false); err != errNoImageLabels {
+	for range 2 {
+		if _, err := imageLabelsWithAuth(context.Background(), "a", ref, false); !errors.Is(err, errNoImageLabels) {
 			t.Fatalf("want errNoImageLabels, got %v", err)
 		}
 	}
@@ -120,7 +121,7 @@ func TestImageLabels_NoLabelsIsCachedBrieflyErrorsAreNot(t *testing.T) {
 
 	f.setStatus("quay-blob", 500)
 	ref2 := "quay.io/rhoai/flaky@" + digestOf(2)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if _, err := imageLabelsWithAuth(context.Background(), "a", ref2, false); err == nil {
 			t.Fatal("expected error")
 		}
@@ -180,7 +181,7 @@ func TestCachedQuayToken_ReusedPerCredentialAndRepo(t *testing.T) {
 	f := newFakeRegistry()
 	installFakeRegistry(t, f)
 	ctx := context.Background()
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if _, err := cachedQuayToken(ctx, "cred-a", quayFBCRepo); err != nil {
 			t.Fatal(err)
 		}
@@ -201,7 +202,7 @@ func TestEnrichTagsWithBuildDates_NoGitHubAndCached(t *testing.T) {
 	f := newFakeRegistry()
 	installFakeRegistry(t, f)
 	var tags []types.NightlyTag
-	for i := 0; i < 24; i++ {
+	for i := range 24 {
 		f.labels[digestOf(1000+i)] = map[string]string{"vcs-ref": "74dafc3d", "git.url": "https://github.com/red-hat-data-services/RHOAI-Build-Config", "build-date": fmt.Sprintf("2026-10-%02d", i%28+1)}
 		tags = append(tags, types.NightlyTag{Tag: fmt.Sprint(i), Image: fmt.Sprintf("quay.io/rhoai/rhoai-fbc-fragment:t%d@%s", i, digestOf(1000+i))})
 	}
@@ -240,7 +241,7 @@ func TestFetchCommitDate_CachesAndBacksOffOnRateLimit(t *testing.T) {
 	if d := fetchCommitDate(ctx, "https://github.com/o/r", strings.Repeat("b", 40)); d != "" {
 		t.Fatalf("rate-limited date %q", d)
 	}
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		fetchCommitDate(ctx, "https://github.com/o/r", strings.Repeat("c", 40))
 	}
 	if f.count("github") != 2 {
@@ -316,7 +317,7 @@ func TestImageLabels_OversizedTokenAndUnknownManifest(t *testing.T) {
 	// A garbage-collected digest (404) is remembered instead of re-read on every page load.
 	f.setStatus("quay-manifest", 404)
 	gone := "quay.io/rhoai/rhoai-fbc-fragment:rhoai-2.17@" + digestOf(5)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if _, err := imageLabelsWithAuth(context.Background(), "a", gone, false); err == nil {
 			t.Fatal("expected an error for an unknown manifest")
 		}

@@ -79,7 +79,7 @@ func wantAllowed(t *testing.T, mc *modelsCluster, want ...string) {
 // (JSON), as an edit by someone else would: a new resourceVersion.
 func setListeners(t *testing.T, mc *modelsCluster, allowedRoutes string) {
 	t.Helper()
-	var allowed map[string]interface{}
+	var allowed map[string]any
 	if err := json.Unmarshal([]byte(allowedRoutes), &allowed); err != nil {
 		t.Fatal(err)
 	}
@@ -87,10 +87,10 @@ func setListeners(t *testing.T, mc *modelsCluster, allowedRoutes string) {
 	if gw == nil {
 		t.Fatal("no gateway")
 	}
-	for _, l := range gw["spec"].(map[string]interface{})["listeners"].([]interface{}) {
-		l.(map[string]interface{})["allowedRoutes"] = allowed
+	for _, l := range gw["spec"].(map[string]any)["listeners"].([]any) {
+		l.(map[string]any)["allowedRoutes"] = allowed
 	}
-	mc.f.bumpRV(gw["metadata"].(map[string]interface{}))
+	mc.f.bumpRV(gw["metadata"].(map[string]any))
 	mc.f.put(testGatewayPath, gw)
 }
 
@@ -101,7 +101,8 @@ func namesList(values ...string) string {
 
 // someoneElsesModel adds a dashboard project with an LLMInferenceService
 // this tool did not create, on KServe's default route.
-func someoneElsesModel(mc *modelsCluster, project string) {
+func someoneElsesModel(mc *modelsCluster) {
+	project := "team"
 	mc.f.putJSON("/api/v1/namespaces/"+project, `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}}}`)
 	mc.f.putJSON("/apis/serving.kserve.io/v1alpha2/namespaces/"+project+"/llminferenceservices/granite", `{"spec":{"router":{"route":{},"gateway":{}}}}`)
 }
@@ -231,7 +232,7 @@ func TestInferenceGateway_ConvertsAPreReleaseGateway(t *testing.T) {
 				t.Fatalf("setup: %+v", res)
 			}
 			setListeners(t, mc, allowed)
-			someoneElsesModel(mc, "team")
+			someoneElsesModel(mc)
 			// A model that inherits its route from a preset: only its
 			// address says it is behind this gateway.
 			mc.f.putJSON("/api/v1/namespaces/lab", `{"metadata":{"labels":{}}}`)
@@ -276,7 +277,7 @@ func TestModelsAllow_AddsAProjectWhoseModelTheGatewayDoesNotList(t *testing.T) {
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
-	someoneElsesModel(mc, "team")
+	someoneElsesModel(mc)
 	st, err := GetResourcesStatus(mc.c)
 	if err != nil {
 		t.Fatal(err)
@@ -322,7 +323,7 @@ func TestModelsAllow_AddsAProjectWhoseModelTheGatewayDoesNotList(t *testing.T) {
 func TestInferenceGateway_SomeoneElsesGatewayIsNeverChanged(t *testing.T) {
 	mc := newModelsCluster(t)
 	mc.f.putJSON(testGatewayPath, `{"spec":{"gatewayClassName":"openshift-ai-inference","listeners":[{"name":"https","hostname":"x.example.com","allowedRoutes":`+namesList("openshift-ingress", "other")+`}]}}`)
-	someoneElsesModel(mc, "team")
+	someoneElsesModel(mc)
 	st, _ := GetResourcesStatus(mc.c)
 	gw := st.InferenceGateway
 	if gw.ManagedByTool || strings.Join(gw.AllowedProjects, ",") != "openshift-ingress,other" || strings.Join(gw.NotAllowedModelProjects, ",") != "team" {
@@ -423,7 +424,7 @@ func TestInferenceGateway_UnusedAndGoneProjectsAndDisallow(t *testing.T) {
 		t.Fatalf("setup: %+v", res)
 	}
 	setListeners(t, mc, namesList("openshift-ingress", "e2e-v300", "proj", "team"))
-	someoneElsesModel(mc, "team")
+	someoneElsesModel(mc)
 	st, _ := GetResourcesStatus(mc.c)
 	gw := st.InferenceGateway
 	if strings.Join(gw.UnusedProjects, ",") != "e2e-v300,proj" || strings.Join(gw.GoneProjects, ",") != "e2e-v300" {

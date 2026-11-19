@@ -222,7 +222,7 @@ func TestGenAIDemo_OldMemoryLimit(t *testing.T) {
 		if ok || !strings.HasSuffix(msg, "| in_progress") || !strings.Contains(stepMessages(steps), "add the demo again once MLflow is ready") || env.mlflow.generates != 0 {
 			t.Fatalf("%s\n%s", msg, stepMessages(steps))
 		}
-		if spec := env.k8s.get(mlflowPath)["spec"].(map[string]interface{}); spec["resources"] != nil {
+		if spec := env.k8s.get(mlflowPath)["spec"].(map[string]any); spec["resources"] != nil {
 			t.Errorf("spec.resources still set: %v", spec["resources"])
 		}
 		if ok, msg, _ := env.run(t, "add", SampleGenAIDemo); !ok {

@@ -17,14 +17,14 @@ func TestSSEConcurrentWrites(t *testing.T) {
 	go func() {
 		defer workers.Done()
 		<-start
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			w.SendHeartbeat()
 		}
 	}()
 	go func() {
 		defer workers.Done()
 		<-start
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			w.SendStep(UpdateStep{Step: "probe", Status: "running"})
 		}
 	}()

@@ -13,11 +13,12 @@ import (
 
 // conversionCRD stores a RHOAI CRD whose conversion webhook is served by
 // Service ns/svc, labelled as the RHOAI operator labels its CRDs.
-func putConversionCRD(f *resourceFake, name, ns, svc string) {
-	f.put("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/"+name, map[string]interface{}{
-		"metadata": map[string]interface{}{"name": name, "labels": map[string]interface{}{"platform.opendatahub.io/part-of": "platform"}},
-		"spec": map[string]interface{}{"conversion": map[string]interface{}{"strategy": "Webhook", "webhook": map[string]interface{}{
-			"clientConfig": map[string]interface{}{"service": map[string]interface{}{"namespace": ns, "name": svc}}}}},
+func putConversionCRD(f *resourceFake, name, svc string) {
+	ns := "redhat-ods-applications"
+	f.put("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/"+name, map[string]any{
+		"metadata": map[string]any{"name": name, "labels": map[string]any{"platform.opendatahub.io/part-of": "platform"}},
+		"spec": map[string]any{"conversion": map[string]any{"strategy": "Webhook", "webhook": map[string]any{
+			"clientConfig": map[string]any{"service": map[string]any{"namespace": ns, "name": svc}}}}},
 	})
 }
 
@@ -34,11 +35,11 @@ func blockReasons(p *types.DSCPlan, component string) string {
 // change refused it. Plan and change run planToggle; the dialog gets the
 // refusal with the commands that check for objects.
 func TestToggleOfAConversionWebhookComponentIsRefusedInThePlanAsInTheChange(t *testing.T) {
-	f, c := managerWorld(t, func(dsc map[string]interface{}) {
+	f, c := managerWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.sparkoperator.managementState", "Managed")
 	})
-	putConversionCRD(f, "sparkapplications.sparkoperator.k8s.io", "redhat-ods-applications", "spark-operator-webhook-service")
-	putConversionCRD(f, "scheduledsparkapplications.sparkoperator.k8s.io", "redhat-ods-applications", "spark-operator-webhook-service")
+	putConversionCRD(f, "sparkapplications.sparkoperator.k8s.io", "spark-operator-webhook-service")
+	putConversionCRD(f, "scheduledsparkapplications.sparkoperator.k8s.io", "spark-operator-webhook-service")
 	plan, err := PlanDSCChange(c, "toggle", "sparkoperator", "Removed", false, false)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +54,7 @@ func TestToggleOfAConversionWebhookComponentIsRefusedInThePlanAsInTheChange(t *t
 	if res.Success || res.ErrorCode != "prerequisites" || !reflect.DeepEqual(res.Logs, []string{"sparkoperator: " + why}) {
 		t.Fatalf("change = %+v, plan said %q", res, why)
 	}
-	if dry, real := patchesTo(f, dscV3Path); len(dry)+len(real) != 0 {
+	if dry, real := patchesTo(f); len(dry)+len(real) != 0 {
 		t.Fatal("patched a blocked change")
 	}
 }
@@ -71,7 +72,7 @@ func TestToggleNeedsTheReviewedPlan(t *testing.T) {
 			t.Fatalf("%+v: %+v", req, res)
 		}
 	}
-	if dry, real := patchesTo(f, dscV3Path); len(dry)+len(real) != 0 {
+	if dry, real := patchesTo(f); len(dry)+len(real) != 0 {
 		t.Fatal("patched without the reviewed plan")
 	}
 }
@@ -88,7 +89,7 @@ func TestUnsetStateIsTheCRDDefault(t *testing.T) {
 	if n := nodeOf(t, m, "aipipelines.argoWorkflowsControllers"); n.SpecSet || n.SchemaDefault != "Managed" {
 		t.Fatalf("node = %+v", n)
 	}
-	f.put(rhodsOperator, map[string]interface{}{"status": map[string]interface{}{"readyReplicas": 0}})
+	f.put(rhodsOperator, map[string]any{"status": map[string]any{"readyReplicas": 0}})
 	plan, _ := PlanDSCChange(c, "toggle", "aipipelines.argoWorkflowsControllers", "Removed", false, false)
 	if len(plan.Changes) != 1 || plan.Changes[0].Effect != "removes" || plan.Changes[0].FromSet {
 		t.Fatalf("changes = %+v", plan.Changes)
@@ -98,7 +99,7 @@ func TestUnsetStateIsTheCRDDefault(t *testing.T) {
 	}
 	// Unset with no schema default stays Removed: setting it Removed
 	// changes the field, not what is deployed.
-	_, c = managerWorld(t, func(dsc map[string]interface{}) { setPath(t, dsc, "spec.components.databaseservice", nil) })
+	_, c = managerWorld(t, func(dsc map[string]any) { setPath(t, dsc, "spec.components.databaseservice", nil) })
 	plan, _ = PlanDSCChange(c, "toggle", "databaseservice", "Removed", false, false)
 	if len(plan.Changes) != 1 || plan.Changes[0].Effect != "" || len(plan.Blocked) != 0 {
 		t.Fatalf("databaseservice plan = %+v", plan)
@@ -107,9 +108,9 @@ func TestUnsetStateIsTheCRDDefault(t *testing.T) {
 
 // A DSC Helm installed is not changed here.
 func TestHelmManagedDSCIsReadOnly(t *testing.T) {
-	_, c := managerWorld(t, func(dsc map[string]interface{}) {
-		setPath(t, dsc, "metadata.labels", map[string]interface{}{"app.kubernetes.io/managed-by": "Helm"})
-		setPath(t, dsc, "metadata.annotations", map[string]interface{}{"meta.helm.sh/release-name": "rhoai", "meta.helm.sh/release-namespace": "rhoai-config"})
+	_, c := managerWorld(t, func(dsc map[string]any) {
+		setPath(t, dsc, "metadata.labels", map[string]any{"app.kubernetes.io/managed-by": "Helm"})
+		setPath(t, dsc, "metadata.annotations", map[string]any{"meta.helm.sh/release-name": "rhoai", "meta.helm.sh/release-namespace": "rhoai-config"})
 	})
 	m, _ := GetDSCManager(c)
 	if !strings.Contains(m.ReadOnlyReason, "managed by Helm (release rhoai-config/rhoai)") {
@@ -130,7 +131,7 @@ func TestJSONPointerEscapesTildeAndSlash(t *testing.T) {
 	if got := pointerKeys(pointerOf(keys)); !reflect.DeepEqual(got, keys) {
 		t.Fatalf("keys = %v", got)
 	}
-	obj := map[string]interface{}{"spec": map[string]interface{}{"a/b": "old", "c~d": map[string]interface{}{}}}
+	obj := map[string]any{"spec": map[string]any{"a/b": "old", "c~d": map[string]any{}}}
 	ops, err := buildJSONPatch(obj, []dscAssign{{Path: []string{"spec", "a/b"}, Value: "new"}, {Path: []string{"spec", "c~d", "~1"}, Value: true}}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -197,7 +198,7 @@ func TestHardResetDeletesInTheForegroundAndClearsItsRecord(t *testing.T) {
 		}
 	}
 	// The new spec was validated against the live DSC before the delete.
-	dry, real := patchesTo(f, dscV3Path)
+	dry, real := patchesTo(f)
 	if len(real) != 0 || len(dry) != 1 || dry[0].Query.Get("fieldValidation") != "Strict" {
 		t.Fatalf("patches = %+v %+v", dry, real)
 	}
@@ -231,7 +232,7 @@ func TestHardResetValidatesTheNewSpecBeforeTheDelete(t *testing.T) {
 func TestHardResetWithoutReleaseDefaultIsRefusedBeforeTheDelete(t *testing.T) {
 	f, c := managerWorld(t, nil)
 	csv := f.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"))
-	ensureMap(csv, "metadata")["annotations"] = map[string]interface{}{"alm-examples": "[]"}
+	ensureMap(csv, "metadata")["annotations"] = map[string]any{"alm-examples": "[]"}
 	res, _ := runHardReset(t, c, nil)
 	if res.Success || res.ErrorCode != "prerequisites" || !strings.Contains(res.Message, "release default") {
 		t.Fatalf("result = %+v", res)
@@ -285,7 +286,7 @@ func stepsText(steps []UpdateStepEvent) string {
 // pod stops): nothing is created, the message carries the object, and the
 // record lets the user finish.
 func TestHardResetStoppedWhileWaitingCanBeFinished(t *testing.T) {
-	f, c := managerWorld(t, func(dsc map[string]interface{}) {
+	f, c := managerWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.workbenches.workbenchNamespace", "my-notebooks")
 	})
 	plan, _ := PlanDSCChange(c, "hard-reset", "", "", false, false)
@@ -296,7 +297,7 @@ func TestHardResetStoppedWhileWaitingCanBeFinished(t *testing.T) {
 			cancel(ErrOperationLockLost)
 		}
 	}
-	res, err := HardResetDSC(stopping, types.DSCPlanRequest{Name: plan.Name, UID: plan.UID, Token: plan.Token, Confirm: plan.Name, KeepEnabled: boolPtr(false)}, func(UpdateStepEvent) {})
+	res, err := HardResetDSC(stopping, types.DSCPlanRequest{Name: plan.Name, UID: plan.UID, Token: plan.Token, Confirm: plan.Name, KeepEnabled: new(false)}, func(UpdateStepEvent) {})
 	if err != nil || res.Success || res.ErrorCode != "interrupted" || !strings.Contains(res.Message, ErrOperationLockLost.Error()) ||
 		!strings.Contains(res.Message, "Finish the hard reset") || !strings.Contains(res.Message, "workbenchNamespace: my-notebooks") {
 		t.Fatalf("result = %+v, %v", res, err)
@@ -327,8 +328,8 @@ func TestHardResetStoppedWhileWaitingCanBeFinished(t *testing.T) {
 	if res, _ := FinishDSCHardReset(c, types.DSCFinishRequest{Name: "default-dsc", Token: m.PendingHardReset.Token}); res.Success || res.ErrorCode != "managed_platform" {
 		t.Fatalf("unknown platform = %+v", res)
 	}
-	f.put("/apis/dscinitialization.opendatahub.io/v2/dscinitializations/default-dsci", map[string]interface{}{
-		"metadata": map[string]interface{}{"name": "default-dsci"}, "status": map[string]interface{}{"release": map[string]interface{}{"name": selfManagedPlatform}}})
+	f.put("/apis/dscinitialization.opendatahub.io/v2/dscinitializations/default-dsci", map[string]any{
+		"metadata": map[string]any{"name": "default-dsci"}, "status": map[string]any{"release": map[string]any{"name": selfManagedPlatform}}})
 	res, _ = FinishDSCHardReset(c, types.DSCFinishRequest{Name: "default-dsc", Token: m.PendingHardReset.Token})
 	if !res.Success {
 		t.Fatalf("finish = %+v", res)
@@ -387,7 +388,7 @@ func TestHardResetStopsWhenANewDSCAppearsDuringTheWait(t *testing.T) {
 		defer f.mu.Unlock()
 		k, _ := parseFakePath(dscV3Path)
 		if obj := f.objects[k]; obj != nil && ensureMap(obj, "metadata")["deletionTimestamp"] != nil {
-			f.objects[k] = map[string]interface{}{"apiVersion": "datasciencecluster.opendatahub.io/v3", "kind": "DataScienceCluster", "metadata": map[string]interface{}{"name": "default-dsc", "uid": "someone-elses"}}
+			f.objects[k] = map[string]any{"apiVersion": "datasciencecluster.opendatahub.io/v3", "kind": "DataScienceCluster", "metadata": map[string]any{"name": "default-dsc", "uid": "someone-elses"}}
 		}
 	}
 	res, _ := runHardReset(t, c, nil)
@@ -404,7 +405,7 @@ func TestHardResetStopsWhenANewDSCAppearsDuringTheWait(t *testing.T) {
 func TestHardResetListsDSCsBeforeTheCreate(t *testing.T) {
 	f, c := managerWorld(t, nil)
 	operatorRemovesDSCAt(f, dscV3Path, 1, func() {
-		f.put(dscV3List+"/someone-else", map[string]interface{}{"apiVersion": "datasciencecluster.opendatahub.io/v3", "kind": "DataScienceCluster", "metadata": map[string]interface{}{"name": "someone-else"}})
+		f.put(dscV3List+"/someone-else", map[string]any{"apiVersion": "datasciencecluster.opendatahub.io/v3", "kind": "DataScienceCluster", "metadata": map[string]any{"name": "someone-else"}})
 	})
 	res, _ := runHardReset(t, c, nil)
 	if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "DataScienceCluster someone-else now exists") {
@@ -417,7 +418,7 @@ func TestHardResetListsDSCsBeforeTheCreate(t *testing.T) {
 
 // A DSC that is not named default-dsc keeps its name through the reset.
 func TestHardResetOfANonDefaultName(t *testing.T) {
-	f, c := managerWorld(t, func(dsc map[string]interface{}) { setPath(t, dsc, "metadata.name", "my-dsc") })
+	f, c := managerWorld(t, func(dsc map[string]any) { setPath(t, dsc, "metadata.name", "my-dsc") })
 	f.mu.Lock()
 	k, _ := parseFakePath(dscV3Path)
 	obj := f.objects[k]
@@ -437,7 +438,7 @@ func TestHardResetOfANonDefaultName(t *testing.T) {
 	if created == nil || ensureMap(created, "metadata")["name"] != "my-dsc" {
 		t.Fatalf("created = %v", created)
 	}
-	var body map[string]interface{}
+	var body map[string]any
 	posts := f.callsTo(http.MethodPost, dscV3List)
 	_ = json.Unmarshal([]byte(posts[len(posts)-1].Body), &body)
 	if ensureMap(body, "metadata")["name"] != "my-dsc" {
@@ -483,8 +484,8 @@ func TestRemovalChecksFailClosedOnModulesTheToolCannotCheck(t *testing.T) {
 // conversion webhook blocks); one it brings back only warns.
 func TestHardResetChecksModulesThatStayRemovedAsRemovals(t *testing.T) {
 	f, c := managerWorld(t, nil)
-	putConversionCRD(f, "gateways.aigateway.opendatahub.io", "redhat-ods-applications", "ai-gateway-webhook-service")
-	putConversionCRD(f, "guardrails.trustyai.opendatahub.io", "redhat-ods-applications", "trustyai-webhook-service")
+	putConversionCRD(f, "gateways.aigateway.opendatahub.io", "ai-gateway-webhook-service")
+	putConversionCRD(f, "guardrails.trustyai.opendatahub.io", "trustyai-webhook-service")
 	plan, _ := PlanDSCChange(c, "hard-reset", "", "", false, false)
 	if why := blockReasons(plan, "aigateway"); !strings.Contains(why, "oc get gateways.aigateway.opendatahub.io -A") {
 		t.Fatalf("aigateway stays Removed and serves a conversion webhook: blocked = %+v", plan.Blocked)

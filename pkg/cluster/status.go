@@ -87,11 +87,9 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 		mu.Unlock()
 	}
 	run := func(fn func()) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			fn()
-		}()
+		})
 	}
 
 	run(func() {
@@ -349,9 +347,9 @@ func getClusterInfo(c *Client) (string, string) {
 		// Fall back to k8s API user lookup (dev mode)
 		body, _, err := c.get("/apis/user.openshift.io/v1/users/~")
 		if err == nil {
-			var result map[string]interface{}
+			var result map[string]any
 			if json.Unmarshal(body, &result) == nil {
-				if meta, ok := result["metadata"].(map[string]interface{}); ok {
+				if meta, ok := result["metadata"].(map[string]any); ok {
 					if name, ok := meta["name"].(string); ok && name != "" {
 						user = name
 					}
@@ -370,15 +368,15 @@ func getClusterVersion(c *Client) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)
 	}
-	var result map[string]interface{}
+	var result map[string]any
 	if err := json.Unmarshal(body, &result); err != nil {
 		return "", fmt.Errorf("unmarshal: %w", err)
 	}
-	statusMap, _ := result["status"].(map[string]interface{})
+	statusMap, _ := result["status"].(map[string]any)
 	if statusMap == nil {
 		return "", nil
 	}
-	desired, _ := statusMap["desired"].(map[string]interface{})
+	desired, _ := statusMap["desired"].(map[string]any)
 	if desired == nil {
 		return "", nil
 	}
@@ -654,7 +652,7 @@ func readPullSecret(c *Client) (types.PullSecretInfo, string, error) {
 		return types.PullSecretInfo{Exists: true, Detail: problem}, "", nil
 	}
 
-	auths, ok := dockerConfig["auths"].(map[string]interface{})
+	auths, ok := dockerConfig["auths"].(map[string]any)
 	if !ok {
 		return types.PullSecretInfo{Exists: true, Detail: "Missing 'auths' key in docker config"}, "", nil
 	}

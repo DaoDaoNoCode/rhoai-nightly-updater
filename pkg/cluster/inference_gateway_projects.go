@@ -69,7 +69,7 @@ func readGatewayProjects(c *Client) ([]string, error) {
 
 func writeGatewayProjects(c *Client, projects []string) error {
 	sort.Strings(projects)
-	data, _ := json.Marshal(map[string]interface{}{"projects": projects})
+	data, _ := json.Marshal(map[string]any{"projects": projects})
 	if err := writeSnapshotKey(c, gatewayProjectsKey, gatewayProjectsManager, string(data)); err != nil {
 		return fmt.Errorf("record the projects this tool added to the inference gateway: %w", err)
 	}

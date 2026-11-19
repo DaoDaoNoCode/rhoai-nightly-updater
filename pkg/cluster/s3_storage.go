@@ -736,8 +736,8 @@ func s3StatusAndEndpoints(c *Client) (types.ResourceState, s3Endpoints, error) {
 // s3ApplyPath returns the API path of one object from s3Resources. Only the
 // fixed objects the tool creates are accepted; the literal names keep the
 // RBAC rules limited to them (pkg/cluster/rbac_coverage_test.go).
-func s3ApplyPath(obj map[string]interface{}) (string, bool) {
-	meta, _ := obj["metadata"].(map[string]interface{})
+func s3ApplyPath(obj map[string]any) (string, bool) {
+	meta, _ := obj["metadata"].(map[string]any)
 	name, _ := meta["name"].(string)
 	switch kind, _ := obj["kind"].(string); {
 	case kind == "PersistentVolumeClaim" && name == s3PVC:
@@ -833,7 +833,7 @@ func readS3Object(c *Client, kind, name string) (objectMeta, bool, error) {
 type s3Resource struct {
 	name string // shown in logs, for example "PVC"
 	kind string
-	obj  map[string]interface{}
+	obj  map[string]any
 	// frontDoor marks the objects that route traffic to the server: they are
 	// applied only once the server is ready.
 	frontDoor bool
@@ -843,27 +843,27 @@ type s3Resource struct {
 // the admin UI gets a Route: the S3 API stays inside the cluster, where
 // pipeline servers reach it through the Service.
 func s3Resources(keys s3Keys) []s3Resource {
-	meta := func(name string) map[string]interface{} {
-		return map[string]interface{}{"name": name, "namespace": s3Namespace, "labels": toolLabels()}
+	meta := func(name string) map[string]any {
+		return map[string]any{"name": name, "namespace": s3Namespace, "labels": toolLabels()}
 	}
-	secretEnv := func(name, key string) map[string]interface{} {
-		return map[string]interface{}{"name": name, "valueFrom": map[string]interface{}{"secretKeyRef": map[string]interface{}{"name": s3Secret, "key": key}}}
+	secretEnv := func(name, key string) map[string]any {
+		return map[string]any{"name": name, "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": s3Secret, "key": key}}}
 	}
-	podLabels := map[string]interface{}{"app": s3AppLabel}
+	podLabels := map[string]any{"app": s3AppLabel}
 	return []s3Resource{
-		{"PVC", "PersistentVolumeClaim", map[string]interface{}{
+		{"PVC", "PersistentVolumeClaim", map[string]any{
 			"apiVersion": "v1", "kind": "PersistentVolumeClaim",
 			"metadata": meta(s3PVC),
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"accessModes": []string{"ReadWriteOnce"},
-				"resources":   map[string]interface{}{"requests": map[string]interface{}{"storage": s3Storage}},
+				"resources":   map[string]any{"requests": map[string]any{"storage": s3Storage}},
 				"volumeMode":  "Filesystem",
 			},
 		}, false},
-		{"Secret", "Secret", map[string]interface{}{
+		{"Secret", "Secret", map[string]any{
 			"apiVersion": "v1", "kind": "Secret",
 			"metadata": meta(s3Secret),
-			"stringData": map[string]interface{}{
+			"stringData": map[string]any{
 				s3AccessKeyField:     keys.AccessKey,
 				s3SecretKeyField:     keys.SecretKey,
 				s3AdminPasswordField: keys.AdminPassword,
@@ -890,41 +890,41 @@ func s3Resources(keys s3Keys) []s3Resource {
 		// The kubelet's probes always pass (traffic from the pod's node is
 		// allowed by NetworkPolicy semantics), and `oc port-forward` does
 		// not go through the pod network.
-		{"NetworkPolicy", "NetworkPolicy", map[string]interface{}{
+		{"NetworkPolicy", "NetworkPolicy", map[string]any{
 			"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
 			"metadata": meta(s3NetworkPolicy),
-			"spec": map[string]interface{}{
-				"podSelector": map[string]interface{}{"matchLabels": podLabels},
+			"spec": map[string]any{
+				"podSelector": map[string]any{"matchLabels": podLabels},
 				"policyTypes": []string{"Ingress"},
-				"ingress": []map[string]interface{}{
+				"ingress": []map[string]any{
 					{
-						"from":  []map[string]interface{}{{"namespaceSelector": map[string]interface{}{}}},
-						"ports": []map[string]interface{}{{"protocol": "TCP", "port": s3Port}},
+						"from":  []map[string]any{{"namespaceSelector": map[string]any{}}},
+						"ports": []map[string]any{{"protocol": "TCP", "port": s3Port}},
 					},
 					{
-						"from": []map[string]interface{}{
-							{"namespaceSelector": map[string]interface{}{"matchLabels": map[string]interface{}{"policy-group.network.openshift.io/ingress": ""}}},
-							{"namespaceSelector": map[string]interface{}{"matchLabels": map[string]interface{}{"policy-group.network.openshift.io/host-network": ""}}},
+						"from": []map[string]any{
+							{"namespaceSelector": map[string]any{"matchLabels": map[string]any{"policy-group.network.openshift.io/ingress": ""}}},
+							{"namespaceSelector": map[string]any{"matchLabels": map[string]any{"policy-group.network.openshift.io/host-network": ""}}},
 						},
-						"ports": []map[string]interface{}{{"protocol": "TCP", "port": s3AdminPort}},
+						"ports": []map[string]any{{"protocol": "TCP", "port": s3AdminPort}},
 					},
 				},
 			},
 		}, false},
-		{"Deployment", "Deployment", map[string]interface{}{
+		{"Deployment", "Deployment", map[string]any{
 			"apiVersion": "apps/v1", "kind": "Deployment",
 			"metadata": meta(s3Deployment),
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"replicas": 1,
-				"selector": map[string]interface{}{"matchLabels": podLabels},
-				"strategy": map[string]interface{}{"type": "Recreate"},
-				"template": map[string]interface{}{
-					"metadata": map[string]interface{}{"labels": podLabels},
-					"spec": map[string]interface{}{
-						"volumes": []map[string]interface{}{
-							{"name": "data", "persistentVolumeClaim": map[string]interface{}{"claimName": s3PVC}},
+				"selector": map[string]any{"matchLabels": podLabels},
+				"strategy": map[string]any{"type": "Recreate"},
+				"template": map[string]any{
+					"metadata": map[string]any{"labels": podLabels},
+					"spec": map[string]any{
+						"volumes": []map[string]any{
+							{"name": "data", "persistentVolumeClaim": map[string]any{"claimName": s3PVC}},
 						},
-						"containers": []map[string]interface{}{{
+						"containers": []map[string]any{{
 							"name":  s3Container,
 							"image": s3Image(),
 							// -bucket creates the bucket before the server
@@ -935,7 +935,7 @@ func s3Resources(keys s3Keys) []s3Resource {
 							// for compatibility (weed/command/mini.go:598).
 							"args": []string{"mini", "-dir=/data", "-webdav=false", "-bucket=" + s3Bucket,
 								"-admin.port=" + strconv.Itoa(s3AdminPort), "-admin.port.legacy=0"},
-							"env": []map[string]interface{}{
+							"env": []map[string]any{
 								// The S3 server adds a static admin identity
 								// from these (weed/s3api/auth_credentials.go:555-611
 								// at 4.54), so the S3 keys are the ones in the
@@ -958,52 +958,52 @@ func s3Resources(keys s3Keys) []s3Resource {
 								{"name": "WEED_ADMIN_USER", "value": s3AdminUser},
 								secretEnv("WEED_ADMIN_PASSWORD", s3AdminPasswordField),
 							},
-							"ports": []map[string]interface{}{
+							"ports": []map[string]any{
 								{"name": "s3", "containerPort": s3Port, "protocol": "TCP"},
 								{"name": "admin", "containerPort": s3AdminPort, "protocol": "TCP"},
 							},
-							"volumeMounts": []map[string]interface{}{
+							"volumeMounts": []map[string]any{
 								{"name": "data", "mountPath": "/data", "subPath": "seaweedfs"},
 							},
 							// Kubeflow Pipelines requests 64m/256Mi; the limit
 							// leaves room for the admin UI and multipart
 							// uploads (kubeflow/pipelines#13686 raised the CPU).
-							"resources": map[string]interface{}{
-								"limits":   map[string]interface{}{"cpu": "500m", "memory": "1Gi"},
-								"requests": map[string]interface{}{"cpu": "64m", "memory": "256Mi"},
+							"resources": map[string]any{
+								"limits":   map[string]any{"cpu": "500m", "memory": "1Gi"},
+								"requests": map[string]any{"cpu": "64m", "memory": "256Mi"},
 							},
 							// Restricted pod security without a fixed UID, so
 							// OpenShift's restricted-v2 SCC assigns one.
 							"securityContext": restrictedSecurityContext(),
 							// GET /status on the S3 port
 							// (weed/s3api/s3api_server.go:980 at 4.54).
-							"readinessProbe": map[string]interface{}{"httpGet": map[string]interface{}{"path": "/status", "port": s3Port}, "initialDelaySeconds": 5, "periodSeconds": 5},
-							"livenessProbe":  map[string]interface{}{"httpGet": map[string]interface{}{"path": "/status", "port": s3Port}, "initialDelaySeconds": 30, "periodSeconds": 10, "failureThreshold": 6},
+							"readinessProbe": map[string]any{"httpGet": map[string]any{"path": "/status", "port": s3Port}, "initialDelaySeconds": 5, "periodSeconds": 5},
+							"livenessProbe":  map[string]any{"httpGet": map[string]any{"path": "/status", "port": s3Port}, "initialDelaySeconds": 30, "periodSeconds": 10, "failureThreshold": 6},
 						}},
 						"restartPolicy": "Always",
 					},
 				},
 			},
 		}, false},
-		{"Service", "Service", map[string]interface{}{
+		{"Service", "Service", map[string]any{
 			"apiVersion": "v1", "kind": "Service",
 			"metadata": meta(s3Service),
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"selector": podLabels,
 				"type":     "ClusterIP",
-				"ports": []map[string]interface{}{
+				"ports": []map[string]any{
 					{"name": "s3", "port": s3Port, "targetPort": s3Port},
 					{"name": "ui", "port": s3AdminPort, "targetPort": s3AdminPort},
 				},
 			},
 		}, true},
-		{"Admin UI Route", "Route", map[string]interface{}{
+		{"Admin UI Route", "Route", map[string]any{
 			"apiVersion": "route.openshift.io/v1", "kind": "Route",
 			"metadata": meta(s3AdminRoute),
-			"spec": map[string]interface{}{
-				"to":   map[string]interface{}{"kind": "Service", "name": s3Service, "weight": 100},
-				"port": map[string]interface{}{"targetPort": "ui"},
-				"tls":  map[string]interface{}{"termination": "edge", "insecureEdgeTerminationPolicy": "Redirect"},
+			"spec": map[string]any{
+				"to":   map[string]any{"kind": "Service", "name": s3Service, "weight": 100},
+				"port": map[string]any{"targetPort": "ui"},
+				"tls":  map[string]any{"termination": "edge", "insecureEdgeTerminationPolicy": "Redirect"},
 			},
 		}, true},
 	}
@@ -1012,12 +1012,12 @@ func s3Resources(keys s3Keys) []s3Resource {
 // restrictedSecurityContext is a container securityContext that passes
 // Pod Security "restricted" and OpenShift's restricted-v2 SCC, without a
 // fixed UID so the SCC assigns one.
-func restrictedSecurityContext() map[string]interface{} {
-	return map[string]interface{}{
+func restrictedSecurityContext() map[string]any {
+	return map[string]any{
 		"allowPrivilegeEscalation": false,
-		"capabilities":             map[string]interface{}{"drop": []string{"ALL"}},
+		"capabilities":             map[string]any{"drop": []string{"ALL"}},
 		"runAsNonRoot":             true,
-		"seccompProfile":           map[string]interface{}{"type": "RuntimeDefault"},
+		"seccompProfile":           map[string]any{"type": "RuntimeDefault"},
 	}
 }
 
@@ -1073,16 +1073,16 @@ func legacyStorageSetupBlock(l *legacyStorage) string {
 func SetupS3Storage(c *Client) (*types.OperationResponse, error) {
 	legacy, err := readLegacyStorage(c)
 	if err != nil {
-		recordActivity(c, "setup-minio", fmt.Sprintf("namespace=%s (earlier storage check failed)", s3Namespace), false)
+		recordActivity(c, "setup-s3", fmt.Sprintf("namespace=%s (earlier storage check failed)", s3Namespace), false)
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot check for storage from an earlier version in namespace %s; nothing was changed: %v.%s", legacyNamespace, err, templateHint(err)), ErrorCode: errorCodeFromK8sErr(err)}, nil
 	}
 	if reason := legacyStorageSetupBlock(legacy); reason != "" {
-		recordActivity(c, "setup-minio", fmt.Sprintf("namespace=%s (earlier storage present)", s3Namespace), false)
+		recordActivity(c, "setup-s3", fmt.Sprintf("namespace=%s (earlier storage present)", s3Namespace), false)
 		return &types.OperationResponse{Success: false, Message: reason + " Nothing was changed.", ErrorCode: "prerequisites"}, nil
 	}
 	keys, err := s3Credentials(c)
 	if err != nil {
-		recordActivity(c, "setup-minio", fmt.Sprintf("namespace=%s (credentials)", s3Namespace), false)
+		recordActivity(c, "setup-s3", fmt.Sprintf("namespace=%s (credentials)", s3Namespace), false)
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot determine the S3 credentials; nothing was changed: %v.%s", err, templateHint(err)), ErrorCode: errorCodeFromK8sErr(err)}, nil
 	}
 	return setupS3Storage(c, keys, &opLog{}, s3RetrySetup)
@@ -1113,34 +1113,29 @@ func (l *opLog) add(line string) {
 // nothing (the namespace, which the dry runs need, is created before them).
 // retry names the action that continues a setup that stopped.
 func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.OperationResponse, error) {
-	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
+	fail := func(msg, code, activity string) *types.OperationResponse {
 		slog.Warn("s3 storage setup failed", "reason", activity, "user", getUser(c))
-		recordActivity(c, "setup-minio", fmt.Sprintf("namespace=%s (%s)", s3Namespace, activity), false)
-		return &types.OperationResponse{Success: false, Message: msg, Logs: log.lines, ErrorCode: code}, nil
-	}
-	for _, retired := range []string{"MINIO_IMAGE", "MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"} {
-		if strings.TrimSpace(os.Getenv(retired)) != "" {
-			log.add(fmt.Sprintf("Note: %s is set but no longer used (see SEAWEEDFS_IMAGE, SEAWEEDFS_ACCESS_KEY_ID and SEAWEEDFS_SECRET_ACCESS_KEY).", retired))
-		}
+		recordActivity(c, "setup-s3", fmt.Sprintf("namespace=%s (%s)", s3Namespace, activity), false)
+		return &types.OperationResponse{Success: false, Message: msg, Logs: log.lines, ErrorCode: code}
 	}
 	// Migrate storage passes the old storage's keys, which have no admin
 	// UI password: keep the stored one, or make one.
 	keys, err := withAdminPassword(c, keys)
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot determine the admin UI password; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "credentials")
+		return fail(fmt.Sprintf("Cannot determine the admin UI password; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "credentials"), nil
 	}
 
 	// Step 1: Namespace. Never adopt a namespace this tool did not create.
 	log.add(fmt.Sprintf("Creating namespace %s...", s3Namespace))
 	ns, err := lookupS3Namespace(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot check namespace %s: %v.%s", s3Namespace, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace check failed")
+		return fail(fmt.Sprintf("Cannot check namespace %s: %v.%s", s3Namespace, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace check failed"), nil
 	}
 	if !ns.Exists {
-		nsData, _ := json.Marshal(map[string]interface{}{
+		nsData, _ := json.Marshal(map[string]any{
 			"apiVersion": "v1",
 			"kind":       "Namespace",
-			"metadata":   map[string]interface{}{"name": s3Namespace, "labels": toolLabels()},
+			"metadata":   map[string]any{"name": s3Namespace, "labels": toolLabels()},
 		})
 		_, _, err := c.post(withToolFieldManager("/api/v1/namespaces"), nsData)
 		switch {
@@ -1150,19 +1145,19 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 		case IsK8sError(err, 409):
 			// Created concurrently: decide ownership again.
 			if ns, err = lookupS3Namespace(c); err != nil {
-				return fail(fmt.Sprintf("Cannot check namespace %s: %v.%s", s3Namespace, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace check failed")
+				return fail(fmt.Sprintf("Cannot check namespace %s: %v.%s", s3Namespace, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace check failed"), nil
 			}
 		default:
-			return fail(fmt.Sprintf("Failed to create namespace %s: %v.%s", s3Namespace, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace creation failed")
+			return fail(fmt.Sprintf("Failed to create namespace %s: %v.%s", s3Namespace, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace creation failed"), nil
 		}
 	} else if ns.Managed && !ns.terminating() {
 		log.add("Namespace already exists (created by this tool) — reusing")
 	}
 	if ns.terminating() {
-		return fail(fmt.Sprintf("Namespace %s is still being deleted. Wait until it is gone, then %s.", s3Namespace, retry.again), "terminating", "namespace terminating")
+		return fail(fmt.Sprintf("Namespace %s is still being deleted. Wait until it is gone, then %s.", s3Namespace, retry.again), "terminating", "namespace terminating"), nil
 	}
 	if !ns.Managed {
-		return fail(fmt.Sprintf("Namespace %s already exists and was not created by this tool. Nothing was changed. Remove it yourself, or use a cluster without it.", s3Namespace), "not_managed", "namespace not managed")
+		return fail(fmt.Sprintf("Namespace %s already exists and was not created by this tool. Nothing was changed. Remove it yourself, or use a cluster without it.", s3Namespace), "not_managed", "namespace not managed"), nil
 	}
 
 	// Step 2: Check every object the tool writes before writing any, so a
@@ -1175,10 +1170,10 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 	existing := map[string]current{}
 	var foreign, deleting []string
 	for _, r := range resources {
-		name, _ := r.obj["metadata"].(map[string]interface{})["name"].(string)
+		name, _ := r.obj["metadata"].(map[string]any)["name"].(string)
 		meta, found, err := readS3Object(c, r.kind, name)
 		if err != nil {
-			return fail(fmt.Sprintf("Cannot read %s %s/%s; nothing was changed: %v.%s", r.kind, s3Namespace, name, err, templateHint(err)), errorCodeFromK8sErr(err), "read failed")
+			return fail(fmt.Sprintf("Cannot read %s %s/%s; nothing was changed: %v.%s", r.kind, s3Namespace, name, err, templateHint(err)), errorCodeFromK8sErr(err), "read failed"), nil
 		}
 		existing[r.kind+"/"+name] = current{meta, found}
 		switch {
@@ -1190,16 +1185,16 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 		}
 	}
 	if len(foreign) > 0 {
-		return fail(fmt.Sprintf("Namespace %s already contains %s, not created by this tool. Nothing was changed. %s", s3Namespace, strings.Join(foreign, ", "), retry.foreignHint()), "not_managed", "foreign objects: "+strings.Join(foreign, ", "))
+		return fail(fmt.Sprintf("Namespace %s already contains %s, not created by this tool. Nothing was changed. %s", s3Namespace, strings.Join(foreign, ", "), retry.foreignHint()), "not_managed", "foreign objects: "+strings.Join(foreign, ", ")), nil
 	}
 	if len(deleting) > 0 {
-		return fail(fmt.Sprintf("%s in namespace %s is still being deleted. Wait until it is gone, then %s.", strings.Join(deleting, ", "), s3Namespace, retry.again), "terminating", "objects terminating")
+		return fail(fmt.Sprintf("%s in namespace %s is still being deleted. Wait until it is gone, then %s.", strings.Join(deleting, ", "), s3Namespace, retry.again), "terminating", "objects terminating"), nil
 	}
 
 	// Step 3: Create or update the server objects. The Service and the
 	// Route follow once the server is ready (step 5).
 	var applied []string
-	write := func(r s3Resource, dryRun bool) (*types.OperationResponse, error) {
+	write := func(r s3Resource, dryRun bool) *types.OperationResponse {
 		if !dryRun {
 			log.add(fmt.Sprintf("Applying %s...", r.name))
 		}
@@ -1208,7 +1203,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 		if !ok || !createOK {
 			return fail(fmt.Sprintf("Internal error: unexpected S3 storage object %s %v", r.kind, r.obj["metadata"]), "internal", "unknown object")
 		}
-		name, _ := r.obj["metadata"].(map[string]interface{})["name"].(string)
+		name, _ := r.obj["metadata"].(map[string]any)["name"].(string)
 		key := r.kind + "/" + name
 		cur := existing[key]
 		kind := r.kind
@@ -1220,8 +1215,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 			if len(applied) > 0 {
 				done = strings.Join(applied, ", ")
 			}
-			var foreignErr *foreignObjectError
-			if errors.As(err, &foreignErr) {
+			if foreignErr, ok := errors.AsType[*foreignObjectError](err); ok {
 				return fail(fmt.Sprintf("%s was created by someone else while setup was running, so it was left unchanged. Already applied: %s. %s", foreignErr.Desc, done, retry.foreignHint()), "not_managed", r.name+" became foreign")
 			}
 			code := errorCodeFromK8sErr(err)
@@ -1237,7 +1231,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 			applied = append(applied, r.name)
 			log.add(fmt.Sprintf("OK: %s %s", r.name, action))
 		}
-		return nil, nil
+		return nil
 	}
 
 	// Every write is first sent as a server-side dry run, so an object the
@@ -1246,8 +1240,8 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 	// extended to what only the API server can check.
 	log.add("Checking every change with the API server (dry run)...")
 	for _, r := range resources {
-		if resp, err := write(r, true); resp != nil || err != nil {
-			return resp, err
+		if resp := write(r, true); resp != nil {
+			return resp, nil
 		}
 	}
 	log.add("OK: The API server accepts every change")
@@ -1255,8 +1249,8 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 		if r.frontDoor {
 			continue
 		}
-		if resp, err := write(r, false); resp != nil || err != nil {
-			return resp, err
+		if resp := write(r, false); resp != nil {
+			return resp, nil
 		}
 	}
 
@@ -1273,7 +1267,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 				}
 			}
 			log.add("SeaweedFS is not ready: " + reason)
-			return fail(fmt.Sprintf("SeaweedFS was deployed but is not ready after %s (%s). The status shows the current state; %s once it is ready.", S3ReadyTimeout, reason, retry.again), "timeout", "not ready")
+			return fail(fmt.Sprintf("SeaweedFS was deployed but is not ready after %s (%s). The status shows the current state; %s once it is ready.", S3ReadyTimeout, reason, retry.again), "timeout", "not ready"), nil
 		}
 		if errors.Is(err, errS3CannotStart) {
 			msg := issue.Reason
@@ -1281,9 +1275,9 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 				msg += ": " + truncateText(issue.Message, 300)
 			}
 			log.add("SeaweedFS cannot start: " + msg)
-			return fail(fmt.Sprintf("SeaweedFS was deployed but its pod cannot start (%s). Fix the cause (for example set SEAWEEDFS_IMAGE to a pullable image) and %s, or delete the storage.", msg, retry.again), "not_ready", issue.Reason)
+			return fail(fmt.Sprintf("SeaweedFS was deployed but its pod cannot start (%s). Fix the cause (for example set SEAWEEDFS_IMAGE to a pullable image) and %s, or delete the storage.", msg, retry.again), "not_ready", issue.Reason), nil
 		}
-		return fail(fmt.Sprintf("Stopped waiting for SeaweedFS: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "wait failed")
+		return fail(fmt.Sprintf("Stopped waiting for SeaweedFS: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "wait failed"), nil
 	}
 	log.add("OK: SeaweedFS is running")
 
@@ -1293,8 +1287,8 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 		if !r.frontDoor {
 			continue
 		}
-		if resp, err := write(r, false); resp != nil || err != nil {
-			return resp, err
+		if resp := write(r, false); resp != nil {
+			return resp, nil
 		}
 	}
 
@@ -1310,12 +1304,12 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 	}
 	if bucketErr != nil {
 		log.add(fmt.Sprintf("Bucket creation failed: %v — you can create it from the SeaweedFS admin UI.", bucketErr))
-		return fail(fmt.Sprintf("SeaweedFS deployed but bucket creation failed: %v. %s to retry, or create bucket %s from the admin UI.", bucketErr, retry.Again, s3Bucket), "", "bucket failed")
+		return fail(fmt.Sprintf("SeaweedFS deployed but bucket creation failed: %v. %s to retry, or create bucket %s from the admin UI.", bucketErr, retry.Again, s3Bucket), "", "bucket failed"), nil
 	}
 	log.add(fmt.Sprintf("OK: Bucket %s created", s3Bucket))
 
 	slog.Info("s3 storage setup complete", "user", getUser(c))
-	recordActivity(c, "setup-minio", fmt.Sprintf("namespace=%s bucket=%s", s3Namespace, s3Bucket), true)
+	recordActivity(c, "setup-s3", fmt.Sprintf("namespace=%s bucket=%s", s3Namespace, s3Bucket), true)
 	return &types.OperationResponse{
 		Success: true,
 		Message: fmt.Sprintf("S3 storage (SeaweedFS) deployed with bucket %s; pipeline servers reach it at %s. Sign in to the admin UI as %s; the password (the S3 secret key) and the S3 keys are in Secret %s in namespace %s.", s3Bucket, s3Endpoint(), s3AdminUser, s3Secret, s3Namespace),
@@ -1589,7 +1583,7 @@ func storageUsers(dspas []dspaInfo, addresses ...storageAddress) (live, deleting
 func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		recordActivity(c, "teardown-minio", fmt.Sprintf("%s (%s)", s3Namespace, activity), false)
+		recordActivity(c, "teardown-s3", fmt.Sprintf("%s (%s)", s3Namespace, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
@@ -1687,7 +1681,7 @@ func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.Operatio
 	}
 	nsHint := nsNote + s3KeptNamespaceHint(keptNamespaces)
 	if len(d.failed) > 0 {
-		recordActivity(c, "teardown-minio", fmt.Sprintf("%s (failed: %s)", s3Namespace, strings.Join(d.failed, "; ")), false)
+		recordActivity(c, "teardown-s3", fmt.Sprintf("%s (failed: %s)", s3Namespace, strings.Join(d.failed, "; ")), false)
 		code := "partial_failure"
 		if len(d.deleted) == 0 {
 			code = "delete_failed"
@@ -1698,11 +1692,11 @@ func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.Operatio
 		}, nil
 	}
 	if len(d.deleted) == 0 && len(d.pvcUIDs) == 0 {
-		recordActivity(c, "teardown-minio", s3Namespace+" (nothing to remove)", true)
+		recordActivity(c, "teardown-s3", s3Namespace+" (nothing to remove)", true)
 		return &types.OperationResponse{Success: true, Message: "No S3 storage objects created by this tool remain." + keptNote + nsHint, Logs: logs}, nil
 	}
 	slog.Info("s3 storage teardown", "user", getUser(c), "deleted", strings.Join(d.deleted, ", "))
-	recordActivity(c, "teardown-minio", s3Namespace+" (objects deleted, namespace kept)", true)
+	recordActivity(c, "teardown-s3", s3Namespace+" (objects deleted, namespace kept)", true)
 
 	if len(d.pvcUIDs) > 0 {
 		remaining, err := waitPVCsGone(c, d.pvcUIDs)

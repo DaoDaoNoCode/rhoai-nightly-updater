@@ -100,7 +100,7 @@ func TestMutationClientActsAsTheUser(t *testing.T) {
 			t.Errorf("%s: no lease or marker write", tc.name)
 		}
 		mu.Unlock()
-		mutationLimiter = newRateLimiter(30 * time.Second)
+		mutationLimiter = newRateLimiter()
 	}
 }
 
@@ -167,7 +167,7 @@ func TestUserPermissionsReportsTheSignIn(t *testing.T) {
 	fakeSession(t, &cluster.SessionToken{Scopes: []string{"user:info"}}, nil)
 	w := httptest.NewRecorder()
 	HandleUserPermissions(w, postJSONMethod(http.MethodGet, "/api/user/permissions", "sha256~alice-token", ""))
-	var body map[string]interface{}
+	var body map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if w.Code != 200 || body["canMutate"] != false || body["reasonCode"] != signInAgainCode || !strings.Contains(fmt.Sprint(body["reason"]), "Log out and log in again") {
 		t.Fatalf("%d %v", w.Code, body)
@@ -203,7 +203,7 @@ func TestGitOpsProfileWorksWithAScopedSignIn(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, postJSONMethod(http.MethodGet, "/api/user/permissions", "sha256~alice-token", ""))
-	var body map[string]interface{}
+	var body map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if w.Code != http.StatusOK || body["canMutate"] != true || body["reason"] != nil || body["reasonCode"] != nil {
 		t.Fatalf("permissions: %d %v", w.Code, body)
@@ -261,7 +261,7 @@ func TestUserTokenIsNeverLoggedOrEchoed(t *testing.T) {
 		if strings.Contains(w.Body.String(), secret) {
 			t.Fatalf("response shows the token: %s", w.Body.String())
 		}
-		mutationLimiter = newRateLimiter(30 * time.Second)
+		mutationLimiter = newRateLimiter()
 	}
 	fakeSession(t, fullToken(sessionNow), nil)
 	runRefreshStream = func(c *cluster.Client, _ cluster.OperationOptions, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
@@ -276,7 +276,7 @@ func TestUserTokenIsNeverLoggedOrEchoed(t *testing.T) {
 		t.Errorf("a mid-operation 401 does not say to sign in again: %s", out)
 	}
 	f.mu.Lock()
-	record, _ := json.Marshal(map[string]interface{}{"marker": f.marker, "last": f.last, "lease": f.lease, "writes": f.writes})
+	record, _ := json.Marshal(map[string]any{"marker": f.marker, "last": f.last, "lease": f.lease, "writes": f.writes})
 	f.mu.Unlock()
 	snap, _ := json.Marshal(inflight.snapshot())
 	for what, s := range map[string]string{"stream": out, "logs": logs.String(), "operation record": string(record), "operation": string(snap)} {

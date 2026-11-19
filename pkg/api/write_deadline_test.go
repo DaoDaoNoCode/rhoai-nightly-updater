@@ -18,11 +18,12 @@ func TestLongMutationOutlastsServerWriteTimeout(t *testing.T) {
 	t.Cleanup(func() { mutationPermission = original })
 
 	h := withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-		time.Sleep(300 * time.Millisecond) // longer than the server's WriteTimeout
 		writeJSON(w, map[string]bool{"success": true}, "long-op")
 	})
 	srv := httptest.NewUnstartedServer(h)
-	srv.Config.WriteTimeout = 100 * time.Millisecond
+	// The write deadline has passed by the time the handler writes: the
+	// response arrives only because withMutationAuth lifts it.
+	srv.Config.WriteTimeout = time.Nanosecond
 	srv.Start()
 	defer srv.Close()
 

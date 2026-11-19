@@ -249,3 +249,46 @@ func TestWriteOperationResult_SuccessReturns200(t *testing.T) {
 		t.Errorf("expected 2 log entries, got %d", len(body.Logs))
 	}
 }
+
+// decodeBody answers every bad body the same way (400 "invalid request
+// body", errorCode "validation"); an empty body is a bad body only when the
+// handler does not allow it.
+func TestDecodeBody(t *testing.T) {
+	type body struct {
+		Name string `json:"name"`
+	}
+	for _, tc := range []struct {
+		name       string
+		body       string
+		allowEmpty bool
+		ok         bool
+		want       string
+	}{
+		{"valid", `{"name":"a"}`, false, true, "a"},
+		{"empty allowed", ``, true, true, ""},
+		{"empty refused", ``, false, false, ""},
+		{"malformed", `{"name":`, true, false, ""},
+		{"wrong type", `{"name":1}`, true, false, ""},
+		{"over the limit", `{"name":"` + strings.Repeat("x", 64) + `"}`, true, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body))
+			w := httptest.NewRecorder()
+			var got body
+			if ok := decodeBody(w, r, 32, &got, tc.allowEmpty); ok != tc.ok {
+				t.Fatalf("decodeBody = %v, want %v", ok, tc.ok)
+			}
+			if tc.ok {
+				if w.Body.Len() != 0 || got.Name != tc.want {
+					t.Fatalf("wrote %q, decoded %+v", w.Body.String(), got)
+				}
+				return
+			}
+			var resp map[string]string
+			if w.Code != http.StatusBadRequest || json.Unmarshal(w.Body.Bytes(), &resp) != nil ||
+				resp["error"] != "invalid request body" || resp["errorCode"] != "validation" {
+				t.Fatalf("got %d %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}

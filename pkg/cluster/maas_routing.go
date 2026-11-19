@@ -56,9 +56,9 @@ import (
 
 // gatewayRefs are a model's spec.router.gateway.refs as read (KServe
 // UntypedObjectReference: name, namespace), kept whole.
-type gatewayRefs []map[string]interface{}
+type gatewayRefs []map[string]any
 
-func gatewayRefName(r map[string]interface{}) (string, string) {
+func gatewayRefName(r map[string]any) (string, string) {
 	name, _ := r["name"].(string)
 	ns, _ := r["namespace"].(string)
 	return name, ns
@@ -116,7 +116,7 @@ func modelGatewayRefsOf(m llmisvcObject) gatewayRefs {
 	}
 	var out gatewayRefs
 	for _, r := range m.Spec.Router.Gateway.Refs {
-		ref := map[string]interface{}{"name": r.Name}
+		ref := map[string]any{"name": r.Name}
 		if r.Namespace != "" {
 			ref["namespace"] = r.Namespace
 		}
@@ -127,9 +127,9 @@ func modelGatewayRefsOf(m llmisvcObject) gatewayRefs {
 
 // specHasRoute: the model's spec (as read whole) has spec.router.route, so
 // KServe makes an HTTPRoute for it; without it the model has none.
-func specHasRoute(spec map[string]interface{}) bool {
-	router, _ := spec["router"].(map[string]interface{})
-	_, ok := router["route"].(map[string]interface{})
+func specHasRoute(spec map[string]any) bool {
+	router, _ := spec["router"].(map[string]any)
+	_, ok := router["route"].(map[string]any)
 	return ok
 }
 
@@ -164,7 +164,7 @@ func readModelGatewayRefs(c *Client, project, name string) (gatewayRefs, string,
 
 // readModelGatewayRefsSpec is readModelGatewayRefs with the model's
 // metadata and its whole spec from the same read.
-func readModelGatewayRefsSpec(c *Client, project, name string) (gatewayRefs, objectMeta, map[string]interface{}, error) {
+func readModelGatewayRefsSpec(c *Client, project, name string) (gatewayRefs, objectMeta, map[string]any, error) {
 	path, _ := toolModelPath(project, name)
 	body, _, err := c.get(path)
 	if err != nil {
@@ -181,7 +181,7 @@ func readModelGatewayRefsSpec(c *Client, project, name string) (gatewayRefs, obj
 		} `json:"spec"`
 	}
 	var raw struct {
-		Spec map[string]interface{} `json:"spec"`
+		Spec map[string]any `json:"spec"`
 	}
 	if err := json.Unmarshal(body, &model); err != nil {
 		return nil, objectMeta{}, nil, fmt.Errorf("parse %s in %s: %w", name, project, err)
@@ -197,13 +197,13 @@ func readModelGatewayRefsSpec(c *Client, project, name string) (gatewayRefs, obj
 // resourceVersion rv.
 func writeModelGatewayRefs(c *Client, project, name, rv string, refs gatewayRefs) error {
 	path, _ := toolModelPath(project, name)
-	var list interface{}
+	var list any
 	if len(refs) > 0 {
 		list = refs
 	}
-	patch, _ := json.Marshal(map[string]interface{}{
-		"metadata": map[string]interface{}{"resourceVersion": rv},
-		"spec":     map[string]interface{}{"router": map[string]interface{}{"gateway": map[string]interface{}{"refs": list}}},
+	patch, _ := json.Marshal(map[string]any{
+		"metadata": map[string]any{"resourceVersion": rv},
+		"spec":     map[string]any{"router": map[string]any{"gateway": map[string]any{"refs": list}}},
 	})
 	_, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", patch, url.Values{"fieldManager": {maasModelManager}})
 	return err
@@ -473,17 +473,17 @@ func (m *maasRun) removeModelRoute(project, name, rv string, say func(id, status
 // that exposure writes, if the model is still at resourceVersion rv.
 func writeModelRouter(c *Client, project, name, rv string, exp exposurePlan) error {
 	path, _ := toolModelPath(project, name)
-	meta := map[string]interface{}{"resourceVersion": rv}
+	meta := map[string]any{"resourceVersion": rv}
 	if exp.authOff {
-		meta["annotations"] = map[string]interface{}{enableAuthAnnot: "false"}
+		meta["annotations"] = map[string]any{enableAuthAnnot: "false"}
 	}
-	var router interface{}
+	var router any
 	if r := exp.router(); r != nil {
 		router = r
 	}
-	patch, _ := json.Marshal(map[string]interface{}{
+	patch, _ := json.Marshal(map[string]any{
 		"metadata": meta,
-		"spec":     map[string]interface{}{"router": router},
+		"spec":     map[string]any{"router": router},
 	})
 	_, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", patch, url.Values{"fieldManager": {maasModelManager}})
 	return err

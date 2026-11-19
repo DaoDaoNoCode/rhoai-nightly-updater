@@ -45,13 +45,13 @@ func exposures(t *testing.T, mc *modelsCluster, model string) *types.ModelExposu
 	return ex
 }
 
-func modelSpec(t *testing.T, mc *modelsCluster) map[string]interface{} {
+func modelSpec(t *testing.T, mc *modelsCluster) map[string]any {
 	t.Helper()
 	m := mc.f.get(testModelPath)
 	if m == nil {
 		t.Fatal("no model")
 	}
-	return m["spec"].(map[string]interface{})
+	return m["spec"].(map[string]any)
 }
 
 // No gateway on the cluster: the default route cannot be used, and
@@ -127,8 +127,8 @@ func TestModelExposures_OtherGatewaysAreFiltered(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
-	refs := modelSpec(t, mc)["router"].(map[string]interface{})["gateway"].(map[string]interface{})["refs"].([]interface{})
-	if r := refs[0].(map[string]interface{}); len(refs) != 1 || r["name"] != "mine" || r["namespace"] != "team-gw" {
+	refs := modelSpec(t, mc)["router"].(map[string]any)["gateway"].(map[string]any)["refs"].([]any)
+	if r := refs[0].(map[string]any); len(refs) != 1 || r["name"] != "mine" || r["namespace"] != "team-gw" {
 		t.Errorf("refs: %v", refs)
 	}
 	for _, m := range mc.f.mutations()[before:] {
@@ -166,8 +166,8 @@ func TestModelExposures_WithoutConnectivityLink(t *testing.T) {
 		t.Fatal("a model was created")
 	}
 	// KServe's Service for the model, on its own port (RHOAI 3.6: 8000).
-	mc.f.put("/api/v1/namespaces/proj/services/qwen25-05b-instruct-kserve-workload-svc", map[string]interface{}{
-		"spec": map[string]interface{}{"ports": []interface{}{map[string]interface{}{"name": "https", "appProtocol": "https", "port": 8000}}},
+	mc.f.put("/api/v1/namespaces/proj/services/qwen25-05b-instruct-kserve-workload-svc", map[string]any{
+		"spec": map[string]any{"ports": []any{map[string]any{"name": "https", "appProtocol": "https", "port": 8000}}},
 	})
 	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: exposureInternal})
 	if !res.Success {
@@ -177,7 +177,7 @@ func TestModelExposures_WithoutConnectivityLink(t *testing.T) {
 	if _, routed := spec["router"]; routed {
 		t.Errorf("internal model has a router: %v", spec["router"])
 	}
-	ann := mc.f.get(testModelPath)["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
+	ann := mc.f.get(testModelPath)["metadata"].(map[string]any)["annotations"].(map[string]any)
 	if ann[enableAuthAnnot] != "false" {
 		t.Errorf("annotations: %v", ann)
 	}
@@ -361,8 +361,8 @@ func TestModelsSetup_PullFailureThatRecovers(t *testing.T) {
 // works without it); anything else missing still does.
 func TestModelsBlock_ConnectivityLinkAloneIsNoBlock(t *testing.T) {
 	dsc := func(msg string) dscRead {
-		return dscRead{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "default-dsc"}, "spec": map[string]interface{}{"components": map[string]interface{}{"kserve": map[string]interface{}{"managementState": "Managed"}}},
-			"status": map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": llmDependenciesCondition, "status": "False", "message": msg}}}}}
+		return dscRead{Object: map[string]any{"metadata": map[string]any{"name": "default-dsc"}, "spec": map[string]any{"components": map[string]any{"kserve": map[string]any{"managementState": "Managed"}}},
+			"status": map[string]any{"conditions": []any{map[string]any{"type": llmDependenciesCondition, "status": "False", "message": msg}}}}}
 	}
 	if b, deps := modelsBlock(dsc("Red Hat Connectivity Link is not installed")); b != nil || deps != "False" {
 		t.Errorf("rhcl only: %+v %s", b, deps)

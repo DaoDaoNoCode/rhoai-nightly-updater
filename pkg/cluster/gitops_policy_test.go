@@ -22,12 +22,12 @@ import (
 // only testable on a cluster.
 
 type policyCase struct {
-	Name      string                 `json:"name"`
-	Allow     bool                   `json:"allow"`
-	User      string                 `json:"user"`
-	Request   map[string]string      `json:"request"`
-	Object    map[string]interface{} `json:"object"`
-	OldObject map[string]interface{} `json:"oldObject"`
+	Name      string            `json:"name"`
+	Allow     bool              `json:"allow"`
+	User      string            `json:"user"`
+	Request   map[string]string `json:"request"`
+	Object    map[string]any    `json:"object"`
+	OldObject map[string]any    `json:"oldObject"`
 }
 
 type compiledPolicy struct {
@@ -123,14 +123,14 @@ func (p compiledPolicy) admits(c policyCase) (bool, string) {
 	if user == "" {
 		user = "system:serviceaccount:rhoai-nightly-updater:rhoai-nightly-updater"
 	}
-	request := map[string]interface{}{
-		"userInfo":  map[string]interface{}{"username": user},
+	request := map[string]any{
+		"userInfo":  map[string]any{"username": user},
 		"operation": c.Request["operation"],
-		"resource":  map[string]interface{}{"group": "operators.coreos.com", "resource": c.Request["resource"]},
+		"resource":  map[string]any{"group": "operators.coreos.com", "resource": c.Request["resource"]},
 		"namespace": c.Request["namespace"],
 		"name":      c.Request["name"],
 	}
-	vars := map[string]interface{}{"request": request, "object": nilIfEmpty(c.Object), "oldObject": nilIfEmpty(c.OldObject)}
+	vars := map[string]any{"request": request, "object": nilIfEmpty(c.Object), "oldObject": nilIfEmpty(c.OldObject)}
 	for _, m := range p.matchConditions {
 		out, _, err := m.Eval(vars)
 		if err != nil {
@@ -140,7 +140,7 @@ func (p compiledPolicy) admits(c policyCase) (bool, string) {
 			return true, "skipped"
 		}
 	}
-	variables := map[string]interface{}{}
+	variables := map[string]any{}
 	vars["variables"] = variables
 	for _, v := range p.variables {
 		out, _, err := v.prg.Eval(vars)
@@ -161,7 +161,7 @@ func (p compiledPolicy) admits(c policyCase) (bool, string) {
 	return true, ""
 }
 
-func nilIfEmpty(m map[string]interface{}) interface{} {
+func nilIfEmpty(m map[string]any) any {
 	if m == nil {
 		return nil
 	}
@@ -202,7 +202,7 @@ func TestGitOpsPolicyPredicateMatchesTheCEL(t *testing.T) {
 		seen[res][c.Allow] = true
 		op := c.Request["operation"]
 		if res == "subscriptions" && c.User == "" && (op == "CREATE" || op == "UPDATE") {
-			spec, _ := c.Object["spec"].(map[string]interface{})
+			spec, _ := c.Object["spec"].(map[string]any)
 			problem := gitOpsSubscriptionProblem(c.Request["namespace"], c.Request["name"], spec, strings.Split(DefaultSubscriptionEnvAllowlist, ","))
 			if (problem == "") != c.Allow {
 				t.Errorf("%s: the Go predicate says %q, the policy allowed=%v", c.Name, problem, c.Allow)
@@ -259,20 +259,20 @@ func useGitOpsPolicy(t *testing.T) {
 // livePolicy returns the policy and binding of deploy/rbac-gitops.yaml as
 // the API server returns them, with the defaults it fills in (as an
 // OpenShift 4.21 cluster returns its policies).
-func livePolicy(t *testing.T) (policy, binding map[string]interface{}) {
+func livePolicy(t *testing.T) (policy, binding map[string]any) {
 	t.Helper()
 	p, b, err := expectedGitOpsAdmission(testGitOpsPolicyName)
 	if err != nil {
 		t.Fatal(err)
 	}
-	mc := p["matchConstraints"].(map[string]interface{})
-	mc["namespaceSelector"] = map[string]interface{}{}
-	mc["objectSelector"] = map[string]interface{}{}
-	for _, r := range mc["resourceRules"].([]interface{}) {
-		r.(map[string]interface{})["scope"] = "*"
+	mc := p["matchConstraints"].(map[string]any)
+	mc["namespaceSelector"] = map[string]any{}
+	mc["objectSelector"] = map[string]any{}
+	for _, r := range mc["resourceRules"].([]any) {
+		r.(map[string]any)["scope"] = "*"
 	}
-	return map[string]interface{}{"metadata": map[string]interface{}{"name": testGitOpsPolicyName, "uid": "u1"}, "spec": p},
-		map[string]interface{}{"metadata": map[string]interface{}{"name": testGitOpsPolicyName, "uid": "u2"}, "spec": b}
+	return map[string]any{"metadata": map[string]any{"name": testGitOpsPolicyName, "uid": "u1"}, "spec": p},
+		map[string]any{"metadata": map[string]any{"name": testGitOpsPolicyName, "uid": "u2"}, "spec": b}
 }
 
 // servesGitOpsPolicy makes f a cluster with the gitops profile's policy in
@@ -281,7 +281,7 @@ func servesGitOpsPolicy(t *testing.T, f *fakeOLM) *fakeOLM {
 	t.Helper()
 	useGitOpsPolicy(t)
 	policy, binding := livePolicy(t)
-	f.admission = map[string]map[string]interface{}{
+	f.admission = map[string]map[string]any{
 		clusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicies", testGitOpsPolicyName):       policy,
 		clusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicybindings", testGitOpsPolicyName): binding,
 	}
@@ -291,33 +291,33 @@ func servesGitOpsPolicy(t *testing.T, f *fakeOLM) *fakeOLM {
 // The policy and binding must be exactly this release's: each way of
 // weakening them, or a policy rendered with another allowlist, is refused.
 func TestCheckGitOpsAdmissionPolicy(t *testing.T) {
-	spec := func(o map[string]interface{}) map[string]interface{} { return o["spec"].(map[string]interface{}) }
+	spec := func(o map[string]any) map[string]any { return o["spec"].(map[string]any) }
 	for _, tc := range []struct {
 		desc   string
-		change func(policy, binding map[string]interface{})
+		change func(policy, binding map[string]any)
 		want   string
 	}{
-		{"in place", func(_, _ map[string]interface{}) {}, ""},
-		{"failurePolicy unset (Fail)", func(p, _ map[string]interface{}) { delete(spec(p), "failurePolicy") }, ""},
-		{"no policy", func(p, _ map[string]interface{}) { p["gone"] = true }, "read ValidatingAdmissionPolicy"},
-		{"no binding", func(_, b map[string]interface{}) { b["gone"] = true }, "read ValidatingAdmissionPolicyBinding"},
-		{"failurePolicy Ignore", func(p, _ map[string]interface{}) { spec(p)["failurePolicy"] = "Ignore" }, "spec.failurePolicy"},
-		{"warn only", func(_, b map[string]interface{}) { spec(b)["validationActions"] = []interface{}{"Warn"} }, "spec.validationActions"},
-		{"binds another", func(_, b map[string]interface{}) { spec(b)["policyName"] = "other" }, "spec.policyName"},
-		{"binding narrowed to other namespaces", func(_, b map[string]interface{}) {
-			spec(b)["matchResources"] = map[string]interface{}{"namespaceSelector": map[string]interface{}{"matchLabels": map[string]interface{}{"x": "y"}}}
+		{"in place", func(_, _ map[string]any) {}, ""},
+		{"failurePolicy unset (Fail)", func(p, _ map[string]any) { delete(spec(p), "failurePolicy") }, ""},
+		{"no policy", func(p, _ map[string]any) { p["gone"] = true }, "read ValidatingAdmissionPolicy"},
+		{"no binding", func(_, b map[string]any) { b["gone"] = true }, "read ValidatingAdmissionPolicyBinding"},
+		{"failurePolicy Ignore", func(p, _ map[string]any) { spec(p)["failurePolicy"] = "Ignore" }, "spec.failurePolicy"},
+		{"warn only", func(_, b map[string]any) { spec(b)["validationActions"] = []any{"Warn"} }, "spec.validationActions"},
+		{"binds another", func(_, b map[string]any) { spec(b)["policyName"] = "other" }, "spec.policyName"},
+		{"binding narrowed to other namespaces", func(_, b map[string]any) {
+			spec(b)["matchResources"] = map[string]any{"namespaceSelector": map[string]any{"matchLabels": map[string]any{"x": "y"}}}
 		}, "spec.matchResources"},
-		{"policy narrowed to other namespaces", func(p, _ map[string]interface{}) {
-			spec(p)["matchConstraints"].(map[string]interface{})["namespaceSelector"] = map[string]interface{}{"matchLabels": map[string]interface{}{"x": "y"}}
+		{"policy narrowed to other namespaces", func(p, _ map[string]any) {
+			spec(p)["matchConstraints"].(map[string]any)["namespaceSelector"] = map[string]any{"matchLabels": map[string]any{"x": "y"}}
 		}, "spec.matchConstraints"},
-		{"a match condition that skips everything", func(p, _ map[string]interface{}) {
-			spec(p)["matchConditions"] = append(spec(p)["matchConditions"].([]interface{}), map[string]interface{}{"name": "never", "expression": "false"})
+		{"a match condition that skips everything", func(p, _ map[string]any) {
+			spec(p)["matchConditions"] = append(spec(p)["matchConditions"].([]any), map[string]any{"name": "never", "expression": "false"})
 		}, "spec.matchConditions"},
-		{"a validation removed", func(p, _ map[string]interface{}) {
-			spec(p)["validations"] = spec(p)["validations"].([]interface{})[1:]
+		{"a validation removed", func(p, _ map[string]any) {
+			spec(p)["validations"] = spec(p)["validations"].([]any)[1:]
 		}, "spec.validations"},
-		{"another allowlist (a rollout in progress)", func(p, _ map[string]interface{}) {
-			spec(p)["variables"] = []interface{}{map[string]interface{}{"name": "allowedEnv", "expression": "'DISABLE_DSC_CONFIG,RELATED_IMAGE_X'.split(',')"}}
+		{"another allowlist (a rollout in progress)", func(p, _ map[string]any) {
+			spec(p)["variables"] = []any{map[string]any{"name": "allowedEnv", "expression": "'DISABLE_DSC_CONFIG,RELATED_IMAGE_X'.split(',')"}}
 		}, "spec.variables"},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {

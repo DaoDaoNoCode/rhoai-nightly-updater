@@ -19,9 +19,9 @@ type installedCSVFixture struct {
 
 func (fx installedCSVFixture) apply(f *fakeOLM) {
 	f.installed(fx.csvName, nil)
-	f.csvs[fx.csvName]["spec"].(map[string]interface{})["version"] = fx.version
+	f.csvs[fx.csvName]["spec"].(map[string]any)["version"] = fx.version
 	if fx.listOnly {
-		status := f.sub["status"].(map[string]interface{})
+		status := f.sub["status"].(map[string]any)
 		delete(status, "installedCSV")
 		delete(status, "currentCSV")
 	}

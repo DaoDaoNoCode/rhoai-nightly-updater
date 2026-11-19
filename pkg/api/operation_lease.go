@@ -69,7 +69,7 @@ func leaseHeldElsewhere(l *types.OperationLease) bool {
 	if l == nil || l.BootID == "" || l.BootID == bootID {
 		return false
 	}
-	if pod := os.Getenv("HOSTNAME"); pod != "" && l.Pod == pod && os.Getenv("DEV_MODE") != "true" {
+	if pod := os.Getenv("HOSTNAME"); pod != "" && l.Pod == pod && !Dev().Mode {
 		return false
 	}
 	return cluster.LeaseLive(l, time.Now(), leaseTTL)
@@ -156,16 +156,19 @@ func (k *leaseKeeper) startHeartbeat(c *cluster.Client, opID string, cancelOp co
 			cancelOp(cluster.ErrOperationLockLost)
 		}
 	}
+	// The ticker starts here, not in the goroutine, so the first renewal is
+	// due one interval after the lease was taken.
+	hb := clk
+	ticker := hb.NewTicker(interval)
+	lastRenewed := hb.Now()
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		lastRenewed := time.Now()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-ticker.C():
 			}
 			op := inflight.snapshot()
 			if op == nil || op.ID != opID {
@@ -180,13 +183,13 @@ func (k *leaseKeeper) startHeartbeat(c *cluster.Client, opID string, cancelOp co
 			case holder != nil:
 				lose("another updater pod took over the cross-pod operation lock", "holder", holder.ID, "holderPod", holder.Pod)
 				return
-			case err != nil && time.Since(lastRenewed) >= lossAfter:
+			case err != nil && hb.Since(lastRenewed) >= lossAfter:
 				lose("the cross-pod operation lock could not be renewed and may have expired", "since", lastRenewed, "error", err)
 				return
 			case err != nil:
 				slog.Warn("could not renew the cross-pod operation lock", "operation", opID, "error", err)
 			default:
-				lastRenewed = time.Now()
+				lastRenewed = hb.Now()
 			}
 		}
 	}()

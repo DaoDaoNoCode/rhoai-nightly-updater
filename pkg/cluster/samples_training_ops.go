@@ -58,7 +58,7 @@ func (t *mlflowTarget) trainingRuns(experimentID string) (map[string]trainingRun
 			} `json:"data"`
 		} `json:"runs"`
 	}
-	req := map[string]interface{}{
+	req := map[string]any{
 		"experiment_ids": []string{experimentID},
 		"filter":         fmt.Sprintf("tags.`%s` = '%s'", sampleMarkerKey, SampleTraining),
 		"run_view_type":  "ACTIVE_ONLY",
@@ -102,7 +102,7 @@ func (t *mlflowTarget) createTrainingRun(experimentID, lr string, decay, floor f
 			} `json:"info"`
 		} `json:"run"`
 	}
-	err := t.api.sendJSON("POST", "/api/2.0/mlflow/runs/create", nil, map[string]interface{}{
+	err := t.api.sendJSON("POST", "/api/2.0/mlflow/runs/create", nil, map[string]any{
 		"experiment_id": experimentID,
 		"run_name":      "lr-" + lr,
 		"start_time":    time.Now().UnixMilli(),
@@ -126,22 +126,22 @@ func (t *mlflowTarget) finishTrainingRun(run trainingRun, lr string, decay, floo
 			return err
 		}
 	}
-	return t.api.sendJSON("POST", "/api/2.0/mlflow/runs/update", nil, map[string]interface{}{
+	return t.api.sendJSON("POST", "/api/2.0/mlflow/runs/update", nil, map[string]any{
 		"run_id": runID, "status": "FINISHED", "end_time": start + trainingEpochs*1000,
 	}, nil)
 }
 
 func (t *mlflowTarget) logTrainingRun(runID, lr string, decay, floor float64, start int64) error {
-	var metrics []map[string]interface{}
-	for step := 0; step < trainingEpochs; step++ {
+	var metrics []map[string]any
+	for step := range trainingEpochs {
 		loss := floor + (trainingStartLoss-floor)*math.Exp(-decay*float64(step))
 		accuracy := math.Max(0, 1-loss/trainingStartLoss)
 		ts := start + int64(step)*1000
 		metrics = append(metrics,
-			map[string]interface{}{"key": "loss", "value": math.Round(loss*1e4) / 1e4, "timestamp": ts, "step": step},
-			map[string]interface{}{"key": "accuracy", "value": math.Round(accuracy*1e4) / 1e4, "timestamp": ts, "step": step})
+			map[string]any{"key": "loss", "value": math.Round(loss*1e4) / 1e4, "timestamp": ts, "step": step},
+			map[string]any{"key": "accuracy", "value": math.Round(accuracy*1e4) / 1e4, "timestamp": ts, "step": step})
 	}
-	return t.api.sendJSON("POST", "/api/2.0/mlflow/runs/log-batch", nil, map[string]interface{}{
+	return t.api.sendJSON("POST", "/api/2.0/mlflow/runs/log-batch", nil, map[string]any{
 		"run_id":  runID,
 		"params":  []mlflowTag{{Key: "learning_rate", Value: lr}, {Key: "epochs", Value: strconv.Itoa(trainingEpochs)}},
 		"metrics": metrics,
@@ -189,7 +189,7 @@ func (t *mlflowTarget) createModelVersion(runID, lr string) (string, error) {
 			Version string `json:"version"`
 		} `json:"model_version"`
 	}
-	err := t.api.sendJSON("POST", "/api/2.0/mlflow/model-versions/create", nil, map[string]interface{}{
+	err := t.api.sendJSON("POST", "/api/2.0/mlflow/model-versions/create", nil, map[string]any{
 		"name": trainingModel, "source": "runs:/" + runID + "/model", "run_id": runID,
 		"description": "Sample version from run lr-" + lr + " (metadata only: no model files).",
 	}, &out)
@@ -228,7 +228,7 @@ func addTraining(t *mlflowTarget, log func(string)) (string, error) {
 		var created struct {
 			ExperimentID string `json:"experiment_id"`
 		}
-		if err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/create", nil, map[string]interface{}{
+		if err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/create", nil, map[string]any{
 			"name": trainingExperiment,
 			"tags": []mlflowTag{{Key: sampleMarkerKey, Value: SampleTraining}, {Key: "mlflow.note.content", Value: "Sample training runs created by rhoai-nightly-updater. Metadata only: no artifacts."}},
 		}, &created); err != nil {
@@ -237,7 +237,7 @@ func addTraining(t *mlflowTarget, log func(string)) (string, error) {
 		expID = created.ExperimentID
 		log("Created experiment '" + trainingExperiment + "'")
 	case !exp.active():
-		if err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/restore", nil, map[string]interface{}{"experiment_id": exp.ExperimentID}, nil); err != nil {
+		if err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/restore", nil, map[string]any{"experiment_id": exp.ExperimentID}, nil); err != nil {
 			return "", err
 		}
 		expID = exp.ExperimentID
@@ -276,7 +276,7 @@ func addTraining(t *mlflowTarget, log func(string)) (string, error) {
 	}
 
 	if model == nil {
-		err := t.api.sendJSON("POST", "/api/2.0/mlflow/registered-models/create", nil, map[string]interface{}{
+		err := t.api.sendJSON("POST", "/api/2.0/mlflow/registered-models/create", nil, map[string]any{
 			"name":        trainingModel,
 			"description": "Sample registered model created by rhoai-nightly-updater (metadata only).",
 			"tags":        []mlflowTag{{Key: sampleMarkerKey, Value: SampleTraining}},
@@ -319,7 +319,7 @@ func addTraining(t *mlflowTarget, log func(string)) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if err := t.api.sendJSON("POST", "/api/2.0/mlflow/registered-models/alias", nil, map[string]interface{}{
+		if err := t.api.sendJSON("POST", "/api/2.0/mlflow/registered-models/alias", nil, map[string]any{
 			"name": trainingModel, "alias": trainingAlias, "version": v,
 		}, nil); err != nil {
 			return "", err
@@ -342,13 +342,13 @@ func removeTraining(t *mlflowTarget, log func(string)) (string, error) {
 		return "nothing to remove", nil
 	}
 	if model != nil {
-		if err := t.api.sendJSON("DELETE", "/api/2.0/mlflow/registered-models/delete", nil, map[string]interface{}{"name": trainingModel}, nil); err != nil && !isNotFound(err) {
+		if err := t.api.sendJSON("DELETE", "/api/2.0/mlflow/registered-models/delete", nil, map[string]any{"name": trainingModel}, nil); err != nil && !isNotFound(err) {
 			return "", err
 		}
 		log("Deleted registered model '" + trainingModel + "'")
 	}
 	if exp != nil && exp.active() {
-		if err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/delete", nil, map[string]interface{}{"experiment_id": exp.ExperimentID}, nil); err != nil {
+		if err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/delete", nil, map[string]any{"experiment_id": exp.ExperimentID}, nil); err != nil {
 			return "", err
 		}
 		log("Deleted experiment '" + trainingExperiment + "' (MLflow keeps it in its deleted view until garbage collection)")

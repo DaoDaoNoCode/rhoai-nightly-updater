@@ -59,24 +59,24 @@ func rhclCatalog() operatorPackage {
 }
 
 func packageManifestStatus(pkg string, p fakePackage) string {
-	var chans []interface{}
+	var chans []any
 	for _, name := range p.order {
 		ch := p.channels[name]
-		var entries []interface{}
+		var entries []any
 		for _, v := range ch.entries {
-			entries = append(entries, map[string]interface{}{"name": pkg + ".v" + v, "version": v})
+			entries = append(entries, map[string]any{"name": pkg + ".v" + v, "version": v})
 		}
-		desc := map[string]interface{}{"version": ch.head}
+		desc := map[string]any{"version": ch.head}
 		if len(p.installModes) > 0 {
-			var modes []interface{}
+			var modes []any
 			for _, m := range []string{"OwnNamespace", "SingleNamespace", "MultiNamespace", "AllNamespaces"} {
-				modes = append(modes, map[string]interface{}{"type": m, "supported": slices.Contains(p.installModes, m)})
+				modes = append(modes, map[string]any{"type": m, "supported": slices.Contains(p.installModes, m)})
 			}
 			desc["installModes"] = modes
 		}
-		chans = append(chans, map[string]interface{}{"name": name, "currentCSV": pkg + ".v" + ch.head, "currentCSVDesc": desc, "entries": entries})
+		chans = append(chans, map[string]any{"name": name, "currentCSV": pkg + ".v" + ch.head, "currentCSVDesc": desc, "entries": entries})
 	}
-	raw, _ := json.Marshal(map[string]interface{}{"packageName": pkg, "catalogSource": p.source, "catalogSourceNamespace": "openshift-marketplace", "defaultChannel": p.defaultChannel, "channels": chans})
+	raw, _ := json.Marshal(map[string]any{"packageName": pkg, "catalogSource": p.source, "catalogSourceNamespace": "openshift-marketplace", "defaultChannel": p.defaultChannel, "channels": chans})
 	return string(raw)
 }
 
@@ -92,25 +92,25 @@ type fakeOLMSim struct {
 func newFakeOLMSim(f *resourceFake) *fakeOLMSim {
 	s := &fakeOLMSim{f: f, packages: map[string]fakePackage{"rhcl-operator": rhclFakePackage(), "cloudnative-pg": cnpgFakePackage()}}
 	for name, p := range s.packages {
-		var status map[string]interface{}
+		var status map[string]any
 		_ = json.Unmarshal([]byte(packageManifestStatus(name, p)), &status)
-		f.put("/apis/packages.operators.coreos.com/v1/namespaces/openshift-marketplace/packagemanifests/"+name, map[string]interface{}{
-			"metadata": map[string]interface{}{"labels": map[string]interface{}{"catalog": p.source}}, "status": status})
+		f.put("/apis/packages.operators.coreos.com/v1/namespaces/openshift-marketplace/packagemanifests/"+name, map[string]any{
+			"metadata": map[string]any{"labels": map[string]any{"catalog": p.source}}, "status": status})
 	}
 	return s
 }
 
 // csvLocked stores an installed CSV of pkg at version in ns.
 func (s *fakeOLMSim) csvLocked(pkg, ns, version string) {
-	s.f.objects[fakeKey{gv: "operators.coreos.com/v1alpha1", ns: ns, plural: "clusterserviceversions", name: pkg + ".v" + version}] = map[string]interface{}{
-		"metadata": map[string]interface{}{"name": pkg + ".v" + version, "namespace": ns, "uid": "csv-" + version, "labels": map[string]interface{}{"operators.coreos.com/" + pkg + "." + ns: ""}},
-		"spec": map[string]interface{}{"install": map[string]interface{}{"spec": map[string]interface{}{"deployments": []interface{}{map[string]interface{}{
+	s.f.objects[fakeKey{gv: "operators.coreos.com/v1alpha1", ns: ns, plural: "clusterserviceversions", name: pkg + ".v" + version}] = map[string]any{
+		"metadata": map[string]any{"name": pkg + ".v" + version, "namespace": ns, "uid": "csv-" + version, "labels": map[string]any{"operators.coreos.com/" + pkg + "." + ns: ""}},
+		"spec": map[string]any{"install": map[string]any{"spec": map[string]any{"deployments": []any{map[string]any{
 			"name": "kuadrant-operator-controller-manager",
-			"spec": map[string]interface{}{"template": map[string]interface{}{"spec": map[string]interface{}{"containers": []interface{}{map[string]interface{}{
-				"name": "manager", "resources": map[string]interface{}{"limits": map[string]interface{}{"cpu": "200m", "memory": "500Mi"}, "requests": map[string]interface{}{"cpu": "200m", "memory": "350Mi"}},
+			"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{
+				"name": "manager", "resources": map[string]any{"limits": map[string]any{"cpu": "200m", "memory": "500Mi"}, "requests": map[string]any{"cpu": "200m", "memory": "350Mi"}},
 			}}}}},
 		}}}}},
-		"status": map[string]interface{}{"phase": "Succeeded"},
+		"status": map[string]any{"phase": "Succeeded"},
 	}
 }
 
@@ -121,18 +121,18 @@ func (s *fakeOLMSim) installed(pkg, ns, subName, channel, version string) {
 	defer s.f.mu.Unlock()
 	s.csvLocked(pkg, ns, version)
 	p := s.packages[pkg]
-	spec := map[string]interface{}{"channel": channel, "name": pkg, "source": p.source, "sourceNamespace": "openshift-marketplace", "installPlanApproval": "Automatic"}
+	spec := map[string]any{"channel": channel, "name": pkg, "source": p.source, "sourceNamespace": "openshift-marketplace", "installPlanApproval": "Automatic"}
 	if pkg == "rhcl-operator" {
 		// Installed as the docs recommend: rate limits fail closed.
-		spec["config"] = map[string]interface{}{"env": []interface{}{
-			map[string]interface{}{"name": "RATELIMIT_CHECK_SERVICE_FAILURE_MODE", "value": "deny"},
-			map[string]interface{}{"name": "RATELIMIT_REPORT_SERVICE_FAILURE_MODE", "value": "deny"},
+		spec["config"] = map[string]any{"env": []any{
+			map[string]any{"name": "RATELIMIT_CHECK_SERVICE_FAILURE_MODE", "value": "deny"},
+			map[string]any{"name": "RATELIMIT_REPORT_SERVICE_FAILURE_MODE", "value": "deny"},
 		}}
 	}
-	s.f.objects[fakeKey{gv: "operators.coreos.com/v1alpha1", ns: ns, plural: "subscriptions", name: subName}] = map[string]interface{}{
-		"metadata": map[string]interface{}{"name": subName, "namespace": ns, "uid": "sub-" + subName, "resourceVersion": "1"},
+	s.f.objects[fakeKey{gv: "operators.coreos.com/v1alpha1", ns: ns, plural: "subscriptions", name: subName}] = map[string]any{
+		"metadata": map[string]any{"name": subName, "namespace": ns, "uid": "sub-" + subName, "resourceVersion": "1"},
 		"spec":     spec,
-		"status":   map[string]interface{}{"state": "AtLatestKnown", "installedCSV": pkg + ".v" + version, "currentCSV": pkg + ".v" + version},
+		"status":   map[string]any{"state": "AtLatestKnown", "installedCSV": pkg + ".v" + version, "currentCSV": pkg + ".v" + version},
 	}
 }
 
@@ -173,7 +173,7 @@ func (s *fakeOLMSim) stepOne(k fakeKey) {
 	ch, ok := s.packages[pkg].channels[channel]
 	if !ok {
 		status["state"] = "UpgradePending"
-		status["conditions"] = []interface{}{map[string]interface{}{"type": "ResolutionFailed", "status": "True", "message": "no channel " + channel}}
+		status["conditions"] = []any{map[string]any{"type": "ResolutionFailed", "status": "True", "message": "no channel " + channel}}
 		return
 	}
 	installed, _ := status["installedCSV"].(string)
@@ -224,11 +224,11 @@ func newFreshMaaSCluster(t *testing.T) (*modelsCluster, *fakeOLMSim) {
 	sim.onInstalled = func(pkg, ns, from, to string) {
 		switch pkg {
 		case "rhcl-operator":
-			f.objects[fakeKey{gv: "apps/v1", ns: ns, plural: "deployments", name: kuadrantController}] = map[string]interface{}{"metadata": map[string]interface{}{"name": kuadrantController}}
+			f.objects[fakeKey{gv: "apps/v1", ns: ns, plural: "deployments", name: kuadrantController}] = map[string]any{"metadata": map[string]any{"name": kuadrantController}}
 			f.groups["/apis/kuadrant.io"] = `{"kind":"APIGroup","name":"kuadrant.io","versions":[{"groupVersion":"kuadrant.io/v1","version":"v1"},{"groupVersion":"kuadrant.io/v1beta1","version":"v1beta1"}],"preferredVersion":{"groupVersion":"kuadrant.io/v1","version":"v1"}}`
 			delete(f.fail, "GET /apis/kuadrant.io/v1beta1/kuadrants")
 		case "cloudnative-pg":
-			f.objects[fakeKey{gv: "apps/v1", ns: ns, plural: "deployments", name: cnpgController}] = map[string]interface{}{"metadata": map[string]interface{}{"name": cnpgController}}
+			f.objects[fakeKey{gv: "apps/v1", ns: ns, plural: "deployments", name: cnpgController}] = map[string]any{"metadata": map[string]any{"name": cnpgController}}
 			f.groups["/apis/postgresql.cnpg.io"] = `{"kind":"APIGroup","name":"postgresql.cnpg.io","versions":[{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}],"preferredVersion":{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}}`
 		}
 	}
@@ -242,7 +242,7 @@ func newFreshMaaSCluster(t *testing.T) (*modelsCluster, *fakeOLMSim) {
 	// maas-api, the tenant and the gateway's AuthPolicy; MaaS Removed takes
 	// maas-api away.
 	prevPatch := f.onMergePatch
-	f.onMergePatch = func(r *http.Request, k fakeKey, patch, next map[string]interface{}) {
+	f.onMergePatch = func(r *http.Request, k fakeKey, patch, next map[string]any) {
 		prevPatch(r, k, patch, next)
 		if k.plural != "datascienceclusters" || r.URL.Query().Get("dryRun") != "" {
 			return
@@ -254,11 +254,11 @@ func newFreshMaaSCluster(t *testing.T) (*modelsCluster, *fakeOLMSim) {
 			delete(f.objects, api)
 			return
 		}
-		f.objects[api] = map[string]interface{}{"metadata": map[string]interface{}{"name": "maas-api", "uid": "api"}, "status": map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": "Available", "status": "True"}}}}
-		f.objects[fakeKey{gv: "maas.opendatahub.io/v1alpha1", ns: "ai-tenants", plural: "aitenants", name: "models-as-a-service"}] = map[string]interface{}{"metadata": map[string]interface{}{"name": "models-as-a-service"}, "status": map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "True"}}}}
-		f.objects[fakeKey{gv: "maas.opendatahub.io/v1alpha1", ns: "models-as-a-service", plural: "maastenantconfigs", name: "default-tenant"}] = map[string]interface{}{"metadata": map[string]interface{}{"name": "default-tenant"}, "status": map[string]interface{}{"infraNamespace": "redhat-ai-gateway-infra", "conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "True"}}}}
-		f.objects[fakeKey{gv: "kuadrant.io/v1", ns: "openshift-ingress", plural: "authpolicies", name: "maas-gateway-auth"}] = map[string]interface{}{"metadata": map[string]interface{}{"name": "maas-gateway-auth", "labels": map[string]interface{}{"app.kubernetes.io/managed-by": "maas-controller"}},
-			"spec": map[string]interface{}{"targetRef": map[string]interface{}{"kind": "Gateway", "name": "maas-default-gateway"}}, "status": map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": "Enforced", "status": "True"}}}}
+		f.objects[api] = map[string]any{"metadata": map[string]any{"name": "maas-api", "uid": "api"}, "status": map[string]any{"conditions": []any{map[string]any{"type": "Available", "status": "True"}}}}
+		f.objects[fakeKey{gv: "maas.opendatahub.io/v1alpha1", ns: "ai-tenants", plural: "aitenants", name: "models-as-a-service"}] = map[string]any{"metadata": map[string]any{"name": "models-as-a-service"}, "status": map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True"}}}}
+		f.objects[fakeKey{gv: "maas.opendatahub.io/v1alpha1", ns: "models-as-a-service", plural: "maastenantconfigs", name: "default-tenant"}] = map[string]any{"metadata": map[string]any{"name": "default-tenant"}, "status": map[string]any{"infraNamespace": "redhat-ai-gateway-infra", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}}}
+		f.objects[fakeKey{gv: "kuadrant.io/v1", ns: "openshift-ingress", plural: "authpolicies", name: "maas-gateway-auth"}] = map[string]any{"metadata": map[string]any{"name": "maas-gateway-auth", "labels": map[string]any{"app.kubernetes.io/managed-by": "maas-controller"}},
+			"spec": map[string]any{"targetRef": map[string]any{"kind": "Gateway", "name": "maas-default-gateway"}}, "status": map[string]any{"conditions": []any{map[string]any{"type": "Enforced", "status": "True"}}}}
 	}
 	return mc, sim
 }
@@ -272,15 +272,15 @@ func kuadrantMakesAuthorino(f *resourceFake) {
 		if k.plural != "kuadrants" {
 			continue
 		}
-		ensureMap(obj, "status")["conditions"] = []interface{}{map[string]interface{}{"type": "Ready", "status": "True"}}
+		ensureMap(obj, "status")["conditions"] = []any{map[string]any{"type": "Ready", "status": "True"}}
 		cr := fakeKey{gv: "operator.authorino.kuadrant.io/v1beta1", ns: k.ns, plural: "authorinos", name: "authorino"}
 		if f.objects[cr] != nil {
 			continue
 		}
-		f.objects[cr] = map[string]interface{}{"metadata": map[string]interface{}{"name": "authorino", "uid": "authorino-cr", "resourceVersion": "1"}, "spec": map[string]interface{}{"listener": map[string]interface{}{}}}
-		f.objects[fakeKey{gv: "v1", ns: k.ns, plural: "services", name: "authorino-authorino-authorization"}] = map[string]interface{}{"metadata": map[string]interface{}{"name": "authorino-authorino-authorization", "uid": "svc", "resourceVersion": "1"}}
-		f.objects[fakeKey{gv: "apps/v1", ns: k.ns, plural: "deployments", name: "authorino"}] = map[string]interface{}{"metadata": map[string]interface{}{"name": "authorino", "uid": "dep", "resourceVersion": "1"},
-			"spec": map[string]interface{}{"template": map[string]interface{}{"spec": map[string]interface{}{"containers": []interface{}{map[string]interface{}{"name": "authorino"}}}}}}
+		f.objects[cr] = map[string]any{"metadata": map[string]any{"name": "authorino", "uid": "authorino-cr", "resourceVersion": "1"}, "spec": map[string]any{"listener": map[string]any{}}}
+		f.objects[fakeKey{gv: "v1", ns: k.ns, plural: "services", name: "authorino-authorino-authorization"}] = map[string]any{"metadata": map[string]any{"name": "authorino-authorino-authorization", "uid": "svc", "resourceVersion": "1"}}
+		f.objects[fakeKey{gv: "apps/v1", ns: k.ns, plural: "deployments", name: "authorino"}] = map[string]any{"metadata": map[string]any{"name": "authorino", "uid": "dep", "resourceVersion": "1"},
+			"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{"name": "authorino"}}}}}}
 	}
 }
 
@@ -365,17 +365,17 @@ func TestMaaSSetup_FreshClusterDoesEveryStep(t *testing.T) {
 	}
 	// The docs' objects.
 	sub := mc.f.get("/apis/operators.coreos.com/v1alpha1/namespaces/kuadrant-system/subscriptions/kuadrant-operator")
-	if spec := sub["spec"].(map[string]interface{}); spec["name"] != "rhcl-operator" || spec["channel"] != "stable-1.5" || spec["source"] != "redhat-operators" || spec["installPlanApproval"] != "Automatic" {
+	if spec := sub["spec"].(map[string]any); spec["name"] != "rhcl-operator" || spec["channel"] != "stable-1.5" || spec["source"] != "redhat-operators" || spec["installPlanApproval"] != "Automatic" {
 		t.Fatalf("subscription spec = %v", spec)
 	}
 	// The docs' fail-closed rate limiting, and nothing else in config.
-	if raw, _ := json.Marshal(sub["spec"].(map[string]interface{})["config"]); string(raw) != `{"env":[{"name":"RATELIMIT_CHECK_SERVICE_FAILURE_MODE","value":"deny"},{"name":"RATELIMIT_REPORT_SERVICE_FAILURE_MODE","value":"deny"}]}` {
+	if raw, _ := json.Marshal(sub["spec"].(map[string]any)["config"]); string(raw) != `{"env":[{"name":"RATELIMIT_CHECK_SERVICE_FAILURE_MODE","value":"deny"},{"name":"RATELIMIT_REPORT_SERVICE_FAILURE_MODE","value":"deny"}]}` {
 		t.Fatalf("subscription config = %s", raw)
 	}
 	// CloudNativePG in its own namespace, never openshift-operators (an
 	// install there can pull an OSSM upgrade that breaks the gateway).
 	cnpgSub := mc.f.get("/apis/operators.coreos.com/v1alpha1/namespaces/cnpg-system/subscriptions/cloudnative-pg")
-	if spec := cnpgSub["spec"].(map[string]interface{}); spec["name"] != "cloudnative-pg" || spec["source"] != "certified-operators" || spec["channel"] != "stable-v1" || spec["config"] != nil {
+	if spec := cnpgSub["spec"].(map[string]any); spec["name"] != "cloudnative-pg" || spec["source"] != "certified-operators" || spec["channel"] != "stable-v1" || spec["config"] != nil {
 		t.Fatalf("cnpg subscription = %v", cnpgSub)
 	}
 	if og := mc.f.get("/apis/operators.coreos.com/v1/namespaces/cnpg-system/operatorgroups/cloudnative-pg"); og == nil || og["spec"] != nil {
@@ -389,19 +389,19 @@ func TestMaaSSetup_FreshClusterDoesEveryStep(t *testing.T) {
 	if og := mc.f.get("/apis/operators.coreos.com/v1/namespaces/kuadrant-system/operatorgroups/kuadrant-operator-group"); og == nil || og["spec"] != nil {
 		t.Fatalf("operator group = %v", og)
 	}
-	if ns := mc.f.get("/api/v1/namespaces/redhat-ai-gateway-infra"); ns == nil || ns["metadata"].(map[string]interface{})["labels"].(map[string]interface{})[managedByLabelKey] != managedByLabelValue {
+	if ns := mc.f.get("/api/v1/namespaces/redhat-ai-gateway-infra"); ns == nil || ns["metadata"].(map[string]any)["labels"].(map[string]any)[managedByLabelKey] != managedByLabelValue {
 		t.Fatalf("infra namespace = %v", ns)
 	}
 	svc := mc.f.get("/api/v1/namespaces/kuadrant-system/services/authorino-authorino-authorization")
-	if svc["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})[servingCertAnnotation] != "authorino-server-cert" {
+	if svc["metadata"].(map[string]any)["annotations"].(map[string]any)[servingCertAnnotation] != "authorino-server-cert" {
 		t.Fatalf("service = %v", svc)
 	}
 	dep, _ := json.Marshal(mc.f.get("/apis/apps/v1/namespaces/kuadrant-system/deployments/authorino"))
 	if !strings.Contains(string(dep), `"SSL_CERT_FILE"`) || !strings.Contains(string(dep), restartAnnotation) {
 		t.Fatalf("authorino deployment = %s", dep)
 	}
-	ag := mc.f.get(tMaaSDSC)["spec"].(map[string]interface{})["components"].(map[string]interface{})["aigateway"].(map[string]interface{})
-	if ag["managementState"] != "Managed" || ag["modelsAsAService"].(map[string]interface{})["managementState"] != "Managed" || ag["batchGateway"].(map[string]interface{})["managementState"] != "Removed" {
+	ag := mc.f.get(tMaaSDSC)["spec"].(map[string]any)["components"].(map[string]any)["aigateway"].(map[string]any)
+	if ag["managementState"] != "Managed" || ag["modelsAsAService"].(map[string]any)["managementState"] != "Managed" || ag["batchGateway"].(map[string]any)["managementState"] != "Removed" {
 		t.Fatalf("aigateway = %v", ag)
 	}
 	rec := readRecord(t, mc.c)
@@ -429,8 +429,8 @@ func TestMaaSSetup_FreshClusterDoesEveryStep(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("teardown: %+v", res)
 	}
-	ag = mc.f.get(tMaaSDSC)["spec"].(map[string]interface{})["components"].(map[string]interface{})["aigateway"].(map[string]interface{})
-	if ag["managementState"] != "Removed" || ag["modelsAsAService"].(map[string]interface{})["managementState"] != "Removed" {
+	ag = mc.f.get(tMaaSDSC)["spec"].(map[string]any)["components"].(map[string]any)["aigateway"].(map[string]any)
+	if ag["managementState"] != "Removed" || ag["modelsAsAService"].(map[string]any)["managementState"] != "Removed" {
 		t.Fatalf("aigateway after removal = %v", ag)
 	}
 	if mc.f.has("/api/v1/namespaces/redhat-ai-gateway-infra") {
@@ -513,9 +513,9 @@ func TestMaaSRHCLDenyOnFailure(t *testing.T) {
 	sim := newFakeOLMSim(mc.f)
 	sim.installed("rhcl-operator", "kuadrant-system", "kuadrant-operator", "stable-1.5", "1.5.0")
 	subPath := "/apis/operators.coreos.com/v1alpha1/namespaces/kuadrant-system/subscriptions/kuadrant-operator"
-	ensureMap(mc.f.get(subPath), "spec")["config"] = map[string]interface{}{"env": []interface{}{
-		map[string]interface{}{"name": "AUTH_SERVICE_TIMEOUT", "value": "2s"},
-		map[string]interface{}{"name": "RATELIMIT_CHECK_SERVICE_FAILURE_MODE", "value": "allow"},
+	ensureMap(mc.f.get(subPath), "spec")["config"] = map[string]any{"env": []any{
+		map[string]any{"name": "AUTH_SERVICE_TIMEOUT", "value": "2s"},
+		map[string]any{"name": "RATELIMIT_CHECK_SERVICE_FAILURE_MODE", "value": "allow"},
 	}}
 	st, _ := GetMaaSStatus(mc.c)
 	p := maasPart(t, st, "rhcl")
@@ -535,7 +535,7 @@ func TestMaaSRHCLDenyOnFailure(t *testing.T) {
 	if !res.Success || finalSteps(events) != "check=success env=success ready=success" {
 		t.Fatalf("res = %+v", res)
 	}
-	raw, _ := json.Marshal(mc.f.get(subPath)["spec"].(map[string]interface{})["config"])
+	raw, _ := json.Marshal(mc.f.get(subPath)["spec"].(map[string]any)["config"])
 	if string(raw) != `{"env":[{"name":"AUTH_SERVICE_TIMEOUT","value":"2s"},{"name":"RATELIMIT_CHECK_SERVICE_FAILURE_MODE","value":"deny"},{"name":"RATELIMIT_REPORT_SERVICE_FAILURE_MODE","value":"deny"}]}` {
 		t.Fatalf("config = %s", raw)
 	}
@@ -557,7 +557,7 @@ func TestMaaSUpgradeRHCL_HopsThroughTheChannelOLMOffers(t *testing.T) {
 		if to == "1.4.4" {
 			// authorino-operator recreates the Service; service-ca deletes
 			// the old one's certificate.
-			mc.f.objects[fakeKey{gv: "v1", ns: "kuadrant-system", plural: "services", name: "authorino-authorino-authorization"}] = map[string]interface{}{"metadata": map[string]interface{}{"name": "authorino-authorino-authorization", "uid": "svc-2", "resourceVersion": "1"}, "spec": map[string]interface{}{"clusterIP": "None"}}
+			mc.f.objects[fakeKey{gv: "v1", ns: "kuadrant-system", plural: "services", name: "authorino-authorino-authorization"}] = map[string]any{"metadata": map[string]any{"name": "authorino-authorino-authorization", "uid": "svc-2", "resourceVersion": "1"}, "spec": map[string]any{"clusterIP": "None"}}
 		}
 	}
 	mc.f.beforeServe = func(method, path string) { sim.step(method, path) }
@@ -591,11 +591,11 @@ func TestMaaSUpgradeRHCL_HopsThroughTheChannelOLMOffers(t *testing.T) {
 		}
 	}
 	sub := mc.f.get("/apis/operators.coreos.com/v1alpha1/namespaces/kuadrant-system/subscriptions/kuadrant-operator")
-	if sub["spec"].(map[string]interface{})["channel"] != "stable-1.5" || sub["status"].(map[string]interface{})["installedCSV"] != "rhcl-operator.v1.5.0" || len(channels) != 3 {
+	if sub["spec"].(map[string]any)["channel"] != "stable-1.5" || sub["status"].(map[string]any)["installedCSV"] != "rhcl-operator.v1.5.0" || len(channels) != 3 {
 		t.Fatalf("subscription = %v after %v", sub, channels)
 	}
 	svc := mc.f.get("/api/v1/namespaces/kuadrant-system/services/authorino-authorino-authorization")
-	if ann, _ := svc["metadata"].(map[string]interface{})["annotations"].(map[string]interface{}); ann[servingCertAnnotation] == nil {
+	if ann, _ := svc["metadata"].(map[string]any)["annotations"].(map[string]any); ann[servingCertAnnotation] == nil {
 		t.Fatalf("the certificate was not asked for again: %v", svc)
 	}
 	if !strings.Contains(res.Message, "1.5.0") {
@@ -674,7 +674,7 @@ func TestMaaSRHCLMemory_OnlyWhenOOMKilled(t *testing.T) {
 		t.Fatalf("res = %+v", res)
 	}
 	sub := mc.f.get("/apis/operators.coreos.com/v1alpha1/namespaces/kuadrant-system/subscriptions/kuadrant-operator")
-	raw, _ := json.Marshal(sub["spec"].(map[string]interface{})["config"])
+	raw, _ := json.Marshal(sub["spec"].(map[string]any)["config"])
 	// The env stays: the merge patch sets resources only.
 	if string(raw) != `{"env":[{"name":"RATELIMIT_CHECK_SERVICE_FAILURE_MODE","value":"deny"},{"name":"RATELIMIT_REPORT_SERVICE_FAILURE_MODE","value":"deny"}],"resources":{"limits":{"cpu":"200m","memory":"1Gi"},"requests":{"cpu":"200m","memory":"350Mi"}}}` {
 		t.Fatalf("config = %s", raw)
@@ -789,7 +789,7 @@ func TestMaaSPublish_RHCLAndPriority(t *testing.T) {
 		if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"}); !res.Success {
 			t.Fatalf("publish: %+v", res)
 		}
-		if got := fmt.Sprint(mc.f.get(tMaaSSub)["spec"].(map[string]interface{})["priority"]); got != "-4" {
+		if got := fmt.Sprint(mc.f.get(tMaaSSub)["spec"].(map[string]any)["priority"]); got != "-4" {
 			t.Fatalf("priority = %s", got)
 		}
 	})
@@ -807,7 +807,7 @@ func TestMaaSPublish_RHCLAndPriority(t *testing.T) {
 		if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"}); !res.Success {
 			t.Fatalf("publish: %+v", res)
 		}
-		if got := fmt.Sprint(mc.f.get(tMaaSSub)["spec"].(map[string]interface{})["priority"]); got != "10" {
+		if got := fmt.Sprint(mc.f.get(tMaaSSub)["spec"].(map[string]any)["priority"]); got != "10" {
 			t.Fatalf("priority = %s", got)
 		}
 	})

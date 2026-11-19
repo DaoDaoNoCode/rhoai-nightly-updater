@@ -13,13 +13,13 @@ import (
 	"testing"
 )
 
-func pullSecretBody(t *testing.T, auths map[string]interface{}) string {
+func pullSecretBody(t *testing.T, auths map[string]any) string {
 	t.Helper()
-	cfg, err := json.Marshal(map[string]interface{}{"auths": auths})
+	cfg, err := json.Marshal(map[string]any{"auths": auths})
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := json.Marshal(map[string]interface{}{
+	body, err := json.Marshal(map[string]any{
 		"apiVersion": "v1", "kind": "Secret", "type": "kubernetes.io/dockerconfigjson",
 		"data": map[string]string{".dockerconfigjson": base64.StdEncoding.EncodeToString(cfg)},
 	})
@@ -32,60 +32,60 @@ func pullSecretBody(t *testing.T, auths map[string]interface{}) string {
 func TestSelectQuayAuth_PrefersMostSpecificDeterministically(t *testing.T) {
 	cases := []struct {
 		name     string
-		auths    map[string]interface{}
+		auths    map[string]any
 		wantAuth string
 	}{
 		{
 			name: "quay.io/rhoai beats generic quay.io",
-			auths: map[string]interface{}{
-				"quay.io":       map[string]interface{}{"auth": exampleAuth("generic:x")},
-				"quay.io/rhoai": map[string]interface{}{"auth": exampleAuth("rhoai:y")},
-				"docker.io":     map[string]interface{}{"auth": exampleAuth("docker:z")},
+			auths: map[string]any{
+				"quay.io":       map[string]any{"auth": exampleAuth("generic:x")},
+				"quay.io/rhoai": map[string]any{"auth": exampleAuth("rhoai:y")},
+				"docker.io":     map[string]any{"auth": exampleAuth("docker:z")},
 			},
 			wantAuth: exampleAuth("rhoai:y"),
 		},
 		{
 			name: "scheme and trailing slash are normalized",
-			auths: map[string]interface{}{
-				"quay.io":                map[string]interface{}{"auth": exampleAuth("generic:x")},
-				"https://quay.io/rhoai/": map[string]interface{}{"auth": exampleAuth("rhoai:y")},
+			auths: map[string]any{
+				"quay.io":                map[string]any{"auth": exampleAuth("generic:x")},
+				"https://quay.io/rhoai/": map[string]any{"auth": exampleAuth("rhoai:y")},
 			},
 			wantAuth: exampleAuth("rhoai:y"),
 		},
 		{
 			name: "repository-scoped entry beats generic quay.io",
-			auths: map[string]interface{}{
-				"quay.io":                          map[string]interface{}{"auth": exampleAuth("generic:x")},
-				"quay.io/rhoai/rhoai-fbc-fragment": map[string]interface{}{"auth": exampleAuth("repo:z")},
+			auths: map[string]any{
+				"quay.io":                          map[string]any{"auth": exampleAuth("generic:x")},
+				"quay.io/rhoai/rhoai-fbc-fragment": map[string]any{"auth": exampleAuth("repo:z")},
 			},
 			wantAuth: exampleAuth("repo:z"),
 		},
 		{
 			name: "generic quay.io is used when nothing more specific exists",
-			auths: map[string]interface{}{
-				"quay.io": map[string]interface{}{"auth": exampleAuth("generic:x")},
+			auths: map[string]any{
+				"quay.io": map[string]any{"auth": exampleAuth("generic:x")},
 			},
 			wantAuth: exampleAuth("generic:x"),
 		},
 		{
 			name: "username and password entries are accepted",
-			auths: map[string]interface{}{
-				"quay.io/rhoai": map[string]interface{}{"username": "robot", "password": "secret"},
+			auths: map[string]any{
+				"quay.io/rhoai": map[string]any{"username": "robot", "password": "secret"},
 			},
 			wantAuth: base64.StdEncoding.EncodeToString([]byte("robot:secret")),
 		},
 		{
 			name: "empty specific entry falls back to generic quay.io",
-			auths: map[string]interface{}{
-				"quay.io":       map[string]interface{}{"auth": exampleAuth("generic:x")},
-				"quay.io/rhoai": map[string]interface{}{"auth": ""},
+			auths: map[string]any{
+				"quay.io":       map[string]any{"auth": exampleAuth("generic:x")},
+				"quay.io/rhoai": map[string]any{"auth": ""},
 			},
 			wantAuth: exampleAuth("generic:x"),
 		},
 		{
 			name: "similarly named repositories do not match",
-			auths: map[string]interface{}{
-				"quay.io/rhoai-dev": map[string]interface{}{"auth": exampleAuth("dev:w")},
+			auths: map[string]any{
+				"quay.io/rhoai-dev": map[string]any{"auth": exampleAuth("dev:w")},
 			},
 			wantAuth: "",
 		},
@@ -93,7 +93,7 @@ func TestSelectQuayAuth_PrefersMostSpecificDeterministically(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Map iteration order is random; repeat to prove determinism.
-			for i := 0; i < 200; i++ {
+			for i := range 200 {
 				if auth := selectQuayAuth(tc.auths); auth != tc.wantAuth {
 					t.Fatalf("iteration %d: got %q, want %q", i, auth, tc.wantAuth)
 				}
@@ -103,9 +103,9 @@ func TestSelectQuayAuth_PrefersMostSpecificDeterministically(t *testing.T) {
 }
 
 func TestGetQuayAuthAndStatusUseSameCredential(t *testing.T) {
-	body := pullSecretBody(t, map[string]interface{}{
-		"quay.io":       map[string]interface{}{"auth": exampleAuth("generic:x")},
-		"quay.io/rhoai": map[string]interface{}{"auth": exampleAuth("rhoai:y")},
+	body := pullSecretBody(t, map[string]any{
+		"quay.io":       map[string]any{"auth": exampleAuth("generic:x")},
+		"quay.io/rhoai": map[string]any{"auth": exampleAuth("rhoai:y")},
 	})
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/api/v1/namespaces/kube-system/secrets/additional-pull-secret": {body: body},
@@ -117,7 +117,7 @@ func TestGetQuayAuthAndStatusUseSameCredential(t *testing.T) {
 	verifyQuayCredentials = func(auth string) error { verified = append(verified, auth); return nil }
 	defer func() { verifyQuayCredentials = orig }()
 
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		if got := getQuayAuth(client); got != exampleAuth("rhoai:y") {
 			t.Fatalf("getQuayAuth = %q, want the quay.io/rhoai credential", got)
 		}
@@ -132,8 +132,8 @@ func TestGetQuayAuthAndStatusUseSameCredential(t *testing.T) {
 }
 
 func TestGetPullSecret_GenericQuayLoginIsUsable(t *testing.T) {
-	body := pullSecretBody(t, map[string]interface{}{
-		"quay.io": map[string]interface{}{"auth": exampleAuth("generic:x")},
+	body := pullSecretBody(t, map[string]any{
+		"quay.io": map[string]any{"auth": exampleAuth("generic:x")},
 	})
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/api/v1/namespaces/kube-system/secrets/additional-pull-secret": {body: body},
@@ -146,8 +146,8 @@ func TestGetPullSecret_GenericQuayLoginIsUsable(t *testing.T) {
 }
 
 func TestGetPullSecret_DistinguishesOutageFromRejection(t *testing.T) {
-	body := pullSecretBody(t, map[string]interface{}{
-		"quay.io/rhoai": map[string]interface{}{"auth": exampleAuth("rhoai:y")},
+	body := pullSecretBody(t, map[string]any{
+		"quay.io/rhoai": map[string]any{"auth": exampleAuth("rhoai:y")},
 	})
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/api/v1/namespaces/kube-system/secrets/additional-pull-secret": {body: body},
@@ -192,7 +192,7 @@ func TestVerifyQuayCredentialsCached_CachesOnlyDefinitiveAnswers(t *testing.T) {
 	quayCredentialCache = map[[32]byte]quayCredentialVerdict{}
 	quayCredentialCacheMu.Unlock()
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if err := verifyQuayCredentialsCached("good"); err != nil {
 			t.Fatalf("good credentials: %v", err)
 		}
@@ -212,10 +212,10 @@ func TestVerifyQuayCredentialsCached_CachesOnlyDefinitiveAnswers(t *testing.T) {
 }
 
 // pullSecretServer serves the pull secret and records the payload written to it.
-func pullSecretServer(t *testing.T, existing string) (*Client, func() []map[string]interface{}) {
+func pullSecretServer(t *testing.T, existing string) (*Client, func() []map[string]any) {
 	t.Helper()
 	var mu sync.Mutex
-	var writes []map[string]interface{}
+	var writes []map[string]any
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -234,7 +234,7 @@ func pullSecretServer(t *testing.T, existing string) (*Client, func() []map[stri
 			}
 			io.WriteString(w, last)
 		case strings.Contains(r.URL.Path, "/namespaces/kube-system/secrets"):
-			var obj map[string]interface{}
+			var obj map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&obj); err != nil {
 				t.Errorf("decode write: %v", err)
 			}
@@ -248,32 +248,32 @@ func pullSecretServer(t *testing.T, existing string) (*Client, func() []map[stri
 	}))
 	t.Cleanup(srv.Close)
 	client := &Client{baseURL: srv.URL, token: "t", httpClient: srv.Client(), ctx: context.Background()}
-	return client, func() []map[string]interface{} {
+	return client, func() []map[string]any {
 		mu.Lock()
 		defer mu.Unlock()
-		return append([]map[string]interface{}(nil), writes...)
+		return append([]map[string]any(nil), writes...)
 	}
 }
 
-func writtenAuths(t *testing.T, obj map[string]interface{}) map[string]interface{} {
+func writtenAuths(t *testing.T, obj map[string]any) map[string]any {
 	t.Helper()
-	data, _ := obj["data"].(map[string]interface{})
+	data, _ := obj["data"].(map[string]any)
 	raw, err := base64.StdEncoding.DecodeString(data[".dockerconfigjson"].(string))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var cfg map[string]interface{}
+	var cfg map[string]any
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	return cfg["auths"].(map[string]interface{})
+	return cfg["auths"].(map[string]any)
 }
 
 func TestCreatePullSecret_PreservesOtherRegistries(t *testing.T) {
-	existing := pullSecretBody(t, map[string]interface{}{
-		"registry.example.com":   map[string]interface{}{"auth": exampleAuth("example:x")},
-		"quay.io":                map[string]interface{}{"auth": exampleAuth("generic:x")},
-		"https://quay.io/rhoai/": map[string]interface{}{"auth": exampleAuth("old:pass")},
+	existing := pullSecretBody(t, map[string]any{
+		"registry.example.com":   map[string]any{"auth": exampleAuth("example:x")},
+		"quay.io":                map[string]any{"auth": exampleAuth("generic:x")},
+		"https://quay.io/rhoai/": map[string]any{"auth": exampleAuth("old:pass")},
 	})
 	client, writes := pullSecretServer(t, existing)
 

@@ -14,7 +14,7 @@ import (
 // step inside OperationDeadline, then the automatic restore and the
 // bookkeeping) fits in the shutdown drain, and the drain plus the HTTP
 // server shutdown fits in terminationGracePeriodSeconds. The literals in
-// main.go and pkg/api/handlers.go are read from source, so a change there
+// main.go and pkg/api/auth_handlers.go are read from source, so a change there
 // that breaks the arithmetic fails here.
 func TestShutdownBudgetFitsTerminationGracePeriod(t *testing.T) {
 	read := func(path string) string {
@@ -31,8 +31,8 @@ func TestShutdownBudgetFitsTerminationGracePeriod(t *testing.T) {
 	secs, _ := strconv.Atoi(m[1])
 	grace := time.Duration(secs) * time.Second
 
-	if !strings.Contains(read("../api/handlers.go"), "context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Minute)") || OperationDeadline != 15*time.Minute {
-		t.Fatal("the operation deadline in pkg/api/handlers.go no longer matches OperationDeadline")
+	if !strings.Contains(read("../api/auth_handlers.go"), "context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Minute)") || OperationDeadline != 15*time.Minute {
+		t.Fatal("the operation deadline in pkg/api/auth_handlers.go no longer matches OperationDeadline")
 	}
 	mainSrc := read("../../main.go")
 	for _, want := range []string{
@@ -81,12 +81,12 @@ func TestInstallWaitEndsBeforeTheOperationDeadline(t *testing.T) {
 	OperatorInstallTimeout = time.Minute
 	t.Cleanup(func() { OperatorInstallTimeout = old })
 	f := newFakeOLM(t)
-	f.sub = map[string]interface{}{"metadata": map[string]interface{}{"name": SubName}, "spec": map[string]interface{}{}, "status": map[string]interface{}{}}
+	f.sub = map[string]any{"metadata": map[string]any{"name": SubName}, "spec": map[string]any{}, "status": map[string]any{}}
 	ctx, cancel := clk.WithTimeout(context.Background(), installDeadlineReserve+300*time.Millisecond)
 	defer cancel()
 	var logs []string
 	start := clk.Now()
-	out := waitForOperatorInstall(f.client(ctx), "verify_installplan", func(UpdateStepEvent) {}, &logs, &operatorRecovery{}, "")
+	out := waitForOperatorInstall(f.client(ctx), func(UpdateStepEvent) {}, &logs, &operatorRecovery{}, "")
 	if out.errorCode != "install_timeout" || !strings.Contains(out.message, "time budget") || clk.Since(start) > 300*time.Millisecond+InstallPlanPollInterval {
 		t.Fatalf("outcome = %+v after %s", out, clk.Since(start))
 	}

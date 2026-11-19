@@ -42,21 +42,21 @@ const selfManagedPlatform = "OpenShift AI Self-Managed"
 type dscView struct {
 	state      string
 	count      int
-	obj        map[string]interface{}
+	obj        map[string]any
 	meta       objectMeta
 	name, uid  string
 	version    string // the version the DSC was read at, "v3"
 	apiVersion string // "datasciencecluster.opendatahub.io/v3"
 	crd        *dscCRD
 	crdErr     error
-	spec       map[string]interface{} // the spec schema at version
+	spec       map[string]any // the spec schema at version
 	tree       []dscToggle
 	byKey      map[string]dscToggle
 	protected  map[string]bool
 	// defaults is the release default's spec; nil with defaultsErr set
 	// when there is none to use.
-	defaults      map[string]interface{}
-	defaultsLabel map[string]interface{}
+	defaults      map[string]any
+	defaultsLabel map[string]any
 	defaultsErr   string
 	op            *installedOperator
 	argoApp       string
@@ -96,7 +96,7 @@ func readDSCView(c *Client) (*dscView, error) {
 		return v, nil
 	}
 	var list struct {
-		Items []map[string]interface{} `json:"items"`
+		Items []map[string]any `json:"items"`
 	}
 	if err := json.Unmarshal(r.Body, &list); err != nil {
 		return nil, fmt.Errorf("parsing DSC list: %w", err)
@@ -150,7 +150,7 @@ func (v *dscView) readDefaults(c *Client) {
 		v.defaultsErr = fmt.Sprintf("The installed operator %s ships no DataScienceCluster %s example in its CSV's alm-examples, so there is no release default to compare with.", nonEmpty(op.Version, op.Name), v.version)
 		return
 	}
-	spec, _ := normalizeJSON(ex.Spec["spec"]).(map[string]interface{})
+	spec, _ := normalizeJSON(ex.Spec["spec"]).(map[string]any)
 	if spec == nil {
 		v.defaultsErr = "The release default has no spec."
 		return
@@ -165,37 +165,37 @@ func (v *dscView) readDefaults(c *Client) {
 		}
 	}
 	v.defaults = spec
-	meta, _ := ex.Spec["metadata"].(map[string]interface{})
-	v.defaultsLabel, _ = normalizeJSON(meta["labels"]).(map[string]interface{})
+	meta, _ := ex.Spec["metadata"].(map[string]any)
+	v.defaultsLabel, _ = normalizeJSON(meta["labels"]).(map[string]any)
 }
 
 // normalizeJSON returns v as encoding/json decodes it (YAML numbers become
 // float64), so values compare and patch alike.
-func normalizeJSON(v interface{}) interface{} {
+func normalizeJSON(v any) any {
 	raw, err := json.Marshal(v)
 	if err != nil {
 		return nil
 	}
-	var out interface{}
+	var out any
 	if json.Unmarshal(raw, &out) != nil {
 		return nil
 	}
 	return out
 }
 
-func (v *dscView) components() map[string]interface{} {
-	spec, _ := v.obj["spec"].(map[string]interface{})
-	comps, _ := spec["components"].(map[string]interface{})
+func (v *dscView) components() map[string]any {
+	spec, _ := v.obj["spec"].(map[string]any)
+	comps, _ := spec["components"].(map[string]any)
 	return comps
 }
 
-func (v *dscView) defaultComponents() map[string]interface{} {
-	comps, _ := v.defaults["components"].(map[string]interface{})
+func (v *dscView) defaultComponents() map[string]any {
+	comps, _ := v.defaults["components"].(map[string]any)
 	return comps
 }
 
-func (v *dscView) status() map[string]interface{} {
-	s, _ := v.obj["status"].(map[string]interface{})
+func (v *dscView) status() map[string]any {
+	s, _ := v.obj["status"].(map[string]any)
 	return s
 }
 
@@ -205,7 +205,7 @@ func (v *dscView) status() map[string]interface{} {
 // modules/aipipelines handler.go starts argoWorkflowsControllers Managed,
 // the schema's default), else Removed (components.NormalizeManagementState
 // of "").
-func (v *dscView) stateOf(components map[string]interface{}, path []string) (string, bool) {
+func (v *dscView) stateOf(components map[string]any, path []string) (string, bool) {
 	if s, ok := lookupState(components, path); ok && s != "" {
 		return s, true
 	}
@@ -220,7 +220,7 @@ func (v *dscView) stateOf(components map[string]interface{}, path []string) (str
 // it enabled) and every toggle above it is Managed (a sub-component is
 // deployed through its parent's module; rhods-operator 3.6
 // modules/aigateway/handler.go).
-func (v *dscView) deployed(components map[string]interface{}, path []string) bool {
+func (v *dscView) deployed(components map[string]any, path []string) bool {
 	s, _ := v.stateOf(components, path)
 	if s != "Managed" && s != "Unmanaged" {
 		return false
@@ -237,7 +237,7 @@ func (v *dscView) deployed(components map[string]interface{}, path []string) boo
 
 // componentEnabled reports whether a top-level component's module runs: its
 // own state, or for a group without one (dashboard, data) any part.
-func (v *dscView) componentEnabled(components map[string]interface{}, top dscToggle) bool {
+func (v *dscView) componentEnabled(components map[string]any, top dscToggle) bool {
 	if top.Toggle {
 		return v.deployed(components, top.Path)
 	}
@@ -276,10 +276,10 @@ func conditionFor(conds []types.DSCConditionView, name string) *types.DSCConditi
 }
 
 func (v *dscView) conditions() []types.DSCConditionView {
-	raw, _ := v.status()["conditions"].([]interface{})
+	raw, _ := v.status()["conditions"].([]any)
 	var out []types.DSCConditionView
 	for _, c := range raw {
-		m, _ := c.(map[string]interface{})
+		m, _ := c.(map[string]any)
 		cv := types.DSCConditionView{}
 		cv.Type, _ = m["type"].(string)
 		cv.Status, _ = m["status"].(string)
@@ -359,7 +359,7 @@ func (v *dscView) model() *types.DSCManager {
 	out.Deleting, out.Finalizers = v.meta.DeletionTimestamp != "", v.meta.Finalizers
 	st := v.status()
 	out.Phase, _ = st["phase"].(string)
-	release, _ := st["release"].(map[string]interface{})
+	release, _ := st["release"].(map[string]any)
 	out.ReleaseName, _ = release["name"].(string)
 	out.ReleaseVersion, _ = release["version"].(string)
 	conds := v.conditions()
@@ -375,7 +375,7 @@ func (v *dscView) model() *types.DSCManager {
 			out.UpgradeGates = append(out.UpgradeGates, fmt.Sprintf("%s (%s): %s", cd.Type, cd.Reason, truncateText(cd.Message, 300)))
 		}
 	}
-	statusComps, _ := st["components"].(map[string]interface{})
+	statusComps, _ := st["components"].(map[string]any)
 	comps, defComps := v.components(), v.defaultComponents()
 	for _, t := range v.tree {
 		name := t.Path[len(t.Path)-1]
@@ -383,7 +383,7 @@ func (v *dscView) model() *types.DSCManager {
 		if len(t.Path) > 1 {
 			n.Parent = strings.Join(t.Path[:len(t.Path)-1], ".")
 		}
-		if sc, ok := statusComps[name].(map[string]interface{}); ok {
+		if sc, ok := statusComps[name].(map[string]any); ok {
 			n.Actual, _ = sc["managementState"].(string)
 		}
 		n.Condition = conditionFor(conds, name)
@@ -428,7 +428,7 @@ func (v *dscView) comparison() types.DSCComparison {
 
 // dscObjectKeys returns the keys of m, sorted; an empty list (not nil) for a
 // nil map, so the API answers [].
-func dscObjectKeys(m map[string]interface{}) []string {
+func dscObjectKeys(m map[string]any) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
@@ -569,8 +569,8 @@ func (v *dscView) finish(c *Client, p *dscPlanned, teardown bool) *dscPlanned {
 	if err != nil {
 		return p.refuse("Cannot work out the change: "+err.Error(), "internal")
 	}
-	afterSpec, _ := after["spec"].(map[string]interface{})
-	afterComps, _ := afterSpec["components"].(map[string]interface{})
+	afterSpec, _ := after["spec"].(map[string]any)
+	afterComps, _ := afterSpec["components"].(map[string]any)
 	p.plan.Changes = v.changesBetween(v.components(), afterComps)
 	p.plan.Blocked, p.plan.Warnings = v.removalBlocks(c, v.components(), afterComps, teardown)
 	p.plan.Warnings = append(p.plan.Warnings, v.orphanWarnings(v.components(), afterComps)...)
@@ -579,7 +579,7 @@ func (v *dscView) finish(c *Client, p *dscPlanned, teardown bool) *dscPlanned {
 }
 
 // planToken binds a plan to what it does.
-func planToken(parts ...interface{}) string {
+func planToken(parts ...any) string {
 	raw, _ := json.Marshal(parts)
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:12])
@@ -587,7 +587,7 @@ func planToken(parts ...interface{}) string {
 
 // changesBetween lists every managementState that changes, or whose
 // deployment changes through a parent, and every other field that changes.
-func (v *dscView) changesBetween(before, after map[string]interface{}) []types.DSCChange {
+func (v *dscView) changesBetween(before, after map[string]any) []types.DSCChange {
 	out := []types.DSCChange{}
 	for _, t := range v.tree {
 		if !t.Toggle {
@@ -613,7 +613,7 @@ func (v *dscView) changesBetween(before, after map[string]interface{}) []types.D
 }
 
 // diffFields lists the fields other than managementState that differ.
-func diffFields(before, after map[string]interface{}, path []string, out *[]types.DSCChange) {
+func diffFields(before, after map[string]any, path []string, out *[]types.DSCChange) {
 	keys := map[string]bool{}
 	for k := range before {
 		keys[k] = true
@@ -633,8 +633,8 @@ func diffFields(before, after map[string]interface{}, path []string, out *[]type
 		p := append(append([]string{}, path...), k)
 		b, bOK := before[k]
 		a, aOK := after[k]
-		bm, bIsMap := b.(map[string]interface{})
-		am, aIsMap := a.(map[string]interface{})
+		bm, bIsMap := b.(map[string]any)
+		am, aIsMap := a.(map[string]any)
 		switch {
 		case bIsMap && aIsMap:
 			diffFields(bm, am, p, out)
@@ -648,7 +648,7 @@ func diffFields(before, after map[string]interface{}, path []string, out *[]type
 	}
 }
 
-func fieldText(v interface{}) string {
+func fieldText(v any) string {
 	if s, ok := v.(string); ok {
 		return s
 	}
@@ -661,7 +661,7 @@ func fieldText(v interface{}) string {
 
 // orphanWarnings names sub-components that stay Managed but deploy nothing
 // after the change, because a parent stops being Managed.
-func (v *dscView) orphanWarnings(before, after map[string]interface{}) []string {
+func (v *dscView) orphanWarnings(before, after map[string]any) []string {
 	var out []string
 	for _, t := range v.tree {
 		if !t.Toggle || len(t.Path) < 2 {
@@ -680,7 +680,7 @@ var usersCheckedComponents = map[string]bool{"aipipelines": true, "datasciencepi
 
 // modulesOf returns the modules (guardModule) a top-level component runs in
 // components, in tree order: its own, and those of its deployed parts.
-func (v *dscView) modulesOf(components map[string]interface{}, top dscToggle) []string {
+func (v *dscView) modulesOf(components map[string]any, top dscToggle) []string {
 	var out []string
 	seen := map[string]bool{}
 	add := func(m string) {
@@ -710,7 +710,7 @@ func (v *dscView) modulesOf(components map[string]interface{}, top dscToggle) []
 // stops working while the components are down is a warning); a module
 // after leaves Removed gets the rules of removing it, and what still uses
 // it blocks.
-func (v *dscView) removalBlocks(c *Client, before, after map[string]interface{}, teardown bool) ([]types.DSCRemovalBlock, []string) {
+func (v *dscView) removalBlocks(c *Client, before, after map[string]any, teardown bool) ([]types.DSCRemovalBlock, []string) {
 	rc := newRemovalChecker(c)
 	var blocks []types.DSCRemovalBlock
 	var warnings []string
@@ -894,7 +894,7 @@ func (v *dscView) planFix(c *Client) *dscPlanned {
 // fieldPathKeys turns "spec.components.a[0].b" into its keys.
 func fieldPathKeys(path string) []string {
 	var out []string
-	for _, part := range strings.Split(path, ".") {
+	for part := range strings.SplitSeq(path, ".") {
 		for {
 			i := strings.Index(part, "[")
 			if i < 0 {
@@ -978,10 +978,10 @@ func (v *dscView) turnedOn() []dscToggle {
 // toggles above it Managed (it is deployed only through them). It fills
 // in the plan's TurnedOn (always, so the dialog can offer the option) and
 // Kept (with keep).
-func (v *dscView) resetTarget(plan *types.DSCPlan, keep bool) map[string]interface{} {
-	target, _ := normalizeJSON(v.defaultComponents()).(map[string]interface{})
+func (v *dscView) resetTarget(plan *types.DSCPlan, keep bool) map[string]any {
+	target, _ := normalizeJSON(v.defaultComponents()).(map[string]any)
 	if target == nil {
-		target = map[string]interface{}{}
+		target = map[string]any{}
 	}
 	live, def := v.components(), v.defaultComponents()
 	assign := map[string]string{}
@@ -1023,12 +1023,12 @@ func (v *dscView) resetTarget(plan *types.DSCPlan, keep bool) map[string]interfa
 
 // setStateIn sets the managementState at path in components, making the
 // objects that hold it.
-func setStateIn(components map[string]interface{}, path []string, state string) {
+func setStateIn(components map[string]any, path []string, state string) {
 	m := components
 	for _, k := range path {
-		next, ok := m[k].(map[string]interface{})
+		next, ok := m[k].(map[string]any)
 		if !ok {
-			next = map[string]interface{}{}
+			next = map[string]any{}
 			m[k] = next
 		}
 		m = next
@@ -1037,7 +1037,7 @@ func setStateIn(components map[string]interface{}, path []string, state string) 
 }
 
 // resetDiff collects the sets and removals that turn live into target.
-func (v *dscView) resetDiff(schema, live, target map[string]interface{}, path []string, sets *[]dscAssign, removes *[][]string) {
+func (v *dscView) resetDiff(schema, live, target map[string]any, path []string, sets *[]dscAssign, removes *[][]string) {
 	keys := map[string]bool{}
 	for k := range live {
 		keys[k] = true
@@ -1060,8 +1060,8 @@ func (v *dscView) resetDiff(schema, live, target map[string]interface{}, path []
 		}
 		switch {
 		case lok && tok:
-			lm, lIsMap := lv.(map[string]interface{})
-			tm, tIsMap := tv.(map[string]interface{})
+			lm, lIsMap := lv.(map[string]any)
+			tm, tIsMap := tv.(map[string]any)
 			if lIsMap && tIsMap {
 				v.resetDiff(child, lm, tm, p, sets, removes)
 			} else if !jsonEqual(lv, tv) {
@@ -1073,8 +1073,8 @@ func (v *dscView) resetDiff(schema, live, target map[string]interface{}, path []
 			if child != nil && equalsSchemaDefault(child, lv) {
 				continue // the API server puts it back
 			}
-			if lm, isMap := lv.(map[string]interface{}); isMap && child != nil && len(lm) > 0 && v.keepsProtectedBelow(p, lm) {
-				v.resetDiff(child, lm, map[string]interface{}{}, p, sets, removes)
+			if lm, isMap := lv.(map[string]any); isMap && child != nil && len(lm) > 0 && v.keepsProtectedBelow(p, lm) {
+				v.resetDiff(child, lm, map[string]any{}, p, sets, removes)
 				continue
 			}
 			*removes = append(*removes, componentsPath(p...))
@@ -1083,11 +1083,11 @@ func (v *dscView) resetDiff(schema, live, target map[string]interface{}, path []
 }
 
 // keepsProtectedBelow reports whether a live object holds a protected field.
-func (v *dscView) keepsProtectedBelow(path []string, obj map[string]interface{}) bool {
+func (v *dscView) keepsProtectedBelow(path []string, obj map[string]any) bool {
 	prefix := strings.Join(path, ".") + "."
 	for f := range v.protected {
-		if strings.HasPrefix(f, prefix) {
-			if _, ok := lookupPath(obj, strings.Split(strings.TrimPrefix(f, prefix), ".")); ok {
+		if after, ok := strings.CutPrefix(f, prefix); ok {
+			if _, ok := lookupPath(obj, strings.Split(after, ".")); ok {
 				return true
 			}
 		}
@@ -1151,7 +1151,7 @@ func (v *dscView) write(c *Client, p *dscPlanned) *types.OperationResponse {
 	if err != nil {
 		return dscWriteError(err, false)
 	}
-	var after map[string]interface{}
+	var after map[string]any
 	if err := json.Unmarshal(body, &after); err != nil {
 		return &types.OperationResponse{Success: false, ErrorCode: "internal", Message: "The change was sent, but the API server's answer could not be read: " + err.Error() + ". Reload the page to see the DataScienceCluster."}
 	}

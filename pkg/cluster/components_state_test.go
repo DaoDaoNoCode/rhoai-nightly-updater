@@ -20,10 +20,10 @@ func installedCSVBody(almExamples string) string {
 	if almExamples != "" {
 		ann["alm-examples"] = almExamples
 	}
-	b, _ := json.Marshal(map[string]interface{}{
-		"metadata": map[string]interface{}{"name": "rhods-operator.3.6.0", "annotations": ann},
-		"spec":     map[string]interface{}{"version": "3.6.0", "displayName": "Red Hat OpenShift AI"},
-		"status":   map[string]interface{}{"phase": "Succeeded"},
+	b, _ := json.Marshal(map[string]any{
+		"metadata": map[string]any{"name": "rhods-operator.3.6.0", "annotations": ann},
+		"spec":     map[string]any{"version": "3.6.0", "displayName": "Red Hat OpenShift AI"},
+		"status":   map[string]any{"phase": "Succeeded"},
 	})
 	return string(b)
 }
@@ -258,8 +258,8 @@ func TestDefaultDSCFromALMExamples(t *testing.T) {
 				t.Fatalf("GitHub calls %d for source %s", github, tc.wantSource)
 			}
 			if tc.wantSource == "csv" {
-				comps := defaults.Spec["spec"].(map[string]interface{})["components"].(map[string]interface{})
-				mcp := comps["mcplifecycleoperator"].(map[string]interface{})
+				comps := defaults.Spec["spec"].(map[string]any)["components"].(map[string]any)
+				mcp := comps["mcplifecycleoperator"].(map[string]any)
 				if mcp["managementState"] != "Removed" || defaults.Spec["kind"] != "DataScienceCluster" || defaults.SourceURL != "" {
 					t.Fatalf("spec %+v", defaults.Spec)
 				}
@@ -269,7 +269,7 @@ func TestDefaultDSCFromALMExamples(t *testing.T) {
 				// Callers get their own copy.
 				comps["dashboard"] = nil
 				again, _ := defaultDSCSpecFor(context.Background(), &installedOperator{Version: "3.6.0", ALMExamples: tc.alm}, apiVersions{Versions: dscFallbackVersions}, "")
-				if again.Spec["spec"].(map[string]interface{})["components"].(map[string]interface{})["dashboard"] == nil {
+				if again.Spec["spec"].(map[string]any)["components"].(map[string]any)["dashboard"] == nil {
 					t.Fatal("shared mutable defaults")
 				}
 			}

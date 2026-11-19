@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,12 +37,7 @@ func IsHashedAsset(name string) bool {
 	if len(parts) < 2 {
 		return false
 	}
-	for _, p := range parts[:len(parts)-1] {
-		if hashPart.MatchString(p) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(parts[:len(parts)-1], hashPart.MatchString)
 }
 
 // compressible lists the extensions worth gzipping (fonts like woff2 are
@@ -185,7 +181,7 @@ func gzipped(cache *sync.Map, full string, info os.FileInfo) ([]byte, time.Time,
 
 // acceptsGzip parses Accept-Encoding for gzip (or *) with a non-zero q.
 func acceptsGzip(header string) bool {
-	for _, part := range strings.Split(header, ",") {
+	for part := range strings.SplitSeq(header, ",") {
 		fields := strings.Split(strings.TrimSpace(part), ";")
 		coding := strings.ToLower(strings.TrimSpace(fields[0]))
 		if coding != "gzip" && coding != "*" {
@@ -194,8 +190,8 @@ func acceptsGzip(header string) bool {
 		q := 1.0
 		for _, f := range fields[1:] {
 			f = strings.TrimSpace(f)
-			if strings.HasPrefix(f, "q=") {
-				if v, err := strconv.ParseFloat(strings.TrimPrefix(f, "q="), 64); err == nil {
+			if after, ok := strings.CutPrefix(f, "q="); ok {
+				if v, err := strconv.ParseFloat(after, 64); err == nil {
 					q = v
 				}
 			}

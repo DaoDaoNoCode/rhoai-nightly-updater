@@ -160,8 +160,8 @@ func leftoversCheck(c *Client, users usersReader) checkOutput {
 type fieldSchema struct {
 	Found, HasDefault, Required, IntOrString, Nullable bool
 	Type                                               string
-	Enum                                               []interface{}
-	Default                                            interface{}
+	Enum                                               []any
+	Default                                            any
 }
 
 func (s fieldSchema) text() string {
@@ -192,11 +192,11 @@ type leftoverField struct {
 	Path     string   // as reported: ".spec.eval.lmeval.permitOnline"
 	Keys     []string // the path as keys; nil when it is not a plain field path
 	Expected string   // the type the error names ("string", "boolean", "numeric", "map", "list")
-	Value    interface{}
+	Value    any
 	Present  bool
 	Schema   fieldSchema
 	Change   string // "set-default", "remove", "none" or "valid"
-	After    interface{}
+	After    any
 	Why      string
 	Review   bool
 }
@@ -223,11 +223,11 @@ func fieldKeys(path string) []string {
 }
 
 // schemaAt walks a structural schema (openAPIV3Schema) along keys.
-func schemaAt(root map[string]interface{}, keys []string) fieldSchema {
-	node, parent := root, map[string]interface{}(nil)
+func schemaAt(root map[string]any, keys []string) fieldSchema {
+	node, parent := root, map[string]any(nil)
 	for _, k := range keys {
-		props, _ := node["properties"].(map[string]interface{})
-		child, ok := props[k].(map[string]interface{})
+		props, _ := node["properties"].(map[string]any)
+		child, ok := props[k].(map[string]any)
 		if !ok {
 			return fieldSchema{}
 		}
@@ -235,12 +235,12 @@ func schemaAt(root map[string]interface{}, keys []string) fieldSchema {
 	}
 	s := fieldSchema{Found: true}
 	s.Type, _ = node["type"].(string)
-	s.Enum, _ = node["enum"].([]interface{})
+	s.Enum, _ = node["enum"].([]any)
 	s.Default, s.HasDefault = node["default"]
 	s.IntOrString, _ = node["x-kubernetes-int-or-string"].(bool)
 	s.Nullable, _ = node["nullable"].(bool)
 	if parent != nil {
-		req, _ := parent["required"].([]interface{})
+		req, _ := parent["required"].([]any)
 		for _, r := range req {
 			if r == keys[len(keys)-1] {
 				s.Required = true
@@ -252,7 +252,7 @@ func schemaAt(root map[string]interface{}, keys []string) fieldSchema {
 
 // valueMatches reports whether a stored JSON value has the schema's type
 // (and is one of its enum values).
-func valueMatches(v interface{}, s fieldSchema) bool {
+func valueMatches(v any, s fieldSchema) bool {
 	if v == nil {
 		return s.Nullable
 	}
@@ -271,9 +271,9 @@ func valueMatches(v interface{}, s fieldSchema) bool {
 	case s.Type == "number":
 		_, ok = v.(float64)
 	case s.Type == "object":
-		_, ok = v.(map[string]interface{})
+		_, ok = v.(map[string]any)
 	case s.Type == "array":
-		_, ok = v.([]interface{})
+		_, ok = v.([]any)
 	}
 	if ok && len(s.Enum) > 0 {
 		found := false
@@ -296,7 +296,7 @@ func smdTypeName(s fieldSchema) string {
 
 // zeroLike: a value that means "off" or "unset" in any type (false, 0, "",
 // null, empty). Replacing it with a CRD default needs no review.
-func zeroLike(v interface{}) bool {
+func zeroLike(v any) bool {
 	switch x := v.(type) {
 	case nil:
 		return true
@@ -306,16 +306,16 @@ func zeroLike(v interface{}) bool {
 		return x == 0
 	case string:
 		return x == ""
-	case map[string]interface{}:
+	case map[string]any:
 		return len(x) == 0
-	case []interface{}:
+	case []any:
 		return len(x) == 0
 	}
 	return false
 }
 
 // decide fills in the field's plan from the live object and the schema.
-func (lf *leftoverField) decide(obj map[string]interface{}, root map[string]interface{}) {
+func (lf *leftoverField) decide(obj map[string]any, root map[string]any) {
 	lf.Keys = fieldKeys(lf.Path)
 	if lf.Keys == nil {
 		lf.Change, lf.Why = "none", "the path is not a plain field under spec, so the tool does not change it"
@@ -364,7 +364,7 @@ type storedLeftover struct {
 	Blocker                            string // why there is no automatic fix
 	CRDNote                            string
 	Crash                              *leftoverCrash
-	object                             map[string]interface{}
+	object                             map[string]any
 	notReady                           bool
 }
 
@@ -433,7 +433,7 @@ func analyzeStored(c *Client, s reporterScan, rf *reportedApplyFailure) *storedL
 		return st
 	}
 	st.object = obj
-	meta, _ := obj["metadata"].(map[string]interface{})
+	meta, _ := obj["metadata"].(map[string]any)
 	st.UID, _ = meta["uid"].(string)
 	st.ResourceVersion, _ = meta["resourceVersion"].(string)
 	if del, _ := meta["deletionTimestamp"].(string); del != "" {
@@ -471,20 +471,20 @@ func analyzeStored(c *Client, s reporterScan, rf *reportedApplyFailure) *storedL
 
 // listModuleObject finds a module CR by listing its resource (the
 // ServiceAccount may list, not get, module CRs). nil when it does not exist.
-func listModuleObject(c *Client, version, resource, name string) (map[string]interface{}, error) {
+func listModuleObject(c *Client, version, resource, name string) (map[string]any, error) {
 	body, _, err := c.do(http.MethodGet, componentListPath(version, resource), "", nil,
 		url.Values{"fieldSelector": {"metadata.name=" + name}})
 	if err != nil {
 		return nil, err
 	}
 	var list struct {
-		Items []map[string]interface{} `json:"items"`
+		Items []map[string]any `json:"items"`
 	}
 	if err := json.Unmarshal(body, &list); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", resource, err)
 	}
 	for _, it := range list.Items {
-		if meta, _ := it["metadata"].(map[string]interface{}); meta["name"] == name {
+		if meta, _ := it["metadata"].(map[string]any); meta["name"] == name {
 			return it, nil
 		}
 	}
@@ -494,20 +494,20 @@ func listModuleObject(c *Client, version, resource, name string) (map[string]int
 // readCRDByName lists the CRDs with a name field selector: the
 // ServiceAccount may list CRDs but get only one by name. An error when the
 // CRD does not exist.
-func readCRDByName(c *Client, name string) (map[string]interface{}, error) {
+func readCRDByName(c *Client, name string) (map[string]any, error) {
 	body, _, err := c.do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil,
 		url.Values{"fieldSelector": {"metadata.name=" + name}})
 	if err != nil {
 		return nil, err
 	}
 	var list struct {
-		Items []map[string]interface{} `json:"items"`
+		Items []map[string]any `json:"items"`
 	}
 	if err := json.Unmarshal(body, &list); err != nil {
 		return nil, fmt.Errorf("parse CRDs: %w", err)
 	}
 	for _, it := range list.Items {
-		if meta, _ := it["metadata"].(map[string]interface{}); meta["name"] == name {
+		if meta, _ := it["metadata"].(map[string]any); meta["name"] == name {
 			return it, nil
 		}
 	}
@@ -515,16 +515,16 @@ func readCRDByName(c *Client, name string) (map[string]interface{}, error) {
 }
 
 // crdSchema is the openAPIV3Schema of one version of a CRD.
-func crdSchema(crd map[string]interface{}, version string) map[string]interface{} {
-	spec, _ := crd["spec"].(map[string]interface{})
-	versions, _ := spec["versions"].([]interface{})
+func crdSchema(crd map[string]any, version string) map[string]any {
+	spec, _ := crd["spec"].(map[string]any)
+	versions, _ := spec["versions"].([]any)
 	for _, v := range versions {
-		m, _ := v.(map[string]interface{})
+		m, _ := v.(map[string]any)
 		if m["name"] != version {
 			continue
 		}
-		schema, _ := m["schema"].(map[string]interface{})
-		root, _ := schema["openAPIV3Schema"].(map[string]interface{})
+		schema, _ := m["schema"].(map[string]any)
+		root, _ := schema["openAPIV3Schema"].(map[string]any)
 		return root
 	}
 	return nil
@@ -542,14 +542,14 @@ func crdSchema(crd map[string]interface{}, version string) map[string]interface{
 //
 // Anything else, or anything that cannot be read, is not current (fail
 // closed).
-func crdCurrent(c *Client, crd map[string]interface{}, name string) (bool, string) {
-	meta, _ := crd["metadata"].(map[string]interface{})
-	entries, _ := meta["managedFields"].([]interface{})
+func crdCurrent(c *Client, crd map[string]any, name string) (bool, string) {
+	meta, _ := crd["metadata"].(map[string]any)
+	entries, _ := meta["managedFields"].([]any)
 	manager, when := "", ""
 	for _, e := range entries {
-		mf, _ := e.(map[string]interface{})
-		fields, _ := mf["fieldsV1"].(map[string]interface{})
-		spec, _ := fields["f:spec"].(map[string]interface{})
+		mf, _ := e.(map[string]any)
+		fields, _ := mf["fieldsV1"].(map[string]any)
+		spec, _ := fields["f:spec"].(map[string]any)
 		t, _ := mf["time"].(string)
 		if _, ok := spec["f:versions"]; ok && t >= when {
 			manager, _ = mf["manager"].(string)
@@ -704,7 +704,7 @@ func (st *storedLeftover) fieldChanges() []FieldChange {
 	return out
 }
 
-func fieldJSON(v interface{}) string {
+func fieldJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
 }
@@ -729,7 +729,7 @@ func (st *storedLeftover) problem() Problem {
 	reporters := reportersText(rf)
 	evidence := []string{"Reported by " + reporters}
 	for _, d := range rf.details {
-		evidence = append(evidence, "Operator error: "+truncate(d, 500))
+		evidence = append(evidence, "Operator error: "+truncateText(d, 500))
 	}
 	for _, lf := range st.Fields {
 		line := fmt.Sprintf("Field %s: ", lf.Path)
@@ -761,7 +761,7 @@ func (st *storedLeftover) problem() Problem {
 	if st.Crash != nil {
 		line := fmt.Sprintf("Module operator %s is crash-looping (%d restarts)", st.Crash.Deployment, st.Crash.Restarts)
 		if st.Crash.Confirmed {
-			line += ": its last exit says it cannot sync its informer for " + st.Kind + ": " + truncate(st.Crash.Message, 300)
+			line += ": its last exit says it cannot sync its informer for " + st.Kind + ": " + truncateText(st.Crash.Message, 300)
 			description += " Its module operator crash-loops because it cannot read the object either."
 		} else {
 			line += fmt.Sprintf("; its last exit message is not available here. If `oc logs --previous` shows \"failed waiting for *<version>.%s Informer to sync\", this object is the cause", st.Kind)
@@ -1046,7 +1046,7 @@ func (r *recreateLeftover) problem() Problem {
 	reporters := reportersText(rf)
 	evidence := []string{"Reported by " + reporters}
 	for _, d := range rf.details {
-		evidence = append(evidence, "Operator error: "+truncate(d, 500))
+		evidence = append(evidence, "Operator error: "+truncateText(d, 500))
 	}
 	p := Problem{
 		ID:              leftoverRecreateID(f.Kind, f.Namespace, f.Name),

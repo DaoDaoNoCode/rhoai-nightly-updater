@@ -47,25 +47,31 @@ func (m *mutationTracker) isDraining() bool {
 // drain rejects new mutations and waits until in-flight ones finish or ctx
 // ends. It returns how many mutations are still running.
 func (m *mutationTracker) drain(ctx context.Context) int {
+	return m.startDrain()(ctx)
+}
+
+// startDrain rejects new mutations from now on and returns the wait of
+// drain: until the running mutations finish or ctx ends.
+func (m *mutationTracker) startDrain() func(ctx context.Context) int {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.draining = true
 	if m.active == 0 {
-		m.mu.Unlock()
-		return 0
+		return func(context.Context) int { return 0 }
 	}
 	if m.idle == nil {
 		m.idle = make(chan struct{})
 	}
 	idle := m.idle
-	m.mu.Unlock()
-
-	select {
-	case <-idle:
-		return 0
-	case <-ctx.Done():
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		return m.active
+	return func(ctx context.Context) int {
+		select {
+		case <-idle:
+			return 0
+		case <-ctx.Done():
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			return m.active
+		}
 	}
 }
 

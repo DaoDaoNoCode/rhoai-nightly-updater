@@ -157,7 +157,7 @@ func TestGetResourcesStatus_RequestCountDoesNotGrowWithProjects(t *testing.T) {
 	count := func(projects int) int {
 		f, c := newResourceFake(t)
 		putReadyManagedS3(f)
-		for i := 0; i < projects; i++ {
+		for i := range projects {
 			ns := "p" + itoa(i)
 			putDSProject(f, ns)
 			putDSPA(f, ns, dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", `{"conditions":[{"type":"Ready","status":"True"}]}`)
@@ -219,7 +219,7 @@ func TestSetupPipelineServer_CreatesTheStandardName(t *testing.T) {
 		if obj == nil {
 			t.Fatalf("%s not created", path)
 		}
-		l := obj["metadata"].(map[string]interface{})["labels"].(map[string]interface{})
+		l := obj["metadata"].(map[string]any)["labels"].(map[string]any)
 		if l[managedByLabelKey] != managedByLabelValue {
 			t.Errorf("%s lacks the ownership label", path)
 		}
@@ -282,11 +282,11 @@ func TestSetupPipelineServer_DashboardSettingsWhenTheCRDHasThem(t *testing.T) {
 			if api["pipelineStore"] != "database" || api["cacheEnabled"] != true || api["enableSamplePipeline"] != false {
 				t.Errorf("apiServer = %v", api)
 			}
-			managed, hasManaged := api["managedPipelines"].(map[string]interface{})
+			managed, hasManaged := api["managedPipelines"].(map[string]any)
 			if hasManaged != tc.wantManaged || (hasManaged && (len(managed) != 1 || managed["enabled"] != true)) {
 				t.Errorf("managedPipelines = %v, want set: %v", api["managedPipelines"], tc.wantManaged)
 			}
-			mlflow, hasFlow := spec["mlflow"].(map[string]interface{})
+			mlflow, hasFlow := spec["mlflow"].(map[string]any)
 			if hasFlow != tc.wantFlow || (hasFlow && (len(mlflow) != 2 || mlflow["integrationMode"] != "AUTODETECT" || mlflow["injectUserEnvVars"] != false)) {
 				t.Errorf("mlflow = %v, want set: %v", spec["mlflow"], tc.wantFlow)
 			}
@@ -306,11 +306,11 @@ func assertOwnedByDSPA(t *testing.T, f *resourceFake, path, ns, name string) {
 		t.Fatalf("%s missing", path)
 	}
 	uid := ensureMap(f.get(dspaPath(ns, name)), "metadata")["uid"]
-	refs, _ := ensureMap(obj, "metadata")["ownerReferences"].([]interface{})
+	refs, _ := ensureMap(obj, "metadata")["ownerReferences"].([]any)
 	if len(refs) != 1 {
 		t.Fatalf("%s ownerReferences = %v", path, refs)
 	}
-	ref := refs[0].(map[string]interface{})
+	ref := refs[0].(map[string]any)
 	if ref["apiVersion"] != dspaAPIGroup || ref["kind"] != "DataSciencePipelinesApplication" || ref["name"] != name || ref["uid"] != uid || uid == nil {
 		t.Errorf("%s owner = %v, want DSPA %s/%s uid %v", path, ref, ns, name, uid)
 	}
@@ -333,12 +333,12 @@ func TestSetupPipelineServer_SecretOwnedByTheDSPA(t *testing.T) {
 	putManagedDSC(f)
 	putReadyManagedS3(f)
 	putDSProject(f, "proj")
-	for run := 0; run < 2; run++ {
+	for run := range 2 {
 		if resp, _ := SetupPipelineServer(c, "proj"); !resp.Success {
 			t.Fatalf("run %d: %+v", run, resp)
 		}
 		assertOwnedByDSPA(t, f, secretPath("proj", dspaSecretName), "proj", dspaName)
-		labels, _ := ensureMap(f.get(secretPath("proj", dspaSecretName)), "metadata")["labels"].(map[string]interface{})
+		labels, _ := ensureMap(f.get(secretPath("proj", dspaSecretName)), "metadata")["labels"].(map[string]any)
 		if labels["opendatahub.io/dashboard"] != "true" || labels[managedByLabelKey] != managedByLabelValue {
 			t.Errorf("run %d: secret labels = %v", run, labels)
 		}
@@ -440,7 +440,7 @@ func TestSetupPipelineServer_RerunIsIdempotent(t *testing.T) {
 	putManagedDSC(f)
 	putReadyManagedS3(f)
 	putDSProject(f, "proj")
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if resp, _ := SetupPipelineServer(c, "proj"); !resp.Success {
 			t.Fatalf("run %d failed: %+v", i, resp)
 		}

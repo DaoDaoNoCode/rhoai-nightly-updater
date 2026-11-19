@@ -84,8 +84,8 @@ func TestVerifyNodeReadiness_IDMSReadFails(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			client, cleanup := newMockClient(map[string]mockResponse{
-				nodeReadinessPullSecretPath: {body: pullSecretBody(t, map[string]interface{}{
-					"quay.io/rhoai": map[string]interface{}{"auth": exampleAuth("test:test")},
+				nodeReadinessPullSecretPath: {body: pullSecretBody(t, map[string]any{
+					"quay.io/rhoai": map[string]any{"auth": exampleAuth("test:test")},
 				})},
 				nodeReadinessIDMSPath: {body: nodeReadinessStatusBody(tc.status), statusCode: tc.status},
 			})
@@ -117,8 +117,8 @@ func TestVerifyNodeReadiness_IDMSMissing(t *testing.T) {
 	defer func() { verifyQuayCredentials = orig }()
 
 	client, cleanup := newMockClient(map[string]mockResponse{
-		nodeReadinessPullSecretPath: {body: pullSecretBody(t, map[string]interface{}{
-			"quay.io/rhoai": map[string]interface{}{"auth": exampleAuth("test:test")},
+		nodeReadinessPullSecretPath: {body: pullSecretBody(t, map[string]any{
+			"quay.io/rhoai": map[string]any{"auth": exampleAuth("test:test")},
 		})},
 		nodeReadinessIDMSPath: {body: `{"items":[]}`},
 	})

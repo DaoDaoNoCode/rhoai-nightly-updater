@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -31,7 +32,7 @@ func wrapUserTokenError(op string, err error) error {
 // An empty namespace asks about the permission in all namespaces.
 func CheckUserPermissionWithToken(ctx context.Context, userToken, verb, resource, apiGroup, namespace string) (bool, error) {
 	userClient := NewClientWithContext(ctx, userToken)
-	data, err := json.Marshal(map[string]interface{}{
+	data, err := json.Marshal(map[string]any{
 		"apiVersion": "authorization.openshift.io/v1", "kind": "SubjectAccessReview",
 		"verb": verb, "resource": resource, "resourceAPIGroup": apiGroup,
 		"namespace": namespace, "scopes": []string{},
@@ -69,12 +70,7 @@ type SessionToken struct {
 // (scope user:full). A token of the scopes user:info and user:check-access,
 // which a ServiceAccount OAuth client gets, can only identify the user.
 func (s *SessionToken) FullScope() bool {
-	for _, sc := range s.Scopes {
-		if sc == "user:full" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s.Scopes, "user:full")
 }
 
 // Remaining is how long the token keeps working by its expiry at now, and

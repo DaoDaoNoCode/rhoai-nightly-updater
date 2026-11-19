@@ -20,11 +20,9 @@ func GetDebugInfo(c *Client) (*types.DebugResponse, error) {
 	errs := make([]error, len(namespaces))
 	var wg sync.WaitGroup
 	for i, ns := range namespaces {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			pods[i], errs[i] = getPodsInNamespace(c, ns)
-		}()
+		})
 	}
 	wg.Wait()
 

@@ -25,13 +25,13 @@ const (
 
 // mcpSampleTools are the tools DeepWiki's server lists (tools/list,
 // checked 2026-11-17), so the registry shows them without a discovery.
-var mcpSampleTools = []map[string]interface{}{
+var mcpSampleTools = []map[string]any{
 	{"name": "read_wiki_structure", "description": "Get a list of documentation topics for a GitHub repository.",
-		"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"repoName": map[string]string{"type": "string"}}, "required": []string{"repoName"}}},
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"repoName": map[string]string{"type": "string"}}, "required": []string{"repoName"}}},
 	{"name": "read_wiki_contents", "description": "View documentation about a GitHub repository.",
-		"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"repoName": map[string]string{"type": "string"}}, "required": []string{"repoName"}}},
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"repoName": map[string]string{"type": "string"}}, "required": []string{"repoName"}}},
 	{"name": "ask_wiki_question", "description": "Ask a question about a GitHub repository.",
-		"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"repoName": map[string]string{"type": "string"}, "question": map[string]string{"type": "string"}}, "required": []string{"repoName", "question"}}},
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"repoName": map[string]string{"type": "string"}, "question": map[string]string{"type": "string"}}, "required": []string{"repoName", "question"}}},
 }
 
 var errNoMCPRegistry = errors.New("this MLflow has no MCP Server Registry")
@@ -68,13 +68,13 @@ func addMCP(t *mlflowTarget, log func(string)) (string, error) {
 		// by the same caller, is the tool's.
 		if err := t.confirmNewParent("MCP server '"+mcpSampleName+"'", mcpServerPath(""), mcpServerPath("/versions"), "mcp_server_versions", mcpSampleVersion, created.CreatedBy); err != nil {
 			if delErr := t.api.sendJSON("DELETE", mcpServerPath("/versions/"+url.PathEscape(mcpSampleVersion)), nil, nil, nil); delErr != nil {
-				return "", fmt.Errorf("%w; the version this tool added could not be deleted again (%v): delete version %s of MCP server %s in MLflow", err, delErr, mcpSampleVersion, mcpSampleName)
+				return "", fmt.Errorf("%w; the version this tool added could not be deleted again (%w): delete version %s of MCP server %s in MLflow", err, delErr, mcpSampleVersion, mcpSampleName)
 			}
 			return "", err
 		}
 		if err := t.api.sendJSON("POST", mcpServerPath("/tags"), nil, map[string]string{"key": sampleMarkerKey, "value": SampleMCPServer}, nil); err != nil {
 			if delErr := t.api.sendJSON("DELETE", mcpServerPath(""), nil, nil, nil); delErr != nil {
-				return "", fmt.Errorf("%w; the new draft server could not be deleted again (%v): delete MCP server %s in MLflow", err, delErr, mcpSampleName)
+				return "", fmt.Errorf("%w; the new draft server could not be deleted again (%w): delete MCP server %s in MLflow", err, delErr, mcpSampleName)
 			}
 			return "", err
 		}
@@ -153,8 +153,8 @@ func (t *mlflowTarget) confirmNewParent(what, parentPath, versionsPath, listKey,
 
 func (t *mlflowTarget) createMCPVersion(status string) (registryVersion, error) {
 	var out registryVersion
-	err := t.api.sendJSON("POST", mcpServerPath("/versions"), nil, map[string]interface{}{
-		"server_json": map[string]interface{}{
+	err := t.api.sendJSON("POST", mcpServerPath("/versions"), nil, map[string]any{
+		"server_json": map[string]any{
 			"name": mcpSampleName, "version": mcpSampleVersion, "title": mcpSampleTitle, "description": mcpSampleDescription,
 			"remotes":    []map[string]string{{"type": mcpSampleTransport, "url": mcpSampleURL}},
 			"websiteUrl": "https://docs.devin.ai/work-with-devin/deepwiki-mcp",
@@ -228,13 +228,13 @@ func addSkill(t *mlflowTarget, log func(string)) (string, error) {
 		// As for MCP: a skill someone created since the read is theirs.
 		if err := t.confirmNewParent("skill '"+skillSampleName+"'", skillPath(""), skillPath("/versions"), "skill_versions", created.id(), created.CreatedBy); err != nil {
 			if delErr := t.api.sendJSON("DELETE", skillPath("/versions/"+url.PathEscape(created.id())), nil, nil, nil); delErr != nil {
-				return "", fmt.Errorf("%w; the version this tool added could not be deleted again (%v): delete version %s of skill %s in MLflow", err, delErr, created.id(), skillSampleName)
+				return "", fmt.Errorf("%w; the version this tool added could not be deleted again (%w): delete version %s of skill %s in MLflow", err, delErr, created.id(), skillSampleName)
 			}
 			return "", err
 		}
 		if err := t.api.sendJSON("POST", skillPath("/tags"), nil, map[string]string{"key": sampleMarkerKey, "value": SampleSkill}, nil); err != nil {
 			if delErr := t.api.sendJSON("DELETE", skillPath(""), nil, nil, nil); delErr != nil {
-				return "", fmt.Errorf("%w; the new skill could not be deleted again (%v): delete skill %s in MLflow", err, delErr, skillSampleName)
+				return "", fmt.Errorf("%w; the new skill could not be deleted again (%w): delete skill %s in MLflow", err, delErr, skillSampleName)
 			}
 			return "", err
 		}

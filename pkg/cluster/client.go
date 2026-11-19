@@ -291,7 +291,7 @@ func (c *Client) do(method, path, contentType string, body []byte, query url.Val
 	}
 	if resp.StatusCode >= 400 {
 		err := parseK8sError(respBody, resp.StatusCode)
-		if k, ok := err.(*K8sError); ok {
+		if k, ok := errors.AsType[*K8sError](err); ok {
 			k.User = c.asUser
 		}
 		return respBody, resp.StatusCode, err
@@ -321,16 +321,16 @@ func (c *Client) strategicPatch(path string, patchData []byte) ([]byte, int, err
 }
 
 // apply server-side applies resource, taking ownership of its fields.
-func (c *Client) apply(path string, resource interface{}) ([]byte, int, error) {
+func (c *Client) apply(path string, resource any) ([]byte, int, error) {
 	return c.applyWithOptions(path, resource, false)
 }
 
 // dryRunApply validates a server-side apply without persisting it.
-func (c *Client) dryRunApply(path string, resource interface{}) ([]byte, int, error) {
+func (c *Client) dryRunApply(path string, resource any) ([]byte, int, error) {
 	return c.applyWithOptions(path, resource, true)
 }
 
-func (c *Client) applyWithOptions(path string, resource interface{}, dryRun bool) ([]byte, int, error) {
+func (c *Client) applyWithOptions(path string, resource any, dryRun bool) ([]byte, int, error) {
 	data, err := json.Marshal(resource)
 	if err != nil {
 		return nil, 0, err
@@ -411,8 +411,7 @@ func getUser(c *Client) string {
 
 // IsK8sError checks if the error is a K8sError and optionally matches a status code.
 func IsK8sError(err error, statusCode int) bool {
-	var k8sErr *K8sError
-	if errors.As(err, &k8sErr) {
+	if k8sErr, ok := errors.AsType[*K8sError](err); ok {
 		return statusCode == 0 || k8sErr.Status == statusCode
 	}
 	return false

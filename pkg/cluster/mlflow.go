@@ -118,11 +118,11 @@ func (m mlflowCR) oldToolResources() bool {
 	if len(m.Spec.Resources) == 0 {
 		return false
 	}
-	var r map[string]map[string]interface{}
+	var r map[string]map[string]any
 	if json.Unmarshal(m.Spec.Resources, &r) != nil || len(r) != 2 {
 		return false
 	}
-	is := func(q map[string]interface{}, cpu, mem string) bool {
+	is := func(q map[string]any, cpu, mem string) bool {
 		return len(q) == 2 && fmt.Sprint(q["cpu"]) == cpu && fmt.Sprint(q["memory"]) == mem
 	}
 	return is(r["requests"], "500m", "1Gi") && is(r["limits"], "2", "2Gi")
@@ -291,16 +291,16 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 	}
 
 	logs = append(logs, "Creating MLflow CR...")
-	mlflowCR := map[string]interface{}{
+	mlflowCR := map[string]any{
 		"apiVersion": mlflowAPIGroup,
 		"kind":       "MLflow",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":   mlflowCRName,
 			"labels": toolLabels(),
 		},
-		"spec": map[string]interface{}{
+		"spec": map[string]any{
 			"replicas": 1,
-			"migration": map[string]interface{}{
+			"migration": map[string]any{
 				"mode": "Automatic",
 			},
 			// No "resources": the operator then uses its chart's defaults
@@ -310,10 +310,10 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 			// server runs 8 workers that idle near 1.9Gi together; the 2Gi
 			// limit this CR used to set got the container OOMKilled while
 			// MLflow generated its demo data (seen live on 3.6).
-			"storage": map[string]interface{}{
+			"storage": map[string]any{
 				"accessModes": []string{"ReadWriteOnce"},
-				"resources": map[string]interface{}{
-					"requests": map[string]interface{}{"storage": "10Gi"},
+				"resources": map[string]any{
+					"requests": map[string]any{"storage": "10Gi"},
 				},
 			},
 			"backendStoreUri":      "sqlite:////mlflow/mlflow.db",
@@ -419,12 +419,12 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 // patchMLflowCR merge-patches the CR, guarded by resourceVersion so a
 // concurrent change is reported instead of overwritten. spec nil leaves the
 // spec alone.
-func patchMLflowCR(c *Client, cr mlflowCR, annotations, spec map[string]interface{}) error {
-	meta := map[string]interface{}{"resourceVersion": cr.Metadata.ResourceVersion}
+func patchMLflowCR(c *Client, cr mlflowCR, annotations, spec map[string]any) error {
+	meta := map[string]any{"resourceVersion": cr.Metadata.ResourceVersion}
 	if len(annotations) > 0 {
 		meta["annotations"] = annotations
 	}
-	body := map[string]interface{}{"metadata": meta}
+	body := map[string]any{"metadata": meta}
 	if spec != nil {
 		body["spec"] = spec
 	}
@@ -434,8 +434,8 @@ func patchMLflowCR(c *Client, cr mlflowCR, annotations, spec map[string]interfac
 }
 
 // imageSpec is the spec patch that sets spec.image.image (nil removes it).
-func imageSpec(image interface{}) map[string]interface{} {
-	return map[string]interface{}{"image": map[string]interface{}{"image": image}}
+func imageSpec(image any) map[string]any {
+	return map[string]any{"image": map[string]any{"image": image}}
 }
 
 // DeployMLflowPR points the MLflow CR at the PR image, pinned by digest. The
@@ -482,7 +482,7 @@ func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("MLflow already runs the latest PR #%d build.", prNumber), Logs: logs}, nil
 	}
 
-	annotations := map[string]interface{}{}
+	annotations := map[string]any{}
 	// A saved image is replaced when no PR image runs now: someone set the
 	// current image after the last PR deploy, and Revert restores that one.
 	if _, saved := cr.Metadata.Annotations[mlflowOriginalImageAnnotation]; !saved || cr.staleOriginal() {
@@ -536,7 +536,7 @@ func RevertMLflowImage(c *Client) (*types.OperationResponse, error) {
 		if cr.staleOriginal() {
 			// The image was set by hand after the PR deploy: keep it, and drop
 			// the saved image so nothing restores it later.
-			if err := patchMLflowCR(c, cr, map[string]interface{}{mlflowOriginalImageAnnotation: nil}, nil); err != nil {
+			if err := patchMLflowCR(c, cr, map[string]any{mlflowOriginalImageAnnotation: nil}, nil); err != nil {
 				return fail(fmt.Sprintf("No PR image is active; the image saved before the PR deploy could not be dropped: %v", err), errorCodeFromK8sErr(err), "no override, stale annotation kept")
 			}
 			current := cr.image()
@@ -548,13 +548,13 @@ func RevertMLflowImage(c *Client) (*types.OperationResponse, error) {
 		return fail(msg, "validation", "no override")
 	}
 
-	var image interface{} // nil removes spec.image.image
+	var image any // nil removes spec.image.image
 	target := "the operator default image"
 	if revertImage != "" {
 		image = revertImage
 		target = revertImage
 	}
-	if err := patchMLflowCR(c, cr, map[string]interface{}{mlflowOriginalImageAnnotation: nil}, imageSpec(image)); err != nil {
+	if err := patchMLflowCR(c, cr, map[string]any{mlflowOriginalImageAnnotation: nil}, imageSpec(image)); err != nil {
 		code := errorCodeFromK8sErr(err)
 		msg := fmt.Sprintf("Failed to revert MLflow image: %v", err)
 		if IsK8sError(err, 409) {

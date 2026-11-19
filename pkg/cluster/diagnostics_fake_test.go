@@ -74,7 +74,8 @@ func (f *fakeAPI) json(method, path string, status int, body string) {
 	f.handle(method, path, func(*http.Request, []byte) (int, string) { return status, body })
 }
 
-func (f *fakeAPI) obj(method, path string, v interface{}) {
+func (f *fakeAPI) obj(path string, v any) {
+	method := "GET"
 	b, err := json.Marshal(v)
 	if err != nil {
 		panic(err)
@@ -163,15 +164,15 @@ func findCheck(resp *DiagnosticsResponse, name string) *CheckResult {
 // minimalDSCCRD is a DataScienceCluster CRD whose only (stored) version
 // defines these top-level components with managementState Managed or Removed.
 func minimalDSCCRD(version string, components ...string) string {
-	props := map[string]interface{}{}
+	props := map[string]any{}
 	for _, c := range components {
-		props[c] = map[string]interface{}{"type": "object", "properties": map[string]interface{}{
-			"managementState": map[string]interface{}{"type": "string", "enum": []interface{}{"Managed", "Removed"}}}}
+		props[c] = map[string]any{"type": "object", "properties": map[string]any{
+			"managementState": map[string]any{"type": "string", "enum": []any{"Managed", "Removed"}}}}
 	}
-	crd := map[string]interface{}{"spec": map[string]interface{}{"versions": []interface{}{map[string]interface{}{
-		"name": version, "served": true, "storage": true, "schema": map[string]interface{}{"openAPIV3Schema": map[string]interface{}{
-			"type": "object", "properties": map[string]interface{}{"spec": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
-				"components": map[string]interface{}{"type": "object", "properties": props}}}}}}}}}}
+	crd := map[string]any{"spec": map[string]any{"versions": []any{map[string]any{
+		"name": version, "served": true, "storage": true, "schema": map[string]any{"openAPIV3Schema": map[string]any{
+			"type": "object", "properties": map[string]any{"spec": map[string]any{"type": "object", "properties": map[string]any{
+				"components": map[string]any{"type": "object", "properties": props}}}}}}}}}}
 	raw, _ := json.Marshal(crd)
 	return string(raw)
 }
@@ -183,11 +184,11 @@ func minimalDSCCRD(version string, components ...string) string {
 // API server that dropped the change).
 func serveToggleDSC(f *fakeAPI, version, dsc, patchBody string, components ...string) {
 	list := "/apis/datasciencecluster.opendatahub.io/" + version + "/datascienceclusters"
-	var obj map[string]interface{}
+	var obj map[string]any
 	if err := json.Unmarshal([]byte(dsc), &obj); err != nil {
 		panic(err)
 	}
-	meta, _ := obj["metadata"].(map[string]interface{})
+	meta, _ := obj["metadata"].(map[string]any)
 	name, _ := meta["name"].(string)
 	var mu sync.Mutex
 	current := func() string {

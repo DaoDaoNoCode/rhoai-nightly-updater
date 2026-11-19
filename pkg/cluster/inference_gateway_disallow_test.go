@@ -20,7 +20,7 @@ func listedGateway(t *testing.T) *modelsCluster {
 		t.Fatalf("setup: %+v", res)
 	}
 	setListeners(t, mc, namesList("openshift-ingress", "e2e-v300", "proj", "team"))
-	someoneElsesModel(mc, "team")
+	someoneElsesModel(mc)
 	// The tool's first write after creating the Gateway moves its field
 	// ownership to server-side apply (upgradeToolFieldOwnership, a
 	// metadata write of its own): done here, so the tests count only the

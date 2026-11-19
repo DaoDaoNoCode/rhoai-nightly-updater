@@ -17,9 +17,9 @@ const rolledBackCSV = "rhods-operator.3.5.0"
 // served catalog does not have makes the Subscription unresolvable;
 // without one, the served head is installed.
 func catalogServesOlder(f *fakeOLM) {
-	f.onSubscribe = func(f *fakeOLM, spec map[string]interface{}) {
+	f.onSubscribe = func(f *fakeOLM, spec map[string]any) {
 		if pin, _ := spec["startingCSV"].(string); pin != "" && pin != rolledBackCSV {
-			f.sub["status"] = map[string]interface{}{"conditions": []interface{}{cond("ResolutionFailed", "ConstraintsNotSatisfiable",
+			f.sub["status"] = map[string]any{"conditions": []any{cond("ResolutionFailed", "ConstraintsNotSatisfiable",
 				"no operators found with name "+pin+" in channel beta of package rhods-operator in the catalog referenced by subscription rhods-operator")}}
 			return
 		}
@@ -53,7 +53,7 @@ func TestUpdateUnderGitOps_StalePackageManifestCannotDowngrade(t *testing.T) {
 			if _, installed := f.csvs[rolledBackCSV]; installed {
 				t.Fatalf("OLM installed the older build %s", rolledBackCSV)
 			}
-			if f.sub == nil || f.sub["spec"].(map[string]interface{})["startingCSV"] != gitOpsCSV {
+			if f.sub == nil || f.sub["spec"].(map[string]any)["startingCSV"] != gitOpsCSV {
 				t.Fatalf("restored Subscription = %v, want startingCSV %s (the removed CSV)", f.sub, gitOpsCSV)
 			}
 		})

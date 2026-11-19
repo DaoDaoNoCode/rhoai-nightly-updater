@@ -123,13 +123,13 @@ func TestMaaSOnlySetup_UnpublishRemovesTheRoute(t *testing.T) {
 	mc := maasOnlyModel(t)
 	gwBefore, _ := json.Marshal(mc.f.get(testGatewayPath)["spec"])
 	var mu sync.Mutex
-	var patches []map[string]interface{}
+	var patches []map[string]any
 	prev := mc.f.onMergePatch
-	mc.f.onMergePatch = func(r *http.Request, k fakeKey, patch, next map[string]interface{}) {
+	mc.f.onMergePatch = func(r *http.Request, k fakeKey, patch, next map[string]any) {
 		if prev != nil {
 			prev(r, k, patch, next)
 		}
-		if spec, ok := patch["spec"].(map[string]interface{}); ok && k.plural == "llminferenceservices" {
+		if spec, ok := patch["spec"].(map[string]any); ok && k.plural == "llminferenceservices" {
 			if _, router := spec["router"]; router {
 				mu.Lock()
 				patches = append(patches, patch)
@@ -157,7 +157,7 @@ func TestMaaSOnlySetup_UnpublishRemovesTheRoute(t *testing.T) {
 	if len(patches) != 1 {
 		t.Fatalf("router writes = %v", patches)
 	}
-	if meta, _ := patches[0]["metadata"].(map[string]interface{}); meta["annotations"] != nil {
+	if meta, _ := patches[0]["metadata"].(map[string]any); meta["annotations"] != nil {
 		t.Fatalf("token authentication changed with Connectivity Link set up: %v", patches[0])
 	}
 	all := strings.Join(res.Logs, " ") + " " + res.Message
@@ -246,7 +246,7 @@ func TestMaaSOnlySetup_ModelChangedMeanwhileIsAConflict(t *testing.T) {
 // refuses, as for any recorded publication, and writes nothing.
 func TestMaaSOnlySetup_UnpublishRefusesWhenSomeoneAddedAGateway(t *testing.T) {
 	mc := maasOnlyModel(t)
-	setModelRefs(mc, []interface{}{tMaaSGatewayRef, tTeamGatewayRef})
+	setModelRefs(mc, []any{tMaaSGatewayRef, tTeamGatewayRef})
 	mc.f.requests = nil
 	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"})
 	if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "team/team-gateway") ||
@@ -266,7 +266,7 @@ func TestMaaSOnlySetup_UnpublishRefusesWhenSomeoneAddedAGateway(t *testing.T) {
 func TestMaaSOnlySetup_RestoreRefusesWhenTheRefsChangedMeanwhile(t *testing.T) {
 	mc := maasOnlyModel(t)
 	run := &maasRun{c: mc.c}
-	setModelRefs(mc, []interface{}{tMaaSGatewayRef, tTeamGatewayRef})
+	setModelRefs(mc, []any{tMaaSGatewayRef, tTeamGatewayRef})
 	mc.f.requests = nil
 	msg, code := run.restoreModelRoute("proj", "qwen25-05b-instruct", maasModelRefs{NoRoute: true}, true, func(string, string, string) {})
 	if code != "conflict" || !strings.Contains(msg, "team/team-gateway") {
@@ -338,7 +338,7 @@ func TestModelsTeardown_MaaSCheckThatFailsDeletesNothing(t *testing.T) {
 // stops the teardown, and the model is not deleted.
 func TestModelsTeardown_RefusedUnpublishDeletesNothing(t *testing.T) {
 	mc := maasOnlyModel(t)
-	setModelRefs(mc, []interface{}{tMaaSGatewayRef, tTeamGatewayRef})
+	setModelRefs(mc, []any{tMaaSGatewayRef, tTeamGatewayRef})
 	mc.f.requests = nil
 	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "teardown", Project: "proj", Model: "qwen25-05b-instruct"})
 	if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "The model was not deleted.") || !strings.Contains(res.Message, "team/team-gateway") {

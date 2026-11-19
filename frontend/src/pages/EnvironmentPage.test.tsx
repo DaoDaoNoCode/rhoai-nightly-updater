@@ -164,7 +164,7 @@ describe("Environment page", () => {
     const api = stubApi({
       "/api/resources/status": () => jsonResponse(status),
       "/api/resources/projects": { projects: ["dev-project"] },
-      "POST /api/resources/minio/setup": () => { status = { ...status, minio: readyMinio }; return jsonResponse({ success: true, message: "S3 storage deployed.", logs: [] }); },
+      "POST /api/resources/s3/setup": () => { status = { ...status, minio: readyMinio }; return jsonResponse({ success: true, message: "S3 storage deployed.", logs: [] }); },
       // Created, then starting: the run waits until the status says ready.
       "POST /api/resources/pipeline-server/setup": () => {
         status = { ...status, pipelineServers: [{ ...readyDspa("dev-project"), ready: false, message: "Starting (1/3 ready)", uiRoute: undefined }] };
@@ -195,7 +195,7 @@ describe("Environment page", () => {
     expect(await within(progress).findByText("Pipelines are ready in dev-project.")).toBeInTheDocument();
     expect(within(progress).getByText("The pipeline server in dev-project is ready.", { exact: false })).toBeInTheDocument();
     expect(within(progress).getByRole("link", { name: /Open pipelines/ })).toHaveClass("pf-m-primary");
-    expect(api.calls.filter((c) => c.startsWith("POST /api/resources")).map((c) => c.split(" ")[1])).toEqual(["/api/resources/minio/setup", "/api/resources/pipeline-server/setup"]);
+    expect(api.calls.filter((c) => c.startsWith("POST /api/resources")).map((c) => c.split(" ")[1])).toEqual(["/api/resources/s3/setup", "/api/resources/pipeline-server/setup"]);
     expect(api.bodies["POST /api/resources/pipeline-server/setup"]).toEqual([{ project: "dev-project" }]);
   });
 

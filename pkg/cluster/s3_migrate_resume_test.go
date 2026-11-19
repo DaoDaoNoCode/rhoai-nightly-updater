@@ -20,7 +20,7 @@ func migratedForRemoval(t *testing.T) (*resourceFake, *Client) {
 	putMigrationCase(f)
 	delete(f.objects, fakeKey{gv: dspaAPIGroup, ns: "hand-made", plural: "datasciencepipelinesapplications", name: legacyDSPAName})
 	f.putJSON(secretPath("juntao-test", legacyDSPASecretName), `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(legacyPostManager, "Update")+`}}`)
-	ensureMap(f.get(legacyS3PVCPath), "metadata")["finalizers"] = []interface{}{pvcProtection}
+	ensureMap(f.get(legacyS3PVCPath), "metadata")["finalizers"] = []any{pvcProtection}
 	simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
 	if ok, msg, _, _ := runMigrate(t, c, MigrateOptions{}); !ok {
 		t.Fatal(msg)

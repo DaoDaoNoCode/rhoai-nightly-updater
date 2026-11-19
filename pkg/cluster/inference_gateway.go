@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/url"
 	"slices"
 	"sort"
@@ -85,14 +86,14 @@ const (
 
 // allowedRoutesFor is the listeners' allowedRoutes: the namespaces, by
 // name.
-func allowedRoutesFor(namespaces []string) map[string]interface{} {
-	values := make([]interface{}, len(namespaces))
+func allowedRoutesFor(namespaces []string) map[string]any {
+	values := make([]any, len(namespaces))
 	for i, n := range namespaces {
 		values[i] = n
 	}
-	return map[string]interface{}{"namespaces": map[string]interface{}{
+	return map[string]any{"namespaces": map[string]any{
 		"from": "Selector",
-		"selector": map[string]interface{}{"matchExpressions": []interface{}{map[string]interface{}{
+		"selector": map[string]any{"matchExpressions": []any{map[string]any{
 			"key": namespaceNameLabel, "operator": "In", "values": values,
 		}}},
 	}}
@@ -357,9 +358,7 @@ func (g gatewayObject) admits(namespace string, labels map[string]string) string
 // expression it cannot read.
 func matchExpressions(exprs []json.RawMessage, namespace string, labels map[string]string) string {
 	all := map[string]string{"kubernetes.io/metadata.name": namespace}
-	for k, v := range labels {
-		all[k] = v
-	}
+	maps.Copy(all, labels)
 	for _, raw := range exprs {
 		var e struct {
 			Key      string   `json:"key"`
@@ -510,26 +509,26 @@ func defaultIngressCertificate(c *Client) (string, error) {
 }
 
 // inferenceGatewayObjects are the objects setup applies, by kind.
-func inferenceGatewayObjects(domain, certificate string, namespaces []string) map[string]map[string]interface{} {
-	listener := func(name, host, cert string) map[string]interface{} {
-		return map[string]interface{}{
+func inferenceGatewayObjects(domain, certificate string, namespaces []string) map[string]map[string]any {
+	listener := func(name, host, cert string) map[string]any {
+		return map[string]any{
 			"name":          name,
 			"port":          443,
 			"protocol":      "HTTPS",
 			"hostname":      host,
 			"allowedRoutes": allowedRoutesFor(namespaces),
-			"tls": map[string]interface{}{
+			"tls": map[string]any{
 				"mode":            "Terminate",
-				"certificateRefs": []interface{}{map[string]interface{}{"group": "", "kind": "Secret", "name": cert}},
+				"certificateRefs": []any{map[string]any{"group": "", "kind": "Secret", "name": cert}},
 			},
 		}
 	}
-	return map[string]map[string]interface{}{
+	return map[string]map[string]any{
 		"GatewayClass": {
 			"apiVersion": gatewayAPIVersion,
 			"kind":       "GatewayClass",
-			"metadata":   map[string]interface{}{"name": "openshift-ai-inference", "labels": toolLabels()},
-			"spec":       map[string]interface{}{"controllerName": gatewayControllerName},
+			"metadata":   map[string]any{"name": "openshift-ai-inference", "labels": toolLabels()},
+			"spec":       map[string]any{"controllerName": gatewayControllerName},
 		},
 		// The gateway controller merges data.service into the Service it
 		// creates for the Gateway (Gateway API spec.infrastructure.parametersRef,
@@ -538,27 +537,27 @@ func inferenceGatewayObjects(domain, certificate string, namespaces []string) ma
 		"ConfigMap": {
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
-			"metadata":   map[string]interface{}{"name": "openshift-ai-inference-options", "namespace": inferenceGatewayNamespace, "labels": toolLabels()},
-			"data": map[string]interface{}{
+			"metadata":   map[string]any{"name": "openshift-ai-inference-options", "namespace": inferenceGatewayNamespace, "labels": toolLabels()},
+			"data": map[string]any{
 				"service": "metadata:\n  annotations:\n    " + servingCertAnnotation + ": " + inferenceGatewayServiceTLS + "\n",
 			},
 		},
 		"Gateway": {
 			"apiVersion": gatewayAPIVersion,
 			"kind":       "Gateway",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      "openshift-ai-inference",
 				"namespace": inferenceGatewayNamespace,
 				// The chart's label: the gateway runs on OpenShift's own
 				// Istio revision.
-				"labels": map[string]interface{}{managedByLabelKey: managedByLabelValue, "istio.io/rev": "openshift-gateway"},
+				"labels": map[string]any{managedByLabelKey: managedByLabelValue, "istio.io/rev": "openshift-gateway"},
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"gatewayClassName": inferenceGatewayClass,
-				"infrastructure": map[string]interface{}{
-					"parametersRef": map[string]interface{}{"group": "", "kind": "ConfigMap", "name": inferenceGatewayOptions},
+				"infrastructure": map[string]any{
+					"parametersRef": map[string]any{"group": "", "kind": "ConfigMap", "name": inferenceGatewayOptions},
 				},
-				"listeners": []interface{}{
+				"listeners": []any{
 					listener("https-external", inferenceHostPrefix+domain, certificate),
 					listener("https", inferenceGatewayInternalHost, inferenceGatewayServiceTLS),
 				},
@@ -849,7 +848,7 @@ func foreignGatewayRefusal(project string) string {
 // getInferenceGatewayStatus reports the inference gateway. models are the
 // cluster's LLMInferenceServices (modelsErr when they cannot be listed).
 func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr error) types.InferenceGatewayState {
-	state := types.InferenceGatewayState{ResourceState: types.ResourceState{Namespace: inferenceGatewayNamespace, Name: inferenceGatewayName}}
+	state := types.InferenceGatewayState{Namespace: inferenceGatewayNamespace, Name: inferenceGatewayName}
 	gw, found, err := readInferenceGateway(c)
 	if err != nil {
 		state.Message = "Cannot read the inference gateway: " + err.Error()
@@ -1014,7 +1013,7 @@ type gatewayPlan struct {
 	foreign bool
 	gateway gatewayObject
 	// objects to apply, by kind, with what was read of each.
-	objects map[string]map[string]interface{}
+	objects map[string]map[string]any
 	current map[string]objectMeta
 	found   map[string]bool
 	// classForeign: the GatewayClass exists and is not this tool's (it is
@@ -1323,9 +1322,9 @@ func waitInferenceGateway(c *Client, host string, progress func(string)) (ready 
 // counts are waited for (bounded) before refusing.
 func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.OperationResponse, error) {
 	logs := []string{}
-	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
+	fail := func(msg, code, activity string) *types.OperationResponse {
 		recordActivity(c, "teardown-inference-gateway", activity, false)
-		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}
 	}
 	type current struct {
 		meta  objectMeta
@@ -1336,7 +1335,7 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 	for _, kind := range gatewayKinds {
 		meta, found, err := readGatewayObject(c, kind)
 		if err != nil {
-			return fail(fmt.Sprintf("Cannot read %s; nothing was deleted: %v.%s", gatewayDesc(kind), err, templateHint(err)), errorCodeFromK8sErr(err), "read failed")
+			return fail(fmt.Sprintf("Cannot read %s; nothing was deleted: %v.%s", gatewayDesc(kind), err, templateHint(err)), errorCodeFromK8sErr(err), "read failed"), nil
 		}
 		objs[kind] = current{meta, found}
 		if found && gatewayOwned(meta) {
@@ -1344,7 +1343,7 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 		}
 	}
 	if gw := objs["Gateway"]; gw.found && !gatewayOwned(gw.meta) {
-		return fail(fmt.Sprintf("Gateway %s/%s was not created by this tool, so it was not deleted.", inferenceGatewayNamespace, inferenceGatewayName), "not_managed", "gateway not managed")
+		return fail(fmt.Sprintf("Gateway %s/%s was not created by this tool, so it was not deleted.", inferenceGatewayNamespace, inferenceGatewayName), "not_managed", "gateway not managed"), nil
 	}
 	if ours == 0 {
 		logs = append(logs, "No inference gateway objects of this tool exist")
@@ -1354,13 +1353,13 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 	// models cannot be listed.
 	models, err := listLLMInferenceServices(c)
 	if err != nil && !errors.Is(err, errLLMISvcAPIMissing) {
-		return fail(fmt.Sprintf("Cannot check which models use the gateway, so it was not deleted: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "model list failed")
+		return fail(fmt.Sprintf("Cannot check which models use the gateway, so it was not deleted: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "model list failed"), nil
 	}
 	// A model on the default route uses this gateway unless KServe's
 	// default is known to be another one (unreadable counts as this one).
 	def, _ := readKServeGateway(c)
 	if users := gatewayUsers(models, def); len(users) > 0 {
-		return fail(fmt.Sprintf("Models route through the inference gateway: %s. Delete %s first; nothing was deleted.", strings.Join(users, ", "), verb(len(users), "that model", "those models")), "in_use", "in use")
+		return fail(fmt.Sprintf("Models route through the inference gateway: %s. Delete %s first; nothing was deleted.", strings.Join(users, ", "), verb(len(users), "that model", "those models")), "in_use", "in use"), nil
 	}
 	// The gateway controller's count of attached routes also sees models
 	// that inherit their route from a preset, and routes made by hand.
@@ -1379,15 +1378,15 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 			})
 		}
 		if err != nil {
-			return fail(fmt.Sprintf("Cannot read the gateway's attached routes, so it was not deleted: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "gateway read failed")
+			return fail(fmt.Sprintf("Cannot read the gateway's attached routes, so it was not deleted: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "gateway read failed"), nil
 		}
 		if found && current.attachedRoutes() > 0 {
-			return fail(attachedRoutesReason(current.attachedRoutes())+" Nothing was deleted.", "in_use", "routes attached")
+			return fail(attachedRoutesReason(current.attachedRoutes())+" Nothing was deleted.", "in_use", "routes attached"), nil
 		}
 	}
 	var deleted, kept []string
-	for i := len(gatewayKinds) - 1; i >= 0; i-- {
-		kind := gatewayKinds[i]
+	for _, kind := range slices.Backward(gatewayKinds) {
+
 		cur := objs[kind]
 		if !cur.found || !gatewayOwned(cur.meta) {
 			if cur.found {
@@ -1423,7 +1422,7 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 			if IsK8sError(err, 409) {
 				code = "conflict"
 			}
-			return fail(fmt.Sprintf("Failed to delete %s: %v.%s Delete again to retry.%s", gatewayDesc(kind), err, done, templateHint(err)), code, "delete failed")
+			return fail(fmt.Sprintf("Failed to delete %s: %v.%s Delete again to retry.%s", gatewayDesc(kind), err, done, templateHint(err)), code, "delete failed"), nil
 		}
 		deleted = append(deleted, gatewayDesc(kind))
 		logs = append(logs, fmt.Sprintf("OK: %s deleted", gatewayDesc(kind)))

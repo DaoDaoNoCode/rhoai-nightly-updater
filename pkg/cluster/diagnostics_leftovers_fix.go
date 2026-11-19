@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -117,13 +116,13 @@ func fixLeftoverStoredFields(c *Client, target string, acknowledged bool) *types
 	}
 	logs = append(logs, "Patched "+st.ref()+": "+strings.Join(summary, ", "))
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "fix-leftover-fields",
 		Detail:    fmt.Sprintf("%s: %s", st.ref(), strings.Join(summary, ", ")),
 		Success:   true,
 	})
-	var after map[string]interface{}
+	var after map[string]any
 	if err := json.Unmarshal(body, &after); err == nil {
 		for _, lf := range changes {
 			got, present := lookupPath(after, lf.Keys)
@@ -195,16 +194,16 @@ func fixLeftoverRetryDSC(c *Client, name string) *types.OperationResponse {
 	if !strings.HasSuffix(path, "/"+name) {
 		return leftoverRefused(fmt.Sprintf("DataScienceCluster %s is not the cluster's DataScienceCluster. Nothing was changed.", name), "validation", nil)
 	}
-	stamp := time.Now().UTC().Format(time.RFC3339)
-	add, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{"uid": uid, "annotations": map[string]interface{}{leftoverRetryAnno: stamp}}})
+	stamp := nowRFC3339()
+	add, _ := json.Marshal(map[string]any{"metadata": map[string]any{"uid": uid, "annotations": map[string]any{leftoverRetryAnno: stamp}}})
 	if _, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", add, url.Values{"fieldManager": {leftoverManager}}); err != nil {
 		return leftoverWriteError(err, "DataScienceCluster "+name, false)
 	}
 	logs := []string{fmt.Sprintf("Added the annotation %s=%s to DataScienceCluster %s", leftoverRetryAnno, stamp, name)}
-	remove, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{"annotations": map[string]interface{}{leftoverRetryAnno: nil}}})
+	remove, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{leftoverRetryAnno: nil}}})
 	_, _, rmErr := c.do(http.MethodPatch, path, "application/merge-patch+json", remove, url.Values{"fieldManager": {leftoverManager}})
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "fix-retry-dsc-reconcile",
 		Detail:    fmt.Sprintf("annotated DataScienceCluster %s to retry %s", name, waiting),
@@ -252,7 +251,7 @@ func readWorkloadAsUser(c *Client, kind, namespace, name string) (workloadObject
 // deleteWorkload deletes with UID and resourceVersion preconditions and
 // background propagation, as a server-side dry run when dryRun is set.
 func deleteWorkload(c *Client, path, uid, resourceVersion string, dryRun bool) error {
-	opts, _ := json.Marshal(map[string]interface{}{
+	opts, _ := json.Marshal(map[string]any{
 		"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Background",
 		"preconditions": map[string]string{"uid": uid, "resourceVersion": resourceVersion},
 	})
@@ -305,7 +304,7 @@ func fixLeftoverRecreateWorkload(c *Client, target string, acknowledged bool) *t
 	}
 	logs = append(logs, fmt.Sprintf("Deleted %s (UID %s, propagation Background)", r.ref(), uid))
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "fix-recreate-leftover",
 		Detail:    fmt.Sprintf("deleted %s (selector changed; owned by %s) for its operator to recreate", r.ref(), r.Owner),

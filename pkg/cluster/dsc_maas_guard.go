@@ -144,7 +144,7 @@ func (rc *removalChecker) maasBlocker(path string) string {
 // MaaS path that stops being deployed blocks while MaaS is in use. In a
 // hard reset (teardown) a MaaS path that is deployed again afterwards is
 // down only meanwhile: a warning, while a read that fails still blocks.
-func (v *dscView) maasBlocks(rc *removalChecker, before, after map[string]interface{}, teardown bool) (*types.DSCRemovalBlock, string) {
+func (v *dscView) maasBlocks(rc *removalChecker, before, after map[string]any, teardown bool) (*types.DSCRemovalBlock, string) {
 	gone, down := "", ""
 	for _, p := range dscMaaSPaths {
 		t, ok := v.byKey[p]

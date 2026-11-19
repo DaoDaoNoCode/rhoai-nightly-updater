@@ -17,18 +17,18 @@ func assertConnection(t *testing.T, f *resourceFake, ns, accessKey, secretKey st
 		t.Fatalf("connection %s/%s missing", ns, connectionSecretName)
 	}
 	meta := ensureMap(obj, "metadata")
-	labels, _ := meta["labels"].(map[string]interface{})
+	labels, _ := meta["labels"].(map[string]any)
 	if labels["opendatahub.io/dashboard"] != "true" || labels["opendatahub.io/managed"] != "true" || labels[managedByLabelKey] != managedByLabelValue {
 		t.Errorf("labels = %v", labels)
 	}
-	ann, _ := meta["annotations"].(map[string]interface{})
+	ann, _ := meta["annotations"].(map[string]any)
 	if ann["opendatahub.io/connection-type-ref"] != "s3" || ann["opendatahub.io/connection-type"] != "s3" || ann["openshift.io/display-name"] == nil || ann["openshift.io/display-name"] == "" {
 		t.Errorf("annotations = %v", ann)
 	}
 	if typ, ok := obj["type"]; ok && typ != "Opaque" {
 		t.Errorf("type = %v", typ)
 	}
-	data, _ := obj["data"].(map[string]interface{})
+	data, _ := obj["data"].(map[string]any)
 	want := map[string]string{
 		"AWS_ACCESS_KEY_ID": accessKey, "AWS_SECRET_ACCESS_KEY": secretKey,
 		"AWS_S3_ENDPOINT": "http://seaweedfs-s3.seaweedfs.svc:8333", "AWS_DEFAULT_REGION": "us-east-1", "AWS_S3_BUCKET": "pipelines",
@@ -44,7 +44,7 @@ func assertConnection(t *testing.T, f *resourceFake, ns, accessKey, secretKey st
 	}
 }
 
-func stringOf(v interface{}) string {
+func stringOf(v any) string {
 	s, _ := v.(string)
 	return s
 }
@@ -55,7 +55,7 @@ func TestSetupPipelineServer_CreatesTheDashboardConnection(t *testing.T) {
 	putReadyManagedS3(f)
 	putDSProject(f, "proj")
 	keys, _, _ := readS3Keys(c)
-	for run := 0; run < 2; run++ {
+	for run := range 2 {
 		if resp, _ := SetupPipelineServer(c, "proj"); !resp.Success {
 			t.Fatalf("run %d: %+v", run, resp)
 		}

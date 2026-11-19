@@ -31,7 +31,7 @@ const (
 // counts requests per path kind.
 type fakeGitHub struct {
 	mu  sync.Mutex
-	prs map[int]map[string]interface{}
+	prs map[int]map[string]any
 	// prRepos are the repositories prs are found in (any other answers 404).
 	prRepos map[string]bool
 	// commits are the commits GET /repos/<repo>/commits/<ref> resolves, by
@@ -53,7 +53,7 @@ type fakeGitHub struct {
 
 func newFakeGitHub() *fakeGitHub {
 	return &fakeGitHub{
-		prs:           map[int]map[string]interface{}{},
+		prs:           map[int]map[string]any{},
 		prRepos:       map[string]bool{DefaultPRSearchRepo: true},
 		commits:       map[string]string{},
 		compare:       map[string]string{},
@@ -144,9 +144,9 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"message":"No commit found for SHA: `+ref+`"}`, http.StatusUnprocessableEntity)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"sha": sha, "html_url": "https://github.com/" + repo + "/commit/" + sha,
-			"commit": map[string]interface{}{"message": message, "committer": map[string]interface{}{"date": date}},
+			"commit": map[string]any{"message": message, "committer": map[string]any{"date": date}},
 		})
 	case "compare":
 		repo := strings.TrimPrefix(r.URL.Path[:strings.Index(r.URL.Path, "/compare/")], "/repos/")
@@ -167,7 +167,7 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !hasCounts {
 			counts = [2]int{1, 0}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": status, "ahead_by": counts[0], "behind_by": counts[1], "commits": []string{}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": status, "ahead_by": counts[0], "behind_by": counts[1], "commits": []string{}})
 	case "branch":
 		repo := strings.TrimPrefix(r.URL.Path[:strings.Index(r.URL.Path, "/branches/")], "/repos/")
 		branch := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
@@ -178,12 +178,12 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"message":"Branch not found"}`, http.StatusNotFound)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"name": branch, "commit": map[string]interface{}{"sha": sha}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"name": branch, "commit": map[string]any{"sha": sha}})
 	case "commit":
 		g.mu.Lock()
 		date := g.commitDate
 		g.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"committer": map[string]interface{}{"date": date}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"committer": map[string]any{"date": date}})
 	default:
 		http.NotFound(w, r)
 	}
@@ -245,8 +245,9 @@ func registryAsked(s string) bool {
 	return found
 }
 
-func mergedPR(sha string) map[string]interface{} {
-	return map[string]interface{}{"state": "closed", "merged": true, "merged_at": "2026-10-05T21:16:13Z", "merge_commit_sha": sha,
+func mergedPR() map[string]any {
+	sha := mergeSHA
+	return map[string]any{"state": "closed", "merged": true, "merged_at": "2026-10-05T21:16:13Z", "merge_commit_sha": sha,
 		"title": "Fix the thing", "html_url": "https://github.com/opendatahub-io/odh-dashboard/pull/9938"}
 }
 
@@ -320,7 +321,7 @@ func resultsByTag(resp *types.PRContainsResponse) map[string]types.PRContainsBui
 func TestFindBuildsContainingPR_Verdicts(t *testing.T) {
 	g := newFakeGitHub()
 	installFakeGitHub(t, g)
-	g.prs[9938] = mergedPR(mergeSHA)
+	g.prs[9938] = mergedPR()
 	g.compare[mergeSHA+"..."+commitNew] = "ahead"
 	g.compare[mergeSHA+"..."+commitOld] = "diverged"
 	g.compare[mergeSHA+"..."+mergeSHA] = "identical"
@@ -375,16 +376,16 @@ func TestFindBuildsContainingPR_Verdicts(t *testing.T) {
 func TestFindBuildsContainingPR_RequestErrors(t *testing.T) {
 	cases := []struct {
 		name   string
-		pr     map[string]interface{}
+		pr     map[string]any
 		fail   func(w http.ResponseWriter) bool
 		status int
 		code   string
 	}{
-		{name: "open PR (test-merge SHA is ignored)", pr: map[string]interface{}{"state": "open", "merged": false, "merged_at": nil, "merge_commit_sha": mergeSHA}, status: 422, code: "pr_not_merged"},
-		{name: "closed without merge", pr: map[string]interface{}{"state": "closed", "merged": false, "merged_at": nil, "merge_commit_sha": nil}, status: 422, code: "pr_not_merged"},
+		{name: "open PR (test-merge SHA is ignored)", pr: map[string]any{"state": "open", "merged": false, "merged_at": nil, "merge_commit_sha": mergeSHA}, status: 422, code: "pr_not_merged"},
+		{name: "closed without merge", pr: map[string]any{"state": "closed", "merged": false, "merged_at": nil, "merge_commit_sha": nil}, status: 422, code: "pr_not_merged"},
 		{name: "no such PR", status: 404, code: "pr_not_found"},
 		{name: "GitHub 502", fail: func(w http.ResponseWriter) bool { w.WriteHeader(502); return true }, status: 502, code: "upstream_error"},
-		{name: "merged without merge SHA", pr: map[string]interface{}{"state": "closed", "merged": true, "merged_at": "2026-10-01T00:00:00Z", "merge_commit_sha": ""}, status: 502, code: "upstream_error"},
+		{name: "merged without merge SHA", pr: map[string]any{"state": "closed", "merged": true, "merged_at": "2026-10-01T00:00:00Z", "merge_commit_sha": ""}, status: 502, code: "upstream_error"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -450,7 +451,7 @@ func TestFindBuildsContainingPR_StableBranch(t *testing.T) {
 		t.Helper()
 		g := newFakeGitHub()
 		installFakeGitHub(t, g)
-		g.prs[9938] = mergedPR(mergeSHA)
+		g.prs[9938] = mergedPR()
 		g.compare[mergeSHA+"..."+commitOld] = "diverged"
 		g.branches[DefaultPRSearchRepo+":stable"] = stableHead
 		g.commits[DefaultPRSearchRepo+"|"+stableHead] = "Merge main into stable"
@@ -514,7 +515,7 @@ func TestFindBuildsContainingPR_AnyRepository(t *testing.T) {
 	const dspFork = "red-hat-data-services/data-science-pipelines"
 	g.prRepos[dspRepo] = true
 	g.compareRepos[dspFork] = true
-	g.prs[777] = mergedPR(mergeSHA)
+	g.prs[777] = mergedPR()
 	g.compare[mergeSHA+"..."+commitNew] = "ahead"
 	g.compare[mergeSHA+"..."+commitOld] = "diverged"
 	kserveURL := "https://github.com/red-hat-data-services/kserve"
@@ -582,7 +583,7 @@ func TestFindBuildsContainingPR_AnyRepository(t *testing.T) {
 func TestFindBuildsContainingPR_BuiltBeforeMerge(t *testing.T) {
 	g := newFakeGitHub()
 	registryReads := installFakeGitHub(t, g)
-	g.prs[9938] = mergedPR(mergeSHA) // merged 2026-10-05T21:16:13Z
+	g.prs[9938] = mergedPR() // merged 2026-10-05T21:16:13Z
 	g.compare[mergeSHA+"..."+commitNew] = "ahead"
 
 	// Only the build date is known about the old build: its catalog is not
@@ -817,7 +818,7 @@ func TestFindBuildsContainingPR_RateLimits(t *testing.T) {
 	t.Run("compare rate limited (429 Retry-After): the rest are still answered", func(t *testing.T) {
 		g := newFakeGitHub()
 		installFakeGitHub(t, g)
-		g.prs[9938] = mergedPR(mergeSHA)
+		g.prs[9938] = mergedPR()
 		g.compare[mergeSHA+"..."+commitNew] = "ahead"
 		// Answered first and cached, so the second build is checked from the cache.
 		if _, err := compareContains(context.Background(), forkRepo, mergeSHA, commitNew); err != nil {
@@ -848,7 +849,7 @@ func TestFindBuildsContainingPR_RateLimits(t *testing.T) {
 func TestFindBuildsContainingPR_UnknownBuilds(t *testing.T) {
 	g := newFakeGitHub()
 	installFakeGitHub(t, g)
-	g.prs[9938] = mergedPR(mergeSHA)
+	g.prs[9938] = mergedPR()
 	g.compare[mergeSHA+"..."+commitNew] = "ahead"
 	errSHA := "2222222222222222222222222222222222222222"
 
@@ -958,7 +959,7 @@ func TestFindBuildsContainingPR_RepositoryAllowlist(t *testing.T) {
 	})
 	t.Run("the owner's case does not matter", func(t *testing.T) {
 		g.prRepos["OpenDataHub-io/odh-dashboard"] = true
-		g.prs[9938] = mergedPR(mergeSHA)
+		g.prs[9938] = mergedPR()
 		g.compare[mergeSHA+"..."+commitNew] = "ahead"
 		resp, err := findBuildsContainingPR(context.Background(), "", "OpenDataHub-io/odh-dashboard", 9938, staticBuilds(prBuild{image: seedBuild(t, 1, "rhoai-3.6", forkURL, commitNew)}))
 		if err != nil {
@@ -979,9 +980,9 @@ func TestFindBuildsContainingPR_BoundedConcurrencyAndToken(t *testing.T) {
 		g := newFakeGitHub()
 		g.gate = newCallGate()
 		installFakeGitHub(t, g)
-		g.prs[9938] = mergedPR(mergeSHA)
+		g.prs[9938] = mergedPR()
 		var builds []prBuild
-		for i := 0; i < 12; i++ {
+		for i := range 12 {
 			commit := fmt.Sprintf("%040d", i+1)
 			g.compare[mergeSHA+"..."+commit] = "ahead"
 			builds = append(builds, prBuild{image: seedBuild(t, 100+i, fmt.Sprintf("rhoai-3.%d", i), forkURL, commit)})
@@ -1015,7 +1016,7 @@ func TestFindBuildsContainingPR_BoundedConcurrencyAndToken(t *testing.T) {
 func TestFindBuildsContainingPR_Timeout(t *testing.T) {
 	g := newFakeGitHub()
 	installFakeGitHub(t, g)
-	g.prs[9938] = mergedPR(mergeSHA)
+	g.prs[9938] = mergedPR()
 	ctx, cancel := context.WithCancel(context.Background())
 	image := seedBuild(t, 1, "rhoai-3.6", forkURL, commitNew)
 	resp, err := findBuildsContainingPR(ctx, "", DefaultPRSearchRepo, 9938, func(context.Context) ([]prBuild, error) {

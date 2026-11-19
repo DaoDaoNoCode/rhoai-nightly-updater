@@ -121,12 +121,12 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
-func applyFailureCR(name string, ready string, msgs ...string) map[string]interface{} {
+func applyFailureCR(name string, ready string, msgs ...string) map[string]any {
 	conds := []map[string]string{{"type": "Ready", "status": ready, "reason": "Error", "message": "x"}}
 	for _, m := range msgs {
 		conds = append(conds, map[string]string{"type": "ProvisioningSucceeded", "status": "False", "reason": "Error", "message": m})
 	}
-	return map[string]interface{}{"metadata": map[string]string{"name": name}, "status": map[string]interface{}{"conditions": conds}}
+	return map[string]any{"metadata": map[string]string{"name": name}, "status": map[string]any{"conditions": conds}}
 }
 
 func TestCheckApplyFailures(t *testing.T) {
@@ -162,25 +162,25 @@ func applyFailuresWorld(t *testing.T) (*Client, *[]string) {
 	f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1", 200,
 		`{"resources":[{"name":"rays","kind":"Ray"},{"name":"rays/status","kind":"Ray"},{"name":"trustyais","kind":"TrustyAI"},{"name":"aihubs","kind":"AIHub"},{"name":"newmodules","kind":"NewModule"}]}`)
 	// The DSC aggregates the module messages: each object is reported once.
-	f.obj("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", map[string]interface{}{
-		"items": []interface{}{applyFailureCR("default-dsc", "False", msgImmutableLabels, msgSchemaMismatch)},
+	f.obj("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", map[string]any{
+		"items": []any{applyFailureCR("default-dsc", "False", msgImmutableLabels, msgSchemaMismatch)},
 	})
-	f.obj("GET", "/apis/config.opendatahub.io/v1alpha1/platforms", map[string]interface{}{
-		"items": []interface{}{applyFailureCR("default", "True", msgTwoControllers)},
+	f.obj("/apis/config.opendatahub.io/v1alpha1/platforms", map[string]any{
+		"items": []any{applyFailureCR("default", "True", msgTwoControllers)},
 	})
-	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/rays", map[string]interface{}{"items": []interface{}{applyFailureCR("default-ray", "False", msgImmutableLabels)}})
-	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/trustyais", map[string]interface{}{"items": []interface{}{applyFailureCR("default-trustyai", "True", msgSchemaMismatch)}})
-	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/aihubs", map[string]interface{}{"items": []interface{}{applyFailureCR("default-aihub", "True")}})
-	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/newmodules", map[string]interface{}{"items": []interface{}{
+	f.obj("/apis/components.platform.opendatahub.io/v1alpha1/rays", map[string]any{"items": []any{applyFailureCR("default-ray", "False", msgImmutableLabels)}})
+	f.obj("/apis/components.platform.opendatahub.io/v1alpha1/trustyais", map[string]any{"items": []any{applyFailureCR("default-trustyai", "True", msgSchemaMismatch)}})
+	f.obj("/apis/components.platform.opendatahub.io/v1alpha1/aihubs", map[string]any{"items": []any{applyFailureCR("default-aihub", "True")}})
+	f.obj("/apis/components.platform.opendatahub.io/v1alpha1/newmodules", map[string]any{"items": []any{
 		applyFailureCR("default-newmodule", "True", strings.ReplaceAll(msgImmutableLabels, "kuberay-operator", "new-operator"))}})
 	crdLookups := new([]string)
 	f.handle("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", func(r *http.Request, _ []byte) (int, string) {
 		*crdLookups = append(*crdLookups, r.URL.Query().Get("fieldSelector"))
-		b, _ := json.Marshal(map[string]interface{}{"items": []interface{}{map[string]interface{}{"metadata": map[string]interface{}{
+		b, _ := json.Marshal(map[string]any{"items": []any{map[string]any{"metadata": map[string]any{
 			"name": "trustyais.components.platform.opendatahub.io",
-			"managedFields": []interface{}{
-				map[string]interface{}{"manager": "kubectl-edit", "operation": "Update", "time": "2026-09-01T10:00:00Z", "fieldsV1": map[string]interface{}{"f:metadata": map[string]interface{}{}}},
-				map[string]interface{}{"manager": "catalog", "operation": "Update", "time": "2026-10-05T12:00:00Z", "fieldsV1": map[string]interface{}{"f:spec": map[string]interface{}{"f:versions": map[string]interface{}{}}}},
+			"managedFields": []any{
+				map[string]any{"manager": "kubectl-edit", "operation": "Update", "time": "2026-09-01T10:00:00Z", "fieldsV1": map[string]any{"f:metadata": map[string]any{}}},
+				map[string]any{"manager": "catalog", "operation": "Update", "time": "2026-10-05T12:00:00Z", "fieldsV1": map[string]any{"f:spec": map[string]any{"f:versions": map[string]any{}}}},
 			},
 		}}}})
 		return 200, string(b)
@@ -237,11 +237,11 @@ func TestApplyFailuresOneProblemPerObject(t *testing.T) {
 	immutable2 := strings.ReplaceAll(msgImmutableSelector, "kuberay-operator", "shared")
 	owner := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(msgTwoControllers, "aihub-controller-manager-metrics-monitor", "shared"),
 		"monitoring.coreos.com/v1, Kind=ServiceMonitor", "apps/v1, Kind=Deployment"), "ServiceMonitor.monitoring.coreos.com", "Deployment.apps")
-	f.obj("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", map[string]interface{}{
-		"items": []interface{}{applyFailureCR("default-dsc", "True", immutable, owner)},
+	f.obj("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", map[string]any{
+		"items": []any{applyFailureCR("default-dsc", "True", immutable, owner)},
 	})
-	f.obj("GET", "/apis/config.opendatahub.io/v1alpha1/platforms", map[string]interface{}{
-		"items": []interface{}{applyFailureCR("default", "False", immutable2)},
+	f.obj("/apis/config.opendatahub.io/v1alpha1/platforms", map[string]any{
+		"items": []any{applyFailureCR("default", "False", immutable2)},
 	})
 	out := checkApplyFailures(c.WithContext(context.Background()))
 	if len(out.problems) != 1 {
@@ -259,8 +259,8 @@ func TestApplyFailuresOneProblemPerObject(t *testing.T) {
 
 func TestCheckApplyFailuresHealthyAndUnreadable(t *testing.T) {
 	f, c := newFakeAPI(t)
-	f.obj("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", map[string]interface{}{
-		"items": []interface{}{applyFailureCR("default-dsc", "False", "Some modules are not ready: trainer")},
+	f.obj("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", map[string]any{
+		"items": []any{applyFailureCR("default-dsc", "False", "Some modules are not ready: trainer")},
 	})
 	out := checkApplyFailures(c.WithContext(context.Background()))
 	if out.check.Status != "pass" || len(out.problems) != 0 || !strings.Contains(out.check.Detail, "1 CR checked") {

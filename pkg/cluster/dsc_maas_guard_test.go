@@ -38,19 +38,19 @@ func putMaaSRecord(t *testing.T, f *resourceFake, rec maasRecord) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.put(snapshotPath(), map[string]interface{}{"metadata": map[string]interface{}{"name": snapshotConfigMapName, "namespace": getActivityNamespace()},
-		"data": map[string]interface{}{maasRecordKey: string(raw)}})
+	f.put(snapshotPath(), map[string]any{"metadata": map[string]any{"name": snapshotConfigMapName, "namespace": getActivityNamespace()},
+		"data": map[string]any{maasRecordKey: string(raw)}})
 }
 
 // maasInUseWorld is managerWorld with MaaS in use as on the live cluster.
-func maasInUseWorld(t *testing.T, edit func(dsc map[string]interface{})) (*resourceFake, *Client) {
+func maasInUseWorld(t *testing.T, edit func(dsc map[string]any)) (*resourceFake, *Client) {
 	t.Helper()
 	f, c := managerWorld(t, edit)
 	maasServed(f)
-	f.put(guardModelRef, map[string]interface{}{"metadata": map[string]interface{}{"name": "qwen25-05b-instruct", "namespace": "proj", "labels": toolLabels()},
-		"spec": map[string]interface{}{"modelRef": map[string]interface{}{"kind": "LLMInferenceService", "name": "qwen25-05b-instruct"}}})
-	f.put(guardSubscription, map[string]interface{}{"metadata": map[string]interface{}{"name": maasSubscriptionName, "namespace": maasTenantNamespace, "labels": toolLabels()}})
-	f.put(guardAuthPolicy, map[string]interface{}{"metadata": map[string]interface{}{"name": maasAuthPolicyName, "namespace": maasTenantNamespace, "labels": toolLabels()}})
+	f.put(guardModelRef, map[string]any{"metadata": map[string]any{"name": "qwen25-05b-instruct", "namespace": "proj", "labels": toolLabels()},
+		"spec": map[string]any{"modelRef": map[string]any{"kind": "LLMInferenceService", "name": "qwen25-05b-instruct"}}})
+	f.put(guardSubscription, map[string]any{"metadata": map[string]any{"name": maasSubscriptionName, "namespace": maasTenantNamespace, "labels": toolLabels()}})
+	f.put(guardAuthPolicy, map[string]any{"metadata": map[string]any{"name": maasAuthPolicyName, "namespace": maasTenantNamespace, "labels": toolLabels()}})
 	putMaaSRecord(t, f, maasRecord{DSCChanged: true, PreviousModelsAsAService: "Removed", AIGatewayChanged: true, PreviousAIGateway: "Removed",
 		Published: []string{"proj/qwen25-05b-instruct"}, DBNamespace: "redhat-ai-gateway-infra", Database: "cnpg"})
 	return f, c
@@ -94,7 +94,7 @@ func assertMaaSBlock(t *testing.T, plan *types.DSCPlan, component string) {
 
 func assertNoDSCPatch(t *testing.T, f *resourceFake) {
 	t.Helper()
-	if dry, real := patchesTo(f, dscV3Path); len(dry)+len(real) != 0 {
+	if dry, real := patchesTo(f); len(dry)+len(real) != 0 {
 		t.Fatalf("patched the DSC: %d dry runs, %d patches", len(dry), len(real))
 	}
 }
@@ -156,7 +156,7 @@ func TestSoftResetWithoutKeepIsBlockedWhileMaaSIsInUse(t *testing.T) {
 	if plan.KeepEnabled || len(plan.Kept) != 0 || !reflect.DeepEqual(plan.TurnedOn, []string{"aigateway", "aigateway.modelsAsAService"}) {
 		t.Fatalf("keep = %v, kept = %v, turned on = %v", plan.KeepEnabled, plan.Kept, plan.TurnedOn)
 	}
-	res, _ := SoftResetDSC(c, types.DSCPlanRequest{Name: "default-dsc", UID: plan.UID, Token: plan.Token, KeepEnabled: boolPtr(false)})
+	res, _ := SoftResetDSC(c, types.DSCPlanRequest{Name: "default-dsc", UID: plan.UID, Token: plan.Token, KeepEnabled: new(false)})
 	if res.Success || res.ErrorCode != "prerequisites" {
 		t.Fatalf("reset = %+v", res)
 	}
@@ -164,7 +164,7 @@ func TestSoftResetWithoutKeepIsBlockedWhileMaaSIsInUse(t *testing.T) {
 }
 
 func TestSoftResetKeepsWhatTheUserTurnedOn(t *testing.T) {
-	f, c := maasInUseWorld(t, func(dsc map[string]interface{}) {
+	f, c := maasInUseWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.kserve.rawDeploymentServiceConfig", "Headed")
 	})
 	plan := mustPlan(t, c, "soft-reset", "", "", true)
@@ -184,7 +184,7 @@ func TestSoftResetKeepsWhatTheUserTurnedOn(t *testing.T) {
 	if other.Token == plan.Token {
 		t.Fatal("keepEnabled is not part of the token")
 	}
-	res, _ := SoftResetDSC(c, types.DSCPlanRequest{Name: "default-dsc", UID: plan.UID, Token: plan.Token, KeepEnabled: boolPtr(false)})
+	res, _ := SoftResetDSC(c, types.DSCPlanRequest{Name: "default-dsc", UID: plan.UID, Token: plan.Token, KeepEnabled: new(false)})
 	if res.Success {
 		t.Fatalf("the reviewed keep plan ran without keep: %+v", res)
 	}
@@ -193,7 +193,7 @@ func TestSoftResetKeepsWhatTheUserTurnedOn(t *testing.T) {
 		t.Fatalf("reset without keepEnabled = %+v", res)
 	}
 	assertNoDSCPatch(t, f)
-	res, err := SoftResetDSC(c, types.DSCPlanRequest{Name: "default-dsc", UID: plan.UID, Token: plan.Token, KeepEnabled: boolPtr(true)})
+	res, err := SoftResetDSC(c, types.DSCPlanRequest{Name: "default-dsc", UID: plan.UID, Token: plan.Token, KeepEnabled: new(true)})
 	if err != nil || !res.Success || !strings.Contains(res.Message, "Kept: aigateway, aigateway.modelsAsAService (you turned these on).") {
 		t.Fatalf("reset = %+v, %v", res, err)
 	}
@@ -223,7 +223,7 @@ func TestSoftResetKeepingEverythingHasNothingToDo(t *testing.T) {
 // alone); an orphan (Managed under a Removed parent) deploys nothing and is
 // not kept.
 func TestTurnedOnListsDeployedTogglesTheDefaultLeavesOff(t *testing.T) {
-	_, c := managerWorld(t, func(dsc map[string]interface{}) {
+	_, c := managerWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.kueue.managementState", "Unmanaged")
 		setPath(t, dsc, "spec.components.kserve.modelExpress.managementState", "Managed")
 		setPath(t, dsc, "spec.components.aigateway.managementState", "Removed")
@@ -252,7 +252,7 @@ func TestTurnedOnListsDeployedTogglesTheDefaultLeavesOff(t *testing.T) {
 
 // A sub-component kept needs its parent: both are kept, parent first.
 func TestKeptSubComponentKeepsItsParent(t *testing.T) {
-	_, c := managerWorld(t, func(dsc map[string]interface{}) {
+	_, c := managerWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.aigateway.modelsAsAService.managementState", "Removed")
 		setPath(t, dsc, "spec.components.aigateway.batchGateway.managementState", "Managed")
 	})
@@ -301,7 +301,7 @@ func TestHardResetKeepsWhatTheUserTurnedOn(t *testing.T) {
 	if other := mustPlan(t, c, "hard-reset", "", "", false); other.Token == plan.Token {
 		t.Fatal("keepEnabled is not part of the hard reset's token")
 	}
-	res, steps := runHardReset(t, c, func(r *types.DSCPlanRequest) { r.Token, r.KeepEnabled = plan.Token, boolPtr(true) })
+	res, steps := runHardReset(t, c, func(r *types.DSCPlanRequest) { r.Token, r.KeepEnabled = plan.Token, new(true) })
 	if !res.Success {
 		t.Fatalf("hard reset = %+v", res)
 	}
@@ -397,8 +397,8 @@ func TestMaaSGuardBlocksWhenAServedListIsNotFound(t *testing.T) {
 func TestMaaSGuardListsTheDiscoveredVersion(t *testing.T) {
 	f, c := managerWorld(t, nil)
 	f.groups["/apis/maas.opendatahub.io"] = `{"kind":"APIGroup","name":"maas.opendatahub.io","versions":[{"groupVersion":"maas.opendatahub.io/v1","version":"v1"}],"preferredVersion":{"groupVersion":"maas.opendatahub.io/v1","version":"v1"}}`
-	f.put("/apis/maas.opendatahub.io/v1/namespaces/team/maasmodelrefs/their-model", map[string]interface{}{
-		"metadata": map[string]interface{}{"name": "their-model", "namespace": "team"}})
+	f.put("/apis/maas.opendatahub.io/v1/namespaces/team/maasmodelrefs/their-model", map[string]any{
+		"metadata": map[string]any{"name": "their-model", "namespace": "team"}})
 	for _, l := range []string{"maasmodelrefs", "namespaces/models-as-a-service/maassubscriptions", "namespaces/models-as-a-service/maasauthpolicies"} {
 		f.fail["GET /apis/maas.opendatahub.io/v1alpha1/"+l] = http.StatusNotFound
 	}
@@ -453,8 +453,8 @@ func TestMaaSGuardSignalsAlone(t *testing.T) {
 	t.Run("model ref being deleted", func(t *testing.T) {
 		f, c := managerWorld(t, nil)
 		maasServed(f)
-		f.put("/apis/maas.opendatahub.io/v1alpha1/namespaces/team/maasmodelrefs/their-model", map[string]interface{}{
-			"metadata": map[string]interface{}{"name": "their-model", "namespace": "team", "deletionTimestamp": "2026-11-19T10:00:00Z", "finalizers": []interface{}{maasModelFinalizer}}})
+		f.put("/apis/maas.opendatahub.io/v1alpha1/namespaces/team/maasmodelrefs/their-model", map[string]any{
+			"metadata": map[string]any{"name": "their-model", "namespace": "team", "deletionTimestamp": "2026-11-19T10:00:00Z", "finalizers": []any{maasModelFinalizer}}})
 		plan := mustPlan(t, c, "toggle", "aigateway", "Removed", false)
 		b := maasBlock(plan, "aigateway")
 		if b == nil || !strings.Contains(b.Reasons[len(b.Reasons)-1], "published model team/their-model (being deleted)") {
@@ -477,7 +477,7 @@ func TestMaaSGuardSignalsAlone(t *testing.T) {
 // (Clean up MaaS removes the rest in order), while other parts of
 // aigateway and other components are not.
 func TestMaaSGuardPaths(t *testing.T) {
-	f, c := managerWorld(t, func(dsc map[string]interface{}) {
+	f, c := managerWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.aigateway.modelsAsAService.managementState", "Removed")
 		setPath(t, dsc, "spec.components.aigateway.batchGateway.managementState", "Managed")
 	})

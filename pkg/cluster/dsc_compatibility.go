@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -11,7 +12,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-func dscSpecSchema(c *Client, apiVersion string) (map[string]interface{}, error) {
+func dscSpecSchema(c *Client, apiVersion string) (map[string]any, error) {
 	body, _, err := c.get("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io")
 	if err != nil {
 		return nil, err
@@ -22,7 +23,7 @@ func dscSpecSchema(c *Client, apiVersion string) (map[string]interface{}, error)
 				Name   string `json:"name"`
 				Served bool   `json:"served"`
 				Schema struct {
-					OpenAPIV3Schema map[string]interface{} `json:"openAPIV3Schema"`
+					OpenAPIV3Schema map[string]any `json:"openAPIV3Schema"`
 				} `json:"schema"`
 			} `json:"versions"`
 		} `json:"spec"`
@@ -33,8 +34,8 @@ func dscSpecSchema(c *Client, apiVersion string) (map[string]interface{}, error)
 	version := strings.TrimPrefix(apiVersion, "datasciencecluster.opendatahub.io/")
 	for _, v := range crd.Spec.Versions {
 		if v.Name == version && v.Served {
-			properties, _ := v.Schema.OpenAPIV3Schema["properties"].(map[string]interface{})
-			if schema, ok := properties["spec"].(map[string]interface{}); ok {
+			properties, _ := v.Schema.OpenAPIV3Schema["properties"].(map[string]any)
+			if schema, ok := properties["spec"].(map[string]any); ok {
 				return schema, nil
 			}
 		}
@@ -44,18 +45,18 @@ func dscSpecSchema(c *Client, apiVersion string) (map[string]interface{}, error)
 
 // Remove unknown keys according to the installed schema. Values (including managementState)
 // are deliberately not compared with defaults. Free-form configuration stays intact.
-func pruneUnknownDSCFields(value interface{}, schema map[string]interface{}, path string, invalid *[]string) interface{} {
+func pruneUnknownDSCFields(value any, schema map[string]any, path string, invalid *[]string) any {
 	switch object := value.(type) {
-	case map[string]interface{}:
-		result := make(map[string]interface{}, len(object))
-		properties, _ := schema["properties"].(map[string]interface{})
+	case map[string]any:
+		result := make(map[string]any, len(object))
+		properties, _ := schema["properties"].(map[string]any)
 		additional, hasAdditional := schema["additionalProperties"]
 		preserve, _ := schema["x-kubernetes-preserve-unknown-fields"].(bool)
 		for key, v := range object {
 			childPath := path + "." + key
-			childSchema, known := properties[key].(map[string]interface{})
+			childSchema, known := properties[key].(map[string]any)
 			if !known {
-				if extraSchema, ok := additional.(map[string]interface{}); ok {
+				if extraSchema, ok := additional.(map[string]any); ok {
 					childSchema = extraSchema
 				} else if preserve || (hasAdditional && additional == true) {
 					result[key] = v
@@ -68,12 +69,12 @@ func pruneUnknownDSCFields(value interface{}, schema map[string]interface{}, pat
 			result[key] = pruneUnknownDSCFields(v, childSchema, childPath, invalid)
 		}
 		return result
-	case []interface{}:
-		itemSchema, ok := schema["items"].(map[string]interface{})
+	case []any:
+		itemSchema, ok := schema["items"].(map[string]any)
 		if !ok {
 			return value
 		}
-		result := make([]interface{}, len(object))
+		result := make([]any, len(object))
 		for i, v := range object {
 			result[i] = pruneUnknownDSCFields(v, itemSchema, fmt.Sprintf("%s[%d]", path, i), invalid)
 		}
@@ -116,10 +117,10 @@ func checkDSCCompatibilityFor(c *Client, read dscRead, op *installedOperator, op
 	result.Branch = defaults.Branch
 	result.SourceURL = defaults.SourceURL
 	result.DefaultsSource = defaults.Source
-	defaultSpec, _ := defaults.Spec["spec"].(map[string]interface{})
-	defaultComponents, _ := defaultSpec["components"].(map[string]interface{})
-	currentSpec, _ := dsc["spec"].(map[string]interface{})
-	currentComponents, _ := currentSpec["components"].(map[string]interface{})
+	defaultSpec, _ := defaults.Spec["spec"].(map[string]any)
+	defaultComponents, _ := defaultSpec["components"].(map[string]any)
+	currentSpec, _ := dsc["spec"].(map[string]any)
+	currentComponents, _ := currentSpec["components"].(map[string]any)
 	for key := range defaultComponents {
 		if _, exists := currentComponents[key]; !exists {
 			result.MissingComponents = append(result.MissingComponents, key)
@@ -192,15 +193,15 @@ func dscNestsComponents(apiVersion string) bool {
 // spec.components: "kserve" for a component's own state, "kserve.nim" for
 // a part (only when nested). A component with neither is listed with ""
 // (enabled, as the operator defaults it).
-func managementPaths(components map[string]interface{}, nested bool) map[string]string {
+func managementPaths(components map[string]any, nested bool) map[string]string {
 	out := map[string]string{}
 	for name, v := range components {
-		m, _ := v.(map[string]interface{})
+		m, _ := v.(map[string]any)
 		state, hasState := m["managementState"].(string)
 		parts := 0
 		if nested {
 			for part, pv := range m {
-				pm, ok := pv.(map[string]interface{})
+				pm, ok := pv.(map[string]any)
 				if !ok {
 					continue
 				}
@@ -237,9 +238,9 @@ func pathRemoved(paths map[string]string, path string) bool {
 // and Removed (or absent) in next: what a repair from old to next would
 // remove. A path without a state counts as enabled. Without nesting the
 // paths are the component names.
-func removedComponents(oldSpec, nextSpec map[string]interface{}, nested bool) []string {
-	oldComponents, _ := oldSpec["components"].(map[string]interface{})
-	nextComponents, _ := nextSpec["components"].(map[string]interface{})
+func removedComponents(oldSpec, nextSpec map[string]any, nested bool) []string {
+	oldComponents, _ := oldSpec["components"].(map[string]any)
+	nextComponents, _ := nextSpec["components"].(map[string]any)
 	oldPaths := managementPaths(oldComponents, nested)
 	nextPaths := managementPaths(nextComponents, nested)
 	var out []string
@@ -309,13 +310,13 @@ func (g *removalGuard) blockers(path string) []string {
 // removes nothing. Free-form levels (x-kubernetes-preserve-unknown-fields or
 // additionalProperties) keep what they hold: the API server stored it, so the
 // operator may act on it. Without a schema every path is kept.
-func schemaComponents(specSchema map[string]interface{}, names []string) []string {
-	properties, _ := specSchema["properties"].(map[string]interface{})
-	components, _ := properties["components"].(map[string]interface{})
+func schemaComponents(specSchema map[string]any, names []string) []string {
+	properties, _ := specSchema["properties"].(map[string]any)
+	components, _ := properties["components"].(map[string]any)
 	if components == nil {
 		return names
 	}
-	known, _ := components["properties"].(map[string]interface{})
+	known, _ := components["properties"].(map[string]any)
 	var out []string
 	for _, n := range names {
 		component, part, isPart := strings.Cut(n, ".")
@@ -324,7 +325,7 @@ func schemaComponents(specSchema map[string]interface{}, names []string) []strin
 		}
 		// A component accepted only by a free-form components schema has no
 		// schema of its own, so its parts are kept too.
-		if componentSchema, ok := known[component].(map[string]interface{}); ok && isPart && !schemaDefines(componentSchema, part) {
+		if componentSchema, ok := known[component].(map[string]any); ok && isPart && !schemaDefines(componentSchema, part) {
 			continue
 		}
 		out = append(out, n)
@@ -334,8 +335,8 @@ func schemaComponents(specSchema map[string]interface{}, names []string) []strin
 
 // schemaDefines reports whether an object schema accepts the key: it names
 // it, or it is free-form.
-func schemaDefines(schema map[string]interface{}, key string) bool {
-	if props, _ := schema["properties"].(map[string]interface{}); props != nil {
+func schemaDefines(schema map[string]any, key string) bool {
+	if props, _ := schema["properties"].(map[string]any); props != nil {
 		if _, ok := props[key]; ok {
 			return true
 		}
@@ -346,35 +347,35 @@ func schemaDefines(schema map[string]interface{}, key string) bool {
 	switch additional := schema["additionalProperties"].(type) {
 	case bool:
 		return additional
-	case map[string]interface{}:
+	case map[string]any:
 		return true
 	}
 	return false
 }
 
 // withoutComponents returns spec with the named components dropped.
-func withoutComponents(spec map[string]interface{}, names []string) map[string]interface{} {
-	components, _ := spec["components"].(map[string]interface{})
-	kept := make(map[string]interface{}, len(components))
+func withoutComponents(spec map[string]any, names []string) map[string]any {
+	components, _ := spec["components"].(map[string]any)
+	kept := make(map[string]any, len(components))
 	for k, v := range components {
 		if !slices.Contains(names, k) {
 			kept[k] = v
 		}
 	}
-	return map[string]interface{}{"components": kept}
+	return map[string]any{"components": kept}
 }
 
 // Merge patches need explicit nulls to delete keys that disappeared from a new spec.
-func replacementMergePatch(old, next map[string]interface{}) map[string]interface{} {
-	patch := make(map[string]interface{}, len(old)+len(next))
+func replacementMergePatch(old, next map[string]any) map[string]any {
+	patch := make(map[string]any, len(old)+len(next))
 	for key := range old {
 		if _, exists := next[key]; !exists {
 			patch[key] = nil
 		}
 	}
 	for key, v := range next {
-		oldMap, oldIsMap := old[key].(map[string]interface{})
-		newMap, newIsMap := v.(map[string]interface{})
+		oldMap, oldIsMap := old[key].(map[string]any)
+		newMap, newIsMap := v.(map[string]any)
 		if oldIsMap && newIsMap {
 			patch[key] = replacementMergePatch(oldMap, newMap)
 		} else {
@@ -434,21 +435,21 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 		return nil, errDSCVersionChanged(expectedAPIVersion, read.Version)
 	}
 	path := fmt.Sprintf("/apis/datasciencecluster.opendatahub.io/%s/datascienceclusters/", read.Version) + name
-	var dsc map[string]interface{}
+	var dsc map[string]any
 	if err := json.Unmarshal(read.Body, &dsc); err != nil {
 		return nil, err
 	}
 	if app := argoApplicationOf(dsc, "DataScienceCluster"); app != "" {
 		return &types.OperationResponse{Success: false, Message: gitOpsRefusal("DataScienceCluster "+name, app, "this change"), ErrorCode: ErrorCodeGitOpsManaged}, nil
 	}
-	oldSpec, _ := dsc["spec"].(map[string]interface{})
+	oldSpec, _ := dsc["spec"].(map[string]any)
 	apiVersion, _ := dsc["apiVersion"].(string)
 	schema, err := dscSpecSchema(c, apiVersion)
 	if err != nil {
 		return nil, fmt.Errorf("cannot repair DSC without its installed schema: %w", err)
 	}
 	invalid := []string{}
-	nextSpec, _ := pruneUnknownDSCFields(oldSpec, schema, "spec", &invalid).(map[string]interface{})
+	nextSpec, _ := pruneUnknownDSCFields(oldSpec, schema, "spec", &invalid).(map[string]any)
 	detail := "Removed invalid DSC fields: " + strings.Join(invalid, ", ")
 	if mode == "reset-defaults" || mode == "remove-extra-components" {
 		defaults, err := fetchDefaultDSCSpec(c, read.Version)
@@ -461,11 +462,11 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 		if defaults.Spec["apiVersion"] != apiVersion {
 			return nil, fmt.Errorf("sample API version does not match the existing DSC; wait for operator migration to complete")
 		}
-		defaultSpec, _ := defaults.Spec["spec"].(map[string]interface{})
+		defaultSpec, _ := defaults.Spec["spec"].(map[string]any)
 		if mode == "remove-extra-components" {
-			defaultComponents, _ := defaultSpec["components"].(map[string]interface{})
-			currentComponents, _ := oldSpec["components"].(map[string]interface{})
-			nextComponents := make(map[string]interface{}, len(currentComponents))
+			defaultComponents, _ := defaultSpec["components"].(map[string]any)
+			currentComponents, _ := oldSpec["components"].(map[string]any)
+			nextComponents := make(map[string]any, len(currentComponents))
 			removed := []string{}
 			for key, value := range currentComponents {
 				if _, exists := defaultComponents[key]; exists {
@@ -490,10 +491,8 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 				}
 			}
 			sort.Strings(removed)
-			nextSpec = make(map[string]interface{}, len(oldSpec))
-			for key, value := range oldSpec {
-				nextSpec[key] = value
-			}
+			nextSpec = make(map[string]any, len(oldSpec))
+			maps.Copy(nextSpec, oldSpec)
 			nextSpec["components"] = nextComponents
 			detail = "Removed DSC components absent from the defaults (" + defaults.SourceDescription + "): " + strings.Join(removed, ", ")
 		} else {
@@ -516,7 +515,7 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 	} else if len(invalid) == 0 {
 		return &types.OperationResponse{Success: true, Message: "No invalid DSC fields to remove", Logs: []string{}}, nil
 	}
-	meta, _ := dsc["metadata"].(map[string]interface{})
+	meta, _ := dsc["metadata"].(map[string]any)
 	resourceVersion, _ := meta["resourceVersion"].(string)
 	if resourceVersion == "" {
 		return nil, fmt.Errorf("DSC has no resourceVersion; refusing an unprotected repair")
@@ -552,8 +551,8 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 		}
 		detail += ". Components set to Removed: " + strings.Join(removals, ", ")
 	}
-	patch, err := json.Marshal(map[string]interface{}{
-		"metadata": map[string]interface{}{"resourceVersion": resourceVersion},
+	patch, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{"resourceVersion": resourceVersion},
 		"spec":     replacementMergePatch(oldSpec, nextSpec),
 	})
 	if err != nil {

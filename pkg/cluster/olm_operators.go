@@ -57,7 +57,7 @@ type operatorSpec struct {
 	// refusal when none fits); nil: the package's default channel.
 	channel func(operatorPackage) (string, string)
 	// env is the Subscription's spec.config.env ("" none).
-	env []map[string]interface{}
+	env []map[string]any
 }
 
 // operatorSubscriptionPath is the path of an operator Subscription this
@@ -80,12 +80,12 @@ func operatorSubscriptionPath(ns, name string) (string, bool) {
 type olmSubscription struct {
 	Metadata objectMeta `json:"metadata"`
 	Spec     struct {
-		Channel             string                 `json:"channel"`
-		Name                string                 `json:"name"`
-		Source              string                 `json:"source"`
-		SourceNamespace     string                 `json:"sourceNamespace"`
-		InstallPlanApproval string                 `json:"installPlanApproval"`
-		Config              map[string]interface{} `json:"config"`
+		Channel             string         `json:"channel"`
+		Name                string         `json:"name"`
+		Source              string         `json:"source"`
+		SourceNamespace     string         `json:"sourceNamespace"`
+		InstallPlanApproval string         `json:"installPlanApproval"`
+		Config              map[string]any `json:"config"`
 	} `json:"spec"`
 	Status struct {
 		State        string         `json:"state"`
@@ -102,7 +102,7 @@ func parseSubscription(raw []byte) (*olmSubscription, error) {
 	if err := json.Unmarshal(raw, &sub); err != nil {
 		return nil, err
 	}
-	var obj map[string]interface{}
+	var obj map[string]any
 	_ = json.Unmarshal(raw, &obj)
 	sub.argoApp = argoApplicationOf(obj, "Subscription")
 	return &sub, nil
@@ -198,8 +198,8 @@ func (s operatorState) pending() *olmSubscription {
 // csvVersion is the version in a CSV name ("rhcl-operator.v1.5.0" ->
 // "1.5.0"), or "".
 func csvVersion(name string) string {
-	if i := strings.Index(name, ".v"); i >= 0 {
-		return name[i+2:]
+	if _, after, ok := strings.Cut(name, ".v"); ok {
+		return after
 	}
 	return ""
 }
@@ -492,28 +492,28 @@ func readOperatorGroups(c *Client, ns string) (operatorGroups, error) {
 }
 
 // operatorObjects are the docs' objects for installing op on channel.
-func operatorObjects(op operatorSpec, channel string) (ns, group, sub map[string]interface{}) {
-	ns = map[string]interface{}{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]interface{}{"name": op.namespace, "labels": toolLabels()}}
-	group = map[string]interface{}{"apiVersion": "operators.coreos.com/v1", "kind": "OperatorGroup",
-		"metadata": map[string]interface{}{"name": op.group, "namespace": op.namespace, "labels": toolLabels()}}
+func operatorObjects(op operatorSpec, channel string) (ns, group, sub map[string]any) {
+	ns = map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": op.namespace, "labels": toolLabels()}}
+	group = map[string]any{"apiVersion": "operators.coreos.com/v1", "kind": "OperatorGroup",
+		"metadata": map[string]any{"name": op.group, "namespace": op.namespace, "labels": toolLabels()}}
 	if op.ownNamespace {
-		group["spec"] = map[string]interface{}{"targetNamespaces": []interface{}{op.namespace}}
+		group["spec"] = map[string]any{"targetNamespaces": []any{op.namespace}}
 	}
-	sub = map[string]interface{}{
+	sub = map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "Subscription",
-		"metadata":   map[string]interface{}{"name": op.subName, "namespace": op.namespace, "labels": toolLabels()},
-		"spec": map[string]interface{}{
+		"metadata":   map[string]any{"name": op.subName, "namespace": op.namespace, "labels": toolLabels()},
+		"spec": map[string]any{
 			"channel": channel, "installPlanApproval": "Automatic", "name": op.pkg,
 			"source": op.source, "sourceNamespace": CatalogNS,
 		},
 	}
 	if len(op.env) > 0 {
-		env := make([]interface{}, len(op.env))
+		env := make([]any, len(op.env))
 		for i, e := range op.env {
 			env[i] = e
 		}
-		sub["spec"].(map[string]interface{})["config"] = map[string]interface{}{"env": env}
+		sub["spec"].(map[string]any)["config"] = map[string]any{"env": env}
 	}
 	return ns, group, sub
 }
@@ -653,12 +653,12 @@ func waitForSubscription(c *Client, ns, name string, progress func(string)) (sub
 // patchSubscription sets fields of a Subscription this tool may change (a
 // merge patch under the tool's field manager; a server-side dry run with
 // dryRun).
-func patchSubscription(c *Client, sub *olmSubscription, spec map[string]interface{}, dryRun bool) error {
+func patchSubscription(c *Client, sub *olmSubscription, spec map[string]any, dryRun bool) error {
 	path, ok := operatorSubscriptionPath(sub.Metadata.Namespace, sub.Metadata.Name)
 	if !ok {
 		return fmt.Errorf("subscription %s/%s is not one this tool changes", sub.Metadata.Namespace, sub.Metadata.Name)
 	}
-	data, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{"resourceVersion": sub.Metadata.ResourceVersion}, "spec": spec})
+	data, _ := json.Marshal(map[string]any{"metadata": map[string]any{"resourceVersion": sub.Metadata.ResourceVersion}, "spec": spec})
 	query := url.Values{"fieldManager": {toolFieldManager}}
 	if dryRun {
 		query.Set("dryRun", "All")

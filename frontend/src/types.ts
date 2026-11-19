@@ -48,6 +48,17 @@ export interface StatusResponse {
    */
   catalogServes?: CatalogServes;
   installPlan?: InstallPlanInfo;
+  /** The catalog source pod that serves the FBC index, when it exists (pkg/types CatalogPodInfo). */
+  catalogPod?: CatalogPodInfo;
+}
+
+/** pkg/types CatalogPodInfo. */
+export interface CatalogPodInfo {
+  name: string;
+  /** Pending, Running */
+  phase: string;
+  ready: boolean;
+  restartCount: number;
 }
 
 export interface CatalogServes {
@@ -1106,7 +1117,7 @@ export interface KeptPVC {
 /** The cluster operation that holds the backend's mutation lock. */
 export interface ServerOperation {
   id: string;
-  /** update, reinstall, refresh, deploy-dashboard-pr, setup-minio, ... */
+  /** update, reinstall, refresh, deploy-dashboard-pr, setup-s3, ... */
   type: string;
   label: string;
   user: string;
@@ -1136,6 +1147,10 @@ export interface InterruptedOperation {
   target?: string;
   startedAt: string;
   pod?: string;
+  /** The operation's ID (pkg/types OperationMarker). */
+  id?: string;
+  /** The server process that wrote the marker: a restarted container keeps its pod name but not this. */
+  bootId?: string;
 }
 
 /**
@@ -1322,7 +1337,7 @@ export interface MaaSPart {
 }
 
 /** The fixes a part offers besides Set up. */
-export type MaaSActionId = "upgrade-rhcl" | "rhcl-memory" | "rhcl-deny-on-failure" | "authorino-tls" | "remove-tier-policies";
+export type MaaSActionId = "upgrade-rhcl" | "rhcl-memory" | "rhcl-deny-on-failure" | "authorino-tls" | "remove-tier-policies" | "change-database";
 
 /** A part's own fix (pkg/types MaaSAction): its confirmation lists changes. */
 export interface MaaSAction {
@@ -1428,7 +1443,7 @@ export interface MaaSGroupProblem {
 
 /** The body of POST /api/resources/maas/stream. */
 export interface MaaSRequest {
-  action: "setup" | "teardown" | "publish" | "unpublish" | "change-limit" | "change-access" | "change-database" | MaaSActionId;
+  action: "setup" | "teardown" | "publish" | "unpublish" | "change-limit" | "change-access" | MaaSActionId;
   project?: string;
   /** The catalog name of the chat model to publish or unpublish; absent: the default. */
   model?: string;

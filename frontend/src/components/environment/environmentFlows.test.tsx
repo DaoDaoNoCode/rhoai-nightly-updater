@@ -127,7 +127,7 @@ describe("Set up checks every part first", () => {
     const api = stubApi({
       "/api/resources/status": () => jsonResponse(status),
       "/api/resources/projects": { projects: ["dev"] },
-      "POST /api/resources/minio/setup": () => jsonResponse({ success: true, message: "ok", logs: [] }),
+      "POST /api/resources/s3/setup": () => jsonResponse({ success: true, message: "ok", logs: [] }),
     });
     renderAt("/test-resources?tab=pipelines&project=dev");
     fireEvent.click(await screen.findByRole("button", { name: "Set up Pipelines in dev" }));

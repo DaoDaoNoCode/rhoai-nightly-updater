@@ -146,10 +146,10 @@ func rhclDenyOffer(st operatorState) (*types.MaaSAction, string, string) {
 	}, note, cmd
 }
 
-func resourcesText(res map[string]interface{}) string {
+func resourcesText(res map[string]any) string {
 	var parts []string
 	for _, kind := range []string{"limits", "requests"} {
-		values, _ := res[kind].(map[string]interface{})
+		values, _ := res[kind].(map[string]any)
 		var kv []string
 		for _, k := range []string{"cpu", "memory"} {
 			if v, ok := values[k]; ok {

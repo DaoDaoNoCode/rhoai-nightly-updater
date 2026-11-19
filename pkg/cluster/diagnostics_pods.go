@@ -265,7 +265,7 @@ func describeTermination(t *diagTerminated, fallback string) string {
 	}
 	parts := []string{fmt.Sprintf("last exit: %s (exit code %d)", nonEmpty(t.Reason, "Terminated"), t.ExitCode)}
 	if msg := strings.TrimSpace(t.Message); msg != "" {
-		parts = append(parts, truncate(msg, 300))
+		parts = append(parts, truncateText(msg, 300))
 	}
 	return strings.Join(parts, ": ")
 }
@@ -275,14 +275,6 @@ func nonEmpty(s, fallback string) string {
 		return fallback
 	}
 	return s
-}
-
-func truncate(s string, n int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }
 
 // errEventsForbidden marks an events lookup refused by RBAC.
@@ -355,7 +347,7 @@ func shortCause(is podIssue) string {
 	}
 	switch is.Kind {
 	case issueUnschedulable:
-		return truncate(is.Message, 160)
+		return truncateText(is.Message, 160)
 	case issueImagePull, issueContainerConfig:
 		return is.Reason
 	}
@@ -469,7 +461,7 @@ func podGroupProblem(c *Client, g podIssueGroup, critical bool) Problem {
 		}
 		line += fmt.Sprintf(", age %s", formatDuration(is.Age))
 		if is.Message != "" {
-			line += ": " + truncate(is.Message, 400)
+			line += ": " + truncateText(is.Message, 400)
 		}
 		evidence = append(evidence, line)
 		affected = append(affected, fmt.Sprintf("Pod %s/%s", is.Namespace, is.Pod))

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -124,12 +125,7 @@ func (d dspaInfo) managedByTool() bool {
 }
 
 func (d dspaInfo) hasFinalizer() bool {
-	for _, f := range d.Meta.Finalizers {
-		if f == dspaFinalizer {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(d.Meta.Finalizers, dspaFinalizer)
 }
 
 // toolDSPAPath returns the path of a pipeline server only for the names this
@@ -475,7 +471,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	// fieldValidation=Strict (and server-side apply, which always validates
 	// strictly) rejects fields the CRD does not declare, so a manifest that
 	// drifts from the CRD fails instead of being silently pruned.
-	apiServer := map[string]interface{}{
+	apiServer := map[string]any{
 		"enableSamplePipeline": false,
 		"cacheEnabled":         true,
 		// odh-dashboard's default is "kubernetes" (Pipeline and
@@ -484,15 +480,15 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 		// pipeline definitions in the database, DSPO's own default.
 		"pipelineStore": "database",
 	}
-	spec := map[string]interface{}{
+	spec := map[string]any{
 		"dspVersion": "v2",
-		"objectStorage": map[string]interface{}{
-			"externalStorage": map[string]interface{}{
+		"objectStorage": map[string]any{
+			"externalStorage": map[string]any{
 				"host":   s3Host(),
 				"scheme": "http",
 				"bucket": s3Bucket,
 				"region": s3Region,
-				"s3CredentialsSecret": map[string]interface{}{
+				"s3CredentialsSecret": map[string]any{
 					"accessKey":  s3AccessKeyField,
 					"secretKey":  s3SecretKeyField,
 					"secretName": dspaSecretName,
@@ -502,16 +498,16 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 		"apiServer": apiServer,
 	}
 	logs = append(logs, addDashboardDSPASettings(c, spec, apiServer)...)
-	dspa := map[string]interface{}{
+	dspa := map[string]any{
 		"apiVersion": dspaAPIGroup,
 		"kind":       "DataSciencePipelinesApplication",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      dspaName,
 			"namespace": project,
 			"labels":    toolLabels(),
 			// Which Connection goes with it, for the status: the status
 			// reads only the DSPA list, so it costs no request per project.
-			"annotations": map[string]interface{}{dspaConnectionAnnotation: connectionSecretName},
+			"annotations": map[string]any{dspaConnectionAnnotation: connectionSecretName},
 		},
 		"spec": spec,
 	}
@@ -832,17 +828,17 @@ func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInf
 // createObjectStorageSecret, assembleSecret in api/k8s/secrets.ts,
 // rhoai-3.6); without a connection-type annotation the dashboard does not
 // list it as a Connection (connectionTypeUtils.ts isConnection).
-func dspaS3Secret(project string, keys s3Keys) map[string]interface{} {
+func dspaS3Secret(project string, keys s3Keys) map[string]any {
 	labels := toolLabels()
 	labels[dashboardLabelKey] = "true"
-	return map[string]interface{}{
+	return map[string]any{
 		"apiVersion": "v1", "kind": "Secret",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      dspaSecretName,
 			"namespace": project,
 			"labels":    labels,
 		},
-		"stringData": map[string]interface{}{
+		"stringData": map[string]any{
 			s3AccessKeyField: keys.AccessKey,
 			s3SecretKeyField: keys.SecretKey,
 		},
@@ -876,24 +872,24 @@ const (
 // opendatahub.io/connection-type s3; the s3 type's fields as data. The
 // endpoint is the in-cluster Service: it works from pods, not from outside
 // the cluster.
-func dashboardS3Connection(project string, keys s3Keys) map[string]interface{} {
+func dashboardS3Connection(project string, keys s3Keys) map[string]any {
 	labels := toolLabels()
 	labels[dashboardLabelKey] = "true"
 	labels["opendatahub.io/managed"] = "true"
-	return map[string]interface{}{
+	return map[string]any{
 		"apiVersion": "v1", "kind": "Secret",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      connectionSecretName,
 			"namespace": project,
 			"labels":    labels,
-			"annotations": map[string]interface{}{
+			"annotations": map[string]any{
 				"openshift.io/display-name":          connectionDisplayName,
 				"openshift.io/description":           "The cluster's S3 storage, which this project's pipeline server also uses (set up by RHOAI Nightly Updater). In-cluster address: reachable from workbenches and model deployments, not from outside the cluster.",
 				"opendatahub.io/connection-type-ref": "s3",
 				"opendatahub.io/connection-type":     "s3",
 			},
 		},
-		"stringData": map[string]interface{}{
+		"stringData": map[string]any{
 			s3AccessKeyField:     keys.AccessKey,
 			s3SecretKeyField:     keys.SecretKey,
 			"AWS_S3_ENDPOINT":    s3Endpoint(),
@@ -909,7 +905,7 @@ type projectSecret struct {
 	c             *Client
 	project, name string
 	what          string // "secret" or "connection", for the activity log
-	obj           map[string]interface{}
+	obj           map[string]any
 	meta          objectMeta
 	found         bool
 }
@@ -953,9 +949,9 @@ func writeProjectSecret(s *projectSecret, path, createPath string, dryRun bool) 
 // owner references freely and an update change them only with delete on the
 // object being written (kubernetes plugin/pkg/admission/gc/gc_admission.go
 // Validate), which the tool has for these Secrets by name.
-func setDSPAOwner(obj map[string]interface{}, name, uid string) {
-	meta, _ := obj["metadata"].(map[string]interface{})
-	meta["ownerReferences"] = []interface{}{map[string]interface{}{
+func setDSPAOwner(obj map[string]any, name, uid string) {
+	meta, _ := obj["metadata"].(map[string]any)
+	meta["ownerReferences"] = []any{map[string]any{
 		"apiVersion": dspaAPIGroup,
 		"kind":       "DataSciencePipelinesApplication",
 		"name":       name,
@@ -969,7 +965,7 @@ const dspaCRDName = "datasciencepipelinesapplications.datasciencepipelinesapplic
 // dspaSpecSchema returns the OpenAPI schema of spec in the served v1 of the
 // installed DSPA CRD. It lists CRDs by name (the cluster-wide list the
 // diagnostics already use), so it needs no rule of its own.
-func dspaSpecSchema(c *Client) (map[string]interface{}, error) {
+func dspaSpecSchema(c *Client) (map[string]any, error) {
 	body, _, err := c.do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil,
 		url.Values{"fieldSelector": {"metadata.name=" + dspaCRDName}})
 	if err != nil {
@@ -982,7 +978,7 @@ func dspaSpecSchema(c *Client) (map[string]interface{}, error) {
 					Name   string `json:"name"`
 					Served bool   `json:"served"`
 					Schema struct {
-						OpenAPIV3Schema map[string]interface{} `json:"openAPIV3Schema"`
+						OpenAPIV3Schema map[string]any `json:"openAPIV3Schema"`
 					} `json:"schema"`
 				} `json:"versions"`
 			} `json:"spec"`
@@ -997,8 +993,8 @@ func dspaSpecSchema(c *Client) (map[string]interface{}, error) {
 			if v.Name != version || !v.Served {
 				continue
 			}
-			props, _ := v.Schema.OpenAPIV3Schema["properties"].(map[string]interface{})
-			if spec, ok := props["spec"].(map[string]interface{}); ok {
+			props, _ := v.Schema.OpenAPIV3Schema["properties"].(map[string]any)
+			if spec, ok := props["spec"].(map[string]any); ok {
 				return spec, nil
 			}
 		}
@@ -1008,11 +1004,11 @@ func dspaSpecSchema(c *Client) (map[string]interface{}, error) {
 
 // schemaHasField reports whether an OpenAPI object schema declares the
 // field at path (nested properties).
-func schemaHasField(schema map[string]interface{}, path ...string) bool {
+func schemaHasField(schema map[string]any, path ...string) bool {
 	node := schema
 	for _, key := range path {
-		props, _ := node["properties"].(map[string]interface{})
-		next, ok := props[key].(map[string]interface{})
+		props, _ := node["properties"].(map[string]any)
+		next, ok := props[key].(map[string]any)
 		if !ok {
 			return false
 		}
@@ -1032,17 +1028,17 @@ func schemaHasField(schema map[string]interface{}, path ...string) bool {
 // omitted one gets the operator's default, which is the same value
 // (api/v1 dspipeline_types.go ManagedPipelinesEnabled, MLflowConfig
 // kubebuilder defaults). It returns log lines.
-func addDashboardDSPASettings(c *Client, spec, apiServer map[string]interface{}) []string {
+func addDashboardDSPASettings(c *Client, spec, apiServer map[string]any) []string {
 	schema, err := dspaSpecSchema(c)
 	if err != nil {
 		slog.Info("cannot read the DSPA CRD; leaving managed pipelines and MLflow to the operator's defaults", "error", err)
 		return []string{fmt.Sprintf("Note: cannot read the DataSciencePipelinesApplication CRD (%v); managed pipelines and the MLflow integration keep the operator's defaults", err)}
 	}
 	if schemaHasField(schema, "apiServer", "managedPipelines", "enabled") {
-		apiServer["managedPipelines"] = map[string]interface{}{"enabled": true}
+		apiServer["managedPipelines"] = map[string]any{"enabled": true}
 	}
 	if schemaHasField(schema, "mlflow", "integrationMode") && schemaHasField(schema, "mlflow", "injectUserEnvVars") {
-		spec["mlflow"] = map[string]interface{}{"integrationMode": "AUTODETECT", "injectUserEnvVars": false}
+		spec["mlflow"] = map[string]any{"integrationMode": "AUTODETECT", "injectUserEnvVars": false}
 	}
 	return nil
 }

@@ -45,8 +45,8 @@ var activityActions = map[string][2]string{
 	"deploy-dashboard-pr":           {"dashboard-dev", "Dashboard PR deployed"},
 	"deploy-dashboard-main":         {"dashboard-dev", "Dashboard main deployed"},
 	"revert-dashboard":              {"dashboard-dev", "Dashboard reverted"},
-	"setup-minio":                   {"test-resources", "S3 storage set up"},
-	"teardown-minio":                {"test-resources", "S3 storage torn down"},
+	"setup-s3":                      {"test-resources", "S3 storage set up"},
+	"teardown-s3":                   {"test-resources", "S3 storage torn down"},
 	"setup-pipeline-server":         {"test-resources", "Pipeline server set up"},
 	"teardown-pipeline-server":      {"test-resources", "Pipeline server torn down"},
 	"setup-mlflow":                  {"test-resources", "MLflow set up"},
@@ -78,8 +78,8 @@ var activityFailedLabels = map[string]string{
 	"deploy-dashboard-pr":      "Dashboard PR deploy failed",
 	"deploy-dashboard-main":    "Dashboard main deploy failed",
 	"revert-dashboard":         "Dashboard revert failed",
-	"setup-minio":              "S3 storage setup failed",
-	"teardown-minio":           "S3 storage teardown failed",
+	"setup-s3":                 "S3 storage setup failed",
+	"teardown-s3":              "S3 storage teardown failed",
 	"setup-pipeline-server":    "Pipeline server setup failed",
 	"teardown-pipeline-server": "Pipeline server teardown failed",
 	"setup-mlflow":             "MLflow setup failed",
@@ -92,8 +92,24 @@ var activityFailedLabels = map[string]string{
 	"hard-reset-dsc":           "DataScienceCluster hard reset failed",
 }
 
+// legacyActivityActions are the names earlier versions recorded for an
+// action, read as the current one: entries already in the log keep their
+// category and label.
+var legacyActivityActions = map[string]string{
+	"setup-minio":    "setup-s3",
+	"teardown-minio": "teardown-s3",
+}
+
+// currentActivityAction is the current name of a recorded action.
+func currentActivityAction(action string) string {
+	if a, ok := legacyActivityActions[action]; ok {
+		return a
+	}
+	return action
+}
+
 func activityCategory(action string) string {
-	if a, ok := activityActions[action]; ok {
+	if a, ok := activityActions[currentActivityAction(action)]; ok {
 		return a[0]
 	}
 	return "other"
@@ -124,6 +140,7 @@ func activityBuild(detail string) string {
 
 // describeActivity fills the read-time fields of an entry.
 func describeActivity(e *types.ActivityEntry) {
+	e.Action = currentActivityAction(e.Action)
 	e.Category = activityCategory(e.Action)
 	if l, ok := activityFailedLabels[e.Action]; ok && !e.Success {
 		e.Label = l
@@ -222,7 +239,7 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 	}
 	cmPath := namespacedPath("v1", "configmaps", ns, activityConfigMapName)
 
-	for attempt := 0; attempt < maxConflictRetries; attempt++ {
+	for attempt := range maxConflictRetries {
 		if attempt > 0 {
 			slog.Info("retrying activity record after conflict", "attempt", attempt+1)
 		}
@@ -242,18 +259,18 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 			isNew = true
 			entries = []types.ActivityEntry{}
 		} else {
-			var cm map[string]interface{}
+			var cm map[string]any
 			if err := json.Unmarshal(body, &cm); err != nil {
 				slog.Warn("failed to parse activity configmap", "error", err)
 				return
 			}
 			// Extract resourceVersion for optimistic concurrency
-			if metadata, ok := cm["metadata"].(map[string]interface{}); ok {
+			if metadata, ok := cm["metadata"].(map[string]any); ok {
 				if rv, ok := metadata["resourceVersion"].(string); ok {
 					resourceVersion = rv
 				}
 			}
-			data, _ := cm["data"].(map[string]interface{})
+			data, _ := cm["data"].(map[string]any)
 			if raw, ok := data["entries"].(string); ok && raw != "" {
 				if err := json.Unmarshal([]byte(raw), &entries); err != nil {
 					slog.Warn("failed to parse activity entries", "error", err)
@@ -272,7 +289,7 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 		}
 
 		// Step 3: PUT/Create with resourceVersion for optimistic locking
-		metadata := map[string]interface{}{
+		metadata := map[string]any{
 			"name":      activityConfigMapName,
 			"namespace": ns,
 		}
@@ -280,11 +297,11 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 			metadata["resourceVersion"] = resourceVersion
 		}
 
-		cm := map[string]interface{}{
+		cm := map[string]any{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
 			"metadata":   metadata,
-			"data": map[string]interface{}{
+			"data": map[string]any{
 				"entries": string(entriesJSON),
 			},
 		}
@@ -334,12 +351,12 @@ func GetActivity(c *Client) ([]types.ActivityEntry, error) {
 		return nil, fmt.Errorf("get activity configmap: %w", err)
 	}
 
-	var cm map[string]interface{}
+	var cm map[string]any
 	if err := json.Unmarshal(body, &cm); err != nil {
 		return nil, fmt.Errorf("parse activity configmap: %w", err)
 	}
 
-	data, _ := cm["data"].(map[string]interface{})
+	data, _ := cm["data"].(map[string]any)
 	raw, ok := data["entries"].(string)
 	if !ok || raw == "" {
 		return []types.ActivityEntry{}, nil

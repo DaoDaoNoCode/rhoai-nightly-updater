@@ -27,30 +27,30 @@ type whFixture struct {
 	urls     []string // webhooks called through clientConfig.url
 }
 
-func (w whFixture) object() map[string]interface{} {
-	meta := map[string]interface{}{"name": w.name, "uid": "uid-" + w.name, "resourceVersion": "1"}
+func (w whFixture) object() map[string]any {
+	meta := map[string]any{"name": w.name, "uid": "uid-" + w.name, "resourceVersion": "1"}
 	if w.labels != nil {
 		meta["labels"] = w.labels
 	}
 	if w.owner != "" {
-		meta["ownerReferences"] = []interface{}{map[string]interface{}{"apiVersion": "components.platform.opendatahub.io/v1alpha1", "kind": w.owner, "name": "default-" + strings.ToLower(w.owner)}}
+		meta["ownerReferences"] = []any{map[string]any{"apiVersion": "components.platform.opendatahub.io/v1alpha1", "kind": w.owner, "name": "default-" + strings.ToLower(w.owner)}}
 	}
 	if w.created != "" {
 		meta["creationTimestamp"] = w.created
 	}
-	var hooks []interface{}
+	var hooks []any
 	for i, s := range w.services {
 		ns, name, _ := strings.Cut(s, "/")
-		hook := map[string]interface{}{"name": fmt.Sprintf("hook%d", i), "clientConfig": map[string]interface{}{"service": map[string]interface{}{"namespace": ns, "name": name}}}
+		hook := map[string]any{"name": fmt.Sprintf("hook%d", i), "clientConfig": map[string]any{"service": map[string]any{"namespace": ns, "name": name}}}
 		if w.ignore {
 			hook["failurePolicy"] = "Ignore"
 		}
 		hooks = append(hooks, hook)
 	}
 	for i, u := range w.urls {
-		hooks = append(hooks, map[string]interface{}{"name": fmt.Sprintf("url%d", i), "clientConfig": map[string]interface{}{"url": u}})
+		hooks = append(hooks, map[string]any{"name": fmt.Sprintf("url%d", i), "clientConfig": map[string]any{"url": u}})
 	}
-	return map[string]interface{}{"metadata": meta, "webhooks": hooks}
+	return map[string]any{"metadata": meta, "webhooks": hooks}
 }
 
 func olmOwned(csv string) map[string]string {
@@ -60,7 +60,7 @@ func olmOwned(csv string) map[string]string {
 // serveWebhooks registers the configs, the CSV list, live Services (with a
 // ready endpoint) and module CRs. Everything not registered is NotFound.
 func serveWebhooks(f *fakeAPI, configs []whFixture, csvPhase string, liveServices []string, modules map[string]bool) {
-	var v, m []interface{}
+	var v, m []any
 	for _, w := range configs {
 		if w.kind == "m" {
 			m = append(m, w.object())
@@ -68,8 +68,8 @@ func serveWebhooks(f *fakeAPI, configs []whFixture, csvPhase string, liveService
 			v = append(v, w.object())
 		}
 	}
-	f.obj("GET", vwcPath, map[string]interface{}{"items": v})
-	f.obj("GET", mwcPath, map[string]interface{}{"items": m})
+	f.obj(vwcPath, map[string]any{"items": v})
+	f.obj(mwcPath, map[string]any{"items": m})
 	f.json("GET", csvBase, http.StatusOK, fmt.Sprintf(`{"items":[{"metadata":{"name":"rhods-operator.3.6.0"},"status":{"phase":%q}}]}`, csvPhase))
 	f.json("GET", csvBase+"/rhods-operator.3.6.0", http.StatusOK, `{"metadata":{"name":"rhods-operator.3.6.0"}}`)
 	for _, s := range liveServices {
@@ -333,14 +333,14 @@ func TestReinstallWebhookCleanup_SkippedDuringAnInstall(t *testing.T) {
 func TestIsRHOAIWebhook(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		labels map[string]interface{}
+		labels map[string]any
 		want   bool
 	}{
-		{"datasciencecluster-v2-validator.opendatahub.io-x", map[string]interface{}{"olm.owner": "rhods-operator.3.6.0", "olm.owner.namespace": SubNS}, true},
-		{"anything", map[string]interface{}{"olm.owner": "rhods-operator.3.6.0"}, true},
-		{"x.opendatahub.io", map[string]interface{}{"olm.owner": "rhods-operator.3.6.0", "olm.owner.namespace": "elsewhere"}, false},
-		{"x.opendatahub.io", map[string]interface{}{"olm.owner": "authorino-operator.v1"}, false},
-		{"rhods-thing", map[string]interface{}{"olm.owner": "not-rhods-operator.v1"}, false},
+		{"datasciencecluster-v2-validator.opendatahub.io-x", map[string]any{"olm.owner": "rhods-operator.3.6.0", "olm.owner.namespace": SubNS}, true},
+		{"anything", map[string]any{"olm.owner": "rhods-operator.3.6.0"}, true},
+		{"x.opendatahub.io", map[string]any{"olm.owner": "rhods-operator.3.6.0", "olm.owner.namespace": "elsewhere"}, false},
+		{"x.opendatahub.io", map[string]any{"olm.owner": "authorino-operator.v1"}, false},
+		{"rhods-thing", map[string]any{"olm.owner": "not-rhods-operator.v1"}, false},
 		{"legacy.opendatahub.io", nil, true},
 		{"kuberay-mutating-webhook-configuration", nil, false},
 	} {

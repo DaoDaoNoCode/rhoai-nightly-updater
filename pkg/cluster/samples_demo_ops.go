@@ -40,7 +40,7 @@ type demoGenerateResult struct {
 }
 
 func (t *mlflowTarget) restoreExperiment(e *mlflowExperiment, log func(string)) error {
-	if err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/restore", nil, map[string]interface{}{"experiment_id": e.ExperimentID}, nil); err != nil {
+	if err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/restore", nil, map[string]any{"experiment_id": e.ExperimentID}, nil); err != nil {
 		return err
 	}
 	e.LifecycleStage = "active"
@@ -58,7 +58,7 @@ func (t *mlflowTarget) resetDemoVersions(e *mlflowExperiment, log func(string)) 
 	}
 	sort.Strings(features)
 	for _, f := range features {
-		if err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/set-experiment-tag", nil, map[string]interface{}{
+		if err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/set-experiment-tag", nil, map[string]any{
 			"experiment_id": e.ExperimentID, "key": demoVersionTagPrefix + f, "value": "0",
 		}, nil); err != nil {
 			return err
@@ -76,7 +76,7 @@ var errNoDemoGenerator = errors.New("this MLflow has no demo generator (demo/gen
 func (t *mlflowTarget) generateDemo(log func(string)) (demoGenerateResult, string, error) {
 	log("Generating the demo (this takes about 30 seconds)...")
 	var out demoGenerateResult
-	if err := t.api.sendJSON("POST", "/ajax-api/3.0/mlflow/demo/generate", nil, map[string]interface{}{}, &out); err != nil {
+	if err := t.api.sendJSON("POST", "/ajax-api/3.0/mlflow/demo/generate", nil, map[string]any{}, &out); err != nil {
 		if isEndpointMissing(err) {
 			return out, "", errNoDemoGenerator
 		}
@@ -96,7 +96,7 @@ func (t *mlflowTarget) createDemoExperiment(log func(string)) (*mlflowExperiment
 	var created struct {
 		ExperimentID string `json:"experiment_id"`
 	}
-	err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/create", nil, map[string]interface{}{"name": demoExperiment, "tags": tags}, &created)
+	err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/create", nil, map[string]any{"name": demoExperiment, "tags": tags}, &created)
 	if isAlreadyExists(err) {
 		exp, err := t.experimentByName(demoExperiment)
 		if err != nil {
@@ -128,7 +128,7 @@ func (t *mlflowTarget) dropStaleDemoVersions(e *mlflowExperiment, zero []string,
 		}
 	}
 	for _, f := range stale {
-		if err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/delete-experiment-tag", nil, map[string]interface{}{
+		if err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/delete-experiment-tag", nil, map[string]any{
 			"experiment_id": e.ExperimentID, "key": demoVersionTagPrefix + f,
 		}, nil); err != nil {
 			return err
@@ -157,7 +157,7 @@ var errMLflowRestarting = errors.New("MLflow restarts with the operator's defaul
 // operator's defaults apply. The server restarts, so the demo waits for the
 // next Add.
 func (t *mlflowTarget) raiseOldMemoryLimit(log func(string)) error {
-	if err := patchMLflowCR(t.c, t.cr, nil, map[string]interface{}{"resources": nil}); err != nil {
+	if err := patchMLflowCR(t.c, t.cr, nil, map[string]any{"resources": nil}); err != nil {
 		if IsK8sError(err, 409) {
 			return fmt.Errorf("MLflow changed while its memory limit was being removed; nothing was changed, refresh and retry: %w", err)
 		}

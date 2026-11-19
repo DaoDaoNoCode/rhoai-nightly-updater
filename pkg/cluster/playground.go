@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -189,7 +190,7 @@ var errGenAINotAllowed = errors.New("this tool does not make this call to the da
 // (model_source_type "namespace"). Anything else (maas/models, maas/tokens,
 // lsd/responses, an install with a MaaS model, a path added later) is
 // refused before a request is made.
-func genAICallAllowed(method, path string, in interface{}) bool {
+func genAICallAllowed(method, path string, in any) bool {
 	switch method + " " + path {
 	case "GET /aaa/models", "GET /lsd/status", "DELETE /lsd/delete":
 		return true
@@ -203,14 +204,14 @@ func genAICallAllowed(method, path string, in interface{}) bool {
 // project's own models, no tracing, no guardrails, no vector stores (each
 // of those names further endpoints or providers the dashboard would wire
 // with the caller's token), and no key the tool does not know.
-func genAIInstallAllowed(in interface{}) bool {
+func genAIInstallAllowed(in any) bool {
 	return genAIInstallAllowedWith(in, "namespace")
 }
 
 // genAIInstallAllowedWith is genAIInstallAllowed for models of the given
 // sources.
-func genAIInstallAllowedWith(in interface{}, sources ...string) bool {
-	body, ok := in.(map[string]interface{})
+func genAIInstallAllowedWith(in any, sources ...string) bool {
+	body, ok := in.(map[string]any)
 	if !ok {
 		return false
 	}
@@ -224,10 +225,10 @@ func genAIInstallAllowedWith(in interface{}, sources ...string) bool {
 	if body["enable_tracing"] != false || body["enable_guardrails"] != false {
 		return false
 	}
-	if vs, ok := body["vector_stores"].([]interface{}); !ok || len(vs) != 0 {
+	if vs, ok := body["vector_stores"].([]any); !ok || len(vs) != 0 {
 		return false
 	}
-	models, ok := body["models"].([]map[string]interface{})
+	models, ok := body["models"].([]map[string]any)
 	if !ok || len(models) == 0 {
 		return false
 	}
@@ -253,7 +254,7 @@ func genAIInstallAllowedWith(in interface{}, sources ...string) bool {
 // (model_source_type "maas"), with the same narrow body otherwise. The
 // dashboard then sends the user's token to the MaaS gateway, as when the
 // user adds the model there.
-func genAIUserCallAllowed(method, path string, in interface{}) bool {
+func genAIUserCallAllowed(method, path string, in any) bool {
 	switch method + " " + path {
 	case "GET /maas/models":
 		return true
@@ -264,7 +265,7 @@ func genAIUserCallAllowed(method, path string, in interface{}) bool {
 }
 
 // call makes one request to path (below /gen-ai/api/v1) in namespace ns.
-func (a genAIAPI) call(method, path, ns string, in, out interface{}) error {
+func (a genAIAPI) call(method, path, ns string, in, out any) error {
 	allowed := genAICallAllowed
 	if a.asUser {
 		allowed = genAIUserCallAllowed
@@ -674,11 +675,11 @@ func writePlaygroundRecords(c *Client, records map[string]playgroundRecord) erro
 		return err
 	}
 	ns := getActivityNamespace()
-	cm, _ := json.Marshal(map[string]interface{}{
+	cm, _ := json.Marshal(map[string]any{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
-		"metadata":   map[string]interface{}{"name": snapshotConfigMapName, "namespace": ns},
-		"data":       map[string]interface{}{playgroundRecordKey: string(data)},
+		"metadata":   map[string]any{"name": snapshotConfigMapName, "namespace": ns},
+		"data":       map[string]any{playgroundRecordKey: string(data)},
 	})
 	query := url.Values{"fieldManager": {playgroundRecordManager}, "force": {"true"}}
 	if _, _, err := c.bookkeeping().do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
@@ -722,12 +723,12 @@ var playgroundComponent = featureComponent{feature: "The Gen AI playground", key
 // componentReadyCondition reads the DataScienceCluster's "<component>Ready"
 // condition (OGXReady, LlamaStackOperatorReady) of the first component key
 // it reports: "True", "False" or "" (not reported), with its message.
-func componentReadyCondition(dsc map[string]interface{}, keys []string) (string, string) {
-	status, _ := dsc["status"].(map[string]interface{})
-	conds, _ := status["conditions"].([]interface{})
+func componentReadyCondition(dsc map[string]any, keys []string) (string, string) {
+	status, _ := dsc["status"].(map[string]any)
+	conds, _ := status["conditions"].([]any)
 	for _, key := range keys {
 		for _, raw := range conds {
-			cond, _ := raw.(map[string]interface{})
+			cond, _ := raw.(map[string]any)
 			if t, _ := cond["type"].(string); !strings.EqualFold(t, key+"Ready") {
 				continue
 			}
@@ -836,9 +837,9 @@ func playgroundAPI(c *Client) (genAIAPI, string, string) {
 // playgroundItem is a playground (srv, nil for none) in a project as the
 // page shows it.
 func playgroundItem(project string, srv *genAIServer, requested bool) types.PlaygroundState {
-	s := types.PlaygroundState{Requested: requested}
-	s.Namespace = project
-	s.ManagedByTool = requested
+	s := types.PlaygroundState{Requested: requested,
+		Namespace:     project,
+		ManagedByTool: requested}
 	if srv == nil {
 		return s
 	}
@@ -888,8 +889,7 @@ func GetPlaygroundStatus(c *Client, project string) (*types.PlaygroundStatus, er
 		return nil, err
 	}
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() { defer wg.Done(); playgroundClusterParts(c, st) }()
+	wg.Go(func() { playgroundClusterParts(c, st) })
 	api, problem, code := playgroundAPI(c)
 	if problem != "" {
 		st.APIProblem, st.APICode = problem, code
@@ -903,9 +903,7 @@ func GetPlaygroundStatus(c *Client, project string) (*types.PlaygroundStatus, er
 	var mu sync.Mutex
 	var pwg sync.WaitGroup
 	if project != "" {
-		pwg.Add(1)
-		go func() {
-			defer pwg.Done()
+		pwg.Go(func() {
 			models, err := api.listProjectModels(project, false)
 			if err == nil {
 				markToolEmbeddingModels(c, project, models)
@@ -924,7 +922,7 @@ func GetPlaygroundStatus(c *Client, project string) (*types.PlaygroundStatus, er
 				return
 			}
 			st.Models = models
-		}()
+		})
 	}
 	fo := readPlaygroundFanOut(c, api, projects, records)
 	if project != "" && !slices.Contains(fo.projects, project) {
@@ -996,9 +994,7 @@ func readPlaygroundFanOut(c *Client, api genAIAPI, projects []string, records ma
 	sem := make(chan struct{}, playgroundStatusParallel)
 	var wg sync.WaitGroup
 	for _, p := range fo.projects {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			srv, owned, err := readProjectPlayground(c, api, p, records)
@@ -1009,7 +1005,7 @@ func readPlaygroundFanOut(c *Client, api genAIAPI, projects []string, records ma
 				return
 			}
 			fo.servers[p], fo.owned[p] = srv, owned
-		}()
+		})
 	}
 	wg.Wait()
 	playgroundFanOutCache.Add(key, fo, playgroundStatusTTL)
@@ -1019,15 +1015,9 @@ func readPlaygroundFanOut(c *Client, api genAIAPI, projects []string, records ma
 // with is a copy of fo that also has project.
 func (fo *playgroundFanOut) with(c *Client, api genAIAPI, project string, records map[string]playgroundRecord) *playgroundFanOut {
 	cp := &playgroundFanOut{projects: append(append([]string{}, fo.projects...), project), servers: map[string]*genAIServer{}, owned: map[string]bool{}, errs: map[string]error{}, truncated: fo.truncated}
-	for p, s := range fo.servers {
-		cp.servers[p] = s
-	}
-	for p, o := range fo.owned {
-		cp.owned[p] = o
-	}
-	for p, e := range fo.errs {
-		cp.errs[p] = e
-	}
+	maps.Copy(cp.servers, fo.servers)
+	maps.Copy(cp.owned, fo.owned)
+	maps.Copy(cp.errs, fo.errs)
 	srv, owned, err := readProjectPlayground(c, api, project, records)
 	if err != nil {
 		cp.errs[project] = err
@@ -1345,7 +1335,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 		if err := setPlaygroundRecord(p.c, p.project, newPlaygroundRecord(p.c)); err != nil {
 			return p.fail("install", fmt.Sprintf("Cannot record the request in this tool's namespace; nothing was set up: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "record")
 		}
-		body := map[string]interface{}{"enable_guardrails": false, "enable_tracing": false, "vector_stores": []interface{}{}}
+		body := map[string]any{"enable_guardrails": false, "enable_tracing": false, "vector_stores": []any{}}
 		// model_type and embedding_dimension per model: odh-dashboard
 		// rhoai-3.6 packages/gen-ai/bff internal/models/llamastack_distribution.go
 		// InstallModel ("llm" or "embedding"; embedding_dimension 128 to
@@ -1355,9 +1345,9 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 		// AddVLLMProviderAndModel, which falls back to 128 dimensions without
 		// one (llamastack_config.go); the dashboard's own dialog asks for it
 		// (ChatbotConfigurationTableRow.tsx: "Embedding", "Embedding dimension").
-		list := make([]map[string]interface{}, len(models))
+		list := make([]map[string]any, len(models))
 		for i, m := range models {
-			list[i] = map[string]interface{}{"model_name": m.Name, "model_source_type": m.Source, "model_type": "llm"}
+			list[i] = map[string]any{"model_name": m.Name, "model_source_type": m.Source, "model_type": "llm"}
 			if !m.Chat {
 				list[i]["model_type"] = "embedding"
 				list[i]["embedding_dimension"] = m.EmbeddingDimension

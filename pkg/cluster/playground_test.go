@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -49,7 +50,7 @@ type genAIFake struct {
 	// there (the BFF's zero-restart path) instead of creating one.
 	existingOnInstall bool
 	paths             []string
-	installs          []map[string]interface{}
+	installs          []map[string]any
 	deletes           []string
 	auth              []string
 	// userToken is a signed-in user's own token: with it, and only with
@@ -71,7 +72,7 @@ func (g *genAIFake) serve(w http.ResponseWriter, r *http.Request) {
 	ns := r.URL.Query().Get("namespace")
 	fail := func(status int, msg string) {
 		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": map[string]string{"code": http.StatusText(status), "message": msg}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": http.StatusText(status), "message": msg}})
 	}
 	if g.missing {
 		fail(http.StatusNotFound, "the requested resource could not be found")
@@ -111,14 +112,14 @@ func (g *genAIFake) serve(w http.ResponseWriter, r *http.Request) {
 				srv.Phase = "Failed"
 			}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": map[string]string{"name": srv.Name, "phase": srv.Phase, "version": "v1"}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]string{"name": srv.Name, "phase": srv.Phase, "version": "v1"}})
 	case "POST /gen-ai/api/v1/lsd/install":
-		var body map[string]interface{}
+		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		g.installs = append(g.installs, body)
-		models, _ := body["models"].([]interface{})
+		models, _ := body["models"].([]any)
 		for _, m := range models {
-			if mm, _ := m.(map[string]interface{}); mm["model_source_type"] != "namespace" && (!asUser || mm["model_source_type"] != "maas") {
+			if mm, _ := m.(map[string]any); mm["model_source_type"] != "namespace" && (!asUser || mm["model_source_type"] != "maas") {
 				g.t.Errorf("install with model %v: the dashboard lists MaaS models with the caller's token", m)
 			}
 		}
@@ -254,7 +255,8 @@ func (e *playgroundEnv) records(t *testing.T) map[string]playgroundRecord {
 	return r
 }
 
-func setup(project string) types.PlaygroundRequest {
+func setup() types.PlaygroundRequest {
+	project := "proj"
 	return types.PlaygroundRequest{Action: "setup", Project: project}
 }
 
@@ -264,7 +266,7 @@ func setup(project string) types.PlaygroundRequest {
 func TestPlayground_SetupInstallsThroughTheDashboardAndWaitsForReady(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.putMaaSModels()
-	res, steps := e.run(t, setup("proj"))
+	res, steps := e.run(t, setup())
 	if !res.Success {
 		t.Fatalf("got %+v", res)
 	}
@@ -301,7 +303,7 @@ func TestPlayground_SetupInstallsThroughTheDashboardAndWaitsForReady(t *testing.
 func TestPlayground_SetupWithTheServiceAccountNeverAddsAMaaSModel(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.putMaaSModels()
-	req := setup("proj")
+	req := setup()
 	req.Models = []types.PlaygroundModelRef{{Name: "qwen25-05b-instruct", Source: "namespace"}, {Name: "gpt-oss-20b", Source: "maas"}}
 	res, _ := e.run(t, req)
 	if res.Success || res.ErrorCode != "validation" || !strings.Contains(res.Message, "does not offer model gpt-oss-20b") {
@@ -335,7 +337,7 @@ func TestPlayground_SetupWithTheUsersTokenAddsAMaaSModel(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	const userToken = "sha256~user-own-token"
 	uc := e.userPlaygroundClient(userToken)
-	req := setup("proj")
+	req := setup()
 	req.Models = []types.PlaygroundModelRef{{Name: "qwen25-05b-instruct", Source: "namespace"}, {Name: "gpt-oss-20b", Source: "maas"}}
 	var steps []UpdateStepEvent
 	res, err := RunPlayground(uc, req, func(s UpdateStepEvent) { steps = append(steps, s) })
@@ -371,7 +373,7 @@ func TestPlayground_SetupWithTheUsersTokenAddsAMaaSModel(t *testing.T) {
 			t.Errorf("%s %s with the user's token: %v", c.method, c.path, err)
 		}
 	}
-	traced := map[string]interface{}{"enable_guardrails": false, "enable_tracing": true, "vector_stores": []interface{}{}, "models": []map[string]interface{}{{"model_name": "m", "model_source_type": "maas"}}}
+	traced := map[string]any{"enable_guardrails": false, "enable_tracing": true, "vector_stores": []any{}, "models": []map[string]any{{"model_name": "m", "model_source_type": "maas"}}}
 	if err := api.call(http.MethodPost, "/lsd/install", "proj", traced, nil); !errors.Is(err, errGenAINotAllowed) {
 		t.Errorf("an install with tracing: %v", err)
 	}
@@ -390,7 +392,7 @@ func TestPlayground_SetupWithProjectModelsOnlyNeverReachesMaaS(t *testing.T) {
 			e := newPlaygroundEnv(t)
 			const userToken = "sha256~user-own-token"
 			uc := e.userPlaygroundClient(userToken)
-			req := setup("proj")
+			req := setup()
 			req.Models = models
 			res, err := RunPlayground(uc, req, nil)
 			if err != nil || !res.Success {
@@ -414,32 +416,30 @@ func TestPlayground_GenAIClientRefusesCallsThatReachMaaS(t *testing.T) {
 	if problem != "" {
 		t.Fatal(problem)
 	}
-	ns := map[string]interface{}{"model_name": "m", "model_source_type": "namespace"}
+	ns := map[string]any{"model_name": "m", "model_source_type": "namespace"}
 	// install is the body Set up sends, with over changed.
-	install := func(over map[string]interface{}) map[string]interface{} {
-		b := map[string]interface{}{"enable_guardrails": false, "enable_tracing": false, "vector_stores": []interface{}{}, "models": []map[string]interface{}{ns}}
-		for k, v := range over {
-			b[k] = v
-		}
+	install := func(over map[string]any) map[string]any {
+		b := map[string]any{"enable_guardrails": false, "enable_tracing": false, "vector_stores": []any{}, "models": []map[string]any{ns}}
+		maps.Copy(b, over)
 		return b
 	}
 	for _, c := range []struct {
 		method, path string
-		in           interface{}
+		in           any
 	}{
 		{http.MethodGet, "/maas/models", nil},
 		{http.MethodPost, "/maas/tokens", map[string]string{"model": "m"}},
 		{http.MethodPost, "/lsd/responses", nil},
 		{http.MethodGet, "/genai-proxy/ns/proj/v1/models", nil},
-		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"models": []map[string]interface{}{ns, {"model_name": "x", "model_source_type": "maas"}}})},
-		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"models": []map[string]interface{}{{"model_name": "x", "model_source_type": "custom_endpoint"}}})},
-		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"models": []map[string]interface{}{}})},
-		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"enable_tracing": true})},
-		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"enable_guardrails": true})},
-		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"vector_stores": []interface{}{map[string]interface{}{"provider": "remote"}}})},
-		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"guardrail_models": []interface{}{}})},
-		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"models": []map[string]interface{}{{"model_name": "m", "model_source_type": "namespace", "subscription": "s"}}})},
-		{http.MethodPost, "/lsd/install", map[string]interface{}{"models": []map[string]interface{}{ns}}},
+		{http.MethodPost, "/lsd/install", install(map[string]any{"models": []map[string]any{ns, {"model_name": "x", "model_source_type": "maas"}}})},
+		{http.MethodPost, "/lsd/install", install(map[string]any{"models": []map[string]any{{"model_name": "x", "model_source_type": "custom_endpoint"}}})},
+		{http.MethodPost, "/lsd/install", install(map[string]any{"models": []map[string]any{}})},
+		{http.MethodPost, "/lsd/install", install(map[string]any{"enable_tracing": true})},
+		{http.MethodPost, "/lsd/install", install(map[string]any{"enable_guardrails": true})},
+		{http.MethodPost, "/lsd/install", install(map[string]any{"vector_stores": []any{map[string]any{"provider": "remote"}}})},
+		{http.MethodPost, "/lsd/install", install(map[string]any{"guardrail_models": []any{}})},
+		{http.MethodPost, "/lsd/install", install(map[string]any{"models": []map[string]any{{"model_name": "m", "model_source_type": "namespace", "subscription": "s"}}})},
+		{http.MethodPost, "/lsd/install", map[string]any{"models": []map[string]any{ns}}},
 		{http.MethodPost, "/lsd/install", nil},
 		{http.MethodGet, "/lsd/models", nil},
 	} {
@@ -460,7 +460,7 @@ func TestPlayground_GenAIClientRefusesCallsThatReachMaaS(t *testing.T) {
 func TestPlayground_SetupRetriesWhileThePreviousDatabaseIsRemoved(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.g.conflicts = 2
-	res, steps := e.run(t, setup("proj"))
+	res, steps := e.run(t, setup())
 	if !res.Success || len(e.g.installs) != 3 {
 		t.Fatalf("got %+v after %d installs", res, len(e.g.installs))
 	}
@@ -478,7 +478,7 @@ func TestPlayground_SetupRetriesWhileThePreviousDatabaseIsRemoved(t *testing.T) 
 func TestPlayground_SetupGivesUpOnAPersistentConflict(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.g.conflicts = 1 << 20
-	res, _ := e.run(t, setup("proj"))
+	res, _ := e.run(t, setup())
 	if res.Success || res.ErrorCode != "in_progress" {
 		t.Fatalf("got %+v", res)
 	}
@@ -493,7 +493,7 @@ func TestPlayground_SetupGivesUpOnAPersistentConflict(t *testing.T) {
 func TestPlayground_SetupExplainsLeftovers(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.g.installFail, e.g.installMessage = http.StatusBadRequest, `failed to create ConfigMap: configmaps "llama-stack-config" already exists`
-	res, _ := e.run(t, setup("proj"))
+	res, _ := e.run(t, setup())
 	if res.Success || res.ErrorCode != "leftovers" || !strings.Contains(res.Message, "oc delete configmap -n proj llama-stack-config") {
 		t.Fatalf("got %+v", res)
 	}
@@ -513,12 +513,12 @@ func TestPlayground_SetupExplainsLeftovers(t *testing.T) {
 func TestPlayground_SetupUsesTheReadyModelsOnly(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.g.models["proj"] = `{"data":[` + strings.TrimSuffix(strings.TrimPrefix(testQwenModels, `{"data":[`), `]}`) + `,{"model_name":"deepseek","status":"Failed"}]}`
-	res, steps := e.run(t, setup("proj"))
+	res, steps := e.run(t, setup())
 	if !res.Success || len(e.g.installs) != 1 {
 		t.Fatalf("got %+v", res)
 	}
-	models, _ := e.g.installs[0]["models"].([]interface{})
-	if m, _ := models[0].(map[string]interface{}); len(models) != 1 || m["model_name"] != "qwen25-05b-instruct" {
+	models, _ := e.g.installs[0]["models"].([]any)
+	if m, _ := models[0].(map[string]any); len(models) != 1 || m["model_name"] != "qwen25-05b-instruct" {
 		t.Errorf("models %v", models)
 	}
 	if !strings.Contains(steps[0].Message, "deepseek") {
@@ -527,7 +527,7 @@ func TestPlayground_SetupUsesTheReadyModelsOnly(t *testing.T) {
 	// A chosen model that is not ready is still refused.
 	PurgePlaygroundStatus()
 	delete(e.g.servers, "proj")
-	req := setup("proj")
+	req := setup()
 	req.Models = []types.PlaygroundModelRef{{Name: "deepseek", Source: "namespace"}}
 	if res, _ := e.run(t, req); res.Success || res.ErrorCode != "model_not_ready" {
 		t.Fatalf("chosen model not ready: %+v", res)
@@ -537,7 +537,7 @@ func TestPlayground_SetupUsesTheReadyModelsOnly(t *testing.T) {
 // The record holds the playground's OGXServer UID once the dashboard made it.
 func TestPlayground_SetupRecordsTheServerUID(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	if res, _ := e.run(t, setup("proj")); !res.Success {
+	if res, _ := e.run(t, setup()); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	if got := e.records(t)["proj"].UID; got != "uid-installed-1" {
@@ -550,7 +550,7 @@ func TestPlayground_SetupRecordsTheServerUID(t *testing.T) {
 // tool's: shown as not managed, never deleted, and the record is dropped.
 func TestPlayground_AStaleRecordDoesNotOwnANewPlayground(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	if res, _ := e.run(t, setup("proj")); !res.Success {
+	if res, _ := e.run(t, setup()); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	e.g.servers["proj"] = &genAIServer{Name: "lsd-genai-playground", Phase: "Ready"}
@@ -586,7 +586,7 @@ func TestPlayground_AnInstallAnsweredWithAnExistingServerIsNotOwned(t *testing.T
 			e.g.mu.Unlock()
 		}
 	}
-	res, _ := e.run(t, setup("proj"))
+	res, _ := e.run(t, setup())
 	if res.Success || res.ErrorCode != "not_managed" {
 		t.Fatalf("got %+v", res)
 	}
@@ -599,7 +599,7 @@ func TestPlayground_AnInstallAnsweredWithAnExistingServerIsNotOwned(t *testing.T
 // missing route or object, not absence: teardown fails and keeps the record.
 func TestPlayground_A404IsNotAbsence(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	if res, _ := e.run(t, setup("proj")); !res.Success {
+	if res, _ := e.run(t, setup()); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	e.g.missing = true
@@ -637,7 +637,7 @@ func TestPlayground_SetupNeedsAChatModel(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.g.models["proj"] = `{"data":[{"model_name":"granite-embedding","status":"Running","usecase":"embedding","capabilities":["embedding"]}]}`
 	e.putMaaSModels()
-	res, _ := e.run(t, setup("proj"))
+	res, _ := e.run(t, setup())
 	if res.Success || res.ErrorCode != "no_model" || !strings.Contains(res.Message, "Models tab") || len(e.g.installs) != 0 {
 		t.Fatalf("got %+v", res)
 	}
@@ -648,7 +648,7 @@ func TestPlayground_SetupNeedsAChatModel(t *testing.T) {
 func TestPlayground_LeavesAPlaygroundItDidNotRequest(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.g.servers["proj"] = &genAIServer{Name: "lsd-genai-playground", Phase: "Ready"}
-	if res, _ := e.run(t, setup("proj")); res.Success || res.ErrorCode != "not_managed" {
+	if res, _ := e.run(t, setup()); res.Success || res.ErrorCode != "not_managed" {
 		t.Fatalf("setup: %+v", res)
 	}
 	if res, _ := e.run(t, types.PlaygroundRequest{Action: "teardown", Project: "proj"}); res.Success || res.ErrorCode != "not_managed" {
@@ -663,7 +663,7 @@ func TestPlayground_LeavesAPlaygroundItDidNotRequest(t *testing.T) {
 // is gone, and clears the record.
 func TestPlayground_TeardownDeletesThroughTheDashboard(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	if res, _ := e.run(t, setup("proj")); !res.Success {
+	if res, _ := e.run(t, setup()); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	res, steps := e.run(t, types.PlaygroundRequest{Action: "teardown", Project: "proj"})
@@ -689,7 +689,7 @@ func TestPlayground_TeardownDeletesThroughTheDashboard(t *testing.T) {
 func TestPlayground_SetupReportsAFailedPlayground(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.g.failPhase = true
-	res, _ := e.run(t, setup("proj"))
+	res, _ := e.run(t, setup())
 	if res.Success || res.ErrorCode != "not_ready" || !strings.Contains(res.Message, "phase Failed") {
 		t.Fatalf("got %+v", res)
 	}
@@ -721,7 +721,7 @@ func TestPlayground_SetupChecksTheCluster(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			e := newPlaygroundEnv(t)
 			tc.change(e)
-			res, _ := e.run(t, setup("proj"))
+			res, _ := e.run(t, setup())
 			if res.Success || res.ErrorCode != tc.code || len(e.g.installs) != 0 {
 				t.Fatalf("got %+v", res)
 			}
@@ -733,7 +733,7 @@ func TestPlayground_SetupChecksTheCluster(t *testing.T) {
 func TestPlayground_UnknownOperatorReadinessIsANote(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.k8s.putJSON("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc", `{"spec":{"components":{"ogx":{"managementState":"Managed"}}}}`)
-	res, steps := e.run(t, setup("proj"))
+	res, steps := e.run(t, setup())
 	if !res.Success || !strings.Contains(steps[0].Message, "not reported (unknown)") {
 		t.Fatalf("got %+v, %+v", res, steps[0])
 	}
@@ -742,7 +742,7 @@ func TestPlayground_UnknownOperatorReadinessIsANote(t *testing.T) {
 func TestPlayground_NoToken(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.c.token = ""
-	res, err := RunPlayground(e.c, setup("proj"), nil)
+	res, err := RunPlayground(e.c, setup(), nil)
 	if err != nil || res.Success || res.ErrorCode != "no_token" || len(e.g.auth) != 0 {
 		t.Fatalf("got %+v, %v", res, err)
 	}
@@ -752,7 +752,7 @@ func TestPlayground_NoToken(t *testing.T) {
 // selected project's models (none from MaaS while nothing is published).
 func TestPlayground_Status(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	if res, _ := e.run(t, setup("proj")); !res.Success {
+	if res, _ := e.run(t, setup()); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	e.g.servers["other"] = &genAIServer{Name: "lsd-genai-playground", Phase: "Initializing"}

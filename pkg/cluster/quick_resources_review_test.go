@@ -31,8 +31,8 @@ func assertForeignUntouched(t *testing.T, f *resourceFake, path, field, want str
 	if obj == nil {
 		t.Fatalf("%s was deleted", path)
 	}
-	meta := obj["metadata"].(map[string]interface{})
-	labels, _ := meta["labels"].(map[string]interface{})
+	meta := obj["metadata"].(map[string]any)
+	labels, _ := meta["labels"].(map[string]any)
 	if meta["uid"] != "foreign-uid" || labels[managedByLabelKey] != nil || labels["owner"] != "someone" {
 		t.Errorf("%s metadata changed: %v", path, meta)
 	}

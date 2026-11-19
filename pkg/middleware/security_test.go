@@ -105,7 +105,7 @@ func TestSecurityHeaders_CSPDirectives(t *testing.T) {
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
 	directives := map[string]string{}
-	for _, d := range strings.Split(rr.Header().Get("Content-Security-Policy"), ";") {
+	for d := range strings.SplitSeq(rr.Header().Get("Content-Security-Policy"), ";") {
 		name, value, _ := strings.Cut(strings.TrimSpace(d), " ")
 		directives[name] = value
 	}

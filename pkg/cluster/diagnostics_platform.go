@@ -63,7 +63,7 @@ func checkPlatformModules(c *Client) checkOutput {
 				switch cond.Reason {
 				case "AdminAckRequired":
 					out.check.Status = "fail"
-					evidence := []string{fmt.Sprintf("Platform %s: ProvisioningProgress=False (AdminAckRequired): %s", pl.Metadata.Name, truncate(cond.Message, 400))}
+					evidence := []string{fmt.Sprintf("Platform %s: ProvisioningProgress=False (AdminAckRequired): %s", pl.Metadata.Name, truncateText(cond.Message, 400))}
 					keys, values, keysErr := pendingUpgradeAckKeys(c)
 					cmd := upgradeAckCommand("<key>")
 					fix := "Read what the gate is about, then acknowledge it in the OpenShift console or with the command below (replace <key>)."
@@ -98,7 +98,7 @@ func checkPlatformModules(c *Client) checkOutput {
 						Severity:    "warning",
 						Title:       "Some modules were provisioned before the modules they wait for became ready",
 						Description: "The operator provisions modules in run levels and waits up to 10 minutes for each level. It moved on because a module of an earlier level did not become ready; modules that depend on it may not work.",
-						Evidence:    []string{fmt.Sprintf("Platform %s: ProvisioningProgress=False (RunlevelTimeoutExceeded): %s", pl.Metadata.Name, truncate(cond.Message, 400))},
+						Evidence:    []string{fmt.Sprintf("Platform %s: ProvisioningProgress=False (RunlevelTimeoutExceeded): %s", pl.Metadata.Name, truncateText(cond.Message, 400))},
 						Fix:         "Fix the module named in the message (see the DataScienceCluster and RHOAI pods results).",
 					})
 				}
@@ -160,7 +160,7 @@ func pendingUpgradeAckKeys(c *Client) ([]string, map[string]string, error) {
 
 // upgradeAckCommand acknowledges one upgrade gate.
 func upgradeAckCommand(key string) string {
-	patch, _ := json.Marshal(map[string]interface{}{"data": map[string]string{key: "true"}})
+	patch, _ := json.Marshal(map[string]any{"data": map[string]string{key: "true"}})
 	return shellCommand("oc", "patch", "configmap", "odh-upgrade-acks", "-n", SubNS, "--type", "merge", "-p", string(patch))
 }
 
@@ -180,10 +180,9 @@ func stuckModuleCRs(c *Client, now time.Time) ([]stuckModule, error) {
 		items []moduleCRItem
 		err   error
 	}
-	discovered := func() (componentAPI, error) { return api, nil }
 	results := make([]listResult, len(api.Kinds))
 	parallelFor(len(api.Kinds), 6, func(i int) {
-		results[i].items, results[i].err = listModuleCRs(c, discovered, strings.ToLower(api.Kinds[i].Kind))
+		results[i].items, results[i].err = listModuleCRsIn(c, api, strings.ToLower(api.Kinds[i].Kind))
 	})
 	var out []stuckModule
 	var errs []string
@@ -244,7 +243,8 @@ func stuckModuleProblem(c *Client, m stuckModule) Problem {
 func checkManagedConfig(c *Client) checkOutput {
 	const name = "Operator-managed config"
 	out := checkOutput{check: CheckResult{Name: name, Status: "pass"}}
-	release := dscReleaseVersion(c)
+	installed := dscRelease(c)
+	release := installed.Version
 	var details []string
 	count := 0
 	for _, ns := range rolloutNamespaces {
@@ -284,9 +284,16 @@ func checkManagedConfig(c *Client) checkOutput {
 					Fix:             "If nobody needs the manual change any more, remove the annotation; the operator then re-applies the current version on its next reconcile. The tool does not do this automatically.",
 					TechnicalCmd:    fmt.Sprintf("oc annotate deployment %s -n %s opendatahub.io/managed-", d.Metadata.Name, ns),
 				})
-			} else if v := ann["platform.opendatahub.io/version"]; v != "" && release != "" && v != release && ann["platform.opendatahub.io/instance.name"] == "default" {
-				// Only Deployments the Platform applies carry the platform
-				// version; module operators stamp their own versions.
+			} else if v := ann["platform.opendatahub.io/version"]; v != "" && release != "" && v != release && ann["platform.opendatahub.io/instance.name"] == "default" &&
+				installed.Name != "" && ann["platform.opendatahub.io/type"] == installed.Name {
+				// Only Deployments the Platform applies carry the platform's
+				// version and type: the operator stamps the release it runs
+				// (status.release name and version). Module operators stamp
+				// their own: the MCP lifecycle module's framework defaults
+				// stamp type OpenDataHub and version 0.0.1 on its manager
+				// (owner MCPLifecycleOperator "default") on an OpenShift AI
+				// Self-Managed 3.6.0 cluster. A type other than the installed
+				// release's name is not the platform's version to compare.
 				out.problems = append(out.problems, Problem{
 					ID:              "deployment-version-drift-" + d.Metadata.Name,
 					Severity:        "info",
@@ -327,24 +334,32 @@ func checkManagedConfig(c *Client) checkOutput {
 	return out
 }
 
-func dscReleaseVersion(c *Client) string {
+// platformRelease is the release a DataScienceCluster reports in
+// status.release: its name (for example "OpenShift AI Self-Managed") and
+// version.
+type platformRelease struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// dscRelease reads the DataScienceCluster's status.release; empty fields
+// when there is no DataScienceCluster or it cannot be read.
+func dscRelease(c *Client) platformRelease {
 	path, err := dataScienceClusterPath(c)
 	if err != nil {
-		return ""
+		return platformRelease{}
 	}
 	body, _, err := c.get(path)
 	if err != nil {
-		return ""
+		return platformRelease{}
 	}
 	var dsc struct {
 		Status struct {
-			Release struct {
-				Version string `json:"version"`
-			} `json:"release"`
+			Release platformRelease `json:"release"`
 		} `json:"status"`
 	}
 	_ = json.Unmarshal(body, &dsc)
-	return dsc.Status.Release.Version
+	return dsc.Status.Release
 }
 
 // channelHeadBehind reports when the Subscription's channel head is older
@@ -363,7 +378,7 @@ func channelHeadBehind(c *Client, sub subscriptionState) *Problem {
 		return nil
 	}
 	for _, ch := range channels {
-		m, _ := ch.(map[string]interface{})
+		m, _ := ch.(map[string]any)
 		if name, _ := m["name"].(string); name != sub.Channel {
 			continue
 		}

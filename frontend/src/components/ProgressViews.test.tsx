@@ -61,7 +61,7 @@ describe("View progress: a run of this page whose dialog was closed", () => {
       "/api/resources/status": { minio: { deployed: false, ready: false, managedByTool: false, message: "Not deployed" }, mlflow: ownMlflow, pipelineServers: [] },
       "/api/resources/projects": { projects: ["dev"] },
       "/api/resources/prerequisites": { features: {} },
-      "POST /api/resources/minio/setup": () => new Promise<Response>((r) => { finish = r; }),
+      "POST /api/resources/s3/setup": () => new Promise<Response>((r) => { finish = r; }),
     });
     renderWithApp(<><GlobalBanners /><QuickResourceCreator mutateBlocker={null} /></>, {}, "/test-resources?tab=pipelines&project=dev");
     fireEvent.click(await screen.findByRole("button", { name: "Set up Pipelines in dev" }));

@@ -191,8 +191,8 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 // replaces this pod, and this pod may still be running an Update then: with
 // an allowlist that dropped a variable, it would delete a Subscription it
 // could not create again.
-func gitOpsWriteProblem(c *Client) func(newSub, restoreSub map[string]interface{}) string {
-	return func(newSub, restoreSub map[string]interface{}) string {
+func gitOpsWriteProblem(c *Client) func(newSub, restoreSub map[string]any) string {
+	return func(newSub, restoreSub map[string]any) string {
 		if msg := gitOpsSubscriptionsProblem(newSub, restoreSub); msg != "" {
 			return msg
 		}

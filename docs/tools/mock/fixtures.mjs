@@ -56,7 +56,7 @@ const updateEntry = (minutesAgo, b) => ({
 });
 const olderActivity = [
   { timestamp: ago(60 * 27), user: USER, action: "setup-pipeline-server", detail: "Project dev-project", success: true, label: "Pipeline server set up", category: "test-resources" },
-  { timestamp: ago(60 * 27 + 5), user: USER, action: "setup-minio", detail: "S3 storage in namespace minio", success: true, label: "S3 storage set up", category: "test-resources" },
+  { timestamp: ago(60 * 27 + 5), user: USER, action: "setup-s3", detail: "S3 storage in namespace seaweedfs", success: true, label: "S3 storage set up", category: "test-resources" },
   { timestamp: ago(60 * 50), user: "qa-user", action: "deploy-dashboard-pr", detail: "PR #5123 (RHOAI build)", success: true, label: "Dashboard PR deployed", category: "dashboard-dev" },
   { timestamp: ago(60 * 51), user: "qa-user", action: "revert-dashboard", detail: "Restored the release images", success: true, label: "Dashboard reverted", category: "dashboard-dev" },
   { timestamp: ago(60 * 74), user: USER, action: "update", detail: fbc("rhoai-3.6", "rhoai-3.6-2026-10-03"), success: false, reason: "The catalog image could not be pulled: unauthorized. Nothing was changed.", label: "Updated to nightly", category: "operator", build: `rhoai-3.6 · ${digest("rhoai-3.6-2026-10-03").slice(7, 19)}` },

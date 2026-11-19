@@ -21,7 +21,7 @@ func csvDeletes(f *fakeOLM) map[string]string {
 	out := map[string]string{}
 	for _, r := range f.requests {
 		if r.Method == http.MethodDelete && strings.Contains(r.Path, "/clusterserviceversions/") {
-			pre, _ := r.Body["preconditions"].(map[string]interface{})
+			pre, _ := r.Body["preconditions"].(map[string]any)
 			uid, _ := pre["uid"].(string)
 			out[r.Path[strings.LastIndex(r.Path, "/")+1:]] = uid
 		}
@@ -32,14 +32,14 @@ func csvDeletes(f *fakeOLM) map[string]string {
 func csvUID(f *fakeOLM, name string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	uid, _ := f.csvs[name]["metadata"].(map[string]interface{})["uid"].(string)
+	uid, _ := f.csvs[name]["metadata"].(map[string]any)["uid"].(string)
 	return uid
 }
 
 // A second CSV that existed before the operation (here one left in
 // Replacing) is kept even though the operation deleted the installed CSV.
 func TestRestore_OperationRemovedCSV_DeletesOnlyTheAttemptsCSV(t *testing.T) {
-	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"channel": "fast"})
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"channel": "fast"})
 	f.addCSV("rhods-operator.3.5.0", "Replacing")
 	c := f.client(context.Background())
 	r, err := captureOperatorRecovery(c)
@@ -114,7 +114,7 @@ func TestRestore_ObjectsReplacedMeanwhileAreNotDeleted(t *testing.T) {
 		f.intercept = func(f *fakeOLM, _ http.ResponseWriter, req *http.Request) bool {
 			if req.Method == http.MethodDelete && strings.HasSuffix(req.URL.Path, "/rhods-operator.3.6.1") {
 				// An administrator recreated it just before the delete.
-				f.csvs["rhods-operator.3.6.1"]["metadata"].(map[string]interface{})["uid"] = "admin-uid"
+				f.csvs["rhods-operator.3.6.1"]["metadata"].(map[string]any)["uid"] = "admin-uid"
 			}
 			return false
 		}
@@ -130,15 +130,15 @@ func TestRestore_ObjectsReplacedMeanwhileAreNotDeleted(t *testing.T) {
 		}
 	})
 	t.Run("Subscription", func(t *testing.T) {
-		f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"channel": "fast"})
+		f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"channel": "fast"})
 		c := f.client(context.Background())
 		r, _ := captureOperatorRecovery(c)
 		r.subscriptionChanged = true
 		f.mu.Lock()
 		f.intercept = func(f *fakeOLM, _ http.ResponseWriter, req *http.Request) bool {
 			if req.Method == http.MethodDelete && strings.HasSuffix(req.URL.Path, "/subscriptions/"+SubName) {
-				f.sub["metadata"].(map[string]interface{})["uid"] = "admin-sub"
-				f.sub["spec"].(map[string]interface{})["channel"] = "admin-channel"
+				f.sub["metadata"].(map[string]any)["uid"] = "admin-sub"
+				f.sub["spec"].(map[string]any)["channel"] = "admin-channel"
 			}
 			return false
 		}
@@ -148,7 +148,7 @@ func TestRestore_ObjectsReplacedMeanwhileAreNotDeleted(t *testing.T) {
 		r.restore(c, result, emit)
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		if f.sub == nil || f.sub["metadata"].(map[string]interface{})["uid"] != "admin-sub" || f.sub["spec"].(map[string]interface{})["channel"] != "admin-channel" {
+		if f.sub == nil || f.sub["metadata"].(map[string]any)["uid"] != "admin-sub" || f.sub["spec"].(map[string]any)["channel"] != "admin-channel" {
 			t.Fatalf("the replaced Subscription was deleted or overwritten: %v", f.sub)
 		}
 		if lastStatus(events(), restoreStepName) != "failed" || !strings.Contains(result.Message, "Subscription was replaced by someone else") {

@@ -114,36 +114,36 @@ const (
 // commit with storageIgnorePatterns applied (Hugging Face API file sizes).
 var modelCatalog = []catalogModel{
 	{
-		CatalogModel: types.CatalogModel{Name: "smollm2-135m-instruct", DisplayName: "SmolLM2 135M Instruct (CPU)", URI: "hf://HuggingFaceTB/SmolLM2-135M-Instruct:12fd25f77366fa6b3b4b768ec3050bf629380bac",
-			CPU: "2", MemoryRequest: "4Gi", Memory: "5Gi", Type: modelTypeChat, UseCase: "Chat (smoke test)", DownloadSize: "270 MB",
-			Description: "A very small chat model, for checking that model serving works. From Hugging Face (HuggingFaceTB/SmolLM2-135M-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
-			Args:        "--max-model-len 4096"},
-		threads: "2", kvCacheGiB: "1", ephemeralStorage: "400M",
+		Name: "smollm2-135m-instruct", DisplayName: "SmolLM2 135M Instruct (CPU)", URI: "hf://HuggingFaceTB/SmolLM2-135M-Instruct:12fd25f77366fa6b3b4b768ec3050bf629380bac",
+		CPU: "2", MemoryRequest: "4Gi", Memory: "5Gi", Type: modelTypeChat, UseCase: "Chat (smoke test)", DownloadSize: "270 MB",
+		Description: "A very small chat model, for checking that model serving works. From Hugging Face (HuggingFaceTB/SmolLM2-135M-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
+		Args:        "--max-model-len 4096",
+		threads:     "2", kvCacheGiB: "1", ephemeralStorage: "400M",
 	},
 	{
-		CatalogModel: types.CatalogModel{Name: "qwen25-05b-instruct", DisplayName: "Qwen2.5 0.5B Instruct (CPU)", URI: "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775",
-			CPU: "4", MemoryRequest: "6Gi", Memory: "8Gi", Type: modelTypeChat, UseCase: "Chat", DownloadSize: "1.0 GB", Default: true,
-			Description: "A small chat model. From Hugging Face (Qwen/Qwen2.5-0.5B-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
-			Args:        "--max-model-len 4096"},
-		threads: "4", kvCacheGiB: "2", ephemeralStorage: "1.5G",
+		Name: "qwen25-05b-instruct", DisplayName: "Qwen2.5 0.5B Instruct (CPU)", URI: "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775",
+		CPU: "4", MemoryRequest: "6Gi", Memory: "8Gi", Type: modelTypeChat, UseCase: "Chat", DownloadSize: "1.0 GB", Default: true,
+		Description: "A small chat model. From Hugging Face (Qwen/Qwen2.5-0.5B-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
+		Args:        "--max-model-len 4096",
+		threads:     "4", kvCacheGiB: "2", ephemeralStorage: "1.5G",
 	},
 	{
 		// Thinking is off by default (the user's choice); a request turns
 		// it on with chat_template_kwargs {"enable_thinking": true}.
-		CatalogModel: types.CatalogModel{Name: "qwen3-1-7b", DisplayName: "Qwen3 1.7B (CPU, tool calling)", URI: "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
-			CPU: "4", MemoryRequest: "12Gi", Memory: "14Gi", Type: modelTypeChat, ToolCalling: true, UseCase: "Chat, Tool calling, Reasoning", DownloadSize: "4.1 GB",
-			Description: "A chat model that can call tools; its reasoning (thinking) is off unless a request turns it on. From Hugging Face (Qwen/Qwen3-1.7B), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
-			Args:        `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'`},
-		threads: "4", kvCacheGiB: "2", ephemeralStorage: "6.2G",
+		Name: "qwen3-1-7b", DisplayName: "Qwen3 1.7B (CPU, tool calling)", URI: "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+		CPU: "4", MemoryRequest: "12Gi", Memory: "14Gi", Type: modelTypeChat, ToolCalling: true, UseCase: "Chat, Tool calling, Reasoning", DownloadSize: "4.1 GB",
+		Description: "A chat model that can call tools; its reasoning (thinking) is off unless a request turns it on. From Hugging Face (Qwen/Qwen3-1.7B), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
+		Args:        `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'`,
+		threads:     "4", kvCacheGiB: "2", ephemeralStorage: "6.2G",
 	},
 	{
 		// A RobertaModel, which vLLM serves as an embedding model with the
 		// pooling runner (vLLM 0.24 removed --task); 512 positions.
-		CatalogModel: types.CatalogModel{Name: "granite-embedding-125m-english", DisplayName: "Granite Embedding 125M English (CPU)", URI: "hf://ibm-granite/granite-embedding-125m-english:4ab61ffd423be45cd932b21a7c696063d82bf45f",
-			CPU: "2", MemoryRequest: "3Gi", Memory: "4Gi", Type: modelTypeEmbedding, EmbeddingDimension: 768, UseCase: "Embeddings, Semantic search", DownloadSize: "250 MB",
-			Description: "An English embedding model (768 dimensions) for semantic search. From Hugging Face (ibm-granite/granite-embedding-125m-english), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
-			Args:        "--runner pooling --max-model-len 512"},
-		threads: "2", kvCacheGiB: "1", ephemeralStorage: "375M",
+		Name: "granite-embedding-125m-english", DisplayName: "Granite Embedding 125M English (CPU)", URI: "hf://ibm-granite/granite-embedding-125m-english:4ab61ffd423be45cd932b21a7c696063d82bf45f",
+		CPU: "2", MemoryRequest: "3Gi", Memory: "4Gi", Type: modelTypeEmbedding, EmbeddingDimension: 768, UseCase: "Embeddings, Semantic search", DownloadSize: "250 MB",
+		Description: "An English embedding model (768 dimensions) for semantic search. From Hugging Face (ibm-granite/granite-embedding-125m-english), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
+		Args:        "--runner pooling --max-model-len 512",
+		threads:     "2", kvCacheGiB: "1", ephemeralStorage: "375M",
 	},
 }
 
@@ -341,7 +341,7 @@ func olderThan(meta objectMeta, d time.Duration) bool {
 // ready. rec is the tool's record of its models (nil: it could not be
 // read, so no model counts as the tool's).
 func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) types.ModelState {
-	s := types.ModelState{ResourceState: types.ResourceState{Deployed: true, Namespace: m.Metadata.Namespace, Name: m.Metadata.Name}}
+	s := types.ModelState{Deployed: true, Namespace: m.Metadata.Namespace, Name: m.Metadata.Name}
 	s.ManagedByTool = rec.owns(m.Metadata)
 	if s.ManagedByTool && rec[modelRecordKey(m.Metadata.Namespace, m.Metadata.Name)].TokenSecretUID != "" {
 		s.TokenSecret, s.TokenServiceAccount = tokenSecretName(m.Metadata.Name), tokenSAName(m.Metadata.Name)
@@ -459,11 +459,11 @@ var kserveComponent = featureComponent{feature: "Model serving (KServe)", keys: 
 // llmDependencies reads the DataScienceCluster condition that says whether
 // LLMInferenceService's dependencies are met: "True", "False" or "" (not
 // reported: unknown), with its message.
-func llmDependencies(dsc map[string]interface{}) (string, string) {
-	status, _ := dsc["status"].(map[string]interface{})
-	conds, _ := status["conditions"].([]interface{})
+func llmDependencies(dsc map[string]any) (string, string) {
+	status, _ := dsc["status"].(map[string]any)
+	conds, _ := status["conditions"].([]any)
 	for _, raw := range conds {
-		cond, _ := raw.(map[string]interface{})
+		cond, _ := raw.(map[string]any)
 		if t, _ := cond["type"].(string); t != llmDependenciesCondition {
 			continue
 		}
@@ -492,7 +492,7 @@ func modelsBlock(dsc dscRead) (*types.ComponentBlock, string) {
 		return nil, deps
 	}
 	if deps == "False" {
-		meta, _ := dsc.Object["metadata"].(map[string]interface{})
+		meta, _ := dsc.Object["metadata"].(map[string]any)
 		name, _ := meta["name"].(string)
 		return &types.ComponentBlock{Component: "kserve",
 			Reason: fmt.Sprintf("KServe cannot serve LLMInferenceServices yet: DataScienceCluster %s reports %s=False (%s). A cluster-admin installs what it names; the Components page shows the details.", name, llmDependenciesCondition, firstNonEmpty(msg, "no message"))}, deps
@@ -599,8 +599,8 @@ func discoverCPUPreset(c *Client, ns string) cpuPreset {
 // exp is how the model is reached (models_exposure.go): its spec.router,
 // and token authentication turned off for an internal-only model while
 // Connectivity Link is missing.
-func modelManifest(project string, entry catalogModel, preset string, img imagePlan, hw hardwareProfile, published, ephemeral bool, exp exposurePlan) map[string]interface{} {
-	annotations := map[string]interface{}{
+func modelManifest(project string, entry catalogModel, preset string, img imagePlan, hw hardwareProfile, published, ephemeral bool, exp exposurePlan) map[string]any {
+	annotations := map[string]any{
 		// The dashboard's llmd deploy wizard writes these three
 		// (odh-dashboard rhoai-3.6 packages/llmd-serving deploy.ts
 		// assembleLLMInferenceService: model-type "generative" on every
@@ -615,23 +615,23 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 		// wizard's applyModelAvailabilityData sets them).
 		"opendatahub.io/genai-use-case": entry.UseCase,
 	}
-	main := map[string]interface{}{
+	main := map[string]any{
 		"name": "main",
-		"env": []interface{}{
-			map[string]interface{}{"name": "OMP_NUM_THREADS", "value": entry.threads},
-			map[string]interface{}{"name": "VLLM_CPU_KVCACHE_SPACE", "value": entry.kvCacheGiB},
-			map[string]interface{}{"name": "VLLM_ADDITIONAL_ARGS", "value": entry.Args},
+		"env": []any{
+			map[string]any{"name": "OMP_NUM_THREADS", "value": entry.threads},
+			map[string]any{"name": "VLLM_CPU_KVCACHE_SPACE", "value": entry.kvCacheGiB},
+			map[string]any{"name": "VLLM_ADDITIONAL_ARGS", "value": entry.Args},
 		},
-		"resources": map[string]interface{}{
-			"requests": map[string]interface{}{"cpu": entry.CPU, "memory": entry.MemoryRequest},
-			"limits":   map[string]interface{}{"cpu": entry.CPU, "memory": entry.Memory},
+		"resources": map[string]any{
+			"requests": map[string]any{"cpu": entry.CPU, "memory": entry.MemoryRequest},
+			"limits":   map[string]any{"cpu": entry.CPU, "memory": entry.Memory},
 		},
 	}
 	if ephemeral && entry.ephemeralStorage != "" {
 		// The download's emptyDir is on the node's disk (models_storage.go):
 		// a request, no limit, so the scheduler counts it and nothing is
 		// evicted for it.
-		main["resources"].(map[string]interface{})["requests"].(map[string]interface{})["ephemeral-storage"] = entry.ephemeralStorage
+		main["resources"].(map[string]any)["requests"].(map[string]any)["ephemeral-storage"] = entry.ephemeralStorage
 	}
 	if hw.Name != "" {
 		// As the dashboard's deploy wizard records the profile
@@ -647,7 +647,7 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 			annotations[modelImageVersionAnnotation] = img.Version
 		}
 	}
-	labels := map[string]interface{}{
+	labels := map[string]any{
 		managedByLabelKey:          managedByLabelValue,
 		"opendatahub.io/dashboard": "true",
 		genAIAssetLabel:            "true",
@@ -659,31 +659,31 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 	if exp.authOff {
 		annotations[enableAuthAnnot] = "false"
 	}
-	spec := map[string]interface{}{
-		"baseRefs": []interface{}{map[string]interface{}{"name": preset}},
+	spec := map[string]any{
+		"baseRefs": []any{map[string]any{"name": preset}},
 		// spec.model.name is the model's resource name: the dashboard's
 		// playground proxy finds a model by it (deploy.ts), so an
 		// HF-style name would make the playground answer 404. It is also
 		// the name vLLM serves: a request whose "model" is anything else
 		// (the display name, the Hugging Face id) answers 404 NotFoundError.
-		"model":    map[string]interface{}{"uri": entry.URI, "name": entry.Name},
+		"model":    map[string]any{"uri": entry.URI, "name": entry.Name},
 		"replicas": 1,
-		"template": map[string]interface{}{
-			"containers": []interface{}{main},
+		"template": map[string]any{
+			"containers": []any{main},
 			// Only env: KServe generates the rest of its storage-initializer.
-			"initContainers": []interface{}{map[string]interface{}{
+			"initContainers": []any{map[string]any{
 				"name": "storage-initializer",
-				"env":  []interface{}{map[string]interface{}{"name": "STORAGE_IGNORE_PATTERNS", "value": storageIgnorePatterns}},
+				"env":  []any{map[string]any{"name": "STORAGE_IGNORE_PATTERNS", "value": storageIgnorePatterns}},
 			}},
 		},
 	}
 	if router := exp.router(); router != nil {
 		spec["router"] = router
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"apiVersion": llmisvcAPIVersion,
 		"kind":       "LLMInferenceService",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":        entry.Name,
 			"namespace":   project,
 			"labels":      labels,
@@ -1033,7 +1033,7 @@ type modelPlan struct {
 	preset   string
 	image    imagePlan
 	hardware hardwareProfile
-	obj      map[string]interface{}
+	obj      map[string]any
 	current  objectMeta
 	found    bool
 	// rec is the tool's record of its models, as read by the plan.
@@ -1499,10 +1499,7 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 
 // clockText is a duration as m:ss.
 func clockText(d time.Duration) string {
-	s := int(d.Round(time.Second) / time.Second)
-	if s < 0 {
-		s = 0
-	}
+	s := max(int(d.Round(time.Second)/time.Second), 0)
 	return fmt.Sprintf("%d:%02d", s/60, s%60)
 }
 

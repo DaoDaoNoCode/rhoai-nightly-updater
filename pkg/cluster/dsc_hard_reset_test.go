@@ -18,7 +18,7 @@ func runHardReset(t *testing.T, c *Client, mutate func(*types.DSCPlanRequest)) (
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := types.DSCPlanRequest{Name: plan.Name, UID: plan.UID, Token: plan.Token, Confirm: plan.Name, KeepEnabled: boolPtr(false)}
+	req := types.DSCPlanRequest{Name: plan.Name, UID: plan.UID, Token: plan.Token, Confirm: plan.Name, KeepEnabled: new(false)}
 	if mutate != nil {
 		mutate(&req)
 	}
@@ -55,9 +55,9 @@ func operatorRemovesDSCAfter(f *resourceFake, n int) {
 			delete(f.objects, k)
 		}
 	}
-	f.onGet = func(k fakeKey, obj map[string]interface{}) {
+	f.onGet = func(k fakeKey, obj map[string]any) {
 		if k.plural == "datascienceclusters" && ensureMap(obj, "metadata")["uid"] != "ba54ddbf-ad4a-4257-9ab4-977eb541dc1c" {
-			obj["status"] = map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "True"}}}
+			obj["status"] = map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True"}}}
 		}
 	}
 }
@@ -73,7 +73,7 @@ func stepNames(steps []UpdateStepEvent) string {
 }
 
 func TestHardResetDeletesWaitsAndCreatesTheReleaseDefault(t *testing.T) {
-	f, c := managerWorld(t, func(dsc map[string]interface{}) {
+	f, c := managerWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.workbenches.workbenchNamespace", "my-notebooks")
 		setPath(t, dsc, "spec.components.aiHub.instancesNamespace", "my-registries")
 	})
@@ -133,7 +133,7 @@ func TestHardResetTimesOutWithoutCreating(t *testing.T) {
 		t.Fatalf("created after a timeout: %+v", posts)
 	}
 	// Only the pre-delete validation, a dry run; never a finalizer.
-	if _, real := patchesTo(f, dscV3Path); len(real) != 0 {
+	if _, real := patchesTo(f); len(real) != 0 {
 		t.Fatalf("patched the DSC (finalizer?): %+v", real)
 	}
 	if !strings.Contains(res.Message, "Finish the hard reset") || !strings.Contains(res.Message, "kind: DataScienceCluster") {
@@ -160,51 +160,51 @@ func TestHardResetExplainsHowToRecreateWhenCreateFails(t *testing.T) {
 func TestHardResetRefusals(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		edit   func(t *testing.T, f *resourceFake, dsc map[string]interface{})
+		edit   func(t *testing.T, f *resourceFake, dsc map[string]any)
 		mutate func(*types.DSCPlanRequest)
 		code   string
 	}{
-		{"managed RHOAI", func(t *testing.T, _ *resourceFake, dsc map[string]interface{}) {
+		{"managed RHOAI", func(t *testing.T, _ *resourceFake, dsc map[string]any) {
 			if dsc == nil {
 				return
 			}
 			setPath(t, dsc, "status.release.name", "OpenShift AI Cloud Service")
 		}, nil, "managed_platform"},
-		{"platform unknown", func(t *testing.T, _ *resourceFake, dsc map[string]interface{}) {
+		{"platform unknown", func(t *testing.T, _ *resourceFake, dsc map[string]any) {
 			if dsc == nil {
 				return
 			}
 			setPath(t, dsc, "status.release", nil)
 		}, nil, "managed_platform"},
-		{"already deleting", func(t *testing.T, _ *resourceFake, dsc map[string]interface{}) {
+		{"already deleting", func(t *testing.T, _ *resourceFake, dsc map[string]any) {
 			if dsc == nil {
 				return
 			}
 			setPath(t, dsc, "metadata.deletionTimestamp", "2026-11-18T00:00:00Z")
 		}, nil, "conflict"},
-		{"argo cd", func(t *testing.T, _ *resourceFake, dsc map[string]interface{}) {
+		{"argo cd", func(t *testing.T, _ *resourceFake, dsc map[string]any) {
 			if dsc == nil {
 				return
 			}
-			setPath(t, dsc, "metadata.annotations", map[string]interface{}{argoTrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:x/default-dsc"})
+			setPath(t, dsc, "metadata.annotations", map[string]any{argoTrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:x/default-dsc"})
 		}, nil, ErrorCodeGitOpsManaged},
-		{"operator down", func(t *testing.T, f *resourceFake, dsc map[string]interface{}) {
+		{"operator down", func(t *testing.T, f *resourceFake, dsc map[string]any) {
 			if f == nil {
 				return
 			}
-			f.put(rhodsOperator, map[string]interface{}{"status": map[string]interface{}{"readyReplicas": 0}})
+			f.put(rhodsOperator, map[string]any{"status": map[string]any{"readyReplicas": 0}})
 		}, nil, "prerequisites"},
-		{"two DSCs", func(t *testing.T, f *resourceFake, dsc map[string]interface{}) {
+		{"two DSCs", func(t *testing.T, f *resourceFake, dsc map[string]any) {
 			if f == nil {
 				return
 			}
-			f.put(dscV3List+"/other", map[string]interface{}{"apiVersion": "datasciencecluster.opendatahub.io/v3", "kind": "DataScienceCluster"})
+			f.put(dscV3List+"/other", map[string]any{"apiVersion": "datasciencecluster.opendatahub.io/v3", "kind": "DataScienceCluster"})
 		}, nil, "prerequisites"},
-		{"MLflow in use", func(t *testing.T, f *resourceFake, dsc map[string]interface{}) {
+		{"MLflow in use", func(t *testing.T, f *resourceFake, dsc map[string]any) {
 			if f == nil {
 				return
 			}
-			f.put(clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), map[string]interface{}{})
+			f.put(clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), map[string]any{})
 		}, nil, "prerequisites"},
 		{"name not typed", nil, func(r *types.DSCPlanRequest) { r.Confirm = "default" }, "validation"},
 		{"stale plan", nil, func(r *types.DSCPlanRequest) { r.Token = strings.Repeat("a", 24) }, "conflict"},
@@ -212,7 +212,7 @@ func TestHardResetRefusals(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// An edit gets the DSC before it is stored, then the fake.
-			f, c := managerWorld(t, func(dsc map[string]interface{}) {
+			f, c := managerWorld(t, func(dsc map[string]any) {
 				if tc.edit != nil {
 					tc.edit(t, nil, dsc)
 				}
@@ -236,7 +236,7 @@ func TestHardResetRefusals(t *testing.T) {
 // newDefaultObject keeps the release default's own values where the old
 // DSC has no protected value, and is valid JSON for the create.
 func TestNewDefaultObjectIsTheReleaseDefault(t *testing.T) {
-	_, c := managerWorld(t, func(dsc map[string]interface{}) {
+	_, c := managerWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.workbenches.workbenchNamespace", nil)
 	})
 	v, err := readDSCView(c)

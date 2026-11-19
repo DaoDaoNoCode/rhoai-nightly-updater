@@ -277,7 +277,7 @@ func (a admissionConfig) ref() string { return a.Kind + " " + a.Metadata.Name }
 // RHOAI CSV, applied by the platform for a module, owned by an RHOAI object,
 // or carrying an RHOAI name without any OLM owner (older installs).
 func (a admissionConfig) isRHOAI() bool {
-	labels := map[string]interface{}{}
+	labels := map[string]any{}
 	for k, v := range a.Metadata.Labels {
 		labels[k] = v
 	}
@@ -335,7 +335,7 @@ func (a admissionConfig) blocking() bool {
 // for the RHOAI operator CSV, or carries an RHOAI name without any OLM owner
 // label (a leftover from older installs). It only selects candidates; the
 // staleness rules above decide.
-func isRHOAIWebhook(name string, labels map[string]interface{}) bool {
+func isRHOAIWebhook(name string, labels map[string]any) bool {
 	if rhoaiOLMOwner(labels) != "" {
 		return true
 	}
@@ -347,7 +347,7 @@ func isRHOAIWebhook(name string, labels map[string]interface{}) bool {
 }
 
 // rhoaiOLMOwner returns the RHOAI CSV named in the olm.owner label, or "".
-func rhoaiOLMOwner(labels map[string]interface{}) string {
+func rhoaiOLMOwner(labels map[string]any) string {
 	owner, _ := labels["olm.owner"].(string)
 	if owner != SubName && !strings.HasPrefix(owner, SubName+".") {
 		return ""
@@ -512,7 +512,7 @@ func (e *webhookEnv) evaluate(cfg admissionConfig) *webhookVerdict {
 		v.Reason = "it was created less than " + formatDuration(staleServiceGrace) + " ago, so its owner may still be setting it up"
 	case labels["olm.owner"] != "":
 		owner := labels["olm.owner"]
-		if rhoaiOLMOwner(map[string]interface{}{"olm.owner": owner, "olm.owner.namespace": labels["olm.owner.namespace"]}) == "" {
+		if rhoaiOLMOwner(map[string]any{"olm.owner": owner, "olm.owner.namespace": labels["olm.owner.namespace"]}) == "" {
 			v.Reason = fmt.Sprintf("it belongs to another operator's CSV (%s)", owner)
 			break
 		}
@@ -665,6 +665,15 @@ type conversionCRD struct {
 		Name string `json:"name"`
 	} `json:"metadata"`
 	Spec struct {
+		Group string `json:"group"`
+		Names struct {
+			Plural string `json:"plural"`
+		} `json:"names"`
+		Versions []struct {
+			Name    string `json:"name"`
+			Served  bool   `json:"served"`
+			Storage bool   `json:"storage"`
+		} `json:"versions"`
 		Scope      string `json:"scope"`
 		Conversion *struct {
 			Strategy string `json:"strategy"`
@@ -697,11 +706,29 @@ func (crd conversionCRD) conversionService() string {
 	return svc.Namespace + "/" + svc.Name
 }
 
+// listPath is the path listing the CRD's objects in every namespace, at
+// its storage version when served (an object stored at the version read
+// needs no conversion), else at the first served version; "" when the
+// CRD serves none.
+func (crd conversionCRD) listPath() string {
+	version := ""
+	for _, v := range crd.Spec.Versions {
+		if v.Served && (version == "" || v.Storage) {
+			version = v.Name
+		}
+	}
+	if version == "" || crd.Spec.Group == "" || crd.Spec.Names.Plural == "" {
+		return ""
+	}
+	return "/apis/" + crd.Spec.Group + "/" + version + "/" + crd.Spec.Names.Plural
+}
+
 type deadConversion struct {
 	CRD            string
 	Service        string // ns/name
 	Health         serviceHealth
 	StoredVersions []string
+	ListPath       string // conversionCRD.listPath
 }
 
 // deadConversions returns the CRDs whose conversion Service is down. A
@@ -720,7 +747,7 @@ func deadConversions(crds []conversionCRD, health *serviceHealthCache) (dead []d
 			continue
 		}
 		h := health.lookup(ref)
-		d := deadConversion{CRD: crd.Metadata.Name, Service: ref, Health: h, StoredVersions: crd.Status.StoredVersions}
+		d := deadConversion{CRD: crd.Metadata.Name, Service: ref, Health: h, StoredVersions: crd.Status.StoredVersions, ListPath: crd.listPath()}
 		switch {
 		case h.down():
 			dead = append(dead, d)

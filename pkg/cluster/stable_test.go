@@ -12,16 +12,16 @@ import (
 )
 
 func stableCatalogMock(source, channel, version string) mockResponse {
-	return mockResponse{body: stableManifestJSON(source, channel, []map[string]interface{}{
+	return mockResponse{body: stableManifestJSON(source, channel, []map[string]any{
 		{"name": channel, "currentCSV": "rhods-operator.v" + version, "currentCSVDesc": map[string]string{"version": version}},
 	})}
 }
 
-func stableManifestJSON(source, defaultChannel string, channels []map[string]interface{}) string {
-	body, _ := json.Marshal(map[string]interface{}{
-		"items": []interface{}{map[string]interface{}{
+func stableManifestJSON(source, defaultChannel string, channels []map[string]any) string {
+	body, _ := json.Marshal(map[string]any{
+		"items": []any{map[string]any{
 			"metadata": map[string]string{"name": SubName},
-			"status": map[string]interface{}{
+			"status": map[string]any{
 				"packageName": SubName, "catalogSource": source, "catalogSourceNamespace": CatalogNS,
 				"defaultChannel": defaultChannel, "channels": channels,
 			},
@@ -31,26 +31,26 @@ func stableManifestJSON(source, defaultChannel string, channels []map[string]int
 }
 
 func TestStableTargetDiscovery(t *testing.T) {
-	channel := func(name, version string) map[string]interface{} {
-		return map[string]interface{}{"name": name, "currentCSV": "rhods-operator.v" + version, "currentCSVDesc": map[string]string{"version": version}}
+	channel := func(name, version string) map[string]any {
+		return map[string]any{"name": name, "currentCSV": "rhods-operator.v" + version, "currentCSVDesc": map[string]string{"version": version}}
 	}
 	tests := []struct {
 		name, defaultChannel, override, wantChannel, wantVersion string
-		channels                                                 []map[string]interface{}
+		channels                                                 []map[string]any
 		wantError                                                bool
 	}{
-		{"current release", "stable-3.4", "", "stable-3.5", "3.5.0", []map[string]interface{}{channel("stable-3.4", "3.4.0"), channel("stable-3.5", "3.5.0")}, false},
-		{"numeric versions", "stable-3.9", "", "stable-3.10", "3.10.2", []map[string]interface{}{channel("stable-3.9", "3.9.9"), channel("stable-3.10", "3.10.2")}, false},
-		{"future plain EA excluded", "beta", "", "stable-3.7", "3.7.0", []map[string]interface{}{channel("beta", "3.8.0-ea"), channel("stable-3.7", "3.7.0"), channel("stable-9.1", "9.1.0-ea.1")}, false},
-		{"preview excluded", "alpha", "", "stable", "3.5.0", []map[string]interface{}{channel("alpha", "10.0.0"), channel("fast", "3.6.0-rc.1"), channel("stable", "3.5.0")}, false},
-		{"newer production fast", "stable", "", "fast", "3.7.0", []map[string]interface{}{channel("stable", "3.5.0"), channel("fast", "3.7.0")}, false},
-		{"prefer catalog default on tie", "fast", "", "fast", "3.5.0", []map[string]interface{}{channel("stable-3.5", "3.5.0"), channel("fast", "3.5.0")}, false},
-		{"prefer stable on tie", "alpha", "", "stable-3.5", "3.5.0", []map[string]interface{}{channel("fast", "3.5.0"), channel("stable-3.5", "3.5.0")}, false},
-		{"configured older GA", "stable-3.5", "stable-3.3", "stable-3.3", "3.3.2", []map[string]interface{}{channel("stable-3.5", "3.5.0"), channel("stable-3.3", "3.3.2")}, false},
-		{"configured missing channel", "stable", "stable-missing", "", "", []map[string]interface{}{channel("stable", "3.5.0")}, true},
-		{"configured EA rejected", "beta", "beta", "", "", []map[string]interface{}{channel("beta", "3.7.0-ea")}, true},
-		{"missing description uses CSV", "stable", "", "stable", "4.12.0+build.42", []map[string]interface{}{{"name": "stable", "currentCSV": "rhods-operator.v4.12.0+build.42"}}, false},
-		{"no GA", "fast", "", "", "", []map[string]interface{}{channel("fast", "3.7.0-ea")}, true},
+		{"current release", "stable-3.4", "", "stable-3.5", "3.5.0", []map[string]any{channel("stable-3.4", "3.4.0"), channel("stable-3.5", "3.5.0")}, false},
+		{"numeric versions", "stable-3.9", "", "stable-3.10", "3.10.2", []map[string]any{channel("stable-3.9", "3.9.9"), channel("stable-3.10", "3.10.2")}, false},
+		{"future plain EA excluded", "beta", "", "stable-3.7", "3.7.0", []map[string]any{channel("beta", "3.8.0-ea"), channel("stable-3.7", "3.7.0"), channel("stable-9.1", "9.1.0-ea.1")}, false},
+		{"preview excluded", "alpha", "", "stable", "3.5.0", []map[string]any{channel("alpha", "10.0.0"), channel("fast", "3.6.0-rc.1"), channel("stable", "3.5.0")}, false},
+		{"newer production fast", "stable", "", "fast", "3.7.0", []map[string]any{channel("stable", "3.5.0"), channel("fast", "3.7.0")}, false},
+		{"prefer catalog default on tie", "fast", "", "fast", "3.5.0", []map[string]any{channel("stable-3.5", "3.5.0"), channel("fast", "3.5.0")}, false},
+		{"prefer stable on tie", "alpha", "", "stable-3.5", "3.5.0", []map[string]any{channel("fast", "3.5.0"), channel("stable-3.5", "3.5.0")}, false},
+		{"configured older GA", "stable-3.5", "stable-3.3", "stable-3.3", "3.3.2", []map[string]any{channel("stable-3.5", "3.5.0"), channel("stable-3.3", "3.3.2")}, false},
+		{"configured missing channel", "stable", "stable-missing", "", "", []map[string]any{channel("stable", "3.5.0")}, true},
+		{"configured EA rejected", "beta", "beta", "", "", []map[string]any{channel("beta", "3.7.0-ea")}, true},
+		{"missing description uses CSV", "stable", "", "stable", "4.12.0+build.42", []map[string]any{{"name": "stable", "currentCSV": "rhods-operator.v4.12.0+build.42"}}, false},
+		{"no GA", "fast", "", "", "", []map[string]any{channel("fast", "3.7.0-ea")}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -83,10 +83,10 @@ func TestStableDiscoveryScopesCatalogAndRefreshes(t *testing.T) {
 			t.Errorf("package name filter missing: %s", r.URL.String())
 		}
 		// Include a newer nightly package despite the selector, to verify source identity.
-		var stable, nightly map[string]interface{}
+		var stable, nightly map[string]any
 		json.Unmarshal([]byte(stableCatalogMock("mirrored-operators", "stable", version).body), &stable)
 		json.Unmarshal([]byte(stableCatalogMock(CatalogName, "stable", "99.0.0").body), &nightly)
-		stable["items"] = append(nightly["items"].([]interface{}), stable["items"].([]interface{})...)
+		stable["items"] = append(nightly["items"].([]any), stable["items"].([]any)...)
 		json.NewEncoder(w).Encode(stable)
 	}))
 	defer server.Close()

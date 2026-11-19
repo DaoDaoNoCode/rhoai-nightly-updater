@@ -65,12 +65,12 @@ func TestWriteDocsFixtures(t *testing.T) {
 
 	// JobSet installed, its JobSetOperator/cluster operand missing.
 	w := newDSCWorld(t, liveMissingPrereqs()[:2])
-	w.installedCSV("jobset-operator.v1.0.1", "openshift-jobset-operator", "Job Set Operator", "Succeeded", time.Hour, "job-set")
+	w.installedCSV(time.Hour)
 	write("operand-missing", dsc(w))
 
 	// Everything is in place, but the trainer module operator backs off.
 	w = newDSCWorld(t, liveMissingPrereqs()[:2])
-	w.installedCSV("jobset-operator.v1.0.1", "openshift-jobset-operator", "Job Set Operator", "Succeeded", time.Hour, "job-set")
+	w.installedCSV(time.Hour)
 	w.f.json("GET", jobSetOperandPath, 200, `{"metadata":{"name":"cluster"}}`)
 	w.trainerCR([]dcond{{"type": "Ready", "status": "False", "reason": "Error", "message": msgTrainerJobSet, "lastTransitionTime": ago(time.Hour)}}, 3, 3)
 	write("module-backoff", dsc(w))

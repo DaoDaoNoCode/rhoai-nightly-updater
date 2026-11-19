@@ -91,10 +91,10 @@ var modelCallHTTPClient = &http.Client{
 func modelCallRequest(base, served, typ string) (string, []byte) {
 	base = strings.TrimRight(base, "/")
 	if typ == modelTypeEmbedding {
-		body, _ := json.Marshal(map[string]interface{}{"model": served, "input": []string{"hi"}})
+		body, _ := json.Marshal(map[string]any{"model": served, "input": []string{"hi"}})
 		return base + "/v1/embeddings", body
 	}
-	body, _ := json.Marshal(map[string]interface{}{"model": served, "messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}}, "max_tokens": 1})
+	body, _ := json.Marshal(map[string]any{"model": served, "messages": []any{map[string]any{"role": "user", "content": "hi"}}, "max_tokens": 1})
 	return base + "/v1/chat/completions", body
 }
 

@@ -302,9 +302,42 @@ only accepts a tag whose version is the top dated section. See
   secret is missing or the image mirror (IDMS) is not configured when it
   could not read them (403, a server error, the network): it says the read
   failed and why.
+- A change whose sign-in ended while it ran (the API server rejected your
+  own token mid-change) said "The cluster rejected the updater's
+  credentials" and to check the ServiceAccount. It now says "Your sign-in
+  ended during the change": part of it may have run; sign in again, check
+  the result, then run it again if it is not complete (`sign_in_ended`).
+- Diagnostics no longer reports a module operator's own Deployment as
+  "last applied for version ..." (live: the MCP lifecycle operator's
+  manager, stamped `platform.opendatahub.io/type=OpenDataHub` and
+  `version=0.0.1` by its module framework, on OpenShift AI Self-Managed
+  3.6.0). A version is compared only on Deployments whose stamped
+  platform type is the installed release's name (the DataScienceCluster's
+  `status.release`), as the RHOAI operator stamps it.
+- Diagnostics' dead CRD conversion webhook problem named the component
+  once per CRD ("here: sparkoperator, sparkoperator, sparkoperator"), and
+  its advice (set the component to Managed, delete the objects, set it back
+  to Removed) led back to the same state: removing a component leaves its
+  CRDs, which get no owner, with the dead webhook (live: Spark's 3 CRDs, no
+  objects). Each such CRD is now checked for objects (one list of at most
+  one object; a list this app may not make says how to check with `oc`).
+  CRDs of a removed component that hold none can be deleted, with the exact
+  `oc delete crd ...` command (the operator applies them again when the
+  component is set to Managed); for CRDs with objects the advice brings the
+  Service back, then deletes the objects and the CRDs before the component
+  is set to Removed.
 
 ### Changed
 
+- API routes named after what they do: `/api/resources/minio/*` (the
+  SeaweedFS S3 storage) is `/api/resources/s3/*`, and `POST
+  /api/rollback/stream` (Install a different build) is `POST
+  /api/reinstall/stream`. The UI ships in the same image; a script that
+  called the old paths changes them. The S3 storage's activity entries are
+  `setup-s3` and `teardown-s3`; entries recorded as `setup-minio` and
+  `teardown-minio` read as the new names. The note that `MINIO_IMAGE`,
+  `MINIO_ROOT_USER` or `MINIO_ROOT_PASSWORD` is set but unused (retired in
+  3.0.0) is gone.
 - Diagnostics' "Objects the operator cannot update" no longer lists an
   object whose only failure is a changed `spec.selector` of a workload: it
   is under "Left over from an earlier release", with a Fix. An object with

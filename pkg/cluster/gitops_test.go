@@ -26,28 +26,28 @@ const (
 	gitOpsBuilt         = "2026-10-08T04:00:00Z"
 )
 
-func trackingID(kind, ns, name string) map[string]interface{} {
-	return map[string]interface{}{argoTrackingAnnotation: fmt.Sprintf("%s:operators.coreos.com/%s:%s/%s", testArgoApp, kind, ns, name)}
+func trackingID(kind, ns, name string) map[string]any {
+	return map[string]any{argoTrackingAnnotation: fmt.Sprintf("%s:operators.coreos.com/%s:%s/%s", testArgoApp, kind, ns, name)}
 }
 
 // gitOpsFake is a cluster where Argo CD manages the nightly catalog and the
 // Subscription, as the odh-gitops chart renders them.
 func gitOpsFake(t *testing.T) *fakeOLM {
-	f := newFakeOLM(t).installed(gitOpsCSV, map[string]interface{}{
+	f := newFakeOLM(t).installed(gitOpsCSV, map[string]any{
 		"channel": gitOpsChannel,
-		"config":  map[string]interface{}{"env": []interface{}{map[string]interface{}{"name": "DISABLE_DSC_CONFIG", "value": "true"}}},
+		"config":  map[string]any{"env": []any{map[string]any{"name": "DISABLE_DSC_CONFIG", "value": "true"}}},
 	})
 	subAnn := trackingID("Subscription", SubNS, SubName)
 	subAnn[lastAppliedAnnotation] = `{"kind":"Subscription","spec":{"channel":"beta"}}`
-	f.sub["metadata"].(map[string]interface{})["annotations"] = subAnn
-	f.sub["metadata"].(map[string]interface{})["labels"] = map[string]interface{}{"helm.sh/chart": "rhai-on-openshift-chart-3.4.0", "app.kubernetes.io/managed-by": "Helm"}
-	f.catalog["metadata"] = map[string]interface{}{"annotations": trackingID("CatalogSource", CatalogNS, CatalogName)}
-	f.catalog["spec"].(map[string]interface{})["displayName"] = "Red Hat OpenShift AI (nightly)"
+	f.sub["metadata"].(map[string]any)["annotations"] = subAnn
+	f.sub["metadata"].(map[string]any)["labels"] = map[string]any{"helm.sh/chart": "rhai-on-openshift-chart-3.4.0", "app.kubernetes.io/managed-by": "Helm"}
+	f.catalog["metadata"] = map[string]any{"annotations": trackingID("CatalogSource", CatalogNS, CatalogName)}
+	f.catalog["spec"].(map[string]any)["displayName"] = "Red Hat OpenShift AI (nightly)"
 	f.gitOpsPods = true
 	f.channels = `[{"name":"beta","currentCSV":"` + gitOpsCSV + `","currentCSVDesc":{"annotations":{"containerImage":"` + gitOpsOperatorImage + `","createdAt":"` + gitOpsBuilt + `"}}},` +
 		`{"name":"stable-3.x","currentCSV":"rhods-operator.3.6.0"}]`
 	// What OLM installs from this catalog carries the same build identity.
-	f.csvAnnotations = map[string]interface{}{"containerImage": gitOpsOperatorImage, "createdAt": gitOpsBuilt}
+	f.csvAnnotations = map[string]any{"containerImage": gitOpsOperatorImage, "createdAt": gitOpsBuilt}
 	f.onSubscribe = olmInstalls(gitOpsCSV)
 	return f
 }
@@ -94,19 +94,19 @@ func TestArgoApplication(t *testing.T) {
 // installation id, sync options), the last-applied annotation and the
 // labels; other annotations are not copied.
 func TestKeepArgoTracking(t *testing.T) {
-	prev := map[string]interface{}{"metadata": map[string]interface{}{
-		"annotations": map[string]interface{}{
+	prev := map[string]any{"metadata": map[string]any{
+		"annotations": map[string]any{
 			argoTrackingAnnotation:                "app:operators.coreos.com/Subscription:ns/name",
 			"argocd.argoproj.io/installation-id":  "inst-1",
 			"argocd.argoproj.io/sync-options":     "Prune=false",
 			lastAppliedAnnotation:                 "{}",
 			"olm.operatorframework.io/managed-by": "x",
 		},
-		"labels": map[string]interface{}{"helm.sh/chart": "c"},
+		"labels": map[string]any{"helm.sh/chart": "c"},
 	}}
-	obj := map[string]interface{}{"metadata": map[string]interface{}{"name": "name"}}
+	obj := map[string]any{"metadata": map[string]any{"name": "name"}}
 	keepArgoTracking(prev, obj)
-	ann := obj["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
+	ann := obj["metadata"].(map[string]any)["annotations"].(map[string]any)
 	for _, k := range []string{argoTrackingAnnotation, "argocd.argoproj.io/installation-id", "argocd.argoproj.io/sync-options", lastAppliedAnnotation} {
 		if ann[k] == nil {
 			t.Errorf("annotation %s not kept: %v", k, ann)
@@ -115,17 +115,17 @@ func TestKeepArgoTracking(t *testing.T) {
 	if ann["olm.operatorframework.io/managed-by"] != "x" {
 		t.Errorf("an annotation Git may set was not copied: %v", ann)
 	}
-	kept := map[string]interface{}{"metadata": map[string]interface{}{"annotations": map[string]interface{}{lastAppliedAnnotation: "mine"}}}
+	kept := map[string]any{"metadata": map[string]any{"annotations": map[string]any{lastAppliedAnnotation: "mine"}}}
 	keepArgoTracking(prev, kept)
-	if kept["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})[lastAppliedAnnotation] != "mine" {
+	if kept["metadata"].(map[string]any)["annotations"].(map[string]any)[lastAppliedAnnotation] != "mine" {
 		t.Errorf("an annotation of the new object was overwritten: %v", kept)
 	}
-	if labels := obj["metadata"].(map[string]interface{})["labels"].(map[string]interface{}); labels["helm.sh/chart"] != "c" {
+	if labels := obj["metadata"].(map[string]any)["labels"].(map[string]any); labels["helm.sh/chart"] != "c" {
 		t.Errorf("labels = %v", labels)
 	}
-	untracked := map[string]interface{}{"metadata": map[string]interface{}{"name": "name"}}
-	keepArgoTracking(map[string]interface{}{"metadata": map[string]interface{}{"labels": map[string]interface{}{"a": "b"}}}, untracked)
-	if untracked["metadata"].(map[string]interface{})["labels"] != nil {
+	untracked := map[string]any{"metadata": map[string]any{"name": "name"}}
+	keepArgoTracking(map[string]any{"metadata": map[string]any{"labels": map[string]any{"a": "b"}}}, untracked)
+	if untracked["metadata"].(map[string]any)["labels"] != nil {
 		t.Error("labels copied from an untracked object")
 	}
 }
@@ -171,20 +171,20 @@ func TestUpdateUnderGitOps_InstallsWhatTheCatalogServes(t *testing.T) {
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	spec := f.catalog["spec"].(map[string]interface{})
+	spec := f.catalog["spec"].(map[string]any)
 	if spec["image"] != gitOpsImage || spec["displayName"] != "Red Hat OpenShift AI (nightly)" {
 		t.Fatalf("catalog spec = %v, want it unchanged", spec)
 	}
-	subSpec := f.sub["spec"].(map[string]interface{})
+	subSpec := f.sub["spec"].(map[string]any)
 	if subSpec["channel"] != gitOpsChannel || subSpec["config"] == nil {
 		t.Fatalf("Subscription spec = %v, want channel %s and the config Git sets", subSpec, gitOpsChannel)
 	}
-	if ann, _ := f.sub["metadata"].(map[string]interface{})["annotations"].(map[string]interface{}); ann[argoTrackingAnnotation] == nil || ann[lastAppliedAnnotation] == nil {
+	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argoTrackingAnnotation] == nil || ann[lastAppliedAnnotation] == nil {
 		t.Fatalf("the recreated Subscription lacks Argo CD's tracking or last-applied annotation: %v", ann)
 	}
 	// The chart's labels too: without them Argo CD syncs the Subscription
 	// again right after Update recreated it (seen on a live cluster).
-	if labels, _ := f.sub["metadata"].(map[string]interface{})["labels"].(map[string]interface{}); labels["helm.sh/chart"] != "rhai-on-openshift-chart-3.4.0" {
+	if labels, _ := f.sub["metadata"].(map[string]any)["labels"].(map[string]any); labels["helm.sh/chart"] != "rhai-on-openshift-chart-3.4.0" {
 		t.Fatalf("the recreated Subscription lost Git's labels: %v", labels)
 	}
 	if lastStatus(events(), "detect_channel") != "success" {
@@ -218,7 +218,7 @@ func TestUpdateUnderGitOps_ImageChangesMeanwhile(t *testing.T) {
 		if r.Method == http.MethodGet && r.URL.Path == csPath {
 			reads++
 			if reads == 3 {
-				f.catalog["spec"].(map[string]interface{})["image"] = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:newer"
+				f.catalog["spec"].(map[string]any)["image"] = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:newer"
 			}
 		}
 		return false
@@ -239,7 +239,7 @@ func TestUpdateUnderGitOps_ImageChangesMeanwhile(t *testing.T) {
 // tracking annotation; the catalog was never touched.
 func TestUpdateUnderGitOps_RestoreKeepsTracking(t *testing.T) {
 	f := gitOpsFake(t)
-	f.onSubscribe = func(*fakeOLM, map[string]interface{}) {} // OLM never acts
+	f.onSubscribe = func(*fakeOLM, map[string]any) {} // OLM never acts
 	emit, events := eventsRecorder()
 	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, emit)
 	if err != nil || result.Success || result.ErrorCode != "install_timeout" {
@@ -259,13 +259,13 @@ func TestUpdateUnderGitOps_RestoreKeepsTracking(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if image := f.catalog["spec"].(map[string]interface{})["image"]; image != gitOpsImage {
+	if image := f.catalog["spec"].(map[string]any)["image"]; image != gitOpsImage {
 		t.Fatalf("catalog image = %v, want Git's", image)
 	}
-	if ann, _ := f.sub["metadata"].(map[string]interface{})["annotations"].(map[string]interface{}); ann[argoTrackingAnnotation] == nil {
+	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argoTrackingAnnotation] == nil {
 		t.Fatal("the restored Subscription has no Argo CD tracking annotation")
 	}
-	if f.sub["spec"].(map[string]interface{})["channel"] != gitOpsChannel {
+	if f.sub["spec"].(map[string]any)["channel"] != gitOpsChannel {
 		t.Fatalf("restored Subscription = %v", f.sub["spec"])
 	}
 }
@@ -316,7 +316,7 @@ func TestCatalogServing(t *testing.T) {
 func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 	t.Run("source not the nightly catalog", func(t *testing.T) {
 		f := gitOpsFake(t)
-		f.sub["spec"].(map[string]interface{})["source"] = "redhat-operators"
+		f.sub["spec"].(map[string]any)["source"] = "redhat-operators"
 		result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 		if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "redhat-operators") {
 			t.Fatalf("result=%+v err=%v", result, err)
@@ -340,8 +340,8 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 		f := gitOpsFake(t)
 		// Argo CD created the Subscription; OLM is installing its InstallPlan.
 		delete(f.csvs, gitOpsCSV)
-		f.sub["status"] = map[string]interface{}{"state": "UpgradePending", "installPlanRef": map[string]interface{}{"name": "install-first"}}
-		f.installPlans["install-first"] = map[string]interface{}{"spec": map[string]interface{}{"clusterServiceVersionNames": []string{gitOpsCSV}}, "status": map[string]interface{}{"phase": "Installing"}}
+		f.sub["status"] = map[string]any{"state": "UpgradePending", "installPlanRef": map[string]any{"name": "install-first"}}
+		f.installPlans["install-first"] = map[string]any{"spec": map[string]any{"clusterServiceVersionNames": []string{gitOpsCSV}}, "status": map[string]any{"phase": "Installing"}}
 		result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 		if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "install-first is Installing") {
 			t.Fatalf("result=%+v err=%v", result, err)
@@ -350,14 +350,14 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 			t.Fatalf("writes = %v", w)
 		}
 		// Once that plan is done (Failed here), Update proceeds.
-		f.installPlans["install-first"]["status"].(map[string]interface{})["phase"] = "Failed"
+		f.installPlans["install-first"]["status"].(map[string]any)["phase"] = "Failed"
 		if result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {}); err != nil || !result.Success {
 			t.Fatalf("after the plan ended: result=%+v err=%v", result, err)
 		}
 	})
 	t.Run("startingCSV pinned to another build", func(t *testing.T) {
 		f := gitOpsFake(t)
-		f.sub["spec"].(map[string]interface{})["startingCSV"] = "rhods-operator.3.5.0"
+		f.sub["spec"].(map[string]any)["startingCSV"] = "rhods-operator.3.5.0"
 		result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 		if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "pins startingCSV rhods-operator.3.5.0") {
 			t.Fatalf("result=%+v err=%v", result, err)
@@ -388,14 +388,14 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 // Subscription keeps the pin, so it matches Git.
 func TestUpdateUnderGitOps_KeepsStartingCSV(t *testing.T) {
 	f := gitOpsFake(t)
-	f.sub["spec"].(map[string]interface{})["startingCSV"] = gitOpsCSV
+	f.sub["spec"].(map[string]any)["startingCSV"] = gitOpsCSV
 	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || !result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.sub["spec"].(map[string]interface{})["startingCSV"] != gitOpsCSV {
+	if f.sub["spec"].(map[string]any)["startingCSV"] != gitOpsCSV {
 		t.Fatalf("recreated Subscription spec = %v", f.sub["spec"])
 	}
 }
@@ -408,7 +408,7 @@ func TestUpdateUnderGitOps_ImageChangesBeforeTheDeletions(t *testing.T) {
 		// The catalog's PackageManifest is read last in each wait poll: the
 		// image changes right after the poll that accepted the catalog.
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/packagemanifests") && strings.Contains(r.URL.Query().Get("labelSelector"), CatalogName) {
-			f.catalog["spec"].(map[string]interface{})["image"] = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:newer"
+			f.catalog["spec"].(map[string]any)["image"] = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:newer"
 		}
 		return false
 	}
@@ -430,7 +430,7 @@ func TestUpdateUnderGitOps_SubscriptionChangesMeanwhile(t *testing.T) {
 	f := gitOpsFake(t)
 	f.intercept = func(f *fakeOLM, w http.ResponseWriter, r *http.Request) bool {
 		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/clusterserviceversions/") {
-			f.sub["spec"].(map[string]interface{})["channel"] = "fast"
+			f.sub["spec"].(map[string]any)["channel"] = "fast"
 		}
 		return false
 	}
@@ -446,10 +446,10 @@ func TestUpdateUnderGitOps_SubscriptionChangesMeanwhile(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.sub["spec"].(map[string]interface{})["channel"] != "fast" {
+	if f.sub["spec"].(map[string]any)["channel"] != "fast" {
 		t.Fatalf("the restore put the old channel back over Git's: %v", f.sub["spec"])
 	}
-	if ann, _ := f.sub["metadata"].(map[string]interface{})["annotations"].(map[string]interface{}); ann[argoTrackingAnnotation] == nil {
+	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argoTrackingAnnotation] == nil {
 		t.Fatalf("the restored Subscription lost Argo CD's tracking: %v", f.sub["metadata"])
 	}
 }
@@ -463,7 +463,7 @@ func TestUpdateUnderGitOps_StartingCSVChangesMeanwhile(t *testing.T) {
 			f := gitOpsFake(t)
 			f.intercept = func(f *fakeOLM, w http.ResponseWriter, r *http.Request) bool {
 				if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/clusterserviceversions/") {
-					f.sub["spec"].(map[string]interface{})["startingCSV"] = pin
+					f.sub["spec"].(map[string]any)["startingCSV"] = pin
 				}
 				return false
 			}
@@ -479,7 +479,7 @@ func TestUpdateUnderGitOps_StartingCSVChangesMeanwhile(t *testing.T) {
 			}
 			f.mu.Lock()
 			defer f.mu.Unlock()
-			if f.sub["spec"].(map[string]interface{})["startingCSV"] != pin {
+			if f.sub["spec"].(map[string]any)["startingCSV"] != pin {
 				t.Fatalf("Subscription spec = %v", f.sub["spec"])
 			}
 		})
@@ -491,16 +491,16 @@ func TestUpdateUnderGitOps_StartingCSVChangesMeanwhile(t *testing.T) {
 // different channel on it is no conflict.
 func TestUpdateUnderGitOps_CatalogOnlyManaged(t *testing.T) {
 	f := gitOpsFake(t)
-	delete(f.sub["metadata"].(map[string]interface{}), "annotations")
-	f.sub["spec"].(map[string]interface{})["channel"] = "fast"
-	f.sub["spec"].(map[string]interface{})["startingCSV"] = "rhods-operator.3.5.0"
+	delete(f.sub["metadata"].(map[string]any), "annotations")
+	f.sub["spec"].(map[string]any)["channel"] = "fast"
+	f.sub["spec"].(map[string]any)["startingCSV"] = "rhods-operator.3.5.0"
 	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || !result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	spec := f.sub["spec"].(map[string]interface{})
+	spec := f.sub["spec"].(map[string]any)
 	// Git's old pin is dropped; the new one is the verified head.
 	if spec["channel"] == "fast" || spec["startingCSV"] != "rhods-operator.3.6.0" {
 		t.Fatalf("recreated Subscription spec = %v", spec)
@@ -511,7 +511,7 @@ func TestUpdateUnderGitOps_CatalogOnlyManaged(t *testing.T) {
 // verified build either.
 func TestUpdateUnderGitOps_BuildWithoutAnnotations(t *testing.T) {
 	f := gitOpsFake(t)
-	f.onSubscribe = func(f *fakeOLM, spec map[string]interface{}) {
+	f.onSubscribe = func(f *fakeOLM, spec map[string]any) {
 		f.csvAnnotations = nil
 		olmInstalls(gitOpsCSV)(f, spec)
 	}
@@ -527,7 +527,7 @@ func TestUpdateUnderGitOps_RecreatesFromTheLiveSubscription(t *testing.T) {
 	f := gitOpsFake(t)
 	f.intercept = func(f *fakeOLM, w http.ResponseWriter, r *http.Request) bool {
 		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/clusterserviceversions/") {
-			f.sub["spec"].(map[string]interface{})["config"] = map[string]interface{}{"env": []interface{}{map[string]interface{}{"name": "NEW", "value": "1"}}}
+			f.sub["spec"].(map[string]any)["config"] = map[string]any{"env": []any{map[string]any{"name": "NEW", "value": "1"}}}
 		}
 		return false
 	}
@@ -537,7 +537,7 @@ func TestUpdateUnderGitOps_RecreatesFromTheLiveSubscription(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	cfg, _ := json.Marshal(f.sub["spec"].(map[string]interface{})["config"])
+	cfg, _ := json.Marshal(f.sub["spec"].(map[string]any)["config"])
 	if !strings.Contains(string(cfg), `"NEW"`) {
 		t.Fatalf("recreated Subscription has the old config: %s", cfg)
 	}
@@ -547,8 +547,8 @@ func TestUpdateUnderGitOps_RecreatesFromTheLiveSubscription(t *testing.T) {
 // on): Update reports it instead of success, and keeps the running operator.
 func TestUpdateUnderGitOps_AnotherBuildInstalled(t *testing.T) {
 	f := gitOpsFake(t)
-	f.onSubscribe = func(f *fakeOLM, spec map[string]interface{}) {
-		f.csvAnnotations = map[string]interface{}{"containerImage": "registry.redhat.io/rhoai/odh-rhel9-operator@sha256:other", "createdAt": "2026-10-09T04:00:00Z"}
+	f.onSubscribe = func(f *fakeOLM, spec map[string]any) {
+		f.csvAnnotations = map[string]any{"containerImage": "registry.redhat.io/rhoai/odh-rhel9-operator@sha256:other", "createdAt": "2026-10-09T04:00:00Z"}
 		olmInstalls(gitOpsCSV)(f, spec)
 	}
 	emit, events := eventsRecorder()
@@ -603,7 +603,7 @@ func TestOperatorOperationsRefusedUnderGitOps(t *testing.T) {
 	}
 	t.Run("only the catalog managed", func(t *testing.T) {
 		f := gitOpsFake(t)
-		delete(f.sub["metadata"].(map[string]interface{}), "annotations")
+		delete(f.sub["metadata"].(map[string]any), "annotations")
 		r, _ := ReinstallStreamWithOptions(f.client(context.Background()), "stable", "", "", OperationOptions{}, func(UpdateStepEvent) {})
 		if r.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(r.Message, "CatalogSource "+CatalogName) {
 			t.Fatalf("result=%+v", r)
@@ -643,10 +643,10 @@ func TestStatusReportsWhatTheCatalogServes(t *testing.T) {
 	cs := types.CatalogSourceInfo{Exists: true, Image: gitOpsImage}
 	csv := types.CSVInfo{Name: gitOpsCSV, Phase: "Succeeded"}
 	annotate := func(image, created string) {
-		f.csvs[gitOpsCSV]["metadata"].(map[string]interface{})["annotations"] = map[string]interface{}{"containerImage": image, "createdAt": created}
+		f.csvs[gitOpsCSV]["metadata"].(map[string]any)["annotations"] = map[string]any{"containerImage": image, "createdAt": created}
 	}
 
-	delete(f.csvs[gitOpsCSV]["metadata"].(map[string]interface{}), "annotations")
+	delete(f.csvs[gitOpsCSV]["metadata"].(map[string]any), "annotations")
 	s := readCatalogServes(c, sub, cs, csv)
 	if s == nil || s.Channel != gitOpsChannel || s.CSV != gitOpsCSV || s.OperatorImage != gitOpsOperatorImage || s.Built != gitOpsBuilt || s.Installed != nil || s.Updating {
 		t.Fatalf("without CSV annotations: %+v", s)

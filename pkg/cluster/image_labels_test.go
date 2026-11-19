@@ -97,17 +97,12 @@ func TestExtractRepoAndDigest(t *testing.T) {
 
 func TestCheckRedirect_StripsAuthorization(t *testing.T) {
 	// The CheckRedirect in fetchConfigLabels strips the Authorization header
-	// on redirects (Quay returns 302 to S3 pre-signed URLs).
-	checkRedirect := func(req *http.Request, via []*http.Request) error {
-		req.Header.Del("Authorization")
-		return nil
-	}
-
+	// on redirects (Quay returns 302 to S3 pre-signed URLs). The test
+	// tested a copy of it before.
 	req, _ := http.NewRequest("GET", "https://example.com/blob", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
 
-	// Simulate the redirect handler stripping auth
-	err := checkRedirect(req, []*http.Request{})
+	err := stripAuthOnRedirect(req, []*http.Request{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

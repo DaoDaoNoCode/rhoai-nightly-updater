@@ -515,7 +515,7 @@ const routes = {
   "GET /api/resources/samples/mlflow": (u) => mlflowSamplesOf(u.searchParams.get("project") || ""),
   "GET /api/resources/samples/pipeline/spec": () => F.pipelineSampleSpec,
   // Made up, like every value here.
-  "GET /api/resources/minio/admin-password": () => ({ user: "admin", accessKey: "docs-mock-access-key", secretKey: "docs-mock-secret-key", password: "docs-mock-admin-password" }),
+  "GET /api/resources/s3/admin-password": () => ({ user: "admin", accessKey: "docs-mock-access-key", secretKey: "docs-mock-secret-key", password: "docs-mock-admin-password" }),
   "GET /api/activity": () => reads["GET /api/activity"](world),
   "GET /api/test-pull-secret": () => ({ success: true, message: "The pull secret can pull from quay.io/rhoai.", logs: [] }),
   "GET /api/verify-nodes": () => ({ success: true, message: "All 3 nodes have the pull secret and the image mirror.", logs: [] }),
@@ -562,12 +562,12 @@ async function api(req, res, u) {
     }
     if (req.method !== "GET") return json(res, status, { error: code === "session_expired" ? message : `${message} Nothing was changed.`, errorCode: code });
   }
-  if (key === "GET /api/resources/minio/admin-password" && world.canMutate === false) {
+  if (key === "GET /api/resources/s3/admin-password" && world.canMutate === false) {
     return json(res, 403, { error: "Only cluster-admins can read this through the updater.", errorCode: "forbidden" });
   }
   if (key === "POST /api/update/stream") return updateStream(req, res);
-  if (key === "POST /api/resources/minio/setup") return mutation(res, "setup-minio", "Set up S3 storage", minioSetup);
-  if (key === "POST /api/resources/minio/migrate/stream") return migrateStream(req, res);
+  if (key === "POST /api/resources/s3/setup") return mutation(res, "setup-s3", "Set up S3 storage", minioSetup);
+  if (key === "POST /api/resources/s3/migrate/stream") return migrateStream(req, res);
   if (key === "POST /api/resources/cleanup/stream") return cleanupStream(req, res);
   if (key === "POST /api/resources/models/stream") return modelsStream(req, res);
   if (key === "POST /api/resources/playground/stream") return playgroundStream(req, res);

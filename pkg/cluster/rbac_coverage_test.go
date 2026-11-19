@@ -17,6 +17,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,6 +54,7 @@ var rbacCallsNotUsingTheSAToken = map[string]string{
 // covered by the other call sites.
 var rbacBestEffortCalls = map[string]string{
 	"diagnostics_conversion.go:getDiscovered": "API versions check: one ?limit=1 list per resource and version of the multi-version *.opendatahub.io groups",
+	"diagnostics_webhooks.go:probeCRDObjects": "stale CRD conversions: one ?limit=1 list per RHOAI CRD whose conversion Service is down, to tell whether it holds objects",
 }
 
 // Calls only the gitops profile makes (api.StartGitOpsPolicyWatch and
@@ -656,7 +658,7 @@ func toRequests(method, path, site string) ([]rbacRequest, error) {
 	default:
 		return nil, fmt.Errorf("unrecognised API path %q", path)
 	}
-	ns, resource, name := "", "", ""
+	var ns, resource, name string
 	switch {
 	case len(segs) >= 3 && segs[0] == "namespaces":
 		ns, resource = segs[1], segs[2]
@@ -781,9 +783,7 @@ func serviceAccountRequests(t *testing.T) ([]rbacRequest, map[string]bool) {
 		fullScan.done = true
 	}
 	excluded := make(map[string]bool, len(fullScan.excluded))
-	for k, v := range fullScan.excluded {
-		excluded[k] = v
-	}
+	maps.Copy(excluded, fullScan.excluded)
 	return append([]rbacRequest(nil), fullScan.reqs...), excluded
 }
 

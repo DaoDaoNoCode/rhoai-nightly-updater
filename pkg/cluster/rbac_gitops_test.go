@@ -77,7 +77,7 @@ func exportData(t *testing.T) map[string]string {
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()
 		if err != nil {
-			exportErr = fmt.Errorf("go list -export: %v: %s", err, stderr.String())
+			exportErr = fmt.Errorf("go list -export: %w: %s", err, stderr.String())
 			return
 		}
 		exportFiles = map[string]string{}
@@ -489,7 +489,7 @@ func TestGitOpsRBACHasNoClusterWideWrites(t *testing.T) {
 // gitOpsTemplate is deploy/rbac-gitops.yaml, decoded loosely.
 type gitOpsTemplate struct {
 	Parameters []templateParameter `yaml:"parameters"`
-	Objects    []map[string]interface{}
+	Objects    []map[string]any
 }
 
 func readGitOpsTemplate(t *testing.T) gitOpsTemplate {
@@ -554,7 +554,7 @@ func TestGitOpsTemplateParameters(t *testing.T) {
 	}
 	// `oc process` drops literal namespaces (TestTemplateNamespacesAreParameters).
 	for _, o := range tmpl.Objects {
-		meta, _ := o["metadata"].(map[string]interface{})
+		meta, _ := o["metadata"].(map[string]any)
 		if ns, _ := meta["namespace"].(string); ns != "" && !strings.HasPrefix(ns, "${") {
 			t.Errorf("%v %v has the literal namespace %q", o["kind"], meta["name"], ns)
 		}
@@ -567,7 +567,7 @@ func TestGitOpsTemplateParameters(t *testing.T) {
 // ValidatingAdmissionPolicy cannot see.
 func TestGitOpsAdmissionPolicyMatchesTheCode(t *testing.T) {
 	tmpl := readGitOpsTemplate(t)
-	var policy, binding map[string]interface{}
+	var policy, binding map[string]any
 	for _, o := range tmpl.Objects {
 		switch o["kind"] {
 		case "ValidatingAdmissionPolicy":
@@ -582,19 +582,19 @@ func TestGitOpsAdmissionPolicyMatchesTheCode(t *testing.T) {
 	if policy == nil || binding == nil {
 		t.Fatal("deploy/rbac-gitops.yaml has no ValidatingAdmissionPolicy and binding")
 	}
-	meta := policy["metadata"].(map[string]interface{})
-	if meta["name"] != "${APP_NAME}-${NAMESPACE}-gitops" || binding["metadata"].(map[string]interface{})["name"] != meta["name"] {
+	meta := policy["metadata"].(map[string]any)
+	if meta["name"] != "${APP_NAME}-${NAMESPACE}-gitops" || binding["metadata"].(map[string]any)["name"] != meta["name"] {
 		t.Errorf("the policy and binding must be named ${APP_NAME}-${NAMESPACE}-gitops, the name the Template passes in %s", GitOpsAdmissionPolicyEnv)
 	}
-	spec := policy["spec"].(map[string]interface{})
+	spec := policy["spec"].(map[string]any)
 	if spec["failurePolicy"] != "Fail" {
 		t.Errorf("failurePolicy = %v, want Fail", spec["failurePolicy"])
 	}
-	bspec := binding["spec"].(map[string]interface{})
+	bspec := binding["spec"].(map[string]any)
 	if bspec["policyName"] != meta["name"] || fmt.Sprint(bspec["validationActions"]) != "[Deny]" || bspec["matchResources"] != nil {
 		t.Errorf("binding spec = %v", bspec)
 	}
-	conds, _ := spec["matchConditions"].([]interface{})
+	conds, _ := spec["matchConditions"].([]any)
 	if len(conds) != 1 || !strings.Contains(fmt.Sprint(conds[0]), "request.userInfo.username == 'system:serviceaccount:${NAMESPACE}:${APP_NAME}'") {
 		t.Errorf("matchConditions = %v, want the updater's ServiceAccount only", conds)
 	}
@@ -605,8 +605,8 @@ func TestGitOpsAdmissionPolicyMatchesTheCode(t *testing.T) {
 		}
 	}
 	var exprs []string
-	for _, v := range spec["validations"].([]interface{}) {
-		exprs = append(exprs, v.(map[string]interface{})["expression"].(string))
+	for _, v := range spec["validations"].([]any) {
+		exprs = append(exprs, v.(map[string]any)["expression"].(string))
 	}
 	all := strings.Join(exprs, "\n") + fmt.Sprint(spec["variables"])
 	for _, want := range []string{

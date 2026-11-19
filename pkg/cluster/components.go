@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"sort"
@@ -24,8 +25,8 @@ const (
 
 // dscRead is the first DataScienceCluster as read.
 type dscRead struct {
-	Object map[string]interface{} // nil without a DSC
-	State  string                 // DSCStatePresent, DSCStateNoDSC or DSCStateNoCRD
+	Object map[string]any // nil without a DSC
+	State  string         // DSCStatePresent, DSCStateNoDSC or DSCStateNoCRD
 	// Version is the API version it was read at ("v3"); Skipped are the
 	// newer served versions that failed with a conversion webhook error.
 	Version string
@@ -44,7 +45,7 @@ func readFirstDSC(c *Client) (dscRead, error) {
 		return dscRead{State: DSCStateNoCRD}, nil
 	}
 	var list struct {
-		Items []map[string]interface{} `json:"items"`
+		Items []map[string]any `json:"items"`
 	}
 	if err := json.Unmarshal(r.Body, &list); err != nil {
 		return dscRead{}, fmt.Errorf("parsing DSC list: %w", err)
@@ -96,11 +97,9 @@ func getComponents(c *Client, reads componentRegistryReads, includeLabels bool) 
 	// Every read below is independent of the DSC, so they run while it is read.
 	var wg sync.WaitGroup
 	run := func(fn func()) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			fn()
-		}()
+		})
 	}
 	var (
 		appDeps, opDeps    []types.DeploymentInfo
@@ -170,18 +169,18 @@ func getComponents(c *Client, reads componentRegistryReads, includeLabels bool) 
 }
 
 // addDSCComponents fills the DSC fields and the component list from the DSC.
-func addDSCComponents(resp *types.ComponentsResponse, dsc map[string]interface{}) {
-	meta, _ := dsc["metadata"].(map[string]interface{})
+func addDSCComponents(resp *types.ComponentsResponse, dsc map[string]any) {
+	meta, _ := dsc["metadata"].(map[string]any)
 	resp.DSCName, _ = meta["name"].(string)
 
 	// Extract DSC phase from status
-	dscStatus, _ := dsc["status"].(map[string]interface{})
+	dscStatus, _ := dsc["status"].(map[string]any)
 	resp.DSCPhase, _ = dscStatus["phase"].(string)
 
 	// Extract the Ready condition reason for the DSC phase explanation
-	if conditions, ok := dscStatus["conditions"].([]interface{}); ok {
+	if conditions, ok := dscStatus["conditions"].([]any); ok {
 		for _, cond := range conditions {
-			condMap, _ := cond.(map[string]interface{})
+			condMap, _ := cond.(map[string]any)
 			condType, _ := condMap["type"].(string)
 			if condType == "Ready" {
 				msg, _ := condMap["message"].(string)
@@ -192,14 +191,14 @@ func addDSCComponents(resp *types.ComponentsResponse, dsc map[string]interface{}
 	}
 
 	// Extract component management states from spec.components
-	spec, _ := dsc["spec"].(map[string]interface{})
-	specComponents, _ := spec["components"].(map[string]interface{})
+	spec, _ := dsc["spec"].(map[string]any)
+	specComponents, _ := spec["components"].(map[string]any)
 
 	// Build a map of component conditions from status.conditions
 	conditionMap := make(map[string]conditionInfo)
-	if conditions, ok := dscStatus["conditions"].([]interface{}); ok {
+	if conditions, ok := dscStatus["conditions"].([]any); ok {
 		for _, cond := range conditions {
-			condMap, _ := cond.(map[string]interface{})
+			condMap, _ := cond.(map[string]any)
 			condType, _ := condMap["type"].(string)
 			condStatus, _ := condMap["status"].(string)
 			condReason, _ := condMap["reason"].(string)
@@ -214,7 +213,7 @@ func addDSCComponents(resp *types.ComponentsResponse, dsc map[string]interface{}
 
 	// Build component list from spec — report exactly what the operator says
 	for compName, compVal := range specComponents {
-		compMap, ok := compVal.(map[string]interface{})
+		compMap, ok := compVal.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -223,8 +222,8 @@ func addDSCComponents(resp *types.ComponentsResponse, dsc map[string]interface{}
 			// DataScienceCluster v3 groups some components without a state
 			// of their own (dashboard: standard, maasPortal); the operator
 			// reports the group's state in status.components.
-			statusComponents, _ := dscStatus["components"].(map[string]interface{})
-			statusComp, _ := statusComponents[compName].(map[string]interface{})
+			statusComponents, _ := dscStatus["components"].(map[string]any)
+			statusComp, _ := statusComponents[compName].(map[string]any)
 			mgmtState, _ = statusComp["managementState"].(string)
 		}
 		if mgmtState == "" {
@@ -285,8 +284,8 @@ func addDSCComponents(resp *types.ComponentsResponse, dsc map[string]interface{}
 		// Extract component name from condition type
 		compName := key
 		for _, suffix := range []string{"ready", "available"} {
-			if strings.HasSuffix(compName, suffix) {
-				compName = strings.TrimSuffix(compName, suffix)
+			if before, ok := strings.CutSuffix(compName, suffix); ok {
+				compName = before
 				break
 			}
 		}
@@ -315,10 +314,10 @@ func addDSCComponents(resp *types.ComponentsResponse, dsc map[string]interface{}
 // groupManagementState summarizes the managementState of a grouped
 // component's parts: Managed when any part is Managed, Removed when every
 // part is Removed, "" otherwise (no parts, or other states).
-func groupManagementState(comp map[string]interface{}) string {
+func groupManagementState(comp map[string]any) string {
 	parts, removed := 0, 0
 	for _, v := range comp {
-		part, ok := v.(map[string]interface{})
+		part, ok := v.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -369,9 +368,7 @@ func fetchImageLabelsForDeployments(c *Client, deployments []types.DeploymentInf
 	if fetch && len(missing) > 0 {
 		labelCtx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
 		defer cancel()
-		for ref, l := range resolveImageLabels(labelCtx, getQuayAuth(c), missing, true) {
-			labels[ref] = l
-		}
+		maps.Copy(labels, resolveImageLabels(labelCtx, getQuayAuth(c), missing, true))
 	} else {
 		for _, ref := range missing {
 			if l, ok := cachedImageLabels(ref); ok {
@@ -713,7 +710,7 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 	logs = append(logs, "Creating default DataScienceCluster...")
 	defaults, fetchErr := fetchDefaultDSCSpec(c, "")
 	if fetchErr != nil {
-		return &types.OperationResponse{Success: false, Message: "Failed to fetch version-matched DSC defaults: " + fetchErr.Error(), Logs: logs, ErrorCode: "prerequisites"}, nil
+		return &types.OperationResponse{Success: false, Message: "Failed to fetch version-matched DSC defaults: " + fetchErr.Error(), Logs: logs, ErrorCode: nonEmpty(errorCodeFromK8sErr(fetchErr), "prerequisites")}, nil
 	}
 	logs = append(logs, fmt.Sprintf("DSC spec source: %s (%s)", defaults.SourceDescription, defaults.Version))
 

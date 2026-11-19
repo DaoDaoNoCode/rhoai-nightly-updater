@@ -45,11 +45,11 @@ func TestLeaseTakeoverStopsTheOperation(t *testing.T) {
 	setupDevMode(t)
 	allowMutations(t)
 	f := installFakeRecord(t)
-	leaseHeartbeatInterval = 5 * time.Millisecond
 	started, cause, _ := refreshUntilStopped()
 	done := runRefreshInBackground()
 	<-started
 	f.setLease(otherPodLease(time.Now())) // another pod took the lock over
+	f.beat(t)
 	select {
 	case err := <-cause:
 		if !errors.Is(err, cluster.ErrOperationLockLost) {
@@ -73,19 +73,23 @@ func TestRenewalFailuresStopTheOperationOnlyPastTheThreshold(t *testing.T) {
 	setupDevMode(t)
 	allowMutations(t)
 	f := installFakeRecord(t)
-	leaseHeartbeatInterval, leaseTTL = 5*time.Millisecond, 80*time.Millisecond
+	// Renewals every 10s; lost once they have failed for 45s-10s = 35s.
+	leaseHeartbeatInterval, leaseTTL = 10*time.Second, 45*time.Second
 
-	// One failure, then renewals succeed again: the operation goes on.
+	// One failure, then renewals succeed again: the operation goes on (a
+	// stopped heartbeat would not make the second renewal).
 	started, cause, release := refreshUntilStopped()
 	done := runRefreshInBackground()
 	<-started
 	f.mu.Lock()
 	f.failNext = 1
 	f.mu.Unlock()
+	f.beat(t)
+	f.beat(t)
 	select {
 	case err := <-cause:
 		t.Fatalf("a single failed renewal stopped the operation: %v", err)
-	case <-time.After(250 * time.Millisecond):
+	default:
 	}
 	close(release)
 	<-done
@@ -94,18 +98,28 @@ func TestRenewalFailuresStopTheOperationOnlyPastTheThreshold(t *testing.T) {
 	}
 
 	// Every renewal fails: stopped once leaseTTL-interval has passed.
-	mutationLimiter = newRateLimiter(30 * time.Second)
+	mutationLimiter = newRateLimiter()
 	started, cause, _ = refreshUntilStopped()
 	done = runRefreshInBackground()
 	<-started
-	begin := time.Now()
 	f.mu.Lock()
 	f.failNext = 1 << 30
 	f.mu.Unlock()
+	// Failed renewals 10s, 20s and 30s after the last success: the lease
+	// still holds (the fourth renewal proves the heartbeat went on).
+	for range 3 {
+		f.beat(t)
+	}
 	select {
 	case err := <-cause:
-		if !errors.Is(err, cluster.ErrOperationLockLost) || time.Since(begin) < leaseTTL-3*leaseHeartbeatInterval {
-			t.Fatalf("cause %v after %s", err, time.Since(begin))
+		t.Fatalf("stopped before the threshold: %v", err)
+	default:
+	}
+	f.beat(t) // 40s >= 35s: lost
+	select {
+	case err := <-cause:
+		if !errors.Is(err, cluster.ErrOperationLockLost) {
+			t.Fatalf("cause %v", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the operation was not stopped")

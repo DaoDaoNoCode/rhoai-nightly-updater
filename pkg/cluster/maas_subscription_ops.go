@@ -15,29 +15,29 @@ import (
 // maasPublished reads what both changes need: the record, the tool's
 // subscription (which must be this tool's and exist), and the publications
 // it lists. It returns a refusal message and code instead.
-func maasPublished(c *Client) (maasRecord, maasToolSub, []maasPub, string, string) {
+func maasPublished(c *Client) (maasToolSub, []maasPub, string, string) {
 	rec, err := readMaaSRecord(c)
 	if err != nil {
-		return rec, maasToolSub{}, nil, err.Error() + " Nothing was changed.", errorCodeFromK8sErr(err)
+		return maasToolSub{}, nil, err.Error() + " Nothing was changed.", errorCodeFromK8sErr(err)
 	}
 	cur, err := readMaaSToolSubscription(c)
 	if err != nil {
-		return rec, cur, nil, err.Error() + " Nothing was changed.", errorCodeFromK8sErr(err)
+		return cur, nil, err.Error() + " Nothing was changed.", errorCodeFromK8sErr(err)
 	}
 	switch {
 	case !cur.found:
-		return rec, cur, nil, "No model of this tool is published, so there is no subscription to change; Publish sets it. Nothing was changed.", "prerequisites"
+		return cur, nil, "No model of this tool is published, so there is no subscription to change; Publish sets it. Nothing was changed.", "prerequisites"
 	case !cur.owned:
-		return rec, cur, nil, fmt.Sprintf("MaaSSubscription %s/%s was not created by this tool, so it is left alone. Nothing was changed.", maasTenantNamespace, maasSubscriptionName), "not_managed"
+		return cur, nil, fmt.Sprintf("MaaSSubscription %s/%s was not created by this tool, so it is left alone. Nothing was changed.", maasTenantNamespace, maasSubscriptionName), "not_managed"
 	}
 	live, err := maasLivePubs(c, rec, maasPub{}, maasPub{})
 	if err != nil {
-		return rec, cur, nil, fmt.Sprintf("Cannot check the publications: %v. Nothing was changed.", err), errorCodeFromK8sErr(err)
+		return cur, nil, fmt.Sprintf("Cannot check the publications: %v. Nothing was changed.", err), errorCodeFromK8sErr(err)
 	}
 	if len(live) == 0 {
-		return rec, cur, nil, "No model of this tool is published now. Nothing was changed.", "prerequisites"
+		return cur, nil, "No model of this tool is published now. Nothing was changed.", "prerequisites"
 	}
-	return rec, cur, live, "", ""
+	return cur, live, "", ""
 }
 
 // changeLimit sets the token limit of the published model name in project.
@@ -49,7 +49,7 @@ func (m *maasRun) changeLimit(project, name string, req *types.MaaSLimit) (*type
 	if problem != "" {
 		return m.fail("check", "Invalid limit: "+problem+". Nothing was changed.", "validation", "invalid limit")
 	}
-	_, cur, live, msg, code := maasPublished(c)
+	cur, live, msg, code := maasPublished(c)
 	if msg != "" {
 		return m.fail("check", msg, code, "subscription check failed")
 	}
@@ -98,7 +98,7 @@ func (m *maasRun) changeAccess(req *types.MaaSAudience) (*types.OperationRespons
 	if problem != "" {
 		return m.fail("check", "Invalid audience: "+problem+". Nothing was changed.", "validation", "invalid audience")
 	}
-	_, cur, live, msg, code := maasPublished(c)
+	cur, live, msg, code := maasPublished(c)
 	if msg != "" {
 		return m.fail("check", msg, code, "subscription check failed")
 	}

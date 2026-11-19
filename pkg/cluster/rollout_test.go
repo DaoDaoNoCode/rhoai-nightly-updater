@@ -18,21 +18,21 @@ const (
 
 type rolloutFixture struct {
 	replicas       int
-	strategy       map[string]interface{}
-	managedFields  []interface{}
-	newPodSchedule map[string]interface{} // PodScheduled condition of the new pod
+	strategy       map[string]any
+	managedFields  []any
+	newPodSchedule map[string]any // PodScheduled condition of the new pod
 	oldReady       int
 }
 
 func defaultRollout() rolloutFixture {
 	return rolloutFixture{
 		replicas: 3,
-		strategy: map[string]interface{}{"type": "RollingUpdate", "rollingUpdate": map[string]interface{}{"maxSurge": "25%", "maxUnavailable": "25%"}},
-		managedFields: []interface{}{
-			map[string]interface{}{"manager": "olm", "operation": "Update", "fieldsV1": map[string]interface{}{
-				"f:spec": map[string]interface{}{"f:strategy": map[string]interface{}{"f:rollingUpdate": map[string]interface{}{"f:maxUnavailable": map[string]interface{}{}}}}}},
+		strategy: map[string]any{"type": "RollingUpdate", "rollingUpdate": map[string]any{"maxSurge": "25%", "maxUnavailable": "25%"}},
+		managedFields: []any{
+			map[string]any{"manager": "olm", "operation": "Update", "fieldsV1": map[string]any{
+				"f:spec": map[string]any{"f:strategy": map[string]any{"f:rollingUpdate": map[string]any{"f:maxUnavailable": map[string]any{}}}}}},
 		},
-		newPodSchedule: map[string]interface{}{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/3 nodes are available: 3 Insufficient cpu."},
+		newPodSchedule: map[string]any{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/3 nodes are available: 3 Insufficient cpu."},
 		oldReady:       3,
 	}
 }
@@ -42,11 +42,11 @@ func defaultRollout() rolloutFixture {
 // owned by another Deployment.
 func (fx rolloutFixture) install(f *fakeAPI) {
 	ctrl := true
-	f.obj("GET", depPath, map[string]interface{}{
-		"metadata": map[string]interface{}{"name": "rhods-operator", "uid": "dep-uid", "resourceVersion": "100", "generation": 5, "managedFields": fx.managedFields},
-		"spec": map[string]interface{}{
+	f.obj(depPath, map[string]any{
+		"metadata": map[string]any{"name": "rhods-operator", "uid": "dep-uid", "resourceVersion": "100", "generation": 5, "managedFields": fx.managedFields},
+		"spec": map[string]any{
 			"replicas": fx.replicas,
-			"selector": map[string]interface{}{"matchLabels": map[string]string{"name": "rhods-operator"}},
+			"selector": map[string]any{"matchLabels": map[string]string{"name": "rhods-operator"}},
 			"strategy": fx.strategy,
 		},
 	})
@@ -54,24 +54,24 @@ func (fx rolloutFixture) install(f *fakeAPI) {
 		if r.URL.Query().Get("labelSelector") != "name=rhods-operator" {
 			return http.StatusOK, `{"items":[]}`
 		}
-		b, _ := json.Marshal(map[string]interface{}{"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhods-operator-new", "uid": "rs-new", "labels": map[string]string{"pod-template-hash": "new"},
+		b, _ := json.Marshal(map[string]any{"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "rhods-operator-new", "uid": "rs-new", "labels": map[string]string{"pod-template-hash": "new"},
 					"annotations":     map[string]string{"deployment.kubernetes.io/revision": "10"},
-					"ownerReferences": []interface{}{map[string]interface{}{"uid": "dep-uid", "controller": ctrl}}},
-				"spec": map[string]interface{}{"replicas": 1}, "status": map[string]interface{}{"readyReplicas": 0},
+					"ownerReferences": []any{map[string]any{"uid": "dep-uid", "controller": ctrl}}},
+				"spec": map[string]any{"replicas": 1}, "status": map[string]any{"readyReplicas": 0},
 			},
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhods-operator-old", "uid": "rs-old", "labels": map[string]string{"pod-template-hash": "old"},
+			map[string]any{
+				"metadata": map[string]any{"name": "rhods-operator-old", "uid": "rs-old", "labels": map[string]string{"pod-template-hash": "old"},
 					"annotations":     map[string]string{"deployment.kubernetes.io/revision": "9"},
-					"ownerReferences": []interface{}{map[string]interface{}{"uid": "dep-uid", "controller": ctrl}}},
-				"spec": map[string]interface{}{"replicas": fx.oldReady}, "status": map[string]interface{}{"readyReplicas": fx.oldReady},
+					"ownerReferences": []any{map[string]any{"uid": "dep-uid", "controller": ctrl}}},
+				"spec": map[string]any{"replicas": fx.oldReady}, "status": map[string]any{"readyReplicas": fx.oldReady},
 			},
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "someone-else", "uid": "rs-x", "labels": map[string]string{"pod-template-hash": "x"},
+			map[string]any{
+				"metadata": map[string]any{"name": "someone-else", "uid": "rs-x", "labels": map[string]string{"pod-template-hash": "x"},
 					"annotations":     map[string]string{"deployment.kubernetes.io/revision": "99"},
-					"ownerReferences": []interface{}{map[string]interface{}{"uid": "other-dep", "controller": ctrl}}},
-				"spec": map[string]interface{}{"replicas": 1}, "status": map[string]interface{}{"readyReplicas": 0},
+					"ownerReferences": []any{map[string]any{"uid": "other-dep", "controller": ctrl}}},
+				"spec": map[string]any{"replicas": 1}, "status": map[string]any{"readyReplicas": 0},
 			},
 		}})
 		return http.StatusOK, string(b)
@@ -80,9 +80,9 @@ func (fx rolloutFixture) install(f *fakeAPI) {
 		if r.URL.Query().Get("labelSelector") != "pod-template-hash=new" {
 			return http.StatusOK, `{"items":[]}`
 		}
-		b, _ := json.Marshal(map[string]interface{}{"items": []interface{}{map[string]interface{}{
-			"metadata": map[string]interface{}{"name": "rhods-operator-new-abc", "ownerReferences": []interface{}{map[string]interface{}{"kind": "ReplicaSet", "uid": "rs-new", "controller": ctrl}}},
-			"status":   map[string]interface{}{"phase": "Pending", "conditions": []interface{}{fx.newPodSchedule}},
+		b, _ := json.Marshal(map[string]any{"items": []any{map[string]any{
+			"metadata": map[string]any{"name": "rhods-operator-new-abc", "ownerReferences": []any{map[string]any{"kind": "ReplicaSet", "uid": "rs-new", "controller": ctrl}}},
+			"status":   map[string]any{"phase": "Pending", "conditions": []any{fx.newPodSchedule}},
 		}}})
 		return http.StatusOK, string(b)
 	})
@@ -123,7 +123,7 @@ func TestAssistRollout_NotApplicable(t *testing.T) {
 		wantIn string
 	}{
 		{"pod scheduled but stuck creating", func(fx *rolloutFixture) {
-			fx.newPodSchedule = map[string]interface{}{"type": "PodScheduled", "status": "True"}
+			fx.newPodSchedule = map[string]any{"type": "PodScheduled", "status": "True"}
 		}, "not Unschedulable"},
 		{"strategy already allows one unavailable", func(fx *rolloutFixture) {
 			fx.replicas = 4
@@ -164,12 +164,12 @@ func TestAssistRollout_NotApplicable(t *testing.T) {
 			fx.oldReady = 1
 		}, "only 1 pod(s) are ready (3 replica(s))"},
 		{"recreate strategy", func(fx *rolloutFixture) {
-			fx.strategy = map[string]interface{}{"type": "Recreate"}
+			fx.strategy = map[string]any{"type": "Recreate"}
 		}, "Recreate"},
 		{"no old pods hold resources", func(fx *rolloutFixture) { fx.oldReady = 0 }, "no old pods"},
 		{"an applier owns the field", func(fx *rolloutFixture) {
-			fx.managedFields = []interface{}{map[string]interface{}{"manager": "workbenches-operator", "operation": "Apply", "fieldsV1": map[string]interface{}{
-				"f:spec": map[string]interface{}{"f:strategy": map[string]interface{}{"f:rollingUpdate": map[string]interface{}{"f:maxUnavailable": map[string]interface{}{}}}}}}}
+			fx.managedFields = []any{map[string]any{"manager": "workbenches-operator", "operation": "Apply", "fieldsV1": map[string]any{
+				"f:spec": map[string]any{"f:strategy": map[string]any{"f:rollingUpdate": map[string]any{"f:maxUnavailable": map[string]any{}}}}}}}
 		}, "workbenches-operator manages its rollout strategy"},
 	}
 	for _, tt := range tests {
@@ -244,7 +244,7 @@ func TestAssistRollout_ProblemOffersFixOnlyWhenApplicable(t *testing.T) {
 	}
 }
 
-func restoreDeployment(maxUnavailable interface{}, note string, complete bool) map[string]interface{} {
+func restoreDeployment(maxUnavailable any, note string, complete bool) map[string]any {
 	ready := 1
 	if !complete {
 		ready = 0
@@ -253,14 +253,14 @@ func restoreDeployment(maxUnavailable interface{}, note string, complete bool) m
 	if note != "" {
 		ann[assistRolloutAnnotation] = note
 	}
-	ru := map[string]interface{}{}
+	ru := map[string]any{}
 	if maxUnavailable != nil {
 		ru["maxUnavailable"] = maxUnavailable
 	}
-	return map[string]interface{}{
-		"metadata": map[string]interface{}{"name": "rhods-operator", "resourceVersion": "200", "generation": 6, "annotations": ann},
-		"spec":     map[string]interface{}{"replicas": 1, "strategy": map[string]interface{}{"rollingUpdate": ru}},
-		"status":   map[string]interface{}{"observedGeneration": 6, "replicas": 1, "updatedReplicas": 1, "readyReplicas": ready},
+	return map[string]any{
+		"metadata": map[string]any{"name": "rhods-operator", "resourceVersion": "200", "generation": 6, "annotations": ann},
+		"spec":     map[string]any{"replicas": 1, "strategy": map[string]any{"rollingUpdate": ru}},
+		"status":   map[string]any{"observedGeneration": 6, "replicas": 1, "updatedReplicas": 1, "readyReplicas": ready},
 	}
 }
 
@@ -268,7 +268,7 @@ func TestRestoreRolloutStrategy(t *testing.T) {
 	note := `{"maxUnavailable":"25%","patchedAt":"` + time.Now().UTC().Format(time.RFC3339) + `"}`
 	tests := []struct {
 		name      string
-		dep       map[string]interface{}
+		dep       map[string]any
 		wantPatch string // substring of the patch body; "" = no patch
 		wantOK    bool
 		wantCode  string
@@ -282,7 +282,7 @@ func TestRestoreRolloutStrategy(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f, c := newFakeAPI(t)
-			f.obj("GET", depPath, tt.dep)
+			f.obj(depPath, tt.dep)
 			f.json("PATCH", depPath, http.StatusOK, `{}`)
 			res, err := ApplyFix(c, "restore-rollout-strategy:"+rolloutNS+"/rhods-operator")
 			if err != nil || res.Success != tt.wantOK || res.ErrorCode != tt.wantCode {

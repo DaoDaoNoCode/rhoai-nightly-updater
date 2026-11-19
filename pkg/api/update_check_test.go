@@ -336,7 +336,7 @@ func TestUpdateCheckerCaches(t *testing.T) {
 // registry: an anonymous request is refused.
 func TestHandleUpdateCheck_NeedsASignedInUser(t *testing.T) {
 	setupDevMode(t)
-	t.Setenv("DEV_MODE", "false") // in the cluster: oauth-proxy forwards no token for this request
+	setDevMode(t, false) // in the cluster: oauth-proxy forwards no token for this request
 	oldChecker := defaultUpdateChecker
 	t.Cleanup(func() { defaultUpdateChecker = oldChecker })
 	defaultUpdateChecker = &updateChecker{

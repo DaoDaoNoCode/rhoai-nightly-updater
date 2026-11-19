@@ -38,11 +38,9 @@ const (
 var nightlyBackground sync.WaitGroup
 
 func goBackground(fn func()) {
-	nightlyBackground.Add(1)
-	go func() {
-		defer nightlyBackground.Done()
+	nightlyBackground.Go(func() {
 		fn()
-	}()
+	})
 }
 
 var (

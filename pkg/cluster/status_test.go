@@ -9,9 +9,9 @@ import (
 // --- getClusterVersion tests ---
 
 func TestGetClusterVersion_AllFieldsPresent(t *testing.T) {
-	cv := map[string]interface{}{
-		"status": map[string]interface{}{
-			"desired": map[string]interface{}{
+	cv := map[string]any{
+		"status": map[string]any{
+			"desired": map[string]any{
 				"version": "4.16.3",
 			},
 		},
@@ -36,10 +36,10 @@ func TestGetClusterVersion_AllFieldsPresent(t *testing.T) {
 
 func TestGetClusterVersion_NilStatus(t *testing.T) {
 	// status field is missing entirely
-	cv := map[string]interface{}{
+	cv := map[string]any{
 		"apiVersion": "config.openshift.io/v1",
 		"kind":       "ClusterVersion",
-		"metadata":   map[string]interface{}{"name": "version"},
+		"metadata":   map[string]any{"name": "version"},
 	}
 	body, _ := json.Marshal(cv)
 
@@ -61,9 +61,9 @@ func TestGetClusterVersion_NilStatus(t *testing.T) {
 
 func TestGetClusterVersion_StatusPresentButDesiredNil(t *testing.T) {
 	// status exists but desired is missing
-	cv := map[string]interface{}{
-		"status": map[string]interface{}{
-			"conditions": []interface{}{},
+	cv := map[string]any{
+		"status": map[string]any{
+			"conditions": []any{},
 		},
 	}
 	body, _ := json.Marshal(cv)
@@ -86,9 +86,9 @@ func TestGetClusterVersion_StatusPresentButDesiredNil(t *testing.T) {
 
 func TestGetClusterVersion_DesiredPresentButVersionEmpty(t *testing.T) {
 	// desired exists but version key is absent
-	cv := map[string]interface{}{
-		"status": map[string]interface{}{
-			"desired": map[string]interface{}{
+	cv := map[string]any{
+		"status": map[string]any{
+			"desired": map[string]any{
 				"image": "quay.io/openshift-release-dev/ocp-release:4.16.3",
 			},
 		},
@@ -113,7 +113,7 @@ func TestGetClusterVersion_DesiredPresentButVersionEmpty(t *testing.T) {
 
 func TestGetClusterVersion_StatusIsWrongType(t *testing.T) {
 	// status is a string instead of a map -- should not panic
-	cv := map[string]interface{}{
+	cv := map[string]any{
 		"status": "not-a-map",
 	}
 	body, _ := json.Marshal(cv)
@@ -136,8 +136,8 @@ func TestGetClusterVersion_StatusIsWrongType(t *testing.T) {
 
 func TestGetClusterVersion_DesiredIsWrongType(t *testing.T) {
 	// desired is a string instead of a map -- should not panic
-	cv := map[string]interface{}{
-		"status": map[string]interface{}{
+	cv := map[string]any{
+		"status": map[string]any{
 			"desired": "not-a-map",
 		},
 	}
@@ -239,15 +239,15 @@ func TestGetCatalogSource_NonNotFoundErrorPropagates(t *testing.T) {
 }
 
 func TestGetCatalogSource_ExistsWithState(t *testing.T) {
-	csBody := map[string]interface{}{
+	csBody := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "CatalogSource",
-		"metadata":   map[string]interface{}{"name": CatalogName},
-		"spec": map[string]interface{}{
+		"metadata":   map[string]any{"name": CatalogName},
+		"spec": map[string]any{
 			"image": "quay.io/rhoai/rhoai-fbc-fragment:nightly-4.16-20240101",
 		},
-		"status": map[string]interface{}{
-			"connectionState": map[string]interface{}{
+		"status": map[string]any{
+			"connectionState": map[string]any{
 				"lastObservedState": "READY",
 			},
 		},
@@ -281,11 +281,11 @@ func TestGetCatalogSource_ExistsWithState(t *testing.T) {
 }
 
 func TestGetCatalogSource_ExistsMissingStatus(t *testing.T) {
-	csBody := map[string]interface{}{
+	csBody := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "CatalogSource",
-		"metadata":   map[string]interface{}{"name": CatalogName},
-		"spec": map[string]interface{}{
+		"metadata":   map[string]any{"name": CatalogName},
+		"spec": map[string]any{
 			"image": "quay.io/rhoai/rhoai-fbc-fragment:nightly-4.16-20240101",
 		},
 	}
@@ -318,19 +318,19 @@ func TestGetCatalogSource_ExistsMissingStatus(t *testing.T) {
 
 func TestGetInstallPlan_ReturnsCorrectData(t *testing.T) {
 	// InstallPlan list with one rhods-operator entry
-	ipListResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+	ipListResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":              "install-plan-xyz789",
 					"namespace":         SubNS,
 					"creationTimestamp": "2026-01-01T00:00:00Z",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"approved":                   true,
-					"clusterServiceVersionNames": []interface{}{"rhods-operator.3.5.0-ea.1"},
+					"clusterServiceVersionNames": []any{"rhods-operator.3.5.0-ea.1"},
 				},
-				"status": map[string]interface{}{"phase": "Complete"},
+				"status": map[string]any{"phase": "Complete"},
 			},
 		},
 	}
@@ -363,19 +363,19 @@ func TestGetInstallPlan_ReturnsCorrectData(t *testing.T) {
 
 func TestGetInstallPlan_NoRhodsPlans(t *testing.T) {
 	// InstallPlan list with entries that don't match rhods-operator
-	ipListResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+	ipListResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":              "install-plan-other",
 					"namespace":         SubNS,
 					"creationTimestamp": "2026-01-01T00:00:00Z",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"approved":                   true,
-					"clusterServiceVersionNames": []interface{}{"some-other-operator.1.0.0"},
+					"clusterServiceVersionNames": []any{"some-other-operator.1.0.0"},
 				},
-				"status": map[string]interface{}{"phase": "Complete"},
+				"status": map[string]any{"phase": "Complete"},
 			},
 		},
 	}
@@ -399,8 +399,8 @@ func TestGetInstallPlan_NoRhodsPlans(t *testing.T) {
 
 func TestGetInstallPlan_ListEmpty(t *testing.T) {
 	// InstallPlan list with no entries
-	ipListResponse := map[string]interface{}{
-		"items": []interface{}{},
+	ipListResponse := map[string]any{
+		"items": []any{},
 	}
 	ipListJSON, _ := json.Marshal(ipListResponse)
 
@@ -442,17 +442,17 @@ func TestGetInstallPlan_APIError(t *testing.T) {
 
 func TestGetCatalogPod_ReturnsCorrectData(t *testing.T) {
 	// Pod list with one catalog pod
-	podList := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+	podList := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":      "rhoai-catalog-dev-abc123",
 					"namespace": CatalogNS,
 				},
-				"status": map[string]interface{}{
+				"status": map[string]any{
 					"phase": "Running",
-					"containerStatuses": []interface{}{
-						map[string]interface{}{
+					"containerStatuses": []any{
+						map[string]any{
 							"name":         "registry-server",
 							"ready":        true,
 							"restartCount": float64(2),
@@ -492,7 +492,7 @@ func TestGetCatalogPod_ReturnsCorrectData(t *testing.T) {
 }
 
 func TestGetCatalogPod_NoPods(t *testing.T) {
-	podList := map[string]interface{}{"items": []interface{}{}}
+	podList := map[string]any{"items": []any{}}
 	podListJSON, _ := json.Marshal(podList)
 
 	podsPath := fmt.Sprintf("/api/v1/namespaces/%s/pods", CatalogNS)
@@ -511,17 +511,17 @@ func TestGetCatalogPod_NoPods(t *testing.T) {
 }
 
 func TestGetCatalogPod_PodNotReady(t *testing.T) {
-	podList := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+	podList := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":      "rhoai-catalog-dev-pending",
 					"namespace": CatalogNS,
 				},
-				"status": map[string]interface{}{
+				"status": map[string]any{
 					"phase": "Pending",
-					"containerStatuses": []interface{}{
-						map[string]interface{}{
+					"containerStatuses": []any{
+						map[string]any{
 							"name":         "registry-server",
 							"ready":        false,
 							"restartCount": float64(0),
@@ -560,43 +560,43 @@ func TestGetStatus_IncludesInstallPlanAndCatalogPod(t *testing.T) {
 	t.Setenv("STABLE_SOURCE", "redhat-operators")
 	t.Setenv("STABLE_CHANNEL", "")
 	// Build all required mock responses for GetStatus
-	subResponse := map[string]interface{}{
+	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS},
-		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
-		"status": map[string]interface{}{
+		"metadata": map[string]any{"name": SubName, "namespace": SubNS},
+		"spec":     map[string]any{"source": CatalogName, "channel": "fast"},
+		"status": map[string]any{
 			"state": "AtLatestKnown",
 		},
 	}
 	subJSON, _ := json.Marshal(subResponse)
 
 	// InstallPlan list response (getInstallPlan now lists all installplans)
-	ipListResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+	ipListResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":              "install-plan-status-test",
 					"namespace":         SubNS,
 					"creationTimestamp": "2026-01-01T00:00:00Z",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"approved":                   true,
-					"clusterServiceVersionNames": []interface{}{"rhods-operator.3.5.0"},
+					"clusterServiceVersionNames": []any{"rhods-operator.3.5.0"},
 				},
-				"status": map[string]interface{}{"phase": "Complete"},
+				"status": map[string]any{"phase": "Complete"},
 			},
 		},
 	}
 	ipListJSON, _ := json.Marshal(ipListResponse)
 
-	podList := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhoai-catalog-dev-pod1", "namespace": CatalogNS},
-				"status": map[string]interface{}{
+	podList := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "rhoai-catalog-dev-pod1", "namespace": CatalogNS},
+				"status": map[string]any{
 					"phase": "Running",
-					"containerStatuses": []interface{}{
-						map[string]interface{}{"name": "server", "ready": true, "restartCount": float64(0)},
+					"containerStatuses": []any{
+						map[string]any{"name": "server", "ready": true, "restartCount": float64(0)},
 					},
 				},
 			},
@@ -604,35 +604,35 @@ func TestGetStatus_IncludesInstallPlanAndCatalogPod(t *testing.T) {
 	}
 	podListJSON, _ := json.Marshal(podList)
 
-	csvResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhods-operator.v3.5.0"},
-				"spec":     map[string]interface{}{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
-				"status":   map[string]interface{}{"phase": "Succeeded"},
+	csvResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "rhods-operator.v3.5.0"},
+				"spec":     map[string]any{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
+				"status":   map[string]any{"phase": "Succeeded"},
 			},
 		},
 	}
 	csvJSON, _ := json.Marshal(csvResponse)
 
-	csBody := map[string]interface{}{
+	csBody := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
-		"metadata": map[string]interface{}{"name": CatalogName},
-		"spec":     map[string]interface{}{"image": "quay.io/rhoai/test:latest"},
-		"status":   map[string]interface{}{"connectionState": map[string]interface{}{"lastObservedState": "READY"}},
+		"metadata": map[string]any{"name": CatalogName},
+		"spec":     map[string]any{"image": "quay.io/rhoai/test:latest"},
+		"status":   map[string]any{"connectionState": map[string]any{"lastObservedState": "READY"}},
 	}
 	csJSON, _ := json.Marshal(csBody)
 
-	secretData := map[string]interface{}{
+	secretData := map[string]any{
 		"apiVersion": "v1", "kind": "Secret",
-		"data": map[string]interface{}{".dockerconfigjson": "e30="}, // base64("{}")
+		"data": map[string]any{".dockerconfigjson": "e30="}, // base64("{}")
 	}
 	secretJSON, _ := json.Marshal(secretData)
 
-	idmsData := map[string]interface{}{"items": []interface{}{}}
+	idmsData := map[string]any{"items": []any{}}
 	idmsJSON, _ := json.Marshal(idmsData)
 
-	activityData := map[string]interface{}{"data": map[string]interface{}{}}
+	activityData := map[string]any{"data": map[string]any{}}
 	activityJSON, _ := json.Marshal(activityData)
 
 	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)

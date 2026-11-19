@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -127,7 +128,7 @@ func (m *dashboardTagMock) RoundTrip(r *http.Request) (*http.Response, error) {
 		if !ok {
 			return answer(http.StatusOK, `{"config":{}}`, nil)
 		}
-		b, _ := json.Marshal(map[string]interface{}{"created": fakeImageCreated, "config": map[string]interface{}{"Labels": labels}})
+		b, _ := json.Marshal(map[string]any{"created": fakeImageCreated, "config": map[string]any{"Labels": labels}})
 		return answer(http.StatusOK, string(b), nil)
 	}
 	return answer(http.StatusNotFound, "", nil)
@@ -643,19 +644,18 @@ func TestDashboardInterruptedDeployCanBeRetried(t *testing.T) {
 	}
 }
 
-func dashboardTestPod(name, container, image string, ready bool, status map[string]interface{}) map[string]interface{} {
-	cs := map[string]interface{}{"name": container, "ready": ready, "restartCount": 0, "state": map[string]interface{}{"running": map[string]interface{}{}}}
-	for k, v := range status {
-		cs[k] = v
-	}
-	return map[string]interface{}{
+func dashboardTestPod(name, image string, ready bool, status map[string]any) map[string]any {
+	container := "notebooks-ui"
+	cs := map[string]any{"name": container, "ready": ready, "restartCount": 0, "state": map[string]any{"running": map[string]any{}}}
+	maps.Copy(cs, status)
+	return map[string]any{
 		// Like a real Deployment pod: a pod-template-hash label and its
 		// ReplicaSet "<deployment>-<hash>" as controlling owner (container is
 		// the Deployment's name in these tests).
-		"metadata": map[string]interface{}{"name": name, "labels": map[string]string{"app": "notebooks", "pod-template-hash": name}, "creationTimestamp": "2026-10-05T10:00:00Z",
-			"ownerReferences": []map[string]interface{}{{"kind": "ReplicaSet", "name": container + "-" + name, "controller": true}}},
-		"spec":   map[string]interface{}{"containers": []map[string]string{{"name": container, "image": image}}},
-		"status": map[string]interface{}{"containerStatuses": []interface{}{cs}},
+		"metadata": map[string]any{"name": name, "labels": map[string]string{"app": "notebooks", "pod-template-hash": name}, "creationTimestamp": "2026-10-05T10:00:00Z",
+			"ownerReferences": []map[string]any{{"kind": "ReplicaSet", "name": container + "-" + name, "controller": true}}},
+		"spec":   map[string]any{"containers": []map[string]string{{"name": container, "image": image}}},
+		"status": map[string]any{"containerStatuses": []any{cs}},
 	}
 }
 
@@ -664,16 +664,16 @@ func dashboardTestPod(name, container, image string, ready bool, status map[stri
 func TestDashboardStuckRolloutReportsReasons(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
-		status      map[string]interface{}
-		conditions  []interface{}
+		status      map[string]any
+		conditions  []any
 		stuck       bool
 		wantReason  string
 		wantMessage string
 		restarts    int
 	}{
-		{name: "image-pull", status: map[string]interface{}{"state": map[string]interface{}{"waiting": map[string]string{"reason": "ImagePullBackOff", "message": "Back-off pulling image"}}}, stuck: true, wantReason: "ImagePullBackOff", wantMessage: "Back-off pulling image"},
-		{name: "crash-loop", status: map[string]interface{}{"restartCount": 4, "state": map[string]interface{}{"waiting": map[string]string{"reason": "CrashLoopBackOff"}}, "lastState": map[string]interface{}{"terminated": map[string]string{"reason": "Error"}}}, wantReason: "CrashLoopBackOff", wantMessage: "last exit: Error", restarts: 4},
-		{name: "unschedulable", conditions: []interface{}{map[string]string{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/3 nodes are available"}}, wantReason: "Unschedulable", wantMessage: "0/3 nodes are available"},
+		{name: "image-pull", status: map[string]any{"state": map[string]any{"waiting": map[string]string{"reason": "ImagePullBackOff", "message": "Back-off pulling image"}}}, stuck: true, wantReason: "ImagePullBackOff", wantMessage: "Back-off pulling image"},
+		{name: "crash-loop", status: map[string]any{"restartCount": 4, "state": map[string]any{"waiting": map[string]string{"reason": "CrashLoopBackOff"}}, "lastState": map[string]any{"terminated": map[string]string{"reason": "Error"}}}, wantReason: "CrashLoopBackOff", wantMessage: "last exit: Error", restarts: 4},
+		{name: "unschedulable", conditions: []any{map[string]string{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/3 nodes are available"}}, wantReason: "Unschedulable", wantMessage: "0/3 nodes are available"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newDashboardDevFixture(t)
@@ -692,19 +692,19 @@ func TestDashboardStuckRolloutReportsReasons(t *testing.T) {
 			}
 			f.workloads["notebooks-ui"] = d
 			newImage := d.Spec.Template.Spec.Containers[0].Image
-			oldPod := dashboardTestPod("notebooks-old", "notebooks-ui", "release-notebooks", true, nil)
-			newPod := dashboardTestPod("notebooks-new", "notebooks-ui", newImage, false, tc.status)
+			oldPod := dashboardTestPod("notebooks-old", "release-notebooks", true, nil)
+			newPod := dashboardTestPod("notebooks-new", newImage, false, tc.status)
 			if tc.conditions != nil {
-				newPod["status"] = map[string]interface{}{"conditions": tc.conditions}
+				newPod["status"] = map[string]any{"conditions": tc.conditions}
 			}
-			other := dashboardTestPod("other", "notebooks-ui", newImage, false, nil)
-			other["metadata"].(map[string]interface{})["labels"] = map[string]string{"app": "other"}
+			other := dashboardTestPod("other", newImage, false, nil)
+			other["metadata"].(map[string]any)["labels"] = map[string]string{"app": "other"}
 			// Same labels as the Deployment's pods, newer and not ready, but
 			// owned by another Deployment's ReplicaSet: never this one's pod.
-			foreign := dashboardTestPod("foreign", "notebooks-ui", newImage, false, map[string]interface{}{"state": map[string]interface{}{"waiting": map[string]interface{}{"reason": "ErrImagePull"}}})
-			foreign["metadata"].(map[string]interface{})["creationTimestamp"] = "2026-10-06T10:00:00Z"
-			foreign["metadata"].(map[string]interface{})["ownerReferences"] = []map[string]interface{}{{"kind": "ReplicaSet", "name": "other-deployment-foreign", "controller": true}}
-			f.pods = []map[string]interface{}{oldPod, newPod, other, foreign}
+			foreign := dashboardTestPod("foreign", newImage, false, map[string]any{"state": map[string]any{"waiting": map[string]any{"reason": "ErrImagePull"}}})
+			foreign["metadata"].(map[string]any)["creationTimestamp"] = "2026-10-06T10:00:00Z"
+			foreign["metadata"].(map[string]any)["ownerReferences"] = []map[string]any{{"kind": "ReplicaSet", "name": "other-deployment-foreign", "controller": true}}
+			f.pods = []map[string]any{oldPod, newPod, other, foreign}
 
 			var state types.DashboardState
 			populateDashboardDevState(c, &state)

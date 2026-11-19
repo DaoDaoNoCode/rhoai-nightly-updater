@@ -10,22 +10,22 @@ import (
 )
 
 func TestGetDashboardState_NoPR(t *testing.T) {
-	deploy := map[string]interface{}{
-		"metadata": map[string]interface{}{
-			"annotations": map[string]interface{}{
+	deploy := map[string]any{
+		"metadata": map[string]any{
+			"annotations": map[string]any{
 				"opendatahub.io/managed": "true",
 			},
 		},
-		"spec": map[string]interface{}{
-			"selector": map[string]interface{}{
-				"matchLabels": map[string]interface{}{
+		"spec": map[string]any{
+			"selector": map[string]any{
+				"matchLabels": map[string]any{
 					"app": "rhods-dashboard",
 				},
 			},
-			"template": map[string]interface{}{
-				"spec": map[string]interface{}{
-					"containers": []interface{}{
-						map[string]interface{}{
+			"template": map[string]any{
+				"spec": map[string]any{
+					"containers": []any{
+						map[string]any{
 							"name":  "rhods-dashboard",
 							"image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5",
 						},
@@ -36,31 +36,31 @@ func TestGetDashboardState_NoPR(t *testing.T) {
 	}
 	deployJSON, _ := json.Marshal(deploy)
 
-	podList := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+	podList := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":      "rhods-dashboard-abc",
 					"namespace": "redhat-ods-applications",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"nodeName": "node-1",
-					"containers": []interface{}{
-						map[string]interface{}{
+					"containers": []any{
+						map[string]any{
 							"name":  "rhods-dashboard",
 							"image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5",
 						},
 					},
 				},
-				"status": map[string]interface{}{
+				"status": map[string]any{
 					"phase": "Running",
-					"containerStatuses": []interface{}{
-						map[string]interface{}{
+					"containerStatuses": []any{
+						map[string]any{
 							"name":         "rhods-dashboard",
 							"ready":        true,
 							"restartCount": 0,
-							"state": map[string]interface{}{
-								"running": map[string]interface{}{},
+							"state": map[string]any{
+								"running": map[string]any{},
 							},
 						},
 					},
@@ -68,7 +68,7 @@ func TestGetDashboardState_NoPR(t *testing.T) {
 			},
 		},
 	}
-	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
@@ -96,26 +96,26 @@ func TestGetDashboardState_NoPR(t *testing.T) {
 }
 
 func TestGetDashboardState_SingleContainerPR(t *testing.T) {
-	deploy := map[string]interface{}{
-		"metadata": map[string]interface{}{
-			"annotations": map[string]interface{}{
+	deploy := map[string]any{
+		"metadata": map[string]any{
+			"annotations": map[string]any{
 				"opendatahub.io/managed": "false",
 			},
 		},
-		"spec": map[string]interface{}{
-			"selector": map[string]interface{}{
-				"matchLabels": map[string]interface{}{
+		"spec": map[string]any{
+			"selector": map[string]any{
+				"matchLabels": map[string]any{
 					"app": "rhods-dashboard",
 				},
 			},
-			"template": map[string]interface{}{
-				"spec": map[string]interface{}{
-					"containers": []interface{}{
-						map[string]interface{}{
+			"template": map[string]any{
+				"spec": map[string]any{
+					"containers": []any{
+						map[string]any{
 							"name":  "rhods-dashboard",
 							"image": "quay.io/opendatahub/odh-dashboard:pr-42",
 						},
-						map[string]interface{}{
+						map[string]any{
 							"name":  "model-registry-ui",
 							"image": "registry.redhat.io/rhoai/model-registry-ui:v3.5",
 						},
@@ -126,8 +126,8 @@ func TestGetDashboardState_SingleContainerPR(t *testing.T) {
 	}
 	deployJSON, _ := json.Marshal(deploy)
 
-	podList := map[string]interface{}{"items": []interface{}{}}
-	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
+	podList := map[string]any{"items": []any{}}
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
@@ -158,26 +158,26 @@ func TestGetDashboardState_SingleContainerPR(t *testing.T) {
 }
 
 func TestGetDashboardState_MultiContainerPR(t *testing.T) {
-	deploy := map[string]interface{}{
-		"metadata": map[string]interface{}{},
-		"spec": map[string]interface{}{
-			"selector": map[string]interface{}{
-				"matchLabels": map[string]interface{}{
+	deploy := map[string]any{
+		"metadata": map[string]any{},
+		"spec": map[string]any{
+			"selector": map[string]any{
+				"matchLabels": map[string]any{
 					"app": "rhods-dashboard",
 				},
 			},
-			"template": map[string]interface{}{
-				"spec": map[string]interface{}{
-					"containers": []interface{}{
-						map[string]interface{}{
+			"template": map[string]any{
+				"spec": map[string]any{
+					"containers": []any{
+						map[string]any{
 							"name":  "rhods-dashboard",
 							"image": "quay.io/opendatahub/odh-dashboard:pr-99",
 						},
-						map[string]interface{}{
+						map[string]any{
 							"name":  "model-registry-ui",
 							"image": "quay.io/opendatahub/odh-mod-arch-modular-architecture:pr-99",
 						},
-						map[string]interface{}{
+						map[string]any{
 							"name":  "gen-ai-ui",
 							"image": "quay.io/opendatahub/odh-mod-arch-gen-ai:pr-99",
 						},
@@ -188,8 +188,8 @@ func TestGetDashboardState_MultiContainerPR(t *testing.T) {
 	}
 	deployJSON, _ := json.Marshal(deploy)
 
-	podList := map[string]interface{}{"items": []interface{}{}}
-	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
+	podList := map[string]any{"items": []any{}}
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
@@ -240,22 +240,22 @@ func TestPRContainerRepos_Entries(t *testing.T) {
 }
 
 func TestGetDashboardState_RolloutPending(t *testing.T) {
-	deploy := map[string]interface{}{
-		"metadata": map[string]interface{}{
-			"annotations": map[string]interface{}{
+	deploy := map[string]any{
+		"metadata": map[string]any{
+			"annotations": map[string]any{
 				"opendatahub.io/managed": "true",
 			},
 		},
-		"spec": map[string]interface{}{
-			"selector": map[string]interface{}{
-				"matchLabels": map[string]interface{}{
+		"spec": map[string]any{
+			"selector": map[string]any{
+				"matchLabels": map[string]any{
 					"app": "rhods-dashboard",
 				},
 			},
-			"template": map[string]interface{}{
-				"spec": map[string]interface{}{
-					"containers": []interface{}{
-						map[string]interface{}{
+			"template": map[string]any{
+				"spec": map[string]any{
+					"containers": []any{
+						map[string]any{
 							"name":  "rhods-dashboard",
 							"image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5",
 						},
@@ -267,57 +267,57 @@ func TestGetDashboardState_RolloutPending(t *testing.T) {
 	deployJSON, _ := json.Marshal(deploy)
 
 	// Two pods: one ready, one not ready (simulates a rollout)
-	podList := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+	podList := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":      "rhods-dashboard-old",
 					"namespace": "redhat-ods-applications",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"nodeName": "node-1",
-					"containers": []interface{}{
-						map[string]interface{}{
+					"containers": []any{
+						map[string]any{
 							"name":  "rhods-dashboard",
 							"image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5",
 						},
 					},
 				},
-				"status": map[string]interface{}{
+				"status": map[string]any{
 					"phase": "Running",
-					"containerStatuses": []interface{}{
-						map[string]interface{}{
+					"containerStatuses": []any{
+						map[string]any{
 							"name":         "rhods-dashboard",
 							"ready":        true,
 							"restartCount": 0,
-							"state":        map[string]interface{}{"running": map[string]interface{}{}},
+							"state":        map[string]any{"running": map[string]any{}},
 						},
 					},
 				},
 			},
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":      "rhods-dashboard-new",
 					"namespace": "redhat-ods-applications",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"nodeName": "node-2",
-					"containers": []interface{}{
-						map[string]interface{}{
+					"containers": []any{
+						map[string]any{
 							"name":  "rhods-dashboard",
 							"image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.6",
 						},
 					},
 				},
-				"status": map[string]interface{}{
+				"status": map[string]any{
 					"phase": "Pending",
-					"containerStatuses": []interface{}{
-						map[string]interface{}{
+					"containerStatuses": []any{
+						map[string]any{
 							"name":         "rhods-dashboard",
 							"ready":        false,
 							"restartCount": 0,
-							"state": map[string]interface{}{
-								"waiting": map[string]interface{}{"reason": "ContainerCreating"},
+							"state": map[string]any{
+								"waiting": map[string]any{"reason": "ContainerCreating"},
 							},
 						},
 					},
@@ -325,7 +325,7 @@ func TestGetDashboardState_RolloutPending(t *testing.T) {
 			},
 		},
 	}
-	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
@@ -369,30 +369,30 @@ func TestGetDashboardState_ContainersReadyDuringRollout(t *testing.T) {
 	// During a rollout (multiple pods, not all ready) the rollout branch sets
 	// ContainersTotal from the first not-ready pod but does NOT compute
 	// ContainersReady, so it must stay 0.
-	deploy := map[string]interface{}{
-		"metadata": map[string]interface{}{
-			"annotations": map[string]interface{}{
+	deploy := map[string]any{
+		"metadata": map[string]any{
+			"annotations": map[string]any{
 				"opendatahub.io/managed": "true",
 			},
 		},
-		"spec": map[string]interface{}{
-			"selector": map[string]interface{}{
-				"matchLabels": map[string]interface{}{
+		"spec": map[string]any{
+			"selector": map[string]any{
+				"matchLabels": map[string]any{
 					"app": "rhods-dashboard",
 				},
 			},
-			"template": map[string]interface{}{
-				"spec": map[string]interface{}{
-					"containers": []interface{}{
-						map[string]interface{}{
+			"template": map[string]any{
+				"spec": map[string]any{
+					"containers": []any{
+						map[string]any{
 							"name":  "rhods-dashboard",
 							"image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.6",
 						},
-						map[string]interface{}{
+						map[string]any{
 							"name":  "model-registry-ui",
 							"image": "registry.redhat.io/rhoai/model-registry-ui:v3.6",
 						},
-						map[string]interface{}{
+						map[string]any{
 							"name":  "gen-ai-ui",
 							"image": "registry.redhat.io/rhoai/gen-ai-ui:v3.6",
 						},
@@ -405,57 +405,57 @@ func TestGetDashboardState_ContainersReadyDuringRollout(t *testing.T) {
 
 	// Three pods: one ready old pod, one new pod with 2/3 containers ready,
 	// one new pod still pending. This exercises the rollout branch.
-	podList := map[string]interface{}{
-		"items": []interface{}{
+	podList := map[string]any{
+		"items": []any{
 			// Old pod -- fully ready
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":      "rhods-dashboard-old-abc",
 					"namespace": "redhat-ods-applications",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"nodeName": "node-1",
-					"containers": []interface{}{
-						map[string]interface{}{"name": "rhods-dashboard", "image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5"},
-						map[string]interface{}{"name": "model-registry-ui", "image": "registry.redhat.io/rhoai/model-registry-ui:v3.5"},
-						map[string]interface{}{"name": "gen-ai-ui", "image": "registry.redhat.io/rhoai/gen-ai-ui:v3.5"},
+					"containers": []any{
+						map[string]any{"name": "rhods-dashboard", "image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5"},
+						map[string]any{"name": "model-registry-ui", "image": "registry.redhat.io/rhoai/model-registry-ui:v3.5"},
+						map[string]any{"name": "gen-ai-ui", "image": "registry.redhat.io/rhoai/gen-ai-ui:v3.5"},
 					},
 				},
-				"status": map[string]interface{}{
+				"status": map[string]any{
 					"phase": "Running",
-					"containerStatuses": []interface{}{
-						map[string]interface{}{"name": "rhods-dashboard", "ready": true, "restartCount": 0, "state": map[string]interface{}{"running": map[string]interface{}{}}},
-						map[string]interface{}{"name": "model-registry-ui", "ready": true, "restartCount": 0, "state": map[string]interface{}{"running": map[string]interface{}{}}},
-						map[string]interface{}{"name": "gen-ai-ui", "ready": true, "restartCount": 0, "state": map[string]interface{}{"running": map[string]interface{}{}}},
+					"containerStatuses": []any{
+						map[string]any{"name": "rhods-dashboard", "ready": true, "restartCount": 0, "state": map[string]any{"running": map[string]any{}}},
+						map[string]any{"name": "model-registry-ui", "ready": true, "restartCount": 0, "state": map[string]any{"running": map[string]any{}}},
+						map[string]any{"name": "gen-ai-ui", "ready": true, "restartCount": 0, "state": map[string]any{"running": map[string]any{}}},
 					},
 				},
 			},
 			// New pod -- 2 of 3 containers ready, 1 still waiting
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":      "rhods-dashboard-new-xyz",
 					"namespace": "redhat-ods-applications",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"nodeName": "node-2",
-					"containers": []interface{}{
-						map[string]interface{}{"name": "rhods-dashboard", "image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.6"},
-						map[string]interface{}{"name": "model-registry-ui", "image": "registry.redhat.io/rhoai/model-registry-ui:v3.6"},
-						map[string]interface{}{"name": "gen-ai-ui", "image": "registry.redhat.io/rhoai/gen-ai-ui:v3.6"},
+					"containers": []any{
+						map[string]any{"name": "rhods-dashboard", "image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.6"},
+						map[string]any{"name": "model-registry-ui", "image": "registry.redhat.io/rhoai/model-registry-ui:v3.6"},
+						map[string]any{"name": "gen-ai-ui", "image": "registry.redhat.io/rhoai/gen-ai-ui:v3.6"},
 					},
 				},
-				"status": map[string]interface{}{
+				"status": map[string]any{
 					"phase": "Running",
-					"containerStatuses": []interface{}{
-						map[string]interface{}{"name": "rhods-dashboard", "ready": true, "restartCount": 0, "state": map[string]interface{}{"running": map[string]interface{}{}}},
-						map[string]interface{}{"name": "model-registry-ui", "ready": true, "restartCount": 0, "state": map[string]interface{}{"running": map[string]interface{}{}}},
-						map[string]interface{}{"name": "gen-ai-ui", "ready": false, "restartCount": 0, "state": map[string]interface{}{"waiting": map[string]interface{}{"reason": "ContainerCreating"}}},
+					"containerStatuses": []any{
+						map[string]any{"name": "rhods-dashboard", "ready": true, "restartCount": 0, "state": map[string]any{"running": map[string]any{}}},
+						map[string]any{"name": "model-registry-ui", "ready": true, "restartCount": 0, "state": map[string]any{"running": map[string]any{}}},
+						map[string]any{"name": "gen-ai-ui", "ready": false, "restartCount": 0, "state": map[string]any{"waiting": map[string]any{"reason": "ContainerCreating"}}},
 					},
 				},
 			},
 		},
 	}
-	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
@@ -508,22 +508,22 @@ func TestGetDashboardState_ContainersTotalFallbackForPendingPod(t *testing.T) {
 	// When containerStatuses is empty (Pending pod before kubelet reports),
 	// getDashboardPods falls back to spec containers so the UI shows "0/N"
 	// instead of "0/0".
-	deploy := map[string]interface{}{
-		"metadata": map[string]interface{}{},
-		"spec": map[string]interface{}{
-			"selector": map[string]interface{}{
-				"matchLabels": map[string]interface{}{
+	deploy := map[string]any{
+		"metadata": map[string]any{},
+		"spec": map[string]any{
+			"selector": map[string]any{
+				"matchLabels": map[string]any{
 					"app": "rhods-dashboard",
 				},
 			},
-			"template": map[string]interface{}{
-				"spec": map[string]interface{}{
-					"containers": []interface{}{
-						map[string]interface{}{
+			"template": map[string]any{
+				"spec": map[string]any{
+					"containers": []any{
+						map[string]any{
 							"name":  "rhods-dashboard",
 							"image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5",
 						},
-						map[string]interface{}{
+						map[string]any{
 							"name":  "model-registry-ui",
 							"image": "registry.redhat.io/rhoai/model-registry-ui:v3.5",
 						},
@@ -535,34 +535,34 @@ func TestGetDashboardState_ContainersTotalFallbackForPendingPod(t *testing.T) {
 	deployJSON, _ := json.Marshal(deploy)
 
 	// Single Pending pod with NO containerStatuses (kubelet hasn't reported yet)
-	podList := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+	podList := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":      "rhods-dashboard-pending",
 					"namespace": "redhat-ods-applications",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"nodeName": "",
-					"containers": []interface{}{
-						map[string]interface{}{
+					"containers": []any{
+						map[string]any{
 							"name":  "rhods-dashboard",
 							"image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5",
 						},
-						map[string]interface{}{
+						map[string]any{
 							"name":  "model-registry-ui",
 							"image": "registry.redhat.io/rhoai/model-registry-ui:v3.5",
 						},
 					},
 				},
-				"status": map[string]interface{}{
+				"status": map[string]any{
 					"phase": "Pending",
 					// No containerStatuses -- simulates a pod just created
 				},
 			},
 		},
 	}
-	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
@@ -614,8 +614,8 @@ func TestGetDashboardPods_URLEncodesLabelSelector(t *testing.T) {
 	// getDashboardPods must URL-encode label selector values that contain
 	// special characters (slashes, spaces, equals signs, etc.).
 	var capturedRawQuery string
-	podList := map[string]interface{}{"items": []interface{}{}}
-	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
+	podList := map[string]any{"items": []any{}}
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/namespaces/redhat-ods-applications/pods" {
@@ -703,30 +703,30 @@ func TestIsStandaloneMode(t *testing.T) {
 
 func TestGetDashboardState_StandaloneMode(t *testing.T) {
 	// Main deployment has only core containers (standalone mode)
-	deploy := map[string]interface{}{
-		"metadata": map[string]interface{}{
-			"annotations": map[string]interface{}{
+	deploy := map[string]any{
+		"metadata": map[string]any{
+			"annotations": map[string]any{
 				"opendatahub.io/managed": "true",
 			},
 		},
-		"spec": map[string]interface{}{
-			"selector": map[string]interface{}{
-				"matchLabels": map[string]interface{}{
+		"spec": map[string]any{
+			"selector": map[string]any{
+				"matchLabels": map[string]any{
 					"app": "rhods-dashboard",
 				},
 			},
-			"template": map[string]interface{}{
-				"spec": map[string]interface{}{
-					"containers": []interface{}{
-						map[string]interface{}{
+			"template": map[string]any{
+				"spec": map[string]any{
+					"containers": []any{
+						map[string]any{
 							"name":  "rhods-dashboard",
 							"image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5",
 						},
-						map[string]interface{}{
+						map[string]any{
 							"name":  "kube-rbac-proxy",
 							"image": "quay.io/opendatahub/odh-kube-rbac-proxy:latest",
 						},
-						map[string]interface{}{
+						map[string]any{
 							"name":  "core-bff",
 							"image": "quay.io/opendatahub/odh-core-bff:main",
 						},
@@ -738,12 +738,12 @@ func TestGetDashboardState_StandaloneMode(t *testing.T) {
 	deployJSON, _ := json.Marshal(deploy)
 
 	// Standalone module deployment with a PR image
-	moduleDeploy := map[string]interface{}{
-		"spec": map[string]interface{}{
-			"template": map[string]interface{}{
-				"spec": map[string]interface{}{
-					"containers": []interface{}{
-						map[string]interface{}{
+	moduleDeploy := map[string]any{
+		"spec": map[string]any{
+			"template": map[string]any{
+				"spec": map[string]any{
+					"containers": []any{
+						map[string]any{
 							"name":  "model-registry-ui",
 							"image": "quay.io/opendatahub/odh-mod-arch-modular-architecture:pr-42",
 						},
@@ -754,8 +754,8 @@ func TestGetDashboardState_StandaloneMode(t *testing.T) {
 	}
 	moduleDeployJSON, _ := json.Marshal(moduleDeploy)
 
-	podList := map[string]interface{}{"items": []interface{}{}}
-	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
+	podList := map[string]any{"items": []any{}}
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
@@ -795,22 +795,22 @@ func TestGetDashboardState_StandaloneMode(t *testing.T) {
 }
 
 func TestGetDashboardState_SidecarModeDetection(t *testing.T) {
-	deploy := map[string]interface{}{
-		"metadata": map[string]interface{}{},
-		"spec": map[string]interface{}{
-			"selector": map[string]interface{}{
-				"matchLabels": map[string]interface{}{
+	deploy := map[string]any{
+		"metadata": map[string]any{},
+		"spec": map[string]any{
+			"selector": map[string]any{
+				"matchLabels": map[string]any{
 					"app": "rhods-dashboard",
 				},
 			},
-			"template": map[string]interface{}{
-				"spec": map[string]interface{}{
-					"containers": []interface{}{
-						map[string]interface{}{
+			"template": map[string]any{
+				"spec": map[string]any{
+					"containers": []any{
+						map[string]any{
 							"name":  "rhods-dashboard",
 							"image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5",
 						},
-						map[string]interface{}{
+						map[string]any{
 							"name":  "model-registry-ui",
 							"image": "registry.redhat.io/rhoai/model-registry:v3.5",
 						},
@@ -820,8 +820,8 @@ func TestGetDashboardState_SidecarModeDetection(t *testing.T) {
 		},
 	}
 	deployJSON, _ := json.Marshal(deploy)
-	podList := map[string]interface{}{"items": []interface{}{}}
-	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
+	podList := map[string]any{"items": []any{}}
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
@@ -844,22 +844,22 @@ func TestGetDashboardState_SidecarModeDetection(t *testing.T) {
 
 func TestDeployPRImage_Standalone(t *testing.T) {
 	// Main deployment with core containers only (standalone mode)
-	deploy := map[string]interface{}{
-		"metadata": map[string]interface{}{
-			"annotations": map[string]interface{}{
+	deploy := map[string]any{
+		"metadata": map[string]any{
+			"annotations": map[string]any{
 				"opendatahub.io/managed": "true",
 			},
 		},
-		"spec": map[string]interface{}{
-			"selector": map[string]interface{}{
-				"matchLabels": map[string]interface{}{"app": "rhods-dashboard"},
+		"spec": map[string]any{
+			"selector": map[string]any{
+				"matchLabels": map[string]any{"app": "rhods-dashboard"},
 			},
-			"template": map[string]interface{}{
-				"spec": map[string]interface{}{
-					"containers": []interface{}{
-						map[string]interface{}{"name": "rhods-dashboard", "image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5"},
-						map[string]interface{}{"name": "kube-rbac-proxy", "image": "quay.io/opendatahub/odh-kube-rbac-proxy:latest"},
-						map[string]interface{}{"name": "core-bff", "image": "quay.io/opendatahub/odh-core-bff:main"},
+			"template": map[string]any{
+				"spec": map[string]any{
+					"containers": []any{
+						map[string]any{"name": "rhods-dashboard", "image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5"},
+						map[string]any{"name": "kube-rbac-proxy", "image": "quay.io/opendatahub/odh-kube-rbac-proxy:latest"},
+						map[string]any{"name": "core-bff", "image": "quay.io/opendatahub/odh-core-bff:main"},
 					},
 				},
 			},
@@ -868,12 +868,12 @@ func TestDeployPRImage_Standalone(t *testing.T) {
 	deployJSON, _ := json.Marshal(deploy)
 
 	// Standalone module deployment
-	moduleDeploy := map[string]interface{}{
-		"spec": map[string]interface{}{
-			"template": map[string]interface{}{
-				"spec": map[string]interface{}{
-					"containers": []interface{}{
-						map[string]interface{}{"name": "model-registry-ui", "image": "registry.redhat.io/rhoai/model-registry:v3.5"},
+	moduleDeploy := map[string]any{
+		"spec": map[string]any{
+			"template": map[string]any{
+				"spec": map[string]any{
+					"containers": []any{
+						map[string]any{"name": "model-registry-ui", "image": "registry.redhat.io/rhoai/model-registry:v3.5"},
 					},
 				},
 			},
@@ -881,8 +881,8 @@ func TestDeployPRImage_Standalone(t *testing.T) {
 	}
 	moduleDeployJSON, _ := json.Marshal(moduleDeploy)
 
-	podList := map[string]interface{}{"items": []interface{}{}}
-	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
+	podList := map[string]any{"items": []any{}}
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	client, requests, cleanup := newRecordingMockClient(map[string]mockResponse{
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
@@ -951,17 +951,18 @@ func TestModuleContainers_MatchesModuleRegistry(t *testing.T) {
 // ownedByReplicaSets gives each fixture pod what a real Deployment pod has:
 // a pod-template-hash label and its ReplicaSet "<deployment>-<hash>" as the
 // controlling owner (the hash is the pod's name, unique per fixture).
-func ownedByReplicaSets(podList map[string]interface{}, deployment string) map[string]interface{} {
-	for _, item := range podList["items"].([]interface{}) {
-		meta := item.(map[string]interface{})["metadata"].(map[string]interface{})
+func ownedByReplicaSets(podList map[string]any) map[string]any {
+	deployment := dashboardDeploymentName
+	for _, item := range podList["items"].([]any) {
+		meta := item.(map[string]any)["metadata"].(map[string]any)
 		name := meta["name"].(string)
-		labels, _ := meta["labels"].(map[string]interface{})
+		labels, _ := meta["labels"].(map[string]any)
 		if labels == nil {
-			labels = map[string]interface{}{}
+			labels = map[string]any{}
 		}
 		labels["pod-template-hash"] = name
 		meta["labels"] = labels
-		meta["ownerReferences"] = []interface{}{map[string]interface{}{"kind": "ReplicaSet", "name": deployment + "-" + name, "controller": true}}
+		meta["ownerReferences"] = []any{map[string]any{"kind": "ReplicaSet", "name": deployment + "-" + name, "controller": true}}
 	}
 	return podList
 }

@@ -14,7 +14,7 @@ import (
 func TestActivityRetentionPerCategory(t *testing.T) {
 	var entries []types.ActivityEntry
 	entries = append(entries, types.ActivityEntry{Action: "update", Detail: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + strings.Repeat("a", 64)})
-	for i := 0; i < 200; i++ { // Dashboard Dev noise after the update
+	for i := range 200 { // Dashboard Dev noise after the update
 		entries = append(entries, types.ActivityEntry{Action: "deploy-dashboard-pr", Detail: fmt.Sprintf("PR %d", i)})
 	}
 	got := trimActivity(entries)
@@ -27,7 +27,7 @@ func TestActivityRetentionPerCategory(t *testing.T) {
 	if got[len(got)-1].Detail != "PR 199" {
 		t.Fatal("newest entry not kept")
 	}
-	for i := 0; i < 60; i++ {
+	for range 60 {
 		got = trimActivity(append(got, types.ActivityEntry{Action: "refresh"}))
 	}
 	ops := 0
@@ -43,7 +43,7 @@ func TestActivityRetentionPerCategory(t *testing.T) {
 
 func TestActivityStaysFarBelowConfigMapLimit(t *testing.T) {
 	var entries []types.ActivityEntry
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		entries = append(entries, types.ActivityEntry{Action: []string{"update", "deploy-pr", "create-dsc", "fix-maas-gateway", "unknown-x"}[i%5], Detail: strings.Repeat("d", maxActivityDetail)})
 	}
 	data, _ := json.Marshal(trimActivity(entries))
@@ -76,7 +76,7 @@ func TestDescribeActivity(t *testing.T) {
 // Every action the code records has a label and a category.
 func TestEveryRecordedActionIsDescribed(t *testing.T) {
 	for _, a := range []string{"update", "refresh", "reinstall", "rollback", "deploy-pr", "deploy-dashboard-pr", "deploy-dashboard-main",
-		"revert-dashboard", "setup-minio", "teardown-minio", "setup-pipeline-server", "teardown-pipeline-server", "setup-mlflow",
+		"revert-dashboard", "setup-s3", "teardown-s3", "setup-pipeline-server", "teardown-pipeline-server", "setup-mlflow",
 		"teardown-mlflow", "deploy-mlflow-pr", "revert-mlflow", "create-pull-secret", "create-dsc", "repair-dsc", "assist-rollout",
 		"fix-delete-stale-webhooks", "fix-recreate-subscription", "fix-delete-stale-installplans", "fix-maas-gateway",
 		"disable-component", "restart-operator"} {
@@ -110,7 +110,7 @@ func TestOperationMarkerRoundTrip(t *testing.T) {
 				w.Write([]byte(`{"kind":"Status","status":"Failure","code":404}`))
 				return
 			}
-			data, _ := json.Marshal(map[string]interface{}{"data": map[string]string{"operation": stored}})
+			data, _ := json.Marshal(map[string]any{"data": map[string]string{"operation": stored}})
 			w.Write(data)
 		default:
 			t.Errorf("unexpected method %s", r.Method)
@@ -148,7 +148,10 @@ func TestDescribeActivity_FailedLabelsAndCategories(t *testing.T) {
 	}{
 		{types.ActivityEntry{Action: "update", Success: true}, "Updated to nightly", "operator"},
 		{types.ActivityEntry{Action: "update", Success: false}, "Update to nightly failed", "operator"},
+		{types.ActivityEntry{Action: "teardown-s3", Success: false}, "S3 storage teardown failed", "test-resources"},
+		// Entries an earlier version recorded under the MinIO-era names.
 		{types.ActivityEntry{Action: "teardown-minio", Success: false}, "S3 storage teardown failed", "test-resources"},
+		{types.ActivityEntry{Action: "setup-minio", Success: true}, "S3 storage set up", "test-resources"},
 		{types.ActivityEntry{Action: "setup-mlflow", Success: true}, "MLflow set up", "test-resources"},
 		{types.ActivityEntry{Action: "deploy-dashboard-main", Success: true}, "Dashboard main deployed", "dashboard-dev"},
 		{types.ActivityEntry{Action: "assist-rollout", Success: false}, "Stuck rollout assisted", "diagnostics"},
@@ -159,5 +162,10 @@ func TestDescribeActivity_FailedLabelsAndCategories(t *testing.T) {
 		if e.Label != tc.label || e.Category != tc.catego {
 			t.Errorf("%s success=%v: got %q/%q, want %q/%q", e.Action, e.Success, e.Label, e.Category, tc.label, tc.catego)
 		}
+	}
+	old := types.ActivityEntry{Action: "setup-minio", Success: true}
+	describeActivity(&old)
+	if old.Action != "setup-s3" {
+		t.Errorf("an old entry's action reads as %q", old.Action)
 	}
 }

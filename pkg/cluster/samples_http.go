@@ -248,7 +248,7 @@ func parseSampleAPIError(server string, status int, body []byte) *sampleAPIError
 
 // send makes one request. body is sent as is with contentType; out, when
 // not nil, receives the JSON answer.
-func (a *sampleAPI) send(method, path string, query url.Values, contentType string, body []byte, out interface{}) error {
+func (a *sampleAPI) send(method, path string, query url.Values, contentType string, body []byte, out any) error {
 	u := a.base + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
@@ -294,7 +294,7 @@ func (a *sampleAPI) send(method, path string, query url.Values, contentType stri
 }
 
 // sendJSON sends in as JSON (nil sends no body).
-func (a *sampleAPI) sendJSON(method, path string, query url.Values, in, out interface{}) error {
+func (a *sampleAPI) sendJSON(method, path string, query url.Values, in, out any) error {
 	if in == nil {
 		return a.send(method, path, query, "", nil, out)
 	}

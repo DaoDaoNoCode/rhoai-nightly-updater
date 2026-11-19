@@ -6,10 +6,12 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 
@@ -138,7 +140,7 @@ func downloadFBCContent(ctx context.Context, basicAuth, imageRef string) (*types
 	}
 
 	// Determine if this is an image index (multi-arch) or a single manifest
-	var manifestData map[string]interface{}
+	var manifestData map[string]any
 	if err := json.Unmarshal(manifestBody, &manifestData); err != nil {
 		return nil, fmt.Errorf("parsing manifest JSON: %w", err)
 	}
@@ -176,10 +178,10 @@ func downloadFBCContent(ctx context.Context, basicAuth, imageRef string) (*types
 	var bundleName string
 	var layerErr error
 
-	for i := len(layerDigests) - 1; i >= 0; i-- {
-		images, bn, err := downloadAndParseLayer(ctx, quayHTTPClient, bearerToken, layerDigests[i], tag)
+	for _, layerDigest := range slices.Backward(layerDigests) {
+		images, bn, err := downloadAndParseLayer(ctx, quayHTTPClient, bearerToken, layerDigest, tag)
 		if err != nil {
-			slog.Warn("failed to parse FBC layer", "digest", layerDigests[i], "error", err)
+			slog.Warn("failed to parse FBC layer", "digest", layerDigest, "error", err)
 			layerErr = err
 			continue
 		}
@@ -273,15 +275,15 @@ func isImageIndex(mediaType, contentType string) bool {
 	return false
 }
 
-func resolveAmd64FromIndex(indexData map[string]interface{}) (string, error) {
-	manifests, ok := indexData["manifests"].([]interface{})
+func resolveAmd64FromIndex(indexData map[string]any) (string, error) {
+	manifests, ok := indexData["manifests"].([]any)
 	if !ok || len(manifests) == 0 {
 		return "", fmt.Errorf("no manifests in image index")
 	}
 
 	for _, m := range manifests {
-		mObj, _ := m.(map[string]interface{})
-		platform, _ := mObj["platform"].(map[string]interface{})
+		mObj, _ := m.(map[string]any)
+		platform, _ := mObj["platform"].(map[string]any)
 		arch, _ := platform["architecture"].(string)
 		os, _ := platform["os"].(string)
 		if arch == "amd64" && (os == "" || os == "linux") {
@@ -293,7 +295,7 @@ func resolveAmd64FromIndex(indexData map[string]interface{}) (string, error) {
 	}
 
 	// Fallback: use first manifest
-	first, _ := manifests[0].(map[string]interface{})
+	first, _ := manifests[0].(map[string]any)
 	digest, _ := first["digest"].(string)
 	if digest != "" {
 		return digest, nil
@@ -321,7 +323,7 @@ func fetchLayerDigests(ctx context.Context, client *http.Client, token, manifest
 		return nil, err
 	}
 
-	var manifest map[string]interface{}
+	var manifest map[string]any
 	if err := json.Unmarshal(body, &manifest); err != nil {
 		return nil, err
 	}
@@ -329,14 +331,14 @@ func fetchLayerDigests(ctx context.Context, client *http.Client, token, manifest
 	return extractLayerDigests(manifest), nil
 }
 
-func extractLayerDigests(manifest map[string]interface{}) []string {
-	layers, ok := manifest["layers"].([]interface{})
+func extractLayerDigests(manifest map[string]any) []string {
+	layers, ok := manifest["layers"].([]any)
 	if !ok {
 		return nil
 	}
 	var digests []string
 	for _, l := range layers {
-		lObj, _ := l.(map[string]interface{})
+		lObj, _ := l.(map[string]any)
 		digest, _ := lObj["digest"].(string)
 		if digest != "" {
 			digests = append(digests, digest)
@@ -377,7 +379,7 @@ func downloadAndParseLayer(ctx context.Context, client *http.Client, token, laye
 
 	for {
 		header, err := tarReader.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -522,7 +524,7 @@ func decodeJSONEntries(content []byte) []fbcEntry {
 		entries = append(entries, entry)
 	}
 	var lineEntries []fbcEntry
-	for _, line := range strings.Split(string(content), "\n") {
+	for line := range strings.SplitSeq(string(content), "\n") {
 		var entry fbcEntry
 		if json.Unmarshal([]byte(strings.TrimSpace(line)), &entry) == nil {
 			lineEntries = append(lineEntries, entry)
@@ -541,7 +543,7 @@ func highestBundle(bundles []fbcBundleInfo) *fbcBundleInfo {
 	bestVersion, bestOK := parseCSVVersion(best.name)
 	for i := 1; i < len(bundles); i++ {
 		version, ok := parseCSVVersion(bundles[i].name)
-		better := false
+		var better bool
 		switch {
 		case ok != bestOK:
 			better = ok // a parseable version beats an unparseable name

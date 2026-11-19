@@ -22,9 +22,9 @@ const (
 )
 
 var (
-	tMaaSGatewayRef      = map[string]interface{}{"name": "maas-default-gateway", "namespace": "openshift-ingress"}
-	tInferenceGatewayRef = map[string]interface{}{"name": "openshift-ai-inference", "namespace": "openshift-ingress"}
-	tTeamGatewayRef      = map[string]interface{}{"name": "team-gateway", "namespace": "team"}
+	tMaaSGatewayRef      = map[string]any{"name": "maas-default-gateway", "namespace": "openshift-ingress"}
+	tInferenceGatewayRef = map[string]any{"name": "openshift-ai-inference", "namespace": "openshift-ingress"}
+	tTeamGatewayRef      = map[string]any{"name": "team-gateway", "namespace": "team"}
 )
 
 // kserveRouteSim stands in for KServe's LLMInferenceService router
@@ -71,8 +71,8 @@ func simulateKServeRoute(mc *modelsCluster) *kserveRouteSim {
 			delete(f.objects, rk)
 			return
 		}
-		spec, _ := model["spec"].(map[string]interface{})
-		router, _ := spec["router"].(map[string]interface{})
+		spec, _ := model["spec"].(map[string]any)
+		router, _ := spec["router"].(map[string]any)
 		if _, route := router["route"]; !route {
 			// No spec.router.route: KServe makes no HTTPRoute, and
 			// deletes the one it made.
@@ -81,25 +81,25 @@ func simulateKServeRoute(mc *modelsCluster) *kserveRouteSim {
 			}
 			return
 		}
-		gw, _ := router["gateway"].(map[string]interface{})
-		refs, _ := gw["refs"].([]interface{})
-		var want []interface{}
+		gw, _ := router["gateway"].(map[string]any)
+		refs, _ := gw["refs"].([]any)
+		var want []any
 		for _, r := range refs {
-			m, _ := r.(map[string]interface{})
-			want = append(want, map[string]interface{}{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": m["name"], "namespace": m["namespace"]})
+			m, _ := r.(map[string]any)
+			want = append(want, map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": m["name"], "namespace": m["namespace"]})
 		}
 		if len(want) == 0 {
-			want = []interface{}{map[string]interface{}{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": "openshift-ai-inference", "namespace": "openshift-ingress"}}
+			want = []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": "openshift-ai-inference", "namespace": "openshift-ingress"}}
 		}
 		route := f.objects[rk]
 		if route == nil {
-			f.objects[rk] = map[string]interface{}{
-				"metadata": map[string]interface{}{"name": rk.name, "namespace": rk.ns, "uid": "route-uid", "resourceVersion": "1"},
-				"spec":     map[string]interface{}{"parentRefs": want},
+			f.objects[rk] = map[string]any{
+				"metadata": map[string]any{"name": rk.name, "namespace": rk.ns, "uid": "route-uid", "resourceVersion": "1"},
+				"spec":     map[string]any{"parentRefs": want},
 			}
 			return
 		}
-		have, _ := ensureMap(route, "spec")["parentRefs"].([]interface{})
+		have, _ := ensureMap(route, "spec")["parentRefs"].([]any)
 		isPrefix := len(want) <= len(have)
 		for i := 0; isPrefix && i < len(want); i++ {
 			a, _ := json.Marshal(want[i])
@@ -159,7 +159,7 @@ func modelRefsJSON(t *testing.T, mc *modelsCluster) string {
 // rawMaaSRecord is the record as stored (snapshot ConfigMap, key "maas").
 func rawMaaSRecord(mc *modelsCluster) string {
 	cm := mc.f.get("/api/v1/namespaces/" + getActivityNamespace() + "/configmaps/" + snapshotConfigMapName)
-	data, _ := cm["data"].(map[string]interface{})
+	data, _ := cm["data"].(map[string]any)
 	s, _ := data["maas"].(string)
 	return s
 }
@@ -171,11 +171,11 @@ func TestKServeRouteSim_KeepsAParentDroppedFromTheEnd(t *testing.T) {
 	if got := routeParents(t, mc); got != "openshift-ai-inference" {
 		t.Fatalf("route on the default = %s", got)
 	}
-	setModelRefs(mc, []interface{}{tMaaSGatewayRef, tInferenceGatewayRef})
+	setModelRefs(mc, []any{tMaaSGatewayRef, tInferenceGatewayRef})
 	if got := routeParents(t, mc); got != "maas-default-gateway,openshift-ai-inference" {
 		t.Fatalf("route = %s", got)
 	}
-	setModelRefs(mc, []interface{}{tMaaSGatewayRef})
+	setModelRefs(mc, []any{tMaaSGatewayRef})
 	if got := routeParents(t, mc); got != "maas-default-gateway,openshift-ai-inference" {
 		t.Fatalf("route after dropping the last parent = %s", got)
 	}
@@ -218,7 +218,7 @@ func TestMaaSPublish_RoutesTheModelThroughTheMaaSGatewayOnly(t *testing.T) {
 // alone.
 func TestMaaSPublish_FromAnEarlierBuildsPublicationGoesThroughTheDefaultFirst(t *testing.T) {
 	mc := modelReadyForMaaS(t)
-	setModelRefs(mc, []interface{}{tMaaSGatewayRef, tInferenceGatewayRef})
+	setModelRefs(mc, []any{tMaaSGatewayRef, tInferenceGatewayRef})
 	routeParents(t, mc)
 	if got := routeParents(t, mc); got != "maas-default-gateway,openshift-ai-inference" {
 		t.Fatalf("legacy route = %s", got)
@@ -231,15 +231,15 @@ func TestMaaSPublish_FromAnEarlierBuildsPublicationGoesThroughTheDefaultFirst(t 
 	var mu sync.Mutex
 	var writes []string
 	prev := mc.f.onMergePatch
-	mc.f.onMergePatch = func(r *http.Request, k fakeKey, patch, next map[string]interface{}) {
+	mc.f.onMergePatch = func(r *http.Request, k fakeKey, patch, next map[string]any) {
 		if prev != nil {
 			prev(r, k, patch, next)
 		}
 		// The refs writes (publish also patches the model's metadata).
 		if _, refs := patch["spec"]; k.plural == "llminferenceservices" && refs {
-			spec, _ := patch["spec"].(map[string]interface{})
-			router, _ := spec["router"].(map[string]interface{})
-			gw, _ := router["gateway"].(map[string]interface{})
+			spec, _ := patch["spec"].(map[string]any)
+			router, _ := spec["router"].(map[string]any)
+			gw, _ := router["gateway"].(map[string]any)
 			raw, _ := json.Marshal(gw["refs"])
 			mu.Lock()
 			writes = append(writes, string(raw))
@@ -272,7 +272,7 @@ func TestMaaSPublish_FromAnEarlierBuildsPublicationGoesThroughTheDefaultFirst(t 
 // gateway, and the route follows.
 func TestMaaSUnpublish_RestoresTheRecordedRefs(t *testing.T) {
 	mc := modelReadyForMaaS(t)
-	setModelRefs(mc, []interface{}{tTeamGatewayRef})
+	setModelRefs(mc, []any{tTeamGatewayRef})
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"}); !res.Success {
 		t.Fatalf("publish: %+v", res)
 	}
@@ -297,7 +297,7 @@ func TestMaaSUnpublish_RestoresTheRecordedRefs(t *testing.T) {
 // Unpublish refuses before changing anything and says what to do.
 func TestMaaSUnpublish_RefusesWhenSomeoneAddedARefWhilePublished(t *testing.T) {
 	mc := publishedMaaSCluster(t)
-	setModelRefs(mc, []interface{}{tMaaSGatewayRef, tTeamGatewayRef})
+	setModelRefs(mc, []any{tMaaSGatewayRef, tTeamGatewayRef})
 	mc.f.requests = nil
 	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"})
 	if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "team/team-gateway") ||
@@ -312,7 +312,7 @@ func TestMaaSUnpublish_RefusesWhenSomeoneAddedARefWhilePublished(t *testing.T) {
 	}
 	// Following the message: the user sets the refs they want; Unpublish
 	// then leaves them alone and finishes.
-	setModelRefs(mc, []interface{}{tTeamGatewayRef})
+	setModelRefs(mc, []any{tTeamGatewayRef})
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"}); !res.Success {
 		t.Fatalf("unpublish after the fix: %+v", res)
 	}
@@ -325,7 +325,7 @@ func TestMaaSUnpublish_RefusesWhenSomeoneAddedARefWhilePublished(t *testing.T) {
 // going through the recorded refs first would drop it.
 func TestMaaSPublish_RefusesWhenSomeoneAddedARefWhilePublished(t *testing.T) {
 	mc := publishedMaaSCluster(t)
-	setModelRefs(mc, []interface{}{tMaaSGatewayRef, tTeamGatewayRef})
+	setModelRefs(mc, []any{tMaaSGatewayRef, tTeamGatewayRef})
 	mc.f.requests = nil
 	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"})
 	if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "team/team-gateway") || !strings.Contains(res.Message, "Then Publish again") {
@@ -396,7 +396,7 @@ func TestMaaSStatus_AnEarlierBuildsPublicationIsPartlyPublished(t *testing.T) {
 	if err := writeMaaSRecord(mc.c, rec); err != nil {
 		t.Fatal(err)
 	}
-	setModelRefs(mc, []interface{}{tMaaSGatewayRef, tInferenceGatewayRef})
+	setModelRefs(mc, []any{tMaaSGatewayRef, tInferenceGatewayRef})
 	st, err := GetMaaSStatus(mc.c)
 	if err != nil || len(st.Items) != 1 || !st.Items[0].Partly || !strings.Contains(st.Items[0].Message, "earlier build") ||
 		!strings.Contains(st.Items[0].Message, "Unpublish, then Publish again") {
@@ -413,7 +413,7 @@ func TestMaaSStatus_AnEarlierBuildsPublicationIsPartlyPublished(t *testing.T) {
 // the 500 is "once the rate limit applies".
 func TestMaaSStatus_SomeoneAddedAGatewayWhilePublished(t *testing.T) {
 	mc := publishedMaaSCluster(t)
-	setModelRefs(mc, []interface{}{tMaaSGatewayRef, tInferenceGatewayRef})
+	setModelRefs(mc, []any{tMaaSGatewayRef, tInferenceGatewayRef})
 	st, err := GetMaaSStatus(mc.c)
 	if err != nil || len(st.Items) != 1 {
 		t.Fatalf("status = %+v, %v", st.Items, err)
@@ -434,7 +434,7 @@ func TestMaaSStatus_SomeoneAddedAGatewayWhilePublished(t *testing.T) {
 	if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "oc patch llminferenceservice qwen25-05b-instruct -n proj") {
 		t.Fatalf("unpublish = %+v", res)
 	}
-	setModelRefs(mc, []interface{}{tInferenceGatewayRef})
+	setModelRefs(mc, []any{tInferenceGatewayRef})
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"}); !res.Success {
 		t.Fatalf("unpublish after setting the refs: %+v", res)
 	}
@@ -447,7 +447,7 @@ func TestMaaSStatus_SomeoneAddedAGatewayToTheSecondModel(t *testing.T) {
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj", Model: "smollm2-135m-instruct"}); !res.Success {
 		t.Fatalf("publish: %+v", res)
 	}
-	setModelRefsOf(mc, "smollm2-135m-instruct", []interface{}{tMaaSGatewayRef, tTeamGatewayRef})
+	setModelRefsOf(mc, "smollm2-135m-instruct", []any{tMaaSGatewayRef, tTeamGatewayRef})
 	st, _ := GetMaaSStatus(mc.c)
 	for _, it := range st.Items {
 		if it.Name != "smollm2-135m-instruct" {
@@ -469,7 +469,7 @@ func TestModelState_SaysWhenTheModelRoutesThroughMaaS(t *testing.T) {
 	if raw, _ := json.Marshal(modelState(mc.c, model, false, modelsRecord{})); strings.Contains(string(raw), "maasPublished") {
 		t.Fatalf("unpublished model state = %s", raw)
 	}
-	setModelRefs(mc, []interface{}{tMaaSGatewayRef})
+	setModelRefs(mc, []any{tMaaSGatewayRef})
 	model, _, _ = readToolModel(mc.c, "proj", "qwen25-05b-instruct")
 	if raw, _ := json.Marshal(modelState(mc.c, model, false, modelsRecord{})); !strings.Contains(string(raw), `"maasPublished":true`) {
 		t.Fatalf("published model state = %s", raw)

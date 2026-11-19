@@ -54,7 +54,7 @@ func simulateRouting(t *testing.T, mc *modelsCluster) {
 	f.groups["/apis/kuadrant.io"] = kuadrantGroupDoc
 	f.listOnGet = map[string]bool{"gateways": true}
 	prev := f.onGet
-	f.onGet = func(k fakeKey, obj map[string]interface{}) {
+	f.onGet = func(k fakeKey, obj map[string]any) {
 		if prev != nil {
 			prev(k, obj)
 		}

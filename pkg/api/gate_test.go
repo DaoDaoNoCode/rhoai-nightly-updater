@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/clock/clocktest"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -30,9 +31,9 @@ func postJSON(path, token, body string) *http.Request {
 	return r
 }
 
-func decodeError(t *testing.T, w *httptest.ResponseRecorder) map[string]interface{} {
+func decodeError(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
-	var body map[string]interface{}
+	var body map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("response is not JSON: %q", w.Body.String())
 	}
@@ -55,8 +56,7 @@ func TestAuthGate(t *testing.T) {
 		for _, wrapper := range []string{"withAuth", "withMutationAuth"} {
 			t.Run(tc.name+"/"+wrapper, func(t *testing.T) {
 				setupDevMode(t)
-				t.Setenv("DEV_TOKEN", "") // no dev fallback for the user token
-				t.Setenv("DEV_MODE", "")
+				setDev(t, DevConfig{}) // in the cluster: no dev fallback for the user token
 				cachedTokenMu.Lock()
 				cachedTokenValue, cachedTokenAt = "sa-token", time.Now()
 				cachedTokenMu.Unlock()
@@ -132,7 +132,7 @@ func TestMutationPermissionErrorsMapToSessionExpiredOr503(t *testing.T) {
 // (pkg/cluster's authz tests pin the SubjectAccessReview body itself.)
 func TestMutationGateAsksForClusterAdmin(t *testing.T) {
 	setupDevMode(t)
-	t.Setenv("DEV_MODE", "")
+	setDevMode(t, false)
 	var got []string
 	checkPermission = func(_ context.Context, token, verb, resource, group, namespace string) (bool, error) {
 		got = []string{token, verb, resource, group, namespace}
@@ -222,7 +222,7 @@ func TestUpdateEndpointOnlyRunsDryRuns(t *testing.T) {
 	if w.Code != 400 || calls != 0 {
 		t.Fatalf("non-dry-run update: status %d calls %d", w.Code, calls)
 	}
-	for i := 0; i < 2; i++ { // dry runs do not use up the rate limit
+	for i := range 2 { // dry runs do not use up the rate limit
 		w = httptest.NewRecorder()
 		HandleUpdate(w, postJSON("/api/update", "tok", `{"image":"`+image+`","dryRun":true}`))
 		if w.Code != 200 {
@@ -298,7 +298,7 @@ func TestBusyClusterReturnsRunningOperation(t *testing.T) {
 	w = httptest.NewRecorder()
 	HandleDashboardRevert(w, postJSON("/api/dashboard/revert", "user:bob", "{}"))
 	body := decodeError(t, w)
-	busyOp, _ := body["operation"].(map[string]interface{})
+	busyOp, _ := body["operation"].(map[string]any)
 	if w.Code != 409 || body["errorCode"] != "cluster_busy" || busyOp["user"] != "alice" || busyOp["type"] != "update" {
 		t.Fatalf("busy response: %d %s", w.Code, w.Body.String())
 	}
@@ -401,14 +401,12 @@ func TestConcurrentDuplicateMutationsRunOnce(t *testing.T) {
 	})
 	codes := make(chan int, 3)
 	var wg sync.WaitGroup
-	for i := 0; i < 3; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 3 {
+		wg.Go(func() {
 			w := httptest.NewRecorder()
 			h(w, postJSON("/api/dup", "user:alice", "{}"))
 			codes <- w.Code
-		}()
+		})
 	}
 	// Two duplicates are refused while the first one still runs.
 	deadline := time.After(5 * time.Second)
@@ -445,7 +443,7 @@ func TestRateLimitSlotReturnedOnFailure(t *testing.T) {
 	h := withMutationAuth(func(_ *cluster.Client, w http.ResponseWriter, _ *http.Request) {
 		writeError(w, "bad input", http.StatusBadRequest, "validation")
 	})
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		w := httptest.NewRecorder()
 		h(w, postJSON("/api/fails", "tok", "{}"))
 		if w.Code != 400 {
@@ -462,7 +460,7 @@ func TestRateLimitIsTheToolsOwnWithTheRealWait(t *testing.T) {
 	allowMutations(t)
 	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
 	orig := mutationLimiter
-	mutationLimiter = newRateLimiter(30 * time.Second)
+	mutationLimiter = newRateLimiter()
 	mutationLimiter.now = func() time.Time { return now }
 	t.Cleanup(func() { mutationLimiter = orig })
 	h := withMutationAuth(func(_ *cluster.Client, w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -483,7 +481,9 @@ func TestRateLimitIsTheToolsOwnWithTheRealWait(t *testing.T) {
 }
 
 func TestRateLimiterWindow(t *testing.T) {
-	rl := newRateLimiter(20 * time.Millisecond)
+	fc := clocktest.NewFake()
+	rl := newRateLimiter()
+	rl.now = fc.Now
 	slot, ok := rl.tryAcquire("a")
 	if !ok {
 		t.Fatal("first acquire refused")
@@ -494,7 +494,11 @@ func TestRateLimiterWindow(t *testing.T) {
 	if _, ok := rl.tryAcquire("b"); !ok {
 		t.Fatal("other key limited")
 	}
-	time.Sleep(30 * time.Millisecond)
+	fc.Advance(30*time.Second - time.Nanosecond)
+	if _, ok := rl.tryAcquire("a"); ok {
+		t.Fatal("acquire before the window ended allowed")
+	}
+	fc.Advance(time.Nanosecond)
 	newSlot, ok := rl.tryAcquire("a")
 	if !ok {
 		t.Fatal("acquire after the window refused")
@@ -518,8 +522,8 @@ func TestFiveFormerlyUnlockedMutationsTakeTheClusterLock(t *testing.T) {
 	defer releaseClusterMutationLock()
 	for path, h := range map[string]http.HandlerFunc{
 		"/api/setup/pull-secret":                  HandleCreatePullSecret,
-		"/api/resources/minio/setup":              HandleS3StorageSetup,
-		"/api/resources/minio/teardown":           HandleS3StorageTeardown,
+		"/api/resources/s3/setup":                 HandleS3StorageSetup,
+		"/api/resources/s3/teardown":              HandleS3StorageTeardown,
 		"/api/resources/pipeline-server/setup":    HandlePipelineServerSetup,
 		"/api/resources/pipeline-server/teardown": HandlePipelineServerTeardown,
 	} {
@@ -547,7 +551,7 @@ func TestReadinessCachesTheAPICheck(t *testing.T) {
 		HandleReady(w, httptest.NewRequest("GET", "/api/health/ready", nil))
 		return w.Code
 	}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if c := probe(); c != 200 {
 			t.Fatalf("probe %d: %d", i, c)
 		}
@@ -575,7 +579,7 @@ func TestReadinessCachesTheAPICheck(t *testing.T) {
 
 func TestMetricLabelsAreBounded(t *testing.T) {
 	setupDevMode(t)
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		RecordPageView("probe_" + strings.Repeat("x", i))
 	}
 	RecordFeatureUsage("teardown-minio")

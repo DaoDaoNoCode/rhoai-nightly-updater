@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -60,8 +61,8 @@ var rolloutNamespaces = []string{"redhat-ods-operator", "redhat-ods-applications
 const assistRolloutAnnotation = "rhoai-nightly-updater.opendatahub.io/assist-rollout"
 
 type assistRecord struct {
-	MaxUnavailable interface{} `json:"maxUnavailable"` // original value; nil = unset (defaults to 25%)
-	PatchedAt      string      `json:"patchedAt"`
+	MaxUnavailable any    `json:"maxUnavailable"` // original value; nil = unset (defaults to 25%)
+	PatchedAt      string `json:"patchedAt"`
 }
 
 // strategyApplier returns the server-side-apply manager (other than this
@@ -100,7 +101,7 @@ type rolloutAssessment struct {
 	PendingPods     []string
 	OldReadyPods    int
 	// OriginalMaxUnavailable is the raw spec value (nil when unset).
-	OriginalMaxUnavailable interface{}
+	OriginalMaxUnavailable any
 }
 
 func (a rolloutAssessment) target() string { return a.Namespace + "/" + a.Deployment }
@@ -113,7 +114,7 @@ func notApplicable(a rolloutAssessment, reason string) rolloutAssessment {
 
 // resolveIntOrPercent mirrors intstr.GetScaledValueFromIntOrPercent; an
 // unset value is the Deployment default, 25%.
-func resolveIntOrPercent(v interface{}, total int, roundUp bool) (int, string, error) {
+func resolveIntOrPercent(v any, total int, roundUp bool) (int, string, error) {
 	if v == nil {
 		v = "25%"
 	}
@@ -179,8 +180,8 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 			Strategy struct {
 				Type          string `json:"type"`
 				RollingUpdate *struct {
-					MaxUnavailable interface{} `json:"maxUnavailable"`
-					MaxSurge       interface{} `json:"maxSurge"`
+					MaxUnavailable any `json:"maxUnavailable"`
+					MaxSurge       any `json:"maxSurge"`
 				} `json:"rollingUpdate"`
 			} `json:"strategy"`
 		} `json:"spec"`
@@ -196,7 +197,7 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 	if dep.Spec.Strategy.Type != "" && dep.Spec.Strategy.Type != "RollingUpdate" {
 		return notApplicable(a, fmt.Sprintf("the Deployment uses the %s strategy", dep.Spec.Strategy.Type)), nil
 	}
-	var rawUnavailable, rawSurge interface{}
+	var rawUnavailable, rawSurge any
 	if ru := dep.Spec.Strategy.RollingUpdate; ru != nil {
 		rawUnavailable, rawSurge = ru.MaxUnavailable, ru.MaxSurge
 	}
@@ -386,7 +387,7 @@ func resourceOnlyNodes(msg string) (int, []string) {
 	}
 	nodes := 0
 	var other []string
-	for _, entry := range strings.Split(rest, ", ") {
+	for entry := range strings.SplitSeq(rest, ", ") {
 		entry = strings.TrimSpace(entry)
 		m := resourceFitReason.FindStringSubmatch(entry)
 		if m == nil {
@@ -432,12 +433,7 @@ func attachRolloutAssist(c *Client, p *Problem, namespace, deployment string) {
 }
 
 func isRolloutNamespace(ns string) bool {
-	for _, n := range rolloutNamespaces {
-		if n == ns {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(rolloutNamespaces, ns)
 }
 
 var dns1123Name = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`)
@@ -453,13 +449,13 @@ func patchMaxUnavailable(c *Client, namespace, name string) (rolloutAssessment, 
 		return a, false, ""
 	}
 	record, _ := json.Marshal(assistRecord{MaxUnavailable: a.OriginalMaxUnavailable, PatchedAt: nowRFC3339()})
-	patch, _ := json.Marshal(map[string]interface{}{
-		"metadata": map[string]interface{}{
+	patch, _ := json.Marshal(map[string]any{
+		"metadata": map[string]any{
 			"resourceVersion": a.ResourceVersion,
-			"annotations":     map[string]interface{}{assistRolloutAnnotation: string(record)},
+			"annotations":     map[string]any{assistRolloutAnnotation: string(record)},
 		},
-		"spec": map[string]interface{}{
-			"strategy": map[string]interface{}{"rollingUpdate": map[string]interface{}{"maxUnavailable": 1}},
+		"spec": map[string]any{
+			"strategy": map[string]any{"rollingUpdate": map[string]any{"maxUnavailable": 1}},
 		},
 	})
 	respBody, _, err := c.strategicPatch(namespacedPath("apps/v1", "deployments", namespace, name), patch)
@@ -473,7 +469,7 @@ func patchMaxUnavailable(c *Client, namespace, name string) (rolloutAssessment, 
 		Spec struct {
 			Strategy struct {
 				RollingUpdate *struct {
-					MaxUnavailable interface{} `json:"maxUnavailable"`
+					MaxUnavailable any `json:"maxUnavailable"`
 				} `json:"rollingUpdate"`
 			} `json:"strategy"`
 		} `json:"spec"`
@@ -603,17 +599,17 @@ func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.Operation
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("The saved value on %s is not readable (%v); remove the annotation %s by hand.", target, err, assistRolloutAnnotation)}, nil
 	}
 
-	spec := map[string]interface{}{}
+	spec := map[string]any{}
 	current := dep.currentMaxUnavailable()
 	restoring := current == "1"
 	if restoring {
 		// A strategic-merge null removes the field, so the API default (25%) applies again.
-		spec["strategy"] = map[string]interface{}{"rollingUpdate": map[string]interface{}{"maxUnavailable": rec.MaxUnavailable}}
+		spec["strategy"] = map[string]any{"rollingUpdate": map[string]any{"maxUnavailable": rec.MaxUnavailable}}
 	}
-	patchObj := map[string]interface{}{
-		"metadata": map[string]interface{}{
+	patchObj := map[string]any{
+		"metadata": map[string]any{
 			"resourceVersion": dep.Metadata.ResourceVersion,
-			"annotations":     map[string]interface{}{assistRolloutAnnotation: nil},
+			"annotations":     map[string]any{assistRolloutAnnotation: nil},
 		},
 	}
 	if len(spec) > 0 {
@@ -657,7 +653,7 @@ type rolloutDeployment struct {
 		Replicas *int `json:"replicas"`
 		Strategy struct {
 			RollingUpdate *struct {
-				MaxUnavailable interface{} `json:"maxUnavailable"`
+				MaxUnavailable any `json:"maxUnavailable"`
 			} `json:"rollingUpdate"`
 		} `json:"strategy"`
 	} `json:"spec"`

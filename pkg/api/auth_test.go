@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/clock/clocktest"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -23,9 +24,7 @@ const (
 
 func setupDevMode(t *testing.T) {
 	t.Helper()
-	t.Setenv("DEV_MODE", "true")
-	t.Setenv("DEV_TOKEN", "test-cluster-token")
-	t.Setenv("DEV_USER", "test-user")
+	setDev(t, DevConfig{Mode: true, Token: "test-cluster-token", User: "test-user"})
 	// Clear the cached token so DEV_TOKEN takes effect
 	cachedTokenMu.Lock()
 	cachedTokenValue = ""
@@ -46,6 +45,9 @@ func setupDevMode(t *testing.T) {
 	}
 }
 
+// testClock is the fake clock resetPackageState installs as clk.
+var testClock *clocktest.Fake
+
 // resetPackageState gives each test fresh package-level state (rate
 // limiter, lock, in-flight operation, caches) and restores the seams, so
 // tests are repeatable with -count=N and independent of their order.
@@ -59,10 +61,15 @@ func resetPackageState(t *testing.T) {
 	origU, origD, origR, origF := runUpdateStream, runUpdateDryRun, runReinstallStream, runRefreshStream
 	origUG, origUDG, origProfile := runUpdateStreamGitOps, runUpdateDryRunGitOps, activeProfile
 	origPolicyCheck := checkGitOpsPolicy
+	origClock := clk
+	// Every test starts on its own fake clock: nothing waits in real time,
+	// and a test moves the time with testClock.Advance.
+	testClock = clocktest.NewFake()
+	clk = testClock
 	origSession, origSessionClock := readSessionToken, sessionClock
 	checkGitOpsPolicy = func(*cluster.Client) error { return nil }
 	setGitOpsPolicyState("")
-	mutationLimiter = newRateLimiter(30 * time.Second)
+	mutationLimiter = newRateLimiter()
 	identities.reset()
 	apiReady.reset()
 	inflight.reset()
@@ -89,6 +96,7 @@ func resetPackageState(t *testing.T) {
 		runUpdateStream, runUpdateDryRun, runReinstallStream, runRefreshStream = origU, origD, origR, origF
 		runUpdateStreamGitOps, runUpdateDryRunGitOps, activeProfile = origUG, origUDG, origProfile
 		checkGitOpsPolicy = origPolicyCheck
+		clk = origClock
 		readSessionToken, sessionClock = origSession, origSessionClock
 		setGitOpsPolicyState("")
 		identities.reset()

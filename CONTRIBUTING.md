@@ -104,7 +104,7 @@ rhoai-nightly-updater/
 ├── dev.sh                   # Local development launcher
 ├── .env.example             # Environment variable reference
 ├── pkg/                     # Go backend packages
-│   ├── api/                 # HTTP handlers and auth
+│   ├── api/                 # HTTP handlers (one <feature>_handlers.go per feature), auth in auth_handlers.go
 │   ├── cluster/             # Kubernetes API client and operations
 │   ├── middleware/          # HTTP middleware (security, request ID)
 │   └── types/               # Shared type definitions
@@ -350,7 +350,7 @@ All API handlers use one of two wrapper functions:
 **`withAuth`** — For read-only endpoints (GET requests):
 
 ```go
-// From pkg/api/handlers.go
+// From pkg/api/update_handlers.go
 var HandleStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
     // Handler receives an authenticated cluster.Client
     // Use c.get(), c.post(), etc. to call Kubernetes APIs
@@ -413,7 +413,16 @@ path := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", "ns", "
 
 #### 3. Test Patterns
 
-Tests use mock clients by overriding timing constants in `TestMain`. This allows tests to verify polling/retry logic without waiting for production timeouts.
+No test waits in real time. Every wait, poll, retry and periodic job takes its time from an injected clock (`clk` in `pkg/cluster` and `pkg/api`, `clock.Real` in production); tests use `pkg/clock/clocktest`: `pkg/cluster`'s `TestMain` installs a fake clock that advances when the code sleeps, and `pkg/api`'s `resetPackageState` gives each test its own fake clock, which the test advances (`testClock.Advance`) and synchronises with the code under test through its fakes (for example `fakeRecord.beat`, which waits for the lease write a heartbeat makes). Do not add `time.Sleep`, polling loops or "it would have run by now" waits to tests; a `time.After` may only end a test that hangs.
+
+#### 4. Errors and operation results
+
+A function that returns `(*types.OperationResponse, error)` uses the two results for different things, never both:
+
+- **`Success: false`, a `Message` and an `ErrorCode`, `error` nil:** the operation ran, if only its checks, and refused or failed in a way the user reads: invalid input (`validation`), something missing (`prerequisites`), a cluster request that failed, partial work (`partial_failure`). The message says what was and was not changed. The code of a failed cluster request comes from the request's own error (`errorCodeFromK8sErr`: `forbidden`, `network`, `sign_in_ended`, ...), with a fallback such as `prerequisites` only when it gives none. Handlers answer 422 with the response (`writeOperationResult`); streams send it as the final event.
+- **A non-nil `error`:** the function could not report an outcome itself: the context ended (cancelled, deadline, `ErrOperationLockLost`) or the caller has to react to that error. Handlers log it and answer a generic 500; streams send its text.
+
+Readers that report a state (`types.ResourceState`, assessments, status parts) put a failed read in the state's message instead of returning an error, so one unreadable part does not hide the others. `nilerr` flags these returns, which is why it is not enabled; the convention is checked in review.
 
 ### Frontend Patterns
 
@@ -456,7 +465,7 @@ useEffect(() => {
 
 #### 3. API Calls
 
-API calls are centralized in `frontend/src/services/api.ts` (`getStatus`, `getUserPermissions`, `trackPageView`, ...); each component imports the calls it uses. `App.tsx`, for example:
+API calls are centralized in `frontend/src/services/api/`, one module per feature (`client.ts` has the request and `ApiError`, `stream.ts` the operation streams, then `operator.ts`, `components.ts`, `environment.ts`, ...); `index.ts` re-exports them, so components import from `services/api` (`getStatus`, `getUserPermissions`, `trackPageView`, ...). `App.tsx`, for example:
 
 ```tsx
 import { trackPageView } from "./services/api";

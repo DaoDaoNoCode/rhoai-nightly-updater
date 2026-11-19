@@ -10,13 +10,13 @@ import (
 )
 
 func buildHealthyCatalogSource() string {
-	cs := map[string]interface{}{
+	cs := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "CatalogSource",
-		"metadata":   map[string]interface{}{"name": CatalogName, "namespace": CatalogNS},
-		"spec":       map[string]interface{}{"image": "quay.io/rhoai/rhoai-fbc-fragment:nightly-20260101"},
-		"status": map[string]interface{}{
-			"connectionState": map[string]interface{}{"lastObservedState": "READY"},
+		"metadata":   map[string]any{"name": CatalogName, "namespace": CatalogNS},
+		"spec":       map[string]any{"image": "quay.io/rhoai/rhoai-fbc-fragment:nightly-20260101"},
+		"status": map[string]any{
+			"connectionState": map[string]any{"lastObservedState": "READY"},
 		},
 	}
 	b, _ := json.Marshal(cs)
@@ -24,12 +24,12 @@ func buildHealthyCatalogSource() string {
 }
 
 func buildHealthyCSVList() string {
-	csvList := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhods-operator.v3.5.0"},
-				"spec":     map[string]interface{}{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
-				"status":   map[string]interface{}{"phase": "Succeeded"},
+	csvList := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "rhods-operator.v3.5.0"},
+				"spec":     map[string]any{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
+				"status":   map[string]any{"phase": "Succeeded"},
 			},
 		},
 	}
@@ -38,21 +38,21 @@ func buildHealthyCSVList() string {
 }
 
 func buildHealthySubscription() string {
-	sub := map[string]interface{}{
+	sub := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "Subscription",
-		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS},
-		"spec":       map[string]interface{}{"source": CatalogName, "channel": "fast"},
-		"status":     map[string]interface{}{"state": "AtLatestKnown"},
+		"metadata":   map[string]any{"name": SubName, "namespace": SubNS},
+		"spec":       map[string]any{"source": CatalogName, "channel": "fast"},
+		"status":     map[string]any{"state": "AtLatestKnown"},
 	}
 	b, _ := json.Marshal(sub)
 	return string(b)
 }
 
 func buildValidPullSecret() string {
-	dockerConfig := map[string]interface{}{
-		"auths": map[string]interface{}{
-			"quay.io/rhoai": map[string]interface{}{
+	dockerConfig := map[string]any{
+		"auths": map[string]any{
+			"quay.io/rhoai": map[string]any{
 				"auth": exampleAuth("test:test"),
 			},
 		},
@@ -60,10 +60,10 @@ func buildValidPullSecret() string {
 	dockerConfigJSON, _ := json.Marshal(dockerConfig)
 	dockerConfigB64 := base64.StdEncoding.EncodeToString(dockerConfigJSON)
 
-	secret := map[string]interface{}{
+	secret := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Secret",
-		"data": map[string]interface{}{
+		"data": map[string]any{
 			".dockerconfigjson": dockerConfigB64,
 		},
 	}
@@ -72,13 +72,13 @@ func buildValidPullSecret() string {
 }
 
 func buildIDMSList() string {
-	idms := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhoai-mirror"},
-				"spec": map[string]interface{}{
-					"imageDigestMirrors": []interface{}{
-						map[string]interface{}{"source": IDMSSource},
+	idms := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "rhoai-mirror"},
+				"spec": map[string]any{
+					"imageDigestMirrors": []any{
+						map[string]any{"source": IDMSSource},
 					},
 				},
 			},
@@ -89,15 +89,15 @@ func buildIDMSList() string {
 }
 
 func buildInstallPlanList() string {
-	list := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+	list := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":              "install-abc",
 					"creationTimestamp": "2026-01-01T00:00:00Z",
 				},
-				"spec":   map[string]interface{}{"approved": true},
-				"status": map[string]interface{}{"phase": "Complete"},
+				"spec":   map[string]any{"approved": true},
+				"status": map[string]any{"phase": "Complete"},
 			},
 		},
 	}
@@ -106,28 +106,28 @@ func buildInstallPlanList() string {
 }
 
 func buildEmptyWebhookList() string {
-	list := map[string]interface{}{"items": []interface{}{}}
+	list := map[string]any{"items": []any{}}
 	b, _ := json.Marshal(list)
 	return string(b)
 }
 
 func buildEmptyList() string {
-	list := map[string]interface{}{"items": []interface{}{}}
+	list := map[string]any{"items": []any{}}
 	b, _ := json.Marshal(list)
 	return string(b)
 }
 
 func buildHealthyPodList() string {
-	list := map[string]interface{}{"items": []interface{}{
-		map[string]interface{}{
-			"metadata": map[string]interface{}{"name": "rhods-operator-abc123", "namespace": SubNS, "creationTimestamp": "2026-07-01T00:00:00Z"},
-			"status": map[string]interface{}{
+	list := map[string]any{"items": []any{
+		map[string]any{
+			"metadata": map[string]any{"name": "rhods-operator-abc123", "namespace": SubNS, "creationTimestamp": "2026-07-01T00:00:00Z"},
+			"status": map[string]any{
 				"phase": "Running",
-				"containerStatuses": []interface{}{
-					map[string]interface{}{"name": "manager", "ready": true, "restartCount": 0, "state": map[string]interface{}{"running": map[string]interface{}{}}},
+				"containerStatuses": []any{
+					map[string]any{"name": "manager", "ready": true, "restartCount": 0, "state": map[string]any{"running": map[string]any{}}},
 				},
 			},
-			"spec": map[string]interface{}{"nodeName": "node-1"},
+			"spec": map[string]any{"nodeName": "node-1"},
 		},
 	}}
 	b, _ := json.Marshal(list)
@@ -135,27 +135,27 @@ func buildHealthyPodList() string {
 }
 
 func buildNodeList(count int) string {
-	items := make([]interface{}, count)
-	for i := 0; i < count; i++ {
-		items[i] = map[string]interface{}{
-			"metadata": map[string]interface{}{
+	items := make([]any, count)
+	for i := range count {
+		items[i] = map[string]any{
+			"metadata": map[string]any{
 				"name": fmt.Sprintf("node-%d", i),
 			},
-			"status": map[string]interface{}{
-				"conditions": []interface{}{
-					map[string]interface{}{
+			"status": map[string]any{
+				"conditions": []any{
+					map[string]any{
 						"type":   "Ready",
 						"status": "True",
 					},
 				},
-				"allocatable": map[string]interface{}{
+				"allocatable": map[string]any{
 					"cpu":    "4",
 					"memory": "16Gi",
 				},
 			},
 		}
 	}
-	list := map[string]interface{}{"items": items}
+	list := map[string]any{"items": items}
 	b, _ := json.Marshal(list)
 	return string(b)
 }
@@ -231,13 +231,13 @@ func TestDiagnostics_CatalogSourceFailing(t *testing.T) {
 	responses := buildAllHealthyResponses()
 	paths := diagnosticPaths()
 
-	failingCS := map[string]interface{}{
+	failingCS := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "CatalogSource",
-		"metadata":   map[string]interface{}{"name": CatalogName, "namespace": CatalogNS},
-		"spec":       map[string]interface{}{"image": "quay.io/rhoai/rhoai-fbc-fragment:bad"},
-		"status": map[string]interface{}{
-			"connectionState": map[string]interface{}{"lastObservedState": "TRANSIENT_FAILURE"},
+		"metadata":   map[string]any{"name": CatalogName, "namespace": CatalogNS},
+		"spec":       map[string]any{"image": "quay.io/rhoai/rhoai-fbc-fragment:bad"},
+		"status": map[string]any{
+			"connectionState": map[string]any{"lastObservedState": "TRANSIENT_FAILURE"},
 		},
 	}
 	failingCSJSON, _ := json.Marshal(failingCS)
@@ -291,7 +291,7 @@ func TestDiagnostics_NoCSV(t *testing.T) {
 	responses := buildAllHealthyResponses()
 	paths := diagnosticPaths()
 
-	emptyCSV := map[string]interface{}{"items": []interface{}{}}
+	emptyCSV := map[string]any{"items": []any{}}
 	emptyCSVJSON, _ := json.Marshal(emptyCSV)
 	responses[paths["csvList"]] = mockResponse{body: string(emptyCSVJSON)}
 
@@ -334,22 +334,22 @@ func TestDiagnostics_StaleWebhooks(t *testing.T) {
 	responses := buildAllHealthyResponses()
 	paths := diagnosticPaths()
 
-	emptyCSV := map[string]interface{}{"items": []interface{}{}}
+	emptyCSV := map[string]any{"items": []any{}}
 	emptyCSVJSON, _ := json.Marshal(emptyCSV)
 	responses[paths["csvList"]] = mockResponse{body: string(emptyCSVJSON)}
 
-	vwhList := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+	vwhList := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":   "opendatahub-operator-validating-webhook",
-					"labels": map[string]interface{}{"olm.owner": "rhods-operator"},
+					"labels": map[string]any{"olm.owner": "rhods-operator"},
 				},
 				// The backing Service does not exist (the mock answers 404).
-				"webhooks": []interface{}{
-					map[string]interface{}{
-						"clientConfig": map[string]interface{}{
-							"service": map[string]interface{}{"name": "rhods-operator-service", "namespace": "redhat-ods-operator"},
+				"webhooks": []any{
+					map[string]any{
+						"clientConfig": map[string]any{
+							"service": map[string]any{"name": "rhods-operator-service", "namespace": "redhat-ods-operator"},
 						},
 					},
 				},
@@ -450,15 +450,15 @@ func TestDiagnostics_InstallPlanFailed(t *testing.T) {
 	responses := buildAllHealthyResponses()
 	paths := diagnosticPaths()
 
-	failedIP := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+	failedIP := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":              "install-xyz",
 					"creationTimestamp": "2026-06-01T00:00:00Z",
 				},
-				"spec":   map[string]interface{}{"approved": true},
-				"status": map[string]interface{}{"phase": "Failed"},
+				"spec":   map[string]any{"approved": true},
+				"status": map[string]any{"phase": "Failed"},
 			},
 		},
 	}
@@ -500,17 +500,17 @@ func TestDiagnostics_InstallPlanFailed(t *testing.T) {
 func TestDiagnostics_ApplyFix_DeleteStaleWebhooks(t *testing.T) {
 	paths := diagnosticPaths()
 
-	vwhList := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+	vwhList := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":   "opendatahub-operator-validating-webhook",
-					"labels": map[string]interface{}{"olm.owner": "rhods-operator"},
+					"labels": map[string]any{"olm.owner": "rhods-operator"},
 				},
-				"webhooks": []interface{}{
-					map[string]interface{}{
-						"clientConfig": map[string]interface{}{
-							"service": map[string]interface{}{
+				"webhooks": []any{
+					map[string]any{
+						"clientConfig": map[string]any{
+							"service": map[string]any{
 								"name":      "opendatahub-operator-webhook-service",
 								"namespace": "redhat-ods-operator",
 							},
@@ -522,17 +522,17 @@ func TestDiagnostics_ApplyFix_DeleteStaleWebhooks(t *testing.T) {
 	}
 	vwhJSON, _ := json.Marshal(vwhList)
 
-	mwhList := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+	mwhList := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":   "rhods-mutating-webhook",
-					"labels": map[string]interface{}{"olm.owner": "rhods-operator"},
+					"labels": map[string]any{"olm.owner": "rhods-operator"},
 				},
-				"webhooks": []interface{}{
-					map[string]interface{}{
-						"clientConfig": map[string]interface{}{
-							"service": map[string]interface{}{
+				"webhooks": []any{
+					map[string]any{
+						"clientConfig": map[string]any{
+							"service": map[string]any{
 								"name":      "rhods-webhook-service",
 								"namespace": "redhat-ods-operator",
 							},

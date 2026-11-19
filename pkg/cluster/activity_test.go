@@ -43,13 +43,13 @@ func TestRecordActivityConcurrent(t *testing.T) {
 	// so that the optimistic concurrency PUT path works correctly.
 	injectRV := func(body []byte) []byte {
 		rvCounter++
-		var cm map[string]interface{}
+		var cm map[string]any
 		if json.Unmarshal(body, &cm) != nil {
 			return body
 		}
-		meta, _ := cm["metadata"].(map[string]interface{})
+		meta, _ := cm["metadata"].(map[string]any)
 		if meta == nil {
-			meta = map[string]interface{}{}
+			meta = map[string]any{}
 			cm["metadata"] = meta
 		}
 		currentRV = fmt.Sprintf("%d", rvCounter)
@@ -60,11 +60,11 @@ func TestRecordActivityConcurrent(t *testing.T) {
 
 	// extractRV gets the resourceVersion from a request body.
 	extractRV := func(body []byte) string {
-		var cm map[string]interface{}
+		var cm map[string]any
 		if json.Unmarshal(body, &cm) != nil {
 			return ""
 		}
-		meta, _ := cm["metadata"].(map[string]interface{})
+		meta, _ := cm["metadata"].(map[string]any)
 		if meta == nil {
 			return ""
 		}
@@ -169,7 +169,7 @@ func TestRecordActivityConcurrent(t *testing.T) {
 	// Launch numGoroutines concurrent RecordActivity calls.
 	var wg sync.WaitGroup
 	wg.Add(numGoroutines)
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		go func(idx int) {
 			defer wg.Done()
 			RecordActivity(client, types.ActivityEntry{
@@ -192,12 +192,12 @@ func TestRecordActivityConcurrent(t *testing.T) {
 		t.Fatal("ConfigMap was never created; expected it to contain entries")
 	}
 
-	var cm map[string]interface{}
+	var cm map[string]any
 	if err := json.Unmarshal(finalCM, &cm); err != nil {
 		t.Fatalf("failed to parse final ConfigMap: %v", err)
 	}
 
-	data, ok := cm["data"].(map[string]interface{})
+	data, ok := cm["data"].(map[string]any)
 	if !ok {
 		t.Fatal("ConfigMap has no 'data' field")
 	}
@@ -220,7 +220,7 @@ func TestRecordActivityConcurrent(t *testing.T) {
 	for _, e := range entries {
 		seen[e.Detail] = true
 	}
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		key := fmt.Sprintf("entry-%d", i)
 		if !seen[key] {
 			t.Errorf("missing entry for goroutine %d (Detail=%q)", i, key)
@@ -242,13 +242,13 @@ func TestRecordActivityExceedsMax(t *testing.T) {
 
 	injectRV2 := func(body []byte) []byte {
 		rvCounter2++
-		var cm map[string]interface{}
+		var cm map[string]any
 		if json.Unmarshal(body, &cm) != nil {
 			return body
 		}
-		meta, _ := cm["metadata"].(map[string]interface{})
+		meta, _ := cm["metadata"].(map[string]any)
 		if meta == nil {
-			meta = map[string]interface{}{}
+			meta = map[string]any{}
 			cm["metadata"] = meta
 		}
 		meta["resourceVersion"] = fmt.Sprintf("%d", rvCounter2)
@@ -313,7 +313,7 @@ func TestRecordActivityExceedsMax(t *testing.T) {
 	}
 
 	// Call RecordActivity sequentially to isolate trimming behavior
-	for i := 0; i < numEntries; i++ {
+	for i := range numEntries {
 		RecordActivity(client, types.ActivityEntry{
 			Timestamp: fmt.Sprintf("2025-01-01T00:00:%02dZ", i%60),
 			User:      fmt.Sprintf("user-%d", i),
@@ -327,12 +327,12 @@ func TestRecordActivityExceedsMax(t *testing.T) {
 		t.Fatal("ConfigMap was never created")
 	}
 
-	var cm map[string]interface{}
+	var cm map[string]any
 	if err := json.Unmarshal(storedCM, &cm); err != nil {
 		t.Fatalf("failed to parse final ConfigMap: %v", err)
 	}
 
-	data, _ := cm["data"].(map[string]interface{})
+	data, _ := cm["data"].(map[string]any)
 	raw, _ := data["entries"].(string)
 
 	var entries []types.ActivityEntry
@@ -378,10 +378,10 @@ func TestGetActivityReturnsEntries(t *testing.T) {
 	}
 	entriesJSON, _ := json.Marshal(want)
 
-	cm := map[string]interface{}{
+	cm := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
-		"data": map[string]interface{}{
+		"data": map[string]any{
 			"entries": string(entriesJSON),
 		},
 	}

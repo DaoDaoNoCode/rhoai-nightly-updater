@@ -7,10 +7,10 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-func modelMetaOf(mc *modelsCluster) (map[string]interface{}, map[string]interface{}) {
-	meta := mc.f.get(testModelPath)["metadata"].(map[string]interface{})
-	labels, _ := meta["labels"].(map[string]interface{})
-	ann, _ := meta["annotations"].(map[string]interface{})
+func modelMetaOf(mc *modelsCluster) (map[string]any, map[string]any) {
+	meta := mc.f.get(testModelPath)["metadata"].(map[string]any)
+	labels, _ := meta["labels"].(map[string]any)
+	ann, _ := meta["annotations"].(map[string]any)
 	return labels, ann
 }
 
@@ -61,14 +61,14 @@ func TestMaaSPublish_TakesTheModelOutOfGenAIAssetsAndUnpublishRestores(t *testin
 // removes it with the model.
 func TestMaaSPublish_TheModelRefIsOwnedByTheModelAndCarriesItsDescription(t *testing.T) {
 	mc := publishedMaaSCluster(t)
-	uid := mc.f.get(testModelPath)["metadata"].(map[string]interface{})["uid"].(string)
-	meta := mc.f.get(tMaaSRef)["metadata"].(map[string]interface{})
+	uid := mc.f.get(testModelPath)["metadata"].(map[string]any)["uid"].(string)
+	meta := mc.f.get(tMaaSRef)["metadata"].(map[string]any)
 	want := `[{"apiVersion":"serving.kserve.io/v1alpha2","blockOwnerDeletion":false,"kind":"LLMInferenceService","name":"qwen25-05b-instruct","uid":"` + uid + `"}]`
 	if got := jsonOf(meta["ownerReferences"]); got != want {
 		t.Errorf("ownerReferences %s, want %s", got, want)
 	}
 	entry, _ := catalogEntry("")
-	if got := meta["annotations"].(map[string]interface{})["openshift.io/description"]; got != entry.Description {
+	if got := meta["annotations"].(map[string]any)["openshift.io/description"]; got != entry.Description {
 		t.Errorf("description %v", got)
 	}
 }

@@ -83,6 +83,11 @@ func listModuleCRs(c *Client, discover func() (componentAPI, error), module stri
 	if err != nil {
 		return nil, err
 	}
+	return listModuleCRsIn(c, api, module)
+}
+
+// listModuleCRsIn is listModuleCRs with the API already discovered.
+func listModuleCRsIn(c *Client, api componentAPI, module string) ([]moduleCRItem, error) {
 	resource, ok := api.resourceForModule(module)
 	if !ok {
 		return nil, nil
@@ -263,7 +268,7 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 			// under the same name, or whose finalizers changed since they
 			// were inspected, is left alone. A recreated CR always has a new
 			// resourceVersion (and uid, which is immutable).
-			patch, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{
+			patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{
 				"uid": m.UID, "resourceVersion": m.ResourceVersion, "finalizers": []string{},
 			}})
 			if _, _, err := c.patch(listPath+"/"+m.Name, patch); err != nil {

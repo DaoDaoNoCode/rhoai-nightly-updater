@@ -52,7 +52,7 @@ func subscriptionEnvAllowlist() []string {
 // pkg/operators/v1alpha1/subscription_types.go, which OLM applies to the
 // operator's Deployment), each entry only name and value, the name in
 // allowedEnv.
-func gitOpsSubscriptionProblem(namespace, name string, spec map[string]interface{}, allowedEnv []string) string {
+func gitOpsSubscriptionProblem(namespace, name string, spec map[string]any, allowedEnv []string) string {
 	if namespace != SubNS || name != SubName {
 		return fmt.Sprintf("the gitops profile may only write Subscription %s in %s, not %s in %s", SubName, SubNS, name, namespace)
 	}
@@ -68,7 +68,7 @@ func gitOpsSubscriptionProblem(namespace, name string, spec map[string]interface
 	if !present || raw == nil {
 		return ""
 	}
-	config, ok := raw.(map[string]interface{})
+	config, ok := raw.(map[string]any)
 	if !ok {
 		return "its spec.config is not an object"
 	}
@@ -86,12 +86,12 @@ func gitOpsSubscriptionProblem(namespace, name string, spec map[string]interface
 	if !present || rawEnv == nil {
 		return ""
 	}
-	env, ok := rawEnv.([]interface{})
+	env, ok := rawEnv.([]any)
 	if !ok {
 		return "its spec.config.env is not a list"
 	}
 	for _, e := range env {
-		entry, ok := e.(map[string]interface{})
+		entry, ok := e.(map[string]any)
 		if !ok {
 			return "an entry of spec.config.env is not an object"
 		}
@@ -113,8 +113,8 @@ func gitOpsSubscriptionProblem(namespace, name string, spec map[string]interface
 
 // subscriptionSpec returns obj's spec (nil when it has none). obj may be a
 // decoded object or one built by buildSubscription.
-func subscriptionSpec(obj map[string]interface{}) map[string]interface{} {
-	spec, _ := obj["spec"].(map[string]interface{})
+func subscriptionSpec(obj map[string]any) map[string]any {
+	spec, _ := obj["spec"].(map[string]any)
 	if spec == nil {
 		return nil
 	}
@@ -125,7 +125,7 @@ func subscriptionSpec(obj map[string]interface{}) map[string]interface{} {
 	if err != nil {
 		return spec
 	}
-	var out map[string]interface{}
+	var out map[string]any
 	if json.Unmarshal(data, &out) != nil {
 		return spec
 	}
@@ -135,7 +135,7 @@ func subscriptionSpec(obj map[string]interface{}) map[string]interface{} {
 // gitOpsSubscriptionsProblem checks, before Update deletes anything, the
 // Subscription it would create and the one the restore would re-apply
 // (nil when there is none). It returns the refusal, or "".
-func gitOpsSubscriptionsProblem(newSub, restoreSub map[string]interface{}) string {
+func gitOpsSubscriptionsProblem(newSub, restoreSub map[string]any) string {
 	allowed := subscriptionEnvAllowlist()
 	if why := gitOpsSubscriptionProblem(SubNS, SubName, subscriptionSpec(newSub), allowed); why != "" {
 		return "The Subscription Update would create could not be written in the gitops profile: " + why + ". " + gitOpsPolicyFix
@@ -178,7 +178,7 @@ func SetGitOpsPolicyTemplate(data []byte) {
 // allowlist, OPERATOR_NAMESPACE and MARKETPLACE_NAMESPACE the namespaces the
 // code writes to. Other parameters keep their defaults. It returns both
 // specs.
-func expectedGitOpsAdmission(name string) (policy, binding map[string]interface{}, err error) {
+func expectedGitOpsAdmission(name string) (policy, binding map[string]any, err error) {
 	if len(gitOpsPolicyTemplate) == 0 {
 		return nil, nil, fmt.Errorf("this build has no deploy/rbac-gitops.yaml to compare the policy with")
 	}
@@ -192,7 +192,7 @@ func expectedGitOpsAdmission(name string) (policy, binding map[string]interface{
 			Name  string `yaml:"name"`
 			Value string `yaml:"value"`
 		} `yaml:"parameters"`
-		Objects []map[string]interface{} `yaml:"objects"`
+		Objects []map[string]any `yaml:"objects"`
 	}
 	if err := yaml.Unmarshal(gitOpsPolicyTemplate, &tmpl); err != nil {
 		return nil, nil, fmt.Errorf("parse deploy/rbac-gitops.yaml: %w", err)
@@ -233,7 +233,7 @@ func expectedGitOpsAdmission(name string) (policy, binding map[string]interface{
 
 // substituteParameters replaces ${NAME} in every string of v, as `oc
 // process` does for string parameters; an unknown parameter is an error.
-func substituteParameters(v interface{}, values map[string]string) (interface{}, error) {
+func substituteParameters(v any, values map[string]string) (any, error) {
 	switch t := v.(type) {
 	case string:
 		var err error
@@ -246,8 +246,8 @@ func substituteParameters(v interface{}, values map[string]string) (interface{},
 			return val
 		})
 		return out, err
-	case map[string]interface{}:
-		out := make(map[string]interface{}, len(t))
+	case map[string]any:
+		out := make(map[string]any, len(t))
 		for k, e := range t {
 			r, err := substituteParameters(e, values)
 			if err != nil {
@@ -256,8 +256,8 @@ func substituteParameters(v interface{}, values map[string]string) (interface{},
 			out[k] = r
 		}
 		return out, nil
-	case []interface{}:
-		out := make([]interface{}, len(t))
+	case []any:
+		out := make([]any, len(t))
 		for i, e := range t {
 			r, err := substituteParameters(e, values)
 			if err != nil {
@@ -274,12 +274,12 @@ var templateParamRef = regexp.MustCompile(`\$\{[A-Za-z0-9_]+\}`)
 
 // asJSONObject returns v as the API server would serialise it: a JSON
 // object decoded into maps, slices, strings, float64s and bools.
-func asJSONObject(v interface{}) (map[string]interface{}, error) {
+func asJSONObject(v any) (map[string]any, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
 	}
-	var out map[string]interface{}
+	var out map[string]any
 	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, err
 	}
@@ -294,17 +294,17 @@ func asJSONObject(v interface{}) (map[string]interface{}, error) {
 // SetDefaults_Rule and SetDefaults_ValidatingAdmissionPolicySpec in
 // k8s.io/kubernetes pkg/apis/admissionregistration/v1/defaults.go; the same
 // fields an OpenShift 4.21 hub returns for its policies).
-func withoutAdmissionDefaults(spec map[string]interface{}) map[string]interface{} {
+func withoutAdmissionDefaults(spec map[string]any) map[string]any {
 	if spec["failurePolicy"] == "Fail" {
 		delete(spec, "failurePolicy")
 	}
 	for _, key := range []string{"matchConstraints", "matchResources"} {
-		m, _ := spec[key].(map[string]interface{})
+		m, _ := spec[key].(map[string]any)
 		if m == nil {
 			continue
 		}
 		for _, sel := range []string{"namespaceSelector", "objectSelector"} {
-			if s, ok := m[sel].(map[string]interface{}); ok && len(s) == 0 {
+			if s, ok := m[sel].(map[string]any); ok && len(s) == 0 {
 				delete(m, sel)
 			}
 		}
@@ -312,9 +312,9 @@ func withoutAdmissionDefaults(spec map[string]interface{}) map[string]interface{
 			delete(m, "matchPolicy")
 		}
 		for _, rules := range []string{"resourceRules", "excludeResourceRules"} {
-			list, _ := m[rules].([]interface{})
+			list, _ := m[rules].([]any)
 			for _, r := range list {
-				if rule, _ := r.(map[string]interface{}); rule != nil && rule["scope"] == "*" {
+				if rule, _ := r.(map[string]any); rule != nil && rule["scope"] == "*" {
 					delete(rule, "scope")
 				}
 			}
@@ -325,7 +325,7 @@ func withoutAdmissionDefaults(spec map[string]interface{}) map[string]interface{
 
 // differingKeys lists the top-level keys whose values differ between a and
 // b, sorted.
-func differingKeys(a, b map[string]interface{}) []string {
+func differingKeys(a, b map[string]any) []string {
 	var keys []string
 	for k := range a {
 		if !reflect.DeepEqual(a[k], b[k]) {
@@ -363,7 +363,7 @@ func CheckGitOpsAdmissionPolicy(c *Client) error {
 	}
 	for _, o := range []struct {
 		kind, resource string
-		want           map[string]interface{}
+		want           map[string]any
 	}{
 		{"ValidatingAdmissionPolicy", "validatingadmissionpolicies", wantPolicy},
 		{"ValidatingAdmissionPolicyBinding", "validatingadmissionpolicybindings", wantBinding},
@@ -373,7 +373,7 @@ func CheckGitOpsAdmissionPolicy(c *Client) error {
 			return fmt.Errorf("read %s %s: %w", o.kind, name, err)
 		}
 		var live struct {
-			Spec map[string]interface{} `json:"spec"`
+			Spec map[string]any `json:"spec"`
 		}
 		if err := json.Unmarshal(body, &live); err != nil {
 			return fmt.Errorf("parse %s %s: %w", o.kind, name, err)

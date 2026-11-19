@@ -20,7 +20,7 @@ func putManagedDSC(f *resourceFake) {
 
 func TestComponentBlock(t *testing.T) {
 	dsc := func(obj string) dscRead {
-		var m map[string]interface{}
+		var m map[string]any
 		if err := json.Unmarshal([]byte(obj), &m); err != nil {
 			t.Fatal(err)
 		}

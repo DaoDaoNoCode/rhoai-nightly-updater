@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -299,7 +300,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 	if prNumber > 0 {
 		operator, err := readDashboardOperator(c)
 		if err != nil {
-			return &types.OperationResponse{Success: false, Message: "Cannot verify dashboard-operator: " + err.Error(), ErrorCode: "prerequisites"}, nil
+			return &types.OperationResponse{Success: false, Message: "Cannot verify dashboard-operator: " + err.Error(), ErrorCode: nonEmpty(errorCodeFromK8sErr(err), "prerequisites")}, nil
 		}
 		if operator != nil {
 			return deployDashboardBuild(c, "pr", prNumber, flavor)
@@ -414,20 +415,20 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 				Logs: logs, ErrorCode: errorCodeFromK8sErr(err),
 			}, nil
 		}
-		var containerPatches []map[string]interface{}
+		var containerPatches []map[string]any
 		for name, image := range coreImages {
-			containerPatches = append(containerPatches, map[string]interface{}{
+			containerPatches = append(containerPatches, map[string]any{
 				"name":  name,
 				"image": image,
 			})
 		}
-		patchData, err := json.Marshal(map[string]interface{}{
-			"metadata": map[string]interface{}{
+		patchData, err := json.Marshal(map[string]any{
+			"metadata": map[string]any{
 				"annotations": annotations,
 			},
-			"spec": map[string]interface{}{
-				"template": map[string]interface{}{
-					"spec": map[string]interface{}{
+			"spec": map[string]any{
+				"template": map[string]any{
+					"spec": map[string]any{
 						"containers": containerPatches,
 					},
 				},
@@ -455,9 +456,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 
 	// Patch standalone module deployments
 	patched := make(map[string]string, targets)
-	for name, image := range coreImages {
-		patched[name] = image
-	}
+	maps.Copy(patched, coreImages)
 	for name, image := range moduleImages {
 		if err := patchStandaloneModule(c, name, image); err != nil {
 			slog.Warn("failed to patch standalone module", "module", name, "error", err)
@@ -552,17 +551,11 @@ func splitLegacyDashboardTargets(c *Client, images map[string]string, logs *[]st
 	return core, modules, failed, nil
 }
 
-// containsString is slices.Contains, for the diagnostics files that still
-// call it.
-func containsString(values []string, want string) bool {
-	return slices.Contains(values, want)
-}
-
 // RevertDashboardImage reverts ALL dashboard containers to their operator-managed images.
 func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	operator, err := readDashboardOperator(c)
 	if err != nil {
-		return &types.OperationResponse{Success: false, Message: "Cannot verify dashboard-operator: " + err.Error(), ErrorCode: "prerequisites"}, nil
+		return &types.OperationResponse{Success: false, Message: "Cannot verify dashboard-operator: " + err.Error(), ErrorCode: nonEmpty(errorCodeFromK8sErr(err), "prerequisites")}, nil
 	}
 	if operator != nil {
 		return revertDashboardOperator(c, operator)
@@ -595,10 +588,10 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	sort.Strings(coreNames)
 
 	// Revert the main dashboard deployment
-	var containerPatches []map[string]interface{}
+	var containerPatches []map[string]any
 	for _, name := range coreNames {
 		logs = append(logs, fmt.Sprintf("  %s: %s", name, truncateText(coreImages[name], 80)))
-		containerPatches = append(containerPatches, map[string]interface{}{
+		containerPatches = append(containerPatches, map[string]any{
 			"name":  name,
 			"image": coreImages[name],
 		})
@@ -612,15 +605,15 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 			Logs: logs, ErrorCode: errorCodeFromK8sErr(err),
 		}, nil
 	}
-	revertPatch := map[string]interface{}{
-		"metadata": map[string]interface{}{
+	revertPatch := map[string]any{
+		"metadata": map[string]any{
 			"annotations": restored,
 		},
 	}
 	if len(containerPatches) > 0 {
-		revertPatch["spec"] = map[string]interface{}{
-			"template": map[string]interface{}{
-				"spec": map[string]interface{}{
+		revertPatch["spec"] = map[string]any{
+			"template": map[string]any{
+				"spec": map[string]any{
 					"containers": containerPatches,
 				},
 			},
@@ -714,12 +707,12 @@ func getDeploymentAnnotations(c *Client, name string) (map[string]string, error)
 // managed=false and, on the first deployment only, the original value:
 // absent, "true" or "false". A "false" the user set before the deployment is
 // recorded like any other value, so revert keeps it.
-func legacyDeployAnnotations(c *Client) (map[string]interface{}, error) {
+func legacyDeployAnnotations(c *Client) (map[string]any, error) {
 	current, err := getDeploymentAnnotations(c, dashboardDeploymentName)
 	if err != nil {
 		return nil, err
 	}
-	annotations := map[string]interface{}{"opendatahub.io/managed": "false"}
+	annotations := map[string]any{"opendatahub.io/managed": "false"}
 	if _, saved := current[legacyOriginalManagedAnnotation]; !saved {
 		record := legacyManagedRecord{}
 		if value, ok := current["opendatahub.io/managed"]; ok {
@@ -739,7 +732,7 @@ func legacyDeployAnnotations(c *Client) (map[string]interface{}, error) {
 // removes it) and drops the record. Without a usable record the value before
 // the PR deployment is unknown, so opendatahub.io/managed is left as it is,
 // and note (otherwise "") tells the user what to check.
-func legacyRevertAnnotations(c *Client) (patch map[string]interface{}, note string, err error) {
+func legacyRevertAnnotations(c *Client) (patch map[string]any, note string, err error) {
 	current, err := getDeploymentAnnotations(c, dashboardDeploymentName)
 	if err != nil {
 		return nil, "", err
@@ -749,19 +742,19 @@ func legacyRevertAnnotations(c *Client) (patch map[string]interface{}, note stri
 	var record legacyManagedRecord
 	switch {
 	case saved && json.Unmarshal([]byte(raw), &record) == nil:
-		var managed interface{}
+		var managed any
 		if record.Present {
 			managed = record.Value
 		}
-		return map[string]interface{}{"opendatahub.io/managed": managed, legacyOriginalManagedAnnotation: nil}, "", nil
+		return map[string]any{"opendatahub.io/managed": managed, legacyOriginalManagedAnnotation: nil}, "", nil
 	case saved:
 		// Unreadable record: drop it, keep the current value.
-		patch = map[string]interface{}{legacyOriginalManagedAnnotation: nil}
+		patch = map[string]any{legacyOriginalManagedAnnotation: nil}
 		if managedSet {
 			note = fmt.Sprintf(" The saved original value of opendatahub.io/managed on %s could not be read (%s=%q), so its current value %q was left unchanged.", dashboardDeploymentName, legacyOriginalManagedAnnotation, raw, value)
 		}
 	default:
-		patch = map[string]interface{}{}
+		patch = map[string]any{}
 		if managedSet {
 			note = fmt.Sprintf(" No record of the opendatahub.io/managed value %s had before the PR deployment was found, so its current value %q was left unchanged.", dashboardDeploymentName, value)
 		}
@@ -1043,11 +1036,11 @@ func getStandaloneModuleImage(c *Client, containerName string) string {
 
 // patchStandaloneModule patches a standalone module deployment's container image.
 func patchStandaloneModule(c *Client, containerName, image string) error {
-	patchData, err := json.Marshal(map[string]interface{}{
-		"spec": map[string]interface{}{
-			"template": map[string]interface{}{
-				"spec": map[string]interface{}{
-					"containers": []map[string]interface{}{
+	patchData, err := json.Marshal(map[string]any{
+		"spec": map[string]any{
+			"template": map[string]any{
+				"spec": map[string]any{
+					"containers": []map[string]any{
 						{"name": containerName, "image": image},
 					},
 				},

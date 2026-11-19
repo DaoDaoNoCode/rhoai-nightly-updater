@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -29,24 +30,24 @@ type leftoverWorld struct {
 	f   *fakeAPI
 	c   *Client
 	mu  sync.Mutex
-	dsc map[string]interface{}
-	cr  map[string]interface{}
-	dep map[string]interface{} // nil: deleted
+	dsc map[string]any
+	cr  map[string]any
+	dep map[string]any // nil: deleted
 	// recreate: after a delete, the operator creates the Deployment again.
 	recreate bool
 	deletes  []fakeReq
 }
 
-func newLeftoverWorld(t *testing.T, dscMsgs []string, crMsgs []string, lmeval map[string]interface{}) *leftoverWorld {
+func newLeftoverWorld(t *testing.T, dscMsgs []string, crMsgs []string, lmeval map[string]any) *leftoverWorld {
 	t.Helper()
 	f, c := newFakeAPI(t)
 	w := &leftoverWorld{t: t, f: f, c: c.WithContext(context.Background()), recreate: true}
 	serveComponentGroup(f)
 	f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1", 200, `{"resources":[{"name":"trustyais","kind":"TrustyAI"},{"name":"trustyais/status","kind":"TrustyAI"}]}`)
-	conds := func(ready string, msgs []string) []interface{} {
-		out := []interface{}{map[string]interface{}{"type": "Ready", "status": ready, "reason": "Error", "message": strings.Join(msgs, "; ")}}
+	conds := func(ready string, msgs []string) []any {
+		out := []any{map[string]any{"type": "Ready", "status": ready, "reason": "Error", "message": strings.Join(msgs, "; ")}}
 		for _, m := range msgs {
-			out = append(out, map[string]interface{}{"type": "ProvisioningSucceeded", "status": "False", "reason": "Error", "message": m})
+			out = append(out, map[string]any{"type": "ProvisioningSucceeded", "status": "False", "reason": "Error", "message": m})
 		}
 		return out
 	}
@@ -57,12 +58,12 @@ func newLeftoverWorld(t *testing.T, dscMsgs []string, crMsgs []string, lmeval ma
 	if len(crMsgs) > 0 {
 		crReady = "False"
 	}
-	w.dsc = map[string]interface{}{"apiVersion": "datasciencecluster.opendatahub.io/v2", "kind": "DataScienceCluster",
-		"metadata": map[string]interface{}{"name": "default-dsc", "uid": "dsc-uid"}, "status": map[string]interface{}{"conditions": conds(dscReady, dscMsgs)}}
-	w.cr = map[string]interface{}{"apiVersion": "components.platform.opendatahub.io/v1alpha1", "kind": "TrustyAI",
-		"metadata": map[string]interface{}{"name": "default-trustyai", "uid": "trusty-uid", "resourceVersion": "100"},
-		"spec":     map[string]interface{}{"eval": map[string]interface{}{"lmeval": lmeval}},
-		"status":   map[string]interface{}{"conditions": conds(crReady, crMsgs)}}
+	w.dsc = map[string]any{"apiVersion": "datasciencecluster.opendatahub.io/v2", "kind": "DataScienceCluster",
+		"metadata": map[string]any{"name": "default-dsc", "uid": "dsc-uid"}, "status": map[string]any{"conditions": conds(dscReady, dscMsgs)}}
+	w.cr = map[string]any{"apiVersion": "components.platform.opendatahub.io/v1alpha1", "kind": "TrustyAI",
+		"metadata": map[string]any{"name": "default-trustyai", "uid": "trusty-uid", "resourceVersion": "100"},
+		"spec":     map[string]any{"eval": map[string]any{"lmeval": lmeval}},
+		"status":   map[string]any{"conditions": conds(crReady, crMsgs)}}
 	f.handle("GET", dscV2List, func(*http.Request, []byte) (int, string) { return 200, w.list(w.dsc) })
 	f.handle("GET", trustyList, func(*http.Request, []byte) (int, string) { return 200, w.list(w.cr) })
 	f.handle("PATCH", trustyList+"/default-trustyai", w.patchCR)
@@ -100,19 +101,19 @@ func newLeftoverWorld(t *testing.T, dscMsgs []string, crMsgs []string, lmeval ma
 	return w
 }
 
-func (w *leftoverWorld) serviceDeployment(uid string) map[string]interface{} {
-	return map[string]interface{}{
-		"metadata": map[string]interface{}{"name": "trustyai-service-operator-controller-manager", "namespace": "redhat-ods-applications", "uid": uid, "resourceVersion": "7",
-			"ownerReferences": []interface{}{map[string]interface{}{"apiVersion": "components.platform.opendatahub.io/v1alpha1", "kind": "TrustyAI", "name": "default-trustyai", "uid": "trusty-uid", "controller": true}}},
-		"spec":   map[string]interface{}{"replicas": 1, "template": map[string]interface{}{"metadata": map[string]interface{}{"labels": map[string]interface{}{"control-plane": "controller-manager"}}}},
-		"status": map[string]interface{}{"readyReplicas": 1},
+func (w *leftoverWorld) serviceDeployment(uid string) map[string]any {
+	return map[string]any{
+		"metadata": map[string]any{"name": "trustyai-service-operator-controller-manager", "namespace": "redhat-ods-applications", "uid": uid, "resourceVersion": "7",
+			"ownerReferences": []any{map[string]any{"apiVersion": "components.platform.opendatahub.io/v1alpha1", "kind": "TrustyAI", "name": "default-trustyai", "uid": "trusty-uid", "controller": true}}},
+		"spec":   map[string]any{"replicas": 1, "template": map[string]any{"metadata": map[string]any{"labels": map[string]any{"control-plane": "controller-manager"}}}},
+		"status": map[string]any{"readyReplicas": 1},
 	}
 }
 
-func (w *leftoverWorld) list(obj map[string]interface{}) string {
+func (w *leftoverWorld) list(obj map[string]any) string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	b, _ := json.Marshal(map[string]interface{}{"items": []interface{}{obj}})
+	b, _ := json.Marshal(map[string]any{"items": []any{obj}})
 	return string(b)
 }
 
@@ -139,30 +140,30 @@ func (w *leftoverWorld) patchCR(r *http.Request, body []byte) (int, string) {
 // lmevalSchema is the installed CRD's schema of spec.eval.lmeval (RHOAI
 // 3.6 components.platform.opendatahub.io_trustyais.yaml): strings with an
 // enum and a default, or (withDefault false) without the default.
-func lmevalSchema(withDefault bool) map[string]interface{} {
-	field := func() map[string]interface{} {
-		m := map[string]interface{}{"type": "string", "enum": []interface{}{"allow", "deny"}}
+func lmevalSchema(withDefault bool) map[string]any {
+	field := func() map[string]any {
+		m := map[string]any{"type": "string", "enum": []any{"allow", "deny"}}
 		if withDefault {
 			m["default"] = "deny"
 		}
 		return m
 	}
-	return map[string]interface{}{"type": "object", "properties": map[string]interface{}{
-		"spec": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
-			"eval": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
-				"lmeval": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"spec": map[string]any{"type": "object", "properties": map[string]any{
+			"eval": map[string]any{"type": "object", "properties": map[string]any{
+				"lmeval": map[string]any{"type": "object", "properties": map[string]any{
 					"permitOnline": field(), "permitCodeExecution": field()}}}}}}}}
 }
 
 // serveCRD serves the TrustyAI CRD whose spec.versions manager wrote last.
-func (w *leftoverWorld) serveCRD(manager string, schema map[string]interface{}) {
-	crd := map[string]interface{}{
-		"metadata": map[string]interface{}{"name": trustyCRD, "managedFields": []interface{}{
-			map[string]interface{}{"manager": manager, "operation": "Apply", "time": "2026-11-01T10:00:00Z", "fieldsV1": map[string]interface{}{"f:spec": map[string]interface{}{"f:versions": map[string]interface{}{}}}},
+func (w *leftoverWorld) serveCRD(manager string, schema map[string]any) {
+	crd := map[string]any{
+		"metadata": map[string]any{"name": trustyCRD, "managedFields": []any{
+			map[string]any{"manager": manager, "operation": "Apply", "time": "2026-11-01T10:00:00Z", "fieldsV1": map[string]any{"f:spec": map[string]any{"f:versions": map[string]any{}}}},
 		}},
-		"spec": map[string]interface{}{"versions": []interface{}{map[string]interface{}{"name": "v1alpha1", "served": true, "storage": true, "schema": map[string]interface{}{"openAPIV3Schema": schema}}}},
+		"spec": map[string]any{"versions": []any{map[string]any{"name": "v1alpha1", "served": true, "storage": true, "schema": map[string]any{"openAPIV3Schema": schema}}}},
 	}
-	w.f.obj("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", map[string]interface{}{"items": []interface{}{crd}})
+	w.f.obj("/apis/apiextensions.k8s.io/v1/customresourcedefinitions", map[string]any{"items": []any{crd}})
 }
 
 func (w *leftoverWorld) scan() checkOutput {
@@ -180,8 +181,8 @@ func onlyProblem(t *testing.T, out checkOutput) Problem {
 	return out.problems[0]
 }
 
-func storedFalse() map[string]interface{} {
-	return map[string]interface{}{"permitOnline": false, "permitCodeExecution": false}
+func storedFalse() map[string]any {
+	return map[string]any{"permitOnline": false, "permitCodeExecution": false}
 }
 
 func TestParseStoredTypeFailure(t *testing.T) {
@@ -246,7 +247,7 @@ func TestLeftoverStoredFieldsScan(t *testing.T) {
 	pods := checkRHOAIPods(w.c)
 	linked := linkProblems(append(pods.problems, p))
 	crash := findProblem(&DiagnosticsResponse{Problems: linked}, "pod-crashloop-redhat-ods-applications-trustyai-operator-module-controller-manager")
-	if crash == nil || !containsString(crash.RelatedProblems, p.ID) || !strings.Contains(strings.Join(crash.Evidence, "\n"), "Likely caused by") {
+	if crash == nil || !slices.Contains(crash.RelatedProblems, p.ID) || !strings.Contains(strings.Join(crash.Evidence, "\n"), "Likely caused by") {
 		t.Errorf("crash problem %+v", crash)
 	}
 	// The apply-failures check leaves the object to this check.
@@ -269,13 +270,13 @@ func TestLeftoverStoredFieldsFixAndRetry(t *testing.T) {
 		!strings.Contains(patches[1].Query, "fieldValidation=Strict") {
 		t.Fatalf("patches %+v", patches)
 	}
-	var ops []map[string]interface{}
+	var ops []map[string]any
 	_ = json.Unmarshal([]byte(patches[1].Body), &ops)
 	if len(ops) != 5 || ops[0]["op"] != "test" || ops[0]["path"] != "/metadata/uid" || ops[1]["op"] != "test" || ops[1]["value"] != false || ops[2]["op"] != "replace" || ops[2]["value"] != "deny" {
 		t.Fatalf("ops %+v", ops)
 	}
 	assertWrites(t, w.f, "PATCH "+trustyList+"/default-trustyai", "PATCH "+trustyList+"/default-trustyai")
-	lmeval := w.cr["spec"].(map[string]interface{})["eval"].(map[string]interface{})["lmeval"].(map[string]interface{})
+	lmeval := w.cr["spec"].(map[string]any)["eval"].(map[string]any)["lmeval"].(map[string]any)
 	if lmeval["permitOnline"] != "deny" || lmeval["permitCodeExecution"] != "deny" {
 		t.Fatalf("object %+v", lmeval)
 	}
@@ -301,7 +302,7 @@ func TestLeftoverStoredFieldsFixAndRetry(t *testing.T) {
 // A stored true may not mean the CRD default: the fix needs an
 // acknowledgement, and without one changes nothing.
 func TestLeftoverStoredFieldsReviewNeedsAcknowledgement(t *testing.T) {
-	w := newLeftoverWorld(t, []string{msgStoredTypes}, nil, map[string]interface{}{"permitOnline": true, "permitCodeExecution": false})
+	w := newLeftoverWorld(t, []string{msgStoredTypes}, nil, map[string]any{"permitOnline": true, "permitCodeExecution": false})
 	p := onlyProblem(t, w.scan())
 	if p.Acknowledge == "" || !strings.Contains(p.Acknowledge, `.spec.eval.lmeval.permitOnline (true -> "deny")`) || strings.Contains(p.Acknowledge, "permitCodeExecution") {
 		t.Fatalf("acknowledge %q", p.Acknowledge)
@@ -327,15 +328,15 @@ func TestLeftoverStoredFieldsNoDefault(t *testing.T) {
 		t.Fatalf("%+v", p.FieldChanges)
 	}
 	res, _ := ApplyFix(w.c, p.AutoFixAction)
-	lmeval := w.cr["spec"].(map[string]interface{})["eval"].(map[string]interface{})["lmeval"].(map[string]interface{})
+	lmeval := w.cr["spec"].(map[string]any)["eval"].(map[string]any)["lmeval"].(map[string]any)
 	if !res.Success || len(lmeval) != 0 {
 		t.Fatalf("%+v %+v", res, lmeval)
 	}
 
 	w = newLeftoverWorld(t, []string{msgStoredTypes}, nil, storedFalse())
 	schema := lmevalSchema(false)
-	lm := schema["properties"].(map[string]interface{})["spec"].(map[string]interface{})["properties"].(map[string]interface{})["eval"].(map[string]interface{})["properties"].(map[string]interface{})["lmeval"].(map[string]interface{})
-	lm["required"] = []interface{}{"permitOnline"}
+	lm := schema["properties"].(map[string]any)["spec"].(map[string]any)["properties"].(map[string]any)["eval"].(map[string]any)["properties"].(map[string]any)["lmeval"].(map[string]any)
+	lm["required"] = []any{"permitOnline"}
 	w.serveCRD("platform.opendatahub.io", schema)
 	p = onlyProblem(t, w.scan())
 	if p.AutoFixable || !strings.Contains(p.Fix, "required and the CRD gives no default") {
@@ -403,7 +404,7 @@ func TestLeftoverStoredFieldsWriteRefusals(t *testing.T) {
 	w := newLeftoverWorld(t, []string{msgStoredTypes}, nil, storedFalse())
 	w.f.handle("PATCH", trustyList+"/default-trustyai", func(r *http.Request, body []byte) (int, string) {
 		w.mu.Lock()
-		w.cr["spec"].(map[string]interface{})["eval"].(map[string]interface{})["lmeval"].(map[string]interface{})["permitOnline"] = true
+		w.cr["spec"].(map[string]any)["eval"].(map[string]any)["lmeval"].(map[string]any)["permitOnline"] = true
 		w.mu.Unlock()
 		return w.patchCR(r, body)
 	})
@@ -481,12 +482,12 @@ func TestLeftoverRecreateRefusals(t *testing.T) {
 		want  string
 	}{
 		{"platform owner", func(w *leftoverWorld) {
-			w.dep["metadata"].(map[string]interface{})["ownerReferences"] = []interface{}{map[string]interface{}{"apiVersion": "config.opendatahub.io/v1alpha1", "kind": "Platform", "name": "default", "uid": "p", "controller": true}}
+			w.dep["metadata"].(map[string]any)["ownerReferences"] = []any{map[string]any{"apiVersion": "config.opendatahub.io/v1alpha1", "kind": "Platform", "name": "default", "uid": "p", "controller": true}}
 		}, "controller owner Platform default"},
 		{"other uid", func(w *leftoverWorld) {
-			w.dep["metadata"].(map[string]interface{})["ownerReferences"].([]interface{})[0].(map[string]interface{})["uid"] = "someone-else"
+			w.dep["metadata"].(map[string]any)["ownerReferences"].([]any)[0].(map[string]any)["uid"] = "someone-else"
 		}, "not a module CR or the DataScienceCluster that reports the failure"},
-		{"no owner", func(w *leftoverWorld) { delete(w.dep["metadata"].(map[string]interface{}), "ownerReferences") }, "no controller owner"},
+		{"no owner", func(w *leftoverWorld) { delete(w.dep["metadata"].(map[string]any), "ownerReferences") }, "no controller owner"},
 		{"namespace", func(w *leftoverWorld) {
 			w.f.json("GET", dsciV2List, 200, `{"items":[{"spec":{"applicationsNamespace":"opendatahub"}}]}`)
 		}, "not in the RHOAI applications namespace opendatahub"},
@@ -495,7 +496,7 @@ func TestLeftoverRecreateRefusals(t *testing.T) {
 			w.f.json("GET", trustyOpDep, 200, `{"metadata":{"name":"trustyai-operator-module-controller-manager","namespace":"redhat-ods-applications"},"spec":{"replicas":1},"status":{"availableReplicas":0}}`)
 		}, "has no available pod"},
 		{"deleting", func(w *leftoverWorld) {
-			w.dep["metadata"].(map[string]interface{})["deletionTimestamp"] = "2026-11-19T00:00:00Z"
+			w.dep["metadata"].(map[string]any)["deletionTimestamp"] = "2026-11-19T00:00:00Z"
 		}, "already being deleted"},
 	} {
 		w := newLeftoverWorld(t, nil, []string{msgTrustySelector}, storedFalse())

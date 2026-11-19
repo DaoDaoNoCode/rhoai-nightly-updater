@@ -15,7 +15,7 @@ const (
 	tTokenSecret  = "/api/v1/namespaces/proj/secrets/default-name-qwen25-05b-instruct-sa"
 )
 
-func jsonOf(v interface{}) string {
+func jsonOf(v any) string {
 	raw, _ := json.Marshal(v)
 	return string(raw)
 }
@@ -29,7 +29,7 @@ func TestModelsSetup_MakesTheDashboardsTokenAuthentication(t *testing.T) {
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
-	modelUID := mc.f.get(testModelPath)["metadata"].(map[string]interface{})["uid"].(string)
+	modelUID := mc.f.get(testModelPath)["metadata"].(map[string]any)["uid"].(string)
 	owner := `"ownerReferences":[{"apiVersion":"serving.kserve.io/v1alpha2","blockOwnerDeletion":false,"kind":"LLMInferenceService","name":"qwen25-05b-instruct","uid":"` + modelUID + `"}]`
 	for path, want := range map[string][]string{
 		tTokenSA:   {`"kind":"ServiceAccount"`, owner},
@@ -53,7 +53,7 @@ func TestModelsSetup_MakesTheDashboardsTokenAuthentication(t *testing.T) {
 	if ann := jsonOf(mc.f.get(testModelPath)["metadata"]); strings.Contains(ann, enableAuthAnnot) {
 		t.Errorf("enable-auth set: %s", ann)
 	}
-	secretUID := mc.f.get(tTokenSecret)["metadata"].(map[string]interface{})["uid"].(string)
+	secretUID := mc.f.get(tTokenSecret)["metadata"].(map[string]any)["uid"].(string)
 	if rec := mustReadModelsRecord(t, mc); rec["proj/qwen25-05b-instruct"].TokenSecretUID != secretUID {
 		t.Errorf("secret UID not recorded: %+v", rec)
 	}

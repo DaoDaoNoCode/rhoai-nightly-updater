@@ -19,7 +19,7 @@ import (
 func TestCreatePullSecret_RedactsTheCredentialFromWriteErrors(t *testing.T) {
 	const auth = "bmV3dXNlcjpzM2NyM3QtdG9rZW4=" // newuser:s3cr3t-token
 	other := base64.StdEncoding.EncodeToString([]byte("someone:other-registry-secret"))
-	existing := pullSecretBody(t, map[string]interface{}{"registry.example.com": map[string]interface{}{"auth": other}})
+	existing := pullSecretBody(t, map[string]any{"registry.example.com": map[string]any{"auth": other}})
 	for _, tc := range []struct {
 		name     string
 		existing string
@@ -44,7 +44,7 @@ func TestCreatePullSecret_RedactsTheCredentialFromWriteErrors(t *testing.T) {
 				}
 				_ = json.Unmarshal(body, &obj)
 				cfg, _ := base64.StdEncoding.DecodeString(obj.Data[".dockerconfigjson"])
-				msg, _ := json.Marshal(map[string]interface{}{"kind": "Status", "status": "Failure", "code": 422, "reason": "Invalid",
+				msg, _ := json.Marshal(map[string]any{"kind": "Status", "status": "Failure", "code": 422, "reason": "Invalid",
 					"message": "admission webhook denied " + string(body) + " config " + string(cfg) + " auth " + auth + " " + base64.StdEncoding.EncodeToString([]byte(auth)) + " newuser:s3cr3t-token"})
 				w.WriteHeader(http.StatusUnprocessableEntity)
 				_, _ = w.Write(msg)

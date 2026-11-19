@@ -21,7 +21,7 @@ func helperServer(t *testing.T, h http.HandlerFunc) (*Client, context.CancelFunc
 }
 
 func TestApplySubscriptionWithRetry(t *testing.T) {
-	sub := map[string]interface{}{"kind": "Subscription"}
+	sub := map[string]any{"kind": "Subscription"}
 	cases := []struct {
 		name          string
 		failures      int32
@@ -34,9 +34,9 @@ func TestApplySubscriptionWithRetry(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var calls int32
+			var calls atomic.Int32
 			c, _ := helperServer(t, func(w http.ResponseWriter, r *http.Request) {
-				if atomic.AddInt32(&calls, 1) <= tc.failures {
+				if calls.Add(1) <= tc.failures {
 					w.WriteHeader(500)
 					return
 				}
@@ -62,17 +62,17 @@ func TestApplySubscriptionWithRetry(t *testing.T) {
 
 func TestApplySubscriptionWithRetry_CanceledWhileWaiting(t *testing.T) {
 	c, cancel := helperServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) })
-	applyErr, cancelErr := applySubscriptionWithRetry(c, "/sub", map[string]interface{}{}, nil, func(int, error, bool, time.Duration) { cancel() })
+	applyErr, cancelErr := applySubscriptionWithRetry(c, "/sub", map[string]any{}, nil, func(int, error, bool, time.Duration) { cancel() })
 	if applyErr == nil || !errors.Is(cancelErr, context.Canceled) {
 		t.Fatalf("applyErr=%v cancelErr=%v", applyErr, cancelErr)
 	}
 }
 
 func TestWaitForNightlyCatalogReady(t *testing.T) {
-	var polls int32
+	var polls atomic.Int32
 	c, _ := helperServer(t, func(w http.ResponseWriter, r *http.Request) {
 		state := "CONNECTING"
-		if atomic.AddInt32(&polls, 1) >= 2 {
+		if polls.Add(1) >= 2 {
 			state = "READY"
 		}
 		fmt.Fprintf(w, `{"spec":{"image":"x"},"status":{"connectionState":{"lastObservedState":%q}}}`, state)

@@ -12,15 +12,15 @@ import (
 // with an "already exists" message when a DSC is already present.
 func TestCreateDefaultDSC_AlreadyExists(t *testing.T) {
 	// Mock DSC list response with one existing DSC
-	dscList := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+	dscList := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{
 					"name": "default-dsc",
 				},
-				"spec": map[string]interface{}{
-					"components": map[string]interface{}{
-						"dashboard": map[string]interface{}{
+				"spec": map[string]any{
+					"components": map[string]any{
+						"dashboard": map[string]any{
 							"managementState": "Managed",
 						},
 					},
@@ -63,16 +63,16 @@ func TestCreateDefaultDSC_AlreadyExists(t *testing.T) {
 func TestCreateDefaultDSC_CreatesSuccessfully(t *testing.T) {
 	mockDSCSamples(t, func(*http.Request) (int, string) { return 200, testDSCSample })
 	// Mock empty DSC list (no existing DSC)
-	emptyList := map[string]interface{}{
-		"items": []interface{}{},
+	emptyList := map[string]any{
+		"items": []any{},
 	}
 	emptyListJSON, _ := json.Marshal(emptyList)
 
 	// Mock successful apply response
-	applyResponse := map[string]interface{}{
+	applyResponse := map[string]any{
 		"apiVersion": "datasciencecluster.opendatahub.io/v2",
 		"kind":       "DataScienceCluster",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name": "default-dsc",
 		},
 	}
@@ -155,8 +155,8 @@ func TestCreateDefaultDSC_CRDNotInstalled(t *testing.T) {
 func TestCreateDefaultDSC_ApplyFailure(t *testing.T) {
 	mockDSCSamples(t, func(*http.Request) (int, string) { return 200, testDSCSample })
 	// Mock empty DSC list (no existing DSC)
-	emptyList := map[string]interface{}{
-		"items": []interface{}{},
+	emptyList := map[string]any{
+		"items": []any{},
 	}
 	emptyListJSON, _ := json.Marshal(emptyList)
 
@@ -197,21 +197,21 @@ func TestCreateDefaultDSC_ApplyFailure(t *testing.T) {
 // the DSCExists field.
 func TestGetStatus_IncludesDSCExists(t *testing.T) {
 	// Build all required mock responses for GetStatus
-	subResponse := map[string]interface{}{
+	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
-		"status": map[string]interface{}{
+		"metadata": map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
+		"spec":     map[string]any{"source": CatalogName, "channel": "fast"},
+		"status": map[string]any{
 			"state": "AtLatestKnown",
 		},
 	}
 	subJSON, _ := json.Marshal(subResponse)
 
 	// DSC list with one item (DSC exists)
-	dscList := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+	dscList := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{
 					"name": "default-dsc",
 				},
 			},
@@ -220,32 +220,32 @@ func TestGetStatus_IncludesDSCExists(t *testing.T) {
 	dscListJSON, _ := json.Marshal(dscList)
 
 	// InstallPlan list response
-	ipListResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+	ipListResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":              "install-plan-test",
 					"namespace":         SubNS,
 					"creationTimestamp": "2026-01-01T00:00:00Z",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"approved":                   true,
-					"clusterServiceVersionNames": []interface{}{"rhods-operator.3.5.0"},
+					"clusterServiceVersionNames": []any{"rhods-operator.3.5.0"},
 				},
-				"status": map[string]interface{}{"phase": "Complete"},
+				"status": map[string]any{"phase": "Complete"},
 			},
 		},
 	}
 	ipListJSON, _ := json.Marshal(ipListResponse)
 
-	podList := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhoai-catalog-dev-pod1", "namespace": CatalogNS},
-				"status": map[string]interface{}{
+	podList := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "rhoai-catalog-dev-pod1", "namespace": CatalogNS},
+				"status": map[string]any{
 					"phase": "Running",
-					"containerStatuses": []interface{}{
-						map[string]interface{}{"name": "server", "ready": true, "restartCount": float64(0)},
+					"containerStatuses": []any{
+						map[string]any{"name": "server", "ready": true, "restartCount": float64(0)},
 					},
 				},
 			},
@@ -253,35 +253,35 @@ func TestGetStatus_IncludesDSCExists(t *testing.T) {
 	}
 	podListJSON, _ := json.Marshal(podList)
 
-	csvResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhods-operator.v3.5.0"},
-				"spec":     map[string]interface{}{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
-				"status":   map[string]interface{}{"phase": "Succeeded"},
+	csvResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "rhods-operator.v3.5.0"},
+				"spec":     map[string]any{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
+				"status":   map[string]any{"phase": "Succeeded"},
 			},
 		},
 	}
 	csvJSON, _ := json.Marshal(csvResponse)
 
-	csBody := map[string]interface{}{
+	csBody := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
-		"metadata": map[string]interface{}{"name": CatalogName},
-		"spec":     map[string]interface{}{"image": "quay.io/rhoai/test:latest"},
-		"status":   map[string]interface{}{"connectionState": map[string]interface{}{"lastObservedState": "READY"}},
+		"metadata": map[string]any{"name": CatalogName},
+		"spec":     map[string]any{"image": "quay.io/rhoai/test:latest"},
+		"status":   map[string]any{"connectionState": map[string]any{"lastObservedState": "READY"}},
 	}
 	csJSON, _ := json.Marshal(csBody)
 
-	secretData := map[string]interface{}{
+	secretData := map[string]any{
 		"apiVersion": "v1", "kind": "Secret",
-		"data": map[string]interface{}{".dockerconfigjson": "e30="}, // base64("{}")
+		"data": map[string]any{".dockerconfigjson": "e30="}, // base64("{}")
 	}
 	secretJSON, _ := json.Marshal(secretData)
 
-	idmsData := map[string]interface{}{"items": []interface{}{}}
+	idmsData := map[string]any{"items": []any{}}
 	idmsJSON, _ := json.Marshal(idmsData)
 
-	activityData := map[string]interface{}{"data": map[string]interface{}{}}
+	activityData := map[string]any{"data": map[string]any{}}
 	activityJSON, _ := json.Marshal(activityData)
 
 	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
@@ -323,57 +323,57 @@ func TestGetStatus_IncludesDSCExists(t *testing.T) {
 // TestGetStatus_DSCNotExists verifies that GetStatus correctly reports when no DSC exists.
 func TestGetStatus_DSCNotExists(t *testing.T) {
 	// Build minimal mock responses for GetStatus
-	subResponse := map[string]interface{}{
+	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
-		"status": map[string]interface{}{
+		"metadata": map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
+		"spec":     map[string]any{"source": CatalogName, "channel": "fast"},
+		"status": map[string]any{
 			"state": "AtLatestKnown",
 		},
 	}
 	subJSON, _ := json.Marshal(subResponse)
 
 	// Empty DSC list (no DSC exists)
-	emptyDSCList := map[string]interface{}{
-		"items": []interface{}{},
+	emptyDSCList := map[string]any{
+		"items": []any{},
 	}
 	emptyDSCListJSON, _ := json.Marshal(emptyDSCList)
 
-	ipListResponse := map[string]interface{}{"items": []interface{}{}}
+	ipListResponse := map[string]any{"items": []any{}}
 	ipListJSON, _ := json.Marshal(ipListResponse)
 
-	podList := map[string]interface{}{"items": []interface{}{}}
+	podList := map[string]any{"items": []any{}}
 	podListJSON, _ := json.Marshal(podList)
 
-	csvResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhods-operator.v3.5.0"},
-				"spec":     map[string]interface{}{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
-				"status":   map[string]interface{}{"phase": "Succeeded"},
+	csvResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "rhods-operator.v3.5.0"},
+				"spec":     map[string]any{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
+				"status":   map[string]any{"phase": "Succeeded"},
 			},
 		},
 	}
 	csvJSON, _ := json.Marshal(csvResponse)
 
-	csBody := map[string]interface{}{
+	csBody := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
-		"metadata": map[string]interface{}{"name": CatalogName},
-		"spec":     map[string]interface{}{"image": "quay.io/rhoai/test:latest"},
-		"status":   map[string]interface{}{"connectionState": map[string]interface{}{"lastObservedState": "READY"}},
+		"metadata": map[string]any{"name": CatalogName},
+		"spec":     map[string]any{"image": "quay.io/rhoai/test:latest"},
+		"status":   map[string]any{"connectionState": map[string]any{"lastObservedState": "READY"}},
 	}
 	csJSON, _ := json.Marshal(csBody)
 
-	secretData := map[string]interface{}{
+	secretData := map[string]any{
 		"apiVersion": "v1", "kind": "Secret",
-		"data": map[string]interface{}{".dockerconfigjson": "e30="},
+		"data": map[string]any{".dockerconfigjson": "e30="},
 	}
 	secretJSON, _ := json.Marshal(secretData)
 
-	idmsData := map[string]interface{}{"items": []interface{}{}}
+	idmsData := map[string]any{"items": []any{}}
 	idmsJSON, _ := json.Marshal(idmsData)
 
-	activityData := map[string]interface{}{"data": map[string]interface{}{}}
+	activityData := map[string]any{"data": map[string]any{}}
 	activityJSON, _ := json.Marshal(activityData)
 
 	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
@@ -416,11 +416,11 @@ func TestGetStatus_DSCNotExists(t *testing.T) {
 // gracefully when the DSC CRD is not installed.
 func TestGetStatus_DSCCRDNotInstalled(t *testing.T) {
 	// Build minimal mock responses for GetStatus
-	subResponse := map[string]interface{}{
+	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
-		"status": map[string]interface{}{
+		"metadata": map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
+		"spec":     map[string]any{"source": CatalogName, "channel": "fast"},
+		"status": map[string]any{
 			"state": "AtLatestKnown",
 		},
 	}
@@ -429,41 +429,41 @@ func TestGetStatus_DSCCRDNotInstalled(t *testing.T) {
 	// 404 for both v2 and v1 DSC endpoints (CRD not installed)
 	notFoundResponse := `{"kind":"Status","status":"Failure","message":"the server could not find the requested resource","reason":"NotFound","code":404}`
 
-	ipListResponse := map[string]interface{}{"items": []interface{}{}}
+	ipListResponse := map[string]any{"items": []any{}}
 	ipListJSON, _ := json.Marshal(ipListResponse)
 
-	podList := map[string]interface{}{"items": []interface{}{}}
+	podList := map[string]any{"items": []any{}}
 	podListJSON, _ := json.Marshal(podList)
 
-	csvResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhods-operator.v3.5.0"},
-				"spec":     map[string]interface{}{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
-				"status":   map[string]interface{}{"phase": "Succeeded"},
+	csvResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "rhods-operator.v3.5.0"},
+				"spec":     map[string]any{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
+				"status":   map[string]any{"phase": "Succeeded"},
 			},
 		},
 	}
 	csvJSON, _ := json.Marshal(csvResponse)
 
-	csBody := map[string]interface{}{
+	csBody := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
-		"metadata": map[string]interface{}{"name": CatalogName},
-		"spec":     map[string]interface{}{"image": "quay.io/rhoai/test:latest"},
-		"status":   map[string]interface{}{"connectionState": map[string]interface{}{"lastObservedState": "READY"}},
+		"metadata": map[string]any{"name": CatalogName},
+		"spec":     map[string]any{"image": "quay.io/rhoai/test:latest"},
+		"status":   map[string]any{"connectionState": map[string]any{"lastObservedState": "READY"}},
 	}
 	csJSON, _ := json.Marshal(csBody)
 
-	secretData := map[string]interface{}{
+	secretData := map[string]any{
 		"apiVersion": "v1", "kind": "Secret",
-		"data": map[string]interface{}{".dockerconfigjson": "e30="},
+		"data": map[string]any{".dockerconfigjson": "e30="},
 	}
 	secretJSON, _ := json.Marshal(secretData)
 
-	idmsData := map[string]interface{}{"items": []interface{}{}}
+	idmsData := map[string]any{"items": []any{}}
 	idmsJSON, _ := json.Marshal(idmsData)
 
-	activityData := map[string]interface{}{"data": map[string]interface{}{}}
+	activityData := map[string]any{"data": map[string]any{}}
 	activityJSON, _ := json.Marshal(activityData)
 
 	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)

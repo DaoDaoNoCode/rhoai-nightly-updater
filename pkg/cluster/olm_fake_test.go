@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -21,11 +22,11 @@ type fakeOLM struct {
 	t  *testing.T
 	mu sync.Mutex
 
-	sub          map[string]interface{} // nil = no Subscription
-	csvs         map[string]map[string]interface{}
-	installPlans map[string]map[string]interface{}
-	catalog      map[string]interface{} // nil = no nightly catalog
-	operatorGrps []interface{}
+	sub          map[string]any // nil = no Subscription
+	csvs         map[string]map[string]any
+	installPlans map[string]map[string]any
+	catalog      map[string]any // nil = no nightly catalog
+	operatorGrps []any
 	channels     string // PackageManifest channels JSON for every catalog
 	stableChans  string // channels of the stable catalog (redhat-operators), "" = same as channels
 	catalogPods  string // pod list JSON for olm.catalogSource pods
@@ -46,14 +47,14 @@ type fakeOLM struct {
 	catalogRV  int // resourceVersion of the nightly catalog
 	// csvAnnotations go on every CSV the fake creates (the bundle's
 	// containerImage and createdAt, which identify a nightly build).
-	csvAnnotations map[string]interface{}
+	csvAnnotations map[string]any
 
-	onSubscribe func(f *fakeOLM, spec map[string]interface{})
+	onSubscribe func(f *fakeOLM, spec map[string]any)
 	onApprove   func(f *fakeOLM, ip string)
 	// intercept runs first (under the lock) and may answer the request itself.
 	intercept func(f *fakeOLM, w http.ResponseWriter, r *http.Request) bool
 	// admission: the objects served at these paths (servesGitOpsPolicy).
-	admission map[string]map[string]interface{}
+	admission map[string]map[string]any
 	// topology: Infrastructure cluster's status.controlPlaneTopology, ""
 	// = Infrastructure not readable (403).
 	topology string
@@ -64,16 +65,16 @@ type fakeOLM struct {
 type fakeRequest struct {
 	Method, Path string
 	Query        url.Values
-	Body         map[string]interface{}
+	Body         map[string]any
 }
 
 func newFakeOLM(t *testing.T) *fakeOLM {
 	isolateClusterCaches(t)
 	return &fakeOLM{
 		t:            t,
-		csvs:         map[string]map[string]interface{}{},
-		installPlans: map[string]map[string]interface{}{},
-		operatorGrps: []interface{}{map[string]interface{}{"metadata": map[string]interface{}{"name": "rhods-operator"}, "spec": map[string]interface{}{}}},
+		csvs:         map[string]map[string]any{},
+		installPlans: map[string]map[string]any{},
+		operatorGrps: []any{map[string]any{"metadata": map[string]any{"name": "rhods-operator"}, "spec": map[string]any{}}},
 		channels:     `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.6.0"}]`,
 		catalogPods:  `{"items":[]}`,
 		failDelete:   map[string]int{},
@@ -82,46 +83,42 @@ func newFakeOLM(t *testing.T) *fakeOLM {
 }
 
 // installed sets up a running operator on the nightly catalog.
-func (f *fakeOLM) installed(csv string, spec map[string]interface{}) *fakeOLM {
+func (f *fakeOLM) installed(csv string, spec map[string]any) *fakeOLM {
 	if spec == nil {
-		spec = map[string]interface{}{}
+		spec = map[string]any{}
 	}
-	full := map[string]interface{}{"channel": "stable-3.x", "installPlanApproval": "Automatic", "name": SubName, "source": CatalogName, "sourceNamespace": CatalogNS}
-	for k, v := range spec {
-		full[k] = v
-	}
-	f.sub = map[string]interface{}{"metadata": map[string]interface{}{"name": SubName, "uid": "uid-sub-installed"}, "spec": full,
-		"status": map[string]interface{}{"state": "AtLatestKnown", "currentCSV": csv, "installedCSV": csv, "installPlanRef": map[string]interface{}{"name": "install-old"}}}
+	full := map[string]any{"channel": "stable-3.x", "installPlanApproval": "Automatic", "name": SubName, "source": CatalogName, "sourceNamespace": CatalogNS}
+	maps.Copy(full, spec)
+	f.sub = map[string]any{"metadata": map[string]any{"name": SubName, "uid": "uid-sub-installed"}, "spec": full,
+		"status": map[string]any{"state": "AtLatestKnown", "currentCSV": csv, "installedCSV": csv, "installPlanRef": map[string]any{"name": "install-old"}}}
 	f.addCSV(csv, "Succeeded")
-	f.installPlans["install-old"] = map[string]interface{}{"spec": map[string]interface{}{"clusterServiceVersionNames": []string{csv}}, "status": map[string]interface{}{"phase": "Complete"}}
-	f.catalog = map[string]interface{}{"spec": map[string]interface{}{"image": "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:old"}}
+	f.installPlans["install-old"] = map[string]any{"spec": map[string]any{"clusterServiceVersionNames": []string{csv}}, "status": map[string]any{"phase": "Complete"}}
+	f.catalog = map[string]any{"spec": map[string]any{"image": "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:old"}}
 	return f
 }
 
 func (f *fakeOLM) addCSV(name, phase string) {
 	f.csvSeq++
-	meta := map[string]interface{}{"name": name, "uid": fmt.Sprintf("uid-%s-%d", name, f.csvSeq)}
+	meta := map[string]any{"name": name, "uid": fmt.Sprintf("uid-%s-%d", name, f.csvSeq)}
 	if f.csvAnnotations != nil {
-		ann := map[string]interface{}{}
-		for k, v := range f.csvAnnotations {
-			ann[k] = v
-		}
+		ann := map[string]any{}
+		maps.Copy(ann, f.csvAnnotations)
 		meta["annotations"] = ann
 	}
-	f.csvs[name] = map[string]interface{}{
+	f.csvs[name] = map[string]any{
 		"metadata": meta,
-		"spec":     map[string]interface{}{"displayName": "Red Hat OpenShift AI", "version": strings.TrimPrefix(name, SubName+".")},
-		"status":   map[string]interface{}{"phase": phase},
+		"spec":     map[string]any{"displayName": "Red Hat OpenShift AI", "version": strings.TrimPrefix(name, SubName+".")},
+		"status":   map[string]any{"phase": phase},
 	}
 }
 
 // olmInstalls returns an onSubscribe that installs the channel head the way
 // OLM does: InstallPlan Complete, CSV Succeeded, status filled in.
-func olmInstalls(csv string) func(*fakeOLM, map[string]interface{}) {
-	return func(f *fakeOLM, _ map[string]interface{}) {
-		f.installPlans["install-new"] = map[string]interface{}{"spec": map[string]interface{}{"clusterServiceVersionNames": []string{csv}}, "status": map[string]interface{}{"phase": "Complete"}}
+func olmInstalls(csv string) func(*fakeOLM, map[string]any) {
+	return func(f *fakeOLM, _ map[string]any) {
+		f.installPlans["install-new"] = map[string]any{"spec": map[string]any{"clusterServiceVersionNames": []string{csv}}, "status": map[string]any{"phase": "Complete"}}
 		f.addCSV(csv, "Succeeded")
-		f.sub["status"] = map[string]interface{}{"currentCSV": csv, "installedCSV": csv, "installPlanRef": map[string]interface{}{"name": "install-new"}, "state": "AtLatestKnown"}
+		f.sub["status"] = map[string]any{"currentCSV": csv, "installedCSV": csv, "installPlanRef": map[string]any{"name": "install-new"}, "state": "AtLatestKnown"}
 	}
 }
 
@@ -140,13 +137,13 @@ func notFound(w http.ResponseWriter) {
 
 // uidPreconditionMet reports whether a DELETE body's preconditions.uid, if
 // any, matches obj's metadata.uid, as the API server checks it.
-func uidPreconditionMet(body, obj map[string]interface{}) bool {
-	pre, _ := body["preconditions"].(map[string]interface{})
+func uidPreconditionMet(body, obj map[string]any) bool {
+	pre, _ := body["preconditions"].(map[string]any)
 	want, _ := pre["uid"].(string)
 	if want == "" {
 		return true
 	}
-	meta, _ := obj["metadata"].(map[string]interface{})
+	meta, _ := obj["metadata"].(map[string]any)
 	return meta["uid"] == want
 }
 
@@ -156,14 +153,14 @@ func uidConflict(w http.ResponseWriter) {
 	_, _ = io.WriteString(w, `{"kind":"Status","status":"Failure","reason":"Conflict","message":"Precondition failed: UID in precondition does not match","code":409}`)
 }
 
-func writeJSON(w http.ResponseWriter, v interface{}) {
+func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
 func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var body map[string]interface{}
+	var body map[string]any
 	if r.Body != nil {
 		data, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(data, &body)
@@ -194,13 +191,13 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = fmt.Fprintf(w, `{"status":{"controlPlaneTopology":%q}}`, f.topology)
 	case strings.HasSuffix(p, "/secrets/additional-pull-secret"):
-		_, _ = io.WriteString(w, pullSecretBody(f.t, map[string]interface{}{"quay.io/rhoai": map[string]interface{}{"auth": exampleAuth("user:pass")}}))
+		_, _ = io.WriteString(w, pullSecretBody(f.t, map[string]any{"quay.io/rhoai": map[string]any{"auth": exampleAuth("user:pass")}}))
 	case strings.HasSuffix(p, "/imagedigestmirrorsets"):
 		_, _ = fmt.Fprintf(w, `{"items":[{"metadata":{"name":"rhoai-mirror"},"spec":{"imageDigestMirrors":[{"source":%q}]}}]}`, IDMSSource)
 	case p == "/api/v1/namespaces/"+SubNS:
 		_, _ = io.WriteString(w, `{"metadata":{"name":"`+SubNS+`"}}`)
 	case strings.HasSuffix(p, "/operatorgroups"):
-		writeJSON(w, map[string]interface{}{"items": f.operatorGrps})
+		writeJSON(w, map[string]any{"items": f.operatorGrps})
 	case strings.Contains(p, "/operatorgroups/"):
 		f.operatorGrps = append(f.operatorGrps, body)
 		_, _ = io.WriteString(w, `{}`)
@@ -221,7 +218,7 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(p, "/namespaces/"+CatalogNS+"/pods") && f.gitOpsPods && r.URL.Query().Get("labelSelector") == "olm.catalogSource="+CatalogName:
 		image := ""
 		if f.catalog != nil {
-			image, _ = f.catalog["spec"].(map[string]interface{})["image"].(string)
+			image, _ = f.catalog["spec"].(map[string]any)["image"].(string)
 		}
 		_, _ = fmt.Fprintf(w, `{"items":[{"metadata":{"name":"rhoai-catalog-dev-abc"},"spec":{"containers":[{"image":%q}]},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`, image)
 	case strings.HasSuffix(p, "/namespaces/"+CatalogNS+"/pods"):
@@ -229,11 +226,11 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(p, "/subscriptions/"+SubName):
 		f.serveSubscription(w, r, body)
 	case strings.HasSuffix(p, "/clusterserviceversions"):
-		var items []interface{}
+		var items []any
 		for _, csv := range f.csvs {
 			items = append(items, csv)
 		}
-		writeJSON(w, map[string]interface{}{"items": items})
+		writeJSON(w, map[string]any{"items": items})
 	case strings.Contains(p, "/clusterserviceversions/"):
 		csv, ok := f.csvs[last]
 		switch {
@@ -242,7 +239,7 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 		case r.Method == http.MethodDelete && !uidPreconditionMet(body, csv):
 			uidConflict(w)
 		case r.Method == http.MethodDelete && f.stuckCSVs[last]:
-			csv["metadata"].(map[string]interface{})["deletionTimestamp"] = "2026-01-01T00:00:00Z"
+			csv["metadata"].(map[string]any)["deletionTimestamp"] = "2026-01-01T00:00:00Z"
 			_, _ = io.WriteString(w, `{}`)
 		case r.Method == http.MethodDelete:
 			delete(f.csvs, last)
@@ -259,7 +256,7 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 			delete(f.installPlans, last)
 			_, _ = io.WriteString(w, `{}`)
 		case r.Method == http.MethodPatch:
-			ip["spec"].(map[string]interface{})["approved"] = true
+			ip["spec"].(map[string]any)["approved"] = true
 			if f.onApprove != nil {
 				f.onApprove(f, last)
 			}
@@ -287,11 +284,11 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = io.WriteString(w, f.platform)
 	case strings.HasSuffix(p, "/configmaps/"+snapshotConfigMapName) && r.Method == http.MethodPatch && r.URL.Query().Get("fieldManager") == subscriptionSnapshotManager:
-		data, _ := body["data"].(map[string]interface{})
+		data, _ := body["data"].(map[string]any)
 		f.recordedSub, _ = data[subscriptionSnapshotKey].(string)
 		_, _ = io.WriteString(w, `{}`)
 	case strings.HasSuffix(p, "/configmaps/"+snapshotConfigMapName) && r.Method == http.MethodGet:
-		writeJSON(w, map[string]interface{}{"data": map[string]interface{}{subscriptionSnapshotKey: f.recordedSub}})
+		writeJSON(w, map[string]any{"data": map[string]any{subscriptionSnapshotKey: f.recordedSub}})
 	case strings.Contains(p, "/configmaps/") && r.Method != http.MethodGet:
 		_, _ = io.WriteString(w, `{}`)
 	case p == "/apis/apiextensions.k8s.io/v1/customresourcedefinitions":
@@ -301,22 +298,22 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = io.WriteString(w, f.crds)
 	case strings.HasSuffix(p, "/installplans"):
-		var items []interface{}
+		var items []any
 		for name, ip := range f.installPlans {
-			meta, _ := ip["metadata"].(map[string]interface{})
+			meta, _ := ip["metadata"].(map[string]any)
 			if meta == nil {
-				meta = map[string]interface{}{}
+				meta = map[string]any{}
 			}
 			meta["name"] = name
-			items = append(items, map[string]interface{}{"metadata": meta, "spec": ip["spec"]})
+			items = append(items, map[string]any{"metadata": meta, "spec": ip["spec"]})
 		}
-		writeJSON(w, map[string]interface{}{"items": items})
+		writeJSON(w, map[string]any{"items": items})
 	default:
 		notFound(w)
 	}
 }
 
-func (f *fakeOLM) serveCatalog(w http.ResponseWriter, r *http.Request, name string, body map[string]interface{}) {
+func (f *fakeOLM) serveCatalog(w http.ResponseWriter, r *http.Request, name string, body map[string]any) {
 	verify := strings.Contains(name, "-verify-")
 	switch r.Method {
 	case http.MethodDelete:
@@ -341,11 +338,11 @@ func (f *fakeOLM) serveCatalog(w http.ResponseWriter, r *http.Request, name stri
 		if !verify {
 			// An apply keeps annotations another manager set (Argo CD's
 			// tracking annotation).
-			old, _ := f.catalog["metadata"].(map[string]interface{})
+			old, _ := f.catalog["metadata"].(map[string]any)
 			if ann := old["annotations"]; ann != nil {
-				meta, _ := body["metadata"].(map[string]interface{})
+				meta, _ := body["metadata"].(map[string]any)
 				if meta == nil {
-					meta = map[string]interface{}{}
+					meta = map[string]any{}
 					body["metadata"] = meta
 				}
 				if meta["annotations"] == nil {
@@ -362,24 +359,22 @@ func (f *fakeOLM) serveCatalog(w http.ResponseWriter, r *http.Request, name stri
 			return
 		}
 		image, state := "", "READY"
-		meta := map[string]interface{}{"name": name}
+		meta := map[string]any{"name": name}
 		if !verify {
-			image, _ = f.catalog["spec"].(map[string]interface{})["image"].(string)
-			if m, _ := f.catalog["metadata"].(map[string]interface{}); m != nil {
-				for k, v := range m {
-					meta[k] = v
-				}
+			image, _ = f.catalog["spec"].(map[string]any)["image"].(string)
+			if m, _ := f.catalog["metadata"].(map[string]any); m != nil {
+				maps.Copy(meta, m)
 			}
 			meta["resourceVersion"] = fmt.Sprint(f.catalogRV)
 		} else if f.verifyState != "" {
 			state = f.verifyState
 		}
-		writeJSON(w, map[string]interface{}{"metadata": meta, "spec": map[string]interface{}{"image": image},
-			"status": map[string]interface{}{"connectionState": map[string]interface{}{"lastObservedState": state}}})
+		writeJSON(w, map[string]any{"metadata": meta, "spec": map[string]any{"image": image},
+			"status": map[string]any{"connectionState": map[string]any{"lastObservedState": state}}})
 	}
 }
 
-func (f *fakeOLM) serveSubscription(w http.ResponseWriter, r *http.Request, body map[string]interface{}) {
+func (f *fakeOLM) serveSubscription(w http.ResponseWriter, r *http.Request, body map[string]any) {
 	switch r.Method {
 	case http.MethodDelete:
 		if f.sub == nil {
@@ -393,25 +388,25 @@ func (f *fakeOLM) serveSubscription(w http.ResponseWriter, r *http.Request, body
 		f.sub = nil
 		_, _ = io.WriteString(w, `{}`)
 	case http.MethodPatch:
-		spec, _ := body["spec"].(map[string]interface{})
+		spec, _ := body["spec"].(map[string]any)
 		// An apply keeps the UID of an existing Subscription; a new one
 		// gets a new UID.
 		uid := ""
 		if f.sub != nil {
-			uid, _ = f.sub["metadata"].(map[string]interface{})["uid"].(string)
+			uid, _ = f.sub["metadata"].(map[string]any)["uid"].(string)
 		}
 		if uid == "" {
 			f.csvSeq++
 			uid = fmt.Sprintf("uid-sub-%d", f.csvSeq)
 		}
-		meta := map[string]interface{}{"name": SubName, "uid": uid}
-		bodyMeta, _ := body["metadata"].(map[string]interface{})
+		meta := map[string]any{"name": SubName, "uid": uid}
+		bodyMeta, _ := body["metadata"].(map[string]any)
 		for _, k := range []string{"annotations", "labels"} {
 			if bodyMeta[k] != nil {
 				meta[k] = bodyMeta[k]
 			}
 		}
-		f.sub = map[string]interface{}{"metadata": meta, "spec": spec, "status": map[string]interface{}{}}
+		f.sub = map[string]any{"metadata": meta, "spec": spec, "status": map[string]any{}}
 		// The API server answers an apply with the resulting object
 		// (apiserver handlers/patch.go), before anything else changes it.
 		applied, _ := json.Marshal(f.sub)
@@ -442,13 +437,13 @@ func (f *fakeOLM) writes() []string {
 }
 
 // lastSubscriptionApply returns the spec of the last Subscription apply.
-func (f *fakeOLM) subscriptionApplies() []map[string]interface{} {
+func (f *fakeOLM) subscriptionApplies() []map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var out []map[string]interface{}
+	var out []map[string]any
 	for _, r := range f.requests {
 		if r.Method == http.MethodPatch && strings.HasSuffix(r.Path, "/subscriptions/"+SubName) {
-			spec, _ := r.Body["spec"].(map[string]interface{})
+			spec, _ := r.Body["spec"].(map[string]any)
 			out = append(out, spec)
 		}
 	}

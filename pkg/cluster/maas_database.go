@@ -333,20 +333,20 @@ func toolDBKind(kind string) bool {
 
 // --- the development database (scripts/setup-database.sh) ---------------------------
 
-func maasPOCLabels() map[string]interface{} {
+func maasPOCLabels() map[string]any {
 	l := toolLabels()
 	l["app"] = "postgres"
 	l["purpose"] = "poc"
 	return l
 }
 
-func maasPOCCredsObject(ns, password string) map[string]interface{} {
+func maasPOCCredsObject(ns, password string) map[string]any {
 	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
-	return map[string]interface{}{
+	return map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Secret",
-		"metadata":   map[string]interface{}{"name": maasPOCCreds, "namespace": ns, "labels": maasPOCLabels()},
-		"data":       map[string]interface{}{"POSTGRES_USER": b64(maasPOCUser), "POSTGRES_PASSWORD": b64(password), "POSTGRES_DB": b64(maasPOCDatabase)},
+		"metadata":   map[string]any{"name": maasPOCCreds, "namespace": ns, "labels": maasPOCLabels()},
+		"data":       map[string]any{"POSTGRES_USER": b64(maasPOCUser), "POSTGRES_PASSWORD": b64(password), "POSTGRES_DB": b64(maasPOCDatabase)},
 	}
 }
 
@@ -358,62 +358,62 @@ func maasPOCCredsObject(ns, password string) map[string]interface{} {
 // (maasPOCCredsAnnotation), so a recreated Secret (a new password) rolls
 // the pod; the database is ephemeral, so nothing is lost but the keys a
 // new password loses anyway.
-func maasPOCDeploymentObject(ns, image, credsUID string) map[string]interface{} {
-	env := func(name, key string) map[string]interface{} {
-		return map[string]interface{}{"name": name, "valueFrom": map[string]interface{}{"secretKeyRef": map[string]interface{}{"name": maasPOCCreds, "key": key}}}
+func maasPOCDeploymentObject(ns, image, credsUID string) map[string]any {
+	env := func(name, key string) map[string]any {
+		return map[string]any{"name": name, "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": maasPOCCreds, "key": key}}}
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"apiVersion": "apps/v1",
 		"kind":       "Deployment",
-		"metadata":   map[string]interface{}{"name": maasPOCName, "namespace": ns, "labels": maasPOCLabels()},
-		"spec": map[string]interface{}{
+		"metadata":   map[string]any{"name": maasPOCName, "namespace": ns, "labels": maasPOCLabels()},
+		"spec": map[string]any{
 			"replicas": 1,
-			"selector": map[string]interface{}{"matchLabels": map[string]interface{}{"app": "postgres"}},
-			"template": map[string]interface{}{
-				"metadata": map[string]interface{}{"labels": map[string]interface{}{"app": "postgres"}, "annotations": map[string]interface{}{maasPOCCredsAnnotation: credsUID}},
-				"spec": map[string]interface{}{
-					"containers": []interface{}{map[string]interface{}{
+			"selector": map[string]any{"matchLabels": map[string]any{"app": "postgres"}},
+			"template": map[string]any{
+				"metadata": map[string]any{"labels": map[string]any{"app": "postgres"}, "annotations": map[string]any{maasPOCCredsAnnotation: credsUID}},
+				"spec": map[string]any{
+					"containers": []any{map[string]any{
 						"name":  "postgres",
 						"image": image,
-						"env": []interface{}{
+						"env": []any{
 							env("POSTGRESQL_USER", "POSTGRES_USER"),
 							env("POSTGRESQL_PASSWORD", "POSTGRES_PASSWORD"),
 							env("POSTGRESQL_DATABASE", "POSTGRES_DB"),
 						},
-						"ports":        []interface{}{map[string]interface{}{"containerPort": 5432}},
-						"volumeMounts": []interface{}{map[string]interface{}{"name": "data", "mountPath": "/var/lib/pgsql/data"}},
-						"resources": map[string]interface{}{
-							"requests": map[string]interface{}{"memory": "256Mi", "cpu": "100m"},
-							"limits":   map[string]interface{}{"memory": "512Mi", "cpu": "500m"},
+						"ports":        []any{map[string]any{"containerPort": 5432}},
+						"volumeMounts": []any{map[string]any{"name": "data", "mountPath": "/var/lib/pgsql/data"}},
+						"resources": map[string]any{
+							"requests": map[string]any{"memory": "256Mi", "cpu": "100m"},
+							"limits":   map[string]any{"memory": "512Mi", "cpu": "500m"},
 						},
-						"readinessProbe": map[string]interface{}{
-							"exec":                map[string]interface{}{"command": []interface{}{"/usr/libexec/check-container"}},
+						"readinessProbe": map[string]any{
+							"exec":                map[string]any{"command": []any{"/usr/libexec/check-container"}},
 							"initialDelaySeconds": 5,
 							"periodSeconds":       5,
 						},
 					}},
-					"volumes": []interface{}{map[string]interface{}{"name": "data", "emptyDir": map[string]interface{}{}}},
+					"volumes": []any{map[string]any{"name": "data", "emptyDir": map[string]any{}}},
 				},
 			},
 		},
 	}
 }
 
-func maasPOCServiceObject(ns string) map[string]interface{} {
-	return map[string]interface{}{
+func maasPOCServiceObject(ns string) map[string]any {
+	return map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Service",
-		"metadata":   map[string]interface{}{"name": maasPOCName, "namespace": ns, "labels": maasPOCLabels()},
-		"spec": map[string]interface{}{
-			"selector": map[string]interface{}{"app": "postgres"},
-			"ports":    []interface{}{map[string]interface{}{"port": 5432, "targetPort": 5432}},
+		"metadata":   map[string]any{"name": maasPOCName, "namespace": ns, "labels": maasPOCLabels()},
+		"spec": map[string]any{
+			"selector": map[string]any{"app": "postgres"},
+			"ports":    []any{map[string]any{"port": 5432, "targetPort": 5432}},
 		},
 	}
 }
 
 // maasPOCObject is the development database's Deployment or Service
 // (postgres-creds is only ever created, by createMaaSPOCCreds).
-func maasPOCObject(kind, ns, image, credsUID string) map[string]interface{} {
+func maasPOCObject(kind, ns, image, credsUID string) map[string]any {
 	if kind == "PostgresDeployment" {
 		return maasPOCDeploymentObject(ns, image, credsUID)
 	}
@@ -1020,7 +1020,7 @@ func (p *maasDBPlan) dryRun(c *Client) (string, error) {
 
 // ensureMaaSDBObject creates or updates one of the database's objects
 // (only this tool's).
-func ensureMaaSDBObject(c *Client, kind, ns string, obj map[string]interface{}, cur objectMeta, found, dryRun bool) (objectMeta, error) {
+func ensureMaaSDBObject(c *Client, kind, ns string, obj map[string]any, cur objectMeta, found, dryRun bool) (objectMeta, error) {
 	read := func() (objectMeta, bool, error) { return readObjectMeta(c, maasObjectPath(kind, ns)) }
 	_, written, _, err := ensureToolObject(c, maasDesc(kind, ns), maasObjectPath(kind, ns), maasCreatePath(kind, ns), obj, cur, found, read, toolOwned, dryRun)
 	return written, err

@@ -79,7 +79,7 @@ func patchControlledDashboardImage(c *Client, operator *dashboardDeployment, ima
 	return patchControlledDashboardImages(c, operator, []dashboardImagePatch{{Image: image, Target: target}})
 }
 
-func checkDSCCompatibility(c *Client, dsc map[string]interface{}) *types.DSCCompatibility {
+func checkDSCCompatibility(c *Client, dsc map[string]any) *types.DSCCompatibility {
 	op, err := getInstalledOperator(c)
 	apiVersion, _ := dsc["apiVersion"].(string)
 	version, _ := dscAPIVersion(apiVersion)
@@ -112,6 +112,6 @@ func GetOperationState(c *Client) (*types.OperationMarker, *types.CompletedOpera
 }
 
 // redactURL is redactDBSecrets for one connection URL.
-func redactURL(msg, connURL string, passwords ...string) string {
-	return redactDBSecrets(msg, []string{connURL}, passwords)
+func redactURL(msg, connURL string) string {
+	return redactDBSecrets(msg, []string{connURL}, nil)
 }

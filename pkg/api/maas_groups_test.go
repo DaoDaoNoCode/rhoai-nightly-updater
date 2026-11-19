@@ -69,7 +69,7 @@ func TestMaaSGroups(t *testing.T) {
 		allowMutations(t)
 		stubMaaSGroups(t)
 		many := ""
-		for i := 0; i < 21; i++ {
+		for range 21 {
 			many += "&name=g"
 		}
 		for _, q := range []string{"", "?" + many[1:], "?name=system:authenticated"} {

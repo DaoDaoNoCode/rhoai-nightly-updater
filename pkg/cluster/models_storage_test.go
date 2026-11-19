@@ -21,10 +21,10 @@ func TestModelCatalog_EphemeralStorageIsAboutOneAndAHalfTheDownload(t *testing.T
 	}
 }
 
-func mainResources(t *testing.T, mc *modelsCluster) map[string]interface{} {
+func mainResources(t *testing.T, mc *modelsCluster) map[string]any {
 	t.Helper()
-	main := mc.f.get(testModelPath)["spec"].(map[string]interface{})["template"].(map[string]interface{})["containers"].([]interface{})[0].(map[string]interface{})
-	return main["resources"].(map[string]interface{})
+	main := mc.f.get(testModelPath)["spec"].(map[string]any)["template"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+	return main["resources"].(map[string]any)
 }
 
 // With KServe's default model volume (no modelVolumeSource in
@@ -48,7 +48,7 @@ func TestModelsSetup_RequestsEphemeralStorageOnlyForTheDefaultVolume(t *testing.
 		if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
 			t.Fatalf("%s: setup %+v", tc.name, res)
 		}
-		req := mainResources(t, mc)["requests"].(map[string]interface{})
+		req := mainResources(t, mc)["requests"].(map[string]any)
 		if got, set := req["ephemeral-storage"]; set != tc.want || (set && got != "1.5G") {
 			t.Errorf("%s: requests %v", tc.name, req)
 		}

@@ -8,7 +8,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-func subSpec(t *testing.T, mc *modelsCluster) (map[string]interface{}, string) {
+func subSpec(t *testing.T, mc *modelsCluster) (map[string]any, string) {
 	t.Helper()
 	sub := mc.f.get(tMaaSSub)
 	if sub == nil {
@@ -18,7 +18,7 @@ func subSpec(t *testing.T, mc *modelsCluster) (map[string]interface{}, string) {
 	return ensureMap(sub, "spec"), desc
 }
 
-func asJSON(v interface{}) string {
+func asJSON(v any) string {
 	raw, _ := json.Marshal(v)
 	return string(raw)
 }
@@ -224,7 +224,7 @@ func TestMaaSUpgrade_EarlierSubscriptionIsTheFreeSample(t *testing.T) {
 		t.Fatalf("publish: %+v", res)
 	}
 	sub := mc.f.get(tMaaSSub)
-	ensureMap(sub, "metadata")["annotations"] = map[string]interface{}{"openshift.io/display-name": "rhoai-nightly-updater models", "openshift.io/description": "100 tokens a minute for every signed-in user"}
+	ensureMap(sub, "metadata")["annotations"] = map[string]any{"openshift.io/display-name": "rhoai-nightly-updater models", "openshift.io/description": "100 tokens a minute for every signed-in user"}
 	mc.f.put(tMaaSSub, sub)
 	st, _ := GetMaaSStatus(mc.c)
 	for _, it := range st.Items {

@@ -67,10 +67,10 @@ const (
 	lwsExamples         = `[{"apiVersion":"operator.openshift.io/v1","kind":"LeaderWorkerSetOperator","metadata":{"name":"cluster"},"spec":{"managementState":"Managed"}}]`
 )
 
-func pkgManifest(name, catalog, provider, channel, csv, display, suggestedNS string, modes []string, examples string, monitoring bool) map[string]interface{} {
-	var installModes []map[string]interface{}
+func pkgManifest(name, catalog, provider, channel, csv, display, suggestedNS string, modes []string, examples string, monitoring bool) map[string]any {
+	var installModes []map[string]any
 	for _, m := range []string{"OwnNamespace", "SingleNamespace", "MultiNamespace", "AllNamespaces"} {
-		installModes = append(installModes, map[string]interface{}{"type": m, "supported": slices.Contains(modes, m)})
+		installModes = append(installModes, map[string]any{"type": m, "supported": slices.Contains(modes, m)})
 	}
 	ann := map[string]string{"alm-examples": examples}
 	if suggestedNS != "" {
@@ -79,14 +79,14 @@ func pkgManifest(name, catalog, provider, channel, csv, display, suggestedNS str
 	if monitoring {
 		ann["operatorframework.io/cluster-monitoring"] = "true"
 	}
-	return map[string]interface{}{
-		"metadata": map[string]interface{}{"name": name, "labels": map[string]string{"catalog": catalog, "provider": provider}},
-		"status": map[string]interface{}{
+	return map[string]any{
+		"metadata": map[string]any{"name": name, "labels": map[string]string{"catalog": catalog, "provider": provider}},
+		"status": map[string]any{
 			"catalogSource": catalog, "catalogSourceNamespace": "openshift-marketplace", "defaultChannel": channel,
 			"provider": map[string]string{"name": provider},
-			"channels": []interface{}{
-				map[string]interface{}{"name": "older", "currentCSV": "old.v0", "currentCSVDesc": map[string]interface{}{"displayName": "Old"}},
-				map[string]interface{}{"name": channel, "currentCSV": csv, "currentCSVDesc": map[string]interface{}{
+			"channels": []any{
+				map[string]any{"name": "older", "currentCSV": "old.v0", "currentCSVDesc": map[string]any{"displayName": "Old"}},
+				map[string]any{"name": channel, "currentCSV": csv, "currentCSVDesc": map[string]any{
 					"displayName": display, "installModes": installModes, "annotations": ann,
 				}},
 			},
@@ -94,8 +94,8 @@ func pkgManifest(name, catalog, provider, channel, csv, display, suggestedNS str
 	}
 }
 
-func liveCatalog() []map[string]interface{} {
-	return []map[string]interface{}{
+func liveCatalog() []map[string]any {
+	return []map[string]any{
 		pkgManifest("job-set", "redhat-operators", "Red Hat, Inc.", "stable-v1.0", "jobset-operator.v1.0.1", "Job Set Operator", "openshift-jobset-operator",
 			[]string{"OwnNamespace", "SingleNamespace"}, jobSetExamples, true),
 		pkgManifest("openshift-cert-manager-operator", "redhat-operators", "Red Hat", "stable-v1", "cert-manager-operator.v1.20.1", "cert-manager Operator for Red Hat OpenShift", "cert-manager-operator",
@@ -108,9 +108,9 @@ func liveCatalog() []map[string]interface{} {
 	}
 }
 
-func catalogPackages(t *testing.T, items []map[string]interface{}) []catalogPackage {
+func catalogPackages(t *testing.T, items []map[string]any) []catalogPackage {
 	t.Helper()
-	body, _ := json.Marshal(map[string]interface{}{"items": items})
+	body, _ := json.Marshal(map[string]any{"items": items})
 	pkgs, err := parsePackageManifests(body)
 	if err != nil {
 		t.Fatal(err)

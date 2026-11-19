@@ -162,7 +162,7 @@ describe("GlobalBanners", () => {
     renderWithApp(<GlobalBanners />, {
       operation: async () => ({
         inProgress: true,
-        operation: { id: "1", type: "setup-minio", label: "Set up S3 storage", user: "alice", startedAt: new Date().toISOString(), remote: true, pod: "updater-7d9f-abcde", message: "Waiting for the SeaweedFS pod" },
+        operation: { id: "1", type: "setup-s3", label: "Set up S3 storage", user: "alice", startedAt: new Date().toISOString(), remote: true, pod: "updater-7d9f-abcde", message: "Waiting for the SeaweedFS pod" },
       }),
     }, "/components");
     expect(await screen.findByText(/alice is running "Set up S3 storage" on updater pod updater-7d9f-abcde/)).toBeInTheDocument();

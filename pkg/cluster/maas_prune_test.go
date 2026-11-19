@@ -25,7 +25,8 @@ func publishedCluster(t *testing.T) *modelsCluster {
 	return mc
 }
 
-func gatewayAdmits(t *testing.T, mc *modelsCluster, project string) bool {
+func gatewayAdmits(t *testing.T, mc *modelsCluster) bool {
+	project := "proj"
 	t.Helper()
 	gw, _ := json.Marshal(mc.f.get(tMaaSGateway))
 	return strings.Contains(string(gw), `"`+project+`"`)
@@ -46,7 +47,7 @@ func dropNamespace(mc *modelsCluster, project string) {
 // closed: nothing is changed).
 func TestMaaS_APublishedProjectThatIsGoneLeavesTheGateway(t *testing.T) {
 	mc := publishedCluster(t)
-	if !gatewayAdmits(t, mc, "proj") {
+	if !gatewayAdmits(t, mc) {
 		t.Fatal("the gateway does not admit proj after publishing")
 	}
 	dropNamespace(mc, "proj")
@@ -68,7 +69,7 @@ func TestMaaS_APublishedProjectThatIsGoneLeavesTheGateway(t *testing.T) {
 	for _, r := range mc.f.mutations() {
 		t.Errorf("written while the project could not be read: %s", r)
 	}
-	if rec, _ := readMaaSRecord(mc.c); len(rec.Published) != 1 || !gatewayAdmits(t, mc, "proj") {
+	if rec, _ := readMaaSRecord(mc.c); len(rec.Published) != 1 || !gatewayAdmits(t, mc) {
 		t.Fatalf("the publication was dropped: %+v", rec)
 	}
 	delete(mc.f.fail, "GET /api/v1/namespaces/proj")
@@ -80,7 +81,7 @@ func TestMaaS_APublishedProjectThatIsGoneLeavesTheGateway(t *testing.T) {
 	if !strings.Contains(strings.Join(res.Logs, "\n"), "project proj no longer exists") {
 		t.Errorf("logs: %v", res.Logs)
 	}
-	if gatewayAdmits(t, mc, "proj") {
+	if gatewayAdmits(t, mc) {
 		t.Fatal("the gateway still admits proj")
 	}
 	if rec, _ := readMaaSRecord(mc.c); len(rec.Published) != 0 {
@@ -108,7 +109,7 @@ func TestMaaS_APublishedModelMadeAgainIsGone(t *testing.T) {
 	if !strings.Contains(strings.Join(res.Logs, "\n"), "is not the one this tool published") {
 		t.Fatalf("logs: %v", res.Logs)
 	}
-	if gatewayAdmits(t, mc, "proj") {
+	if gatewayAdmits(t, mc) {
 		t.Fatal("the gateway still admits proj")
 	}
 	// The tool's reference in the project that still exists is deleted.
@@ -128,7 +129,7 @@ func TestMaaS_PruneNarrowsTheGatewayWhenAnotherStepFails(t *testing.T) {
 	if err == nil || !changed {
 		t.Fatalf("changed %t, err %v", changed, err)
 	}
-	if gatewayAdmits(t, mc, "proj") {
+	if gatewayAdmits(t, mc) {
 		t.Fatal("the gateway still admits proj")
 	}
 	if rec, _ := readMaaSRecord(mc.c); len(rec.Published) != 1 {
@@ -158,7 +159,7 @@ func TestMaaSStatus_WarnsWhenTheModelsRecordIsUnreadable(t *testing.T) {
 	if w := maasPart(t, st, "gateway").Warning; !strings.Contains(w, "record of its models cannot be read") {
 		t.Fatalf("warning = %q", w)
 	}
-	if _, _, err := pruneGoneMaaSPublications(mc.c); err != nil || !gatewayAdmits(t, mc, "proj") {
+	if _, _, err := pruneGoneMaaSPublications(mc.c); err != nil || !gatewayAdmits(t, mc) {
 		t.Fatalf("the publication was dropped: %v", err)
 	}
 }
@@ -180,7 +181,7 @@ func TestMaaS_BackgroundPruneRecordsActivityOnlyOnChange(t *testing.T) {
 	if len(entries) != 1 || entries[0].Action != "prune-maas-publications" || !entries[0].Success || !strings.Contains(entries[0].Detail, "project proj no longer exists") {
 		t.Fatalf("entries = %+v", entries)
 	}
-	if gatewayAdmits(t, mc, "proj") {
+	if gatewayAdmits(t, mc) {
 		t.Fatal("the gateway still admits proj")
 	}
 }
@@ -192,7 +193,7 @@ func TestMaaS_ALivePublicationIsKept(t *testing.T) {
 	if _, logs, err := pruneGoneMaaSPublications(mc.c); err != nil || len(logs) != 0 {
 		t.Fatalf("got %v, %v", logs, err)
 	}
-	if len(mc.f.mutations()) != 0 || !gatewayAdmits(t, mc, "proj") {
+	if len(mc.f.mutations()) != 0 || !gatewayAdmits(t, mc) {
 		t.Fatalf("changed: %v", mc.f.mutations())
 	}
 }
@@ -219,7 +220,7 @@ func TestMaaS_PruneKeepsTheOthersLimitsAndAudience(t *testing.T) {
 		t.Fatalf("prune: changed %t, %v", changed, err)
 	}
 	spec, _ := subSpec(t, mc)
-	refs, _ := spec["modelRefs"].([]interface{})
+	refs, _ := spec["modelRefs"].([]any)
 	if len(refs) != 1 {
 		t.Fatalf("modelRefs: %s", asJSON(refs))
 	}

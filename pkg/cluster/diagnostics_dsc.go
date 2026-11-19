@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -100,7 +101,7 @@ func conditionLine(cond dscCondition) string {
 	if cond.Reason != "" {
 		line += fmt.Sprintf(" (%s)", cond.Reason)
 	}
-	if msg := truncate(cond.Message, 300); msg != "" {
+	if msg := truncateText(cond.Message, 300); msg != "" {
 		line += ": " + msg
 	}
 	return line
@@ -115,7 +116,7 @@ func failingConditions(conds []dscCondition) []string {
 		if !conditionFailing(cond) {
 			continue
 		}
-		msg := truncate(cond.Message, 300)
+		msg := truncateText(cond.Message, 300)
 		if seen[msg] && msg != "" {
 			continue
 		}
@@ -276,7 +277,7 @@ func (cc *classifiedCondition) classify(deps map[string]*dependency, order *[]*d
 	cc.Stale = strings.Contains(lower, "observedgeneration < generation") || strings.Contains(lower, "status is stale")
 	cc.Conversion = strings.Contains(lower, "conversion webhook")
 	for _, f := range parseApplyFailures(msg) {
-		if !containsString(cc.ApplyIDs, f.problemID()) {
+		if !slices.Contains(cc.ApplyIDs, f.problemID()) {
 			cc.ApplyIDs = append(cc.ApplyIDs, f.problemID())
 		}
 	}
@@ -380,7 +381,7 @@ func analyzeDSC(c *Client, dsc dscObject, appNS string, now time.Time) *dscAnaly
 	// Modules whose operator has not retried.
 	reasons := map[string][]string{}
 	addReason := func(module, reason string) {
-		if module != "" && !containsString(reasons[module], reason) {
+		if module != "" && !slices.Contains(reasons[module], reason) {
 			reasons[module] = append(reasons[module], reason)
 		}
 	}
@@ -475,10 +476,10 @@ func (a *dscAnalysis) conditionCauses(cc *classifiedCondition, titles map[string
 		if t := titles[id]; t != "" {
 			cause += fmt.Sprintf(" (see %q)", t)
 		}
-		if !containsString(causes, cause) {
+		if !slices.Contains(causes, cause) {
 			causes = append(causes, cause)
 		}
-		if id != "" && !containsString(related, id) {
+		if id != "" && !slices.Contains(related, id) {
 			related = append(related, id)
 		}
 	}
@@ -550,12 +551,12 @@ func (a *dscAnalysis) conditionCauses(cc *classifiedCondition, titles map[string
 				}
 				c2, r2 := a.conditionCauses(x, titles)
 				for _, c := range c2 {
-					if !containsString(mc, c) {
+					if !slices.Contains(mc, c) {
 						mc = append(mc, c)
 					}
 				}
 				for _, id := range r2 {
-					if !containsString(related, id) {
+					if !slices.Contains(related, id) {
 						related = append(related, id)
 					}
 				}
@@ -582,7 +583,7 @@ func parseNotReadyModules(msg string) []string {
 	}
 	var out []string
 	for _, f := range strings.FieldsFunc(m[1], func(r rune) bool { return r == ',' || r == ' ' }) {
-		if f = strings.ToLower(strings.TrimSpace(f)); f != "" && f != "and" && !containsString(out, f) {
+		if f = strings.ToLower(strings.TrimSpace(f)); f != "" && f != "and" && !slices.Contains(out, f) {
 			out = append(out, f)
 		}
 	}
@@ -778,7 +779,7 @@ func checkDataScienceCluster(c *Client) checkOutput {
 // failing conditions.
 func (a *dscAnalysis) notReadyProblem(dsc dscObject, titles map[string]string, dsciProblem *Problem) (Problem, int) {
 	ready := a.Ready
-	evidence := []string{fmt.Sprintf("DataScienceCluster %s: Ready=%s (%s): %s", dsc.Metadata.Name, ready.Status, ready.Reason, truncate(ready.Message, 400))}
+	evidence := []string{fmt.Sprintf("DataScienceCluster %s: Ready=%s (%s): %s", dsc.Metadata.Name, ready.Status, ready.Reason, truncateText(ready.Message, 400))}
 	var related, unclassified, fixes []string
 	failing := 0
 	seen := map[string]bool{}
@@ -811,12 +812,12 @@ func (a *dscAnalysis) notReadyProblem(dsc dscObject, titles map[string]string, d
 		}
 		evidence = append(evidence, line+" → cause: "+strings.Join(causes, "; "))
 		for _, id := range rel {
-			if !containsString(related, id) {
+			if !slices.Contains(related, id) {
 				related = append(related, id)
 			}
 			if t := titles[id]; t != "" {
 				fix := fmt.Sprintf("%q", t)
-				if !containsString(fixes, fix) {
+				if !slices.Contains(fixes, fix) {
 					fixes = append(fixes, fix)
 				}
 			}

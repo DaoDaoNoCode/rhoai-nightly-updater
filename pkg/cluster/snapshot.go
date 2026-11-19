@@ -45,14 +45,14 @@ func SaveDeploymentSnapshot(c *Client) error {
 
 	ns := getActivityNamespace()
 	cmPath := namespacedPath("v1", "configmaps", ns, snapshotConfigMapName)
-	cm := map[string]interface{}{
+	cm := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      snapshotConfigMapName,
 			"namespace": ns,
 		},
-		"data": map[string]interface{}{
+		"data": map[string]any{
 			"snapshot": string(snapJSON),
 		},
 	}
@@ -77,13 +77,13 @@ func GetDeploymentSnapshot(c *Client) (map[string]string, string) {
 		return nil, ""
 	}
 
-	var cm map[string]interface{}
+	var cm map[string]any
 	if err := json.Unmarshal(body, &cm); err != nil {
 		slog.Warn("snapshot: failed to parse configmap", "error", err)
 		return nil, ""
 	}
 
-	data, ok := cm["data"].(map[string]interface{})
+	data, ok := cm["data"].(map[string]any)
 	if !ok {
 		return nil, ""
 	}
@@ -138,30 +138,30 @@ const (
 )
 
 type subscriptionSnapshot struct {
-	RecordedAt   string                 `json:"recordedAt"`
-	Spec         map[string]interface{} `json:"spec"`
-	InstalledCSV string                 `json:"installedCSV,omitempty"`
+	RecordedAt   string         `json:"recordedAt"`
+	Spec         map[string]any `json:"spec"`
+	InstalledCSV string         `json:"installedCSV,omitempty"`
 }
 
 // saveSubscriptionSnapshot records the spec and installed CSV of sub (a
 // Subscription object).
-func saveSubscriptionSnapshot(c *Client, sub map[string]interface{}) error {
-	spec, _ := sub["spec"].(map[string]interface{})
+func saveSubscriptionSnapshot(c *Client, sub map[string]any) error {
+	spec, _ := sub["spec"].(map[string]any)
 	if spec == nil {
 		return fmt.Errorf("the Subscription has no spec")
 	}
-	status, _ := sub["status"].(map[string]interface{})
+	status, _ := sub["status"].(map[string]any)
 	installed, _ := status["installedCSV"].(string)
 	data, err := json.Marshal(subscriptionSnapshot{RecordedAt: nowRFC3339(), Spec: spec, InstalledCSV: installed})
 	if err != nil {
 		return err
 	}
 	ns := getActivityNamespace()
-	cm, _ := json.Marshal(map[string]interface{}{
+	cm, _ := json.Marshal(map[string]any{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
-		"metadata":   map[string]interface{}{"name": snapshotConfigMapName, "namespace": ns},
-		"data":       map[string]interface{}{subscriptionSnapshotKey: string(data)},
+		"metadata":   map[string]any{"name": snapshotConfigMapName, "namespace": ns},
+		"data":       map[string]any{subscriptionSnapshotKey: string(data)},
 	})
 	query := url.Values{"fieldManager": {subscriptionSnapshotManager}, "force": {"true"}}
 	if _, _, err := c.bookkeeping().do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
@@ -212,7 +212,7 @@ func recordLiveSubscription(c *Client) {
 		slog.Warn("could not read the operator Subscription to record it", "error", err)
 		return
 	}
-	var sub map[string]interface{}
+	var sub map[string]any
 	if err := json.Unmarshal(body, &sub); err != nil {
 		return
 	}

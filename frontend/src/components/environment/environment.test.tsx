@@ -186,13 +186,13 @@ describe("S3SecretField", () => {
 
 describe("S3SecretField: the admin UI password", () => {
   it("is the password of its own, not the S3 secret key", async () => {
-    stubApi({ "/api/resources/minio/admin-password": { user: "admin", password: "AP", accessKey: "AK", secretKey: "SK" } });
+    stubApi({ "/api/resources/s3/admin-password": { user: "admin", password: "AP", accessKey: "AK", secretKey: "SK" } });
     render(<S3SecretField id="p" field="password" label="admin UI password" disabledReason={null} />);
     fireEvent.click(screen.getByRole("button", { name: "Show the admin UI password" }));
     await waitFor(() => expect(screen.getByLabelText("admin UI password")).toHaveValue("AP"));
   });
   it("on storage an earlier version set up, says Repair sets one", async () => {
-    stubApi({ "/api/resources/minio/admin-password": { user: "admin", password: "", accessKey: "AK", secretKey: "SK" } });
+    stubApi({ "/api/resources/s3/admin-password": { user: "admin", password: "", accessKey: "AK", secretKey: "SK" } });
     render(<S3SecretField id="p" field="password" label="admin UI password" disabledReason={null} />);
     fireEvent.click(screen.getByRole("button", { name: "Show the admin UI password" }));
     expect(await screen.findByText(/There is no admin UI password yet. Repair the S3 storage/)).toBeInTheDocument();
