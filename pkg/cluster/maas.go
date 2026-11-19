@@ -182,7 +182,7 @@ func (r *maasRecord) setShared(key, what string) {
 
 func readMaaSRecord(c *Client) (maasRecord, error) {
 	var rec maasRecord
-	body, _, err := c.get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
+	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
 	if IsK8sError(err, 404) {
 		return rec, nil
 	}

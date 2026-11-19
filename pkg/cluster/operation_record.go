@@ -43,7 +43,7 @@ type OperationRecord struct {
 // an empty record. An unreadable value is logged and ignored rather than
 // hiding the others.
 func ReadOperationRecord(c *Client) (*OperationRecord, error) {
-	body, _, err := c.get(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
+	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
 	if IsK8sError(err, 404) {
 		return &OperationRecord{}, nil
 	}
@@ -108,7 +108,7 @@ func SaveOperationMarker(c *Client, marker *types.OperationMarker) error {
 		"metadata":   map[string]interface{}{"name": operationConfigMapName, "namespace": ns},
 		"data":       map[string]interface{}{operationKey: value},
 	}
-	if _, _, err := c.apply(namespacedPath("v1", "configmaps", ns, operationConfigMapName), cm); err != nil {
+	if _, _, err := c.bookkeeping().apply(namespacedPath("v1", "configmaps", ns, operationConfigMapName), cm); err != nil {
 		return fmt.Errorf("save operation marker: %w", err)
 	}
 	return nil
@@ -218,7 +218,7 @@ func writeOperationRecord(c *Client, rec *OperationRecord, data map[string]strin
 		if err != nil {
 			return err
 		}
-		_, _, err = c.post(namespacedPath("v1", "configmaps", ns, ""), cm)
+		_, _, err = c.bookkeeping().post(namespacedPath("v1", "configmaps", ns, ""), cm)
 		return err
 	}
 	return patchOperationRecord(c, rec.resourceVersion, data)
@@ -239,7 +239,7 @@ func patchOperationRecord(c *Client, resourceVersion string, data map[string]str
 		return err
 	}
 	ns := getActivityNamespace()
-	_, _, err = c.patch(namespacedPath("v1", "configmaps", ns, operationConfigMapName), patch)
+	_, _, err = c.bookkeeping().patch(namespacedPath("v1", "configmaps", ns, operationConfigMapName), patch)
 	if resourceVersion == "" && IsK8sError(err, 404) {
 		return writeOperationRecord(c, &OperationRecord{}, data)
 	}

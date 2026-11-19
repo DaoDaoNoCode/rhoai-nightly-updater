@@ -141,11 +141,41 @@ type Client struct {
 	httpClient *http.Client
 	ctx        context.Context
 	username   string // logged-in user identity (from OAuth headers)
+	// bookkeeper, when set, is the client of the updater's own records
+	// (see bookkeeping).
+	bookkeeper *Client
 }
 
 // SetUsername sets the logged-in user identity for audit logging.
 func (c *Client) SetUsername(username string) {
 	c.username = username
+}
+
+// SetBookkeeping makes b (the ServiceAccount's client) the client of the
+// updater's own records: the activity, snapshot and operation ConfigMaps in
+// its namespace (see bookkeeping).
+func (c *Client) SetBookkeeping(b *Client) {
+	c.bookkeeper = b
+}
+
+// bookkeeping returns the client for the updater's own records in its
+// namespace (the activity log, the snapshot and the operation record): the
+// ServiceAccount's client set with SetBookkeeping, with this client's
+// context and user, or this client itself when none is set (a read, a
+// background job and dev mode run with that token anyway). The records are
+// the app's, not the user's: they must be written whatever the user's
+// token may do, and also when it stops working mid-operation. Every
+// request to those ConfigMaps goes through it (TestBookkeepingUsesTheServiceAccount).
+func (c *Client) bookkeeping() *Client {
+	if c.bookkeeper == nil {
+		return c
+	}
+	b := *c.bookkeeper
+	b.ctx, b.bookkeeper = c.ctx, nil
+	if b.username == "" {
+		b.username = c.username
+	}
+	return &b
 }
 
 // WithContext returns a shallow copy of the client with a different context.

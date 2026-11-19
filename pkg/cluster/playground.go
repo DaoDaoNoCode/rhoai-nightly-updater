@@ -558,7 +558,7 @@ func playgroundOwnership(c *Client, project string, rec playgroundRecord, has bo
 // readPlaygroundRecords returns the recorded projects (none when nothing is
 // recorded).
 func readPlaygroundRecords(c *Client) (map[string]playgroundRecord, error) {
-	body, _, err := c.get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
+	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
 	if IsK8sError(err, 404) {
 		return map[string]playgroundRecord{}, nil
 	}
@@ -595,7 +595,7 @@ func writePlaygroundRecords(c *Client, records map[string]playgroundRecord) erro
 		"data":       map[string]interface{}{playgroundRecordKey: string(data)},
 	})
 	query := url.Values{"fieldManager": {playgroundRecordManager}, "force": {"true"}}
-	if _, _, err := c.do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if _, _, err := c.bookkeeping().do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
 		return fmt.Errorf("record this tool's playgrounds: %w", err)
 	}
 	return nil

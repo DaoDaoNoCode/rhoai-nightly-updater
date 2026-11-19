@@ -225,10 +225,18 @@ func withMutationAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.
 		// cluster.ErrOperationLockLost when another pod takes the lock over.
 		opContext, cancelOp := context.WithCancelCause(opContext)
 		defer cancelOp(nil)
+		// The updater's own records (the cross-pod lease, the operation
+		// marker, the activity log and the snapshot) are always written
+		// with the ServiceAccount: they outlive the request (lease
+		// heartbeat, marker retries, the shutdown flush) and must not
+		// depend on the token the operation acts with.
+		bookkeeper := cluster.NewClientWithContext(opContext, clusterToken)
+		bookkeeper.SetUsername(username)
 		client := cluster.NewClientWithContext(opContext, clusterToken)
 		client.SetUsername(username)
+		client.SetBookkeeping(bookkeeper)
 
-		sw := &statusWriter{ResponseWriter: w, path: r.URL.Path, user: username, client: client, cancelOp: cancelOp}
+		sw := &statusWriter{ResponseWriter: w, path: r.URL.Path, user: username, bookkeeper: bookkeeper, cancelOp: cancelOp}
 		completed := false
 		defer func() {
 			// Rejected requests (4xx/5xx status, including 409 busy),
@@ -249,9 +257,11 @@ type statusWriter struct {
 	http.ResponseWriter
 	status int
 
-	path   string
-	user   string
-	client *cluster.Client
+	path string
+	user string
+	// bookkeeper is the ServiceAccount client of the operation's lease and
+	// marker (never the client the operation acts with).
+	bookkeeper *cluster.Client
 	// cancelOp ends the operation's context with a cause.
 	cancelOp context.CancelCauseFunc
 	opID     string // set by lockCluster
