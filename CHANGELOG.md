@@ -225,6 +225,15 @@ only accepts a tag whose version is the top dated section. See
   same commit. `make build` and `make push` use `dev-<commit>` tags
   (`-dirty` with uncommitted changes), `make push` refuses a tree with
   uncommitted changes, and a commit-like `TAG` is not pushed.
+- Commit links on the Components page (Deployments) and in a build's
+  components (Build Explorer, catalog contents) come from the image's
+  labels, which whoever builds the image chooses. They are now links only
+  for `https://github.com/<owner>/<repo>`, as elsewhere in the app; before,
+  a `javascript:` URL in a label became a clickable link. The backend keeps
+  only https repository URLs from labels, and reads labels only for
+  images whose reference starts with `registry.redhat.io/rhoai/`,
+  `quay.io/rhoai/` or `quay.io/opendatahub/` (it matched those anywhere in
+  the reference, and labels are always read from quay.io).
 
 ## [3.0.0] - 2026-11-18
 

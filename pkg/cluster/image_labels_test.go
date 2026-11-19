@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -152,6 +153,17 @@ func TestParseImageLabels(t *testing.T) {
 			"git.commit": "4444444444444444444444444444444444444444", "git.url": "https://github.com/example/git", "vcs-url": "https://github.com/example/vcs",
 		}, ImageLabels{GitCommit: "4444444444444444444444444444444444444444", GitURL: "https://github.com/example/git"}},
 		{"revision-alone-is-not-a-commit", map[string]string{"org.opencontainers.image.revision": "5555555555555555555555555555555555555555"}, ImageLabels{}},
+		// The UI links the repository: an image's labels cannot make it a
+		// javascript: or plain http link; the next https label is used.
+		{"javascript-url-dropped", map[string]string{
+			"git.commit": "6666666666666666666666666666666666666666", "git.url": "javascript:alert(document.cookie)//",
+		}, ImageLabels{GitCommit: "6666666666666666666666666666666666666666"}},
+		{"http-url-dropped-for-the-next-https-one", map[string]string{
+			"git.commit": "6666666666666666666666666666666666666666", "git.url": "http://github.com/example/git", "vcs-url": "https://github.com/example/vcs",
+		}, ImageLabels{GitCommit: "6666666666666666666666666666666666666666", GitURL: "https://github.com/example/vcs"}},
+		{"url-with-user-info-dropped", map[string]string{
+			"git.commit": "6666666666666666666666666666666666666666", "git.url": "https://github.com@evil.example/x",
+		}, ImageLabels{GitCommit: "6666666666666666666666666666666666666666"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			created := "2026-10-29T22:55:20.781805405Z"
@@ -162,5 +174,33 @@ func TestParseImageLabels(t *testing.T) {
 				t.Fatalf("got %+v, want %+v", *got, tc.want)
 			}
 		})
+	}
+}
+
+// Labels are always read from quay.io, so the registry is matched as a
+// prefix: a reference that only contains "rhoai/" or
+// "quay.io/opendatahub/" somewhere is not a build image.
+func TestBuildImageRegistryPrefix(t *testing.T) {
+	digest := "@sha256:" + strings.Repeat("a", 64)
+	for _, tc := range []struct {
+		ref          string
+		rhoai, build bool
+	}{
+		{"registry.redhat.io/rhoai/odh-dashboard-rhel9" + digest, true, true},
+		{"quay.io/rhoai/odh-dashboard-rhel9:rhoai-3.6", true, true},
+		{"docker-pullable://registry.redhat.io/rhoai/odh-dashboard-rhel9" + digest, true, true},
+		{"quay.io/opendatahub/odh-dashboard:main", false, true},
+		{"quay.io.evil.example/rhoai/odh-dashboard-rhel9:x", false, false},
+		{"evil.example/x/rhoai/odh-dashboard-rhel9:x", false, false},
+		{"quay.io/someone/rhoai/odh-dashboard-rhel9:x", false, false},
+		{"evil.example/quay.io/opendatahub/odh-dashboard:main", false, false},
+		{"registry.access.redhat.com/ubi9/nginx-124:latest", false, false},
+	} {
+		if got := isRHOAIImage(tc.ref); got != tc.rhoai {
+			t.Errorf("isRHOAIImage(%q) = %v, want %v", tc.ref, got, tc.rhoai)
+		}
+		if got := isBuildImage(tc.ref); got != tc.build {
+			t.Errorf("isBuildImage(%q) = %v, want %v", tc.ref, got, tc.build)
+		}
 	}
 }
