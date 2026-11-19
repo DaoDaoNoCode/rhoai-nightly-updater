@@ -138,6 +138,13 @@ export const scenarios = {
     scenarios["env-maas-published"](w);
     w.dscManager = F.dscManager({ ray: "Removed", "workbenches.workbenchesV2": null });
   },
+  // The same, with the hard reset blocked as on the live cluster (RHOAI
+  // 3.6.0): two modules whose operator the tool cannot check, and MLflow in
+  // use.
+  "components-hard-reset-blocked": (w) => {
+    scenarios["env-maas-published"](w);
+    w.dscManager = F.dscManager({ ray: "Removed", "workbenches.workbenchesV2": null }, { hardResetBlocked: true });
+  },
   // The page compared the DSC as v2; when the reset dialog opens, the defaults are v3 (the conversion recovered).
   "components-reset-stale": (w) => {
     w.components.dscCompatibility = { ...w.components.dscCompatibility, missingComponents: ["sparkoperator"], resetRemovals: ["trainer"] };
