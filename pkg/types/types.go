@@ -1639,6 +1639,10 @@ type ModelExposureOption struct {
 	// Reason says why not.
 	Available bool   `json:"available"`
 	Reason    string `json:"reason,omitempty"`
+	// Fix names where the user makes an unavailable option available:
+	// "inference-gateway" (set up the inference gateway on the Models tab)
+	// or "maas-tab" (set up MaaS on its tab); "" none.
+	Fix string `json:"fix,omitempty"`
 	// NeedsAuth: calls are authenticated by Connectivity Link, which is not
 	// set up yet: Set up on the tab installs it first.
 	NeedsAuth bool `json:"needsAuth,omitempty"`

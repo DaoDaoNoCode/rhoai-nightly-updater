@@ -735,7 +735,13 @@ func readKServeGateway(c *Client) (kserveGateway, error) {
 	var ingress struct {
 		KserveIngressGateway string `json:"kserveIngressGateway"`
 	}
-	if json.Unmarshal(body, &cm) != nil || json.Unmarshal([]byte(cm.Data["ingress"]), &ingress) != nil {
+	if json.Unmarshal(body, &cm) != nil {
+		return kserveGateway{}, fmt.Errorf("parse ConfigMap %s/%s", ns, kserveConfigMap)
+	}
+	if strings.TrimSpace(cm.Data["ingress"]) == "" {
+		return kserveGateway{}, nil
+	}
+	if json.Unmarshal([]byte(cm.Data["ingress"]), &ingress) != nil {
 		return kserveGateway{}, fmt.Errorf("parse ConfigMap %s/%s (ingress)", ns, kserveConfigMap)
 	}
 	name := strings.TrimSpace(ingress.KserveIngressGateway)

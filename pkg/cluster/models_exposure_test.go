@@ -63,7 +63,7 @@ func TestModelExposures_NoGatewayRecommendsSettingItUp(t *testing.T) {
 	if ex.Default != "" || !ex.RecommendGateway || !ex.AuthReady {
 		t.Fatalf("got %+v", ex)
 	}
-	if a := optionByKey(t, ex, exposureDefault); a.Available || !strings.Contains(a.Reason, "RHOAI does not create it") {
+	if a := optionByKey(t, ex, exposureDefault); a.Available || !strings.Contains(a.Reason, "The inference gateway isn't set up yet") || a.Fix != "inference-gateway" {
 		t.Errorf("default: %+v", a)
 	}
 	if e := optionByKey(t, ex, exposureInternal); !e.Available || !strings.Contains(e.Warning, "not authenticated") || e.Address != "https://qwen25-05b-instruct-kserve-workload-svc.proj.svc.cluster.local" {
@@ -110,7 +110,7 @@ func TestModelExposures_OtherGatewaysAreFiltered(t *testing.T) {
 	mc.f.putJSON(p, `{"spec":{"listeners":[{"name":"https","hostname":"closed.example.com","allowedRoutes":{"namespaces":{"from":"Same"}}}]}}`)
 	ex := exposures(t, mc, "")
 	mine := optionByKey(t, ex, "gateway:team-gw/mine")
-	if !mine.Available || mine.GatewayRef != "team-gw/mine" || ex.Default != "gateway:team-gw/mine" {
+	if !mine.Available || mine.GatewayRef != "team-gw/mine" || ex.Default != "" {
 		t.Errorf("mine: %+v default %s", mine, ex.Default)
 	}
 	if closed := optionByKey(t, ex, "gateway:team-gw/closed"); closed.Available || !strings.Contains(closed.Reason, "does not let routes from project proj attach") {

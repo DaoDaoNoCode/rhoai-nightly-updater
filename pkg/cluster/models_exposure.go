@@ -193,6 +193,12 @@ type exposurePlan struct {
 	authOff bool
 	// needsAuth: Connectivity Link must be set up first.
 	needsAuth bool
+	// authUncertain: whether RHOAI checks the callers' tokens on the
+	// gateway is not known: it is labelled opendatahub.io/managed=false
+	// (odh-model-controller adds no AuthPolicy), or it is outside
+	// openshift-ingress, where this tool cannot read AuthPolicies. Such a
+	// gateway is offered, never recommended.
+	authUncertain bool
 }
 
 // router is the model's spec.router for the plan (nil: no router, the
@@ -216,7 +222,8 @@ type exposureReads struct {
 	labels  map[string]string
 	entry   catalogModel
 	def     kserveGateway
-	defNote string
+	// defErr: KServe's configuration cannot be read (def is not known).
+	defErr  error
 	gws     []gatewayObject
 	gwsErr  error
 	auth    bool
@@ -230,18 +237,11 @@ type exposureReads struct {
 
 func readExposureInputs(c *Client, project string, labels map[string]string, entry catalogModel, needMaaS bool) exposureReads {
 	r := exposureReads{project: project, labels: labels, entry: entry}
-	def, err := readKServeGateway(c)
-	if err != nil || !def.Known {
-		// RHOAI 3.x names openshift-ingress/openshift-ai-inference; an
-		// unreadable or unset configuration is taken to be that.
-		why := "it is not set"
-		if err != nil {
-			why = err.Error()
-		}
-		r.defNote = fmt.Sprintf(" (KServe's configuration could not be read: %s; RHOAI 3.x uses %s)", why, gatewayKey(inferenceGatewayNamespace, inferenceGatewayName))
-		def = kserveGateway{Namespace: inferenceGatewayNamespace, Name: inferenceGatewayName}
-	}
-	r.def = def
+	// KServe's default gateway is used only when its configuration names
+	// it: an unreadable or unset one is never taken to be a gateway (a
+	// model routed by default could land elsewhere, and its project would
+	// be added to a list it does not need).
+	r.def, r.defErr = readKServeGateway(c)
 	r.gws, r.gwsErr = listAllGateways(c)
 	r.auth, r.authWhy, r.authErr = authReadiness(c)
 	if needMaaS && entry.Type == modelTypeChat {
@@ -252,6 +252,14 @@ func readExposureInputs(c *Client, project string, labels map[string]string, ent
 			r.maas = "The MaaS platform's state cannot be read: " + err.Error()
 		case st.Blocked != nil:
 			r.maas = st.Blocked.Reason
+		case !st.Platform.Ready && !st.Platform.Deployed:
+			r.maas = "MaaS isn't set up yet."
+			for _, p := range st.Parts {
+				if p.State == "missing" {
+					r.maas = fmt.Sprintf("MaaS isn't set up yet (%s is missing).", p.Title)
+					break
+				}
+			}
 		case !st.Platform.Ready:
 			r.maas = maasNotReadyReason(st)
 		default:
@@ -285,8 +293,14 @@ func (r exposureReads) gatewayOption(opt *types.ModelExposureOption, plan *expos
 			opt.Warning = fmt.Sprintf("Gateway %s chooses the projects it admits with expressions this tool does not evaluate: if the model does not become ready, check that it admits %s.", gatewayKey(ns, name), r.project)
 		}
 	}
-	if g.Metadata.Labels[odhManagedLabel] == "false" {
+	switch {
+	case g.Metadata.Labels[odhManagedLabel] == "false":
+		plan.authUncertain = true
 		opt.Warning = strings.TrimSpace(opt.Warning + fmt.Sprintf(" Gateway %s is labelled %s=false, so RHOAI does not add its token authentication: whoever owns the gateway decides who may call.", gatewayKey(ns, name), odhManagedLabel))
+	case ns != inferenceGatewayNamespace:
+		// RHOAI adds its AuthPolicy there too, but this tool reads
+		// AuthPolicies only in openshift-ingress, so it cannot tell.
+		plan.authUncertain = true
 	}
 	opt.Available = true
 	if !r.auth {
@@ -313,21 +327,26 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 	// (a) KServe's default gateway.
 	defKey := gatewayKey(r.def.Namespace, r.def.Name)
 	a := types.ModelExposureOption{Key: exposureDefault, Exposure: exposureDefault,
-		Title:       "Through the cluster's default inference gateway",
-		Description: fmt.Sprintf("KServe's default route, as the dashboard deploys models: gateway %s%s answers for the model and checks each caller's OpenShift token (RHOAI's AuthPolicy on the gateway).", defKey, r.defNote)}
+		Title: "Through the cluster's default inference gateway"}
 	ap := exposurePlan{exposure: exposureDefault}
 	switch {
+	case r.defErr != nil:
+		a.Reason = fmt.Sprintf("KServe's default gateway cannot be read (%v), so a model cannot be routed through it. Choose another way.", r.defErr)
+	case !r.def.Known:
+		a.Reason = "KServe's configuration names no default gateway, so a model cannot be routed through it. Choose another way."
 	case r.gwsErr != nil:
 		a.Reason = fmt.Sprintf("The gateways cannot be read, so whether %s exists is unknown: %v.", defKey, r.gwsErr)
 	default:
 		if g, ok := findGateway(r.gws, r.def.Namespace, r.def.Name); ok {
 			r.gatewayOption(&a, &ap, g)
-		} else if r.def.Namespace == inferenceGatewayNamespace && r.def.Name == inferenceGatewayName {
-			a.Reason = fmt.Sprintf("Gateway %s does not exist: RHOAI does not create it. Set up the inference gateway on this tab to create it, or choose another way.", defKey)
+		} else if r.def.isInferenceGateway() {
+			a.Reason = "The inference gateway isn't set up yet. Set it up below, or choose another way."
+			a.Fix = "inference-gateway"
 		} else {
 			a.Reason = fmt.Sprintf("Gateway %s, which KServe's configuration names as its default, does not exist. Its owner creates it, or choose another way.", defKey)
 		}
 	}
+	a.Description = fmt.Sprintf("Reachable from outside the cluster at %s. Each call needs an OpenShift token that can see %s.", firstNonEmpty(a.Address, "https://inference.<apps domain>/"+r.project+"/"+r.entry.Name), r.project)
 	if a.NeedsAuth {
 		a.Warning = strings.TrimSpace(a.Warning + " " + authWords + " Set up installs it first.")
 	}
@@ -337,7 +356,7 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 	// (b) MaaS only.
 	b := types.ModelExposureOption{Key: exposureMaaS, Exposure: exposureMaaS, GatewayRef: gatewayKey(inferenceGatewayNamespace, maasGatewayName),
 		Title:       "Through MaaS only",
-		Description: "The model routes through MaaS's gateway alone and is published to Models as a Service: everyone signed in to the cluster calls it with a MaaS API key, within the subscription's token limit, and the dashboard's playground offers it as a MaaS model. No inference gateway is needed."}
+		Description: "Published to Models as a Service: anyone signed in to the cluster can call it with a MaaS API key, within their subscription's token limit. The dashboard's playground lists it as a MaaS model."}
 	bp := exposurePlan{exposure: exposureMaaS, gwNS: inferenceGatewayNamespace, gwName: maasGatewayName}
 	switch {
 	case r.entry.Type != modelTypeChat:
@@ -346,6 +365,7 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 		b.Reason = "Not checked."
 	case r.maas != "":
 		b.Reason = r.maas
+		b.Fix = "maas-tab"
 	default:
 		b.Available = true
 		b.Changes = []string{
@@ -364,13 +384,20 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 	if r.gwsErr == nil {
 		for _, g := range r.gws {
 			ns, name := g.Metadata.Namespace, g.Metadata.Name
-			if (ns == r.def.Namespace && name == r.def.Name) || gatewayExclusion(g) != "" || gatewayProblem(g) != "" {
+			if (r.def.Known && ns == r.def.Namespace && name == r.def.Name) || gatewayExclusion(g) != "" || gatewayProblem(g) != "" {
 				continue
 			}
 			key := exposureGateway + ":" + gatewayKey(ns, name)
 			o := types.ModelExposureOption{Key: key, Exposure: exposureGateway, GatewayRef: gatewayKey(ns, name),
-				Title:       "Through gateway " + gatewayKey(ns, name),
-				Description: fmt.Sprintf("The model's route is on gateway %s (as it is; this tool never changes someone else's gateway), and RHOAI adds its token authentication to that gateway.", gatewayKey(ns, name))}
+				Title:       "Through another gateway: " + gatewayKey(ns, name),
+				Description: "Uses a gateway someone else runs; this tool doesn't change it. RHOAI adds token checks."}
+			if g.Metadata.Labels[odhManagedLabel] == "false" {
+				o.Description = "Uses a gateway someone else runs; this tool doesn't change it. RHOAI adds no token checks to it."
+			}
+			if ns == inferenceGatewayNamespace && name == inferenceGatewayName && gatewayOwned(g.Metadata) {
+				o.Title = "Through the inference gateway, by name: " + gatewayKey(ns, name)
+				o.Description = "Names this tool's inference gateway on the model, because KServe's default gateway isn't known. Each call needs an OpenShift token that can see " + r.project + "."
+			}
 			op := exposurePlan{exposure: exposureGateway}
 			r.gatewayOption(&o, &op, g)
 			if o.NeedsAuth {
@@ -391,7 +418,7 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 	// (e) Inside the cluster only.
 	e := types.ModelExposureOption{Key: exposureInternal, Exposure: exposureInternal, Available: true,
 		Title:       "Only inside the cluster",
-		Description: "No route: the model answers only at its in-cluster address, for programs that run on this cluster. Nothing outside the cluster can reach it.",
+		Description: "No outside address. Programs on this cluster (for example a workbench) can call it without a token.",
 		Address:     internalAddress(r.project, r.entry.Name),
 		Warning:     "Calls to the in-cluster address are not authenticated: any pod on the cluster whose network can reach the project can use the model."}
 	ep := exposurePlan{exposure: exposureInternal}
@@ -402,19 +429,21 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 	out.Options = append(out.Options, e)
 	plans[e.Key] = ep
 
-	// The recommendation.
+	// The recommendation: never a gateway whose token checks are not known
+	// (labelled managed=false, or outside openshift-ingress): those are
+	// offered for an explicit choice only.
 	switch {
-	case a.Available:
+	case a.Available && !ap.authUncertain:
 		out.Default = a.Key
-		out.DefaultReason = fmt.Sprintf("Gateway %s is KServe's default and can carry a model from %s: the model is reached the way the dashboard deploys models.", defKey, r.project)
+		out.DefaultReason = "works from your laptop with an OpenShift token, the way the dashboard deploys models."
 	case b.Available:
 		out.Default = b.Key
-		out.DefaultReason = "The MaaS platform is ready and the cluster's default inference gateway cannot be used: the model is reached through MaaS, with no inference gateway."
+		out.DefaultReason = "MaaS is set up and the inference gateway can't be used: anyone signed in calls the model with a MaaS API key."
 	default:
 		for _, o := range others {
-			if o.Available {
+			if o.Available && !plans[o.Key].authUncertain {
 				out.Default = o.Key
-				out.DefaultReason = fmt.Sprintf("The cluster's default inference gateway cannot be used, and gateway %s can carry a model from %s.", o.GatewayRef, r.project)
+				out.DefaultReason = fmt.Sprintf("works from your laptop with an OpenShift token, through gateway %s (KServe's default gateway can't be used).", o.GatewayRef)
 				break
 			}
 		}
@@ -422,10 +451,7 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 	if !a.Available && r.gwsErr == nil {
 		if _, found := findGateway(r.gws, inferenceGatewayNamespace, inferenceGatewayName); !found {
 			out.RecommendGateway = true
-			out.RecommendGatewayReason = "Set up the inference gateway (this tab's own part) to reach models from outside the cluster with OpenShift tokens, as the dashboard deploys them."
-			if r.def.Namespace != inferenceGatewayNamespace || r.def.Name != inferenceGatewayName {
-				out.RecommendGatewayReason = fmt.Sprintf("Set up the inference gateway (this tab's own part) to get a gateway models can route through; KServe's default (%s) does not exist.", defKey)
-			}
+			out.RecommendGatewayReason = "Set up the inference gateway to reach models from outside the cluster with an OpenShift token, as the dashboard does."
 		}
 	}
 	return out, plans
@@ -495,7 +521,13 @@ func (m *modelsRun) planModelExposure(req types.ModelsRequest, labels map[string
 		return ok, why, ""
 	}
 	if gw != nil && !found {
-		if def, err := readKServeGateway(c); err == nil && def.Known && !def.isInferenceGateway() {
+		def, err := readKServeGateway(c)
+		switch {
+		case err != nil:
+			return exposurePlan{}, fmt.Sprintf("KServe's default gateway cannot be read (%v), so the model may not route through the inference gateway this request sets up. Set the inference gateway up on its own, then choose it by name for the model. Nothing was changed.", err), errorCodeFromK8sErr(err)
+		case !def.Known:
+			return exposurePlan{}, "KServe's configuration names no default gateway, so the model would not route through the inference gateway this request sets up. Set the inference gateway up on its own, then choose it by name for the model. Nothing was changed.", "prerequisites"
+		case !def.isInferenceGateway():
 			return exposurePlan{}, fmt.Sprintf("KServe's default gateway is %s, not the inference gateway this request sets up, so the model would not route through it. Set the inference gateway up on its own, then choose 'Through gateway %s' for the model. Nothing was changed.", def, gatewayKey(inferenceGatewayNamespace, inferenceGatewayName)), "prerequisites"
 		}
 		if gw.foreign && gw.gateway.admits(req.Project, labels) == "no" {

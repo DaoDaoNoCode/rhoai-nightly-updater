@@ -43,7 +43,7 @@ func TestModelsSetup_RequestsEphemeralStorageOnlyForTheDefaultVolume(t *testing.
 	} {
 		mc := newModelsCluster(t)
 		if tc.storageInitializer != "" {
-			mc.f.putJSON("/api/v1/namespaces/redhat-ods-applications/configmaps/inferenceservice-config", `{"data":{"storageInitializer":`+jsonOf(tc.storageInitializer)+`}}`)
+			mc.f.putJSON("/api/v1/namespaces/redhat-ods-applications/configmaps/inferenceservice-config", `{"data":{"ingress":"{\"kserveIngressGateway\":\"openshift-ingress/openshift-ai-inference\"}","storageInitializer":`+jsonOf(tc.storageInitializer)+`}}`)
 		}
 		if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
 			t.Fatalf("%s: setup %+v", tc.name, res)

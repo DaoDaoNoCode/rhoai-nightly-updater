@@ -61,6 +61,8 @@ func newModelsCluster(t *testing.T) *modelsCluster {
 	f.putJSON("/apis/serving.kserve.io/v1alpha2/namespaces/redhat-ods-applications/llminferenceserviceconfigs/"+testPresetName, `{
 		"spec":{"template":{"containers":[{"name":"main","image":"`+testPresetImage+`"}]}}}`)
 	f.putJSON("/apis/config.openshift.io/v1/ingresses/cluster", `{"spec":{"domain":"apps.example.com"}}`)
+	// KServe's configuration names its default gateway, as RHOAI 3.x ships it.
+	f.putJSON("/api/v1/namespaces/redhat-ods-applications/configmaps/inferenceservice-config", `{"data":{"ingress":"{\"kserveIngressGateway\":\"openshift-ingress/openshift-ai-inference\"}"}}`)
 	f.putJSON("/apis/operator.openshift.io/v1/namespaces/openshift-ingress-operator/ingresscontrollers/default", `{"spec":{"defaultCertificate":{"name":"custom-cert"}}}`)
 	f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}}}`)
 	f.putJSON("/apis/ingress.operator.openshift.io/v1/namespaces/openshift-ingress/dnsrecords/external", `{
