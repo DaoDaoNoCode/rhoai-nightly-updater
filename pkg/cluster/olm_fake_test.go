@@ -269,7 +269,15 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 		default:
 			writeJSON(w, ip)
 		}
-	case strings.HasSuffix(p, "/deployments/dashboard-operator"):
+	case f.dashboardOp != "" && r.Method == http.MethodGet && dashboardModuleDiscoveryRoutes(fixtureAppsNS)[p] != "":
+		// A dashboard module whose operator is dashboardOp.
+		_, _ = io.WriteString(w, dashboardModuleDiscoveryRoutes(fixtureAppsNS)[p])
+	case f.dashboardOp != "" && p == "/apis/apps/v1/namespaces/"+fixtureAppsNS+"/deployments":
+		var op dashboardDeployment
+		_ = json.Unmarshal([]byte(f.dashboardOp), &op)
+		op.Metadata.Name = fixtureOperatorName
+		writeJSON(w, map[string]any{"items": []any{dashboardModuleOperatorListItem(op)}})
+	case p == namespacedPath("apps/v1", "deployments", fixtureAppsNS, fixtureOperatorName):
 		if f.dashboardOp == "" {
 			notFound(w)
 			return
@@ -483,7 +491,8 @@ func lastStatus(events []UpdateStepEvent, step string) string {
 // dashboardOperatorAbsent answers the Dashboard Dev guard's lookup with 404
 // for mocks that return a generic body for unknown paths.
 func dashboardOperatorAbsent(w http.ResponseWriter, r *http.Request) bool {
-	if strings.HasSuffix(r.URL.Path, "/deployments/dashboard-operator") {
+	// No component API: the cluster has no dashboard module (legacy flow).
+	if p := r.URL.Path; p == "/apis/"+componentAPIGroup || strings.HasPrefix(p, "/apis/"+componentAPIGroup+"/") {
 		notFound(w)
 		return true
 	}

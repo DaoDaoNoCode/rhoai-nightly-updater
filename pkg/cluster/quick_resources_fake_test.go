@@ -106,6 +106,10 @@ func newResourceFake(t *testing.T) (*resourceFake, *Client) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	c := &Client{baseURL: srv.URL, token: "test-token", httpClient: srv.Client(), ctx: context.Background()}
+	// An installed RHOAI: its DSCInitialization names the applications
+	// namespace these fixtures put RHOAI's objects in (delete it to test a
+	// cluster without one).
+	f.putJSON(dsciV2List+"/default-dsci", `{"metadata":{"name":"default-dsci"},"spec":{"applicationsNamespace":"redhat-ods-applications"}}`)
 	return f, c
 }
 

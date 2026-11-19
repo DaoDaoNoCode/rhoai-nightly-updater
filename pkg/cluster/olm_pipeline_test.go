@@ -1108,7 +1108,7 @@ func TestOperations_UnreadableCSVsCarryTheRequestsCode(t *testing.T) {
 // refuse, every operation ends the session after its checks and before its
 // first change to OLM's objects, then runs to the end.
 func TestOperationsEndDashboardDevBeforeTheFirstChange(t *testing.T) {
-	const dashboardOpPath = "/apis/apps/v1/namespaces/redhat-ods-applications/deployments/dashboard-operator"
+	dashboardOpPath := namespacedPath("apps/v1", "deployments", fixtureAppsNS, fixtureOperatorName)
 	for _, op := range []string{"update", "reinstall", "refresh"} {
 		t.Run(op, func(t *testing.T) {
 			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
@@ -1132,7 +1132,7 @@ func TestOperationsEndDashboardDevBeforeTheFirstChange(t *testing.T) {
 			case "refresh":
 				r, _ = RefreshOperatorStreamWithOptions(c, opts, func(UpdateStepEvent) {})
 			}
-			if r == nil || !r.Success || !slices.Contains(r.Logs, "OK: Dashboard Dev session ended; dashboard-operator is running again") {
+			if r == nil || !r.Success || !slices.Contains(r.Logs, "OK: Dashboard Dev session ended; the dashboard operator is running again") {
 				t.Fatalf("result = %+v", r)
 			}
 			ended := false

@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -210,7 +211,11 @@ func stuckModuleProblem(c *Client, operators *moduleOperatorFinder, m stuckModul
 	}
 	switch m.Module {
 	case "dashboard":
-		fix += " If Dashboard Dev paused dashboard-operator (0 replicas), use Revert on the Dashboard Dev page; the deletion then completes."
+		paused := "the dashboard's operator"
+		if op != nil {
+			paused = op.Name
+		}
+		fix += " If Dashboard Dev paused " + paused + " (0 replicas), use Revert on the Dashboard Dev page; the deletion then completes."
 	case "mlflowoperator":
 		fix = "The MLflowOperator finalizer waits until no MLflow CR exists. Delete MLflow on the Environment page, or delete the MLflow CR; the deletion then completes. " + fix
 	case "aipipelines":
@@ -235,7 +240,12 @@ func checkManagedConfig(c *Client) checkOutput {
 	release := installed.Version
 	var details []string
 	count := 0
-	for _, ns := range rolloutNamespaces {
+	namespaces, nsErr := rolloutNamespaces(c)
+	if nsErr != nil && !errors.Is(nsErr, errNoDSCInitialization) {
+		details = append(details, fmt.Sprintf("could not tell the applications namespace, so its Deployments were not checked: %v", nsErr))
+		out.check.Status = "warn"
+	}
+	for _, ns := range namespaces {
 		body, _, err := c.do(http.MethodGet, namespacedPath("apps/v1", "deployments", ns, ""), "", nil, url.Values{})
 		if IsK8sError(err, http.StatusNotFound) {
 			continue

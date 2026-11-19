@@ -54,6 +54,7 @@ import { GITOPS_PROFILE_UNMANAGED_CATALOG, gitOpsPolicyProblem } from "../profil
 import { STEP_SETS } from "../operationSteps";
 import { argoTrackingGroups, catalogManaged, gitOpsOperatorReason, operatorGitOpsApp, operatorManaged } from "../gitops";
 import { ArgoCDLeftOverNote, GitOpsNotice, GitOpsProfileNotice } from "../components/GitOpsNotice";
+import { dashboardOperatorLabel } from "../components/dashboardOperator";
 
 const REFRESH_PLAN = STEP_SETS.refresh;
 
@@ -507,7 +508,7 @@ export const StatusPage: React.FC = () => {
             {override?.active && (
               <StackItem>
                 <Alert variant="warning" isInline component="p" title="A Dashboard Dev session is active">
-                  dashboard-operator is paused ({describeDashboardSession(override)}). The re-deploy ends that session first.
+                  {dashboardOperatorLabel(override?.operatorName)} is paused ({describeDashboardSession(override)}). The re-deploy ends that session first.
                   {" "}{REVERT_DASHBOARD_EXPLANATION}
                 </Alert>
               </StackItem>

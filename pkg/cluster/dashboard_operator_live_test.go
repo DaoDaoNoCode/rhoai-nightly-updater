@@ -2,14 +2,12 @@ package cluster
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strconv"
-	"strings"
 	"testing"
 )
 
@@ -19,39 +17,29 @@ func TestDashboardBuildDiscoveryLive(t *testing.T) {
 	if os.Getenv("RHOAI_DASHBOARD_LIVE_TEST") != "1" {
 		t.Skip("set RHOAI_DASHBOARD_LIVE_TEST=1 for read-only cluster/Quay verification")
 	}
-	body, err := exec.Command("oc", "get", "deployments", "-n", dashboardNamespace, "-o", "json").Output()
-	if err != nil {
-		t.Fatal("cannot read installed dashboard deployments: ", err)
-	}
-	var list struct {
-		Items []dashboardDeployment `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		t.Fatal(err)
-	}
-	var operator *dashboardDeployment
-	for i := range list.Items {
-		if list.Items[i].Metadata.Name == dashboardOperatorName {
-			operator = &list.Items[i]
-		}
-	}
-	if operator == nil {
-		t.Fatal("dashboard-operator is not installed")
-	}
+	// Every read goes through `oc get --raw` (GET only), so the discovery
+	// of the dashboard module's operator runs against the live cluster.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
 			t.Errorf("unexpected live-test mutation: %s", r.Method)
 			w.WriteHeader(405)
 			return
 		}
-		if strings.HasSuffix(r.URL.Path, "/deployments") || strings.HasSuffix(r.URL.Path, "/deployments/") {
-			w.Write(body)
+		body, err := exec.Command("oc", "get", "--raw", r.URL.RequestURI()).Output()
+		if err != nil {
+			w.WriteHeader(404)
+			fmt.Fprintf(w, `{"kind":"Status","code":404,"message":%q}`, err.Error())
 			return
 		}
-		w.WriteHeader(404)
+		w.Write(body)
 	}))
 	defer server.Close()
 	c := &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background()}
+	target, operator, err := loadDashboardOperator(c, true)
+	if err != nil || operator == nil {
+		t.Fatalf("dashboard module operator: %+v %v", target, err)
+	}
+	t.Logf("dashboard module operator: %s (%s)", operator.ref(), target.Operator.Via)
 	images, err := discoverDashboardImages(c, operator)
 	if err != nil {
 		t.Fatal(err)

@@ -90,6 +90,7 @@ func TestPlatformModules_StuckDashboardWithPausedOperator(t *testing.T) {
 
 func TestManagedConfig_ReportsUnmanagedAndLeftovers(t *testing.T) {
 	f, c := newFakeAPI(t)
+	serveDSCI(f, "redhat-ods-applications")
 	f.json("GET", dscV2List, http.StatusOK, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
 	f.json("GET", dscV2List+"/default-dsc", http.StatusOK, `{"status":{"release":{"name":"OpenShift AI Self-Managed","version":"3.6.0"}}}`)
 	f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-applications/deployments", http.StatusOK, `{"items":[

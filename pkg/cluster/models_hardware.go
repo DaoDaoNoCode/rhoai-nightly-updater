@@ -138,7 +138,10 @@ func (p hardwareProfileObject) fits(entry catalogModel) string {
 // or a zero profile and why none was used; a read error is a reason too:
 // the profile is a label in the dashboard, never a reason to stop.
 func pickHardwareProfile(c *Client, entry catalogModel) (hardwareProfile, string) {
-	ns := appsNamespace(c)
+	ns, err := appsNamespace(c)
+	if err != nil {
+		return hardwareProfile{}, fmt.Sprintf("the dashboard's namespace is not known (%v)", err)
+	}
 	body, _, err := c.get(namespacedPath("infrastructure.opendatahub.io/v1", "hardwareprofiles", ns, ""))
 	if err != nil {
 		return hardwareProfile{}, fmt.Sprintf("the hardware profiles in %s cannot be read (%v)", ns, err)

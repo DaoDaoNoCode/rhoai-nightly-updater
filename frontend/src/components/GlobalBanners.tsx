@@ -26,6 +26,7 @@ import { OPERATION_NAMES, STEP_SETS, operationKindForServerType, stepLabel } fro
 import { formatElapsed, formatRelativeTime } from "../utils";
 import { sentence, shortTarget } from "../build";
 import { BackgroundRunAlert, ViewProgressLink, useBackgroundRun, useViewServerOperation } from "./ProgressViews";
+import { dashboardOperatorLabel } from "./dashboardOperator";
 
 const INTERRUPTED_DISMISS_KEY = "rhoai-interrupted-dismissed";
 const TEMPLATE_DISMISS_KEY = "rhoai-template-hint-dismissed";
@@ -195,7 +196,7 @@ function useInterruptedNotice(): Notice | null {
 }
 
 function overrideWhat(o: DashboardOverride): string {
-  if (!o.sessionRecorded) return "dashboard-operator was scaled down outside this tool";
+  if (!o.sessionRecorded) return `${dashboardOperatorLabel(o.operatorName)} was scaled down outside this tool`;
   const what = o.mode === "pr" && o.prNumber ? `PR #${o.prNumber}` : o.mode === "main" ? "the main branch" : "a dashboard build";
   const flavor = o.flavor === "odh" ? " (ODH build)" : o.flavor === "rhoai" ? " (RHOAI build)" : "";
   const who = o.startedBy ? `${o.startedBy} deployed` : "Deployed";
@@ -204,7 +205,7 @@ function overrideWhat(o: DashboardOverride): string {
 }
 
 /**
- * A04-1: a paused dashboard-operator is invisible unless every page says
+ * A04-1: a paused dashboard operator is invisible unless every page says
  * so. The Dashboard Dev page's session panel says it all there, so the
  * notice is not repeated on that page.
  */
@@ -214,7 +215,7 @@ function useDashboardOverrideNotice(onDashboardDevPage: boolean): Notice | null 
   if (!override?.active || onDashboardDevPage) return null;
   const variant = override.dashboardDeleting ? "danger" : override.stale ? "warning" : "info";
   const title = override.dashboardDeleting
-    ? "A dashboard deletion is waiting for the paused dashboard-operator"
+    ? `A dashboard deletion is waiting for the paused ${dashboardOperatorLabel(override.operatorName)}`
     : override.stale
       ? "RHOAI was updated while the dashboard was paused"
       : "Dashboard Dev session active: the dashboard does not follow RHOAI updates";
@@ -231,7 +232,7 @@ function useDashboardOverrideNotice(onDashboardDevPage: boolean): Notice | null 
         title={title}
         actionLinks={<AlertActionLink onClick={() => navigate("/dashboard-dev")}>Open Dashboard Dev</AlertActionLink>}
       >
-        {overrideWhat(override)}; dashboard-operator stays paused until someone reverts it on the Dashboard Dev page.
+        {overrideWhat(override)}; {dashboardOperatorLabel(override.operatorName)} stays paused until someone reverts it on the Dashboard Dev page.
         {override.stale && " The dashboard still runs the images from before the update."}
         {reasons.length > 0 && <> {reasons.map(sentence).join(" ")}</>}
         {" "}Update, Re-deploy and Reinstall offer to revert it first.
@@ -437,7 +438,7 @@ function useReconcileTimeoutNotice(): Notice | null {
 /**
  * App-wide notices, rendered by PageHeader under each page title: the
  * running or interrupted operation (any user), permissions, a paused
- * dashboard-operator and the deployment template hint. At most
+ * dashboard operator and the deployment template hint. At most
  * MAX_VISIBLE_NOTICES show at once, most important first; the rest are one
  * click away. An expired session replaces the whole page instead (App).
  */

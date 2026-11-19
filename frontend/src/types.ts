@@ -118,6 +118,8 @@ export interface ClusterInfo {
 
 export interface SubscriptionInfo {
   name: string;
+  /** Where the RHOAI operator's Subscription is (the operator runs there). */
+  namespace?: string;
   source: string;
   channel: string;
   state: string;
@@ -401,11 +403,11 @@ export interface DashboardState {
   schedulingFailureReason?: string;
   canAssistRollout: boolean;
   dashboardURL?: string;
-  /** Present whenever dashboard-operator exists; `active` while it is paused. */
+  /** Present whenever the dashboard module's operator exists; `active` while it is paused. */
   override?: DashboardOverride;
 }
 
-/** A paused dashboard-operator / Dashboard Dev session (pkg/types DashboardOverride). */
+/** A paused dashboard module operator / Dashboard Dev session (pkg/types DashboardOverride). */
 export interface DashboardOverride {
   active: boolean;
   operatorPaused: boolean;
@@ -861,6 +863,11 @@ export interface ComponentsResponse {
   dscAPIVersion?: string;
   /** Set when the DSC could only be read at an older version than the preferred one. */
   dscVersionFallback?: DSCVersionFallback;
+  /** RHOAI's applications namespace (the DSCInitialization's) and the operator's. */
+  applicationsNamespace?: string;
+  operatorNamespace?: string;
+  /** Why the applications namespace could not be read; its Deployments are missing then. */
+  applicationsNamespaceError?: string;
 }
 
 /** The DSC was read at an older API version because conversion to a newer one failed (pkg/types DSCVersionFallback). */
@@ -892,10 +899,13 @@ export interface DashboardOverrideComponent {
   tag?: string;
 }
 
-/** The Dashboard Dev session recorded on dashboard-operator (pkg/types DashboardOverride). */
+/** The Dashboard Dev session recorded on the dashboard module's operator (pkg/types DashboardOverride). */
 export interface DashboardOverride {
   active: boolean;
   operatorPaused: boolean;
+  /** The paused Deployment, discovered at run time (e.g. dashboard-operator on RHOAI 3.6). */
+  operatorName?: string;
+  operatorNamespace?: string;
   sessionRecorded: boolean;
   sessionError?: string;
   /** "pr" or "main". */
@@ -921,6 +931,13 @@ export interface DashboardOverride {
 
 export interface DashboardState {
   override?: DashboardOverride;
+  /** The dashboard module's operator Deployment, discovered at run time. */
+  operatorName?: string;
+  operatorNamespace?: string;
+  /** Why the cluster has no dashboard module (the legacy flow). */
+  noOperatorReason?: string;
+  /** The applications namespace (the DSCInitialization's). */
+  namespace?: string;
   flavor?: string;
   defaultFlavor?: string;
   availableFlavors?: string[] | null;

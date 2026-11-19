@@ -42,6 +42,7 @@ import { FieldHelperText } from "./FormFields";
 import { StatusLabel, TagLabel } from "./StatusLabel";
 import { StepsPreview } from "./StepsPreview";
 import { REVERT_DASHBOARD_EXPLANATION, describeDashboardSession, type OperatorRequest, type ReinstallTargetType } from "./OperatorActions";
+import { dashboardOperatorLabel } from "./dashboardOperator";
 
 /** pkg/api customFBCImageRegex: only builds of the RHOAI FBC repository, with a tag and/or digest. */
 export const CUSTOM_FBC_IMAGE = /^quay\.io\/rhoai\/rhoai-fbc-fragment(:[a-zA-Z0-9._-]+)?(@sha256:[a-f0-9]{64})?$/;
@@ -394,7 +395,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
             {override?.active && (
               <StackItem>
                 <Alert variant="warning" isInline component="p" title="A Dashboard Dev session is active">
-                  dashboard-operator is paused ({describeDashboardSession(override)}). The reinstall ends that session first.
+                  {dashboardOperatorLabel(override?.operatorName)} is paused ({describeDashboardSession(override)}). The reinstall ends that session first.
                   {" "}{REVERT_DASHBOARD_EXPLANATION}
                 </Alert>
               </StackItem>

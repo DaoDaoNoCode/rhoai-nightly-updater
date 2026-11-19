@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -111,10 +112,23 @@ func getComponents(c *Client, reads componentRegistryReads, includeLabels bool) 
 		installedOpErr     error
 		installedOpReadyCh = make(chan struct{})
 	)
-	run(func() { appDeps, appErr = getDeployments(c, "redhat-ods-applications") })
-	run(func() { opDeps, opDepsErr = getDeployments(c, "redhat-ods-operator") })
-	run(func() { appPods, _ = getPodsInNamespace(c, "redhat-ods-applications") })
-	run(func() { opPods, _ = getPodsInNamespace(c, "redhat-ods-operator") })
+	// The applications namespace is the DSCInitialization's; unknown, its
+	// Deployments are left out and the response says why.
+	resp.OperatorNamespace = SubNS
+	var appNS string
+	var appNSErr error
+	run(func() {
+		if appNS, appNSErr = appsNamespace(c); appNSErr != nil {
+			appErr = appNSErr
+			return
+		}
+		var inner sync.WaitGroup
+		inner.Go(func() { appDeps, appErr = getDeployments(c, appNS) })
+		inner.Go(func() { appPods, _ = getPodsInNamespace(c, appNS) })
+		inner.Wait()
+	})
+	run(func() { opDeps, opDepsErr = getDeployments(c, SubNS) })
+	run(func() { opPods, _ = getPodsInNamespace(c, SubNS) })
 	run(func() { resp.ConsoleURL = cachedConsoleURL(c) })
 	run(func() { snapshot, snapshotTime = GetDeploymentSnapshot(c) })
 	run(func() {
@@ -153,8 +167,14 @@ func getComponents(c *Client, reads componentRegistryReads, includeLabels bool) 
 	if resp.Deployments == nil {
 		resp.Deployments = []types.DeploymentInfo{}
 	}
-	matchPodsToDeployments(c, appPods, "redhat-ods-applications", resp.Deployments)
-	matchPodsToDeployments(c, opPods, "redhat-ods-operator", resp.Deployments)
+	switch {
+	case appNSErr == nil:
+		resp.ApplicationsNamespace = appNS
+		matchPodsToDeployments(c, appPods, appNS, resp.Deployments)
+	case !errors.Is(appNSErr, errNoDSCInitialization): // none yet is not an error
+		resp.ApplicationsNamespaceError = appNSErr.Error()
+	}
+	matchPodsToDeployments(c, opPods, SubNS, resp.Deployments)
 
 	// Compare against last snapshot to detect changes
 	if snapshot != nil {

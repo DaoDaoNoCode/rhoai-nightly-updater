@@ -689,7 +689,7 @@ func updateVerifyTarget(c *Client, image string, chk *updateChecks, logs *[]stri
 		if err := RevertDashboardDevForOperation(c); err != nil {
 			return fail("Could not end the Dashboard Dev session, so the update was not started: "+err.Error(), errorCodeDashboardDevActive)
 		}
-		*logs = append(*logs, "OK: Dashboard Dev session ended; dashboard-operator is running again")
+		*logs = append(*logs, "OK: Dashboard Dev session ended; the dashboard operator is running again")
 	}
 	emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "success", Message: "Prerequisites validated"})
 	chk.target, chk.captured = target, captured
@@ -1435,7 +1435,7 @@ func reinstallCaptureRecovery(c *Client, rs *reinstallChecks, logs *[]string, em
 		if err := RevertDashboardDevForOperation(c); err != nil {
 			return fail("Could not end the Dashboard Dev session, so the install was not started: "+err.Error(), errorCodeDashboardDevActive)
 		}
-		*logs = append(*logs, "OK: Dashboard Dev session ended; dashboard-operator is running again")
+		*logs = append(*logs, "OK: Dashboard Dev session ended; the dashboard operator is running again")
 	}
 	emit(UpdateStepEvent{Step: "validate_target", Status: "success", Message: validated, Detail: crdWarning})
 	rs.captured = captured
@@ -1872,7 +1872,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 		case !subMissing:
 			recordActivity = false
 			msg := "No RHOAI operator CSV found. The operator may still be installing -- check the status and try again once the CSV appears."
-			logs = append(logs, "No CSV with displayName 'Red Hat OpenShift AI' found in the redhat-ods-operator namespace.")
+			logs = append(logs, "No CSV with displayName 'Red Hat OpenShift AI' found in the "+SubNS+" namespace.")
 			emit(UpdateStepEvent{Step: "verify_csv", Status: "success", Message: msg})
 			return &types.OperationResponse{Success: true, Message: msg, Logs: logs}, nil
 		case recorded == nil || recorded.InstalledCSV == "":
@@ -1961,7 +1961,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 		if err := RevertDashboardDevForOperation(c); err != nil {
 			return fail("Could not end the Dashboard Dev session, so the refresh was not started: "+err.Error(), errorCodeDashboardDevActive)
 		}
-		logs = append(logs, "OK: Dashboard Dev session ended; dashboard-operator is running again")
+		logs = append(logs, "OK: Dashboard Dev session ended; the dashboard operator is running again")
 	}
 	recovery = captured
 	emit(UpdateStepEvent{Step: "get_subscription", Status: "success", Message: fmt.Sprintf("Subscription: %s/%s", sub.Source, sub.Channel), Detail: sub.Channel})

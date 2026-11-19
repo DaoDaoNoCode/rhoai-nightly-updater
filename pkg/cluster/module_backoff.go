@@ -294,7 +294,7 @@ func (b *moduleBackoff) problem() Problem {
 	if b.Deployment == nil {
 		p.Evidence = append(p.Evidence, "Operator Deployment: "+b.FindErr)
 		p.Fix = fmt.Sprintf("Restart the operator that reconciles the %s module (the tool could not tell which Deployment that is), or wait for its next retry.", b.Module)
-		p.TechnicalCmd = "oc get deployments -n redhat-ods-applications -o custom-columns=NAME:.metadata.name,OWNER:.metadata.ownerReferences[0].kind,PART-OF:.metadata.labels.platform\\.opendatahub\\.io/part-of"
+		p.TechnicalCmd = "oc get deployments -n \"$(oc get dscinitializations -o jsonpath='{.items[0].spec.applicationsNamespace}')\" -o custom-columns=NAME:.metadata.name,OWNER:.metadata.ownerReferences[0].kind,PART-OF:.metadata.labels.platform\\.opendatahub\\.io/part-of"
 		return p
 	}
 	d := b.Deployment

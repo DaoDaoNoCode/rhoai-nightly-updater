@@ -23,17 +23,17 @@ function clean(over: Partial<DashboardState> = {}): DashboardState {
     isCustomPR: false, managed: true, podStatus: "Running", podReady: true, containersReady: 3, containersTotal: 3,
     rolloutPending: false, canAssistRollout: false, dashboardURL: "https://dash.example",
     devImages: [image("rhods-dashboard"), image("notebooks-ui")],
-    override: { active: false, operatorPaused: false, sessionRecorded: false, stale: false, dashboardDeleting: false, releaseVersion: "3.6.0" },
+    override: { active: false, operatorPaused: false, operatorName: "dashboard-module-manager", operatorNamespace: "custom-apps", sessionRecorded: false, stale: false, dashboardDeleting: false, releaseVersion: "3.6.0" },
     defaultFlavor: "rhoai", availableFlavors: ["rhoai", "odh"], rolloutStuck: false,
     ...over,
   };
 }
 
 const session: DashboardOverride = {
-  active: true, operatorPaused: true, sessionRecorded: true, mode: "pr", prNumber: 222, flavor: "rhoai",
+  active: true, operatorPaused: true, operatorName: "dashboard-module-manager", operatorNamespace: "custom-apps", sessionRecorded: true, mode: "pr", prNumber: 222, flavor: "rhoai",
   startedAt: "2026-10-03T14:05:00Z", startedBy: "alice", updatedAt: "2026-10-03T14:05:00Z", updatedBy: "alice",
   releaseVersionAtStart: "3.6.0", releaseVersion: "3.6.1", stale: true, staleReasons: ["RHOAI version changed from 3.6.0 to 3.6.1"],
-  dashboardDeleting: false, warnings: ["RHOAI was updated while dashboard-operator is paused. Revert to default to apply the new release."],
+  dashboardDeleting: false, warnings: ["RHOAI was updated while dashboard-module-manager is paused. Revert to default to apply the new release."],
   components: [{ deployment: "rhods-dashboard", container: "rhods-dashboard", source: "pr", tag: "odh-pr-222" }, { deployment: "notebooks-ui", container: "notebooks-ui", source: "baseline" }],
 };
 
@@ -61,14 +61,14 @@ describe("Dashboard Dev session panel", () => {
     expect(await screen.findByText("Dashboard Dev session active: PR #222")).toBeInTheDocument();
     expect(screen.getByText("alice")).toBeInTheDocument();
     expect(screen.getAllByText("RHOAI build (Konflux)").length).toBeGreaterThan(0);
-    expect(screen.getByText("RHOAI was updated while dashboard-operator is paused")).toBeInTheDocument();
+    expect(screen.getByText("RHOAI was updated while dashboard-module-manager is paused")).toBeInTheDocument();
     expect(screen.getByText("RHOAI version changed from 3.6.0 to 3.6.1")).toBeInTheDocument();
     expect(screen.getByText("1 of 2 run the PR build; 1 run the release image")).toBeInTheDocument();
     expect(screen.getByText("3.6.0 at start, now 3.6.1")).toBeInTheDocument();
 
     fireEvent.click(screen.getAllByRole("button", { name: "Revert to default" })[0]);
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("redhat-ods-applications/dashboard-operator")).toBeInTheDocument();
+    expect(within(dialog).getByText("custom-apps/dashboard-module-manager")).toBeInTheDocument();
     expect(within(dialog).getByText(/ending alice's session/)).toBeInTheDocument();
     expect(api.calls.some((c) => c.startsWith("POST /api/dashboard/revert"))).toBe(false);
     fireEvent.click(within(dialog).getByRole("button", { name: "Revert to default" }));
@@ -104,8 +104,8 @@ describe("Dashboard Dev session panel", () => {
     const alerts = overrideAlerts({ ...session, dashboardDeleting: true, sessionRecorded: false, warnings: ["deleting text", "stale text", "external text"] });
     expect(alerts.map((a) => [a.title, a.body, a.variant])).toEqual([
       ["Dashboard deletion is blocked until you revert", "deleting text", "danger"],
-      ["RHOAI was updated while dashboard-operator is paused", "stale text", "warning"],
-      ["dashboard-operator was paused outside Dashboard Dev", "external text", "warning"],
+      ["RHOAI was updated while dashboard-module-manager is paused", "stale text", "warning"],
+      ["dashboard-module-manager was paused outside Dashboard Dev", "external text", "warning"],
     ]);
   });
 });
@@ -172,10 +172,10 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Assist rollout" }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("redhat-ods-applications/rhods-dashboard")).toBeInTheDocument();
+    expect(within(dialog).getByText("custom-apps/rhods-dashboard")).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Assist rollout" }));
     expect(await screen.findByText("Nothing to do")).toBeInTheDocument();
-    expect(api.bodies["POST /api/assist-rollout"]).toEqual([{ namespace: "redhat-ods-applications", deployment: "rhods-dashboard" }]);
+    expect(api.bodies["POST /api/assist-rollout"]).toEqual([{ namespace: "custom-apps", deployment: "rhods-dashboard" }]);
   });
 
   it("Assist rollout is available while the page waits for the rollout it rescues", async () => {

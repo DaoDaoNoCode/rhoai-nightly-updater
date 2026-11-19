@@ -121,10 +121,13 @@ type ClusterInfo struct {
 
 // SubscriptionInfo describes the OLM Subscription resource for the RHOAI operator.
 type SubscriptionInfo struct {
-	Name    string `json:"name"`
-	Source  string `json:"source"`
-	Channel string `json:"channel"`
-	State   string `json:"state"`
+	Name string `json:"name"`
+	// Namespace is where the tool installs and reads RHOAI's Subscription
+	// (SubNS); the operator runs there.
+	Namespace string `json:"namespace,omitempty"`
+	Source    string `json:"source"`
+	Channel   string `json:"channel"`
+	State     string `json:"state"`
 	// ManagedBy is the Argo CD application that manages the Subscription
 	// (ArgoCDTracking: managed or unconfirmed).
 	ManagedBy string `json:"managedBy,omitempty"`
@@ -837,6 +840,14 @@ type ComponentsResponse struct {
 	SnapshotTime       string              `json:"snapshotTime,omitempty"`
 	ChangedCount       int                 `json:"changedCount"`
 	ConsoleURL         string              `json:"consoleURL,omitempty"`
+	// ApplicationsNamespace is RHOAI's applications namespace, read from the
+	// DSCInitialization ("" when there is none yet). OperatorNamespace is
+	// where the RHOAI operator runs (its Subscription's namespace).
+	ApplicationsNamespace string `json:"applicationsNamespace,omitempty"`
+	OperatorNamespace     string `json:"operatorNamespace,omitempty"`
+	// ApplicationsNamespaceError says why the applications namespace could
+	// not be read; its Deployments are missing from the list then.
+	ApplicationsNamespaceError string `json:"applicationsNamespaceError,omitempty"`
 }
 
 // ContainerInfo holds per-container status within a pod.
@@ -905,9 +916,17 @@ type DebugResponse struct {
 
 // DashboardState describes the current state of the rhods-dashboard deployment.
 type DashboardState struct {
-	OperatorAvailable       bool                `json:"operatorAvailable"`
-	OperatorPaused          bool                `json:"operatorPaused"`
-	OperatorError           string              `json:"operatorError,omitempty"`
+	OperatorAvailable bool   `json:"operatorAvailable"`
+	OperatorPaused    bool   `json:"operatorPaused"`
+	OperatorError     string `json:"operatorError,omitempty"`
+	// OperatorName and OperatorNamespace name the dashboard module's
+	// operator Deployment, discovered at run time (set when it is
+	// available). NoOperatorReason says why the cluster has no dashboard
+	// module (the legacy flow). Namespace is the applications namespace.
+	OperatorName            string              `json:"operatorName,omitempty"`
+	OperatorNamespace       string              `json:"operatorNamespace,omitempty"`
+	NoOperatorReason        string              `json:"noOperatorReason,omitempty"`
+	Namespace               string              `json:"namespace,omitempty"`
 	IsDevMode               bool                `json:"isDevMode"`
 	DevMode                 string              `json:"devMode,omitempty"`
 	DevImages               []DashboardDevImage `json:"devImages,omitempty"`
@@ -981,6 +1000,10 @@ type DashboardOverride struct {
 	// session is recorded; the dashboard then does not follow RHOAI updates.
 	Active         bool `json:"active"`
 	OperatorPaused bool `json:"operatorPaused"`
+	// OperatorName and OperatorNamespace name the paused Deployment: the
+	// dashboard module's operator, discovered at run time.
+	OperatorName      string `json:"operatorName"`
+	OperatorNamespace string `json:"operatorNamespace"`
 	// SessionRecorded is false when the operator was paused outside the tool
 	// or the session annotation was lost; SessionError explains a corrupt one.
 	SessionRecorded bool   `json:"sessionRecorded"`

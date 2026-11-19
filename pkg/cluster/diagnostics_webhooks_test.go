@@ -122,6 +122,7 @@ func TestStaleWebhooks_PartlyServingConfigIsNotStale(t *testing.T) {
 
 func TestStaleCRDConversion_IsReportedAsGuidance(t *testing.T) {
 	f, c := newFakeAPI(t)
+	serveDSCI(f, "redhat-ods-applications")
 	crds := map[string]any{"items": []any{
 		map[string]any{
 			"metadata": map[string]any{"name": "mcpservers.mcp.x-k8s.io"},
@@ -191,6 +192,7 @@ func sparkCRDs(names ...string) string {
 // CRDs can be deleted; the operator applies them again with the component.
 func TestStaleCRDConversion_EmptyCRDsCanBeDeleted(t *testing.T) {
 	f, c := newFakeAPI(t)
+	serveDSCI(f, "redhat-ods-applications")
 	names := []string{"scheduledsparkapplications.sparkoperator.k8s.io", "sparkapplications.sparkoperator.k8s.io", "sparkconnects.sparkoperator.k8s.io"}
 	f.json("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", http.StatusOK, sparkCRDs(names...))
 	for _, n := range names {
@@ -225,6 +227,7 @@ func TestStaleCRDConversion_EmptyCRDsCanBeDeleted(t *testing.T) {
 // CRDs, then Removed); one this app may not list gets the oc check.
 func TestStaleCRDConversion_ObjectsOrUnknown(t *testing.T) {
 	f, c := newFakeAPI(t)
+	serveDSCI(f, "redhat-ods-applications")
 	f.json("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", http.StatusOK,
 		sparkCRDs("scheduledsparkapplications.sparkoperator.k8s.io", "sparkapplications.sparkoperator.k8s.io", "sparkconnects.sparkoperator.k8s.io"))
 	f.json("GET", "/apis/sparkoperator.k8s.io/v1beta2/sparkapplications", http.StatusOK, `{"items":[{"metadata":{"name":"pi","namespace":"team"}}]}`)
@@ -256,6 +259,7 @@ func TestStaleCRDConversion_ObjectsOrUnknown(t *testing.T) {
 
 func TestStaleCRDConversion_ForbiddenListIsAWarning(t *testing.T) {
 	f, c := newFakeAPI(t)
+	serveDSCI(f, "redhat-ods-applications")
 	f.status("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", http.StatusForbidden, "Forbidden")
 	out := checkStaleWebhooks(c)
 	if out.check.Status != "warn" || !strings.Contains(out.check.Detail, "cannot list CRDs") {
@@ -267,6 +271,7 @@ func TestStaleCRDConversion_ForbiddenListIsAWarning(t *testing.T) {
 // is not proven healthy, so the check warns instead of passing.
 func TestStaleCRDConversion_UnreadableEndpointsWarn(t *testing.T) {
 	f, c := newFakeAPI(t)
+	serveDSCI(f, "redhat-ods-applications")
 	crds := `{"items":[{"metadata":{"name":"modelregistries.modelregistry.opendatahub.io"},"spec":{"conversion":{"strategy":"Webhook","webhook":{"clientConfig":{"service":{"namespace":"redhat-ods-applications","name":"model-registry-operator-webhook-service"}}}}}}]}`
 	f.json("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", http.StatusOK, crds)
 	f.json("GET", svcPath("redhat-ods-applications", "model-registry-operator-webhook-service"), http.StatusOK, `{}`)

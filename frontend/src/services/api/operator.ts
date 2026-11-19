@@ -114,7 +114,7 @@ export function getUserPermissions(): Promise<UserPermissions> {
  * downgrade_requires_confirmation).
  */
 export interface OperatorOperationOptions {
-  /** End an active Dashboard Dev session (resume dashboard-operator) first. */
+  /** End an active Dashboard Dev session (resume the dashboard module's operator) first. */
   revertDashboardDev?: boolean;
   /** Reinstall only: accept a target older than the installed operator. */
   allowDowngrade?: boolean;

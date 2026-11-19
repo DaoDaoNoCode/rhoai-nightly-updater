@@ -589,7 +589,7 @@ func getModelsStatus(c *Client, dsc dscRead, dscErr error, models []llmisvcObjec
 	if st.Blocked != nil {
 		return st
 	}
-	preset := discoverCPUPreset(c, appsNamespace(c))
+	preset := discoverCPUPreset(c)
 	st.Preset, st.PresetProblem = preset.name, preset.problem
 	if preset.problem == "" {
 		key := c.baseURL + "|" + preset.image

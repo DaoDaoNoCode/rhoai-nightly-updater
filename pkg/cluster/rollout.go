@@ -16,8 +16,18 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// rolloutNamespaces are the only namespaces assist-rollout may patch.
-var rolloutNamespaces = []string{"redhat-ods-operator", "redhat-ods-applications"}
+// rolloutNamespaces are the only namespaces assist-rollout may patch: the
+// operator's (SubNS) and the applications namespace, as the
+// DSCInitialization names it. err is set when the applications namespace
+// is not known (no DSCInitialization, or a read error); the list then holds
+// the operator namespace only, so nothing is ever allowed by a guess.
+func rolloutNamespaces(c *Client) ([]string, error) {
+	appNS, err := appsNamespace(c)
+	if err != nil {
+		return []string{SubNS}, err
+	}
+	return []string{SubNS, appNS}, nil
+}
 
 // Assist-rollout unblocks exactly one situation: a RollingUpdate Deployment
 // whose new pods are Unschedulable because nodes they may run on lack the
@@ -413,7 +423,7 @@ func assistConfirmMessage(a rolloutAssessment) string {
 // attachRolloutAssist offers the assist-rollout fix on an Unschedulable
 // problem only when the precondition holds right now.
 func attachRolloutAssist(c *Client, p *Problem, namespace, deployment string) {
-	if !isRolloutNamespace(namespace) {
+	if ok, _ := isRolloutNamespace(c, namespace); !ok {
 		return
 	}
 	a, err := assessRolloutBlock(c, namespace, deployment)
@@ -432,8 +442,18 @@ func attachRolloutAssist(c *Client, p *Problem, namespace, deployment string) {
 	p.AffectedObjects = append([]string{"Deployment " + a.target()}, p.AffectedObjects...)
 }
 
-func isRolloutNamespace(ns string) bool {
-	return slices.Contains(rolloutNamespaces, ns)
+// isRolloutNamespace reports whether assist-rollout may patch Deployments
+// in ns. why explains a refusal (fail closed when the applications
+// namespace is not known).
+func isRolloutNamespace(c *Client, ns string) (ok bool, why string) {
+	allowed, err := rolloutNamespaces(c)
+	if slices.Contains(allowed, ns) {
+		return true, ""
+	}
+	if err != nil {
+		return false, fmt.Sprintf("Assist rollout only works on Deployments in %s or the applications namespace, and whether %s is the applications namespace cannot be told: %v.", SubNS, ns, err)
+	}
+	return false, fmt.Sprintf("Assist rollout only works on Deployments in %s.", strings.Join(allowed, " or "))
 }
 
 var dns1123Name = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`)
@@ -487,7 +507,11 @@ func patchMaxUnavailable(c *Client, namespace, name string) (rolloutAssessment, 
 func AssistRollout(c *Client) (*types.OperationResponse, error) {
 	var targets []string
 	var logs []string
-	for _, ns := range rolloutNamespaces {
+	namespaces, nsErr := rolloutNamespaces(c)
+	if nsErr != nil {
+		logs = append(logs, fmt.Sprintf("Warning: the applications namespace is not known, so only %s is checked: %v", SubNS, nsErr))
+	}
+	for _, ns := range namespaces {
 		deps, err := getDeployments(c, ns)
 		if err != nil {
 			logs = append(logs, fmt.Sprintf("Warning: could not list deployments in %s: %v", ns, err))
@@ -506,10 +530,11 @@ func AssistRollout(c *Client) (*types.OperationResponse, error) {
 
 // AssistRolloutFor unblocks one Deployment, if its rollout is blocked.
 func AssistRolloutFor(c *Client, namespace, name string) (*types.OperationResponse, error) {
-	if !isRolloutNamespace(namespace) || !dns1123Name.MatchString(name) || len(name) > 253 {
+	ok, why := isRolloutNamespace(c, namespace)
+	if !ok || !dns1123Name.MatchString(name) || len(name) > 253 {
 		return &types.OperationResponse{
 			Success:   false,
-			Message:   fmt.Sprintf("Assist rollout only works on Deployments in %s.", strings.Join(rolloutNamespaces, " or ")),
+			Message:   firstNonEmpty(why, "Unknown Deployment."),
 			ErrorCode: "validation",
 		}, nil
 	}
@@ -571,8 +596,8 @@ func assistTargets(c *Client, targets []string, logs []string) (*types.Operation
 // RestoreRolloutStrategy puts back the maxUnavailable value that
 // assist-rollout saved in its annotation, once the rollout has finished.
 func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.OperationResponse, error) {
-	if !isRolloutNamespace(namespace) || !dns1123Name.MatchString(name) {
-		return &types.OperationResponse{Success: false, Message: "Unknown Deployment.", ErrorCode: "validation"}, nil
+	if ok, why := isRolloutNamespace(c, namespace); !ok || !dns1123Name.MatchString(name) {
+		return &types.OperationResponse{Success: false, Message: firstNonEmpty(why, "Unknown Deployment."), ErrorCode: "validation"}, nil
 	}
 	target := namespace + "/" + name
 	path := namespacedPath("apps/v1", "deployments", namespace, name)

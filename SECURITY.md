@@ -297,6 +297,8 @@ The rule fails closed: a read error, no matching Deployment, several equally spe
 
 Install a different build reads the same lists, once per install and only when a module CR has been deleting for 10 minutes, to decide whether that CR's finalizer may be stripped (RUNBOOK §11.4). It strips one only when the ServiceAccounts the RBAC names have no Deployment left; an unknown operator or a read error leaves the finalizer. The lists add no new permission.
 
+Dashboard Dev reads the same lists to find the Deployment it pauses (the dashboard module's operator; `pkg/cluster/dashboard_operator_discovery.go`), and the RHOAI namespaces come from the DSCInitialization (`list`, already granted). No rule is added: status reads (the page and the banner) use the ServiceAccount and reuse a discovery for 30 seconds; deploy and revert discover again with the signed-in user's token, so that user needs `list` on ClusterRoles and ClusterRoleBindings besides the Deployment patches Dashboard Dev already needs (cluster-admins have both). Without them the change is refused and nothing is patched: an unknown operator never selects the legacy flow.
+
 ```bash
 oc auth can-i list clusterroles.rbac.authorization.k8s.io --as=$SA         # yes
 oc auth can-i list clusterrolebindings.rbac.authorization.k8s.io --as=$SA  # yes

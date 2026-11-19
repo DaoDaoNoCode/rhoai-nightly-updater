@@ -569,7 +569,8 @@ func TestDashboardRevertReportsFailures(t *testing.T) {
 		}))
 		defer srv.Close()
 		c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
-		result, err := revertDashboardOperator(c, nil)
+		result, _ := revertDashboardOperatorTo(c, dashboardTarget{Operator: &moduleOperator{Namespace: fixtureAppsNS, Name: fixtureOperatorName}})
+		var err error
 		if err != nil || result.Success || result.ErrorCode != "forbidden" {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}

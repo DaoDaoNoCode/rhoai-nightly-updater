@@ -71,6 +71,7 @@ func TestGetDashboardState_NoPR(t *testing.T) {
 	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
+		dsciV2List: {body: defaultDSCIList},
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
 			body: string(deployJSON),
 		},
@@ -130,6 +131,7 @@ func TestGetDashboardState_SingleContainerPR(t *testing.T) {
 	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
+		dsciV2List: {body: defaultDSCIList},
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
 			body: string(deployJSON),
 		},
@@ -192,6 +194,7 @@ func TestGetDashboardState_MultiContainerPR(t *testing.T) {
 	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
+		dsciV2List: {body: defaultDSCIList},
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
 			body: string(deployJSON),
 		},
@@ -328,6 +331,7 @@ func TestGetDashboardState_RolloutPending(t *testing.T) {
 	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
+		dsciV2List: {body: defaultDSCIList},
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
 			body: string(deployJSON),
 		},
@@ -458,6 +462,7 @@ func TestGetDashboardState_ContainersReadyDuringRollout(t *testing.T) {
 	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
+		dsciV2List: {body: defaultDSCIList},
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
 			body: string(deployJSON),
 		},
@@ -565,6 +570,7 @@ func TestGetDashboardState_ContainersTotalFallbackForPendingPod(t *testing.T) {
 	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
+		dsciV2List: {body: defaultDSCIList},
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
 			body: string(deployJSON),
 		},
@@ -640,7 +646,7 @@ func TestGetDashboardPods_URLEncodesLabelSelector(t *testing.T) {
 		"deployment":                "rhods-dashboard",
 	}
 
-	getDashboardPods(client, dashboardDeploymentName, "", labels)
+	getDashboardPods(client, "redhat-ods-applications", dashboardDeploymentName, "", labels)
 
 	if capturedRawQuery == "" {
 		t.Fatal("expected pods request to be made, but no query was captured")
@@ -758,6 +764,7 @@ func TestGetDashboardState_StandaloneMode(t *testing.T) {
 	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
+		dsciV2List: {body: defaultDSCIList},
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
 			body: string(deployJSON),
 		},
@@ -824,6 +831,7 @@ func TestGetDashboardState_SidecarModeDetection(t *testing.T) {
 	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
+		dsciV2List: {body: defaultDSCIList},
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
 			body: string(deployJSON),
 		},
@@ -885,6 +893,7 @@ func TestDeployPRImage_Standalone(t *testing.T) {
 	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList))
 
 	client, requests, cleanup := newRecordingMockClient(map[string]mockResponse{
+		dsciV2List: {body: defaultDSCIList},
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
 			body: string(deployJSON),
 		},

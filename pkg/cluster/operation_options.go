@@ -26,7 +26,7 @@ const (
 // refusal message when one is active and the caller did not ask to revert it,
 // and whether a revert is needed before the first change.
 func dashboardDevGuard(c *Client, opts OperationOptions, operation string) (refusal string, revert bool, err error) {
-	active, err := DashboardDevActive(c)
+	active, operator, err := dashboardDevActive(c)
 	if err != nil {
 		return "", false, fmt.Errorf("cannot check for a Dashboard Dev session: %w", err)
 	}
@@ -34,7 +34,7 @@ func dashboardDevGuard(c *Client, opts OperationOptions, operation string) (refu
 		return "", false, nil
 	}
 	if !opts.RevertDashboardDev {
-		return fmt.Sprintf("A Dashboard Dev session is active (dashboard-operator is paused). %s would keep the dashboard paused under the new operator, so it was not started and nothing was changed. Revert the dashboard first, or confirm reverting it as part of this %s.", operation, operation), false, nil
+		return fmt.Sprintf("A Dashboard Dev session is active (%s). %s would keep the dashboard paused under the new operator, so it was not started and nothing was changed. Revert the dashboard first, or confirm reverting it as part of this %s.", pausedOperatorText(operator), operation, operation), false, nil
 	}
 	return "", true, nil
 }

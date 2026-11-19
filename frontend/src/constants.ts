@@ -44,7 +44,7 @@ export const OPERATION_POLL_IDLE_MS = 15_000;
  * (pkg/api/gitops_policy.go, gitOpsPolicyInterval) (ms).
  */
 export const GITOPS_POLICY_POLL_MS = 60_000;
-/** Dashboard Dev session check for the global "dashboard-operator paused" banner (ms). */
+/** Dashboard Dev session check for the global "dashboard operator paused" banner (ms). */
 export const DASHBOARD_OVERRIDE_POLL_MS = 120_000;
 /**
  * Dashboard Dev build commits (GET /api/dashboard/builds) while the page is

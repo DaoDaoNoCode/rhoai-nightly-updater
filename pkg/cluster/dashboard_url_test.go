@@ -47,6 +47,7 @@ func TestDashboardBaseURL(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newResourceFake(t)
+			f.putJSON(dsciV2List+"/default-dsci", `{"metadata":{"name":"default-dsci"},"spec":{"applicationsNamespace":"redhat-ods-applications"}}`)
 			tc.setup(f)
 			if got := dashboardBaseURL(c); got != tc.want {
 				t.Errorf("dashboardBaseURL = %q, want %q", got, tc.want)
@@ -74,6 +75,7 @@ func TestGetResourcesStatus_PipelineLinkUsesTheDashboardAddress(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newResourceFake(t)
+			f.putJSON(dsciV2List+"/default-dsci", `{"metadata":{"name":"default-dsci"},"spec":{"applicationsNamespace":"redhat-ods-applications"}}`)
 			putReadyManagedS3(f)
 			putDSProject(f, "team-a")
 			putDSPA(f, "team-a", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", `{"conditions":[{"type":"Ready","status":"True"}]}`)

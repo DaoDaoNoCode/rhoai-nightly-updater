@@ -26,10 +26,10 @@ func legacyAnnotationServer(t *testing.T, initial map[string]string) (*Client, f
 		mu.Lock()
 		defer mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		if legacyClusterRoute(w, r) {
+			return
+		}
 		switch {
-		case strings.HasSuffix(r.URL.Path, "/deployments/dashboard-operator"):
-			w.WriteHeader(http.StatusNotFound)
-			io.WriteString(w, `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`)
 		case strings.HasSuffix(r.URL.Path, "/deployments/rhods-operator"):
 			io.WriteString(w, `{"spec":{"template":{"spec":{"containers":[{"env":[{"name":"RELATED_IMAGE_ODH_DASHBOARD_IMAGE","value":"release-dashboard"}]}]}}}}`)
 		case strings.HasSuffix(r.URL.Path, "/deployments/rhods-dashboard"):

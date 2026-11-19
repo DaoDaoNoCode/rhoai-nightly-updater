@@ -22,7 +22,6 @@ import (
 const (
 	dashboardDeploymentName = "rhods-dashboard"
 	dashboardContainerName  = "rhods-dashboard"
-	dashboardNamespace      = "redhat-ods-applications"
 	prImagePrefix           = "quay.io/opendatahub/odh-dashboard:pr-"
 )
 
@@ -82,7 +81,7 @@ func DashboardStateError(err error) (status int, code, message string) {
 	var netErr net.Error
 	switch {
 	case errors.Is(err, ErrDashboardNotDeployed):
-		return http.StatusNotFound, "dashboard_not_deployed", "failed to get dashboard state: RHOAI Dashboard is not deployed (no rhods-dashboard Deployment in " + dashboardNamespace + ")"
+		return http.StatusNotFound, "dashboard_not_deployed", "failed to get dashboard state: " + err.Error()
 	case IsK8sError(err, http.StatusUnauthorized):
 		return http.StatusBadGateway, "unauthorized", "Cannot read dashboard state: the Kubernetes API rejected the updater's credentials (HTTP 401)."
 	case IsK8sError(err, http.StatusForbidden):
@@ -102,10 +101,17 @@ func DashboardStateError(err error) (status int, code, message string) {
 
 // GetDashboardState returns the current state of the rhods-dashboard deployment.
 func GetDashboardState(c *Client) (*types.DashboardState, error) {
-	deployPath := namespacedPath("apps/v1", "deployments", dashboardNamespace, dashboardDeploymentName)
+	ns, err := appsNamespace(c)
+	if errors.Is(err, errNoDSCInitialization) {
+		return nil, fmt.Errorf("%w (no DSCInitialization, so RHOAI has no applications namespace)", ErrDashboardNotDeployed)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find the dashboard: %w", err)
+	}
+	deployPath := namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName)
 	body, _, err := c.get(deployPath)
 	if IsK8sError(err, http.StatusNotFound) {
-		return nil, fmt.Errorf("%w: deployment %s/%s not found", ErrDashboardNotDeployed, dashboardNamespace, dashboardDeploymentName)
+		return nil, fmt.Errorf("%w (no %s Deployment in %s)", ErrDashboardNotDeployed, dashboardDeploymentName, ns)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get dashboard deployment: %w", err)
@@ -135,8 +141,8 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 		return nil, fmt.Errorf("parse dashboard deployment: %w", err)
 	}
 
-	state := &types.DashboardState{}
-	operator, operatorErr := readDashboardOperator(c)
+	state := &types.DashboardState{Namespace: ns}
+	target, operator, operatorErr := loadDashboardOperator(c, false)
 
 	// Detect deployment mode from container list
 	var containerNames []string
@@ -172,7 +178,7 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 			if !ok {
 				continue
 			}
-			image := getStandaloneModuleImage(c, containerName)
+			image := getStandaloneModuleImage(c, ns, containerName)
 			if image == "" {
 				continue
 			}
@@ -196,7 +202,7 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 	}
 
 	// Get dashboard pods using the deployment's label selector
-	dashPods := getDashboardPods(c, dashboardDeploymentName, deploy.Metadata.UID, deploy.Spec.Selector.MatchLabels)
+	dashPods := getDashboardPods(c, ns, dashboardDeploymentName, deploy.Metadata.UID, deploy.Spec.Selector.MatchLabels)
 	state.Pods = dashPods
 
 	// Build the expected image for the primary dashboard container from the deployment spec
@@ -286,7 +292,7 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 	// The dashboard's address: the Dashboard CR's status.url, else the Route.
 	state.DashboardURL = dashboardBaseURL(c)
 
-	populateDashboardDevStateWithOperator(c, state, operator, operatorErr)
+	populateDashboardDevStateWithOperator(c, state, target, operator, operatorErr)
 	return state, nil
 }
 
@@ -297,25 +303,27 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 	if !ValidDashboardFlavor(flavor) {
 		return &types.OperationResponse{Success: false, Message: "Unknown dashboard build flavor " + strconv.Quote(flavor) + "; use rhoai or odh.", ErrorCode: "validation"}, nil
 	}
-	if prNumber > 0 {
-		operator, err := readDashboardOperator(c)
-		if err != nil {
-			return &types.OperationResponse{Success: false, Message: "Cannot verify dashboard-operator: " + err.Error(), ErrorCode: nonEmpty(errorCodeFromK8sErr(err), "prerequisites")}, nil
-		}
-		if operator != nil {
-			return deployDashboardBuild(c, "pr", prNumber, flavor)
-		}
-	}
-	logs := []string{}
-	if flavor == DashboardFlavorRHOAI {
-		logs = append(logs, "This cluster has no dashboard-operator; the legacy flow deploys the OpenShift CI pr-N (ODH) builds.")
-	}
-
 	if prNumber <= 0 {
-		return &types.OperationResponse{
-			Success: false, Message: "PR number must be greater than 0",
-			Logs: logs, ErrorCode: "validation",
-		}, nil
+		return &types.OperationResponse{Success: false, Message: "PR number must be greater than 0", ErrorCode: "validation"}, nil
+	}
+	// Which flow: the dashboard module's operator, or (only when the
+	// cluster definitely has no dashboard module) the legacy flow. Unknown
+	// refuses: the legacy flow on a module cluster patches what the module
+	// operator resets.
+	target, err := discoverDashboardTarget(c)
+	if err != nil {
+		return &types.OperationResponse{Success: false, Message: sentenceStart(err.Error()) + ". No changes were made.", ErrorCode: nonEmpty(errorCodeFromK8sErr(err), "prerequisites")}, nil
+	}
+	if target.Operator != nil {
+		return deployDashboardBuild(c, "pr", prNumber, flavor)
+	}
+	ns := target.Namespace
+	if ns == "" {
+		return &types.OperationResponse{Success: false, Message: sentenceStart(errNoDSCInitialization.Error()) + ". No changes were made.", ErrorCode: "prerequisites"}, nil
+	}
+	logs := []string{"This cluster has no dashboard module (" + target.Legacy + "); the legacy flow patches " + dashboardDeploymentName + " in " + ns + "."}
+	if flavor == DashboardFlavorRHOAI {
+		logs = append(logs, "The legacy flow deploys the OpenShift CI pr-N (ODH) builds.")
 	}
 
 	tag := fmt.Sprintf("pr-%d", prNumber)
@@ -394,7 +402,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 
 	// Only containers that exist in this installation are patched; a strategic
 	// merge patch would otherwise add a bare container to the pod.
-	coreImages, moduleImages, failedModules, err := splitLegacyDashboardTargets(c, found, &logs)
+	coreImages, moduleImages, failedModules, err := splitLegacyDashboardTargets(c, ns, found, &logs)
 	if err != nil {
 		return nil, fmt.Errorf("detect deployment mode: %w", err)
 	}
@@ -408,7 +416,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 
 	// Patch the main dashboard deployment with core images
 	if len(coreImages) > 0 {
-		annotations, err := legacyDeployAnnotations(c)
+		annotations, err := legacyDeployAnnotations(c, ns)
 		if err != nil {
 			return &types.OperationResponse{
 				Success: false, Message: fmt.Sprintf("Cannot read %s before patching: %v. No changes were made.", dashboardDeploymentName, err),
@@ -437,7 +445,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 		if err != nil {
 			return nil, fmt.Errorf("marshal patch: %w", err)
 		}
-		deployPath := namespacedPath("apps/v1", "deployments", dashboardNamespace, dashboardDeploymentName)
+		deployPath := namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName)
 		_, _, err = c.strategicPatch(deployPath, patchData)
 		if err != nil {
 			RecordActivity(c, types.ActivityEntry{
@@ -458,7 +466,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 	patched := make(map[string]string, targets)
 	maps.Copy(patched, coreImages)
 	for name, image := range moduleImages {
-		if err := patchStandaloneModule(c, name, image); err != nil {
+		if err := patchStandaloneModule(c, ns, name, image); err != nil {
 			slog.Warn("failed to patch standalone module", "module", name, "error", err)
 			logs = append(logs, fmt.Sprintf("  %s: patch failed (%v)", name, err))
 			failedModules = append(failedModules, name)
@@ -502,8 +510,8 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 // main dashboard Deployment. Containers that are not installed are skipped so
 // strategic merge patches never add new containers. Modules whose Deployment
 // cannot be read are returned as failures.
-func splitLegacyDashboardTargets(c *Client, images map[string]string, logs *[]string) (core, modules map[string]string, failed []string, err error) {
-	mainContainers, err := getDeploymentContainerNames(c, dashboardNamespace, dashboardDeploymentName)
+func splitLegacyDashboardTargets(c *Client, ns string, images map[string]string, logs *[]string) (core, modules map[string]string, failed []string, err error) {
+	mainContainers, err := getDeploymentContainerNames(c, ns, dashboardDeploymentName)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -528,7 +536,7 @@ func splitLegacyDashboardTargets(c *Client, images map[string]string, logs *[]st
 	modules = map[string]string{}
 	for _, name := range names {
 		if standalone && moduleContainers[name] {
-			moduleNames, moduleErr := getDeploymentContainerNames(c, dashboardNamespace, name)
+			moduleNames, moduleErr := getDeploymentContainerNames(c, ns, name)
 			switch {
 			case IsK8sError(moduleErr, 404):
 				*logs = append(*logs, fmt.Sprintf("  %s: module not installed; unchanged", name))
@@ -551,16 +559,24 @@ func splitLegacyDashboardTargets(c *Client, images map[string]string, logs *[]st
 	return core, modules, failed, nil
 }
 
-// RevertDashboardImage reverts ALL dashboard containers to their operator-managed images.
+// RevertDashboardImage reverts ALL dashboard containers to their
+// operator-managed images: it resumes the dashboard module's operator, or,
+// only on a cluster without a dashboard module, reverts the legacy flow's
+// patches. When the operator cannot be identified it changes nothing.
 func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
-	operator, err := readDashboardOperator(c)
+	target, err := discoverDashboardTarget(c)
 	if err != nil {
-		return &types.OperationResponse{Success: false, Message: "Cannot verify dashboard-operator: " + err.Error(), ErrorCode: nonEmpty(errorCodeFromK8sErr(err), "prerequisites")}, nil
+		return &types.OperationResponse{Success: false, Message: sentenceStart(err.Error()) + ". No changes were made; retry Revert to default.", ErrorCode: nonEmpty(errorCodeFromK8sErr(err), "prerequisites")}, nil
 	}
-	if operator != nil {
-		return revertDashboardOperator(c, operator)
+	if target.Operator != nil {
+		result, _ := revertDashboardOperatorTo(c, target)
+		return result, nil
 	}
-	logs := []string{}
+	ns := target.Namespace
+	if ns == "" {
+		return &types.OperationResponse{Success: false, Message: sentenceStart(errNoDSCInitialization.Error()) + ", so there is no dashboard to revert. No changes were made.", ErrorCode: "prerequisites"}, nil
+	}
+	logs := []string{"This cluster has no dashboard module (" + target.Legacy + "); reverting the legacy flow's changes to " + dashboardDeploymentName + " in " + ns + "."}
 
 	logs = append(logs, "Looking up original images from operator env vars...")
 	originalImages, imgErr := getOriginalImages(c)
@@ -573,7 +589,7 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	logs = append(logs, fmt.Sprintf("Found %d original images", len(originalImages)))
 
 	// Only installed containers are reverted; see splitLegacyDashboardTargets.
-	coreImages, moduleImages, failedModules, modeErr := splitLegacyDashboardTargets(c, originalImages, &logs)
+	coreImages, moduleImages, failedModules, modeErr := splitLegacyDashboardTargets(c, ns, originalImages, &logs)
 	if modeErr != nil {
 		return &types.OperationResponse{
 			Success: false, Message: fmt.Sprintf("Failed to detect deployment mode: %v", modeErr),
@@ -597,8 +613,8 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 		})
 	}
 
-	deployPath := namespacedPath("apps/v1", "deployments", dashboardNamespace, dashboardDeploymentName)
-	restored, managedNote, err := legacyRevertAnnotations(c)
+	deployPath := namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName)
+	restored, managedNote, err := legacyRevertAnnotations(c, ns)
 	if err != nil {
 		return &types.OperationResponse{
 			Success: false, Message: fmt.Sprintf("Cannot read %s before reverting: %v", dashboardDeploymentName, err),
@@ -644,7 +660,7 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	// Revert standalone module deployments
 	totalReverted := len(containerPatches)
 	for name, image := range moduleImages {
-		if err := patchStandaloneModule(c, name, image); err != nil {
+		if err := patchStandaloneModule(c, ns, name, image); err != nil {
 			slog.Warn("failed to revert standalone module", "module", name, "error", err)
 			logs = append(logs, fmt.Sprintf("  %s: revert failed (%v)", name, err))
 			failedModules = append(failedModules, name)
@@ -687,8 +703,8 @@ type legacyManagedRecord struct {
 	Value   string `json:"value,omitempty"`
 }
 
-func getDeploymentAnnotations(c *Client, name string) (map[string]string, error) {
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", dashboardNamespace, name))
+func getDeploymentAnnotations(c *Client, ns, name string) (map[string]string, error) {
+	body, _, err := c.get(namespacedPath("apps/v1", "deployments", ns, name))
 	if err != nil {
 		return nil, err
 	}
@@ -707,8 +723,8 @@ func getDeploymentAnnotations(c *Client, name string) (map[string]string, error)
 // managed=false and, on the first deployment only, the original value:
 // absent, "true" or "false". A "false" the user set before the deployment is
 // recorded like any other value, so revert keeps it.
-func legacyDeployAnnotations(c *Client) (map[string]any, error) {
-	current, err := getDeploymentAnnotations(c, dashboardDeploymentName)
+func legacyDeployAnnotations(c *Client, ns string) (map[string]any, error) {
+	current, err := getDeploymentAnnotations(c, ns, dashboardDeploymentName)
 	if err != nil {
 		return nil, err
 	}
@@ -732,8 +748,8 @@ func legacyDeployAnnotations(c *Client) (map[string]any, error) {
 // removes it) and drops the record. Without a usable record the value before
 // the PR deployment is unknown, so opendatahub.io/managed is left as it is,
 // and note (otherwise "") tells the user what to check.
-func legacyRevertAnnotations(c *Client) (patch map[string]any, note string, err error) {
-	current, err := getDeploymentAnnotations(c, dashboardDeploymentName)
+func legacyRevertAnnotations(c *Client, ns string) (patch map[string]any, note string, err error) {
+	current, err := getDeploymentAnnotations(c, ns, dashboardDeploymentName)
 	if err != nil {
 		return nil, "", err
 	}
@@ -760,15 +776,24 @@ func legacyRevertAnnotations(c *Client) (patch map[string]any, note string, err 
 		}
 	}
 	if note != "" && value == "false" {
-		note += fmt.Sprintf(" While it is \"false\" the operator does not update the dashboard; if this tool set it, remove it with `oc annotate deployment/%s -n %s opendatahub.io/managed-`.", dashboardDeploymentName, dashboardNamespace)
+		note += fmt.Sprintf(" While it is \"false\" the operator does not update the dashboard; if this tool set it, remove it with `oc annotate deployment/%s -n %s opendatahub.io/managed-`.", dashboardDeploymentName, ns)
 	}
 	return patch, note, nil
 }
 
 // getOriginalImages reads all dashboard container images from the operator's
-// RELATED_IMAGE_* env vars.
+// RELATED_IMAGE_* env vars: the Deployment the installed CSV installs in
+// its namespace (SubNS), which reconciles the dashboard on releases without
+// a dashboard module.
 func getOriginalImages(c *Client) (map[string]string, error) {
-	operatorPath := namespacedPath("apps/v1", "deployments", "redhat-ods-operator", "rhods-operator")
+	csv, err := getInstalledOperator(c)
+	if err != nil {
+		return nil, fmt.Errorf("read the installed RHOAI CSV: %w", err)
+	}
+	if len(csv.Deployments) != 1 {
+		return nil, fmt.Errorf("the installed CSV %s installs %d Deployments, so which one holds the dashboard images is unknown", csv.Name, len(csv.Deployments))
+	}
+	operatorPath := namespacedPath("apps/v1", "deployments", SubNS, csv.Deployments[0])
 	body, _, err := c.get(operatorPath)
 	if err != nil {
 		return nil, fmt.Errorf("get operator deployment: %w", err)
@@ -827,7 +852,7 @@ func getOriginalImages(c *Client) (map[string]string, error) {
 // getDashboardPods returns the pods of the Deployment (deploymentUID) that
 // match its label selector, with pod.Image set to the rhods-dashboard
 // container (not the first container).
-func getDashboardPods(c *Client, deployment, deploymentUID string, matchLabels map[string]string) []types.PodInfo {
+func getDashboardPods(c *Client, ns, deployment, deploymentUID string, matchLabels map[string]string) []types.PodInfo {
 	// Build label selector query string
 	var parts []string
 	for k, v := range matchLabels {
@@ -835,7 +860,7 @@ func getDashboardPods(c *Client, deployment, deploymentUID string, matchLabels m
 	}
 	selector := strings.Join(parts, ",")
 
-	path := fmt.Sprintf("/api/v1/namespaces/%s/pods?labelSelector=%s", dashboardNamespace, url.QueryEscape(selector))
+	path := fmt.Sprintf("/api/v1/namespaces/%s/pods?labelSelector=%s", ns, url.QueryEscape(selector))
 	body, _, err := c.get(path)
 	if err != nil {
 		slog.Warn("failed to list dashboard pods", "error", err)
@@ -890,7 +915,7 @@ func getDashboardPods(c *Client, deployment, deploymentUID string, matchLabels m
 	var pods []types.PodInfo
 	for _, item := range podList.Items {
 		// Only the Deployment's own pods: its selector may also match others.
-		if !ownedByDeployment(c, dashboardNamespace, deployment, deploymentUID, item.Metadata.Labels, controllerOf(item.Metadata.OwnerReferences)) {
+		if !ownedByDeployment(c, ns, deployment, deploymentUID, item.Metadata.Labels, controllerOf(item.Metadata.OwnerReferences)) {
 			continue
 		}
 		pod := types.PodInfo{
@@ -1005,8 +1030,8 @@ func getDeploymentContainerNames(c *Client, namespace, deployName string) ([]str
 
 // getStandaloneModuleImage reads a standalone module deployment and returns
 // its container image. Returns empty string if the deployment doesn't exist.
-func getStandaloneModuleImage(c *Client, containerName string) string {
-	path := namespacedPath("apps/v1", "deployments", dashboardNamespace, containerName)
+func getStandaloneModuleImage(c *Client, ns, containerName string) string {
+	path := namespacedPath("apps/v1", "deployments", ns, containerName)
 	body, statusCode, err := c.get(path)
 	if err != nil || statusCode == 404 {
 		return ""
@@ -1035,7 +1060,7 @@ func getStandaloneModuleImage(c *Client, containerName string) string {
 }
 
 // patchStandaloneModule patches a standalone module deployment's container image.
-func patchStandaloneModule(c *Client, containerName, image string) error {
+func patchStandaloneModule(c *Client, ns, containerName, image string) error {
 	patchData, err := json.Marshal(map[string]any{
 		"spec": map[string]any{
 			"template": map[string]any{
@@ -1050,7 +1075,7 @@ func patchStandaloneModule(c *Client, containerName, image string) error {
 	if err != nil {
 		return fmt.Errorf("marshal module patch: %w", err)
 	}
-	path := namespacedPath("apps/v1", "deployments", dashboardNamespace, containerName)
+	path := namespacedPath("apps/v1", "deployments", ns, containerName)
 	_, _, err = c.strategicPatch(path, patchData)
 	return err
 }

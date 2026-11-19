@@ -377,7 +377,7 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
                     {safeConsoleURL && (
                       <AlertActionLink
                         component="a"
-                        href={`${safeConsoleURL}/k8s/ns/redhat-ods-operator/operators.coreos.com~v1alpha1~ClusterServiceVersion`}
+                        href={`${safeConsoleURL}/k8s/${status.subscription.namespace ? `ns/${encodeURIComponent(status.subscription.namespace)}` : "all-namespaces"}/operators.coreos.com~v1alpha1~ClusterServiceVersion`}
                         target="_blank"
                         rel="noopener noreferrer"
                         icon={<ExternalLinkAltIcon />}

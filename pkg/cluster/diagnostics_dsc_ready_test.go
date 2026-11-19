@@ -86,7 +86,8 @@ func TestDataScienceClusterCheck(t *testing.T) {
 // pods check cannot pass: their pods were not scanned.
 func TestRHOAIPodsCheck_NamespaceDiscoveryErrorWarns(t *testing.T) {
 	f, c := newFakeAPI(t)
-	for _, ns := range rhoaiPodNamespaces {
+	serveDSCI(f, "redhat-ods-applications")
+	for _, ns := range []string{"redhat-ods-applications"} {
 		f.json("GET", "/api/v1/namespaces/"+ns+"/pods", http.StatusOK, `{"items":[]}`)
 	}
 	f.status("GET", "/api/v1/namespaces", http.StatusForbidden, "Forbidden")

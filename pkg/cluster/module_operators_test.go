@@ -320,7 +320,7 @@ func TestModuleOperatorFinderFailsClosed(t *testing.T) {
 		{"Deployments forbidden", "list Deployments in redhat-ods-applications", func(f *fakeAPI) {
 			f.status("GET", "/apis/apps/v1/namespaces/"+liveAppsNS+"/deployments", http.StatusForbidden, "Forbidden")
 		}},
-		{"no DSCInitialization", "no DSCInitialization names the applications namespace", func(f *fakeAPI) {
+		{"no DSCInitialization", "no DSCInitialization exists", func(f *fakeAPI) {
 			f.json("GET", dsciV2List, 200, `{"items":[]}`)
 		}},
 	} {

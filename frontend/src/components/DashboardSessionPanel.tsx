@@ -28,16 +28,17 @@ import type { DashboardOverride } from "../types";
 import { RelativeTime } from "./RelativeTime";
 import { StatusLabel, TagLabel } from "./StatusLabel";
 import { TooltipButton } from "./TooltipButton";
+import { dashboardOperatorLabel } from "./dashboardOperator";
 
 export function flavorName(flavor?: string): string {
   return flavor === "odh" ? "ODH build (OpenShift CI)" : flavor === "rhoai" ? "RHOAI build (Konflux)" : "";
 }
 
 /** "PR #222", "Latest main", or a fallback when the session was not recorded. */
-export function sessionTitle(o: Pick<DashboardOverride, "mode" | "prNumber" | "sessionRecorded" | "operatorPaused">): string {
+export function sessionTitle(o: Pick<DashboardOverride, "mode" | "prNumber" | "sessionRecorded" | "operatorPaused" | "operatorName">): string {
   if (o.mode === "pr" && o.prNumber) return `PR #${o.prNumber}`;
   if (o.mode === "main") return "Latest main";
-  return o.operatorPaused ? "dashboard-operator paused" : "Custom dashboard images";
+  return o.operatorPaused ? `${dashboardOperatorLabel(o.operatorName)} paused` : "Custom dashboard images";
 }
 
 const When: React.FC<{ at?: string }> = ({ at }) => (at ? <RelativeTime date={at} size="inherit" /> : <>unknown</>);
@@ -51,17 +52,18 @@ const When: React.FC<{ at?: string }> = ({ at }) => (at ? <RelativeTime date={at
 export function overrideAlerts(o: DashboardOverride): { title: string; body: string; variant: "danger" | "warning"; list?: string[] }[] {
   const warnings = [...(o.warnings ?? [])];
   const take = (fallback: string) => warnings.shift() ?? fallback;
+  const op = dashboardOperatorLabel(o.operatorName);
   const out: { title: string; body: string; variant: "danger" | "warning"; list?: string[] }[] = [];
   if (o.dashboardDeleting) {
     out.push({
       title: "Dashboard deletion is blocked until you revert",
-      body: take("A Dashboard CR is being deleted while dashboard-operator is paused; only dashboard-operator can finish the deletion. Revert to default to resume it."),
+      body: take(`A Dashboard CR is being deleted while ${op} is paused; only ${op} can finish the deletion. Revert to default to resume it.`),
       variant: "danger",
     });
   }
   if (o.stale && o.operatorPaused) {
     out.push({
-      title: "RHOAI was updated while dashboard-operator is paused",
+      title: `RHOAI was updated while ${op} is paused`,
       body: take("The dashboard keeps its current images. Revert to default to apply the new release."),
       variant: "warning",
       list: o.staleReasons ?? undefined,
@@ -69,7 +71,7 @@ export function overrideAlerts(o: DashboardOverride): { title: string; body: str
   }
   if (o.operatorPaused && !o.sessionRecorded) {
     out.push({
-      title: "dashboard-operator was paused outside Dashboard Dev",
+      title: `${op} was paused outside Dashboard Dev`,
       body: take("The dashboard does not follow RHOAI updates. Revert to default resumes it."),
       variant: "warning",
     });
@@ -78,7 +80,7 @@ export function overrideAlerts(o: DashboardOverride): { title: string; body: str
   if (o.sessionError) {
     out.push({
       title: "The saved session cannot be read",
-      body: `${o.sessionError}. Revert to default still works: it resumes dashboard-operator (with 1 replica when the original count is unknown).`,
+      body: `${o.sessionError}. Revert to default still works: it resumes ${op} (with 1 replica when the original count is unknown).`,
       variant: "warning",
     });
   }

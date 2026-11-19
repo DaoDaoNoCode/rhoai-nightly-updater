@@ -18,11 +18,11 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-const dashboardOperatorName = "dashboard-operator"
 const dashboardDevAnnotation = "rhoai-nightly-updater.opendatahub.io/dashboard-dev"
 
 // dashboardDevLastActionAnnotation records who last deployed or reverted and
-// when. It lives next to the session on the dashboard-operator Deployment and,
+// when. It lives next to the session on the dashboard module's operator
+// Deployment (dashboard_operator_discovery.go) and,
 // unlike the session, survives a revert. The platform controller applies that
 // Deployment with server-side apply and never sets these annotations, so it
 // leaves them alone.
@@ -75,6 +75,7 @@ type dashboardContainer struct {
 type dashboardDeployment struct {
 	Metadata struct {
 		Name            string            `json:"name"`
+		Namespace       string            `json:"namespace"`
 		UID             string            `json:"uid"`
 		ResourceVersion string            `json:"resourceVersion"`
 		Generation      int64             `json:"generation"`
@@ -153,23 +154,8 @@ type dashboardDevBaseline struct {
 	DefaultImage string `json:"defaultImage"`
 }
 
-func readDashboardOperator(c *Client) (*dashboardDeployment, error) {
-	body, status, err := c.get(namespacedPath("apps/v1", "deployments", dashboardNamespace, dashboardOperatorName))
-	if status == http.StatusNotFound {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var d dashboardDeployment
-	if err := json.Unmarshal(body, &d); err != nil {
-		return nil, err
-	}
-	if d.Metadata.UID == "" {
-		return nil, fmt.Errorf("dashboard-operator deployment has no UID")
-	}
-	return &d, nil
-}
+// ref is the operator Deployment's namespace/name.
+func (d *dashboardDeployment) ref() string { return d.Metadata.Namespace + "/" + d.Metadata.Name }
 
 // Environment names define the available dashboard build components. Only the
 // two upstream naming exceptions need a map; new MOD_ARCH modules are automatic.
@@ -247,8 +233,8 @@ func dashboardOwner(d dashboardDeployment) string {
 	return ""
 }
 
-func listDashboardNamespaceDeployments(c *Client) ([]dashboardDeployment, error) {
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", dashboardNamespace, ""))
+func listDashboardNamespaceDeployments(c *Client, ns string) ([]dashboardDeployment, error) {
+	body, _, err := c.get(namespacedPath("apps/v1", "deployments", ns, ""))
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +255,9 @@ func discoverDashboardImages(c *Client, operator *dashboardDeployment) ([]types.
 // discoverDashboardWorkloads returns the dashboard build containers and the
 // Deployments that run them, keyed by name.
 func discoverDashboardWorkloads(c *Client, operator *dashboardDeployment) ([]types.DashboardDevImage, map[string]dashboardDeployment, error) {
-	items, err := listDashboardNamespaceDeployments(c)
+	// The workloads run in the applications namespace, where the finder
+	// found the operator.
+	items, err := listDashboardNamespaceDeployments(c, operator.Metadata.Namespace)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -289,7 +277,7 @@ func discoverDashboardWorkloads(c *Client, operator *dashboardDeployment) ([]typ
 		return nil, nil, err
 	}
 	for _, d := range items {
-		if d.Metadata.Name == dashboardOperatorName || dashboardOwner(d) != owner {
+		if d.Metadata.UID == operator.Metadata.UID || dashboardOwner(d) != owner {
 			continue
 		}
 		for _, ct := range d.Spec.Template.Spec.Containers {
@@ -328,7 +316,7 @@ func discoverDashboardWorkloads(c *Client, operator *dashboardDeployment) ([]typ
 		return images[i].Deployment+images[i].Container < images[j].Deployment+images[j].Container
 	})
 	if len(images) == 0 {
-		return nil, nil, fmt.Errorf("no Dashboard-owned containers match dashboard-operator image environment variables")
+		return nil, nil, fmt.Errorf("no Dashboard-owned containers match the image environment variables of %s", operator.Metadata.Name)
 	}
 	return images, workloads, nil
 }
@@ -402,7 +390,7 @@ func dashboardStaleReasons(session *dashboardDevSession, operator *dashboardDepl
 		reasons = append(reasons, fmt.Sprintf("RHOAI version changed from %s to %s", session.ReleaseVersion, current))
 	}
 	if image := dashboardOperatorImage(operator); session.OperatorImage != "" && image != "" && image != session.OperatorImage {
-		reasons = append(reasons, "dashboard-operator image changed (RHOAI was updated)")
+		reasons = append(reasons, operator.Metadata.Name+" image changed (RHOAI was updated)")
 	}
 	env := dashboardOperatorEnv(operator)
 	changed := map[string]bool{}
@@ -429,13 +417,14 @@ func dashboardLastAction(operator *dashboardDeployment) *types.DashboardDevActio
 	return &action
 }
 
-// DashboardOverrideSummary reports whether the dashboard-operator is paused
-// (by Dashboard Dev or otherwise), by whom and since when, what each container
-// was set to run, and whether RHOAI was updated since. It reads only the
-// dashboard-operator Deployment. It returns nil when that Deployment does not
-// exist (RHOAI 2.x or not installed).
+// DashboardOverrideSummary reports whether the dashboard module's operator
+// is paused (by Dashboard Dev or otherwise), by whom and since when, what
+// each container was set to run, and whether RHOAI was updated since. It
+// reads the operator Deployment, after a (cached) discovery of which one it
+// is. It returns nil when the cluster has no dashboard module (legacy
+// flow, or RHOAI not installed), and an error when it cannot tell.
 func DashboardOverrideSummary(c *Client) (*types.DashboardOverride, error) {
-	operator, err := readDashboardOperator(c)
+	_, operator, err := loadDashboardOperator(c, false)
 	if err != nil || operator == nil {
 		return nil, err
 	}
@@ -444,11 +433,17 @@ func DashboardOverrideSummary(c *Client) (*types.DashboardOverride, error) {
 	return o, nil
 }
 
-const (
-	dashboardStaleWarning         = "RHOAI was updated while dashboard-operator is paused. The dashboard keeps its current images, and the Dashboard CR still reports the old release, so RHOAI's later upgrade stages (runlevels 31 and 32: kserve, mlflow, feast, ogx, trustyai) wait up to 10 minutes after each rhods-operator start before continuing. Revert to default to apply the new release."
-	dashboardDeletingWarning      = "A Dashboard CR is being deleted while dashboard-operator is paused. Only dashboard-operator removes its finalizer (components.platform.opendatahub.io/cleanup), so the deletion, and any dashboard removal or RHOAI uninstall waiting on it, is stuck. Revert to default to resume dashboard-operator; the deletion then completes."
-	dashboardExternalPauseWarning = "dashboard-operator is paused outside Dashboard Dev, so the dashboard does not follow RHOAI updates. Revert to default resumes it with the chart default of 1 replica."
-)
+func dashboardStaleWarning(op string) string {
+	return "RHOAI was updated while " + op + " is paused. The dashboard keeps its current images, and the Dashboard CR still reports the old release, so RHOAI's later upgrade stages (runlevels 31 and 32: kserve, mlflow, feast, ogx, trustyai) wait up to 10 minutes after each rhods-operator start before continuing. Revert to default to apply the new release."
+}
+
+func dashboardDeletingWarning(op string) string {
+	return "A Dashboard CR is being deleted while " + op + " is paused. Only " + op + " removes its finalizer (components.platform.opendatahub.io/cleanup), so the deletion, and any dashboard removal or RHOAI uninstall waiting on it, is stuck. Revert to default to resume " + op + "; the deletion then completes."
+}
+
+func dashboardExternalPauseWarning(op string) string {
+	return op + " is paused outside Dashboard Dev, so the dashboard does not follow RHOAI updates. Revert to default resumes it with the chart default of 1 replica."
+}
 
 // dashboardCRDeleting reports whether any Dashboard CR has a deletionTimestamp.
 // A missing CRD means there is nothing to delete.
@@ -493,15 +488,17 @@ func addDashboardDeletionWarning(c *Client, o *types.DashboardOverride) {
 	}
 	if deleting {
 		o.DashboardDeleting = true
-		o.Warnings = append([]string{dashboardDeletingWarning}, o.Warnings...)
+		o.Warnings = append([]string{dashboardDeletingWarning(o.OperatorName)}, o.Warnings...)
 	}
 }
 
 func dashboardOverrideFromOperator(operator *dashboardDeployment) *types.DashboardOverride {
 	o := &types.DashboardOverride{
-		OperatorPaused: dashboardOperatorReplicas(operator) == 0,
-		ReleaseVersion: operator.Metadata.Annotations[platformVersionAnnotation],
-		LastAction:     dashboardLastAction(operator),
+		OperatorName:      operator.Metadata.Name,
+		OperatorNamespace: operator.Metadata.Namespace,
+		OperatorPaused:    dashboardOperatorReplicas(operator) == 0,
+		ReleaseVersion:    operator.Metadata.Annotations[platformVersionAnnotation],
+		LastAction:        dashboardLastAction(operator),
 	}
 	session, err := dashboardSession(operator)
 	if err != nil {
@@ -525,15 +522,15 @@ func dashboardOverrideFromOperator(operator *dashboardDeployment) *types.Dashboa
 	}
 	o.Active = o.OperatorPaused || session != nil || err != nil
 	if o.Stale && o.OperatorPaused {
-		o.Warnings = append(o.Warnings, dashboardStaleWarning)
+		o.Warnings = append(o.Warnings, dashboardStaleWarning(o.OperatorName))
 	}
 	if o.OperatorPaused && session == nil {
-		o.Warnings = append(o.Warnings, dashboardExternalPauseWarning)
+		o.Warnings = append(o.Warnings, dashboardExternalPauseWarning(o.OperatorName))
 	}
 	return o
 }
 
-func populateDashboardDevStateWithOperator(c *Client, state *types.DashboardState, operator *dashboardDeployment, err error) {
+func populateDashboardDevStateWithOperator(c *Client, state *types.DashboardState, target dashboardTarget, operator *dashboardDeployment, err error) {
 	state.DefaultFlavor = DashboardFlavorRHOAI
 	state.AvailableFlavors = []string{DashboardFlavorRHOAI, DashboardFlavorODH}
 	if err != nil {
@@ -541,12 +538,15 @@ func populateDashboardDevStateWithOperator(c *Client, state *types.DashboardStat
 		return
 	}
 	if operator == nil {
+		state.NoOperatorReason = target.Legacy
 		state.IsDevMode = state.IsCustomPR
 		state.AllDevImagesReady = state.PodReady && !state.RolloutPending
 		state.DevImagesMatchTarget = true
 		return
 	}
 	state.OperatorAvailable = true
+	state.OperatorName = operator.Metadata.Name
+	state.OperatorNamespace = operator.Metadata.Namespace
 	state.OperatorPaused = dashboardOperatorReplicas(operator) == 0
 	state.Managed = !state.OperatorPaused
 	state.Override = dashboardOverrideFromOperator(operator)
@@ -653,7 +653,7 @@ func populateDashboardDevStateWithOperator(c *Client, state *types.DashboardStat
 		state.IsDevMode = false
 		state.DevMode = ""
 	}
-	addDashboardRolloutDiagnostics(c, images, workloads)
+	addDashboardRolloutDiagnostics(c, operator.Metadata.Namespace, images, workloads)
 	for _, image := range images {
 		if image.RolloutStuck && !state.RolloutStuck {
 			state.RolloutStuck = true
@@ -716,7 +716,7 @@ type dashboardPod struct {
 // deployment controller sets Progressing=False with reason
 // ProgressDeadlineExceeded (kubernetes.io/docs/concepts/workloads/controllers/deployment/#failed-deployment).
 // It is server-side state, so it survives page reloads and updater restarts.
-func addDashboardRolloutDiagnostics(c *Client, images []types.DashboardDevImage, workloads map[string]dashboardDeployment) {
+func addDashboardRolloutDiagnostics(c *Client, ns string, images []types.DashboardDevImage, workloads map[string]dashboardDeployment) {
 	needPods := false
 	for i := range images {
 		d := workloads[images[i].Deployment]
@@ -737,7 +737,7 @@ func addDashboardRolloutDiagnostics(c *Client, images []types.DashboardDevImage,
 		return
 	}
 	// One namespace-wide list, only while something is not ready.
-	body, _, err := c.get("/api/v1/namespaces/" + dashboardNamespace + "/pods")
+	body, _, err := c.get("/api/v1/namespaces/" + ns + "/pods")
 	if err != nil {
 		slog.Warn("cannot list dashboard pods for rollout diagnostics", "error", err)
 		return
@@ -764,7 +764,7 @@ func addDashboardRolloutDiagnostics(c *Client, images []types.DashboardDevImage,
 			if pod.Metadata.DeletionTimestamp != "" || !dashboardLabelsMatch(d.Spec.Selector.MatchLabels, pod.Metadata.Labels) {
 				continue
 			}
-			if !ownedByDeployment(c, dashboardNamespace, images[i].Deployment, d.Metadata.UID, pod.Metadata.Labels, controllerOf(pod.Metadata.OwnerReferences)) {
+			if !ownedByDeployment(c, ns, images[i].Deployment, d.Metadata.UID, pod.Metadata.Labels, controllerOf(pod.Metadata.OwnerReferences)) {
 				continue
 			}
 			score := 0
@@ -850,13 +850,14 @@ func patchDashboardOperator(c *Client, operator *dashboardDeployment, replicas i
 	if err != nil {
 		return err
 	}
-	_, _, err = c.patch(namespacedPath("apps/v1", "deployments", dashboardNamespace, dashboardOperatorName), data)
+	_, _, err = c.patch(namespacedPath("apps/v1", "deployments", operator.Metadata.Namespace, operator.Metadata.Name), data)
 	return err
 }
 
 func waitDashboardOperatorStopped(c *Client, operator *dashboardDeployment) error {
+	ns, name := operator.Metadata.Namespace, operator.Metadata.Name
 	if len(operator.Spec.Selector.MatchLabels) == 0 {
-		return fmt.Errorf("dashboard-operator has no pod selector")
+		return fmt.Errorf("%s has no pod selector", name)
 	}
 	var selector []string
 	for k, v := range operator.Spec.Selector.MatchLabels {
@@ -868,14 +869,14 @@ func waitDashboardOperatorStopped(c *Client, operator *dashboardDeployment) erro
 	reader := *c
 	reader.ctx = ctx
 	for {
-		current, err := readDashboardOperator(&reader)
+		current, err := readDashboardOperatorAt(&reader, ns, name)
 		if err != nil {
 			return err
 		}
 		if current == nil || current.Metadata.UID != operator.Metadata.UID || current.Spec.Replicas == nil || *current.Spec.Replicas != 0 {
-			return fmt.Errorf("dashboard-operator was replaced or resumed while pausing")
+			return fmt.Errorf("%s was replaced or resumed while pausing", name)
 		}
-		body, _, err := reader.get("/api/v1/namespaces/" + dashboardNamespace + "/pods?labelSelector=" + url.QueryEscape(strings.Join(selector, ",")))
+		body, _, err := reader.get("/api/v1/namespaces/" + ns + "/pods?labelSelector=" + url.QueryEscape(strings.Join(selector, ",")))
 		if err != nil {
 			return err
 		}
@@ -886,13 +887,13 @@ func waitDashboardOperatorStopped(c *Client, operator *dashboardDeployment) erro
 			return err
 		}
 		if pods.Items == nil {
-			return fmt.Errorf("dashboard-operator pod list is missing items; cannot confirm the controller has stopped")
+			return fmt.Errorf("%s pod list is missing items; cannot confirm the controller has stopped", name)
 		}
 		if len(pods.Items) == 0 {
 			return nil
 		}
 		if err := clk.Sleep(ctx, time.Second); err != nil {
-			return fmt.Errorf("waiting for dashboard-operator pods to terminate: %w", err)
+			return fmt.Errorf("waiting for %s pods to terminate: %w", name, err)
 		}
 	}
 }
@@ -1031,13 +1032,15 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 	}
 	dashboardDevMu.Lock()
 	defer dashboardDevMu.Unlock()
-	operator, err := readDashboardOperator(c)
+	target, operator, err := loadDashboardOperator(c, true)
 	if err != nil {
-		return fail("Cannot read dashboard-operator: "+err.Error(), errorCodeOr(err, "prerequisites"))
+		return fail(sentenceStart(err.Error())+". No changes were made.", errorCodeOr(err, "prerequisites"))
 	}
 	if operator == nil {
-		return fail("Latest-main deployment requires dashboard-operator.", "prerequisites")
+		return fail("Latest-main deployment needs the dashboard module's operator, and this cluster has no dashboard module ("+target.Legacy+"). No changes were made.", "prerequisites")
 	}
+	opName := operator.Metadata.Name
+	logs = append(logs, fmt.Sprintf("Dashboard operator: Deployment %s (%s)", operator.ref(), target.Operator.Via))
 	session, err := dashboardSession(operator)
 	if err != nil {
 		return fail(err.Error()+". Click Revert to default to restore operator management, then deploy again.", "prerequisites")
@@ -1048,16 +1051,16 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 	if newSession {
 		replicas := dashboardOperatorReplicas(operator)
 		if replicas <= 0 {
-			return fail("dashboard-operator is already paused outside Dashboard Dev. Click Revert to default to resume it before starting a test session.", "prerequisites")
+			return fail(opName+" is already paused outside Dashboard Dev. Click Revert to default to resume it before starting a test session.", "prerequisites")
 		}
 		session = &dashboardDevSession{OperatorUID: operator.Metadata.UID, Replicas: replicas, StartedAt: now, StartedBy: user}
 	}
 	// Pausing while a Dashboard CR deletion is pending would block that
-	// deletion on the finalizer only dashboard-operator removes (D1).
+	// deletion on the finalizer only the dashboard operator removes (D1).
 	if deleting, err := dashboardCRDeleting(c); err != nil {
 		return fail("Cannot check whether the Dashboard is being deleted: "+err.Error()+". No changes were made.", errorCodeOr(err, "prerequisites"))
 	} else if deleting {
-		return fail("The Dashboard CR is being deleted (dashboard removal or RHOAI uninstall in progress). Pausing dashboard-operator now would block that deletion. No changes were made.", "prerequisites")
+		return fail("The Dashboard CR is being deleted (dashboard removal or RHOAI uninstall in progress). Pausing "+opName+" now would block that deletion. No changes were made.", "prerequisites")
 	}
 	images, err := discoverDashboardImages(c, operator)
 	if err != nil {
@@ -1139,9 +1142,9 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 	session.OperatorImage = dashboardOperatorImage(operator)
 	action := &types.DashboardDevAction{Action: "deploy-" + mode, By: user, At: now, Detail: "Deploying " + label}
 	if err := patchDashboardOperator(c, operator, 0, session, action); err != nil {
-		return fail("Could not pause dashboard-operator: "+err.Error(), errorCodeFromK8sErr(err))
+		return fail("Could not pause "+opName+": "+err.Error(), errorCodeFromK8sErr(err))
 	}
-	logs = append(logs, "Dashboard Dev recovery information saved; dashboard-operator scaled to 0.")
+	logs = append(logs, "Dashboard Dev recovery information saved; "+opName+" scaled to 0.")
 	if err := waitDashboardOperatorStopped(c, operator); err != nil {
 		return fail(err.Error()+". No dashboard images were patched. Click Revert to default to resume the operator.", "prerequisites")
 	}
@@ -1176,7 +1179,7 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 	if built < len(images) {
 		message += fmt.Sprintf("; the other %d have no build for it and run the release image", len(images)-built)
 	}
-	message += ". Dashboard-operator is paused; revert after testing."
+	message += ". " + opName + " is paused; revert after testing."
 	if !success {
 		retry := "Deploy latest main"
 		if mode == "pr" {
@@ -1206,14 +1209,15 @@ func patchControlledDashboardImages(c *Client, operator *dashboardDeployment, pa
 		return nil
 	}
 	image := patches[0].Image
-	path := namespacedPath("apps/v1", "deployments", dashboardNamespace, image.Deployment)
+	ns := operator.Metadata.Namespace
+	path := namespacedPath("apps/v1", "deployments", ns, image.Deployment)
 	for attempt := range 5 {
-		current, err := readDashboardOperator(c)
+		current, err := readDashboardOperatorAt(c, ns, operator.Metadata.Name)
 		if err != nil {
 			return err
 		}
 		if current == nil || current.Metadata.UID != operator.Metadata.UID || current.Spec.Replicas == nil || *current.Spec.Replicas != 0 {
-			return fmt.Errorf("dashboard-operator is no longer paused")
+			return fmt.Errorf("%s is no longer paused", operator.Metadata.Name)
 		}
 		body, _, err := c.get(path)
 		if err != nil {
@@ -1265,235 +1269,27 @@ func patchControlledDashboardImages(c *Client, operator *dashboardDeployment, pa
 
 // clearDashboardManagedAnnotations removes opendatahub.io/managed from every
 // Dashboard-owned workload that has it. The old PR flow set it to "false",
-// which makes the dashboard-operator skip the workload (odh-platform-utilities
+// which makes the dashboard operator skip the workload (odh-platform-utilities
 // pkg/deploy: managed=false is a create-only opt-out). It needs no session, so
 // it also works after the session annotation was lost or the Dashboard removed.
-func clearDashboardManagedAnnotations(c *Client) (cleared []string, failures []string) {
-	items, err := listDashboardNamespaceDeployments(c)
+func clearDashboardManagedAnnotations(c *Client, ns, operatorName string) (cleared []string, failures []string) {
+	items, err := listDashboardNamespaceDeployments(c, ns)
 	if err != nil {
 		return nil, []string{"list dashboard workloads: " + err.Error()}
 	}
 	for _, d := range items {
-		if d.Metadata.Name == dashboardOperatorName || dashboardOwner(d) == "" {
+		if d.Metadata.Name == operatorName || dashboardOwner(d) == "" {
 			continue
 		}
 		if _, ok := d.Metadata.Annotations["opendatahub.io/managed"]; !ok {
 			continue
 		}
 		data, _ := json.Marshal(map[string]any{"metadata": map[string]any{"uid": d.Metadata.UID, "annotations": map[string]any{"opendatahub.io/managed": nil}}})
-		if _, _, err := c.patch(namespacedPath("apps/v1", "deployments", dashboardNamespace, d.Metadata.Name), data); err != nil && !IsK8sError(err, http.StatusNotFound) {
+		if _, _, err := c.patch(namespacedPath("apps/v1", "deployments", ns, d.Metadata.Name), data); err != nil && !IsK8sError(err, http.StatusNotFound) {
 			failures = append(failures, d.Metadata.Name+": "+err.Error())
 			continue
 		}
 		cleared = append(cleared, d.Metadata.Name)
 	}
 	return cleared, failures
-}
-
-// revertDashboardOperator returns the dashboard to operator management from
-// any state: with or without a session, with a corrupt session, after RHOAI
-// was updated, and after a partial deploy. Resuming the operator is enough:
-// the dashboard-operator applies its manifests with server-side apply and
-// ForceOwnership (odh-platform-utilities pkg/deploy), which takes the image
-// fields back and rolls every workload to the installed release. Repeating it
-// is safe.
-func revertDashboardOperator(c *Client, _ *dashboardDeployment) (*types.OperationResponse, error) {
-	result, _ := revertDashboardOperatorTo(c)
-	return result, nil
-}
-
-// revertDashboardOperatorTo also returns the replica count it resumed the
-// operator to (0 when it could not resume it).
-func revertDashboardOperatorTo(c *Client) (*types.OperationResponse, int) {
-	dashboardDevMu.Lock()
-	defer dashboardDevMu.Unlock()
-	var logs []string
-	fail := func(message, code string) (*types.OperationResponse, int) {
-		return &types.OperationResponse{Success: false, Message: message, ErrorCode: code, Logs: logs}, 0
-	}
-	cleared, failures := clearDashboardManagedAnnotations(c)
-	for _, name := range cleared {
-		logs = append(logs, name+": removed opendatahub.io/managed so the operator manages it again")
-	}
-	for attempt := 0; ; attempt++ {
-		// Re-read after acquiring the shared deploy/revert lock and on conflicts.
-		operator, err := readDashboardOperator(c)
-		if err != nil {
-			code := errorCodeFromK8sErr(err)
-			if code == "" {
-				code = "prerequisites"
-			}
-			return fail("Cannot read dashboard-operator: "+err.Error()+". Retry Revert to default.", code)
-		}
-		if operator == nil {
-			return fail("dashboard-operator Deployment not found. The RHOAI platform recreates it with its default replica count; retry Revert to default once it exists.", "prerequisites")
-		}
-		session, sessionErr := dashboardSession(operator)
-		replicas := dashboardOperatorReplicas(operator)
-		switch {
-		case session != nil:
-			replicas = session.Replicas
-		case replicas <= 0:
-			reason := "no Dashboard Dev session is recorded"
-			if sessionErr != nil {
-				reason = sessionErr.Error()
-			}
-			replicas = dashboardOperatorDefaultReplicas
-			logs = append(logs, fmt.Sprintf("Original replica count unknown (%s); resuming with the chart default of %d.", reason, replicas))
-		}
-		if session != nil {
-			if reasons := dashboardStaleReasons(session, operator); len(reasons) > 0 {
-				logs = append(logs, "RHOAI changed during the session ("+strings.Join(reasons, "; ")+"); the operator will deploy the new release images.")
-			}
-		}
-		// Keep a valid session while workload annotations still need cleanup
-		// so the page keeps offering Revert. A corrupt one is dropped.
-		var keep *dashboardDevSession
-		if len(failures) > 0 {
-			keep = session
-		}
-		now := nowRFC3339()
-		detail := fmt.Sprintf("Resumed dashboard-operator (%d replicas)", replicas)
-		action := &types.DashboardDevAction{Action: "revert", By: getUser(c), At: now, Detail: detail}
-		if err := patchDashboardOperator(c, operator, replicas, keep, action); err != nil {
-			if IsK8sError(err, http.StatusConflict) && attempt < 2 {
-				continue
-			}
-			return fail("Failed to resume dashboard-operator: "+err.Error()+". Retry Revert to default.", errorCodeFromK8sErr(err))
-		}
-		message := fmt.Sprintf("Dashboard-operator restored to %d replicas. It will reconcile all dashboard images to the installed release.", replicas)
-		code := ""
-		if len(failures) > 0 {
-			message += " Some workload annotations could not be restored: " + strings.Join(failures, "; ") + ". Retry revert."
-			code = "partial_failure"
-		}
-		logs = append(logs, message)
-		RecordActivity(c, types.ActivityEntry{Timestamp: now, User: getUser(c), Action: "revert-dashboard", Detail: message, Success: len(failures) == 0})
-		return &types.OperationResponse{Success: len(failures) == 0, Message: message, ErrorCode: code, Logs: logs}, replicas
-	}
-}
-
-// DashboardDevActive reports whether the dashboard is overridden: the
-// dashboard-operator is paused (by Dashboard Dev or otherwise), a session or
-// a corrupt session annotation exists, or a Dashboard-owned workload carries
-// opendatahub.io/managed. Without dashboard-operator (RHOAI 3.4 and older) it
-// reports the legacy flow's managed=false annotation, its saved original, or a
-// PR/main build on rhods-dashboard.
-func DashboardDevActive(c *Client) (bool, error) {
-	operator, err := readDashboardOperator(c)
-	if err != nil {
-		return false, err
-	}
-	if operator == nil {
-		return legacyDashboardDevActive(c)
-	}
-	if dashboardOverrideFromOperator(operator).Active {
-		return true, nil
-	}
-	items, err := listDashboardNamespaceDeployments(c)
-	if err != nil {
-		return false, err
-	}
-	for _, d := range items {
-		if _, ok := d.Metadata.Annotations["opendatahub.io/managed"]; ok && d.Metadata.Name != dashboardOperatorName && dashboardOwner(d) != "" {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func legacyDashboardDevActive(c *Client) (bool, error) {
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", dashboardNamespace, dashboardDeploymentName))
-	if IsK8sError(err, http.StatusNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	var d dashboardDeployment
-	if err := json.Unmarshal(body, &d); err != nil {
-		return false, err
-	}
-	if _, saved := d.Metadata.Annotations[legacyOriginalManagedAnnotation]; saved || d.Metadata.Annotations["opendatahub.io/managed"] == "false" {
-		return true, nil
-	}
-	for _, ct := range d.Spec.Template.Spec.Containers {
-		if repo, ok := prContainerRepos[ct.Name]; ok {
-			if kind, _, _ := parseDashboardBuild(repo, ct.Image); kind != "" {
-				return true, nil
-			}
-		}
-	}
-	return false, nil
-}
-
-// Bounds for RevertDashboardDevForOperation; variables so tests can shorten them.
-var (
-	dashboardOperatorReadyTimeout = 3 * time.Minute
-	dashboardOperatorPollInterval = 2 * time.Second
-)
-
-// RevertDashboardDevForOperation returns the dashboard to operator management
-// before an operation that needs a working dashboard-operator (RHOAI update,
-// reinstall, refresh, dashboard removal, uninstall): with the operator paused,
-// a Dashboard CR deletion never completes and RHOAI updates do not reach the
-// dashboard. It does nothing when no override is active, otherwise reverts and
-// waits, bounded by dashboardOperatorReadyTimeout and the client's context,
-// until the operator is scaled up and Ready. Safe to repeat from any state.
-func RevertDashboardDevForOperation(c *Client) error {
-	active, err := DashboardDevActive(c)
-	if err != nil {
-		return fmt.Errorf("check Dashboard Dev state: %w", err)
-	}
-	if !active {
-		return nil
-	}
-	operator, err := readDashboardOperator(c)
-	if err != nil {
-		return fmt.Errorf("read dashboard-operator: %w", err)
-	}
-	if operator == nil {
-		result, err := RevertDashboardImage(c)
-		if err != nil {
-			return fmt.Errorf("revert legacy dashboard override: %w", err)
-		}
-		if !result.Success {
-			return fmt.Errorf("revert legacy dashboard override: %s", result.Message)
-		}
-		return nil
-	}
-	result, replicas := revertDashboardOperatorTo(c)
-	if !result.Success {
-		return fmt.Errorf("revert Dashboard Dev: %s", result.Message)
-	}
-	return waitDashboardOperatorReady(c, replicas)
-}
-
-func waitDashboardOperatorReady(c *Client, replicas int) error {
-	ctx, cancel := clk.WithTimeout(c.ctx, dashboardOperatorReadyTimeout)
-	defer cancel()
-	reader := *c
-	reader.ctx = ctx
-	var last string
-	for {
-		operator, err := readDashboardOperator(&reader)
-		switch {
-		case err != nil:
-			last = err.Error()
-		case operator == nil:
-			last = "dashboard-operator Deployment not found"
-		case dashboardOperatorReplicas(operator) == 0:
-			return fmt.Errorf("dashboard-operator was paused again while waiting for it to resume")
-		case dashboardDeploymentReady(*operator):
-			if got := dashboardOperatorReplicas(operator); got != replicas {
-				slog.Info("dashboard-operator ready with a different replica count than restored", "restored", replicas, "current", got)
-			}
-			return nil
-		default:
-			last = fmt.Sprintf("%d/%d replicas ready", operator.Status.ReadyReplicas, dashboardOperatorReplicas(operator))
-		}
-		if err := clk.Sleep(ctx, dashboardOperatorPollInterval); err != nil {
-			return fmt.Errorf("dashboard-operator did not become ready (%s): %w", last, err)
-		}
-	}
 }

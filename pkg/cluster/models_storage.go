@@ -28,7 +28,10 @@ import (
 // a modelVolumeSource (unreadable counts as KServe's default, emptyDir: a
 // request only reserves room).
 func modelVolumeIsEmptyDir(c *Client) bool {
-	ns := appsNamespace(c)
+	ns, err := appsNamespace(c)
+	if err != nil {
+		return true
+	}
 	body, _, err := c.get(namespacedPath("v1", "configmaps", ns, kserveConfigMap))
 	if err != nil {
 		return true

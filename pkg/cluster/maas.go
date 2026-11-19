@@ -337,8 +337,11 @@ const maasEmbeddingReason = "This tool publishes chat models only. Use the embed
 // tenant's status.infraNamespace when MaaS runs, else derived from the
 // applications namespace as the docs' scripts do (derive_infra_namespace in
 // scripts/setup-database.sh: redhat-ods-applications ->
-// redhat-ai-gateway-infra, opendatahub -> odh-ai-gateway-infra).
-func maasInfraNamespace(c *Client) string {
+// redhat-ai-gateway-infra, opendatahub -> odh-ai-gateway-infra). The two
+// names are that script's documented mapping, applied to the discovered
+// applications namespace. err is set when neither is known; callers that
+// change something refuse then.
+func maasInfraNamespace(c *Client) (string, error) {
 	body, _, err := c.get(namespacedPath(maasAPI(c), "maastenantconfigs", "models-as-a-service", "default-tenant"))
 	if err == nil {
 		var tc struct {
@@ -347,17 +350,30 @@ func maasInfraNamespace(c *Client) string {
 			} `json:"status"`
 		}
 		if json.Unmarshal(body, &tc) == nil && tc.Status.InfraNamespace != "" {
-			return tc.Status.InfraNamespace
+			return tc.Status.InfraNamespace, nil
 		}
 	}
-	switch apps := appsNamespace(c); apps {
-	case "redhat-ods-applications":
-		return "redhat-ai-gateway-infra"
-	case "opendatahub":
-		return "odh-ai-gateway-infra"
-	default:
-		return apps
+	apps, err := appsNamespace(c)
+	if err != nil {
+		return "", fmt.Errorf("cannot tell where maas-api and its database go: the default tenant reports no infrastructure namespace, and the applications namespace it is derived from is not known (%w)", err)
 	}
+	switch apps {
+	case "redhat-ods-applications":
+		return "redhat-ai-gateway-infra", nil
+	case "opendatahub":
+		return "odh-ai-gateway-infra", nil
+	default:
+		return apps, nil
+	}
+}
+
+// maasDBNamespace is where this tool's database is: the recorded
+// namespace, else maasInfraNamespace.
+func maasDBNamespace(c *Client, rec maasRecord) (string, error) {
+	if rec.DBNamespace != "" {
+		return rec.DBNamespace, nil
+	}
+	return maasInfraNamespace(c)
 }
 
 // maasDSC is the DataScienceCluster as MaaS needs it.
@@ -1082,7 +1098,11 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		return nil, err
 	}
 	dsc, dscErr := readMaaSDSC(c)
-	r := &maasStatusRun{c: c, st: st, rec: rec, infra: maasInfraNamespace(c)}
+	r := &maasStatusRun{c: c, st: st, rec: rec}
+	r.infra, r.infraErr = maasInfraNamespace(c)
+	if r.infraErr != nil {
+		r.blockers = append(r.blockers, sentenceStart(r.infraErr.Error())+".")
+	}
 	domain, _ := clusterAppsDomain(c)
 	if u := "https://" + maasHostPrefix + domain; domain != "" && snippetURL(u) {
 		st.URL = u
@@ -1105,10 +1125,12 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 // maasStatusRun builds GetMaaSStatus's answer: each method reads one part
 // of the platform and appends it, in setup order.
 type maasStatusRun struct {
-	c     *Client
-	st    *types.MaaSStatus
-	rec   maasRecord
-	infra string
+	c   *Client
+	st  *types.MaaSStatus
+	rec maasRecord
+	// infra is maasInfraNamespace; "" with infraErr when it is not known.
+	infra    string
+	infraErr error
 	// blockers are the reasons Set up cannot run, the first one shown.
 	blockers []string
 	// denyNote is the Connectivity Link part's own offer, added to the
@@ -1242,6 +1264,11 @@ func (r *maasStatusRun) statusDatabase(cnpg operatorState, cnpgReadErr error) {
 	c, rec, infra, st, part := r.c, r.rec, r.infra, r.st, r.part
 	// The database, as chosen (maas_database.go), and CloudNativePG while
 	// it is the database.
+	if rec.DBNamespace == "" && r.infraErr != nil {
+		part(types.MaaSPart{ID: "database", Title: "Database", DocURL: maasDocsBase + "install/maas-setup.md#database-setup",
+			State: "unknown", Message: sentenceStart(r.infraErr.Error())})
+		return
+	}
 	dbs := maasDatabaseStatus(c, rec, infra, cnpg, cnpgReadErr)
 	for _, p := range dbs.parts {
 		part(p)
@@ -1272,7 +1299,9 @@ func (r *maasStatusRun) statusGateway() {
 		case gw.gw.admitsAll():
 			gwPart.State = "problem"
 			gwPart.Message = "This gateway, which this tool did not create, admits routes from every namespace, so any project editor could put a route on MaaS's gateway. The MaaS docs' gateway (setup-gateway.sh) lists the namespaces instead. This tool publishes nothing through it until its owner applies the command below; it does not change a gateway it did not create."
-			gwPart.Commands = gatewayAllowedRoutesCommand(gw.gw, maasGatewayNamespaces(infra, rec.projects()))
+			if r.infraErr == nil {
+				gwPart.Commands = gatewayAllowedRoutesCommand(gw.gw, maasGatewayNamespaces(infra, rec.projects()))
+			}
 		case gw.acceptedErr != "":
 			gwPart.State, gwPart.Message = "problem", "Not accepted: "+truncateText(gw.acceptedErr, 300)
 		case gw.programmed && gw.address != "":
@@ -1421,7 +1450,11 @@ func (r *maasStatusRun) statusDSC(dsc maasDSC, dscErr error) {
 	apiPart := types.MaaSPart{ID: "maas-api", Title: "MaaS API (maas-api)", DocURL: maasDocsBase + "install/validation.md"}
 	tenantPart := types.MaaSPart{ID: "tenant", Title: "Default tenant and gateway authentication", DocURL: maasDocsBase + "install/maas-setup.md#maastenantconfig-cr"}
 	if dsc.maas == "Managed" {
-		switch deploymentAvailable(c, infra, "maas-api") {
+		state := "unknown"
+		if r.infraErr == nil {
+			state = deploymentAvailable(c, infra, "maas-api")
+		}
+		switch state {
 		case "True":
 			apiPart.State, apiPart.Message = "ready", "Available in "+infra
 		case "missing":
@@ -1430,6 +1463,9 @@ func (r *maasStatusRun) statusDSC(dsc maasDSC, dscErr error) {
 			apiPart.State, apiPart.Message = "waiting", "Not available yet (it restarts until the database answers)"
 		default:
 			apiPart.State, apiPart.Message = "unknown", "Cannot read Deployment maas-api"
+			if r.infraErr != nil {
+				apiPart.Message = sentenceStart(r.infraErr.Error())
+			}
 		}
 		ai, aiMsg := readyCondition(c, namespacedPath(maasAPI(c), "aitenants", "ai-tenants", "models-as-a-service"))
 		tc, tcMsg := readyCondition(c, namespacedPath(maasAPI(c), "maastenantconfigs", "models-as-a-service", "default-tenant"))

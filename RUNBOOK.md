@@ -314,8 +314,8 @@ Alerts: `NightlyUpdaterDown` (target down or absent for 5 m), `NightlyUpdateFail
 1. Who deployed which build, and when.
 2. **Revert to default** ends the session.
 
-- **Banner "Dashboard Dev session active":** `dashboard-operator` is paused (0 replicas), so RHOAI updates don't reach the dashboard. Use **Revert** on Dashboard Dev when done. Operator operations offer "Revert Dashboard Dev and continue".
-- **"A dashboard deletion is waiting for the paused dashboard-operator":** this is deadlock D1. Revert at once (§11.1).
+- **Banner "Dashboard Dev session active":** the dashboard module's operator (`dashboard-operator` on RHOAI 3.6; the banner names the Deployment the tool discovered) is paused (0 replicas), so RHOAI updates don't reach the dashboard. Use **Revert** on Dashboard Dev when done. Operator operations offer "Revert Dashboard Dev and continue".
+- **"A dashboard deletion is waiting for the paused <operator>":** this is deadlock D1. Revert at once (§11.1).
 - **Stuck rollout:** the panel reports the Deployment's `ProgressDeadlineExceeded`. Revert, or deploy again.
 - **"Distance from main unknown" on a container:** the page could not ask GitHub how far the build's commit is from upstream `main` (or from the PR's latest commit). Usually the rate limit: GitHub allows 60 anonymous requests per hour per egress IP, shared by every user of the pod; the tooltip names the retry time. Set `GITHUB_TOKEN` on the updater Deployment ([README: Configuration](README.md#configuration)) to raise it to 5000/hour. Other reasons in the tooltip: GitHub does not know the commit (a force-pushed PR), the PR was not found, or GitHub answered an error (retried on the next refresh). The commit itself comes from the image labels and is shown either way.
 - **"A newer ... build exists" or "Newer build available" under a container:** the tag the build was deployed from (`odh-stable`, `main`, `odh-pr-N`, `pr-N`) now points to another image. Nothing changed on the cluster: the container keeps its digest-pinned image. **Deploy latest main** or **Deploy PR** again to switch; main builds are then written under their commit tag ([CLUSTER_CHANGES §7](docs/CLUSTER_CHANGES.md#7-dashboard-dev)).
@@ -673,18 +673,23 @@ These follow the deadlock map in the RHOAI 3.6 operator notes (D1–D8). The too
 
 ### 11.1 D1: dashboard-operator scaled to 0 (Dashboard CR deletion hangs)
 
-Only dashboard-operator removes the Dashboard CR finalizer `components.platform.opendatahub.io/cleanup`. If it stays at 0 while the Dashboard is being removed, the DSC change or uninstall waits forever.
+Only the dashboard module's operator removes the Dashboard CR finalizer `components.platform.opendatahub.io/cleanup`. If it stays at 0 while the Dashboard is being removed, the DSC change or uninstall waits forever.
+
+The tool does not assume its name or namespace: the namespace is the DSCInitialization's `spec.applicationsNamespace`, and the operator is the Deployment there that carries Dashboard Dev's annotation (or, without a session, the one whose ServiceAccount a ClusterRoleBinding lets update `dashboards` and `dashboards/finalizers`; on RHOAI 3.6 it is `dashboard-operator`). The Dashboard Dev page and its banner name it.
 
 ```bash
-oc get deploy dashboard-operator -n redhat-ods-applications -o jsonpath='{.spec.replicas}{"\n"}'
+NS=$(oc get dscinitializations -o jsonpath='{.items[0].spec.applicationsNamespace}')
+OP=$(oc get deploy -n "$NS" -o json | jq -r '.items[] | select(.metadata.annotations["rhoai-nightly-updater.opendatahub.io/dashboard-dev"]) | .metadata.name')
+echo "$NS/$OP"   # empty OP: no session annotation; use the name the Dashboard Dev page shows
+oc get deploy "$OP" -n "$NS" -o jsonpath='{.spec.replicas}{"\n"}'
 oc get dashboards.components.platform.opendatahub.io -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.deletionTimestamp}{"\n"}{end}'
 ```
 
 Fix: **Revert** on Dashboard Dev. If the UI is unavailable (MANUAL ADMIN STEP):
 
 ```bash
-oc scale deploy/dashboard-operator -n redhat-ods-applications --replicas=1
-oc annotate deploy/dashboard-operator -n redhat-ods-applications rhoai-nightly-updater.opendatahub.io/dashboard-dev-
+oc scale deploy/"$OP" -n "$NS" --replicas=1
+oc annotate deploy/"$OP" -n "$NS" rhoai-nightly-updater.opendatahub.io/dashboard-dev-
 ```
 
 The operator then restores the release images and finishes the deletion.

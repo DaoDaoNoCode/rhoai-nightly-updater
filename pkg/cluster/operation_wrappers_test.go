@@ -71,8 +71,8 @@ func DeployDashboardMain(c *Client) (*types.OperationResponse, error) {
 }
 
 func populateDashboardDevState(c *Client, state *types.DashboardState) {
-	operator, err := readDashboardOperator(c)
-	populateDashboardDevStateWithOperator(c, state, operator, err)
+	target, operator, err := loadDashboardOperator(c, false)
+	populateDashboardDevStateWithOperator(c, state, target, operator, err)
 }
 
 func patchControlledDashboardImage(c *Client, operator *dashboardDeployment, image types.DashboardDevImage, target string) error {

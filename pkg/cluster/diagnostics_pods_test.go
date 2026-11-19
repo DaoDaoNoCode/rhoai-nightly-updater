@@ -176,6 +176,7 @@ func TestPodOwner(t *testing.T) {
 func observabilityCluster(t *testing.T, eventsForbidden bool) (*fakeAPI, *Client) {
 	f, c := newFakeAPI(t)
 	const ns = "redhat-ods-applications"
+	serveDSCI(f, ns)
 	pods := []any{
 		makePod(ns, "odh-observability", "7b6d65d9b7", "vxzxh", 65*time.Hour, phase("Pending"), waiting("manager", "ContainerCreating", "", 0)),
 		makePod(ns, "odh-observability", "84f945d8bc", "g5kp6", 65*time.Hour, phase("Pending"), waiting("manager", "ContainerCreating", "", 0)),

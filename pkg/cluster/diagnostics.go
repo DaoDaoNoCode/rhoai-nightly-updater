@@ -313,10 +313,26 @@ func checkCatalogHealth(c *Client) checkOutput {
 
 // rhoaiPodNamespaces are the namespaces whose pods the "RHOAI pods" check
 // scans, besides namespaces labelled platform.opendatahub.io/part-of (which
-// the operator creates for platform modules). The operator namespace is
-// covered by the "Operator pods" check. User workbench namespaces such as
-// rhods-notebooks are left out on purpose.
-var rhoaiPodNamespaces = []string{"redhat-ods-applications", "redhat-ods-monitoring"}
+// the operator creates for platform modules): the applications and
+// monitoring namespaces the DSCInitialization names. The operator namespace
+// is covered by the "Operator pods" check. User workbench namespaces such
+// as rhods-notebooks are left out on purpose. No DSCInitialization gives
+// none and no error (RHOAI has none yet); a read error is returned, so the
+// check cannot pass without them.
+func rhoaiPodNamespaces(c *Client) ([]string, error) {
+	ns, err := discoverRHOAINamespaces(c)
+	if errors.Is(err, errNoDSCInitialization) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := []string{ns.Applications}
+	if ns.Monitoring != "" && ns.Monitoring != ns.Applications {
+		out = append(out, ns.Monitoring)
+	}
+	return out, nil
+}
 
 func checkOperatorPods(c *Client) checkOutput {
 	const name = "Operator pods"
@@ -335,7 +351,7 @@ func checkOperatorPods(c *Client) checkOutput {
 
 func checkRHOAIPods(c *Client) checkOutput {
 	const name = "RHOAI pods"
-	namespaces := append([]string{}, rhoaiPodNamespaces...)
+	namespaces, rhoaiNSErr := rhoaiPodNamespaces(c)
 	// Platform module namespaces (for example opendatahub-ogx-system).
 	// A failed lookup is reported: the module namespaces could hold
 	// unhealthy pods, so the check cannot pass without them.
@@ -375,6 +391,12 @@ func checkRHOAIPods(c *Client) checkOutput {
 			out.check.Status = "warn"
 		}
 		out.check.Detail += fmt.Sprintf("; could not verify the platform module namespaces (labelled platform.opendatahub.io/part-of): %v", nsErr)
+	}
+	if rhoaiNSErr != nil {
+		if out.check.Status == "pass" {
+			out.check.Status = "warn"
+		}
+		out.check.Detail += fmt.Sprintf("; could not tell the applications and monitoring namespaces, so their pods were not checked: %v", rhoaiNSErr)
 	}
 	return out
 }

@@ -306,7 +306,7 @@ The updater changes a shared, stateful system (OLM and the RHOAI operator). Thes
 
 **Refuse before changing.** Update, Re-deploy and Install a different build run all their checks first (pull secret, IDMS, a test catalog for the exact image, version, OperatorGroup, a second rhods-operator Subscription). A refusal says "Nothing was changed".
 
-**Dashboard Dev guard.** While a Dashboard Dev session pauses `dashboard-operator`, a banner says so on every page. Update, Re-deploy and Install a different build then refuse, and offer **Revert Dashboard Dev and continue**. A paused dashboard-operator would block RHOAI upgrades of the dashboard and hang any deletion of the Dashboard CR.
+**Dashboard Dev guard.** While a Dashboard Dev session pauses the dashboard module's operator (found at run time from its RBAC in the DSCInitialization's applications namespace; `dashboard-operator` on RHOAI 3.6), a banner names it on every page. Update, Re-deploy and Install a different build then refuse, and offer **Revert Dashboard Dev and continue**. A paused dashboard operator would block RHOAI upgrades of the dashboard and hang any deletion of the Dashboard CR.
 
 **Versions.**
 - Update refuses an older build.

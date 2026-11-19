@@ -34,7 +34,7 @@ func planModelSpecExpectation(c *Client, name string) (modelSpecExpectation, str
 	if !ok {
 		return modelSpecExpectation{}, fmt.Sprintf("%s is not a model of this tool's catalog.", name)
 	}
-	preset := discoverCPUPreset(c, appsNamespace(c))
+	preset := discoverCPUPreset(c)
 	if preset.problem != "" {
 		return modelSpecExpectation{}, "Cannot tell what the model should run, so it is not published: " + preset.problem
 	}

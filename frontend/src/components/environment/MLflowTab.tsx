@@ -220,7 +220,7 @@ export const MLflowTab: React.FC<MLflowTabProps> = (props) => {
       )}
       <StackItem>
         <FeatureSection title="What this creates">
-          <CreatesList items={[<>On the cluster: MLflow CR <code>mlflow</code>; the MLflow operator runs the server in <code>{mlflow?.namespace || "redhat-ods-applications"}</code> with its default (RHOAI) image, a SQLite database and a 10Gi PersistentVolumeClaim</>]} />
+          <CreatesList items={[<>On the cluster: MLflow CR <code>mlflow</code>; the MLflow operator runs the server in {mlflow?.namespace ? <code>{mlflow.namespace}</code> : "the applications namespace"} with its default (RHOAI) image, a SQLite database and a 10Gi PersistentVolumeClaim</>]} />
         </FeatureSection>
       </StackItem>
       {!readOnly && managed && !isTerminating(mlflow) && (
@@ -240,7 +240,7 @@ export function mlflowConfirm(pending: Pending, mlflow: ResourceState | undefine
       return {
         title: "Set up MLflow?", confirm: "Set up", runTitle: "Set up MLflow",
         summary: <Content component="p">On the cluster: one MLflow server, with a workspace per data science project and its data on a 10 GiB volume. Takes 1 to 3 minutes.</Content>,
-        changes: [<>MLflow CR <code>mlflow</code> is created; the MLflow operator deploys the server in <code>redhat-ods-applications</code> with its default (RHOAI) image.</>],
+        changes: [<>MLflow CR <code>mlflow</code> is created; the MLflow operator deploys the server in {mlflow?.namespace ? <code>{mlflow.namespace}</code> : "the applications namespace"} with its default (RHOAI) image.</>],
       };
     case "teardown-mlflow":
       return {

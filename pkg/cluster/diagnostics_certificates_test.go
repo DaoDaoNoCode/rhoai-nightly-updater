@@ -16,7 +16,8 @@ const appCertsPath = "/apis/cert-manager.io/v1/namespaces/redhat-ods-application
 func certWorld(t *testing.T) (*fakeAPI, *Client) {
 	t.Helper()
 	f, c := newFakeAPI(t)
-	for _, ns := range append([]string{SubNS}, rhoaiPodNamespaces...) {
+	serveDSCI(f, "redhat-ods-applications")
+	for _, ns := range []string{SubNS, "redhat-ods-applications"} {
 		f.json("GET", "/apis/cert-manager.io/v1/namespaces/"+ns+"/certificates", 200, `{"items":[]}`)
 	}
 	f.obj(appCertsPath, map[string]any{"items": []any{

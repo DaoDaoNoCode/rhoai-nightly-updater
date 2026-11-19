@@ -73,7 +73,10 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 	kuadrantNS := firstNonEmpty(kq.namespace, rhcl.csvNS, rhclOperator.namespace)
 
 	// The infrastructure namespace and the database.
-	infra := maasInfraNamespace(c)
+	infra, err := maasInfraNamespace(c)
+	if err != nil {
+		return m.fail("check", sentenceStart(err.Error())+". Nothing was changed.", "prerequisites", "infra namespace unknown")
+	}
 	_, infraFound, err := readObjectMeta(c, "/api/v1/namespaces/"+infra)
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot read namespace %s; nothing was changed: %v.%s", infra, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace read failed")
@@ -473,10 +476,12 @@ func (m *maasRun) applyAuthorinoTLS(rec *maasRecord, ns, step string) (*types.Op
 	} else {
 		m.step(step, "success", "Authorino TLS is configured: "+strings.Join(changes, "; ")+".")
 	}
-	if infra := maasInfraNamespace(c); len(changes) > 0 {
+	if len(changes) > 0 {
 		// The script's closing note: maas-api picks the TLS setup up on
 		// restart. None runs before MaaS is turned on.
-		if restarted, err := restartMaaSAPI(c, infra); err == nil && restarted {
+		if infra, err := maasInfraNamespace(c); err != nil {
+			m.logs = append(m.logs, "Warning: maas-api was not restarted to use Authorino's TLS: "+err.Error())
+		} else if restarted, err := restartMaaSAPI(c, infra); err == nil && restarted {
 			m.logs = append(m.logs, "OK: maas-api restarted to use Authorino's TLS")
 		}
 	}
