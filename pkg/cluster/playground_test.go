@@ -194,6 +194,9 @@ func newPlaygroundEnv(t *testing.T) *playgroundEnv {
 	t.Setenv("NAMESPACE", "rhoai-nightly-updater")
 	PurgePlaygroundStatus()
 	k8s, c := newResourceFake(t)
+	// The ServiceAccount's client, as a read gets it: the gen-ai API is
+	// called with its token.
+	c.token = testGenAIToken
 	g := newGenAIFake(t)
 	g.models["proj"] = testQwenModels
 	srv := httptest.NewTLSServer(http.HandlerFunc(g.serve))
@@ -227,7 +230,7 @@ func (e *playgroundEnv) putServer(ns, uid string, created time.Time) {
 func (e *playgroundEnv) run(t *testing.T, req types.PlaygroundRequest) (*types.OperationResponse, []UpdateStepEvent) {
 	t.Helper()
 	var steps []UpdateStepEvent
-	res, err := RunPlayground(e.c, req, testGenAIToken, func(s UpdateStepEvent) { steps = append(steps, s) })
+	res, err := RunPlayground(e.c, req, func(s UpdateStepEvent) { steps = append(steps, s) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +338,7 @@ func TestPlayground_SetupWithTheUsersTokenAddsAMaaSModel(t *testing.T) {
 	req := setup("proj")
 	req.Models = []types.PlaygroundModelRef{{Name: "qwen25-05b-instruct", Source: "namespace"}, {Name: "gpt-oss-20b", Source: "maas"}}
 	var steps []UpdateStepEvent
-	res, err := RunPlayground(uc, req, userToken, func(s UpdateStepEvent) { steps = append(steps, s) })
+	res, err := RunPlayground(uc, req, func(s UpdateStepEvent) { steps = append(steps, s) })
 	if err != nil || !res.Success {
 		t.Fatalf("got %+v, %v", res, err)
 	}
@@ -353,15 +356,16 @@ func TestPlayground_SetupWithTheUsersTokenAddsAMaaSModel(t *testing.T) {
 			t.Errorf("step %s shows the token", s.Step)
 		}
 	}
-	// The user's client with another token (not its own) is not the
-	// user's: the ServiceAccount allowlist applies.
-	api, _, _ := playgroundAPI(uc, testGenAIToken)
-	if api.asUser {
-		t.Fatal("a token other than the client's own is treated as the user's")
+	// The ServiceAccount's client gets the ServiceAccount allowlist.
+	if api, _, _ := playgroundAPI(e.c); api.asUser || api.token != testGenAIToken {
+		t.Fatal("the ServiceAccount's client is treated as the user's")
 	}
 	// Even with the user's token, the calls that are not the playground's
 	// own stay refused.
-	api, _, _ = playgroundAPI(uc, userToken)
+	api, _, _ := playgroundAPI(uc)
+	if !api.asUser || api.token != userToken {
+		t.Fatal("the user's client does not call with the user's token")
+	}
 	for _, c := range []struct{ method, path string }{{http.MethodPost, "/maas/tokens"}, {http.MethodPost, "/lsd/responses"}, {http.MethodGet, "/genai-proxy/ns/proj/v1/models"}} {
 		if err := api.call(c.method, c.path, "proj", nil, nil); !errors.Is(err, errGenAINotAllowed) {
 			t.Errorf("%s %s with the user's token: %v", c.method, c.path, err)
@@ -388,7 +392,7 @@ func TestPlayground_SetupWithProjectModelsOnlyNeverReachesMaaS(t *testing.T) {
 			uc := e.userPlaygroundClient(userToken)
 			req := setup("proj")
 			req.Models = models
-			res, err := RunPlayground(uc, req, userToken, nil)
+			res, err := RunPlayground(uc, req, nil)
 			if err != nil || !res.Success {
 				t.Fatalf("got %+v, %v", res, err)
 			}
@@ -406,7 +410,7 @@ func TestPlayground_SetupWithProjectModelsOnlyNeverReachesMaaS(t *testing.T) {
 // check guards the token whatever calls it.
 func TestPlayground_GenAIClientRefusesCallsThatReachMaaS(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	api, problem, _ := playgroundAPI(e.c, testGenAIToken)
+	api, problem, _ := playgroundAPI(e.c)
 	if problem != "" {
 		t.Fatal(problem)
 	}
@@ -552,7 +556,7 @@ func TestPlayground_AStaleRecordDoesNotOwnANewPlayground(t *testing.T) {
 	e.g.servers["proj"] = &genAIServer{Name: "lsd-genai-playground", Phase: "Ready"}
 	e.putServer("proj", "uid-made-in-the-dashboard", clk.Now())
 	PurgePlaygroundStatus()
-	st, err := GetPlaygroundStatus(e.c, testGenAIToken, "proj")
+	st, err := GetPlaygroundStatus(e.c, "proj")
 	if err != nil || len(st.Items) != 1 || st.Items[0].ManagedByTool {
 		t.Fatalf("status %+v, %v", st, err)
 	}
@@ -612,11 +616,11 @@ func TestPlayground_A404IsNotAbsence(t *testing.T) {
 // every project are cached apart from it.
 func TestPlayground_StatusFanOutIsSharedAcrossProjects(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	if _, err := GetPlaygroundStatus(e.c, testGenAIToken, "proj"); err != nil {
+	if _, err := GetPlaygroundStatus(e.c, "proj"); err != nil {
 		t.Fatal(err)
 	}
 	before := len(e.g.paths)
-	if _, err := GetPlaygroundStatus(e.c, testGenAIToken, "other"); err != nil {
+	if _, err := GetPlaygroundStatus(e.c, "other"); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range e.g.paths[before:] {
@@ -737,7 +741,8 @@ func TestPlayground_UnknownOperatorReadinessIsANote(t *testing.T) {
 
 func TestPlayground_NoToken(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	res, err := RunPlayground(e.c, setup("proj"), "", nil)
+	e.c.token = ""
+	res, err := RunPlayground(e.c, setup("proj"), nil)
 	if err != nil || res.Success || res.ErrorCode != "no_token" || len(e.g.auth) != 0 {
 		t.Fatalf("got %+v, %v", res, err)
 	}
@@ -753,7 +758,7 @@ func TestPlayground_Status(t *testing.T) {
 	e.g.servers["other"] = &genAIServer{Name: "lsd-genai-playground", Phase: "Initializing"}
 	e.g.startingReads = 1 << 20
 	PurgePlaygroundStatus()
-	st, err := GetPlaygroundStatus(e.c, testGenAIToken, "proj")
+	st, err := GetPlaygroundStatus(e.c, "proj")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -775,7 +780,7 @@ func TestPlayground_Status(t *testing.T) {
 	}
 	// Cached: a second read makes no call.
 	calls := len(e.g.auth)
-	if _, err := GetPlaygroundStatus(e.c, testGenAIToken, "proj"); err != nil || len(e.g.auth) != calls {
+	if _, err := GetPlaygroundStatus(e.c, "proj"); err != nil || len(e.g.auth) != calls {
 		t.Errorf("not cached: %d calls, %v", len(e.g.auth)-calls, err)
 	}
 }
@@ -784,7 +789,7 @@ func TestPlayground_Status(t *testing.T) {
 func TestPlayground_StatusOfAnAPIThatDiffers(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.g.missing = true
-	st, err := GetPlaygroundStatus(e.c, testGenAIToken, "proj")
+	st, err := GetPlaygroundStatus(e.c, "proj")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -795,7 +800,8 @@ func TestPlayground_StatusOfAnAPIThatDiffers(t *testing.T) {
 
 func TestPlayground_StatusWithoutToken(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	st, err := GetPlaygroundStatus(e.c, "", "")
+	e.c.token = ""
+	st, err := GetPlaygroundStatus(e.c, "")
 	if err != nil || st.APICode != "no_token" || len(e.g.auth) != 0 {
 		t.Fatalf("got %+v, %v", st, err)
 	}
@@ -833,7 +839,7 @@ func TestValidatePlaygroundRequest(t *testing.T) {
 func TestPlayground_StatusListsMaaSModelsFromTheirModelRefs(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.putMaaSModels()
-	st, err := GetPlaygroundStatus(e.c, testGenAIToken, "proj")
+	st, err := GetPlaygroundStatus(e.c, "proj")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -862,7 +868,7 @@ func TestPlayground_StatusWithoutReadableMaaSModels(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.putMaaSModels()
 	e.k8s.fail["GET /apis/maas.opendatahub.io/v1alpha1/maasmodelrefs"] = http.StatusForbidden
-	st, err := GetPlaygroundStatus(e.c, testGenAIToken, "proj")
+	st, err := GetPlaygroundStatus(e.c, "proj")
 	if err != nil {
 		t.Fatal(err)
 	}

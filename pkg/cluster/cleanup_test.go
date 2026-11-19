@@ -34,9 +34,9 @@ func fakeTeardowns(t *testing.T, fail map[string]*types.OperationResponse) *[]st
 		return result("storage", "S3 storage removed.")
 	}
 	cleanupMLflow = func(*Client) (*types.OperationResponse, error) { return result("mlflow", "MLflow removed.") }
-	cleanupPlayground = func(_ *Client, project, token string) (*types.OperationResponse, error) {
-		if token != "genai-token" {
-			t.Errorf("playground teardown got token %q", token)
+	cleanupPlayground = func(c *Client, project string) (*types.OperationResponse, error) {
+		if c == nil || !c.asUser {
+			t.Errorf("playground teardown of %s does not get the user's client", project)
 		}
 		return result(CleanupStepID("playground", project), "Playground deleted from '"+project+"'.")
 	}
@@ -54,7 +54,7 @@ func fakeTeardowns(t *testing.T, fail map[string]*types.OperationResponse) *[]st
 func TestCleanUp_DeletesTheModelsBeforeTheGateway(t *testing.T) {
 	ran := fakeTeardowns(t, nil)
 	_, c := newResourceFake(t)
-	res, err := CleanUp(c, types.CleanupRequest{MLflow: true, Models: []string{"a", "b"}, InferenceGateway: true}, "", nil)
+	res, err := CleanUp(c, types.CleanupRequest{MLflow: true, Models: []string{"a", "b"}, InferenceGateway: true}, nil)
 	if err != nil || !res.Success {
 		t.Fatalf("got %+v, %v", res, err)
 	}
@@ -66,11 +66,13 @@ func TestCleanUp_DeletesTheModelsBeforeTheGateway(t *testing.T) {
 	}
 }
 
-// The playgrounds go before the models they use, with the gen-ai token.
+// The playgrounds go before the models they use, with the user's client
+// (its token is what the gen-ai API is called with).
 func TestCleanUp_DeletesThePlaygroundsBeforeTheModels(t *testing.T) {
 	ran := fakeTeardowns(t, nil)
 	_, c := newResourceFake(t)
-	res, err := CleanUp(c, types.CleanupRequest{Models: []string{"a"}, Playgrounds: []string{"a", "b"}, InferenceGateway: true}, "genai-token", nil)
+	c.asUser = true
+	res, err := CleanUp(c, types.CleanupRequest{Models: []string{"a"}, Playgrounds: []string{"a", "b"}, InferenceGateway: true}, nil)
 	if err != nil || !res.Success {
 		t.Fatalf("got %+v, %v", res, err)
 	}
@@ -85,7 +87,7 @@ func TestCleanUp_KeepsTheGatewayWhenAModelStays(t *testing.T) {
 		"model:a": {Success: false, Message: "The model a/qwen25-05b-instruct is still being deleted after 2:00.", ErrorCode: "in_progress"},
 	})
 	_, c := newResourceFake(t)
-	res, _ := CleanUp(c, types.CleanupRequest{Models: []string{"a"}, InferenceGateway: true}, "", nil)
+	res, _ := CleanUp(c, types.CleanupRequest{Models: []string{"a"}, InferenceGateway: true}, nil)
 	if res.Success || res.ErrorCode != "in_progress" || !strings.Contains(res.Message, "Not done: the inference gateway.") {
 		t.Fatalf("got %+v", res)
 	}
@@ -98,7 +100,7 @@ func TestCleanUp_RunsThePartsInDependencyOrder(t *testing.T) {
 	ran := fakeTeardowns(t, nil)
 	_, c := newResourceFake(t)
 	var events []UpdateStepEvent
-	res, err := CleanUp(c, types.CleanupRequest{PipelineServers: []string{"a", "b"}, Storage: true, DeleteNamespace: true, MLflow: true}, "", func(e UpdateStepEvent) { events = append(events, e) })
+	res, err := CleanUp(c, types.CleanupRequest{PipelineServers: []string{"a", "b"}, Storage: true, DeleteNamespace: true, MLflow: true}, func(e UpdateStepEvent) { events = append(events, e) })
 	if err != nil || !res.Success {
 		t.Fatalf("got %+v, %v", res, err)
 	}
@@ -120,7 +122,7 @@ func TestCleanUp_StopsAtTheFirstPartThatFails(t *testing.T) {
 	})
 	_, c := newResourceFake(t)
 	var last UpdateStepEvent
-	res, _ := CleanUp(c, types.CleanupRequest{PipelineServers: []string{"a", "b"}, Storage: true, MLflow: true}, "", func(e UpdateStepEvent) { last = e })
+	res, _ := CleanUp(c, types.CleanupRequest{PipelineServers: []string{"a", "b"}, Storage: true, MLflow: true}, func(e UpdateStepEvent) { last = e })
 	if res.Success || res.ErrorCode != "in_progress" {
 		t.Fatalf("got %+v", res)
 	}
@@ -143,7 +145,7 @@ func TestCleanUp_StopsWhenTheOperationIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	c.ctx = ctx
-	res, _ := CleanUp(c, types.CleanupRequest{MLflow: true}, "", nil)
+	res, _ := CleanUp(c, types.CleanupRequest{MLflow: true}, nil)
 	if res.Success || len(*ran) != 0 || !strings.Contains(res.Message, "Not done: MLflow.") {
 		t.Fatalf("got %+v, ran %v", res, *ran)
 	}
@@ -153,7 +155,7 @@ func TestCleanUp_StopsWhenTheOperationIsCancelled(t *testing.T) {
 // each part says so and succeeds.
 func TestCleanUp_NothingLeftSucceeds(t *testing.T) {
 	_, c := newResourceFake(t)
-	res, err := CleanUp(c, types.CleanupRequest{PipelineServers: []string{"p1"}, Storage: true, MLflow: true}, "", nil)
+	res, err := CleanUp(c, types.CleanupRequest{PipelineServers: []string{"p1"}, Storage: true, MLflow: true}, nil)
 	if err != nil || !res.Success {
 		t.Fatalf("got %+v, %v", res, err)
 	}

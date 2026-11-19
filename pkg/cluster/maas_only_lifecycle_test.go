@@ -440,7 +440,7 @@ func TestCleanUp_MaaSOnlyModelIsUnpublishedOnce(t *testing.T) {
 	mc := maasOnlyModel(t)
 	mc.f.requests = nil
 	var steps []string
-	res, err := CleanUp(mc.c, types.CleanupRequest{MaaSPublished: []string{"proj"}, Models: []string{"proj"}}, "", func(e UpdateStepEvent) {
+	res, err := CleanUp(mc.c, types.CleanupRequest{MaaSPublished: []string{"proj"}, Models: []string{"proj"}}, func(e UpdateStepEvent) {
 		if e.Status != "running" {
 			steps = append(steps, e.Step+"="+e.Status)
 		}

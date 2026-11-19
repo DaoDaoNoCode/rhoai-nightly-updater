@@ -90,41 +90,13 @@ func templateSARequests(t *testing.T) []rbacRequest {
 	return append([]rbacRequest(nil), saRequestsMemo...)
 }
 
-// playgroundStatusKeys are the requests the dashboard's gen-ai API makes
-// with the caller's token for the status calls (aaa/models, lsd/status),
-// which carry the ServiceAccount's token. Set up, delete and Clean up call
-// it with the user's.
-var playgroundStatusKeys = []string{
-	"list ogx.io/ogxservers",
-	"get ogx.io/ogxservers/lsd-genai-playground",
-	"get /configmaps/gen-ai-aa-custom-model-endpoints",
-	"get serving.kserve.io/inferenceservices",
-	"list serving.kserve.io/inferenceservices",
-	"get serving.kserve.io/llminferenceservices",
-	"list serving.kserve.io/llminferenceservices",
-}
-
 // otherServerSARequests are the access reviews other servers make with the
-// ServiceAccount's token: the playground status's, and MLflow's for the
-// samples status, which only reads (get and list checks).
+// ServiceAccount's token: the playground status's (genAIDashboardRequests),
+// and MLflow's for the samples status, which only reads (get and list
+// checks).
 func otherServerSARequests(t *testing.T) []rbacRequest {
 	t.Helper()
-	var out []rbacRequest
-	for _, key := range playgroundStatusKeys {
-		found := false
-		for _, r := range playgroundServerRequests() {
-			k := r.Verb + " " + r.Group + "/" + r.Resource
-			if r.Name != "" {
-				k += "/" + r.Name
-			}
-			if k == key {
-				out, found = append(out, r), true
-			}
-		}
-		if !found {
-			t.Fatalf("playgroundStatusKeys: %s is not in genAIDashboardRequests", key)
-		}
-	}
+	out := playgroundServerRequests()
 	for _, r := range samplesReviewRequests() {
 		if r.Verb == "get" || r.Verb == "list" {
 			out = append(out, r)
@@ -186,7 +158,6 @@ var mutationMachinery = []string{
 // a client with it: a change must reach none of them.
 var saTokenSources = []string{
 	apiPkg + ".getClusterToken",
-	"var " + apiPkg + ".genAIToken",
 	clusterPkg + ".NewClientWithContext",
 }
 
@@ -210,6 +181,9 @@ func TestMutationPathsActWithTheUsersToken(t *testing.T) {
 	}
 	reach := pg.graph.reach(roots, pruned)
 	for _, src := range saTokenSources {
+		if _, ok := pg.graph[src]; !ok {
+			t.Errorf("%s is not in the graph; update saTokenSources", src)
+		}
 		if reach[src] {
 			t.Errorf("a change reaches the ServiceAccount's token through %s:\n  %s", src, strings.Join(pg.graph.pathTo(roots, pruned, src), "\n  -> "))
 		}

@@ -35,7 +35,7 @@ func fakeSession(t *testing.T, tok *cluster.SessionToken, err error) *int {
 
 // fullToken is a user:full token created at created, valid for a day.
 func fullToken(created time.Time) *cluster.SessionToken {
-	return &cluster.SessionToken{Created: created, ExpiresIn: 86400, Scopes: []string{"user:full"}, ClientName: "rhoai-nightly-updater-ns"}
+	return &cluster.SessionToken{Created: created, ExpiresIn: 86400, Scopes: []string{"user:full"}}
 }
 
 // A change acts with the user's own token; its lease, marker and records

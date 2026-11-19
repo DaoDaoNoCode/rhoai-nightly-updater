@@ -62,11 +62,7 @@ type SessionToken struct {
 	Created time.Time
 	// ExpiresIn: seconds after Created the token stops working; 0 never.
 	ExpiresIn int64
-	// InactivityTimeoutSeconds: the token stops working this long after
-	// Created unless it is used; every use moves it on.
-	InactivityTimeoutSeconds int64
-	Scopes                   []string
-	ClientName               string
+	Scopes    []string
 }
 
 // FullScope reports whether the token may act with the user's whole RBAC
@@ -144,18 +140,13 @@ func ReadSessionToken(ctx context.Context, userToken string) (*SessionToken, err
 		Metadata struct {
 			CreationTimestamp time.Time `json:"creationTimestamp"`
 		} `json:"metadata"`
-		ExpiresIn                int64    `json:"expiresIn"`
-		InactivityTimeoutSeconds int64    `json:"inactivityTimeoutSeconds"`
-		Scopes                   []string `json:"scopes"`
-		ClientName               string   `json:"clientName"`
+		ExpiresIn int64    `json:"expiresIn"`
+		Scopes    []string `json:"scopes"`
 	}
 	if err := json.Unmarshal(body, &obj); err != nil {
 		return nil, fmt.Errorf("parse the sign-in's token: %w", err)
 	}
-	return &SessionToken{
-		Created: obj.Metadata.CreationTimestamp, ExpiresIn: obj.ExpiresIn,
-		InactivityTimeoutSeconds: obj.InactivityTimeoutSeconds, Scopes: obj.Scopes, ClientName: obj.ClientName,
-	}, nil
+	return &SessionToken{Created: obj.Metadata.CreationTimestamp, ExpiresIn: obj.ExpiresIn, Scopes: obj.Scopes}, nil
 }
 
 // LookupUserWithToken returns the name of the user who owns the token, as

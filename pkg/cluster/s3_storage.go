@@ -1052,11 +1052,15 @@ func (r s3Retry) foreignHint() string {
 	return fmt.Sprintf("Delete or rename it, or label it with `oc label -n %s <kind>/<name> app.kubernetes.io/managed-by=rhoai-nightly-updater` if this tool created it, then %s.", s3Namespace, r.again)
 }
 
-// templateHint explains a 403 from the API server: the updater's own
-// ServiceAccount was refused, which after an upgrade means its RBAC still
-// comes from an older deploy/template.yaml.
+// templateHint explains a 403 the API server answered to the updater's own
+// ServiceAccount (a read, or the app's records), which after an upgrade
+// means its RBAC still comes from an older deploy/template.yaml. A 403 to
+// the signed-in user's token (every change) is about that user's RBAC and
+// says so itself (K8sError.Error, UserForbiddenMessage), so it gets no
+// hint.
 func templateHint(err error) string {
-	if !IsK8sError(err, http.StatusForbidden) {
+	var ke *K8sError
+	if !errors.As(err, &ke) || ke.Status != http.StatusForbidden || ke.User {
 		return ""
 	}
 	return " The updater's ServiceAccount is not allowed to do this. If the updater was upgraded recently, its permissions still come from an older deploy/template.yaml: an admin should run `make upgrade` to re-apply it, then retry."
