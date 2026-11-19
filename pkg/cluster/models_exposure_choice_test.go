@@ -80,6 +80,27 @@ func TestModelsSetup_ReadyWaitEndingDuringAFailingPullKeepsTheAdvice(t *testing.
 	}
 }
 
+// The status names the projects this tool added to the gateway's list (a
+// teardown of their last model there takes them off), and the
+// prerequisites answer says which way to reach a model it was planned for.
+func TestModels_StatusNamesAddedProjectsAndPlannedExposure(t *testing.T) {
+	mc := newModelsCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	setListeners(t, mc, namesList("openshift-ingress", "proj", "by-hand"))
+	st, _ := GetResourcesStatus(mc.c)
+	if got := strings.Join(st.InferenceGateway.AddedProjects, ","); got != "proj" {
+		t.Errorf("added projects: %q", got)
+	}
+	for _, e := range []string{"", exposureDefault, exposureInternal} {
+		p, err := GetPrerequisitesStatusFor(mc.c, e)
+		if err != nil || p.ModelsExposure != e {
+			t.Errorf("planned for %q: %+v %v", e, p, err)
+		}
+	}
+}
+
 // KServe's default gateway is used only when its configuration names it:
 // unreadable or unset, the default route is not offered (and no project is
 // added to the tool's gateway's list for it); the tool's gateway can still

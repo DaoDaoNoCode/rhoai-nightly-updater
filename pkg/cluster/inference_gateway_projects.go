@@ -298,6 +298,14 @@ func listedProjectsState(c *Client, state *types.InferenceGatewayState, gw gatew
 	if !shaped {
 		return
 	}
+	if recorded, err := readGatewayProjects(c); err == nil {
+		for _, p := range recorded {
+			if containsString(listed, p) {
+				state.AddedProjects = append(state.AddedProjects, p)
+			}
+		}
+		sort.Strings(state.AddedProjects)
+	}
 	used := map[string]bool{}
 	for _, ns := range routeNamespaces(models, def, gw) {
 		used[ns] = true

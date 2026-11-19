@@ -701,6 +701,10 @@ type InferenceGatewayState struct {
 	// a new project of that name would be admitted at once.
 	UnusedProjects []string `json:"unusedProjects,omitempty"`
 	GoneProjects   []string `json:"goneProjects,omitempty"`
+	// AddedProjects are the projects on the list that this tool added (its
+	// record): deleting the last model routed through the gateway from one
+	// takes it off the list.
+	AddedProjects []string `json:"addedProjects,omitempty"`
 }
 
 // ModelsStatus is what setting up a model needs, and the models of the
@@ -1148,6 +1152,10 @@ type MaaSTokenRate struct {
 // feature: "pipelines", "mlflow", "models", "playground".
 type PrerequisitesStatus struct {
 	Features map[string]FeaturePrerequisites `json:"features"`
+	// ModelsExposure is the way to reach a model that Models was planned
+	// for (the request's exposure, "" none): the page ignores an answer
+	// for another one.
+	ModelsExposure string `json:"modelsExposure"`
 }
 
 // FeaturePrerequisites is one feature's cluster prerequisites: its

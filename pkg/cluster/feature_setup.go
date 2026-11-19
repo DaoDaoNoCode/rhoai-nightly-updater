@@ -269,7 +269,11 @@ func dscComponentCommand(dsc, key, state string) string {
 
 // componentTitle names a component for people.
 func componentTitle(fc featureComponent, key string) string {
-	return fmt.Sprintf("%s component (%s)", strings.TrimPrefix(fc.feature, "The "), key)
+	name := strings.TrimPrefix(fc.feature, "The ")
+	if strings.Contains(name, "(") {
+		return name // "Model serving (KServe)"
+	}
+	return fmt.Sprintf("%s (%s)", name, key)
 }
 
 // --- the plan --------------------------------------------------------------------------
@@ -427,7 +431,7 @@ func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
 // planKuadrantPart reads the Kuadrant CR; a missing one is created by Set
 // up in Connectivity Link's namespace.
 func planKuadrantPart(c *Client, p *featurePlan) types.MaaSPart {
-	pt := types.MaaSPart{ID: "kuadrant", Title: "Kuadrant CR (Connectivity Link's policies)"}
+	pt := types.MaaSPart{ID: "kuadrant", Title: "Connectivity Link instance (Kuadrant)"}
 	k, err := readKuadrant(c)
 	switch {
 	case err != nil:
@@ -440,7 +444,7 @@ func planKuadrantPart(c *Client, p *featurePlan) types.MaaSPart {
 	case k.found:
 		pt.State, pt.Message = "waiting", "Kuadrant "+k.namespace+"/kuadrant is not Ready yet: "+truncateMessage(firstNonEmpty(k.message, "no message"))
 	default:
-		pt.State, pt.Message = "missing", "Not there. Set up creates it once Connectivity Link serves its API; it starts Authorino, which checks each call's token."
+		pt.State, pt.Message = "missing", "Not created yet. Set up creates it once Connectivity Link serves its API; it starts Authorino, which checks each call's token."
 		pt.Commands = kuadrantCommands(rhclOperator.namespace)
 		p.plan = append(p.plan, fmt.Sprintf("Create the Kuadrant CR %s/kuadrant (as the MaaS docs do); it stays after Clean up, as other features share it", rhclOperator.namespace))
 	}
@@ -541,7 +545,7 @@ func operatorAPIServed(c *Client, op operatorSpec) (bool, error) {
 
 // dependencyPart is KServe's own view of its operators.
 func dependencyPart(p *featurePlan) types.MaaSPart {
-	pt := types.MaaSPart{ID: "dependencies", Title: "KServe's operator check (" + p.fs.dependency + ")"}
+	pt := types.MaaSPart{ID: "dependencies", Title: "KServe's dependency check"}
 	missing := parseMissingDependencies(p.depMsg)
 	var others []string
 	for _, m := range missing {
@@ -559,6 +563,9 @@ func dependencyPart(p *featurePlan) types.MaaSPart {
 	case len(others) > 0:
 		pt.State = "manual"
 		pt.Message = fmt.Sprintf("KServe also reports missing: %s. Whether a model needs it depends on how it is routed, so Set up here does not install it: the MaaS tab's Set up installs Red Hat Connectivity Link. Until then, LLMInferenceServices are refused.", strings.Join(others, ", "))
+	case len(missing) > 0:
+		names := strings.Join(missing, " and ")
+		pt.State, pt.Message = "waiting", fmt.Sprintf("Waits for %s: KServe reports %s. Set up installs %s, then waits until KServe sees %s.", names, verb(len(missing), "it isn't installed", "they aren't installed"), verb(len(missing), "it", "them"), verb(len(missing), "it", "them"))
 	default:
 		pt.State, pt.Message = "waiting", "KServe reports: "+truncateMessage(firstNonEmpty(p.depMsg, "not met"))+". Set up installs what it names, then waits until KServe sees it."
 	}
@@ -671,7 +678,7 @@ func GetPrerequisitesStatus(c *Client) (*types.PrerequisitesStatus, error) {
 // for how its model is reached (featureSetupFor).
 func GetPrerequisitesStatusFor(c *Client, modelsExposure string) (*types.PrerequisitesStatus, error) {
 	r := readClusterForPrerequisites(c)
-	out := &types.PrerequisitesStatus{Features: map[string]types.FeaturePrerequisites{}}
+	out := &types.PrerequisitesStatus{Features: map[string]types.FeaturePrerequisites{}, ModelsExposure: modelsExposure}
 	for _, base := range featureSetups {
 		fs, _ := featureSetupFor(base.id, modelsExposure)
 		out.Features[fs.id] = planFeature(c, fs, r).status()
