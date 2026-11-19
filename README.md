@@ -70,7 +70,7 @@ The tree is read from the installed DataScienceCluster CRD, so it follows whatev
 
 - **MaaS is never removed from here while it is in use.** A change that would stop `aigateway` or `aigateway.modelsAsAService` (setting either to Removed, a reset without the option above, Diagnostics' disable fix, a repair) is refused while any model is published to MaaS, any MaaSSubscription or MaaSAuthPolicy exists, or this tool's MaaS setup is recorded: without MaaS, every published model and every API key stops working. The message names the models and subscriptions. Remove MaaS on the Environment page's MaaS tab (**Clean up MaaS** unpublishes and removes it in order), or keep `aigateway` Managed. When the tool cannot read those, it refuses too.
 
-  <img src="docs/images/components-soft-reset-maas-in-use.png" alt="The same soft reset unchecked: it would remove aigateway and modelsAsAService, so This change is not possible now names the published model dev-project/qwen25-05b-instruct and says to remove MaaS on the MaaS tab or keep aigateway Managed; Reset is disabled" width="640">
+  <img src="docs/images/components-soft-reset-maas-in-use.png" alt="The same soft reset unchecked: it would remove aigateway, so This change is not possible now comes first, names the published model dev-project/qwen25-05b-instruct and says to remove MaaS on the MaaS tab or keep aigateway Managed; What a soft reset would do is collapsed; Reset is disabled" width="640">
 
 Changes are off with the reason when Argo CD or an ACM policy manages the DSC, in the gitops profile, or without cluster-admin.
 
