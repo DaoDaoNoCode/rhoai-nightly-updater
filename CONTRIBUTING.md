@@ -63,7 +63,7 @@ The frontend uses:
 
 - **React 19** with TypeScript 6.0
 - **PatternFly 6.x** for UI components (`@patternfly/react-core`, `@patternfly/react-table`)
-- **React Router 7** (`react-router-dom` ^7.18.4) for client-side routing
+- **React Router 7** (`react-router-dom` ^7.18.6) for client-side routing
 - **Webpack 5** for bundling (configured in `frontend/webpack.config.js`)
 
 #### TypeScript Configuration
