@@ -94,6 +94,8 @@ type olmSubscription struct {
 		LastUpdated  string         `json:"lastUpdated"`
 		Conditions   []k8sCondition `json:"conditions"`
 	} `json:"status"`
+	// argoApp is the Argo CD application managing it (argoTracking.managedBy),
+	// set by readOperatorSubscription.
 	argoApp string
 }
 
@@ -102,10 +104,17 @@ func parseSubscription(raw []byte) (*olmSubscription, error) {
 	if err := json.Unmarshal(raw, &sub); err != nil {
 		return nil, err
 	}
-	var obj map[string]any
-	_ = json.Unmarshal(raw, &obj)
-	sub.argoApp = argoApplicationOf(obj, "Subscription")
 	return &sub, nil
+}
+
+// withArgoManager sets sub.argoApp from its tracking annotation, confirmed
+// with Argo CD.
+func withArgoManager(c *Client, sub *olmSubscription) *olmSubscription {
+	if sub != nil {
+		sub.argoApp = newArgoCheck(c).object(sub.Metadata.Annotations,
+			argoObject{group: argoSubscriptionObject.group, kind: "Subscription", namespace: sub.Metadata.Namespace, name: sub.Metadata.Name}).managedBy()
+	}
+	return sub
 }
 
 // readOperatorSubscription reads Subscription ns/name: by name when it is
@@ -120,7 +129,7 @@ func readOperatorSubscription(c *Client, ns, name string) (*olmSubscription, err
 		}
 		for _, s := range subs {
 			if s.Metadata.Name == name {
-				return s, nil
+				return withArgoManager(c, s), nil
 			}
 		}
 		return nil, nil
@@ -136,7 +145,7 @@ func readOperatorSubscription(c *Client, ns, name string) (*olmSubscription, err
 	if err != nil {
 		return nil, fmt.Errorf("parse Subscription %s/%s: %w", ns, name, err)
 	}
-	return sub, nil
+	return withArgoManager(c, sub), nil
 }
 
 // listSubscriptions lists the Subscriptions of namespace ns, or of every

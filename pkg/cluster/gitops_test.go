@@ -49,6 +49,8 @@ func gitOpsFake(t *testing.T) *fakeOLM {
 	// What OLM installs from this catalog carries the same build identity.
 	f.csvAnnotations = map[string]any{"containerImage": gitOpsOperatorImage, "createdAt": gitOpsBuilt}
 	f.onSubscribe = olmInstalls(gitOpsCSV)
+	// Argo CD runs here, and its application lists both (argocd.go).
+	f.argo = argoManagingAll(argoGitOpsObjects...)
 	return f
 }
 
@@ -693,7 +695,8 @@ func TestDSCChangesRefusedUnderGitOps(t *testing.T) {
 		mockDSCSamples(t, func(*http.Request) (int, string) { return 200, testDSCSample })
 		var mu sync.Mutex
 		patched := false
-		c := dscRepairD3Server(t, `{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"default-dsc","resourceVersion":"42",`+tracked+`},"spec":{"components":{"dashboard":{"managementState":"Managed"}}}}`, &patched, &mu)
+		c := dscRepairD3Server(t, `{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"default-dsc","resourceVersion":"42",`+tracked+`},"spec":{"components":{"dashboard":{"managementState":"Managed"}}}}`, &patched, &mu,
+			argoManagingAll(argoGitOpsObjects...))
 		r, err := RepairDSC(c, "default-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v2", nil, []string{})
 		if err != nil || r.Success || r.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(r.Message, testArgoApp) {
 			t.Fatalf("result = %+v, %v", r, err)
@@ -706,6 +709,7 @@ func TestDSCChangesRefusedUnderGitOps(t *testing.T) {
 	})
 	t.Run("disable-component", func(t *testing.T) {
 		f, c := newFakeAPI(t)
+		argoManagingAll(argoGitOpsObjects...).register(f)
 		serveToggleDSC(f, "v2", `{"metadata":{"name":"default-dsc","uid":"u1","resourceVersion":"7",`+tracked+`},"spec":{"components":{"ray":{"managementState":"Managed"}}}}`, "", "ray")
 		res, err := ApplyFix(c, "disable-component:ray")
 		if err != nil || res.Success || res.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(res.Message, "Set ray to Removed in Git") {
@@ -715,20 +719,51 @@ func TestDSCChangesRefusedUnderGitOps(t *testing.T) {
 	})
 }
 
-// Status names the Argo CD application of each managed object.
+// statusManagersOf reads the Subscription and the catalog as GetStatus does
+// and sets who manages them (gitOpsManagers).
+func statusManagersOf(t *testing.T, c *Client) *types.StatusResponse {
+	t.Helper()
+	sub, err := readSubscription(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs, csMeta, err := readCatalogSource(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := &types.StatusResponse{Subscription: sub.info, CatalogSource: cs}
+	var subMeta *objectMeta
+	if sub.found {
+		subMeta = &sub.meta
+	}
+	gitOpsManagers(c, status, subMeta, csMeta, nil)
+	return status
+}
+
+// Status names the Argo CD application of each managed object, once Argo
+// CD confirms it, and its namespace and sync status.
 func TestStatusReportsArgoCDApplications(t *testing.T) {
 	f := gitOpsFake(t)
 	c := f.client(context.Background())
-	sub, err := readSubscription(c)
-	if err != nil || sub.info.ManagedBy != testArgoApp {
-		t.Fatalf("subscription managedBy = %q, %v", sub.info.ManagedBy, err)
+	s := statusManagersOf(t, c)
+	if s.Subscription.ManagedBy != testArgoApp || s.CatalogSource.ManagedBy != testArgoApp {
+		t.Fatalf("managedBy = %q, %q", s.Subscription.ManagedBy, s.CatalogSource.ManagedBy)
 	}
-	cs, err := getCatalogSource(c)
-	if err != nil || cs.ManagedBy != testArgoApp {
-		t.Fatalf("catalog managedBy = %q, %v", cs.ManagedBy, err)
+	want := types.ArgoCDTracking{Application: testArgoApp, State: types.ArgoCDManaged, Namespace: "openshift-gitops", SyncStatus: "Synced"}
+	if s.Subscription.ArgoCD == nil || *s.Subscription.ArgoCD != want || s.CatalogSource.ArgoCD == nil || *s.CatalogSource.ArgoCD != want {
+		t.Fatalf("argoCD = %+v, %+v", s.Subscription.ArgoCD, s.CatalogSource.ArgoCD)
+	}
+	// One poll asks Argo CD once for both objects of one application.
+	if got := f.argo.requested(); len(got) != 2 {
+		t.Fatalf("Argo CD requests = %v, want discovery and one list", got)
 	}
 	delete(f.catalog, "metadata")
-	if cs, _ := getCatalogSource(c); cs.ManagedBy != "" {
-		t.Fatalf("untracked catalog managedBy = %q", cs.ManagedBy)
+	if s := statusManagersOf(t, c); s.CatalogSource.ManagedBy != "" || s.CatalogSource.ArgoCD != nil {
+		t.Fatalf("untracked catalog: %+v", s.CatalogSource)
+	}
+	// Readers outside the status do not claim a manager from the
+	// annotation alone.
+	if sub, _ := readSubscription(c); sub.info.ManagedBy != "" {
+		t.Fatalf("readSubscription set managedBy %q", sub.info.ManagedBy)
 	}
 }

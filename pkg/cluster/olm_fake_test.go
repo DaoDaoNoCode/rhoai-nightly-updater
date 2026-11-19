@@ -58,6 +58,8 @@ type fakeOLM struct {
 	// topology: Infrastructure cluster's status.controlPlaneTopology, ""
 	// = Infrastructure not readable (403).
 	topology string
+	// argo answers Argo CD's (and ACM's) reads of argocd.go; nil = 404.
+	argo *fakeArgoCD
 
 	requests []fakeRequest
 }
@@ -168,6 +170,9 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
 	f.requests = append(f.requests, fakeRequest{Method: r.Method, Path: p, Query: r.URL.Query(), Body: body})
 	if f.intercept != nil && f.intercept(f, w, r) {
+		return
+	}
+	if f.argo != nil && f.argo.serve(w, r) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

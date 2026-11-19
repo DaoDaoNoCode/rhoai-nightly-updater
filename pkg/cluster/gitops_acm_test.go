@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // acmCatalogMetadata is the nightly CatalogSource's metadata where an ACM
@@ -251,18 +253,23 @@ func TestCatalogImageChangedNamesTheManager(t *testing.T) {
 func TestStatusReportsACMManagedCatalog(t *testing.T) {
 	f := acmFake(t)
 	c := f.client(context.Background())
-	cs, err := getCatalogSource(c)
-	if err != nil || !cs.ManagedByACM || cs.ManagedBy != "" {
-		t.Fatalf("catalog = %+v, %v", cs, err)
+	if cs := statusManagersOf(t, c).CatalogSource; !cs.ManagedByACM || cs.ManagedBy != "" {
+		t.Fatalf("catalog = %+v", cs)
 	}
 	f.catalog["metadata"] = acmCatalogMetadata("kubectl-edit")
-	if cs, _ := getCatalogSource(c); cs.ManagedByACM {
+	if cs := statusManagersOf(t, c).CatalogSource; cs.ManagedByACM {
 		t.Fatalf("another manager counted as ACM: %+v", cs)
 	}
 	meta := acmCatalogMetadata(acmPolicyManager)
 	meta["annotations"] = trackingID("CatalogSource", CatalogNS, CatalogName)
 	f.catalog["metadata"] = meta
-	if cs, _ := getCatalogSource(c); cs.ManagedByACM || cs.ManagedBy != testArgoApp {
+	if cs := statusManagersOf(t, c).CatalogSource; cs.ManagedByACM || cs.ManagedBy != testArgoApp {
 		t.Fatalf("Argo CD must win: %+v", cs)
+	}
+	// A tracking annotation left over (no Argo CD here) does not hide the
+	// policy.
+	f.argo = &fakeArgoCD{}
+	if cs := statusManagersOf(t, c).CatalogSource; !cs.ManagedByACM || cs.ManagedBy != "" || cs.ArgoCD == nil || cs.ArgoCD.State != types.ArgoCDStale {
+		t.Fatalf("stale tracking and an ACM policy: %+v", cs)
 	}
 }

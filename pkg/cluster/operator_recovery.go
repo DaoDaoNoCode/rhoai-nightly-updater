@@ -375,7 +375,8 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 		failures = append(failures, r.reapplySubscription(c)...)
 	}
 
-	status, message := r.restoreMessage(failures, stillDeleting, operatorTouched)
+	gitManaged := r.subscription != nil && argoTrackingOf(c, r.subscription, argoSubscriptionObject.group, "Subscription").managedBy() != ""
+	status, message := r.restoreMessage(failures, stillDeleting, operatorTouched, gitManaged)
 	if result != nil {
 		result.Logs = append(result.Logs, message)
 		result.Message = strings.TrimSpace(result.Message + " " + message)
@@ -459,8 +460,9 @@ func (r *operatorRecovery) reapplySubscription(c *Client) []string {
 	return failures
 }
 
-// restoreMessage is the restore step's status and message.
-func (r *operatorRecovery) restoreMessage(failures, stillDeleting []string, operatorTouched bool) (string, string) {
+// restoreMessage is the restore step's status and message. gitManaged: Argo
+// CD manages the restored Subscription (argoTracking.managedBy).
+func (r *operatorRecovery) restoreMessage(failures, stillDeleting []string, operatorTouched, gitManaged bool) (string, string) {
 	var message string
 	status := "success"
 	switch {
@@ -486,7 +488,7 @@ func (r *operatorRecovery) restoreMessage(failures, stillDeleting []string, oper
 		message = "The previous catalog and Subscription were restored; the installed operator was not changed."
 	case r.subscription == nil:
 		message = "There was no previous Subscription, so the Subscription and CSV created by this attempt were removed and the catalog was restored to its previous state."
-	case argoApplicationOf(r.subscription, "Subscription") != "":
+	case gitManaged:
 		// Git's catalog serves one build: the restore makes OLM install it
 		// again, which is the build that just failed.
 		message = "The Subscription was recreated with Git's settings; OLM installs the build the catalog serves again. To go back to another build, change the catalog image in Git."
