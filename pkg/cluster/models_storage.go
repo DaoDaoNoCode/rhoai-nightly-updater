@@ -100,7 +100,7 @@ func quotaWarning(c *Client, project string, entry catalogModel, ephemeral bool)
 	if len(short) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("Project '%s' has no room in its quota for the model (%s). KServe cannot create the model's pod until the quota is raised or other workloads in the project stop; the setup still runs.", project, strings.Join(short, "; "))
+	return fmt.Sprintf("Project %s has no room in its quota for the model (%s). KServe cannot create the model's pod until the quota is raised or other workloads in the project stop; the setup still runs.", project, strings.Join(short, "; "))
 }
 
 // quantityWords prints a quantity left: memory and storage in Gi, else a

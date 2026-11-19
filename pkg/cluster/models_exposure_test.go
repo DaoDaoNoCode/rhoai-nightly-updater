@@ -87,7 +87,7 @@ func TestModelExposures_TheToolsGatewayIsTheDefault(t *testing.T) {
 	}
 	ex := exposures(t, mc, "")
 	a := optionByKey(t, ex, exposureDefault)
-	if ex.Default != exposureDefault || !a.Available || len(a.Changes) != 1 || !strings.Contains(a.Changes[0], "'proj' is added") || a.Address != "https://inference.apps.example.com/proj/qwen25-05b-instruct" {
+	if ex.Default != exposureDefault || !a.Available || len(a.Changes) != 1 || !strings.Contains(a.Changes[0], "proj is added") || a.Address != "https://inference.apps.example.com/proj/qwen25-05b-instruct" {
 		t.Fatalf("got %+v / %+v", ex, a)
 	}
 }
@@ -113,7 +113,7 @@ func TestModelExposures_OtherGatewaysAreFiltered(t *testing.T) {
 	if !mine.Available || mine.GatewayRef != "team-gw/mine" || ex.Default != "gateway:team-gw/mine" {
 		t.Errorf("mine: %+v default %s", mine, ex.Default)
 	}
-	if closed := optionByKey(t, ex, "gateway:team-gw/closed"); closed.Available || !strings.Contains(closed.Reason, "does not let routes from project 'proj' attach") {
+	if closed := optionByKey(t, ex, "gateway:team-gw/closed"); closed.Available || !strings.Contains(closed.Reason, "does not let routes from project proj attach") {
 		t.Errorf("closed: %+v", closed)
 	}
 	for _, k := range []string{"gateway:openshift-ingress/maas-default-gateway", "gateway:openshift-ingress/data-science-gateway", "gateway:openshift-ingress/owned"} {

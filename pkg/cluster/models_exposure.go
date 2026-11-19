@@ -153,7 +153,7 @@ func internalAddress(project, model string) string {
 // foreignGatewayAdmitReason says that someone else's gateway does not let
 // project's routes attach, and the step its owner takes.
 func foreignGatewayAdmitReason(g gatewayObject, project string) string {
-	return fmt.Sprintf("Gateway %s, which this tool did not create, does not let routes from project '%s' attach (its listeners' allowedRoutes), and this tool does not change it. Its owner (a cluster admin) adds '%s'; for a gateway that lists projects by name, as RHOAI documents it, that is the values array of allowedRoutes.namespaces.selector (%s In [...]).",
+	return fmt.Sprintf("Gateway %s, which this tool did not create, does not let routes from project %s attach (its listeners' allowedRoutes), and this tool does not change it. Its owner (a cluster admin) adds %s; for a gateway that lists projects by name, as RHOAI documents it, that is the values array of allowedRoutes.namespaces.selector (%s In [...]).",
 		gatewayKey(g.Metadata.Namespace, g.Metadata.Name), project, project, namespaceNameLabel)
 }
 
@@ -274,7 +274,7 @@ func (r exposureReads) gatewayOption(opt *types.ModelExposureOption, plan *expos
 	if ns == inferenceGatewayNamespace && name == inferenceGatewayName && gatewayOwned(g.Metadata) {
 		plan.toolGateway = true
 		if g.admits(r.project, r.labels) != "yes" {
-			opt.Changes = append(opt.Changes, fmt.Sprintf("Gateway %s (this tool's): '%s' is added to the projects it allows. Anyone who can edit '%s' can then attach routes to this shared gateway.", gatewayKey(ns, name), r.project, r.project))
+			opt.Changes = append(opt.Changes, fmt.Sprintf("Gateway %s (this tool's): %s is added to the projects it allows. Anyone who can edit %s can then attach routes to this shared gateway.", gatewayKey(ns, name), r.project, r.project))
 		}
 	} else {
 		switch g.admits(r.project, r.labels) {
@@ -282,7 +282,7 @@ func (r exposureReads) gatewayOption(opt *types.ModelExposureOption, plan *expos
 			opt.Reason = foreignGatewayAdmitReason(g, r.project)
 			return
 		case "unknown":
-			opt.Warning = fmt.Sprintf("Gateway %s chooses the projects it admits with expressions this tool does not evaluate: if the model does not become ready, check that it admits '%s'.", gatewayKey(ns, name), r.project)
+			opt.Warning = fmt.Sprintf("Gateway %s chooses the projects it admits with expressions this tool does not evaluate: if the model does not become ready, check that it admits %s.", gatewayKey(ns, name), r.project)
 		}
 	}
 	if g.Metadata.Labels[odhManagedLabel] == "false" {
@@ -349,8 +349,8 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 	default:
 		b.Available = true
 		b.Changes = []string{
-			fmt.Sprintf("Gateway %s: admits routes from '%s'.", gatewayKey(inferenceGatewayNamespace, maasGatewayName), r.project),
-			fmt.Sprintf("Published to MaaS: MaaSModelRef %s in '%s', and this tool's subscription and access policy list the model.", r.entry.Name, r.project),
+			fmt.Sprintf("Gateway %s: admits routes from %s.", gatewayKey(inferenceGatewayNamespace, maasGatewayName), r.project),
+			fmt.Sprintf("Published to MaaS: MaaSModelRef %s in %s, and this tool's subscription and access policy list the model.", r.entry.Name, r.project),
 		}
 		if r.maasURL != "" {
 			b.Address = r.maasURL
@@ -406,7 +406,7 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 	switch {
 	case a.Available:
 		out.Default = a.Key
-		out.DefaultReason = fmt.Sprintf("Gateway %s is KServe's default and can carry a model from '%s': the model is reached the way the dashboard deploys models.", defKey, r.project)
+		out.DefaultReason = fmt.Sprintf("Gateway %s is KServe's default and can carry a model from %s: the model is reached the way the dashboard deploys models.", defKey, r.project)
 	case b.Available:
 		out.Default = b.Key
 		out.DefaultReason = "The MaaS platform is ready and the cluster's default inference gateway cannot be used: the model is reached through MaaS, with no inference gateway."
@@ -414,7 +414,7 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 		for _, o := range others {
 			if o.Available {
 				out.Default = o.Key
-				out.DefaultReason = fmt.Sprintf("The cluster's default inference gateway cannot be used, and gateway %s can carry a model from '%s'.", o.GatewayRef, r.project)
+				out.DefaultReason = fmt.Sprintf("The cluster's default inference gateway cannot be used, and gateway %s can carry a model from %s.", o.GatewayRef, r.project)
 				break
 			}
 		}
@@ -519,7 +519,7 @@ func (m *modelsRun) planModelExposure(req types.ModelsRequest, labels map[string
 			curKey = exposureKey(cur, curGW)
 		}
 		if req.Exposure != "" && want != curKey {
-			return exposurePlan{}, fmt.Sprintf("%s in '%s' is already set up to be reached %s. To reach it another way, delete it and set it up again with that choice. Nothing was changed.", entry.Name, req.Project, exposureWords(exposurePlanOf(cur, curGW))), "validation"
+			return exposurePlan{}, fmt.Sprintf("%s in %s is already set up to be reached %s. To reach it another way, delete it and set it up again with that choice. Nothing was changed.", entry.Name, req.Project, exposureWords(exposurePlanOf(cur, curGW))), "validation"
 		}
 		switch cur {
 		case exposureMaaS, exposureGateway:
@@ -543,7 +543,7 @@ func (m *modelsRun) planModelExposure(req types.ModelsRequest, labels map[string
 		if want == "" {
 			why := strings.TrimSpace(out.Options[0].Reason + " " + out.RecommendGatewayReason)
 			if why == "" {
-				why = "No gateway can carry a model from '" + req.Project + "' now."
+				why = "No gateway can carry a model from " + req.Project + " now."
 			}
 			return exposurePlan{}, why + " Or choose 'Only inside the cluster'. Nothing was changed.", "prerequisites"
 		}

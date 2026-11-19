@@ -45,6 +45,9 @@ type resourceFake struct {
 	// can change the stored objects (for example to inject a foreign object
 	// between the tool's check and its write).
 	beforeServe func(method, path string)
+	// beforeRequest is beforeServe with the whole request (its query tells
+	// a server-side dry run from the write).
+	beforeRequest func(r *http.Request)
 	// failDryRun maps "METHOD /path" to an HTTP status to return for a
 	// server-side dry run (?dryRun=All) of that request.
 	failDryRun map[string]int
@@ -249,6 +252,9 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	if f.beforeServe != nil {
 		f.beforeServe(r.Method, r.URL.Path)
+	}
+	if f.beforeRequest != nil {
+		f.beforeRequest(r)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

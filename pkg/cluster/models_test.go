@@ -214,7 +214,7 @@ func TestModelsSetup_RefusesAGatewayThatDoesNotAdmitTheProject(t *testing.T) {
 	mc := newModelsCluster(t)
 	mc.f.putJSON(testGatewayPath, `{"spec":{"listeners":[{"name":"https","allowedRoutes":{"namespaces":{"from":"Selector","selector":{"matchLabels":{"maas":"true"}}}}}]}}`)
 	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj"})
-	if res.Success || res.ErrorCode != "prerequisites" || !strings.Contains(res.Message, "does not let routes from project 'proj' attach") {
+	if res.Success || res.ErrorCode != "prerequisites" || !strings.Contains(res.Message, "does not let routes from project proj attach") {
 		t.Fatalf("got %+v", res)
 	}
 	if m := mc.f.mutations(); len(m) != 0 {

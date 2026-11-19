@@ -643,10 +643,10 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 func projectNamespace(c *Client, project string) (map[string]string, string, string) {
 	body, _, err := c.get("/api/v1/namespaces/" + project)
 	if IsK8sError(err, 404) {
-		return nil, fmt.Sprintf("Project '%s' does not exist. Choose a data science project, or create one in the dashboard.", project), "validation"
+		return nil, fmt.Sprintf("Project %s does not exist. Choose a data science project, or create one in the dashboard.", project), "validation"
 	}
 	if err != nil {
-		return nil, fmt.Sprintf("Cannot read project '%s': %v.", project, err), errorCodeFromK8sErr(err)
+		return nil, fmt.Sprintf("Cannot read project %s: %v.", project, err), errorCodeFromK8sErr(err)
 	}
 	var ns struct {
 		Metadata objectMeta `json:"metadata"`
@@ -655,13 +655,13 @@ func projectNamespace(c *Client, project string) (map[string]string, string, str
 		} `json:"status"`
 	}
 	if err := json.Unmarshal(body, &ns); err != nil {
-		return nil, fmt.Sprintf("Cannot parse project '%s': %v.", project, err), "internal"
+		return nil, fmt.Sprintf("Cannot parse project %s: %v.", project, err), "internal"
 	}
 	if ns.Metadata.terminating() || ns.Status.Phase == "Terminating" {
-		return nil, fmt.Sprintf("Project '%s' is being deleted.", project), "terminating"
+		return nil, fmt.Sprintf("Project %s is being deleted.", project), "terminating"
 	}
 	if ns.Metadata.Labels["opendatahub.io/dashboard"] != "true" {
-		return nil, fmt.Sprintf("Namespace '%s' is not a data science project (it lacks the label opendatahub.io/dashboard=true), so the dashboard would not show a model there. Choose a data science project.", project), "validation"
+		return nil, fmt.Sprintf("Namespace %s is not a data science project (it lacks the label opendatahub.io/dashboard=true), so the dashboard would not show a model there. Choose a data science project.", project), "validation"
 	}
 	return ns.Metadata.Labels, "", ""
 }
@@ -780,14 +780,27 @@ func RunModels(c *Client, req types.ModelsRequest, onStep func(UpdateStepEvent))
 	switch req.Action {
 	case "teardown":
 		return m.teardown(req)
-	case "allow":
-		return m.allow(req.Project)
 	case "check":
 		return m.check(req)
 	case "disallow":
 		return m.disallow(req.Project)
 	}
-	return m.setup(req)
+	var res *types.OperationResponse
+	var err error
+	if req.Action == "allow" {
+		res, err = m.allow(req.Project)
+	} else {
+		res, err = m.setup(req)
+	}
+	// After a change that succeeded (the teardown does it itself): projects
+	// this tool added to the gateway's list that were deleted since go off
+	// it. Never before or after a refusal, which says nothing was changed.
+	if err == nil && res != nil && res.Success {
+		if note := releaseGoneGatewayProjects(c); note != "" {
+			res.Message = strings.TrimSpace(res.Message + note)
+		}
+	}
+	return res, err
 }
 
 // check is "Check again": the "Can it be called?" check of the tool's
@@ -795,10 +808,10 @@ func RunModels(c *Client, req types.ModelsRequest, onStep func(UpdateStepEvent))
 func (m *modelsRun) check(req types.ModelsRequest) (*types.OperationResponse, error) {
 	c := m.c
 	entry, _ := catalogEntry(req.Model)
-	m.step("callable", "running", fmt.Sprintf("Calling %s in '%s' once...", entry.Name, req.Project))
+	m.step("callable", "running", fmt.Sprintf("Calling %s in %s once...", entry.Name, req.Project))
 	model, found, err := readToolModel(c, req.Project, entry.Name)
 	if err != nil {
-		return m.fail("callable", fmt.Sprintf("Cannot read %s in '%s': %v.", entry.Name, req.Project, err), errorCodeFromK8sErr(err), "model read failed")
+		return m.fail("callable", fmt.Sprintf("Cannot read %s in %s: %v.", entry.Name, req.Project, err), errorCodeFromK8sErr(err), "model read failed")
 	}
 	rec, err := readModelsRecord(c)
 	if err != nil {
@@ -806,12 +819,12 @@ func (m *modelsRun) check(req types.ModelsRequest) (*types.OperationResponse, er
 	}
 	switch {
 	case !found:
-		return m.fail("callable", fmt.Sprintf("Project '%s' has no %s.", req.Project, entry.Name), "validation", "no model")
+		return m.fail("callable", fmt.Sprintf("Project %s has no %s.", req.Project, entry.Name), "validation", "no model")
 	case !rec.owns(model.Metadata):
-		return m.fail("callable", fmt.Sprintf("%s in '%s' was not created by this tool, so this tool has no token of the model's own to call it with.", entry.Name, req.Project), "not_managed", "model foreign")
+		return m.fail("callable", fmt.Sprintf("%s in %s was not created by this tool, so this tool has no token of the model's own to call it with.", entry.Name, req.Project), "not_managed", "model foreign")
 	}
 	if cond, ok := findCondition(model.Status.Conditions, "Ready"); !ok || cond.Status != "True" {
-		return m.fail("callable", fmt.Sprintf("%s in '%s' is not ready yet; check once it is.", entry.Name, req.Project), "not_ready", "model not ready")
+		return m.fail("callable", fmt.Sprintf("%s in %s is not ready yet; check once it is.", entry.Name, req.Project), "not_ready", "model not ready")
 	}
 	return m.callable(req.Project, entry.Name, rec)
 }
@@ -838,7 +851,7 @@ func (m *modelsRun) callable(project, name string, rec modelsRecord) (*types.Ope
 // never changed: the refusal gives RHOAI's documented step.
 func (m *modelsRun) allow(project string) (*types.OperationResponse, error) {
 	c := m.c
-	m.step("check", "running", fmt.Sprintf("Checking the inference gateway and project '%s'...", project))
+	m.step("check", "running", fmt.Sprintf("Checking the inference gateway and project %s...", project))
 	if _, msg, code := projectNamespace(c, project); msg != "" {
 		return m.fail("check", msg+" Nothing was changed.", code, "project check failed")
 	}
@@ -857,8 +870,8 @@ func (m *modelsRun) allow(project string) (*types.OperationResponse, error) {
 	}
 	if plan == nil {
 		m.step("check", "success", "Checked.")
-		m.step("gateway", "success", fmt.Sprintf("The inference gateway already allows '%s'.", project))
-		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("The inference gateway already allows '%s'.", project), Logs: m.logs}, nil
+		m.step("gateway", "success", fmt.Sprintf("The inference gateway already allows %s.", project))
+		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("The inference gateway already allows %s.", project), Logs: m.logs}, nil
 	}
 	if plan.foreign {
 		return m.fail("check", foreignGatewayRefusal(project), "not_managed", "foreign gateway")
@@ -867,7 +880,7 @@ func (m *modelsRun) allow(project string) (*types.OperationResponse, error) {
 		return m.fail("check", msg, code, "gateway dry run failed")
 	}
 	m.step("check", "success", "The gateway is this tool's; the project exists.")
-	m.step("gateway", "running", fmt.Sprintf("Adding '%s' to the projects the inference gateway allows...", project))
+	m.step("gateway", "running", fmt.Sprintf("Adding %s to the projects the inference gateway allows...", project))
 	if err := recordGatewayProject(c, project); err != nil {
 		return m.fail("gateway", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
 	}
@@ -875,7 +888,7 @@ func (m *modelsRun) allow(project string) (*types.OperationResponse, error) {
 	if msg != "" {
 		return m.fail("gateway", msg, code, "gateway list failed")
 	}
-	done := fmt.Sprintf("The inference gateway now allows '%s'; models there attach to it. Projects it allows: %s.", project, strings.Join(written.names, ", "))
+	done := fmt.Sprintf("The inference gateway now allows %s; models there attach to it. Projects it allows: %s.", project, strings.Join(written.names, ", "))
 	m.step("gateway", "success", done)
 	slog.Info("models allow", "project", project, "user", getUser(c))
 	recordModelsActivity(c, m.activity, m.target, true)
@@ -886,7 +899,7 @@ func (m *modelsRun) teardown(req types.ModelsRequest) (*types.OperationResponse,
 	var done []string
 	if req.Project != "" {
 		entry, _ := catalogEntry(req.Model)
-		m.step("model", "running", fmt.Sprintf("Deleting %s in '%s'...", entry.Name, req.Project))
+		m.step("model", "running", fmt.Sprintf("Deleting %s in %s...", entry.Name, req.Project))
 		res, _ := TeardownModels(m.c, req.Project, entry.Name)
 		m.logs = append(m.logs, res.Logs...)
 		if !res.Success {
@@ -1047,7 +1060,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 
 	if mp != nil {
 		if allow != nil {
-			m.step("model", "running", fmt.Sprintf("Adding '%s' to the projects the inference gateway allows...", mp.project))
+			m.step("model", "running", fmt.Sprintf("Adding %s to the projects the inference gateway allows...", mp.project))
 			if err := recordGatewayProject(c, mp.project); err != nil {
 				return m.fail("model", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
 			}
@@ -1055,7 +1068,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 				return m.fail("model", msg, code, "gateway list failed")
 			}
 		}
-		m.step("model", "running", fmt.Sprintf("Creating %s in '%s' (%s)...", mp.entry.DisplayName, mp.project, mp.image.describe()))
+		m.step("model", "running", fmt.Sprintf("Creating %s in %s (%s)...", mp.entry.DisplayName, mp.project, mp.image.describe()))
 		if msg, code := m.applyModel(mp, false); msg != "" {
 			return m.fail("model", msg, code, "model apply failed")
 		}
@@ -1064,7 +1077,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 		}
 		listed := ""
 		if allow != nil {
-			listed = fmt.Sprintf(" '%s' was added to the projects the inference gateway allows.", mp.project)
+			listed = fmt.Sprintf(" %s was added to the projects the inference gateway allows.", mp.project)
 		}
 		m.step("model", "success", fmt.Sprintf("LLMInferenceService %s/%s applied, on preset %s with %s. %s.%s%s", mp.project, mp.entry.Name, mp.preset, mp.image.describe(), exposureWords(mp.exp), tokenWords(mp.project, mp.entry.Name, mp.token), listed))
 		m.step("model-ready", "running", "Waiting for the model to start (typically 3 to 5 minutes the first time)...")
@@ -1159,10 +1172,10 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 		return nil, err.Error() + " Nothing was changed.", errorCodeFromK8sErr(err)
 	}
 	if found && !rec.owns(existing.Metadata) {
-		return nil, fmt.Sprintf("Project '%s' already has an LLMInferenceService named %s that this tool did not create. It was left unchanged.", req.Project, entry.Name), "not_managed"
+		return nil, fmt.Sprintf("Project %s already has an LLMInferenceService named %s that this tool did not create. It was left unchanged.", req.Project, entry.Name), "not_managed"
 	}
 	if found && existing.Metadata.terminating() {
-		return nil, fmt.Sprintf("The model %s in '%s' is still being deleted. Wait until it is gone, then set it up again.", entry.Name, req.Project), "terminating"
+		return nil, fmt.Sprintf("The model %s in %s is still being deleted. Wait until it is gone, then set it up again.", entry.Name, req.Project), "terminating"
 	}
 	exp, msg, code := m.planModelExposure(req, labels, entry, gw, existing, found)
 	if msg != "" {
@@ -1190,7 +1203,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	published := false
 	if found {
 		if published, err = MaaSPublishedIn(c, req.Project, entry.Name); err != nil {
-			return nil, fmt.Sprintf("Cannot check whether %s in '%s' is published to MaaS: %v. Nothing was changed.", entry.Name, req.Project, err), errorCodeFromK8sErr(err)
+			return nil, fmt.Sprintf("Cannot check whether %s in %s is published to MaaS: %v. Nothing was changed.", entry.Name, req.Project, err), errorCodeFromK8sErr(err)
 		}
 	}
 	ephemeral := modelVolumeIsEmptyDir(c)
@@ -1295,9 +1308,9 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 	// and access entries would point at nothing.
 	for _, entry := range entries {
 		if published, err := MaaSPublishedIn(c, project, entry.Name); err != nil {
-			return fail(fmt.Sprintf("Cannot check whether %s in '%s' is published to MaaS; nothing was deleted: %v.", entry.Name, project, err), errorCodeFromK8sErr(err), "maas check failed")
+			return fail(fmt.Sprintf("Cannot check whether %s in %s is published to MaaS; nothing was deleted: %v.", entry.Name, project, err), errorCodeFromK8sErr(err), "maas check failed")
 		} else if published {
-			return fail(fmt.Sprintf("%s in '%s' is published to Models as a Service. Unpublish it on the MaaS tab first; nothing was deleted.", entry.Name, project), "in_use", "published to maas")
+			return fail(fmt.Sprintf("%s in %s is published to Models as a Service. Unpublish it on the MaaS tab first; nothing was deleted.", entry.Name, project), "in_use", "published to maas")
 		}
 	}
 	rec, err := readModelsRecord(c)
@@ -1353,7 +1366,7 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 		logs = append(logs, fmt.Sprintf("OK: LLMInferenceService %s/%s deleted", project, entry.Name))
 	}
 	if len(deleted) == 0 && len(kept) > 0 {
-		return fail(fmt.Sprintf("The model %s in '%s' was not created by this tool, so it was not deleted.", strings.Join(kept, ", "), project), "not_managed", "not managed")
+		return fail(fmt.Sprintf("The model %s in %s was not created by this tool, so it was not deleted.", strings.Join(kept, ", "), project), "not_managed", "not managed")
 	}
 	recordModelsActivity(c, "teardown-model", detail, true)
 	if len(deleted) == 0 {
@@ -1361,12 +1374,13 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 		if len(names) > 0 {
 			what = "No " + strings.Join(names, ", ") + " of this tool"
 		}
-		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("%s in '%s'; nothing to delete.", what, project), Logs: logs}, nil
+		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("%s in %s; nothing to delete.%s", what, project, releaseGoneGatewayProjects(c)), Logs: logs}, nil
 	}
 	// The project's last model on this tool's gateway: a project this tool
-	// added goes off the gateway's list (inference_gateway_projects.go).
-	note := releaseGatewayProject(c, project)
-	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Model %s deleted from '%s'; KServe removed its Deployment, Service and route. The project stays.%s", strings.Join(deleted, ", "), project, note), Logs: logs}, nil
+	// added goes off the gateway's list (inference_gateway_projects.go);
+	// so do projects it added that were deleted since.
+	note := releaseGatewayProject(c, project) + releaseGoneGatewayProjects(c)
+	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Model %s deleted from %s; KServe removed its Deployment, Service and route. The project stays.%s", strings.Join(deleted, ", "), project, note), Logs: logs}, nil
 }
 
 // clockText is a duration as m:ss.

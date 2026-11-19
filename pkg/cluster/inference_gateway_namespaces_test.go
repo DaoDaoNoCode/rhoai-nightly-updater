@@ -197,7 +197,7 @@ func TestModelsSetup_GatewayEditedMeanwhileKeepsTheOtherEdit(t *testing.T) {
 	// The edit lands after the check read the gateway, as the write starts.
 	edited := false
 	res, err := RunModels(mc.c, types.ModelsRequest{Action: "setup", Project: "team"}, func(e UpdateStepEvent) {
-		if e.Step == "model" && strings.HasPrefix(e.Message, "Adding 'team'") && !edited {
+		if e.Step == "model" && strings.HasPrefix(e.Message, "Adding team") && !edited {
 			edited = true
 			setListeners(t, mc, namesList("openshift-ingress", "proj", "late"))
 		}
@@ -359,7 +359,7 @@ func TestModelsTeardown_TakesARecordedProjectOffTheGateway(t *testing.T) {
 		t.Fatalf("record: %v", rec)
 	}
 	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "teardown", Project: "proj"})
-	if !res.Success || !strings.Contains(res.Message, "'proj' was taken off the projects the inference gateway allows") {
+	if !res.Success || !strings.Contains(res.Message, "proj was taken off the projects the inference gateway allows") {
 		t.Fatalf("teardown: %+v", res)
 	}
 	wantAllowed(t, mc, "openshift-ingress")

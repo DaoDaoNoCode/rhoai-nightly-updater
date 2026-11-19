@@ -281,7 +281,7 @@ func planModelToken(c *Client, project, model, modelUID, secretUID string) (toke
 }
 
 func foreignTokenRefusal(kind, project, model string) string {
-	return fmt.Sprintf("Project '%s' already has a %s %s that this tool did not make for this model. The model's token authentication uses that name (as the dashboard names it), so nothing was changed; delete it, or set the model up in another project.", project, kind, tokenObjectName(kind, model))
+	return fmt.Sprintf("Project %s already has a %s %s that this tool did not make for this model. The model's token authentication uses that name (as the dashboard names it), so nothing was changed; delete it, or set the model up in another project.", project, kind, tokenObjectName(kind, model))
 }
 
 // applyModelToken makes the missing token objects, owned by the model
@@ -378,5 +378,5 @@ func tokenWords(project, model string, plan tokenPlan) string {
 	if len(made) == 0 {
 		return ""
 	}
-	return fmt.Sprintf(" Token authentication as the dashboard makes it: %s in '%s', owned by the model.", strings.Join(made, ", "), project)
+	return fmt.Sprintf(" Token authentication as the dashboard makes it: %s in %s, owned by the model.", strings.Join(made, ", "), project)
 }

@@ -836,7 +836,7 @@ func notAllowedModels(c *Client, models []llmisvcObject, def kserveGateway, gw g
 // foreignGatewayRefusal says that someone else's gateway does not let
 // project's routes attach, and RHOAI's documented step.
 func foreignGatewayRefusal(project string) string {
-	return fmt.Sprintf("Gateway %s/%s, which this tool did not create, does not let routes from project '%s' attach (its listeners' allowedRoutes), and this tool does not change it. As RHOAI documents it, a cluster admin adds '%s' to the projects the Gateway's listeners allow: the values array of allowedRoutes.namespaces.selector (%s In [...]). Nothing was changed.", inferenceGatewayNamespace, inferenceGatewayName, project, project, namespaceNameLabel)
+	return fmt.Sprintf("Gateway %s/%s, which this tool did not create, does not let routes from project %s attach (its listeners' allowedRoutes), and this tool does not change it. As RHOAI documents it, a cluster admin adds %s to the projects the Gateway's listeners allow: the values array of allowedRoutes.namespaces.selector (%s In [...]). Nothing was changed.", inferenceGatewayNamespace, inferenceGatewayName, project, project, namespaceNameLabel)
 }
 
 // getInferenceGatewayStatus reports the inference gateway. models are the
@@ -1043,6 +1043,9 @@ func planInferenceGateway(c *Client, add []string) (*gatewayPlan, string, string
 
 // planInferenceGatewayList is planInferenceGateway that also takes the
 // namespaces in remove off the list (the gateway's own namespace stays).
+// A namespace in remove where a model (anyone's) routes through the
+// gateway, or whose models cannot be checked, refuses the plan: every
+// plan checks it, so a write planned again after a conflict does too.
 func planInferenceGatewayList(c *Client, add, remove []string) (*gatewayPlan, string, string) {
 	gw, found, err := readInferenceGateway(c)
 	if err != nil {
@@ -1053,6 +1056,18 @@ func planInferenceGatewayList(c *Client, add, remove []string) (*gatewayPlan, st
 	}
 	if found && gw.Metadata.terminating() {
 		return nil, fmt.Sprintf("Gateway %s/%s is still being deleted. Wait until it is gone, then set it up again.", inferenceGatewayNamespace, inferenceGatewayName), "terminating"
+	}
+	for _, project := range remove {
+		if !found || project == inferenceGatewayNamespace {
+			continue
+		}
+		users, err := gatewayRoutedIn(c, gw, project)
+		if err != nil {
+			return nil, fmt.Sprintf("Cannot check which models in %s use the inference gateway, so it stays on its list: %v.%s", project, err, templateHint(err)), errorCodeFromK8sErr(err)
+		}
+		if len(users) > 0 {
+			return nil, fmt.Sprintf("%s stays on the inference gateway's list: %s %s through it.", project, strings.Join(users, ", "), verb(len(users), "routes", "route")), "in_use"
+		}
 	}
 	plan := &gatewayPlan{current: map[string]objectMeta{}, found: map[string]bool{}, gateway: gw, add: add, remove: remove}
 	listed, shaped := gw.listedNamespaces()
