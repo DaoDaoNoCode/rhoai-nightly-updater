@@ -16,8 +16,6 @@ import {
   Form,
   FormAlert,
   FormGroup,
-  HelperText,
-  HelperTextItem,
   MenuToggle,
   Modal,
   ModalBody,
@@ -40,6 +38,7 @@ import { useDashboardOverride, useMutationBlocker } from "../state/AppInfo";
 import { STEP_SETS } from "../operationSteps";
 import { compareTagToInstalled, compareVersions, parseImageRef, shortDigest } from "../build";
 import { TooltipButton } from "./TooltipButton";
+import { FieldHelperText } from "./FormFields";
 import { StatusLabel, TagLabel } from "./StatusLabel";
 import { StepsPreview } from "./StepsPreview";
 import { REVERT_DASHBOARD_EXPLANATION, describeDashboardSession, type OperatorRequest, type ReinstallTargetType } from "./OperatorActions";
@@ -239,13 +238,11 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
                     validated={customImage.trim() && !customImageValid ? "error" : "default"}
                     aria-describedby="reinstall-custom-image-help"
                   />
-                  <HelperText id="reinstall-custom-image-help">
-                    <HelperTextItem variant={customImage.trim() && !customImageValid ? "error" : "default"}>
-                      {customImage.trim() && !customImageValid
-                        ? "Only quay.io/rhoai/rhoai-fbc-fragment images, with a tag, a full sha256 digest, or both."
-                        : "The digest is used exactly, even if its tag now points to a newer build."}
-                    </HelperTextItem>
-                  </HelperText>
+                  <FieldHelperText id="reinstall-custom-image-help" variant={customImage.trim() && !customImageValid ? "error" : "default"}>
+                    {customImage.trim() && !customImageValid
+                      ? "Only quay.io/rhoai/rhoai-fbc-fragment images, with a tag, a full sha256 digest, or both."
+                      : "The digest is used exactly, even if its tag now points to a newer build."}
+                  </FieldHelperText>
                 </FormGroup>
               ) : (
                 <FormGroup label="Nightly build" fieldId="reinstall-nightly-image">
@@ -290,15 +287,13 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
                     </SelectList>
                   </Select>
                   {selectedTag && DIRECTION_LABELS[direction] && (
-                    <HelperText>
-                      <HelperTextItem>
-                        {direction === "downgrade"
-                          ? `Older release line than the installed ${installedVersion}.`
-                          : direction === "same-line"
-                            ? `Same release line as the installed ${installedVersion}; the exact version is checked before anything changes.`
-                            : `Newer than the installed ${installedVersion}.`}
-                      </HelperTextItem>
-                    </HelperText>
+                    <FieldHelperText>
+                      {direction === "downgrade"
+                        ? `Older release line than the installed ${installedVersion}.`
+                        : direction === "same-line"
+                          ? `Same release line as the installed ${installedVersion}; the exact version is checked before anything changes.`
+                          : `Newer than the installed ${installedVersion}.`}
+                    </FieldHelperText>
                   )}
                 </FormGroup>
               )}
@@ -312,11 +307,9 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
                   validated={channelValid ? "default" : "error"}
                   aria-describedby="reinstall-channel-help"
                 />
-                <HelperText id="reinstall-channel-help">
-                  <HelperTextItem variant={channelValid ? "default" : "error"}>
-                    {channelValid ? "Optional. Only set it if the detected channel is wrong." : "Letters, digits, '.', '_' and '-' only."}
-                  </HelperTextItem>
-                </HelperText>
+                <FieldHelperText id="reinstall-channel-help" variant={channelValid ? "default" : "error"}>
+                  {channelValid ? "Optional. Only set it if the detected channel is wrong." : "Letters, digits, '.', '_' and '-' only."}
+                </FieldHelperText>
               </FormGroup>
             </>
           )}

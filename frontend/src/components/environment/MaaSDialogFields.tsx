@@ -32,12 +32,9 @@ import {
   type AudienceForm, type DatabaseForm, type LimitForm, type WindowUnit, DATABASE_CHOICES, LIMIT_PRESETS, MAX_RATES,
   audienceProblem, audienceRequest, connectionUrlProblem, groupNameProblem, limitSummary, MAX_NAMES, openShiftGroupName, rateRowProblem,
 } from "./maasForms";
+import { FieldHelperText, NestedFields } from "../FormFields";
 
-const Problem: React.FC<{ id: string; text: string | null }> = ({ id, text }) => text ? (
-  <FormHelperText>
-    <HelperText id={id}><HelperTextItem variant="error">{text}</HelperTextItem></HelperText>
-  </FormHelperText>
-) : null;
+const Problem: React.FC<{ id: string; text: string | null }> = ({ id, text }) => text ? <FieldHelperText id={id} variant="error">{text}</FieldHelperText> : null;
 
 /**
  * Where MaaS keeps its API keys: the three options with their trade-offs,
@@ -68,28 +65,28 @@ export const DatabaseChoice: React.FC<{ db: MaaSDatabase; value: DatabaseForm; o
                   The pod has no storage. After a restart (node reboot, eviction), every API key is gone and maas-api must be restarted; this tab shows how. Choose a persistent database if keys must survive.
                 </Alert>
               ) : c.id === "external" ? (
-                <FormGroup label="Connection URL" isRequired fieldId={`${idPrefix}-database-url`}>
-                  <InputGroup>
-                    <InputGroupItem isFill>
-                      <TextInput id={`${idPrefix}-database-url`} type={value.showUrl ? "text" : "password"} autoComplete="off" spellCheck={false}
-                        placeholder="postgresql://USER:PASSWORD@HOST:5432/DATABASE?sslmode=require" value={value.connectionUrl}
-                        validated={urlProblem ? "error" : "default"} aria-describedby={`${idPrefix}-database-url-help`}
-                        onBlur={() => onChange({ ...value, urlTouched: true })}
-                        onChange={(_e, v) => onChange({ ...value, connectionUrl: v })} />
-                    </InputGroupItem>
-                    <InputGroupItem>
-                      <Button variant="control" aria-label={value.showUrl ? "Hide the URL" : "Show the URL"} icon={value.showUrl ? <EyeSlashIcon /> : <EyeIcon />}
-                        onClick={() => onChange({ ...value, showUrl: !value.showUrl })} />
-                    </InputGroupItem>
-                  </InputGroup>
-                  {urlProblem ? <Problem id={`${idPrefix}-database-url-help`} text={urlProblem} /> : (
-                    <FormHelperText>
-                      <HelperText id={`${idPrefix}-database-url-help`}>
-                        <HelperTextItem>Stored only in Secret maas-db-config in {db.namespace}; never shown again or logged. maas-api must reach this address from the cluster.</HelperTextItem>
-                      </HelperText>
-                    </FormHelperText>
-                  )}
-                </FormGroup>
+                <NestedFields>
+                  <FormGroup label="Connection URL" isRequired fieldId={`${idPrefix}-database-url`}>
+                    <InputGroup>
+                      <InputGroupItem isFill>
+                        <TextInput id={`${idPrefix}-database-url`} type={value.showUrl ? "text" : "password"} autoComplete="off" spellCheck={false}
+                          placeholder="postgresql://USER:PASSWORD@HOST:5432/DATABASE?sslmode=require" value={value.connectionUrl}
+                          validated={urlProblem ? "error" : "default"} aria-describedby={`${idPrefix}-database-url-help`}
+                          onBlur={() => onChange({ ...value, urlTouched: true })}
+                          onChange={(_e, v) => onChange({ ...value, connectionUrl: v })} />
+                      </InputGroupItem>
+                      <InputGroupItem>
+                        <Button variant="control" aria-label={value.showUrl ? "Hide the URL" : "Show the URL"} icon={value.showUrl ? <EyeSlashIcon /> : <EyeIcon />}
+                          onClick={() => onChange({ ...value, showUrl: !value.showUrl })} />
+                      </InputGroupItem>
+                    </InputGroup>
+                    {urlProblem ? <Problem id={`${idPrefix}-database-url-help`} text={urlProblem} /> : (
+                      <FieldHelperText id={`${idPrefix}-database-url-help`}>
+                        Stored only in Secret maas-db-config in {db.namespace}; never shown again or logged. maas-api must reach this address from the cluster.
+                      </FieldHelperText>
+                    )}
+                  </FormGroup>
+                </NestedFields>
               ) : undefined} />
           );
         })}
@@ -121,47 +118,49 @@ export const LimitFields: React.FC<{ value: LimitForm; onChange: (f: LimitForm) 
           description="Set one or more limits, for example 10,000 tokens per hour and 100,000 per day."
           onChange={() => onChange({ ...value, preset: "custom" })}
           body={value.preset === "custom" ? (
-            <Stack hasGutter>
-              {value.rows.map((r, i) => {
-                const problem = rateRowProblem(value, i);
-                const tokensBad = !!problem && problem.includes("tokens");
-                const periodBad = !!problem && !tokensBad;
-                const helpId = `${idPrefix}-rate-${i}-problem`;
-                return (
-                  <StackItem key={i}>
-                    <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "nowrap" }}>
-                      <FlexItem>
-                        <TextInput id={`${idPrefix}-rate-${i}-limit`} aria-label={`Limit ${i + 1}: tokens`} type="text" inputMode="numeric" value={r.limit} style={{ width: "14ch" }}
-                          validated={tokensBad ? "error" : "default"} aria-describedby={problem ? helpId : undefined} onChange={(_e, v) => setRow(i, { limit: digits(v) })} />
-                      </FlexItem>
-                      <FlexItem>tokens per</FlexItem>
-                      <FlexItem>
-                        <TextInput id={`${idPrefix}-rate-${i}-amount`} aria-label={`Limit ${i + 1}: period length`} type="text" inputMode="numeric" value={r.amount} style={{ width: "9ch" }}
-                          validated={periodBad ? "error" : "default"} aria-describedby={problem ? helpId : undefined} onChange={(_e, v) => setRow(i, { amount: digits(v) })} />
-                      </FlexItem>
-                      <FlexItem>
-                        <FormSelect id={`${idPrefix}-rate-${i}-unit`} aria-label={`Limit ${i + 1}: period unit`} value={r.unit} validated={periodBad ? "error" : "default"}
-                          onChange={(_e, v) => setRow(i, { unit: v as WindowUnit })}>
-                          <FormSelectOption value="s" label="seconds" />
-                          <FormSelectOption value="m" label="minutes" />
-                          <FormSelectOption value="h" label="hours" />
-                        </FormSelect>
-                      </FlexItem>
-                      <FlexItem>
-                        <Button variant="plain" aria-label={`Remove limit ${i + 1}`} icon={<MinusCircleIcon />} isDisabled={value.rows.length === 1}
-                          onClick={() => onChange({ ...value, rows: value.rows.filter((_r, j) => j !== i) })} />
-                      </FlexItem>
-                    </Flex>
-                    <Problem id={helpId} text={problem} />
-                  </StackItem>
-                );
-              })}
-              <StackItem>
-                <Button variant="link" isInline icon={<PlusCircleIcon />} isDisabled={value.rows.length >= MAX_RATES}
-                  onClick={() => onChange({ ...value, rows: [...value.rows, { limit: "100000", amount: "24", unit: "h" }] })}>Add token rate limit</Button>
-              </StackItem>
-              {summary && <StackItem><Content component="small" aria-live="polite">{summary}</Content></StackItem>}
-            </Stack>
+            <NestedFields>
+              <Stack hasGutter>
+                {value.rows.map((r, i) => {
+                  const problem = rateRowProblem(value, i);
+                  const tokensBad = !!problem && problem.includes("tokens");
+                  const periodBad = !!problem && !tokensBad;
+                  const helpId = `${idPrefix}-rate-${i}-problem`;
+                  return (
+                    <StackItem key={i}>
+                      <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "nowrap" }}>
+                        <FlexItem>
+                          <TextInput id={`${idPrefix}-rate-${i}-limit`} aria-label={`Limit ${i + 1}: tokens`} type="text" inputMode="numeric" value={r.limit} style={{ width: "14ch" }}
+                            validated={tokensBad ? "error" : "default"} aria-describedby={problem ? helpId : undefined} onChange={(_e, v) => setRow(i, { limit: digits(v) })} />
+                        </FlexItem>
+                        <FlexItem>tokens per</FlexItem>
+                        <FlexItem>
+                          <TextInput id={`${idPrefix}-rate-${i}-amount`} aria-label={`Limit ${i + 1}: period length`} type="text" inputMode="numeric" value={r.amount} style={{ width: "9ch" }}
+                            validated={periodBad ? "error" : "default"} aria-describedby={problem ? helpId : undefined} onChange={(_e, v) => setRow(i, { amount: digits(v) })} />
+                        </FlexItem>
+                        <FlexItem>
+                          <FormSelect id={`${idPrefix}-rate-${i}-unit`} aria-label={`Limit ${i + 1}: period unit`} value={r.unit} validated={periodBad ? "error" : "default"}
+                            onChange={(_e, v) => setRow(i, { unit: v as WindowUnit })}>
+                            <FormSelectOption value="s" label="seconds" />
+                            <FormSelectOption value="m" label="minutes" />
+                            <FormSelectOption value="h" label="hours" />
+                          </FormSelect>
+                        </FlexItem>
+                        <FlexItem>
+                          <Button variant="plain" aria-label={`Remove limit ${i + 1}`} icon={<MinusCircleIcon />} isDisabled={value.rows.length === 1}
+                            onClick={() => onChange({ ...value, rows: value.rows.filter((_r, j) => j !== i) })} />
+                        </FlexItem>
+                      </Flex>
+                      <Problem id={helpId} text={problem} />
+                    </StackItem>
+                  );
+                })}
+                <StackItem>
+                  <Button variant="link" isInline icon={<PlusCircleIcon />} isDisabled={value.rows.length >= MAX_RATES}
+                    onClick={() => onChange({ ...value, rows: [...value.rows, { limit: "100000", amount: "24", unit: "h" }] })}>Add token rate limit</Button>
+                </StackItem>
+                {summary && <StackItem><Content component="small" aria-live="polite">{summary}</Content></StackItem>}
+              </Stack>
+            </NestedFields>
           ) : undefined} />
       </FormGroup>
     </Form>
@@ -213,32 +212,34 @@ export const AudienceFields: React.FC<{ value: AudienceForm; onChange: (f: Audie
         <Radio id={`${idPrefix}-audience-specific`} name={`${idPrefix}-audience`} isChecked={!value.everyone} label="Specific groups and users"
           description="Only these can create API keys for the models and call them." onChange={() => onChange({ ...value, everyone: false })}
           body={!value.everyone ? (
-            <Stack hasGutter>
-              <StackItem>
-                <FormGroup label="Groups" fieldId={`${idPrefix}-groups`}>
-                  <TextArea id={`${idPrefix}-groups`} aria-describedby={`${idPrefix}-groups-help`} rows={3} resizeOrientation="vertical" value={value.groups} placeholder="One per line" onChange={(_e, v) => onChange({ ...value, groups: v })} />
-                  <FormHelperText>
-                    <HelperText id={`${idPrefix}-groups-help`}>
-                      <HelperTextItem>Use groups for people. A cluster admin creates them with oc adm groups new.</HelperTextItem>
-                      {missing.map((g) => <HelperTextItem key={g} variant="warning">{missingGroupText(g)}</HelperTextItem>)}
-                    </HelperText>
-                  </FormHelperText>
-                </FormGroup>
-              </StackItem>
-              <StackItem>
-                <FormGroup label="Users" fieldId={`${idPrefix}-users`}>
-                  <TextArea id={`${idPrefix}-users`} aria-describedby={`${idPrefix}-users-help`} rows={2} resizeOrientation="vertical" value={value.users} placeholder="system:serviceaccount:<namespace>:<name>, one per line" onChange={(_e, v) => onChange({ ...value, users: v })} />
-                  <FormHelperText>
-                    <HelperText id={`${idPrefix}-users-help`}>
-                      <HelperTextItem>For service accounts. For teams, use a group: the MaaS docs advise against long user lists.</HelperTextItem>
-                    </HelperText>
-                  </FormHelperText>
-                </FormGroup>
-              </StackItem>
-              {problem && <StackItem><Problem id={`${idPrefix}-audience-problem`} text={problem} /></StackItem>}
-            </Stack>
+            <NestedFields>
+              <Stack hasGutter>
+                <StackItem>
+                  <FormGroup label="Groups" fieldId={`${idPrefix}-groups`}>
+                    <TextArea id={`${idPrefix}-groups`} aria-describedby={`${idPrefix}-groups-help`} rows={3} resizeOrientation="vertical" value={value.groups} placeholder="One per line" onChange={(_e, v) => onChange({ ...value, groups: v })} />
+                    <FormHelperText>
+                      <HelperText id={`${idPrefix}-groups-help`}>
+                        <HelperTextItem>Use groups for people. A cluster admin creates them with oc adm groups new.</HelperTextItem>
+                        {missing.map((g) => <HelperTextItem key={g} variant="warning">{missingGroupText(g)}</HelperTextItem>)}
+                      </HelperText>
+                    </FormHelperText>
+                  </FormGroup>
+                </StackItem>
+                <StackItem>
+                  <FormGroup label="Users" fieldId={`${idPrefix}-users`}>
+                    <TextArea id={`${idPrefix}-users`} aria-describedby={`${idPrefix}-users-help`} rows={2} resizeOrientation="vertical" value={value.users} placeholder="system:serviceaccount:<namespace>:<name>, one per line" onChange={(_e, v) => onChange({ ...value, users: v })} />
+                    <FormHelperText>
+                      <HelperText id={`${idPrefix}-users-help`}>
+                        <HelperTextItem>For service accounts. For teams, use a group: the MaaS docs advise against long user lists.</HelperTextItem>
+                      </HelperText>
+                    </FormHelperText>
+                  </FormGroup>
+                </StackItem>
+                {problem && <StackItem><Problem id={`${idPrefix}-audience-problem`} text={problem} /></StackItem>}
+              </Stack>
+            </NestedFields>
           ) : undefined} />
-        <HelperText><HelperTextItem>Applies to every model you publish here.</HelperTextItem></HelperText>
+        <FieldHelperText>Applies to every model you publish here.</FieldHelperText>
       </FormGroup>
     </Form>
   );
