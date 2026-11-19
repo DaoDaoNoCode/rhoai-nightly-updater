@@ -101,7 +101,9 @@ expect_eq "the Template's PROFILE defaults to full (empty)" "" "$(default_of PRO
 # Kind/name/namespace of every object a render should have, sorted: the
 # Template's with its placeholders replaced (without its RBAC objects in the
 # gitops profile, the default, which adds deploy/rbac-gitops.yaml's), then
-# the hooks that are on (1, the default).
+# the hooks that are on (1, the default). The OAuth client hooks exist in
+# the full profile only: the gitops profile signs in through the
+# ServiceAccount.
 expected_objects() {
 	local ns=$1 app=$2 session=${3:-1} link=${4:-1} profile=${5:-gitops} oauth=${6:-1} objects=$template_objects
 	if [ "$profile" = gitops ]; then
@@ -118,7 +120,7 @@ expected_objects() {
 			printf '%s\n' "ServiceAccount/$app-session-secret/$ns" "Role/$app-session-secret/$ns" \
 				"RoleBinding/$app-session-secret/$ns" "Job/$app-session-secret/$ns"
 		fi
-		if [ "$oauth" = 1 ]; then
+		if [ "$oauth" = 1 ] && [ "$profile" = full ]; then
 			printf '%s\n' "ServiceAccount/$app-oauth-secret/$ns" "Role/$app-oauth-secret/$ns" \
 				"RoleBinding/$app-oauth-secret/$ns" "Job/$app-oauth-secret/$ns" \
 				"ServiceAccount/$app-oauthclient/$ns" "Role/$app-oauthclient/$ns" "RoleBinding/$app-oauthclient/$ns" \
@@ -239,6 +241,28 @@ expect_render_fail "an allowlist entry that is not a name (schema)" "subscriptio
 expect_render_fail "an allowlist entry that is not a name (template)" "is not an environment variable name" --skip-schema-validation --namespace ns1 "${BASE[@]}" --set "gitops.subscriptionEnvAllowlist={x'y}"
 expect_render_fail "parameters.SUBSCRIPTION_ENV_ALLOWLIST (template)" "parameters.SUBSCRIPTION_ENV_ALLOWLIST is set by the chart" --skip-schema-validation --namespace ns1 "${BASE[@]}" --set parameters.SUBSCRIPTION_ENV_ALLOWLIST=X
 
+# sign_in: the oauth-proxy arguments that choose the OAuth client and scope,
+# the OAuth client Secret's volume, and the ServiceAccount's redirect
+# reference, of the render in $OUT.
+sign_in() {
+	grep -E -e '^ *- --(client-id|client-secret|client-secret-file|scope|openshift-service-account)=' \
+		-e 'secretName: .*-oauth-client$' -e 'oauth-redirectreference' "$OUT" | sed 's/^ *//'
+}
+# The gitops profile signs in as 3.x did: the ServiceAccount is the OAuth
+# client (its token the secret, the Route its redirect), with the scopes an
+# OpenShift ServiceAccount client may have; nothing there acts with the
+# user's token. No OAuthClient, no client Secret, no hook with a right on
+# OAuthClients.
+expect_render "profile gitops: sign-in" --namespace ns1 "${BASE[@]}" --set parameters.APP_NAME=upd
+expect_eq "profile gitops: the ServiceAccount is the OAuth client" "$(printf '%s\n' \
+	"serviceaccounts.openshift.io/oauth-redirectreference.primary: '{\"kind\":\"OAuthRedirectReference\",\"apiVersion\":\"v1\",\"reference\":{\"kind\":\"Route\",\"name\":\"upd\"}}'" \
+	'- --openshift-service-account=upd' \
+	'- --scope=user:info user:check-access')" "$(sign_in)"
+grep -qE 'oauthclients|OAuthClient|user:full|oauth-client|/etc/proxy/oauth' "$OUT" && fail "profile gitops: something of the OAuthClient sign-in is left: $(grep -nE 'oauthclients|OAuthClient|user:full|oauth-client|/etc/proxy/oauth' "$OUT")" || pass
+expect_eq "profile gitops: the OAuth client hooks" "" "$(objects | grep -E 'oauth' || true)"
+expect_render "profile gitops: sign-in with gitops.oauthClient.enabled=false" --namespace ns1 "${BASE[@]}" --set parameters.APP_NAME=upd --set gitops.oauthClient.enabled=false
+grep -qF -- '- --openshift-service-account=upd' "$OUT" && pass || fail "profile gitops, oauthClient off: not the ServiceAccount sign-in"
+
 # profile full: the Template as install.sh applies it, RBAC included, no
 # admission policy.
 expect_render "profile full" --namespace ns1 "${BASE[@]}" --set profile=full
@@ -250,6 +274,11 @@ grep -qE '^ *- secrets$' <<<"$(doc ClusterRole/rhoai-nightly-updater-ns1)" && pa
 helm template rnu "$CHART" --namespace ns1 "${BASE[@]}" --set profile=full --show-only templates/objects.yaml >"$WORK/full.yaml" 2>&1 || true
 expect_eq "profile full: the Template's RBAC objects" "$(grep -cE '^kind: (ClusterRole|ClusterRoleBinding|Role|RoleBinding)$' "$WORK/full.yaml")" \
 	"$(grep -cE '^(ClusterRole|ClusterRoleBinding|Role|RoleBinding)/' <<<"$template_objects")"
+# The full profile signs in through the install's OAuthClient with user:full,
+# as install.sh's: the Template's arguments, unchanged.
+expect_render "profile full: sign-in" --namespace ns1 "${BASE[@]}" --set parameters.APP_NAME=upd --set profile=full
+expect_eq "profile full: the OAuthClient upd-ns1 with user:full" "$(printf '%s\n' \
+	'- --client-id=upd-ns1' '- --client-secret-file=/etc/proxy/oauth/client-secret' '- --scope=user:full' 'secretName: upd-oauth-client')" "$(sign_in)"
 
 expect_render_fail "an unknown profile (schema)" "profile" --namespace ns1 "${BASE[@]}" --set profile=readonly
 expect_render_fail "an unknown profile (template)" "profile must be gitops or full" --skip-schema-validation --namespace ns1 "${BASE[@]}" --set profile=readonly
@@ -271,8 +300,8 @@ expect_render "no session Secret hook" --namespace ns1 "${BASE[@]}" --set gitops
 expect_eq "no session Secret hook: the objects" "$(expected_objects ns1 rhoai-nightly-updater 0 1)" "$(objects)"
 expect_render "no ConsoleLink hook" --namespace ns1 "${BASE[@]}" --set gitops.consoleLink.enabled=false
 expect_eq "no ConsoleLink hook: the objects" "$(expected_objects ns1 rhoai-nightly-updater 1 0)" "$(objects)"
-expect_render "no OAuthClient hooks" --namespace ns1 "${BASE[@]}" --set gitops.oauthClient.enabled=false
-expect_eq "no OAuthClient hooks: the objects" "$(expected_objects ns1 rhoai-nightly-updater 1 1 gitops 0)" "$(objects)"
+expect_render "no OAuthClient hooks" --namespace ns1 "${BASE[@]}" --set profile=full --set gitops.oauthClient.enabled=false
+expect_eq "no OAuthClient hooks: the objects" "$(expected_objects ns1 rhoai-nightly-updater 1 1 full 0)" "$(objects)"
 expect_render "no hooks" --namespace ns1 "${BASE[@]}" --set gitops.sessionSecret.enabled=false --set gitops.consoleLink.enabled=false --set gitops.oauthClient.enabled=false
 expect_eq "no hooks: only the Template's objects" "$(expected_objects ns1 rhoai-nightly-updater 0 0 gitops 0)" "$(objects)"
 grep -q 'argocd.argoproj.io/hook' "$OUT" && fail "no hooks: a hook annotation is left" || pass
@@ -397,6 +426,21 @@ if helm template rnu "$WORK/chart" --namespace ns1 "${BASE[@]}" >"$OUT" 2>&1; th
 else
 	grep -qF 'non-string' "$OUT" && pass || fail "a \${{NAME}} parameter: $(cat "$OUT")"
 fi
+# The gitops profile's sign-in replaces exactly the Template's OAuthClient
+# arguments, mount and volume; a Template without one of them fails that
+# render instead of signing in half one way, half the other. The full
+# profile renders such a Template as it is.
+for change in 's/--scope=user:full$/--scope=user:info/' 's/--client-secret-file=\/etc\/proxy\/oauth\/client-secret$/--client-secret-file=\/x/' \
+	's/^\(                - name: \)oauth-client$/\1oauth-x/' \
+	's/secretName: ${APP_NAME}-oauth-client$/secretName: other/'; do
+	sed "$change" "$SRC/deploy/template.yaml" >"$WORK/chart/files/template.yaml"
+	cmp -s "$SRC/deploy/template.yaml" "$WORK/chart/files/template.yaml" && fail "gitops sign-in: '$change' changed nothing"
+	if helm template rnu "$WORK/chart" --namespace ns1 "${BASE[@]}" >"$OUT" 2>&1; then
+		fail "gitops sign-in, $change: the render succeeded"
+	else
+		grep -qF 'update rnu.gitopsSignIn' "$OUT" && pass || fail "gitops sign-in, $change: $(cat "$OUT")"
+	fi
+done
 rm "$WORK/chart/files/template.yaml"
 if helm template rnu "$WORK/chart" --namespace ns1 "${BASE[@]}" >"$OUT" 2>&1; then
 	fail "no files/template.yaml: the render succeeded"
@@ -441,7 +485,7 @@ expect_eq "ConsoleLink: the same object as install.sh's" "$install_link" "$(link
 # The OAuth client: a Sync hook for its Secret, a PostSync hook for the
 # OAuthClient. Only the hooks' own ServiceAccounts get OAuthClient rights:
 # get and patch of this instance's client, and create; never delete.
-expect_render "OAuthClient hooks" --namespace ns1 "${BASE[@]}" --set parameters.APP_NAME=upd --show-only templates/oauth-client.yaml
+expect_render "OAuthClient hooks" --namespace ns1 "${BASE[@]}" --set profile=full --set parameters.APP_NAME=upd --show-only templates/oauth-client.yaml
 expect_eq "OAuthClient: four Sync hooks" 4 "$(grep -c 'argocd.argoproj.io/hook: "Sync"' "$OUT")"
 expect_eq "OAuthClient: six PostSync hooks" 6 "$(grep -c 'argocd.argoproj.io/hook: "PostSync"' "$OUT")"
 expect_eq "OAuthClient: delete policy" 10 "$(grep -c 'hook-delete-policy: BeforeHookCreation,HookSucceeded' "$OUT")"
@@ -465,7 +509,7 @@ install_client=$(client_lines "$SRC/scripts/install.sh")
 [ "$(wc -l <<<"$install_client")" -ge 10 ] && pass || fail "OAuthClient: cannot find install.sh's OAuthClient"
 expect_eq "OAuthClient: the same object as install.sh's" "$install_client" "$(client_lines "$CHART/templates/oauth-client.yaml")"
 # The Deployment reads the Secret the hook creates, under the key it writes.
-expect_render "OAuthClient: the Deployment" --namespace ns1 "${BASE[@]}" --set parameters.APP_NAME=upd --show-only templates/objects.yaml
+expect_render "OAuthClient: the Deployment" --namespace ns1 "${BASE[@]}" --set profile=full --set parameters.APP_NAME=upd --show-only templates/objects.yaml
 grep -qF -- '- --client-id=upd-ns1' "$OUT" && grep -qF -- '- --client-secret-file=/etc/proxy/oauth/client-secret' "$OUT" && grep -qx '          secretName: upd-oauth-client' "$OUT" && pass ||
 	fail "OAuthClient: the Deployment does not use the client upd-ns1 and Secret upd-oauth-client"
 
@@ -585,7 +629,7 @@ grep -qF 'consolelinks is forbidden' "$HOOKOUT" && pass || fail "ConsoleLink, ap
 # The two OAuth client hook scripts (the Sync one first), with their own
 # fake oc: the Secret's value comes back base64-encoded as oc prints it.
 oauth_script() {
-	helm template rnu "$CHART" --namespace ns1 "${BASE[@]}" --show-only templates/oauth-client.yaml 2>&1 |
+	helm template rnu "$CHART" --namespace ns1 "${BASE[@]}" --set profile=full --show-only templates/oauth-client.yaml 2>&1 |
 		awk -v want="$1" '/^            - \|$/ { n++; f = (n == want); next } f && /^          [a-z]/ { exit } f' |
 		sed -e 's/^              //' -e "s|/secret/|$WORK/secretvol/|g"
 }

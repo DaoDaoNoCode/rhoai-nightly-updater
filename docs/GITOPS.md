@@ -263,11 +263,16 @@ with the same instance label, so `install.sh uninstall` also removes it if a
 failed run left it). Argo CD does not prune the ConsoleLink, because a Job
 created it ([section 7](#7-removing-it)).
 
-**OAuth client** (4.0.0; `gitops.oauthClient.enabled`, on by default). Users
-sign in through OAuthClient `<APP_NAME>-<NAMESPACE>` (oauth-proxy
-`--client-id`, `--scope=user:full`), whose secret oauth-proxy reads from
-Secret `<APP_NAME>-oauth-client`. Neither can be in Git: the secret is
-random, and the client's redirect URI is the Route's host.
+**OAuth client** (4.0.0, **`profile: full` only**;
+`gitops.oauthClient.enabled`, on by default). In the full profile every
+change runs with the user's own token, so users sign in through OAuthClient
+`<APP_NAME>-<NAMESPACE>` (oauth-proxy `--client-id`, `--scope=user:full`),
+whose secret oauth-proxy reads from Secret `<APP_NAME>-oauth-client`.
+Neither can be in Git: the secret is random, and the client's redirect URI
+is the Route's host. With `profile: gitops` (the default) nothing here is
+rendered: that profile makes no change with the user's token, so users sign
+in through the app's ServiceAccount as with 3.x
+([section 11](#sign-in-in-the-gitops-profile)).
 
 - A `Sync` hook (Job `<APP_NAME>-oauth-secret`, wave -1) creates the Secret
   with key `client-secret`, 32 random letters and digits without a trailing
@@ -287,11 +292,9 @@ random, and the client's redirect URI is the Route's host.
   ServiceAccount gets no right on OAuthClients.
 
 Until the PostSync hook ran, signing in fails with `unauthorized_client`.
-Argo CD never prunes the OAuthClient ([section 7](#7-removing-it)). The
-gitops profile makes no change with the user's token (its Update keeps the
-ServiceAccount, which its admission policy binds), but users still sign in
-through this client. With `gitops.oauthClient.enabled: false`, create both
-before the first sync (the secret never in Git):
+Argo CD never prunes the OAuthClient ([section 7](#7-removing-it)). With
+`gitops.oauthClient.enabled: false`, create both before the first sync
+(the secret never in Git):
 
 ```bash
 secret=$(head -c 64 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)
@@ -684,6 +687,33 @@ cluster that serves tenants many people can sign in, and what the
 ServiceAccount reads, such as pods and events in every namespace, is not
 theirs to see. Other users get 403 `forbidden` and the UI shows
 "Cluster-admin required".
+
+### Sign-in in the gitops profile
+
+Nothing in the gitops profile acts with the user's token: Update acts with
+the ServiceAccount (its admission policy matches that username, so a change
+with the user's token would bypass it), the reads are the ServiceAccount's,
+and the user's token only identifies the user and runs the cluster-admin
+check. So the chart signs users in as 3.x did, with the app's
+ServiceAccount as the OAuth client: oauth-proxy
+`--openshift-service-account=<APP_NAME>` and
+`--scope=user:info user:check-access`, and the ServiceAccount's
+`serviceaccounts.openshift.io/oauth-redirectreference.primary` annotation
+names Route `<APP_NAME>`. The OAuth server allows a ServiceAccount client
+no more than those scopes, the list-projects scopes and roles in its own
+namespace, so the session cookie carries a token that cannot change the
+cluster. There is no OAuthClient, no Secret `<APP_NAME>-oauth-client` and
+no hook with a right on OAuthClients; the app never asks a gitops user to
+"Log out and log in again" for the scope. The chart takes the Template's
+three sign-in arguments and its client Secret volume out
+(`rnu.gitopsSignIn` in `deploy/chart/templates/_helpers.tpl`) and fails the
+render if the Template no longer has them; `scripts/test-chart.sh` checks
+both profiles' sign-in.
+
+Switching a deployed chart from `profile: full` to `gitops` leaves the full
+profile's OAuthClient: delete it and its sign-ins (`oc delete oauthclient
+<APP_NAME>-<NAMESPACE>`, `oc delete oauthaccesstokens --field-selector
+clientName=<APP_NAME>-<NAMESPACE>`) and Secret `<APP_NAME>-oauth-client`.
 
 ### How Update works there
 

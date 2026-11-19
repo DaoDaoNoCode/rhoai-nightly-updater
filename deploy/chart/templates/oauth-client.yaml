@@ -22,8 +22,12 @@ track the Secret or the OAuthClient and never prunes them; `install.sh
 uninstall` removes the OAuthClient and revokes the sign-ins it issued
 (docs/GITOPS.md). With gitops.oauthClient.enabled=false, create both before
 the first sync.
+
+Profile full only: the gitops profile signs users in through the app's
+ServiceAccount, as 3.x did (rnu.gitopsSignIn in _helpers.tpl), and needs
+neither the client nor its Secret.
 */ -}}
-{{- if .Values.gitops.oauthClient.enabled }}
+{{- if and .Values.gitops.oauthClient.enabled (eq (.Values.profile | default "gitops") "full") }}
 {{- $p := include "rnu.params" . | fromJson }}
 {{- $secretName := printf "%s-oauth-client" $p.APP_NAME }}
 {{- $instance := printf "%s-%s" $p.APP_NAME $p.NAMESPACE }}

@@ -102,6 +102,9 @@ gitops:
     enabled: true
 
   oauthClient:
+    # Profile full only. The gitops profile makes no change with the
+    # user's token, so users sign in through the app's ServiceAccount as
+    # with 3.x (scopes user:info user:check-access), and this does nothing.
     # The OAuth client users sign in with: a Sync hook Job creates Secret
     # <APP_NAME>-oauth-client (32 random characters) when it does not exist,
     # and a PostSync hook Job applies OAuthClient <APP_NAME>-<NAMESPACE> with

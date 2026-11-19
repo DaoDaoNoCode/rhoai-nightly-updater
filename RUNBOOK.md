@@ -131,7 +131,7 @@ oc logs -n $NS deploy/$APP -c app --previous
 
 ### Sign-in and the OAuthClient
 
-Since 4.0.0 users sign in through the install's own OAuthClient `$APP-$NS` (`install.sh` creates it after the Route; the chart's PostSync hook in Argo CD). Check it:
+Since 4.0.0 users sign in through the install's own OAuthClient `$APP-$NS` (`install.sh` creates it after the Route; the chart's PostSync hook in Argo CD with `profile: full`). The chart's gitops profile has no OAuthClient: users sign in through the ServiceAccount as with 3.x ([GITOPS §11](docs/GITOPS.md#sign-in-in-the-gitops-profile)). Check it:
 
 ```bash
 oc get oauthclient $APP-$NS -o jsonpath='{.grantMethod} {.redirectURIs}{"\n"}'   # auto ["https://<route host>/oauth/callback"]

@@ -691,7 +691,11 @@ objects:
                 # (the OAuth server allows it only user:info,
                 # user:check-access, the list-projects scopes and roles in
                 # its own namespace), and the app makes every change with
-                # the user's own token.
+                # the user's own token. The Helm chart's gitops profile,
+                # which makes no change with the user's token, replaces
+                # these three arguments and the oauth-client volume with
+                # the ServiceAccount sign-in of 3.x (deploy/chart
+                # _helpers.tpl, rnu.gitopsSignIn); keep them as they are.
                 - --client-id=${APP_NAME}-${NAMESPACE}
                 # Read raw, without trimming: the Secret's value has no
                 # trailing newline.

@@ -273,8 +273,13 @@ only accepts a tag whose version is the top dated section. See
   through the app's ServiceAccount, which the OAuth server limits to
   `user:info user:check-access`. `install.sh` creates the client and its
   Secret `<APP_NAME>-oauth-client` (an upgrade from 3.x too; uninstall
-  deletes the client and revokes its sign-ins); the chart does it with a
-  Sync and a PostSync hook (`gitops.oauthClient.enabled`). The API server
+  deletes the client and revokes its sign-ins); the chart's `profile: full`
+  does it with a Sync and a PostSync hook (`gitops.oauthClient.enabled`).
+  The chart's gitops profile (its default) keeps the 3.x sign-in through
+  the ServiceAccount (`user:info user:check-access`, no OAuthClient):
+  nothing there acts with your token, so its session cannot change the
+  cluster and nobody signs in again
+  ([GITOPS §11](docs/GITOPS.md#sign-in-in-the-gitops-profile)). The API server
   checks each change against your RBAC and its audit log names you. Before
   a change is accepted, the app checks that your sign-in can carry it (scope
   `user:full`, not expiring within the operation's deadline); otherwise

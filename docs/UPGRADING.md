@@ -502,9 +502,13 @@ Check it: `oc get oauthclient $APP-$NS` and the [RUNBOOK's sign-in
 section](../RUNBOOK.md#sign-in-and-the-oauthclient).
 
 **With Argo CD (the Helm chart).** The usual commit (`targetRevision: v4.0.0`
-and the v4.0.0 image by digest). The chart's new hooks create the Secret
-(Sync) and the OAuthClient (PostSync); their ServiceAccounts, not the
-app's, get the OAuthClient rights, only while they run. With
+and the v4.0.0 image by digest). With `profile: gitops` (the default)
+nothing changes for sign-in: that profile makes no change with the user's
+token, so users keep signing in through the ServiceAccount as with 3.x
+([GITOPS §11](GITOPS.md#sign-in-in-the-gitops-profile)) and nobody needs
+to sign in again. With `profile: full` the chart's new hooks create the
+Secret (Sync) and the OAuthClient (PostSync); their ServiceAccounts, not
+the app's, get the OAuthClient rights, only while they run. With
 `gitops.oauthClient.enabled: false`, create both before the sync
 ([GITOPS §4](GITOPS.md#4-the-hook-jobs)). Argo CD never prunes the
 OAuthClient: `install.sh uninstall` removes it.
