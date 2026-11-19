@@ -684,13 +684,19 @@ export const modelStates = {
   foreign: (ns = "llm-eval") => ({ ...MODEL, displayName: "Qwen (team copy)", namespace: ns, ready: false, managedByTool: false, healthUnknown: true, message: "Reports no Ready condition", teardownBlockedReason: "This model was not created by this tool (for example in the dashboard), so the tool does not change or delete it." }),
 };
 
-export const modelsStatus = (over = {}) => ({
-  dependencies: "True", preset: PRESET, imagePlan: "released",
-  imagePlanReason: "This cluster runs a nightly RHOAI build, whose preset names an image that Red Hat has not published yet, and no mirror set serves registry.redhat.io/rhaii/vllm-cpu-rhel9; the newest released Red Hat image is used instead.",
-  catalog: MODEL_CATALOG,
-  items: [],
-  ...over,
-});
+export const modelsStatus = (over = {}) => {
+  const out = {
+    dependencies: "True", preset: PRESET, imagePlan: "released",
+    imagePlanReason: "This cluster runs a nightly RHOAI build, whose preset names an image that Red Hat has not published yet, and no mirror set serves registry.redhat.io/rhaii/vllm-cpu-rhel9; the newest released Red Hat image is used instead.",
+    catalog: MODEL_CATALOG,
+    items: [],
+    ...over,
+  };
+  // The backend reports how every deployed model is reached (addModelRouting); a
+  // fixture that names none is on KServe's default gateway, as models were before 4.0.0.
+  out.items = out.items.map((i) => (i && i.deployed && !i.exposure ? routed(i) : i));
+  return out;
+};
 
 /** The status's room check of one catalog model (pkg/cluster roomWarning). */
 export const CAPACITY_WARNING = "No worker seems to have room for the model: it needs 4 CPUs and 12Gi of memory free (up to 14Gi), and the most CPU free is 5.5 CPUs and 8.2 GiB on ip-10-0-1-23.ec2.internal.";
