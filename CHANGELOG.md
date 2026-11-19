@@ -302,6 +302,13 @@ only accepts a tag whose version is the top dated section. See
   secret is missing or the image mirror (IDMS) is not configured when it
   could not read them (403, a server error, the network): it says the read
   failed and why.
+- Diagnostics no longer reports a module operator's own Deployment as
+  "last applied for version ..." (live: the MCP lifecycle operator's
+  manager, stamped `platform.opendatahub.io/type=OpenDataHub` and
+  `version=0.0.1` by its module framework, on OpenShift AI Self-Managed
+  3.6.0). A version is compared only on Deployments whose stamped
+  platform type is the installed release's name (the DataScienceCluster's
+  `status.release`), as the RHOAI operator stamps it.
 
 ### Changed
 

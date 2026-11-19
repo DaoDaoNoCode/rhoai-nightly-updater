@@ -244,7 +244,8 @@ func stuckModuleProblem(c *Client, m stuckModule) Problem {
 func checkManagedConfig(c *Client) checkOutput {
 	const name = "Operator-managed config"
 	out := checkOutput{check: CheckResult{Name: name, Status: "pass"}}
-	release := dscReleaseVersion(c)
+	installed := dscRelease(c)
+	release := installed.Version
 	var details []string
 	count := 0
 	for _, ns := range rolloutNamespaces {
@@ -284,9 +285,16 @@ func checkManagedConfig(c *Client) checkOutput {
 					Fix:             "If nobody needs the manual change any more, remove the annotation; the operator then re-applies the current version on its next reconcile. The tool does not do this automatically.",
 					TechnicalCmd:    fmt.Sprintf("oc annotate deployment %s -n %s opendatahub.io/managed-", d.Metadata.Name, ns),
 				})
-			} else if v := ann["platform.opendatahub.io/version"]; v != "" && release != "" && v != release && ann["platform.opendatahub.io/instance.name"] == "default" {
-				// Only Deployments the Platform applies carry the platform
-				// version; module operators stamp their own versions.
+			} else if v := ann["platform.opendatahub.io/version"]; v != "" && release != "" && v != release && ann["platform.opendatahub.io/instance.name"] == "default" &&
+				installed.Name != "" && ann["platform.opendatahub.io/type"] == installed.Name {
+				// Only Deployments the Platform applies carry the platform's
+				// version and type: the operator stamps the release it runs
+				// (status.release name and version). Module operators stamp
+				// their own: the MCP lifecycle module's framework defaults
+				// stamp type OpenDataHub and version 0.0.1 on its manager
+				// (owner MCPLifecycleOperator "default") on an OpenShift AI
+				// Self-Managed 3.6.0 cluster. A type other than the installed
+				// release's name is not the platform's version to compare.
 				out.problems = append(out.problems, Problem{
 					ID:              "deployment-version-drift-" + d.Metadata.Name,
 					Severity:        "info",
@@ -327,24 +335,32 @@ func checkManagedConfig(c *Client) checkOutput {
 	return out
 }
 
-func dscReleaseVersion(c *Client) string {
+// platformRelease is the release a DataScienceCluster reports in
+// status.release: its name (for example "OpenShift AI Self-Managed") and
+// version.
+type platformRelease struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// dscRelease reads the DataScienceCluster's status.release; empty fields
+// when there is no DataScienceCluster or it cannot be read.
+func dscRelease(c *Client) platformRelease {
 	path, err := dataScienceClusterPath(c)
 	if err != nil {
-		return ""
+		return platformRelease{}
 	}
 	body, _, err := c.get(path)
 	if err != nil {
-		return ""
+		return platformRelease{}
 	}
 	var dsc struct {
 		Status struct {
-			Release struct {
-				Version string `json:"version"`
-			} `json:"release"`
+			Release platformRelease `json:"release"`
 		} `json:"status"`
 	}
 	_ = json.Unmarshal(body, &dsc)
-	return dsc.Status.Release.Version
+	return dsc.Status.Release
 }
 
 // channelHeadBehind reports when the Subscription's channel head is older

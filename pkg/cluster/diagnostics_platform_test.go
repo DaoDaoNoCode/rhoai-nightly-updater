@@ -90,12 +90,14 @@ func TestPlatformModules_StuckDashboardWithPausedOperator(t *testing.T) {
 func TestManagedConfig_ReportsUnmanagedAndLeftovers(t *testing.T) {
 	f, c := newFakeAPI(t)
 	f.json("GET", dscV2List, http.StatusOK, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
-	f.json("GET", dscV2List+"/default-dsc", http.StatusOK, `{"status":{"release":{"version":"3.6.0"}}}`)
+	f.json("GET", dscV2List+"/default-dsc", http.StatusOK, `{"status":{"release":{"name":"OpenShift AI Self-Managed","version":"3.6.0"}}}`)
 	f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-applications/deployments", http.StatusOK, `{"items":[
 		{"metadata":{"name":"mlflow-operator-controller-manager","annotations":{"opendatahub.io/managed":"false","platform.opendatahub.io/version":"3.6.0-ea.1"}},"spec":{"replicas":1},"status":{"replicas":1,"updatedReplicas":1,"readyReplicas":1}},
 		{"metadata":{"name":"odh-model-controller","annotations":{"platform.opendatahub.io/version":"3.6.0"}},"spec":{"replicas":1},"status":{"replicas":1,"updatedReplicas":1,"readyReplicas":1}},
 		{"metadata":{"name":"kuberay-operator","annotations":{"platform.opendatahub.io/version":"3.6.0-ea.1","platform.opendatahub.io/instance.name":"default-ray"}},"spec":{"replicas":1},"status":{"replicas":1,"updatedReplicas":1,"readyReplicas":1}},
-		{"metadata":{"name":"kserve-old","annotations":{"platform.opendatahub.io/version":"3.5.1","platform.opendatahub.io/instance.name":"default"}},"spec":{"replicas":1},"status":{"replicas":1,"updatedReplicas":1,"readyReplicas":1}},
+		{"metadata":{"name":"kserve-old","annotations":{"platform.opendatahub.io/version":"3.5.1","platform.opendatahub.io/type":"OpenShift AI Self-Managed","platform.opendatahub.io/instance.name":"default"}},"spec":{"replicas":1},"status":{"replicas":1,"updatedReplicas":1,"readyReplicas":1}},
+		{"metadata":{"name":"mcp-lifecycle-operator-controller-manager","ownerReferences":[{"apiVersion":"components.platform.opendatahub.io/v1alpha1","kind":"MCPLifecycleOperator","name":"default","controller":true}],
+		 "annotations":{"platform.opendatahub.io/version":"0.0.1","platform.opendatahub.io/type":"OpenDataHub","platform.opendatahub.io/instance.name":"default"}},"spec":{"replicas":1},"status":{"replicas":1,"updatedReplicas":1,"readyReplicas":1}},
 		{"metadata":{"name":"odh-observability","generation":2,"annotations":{"`+assistRolloutAnnotation+`":"{\"maxUnavailable\":\"25%\"}"}},
 		 "spec":{"replicas":1,"strategy":{"rollingUpdate":{"maxUnavailable":1}}},"status":{"observedGeneration":2,"replicas":1,"updatedReplicas":1,"readyReplicas":1}}]}`)
 	f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-operator/deployments", http.StatusOK, `{"items":[]}`)
@@ -115,6 +117,11 @@ func TestManagedConfig_ReportsUnmanagedAndLeftovers(t *testing.T) {
 	if _, ok := ids["deployment-version-drift-kuberay-operator"]; ok {
 		t.Fatal("module-operator version reported as platform drift")
 	}
+	// Live 2026-11-19: the MCP module operator's framework stamps its own
+	// type and version; they are not the platform's.
+	if _, ok := ids["deployment-version-drift-mcp-lifecycle-operator-controller-manager"]; ok {
+		t.Fatal("a module's own platform type reported as platform drift")
+	}
 	if _, ok := ids["deployment-version-drift-odh-model-controller"]; ok {
 		t.Fatal("current version reported as drift")
 	}
@@ -127,6 +134,21 @@ func TestManagedConfig_ReportsUnmanagedAndLeftovers(t *testing.T) {
 	}
 	if resp.check.Status != "fail" {
 		t.Fatalf("check = %+v", resp.check)
+	}
+}
+
+// Without a release name the stamped platform type cannot be checked, so
+// no version is compared.
+func TestManagedConfig_NoDriftWithoutReleaseName(t *testing.T) {
+	f, c := newFakeAPI(t)
+	f.json("GET", dscV2List, http.StatusOK, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
+	f.json("GET", dscV2List+"/default-dsc", http.StatusOK, `{"status":{"release":{"version":"3.6.0"}}}`)
+	f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-applications/deployments", http.StatusOK, `{"items":[
+		{"metadata":{"name":"kserve-old","annotations":{"platform.opendatahub.io/version":"3.5.1","platform.opendatahub.io/type":"OpenShift AI Self-Managed","platform.opendatahub.io/instance.name":"default"}},"spec":{"replicas":1},"status":{"replicas":1,"updatedReplicas":1,"readyReplicas":1}}]}`)
+	f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-operator/deployments", http.StatusOK, `{"items":[]}`)
+
+	if resp := checkManagedConfig(c); len(resp.problems) != 0 || resp.check.Status != "pass" {
+		t.Fatalf("problems = %+v, check = %+v", resp.problems, resp.check)
 	}
 }
 
