@@ -470,6 +470,75 @@ func TestMaaSDatabase_AdoptedAndForeignObjectsAreLeftAlone(t *testing.T) {
 	}
 }
 
+// Set up never changes your PostgreSQL's URL in place: a new URL is refused
+// (it would be ignored), and Change database does it.
+func TestMaaSDatabase_SetUpRefusesANewURLForYours(t *testing.T) {
+	mc := newMaaSCluster(t)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "external", ConnectionURL: tUserDBURL}}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.requests = nil
+	res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "external", ConnectionURL: "postgresql://u:n3w-pw@db2/maas"}})
+	if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "Change database") || len(mc.f.mutations()) > 0 {
+		t.Fatalf("setup with a new URL: %+v %v", res, mc.f.mutations())
+	}
+	noLeak(t, mc, "n3w-pw", res, events)
+	if got := secretURL(t, mc); got != tUserDBURL {
+		t.Fatal("the URL changed")
+	}
+}
+
+// Your PostgreSQL is recorded only once its Secret is written: a refused
+// write leaves no record, so the status asks again instead of calling the
+// Secret lost. A Secret of this tool's with no record (the record write
+// failed after it) reads as yours, not as an earlier build's CloudNativePG.
+func TestMaaSDatabase_YoursIsRecordedAfterItsSecret(t *testing.T) {
+	mc := newMaaSCluster(t)
+	mc.f.fail["POST /api/v1/namespaces/redhat-ai-gateway-infra/secrets"] = 500
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "external", ConnectionURL: tUserDBURL}}); res.Success {
+		t.Fatalf("setup with a failing write: %+v", res)
+	}
+	if rec := readRecord(t, mc.c); rec.Database != "" {
+		t.Fatalf("recorded before the Secret: %+v", rec)
+	}
+	st, _ := GetMaaSStatus(mc.c)
+	if db := maasPart(t, st, "database"); st.Database.Current != "" || !st.Database.Needed || strings.Contains(db.Message, "is gone") {
+		t.Fatalf("status %+v %+v", st.Database, db)
+	}
+	delete(mc.f.fail, "POST /api/v1/namespaces/redhat-ai-gateway-infra/secrets")
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "external", ConnectionURL: tUserDBURL}}); !res.Success {
+		t.Fatalf("setup again: %+v", res)
+	}
+	rec := readRecord(t, mc.c)
+	if rec.Database != "external" {
+		t.Fatalf("record %+v", rec)
+	}
+	rec.Database = ""
+	if err := writeMaaSRecord(mc.c, rec); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := GetMaaSStatus(mc.c); st.Database.Current != "external" {
+		t.Fatalf("an unrecorded Secret of this tool's reads as %q", st.Database.Current)
+	}
+}
+
+// Change database runs only from a database that runs: the check refuses
+// before any change.
+func TestMaaSDatabase_ChangeRefusesADatabaseThatDoesNotRun(t *testing.T) {
+	mc := newMaaSCluster(t)
+	plain := mc.f.onGet
+	devDatabaseRuns(mc)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "development"}}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.onGet = plain // the pod is gone: not Available
+	mc.f.requests = nil
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "change-database", Database: tCNPG, ConfirmKeysLost: true})
+	if res.Success || res.ErrorCode != "not_ready" || len(mc.f.mutations()) > 0 {
+		t.Fatalf("change from a database that does not run: %+v %v", res, mc.f.mutations())
+	}
+}
+
 // A CloudNativePG database an earlier build made (no kind recorded) reads
 // as this tool's CloudNativePG one.
 func TestMaaSDatabase_EarlierBuildsCNPGIsAdoptedAsCNPG(t *testing.T) {

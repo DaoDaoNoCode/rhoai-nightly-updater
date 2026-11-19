@@ -278,10 +278,16 @@ func readMaaSDBState(c *Client, rec maasRecord, ns string) (maasDBState, error) 
 		st.kind = maasDBAdopted
 	case rec.Database != "":
 		st.kind = rec.Database
-	case st.secretFound || (st.clusterFound && toolOwned(st.cluster)):
+	case st.clusterFound && toolOwned(st.cluster):
 		// Earlier builds made only CloudNativePG databases, and recorded
 		// no kind.
 		st.kind = maasDBCNPG
+	case st.secretFound && toolOwned(st.poc["PostgresDeployment"]):
+		st.kind = maasDBDevelopment
+	case st.secretFound:
+		// This tool's maas-db-config with no database of its own: the
+		// user's, whose record write failed after the Secret was written.
+		st.kind = maasDBExternal
 	}
 	if st.kind == maasDBExternal && !st.secretFound {
 		st.kind, st.lostSecret = "", true
@@ -804,6 +810,10 @@ func planMaaSDatabase(c *Client, rec maasRecord, ns string, nsFound bool, req *t
 			return nil, fmt.Sprintf("The database is already chosen: %s. Change database on the Database part switches it (every API key is lost then). Nothing was changed.", maasDBKindText(cur)), "conflict"
 		}
 		if cur == maasDBExternal {
+			// Set up never changes the URL in place; it would be ignored.
+			if req != nil && req.ConnectionURL != "" {
+				return nil, "Your PostgreSQL is set up already, and Set up does not change its connection URL. Change database on the Database part points MaaS at another URL (API keys are lost if it is a different database). Nothing was changed.", "conflict"
+			}
 			return p, "", ""
 		}
 		p.target = cur
@@ -980,7 +990,10 @@ func (m *maasRun) makeDatabase(rec *maasRecord, p *maasDBPlan, maasOn, switching
 		m.step("database", "success", fmt.Sprintf("Secret %s/%s, written by this tool for your PostgreSQL, is in place.", ns, maasDBConfigSecret))
 		return nil, nil
 	}
-	if !switching && (rec.Database != p.target || rec.DBNamespace != ns) {
+	// A database this tool makes is recorded before its objects, so Remove
+	// finds them; the user's only after its Secret is written, so a failed
+	// write is not taken for a lost Secret (writeDBConfig).
+	if !switching && p.target != maasDBExternal && (rec.Database != p.target || rec.DBNamespace != ns) {
 		rec.Database, rec.DBNamespace = p.target, ns
 		if err := writeMaaSRecord(c, *rec); err != nil {
 			return m.fail("database", err.Error(), errorCodeFromK8sErr(err), "record write failed")
@@ -1051,7 +1064,7 @@ func (m *maasRun) writeDBConfig(rec *maasRecord, p *maasDBPlan, st maasDBState, 
 	if err != nil {
 		return m.fail("database", p.redact(fmt.Sprintf("Failed to write Secret %s/%s: %v.", ns, maasDBConfigSecret, err), connURL), maasWriteCode(err), "secret apply failed")
 	}
-	if switching {
+	if switching || rec.Database != p.target || rec.DBNamespace != ns {
 		rec.Database, rec.DBNamespace = p.target, ns
 		if err := writeMaaSRecord(c, *rec); err != nil {
 			return m.fail("database", err.Error()+" The Secret names the new database already.", errorCodeFromK8sErr(err), "record write failed")
@@ -1113,6 +1126,30 @@ func (m *maasRun) deleteDBObjects(step, ns, dbKind string) ([]string, *types.Ope
 
 // --- Change database ------------------------------------------------------------------
 
+// maasDBNotReady says why the database this tool set up does not run
+// (what the status reports as not ready), or "".
+func maasDBNotReady(c *Client, st maasDBState) string {
+	switch st.kind {
+	case maasDBDevelopment:
+		for _, k := range []string{"PostgresSecret", "PostgresDeployment", "PostgresService"} {
+			if _, ok := st.poc[k]; !ok {
+				return maasDesc(k, st.ns) + " is missing."
+			}
+		}
+		if !st.secretFound {
+			return maasDesc("Secret", st.ns) + " is missing."
+		}
+		if deploymentAvailable(c, st.ns, maasPOCName) != "True" {
+			return "The development database is not available."
+		}
+	case maasDBCNPG:
+		if !st.clusterReady || !st.secretFound {
+			return "The CloudNativePG database is not ready, or its connection Secret is not written."
+		}
+	}
+	return ""
+}
+
 // changeDatabase switches maas-api to another database this tool makes (or
 // to the user's): the new one first, then maas-db-config and a restart of
 // maas-api, then the old one's objects. Every API key is lost (the request
@@ -1144,6 +1181,9 @@ func (m *maasRun) changeDatabase(req *types.MaaSDatabaseRequest) (*types.Operati
 		return m.fail("check", msg, code, "database check failed")
 	}
 	old := p.state.kind
+	if why := maasDBNotReady(c, p.state); why != "" {
+		return m.fail("check", why+" Set up finishes it; Change database runs only from a database that runs. Nothing was changed.", "not_ready", "database not ready")
+	}
 	if what, err := p.dryRun(c); err != nil {
 		return m.fail("check", p.redact(fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", what, err, templateHint(err))), maasWriteCode(err), "dry run failed")
 	}
