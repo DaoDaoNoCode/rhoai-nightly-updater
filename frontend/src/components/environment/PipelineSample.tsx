@@ -138,9 +138,10 @@ export const PipelineSample: React.FC<PipelineSampleProps> = ({ project, dspa, a
       <ListItem>
         <Stack hasGutter>
           <StackItem>
-            <Content component="p">
+            {/* A div styled as a paragraph: the copyable image is a block (PatternFly ClipboardCopy), invalid inside <p>. */}
+            <div className="pf-v6-c-content--p">
               Download the pipeline. Both steps run <ImageRef image={spec.image} />; on a disconnected cluster, mirror that image or set SAMPLE_PIPELINE_IMAGE on the updater to a copy the cluster can pull.
-            </Content>
+            </div>
           </StackItem>
           <StackItem>
             <Button variant="secondary" component="a" href={pipelineFileHref(spec.yaml)} download={spec.fileName} icon={<DownloadIcon />}>

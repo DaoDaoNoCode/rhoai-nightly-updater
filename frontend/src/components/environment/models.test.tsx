@@ -618,7 +618,7 @@ describe("The projects the inference gateway allows (RHOAI's names list)", () =>
 
   it("a model setup behind this tool's gateway says that it adds the project to the list", () => {
     const spec = modelsConfirm({ kind: "setup-models", gateway: false, project: "team", model: "qwen25-05b-instruct" }, status({ inferenceGateway: listed(gateway, ["dev"]) }));
-    render(<>{spec?.changes}</>);
+    render(<>{spec?.changes?.map((c, i) => <div key={i}>{c}</div>)}</>);
     expect(screen.getByText(/is added to the projects it allows, before the model is created/)).toBeInTheDocument();
   });
 

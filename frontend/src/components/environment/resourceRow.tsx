@@ -155,7 +155,7 @@ export const ProblemAlerts: React.FC<{
     alerts.push(
       <Alert key="repair" variant="warning" isInline component="div" title={`${SUBJECT[kind]} needs a repair`} actionLinks={fixLink ?? undefined}>
         <Stack hasGutter>
-          <StackItem><Content component="p"><span className="pf-v6-u-text-break-word">{withImageRefs(state.repairNeeded)}</span></Content></StackItem>
+          <StackItem><div className="pf-v6-c-content--p pf-v6-u-text-break-word">{withImageRefs(state.repairNeeded)}</div></StackItem>
           {step && <StackItem><Content component="p">{step}</Content></StackItem>}
           {fixBlocked}
         </Stack>
@@ -167,7 +167,7 @@ export const ProblemAlerts: React.FC<{
     const cut = state.warning.indexOf(". ");
     const [head, rest] = cut > 0 ? [state.warning.slice(0, cut + 1), state.warning.slice(cut + 2)] : [state.warning, ""];
     alerts.push(
-      <Alert key="warning" variant="warning" isInline component="p" title={<span className="pf-v6-u-text-break-word">{withImageRefs(head)}</span>}>
+      <Alert key="warning" variant="warning" isInline component="div" title={<span className="pf-v6-u-text-break-word">{withImageRefs(head)}</span>}>
         {rest && <span className="pf-v6-u-text-break-word">{withImageRefs(rest)}</span>}
       </Alert>,
     );

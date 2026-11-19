@@ -7,7 +7,7 @@ const IMAGE = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:0aa1d3d94c6ea06
 
 describe("withImageRefs (UX round 2, Diagnostics details)", () => {
   it("shows a digest-pinned reference as tag@short digest with a copy of the full reference", () => {
-    render(<p>{withImageRefs(`Nightly catalog is healthy (${IMAGE})`)}</p>);
+    render(<div>{withImageRefs(`Nightly catalog is healthy (${IMAGE})`)}</div>);
     expect(screen.getByText("rhoai-3.6@0aa1d3d94c6e")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: `Copy image reference ${IMAGE}` })).toBeInTheDocument();
     expect(screen.queryByText(IMAGE)).not.toBeInTheDocument();
@@ -16,7 +16,7 @@ describe("withImageRefs (UX round 2, Diagnostics details)", () => {
 
   it("names an untagged image by its repository and drops the quotes around it", () => {
     const minio = "quay.io/hummingbird-community/minio@sha256:25268b5a6539d9ffc7d23b89a2ba846d12a49aac4e81172336700222818d5f45";
-    const { container } = render(<p>{withImageRefs(`Back-off pulling image "${minio}": ErrImagePull`)}</p>);
+    const { container } = render(<div>{withImageRefs(`Back-off pulling image "${minio}": ErrImagePull`)}</div>);
     expect(screen.getByText("minio@25268b5a6539")).toBeInTheDocument();
     expect(container.textContent).not.toContain('"');
   });

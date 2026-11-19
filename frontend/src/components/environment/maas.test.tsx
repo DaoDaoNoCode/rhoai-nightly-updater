@@ -95,13 +95,13 @@ describe("Unpublish of a model set up through MaaS only", () => {
   };
 
   it("says the model is left with no route, not that its direct address answers again", () => {
-    render(<>{confirmOf(true).changes}</>);
+    render(<>{confirmOf(true).changes.map((c, i) => <div key={i}>{c}</div>)}</>);
     expect(screen.getByText(/so its route is removed: it then answers only at its in-cluster address/)).toBeInTheDocument();
     expect(screen.queryByText(/its direct address answers again/)).not.toBeInTheDocument();
   });
 
   it("a model published on the MaaS tab goes back to the gateways it used before", () => {
-    render(<>{confirmOf(false).changes}</>);
+    render(<>{confirmOf(false).changes.map((c, i) => <div key={i}>{c}</div>)}</>);
     expect(screen.getByText(/its direct address answers again/)).toBeInTheDocument();
   });
 });

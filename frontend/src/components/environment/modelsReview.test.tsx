@@ -23,7 +23,7 @@ describe("Models review fixes", () => {
     const st = status(gw);
     expect(gatewayListRelease(st, "dev", ["qwen25-05b-instruct"])).toBe(true);
     const spec = modelsConfirm({ kind: "teardown-model", project: "dev", model: "qwen25-05b-instruct" }, st)!;
-    render(<>{spec.changes}</>);
+    render(<>{spec.changes.map((c, i) => <div key={i}>{c}</div>)}</>);
     expect(screen.getByText(/is taken off the gateway's projects; routes made by hand there stop attaching\./)).toBeInTheDocument();
     // Another model there keeps it; a project the tool did not add is never taken off.
     expect(gatewayListRelease(status({ ...gw, usedBy: ["dev/qwen25-05b-instruct", "dev/granite"] }), "dev", ["qwen25-05b-instruct"])).toBe(false);
@@ -33,14 +33,14 @@ describe("Models review fixes", () => {
   it("deleting a model set up through MaaS only says it is unpublished first", () => {
     const st = status(gw, [model({ exposure: "maas", maasPublished: true, maasOnlySetup: true })]);
     const spec = modelsConfirm({ kind: "teardown-model", project: "dev", model: "qwen25-05b-instruct", unpublish: true }, st)!;
-    render(<>{spec.summary}{spec.changes}</>);
+    render(<>{spec.summary}{spec.changes.map((c, i) => <div key={i}>{c}</div>)}</>);
     expect(screen.getByText(/Unpublishes it from Models as a Service first \(its subscription entry and model reference go\)\./)).toBeInTheDocument();
     expect(screen.getByText(/which was set up to be reached through MaaS only, so it is unpublished first/)).toBeInTheDocument();
   });
 
   it("deleting any other model says nothing about MaaS", () => {
     const spec = modelsConfirm({ kind: "teardown-model", project: "dev", model: "qwen25-05b-instruct" }, status(gw))!;
-    render(<>{spec.summary}{spec.changes}</>);
+    render(<>{spec.summary}{spec.changes.map((c, i) => <div key={i}>{c}</div>)}</>);
     expect(screen.queryByText(/Models as a Service/)).not.toBeInTheDocument();
     expect(screen.queryByText(/unpublished first/)).not.toBeInTheDocument();
   });
