@@ -422,6 +422,32 @@ func TestMaaSPublishAndUnpublish(t *testing.T) {
 	}
 }
 
+// Remove unpublishes this tool's models first; the steps after it write
+// the record as the unpublish left it, so the publication does not come
+// back.
+func TestMaaSTeardown_UnpublishesFirst(t *testing.T) {
+	mc := maasClusterWithModel(t)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"}); !res.Success {
+		t.Fatalf("publish: %+v", res)
+	}
+	res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"})
+	if !res.Success {
+		t.Fatalf("teardown: %+v", res)
+	}
+	if got := finalSteps(events); got != "check=success unpublish=success dsc=success gateway=success database=success" {
+		t.Fatalf("steps = %s", got)
+	}
+	if !stepSaid(events, "unpublish", "1 model unpublished.") {
+		t.Fatalf("events = %+v", events)
+	}
+	if mc.f.has(tMaaSRef) || mc.f.has(tMaaSSub) || mc.f.has(tMaaSAuth) || mc.f.has(tMaaSGateway) {
+		t.Fatal("a MaaS object is left")
+	}
+	if rec := readRecord(t, mc.c); len(rec.Published) != 0 || len(rec.ModelRefs) != 0 || rec.DSCChanged {
+		t.Fatalf("record = %+v", rec)
+	}
+}
+
 func TestCleanUp_UnpublishesFirstAndRemovesThePlatformLast(t *testing.T) {
 	parts := cleanupParts(nil, types.CleanupRequest{MaaSPublished: []string{"p"}, Models: []string{"p"}, InferenceGateway: true, MaaSPlatform: true})
 	var ids []string
