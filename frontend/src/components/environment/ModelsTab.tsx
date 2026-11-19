@@ -460,7 +460,6 @@ export const ExposureChooser: React.FC<{
       : null;
   return (
     <Stack hasGutter>
-      {exposures.defaultReason && <StackItem><Content component="small">Recommended: {exposures.defaultReason}</Content></StackItem>}
       {!exposures.default && exposures.recommendGateway && (
         <StackItem>
           <Alert variant="info" isInline component="div" title="No gateway can carry this model yet"
@@ -478,6 +477,9 @@ export const ExposureChooser: React.FC<{
               <HelperText>
                 <HelperTextItem variant="warning">{o.reason ?? "Not available now."}{fixLink(o) ? <> {fixLink(o)}</> : null}</HelperTextItem>
               </HelperText>
+            ) : o.key === exposures.default && exposures.defaultReason ? (
+              // Why it is the recommended one, next to its Recommended label.
+              <HelperText><HelperTextItem>{exposures.defaultReason.charAt(0).toUpperCase() + exposures.defaultReason.slice(1)}</HelperTextItem></HelperText>
             ) : undefined} />
         </StackItem>
       ))}

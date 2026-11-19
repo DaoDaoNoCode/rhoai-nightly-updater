@@ -373,7 +373,7 @@ describe("Models tab", () => {
     // The recommended way is chosen, and said why.
     expect(await screen.findByRole("radio", { name: /Through the cluster's default inference gateway/ })).toBeChecked();
     expect(screen.getByRole("radio", { name: /Through MaaS only/ })).toBeDisabled();
-    expect(screen.getByText(/Recommended: Gateway openshift-ingress\/openshift-ai-inference is KServe's default/)).toBeInTheDocument();
+    expect(screen.getByText(/^Gateway openshift-ingress\/openshift-ai-inference is KServe.s default/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Set up Qwen2.5 0.5B Instruct in dev" }));
     const dialog = await screen.findByRole("dialog", { name: /Set up Qwen2.5 0.5B Instruct in dev\?/ });
     expect(within(dialog).getByText(/Reached: through the cluster's default inference gateway/)).toBeInTheDocument();
