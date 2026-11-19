@@ -352,10 +352,12 @@ Environment variables of the `app` container. The template sets the first group;
 | `LOG_LEVEL` | `info` | `debug`, `warn`, `error` |
 | `SHUTDOWN_DRAIN_TIMEOUT` | 980s | how long a terminating pod waits for a running operation; keep it below the grace period |
 
-To set `GITHUB_TOKEN`, keep the token in a Secret. The Deployment restarts afterwards:
+To set `GITHUB_TOKEN`, keep the token in a Secret. It is read without echo, so it stays out of your shell history and the terminal. The Deployment restarts afterwards:
 
 ```bash
-oc create secret generic github-token -n rhoai-nightly-updater --from-literal=GITHUB_TOKEN=<token>
+printf 'GitHub token: ' && read -rs GITHUB_TOKEN && echo
+oc create secret generic github-token -n rhoai-nightly-updater --from-literal="GITHUB_TOKEN=$GITHUB_TOKEN"
+unset GITHUB_TOKEN
 oc set env deployment/rhoai-nightly-updater -n rhoai-nightly-updater -c app --from=secret/github-token
 ```
 
