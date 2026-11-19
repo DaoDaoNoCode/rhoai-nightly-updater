@@ -55,6 +55,10 @@ var activityActions = map[string][2]string{
 	"create-pull-secret":            {"setup", "Pull secret configured"},
 	"create-dsc":                    {"setup", "DataScienceCluster created"},
 	"repair-dsc":                    {"setup", "DataScienceCluster repaired"},
+	"set-component-state":           {"setup", "DataScienceCluster component changed"},
+	"fix-dsc":                       {"setup", "DataScienceCluster fixed"},
+	"reset-dsc":                     {"setup", "DataScienceCluster reset in place"},
+	"hard-reset-dsc":                {"setup", "DataScienceCluster hard reset"},
 	"assist-rollout":                {"diagnostics", "Stuck rollout assisted"},
 	"fix-delete-stale-webhooks":     {"diagnostics", "Stale webhooks deleted"},
 	"fix-recreate-subscription":     {"diagnostics", "Subscription recreated"},
@@ -84,6 +88,7 @@ var activityFailedLabels = map[string]string{
 	"create-pull-secret":       "Pull secret update failed",
 	"create-dsc":               "DataScienceCluster creation failed",
 	"repair-dsc":               "DataScienceCluster repair failed",
+	"hard-reset-dsc":           "DataScienceCluster hard reset failed",
 }
 
 func activityCategory(action string) string {

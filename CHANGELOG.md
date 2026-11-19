@@ -23,6 +23,35 @@ only accepts a tag whose version is the top dated section. See
 
 ### Added
 
+- **Components: change the DataScienceCluster without the OpenShift
+  console.** A tree of every component and sub-component the installed
+  DataScienceCluster CRD defines (any depth: `dashboard.standard`,
+  `kserve.nim`, `aigateway.modelsAsAService`, ...), each with its value in
+  the DSC, the release default (the installed CSV's `alm-examples`) and what
+  the operator reports, replaces the Ready/Removed lists. Each value is a
+  select limited to the CRD's values; the confirmation lists exactly what
+  is deployed or removed, removals run the disable checks first (fail
+  closed), and a sub-component set to Managed under a parent that is not is
+  offered with its parent. **Differences from the release default** lists
+  only real problems (a value the default sets and the DSC leaves unset,
+  Managed under a parent that is not Managed, fields the CRD does not
+  define), not user choices or values the API server fills in; **Fix**
+  adds or removes exactly the reviewed ones. **Reset to the release
+  default…**: a soft reset changes in place only what differs, keeping the
+  workbench and AI hub namespaces; a hard reset (typed DSC name) deletes the
+  DSC and creates the release default with the same name and namespaces,
+  waits up to 10 minutes for the operator's cleanup, never removes a
+  finalizer and creates nothing when the old DSC is not gone. Every change
+  is a JSON Patch of only its fields (its `test` operations fail the patch
+  when the DSC changed since you looked), after a server-side dry run, with
+  `fieldValidation=Strict` and its own field manager
+  (`rhoai-nightly-updater-components`, so Clean up never turns it back);
+  refused under Argo CD or an ACM policy, in the gitops profile (which
+  shows the tree read-only), and on Managed RHOAI for the hard reset.
+  Diagnostics' **disable** fix now uses the same change for any component
+  the CRD defines, instead of a fixed list. **New RBAC**: `delete` on
+  `datascienceclusters` (full profile only; [SECURITY.md](SECURITY.md)
+  hard reset audit).
 - **MaaS: choose the database.** PostgreSQL is customer-provided in the
   MaaS docs, so Set up asks: your PostgreSQL (only Secret
   `maas-db-config` is written; the URL is never shown, logged or kept),

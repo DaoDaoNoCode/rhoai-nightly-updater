@@ -1355,3 +1355,123 @@ export function prerequisites({ models = "ready", pipelines = "ready", exposure 
     },
   };
 }
+
+// --- The Components page's DataScienceCluster manager (GET /api/components/dsc) ---
+// The tree of a RHOAI 3.6 cluster's CRD (v3), with the live DSC's values and
+// the release default of its CSV's alm-examples (pkg/cluster/testdata/dsc).
+const MR = ["Managed", "Removed"];
+const dscTree = [
+  // [path, spec (null: not set; undefined: a group), release default, CRD default, allowed, actual, condition]
+  ["aigateway", "Managed", "Removed", "", MR, "Managed", ["AIGatewayReady", "True"]],
+  ["aigateway.aiGrid", null, null, "", MR, "Removed", ["AIGridReady", "False", "Removed"]],
+  ["aigateway.batchGateway", "Removed", "Removed", "", MR, "Removed", ["BatchGatewayReady", "False", "Removed"]],
+  ["aigateway.modelsAsAService", "Managed", "Removed", "Removed", MR, "Managed", ["ModelsAsAServiceReady", "True"]],
+  ["aiHub", "Managed", "Managed", "", MR, "Managed", ["AIHubReady", "True"]],
+  ["aipipelines", "Managed", "Managed", "", MR, "Managed", ["AIPipelinesReady", "True"]],
+  ["aipipelines.argoWorkflowsControllers", null, null, "Managed", MR, "", null],
+  ["dashboard", undefined, undefined, "", null, "Managed", ["DashboardReady", "True"]],
+  ["dashboard.maasPortal", "Removed", "Removed", "", MR, "Removed", ["MaaSPortalAvailable", "False", "Removed"]],
+  ["dashboard.standard", "Managed", "Managed", "", MR, "", null],
+  ["data", undefined, undefined, "", null, "Managed", ["DataReady", "True"]],
+  ["data.dataRegistry", null, null, "", MR, "", null],
+  ["data.featureStore", "Managed", "Managed", "", MR, "", null],
+  ["databaseservice", "Removed", "Removed", "", MR, "Removed", ["DatabaseServiceReady", "False", "Removed"]],
+  ["kserve", "Managed", "Managed", "", MR, "Managed", ["KserveReady", "True"]],
+  ["kserve.modelCache", null, null, "Removed", MR, "", null],
+  ["kserve.modelExpress", "Removed", "Removed", "Removed", MR, "", null],
+  ["kserve.nim", "Managed", "Managed", "Managed", MR, "", null],
+  ["kueue", "Removed", "Removed", "", ["Managed", "Unmanaged", "Removed"], "Removed", ["KueueReady", "False", "Removed"]],
+  ["mcplifecycleoperator", "Managed", "Managed", "", MR, "Managed", ["MCPLifecycleOperatorReady", "True"]],
+  ["mlflowoperator", "Managed", "Managed", "", MR, "Managed", ["MLflowOperatorReady", "True"]],
+  ["ogx", "Managed", "Managed", "", MR, "Managed", ["OGXReady", "True"]],
+  ["ray", "Managed", "Managed", "", MR, "Managed", ["RayReady", "True"]],
+  ["sparkoperator", "Removed", "Removed", "", MR, "Removed", ["SparkOperatorReady", "False", "Removed"]],
+  ["trainer", "Managed", "Managed", "", MR, "Managed", ["TrainerReady", "True"]],
+  ["trustyai", "Managed", "Managed", "", MR, "Managed", ["TrustyAIReady", "True"]],
+  ["workbenches", "Managed", "Managed", "", MR, "Managed", ["WorkbenchesReady", "True"]],
+  ["workbenches.workbenchesV2", "Removed", "Removed", "Removed", MR, "Removed", ["WorkbenchesV2Ready", "False", "Removed"]],
+];
+
+/**
+ * The DSC manager. overrides maps a path to its value in the DSC (null: not
+ * set). Mismatches are worked out as the backend does: a toggle the default
+ * sets and the DSC leaves unset, and Managed under a parent that is not.
+ */
+export function dscManager(overrides = {}) {
+  const nodes = dscTree.map(([path, s, def, schemaDefault, allowed, actual, cond]) => {
+    const parts = path.split(".");
+    const toggle = s !== undefined;
+    const value = toggle ? (path in overrides ? overrides[path] : s) : null;
+    // A component set to Removed is reported as Removed once reconciled.
+    if (toggle && value !== "Managed" && actual === "Managed") {
+      actual = "Removed";
+      cond = cond && [cond[0], "False", "Removed"];
+    }
+    const n = {
+      path, name: parts[parts.length - 1], parent: parts.slice(0, -1).join("."), depth: parts.length - 1, toggle,
+      specSet: value !== null && value !== undefined, defaultSet: def !== null && def !== undefined,
+      ...(allowed ? { allowed } : {}), ...(schemaDefault ? { schemaDefault } : {}),
+      ...(value ? { spec: value } : {}), ...(def ? { default: def } : {}), ...(actual ? { actual } : {}),
+      ...(cond ? { condition: { type: cond[0], status: cond[1], ...(cond[2] ? { reason: cond[2], message: `ManagementState is set to ${cond[2]}` } : {}) } } : {}),
+    };
+    if (n.specSet) n.changed = n.spec !== (n.defaultSet ? n.default : schemaDefault || "Removed");
+    return n;
+  });
+  const byPath = Object.fromEntries(nodes.map((n) => [n.path, n]));
+  const mismatches = [];
+  for (const n of nodes) {
+    if (!n.toggle) continue;
+    if (!n.specSet && n.defaultSet) {
+      mismatches.push({ kind: "unset", path: n.path, default: n.default, fixable: true, message: n.default === "Removed"
+        ? "Not set in the DataScienceCluster. The operator treats it as Removed, which is also the release default; Fix sets it explicitly."
+        : `Not set in the DataScienceCluster, so the operator treats it as Removed, but the release default is ${n.default}. Fix sets it to ${n.default}.` });
+    }
+    const parent = byPath[n.parent];
+    if (n.spec === "Managed" && parent?.toggle && parent.spec !== "Managed") {
+      mismatches.push({ kind: "parent-removed", path: n.path, parent: parent.path, fixable: false,
+        message: `Managed, but ${parent.path} is ${parent.spec || "not set"}, so the operator deploys nothing for it. Set ${parent.path} to Managed, or set this to Removed.` });
+    }
+  }
+  return {
+    exists: true, state: "present", name: "default-dsc", uid: "ba54ddbf-ad4a-4257-9ab4-977eb541dc1c", apiVersion: "datasciencecluster.opendatahub.io/v3", storageVersion: "v3",
+    dscCount: 1, phase: "Ready", releaseName: "OpenShift AI Self-Managed", releaseVersion: "3.6.0", operatorVersion: "3.6.0",
+    defaultsSource: "alm-examples of the installed CSV rhods-operator.3.6.0",
+    conditions: [{ type: "Ready", status: "True" }, { type: "ProvisioningSucceeded", status: "True" }, { type: "ComponentsReady", status: "True" }, { type: "ModulesReady", status: "True" }],
+    nodes, mismatches,
+  };
+}
+
+// The plan's binding (a hash in the real backend); the mock never checks it.
+const DSC_PLAN_BINDING = "0".repeat(24);
+
+/** What a change would do (GET /api/components/dsc/plan), for the mock's manager m. */
+export function dscPlan(m, action, path, to, withParent) {
+  const base = { action, name: m.name, uid: m.uid, apiVersion: m.apiVersion, token: DSC_PLAN_BINDING, changes: [] };
+  const node = m.nodes.find((n) => n.path === path);
+  const change = (n, value) => ({ path: n.path, from: n.spec, fromSet: n.specSet, to: value, toSet: true, toggle: true,
+    effect: value === "Managed" && n.spec !== "Managed" ? "deploys" : value !== "Managed" && n.spec === "Managed" ? "removes" : "" });
+  if (action === "toggle" && node) {
+    const parent = m.nodes.find((n) => n.path === node.parent);
+    if (to === "Managed" && parent?.toggle && parent.spec !== "Managed") {
+      if (!withParent) return { ...base, refusal: `${parent.path} is ${parent.spec || "not set"}, so setting ${path} to Managed would deploy nothing. Set ${parent.path} to Managed in the same change, or set it first.`, code: "parent_removed", parentPath: parent.path };
+      return { ...base, changes: [change(parent, "Managed"), change(node, "Managed")] };
+    }
+    const changes = [change(node, to)];
+    if (to !== "Managed") {
+      for (const c of m.nodes.filter((n) => n.parent === path && n.spec === "Managed")) changes.push({ path: c.path, from: "Managed", fromSet: true, to: "Managed", toSet: true, toggle: true, effect: "removes" });
+    }
+    return { ...base, changes };
+  }
+  if (action === "fix") {
+    return { ...base, changes: m.mismatches.filter((x) => x.kind === "unset").map((x) => ({ path: x.path, fromSet: false, to: x.default, toSet: true, toggle: true, effect: x.default === "Managed" ? "deploys" : "" })) };
+  }
+  const differing = m.nodes.filter((n) => n.toggle && n.defaultSet && n.spec !== n.default).map((n) => change(n, n.default));
+  if (action === "soft-reset") return { ...base, changes: differing };
+  return {
+    ...base, changes: differing,
+    tornDown: m.nodes.filter((n) => n.depth === 0 && (n.toggle ? n.spec === "Managed" : n.actual === "Managed")).map((n) => n.path),
+    stayRemoved: differing.filter((c) => c.effect === "removes").map((c) => c.path),
+    warnings: ["Until aipipelines is back, these stop working: pipeline server team-a/dspa."],
+    newObject: "apiVersion: datasciencecluster.opendatahub.io/v3\nkind: DataScienceCluster\nmetadata:\n  labels:\n    app.kubernetes.io/name: datasciencecluster\n  name: default-dsc\nspec:\n  components:\n    aiHub:\n      instancesNamespace: rhoai-model-registries\n      managementState: Managed\n    aigateway:\n      managementState: Removed\n    ...\n",
+  };
+}

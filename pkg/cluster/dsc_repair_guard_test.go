@@ -167,8 +167,7 @@ func TestDisableComponent_OperatorAndConversionPreconditions(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newFakeAPI(t)
-			f.json("GET", dscV2List, http.StatusOK, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
-			f.json("GET", dscV2List+"/default-dsc", http.StatusOK, `{"spec":{"components":{"`+tc.component+`":{"managementState":"Managed"}}}}`)
+			serveToggleDSC(f, "v2", `{"metadata":{"name":"default-dsc","uid":"u1"},"spec":{"components":{"`+tc.component+`":{"managementState":"Managed"}}}}`, "", tc.component)
 			f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator", http.StatusOK, `{"status":{"readyReplicas":1}}`)
 			serveComponentGroup(f)
 			kind := map[string]string{"ray": "Ray", "trustyai": "TrustyAI"}[tc.component]

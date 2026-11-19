@@ -20,6 +20,7 @@ What the tool itself changes: [docs/CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md)
 | A PR shows "Does not contain" in Build Explorer | [§8](#8-build-explorer-quay-and-github) |
 | Storage **Needs attention** (Migrate storage or Repair), **Error**, Delete disabled | [§10](#10-environment-page) |
 | DataScienceCluster **Not Ready**, a Diagnostics problem | [§11.7](#117-datasciencecluster-not-ready), [§11.6](#116-upgrade-leftovers-the-operator-cannot-fix-itself) |
+| A component missing or "Not set" after an upgrade, a change refused on Components, a hard reset that stopped | [§11.9](#119-change-or-reset-the-datasciencecluster) |
 | "The operator cannot convert DataScienceCluster to v3", "The DataScienceCluster is shown as v2" | [§11.8](#118-the-operator-cannot-convert-a-crd-version) |
 | "Argo CD manages ...", **Install pending**, **OLM installing**, `gitops_managed`, `install_mismatch`, "sets the image of CatalogSource ... in Git" | [§13](#13-clusters-managed-by-argo-cd) |
 
@@ -813,6 +814,41 @@ oc logs -n redhat-ods-operator deploy/rhods-operator | grep conversion-webhook
 ```
 
 Fix: update RHOAI to a newer nightly (Update on the Status page, or a build from Build Explorer), then run Diagnostics again. Do not switch the CRD to conversion strategy `None` (§11.2 step 3): the stored objects would be read in the wrong shape.
+
+### 11.9 Change or reset the DataScienceCluster
+
+The Components page's **Components and sub-components** card ([README](README.md#components-and-sub-components-change-them-without-the-openshift-console)) changes the DSC. What it writes: [CLUSTER_CHANGES §5](docs/CLUSTER_CHANGES.md#5-datasciencecluster-status-and-components-pages).
+
+**A component is "Not set" after an upgrade.** A release that adds a sub-component (`dashboard.maasPortal`, `workbenches.workbenchesV2`, `kserve.modelExpress`, `aigateway.aiGrid`, `databaseservice` in 3.6) does not add it to an existing DSC. The operator treats a value that is not set as Removed. When the release default is Removed too, nothing differs in practice; when it is Managed (for example `dashboard.standard` lost by a client that wrote the old `dashboard.managementState` shape against v3, which the API server prunes), the component is gone. **Fix** sets each missing value to the release default.
+
+**Managed under a parent that is not Managed.** A sub-component is deployed through its parent's module (`aigateway.modelsAsAService` needs `aigateway` Managed). Set the parent to Managed (the confirmation offers both in one change) or set the sub-component to Removed.
+
+**A change is refused.** Every change shows its exact list first:
+
+<img src="docs/images/components-toggle.png" alt="Set ray to Removed? The confirmation lists ray: Managed to Removed (removes it)" width="640">
+
+- "changed since you looked": someone else changed the DSC (the JSON Patch's `test` failed). Nothing was changed; reload.
+- "The API server refused the change in its dry run: ...": a validation rule or the operator's webhook refused it, quoted as is (for example Kueue `Managed`, which the 3.6 webhook denies; use `Unmanaged`; or `kserve.modelCache` Managed without `cacheSize`, which needs settings this page does not edit: use the console).
+- "removing X now could leave it stuck in deletion": the removal checks of [§11.1](#111-d1-dashboard-operator-scaled-to-0-dashboard-cr-deletion-hangs) and [§11.4](#114-d7--d8-mlflow-or-pipeline-server-finalizers) (the module operator must run, the module CR must not be deleting, the component must not serve a CRD conversion webhook, nothing must still use it). The dashboard, MLflow operator and pipelines are never removed by the tool.
+- Argo CD or an ACM policy manages the DSC: change it in Git or in the policy.
+
+**Hard reset.** Use it when components are stuck and a soft reset does not help.
+
+<img src="docs/images/components-hard-reset.png" alt="The hard reset dialog: every component is torn down and comes back as the release default; what stays Removed; the DataScienceCluster it creates; the DSC name typed to confirm" width="640">
+
+It runs as one operation with steps: check, delete (UID precondition, after a dry run), wait until the operator has removed every component and the DSC is gone, create the release default with the old name and the old workbench and AI hub namespaces (after a dry run), wait for Ready. Your notebooks, pipeline servers, models and model registries are kept, but stop working until their components are back. Components you enabled that the release default leaves Removed stay Removed: turn them on again afterwards. It is refused on Managed RHOAI (the operator recreates `default-dsc` itself), when the operator is not running, when the DSC is already being deleted, when there is not exactly one DSC, under Argo CD or ACM, and while a module cannot be cleaned up (for example an MLflow CR exists).
+
+If it stops:
+
+- **"still being deleted after 10m0s"**: nothing was created. The DSC finalizer `platform.opendatahub.io/finalizer` is removed by the operator once every module is cleaned up; the message quotes `ModulesReady`. Check Diagnostics → Platform modules for the module that is stuck and fix it (§11.1, §11.4). Do **not** remove the finalizer by hand: the operator would leave modules behind. Once `oc get datasciencecluster` shows nothing, use **Create DataScienceCluster** on the Components page.
+- **"creating the release default failed"**: the old DSC is gone. Use **Create DataScienceCluster** (it creates the release default, named `default-dsc`), or apply the object the message prints:
+
+  ```bash
+  oc get datasciencecluster                 # expect: No resources found
+  oc apply -f dsc.yaml                      # the object from the message
+  ```
+
+- **"A new DataScienceCluster ... appeared"**: someone, or the operator, created one meanwhile; the reset created nothing. Review it on the Components page.
 
 ## 12. Activity log
 

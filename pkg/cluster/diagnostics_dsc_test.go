@@ -6,91 +6,67 @@ import (
 )
 
 func TestDisableComponent_PatchesTheExistingDSC(t *testing.T) {
-	client, records, cleanup := newRecordingMockClient(map[string]mockResponse{
-		"GET /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters": {
-			body: `{"items":[{"metadata":{"name":"my-dsc"}}]}`,
-		},
-		"GET /apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator": {body: `{"status":{"readyReplicas":3}}`},
-		// No component API served, so no module CR (and no finalizer) exists.
-		"GET /apis/components.platform.opendatahub.io": {statusCode: 404, body: `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`},
-		"GET /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/my-dsc": {
-			body: `{"spec":{"components":{"llamastackoperator":{"managementState":"Managed"}}}}`,
-		},
-		"PATCH /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/my-dsc": {
-			body: `{"spec":{"components":{"llamastackoperator":{"managementState":"Removed"}}}}`,
-		},
-	})
-	defer cleanup()
+	f, client := newFakeAPI(t)
+	serveToggleDSC(f, "v2", `{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"my-dsc","uid":"u1"},"spec":{"components":{"llamastackoperator":{"managementState":"Managed"}}}}`, "", "llamastackoperator")
+	f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator", 200, `{"status":{"readyReplicas":3}}`)
 	result, err := ApplyFix(client, "disable-component:llamastackoperator")
 	if err != nil || !result.Success {
 		t.Fatalf("ApplyFix = %+v, %v", result, err)
 	}
-	patched := false
-	for _, r := range *records {
-		if r.Method == "PATCH" {
-			if r.Path != "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/my-dsc" {
-				t.Fatalf("patched %s", r.Path)
-			}
-			patched = true
-		}
+	const path = "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/my-dsc"
+	if got := f.realWrites(); len(got) != 1 || got[0] != "PATCH "+path {
+		t.Fatalf("writes = %v", got)
 	}
-	if !patched {
-		t.Fatal("DSC was not patched")
+	patches := f.requests("PATCH", path)
+	if len(patches) != 2 || !strings.Contains(patches[0].Query, "dryRun=All") {
+		t.Fatalf("no dry run first: %+v", patches)
+	}
+	want := `[{"op":"test","path":"/spec/components/llamastackoperator/managementState","value":"Managed"},{"op":"replace","path":"/spec/components/llamastackoperator/managementState","value":"Removed"}]`
+	if patches[1].Body != want || !strings.Contains(patches[1].Query, "fieldManager="+dscComponentsManager) || !strings.Contains(patches[1].Query, "fieldValidation=Strict") {
+		t.Fatalf("patch = %+v", patches[1])
 	}
 }
 
 func TestDisableComponent_FallsBackToV1API(t *testing.T) {
-	client, records, cleanup := newRecordingMockClient(map[string]mockResponse{
-		"GET /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters": {
-			statusCode: 404, body: `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`,
-		},
-		"GET /apis/datasciencecluster.opendatahub.io/v1/datascienceclusters": {
-			body: `{"items":[{"metadata":{"name":"rhods"}}]}`,
-		},
-		"GET /apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator": {body: `{"status":{"readyReplicas":3}}`},
-		// No component API served, so no module CR (and no finalizer) exists.
-		"GET /apis/components.platform.opendatahub.io": {statusCode: 404, body: `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`},
-		"GET /apis/datasciencecluster.opendatahub.io/v1/datascienceclusters/rhods": {
-			body: `{"spec":{"components":{"ray":{"managementState":"Managed"}}}}`,
-		},
-		"PATCH /apis/datasciencecluster.opendatahub.io/v1/datascienceclusters/rhods": {
-			body: `{"spec":{"components":{"ray":{"managementState":"Removed"}}}}`,
-		},
-	})
-	defer cleanup()
+	f, client := newFakeAPI(t)
+	serveToggleDSC(f, "v1", `{"apiVersion":"datasciencecluster.opendatahub.io/v1","metadata":{"name":"rhods","uid":"u1"},"spec":{"components":{"ray":{"managementState":"Managed"}}}}`, "", "ray")
+	f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator", 200, `{"status":{"readyReplicas":3}}`)
 	result, err := ApplyFix(client, "disable-component:ray")
 	if err != nil || !result.Success {
 		t.Fatalf("ApplyFix = %+v, %v", result, err)
 	}
-	for _, r := range *records {
-		if r.Method == "PATCH" && r.Path != "/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters/rhods" {
-			t.Fatalf("patched %s", r.Path)
-		}
+	if got := f.realWrites(); len(got) != 1 || got[0] != "PATCH /apis/datasciencecluster.opendatahub.io/v1/datascienceclusters/rhods" {
+		t.Fatalf("writes = %v", got)
 	}
 }
 
 // The module CR check must not be skipped when discovery fails: a hidden
 // finalizer could leave the component stuck in deletion.
 func TestDisableComponent_DiscoveryErrorBlocks(t *testing.T) {
-	client, records, cleanup := newRecordingMockClient(map[string]mockResponse{
-		"GET /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters": {
-			body: `{"items":[{"metadata":{"name":"my-dsc"}}]}`,
-		},
-		"GET /apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator": {body: `{"status":{"readyReplicas":3}}`},
-		"GET /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/my-dsc": {
-			body: `{"spec":{"components":{"ray":{"managementState":"Managed"}}}}`,
-		},
-		"GET /apis/components.platform.opendatahub.io": {statusCode: 503, body: `{"kind":"Status","status":"Failure","code":503}`},
-	})
-	defer cleanup()
+	f, client := newFakeAPI(t)
+	serveToggleDSC(f, "v2", `{"metadata":{"name":"my-dsc","uid":"u1"},"spec":{"components":{"ray":{"managementState":"Managed"}}}}`, "", "ray")
+	f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator", 200, `{"status":{"readyReplicas":3}}`)
+	f.json("GET", "/apis/components.platform.opendatahub.io", 503, `{"kind":"Status","status":"Failure","code":503}`)
 	result, err := ApplyFix(client, "disable-component:ray")
 	if err != nil || result.Success || result.ErrorCode != "prerequisites" || !strings.Contains(result.Message, "could not read the ray module CR") {
 		t.Fatalf("ApplyFix = %+v, %v", result, err)
 	}
-	for _, r := range *records {
-		if r.Method == "PATCH" {
-			t.Fatalf("patched %s although the module CR could not be checked", r.Path)
-		}
+	if w := f.writes(); len(w) != 0 {
+		t.Fatalf("patched although the module CR could not be checked: %v", w)
+	}
+}
+
+// Without the CRD the change cannot be checked against its schema: refused.
+func TestDisableComponent_NoCRDSchemaRefuses(t *testing.T) {
+	f, client := newFakeAPI(t)
+	serveToggleDSC(f, "v2", `{"metadata":{"name":"my-dsc","uid":"u1"},"spec":{"components":{"ray":{"managementState":"Managed"}}}}`, "", "ray")
+	f.status("GET", dscCRDPath, 403, "Forbidden")
+	result, err := ApplyFix(client, "disable-component:ray")
+	if err != nil || result.Success || !strings.Contains(result.Message, "CRD") {
+		t.Fatalf("ApplyFix = %+v, %v", result, err)
+	}
+	if w := f.writes(); len(w) != 0 {
+		t.Fatalf("writes: %v", w)
 	}
 }
 

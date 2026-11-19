@@ -1202,113 +1202,47 @@ func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error
 	}, nil
 }
 
-// disableableComponents are DSC components the tool may set to Removed. All
-// are top-level keys of spec.components in the v1 or v2 DataScienceCluster
-// CRD (a key the CRD does not define would be pruned silently).
-var disableableComponents = map[string]bool{
-	"llamastackoperator": true,
-	"feastoperator":      true,
-	"trustyai":           true,
-	"ray":                true,
-	"kueue":              true,
-	"sparkoperator":      true,
-	"trainer":            true,
-	"trainingoperator":   true,
-}
-
+// applyFixDisableComponent sets a component to Removed (Diagnostics and the
+// Components page's "disable-component:<name>" fix). It is the Components
+// page's toggle (SetDSCManagementState): the component must be a
+// managementState the installed CRD defines, the removal preconditions run
+// first, and the change is a tested JSON Patch of that one field after a
+// server-side dry run.
 func applyFixDisableComponent(c *Client, compName string) (*types.OperationResponse, error) {
 	if compName == "" {
 		return &types.OperationResponse{Success: false, Message: "Component name is required", ErrorCode: "validation"}, nil
 	}
+	v, err := readDSCView(c)
+	if err != nil {
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot find the DataScienceCluster: %v", err), ErrorCode: errorCodeFromK8sErr(err)}, nil
+	}
+	switch {
+	case v.state == DSCStateNoCRD:
+		return &types.OperationResponse{Success: false, Message: "Cannot find the DataScienceCluster: the DataScienceCluster API is not installed", ErrorCode: "prerequisites"}, nil
+	case v.state != DSCStatePresent:
+		return &types.OperationResponse{Success: false, Message: "Cannot find the DataScienceCluster: no DataScienceCluster exists", ErrorCode: "prerequisites"}, nil
+	case v.argoApp != "":
+		return &types.OperationResponse{Success: false, Message: gitOpsRefusal("The DataScienceCluster", v.argoApp, "removing "+compName) + fmt.Sprintf(" Set %s to Removed in Git.", compName), ErrorCode: ErrorCodeGitOpsManaged}, nil
+	}
 	if reason, refused := refusedComponents[compName]; refused {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("The tool does not remove %s. %s", compName, reason), ErrorCode: "validation"}, nil
 	}
-	if !disableableComponents[compName] {
-		return &types.OperationResponse{
-			Success:   false,
-			Message:   fmt.Sprintf("Component %q cannot be disabled through this tool. Use the OpenShift Console to edit the DSC directly.", compName),
-			ErrorCode: "validation",
-		}, nil
+	if t, ok := v.byKey[compName]; v.crdErr == nil && (!ok || !t.Toggle) {
+		return &types.OperationResponse{Success: false, ErrorCode: "validation",
+			Message: fmt.Sprintf("Component %q is not a component the installed DataScienceCluster CRD defines. Use the OpenShift Console to edit the DSC directly.", compName)}, nil
 	}
-
-	dscPath, err := dataScienceClusterPath(c)
-	if err != nil {
-		return &types.OperationResponse{
-			Success:   false,
-			Message:   fmt.Sprintf("Cannot find the DataScienceCluster: %v", err),
-			ErrorCode: errorCodeFromK8sErr(err),
-		}, nil
-	}
-
-	// Re-check: the component must be in the DSC and not already Removed.
-	body, _, err := c.get(dscPath)
-	if err != nil {
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read the DataScienceCluster: %v", err), ErrorCode: errorCodeFromK8sErr(err)}, nil
-	}
-	if meta, err := parseObjectMeta(body); err == nil {
-		if app := argoApplication(meta.Annotations, "DataScienceCluster", "", meta.Name); app != "" {
-			return &types.OperationResponse{Success: false, Message: gitOpsRefusal("The DataScienceCluster", app, "removing "+compName) + fmt.Sprintf(" Set %s to Removed in Git.", compName), ErrorCode: ErrorCodeGitOpsManaged}, nil
-		}
-	}
-	state, present := componentManagementState(body, compName)
+	state, present := lookupState(v.components(), strings.Split(compName, "."))
 	if !present {
 		return nothingToDo(fmt.Sprintf("the DataScienceCluster has no %s component. Nothing was changed.", compName), nil), nil
 	}
 	if state == "Removed" {
 		return nothingToDo(fmt.Sprintf("%s is already Removed. Nothing was changed.", compName), nil), nil
 	}
-	if blockers := disableBlockers(c, compName); len(blockers) > 0 {
-		return &types.OperationResponse{
-			Success:   false,
-			Message:   fmt.Sprintf("Not removing %s now, because it could leave the component stuck in deletion: %s. Nothing was changed.", compName, strings.Join(blockers, "; ")),
-			Logs:      blockers,
-			ErrorCode: "prerequisites",
-		}, nil
+	res := v.setManagementState(c, types.DSCToggleRequest{Name: v.name, Path: compName, From: state, To: "Removed"}, "disable-component")
+	if res.Success {
+		res.Message = fmt.Sprintf("Set %s to Removed (was %s). The operator will clean up the component.", compName, nonEmpty(state, "unset"))
 	}
-
-	patch := fmt.Sprintf(`{"spec":{"components":{%q:{"managementState":"Removed"}}}}`, compName)
-	respBody, _, err := c.patch(dscPath, []byte(patch))
-	if err != nil {
-		return &types.OperationResponse{
-			Success:   false,
-			Message:   fmt.Sprintf("Failed to patch DataScienceCluster: %v", err),
-			ErrorCode: errorCodeFromK8sErr(err),
-		}, nil
-	}
-	if after, _ := componentManagementState(respBody, compName); after != "Removed" {
-		return &types.OperationResponse{
-			Success: false,
-			Message: fmt.Sprintf("The API accepted the patch, but %s is %q instead of Removed in the returned DataScienceCluster.", compName, after),
-		}, nil
-	}
-
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		User:      getUser(c),
-		Action:    "disable-component",
-		Detail:    compName,
-		Success:   true,
-	})
-
-	return &types.OperationResponse{
-		Success: true,
-		Message: fmt.Sprintf("Set %s to Removed (was %s). The operator will clean up the component.", compName, nonEmpty(state, "unset")),
-	}, nil
-}
-
-func componentManagementState(dscJSON []byte, compName string) (string, bool) {
-	var dsc struct {
-		Spec struct {
-			Components map[string]struct {
-				ManagementState string `json:"managementState"`
-			} `json:"components"`
-		} `json:"spec"`
-	}
-	if json.Unmarshal(dscJSON, &dsc) != nil {
-		return "", false
-	}
-	comp, ok := dsc.Spec.Components[compName]
-	return comp.ManagementState, ok
+	return res, nil
 }
 
 // dataScienceClusterPath returns the API path of the cluster's

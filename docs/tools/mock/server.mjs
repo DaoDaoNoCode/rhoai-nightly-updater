@@ -132,6 +132,9 @@ const scenarios = {
   },
   "template-outdated": (w) => { w.version = F.versionInfo({ templateRevision: "3", templateOutdated: true }); },
   "components-not-ready": (w) => { w.components = F.notReadyComponents(); },
+  // An upgraded DSC: things a later release added are not set, and
+  // modelsAsAService is Managed under a Removed aigateway.
+  "components-differences": (w) => { w.dscManager = F.dscManager({ "workbenches.workbenchesV2": null, databaseservice: null, aigateway: "Removed" }); },
   // The page compared the DSC as v2; when the reset dialog opens, the defaults are v3 (the conversion recovered).
   "components-reset-stale": (w) => {
     w.components.dscCompatibility = { ...w.components.dscCompatibility, missingComponents: ["sparkoperator"], resetRemovals: ["trainer"] };
@@ -951,6 +954,9 @@ const routes = {
   "GET /api/build-explorer/content": (u) => F.fbcContent(u.searchParams.get("image") || F.INSTALLED_IMAGE),
   "GET /api/build-explorer/contains": (u) => F.buildContains({ pr: u.searchParams.get("pr"), commit: u.searchParams.get("commit"), repo: u.searchParams.get("repo") }, u.searchParams.getAll("image")),
   "GET /api/components": () => world.components,
+  // The DSC manager: none without a DataScienceCluster, else the scenario's.
+  "GET /api/components/dsc": () => (world.components.dscExists === false ? { exists: false, state: world.components.dscState || "no-dsc", dscCount: 0, conditions: [], nodes: [], mismatches: [] } : world.dscManager ?? F.dscManager()),
+  "GET /api/components/dsc/plan": (u) => F.dscPlan(world.dscManager ?? F.dscManager(), u.searchParams.get("action"), u.searchParams.get("path"), u.searchParams.get("to"), u.searchParams.get("withParent") === "true"),
   "GET /api/diagnostics": () => world.diagnostics,
   "GET /api/dashboard/state": () => world.dashboard,
   "GET /api/dashboard/builds": () => world.dashboardBuilds,
@@ -981,7 +987,7 @@ const routes = {
 // What the gitops profile serves (pkg/api gitOpsRoutes); every other route
 // answers 403 profile_gitops, and its reads need cluster-admin.
 const GITOPS_PROFILE_ROUTES = new Set([
-  "GET /api/status", "GET /api/operation", "GET /api/activity", "GET /api/update-check", "GET /api/components",
+  "GET /api/status", "GET /api/operation", "GET /api/activity", "GET /api/update-check", "GET /api/components", "GET /api/components/dsc",
   "GET /api/diagnostics", "GET /api/user/permissions", "POST /api/update", "POST /api/update/stream", "POST /api/pageview", "GET /api/version",
 ]);
 

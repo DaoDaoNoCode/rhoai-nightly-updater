@@ -346,6 +346,13 @@ objects:
       - apiGroups: ["datasciencecluster.opendatahub.io"]
         resources: ["datascienceclusters"]
         verbs: ["get", "list", "patch", "create"]
+      # Components page hard reset: delete the DataScienceCluster (UID
+      # precondition) and create the release default in its place. The DSC
+      # is a singleton whose name its creator chose, so no resourceNames
+      # (SECURITY.md, hard reset audit).
+      - apiGroups: ["datasciencecluster.opendatahub.io"]
+        resources: ["datascienceclusters"]
+        verbs: ["delete"]
       - apiGroups: ["dscinitialization.opendatahub.io"]
         resources: ["dscinitializations"]
         verbs: ["list"]

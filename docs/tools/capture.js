@@ -595,6 +595,27 @@ async (page) => {
         ],
         pad: 24,
       });
+
+      // The component tree with the differences from the release default,
+      // a toggle's confirmation, and the hard reset's dialog.
+      await open("/components", "components-differences");
+      const tree = card("Components and sub-components");
+      await tree.scrollIntoViewIfNeeded();
+      await settle();
+      await crop("components-tree", tree);
+      await tree.getByRole("combobox", { name: "Set ray" }).selectOption("Removed");
+      await page.getByRole("dialog").getByText(/removes it/).waitFor();
+      await settle();
+      await crop("components-toggle", page.locator(".pf-v6-c-modal-box"), { noFit: true, pad: 6 });
+      await page.keyboard.press("Escape");
+      await wait(400);
+      await tree.getByRole("button", { name: "Reset to the release default…" }).click();
+      await page.getByRole("dialog").getByLabel("Hard reset").check();
+      await page.getByRole("dialog").getByText(/Every component is torn down/).waitFor();
+      await page.getByRole("dialog").getByRole("textbox").fill("default-dsc");
+      await settle();
+      await crop("components-hard-reset", page.locator(".pf-v6-c-modal-box"), { noFit: true, pad: 6 });
+      await page.keyboard.press("Escape");
     },
 
     async builds() {
