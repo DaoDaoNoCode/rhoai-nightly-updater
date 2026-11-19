@@ -748,7 +748,7 @@ func TestParseDashboardBuild(t *testing.T) {
 		{"quay.io/opendatahub/other:pr-12", "", "", 0},
 		{"registry.redhat.io/rhoai/odh-dashboard-rhel9@sha256:abc", "", "", 0},
 	} {
-		kind, pr, flavor, _ := parseDashboardBuild("opendatahub/odh-dashboard", tc.image)
+		kind, pr, flavor := parseDashboardBuild("opendatahub/odh-dashboard", tc.image)
 		if kind != tc.kind || pr != tc.pr || flavor != tc.flavor {
 			t.Errorf("%s: kind=%q pr=%d flavor=%q", tc.image, kind, pr, flavor)
 		}

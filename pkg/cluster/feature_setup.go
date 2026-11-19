@@ -94,16 +94,16 @@ type featureSetup struct {
 // added, as the MaaS docs install them (the MaaS tab's own steps). "maas"
 // needs the MaaS platform (its tab sets it up, Connectivity Link included);
 // "internal" and "" need neither.
-func featureSetupFor(id, exposure string) (featureSetup, bool) {
-	fs, ok := featureSetupOf(id)
-	if !ok || id != "models" {
-		return fs, ok
+func featureSetupFor(id, exposure string) featureSetup {
+	fs, _ := featureSetupOf(id)
+	if id != "models" {
+		return fs
 	}
 	if exposure == exposureDefault || exposure == exposureGateway {
 		fs.operators = append(append([]operatorSpec(nil), fs.operators...), rhclOperator)
 		fs.kuadrant = true
 	}
-	return fs, true
+	return fs
 }
 
 var featureSetups = []featureSetup{
@@ -676,7 +676,7 @@ func GetPrerequisitesStatusFor(c *Client, modelsExposure string) (*types.Prerequ
 	r := readClusterForPrerequisites(c)
 	out := &types.PrerequisitesStatus{Features: map[string]types.FeaturePrerequisites{}, ModelsExposure: modelsExposure}
 	for _, base := range featureSetups {
-		fs, _ := featureSetupFor(base.id, modelsExposure)
+		fs := featureSetupFor(base.id, modelsExposure)
 		out.Features[fs.id] = planFeature(c, fs, r).status()
 	}
 	return out, nil
@@ -706,7 +706,7 @@ func RunPrerequisites(c *Client, req types.PrerequisitesRequest, onStep func(Upd
 	if problem := ValidatePrerequisitesRequest(req); problem != "" {
 		return m.fail("prerequisites", problem, "validation", "invalid request")
 	}
-	fs, _ := featureSetupFor(req.Feature, req.Exposure)
+	fs := featureSetupFor(req.Feature, req.Exposure)
 	m.target = fs.title + " prerequisites"
 	m.step("prerequisites", "running", fmt.Sprintf("Checking what %s needs on the cluster...", fs.title))
 	p := planFeature(c, fs, readClusterForPrerequisites(c))

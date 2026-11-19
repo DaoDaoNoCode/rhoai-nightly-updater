@@ -154,7 +154,7 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 			state.CurrentImage = container.Image
 		}
 		if repo, ok := prContainerRepos[container.Name]; ok {
-			if kind, n, _, _ := parseDashboardBuild(repo, container.Image); kind == "pr" {
+			if kind, n, _ := parseDashboardBuild(repo, container.Image); kind == "pr" {
 				state.PRContainers = append(state.PRContainers, container.Name)
 				if state.PRNumber == 0 {
 					state.PRNumber = n
@@ -174,7 +174,7 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 			if image == "" {
 				continue
 			}
-			if kind, n, _, _ := parseDashboardBuild(repo, image); kind == "pr" {
+			if kind, n, _ := parseDashboardBuild(repo, image); kind == "pr" {
 				state.PRContainers = append(state.PRContainers, containerName)
 				if state.PRNumber == 0 {
 					state.PRNumber = n

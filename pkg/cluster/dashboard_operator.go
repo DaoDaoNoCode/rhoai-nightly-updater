@@ -213,29 +213,29 @@ func dashboardBuildTags(mode string, pr int, flavor string) []string {
 }
 
 // parseDashboardBuild classifies an image of repo as a PR or main build and
-// returns its flavor and tag. A main build may run under its floating tag or
-// the commit tag Deploy pins it to. Other images (release builds) return kind "".
-func parseDashboardBuild(repo, image string) (kind string, pr int, flavor, tag string) {
+// returns its flavor. A main build may run under its floating tag or the
+// commit tag Deploy pins it to. Other images (release builds) return kind "".
+func parseDashboardBuild(repo, image string) (kind string, pr int, flavor string) {
 	prefix := "quay.io/" + repo + ":"
 	if !strings.HasPrefix(image, prefix) {
-		return "", 0, "", ""
+		return "", 0, ""
 	}
-	tag = strings.SplitN(strings.TrimPrefix(image, prefix), "@", 2)[0]
+	tag := strings.SplitN(strings.TrimPrefix(image, prefix), "@", 2)[0]
 	switch {
 	case tag == "odh-stable", dashboardCommitSHAPattern.MatchString(tag):
-		return "main", 0, DashboardFlavorRHOAI, tag
+		return "main", 0, DashboardFlavorRHOAI
 	case tag == "main", dashboardODHCommitTagPattern.MatchString(tag):
-		return "main", 0, DashboardFlavorODH, tag
+		return "main", 0, DashboardFlavorODH
 	case strings.HasPrefix(tag, "odh-pr-"):
 		if n, err := strconv.Atoi(strings.TrimPrefix(tag, "odh-pr-")); err == nil && n > 0 {
-			return "pr", n, DashboardFlavorRHOAI, tag
+			return "pr", n, DashboardFlavorRHOAI
 		}
 	case strings.HasPrefix(tag, "pr-"):
 		if n, err := strconv.Atoi(strings.TrimPrefix(tag, "pr-")); err == nil && n > 0 {
-			return "pr", n, DashboardFlavorODH, tag
+			return "pr", n, DashboardFlavorODH
 		}
 	}
-	return "", 0, "", ""
+	return "", 0, ""
 }
 
 func dashboardOwner(d dashboardDeployment) string {
@@ -615,7 +615,7 @@ func populateDashboardDevStateWithOperator(c *Client, state *types.DashboardStat
 		if image.CurrentImage != image.DefaultImage {
 			state.DefaultImagesRestored = false
 		}
-		kind, n, flavor, _ := parseDashboardBuild(image.Repository, image.CurrentImage)
+		kind, n, flavor := parseDashboardBuild(image.Repository, image.CurrentImage)
 		switch {
 		case image.CurrentImage == image.DefaultImage:
 			image.Running = "release"
@@ -1419,7 +1419,7 @@ func legacyDashboardDevActive(c *Client) (bool, error) {
 	}
 	for _, ct := range d.Spec.Template.Spec.Containers {
 		if repo, ok := prContainerRepos[ct.Name]; ok {
-			if kind, _, _, _ := parseDashboardBuild(repo, ct.Image); kind != "" {
+			if kind, _, _ := parseDashboardBuild(repo, ct.Image); kind != "" {
 				return true, nil
 			}
 		}
