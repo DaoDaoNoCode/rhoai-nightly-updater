@@ -299,9 +299,6 @@ func (g *removalGuard) blockers(path string) []string {
 		reasons = g.rc.blockers(module)
 		g.byName[module] = reasons
 	}
-	if why := g.rc.maasBlocker(path); why != "" {
-		return append(append([]string{}, reasons...), why)
-	}
 	return reasons
 }
 
@@ -532,7 +529,14 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 		guard := newRemovalGuard(c)
 		var blocked, safe, reasons []string
 		for _, name := range removals {
-			if why := guard.blockers(name); len(why) > 0 {
+			why := guard.blockers(name)
+			// MaaS in use (dsc_maas_guard.go), checked here at the repair
+			// and not in the preview: the preview is part of the gitops
+			// profile, whose ServiceAccount does not list MaaS objects.
+			if maas := guard.rc.maasBlocker(name); maas != "" {
+				why = append(append([]string{}, why...), maas)
+			}
+			if len(why) > 0 {
 				blocked = append(blocked, name)
 				reasons = append(reasons, fmt.Sprintf("%s: %s", name, strings.Join(why, "; ")))
 			} else {

@@ -135,18 +135,17 @@ func TestMaaSGuardBlocksDisableComponent(t *testing.T) {
 	assertNoDSCPatch(t, f)
 }
 
-// The version-matched repair (reset-defaults, remove-extra-components)
-// checks each path it removes with removalGuard: MaaS paths get the guard.
-func TestMaaSGuardInTheRepairGuard(t *testing.T) {
-	_, c := maasInUseWorld(t, nil)
-	g := newRemovalGuard(c)
-	for _, p := range []string{"aigateway", "aigateway.modelsAsAService"} {
-		if why := strings.Join(g.blockers(p), " "); !strings.Contains(why, "MaaS is in use") {
-			t.Errorf("%s: %s", p, why)
-		}
+// The version-matched repair (reset-defaults) checks the MaaS guard
+// before it patches the DSC.
+func TestMaaSGuardBlocksTheRepair(t *testing.T) {
+	f, c := maasInUseWorld(t, nil)
+	compat := checkDSCCompatibility(c, f.get(dscV3Path))
+	res, err := RepairDSC(c, "default-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v3", nil, compat.ResetRemovals)
+	if err != nil || res.Success || res.ErrorCode != "prerequisites" || !strings.Contains(res.Message, "MaaS is in use") {
+		t.Fatalf("repair = %+v, %v (removals %v)", res, err, compat.ResetRemovals)
 	}
-	if why := strings.Join(g.blockers("aigateway.batchGateway"), " "); strings.Contains(why, "MaaS") {
-		t.Errorf("batchGateway got the MaaS guard: %s", why)
+	if real := f.callsTo(http.MethodPatch, dscV3Path); len(real) != 0 {
+		t.Fatalf("patched the DSC: %+v", real)
 	}
 }
 
