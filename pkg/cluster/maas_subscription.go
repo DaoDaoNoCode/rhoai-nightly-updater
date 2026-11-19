@@ -3,6 +3,7 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"sort"
@@ -592,10 +593,58 @@ func maasAccessObjects(c *Client, pubs []maasPub, limits map[string]maasLimit, a
 }
 
 // unlimitedRefusal turns the API server's refusal of an unlimited model
-// reference (RHOAI 3.4: tokenRateLimits required, no unlimited) into words.
+// reference (a MaaSSubscription API without unlimited requires
+// tokenRateLimits) into words.
 func unlimitedRefusal(err error, l maasLimit) string {
 	if l.unlimited && err != nil && strings.Contains(err.Error(), "tokenRateLimits") {
-		return "This cluster's MaaS does not offer unlimited model references (its MaaSSubscription API requires tokenRateLimits; unlimited came with RHOAI 3.6). Choose a limit instead."
+		return "This cluster's MaaS has no unlimited option (its MaaSSubscription API requires a token limit). Choose a limit instead."
 	}
 	return ""
+}
+
+// maasNoUnlimited: the cluster's MaaSSubscription API, in the version this
+// tool writes, has no modelRefs[].unlimited (read from its CRD's schema,
+// with the existing list of CRDs, by name). False when that cannot be
+// told: Publish's dry run refuses then (unlimitedRefusal).
+func maasNoUnlimited(c *Client) bool {
+	body, _, err := c.do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil, url.Values{"fieldSelector": {"metadata.name=maassubscriptions." + maasGroup}})
+	if err != nil {
+		return false
+	}
+	type props map[string]struct {
+		Properties props `json:"properties"`
+		Items      *struct {
+			Properties props `json:"properties"`
+		} `json:"items"`
+	}
+	var list struct {
+		Items []struct {
+			Spec struct {
+				Versions []struct {
+					Name   string `json:"name"`
+					Schema struct {
+						OpenAPIV3Schema struct {
+							Properties props `json:"properties"`
+						} `json:"openAPIV3Schema"`
+					} `json:"schema"`
+				} `json:"versions"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(body, &list) != nil || len(list.Items) != 1 {
+		return false
+	}
+	version := strings.TrimPrefix(maasAPI(c), maasGroup+"/")
+	for _, v := range list.Items[0].Spec.Versions {
+		if v.Name != version {
+			continue
+		}
+		refs := v.Schema.OpenAPIV3Schema.Properties["spec"].Properties["modelRefs"].Items
+		if refs == nil || len(refs.Properties) == 0 {
+			return false
+		}
+		_, ok := refs.Properties["unlimited"]
+		return !ok
+	}
+	return false
 }

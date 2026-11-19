@@ -1427,6 +1427,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	subPhase, _ := maasPhase(c, namespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription"))
 	// Who may use the published models, and each one's limit: the
 	// subscription's (one an earlier build wrote reads as the free sample).
+	st.NoUnlimited = maasNoUnlimited(c)
 	toolSub, subErr := readMaaSToolSubscription(c)
 	if subErr != nil {
 		slog.Debug("cannot read this tool's MaaSSubscription", "error", subErr)

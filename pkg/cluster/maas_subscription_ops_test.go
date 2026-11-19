@@ -81,8 +81,38 @@ func TestMaaSPublish_Unlimited(t *testing.T) {
 		t.Errorf("description %q", desc)
 	}
 	err := &K8sError{Status: 422, K8sMessage: `MaaSSubscription "x" is invalid: spec.modelRefs[0].tokenRateLimits: Required value`}
-	if why := unlimitedRefusal(err, maasLimit{unlimited: true}); !strings.Contains(why, "does not offer unlimited") {
-		t.Errorf("RHOAI 3.4's refusal: %q", why)
+	if why := unlimitedRefusal(err, maasLimit{unlimited: true}); !strings.Contains(why, "has no unlimited option") || strings.Contains(why, "RHOAI") {
+		t.Errorf("the refusal of an API without unlimited: %q (no release named)", why)
+	}
+}
+
+// Whether unlimited is offered is read from the cluster's MaaSSubscription
+// CRD, never from a release number; unknown is "offered" (the dry run
+// refuses then).
+func TestMaaSNoUnlimited_FromTheCRD(t *testing.T) {
+	crd := func(refProps string) string {
+		return `{"spec":{"versions":[{"name":"v1alpha1","schema":{"openAPIV3Schema":{"properties":{"spec":{"properties":{"modelRefs":{"items":{"properties":{` + refProps + `}}}}}}}}}]}}`
+	}
+	const path = "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/maassubscriptions.maas.opendatahub.io"
+	for _, tc := range []struct {
+		name string
+		crd  string
+		want bool
+	}{
+		{"with unlimited", crd(`"name":{},"tokenRateLimits":{},"unlimited":{}`), false},
+		{"without unlimited", crd(`"name":{},"tokenRateLimits":{}`), true},
+		{"no schema to tell", `{"spec":{"versions":[{"name":"v1alpha1"}]}}`, false},
+		{"no CRD", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c := newResourceFake(t)
+			if tc.crd != "" {
+				f.putJSON(path, tc.crd)
+			}
+			if got := maasNoUnlimited(c); got != tc.want {
+				t.Errorf("noUnlimited = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

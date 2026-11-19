@@ -979,6 +979,9 @@ type MaaSStatus struct {
 	// subscription (nil while it does not exist).
 	Database *MaaSDatabase      `json:"database,omitempty"`
 	Access   *MaaSAudienceState `json:"access,omitempty"`
+	// NoUnlimited: the cluster's MaaSSubscription API has no unlimited
+	// model reference (read from its CRD; false when that cannot be told).
+	NoUnlimited bool `json:"noUnlimited,omitempty"`
 }
 
 // MaaSAction is a change a platform part offers on its own (POST
