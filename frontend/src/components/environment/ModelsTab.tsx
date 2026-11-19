@@ -920,7 +920,7 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
   return (
     <Stack hasGutter>
       <StackItem><FeatureHeader title="Models" purpose={FEATURE_PURPOSE.models} state={state} /></StackItem>
-      {noProjects && <StackItem><NoProjectsAlert dashboardUrl={status.dashboardUrl} /></StackItem>}
+      {noProjects && <StackItem><NoProjectsAlert dashboardUrl={status.dashboardUrl} things="Models" /></StackItem>}
       {missingProject && (
         <StackItem>
           <Alert variant="info" isInline component="p" title={`Project ${missingProject} no longer exists`}>

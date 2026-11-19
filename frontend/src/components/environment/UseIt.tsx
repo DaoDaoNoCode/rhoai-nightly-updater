@@ -75,12 +75,13 @@ export const dashboardProjectsHref = (dashboardUrl: string | undefined) =>
   dashboardUrl?.startsWith("https://") ? `${dashboardUrl.replace(/\/$/, "")}/projects` : undefined;
 
 /** No data science project yet: where to make one. */
-export const NoProjectsAlert: React.FC<{ dashboardUrl?: string }> = ({ dashboardUrl }) => {
+/** things: what the tab makes in a project, as the sentence's subject ("Models"). */
+export const NoProjectsAlert: React.FC<{ dashboardUrl?: string; things: string }> = ({ dashboardUrl, things }) => {
   const href = dashboardProjectsHref(dashboardUrl);
   return (
     <Alert variant="info" isInline component="div" title="There are no data science projects yet"
       actionLinks={href ? <AlertActionLink component="a" href={href} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">Create a project in the dashboard</AlertActionLink> : undefined}>
-      <Content component="p">Pipeline servers and MLflow workspaces belong to a data science project: a project made in the RHOAI dashboard. Create one there, then choose it here.</Content>
+      <Content component="p">{things} belong to a data science project: a project made in the RHOAI dashboard. Create one there, then choose it here.</Content>
     </Alert>
   );
 };

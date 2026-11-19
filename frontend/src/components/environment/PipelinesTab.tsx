@@ -423,7 +423,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
       {props.prerequisites && <StackItem>{props.prerequisites}</StackItem>}
       {status.pipelinesBlocked && <StackItem><ComponentAlert feature="Data Science Pipelines" block={status.pipelinesBlocked} /></StackItem>}
       {legacy && <StackItem><MigrationAlert legacy={legacy} onMigrate={onMigrate} readOnly={readOnly} reason={busy.migrating ? "Migrate storage is running." : baseReason} /></StackItem>}
-      {noProjects && <StackItem><NoProjectsAlert dashboardUrl={status.dashboardUrl} /></StackItem>}
+      {noProjects && <StackItem><NoProjectsAlert dashboardUrl={status.dashboardUrl} things="Pipeline servers" /></StackItem>}
       {missingProject && (
         <StackItem>
           <Alert variant="info" isInline component="p" title={`Project ${missingProject} no longer exists`}>

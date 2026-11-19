@@ -313,7 +313,7 @@ export const PlaygroundTab: React.FC<PlaygroundTabProps> = (props) => {
       {!playground?.blocked && playground?.operatorReady === "False" && (
         <StackItem><Alert variant="warning" isInline component="p" title="The playground's operator is not ready">{playground.operatorMessage || "The DataScienceCluster reports it not ready."} The Components page shows the details.</Alert></StackItem>
       )}
-      {noProjects && <StackItem><NoProjectsAlert dashboardUrl={status.dashboardUrl} /></StackItem>}
+      {noProjects && <StackItem><NoProjectsAlert dashboardUrl={status.dashboardUrl} things="Playgrounds" /></StackItem>}
       {missingProject && (
         <StackItem>
           <Alert variant="info" isInline component="p" title={`Project ${missingProject} no longer exists`}>
