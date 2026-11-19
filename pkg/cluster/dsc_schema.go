@@ -219,27 +219,78 @@ func dscProtectedFields(spec map[string]any) map[string]bool {
 	return out
 }
 
-// equalsSchemaDefault reports whether value is what the API server's
-// defaulting would put there anyway: the schema's default, or an object
-// whose every field equals its own schema default. Such values are no
-// difference from a release default that leaves them out.
-func equalsSchemaDefault(schema map[string]any, value any) bool {
+// applySchemaDefaults fills in x, in place, what the API server's
+// defaulting adds to an object of the installed CRD (Kubernetes structural
+// schema defaulting, apiextensions-apiserver
+// pkg/apiserver/schema/defaulting/algorithm.go Default): in every object,
+// a property that is missing (or null and not nullable) gets its schema
+// default; then every property is defaulted below, a default just set
+// included; array items and additionalProperties alike. The API server
+// does this on every create, update and read, so a field it defaulted
+// (no field manager owns it) comes back by itself in a new object.
+func applySchemaDefaults(x any, schema map[string]any) {
 	if schema == nil {
-		return false
+		return
 	}
-	if def, ok := schema["default"]; ok {
-		return jsonEqual(def, value)
-	}
-	m, ok := value.(map[string]any)
-	if !ok || len(m) == 0 {
-		return false
-	}
-	for k, v := range m {
-		if !equalsSchemaDefault(schemaChild(schema, k), v) {
-			return false
+	switch x := x.(type) {
+	case map[string]any:
+		props := schemaProps(schema)
+		for k, p := range props {
+			ps, _ := p.(map[string]any)
+			def, ok := ps["default"]
+			if !ok {
+				continue
+			}
+			if cur, found := x[k]; !found || (cur == nil && ps["nullable"] != true) {
+				x[k] = normalizeJSON(def)
+			}
+		}
+		additional, _ := schema["additionalProperties"].(map[string]any)
+		for k, v := range x {
+			if ps, ok := props[k].(map[string]any); ok {
+				applySchemaDefaults(v, ps)
+			} else if additional != nil {
+				applySchemaDefaults(v, additional)
+			}
+		}
+	case []any:
+		items, _ := schema["items"].(map[string]any)
+		if items == nil {
+			return
+		}
+		for i := range x {
+			if def, ok := items["default"]; ok && x[i] == nil && items["nullable"] != true {
+				x[i] = normalizeJSON(def)
+			}
+			applySchemaDefaults(x[i], items)
 		}
 	}
-	return true
+}
+
+// withSchemaDefaults returns a copy of obj with the schema's defaults
+// filled in (applySchemaDefaults); an empty object for nil.
+func withSchemaDefaults(obj map[string]any, schema map[string]any) map[string]any {
+	out, _ := normalizeJSON(obj).(map[string]any)
+	if out == nil {
+		out = map[string]any{}
+	}
+	applySchemaDefaults(out, schema)
+	return out
+}
+
+// defaultedBack reports whether removing a field that holds value changes
+// nothing: its schema has a default, and the API server's defaulting puts
+// exactly value back (the default with the defaults below it). Removing
+// such a field is no change, so a reset neither sends nor lists it.
+func defaultedBack(schema map[string]any, value any) bool {
+	def, ok := schema["default"]
+	if !ok {
+		return false
+	}
+	back, now := normalizeJSON(def), normalizeJSON(value)
+	applySchemaDefaults(back, schema)
+	applySchemaDefaults(now, schema)
+	return jsonEqual(back, now)
 }
 
 // jsonEqual compares two decoded JSON values.

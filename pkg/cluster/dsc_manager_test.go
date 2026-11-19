@@ -740,7 +740,7 @@ func TestSoftResetChangesOnlyWhatDiffersAndKeepsProtectedFields(t *testing.T) {
 	for _, ch := range plan.Changes {
 		paths = append(paths, ch.Path+":"+ch.From+">"+ch.To+":"+ch.Effect)
 	}
-	want := []string{"aigateway:Managed>Removed:removes", "aigateway.modelsAsAService:Managed>Removed:removes", "kserve.rawDeploymentServiceConfig:Headed>:"}
+	want := []string{"aigateway:Managed>Removed:removes", "aigateway.modelsAsAService:Managed>Removed:removes", "kserve.rawDeploymentServiceConfig:Headed>Headless:"}
 	if !reflect.DeepEqual(paths, want) {
 		t.Fatalf("changes = %v, want %v", paths, want)
 	}

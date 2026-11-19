@@ -461,7 +461,7 @@ func TestRemovalChecksFailClosedOnModulesTheToolCannotCheck(t *testing.T) {
 	if got := strings.Join(rc.partBlockers("data"), " "); !strings.Contains(got, "no components.platform.opendatahub.io kind is named after data") {
 		t.Fatalf("unknown kind: %q", got)
 	}
-	if got := strings.Join(rc.moduleBlockers("sparkoperator"), " "); !strings.Contains(got, "does not know which operator") {
+	if got := strings.Join(rc.moduleBlockers("sparkoperator"), " "); !strings.Contains(got, "can't confirm its operator is running") {
 		t.Fatalf("unknown operator: %q", got)
 	}
 	if b, _ := rc.teardownBlockers("sparkoperator"); len(b) == 0 {
@@ -490,7 +490,8 @@ func TestHardResetChecksModulesThatStayRemovedAsRemovals(t *testing.T) {
 	if why := blockReasons(plan, "aigateway"); !strings.Contains(why, "oc get gateways.aigateway.opendatahub.io -A") {
 		t.Fatalf("aigateway stays Removed and serves a conversion webhook: blocked = %+v", plan.Blocked)
 	}
-	if blockReasons(plan, "trustyai") != "" || !strings.Contains(strings.Join(plan.Warnings, " "), "While trustyai is down") {
-		t.Fatalf("trustyai comes back: blocked = %+v, warnings = %v", plan.Blocked, plan.Warnings)
+	want := []types.DSCConversionCRD{{CRD: "guardrails.trustyai.opendatahub.io", Component: "trustyai"}}
+	if blockReasons(plan, "trustyai") != "" || !reflect.DeepEqual(plan.ConversionCRDs, want) {
+		t.Fatalf("trustyai comes back: blocked = %+v, conversion CRDs = %+v", plan.Blocked, plan.ConversionCRDs)
 	}
 }

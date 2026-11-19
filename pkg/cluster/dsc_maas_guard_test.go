@@ -290,13 +290,13 @@ func TestHardResetKeepsWhatTheUserTurnedOn(t *testing.T) {
 	if !reflect.DeepEqual(plan.Kept, []string{"aigateway", "aigateway.modelsAsAService"}) {
 		t.Fatalf("kept = %v", plan.Kept)
 	}
-	// MaaS is down while the components are: a warning, not a block.
-	warned := false
-	for _, w := range plan.Warnings {
-		warned = warned || (strings.Contains(w, "While aigateway is down, MaaS does not serve") && strings.Contains(w, "proj/qwen25-05b-instruct"))
+	// MaaS is down while the components are: it stops working, no block.
+	want := []types.DSCStopsWorking{
+		{Resource: "published model proj/qwen25-05b-instruct", Components: []string{"aigateway"}},
+		{Resource: "every MaaS API key", Components: []string{"aigateway"}},
 	}
-	if !warned {
-		t.Fatalf("warnings = %v", plan.Warnings)
+	if !reflect.DeepEqual(plan.StopsWorking, want) {
+		t.Fatalf("stops working = %+v", plan.StopsWorking)
 	}
 	if other := mustPlan(t, c, "hard-reset", "", "", false); other.Token == plan.Token {
 		t.Fatal("keepEnabled is not part of the hard reset's token")
@@ -435,9 +435,9 @@ func TestMaaSGuardAllowsWhenMaaSIsNotInUse(t *testing.T) {
 	if len(plan.Blocked) != 0 {
 		t.Fatalf("hard reset: %+v", plan.Blocked)
 	}
-	for _, w := range plan.Warnings {
-		if strings.Contains(w, "MaaS") {
-			t.Fatalf("warned about MaaS not in use: %s", w)
+	for _, s := range plan.StopsWorking {
+		if strings.Contains(s.Resource, "MaaS") || strings.Contains(s.Resource, "published model") {
+			t.Fatalf("warned about MaaS not in use: %+v", s)
 		}
 	}
 	res, err := reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "aigateway", From: "Managed", To: "Removed"})

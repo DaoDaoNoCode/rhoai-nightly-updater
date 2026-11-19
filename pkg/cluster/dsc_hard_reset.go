@@ -127,14 +127,19 @@ func (v *dscView) planHardReset(c *Client, keep bool) *dscPlanned {
 		return p.refuse("The RHOAI operator removes the DataScienceCluster's finalizer, so the deletion would hang: "+why+". Nothing was changed.", "prerequisites")
 	}
 	obj := v.newDefaultObject(v.resetTarget(p.plan, keep))
-	text, err := yaml.Marshal(obj)
+	created := v.asCreated(obj)
+	text, err := yaml.Marshal(created)
 	if err != nil {
 		return p.refuse("Cannot build the new DataScienceCluster: "+err.Error(), "internal")
 	}
 	p.plan.NewObject = string(text)
+	p.plan.DeleteTimeoutSeconds = int(HardResetDeleteTimeout / time.Second)
+	p.plan.ProtectedFields = v.protectedFields()
 	newSpec, _ := obj["spec"].(map[string]any)
 	newComps, _ := newSpec["components"].(map[string]any)
-	p.plan.Changes = v.changesBetween(v.components(), newComps)
+	createdSpec, _ := created["spec"].(map[string]any)
+	createdComps, _ := createdSpec["components"].(map[string]any)
+	p.plan.Changes = v.changesBetween(v.defaultedComponents(v.components()), createdComps)
 	for _, t := range v.tree {
 		if len(t.Path) == 1 && v.componentEnabled(v.components(), t) {
 			p.plan.TornDown = append(p.plan.TornDown, t.key())
@@ -143,9 +148,21 @@ func (v *dscView) planHardReset(c *Client, keep bool) *dscPlanned {
 			p.plan.StayRemoved = append(p.plan.StayRemoved, t.key())
 		}
 	}
-	p.plan.Blocked, p.plan.Warnings = v.removalBlocks(c, v.components(), newComps, true)
-	p.plan.Token = planToken("hard-reset", v.uid, v.apiVersion, obj, keep)
+	v.removalBlocks(c, v.components(), newComps, true).applyTo(p.plan)
+	p.plan.Token = planToken("hard-reset", v.uid, v.apiVersion, created, keep)
 	return p
+}
+
+// asCreated is obj as the API server stores it: its spec with what the
+// installed CRD's defaults fill in (applySchemaDefaults). The plan shows
+// and compares this object; the create sends obj and the API server fills
+// in the same values.
+func (v *dscView) asCreated(obj map[string]any) map[string]any {
+	out, _ := normalizeJSON(obj).(map[string]any)
+	if spec, ok := out["spec"].(map[string]any); ok {
+		applySchemaDefaults(spec, v.spec)
+	}
+	return out
 }
 
 // hardResetRun emits the steps of the hard reset and keeps them as logs.

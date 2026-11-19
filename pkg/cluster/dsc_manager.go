@@ -571,8 +571,8 @@ func (v *dscView) finish(c *Client, p *dscPlanned, teardown bool) *dscPlanned {
 	}
 	afterSpec, _ := after["spec"].(map[string]any)
 	afterComps, _ := afterSpec["components"].(map[string]any)
-	p.plan.Changes = v.changesBetween(v.components(), afterComps)
-	p.plan.Blocked, p.plan.Warnings = v.removalBlocks(c, v.components(), afterComps, teardown)
+	p.plan.Changes = v.changesBetween(v.defaultedComponents(v.components()), v.defaultedComponents(afterComps))
+	v.removalBlocks(c, v.components(), afterComps, teardown).applyTo(p.plan)
 	p.plan.Warnings = append(p.plan.Warnings, v.orphanWarnings(v.components(), afterComps)...)
 	p.plan.Token = planToken(p.plan.Action, v.uid, v.apiVersion, p.ops, p.plan.KeepEnabled)
 	return p
@@ -583,6 +583,28 @@ func planToken(parts ...any) string {
 	raw, _ := json.Marshal(parts)
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:12])
+}
+
+// defaultedComponents returns a copy of spec.components with what the API
+// server's defaulting fills in from the installed CRD: what the
+// DataScienceCluster holds once stored. Changes are listed between such
+// copies, so a field the API server defaults is no change when a value
+// leaves it out.
+func (v *dscView) defaultedComponents(comps map[string]any) map[string]any {
+	return withSchemaDefaults(comps, schemaChild(v.spec, "components"))
+}
+
+// protectedFields returns the protected fields (dscProtectedFields) the
+// DataScienceCluster sets, sorted: a reset keeps their value.
+func (v *dscView) protectedFields() []string {
+	var out []string
+	for f := range v.protected {
+		if _, ok := lookupPath(v.components(), strings.Split(f, ".")); ok {
+			out = append(out, f)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // changesBetween lists every managementState that changes, or whose
@@ -710,10 +732,10 @@ func (v *dscView) modulesOf(components map[string]any, top dscToggle) []string {
 // stops working while the components are down is a warning); a module
 // after leaves Removed gets the rules of removing it, and what still uses
 // it blocks.
-func (v *dscView) removalBlocks(c *Client, before, after map[string]any, teardown bool) ([]types.DSCRemovalBlock, []string) {
+func (v *dscView) removalBlocks(c *Client, before, after map[string]any, teardown bool) removalCheck {
 	rc := newRemovalChecker(c)
 	var blocks []types.DSCRemovalBlock
-	var warnings []string
+	var out removalCheck
 	for _, top := range v.tree {
 		if len(top.Path) != 1 {
 			continue
@@ -729,9 +751,11 @@ func (v *dscView) removalBlocks(c *Client, before, after map[string]any, teardow
 			}
 			for _, m := range v.modulesOf(before, top) {
 				if comesBack[m] {
-					b, w := rc.teardownBlockers(m)
+					b, crds := rc.teardownBlockers(m)
 					reasons = append(reasons, b...)
-					warnings = append(warnings, w...)
+					for _, crd := range crds {
+						out.conversionCRDs = append(out.conversionCRDs, types.DSCConversionCRD{CRD: crd, Component: m})
+					}
 				} else {
 					reasons = append(reasons, rc.blockers(m)...)
 				}
@@ -743,13 +767,14 @@ func (v *dscView) removalBlocks(c *Client, before, after map[string]any, teardow
 				case err != nil:
 					reasons = append(reasons, fmt.Sprintf("could not check what still uses %s: %v", name, err))
 				case len(users) > 0 && (!teardown || !isOn || name == "mlflowoperator"):
-					what := "remove them first"
+					what := "; remove them first"
 					if name == "mlflowoperator" {
-						what = "the MLflowOperator CR cannot be deleted while an MLflow CR exists, so its removal would hang; delete MLflow first (Environment page)"
+						// The MLflowOperator CR's finalizer waits for every MLflow CR.
+						what = ", so its removal would hang; delete MLflow first (Environment page)"
 					}
-					reasons = append(reasons, fmt.Sprintf("still in use by %s; %s", strings.Join(users, ", "), what))
+					reasons = append(reasons, fmt.Sprintf("in use by %s%s", strings.Join(users, ", "), what))
 				case len(users) > 0:
-					warnings = append(warnings, fmt.Sprintf("Until %s is back, these stop working: %s.", name, strings.Join(users, ", ")))
+					out.addStopsWorking(name, users...)
 				}
 			}
 			if len(reasons) > 0 {
@@ -769,12 +794,41 @@ func (v *dscView) removalBlocks(c *Client, before, after map[string]any, teardow
 		}
 	}
 	// What uses MaaS, beyond the module checks (dsc_maas_guard.go).
-	if b, w := v.maasBlocks(rc, before, after, teardown); b != nil {
+	if b, down, stops := v.maasBlocks(rc, before, after, teardown); b != nil {
 		blocks = addBlock(blocks, *b)
-	} else if w != "" {
-		warnings = append(warnings, w)
+	} else {
+		out.addStopsWorking(down, stops...)
 	}
-	return blocks, uniqueInOrder(warnings)
+	out.blocked = blocks
+	return out
+}
+
+// removalCheck is what removalBlocks found: the removals that must not
+// happen now, and, in a hard reset, what only stops working while the
+// components are down.
+type removalCheck struct {
+	blocked        []types.DSCRemovalBlock
+	stopsWorking   []types.DSCStopsWorking
+	conversionCRDs []types.DSCConversionCRD
+}
+
+// addStopsWorking records resources that stop working while component is
+// down: each resource once, with every component it needs.
+func (r *removalCheck) addStopsWorking(component string, resources ...string) {
+	for _, res := range resources {
+		i := slices.IndexFunc(r.stopsWorking, func(s types.DSCStopsWorking) bool { return s.Resource == res })
+		switch {
+		case i < 0:
+			r.stopsWorking = append(r.stopsWorking, types.DSCStopsWorking{Resource: res, Components: []string{component}})
+		case !slices.Contains(r.stopsWorking[i].Components, component):
+			r.stopsWorking[i].Components = append(r.stopsWorking[i].Components, component)
+		}
+	}
+}
+
+// applyTo puts the result in the plan.
+func (r removalCheck) applyTo(p *types.DSCPlan) {
+	p.Blocked, p.StopsWorking, p.ConversionCRDs = r.blocked, r.stopsWorking, r.conversionCRDs
 }
 
 func uniqueInOrder(in []string) []string {
@@ -933,6 +987,7 @@ func (v *dscView) planSoftReset(c *Client, keep bool) *dscPlanned {
 		return p.refuse(v.defaultsErr, "prerequisites")
 	}
 	target := v.resetTarget(p.plan, keep)
+	p.plan.ProtectedFields = v.protectedFields()
 	var removes [][]string
 	compSchema := schemaChild(v.spec, "components")
 	v.resetDiff(compSchema, v.components(), target, nil, &p.sets, &removes)
@@ -1070,7 +1125,7 @@ func (v *dscView) resetDiff(schema, live, target map[string]any, path []string, 
 		case tok:
 			*sets = append(*sets, dscAssign{Path: componentsPath(p...), Value: tv})
 		case lok:
-			if child != nil && equalsSchemaDefault(child, lv) {
+			if child != nil && defaultedBack(child, lv) {
 				continue // the API server puts it back
 			}
 			if lm, isMap := lv.(map[string]any); isMap && child != nil && len(lm) > 0 && v.keepsProtectedBelow(p, lm) {
