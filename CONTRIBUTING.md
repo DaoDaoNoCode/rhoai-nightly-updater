@@ -515,7 +515,7 @@ make undeploy          # install.sh uninstall: the app namespace, its ClusterRol
 Create a `.env` file to persist custom configuration:
 
 ```bash
-make env               # Create .env from defaults
+make env               # Create .env from .env.example (an existing .env is kept)
 ```
 
 Edit `.env` with your values:
@@ -562,5 +562,5 @@ make help              # Show all targets and current configuration
 
 - All `Makefile` variables can be overridden via environment, command line, or `.env` file.
 - The `.env` file is not committed (listed in `.gitignore`).
-- Use `make env` to create a `.env` file from defaults.
+- Use `make env` to create a `.env` file from `.env.example`.
 - The container build runs `go vet`, the Go tests, the frontend typecheck, ESLint and tests; any failure stops the build.
