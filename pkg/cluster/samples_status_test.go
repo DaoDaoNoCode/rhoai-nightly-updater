@@ -215,12 +215,12 @@ func TestRunMLflowSamples_Refusals(t *testing.T) {
 	}
 
 	// Not a Data Science project, and MLflow not ready: nothing is sent.
-	resp, _ := RunMLflowSamples(env.c, types.MLflowSamplesRequest{Project: "other", Action: "add", Samples: []string{SampleTraining}}, nil)
+	resp, _ := RunMLflowSamples(env.user, types.MLflowSamplesRequest{Project: "other", Action: "add", Samples: []string{SampleTraining}}, nil)
 	if resp.Success || resp.ErrorCode != "validation" || !strings.Contains(resp.Message, "not a Data Science project") {
 		t.Errorf("other project: %+v", resp)
 	}
 	putMLflow(env.k8s, toolLabelJSON, toolFieldManager, "Update", "", `{}`, `{"url":"https://x/mlflow","conditions":[{"type":"Available","status":"False"}]}`)
-	resp, _ = RunMLflowSamples(env.c, mlflowRequest("add", SampleTraining), nil)
+	resp, _ = RunMLflowSamples(env.user, mlflowRequest("add", SampleTraining), nil)
 	if resp.Success || resp.ErrorCode != "prerequisites" || !strings.Contains(resp.Message, "not ready") {
 		t.Errorf("not ready: %+v", resp)
 	}

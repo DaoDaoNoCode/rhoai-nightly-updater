@@ -199,10 +199,15 @@ func sampleErrorCode(err error) string {
 	return "network"
 }
 
-// deniedHint explains a 401/403 from MLflow.
-func deniedHint(err error) string {
+// deniedHint explains a 401/403 from MLflow, which decides with access
+// reviews of the caller's token: the signed-in user's own for a change
+// (asUser), the ServiceAccount's for the status.
+func deniedHint(err error, asUser bool) string {
 	if !isDenied(err) {
 		return ""
+	}
+	if asUser {
+		return " MLflow refused your own OpenShift permissions for this call (the updater makes changes as you), or your sign-in expired: log out and log in again, or ask for the rights in this project."
 	}
 	return " The updater's ServiceAccount lacks the rights for this call: re-apply the template (deploy/template.yaml) so its ClusterRole has the samples rules. MLflow caches access decisions for up to 5 minutes, so a change can take that long to apply."
 }

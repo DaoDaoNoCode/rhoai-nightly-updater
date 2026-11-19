@@ -153,7 +153,7 @@ func TestRegistrySamples_ForeignAndDenied(t *testing.T) {
 	}
 
 	env2 := newSamplesEnv(t)
-	env2.mlflow.allow = func(resource, verb, ns, name string) bool { return verb != "update" }
+	env2.mlflow.userAllow = func(resource, verb, ns, name string) bool { return verb != "update" }
 	ok, msg, steps := env2.run(t, "add", SampleMCPServer, SampleSkill)
 	if ok || !strings.Contains(msg, "forbidden") || strings.Count(stepMessages(steps), "403 PERMISSION_DENIED") != 2 {
 		t.Errorf("%s\n%s", msg, stepMessages(steps))

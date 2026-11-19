@@ -650,23 +650,21 @@ func TestBuildJSONPatchGroupsMissingObjects(t *testing.T) {
 
 // --- RBAC ----------------------------------------------------------------------
 
-// The hard reset's delete is granted only by the full profile's template,
-// cluster-wide (the DSC is a singleton named by its creator), and never by
-// the gitops profile.
+// The hard reset deletes the DataScienceCluster with the signed-in user's
+// own token, so neither the template nor the gitops profile grants the
+// ServiceAccount delete on it (a leaked token cannot remove RHOAI's
+// configuration).
 func TestHardResetDeleteRule(t *testing.T) {
 	has := func(path string) bool {
 		for _, g := range templateGrantsFrom(t, path) {
 			if containsString(g.rule.APIGroups, dscGroup) && containsString(g.rule.Resources, "datascienceclusters") && containsString(g.rule.Verbs, "delete") {
-				if len(g.rule.ResourceNames) != 0 || g.namespace != "" {
-					t.Fatalf("%s: unexpected delete rule %+v in %q", path, g.rule, g.namespace)
-				}
 				return true
 			}
 		}
 		return false
 	}
-	if !has(templateRel) {
-		t.Fatal("deploy/template.yaml does not grant delete on datascienceclusters")
+	if has(templateRel) {
+		t.Fatal("deploy/template.yaml grants the ServiceAccount delete on datascienceclusters; the hard reset runs as the user")
 	}
 	if has(rbacGitOpsRel) {
 		t.Fatal("deploy/rbac-gitops.yaml grants delete on datascienceclusters")

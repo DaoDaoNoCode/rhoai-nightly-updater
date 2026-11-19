@@ -179,7 +179,8 @@ func TestTrainingSample_RetryReusesRunsAndVersions(t *testing.T) {
 
 func TestTrainingSample_PermissionDenied(t *testing.T) {
 	env := newSamplesEnv(t)
-	env.mlflow.allow = func(resource, verb, ns, name string) bool {
+	// The change runs with the user's own token, so a denial is the user's.
+	env.mlflow.userAllow = func(resource, verb, ns, name string) bool {
 		return resource != "registeredmodels" || verb != "create"
 	}
 	ok, msg, steps := env.run(t, "add", SampleTraining)
@@ -187,7 +188,7 @@ func TestTrainingSample_PermissionDenied(t *testing.T) {
 		t.Fatalf("got %s", msg)
 	}
 	last := steps[len(steps)-1]
-	if last.Status != "failed" || last.ErrorCode != "forbidden" || !strings.Contains(last.Message, "re-apply the template") || !strings.Contains(last.Message, "5 minutes") {
+	if last.Status != "failed" || last.ErrorCode != "forbidden" || !strings.Contains(last.Message, "your own OpenShift permissions") || strings.Contains(last.Message, "re-apply the template") {
 		t.Errorf("step %+v", last)
 	}
 }

@@ -27,6 +27,9 @@ type mlflowFake struct {
 	mu sync.Mutex
 	// allow decides an access review; nil allows everything.
 	allow func(resource, verb, namespace, name string) bool
+	// userAllow decides the reviews of the signed-in user's token (nil: all
+	// allowed, a cluster-admin).
+	userAllow func(resource, verb, namespace, name string) bool
 	// used records the rules that were matched.
 	used map[string]bool
 	// failNext maps "METHOD path" to a status to answer once.
@@ -294,12 +297,12 @@ func (f *mlflowFake) resolveName(kind string, r *http.Request, body map[string]i
 }
 
 // authorize returns false when the plugin would deny the request.
-func (f *mlflowFake) authorize(rule mlflowFakeRule, ns string, names []string) bool {
-	if f.allow == nil {
+func (f *mlflowFake) authorizeWith(allow func(resource, verb, namespace, name string) bool, rule mlflowFakeRule, ns string, names []string) bool {
+	if allow == nil {
 		return true
 	}
 	for _, c := range rule.checks {
-		if f.allow(c.resource, c.verb, ns, "") {
+		if allow(c.resource, c.verb, ns, "") {
 			continue
 		}
 		if rule.name == "" || len(names) == 0 {
@@ -310,7 +313,7 @@ func (f *mlflowFake) authorize(rule mlflowFakeRule, ns string, names []string) b
 			verb = "get" // the collection filter's named read
 		}
 		for _, n := range names {
-			if !f.allow(c.resource, verb, ns, n) {
+			if !allow(c.resource, verb, ns, n) {
 				return false
 			}
 		}
@@ -326,7 +329,7 @@ func (f *mlflowFake) serve(w http.ResponseWriter, r *http.Request) {
 	if f.onRequest != nil {
 		f.onRequest(r.Method, path)
 	}
-	if r.Header.Get("Authorization") != "Bearer test-token" {
+	if a := r.Header.Get("Authorization"); a != "Bearer test-token" && a != "Bearer "+samplesUserToken {
 		f.mlflowError(w, 401, "UNAUTHENTICATED", "no token")
 		return
 	}
@@ -374,7 +377,14 @@ func (f *mlflowFake) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if !f.authorize(rule, ns, names) {
+	// A signed-in cluster-admin's own token (a change's client) passes
+	// every review unless userAllow says otherwise; the ServiceAccount's is
+	// decided by allow (the template).
+	check := f.allow
+	if r.Header.Get("Authorization") == "Bearer "+samplesUserToken {
+		check = f.userAllow
+	}
+	if !f.authorizeWith(check, rule, ns, names) {
 		f.mlflowError(w, 403, "PERMISSION_DENIED", "Permission denied for requested operation.")
 		return
 	}
@@ -876,8 +886,11 @@ func (f *mlflowFake) handleRegistry(w http.ResponseWriter, rule mlflowFakeRule, 
 // samplesEnv is a fake cluster with a ready MLflow and project fakeProject,
 // and the fake MLflow behind one TLS server.
 type samplesEnv struct {
-	k8s    *resourceFake
-	c      *Client
+	k8s *resourceFake
+	c   *Client
+	// user is c acting with a signed-in cluster-admin's own token, as a
+	// change's client does (the samples stream).
+	user   *Client
 	mlflow *mlflowFake
 	srv    *httptest.Server
 	mux    *http.ServeMux
@@ -887,6 +900,9 @@ func newSamplesEnv(t *testing.T) *samplesEnv {
 	t.Helper()
 	k8s, c := newResourceFake(t)
 	env := &samplesEnv{k8s: k8s, c: c, mlflow: newMLflowFake(t), mux: http.NewServeMux()}
+	uc := *c
+	uc.token, uc.asUser = samplesUserToken, true
+	env.user = &uc
 	// MLflow decides every access review with the template's rules.
 	env.mlflow.allow = templateAllow(t)
 	env.mux.HandleFunc("/mlflow/", env.mlflow.serve)
@@ -934,7 +950,7 @@ type typesSample struct {
 func (env *samplesEnv) run(t *testing.T, action string, samples ...string) (bool, string, []UpdateStepEvent) {
 	t.Helper()
 	var steps []UpdateStepEvent
-	resp, err := RunMLflowSamples(env.c, mlflowRequest(action, samples...), func(e UpdateStepEvent) { steps = append(steps, e) })
+	resp, err := RunMLflowSamples(env.user, mlflowRequest(action, samples...), func(e UpdateStepEvent) { steps = append(steps, e) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -952,3 +968,6 @@ func stepMessages(steps []UpdateStepEvent) string {
 func mlflowRequest(action string, samples ...string) types.MLflowSamplesRequest {
 	return types.MLflowSamplesRequest{Project: fakeProject, Action: action, Samples: samples}
 }
+
+// samplesUserToken is the signed-in cluster-admin's token of samplesEnv.user.
+const samplesUserToken = "sha256~samples-user-token"

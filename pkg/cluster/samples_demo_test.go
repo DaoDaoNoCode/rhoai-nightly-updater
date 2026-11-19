@@ -51,7 +51,7 @@ func TestGenAIDemo_AddAfterMLflowRemovalIsComplete(t *testing.T) {
 			t.Fatal(msg)
 		}
 		env.mlflow.mlflowDeleteDemo()
-		target, _, _ := mlflowSampleTarget(env.c, fakeProject)
+		target, _, _ := mlflowSampleTarget(env.user, fakeProject)
 		if _, _, err := target.generateDemo(func(string) {}); err != nil {
 			t.Fatal(err)
 		}
@@ -243,7 +243,7 @@ func TestGenAIDemo_OldMemoryLimit(t *testing.T) {
 
 func TestGenAIDemo_PermissionDenied(t *testing.T) {
 	env := newSamplesEnv(t)
-	env.mlflow.allow = func(resource, verb, ns, name string) bool { return resource != "datasets" }
+	env.mlflow.userAllow = func(resource, verb, ns, name string) bool { return resource != "datasets" }
 	ok, msg, steps := env.run(t, "add", SampleGenAIDemo)
 	if ok || !strings.Contains(msg, "forbidden") || !strings.Contains(stepMessages(steps), "403 PERMISSION_DENIED") {
 		t.Errorf("%s\n%s", msg, stepMessages(steps))

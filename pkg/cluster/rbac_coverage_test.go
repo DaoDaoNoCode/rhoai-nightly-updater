@@ -792,6 +792,22 @@ func serviceAccountRequests(t *testing.T) ([]rbacRequest, map[string]bool) {
 // resolved from the call sites in those functions only.
 func serviceAccountRequestsIn(t *testing.T, only map[string]bool) ([]rbacRequest, map[string]bool) {
 	t.Helper()
+	return scanRequests(t, only, false)
+}
+
+// bookkeepingRequests are the calls on c.bookkeeping() anywhere in the
+// package: the updater's own records, always written with the
+// ServiceAccount's token, whatever path reaches them.
+func bookkeepingRequests(t *testing.T) []rbacRequest {
+	t.Helper()
+	reqs, _ := scanRequests(t, nil, true)
+	return reqs
+}
+
+// scanRequests scans the functions in only (nil: all) for Client calls,
+// or only the calls on c.bookkeeping() with onlyBookkeeping.
+func scanRequests(t *testing.T, only map[string]bool, onlyBookkeeping bool) ([]rbacRequest, map[string]bool) {
+	t.Helper()
 	p := loadClusterSource(t)
 	p.only = only
 	var reqs []rbacRequest
@@ -830,6 +846,9 @@ func serviceAccountRequestsIn(t *testing.T, only map[string]bool) ([]rbacRequest
 					method, pathArg = m, call.Args[1]
 				}
 				if _, known := methodVerbs[method]; !known && method != "get" {
+					return true
+				}
+				if inner, ok := sel.X.(*ast.CallExpr); onlyBookkeeping && (!ok || selectorName(inner.Fun) != "bookkeeping") {
 					return true
 				}
 				site := fmt.Sprintf("%s:%s", file, fn.Name.Name)
@@ -1044,7 +1063,8 @@ func (g grant) allows(r rbacRequest) bool {
 }
 
 func TestTemplateRBACCoversEveryServiceAccountCall(t *testing.T) {
-	reqs, seenExcluded := serviceAccountRequests(t)
+	_, seenExcluded := serviceAccountRequests(t)
+	reqs := templateSARequests(t)
 	for site := range rbacCallsNotUsingTheSAToken {
 		if !seenExcluded[site] {
 			t.Errorf("rbacCallsNotUsingTheSAToken lists %s, but that function no longer makes API calls; remove the entry", site)
@@ -1062,9 +1082,6 @@ func TestTemplateRBACCoversEveryServiceAccountCall(t *testing.T) {
 	}
 	grants := templateGrants(t)
 	missing := map[string][]string{}
-	// The access reviews MLflow and the DSPA proxy make for the samples
-	// (samples_rbac_test.go).
-	reqs = append(reqs, otherServerRequests()...)
 	for _, r := range reqs {
 		ok := false
 		for _, g := range grants {
@@ -1088,8 +1105,7 @@ func TestTemplateRBACCoversEveryServiceAccountCall(t *testing.T) {
 }
 
 func TestTemplateRBACGrantsNothingTheCodeDoesNotUse(t *testing.T) {
-	reqs, _ := serviceAccountRequests(t)
-	reqs = append(reqs, otherServerRequests()...)
+	reqs := templateSARequests(t)
 	for _, g := range templateGrants(t) {
 		if g.source == "built-in basic-user" {
 			continue

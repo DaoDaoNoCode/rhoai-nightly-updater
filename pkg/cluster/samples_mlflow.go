@@ -179,7 +179,7 @@ func foreignMessage(what string) string {
 // statusFromError reports a status read that failed.
 func statusFromError(s types.SampleStatus, err error) types.SampleStatus {
 	s.State = "unknown"
-	s.Message = "Cannot read the sample's state: " + err.Error() + "." + deniedHint(err)
+	s.Message = "Cannot read the sample's state: " + err.Error() + "." + deniedHint(err, false)
 	s.Actions = []string{}
 	return s
 }
@@ -418,7 +418,7 @@ func RunMLflowSamples(c *Client, req types.MLflowSamplesRequest, onStep func(Upd
 				stepCode = "in_progress"
 			}
 			code = firstNonEmpty(code, stepCode)
-			emit(UpdateStepEvent{Step: id, Status: "failed", Message: fmt.Sprintf("%s: %v%s", name, err, deniedHint(err)), ErrorCode: stepCode})
+			emit(UpdateStepEvent{Step: id, Status: "failed", Message: fmt.Sprintf("%s: %v%s", name, err, deniedHint(err, c.asUser)), ErrorCode: stepCode})
 			continue
 		}
 		emit(UpdateStepEvent{Step: id, Status: "success", Message: fmt.Sprintf("%s: %s", name, msg)})
