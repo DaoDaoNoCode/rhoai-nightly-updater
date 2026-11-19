@@ -10,9 +10,15 @@ ifeq ($(origin TAG),undefined)
 TAG := $(RELEASE_TAG)
 TAG_DEFAULTED := 1
 endif
-# Same 8-character commit tag as GitLab CI's CI_COMMIT_SHORT_SHA.
+# The first 8 characters of HEAD, as GitLab CI's CI_COMMIT_SHORT_SHA.
 GIT_SHA   ?= $(shell git rev-parse HEAD 2>/dev/null | cut -c1-8 || echo "dev")
 GIT_FULL_SHA ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
+# "dirty" when the checkout has uncommitted changes (untracked files too).
+GIT_DIRTY := $(shell test -z "$$(git status --porcelain 2>/dev/null)" || echo dirty)
+# A local build's tag: dev-<commit>, with -dirty for a tree with uncommitted
+# changes. Never the bare commit tag: CI writes that once, and publish-main
+# refuses a commit tag it did not build.
+DEV_TAG   := dev-$(GIT_SHA)$(if $(GIT_DIRTY),-dirty)
 # The version string a local build reports: the release tag, else the commit.
 BUILD_VERSION ?= $(or $(RELEASE_TAG),$(GIT_SHA))
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -34,26 +40,30 @@ RELEASES_URL ?=
 
 .DEFAULT_GOAL := help
 
-all: build push  ## Build, push and deploy this checkout's build (:<commit>)
-	@$(MAKE) --no-print-directory deploy TAG=$(GIT_SHA)
+all: build push  ## Build, push and deploy this checkout's build (:dev-<commit>; needs a clean tree)
+	@$(MAKE) --no-print-directory deploy TAG=$(DEV_TAG)
 
-# :latest, :main, :vN and :vX.Y.Z are published by CI only (release tags are
-# immutable, :latest follows releases). A local build is tagged with its
-# commit and, optionally, a TAG of your own.
-PUBLISHED_TAG = $(shell echo '$(TAG)' | grep -Ex 'latest|main|v[0-9]+|v[0-9]+\.[0-9]+\.[0-9]+')
-EXTRA_TAG = $(if $(PUBLISHED_TAG),,$(filter-out $(GIT_SHA),$(TAG)))
+# :latest, :main, :vN, :vX.Y.Z and the commit tags (7 to 40 hex) are
+# published by CI only (release and commit tags are written once, :latest
+# follows releases). A local build is tagged dev-<commit> and, optionally,
+# with a TAG of your own.
+PUBLISHED_TAG = $(shell echo '$(TAG)' | grep -Ex 'latest|main|v[0-9]+|v[0-9]+\.[0-9]+\.[0-9]+|[0-9a-f]{7,40}')
+EXTRA_TAG = $(if $(PUBLISHED_TAG),,$(filter-out $(DEV_TAG),$(TAG)))
 
-build:  ## Build the image as :<commit> (and :TAG for your own test tag; NO_CACHE=1 skips the cache)
+build:  ## Build the image as :dev-<commit> (-dirty with uncommitted changes; :TAG for your own test tag; NO_CACHE=1 skips the cache)
 	@command -v $(RUNTIME) >/dev/null 2>&1 || { echo "Error: $(RUNTIME) is not installed."; exit 1; }
 	$(RUNTIME) build --platform $(PLATFORM) $(if $(NO_CACHE),--no-cache,) \
 		--build-arg GIT_SHA=$(GIT_FULL_SHA) --build-arg VERSION=$(BUILD_VERSION) --build-arg BUILD_DATE=$(BUILD_DATE) \
-		-t $(IMAGE):$(GIT_SHA) -f Containerfile .
-	$(if $(EXTRA_TAG),$(RUNTIME) tag $(IMAGE):$(GIT_SHA) $(IMAGE):$(EXTRA_TAG),@true)
+		-t $(IMAGE):$(DEV_TAG) -f Containerfile .
+	$(if $(EXTRA_TAG),$(RUNTIME) tag $(IMAGE):$(DEV_TAG) $(IMAGE):$(EXTRA_TAG),@true)
 
-# No commas in the $(if ...) texts below: make splits its arguments on them.
-push:  ## Push :<commit> (and :TAG for your own test tag); CI publishes releases, :main and :latest
-	@$(if $(and $(PUBLISHED_TAG),$(if $(TAG_DEFAULTED),,1)),echo "Not pushing :$(TAG): CI publishes :latest and :main and the release tags. Pushing only :$(GIT_SHA).",true)
-	$(RUNTIME) push $(IMAGE):$(GIT_SHA)
+# Only a build of a clean tree is pushed: the image's revision label names
+# HEAD, which must be what it was built from. No commas in the $(if ...)
+# texts below: make splits its arguments on them.
+push:  ## Push :dev-<commit> (and :TAG for your own test tag) of a clean tree; CI publishes releases, :main, :latest and commit tags
+	@test -z "$(GIT_DIRTY)" || { echo "Error: the working tree has uncommitted changes. Commit them, then make build push: the image's revision label names HEAD."; exit 1; }
+	@$(if $(and $(PUBLISHED_TAG),$(if $(TAG_DEFAULTED),,1)),echo "Not pushing :$(TAG): CI publishes :latest and :main and the release and commit tags. Pushing only :$(DEV_TAG).",true)
+	$(RUNTIME) push $(IMAGE):$(DEV_TAG)
 	$(if $(EXTRA_TAG),$(RUNTIME) push $(IMAGE):$(EXTRA_TAG),@true)
 
 # deploy, upgrade, rollback and resolve-image are scripts/install.sh, the
@@ -185,6 +195,7 @@ help:  ## Show this help
 	@echo "  IMAGE      = $(IMAGE)"
 	@echo "  TAG        = $(or $(TAG),(none: HEAD is not on a release tag))"
 	@echo "  GIT_SHA    = $(GIT_SHA)"
+	@echo "  DEV_TAG    = $(DEV_TAG)  (the tag of make build and make push)"
 	@echo "  NAMESPACE  = $(NAMESPACE)"
 	@echo "  APP_NAME   = $(APP_NAME)"
 	@echo "  RUNTIME    = $(RUNTIME)"
