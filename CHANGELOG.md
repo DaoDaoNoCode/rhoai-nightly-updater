@@ -311,6 +311,20 @@ only accepts a tag whose version is the top dated section. See
   ClusterRoleBindings (read only; SECURITY.md, "Reading RBAC to find
   module operators"); RUNBOOK §11.9.
 
+- **Install a different build: a stuck module CR's finalizer is stripped
+  by the same discovery, not a list of names.** The list lacked
+  `aigateway` and `mcplifecycleoperator`, so their stuck CRs were never
+  unblocked, and it named Deployments in `redhat-ods-applications` rather
+  than the DSCInitialization's applications namespace. A finalizer is
+  still removed only after 10 minutes of deletion and only when the
+  operator is gone: the ServiceAccounts a ClusterRoleBinding lets update
+  the CR and its finalizers (or status) name it, and no Deployment in
+  the applications namespace runs as them, nor as any other ServiceAccount
+  that may update the CR and its finalizers or status. An operator the
+  tool cannot identify (Kueue, the RHOAI operator's own; a module whose
+  binding is gone too) or a read error leaves the finalizer, as before
+  for kinds not on the list; RUNBOOK §11.4.
+
 - **Components: MaaS is no longer removed by a change that does not know
   it is in use.** Setting `aigateway` or `aigateway.modelsAsAService` to
   Removed, a soft or hard reset (the release default leaves both

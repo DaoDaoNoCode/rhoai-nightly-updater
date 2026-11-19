@@ -324,7 +324,7 @@ The updater changes a shared, stateful system (OLM and the RHOAI operator). Thes
 - its owning CSV or module is gone;
 - no operator install is in progress.
 
-Platform-owned configurations, and those whose owner is unknown, are never removed. A component CR's finalizer is removed only after 10 minutes of deletion, and only when its operator Deployment no longer exists.
+Platform-owned configurations, and those whose owner is unknown, are never removed. A component CR's finalizer is removed only after 10 minutes of deletion, and only when its operator, identified from RBAC, no longer has a Deployment; an operator the tool cannot identify leaves it alone.
 
 **Diagnostics.** Most findings are guidance only: they explain the cause and the manual fix. The automatic fixes are:
 - delete stale webhooks;

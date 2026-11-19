@@ -294,6 +294,8 @@ Kept narrow: `list` only (no `get`, `watch` or any write; the two lists are read
 
 The rule fails closed: a read error, no matching Deployment, several equally specific ones, or a grant that names no kind (`*` resources, as in `cluster-admin`, or a binding to a group of ServiceAccounts) leaves the operator unknown, and the removal is refused with the same message as before.
 
+Install a different build reads the same lists, once per install and only when a module CR has been deleting for 10 minutes, to decide whether that CR's finalizer may be stripped (RUNBOOK §11.4). It strips one only when the ServiceAccounts the RBAC names have no Deployment left; an unknown operator or a read error leaves the finalizer. The lists add no new permission.
+
 ```bash
 oc auth can-i list clusterroles.rbac.authorization.k8s.io --as=$SA         # yes
 oc auth can-i list clusterrolebindings.rbac.authorization.k8s.io --as=$SA  # yes

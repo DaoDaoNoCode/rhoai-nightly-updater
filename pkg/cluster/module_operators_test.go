@@ -164,14 +164,17 @@ func (w *moduleOperatorWorld) serve(f *fakeAPI) {
 // Deployments.
 func serveLive36ModuleOperators(f *fakeAPI) { newLive36ModuleOperatorWorld().serve(f) }
 
-// serveLive36Kinds serves the component API with every live kind and Kueue.
+// serveLive36Kinds serves the component API with every live kind and Kueue,
+// with the verbs the API server lists for a CRD.
 func serveLive36Kinds(f *fakeAPI) {
 	serveComponentGroup(f)
+	verbs := []string{"delete", "deletecollection", "get", "list", "patch", "create", "update", "watch"}
+	statusVerbs := []string{"get", "patch", "update"}
 	var res []map[string]any
 	for _, o := range live36Operators {
-		res = append(res, map[string]any{"name": o.Plural, "kind": o.Kind}, map[string]any{"name": o.Plural + "/status", "kind": o.Kind})
+		res = append(res, map[string]any{"name": o.Plural, "kind": o.Kind, "verbs": verbs}, map[string]any{"name": o.Plural + "/status", "kind": o.Kind, "verbs": statusVerbs})
 	}
-	res = append(res, map[string]any{"name": "kueues", "kind": "Kueue"}, map[string]any{"name": "newmodules", "kind": "NewModule"})
+	res = append(res, map[string]any{"name": "kueues", "kind": "Kueue", "verbs": verbs}, map[string]any{"name": "newmodules", "kind": "NewModule", "verbs": verbs})
 	f.obj("/apis/components.platform.opendatahub.io/v1alpha1", map[string]any{"resources": res})
 }
 
