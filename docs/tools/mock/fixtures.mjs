@@ -1186,12 +1186,15 @@ export function setMaaSPublished(resources, project, model, published, { maasOnl
   for (const [i, m] of items.entries()) {
     if (m.namespace !== project || m.name !== model) continue;
     if (published) {
-      items[i] = { ...m, maasPublished: true, ...(maasOnlySetup ? { maasOnlySetup: true } : {}) };
+      // As pkg/cluster reports a published model: routed through the MaaS gateway alone, its address the MaaS route's, its check MaaS's own.
+      const url = `https://maas.${APPS}/${project}/${model}`;
+      items[i] = { ...routed({ ...m, url }, { exposure: "maas", check: undefined }), maasPublished: true, ...(maasOnlySetup ? { maasOnlySetup: true } : {}),
+        callCheck: { result: "maas", ok: true, url, message: "MaaS lists the model (its reference is Ready). Calls go through MaaS with an API key, which this tool does not create: the MaaS tab's commands get one and call the model.", at: "2026-11-18T18:04:12Z" } };
       continue;
     }
     noRoute = !!m.maasOnlySetup;
     const { maasPublished: _p, maasOnlySetup: _o, ...rest } = m;
-    items[i] = noRoute ? routed(rest, { exposure: "internal", check: undefined }) : rest;
+    items[i] = noRoute ? routed(rest, { exposure: "internal", check: undefined }) : routed({ ...rest, url: `${INFERENCE}/${project}/${model}` });
   }
   const gw = resources?.inferenceGateway;
   if (!gw?.deployed || !gw.managedByTool) return;

@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { CatalogModel, InferenceGatewayState, ModelState, ResourcesStatus } from "../../types";
 import { IDLE, modelsState } from "./featureState";
-import { UseModel, agoWords, gatewayListRelease, modelsConfirm } from "./ModelsTab";
+import { UseModel, agoWords, exposureWords, gatewayListRelease, modelsConfirm } from "./ModelsTab";
 
 const gw: InferenceGatewayState = {
   deployed: true, ready: true, managedByTool: true, namespace: "openshift-ingress", name: "openshift-ai-inference", message: "Running",
@@ -52,6 +52,11 @@ describe("Models review fixes", () => {
     expect(screen.getByText(/leaves it with no outside route, as before it was published/)).toBeInTheDocument();
     expect(screen.queryByText(/To call its direct address again/)).not.toBeInTheDocument();
     expect(screen.queryByText(/answers 404 until it is unpublished/)).not.toBeInTheDocument();
+  });
+
+  it("how a published model is reached matches what Use it says", () => {
+    expect(exposureWords({ exposure: "maas", maasOnlySetup: true })).toBe("Through MaaS only");
+    expect(exposureWords({ exposure: "maas" })).toBe("Through MaaS while published (Unpublish on the MaaS tab routes it as before)");
   });
 
   it("a model reached only inside the cluster has its own next steps", () => {

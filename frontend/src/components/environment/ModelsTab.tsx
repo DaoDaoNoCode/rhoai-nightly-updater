@@ -418,10 +418,10 @@ export function useModelExposures(project: string | null, model: string, refresh
 }
 
 /** How a model is reached, in a few words. */
-export function exposureWords(m: Pick<ModelState, "exposure" | "gateway">): string {
+export function exposureWords(m: Pick<ModelState, "exposure" | "gateway" | "maasOnlySetup">): string {
   switch (m.exposure) {
     case "maas":
-      return "Through MaaS only";
+      return m.maasOnlySetup ? "Through MaaS only" : "Through MaaS while published (Unpublish on the MaaS tab routes it as before)";
     case "gateway":
       return `Through gateway ${m.gateway ?? ""}`;
     case "internal":
@@ -628,9 +628,10 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
         )}
         {model?.url && model.exposure !== "internal" && (
           <DescriptionListGroup>
-            <DescriptionListTerm>Address</DescriptionListTerm>
+            <DescriptionListTerm>{model.exposure === "maas" ? "MaaS address" : "Address"}</DescriptionListTerm>
             <DescriptionListDescription>
-              <ImageRef image={model.url} what="model address" truncate={false} isCode={false} />
+              <ImageRef image={model.url} what={model.exposure === "maas" ? "MaaS address" : "model address"} truncate={false} isCode={false} />
+              {model.exposure === "maas" && <HelperText><HelperTextItem>Call it with a MaaS API key: see the MaaS tab&apos;s commands.</HelperTextItem></HelperText>}
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}
