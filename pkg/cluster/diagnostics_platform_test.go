@@ -75,6 +75,7 @@ func TestPlatformModules_StuckDashboardWithPausedOperator(t *testing.T) {
 	f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1/rays", http.StatusOK,
 		`{"items":[{"metadata":{"name":"default-ray","deletionTimestamp":"`+recent+`","finalizers":["x"]}}]}`)
 	f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-applications/deployments/dashboard-operator", http.StatusOK, `{"spec":{"replicas":0},"status":{"readyReplicas":0}}`)
+	serveLive36ModuleOperators(f)
 
 	out := checkPlatformModules(c)
 	if len(out.problems) != 1 {

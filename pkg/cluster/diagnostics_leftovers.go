@@ -131,7 +131,7 @@ func leftoversCheck(c *Client, users usersReader) checkOutput {
 		switch {
 		case rf.has(applyStoredType):
 			st := analyzeStored(c, s, rf)
-			st.Crash = moduleOperatorCrash(c, st, appNS, time.Now())
+			st.Crash = moduleOperatorCrash(c, st, time.Now())
 			out.problems = append(out.problems, st.problem())
 		case rf.has(applyImmutable):
 			r := analyzeRecreate(c, rf, appNS, readDeploymentForScan, users)
@@ -638,7 +638,7 @@ type leftoverCrash struct {
 // Confirmed when a pod's last exit message says it could not sync the
 // informer of the leftover's kind (only there when the container writes
 // its log as the termination message; the pod log itself is not read).
-func moduleOperatorCrash(c *Client, st *storedLeftover, appNS string, now time.Time) *leftoverCrash {
+func moduleOperatorCrash(c *Client, st *storedLeftover, now time.Time) *leftoverCrash {
 	if st.Resource == "" {
 		return nil
 	}

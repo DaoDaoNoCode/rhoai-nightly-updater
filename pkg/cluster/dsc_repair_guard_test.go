@@ -170,18 +170,19 @@ func TestDisableComponent_OperatorAndConversionPreconditions(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newFakeAPI(t)
+			serveLive36ModuleOperators(f)
 			serveToggleDSC(f, "v2", `{"metadata":{"name":"default-dsc","uid":"u1"},"spec":{"components":{"`+tc.component+`":{"managementState":"Managed"}}}}`, "", tc.component)
 			f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator", http.StatusOK, `{"status":{"readyReplicas":1}}`)
 			serveComponentGroup(f)
 			kind := map[string]string{"ray": "Ray", "trustyai": "TrustyAI"}[tc.component]
 			f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1", http.StatusOK, `{"resources":[{"name":"`+strings.ToLower(kind)+`s","kind":"`+kind+`"}]}`)
 			f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1/"+strings.ToLower(kind)+"s", http.StatusOK, `{"items":[{"metadata":{"name":"default"}}]}`)
-			op := moduleOperators[tc.component]
+			op := liveOperator(tc.component)
 			ready := 0
 			if tc.operatorReady {
 				ready = 1
 			}
-			f.json("GET", "/apis/apps/v1/namespaces/"+op.namespace+"/deployments/"+op.name, http.StatusOK, `{"status":{"readyReplicas":`+map[int]string{0: "0", 1: "1"}[ready]+`}}`)
+			f.json("GET", "/apis/apps/v1/namespaces/"+liveAppsNS+"/deployments/"+op.Deployment, http.StatusOK, `{"status":{"readyReplicas":`+map[int]string{0: "0", 1: "1"}[ready]+`}}`)
 			f.json("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", http.StatusOK, tc.conv)
 			f.json("GET", svcPath("redhat-ods-applications", "trustyai-service-operator-webhook-service"), http.StatusOK,
 				`{"metadata":{"ownerReferences":[{"apiVersion":"components.platform.opendatahub.io/v1alpha1","kind":"TrustyAI","name":"default-trustyai"}]}}`)

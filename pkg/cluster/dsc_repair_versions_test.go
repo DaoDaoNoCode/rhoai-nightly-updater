@@ -102,6 +102,7 @@ func v3RepairWorld(t *testing.T, defaults string) (*fakeAPI, *Client) {
 	apiVersionsCache.Purge()
 	t.Cleanup(apiVersionsCache.Purge)
 	f, c := newFakeAPI(t)
+	serveLive36ModuleOperators(f)
 	f.json("GET", "/apis/datasciencecluster.opendatahub.io", 200, dscGroupDoc)
 	f.json("GET", "/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters/my-dsc", 200,
 		`{"apiVersion":"datasciencecluster.opendatahub.io/v3","kind":"DataScienceCluster","metadata":{"name":"my-dsc","resourceVersion":"42"},"spec":{"components":`+v3Components+`}}`)

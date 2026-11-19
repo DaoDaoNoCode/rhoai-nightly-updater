@@ -69,6 +69,7 @@ func newLeftoverWorld(t *testing.T, dscMsgs []string, crMsgs []string, lmeval ma
 	f.handle("PATCH", trustyList+"/default-trustyai", w.patchCR)
 	f.handle("PATCH", dscV2List+"/default-dsc", func(*http.Request, []byte) (int, string) { return 200, w.list(w.dsc) })
 	f.json("GET", dsciV2List, 200, `{"items":[{"metadata":{"name":"default-dsci"},"spec":{"applicationsNamespace":"redhat-ods-applications"}}]}`)
+	serveLive36ModuleOperators(f)
 	w.serveCRD("platform.opendatahub.io", lmevalSchema(true))
 	// The module operator, running.
 	f.json("GET", trustyOpDep, 200, `{"metadata":{"name":"trustyai-operator-module-controller-manager","namespace":"redhat-ods-applications","uid":"op"},"spec":{"replicas":1,"template":{"metadata":{"labels":{"app":"trustyai-module"}}}},"status":{"availableReplicas":1,"readyReplicas":1}}`)
