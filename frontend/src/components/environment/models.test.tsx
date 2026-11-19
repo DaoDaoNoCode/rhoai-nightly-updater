@@ -305,7 +305,9 @@ describe("Models tab: token authentication", () => {
   it("the setup confirmation lists the token objects", async () => {
     stubApi({ "/api/resources/status": status({ inferenceGateway: gateway }), "/api/resources/projects": { projects: ["dev"] }, ...routing });
     renderAt("/test-resources?tab=models&project=dev");
-    fireEvent.click(await screen.findByRole("button", { name: "Set up Qwen2.5 0.5B Instruct in dev" }));
+    // Set up waits (disabled) until it knows how the model is reached.
+    expect(await screen.findByRole("radio", { name: /Through the cluster's default inference gateway/ })).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Set up Qwen2.5 0.5B Instruct in dev" }));
     const dialog = await screen.findByRole("dialog", { name: /Set up Qwen2.5 0.5B Instruct in dev\?/ });
     expect(within(dialog).getByText(/ServiceAccount/)).toHaveTextContent("ServiceAccount qwen25-05b-instruct-sa, Role qwen25-05b-instruct-view-role (get on this model only), RoleBinding qwen25-05b-instruct-view and token Secret default-name-qwen25-05b-instruct-sa");
     expect(within(dialog).queryByText(/No ServiceAccount, role or token is made/)).toBeNull();

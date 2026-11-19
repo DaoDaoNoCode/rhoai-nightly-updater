@@ -61,7 +61,7 @@ Open **http://127.0.0.1:9000** in your browser.
 
 The frontend uses:
 
-- **React 18.3.0** with TypeScript 5.6.x
+- **React 19** with TypeScript 5.9
 - **PatternFly 6.x** for UI components (`@patternfly/react-core`, `@patternfly/react-table`)
 - **React Router 7** (`react-router-dom` ^7.18.4) for client-side routing
 - **Webpack 5** for bundling (configured in `frontend/webpack.config.js`)

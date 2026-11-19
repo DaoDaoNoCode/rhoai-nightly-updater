@@ -6,15 +6,16 @@ import { setDocumentHidden } from "./utils";
 
 // React's development warnings (a list item without a key, a <div> inside a
 // <p>, an update outside act, ...) are bugs in what the UI renders, not
-// noise: a test that makes React warn fails, with the warning and the
-// component stack. Messages a test expects are not React's ("Warning: ...").
+// noise: a test that logs an error fails, with the message. React 19's
+// warnings have no "Warning: " prefix to tell them apart, and nothing else
+// in the suite logs errors, so every console.error counts. A test that
+// expects one replaces this with its own vi.spyOn(console, "error").
 let reactWarnings: string[] = [];
 beforeEach(() => {
   reactWarnings = [];
   const original = console.error;
   vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
-    const text = format(...args);
-    if (text.startsWith("Warning: ")) reactWarnings.push(text);
+    reactWarnings.push(format(...args));
     original(...args);
   });
 });
@@ -35,6 +36,6 @@ afterEach(() => {
   setDocumentHidden(false, { silent: true });
   const found = reactWarnings;
   reactWarnings = [];
-  if (found.length > 0) throw new Error(`React warned while rendering:\n${found.join("\n\n")}`);
+  if (found.length > 0) throw new Error(`Logged an error (a React warning, or another console.error):\n${found.join("\n\n")}`);
   if (nested.length > 0) throw new Error(`Invalid HTML, a block inside a paragraph:\n${nested.join("\n")}`);
 });
