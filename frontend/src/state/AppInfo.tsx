@@ -44,11 +44,11 @@ export const PERMISSION_CHECKING_REASON = "Checking your permissions...";
 export const PERMISSION_UNKNOWN_REASON = "Your permissions could not be checked, so changes are disabled. Retry from the banner at the top of the page.";
 export const SESSION_EXPIRED_REASON = "Your session has expired. Sign in again to make changes.";
 
-function permissionReason(status: PermissionStatus, sessionExpired: boolean): string | null {
+function permissionReason(status: PermissionStatus, sessionExpired: boolean, deniedReason: string | null = null): string | null {
   if (sessionExpired) return SESSION_EXPIRED_REASON;
   switch (status) {
     case "allowed": return null;
-    case "denied": return NO_PERMISSION_REASON;
+    case "denied": return deniedReason ?? NO_PERMISSION_REASON;
     case "checking": return PERMISSION_CHECKING_REASON;
     case "unknown": return PERMISSION_UNKNOWN_REASON;
   }
@@ -163,6 +163,8 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
   // --- Permissions -----------------------------------------------------------
   const [permStatus, setPermStatus] = useState<PermissionStatus>("checking");
   const [permError, setPermError] = useState<ApiError | null>(null);
+  // The backend's reason when a cluster-admin's sign-in cannot carry a change.
+  const [deniedReason, setDeniedReason] = useState<string | null>(null);
   const permStatusRef = useRef(permStatus);
   permStatusRef.current = permStatus;
 
@@ -170,6 +172,7 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
     try {
       const p = await fetchers.current.fetchPermissions();
       setPermStatus(p.canMutate ? "allowed" : "denied");
+      setDeniedReason(!p.canMutate && p.reason ? p.reason : null);
       setPermError(null);
     } catch (e) {
       const err = toApiError(e, "Could not check your permissions");
@@ -284,7 +287,7 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
     permissions: {
       status: permStatus,
       canMutate: permStatus === "allowed" && !sessionExpired,
-      reason: permissionReason(permStatus, sessionExpired),
+      reason: permissionReason(permStatus, sessionExpired, deniedReason),
       error: permError,
       retry: retryPermissions,
     },
@@ -293,7 +296,7 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
     update,
     dashboard: { override, loaded: overrideLoaded, refresh: refreshOverride },
     sessionExpired,
-  }), [permStatus, sessionExpired, permError, retryPermissions, version, versionSettled, gitOpsProfile, update, override, overrideLoaded, refreshOverride]);
+  }), [permStatus, sessionExpired, deniedReason, permError, retryPermissions, version, versionSettled, gitOpsProfile, update, override, overrideLoaded, refreshOverride]);
 
   return <AppInfoContext.Provider value={value}>{children}</AppInfoContext.Provider>;
 };

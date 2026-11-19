@@ -43,6 +43,7 @@ const (
 var rbacCallsNotUsingTheSAToken = map[string]string{
 	"authz.go:CheckUserPermissionWithToken": "SubjectAccessReview sent with the user's token",
 	"authz.go:LookupUserWithToken":          "users/~ read with the user's token",
+	"authz.go:ReadSessionToken":             "the user's own OAuth access token, read with that token",
 }
 
 // Best-effort reads of paths found by API discovery at run time, whose API

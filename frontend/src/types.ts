@@ -285,6 +285,9 @@ export interface PodInfo {
 export interface UserPermissions {
   canMutate: boolean;
   user: string;
+  /** Why a user who may change the cluster cannot now (their sign-in cannot carry a change: an old session, or one about to expire). */
+  reason?: string;
+  reasonCode?: string;
 }
 
 export interface DashboardState {
