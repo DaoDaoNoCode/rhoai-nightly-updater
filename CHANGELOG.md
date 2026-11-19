@@ -34,7 +34,23 @@ only accepts a tag whose version is the top dated section. See
   runs with your token; the commands stay under **Do it yourself instead**.
   The pull secret change copies the token the updater already holds (never
   sent to the browser), changes only that entry, and refuses an unreadable or
-  External Secrets-managed Secret. ROSA Classic and OpenShift Dedicated
+  External Secrets-managed Secret. It never removes or overwrites a setup it
+  did not make: Add records the entry it writes (the Secret's UID and a
+  salted SHA-256 of the token, never the token, in the snapshot ConfigMap),
+  and **Remove from the nodes' pull secret** takes out only that entry (the
+  record, the UID and the hash must all match) and is shown only then. An
+  entry someone else set (a provisioner's, say) is left: with the same token
+  there is nothing to do, with another token Add refuses and offers **Check
+  that the nodes can pull**, and replaces it only after a checkbox stating
+  that its token is not kept and cannot be restored. When the nodes pull
+  without a record the button reads **Already set up (not by this tool)**;
+  the tool's own entry with an earlier token gets **Update the nodes' pull
+  secret**. The card says who set the entry. Any ImageDigestMirrorSet that
+  redirects `registry.redhat.io/rhoai` (for example a provisioner's
+  `quay-registry`) counts as the mirror; Create adds no second one and
+  Remove deletes only `rhoai-quay-mirror` with exactly its one mapping. The
+  removal command under **Do it yourself instead** says that it removes
+  whatever entry is there and asks for `yes`. ROSA Classic and OpenShift Dedicated
   (detected by Red Hat SRE's `*.managed.openshift.io` webhooks) get the mirror
   button but not the pull secret one (Red Hat manages that secret); ROSA HCP
   keeps the `rosa` instructions. No new ServiceAccount permission. Sources:
