@@ -14,7 +14,6 @@ import {
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
-  ExpandableSection,
   Flex,
   FlexItem,
   HelperText,
@@ -49,6 +48,7 @@ import { StatusLabel, TagLabel, type StatusKind } from "../components/StatusLabe
 import { TechnicalDetails, TruncatedText, firstClause } from "../components/LongText";
 import { DeploymentsTable } from "../components/DeploymentsTable";
 import { DSCEmptyState } from "../components/DSCEmptyState";
+import { DSCManagerSection } from "../components/dsc/DSCManagerSection";
 import { TooltipButton } from "../components/TooltipButton";
 import { useComponentsData } from "../hooks/useComponentsData";
 import { useClusterBusyHandler, useGitOpsProfile, useMutationBlocker } from "../state/AppInfo";
@@ -119,7 +119,6 @@ export const ComponentsPage: React.FC = () => {
   const [fixConfirm, setFixConfirm] = useState<{ action: string; title: string; message: string } | null>(null);
   const [fixLoading, setFixLoading] = useState<string | null>(null);
   const [fixResult, setFixResult] = useState<Record<string, OperationResponse>>({});
-  const [othersExpanded, setOthersExpanded] = useState(false);
   const [repairMode, setRepairMode] = useState<DSCRepairMode | null>(null);
   const [repairLoading, setRepairLoading] = useState(false);
   const [repairResult, setRepairResult] = useState<OperationResponse | null>(null);
@@ -522,34 +521,14 @@ export const ComponentsPage: React.FC = () => {
                       </Table>
                 </CardBody>
               )}
-              {(ready.length > 0 || removed.length > 0) && (
-                <CardBody>
-                      <ExpandableSection
-                        toggleText={`Ready (${ready.length})${removed.length > 0 ? ` and removed (${removed.length})` : ""} components`}
-                        isExpanded={othersExpanded}
-                        onToggle={(_e, v) => setOthersExpanded(v)}
-                      >
-                        <DescriptionList isCompact isHorizontal horizontalTermWidthModifier={{ default: "10ch" }}>
-                          {ready.length > 0 && (
-                            <DescriptionListGroup>
-                              <DescriptionListTerm>Ready</DescriptionListTerm>
-                              <DescriptionListDescription>{ready.map((c) => c.name).join(", ")}</DescriptionListDescription>
-                            </DescriptionListGroup>
-                          )}
-                          {removed.length > 0 && (
-                            <DescriptionListGroup>
-                              <DescriptionListTerm>Removed</DescriptionListTerm>
-                              <DescriptionListDescription>{removed.map((c) => c.name).join(", ")}</DescriptionListDescription>
-                            </DescriptionListGroup>
-                          )}
-                        </DescriptionList>
-                      </ExpandableSection>
-                </CardBody>
-              )}
             </Card>
           </PageSection>
         );
       })()}
+
+      {data && !noDSC && (
+        <DSCManagerSection refreshKey={lastRefreshed} mutateReason={mutateReason ?? dscGitOpsReason} onResult={onResult} onChanged={handleRefresh} />
+      )}
 
       {data && dscState !== "no-crd" && (
         <PageSection isFilled>

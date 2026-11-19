@@ -1,4 +1,4 @@
-import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, DashboardBuildsResponse, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse, ModelsRequest, PlaygroundRequest, PlaygroundStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest } from '../types';
+import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, DashboardBuildsResponse, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse, ModelsRequest, PlaygroundRequest, PlaygroundStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest, DSCManager, DSCPlan, DSCPlanAction } from '../types';
 
 /**
  * Error thrown by every API helper. `status` is the HTTP status (0 when no
@@ -862,6 +862,45 @@ export function repairDSC(name: string, mode: 'remove-invalid' | 'remove-extra-c
     method: 'POST',
     body: JSON.stringify({ name, mode, expectedAPIVersion, expectedOperatorVersion, expectedExtraComponents, expectedResetRemovals }),
   });
+}
+
+/** The DataScienceCluster's component tree, compared with the release default. */
+export function getDSCManager(): Promise<DSCManager> {
+  return request<DSCManager>('/api/components/dsc');
+}
+
+/** What a change would do, from a fresh read: a toggle (path, to, withParent), fix, soft-reset or hard-reset. */
+export function getDSCPlan(action: DSCPlanAction, toggle?: { path: string; to: string; withParent?: boolean }): Promise<DSCPlan> {
+  const q = new URLSearchParams({ action });
+  if (toggle) {
+    q.set('path', toggle.path);
+    q.set('to', toggle.to);
+    if (toggle.withParent) q.set('withParent', 'true');
+  }
+  return request<DSCPlan>(`/api/components/dsc/plan?${q.toString()}`);
+}
+
+/** Sets one managementState; refused (422) when the DSC no longer holds `from`. */
+export function setDSCManagementState(req: { name: string; path: string; from: string; to: string; withParent?: boolean }): Promise<OperationResponse> {
+  return request('/api/components/dsc/management', { method: 'POST', body: JSON.stringify(req), acceptStatuses: [422] });
+}
+
+/** Runs the reviewed fix or soft reset; refused when the plan changed since. */
+export function runDSCPlan(action: 'fix' | 'soft-reset', plan: DSCPlan): Promise<OperationResponse> {
+  return request(action === 'fix' ? '/api/components/dsc/fix' : '/api/components/dsc/reset', {
+    method: 'POST', body: JSON.stringify({ name: plan.name, uid: plan.uid, token: plan.token }), acceptStatuses: [422],
+  });
+}
+
+/** Hard reset, streaming "check", "delete", "wait_deleted", "create", "wait_ready". */
+export function streamDSCHardReset(
+  plan: DSCPlan,
+  confirm: string,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/components/dsc/hard-reset/stream', { name: plan.name, uid: plan.uid, token: plan.token, confirm }, onStep, onDone, onConnectionDrop);
 }
 
 // ---------------------------------------------------------------------------

@@ -580,6 +580,103 @@ export interface DSCRemovalBlock {
   reasons: string[];
 }
 
+/** One DSC status condition (pkg/types DSCConditionView). */
+export interface DSCConditionView {
+  type: string;
+  status: string;
+  reason?: string;
+  message?: string;
+}
+
+/** A component or sub-component of spec.components as the installed CRD defines it (pkg/types DSCNode). */
+export interface DSCNode {
+  path: string;
+  name: string;
+  parent: string;
+  depth: number;
+  /** Has its own managementState; a group (dashboard, data) only holds sub-components. */
+  toggle: boolean;
+  allowed?: string[];
+  schemaDefault?: string;
+  spec?: string;
+  specSet: boolean;
+  default?: string;
+  defaultSet: boolean;
+  actual?: string;
+  condition?: DSCConditionView;
+  changed?: boolean;
+}
+
+/** A difference from the release default that is a real problem (pkg/types DSCMismatch). */
+export interface DSCMismatch {
+  kind: "unset" | "parent-removed" | "unknown-field";
+  path: string;
+  default?: string;
+  parent?: string;
+  message: string;
+  fixable: boolean;
+}
+
+/** GET /api/components/dsc (pkg/types DSCManager). */
+export interface DSCManager {
+  exists: boolean;
+  state: string;
+  name?: string;
+  uid?: string;
+  apiVersion?: string;
+  storageVersion?: string;
+  dscCount: number;
+  phase?: string;
+  releaseName?: string;
+  releaseVersion?: string;
+  operatorVersion?: string;
+  defaultsSource?: string;
+  defaultsError?: string;
+  schemaError?: string;
+  /** Why this page changes nothing in the DSC now; empty when it may. */
+  readOnlyReason?: string;
+  managedBy?: string;
+  acmEnforced?: boolean;
+  deleting?: boolean;
+  finalizers?: string[];
+  conditions: DSCConditionView[];
+  upgradeGates?: string[];
+  nodes: DSCNode[];
+  mismatches: DSCMismatch[];
+}
+
+/** One change of a plan (pkg/types DSCChange). */
+export interface DSCChange {
+  path: string;
+  from?: string;
+  fromSet: boolean;
+  to?: string;
+  toSet: boolean;
+  toggle: boolean;
+  /** "deploys" or "removes" when what the operator deploys changes. */
+  effect?: "deploys" | "removes" | "";
+}
+
+export type DSCPlanAction = "toggle" | "fix" | "soft-reset" | "hard-reset";
+
+/** GET /api/components/dsc/plan (pkg/types DSCPlan). */
+export interface DSCPlan {
+  action: DSCPlanAction;
+  name: string;
+  uid?: string;
+  apiVersion?: string;
+  refusal?: string;
+  code?: string;
+  parentPath?: string;
+  changes: DSCChange[];
+  blocked?: DSCRemovalBlock[] | null;
+  warnings?: string[] | null;
+  tornDown?: string[] | null;
+  stayRemoved?: string[] | null;
+  newObject?: string;
+  token?: string;
+}
+
 export interface ComponentsResponse {
   dscExists?: boolean;
   /** "present", "no-dsc" (CRD installed, no DSC) or "no-crd" (no DSC API). */
