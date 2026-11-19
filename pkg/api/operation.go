@@ -212,6 +212,7 @@ var operationTypes = map[string][2]string{
 	"/api/resources/cleanup/stream":           {"cleanup", "Clean up the environment"},
 	"/api/resources/samples/mlflow/stream":    {"mlflow-samples", "MLflow samples"},
 	"/api/diagnostics/fix":                    {"diagnostics-fix", "Apply diagnostics fix"},
+	"/api/diagnostics/fix/acknowledged":       {"diagnostics-fix", "Apply diagnostics fix"},
 }
 
 // Size bounds of what is kept and persisted about an operation.

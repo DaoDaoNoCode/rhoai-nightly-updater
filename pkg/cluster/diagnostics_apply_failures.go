@@ -90,7 +90,59 @@ const (
 	applyImmutable       applyFailureClass = "immutable"
 	applyControllerOwner applyFailureClass = "controller-owner"
 	applySchemaMismatch  applyFailureClass = "schema-mismatch"
+	// applyStoredType: the API server could not convert the stored object
+	// to the CRD's schema for server-side apply ("failed to create manager
+	// for existing fields: failed to convert new object (...) to smd typed:
+	// errors: <path>: expected <type>, got ..."), live on RHOAI 3.6 after
+	// upgrades over several releases. The "Left over from an earlier
+	// release" check handles it (diagnostics_leftovers.go).
+	applyStoredType applyFailureClass = "stored-type"
 )
+
+// leftoverWorkloads are the kinds whose spec.selector is immutable, by API
+// group: the "Left over from an earlier release" check recreates them.
+var leftoverWorkloads = map[string]string{"Deployment": "apps", "StatefulSet": "apps", "DaemonSet": "apps", "Job": "batch"}
+
+// leftover reports whether the "Left over from an earlier release" check
+// handles the failure: a stored object of an older schema, or a workload
+// whose spec.selector changed. checkApplyFailures leaves those out.
+func (f applyFailure) leftover() bool {
+	switch f.Class {
+	case applyStoredType:
+		return true
+	case applyImmutable:
+		return f.selectorChanged()
+	}
+	return false
+}
+
+// selectorChanged: an immutable spec.selector of a workload kind.
+func (f applyFailure) selectorChanged() bool {
+	group, ok := leftoverWorkloads[f.Kind]
+	return ok && f.group() == group && containsString(f.Fields, "spec.selector")
+}
+
+// leftover decides per object: the "Left over from an earlier release"
+// check takes an object only when every failure reported for it is one it
+// fixes (stored field types alone, or an immutable spec.selector alone).
+// An object with other failures stays one problem here (one problem per
+// object), with guidance.
+func (rf *reportedApplyFailure) leftover() bool {
+	if len(rf.classes) != 1 {
+		return false
+	}
+	switch rf.classes[0] {
+	case applyStoredType:
+		return true
+	case applyImmutable:
+		fields := rf.fields[applyImmutable]
+		return rf.selectorChanged() && len(fields) == 1 && fields[0] == "spec.selector"
+	}
+	return false
+}
+
+// allApplyFailures keeps every failure.
+func allApplyFailures(applyFailure) bool { return true }
 
 // applyFailure is one object an operator could not apply.
 type applyFailure struct {
@@ -135,6 +187,17 @@ func (f applyFailure) ocCommand(verb string, extra ...string) string {
 
 // problemID is the ID of the problem reported for the object.
 func (f applyFailure) problemID() string {
+	switch {
+	case f.Class == applyStoredType:
+		return leftoverFieldsID(f.Kind, f.Name)
+	case f.leftover():
+		return leftoverRecreateID(f.Kind, f.Namespace, f.Name)
+	}
+	return f.genericProblemID()
+}
+
+// genericProblemID is the ID of this check's problem for the object.
+func (f applyFailure) genericProblemID() string {
 	return "operator-apply-failed-" + strings.ToLower(strings.Join([]string{f.Kind, f.Namespace, f.Name}, "-"))
 }
 
@@ -173,6 +236,17 @@ func parseApplyFailures(msg string) []applyFailure {
 					f.Fields = append(f.Fields, m[1])
 				}
 			}
+		case strings.Contains(f.Detail, "to smd typed") && strings.Contains(f.Detail, "expected "):
+			f.Class = applyStoredType
+			for _, m := range typedFieldPattern.FindAllStringSubmatch(f.Detail, -1) {
+				field := fmt.Sprintf("%s: expected %s, got %s", m[1], m[2], m[3])
+				if !containsString(f.Fields, field) {
+					f.Fields = append(f.Fields, field)
+				}
+			}
+			if len(f.Fields) == 0 {
+				continue
+			}
 		case strings.Contains(f.Detail, "failed to create typed") && strings.Contains(f.Detail, "expected "):
 			f.Class = applySchemaMismatch
 			for _, m := range typedFieldPattern.FindAllStringSubmatch(f.Detail, -1) {
@@ -191,7 +265,7 @@ func parseApplyFailures(msg string) []applyFailure {
 
 // applyReporter is a CR whose conditions report apply failures.
 type applyReporter struct {
-	Kind, Name string
+	Kind, Name, UID string
 	// Module is the lower-case kind of a components.platform.opendatahub.io
 	// CR, "" for the DataScienceCluster and the Platform.
 	Module   string
@@ -238,8 +312,9 @@ func (rf *reportedApplyFailure) has(class applyFailureClass) bool {
 	return false
 }
 
-// collectApplyFailures scans the conditions of one CR.
-func collectApplyFailures(found map[string]*reportedApplyFailure, r applyReporter, conds []dscCondition) {
+// collectApplyFailures scans the conditions of one CR for the failures
+// keep accepts.
+func collectApplyFailures(found map[string]*reportedApplyFailure, r applyReporter, conds []dscCondition, keep func(applyFailure) bool) {
 	for _, cond := range conds {
 		if cond.Type == "Ready" && cond.Status == "False" {
 			r.NotReady = true
@@ -247,6 +322,9 @@ func collectApplyFailures(found map[string]*reportedApplyFailure, r applyReporte
 	}
 	for _, cond := range conds {
 		for _, f := range parseApplyFailures(cond.Message) {
+			if !keep(f) {
+				continue
+			}
 			k := f.key()
 			if found[k] == nil {
 				found[k] = &reportedApplyFailure{applyFailure: f, fields: map[applyFailureClass][]string{}}
@@ -264,37 +342,50 @@ func collectApplyFailures(found map[string]*reportedApplyFailure, r applyReporte
 	}
 }
 
-func checkApplyFailures(c *Client) checkOutput {
-	out := checkOutput{check: CheckResult{Name: applyFailuresCheckName, Status: "pass"}}
-	found := map[string]*reportedApplyFailure{}
-	var errs []string
-	scanned := 0
+// reporterScan is what scanApplyReporters read: the failures it kept, the
+// component API, the DataScienceClusters and the module CRs (each also as
+// the raw object, by kind and name).
+type reporterScan struct {
+	api     componentAPI
+	found   map[string]*reportedApplyFailure
+	dscs    []dscObject
+	modules map[string]map[string]map[string]interface{}
+	scanned int
+	errs    []string
+}
+
+// scanApplyReporters reads the conditions of the DataScienceCluster, the
+// Platform and every module CR (whatever kinds this operator version
+// serves) and collects the apply failures keep accepts.
+func scanApplyReporters(c *Client, keep func(applyFailure) bool) reporterScan {
+	s := reporterScan{found: map[string]*reportedApplyFailure{}, modules: map[string]map[string]map[string]interface{}{}}
 
 	dscs, _, err := listFirstServed(c, dscGroup, dscListFmt, "datascienceclusters", dscFallbackVersions)
 	if err != nil {
-		errs = append(errs, fmt.Sprintf("DataScienceCluster: %v", err))
+		s.errs = append(s.errs, fmt.Sprintf("DataScienceCluster: %v", err))
 	}
+	s.dscs = dscs
 	for _, d := range dscs {
-		scanned++
-		collectApplyFailures(found, applyReporter{Kind: "DataScienceCluster", Name: d.Metadata.Name}, d.Status.Conditions)
+		s.scanned++
+		collectApplyFailures(s.found, applyReporter{Kind: "DataScienceCluster", Name: d.Metadata.Name, UID: d.Metadata.UID}, d.Status.Conditions, keep)
 	}
 
 	platforms, _, err := listFirstServed(c, platformGroup, platformListFmt, "platforms", platformFallbackVersions)
 	if err != nil {
-		errs = append(errs, fmt.Sprintf("Platform: %v", err))
+		s.errs = append(s.errs, fmt.Sprintf("Platform: %v", err))
 	}
 	for _, p := range platforms {
-		scanned++
-		collectApplyFailures(found, applyReporter{Kind: "Platform", Name: p.Metadata.Name, rank: 1}, p.Status.Conditions)
+		s.scanned++
+		collectApplyFailures(s.found, applyReporter{Kind: "Platform", Name: p.Metadata.Name, UID: p.Metadata.UID, rank: 1}, p.Status.Conditions, keep)
 	}
 
-	// Module CRs, whatever kinds this operator version serves.
 	api, err := discoverComponentAPI(c)
 	if err != nil {
-		errs = append(errs, err.Error())
+		s.errs = append(s.errs, err.Error())
 	}
+	s.api = api
 	type moduleList struct {
-		items []dscObject
+		items []json.RawMessage
 		err   error
 	}
 	lists := make([]moduleList, len(api.Kinds))
@@ -305,25 +396,43 @@ func checkApplyFailures(c *Client) checkOutput {
 			return
 		}
 		var list struct {
-			Items []dscObject `json:"items"`
+			Items []json.RawMessage `json:"items"`
 		}
 		lists[i].err = json.Unmarshal(body, &list)
 		lists[i].items = list.Items
 	})
 	for i, k := range api.Kinds {
 		if lists[i].err != nil {
-			errs = append(errs, lists[i].err.Error())
+			s.errs = append(s.errs, lists[i].err.Error())
 			continue
 		}
-		for _, it := range lists[i].items {
-			scanned++
-			collectApplyFailures(found, applyReporter{Kind: k.Kind, Name: it.Metadata.Name, Module: strings.ToLower(k.Kind), rank: 2}, it.Status.Conditions)
+		for _, raw := range lists[i].items {
+			var it dscObject
+			var obj map[string]interface{}
+			if json.Unmarshal(raw, &it) != nil || json.Unmarshal(raw, &obj) != nil {
+				continue
+			}
+			s.scanned++
+			if s.modules[k.Kind] == nil {
+				s.modules[k.Kind] = map[string]map[string]interface{}{}
+			}
+			s.modules[k.Kind][it.Metadata.Name] = obj
+			collectApplyFailures(s.found, applyReporter{Kind: k.Kind, Name: it.Metadata.Name, UID: it.Metadata.UID, Module: strings.ToLower(k.Kind), rank: 2}, it.Status.Conditions, keep)
 		}
 	}
+	return s
+}
+
+func checkApplyFailures(c *Client) checkOutput {
+	out := checkOutput{check: CheckResult{Name: applyFailuresCheckName, Status: "pass"}}
+	s := scanApplyReporters(c, allApplyFailures)
+	found, api, errs, scanned := s.found, s.api, s.errs, s.scanned
 
 	keys := make([]string, 0, len(found))
-	for k := range found {
-		keys = append(keys, k)
+	for k, rf := range found {
+		if !rf.leftover() {
+			keys = append(keys, k)
+		}
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
@@ -384,7 +493,7 @@ func applyFailureProblem(c *Client, api componentAPI, rf *reportedApplyFailure) 
 		evidence = append(evidence, fmt.Sprintf("Failure deploying %s (%s): %s", f.object(), f.GroupVersion, truncate(d, 500)))
 	}
 	p := Problem{
-		ID:              f.problemID(),
+		ID:              f.genericProblemID(),
 		Severity:        severity,
 		AffectedObjects: []string{f.object()},
 		AutoFixable:     false,

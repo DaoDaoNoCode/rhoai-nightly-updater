@@ -43,6 +43,17 @@ type Problem struct {
 	// RelatedProblems are the IDs of other problems in the same report that
 	// fix this problem's cause (only IDs present in the report are kept).
 	RelatedProblems []string `json:"relatedProblems,omitempty"`
+	// FieldChanges is the per-field plan of a fix that changes fields of
+	// an object: the value now, the value after, and why.
+	FieldChanges []FieldChange `json:"fieldChanges,omitempty"`
+	// Acknowledge, when set, is a statement the user must confirm before
+	// the fix runs: the fix is sent to /api/diagnostics/fix/acknowledged,
+	// and refused without it.
+	Acknowledge string `json:"acknowledge,omitempty"`
+
+	// explains are objects (pods) whose problems this one likely causes:
+	// a pod problem whose objects are all listed links to this problem.
+	explains []string
 
 	// mergeable: two checks may report the same problem (a prerequisite
 	// named by a module and needed by a Certificate); their evidence is
@@ -53,6 +64,22 @@ type Problem struct {
 	// pods are all covered, and webhook entries covered here, are folded
 	// into this problem.
 	covers []string
+}
+
+// FieldChange is one field of a fix's plan.
+type FieldChange struct {
+	Object string `json:"object"` // "<Kind> <name>"
+	Field  string `json:"field"`  // ".spec.eval.lmeval.permitOnline"
+	Now    string `json:"now"`    // the stored value, as JSON
+	After  string `json:"after"`  // the value after the fix, as JSON; "" when removed or not changed
+	// Change is "set-default", "remove", "none" (no automatic fix) or
+	// "valid" (already matches the CRD).
+	Change string `json:"change"`
+	Schema string `json:"schema"` // what the installed CRD says about the field
+	Note   string `json:"note,omitempty"`
+	// Review: the stored value may not mean the same as the new one, so
+	// the fix needs an acknowledgement.
+	Review bool `json:"review,omitempty"`
 }
 
 // DiagnosticsResponse is the response for the diagnostics endpoint.
@@ -89,6 +116,7 @@ var diagnosticChecks = []diagnosticCheck{
 	{"Certificates", checkCertificates},
 	{"Platform modules", checkPlatformModules},
 	{applyFailuresCheckName, checkApplyFailures},
+	{leftoversCheckName, checkLeftovers},
 	{"Operator-managed config", checkManagedConfig},
 }
 
@@ -113,6 +141,7 @@ var gitOpsDiagnosticChecks = []diagnosticCheck{
 	{"Certificates", checkCertificates},
 	{"Platform modules", checkPlatformModules},
 	{applyFailuresCheckName, checkApplyFailures},
+	{leftoversCheckName, checkLeftoversGitOps},
 	{"Operator-managed config", checkManagedConfig},
 	{secretAccessCheckName, checkServiceAccountSecretAccess},
 }
@@ -1088,6 +1117,20 @@ var removedFixes = map[string]string{
 // re-checks its precondition right before acting and reports what it
 // actually changed; errorCode "nothing_to_do" means nothing needed changing.
 func ApplyFix(c *Client, problemID string) (*types.OperationResponse, error) {
+	return applyFix(c, problemID, false)
+}
+
+// ApplyFixAcknowledged is ApplyFix after the user confirmed the problem's
+// Acknowledge statement (POST /api/diagnostics/fix/acknowledged). Fixes
+// that need no acknowledgement run as with ApplyFix.
+func ApplyFixAcknowledged(c *Client, problemID string) (*types.OperationResponse, error) {
+	return applyFix(c, problemID, true)
+}
+
+func applyFix(c *Client, problemID string, acknowledged bool) (*types.OperationResponse, error) {
+	if res, ok := applyLeftoverFix(c, problemID, acknowledged); ok {
+		return res, nil
+	}
 	switch problemID {
 	case "delete-stale-webhooks":
 		return applyFixDeleteStaleWebhooks(c)

@@ -472,6 +472,29 @@ func mergeProblem(dst *Problem, src Problem) {
 // problems whose pods it covers, and covered entries of the webhook
 // guidance problem), and keeps only related IDs that are in the report.
 func linkProblems(problems []Problem) []Problem {
+	// A crash-looping or restarting workload whose pods a problem explains
+	// keeps its own problem (the pods are really down) and links to the
+	// cause.
+	for i := range problems {
+		if len(problems[i].explains) == 0 {
+			continue
+		}
+		for j := range problems {
+			pj := &problems[j]
+			crash := strings.HasPrefix(pj.ID, "pod-"+string(issueCrashLoop)+"-") || strings.HasPrefix(pj.ID, "pod-"+string(issueRestarting)+"-")
+			if i == j || !crash || len(pj.AffectedObjects) == 0 {
+				continue
+			}
+			all := true
+			for _, o := range pj.AffectedObjects {
+				all = all && containsString(problems[i].explains, o)
+			}
+			if all && !containsString(pj.RelatedProblems, problems[i].ID) {
+				pj.RelatedProblems = append(pj.RelatedProblems, problems[i].ID)
+				pj.Evidence = append(pj.Evidence, fmt.Sprintf("Likely caused by %q", problems[i].Title))
+			}
+		}
+	}
 	drop := map[int]bool{}
 	for i := range problems {
 		if len(problems[i].covers) == 0 {

@@ -74,6 +74,7 @@ var routes = []Route{
 	{"GET /api/resources/samples/pipeline/spec", HandlePipelineSampleSpec},
 	{"GET /api/diagnostics", HandleDiagnostics},
 	{"POST /api/diagnostics/fix", HandleDiagnosticsFix},
+	{"POST /api/diagnostics/fix/acknowledged", HandleDiagnosticsFixAcknowledged},
 	{"GET /api/setup/dsc/preview", HandleDSCPreview},
 	{"POST /api/setup/dsc", HandleCreateDSC},
 	{"POST /api/pageview", HandlePageView},
@@ -166,6 +167,7 @@ var gitOpsRefused = map[string]string{
 	"POST /api/resources/samples/mlflow/stream":    "The Environment page",
 	"GET /api/resources/samples/pipeline/spec":     "The Environment page",
 	"POST /api/diagnostics/fix":                    "Diagnostics fixes",
+	"POST /api/diagnostics/fix/acknowledged":       "Diagnostics fixes",
 	"GET /api/setup/dsc/preview":                   "Creating the DataScienceCluster",
 	"POST /api/setup/dsc":                          "Creating the DataScienceCluster",
 }
