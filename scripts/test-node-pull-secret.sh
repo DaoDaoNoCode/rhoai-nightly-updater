@@ -12,6 +12,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 SRC=$(cd "$HERE/.." && pwd)
 CMD_FILE="$SRC/pkg/cluster/node_pull_secret.sh"
+REMOVE_FILE="$SRC/pkg/cluster/node_pull_secret_remove.sh"
 
 if ! command -v jq >/dev/null 2>&1 || ! jq -n '"eA==" | @base64d' >/dev/null 2>&1; then
 	if [ "${REQUIRE_JQ:-}" = 1 ]; then
@@ -97,6 +98,12 @@ run() {
 	printf '%s' "$2" | in_shell "$1" "$(cat "$CMD_FILE")" >"$WORK/out" 2>&1 || true
 }
 
+# run_remove SHELL: runs the removal command file in SHELL.
+run_remove() {
+	rm -f "$WORK/replaced.json" "$WORK/oc.log" "$WORK/jq-args.log"
+	in_shell "$1" "$(cat "$REMOVE_FILE")" </dev/null >"$WORK/out" 2>&1 || true
+}
+
 # auths prints the .auths of the replaced Secret's .dockerconfigjson.
 auths() { jq -c '.data[".dockerconfigjson"] | @base64d | fromjson | .auths' "$WORK/replaced.json"; }
 
@@ -162,6 +169,28 @@ for sh in $SHELLS; do
 	printf '%s\n' "$TOKEN" | in_shell "$sh" "$(cat "$CMD_FILE")"'
 echo "left=[${QUAY_AUTH-}]"' >"$WORK/out" 2>&1 || true
 	grep -qF 'left=[]' "$WORK/out" && pass || fail "$sh: QUAY_AUTH left set: $(cat "$WORK/out")"
+
+	# The removal command (node_pull_secret_remove.sh): drops only the
+	# quay.io/rhoai entry, keeps the rest, and changes nothing on a missing
+	# or garbled Secret or a conflict.
+	secret "$(b64 "$OTHERS")"
+	run_remove "$sh"
+	if [ -f "$WORK/replaced.json" ]; then
+		expect_eq "$sh: remove: entry gone, others kept" "$(jq -cS '.auths | del(."quay.io/rhoai")' <<<"$OTHERS")" "$(auths | jq -cS .)"
+		expect_eq "$sh: remove: resourceVersion kept" 42 "$(jq -r .metadata.resourceVersion "$WORK/replaced.json")"
+	else
+		fail "$sh: remove: nothing was replaced: $(cat "$WORK/out")"
+	fi
+	rm -f "$WORK/secret.json"
+	run_remove "$sh"
+	[ ! -e "$WORK/replaced.json" ] && pass || fail "$sh: remove: replaced without a Secret"
+	secret "bm90IGpzb24="
+	run_remove "$sh"
+	[ ! -e "$WORK/replaced.json" ] && pass || fail "$sh: remove: replaced a garbled Secret"
+	secret "$(b64 "$OTHERS")"
+	echo 43 >"$WORK/live-rv"
+	run_remove "$sh"
+	[ ! -e "$WORK/replaced.json" ] && pass || fail "$sh: remove: replaced a Secret that changed meanwhile"
 done
 
 echo "test-node-pull-secret.sh: $PASSED passed, $FAILED failed ($SHELLS; $(jq --version))"

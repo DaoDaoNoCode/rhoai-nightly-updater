@@ -35,6 +35,7 @@ import { operatorInstalled, prerequisitesMet as setupComplete, pullSecretReady }
 import { BuildSummary } from "./BuildSummary";
 import { nodePullState, PullSecretSetup } from "./PullSecretCard";
 import { CardList, CardListItem } from "./CardList";
+import { ImageMirrorSetup } from "./ImageMirrorSetup";
 import { StatusLabel, TagLabel } from "./StatusLabel";
 import { TooltipButton } from "./TooltipButton";
 import { catalogImageSetter, catalogManagedByACM, gitOpsInstallState, gitOpsInstallWaitReason, operatorManaged } from "../gitops";
@@ -514,37 +515,7 @@ export const ClusterSetupCard: React.FC<ClusterSetupCardProps> = ({ status, onSt
               />
             </CardListItem>
             <CardListItem labelledBy="setup-image-mirror">
-              <Stack hasGutter>
-                <StackItem>
-                  <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
-                    <FlexItem><strong id="setup-image-mirror">Image mirror (IDMS)</strong></FlexItem>
-                    <FlexItem>
-                      {status.imageMirror.exists
-                        ? <StatusLabel status="success">Ready</StatusLabel>
-                        : <StatusLabel status="danger">Missing</StatusLabel>}
-                    </FlexItem>
-                  </Flex>
-                  <Content component="p" className="pf-v6-u-text-color-subtle">
-                    Redirects registry.redhat.io/rhoai image pulls to quay.io/rhoai, where nightly images are published.
-                  </Content>
-                </StackItem>
-                <StackItem>
-                  {status.imageMirror.exists ? (
-                    <DescriptionList isCompact isHorizontal horizontalTermWidthModifier={{ default: "8ch" }}>
-                      <DescriptionListGroup>
-                        <DescriptionListTerm>Name</DescriptionListTerm>
-                        <DescriptionListDescription>{status.imageMirror.name || "unknown"}</DescriptionListDescription>
-                      </DescriptionListGroup>
-                      <DescriptionListGroup>
-                        <DescriptionListTerm>Source</DescriptionListTerm>
-                        <DescriptionListDescription>{status.imageMirror.source || "registry.redhat.io/rhoai"}</DescriptionListDescription>
-                      </DescriptionListGroup>
-                    </DescriptionList>
-                  ) : (
-                    <Button variant="secondary" onClick={onShowInstructions}>How to create the image mirror</Button>
-                  )}
-                </StackItem>
-              </Stack>
+              <ImageMirrorSetup status={status} readOnly={readOnly} onShowInstructions={onShowInstructions} onStatusRefresh={onStatusRefresh} />
             </CardListItem>
           </CardList>
         </StackItem>

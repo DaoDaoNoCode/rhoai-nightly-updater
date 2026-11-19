@@ -110,8 +110,9 @@ type ClusterInfo struct {
 	Version string `json:"version"`
 	User    string `json:"user"`
 	// ControlPlane is "hosted" (a hosted control plane: ROSA HCP,
-	// HyperShift) or "self-managed"; absent when it could not be read, and
-	// in the gitops profile, which does not read it.
+	// HyperShift), "managed" (on the cluster, run by Red Hat: ROSA Classic,
+	// OpenShift Dedicated) or "self-managed"; absent when it could not be
+	// read, and in the gitops profile, which does not read it.
 	ControlPlane string `json:"controlPlane,omitempty"`
 }
 
@@ -159,14 +160,65 @@ type PullSecretInfo struct {
 
 // NodePullSecretInfo is the nodes' side of the quay.io/rhoai credentials on
 // a cluster whose nodes pull with the cluster pull secret,
-// openshift-config/pull-secret, which the updater cannot read.
+// openshift-config/pull-secret, which the updater's ServiceAccount cannot
+// read (the one-click setup reads it with the signed-in user's token).
 type NodePullSecretInfo struct {
 	// Command adds the quay.io/rhoai entry to openshift-config/pull-secret,
 	// for a cluster-admin to run (it prompts for the token).
 	Command string `json:"command"`
+	// RemoveCommand removes that entry again.
+	RemoveCommand string `json:"removeCommand"`
 	// Pulled: the nightly CatalogSource is READY on its quay.io/rhoai image,
 	// so the nodes have pulled from quay.io/rhoai.
 	Pulled bool `json:"pulled"`
+}
+
+// NodeSetupRequest is the JSON body of POST /api/setup/nodes/plan and
+// POST /api/setup/nodes/stream: one of the one-click setup actions
+// ("mirror-create", "mirror-remove", "pull-secret-add",
+// "pull-secret-remove"). The stream also sends back the object version the
+// plan was made on (ResourceVersion, UID), so a change made after the user
+// reviewed the plan stops it with nothing changed.
+type NodeSetupRequest struct {
+	Action          string `json:"action"`
+	ResourceVersion string `json:"resourceVersion,omitempty"`
+	UID             string `json:"uid,omitempty"`
+}
+
+// NodeSetupPlan is what a one-click setup action would do, worked out with
+// the signed-in user's own token and a server-side dry run. It never holds
+// a credential.
+type NodeSetupPlan struct {
+	Action string `json:"action"`
+	// ControlPlane as in ClusterInfo, read again with the user's token;
+	// "" when unknown.
+	ControlPlane string `json:"controlPlane,omitempty"`
+	// Ready: the action can run (the dry run passed). False with
+	// NothingToDo, or with Refusal.
+	Ready       bool `json:"ready"`
+	NothingToDo bool `json:"nothingToDo,omitempty"`
+	// State is what is on the cluster now, in words.
+	State string `json:"state"`
+	// Changes lists exactly what is created, changed or deleted.
+	Changes []string `json:"changes,omitempty"`
+	// NodeImpact is what the nodes do when it rolls out.
+	NodeImpact string `json:"nodeImpact,omitempty"`
+	// Undo says how to take it back.
+	Undo string `json:"undo,omitempty"`
+	// Pools names the machine config pools that will not take the change
+	// yet (paused or degraded).
+	Pools []string `json:"pools,omitempty"`
+	// Refusal says why it cannot be done here; RefusalCode is "hosted",
+	// "managed", "unknown_topology", "forbidden" (RBAC or an admission
+	// webhook refused the dry run), "foreign" (an object of that name that
+	// is not this setup's), "unreadable", "external_secrets",
+	// "no_token" or "quay".
+	Refusal     string `json:"refusal,omitempty"`
+	RefusalCode string `json:"refusalCode,omitempty"`
+	// ResourceVersion and UID of the object the plan was made on, sent back
+	// with the stream request.
+	ResourceVersion string `json:"resourceVersion,omitempty"`
+	UID             string `json:"uid,omitempty"`
 }
 
 // NodePullCheckRequest is the JSON body of POST /api/setup/node-pull-check.

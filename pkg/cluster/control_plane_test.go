@@ -8,7 +8,19 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-const infrastructurePath = "/apis/config.openshift.io/v1/infrastructures/cluster"
+const (
+	infrastructurePath = "/apis/config.openshift.io/v1/infrastructures/cluster"
+	webhookConfigsPath = "/apis/admissionregistration.k8s.io/v1/validatingwebhookconfigurations"
+)
+
+// Validating webhook configurations: none, a self-managed cluster's own,
+// and Red Hat SRE's on ROSA Classic and OSD (managed-cluster-validating-webhooks
+// build/resources.go: "sre-<hook>", webhook "<hook>.managed.openshift.io").
+var (
+	noWebhooks      = mockResponse{body: `{"items":[]}`}
+	otherWebhooks   = mockResponse{body: `{"items":[{"metadata":{"name":"vdatasciencecluster.opendatahub.io"},"webhooks":[{"name":"datasciencecluster-v1.opendatahub.io"}]}]}`}
+	managedWebhooks = mockResponse{body: `{"items":[{"metadata":{"name":"autoscaling.openshift.io"},"webhooks":[{"name":"clusterautoscalers.autoscaling.openshift.io"}]},{"metadata":{"name":"sre-imagecontentpolicies-validation"},"webhooks":[{"name":"imagecontentpolicies-validation.managed.openshift.io"}]}]}`}
+)
 
 // The command the setup card and Diagnostics show for a self-managed
 // cluster. It is pinned here so that a change is a deliberate one;
@@ -32,20 +44,25 @@ func TestNodePullSecretCommandIsExactlyTheScript(t *testing.T) {
 
 func TestReadControlPlane(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		resp   mockResponse
-		want   string
-		wantOK bool
+		name     string
+		resp     mockResponse
+		webhooks mockResponse
+		want     string
+		wantOK   bool
 	}{
-		{"hosted control plane", mockResponse{body: `{"status":{"controlPlaneTopology":"External","infrastructureTopology":"HighlyAvailable"}}`}, ControlPlaneHosted, true},
-		{"highly available", mockResponse{body: `{"status":{"controlPlaneTopology":"HighlyAvailable"}}`}, ControlPlaneSelfManaged, true},
-		{"single node", mockResponse{body: `{"status":{"controlPlaneTopology":"SingleReplica"}}`}, ControlPlaneSelfManaged, true},
-		{"no topology field", mockResponse{body: `{"status":{}}`}, "", false},
-		{"forbidden", mockResponse{statusCode: 403, body: `{"kind":"Status","code":403,"reason":"Forbidden"}`}, "", false},
-		{"garbled", mockResponse{body: `not json`}, "", false},
+		{"hosted control plane", mockResponse{body: `{"status":{"controlPlaneTopology":"External","infrastructureTopology":"HighlyAvailable"}}`}, noWebhooks, ControlPlaneHosted, true},
+		{"highly available", mockResponse{body: `{"status":{"controlPlaneTopology":"HighlyAvailable"}}`}, noWebhooks, ControlPlaneSelfManaged, true},
+		{"single node", mockResponse{body: `{"status":{"controlPlaneTopology":"SingleReplica"}}`}, noWebhooks, ControlPlaneSelfManaged, true},
+		{"other webhooks only", mockResponse{body: `{"status":{"controlPlaneTopology":"HighlyAvailable"}}`}, otherWebhooks, ControlPlaneSelfManaged, true},
+		{"Red Hat-managed classic", mockResponse{body: `{"status":{"controlPlaneTopology":"HighlyAvailable"}}`}, managedWebhooks, ControlPlaneManaged, true},
+		{"hosted with SRE webhooks", mockResponse{body: `{"status":{"controlPlaneTopology":"External"}}`}, managedWebhooks, ControlPlaneHosted, true},
+		{"webhooks unreadable", mockResponse{body: `{"status":{"controlPlaneTopology":"HighlyAvailable"}}`}, mockResponse{statusCode: 403, body: `{"kind":"Status","code":403,"reason":"Forbidden"}`}, "", false},
+		{"no topology field", mockResponse{body: `{"status":{}}`}, noWebhooks, "", false},
+		{"forbidden", mockResponse{statusCode: 403, body: `{"kind":"Status","code":403,"reason":"Forbidden"}`}, noWebhooks, "", false},
+		{"garbled", mockResponse{body: `not json`}, noWebhooks, "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c, cleanup := newMockClient(map[string]mockResponse{infrastructurePath: tc.resp})
+			c, cleanup := newMockClient(map[string]mockResponse{infrastructurePath: tc.resp, webhookConfigsPath: tc.webhooks})
 			defer cleanup()
 			got, err := readControlPlane(c)
 			if got != tc.want || (err == nil) != tc.wantOK {
@@ -85,22 +102,24 @@ func TestGetStatus_NodePullSecretPerTopology(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		topology  string // "" = 403
+		webhooks  string
 		csImage   string
 		wantCP    string
 		wantNodes bool
 		wantPull  bool
 	}{
-		{"hosted control plane", "External", "", ControlPlaneHosted, false, false},
-		{"self-managed, highly available", "HighlyAvailable", "", ControlPlaneSelfManaged, true, false},
-		{"self-managed, single node", "SingleReplica", "", ControlPlaneSelfManaged, true, false},
-		{"unreadable", "", "", "", true, false},
-		{"self-managed with a READY nightly catalog", "HighlyAvailable", "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:abc", ControlPlaneSelfManaged, true, true},
-		{"unreadable with a READY nightly catalog", "", "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:abc", "", true, true},
-		{"self-managed, catalog from another registry", "HighlyAvailable", "registry.example.com/fbc:1", ControlPlaneSelfManaged, true, false},
+		{"hosted control plane", "External", "", "", ControlPlaneHosted, false, false},
+		{"self-managed, highly available", "HighlyAvailable", "", "", ControlPlaneSelfManaged, true, false},
+		{"self-managed, single node", "SingleReplica", "", "", ControlPlaneSelfManaged, true, false},
+		{"Red Hat-managed classic", "HighlyAvailable", managedWebhooks.body, "", ControlPlaneManaged, true, false},
+		{"unreadable", "", "", "", "", true, false},
+		{"self-managed with a READY nightly catalog", "HighlyAvailable", "", "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:abc", ControlPlaneSelfManaged, true, true},
+		{"unreadable with a READY nightly catalog", "", "", "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:abc", "", true, true},
+		{"self-managed, catalog from another registry", "HighlyAvailable", "", "registry.example.com/fbc:1", ControlPlaneSelfManaged, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			installFakeRegistry(t, newFakeRegistry())
-			a := &statusAPI{csvList: `{"items":[]}`, infra: tc.topology, csImage: tc.csImage}
+			a := &statusAPI{csvList: `{"items":[]}`, infra: tc.topology, webhooks: tc.webhooks, csImage: tc.csImage}
 			if tc.topology == "" {
 				a.failPath = map[string]int{infrastructurePath: 403}
 			}
@@ -115,7 +134,7 @@ func TestGetStatus_NodePullSecretPerTopology(t *testing.T) {
 			if (nodes != nil) != tc.wantNodes {
 				t.Fatalf("nodes %+v, want set %v", nodes, tc.wantNodes)
 			}
-			if nodes != nil && (nodes.Command != NodePullSecretCommand || nodes.Pulled != tc.wantPull) {
+			if nodes != nil && (nodes.Command != NodePullSecretCommand || nodes.RemoveCommand != NodePullSecretRemoveCommand || nodes.Pulled != tc.wantPull) {
 				t.Fatalf("nodes %+v, want the command and pulled %v", nodes, tc.wantPull)
 			}
 			// An unknown topology is not an error the status reports.
@@ -166,7 +185,7 @@ func TestUpdateStream_CatalogImagePullAdvicePerTopology(t *testing.T) {
 		notWant  []string
 	}{
 		{"hosted control plane", "External", []string{"(Setup step 1)"}, []string{"openshift-config/pull-secret"}},
-		{"self-managed", "HighlyAvailable", []string{"This cluster is self-managed", "openshift-config/pull-secret", "the command under Pull secret in the cluster setup"}, []string{"Setup step 1", "If it is self-managed"}},
+		{"self-managed", "HighlyAvailable", []string{"This cluster is self-managed", "openshift-config/pull-secret", "Add to the nodes' pull secret under Pull secret in the cluster setup"}, []string{"Setup step 1", "If it is self-managed"}},
 		{"single node", "SingleReplica", []string{"This cluster is self-managed", "openshift-config/pull-secret"}, []string{"Setup step 1"}},
 		{"unreadable", "", []string{"could not read whether this cluster has a hosted control plane", "If it is self-managed", "openshift-config/pull-secret", "the command under Pull secret"}, []string{"This cluster is self-managed"}},
 	} {

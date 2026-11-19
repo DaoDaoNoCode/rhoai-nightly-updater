@@ -25,6 +25,8 @@ type statusAPI struct {
 	csImage  string
 	failPath map[string]int
 	infra    string // Infrastructure status.controlPlaneTopology; "" = the field is absent
+	// webhooks is the ValidatingWebhookConfiguration list; "" = none.
+	webhooks string
 }
 
 func (a *statusAPI) count(path string) int {
@@ -82,6 +84,8 @@ func (a *statusAPI) handler(w http.ResponseWriter, r *http.Request) {
 		infra := a.infra
 		a.mu.Unlock()
 		_, _ = fmt.Fprintf(w, `{"status":{"controlPlaneTopology":%q}}`, infra)
+	case p == "/apis/admissionregistration.k8s.io/v1/validatingwebhookconfigurations" && a.webhooks != "":
+		_, _ = fmt.Fprint(w, a.webhooks)
 	case p == "/apis/config.openshift.io/v1/consoles/cluster":
 		_, _ = fmt.Fprint(w, `{"status":{"consoleURL":"https://console.example"}}`)
 	case strings.HasSuffix(p, "/secrets/additional-pull-secret"):

@@ -143,6 +143,36 @@ const minioSetup = () => {
 };
 
 /** Migrate storage: its steps wait for /__docs/advance in gated mode. */
+// The one-click setup's run: the plan's steps, then the mock cluster
+// changes as the backend's would.
+async function nodeSetupStream(req, res) {
+  const { action = "" } = await body(req);
+  const plan = F.nodeSetupPlan(world, action);
+  beginOperation("node-setup", "One-time cluster setup", action);
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  const steps = plan.ready ? F.nodeSetupSteps(plan) : [
+    { step: "check", status: "failed", errorCode: plan.refusalCode, message: plan.refusal ?? plan.state },
+    { step: "operation_complete", status: plan.nothingToDo ? "success" : "failed", errorCode: plan.refusalCode, message: plan.refusal ?? `Nothing to change: ${plan.state}` },
+  ];
+  let n = 0;
+  for (const step of steps) {
+    n += 1;
+    if (step.status !== "running") await nextStep();
+    if (res.destroyed) return;
+    if (step.step === "operation_complete") {
+      if (plan.ready) {
+        if (action === "mirror-create") world.status.imageMirror = { exists: true, name: "rhoai-quay-mirror", source: "registry.redhat.io/rhoai" };
+        if (action === "mirror-remove") world.status.imageMirror = { exists: false, name: "", source: "" };
+        if (action === "pull-secret-add") world.nodes = { pullEntry: "same" };
+        if (action === "pull-secret-remove") world.nodes = { pullEntry: "none" };
+      }
+      endOperation(step.status === "success", step.message);
+    }
+    res.write(`data: ${JSON.stringify({ ...step, elapsedMs: n * 1500 })}\n\n`);
+  }
+  res.end();
+}
+
 async function migrateStream(req, res) {
   const { removeOldStorage = false } = await body(req);
   const kind = removeOldStorage ? "remove" : "migrate";
@@ -565,6 +595,14 @@ async function api(req, res, u) {
   if (key === "GET /api/resources/s3/admin-password" && world.canMutate === false) {
     return json(res, 403, { error: "Only cluster-admins can read this through the updater.", errorCode: "forbidden" });
   }
+  if ((key === "POST /api/setup/nodes/plan" || key === "POST /api/setup/nodes/stream") && world.canMutate === false) {
+    return json(res, 403, { error: "Read-only access: changing the cluster through this tool requires the cluster-admin role.", errorCode: "forbidden" });
+  }
+  if (key === "POST /api/setup/nodes/plan") {
+    const { action = "" } = await body(req);
+    return json(res, 200, F.nodeSetupPlan(world, action));
+  }
+  if (key === "POST /api/setup/nodes/stream") return nodeSetupStream(req, res);
   if (key === "POST /api/update/stream") return updateStream(req, res);
   if (key === "POST /api/resources/s3/setup") return mutation(res, "setup-s3", "Set up S3 storage", minioSetup);
   if (key === "POST /api/resources/s3/migrate/stream") return migrateStream(req, res);

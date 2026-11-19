@@ -25,6 +25,20 @@ only accepts a tag whose version is the top dated section. See
 
 ### Added
 
+- **One-click cluster setup on self-managed OpenShift.** The image mirror
+  (ImageDigestMirrorSet `rhoai-quay-mirror`) and the `quay.io/rhoai` entry of
+  the nodes' pull secret (`openshift-config/pull-secret`) are now buttons:
+  **Create the image mirror**, **Add to the nodes' pull secret**, and their
+  removals. Each opens a review read with your own token and checked by a
+  server-side dry run (what changes, what the nodes do, how to undo it), then
+  runs with your token; the commands stay under **Do it yourself instead**.
+  The pull secret change copies the token the updater already holds (never
+  sent to the browser), changes only that entry, and refuses an unreadable or
+  External Secrets-managed Secret. ROSA Classic and OpenShift Dedicated
+  (detected by Red Hat SRE's `*.managed.openshift.io` webhooks) get the mirror
+  button but not the pull secret one (Red Hat manages that secret); ROSA HCP
+  keeps the `rosa` instructions. No new ServiceAccount permission. Sources:
+  [docs/research/node-setup.md](docs/research/node-setup.md).
 - **Diagnostics: "Left over from an earlier release", with fixes.** Found
   from the operator's own failure reports (DataScienceCluster, Platform and
   every module CR) and confirmed with live reads, not from a list of known

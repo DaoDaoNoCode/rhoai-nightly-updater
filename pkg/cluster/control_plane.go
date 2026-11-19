@@ -16,27 +16,55 @@ import (
 // self-managed cluster does not: its nodes pull with the cluster pull
 // secret, openshift-config/pull-secret, only. The updater still writes
 // additional-pull-secret everywhere: its own Quay lookups read it
-// (getQuayAuth). It has no access to openshift-config/pull-secret, which
-// holds every registry credential of the cluster, so on a self-managed
-// cluster it shows a command for a cluster-admin instead
-// (NodePullSecretCommand).
+// (getQuayAuth). Its ServiceAccount has no access to
+// openshift-config/pull-secret, which holds every registry credential of
+// the cluster; on a self-managed cluster the signed-in cluster-admin adds
+// the entry with one click (node_setup.go, with their own token), or runs
+// NodePullSecretCommand.
 const (
 	// ControlPlaneHosted: Infrastructure status.controlPlaneTopology
 	// External, a hosted control plane.
 	ControlPlaneHosted = "hosted"
+	// ControlPlaneManaged: the control plane runs on the cluster (any
+	// topology but External) and Red Hat runs the cluster: ROSA Classic or
+	// OpenShift Dedicated, known by Red Hat SRE's admission webhooks
+	// (isRedHatManagedWebhook).
+	ControlPlaneManaged = "managed"
 	// ControlPlaneSelfManaged: any other topology (HighlyAvailable,
-	// SingleReplica, ...).
+	// SingleReplica, ...) without those webhooks.
 	ControlPlaneSelfManaged = "self-managed"
 )
 
 // readControlPlane reads Infrastructure "cluster" (config.openshift.io/v1)
-// and returns ControlPlaneHosted or ControlPlaneSelfManaged. A missing
-// status.controlPlaneTopology is an error: the topology is then unknown,
+// and, unless the control plane is hosted, the validating webhook
+// configurations, and returns ControlPlaneHosted, ControlPlaneManaged or
+// ControlPlaneSelfManaged. A failed read, or a missing
+// status.controlPlaneTopology, is an error: the platform is then unknown,
 // and callers must not assume the nodes have the updater's credentials.
 func readControlPlane(c *Client) (string, error) {
+	hosted, err := readTopologyHosted(c)
+	if err != nil {
+		return "", err
+	}
+	if hosted {
+		return ControlPlaneHosted, nil
+	}
+	managed, err := readRedHatManaged(c)
+	if err != nil {
+		return "", err
+	}
+	if managed {
+		return ControlPlaneManaged, nil
+	}
+	return ControlPlaneSelfManaged, nil
+}
+
+// readTopologyHosted reads Infrastructure "cluster": whether its
+// status.controlPlaneTopology is External (a hosted control plane).
+func readTopologyHosted(c *Client) (bool, error) {
 	body, _, err := c.get(clusterPath("config.openshift.io/v1", "infrastructures", "cluster"))
 	if err != nil {
-		return "", fmt.Errorf("read Infrastructure cluster: %w", err)
+		return false, fmt.Errorf("read Infrastructure cluster: %w", err)
 	}
 	var infra struct {
 		Status struct {
@@ -44,16 +72,51 @@ func readControlPlane(c *Client) (string, error) {
 		} `json:"status"`
 	}
 	if err := json.Unmarshal(body, &infra); err != nil {
-		return "", fmt.Errorf("parse Infrastructure cluster: %w", err)
+		return false, fmt.Errorf("parse Infrastructure cluster: %w", err)
 	}
-	switch topology := infra.Status.ControlPlaneTopology; topology {
-	case "":
-		return "", fmt.Errorf("infrastructure cluster has no status.controlPlaneTopology")
-	case "External":
-		return ControlPlaneHosted, nil
-	default:
-		return ControlPlaneSelfManaged, nil
+	if infra.Status.ControlPlaneTopology == "" {
+		return false, fmt.Errorf("infrastructure cluster has no status.controlPlaneTopology")
 	}
+	return infra.Status.ControlPlaneTopology == "External", nil
+}
+
+// redHatManagedWebhookSuffix ends the name of every webhook of Red Hat
+// SRE's managed-cluster-validating-webhooks
+// (github.com/openshift/managed-cluster-validating-webhooks build/resources.go:
+// configuration "sre-<hook>", webhook "<hook>.managed.openshift.io"). Hive
+// syncs them to ROSA Classic and OpenShift Dedicated clusters
+// (ClassicEnabled); a self-managed cluster has none. Among them,
+// imagecontentpolicies-validation refuses mirrors of registry.redhat.io
+// itself, quay.io and registry.access.redhat.com, but not of
+// registry.redhat.io/rhoai.
+const redHatManagedWebhookSuffix = ".managed.openshift.io"
+
+// readRedHatManaged lists the ValidatingWebhookConfigurations (the
+// ServiceAccount's existing list rule, also used by the stale-webhook
+// check): whether one holds a Red Hat SRE webhook.
+func readRedHatManaged(c *Client) (bool, error) {
+	body, _, err := c.get(clusterPath("admissionregistration.k8s.io/v1", "validatingwebhookconfigurations", ""))
+	if err != nil {
+		return false, fmt.Errorf("list validating webhook configurations: %w", err)
+	}
+	var list struct {
+		Items []struct {
+			Webhooks []struct {
+				Name string `json:"name"`
+			} `json:"webhooks"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return false, fmt.Errorf("parse validating webhook configurations: %w", err)
+	}
+	for _, item := range list.Items {
+		for _, wh := range item.Webhooks {
+			if strings.HasSuffix(wh.Name, redHatManagedWebhookSuffix) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // The topology of a cluster does not change while the app runs; a read
@@ -107,15 +170,29 @@ var nodePullSecretScript string
 // NodePullSecretCommand is node_pull_secret.sh without its final newline.
 var NodePullSecretCommand = strings.TrimSpace(nodePullSecretScript)
 
+// node_pull_secret_remove.sh removes the quay.io/rhoai entry from
+// openshift-config/pull-secret, for a cluster-admin who prefers the CLI.
+// The same safeguards as node_pull_secret.sh: only that key changes, a
+// missing or garbled Secret gives oc replace no object, and the kept
+// resourceVersion makes a concurrent change fail with a conflict. It needs
+// no token. scripts/test-node-pull-secret.sh runs it against a stub oc.
+//
+//go:embed node_pull_secret_remove.sh
+var nodePullSecretRemoveScript string
+
+// NodePullSecretRemoveCommand is node_pull_secret_remove.sh without its
+// final newline.
+var NodePullSecretRemoveCommand = strings.TrimSpace(nodePullSecretRemoveScript)
+
 // nodePullInfo is the nodes' side of the pull secret for a cluster whose
 // nodes may not use additional-pull-secret (controlPlane is
-// ControlPlaneSelfManaged or "" for unknown); nil on a hosted control
-// plane. cs is the nightly CatalogSource.
+// ControlPlaneSelfManaged, ControlPlaneManaged or "" for unknown); nil on
+// a hosted control plane. cs is the nightly CatalogSource.
 func nodePullInfo(controlPlane string, cs types.CatalogSourceInfo) *types.NodePullSecretInfo {
 	if controlPlane == ControlPlaneHosted {
 		return nil
 	}
-	return &types.NodePullSecretInfo{Command: NodePullSecretCommand, Pulled: catalogPulledFromQuay(cs)}
+	return &types.NodePullSecretInfo{Command: NodePullSecretCommand, RemoveCommand: NodePullSecretRemoveCommand, Pulled: catalogPulledFromQuay(cs)}
 }
 
 // catalogPulledFromQuay: the nightly CatalogSource is READY on a
@@ -140,7 +217,10 @@ func nodePullAdviceFor(controlPlane string) string {
 		return "Check that the pull secret has access to quay.io/rhoai (Setup step 1) and that the image exists; on a new cluster the credentials can take a few minutes to reach every node"
 	case ControlPlaneSelfManaged:
 		return "This cluster is self-managed: its nodes pull with the cluster pull secret, openshift-config/pull-secret, not with additional-pull-secret, which only the updater uses here. " +
-			"A cluster-admin adds the quay.io/rhoai entry with " + nodePullCommandPlace + "; the nodes pick it up within a few minutes. Also check that the image exists"
+			"A cluster-admin adds the quay.io/rhoai entry with Add to the nodes' pull secret under Pull secret in the cluster setup (Status page), or with the command there; the nodes pick it up within a few minutes. Also check that the image exists"
+	case ControlPlaneManaged:
+		return "This cluster is run by Red Hat (ROSA Classic or OpenShift Dedicated): its nodes pull with the cluster pull secret, openshift-config/pull-secret, not with additional-pull-secret. " +
+			"Red Hat creates that secret and documents no procedure for changing it there, so the updater does not change it; " + nodePullCommandPlace + " adds the quay.io/rhoai entry if you choose to. Also check that the image exists"
 	default:
 		return "The updater could not read whether this cluster has a hosted control plane. If it is self-managed, its nodes pull with the cluster pull secret, openshift-config/pull-secret, not with additional-pull-secret: " +
 			"a cluster-admin adds the quay.io/rhoai entry with " + nodePullCommandPlace + ". On a hosted control plane (ROSA HCP), check the pull secret in Setup step 1. Also check that the image exists"

@@ -16,8 +16,12 @@ const COMMAND = `printf 'quay.io/rhoai token (the one you saved under Pull secre
 unset QUAY_AUTH`;
 const IMAGE = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + "0b3f9b4d".padEnd(64, "1");
 
+const REMOVE_COMMAND = `oc get secret pull-secret -n openshift-config -o json \\
+  | jq '.data[".dockerconfigjson"] |= (@base64d | fromjson | del(.auths["quay.io/rhoai"]) | tojson | @base64)' \\
+  | oc replace -f -`;
+
 const saved = (nodes?: PullSecretInfo["nodes"]): PullSecretInfo => ({ exists: true, valid: true, nodes });
-const unchecked = { command: COMMAND, pulled: false };
+const unchecked = { command: COMMAND, removeCommand: REMOVE_COMMAND, pulled: false };
 
 /** A fresh cluster: the updater's copy saved, the mirror there, nothing installed. */
 function freshStatus(controlPlane: StatusResponse["cluster"]["controlPlane"], pullSecret: PullSecretInfo): StatusResponse {
@@ -49,30 +53,48 @@ describe("The pull secret's node part, by control plane", () => {
     expect(screen.queryByRole("button", { name: "Check that the nodes can pull" })).not.toBeInTheDocument();
   });
 
-  it("on a self-managed cluster shows the command and does not say Ready before the nodes are checked", () => {
+  it("on a self-managed cluster offers one click, keeps the commands folded away, and does not say Ready before the nodes are checked", () => {
     renderWithApp(<PullSecretSetup pullSecret={saved(unchecked)} controlPlane="self-managed" checkImage={IMAGE} />);
     expect(screen.getByText("Nodes not checked")).toBeInTheDocument();
     expect(screen.queryByText("Ready")).not.toBeInTheDocument();
     expect(screen.getByText(/This cluster is self-managed: its nodes pull with the cluster pull secret, openshift-config\/pull-secret/)).toBeInTheDocument();
-    expect(screen.getByText(/a cluster-admin adds the quay.io\/rhoai entry with this command/)).toBeInTheDocument();
-    expect(document.getElementById("node-pull-secret-command-code")).toHaveTextContent(/oc replace -f -/);
+    expect(screen.getByRole("button", { name: "Add to the nodes' pull secret" })).toHaveClass("pf-m-primary");
+    expect(screen.getByRole("button", { name: "Remove from the nodes' pull secret" })).toHaveClass("pf-m-danger");
+    expect(document.getElementById("node-pull-secret-command-code")).not.toBeVisible();
+    const toggle = screen.getByRole("button", { name: "Do it yourself instead" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
     expect(document.getElementById("node-pull-secret-command-code")?.textContent).toBe(COMMAND);
+    expect(document.getElementById("node-pull-secret-remove-command-code")?.textContent).toBe(REMOVE_COMMAND);
     expect(screen.getByRole("button", { name: "Copy the command" })).toBeInTheDocument();
     expect(screen.getByText(/oc get mcp/)).toBeInTheDocument();
   });
 
-  it("when the control plane is unknown says it only applies if the cluster is self-managed", () => {
+  it("on a Red Hat-managed cluster offers no button and says why, with the commands open", () => {
+    renderWithApp(<PullSecretSetup pullSecret={saved(unchecked)} controlPlane="managed" checkImage={IMAGE} />);
+    expect(screen.getByText(/Red Hat runs this cluster \(ROSA Classic or OpenShift Dedicated\)/)).toBeInTheDocument();
+    expect(screen.getByText(/has no procedure for changing it, so the updater does not change it/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add to the nodes' pull secret" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "The commands" })).toHaveAttribute("aria-expanded", "true");
+    expect(document.getElementById("node-pull-secret-command-code")?.textContent).toBe(COMMAND);
+    expect(screen.getByRole("button", { name: "Check that the nodes can pull" })).toBeInTheDocument();
+  });
+
+  it("when the control plane is unknown shows the command first and offers the click as an attempt", () => {
     renderWithApp(<PullSecretSetup pullSecret={saved(unchecked)} checkImage={IMAGE} />);
     expect(screen.getByText("Nodes not checked")).toBeInTheDocument();
-    expect(screen.getByText(/could not read whether this cluster has a hosted control plane/)).toBeInTheDocument();
+    expect(screen.getByText(/could not read what kind of cluster this is/)).toBeInTheDocument();
     expect(screen.getByText(/If this cluster is self-managed, its nodes pull with the cluster pull secret/)).toBeInTheDocument();
     expect(screen.queryByText(/This cluster is self-managed:/)).not.toBeInTheDocument();
+    expect(document.getElementById("node-pull-secret-command-code")?.textContent).toBe(COMMAND);
+    expect(screen.getByRole("button", { name: "Add to the nodes' pull secret" })).toHaveClass("pf-m-secondary");
+    expect(screen.queryByRole("button", { name: "Remove from the nodes' pull secret" })).not.toBeInTheDocument();
   });
 
   it("is not there before the updater's copy is saved; the form says it comes next", () => {
     renderWithApp(<PullSecretSetup pullSecret={{ exists: false, valid: false, nodes: unchecked }} controlPlane="self-managed" />);
     expect(screen.getByText("Missing")).toBeInTheDocument();
-    expect(screen.getByText(/The nodes of this self-managed cluster need it in openshift-config\/pull-secret too: once it is saved, this item shows the command/)).toBeInTheDocument();
+    expect(screen.getByText(/The nodes of this self-managed cluster need it in openshift-config\/pull-secret too: once it is saved, this item offers to add it there/)).toBeInTheDocument();
     expect(document.getElementById("node-pull-secret-command-code")).toBeNull();
     expect(screen.queryByRole("button", { name: "Check that the nodes can pull" })).not.toBeInTheDocument();
     cleanup();
@@ -84,11 +106,13 @@ describe("The pull secret's node part, by control plane", () => {
   });
 
   it("is Ready, with the command folded away, when the nightly catalog shows that the nodes pull", () => {
-    renderWithApp(<PullSecretSetup pullSecret={saved({ command: COMMAND, pulled: true })} controlPlane="self-managed" />);
+    renderWithApp(<PullSecretSetup pullSecret={saved({ ...unchecked, pulled: true })} controlPlane="self-managed" />);
     expect(screen.getByText("Ready")).toBeInTheDocument();
     expect(screen.getByText(/The nightly catalog runs its quay.io\/rhoai image, so they can pull/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Check that the nodes can pull" })).not.toBeInTheDocument();
-    const toggle = screen.getByRole("button", { name: "The command that adds the quay.io/rhoai entry" });
+    expect(screen.getByRole("button", { name: "Add to the nodes' pull secret" })).toHaveClass("pf-m-secondary");
+    expect(screen.getByRole("button", { name: "Remove from the nodes' pull secret" })).toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: "Do it yourself instead" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(toggle);
     expect(document.getElementById("node-pull-secret-command-code")?.textContent).toBe(COMMAND);
@@ -159,7 +183,7 @@ describe("The cluster setup on a self-managed cluster", () => {
     const status = freshStatus("self-managed", saved(unchecked));
     expect(nodePullUnverified(status)).toBe(true);
     expect(prerequisitesMet(status)).toBe(true);
-    expect(nodePullUnverified(freshStatus("self-managed", saved({ command: COMMAND, pulled: true })))).toBe(false);
+    expect(nodePullUnverified(freshStatus("self-managed", saved({ ...unchecked, pulled: true })))).toBe(false);
     expect(nodePullUnverified(freshStatus("hosted", saved()))).toBe(false);
     expect(nodePullUnverified(status, true)).toBe(false);
     expect(nodePullUnverified(freshStatus("self-managed", { exists: false, valid: false, nodes: unchecked }))).toBe(false);

@@ -23,9 +23,9 @@ import {
 } from '@patternfly/react-core';
 import type { StatusResponse } from '../types';
 import { pullSecretNotUsed } from '../utils';
+import { MIRROR_CREATE_COMMAND, ROSA_MIRROR_COMMAND } from '../nodeSetupCommands';
 
-const MIRROR_COMMAND = `rosa create image-mirror --cluster=<your-cluster-name> \\
-  --source=registry.redhat.io/rhoai --mirrors=quay.io/rhoai`;
+const MIRROR_COMMAND = ROSA_MIRROR_COMMAND;
 
 /** A one-line shell command: monospace, with a copy button. */
 const Command: React.FC<{ children: string; label: string }> = ({ children, label }) => (
@@ -61,34 +61,26 @@ const MultiLineCommand: React.FC<{ children: string; label: string; id: string }
   );
 };
 
-// The ImageDigestMirrorSet of a self-managed cluster, created with oc (docs/QUICKSTART.md).
-// Creating it does not drain or reboot the nodes; deleting it later does.
-const SELF_MANAGED_MIRROR_COMMAND = `oc apply -f - <<'EOF'
-apiVersion: config.openshift.io/v1
-kind: ImageDigestMirrorSet
-metadata:
-  name: rhoai-quay-mirror
-spec:
-  imageDigestMirrors:
-    - source: registry.redhat.io/rhoai
-      mirrors:
-        - quay.io/rhoai
-EOF`;
-
+// The ImageDigestMirrorSet of a cluster whose control plane runs on the
+// cluster, created with oc (docs/QUICKSTART.md): the same object as Create
+// the image mirror on the Status page. Creating it does not drain or reboot
+// the nodes; deleting it later drains them (not on a single node), without
+// a reboot.
 const SelfManagedIDMSInstructions: React.FC = () => (
   <Stack hasGutter>
     <StackItem>
-      A cluster-admin creates the ImageDigestMirrorSet with <code>oc</code>. Creating it does not drain or reboot the
-      nodes; deleting it later does.
+      Create the image mirror on the Status page does it with your own permissions, or a cluster-admin creates the
+      ImageDigestMirrorSet with <code>oc</code>. Creating it does not drain or reboot the nodes; deleting it later
+      drains them one at a time, without a reboot.
     </StackItem>
-    <StackItem><MultiLineCommand id="cmd-image-mirror-oc" label="image mirror command">{SELF_MANAGED_MIRROR_COMMAND}</MultiLineCommand></StackItem>
+    <StackItem><MultiLineCommand id="cmd-image-mirror-oc" label="image mirror command">{MIRROR_CREATE_COMMAND}</MultiLineCommand></StackItem>
   </Stack>
 );
 
-/** How to create the image mirror: through OCM (rosa) on ROSA HCP, with oc on a self-managed cluster, both when the control plane is unknown. */
+/** How to create the image mirror: through OCM (rosa) on ROSA HCP, with oc when the control plane runs on the cluster, both when it is unknown. */
 const MirrorInstructions: React.FC<{ controlPlane?: StatusResponse["cluster"]["controlPlane"] }> = ({ controlPlane }) => {
   if (controlPlane === "hosted") return <IDMSInstructions />;
-  if (controlPlane === "self-managed") return <SelfManagedIDMSInstructions />;
+  if (controlPlane === "self-managed" || controlPlane === "managed") return <SelfManagedIDMSInstructions />;
   return (
     <Stack hasGutter>
       <StackItem><Content component="h4">On ROSA HCP</Content></StackItem>
@@ -101,6 +93,10 @@ const MirrorInstructions: React.FC<{ controlPlane?: StatusResponse["cluster"]["c
 
 const IDMSInstructions: React.FC = () => (
   <Stack hasGutter>
+    <StackItem>
+      On ROSA HCP the image mirror is configured through OpenShift Cluster Manager, so it is created with the rosa CLI,
+      not with an object in the cluster:
+    </StackItem>
     <StackItem>
       <List component="ol">
         <ListItem>
@@ -214,7 +210,7 @@ export const SetupModal: React.FC<{
               {notUsed
                 ? "The gitops profile pulls with the cluster's own pull secrets, so additional-pull-secret is not needed."
                 : pullSecretReady && status?.pullSecret.nodes && !status.pullSecret.nodes.pulled
-                ? "The updater's copy of the pull secret is ready. The nodes of a self-managed cluster pull with openshift-config/pull-secret: the Pull secret card on the Status page has the command that adds the quay.io/rhoai entry, and a check that the nodes can pull."
+                ? "The updater's copy of the pull secret is ready. The nodes of a self-managed cluster pull with openshift-config/pull-secret: the Pull secret item on the Status page adds the quay.io/rhoai entry there (Add to the nodes' pull secret, or its command), and checks that the nodes can pull."
                 : pullSecretReady
                 ? 'The pull secret is ready. You can test or replace it from the Pull secret card on the Status page.'
                 : pullSecretInvalid
