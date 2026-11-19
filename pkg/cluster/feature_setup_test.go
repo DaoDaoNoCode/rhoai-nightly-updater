@@ -3,6 +3,7 @@ package cluster
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -68,7 +69,8 @@ func newPrereqCluster(t *testing.T) *prereqCluster {
 		}
 	}
 	f.onMergePatch = func(r *http.Request, k fakeKey, patch, next map[string]interface{}) {
-		recordDSCFieldManagers(r, k, patch, next)
+		// Under the fake's lock: the stored object is the one before the patch.
+		updateFieldOwnership(r.URL.Query().Get("fieldManager"), pc.f.objects[k], patch, next)
 		if k.plural != "datascienceclusters" || r.URL.Query().Get("dryRun") != "" {
 			return
 		}
@@ -119,6 +121,89 @@ func (pc *prereqCluster) putPackage(name string) {
 	_ = json.Unmarshal([]byte(packageManifestStatus(name, p)), &status)
 	pc.f.put("/apis/packages.operators.coreos.com/v1/namespaces/openshift-marketplace/packagemanifests/"+name, map[string]interface{}{
 		"metadata": map[string]interface{}{"labels": map[string]interface{}{"catalog": p.source}}, "status": status})
+}
+
+// updateFieldOwnership records an update (a merge patch) by manager in
+// next's managedFields as the API server does (Kubernetes docs,
+// "Server-Side Apply", Field management: an update takes ownership of the
+// fields it changes, from every other manager). A field the patch sets to
+// the value it already had changes no ownership. Only spec is tracked.
+func updateFieldOwnership(manager string, before, patch, next map[string]interface{}) {
+	if manager == "" {
+		return
+	}
+	var leaves [][]string
+	var walk func(v interface{}, path []string)
+	walk = func(v interface{}, path []string) {
+		if m, ok := v.(map[string]interface{}); ok && len(m) > 0 {
+			for key, child := range m {
+				walk(child, append(append([]string(nil), path...), "f:"+key))
+			}
+			return
+		}
+		leaves = append(leaves, path)
+	}
+	if spec, ok := patch["spec"]; ok {
+		walk(spec, []string{"f:spec"})
+	}
+	valueAt := func(obj map[string]interface{}, path []string) interface{} {
+		var v interface{} = obj
+		for _, p := range path {
+			m, _ := v.(map[string]interface{})
+			v = m[strings.TrimPrefix(p, "f:")]
+		}
+		raw, _ := json.Marshal(v)
+		return string(raw)
+	}
+	meta := ensureMap(next, "metadata")
+	entries, _ := meta["managedFields"].([]interface{})
+	var mine map[string]interface{}
+	for _, e := range entries {
+		if em, _ := e.(map[string]interface{}); em["manager"] == manager && em["operation"] == "Update" {
+			mine = em
+		}
+	}
+	for _, path := range leaves {
+		if before != nil && valueAt(before, path) == valueAt(next, path) {
+			continue
+		}
+		for _, e := range entries {
+			em, _ := e.(map[string]interface{})
+			if em["manager"] == manager && em["operation"] == "Update" {
+				continue
+			}
+			node, _ := em["fieldsV1"].(map[string]interface{})
+			for i, p := range path {
+				if node == nil {
+					break
+				}
+				if i == len(path)-1 {
+					delete(node, p)
+					break
+				}
+				node, _ = node[p].(map[string]interface{})
+			}
+		}
+		if mine == nil {
+			mine = map[string]interface{}{"manager": manager, "operation": "Update", "fieldsV1": map[string]interface{}{}}
+			entries = append(entries, mine)
+		}
+		node := ensureMap(mine, "fieldsV1")
+		for _, p := range path {
+			node = ensureMap(node, p)
+		}
+	}
+	meta["managedFields"] = entries
+}
+
+// someoneSets changes a component as someone else would, with an update of
+// their own field manager (kubectl edit).
+func someoneSets(t *testing.T, pc *prereqCluster, key, state string) {
+	t.Helper()
+	patch, _ := json.Marshal(map[string]interface{}{"spec": map[string]interface{}{"components": map[string]interface{}{key: map[string]interface{}{"managementState": state}}}})
+	if _, _, err := pc.c.do(http.MethodPatch, tDSC, "application/merge-patch+json", patch, url.Values{"fieldManager": {"kubectl-edit"}}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func setFakeCondition(conds []interface{}, typ, status, msg string) []interface{} {
@@ -559,26 +644,111 @@ func TestRestoreComponents(t *testing.T) {
 			t.Fatalf("still restorable: %+v", st.Restorable)
 		}
 	})
-	t.Run("set by someone since", func(t *testing.T) {
+	t.Run("changed by someone since", func(t *testing.T) {
 		pc := setUp(t, "pipelines")
-		req, _ := http.NewRequest(http.MethodPatch, "/x?fieldManager=kubectl-edit", nil)
-		recordDSCFieldManagers(req, fakeKey{plural: "datascienceclusters"}, map[string]interface{}{"spec": map[string]interface{}{"components": map[string]interface{}{"aipipelines": map[string]interface{}{"managementState": "Managed"}}}}, pc.f.get(tDSC))
-		// kubectl's entry took the field: the tool's manager no longer owns it.
-		meta := ensureMap(pc.f.get(tDSC), "metadata")
-		var kept []interface{}
-		for _, e := range meta["managedFields"].([]interface{}) {
-			if e.(map[string]interface{})["manager"] != dscComponentManager("aipipelines") {
-				kept = append(kept, e)
-			}
-		}
-		meta["managedFields"] = kept
+		// They turned it off and on again: each change takes the field.
+		someoneSets(t, pc, "aipipelines", "Removed")
+		someoneSets(t, pc, "aipipelines", "Managed")
 		n := len(pc.f.mutations())
 		res, _ := RestoreComponents(pc.c, []string{"aipipelines"})
-		if !res.Success || !strings.Contains(res.Message, "Kept Managed: aipipelines (set to Managed by someone since") {
+		if !res.Success || !strings.Contains(res.Message, "Kept Managed: aipipelines (changed by someone since") {
 			t.Fatalf("restore: %+v", res)
 		}
 		if len(pc.f.mutations()) != n || componentState(pc.f, "aipipelines") != "Managed" {
 			t.Fatal("changed a field someone else set")
+		}
+	})
+	t.Run("set to Managed again by someone", func(t *testing.T) {
+		// Setting the value it already has does not take the field (the
+		// API server moves a field only when its value changes): the tool
+		// still owns it, and the in-use check is what keeps a component
+		// someone relies on.
+		pc := setUp(t, "pipelines")
+		someoneSets(t, pc, "aipipelines", "Managed")
+		if !dscComponentOwned(pc.f.get(tDSC), "aipipelines") {
+			t.Fatal("a same-value update took the field")
+		}
+		pc.f.putJSON("/apis/datasciencepipelinesapplications.opendatahub.io/v1/namespaces/team/datasciencepipelinesapplications/theirs", `{}`)
+		res, _ := RestoreComponents(pc.c, []string{"aipipelines"})
+		if !res.Success || !strings.Contains(res.Message, "in use: pipeline server team/theirs") || componentState(pc.f, "aipipelines") != "Managed" {
+			t.Fatalf("restore: %+v", res)
+		}
+		k, _ := parseFakePath("/apis/datasciencepipelinesapplications.opendatahub.io/v1/namespaces/team/datasciencepipelinesapplications/theirs")
+		delete(pc.f.objects, k)
+		if res, _ := RestoreComponents(pc.c, []string{"aipipelines"}); !res.Success || componentState(pc.f, "aipipelines") != "Removed" {
+			t.Fatalf("restore once unused: %+v", res)
+		}
+	})
+	t.Run("the DataScienceCluster changes before the write", func(t *testing.T) {
+		pc := setUp(t, "pipelines")
+		writes := 0
+		pc.f.beforeRequest = func(r *http.Request) {
+			if r.Method == http.MethodPatch && r.URL.Path == tDSC && r.URL.Query().Get("dryRun") == "" && r.URL.Query().Get("fieldManager") != "kubectl-edit" {
+				writes++
+				if writes == 1 {
+					// An unrelated edit: a new resourceVersion.
+					pc.f.bumpRV(ensureMap(pc.f.get(tDSC), "metadata"))
+				}
+			}
+		}
+		res, _ := RestoreComponents(pc.c, []string{"aipipelines"})
+		if !res.Success || componentState(pc.f, "aipipelines") != "Removed" || writes != 2 {
+			t.Fatalf("restore: %+v (writes %d)", res, writes)
+		}
+	})
+	t.Run("a change before the write fails a check", func(t *testing.T) {
+		for name, change := range map[string]func(pc *prereqCluster){
+			"someone changed it": func(pc *prereqCluster) {
+				someoneSets(t, pc, "ogx", "Removed")
+				someoneSets(t, pc, "ogx", "Managed")
+			},
+			"a playground server appears": func(pc *prereqCluster) {
+				pc.f.putJSON("/apis/ogx.io/v1beta1/namespaces/team/ogxservers/theirs", `{}`)
+				pc.f.bumpRV(ensureMap(pc.f.get(tDSC), "metadata"))
+			},
+			"Argo CD takes it over": func(pc *prereqCluster) {
+				meta := ensureMap(pc.f.get(tDSC), "metadata")
+				meta["annotations"] = map[string]interface{}{argoTrackingAnnotation: "rhoai:datasciencecluster.opendatahub.io/DataScienceCluster:/default-dsc"}
+				pc.f.bumpRV(meta)
+			},
+			"the second read fails": func(pc *prereqCluster) {
+				pc.f.bumpRV(ensureMap(pc.f.get(tDSC), "metadata"))
+				pc.f.fail["GET /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters"] = 500
+				pc.f.fail["GET /apis/datasciencecluster.opendatahub.io/v1/datascienceclusters"] = 500
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				pc := setUp(t, "playground")
+				changed := false
+				pc.f.beforeRequest = func(r *http.Request) {
+					if !changed && r.Method == http.MethodPatch && r.URL.Path == tDSC && r.URL.Query().Get("dryRun") == "" && r.URL.Query().Get("fieldManager") != "kubectl-edit" {
+						changed = true
+						change(pc)
+					}
+				}
+				res, _ := RestoreComponents(pc.c, []string{"ogx", "dashboard"})
+				if !changed {
+					t.Fatal("no write was attempted")
+				}
+				if componentState(pc.f, "ogx") != "Managed" {
+					t.Fatalf("ogx turned back after the check failed: %+v", res)
+				}
+				switch name {
+				case "a playground server appears":
+					// Both are checked again on the new read: both in use.
+					if !res.Success || componentState(pc.f, "dashboard") != "Managed" || !strings.Contains(res.Message, "dashboard (in use") {
+						t.Fatalf("restore: %+v", res)
+					}
+				case "someone changed it":
+					if !res.Success || !strings.Contains(res.Message, "ogx (changed by someone since") || componentState(pc.f, "dashboard") != "Removed" {
+						t.Fatalf("restore: %+v", res)
+					}
+				default:
+					if res.Success || !strings.Contains(res.Message, "Nothing was changed") || componentState(pc.f, "dashboard") != "Managed" {
+						t.Fatalf("restore: %+v", res)
+					}
+				}
+			})
 		}
 	})
 	t.Run("in use", func(t *testing.T) {

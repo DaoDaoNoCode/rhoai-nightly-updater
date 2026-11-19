@@ -223,22 +223,38 @@ func dscComponentManager(key string) string {
 // patchDSCComponent sets spec.components.<key>.managementState of the
 // DataScienceCluster (a merge patch as the component's field manager; a
 // server-side dry run with dryRun). Nothing else of the component changes.
-func patchDSCComponent(c *Client, key, state string, dryRun bool) error {
+// With a resourceVersion, the API server refuses the patch (409) when the
+// DataScienceCluster changed since it was read. It returns the object the
+// API server answered with.
+func patchDSCComponent(c *Client, key, state, resourceVersion string, dryRun bool) (map[string]interface{}, error) {
 	path, err := dataScienceClusterPath(c)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	patch, _ := json.Marshal(map[string]interface{}{"spec": map[string]interface{}{"components": map[string]interface{}{key: map[string]interface{}{"managementState": state}}}})
+	body := map[string]interface{}{"spec": map[string]interface{}{"components": map[string]interface{}{key: map[string]interface{}{"managementState": state}}}}
+	if resourceVersion != "" {
+		body["metadata"] = map[string]interface{}{"resourceVersion": resourceVersion}
+	}
+	patch, _ := json.Marshal(body)
 	query := url.Values{"fieldManager": {dscComponentManager(key)}}
 	if dryRun {
 		query.Set("dryRun", "All")
 	}
-	_, _, err = c.do(http.MethodPatch, path, "application/merge-patch+json", patch, query)
-	return err
+	answer, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", patch, query)
+	if err != nil {
+		return nil, err
+	}
+	var obj map[string]interface{}
+	_ = json.Unmarshal(answer, &obj)
+	return obj, nil
 }
 
 // dscComponentOwned: this tool's field manager of the component still owns
-// its managementState (nobody has set it since).
+// its managementState. The API server moves a field to another manager only
+// when that manager changes its value (an update to the same value, or an
+// apply of it, leaves it owned, or shared): so this tells whether someone
+// changed the component since this tool's setup, not whether someone set
+// it to Managed again.
 func dscComponentOwned(dsc map[string]interface{}, key string) bool {
 	raw, _ := json.Marshal(dsc["metadata"])
 	var meta objectMeta
@@ -699,7 +715,7 @@ func RunPrerequisites(c *Client, req types.PrerequisitesRequest, onStep func(Upd
 		if !cp.turnOn {
 			continue
 		}
-		if err := patchDSCComponent(c, cp.key, "Managed", true); err != nil {
+		if _, err := patchDSCComponent(c, cp.key, "Managed", "", true); err != nil {
 			return m.fail("prerequisites", fmt.Sprintf("The API server rejects setting %s to Managed in the DataScienceCluster: %v. Nothing was changed.%s", cp.key, err, templateHint(err)), maasWriteCode(err), "dry run failed")
 		}
 	}
@@ -741,7 +757,7 @@ func RunPrerequisites(c *Client, req types.PrerequisitesRequest, onStep func(Upd
 			if !cp.turnOn {
 				continue
 			}
-			if err := patchDSCComponent(c, cp.key, "Managed", false); err != nil {
+			if _, err := patchDSCComponent(c, cp.key, "Managed", "", false); err != nil {
 				return m.fail("dsc", fmt.Sprintf("Failed to set %s to Managed: %v.%s", cp.key, err, templateHint(err)), maasWriteCode(err), "dsc patch failed")
 			}
 			m.logs = append(m.logs, fmt.Sprintf("OK: %s Managed (was %s)", cp.key, firstNonEmpty(cp.state, "not set")))
@@ -1024,13 +1040,64 @@ func componentUsers(c *Client, key string) ([]string, error) {
 	return out, nil
 }
 
+// restoreVerdict is what Clean up does with one component, decided on one
+// read of the DataScienceCluster.
+type restoreVerdict struct {
+	restore bool   // turn it back to prev
+	prev    string // its value before this tool's setup
+	drop    bool   // forget it in the record (it is not this tool's to turn back any more)
+	kept    string // why it stays Managed, for the result ("" none)
+	log     string
+	// refusal stops the whole restore before any further write.
+	refusal, code string
+}
+
+// restoreCheck runs every check of turning key back, on dsc: the record
+// says this tool turned it on, it is still Managed, this tool's field
+// manager still owns it (nobody changed it since: dscComponentOwned),
+// Argo CD does not manage the DataScienceCluster, and nothing on the
+// cluster uses it (a list that fails refuses).
+func restoreCheck(c *Client, rec prereqRecord, dsc dscRead, key string) restoreVerdict {
+	rc, ok := rec.Components[key]
+	if !ok {
+		return restoreVerdict{kept: key + " (this tool did not turn it on)"}
+	}
+	prev := firstNonEmpty(rc.Previous, "Removed")
+	state, _ := componentManagement(dsc.Object, key)
+	switch {
+	case dsc.Object == nil || state != "Managed":
+		return restoreVerdict{drop: true, log: key + " is " + firstNonEmpty(state, "not set") + " already"}
+	case !dscComponentOwned(dsc.Object, key):
+		return restoreVerdict{drop: true, kept: key + " (changed by someone since this tool's setup)"}
+	}
+	if app := argoApplicationOf(dsc.Object, "DataScienceCluster"); app != "" {
+		return restoreVerdict{refusal: gitOpsRefusal("The DataScienceCluster", app, "turning "+key+" back to "+prev), code: ErrorCodeGitOpsManaged}
+	}
+	users, err := componentUsers(c, key)
+	if err != nil {
+		return restoreVerdict{refusal: fmt.Sprintf("Cannot tell whether anything still uses %s, so it stays Managed: %v.%s", key, err, templateHint(err)), code: errorCodeFromK8sErr(err)}
+	}
+	if len(users) > 0 {
+		shown := users
+		if len(shown) > 3 {
+			shown = append(append([]string{}, users[:3]...), fmt.Sprintf("%d more", len(users)-3))
+		}
+		return restoreVerdict{kept: fmt.Sprintf("%s (in use: %s)", key, joinTitles(shown))}
+	}
+	return restoreVerdict{restore: true, prev: prev}
+}
+
 // RestoreComponents turns the given components back to what they were
-// before this tool turned them on (Clean up, last): each only when the
-// record says this tool turned it on, the tool's field manager still owns
-// it, Argo CD does not manage the DataScienceCluster, and nothing on the
-// cluster uses it. A component in use, or set by someone since, stays as it
-// is (the result says why). Every read is made before any write; a read
-// that fails changes nothing.
+// before this tool turned them on (Clean up, last): each only when
+// restoreCheck allows it. A component in use, or changed by someone since,
+// stays as it is (the result says why). Every check is made on one read
+// before any write; a read that fails changes nothing. Each write carries
+// the resourceVersion of the read its checks were made on: when the
+// DataScienceCluster changed meanwhile (409), it is read again and every
+// check runs again before the next attempt. Someone who set a component to
+// Managed again without changing it does not take the field from this
+// tool's manager (the API server moves a field only when its value
+// changes), so then the in-use check is what keeps a component in use on.
 func RestoreComponents(c *Client, keys []string) (*types.OperationResponse, error) {
 	rec, err := readPrereqRecord(c)
 	if err != nil {
@@ -1040,58 +1107,86 @@ func RestoreComponents(c *Client, keys []string) (*types.OperationResponse, erro
 	if err != nil {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read the DataScienceCluster; nothing was changed: %v.%s", err, templateHint(err)), ErrorCode: errorCodeFromK8sErr(err)}, nil
 	}
-	type restore struct{ key, prev string }
-	var todo []restore
-	var kept, logs []string
+	var todo []string
+	var kept, logs, done []string
 	dropped := false
-	for _, key := range keys {
-		rc, ok := rec.Components[key]
-		if !ok {
-			kept = append(kept, key+" (this tool did not turn it on)")
-			continue
-		}
-		state, _ := componentManagement(dsc.Object, key)
-		switch {
-		case dsc.Object == nil || state != "Managed":
+	apply := func(key string, v restoreVerdict) {
+		if v.drop {
 			delete(rec.Components, key)
 			dropped = true
-			logs = append(logs, key+" is "+firstNonEmpty(state, "not set")+" already")
-			continue
-		case !dscComponentOwned(dsc.Object, key):
-			delete(rec.Components, key)
-			dropped = true
-			kept = append(kept, key+" (set to Managed by someone since this tool's setup)")
-			continue
 		}
-		if app := argoApplicationOf(dsc.Object, "DataScienceCluster"); app != "" {
-			return &types.OperationResponse{Success: false, Message: gitOpsRefusal("The DataScienceCluster", app, "turning "+key+" back to "+firstNonEmpty(rc.Previous, "Removed")), ErrorCode: ErrorCodeGitOpsManaged}, nil
+		if v.kept != "" {
+			kept = append(kept, v.kept)
 		}
-		users, err := componentUsers(c, key)
-		if err != nil {
-			return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot tell whether anything still uses %s, so it stays Managed and nothing was changed: %v.%s", key, err, templateHint(err)), ErrorCode: errorCodeFromK8sErr(err)}, nil
+		if v.log != "" {
+			logs = append(logs, v.log)
 		}
-		if len(users) > 0 {
-			shown := users
-			if len(shown) > 3 {
-				shown = append(append([]string{}, users[:3]...), fmt.Sprintf("%d more", len(users)-3))
-			}
-			kept = append(kept, fmt.Sprintf("%s (in use: %s)", key, joinTitles(shown)))
-			continue
-		}
-		todo = append(todo, restore{key, firstNonEmpty(rc.Previous, "Removed")})
 	}
-	var done []string
-	for _, r := range todo {
-		if err := patchDSCComponent(c, r.key, r.prev, false); err != nil {
-			if dropped {
-				_ = writePrereqRecord(c, rec)
-			}
-			return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Failed to turn %s back to %s: %v.%s", r.key, r.prev, err, templateHint(err)), Logs: logs, ErrorCode: errorCodeFromK8sErr(err)}, nil
+	for _, key := range keys {
+		v := restoreCheck(c, rec, dsc, key)
+		if v.refusal != "" {
+			return &types.OperationResponse{Success: false, Message: v.refusal + " Nothing was changed.", ErrorCode: v.code}, nil
 		}
-		delete(rec.Components, r.key)
-		dropped = true
-		done = append(done, fmt.Sprintf("%s is %s again", r.key, r.prev))
-		logs = append(logs, "OK: "+r.key+" "+r.prev)
+		if v.restore {
+			todo = append(todo, key)
+			continue
+		}
+		apply(key, v)
+	}
+	stop := func(msg, code string) (*types.OperationResponse, error) {
+		if dropped {
+			_ = writePrereqRecord(c, rec)
+		}
+		if len(done) > 0 {
+			msg += " Already turned back: " + joinTitles(done) + "."
+		} else {
+			msg += " Nothing was changed."
+		}
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
+	}
+	// reads counts the reads of the DataScienceCluster; a component's checks
+	// hold for the read they were made on, and for the answers to this
+	// restore's own writes after it (each guarded by its resourceVersion).
+	reads := 0
+	checkedOn := map[string]int{}
+	for _, key := range todo {
+		for attempt := 1; ; attempt++ {
+			v := restoreVerdict{restore: true, prev: firstNonEmpty(rec.Components[key].Previous, "Removed")}
+			if checkedOn[key] != reads {
+				if v = restoreCheck(c, rec, dsc, key); v.refusal != "" {
+					return stop(v.refusal, v.code)
+				}
+				checkedOn[key] = reads
+			}
+			if !v.restore {
+				apply(key, v)
+				break
+			}
+			meta, _ := dsc.Object["metadata"].(map[string]interface{})
+			rv, _ := meta["resourceVersion"].(string)
+			answer, err := patchDSCComponent(c, key, v.prev, rv, false)
+			if err == nil {
+				if answer != nil {
+					dsc.Object = answer
+				}
+				delete(rec.Components, key)
+				dropped = true
+				done = append(done, fmt.Sprintf("%s is %s again", key, v.prev))
+				logs = append(logs, "OK: "+key+" "+v.prev)
+				break
+			}
+			if !IsK8sError(err, http.StatusConflict) {
+				return stop(fmt.Sprintf("Failed to turn %s back to %s: %v.%s", key, v.prev, err, templateHint(err)), errorCodeFromK8sErr(err))
+			}
+			if attempt == 3 {
+				return stop(fmt.Sprintf("The DataScienceCluster kept changing while %s was turned back (someone else is editing it), so it stays Managed. Clean up again later.", key), "conflict")
+			}
+			logs = append(logs, "The DataScienceCluster changed since it was read; reading it again and checking again.")
+			if dsc, err = readFirstDSC(c); err != nil {
+				return stop(fmt.Sprintf("The DataScienceCluster changed since it was read, and it cannot be read again, so %s stays Managed: %v.%s", key, err, templateHint(err)), errorCodeFromK8sErr(err))
+			}
+			reads++
+		}
 	}
 	if dropped {
 		if err := writePrereqRecord(c, rec); err != nil {
