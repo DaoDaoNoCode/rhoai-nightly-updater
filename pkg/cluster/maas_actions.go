@@ -82,7 +82,7 @@ func rhclUpgradeOffer(c *Client, st operatorState) (*types.MaaSAction, string) {
 	if hop := hopChannel(pkg, st.csv, target); hop != "" && !targetCh.has(st.csv) {
 		hopCh, _ := pkg.channel(hop)
 		changes = append(changes, fmt.Sprintf("If OLM has no path from %s straight to %s (it then stays at %s), channel %s first, to %s, then %s.", st.version, targetCh.head(), st.version, hop, hopCh.head(), target))
-		cmds = []string{"# OLM may have no path from " + st.version + " straight to " + target + ": go through " + hop + " first", rhclChannelCommand(st.sub.Metadata.Namespace, st.sub.Metadata.Name, hop), "# once " + hopCh.CurrentCSV + " is installed:", cmds[0]}
+		cmds = []string{commentText("# OLM may have no path from " + st.version + " straight to " + target + ": go through " + hop + " first"), rhclChannelCommand(st.sub.Metadata.Namespace, st.sub.Metadata.Name, hop), commentText("# once " + hopCh.CurrentCSV + " is installed:"), cmds[0]}
 	}
 	changes = append(changes, "Afterwards, Authorino TLS is set up again where an upgrade step recreated Authorino's Service (which removes its certificate).")
 	return &types.MaaSAction{
