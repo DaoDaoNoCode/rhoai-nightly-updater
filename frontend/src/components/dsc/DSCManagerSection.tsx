@@ -11,6 +11,14 @@ import {
   CodeBlock,
   CodeBlockCode,
   Content,
+  DescriptionList,
+  DescriptionListDescription,
+  DescriptionListGroup,
+  DescriptionListTerm,
+  EmptyState,
+  EmptyStateActions,
+  EmptyStateBody,
+  EmptyStateFooter,
   ExpandableSection,
   Flex,
   FlexItem,
@@ -26,15 +34,20 @@ import {
   ModalHeader,
   ModalVariant,
   PageSection,
+  Popover,
   Radio,
   Spinner,
   Stack,
   StackItem,
+  Switch,
   TextInput,
   Title,
+  Toolbar,
+  ToolbarContent,
+  ToolbarItem,
 } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, TreeRowWrapper, Tr } from "@patternfly/react-table";
-import type { DSCChange, DSCManager, DSCNode, DSCPendingHardReset, DSCPlan, OperationResponse, UpdateStep } from "../../types";
+import type { DSCChange, DSCManager, DSCMismatch, DSCNode, DSCPendingHardReset, DSCPlan, OperationResponse, UpdateStep } from "../../types";
 import { finishDSCHardReset, getDSCManager, getDSCPlan, runDSCPlan, setDSCManagementState, streamDSCHardReset, toApiError } from "../../services/api";
 import { ConfirmActionModal } from "../ConfirmActionModal";
 import { StatusLabel, TagLabel, type StatusKind } from "../StatusLabel";
@@ -98,6 +111,69 @@ const PlanAlerts: React.FC<{ plan: DSCPlan }> = ({ plan }) => (
   </Stack>
 );
 
+/** The value a row has without a choice of its own: the release default, else the CRD's default, else Removed. */
+function defaultText(n: DSCNode): string {
+  if (n.defaultSet) return n.default ?? "";
+  return n.schemaDefault ? `${n.schemaDefault} (the CRD's default)` : "not set (Removed)";
+}
+
+// A label's onClick makes it a button, so it takes keyboard focus and has a
+// name; the Popover around it opens and closes on that click.
+const openPopover = () => {};
+
+/** A row's label that explains itself in a popover. */
+const ExplainedLabel: React.FC<{ kind: StatusKind | "changed"; text: string; header: string; children: React.ReactNode }> = ({ kind, text, header, children }) => (
+  <Popover headerContent={header} bodyContent={children} maxWidth="28rem">
+    {kind === "changed"
+      ? <TagLabel color="blue" onClick={openPopover}>{text}</TagLabel>
+      : <StatusLabel status={kind} onClick={openPopover}>{text}</StatusLabel>}
+  </Popover>
+);
+
+/** The labels of a row: changed from the default, and each difference that is a problem. */
+const RowLabels: React.FC<{ node: DSCNode; mismatches: DSCMismatch[]; byPath: Map<string, DSCNode> }> = ({ node, mismatches, byPath }) => (
+  <>
+    {node.changed && (
+      <FlexItem>
+        <ExplainedLabel kind="changed" text="Changed from the default" header="Changed from the default">
+          The DSC sets {node.spec}; the release default is {defaultText(node)}. A value you chose, not a problem: Fix leaves it as it is, and Reset to the release default sets it back.
+        </ExplainedLabel>
+      </FlexItem>
+    )}
+    {mismatches.map((m) => {
+      if (m.kind === "unset") {
+        // Missing, but the operator already does what the release default says: only worth setting explicitly.
+        const sameInEffect = (node.schemaDefault || "Removed") === m.default;
+        return (
+          <FlexItem key={m.kind}>
+            <ExplainedLabel kind={sameInEffect ? "neutral" : "warning"} text={`Missing — default ${m.default}`} header="Missing in the DSC">
+              {m.message} A release that adds a field does not add it to an existing DataScienceCluster, so this is common after an upgrade.
+            </ExplainedLabel>
+          </FlexItem>
+        );
+      }
+      if (m.kind === "unknown-field") {
+        return (
+          <FlexItem key={m.kind}>
+            <ExplainedLabel kind="danger" text="Not in the installed CRD" header="Not in the installed CRD">{m.message}</ExplainedLabel>
+          </FlexItem>
+        );
+      }
+      const parent = m.parent ? byPath.get(m.parent) : undefined;
+      return (
+        <FlexItem key={m.kind}>
+          <ExplainedLabel kind="warning" text={`Deploys nothing — parent ${parent?.specSet ? parent.spec : "not set"}`} header="Deploys nothing">
+            {m.message} Fix does not change this: choose one of the two in the table.
+          </ExplainedLabel>
+        </FlexItem>
+      );
+    })}
+  </>
+);
+
+/** Whether a row differs from the release default: changed, or a difference that is a problem. */
+const differs = (n: DSCNode, mismatches: Map<string, DSCMismatch[]>) => !!n.changed || !!n.unknown || (mismatches.get(n.path)?.length ?? 0) > 0;
+
 /** The tree of components and sub-components, with a state control per row. */
 const ComponentTree: React.FC<{
   manager: DSCManager;
@@ -106,74 +182,241 @@ const ComponentTree: React.FC<{
   onSet: (node: DSCNode, to: string) => void;
 }> = ({ manager, disabledReason, pending, onSet }) => {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [onlyDiffs, setOnlyDiffs] = useState(false);
   const nodes = manager.nodes;
-  const children = (path: string) => nodes.filter((n) => n.parent === path);
+  const byPath = new Map(nodes.map((n) => [n.path, n]));
+  const mismatches = new Map<string, DSCMismatch[]>();
+  for (const m of manager.mismatches) mismatches.set(m.path, [...(mismatches.get(m.path) ?? []), m]);
+  // With only differences: the rows that differ and every row above them, for context.
+  const kept = new Set<string>();
+  for (const n of nodes) {
+    if (!differs(n, mismatches)) continue;
+    for (let p: DSCNode | undefined = n; p && !kept.has(p.path); p = p.parent ? byPath.get(p.parent) : undefined) kept.add(p.path);
+  }
+  const shown = onlyDiffs ? nodes.filter((n) => kept.has(n.path)) : nodes;
+  const children = (path: string) => shown.filter((n) => n.parent === path);
   const hidden = (n: DSCNode): boolean => {
-    for (let p = n.parent; p; p = p.includes(".") ? p.slice(0, p.lastIndexOf(".")) : "") {
+    for (let p = n.parent; p; p = byPath.get(p)?.parent ?? "") {
       if (collapsed[p]) return true;
     }
     return false;
   };
-  const visible = nodes.filter((n) => !hidden(n));
+  const visible = shown.filter((n) => !hidden(n));
+  const differing = nodes.filter((n) => differs(n, mismatches)).length;
   return (
-    <Table isTreeTable aria-label="Components of the DataScienceCluster" variant="compact">
-      <Thead>
-        <Tr>
-          {/* Set widths: an operator message appearing after a change must not take
-              the room of the select and its label (it wraps in its own column). */}
-          <Th modifier="wrap" width={25}>Component</Th>
-          <Th modifier="wrap" width={40}>In the DSC</Th>
-          <Th modifier="wrap" width={15}>Release default</Th>
-          <Th modifier="wrap" width={20}>Operator reports</Th>
-        </Tr>
-      </Thead>
-      <Tbody>
-        {visible.map((n, rowIndex) => {
-          const siblings = n.parent ? children(n.parent) : nodes.filter((x) => x.depth === 0);
-          const kids = children(n.path);
-          const treeRow = {
-            onCollapse: () => setCollapsed((c) => ({ ...c, [n.path]: !c[n.path] })),
-            rowIndex,
-            props: {
-              isExpanded: !collapsed[n.path],
-              "aria-level": n.depth + 1,
-              "aria-posinset": siblings.indexOf(n) + 1,
-              "aria-setsize": kids.length,
-            },
-          };
-          const allowed = n.allowed ?? [];
-          const rowReason = disabledReason ?? (allowed.length === 0 ? "The CRD lists no values for it, so this page does not change it." : null);
-          return (
-            <TreeRowWrapper key={n.path} row={{ props: treeRow.props }}>
-              <Td dataLabel="Component" treeRow={treeRow}>
-                <code>{n.name}</code>
-              </Td>
-              <Td dataLabel="In the DSC">
-                {!n.toggle ? <span className="pf-v6-u-text-color-subtle">Group</span> : (
-                  <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "nowrap" }}>
-                    {/* The value in the DSC, and the control that changes it (the CRD's values only). */}
-                    <FlexItem className="pf-v6-u-min-width" style={{ "--pf-v6-u-min-width--MinWidth": "22ch" } as React.CSSProperties}>
-                      <FormSelect aria-label={`Set ${n.path}`} id={`dsc-set-${n.path}`} value={n.specSet ? n.spec : ""}
-                        isDisabled={!!rowReason || pending !== null}
-                        onChange={(_e, v) => { if (v && !(n.specSet && n.spec === v)) onSet(n, v); }}>
-                        {!n.specSet && <FormSelectOption value="" label={`Not set (${n.schemaDefault || "Removed"})`} isDisabled />}
-                        {allowed.map((v) => <FormSelectOption key={v} value={v} label={v} />)}
-                      </FormSelect>
-                    </FlexItem>
-                    {pending === n.path && <FlexItem><Spinner size="sm" aria-label={`Changing ${n.path}`} /></FlexItem>}
-                    {n.changed && <FlexItem><TagLabel color="blue">Changed from the default</TagLabel></FlexItem>}
-                  </Flex>
-                )}
-              </Td>
-              <Td dataLabel="Release default">
-                {!n.toggle ? null : n.defaultSet ? n.default : <span className="pf-v6-u-text-color-subtle">{n.schemaDefault ? `Not set (CRD default ${n.schemaDefault})` : "Not set"}</span>}
-              </Td>
-              <Td dataLabel="Operator reports"><ActualCell node={n} /></Td>
-            </TreeRowWrapper>
-          );
-        })}
-      </Tbody>
-    </Table>
+    <>
+      <Toolbar inset={{ default: "insetMd" }}>
+        <ToolbarContent>
+          <ToolbarItem>
+            <Switch id="dsc-only-differences" label="Show only differences" isChecked={onlyDiffs} onChange={(_e, v) => setOnlyDiffs(v)} />
+          </ToolbarItem>
+          <ToolbarItem alignSelf="center">
+            <span className="pf-v6-u-text-color-subtle pf-v6-u-font-size-sm">
+              {differing === 0 ? "No row differs from the release default" : `${differing} ${differing === 1 ? "row differs" : "rows differ"} from the release default`}
+            </span>
+          </ToolbarItem>
+        </ToolbarContent>
+      </Toolbar>
+      {visible.length === 0 ? (
+        <EmptyState headingLevel="h3" titleText="Nothing differs from the release default" variant="xs">
+          <EmptyStateBody>
+            {manager.comparison?.defaultsRead
+              ? "Every value in the DSC is the release default's, nothing is missing, and the DSC has no field the installed CRD does not define."
+              : "There is no release default to compare with, so only fields the installed CRD does not define and Managed sub-components under a parent that is not Managed are looked for: there are none."}
+          </EmptyStateBody>
+          <EmptyStateFooter>
+            <EmptyStateActions>
+              <Button variant="link" onClick={() => setOnlyDiffs(false)}>Show all components</Button>
+            </EmptyStateActions>
+          </EmptyStateFooter>
+        </EmptyState>
+      ) : (
+        <Table isTreeTable aria-label="Components of the DataScienceCluster" variant="compact">
+          <Thead>
+            <Tr>
+              {/* Set widths: an operator message appearing after a change must not take
+                  the room of the select and its label (it wraps in its own column). */}
+              <Th modifier="wrap" width={25}>Component</Th>
+              <Th modifier="wrap" width={40}>In the DSC</Th>
+              <Th modifier="wrap" width={15}>Release default</Th>
+              <Th modifier="wrap" width={20}>Operator reports</Th>
+            </Tr>
+          </Thead>
+          <Tbody>
+            {visible.map((n, rowIndex) => {
+              const siblings = n.parent ? children(n.parent) : shown.filter((x) => x.depth === 0);
+              const kids = children(n.path);
+              const treeRow = {
+                onCollapse: () => setCollapsed((c) => ({ ...c, [n.path]: !c[n.path] })),
+                rowIndex,
+                props: {
+                  isExpanded: !collapsed[n.path],
+                  "aria-level": n.depth + 1,
+                  "aria-posinset": siblings.indexOf(n) + 1,
+                  "aria-setsize": kids.length,
+                },
+              };
+              const allowed = n.allowed ?? [];
+              const rowReason = disabledReason ?? (allowed.length === 0 ? "The CRD lists no values for it, so this page does not change it." : null);
+              return (
+                <TreeRowWrapper key={n.path} row={{ props: treeRow.props }}>
+                  <Td dataLabel="Component" treeRow={treeRow}>
+                    <code>{n.name}</code>
+                  </Td>
+                  <Td dataLabel="In the DSC">
+                    {n.unknown ? (
+                      <Flex><RowLabels node={n} mismatches={mismatches.get(n.path) ?? []} byPath={byPath} /></Flex>
+                    ) : !n.toggle ? <span className="pf-v6-u-text-color-subtle">Group</span> : (
+                      // The labels wrap under the select when the column has no room
+                      // for them; the column keeps its width.
+                      <Flex gap={{ default: "gapSm" }} rowGap={{ default: "rowGapXs" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "wrap" }}>
+                        {/* The value in the DSC, and the control that changes it (the CRD's values only). */}
+                        <FlexItem className="pf-v6-u-min-width" style={{ "--pf-v6-u-min-width--MinWidth": "22ch" } as React.CSSProperties}>
+                          <FormSelect aria-label={`Set ${n.path}`} id={`dsc-set-${n.path}`} value={n.specSet ? n.spec : ""}
+                            isDisabled={!!rowReason || pending !== null}
+                            onChange={(_e, v) => { if (v && !(n.specSet && n.spec === v)) onSet(n, v); }}>
+                            {!n.specSet && <FormSelectOption value="" label={`Not set (${n.schemaDefault || "Removed"})`} isDisabled />}
+                            {allowed.map((v) => <FormSelectOption key={v} value={v} label={v} />)}
+                          </FormSelect>
+                        </FlexItem>
+                        {pending === n.path && <FlexItem><Spinner size="sm" aria-label={`Changing ${n.path}`} /></FlexItem>}
+                        <RowLabels node={n} mismatches={mismatches.get(n.path) ?? []} byPath={byPath} />
+                      </Flex>
+                    )}
+                  </Td>
+                  <Td dataLabel="Release default">
+                    {!n.toggle ? null : n.defaultSet ? n.default : <span className="pf-v6-u-text-color-subtle">{n.schemaDefault ? `Not set (CRD default ${n.schemaDefault})` : "Not set"}</span>}
+                  </Td>
+                  <Td dataLabel="Operator reports"><ActualCell node={n} /></Td>
+                </TreeRowWrapper>
+              );
+            })}
+          </Tbody>
+        </Table>
+      )}
+    </>
+  );
+};
+
+/** Paths as "<count>: a, b (note)", or "None". */
+const CountedPaths: React.FC<{ items: { path: string; note?: string }[] }> = ({ items }) => (
+  items.length === 0 ? <>None</> : (
+    <>{items.length}: {items.map((it, i) => <React.Fragment key={it.path}>{i > 0 && ", "}<code>{it.path}</code>{it.note && ` (${it.note})`}</React.Fragment>)}</>
+  )
+);
+
+/** What the comparison means, behind a link in the summary. */
+const ComparisonHelp: React.FC = () => (
+  <Popover
+    headerContent="About this comparison"
+    maxWidth="36rem"
+    bodyContent={
+      <Stack hasGutter>
+        <StackItem>
+          The release default is the DataScienceCluster example the installed operator&apos;s CSV ships (<code>alm-examples</code>). Each row compares the value in your DSC with it:
+        </StackItem>
+        <StackItem>
+          <List>
+            <ListItem><strong>Changed from the default</strong>: a value you chose. Not a problem; Fix leaves it.</ListItem>
+            <ListItem><strong>Missing</strong>: the release default sets it, your DSC does not, so the operator uses the CRD&apos;s default for it or treats it as Removed. Fix sets it to the release default.</ListItem>
+            <ListItem><strong>Not in the installed CRD</strong>: the operator never sees it. Fix removes it.</ListItem>
+            <ListItem><strong>Deploys nothing</strong>: Managed under a parent that is not Managed. Set the parent to Managed, or this to Removed.</ListItem>
+          </List>
+        </StackItem>
+        <StackItem>
+          <strong>Deprecated fields.</strong> The CRD marks only whole API versions as deprecated, not single fields, so this page does not list deprecated fields.
+          A field the installed CRD no longer defines cannot stay in the DSC: the API server prunes fields the CRD does not define.
+          So after an upgrade, what matters is what the new release default sets that your DSC lacks: those rows show <strong>Missing</strong>.
+          Components renamed between API versions (v2 to v3) are converted by the operator&apos;s conversion webhook.
+        </StackItem>
+      </Stack>
+    }
+  >
+    <Button variant="link" isInline>About this comparison</Button>
+  </Popover>
+);
+
+/**
+ * The comparison with the release default in one place, always shown: what
+ * was compared with, and for each kind of difference its count and paths or
+ * "None", or "Not checked" when it could not be.
+ */
+const ComparisonSummary: React.FC<{ manager: DSCManager; fix: React.ReactNode }> = ({ manager, fix }) => {
+  const cmp = manager.comparison;
+  const defaultsRead = !!cmp?.defaultsRead;
+  const schemaRead = !!cmp?.schemaRead;
+  const of = (kind: DSCMismatch["kind"]) => manager.mismatches.filter((m) => m.kind === kind);
+  const missing = of("unset");
+  const unknown = of("unknown-field");
+  const parentRemoved = of("parent-removed");
+  const changed = manager.nodes.filter((n) => n.changed).map((n) => ({ path: n.path }));
+  const problems = missing.length + unknown.length + parentRemoved.length;
+  const byPath = new Map(manager.nodes.map((n) => [n.path, n]));
+  // Missing where the operator already does what the release default says is only worth setting explicitly.
+  const missingInEffect = missing.some((m) => (byPath.get(m.path)?.schemaDefault || "Removed") !== m.default);
+  const defaultComps = cmp?.defaultComponents ?? [];
+  const dscComps = cmp?.dscComponents ?? [];
+  const absent = defaultComps.filter((c) => !dscComps.includes(c));
+  const notChecked = "Not checked: no release default";
+
+  let variant: "success" | "info" | "warning" | "danger" = "success";
+  if (unknown.length > 0) variant = "danger";
+  else if (!defaultsRead || parentRemoved.length > 0 || missingInEffect) variant = "warning";
+  else if (problems > 0) variant = "info";
+  const title = !defaultsRead
+    ? "Not compared with a release default"
+    : problems === 0
+      ? "Nothing to fix compared with the release default"
+      : `${problems} ${problems === 1 ? "difference" : "differences"} from the release default to fix`;
+
+  return (
+    <Alert component="h3" isInline isPlain={variant === "success"} variant={variant} title={title}
+      actionLinks={<>{fix}<ComparisonHelp /></>}>
+      <DescriptionList isHorizontal isCompact aria-label="Comparison with the release default" horizontalTermWidthModifier={{ default: "14rem" }}>
+        <DescriptionListGroup>
+          <DescriptionListTerm>Release default</DescriptionListTerm>
+          <DescriptionListDescription>
+            {defaultsRead
+              ? <>Operator {manager.operatorVersion}: the DataScienceCluster example in CSV <code>{cmp?.defaultsCSV}</code> (<code>alm-examples</code>)</>
+              : manager.defaultsError || "Could not be read"}
+          </DescriptionListDescription>
+        </DescriptionListGroup>
+        <DescriptionListGroup>
+          <DescriptionListTerm>Components</DescriptionListTerm>
+          <DescriptionListDescription>
+            {!defaultsRead
+              ? `${dscComps.length} in the DSC; the installed CRD defines ${cmp?.crdComponents?.length ?? 0}`
+              : absent.length === 0
+                ? `All ${defaultComps.length} components of the release default are in the DSC`
+                : <>{defaultComps.length - absent.length} of {defaultComps.length} components of the release default are in the DSC; not in it: <PathList paths={absent} /></>}
+          </DescriptionListDescription>
+        </DescriptionListGroup>
+        <DescriptionListGroup>
+          <DescriptionListTerm>Missing</DescriptionListTerm>
+          <DescriptionListDescription>
+            {defaultsRead ? <CountedPaths items={missing.map((m) => ({ path: m.path, note: `default ${m.default}` }))} /> : notChecked}
+          </DescriptionListDescription>
+        </DescriptionListGroup>
+        <DescriptionListGroup>
+          <DescriptionListTerm>Not in the installed CRD</DescriptionListTerm>
+          <DescriptionListDescription>
+            {schemaRead ? <CountedPaths items={unknown.map((m) => ({ path: m.path }))} /> : `Not checked: ${manager.schemaError || "the CRD's schema could not be read"}`}
+          </DescriptionListDescription>
+        </DescriptionListGroup>
+        <DescriptionListGroup>
+          <DescriptionListTerm>Deploys nothing</DescriptionListTerm>
+          <DescriptionListDescription>
+            {schemaRead ? <CountedPaths items={parentRemoved.map((m) => ({ path: m.path, note: `parent ${m.parent}` }))} /> : "Not checked: the CRD's schema could not be read"}
+          </DescriptionListDescription>
+        </DescriptionListGroup>
+        <DescriptionListGroup>
+          <DescriptionListTerm>Changed from the default</DescriptionListTerm>
+          <DescriptionListDescription>
+            {defaultsRead ? <CountedPaths items={changed} /> : notChecked}
+          </DescriptionListDescription>
+        </DescriptionListGroup>
+      </DescriptionList>
+    </Alert>
   );
 };
 
@@ -565,12 +808,19 @@ export const DSCManagerSection: React.FC<{
         <CardBody>
           <Stack hasGutter>
             <StackItem>
+              <ComparisonSummary manager={manager} fix={fixable.length > 0 ? (
+                <TooltipButton variant="link" isInline isDisabled={!!disabledReason || running !== null} disabledReason={disabledReason}
+                  onClick={() => openPlan({ title: "Fix the differences from the release default?", confirmLabel: "Fix" })}>
+                  Fix
+                </TooltipButton>
+              ) : null} />
+            </StackItem>
+            <StackItem>
               <Content component="p" className="pf-v6-u-text-color-subtle">
-                From the installed DataScienceCluster CRD ({manager.apiVersion?.split("/")[1]}); the release default is the example the installed operator {manager.operatorVersion} ships. A change here patches only the field you change.
+                From the installed DataScienceCluster CRD ({manager.apiVersion?.split("/")[1]}). A change here patches only the field you change.
               </Content>
             </StackItem>
             {manager.readOnlyReason && <StackItem><Alert component="p" variant="info" isInline title="This page does not change the DataScienceCluster now">{manager.readOnlyReason}</Alert></StackItem>}
-            {manager.defaultsError && <StackItem><Alert component="p" variant="warning" isInline title="No release default to compare with">{manager.defaultsError}</Alert></StackItem>}
             {(manager.upgradeGates?.length ?? 0) > 0 && (
               <StackItem>
                 <Alert component="div" variant="warning" isInline title="An upgrade gate holds provisioning">
@@ -585,31 +835,6 @@ export const DSCManagerSection: React.FC<{
                   actionClose={<AlertActionCloseButton onClose={() => setResult(null)} />}>
                   {result.success ? undefined : result.message}
                 </Alert>
-              </StackItem>
-            )}
-            {manager.mismatches.length > 0 && (
-              <StackItem>
-                <Card isPlain isCompact>
-                  <CardHeader actions={fixable.length > 0 ? {
-                    actions: (
-                      <TooltipButton variant="primary" isDisabled={!!disabledReason || running !== null} disabledReason={disabledReason}
-                        onClick={() => openPlan({ title: "Fix the differences from the release default?", confirmLabel: "Fix" })}>
-                        Fix
-                      </TooltipButton>
-                    ),
-                  } : undefined}>
-                    <CardTitle><Title headingLevel="h3" size="md">Differences from the release default</Title></CardTitle>
-                  </CardHeader>
-                  <CardBody>
-                    <List aria-label="Differences from the release default">
-                      {manager.mismatches.map((m) => (
-                        <ListItem key={m.kind + m.path}>
-                          <code>{m.path}</code>: {m.message}
-                        </ListItem>
-                      ))}
-                    </List>
-                  </CardBody>
-                </Card>
               </StackItem>
             )}
           </Stack>

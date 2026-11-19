@@ -32,13 +32,15 @@ interface StatusLabelProps {
   /** Replaces the default status icon (for example an upgrade arrow or a spinner). */
   icon?: React.ReactNode;
   isCompact?: boolean;
+  /** Makes the label a button (for example the trigger of a Popover around it). */
+  onClick?: () => void;
 }
 
 /** A status label: the color and icon come from `status`, so no separate icon goes next to it. */
-export const StatusLabel: React.FC<StatusLabelProps> = ({ status, children, icon, isCompact = true }) => {
+export const StatusLabel: React.FC<StatusLabelProps> = ({ status, children, icon, isCompact = true, onClick }) => {
   const style = STYLE[status];
   // The span keeps the label's own width where its parent stretches children (table cells in grid mode).
-  return <span><Label isCompact={isCompact} color={style.color} icon={icon ?? style.icon}>{children}</Label></span>;
+  return <span><Label isCompact={isCompact} color={style.color} icon={icon ?? style.icon} onClick={onClick}>{children}</Label></span>;
 };
 
 /**
@@ -49,6 +51,8 @@ export const TagLabel: React.FC<{
   color?: Extract<LabelProps["color"], "blue" | "purple" | "teal" | "grey">;
   icon?: React.ReactNode;
   children: React.ReactNode;
-}> = ({ color = "grey", icon, children }) => (
-  <span><Label isCompact variant="outline" color={color} icon={icon}>{children}</Label></span>
+  /** Makes the label a button (for example the trigger of a Popover around it). */
+  onClick?: () => void;
+}> = ({ color = "grey", icon, children, onClick }) => (
+  <span><Label isCompact variant="outline" color={color} icon={icon} onClick={onClick}>{children}</Label></span>
 );

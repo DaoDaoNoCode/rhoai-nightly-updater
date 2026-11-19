@@ -608,6 +608,22 @@ export interface DSCNode {
   actual?: string;
   condition?: DSCConditionView;
   changed?: boolean;
+  /** A field in the DSC the installed CRD does not define (an "unknown-field" mismatch); name is its path below parent. */
+  unknown?: boolean;
+}
+
+/** What the comparison with the release default covered (pkg/types DSCComparison). */
+export interface DSCComparison {
+  /** The release default was read: missing values and changes from it were looked for. */
+  defaultsRead: boolean;
+  /** The CRD schema was read: fields it does not define were looked for. */
+  schemaRead: boolean;
+  /** The installed CSV whose alm-examples hold the release default. */
+  defaultsCSV?: string;
+  /** Keys of spec.components in the CRD, the release default and the DSC, sorted. */
+  crdComponents: string[] | null;
+  defaultComponents: string[] | null;
+  dscComponents: string[] | null;
 }
 
 /** A difference from the release default that is a real problem (pkg/types DSCMismatch). */
@@ -646,6 +662,8 @@ export interface DSCManager {
   upgradeGates?: string[];
   nodes: DSCNode[];
   mismatches: DSCMismatch[];
+  /** What the comparison covered; absent when there is no DSC. */
+  comparison?: DSCComparison;
   /** A hard reset that deleted the DSC and did not create its replacement; only while no DSC exists. */
   pendingHardReset?: DSCPendingHardReset;
   pendingHardResetError?: string;

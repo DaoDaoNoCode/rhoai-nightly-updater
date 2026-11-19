@@ -287,6 +287,163 @@ func TestDSCManagerMismatches(t *testing.T) {
 	}
 }
 
+// The comparison says what it covered: on the live DSC the CRD, the release
+// default and the DSC list the same 16 components.
+func TestDSCManagerComparisonOnTheLiveDSC(t *testing.T) {
+	_, c := managerWorld(t, nil)
+	m, err := GetDSCManager(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmp := m.Comparison
+	if !cmp.DefaultsRead || !cmp.SchemaRead || cmp.DefaultsCSV != "rhods-operator.3.6.0" {
+		t.Fatalf("comparison = %+v", cmp)
+	}
+	want := []string{"aiHub", "aigateway", "aipipelines", "dashboard", "data", "databaseservice", "kserve", "kueue", "mcplifecycleoperator", "mlflowoperator", "ogx", "ray", "sparkoperator", "trainer", "trustyai", "workbenches"}
+	for name, got := range map[string][]string{"crd": cmp.CRDComponents, "default": cmp.DefaultComponents, "dsc": cmp.DSCComponents} {
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s components = %v", name, got)
+		}
+	}
+	for _, n := range m.Nodes {
+		if n.Unknown {
+			t.Fatalf("unknown node on the live DSC: %+v", n)
+		}
+	}
+}
+
+// Fields the installed CRD does not define are rows of the tree, under the
+// nearest node above them, as well as mismatches; Fix removes them.
+func TestDSCManagerUnknownFieldsAreRowsAndFixRemovesThem(t *testing.T) {
+	f, c := managerWorld(t, func(dsc map[string]interface{}) {
+		setPath(t, dsc, "spec.components.codeflare", map[string]interface{}{"managementState": "Removed"}) // a v2 component
+		setPath(t, dsc, "spec.components.kserve.serving", map[string]interface{}{"managementState": "Managed"})
+		setPath(t, dsc, "spec.components.kserve.oauthProxy.legacy", true) // under an object that is not a row
+		setPath(t, dsc, "spec.components.databaseservice", nil)
+	})
+	m, err := GetDSCManager(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]string{}
+	for _, mm := range m.Mismatches {
+		kinds[mm.Path] = mm.Kind
+	}
+	if kinds["codeflare"] != "unknown-field" || kinds["kserve.serving"] != "unknown-field" || kinds["kserve.oauthProxy.legacy"] != "unknown-field" || kinds["databaseservice"] != "unset" {
+		t.Fatalf("mismatches = %+v", m.Mismatches)
+	}
+	var paths []string
+	for _, n := range m.Nodes {
+		paths = append(paths, n.Path)
+	}
+	index := func(p string) int {
+		for i, q := range paths {
+			if q == p {
+				return i
+			}
+		}
+		t.Fatalf("no row %s in %v", p, paths)
+		return -1
+	}
+	cf := nodeOf(t, m, "codeflare")
+	if !cf.Unknown || cf.Toggle || cf.Parent != "" || cf.Depth != 0 || cf.Name != "codeflare" || cf.SpecSet || len(cf.Allowed) != 0 {
+		t.Fatalf("codeflare = %+v", cf)
+	}
+	if index("codeflare") != len(paths)-1 {
+		t.Fatalf("a top-level unknown field is not after the CRD's components: %v", paths)
+	}
+	sv := nodeOf(t, m, "kserve.serving")
+	if !sv.Unknown || sv.Parent != "kserve" || sv.Depth != 1 || sv.Name != "serving" {
+		t.Fatalf("kserve.serving = %+v", sv)
+	}
+	op := nodeOf(t, m, "kserve.oauthProxy.legacy")
+	if !op.Unknown || op.Parent != "kserve" || op.Depth != 1 || op.Name != "oauthProxy.legacy" {
+		t.Fatalf("kserve.oauthProxy.legacy = %+v", op)
+	}
+	// After kserve's own sub-components, before the next component.
+	if index("kserve.nim") > index("kserve.oauthProxy.legacy") || index("kserve.serving") > index("kueue") || index("kserve.oauthProxy.legacy") > index("kserve.serving") {
+		t.Fatalf("unknown rows out of place: %v", paths)
+	}
+	if want := []string{"codeflare"}; !reflect.DeepEqual(diffList(m.Comparison.DSCComponents, m.Comparison.CRDComponents), want) {
+		t.Fatalf("dsc components = %v", m.Comparison.DSCComponents)
+	}
+	if got := diffList(m.Comparison.DefaultComponents, m.Comparison.DSCComponents); !reflect.DeepEqual(got, []string{"databaseservice"}) {
+		t.Fatalf("default components not in the DSC = %v", got)
+	}
+
+	plan, err := PlanDSCChange(c, "fix", "", "", false, false)
+	if err != nil || plan.Refusal != "" {
+		t.Fatalf("plan = %+v, %v", plan, err)
+	}
+	res, err := FixDSC(c, types.DSCPlanRequest{Name: "default-dsc", UID: plan.UID, Token: plan.Token})
+	if err != nil || !res.Success {
+		t.Fatalf("fix = %+v, %v", res, err)
+	}
+	stored := comps(f.get(dscV3Path))
+	if _, ok := stored["codeflare"]; ok {
+		t.Fatal("codeflare is still in the DSC")
+	}
+	if _, ok := lookupPath(stored, []string{"kserve", "serving"}); ok {
+		t.Fatal("kserve.serving is still in the DSC")
+	}
+	if _, ok := lookupPath(stored, []string{"kserve", "oauthProxy", "legacy"}); ok {
+		t.Fatal("kserve.oauthProxy.legacy is still in the DSC")
+	}
+	after, _ := GetDSCManager(c)
+	if len(after.Mismatches) != 0 {
+		t.Fatalf("still mismatched: %+v", after.Mismatches)
+	}
+	for _, n := range after.Nodes {
+		if n.Unknown {
+			t.Fatalf("unknown row after the fix: %+v", n)
+		}
+	}
+}
+
+// diffList returns the entries of a that b does not have.
+func diffList(a, b []string) []string {
+	in := map[string]bool{}
+	for _, s := range b {
+		in[s] = true
+	}
+	var out []string
+	for _, s := range a {
+		if !in[s] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// Without a release default nothing is compared with it, and the
+// comparison says so rather than reporting nothing missing.
+func TestDSCManagerComparisonWithoutAReleaseDefault(t *testing.T) {
+	f, c := managerWorld(t, func(dsc map[string]interface{}) {
+		setPath(t, dsc, "spec.components.dashboard.standard", nil)
+	})
+	csv := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0")
+	obj := f.get(csv)
+	setPath(t, obj, "metadata.annotations.alm-examples", "[]")
+	f.put(csv, obj)
+	m, err := GetDSCManager(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmp := m.Comparison
+	if cmp.DefaultsRead || !cmp.SchemaRead || m.DefaultsError == "" || cmp.DefaultsCSV != "" || len(cmp.DefaultComponents) != 0 || len(cmp.DSCComponents) != 16 || len(cmp.CRDComponents) != 16 {
+		t.Fatalf("comparison = %+v (defaults error %q)", cmp, m.DefaultsError)
+	}
+	raw, _ := json.Marshal(cmp)
+	if !strings.Contains(string(raw), `"defaultComponents":[]`) {
+		t.Fatalf("defaultComponents must be an empty list: %s", raw)
+	}
+	for _, mm := range m.Mismatches {
+		if mm.Kind == "unset" {
+			t.Fatalf("an unset value was compared with no release default: %+v", mm)
+		}
+	}
+}
+
 // --- toggle --------------------------------------------------------------------
 
 func TestToggleReplacesOnlyThatFieldAfterADryRun(t *testing.T) {

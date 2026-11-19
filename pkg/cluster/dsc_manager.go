@@ -405,6 +405,75 @@ func (v *dscView) model() *types.DSCManager {
 		out.Nodes = append(out.Nodes, n)
 	}
 	out.Mismatches = v.mismatches()
+	out.Nodes = withUnknownNodes(out.Nodes, out.Mismatches)
+	out.Comparison = v.comparison()
+	return out
+}
+
+// comparison says what the comparison with the release default covered,
+// and which components the CRD, the release default and the DSC list.
+func (v *dscView) comparison() types.DSCComparison {
+	out := types.DSCComparison{
+		DefaultsRead:      v.defaults != nil,
+		SchemaRead:        v.spec != nil,
+		CRDComponents:     dscObjectKeys(schemaProps(schemaChild(v.spec, "components"))),
+		DefaultComponents: dscObjectKeys(v.defaultComponents()),
+		DSCComponents:     dscObjectKeys(v.components()),
+	}
+	if v.defaults != nil && v.op != nil {
+		out.DefaultsCSV = v.op.Name
+	}
+	return out
+}
+
+// dscObjectKeys returns the keys of m, sorted; an empty list (not nil) for a
+// nil map, so the API answers [].
+func dscObjectKeys(m map[string]interface{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// withUnknownNodes adds a row for each field the installed CRD does not
+// define (the "unknown-field" mismatches): under the nearest node above it
+// (named by its path below that node), after that node's other rows; a
+// field no node is above goes last.
+func withUnknownNodes(nodes []types.DSCNode, mismatches []types.DSCMismatch) []types.DSCNode {
+	out := append([]types.DSCNode{}, nodes...)
+	index := map[string]int{}
+	for i, n := range out {
+		index[n.Path] = i
+	}
+	for _, m := range mismatches {
+		if m.Kind != "unknown-field" {
+			continue
+		}
+		u := types.DSCNode{Path: m.Path, Name: m.Path, Unknown: true}
+		parts := strings.Split(m.Path, ".")
+		for i := len(parts) - 1; i >= 1; i-- {
+			p := strings.Join(parts[:i], ".")
+			if pi, ok := index[p]; ok {
+				u.Parent, u.Name, u.Depth = p, strings.Join(parts[i:], "."), out[pi].Depth+1
+				break
+			}
+		}
+		at := len(out)
+		if u.Parent != "" {
+			// After the parent's subtree: the first row past it that is
+			// not below it.
+			at = index[u.Parent] + 1
+			for at < len(out) && strings.HasPrefix(out[at].Path, u.Parent+".") {
+				at++
+			}
+		}
+		out = append(out[:at], append([]types.DSCNode{u}, out[at:]...)...)
+		for i := at; i < len(out); i++ {
+			index[out[i].Path] = i
+		}
+	}
 	return out
 }
 

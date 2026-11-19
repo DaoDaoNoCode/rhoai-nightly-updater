@@ -1396,8 +1396,11 @@ const dscTree = [
  * The DSC manager. overrides maps a path to its value in the DSC (null: not
  * set). Mismatches are worked out as the backend does: a toggle the default
  * sets and the DSC leaves unset, and Managed under a parent that is not.
+ * unknown maps the paths of fields the CRD does not define to their value
+ * in the DSC (a row each, under the nearest node above it); noDefault
+ * leaves the release default out (no DataScienceCluster example in the CSV).
  */
-export function dscManager(overrides = {}) {
+export function dscManager(overrides = {}, { unknown = {}, noDefault = false } = {}) {
   const nodes = dscTree.map(([path, s, def, schemaDefault, allowed, actual, cond]) => {
     const parts = path.split(".");
     const toggle = s !== undefined;
@@ -1407,6 +1410,7 @@ export function dscManager(overrides = {}) {
       actual = "Removed";
       cond = cond && [cond[0], "False", "Removed"];
     }
+    if (noDefault) def = null;
     const n = {
       path, name: parts[parts.length - 1], parent: parts.slice(0, -1).join("."), depth: parts.length - 1, toggle,
       specSet: value !== null && value !== undefined, defaultSet: def !== null && def !== undefined,
@@ -1414,7 +1418,7 @@ export function dscManager(overrides = {}) {
       ...(value ? { spec: value } : {}), ...(def ? { default: def } : {}), ...(actual ? { actual } : {}),
       ...(cond ? { condition: { type: cond[0], status: cond[1], ...(cond[2] ? { reason: cond[2], message: `ManagementState is set to ${cond[2]}` } : {}) } } : {}),
     };
-    if (n.specSet) n.changed = n.spec !== (n.defaultSet ? n.default : schemaDefault || "Removed");
+    if (n.specSet && !noDefault) n.changed = n.spec !== (n.defaultSet ? n.default : schemaDefault || "Removed");
     return n;
   });
   const byPath = Object.fromEntries(nodes.map((n) => [n.path, n]));
@@ -1432,13 +1436,41 @@ export function dscManager(overrides = {}) {
         message: `Managed, but ${parent.path} is ${parent.spec || "not set"}, so the operator deploys nothing for it. Set ${parent.path} to Managed, or set this to Removed.` });
     }
   }
-  return {
+  // Fields the CRD does not define: mismatches last, sorted, and a row each
+  // after the rows of the nearest node above it (pkg/cluster withUnknownNodes).
+  for (const path of Object.keys(unknown).sort()) {
+    mismatches.push({ kind: "unknown-field", path, fixable: true, message: "The installed CRD does not define this field, so the operator never sees it. Fix removes it." });
+    const parts = path.split(".");
+    let parent;
+    for (let i = parts.length - 1; i >= 1 && !parent; i--) parent = byPath[parts.slice(0, i).join(".")];
+    const row = { path, name: parent ? path.slice(parent.path.length + 1) : path, parent: parent?.path ?? "", depth: parent ? parent.depth + 1 : 0, toggle: false, specSet: false, defaultSet: false, unknown: true };
+    let at = nodes.length;
+    if (parent) {
+      at = nodes.indexOf(parent) + 1;
+      while (at < nodes.length && nodes[at].path.startsWith(`${parent.path}.`)) at++;
+    }
+    nodes.splice(at, 0, row);
+  }
+  const components = nodes.filter((n) => n.depth === 0 && !n.unknown).map((n) => n.path);
+  // A component is in the DSC when it or anything below it is set.
+  const inDSC = components.filter((c) => nodes.some((n) => (n.path === c || n.path.startsWith(`${c}.`)) && n.specSet));
+  const byName = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  // The unknown fields' values, for dscPlan's Fix; not part of the answer (not enumerable, so not sent).
+  return Object.defineProperty({
     exists: true, state: "present", name: "default-dsc", uid: "ba54ddbf-ad4a-4257-9ab4-977eb541dc1c", apiVersion: "datasciencecluster.opendatahub.io/v3", storageVersion: "v3",
     dscCount: 1, phase: "Ready", releaseName: "OpenShift AI Self-Managed", releaseVersion: "3.6.0", operatorVersion: "3.6.0",
-    defaultsSource: "alm-examples of the installed CSV rhods-operator.3.6.0",
+    ...(noDefault
+      ? { defaultsError: "The installed operator 3.6.0 ships no DataScienceCluster v3 example in its CSV's alm-examples, so there is no release default to compare with." }
+      : { defaultsSource: "alm-examples of the installed CSV rhods-operator.3.6.0" }),
     conditions: [{ type: "Ready", status: "True" }, { type: "ProvisioningSucceeded", status: "True" }, { type: "ComponentsReady", status: "True" }, { type: "ModulesReady", status: "True" }],
     nodes, mismatches,
-  };
+    comparison: {
+      defaultsRead: !noDefault, schemaRead: true, ...(noDefault ? {} : { defaultsCSV: "rhods-operator.3.6.0" }),
+      crdComponents: [...components].sort(byName),
+      defaultComponents: noDefault ? [] : [...components].sort(byName),
+      dscComponents: [...inDSC, ...Object.keys(unknown).filter((p) => !p.includes("."))].sort(byName),
+    },
+  }, "unknownValues", { value: Object.fromEntries(Object.entries(unknown).map(([p, v]) => [p, typeof v === "string" ? v : JSON.stringify(v)])) });
 }
 
 // The plan's binding (a hash in the real backend); the mock never checks it.
@@ -1470,7 +1502,11 @@ export function dscPlan(m, action, path, to, withParent, keepEnabled = false) {
     return { ...base, changes, ...(takesMaaS ? { blocked: [maasBlock(path)] } : {}) };
   }
   if (action === "fix") {
-    return { ...base, changes: m.mismatches.filter((x) => x.kind === "unset").map((x) => ({ path: x.path, fromSet: false, to: x.default, toSet: true, toggle: true, effect: x.default === "Managed" ? "deploys" : "" })) };
+    return { ...base, changes: [
+      ...m.mismatches.filter((x) => x.kind === "unset").map((x) => ({ path: x.path, fromSet: false, to: x.default, toSet: true, toggle: true, effect: x.default === "Managed" ? "deploys" : "" })),
+      // A removed field, as the backend's diffFields lists it (its value as JSON).
+      ...m.mismatches.filter((x) => x.kind === "unknown-field").map((x) => ({ path: x.path, from: m.unknownValues?.[x.path] ?? "", fromSet: true, toSet: false, toggle: false })),
+    ] };
   }
   // Resets: what the user turned on (Managed or Unmanaged and deployed,
   // off in the release default) is kept with keepEnabled.
