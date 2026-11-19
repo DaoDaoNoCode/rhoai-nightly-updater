@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -1194,10 +1193,6 @@ func refusedResult(p *types.DSCPlan) *types.OperationResponse {
 		Message: fmt.Sprintf("Not changing the DataScienceCluster: %s must not be removed now. Nothing was changed. %s", strings.Join(names, ", "), strings.Join(reasons, " "))}
 }
 
-func recordDSCActivity(c *Client, action, detail string, success bool) {
-	RecordActivity(c, types.ActivityEntry{Timestamp: time.Now().UTC().Format(time.RFC3339), User: getUser(c), Action: action, Detail: detail, Success: success})
-}
-
 // SetDSCManagementState sets one managementState (and, with WithParent,
 // the parents that are not Managed) in the DataScienceCluster, only when
 // it still holds From and the change is the plan the user reviewed (its
@@ -1238,7 +1233,7 @@ func (v *dscView) setManagementState(c *Client, req types.DSCToggleRequest, acti
 		return res
 	}
 	detail := v.name + ": " + changeSummary(p.plan.Changes)
-	recordDSCActivity(c, activity, detail, true)
+	recordActivity(c, activity, detail, true)
 	slog.Info("dsc management state set", "dsc", v.name, "path", req.Path, "to", req.To, "user", getUser(c))
 	msg := "Set " + changeSummary(p.plan.Changes) + "."
 	if len(p.plan.Warnings) > 0 {
@@ -1280,7 +1275,7 @@ func runPlanned(c *Client, req types.DSCPlanRequest, action, activity string) (*
 	if len(p.plan.Kept) > 0 {
 		detail += "; kept " + strings.Join(p.plan.Kept, ", ")
 	}
-	recordDSCActivity(c, activity, detail, true)
+	recordActivity(c, activity, detail, true)
 	slog.Info("dsc changed", "action", action, "dsc", v.name, "user", getUser(c))
 	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Changed %s.%s", changeSummary(p.plan.Changes), keptText(p.plan.Kept)), Logs: []string{detail}}, nil
 }

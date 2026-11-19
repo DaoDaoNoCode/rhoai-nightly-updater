@@ -387,7 +387,7 @@ func applyFixRestartModuleOperator(c *Client, module string) (*types.OperationRe
 	patch, _ := json.Marshal(map[string]interface{}{
 		"metadata": map[string]interface{}{"uid": d.UID, "resourceVersion": d.ResourceVersion},
 		"spec": map[string]interface{}{"template": map[string]interface{}{"metadata": map[string]interface{}{
-			"annotations": map[string]string{restartAnnotation: time.Now().UTC().Format(time.RFC3339)},
+			"annotations": map[string]string{restartAnnotation: nowRFC3339()},
 		}}},
 	})
 	_, _, err = c.patch(namespacedPath("apps/v1", "deployments", d.Namespace, d.Name), patch)
@@ -401,7 +401,7 @@ func applyFixRestartModuleOperator(c *Client, module string) (*types.OperationRe
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Could not restart %s: %v.%s", d.ref(), err, templateHint(err)), Logs: logs, ErrorCode: errorCodeFromK8sErr(err)}, nil
 	}
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "fix-restart-module-operator",
 		Detail:    fmt.Sprintf("restarted %s (module %s)", d.ref(), module),

@@ -353,7 +353,7 @@ func RunMLflowSamples(c *Client, req types.MLflowSamplesRequest, onStep func(Upd
 	activity := fmt.Sprintf("%s %s in %s", req.Action, strings.Join(req.Samples, ","), req.Project)
 	fail := func(step, msg, code string) (*types.OperationResponse, error) {
 		emit(UpdateStepEvent{Step: step, Status: "failed", Message: msg, ErrorCode: code})
-		recordSamplesActivity(c, "mlflow-samples", activity, false)
+		recordActivity(c, "mlflow-samples", activity, false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 	if problem := ValidateMLflowSamplesRequest(req); problem != "" {
@@ -425,10 +425,10 @@ func RunMLflowSamples(c *Client, req types.MLflowSamplesRequest, onStep func(Upd
 	}
 	slog.Info("mlflow samples", "action", req.Action, "samples", req.Samples, "project", req.Project, "failed", failed, "user", getUser(c))
 	if len(failed) > 0 {
-		recordSamplesActivity(c, "mlflow-samples", activity+" (failed: "+strings.Join(failed, ", ")+")", false)
+		recordActivity(c, "mlflow-samples", activity+" (failed: "+strings.Join(failed, ", ")+")", false)
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Failed: %s. See the steps for the reason.", strings.Join(failed, ", ")), Logs: logs, ErrorCode: code}, nil
 	}
-	recordSamplesActivity(c, "mlflow-samples", activity, true)
+	recordActivity(c, "mlflow-samples", activity, true)
 	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Samples %s in project '%s'.", verbPast(req.Action), req.Project), Logs: logs}, nil
 }
 
@@ -444,16 +444,6 @@ func verbPast(action string) string {
 		return "started"
 	}
 	return action
-}
-
-func recordSamplesActivity(c *Client, action, detail string, success bool) {
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		User:      getUser(c),
-		Action:    action,
-		Detail:    detail,
-		Success:   success,
-	})
 }
 
 // httpsBase is u without a trailing slash when it is an https address, else "".

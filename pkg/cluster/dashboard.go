@@ -376,7 +376,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 	}
 	if len(found) == 0 {
 		RecordActivity(c, types.ActivityEntry{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			Timestamp: nowRFC3339(),
 			User:      getUser(c),
 			Action:    "deploy-pr",
 			Detail:    fmt.Sprintf("PR #%d (no images found)", prNumber),
@@ -439,7 +439,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 		_, _, err = c.strategicPatch(deployPath, patchData)
 		if err != nil {
 			RecordActivity(c, types.ActivityEntry{
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				Timestamp: nowRFC3339(),
 				User:      getUser(c),
 				Action:    "deploy-pr",
 				Detail:    fmt.Sprintf("PR #%d (patch failed: %v)", prNumber, err),
@@ -479,7 +479,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 
 	sort.Strings(failedModules)
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "deploy-pr",
 		Detail:    fmt.Sprintf("PR #%d (%d/%d containers patched; failed modules: %s)", prNumber, len(patched), targets, strings.Join(failedModules, ", ")),
@@ -666,7 +666,7 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	slog.Info("dashboard reverted", "containers", totalReverted, "user", getUser(c))
 
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "revert-dashboard",
 		Detail:    fmt.Sprintf("%d containers restored; failed modules: %s", totalReverted, strings.Join(failedModules, ", ")),

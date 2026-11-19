@@ -1031,7 +1031,7 @@ var lookupTargetBundle = func(c *Client, image string) (string, error) {
 
 func recordUpdateActivity(c *Client, image string, success bool, reason string) {
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "update",
 		Detail:    image,
@@ -1609,7 +1609,7 @@ func rhoaiCSVExists(c *Client) (bool, error) {
 
 func recordRefreshActivity(c *Client, csvName string, success bool, reason string) {
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "refresh",
 		Detail:    csvName,
@@ -1626,7 +1626,7 @@ func recordReinstallActivity(c *Client, targetType, image string, success bool, 
 		detail = fmt.Sprintf("to %s %s", targetType, image)
 	}
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "reinstall",
 		Detail:    detail,
@@ -2102,7 +2102,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 	}
 
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "create-pull-secret",
 		Detail:    "",

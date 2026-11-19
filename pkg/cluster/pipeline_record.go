@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"time"
 )
 
 // Which pipeline servers are the tool's, for the writes that hand them the
@@ -99,7 +98,7 @@ func recordPipelineServer(c *Client, meta objectMeta) error {
 	if err != nil {
 		return err
 	}
-	rec[meta.Namespace+"/"+meta.Name] = recordedPipelineServer{UID: meta.UID, At: time.Now().UTC().Format(time.RFC3339), By: getUser(c)}
+	rec[meta.Namespace+"/"+meta.Name] = recordedPipelineServer{UID: meta.UID, At: nowRFC3339(), By: getUser(c)}
 	return writePipelineRecord(c, rec)
 }
 

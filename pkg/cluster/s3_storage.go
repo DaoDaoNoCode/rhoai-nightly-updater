@@ -1021,16 +1021,6 @@ func restrictedSecurityContext() map[string]interface{} {
 	}
 }
 
-func recordS3Activity(c *Client, action, detail string, success bool) {
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		User:      getUser(c),
-		Action:    action,
-		Detail:    detail,
-		Success:   success,
-	})
-}
-
 // s3Retry names the action that retries a storage setup that stopped: the
 // Storage card's Set up (or Repair), or Migrate storage, whose first step
 // is this setup and which continues from where it stopped. A message must
@@ -1079,16 +1069,16 @@ func legacyStorageSetupBlock(l *legacyStorage) string {
 func SetupS3Storage(c *Client) (*types.OperationResponse, error) {
 	legacy, err := readLegacyStorage(c)
 	if err != nil {
-		recordS3Activity(c, "setup-minio", fmt.Sprintf("namespace=%s (earlier storage check failed)", s3Namespace), false)
+		recordActivity(c, "setup-minio", fmt.Sprintf("namespace=%s (earlier storage check failed)", s3Namespace), false)
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot check for storage from an earlier version in namespace %s; nothing was changed: %v.%s", legacyNamespace, err, templateHint(err)), ErrorCode: errorCodeFromK8sErr(err)}, nil
 	}
 	if reason := legacyStorageSetupBlock(legacy); reason != "" {
-		recordS3Activity(c, "setup-minio", fmt.Sprintf("namespace=%s (earlier storage present)", s3Namespace), false)
+		recordActivity(c, "setup-minio", fmt.Sprintf("namespace=%s (earlier storage present)", s3Namespace), false)
 		return &types.OperationResponse{Success: false, Message: reason + " Nothing was changed.", ErrorCode: "prerequisites"}, nil
 	}
 	keys, err := s3Credentials(c)
 	if err != nil {
-		recordS3Activity(c, "setup-minio", fmt.Sprintf("namespace=%s (credentials)", s3Namespace), false)
+		recordActivity(c, "setup-minio", fmt.Sprintf("namespace=%s (credentials)", s3Namespace), false)
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot determine the S3 credentials; nothing was changed: %v.%s", err, templateHint(err)), ErrorCode: errorCodeFromK8sErr(err)}, nil
 	}
 	return setupS3Storage(c, keys, &opLog{}, s3RetrySetup)
@@ -1121,7 +1111,7 @@ func (l *opLog) add(line string) {
 func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.OperationResponse, error) {
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
 		slog.Warn("s3 storage setup failed", "reason", activity, "user", getUser(c))
-		recordS3Activity(c, "setup-minio", fmt.Sprintf("namespace=%s (%s)", s3Namespace, activity), false)
+		recordActivity(c, "setup-minio", fmt.Sprintf("namespace=%s (%s)", s3Namespace, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: log.lines, ErrorCode: code}, nil
 	}
 	for _, retired := range []string{"MINIO_IMAGE", "MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"} {
@@ -1321,7 +1311,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 	log.add(fmt.Sprintf("OK: Bucket %s created", s3Bucket))
 
 	slog.Info("s3 storage setup complete", "user", getUser(c))
-	recordS3Activity(c, "setup-minio", fmt.Sprintf("namespace=%s bucket=%s", s3Namespace, s3Bucket), true)
+	recordActivity(c, "setup-minio", fmt.Sprintf("namespace=%s bucket=%s", s3Namespace, s3Bucket), true)
 	return &types.OperationResponse{
 		Success: true,
 		Message: fmt.Sprintf("S3 storage (SeaweedFS) deployed with bucket %s; pipeline servers reach it at %s. Sign in to the admin UI as %s; the password (the S3 secret key) and the S3 keys are in Secret %s in namespace %s.", s3Bucket, s3Endpoint(), s3AdminUser, s3Secret, s3Namespace),
@@ -1595,7 +1585,7 @@ func storageUsers(dspas []dspaInfo, addresses ...storageAddress) (live, deleting
 func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		recordS3Activity(c, "teardown-minio", fmt.Sprintf("%s (%s)", s3Namespace, activity), false)
+		recordActivity(c, "teardown-minio", fmt.Sprintf("%s (%s)", s3Namespace, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
@@ -1693,7 +1683,7 @@ func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.Operatio
 	}
 	nsHint := nsNote + s3KeptNamespaceHint(keptNamespaces)
 	if len(d.failed) > 0 {
-		recordS3Activity(c, "teardown-minio", fmt.Sprintf("%s (failed: %s)", s3Namespace, strings.Join(d.failed, "; ")), false)
+		recordActivity(c, "teardown-minio", fmt.Sprintf("%s (failed: %s)", s3Namespace, strings.Join(d.failed, "; ")), false)
 		code := "partial_failure"
 		if len(d.deleted) == 0 {
 			code = "delete_failed"
@@ -1704,11 +1694,11 @@ func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.Operatio
 		}, nil
 	}
 	if len(d.deleted) == 0 && len(d.pvcUIDs) == 0 {
-		recordS3Activity(c, "teardown-minio", s3Namespace+" (nothing to remove)", true)
+		recordActivity(c, "teardown-minio", s3Namespace+" (nothing to remove)", true)
 		return &types.OperationResponse{Success: true, Message: "No S3 storage objects created by this tool remain." + keptNote + nsHint, Logs: logs}, nil
 	}
 	slog.Info("s3 storage teardown", "user", getUser(c), "deleted", strings.Join(d.deleted, ", "))
-	recordS3Activity(c, "teardown-minio", s3Namespace+" (objects deleted, namespace kept)", true)
+	recordActivity(c, "teardown-minio", s3Namespace+" (objects deleted, namespace kept)", true)
 
 	if len(d.pvcUIDs) > 0 {
 		remaining, err := waitPVCsGone(c, d.pvcUIDs)

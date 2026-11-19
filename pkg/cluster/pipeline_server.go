@@ -359,16 +359,6 @@ func pipelineServerState(d dspaInfo, dashboardURL string) types.ResourceState {
 	return state
 }
 
-func recordPipelineActivity(c *Client, action, detail string, success bool) {
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		User:      getUser(c),
-		Action:    action,
-		Detail:    detail,
-		Success:   success,
-	})
-}
-
 // SetupPipelineServer creates a pipeline server (DSPA) in the given project.
 func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, error) {
 	return setupPipelineServer(c, project, false)
@@ -391,7 +381,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 		op = "recreate-pipeline-server"
 	}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		recordPipelineActivity(c, op, fmt.Sprintf("project=%s (%s)", project, activity), false)
+		recordActivity(c, op, fmt.Sprintf("project=%s (%s)", project, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
@@ -596,7 +586,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 			logs = append(logs, fmt.Sprintf("Making pipeline server %s the owner of secret %s...", dspaName, s.name))
 			setDSPAOwner(s.obj, dspaName, dspaMeta.UID)
 			if _, err := writeProjectSecret(s, projectSecretPath(project, s.name), withToolFieldManager(namespacedPath("v1", "secrets", project, "")), false); err != nil {
-				recordPipelineActivity(c, "setup-pipeline-server", fmt.Sprintf("project=%s (%s owner not set: %v)", project, s.what, err), false)
+				recordActivity(c, "setup-pipeline-server", fmt.Sprintf("project=%s (%s owner not set: %v)", project, s.what, err), false)
 				return &types.OperationResponse{
 					Success: false, ErrorCode: "partial_failure", Logs: logs,
 					Message: fmt.Sprintf("Pipeline server created, but secret %s could not be linked to it: %v. Deleting the pipeline server in the RHOAI dashboard would leave the secret behind; Delete pipeline server in this tool removes it too.", s.name, err),
@@ -608,7 +598,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	logs = append(logs, "The pipeline server will take 1-3 minutes to become ready.")
 
 	slog.Info("pipeline server setup", "project", project, "user", getUser(c))
-	recordPipelineActivity(c, "setup-pipeline-server", fmt.Sprintf("project=%s dspa=%s", project, dspaName), true)
+	recordActivity(c, "setup-pipeline-server", fmt.Sprintf("project=%s dspa=%s", project, dspaName), true)
 
 	return &types.OperationResponse{
 		Success: true, Message: "Pipeline server created. It will take 1-3 minutes to become ready." + recordNote,
@@ -629,7 +619,7 @@ func replacePipelineServer(c *Client, project string, old *dspaInfo, logs []stri
 	}
 	logs = append(logs, down.Logs...)
 	if !down.Success {
-		recordPipelineActivity(c, "recreate-pipeline-server", fmt.Sprintf("project=%s (teardown of %s: %s)", project, old.Meta.Name, down.ErrorCode), false)
+		recordActivity(c, "recreate-pipeline-server", fmt.Sprintf("project=%s (teardown of %s: %s)", project, old.Meta.Name, down.ErrorCode), false)
 		msg := down.Message
 		if !strings.Contains(msg, "Nothing was deleted") {
 			msg += fmt.Sprintf(" Pipeline server %s was not created; once %s is gone, use Set up.", dspaName, old.Meta.Name)
@@ -643,10 +633,10 @@ func replacePipelineServer(c *Client, project string, old *dspaInfo, logs []stri
 	up.Logs = append(logs, up.Logs...)
 	if !up.Success {
 		up.Message = fmt.Sprintf("Pipeline server %s was deleted, but %s could not be set up: %s Use Set up to try again.", old.Meta.Name, dspaName, up.Message)
-		recordPipelineActivity(c, "recreate-pipeline-server", fmt.Sprintf("project=%s (setup failed)", project), false)
+		recordActivity(c, "recreate-pipeline-server", fmt.Sprintf("project=%s (setup failed)", project), false)
 		return up, nil
 	}
-	recordPipelineActivity(c, "recreate-pipeline-server", fmt.Sprintf("project=%s %s -> %s", project, old.Meta.Name, dspaName), true)
+	recordActivity(c, "recreate-pipeline-server", fmt.Sprintf("project=%s %s -> %s", project, old.Meta.Name, dspaName), true)
 	up.Message = fmt.Sprintf("Pipeline server %s replaced by %s, which workbench pipelines use. It will take 1-3 minutes to become ready.", old.Meta.Name, dspaName)
 	return up, nil
 }
@@ -682,7 +672,7 @@ func dspoRunning(c *Client) (bool, error) {
 func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		recordPipelineActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (%s)", project, activity), false)
+		recordActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (%s)", project, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
@@ -754,7 +744,7 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 
 	gone, waitErr := waitForDeletion(c, dspaPath, PipelineServerDeleteTimeout, PipelineServerDeletePoll)
 	if waitErr != nil {
-		recordPipelineActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (cannot confirm deletion: %v)", project, waitErr), false)
+		recordActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (cannot confirm deletion: %v)", project, waitErr), false)
 		return &types.OperationResponse{
 			Success:   false,
 			Message:   fmt.Sprintf("Deletion of pipeline server %s was requested, but whether it is gone cannot be checked: %v.%s", target.Meta.Name, waitErr, secretNote),
@@ -763,7 +753,7 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 		}, nil
 	}
 	if !gone {
-		recordPipelineActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (still terminating)", project), false)
+		recordActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (still terminating)", project), false)
 		return &types.OperationResponse{
 			Success:   false,
 			Message:   fmt.Sprintf("Deletion of pipeline server %s was requested, but it is still terminating after %s (waiting for the data-science-pipelines operator to finish cleanup). The status shows it until it is gone.%s", target.Meta.Name, PipelineServerDeleteTimeout, secretNote),
@@ -778,7 +768,7 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 	}
 
 	slog.Info("pipeline server teardown", "project", project, "dspa", target.Meta.Name, "user", getUser(c))
-	recordPipelineActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s dspa=%s", project, target.Meta.Name), secretNote == "")
+	recordActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s dspa=%s", project, target.Meta.Name), secretNote == "")
 
 	msg := fmt.Sprintf("Pipeline server removed from %s.", project)
 	if !target.ExternalDB {

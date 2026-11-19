@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -562,6 +561,6 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 	if _, _, err := c.patch(path, patch); err != nil {
 		return nil, err
 	}
-	RecordActivity(c, types.ActivityEntry{Timestamp: time.Now().UTC().Format(time.RFC3339), User: getUser(c), Action: "repair-dsc", Detail: name + ": " + detail, Success: true})
+	RecordActivity(c, types.ActivityEntry{Timestamp: nowRFC3339(), User: getUser(c), Action: "repair-dsc", Detail: name + ": " + detail, Success: true})
 	return &types.OperationResponse{Success: true, Message: detail, Logs: []string{detail}}, nil
 }

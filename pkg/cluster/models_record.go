@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"time"
 )
 
 // Which catalog-named models are this tool's.
@@ -118,7 +117,7 @@ func recordModel(c *Client, meta objectMeta) error {
 	if err != nil {
 		return err
 	}
-	rec[modelRecordKey(meta.Namespace, meta.Name)] = recordedModel{UID: meta.UID, At: time.Now().UTC().Format(time.RFC3339), By: getUser(c)}
+	rec[modelRecordKey(meta.Namespace, meta.Name)] = recordedModel{UID: meta.UID, At: nowRFC3339(), By: getUser(c)}
 	return writeModelsRecord(c, rec)
 }
 

@@ -721,16 +721,6 @@ func projectNamespace(c *Client, project string) (map[string]string, string, str
 	return ns.Metadata.Labels, "", ""
 }
 
-func recordModelsActivity(c *Client, action, detail string, success bool) {
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		User:      getUser(c),
-		Action:    action,
-		Detail:    detail,
-		Success:   success,
-	})
-}
-
 // modelsRun is one streamed Models operation.
 type modelsRun struct {
 	c        *Client
@@ -765,7 +755,7 @@ func (m *modelsRun) fail(id, msg, code, activity string) (*types.OperationRespon
 	}
 	m.logs = append(m.logs, msg)
 	slog.Warn("models operation stopped", "step", id, "reason", activity, "user", getUser(m.c))
-	recordModelsActivity(m.c, m.activity, fmt.Sprintf("%s (%s)", m.target, activity), false)
+	recordActivity(m.c, m.activity, fmt.Sprintf("%s (%s)", m.target, activity), false)
 	return &types.OperationResponse{Success: false, Message: msg, Logs: m.logs, ErrorCode: code}, nil
 }
 
@@ -912,7 +902,7 @@ func (m *modelsRun) callable(project, name string, rec modelsRecord) (*types.Ope
 	default:
 		return m.fail("callable", callFailureWords("The model is set up", check), "not_callable", "model not callable ("+check.Result+")")
 	}
-	recordModelsActivity(m.c, m.activity, m.target, true)
+	recordActivity(m.c, m.activity, m.target, true)
 	return &types.OperationResponse{Success: true, Message: check.Message, Logs: m.logs}, nil
 }
 
@@ -962,7 +952,7 @@ func (m *modelsRun) allow(project string) (*types.OperationResponse, error) {
 	done := fmt.Sprintf("The inference gateway now allows %s; models there attach to it. Projects it allows: %s.", project, strings.Join(written.names, ", "))
 	m.step("gateway", "success", done)
 	slog.Info("models allow", "project", project, "user", getUser(c))
-	recordModelsActivity(c, m.activity, m.target, true)
+	recordActivity(c, m.activity, m.target, true)
 	return &types.OperationResponse{Success: true, Message: done, Logs: m.logs}, nil
 }
 
@@ -1244,7 +1234,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 		}
 	}
 	slog.Info("models setup", "target", m.target, "user", getUser(c))
-	recordModelsActivity(c, "setup-models", m.target, true)
+	recordActivity(c, "setup-models", m.target, true)
 	return &types.OperationResponse{Success: true, Message: strings.Join(summary, " "), Logs: m.logs}, nil
 }
 
@@ -1418,7 +1408,7 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 		detail += " model=" + strings.Join(names, ",")
 	}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		recordModelsActivity(c, "teardown-model", fmt.Sprintf("%s (%s)", detail, activity), false)
+		recordActivity(c, "teardown-model", fmt.Sprintf("%s (%s)", detail, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 	var entries []catalogModel
@@ -1491,7 +1481,7 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 	if len(deleted) == 0 && len(kept) > 0 {
 		return fail(fmt.Sprintf("The model %s in %s was not created by this tool, so it was not deleted.", strings.Join(kept, ", "), project), "not_managed", "not managed")
 	}
-	recordModelsActivity(c, "teardown-model", detail, true)
+	recordActivity(c, "teardown-model", detail, true)
 	if len(deleted) == 0 {
 		what := "No model of this tool"
 		if len(names) > 0 {

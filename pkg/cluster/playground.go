@@ -1119,7 +1119,7 @@ func (p *playgroundRun) fail(id, msg, code, activity string) (*types.OperationRe
 
 func (p *playgroundRun) record(detail string, success bool) {
 	RecordActivity(p.c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(p.c),
 		Action:    p.action + "-playground",
 		Detail:    detail,

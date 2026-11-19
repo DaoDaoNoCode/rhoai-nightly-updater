@@ -148,7 +148,7 @@ func lookupNightlyStatus(ctx context.Context, basicAuth, key string, installed *
 		Tag:    installed.Tag,
 		Digest: digest,
 	}
-	status.CheckedAt = time.Now().UTC().Format(time.RFC3339)
+	status.CheckedAt = nowRFC3339()
 	if installed.Digest != "" {
 		update := installed.Digest != digest
 		status.UpdateAvailable = &update

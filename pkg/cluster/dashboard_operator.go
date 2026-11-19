@@ -1042,7 +1042,7 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 	if err != nil {
 		return fail(err.Error()+". Click Revert to default to restore operator management, then deploy again.", "prerequisites")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	user := getUser(c)
 	newSession := session == nil
 	if newSession {
@@ -1352,7 +1352,7 @@ func revertDashboardOperatorTo(c *Client) (*types.OperationResponse, int) {
 		if len(failures) > 0 {
 			keep = session
 		}
-		now := time.Now().UTC().Format(time.RFC3339)
+		now := nowRFC3339()
 		detail := fmt.Sprintf("Resumed dashboard-operator (%d replicas)", replicas)
 		action := &types.DashboardDevAction{Action: "revert", By: getUser(c), At: now, Detail: detail}
 		if err := patchDashboardOperator(c, operator, replicas, keep, action); err != nil {

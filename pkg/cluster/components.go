@@ -735,7 +735,7 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 
 	// Step 3: Record activity
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: nowRFC3339(),
 		User:      getUser(c),
 		Action:    "create-dsc",
 		Detail:    "default-dsc with default components",

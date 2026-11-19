@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -192,6 +193,24 @@ func RecordActivity(c *Client, entry types.ActivityEntry) {
 	ctx, cancel := bookkeepingContext(c, activityWriteTimeout)
 	defer cancel()
 	recordActivityWithClient(c.WithContext(ctx), entry)
+}
+
+// recordActivity records an action of the signed-in user, stamped now.
+func recordActivity(c *Client, action, detail string, success bool) {
+	RecordActivity(c, types.ActivityEntry{
+		Timestamp: nowRFC3339(),
+		User:      getUser(c),
+		Action:    action,
+		Detail:    detail,
+		Success:   success,
+	})
+}
+
+// nowRFC3339 is the wall-clock time in UTC as RFC 3339, the form of every
+// timestamp this package records (activity entries, records, annotations).
+// Recorded times come from the time package, not clk (see clock.go).
+func nowRFC3339() string {
+	return time.Now().UTC().Format(time.RFC3339)
 }
 
 func recordActivityWithClient(c *Client, entry types.ActivityEntry) {

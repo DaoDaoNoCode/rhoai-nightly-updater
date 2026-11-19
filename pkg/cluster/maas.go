@@ -224,7 +224,7 @@ func readMaaSRecord(c *Client) (maasRecord, error) {
 
 // writeMaaSRecord applies the record (operations hold the cluster lock).
 func writeMaaSRecord(c *Client, rec maasRecord) error {
-	rec.At, rec.By = time.Now().UTC().Format(time.RFC3339), getUser(c)
+	rec.At, rec.By = nowRFC3339(), getUser(c)
 	sort.Strings(rec.Published)
 	data, err := json.Marshal(rec)
 	if err != nil {

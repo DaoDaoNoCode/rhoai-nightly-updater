@@ -415,7 +415,7 @@ func (m *migrateRun) fail(id, msg, code, activity string) (*types.OperationRespo
 	}
 	m.logs = append(m.logs, msg)
 	slog.Warn("s3 storage migration stopped", "step", id, "reason", activity, "user", getUser(m.c))
-	recordS3Activity(m.c, "migrate-storage", fmt.Sprintf("%s (%s)", legacyNamespace, activity), false)
+	recordActivity(m.c, "migrate-storage", fmt.Sprintf("%s (%s)", legacyNamespace, activity), false)
 	return &types.OperationResponse{Success: false, Message: msg, Logs: m.logs, ErrorCode: code}, nil
 }
 
@@ -453,7 +453,7 @@ func MigrateS3Storage(c *Client, opts MigrateOptions, onStep func(UpdateStepEven
 	}
 	if legacy == nil {
 		m.step("check", "success", fmt.Sprintf("No storage from an earlier version in namespace %s.", legacyNamespace))
-		recordS3Activity(c, "migrate-storage", legacyNamespace+" (nothing to do)", true)
+		recordActivity(c, "migrate-storage", legacyNamespace+" (nothing to do)", true)
 		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Nothing to do: there is no storage from an earlier version in namespace %s.", legacyNamespace), Logs: m.logs}, nil
 	}
 	if legacy.terminating {
@@ -586,7 +586,7 @@ func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo, confirmed 
 	}
 	msg += fmt.Sprintf(" The old storage in namespace %s is kept: delete it later from the S3 storage's menu, once nothing else uses it.", legacyNamespace)
 	slog.Info("s3 storage migrated", "user", getUser(m.c), "objects", result.checked())
-	recordS3Activity(m.c, "migrate-storage", fmt.Sprintf("%s -> %s (%s, %d pipeline servers)", legacyNamespace, s3Namespace, result.summary(), len(repointed)), true)
+	recordActivity(m.c, "migrate-storage", fmt.Sprintf("%s -> %s (%s, %d pipeline servers)", legacyNamespace, s3Namespace, result.summary(), len(repointed)), true)
 	return &types.OperationResponse{Success: true, Message: msg, Logs: m.logs}, nil
 }
 
@@ -1496,7 +1496,7 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 	}
 	msg += " " + nsMsg
 	slog.Info("old s3 storage removed", "user", getUser(c), "deleted", strings.Join(d.deleted, ", "), "resumed", resume)
-	recordS3Activity(c, "migrate-storage", fmt.Sprintf("%s removed (%s)", legacyNamespace, strings.TrimSuffix(nsMsg, ".")), true)
+	recordActivity(c, "migrate-storage", fmt.Sprintf("%s removed (%s)", legacyNamespace, strings.TrimSuffix(nsMsg, ".")), true)
 	return &types.OperationResponse{Success: true, Message: strings.TrimSpace(msg), Logs: m.logs}, nil
 }
 

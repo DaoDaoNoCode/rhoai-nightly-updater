@@ -165,7 +165,7 @@ func readPrereqRecord(c *Client) (prereqRecord, error) {
 }
 
 func writePrereqRecord(c *Client, rec prereqRecord) error {
-	rec.At, rec.By = time.Now().UTC().Format(time.RFC3339), getUser(c)
+	rec.At, rec.By = nowRFC3339(), getUser(c)
 	data, err := json.Marshal(rec)
 	if err != nil {
 		return err
