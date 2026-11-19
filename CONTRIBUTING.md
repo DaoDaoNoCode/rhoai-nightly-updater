@@ -57,7 +57,7 @@ Open **http://127.0.0.1:9000** in your browser.
 
 ### Frontend Development
 
-**Changing frontend dependencies:** after editing `frontend/package.json`, run `make frontend-lock`. It updates `package-lock.json` with the npm of CI's pinned `node:22-alpine` image. A newer local npm (11) leaves out optional peer entries that npm 10 expects, and CI's `npm ci` then refuses the lock as out of sync.
+**Changing frontend dependencies:** after editing `frontend/package.json`, run `make frontend-lock`. It updates `package-lock.json` with the npm of CI's pinned `node:22-alpine` image. A newer local npm (11) leaves out optional peer entries that npm 10 expects, and CI's `npm ci` then refuses the lock as out of sync. Renovate's merge requests: [Dependency updates](#dependency-updates).
 
 The frontend uses:
 
@@ -270,7 +270,8 @@ GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release t
 - **main**: `build-main` builds the image to a tarball; `publish-main` pushes it as the write-once `:$CI_COMMIT_SHORT_SHA` (8 characters) and as `:main`, the latter only while the commit is still the tip of `main`. `:main` is always the pipeline's own image. An existing commit tag is kept only when it is that same image, or the release image of the same commit (a tag pipeline that published first: its `:vX.Y.Z` has the same digest); anything else (another commit, an earlier build, a workstation push) stops the job before `:main` moves. Delete such a tag in Quay after checking it, then retry the job. It never touches `:latest`.
 - **Other branches**: the manual `build-branch` job builds the image. It pushes it as `$BRANCH_IMAGE:$CI_COMMIT_REF_SLUG` only when the project has the variables `BRANCH_IMAGE`, `QUAY_BRANCH_USER` and `QUAY_BRANCH_TOKEN` (below); without them it builds and pushes nothing. It never uses `QUAY_USER`/`QUAY_TOKEN`.
 - **Release tags**: `release-build` builds the image (`VERSION=<tag>`) to a tarball; `release-installer` generates `install.sh`; `release-publish` pushes `:vX.Y.Z` and moves `:vN` and `:latest` (every tag-writing job, main or release, holds the one resource group `publish-latest`); `release-notes` creates the GitLab Release. `promote-latest` is manual.
-- The registry comes from the `IMAGE` variable (a project CI/CD variable overrides the default) with `QUAY_USER`/`QUAY_TOKEN` as its credentials. Only the crane jobs (`publish-main`, `release-publish`, `promote-latest`) read them, and those run only on `main` and on release tags. Kaniko never gets them: the build's `RUN` steps (`npm ci` with its packages' install scripts, `go mod download`) could read kaniko's registry login, so `build-main` and `release-build` build a tarball with no registry login and the crane job pushes it.
+- The registry comes from the `IMAGE` variable (a project CI/CD variable overrides the default) with `QUAY_USER`/`QUAY_TOKEN` as its credentials. Only the crane jobs (`publish-main`, `release-publish`, `promote-latest`) read them, and those run only on `main` and on release tags. The image jobs never log in with them: `build-main` and `release-build` build a tarball with no registry login (except the Dependency Proxy, when `DOCKER_HUB` points at it) and the crane job pushes it.
+- The image jobs build with buildah (`scripts/ci-build-image.sh`; `BUILDAH_IMAGE` pins `quay.io/buildah/stable` by digest): chroot isolation, vfs storage, `linux/amd64`, Docker image format, no layer cache. The Containerfile's `RUN` steps (`npm ci` with its packages' install scripts, `go mod download`) run chrooted with buildah's default capabilities: they see neither the job's registry logins nor the environments of the job's processes. buildah's `RUN` needs mounts in a user namespace, which Docker's default seccomp profile refuses; GitLab.com's hosted `saas-linux-*` runners (the untagged default) allow them (they run jobs privileged, one ephemeral VM per job). On a runner with Docker's default profile the build stops at the first `RUN` with `unshare(CLONE_NEWUSER): Operation not permitted`; such a runner needs `security_opt` `seccomp=unconfined` plus its host's mandatory access control exemption in its configuration, not privileged mode (tested with Podman under SELinux: `label=disable`; under AppArmor presumably `apparmor=unconfined`, not tested). kaniko, used before 4.0.0, ran without that but is archived upstream.
 
 #### GitLab and Quay settings
 
@@ -279,6 +280,7 @@ The image tags are only as safe as the credentials that write them. Set these by
 | Where | Setting | Why |
 |---|---|---|
 | GitLab, Settings > CI/CD > Variables | `QUAY_USER` and `QUAY_TOKEN`: **Protect variable** and **Mask variable** on (Visibility: Masked) | Protected variables reach only pipelines of protected branches and tags, so a pipeline of any other branch (whoever can push one can change `.gitlab-ci.yml`) cannot read the token that pushes `:main`, `:latest` and the release tags |
+| GitLab, Settings > CI/CD > Variables | `QUAY_USER` and `QUAY_TOKEN`: **Environment scope** `quay-publish` (and `RENOVATE_TOKEN`, `GITHUB_COM_TOKEN`: `renovate`) | Only the jobs that declare that environment (the crane jobs: `publish-main`, `release-publish`, `promote-latest`; the `renovate` job) receive the tokens; the test jobs, whose `npm ci` runs packages' install scripts, do not. After setting it, check that the next `publish-main` still logs in |
 | GitLab, Settings > Repository > Protected branches | `main` protected (allowed to push and merge: Maintainers) | `publish-main` runs on every `main` pipeline with the push token |
 | GitLab, Settings > Repository > Protected tags | `v*`: allowed to create **Maintainers** only | A release tag pipeline gets the protected variables and publishes `:vX.Y.Z`, `:vN` and `:latest`; without the protection anyone who can push a tag could publish a release |
 | Quay, the repository's robot accounts | `QUAY_USER`/`QUAY_TOKEN` a robot account with **Write** on the `IMAGE` repository only (not the user's own password or an organisation-wide token) | Limits what a leaked token can overwrite |
@@ -288,6 +290,32 @@ The image tags are only as safe as the credentials that write them. Set these by
 GitHub Actions (`.github/workflows/ci.yml`) runs the same test-stage checks on pushes to `main` and on pull requests; `release.yml` runs them on release tags and creates the GitHub Release. Nothing is published to a registry from GitHub.
 
 Teammates install releases, so a broken `main` only reaches people who test `:main` on purpose.
+
+### Dependency updates
+
+`renovate.json5` configures [Renovate](https://docs.renovatebot.com/): merge requests every Monday before 6am (New York time) for Go modules (`go.mod`'s toolchain line moves, its `go` line stays), npm (`frontend/`), the container images of the Containerfile and of `.gitlab-ci.yml`'s `*_IMAGE` variables (tag and digest; digest-only references get digest updates), and the GitHub Actions (by commit SHA). Minor and patch updates are grouped (Go modules, npm dependencies, container image digests, GitHub Actions); the Go toolchain (go.mod, the golang images, the workflows' `go-version`) and golangci-lint (image and workflow version) each move in one merge request; major updates come one by one. Nothing is merged automatically; every merge request runs the normal pipeline. npm versions wait 3 days before a merge request. Labels: `dependencies`, plus `go`, `frontend` or `ci`.
+
+**The frontend lock.** Renovate updates `frontend/package-lock.json` with npm 10 (`constraints` in `renovate.json5`), the npm major of CI's `node:22-alpine` image, which is what `make frontend-lock` uses. If CI's `npm ci` still refuses a Renovate lock, check out the branch, run `make frontend-lock` and push. (Renovate's `postUpgradeTasks` could run that npm command itself, but only on a self-hosted Renovate whose admin allows the command, never on the Mend app; the version constraint covers both.) A Node major update (for example `node:24-alpine`) brings another npm: change the constraint in the same merge request.
+
+Not covered: the images the backend deploys on clusters (`pkg/cluster/*.go` constants such as SeaweedFS and rclone), Helm and shellcheck versions with their SHA-256s, and the chart's example `ose-cli` image (its tag follows the cluster's OCP version). Update those by hand.
+
+Renovate needs a host. Pick one:
+
+| | Mend Renovate app | Scheduled self-hosted job (`renovate` in `.gitlab-ci.yml`) |
+|---|---|---|
+| Setup | The hosted app for GitLab.com, through the [Mend Developer Platform](https://developer.mend.io) ([Renovate: Hosted GitLab.com App](https://docs.renovatebot.com/getting-started/installing-onboarding/#hosted-gitlabcom-app)). It installs on a **group** only, not a single project: someone with that right on the group (and the organisation's approval for a third-party app with write access) installs it and selects this project | A bot token, two variables and a pipeline schedule (below), by a Maintainer of this project |
+| Runs as | Mend's bot, on Mend's infrastructure | This project's pipeline, with this project's bot token |
+| `postUpgradeTasks` | not available | possible (not used) |
+| Note | Leave `RENOVATE_TOKEN` unset, so the `renovate` job stays inert: never run both | Nothing outside this project |
+
+The self-hosted job, step by step (a Maintainer):
+
+1. **Bot token.** Settings > Access tokens: a project access token, role **Developer** (it pushes `renovate/*` branches and opens merge requests; it cannot push to the protected `main`), scopes `api` and `write_repository`, with an expiry date (a year at most; put a reminder in the calendar).
+2. **Variables.** Settings > CI/CD > Variables: `RENOVATE_TOKEN` = that token, **Protect variable** and **Mask variable** on (Visibility: Masked and hidden). Optional: `GITHUB_COM_TOKEN`, a GitHub personal access token with no scopes (read-only public data), protected and masked: without it Renovate skips the GitHub Actions, the workflows' Go and Node versions and golangci-lint's workflow version (GitHub's API refuses anonymous lookups at this rate), and its merge requests carry no release notes.
+3. **Schedule.** Build > Pipeline schedules > New schedule: target branch `main` (protected, so the pipeline gets the protected token), for example `0 9 * * 1` (Mondays). A schedule pipeline runs the `renovate` job only; the test, image and publish jobs skip schedules. Renovate's own `schedule` in `renovate.json5` still decides which updates it opens, so a more frequent pipeline only rebases and refreshes.
+4. **First run.** Run the schedule once by hand (Play). The job log lists the dependencies found and the branches it would create; a dependency dashboard issue appears in the project's issues.
+
+Protected variables reach every job of a `main` pipeline, not just the job that reads them: in a push pipeline on `main`, `RENOVATE_TOKEN` is in the environment of the test jobs too (their `npm ci` runs the packages' install scripts), as `QUAY_TOKEN` is. A token with Developer role on this project only, with an expiry, limits what a leak can do.
 
 ## Releases
 
