@@ -580,6 +580,142 @@ func TestMaaSDatabase_UnrecordedPostgresCredsIsForeign(t *testing.T) {
 	}
 }
 
+// The development database that never becomes available stops Set up
+// after MaaSDevDatabaseTimeout (the injected clock: no real wait), with
+// what it made recorded; Set up again finishes it once the pod runs.
+func TestMaaSDatabase_DevelopmentNotAvailableTimesOut(t *testing.T) {
+	mc := newMaaSCluster(t)
+	plain := mc.f.onGet
+	dev := types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "development"}}
+	res, events := runMaaSOp(t, mc.c, dev)
+	if res.Success || res.ErrorCode != "not_ready" || !strings.Contains(res.Message, "not available after "+clockText(MaaSDevDatabaseTimeout)) {
+		t.Fatalf("setup with a pod that never runs: %+v", res)
+	}
+	if got := finalSteps(events); !strings.HasSuffix(got, "database=failed") {
+		t.Fatalf("steps %s", got)
+	}
+	if rec := readRecord(t, mc.c); rec.Database != "development" || rec.POCCredsUID == "" || mc.f.has(tMaaSDBConfig) {
+		t.Fatalf("record %+v; maas-db-config written before the database runs: %v", rec, mc.f.has(tMaaSDBConfig))
+	}
+	st, _ := GetMaaSStatus(mc.c)
+	if db := maasPart(t, st, "database"); db.State != "missing" || !strings.Contains(db.Message, "maas-db-config") {
+		t.Fatalf("status %+v", db)
+	}
+	mc.f.onGet = plain
+	devDatabaseRuns(mc)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success || !mc.f.has(tMaaSDBConfig) {
+		t.Fatalf("setup again: %+v", res)
+	}
+}
+
+// maasPOCRestartWarning: a development pod made after maas-api started
+// means its keys and tables are gone; one made before is fine; anything it
+// cannot read is no warning.
+func TestMaaSPOCRestartWarning(t *testing.T) {
+	const pods = "/api/v1/namespaces/redhat-ai-gateway-infra/pods/"
+	for _, tc := range []struct {
+		name, dbCreated, apiStarted string
+		want                        bool
+	}{
+		{"database replaced after maas-api started", "2026-11-18T10:05:00Z", "2026-11-18T10:00:00Z", true},
+		{"database older than maas-api", "2026-11-18T09:00:00Z", "2026-11-18T10:00:00Z", false},
+		{"no maas-api running", "2026-11-18T10:05:00Z", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c := newResourceFake(t)
+			f.putJSON(pods+"postgres-abc", `{"metadata":{"labels":{"app":"postgres"},"creationTimestamp":"`+tc.dbCreated+`"}}`)
+			running := `{}`
+			if tc.apiStarted != "" {
+				running = `{"running":{"startedAt":"` + tc.apiStarted + `"}}`
+			}
+			f.putJSON(pods+"maas-api-xyz", `{"status":{"containerStatuses":[{"state":`+running+`}]}}`)
+			got := maasPOCRestartWarning(c, "redhat-ai-gateway-infra")
+			if (got != "") != tc.want {
+				t.Fatalf("warning %q, want one: %v", got, tc.want)
+			}
+			if tc.want && (!strings.Contains(got, "2026-11-18T10:05:00Z") || !strings.Contains(got, "oc rollout restart deployment/maas-api -n redhat-ai-gateway-infra")) {
+				t.Errorf("warning %q", got)
+			}
+		})
+	}
+	f, c := newResourceFake(t)
+	f.fail["GET /api/v1/namespaces/redhat-ai-gateway-infra/pods"] = 403
+	if got := maasPOCRestartWarning(c, "redhat-ai-gateway-infra"); got != "" {
+		t.Errorf("unreadable pods: %q", got)
+	}
+}
+
+// Change database deletes only what this tool made of the database before:
+// a Service postgres someone put in its place and a postgres-creds with
+// another UID are kept, and the log says so.
+func TestMaaSDatabase_ChangeKeepsForeignObjectsOfTheDatabaseBefore(t *testing.T) {
+	mc := newMaaSCluster(t)
+	devDatabaseRuns(mc)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "development"}}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	// Status reads a foreign Service as a problem, so the swap happens
+	// between the change's check and its cleanup.
+	swapped := false
+	mc.f.beforeServe = func(method, path string) {
+		if !swapped && method == "PATCH" && strings.HasSuffix(path, "/maas-db-config") {
+			swapped = true
+			deleteFakeObject(mc, tPOCService)
+			mc.f.putJSON(tPOCService, `{"metadata":{"labels":{"app":"theirs"}}}`)
+			deleteFakeObject(mc, tPOCCreds)
+			mc.f.putJSON(tPOCCreds, `{}`)
+		}
+	}
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "change-database", Database: tCNPG, ConfirmKeysLost: true})
+	if !res.Success || !swapped {
+		t.Fatalf("change: %+v (swapped %v)", res, swapped)
+	}
+	if mc.f.has(tPOCDeploy) || !mc.f.has(tPOCService) || !mc.f.has(tPOCCreds) {
+		t.Fatal("the change deleted an object this tool did not make, or kept its own Deployment")
+	}
+	logs := strings.Join(res.Logs, "\n")
+	if !strings.Contains(logs, "Kept Service redhat-ai-gateway-infra/postgres: not created by this tool") || !strings.Contains(logs, "was replaced by one this tool did not create") {
+		t.Errorf("logs %s", logs)
+	}
+}
+
+// A Change database that stops after the new database is in place leaves
+// two databases; Remove deletes both (each object this tool made).
+func TestMaaSDatabase_ChangeStoppedPartWayThenRemoveCleansBoth(t *testing.T) {
+	mc := newMaaSCluster(t)
+	devDatabaseRuns(mc)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "development"}}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.fail["DELETE "+tPOCDeploy] = 500
+	res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "change-database", Database: tCNPG, ConfirmKeysLost: true})
+	if res.Success || !strings.HasSuffix(finalSteps(events), "cleanup=failed") {
+		t.Fatalf("change: %+v %s", res, finalSteps(events))
+	}
+	if !mc.f.has(tMaaSDB) || !mc.f.has(tPOCDeploy) || !mc.f.has(tPOCCreds) {
+		t.Fatal("expected both databases after the stopped change")
+	}
+	if rec := readRecord(t, mc.c); rec.Database != "cnpg" || rec.POCCredsUID == "" {
+		t.Fatalf("record %+v", rec)
+	}
+	if got := secretURL(t, mc); !strings.Contains(got, "maas-db-rw") {
+		t.Fatalf("maas-db-config names %q, not the new database", got)
+	}
+	delete(mc.f.fail, "DELETE "+tPOCDeploy)
+	res, _ = runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"})
+	if !res.Success {
+		t.Fatalf("teardown: %+v", res)
+	}
+	for _, p := range []string{tMaaSDB, tMaaSDBConfig, tPOCDeploy, tPOCService, tPOCCreds} {
+		if mc.f.has(p) {
+			t.Errorf("%s is left", p)
+		}
+	}
+	if rec := readRecord(t, mc.c); rec.Database != "" || rec.POCCredsUID != "" {
+		t.Fatalf("record %+v", rec)
+	}
+}
+
 // Set up never changes your PostgreSQL's URL in place: a new URL is refused
 // (it would be ignored), and Change database does it.
 func TestMaaSDatabase_SetUpRefusesANewURLForYours(t *testing.T) {
