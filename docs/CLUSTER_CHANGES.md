@@ -38,8 +38,13 @@ Conventions:
 |---|---|---|
 | Pull secret card | Secret `kube-system/additional-pull-secret` | Created if missing; otherwise SSA. Only the `quay.io/rhoai` entry of `.dockerconfigjson` is replaced (equivalent spellings removed); other registries are kept. Unpadded base64 is stored padded |
 | Check that the nodes can pull (self-managed or unknown topology) | CatalogSource `openshift-marketplace/rhoai-catalog-dev-verify-<id>` | The verification catalog of §4 with the newest nightly catalog image: created, read until READY (pulled) or a pull failure (at most 2 minutes), then deleted. Gated and locked like any change |
-| — | Secret `openshift-config/pull-secret` | **Never read or written by the tool.** On a self-managed cluster the Pull secret card shows the `oc` command a cluster-admin runs to add the `quay.io/rhoai` entry |
-| — | IDMS | **Never created by the tool.** You create it (`rosa create image-mirror` on ROSA HCP, `oc apply` of an ImageDigestMirrorSet on self-managed OpenShift) |
+| Add to the nodes' pull secret (self-managed, or platform unknown; not on a hosted control plane, not on ROSA Classic or OSD) | Secret `openshift-config/pull-secret` (cluster-wide: every node's pull credentials) | Read with the user's token; refused, unchanged, when unreadable, without a readable non-empty registry list, or kept in sync by External Secrets. Merge patch of `.dockerconfigjson` only, carrying the `resourceVersion` the user reviewed: the `quay.io/rhoai` entry (equivalent spellings removed) is set to the padded token of `additional-pull-secret`, after Quay accepts it; every other login is kept. Server-side dry run first. The Machine Config Operator rolls it out to the nodes without a drain or reboot |
+| Remove from the nodes' pull secret (same platforms) | Secret `openshift-config/pull-secret` | The same reads and safeguards; removes only the `quay.io/rhoai` entry. Images already on a node stay; new pulls from `quay.io/rhoai` fail afterwards |
+| Create the image mirror (self-managed, ROSA Classic, OSD, or platform unknown; not on a hosted control plane) | ImageDigestMirrorSet `rhoai-quay-mirror` (cluster-scoped, label `app.kubernetes.io/managed-by=rhoai-nightly-updater`): `registry.redhat.io/rhoai` to `quay.io/rhoai` | Created (POST, after a dry run) only when no ImageDigestMirrorSet redirects that source (one that does counts as done) and none of that name exists. No drain, no reboot (CRI-O reload) |
+| Remove the image mirror (same platforms) | ImageDigestMirrorSet `rhoai-quay-mirror` | Deleted with UID and `resourceVersion` preconditions after a dry run, only while it holds exactly that one source and mirror (with or without the label: the docs' command makes the same object). Each node is drained, one at a time, without a reboot (not on a single node) |
+| — | IDMS on ROSA HCP | **Never created by the tool.** It is configured through OpenShift Cluster Manager (`rosa create image-mirror`) |
+
+The four one-click actions above run with the signed-in user's token only (the ServiceAccount has no access to `openshift-config/pull-secret` and no write on ImageDigestMirrorSets), behind the cluster-admin gate and the cluster lock, after a review the user confirms, and are recorded in the activity log.
 
 ## 4. Operator lifecycle (Status page)
 
@@ -247,7 +252,7 @@ Kept by Clean up MaaS, also when this tool installed or created them (shared pla
 
 - Delete a namespace, other than `make undeploy` deleting its own, and `seaweedfs` or `minio` when you tick that choice in the storage's deletion, and the AI gateway's infrastructure namespace on Clean up MaaS when the tool created it and nothing else is in it.
 - Read or list Secrets cluster-wide.
-- Create an IDMS, or touch `openshift-config/pull-secret`.
+- Create an IDMS or touch `openshift-config/pull-secret` other than by the four one-click setup actions of §3 that a user confirms (never on a hosted control plane; the pull secret never on ROSA Classic or OSD), or change any registry login in it other than `quay.io/rhoai`.
 - Delete webhook configurations of a live CSV or operand.
 - Pause any operator other than `dashboard-operator`.
 - Set `opendatahub.io/managed=false` where `dashboard-operator` exists (it would freeze the resource across upgrades).

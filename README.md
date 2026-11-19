@@ -37,7 +37,7 @@ The installer prints the app URL when it is done. To check the download, compare
 3. The verdict: **Update available**, **Up to date**, **Operator failed** or **No Subscription**.
 4. **Update to latest** installs the newest build. Progress streams step by step; if OLM fails, the previous catalog and Subscription are restored.
 
-The same page has one-time cluster setup (pull secret, image mirror), **Update to a specific build**, **Recent activity** and **Recovery** (**Re-deploy operator...**, **Choose a build...**).
+The same page has one-time cluster setup (pull secret, image mirror), **Update to a specific build**, **Recent activity** and **Recovery** (**Re-deploy operator...**, **Choose a build...**). On self-managed OpenShift the setup is one click each: **Create the image mirror** and **Add to the nodes' pull secret** (with removals), each after a review of exactly what changes and what the nodes do, run with your own permissions; ROSA HCP keeps the `rosa create image-mirror` instructions ([QUICKSTART](docs/QUICKSTART.md#3-one-time-setup-pull-secret-and-image-mirror)).
 
 ### Components: is RHOAI ready?
 
