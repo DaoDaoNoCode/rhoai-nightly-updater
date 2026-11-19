@@ -199,7 +199,7 @@ func TestModelsSetup_CanItBeCalled(t *testing.T) {
 	mc := newModelsCluster(t)
 	mc.calls.answers = []simAnswer{{status: 404}, {status: 503, body: "no healthy upstream"}}
 	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
-	if !res.Success || !strings.Contains(res.Message, "Answers requests") {
+	if !res.Success || !strings.Contains(res.Message, "A chat request for \"qwen25-05b-instruct\" was answered (HTTP 200). A request without a token was refused (HTTP 401).") || mc.calls.probes != 1 {
 		t.Fatalf("setup: %+v", res)
 	}
 	sent := mc.calls.sent()
@@ -248,9 +248,10 @@ func TestClassifyModelCall(t *testing.T) {
 		transient bool
 		says      string
 	}{
-		{"ok", 200, `{}`, nil, false, "ok", false, "Answers requests"},
+		{"ok", 200, `{}`, nil, false, "ok", false, "A chat request for \"qwen25-05b-instruct\" was answered (HTTP 200)."},
+		{"older vLLM wrong name", 404, `{"object":"error","message":"The model ` + "`x`" + ` does not exist.","type":"NotFoundError","code":404}`, nil, false, "model-name", false, "not its display name"},
 		{"wrong name", 404, `{"error":{"message":"The model x does not exist.","type":"NotFoundError","code":404}}`, nil, false, "model-name", false, "not its display name"},
-		{"no route", 404, ``, nil, false, "route", true, "/<project>/<model>/v1/"},
+		{"no route", 404, ``, nil, false, "route", true, "404, empty body"},
 		{"401", 401, ``, nil, false, "auth", false, "refused the model's own token"},
 		{"403", 403, ``, nil, false, "forbidden", false, "may not call the model"},
 		{"503", 503, `no healthy upstream`, nil, false, "server-error", true, "no healthy upstream"},

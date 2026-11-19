@@ -31,6 +31,36 @@ func TestModelExposures_NeverRecommendsAGatewayWithUnknownTokenChecks(t *testing
 	}
 }
 
+// A gateway that answers without a token fails "Can it be called?" as
+// unauthenticated (the setup fails, the model stays); an internal-only
+// model is never probed (it is called without a token anyway).
+func TestModelsSetup_AGatewayThatAnswersWithoutATokenFailsTheCheck(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.calls.open = true
+	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if res.Success || res.ErrorCode != "not_callable" || !strings.Contains(res.Message, "answers without a token") || !strings.Contains(finalSteps(events), "callable=failed") {
+		t.Fatalf("setup: %+v %s", res, finalSteps(events))
+	}
+	if !mc.f.has(testModelPath) {
+		t.Fatal("the model must stay set up")
+	}
+	st, _ := GetResourcesStatus(mc.c)
+	if c := st.Models.Items[0].CallCheck; c == nil || c.OK || c.Result != "unauthenticated" {
+		t.Fatalf("status check: %+v", c)
+	}
+	// The model's own token never goes on the probe.
+	for _, s := range mc.calls.sent() {
+		if !strings.Contains(s, testModelToken) {
+			t.Errorf("a recorded request without the token: %s", s)
+		}
+	}
+
+	mc2 := newModelsCluster(t)
+	if res, _ := runModels(t, mc2.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: exposureInternal}); !res.Success || mc2.calls.probes != 0 {
+		t.Fatalf("internal: %+v probes %d", res, mc2.calls.probes)
+	}
+}
+
 // KServe's default gateway is used only when its configuration names it:
 // unreadable or unset, the default route is not offered (and no project is
 // added to the tool's gateway's list for it); the tool's gateway can still

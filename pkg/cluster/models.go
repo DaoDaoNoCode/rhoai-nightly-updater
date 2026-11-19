@@ -839,7 +839,7 @@ func (m *modelsRun) callable(project, name string, rec modelsRecord) (*types.Ope
 	case check.Result == "not-checked":
 		m.step("callable", "success", check.Message)
 	default:
-		return m.fail("callable", "The model is set up but cannot be called: "+check.Message, "not_callable", "model not callable ("+check.Result+")")
+		return m.fail("callable", callFailureWords("The model is set up", check), "not_callable", "model not callable ("+check.Result+")")
 	}
 	recordModelsActivity(m.c, m.activity, m.target, true)
 	return &types.OperationResponse{Success: true, Message: check.Message, Logs: m.logs}, nil
@@ -1124,7 +1124,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 			}
 			check := checkModelCall(c, mp.project, mp.entry.Name, rec, func(line string) { m.step("callable", "running", line) })
 			if !check.OK && check.Result != "not-checked" {
-				return m.fail("callable", fmt.Sprintf("%s is ready in %s but cannot be called: %s It stays set up; Check again on the Models tab after fixing the cause.", mp.entry.DisplayName, mp.project, check.Message), "not_callable", "model not callable ("+check.Result+")")
+				return m.fail("callable", callFailureWords(fmt.Sprintf("%s is ready in %s", mp.entry.DisplayName, mp.project), check)+" It stays set up; check again on the Models tab after fixing the cause.", "not_callable", "model not callable ("+check.Result+")")
 			}
 			m.step("callable", "success", check.Message)
 			summary = append(summary, fmt.Sprintf("%s is ready in %s. %s", mp.entry.DisplayName, mp.project, check.Message))

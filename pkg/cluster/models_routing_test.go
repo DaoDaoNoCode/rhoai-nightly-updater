@@ -21,8 +21,13 @@ type modelCallSim struct {
 	body    string
 	err     error
 	answers []simAnswer
-	// requests are "URL token body" of each request.
+	// requests are "URL token body" of each request (not the requests
+	// without a token through a gateway, which are counted in probes).
 	requests []string
+	// open: the gateway answers a request without a token like one with
+	// it (no AuthPolicy enforced); otherwise it refuses it with 401.
+	open   bool
+	probes int
 }
 
 type simAnswer struct {
@@ -65,6 +70,15 @@ func simulateRouting(t *testing.T, mc *modelsCluster) {
 		data, _ := io.ReadAll(r.Body)
 		sim.mu.Lock()
 		defer sim.mu.Unlock()
+		// The gateway's AuthPolicy refuses a call without a token; the
+		// in-cluster address (no gateway) does not check.
+		if r.Header.Get("Authorization") == "" && !strings.HasSuffix(r.URL.Hostname(), ".svc.cluster.local") {
+			sim.probes++
+			if !sim.open {
+				return &http.Response{StatusCode: 401, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}, Request: r}, nil
+			}
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(sim.body)), Header: http.Header{}, Request: r}, nil
+		}
 		sim.requests = append(sim.requests, r.URL.String()+" "+strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")+" "+string(data))
 		a := simAnswer{status: sim.status, body: sim.body, err: sim.err}
 		if len(sim.answers) > 0 {

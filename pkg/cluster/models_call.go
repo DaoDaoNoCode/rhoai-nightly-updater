@@ -119,9 +119,15 @@ func callModelOnce(ctx context.Context, target string, body []byte, token string
 
 // vllmNotFound: the body is vLLM's (OpenAI-shaped) error for a model name
 // it does not serve.
+// Newer vLLM nests it ({"error":{"type":"NotFoundError",...}}); older vLLM
+// answers it at the top level ({"object":"error","type":"NotFoundError",
+// "message":...}).
 func vllmNotFound(body []byte) bool {
 	var e struct {
-		Error struct {
+		Object  string `json:"object"`
+		Type    string `json:"type"`
+		Message string `json:"message"`
+		Error   struct {
 			Type    string `json:"type"`
 			Message string `json:"message"`
 		} `json:"error"`
@@ -129,7 +135,18 @@ func vllmNotFound(body []byte) bool {
 	if json.Unmarshal(body, &e) != nil {
 		return false
 	}
-	return e.Error.Type == "NotFoundError" || strings.Contains(e.Error.Message, "does not exist")
+	if e.Error.Type == "NotFoundError" || strings.Contains(e.Error.Message, "does not exist") {
+		return true
+	}
+	return e.Object == "error" && (e.Type == "NotFoundError" || strings.Contains(e.Message, "does not exist"))
+}
+
+// requestWords names the check's request by the path it calls.
+func requestWords(target string) string {
+	if strings.HasSuffix(target, "/v1/embeddings") {
+		return "An embedding request"
+	}
+	return "A chat request"
 }
 
 // bodyExcerpt is an answer's body for a message: one line, shortened.
@@ -173,7 +190,7 @@ func classifyModelCall(status int, body []byte, err error, target, served string
 		return out, true
 	case status >= 200 && status < 300:
 		out.Result, out.OK = "ok", true
-		out.Message = fmt.Sprintf("Answers requests: a request for model %q got %d.", served, status)
+		out.Message = fmt.Sprintf("%s for %q was answered (HTTP %d).", requestWords(target), served, status)
 		return out, false
 	case status == http.StatusNotFound && vllmNotFound(body):
 		out.Result = "model-name"
@@ -181,7 +198,7 @@ func classifyModelCall(status int, body []byte, err error, target, served string
 		return out, false
 	case status == http.StatusNotFound:
 		out.Result = "route"
-		out.Message = fmt.Sprintf("Nothing answers at %s (404 without the model's own answer): the request did not reach the model. On a gateway the path must be /<project>/<model>/v1/...; right after a change the gateway may not have loaded the model's route yet.", target)
+		out.Message = fmt.Sprintf("No answer at %s (404, empty body): the gateway didn't route the request to the model. Right after setup the gateway can take a minute to load the route; check again shortly.", target)
 		return out, true
 	case status == http.StatusUnauthorized:
 		out.Result = "auth"
@@ -312,11 +329,45 @@ func checkModelCall(c *Client, project, name string, rec modelsRecord, progress 
 			if check.Result == "server-error" && gw != "" && exposure == exposureGateway {
 				check.Message += " (through gateway " + gw + ")"
 			}
+			if check.OK {
+				check = probeWithoutToken(c, check, model.Status.URL, served, entry.Type, gw)
+			}
 		}
 	}
 	check.At = now()
 	rememberCallCheck(c, project, name, model.Metadata.UID, check)
 	return check
+}
+
+// probeWithoutToken sends the same request through the gateway once more,
+// without a token, after the model answered one with its token. The
+// gateway must refuse it (401 or 403): an answer means the gateway does not
+// check who calls (no AuthPolicy, one not enforced, or a gateway labelled
+// opendatahub.io/managed=false), and the check fails as "unauthenticated".
+// Any other outcome is said, not counted as a failure.
+func probeWithoutToken(c *Client, ok types.ModelCallCheck, base, served, typ, gw string) types.ModelCallCheck {
+	target, body := modelCallRequest(base, served, typ)
+	status, _, err := callModelOnce(c.ctx, target, body, "")
+	switch {
+	case err == nil && status >= 200 && status < 300:
+		return types.ModelCallCheck{Result: "unauthenticated", Status: status, URL: target,
+			Message: fmt.Sprintf("The model also answered a request without a token (HTTP %d): gateway %s does not check who calls, so anyone who can reach %s can use the model. Check that RHOAI's AuthPolicy on the gateway is enforced (odh-model-controller and Red Hat Connectivity Link run), and that the gateway is not labelled %s=false.", status, firstNonEmpty(gw, "the gateway"), base, odhManagedLabel)}
+	case err == nil && (status == http.StatusUnauthorized || status == http.StatusForbidden):
+		ok.Message += fmt.Sprintf(" A request without a token was refused (HTTP %d).", status)
+	case err == nil:
+		ok.Message += fmt.Sprintf(" A request without a token got HTTP %d, so whether the gateway refuses callers without a token is not confirmed.", status)
+	default:
+		ok.Message += " A request without a token got no answer, so whether the gateway refuses callers without a token is not confirmed."
+	}
+	return ok
+}
+
+// callFailureWords is a failed check as a sentence about the model.
+func callFailureWords(what string, check types.ModelCallCheck) string {
+	if check.Result == "unauthenticated" {
+		return what + ", but it answers without a token: " + check.Message
+	}
+	return what + " but cannot be called: " + check.Message
 }
 
 // runModelCall calls the model, retrying transient answers for up to
