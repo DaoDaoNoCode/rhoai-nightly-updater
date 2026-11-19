@@ -492,8 +492,12 @@ test resources) stay, as with `install.sh uninstall`.
 
 **When Argo CD also manages RHOAI.** Deploying the updater with Argo CD does
 not change how it works with an RHOAI that Argo CD manages: it notices Argo
-CD's tracking annotation on the catalog, Subscription and DataScienceCluster
-and treats Git as the source of truth there
+CD's tracking annotation on the catalog, Subscription and DataScienceCluster,
+confirms with Argo CD that the Application still manages them (it lists
+Applications by name: an Argo CD on another cluster, a hub, is only seen
+through ACM's AppliedManifestWork API or `argocd cluster add`'s
+ClusterRoleBinding, and counts as managing when either is there), and
+treats Git as the source of truth there
 ([CLUSTER_CHANGES: Update when Argo CD manages the operator](CLUSTER_CHANGES.md#update-when-argo-cd-manages-the-operator),
 [RUNBOOK §13](../RUNBOOK.md#13-clusters-managed-by-argo-cd)). Keep the
 updater in its own Application, apart from the one that manages RHOAI.
@@ -756,7 +760,11 @@ with these differences:
 
 - It refuses (`profile_gitops`) unless Argo CD or an ACM policy manages
   CatalogSource `rhoai-catalog-dev`:
-  - Argo CD: its `argocd.argoproj.io/tracking-id` names the catalog.
+  - Argo CD: its `argocd.argoproj.io/tracking-id` names the catalog, and
+    Argo CD confirms it: the Application lists the catalog in its
+    `status.resources`, or it could not be asked (a read error counts as
+    managed). A left-over annotation does not count
+    ([RUNBOOK §13](../RUNBOOK.md#13-clusters-managed-by-argo-cd)).
   - ACM: an enforced ConfigurationPolicy applies the catalog, so the
     catalog's `managedFields` show manager `config-policy-controller`
     owning `f:spec`. An entry that owns only `f:status` does not count.

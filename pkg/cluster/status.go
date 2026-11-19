@@ -80,6 +80,8 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 
 	var wg sync.WaitGroup
 	var quayAuth string
+	// The metadata of the objects Argo CD may manage (gitOpsManagers).
+	var subMeta, catalogMeta, dscMeta *objectMeta
 
 	addErr := func(msg string) {
 		mu.Lock()
@@ -125,6 +127,9 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 		}
 		mu.Lock()
 		status.Subscription = sub.info
+		if sub.found {
+			subMeta = &sub.meta
+		}
 		mu.Unlock()
 		if csv, err := csvForInstalledName(c, sub.installedCSV); err != nil {
 			addErr(fmt.Sprintf("csv: %v", err))
@@ -136,11 +141,11 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 	})
 
 	run(func() {
-		if cs, err := getCatalogSource(c); err != nil {
+		if cs, meta, err := readCatalogSource(c); err != nil {
 			addErr(fmt.Sprintf("catalogsource: %v", err))
 		} else {
 			mu.Lock()
-			status.CatalogSource = cs
+			status.CatalogSource, catalogMeta = cs, meta
 			mu.Unlock()
 		}
 	})
@@ -219,7 +224,7 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 	})
 
 	run(func() {
-		exists, managedBy, err := checkDSCExists(c)
+		meta, err := checkDSCExists(c)
 		mu.Lock()
 		if err != nil {
 			// Transient API errors (429, 503) happen during operator reinstall.
@@ -227,8 +232,8 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 			slog.Debug("dsc check failed, assuming exists", "error", err)
 			status.DSCExists = true
 		} else {
-			status.DSCExists = exists
-			status.DSCManagedBy = managedBy
+			status.DSCExists = meta != nil
+			dscMeta = meta
 		}
 		mu.Unlock()
 	})
@@ -258,6 +263,8 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 	})
 
 	wg.Wait()
+
+	gitOpsManagers(c, status, subMeta, catalogMeta, dscMeta)
 
 	// The nodes' side of the pull secret: shown, with the command, unless
 	// the control plane is known to be hosted. An unreadable topology
@@ -406,10 +413,12 @@ func getClusterVersion(c *Client) (string, error) {
 }
 
 // subscriptionDetails is the RHOAI Subscription as read by status checks.
+// info.ManagedBy is not set: gitOpsManagers sets it from meta.
 type subscriptionDetails struct {
 	info         types.SubscriptionInfo
 	installedCSV string
 	found        bool
+	meta         objectMeta
 }
 
 func readSubscription(c *Client) (subscriptionDetails, error) {
@@ -445,14 +454,14 @@ func readSubscription(c *Client) (subscriptionDetails, error) {
 	}
 	return subscriptionDetails{
 		info: types.SubscriptionInfo{
-			Name:      SubName,
-			Source:    sub.Spec.Source,
-			Channel:   sub.Spec.Channel,
-			State:     state,
-			ManagedBy: argoApplication(sub.Metadata.Annotations, "Subscription", SubNS, SubName),
+			Name:    SubName,
+			Source:  sub.Spec.Source,
+			Channel: sub.Spec.Channel,
+			State:   state,
 		},
 		installedCSV: installed,
 		found:        true,
+		meta:         sub.Metadata,
 	}, nil
 }
 
@@ -563,15 +572,23 @@ func csvForInstalledName(c *Client, installedName string) (types.CSVInfo, error)
 	return types.CSVInfo{Phase: "Not Found"}, nil
 }
 
+// getCatalogSource reads the nightly CatalogSource. Who manages it
+// (ManagedBy, ManagedByACM) is not set: gitOpsManagers sets it from the
+// metadata readCatalogSource returns.
 func getCatalogSource(c *Client) (types.CatalogSourceInfo, error) {
+	cs, _, err := readCatalogSource(c)
+	return cs, err
+}
+
+func readCatalogSource(c *Client) (types.CatalogSourceInfo, *objectMeta, error) {
 	path := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
 	body, _, err := c.get(path)
 	if err != nil {
 		// 404 is expected when the CatalogSource does not exist yet
 		if IsK8sError(err, 404) {
-			return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil
+			return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, nil
 		}
-		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, fmt.Errorf("request failed: %w", err)
+		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, fmt.Errorf("request failed: %w", err)
 	}
 	var result struct {
 		Metadata objectMeta `json:"metadata"`
@@ -585,7 +602,7 @@ func getCatalogSource(c *Client) (types.CatalogSourceInfo, error) {
 		} `json:"status"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, fmt.Errorf("unmarshal: %w", err)
+		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, fmt.Errorf("unmarshal: %w", err)
 	}
 
 	state := "Unknown"
@@ -593,15 +610,35 @@ func getCatalogSource(c *Client) (types.CatalogSourceInfo, error) {
 		state = *s
 	}
 
-	managedBy := argoApplication(result.Metadata.Annotations, "CatalogSource", CatalogNS, CatalogName)
 	return types.CatalogSourceInfo{
-		Exists:       true,
-		Name:         CatalogName,
-		Image:        result.Spec.Image,
-		State:        state,
-		ManagedBy:    managedBy,
-		ManagedByACM: managedBy == "" && acmEnforcesSpec(result.Metadata),
-	}, nil
+		Exists: true,
+		Name:   CatalogName,
+		Image:  result.Spec.Image,
+		State:  state,
+	}, &result.Metadata, nil
+}
+
+// gitOpsManagers sets on status who manages the operator Subscription, the
+// nightly catalog and the DataScienceCluster: the Argo CD application their
+// tracking annotation names, once Argo CD confirms it (argocd.go; one
+// argoCheck, so each answer is read once per poll), and an ACM policy that
+// enforces the catalog when no Argo CD application manages it. A nil
+// metadata is an object the status did not find.
+func gitOpsManagers(c *Client, status *types.StatusResponse, sub, catalog, dsc *objectMeta) {
+	argo := newArgoCheck(c)
+	if sub != nil {
+		t := argo.object(sub.Annotations, argoSubscriptionObject)
+		status.Subscription.ManagedBy, status.Subscription.ArgoCD = t.managedBy(), t.info()
+	}
+	if catalog != nil {
+		t := argo.object(catalog.Annotations, argoCatalogObject)
+		status.CatalogSource.ManagedBy, status.CatalogSource.ArgoCD = t.managedBy(), t.info()
+		status.CatalogSource.ManagedByACM = t.managedBy() == "" && acmEnforcesSpec(*catalog)
+	}
+	if dsc != nil {
+		t := argo.object(dsc.Annotations, argoDSCObject(dsc.Name))
+		status.DSCManagedBy, status.DSCArgoCD = t.managedBy(), t.info()
+	}
 }
 
 // quayCredentialCacheTTL bounds how long a Quay verdict on a credential is
@@ -844,18 +881,17 @@ func getIDMS(c *Client) (types.ImageMirrorInfo, error) {
 	return types.ImageMirrorInfo{Exists: false}, nil
 }
 
-// checkDSCExists returns true if at least one DataScienceCluster exists,
-// listed at the newest served version that works (listServed), and the Argo
-// CD application that tracks it. No served version (CRD not installed) is not
-// an error: it returns false.
-func checkDSCExists(c *Client) (exists bool, managedBy string, err error) {
+// checkDSCExists returns the metadata of the first DataScienceCluster,
+// listed at the newest served version that works (listServed), or nil when
+// there is none. No served version (CRD not installed) is not an error.
+func checkDSCExists(c *Client) (*objectMeta, error) {
 	// limit=1: only existence matters, not the (large) objects.
 	r, err := listServed(c, dscGroup, dscListFmt, url.Values{"limit": {"1"}}, dscFallbackVersions)
 	if err != nil {
-		return false, "", fmt.Errorf("request failed: %w", err)
+		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	if r.Version == "" {
-		return false, "", nil
+		return nil, nil
 	}
 	var dscList struct {
 		Items []struct {
@@ -863,10 +899,10 @@ func checkDSCExists(c *Client) (exists bool, managedBy string, err error) {
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(r.Body, &dscList); err != nil {
-		return false, "", fmt.Errorf("unmarshal: %w", err)
+		return nil, fmt.Errorf("unmarshal: %w", err)
 	}
 	if len(dscList.Items) == 0 {
-		return false, "", nil
+		return nil, nil
 	}
-	return true, argoApplication(dscList.Items[0].Metadata.Annotations, "DataScienceCluster", "", dscList.Items[0].Metadata.Name), nil
+	return &dscList.Items[0].Metadata, nil
 }

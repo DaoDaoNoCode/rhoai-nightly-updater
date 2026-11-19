@@ -35,7 +35,7 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 	case dsc.read.Object == nil:
 		return m.fail("check", "This cluster has no DataScienceCluster. A cluster-admin creates one on the Components page. Nothing was changed.", "prerequisites", "no dsc")
 	case needDSC && dsc.argoApp != "":
-		return m.fail("check", gitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning on Models as a Service")+" Set aigateway and aigateway.modelsAsAService to Managed in Git. Nothing was changed.", ErrorCodeGitOpsManaged, "dsc gitops")
+		return m.fail("check", gitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning on Models as a Service")+" Set aigateway and aigateway.modelsAsAService to Managed in Git. Nothing was changed."+dsc.argo.unconfirmedNote(), ErrorCodeGitOpsManaged, "dsc gitops")
 	}
 
 	// Connectivity Link and its Kuadrant CR.

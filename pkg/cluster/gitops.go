@@ -24,9 +24,12 @@ const argoTrackingAnnotation = "argocd.argoproj.io/tracking-id"
 // the action would change, and would undo the change.
 const ErrorCodeGitOpsManaged = "gitops_managed"
 
-// argoApplication returns the Argo CD application that tracks the object of
-// this kind, namespace and name carrying these annotations, or "" when none
-// does. The tracking id must name the object itself: Argo CD ignores an
+// argoApplication returns the Argo CD application that the tracking
+// annotation among annotations names for the object of this kind, namespace
+// and name, or "" when none does. The annotation alone does not show that
+// the application still manages the object: argocd.go confirms it with Argo
+// CD, and every refusal reads that verdict (argoTracking.managedBy). The
+// tracking id must name the object itself: Argo CD ignores an
 // annotation copied from another object (a "non-self-referencing"
 // annotation), so the tool does too. namespace "" skips the namespace check:
 // for a cluster-scoped object Argo CD writes its destination namespace there.
@@ -45,15 +48,6 @@ func argoApplication(annotations map[string]string, kind, namespace, name string
 		return ""
 	}
 	return app
-}
-
-// argoApplicationOf is argoApplication for a decoded cluster-scoped object.
-func argoApplicationOf(obj map[string]any, kind string) string {
-	meta, _ := obj["metadata"].(map[string]any)
-	raw, _ := meta["annotations"].(map[string]any)
-	id, _ := raw[argoTrackingAnnotation].(string)
-	name, _ := meta["name"].(string)
-	return argoApplication(map[string]string{argoTrackingAnnotation: id}, kind, "", name)
 }
 
 // lastAppliedAnnotation is where client-side apply, which Argo CD uses by
@@ -149,11 +143,14 @@ func acmEnforcesSpec(meta objectMeta) bool {
 // operatorGitOps is how Argo CD or ACM manages the operator's catalog and
 // Subscription, read before an operator operation.
 type operatorGitOps struct {
-	catalogApp string // Argo CD application tracking CatalogSource rhoai-catalog-dev
-	// catalogACM: no Argo CD application tracks the catalog, and an ACM
+	catalogApp string // Argo CD application managing CatalogSource rhoai-catalog-dev
+	// catalogACM: no Argo CD application manages the catalog, and an ACM
 	// policy enforces its spec (acmEnforcesSpec). Argo CD wins when both do.
 	catalogACM      bool
-	subscriptionApp string // Argo CD application tracking the rhods-operator Subscription
+	subscriptionApp string // Argo CD application managing the rhods-operator Subscription
+	// What Argo CD said about each tracking annotation (argocd.go);
+	// catalogApp and subscriptionApp are their managedBy.
+	catalogArgo, subscriptionArgo argoTracking
 }
 
 func (g operatorGitOps) active() bool {
@@ -210,26 +207,32 @@ func sentenceStart(s string) string {
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 
-// readOperatorGitOps reads which Argo CD applications track the nightly
-// CatalogSource and the operator Subscription, and whether an ACM policy
-// enforces the catalog (from the managedFields of the same GET). A missing
-// object is not managed.
+// readOperatorGitOps reads which Argo CD applications manage the nightly
+// CatalogSource and the operator Subscription (their tracking annotations,
+// confirmed with Argo CD: argocd.go), and whether an ACM policy enforces the
+// catalog (from the managedFields of the same GET). A missing object is not
+// managed.
 func readOperatorGitOps(c *Client) (operatorGitOps, error) {
 	var g operatorGitOps
+	argo := newArgoCheck(c)
 	for _, r := range []struct {
-		path, kind, ns, name string
-		app                  *string
+		path      string
+		obj       argoObject
+		tracking  *argoTracking
+		app       *string
+		isCatalog bool
 	}{
-		{namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName), "CatalogSource", CatalogNS, CatalogName, &g.catalogApp},
-		{subscriptionPath(), "Subscription", SubNS, SubName, &g.subscriptionApp},
+		{namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName), argoCatalogObject, &g.catalogArgo, &g.catalogApp, true},
+		{subscriptionPath(), argoSubscriptionObject, &g.subscriptionArgo, &g.subscriptionApp, false},
 	} {
 		meta, found, err := readObjectMeta(c, r.path)
 		if err != nil {
 			return operatorGitOps{}, err
 		}
 		if found {
-			*r.app = argoApplication(meta.Annotations, r.kind, r.ns, r.name)
-			if r.kind == "CatalogSource" {
+			*r.tracking = argo.object(meta.Annotations, r.obj)
+			*r.app = r.tracking.managedBy()
+			if r.isCatalog {
 				g.catalogACM = g.catalogApp == "" && acmEnforcesSpec(meta)
 			}
 		}
@@ -241,9 +244,9 @@ func readOperatorGitOps(c *Client) (operatorGitOps, error) {
 // catalog or Subscription, or an ACM policy the catalog; "" when neither
 // does. deletes says what the operation deletes, and for how long.
 func (g operatorGitOps) refusal(operation, deletes string) string {
-	object, app := "The operator Subscription", g.subscriptionApp
+	object, app, note := "The operator Subscription", g.subscriptionApp, g.subscriptionArgo.unconfirmedNote()
 	if app == "" {
-		object, app = "CatalogSource "+CatalogName, g.catalogApp
+		object, app, note = "CatalogSource "+CatalogName, g.catalogApp, g.catalogArgo.unconfirmedNote()
 	}
 	if app == "" && g.catalogACM {
 		return fmt.Sprintf("%s is managed by %s, which puts back what differs from the policy. %s deletes %s, so %s is not available here. Nothing was changed.",
@@ -252,8 +255,8 @@ func (g operatorGitOps) refusal(operation, deletes string) string {
 	if app == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s is managed by Argo CD application %q. %s deletes %s, and Argo CD would recreate it from Git in the meantime, so %s is not available here. Nothing was changed.",
-		object, app, operation, deletes, operation)
+	return fmt.Sprintf("%s is managed by Argo CD application %q. %s deletes %s, and Argo CD would recreate it from Git in the meantime, so %s is not available here. Nothing was changed.%s",
+		object, app, operation, deletes, operation, note)
 }
 
 // readCatalogServes reads the head of the nightly catalog's channel (the

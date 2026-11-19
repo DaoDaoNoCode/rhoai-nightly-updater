@@ -657,6 +657,7 @@ func TestDSCChangesRefusedUnderArgoCDAndACM(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, c := managerWorld(t, edit)
+			f.argo = argoManagingAll(argoDSCObject("default-dsc"))
 			m, _ := GetDSCManager(c)
 			if m.ReadOnlyReason == "" {
 				t.Fatal("no read-only reason")
@@ -675,6 +676,45 @@ func TestDSCChangesRefusedUnderArgoCDAndACM(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A tracking annotation Argo CD does not confirm: left over, the DSC is the
+// tool's to change; Argo CD not reachable, it stays read-only and says why.
+func TestDSCManagerConfirmsArgoCDTracking(t *testing.T) {
+	tracked := func(dsc map[string]any) {
+		setPath(t, dsc, "metadata.annotations", map[string]any{argoTrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"})
+	}
+	for name, argo := range map[string]*fakeArgoCD{
+		"argo cd not installed": {},
+		"application gone":      {served: true},
+		"not among its resources": {served: true, apps: []map[string]any{
+			argoApplicationListing("openshift-gitops", argoSubscriptionObject)}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, c := managerWorld(t, tracked)
+			f.argo = argo
+			m, err := GetDSCManager(c)
+			if err != nil || m.ReadOnlyReason != "" || m.ManagedBy != "" {
+				t.Fatalf("manager = %+v, %v", m, err)
+			}
+			res, _ := reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed"})
+			if !res.Success {
+				t.Fatalf("toggle = %+v", res)
+			}
+		})
+	}
+	t.Run("cannot ask Argo CD", func(t *testing.T) {
+		f, c := managerWorld(t, tracked)
+		f.argo = &fakeArgoCD{served: true, fail: map[string]int{argoDiscoveryPath + "/applications": http.StatusForbidden}}
+		m, _ := GetDSCManager(c)
+		if m.ManagedBy != testArgoApp || !strings.Contains(m.ReadOnlyReason, "could not confirm this with Argo CD") || !strings.Contains(m.ReadOnlyReason, "403") {
+			t.Fatalf("manager = %+v", m)
+		}
+		res, _ := reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed"})
+		if res.Success || res.ErrorCode != ErrorCodeGitOpsManaged || len(f.mutations()) != 0 {
+			t.Fatalf("toggle = %+v, writes %v", res, f.mutations())
+		}
+	})
 }
 
 // --- fix -------------------------------------------------------------------

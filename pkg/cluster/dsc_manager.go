@@ -59,8 +59,10 @@ type dscView struct {
 	defaultsLabel map[string]any
 	defaultsErr   string
 	op            *installedOperator
-	argoApp       string
-	acm           bool
+	// argoApp is the Argo CD application managing the DSC (argo.managedBy).
+	argoApp string
+	argo    argoTracking
+	acm     bool
 	// helm names the Helm release that manages the DSC ("" when none).
 	helm string
 }
@@ -114,7 +116,8 @@ func readDSCView(c *Client) (*dscView, error) {
 	if v.apiVersion == "" {
 		v.apiVersion = dscGroup + "/" + v.version
 	}
-	v.argoApp = argoApplicationOf(v.obj, "DataScienceCluster")
+	v.argo = argoTrackingOf(c, v.obj, dscGroup, "DataScienceCluster")
+	v.argoApp = v.argo.managedBy()
 	v.acm = v.argoApp == "" && acmEnforcesSpec(v.meta)
 	v.helm = helmManagerOf(v.meta)
 	v.crd, v.crdErr = readDSCCRD(c)
@@ -301,7 +304,7 @@ func (v *dscView) readOnlyReason() (string, string) {
 	case v.count > 1:
 		return fmt.Sprintf("There are %d DataScienceClusters; the operator allows one. Delete the extra ones in the OpenShift console first.", v.count), "prerequisites"
 	case v.argoApp != "":
-		return gitOpsRefusal("DataScienceCluster "+v.name, v.argoApp, "a change made here"), ErrorCodeGitOpsManaged
+		return gitOpsRefusal("DataScienceCluster "+v.name, v.argoApp, "a change made here") + v.argo.unconfirmedNote(), ErrorCodeGitOpsManaged
 	case v.acm:
 		return fmt.Sprintf("DataScienceCluster %s is enforced by %s, which puts back what differs from the policy. Change the policy instead. Nothing was changed.", v.name, acmCatalogManager), ErrorCodeGitOpsManaged
 	case v.helm != "":

@@ -52,8 +52,8 @@ import { useClusterStatus, useOperation } from "../state/AppState";
 import { useClusterBusyHandler, useDashboardOverride, useGitOpsProfile, useMutationBlocker, useProfile, useVersion } from "../state/AppInfo";
 import { GITOPS_PROFILE_UNMANAGED_CATALOG, gitOpsPolicyProblem } from "../profile";
 import { STEP_SETS } from "../operationSteps";
-import { catalogManaged, gitOpsOperatorReason, operatorGitOpsApp, operatorManaged } from "../gitops";
-import { GitOpsNotice, GitOpsProfileNotice } from "../components/GitOpsNotice";
+import { argoTrackingGroups, catalogManaged, gitOpsOperatorReason, operatorGitOpsApp, operatorManaged } from "../gitops";
+import { ArgoCDLeftOverNote, GitOpsNotice, GitOpsProfileNotice } from "../components/GitOpsNotice";
 
 const REFRESH_PLAN = STEP_SETS.refresh;
 
@@ -261,6 +261,13 @@ export const StatusPage: React.FC = () => {
       {status && (operatorManaged(status) || status.dscManagedBy) && (
         <PageSection>
           <GitOpsNotice status={status} />
+        </PageSection>
+      )}
+
+      {/* --- Argo CD tracking that Argo CD does not back: a small note, nothing is off --- */}
+      {status && argoTrackingGroups(status, "stale").length > 0 && (
+        <PageSection>
+          <ArgoCDLeftOverNote status={status} />
         </PageSection>
       )}
 

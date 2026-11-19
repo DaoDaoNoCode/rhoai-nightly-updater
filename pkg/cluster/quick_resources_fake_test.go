@@ -71,6 +71,9 @@ type resourceFake struct {
 	failMessage map[string]string
 	// calls records every request with its query, content type and body.
 	calls []fakeCall
+	// argo answers Argo CD's (and ACM's) reads of argocd.go; nil = the
+	// generic handling.
+	argo *fakeArgoCD
 }
 
 // fakeCall is one request to resourceFake.
@@ -318,6 +321,9 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 			f.status(w, code, firstNonEmpty(f.failMessage[echoKey], "injected failure"))
 			return
 		}
+	}
+	if f.argo != nil && f.argo.serve(w, r) {
+		return
 	}
 	// A JSON patch (the field-ownership upgrade) carries no object to quote.
 	if code, ok := f.failEcho[echoKey]; ok && !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json-patch+json") {

@@ -542,7 +542,7 @@ func (m *maasRun) teardownCheck(t *maasTeardown) (*types.OperationResponse, erro
 		return m.done("The MaaS platform was not set up by this tool; nothing to remove.")
 	}
 	if rec.DSCChanged && dsc.maas == "Managed" && dsc.argoApp != "" {
-		return m.fail("check", gitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning off Models as a Service")+" Nothing was deleted.", ErrorCodeGitOpsManaged, "dsc gitops")
+		return m.fail("check", gitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning off Models as a Service")+" Nothing was deleted."+dsc.argo.unconfirmedNote(), ErrorCodeGitOpsManaged, "dsc gitops")
 	}
 	if !rec.DSCChanged && dsc.maas == "Managed" && owned > 0 {
 		return m.fail("check", "MaaS was turned on in the DataScienceCluster by someone else, and it uses the gateway and database this tool created: removing them would break it. Turn MaaS off first (aigateway.modelsAsAService Removed), then remove. Nothing was deleted.", "in_use", "maas on, not by tool")

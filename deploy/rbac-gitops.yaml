@@ -117,9 +117,16 @@ objects:
         resources: ["*"]
         verbs: ["list"]
       # Which Deployment cleans up a module CR (its ServiceAccount's
-      # ClusterRoleBinding; see deploy/template.yaml): read only
+      # ClusterRoleBinding; see deploy/template.yaml), and whether an Argo
+      # CD on another cluster may manage this one: read only
       - apiGroups: ["rbac.authorization.k8s.io"]
         resources: ["clusterroles", "clusterrolebindings"]
+        verbs: ["list"]
+      # Argo CD Applications, listed by name, to confirm that the
+      # application a tracking annotation names still manages the object
+      # (see deploy/template.yaml): read only
+      - apiGroups: ["argoproj.io"]
+        resources: ["applications"]
         verbs: ["list"]
       # Prerequisite operators: their CSVs and OperatorGroups in any
       # namespace, and their singleton operand <Kind>/cluster

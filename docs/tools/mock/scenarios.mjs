@@ -30,6 +30,17 @@ export function baseWorld() {
   };
 }
 
+// The Subscription, catalog and DSC carry Argo CD tracking from "rhoai" that
+// Argo CD does not back (left over): no manager, only the note, and every
+// action is on as on a cluster without Argo CD.
+function staleArgo(w, verdict) {
+  w.status = F.updateAvailableStatus();
+  const t = { application: "rhoai", state: "stale", ...verdict };
+  w.status.subscription = { ...w.status.subscription, argoCD: t };
+  w.status.catalogSource = { ...w.status.catalogSource, argoCD: t };
+  w.status.dscArgoCD = t;
+}
+
 export const scenarios = {
   healthy: () => {},
   "update-available": (w) => { w.status = F.updateAvailableStatus(); },
@@ -182,6 +193,25 @@ export const scenarios = {
     w.status.csv = { ...w.status.csv, name: "rhods-operator.3.6.0-ea.1", version: "3.6.0-ea.1" };
     w.status.catalogServes = { channel: "beta", csv: "rhods-operator.3.6.0-ea.1", operatorImage: "registry.redhat.io/rhoai/odh-rhel9-operator@sha256:3f9e7b1c5d2a8e406b1f9c3d7a2e5b8f0c6d4a193f9e7b1c5d2a8e406b1f9c3d", built: "2026-10-05T21:47:53Z", installed: false };
     w.status.dscManagedBy = "rhoai";
+  },
+  // Argo CD's tracking annotation confirmed with Argo CD (pkg/cluster/argocd.go),
+  // and the four ways it is not: three left over, one not confirmed.
+  "gitops-confirmed": (w) => {
+    scenarios["gitops-synced"](w);
+    const t = { application: "rhoai", state: "managed", namespace: "openshift-gitops", syncStatus: "Synced" };
+    w.status.subscription.argoCD = t;
+    w.status.catalogSource.argoCD = t;
+    w.status.dscArgoCD = t;
+  },
+  "gitops-stale-app-missing": (w) => staleArgo(w, { staleReason: "application-missing" }),
+  "gitops-stale-argo-not-installed": (w) => staleArgo(w, { staleReason: "argo-cd-not-installed" }),
+  "gitops-stale-not-in-resources": (w) => staleArgo(w, { staleReason: "not-in-resources", namespace: "openshift-gitops" }),
+  "gitops-read-error": (w) => {
+    scenarios["gitops-synced"](w);
+    const t = { application: "rhoai", state: "unconfirmed", reason: 'reading Argo CD application "rhoai" failed: k8s API error 403 (Forbidden): applications.argoproj.io is forbidden' };
+    w.status.subscription.argoCD = t;
+    w.status.catalogSource.argoCD = t;
+    w.status.dscArgoCD = t;
   },
   // Same, once the operator runs the build Git set; Quay has a newer one.
   "gitops-synced": (w) => {

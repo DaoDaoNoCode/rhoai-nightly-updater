@@ -248,9 +248,18 @@ objects:
       # Which Deployment cleans up a module CR: the one whose ServiceAccount
       # a ClusterRoleBinding lets update the CR's finalizers (module kinds
       # change between releases, and nothing on the Deployment names its
-      # module). RBAC objects hold no secrets; read only (SECURITY.md)
+      # module). RBAC objects hold no secrets; read only (SECURITY.md).
+      # ClusterRoleBinding argocd-manager-role-binding (by field selector)
+      # also tells whether an Argo CD on another cluster may manage this one
       - apiGroups: ["rbac.authorization.k8s.io"]
         resources: ["clusterroles", "clusterrolebindings"]
+        verbs: ["list"]
+      # Argo CD Applications, listed by name (field selector), to confirm
+      # that the application a tracking annotation names on the catalog,
+      # the Subscription or the DSC still manages it. Applications hold no
+      # credentials; read only (SECURITY.md, "Reading Argo CD Applications")
+      - apiGroups: ["argoproj.io"]
+        resources: ["applications"]
         verbs: ["list"]
       - apiGroups: ["datasciencepipelinesapplications.opendatahub.io"]
         resources: ["datasciencepipelinesapplications"]

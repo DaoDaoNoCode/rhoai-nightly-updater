@@ -266,7 +266,8 @@ The app's ServiceAccount has no right on OAuthClients or OAuth tokens (`TestServ
 | Validating/Mutating webhook configurations, CRDs, DSCInitializations, Platforms, DSPAs, cert-manager Certificates, Gateways, Kuadrants, ImageDigestMirrorSets, ImageTagMirrorSets | `list` | read-only; CRD `get` only the DSC's |
 | DataScienceClusters | `get list` | read-only: the hard reset's `delete` (template revision 7 before 4.0.0) now runs with the user's token |
 | `components.platform.opendatahub.io/*` (module CRs) | `list` | read-only; the kinds change between releases and are discovered |
-| ClusterRoles, ClusterRoleBindings | `list` | read-only: [which operator cleans up a module](#reading-rbac-to-find-module-operators-400) |
+| ClusterRoles, ClusterRoleBindings | `list` | read-only: [which operator cleans up a module](#reading-rbac-to-find-module-operators-400); also ClusterRoleBinding `argocd-manager-role-binding` by field selector ([Argo CD on another cluster](#reading-argo-cd-applications-400)) |
+| Argo CD Applications (`argoproj.io`) | `list` | read-only, by name with a field selector: [is Argo CD's tracking annotation still Argo CD's](#reading-argo-cd-applications-400) |
 | `operator.openshift.io/*` | `get` | only objects named `cluster` |
 | ClusterVersion, Console, Infrastructure, Ingress config | `get` | only `version` / `cluster` |
 | MLflows | `get` | only `mlflow` |
@@ -302,6 +303,30 @@ oc auth can-i list clusterrolebindings.rbac.authorization.k8s.io --as=$SA  # yes
 oc auth can-i get clusterroles.rbac.authorization.k8s.io/admin --as=$SA    # no
 oc auth can-i list rolebindings.rbac.authorization.k8s.io -A --as=$SA      # no
 oc auth can-i update clusterroles.rbac.authorization.k8s.io --as=$SA       # no
+```
+
+### Reading Argo CD Applications (4.0.0)
+
+Argo CD's tracking annotation (`argocd.argoproj.io/tracking-id`) on the nightly catalog, the RHOAI Subscription or the DataScienceCluster switches actions off (Argo CD would undo them). The annotation outlives its Application, so the tool asks Argo CD whether the Application still lists the object in `status.resources` ([RUNBOOK §13](RUNBOOK.md#13-clusters-managed-by-argo-cd); `pkg/cluster/argocd.go`). The ServiceAccount (both profiles) reads it on every status poll, for non-admins too; changes read it with the user's token.
+
+| Rule | What it allows | Worst case if the SA token leaks |
+|---|---|---|
+| Applications (`argoproj.io`): `list`, cluster-wide | read every Argo CD Application: its spec (source repository URLs, revisions, paths, Helm value files, inline `values`/`valuesObject`, parameters, plugin `env`, Kustomize settings, destination cluster and namespace, project, sync policy) and status (synced revision, resource list with health, images, conditions and operation messages) | an attacker learns where the cluster's configuration comes from (repository URLs, which may reveal private repository names and hosts), the other clusters Argo CD deploys to, and whatever an admin wrote inline into Helm values or plugin `env`. Application objects have no credential field: repository and cluster credentials live in Secrets labelled `argocd.argoproj.io/secret-type` in Argo CD's namespace, which the SA cannot read (no `list` or general `get` on Secrets). Inline values are as readable as the Git repository they come from, and Argo CD's docs advise against putting secrets there. Nothing can be changed: no `get` on other Argo CD kinds, no write |
+| ClusterRoleBindings: `list` (already granted, [above](#reading-rbac-to-find-module-operators-400)) | `?fieldSelector=metadata.name=argocd-manager-role-binding` | none added |
+| Discovery of `argoproj.io/v1alpha1` and `work.open-cluster-management.io/v1` | which APIs the cluster serves | none: every authenticated user may (`system:discovery`) |
+
+Why nothing narrower works: the annotation names `<name>` for an Application in Argo CD's own namespace, which can be any namespace (`openshift-gitops` for OpenShift GitOps' default instance, another for a second instance or an upstream install), or `<namespace>_<name>` for one elsewhere ("apps in any namespace"). Both need a cluster-wide grant, and `resourceNames` cannot be used: the names come from the cluster. The rejected alternative, `get` on Applications plus `list` on ArgoCD instances (`argoproj.io` `argocds`) to find Argo CD's namespaces, needs two rules instead of one, misses an upstream Argo CD (no ArgoCD resource, so it would fail closed there forever), and reads ArgoCD instance specs, which carry SSO and RBAC configuration (an inline OIDC config can hold a client secret). `list` with `metadata.name=` reads only Applications of the name the annotation already shows, but RBAC does not limit a `list` by its field selector, so the rule allows listing them all. No `get` and no `watch`: the code only lists.
+
+The check fails closed: a read error, a 403 (an install from before 4.0.0 whose template lacks the rule; a non-admin user's token during a change), an Application Argo CD has not compared, or signs of an Argo CD on another cluster keep the object managed, and the actions stay off with the reason.
+
+```bash
+oc auth can-i list applications.argoproj.io -A --as=$SA                          # yes
+oc auth can-i get applications.argoproj.io/x -n openshift-gitops --as=$SA        # no
+oc auth can-i watch applications.argoproj.io -A --as=$SA                         # no
+oc auth can-i patch applications.argoproj.io -A --as=$SA                         # no
+oc auth can-i list appprojects.argoproj.io -A --as=$SA                           # no
+oc auth can-i list argocds.argoproj.io -A --as=$SA                               # no
+oc auth can-i list secrets -n openshift-gitops --as=$SA                          # no
 ```
 
 ### The MaaS prune job (4.0.0)

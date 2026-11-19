@@ -36,8 +36,10 @@ export interface StatusResponse {
   activity?: ActivityEntry[];
   errors?: string[];
   dscExists: boolean;
-  /** The Argo CD application that tracks the DataScienceCluster. */
+  /** The Argo CD application that manages the DataScienceCluster (confirmed, or unconfirmed with a reason). */
   dscManagedBy?: string;
+  /** What Argo CD said about the DataScienceCluster's tracking annotation. */
+  dscArgoCD?: ArgoCDTracking;
   /** Installed vs latest nightly; only while the Subscription uses the nightly catalog. */
   nightly?: NightlyStatus;
   /**
@@ -119,8 +121,30 @@ export interface SubscriptionInfo {
   source: string;
   channel: string;
   state: string;
-  /** The Argo CD application that tracks the Subscription. */
+  /** The Argo CD application that manages the Subscription (confirmed, or unconfirmed with a reason). */
   managedBy?: string;
+  /** What Argo CD said about the Subscription's tracking annotation. */
+  argoCD?: ArgoCDTracking;
+}
+
+/**
+ * What the backend learnt from Argo CD about an object's
+ * argocd.argoproj.io/tracking-id annotation (pkg/cluster/argocd.go):
+ * - "managed": the Application lists the object among its resources;
+ * - "stale": the annotation is left over (staleReason), the tool treats
+ *   the object as not managed;
+ * - "unconfirmed": Argo CD could not be asked or did not answer clearly
+ *   (reason), the tool treats the object as managed.
+ */
+export interface ArgoCDTracking {
+  /** As the annotation names it: "name", or "namespace_name" outside Argo CD's own namespace. */
+  application: string;
+  state: "managed" | "stale" | "unconfirmed";
+  /** The namespace of the Application found. */
+  namespace?: string;
+  staleReason?: "argo-cd-not-installed" | "application-missing" | "not-in-resources";
+  reason?: string;
+  syncStatus?: string;
 }
 
 export interface CSVInfo {
@@ -134,10 +158,12 @@ export interface CatalogSourceInfo {
   name: string;
   image: string;
   state: string;
-  /** The Argo CD application that tracks the CatalogSource. */
+  /** The Argo CD application that manages the CatalogSource (confirmed, or unconfirmed with a reason). */
   managedBy?: string;
-  /** No Argo CD application tracks the catalog, and an ACM policy enforces its spec. */
+  /** No Argo CD application manages the catalog, and an ACM policy enforces its spec. */
   managedByACM?: boolean;
+  /** What Argo CD said about the CatalogSource's tracking annotation. */
+  argoCD?: ArgoCDTracking;
 }
 
 export interface PullSecretInfo {

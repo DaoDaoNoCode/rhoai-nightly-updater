@@ -305,7 +305,8 @@ type featurePlan struct {
 	fs                featureSetup
 	rec               prereqRecord
 	dsc               dscRead
-	dscName, argoApp  string
+	dscName, argoApp  string // argoApp: argo.managedBy
+	argo              argoTracking
 	components        []componentPlan
 	operators         []operatorPlan
 	depStatus, depMsg string
@@ -367,7 +368,8 @@ func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
 	if r.dscErr == nil && r.dsc.Object != nil {
 		meta, _ := r.dsc.Object["metadata"].(map[string]any)
 		p.dscName, _ = meta["name"].(string)
-		p.argoApp = argoApplicationOf(r.dsc.Object, "DataScienceCluster")
+		p.argo = argoTrackingOf(c, r.dsc.Object, dscGroup, "DataScienceCluster")
+		p.argoApp = p.argo.managedBy()
 		for _, fc := range fs.components {
 			key := fc.keyIn(r.dsc)
 			state, _ := componentManagement(r.dsc.Object, key)
@@ -404,7 +406,7 @@ func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
 			}
 		}
 		if len(turnOn) > 0 && p.argoApp != "" {
-			p.refuse(gitOpsRefusal("The DataScienceCluster", p.argoApp, "turning on "+strings.Join(turnOn, " and ")), ErrorCodeGitOpsManaged)
+			p.refuse(gitOpsRefusal("The DataScienceCluster", p.argoApp, "turning on "+strings.Join(turnOn, " and "))+p.argo.unconfirmedNote(), ErrorCodeGitOpsManaged)
 		}
 		if fs.dependency != "" {
 			p.depStatus, p.depMsg = dscConditionStatus(r.dsc.Object, fs.dependency)
@@ -1074,8 +1076,8 @@ func restoreCheck(c *Client, rec prereqRecord, dsc dscRead, key string) restoreV
 	case !dscComponentOwned(dsc.Object, key):
 		return restoreVerdict{drop: true, kept: key + " (changed by someone since this tool's setup)"}
 	}
-	if app := argoApplicationOf(dsc.Object, "DataScienceCluster"); app != "" {
-		return restoreVerdict{refusal: gitOpsRefusal("The DataScienceCluster", app, "turning "+key+" back to "+prev), code: ErrorCodeGitOpsManaged}
+	if argo := argoTrackingOf(c, dsc.Object, dscGroup, "DataScienceCluster"); argo.managedBy() != "" {
+		return restoreVerdict{refusal: gitOpsRefusal("The DataScienceCluster", argo.managedBy(), "turning "+key+" back to "+prev) + argo.unconfirmedNote(), code: ErrorCodeGitOpsManaged}
 	}
 	users, err := componentUsers(c, key)
 	if err != nil {

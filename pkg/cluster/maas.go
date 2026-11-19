@@ -368,7 +368,8 @@ type maasDSC struct {
 	maas      string // aigateway.modelsAsAService.managementState
 	ready     string // ModelsAsAServiceReady: True, False or "" (unknown)
 	readyMsg  string
-	argoApp   string
+	argoApp   string // the Argo CD application managing it (argo.managedBy)
+	argo      argoTracking
 }
 
 func readMaaSDSC(c *Client) (maasDSC, error) {
@@ -382,7 +383,8 @@ func readMaaSDSC(c *Client) (maasDSC, error) {
 	}
 	meta, _ := r.Object["metadata"].(map[string]any)
 	d.name, _ = meta["name"].(string)
-	d.argoApp = argoApplicationOf(r.Object, "DataScienceCluster")
+	d.argo = argoTrackingOf(c, r.Object, dscGroup, "DataScienceCluster")
+	d.argoApp = d.argo.managedBy()
 	d.aigateway, _ = componentManagement(r.Object, "aigateway")
 	spec, _ := r.Object["spec"].(map[string]any)
 	comps, _ := spec["components"].(map[string]any)
@@ -1408,7 +1410,7 @@ func (r *maasStatusRun) statusDSC(dsc maasDSC, dscErr error) {
 		dscPart.ManagedByTool = rec.AIGatewayChanged
 		if dsc.argoApp != "" {
 			dscPart.State = "problem"
-			dscPart.Message = gitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning on Models as a Service") + " Set " + strings.Join(fields, " and ") + " in Git."
+			dscPart.Message = gitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning on Models as a Service") + " Set " + strings.Join(fields, " and ") + " in Git." + dsc.argo.unconfirmedNote()
 			r.blockers = append(r.blockers, dscPart.Message)
 		} else {
 			plan(fmt.Sprintf("DataScienceCluster %s: %s (the values before are recorded, and Remove restores them)", dsc.name, strings.Join(fields, ", ")))

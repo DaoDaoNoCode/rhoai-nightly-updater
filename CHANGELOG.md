@@ -311,6 +311,23 @@ only accepts a tag whose version is the top dated section. See
 
 ### Fixed
 
+- **Argo CD: a left-over tracking annotation no longer switches features
+  off.** The tool trusted `argocd.argoproj.io/tracking-id` on the catalog,
+  the Subscription and the DataScienceCluster alone, so after the
+  Application was deleted without cascade, OpenShift GitOps was
+  uninstalled, or a cluster set up from Git was handed over, the Status
+  page still said Argo CD managed them and Re-deploy, Install a different
+  build and DSC changes stayed off. It now asks Argo CD: the Application
+  must list the object in `status.resources`. Argo CD not installed, the
+  Application gone, or an Application that no longer lists the object
+  shows a small note instead and leaves every action on; a read error, a
+  403, an Application Argo CD has not compared yet, or signs that an Argo
+  CD on another cluster may manage this one (ACM's AppliedManifestWork API,
+  ClusterRoleBinding `argocd-manager-role-binding`) keep the object managed
+  and say why. Every refusal uses the same verdict
+  ([RUNBOOK §13](RUNBOOK.md#13-clusters-managed-by-argo-cd)). The
+  ServiceAccount (both profiles) may now `list` Argo CD Applications
+  ([SECURITY: Reading Argo CD Applications](SECURITY.md#reading-argo-cd-applications-400)).
 - **Components and Diagnostics: module operators are found at run time,
   not from a list of names.** The list lacked `aigateway` and
   `mcplifecycleoperator`, so on RHOAI 3.6 a hard reset or a change that

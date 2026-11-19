@@ -91,10 +91,13 @@ type StatusResponse struct {
 	StableChannelPinned  bool              `json:"stableChannelPinned,omitempty"`
 	StableDiscoveryError string            `json:"stableDiscoveryError,omitempty"`
 	DSCExists            bool              `json:"dscExists"`
-	// DSCManagedBy is the Argo CD application that tracks the
-	// DataScienceCluster.
-	DSCManagedBy string         `json:"dscManagedBy,omitempty"`
-	Nightly      *NightlyStatus `json:"nightly,omitempty"`
+	// DSCManagedBy is the Argo CD application that manages the
+	// DataScienceCluster (ArgoCDTracking: managed or unconfirmed).
+	DSCManagedBy string `json:"dscManagedBy,omitempty"`
+	// DSCArgoCD is what Argo CD said about the DataScienceCluster's tracking
+	// annotation; absent when it has none.
+	DSCArgoCD *ArgoCDTracking `json:"dscArgoCD,omitempty"`
+	Nightly   *NightlyStatus  `json:"nightly,omitempty"`
 	// CatalogServes is the operator build the nightly catalog serves on the
 	// Subscription's channel, compared with the installed operator. Only set
 	// while Argo CD manages the catalog or the Subscription: Git then picks
@@ -122,8 +125,49 @@ type SubscriptionInfo struct {
 	Source  string `json:"source"`
 	Channel string `json:"channel"`
 	State   string `json:"state"`
-	// ManagedBy is the Argo CD application that tracks the Subscription.
+	// ManagedBy is the Argo CD application that manages the Subscription
+	// (ArgoCDTracking: managed or unconfirmed).
 	ManagedBy string `json:"managedBy,omitempty"`
+	// ArgoCD is what Argo CD said about the Subscription's tracking
+	// annotation; absent when it has none.
+	ArgoCD *ArgoCDTracking `json:"argoCD,omitempty"`
+}
+
+// Argo CD tracking states (ArgoCDTracking.State).
+const (
+	// ArgoCDManaged: the Application the annotation names lists the object
+	// among its resources.
+	ArgoCDManaged = "managed"
+	// ArgoCDStale: the annotation is left over (StaleReason says how the
+	// tool knows); the object is treated as not managed.
+	ArgoCDStale = "stale"
+	// ArgoCDUnconfirmed: Argo CD could not be asked, or did not answer
+	// clearly (Reason); the object is treated as managed.
+	ArgoCDUnconfirmed = "unconfirmed"
+)
+
+// Why a tracking annotation is left over (ArgoCDTracking.StaleReason).
+const (
+	ArgoCDNotInstalled      = "argo-cd-not-installed"
+	ArgoCDApplicationGone   = "application-missing"
+	ArgoCDNotAmongResources = "not-in-resources"
+)
+
+// ArgoCDTracking is what the tool learnt from Argo CD about an object's
+// argocd.argoproj.io/tracking-id annotation (pkg/cluster/argocd.go).
+type ArgoCDTracking struct {
+	// Application is the application as the annotation names it:
+	// "<name>", or "<namespace>_<name>" for an application outside Argo
+	// CD's own namespace.
+	Application string `json:"application"`
+	State       string `json:"state"`
+	// Namespace is the namespace of the Application the tool found.
+	Namespace   string `json:"namespace,omitempty"`
+	StaleReason string `json:"staleReason,omitempty"`
+	// Reason says why Argo CD could not confirm (unconfirmed).
+	Reason string `json:"reason,omitempty"`
+	// SyncStatus is the Application's status.sync.status (managed).
+	SyncStatus string `json:"syncStatus,omitempty"`
 }
 
 // CSVInfo describes the ClusterServiceVersion for the installed RHOAI operator.
@@ -139,11 +183,16 @@ type CatalogSourceInfo struct {
 	Name   string `json:"name"`
 	Image  string `json:"image"`
 	State  string `json:"state"`
-	// ManagedBy is the Argo CD application that tracks the CatalogSource.
+	// ManagedBy is the Argo CD application that manages the CatalogSource
+	// (ArgoCDTracking: managed or unconfirmed).
 	ManagedBy string `json:"managedBy,omitempty"`
-	// ManagedByACM: no Argo CD application tracks the CatalogSource, and an
-	// ACM policy enforces its spec (config-policy-controller owns f:spec).
+	// ManagedByACM: no Argo CD application manages the CatalogSource, and
+	// an ACM policy enforces its spec (config-policy-controller owns
+	// f:spec).
 	ManagedByACM bool `json:"managedByACM,omitempty"`
+	// ArgoCD is what Argo CD said about the CatalogSource's tracking
+	// annotation; absent when it has none.
+	ArgoCD *ArgoCDTracking `json:"argoCD,omitempty"`
 }
 
 // PullSecretInfo reports whether the additional-pull-secret exists and is valid.
