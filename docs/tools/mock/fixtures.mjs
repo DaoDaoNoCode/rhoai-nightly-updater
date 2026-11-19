@@ -635,7 +635,7 @@ const usedBy = (models) => models.length
 export const gatewayStates = {
   none: { deployed: false, ready: false, message: "Not set up", managedByTool: false },
   starting: { ...GW, deployed: true, ready: false, managedByTool: true, message: "Programmed, waiting for an address", externalUrl: INFERENCE },
-  ready: (models = []) => ({ ...GW, deployed: true, ready: true, managedByTool: true, message: "Running", externalUrl: INFERENCE, address: "a1b2c3d4e5f6-1234567890.us-east-1.elb.amazonaws.com", dns: "published", authPolicy: models.length ? "enforced" : "missing", ...usedBy(models) }),
+  ready: (models = []) => ({ ...GW, deployed: true, ready: true, managedByTool: true, message: "Running", externalUrl: INFERENCE, address: "a1b2c3d4e5f6-1234567890.us-east-1.elb.amazonaws.com", dns: "published", addedProjects: models.length ? ["dev-project"] : undefined, authPolicy: models.length ? "enforced" : "missing", ...usedBy(models) }),
   // RHOAI's chart (or an admin) made it: used as it is, never changed. The
   // chart's documented allowedRoutes: a list of project names.
   foreign: (models = []) => ({ ...GW, allowedProjects: ["openshift-ingress", "llm-eval"], deployed: true, ready: true, managedByTool: false, message: "Running", externalUrl: INFERENCE, address: "a9f8e7d6-0987654321.us-east-1.elb.amazonaws.com", authPolicy: "enforced", ...usedBy(models), teardownBlockedReason: "This gateway was not created by this tool, so the tool does not change or delete it." }),
@@ -1208,42 +1208,45 @@ export function modelExposures(project, model, gw, { maasReady = false, otherGat
   const chat = MODEL_CATALOG.find((c) => c.name === model)?.type !== "embedding";
   const gwUsable = !!gw?.deployed && !!gw.ready;
   const listed = (gw?.allowedProjects ?? []).includes(project);
+  const address = `${INFERENCE}/${project}/${model}`;
   const def = {
     key: "default-gateway", exposure: "default-gateway", title: "Through the cluster's default inference gateway",
-    description: `KServe's default route, as the dashboard deploys models: gateway ${GW_KEY} answers for the model and checks each caller's OpenShift token (RHOAI's AuthPolicy on the gateway).`,
-    available: gwUsable, address: gwUsable ? `${INFERENCE}/${project}/${model}` : undefined,
-    reason: gwUsable ? undefined : `Gateway ${GW_KEY} does not exist: RHOAI does not create it. Set up the inference gateway on this tab to create it, or choose another way.`,
-    changes: gwUsable && gw.managedByTool && !listed ? [`Gateway ${GW_KEY} (this tool's): '${project}' is added to the projects it allows. Anyone who can edit '${project}' can then attach routes to this shared gateway.`] : undefined,
+    description: `Reachable from outside the cluster at ${gwUsable ? address : `https://inference.<apps domain>/${project}/${model}`}. Each call needs an OpenShift token that can see ${project}.`,
+    available: gwUsable, address: gwUsable ? address : undefined,
+    reason: gwUsable ? undefined : "The inference gateway isn't set up yet. Set it up below, or choose another way.",
+    fix: gwUsable ? undefined : "inference-gateway",
+    changes: gwUsable && gw.managedByTool && !listed ? [`Gateway ${GW_KEY} (this tool's): ${project} is added to the projects it allows. Anyone who can edit ${project} can then attach routes to this shared gateway.`] : undefined,
     needsAuth: gwUsable && !authReady ? true : undefined,
   };
   const maas = {
     key: "maas", exposure: "maas", gatewayRef: "openshift-ingress/maas-default-gateway", title: "Through MaaS only",
-    description: "The model routes through MaaS's gateway alone and is published to Models as a Service: everyone signed in to the cluster calls it with a MaaS API key, within the subscription's token limit, and the dashboard's playground offers it as a MaaS model. No inference gateway is needed.",
+    description: "Published to Models as a Service: anyone signed in to the cluster can call it with a MaaS API key, within their subscription's token limit. The dashboard's playground lists it as a MaaS model.",
     available: chat && maasReady, address: maasReady ? `https://maas.${APPS}` : undefined,
-    reason: !chat ? "Only chat models are published to MaaS." : maasReady ? undefined : "The MaaS platform is not ready: Red Hat Connectivity Link: Not installed. Set up on the MaaS tab does what is missing.",
-    changes: chat && maasReady ? [`Gateway openshift-ingress/maas-default-gateway: admits routes from '${project}'.`, `Published to MaaS: MaaSModelRef ${model} in '${project}', and this tool's subscription and access policy list the model.`] : undefined,
+    reason: !chat ? "Only chat models are published to MaaS." : maasReady ? undefined : "MaaS isn't set up yet (Red Hat Connectivity Link is missing).",
+    fix: chat && !maasReady ? "maas-tab" : undefined,
+    changes: chat && maasReady ? [`Gateway openshift-ingress/maas-default-gateway: admits routes from ${project}.`, `Published to MaaS: MaaSModelRef ${model} in ${project}, and this tool's subscription and access policy list the model.`] : undefined,
   };
+  // Outside openshift-ingress: offered, never recommended (its token checks cannot be read).
   const other = otherGateway ? [{
-    key: "gateway:team-gateways/shared-llm", exposure: "gateway", gatewayRef: "team-gateways/shared-llm", title: "Through gateway team-gateways/shared-llm",
-    description: "The model's route is on gateway team-gateways/shared-llm (as it is; this tool never changes someone else's gateway), and RHOAI adds its token authentication to that gateway.",
+    key: "gateway:team-gateways/shared-llm", exposure: "gateway", gatewayRef: "team-gateways/shared-llm", title: "Through another gateway: team-gateways/shared-llm",
+    description: "Uses a gateway someone else runs; this tool doesn't change it. RHOAI adds token checks.",
     available: true, address: `https://shared-llm.${APPS}/${project}/${model}`,
   }] : [];
   const internal = {
     key: "internal", exposure: "internal", title: "Only inside the cluster", available: true,
-    description: "No route: the model answers only at its in-cluster address, for programs that run on this cluster. Nothing outside the cluster can reach it.",
+    description: "No outside address. Programs on this cluster (for example a workbench) can call it without a token.",
     address: `https://${model}-kserve-workload-svc.${project}.svc.cluster.local`,
     warning: "Calls to the in-cluster address are not authenticated: any pod on the cluster whose network can reach the project can use the model.",
   };
   const options = [def, maas, ...other, internal];
-  const chosen = def.available ? def : maas.available ? maas : other[0];
+  const chosen = def.available ? def : maas.available ? maas : undefined;
   return {
     project, model, kserveDefaultGateway: GW_KEY, authReady, options,
     default: chosen?.key ?? "",
-    defaultReason: chosen === def ? `Gateway ${GW_KEY} is KServe's default and can carry a model from '${project}': the model is reached the way the dashboard deploys models.`
-      : chosen === maas ? "The MaaS platform is ready and the cluster's default inference gateway cannot be used: the model is reached through MaaS, with no inference gateway."
-        : chosen ? `The cluster's default inference gateway cannot be used, and gateway ${chosen.gatewayRef} can carry a model from '${project}'.` : undefined,
+    defaultReason: chosen === def ? "works from your laptop with an OpenShift token, the way the dashboard deploys models."
+      : chosen === maas ? "MaaS is set up and the inference gateway can't be used: anyone signed in calls the model with a MaaS API key." : undefined,
     recommendGateway: !def.available,
-    recommendGatewayReason: def.available ? undefined : "Set up the inference gateway (this tab's own part) to reach models from outside the cluster with OpenShift tokens, as the dashboard deploys them.",
+    recommendGatewayReason: def.available ? undefined : "Set up the inference gateway to reach models from outside the cluster with an OpenShift token, as the dashboard does.",
   };
 }
 
@@ -1254,26 +1257,27 @@ export const routed = (m, { exposure = "default-gateway", check = "ok" } = {}) =
   gatewayAuth: exposure === "internal" ? undefined : exposure === "maas" ? "maas" : "enforced",
   internalUrl: `https://${m.name}-kserve-workload-svc.${m.namespace}.svc.cluster.local`,
   url: exposure === "internal" ? undefined : m.url,
-  callCheck: check === "ok" ? { result: "ok", ok: true, status: 200, message: `Answers requests: a request for model "${m.name}" got 200.`, url: `${m.url}/v1/chat/completions`, at: "2026-11-18T18:04:12Z" }
+  callCheck: check === "ok" ? { result: "ok", ok: true, status: 200, message: exposure === "internal" ? `A chat request for "${m.name}" was answered (HTTP 200).` : `A chat request for "${m.name}" was answered (HTTP 200). A request without a token was refused (HTTP 401).`, url: `${m.url}/v1/chat/completions`, at: "2026-11-18T18:04:12Z" }
+    : check === "unauthenticated" ? { result: "unauthenticated", ok: false, status: 200, message: `The model also answered a request without a token (HTTP 200): gateway ${GW_KEY} does not check who calls, so anyone who can reach ${m.url} can use the model. Check that RHOAI's AuthPolicy on the gateway is enforced (odh-model-controller and Red Hat Connectivity Link run), and that the gateway is not labelled opendatahub.io/managed=false.`, url: `${m.url}/v1/chat/completions`, at: "2026-11-18T18:04:12Z" }
     : check === "model-name" ? { result: "model-name", ok: false, status: 404, message: `The model's server answered 404: it does not serve a model named "Qwen/Qwen2.5-0.5B-Instruct". A request must send "model": "${m.name}", the name the model was set up with (not its display name or its Hugging Face id).`, at: "2026-11-18T18:04:12Z" }
-      : check === "route" ? { result: "route", ok: false, status: 404, message: `Nothing answers at ${m.url}/v1/chat/completions (404 without the model's own answer): the request did not reach the model. On a gateway the path must be /<project>/<model>/v1/...; right after a change the gateway may not have loaded the model's route yet.`, at: "2026-11-18T18:04:12Z" }
+      : check === "route" ? { result: "route", ok: false, status: 404, message: `No answer at ${m.url}/v1/chat/completions (404, empty body): the gateway didn't route the request to the model. Right after setup the gateway can take a minute to load the route; check again shortly.`, at: "2026-11-18T18:04:12Z" }
         : undefined,
 });
 
 /** GET /api/resources/prerequisites: every feature ready, or Models missing what it needs. */
-export function prerequisites({ models = "ready", pipelines = "ready" } = {}) {
+export function prerequisites({ models = "ready", pipelines = "ready", exposure = "" } = {}) {
   const readyPart = (id, title, message) => ({ id, title, state: "ready", message, notManaged: true });
   const ready = (parts) => ({ ready: true, parts });
   const missingModels = {
     ready: false,
     parts: [
-      { id: "dsc-kserve", title: "Model serving (KServe) component (kserve)", state: "missing", message: "Removed in DataScienceCluster default-dsc. Set up sets it to Managed; Clean up can turn it back.", commands: `oc patch datasciencecluster default-dsc --type=merge -p '{"spec":{"components":{"kserve":{"managementState":"Managed"}}}}'` },
+      { id: "dsc-kserve", title: "Model serving (KServe)", state: "missing", message: "Removed in DataScienceCluster default-dsc. Set up sets it to Managed; Clean up can turn it back.", commands: `oc patch datasciencecluster default-dsc --type=merge -p '{"spec":{"components":{"kserve":{"managementState":"Managed"}}}}'` },
       { id: "cert-manager", title: "cert-manager Operator for Red Hat OpenShift", state: "missing", message: "Not installed. Set up installs version 1.20.1 from redhat-operators (channel stable-v1).", commands: "oc apply -f - <<'EOF'\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: cert-manager-operator\nEOF" },
       ...(models === "missing-routing" ? [
         { id: "rhcl", title: "Red Hat Connectivity Link", state: "missing", message: "Not installed. Set up installs version 1.4.4 from redhat-operators (channel stable)." },
-        { id: "kuadrant", title: "Kuadrant CR (Connectivity Link's policies)", state: "missing", message: "Not there. Set up creates it once Connectivity Link serves its API; it starts Authorino, which checks each call's token." },
+        { id: "kuadrant", title: "Connectivity Link instance (Kuadrant)", state: "missing", message: "Not created yet. Set up creates it once Connectivity Link serves its API; it starts Authorino, which checks each call's token." },
       ] : []),
-      { id: "dependencies", title: "KServe's operator check (KserveLLMInferenceServiceDependencies)", state: "waiting", message: "KServe reports: cert-manager operator not installed. Set up installs what it names, then waits until KServe sees it." },
+      { id: "dependencies", title: "KServe's dependency check", state: "waiting", message: "Waits for cert-manager: KServe reports it isn't installed. Set up installs it, then waits until KServe sees it." },
     ],
     setupPlan: [
       "DataScienceCluster default-dsc: set kserve to Managed (it is Removed; Clean up can turn it back while nothing else uses it)",
@@ -1286,15 +1290,16 @@ export function prerequisites({ models = "ready", pipelines = "ready" } = {}) {
   };
   const missingPipelines = {
     ready: false,
-    parts: [{ id: "dsc-aipipelines", title: "Pipelines component (aipipelines)", state: "missing", message: "Removed in DataScienceCluster default-dsc. Set up sets it to Managed; Clean up can turn it back.", commands: `oc patch datasciencecluster default-dsc --type=merge -p '{"spec":{"components":{"aipipelines":{"managementState":"Managed"}}}}'` }],
+    parts: [{ id: "dsc-aipipelines", title: "Data Science Pipelines (aipipelines)", state: "missing", message: "Removed in DataScienceCluster default-dsc. Set up sets it to Managed; Clean up can turn it back.", commands: `oc patch datasciencecluster default-dsc --type=merge -p '{"spec":{"components":{"aipipelines":{"managementState":"Managed"}}}}'` }],
     setupPlan: ["DataScienceCluster default-dsc: set aipipelines to Managed (it is Removed; Clean up can turn it back while nothing else uses it)"],
   };
   return {
+    modelsExposure: exposure,
     features: {
-      pipelines: pipelines === "missing" ? missingPipelines : ready([readyPart("dsc-aipipelines", "Pipelines component (aipipelines)", "Managed in DataScienceCluster default-dsc")]),
-      mlflow: ready([readyPart("dsc-mlflowoperator", "MLflow component (mlflowoperator)", "Managed in DataScienceCluster default-dsc")]),
-      models: models === "ready" ? ready([readyPart("dsc-kserve", "Model serving (KServe) component (kserve)", "Managed in DataScienceCluster default-dsc"), readyPart("cert-manager", "cert-manager Operator for Red Hat OpenShift", "Version 1.20.1 runs in cert-manager-operator")]) : missingModels,
-      playground: ready([readyPart("dsc-ogx", "OGX component (ogx)", "Managed in DataScienceCluster default-dsc")]),
+      pipelines: pipelines === "missing" ? missingPipelines : ready([readyPart("dsc-aipipelines", "Data Science Pipelines (aipipelines)", "Managed in DataScienceCluster default-dsc")]),
+      mlflow: ready([readyPart("dsc-mlflowoperator", "MLflow (mlflowoperator)", "Managed in DataScienceCluster default-dsc")]),
+      models: models === "ready" ? ready([readyPart("dsc-kserve", "Model serving (KServe)", "Managed in DataScienceCluster default-dsc"), readyPart("cert-manager", "cert-manager Operator for Red Hat OpenShift", "Version 1.20.1 runs in cert-manager-operator")]) : missingModels,
+      playground: ready([readyPart("dsc-ogx", "Gen AI playground (ogx)", "Managed in DataScienceCluster default-dsc")]),
     },
   };
 }

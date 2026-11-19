@@ -337,6 +337,13 @@ const scenarios = {
     w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
     w.resources.models = F.modelsStatus({ items: [F.routed(F.modelStates.released("dev-project"), { check: "route" })] });
   },
+  // The gateway answers a call without a token: the check fails as unauthenticated.
+  "env-models-unauthenticated": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ items: [F.routed(F.modelStates.released("dev-project"), { check: "unauthenticated" })] });
+  },
+  // A fresh cluster: the Overview's Models row needs cluster setup (planned for the recommended gateway).
+  "env-overview-prereq": (w) => { w.resources.inferenceGateway = F.gatewayStates.none; w.resources.models = F.modelsStatus(); w.prereq = { models: "missing", pipelines: "missing" }; w.routing = { authReady: false }; },
   "env-models-internal": (w) => {
     w.resources.inferenceGateway = F.gatewayStates.none;
     w.resources.models = F.modelsStatus({ items: [F.routed(F.modelStates.released("dev-project"), { exposure: "internal", check: undefined })] });
@@ -902,7 +909,7 @@ const routes = {
   "GET /api/resources/maas": () => world.maas,
   // Models routing and one-click prerequisites.
   "GET /api/resources/models/exposures": (u) => F.modelExposures(u.searchParams.get("project") || "", u.searchParams.get("model") || "qwen25-05b-instruct", world.resources.inferenceGateway ?? F.gatewayStates.none, world.routing ?? {}),
-  "GET /api/resources/prerequisites": (u) => F.prerequisites({ ...(world.prereq ?? {}), ...(world.prereq?.models === "missing" && ["default-gateway", "gateway"].includes(u.searchParams.get("exposure") ?? "") ? { models: "missing-routing" } : {}) }),
+  "GET /api/resources/prerequisites": (u) => F.prerequisites({ ...(world.prereq ?? {}), exposure: u.searchParams.get("exposure") ?? "", ...(world.prereq?.models === "missing" && ["default-gateway", "gateway"].includes(u.searchParams.get("exposure") ?? "") ? { models: "missing-routing" } : {}) }),
   "GET /api/resources/samples/mlflow": (u) => mlflowSamplesOf(u.searchParams.get("project") || ""),
   "GET /api/resources/samples/pipeline/spec": () => F.pipelineSampleSpec,
   // Made up, like every value here.
