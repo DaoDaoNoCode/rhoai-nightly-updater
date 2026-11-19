@@ -169,6 +169,15 @@ only accepts a tag whose version is the top dated section. See
 - `dev.sh` stops everything it started on Ctrl-C, kill or a closed
   terminal (also after `kill -9`), and refuses a second copy for the same
   checkout.
+- A model set up on the Models tab **Through MaaS only** is published as
+  part of its setup, and its lifecycle now follows that. **Unpublish**
+  leaves it with no route (only inside the cluster), as it was set up;
+  before, it put the model on KServe's default gateway, which nobody chose,
+  and said it routed "as before publishing". **Delete** on the Models tab
+  unpublishes it first, in the same operation; before, it refused and
+  asked for Unpublish on the MaaS tab. When that unpublish stops, the model
+  is not deleted. A model published on the MaaS tab still has to be
+  unpublished there first.
 
 ### Changed
 
