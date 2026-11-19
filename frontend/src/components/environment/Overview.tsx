@@ -112,7 +112,7 @@ export const Overview: React.FC<{
       }
       case "show-issue":
         // Among several projects, the step names the one with the problem.
-        return <Button variant="link" isInline className={ONE_LINE} onClick={() => onShowIssue(row, step.part)}>{step.project ? `Open ${step.project}` : "Show issue"}</Button>;
+        return <Button variant="link" isInline className={ONE_LINE} onClick={() => onShowIssue(row, step.part)}>{step.project ? `Show issue in ${step.project}` : "Show issue"}</Button>;
       case "migrate":
         return setUpReason
           ? <Button variant="link" isInline className={ONE_LINE} onClick={() => onShowIssue(row, "storage")}>Show issue</Button>
