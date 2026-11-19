@@ -149,7 +149,8 @@ func TestCheckApplyFailures(t *testing.T) {
 // msgImmutableLabels is msgImmutableSelector for another immutable field:
 // a changed selector alone is the "Left over from an earlier release"
 // check's (diagnostics_leftovers.go), any other immutable field stays here.
-var msgImmutableLabels = strings.Replace(msgImmutableSelector, "spec.selector: Invalid value", "spec.template.metadata.labels: Invalid value", 1)
+var msgImmutableLabels = strings.Replace(msgImmutableSelector, `spec.selector: Invalid value: {"matchLabels":{"app.kubernetes.io/component":"kuberay-operator","app.kubernetes.io/name":"kuberay"}}`,
+	`spec.template.metadata.labels: Invalid value: {"app.kubernetes.io/component":"kuberay-operator","app.kubernetes.io/name":"kuberay"}`, 1)
 
 // applyFailuresWorld serves four apply failures (an immutable field, two
 // controller owners, a CRD schema mismatch, a module the tool does not

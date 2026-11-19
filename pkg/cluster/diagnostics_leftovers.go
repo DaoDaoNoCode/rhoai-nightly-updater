@@ -117,7 +117,15 @@ func leftoversCheck(c *Client, users usersReader) checkOutput {
 			keys = append(keys, k)
 		}
 	}
-	sort.Strings(keys)
+	// Stored field types first: the module operator cannot run until they
+	// are fixed, and it is what recreates a workload.
+	sort.Slice(keys, func(i, j int) bool {
+		si, sj := s.found[keys[i]].has(applyStoredType), s.found[keys[j]].has(applyStoredType)
+		if si != sj {
+			return si
+		}
+		return keys[i] < keys[j]
+	})
 	for _, k := range keys {
 		rf := s.found[k]
 		switch {
@@ -330,7 +338,7 @@ func (lf *leftoverField) decide(obj map[string]interface{}, root map[string]inte
 		return
 	case lf.Schema.HasDefault && valueMatches(lf.Schema.Default, lf.Schema):
 		lf.Change, lf.After = "set-default", lf.Schema.Default
-		lf.Why = "the installed CRD's default, which the operator gets when the field is not set"
+		lf.Why = "the operator uses this value when the field is not set"
 		if !zeroLike(lf.Value) {
 			lf.Review = true
 			lf.Why += fmt.Sprintf("; the stored %s may not mean the same as %s, so check what the field means", fieldJSON(lf.Value), fieldText(lf.Schema.Default))
@@ -1000,7 +1008,7 @@ func analyzeRecreate(c *Client, rf *reportedApplyFailure, appNS string, read wor
 	}
 
 	// What stops while it is gone.
-	r.Warnings = append(r.Warnings, fmt.Sprintf("%s and its pods stop now. %s creates it again with the current selector on its next reconcile, usually within seconds; the old ReplicaSets and pods are removed in the background.", r.ref(), nonEmpty(r.Recreator, "Its operator")))
+	r.Warnings = append(r.Warnings, fmt.Sprintf("%s and its pods stop now; %s creates it again with the current selector on its next reconcile, usually within seconds; the old ReplicaSets and pods are removed in the background.", r.ref(), nonEmpty(r.Recreator, "its operator")))
 	switch {
 	case r.Module != "" && usersCheckedComponents[r.Module] && users == nil:
 		r.AckReasons = append(r.AckReasons, fmt.Sprintf("this scan does not check what uses %s", r.Module))

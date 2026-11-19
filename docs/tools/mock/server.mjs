@@ -502,7 +502,7 @@ const scenarios = {
   // Sample changes wait for /__docs/advance: a row shows its operation.
   "env-samples-gated": (w) => { scenarios["env-samples-new"](w); w.gated = true; },
 };
-for (const name of ["healthy", "prerequisite-missing", "operand-missing", "module-backoff", "certificate-stale", "apply-failures", "upgrade-gates", "conversion-webhook"]) {
+for (const name of ["healthy", "prerequisite-missing", "operand-missing", "module-backoff", "certificate-stale", "apply-failures", "upgrade-gates", "conversion-webhook", "leftovers"]) {
   scenarios[`diag-${name}`] = (w) => {
     w.diagnostics = F.diagnostics(name);
     // The operator cannot convert the DSC to v3: the Components page reads it as v2.
@@ -511,6 +511,9 @@ for (const name of ["healthy", "prerequisite-missing", "operand-missing", "modul
     if (name === "module-backoff") w.gated = true;
   };
 }
+// The leftover fixes refused: the module operator that recreates the
+// Deployment is not running (the backend's prerequisites refusal).
+scenarios["diag-leftovers-refused"] = (w) => { scenarios["diag-leftovers"](w); w.leftoverRefusal = true; };
 
 let scenario = args.scenario || process.env.DOCS_SCENARIO || "healthy";
 let world;
@@ -1074,15 +1077,36 @@ async function api(req, res, u) {
         : { success: true, message: "Pipeline server created. It will take 1-3 minutes to become ready.", logs: [] };
     });
   }
-  if (key === "POST /api/diagnostics/fix") {
-    const { problemId = "" } = await body(req);
-    return mutation(res, "diagnostics-fix", "Apply diagnostics fix", () => ({
-      success: true,
-      message: problemId.includes("restart-module-operator")
-        ? "Restarted redhat-ods-applications/trainer-operator-controller-manager. The trainer operator reconciles when its new pod starts; re-scan in a minute or two."
-        : "Done.",
-      logs: [],
-    }));
+  if (key === "POST /api/diagnostics/fix" || key === "POST /api/diagnostics/fix/acknowledged") {
+    const { problemId = "", acknowledged = false } = await body(req);
+    return mutation(res, "diagnostics-fix", "Apply diagnostics fix", () => {
+      // The backend's answers (pkg/cluster/diagnostics_leftovers_fix.go).
+      if (problemId.startsWith("recreate-leftover:")) {
+        if (!acknowledged) {
+          return { success: false, errorCode: "acknowledgement_required", logs: [],
+            message: "Deleting Deployment redhat-ods-applications/trustyai-service-operator-controller-manager needs your acknowledgement first: the tool cannot tell whether trustyai is in use: it has no reader for that component's resources. Nothing was changed; confirm it in the Fix dialog." };
+        }
+        if (world.leftoverRefusal) {
+          return { success: false, errorCode: "prerequisites", logs: ["Reported by TrustyAI default-trustyai"],
+            message: "Not deleting Deployment redhat-ods-applications/trustyai-service-operator-controller-manager: the trustyai module operator redhat-ods-applications/trustyai-operator-module-controller-manager, which creates it again, has no available pod; fix that first. Nothing was deleted." };
+        }
+        world.diagnostics = { ...world.diagnostics, problems: world.diagnostics.problems.filter((p) => !p.id.startsWith("leftover-recreate-")) };
+        return { success: true, logs: ["Deleted Deployment redhat-ods-applications/trustyai-service-operator-controller-manager (UID old-uid, propagation Background)", "It is back and ready"],
+          message: "Recreated Deployment redhat-ods-applications/trustyai-service-operator-controller-manager: the trustyai module operator redhat-ods-applications/trustyai-operator-module-controller-manager created it again with the current selector and its pods are ready. Re-scan to check that TrustyAI default-trustyai is ready." };
+      }
+      if (problemId.startsWith("fix-leftover-fields:")) {
+        world.diagnostics = { ...world.diagnostics, problems: world.diagnostics.problems.filter((p) => !p.id.startsWith("leftover-fields-") && !p.id.startsWith("pod-crashloop-")) };
+        return { success: true, logs: ["The API server's dry run accepted the change"],
+          message: "Changed TrustyAI default-trustyai: .spec.eval.lmeval.permitOnline false -> \"deny\", .spec.eval.lmeval.permitCodeExecution false -> \"deny\". The DataScienceCluster controller applies it again on its own; re-scan in a minute. If the error stays, the scan offers Retry now." };
+      }
+      return {
+        success: true,
+        message: problemId.includes("restart-module-operator")
+          ? "Restarted redhat-ods-applications/trainer-operator-controller-manager. The trainer operator reconciles when its new pod starts; re-scan in a minute or two."
+          : "Done.",
+        logs: [],
+      };
+    });
   }
   const handler = routes[key];
   if (handler) return json(res, 200, handler(u));

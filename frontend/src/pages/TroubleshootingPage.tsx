@@ -166,7 +166,8 @@ export const FieldChangesTable: React.FC<{ changes: FieldChange[]; label: string
       {changes.map((fc) => (
         <Tr key={fc.object + fc.field}>
           <Td dataLabel="Field">
-            <code className="pf-v6-u-text-break-word">{fc.field}</code>
+            {/* Long paths wrap at their dots, not inside a key. */}
+            <code>{fc.field.split(".").map((part, i) => <React.Fragment key={i}>{i > 0 && <>.<wbr /></>}{part}</React.Fragment>)}</code>
             <div className="pf-v6-u-font-size-sm pf-v6-u-text-color-subtle">The CRD says: {fc.schema}</div>
           </Td>
           <Td dataLabel="Now" modifier="fitContent">{fc.now ? <code>{fc.now}</code> : "Not stored"}</Td>
@@ -536,7 +537,7 @@ export const TroubleshootingPage: React.FC = () => {
         onCancel={() => setConfirmFix(null)}
       >
         {(confirmFix?.fieldChanges?.length ?? 0) > 0 ? (
-          <Stack hasGutter>
+          <Stack hasGutter className="pf-v6-u-mb-md">
             <StackItem>
               <FieldChangesTable changes={confirmFix!.fieldChanges!.filter((fc) => fc.change === "set-default" || fc.change === "remove")} label="Fields the fix changes" />
             </StackItem>

@@ -25,6 +25,32 @@ only accepts a tag whose version is the top dated section. See
 
 ### Added
 
+- **Diagnostics: "Left over from an earlier release", with fixes.** Found
+  from the operator's own failure reports (DataScienceCluster, Platform and
+  every module CR) and confirmed with live reads, not from a list of known
+  objects (live on RHOAI 3.6.0, where the DSC was Not Ready while every
+  component said Ready). **Stored field types** (`... to smd typed: errors:
+  <path>: expected <type>`): a module CR still holds a value of the type an
+  earlier release wrote; the problem shows each field's stored value, what
+  the installed CRD says and the value after (the CRD's default, or removed
+  when optional; a required field without a default has no fix), and Fix
+  patches only those fields with a JSON Patch that tests each stored value,
+  after a server-side dry run. It refuses when the CRD may be the older side
+  (OLM wrote it for a bundle the installed operator does not ship, or it was
+  written by hand), and asks for an acknowledgement when a stored value may
+  not mean the same as the default. A crash-looping module operator whose
+  last exit names the object's informer links to it. If the DSC still shows
+  the error once the fields are valid, **Retry now** adds and removes an
+  annotation on it. **Changed selector** on a Deployment, StatefulSet,
+  DaemonSet or Job: Fix deletes it (UID and resourceVersion preconditions,
+  after a dry run) so the operator creates it again, and waits for it to be
+  back and ready; only in the applications namespace, only when its
+  controller owner is a module CR (or the DSC) that reports it, and only
+  while that owner's operator runs. When the tool cannot tell what the
+  outage affects, you tick an acknowledgement; the new route
+  `POST /api/diagnostics/fix/acknowledged` carries it, and the plain route
+  refuses such fixes. All fixes run with your token; no new ServiceAccount
+  permission. RUNBOOK §11.6.
 - **Components: change the DataScienceCluster without the OpenShift
   console.** A tree of every component and sub-component the installed
   DataScienceCluster CRD defines (any depth: `dashboard.standard`,
@@ -275,6 +301,10 @@ only accepts a tag whose version is the top dated section. See
 
 ### Changed
 
+- Diagnostics' "Objects the operator cannot update" no longer lists an
+  object whose only failure is a changed `spec.selector` of a workload: it
+  is under "Left over from an earlier release", with a Fix. An object with
+  other failures as well stays there, one problem per object.
 - **Every change runs with your own OpenShift token.** Users sign in
   through the install's own OAuthClient `<APP_NAME>-<NAMESPACE>`
   (`grantMethod: auto`, so no "Authorize Access" page; oauth-proxy

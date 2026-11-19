@@ -331,9 +331,10 @@ Platform-owned configurations, and those whose owner is unknown, are never remov
 - delete Failed InstallPlans;
 - assist a stuck rollout (`maxUnavailable: 1`, recorded and restorable);
 - set one allowlisted optional component to Removed;
-- restart a module operator that has not retried (a rolling restart).
+- restart a module operator that has not retried (a rolling restart);
+- left over from an earlier release: set module CR fields that an older release stored with another type to the installed CRD's default (or remove an optional one), as a tested JSON Patch after a dry run; recreate a Deployment, StatefulSet, DaemonSet or Job whose `spec.selector` changed, only when a module CR (or the DSC) that reports it owns it and its operator runs; and "Retry now", which adds and removes an annotation on the DataScienceCluster ([RUNBOOK §11.6](RUNBOOK.md#116-upgrade-leftovers-the-operator-cannot-fix-itself)).
 
-Each re-checks its precondition right before acting and reports "Nothing to do" when nothing needs changing.
+Each re-checks its precondition right before acting and reports "Nothing to do" when nothing needs changing. A fix whose effect the tool cannot fully check (for example a workload whose users it cannot list) asks you to tick an acknowledgement first, and the server refuses it without one.
 
 **If the updater pod restarts mid-operation.** On SIGTERM the pod stops taking new changes (503, "restarting") and reports not ready. It then waits up to 980 s for the running operation: its 15-minute deadline plus a bounded restore and bookkeeping. `terminationGracePeriodSeconds` is 1020 and the strategy is `Recreate`, so rollouts never overlap. A deleted or evicted pod is replaced at once while it still drains, so every operation also holds a lease in the operation ConfigMap: the replacement shows the old pod's operation as running "on updater pod ..." and refuses changes until it ends (a crashed pod's lease expires after 45 s). oauth-proxy exits immediately, so **the UI is offline for up to ~17 minutes** in that case. If the pod is killed anyway (SIGKILL, node loss), the next pod finds the operation marker and shows "*X* was interrupted" with what to do. Re-running the same operation is safe. Diagrams: [RUNBOOK §5](RUNBOOK.md#5-operations-busy-stuck-interrupted).
 
