@@ -1403,16 +1403,12 @@ func s3KeptNamespaceHint(namespaces []string) string {
 	if len(namespaces) == 0 {
 		return ""
 	}
-	quoted := make([]string, len(namespaces))
-	for i, n := range namespaces {
-		quoted[i] = n
-	}
 	cmds := make([]string, len(namespaces))
 	for i, n := range namespaces {
 		cmds[i] = "`oc delete project " + n + "`"
 	}
 	return fmt.Sprintf(" %s %s kept: %s may hold objects this tool did not create. Delete %s with %s once you've checked %s empty.",
-		verb(len(namespaces), "Namespace", "Namespaces"), strings.Join(quoted, " and ")+" "+verb(len(namespaces), "was", "were"),
+		verb(len(namespaces), "Namespace", "Namespaces"), strings.Join(namespaces, " and ")+" "+verb(len(namespaces), "was", "were"),
 		verb(len(namespaces), "it", "they"), verb(len(namespaces), "it", "them"), strings.Join(cmds, " and "), verb(len(namespaces), "it's", "they're"))
 }
 

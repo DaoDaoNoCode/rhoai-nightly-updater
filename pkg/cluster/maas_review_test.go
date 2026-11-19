@@ -187,9 +187,9 @@ func TestTeardownModels_RefusesWhileAPublicationIsLeft(t *testing.T) {
 // someone else made exist: removing the platform would break them.
 func TestMaaSTeardown_RefusesWhileOthersUseMaaS(t *testing.T) {
 	for name, path := range map[string]string{
-		"model reference": "/apis/maas.opendatahub.io/v1alpha1/namespaces/team/maasmodelrefs/their-model",
-		"subscription":    "/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maassubscriptions/team-sub",
-		"authorization policy":   "/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maasauthpolicies/team-access",
+		"model reference":      "/apis/maas.opendatahub.io/v1alpha1/namespaces/team/maasmodelrefs/their-model",
+		"subscription":         "/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maassubscriptions/team-sub",
+		"authorization policy": "/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maasauthpolicies/team-access",
 	} {
 		t.Run(name, func(t *testing.T) {
 			mc := newMaaSCluster(t)
