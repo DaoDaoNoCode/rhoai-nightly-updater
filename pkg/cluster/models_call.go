@@ -301,14 +301,29 @@ func checkModelCall(c *Client, project, name string, rec modelsRecord, progress 
 	def, _ := readKServeGateway(c)
 	exposure, gw := modelExposureOf(model, def)
 	var check types.ModelCallCheck
-	switch exposure {
-	case exposureMaaS:
+	switch {
+	case exposure == exposureMaaS:
 		check = maasCallCheck(c, project, name)
+	case !safeServedName(served):
+		check = types.ModelCallCheck{Result: "not-checked", Message: "Not checked: " + unsafeServedNameWarning}
+	default:
+		check = callModelDirectly(c, model, project, name, served, entry.Type, exposure, gw, rec, progress)
+	}
+	check.At = now()
+	rememberCallCheck(c, project, name, model.Metadata.UID, check)
+	return check
+}
+
+// callModelDirectly is the check of a model reached at its own address
+// (inside the cluster, or through a gateway that is not MaaS's).
+func callModelDirectly(c *Client, model llmisvcObject, project, name, served, typ, exposure, gw string, rec modelsRecord, progress func(string)) types.ModelCallCheck {
+	var check types.ModelCallCheck
+	switch exposure {
 	case exposureInternal:
 		if target := withServicePort(c, firstNonEmpty(modelInClusterURL(model), internalAddress(project, name))); target == "" {
 			check = types.ModelCallCheck{Result: "not-checked", Message: "Not checked: the model's Service " + name + "-kserve-workload-svc in " + project + " could not be read for its port."}
 		} else {
-			check = runModelCall(c, target, served, entry.Type, "", true, progress)
+			check = runModelCall(c, target, served, typ, "", true, progress)
 		}
 	default:
 		switch {
@@ -322,17 +337,15 @@ func checkModelCall(c *Client, project, name string, rec modelsRecord, progress 
 				check = types.ModelCallCheck{Result: "not-checked", Message: "Not checked: " + err.Error() + ". This app calls a model only with the model's own token."}
 				break
 			}
-			check = runModelCall(c, model.Status.URL, served, entry.Type, token, false, progress)
+			check = runModelCall(c, model.Status.URL, served, typ, token, false, progress)
 			if check.Result == "server-error" && gw != "" && exposure == exposureGateway {
 				check.Message += " (through gateway " + gw + ")"
 			}
 			if check.OK {
-				check = probeWithoutToken(c, check, model.Status.URL, served, entry.Type, gw)
+				check = probeWithoutToken(c, check, model.Status.URL, served, typ, gw)
 			}
 		}
 	}
-	check.At = now()
-	rememberCallCheck(c, project, name, model.Metadata.UID, check)
 	return check
 }
 

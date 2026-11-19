@@ -780,7 +780,12 @@ func (m *modelsRun) publishToMaaS(project, name string) (*types.OperationRespons
 // "Can it be called?" check.
 func addModelRouting(c *Client, s *types.ModelState, m llmisvcObject, def kserveGateway, auth map[string]string) {
 	s.Exposure, s.Gateway = modelExposureOf(m, def)
-	s.ServedName = firstNonEmpty(m.Spec.Model.Name, m.Metadata.Name)
+	if served := firstNonEmpty(m.Spec.Model.Name, m.Metadata.Name); safeServedName(served) {
+		s.ServedName = served
+	} else {
+		s.ServedNameWithheld = true
+		s.Warning = strings.TrimSpace(s.Warning + " " + unsafeServedNameWarning)
+	}
 	s.InternalURL = withServicePort(c, modelInClusterURL(m))
 	if s.Exposure == exposureInternal {
 		// KServe keeps status.url from a route it has removed (live, RHOAI

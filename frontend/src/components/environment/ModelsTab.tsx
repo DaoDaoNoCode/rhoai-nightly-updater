@@ -33,7 +33,7 @@ import { type ConfirmSpec, type ModelsPending, type Pending, ExternalLink, Probl
 import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { envStatusText, notManaged } from "./resourceStatus";
-import { ComponentAlert, CopyableCode, NoProjectsAlert, shellQuote } from "./UseIt";
+import { ComponentAlert, CopyableCode, NoProjectsAlert, shellQuote, shellWord } from "./UseIt";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
 import { type Busy, type FeatureState, callCheckFailed, catalogModel, dashboardProjectHref, gatewayStatus, modelIn, modelOptionReason, modelStatus, modelTypeWords, foreignGatewayStep, shortModelName } from "./featureState";
 
@@ -97,21 +97,32 @@ const auth = `-H "Authorization: Bearer $TOKEN"`;
  * with the user's own oc. Only for this tool's model with that Secret;
  * otherwise null, and no command calls the model: the user's own token
  * never goes to a model, whose pod is in a project its editors control
- * (SECURITY.md, "Which token is used where"). Secret and project names are
- * Kubernetes names (no shell quoting).
+ * (SECURITY.md, "Which token is used where"). The names are shell words
+ * (shellWord): bare when plain, single-quoted otherwise.
  */
 export function modelTokenLine(project: string, m: ModelState): string | null {
-  return m.managedByTool === true && m.tokenSecret ? `TOKEN=$(oc get secret ${m.tokenSecret} -n ${project} -o jsonpath='{.data.token}' | base64 -d)` : null;
+  return m.managedByTool === true && m.tokenSecret ? `TOKEN=$(oc get secret ${shellWord(m.tokenSecret)} -n ${shellWord(project)} -o jsonpath='{.data.token}' | base64 -d)` : null;
 }
 
-/** Commands that call a chat model with its token (modelTokenLine). Catalog names need no shell quoting; the address comes from the cluster, so it is single-quoted. */
+/**
+ * A request's JSON body as one single-quoted shell word. The model name is
+ * the model's spec.model.name, which anyone who can edit the project
+ * chooses: it goes in through JSON.stringify and the quoting, so no
+ * character of it can end the JSON string or the shell word.
+ */
+const jsonBody = (body: unknown) => shellQuote(JSON.stringify(body));
+
+const HELLO = [{ role: "user", content: "Say hello in one sentence." }];
+const EMBED_INPUT = ["Red Hat OpenShift AI serves models."];
+
+/** Commands that call a chat model with its token (modelTokenLine). The address (from the cluster) and the body are single-quoted. */
 export function modelCurl(url: string, model: string, token: string): string {
   const base = url.replace(/\/+$/, "");
   return [
     token,
     `curl -s ${auth} ${shellQuote(`${base}/v1/models`)}`,
     `curl -s ${auth} -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`,
-    `  -d '{"model":"${model}","messages":[{"role":"user","content":"Say hello in one sentence."}],"max_tokens":64}'`,
+    `  -d ${jsonBody({ model, messages: HELLO, max_tokens: 64 })}`,
   ].join("\n");
 }
 
@@ -126,18 +137,18 @@ export function thinkingCurl(url: string, model: string, token: string): string 
   return [
     token,
     `curl -N -s ${auth} -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`,
-    `  -d '{"model":"${model}","messages":[{"role":"user","content":"Is 1001 a prime number?"}],"max_tokens":1024,"stream":true,"chat_template_kwargs":{"enable_thinking":true}}'`,
+    `  -d ${jsonBody({ model, messages: [{ role: "user", content: "Is 1001 a prime number?" }], max_tokens: 1024, stream: true, chat_template_kwargs: { enable_thinking: true } })}`,
   ].join("\n");
 }
 
 /** A tool-calling request: the model answers with tool_calls when a tool fits. */
 export function toolCurl(url: string, model: string, token: string): string {
   const base = url.replace(/\/+$/, "");
-  const tool = `{"type":"function","function":{"name":"get_weather","description":"Current weather in a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}`;
+  const tool = { type: "function", function: { name: "get_weather", description: "Current weather in a city", parameters: { type: "object", properties: { city: { type: "string" } }, required: ["city"] } } };
   return [
     token,
     `curl -s ${auth} -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`,
-    `  -d '{"model":"${model}","messages":[{"role":"user","content":"What is the weather in Brno?"}],"tools":[${tool}],"max_tokens":256}'`,
+    `  -d ${jsonBody({ model, messages: [{ role: "user", content: "What is the weather in Brno?" }], tools: [tool], max_tokens: 256 })}`,
   ].join("\n");
 }
 
@@ -147,7 +158,7 @@ export function embeddingCurl(url: string, model: string, token: string): string
   return [
     token,
     `curl -s ${auth} -H "Content-Type: application/json" ${shellQuote(`${base}/v1/embeddings`)} \\`,
-    `  -d '{"model":"${model}","input":["Red Hat OpenShift AI serves models."]}'`,
+    `  -d ${jsonBody({ model, input: EMBED_INPUT })}`,
   ].join("\n");
 }
 
@@ -155,8 +166,8 @@ export function embeddingCurl(url: string, model: string, token: string): string
 export function internalCurl(url: string, model: string, embedding: boolean): string {
   const base = url.replace(/\/+$/, "");
   return embedding
-    ? [`curl -sk -H "Content-Type: application/json" ${shellQuote(`${base}/v1/embeddings`)} \\`, `  -d '{"model":"${model}","input":["Red Hat OpenShift AI serves models."]}'`].join("\n")
-    : [`curl -sk -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`, `  -d '{"model":"${model}","messages":[{"role":"user","content":"Say hello in one sentence."}],"max_tokens":64}'`].join("\n");
+    ? [`curl -sk -H "Content-Type: application/json" ${shellQuote(`${base}/v1/embeddings`)} \\`, `  -d ${jsonBody({ model, input: EMBED_INPUT })}`].join("\n")
+    : [`curl -sk -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`, `  -d ${jsonBody({ model, messages: HELLO, max_tokens: 64 })}`].join("\n");
 }
 
 /** The two 404s a caller can get, and what each means. */
@@ -737,6 +748,16 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
   const published = !!model.maasPublished;
   const token = modelTokenLine(project, model);
   const ours = model.managedByTool === true;
+  if (model.servedNameWithheld && !published) {
+    // The backend withholds a served name that is not safe in commands (pkg/cluster safeServedName).
+    return (
+      <TabSection title="Use it" id="models-use">
+        <Content component="p">
+          There are no commands for this model: the name it serves (<code>spec.model.name</code>) has characters that are not safe to paste into a shell, so this tool does not show it. Someone who can edit {project} set it; check the model in the dashboard.
+        </Content>
+      </TabSection>
+    );
+  }
   return (
     <TabSection title="Use it" id="models-use">
       {callCheckFailed(model) && (

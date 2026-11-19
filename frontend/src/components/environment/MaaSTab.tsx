@@ -92,7 +92,7 @@ export function maasCurl(url: string, subscription: string): string {
     "# 1. A MaaS API key for the subscription (shown once: keep it)",
     `API_KEY=$(curl -sS -X POST "$HOST/maas-api/v1/api-keys" \\`,
     `  -H "Authorization: Bearer $(oc whoami -t)" -H "Content-Type: application/json" \\`,
-    `  -d '{"name":"my-key","expiresIn":"1h","subscription":"${subscription}"}' | jq -r .key)`,
+    `  -d ${shellQuote(JSON.stringify({ name: "my-key", expiresIn: "1h", subscription }))} | jq -r .key)`,
     "# 2. The models the key may use",
     `MODEL=$(curl -sS "$HOST/maas-api/v1/models" -H "Authorization: Bearer $API_KEY" | jq -r '[.data[] | select(.ready==true)][0].id')`,
     "# 3. Chat",

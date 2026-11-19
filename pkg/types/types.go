@@ -828,6 +828,10 @@ type ModelState struct {
 	// ServedName is the name the model answers to (spec.model.name): the
 	// "model" a request sends.
 	ServedName string `json:"servedName,omitempty"`
+	// ServedNameWithheld: spec.model.name has characters that are not safe
+	// in commands (safeServedName), so ServedName is empty and no command
+	// or call check uses it.
+	ServedNameWithheld bool `json:"servedNameWithheld,omitempty"`
 	// CallCheck is the last "Can it be called?" check of this model by this
 	// app (nil: not checked since the app started).
 	CallCheck *ModelCallCheck `json:"callCheck,omitempty"`

@@ -13,10 +13,13 @@ import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external
 import type { ComponentBlock } from "../../types";
 import { TechnicalDetails } from "./resourceRow";
 
-/** A few lines to copy (environment variables, a Python snippet), PatternFly's code block with a copy button. */
 /** s as one single-quoted POSIX shell word: nothing in it is expanded ($(), backticks, variables). */
 export const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
+/** s as one shell word: bare when it is a plain name (a Kubernetes name), single-quoted otherwise (shellQuote). */
+export const shellWord = (s: string) => (/^[A-Za-z0-9._/:=-]+$/.test(s) ? s : shellQuote(s));
+
+/** A few lines to copy (environment variables, a Python snippet), PatternFly's code block with a copy button. */
 export const CopyableCode: React.FC<{ id: string; code: string; label: string }> = ({ id, code, label }) => {
   const [copied, setCopied] = React.useState(false);
   const copy = async () => {
