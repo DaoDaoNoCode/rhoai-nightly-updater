@@ -114,6 +114,18 @@ only accepts a tag whose version is the top dated section. See
   list** (models action `disallow`).
 - New RBAC: `get` on the four model token Secrets `default-name-<model>-sa`
   (SECURITY.md, "Models routing and Can it be called?").
+- **View progress on the running-operation alert.** Closing a run's
+  progress dialog left only an alert that something was running. While a
+  run of the Environment page (a setup, a deletion, samples, Clean up, a
+  MaaS change) or Migrate storage goes on with its dialog closed, the alert
+  names the run and its step ("Set up Pipelines in dev-project is running:
+  step 2 of 3, Set up the S3 storage") and **View progress** opens the same
+  dialog again with its steps; the focus returns to the action when it
+  closes. An operation started in another tab or by another user opens a
+  read-only view of what the server records (who started it, when, its
+  latest progress, what it acts on) and, once it ends, how it ended. An
+  RHOAI update, install or re-deploy keeps its **View progress** link to
+  its progress card on the Status page.
 
 ### Fixed (Models routing)
 
@@ -161,6 +173,14 @@ only accepts a tag whose version is the top dated section. See
 
 ### Fixed
 
+- Helper and error text under a field inside a radio's body (Change
+  database's connection URL, custom token rate limits, the groups and users
+  of Publish and Change access) sat on the field's edge: the radio group's
+  stacked layout pulled it up. It now has PatternFly's spacing, as do the
+  fields of Install a different build, whose helper text touched them.
+- Change database and Remove MaaS name the database without nested
+  parentheses: "...then permanently deletes the current one, the persistent
+  development database (CloudNativePG)."
 - The Playground tab's command for a Models as a Service model names the
   model's subscription (this tool's when the model is offered under it).
   Without one, the dashboard cannot mint the MaaS key it calls the model
