@@ -14,13 +14,13 @@ const replacementCSV = "rhods-operator.3.6.9"
 // the Subscription (another UID), OLM installs a CSV for the replacement,
 // and the operation's install fails.
 func replacedAfterApply(f *fakeOLM) {
-	f.onSubscribe = func(f *fakeOLM, _ map[string]interface{}) {
-		f.sub["metadata"].(map[string]interface{})["uid"] = "uid-replacement"
-		f.sub["spec"].(map[string]interface{})["channel"] = "replacement"
+	f.onSubscribe = func(f *fakeOLM, _ map[string]any) {
+		f.sub["metadata"].(map[string]any)["uid"] = "uid-replacement"
+		f.sub["spec"].(map[string]any)["channel"] = "replacement"
 		f.addCSV(replacementCSV, "Installing")
-		f.installPlans["install-new"] = map[string]interface{}{"spec": map[string]interface{}{}, "status": map[string]interface{}{"phase": "Failed",
-			"conditions": []interface{}{map[string]interface{}{"type": "Installed", "status": "False", "reason": "InstallComponentFailed", "message": "CRD step failed"}}}}
-		f.sub["status"] = map[string]interface{}{"installPlanRef": map[string]interface{}{"name": "install-new"}}
+		f.installPlans["install-new"] = map[string]any{"spec": map[string]any{}, "status": map[string]any{"phase": "Failed",
+			"conditions": []any{map[string]any{"type": "Installed", "status": "False", "reason": "InstallComponentFailed", "message": "CRD step failed"}}}}
+		f.sub["status"] = map[string]any{"installPlanRef": map[string]any{"name": "install-new"}}
 	}
 }
 
@@ -33,7 +33,7 @@ func assertReplacementKept(t *testing.T, f *fakeOLM, result *types.OperationResp
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.sub == nil || f.sub["metadata"].(map[string]interface{})["uid"] != "uid-replacement" || f.sub["spec"].(map[string]interface{})["channel"] != "replacement" {
+	if f.sub == nil || f.sub["metadata"].(map[string]any)["uid"] != "uid-replacement" || f.sub["spec"].(map[string]any)["channel"] != "replacement" {
 		t.Fatalf("the replacement Subscription was deleted or overwritten: %v", f.sub)
 	}
 	if _, ok := f.csvs[replacementCSV]; !ok {
@@ -93,7 +93,7 @@ func TestRestoreDeletesOnlyTheAttemptsSubscription(t *testing.T) {
 		t.Fatal(applyErr)
 	}
 	f.mu.Lock()
-	own, _ := f.sub["metadata"].(map[string]interface{})["uid"].(string)
+	own, _ := f.sub["metadata"].(map[string]any)["uid"].(string)
 	f.mu.Unlock()
 	if r.attemptSubscriptionUID == "" || r.attemptSubscriptionUID != own {
 		t.Fatalf("recorded %q, applied %q", r.attemptSubscriptionUID, own)
@@ -104,7 +104,7 @@ func TestRestoreDeletesOnlyTheAttemptsSubscription(t *testing.T) {
 	r.restore(c, result, emit)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if lastStatus(events(), restoreStepName) != "success" || f.sub == nil || f.sub["metadata"].(map[string]interface{})["uid"] == own {
+	if lastStatus(events(), restoreStepName) != "success" || f.sub == nil || f.sub["metadata"].(map[string]any)["uid"] == own {
 		t.Fatalf("restore %v, sub %v", events(), f.sub)
 	}
 }

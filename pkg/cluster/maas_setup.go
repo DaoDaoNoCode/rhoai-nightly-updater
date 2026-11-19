@@ -523,14 +523,14 @@ func patchMaaSDSC(c *Client, aigateway, maas string, dryRun bool) error {
 	if err != nil {
 		return err
 	}
-	ag := map[string]interface{}{}
+	ag := map[string]any{}
 	if aigateway != "" {
 		ag["managementState"] = aigateway
 	}
 	if maas != "" {
-		ag["modelsAsAService"] = map[string]interface{}{"managementState": maas}
+		ag["modelsAsAService"] = map[string]any{"managementState": maas}
 	}
-	patch, _ := json.Marshal(map[string]interface{}{"spec": map[string]interface{}{"components": map[string]interface{}{"aigateway": ag}}})
+	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"components": map[string]any{"aigateway": ag}}})
 	query := url.Values{"fieldManager": {maasDSCManager}}
 	if dryRun {
 		query.Set("dryRun", "All")

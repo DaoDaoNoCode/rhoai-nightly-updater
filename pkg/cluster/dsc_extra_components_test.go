@@ -14,14 +14,14 @@ import (
 // Model an upgrade whose CRD still accepts component names absent from its sample.
 func dscCRDWithLegacyComponents(t *testing.T) string {
 	t.Helper()
-	var crd map[string]interface{}
+	var crd map[string]any
 	if err := json.Unmarshal([]byte(testDSCCRD()), &crd); err != nil {
 		t.Fatal(err)
 	}
-	version := crd["spec"].(map[string]interface{})["versions"].([]interface{})[0].(map[string]interface{})
-	root := version["schema"].(map[string]interface{})["openAPIV3Schema"].(map[string]interface{})
-	spec := root["properties"].(map[string]interface{})["spec"].(map[string]interface{})
-	components := spec["properties"].(map[string]interface{})["components"].(map[string]interface{})["properties"].(map[string]interface{})
+	version := crd["spec"].(map[string]any)["versions"].([]any)[0].(map[string]any)
+	root := version["schema"].(map[string]any)["openAPIV3Schema"].(map[string]any)
+	spec := root["properties"].(map[string]any)["spec"].(map[string]any)
+	components := spec["properties"].(map[string]any)["components"].(map[string]any)["properties"].(map[string]any)
 	components["llamastackoperator"] = components["dashboard"]
 	components["trainingoperator"] = components["dashboard"]
 	body, err := json.Marshal(crd)
@@ -38,7 +38,7 @@ func TestDSCCompatibilityReportsCRDAcceptedExtraComponents(t *testing.T) {
 		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""):                            csvListMock("3.6.0"),
 	})
 	defer cleanup()
-	var dsc map[string]interface{}
+	var dsc map[string]any
 	if err := json.Unmarshal([]byte(`{"apiVersion":"datasciencecluster.opendatahub.io/v2","spec":{"components":{"dashboard":{"managementState":"Removed","optionalValidSetting":"custom"},"trainingoperator":{"managementState":"Removed"},"llamastackoperator":{"managementState":"Managed"}}}}`), &dsc); err != nil {
 		t.Fatal(err)
 	}
@@ -80,17 +80,17 @@ func TestRepairDSCRemoveExtraComponentsPreservesRemainingSettings(t *testing.T) 
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mockDSCSamples(t, func(*http.Request) (int, string) { return tc.defaults, testDSCSample })
-			var dsc map[string]interface{}
+			var dsc map[string]any
 			json.Unmarshal([]byte(`{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"my-dsc","labels":{"keep":"yes"}},"spec":{"components":{"dashboard":{"managementState":"Removed","optionalValidSetting":"custom","oldField":"preserve","config":{"nested":{"keep":true}}},"trainingoperator":{"managementState":"Managed"},"llamastackoperator":{"managementState":"Removed"}},"extensions":{"custom":"keep"}}}`), &dsc)
-			dsc["metadata"].(map[string]interface{})["resourceVersion"] = tc.rv
+			dsc["metadata"].(map[string]any)["resourceVersion"] = tc.rv
 			if tc.clean {
-				components := dsc["spec"].(map[string]interface{})["components"].(map[string]interface{})
+				components := dsc["spec"].(map[string]any)["components"].(map[string]any)
 				delete(components, "trainingoperator")
 				delete(components, "llamastackoperator")
 			}
 			body, _ := json.Marshal(dsc)
 			crd := dscCRDWithLegacyComponents(t)
-			var patch map[string]interface{}
+			var patch map[string]any
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case r.Method == "PATCH" && strings.Contains(r.URL.Path, "datascienceclusters/"):
@@ -125,18 +125,18 @@ func TestRepairDSCRemoveExtraComponentsPreservesRemainingSettings(t *testing.T) 
 			if !tc.wantPatch {
 				return
 			}
-			if !reflect.DeepEqual(patch["metadata"], map[string]interface{}{"resourceVersion": "42"}) {
+			if !reflect.DeepEqual(patch["metadata"], map[string]any{"resourceVersion": "42"}) {
 				t.Fatalf("metadata changed or concurrency guard missing: %v", patch["metadata"])
 			}
-			spec := patch["spec"].(map[string]interface{})
-			components := spec["components"].(map[string]interface{})
+			spec := patch["spec"].(map[string]any)
+			components := spec["components"].(map[string]any)
 			for _, name := range []string{"llamastackoperator", "trainingoperator"} {
 				if value, exists := components[name]; !exists || value != nil {
 					t.Fatalf("extra component %s was not explicitly deleted", name)
 				}
 			}
-			original := dsc["spec"].(map[string]interface{})
-			if !reflect.DeepEqual(components["dashboard"], original["components"].(map[string]interface{})["dashboard"]) || !reflect.DeepEqual(spec["extensions"], original["extensions"]) {
+			original := dsc["spec"].(map[string]any)
+			if !reflect.DeepEqual(components["dashboard"], original["components"].(map[string]any)["dashboard"]) || !reflect.DeepEqual(spec["extensions"], original["extensions"]) {
 				t.Fatal("targeted removal changed remaining settings")
 			}
 			if _, added := components["aipipelines"]; added {

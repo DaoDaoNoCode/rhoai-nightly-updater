@@ -13,16 +13,16 @@ const (
 	mwcPath = "/apis/admissionregistration.k8s.io/v1/mutatingwebhookconfigurations"
 )
 
-func webhookConfig(name string, labels map[string]string, svcNS, svcName string) map[string]interface{} {
-	meta := map[string]interface{}{"name": name}
+func webhookConfig(name string, labels map[string]string, svcNS, svcName string) map[string]any {
+	meta := map[string]any{"name": name}
 	if labels != nil {
 		meta["labels"] = labels
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"metadata": meta,
-		"webhooks": []interface{}{map[string]interface{}{
+		"webhooks": []any{map[string]any{
 			"name":         name,
-			"clientConfig": map[string]interface{}{"service": map[string]interface{}{"namespace": svcNS, "name": svcName}},
+			"clientConfig": map[string]any{"service": map[string]any{"namespace": svcNS, "name": svcName}},
 		}},
 	}
 }
@@ -33,7 +33,7 @@ func svcPath(ns, name string) string { return "/api/v1/namespaces/" + ns + "/ser
 // webhooks, a KServe component webhook whose Service exists, and webhooks
 // whose Service was deleted.
 func setupWebhookFixtures(f *fakeAPI) {
-	f.obj(vwcPath, map[string]interface{}{"items": []interface{}{
+	f.obj(vwcPath, map[string]any{"items": []any{
 		// Stale: operator Service is gone.
 		webhookConfig("datasciencecluster-v2-validator.opendatahub.io-nfzvz", map[string]string{"olm.owner": "rhods-operator.3.6.0"}, "redhat-ods-operator", "rhods-operator-service"),
 		// Serving: Service exists (the webhook the old fix deleted).
@@ -41,7 +41,7 @@ func setupWebhookFixtures(f *fakeAPI) {
 		// Not RHOAI: never touched even though its Service is missing.
 		webhookConfig("some-other-operator.example.com", nil, "other", "gone-service"),
 	}})
-	f.obj(mwcPath, map[string]interface{}{"items": []interface{}{
+	f.obj(mwcPath, map[string]any{"items": []any{
 		webhookConfig("servicemonitor-injector.opendatahub.io-7vqqf", map[string]string{"olm.owner": "rhods-operator.3.6.0"}, "redhat-ods-operator", "rhods-operator-service"),
 	}})
 	f.json("GET", svcPath("redhat-ods-applications", "odh-model-controller-webhook-service"), http.StatusOK, `{"kind":"Service"}`)
@@ -144,8 +144,8 @@ func TestStaleWebhookCheck_ServingWebhooksDuringUpgradeAreNotStale(t *testing.T)
 	f, c := newFakeAPI(t)
 	setupWebhookFixtures(f)
 	f.json("GET", svcPath("redhat-ods-operator", "rhods-operator-service"), http.StatusOK, `{"kind":"Service"}`)
-	f.obj("/apis/operators.coreos.com/v1alpha1/namespaces/"+SubNS+"/clusterserviceversions", map[string]interface{}{
-		"items": []interface{}{map[string]interface{}{"metadata": map[string]interface{}{"name": "rhods-operator.3.6.0"}, "spec": map[string]interface{}{"version": "3.6.0"}, "status": map[string]interface{}{"phase": "Installing"}}},
+	f.obj("/apis/operators.coreos.com/v1alpha1/namespaces/"+SubNS+"/clusterserviceversions", map[string]any{
+		"items": []any{map[string]any{"metadata": map[string]any{"name": "rhods-operator.3.6.0"}, "spec": map[string]any{"version": "3.6.0"}, "status": map[string]any{"phase": "Installing"}}},
 	})
 	out := checkStaleWebhooks(c)
 	if len(out.problems) != 0 || out.check.Status != "pass" {
@@ -153,11 +153,11 @@ func TestStaleWebhookCheck_ServingWebhooksDuringUpgradeAreNotStale(t *testing.T)
 	}
 }
 
-func installPlan(name, phase, uid, rv, created string) map[string]interface{} {
-	return map[string]interface{}{
-		"metadata": map[string]interface{}{"name": name, "uid": uid, "resourceVersion": rv, "creationTimestamp": created},
-		"spec":     map[string]interface{}{"approved": true, "clusterServiceVersionNames": []string{"rhods-operator.3.6.0"}},
-		"status":   map[string]interface{}{"phase": phase},
+func installPlan(name, phase, uid, rv, created string) map[string]any {
+	return map[string]any{
+		"metadata": map[string]any{"name": name, "uid": uid, "resourceVersion": rv, "creationTimestamp": created},
+		"spec":     map[string]any{"approved": true, "clusterServiceVersionNames": []string{"rhods-operator.3.6.0"}},
+		"status":   map[string]any{"phase": phase},
 	}
 }
 
@@ -165,7 +165,7 @@ const ipListPath = "/apis/operators.coreos.com/v1alpha1/namespaces/redhat-ods-op
 
 func TestDeleteStaleInstallPlans_DeletesOnlyFailedPlansWithPreconditions(t *testing.T) {
 	f, c := newFakeAPI(t)
-	f.obj(ipListPath, map[string]interface{}{"items": []interface{}{
+	f.obj(ipListPath, map[string]any{"items": []any{
 		installPlan("install-complete", "Complete", "u1", "11", "2026-10-01T00:00:00Z"),
 		installPlan("install-new", "", "u2", "12", "2026-10-05T00:00:00Z"),
 		installPlan("install-running", "Installing", "u3", "13", "2026-10-04T00:00:00Z"),
@@ -197,7 +197,7 @@ func TestDeleteStaleInstallPlans_DeletesOnlyFailedPlansWithPreconditions(t *test
 }
 
 func TestDeleteStaleInstallPlans_ReferencedPlan(t *testing.T) {
-	plans := map[string]interface{}{"items": []interface{}{installPlan("install-failed", "Failed", "u1", "1", "2026-10-02T00:00:00Z")}}
+	plans := map[string]any{"items": []any{installPlan("install-failed", "Failed", "u1", "1", "2026-10-02T00:00:00Z")}}
 	sub := func(state string) string {
 		return `{"spec":{"source":"rhoai-catalog-dev","channel":"stable-3.x"},"status":{"state":"` + state + `","installPlanRef":{"name":"install-failed"}}}`
 	}
@@ -232,18 +232,18 @@ func TestDeleteStaleInstallPlans_ReferencedPlan(t *testing.T) {
 }
 
 func TestDeleteStaleInstallPlans_Outcomes(t *testing.T) {
-	failedOnly := map[string]interface{}{"items": []interface{}{installPlan("install-failed", "Failed", "u1", "1", "2026-10-02T00:00:00Z")}}
+	failedOnly := map[string]any{"items": []any{installPlan("install-failed", "Failed", "u1", "1", "2026-10-02T00:00:00Z")}}
 	tests := []struct {
 		name        string
-		list        interface{}
+		list        any
 		listStatus  int
 		deleteCode  int
 		wantSuccess bool
 		wantCode    string
 		wantDeletes int
 	}{
-		{"no failed plans", map[string]interface{}{"items": []interface{}{installPlan("install-new", "", "u", "1", "2026-10-05T00:00:00Z")}}, 0, 0, false, "nothing_to_do", 0},
-		{"no plans at all", map[string]interface{}{"items": []interface{}{}}, 0, 0, false, "nothing_to_do", 0},
+		{"no failed plans", map[string]any{"items": []any{installPlan("install-new", "", "u", "1", "2026-10-05T00:00:00Z")}}, 0, 0, false, "nothing_to_do", 0},
+		{"no plans at all", map[string]any{"items": []any{}}, 0, 0, false, "nothing_to_do", 0},
 		{"namespace missing", nil, http.StatusNotFound, 0, false, "nothing_to_do", 0},
 		{"list forbidden", nil, http.StatusForbidden, 0, false, "forbidden", 0},
 		{"already deleted (second click)", failedOnly, 0, http.StatusNotFound, false, "nothing_to_do", 1},
@@ -277,7 +277,7 @@ func TestDeleteStaleInstallPlans_Outcomes(t *testing.T) {
 
 func TestInstallPlanCheck_FailedPlanConfirmNamesThePlans(t *testing.T) {
 	f, c := newFakeAPI(t)
-	f.obj(ipListPath, map[string]interface{}{"items": []interface{}{
+	f.obj(ipListPath, map[string]any{"items": []any{
 		installPlan("install-old", "Complete", "u1", "1", "2026-10-01T00:00:00Z"),
 		installPlan("install-bad", "Failed", "u2", "2", "2026-10-02T00:00:00Z"),
 	}})

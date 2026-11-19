@@ -43,7 +43,7 @@ var (
 // platformName returns the platform the operator reports: the DSC's
 // status.release.name, else the DSCInitialization's.
 func (v *dscView) platformName(c *Client) string {
-	release, _ := v.status()["release"].(map[string]interface{})
+	release, _ := v.status()["release"].(map[string]any)
 	if name, _ := release["name"].(string); name != "" {
 		return name
 	}
@@ -81,9 +81,9 @@ func managedPlatformRefusal(platform string) string {
 // default's, with the toggles kept), the old DSC's name and the values of
 // its protected fields (the workbench and AI Hub namespaces), where the
 // default has the object that holds them.
-func (v *dscView) newDefaultObject(comps map[string]interface{}) map[string]interface{} {
-	spec, _ := normalizeJSON(v.defaults).(map[string]interface{})
-	if comps, _ = normalizeJSON(comps).(map[string]interface{}); len(comps) > 0 {
+func (v *dscView) newDefaultObject(comps map[string]any) map[string]any {
+	spec, _ := normalizeJSON(v.defaults).(map[string]any)
+	if comps, _ = normalizeJSON(comps).(map[string]any); len(comps) > 0 {
 		spec["components"] = comps
 	}
 	fields := make([]string, 0, len(v.protected))
@@ -98,15 +98,15 @@ func (v *dscView) newDefaultObject(comps map[string]interface{}) map[string]inte
 			continue
 		}
 		parent, ok := lookupPath(comps, keys[:len(keys)-1])
-		if pm, isMap := parent.(map[string]interface{}); ok && isMap {
+		if pm, isMap := parent.(map[string]any); ok && isMap {
 			pm[keys[len(keys)-1]] = old
 		}
 	}
-	meta := map[string]interface{}{"name": v.name}
+	meta := map[string]any{"name": v.name}
 	if len(v.defaultsLabel) > 0 {
 		meta["labels"] = v.defaultsLabel
 	}
-	return map[string]interface{}{"apiVersion": v.apiVersion, "kind": "DataScienceCluster", "metadata": meta, "spec": spec}
+	return map[string]any{"apiVersion": v.apiVersion, "kind": "DataScienceCluster", "metadata": meta, "spec": spec}
 }
 
 // planHardReset plans the hard reset; keep keeps the components the user
@@ -132,8 +132,8 @@ func (v *dscView) planHardReset(c *Client, keep bool) *dscPlanned {
 		return p.refuse("Cannot build the new DataScienceCluster: "+err.Error(), "internal")
 	}
 	p.plan.NewObject = string(text)
-	newSpec, _ := obj["spec"].(map[string]interface{})
-	newComps, _ := newSpec["components"].(map[string]interface{})
+	newSpec, _ := obj["spec"].(map[string]any)
+	newComps, _ := newSpec["components"].(map[string]any)
 	p.plan.Changes = v.changesBetween(v.components(), newComps)
 	for _, t := range v.tree {
 		if len(t.Path) == 1 && v.componentEnabled(v.components(), t) {
@@ -171,7 +171,7 @@ func (r *hardResetRun) fail(step, msg, code string) *types.OperationResponse {
 // cleanup the new DSC must not race (Kubernetes "Foreground cascading
 // deletion").
 func dscDeleteBody(uid string) []byte {
-	body, _ := json.Marshal(map[string]interface{}{"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Foreground", "preconditions": map[string]interface{}{"uid": uid}})
+	body, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Foreground", "preconditions": map[string]any{"uid": uid}})
 	return body
 }
 
@@ -284,7 +284,7 @@ func firstLine(s string) string {
 // appeared meanwhile is someone else's) and a server-side dry run, with
 // fieldValidation=Strict. It returns why it did not ("" when it did) and
 // an error code.
-func createPlannedDSC(c *Client, version string, obj map[string]interface{}) (string, string) {
+func createPlannedDSC(c *Client, version string, obj map[string]any) (string, string) {
 	listPath := fmt.Sprintf(dscListFmt, version)
 	body, _, err := c.get(listPath)
 	if err != nil {
@@ -332,7 +332,7 @@ func readDSCWaitState(c *Client, path string) (dscWaitState, error) {
 	if err != nil {
 		return dscWaitState{}, err
 	}
-	var obj map[string]interface{}
+	var obj map[string]any
 	if err := json.Unmarshal(body, &obj); err != nil {
 		return dscWaitState{}, err
 	}
@@ -515,7 +515,7 @@ func FinishDSCHardReset(c *Client, req types.DSCFinishRequest) (*types.Operation
 	if req.Name != rec.Name || req.Token != pendingHardResetToken(rec) {
 		return refuse("The recorded hard reset changed since you reviewed it, so nothing was changed. Reload the page and review it again.", "conflict")
 	}
-	var obj map[string]interface{}
+	var obj map[string]any
 	if err := json.Unmarshal([]byte(rec.Object), &obj); err != nil {
 		return refuse("The recorded DataScienceCluster cannot be read: "+err.Error()+". Nothing was changed.", "internal")
 	}

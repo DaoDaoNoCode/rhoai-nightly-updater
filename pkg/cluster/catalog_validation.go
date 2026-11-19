@@ -16,7 +16,7 @@ import (
 
 // Always scope and verify catalog identity: the stable and nightly catalogs
 // both publish rhods-operator, so a by-name lookup is ambiguous.
-func catalogChannels(c *Client, source string) ([]interface{}, error) {
+func catalogChannels(c *Client, source string) ([]any, error) {
 	path := namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, "") +
 		"?labelSelector=" + url.QueryEscape("catalog="+source) + "&fieldSelector=" + url.QueryEscape("metadata.name="+SubName)
 	body, _, err := c.get(path)
@@ -29,10 +29,10 @@ func catalogChannels(c *Client, source string) ([]interface{}, error) {
 				Name string `json:"name"`
 			} `json:"metadata"`
 			Status struct {
-				PackageName string        `json:"packageName"`
-				Source      string        `json:"catalogSource"`
-				Namespace   string        `json:"catalogSourceNamespace"`
-				Channels    []interface{} `json:"channels"`
+				PackageName string `json:"packageName"`
+				Source      string `json:"catalogSource"`
+				Namespace   string `json:"catalogSourceNamespace"`
+				Channels    []any  `json:"channels"`
 			} `json:"status"`
 		} `json:"items"`
 	}
@@ -87,9 +87,9 @@ type catalogTarget struct {
 // CSV: its operator image and creation time (currentCSVDesc annotations
 // containerImage and createdAt). Two nightly builds of the same version have
 // the same CSV name but differ here. "" when neither annotation is set.
-func headFingerprint(entry map[string]interface{}) string {
-	desc, _ := entry["currentCSVDesc"].(map[string]interface{})
-	ann, _ := desc["annotations"].(map[string]interface{})
+func headFingerprint(entry map[string]any) string {
+	desc, _ := entry["currentCSVDesc"].(map[string]any)
+	ann, _ := desc["annotations"].(map[string]any)
 	image, _ := ann["containerImage"].(string)
 	created, _ := ann["createdAt"].(string)
 	return buildFingerprint(image, created)
@@ -106,16 +106,16 @@ func buildFingerprint(image, created string) string {
 
 // ownedCRDVersions reads currentCSVDesc.customresourcedefinitions.owned of
 // a PackageManifest channel entry.
-func ownedCRDVersions(entry map[string]interface{}) map[string][]string {
-	desc, _ := entry["currentCSVDesc"].(map[string]interface{})
-	crds, _ := desc["customresourcedefinitions"].(map[string]interface{})
-	owned, _ := crds["owned"].([]interface{})
+func ownedCRDVersions(entry map[string]any) map[string][]string {
+	desc, _ := entry["currentCSVDesc"].(map[string]any)
+	crds, _ := desc["customresourcedefinitions"].(map[string]any)
+	owned, _ := crds["owned"].([]any)
 	if len(owned) == 0 {
 		return nil
 	}
 	out := map[string][]string{}
 	for _, o := range owned {
-		m, _ := o.(map[string]interface{})
+		m, _ := o.(map[string]any)
 		name, _ := m["name"].(string)
 		version, _ := m["version"].(string)
 		if name != "" && version != "" && !slices.Contains(out[name], version) {
@@ -195,9 +195,9 @@ func createVerificationCatalog(c *Client, image string) (name, path string, remo
 		}
 	}
 	spec := buildCatalogSourceSpec(image)
-	meta := spec["metadata"].(map[string]interface{})
+	meta := spec["metadata"].(map[string]any)
 	meta["name"] = name
-	meta["labels"] = map[string]interface{}{managedByLabel: managedByValue, catalogPurposeLabel: verificationCatalogRole}
+	meta["labels"] = map[string]any{managedByLabel: managedByValue, catalogPurposeLabel: verificationCatalogRole}
 	if _, _, err := c.apply(path, spec); err != nil {
 		// The apply may have created it before failing.
 		remove()
@@ -230,9 +230,9 @@ func verificationCatalogState(c *Client, path string) (string, error) {
 }
 
 // findChannel returns the PackageManifest channel entry with the given name.
-func findChannel(channels []interface{}, name string) map[string]interface{} {
+func findChannel(channels []any, name string) map[string]any {
 	for _, entry := range channels {
-		ch, _ := entry.(map[string]interface{})
+		ch, _ := entry.(map[string]any)
 		if ch["name"] == name {
 			return ch
 		}
@@ -386,10 +386,10 @@ type containerWaitStatus struct {
 }
 
 // channelNames lists the channel names of a PackageManifest, sorted.
-func channelNames(channels []interface{}) []string {
+func channelNames(channels []any) []string {
 	var names []string
 	for _, entry := range channels {
-		ch, _ := entry.(map[string]interface{})
+		ch, _ := entry.(map[string]any)
 		if name, _ := ch["name"].(string); name != "" {
 			names = append(names, name)
 		}

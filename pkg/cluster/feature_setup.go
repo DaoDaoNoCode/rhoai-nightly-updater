@@ -200,11 +200,11 @@ func readSnapshotKey(c *Client, key string) (string, error) {
 // server-side apply keeps the keys other managers own.
 func writeSnapshotKey(c *Client, key, manager, value string) error {
 	ns := getActivityNamespace()
-	cm, _ := json.Marshal(map[string]interface{}{
+	cm, _ := json.Marshal(map[string]any{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
-		"metadata":   map[string]interface{}{"name": snapshotConfigMapName, "namespace": ns},
-		"data":       map[string]interface{}{key: value},
+		"metadata":   map[string]any{"name": snapshotConfigMapName, "namespace": ns},
+		"data":       map[string]any{key: value},
 	})
 	query := url.Values{"fieldManager": {manager}, "force": {"true"}}
 	_, _, err := c.bookkeeping().do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query)
@@ -227,14 +227,14 @@ func dscComponentManager(key string) string {
 // With a resourceVersion, the API server refuses the patch (409) when the
 // DataScienceCluster changed since it was read. It returns the object the
 // API server answered with.
-func patchDSCComponent(c *Client, key, state, resourceVersion string, dryRun bool) (map[string]interface{}, error) {
+func patchDSCComponent(c *Client, key, state, resourceVersion string, dryRun bool) (map[string]any, error) {
 	path, err := dataScienceClusterPath(c)
 	if err != nil {
 		return nil, err
 	}
-	body := map[string]interface{}{"spec": map[string]interface{}{"components": map[string]interface{}{key: map[string]interface{}{"managementState": state}}}}
+	body := map[string]any{"spec": map[string]any{"components": map[string]any{key: map[string]any{"managementState": state}}}}
 	if resourceVersion != "" {
-		body["metadata"] = map[string]interface{}{"resourceVersion": resourceVersion}
+		body["metadata"] = map[string]any{"resourceVersion": resourceVersion}
 	}
 	patch, _ := json.Marshal(body)
 	query := url.Values{"fieldManager": {dscComponentManager(key)}}
@@ -245,7 +245,7 @@ func patchDSCComponent(c *Client, key, state, resourceVersion string, dryRun boo
 	if err != nil {
 		return nil, err
 	}
-	var obj map[string]interface{}
+	var obj map[string]any
 	_ = json.Unmarshal(answer, &obj)
 	return obj, nil
 }
@@ -256,7 +256,7 @@ func patchDSCComponent(c *Client, key, state, resourceVersion string, dryRun boo
 // apply of it, leaves it owned, or shared): so this tells whether someone
 // changed the component since this tool's setup, not whether someone set
 // it to Managed again.
-func dscComponentOwned(dsc map[string]interface{}, key string) bool {
+func dscComponentOwned(dsc map[string]any, key string) bool {
 	raw, _ := json.Marshal(dsc["metadata"])
 	var meta objectMeta
 	_ = json.Unmarshal(raw, &meta)
@@ -365,7 +365,7 @@ func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
 		p.refuse("This cluster has no DataScienceCluster. A cluster-admin creates one on the Components page. Nothing was changed.", "prerequisites")
 	}
 	if r.dscErr == nil && r.dsc.Object != nil {
-		meta, _ := r.dsc.Object["metadata"].(map[string]interface{})
+		meta, _ := r.dsc.Object["metadata"].(map[string]any)
 		p.dscName, _ = meta["name"].(string)
 		p.argoApp = argoApplicationOf(r.dsc.Object, "DataScienceCluster")
 		for _, fc := range fs.components {
@@ -589,7 +589,7 @@ func (p *featurePlan) installs(mention string) bool {
 // operatorInstallCommands are the plan's objects from a terminal.
 func operatorInstallCommands(p *operatorInstallPlan) string {
 	ns, group, sub := operatorObjects(p.op, p.channel)
-	var objs []map[string]interface{}
+	var objs []map[string]any
 	if p.nsMissing {
 		objs = append(objs, ns)
 	}
@@ -599,7 +599,7 @@ func operatorInstallCommands(p *operatorInstallPlan) string {
 	objs = append(objs, sub)
 	var docs []string
 	for _, o := range objs {
-		meta := o["metadata"].(map[string]interface{})
+		meta := o["metadata"].(map[string]any)
 		delete(meta, "labels")
 		docs = append(docs, yamlish(o, ""))
 	}
@@ -609,10 +609,10 @@ func operatorInstallCommands(p *operatorInstallPlan) string {
 
 // yamlish writes the plain maps, lists and strings of an object as YAML
 // (keys in a fixed order: apiVersion, kind, metadata, spec, then the rest).
-func yamlish(v interface{}, indent string) string {
+func yamlish(v any, indent string) string {
 	var b strings.Builder
 	switch t := v.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		keys := make([]string, 0, len(t))
 		for k := range t {
 			keys = append(keys, k)
@@ -631,13 +631,13 @@ func yamlish(v interface{}, indent string) string {
 		})
 		for _, k := range keys {
 			switch child := t[k].(type) {
-			case map[string]interface{}, []interface{}:
+			case map[string]any, []any:
 				b.WriteString(indent + k + ":\n" + yamlish(child, indent+"  "))
 			default:
 				fmt.Fprintf(&b, "%s%s: %v\n", indent, k, child)
 			}
 		}
-	case []interface{}:
+	case []any:
 		for _, e := range t {
 			inner := yamlish(e, indent+"  ")
 			b.WriteString(indent + "- " + strings.TrimPrefix(inner, indent+"  "))
@@ -1166,7 +1166,7 @@ func RestoreComponents(c *Client, keys []string) (*types.OperationResponse, erro
 				apply(key, v)
 				break
 			}
-			meta, _ := dsc.Object["metadata"].(map[string]interface{})
+			meta, _ := dsc.Object["metadata"].(map[string]any)
 			rv, _ := meta["resourceVersion"].(string)
 			answer, err := patchDSCComponent(c, key, v.prev, rv, false)
 			if err == nil {

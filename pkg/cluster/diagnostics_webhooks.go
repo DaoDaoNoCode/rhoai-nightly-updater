@@ -354,7 +354,7 @@ func staleConversionFix(conversions []staleConversion) (fix, technicalCmd string
 // deleteExact deletes an object only if it still has the UID and
 // resourceVersion that were inspected (DeleteOptions preconditions).
 func deleteExact(c *Client, path, uid, resourceVersion string) error {
-	opts := map[string]interface{}{"apiVersion": "v1", "kind": "DeleteOptions"}
+	opts := map[string]any{"apiVersion": "v1", "kind": "DeleteOptions"}
 	pre := map[string]string{}
 	if uid != "" {
 		pre["uid"] = uid
@@ -465,7 +465,7 @@ func listOperatorCSVs(c *Client) ([]operatorCSV, error) {
 func parallelFor(n, limit int, fn func(i int)) {
 	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(i int) {

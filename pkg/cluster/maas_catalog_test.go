@@ -40,7 +40,7 @@ func TestMaaSPublish_TheChosenModel(t *testing.T) {
 	if ref == nil || mc.f.has(tMaaSRef) {
 		t.Fatalf("refs: smollm2 %v, qwen25 %v", ref != nil, mc.f.has(tMaaSRef))
 	}
-	if name := ref["spec"].(map[string]interface{})["modelRef"].(map[string]interface{})["name"]; name != "smollm2-135m-instruct" {
+	if name := ref["spec"].(map[string]any)["modelRef"].(map[string]any)["name"]; name != "smollm2-135m-instruct" {
 		t.Errorf("modelRef %v", name)
 	}
 	if !strings.Contains(res.Message, "smollm2-135m-instruct") {

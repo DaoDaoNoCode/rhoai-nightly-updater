@@ -26,12 +26,12 @@ func legacyDashboardServer(t *testing.T, deployments map[string][]string) (*Clie
 			for container, name := range containerEnvVarMap {
 				env = append(env, map[string]string{"name": name, "value": "release-" + container})
 			}
-			b, _ := json.Marshal(map[string]interface{}{"spec": map[string]interface{}{"template": map[string]interface{}{"spec": map[string]interface{}{"containers": []interface{}{map[string]interface{}{"env": env}}}}}})
+			b, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{"env": env}}}}}})
 			w.Write(b)
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, prefix) {
-			name := strings.TrimPrefix(r.URL.Path, prefix)
+		if after, ok := strings.CutPrefix(r.URL.Path, prefix); ok {
+			name := after
 			containers, ok := deployments[name]
 			if !ok {
 				w.WriteHeader(http.StatusNotFound)
@@ -65,7 +65,7 @@ func legacyDashboardServer(t *testing.T, deployments map[string][]string) (*Clie
 			for _, c := range containers {
 				cs = append(cs, map[string]string{"name": c, "image": "old-" + c})
 			}
-			b, _ := json.Marshal(map[string]interface{}{"spec": map[string]interface{}{"template": map[string]interface{}{"spec": map[string]interface{}{"containers": cs}}}})
+			b, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": cs}}}})
 			w.Write(b)
 			return
 		}

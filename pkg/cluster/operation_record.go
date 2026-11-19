@@ -149,11 +149,11 @@ func SaveOperationMarker(c *Client, marker *types.OperationMarker) error {
 		value = string(data)
 	}
 	ns := getActivityNamespace()
-	cm := map[string]interface{}{
+	cm := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
-		"metadata":   map[string]interface{}{"name": operationConfigMapName, "namespace": ns},
-		"data":       map[string]interface{}{operationKey: value},
+		"metadata":   map[string]any{"name": operationConfigMapName, "namespace": ns},
+		"data":       map[string]any{operationKey: value},
 	}
 	if _, _, err := c.bookkeeping().apply(namespacedPath("v1", "configmaps", ns, operationConfigMapName), cm); err != nil {
 		return fmt.Errorf("save operation marker: %w", err)
@@ -198,7 +198,7 @@ func SaveCompletedOperation(c *Client, done *types.CompletedOperation, owner *Le
 		}
 		return nil
 	}
-	for attempt := 0; attempt < maxLeaseWriteAttempts; attempt++ {
+	for range maxLeaseWriteAttempts {
 		rec, err := ReadOperationRecord(c)
 		if err != nil {
 			return fmt.Errorf("save completed operation: %w", err)
@@ -256,10 +256,10 @@ var ErrOperationRecordContended = errors.New("the operation record kept changing
 func writeOperationRecord(c *Client, rec *OperationRecord, data map[string]string) error {
 	if rec.resourceVersion == "" {
 		ns := getActivityNamespace()
-		cm, err := json.Marshal(map[string]interface{}{
+		cm, err := json.Marshal(map[string]any{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
-			"metadata":   map[string]interface{}{"name": operationConfigMapName, "namespace": ns},
+			"metadata":   map[string]any{"name": operationConfigMapName, "namespace": ns},
 			"data":       data,
 		})
 		if err != nil {
@@ -277,9 +277,9 @@ func writeOperationRecord(c *Client, rec *OperationRecord, data map[string]strin
 // (https://kubernetes.io/docs/reference/using-api/api-concepts/#resource-versions).
 // Without one, a missing ConfigMap is created.
 func patchOperationRecord(c *Client, resourceVersion string, data map[string]string) error {
-	body := map[string]interface{}{"data": data}
+	body := map[string]any{"data": data}
 	if resourceVersion != "" {
-		body["metadata"] = map[string]interface{}{"resourceVersion": resourceVersion}
+		body["metadata"] = map[string]any{"resourceVersion": resourceVersion}
 	}
 	patch, err := json.Marshal(body)
 	if err != nil {
@@ -321,7 +321,7 @@ func WriteOperationLease(c *Client, lease *types.OperationLease, heldElsewhere f
 	if err != nil {
 		return nil, err
 	}
-	for attempt := 0; attempt < maxLeaseWriteAttempts; attempt++ {
+	for attempt := range maxLeaseWriteAttempts {
 		rec, err := ReadOperationRecord(c)
 		if err != nil {
 			return nil, err
@@ -346,7 +346,7 @@ func WriteOperationLease(c *Client, lease *types.OperationLease, heldElsewhere f
 // holds another lease (or none). The clear is conditional like
 // WriteOperationLease.
 func ReleaseOperationLease(c *Client, owner LeaseOwner) error {
-	for attempt := 0; attempt < maxLeaseWriteAttempts; attempt++ {
+	for range maxLeaseWriteAttempts {
 		rec, err := ReadOperationRecord(c)
 		if err != nil {
 			return err

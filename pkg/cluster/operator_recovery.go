@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -148,8 +149,8 @@ func bookkeepingContext(c *Client, timeout time.Duration) (context.Context, cont
 // operatorRecovery holds the desired state captured before an operation and
 // what the operation has changed, so a failure restores exactly that.
 type operatorRecovery struct {
-	subscription map[string]interface{}
-	catalog      map[string]interface{}
+	subscription map[string]any
+	catalog      map[string]any
 
 	// catalogChanged: the nightly CatalogSource was replaced or deleted
 	// (noteCatalogChanged, which also sets catalogRestore).
@@ -211,8 +212,8 @@ func (r *operatorRecovery) noteCatalogChanged() {
 func (r *operatorRecovery) restoreNightlyCatalog(c *Client) []string {
 	catalogPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
 	if r.catalog != nil {
-		obj := map[string]interface{}{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
-			"metadata": map[string]interface{}{"name": CatalogName, "namespace": CatalogNS}, "spec": r.catalog["spec"]}
+		obj := map[string]any{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
+			"metadata": map[string]any{"name": CatalogName, "namespace": CatalogNS}, "spec": r.catalog["spec"]}
 		if _, _, err := c.apply(catalogPath, obj); err != nil {
 			return []string{"CatalogSource: " + err.Error()}
 		}
@@ -225,8 +226,8 @@ func (r *operatorRecovery) restoreNightlyCatalog(c *Client) []string {
 }
 
 func (r *operatorRecovery) installPlanName() string {
-	status, _ := r.subscription["status"].(map[string]interface{})
-	ref, _ := status["installPlanRef"].(map[string]interface{})
+	status, _ := r.subscription["status"].(map[string]any)
+	ref, _ := status["installPlanRef"].(map[string]any)
 	name, _ := ref["name"].(string)
 	return name
 }
@@ -235,10 +236,8 @@ func (r *operatorRecovery) noteAttemptCSV(name string) {
 	if r == nil || name == "" {
 		return
 	}
-	for _, n := range r.attemptCSVs {
-		if n == name {
-			return
-		}
+	if slices.Contains(r.attemptCSVs, name) {
+		return
 	}
 	r.attemptCSVs = append(r.attemptCSVs, name)
 }
@@ -267,7 +266,7 @@ func captureOperatorRecovery(c *Client) (*operatorRecovery, error) {
 	}
 	for _, resource := range []struct {
 		path   string
-		target *map[string]interface{}
+		target *map[string]any
 	}{
 		{subscriptionPath(), &r.subscription},
 		{namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName), &r.catalog},
@@ -279,7 +278,7 @@ func captureOperatorRecovery(c *Client) (*operatorRecovery, error) {
 		if err != nil {
 			return nil, fmt.Errorf("capture operator recovery state: %w", err)
 		}
-		var obj map[string]interface{}
+		var obj map[string]any
 		if err := json.Unmarshal(body, &obj); err != nil {
 			return nil, err
 		}
@@ -303,7 +302,7 @@ func captureOperatorRecovery(c *Client) (*operatorRecovery, error) {
 
 // subscriptionBase is the Subscription whose settings (spec.config, approval
 // mode) a new Subscription carries over: the live one, else the recorded one.
-func (r *operatorRecovery) subscriptionBase() map[string]interface{} {
+func (r *operatorRecovery) subscriptionBase() map[string]any {
 	if r == nil {
 		return nil
 	}
@@ -311,7 +310,7 @@ func (r *operatorRecovery) subscriptionBase() map[string]interface{} {
 		return r.subscription
 	}
 	if r.recorded != nil && r.recorded.Spec != nil {
-		return map[string]interface{}{"spec": r.recorded.Spec}
+		return map[string]any{"spec": r.recorded.Spec}
 	}
 	return nil
 }
@@ -419,16 +418,14 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 	if operatorTouched && r.subscription != nil && !subReplaced {
 		spec := r.subscription["spec"]
 		// A pin the restored spec sets itself (Git's) is kept.
-		if prev, _ := spec.(map[string]interface{}); r.csvRemoved && r.restoreStartingCSV != "" && prev != nil && prev["startingCSV"] == nil {
-			pinned := make(map[string]interface{}, len(prev)+1)
-			for k, v := range prev {
-				pinned[k] = v
-			}
+		if prev, _ := spec.(map[string]any); r.csvRemoved && r.restoreStartingCSV != "" && prev != nil && prev["startingCSV"] == nil {
+			pinned := make(map[string]any, len(prev)+1)
+			maps.Copy(pinned, prev)
 			pinned["startingCSV"] = r.restoreStartingCSV
 			spec = pinned
 		}
-		obj := map[string]interface{}{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-			"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS}, "spec": spec}
+		obj := map[string]any{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
+			"metadata": map[string]any{"name": SubName, "namespace": SubNS}, "spec": spec}
 		keepArgoTracking(r.subscription, obj)
 		if _, _, err := c.apply(subscriptionPath(), obj); err != nil {
 			failures = append(failures, "Subscription: "+err.Error())
@@ -464,12 +461,12 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 		// Git's catalog serves one build: the restore makes OLM install it
 		// again, which is the build that just failed.
 		message = "The Subscription was recreated with Git's settings; OLM installs the build the catalog serves again. To go back to another build, change the catalog image in Git."
-		if spec, _ := r.subscription["spec"].(map[string]interface{}); r.csvRemoved && r.restoreStartingCSV != "" && spec["startingCSV"] == nil {
+		if spec, _ := r.subscription["spec"].(map[string]any); r.csvRemoved && r.restoreStartingCSV != "" && spec["startingCSV"] == nil {
 			message = fmt.Sprintf("The Subscription was recreated with Git's settings and startingCSV %s, the CSV that was installed: OLM installs the build the catalog serves again if the catalog has that CSV, and nothing else. To go back to another build, change the catalog image in Git.", r.restoreStartingCSV)
 		}
 	default:
 		message = "The previous catalog and Subscription were restored; OLM will reinstall the previous operator version. Watch the operator status before retrying."
-		if spec, _ := r.subscription["spec"].(map[string]interface{}); r.csvRemoved && spec["installPlanApproval"] == "Manual" {
+		if spec, _ := r.subscription["spec"].(map[string]any); r.csvRemoved && spec["installPlanApproval"] == "Manual" {
 			message += " The Subscription uses Manual approval: approve its InstallPlan in the console to reinstall the operator."
 		}
 	}
@@ -659,7 +656,7 @@ func (r *operatorRecovery) subscriptionToDelete() string {
 	if r.attemptSubscriptionUID != "" {
 		return r.attemptSubscriptionUID
 	}
-	meta, _ := r.subscription["metadata"].(map[string]interface{})
+	meta, _ := r.subscription["metadata"].(map[string]any)
 	uid, _ := meta["uid"].(string)
 	return uid
 }

@@ -16,14 +16,14 @@ func putMLflow(f *resourceFake, labels, manager, op, extraMeta, spec, status str
 }
 
 func mlflowImageOf(f *resourceFake) (string, bool) {
-	spec, _ := f.get(mlflowPath)["spec"].(map[string]interface{})
-	img, _ := spec["image"].(map[string]interface{})
+	spec, _ := f.get(mlflowPath)["spec"].(map[string]any)
+	img, _ := spec["image"].(map[string]any)
 	v, ok := img["image"].(string)
 	return v, ok
 }
 
-func mlflowAnnotations(f *resourceFake) map[string]interface{} {
-	a, _ := f.get(mlflowPath)["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
+func mlflowAnnotations(f *resourceFake) map[string]any {
+	a, _ := f.get(mlflowPath)["metadata"].(map[string]any)["annotations"].(map[string]any)
 	return a
 }
 
@@ -81,7 +81,7 @@ func TestSetupMLflow(t *testing.T) {
 			t.Fatalf("got %+v", resp)
 		}
 		cr := f.get(mlflowPath)
-		if cr["metadata"].(map[string]interface{})["labels"].(map[string]interface{})[managedByLabelKey] != managedByLabelValue {
+		if cr["metadata"].(map[string]any)["labels"].(map[string]any)[managedByLabelKey] != managedByLabelValue {
 			t.Error("CR lacks the ownership label")
 		}
 		if _, set := mlflowImageOf(f); set {
@@ -89,7 +89,7 @@ func TestSetupMLflow(t *testing.T) {
 		}
 		// The operator's chart defaults apply only when spec.resources is
 		// unset; a lower limit got the 8-worker server OOMKilled (live, 3.6).
-		if r, set := cr["spec"].(map[string]interface{})["resources"]; set {
+		if r, set := cr["spec"].(map[string]any)["resources"]; set {
 			t.Errorf("setup must leave spec.resources unset so the operator's defaults apply, got %v", r)
 		}
 		if hasMutation(f, "PATCH "+mlflowPath) {
@@ -264,9 +264,9 @@ func TestDeployAndRevertMLflowPR(t *testing.T) {
 		{"quay error", 500, func(f *resourceFake) { putMLflow(f, toolLabelJSON, toolFieldManager, "Update", "", `{}`, `{}`) }, "network"},
 		{"concurrent change", 7, func(f *resourceFake) {
 			putMLflow(f, toolLabelJSON, toolFieldManager, "Update", "", `{}`, `{}`)
-			f.onGet = func(k fakeKey, obj map[string]interface{}) {
+			f.onGet = func(k fakeKey, obj map[string]any) {
 				if k.plural == "mlflows" {
-					obj["metadata"].(map[string]interface{})["resourceVersion"] = "stale"
+					obj["metadata"].(map[string]any)["resourceVersion"] = "stale"
 				}
 			}
 		}, "conflict"},

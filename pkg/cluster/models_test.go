@@ -69,12 +69,12 @@ func newModelsCluster(t *testing.T) *modelsCluster {
 	f.putJSON("/apis/ingress.operator.openshift.io/v1/namespaces/openshift-ingress/dnsrecords/external", `{
 		"spec":{"dnsName":"inference.apps.example.com."},
 		"status":{"zones":[{"conditions":[{"type":"Published","status":"True"}]},{"conditions":[{"type":"Published","status":"True"}]}]}}`)
-	f.onGet = func(k fakeKey, obj map[string]interface{}) {
+	f.onGet = func(k fakeKey, obj map[string]any) {
 		switch k.plural {
 		case "gateways":
-			obj["status"] = map[string]interface{}{
-				"addresses":  []interface{}{map[string]interface{}{"value": "a1.elb.example.com"}},
-				"conditions": []interface{}{map[string]interface{}{"type": "Accepted", "status": "True"}, map[string]interface{}{"type": "Programmed", "status": "True"}},
+			obj["status"] = map[string]any{
+				"addresses":  []any{map[string]any{"value": "a1.elb.example.com"}},
+				"conditions": []any{map[string]any{"type": "Accepted", "status": "True"}, map[string]any{"type": "Programmed", "status": "True"}},
 			}
 		case "llminferenceservices":
 			mc.mu.Lock()
@@ -82,9 +82,9 @@ func newModelsCluster(t *testing.T) *modelsCluster {
 			n := mc.modelReads
 			mc.mu.Unlock()
 			if mc.readyAfter > 0 && n >= mc.readyAfter {
-				obj["status"] = map[string]interface{}{
+				obj["status"] = map[string]any{
 					"url":        "https://inference.apps.example.com/" + k.ns + "/" + k.name,
-					"conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "True"}},
+					"conditions": []any{map[string]any{"type": "Ready", "status": "True"}},
 				}
 			}
 		}
@@ -136,21 +136,21 @@ func TestModelsSetup_CreatesTheGatewayThenTheModel(t *testing.T) {
 	// The class is OpenShift's controller; the options ConfigMap asks
 	// service-ca for the internal listener's certificate.
 	class := mc.f.get(testGatewayClass)
-	if class["spec"].(map[string]interface{})["controllerName"] != "openshift.io/gateway-controller/v1" {
+	if class["spec"].(map[string]any)["controllerName"] != "openshift.io/gateway-controller/v1" {
 		t.Errorf("class: %v", class)
 	}
 	cm := mc.f.get(testGatewayCM)
-	if svc := cm["data"].(map[string]interface{})["service"].(string); !strings.Contains(svc, "service.beta.openshift.io/serving-cert-secret-name: openshift-ai-inference-service-tls") {
+	if svc := cm["data"].(map[string]any)["service"].(string); !strings.Contains(svc, "service.beta.openshift.io/serving-cert-secret-name: openshift-ai-inference-service-tls") {
 		t.Errorf("options: %q", svc)
 	}
 	// Two listeners: the apps domain with the ingress's default
 	// certificate (only named), and the Service's own name.
 	gw := mc.f.get(testGatewayPath)
-	spec := gw["spec"].(map[string]interface{})
-	listeners := spec["listeners"].([]interface{})
-	l0, l1 := listeners[0].(map[string]interface{}), listeners[1].(map[string]interface{})
-	cert := func(l map[string]interface{}) interface{} {
-		return l["tls"].(map[string]interface{})["certificateRefs"].([]interface{})[0].(map[string]interface{})["name"]
+	spec := gw["spec"].(map[string]any)
+	listeners := spec["listeners"].([]any)
+	l0, l1 := listeners[0].(map[string]any), listeners[1].(map[string]any)
+	cert := func(l map[string]any) any {
+		return l["tls"].(map[string]any)["certificateRefs"].([]any)[0].(map[string]any)["name"]
 	}
 	if l0["hostname"] != "inference.apps.example.com" || cert(l0) != "custom-cert" {
 		t.Errorf("external listener: %v", l0)
@@ -158,7 +158,7 @@ func TestModelsSetup_CreatesTheGatewayThenTheModel(t *testing.T) {
 	if l1["hostname"] != "openshift-ai-inference-openshift-ai-inference.openshift-ingress.svc.cluster.local" || cert(l1) != "openshift-ai-inference-service-tls" {
 		t.Errorf("internal listener: %v", l1)
 	}
-	if spec["infrastructure"].(map[string]interface{})["parametersRef"].(map[string]interface{})["name"] != "openshift-ai-inference-options" {
+	if spec["infrastructure"].(map[string]any)["parametersRef"].(map[string]any)["name"] != "openshift-ai-inference-options" {
 		t.Errorf("parametersRef: %v", spec["infrastructure"])
 	}
 
@@ -166,18 +166,18 @@ func TestModelsSetup_CreatesTheGatewayThenTheModel(t *testing.T) {
 	// model's name equal to the resource's (the playground resolves by it),
 	// the default gateway, and no image of its own on a released cluster.
 	model := mc.f.get(testModelPath)
-	ms := model["spec"].(map[string]interface{})
-	if ms["baseRefs"].([]interface{})[0].(map[string]interface{})["name"] != testPresetName {
+	ms := model["spec"].(map[string]any)
+	if ms["baseRefs"].([]any)[0].(map[string]any)["name"] != testPresetName {
 		t.Errorf("baseRefs: %v", ms["baseRefs"])
 	}
-	if m := ms["model"].(map[string]interface{}); m["name"] != "qwen25-05b-instruct" || m["uri"] != "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775" {
+	if m := ms["model"].(map[string]any); m["name"] != "qwen25-05b-instruct" || m["uri"] != "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775" {
 		t.Errorf("model: %v", m)
 	}
-	main := ms["template"].(map[string]interface{})["containers"].([]interface{})[0].(map[string]interface{})
+	main := ms["template"].(map[string]any)["containers"].([]any)[0].(map[string]any)
 	if _, set := main["image"]; set {
 		t.Errorf("a released cluster's model must use the preset's image, got %v", main["image"])
 	}
-	labels := model["metadata"].(map[string]interface{})["labels"].(map[string]interface{})
+	labels := model["metadata"].(map[string]any)["labels"].(map[string]any)
 	if labels["opendatahub.io/dashboard"] != "true" || labels["opendatahub.io/genai-asset"] != "true" || labels[managedByLabelKey] != managedByLabelValue {
 		t.Errorf("labels: %v", labels)
 	}
@@ -321,8 +321,8 @@ func TestModelsSetup_NightlyClusterUsesTheNewestReleasedImage(t *testing.T) {
 		t.Errorf("looked up %q", asked)
 	}
 	model := mc.f.get(testModelPath)
-	main := model["spec"].(map[string]interface{})["template"].(map[string]interface{})["containers"].([]interface{})[0].(map[string]interface{})
-	ann := model["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
+	main := model["spec"].(map[string]any)["template"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+	ann := model["metadata"].(map[string]any)["annotations"].(map[string]any)
 	if main["image"] != "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:5353" || ann[modelImageSourceAnnotation] != "released" || ann[modelImageVersionAnnotation] != "3.5.3" {
 		t.Fatalf("image %v, annotations %v", main["image"], ann)
 	}
@@ -408,11 +408,11 @@ func TestModelsSetup_MaybeMissingPresetImageOffersItsFixAfterTheWindow(t *testin
 	mc.readyAfter = 0
 	mixed := `(Mirrors also failed: [quay.io/rhoai/vllm-cpu@sha256:a: unauthorized: access to the requested resource is not authorized]): registry.redhat.io/rhaii/vllm-cpu@sha256:a: reading manifest sha256:a in registry.redhat.io/rhaii/vllm-cpu: manifest unknown`
 	mc.f.putJSON("/api/v1/nodes/node-a", `{"metadata":{"creationTimestamp":"`+clk.Now().Add(-3*time.Hour).UTC().Format(time.RFC3339)+`"}}`)
-	pod := map[string]interface{}{
-		"metadata": map[string]interface{}{"labels": map[string]interface{}{"app.kubernetes.io/name": "qwen25-05b-instruct", "app.kubernetes.io/component": "llminferenceservice-workload"}},
-		"spec":     map[string]interface{}{"nodeName": "node-a"},
-		"status": map[string]interface{}{"containerStatuses": []interface{}{map[string]interface{}{"name": "main",
-			"state": map[string]interface{}{"waiting": map[string]interface{}{"reason": "ImagePullBackOff", "message": mixed}}}}},
+	pod := map[string]any{
+		"metadata": map[string]any{"labels": map[string]any{"app.kubernetes.io/name": "qwen25-05b-instruct", "app.kubernetes.io/component": "llminferenceservice-workload"}},
+		"spec":     map[string]any{"nodeName": "node-a"},
+		"status": map[string]any{"containerStatuses": []any{map[string]any{"name": "main",
+			"state": map[string]any{"waiting": map[string]any{"reason": "ImagePullBackOff", "message": mixed}}}}},
 	}
 	mc.f.put(testModelPodsPath, pod)
 	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
@@ -490,8 +490,8 @@ func TestModelsTeardown_DeletesTheModelThenTheGateway(t *testing.T) {
 	}
 	var deletes []string
 	for _, m := range mc.f.mutations()[before:] {
-		if strings.HasPrefix(m, "DELETE ") {
-			deletes = append(deletes, strings.TrimPrefix(m, "DELETE "))
+		if after, ok := strings.CutPrefix(m, "DELETE "); ok {
+			deletes = append(deletes, after)
 		}
 	}
 	// (mutations leaves ConfigMaps out: the activity log writes them.)
@@ -549,11 +549,11 @@ func TestGatewayTeardown_RefusesWhileRoutesAreAttached(t *testing.T) {
 	}
 	mc.f.putJSON("/apis/serving.kserve.io/v1alpha2/namespaces/team/llminferenceservices/granite", `{"spec":{"baseRefs":[{"name":"v3-6-0-kserve-config-llm-router-route"}]}}`)
 	attached := 1
-	mc.f.onGet = func(k fakeKey, obj map[string]interface{}) {
+	mc.f.onGet = func(k fakeKey, obj map[string]any) {
 		if k.plural == "gateways" {
-			obj["status"] = map[string]interface{}{"listeners": []interface{}{
-				map[string]interface{}{"name": "https-external", "attachedRoutes": attached},
-				map[string]interface{}{"name": "https", "attachedRoutes": 0},
+			obj["status"] = map[string]any{"listeners": []any{
+				map[string]any{"name": "https-external", "attachedRoutes": attached},
+				map[string]any{"name": "https", "attachedRoutes": 0},
 			}}
 		}
 	}
@@ -648,7 +648,7 @@ func TestInferenceGatewayStatus_WarnsWithoutItsAuthPolicy(t *testing.T) {
 	mc.f.putJSON("/api/v1/namespaces/openshift-ingress/services/openshift-ai-inference-openshift-ai-inference", `{"metadata":{"labels":{"gateway.networking.k8s.io/gateway-name":"openshift-ai-inference"}}}`)
 	// The status lists the models (a list is not changed by onGet).
 	model := mc.f.get(testModelPath)
-	model["status"] = map[string]interface{}{"url": "https://inference.apps.example.com/proj/qwen25-05b-instruct", "conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "True"}}}
+	model["status"] = map[string]any{"url": "https://inference.apps.example.com/proj/qwen25-05b-instruct", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}}
 	mc.f.put(testModelPath, model)
 	st, _ = GetResourcesStatus(mc.c)
 	if st.InferenceGateway.AuthPolicy != "enforced" || st.InferenceGateway.Warning != "" {
@@ -788,7 +788,7 @@ func TestModelsSetup_ReadErrorsKeepTheirCode(t *testing.T) {
 func notProgrammedGateway(mc *modelsCluster, reads int) {
 	next := mc.f.onGet
 	n := 0
-	mc.f.onGet = func(k fakeKey, obj map[string]interface{}) {
+	mc.f.onGet = func(k fakeKey, obj map[string]any) {
 		next(k, obj)
 		if k.plural != "gateways" {
 			return
@@ -798,9 +798,9 @@ func notProgrammedGateway(mc *modelsCluster, reads int) {
 		pending := reads == 0 || n <= reads
 		mc.mu.Unlock()
 		if pending {
-			obj["status"] = map[string]interface{}{"conditions": []interface{}{
-				map[string]interface{}{"type": "Accepted", "status": "True"},
-				map[string]interface{}{"type": "Programmed", "status": "False", "reason": "AddressNotAssigned",
+			obj["status"] = map[string]any{"conditions": []any{
+				map[string]any{"type": "Accepted", "status": "True"},
+				map[string]any{"type": "Programmed", "status": "False", "reason": "AddressNotAssigned",
 					"message": `Failed to assign to any requested addresses: hostname "openshift-ai-inference-openshift-ai-inference.openshift-ingress.svc.cluster.local" not found`},
 			}}
 		}
@@ -879,11 +879,11 @@ func TestModelsSetup_RecordsAFittingHardwareProfile(t *testing.T) {
 		t.Fatalf("setup failed: %+v", res)
 	}
 	model := mc.f.get("/apis/serving.kserve.io/v1alpha2/namespaces/proj/llminferenceservices/qwen25-05b-instruct")
-	ann := model["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
+	ann := model["metadata"].(map[string]any)["annotations"].(map[string]any)
 	if ann[hardwareProfileNameAnnotation] != "default-profile" || ann[hardwareProfileNamespaceAnnotation] != "redhat-ods-applications" || ann[hardwareProfileVersionAnnotation] != "41" {
 		t.Errorf("hardware profile annotations: %v", ann)
 	}
-	main := model["spec"].(map[string]interface{})["template"].(map[string]interface{})["containers"].([]interface{})[0].(map[string]interface{})
+	main := model["spec"].(map[string]any)["template"].(map[string]any)["containers"].([]any)[0].(map[string]any)
 	res2, _ := json.Marshal(main["resources"])
 	if string(res2) != `{"limits":{"cpu":"4","memory":"8Gi"},"requests":{"cpu":"4","ephemeral-storage":"1.5G","memory":"6Gi"}}` {
 		t.Errorf("resources: %s", res2)
@@ -913,7 +913,7 @@ func TestModelsSetup_NoFittingHardwareProfileSaysWhy(t *testing.T) {
 		t.Fatalf("setup failed: %+v", res)
 	}
 	model := mc.f.get("/apis/serving.kserve.io/v1alpha2/namespaces/proj/llminferenceservices/qwen25-05b-instruct")
-	if _, set := model["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})[hardwareProfileNameAnnotation]; set {
+	if _, set := model["metadata"].(map[string]any)["annotations"].(map[string]any)[hardwareProfileNameAnnotation]; set {
 		t.Error("a profile was recorded although none fits")
 	}
 	for _, e := range events {
@@ -992,7 +992,7 @@ func TestModelsSetup_ReadyMustBeForTheAppliedGeneration(t *testing.T) {
 	mc.readyAfter = 1
 	stale := 0
 	next := mc.f.onGet
-	mc.f.onGet = func(k fakeKey, obj map[string]interface{}) {
+	mc.f.onGet = func(k fakeKey, obj map[string]any) {
 		next(k, obj)
 		if k.plural != "llminferenceservices" {
 			return
@@ -1003,7 +1003,7 @@ func TestModelsSetup_ReadyMustBeForTheAppliedGeneration(t *testing.T) {
 		mc.mu.Unlock()
 		ensureMap(obj, "metadata")["generation"] = 3.0
 		st := ensureMap(obj, "status")
-		st["conditions"] = []interface{}{map[string]interface{}{"type": "Ready", "status": "True"}}
+		st["conditions"] = []any{map[string]any{"type": "Ready", "status": "True"}}
 		st["url"] = "https://inference.apps.example.com/proj/qwen25-05b-instruct"
 		if n <= 4 {
 			st["observedGeneration"] = 2.0
@@ -1171,7 +1171,7 @@ func TestGatewayTeardown_WaitsForRoutesOfModelsJustDeleted(t *testing.T) {
 	mc.f.finalizeOnGet = true
 	reads := 0
 	next := mc.f.onGet
-	mc.f.onGet = func(k fakeKey, obj map[string]interface{}) {
+	mc.f.onGet = func(k fakeKey, obj map[string]any) {
 		next(k, obj)
 		if k.plural == "gateways" {
 			reads++
@@ -1179,7 +1179,7 @@ func TestGatewayTeardown_WaitsForRoutesOfModelsJustDeleted(t *testing.T) {
 			if reads <= 3 {
 				attached = 1
 			}
-			ensureMap(obj, "status")["listeners"] = []interface{}{map[string]interface{}{"name": "https-external", "attachedRoutes": attached}}
+			ensureMap(obj, "status")["listeners"] = []any{map[string]any{"name": "https-external", "attachedRoutes": attached}}
 		}
 	}
 	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "teardown", Gateway: true, Project: "proj"})
@@ -1266,7 +1266,7 @@ func TestModelsSetup_SkipsAProfileNotVisibleForModelServing(t *testing.T) {
 		t.Fatalf("setup failed: %+v", res)
 	}
 	model := mc.f.get(testModelPath)
-	ann := model["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
+	ann := model["metadata"].(map[string]any)["annotations"].(map[string]any)
 	if ann[hardwareProfileNameAnnotation] != "b-serving" {
 		t.Errorf("hardware profile %v", ann[hardwareProfileNameAnnotation])
 	}

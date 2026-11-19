@@ -288,13 +288,14 @@ func conversionProblem(group, resource, kind string, failed, working []conversio
 		evidence = append(evidence, fmt.Sprintf("GET %s?limit=1: OK", p.path()))
 	}
 
-	description := fmt.Sprintf("Reading %s objects as %s fails: the API server asks the operator's conversion webhook to convert them, and the webhook returns an error.", kind, failedVersions)
+	var description strings.Builder
+	fmt.Fprintf(&description, "Reading %s objects as %s fails: the API server asks the operator's conversion webhook to convert them, and the webhook returns an error.", kind, failedVersions)
 	if len(working) > 0 {
-		description += fmt.Sprintf(" Reading them as %s works, so clients of that version keep working.", joinVersions(working))
+		fmt.Fprintf(&description, " Reading them as %s works, so clients of that version keep working.", joinVersions(working))
 	}
 	for _, p := range failed {
 		if p.Preferred {
-			description += fmt.Sprintf(" %s is the version the API server prefers, so oc get %s and every client that follows discovery fail too.", p.Version, strings.ToLower(kind))
+			fmt.Fprintf(&description, " %s is the version the API server prefers, so oc get %s and every client that follows discovery fail too.", p.Version, strings.ToLower(kind))
 			break
 		}
 	}
@@ -304,11 +305,11 @@ func conversionProblem(group, resource, kind string, failed, working []conversio
 			unregistered = true
 		}
 	}
-	description += " Each served version is checked on its first object, a sample: a webhook that does not know a version fails on any object."
+	description.WriteString(" Each served version is checked on its first object, a sample: a webhook that does not know a version fails on any object.")
 	if unregistered {
-		description += fmt.Sprintf(" Likely cause (an inference from the message): the conversion webhook served by the running operator does not know %s. That happens when a nightly's operator image is older than the CRDs its bundle installed.", failedVersions)
+		fmt.Fprintf(&description, " Likely cause (an inference from the message): the conversion webhook served by the running operator does not know %s. That happens when a nightly's operator image is older than the CRDs its bundle installed.", failedVersions)
 	} else {
-		description += " Likely cause (an inference): the operator's conversion webhook does not support this conversion or is failing."
+		description.WriteString(" Likely cause (an inference): the operator's conversion webhook does not support this conversion or is failing.")
 	}
 
 	ns := SubNS
@@ -329,7 +330,7 @@ func conversionProblem(group, resource, kind string, failed, working []conversio
 		ID:              "conversion-failed-" + crd,
 		Severity:        "critical",
 		Title:           fmt.Sprintf("The operator cannot convert %s to %s", kind, failedVersions),
-		Description:     description,
+		Description:     description.String(),
 		Evidence:        evidence,
 		AffectedObjects: []string{"CustomResourceDefinition " + crd},
 		Fix: "Update RHOAI to a newer nightly (Update on the Status page, or a build from Build Explorer), then run diagnostics again. " +
@@ -342,8 +343,7 @@ func conversionProblem(group, resource, kind string, failed, working []conversio
 }
 
 func k8sStatus(err error) int {
-	var k *K8sError
-	if errors.As(err, &k) {
+	if k, ok := errors.AsType[*K8sError](err); ok {
 		return k.Status
 	}
 	return 0

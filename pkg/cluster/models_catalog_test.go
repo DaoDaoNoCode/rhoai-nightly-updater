@@ -22,11 +22,11 @@ func putModelDeploymentFor(mc *modelsCluster, name string) {
 		"status":{"observedGeneration":2,"replicas":1,"updatedReplicas":1,"availableReplicas":1}}`, name, name))
 }
 
-func envOf(container map[string]interface{}) map[string]string {
+func envOf(container map[string]any) map[string]string {
 	out := map[string]string{}
-	list, _ := container["env"].([]interface{})
+	list, _ := container["env"].([]any)
 	for _, e := range list {
-		m := e.(map[string]interface{})
+		m := e.(map[string]any)
 		out[m["name"].(string)] = m["value"].(string)
 	}
 	return out
@@ -119,25 +119,25 @@ func TestToolModelPath_IsExactlyTheCatalog(t *testing.T) {
 func TestModelManifest_UsesTheEntrysSettings(t *testing.T) {
 	for _, entry := range modelCatalog {
 		obj := modelManifest("proj", entry, testPresetName, imagePlan{Kind: "preset"}, hardwareProfile{}, false, false, exposurePlan{exposure: exposureDefault})
-		meta := obj["metadata"].(map[string]interface{})
+		meta := obj["metadata"].(map[string]any)
 		if meta["name"] != entry.Name {
 			t.Errorf("%s: name %v", entry.Name, meta["name"])
 		}
-		ann := meta["annotations"].(map[string]interface{})
+		ann := meta["annotations"].(map[string]any)
 		if ann["openshift.io/display-name"] != entry.DisplayName || ann["openshift.io/description"] != entry.Description ||
 			ann["opendatahub.io/genai-use-case"] != entry.UseCase || ann["opendatahub.io/model-type"] != "generative" {
 			t.Errorf("%s: annotations %v", entry.Name, ann)
 		}
-		labels := meta["labels"].(map[string]interface{})
+		labels := meta["labels"].(map[string]any)
 		if labels["opendatahub.io/dashboard"] != "true" || labels["opendatahub.io/genai-asset"] != "true" || labels[managedByLabelKey] != managedByLabelValue {
 			t.Errorf("%s: labels %v", entry.Name, labels)
 		}
-		spec := obj["spec"].(map[string]interface{})
-		if m := spec["model"].(map[string]interface{}); m["uri"] != entry.URI || m["name"] != entry.Name {
+		spec := obj["spec"].(map[string]any)
+		if m := spec["model"].(map[string]any); m["uri"] != entry.URI || m["name"] != entry.Name {
 			t.Errorf("%s: model %v", entry.Name, m)
 		}
-		tmpl := spec["template"].(map[string]interface{})
-		main := tmpl["containers"].([]interface{})[0].(map[string]interface{})
+		tmpl := spec["template"].(map[string]any)
+		main := tmpl["containers"].([]any)[0].(map[string]any)
 		env := envOf(main)
 		if env["OMP_NUM_THREADS"] != entry.threads || env["VLLM_CPU_KVCACHE_SPACE"] != entry.kvCacheGiB || env["VLLM_ADDITIONAL_ARGS"] != entry.Args {
 			t.Errorf("%s: env %v", entry.Name, env)
@@ -146,11 +146,11 @@ func TestModelManifest_UsesTheEntrysSettings(t *testing.T) {
 		if want := fmt.Sprintf(`{"limits":{"cpu":%q,"memory":%q},"requests":{"cpu":%q,"memory":%q}}`, entry.CPU, entry.Memory, entry.CPU, entry.MemoryRequest); string(res) != want {
 			t.Errorf("%s: resources %s", entry.Name, res)
 		}
-		inits, _ := tmpl["initContainers"].([]interface{})
+		inits, _ := tmpl["initContainers"].([]any)
 		if len(inits) != 1 {
 			t.Fatalf("%s: init containers %v", entry.Name, inits)
 		}
-		si := inits[0].(map[string]interface{})
+		si := inits[0].(map[string]any)
 		if si["name"] != "storage-initializer" || len(si) != 2 {
 			t.Errorf("%s: storage-initializer %v (only its env may be set)", entry.Name, si)
 		}
@@ -221,11 +221,11 @@ func TestModelsSetup_TheChosenModel(t *testing.T) {
 		t.Error("the default model was created too")
 	}
 	model := mc.f.get(testModelsBase + "qwen3-1-7b")
-	ann := model["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
+	ann := model["metadata"].(map[string]any)["annotations"].(map[string]any)
 	if ann[hardwareProfileNameAnnotation] != "large" {
 		t.Errorf("hardware profile %v", ann[hardwareProfileNameAnnotation])
 	}
-	main := model["spec"].(map[string]interface{})["template"].(map[string]interface{})["containers"].([]interface{})[0].(map[string]interface{})
+	main := model["spec"].(map[string]any)["template"].(map[string]any)["containers"].([]any)[0].(map[string]any)
 	if r, _ := json.Marshal(main["resources"]); string(r) != `{"limits":{"cpu":"4","memory":"14Gi"},"requests":{"cpu":"4","ephemeral-storage":"6.2G","memory":"12Gi"}}` {
 		t.Errorf("resources %s", r)
 	}

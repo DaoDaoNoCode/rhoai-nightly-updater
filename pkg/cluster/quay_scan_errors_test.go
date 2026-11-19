@@ -33,7 +33,7 @@ func TestFetchAndParseTags_PartialScanIsNotCached(t *testing.T) {
 	f := newFakeTagRepo("rhoai-3.4", "rhoai-3.5")
 	// The probe of 3.5 fails for good (the retry too), on both scans.
 	f.fail["rhoai-3.5"] = []int{502, 502, 502, 502}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		tags, err := fetchAndParseTags(context.Background(), f.client(), "t")
 		if err != nil || len(tags) != 1 || tags[0].raw != "rhoai-3.4" {
 			t.Fatalf("scan %d: tags=%v err=%v", i, rawTags(tags), err)

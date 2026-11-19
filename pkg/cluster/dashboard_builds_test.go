@@ -170,8 +170,8 @@ func TestDashboardBuildsMainBuild(t *testing.T) {
 }
 
 func TestDashboardBuildsPRBuild(t *testing.T) {
-	openPR := func(head string) map[string]interface{} {
-		return map[string]interface{}{"state": "open", "merged": false, "merged_at": nil, "title": "Show the commit", "html_url": upstreamURL + "/pull/5123", "head": map[string]interface{}{"sha": head}}
+	openPR := func(head string) map[string]any {
+		return map[string]any{"state": "open", "merged": false, "merged_at": nil, "title": "Show the commit", "html_url": upstreamURL + "/pull/5123", "head": map[string]any{"sha": head}}
 	}
 	t.Run("built-from-the-pr-head", func(t *testing.T) {
 		m, g := installDashboardBuildsFakes(t, "odh-dashboard:odh-pr-5123")
@@ -455,7 +455,7 @@ func TestDashboardBuildsNewerBuild(t *testing.T) {
 	t.Run("pr-tag-moved", func(t *testing.T) {
 		m, g := installDashboardBuildsFakes(t, "odh-dashboard:odh-pr-7")
 		m.setLabels(fixtureDigest("odh-dashboard:odh-pr-7"), map[string]string{"git.commit": fixtureCommit("odh-dashboard:odh-pr-7"), "git.url": upstreamURL})
-		g.prs[7] = map[string]interface{}{"state": "open", "merged": false, "title": "x", "head": map[string]interface{}{"sha": prHead}}
+		g.prs[7] = map[string]any{"state": "open", "merged": false, "title": "x", "head": map[string]any{"sha": prHead}}
 		newDigest := digestOf(44)
 		m.republish("odh-dashboard:odh-pr-7", newDigest)
 		m.setLabels(newDigest, map[string]string{"git.commit": prHead, "git.url": upstreamURL})
@@ -495,7 +495,7 @@ func TestGetDashboardBuildsCoversPRAndMainContainersOnly(t *testing.T) {
 	f, c := newDashboardDevFixture(t)
 	m, g := installDashboardBuildsFakes(t, "odh-dashboard:odh-stable", "odh-mod-arch-notebooks:odh-pr-9")
 	m.setLabels(fixtureDigest("odh-mod-arch-notebooks:odh-pr-9"), map[string]string{"git.commit": prHead, "git.url": upstreamURL})
-	g.prs[9] = map[string]interface{}{"state": "open", "merged": false, "title": "x", "head": map[string]interface{}{"sha": prHead}}
+	g.prs[9] = map[string]any{"state": "open", "merged": false, "title": "x", "head": map[string]any{"sha": prHead}}
 	g.compare[prHead+"..."+prHead] = "identical"
 	commit := fixtureCommit("odh-dashboard:odh-stable")
 	g.compare[commit+"..."+mainHead] = "identical"

@@ -65,7 +65,7 @@ func TestBookkeepingUsesTheServiceAccount(t *testing.T) {
 	if err := writeSnapshotKey(c, "k", "m", "v"); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveSubscriptionSnapshot(c, map[string]interface{}{"spec": map[string]interface{}{"channel": "x"}}); err != nil {
+	if err := saveSubscriptionSnapshot(c, map[string]any{"spec": map[string]any{"channel": "x"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := loadSubscriptionSnapshot(c); err != nil {
@@ -125,8 +125,7 @@ func TestBookkeepingUsesTheServiceAccount(t *testing.T) {
 // bookkeeping() hands out the ServiceAccount's client with the caller's
 // context and user, and the client itself when none was set.
 func TestBookkeepingClient(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	sa := &Client{token: "sa-token", ctx: context.Background()}
 	c := &Client{token: "user-token", ctx: ctx, username: "alice"}
 	if got := c.bookkeeping(); got != c {

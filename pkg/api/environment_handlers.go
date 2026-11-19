@@ -39,7 +39,7 @@ var HandleDSProjects = withAuth(func(c *cluster.Client, w http.ResponseWriter, r
 		writeError(w, "failed to list projects", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"projects": projects}, "ds-projects")
+	writeJSON(w, map[string]any{"projects": projects}, "ds-projects")
 })
 
 // runPrerequisites sets up a feature's prerequisites; tests replace it.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -29,7 +30,7 @@ type dashboardDevFixture struct {
 	onConflict       func(*dashboardDeployment)
 	containerPatches map[string][][]string
 	// pods are returned for namespace pod lists without the operator selector.
-	pods []map[string]interface{}
+	pods []map[string]any
 	// failOperatorPatch makes every dashboard-operator patch fail with this status.
 	failOperatorPatch int
 	// operatorConflicts makes the next N dashboard-operator patches conflict.
@@ -83,15 +84,15 @@ func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
 			for _, d := range f.workloads {
 				items = append(items, d)
 			}
-			json.NewEncoder(w).Encode(map[string]interface{}{"items": items})
+			json.NewEncoder(w).Encode(map[string]any{"items": items})
 		case "pods":
 			if !strings.Contains(r.URL.RawQuery, "labelSelector") {
 				f.podListCalls++
 				items := f.pods
 				if items == nil {
-					items = []map[string]interface{}{}
+					items = []map[string]any{}
 				}
-				json.NewEncoder(w).Encode(map[string]interface{}{"items": items})
+				json.NewEncoder(w).Encode(map[string]any{"items": items})
 			} else if f.operatorPods {
 				io.WriteString(w, `{"items":[{"metadata":{"name":"still-running"}}]}`)
 			} else {
@@ -111,11 +112,11 @@ func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{}`)
 		return
 	}
-	var patch map[string]interface{}
+	var patch map[string]any
 	json.NewDecoder(r.Body).Decode(&patch)
 	f.writes = append(f.writes, name)
 	if name == dashboardOperatorName {
-		spec := patch["spec"].(map[string]interface{})
+		spec := patch["spec"].(map[string]any)
 		replicas := int(spec["replicas"].(float64))
 		if replicas > 0 && f.failResume {
 			w.WriteHeader(403)
@@ -127,7 +128,7 @@ func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
 			io.WriteString(w, `{"kind":"Status","status":"Failure","message":"injected"}`)
 			return
 		}
-		metadata := patch["metadata"].(map[string]interface{})
+		metadata := patch["metadata"].(map[string]any)
 		if f.operatorConflicts > 0 {
 			f.operatorConflicts--
 			f.operator.Metadata.ResourceVersion += "-next"
@@ -144,7 +145,7 @@ func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
 		if f.operator.Metadata.Annotations == nil {
 			f.operator.Metadata.Annotations = map[string]string{}
 		}
-		for key, value := range metadata["annotations"].(map[string]interface{}) {
+		for key, value := range metadata["annotations"].(map[string]any) {
 			if value == nil {
 				delete(f.operator.Metadata.Annotations, key)
 			} else {
@@ -179,7 +180,7 @@ func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"kind":"Status","reason":"Conflict","message":"object has been modified"}`)
 		return
 	}
-	if metadata, ok := patch["metadata"].(map[string]interface{}); ok {
+	if metadata, ok := patch["metadata"].(map[string]any); ok {
 		if version, ok := metadata["resourceVersion"].(string); ok && version != d.Metadata.ResourceVersion {
 			w.WriteHeader(http.StatusConflict)
 			io.WriteString(w, `{"kind":"Status","reason":"Conflict","message":"stale resourceVersion"}`)
@@ -190,11 +191,9 @@ func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
 			io.WriteString(w, `{"kind":"Status","reason":"Conflict","message":"uid precondition failed"}`)
 			return
 		}
-		if annotations, ok := metadata["annotations"].(map[string]interface{}); ok {
+		if annotations, ok := metadata["annotations"].(map[string]any); ok {
 			merged := map[string]string{}
-			for k, v := range d.Metadata.Annotations {
-				merged[k] = v
-			}
+			maps.Copy(merged, d.Metadata.Annotations)
 			for k, v := range annotations {
 				if v == nil {
 					delete(merged, k)
@@ -205,17 +204,17 @@ func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
 			d.Metadata.Annotations = merged
 		}
 	}
-	if spec, ok := patch["spec"].(map[string]interface{}); ok {
+	if spec, ok := patch["spec"].(map[string]any); ok {
 		if *f.operator.Spec.Replicas != 0 {
 			panic("image patch while operator running")
 		}
-		containers := spec["template"].(map[string]interface{})["spec"].(map[string]interface{})["containers"].([]interface{})
+		containers := spec["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)
 		if f.containerPatches == nil {
 			f.containerPatches = map[string][][]string{}
 		}
 		var names []string
 		for _, raw := range containers {
-			ct := raw.(map[string]interface{})
+			ct := raw.(map[string]any)
 			names = append(names, ct["name"].(string))
 			for i := range d.Spec.Template.Spec.Containers {
 				if d.Spec.Template.Spec.Containers[i].Name == ct["name"] {

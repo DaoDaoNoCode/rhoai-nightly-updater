@@ -87,7 +87,7 @@ func TestModelOwnership_RecordsTheCreatedUIDAndForgetsItOnDelete(t *testing.T) {
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
-	uid := mc.f.get(testModelPath)["metadata"].(map[string]interface{})["uid"].(string)
+	uid := mc.f.get(testModelPath)["metadata"].(map[string]any)["uid"].(string)
 	rec, err := readModelsRecord(mc.c)
 	if err != nil {
 		t.Fatal(err)
@@ -166,7 +166,7 @@ func TestMaaSPublish_DisplayNameFromTheCatalog(t *testing.T) {
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"}); !res.Success {
 		t.Fatalf("publish: %+v", res)
 	}
-	ann := mc.f.get(tMaaSRef)["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
+	ann := mc.f.get(tMaaSRef)["metadata"].(map[string]any)["annotations"].(map[string]any)
 	if ann["openshift.io/display-name"] != "Qwen2.5 0.5B Instruct (CPU)" {
 		t.Errorf("MaaSModelRef display name %v", ann["openshift.io/display-name"])
 	}
@@ -192,7 +192,7 @@ func recordModelFixture(f *resourceFake, path string) {
 	cmKey, _ := parseFakePath(testSnapshotCM)
 	cm := f.objects[cmKey]
 	if cm == nil {
-		cm = map[string]interface{}{"metadata": map[string]interface{}{"name": snapshotConfigMapName, "namespace": "rhoai-nightly-updater", "uid": "snapshot-uid", "resourceVersion": "1"}}
+		cm = map[string]any{"metadata": map[string]any{"name": snapshotConfigMapName, "namespace": "rhoai-nightly-updater", "uid": "snapshot-uid", "resourceVersion": "1"}}
 		f.objects[cmKey] = cm
 	}
 	data := ensureMap(cm, "data")

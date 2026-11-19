@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -70,12 +71,10 @@ func csvPath(name string) string {
 // user put on the previous Subscription are carried over: spec.config (env,
 // resources, nodeSelector, tolerations, ...) and installPlanApproval. Only
 // startingCSV is dropped, because it names a version of the previous channel.
-func buildSubscription(previous map[string]interface{}, source, channel string) map[string]interface{} {
-	spec := map[string]interface{}{}
-	if prevSpec, ok := previous["spec"].(map[string]interface{}); ok {
-		for k, v := range prevSpec {
-			spec[k] = v
-		}
+func buildSubscription(previous map[string]any, source, channel string) map[string]any {
+	spec := map[string]any{}
+	if prevSpec, ok := previous["spec"].(map[string]any); ok {
+		maps.Copy(spec, prevSpec)
 	}
 	delete(spec, "startingCSV")
 	spec["name"] = SubName
@@ -85,10 +84,10 @@ func buildSubscription(previous map[string]interface{}, source, channel string) 
 	if approval, _ := spec["installPlanApproval"].(string); approval != "Manual" {
 		spec["installPlanApproval"] = "Automatic"
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "Subscription",
-		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS},
+		"metadata":   map[string]any{"name": SubName, "namespace": SubNS},
 		"spec":       spec,
 	}
 }
@@ -111,7 +110,7 @@ func ensureOperatorNamespaceAndGroup(c *Client, dryRun bool) (logs []string, pro
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create namespace %s", SubNS))
 	case nsMissing:
 		slog.Info("creating operator namespace", "namespace", SubNS)
-		ns := map[string]interface{}{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]interface{}{"name": SubNS}}
+		ns := map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": SubNS}}
 		if _, _, err := c.apply(nsPath, ns); err != nil {
 			return logs, fmt.Sprintf("Failed to create namespace %s: %v", SubNS, err), errorCodeFromK8sErr(err)
 		}
@@ -129,11 +128,11 @@ func ensureOperatorNamespaceAndGroup(c *Client, dryRun bool) (logs []string, pro
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create OperatorGroup in %s", SubNS))
 	default:
 		slog.Info("creating OperatorGroup", "namespace", SubNS)
-		og := map[string]interface{}{
+		og := map[string]any{
 			"apiVersion": "operators.coreos.com/v1",
 			"kind":       "OperatorGroup",
-			"metadata":   map[string]interface{}{"name": "rhods-operator", "namespace": SubNS},
-			"spec":       map[string]interface{}{},
+			"metadata":   map[string]any{"name": "rhods-operator", "namespace": SubNS},
+			"spec":       map[string]any{},
 		}
 		if _, _, err := c.apply(namespacedPath("operators.coreos.com/v1", "operatorgroups", SubNS, "rhods-operator"), og); err != nil {
 			return logs, fmt.Sprintf("Failed to create OperatorGroup in %s: %v", SubNS, err), errorCodeFromK8sErr(err)
@@ -149,8 +148,8 @@ type rhoaiOperatorGroup struct {
 		Name string `json:"name"`
 	} `json:"metadata"`
 	Spec struct {
-		TargetNamespaces []string    `json:"targetNamespaces"`
-		Selector         interface{} `json:"selector"`
+		TargetNamespaces []string `json:"targetNamespaces"`
+		Selector         any      `json:"selector"`
 	} `json:"spec"`
 }
 

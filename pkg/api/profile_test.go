@@ -175,7 +175,7 @@ func TestGitOpsProfileReadsNeedClusterAdmin(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, postJSONMethod(http.MethodGet, "/api/user/permissions", "user:reader", ""))
-	var perms map[string]interface{}
+	var perms map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &perms)
 	if w.Code != http.StatusOK || perms["canMutate"] != false || perms["user"] != "reader" {
 		t.Fatalf("permissions for a non-admin: %d %s", w.Code, w.Body.String())
@@ -309,7 +309,7 @@ func TestVersionReportsTheProfile(t *testing.T) {
 		SetProfile(p)
 		w := httptest.NewRecorder()
 		HandleVersion(w, httptest.NewRequest(http.MethodGet, "/api/version", nil))
-		var v map[string]interface{}
+		var v map[string]any
 		_ = json.Unmarshal(w.Body.Bytes(), &v)
 		if v["profile"] != string(p) {
 			t.Errorf("profile %s: /api/version = %s", p, w.Body.String())

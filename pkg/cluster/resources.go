@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -32,8 +33,8 @@ const (
 )
 
 // toolLabels returns the ownership labels set on every object the tool creates.
-func toolLabels() map[string]interface{} {
-	return map[string]interface{}{managedByLabelKey: managedByLabelValue}
+func toolLabels() map[string]any {
+	return map[string]any{managedByLabelKey: managedByLabelValue}
 }
 
 // objectMeta is the subset of metadata the ownership checks read.
@@ -187,10 +188,10 @@ func deleteWithUID(c *Client, path, uid string) (int, error) {
 // collector deleted its dependents that set blockOwnerDeletion (Kubernetes
 // docs, Garbage Collection, "Foreground cascading deletion").
 func deleteWithUIDPropagation(c *Client, path, uid, policy string) (int, error) {
-	body, _ := json.Marshal(map[string]interface{}{
+	body, _ := json.Marshal(map[string]any{
 		"apiVersion":        "v1",
 		"kind":              "DeleteOptions",
-		"preconditions":     map[string]interface{}{"uid": uid},
+		"preconditions":     map[string]any{"uid": uid},
 		"propagationPolicy": policy,
 	})
 	_, status, err := c.do(http.MethodDelete, path, "application/json", body, nil)
@@ -250,7 +251,7 @@ type toolObjectReader func() (objectMeta, bool, error)
 // the object path. It returns "created" or "updated", and the object's
 // metadata and existence as last seen, which change when the ownership was
 // upgraded: pass them to the real write after a dry run.
-func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]interface{}, current objectMeta, found bool, read toolObjectReader, owned func(objectMeta) bool, dryRun bool) (string, objectMeta, bool, error) {
+func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]any, current objectMeta, found bool, read toolObjectReader, owned func(objectMeta) bool, dryRun bool) (string, objectMeta, bool, error) {
 	data, err := json.Marshal(obj)
 	if err != nil {
 		return "", current, found, err
@@ -259,7 +260,7 @@ func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]i
 	if dryRun {
 		query = url.Values{"dryRun": {"All"}}
 	}
-	for attempt := 0; attempt < 3; attempt++ {
+	for range 3 {
 		if !found {
 			created, _, postErr := c.do(http.MethodPost, createPath, "application/json", data, query)
 			if postErr == nil {
@@ -291,15 +292,11 @@ func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]i
 			continue
 		}
 		current = upgraded
-		guarded := make(map[string]interface{}, len(obj))
-		for k, v := range obj {
-			guarded[k] = v
-		}
-		meta := map[string]interface{}{}
-		if m, ok := obj["metadata"].(map[string]interface{}); ok {
-			for k, v := range m {
-				meta[k] = v
-			}
+		guarded := make(map[string]any, len(obj))
+		maps.Copy(guarded, obj)
+		meta := map[string]any{}
+		if m, ok := obj["metadata"].(map[string]any); ok {
+			maps.Copy(meta, m)
 		}
 		meta["resourceVersion"] = current.ResourceVersion
 		guarded["metadata"] = meta
@@ -411,7 +408,7 @@ func upgradeToolFieldOwnership(c *Client, path string, current objectMeta) (obje
 	if len(kept) == len(current.ManagedFields) && current.ManagedFields[target].Operation == "Apply" {
 		return current, nil // already server-side only
 	}
-	patch, err := json.Marshal([]map[string]interface{}{
+	patch, err := json.Marshal([]map[string]any{
 		{"op": "replace", "path": "/metadata/managedFields", "value": kept},
 		{"op": "replace", "path": "/metadata/resourceVersion", "value": current.ResourceVersion},
 	})
@@ -429,11 +426,11 @@ func upgradeToolFieldOwnership(c *Client, path string, current objectMeta) (obje
 // a tree whose nodes are JSON objects, so the union of the sets is the deep
 // merge of the trees.
 func unionFieldsV1(a, b map[string]json.RawMessage) (map[string]json.RawMessage, error) {
-	var merge func(x, y map[string]interface{})
-	merge = func(x, y map[string]interface{}) {
+	var merge func(x, y map[string]any)
+	merge = func(x, y map[string]any) {
 		for k, v := range y {
-			xv, okx := x[k].(map[string]interface{})
-			yv, oky := v.(map[string]interface{})
+			xv, okx := x[k].(map[string]any)
+			yv, oky := v.(map[string]any)
 			if okx && oky {
 				merge(xv, yv)
 				continue
@@ -443,10 +440,10 @@ func unionFieldsV1(a, b map[string]json.RawMessage) (map[string]json.RawMessage,
 			}
 		}
 	}
-	decode := func(m map[string]json.RawMessage) (map[string]interface{}, error) {
-		out := map[string]interface{}{}
+	decode := func(m map[string]json.RawMessage) (map[string]any, error) {
+		out := map[string]any{}
 		for k, raw := range m {
-			var v interface{}
+			var v any
 			if err := json.Unmarshal(raw, &v); err != nil {
 				return nil, fmt.Errorf("fieldsV1 %s: %w", k, err)
 			}

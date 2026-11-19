@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -49,7 +50,7 @@ type genAIFake struct {
 	// there (the BFF's zero-restart path) instead of creating one.
 	existingOnInstall bool
 	paths             []string
-	installs          []map[string]interface{}
+	installs          []map[string]any
 	deletes           []string
 	auth              []string
 	// userToken is a signed-in user's own token: with it, and only with
@@ -71,7 +72,7 @@ func (g *genAIFake) serve(w http.ResponseWriter, r *http.Request) {
 	ns := r.URL.Query().Get("namespace")
 	fail := func(status int, msg string) {
 		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": map[string]string{"code": http.StatusText(status), "message": msg}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": http.StatusText(status), "message": msg}})
 	}
 	if g.missing {
 		fail(http.StatusNotFound, "the requested resource could not be found")
@@ -111,14 +112,14 @@ func (g *genAIFake) serve(w http.ResponseWriter, r *http.Request) {
 				srv.Phase = "Failed"
 			}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": map[string]string{"name": srv.Name, "phase": srv.Phase, "version": "v1"}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]string{"name": srv.Name, "phase": srv.Phase, "version": "v1"}})
 	case "POST /gen-ai/api/v1/lsd/install":
-		var body map[string]interface{}
+		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		g.installs = append(g.installs, body)
-		models, _ := body["models"].([]interface{})
+		models, _ := body["models"].([]any)
 		for _, m := range models {
-			if mm, _ := m.(map[string]interface{}); mm["model_source_type"] != "namespace" && (!asUser || mm["model_source_type"] != "maas") {
+			if mm, _ := m.(map[string]any); mm["model_source_type"] != "namespace" && (!asUser || mm["model_source_type"] != "maas") {
 				g.t.Errorf("install with model %v: the dashboard lists MaaS models with the caller's token", m)
 			}
 		}
@@ -372,7 +373,7 @@ func TestPlayground_SetupWithTheUsersTokenAddsAMaaSModel(t *testing.T) {
 			t.Errorf("%s %s with the user's token: %v", c.method, c.path, err)
 		}
 	}
-	traced := map[string]interface{}{"enable_guardrails": false, "enable_tracing": true, "vector_stores": []interface{}{}, "models": []map[string]interface{}{{"model_name": "m", "model_source_type": "maas"}}}
+	traced := map[string]any{"enable_guardrails": false, "enable_tracing": true, "vector_stores": []any{}, "models": []map[string]any{{"model_name": "m", "model_source_type": "maas"}}}
 	if err := api.call(http.MethodPost, "/lsd/install", "proj", traced, nil); !errors.Is(err, errGenAINotAllowed) {
 		t.Errorf("an install with tracing: %v", err)
 	}
@@ -415,32 +416,30 @@ func TestPlayground_GenAIClientRefusesCallsThatReachMaaS(t *testing.T) {
 	if problem != "" {
 		t.Fatal(problem)
 	}
-	ns := map[string]interface{}{"model_name": "m", "model_source_type": "namespace"}
+	ns := map[string]any{"model_name": "m", "model_source_type": "namespace"}
 	// install is the body Set up sends, with over changed.
-	install := func(over map[string]interface{}) map[string]interface{} {
-		b := map[string]interface{}{"enable_guardrails": false, "enable_tracing": false, "vector_stores": []interface{}{}, "models": []map[string]interface{}{ns}}
-		for k, v := range over {
-			b[k] = v
-		}
+	install := func(over map[string]any) map[string]any {
+		b := map[string]any{"enable_guardrails": false, "enable_tracing": false, "vector_stores": []any{}, "models": []map[string]any{ns}}
+		maps.Copy(b, over)
 		return b
 	}
 	for _, c := range []struct {
 		method, path string
-		in           interface{}
+		in           any
 	}{
 		{http.MethodGet, "/maas/models", nil},
 		{http.MethodPost, "/maas/tokens", map[string]string{"model": "m"}},
 		{http.MethodPost, "/lsd/responses", nil},
 		{http.MethodGet, "/genai-proxy/ns/proj/v1/models", nil},
-		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"models": []map[string]interface{}{ns, {"model_name": "x", "model_source_type": "maas"}}})},
-		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"models": []map[string]interface{}{{"model_name": "x", "model_source_type": "custom_endpoint"}}})},
-		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"models": []map[string]interface{}{}})},
-		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"enable_tracing": true})},
-		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"enable_guardrails": true})},
-		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"vector_stores": []interface{}{map[string]interface{}{"provider": "remote"}}})},
-		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"guardrail_models": []interface{}{}})},
-		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"models": []map[string]interface{}{{"model_name": "m", "model_source_type": "namespace", "subscription": "s"}}})},
-		{http.MethodPost, "/lsd/install", map[string]interface{}{"models": []map[string]interface{}{ns}}},
+		{http.MethodPost, "/lsd/install", install(map[string]any{"models": []map[string]any{ns, {"model_name": "x", "model_source_type": "maas"}}})},
+		{http.MethodPost, "/lsd/install", install(map[string]any{"models": []map[string]any{{"model_name": "x", "model_source_type": "custom_endpoint"}}})},
+		{http.MethodPost, "/lsd/install", install(map[string]any{"models": []map[string]any{}})},
+		{http.MethodPost, "/lsd/install", install(map[string]any{"enable_tracing": true})},
+		{http.MethodPost, "/lsd/install", install(map[string]any{"enable_guardrails": true})},
+		{http.MethodPost, "/lsd/install", install(map[string]any{"vector_stores": []any{map[string]any{"provider": "remote"}}})},
+		{http.MethodPost, "/lsd/install", install(map[string]any{"guardrail_models": []any{}})},
+		{http.MethodPost, "/lsd/install", install(map[string]any{"models": []map[string]any{{"model_name": "m", "model_source_type": "namespace", "subscription": "s"}}})},
+		{http.MethodPost, "/lsd/install", map[string]any{"models": []map[string]any{ns}}},
 		{http.MethodPost, "/lsd/install", nil},
 		{http.MethodGet, "/lsd/models", nil},
 	} {
@@ -518,8 +517,8 @@ func TestPlayground_SetupUsesTheReadyModelsOnly(t *testing.T) {
 	if !res.Success || len(e.g.installs) != 1 {
 		t.Fatalf("got %+v", res)
 	}
-	models, _ := e.g.installs[0]["models"].([]interface{})
-	if m, _ := models[0].(map[string]interface{}); len(models) != 1 || m["model_name"] != "qwen25-05b-instruct" {
+	models, _ := e.g.installs[0]["models"].([]any)
+	if m, _ := models[0].(map[string]any); len(models) != 1 || m["model_name"] != "qwen25-05b-instruct" {
 		t.Errorf("models %v", models)
 	}
 	if !strings.Contains(steps[0].Message, "deepseek") {

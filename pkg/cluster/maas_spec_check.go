@@ -63,7 +63,7 @@ var modelSpecTopKeys = map[string]bool{"baseRefs": true, "model": true, "replica
 // differences lists the spec fields that differ from the expectation, by
 // path, sorted. Resources are not compared (KServe defaults some of them,
 // and they change nothing about what runs).
-func (e modelSpecExpectation) differences(spec map[string]interface{}) []string {
+func (e modelSpecExpectation) differences(spec map[string]any) []string {
 	var out []string
 	add := func(path string) { out = append(out, path) }
 	for k := range spec {
@@ -71,17 +71,17 @@ func (e modelSpecExpectation) differences(spec map[string]interface{}) []string 
 			add("spec." + k)
 		}
 	}
-	model, _ := spec["model"].(map[string]interface{})
+	model, _ := spec["model"].(map[string]any)
 	if s, _ := model["uri"].(string); s != e.entry.URI {
 		add("spec.model.uri")
 	}
 	if s, _ := model["name"].(string); s != e.entry.Name {
 		add("spec.model.name")
 	}
-	if !reflect.DeepEqual(spec["baseRefs"], []interface{}{map[string]interface{}{"name": e.preset}}) {
+	if !reflect.DeepEqual(spec["baseRefs"], []any{map[string]any{"name": e.preset}}) {
 		add("spec.baseRefs")
 	}
-	tmpl, _ := spec["template"].(map[string]interface{})
+	tmpl, _ := spec["template"].(map[string]any)
 	for k := range tmpl {
 		if k != "containers" && k != "initContainers" {
 			add("spec.template." + k)
@@ -101,12 +101,12 @@ type envVar struct{ name, value string }
 // one container, want, with no command, args, envFrom or volumeMounts, the
 // env listed (plain values) and an allowed image. Other fields (resources,
 // probes KServe may default) are not compared.
-func containerDifferences(path string, raw interface{}, want string, env []envVar, imageOK func(string) bool) []string {
+func containerDifferences(path string, raw any, want string, env []envVar, imageOK func(string) bool) []string {
 	var out []string
-	list, _ := raw.([]interface{})
+	list, _ := raw.([]any)
 	found := false
 	for _, item := range list {
-		ctr, _ := item.(map[string]interface{})
+		ctr, _ := item.(map[string]any)
 		name, _ := ctr["name"].(string)
 		at := fmt.Sprintf("%s[%s]", path, name)
 		if name != want || found {
@@ -132,25 +132,25 @@ func containerDifferences(path string, raw interface{}, want string, env []envVa
 	return out
 }
 
-func emptyValue(v interface{}) bool {
+func emptyValue(v any) bool {
 	switch t := v.(type) {
 	case nil:
 		return true
-	case []interface{}:
+	case []any:
 		return len(t) == 0
 	}
 	return false
 }
 
 // envEquals: the env holds exactly want (any order), each a plain value.
-func envEquals(raw interface{}, want []envVar) bool {
-	list, _ := raw.([]interface{})
+func envEquals(raw any, want []envVar) bool {
+	list, _ := raw.([]any)
 	if len(list) != len(want) {
 		return false
 	}
 	got := map[string]string{}
 	for _, item := range list {
-		e, _ := item.(map[string]interface{})
+		e, _ := item.(map[string]any)
 		name, _ := e["name"].(string)
 		value, isString := e["value"].(string)
 		if _, from := e["valueFrom"]; from || !isString {

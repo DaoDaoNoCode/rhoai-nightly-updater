@@ -239,7 +239,7 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 	}
 	cmPath := namespacedPath("v1", "configmaps", ns, activityConfigMapName)
 
-	for attempt := 0; attempt < maxConflictRetries; attempt++ {
+	for attempt := range maxConflictRetries {
 		if attempt > 0 {
 			slog.Info("retrying activity record after conflict", "attempt", attempt+1)
 		}
@@ -259,18 +259,18 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 			isNew = true
 			entries = []types.ActivityEntry{}
 		} else {
-			var cm map[string]interface{}
+			var cm map[string]any
 			if err := json.Unmarshal(body, &cm); err != nil {
 				slog.Warn("failed to parse activity configmap", "error", err)
 				return
 			}
 			// Extract resourceVersion for optimistic concurrency
-			if metadata, ok := cm["metadata"].(map[string]interface{}); ok {
+			if metadata, ok := cm["metadata"].(map[string]any); ok {
 				if rv, ok := metadata["resourceVersion"].(string); ok {
 					resourceVersion = rv
 				}
 			}
-			data, _ := cm["data"].(map[string]interface{})
+			data, _ := cm["data"].(map[string]any)
 			if raw, ok := data["entries"].(string); ok && raw != "" {
 				if err := json.Unmarshal([]byte(raw), &entries); err != nil {
 					slog.Warn("failed to parse activity entries", "error", err)
@@ -289,7 +289,7 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 		}
 
 		// Step 3: PUT/Create with resourceVersion for optimistic locking
-		metadata := map[string]interface{}{
+		metadata := map[string]any{
 			"name":      activityConfigMapName,
 			"namespace": ns,
 		}
@@ -297,11 +297,11 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 			metadata["resourceVersion"] = resourceVersion
 		}
 
-		cm := map[string]interface{}{
+		cm := map[string]any{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
 			"metadata":   metadata,
-			"data": map[string]interface{}{
+			"data": map[string]any{
 				"entries": string(entriesJSON),
 			},
 		}
@@ -351,12 +351,12 @@ func GetActivity(c *Client) ([]types.ActivityEntry, error) {
 		return nil, fmt.Errorf("get activity configmap: %w", err)
 	}
 
-	var cm map[string]interface{}
+	var cm map[string]any
 	if err := json.Unmarshal(body, &cm); err != nil {
 		return nil, fmt.Errorf("parse activity configmap: %w", err)
 	}
 
-	data, _ := cm["data"].(map[string]interface{})
+	data, _ := cm["data"].(map[string]any)
 	raw, ok := data["entries"].(string)
 	if !ok || raw == "" {
 		return []types.ActivityEntry{}, nil

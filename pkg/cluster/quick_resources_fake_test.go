@@ -25,7 +25,7 @@ import (
 type resourceFake struct {
 	t       *testing.T
 	mu      sync.Mutex
-	objects map[fakeKey]map[string]interface{}
+	objects map[fakeKey]map[string]any
 	nextID  int
 	// fail maps "METHOD /path" to an HTTP status to return instead.
 	fail map[string]int
@@ -36,7 +36,7 @@ type resourceFake struct {
 	namespacesLinger bool
 	// onGet may change an object before a GET returns it (for example to
 	// simulate a controller updating status).
-	onGet func(k fakeKey, obj map[string]interface{})
+	onGet func(k fakeKey, obj map[string]any)
 	// listOnGet: the items of a list of these resources (by plural) also
 	// go through onGet (a controller's status shows in lists too).
 	listOnGet map[string]bool
@@ -63,7 +63,7 @@ type resourceFake struct {
 	echoed []string
 	// onMergePatch, when set, sees each merge patch and the object it
 	// produces (under the lock), for example to record managedFields.
-	onMergePatch func(r *http.Request, k fakeKey, patch, next map[string]interface{})
+	onMergePatch func(r *http.Request, k fakeKey, patch, next map[string]any)
 	requests     []string
 	// failMessage is the message returned with fail or failDryRun for that
 	// key ("METHOD /path" or "DRYRUN METHOD /path"), as an admission
@@ -99,7 +99,7 @@ type fakeKey struct {
 func newResourceFake(t *testing.T) (*resourceFake, *Client) {
 	t.Helper()
 	isolateClusterCaches(t)
-	f := &resourceFake{t: t, objects: map[fakeKey]map[string]interface{}{}, fail: map[string]int{}, failDryRun: map[string]int{}, failEcho: map[string]int{}, failMessage: map[string]string{}}
+	f := &resourceFake{t: t, objects: map[fakeKey]map[string]any{}, fail: map[string]int{}, failDryRun: map[string]int{}, failEcho: map[string]int{}, failMessage: map[string]string{}}
 	srv := httptest.NewTLSServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	c := &Client{baseURL: srv.URL, token: "test-token", httpClient: srv.Client(), ctx: context.Background()}
@@ -147,7 +147,7 @@ func fakePath(k fakeKey) string {
 }
 
 // put stores an object at path, filling in defaults for metadata.
-func (f *resourceFake) put(path string, obj map[string]interface{}) {
+func (f *resourceFake) put(path string, obj map[string]any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	k, _ := parseFakePath(path)
@@ -171,14 +171,14 @@ func (f *resourceFake) put(path string, obj map[string]interface{}) {
 
 // putJSON stores an object given as JSON.
 func (f *resourceFake) putJSON(path, body string) {
-	var obj map[string]interface{}
+	var obj map[string]any
 	if err := json.Unmarshal([]byte(body), &obj); err != nil {
 		f.t.Fatalf("bad fixture for %s: %v", path, err)
 	}
 	f.put(path, obj)
 }
 
-func (f *resourceFake) get(path string) map[string]interface{} {
+func (f *resourceFake) get(path string) map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	k, _ := parseFakePath(path)
@@ -201,8 +201,8 @@ func (f *resourceFake) mutations() []string {
 
 // foldStringData merges a Secret's stringData into data (base64), as the
 // API server does on every write; stringData is never returned.
-func foldStringData(obj map[string]interface{}) {
-	sd, ok := obj["stringData"].(map[string]interface{})
+func foldStringData(obj map[string]any) {
+	sd, ok := obj["stringData"].(map[string]any)
 	if !ok {
 		return
 	}
@@ -213,25 +213,25 @@ func foldStringData(obj map[string]interface{}) {
 	delete(obj, "stringData")
 }
 
-func ensureMap(obj map[string]interface{}, key string) map[string]interface{} {
-	m, ok := obj[key].(map[string]interface{})
+func ensureMap(obj map[string]any, key string) map[string]any {
+	m, ok := obj[key].(map[string]any)
 	if !ok {
-		m = map[string]interface{}{}
+		m = map[string]any{}
 		obj[key] = m
 	}
 	return m
 }
 
-func mergePatch(dst, patch map[string]interface{}) {
+func mergePatch(dst, patch map[string]any) {
 	for k, v := range patch {
 		if v == nil {
 			delete(dst, k)
 			continue
 		}
-		if pm, ok := v.(map[string]interface{}); ok {
-			dm, ok := dst[k].(map[string]interface{})
+		if pm, ok := v.(map[string]any); ok {
+			dm, ok := dst[k].(map[string]any)
 			if !ok {
-				dm = map[string]interface{}{}
+				dm = map[string]any{}
 				dst[k] = dm
 			}
 			mergePatch(dm, pm)
@@ -241,22 +241,22 @@ func mergePatch(dst, patch map[string]interface{}) {
 	}
 }
 
-func (f *resourceFake) write(w http.ResponseWriter, code int, obj interface{}) {
+func (f *resourceFake) write(w http.ResponseWriter, code int, obj any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(obj)
 }
 
 func (f *resourceFake) status(w http.ResponseWriter, code int, msg string) {
-	f.write(w, code, map[string]interface{}{"kind": "Status", "status": "Failure", "message": msg, "code": code})
+	f.write(w, code, map[string]any{"kind": "Status", "status": "Failure", "message": msg, "code": code})
 }
 
-func matchesSelector(obj map[string]interface{}, selector string) bool {
+func matchesSelector(obj map[string]any, selector string) bool {
 	if selector == "" {
 		return true
 	}
-	labels, _ := ensureMap(obj, "metadata")["labels"].(map[string]interface{})
-	for _, term := range strings.Split(selector, ",") {
+	labels, _ := ensureMap(obj, "metadata")["labels"].(map[string]any)
+	for term := range strings.SplitSeq(selector, ",") {
 		// "!key": the label is absent (as listClusterCSVs excludes OLM's
 		// copies with !olm.copiedFrom).
 		if key, ok := strings.CutPrefix(term, "!"); ok {
@@ -280,14 +280,14 @@ func matchesSelector(obj map[string]interface{}, selector string) bool {
 	return true
 }
 
-func (f *resourceFake) bumpRV(meta map[string]interface{}) {
+func (f *resourceFake) bumpRV(meta map[string]any) {
 	n, _ := strconv.Atoi(fmt.Sprint(meta["resourceVersion"]))
 	meta["resourceVersion"] = strconv.Itoa(n + 1)
 }
 
-func (f *resourceFake) addManagedField(meta map[string]interface{}, manager, op string) {
-	entries, _ := meta["managedFields"].([]interface{})
-	meta["managedFields"] = append(entries, map[string]interface{}{"manager": manager, "operation": op, "time": time.Now().UTC().Format(time.RFC3339)})
+func (f *resourceFake) addManagedField(meta map[string]any, manager, op string) {
+	entries, _ := meta["managedFields"].([]any)
+	meta["managedFields"] = append(entries, map[string]any{"manager": manager, "operation": op, "time": time.Now().UTC().Format(time.RFC3339)})
 }
 
 func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
@@ -342,13 +342,13 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		if isList {
-			items := []interface{}{}
+			items := []any{}
 			for key, obj := range f.objects {
 				name, byName := strings.CutPrefix(r.URL.Query().Get("fieldSelector"), "metadata.name=")
 				if key.gv == k.gv && key.plural == k.plural && (k.ns == "" || key.ns == k.ns) && matchesSelector(obj, r.URL.Query().Get("labelSelector")) && (!byName || key.name == name) {
 					if f.onGet != nil && f.listOnGet[k.plural] {
 						raw, _ := json.Marshal(obj)
-						var cp map[string]interface{}
+						var cp map[string]any
 						_ = json.Unmarshal(raw, &cp)
 						f.onGet(key, cp)
 						obj = cp
@@ -356,7 +356,7 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 					items = append(items, obj)
 				}
 			}
-			f.write(w, 200, map[string]interface{}{"items": items})
+			f.write(w, 200, map[string]any{"items": items})
 			return
 		}
 		obj := f.objects[k]
@@ -373,7 +373,7 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		if f.onGet != nil {
 			// onGet sees a copy, so it changes only this response.
 			raw, _ := json.Marshal(obj)
-			var cp map[string]interface{}
+			var cp map[string]any
 			_ = json.Unmarshal(raw, &cp)
 			f.onGet(k, cp)
 			obj = cp
@@ -381,7 +381,7 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		f.write(w, 200, obj)
 
 	case http.MethodPost:
-		var obj map[string]interface{}
+		var obj map[string]any
 		if err := json.Unmarshal(body, &obj); err != nil {
 			f.status(w, 400, "bad body")
 			return
@@ -398,9 +398,9 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		now := time.Now().UTC().Format(time.RFC3339)
 		meta["creationTimestamp"] = now
 		manager := firstNonEmpty(r.URL.Query().Get("fieldManager"), legacyPostManager)
-		entry := map[string]interface{}{"manager": manager, "operation": "Update", "apiVersion": k.gv, "time": now, "fieldsType": "FieldsV1"}
+		entry := map[string]any{"manager": manager, "operation": "Update", "apiVersion": k.gv, "time": now, "fieldsType": "FieldsV1"}
 		setOwnedPorts(entry, containerPorts(obj))
-		meta["managedFields"] = []interface{}{entry}
+		meta["managedFields"] = []any{entry}
 		if msg := duplicatePortName(k, obj); msg != "" {
 			f.status(w, 422, msg)
 			return
@@ -417,7 +417,7 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 			f.serveJSONPatch(w, r, k, obj, body, dryRun)
 			return
 		}
-		var patch map[string]interface{}
+		var patch map[string]any
 		if err := json.Unmarshal(body, &patch); err != nil {
 			f.status(w, 400, "bad body")
 			return
@@ -426,15 +426,15 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 			manager := r.URL.Query().Get("fieldManager")
 			if obj == nil {
 				f.nextID++
-				obj = map[string]interface{}{}
+				obj = map[string]any{}
 				mergePatch(obj, patch)
 				meta := ensureMap(obj, "metadata")
 				meta["uid"] = fmt.Sprintf("uid-%d", f.nextID)
 				meta["resourceVersion"] = "1"
 				meta["creationTimestamp"] = time.Now().UTC().Format(time.RFC3339)
 				f.addManagedField(meta, manager, "Apply")
-				entries := meta["managedFields"].([]interface{})
-				setOwnedPorts(entries[len(entries)-1].(map[string]interface{}), containerPorts(obj))
+				entries := meta["managedFields"].([]any)
+				setOwnedPorts(entries[len(entries)-1].(map[string]any), containerPorts(obj))
 				foldStringData(obj)
 				if !dryRun {
 					f.objects[k] = obj
@@ -444,7 +444,7 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 			}
 			// A resourceVersion in the applied object is a precondition,
 			// as on a real API server.
-			if pm, ok := patch["metadata"].(map[string]interface{}); ok {
+			if pm, ok := patch["metadata"].(map[string]any); ok {
 				if rv, ok := pm["resourceVersion"]; ok {
 					if rv != ensureMap(obj, "metadata")["resourceVersion"] {
 						f.status(w, 409, "the object has been modified")
@@ -464,7 +464,7 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 				// one: an apply keeps the keys other managers applied (the
 				// tool's records share the snapshot ConfigMap).
 				if key == "metadata" || (k.plural == "configmaps" && key == "data") {
-					mergePatch(ensureMap(next, key), v.(map[string]interface{}))
+					mergePatch(ensureMap(next, key), v.(map[string]any))
 				} else {
 					next[key] = v
 				}
@@ -490,7 +490,7 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		meta := ensureMap(obj, "metadata")
-		if pm, ok := patch["metadata"].(map[string]interface{}); ok {
+		if pm, ok := patch["metadata"].(map[string]any); ok {
 			if rv, ok := pm["resourceVersion"]; ok {
 				if rv != meta["resourceVersion"] {
 					f.status(w, 409, "the object has been modified")
@@ -513,7 +513,7 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 			f.onMergePatch(r, k, patch, next)
 		}
 		// A terminating object whose last finalizer is removed is deleted.
-		if fin, _ := nextMeta["finalizers"].([]interface{}); nextMeta["deletionTimestamp"] != nil && len(fin) == 0 {
+		if fin, _ := nextMeta["finalizers"].([]any); nextMeta["deletionTimestamp"] != nil && len(fin) == 0 {
 			if !dryRun {
 				delete(f.objects, k)
 			}
@@ -546,10 +546,10 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		if dryRun {
 			// The preconditions are checked; nothing is deleted.
-			f.write(w, 200, map[string]interface{}{"kind": "Status", "status": "Success"})
+			f.write(w, 200, map[string]any{"kind": "Status", "status": "Success"})
 			return
 		}
-		if fin, _ := meta["finalizers"].([]interface{}); len(fin) > 0 || (k.plural == "namespaces" && f.namespacesLinger) {
+		if fin, _ := meta["finalizers"].([]any); len(fin) > 0 || (k.plural == "namespaces" && f.namespacesLinger) {
 			meta["deletionTimestamp"] = time.Now().UTC().Format(time.RFC3339)
 			if k.plural == "namespaces" {
 				ensureMap(obj, "status")["phase"] = "Terminating"
@@ -579,7 +579,7 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 // with 409, as the API server's update precondition does (a field-ownership
 // upgrade sends that). A change to spec bumps metadata.generation, and the
 // fieldManager gets an Update entry in managedFields.
-func (f *resourceFake) serveJSONPatch(w http.ResponseWriter, r *http.Request, k fakeKey, obj map[string]interface{}, body []byte, dryRun bool) {
+func (f *resourceFake) serveJSONPatch(w http.ResponseWriter, r *http.Request, k fakeKey, obj map[string]any, body []byte, dryRun bool) {
 	if obj == nil {
 		f.status(w, 404, "not found")
 		return
@@ -604,8 +604,7 @@ func (f *resourceFake) serveJSONPatch(w http.ResponseWriter, r *http.Request, k 
 	}
 	next, err := applyJSONPatch(obj, ops)
 	if err != nil {
-		var testErr *errJSONPatchTest
-		if errors.As(err, &testErr) {
+		if _, ok := errors.AsType[*errJSONPatchTest](err); ok {
 			f.status(w, 422, "the server rejected our request due to an error in our request: "+err.Error()+": test failed")
 			return
 		}
@@ -627,29 +626,29 @@ func (f *resourceFake) serveJSONPatch(w http.ResponseWriter, r *http.Request, k 
 	f.write(w, 200, next)
 }
 
-func deepCopyObject(obj map[string]interface{}) map[string]interface{} {
+func deepCopyObject(obj map[string]any) map[string]any {
 	raw, _ := json.Marshal(obj)
-	var out map[string]interface{}
+	var out map[string]any
 	_ = json.Unmarshal(raw, &out)
 	return out
 }
 
 // podContainers returns the containers of a Deployment's pod template, or nil.
-func podContainers(obj map[string]interface{}) []interface{} {
-	spec, _ := obj["spec"].(map[string]interface{})
-	tmpl, _ := spec["template"].(map[string]interface{})
-	podSpec, _ := tmpl["spec"].(map[string]interface{})
-	containers, _ := podSpec["containers"].([]interface{})
+func podContainers(obj map[string]any) []any {
+	spec, _ := obj["spec"].(map[string]any)
+	tmpl, _ := spec["template"].(map[string]any)
+	podSpec, _ := tmpl["spec"].(map[string]any)
+	containers, _ := podSpec["containers"].([]any)
 	return containers
 }
 
 // containerPorts returns each container's ports by container name.
-func containerPorts(obj map[string]interface{}) map[string][]interface{} {
-	out := map[string][]interface{}{}
+func containerPorts(obj map[string]any) map[string][]any {
+	out := map[string][]any{}
 	for _, c := range podContainers(obj) {
-		cm, _ := c.(map[string]interface{})
+		cm, _ := c.(map[string]any)
 		name, _ := cm["name"].(string)
-		ports, _ := cm["ports"].([]interface{})
+		ports, _ := cm["ports"].([]any)
 		if name != "" && len(ports) > 0 {
 			out[name] = ports
 		}
@@ -660,8 +659,8 @@ func containerPorts(obj map[string]interface{}) map[string][]interface{} {
 // portKey is the fieldsV1 key of a container port: ports are a list map
 // keyed by containerPort and protocol (k8s.io/api core/v1 Container.Ports,
 // +listMapKey=containerPort, +listMapKey=protocol).
-func portKey(p interface{}) string {
-	pm, _ := p.(map[string]interface{})
+func portKey(p any) string {
+	pm, _ := p.(map[string]any)
 	protocol, _ := pm["protocol"].(string)
 	if protocol == "" {
 		protocol = "TCP"
@@ -673,15 +672,15 @@ func containerKey(name string) string { return fmt.Sprintf(`k:{"name":%q}`, name
 
 // portsNode returns the fieldsV1 node of a container's ports in a managedFields
 // entry (created when create is true).
-func portsNode(entry map[string]interface{}, container string, create bool) map[string]interface{} {
+func portsNode(entry map[string]any, container string, create bool) map[string]any {
 	node := entry
 	for _, key := range []string{"fieldsV1", "f:spec", "f:template", "f:spec", "f:containers", containerKey(container), "f:ports"} {
-		next, ok := node[key].(map[string]interface{})
+		next, ok := node[key].(map[string]any)
 		if !ok {
 			if !create {
 				return nil
 			}
-			next = map[string]interface{}{}
+			next = map[string]any{}
 			node[key] = next
 		}
 		node = next
@@ -690,20 +689,20 @@ func portsNode(entry map[string]interface{}, container string, create bool) map[
 }
 
 // setOwnedPorts makes entry own exactly these ports of each container.
-func setOwnedPorts(entry map[string]interface{}, ports map[string][]interface{}) {
+func setOwnedPorts(entry map[string]any, ports map[string][]any) {
 	for container, list := range ports {
 		node := portsNode(entry, container, true)
 		for k := range node {
 			delete(node, k)
 		}
-		node["."] = map[string]interface{}{}
+		node["."] = map[string]any{}
 		for _, p := range list {
-			node[portKey(p)] = map[string]interface{}{".": map[string]interface{}{}, "f:containerPort": map[string]interface{}{}, "f:name": map[string]interface{}{}, "f:protocol": map[string]interface{}{}}
+			node[portKey(p)] = map[string]any{".": map[string]any{}, "f:containerPort": map[string]any{}, "f:name": map[string]any{}, "f:protocol": map[string]any{}}
 		}
 	}
 }
 
-func ownsPort(entry map[string]interface{}, container, key string) bool {
+func ownsPort(entry map[string]any, container, key string) bool {
 	node := portsNode(entry, container, false)
 	_, ok := node[key]
 	return ok
@@ -716,31 +715,31 @@ func ownsPort(entry map[string]interface{}, container, key string) bool {
 // manager, or the same manager's Update entry) also owns it; any other stored
 // port stays. The manager's Apply entry then owns exactly the applied ports.
 // The entry is added when the manager had none.
-func applySSAPorts(old, next map[string]interface{}, manager string) {
+func applySSAPorts(old, next map[string]any, manager string) {
 	meta := ensureMap(next, "metadata")
-	entries, _ := meta["managedFields"].([]interface{})
-	var applyEntry map[string]interface{}
+	entries, _ := meta["managedFields"].([]any)
+	var applyEntry map[string]any
 	for _, e := range entries {
-		em, _ := e.(map[string]interface{})
+		em, _ := e.(map[string]any)
 		if em["manager"] == manager && em["operation"] == "Apply" && em["subresource"] == nil {
 			applyEntry = em
 		}
 	}
 	if applyEntry == nil {
-		applyEntry = map[string]interface{}{"manager": manager, "operation": "Apply", "time": time.Now().UTC().Format(time.RFC3339), "fieldsType": "FieldsV1"}
+		applyEntry = map[string]any{"manager": manager, "operation": "Apply", "time": time.Now().UTC().Format(time.RFC3339), "fieldsType": "FieldsV1"}
 		entries = append(entries, applyEntry)
 		meta["managedFields"] = entries
 	}
 	applied := containerPorts(next)
 	stored := containerPorts(old)
 	for _, c := range podContainers(next) {
-		cm, _ := c.(map[string]interface{})
+		cm, _ := c.(map[string]any)
 		name, _ := cm["name"].(string)
-		appliedByKey := map[string]interface{}{}
+		appliedByKey := map[string]any{}
 		for _, p := range applied[name] {
 			appliedByKey[portKey(p)] = p
 		}
-		var result []interface{}
+		var result []any
 		seen := map[string]bool{}
 		for _, p := range stored[name] {
 			key := portKey(p)
@@ -751,7 +750,7 @@ func applySSAPorts(old, next map[string]interface{}, manager string) {
 			}
 			ownedByOthers := false
 			for _, e := range entries {
-				em, _ := e.(map[string]interface{})
+				em, _ := e.(map[string]any)
 				if em["subresource"] == nil && (em["manager"] != manager || em["operation"] != "Apply") && ownsPort(em, name, key) {
 					ownedByOthers = true
 				}
@@ -775,13 +774,13 @@ func applySSAPorts(old, next map[string]interface{}, manager string) {
 
 // duplicatePortName returns the API server's validation error for two ports
 // of a Deployment container with the same name, or "".
-func duplicatePortName(k fakeKey, obj map[string]interface{}) string {
+func duplicatePortName(k fakeKey, obj map[string]any) string {
 	for ci, c := range podContainers(obj) {
-		cm, _ := c.(map[string]interface{})
-		ports, _ := cm["ports"].([]interface{})
+		cm, _ := c.(map[string]any)
+		ports, _ := cm["ports"].([]any)
 		names := map[string]bool{}
 		for pi, p := range ports {
-			pm, _ := p.(map[string]interface{})
+			pm, _ := p.(map[string]any)
 			name, _ := pm["name"].(string)
 			if name != "" && names[name] {
 				return fmt.Sprintf(`Deployment.apps %q is invalid: spec.template.spec.containers[%d].ports[%d].name: Duplicate value: %q`, k.name, ci, pi, name)

@@ -36,11 +36,11 @@ func TestFBCCache_StoreAndRetrieve(t *testing.T) {
 func TestFBCCache_BoundedAndKeepsRecentlyUsed(t *testing.T) {
 	fbcContentCache.Purge()
 	t.Cleanup(fbcContentCache.Purge)
-	for i := 0; i < fbcCacheMaxEntries; i++ {
+	for i := range fbcCacheMaxEntries {
 		fbcContentCache.Add(fmt.Sprintf("key-%d", i), &types.FBCContentResponse{Tag: fmt.Sprint(i)}, 0)
 	}
 	fbcContentCache.Get("key-0") // most recently used now
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		fbcContentCache.Add(fmt.Sprintf("new-%d", i), &types.FBCContentResponse{}, 0)
 	}
 	if n := fbcContentCache.Len(); n != fbcCacheMaxEntries {
@@ -67,15 +67,13 @@ func TestExtractFBCContent_ConcurrentRequestsDownloadOnce(t *testing.T) {
 	ref := "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@" + digest
 
 	var wg sync.WaitGroup
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 5 {
+		wg.Go(func() {
 			content, err := extractFBCContentWithAuth(context.Background(), "auth", ref)
 			if err != nil || content.BundleName != "rhods-operator.3.6.0" || len(content.RelatedImages) != 1 {
 				t.Errorf("content=%+v err=%v", content, err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if n := f.count("quay-layer"); n != 1 {

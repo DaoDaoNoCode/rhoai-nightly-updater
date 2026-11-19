@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -239,16 +240,14 @@ func GetMLflowSamplesStatus(c *Client, project string) (*types.MLflowSamplesStat
 		samples := mlflowSamples()
 		var wg sync.WaitGroup
 		for i, id := range mlflowSampleIDs {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				s := samples[id].status(t)
 				s.ID, s.Name = id, mlflowSampleNames[id]
 				if s.Actions == nil {
 					s.Actions = []string{}
 				}
 				st.Samples[i] = s
-			}()
+			})
 		}
 		wg.Wait()
 	}
@@ -330,10 +329,8 @@ func isDSProject(c *Client, project string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	for _, p := range projects {
-		if p == project {
-			return true, nil
-		}
+	if slices.Contains(projects, project) {
+		return true, nil
 	}
 	return false, nil
 }

@@ -100,7 +100,7 @@ func writeClusterBusy(w http.ResponseWriter, op *Operation, message string) {
 	if message == "" {
 		message = "Another cluster operation is in progress. Please wait."
 	}
-	body := map[string]interface{}{"error": message, "errorCode": "cluster_busy"}
+	body := map[string]any{"error": message, "errorCode": "cluster_busy"}
 	if op != nil {
 		body["operation"] = op
 		where := ""

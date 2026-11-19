@@ -228,7 +228,7 @@ func UnpublishMaaSModel(c *Client, project string) (*types.OperationResponse, er
 // maasGatewayPlan is the gateway's objects as setup or a publication writes
 // them, with what was read of each.
 type maasGatewayPlan struct {
-	objects map[string]map[string]interface{}
+	objects map[string]map[string]any
 	current map[string]objectMeta
 	found   map[string]bool
 	// classMissing: GatewayClass openshift-default does not exist; setup
@@ -452,7 +452,7 @@ func maasControllerGone(c *Client) string {
 // a changed maas-db-config (maas-setup.md "Restarting maas-api"). A
 // missing Deployment needs nothing: the operator starts it with the Secret.
 func restartMaaSAPI(c *Client, ns string) (bool, error) {
-	patch, _ := json.Marshal(map[string]interface{}{"spec": map[string]interface{}{"template": map[string]interface{}{"metadata": map[string]interface{}{
+	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
 		"annotations": map[string]string{restartAnnotation: clk.Now().UTC().Format(time.RFC3339)},
 	}}}})
 	_, _, err := c.patch(namespacedPath("apps/v1", "deployments", ns, "maas-api"), patch)
@@ -694,22 +694,22 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 // done, and Unpublish finishes it), and a description. The display name
 // and description are the catalog's (the caller's), not the object's,
 // which a project editor can change.
-func maasModelRefObjectFor(c *Client, project, name, displayName, description, modelUID string) map[string]interface{} {
-	annotations := map[string]interface{}{"openshift.io/display-name": displayName}
+func maasModelRefObjectFor(c *Client, project, name, displayName, description, modelUID string) map[string]any {
+	annotations := map[string]any{"openshift.io/display-name": displayName}
 	if description != "" {
 		annotations["openshift.io/description"] = description
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"apiVersion": maasAPI(c),
 		"kind":       "MaaSModelRef",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name": name, "namespace": project, "labels": toolLabels(),
 			"annotations": annotations,
-			"ownerReferences": []interface{}{map[string]interface{}{
+			"ownerReferences": []any{map[string]any{
 				"apiVersion": llmisvcAPIVersion, "kind": "LLMInferenceService", "name": name, "uid": modelUID, "blockOwnerDeletion": false,
 			}},
 		},
-		"spec": map[string]interface{}{"modelRef": map[string]interface{}{"kind": "LLMInferenceService", "name": name}},
+		"spec": map[string]any{"modelRef": map[string]any{"kind": "LLMInferenceService", "name": name}},
 	}
 }
 
@@ -728,7 +728,7 @@ func maasAccessCreatePath(c *Client, kind string) string {
 }
 
 // applyMaaSObject creates or updates one of the tool's MaaS objects.
-func applyMaaSObject(c *Client, desc, path, createPath string, obj map[string]interface{}, dryRun bool) error {
+func applyMaaSObject(c *Client, desc, path, createPath string, obj map[string]any, dryRun bool) error {
 	cur, found, err := readObjectMeta(c, path)
 	if err != nil {
 		return err
@@ -965,7 +965,7 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 	}
 	for _, w := range []struct {
 		desc, path, create string
-		obj                map[string]interface{}
+		obj                map[string]any
 	}{
 		{"MaaSModelRef " + project + "/" + name, refPath, withToolFieldManager(namespacedPath(maasAPI(c), "maasmodelrefs", project, "")), refObj},
 		{"MaaSSubscription " + maasSubscriptionName, maasAccessPath(c, "MaaSSubscription"), maasAccessCreatePath(c, "MaaSSubscription"), sub},
@@ -1002,7 +1002,7 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 	m.step("maas", "running", "Creating the model reference, the subscription and the authorization policy...")
 	for _, w := range []struct {
 		desc, path, create string
-		obj                map[string]interface{}
+		obj                map[string]any
 	}{
 		{"MaaSModelRef " + project + "/" + name, refPath, withToolFieldManager(namespacedPath(maasAPI(c), "maasmodelrefs", project, "")), refObj},
 		{"MaaSSubscription " + maasSubscriptionName, maasAccessPath(c, "MaaSSubscription"), maasAccessCreatePath(c, "MaaSSubscription"), sub},
@@ -1124,7 +1124,7 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 	sub, auth := maasAccessObjects(c, live, limits, cur.audience, maasOwnSubscriptionPriority(c))
 	for _, w := range []struct {
 		kind, desc string
-		obj        map[string]interface{}
+		obj        map[string]any
 	}{{"MaaSAuthPolicy", "MaaSAuthPolicy " + maasAuthPolicyName, auth}, {"MaaSSubscription", "MaaSSubscription " + maasSubscriptionName, sub}} {
 		path := maasAccessPath(c, w.kind)
 		meta, found, err := readObjectMeta(c, path)
@@ -1162,7 +1162,7 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 						rest = append(rest, f)
 					}
 				}
-				patch, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{"resourceVersion": meta.ResourceVersion, "finalizers": rest}})
+				patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"resourceVersion": meta.ResourceVersion, "finalizers": rest}})
 				if _, _, err := c.patch(path, patch); err != nil && !IsK8sError(err, 404) {
 					return m.fail("maas", fmt.Sprintf("MaaSModelRef %s/%s is being deleted and maas-controller cannot finish it (%s); removing its finalizer failed: %v. Unpublish again to retry.", project, name, why, err), maasWriteCode(err), "finalizer patch failed")
 				}

@@ -122,7 +122,7 @@ func fixLeftoverStoredFields(c *Client, target string, acknowledged bool) *types
 		Detail:    fmt.Sprintf("%s: %s", st.ref(), strings.Join(summary, ", ")),
 		Success:   true,
 	})
-	var after map[string]interface{}
+	var after map[string]any
 	if err := json.Unmarshal(body, &after); err == nil {
 		for _, lf := range changes {
 			got, present := lookupPath(after, lf.Keys)
@@ -195,12 +195,12 @@ func fixLeftoverRetryDSC(c *Client, name string) *types.OperationResponse {
 		return leftoverRefused(fmt.Sprintf("DataScienceCluster %s is not the cluster's DataScienceCluster. Nothing was changed.", name), "validation", nil)
 	}
 	stamp := nowRFC3339()
-	add, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{"uid": uid, "annotations": map[string]interface{}{leftoverRetryAnno: stamp}}})
+	add, _ := json.Marshal(map[string]any{"metadata": map[string]any{"uid": uid, "annotations": map[string]any{leftoverRetryAnno: stamp}}})
 	if _, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", add, url.Values{"fieldManager": {leftoverManager}}); err != nil {
 		return leftoverWriteError(err, "DataScienceCluster "+name, false)
 	}
 	logs := []string{fmt.Sprintf("Added the annotation %s=%s to DataScienceCluster %s", leftoverRetryAnno, stamp, name)}
-	remove, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{"annotations": map[string]interface{}{leftoverRetryAnno: nil}}})
+	remove, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{leftoverRetryAnno: nil}}})
 	_, _, rmErr := c.do(http.MethodPatch, path, "application/merge-patch+json", remove, url.Values{"fieldManager": {leftoverManager}})
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),
@@ -251,7 +251,7 @@ func readWorkloadAsUser(c *Client, kind, namespace, name string) (workloadObject
 // deleteWorkload deletes with UID and resourceVersion preconditions and
 // background propagation, as a server-side dry run when dryRun is set.
 func deleteWorkload(c *Client, path, uid, resourceVersion string, dryRun bool) error {
-	opts, _ := json.Marshal(map[string]interface{}{
+	opts, _ := json.Marshal(map[string]any{
 		"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Background",
 		"preconditions": map[string]string{"uid": uid, "resourceVersion": resourceVersion},
 	})

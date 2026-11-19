@@ -12,7 +12,7 @@ import (
 
 // rbacObjects returns the Template's objects of kind in namespace (the
 // parameter as written), by name.
-func rbacObjects(t *testing.T, path, kind string) map[string]map[string]interface{} {
+func rbacObjects(t *testing.T, path, kind string) map[string]map[string]any {
 	const namespace = "${PULL_SECRET_NAMESPACE}"
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -20,14 +20,14 @@ func rbacObjects(t *testing.T, path, kind string) map[string]map[string]interfac
 		t.Fatal(err)
 	}
 	var tmpl struct {
-		Objects []map[string]interface{} `yaml:"objects"`
+		Objects []map[string]any `yaml:"objects"`
 	}
 	if err := yaml.Unmarshal(data, &tmpl); err != nil {
 		t.Fatal(err)
 	}
-	out := map[string]map[string]interface{}{}
+	out := map[string]map[string]any{}
 	for _, o := range tmpl.Objects {
-		meta, _ := o["metadata"].(map[string]interface{})
+		meta, _ := o["metadata"].(map[string]any)
 		if o["kind"] == kind && meta["namespace"] == namespace {
 			out[meta["name"].(string)] = o
 		}
@@ -52,7 +52,7 @@ func TestGitOpsRBACEmptiesTheInstallShPullSecretRole(t *testing.T) {
 		if !ok {
 			t.Fatalf("deploy/rbac-gitops.yaml does not render Role %s in %s, so a moved install keeps install.sh's grant", name, ns)
 		}
-		if rules, _ := role["rules"].([]interface{}); len(rules) != 0 {
+		if rules, _ := role["rules"].([]any); len(rules) != 0 {
 			t.Fatalf("Role %s in %s grants %v; the gitops profile reads no Secret", name, ns, rules)
 		}
 	}
@@ -90,7 +90,7 @@ func TestCheckServiceAccountSecretAccess(t *testing.T) {
 					t.Errorf("unexpected review %s", body)
 				}
 				ok := allow(ra.Verb, ra.Namespace, ra.Name)
-				b, _ := json.Marshal(map[string]interface{}{"status": map[string]interface{}{"allowed": ok}})
+				b, _ := json.Marshal(map[string]any{"status": map[string]any{"allowed": ok}})
 				return 201, string(b)
 			})
 			out := checkServiceAccountSecretAccess(c)

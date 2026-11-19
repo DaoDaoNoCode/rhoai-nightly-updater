@@ -67,7 +67,7 @@ type mcpServer struct {
 // registryEntry reads a registry object at path into out; found is false on
 // a 404 for the object, and supported is false when the server has no such
 // API (isEndpointMissing).
-func (t *mlflowTarget) registryEntry(path string, out interface{}) (found, supported bool, err error) {
+func (t *mlflowTarget) registryEntry(path string, out any) (found, supported bool, err error) {
 	err = t.api.sendJSON("GET", path, nil, nil, out)
 	switch {
 	case err == nil:

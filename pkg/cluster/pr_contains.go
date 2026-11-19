@@ -643,16 +643,14 @@ func runContainsSearch(ctx context.Context, basicAuth string, search containsSea
 	sem := make(chan struct{}, prConcurrency)
 	var wg sync.WaitGroup
 	for i, b := range builds {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			select {
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
 			case <-ctx.Done():
 			}
 			resp.Builds[i] = checkBuildContains(ctx, basicAuth, search, b, noteRateLimit)
-		}()
+		})
 	}
 	wg.Wait()
 	if search.base != "" && strings.EqualFold(search.repo, DefaultPRSearchRepo) && !anyContains(resp.Builds) {
@@ -683,8 +681,7 @@ func stableBranchInfo(ctx context.Context, base string, noteRateLimit func(time.
 	const branch = "stable"
 	head, err := lookupBranchHead(ctx, DefaultPRSearchRepo, branch)
 	if err != nil {
-		var limited *githubRateLimitError
-		if errors.As(err, &limited) {
+		if limited, ok := errors.AsType[*githubRateLimitError](err); ok {
 			noteRateLimit(limited.until)
 		} else if !isContextError(err) {
 			slog.Warn("contains search: reading the stable branch failed", "error", err)
@@ -693,8 +690,7 @@ func stableBranchInfo(ctx context.Context, base string, noteRateLimit func(time.
 	}
 	verdict, err := compareContains(ctx, DefaultPRSearchRepo, base, head.sha)
 	if err != nil || verdict.notFound {
-		var limited *githubRateLimitError
-		if errors.As(err, &limited) {
+		if limited, ok := errors.AsType[*githubRateLimitError](err); ok {
 			noteRateLimit(limited.until)
 		}
 		return nil
@@ -735,10 +731,7 @@ func roughDuration(d time.Duration) string {
 	}
 	switch {
 	case d < time.Hour:
-		n := int(d.Round(time.Minute) / time.Minute)
-		if n < 1 {
-			n = 1
-		}
+		n := max(int(d.Round(time.Minute)/time.Minute), 1)
 		return plural(n, "minute")
 	case d < 48*time.Hour:
 		return plural(int(d.Round(time.Hour)/time.Hour), "hour")

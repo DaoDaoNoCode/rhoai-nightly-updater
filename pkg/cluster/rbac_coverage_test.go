@@ -17,6 +17,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -782,9 +783,7 @@ func serviceAccountRequests(t *testing.T) ([]rbacRequest, map[string]bool) {
 		fullScan.done = true
 	}
 	excluded := make(map[string]bool, len(fullScan.excluded))
-	for k, v := range fullScan.excluded {
-		excluded[k] = v
-	}
+	maps.Copy(excluded, fullScan.excluded)
 	return append([]rbacRequest(nil), fullScan.reqs...), excluded
 }
 

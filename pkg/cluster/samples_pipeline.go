@@ -46,45 +46,45 @@ func pipelineSampleImage() string {
 // description with ": " in it was invalid YAML, and KFP's upload handler
 // hung on it until the route answered 504 (seen live on 3.6).
 func pipelineSampleSpec(image string) string {
-	artifact := map[string]interface{}{
-		"artifactType": map[string]interface{}{"schemaTitle": "system.Artifact", "schemaVersion": "0.0.1"},
+	artifact := map[string]any{
+		"artifactType": map[string]any{"schemaTitle": "system.Artifact", "schemaVersion": "0.0.1"},
 	}
-	container := func(script, path string) map[string]interface{} {
-		return map[string]interface{}{"container": map[string]interface{}{
+	container := func(script, path string) map[string]any {
+		return map[string]any{"container": map[string]any{
 			"image": image, "command": []string{"sh", "-c"}, "args": []string{script, path},
 		}}
 	}
-	spec := map[string]interface{}{
-		"components": map[string]interface{}{
-			"comp-write-artifact": map[string]interface{}{
+	spec := map[string]any{
+		"components": map[string]any{
+			"comp-write-artifact": map[string]any{
 				"executorLabel":     "exec-write-artifact",
-				"outputDefinitions": map[string]interface{}{"artifacts": map[string]interface{}{"greeting": artifact}},
+				"outputDefinitions": map[string]any{"artifacts": map[string]any{"greeting": artifact}},
 			},
-			"comp-read-artifact": map[string]interface{}{
+			"comp-read-artifact": map[string]any{
 				"executorLabel":    "exec-read-artifact",
-				"inputDefinitions": map[string]interface{}{"artifacts": map[string]interface{}{"greeting": artifact}},
+				"inputDefinitions": map[string]any{"artifacts": map[string]any{"greeting": artifact}},
 			},
 		},
-		"deploymentSpec": map[string]interface{}{"executors": map[string]interface{}{
+		"deploymentSpec": map[string]any{"executors": map[string]any{
 			"exec-write-artifact": container(`mkdir -p "$(dirname "$0")" && echo "Hello from the rhoai-nightly-updater sample pipeline" > "$0" && echo "Wrote $0"`,
 				"{{$.outputs.artifacts['greeting'].path}}"),
 			"exec-read-artifact": container(`echo "Read $0:" && cat "$0"`, "{{$.inputs.artifacts['greeting'].path}}"),
 		}},
-		"pipelineInfo": map[string]interface{}{"name": pipelineSampleName, "description": pipelineSampleDescription},
-		"root": map[string]interface{}{"dag": map[string]interface{}{"tasks": map[string]interface{}{
-			"write-artifact": map[string]interface{}{
-				"cachingOptions": map[string]interface{}{},
-				"componentRef":   map[string]interface{}{"name": "comp-write-artifact"},
-				"taskInfo":       map[string]interface{}{"name": "write-artifact"},
+		"pipelineInfo": map[string]any{"name": pipelineSampleName, "description": pipelineSampleDescription},
+		"root": map[string]any{"dag": map[string]any{"tasks": map[string]any{
+			"write-artifact": map[string]any{
+				"cachingOptions": map[string]any{},
+				"componentRef":   map[string]any{"name": "comp-write-artifact"},
+				"taskInfo":       map[string]any{"name": "write-artifact"},
 			},
-			"read-artifact": map[string]interface{}{
-				"cachingOptions": map[string]interface{}{},
-				"componentRef":   map[string]interface{}{"name": "comp-read-artifact"},
+			"read-artifact": map[string]any{
+				"cachingOptions": map[string]any{},
+				"componentRef":   map[string]any{"name": "comp-read-artifact"},
 				"dependentTasks": []string{"write-artifact"},
-				"inputs": map[string]interface{}{"artifacts": map[string]interface{}{"greeting": map[string]interface{}{
-					"taskOutputArtifact": map[string]interface{}{"outputArtifactKey": "greeting", "producerTask": "write-artifact"},
+				"inputs": map[string]any{"artifacts": map[string]any{"greeting": map[string]any{
+					"taskOutputArtifact": map[string]any{"outputArtifactKey": "greeting", "producerTask": "write-artifact"},
 				}}},
-				"taskInfo": map[string]interface{}{"name": "read-artifact"},
+				"taskInfo": map[string]any{"name": "read-artifact"},
 			},
 		}}},
 		"schemaVersion": "2.1.0",

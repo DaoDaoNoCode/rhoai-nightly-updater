@@ -27,7 +27,7 @@ type dscCRDVersion struct {
 	Storage    bool
 	Deprecated bool
 	// Spec is openAPIV3Schema.properties.spec.
-	Spec map[string]interface{}
+	Spec map[string]any
 }
 
 // dscCRD is the installed DataScienceCluster CRD.
@@ -50,7 +50,7 @@ func readDSCCRD(c *Client) (*dscCRD, error) {
 				Storage    bool   `json:"storage"`
 				Deprecated bool   `json:"deprecated"`
 				Schema     struct {
-					OpenAPIV3Schema map[string]interface{} `json:"openAPIV3Schema"`
+					OpenAPIV3Schema map[string]any `json:"openAPIV3Schema"`
 				} `json:"schema"`
 			} `json:"versions"`
 		} `json:"spec"`
@@ -60,8 +60,8 @@ func readDSCCRD(c *Client) (*dscCRD, error) {
 	}
 	out := &dscCRD{}
 	for _, v := range crd.Spec.Versions {
-		props, _ := v.Schema.OpenAPIV3Schema["properties"].(map[string]interface{})
-		spec, _ := props["spec"].(map[string]interface{})
+		props, _ := v.Schema.OpenAPIV3Schema["properties"].(map[string]any)
+		spec, _ := props["spec"].(map[string]any)
 		out.Versions = append(out.Versions, dscCRDVersion{Name: v.Name, Served: v.Served, Storage: v.Storage, Deprecated: v.Deprecated, Spec: spec})
 	}
 	return out, nil
@@ -88,14 +88,14 @@ func (d *dscCRD) version(name string) *dscCRDVersion {
 }
 
 // schemaProps returns an object schema's properties.
-func schemaProps(schema map[string]interface{}) map[string]interface{} {
-	p, _ := schema["properties"].(map[string]interface{})
+func schemaProps(schema map[string]any) map[string]any {
+	p, _ := schema["properties"].(map[string]any)
 	return p
 }
 
 // schemaChild returns the schema of key in an object schema, or nil.
-func schemaChild(schema map[string]interface{}, key string) map[string]interface{} {
-	child, _ := schemaProps(schema)[key].(map[string]interface{})
+func schemaChild(schema map[string]any, key string) map[string]any {
+	child, _ := schemaProps(schema)[key].(map[string]any)
 	return child
 }
 
@@ -115,9 +115,9 @@ var managementPattern = regexp.MustCompile(`^\^?\(?([A-Za-z]+(?:\|[A-Za-z]+)*)\)
 
 // allowedStates returns the values a managementState schema accepts: its
 // enum, or, only without one, the alternatives of a simple pattern.
-func allowedStates(schema map[string]interface{}) []string {
+func allowedStates(schema map[string]any) []string {
 	var out []string
-	if enum, ok := schema["enum"].([]interface{}); ok {
+	if enum, ok := schema["enum"].([]any); ok {
 		for _, v := range enum {
 			if s, ok := v.(string); ok && s != "" {
 				out = append(out, s)
@@ -136,10 +136,10 @@ func allowedStates(schema map[string]interface{}) []string {
 // dscToggleTree returns every object of spec.components that has a
 // managementState or holds one, at any depth, parents before their
 // children, siblings by name.
-func dscToggleTree(spec map[string]interface{}) []dscToggle {
+func dscToggleTree(spec map[string]any) []dscToggle {
 	components := schemaChild(spec, "components")
-	var walk func(schema map[string]interface{}, path []string) []dscToggle
-	walk = func(schema map[string]interface{}, path []string) []dscToggle {
+	var walk func(schema map[string]any, path []string) []dscToggle
+	walk = func(schema map[string]any, path []string) []dscToggle {
 		props := schemaProps(schema)
 		keys := make([]string, 0, len(props))
 		for k := range props {
@@ -154,7 +154,7 @@ func dscToggleTree(spec map[string]interface{}) []dscToggle {
 		})
 		var out []dscToggle
 		for _, k := range keys {
-			child, _ := props[k].(map[string]interface{})
+			child, _ := props[k].(map[string]any)
 			if child == nil || k == "managementState" || schemaProps(child) == nil {
 				continue
 			}
@@ -189,13 +189,13 @@ var sameFieldRule = regexp.MustCompile(`self\.([A-Za-z0-9_]+)\s*==\s*oldSelf\.([
 // with its old value (aiHub.instancesNamespace, "InstancesNamespace is
 // immutable when AI Hub is Managed"). A reset keeps their value whenever the
 // DSC has one: they name namespaces that hold users' data.
-func dscProtectedFields(spec map[string]interface{}) map[string]bool {
+func dscProtectedFields(spec map[string]any) map[string]bool {
 	out := map[string]bool{}
-	var walk func(schema map[string]interface{}, path []string)
-	walk = func(schema map[string]interface{}, path []string) {
-		if rules, ok := schema["x-kubernetes-validations"].([]interface{}); ok {
+	var walk func(schema map[string]any, path []string)
+	walk = func(schema map[string]any, path []string) {
+		if rules, ok := schema["x-kubernetes-validations"].([]any); ok {
 			for _, r := range rules {
-				rm, _ := r.(map[string]interface{})
+				rm, _ := r.(map[string]any)
 				rule, _ := rm["rule"].(string)
 				if strings.Join(strings.Fields(rule), " ") == "self == oldSelf" && len(path) > 0 {
 					out[strings.Join(path, ".")] = true
@@ -208,7 +208,7 @@ func dscProtectedFields(spec map[string]interface{}) map[string]bool {
 			}
 		}
 		for k, v := range schemaProps(schema) {
-			if child, ok := v.(map[string]interface{}); ok {
+			if child, ok := v.(map[string]any); ok {
 				walk(child, append(append([]string{}, path...), k))
 			}
 		}
@@ -223,14 +223,14 @@ func dscProtectedFields(spec map[string]interface{}) map[string]bool {
 // defaulting would put there anyway: the schema's default, or an object
 // whose every field equals its own schema default. Such values are no
 // difference from a release default that leaves them out.
-func equalsSchemaDefault(schema map[string]interface{}, value interface{}) bool {
+func equalsSchemaDefault(schema map[string]any, value any) bool {
 	if schema == nil {
 		return false
 	}
 	if def, ok := schema["default"]; ok {
 		return jsonEqual(def, value)
 	}
-	m, ok := value.(map[string]interface{})
+	m, ok := value.(map[string]any)
 	if !ok || len(m) == 0 {
 		return false
 	}
@@ -243,13 +243,13 @@ func equalsSchemaDefault(schema map[string]interface{}, value interface{}) bool 
 }
 
 // jsonEqual compares two decoded JSON values.
-func jsonEqual(a, b interface{}) bool {
+func jsonEqual(a, b any) bool {
 	ja, err1 := json.Marshal(a)
 	jb, err2 := json.Marshal(b)
 	if err1 != nil || err2 != nil {
 		return false
 	}
-	var da, db interface{}
+	var da, db any
 	if json.Unmarshal(ja, &da) != nil || json.Unmarshal(jb, &db) != nil {
 		return false
 	}
@@ -257,10 +257,10 @@ func jsonEqual(a, b interface{}) bool {
 }
 
 // lookupPath returns the value at path in a decoded JSON object.
-func lookupPath(obj map[string]interface{}, path []string) (interface{}, bool) {
-	var cur interface{} = obj
+func lookupPath(obj map[string]any, path []string) (any, bool) {
+	var cur any = obj
 	for _, k := range path {
-		m, ok := cur.(map[string]interface{})
+		m, ok := cur.(map[string]any)
 		if !ok {
 			return nil, false
 		}
@@ -272,7 +272,7 @@ func lookupPath(obj map[string]interface{}, path []string) (interface{}, bool) {
 }
 
 // lookupState returns the managementState of the object at path.
-func lookupState(components map[string]interface{}, path []string) (string, bool) {
+func lookupState(components map[string]any, path []string) (string, bool) {
 	v, ok := lookupPath(components, append(append([]string{}, path...), "managementState"))
 	if !ok {
 		return "", false
@@ -312,7 +312,7 @@ func pointerKeys(pointer string) []string {
 	return parts
 }
 
-func patchOp(op string, path []string, value interface{}) jsonPatchOp {
+func patchOp(op string, path []string, value any) jsonPatchOp {
 	o := jsonPatchOp{Op: op, Path: pointerOf(path)}
 	if op != "remove" {
 		raw, _ := json.Marshal(value)
@@ -325,7 +325,7 @@ func patchOp(op string, path []string, value interface{}) jsonPatchOp {
 // ["spec", "components", "kserve", "managementState"]).
 type dscAssign struct {
 	Path  []string
-	Value interface{}
+	Value any
 }
 
 // buildJSONPatch returns a JSON Patch that makes exactly these changes to
@@ -335,10 +335,10 @@ type dscAssign struct {
 // concurrent change anywhere in it fails the patch rather than being
 // overwritten). Missing objects on the way are added with the value. All
 // tests come first, so they see the object as read.
-func buildJSONPatch(obj map[string]interface{}, sets []dscAssign, removes [][]string) ([]jsonPatchOp, error) {
+func buildJSONPatch(obj map[string]any, sets []dscAssign, removes [][]string) ([]jsonPatchOp, error) {
 	var tests, changes []jsonPatchOp
 	tested := map[string]bool{}
-	test := func(path []string, value interface{}) {
+	test := func(path []string, value any) {
 		p := pointerOf(path)
 		if !tested[p] {
 			tested[p] = true
@@ -356,8 +356,8 @@ func buildJSONPatch(obj map[string]interface{}, sets []dscAssign, removes [][]st
 	// Sets whose path is missing are grouped under the first missing key.
 	type insertion struct {
 		root  []string
-		value map[string]interface{}
-		leaf  interface{}
+		value map[string]any
+		leaf  any
 		whole bool // the root itself is the value
 	}
 	var inserts []*insertion
@@ -380,7 +380,7 @@ func buildJSONPatch(obj map[string]interface{}, sets []dscAssign, removes [][]st
 			if !ok {
 				break
 			}
-			if _, isMap := v.(map[string]interface{}); !isMap {
+			if _, isMap := v.(map[string]any); !isMap {
 				return nil, fmt.Errorf("%s is not an object", strings.Join(s.Path[:k+1], "."))
 			}
 			k++
@@ -394,7 +394,7 @@ func buildJSONPatch(obj map[string]interface{}, sets []dscAssign, removes [][]st
 		key := pointerOf(root)
 		in := byRoot[key]
 		if in == nil {
-			in = &insertion{root: root, value: map[string]interface{}{}}
+			in = &insertion{root: root, value: map[string]any{}}
 			byRoot[key] = in
 			inserts = append(inserts, in)
 		}
@@ -405,9 +405,9 @@ func buildJSONPatch(obj map[string]interface{}, sets []dscAssign, removes [][]st
 		}
 		m := in.value
 		for _, key := range rest[:len(rest)-1] {
-			next, ok := m[key].(map[string]interface{})
+			next, ok := m[key].(map[string]any)
 			if !ok {
-				next = map[string]interface{}{}
+				next = map[string]any{}
 				m[key] = next
 			}
 			m = next
@@ -434,8 +434,8 @@ func (e *errJSONPatchTest) Error() string { return "testing value " + e.path + "
 
 // applyJSONPatch applies a JSON Patch (test, add, replace, remove) to a
 // copy of doc, as the API server does: the whole patch or nothing.
-func applyJSONPatch(doc map[string]interface{}, ops []jsonPatchOp) (map[string]interface{}, error) {
-	var root interface{}
+func applyJSONPatch(doc map[string]any, ops []jsonPatchOp) (map[string]any, error) {
+	var root any
 	raw, err := json.Marshal(doc)
 	if err != nil {
 		return nil, err
@@ -445,7 +445,7 @@ func applyJSONPatch(doc map[string]interface{}, ops []jsonPatchOp) (map[string]i
 	}
 	for _, op := range ops {
 		keys := pointerKeys(op.Path)
-		var value interface{}
+		var value any
 		if op.Op != "remove" {
 			if err := json.Unmarshal(op.Value, &value); err != nil {
 				return nil, fmt.Errorf("%s %s: bad value: %w", op.Op, op.Path, err)
@@ -460,7 +460,7 @@ func applyJSONPatch(doc map[string]interface{}, ops []jsonPatchOp) (map[string]i
 		}
 		last := keys[len(keys)-1]
 		switch p := parent.(type) {
-		case map[string]interface{}:
+		case map[string]any:
 			cur, exists := p[last]
 			switch op.Op {
 			case "test":
@@ -482,7 +482,7 @@ func applyJSONPatch(doc map[string]interface{}, ops []jsonPatchOp) (map[string]i
 			default:
 				return nil, fmt.Errorf("unsupported op %q", op.Op)
 			}
-		case []interface{}:
+		case []any:
 			if err := applyToArray(root, keys, p, last, op.Op, value); err != nil {
 				return nil, fmt.Errorf("%s %s: %w", op.Op, op.Path, err)
 			}
@@ -490,22 +490,22 @@ func applyJSONPatch(doc map[string]interface{}, ops []jsonPatchOp) (map[string]i
 			return nil, fmt.Errorf("%s %s: the parent is not an object or array", op.Op, op.Path)
 		}
 	}
-	out, _ := root.(map[string]interface{})
+	out, _ := root.(map[string]any)
 	return out, nil
 }
 
 // pointerTarget returns the value at keys.
-func pointerTarget(root interface{}, keys []string) (interface{}, error) {
+func pointerTarget(root any, keys []string) (any, error) {
 	cur := root
 	for _, k := range keys {
 		switch c := cur.(type) {
-		case map[string]interface{}:
+		case map[string]any:
 			next, ok := c[k]
 			if !ok {
 				return nil, fmt.Errorf("the path does not exist")
 			}
 			cur = next
-		case []interface{}:
+		case []any:
 			i, err := strconv.Atoi(k)
 			if err != nil || i < 0 || i >= len(c) {
 				return nil, fmt.Errorf("index %s is out of range", k)
@@ -520,7 +520,7 @@ func pointerTarget(root interface{}, keys []string) (interface{}, error) {
 
 // applyToArray applies one operation to an element of array arr (at
 // keys[:len(keys)-1] of root), replacing the array in its parent.
-func applyToArray(root interface{}, keys []string, arr []interface{}, last, op string, value interface{}) error {
+func applyToArray(root any, keys []string, arr []any, last, op string, value any) error {
 	i := len(arr)
 	if last != "-" {
 		n, err := strconv.Atoi(last)
@@ -529,7 +529,7 @@ func applyToArray(root interface{}, keys []string, arr []interface{}, last, op s
 		}
 		i = n
 	}
-	var next []interface{}
+	var next []any
 	switch op {
 	case "test":
 		if i >= len(arr) || !jsonEqual(arr[i], value) {
@@ -537,18 +537,18 @@ func applyToArray(root interface{}, keys []string, arr []interface{}, last, op s
 		}
 		return nil
 	case "add":
-		next = append(append(append([]interface{}{}, arr[:i]...), value), arr[i:]...)
+		next = append(append(append([]any{}, arr[:i]...), value), arr[i:]...)
 	case "replace":
 		if i >= len(arr) {
 			return fmt.Errorf("index %s is out of range", last)
 		}
-		next = append([]interface{}{}, arr...)
+		next = append([]any{}, arr...)
 		next[i] = value
 	case "remove":
 		if i >= len(arr) {
 			return fmt.Errorf("index %s is out of range", last)
 		}
-		next = append(append([]interface{}{}, arr[:i]...), arr[i+1:]...)
+		next = append(append([]any{}, arr[:i]...), arr[i+1:]...)
 	default:
 		return fmt.Errorf("unsupported op %q", op)
 	}
@@ -558,9 +558,9 @@ func applyToArray(root interface{}, keys []string, arr []interface{}, last, op s
 		return err
 	}
 	switch g := grand.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		g[parentKeys[len(parentKeys)-1]] = next
-	case []interface{}:
+	case []any:
 		n, _ := strconv.Atoi(parentKeys[len(parentKeys)-1])
 		g[n] = next
 	}

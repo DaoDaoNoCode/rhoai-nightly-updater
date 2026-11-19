@@ -44,8 +44,8 @@ func TestCheckNodePull_ImagePulled(t *testing.T) {
 	// The catalog it created is a verification catalog, labelled as one.
 	for _, r := range f.requests {
 		if r.Method == http.MethodPatch {
-			meta, _ := r.Body["metadata"].(map[string]interface{})
-			labels, _ := meta["labels"].(map[string]interface{})
+			meta, _ := r.Body["metadata"].(map[string]any)
+			labels, _ := meta["labels"].(map[string]any)
 			if labels[catalogPurposeLabel] != verificationCatalogRole {
 				t.Fatalf("labels %v", labels)
 			}

@@ -169,7 +169,7 @@ func defaultErrorCode(httpStatus int) string {
 }
 
 // writeJSON encodes v as JSON and writes it to w, logging any encoding error.
-func writeJSON(w http.ResponseWriter, v interface{}, label string) {
+func writeJSON(w http.ResponseWriter, v any, label string) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		slog.Error("response encode error", "label", label, "error", err)

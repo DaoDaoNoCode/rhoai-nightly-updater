@@ -25,11 +25,11 @@ var (
 
 // kuadrantObject is the Kuadrant CR as platform-setup.md creates it (name
 // kuadrant, no spec) at the version that serves kuadrants.
-func kuadrantObject(version, ns string) map[string]interface{} {
-	return map[string]interface{}{
+func kuadrantObject(version, ns string) map[string]any {
+	return map[string]any{
 		"apiVersion": kuadrantGroup + "/" + version,
 		"kind":       "Kuadrant",
-		"metadata":   map[string]interface{}{"name": "kuadrant", "namespace": ns, "labels": toolLabels()},
+		"metadata":   map[string]any{"name": "kuadrant", "namespace": ns, "labels": toolLabels()},
 	}
 }
 
@@ -93,7 +93,7 @@ func createInfraNamespace(c *Client, ns string, dryRun bool) error {
 	if _, ok := maasInfraNamespacePath(ns); !ok {
 		return fmt.Errorf("namespace %s is not one this tool creates", ns)
 	}
-	data, _ := json.Marshal(map[string]interface{}{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]interface{}{"name": ns, "labels": toolLabels()}})
+	data, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": ns, "labels": toolLabels()}})
 	var query url.Values
 	if dryRun {
 		query = url.Values{"dryRun": {"All"}}
@@ -216,15 +216,15 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 	case !found:
 		return nil, fmt.Errorf("%w: no Service %s/authorino-authorino-authorization", errAuthorinoNotYet, ns)
 	case svc.Annotations[servingCertAnnotation] != secret:
-		patch, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{"annotations": map[string]string{servingCertAnnotation: secret}}})
+		patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{servingCertAnnotation: secret}}})
 		if _, _, err := c.do(http.MethodPatch, namespacedPath("v1", "services", ns, "authorino-authorino-authorization"), "application/merge-patch+json", patch, query); err != nil {
 			return changes, fmt.Errorf("annotate Service %s/authorino-authorino-authorization: %w", ns, err)
 		}
 		changes = append(changes, fmt.Sprintf("Service authorino-authorino-authorization asks service-ca for Secret %s", secret))
 	}
 	if !cr.Spec.Listener.TLS.Enabled || cr.Spec.Listener.TLS.CertSecretRef.Name != secret {
-		patch, _ := json.Marshal(map[string]interface{}{"spec": map[string]interface{}{"listener": map[string]interface{}{"tls": map[string]interface{}{
-			"enabled": true, "certSecretRef": map[string]interface{}{"name": secret}}}}})
+		patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"listener": map[string]any{"tls": map[string]any{
+			"enabled": true, "certSecretRef": map[string]any{"name": secret}}}}})
 		if _, _, err := c.do(http.MethodPatch, "/apis/"+authorinoGroup+"/"+read.Version+"/namespaces/"+ns+"/authorinos/authorino", "application/merge-patch+json", patch, query); err != nil {
 			return changes, fmt.Errorf("enable TLS on Authorino %s/authorino: %w", ns, err)
 		}
@@ -250,24 +250,24 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 			} `json:"spec"`
 		}
 		_ = json.Unmarshal(body, &d)
-		var containers []interface{}
+		var containers []any
 		for _, ct := range d.Spec.Template.Spec.Containers {
-			containers = append(containers, map[string]interface{}{"name": ct.Name, "env": []interface{}{
-				map[string]interface{}{"name": "SSL_CERT_FILE", "value": authorinoServiceCAFile},
-				map[string]interface{}{"name": "REQUESTS_CA_BUNDLE", "value": authorinoServiceCAFile},
+			containers = append(containers, map[string]any{"name": ct.Name, "env": []any{
+				map[string]any{"name": "SSL_CERT_FILE", "value": authorinoServiceCAFile},
+				map[string]any{"name": "REQUESTS_CA_BUNDLE", "value": authorinoServiceCAFile},
 			}})
 		}
 		if len(containers) == 0 {
 			return changes, fmt.Errorf("deployment %s/authorino has no containers", ns)
 		}
-		patch, _ := json.Marshal(map[string]interface{}{"spec": map[string]interface{}{"template": map[string]interface{}{"spec": map[string]interface{}{"containers": containers}}}})
+		patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": containers}}}})
 		if _, _, err := c.do(http.MethodPatch, namespacedPath("apps/v1", "deployments", ns, "authorino"), "application/strategic-merge-patch+json", patch, query); err != nil {
 			return changes, fmt.Errorf("set SSL_CERT_FILE on Deployment %s/authorino: %w", ns, err)
 		}
 		changes = append(changes, "Authorino trusts the service CA (SSL_CERT_FILE and REQUESTS_CA_BUNDLE)")
 	}
 	if len(changes) > 0 && !dryRun {
-		patch, _ := json.Marshal(map[string]interface{}{"spec": map[string]interface{}{"template": map[string]interface{}{"metadata": map[string]interface{}{
+		patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
 			"annotations": map[string]string{restartAnnotation: clk.Now().UTC().Format(time.RFC3339)},
 		}}}})
 		if _, _, err := c.do(http.MethodPatch, namespacedPath("apps/v1", "deployments", ns, "authorino"), "application/merge-patch+json", patch, query); err != nil {
@@ -495,7 +495,7 @@ func rhclDenyEnvCommand(sub *olmSubscription) string {
 
 // rhclChannelCommand switches a Subscription's channel.
 func rhclChannelCommand(ns, name, channel string) string {
-	patch, _ := json.Marshal(map[string]interface{}{"spec": map[string]interface{}{"channel": channel}})
+	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"channel": channel}})
 	return fmt.Sprintf("oc patch subscription %s -n %s --type=merge -p %s", shellQuote(name), shellQuote(ns), shellQuote(string(patch)))
 }
 
@@ -541,8 +541,8 @@ func maasDSCCommand(dsc string) string {
 // (build_allowed_routes_yaml: kubernetes.io/metadata.name In [...]), one
 // JSON patch operation per listener that admits all.
 func gatewayAllowedRoutesCommand(g gatewayObject, namespaces []string) string {
-	var ops []interface{}
-	values := make([]interface{}, len(namespaces))
+	var ops []any
+	values := make([]any, len(namespaces))
 	for i, n := range namespaces {
 		values[i] = n
 	}
@@ -550,9 +550,9 @@ func gatewayAllowedRoutesCommand(g gatewayObject, namespaces []string) string {
 		if l.AllowedRoutes == nil || l.AllowedRoutes.Namespaces == nil || l.AllowedRoutes.Namespaces.From != "All" {
 			continue
 		}
-		ops = append(ops, map[string]interface{}{"op": "replace", "path": fmt.Sprintf("/spec/listeners/%d/allowedRoutes/namespaces", i), "value": map[string]interface{}{
+		ops = append(ops, map[string]any{"op": "replace", "path": fmt.Sprintf("/spec/listeners/%d/allowedRoutes/namespaces", i), "value": map[string]any{
 			"from": "Selector",
-			"selector": map[string]interface{}{"matchExpressions": []interface{}{map[string]interface{}{
+			"selector": map[string]any{"matchExpressions": []any{map[string]any{
 				"key": "kubernetes.io/metadata.name", "operator": "In", "values": values,
 			}}},
 		}})

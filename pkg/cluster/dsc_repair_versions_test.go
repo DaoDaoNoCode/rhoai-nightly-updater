@@ -9,9 +9,9 @@ import (
 	"testing"
 )
 
-func specOf(t *testing.T, components string) map[string]interface{} {
+func specOf(t *testing.T, components string) map[string]any {
 	t.Helper()
-	var spec map[string]interface{}
+	var spec map[string]any
 	if err := json.Unmarshal([]byte(`{"components":`+components+`}`), &spec); err != nil {
 		t.Fatal(err)
 	}
@@ -105,18 +105,18 @@ func v3RepairWorld(t *testing.T, defaults string) (*fakeAPI, *Client) {
 	f.json("GET", "/apis/datasciencecluster.opendatahub.io", 200, dscGroupDoc)
 	f.json("GET", "/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters/my-dsc", 200,
 		`{"apiVersion":"datasciencecluster.opendatahub.io/v3","kind":"DataScienceCluster","metadata":{"name":"my-dsc","resourceVersion":"42"},"spec":{"components":`+v3Components+`}}`)
-	open := map[string]interface{}{"type": "object", "x-kubernetes-preserve-unknown-fields": true}
-	props := map[string]interface{}{}
+	open := map[string]any{"type": "object", "x-kubernetes-preserve-unknown-fields": true}
+	props := map[string]any{}
 	for _, k := range []string{"aiHub", "aigateway", "dashboard", "data", "kserve", "trainer", "workbenches"} {
 		props[k] = open
 	}
-	f.obj("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io", map[string]interface{}{
-		"spec": map[string]interface{}{"versions": []interface{}{map[string]interface{}{"name": "v3", "served": true, "schema": map[string]interface{}{"openAPIV3Schema": map[string]interface{}{
-			"properties": map[string]interface{}{"spec": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
-				"components": map[string]interface{}{"type": "object", "properties": props}}}}}}}}},
+	f.obj("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io", map[string]any{
+		"spec": map[string]any{"versions": []any{map[string]any{"name": "v3", "served": true, "schema": map[string]any{"openAPIV3Schema": map[string]any{
+			"properties": map[string]any{"spec": map[string]any{"type": "object", "properties": map[string]any{
+				"components": map[string]any{"type": "object", "properties": props}}}}}}}}},
 	})
-	alm, _ := json.Marshal([]interface{}{map[string]interface{}{
-		"apiVersion": "datasciencecluster.opendatahub.io/v3", "kind": "DataScienceCluster", "metadata": map[string]interface{}{"name": "default-dsc"},
+	alm, _ := json.Marshal([]any{map[string]any{
+		"apiVersion": "datasciencecluster.opendatahub.io/v3", "kind": "DataScienceCluster", "metadata": map[string]any{"name": "default-dsc"},
 		"spec": json.RawMessage(`{"components":` + defaults + `}`),
 	}})
 	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
@@ -151,7 +151,7 @@ func TestRepairDSC_V3PartRemovalsArePreviewedAndGuarded(t *testing.T) {
 			f, c := v3RepairWorld(t, tc.defaults)
 
 			// The Components page preview lists the path and why it is blocked.
-			var dsc map[string]interface{}
+			var dsc map[string]any
 			_ = json.Unmarshal([]byte(`{"apiVersion":"datasciencecluster.opendatahub.io/v3","spec":{"components":`+v3Components+`}}`), &dsc)
 			compat := checkDSCCompatibility(c, dsc)
 			if !slices.Contains(compat.ResetRemovals, tc.wantPath) {
@@ -288,18 +288,18 @@ func TestRepairDSC_ResetBoundToThePreviewedRemovals(t *testing.T) {
 // its parts standard and maasPortal (not free-form), and a DSC whose
 // dashboard also has a part the schema does not know.
 func strictDashboardSchema(f *fakeAPI) {
-	state := map[string]interface{}{"type": "object", "properties": map[string]interface{}{"managementState": map[string]interface{}{"type": "string"}}}
-	open := map[string]interface{}{"type": "object", "x-kubernetes-preserve-unknown-fields": true}
-	props := map[string]interface{}{
-		"dashboard": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"standard": state, "maasPortal": state}},
+	state := map[string]any{"type": "object", "properties": map[string]any{"managementState": map[string]any{"type": "string"}}}
+	open := map[string]any{"type": "object", "x-kubernetes-preserve-unknown-fields": true}
+	props := map[string]any{
+		"dashboard": map[string]any{"type": "object", "properties": map[string]any{"standard": state, "maasPortal": state}},
 	}
 	for _, k := range []string{"aiHub", "aigateway", "data", "kserve", "trainer", "workbenches"} {
 		props[k] = open
 	}
-	f.obj("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io", map[string]interface{}{
-		"spec": map[string]interface{}{"versions": []interface{}{map[string]interface{}{"name": "v3", "served": true, "schema": map[string]interface{}{"openAPIV3Schema": map[string]interface{}{
-			"properties": map[string]interface{}{"spec": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
-				"components": map[string]interface{}{"type": "object", "properties": props}}}}}}}}},
+	f.obj("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io", map[string]any{
+		"spec": map[string]any{"versions": []any{map[string]any{"name": "v3", "served": true, "schema": map[string]any{"openAPIV3Schema": map[string]any{
+			"properties": map[string]any{"spec": map[string]any{"type": "object", "properties": map[string]any{
+				"components": map[string]any{"type": "object", "properties": props}}}}}}}}},
 	})
 	withLegacy := strings.Replace(v3Components, `"dashboard":{`, `"dashboard":{"legacyPart":{"managementState":"Managed"},`, 1)
 	f.json("GET", myDSCv3Path, 200,
@@ -307,12 +307,12 @@ func strictDashboardSchema(f *fakeAPI) {
 }
 
 func TestSchemaComponents_ChecksEveryPathSegment(t *testing.T) {
-	state := map[string]interface{}{"type": "object"}
-	schema := map[string]interface{}{"properties": map[string]interface{}{"components": map[string]interface{}{"properties": map[string]interface{}{
-		"dashboard": map[string]interface{}{"properties": map[string]interface{}{"standard": state}},
-		"kserve":    map[string]interface{}{"x-kubernetes-preserve-unknown-fields": true},
-		"aigateway": map[string]interface{}{"additionalProperties": map[string]interface{}{"type": "object"}},
-		"data":      map[string]interface{}{"additionalProperties": false},
+	state := map[string]any{"type": "object"}
+	schema := map[string]any{"properties": map[string]any{"components": map[string]any{"properties": map[string]any{
+		"dashboard": map[string]any{"properties": map[string]any{"standard": state}},
+		"kserve":    map[string]any{"x-kubernetes-preserve-unknown-fields": true},
+		"aigateway": map[string]any{"additionalProperties": map[string]any{"type": "object"}},
+		"data":      map[string]any{"additionalProperties": false},
 		"trainer":   state,
 	}}}}
 	got := schemaComponents(schema, []string{"aigateway.anything", "dashboard", "dashboard.legacyPart", "dashboard.standard", "data.featureStore", "kserve.nim", "trainer", "unknown", "unknown.part"})
@@ -323,23 +323,23 @@ func TestSchemaComponents_ChecksEveryPathSegment(t *testing.T) {
 }
 
 func TestSchemaComponents_FreeFormComponentsLevel(t *testing.T) {
-	state := map[string]interface{}{"type": "object"}
-	named := map[string]interface{}{"dashboard": map[string]interface{}{"properties": map[string]interface{}{"standard": state}}}
+	state := map[string]any{"type": "object"}
+	named := map[string]any{"dashboard": map[string]any{"properties": map[string]any{"standard": state}}}
 	names := []string{"dashboard.legacyPart", "dashboard.standard", "legacycomponent", "legacycomponent.part"}
 	for _, c := range []struct {
 		name       string
-		components map[string]interface{}
+		components map[string]any
 		want       []string
 	}{
 		// The API server keeps an unlisted component here, so dropping it removes something.
-		{"preserve-unknown-fields", map[string]interface{}{"properties": named, "x-kubernetes-preserve-unknown-fields": true},
+		{"preserve-unknown-fields", map[string]any{"properties": named, "x-kubernetes-preserve-unknown-fields": true},
 			[]string{"dashboard.standard", "legacycomponent", "legacycomponent.part"}},
-		{"additionalProperties schema", map[string]interface{}{"properties": named, "additionalProperties": state},
+		{"additionalProperties schema", map[string]any{"properties": named, "additionalProperties": state},
 			[]string{"dashboard.standard", "legacycomponent", "legacycomponent.part"}},
-		{"closed", map[string]interface{}{"properties": named, "additionalProperties": false},
+		{"closed", map[string]any{"properties": named, "additionalProperties": false},
 			[]string{"dashboard.standard"}},
 	} {
-		schema := map[string]interface{}{"properties": map[string]interface{}{"components": c.components}}
+		schema := map[string]any{"properties": map[string]any{"components": c.components}}
 		if got := schemaComponents(schema, names); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}

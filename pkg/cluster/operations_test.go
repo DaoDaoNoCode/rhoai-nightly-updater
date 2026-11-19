@@ -58,9 +58,9 @@ func newMockClient(responses map[string]mockResponse) (*Client, func()) {
 
 func TestTestPullSecret_Valid(t *testing.T) {
 	// Construct a valid pull secret response
-	dockerConfig := map[string]interface{}{
-		"auths": map[string]interface{}{
-			"quay.io/rhoai": map[string]interface{}{
+	dockerConfig := map[string]any{
+		"auths": map[string]any{
+			"quay.io/rhoai": map[string]any{
 				"auth": exampleAuth("test:test"), // test:test
 			},
 		},
@@ -68,10 +68,10 @@ func TestTestPullSecret_Valid(t *testing.T) {
 	dockerConfigJSON, _ := json.Marshal(dockerConfig)
 	dockerConfigB64 := base64.StdEncoding.EncodeToString(dockerConfigJSON)
 
-	secretData := map[string]interface{}{
+	secretData := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Secret",
-		"data": map[string]interface{}{
+		"data": map[string]any{
 			".dockerconfigjson": dockerConfigB64,
 		},
 	}
@@ -102,9 +102,9 @@ func TestTestPullSecret_RejectedByQuay(t *testing.T) {
 	verifyQuayCredentials = func(string) error { return &quayAuthError{StatusCode: 401, Body: "unauthorized"} }
 	defer func() { verifyQuayCredentials = orig }()
 
-	dockerConfig := map[string]interface{}{
-		"auths": map[string]interface{}{
-			"quay.io/rhoai": map[string]interface{}{
+	dockerConfig := map[string]any{
+		"auths": map[string]any{
+			"quay.io/rhoai": map[string]any{
 				"auth": exampleAuth("test:test"),
 			},
 		},
@@ -112,9 +112,9 @@ func TestTestPullSecret_RejectedByQuay(t *testing.T) {
 	dockerConfigJSON, _ := json.Marshal(dockerConfig)
 	dockerConfigB64 := base64.StdEncoding.EncodeToString(dockerConfigJSON)
 
-	secretData := map[string]interface{}{
+	secretData := map[string]any{
 		"apiVersion": "v1", "kind": "Secret",
-		"data": map[string]interface{}{".dockerconfigjson": dockerConfigB64},
+		"data": map[string]any{".dockerconfigjson": dockerConfigB64},
 	}
 	secretJSON, _ := json.Marshal(secretData)
 
@@ -170,15 +170,15 @@ func TestRollback_AlreadyOnStable(t *testing.T) {
 		stableChannel = v
 	}
 
-	subResponse := map[string]interface{}{
+	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "Subscription",
-		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec": map[string]interface{}{
+		"metadata":   map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
+		"spec": map[string]any{
 			"source":  stableSource,
 			"channel": stableChannel,
 		},
-		"status": map[string]interface{}{
+		"status": map[string]any{
 			"state": "AtLatestKnown",
 		},
 	}
@@ -447,20 +447,20 @@ func pkgManifestPaths() (listPath, directPath string) {
 
 // wrapInList wraps a single packagemanifest JSON body into a list response.
 func wrapPkgManifestList(singleBody string) string {
-	var obj map[string]interface{}
+	var obj map[string]any
 	if err := json.Unmarshal([]byte(singleBody), &obj); err != nil {
 		return `{"items":[]}`
 	}
-	obj["metadata"] = map[string]interface{}{"name": "rhods-operator"}
-	status, _ := obj["status"].(map[string]interface{})
+	obj["metadata"] = map[string]any{"name": "rhods-operator"}
+	status, _ := obj["status"].(map[string]any)
 	if status == nil {
-		status = map[string]interface{}{}
+		status = map[string]any{}
 		obj["status"] = status
 	}
 	status["packageName"] = SubName
 	status["catalogSource"] = CatalogName
 	status["catalogSourceNamespace"] = CatalogNS
-	wrapped := map[string]interface{}{"items": []interface{}{obj}}
+	wrapped := map[string]any{"items": []any{obj}}
 	b, _ := json.Marshal(wrapped)
 	return string(b)
 }
@@ -631,9 +631,9 @@ func TestCreatePullSecret_AcceptsValidAuth(t *testing.T) {
 	// Build mock responses for the success path.
 	// CreatePullSecret checks if the secret exists (GET), then creates/updates it,
 	// then reads it back via getPullSecret for verification.
-	dockerConfig := map[string]interface{}{
-		"auths": map[string]interface{}{
-			"quay.io/rhoai": map[string]interface{}{
+	dockerConfig := map[string]any{
+		"auths": map[string]any{
+			"quay.io/rhoai": map[string]any{
 				"auth": exampleAuth("user:password"), // user:password
 			},
 		},
@@ -641,10 +641,10 @@ func TestCreatePullSecret_AcceptsValidAuth(t *testing.T) {
 	dockerConfigJSON, _ := json.Marshal(dockerConfig)
 	dockerConfigB64 := base64.StdEncoding.EncodeToString(dockerConfigJSON)
 
-	secretData := map[string]interface{}{
+	secretData := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Secret",
-		"data": map[string]interface{}{
+		"data": map[string]any{
 			".dockerconfigjson": dockerConfigB64,
 		},
 	}
@@ -670,28 +670,28 @@ func TestUpdate_FullRefreshFlow(t *testing.T) {
 	testImage := "quay.io/rhoai/rhoai-fbc-fragment:nightly-test"
 
 	// Build mock pull secret response
-	dockerConfig := map[string]interface{}{
-		"auths": map[string]interface{}{
-			"quay.io/rhoai": map[string]interface{}{"auth": exampleAuth("test:test")},
+	dockerConfig := map[string]any{
+		"auths": map[string]any{
+			"quay.io/rhoai": map[string]any{"auth": exampleAuth("test:test")},
 		},
 	}
 	dockerConfigJSON, _ := json.Marshal(dockerConfig)
 	dockerConfigB64 := base64.StdEncoding.EncodeToString(dockerConfigJSON)
 
-	secretData := map[string]interface{}{
+	secretData := map[string]any{
 		"apiVersion": "v1", "kind": "Secret",
-		"data": map[string]interface{}{".dockerconfigjson": dockerConfigB64},
+		"data": map[string]any{".dockerconfigjson": dockerConfigB64},
 	}
 	secretJSON, _ := json.Marshal(secretData)
 
 	// Build IDMS response (has matching source)
-	idmsResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhoai-mirror"},
-				"spec": map[string]interface{}{
-					"imageDigestMirrors": []interface{}{
-						map[string]interface{}{"source": IDMSSource},
+	idmsResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "rhoai-mirror"},
+				"spec": map[string]any{
+					"imageDigestMirrors": []any{
+						map[string]any{"source": IDMSSource},
 					},
 				},
 			},
@@ -700,26 +700,26 @@ func TestUpdate_FullRefreshFlow(t *testing.T) {
 	idmsJSON, _ := json.Marshal(idmsResponse)
 
 	// Build CatalogSource response (already exists with old image)
-	csResponse := map[string]interface{}{
+	csResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
-		"metadata": map[string]interface{}{"name": CatalogName, "namespace": CatalogNS},
-		"spec":     map[string]interface{}{"image": "quay.io/rhoai/rhoai-fbc-fragment:old"},
-		"status": map[string]interface{}{
-			"connectionState": map[string]interface{}{"lastObservedState": "READY"},
+		"metadata": map[string]any{"name": CatalogName, "namespace": CatalogNS},
+		"spec":     map[string]any{"image": "quay.io/rhoai/rhoai-fbc-fragment:old"},
+		"status": map[string]any{
+			"connectionState": map[string]any{"lastObservedState": "READY"},
 		},
 	}
 	csJSON, _ := json.Marshal(csResponse)
 
 	// Build Subscription response (points to nightly catalog, with installPlanRef for verify step)
-	subResponse := map[string]interface{}{
+	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
-		"status": map[string]interface{}{
+		"metadata": map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
+		"spec":     map[string]any{"source": CatalogName, "channel": "fast"},
+		"status": map[string]any{
 			"state":        "AtLatestKnown",
 			"currentCSV":   "rhods-operator.v3.5.0",
 			"installedCSV": "rhods-operator.v3.5.0",
-			"installPlanRef": map[string]interface{}{
+			"installPlanRef": map[string]any{
 				"name": "install-plan-abc123",
 			},
 		},
@@ -727,50 +727,50 @@ func TestUpdate_FullRefreshFlow(t *testing.T) {
 	subJSON, _ := json.Marshal(subResponse)
 
 	// Build CSV list response
-	csvResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhods-operator.v3.5.0"},
-				"spec":     map[string]interface{}{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
-				"status":   map[string]interface{}{"phase": "Succeeded"},
+	csvResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "rhods-operator.v3.5.0"},
+				"spec":     map[string]any{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
+				"status":   map[string]any{"phase": "Succeeded"},
 			},
 		},
 	}
 	csvJSON, _ := json.Marshal(csvResponse)
 
 	// Build dashboard deployment response (non-PR, so Update does not print a warning)
-	dashDeploy := map[string]interface{}{
-		"metadata": map[string]interface{}{"annotations": map[string]interface{}{"opendatahub.io/managed": "true"}},
-		"spec": map[string]interface{}{
-			"selector": map[string]interface{}{"matchLabels": map[string]interface{}{"app": "rhods-dashboard"}},
-			"template": map[string]interface{}{
-				"spec": map[string]interface{}{
-					"containers": []interface{}{
-						map[string]interface{}{"name": "rhods-dashboard", "image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5"},
+	dashDeploy := map[string]any{
+		"metadata": map[string]any{"annotations": map[string]any{"opendatahub.io/managed": "true"}},
+		"spec": map[string]any{
+			"selector": map[string]any{"matchLabels": map[string]any{"app": "rhods-dashboard"}},
+			"template": map[string]any{
+				"spec": map[string]any{
+					"containers": []any{
+						map[string]any{"name": "rhods-dashboard", "image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5"},
 					},
 				},
 			},
 		},
 	}
 	dashDeployJSON, _ := json.Marshal(dashDeploy)
-	emptyPodList, _ := json.Marshal(map[string]interface{}{"items": []interface{}{}})
-	emptyDeployList, _ := json.Marshal(map[string]interface{}{"items": []interface{}{}})
+	emptyPodList, _ := json.Marshal(map[string]any{"items": []any{}})
+	emptyDeployList, _ := json.Marshal(map[string]any{"items": []any{}})
 
 	// Build packagemanifest response for detectNightlyChannel
-	pkgManifest := map[string]interface{}{
-		"status": map[string]interface{}{
-			"channels": []interface{}{
-				map[string]interface{}{"name": "fast", "currentCSV": "rhods-operator.v3.5.0"},
+	pkgManifest := map[string]any{
+		"status": map[string]any{
+			"channels": []any{
+				map[string]any{"name": "fast", "currentCSV": "rhods-operator.v3.5.0"},
 			},
 		},
 	}
 	pkgManifestJSON, _ := json.Marshal(pkgManifest)
 
 	// OperatorGroup response
-	ogResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "redhat-ods-operator-og", "namespace": SubNS},
+	ogResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "redhat-ods-operator-og", "namespace": SubNS},
 			},
 		},
 	}
@@ -907,25 +907,25 @@ func TestReinstall_StableCSVSucceeded(t *testing.T) {
 	}
 
 	// Subscription pointing to stable source
-	subResponse := map[string]interface{}{
+	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "Subscription",
-		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec": map[string]interface{}{
+		"metadata":   map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
+		"spec": map[string]any{
 			"source":  stableSource,
 			"channel": stableChannel,
 		},
-		"status": map[string]interface{}{"state": "AtLatestKnown"},
+		"status": map[string]any{"state": "AtLatestKnown"},
 	}
 	subJSON, _ := json.Marshal(subResponse)
 
 	// CSV list with a Succeeded CSV
-	csvResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhods-operator.v3.5.0"},
-				"spec":     map[string]interface{}{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
-				"status":   map[string]interface{}{"phase": "Succeeded"},
+	csvResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "rhods-operator.v3.5.0"},
+				"spec":     map[string]any{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
+				"status":   map[string]any{"phase": "Succeeded"},
 			},
 		},
 	}
@@ -957,44 +957,44 @@ func TestReinstall_NightlyCatalogAndChannel(t *testing.T) {
 	nightlyImage := "quay.io/rhoai/rhoai-fbc-fragment:nightly-20260101"
 
 	// Subscription pointing to nightly catalog (so it does not short-circuit on "already stable")
-	subResponse := map[string]interface{}{
+	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "Subscription",
-		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec": map[string]interface{}{
+		"metadata":   map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
+		"spec": map[string]any{
 			"source":  CatalogName,
 			"channel": "fast",
 		},
-		"status": map[string]interface{}{"state": "AtLatestKnown", "currentCSV": "rhods-operator.v3.5.0", "installedCSV": "rhods-operator.v3.5.0"},
+		"status": map[string]any{"state": "AtLatestKnown", "currentCSV": "rhods-operator.v3.5.0", "installedCSV": "rhods-operator.v3.5.0"},
 	}
 	subJSON, _ := json.Marshal(subResponse)
 
 	// CSV list with an existing CSV
-	csvResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhods-operator.v3.5.0"},
-				"spec":     map[string]interface{}{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
-				"status":   map[string]interface{}{"phase": "Succeeded"},
+	csvResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "rhods-operator.v3.5.0"},
+				"spec":     map[string]any{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
+				"status":   map[string]any{"phase": "Succeeded"},
 			},
 		},
 	}
 	csvJSON, _ := json.Marshal(csvResponse)
 
 	// Package manifest response: nightly catalog has multiple channels
-	pkgManifest := map[string]interface{}{
-		"status": map[string]interface{}{
-			"channels": []interface{}{
-				map[string]interface{}{"name": "fast", "currentCSV": "rhods-operator.v3.4.0"},
-				map[string]interface{}{"name": "beta", "currentCSV": "rhods-operator.v3.5.0-ea.1"},
-				map[string]interface{}{"name": "stable-3.5", "currentCSV": "rhods-operator.v3.5.0"},
+	pkgManifest := map[string]any{
+		"status": map[string]any{
+			"channels": []any{
+				map[string]any{"name": "fast", "currentCSV": "rhods-operator.v3.4.0"},
+				map[string]any{"name": "beta", "currentCSV": "rhods-operator.v3.5.0-ea.1"},
+				map[string]any{"name": "stable-3.5", "currentCSV": "rhods-operator.v3.5.0"},
 			},
 		},
 	}
 	pkgManifestJSON, _ := json.Marshal(pkgManifest)
 
 	// Empty webhook lists
-	emptyList, _ := json.Marshal(map[string]interface{}{"items": []interface{}{}})
+	emptyList, _ := json.Marshal(map[string]any{"items": []any{}})
 
 	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
 	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", SubNS)
@@ -1008,12 +1008,12 @@ func TestReinstall_NightlyCatalogAndChannel(t *testing.T) {
 	appDeployListPath := "/apis/apps/v1/namespaces/redhat-ods-applications/deployments"
 	opDeployListPath := "/apis/apps/v1/namespaces/redhat-ods-operator/deployments"
 
-	csReadyResponse, _ := json.Marshal(map[string]interface{}{
+	csReadyResponse, _ := json.Marshal(map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "CatalogSource",
-		"metadata":   map[string]interface{}{"name": CatalogName, "namespace": CatalogNS},
-		"spec":       map[string]interface{}{"image": nightlyImage},
-		"status":     map[string]interface{}{"connectionState": map[string]interface{}{"lastObservedState": "READY"}},
+		"metadata":   map[string]any{"name": CatalogName, "namespace": CatalogNS},
+		"spec":       map[string]any{"image": nightlyImage},
+		"status":     map[string]any{"connectionState": map[string]any{"lastObservedState": "READY"}},
 	})
 
 	client, records, cleanup := newRecordingMockClient(map[string]mockResponse{
@@ -1087,26 +1087,26 @@ func buildRefreshMocks() (map[string]mockResponse, map[string]string) {
 	appDeployListPath := fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments", "redhat-ods-applications")
 	opDeployListPath := fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments", "redhat-ods-operator")
 
-	csvResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhods-operator.v3.5.0"},
-				"spec":     map[string]interface{}{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
-				"status":   map[string]interface{}{"phase": "Succeeded"},
+	csvResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "rhods-operator.v3.5.0"},
+				"spec":     map[string]any{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
+				"status":   map[string]any{"phase": "Succeeded"},
 			},
 		},
 	}
 	csvJSON, _ := json.Marshal(csvResponse)
 
-	subResponse := map[string]interface{}{
+	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
-		"status":   map[string]interface{}{"state": "AtLatestKnown", "currentCSV": "rhods-operator.v3.5.0", "installedCSV": "rhods-operator.v3.5.0"},
+		"metadata": map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
+		"spec":     map[string]any{"source": CatalogName, "channel": "fast"},
+		"status":   map[string]any{"state": "AtLatestKnown", "currentCSV": "rhods-operator.v3.5.0", "installedCSV": "rhods-operator.v3.5.0"},
 	}
 	subJSON, _ := json.Marshal(subResponse)
 
-	emptyDeployList, _ := json.Marshal(map[string]interface{}{"items": []interface{}{}})
+	emptyDeployList, _ := json.Marshal(map[string]any{"items": []any{}})
 
 	paths := map[string]string{
 		"csvList":       csvListPath,
@@ -1209,26 +1209,26 @@ func TestRefreshOperator_RetriesSubscriptionCreation(t *testing.T) {
 	appDeployListPath := fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments", "redhat-ods-applications")
 	opDeployListPath := fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments", "redhat-ods-operator")
 
-	csvResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhods-operator.v3.5.0"},
-				"spec":     map[string]interface{}{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
-				"status":   map[string]interface{}{"phase": "Succeeded"},
+	csvResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "rhods-operator.v3.5.0"},
+				"spec":     map[string]any{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
+				"status":   map[string]any{"phase": "Succeeded"},
 			},
 		},
 	}
 	csvJSON, _ := json.Marshal(csvResponse)
 
-	subResponse := map[string]interface{}{
+	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
-		"status":   map[string]interface{}{"state": "AtLatestKnown", "currentCSV": "rhods-operator.v3.5.0", "installedCSV": "rhods-operator.v3.5.0"},
+		"metadata": map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
+		"spec":     map[string]any{"source": CatalogName, "channel": "fast"},
+		"status":   map[string]any{"state": "AtLatestKnown", "currentCSV": "rhods-operator.v3.5.0", "installedCSV": "rhods-operator.v3.5.0"},
 	}
 	subJSON, _ := json.Marshal(subResponse)
 
-	emptyDeployList, _ := json.Marshal(map[string]interface{}{"items": []interface{}{}})
+	emptyDeployList, _ := json.Marshal(map[string]any{"items": []any{}})
 
 	// Custom server: fail the first 2 PATCH requests to the sub path, succeed on 3rd
 	var mu sync.Mutex
@@ -1321,8 +1321,8 @@ func TestRefreshOperator_RetriesSubscriptionCreation(t *testing.T) {
 func TestRefreshOperator_NoCSV(t *testing.T) {
 	// Return an empty CSV list so getCSV returns csv.Name == ""
 	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", SubNS)
-	emptyCSVResponse := map[string]interface{}{
-		"items": []interface{}{},
+	emptyCSVResponse := map[string]any{
+		"items": []any{},
 	}
 	emptyCSVJSON, _ := json.Marshal(emptyCSVResponse)
 
@@ -1431,27 +1431,27 @@ func TestRefreshOperator_MissingSubscriptionChangesNothing(t *testing.T) {
 // CatalogSource is already READY.
 func buildUpdateStreamMocks(testImage string) (map[string]mockResponse, map[string]string) {
 	// Pull secret
-	dockerConfig := map[string]interface{}{
-		"auths": map[string]interface{}{
-			"quay.io/rhoai": map[string]interface{}{"auth": exampleAuth("test:test")},
+	dockerConfig := map[string]any{
+		"auths": map[string]any{
+			"quay.io/rhoai": map[string]any{"auth": exampleAuth("test:test")},
 		},
 	}
 	dockerConfigJSON, _ := json.Marshal(dockerConfig)
 	dockerConfigB64 := base64.StdEncoding.EncodeToString(dockerConfigJSON)
-	secretData := map[string]interface{}{
+	secretData := map[string]any{
 		"apiVersion": "v1", "kind": "Secret",
-		"data": map[string]interface{}{".dockerconfigjson": dockerConfigB64},
+		"data": map[string]any{".dockerconfigjson": dockerConfigB64},
 	}
 	secretJSON, _ := json.Marshal(secretData)
 
 	// IDMS
-	idmsResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhoai-mirror"},
-				"spec": map[string]interface{}{
-					"imageDigestMirrors": []interface{}{
-						map[string]interface{}{"source": IDMSSource},
+	idmsResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "rhoai-mirror"},
+				"spec": map[string]any{
+					"imageDigestMirrors": []any{
+						map[string]any{"source": IDMSSource},
 					},
 				},
 			},
@@ -1460,26 +1460,26 @@ func buildUpdateStreamMocks(testImage string) (map[string]mockResponse, map[stri
 	idmsJSON, _ := json.Marshal(idmsResponse)
 
 	// CatalogSource (READY)
-	csResponse := map[string]interface{}{
+	csResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
-		"metadata": map[string]interface{}{"name": CatalogName, "namespace": CatalogNS},
-		"spec":     map[string]interface{}{"image": testImage},
-		"status": map[string]interface{}{
-			"connectionState": map[string]interface{}{"lastObservedState": "READY"},
+		"metadata": map[string]any{"name": CatalogName, "namespace": CatalogNS},
+		"spec":     map[string]any{"image": testImage},
+		"status": map[string]any{
+			"connectionState": map[string]any{"lastObservedState": "READY"},
 		},
 	}
 	csJSON, _ := json.Marshal(csResponse)
 
 	// Subscription (with installPlanRef in status)
-	subResponse := map[string]interface{}{
+	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
-		"status": map[string]interface{}{
+		"metadata": map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
+		"spec":     map[string]any{"source": CatalogName, "channel": "fast"},
+		"status": map[string]any{
 			"state":        "AtLatestKnown",
 			"currentCSV":   "rhods-operator.v3.5.0",
 			"installedCSV": "rhods-operator.v3.5.0",
-			"installPlanRef": map[string]interface{}{
+			"installPlanRef": map[string]any{
 				"name": "install-plan-abc123",
 			},
 		},
@@ -1487,36 +1487,36 @@ func buildUpdateStreamMocks(testImage string) (map[string]mockResponse, map[stri
 	subJSON, _ := json.Marshal(subResponse)
 
 	// CSV list
-	csvResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhods-operator.v3.5.0"},
-				"spec":     map[string]interface{}{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
-				"status":   map[string]interface{}{"phase": "Succeeded"},
+	csvResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "rhods-operator.v3.5.0"},
+				"spec":     map[string]any{"displayName": "Red Hat OpenShift AI", "version": "3.5.0"},
+				"status":   map[string]any{"phase": "Succeeded"},
 			},
 		},
 	}
 	csvJSON, _ := json.Marshal(csvResponse)
 
 	// Package manifest
-	pkgManifest := map[string]interface{}{
-		"status": map[string]interface{}{
-			"channels": []interface{}{
-				map[string]interface{}{"name": "fast", "currentCSV": "rhods-operator.v3.5.0"},
+	pkgManifest := map[string]any{
+		"status": map[string]any{
+			"channels": []any{
+				map[string]any{"name": "fast", "currentCSV": "rhods-operator.v3.5.0"},
 			},
 		},
 	}
 	pkgManifestJSON, _ := json.Marshal(pkgManifest)
 
 	// Dashboard deployment (non-PR)
-	dashDeploy := map[string]interface{}{
-		"metadata": map[string]interface{}{"annotations": map[string]interface{}{"opendatahub.io/managed": "true"}},
-		"spec": map[string]interface{}{
-			"selector": map[string]interface{}{"matchLabels": map[string]interface{}{"app": "rhods-dashboard"}},
-			"template": map[string]interface{}{
-				"spec": map[string]interface{}{
-					"containers": []interface{}{
-						map[string]interface{}{"name": "rhods-dashboard", "image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5"},
+	dashDeploy := map[string]any{
+		"metadata": map[string]any{"annotations": map[string]any{"opendatahub.io/managed": "true"}},
+		"spec": map[string]any{
+			"selector": map[string]any{"matchLabels": map[string]any{"app": "rhods-dashboard"}},
+			"template": map[string]any{
+				"spec": map[string]any{
+					"containers": []any{
+						map[string]any{"name": "rhods-dashboard", "image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5"},
 					},
 				},
 			},
@@ -1524,14 +1524,14 @@ func buildUpdateStreamMocks(testImage string) (map[string]mockResponse, map[stri
 	}
 	dashDeployJSON, _ := json.Marshal(dashDeploy)
 
-	emptyPodList, _ := json.Marshal(map[string]interface{}{"items": []interface{}{}})
-	emptyDeployList, _ := json.Marshal(map[string]interface{}{"items": []interface{}{}})
+	emptyPodList, _ := json.Marshal(map[string]any{"items": []any{}})
+	emptyDeployList, _ := json.Marshal(map[string]any{"items": []any{}})
 
 	// OperatorGroup response
-	ogResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "redhat-ods-operator-og", "namespace": SubNS},
+	ogResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "redhat-ods-operator-og", "namespace": SubNS},
 			},
 		},
 	}
@@ -1673,27 +1673,27 @@ func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
 	testImage := "quay.io/rhoai/rhoai-fbc-fragment:nightly-timeout"
 
 	// Build pull secret
-	dockerConfig := map[string]interface{}{
-		"auths": map[string]interface{}{
-			"quay.io/rhoai": map[string]interface{}{"auth": exampleAuth("test:test")},
+	dockerConfig := map[string]any{
+		"auths": map[string]any{
+			"quay.io/rhoai": map[string]any{"auth": exampleAuth("test:test")},
 		},
 	}
 	dockerConfigJSON, _ := json.Marshal(dockerConfig)
 	dockerConfigB64 := base64.StdEncoding.EncodeToString(dockerConfigJSON)
-	secretData := map[string]interface{}{
+	secretData := map[string]any{
 		"apiVersion": "v1", "kind": "Secret",
-		"data": map[string]interface{}{".dockerconfigjson": dockerConfigB64},
+		"data": map[string]any{".dockerconfigjson": dockerConfigB64},
 	}
 	secretJSON, _ := json.Marshal(secretData)
 
 	// IDMS
-	idmsResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhoai-mirror"},
-				"spec": map[string]interface{}{
-					"imageDigestMirrors": []interface{}{
-						map[string]interface{}{"source": IDMSSource},
+	idmsResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "rhoai-mirror"},
+				"spec": map[string]any{
+					"imageDigestMirrors": []any{
+						map[string]any{"source": IDMSSource},
 					},
 				},
 			},
@@ -1702,39 +1702,39 @@ func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
 	idmsJSON, _ := json.Marshal(idmsResponse)
 
 	// CatalogSource that always returns TRANSIENT_FAILURE
-	csResponse := map[string]interface{}{
+	csResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
-		"metadata": map[string]interface{}{"name": CatalogName, "namespace": CatalogNS},
-		"spec":     map[string]interface{}{"image": testImage},
-		"status": map[string]interface{}{
-			"connectionState": map[string]interface{}{"lastObservedState": "TRANSIENT_FAILURE"},
+		"metadata": map[string]any{"name": CatalogName, "namespace": CatalogNS},
+		"spec":     map[string]any{"image": testImage},
+		"status": map[string]any{
+			"connectionState": map[string]any{"lastObservedState": "TRANSIENT_FAILURE"},
 		},
 	}
 	csJSON, _ := json.Marshal(csResponse)
 
 	// Dashboard deployment (non-PR)
-	dashDeploy := map[string]interface{}{
-		"metadata": map[string]interface{}{"annotations": map[string]interface{}{"opendatahub.io/managed": "true"}},
-		"spec": map[string]interface{}{
-			"selector": map[string]interface{}{"matchLabels": map[string]interface{}{"app": "rhods-dashboard"}},
-			"template": map[string]interface{}{
-				"spec": map[string]interface{}{
-					"containers": []interface{}{
-						map[string]interface{}{"name": "rhods-dashboard", "image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5"},
+	dashDeploy := map[string]any{
+		"metadata": map[string]any{"annotations": map[string]any{"opendatahub.io/managed": "true"}},
+		"spec": map[string]any{
+			"selector": map[string]any{"matchLabels": map[string]any{"app": "rhods-dashboard"}},
+			"template": map[string]any{
+				"spec": map[string]any{
+					"containers": []any{
+						map[string]any{"name": "rhods-dashboard", "image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5"},
 					},
 				},
 			},
 		},
 	}
 	dashDeployJSON, _ := json.Marshal(dashDeploy)
-	emptyPodList, _ := json.Marshal(map[string]interface{}{"items": []interface{}{}})
-	emptyDeployList, _ := json.Marshal(map[string]interface{}{"items": []interface{}{}})
+	emptyPodList, _ := json.Marshal(map[string]any{"items": []any{}})
+	emptyDeployList, _ := json.Marshal(map[string]any{"items": []any{}})
 
 	// OperatorGroup response
-	ogResponse := map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "redhat-ods-operator-og", "namespace": SubNS},
+	ogResponse := map[string]any{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{"name": "redhat-ods-operator-og", "namespace": SubNS},
 			},
 		},
 	}
@@ -1859,15 +1859,15 @@ func TestUpdateStream_BackwardCompat(t *testing.T) {
 	responses, _ := buildUpdateStreamMocks(testImage)
 
 	// Keep installPlanRef so verify_installplan step completes quickly
-	subResponse := map[string]interface{}{
+	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
-		"status": map[string]interface{}{
+		"metadata": map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
+		"spec":     map[string]any{"source": CatalogName, "channel": "fast"},
+		"status": map[string]any{
 			"state":          "AtLatestKnown",
 			"currentCSV":     "rhods-operator.v3.5.0",
 			"installedCSV":   "rhods-operator.v3.5.0",
-			"installPlanRef": map[string]interface{}{"name": "install-plan-compat"},
+			"installPlanRef": map[string]any{"name": "install-plan-compat"},
 		},
 	}
 	subJSON, _ := json.Marshal(subResponse)

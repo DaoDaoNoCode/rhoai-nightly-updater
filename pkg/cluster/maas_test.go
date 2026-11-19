@@ -56,25 +56,25 @@ func newMaaSCluster(t *testing.T) *modelsCluster {
 	f.putJSON("/api/v1/namespaces/redhat-ai-gateway-infra", `{}`)
 	f.putJSON("/apis/ingress.operator.openshift.io/v1/namespaces/openshift-ingress/dnsrecords/maas", `{"spec":{"dnsName":"maas.apps.example.com."},"status":{"zones":[{"conditions":[{"type":"Published","status":"True"}]}]}}`)
 	prev := f.onGet
-	f.onGet = func(k fakeKey, obj map[string]interface{}) {
+	f.onGet = func(k fakeKey, obj map[string]any) {
 		prev(k, obj)
 		switch k.plural {
 		case "clusters":
-			obj["status"] = map[string]interface{}{"readyInstances": 1, "phase": "Cluster in healthy state"}
+			obj["status"] = map[string]any{"readyInstances": 1, "phase": "Cluster in healthy state"}
 			if !f.hasLocked("/api/v1/namespaces/redhat-ai-gateway-infra/secrets/maas-db-app") {
-				f.objects[fakeKey{gv: "v1", ns: "redhat-ai-gateway-infra", plural: "secrets", name: "maas-db-app"}] = map[string]interface{}{
-					"metadata": map[string]interface{}{"name": "maas-db-app", "uid": "app-uid"},
-					"data": map[string]interface{}{"username": base64.StdEncoding.EncodeToString([]byte("maas")),
+				f.objects[fakeKey{gv: "v1", ns: "redhat-ai-gateway-infra", plural: "secrets", name: "maas-db-app"}] = map[string]any{
+					"metadata": map[string]any{"name": "maas-db-app", "uid": "app-uid"},
+					"data": map[string]any{"username": base64.StdEncoding.EncodeToString([]byte("maas")),
 						"password": base64.StdEncoding.EncodeToString([]byte(tMaaSPassword))},
 				}
 			}
 		case "maasmodelrefs":
-			obj["status"] = map[string]interface{}{"phase": "Ready", "endpoint": "https://maas.apps.example.com/proj/qwen25-05b-instruct"}
+			obj["status"] = map[string]any{"phase": "Ready", "endpoint": "https://maas.apps.example.com/proj/qwen25-05b-instruct"}
 		case "maassubscriptions", "maasauthpolicies":
-			obj["status"] = map[string]interface{}{"phase": "Active"}
+			obj["status"] = map[string]any{"phase": "Active"}
 		case "llminferenceservices":
 			// KServe has seen the model's current spec.
-			if st, ok := obj["status"].(map[string]interface{}); ok {
+			if st, ok := obj["status"].(map[string]any); ok {
 				st["observedGeneration"] = ensureMap(obj, "metadata")["generation"]
 			}
 		}
@@ -99,15 +99,15 @@ func newMaaSCluster(t *testing.T) *modelsCluster {
 // recordDSCFieldManagers is an onMergePatch that gives the fields a merge
 // patch of the DataScienceCluster sets to its field manager, as the API
 // server does (the manager's earlier entry is replaced).
-func recordDSCFieldManagers(r *http.Request, k fakeKey, patch, next map[string]interface{}) {
+func recordDSCFieldManagers(r *http.Request, k fakeKey, patch, next map[string]any) {
 	manager := r.URL.Query().Get("fieldManager")
 	if k.plural != "datascienceclusters" || manager == "" {
 		return
 	}
-	var fields func(v interface{}) map[string]interface{}
-	fields = func(v interface{}) map[string]interface{} {
-		out := map[string]interface{}{}
-		if m, ok := v.(map[string]interface{}); ok {
+	var fields func(v any) map[string]any
+	fields = func(v any) map[string]any {
+		out := map[string]any{}
+		if m, ok := v.(map[string]any); ok {
 			for key, child := range m {
 				out["f:"+key] = fields(child)
 			}
@@ -115,14 +115,14 @@ func recordDSCFieldManagers(r *http.Request, k fakeKey, patch, next map[string]i
 		return out
 	}
 	meta := ensureMap(next, "metadata")
-	var kept []interface{}
-	entries, _ := meta["managedFields"].([]interface{})
+	var kept []any
+	entries, _ := meta["managedFields"].([]any)
 	for _, e := range entries {
-		if em, _ := e.(map[string]interface{}); em["manager"] != manager {
+		if em, _ := e.(map[string]any); em["manager"] != manager {
 			kept = append(kept, e)
 		}
 	}
-	meta["managedFields"] = append(kept, map[string]interface{}{"manager": manager, "operation": "Update", "fieldsV1": map[string]interface{}{"f:spec": fields(patch["spec"])}})
+	meta["managedFields"] = append(kept, map[string]any{"manager": manager, "operation": "Update", "fieldsV1": map[string]any{"f:spec": fields(patch["spec"])}})
 }
 
 // hasLocked is has for use inside onGet, which runs under the fake's lock.
@@ -173,13 +173,13 @@ func TestMaaSSetup_FollowsTheDocumentedOrderAndShapes(t *testing.T) {
 	// The connection URL: the docs' format with sslmode=require, never in
 	// the logs or the message.
 	sec := mc.f.get(tMaaSDBConfig)
-	raw, _ := base64.StdEncoding.DecodeString(sec["data"].(map[string]interface{})["DB_CONNECTION_URL"].(string))
+	raw, _ := base64.StdEncoding.DecodeString(sec["data"].(map[string]any)["DB_CONNECTION_URL"].(string))
 	// Assembled so that no credential-shaped URL appears in the source.
 	userinfo := strings.Join([]string{"maas", "s3cr%3At%2Fp%40ss"}, ":")
 	if want := "postgresql" + "://" + userinfo + "@maas-db-rw.redhat-ai-gateway-infra.svc.cluster.local:5432/maas?sslmode=require"; string(raw) != want {
 		t.Fatalf("DB_CONNECTION_URL = %s", raw)
 	}
-	if labels := sec["metadata"].(map[string]interface{})["labels"].(map[string]interface{}); labels["app"] != "maas-api" || labels[managedByLabelKey] != managedByLabelValue {
+	if labels := sec["metadata"].(map[string]any)["labels"].(map[string]any); labels["app"] != "maas-api" || labels[managedByLabelKey] != managedByLabelValue {
 		t.Fatalf("secret labels = %v", labels)
 	}
 	all, _ := json.Marshal(res)
@@ -190,7 +190,7 @@ func TestMaaSSetup_FollowsTheDocumentedOrderAndShapes(t *testing.T) {
 		t.Fatal("the database password leaked into the output")
 	}
 	db := mc.f.get(tMaaSDB)
-	if spec := db["spec"].(map[string]interface{}); fmt.Sprint(spec["instances"]) != "1" || fmt.Sprint(spec["storage"]) != "map[size:1Gi]" {
+	if spec := db["spec"].(map[string]any); fmt.Sprint(spec["instances"]) != "1" || fmt.Sprint(spec["storage"]) != "map[size:1Gi]" {
 		t.Fatalf("database spec = %v", spec)
 	}
 	// The gateway as setup-gateway.sh loadbalancer mode makes it.
@@ -399,8 +399,8 @@ func TestMaaSPublishAndUnpublish(t *testing.T) {
 	// Back to gateway {}: the refs removed by a merge patch, the gateway
 	// object kept (live: an empty apply nulled it and the API server
 	// refused that with 422).
-	router := mc.f.get(testModelPath)["spec"].(map[string]interface{})["router"].(map[string]interface{})
-	if gw, ok := router["gateway"].(map[string]interface{}); !ok || gw["refs"] != nil || len(gw) != 0 {
+	router := mc.f.get(testModelPath)["spec"].(map[string]any)["router"].(map[string]any)
+	if gw, ok := router["gateway"].(map[string]any); !ok || gw["refs"] != nil || len(gw) != 0 {
 		t.Fatalf("model router after unpublish: %v", router)
 	}
 	if !hasMutation(mc.f, "PATCH "+testModelPath) {
@@ -520,8 +520,8 @@ func TestMaaSUnpublish_FinishesAHalfUndonePublication(t *testing.T) {
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"}); !res.Success {
 		t.Fatalf("unpublish: %+v", res)
 	}
-	router := mc.f.get(testModelPath)["spec"].(map[string]interface{})["router"].(map[string]interface{})
-	if gw, ok := router["gateway"].(map[string]interface{}); !ok || len(gw) != 0 {
+	router := mc.f.get(testModelPath)["spec"].(map[string]any)["router"].(map[string]any)
+	if gw, ok := router["gateway"].(map[string]any); !ok || len(gw) != 0 {
 		t.Fatalf("model router after unpublish: %v", router)
 	}
 	if st, _ := GetMaaSStatus(mc.c); len(st.Items) != 1 || st.Items[0].Published || st.Items[0].Message != "Not published" {

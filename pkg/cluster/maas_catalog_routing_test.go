@@ -14,22 +14,22 @@ import (
 
 const tModelsPath = "/apis/serving.kserve.io/v1alpha2/namespaces/proj/llminferenceservices/"
 
-func setModelRefsOf(mc *modelsCluster, name string, refs []interface{}) {
+func setModelRefsOf(mc *modelsCluster, name string, refs []any) {
 	mc.f.mu.Lock()
 	defer mc.f.mu.Unlock()
 	k, _ := parseFakePath(tModelsPath + name)
 	router := ensureMap(ensureMap(mc.f.objects[k], "spec"), "router")
 	if refs == nil {
-		router["gateway"] = map[string]interface{}{}
+		router["gateway"] = map[string]any{}
 		return
 	}
-	router["gateway"] = map[string]interface{}{"refs": refs}
+	router["gateway"] = map[string]any{"refs": refs}
 }
 
 func modelRefsOf(mc *modelsCluster, name string) string {
-	spec, _ := mc.f.get(tModelsPath + name)["spec"].(map[string]interface{})
-	router, _ := spec["router"].(map[string]interface{})
-	gw, _ := router["gateway"].(map[string]interface{})
+	spec, _ := mc.f.get(tModelsPath + name)["spec"].(map[string]any)
+	router, _ := spec["router"].(map[string]any)
+	gw, _ := router["gateway"].(map[string]any)
 	raw, _ := json.Marshal(gw["refs"])
 	return string(raw)
 }
@@ -81,7 +81,7 @@ func TestModelRoutePath_IsEachChatModelsOwnRoute(t *testing.T) {
 // published with its record.
 func TestMaaSPublish_TwoModelsOfAProjectKeepTheirOwnRefs(t *testing.T) {
 	mc := maasWithModels(t, "qwen25-05b-instruct", "smollm2-135m-instruct")
-	setModelRefsOf(mc, "smollm2-135m-instruct", []interface{}{tTeamGatewayRef})
+	setModelRefsOf(mc, "smollm2-135m-instruct", []any{tTeamGatewayRef})
 	for _, name := range []string{"smollm2-135m-instruct", "qwen25-05b-instruct"} {
 		if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj", Model: name}); !res.Success {
 			t.Fatalf("publish %s: %+v", name, res)
@@ -139,7 +139,7 @@ func TestMaaSUnpublish_SomeoneAddedAGatewayToOneModelOnly(t *testing.T) {
 			t.Fatalf("publish %s: %+v", name, res)
 		}
 	}
-	setModelRefsOf(mc, "qwen3-1-7b", []interface{}{tMaaSGatewayRef, tTeamGatewayRef})
+	setModelRefsOf(mc, "qwen3-1-7b", []any{tMaaSGatewayRef, tTeamGatewayRef})
 	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj", Model: "qwen3-1-7b"})
 	if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "oc patch llminferenceservice qwen3-1-7b -n proj") {
 		t.Fatalf("unpublish qwen3 = %+v", res)

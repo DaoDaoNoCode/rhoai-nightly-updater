@@ -23,18 +23,18 @@ func putOlderToolObjects(t *testing.T, f *resourceFake) {
 		old := strings.ReplaceAll(string(raw), "12535", "23646")
 		old = strings.ReplaceAll(old, `,"-admin.port=23646","-admin.port.legacy=0"`, "")
 		old = strings.ReplaceAll(old, seaweedfsDefaultImage, seaweedfs448)
-		var obj map[string]interface{}
+		var obj map[string]any
 		_ = json.Unmarshal([]byte(old), &obj)
 		meta := ensureMap(obj, "metadata")
-		var entries []interface{}
-		for _, e := range meta["managedFields"].([]interface{}) {
-			em := e.(map[string]interface{})
+		var entries []any
+		for _, e := range meta["managedFields"].([]any) {
+			em := e.(map[string]any)
 			if em["manager"] == toolFieldManager {
-				entries = append(entries, map[string]interface{}{"manager": toolFieldManager, "operation": "Update", "apiVersion": em["apiVersion"], "time": meta["creationTimestamp"], "fieldsType": "FieldsV1", "fieldsV1": em["fieldsV1"]})
-				entries = append(entries, map[string]interface{}{"manager": toolFieldManager, "operation": "Apply", "apiVersion": em["apiVersion"], "time": "2026-10-20T10:00:00Z", "fieldsType": "FieldsV1", "fieldsV1": em["fieldsV1"]})
+				entries = append(entries, map[string]any{"manager": toolFieldManager, "operation": "Update", "apiVersion": em["apiVersion"], "time": meta["creationTimestamp"], "fieldsType": "FieldsV1", "fieldsV1": em["fieldsV1"]})
+				entries = append(entries, map[string]any{"manager": toolFieldManager, "operation": "Apply", "apiVersion": em["apiVersion"], "time": "2026-10-20T10:00:00Z", "fieldsType": "FieldsV1", "fieldsV1": em["fieldsV1"]})
 			}
 		}
-		entries = append(entries, map[string]interface{}{"manager": "kube-controller-manager", "operation": "Update", "apiVersion": "apps/v1", "time": "2026-10-20T10:00:01Z", "fieldsType": "FieldsV1", "subresource": "status", "fieldsV1": map[string]interface{}{"f:status": map[string]interface{}{"f:readyReplicas": map[string]interface{}{}}}})
+		entries = append(entries, map[string]any{"manager": "kube-controller-manager", "operation": "Update", "apiVersion": "apps/v1", "time": "2026-10-20T10:00:01Z", "fieldsType": "FieldsV1", "subresource": "status", "fieldsV1": map[string]any{"f:status": map[string]any{"f:readyReplicas": map[string]any{}}}})
 		meta["managedFields"] = entries
 		raw, _ = json.Marshal(obj)
 		f.putJSON(path, string(raw))
@@ -96,9 +96,9 @@ func TestSetupS3Storage_RemovesAFieldTheToolNoLongerApplies(t *testing.T) {
 
 func TestUpgradeToolFieldOwnership(t *testing.T) {
 	fields := func(keys ...string) map[string]json.RawMessage {
-		spec := map[string]interface{}{}
+		spec := map[string]any{}
 		for _, k := range keys {
-			spec[k] = map[string]interface{}{}
+			spec[k] = map[string]any{}
 		}
 		raw, _ := json.Marshal(spec)
 		return map[string]json.RawMessage{"f:spec": raw}
@@ -113,7 +113,7 @@ func TestUpgradeToolFieldOwnership(t *testing.T) {
 			{Manager: toolFieldManager, Operation: "Update", APIVersion: "apps/v1", Time: "2026-10-01T10:00:00Z", FieldsType: "FieldsV1", FieldsV1: fields("f:strategy", "f:replicas")},
 			{Manager: toolFieldManager, Operation: "Update", APIVersion: "apps/v1", Time: "2026-10-01T10:00:00Z", Subresource: "scale", FieldsType: "FieldsV1", FieldsV1: fields("f:replicas")},
 		}}
-		raw, _ := json.Marshal(map[string]interface{}{"metadata": cur})
+		raw, _ := json.Marshal(map[string]any{"metadata": cur})
 		f.putJSON(path, string(raw))
 		got, err := upgradeToolFieldOwnership(c, path, cur)
 		if err != nil {
@@ -136,7 +136,7 @@ func TestUpgradeToolFieldOwnership(t *testing.T) {
 		cur := objectMeta{ResourceVersion: "3", CreationTimestamp: "2026-10-01T10:00:00Z", ManagedFields: []managedFieldsEntry{
 			{Manager: toolFieldManager, Operation: "Update", APIVersion: "v1", Time: "2026-10-01T10:00:00Z", FieldsType: "FieldsV1", FieldsV1: fields("f:ports")},
 		}}
-		raw, _ := json.Marshal(map[string]interface{}{"metadata": cur})
+		raw, _ := json.Marshal(map[string]any{"metadata": cur})
 		f.putJSON(path, string(raw))
 		got, err := upgradeToolFieldOwnership(c, path, cur)
 		if err != nil || len(got.ManagedFields) != 1 || got.ManagedFields[0].Operation != "Apply" || !got.ownsFieldPath([]string{toolFieldManager}, "f:spec", "f:ports") {
@@ -163,7 +163,7 @@ func TestUpgradeToolFieldOwnership(t *testing.T) {
 		}}
 		stored := cur
 		stored.ResourceVersion = "4"
-		raw, _ := json.Marshal(map[string]interface{}{"metadata": stored})
+		raw, _ := json.Marshal(map[string]any{"metadata": stored})
 		f.putJSON(path, string(raw))
 		if _, err := upgradeToolFieldOwnership(c, path, cur); !IsK8sError(err, 409) {
 			t.Fatalf("err = %v, want 409", err)

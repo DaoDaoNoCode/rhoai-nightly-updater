@@ -312,7 +312,7 @@ var HandleUserPermissions = withAuth(func(c *cluster.Client, w http.ResponseWrit
 		writeAuthError(w, err, "Cannot verify mutation permissions")
 		return
 	}
-	resp := map[string]interface{}{"canMutate": allowed, "user": username}
+	resp := map[string]any{"canMutate": allowed, "user": username}
 	// A cluster-admin whose sign-in cannot carry a change (an old session,
 	// or one about to expire) sees why before trying, as every change would
 	// be refused with the same reason.

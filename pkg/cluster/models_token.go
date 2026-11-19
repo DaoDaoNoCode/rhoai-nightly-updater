@@ -184,37 +184,37 @@ var tokenParts = []string{tokenPartSA, tokenPartRole, tokenPartBinding, tokenPar
 
 // tokenObject is one token object as the dashboard writes it, owned by the
 // model (modelUID; a placeholder for a dry run before the model exists).
-func tokenObject(kind, project, model, modelUID string) map[string]interface{} {
+func tokenObject(kind, project, model, modelUID string) map[string]any {
 	labels := toolLabels()
 	if kind != tokenPartSA {
 		labels[dashboardLabel] = "true"
 	}
-	meta := map[string]interface{}{
+	meta := map[string]any{
 		"name":      tokenObjectName(kind, model),
 		"namespace": project,
 		"labels":    labels,
-		"ownerReferences": []interface{}{map[string]interface{}{
+		"ownerReferences": []any{map[string]any{
 			"apiVersion": llmisvcAPIVersion, "kind": "LLMInferenceService", "name": model,
 			"uid": firstNonEmpty(modelUID, placeholderUID), "blockOwnerDeletion": false,
 		}},
 	}
-	obj := map[string]interface{}{"metadata": meta}
+	obj := map[string]any{"metadata": meta}
 	switch kind {
 	case tokenPartSA:
 		obj["apiVersion"], obj["kind"] = "v1", "ServiceAccount"
 	case tokenPartRole:
 		obj["apiVersion"], obj["kind"] = rbacAPIVersion, "Role"
-		obj["rules"] = []interface{}{map[string]interface{}{
-			"verbs": []interface{}{"get"}, "apiGroups": []interface{}{llmisvcGroup},
-			"resources": []interface{}{"llminferenceservices"}, "resourceNames": []interface{}{model},
+		obj["rules"] = []any{map[string]any{
+			"verbs": []any{"get"}, "apiGroups": []any{llmisvcGroup},
+			"resources": []any{"llminferenceservices"}, "resourceNames": []any{model},
 		}}
 	case tokenPartBinding:
 		obj["apiVersion"], obj["kind"] = rbacAPIVersion, "RoleBinding"
-		obj["roleRef"] = map[string]interface{}{"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": tokenRoleName(model)}
-		obj["subjects"] = []interface{}{map[string]interface{}{"kind": "ServiceAccount", "name": tokenSAName(model)}}
+		obj["roleRef"] = map[string]any{"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": tokenRoleName(model)}
+		obj["subjects"] = []any{map[string]any{"kind": "ServiceAccount", "name": tokenSAName(model)}}
 	default:
 		obj["apiVersion"], obj["kind"], obj["type"] = "v1", "Secret", tokenSecretType
-		meta["annotations"] = map[string]interface{}{saNameAnnotation: tokenSAName(model), "openshift.io/display-name": tokenDisplayName}
+		meta["annotations"] = map[string]any{saNameAnnotation: tokenSAName(model), "openshift.io/display-name": tokenDisplayName}
 	}
 	return obj
 }
@@ -231,8 +231,8 @@ type tokenPlan struct {
 // deletes nothing (Kubernetes API concepts, "Dry-run"; apiserver
 // DryRunnableStorage.Delete checks preconditions on a dry run).
 func probeWithUID(c *Client, path, uid string) (string, error) {
-	body, _ := json.Marshal(map[string]interface{}{
-		"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": map[string]interface{}{"uid": uid},
+	body, _ := json.Marshal(map[string]any{
+		"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": map[string]any{"uid": uid},
 	})
 	_, _, err := c.do(http.MethodDelete, path, "application/json", body, url.Values{"dryRun": {"All"}})
 	switch {

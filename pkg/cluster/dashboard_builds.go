@@ -117,10 +117,7 @@ func dashboardBuilds(ctx context.Context, images []types.DashboardDevImage) *typ
 		rateLimit.Lock()
 		defer rateLimit.Unlock()
 		resp.RateLimited = true
-		secs := int(time.Until(until).Round(time.Second) / time.Second)
-		if secs < 1 {
-			secs = 1
-		}
+		secs := max(int(time.Until(until).Round(time.Second)/time.Second), 1)
 		if secs > resp.RetryAfterSeconds {
 			resp.RetryAfterSeconds = secs
 		}
@@ -128,9 +125,7 @@ func dashboardBuilds(ctx context.Context, images []types.DashboardDevImage) *typ
 	sem := make(chan struct{}, labelFetchConcurrency)
 	var wg sync.WaitGroup
 	for i, image := range selected {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			select {
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
@@ -142,7 +137,7 @@ func dashboardBuilds(ctx context.Context, images []types.DashboardDevImage) *typ
 			containerCtx, cancel := context.WithTimeout(ctx, dashboardBuildContainerTimeout)
 			defer cancel()
 			resp.Builds[i] = dashboardContainerBuild(containerCtx, image, noteRateLimit)
-		}()
+		})
 	}
 	wg.Wait()
 	return resp

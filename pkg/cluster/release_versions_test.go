@@ -33,10 +33,10 @@ func TestUnnumberedEAReleaseTagsAndCSV(t *testing.T) {
 	if compareTags(ea, ga) >= 0 {
 		t.Fatal("GA must rank after EA")
 	}
-	channels := []interface{}{
-		map[string]interface{}{"name": "fast", "currentCSV": "rhods-operator.v3.7.0-ea"},
-		map[string]interface{}{"name": "beta", "currentCSV": "rhods-operator.v3.7.0-ea"},
-		map[string]interface{}{"name": "stable-3.6", "currentCSV": "rhods-operator.v3.6.0"},
+	channels := []any{
+		map[string]any{"name": "fast", "currentCSV": "rhods-operator.v3.7.0-ea"},
+		map[string]any{"name": "beta", "currentCSV": "rhods-operator.v3.7.0-ea"},
+		map[string]any{"name": "stable-3.6", "currentCSV": "rhods-operator.v3.6.0"},
 	}
 	channel, err := detectBestChannel(channels, "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.7-ea")
 	if err != nil || channel != "beta" {

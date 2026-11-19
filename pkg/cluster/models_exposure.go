@@ -292,17 +292,17 @@ type exposurePlan struct {
 
 // router is the model's spec.router for the plan (nil: no router, the
 // model is internal only).
-func (e exposurePlan) router() map[string]interface{} {
+func (e exposurePlan) router() map[string]any {
 	switch e.exposure {
 	case exposureInternal:
 		return nil
 	case exposureMaaS, exposureGateway:
-		return map[string]interface{}{"route": map[string]interface{}{}, "gateway": map[string]interface{}{
-			"refs": []interface{}{map[string]interface{}{"name": e.gwName, "namespace": e.gwNS}},
+		return map[string]any{"route": map[string]any{}, "gateway": map[string]any{
+			"refs": []any{map[string]any{"name": e.gwName, "namespace": e.gwNS}},
 		}}
 	}
 	// No scheduler: one replica needs no endpoint picker.
-	return map[string]interface{}{"route": map[string]interface{}{}, "gateway": map[string]interface{}{}}
+	return map[string]any{"route": map[string]any{}, "gateway": map[string]any{}}
 }
 
 // exposureReads are what the options are computed from.

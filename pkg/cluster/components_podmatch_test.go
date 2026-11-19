@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"maps"
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -14,9 +15,7 @@ func TestPodMatchesDeployment(t *testing.T) {
 	feast := types.DeploymentInfo{Name: "feast-operator-controller-manager", MatchLabels: map[string]string{"control-plane": "controller-manager", "app.kubernetes.io/name": "feast-operator"}}
 	pod := func(owner, kind, hash string, labels map[string]string) types.PodInfo {
 		l := map[string]string{}
-		for k, v := range labels {
-			l[k] = v
-		}
+		maps.Copy(l, labels)
 		if hash != "" {
 			l["pod-template-hash"] = hash
 		}

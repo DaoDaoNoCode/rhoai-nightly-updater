@@ -25,13 +25,13 @@ const (
 
 // mcpSampleTools are the tools DeepWiki's server lists (tools/list,
 // checked 2026-11-17), so the registry shows them without a discovery.
-var mcpSampleTools = []map[string]interface{}{
+var mcpSampleTools = []map[string]any{
 	{"name": "read_wiki_structure", "description": "Get a list of documentation topics for a GitHub repository.",
-		"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"repoName": map[string]string{"type": "string"}}, "required": []string{"repoName"}}},
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"repoName": map[string]string{"type": "string"}}, "required": []string{"repoName"}}},
 	{"name": "read_wiki_contents", "description": "View documentation about a GitHub repository.",
-		"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"repoName": map[string]string{"type": "string"}}, "required": []string{"repoName"}}},
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"repoName": map[string]string{"type": "string"}}, "required": []string{"repoName"}}},
 	{"name": "ask_wiki_question", "description": "Ask a question about a GitHub repository.",
-		"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"repoName": map[string]string{"type": "string"}, "question": map[string]string{"type": "string"}}, "required": []string{"repoName", "question"}}},
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"repoName": map[string]string{"type": "string"}, "question": map[string]string{"type": "string"}}, "required": []string{"repoName", "question"}}},
 }
 
 var errNoMCPRegistry = errors.New("this MLflow has no MCP Server Registry")
@@ -153,8 +153,8 @@ func (t *mlflowTarget) confirmNewParent(what, parentPath, versionsPath, listKey,
 
 func (t *mlflowTarget) createMCPVersion(status string) (registryVersion, error) {
 	var out registryVersion
-	err := t.api.sendJSON("POST", mcpServerPath("/versions"), nil, map[string]interface{}{
-		"server_json": map[string]interface{}{
+	err := t.api.sendJSON("POST", mcpServerPath("/versions"), nil, map[string]any{
+		"server_json": map[string]any{
 			"name": mcpSampleName, "version": mcpSampleVersion, "title": mcpSampleTitle, "description": mcpSampleDescription,
 			"remotes":    []map[string]string{{"type": mcpSampleTransport, "url": mcpSampleURL}},
 			"websiteUrl": "https://docs.devin.ai/work-with-devin/deepwiki-mcp",

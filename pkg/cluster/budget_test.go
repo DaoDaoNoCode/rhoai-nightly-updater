@@ -81,7 +81,7 @@ func TestInstallWaitEndsBeforeTheOperationDeadline(t *testing.T) {
 	OperatorInstallTimeout = time.Minute
 	t.Cleanup(func() { OperatorInstallTimeout = old })
 	f := newFakeOLM(t)
-	f.sub = map[string]interface{}{"metadata": map[string]interface{}{"name": SubName}, "spec": map[string]interface{}{}, "status": map[string]interface{}{}}
+	f.sub = map[string]any{"metadata": map[string]any{"name": SubName}, "spec": map[string]any{}, "status": map[string]any{}}
 	ctx, cancel := clk.WithTimeout(context.Background(), installDeadlineReserve+300*time.Millisecond)
 	defer cancel()
 	var logs []string

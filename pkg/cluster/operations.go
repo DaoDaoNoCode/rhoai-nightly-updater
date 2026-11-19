@@ -105,7 +105,7 @@ func detectNightlyChannel(c *Client, imageRef string) (string, error) {
 	return detectBestChannel(channels, imageRef)
 }
 
-func detectBestChannel(channels []interface{}, imageRef string) (string, error) {
+func detectBestChannel(channels []any, imageRef string) (string, error) {
 	if len(channels) == 0 {
 		slog.Warn("detectNightlyChannel: no channels found in packagemanifest")
 		return "", nil
@@ -120,7 +120,7 @@ func detectBestChannel(channels []interface{}, imageRef string) (string, error) 
 	bestChannel := ""
 	var bestParsed *parsedTag
 	for _, ch := range channels {
-		channel, _ := ch.(map[string]interface{})
+		channel, _ := ch.(map[string]any)
 		name, _ := channel["name"].(string)
 		csv, _ := channel["currentCSV"].(string)
 
@@ -204,7 +204,7 @@ func channelExistsInCatalog(c *Client, channel string) (bool, error) {
 		return false, err
 	}
 	for _, entry := range channels {
-		ch, _ := entry.(map[string]interface{})
+		ch, _ := entry.(map[string]any)
 		if ch["name"] == channel {
 			return true, nil
 		}
@@ -227,20 +227,20 @@ var (
 )
 
 // buildCatalogSourceSpec returns the nightly CatalogSource for an FBC image.
-func buildCatalogSourceSpec(image string) map[string]interface{} {
-	return map[string]interface{}{
+func buildCatalogSourceSpec(image string) map[string]any {
+	return map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "CatalogSource",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      CatalogName,
 			"namespace": CatalogNS,
 		},
-		"spec": map[string]interface{}{
+		"spec": map[string]any{
 			"sourceType":  "grpc",
 			"image":       image,
 			"displayName": "RHOAI Development Catalog",
 			"publisher":   "RHOAI DevOps",
-			"grpcPodConfig": map[string]interface{}{
+			"grpcPodConfig": map[string]any{
 				"securityContextConfig": "restricted",
 			},
 		},
@@ -317,7 +317,7 @@ func waitForNightlyPackageManifest(c *Client, image string, logs *[]string) erro
 //
 // recovery, when set, records the UID of the Subscription the apply left
 // (noteAttemptSubscription), so the restore deletes only that one.
-func applySubscriptionWithRetry(c *Client, path string, sub map[string]interface{}, recovery *operatorRecovery, onFailure func(attempt int, err error, willRetry bool, backoff time.Duration)) (applyErr, cancelErr error) {
+func applySubscriptionWithRetry(c *Client, path string, sub map[string]any, recovery *operatorRecovery, onFailure func(attempt int, err error, willRetry bool, backoff time.Duration)) (applyErr, cancelErr error) {
 	const attempts = 3
 	for attempt := 1; attempt <= attempts; attempt++ {
 		var body []byte
@@ -744,7 +744,7 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 
 // applyUpdateSubscription is Update's apply_subscription step: it applies sub
 // with retries. It returns a nil response when the Subscription was applied.
-func applyUpdateSubscription(c *Client, sub map[string]interface{}, channel string, recovery *operatorRecovery, logs *[]string, emit func(UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error)) (*types.OperationResponse, error) {
+func applyUpdateSubscription(c *Client, sub map[string]any, channel string, recovery *operatorRecovery, logs *[]string, emit func(UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error)) (*types.OperationResponse, error) {
 	subApplyErr, cancelErr := applySubscriptionWithRetry(c, subscriptionPath(), sub, recovery, func(attempt int, err error, willRetry bool, _ time.Duration) {
 		if willRetry {
 			slog.Warn("failed to apply Subscription, retrying", "attempt", attempt, "error", err)
@@ -757,7 +757,7 @@ func applyUpdateSubscription(c *Client, sub map[string]interface{}, channel stri
 	if subApplyErr != nil {
 		return fail(fmt.Sprintf("Failed to apply Subscription after 3 attempts: %v", subApplyErr), errorCodeFromK8sErr(subApplyErr))
 	}
-	*logs = append(*logs, fmt.Sprintf("OK: Subscription applied (channel=%s, installPlanApproval=%v)", channel, sub["spec"].(map[string]interface{})["installPlanApproval"]))
+	*logs = append(*logs, fmt.Sprintf("OK: Subscription applied (channel=%s, installPlanApproval=%v)", channel, sub["spec"].(map[string]any)["installPlanApproval"]))
 	emit(UpdateStepEvent{Step: "apply_subscription", Status: "success", Message: "Subscription applied", Detail: channel})
 	return nil, nil
 }
@@ -1472,7 +1472,7 @@ func createSubscriptionAndWait(c *Client, source, channel, kind, approveCSV stri
 		logs = append(logs, msg)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: errorCodeFromK8sErr(applyErr)}, nil
 	}
-	logs = append(logs, fmt.Sprintf("OK: Subscription created (%s / %s, installPlanApproval=%v)", source, channel, newSub["spec"].(map[string]interface{})["installPlanApproval"]))
+	logs = append(logs, fmt.Sprintf("OK: Subscription created (%s / %s, installPlanApproval=%v)", source, channel, newSub["spec"].(map[string]any)["installPlanApproval"]))
 	emit(UpdateStepEvent{Step: "create_subscription", Status: "success", Message: "Subscription created", Detail: channel})
 
 	// --- verify_installplan: wait for OLM's result ---
@@ -1772,7 +1772,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 		return fail(blocked, "prerequisites")
 	}
 	manual := false
-	if spec, ok := captured.subscriptionBase()["spec"].(map[string]interface{}); ok {
+	if spec, ok := captured.subscriptionBase()["spec"].(map[string]any); ok {
 		manual = spec["installPlanApproval"] == "Manual"
 	}
 	if !manual {
@@ -1843,7 +1843,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	logs = append(logs, "Recreating Subscription...")
 	newSub := buildSubscription(recovery.subscriptionBase(), sub.Source, sub.Channel)
 	if manual {
-		newSub["spec"].(map[string]interface{})["startingCSV"] = target
+		newSub["spec"].(map[string]any)["startingCSV"] = target
 		logs = append(logs, fmt.Sprintf("The Subscription uses Manual approval: startingCSV is pinned to %s and only its InstallPlan is approved", target))
 	}
 	applyErr, cancelErr := applySubscriptionWithRetry(c, subscriptionPath(), newSub, recovery, func(attempt int, err error, _ bool, _ time.Duration) {
@@ -1892,7 +1892,7 @@ func channelHeadCSV(c *Client, source, channel string) (string, error) {
 		return "", err
 	}
 	for _, ch := range channels {
-		m, _ := ch.(map[string]interface{})
+		m, _ := ch.(map[string]any)
 		if name, _ := m["name"].(string); name == channel {
 			head, _ := m["currentCSV"].(string)
 			if head == "" {
@@ -1985,7 +1985,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 		}
 	}
 
-	dockerConfig := map[string]interface{}{}
+	dockerConfig := map[string]any{}
 	if secretExists {
 		existing, problem := decodeDockerConfigSecret(existingBody)
 		switch problem {
@@ -1999,9 +1999,9 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 			logs = append(logs, fmt.Sprintf("Warning: existing .dockerconfigjson was unreadable (%s) and will be replaced", problem))
 		}
 	}
-	auths, ok := dockerConfig["auths"].(map[string]interface{})
+	auths, ok := dockerConfig["auths"].(map[string]any)
 	if !ok {
-		auths = map[string]interface{}{}
+		auths = map[string]any{}
 	}
 	preserved := 0
 	for key := range auths {
@@ -2012,7 +2012,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 		}
 		preserved++
 	}
-	auths[quayRHOAIRegistry] = map[string]interface{}{"auth": auth}
+	auths[quayRHOAIRegistry] = map[string]any{"auth": auth}
 	dockerConfig["auths"] = auths
 	if preserved > 0 {
 		logs = append(logs, fmt.Sprintf("Preserving %d other registry credential(s) in the pull secret", preserved))
@@ -2032,7 +2032,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 	// credentials it keeps, are redacted too.
 	credentials = append(credentials, dockerConfigB64, string(dockerConfigBytes))
 	for _, entry := range auths {
-		if e, ok := entry.(map[string]interface{}); ok {
+		if e, ok := entry.(map[string]any); ok {
 			for _, field := range []string{"auth", "password", "identitytoken", "registrytoken"} {
 				if v, ok := e[field].(string); ok {
 					credentials = append(credentials, v)
@@ -2041,15 +2041,15 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 		}
 	}
 
-	secret := map[string]interface{}{
+	secret := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Secret",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      "additional-pull-secret",
 			"namespace": "kube-system",
 		},
 		"type": "kubernetes.io/dockerconfigjson",
-		"data": map[string]interface{}{
+		"data": map[string]any{
 			".dockerconfigjson": dockerConfigB64,
 		},
 	}

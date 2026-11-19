@@ -305,12 +305,7 @@ func (rf *reportedApplyFailure) add(f applyFailure) {
 }
 
 func (rf *reportedApplyFailure) has(class applyFailureClass) bool {
-	for _, c := range rf.classes {
-		if c == class {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(rf.classes, class)
 }
 
 // collectApplyFailures scans the conditions of one CR for the failures
@@ -350,7 +345,7 @@ type reporterScan struct {
 	api     componentAPI
 	found   map[string]*reportedApplyFailure
 	dscs    []dscObject
-	modules map[string]map[string]map[string]interface{}
+	modules map[string]map[string]map[string]any
 	scanned int
 	errs    []string
 }
@@ -359,7 +354,7 @@ type reporterScan struct {
 // Platform and every module CR (whatever kinds this operator version
 // serves) and collects the apply failures keep accepts.
 func scanApplyReporters(c *Client, keep func(applyFailure) bool) reporterScan {
-	s := reporterScan{found: map[string]*reportedApplyFailure{}, modules: map[string]map[string]map[string]interface{}{}}
+	s := reporterScan{found: map[string]*reportedApplyFailure{}, modules: map[string]map[string]map[string]any{}}
 
 	dscs, _, err := listFirstServed(c, dscGroup, dscListFmt, "datascienceclusters", dscFallbackVersions)
 	if err != nil {
@@ -409,13 +404,13 @@ func scanApplyReporters(c *Client, keep func(applyFailure) bool) reporterScan {
 		}
 		for _, raw := range lists[i].items {
 			var it dscObject
-			var obj map[string]interface{}
+			var obj map[string]any
 			if json.Unmarshal(raw, &it) != nil || json.Unmarshal(raw, &obj) != nil {
 				continue
 			}
 			s.scanned++
 			if s.modules[k.Kind] == nil {
-				s.modules[k.Kind] = map[string]map[string]interface{}{}
+				s.modules[k.Kind] = map[string]map[string]any{}
 			}
 			s.modules[k.Kind][it.Metadata.Name] = obj
 			collectApplyFailures(s.found, applyReporter{Kind: k.Kind, Name: it.Metadata.Name, UID: it.Metadata.UID, Module: strings.ToLower(k.Kind), rank: 2}, it.Status.Conditions, keep)
@@ -599,10 +594,10 @@ func crdWriterEvidence(c *Client, crd string) []string {
 		Items []struct {
 			Metadata struct {
 				ManagedFields []struct {
-					Manager   string                 `json:"manager"`
-					Operation string                 `json:"operation"`
-					Time      string                 `json:"time"`
-					FieldsV1  map[string]interface{} `json:"fieldsV1"`
+					Manager   string         `json:"manager"`
+					Operation string         `json:"operation"`
+					Time      string         `json:"time"`
+					FieldsV1  map[string]any `json:"fieldsV1"`
 				} `json:"managedFields"`
 			} `json:"metadata"`
 		} `json:"items"`
@@ -612,7 +607,7 @@ func crdWriterEvidence(c *Client, crd string) []string {
 	}
 	manager, operation, when := "", "", ""
 	for _, mf := range list.Items[0].Metadata.ManagedFields {
-		spec, _ := mf.FieldsV1["f:spec"].(map[string]interface{})
+		spec, _ := mf.FieldsV1["f:spec"].(map[string]any)
 		if _, ok := spec["f:versions"]; ok && mf.Time >= when {
 			manager, operation, when = mf.Manager, mf.Operation, mf.Time
 		}

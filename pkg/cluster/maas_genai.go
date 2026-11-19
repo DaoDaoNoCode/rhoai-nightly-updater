@@ -48,16 +48,16 @@ func (r *maasRecord) setGenAI(project, model string, g maasGenAI) {
 // patchModelGenAI merge-patches the tool's model's genai label and
 // annotation (nil removes) with its resourceVersion as a precondition, as
 // field manager rhoai-nightly-updater-maas.
-func patchModelGenAI(c *Client, project, name, rv string, labels, annotations map[string]interface{}) error {
+func patchModelGenAI(c *Client, project, name, rv string, labels, annotations map[string]any) error {
 	path, _ := toolModelPath(project, name)
-	meta := map[string]interface{}{"resourceVersion": rv}
+	meta := map[string]any{"resourceVersion": rv}
 	if len(labels) > 0 {
 		meta["labels"] = labels
 	}
 	if len(annotations) > 0 {
 		meta["annotations"] = annotations
 	}
-	patch, _ := json.Marshal(map[string]interface{}{"metadata": meta})
+	patch, _ := json.Marshal(map[string]any{"metadata": meta})
 	_, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", patch, url.Values{"fieldManager": {maasModelManager}})
 	return err
 }
@@ -69,7 +69,7 @@ func stripModelGenAI(c *Client, project, name string) error {
 	if err != nil || !found {
 		return err
 	}
-	labels, annotations := map[string]interface{}{}, map[string]interface{}{}
+	labels, annotations := map[string]any{}, map[string]any{}
 	if _, ok := model.Metadata.Labels[genAIAssetLabel]; ok {
 		labels[genAIAssetLabel] = nil
 	}
@@ -92,7 +92,7 @@ func restoreModelGenAI(c *Client, project, name string, g maasGenAI) error {
 	if err != nil || !found {
 		return err
 	}
-	labels, annotations := map[string]interface{}{}, map[string]interface{}{}
+	labels, annotations := map[string]any{}, map[string]any{}
 	if _, ok := model.Metadata.Labels[genAIAssetLabel]; g.HadAsset && !ok {
 		labels[genAIAssetLabel] = g.Asset
 	}

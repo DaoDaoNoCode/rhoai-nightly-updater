@@ -19,15 +19,15 @@ func certWorld(t *testing.T) (*fakeAPI, *Client) {
 	for _, ns := range append([]string{SubNS}, rhoaiPodNamespaces...) {
 		f.json("GET", "/apis/cert-manager.io/v1/namespaces/"+ns+"/certificates", 200, `{"items":[]}`)
 	}
-	f.obj(appCertsPath, map[string]interface{}{"items": []interface{}{
-		map[string]interface{}{
+	f.obj(appCertsPath, map[string]any{"items": []any{
+		map[string]any{
 			"metadata": map[string]string{"name": "odh-observability-webhook-cert", "namespace": "redhat-ods-applications", "creationTimestamp": ago(time.Hour)},
 			"spec":     map[string]string{"secretName": "odh-observability-webhook-cert"},
 		},
-		map[string]interface{}{
+		map[string]any{
 			"metadata": map[string]string{"name": "serving-cert", "namespace": "redhat-ods-applications", "creationTimestamp": ago(time.Hour)},
 			"spec":     map[string]string{"secretName": "kuberay-webhook-server-cert"},
-			"status":   map[string]interface{}{"conditions": []dcond{{"type": "Ready", "status": "True"}}},
+			"status":   map[string]any{"conditions": []dcond{{"type": "Ready", "status": "True"}}},
 		},
 	}})
 	f.json("GET", "/apis/apps/v1/deployments", 200, `{"items":[]}`)
@@ -45,7 +45,7 @@ func certWorld(t *testing.T) (*fakeAPI, *Client) {
 		"labels":{"platform.opendatahub.io/part-of":"platform"},"annotations":{"cert-manager.io/inject-ca-from":"redhat-ods-applications/odh-observability-webhook-cert"}},
 		"webhooks":[{"name":"v.observability","clientConfig":{"service":{"namespace":"redhat-ods-applications","name":"odh-observability-webhook"}}}]}]}`)
 	f.json("GET", "/apis/admissionregistration.k8s.io/v1/mutatingwebhookconfigurations", 200, `{"items":[]}`)
-	f.obj(packageManifestsPath, map[string]interface{}{"items": liveCatalog()})
+	f.obj(packageManifestsPath, map[string]any{"items": liveCatalog()})
 	f.json("GET", clusterCSVsPath, 200, `{"items":[]}`)
 	return f, c
 }
@@ -90,9 +90,9 @@ func TestCertificatesCheck_OnlyPodsBlockedOnThisSecret(t *testing.T) {
 		t.Fatalf("evidence = %q", p.Evidence)
 	}
 	// One pod list per namespace, also with two Certificates in it.
-	f.obj(appCertsPath, map[string]interface{}{"items": []interface{}{
-		map[string]interface{}{"metadata": map[string]string{"name": "a", "namespace": "redhat-ods-applications", "creationTimestamp": ago(time.Hour)}, "spec": map[string]string{"secretName": "s1"}},
-		map[string]interface{}{"metadata": map[string]string{"name": "b", "namespace": "redhat-ods-applications", "creationTimestamp": ago(time.Hour)}, "spec": map[string]string{"secretName": "s2"}},
+	f.obj(appCertsPath, map[string]any{"items": []any{
+		map[string]any{"metadata": map[string]string{"name": "a", "namespace": "redhat-ods-applications", "creationTimestamp": ago(time.Hour)}, "spec": map[string]string{"secretName": "s1"}},
+		map[string]any{"metadata": map[string]string{"name": "b", "namespace": "redhat-ods-applications", "creationTimestamp": ago(time.Hour)}, "spec": map[string]string{"secretName": "s2"}},
 	}})
 	before := len(f.requests("GET", "/api/v1/namespaces/redhat-ods-applications/pods"))
 	checkCertificates(c)
@@ -104,10 +104,10 @@ func TestCertificatesCheck_OnlyPodsBlockedOnThisSecret(t *testing.T) {
 func TestCertificatesCheck_OwnFailingCondition(t *testing.T) {
 	f, c := certWorld(t)
 	f.json("GET", "/apis/apps/v1/deployments", 200, `{"items":[{"metadata":{"name":"cert-manager","namespace":"cert-manager"},"status":{"availableReplicas":1}}]}`)
-	f.obj(appCertsPath, map[string]interface{}{"items": []interface{}{map[string]interface{}{
+	f.obj(appCertsPath, map[string]any{"items": []any{map[string]any{
 		"metadata": map[string]string{"name": "c1", "namespace": "redhat-ods-applications", "creationTimestamp": ago(time.Hour)},
 		"spec":     map[string]string{"secretName": "s1"},
-		"status":   map[string]interface{}{"conditions": []dcond{{"type": "Ready", "status": "False", "reason": "IssuerNotFound", "message": "issuer odh-ca not found"}}},
+		"status":   map[string]any{"conditions": []dcond{{"type": "Ready", "status": "False", "reason": "IssuerNotFound", "message": "issuer odh-ca not found"}}},
 	}}})
 	out := checkCertificates(c)
 	if len(out.problems) != 1 || !strings.Contains(out.problems[0].Title, "issuer odh-ca not found") || len(out.problems[0].RelatedProblems) != 0 {
@@ -124,7 +124,7 @@ func TestCertificatesCheck_NoAPIAndYoungCertificates(t *testing.T) {
 		t.Fatalf("out = %+v", out.check)
 	}
 	f, c := certWorld(t)
-	f.obj(appCertsPath, map[string]interface{}{"items": []interface{}{map[string]interface{}{
+	f.obj(appCertsPath, map[string]any{"items": []any{map[string]any{
 		"metadata": map[string]string{"name": "new", "namespace": "redhat-ods-applications", "creationTimestamp": ago(10 * time.Second)},
 	}}})
 	if out := checkCertificates(c); out.check.Status != "pass" || len(out.problems) != 0 {
@@ -181,9 +181,9 @@ func TestLinkProblems_FoldsSymptomsIntoRootCause(t *testing.T) {
 // problem, and no separate pod or webhook problem.
 func TestDiagnoseCluster_CertificateRootCause(t *testing.T) {
 	f, c := certWorld(t)
-	f.obj(dscV2List, map[string]interface{}{"items": []interface{}{map[string]interface{}{
+	f.obj(dscV2List, map[string]any{"items": []any{map[string]any{
 		"metadata": map[string]string{"name": "default-dsc"},
-		"status": map[string]interface{}{"conditions": []dcond{
+		"status": map[string]any{"conditions": []dcond{
 			{"type": "Ready", "status": "False", "reason": "Error", "message": "Some modules are not ready: kserve"},
 			{"type": "KserveLLMInferenceServiceDependencies", "status": "False", "reason": "PreConditionFailed", "message": msgCertManager},
 		}},
@@ -236,10 +236,10 @@ func TestDiagnoseCluster_CertificateRootCause(t *testing.T) {
 func staleCertWorld(t *testing.T, managementState string) (*fakeAPI, *Client) {
 	t.Helper()
 	f, c := certWorld(t)
-	f.obj(appCertsPath, map[string]interface{}{"items": []interface{}{map[string]interface{}{
+	f.obj(appCertsPath, map[string]any{"items": []any{map[string]any{
 		"metadata": map[string]string{"name": "odh-observability-webhook-cert", "namespace": "redhat-ods-applications", "creationTimestamp": ago(30 * 24 * time.Hour)},
 		"spec":     map[string]string{"secretName": "odh-observability-webhook-cert"},
-		"status":   map[string]interface{}{"conditions": []dcond{{"type": "Ready", "status": "True", "reason": "Ready", "message": "Certificate is up to date and has not expired"}}},
+		"status":   map[string]any{"conditions": []dcond{{"type": "Ready", "status": "True", "reason": "Ready", "message": "Certificate is up to date and has not expired"}}},
 	}}})
 	f.json("GET", "/api/v1/namespaces/redhat-ods-applications/pods", 200, `{"items":[{"metadata":{"name":"odh-observability-abc","namespace":"redhat-ods-applications",
 		"creationTimestamp":"`+ago(time.Hour)+`","labels":{"pod-template-hash":"abc","app":"odh-observability"},
@@ -250,11 +250,11 @@ func staleCertWorld(t *testing.T, managementState string) (*fakeAPI, *Client) {
 		"message":"MountVolume.SetUp failed for volume \"webhook-certs\" : secret \"odh-observability-webhook-cert\" not found","lastTimestamp":"`+ago(time.Minute)+`"}]}`)
 	f.json("GET", "/apis/apps/v1/deployments", 200, `{"items":[{"metadata":{"name":"cert-manager","namespace":"cert-manager",
 		"labels":{"app":"cert-manager","app.kubernetes.io/name":"cert-manager","app.kubernetes.io/component":"controller"}},"spec":{"replicas":0},"status":{}}]}`)
-	f.obj(clusterCSVsPath, map[string]interface{}{"items": []interface{}{map[string]interface{}{
-		"metadata": map[string]interface{}{"name": "cert-manager-operator.v1.20.1", "namespace": "cert-manager-operator",
+	f.obj(clusterCSVsPath, map[string]any{"items": []any{map[string]any{
+		"metadata": map[string]any{"name": "cert-manager-operator.v1.20.1", "namespace": "cert-manager-operator",
 			"labels": map[string]string{"operators.coreos.com/openshift-cert-manager-operator.cert-manager-operator": ""}, "annotations": map[string]string{"alm-examples": certManagerExamples}},
-		"spec": map[string]interface{}{"displayName": "cert-manager Operator for Red Hat OpenShift",
-			"install": map[string]interface{}{"spec": map[string]interface{}{"deployments": []interface{}{map[string]string{"name": "cert-manager-operator-controller-manager"}}}}},
+		"spec": map[string]any{"displayName": "cert-manager Operator for Red Hat OpenShift",
+			"install": map[string]any{"spec": map[string]any{"deployments": []any{map[string]string{"name": "cert-manager-operator-controller-manager"}}}}},
 		"status": map[string]string{"phase": "Succeeded", "lastTransitionTime": ago(time.Hour)},
 	}}})
 	f.json("GET", "/apis/apps/v1/namespaces/cert-manager-operator/deployments/cert-manager-operator-controller-manager", 200,

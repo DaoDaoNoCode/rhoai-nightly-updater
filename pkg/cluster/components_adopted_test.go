@@ -18,7 +18,7 @@ import (
 // metadata.name field selector, and counts the requests.
 type rsServer struct {
 	mu      sync.Mutex
-	sets    []map[string]interface{}
+	sets    []map[string]any
 	calls   int
 	queries []string
 	fail    bool
@@ -42,13 +42,13 @@ func (s *rsServer) client(t *testing.T) *Client {
 			return
 		}
 		name := strings.TrimPrefix(r.URL.Query().Get("fieldSelector"), "metadata.name=")
-		items := []interface{}{}
+		items := []any{}
 		for _, rs := range s.sets {
-			if rs["metadata"].(map[string]interface{})["name"] == name {
+			if rs["metadata"].(map[string]any)["name"] == name {
 				items = append(items, rs)
 			}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"items": items})
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
 	}))
 	t.Cleanup(srv.Close)
 	old := replicaSetOwnerCache
@@ -57,12 +57,12 @@ func (s *rsServer) client(t *testing.T) *Client {
 	return &Client{baseURL: srv.URL, token: "t", httpClient: srv.Client(), ctx: context.Background()}
 }
 
-func replicaSet(name, uid, deploymentUID string) map[string]interface{} {
-	refs := []interface{}{}
+func replicaSet(name, uid, deploymentUID string) map[string]any {
+	refs := []any{}
 	if deploymentUID != "" {
-		refs = append(refs, map[string]interface{}{"apiVersion": "apps/v1", "kind": "Deployment", "name": "d", "uid": deploymentUID, "controller": true})
+		refs = append(refs, map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "name": "d", "uid": deploymentUID, "controller": true})
 	}
-	return map[string]interface{}{"metadata": map[string]interface{}{"name": name, "uid": uid, "ownerReferences": refs}}
+	return map[string]any{"metadata": map[string]any{"name": name, "uid": uid, "ownerReferences": refs}}
 }
 
 func adoptedPod(name, rs, rsUID string, labels map[string]string) types.PodInfo {
@@ -79,7 +79,7 @@ func trustyDeployment() types.DeploymentInfo {
 // <deployment>-<hash>): its pods are the Deployment's. A pod whose
 // ReplicaSet another Deployment controls is not.
 func TestOwnedByDeployment_AdoptedReplicaSet(t *testing.T) {
-	s := &rsServer{sets: []map[string]interface{}{
+	s := &rsServer{sets: []map[string]any{
 		replicaSet("handmade-rs", "rs-adopted", "dep-trusty"),
 		replicaSet("feast-operator-controller-manager-846574fbc4", "rs-feast", "dep-feast"),
 		replicaSet("orphan-rs", "rs-orphan", ""),
@@ -128,7 +128,7 @@ func TestOwnedByDeployment_LookupFailureFailsClosed(t *testing.T) {
 	// A failure is not cached: the next refresh tries again.
 	s.mu.Lock()
 	s.fail = false
-	s.sets = []map[string]interface{}{replicaSet("handmade-rs", "rs-adopted", "dep-trusty")}
+	s.sets = []map[string]any{replicaSet("handmade-rs", "rs-adopted", "dep-trusty")}
 	s.mu.Unlock()
 	if !podMatchesDeployment(c, adoptedPod("handmade-rs-abcde", "handmade-rs", "rs-adopted", cmLabels), trustyDeployment()) {
 		t.Error("the pod is not matched once its ReplicaSet can be read")

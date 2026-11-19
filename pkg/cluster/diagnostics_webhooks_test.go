@@ -39,8 +39,8 @@ func TestStaleWebhooks_NothingDeletedDuringOperatorUpgrade(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			f, c := newFakeAPI(t)
 			setupWebhookFixtures(f)
-			f.obj(csvBase, map[string]interface{}{"items": []interface{}{map[string]interface{}{
-				"metadata": map[string]interface{}{"name": "rhods-operator.3.7.0"}, "status": map[string]interface{}{"phase": phase},
+			f.obj(csvBase, map[string]any{"items": []any{map[string]any{
+				"metadata": map[string]any{"name": "rhods-operator.3.7.0"}, "status": map[string]any{"phase": phase},
 			}}})
 			res, _ := ApplyFix(c, "delete-stale-webhooks")
 			assertWrites(t, f)
@@ -54,10 +54,10 @@ func TestStaleWebhooks_NothingDeletedDuringOperatorUpgrade(t *testing.T) {
 const vwcRuntime = "inferenceservice.serving.kserve.io"
 
 func runtimeWebhookFixture(f *fakeAPI) {
-	f.obj(vwcPath, map[string]interface{}{"items": []interface{}{
-		map[string]interface{}{
-			"metadata": map[string]interface{}{"name": vwcRuntime, "uid": "w1", "resourceVersion": "7", "labels": map[string]string{"platform.opendatahub.io/part-of": "kserve"}},
-			"webhooks": []interface{}{map[string]interface{}{"name": "x", "clientConfig": map[string]interface{}{"service": map[string]interface{}{"namespace": "redhat-ods-applications", "name": "kserve-webhook-server-service"}}}},
+	f.obj(vwcPath, map[string]any{"items": []any{
+		map[string]any{
+			"metadata": map[string]any{"name": vwcRuntime, "uid": "w1", "resourceVersion": "7", "labels": map[string]string{"platform.opendatahub.io/part-of": "kserve"}},
+			"webhooks": []any{map[string]any{"name": "x", "clientConfig": map[string]any{"service": map[string]any{"namespace": "redhat-ods-applications", "name": "kserve-webhook-server-service"}}}},
 		},
 	}})
 	f.json("GET", mwcPath, http.StatusOK, `{"items":[]}`)
@@ -106,11 +106,11 @@ func TestStaleWebhooks_RuntimeConfigDependsOnModuleCR(t *testing.T) {
 
 func TestStaleWebhooks_PartlyServingConfigIsNotStale(t *testing.T) {
 	f, c := newFakeAPI(t)
-	f.obj(vwcPath, map[string]interface{}{"items": []interface{}{map[string]interface{}{
-		"metadata": map[string]interface{}{"name": "mixed.opendatahub.io", "labels": map[string]string{"olm.owner": "rhods-operator.3.5.0"}},
-		"webhooks": []interface{}{
-			map[string]interface{}{"name": "a", "clientConfig": map[string]interface{}{"service": map[string]interface{}{"namespace": "redhat-ods-operator", "name": "gone"}}},
-			map[string]interface{}{"name": "b", "clientConfig": map[string]interface{}{"service": map[string]interface{}{"namespace": "redhat-ods-operator", "name": "alive"}}},
+	f.obj(vwcPath, map[string]any{"items": []any{map[string]any{
+		"metadata": map[string]any{"name": "mixed.opendatahub.io", "labels": map[string]string{"olm.owner": "rhods-operator.3.5.0"}},
+		"webhooks": []any{
+			map[string]any{"name": "a", "clientConfig": map[string]any{"service": map[string]any{"namespace": "redhat-ods-operator", "name": "gone"}}},
+			map[string]any{"name": "b", "clientConfig": map[string]any{"service": map[string]any{"namespace": "redhat-ods-operator", "name": "alive"}}},
 		},
 	}}})
 	f.json("GET", svcPath("redhat-ods-operator", "alive"), http.StatusOK, `{}`)
@@ -122,21 +122,21 @@ func TestStaleWebhooks_PartlyServingConfigIsNotStale(t *testing.T) {
 
 func TestStaleCRDConversion_IsReportedAsGuidance(t *testing.T) {
 	f, c := newFakeAPI(t)
-	crds := map[string]interface{}{"items": []interface{}{
-		map[string]interface{}{
-			"metadata": map[string]interface{}{"name": "mcpservers.mcp.x-k8s.io"},
-			"spec": map[string]interface{}{"conversion": map[string]interface{}{"strategy": "Webhook", "webhook": map[string]interface{}{
-				"clientConfig": map[string]interface{}{"service": map[string]interface{}{"namespace": "redhat-ods-applications", "name": "mcp-lifecycle-operator-webhook-service"}},
+	crds := map[string]any{"items": []any{
+		map[string]any{
+			"metadata": map[string]any{"name": "mcpservers.mcp.x-k8s.io"},
+			"spec": map[string]any{"conversion": map[string]any{"strategy": "Webhook", "webhook": map[string]any{
+				"clientConfig": map[string]any{"service": map[string]any{"namespace": "redhat-ods-applications", "name": "mcp-lifecycle-operator-webhook-service"}},
 			}}},
-			"status": map[string]interface{}{"storedVersions": []string{"v1alpha1", "v1beta1"}},
+			"status": map[string]any{"storedVersions": []string{"v1alpha1", "v1beta1"}},
 		},
-		map[string]interface{}{
-			"metadata": map[string]interface{}{"name": "modelregistries.modelregistry.opendatahub.io"},
-			"spec": map[string]interface{}{"conversion": map[string]interface{}{"strategy": "Webhook", "webhook": map[string]interface{}{
-				"clientConfig": map[string]interface{}{"service": map[string]interface{}{"namespace": "redhat-ods-applications", "name": "model-registry-operator-webhook-service"}},
+		map[string]any{
+			"metadata": map[string]any{"name": "modelregistries.modelregistry.opendatahub.io"},
+			"spec": map[string]any{"conversion": map[string]any{"strategy": "Webhook", "webhook": map[string]any{
+				"clientConfig": map[string]any{"service": map[string]any{"namespace": "redhat-ods-applications", "name": "model-registry-operator-webhook-service"}},
 			}}},
 		},
-		map[string]interface{}{"metadata": map[string]interface{}{"name": "plain.example.com"}, "spec": map[string]interface{}{"conversion": map[string]interface{}{"strategy": "None"}}},
+		map[string]any{"metadata": map[string]any{"name": "plain.example.com"}, "spec": map[string]any{"conversion": map[string]any{"strategy": "None"}}},
 	}}
 	f.handle("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", func(r *http.Request, _ []byte) (int, string) {
 		if r.URL.Query().Get("labelSelector") == "" {

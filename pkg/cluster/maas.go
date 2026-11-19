@@ -380,14 +380,14 @@ func readMaaSDSC(c *Client) (maasDSC, error) {
 	if r.Object == nil {
 		return d, nil
 	}
-	meta, _ := r.Object["metadata"].(map[string]interface{})
+	meta, _ := r.Object["metadata"].(map[string]any)
 	d.name, _ = meta["name"].(string)
 	d.argoApp = argoApplicationOf(r.Object, "DataScienceCluster")
 	d.aigateway, _ = componentManagement(r.Object, "aigateway")
-	spec, _ := r.Object["spec"].(map[string]interface{})
-	comps, _ := spec["components"].(map[string]interface{})
-	ag, _ := comps["aigateway"].(map[string]interface{})
-	sub, _ := ag["modelsAsAService"].(map[string]interface{})
+	spec, _ := r.Object["spec"].(map[string]any)
+	comps, _ := spec["components"].(map[string]any)
+	ag, _ := comps["aigateway"].(map[string]any)
+	sub, _ := ag["modelsAsAService"].(map[string]any)
 	d.maas, _ = sub["managementState"].(string)
 	d.ready, d.readyMsg = dscConditionStatus(r.Object, "ModelsAsAServiceReady")
 	// The AIGateway component reports the condition first-hand; the DSC
@@ -427,11 +427,11 @@ func aigatewayMaaSReady(c *Client) (string, string) {
 
 // dscConditionStatus reads a DataScienceCluster condition: "True", "False"
 // or "" (not reported), with its message.
-func dscConditionStatus(dsc map[string]interface{}, typ string) (string, string) {
-	status, _ := dsc["status"].(map[string]interface{})
-	conds, _ := status["conditions"].([]interface{})
+func dscConditionStatus(dsc map[string]any, typ string) (string, string) {
+	status, _ := dsc["status"].(map[string]any)
+	conds, _ := status["conditions"].([]any)
 	for _, raw := range conds {
-		cond, _ := raw.(map[string]interface{})
+		cond, _ := raw.(map[string]any)
 		if t, _ := cond["type"].(string); t != typ {
 			continue
 		}
@@ -672,8 +672,8 @@ func maasGatewayNamespaces(infraNS string, published []string) []string {
 // the docs' ClusterIP pattern uses the same annotation and Secret name).
 // The external listener stays as the docs make it, so /v1/tenants keeps
 // its hostname.
-func maasGatewayObjects(domain, certificate string, namespaces []string) map[string]map[string]interface{} {
-	values := make([]interface{}, len(namespaces))
+func maasGatewayObjects(domain, certificate string, namespaces []string) map[string]map[string]any {
+	values := make([]any, len(namespaces))
 	for i, n := range namespaces {
 		values[i] = n
 	}
@@ -682,54 +682,54 @@ func maasGatewayObjects(domain, certificate string, namespaces []string) map[str
 	labels["app.kubernetes.io/instance"] = maasGatewayName
 	labels["app.kubernetes.io/component"] = "gateway"
 	labels["opendatahub.io/managed"] = "false"
-	allowed := map[string]interface{}{"namespaces": map[string]interface{}{
+	allowed := map[string]any{"namespaces": map[string]any{
 		"from": "Selector",
-		"selector": map[string]interface{}{"matchExpressions": []interface{}{map[string]interface{}{
+		"selector": map[string]any{"matchExpressions": []any{map[string]any{
 			"key": "kubernetes.io/metadata.name", "operator": "In", "values": values,
 		}}},
 	}}
-	listener := func(name, host, cert string) map[string]interface{} {
-		return map[string]interface{}{
+	listener := func(name, host, cert string) map[string]any {
+		return map[string]any{
 			"name": name, "hostname": host, "port": 443, "protocol": "HTTPS", "allowedRoutes": allowed,
-			"tls": map[string]interface{}{
+			"tls": map[string]any{
 				"mode":            "Terminate",
-				"certificateRefs": []interface{}{map[string]interface{}{"group": "", "kind": "Secret", "name": cert}},
+				"certificateRefs": []any{map[string]any{"group": "", "kind": "Secret", "name": cert}},
 			},
 		}
 	}
-	return map[string]map[string]interface{}{
+	return map[string]map[string]any{
 		"ConfigMap": {
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
-			"metadata":   map[string]interface{}{"name": maasGatewayOptions, "namespace": inferenceGatewayNamespace, "labels": toolLabels()},
-			"data": map[string]interface{}{
+			"metadata":   map[string]any{"name": maasGatewayOptions, "namespace": inferenceGatewayNamespace, "labels": toolLabels()},
+			"data": map[string]any{
 				"service": "metadata:\n  annotations:\n    service.beta.openshift.io/serving-cert-secret-name: " + maasGatewayServiceTLS + "\n",
 			},
 		},
 		"GatewayClass": {
 			"apiVersion": gatewayAPIVersion,
 			"kind":       "GatewayClass",
-			"metadata":   map[string]interface{}{"name": "openshift-default", "labels": toolLabels()},
-			"spec":       map[string]interface{}{"controllerName": gatewayControllerName},
+			"metadata":   map[string]any{"name": "openshift-default", "labels": toolLabels()},
+			"spec":       map[string]any{"controllerName": gatewayControllerName},
 		},
 		"Gateway": {
 			"apiVersion": gatewayAPIVersion,
 			"kind":       "Gateway",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      "maas-default-gateway",
 				"namespace": inferenceGatewayNamespace,
 				"labels":    labels,
-				"annotations": map[string]interface{}{
+				"annotations": map[string]any{
 					"opendatahub.io/managed":                          "false",
 					"security.opendatahub.io/authorino-tls-bootstrap": "true",
 				},
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"gatewayClassName": maasGatewayClass,
-				"infrastructure": map[string]interface{}{
-					"parametersRef": map[string]interface{}{"group": "", "kind": "ConfigMap", "name": maasGatewayOptions},
+				"infrastructure": map[string]any{
+					"parametersRef": map[string]any{"group": "", "kind": "ConfigMap", "name": maasGatewayOptions},
 				},
-				"listeners": []interface{}{
+				"listeners": []any{
 					listener("https", maasHostPrefix+domain, certificate),
 					listener("https-internal", maasGatewayName+"-"+maasGatewayClass+"."+inferenceGatewayNamespace+".svc.cluster.local", maasGatewayServiceTLS),
 				},
@@ -741,30 +741,30 @@ func maasGatewayObjects(domain, certificate string, namespaces []string) map[str
 // maasDBClusterObject is the CloudNativePG cluster: one instance, the
 // smallest volume, database and owner "maas" as scripts/setup-database.sh
 // names them. A development and test database.
-func maasDBClusterObject(ns string) map[string]interface{} {
-	return map[string]interface{}{
+func maasDBClusterObject(ns string) map[string]any {
+	return map[string]any{
 		"apiVersion": "postgresql.cnpg.io/v1",
 		"kind":       "Cluster",
-		"metadata":   map[string]interface{}{"name": "maas-db", "namespace": ns, "labels": toolLabels()},
-		"spec": map[string]interface{}{
+		"metadata":   map[string]any{"name": "maas-db", "namespace": ns, "labels": toolLabels()},
+		"spec": map[string]any{
 			"instances": 1,
-			"storage":   map[string]interface{}{"size": "1Gi"},
-			"bootstrap": map[string]interface{}{"initdb": map[string]interface{}{"database": maasDBName, "owner": maasDBName}},
+			"storage":   map[string]any{"size": "1Gi"},
+			"bootstrap": map[string]any{"initdb": map[string]any{"database": maasDBName, "owner": maasDBName}},
 		},
 	}
 }
 
 // maasDBConfigObject is Secret maas-db-config as setup-database.sh makes it
 // (create_maas_db_config_secret: key DB_CONNECTION_URL, label app=maas-api).
-func maasDBConfigObject(ns, connURL string) map[string]interface{} {
+func maasDBConfigObject(ns, connURL string) map[string]any {
 	labels := toolLabels()
 	labels["app"] = "maas-api"
-	return map[string]interface{}{
+	return map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Secret",
-		"metadata":   map[string]interface{}{"name": "maas-db-config", "namespace": ns, "labels": labels},
+		"metadata":   map[string]any{"name": "maas-db-config", "namespace": ns, "labels": labels},
 		"type":       "Opaque",
-		"data":       map[string]interface{}{"DB_CONNECTION_URL": base64.StdEncoding.EncodeToString([]byte(connURL))},
+		"data":       map[string]any{"DB_CONNECTION_URL": base64.StdEncoding.EncodeToString([]byte(connURL))},
 	}
 }
 
@@ -1031,7 +1031,7 @@ func authorinoTrustsServiceCA(deployment []byte) bool {
 					return true
 				}
 			case "SSL_CERT_DIR":
-				for _, dir := range strings.Split(e.Value, ":") {
+				for dir := range strings.SplitSeq(e.Value, ":") {
 					if mounts[strings.TrimRight(dir, "/")] {
 						return true
 					}
@@ -1055,8 +1055,8 @@ func authorinoTLSCommands(ns, secret string) (cmds, why string) {
 	if len(secret) > 253 || !dns1123Subdomain.MatchString(secret) {
 		return "", fmt.Sprintf("Authorino's CR names its certificate Secret %s (spec.listener.tls.certSecretRef.name), which is not a valid Kubernetes name, so no commands are shown. A cluster-admin checks Authorino authorino in %s", strconv.Quote(truncateText(secret, 300)), ns)
 	}
-	patch, _ := json.Marshal(map[string]interface{}{"spec": map[string]interface{}{"listener": map[string]interface{}{"tls": map[string]interface{}{
-		"enabled": true, "certSecretRef": map[string]interface{}{"name": secret}}}}})
+	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"listener": map[string]any{"tls": map[string]any{
+		"enabled": true, "certSecretRef": map[string]any{"name": secret}}}}})
 	q := shellQuote(ns)
 	return fmt.Sprintf(`oc annotate service authorino-authorino-authorization -n %[1]s \
   service.beta.openshift.io/serving-cert-secret-name=%[2]s --overwrite
@@ -1561,7 +1561,7 @@ func (r *maasStatusRun) modelRow(m llmisvcObject, entry catalogModel, v maasMode
 	c, st := r.c, r.st
 	p := &st.Platform
 	rec, recErr, authPhase, subPhase, toolSub, subErr := v.rec, v.recErr, v.authPhase, v.subPhase, v.toolSub, v.subErr
-	item := types.MaaSModel{ResourceState: types.ResourceState{Namespace: m.Metadata.Namespace, Name: m.Metadata.Name, ManagedByTool: true}}
+	item := types.MaaSModel{Namespace: m.Metadata.Namespace, Name: m.Metadata.Name, ManagedByTool: true}
 	// The catalog's name: the object's annotation is the project's to change.
 	item.DisplayName = entry.DisplayName
 	if cond, ok := findCondition(m.Status.Conditions, "Ready"); ok && cond.Status == "True" {
@@ -1639,8 +1639,8 @@ func (r *maasStatusRun) goneRows(rec maasRecord) {
 			left = append([]string{"MaaSModelRef " + p.model}, left...)
 		}
 		st.Items = append(st.Items, types.MaaSModel{
-			ResourceState: types.ResourceState{Namespace: p.project, Name: p.model, ManagedByTool: true, Deployed: true,
-				Message: "Partly published: no model of this name is in project " + p.project + " any more (it was deleted there, or the project was); " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it."},
+			Namespace: p.project, Name: p.model, ManagedByTool: true, Deployed: true,
+			Message:     "Partly published: no model of this name is in project " + p.project + " any more (it was deleted there, or the project was); " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it.",
 			DisplayName: p.model,
 			Published:   true,
 			Partly:      true,
@@ -1680,7 +1680,7 @@ func dashboardURLOrEmpty(c *Client) string {
 type maasModelRefObject struct {
 	Metadata objectMeta `json:"metadata"`
 	Spec     struct {
-		ModelRefs []map[string]interface{} `json:"modelRefs"`
+		ModelRefs []map[string]any `json:"modelRefs"`
 	} `json:"spec"`
 	Status struct {
 		Phase    string `json:"phase"`

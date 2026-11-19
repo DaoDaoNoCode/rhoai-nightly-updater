@@ -69,7 +69,7 @@ func TestCachedControlPlaneCachesOnlyAnswers(t *testing.T) {
 	delete(a.failPath, infrastructurePath)
 	a.infra = "SingleReplica"
 	a.mu.Unlock()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if cp := cachedControlPlane(c); cp != ControlPlaneSelfManaged {
 			t.Fatalf("poll %d: %q", i, cp)
 		}
@@ -201,7 +201,7 @@ func TestUpdateStream_CatalogImagePullAdvicePerTopology(t *testing.T) {
 // point to the setup.
 func TestLiveCatalogTarget_GitOpsProfilePullAdvice(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
-	f.catalog["spec"].(map[string]interface{})["image"] = testNightlyImage
+	f.catalog["spec"].(map[string]any)["image"] = testNightlyImage
 	f.catalogPods = `{"items":[{"status":{"containerStatuses":[{"state":{"waiting":{"reason":"ImagePullBackOff","message":"unauthorized"}}}]}}]}`
 	var logs []string
 	_, err := liveCatalogTarget(f.client(context.Background()), testNightlyImage, "", "Argo CD application rhoai", func(UpdateStepEvent) {}, &logs)

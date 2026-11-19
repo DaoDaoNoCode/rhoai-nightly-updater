@@ -84,7 +84,7 @@ type fakeSkill struct {
 	tags     map[string]string
 	versions int          // the highest version number
 	deleted  map[int]bool // versions deleted since
-	source   map[string]interface{}
+	source   map[string]any
 	// createdBy is the parent's creator; versions are the caller's.
 	createdBy string
 }
@@ -102,7 +102,7 @@ func sortedKeys(m map[string]string) []string {
 const fakeCaller = "system:serviceaccount:rhoai-nightly-updater:rhoai-nightly-updater"
 
 // orNull is created_by as MLflow answers it: null when unknown.
-func orNull(s string) interface{} {
+func orNull(s string) any {
 	if s == "" {
 		return nil
 	}
@@ -243,7 +243,7 @@ func (f *mlflowFake) mlflowError(w http.ResponseWriter, status int, code, msg st
 	_ = json.NewEncoder(w).Encode(map[string]string{"error_code": code, "message": msg})
 }
 
-func (f *mlflowFake) writeJSON(w http.ResponseWriter, v interface{}) {
+func (f *mlflowFake) writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
 }
@@ -264,7 +264,7 @@ func (f *mlflowFake) newID() string {
 
 // resolveName mirrors the plugin's resource-name parsers
 // (auth/resource_names.py).
-func (f *mlflowFake) resolveName(kind string, r *http.Request, body map[string]interface{}, params map[string]string) []string {
+func (f *mlflowFake) resolveName(kind string, r *http.Request, body map[string]any, params map[string]string) []string {
 	str := func(k string) string { s, _ := body[k].(string); return s }
 	switch kind {
 	case "query:experiment_name":
@@ -283,7 +283,7 @@ func (f *mlflowFake) resolveName(kind string, r *http.Request, body map[string]i
 		}
 	case "body:experiment_ids:get":
 		var out []string
-		ids, _ := body["experiment_ids"].([]interface{})
+		ids, _ := body["experiment_ids"].([]any)
 		for _, id := range ids {
 			if e := f.experiments[fmt.Sprint(id)]; e != nil {
 				out = append(out, e.name)
@@ -362,7 +362,7 @@ func (f *mlflowFake) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.used[rule.key()] = true
-	body := map[string]interface{}{}
+	body := map[string]any{}
 	if data, _ := io.ReadAll(r.Body); len(data) > 0 {
 		if err := json.Unmarshal(data, &body); err != nil {
 			f.mlflowError(w, 400, "MALFORMED_REQUEST", err.Error())
@@ -391,11 +391,11 @@ func (f *mlflowFake) serve(w http.ResponseWriter, r *http.Request) {
 	f.handle(w, r, rule, params, body)
 }
 
-func tagsOf(body map[string]interface{}) map[string]string {
+func tagsOf(body map[string]any) map[string]string {
 	out := map[string]string{}
-	list, _ := body["tags"].([]interface{})
+	list, _ := body["tags"].([]any)
 	for _, t := range list {
-		m, _ := t.(map[string]interface{})
+		m, _ := t.(map[string]any)
 		out[fmt.Sprint(m["key"])] = fmt.Sprint(m["value"])
 	}
 	return out
@@ -414,13 +414,13 @@ func tagList(tags map[string]string) []map[string]string {
 	return out
 }
 
-func (f *mlflowFake) expJSON(e *fakeExperiment) map[string]interface{} {
-	return map[string]interface{}{"experiment": map[string]interface{}{
+func (f *mlflowFake) expJSON(e *fakeExperiment) map[string]any {
+	return map[string]any{"experiment": map[string]any{
 		"experiment_id": e.id, "name": e.name, "lifecycle_stage": e.stage, "tags": tagList(e.tags),
 	}}
 }
 
-func (f *mlflowFake) handle(w http.ResponseWriter, r *http.Request, rule mlflowFakeRule, params map[string]string, body map[string]interface{}) {
+func (f *mlflowFake) handle(w http.ResponseWriter, r *http.Request, rule mlflowFakeRule, params map[string]string, body map[string]any) {
 	str := func(k string) string { s, _ := body[k].(string); return s }
 	notFound := func(what string) { f.mlflowError(w, 404, "RESOURCE_DOES_NOT_EXIST", what+" not found") }
 	switch rule.key() {
@@ -491,9 +491,9 @@ func (f *mlflowFake) handle(w http.ResponseWriter, r *http.Request, rule mlflowF
 		delete(e.tags, str("key"))
 		f.writeJSON(w, map[string]string{})
 	case "POST /api/2.0/mlflow/runs/search":
-		ids, _ := body["experiment_ids"].([]interface{})
+		ids, _ := body["experiment_ids"].([]any)
 		filter := str("filter")
-		out := []interface{}{}
+		out := []any{}
 		var runIDs []string
 		for id := range f.runs {
 			runIDs = append(runIDs, id)
@@ -511,12 +511,12 @@ func (f *mlflowFake) handle(w http.ResponseWriter, r *http.Request, rule mlflowF
 			for k, v := range run.params {
 				ps = append(ps, map[string]string{"key": k, "value": v})
 			}
-			out = append(out, map[string]interface{}{
+			out = append(out, map[string]any{
 				"info": map[string]string{"run_id": run.id, "run_name": run.name, "status": run.status, "lifecycle_stage": run.stage},
-				"data": map[string]interface{}{"params": ps, "tags": tagList(run.tags)},
+				"data": map[string]any{"params": ps, "tags": tagList(run.tags)},
 			})
 		}
-		f.writeJSON(w, map[string]interface{}{"runs": out})
+		f.writeJSON(w, map[string]any{"runs": out})
 	case "POST /api/2.0/mlflow/runs/create":
 		e := f.experiments[str("experiment_id")]
 		if e == nil || e.stage != "active" {
@@ -525,19 +525,19 @@ func (f *mlflowFake) handle(w http.ResponseWriter, r *http.Request, rule mlflowF
 		}
 		run := &fakeRun{id: "run" + f.newID(), exp: e.id, name: str("run_name"), stage: "active", status: "RUNNING", params: map[string]string{}, tags: tagsOf(body)}
 		f.runs[run.id] = run
-		f.writeJSON(w, map[string]interface{}{"run": map[string]interface{}{"info": map[string]string{"run_id": run.id}}})
+		f.writeJSON(w, map[string]any{"run": map[string]any{"info": map[string]string{"run_id": run.id}}})
 	case "POST /api/2.0/mlflow/runs/log-batch":
 		run := f.runs[str("run_id")]
 		if run == nil {
 			notFound("run")
 			return
 		}
-		ps, _ := body["params"].([]interface{})
+		ps, _ := body["params"].([]any)
 		for _, p := range ps {
-			m := p.(map[string]interface{})
+			m := p.(map[string]any)
 			run.params[fmt.Sprint(m["key"])] = fmt.Sprint(m["value"])
 		}
-		ms, _ := body["metrics"].([]interface{})
+		ms, _ := body["metrics"].([]any)
 		if len(ms) > 1000 {
 			f.mlflowError(w, 400, "INVALID_PARAMETER_VALUE", "too many metrics")
 			return
@@ -562,14 +562,14 @@ func (f *mlflowFake) handle(w http.ResponseWriter, r *http.Request, rule mlflowF
 		for a, v := range m.aliases {
 			aliases = append(aliases, map[string]string{"alias": a, "version": v})
 		}
-		f.writeJSON(w, map[string]interface{}{"registered_model": map[string]interface{}{"name": r.URL.Query().Get("name"), "tags": tagList(m.tags), "aliases": aliases}})
+		f.writeJSON(w, map[string]any{"registered_model": map[string]any{"name": r.URL.Query().Get("name"), "tags": tagList(m.tags), "aliases": aliases}})
 	case "POST /api/2.0/mlflow/registered-models/create":
 		if f.models[str("name")] != nil {
 			f.mlflowError(w, 400, "RESOURCE_ALREADY_EXISTS", "model exists")
 			return
 		}
 		f.models[str("name")] = &fakeModel{tags: tagsOf(body), aliases: map[string]string{}}
-		f.writeJSON(w, map[string]interface{}{"registered_model": map[string]string{"name": str("name")}})
+		f.writeJSON(w, map[string]any{"registered_model": map[string]string{"name": str("name")}})
 	case "DELETE /api/2.0/mlflow/registered-models/delete":
 		if f.models[str("name")] == nil {
 			notFound("model")
@@ -584,7 +584,7 @@ func (f *mlflowFake) handle(w http.ResponseWriter, r *http.Request, rule mlflowF
 			notFound("model version")
 			return
 		}
-		f.writeJSON(w, map[string]interface{}{"model_version": map[string]string{"name": r.URL.Query().Get("name"), "version": strconv.Itoa(v), "run_id": m.versions[v-1]}})
+		f.writeJSON(w, map[string]any{"model_version": map[string]string{"name": r.URL.Query().Get("name"), "version": strconv.Itoa(v), "run_id": m.versions[v-1]}})
 	case "POST /api/2.0/mlflow/model-versions/create":
 		m := f.models[str("name")]
 		if m == nil {
@@ -597,7 +597,7 @@ func (f *mlflowFake) handle(w http.ResponseWriter, r *http.Request, rule mlflowF
 			return
 		}
 		m.versions = append(m.versions, str("run_id"))
-		f.writeJSON(w, map[string]interface{}{"model_version": map[string]string{"version": strconv.Itoa(len(m.versions))}})
+		f.writeJSON(w, map[string]any{"model_version": map[string]string{"version": strconv.Itoa(len(m.versions))}})
 	case "POST /api/2.0/mlflow/registered-models/alias":
 		m := f.models[str("name")]
 		if m == nil {
@@ -647,7 +647,7 @@ func (f *mlflowFake) generate(w http.ResponseWriter) {
 			}
 		}
 		if all {
-			f.writeJSON(w, map[string]interface{}{"status": "exists", "experiment_id": e.id, "features_generated": []string{}, "navigation_url": "/experiments/" + e.id})
+			f.writeJSON(w, map[string]any{"status": "exists", "experiment_id": e.id, "features_generated": []string{}, "navigation_url": "/experiments/" + e.id})
 			return
 		}
 	}
@@ -665,7 +665,7 @@ func (f *mlflowFake) generate(w http.ResponseWriter) {
 		e.tags[demoVersionTagPrefix+name] = strconv.Itoa(f.demo.versions[name])
 		generated = append(generated, name)
 	}
-	f.writeJSON(w, map[string]interface{}{"status": "created", "experiment_id": e.id, "features_generated": generated, "navigation_url": "/experiments/" + e.id})
+	f.writeJSON(w, map[string]any{"status": "created", "experiment_id": e.id, "features_generated": generated, "navigation_url": "/experiments/" + e.id})
 }
 
 // mlflowDeleteDemo is MLflow's own demo/delete as seen live: every
@@ -685,7 +685,7 @@ func (f *mlflowFake) mlflowDeleteDemo() {
 	}
 }
 
-func (f *mlflowFake) handleRegistry(w http.ResponseWriter, rule mlflowFakeRule, params map[string]string, body map[string]interface{}) {
+func (f *mlflowFake) handleRegistry(w http.ResponseWriter, rule mlflowFakeRule, params map[string]string, body map[string]any) {
 	str := func(k string) string { s, _ := body[k].(string); return s }
 	name := firstNonEmpty(params["mcp"], params["skill"])
 	srv, sk := f.mcp[name], f.skills[name]
@@ -708,17 +708,17 @@ func (f *mlflowFake) handleRegistry(w http.ResponseWriter, rule mlflowFakeRule, 
 		for i := 0; i < srv.endpoints; i++ {
 			eps = append(eps, map[string]string{"id": strconv.Itoa(i)})
 		}
-		f.writeJSON(w, map[string]interface{}{"name": name, "status": status, "access_endpoints": eps, "tags": srv.tags, "description": srv.description, "created_by": orNull(srv.createdBy)})
+		f.writeJSON(w, map[string]any{"name": name, "status": status, "access_endpoints": eps, "tags": srv.tags, "description": srv.description, "created_by": orNull(srv.createdBy)})
 	case "GET /api/3.0/mlflow/mcp-servers/{mcp}/versions":
 		if srv == nil {
 			notFound()
 			return
 		}
-		list := []map[string]interface{}{}
+		list := []map[string]any{}
 		for _, v := range sortedKeys(srv.versions) {
-			list = append(list, map[string]interface{}{"name": name, "version": v, "status": srv.versions[v], "created_by": fakeCaller})
+			list = append(list, map[string]any{"name": name, "version": v, "status": srv.versions[v], "created_by": fakeCaller})
 		}
-		f.writeJSON(w, map[string]interface{}{"mcp_server_versions": list})
+		f.writeJSON(w, map[string]any{"mcp_server_versions": list})
 	case "DELETE /api/3.0/mlflow/mcp-servers/{mcp}/versions/{v}":
 		if srv == nil {
 			notFound()
@@ -751,12 +751,12 @@ func (f *mlflowFake) handleRegistry(w http.ResponseWriter, rule mlflowFakeRule, 
 		delete(f.mcp, name)
 		f.writeJSON(w, map[string]string{})
 	case "POST /api/3.0/mlflow/mcp-servers/{mcp}/versions":
-		sj, _ := body["server_json"].(map[string]interface{})
+		sj, _ := body["server_json"].(map[string]any)
 		if fmt.Sprint(sj["name"]) != name {
 			f.mlflowError(w, 400, "INVALID_PARAMETER_VALUE", "server_json.name does not match")
 			return
 		}
-		remotes, _ := sj["remotes"].([]interface{})
+		remotes, _ := sj["remotes"].([]any)
 		if len(remotes) == 0 {
 			f.mlflowError(w, 400, "INVALID_PARAMETER_VALUE", "test fake expects remotes")
 			return
@@ -820,26 +820,26 @@ func (f *mlflowFake) handleRegistry(w http.ResponseWriter, rule mlflowFakeRule, 
 			notFound()
 			return
 		}
-		var latest interface{}
+		var latest any
 		for v := sk.versions; v > 0; v-- {
 			if !sk.deleted[v] {
 				latest = v
 				break
 			}
 		}
-		f.writeJSON(w, map[string]interface{}{"name": name, "latest_version": latest, "tags": sk.tags, "created_by": orNull(sk.createdBy)})
+		f.writeJSON(w, map[string]any{"name": name, "latest_version": latest, "tags": sk.tags, "created_by": orNull(sk.createdBy)})
 	case "GET /api/3.0/mlflow/skills/{skill}/versions":
 		if sk == nil {
 			notFound()
 			return
 		}
-		list := []map[string]interface{}{}
+		list := []map[string]any{}
 		for v := 1; v <= sk.versions; v++ {
 			if !sk.deleted[v] {
-				list = append(list, map[string]interface{}{"name": name, "version": v, "created_by": fakeCaller})
+				list = append(list, map[string]any{"name": name, "version": v, "created_by": fakeCaller})
 			}
 		}
-		f.writeJSON(w, map[string]interface{}{"skill_versions": list})
+		f.writeJSON(w, map[string]any{"skill_versions": list})
 	case "DELETE /api/3.0/mlflow/skills/{skill}/versions/{v}":
 		v, _ := strconv.Atoi(params["v"])
 		if sk == nil || v < 1 || v > sk.versions || sk.deleted[v] {
@@ -869,7 +869,7 @@ func (f *mlflowFake) handleRegistry(w http.ResponseWriter, rule mlflowFakeRule, 
 		}
 		sk.versions++
 		sk.source = body
-		f.writeJSON(w, map[string]interface{}{"name": name, "version": sk.versions, "created_by": fakeCaller})
+		f.writeJSON(w, map[string]any{"name": name, "version": sk.versions, "created_by": fakeCaller})
 	case "POST /api/3.0/mlflow/skills/{skill}/tags":
 		if sk == nil {
 			notFound()

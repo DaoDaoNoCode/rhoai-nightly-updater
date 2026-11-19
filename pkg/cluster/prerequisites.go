@@ -1044,7 +1044,7 @@ func operandCommand(e almExample) (string, error) {
 	if !kindPattern.MatchString(e.Kind) || !groupVersion.MatchString(e.APIVersion) || !dns1123Subdomain.MatchString(e.objName()) || e.Namespace != "" {
 		return "", fmt.Errorf("the example has an unexpected apiVersion, kind, name or a namespace")
 	}
-	obj := map[string]interface{}{"apiVersion": e.APIVersion, "kind": e.Kind, "metadata": map[string]string{"name": e.objName()}}
+	obj := map[string]any{"apiVersion": e.APIVersion, "kind": e.Kind, "metadata": map[string]string{"name": e.objName()}}
 	if len(e.Spec) > 0 && string(e.Spec) != "null" {
 		obj["spec"] = e.Spec
 	}

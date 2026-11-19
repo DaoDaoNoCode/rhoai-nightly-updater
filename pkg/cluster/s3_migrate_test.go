@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -72,14 +73,14 @@ func finishJobAfter(f *resourceFake, sim *migrateSim, d time.Duration) {
 }
 
 // jobCopyMode returns a stored copy Job's COPY_MODE.
-func jobCopyMode(job map[string]interface{}) string {
-	tmpl, _ := ensureMap(job, "spec")["template"].(map[string]interface{})
-	spec, _ := tmpl["spec"].(map[string]interface{})
-	ctrs, _ := spec["containers"].([]interface{})
+func jobCopyMode(job map[string]any) string {
+	tmpl, _ := ensureMap(job, "spec")["template"].(map[string]any)
+	spec, _ := tmpl["spec"].(map[string]any)
+	ctrs, _ := spec["containers"].([]any)
 	for _, ctr := range ctrs {
-		env, _ := ctr.(map[string]interface{})["env"].([]interface{})
+		env, _ := ctr.(map[string]any)["env"].([]any)
 		for _, e := range env {
-			if em := e.(map[string]interface{}); em["name"] == "COPY_MODE" {
+			if em := e.(map[string]any); em["name"] == "COPY_MODE" {
 				return fmt.Sprint(em["value"])
 			}
 		}
@@ -94,25 +95,25 @@ func simulateMigrate(f *resourceFake, sim *migrateSim) {
 		for k, obj := range f.objects {
 			switch {
 			case k.plural == "deployments" && k.ns == s3Namespace && k.name == s3Deployment:
-				obj["status"] = map[string]interface{}{"observedGeneration": 1, "replicas": 1, "readyReplicas": 1, "updatedReplicas": 1}
+				obj["status"] = map[string]any{"observedGeneration": 1, "replicas": 1, "readyReplicas": 1, "updatedReplicas": 1}
 			case k.plural == "jobs" && k.name == migrateJobName:
 				sim.mode = jobCopyMode(obj)
-				ensureMap(obj, "spec")["selector"] = map[string]interface{}{"matchLabels": map[string]interface{}{"job-name": migrateJobName}}
+				ensureMap(obj, "spec")["selector"] = map[string]any{"matchLabels": map[string]any{"job-name": migrateJobName}}
 				if !sim.jobRunning {
-					obj["status"] = map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": "Complete", "status": "True"}}}
+					obj["status"] = map[string]any{"conditions": []any{map[string]any{"type": "Complete", "status": "True"}}}
 					pod := fakeKey{gv: "v1", ns: s3Namespace, plural: "pods", name: "seaweedfs-migrate-x7k2p"}
-					f.objects[pod] = map[string]interface{}{
-						"metadata": map[string]interface{}{"name": pod.name, "namespace": s3Namespace, "labels": map[string]interface{}{"job-name": migrateJobName}},
-						"status": map[string]interface{}{"phase": "Succeeded", "containerStatuses": []interface{}{map[string]interface{}{
-							"name": migrateContainer, "state": map[string]interface{}{"terminated": map[string]interface{}{"exitCode": 0, "reason": "Completed", "message": sim.result}},
+					f.objects[pod] = map[string]any{
+						"metadata": map[string]any{"name": pod.name, "namespace": s3Namespace, "labels": map[string]any{"job-name": migrateJobName}},
+						"status": map[string]any{"phase": "Succeeded", "containerStatuses": []any{map[string]any{
+							"name": migrateContainer, "state": map[string]any{"terminated": map[string]any{"exitCode": 0, "reason": "Completed", "message": sim.result}},
 						}}},
 					}
 				}
 			case k.plural == "datasciencepipelinesapplications":
-				es, _ := ensureMap(ensureMap(obj, "spec"), "objectStorage")["externalStorage"].(map[string]interface{})
+				es, _ := ensureMap(ensureMap(obj, "spec"), "objectStorage")["externalStorage"].(map[string]any)
 				if es != nil && es["host"] == s3Host() && sim.objectStore != "" {
 					gen := ensureMap(obj, "metadata")["generation"]
-					obj["status"] = map[string]interface{}{"conditions": []interface{}{map[string]interface{}{
+					obj["status"] = map[string]any{"conditions": []any{map[string]any{
 						"type": "ObjectStoreAvailable", "status": sim.objectStore, "observedGeneration": gen, "message": "Object Store connectivity successfully verified",
 					}}}
 				}
@@ -155,7 +156,7 @@ func recordDSPAs(f *resourceFake, keys ...string) {
 	path := namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)
 	cm := f.get(path)
 	if cm == nil {
-		cm = map[string]interface{}{}
+		cm = map[string]any{}
 	}
 	data := ensureMap(cm, "data")
 	raw, _ := json.Marshal(rec)
@@ -187,13 +188,13 @@ func runMigrate(t *testing.T, c *Client, opts MigrateOptions) (bool, string, str
 	return res.Success, res.Message, res.ErrorCode, steps
 }
 
-func externalStorage(t *testing.T, f *resourceFake, ns, name string) map[string]interface{} {
+func externalStorage(t *testing.T, f *resourceFake, ns, name string) map[string]any {
 	t.Helper()
 	obj := f.get(dspaPath(ns, name))
 	if obj == nil {
 		t.Fatalf("DSPA %s/%s is gone", ns, name)
 	}
-	return ensureMap(ensureMap(obj, "spec"), "objectStorage")["externalStorage"].(map[string]interface{})
+	return ensureMap(ensureMap(obj, "spec"), "objectStorage")["externalStorage"].(map[string]any)
 }
 
 func secretValue(t *testing.T, f *resourceFake, path, key string) string {
@@ -202,12 +203,12 @@ func secretValue(t *testing.T, f *resourceFake, path, key string) string {
 	if obj == nil {
 		t.Fatalf("no secret %s", path)
 	}
-	if sd, ok := obj["stringData"].(map[string]interface{}); ok {
+	if sd, ok := obj["stringData"].(map[string]any); ok {
 		if v, ok := sd[key].(string); ok {
 			return v
 		}
 	}
-	data, _ := obj["data"].(map[string]interface{})
+	data, _ := obj["data"].(map[string]any)
 	v, _ := data[key].(string)
 	return decodeBase64Field(v)
 }
@@ -256,8 +257,8 @@ func TestMigrate_FullRunMovesDataAndToolPipelineServersOnly(t *testing.T) {
 		if secretValue(t, f, migrateSourcePathT, s3AccessKeyField) != legacyKeyID || secretValue(t, f, migrateSourcePathT, s3SecretKeyField) != legacyKey {
 			t.Error("the source Secret does not hold the old keys")
 		}
-		refs, _ := ensureMap(src, "metadata")["ownerReferences"].([]interface{})
-		if len(refs) != 1 || refs[0].(map[string]interface{})["kind"] != "Job" || refs[0].(map[string]interface{})["name"] != migrateJobName {
+		refs, _ := ensureMap(src, "metadata")["ownerReferences"].([]any)
+		if len(refs) != 1 || refs[0].(map[string]any)["kind"] != "Job" || refs[0].(map[string]any)["name"] != migrateJobName {
 			t.Errorf("source Secret owner = %v", refs)
 		}
 	}
@@ -278,7 +279,7 @@ func TestMigrate_FullRunMovesDataAndToolPipelineServersOnly(t *testing.T) {
 		assertConnection(t, f, ps[0], newID, newKey)
 		assertOwnedByDSPA(t, f, secretPath(ps[0], connectionSecretName), ps[0], ps[1])
 	}
-	labels, _ := ensureMap(f.get(dspaPath("juntao-test", legacyDSPAName)), "metadata")["labels"].(map[string]interface{})
+	labels, _ := ensureMap(f.get(dspaPath("juntao-test", legacyDSPAName)), "metadata")["labels"].(map[string]any)
 	if labels[managedByLabelKey] != managedByLabelValue {
 		t.Error("the earlier version's pipeline server did not get the tool label")
 	}
@@ -348,7 +349,7 @@ func TestMigrateJob_RestrictedAndCredentialsOnlyFromSecretRefs(t *testing.T) {
 						Resources struct {
 							Limits, Requests map[string]string
 						} `json:"resources"`
-						SecurityContext map[string]interface{} `json:"securityContext"`
+						SecurityContext map[string]any `json:"securityContext"`
 					} `json:"containers"`
 				} `json:"spec"`
 			} `json:"template"`
@@ -372,10 +373,10 @@ func TestMigrateJob_RestrictedAndCredentialsOnlyFromSecretRefs(t *testing.T) {
 		t.Errorf("image = %s", ctr.Image)
 	}
 	sc := ctr.SecurityContext
-	if sc["runAsNonRoot"] != true || sc["allowPrivilegeEscalation"] != false || sc["seccompProfile"].(map[string]interface{})["type"] != "RuntimeDefault" {
+	if sc["runAsNonRoot"] != true || sc["allowPrivilegeEscalation"] != false || sc["seccompProfile"].(map[string]any)["type"] != "RuntimeDefault" {
 		t.Errorf("securityContext = %v", sc)
 	}
-	if drop := sc["capabilities"].(map[string]interface{})["drop"].([]interface{}); len(drop) != 1 || drop[0] != "ALL" {
+	if drop := sc["capabilities"].(map[string]any)["drop"].([]any); len(drop) != 1 || drop[0] != "ALL" {
 		t.Errorf("capabilities = %v", sc["capabilities"])
 	}
 	if ctr.Resources.Limits["cpu"] == "" || ctr.Resources.Limits["memory"] == "" || ctr.Resources.Requests["cpu"] == "" || ctr.Resources.Requests["memory"] == "" {
@@ -415,7 +416,7 @@ func TestMigrateJob_RestrictedAndCredentialsOnlyFromSecretRefs(t *testing.T) {
 	}
 }
 
-func mustJSON(v interface{}) string {
+func mustJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
 }
@@ -499,7 +500,7 @@ func TestMigrate_SourceWrittenBetweenCheckAndSizeIsNotAMismatch(t *testing.T) {
 }
 
 func TestDeleteWithUIDPropagation_SendsPreconditionAndPolicy(t *testing.T) {
-	var got map[string]interface{}
+	var got map[string]any
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&got)
 		w.Header().Set("Content-Type", "application/json")
@@ -806,7 +807,7 @@ func TestMigrate_ResumesAfterEachStep(t *testing.T) {
 		fastMigrateTimings(t)
 		f, c := newResourceFake(t)
 		putMigrationCase(f)
-		f.put(dspaPath("hand-made", legacyDSPAName), map[string]interface{}{"metadata": map[string]interface{}{}}) // pointed elsewhere by its owner
+		f.put(dspaPath("hand-made", legacyDSPAName), map[string]any{"metadata": map[string]any{}}) // pointed elsewhere by its owner
 		simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
 		if ok, msg, _, _ := runMigrate(t, c, MigrateOptions{}); !ok {
 			t.Fatal(msg)
@@ -823,12 +824,7 @@ func TestMigrate_ResumesAfterEachStep(t *testing.T) {
 }
 
 func hasExactMutation(f *resourceFake, want string) bool {
-	for _, m := range f.mutations() {
-		if m == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(f.mutations(), want)
 }
 
 func hasStep(steps []UpdateStepEvent, id, text string) bool {

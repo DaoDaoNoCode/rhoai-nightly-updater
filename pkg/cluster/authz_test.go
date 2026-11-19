@@ -45,9 +45,9 @@ func TestPermissionReviewUsesTokenOwnerFullRBAC(t *testing.T) {
 				if r.Method != http.MethodPost || r.URL.Path != "/apis/authorization.openshift.io/v1/subjectaccessreviews" || r.Header.Get("Authorization") != "Bearer scoped-user-token" {
 					t.Errorf("wrong review request: %s %s", r.Method, r.URL.Path)
 				}
-				var review map[string]interface{}
+				var review map[string]any
 				json.NewDecoder(r.Body).Decode(&review)
-				if scopes, ok := review["scopes"].([]interface{}); !ok || len(scopes) != 0 {
+				if scopes, ok := review["scopes"].([]any); !ok || len(scopes) != 0 {
 					t.Error("full RBAC scopes must be explicitly empty")
 				}
 				if review["user"] != nil || review["groups"] != nil {

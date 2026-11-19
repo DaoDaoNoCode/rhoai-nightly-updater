@@ -8,7 +8,7 @@ import (
 )
 
 // editModel changes the tool's model in proj as someone else would.
-func editModel(mc *modelsCluster, edit func(spec, meta map[string]interface{})) {
+func editModel(mc *modelsCluster, edit func(spec, meta map[string]any)) {
 	mc.f.mu.Lock()
 	defer mc.f.mu.Unlock()
 	k, _ := parseFakePath(testModelPath)
@@ -16,11 +16,11 @@ func editModel(mc *modelsCluster, edit func(spec, meta map[string]interface{})) 
 	edit(ensureMap(obj, "spec"), ensureMap(obj, "metadata"))
 }
 
-func templateContainer(spec map[string]interface{}, list, name string) map[string]interface{} {
+func templateContainer(spec map[string]any, list, name string) map[string]any {
 	tmpl := ensureMap(spec, "template")
-	items, _ := tmpl[list].([]interface{})
+	items, _ := tmpl[list].([]any)
 	for _, it := range items {
-		if c, ok := it.(map[string]interface{}); ok && c["name"] == name {
+		if c, ok := it.(map[string]any); ok && c["name"] == name {
 			return c
 		}
 	}
@@ -33,19 +33,19 @@ func templateContainer(spec map[string]interface{}, list, name string) map[strin
 // resources. That must not stop a publication.
 func TestMaaSPublish_PublishesAModelKServeDefaulted(t *testing.T) {
 	mc := modelReadyForMaaS(t)
-	editModel(mc, func(spec, meta map[string]interface{}) {
+	editModel(mc, func(spec, meta map[string]any) {
 		main := templateContainer(spec, "containers", "main")
 		req := ensureMap(ensureMap(main, "resources"), "requests")
 		req["ephemeral-storage"] = "2Gi"
 		initC := templateContainer(spec, "initContainers", "storage-initializer")
-		initC["resources"] = map[string]interface{}{"requests": map[string]interface{}{"cpu": "100m", "memory": "100Mi"}, "limits": map[string]interface{}{"cpu": "1", "memory": "1Gi"}}
-		meta["managedFields"] = []interface{}{
-			map[string]interface{}{"manager": toolFieldManager, "operation": "Apply", "apiVersion": "serving.kserve.io/v1alpha2", "fieldsType": "FieldsV1",
-				"fieldsV1": map[string]interface{}{"f:spec": map[string]interface{}{"f:model": map[string]interface{}{}, "f:template": map[string]interface{}{}}}},
-			map[string]interface{}{"manager": "manager", "operation": "Update", "apiVersion": "serving.kserve.io/v1alpha2", "fieldsType": "FieldsV1",
-				"fieldsV1": map[string]interface{}{"f:spec": map[string]interface{}{"f:template": map[string]interface{}{
-					"f:containers":     map[string]interface{}{`k:{"name":"main"}`: map[string]interface{}{"f:resources": map[string]interface{}{"f:requests": map[string]interface{}{"f:ephemeral-storage": map[string]interface{}{}}}}},
-					"f:initContainers": map[string]interface{}{`k:{"name":"storage-initializer"}`: map[string]interface{}{"f:resources": map[string]interface{}{}}},
+		initC["resources"] = map[string]any{"requests": map[string]any{"cpu": "100m", "memory": "100Mi"}, "limits": map[string]any{"cpu": "1", "memory": "1Gi"}}
+		meta["managedFields"] = []any{
+			map[string]any{"manager": toolFieldManager, "operation": "Apply", "apiVersion": "serving.kserve.io/v1alpha2", "fieldsType": "FieldsV1",
+				"fieldsV1": map[string]any{"f:spec": map[string]any{"f:model": map[string]any{}, "f:template": map[string]any{}}}},
+			map[string]any{"manager": "manager", "operation": "Update", "apiVersion": "serving.kserve.io/v1alpha2", "fieldsType": "FieldsV1",
+				"fieldsV1": map[string]any{"f:spec": map[string]any{"f:template": map[string]any{
+					"f:containers":     map[string]any{`k:{"name":"main"}`: map[string]any{"f:resources": map[string]any{"f:requests": map[string]any{"f:ephemeral-storage": map[string]any{}}}}},
+					"f:initContainers": map[string]any{`k:{"name":"storage-initializer"}`: map[string]any{"f:resources": map[string]any{}}},
 				}}}},
 		}
 	})
@@ -60,38 +60,38 @@ func TestMaaSPublish_PublishesAModelKServeDefaulted(t *testing.T) {
 func TestMaaSPublish_RefusesAChangedModelSpec(t *testing.T) {
 	for _, tc := range []struct {
 		name, field string
-		edit        func(spec map[string]interface{})
+		edit        func(spec map[string]any)
 	}{
-		{"main image", "spec.template.containers[main].image", func(spec map[string]interface{}) {
+		{"main image", "spec.template.containers[main].image", func(spec map[string]any) {
 			templateContainer(spec, "containers", "main")["image"] = "quay.io/someone/vllm:latest"
 		}},
-		{"model uri", "spec.model.uri", func(spec map[string]interface{}) {
+		{"model uri", "spec.model.uri", func(spec map[string]any) {
 			ensureMap(spec, "model")["uri"] = "hf://someone/other-model"
 		}},
-		{"extra env", "spec.template.containers[main].env", func(spec map[string]interface{}) {
+		{"extra env", "spec.template.containers[main].env", func(spec map[string]any) {
 			main := templateContainer(spec, "containers", "main")
-			main["env"] = append(main["env"].([]interface{}), map[string]interface{}{"name": "HF_ENDPOINT", "value": "https://evil.example.com"})
+			main["env"] = append(main["env"].([]any), map[string]any{"name": "HF_ENDPOINT", "value": "https://evil.example.com"})
 		}},
-		{"command", "spec.template.containers[main].command", func(spec map[string]interface{}) {
-			templateContainer(spec, "containers", "main")["command"] = []interface{}{"sh", "-c", "curl evil"}
+		{"command", "spec.template.containers[main].command", func(spec map[string]any) {
+			templateContainer(spec, "containers", "main")["command"] = []any{"sh", "-c", "curl evil"}
 		}},
-		{"extra container", "spec.template.containers[sidecar]", func(spec map[string]interface{}) {
+		{"extra container", "spec.template.containers[sidecar]", func(spec map[string]any) {
 			tmpl := ensureMap(spec, "template")
-			tmpl["containers"] = append(tmpl["containers"].([]interface{}), map[string]interface{}{"name": "sidecar", "image": "quay.io/x/y"})
+			tmpl["containers"] = append(tmpl["containers"].([]any), map[string]any{"name": "sidecar", "image": "quay.io/x/y"})
 		}},
-		{"service account", "spec.template.serviceAccountName", func(spec map[string]interface{}) {
+		{"service account", "spec.template.serviceAccountName", func(spec map[string]any) {
 			ensureMap(spec, "template")["serviceAccountName"] = "builder"
 		}},
-		{"preset", "spec.baseRefs", func(spec map[string]interface{}) {
-			spec["baseRefs"] = []interface{}{map[string]interface{}{"name": "my-preset"}}
+		{"preset", "spec.baseRefs", func(spec map[string]any) {
+			spec["baseRefs"] = []any{map[string]any{"name": "my-preset"}}
 		}},
-		{"prefill", "spec.prefill", func(spec map[string]interface{}) {
-			spec["prefill"] = map[string]interface{}{"template": map[string]interface{}{}}
+		{"prefill", "spec.prefill", func(spec map[string]any) {
+			spec["prefill"] = map[string]any{"template": map[string]any{}}
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mc := modelReadyForMaaS(t)
-			editModel(mc, func(spec, _ map[string]interface{}) { tc.edit(spec) })
+			editModel(mc, func(spec, _ map[string]any) { tc.edit(spec) })
 			mc.f.requests = nil
 			res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"})
 			if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "was changed since this tool set it up: "+tc.field) ||

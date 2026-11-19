@@ -3,8 +3,10 @@ package cluster
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -40,7 +42,7 @@ func newFakeOperationConfigMap(t *testing.T) (*fakeOperationConfigMap, *Client) 
 
 func (f *fakeOperationConfigMap) status(w http.ResponseWriter, code int, reason string) {
 	w.WriteHeader(code)
-	out, _ := json.Marshal(map[string]interface{}{"kind": "Status", "status": "Failure", "code": code, "reason": reason})
+	out, _ := json.Marshal(map[string]any{"kind": "Status", "status": "Failure", "code": code, "reason": reason})
 	w.Write(out)
 }
 
@@ -60,7 +62,7 @@ func (f *fakeOperationConfigMap) ServeHTTP(w http.ResponseWriter, r *http.Reques
 			f.status(w, 404, "NotFound")
 			return
 		}
-		out, _ := json.Marshal(map[string]interface{}{
+		out, _ := json.Marshal(map[string]any{
 			"metadata": map[string]string{"resourceVersion": strconv.Itoa(f.rv)},
 			"data":     f.data,
 		})
@@ -78,9 +80,7 @@ func (f *fakeOperationConfigMap) ServeHTTP(w http.ResponseWriter, r *http.Reques
 			f.status(w, 409, "Conflict")
 			return
 		}
-		for k, v := range body.Data {
-			f.data[k] = v
-		}
+		maps.Copy(f.data, body.Data)
 		f.rv++
 		w.Write([]byte(`{}`))
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/namespaces/test-ns/configmaps":
@@ -120,7 +120,7 @@ func (f *fakeOperationConfigMap) reqs() []string {
 	return append([]string(nil), f.requests...)
 }
 
-func (f *fakeOperationConfigMap) set(key string, v interface{}) {
+func (f *fakeOperationConfigMap) set(key string, v any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.data == nil {
@@ -139,12 +139,7 @@ func testLease(id, boot string, beat time.Time) *types.OperationLease {
 // heldBy treats a lease of any boot ID in alive as held by a live process.
 func heldBy(alive ...string) func(*types.OperationLease) bool {
 	return func(l *types.OperationLease) bool {
-		for _, b := range alive {
-			if l.BootID == b {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(alive, l.BootID)
 	}
 }
 

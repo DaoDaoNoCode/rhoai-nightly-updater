@@ -49,14 +49,12 @@ func TestAPIServerTransportUsesHTTP2AndReusesConnections(t *testing.T) {
 		t.Fatalf("expected HTTP/2.0, got %q", proto)
 	}
 	var wg sync.WaitGroup
-	for i := 0; i < 12; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 12 {
+		wg.Go(func() {
 			if proto := get(); proto != "HTTP/2.0" {
 				t.Errorf("expected HTTP/2.0, got %q", proto)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if n := newConns.Load(); n != 1 {

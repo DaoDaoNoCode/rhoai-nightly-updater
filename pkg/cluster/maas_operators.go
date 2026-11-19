@@ -77,7 +77,7 @@ func rhclChannel(p operatorPackage) (string, string) {
 // reached: "Set RATELIMIT_CHECK_SERVICE_FAILURE_MODE and
 // RATELIMIT_REPORT_SERVICE_FAILURE_MODE to deny on the operator
 // Subscription (spec.config.env)".
-var rhclDenyOnFailureEnv = []map[string]interface{}{
+var rhclDenyOnFailureEnv = []map[string]any{
 	{"name": "RATELIMIT_CHECK_SERVICE_FAILURE_MODE", "value": "deny"},
 	{"name": "RATELIMIT_REPORT_SERVICE_FAILURE_MODE", "value": "deny"},
 }
@@ -86,9 +86,9 @@ var rhclDenyOnFailureEnv = []map[string]interface{}{
 // does not set to deny.
 func rhclMissingDenyEnv(sub *olmSubscription) []string {
 	have := map[string]string{}
-	env, _ := sub.Spec.Config["env"].([]interface{})
+	env, _ := sub.Spec.Config["env"].([]any)
 	for _, e := range env {
-		m, _ := e.(map[string]interface{})
+		m, _ := e.(map[string]any)
 		name, _ := m["name"].(string)
 		value, _ := m["value"].(string)
 		have[name] = value
@@ -105,12 +105,12 @@ func rhclMissingDenyEnv(sub *olmSubscription) []string {
 // rhclDenyEnvPatch is the Subscription's spec.config.env with the
 // deny-on-failure variables set and every other entry kept (a merge patch
 // replaces a list whole).
-func rhclDenyEnvPatch(sub *olmSubscription) []interface{} {
-	var out []interface{}
+func rhclDenyEnvPatch(sub *olmSubscription) []any {
+	var out []any
 	set := map[string]bool{}
-	env, _ := sub.Spec.Config["env"].([]interface{})
+	env, _ := sub.Spec.Config["env"].([]any)
 	for _, e := range env {
-		m, _ := e.(map[string]interface{})
+		m, _ := e.(map[string]any)
 		name, _ := m["name"].(string)
 		for _, want := range rhclDenyOnFailureEnv {
 			if want["name"] == name {
@@ -298,7 +298,7 @@ func oomKilledContainers(c *Client, st operatorState) ([]string, error) {
 // spec.config.resources, for every container of the CSV). It returns why
 // it is not offered instead: more than one container (the value would
 // apply to all), or a limit already at least rhclMemoryLimit.
-func rhclMemoryResources(containers []operatorContainer) (map[string]interface{}, string) {
+func rhclMemoryResources(containers []operatorContainer) (map[string]any, string) {
 	if len(containers) != 1 {
 		return nil, fmt.Sprintf("its CSV runs %d containers, and a Subscription's resources apply to every one of them", len(containers))
 	}
@@ -308,9 +308,9 @@ func rhclMemoryResources(containers []operatorContainer) (map[string]interface{}
 	if limit >= want {
 		return nil, fmt.Sprintf("its memory limit is already %s", res["limits"]["memory"])
 	}
-	out := map[string]interface{}{}
+	out := map[string]any{}
 	for _, kind := range []string{"limits", "requests"} {
-		values := map[string]interface{}{}
+		values := map[string]any{}
 		for k, v := range res[kind] {
 			values[k] = v
 		}

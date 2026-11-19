@@ -23,7 +23,7 @@ var HandleDashboardState = withAuth(func(c *cluster.Client, w http.ResponseWrite
 		// Not deployed: still report a paused dashboard-operator so the page
 		// can offer Revert (for example while a Dashboard CR deletion waits
 		// for the paused operator to process its finalizer).
-		body := map[string]interface{}{"error": message, "errorCode": code}
+		body := map[string]any{"error": message, "errorCode": code}
 		if override, oErr := cluster.DashboardOverrideSummary(c); oErr == nil && override != nil && override.Active {
 			body["override"] = override
 		}

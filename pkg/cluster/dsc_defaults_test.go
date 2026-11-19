@@ -113,9 +113,9 @@ func TestDefaultDSCUsesInstalledCSVAndBranchCache(t *testing.T) {
 		t.Fatalf("defaults: %+v, %v", first, err)
 	}
 	// Every caller gets a fresh parsed map; repairs must never mutate cached defaults.
-	first.Spec["spec"].(map[string]interface{})["components"] = nil
+	first.Spec["spec"].(map[string]any)["components"] = nil
 	second, err := fetchDefaultDSCSpec(c, "")
-	if err != nil || second.Spec["spec"].(map[string]interface{})["components"] == nil {
+	if err != nil || second.Spec["spec"].(map[string]any)["components"] == nil {
 		t.Fatal("shared mutable defaults")
 	}
 	if len(fetched) != 1 {
@@ -169,22 +169,22 @@ func TestDefaultDSCVersionFallbackAndFailures(t *testing.T) {
 	}
 }
 
-func testDSCSchema() map[string]interface{} {
-	state := map[string]interface{}{"type": "string"}
-	component := map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+func testDSCSchema() map[string]any {
+	state := map[string]any{"type": "string"}
+	component := map[string]any{"type": "object", "properties": map[string]any{
 		"managementState":      state,
 		"optionalValidSetting": state,
-		"config":               map[string]interface{}{"type": "object", "additionalProperties": true},
+		"config":               map[string]any{"type": "object", "additionalProperties": true},
 	}}
-	return map[string]interface{}{"type": "object", "properties": map[string]interface{}{
-		"components": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"dashboard": component, "aipipelines": component}},
-		"extensions": map[string]interface{}{"type": "object", "x-kubernetes-preserve-unknown-fields": true},
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"components": map[string]any{"type": "object", "properties": map[string]any{"dashboard": component, "aipipelines": component}},
+		"extensions": map[string]any{"type": "object", "x-kubernetes-preserve-unknown-fields": true},
 	}}
 }
 
 func testDSCCRD() string {
-	body, _ := json.Marshal(map[string]interface{}{"spec": map[string]interface{}{"versions": []interface{}{map[string]interface{}{
-		"name": "v2", "served": true, "schema": map[string]interface{}{"openAPIV3Schema": map[string]interface{}{"properties": map[string]interface{}{"spec": testDSCSchema()}}},
+	body, _ := json.Marshal(map[string]any{"spec": map[string]any{"versions": []any{map[string]any{
+		"name": "v2", "served": true, "schema": map[string]any{"openAPIV3Schema": map[string]any{"properties": map[string]any{"spec": testDSCSchema()}}},
 	}}}})
 	return string(body)
 }
@@ -196,7 +196,7 @@ func TestDSCCompatibilityChecksKeysAndPreservesOptionalFields(t *testing.T) {
 		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""):                            csvListMock("3.6.0-ea.2"),
 	})
 	defer cleanup()
-	var dsc map[string]interface{}
+	var dsc map[string]any
 	json.Unmarshal([]byte(`{"apiVersion":"datasciencecluster.opendatahub.io/v2","spec":{"components":{"dashboard":{"managementState":"Removed","optionalValidSetting":"custom","oldField":"x","config":{"arbitrary":"value"}},"trainingoperator":{"managementState":"Removed"}},"extensions":{"custom":"keep"}}}`), &dsc)
 	result := checkDSCCompatibility(c, dsc)
 	if !reflect.DeepEqual(result.InvalidFields, []string{"spec.components.dashboard.oldField", "spec.components.trainingoperator"}) {
@@ -219,7 +219,7 @@ func TestRepairDSCPrunesOrResetsWithExplicitDeletions(t *testing.T) {
 				}
 				return 200, testDSCSample
 			})
-			var patch map[string]interface{}
+			var patch map[string]any
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case r.Method == "PATCH" && strings.Contains(r.URL.Path, "datascienceclusters/"):
@@ -244,15 +244,15 @@ func TestRepairDSCPrunesOrResetsWithExplicitDeletions(t *testing.T) {
 			if err != nil || !result.Success {
 				t.Fatalf("repair: %+v %v", result, err)
 			}
-			meta := patch["metadata"].(map[string]interface{})
-			if !reflect.DeepEqual(meta, map[string]interface{}{"resourceVersion": "42"}) {
+			meta := patch["metadata"].(map[string]any)
+			if !reflect.DeepEqual(meta, map[string]any{"resourceVersion": "42"}) {
 				t.Fatalf("metadata modified: %v", meta)
 			}
-			components := patch["spec"].(map[string]interface{})["components"].(map[string]interface{})
+			components := patch["spec"].(map[string]any)["components"].(map[string]any)
 			if v, exists := components["trainingoperator"]; !exists || v != nil {
 				t.Fatal("deprecated component was not explicitly deleted")
 			}
-			dashboard := components["dashboard"].(map[string]interface{})
+			dashboard := components["dashboard"].(map[string]any)
 			if v, exists := dashboard["oldField"]; !exists || v != nil {
 				t.Fatal("deprecated nested field was not deleted")
 			}

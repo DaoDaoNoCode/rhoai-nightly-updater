@@ -1300,7 +1300,7 @@ func dataScienceClusterPath(c *Client) (string, error) {
 	if read.State == DSCStateNoCRD {
 		return "", fmt.Errorf("the DataScienceCluster API is not installed")
 	}
-	meta, _ := read.Object["metadata"].(map[string]interface{})
+	meta, _ := read.Object["metadata"].(map[string]any)
 	name, _ := meta["name"].(string)
 	if name == "" {
 		return "", fmt.Errorf("no DataScienceCluster exists")

@@ -39,7 +39,7 @@ type operatorDeployment struct {
 	Namespace, Name, UID, ResourceVersion string
 	Strategy                              string // RollingUpdate (default) or Recreate
 	Replicas, Available                   int
-	MaxUnavailable, MaxSurge              interface{}
+	MaxUnavailable, MaxSurge              any
 	TemplateLabels                        map[string]string
 	OwnerKinds                            []string
 	PartOf                                string
@@ -64,8 +64,8 @@ type deploymentJSON struct {
 		Strategy struct {
 			Type          string `json:"type"`
 			RollingUpdate *struct {
-				MaxUnavailable interface{} `json:"maxUnavailable"`
-				MaxSurge       interface{} `json:"maxSurge"`
+				MaxUnavailable any `json:"maxUnavailable"`
+				MaxSurge       any `json:"maxSurge"`
 			} `json:"rollingUpdate"`
 		} `json:"strategy"`
 		Template struct {
@@ -230,7 +230,7 @@ func (d operatorDeployment) strategyText() string {
 	if d.Strategy == "Recreate" {
 		return "Recreate"
 	}
-	show := func(v interface{}) string {
+	show := func(v any) string {
 		if v == nil {
 			return "25%"
 		}
@@ -385,9 +385,9 @@ func applyFixRestartModuleOperator(c *Client, module string) (*types.OperationRe
 	if !b.Restart.OK {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Not restarting %s: %s. Nothing was changed.", d.ref(), b.Restart.Reason), Logs: logs, ErrorCode: "prerequisites"}, nil
 	}
-	patch, _ := json.Marshal(map[string]interface{}{
-		"metadata": map[string]interface{}{"uid": d.UID, "resourceVersion": d.ResourceVersion},
-		"spec": map[string]interface{}{"template": map[string]interface{}{"metadata": map[string]interface{}{
+	patch, _ := json.Marshal(map[string]any{
+		"metadata": map[string]any{"uid": d.UID, "resourceVersion": d.ResourceVersion},
+		"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
 			"annotations": map[string]string{restartAnnotation: nowRFC3339()},
 		}}},
 	})

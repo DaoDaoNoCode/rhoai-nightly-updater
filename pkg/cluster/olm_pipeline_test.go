@@ -13,8 +13,8 @@ import (
 
 const testNightlyImage = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:new"
 
-func cond(typ, reason, msg string) map[string]interface{} {
-	return map[string]interface{}{"type": typ, "status": "True", "reason": reason, "message": msg}
+func cond(typ, reason, msg string) map[string]any {
+	return map[string]any{"type": typ, "status": "True", "reason": reason, "message": msg}
 }
 
 // A01-2: success is reported only once OLM installed the CSV; every OLM
@@ -23,7 +23,7 @@ func TestUpdateStream_WaitsForOLMOutcome(t *testing.T) {
 	const newCSV = "rhods-operator.3.6.1"
 	for _, tc := range []struct {
 		name        string
-		onSubscribe func(*fakeOLM, map[string]interface{})
+		onSubscribe func(*fakeOLM, map[string]any)
 		wantSuccess bool
 		wantCode    string
 		wantRestore bool
@@ -31,39 +31,39 @@ func TestUpdateStream_WaitsForOLMOutcome(t *testing.T) {
 	}{
 		{name: "installed", onSubscribe: olmInstalls(newCSV), wantSuccess: true, wantInMsg: newCSV + " is installed"},
 		{name: "resolution failed", wantCode: "resolution_failed", wantRestore: true, wantInMsg: "constraints not satisfiable",
-			onSubscribe: func(f *fakeOLM, _ map[string]interface{}) {
-				f.sub["status"] = map[string]interface{}{"conditions": []interface{}{cond("ResolutionFailed", "ConstraintsNotSatisfiable", "constraints not satisfiable")}}
+			onSubscribe: func(f *fakeOLM, _ map[string]any) {
+				f.sub["status"] = map[string]any{"conditions": []any{cond("ResolutionFailed", "ConstraintsNotSatisfiable", "constraints not satisfiable")}}
 			}},
 		{name: "bundle unpack failed", wantCode: "bundle_unpack_failed", wantRestore: true, wantInMsg: "bundle-unpack Job",
-			onSubscribe: func(f *fakeOLM, _ map[string]interface{}) {
-				f.sub["status"] = map[string]interface{}{"conditions": []interface{}{cond("BundleUnpackFailed", "BundleUnpackFailed", "DeadlineExceeded")}}
+			onSubscribe: func(f *fakeOLM, _ map[string]any) {
+				f.sub["status"] = map[string]any{"conditions": []any{cond("BundleUnpackFailed", "BundleUnpackFailed", "DeadlineExceeded")}}
 			}},
 		{name: "install plan failed", wantCode: "installplan_failed", wantRestore: true, wantInMsg: "InstallComponentFailed",
-			onSubscribe: func(f *fakeOLM, _ map[string]interface{}) {
-				f.installPlans["install-new"] = map[string]interface{}{"spec": map[string]interface{}{}, "status": map[string]interface{}{"phase": "Failed",
-					"conditions": []interface{}{map[string]interface{}{"type": "Installed", "status": "False", "reason": "InstallComponentFailed", "message": "CRD step failed"}}}}
-				f.sub["status"] = map[string]interface{}{"installPlanRef": map[string]interface{}{"name": "install-new"}}
+			onSubscribe: func(f *fakeOLM, _ map[string]any) {
+				f.installPlans["install-new"] = map[string]any{"spec": map[string]any{}, "status": map[string]any{"phase": "Failed",
+					"conditions": []any{map[string]any{"type": "Installed", "status": "False", "reason": "InstallComponentFailed", "message": "CRD step failed"}}}}
+				f.sub["status"] = map[string]any{"installPlanRef": map[string]any{"name": "install-new"}}
 			}},
 		{name: "csv failed", wantCode: "csv_failed", wantRestore: true, wantInMsg: "InstallCheckFailed",
-			onSubscribe: func(f *fakeOLM, _ map[string]interface{}) {
-				f.installPlans["install-new"] = map[string]interface{}{"spec": map[string]interface{}{}, "status": map[string]interface{}{"phase": "Complete"}}
+			onSubscribe: func(f *fakeOLM, _ map[string]any) {
+				f.installPlans["install-new"] = map[string]any{"spec": map[string]any{}, "status": map[string]any{"phase": "Complete"}}
 				f.addCSV(newCSV, "Failed")
-				f.csvs[newCSV]["status"] = map[string]interface{}{"phase": "Failed", "reason": "InstallCheckFailed", "message": "install timeout"}
-				f.sub["status"] = map[string]interface{}{"currentCSV": newCSV, "installedCSV": newCSV, "installPlanRef": map[string]interface{}{"name": "install-new"}}
+				f.csvs[newCSV]["status"] = map[string]any{"phase": "Failed", "reason": "InstallCheckFailed", "message": "install timeout"}
+				f.sub["status"] = map[string]any{"currentCSV": newCSV, "installedCSV": newCSV, "installPlanRef": map[string]any{"name": "install-new"}}
 			}},
 		{name: "OLM never acts", wantCode: "install_timeout", wantRestore: true, wantInMsg: "did not finish installing",
-			onSubscribe: func(*fakeOLM, map[string]interface{}) {}},
+			onSubscribe: func(*fakeOLM, map[string]any) {}},
 		{name: "still installing at timeout", wantCode: "install_timeout", wantRestore: false, wantInMsg: "kept because OLM is still installing",
-			onSubscribe: func(f *fakeOLM, _ map[string]interface{}) {
-				f.installPlans["install-new"] = map[string]interface{}{"spec": map[string]interface{}{}, "status": map[string]interface{}{"phase": "Installing"}}
+			onSubscribe: func(f *fakeOLM, _ map[string]any) {
+				f.installPlans["install-new"] = map[string]any{"spec": map[string]any{}, "status": map[string]any{"phase": "Installing"}}
 				f.addCSV(newCSV, "Installing")
-				f.sub["status"] = map[string]interface{}{"currentCSV": newCSV, "installPlanRef": map[string]interface{}{"name": "install-new"}}
+				f.sub["status"] = map[string]any{"currentCSV": newCSV, "installPlanRef": map[string]any{"name": "install-new"}}
 			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"channel": "fast"})
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"channel": "fast"})
 			f.channels = `[{"name":"stable-3.x","currentCSV":"` + newCSV + `"}]`
-			f.onSubscribe = func(f *fakeOLM, spec map[string]interface{}) {
+			f.onSubscribe = func(f *fakeOLM, spec map[string]any) {
 				if spec["channel"] != "fast" { // the restored Subscription is not the attempt
 					tc.onSubscribe(f, spec)
 				}
@@ -90,9 +90,9 @@ func TestUpdateStream_WaitsForOLMOutcome(t *testing.T) {
 			}
 			f.mu.Lock()
 			defer f.mu.Unlock()
-			spec, _ := f.sub["spec"].(map[string]interface{})
+			spec, _ := f.sub["spec"].(map[string]any)
 			if tc.wantRestore {
-				image, _ := f.catalog["spec"].(map[string]interface{})["image"].(string)
+				image, _ := f.catalog["spec"].(map[string]any)["image"].(string)
 				if spec["channel"] != "fast" || !strings.HasSuffix(image, "@sha256:old") {
 					t.Fatalf("previous state not restored: sub=%v catalog=%v", spec, image)
 				}
@@ -137,13 +137,13 @@ func TestUpdateStream_OrderAndSingleSubscriptionApply(t *testing.T) {
 // A01-3: spec.config and Manual approval survive Update, Refresh and
 // Reinstall; the generated InstallPlan for RHOAI is approved once.
 func TestOperationsPreserveSubscriptionSettings(t *testing.T) {
-	config := map[string]interface{}{"env": []interface{}{map[string]interface{}{"name": "DISABLE_DSC_CONFIG", "value": "true"}}, "nodeSelector": map[string]interface{}{"node-role.kubernetes.io/infra": ""}}
+	config := map[string]any{"env": []any{map[string]any{"name": "DISABLE_DSC_CONFIG", "value": "true"}}, "nodeSelector": map[string]any{"node-role.kubernetes.io/infra": ""}}
 	for _, op := range []string{"update", "refresh", "reinstall"} {
 		t.Run(op, func(t *testing.T) {
-			f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"installPlanApproval": "Manual", "config": config, "startingCSV": "rhods-operator.3.5.0"})
-			f.onSubscribe = func(f *fakeOLM, _ map[string]interface{}) {
-				f.installPlans["install-new"] = map[string]interface{}{"spec": map[string]interface{}{"approved": false, "clusterServiceVersionNames": []interface{}{"rhods-operator.3.6.0"}}, "status": map[string]interface{}{"phase": "RequiresApproval"}}
-				f.sub["status"] = map[string]interface{}{"currentCSV": "rhods-operator.3.6.0", "installPlanRef": map[string]interface{}{"name": "install-new"}}
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"installPlanApproval": "Manual", "config": config, "startingCSV": "rhods-operator.3.5.0"})
+			f.onSubscribe = func(f *fakeOLM, _ map[string]any) {
+				f.installPlans["install-new"] = map[string]any{"spec": map[string]any{"approved": false, "clusterServiceVersionNames": []any{"rhods-operator.3.6.0"}}, "status": map[string]any{"phase": "RequiresApproval"}}
+				f.sub["status"] = map[string]any{"currentCSV": "rhods-operator.3.6.0", "installPlanRef": map[string]any{"name": "install-new"}}
 			}
 			f.onApprove = func(f *fakeOLM, ip string) {
 				olmInstalls("rhods-operator.3.6.0")(f, nil)
@@ -175,7 +175,7 @@ func TestOperationsPreserveSubscriptionSettings(t *testing.T) {
 			spec := applies[len(applies)-1]
 			// Refresh pins the installed CSV (R5-F3); the others drop the
 			// old channel's startingCSV.
-			wantStart := interface{}(nil)
+			wantStart := any(nil)
 			if op == "refresh" {
 				wantStart = "rhods-operator.3.6.0"
 			}
@@ -194,10 +194,10 @@ func TestOperationsPreserveSubscriptionSettings(t *testing.T) {
 }
 
 func TestManualApprovalNotGivenForOtherOperators(t *testing.T) {
-	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"installPlanApproval": "Manual"})
-	f.onSubscribe = func(f *fakeOLM, _ map[string]interface{}) {
-		f.installPlans["install-new"] = map[string]interface{}{"spec": map[string]interface{}{"clusterServiceVersionNames": []interface{}{"rhods-operator.3.6.0", "other-operator.v1.0.0"}}, "status": map[string]interface{}{"phase": "RequiresApproval"}}
-		f.sub["status"] = map[string]interface{}{"installPlanRef": map[string]interface{}{"name": "install-new"}}
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"installPlanApproval": "Manual"})
+	f.onSubscribe = func(f *fakeOLM, _ map[string]any) {
+		f.installPlans["install-new"] = map[string]any{"spec": map[string]any{"clusterServiceVersionNames": []any{"rhods-operator.3.6.0", "other-operator.v1.0.0"}}, "status": map[string]any{"phase": "RequiresApproval"}}
+		f.sub["status"] = map[string]any{"installPlanRef": map[string]any{"name": "install-new"}}
 	}
 	result, err := UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != "approval_required" {
@@ -354,7 +354,7 @@ func TestPreflightLabelsVerificationCatalog(t *testing.T) {
 	defer f.mu.Unlock()
 	for _, r := range f.requests {
 		if r.Method == http.MethodPatch && strings.Contains(r.Path, "-verify-") {
-			labels, _ := r.Body["metadata"].(map[string]interface{})["labels"].(map[string]interface{})
+			labels, _ := r.Body["metadata"].(map[string]any)["labels"].(map[string]any)
 			if labels[catalogPurposeLabel] != verificationCatalogRole || labels[managedByLabel] != managedByValue {
 				t.Fatalf("labels = %v", labels)
 			}
@@ -369,13 +369,13 @@ func TestPreflightLabelsVerificationCatalog(t *testing.T) {
 func TestEnsureOperatorNamespaceAndGroup(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		groups  []interface{}
+		groups  []any
 		problem string
 		creates bool
 	}{
-		{"global group", []interface{}{map[string]interface{}{"metadata": map[string]interface{}{"name": "og"}, "spec": map[string]interface{}{}}}, "", false},
-		{"two groups", []interface{}{map[string]interface{}{"metadata": map[string]interface{}{"name": "a"}}, map[string]interface{}{"metadata": map[string]interface{}{"name": "b"}}}, "TooManyOperatorGroups", false},
-		{"own namespace group", []interface{}{map[string]interface{}{"metadata": map[string]interface{}{"name": "og"}, "spec": map[string]interface{}{"targetNamespaces": []interface{}{SubNS}}}}, "AllNamespaces", false},
+		{"global group", []any{map[string]any{"metadata": map[string]any{"name": "og"}, "spec": map[string]any{}}}, "", false},
+		{"two groups", []any{map[string]any{"metadata": map[string]any{"name": "a"}}, map[string]any{"metadata": map[string]any{"name": "b"}}}, "TooManyOperatorGroups", false},
+		{"own namespace group", []any{map[string]any{"metadata": map[string]any{"name": "og"}, "spec": map[string]any{"targetNamespaces": []any{SubNS}}}}, "AllNamespaces", false},
 		{"missing", nil, "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -396,7 +396,7 @@ func TestEnsureOperatorNamespaceAndGroup(t *testing.T) {
 // Reinstall must not run with an unusable OperatorGroup (A01-12).
 func TestReinstallRefusesBadOperatorGroup(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
-	f.operatorGrps = append(f.operatorGrps, map[string]interface{}{"metadata": map[string]interface{}{"name": "second"}})
+	f.operatorGrps = append(f.operatorGrps, map[string]any{"metadata": map[string]any{"name": "second"}})
 	result, err := Reinstall(f.client(context.Background()), "nightly", testNightlyImage, "")
 	if err != nil || result.Success || result.ErrorCode != "prerequisites" {
 		t.Fatalf("result=%+v err=%v", result, err)
@@ -427,8 +427,8 @@ func TestReinstallStableTargets(t *testing.T) {
 		{name: "nightly to older GA confirmed", installed: "rhods-operator.3.6.0", phase: "Succeeded", source: CatalogName, allow: true, wantSuccess: true, wantMsg: "is installed", wantWrites: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newFakeOLM(t).installed(tc.installed, map[string]interface{}{"source": tc.source})
-			f.csvs[tc.installed]["status"] = map[string]interface{}{"phase": tc.phase}
+			f := newFakeOLM(t).installed(tc.installed, map[string]any{"source": tc.source})
+			f.csvs[tc.installed]["status"] = map[string]any{"phase": tc.phase}
 			f.stableChans = stable
 			f.onSubscribe = olmInstalls("rhods-operator.3.5.1")
 			result, err := ReinstallWithOptions(f.client(context.Background()), "stable", "", "", OperationOptions{AllowDowngrade: tc.allow})
@@ -496,7 +496,7 @@ func TestFailuresMarkStepAndKeepLogs(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		// The user cancels when the wait first polls the new Subscription.
 		subscribed := false
-		f.onSubscribe = func(*fakeOLM, map[string]interface{}) { subscribed = true }
+		f.onSubscribe = func(*fakeOLM, map[string]any) { subscribed = true }
 		f.intercept = func(_ *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
 			if subscribed && r.Method == http.MethodGet && r.URL.Path == subscriptionPath() {
 				cancel()
@@ -517,7 +517,7 @@ func TestFailuresMarkStepAndKeepLogs(t *testing.T) {
 // A01-9: when the swapped catalog has no matching channel, the catalog and
 // Subscription are restored and the message says the operator was kept.
 func TestUpdateStream_ChannelDetectionFailureRestores(t *testing.T) {
-	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"channel": "fast"})
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"channel": "fast"})
 	empty := `[]`
 	f.mainChannels = &empty
 	result, err := UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
@@ -529,7 +529,7 @@ func TestUpdateStream_ChannelDetectionFailureRestores(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.sub == nil || f.sub["spec"].(map[string]interface{})["channel"] != "fast" || f.csvs["rhods-operator.3.6.0"] == nil {
+	if f.sub == nil || f.sub["spec"].(map[string]any)["channel"] != "fast" || f.csvs["rhods-operator.3.6.0"] == nil {
 		t.Fatalf("sub=%v csvs=%v", f.sub, f.csvs)
 	}
 }
@@ -552,7 +552,7 @@ func TestLostLockSkipsTheRestore(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
 	writesAtLoss := -1
-	f.onSubscribe = func(f *fakeOLM, _ map[string]interface{}) {
+	f.onSubscribe = func(f *fakeOLM, _ map[string]any) {
 		// The heartbeat saw another holder right after the Subscription
 		// was created; OLM never installs.
 		for _, r := range f.requests {
@@ -728,7 +728,7 @@ func TestConfirmedDowngradeNote(t *testing.T) {
 // A same-name CSV that is still being deleted is not the new install.
 func TestWaitIgnoresDeletingCSV(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
-	f.csvs["rhods-operator.3.6.0"]["metadata"] = map[string]interface{}{"name": "rhods-operator.3.6.0", "deletionTimestamp": "2026-10-05T00:00:00Z"}
+	f.csvs["rhods-operator.3.6.0"]["metadata"] = map[string]any{"name": "rhods-operator.3.6.0", "deletionTimestamp": "2026-10-05T00:00:00Z"}
 	var logs []string
 	outcome := waitForOperatorInstall(f.client(context.Background()), func(UpdateStepEvent) {}, &logs, &operatorRecovery{}, "")
 	if outcome.succeeded || outcome.errorCode != "install_timeout" {
@@ -743,11 +743,11 @@ func TestUpdateStream_FailedFirstInstallRemovesTheAttemptCSV(t *testing.T) {
 	const newCSV = "rhods-operator.3.6.1"
 	f := newFakeOLM(t)
 	f.channels = `[{"name":"stable-3.x","currentCSV":"` + newCSV + `"}]`
-	f.onSubscribe = func(f *fakeOLM, _ map[string]interface{}) {
-		f.installPlans["install-new"] = map[string]interface{}{"spec": map[string]interface{}{}, "status": map[string]interface{}{"phase": "Complete"}}
+	f.onSubscribe = func(f *fakeOLM, _ map[string]any) {
+		f.installPlans["install-new"] = map[string]any{"spec": map[string]any{}, "status": map[string]any{"phase": "Complete"}}
 		f.addCSV(newCSV, "Failed")
-		f.csvs[newCSV]["status"] = map[string]interface{}{"phase": "Failed", "reason": "InstallCheckFailed", "message": "install timeout"}
-		f.sub["status"] = map[string]interface{}{"currentCSV": newCSV, "installedCSV": newCSV, "installPlanRef": map[string]interface{}{"name": "install-new"}}
+		f.csvs[newCSV]["status"] = map[string]any{"phase": "Failed", "reason": "InstallCheckFailed", "message": "install timeout"}
+		f.sub["status"] = map[string]any{"currentCSV": newCSV, "installedCSV": newCSV, "installPlanRef": map[string]any{"name": "install-new"}}
 	}
 	emit, events := eventsRecorder()
 	result, err := UpdateStream(f.client(context.Background()), testNightlyImage, emit)
@@ -790,7 +790,7 @@ func TestRestore_KeepsAPreExistingCSV(t *testing.T) {
 		t.Fatalf("restore: %v sub=%v", events(), f.sub)
 	}
 	// A CSV with the same name but a new UID was created by the attempt.
-	f.csvs["rhods-operator.3.6.0"]["metadata"].(map[string]interface{})["uid"] = "recreated"
+	f.csvs["rhods-operator.3.6.0"]["metadata"].(map[string]any)["uid"] = "recreated"
 	f.mu.Unlock()
 	csvs, err := r.attemptCSVsToRemove(c)
 	f.mu.Lock()
@@ -803,7 +803,7 @@ func TestRestore_KeepsAPreExistingCSV(t *testing.T) {
 // restore budget ends makes the recovery incomplete (failed), with
 // guidance; the previous Subscription is still re-applied.
 func TestRestore_CSVDeletionTimeoutIsIncomplete(t *testing.T) {
-	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"channel": "fast"})
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"channel": "fast"})
 	c := f.client(context.Background())
 	r, err := captureOperatorRecovery(c)
 	if err != nil {
@@ -824,7 +824,7 @@ func TestRestore_CSVDeletionTimeoutIsIncomplete(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if spec, _ := f.sub["spec"].(map[string]interface{}); spec["channel"] != "fast" {
+	if spec, _ := f.sub["spec"].(map[string]any); spec["channel"] != "fast" {
 		t.Fatalf("previous Subscription not re-applied: %v", f.sub)
 	}
 }
@@ -838,7 +838,7 @@ func TestRestore_ReapplyRunsAfterTheDeletionBudget(t *testing.T) {
 	CSVDeletionTimeout = time.Second
 	t.Cleanup(func() { restoreCSVBudget, CSVDeletionTimeout = oldBudget, oldDel })
 
-	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"channel": "fast"})
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"channel": "fast"})
 	c := f.client(context.Background())
 	r, _ := captureOperatorRecovery(c)
 	r.subscriptionChanged, r.csvRemoved = true, true
@@ -859,7 +859,7 @@ func TestRestore_ReapplyRunsAfterTheDeletionBudget(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if spec, _ := f.sub["spec"].(map[string]interface{}); spec["channel"] != "fast" || f.catalog == nil {
+	if spec, _ := f.sub["spec"].(map[string]any); spec["channel"] != "fast" || f.catalog == nil {
 		t.Fatalf("re-apply skipped: sub=%v catalog=%v", f.sub, f.catalog)
 	}
 	if !strings.Contains(result.Message, "incomplete") {
@@ -871,14 +871,14 @@ func TestRestore_ReapplyRunsAfterTheDeletionBudget(t *testing.T) {
 // exact CSV the user confirmed. Anything else OLM proposes is reported and
 // left for an administrator.
 func TestManualApproval_OnlyTheConfirmedCSV(t *testing.T) {
-	proposeNewer := func(f *fakeOLM, _ map[string]interface{}) {
-		f.installPlans["install-new"] = map[string]interface{}{"spec": map[string]interface{}{"approved": false, "clusterServiceVersionNames": []interface{}{"rhods-operator.3.7.0"}}, "status": map[string]interface{}{"phase": "RequiresApproval"}}
-		f.sub["status"] = map[string]interface{}{"currentCSV": "rhods-operator.3.7.0", "installPlanRef": map[string]interface{}{"name": "install-new"}}
+	proposeNewer := func(f *fakeOLM, _ map[string]any) {
+		f.installPlans["install-new"] = map[string]any{"spec": map[string]any{"approved": false, "clusterServiceVersionNames": []any{"rhods-operator.3.7.0"}}, "status": map[string]any{"phase": "RequiresApproval"}}
+		f.sub["status"] = map[string]any{"currentCSV": "rhods-operator.3.7.0", "installPlanRef": map[string]any{"name": "install-new"}}
 	}
 	for _, op := range []string{"update", "refresh"} {
 		t.Run(op, func(t *testing.T) {
-			f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"installPlanApproval": "Manual", "channel": "old"})
-			f.onSubscribe = func(f *fakeOLM, spec map[string]interface{}) {
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"installPlanApproval": "Manual", "channel": "old"})
+			f.onSubscribe = func(f *fakeOLM, spec map[string]any) {
 				if spec["channel"] != "old" || op == "refresh" && spec["startingCSV"] != nil {
 					proposeNewer(f, spec)
 				}
@@ -921,15 +921,15 @@ func TestRefresh_RefusesWhenTheChannelHeadMoved(t *testing.T) {
 // that left no Subscription and no CSV, Refresh re-installs the recorded
 // version with the recorded settings instead of dead-ending.
 func TestRefresh_AfterACrashUsesTheRecordedSubscription(t *testing.T) {
-	config := map[string]interface{}{"nodeSelector": map[string]interface{}{"node-role.kubernetes.io/infra": ""}}
-	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"config": config})
+	config := map[string]any{"nodeSelector": map[string]any{"node-role.kubernetes.io/infra": ""}}
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"config": config})
 	c := f.client(context.Background())
 	if _, err := captureOperatorRecovery(c); err != nil { // an operation starts and records it
 		t.Fatal(err)
 	}
 	f.mu.Lock()
 	recorded := f.recordedSub
-	f.sub, f.csvs = nil, map[string]map[string]interface{}{} // the pod died mid-operation
+	f.sub, f.csvs = nil, map[string]map[string]any{} // the pod died mid-operation
 	f.onSubscribe = olmInstalls("rhods-operator.3.6.0")
 	f.mu.Unlock()
 	if !strings.Contains(recorded, `"installedCSV":"rhods-operator.3.6.0"`) {
@@ -985,9 +985,9 @@ func TestOperationsRefuseBeforeEndingDashboardDev(t *testing.T) {
 		t.Run(op, func(t *testing.T) {
 			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 			f.dashboardOp = `{"metadata":{"uid":"u1","annotations":{"` + dashboardDevAnnotation + `":"{}"}},"spec":{"replicas":0}}`
-			f.installPlans["install-gitops"] = map[string]interface{}{
-				"metadata": map[string]interface{}{"ownerReferences": []interface{}{map[string]interface{}{"kind": "Subscription", "name": "rhoai-gitops"}}},
-				"spec":     map[string]interface{}{"clusterServiceVersionNames": []string{"rhods-operator.3.6.0"}},
+			f.installPlans["install-gitops"] = map[string]any{
+				"metadata": map[string]any{"ownerReferences": []any{map[string]any{"kind": "Subscription", "name": "rhoai-gitops"}}},
+				"spec":     map[string]any{"clusterServiceVersionNames": []string{"rhods-operator.3.6.0"}},
 			}
 			c := f.client(context.Background())
 			opts := OperationOptions{RevertDashboardDev: true}
@@ -1018,9 +1018,9 @@ func TestOperationsRefuseAForeignSubscription(t *testing.T) {
 	for _, op := range []string{"update", "reinstall", "refresh"} {
 		t.Run(op, func(t *testing.T) {
 			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
-			f.installPlans["install-gitops"] = map[string]interface{}{
-				"metadata": map[string]interface{}{"ownerReferences": []interface{}{map[string]interface{}{"kind": "Subscription", "name": "rhoai-gitops"}}},
-				"spec":     map[string]interface{}{"clusterServiceVersionNames": []string{"rhods-operator.3.6.0"}},
+			f.installPlans["install-gitops"] = map[string]any{
+				"metadata": map[string]any{"ownerReferences": []any{map[string]any{"kind": "Subscription", "name": "rhoai-gitops"}}},
+				"spec":     map[string]any{"clusterServiceVersionNames": []string{"rhods-operator.3.6.0"}},
 			}
 			c := f.client(context.Background())
 			var r *types.OperationResponse
@@ -1075,7 +1075,7 @@ func TestReinstallDowngrade_StoredVersionsCheck(t *testing.T) {
 			wantSuccess: true, wantInMsg: "is installed", wantInLogs: "stored versions of the live CRDs were not checked"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"source": CatalogName})
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"source": CatalogName})
 			desc := `"version":"3.5.1"`
 			if tc.owned != "" {
 				desc += `,"customresourcedefinitions":{"owned":` + tc.owned + `}`
@@ -1113,7 +1113,7 @@ func TestWaitRequiresTheCSVToStaySucceeded(t *testing.T) {
 		start := clk.Now()
 		f.intercept = func(f *fakeOLM, _ http.ResponseWriter, _ *http.Request) bool {
 			if p := phase(clk.Since(start)); p != "" {
-				f.csvs["rhods-operator.3.6.0"]["status"] = map[string]interface{}{"phase": p, "reason": "NeedsReinstall"}
+				f.csvs["rhods-operator.3.6.0"]["status"] = map[string]any{"phase": p, "reason": "NeedsReinstall"}
 			}
 			return false
 		}

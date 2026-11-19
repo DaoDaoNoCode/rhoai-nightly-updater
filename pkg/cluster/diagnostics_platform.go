@@ -160,7 +160,7 @@ func pendingUpgradeAckKeys(c *Client) ([]string, map[string]string, error) {
 
 // upgradeAckCommand acknowledges one upgrade gate.
 func upgradeAckCommand(key string) string {
-	patch, _ := json.Marshal(map[string]interface{}{"data": map[string]string{key: "true"}})
+	patch, _ := json.Marshal(map[string]any{"data": map[string]string{key: "true"}})
 	return shellCommand("oc", "patch", "configmap", "odh-upgrade-acks", "-n", SubNS, "--type", "merge", "-p", string(patch))
 }
 
@@ -378,7 +378,7 @@ func channelHeadBehind(c *Client, sub subscriptionState) *Problem {
 		return nil
 	}
 	for _, ch := range channels {
-		m, _ := ch.(map[string]interface{})
+		m, _ := ch.(map[string]any)
 		if name, _ := m["name"].(string); name != sub.Channel {
 			continue
 		}

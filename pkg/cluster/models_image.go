@@ -348,8 +348,8 @@ func parseQuantity(s string) (float64, bool) {
 	}{{"Ki", 1 << 10}, {"Mi", 1 << 20}, {"Gi", 1 << 30}, {"Ti", 1 << 40}, {"Pi", 1 << 50}, {"Ei", 1 << 60},
 		{"m", 1e-3}, {"k", 1e3}, {"M", 1e6}, {"G", 1e9}, {"T", 1e12}, {"P", 1e15}, {"E", 1e18}}
 	for _, suf := range suffixes {
-		if strings.HasSuffix(s, suf.s) {
-			v, err := strconv.ParseFloat(strings.TrimSuffix(s, suf.s), 64)
+		if before, ok := strings.CutSuffix(s, suf.s); ok {
+			v, err := strconv.ParseFloat(before, 64)
 			return v * suf.f, err == nil
 		}
 	}

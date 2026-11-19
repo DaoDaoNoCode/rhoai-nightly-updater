@@ -153,7 +153,7 @@ func pendingInstallPlan(c *Client) (name, phase string, err error) {
 // (pullFailureWatch.advice).
 func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV types.CSVInfo, g operatorGitOps,
 	recovery *operatorRecovery, logs *[]string, emit func(UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error),
-	policy func(newSub, restoreSub map[string]interface{}) string, pullAdvice func(*Client) string,
+	policy func(newSub, restoreSub map[string]any) string, pullAdvice func(*Client) string,
 ) (*types.OperationResponse, error) {
 	stopped := func(msg string) (*types.OperationResponse, error) {
 		return &types.OperationResponse{Success: false, Message: msg, Logs: *logs}, c.ctx.Err()
@@ -194,7 +194,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	// A managed Subscription's startingCSV pin from Git must be the verified
 	// head; the new Subscription pins that head in any case (below).
 	if g.subscriptionApp != "" {
-		prevSpec, _ := recovery.subscriptionBase()["spec"].(map[string]interface{})
+		prevSpec, _ := recovery.subscriptionBase()["spec"].(map[string]any)
 		startingCSV, _ := prevSpec["startingCSV"].(string)
 		if startingCSV != "" && startingCSV != target.HeadCSV {
 			return fail(fmt.Sprintf("The Subscription pins startingCSV %s in Git, but the catalog serves %s on channel %s. Change the pin in Git, or the catalog image, so they agree. Nothing was changed.", startingCSV, target.HeadCSV, target.Channel), ErrorCodeGitOpsManaged)
@@ -279,7 +279,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 		}
 	}
 	if found {
-		liveSpec, _ := live["spec"].(map[string]interface{})
+		liveSpec, _ := live["spec"].(map[string]any)
 		if g.subscriptionApp != "" {
 			liveStartingCSV, _ := liveSpec["startingCSV"].(string)
 			switch {
@@ -315,14 +315,14 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	// installed CSV's replaces and skipRange), so Argo CD dropping it on a
 	// later sync changes nothing. The gitops admission policy does not
 	// restrict startingCSV (deploy/rbac-gitops.yaml).
-	newSub["spec"].(map[string]interface{})["startingCSV"] = target.HeadCSV
+	newSub["spec"].(map[string]any)["startingCSV"] = target.HeadCSV
 	*logs = append(*logs, fmt.Sprintf("The new Subscription pins startingCSV %s: OLM installs exactly that CSV, or reports that the catalog does not have it", target.HeadCSV))
 	keepArgoTracking(base, newSub)
 	recovery.subscriptionChanged = true
 	if found {
 		// Delete exactly the object just validated: a replacement with
 		// another UID is left alone.
-		liveMeta, _ := live["metadata"].(map[string]interface{})
+		liveMeta, _ := live["metadata"].(map[string]any)
 		liveUID, _ := liveMeta["uid"].(string)
 		if err := deleteSubscriptionWithUID(c, liveUID); errors.Is(err, errReplacedMeanwhile) {
 			recovery.subscriptionReplaced = true
@@ -338,7 +338,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 }
 
 // readSubscriptionObject reads the operator Subscription as a decoded object.
-func readSubscriptionObject(c *Client) (obj map[string]interface{}, found bool, err error) {
+func readSubscriptionObject(c *Client) (obj map[string]any, found bool, err error) {
 	body, _, err := c.get(subscriptionPath())
 	if IsK8sError(err, 404) {
 		return nil, false, nil

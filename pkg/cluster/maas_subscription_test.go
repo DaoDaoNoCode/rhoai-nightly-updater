@@ -68,7 +68,7 @@ func TestMaaSLimit_PresetTextAndModelRef(t *testing.T) {
 		if got := tc.l.text(); got != tc.text {
 			t.Errorf("%+v: text %q, want %q", tc.l, got, tc.text)
 		}
-		ref := map[string]interface{}{"name": "m", "namespace": "p"}
+		ref := map[string]any{"name": "m", "namespace": "p"}
 		tc.l.addTo(ref)
 		_, hasRates := ref["tokenRateLimits"]
 		if ref["unlimited"] == true != tc.unlimitedJSON || hasRates == tc.unlimitedJSON {
@@ -79,7 +79,7 @@ func TestMaaSLimit_PresetTextAndModelRef(t *testing.T) {
 			t.Errorf("%+v: read back as %+v %v", tc.l, back, ok)
 		}
 	}
-	if _, ok := maasLimitFromModelRef(map[string]interface{}{"name": "m"}); ok {
+	if _, ok := maasLimitFromModelRef(map[string]any{"name": "m"}); ok {
 		t.Error("a model reference with neither is not a limit")
 	}
 }
@@ -125,7 +125,7 @@ func TestParseMaaSAudience(t *testing.T) {
 
 func TestMaaSAudience_OwnerAndText(t *testing.T) {
 	everyone := maasAudience{everyone: true}
-	if got := everyone.owner(); !reflect.DeepEqual(got, map[string]interface{}{"groups": []interface{}{map[string]interface{}{"name": "system:authenticated"}}, "users": []interface{}{}}) {
+	if got := everyone.owner(); !reflect.DeepEqual(got, map[string]any{"groups": []any{map[string]any{"name": "system:authenticated"}}, "users": []any{}}) {
 		t.Errorf("everyone's owner = %v (the docs' sample: system:authenticated)", got)
 	}
 	back := maasAudienceFromOwner(everyone.owner())

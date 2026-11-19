@@ -167,8 +167,7 @@ var HandleBuildExplorerContains = withAuth(func(c *cluster.Client, w http.Respon
 		result, err = cluster.FindBuildsContainingPR(r.Context(), c, repo, pr, images)
 	}
 	if err != nil {
-		var searchErr *cluster.PRSearchError
-		if errors.As(err, &searchErr) {
+		if searchErr, ok := errors.AsType[*cluster.PRSearchError](err); ok {
 			writeError(w, searchErr.Msg, searchErr.Status, searchErr.Code)
 			return
 		}

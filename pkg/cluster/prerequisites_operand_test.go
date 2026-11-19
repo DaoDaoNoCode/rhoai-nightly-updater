@@ -102,11 +102,11 @@ func TestDSCCheck_OperandMessage_OperandBackOffersRestart(t *testing.T) {
 func TestDSCCheck_OperandMessage_OperatorNotInstalled(t *testing.T) {
 	w := newDSCWorld(t, liveOperandConds())
 	cat := liveCatalog()
-	ch := cat[0]["status"].(map[string]interface{})["channels"].([]interface{})[1].(map[string]interface{})
-	ch["currentCSVDesc"].(map[string]interface{})["customresourcedefinitions"] = map[string]interface{}{
-		"owned": []interface{}{map[string]string{"name": "jobsetoperators.operator.openshift.io", "kind": "JobSetOperator", "version": "v1"}},
+	ch := cat[0]["status"].(map[string]any)["channels"].([]any)[1].(map[string]any)
+	ch["currentCSVDesc"].(map[string]any)["customresourcedefinitions"] = map[string]any{
+		"owned": []any{map[string]string{"name": "jobsetoperators.operator.openshift.io", "kind": "JobSetOperator", "version": "v1"}},
 	}
-	w.f.obj(packageManifestsPath, map[string]interface{}{"items": cat})
+	w.f.obj(packageManifestsPath, map[string]any{"items": cat})
 	out := checkDataScienceCluster(w.c)
 	p, ok := problemsByID(out)["prerequisite-missing-job-set"]
 	if !ok || !strings.Contains(p.TechnicalCmd, "name: job-set") || !strings.Contains(p.TechnicalCmd, "oc get jobsetoperator.operator.openshift.io/cluster") {

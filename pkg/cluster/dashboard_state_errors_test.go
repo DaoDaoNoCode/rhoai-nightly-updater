@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,9 +21,7 @@ func legacyAnnotationServer(t *testing.T, initial map[string]string) (*Client, f
 	t.Helper()
 	var mu sync.Mutex
 	annotations := map[string]string{}
-	for k, v := range initial {
-		annotations[k] = v
-	}
+	maps.Copy(annotations, initial)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -49,9 +48,9 @@ func legacyAnnotationServer(t *testing.T, initial map[string]string) (*Client, f
 					}
 				}
 			}
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"metadata": map[string]interface{}{"annotations": annotations},
-				"spec":     map[string]interface{}{"template": map[string]interface{}{"spec": map[string]interface{}{"containers": []map[string]string{{"name": "rhods-dashboard", "image": "release-dashboard"}}}}},
+			json.NewEncoder(w).Encode(map[string]any{
+				"metadata": map[string]any{"annotations": annotations},
+				"spec":     map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []map[string]string{{"name": "rhods-dashboard", "image": "release-dashboard"}}}}},
 			})
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -63,9 +62,7 @@ func legacyAnnotationServer(t *testing.T, initial map[string]string) (*Client, f
 		mu.Lock()
 		defer mu.Unlock()
 		out := map[string]string{}
-		for k, v := range annotations {
-			out[k] = v
-		}
+		maps.Copy(out, annotations)
 		return out
 	}
 }

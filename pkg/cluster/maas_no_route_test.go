@@ -130,8 +130,8 @@ func TestMaaSPublish_InternalModelGetsARouteAndLosesItAgain(t *testing.T) {
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("maas setup: %+v", res)
 	}
-	mc.f.put("/api/v1/namespaces/proj/services/qwen25-05b-instruct-kserve-workload-svc", map[string]interface{}{
-		"spec": map[string]interface{}{"ports": []interface{}{map[string]interface{}{"name": "https", "appProtocol": "https", "port": 8000}}},
+	mc.f.put("/api/v1/namespaces/proj/services/qwen25-05b-instruct-kserve-workload-svc", map[string]any{
+		"spec": map[string]any{"ports": []any{map[string]any{"name": "https", "appProtocol": "https", "port": 8000}}},
 	})
 	if res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: exposureInternal}); !res.Success {
 		t.Fatalf("internal setup: %+v %s", res, finalSteps(events))

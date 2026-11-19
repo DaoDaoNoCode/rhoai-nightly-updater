@@ -69,7 +69,7 @@ func newPrereqCluster(t *testing.T) *prereqCluster {
 			pc.kserveChecks()
 		}
 	}
-	f.onMergePatch = func(r *http.Request, k fakeKey, patch, next map[string]interface{}) {
+	f.onMergePatch = func(r *http.Request, k fakeKey, patch, next map[string]any) {
 		// Under the fake's lock: the stored object is the one before the patch.
 		updateFieldOwnership(r.URL.Query().Get("fieldManager"), pc.f.objects[k], patch, next)
 		if k.plural != "datascienceclusters" || r.URL.Query().Get("dryRun") != "" {
@@ -78,9 +78,9 @@ func newPrereqCluster(t *testing.T) *prereqCluster {
 		// RHOAI's operator: a component Managed reports <Key>Ready True.
 		comps := ensureMap(ensureMap(next, "spec"), "components")
 		status := ensureMap(next, "status")
-		conds, _ := status["conditions"].([]interface{})
+		conds, _ := status["conditions"].([]any)
 		for key, v := range comps {
-			if m, _ := v.(map[string]interface{}); m["managementState"] == "Managed" {
+			if m, _ := v.(map[string]any); m["managementState"] == "Managed" {
 				conds = setFakeCondition(conds, key+"Ready", "True", "")
 			}
 		}
@@ -108,7 +108,7 @@ func (pc *prereqCluster) kserveChecks() {
 		return
 	}
 	status := ensureMap(obj, "status")
-	conds, _ := status["conditions"].([]interface{})
+	conds, _ := status["conditions"].([]any)
 	if pc.depMissing == "" {
 		status["conditions"] = setFakeCondition(conds, llmDependenciesCondition, "True", "")
 	} else {
@@ -118,10 +118,10 @@ func (pc *prereqCluster) kserveChecks() {
 
 func (pc *prereqCluster) putPackage(name string) {
 	p := pc.sim.packages[name]
-	var status map[string]interface{}
+	var status map[string]any
 	_ = json.Unmarshal([]byte(packageManifestStatus(name, p)), &status)
-	pc.f.put("/apis/packages.operators.coreos.com/v1/namespaces/openshift-marketplace/packagemanifests/"+name, map[string]interface{}{
-		"metadata": map[string]interface{}{"labels": map[string]interface{}{"catalog": p.source}}, "status": status})
+	pc.f.put("/apis/packages.operators.coreos.com/v1/namespaces/openshift-marketplace/packagemanifests/"+name, map[string]any{
+		"metadata": map[string]any{"labels": map[string]any{"catalog": p.source}}, "status": status})
 }
 
 // updateFieldOwnership records an update (a merge patch) by manager in
@@ -129,14 +129,14 @@ func (pc *prereqCluster) putPackage(name string) {
 // "Server-Side Apply", Field management: an update takes ownership of the
 // fields it changes, from every other manager). A field the patch sets to
 // the value it already had changes no ownership. Only spec is tracked.
-func updateFieldOwnership(manager string, before, patch, next map[string]interface{}) {
+func updateFieldOwnership(manager string, before, patch, next map[string]any) {
 	if manager == "" {
 		return
 	}
 	var leaves [][]string
-	var walk func(v interface{}, path []string)
-	walk = func(v interface{}, path []string) {
-		if m, ok := v.(map[string]interface{}); ok && len(m) > 0 {
+	var walk func(v any, path []string)
+	walk = func(v any, path []string) {
+		if m, ok := v.(map[string]any); ok && len(m) > 0 {
 			for key, child := range m {
 				walk(child, append(append([]string(nil), path...), "f:"+key))
 			}
@@ -147,20 +147,20 @@ func updateFieldOwnership(manager string, before, patch, next map[string]interfa
 	if spec, ok := patch["spec"]; ok {
 		walk(spec, []string{"f:spec"})
 	}
-	valueAt := func(obj map[string]interface{}, path []string) interface{} {
-		var v interface{} = obj
+	valueAt := func(obj map[string]any, path []string) any {
+		var v any = obj
 		for _, p := range path {
-			m, _ := v.(map[string]interface{})
+			m, _ := v.(map[string]any)
 			v = m[strings.TrimPrefix(p, "f:")]
 		}
 		raw, _ := json.Marshal(v)
 		return string(raw)
 	}
 	meta := ensureMap(next, "metadata")
-	entries, _ := meta["managedFields"].([]interface{})
-	var mine map[string]interface{}
+	entries, _ := meta["managedFields"].([]any)
+	var mine map[string]any
 	for _, e := range entries {
-		if em, _ := e.(map[string]interface{}); em["manager"] == manager && em["operation"] == "Update" {
+		if em, _ := e.(map[string]any); em["manager"] == manager && em["operation"] == "Update" {
 			mine = em
 		}
 	}
@@ -169,11 +169,11 @@ func updateFieldOwnership(manager string, before, patch, next map[string]interfa
 			continue
 		}
 		for _, e := range entries {
-			em, _ := e.(map[string]interface{})
+			em, _ := e.(map[string]any)
 			if em["manager"] == manager && em["operation"] == "Update" {
 				continue
 			}
-			node, _ := em["fieldsV1"].(map[string]interface{})
+			node, _ := em["fieldsV1"].(map[string]any)
 			for i, p := range path {
 				if node == nil {
 					break
@@ -182,11 +182,11 @@ func updateFieldOwnership(manager string, before, patch, next map[string]interfa
 					delete(node, p)
 					break
 				}
-				node, _ = node[p].(map[string]interface{})
+				node, _ = node[p].(map[string]any)
 			}
 		}
 		if mine == nil {
-			mine = map[string]interface{}{"manager": manager, "operation": "Update", "fieldsV1": map[string]interface{}{}}
+			mine = map[string]any{"manager": manager, "operation": "Update", "fieldsV1": map[string]any{}}
 			entries = append(entries, mine)
 		}
 		node := ensureMap(mine, "fieldsV1")
@@ -201,20 +201,20 @@ func updateFieldOwnership(manager string, before, patch, next map[string]interfa
 // their own field manager (kubectl edit).
 func someoneSets(t *testing.T, pc *prereqCluster, key, state string) {
 	t.Helper()
-	patch, _ := json.Marshal(map[string]interface{}{"spec": map[string]interface{}{"components": map[string]interface{}{key: map[string]interface{}{"managementState": state}}}})
+	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"components": map[string]any{key: map[string]any{"managementState": state}}}})
 	if _, _, err := pc.c.do(http.MethodPatch, tDSC, "application/merge-patch+json", patch, url.Values{"fieldManager": {"kubectl-edit"}}); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func setFakeCondition(conds []interface{}, typ, status, msg string) []interface{} {
+func setFakeCondition(conds []any, typ, status, msg string) []any {
 	for _, c := range conds {
-		if m, _ := c.(map[string]interface{}); m["type"] == typ {
+		if m, _ := c.(map[string]any); m["type"] == typ {
 			m["status"], m["message"] = status, msg
 			return conds
 		}
 	}
-	return append(conds, map[string]interface{}{"type": typ, "status": status, "message": msg})
+	return append(conds, map[string]any{"type": typ, "status": status, "message": msg})
 }
 
 func runPrereqs(t *testing.T, c *Client, feature string) (*types.OperationResponse, []UpdateStepEvent) {
@@ -340,7 +340,7 @@ func TestPrerequisites_CertManagerObjects(t *testing.T) {
 		t.Fatalf("operator group = %v", og)
 	}
 	sub := pc.f.get(tCertSub)
-	spec, _ := sub["spec"].(map[string]interface{})
+	spec, _ := sub["spec"].(map[string]any)
 	if spec["name"] != "openshift-cert-manager-operator" || spec["channel"] != "stable-v1" || spec["source"] != "redhat-operators" || spec["installPlanApproval"] != "Automatic" || spec["config"] != nil {
 		t.Fatalf("subscription spec = %v", spec)
 	}
@@ -501,8 +501,8 @@ func TestPrerequisites_OperatorGroupReuse(t *testing.T) {
 func TestOperatorObjects_OwnNamespaceGroup(t *testing.T) {
 	op := operatorSpec{pkg: "leader-worker-set", subName: "leader-worker-set", namespace: "openshift-lws-operator", source: "redhat-operators", group: "leader-worker-set", ownNamespace: true}
 	_, group, _ := operatorObjects(op, "stable-v1.0")
-	spec, _ := group["spec"].(map[string]interface{})
-	if targets, _ := spec["targetNamespaces"].([]interface{}); len(targets) != 1 || targets[0] != "openshift-lws-operator" {
+	spec, _ := group["spec"].(map[string]any)
+	if targets, _ := spec["targetNamespaces"].([]any); len(targets) != 1 || targets[0] != "openshift-lws-operator" {
 		t.Fatalf("group = %v", group)
 	}
 	if p := operatorPlanPrefix(&operatorInstallPlan{op: op, groupMissing: true}); !strings.Contains(p, "OperatorGroup openshift-lws-operator/leader-worker-set") {
@@ -545,7 +545,7 @@ func TestPrerequisites_CertManagerWithoutOLM(t *testing.T) {
 func TestPrerequisites_RefusesAGitOpsManagedDSC(t *testing.T) {
 	pc := newPrereqCluster(t)
 	dsc := pc.f.get(tDSC)
-	ensureMap(dsc, "metadata")["annotations"] = map[string]interface{}{argoTrackingAnnotation: "rhoai:datasciencecluster.opendatahub.io/DataScienceCluster:/default-dsc"}
+	ensureMap(dsc, "metadata")["annotations"] = map[string]any{argoTrackingAnnotation: "rhoai:datasciencecluster.opendatahub.io/DataScienceCluster:/default-dsc"}
 	st := prereqStatus(t, pc.c, "pipelines")
 	if !strings.Contains(st.SetupBlockedReason, "Argo CD application") {
 		t.Fatalf("status = %+v", st)
@@ -732,7 +732,7 @@ func TestRestoreComponents(t *testing.T) {
 			},
 			"Argo CD takes it over": func(pc *prereqCluster) {
 				meta := ensureMap(pc.f.get(tDSC), "metadata")
-				meta["annotations"] = map[string]interface{}{argoTrackingAnnotation: "rhoai:datasciencecluster.opendatahub.io/DataScienceCluster:/default-dsc"}
+				meta["annotations"] = map[string]any{argoTrackingAnnotation: "rhoai:datasciencecluster.opendatahub.io/DataScienceCluster:/default-dsc"}
 				pc.f.bumpRV(meta)
 			},
 			"the second read fails": func(pc *prereqCluster) {
@@ -798,7 +798,7 @@ func TestRestoreComponents(t *testing.T) {
 	})
 	t.Run("gitops", func(t *testing.T) {
 		pc := setUp(t, "mlflow")
-		ensureMap(pc.f.get(tDSC), "metadata")["annotations"] = map[string]interface{}{argoTrackingAnnotation: "rhoai:datasciencecluster.opendatahub.io/DataScienceCluster:/default-dsc"}
+		ensureMap(pc.f.get(tDSC), "metadata")["annotations"] = map[string]any{argoTrackingAnnotation: "rhoai:datasciencecluster.opendatahub.io/DataScienceCluster:/default-dsc"}
 		n := len(pc.f.mutations())
 		res, _ := RestoreComponents(pc.c, []string{"mlflowoperator"})
 		if res.Success || res.ErrorCode != ErrorCodeGitOpsManaged || len(pc.f.mutations()) != n {

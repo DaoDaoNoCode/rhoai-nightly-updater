@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"sort"
@@ -164,7 +165,7 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 		sub, auth := maasAccessObjects(c, live, limits, aud, maasOwnSubscriptionPriority(c))
 		for _, w := range []struct {
 			kind string
-			obj  map[string]interface{}
+			obj  map[string]any
 		}{{"MaaSAuthPolicy", auth}, {"MaaSSubscription", sub}} {
 			accessPath := maasAccessPath(c, w.kind)
 			meta, found, err := readObjectMeta(c, accessPath)
@@ -259,8 +260,8 @@ func maasGatewayObjectPath(kind string) string {
 // create too, which the ServiceAccount does not have. The MaaS prune job
 // runs with the ServiceAccount, so the ServiceAccount needs only patch on
 // the tool's named MaaS objects (deploy/template.yaml).
-func updateToolObject(c *Client, desc, path string, obj map[string]interface{}, current objectMeta, read toolObjectReader, owned func(objectMeta) bool) error {
-	for attempt := 0; attempt < 3; attempt++ {
+func updateToolObject(c *Client, desc, path string, obj map[string]any, current objectMeta, read toolObjectReader, owned func(objectMeta) bool) error {
+	for range 3 {
 		if !owned(current) {
 			return &foreignObjectError{Desc: desc}
 		}
@@ -270,15 +271,11 @@ func updateToolObject(c *Client, desc, path string, obj map[string]interface{}, 
 		upgraded, err := upgradeToolFieldOwnership(c, path, current)
 		if err == nil {
 			current = upgraded
-			guarded := make(map[string]interface{}, len(obj))
-			for k, v := range obj {
-				guarded[k] = v
-			}
-			meta := map[string]interface{}{}
-			if m, ok := obj["metadata"].(map[string]interface{}); ok {
-				for k, v := range m {
-					meta[k] = v
-				}
+			guarded := make(map[string]any, len(obj))
+			maps.Copy(guarded, obj)
+			meta := map[string]any{}
+			if m, ok := obj["metadata"].(map[string]any); ok {
+				maps.Copy(meta, m)
 			}
 			meta["resourceVersion"] = current.ResourceVersion
 			guarded["metadata"] = meta

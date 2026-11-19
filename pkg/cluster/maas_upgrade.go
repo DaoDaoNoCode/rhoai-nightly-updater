@@ -55,7 +55,7 @@ func (m *maasRun) upgradeRHCL() (*types.OperationResponse, error) {
 		return m.fail("check", fmt.Sprintf("No channel of %s in catalog %s has %s or later. Nothing was changed.", rhclOperator.pkg, st.sub.Spec.Source, rhclDocsMinimum), "prerequisites", "no target channel")
 	}
 	targetCh, _ := pkg.channel(target)
-	if err := patchSubscription(c, st.sub, map[string]interface{}{"channel": target}, true); err != nil {
+	if err := patchSubscription(c, st.sub, map[string]any{"channel": target}, true); err != nil {
 		return m.fail("check", fmt.Sprintf("The API server rejects the channel change of Subscription %s/%s: %v. Nothing was changed.%s", st.sub.Metadata.Namespace, st.sub.Metadata.Name, err, templateHint(err)), maasWriteCode(err), "dry run failed")
 	}
 	ns, name := st.sub.Metadata.Namespace, st.sub.Metadata.Name
@@ -74,7 +74,7 @@ func (m *maasRun) upgradeRHCL() (*types.OperationResponse, error) {
 		}
 		if sub.Spec.Channel != want {
 			m.step("upgrade", "running", fmt.Sprintf("Switching Subscription %s/%s to channel %s...", ns, name, want))
-			if err := patchSubscription(c, sub, map[string]interface{}{"channel": want}, false); err != nil {
+			if err := patchSubscription(c, sub, map[string]any{"channel": want}, false); err != nil {
 				return m.fail("upgrade", fmt.Sprintf("Failed to switch Subscription %s/%s to channel %s: %v. Run the upgrade again to retry.", ns, name, want, err), maasWriteCode(err), "channel patch failed")
 			}
 			m.logs = append(m.logs, fmt.Sprintf("OK: Subscription %s/%s channel %s", ns, name, want))
@@ -218,7 +218,7 @@ func (m *maasRun) rhclMemory() (*types.OperationResponse, error) {
 	if why != "" {
 		return m.fail("check", "This tool does not raise the operator's memory limit: "+why+". Nothing was changed.", "prerequisites", "memory not offered")
 	}
-	spec := map[string]interface{}{"config": map[string]interface{}{"resources": resources}}
+	spec := map[string]any{"config": map[string]any{"resources": resources}}
 	if err := patchSubscription(c, st.sub, spec, true); err != nil {
 		return m.fail("check", fmt.Sprintf("The API server rejects the change of Subscription %s/%s: %v. Nothing was changed.", st.sub.Metadata.Namespace, st.sub.Metadata.Name, err), maasWriteCode(err), "dry run failed")
 	}
@@ -265,7 +265,7 @@ func (m *maasRun) rhclDenyOnFailure() (*types.OperationResponse, error) {
 		m.step("check", "success", "The Subscription already denies traffic when rate limiting fails.")
 		return m.done("Nothing to change: both variables are set to deny.")
 	}
-	spec := map[string]interface{}{"config": map[string]interface{}{"env": rhclDenyEnvPatch(st.sub)}}
+	spec := map[string]any{"config": map[string]any{"env": rhclDenyEnvPatch(st.sub)}}
 	if err := patchSubscription(c, st.sub, spec, true); err != nil {
 		return m.fail("check", fmt.Sprintf("The API server rejects the change of Subscription %s/%s: %v. Nothing was changed.", st.sub.Metadata.Namespace, st.sub.Metadata.Name, err), maasWriteCode(err), "dry run failed")
 	}
@@ -339,7 +339,7 @@ func (m *maasRun) removeTierPolicies() (*types.OperationResponse, error) {
 	}
 	for _, p := range legacy {
 		path := legacyTierPolicyPath(p.Kind, p.Version)
-		opts, _ := json.Marshal(map[string]interface{}{"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": map[string]interface{}{"uid": p.UID}})
+		opts, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": map[string]any{"uid": p.UID}})
 		if _, _, err := c.do(http.MethodDelete, path, "application/json", opts, url.Values{"dryRun": {"All"}}); err != nil && !IsK8sError(err, 404) {
 			return m.fail("check", fmt.Sprintf("The API server rejects deleting %s %s: %v. Nothing was deleted.%s", p.Kind, p.Name, err, templateHint(err)), maasWriteCode(err), "dry run failed")
 		}

@@ -76,11 +76,11 @@ func writePipelineRecord(c *Client, rec pipelineRecord) error {
 		return err
 	}
 	ns := getActivityNamespace()
-	cm, _ := json.Marshal(map[string]interface{}{
+	cm, _ := json.Marshal(map[string]any{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
-		"metadata":   map[string]interface{}{"name": snapshotConfigMapName, "namespace": ns},
-		"data":       map[string]interface{}{pipelineRecordKey: string(data)},
+		"metadata":   map[string]any{"name": snapshotConfigMapName, "namespace": ns},
+		"data":       map[string]any{pipelineRecordKey: string(data)},
 	})
 	query := url.Values{"fieldManager": {pipelineRecordManager}, "force": {"true"}}
 	if _, _, err := c.bookkeeping().do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {

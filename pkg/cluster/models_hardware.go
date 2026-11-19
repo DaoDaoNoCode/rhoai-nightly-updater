@@ -43,15 +43,15 @@ type hardwareProfileObject struct {
 	Metadata objectMeta `json:"metadata"`
 	Spec     struct {
 		Identifiers []struct {
-			Identifier string      `json:"identifier"`
-			MinCount   interface{} `json:"minCount"`
-			MaxCount   interface{} `json:"maxCount"`
+			Identifier string `json:"identifier"`
+			MinCount   any    `json:"minCount"`
+			MaxCount   any    `json:"maxCount"`
 		} `json:"identifiers"`
 		Scheduling *struct {
 			Type string `json:"type"`
 			Node *struct {
 				NodeSelector map[string]string `json:"nodeSelector"`
-				Tolerations  []interface{}     `json:"tolerations"`
+				Tolerations  []any             `json:"tolerations"`
 			} `json:"node"`
 			Kueue *struct {
 				LocalQueueName string `json:"localQueueName"`
@@ -61,7 +61,7 @@ type hardwareProfileObject struct {
 }
 
 // quantityString reads a count that the API returns as a number or a string.
-func quantityString(v interface{}) string {
+func quantityString(v any) string {
 	switch t := v.(type) {
 	case string:
 		return t

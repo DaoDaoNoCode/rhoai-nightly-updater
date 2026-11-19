@@ -121,9 +121,9 @@ func TestInstallCleanupFailureRestoresPreviousDesiredState(t *testing.T) {
 func TestCSVUsesInstalledSubscriptionIdentity(t *testing.T) {
 	subPath := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
 	listPath := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "")
-	body, _ := json.Marshal(map[string]interface{}{"items": []interface{}{
-		map[string]interface{}{"metadata": map[string]string{"name": "rhods-operator.v3.3.0"}, "spec": map[string]string{"displayName": "Red Hat OpenShift AI", "version": "3.3.0"}},
-		map[string]interface{}{"metadata": map[string]string{"name": "rhods-operator.v3.7.0"}, "spec": map[string]string{"displayName": "Red Hat OpenShift AI", "version": "3.7.0"}},
+	body, _ := json.Marshal(map[string]any{"items": []any{
+		map[string]any{"metadata": map[string]string{"name": "rhods-operator.v3.3.0"}, "spec": map[string]string{"displayName": "Red Hat OpenShift AI", "version": "3.3.0"}},
+		map[string]any{"metadata": map[string]string{"name": "rhods-operator.v3.7.0"}, "spec": map[string]string{"displayName": "Red Hat OpenShift AI", "version": "3.7.0"}},
 	}})
 	c, cleanup := newMockClient(map[string]mockResponse{subPath: {body: `{"status":{"installedCSV":"rhods-operator.v3.7.0"}}`}, listPath: {body: string(body)}})
 	defer cleanup()

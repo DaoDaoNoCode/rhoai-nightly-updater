@@ -220,7 +220,7 @@ func parseDashboardBuild(repo, image string) (kind string, pr int, flavor string
 	if !strings.HasPrefix(image, prefix) {
 		return "", 0, ""
 	}
-	tag := strings.SplitN(strings.TrimPrefix(image, prefix), "@", 2)[0]
+	tag, _, _ := strings.Cut(strings.TrimPrefix(image, prefix), "@")
 	switch {
 	case tag == "odh-stable", dashboardCommitSHAPattern.MatchString(tag):
 		return "main", 0, DashboardFlavorRHOAI
@@ -827,7 +827,7 @@ func dashboardLabelsMatch(selector, labels map[string]string) bool {
 // removes it) and the last-action record in one merge patch. uid and
 // resourceVersion make it fail with a conflict instead of acting on a stale read.
 func patchDashboardOperator(c *Client, operator *dashboardDeployment, replicas int, session *dashboardDevSession, action *types.DashboardDevAction) error {
-	var annotation interface{}
+	var annotation any
 	if session != nil {
 		raw, err := json.Marshal(session)
 		if err != nil {
@@ -835,7 +835,7 @@ func patchDashboardOperator(c *Client, operator *dashboardDeployment, replicas i
 		}
 		annotation = string(raw)
 	}
-	annotations := map[string]interface{}{dashboardDevAnnotation: annotation}
+	annotations := map[string]any{dashboardDevAnnotation: annotation}
 	if action != nil {
 		raw, err := json.Marshal(action)
 		if err != nil {
@@ -843,9 +843,9 @@ func patchDashboardOperator(c *Client, operator *dashboardDeployment, replicas i
 		}
 		annotations[dashboardDevLastActionAnnotation] = string(raw)
 	}
-	data, err := json.Marshal(map[string]interface{}{
-		"metadata": map[string]interface{}{"uid": operator.Metadata.UID, "resourceVersion": operator.Metadata.ResourceVersion, "annotations": annotations},
-		"spec":     map[string]interface{}{"replicas": replicas},
+	data, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{"uid": operator.Metadata.UID, "resourceVersion": operator.Metadata.ResourceVersion, "annotations": annotations},
+		"spec":     map[string]any{"replicas": replicas},
 	})
 	if err != nil {
 		return err
@@ -1207,7 +1207,7 @@ func patchControlledDashboardImages(c *Client, operator *dashboardDeployment, pa
 	}
 	image := patches[0].Image
 	path := namespacedPath("apps/v1", "deployments", dashboardNamespace, image.Deployment)
-	for attempt := 0; attempt < 5; attempt++ {
+	for attempt := range 5 {
 		current, err := readDashboardOperator(c)
 		if err != nil {
 			return err
@@ -1248,7 +1248,7 @@ func patchControlledDashboardImages(c *Client, operator *dashboardDeployment, pa
 		if len(containers) == 0 {
 			return nil
 		}
-		data, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{"uid": d.Metadata.UID, "resourceVersion": d.Metadata.ResourceVersion}, "spec": map[string]interface{}{"template": map[string]interface{}{"spec": map[string]interface{}{"containers": containers}}}})
+		data, _ := json.Marshal(map[string]any{"metadata": map[string]any{"uid": d.Metadata.UID, "resourceVersion": d.Metadata.ResourceVersion}, "spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": containers}}}})
 		_, _, err = c.strategicPatch(path, data)
 		if err == nil {
 			return nil
@@ -1280,7 +1280,7 @@ func clearDashboardManagedAnnotations(c *Client) (cleared []string, failures []s
 		if _, ok := d.Metadata.Annotations["opendatahub.io/managed"]; !ok {
 			continue
 		}
-		data, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{"uid": d.Metadata.UID, "annotations": map[string]interface{}{"opendatahub.io/managed": nil}}})
+		data, _ := json.Marshal(map[string]any{"metadata": map[string]any{"uid": d.Metadata.UID, "annotations": map[string]any{"opendatahub.io/managed": nil}}})
 		if _, _, err := c.patch(namespacedPath("apps/v1", "deployments", dashboardNamespace, d.Metadata.Name), data); err != nil && !IsK8sError(err, http.StatusNotFound) {
 			failures = append(failures, d.Metadata.Name+": "+err.Error())
 			continue

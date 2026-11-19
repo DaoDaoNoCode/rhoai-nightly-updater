@@ -30,10 +30,10 @@ const (
 // as its controller would once the pod is ready.
 func devDatabaseRuns(mc *modelsCluster) {
 	prev := mc.f.onGet
-	mc.f.onGet = func(k fakeKey, obj map[string]interface{}) {
+	mc.f.onGet = func(k fakeKey, obj map[string]any) {
 		prev(k, obj)
 		if k.plural == "deployments" && k.name == "postgres" {
-			obj["status"] = map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": "Available", "status": "True"}}}
+			obj["status"] = map[string]any{"conditions": []any{map[string]any{"type": "Available", "status": "True"}}}
 		}
 	}
 }
@@ -283,7 +283,7 @@ func TestMaaSPOCObjects_AreTheDocsScript(t *testing.T) {
 	if got := maasPOCConnectionURL("aB/"); got != "postgresql://maas:%61%42%2f@postgres:5432/maas?sslmode=disable" {
 		t.Errorf("URL %q: every byte percent-encoded, as od -tx1 does", got)
 	}
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		p, err := newMaaSPOCPassword()
 		if err != nil || len(p) != 32 || strings.ContainsAny(p, "/+=") {
 			t.Fatalf("password %q %v", p, err)
@@ -806,7 +806,7 @@ func TestMaaSDatabase_EarlierBuildsCNPGIsAdoptedAsCNPG(t *testing.T) {
 	}
 }
 
-func toolOwnedFake(obj map[string]interface{}) bool {
+func toolOwnedFake(obj map[string]any) bool {
 	raw, _ := json.Marshal(obj["metadata"])
 	var meta objectMeta
 	_ = json.Unmarshal(raw, &meta)

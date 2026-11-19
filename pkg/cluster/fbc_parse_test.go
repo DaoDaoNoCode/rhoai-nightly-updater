@@ -20,7 +20,7 @@ func fbcBundleJSON(name string, images ...string) string {
 	for _, img := range images {
 		related = append(related, map[string]string{"name": "img_" + img, "image": "quay.io/rhoai/" + img + "@sha256:aa"})
 	}
-	b, _ := json.Marshal(map[string]interface{}{"schema": "olm.bundle", "name": name, "package": "rhods-operator", "relatedImages": related})
+	b, _ := json.Marshal(map[string]any{"schema": "olm.bundle", "name": name, "package": "rhods-operator", "relatedImages": related})
 	return string(b)
 }
 
@@ -156,13 +156,13 @@ func TestExtractFBCContent_CachesOnlyDigestPinnedReferences(t *testing.T) {
 	resetRegistryCaches()
 	t.Cleanup(resetRegistryCaches)
 	blob := gzipTar(t, map[string][]byte{"configs/rhods-operator/catalog.json": []byte(fbcBundleJSON("rhods-operator.3.5.0", "dash"))})
-	var manifests int32
+	var manifests atomic.Int32
 	original := quayHTTPClient
 	quayHTTPClient = &http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
 		body := []byte(`{"token":"t"}`)
 		switch {
 		case strings.Contains(r.URL.Path, "/manifests/"):
-			atomic.AddInt32(&manifests, 1)
+			manifests.Add(1)
 			body = []byte(`{"mediaType":"application/vnd.oci.image.manifest.v1+json","layers":[{"digest":"sha256:layer"}]}`)
 		case strings.Contains(r.URL.Path, "/blobs/"):
 			body = blob
@@ -175,7 +175,7 @@ func TestExtractFBCContent_CachesOnlyDigestPinnedReferences(t *testing.T) {
 
 	tagOnly := "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5"
 	pinned := tagOnly + "@sha256:" + strings.Repeat("a", 64)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		for _, ref := range []string{tagOnly, pinned} {
 			result, err := ExtractFBCContent(context.Background(), client, ref)
 			if err != nil || result.BundleName != "rhods-operator.3.5.0" {
@@ -184,7 +184,7 @@ func TestExtractFBCContent_CachesOnlyDigestPinnedReferences(t *testing.T) {
 		}
 	}
 	// Tag-only: fetched twice. Digest-pinned: fetched once, then cached.
-	if got := atomic.LoadInt32(&manifests); got != 3 {
+	if got := manifests.Load(); got != 3 {
 		t.Fatalf("manifest fetches = %d, want 3", got)
 	}
 }

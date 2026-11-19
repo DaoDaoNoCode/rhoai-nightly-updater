@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -34,7 +35,7 @@ func TestCompletedOperationRoundTrip(t *testing.T) {
 				w.Write([]byte(`{"kind":"Status","status":"Failure","code":404}`))
 				return
 			}
-			out, _ := json.Marshal(map[string]interface{}{"data": data})
+			out, _ := json.Marshal(map[string]any{"data": data})
 			w.Write(out)
 		case r.Method == http.MethodPatch && r.URL.Path == cmPath:
 			if data == nil {
@@ -43,9 +44,8 @@ func TestCompletedOperationRoundTrip(t *testing.T) {
 				return
 			}
 			json.NewDecoder(r.Body).Decode(&body)
-			for k, v := range body.Data { // merge (apply only ever sends "operation")
-				data[k] = v
-			}
+			// merge (apply only ever sends "operation")
+			maps.Copy(data, body.Data)
 			w.Write([]byte(`{}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/namespaces/test-ns/configmaps":
 			json.NewDecoder(r.Body).Decode(&body)

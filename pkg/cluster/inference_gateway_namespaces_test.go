@@ -79,7 +79,7 @@ func wantAllowed(t *testing.T, mc *modelsCluster, want ...string) {
 // (JSON), as an edit by someone else would: a new resourceVersion.
 func setListeners(t *testing.T, mc *modelsCluster, allowedRoutes string) {
 	t.Helper()
-	var allowed map[string]interface{}
+	var allowed map[string]any
 	if err := json.Unmarshal([]byte(allowedRoutes), &allowed); err != nil {
 		t.Fatal(err)
 	}
@@ -87,10 +87,10 @@ func setListeners(t *testing.T, mc *modelsCluster, allowedRoutes string) {
 	if gw == nil {
 		t.Fatal("no gateway")
 	}
-	for _, l := range gw["spec"].(map[string]interface{})["listeners"].([]interface{}) {
-		l.(map[string]interface{})["allowedRoutes"] = allowed
+	for _, l := range gw["spec"].(map[string]any)["listeners"].([]any) {
+		l.(map[string]any)["allowedRoutes"] = allowed
 	}
-	mc.f.bumpRV(gw["metadata"].(map[string]interface{}))
+	mc.f.bumpRV(gw["metadata"].(map[string]any))
 	mc.f.put(testGatewayPath, gw)
 }
 

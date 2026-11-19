@@ -112,10 +112,7 @@ func sessionProblem(ctx context.Context, token string) (string, string, int) {
 		return scopeRefusal, signInAgainCode, http.StatusUnauthorized
 	}
 	if left, expires := tok.Remaining(sessionClock()); expires && left < sessionNeeded() {
-		mins := int(left / time.Minute)
-		if mins < 0 {
-			mins = 0
-		}
+		mins := max(int(left/time.Minute), 0)
 		return fmt.Sprintf("Your sign-in expires in %d %s, and a change may take up to %d minutes. Log out and log in again, then retry.",
 			mins, map[bool]string{true: "minute", false: "minutes"}[mins == 1], int(sessionNeeded()/time.Minute)), signInAgainCode, http.StatusUnauthorized
 	}

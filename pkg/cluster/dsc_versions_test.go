@@ -190,7 +190,7 @@ func TestCreateDefaultDSC_PostsToTheDefaultsVersion(t *testing.T) {
 }
 
 func TestAddDSCComponents_GroupedV3Components(t *testing.T) {
-	var dsc map[string]interface{}
+	var dsc map[string]any
 	if err := json.Unmarshal([]byte(`{"spec":{"components":{
 		"dashboard":{"standard":{"managementState":"Managed"},"maasPortal":{"managementState":"Removed"}},
 		"aigateway":{"modelsAsAService":{"managementState":"Removed"},"batchGateway":{"managementState":"Removed"}},

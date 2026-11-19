@@ -10,12 +10,12 @@ import (
 // ConfigurationPolicy (musthave, enforce) applies it, as seen on a live
 // cluster: no Argo CD annotation, config-policy-controller owns the spec and
 // OLM's catalog operator the status.
-func acmCatalogMetadata(specOwner string) map[string]interface{} {
-	return map[string]interface{}{"managedFields": []interface{}{
-		map[string]interface{}{"manager": specOwner, "operation": "Update", "apiVersion": "operators.coreos.com/v1alpha1", "fieldsType": "FieldsV1",
-			"fieldsV1": map[string]interface{}{"f:spec": map[string]interface{}{"f:image": map[string]interface{}{}, "f:sourceType": map[string]interface{}{}}}},
-		map[string]interface{}{"manager": "catalog", "operation": "Update", "apiVersion": "operators.coreos.com/v1alpha1", "fieldsType": "FieldsV1",
-			"fieldsV1": map[string]interface{}{"f:status": map[string]interface{}{}}},
+func acmCatalogMetadata(specOwner string) map[string]any {
+	return map[string]any{"managedFields": []any{
+		map[string]any{"manager": specOwner, "operation": "Update", "apiVersion": "operators.coreos.com/v1alpha1", "fieldsType": "FieldsV1",
+			"fieldsV1": map[string]any{"f:spec": map[string]any{"f:image": map[string]any{}, "f:sourceType": map[string]any{}}}},
+		map[string]any{"manager": "catalog", "operation": "Update", "apiVersion": "operators.coreos.com/v1alpha1", "fieldsType": "FieldsV1",
+			"fieldsV1": map[string]any{"f:status": map[string]any{}}},
 	}}
 }
 
@@ -32,22 +32,22 @@ const acmManagerText = "ACM policy (config-policy-controller)"
 
 func TestACMEnforcesSpec(t *testing.T) {
 	for name, tc := range map[string]struct {
-		fields []interface{}
+		fields []any
 		want   bool
 	}{
-		"spec owned":                    {acmCatalogMetadata(acmPolicyManager)["managedFields"].([]interface{}), true},
-		"another manager owns the spec": {acmCatalogMetadata("kubectl-edit")["managedFields"].([]interface{}), false},
-		"status only": {[]interface{}{map[string]interface{}{"manager": acmPolicyManager, "operation": "Update",
-			"fieldsV1": map[string]interface{}{"f:status": map[string]interface{}{}}}}, false},
-		"through the status subresource": {[]interface{}{map[string]interface{}{"manager": acmPolicyManager, "operation": "Update", "subresource": "status",
-			"fieldsV1": map[string]interface{}{"f:spec": map[string]interface{}{}}}}, false},
-		"metadata only": {[]interface{}{map[string]interface{}{"manager": acmPolicyManager, "operation": "Update",
-			"fieldsV1": map[string]interface{}{"f:metadata": map[string]interface{}{}}}}, false},
+		"spec owned":                    {acmCatalogMetadata(acmPolicyManager)["managedFields"].([]any), true},
+		"another manager owns the spec": {acmCatalogMetadata("kubectl-edit")["managedFields"].([]any), false},
+		"status only": {[]any{map[string]any{"manager": acmPolicyManager, "operation": "Update",
+			"fieldsV1": map[string]any{"f:status": map[string]any{}}}}, false},
+		"through the status subresource": {[]any{map[string]any{"manager": acmPolicyManager, "operation": "Update", "subresource": "status",
+			"fieldsV1": map[string]any{"f:spec": map[string]any{}}}}, false},
+		"metadata only": {[]any{map[string]any{"manager": acmPolicyManager, "operation": "Update",
+			"fieldsV1": map[string]any{"f:metadata": map[string]any{}}}}, false},
 		"no managedFields": {nil, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := gitOpsFake(t)
-			f.catalog["metadata"] = map[string]interface{}{"managedFields": tc.fields}
+			f.catalog["metadata"] = map[string]any{"managedFields": tc.fields}
 			g, err := readOperatorGitOps(f.client(context.Background()))
 			if err != nil {
 				t.Fatal(err)
@@ -88,7 +88,7 @@ func TestUpdateGitOpsProfile_ACMManagedCatalog(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if ch := f.sub["spec"].(map[string]interface{})["channel"]; ch != gitOpsChannel {
+	if ch := f.sub["spec"].(map[string]any)["channel"]; ch != gitOpsChannel {
 		t.Fatalf("channel = %v, want Git's %s", ch, gitOpsChannel)
 	}
 }
@@ -98,7 +98,7 @@ func TestUpdateGitOpsProfile_ACMManagedCatalog(t *testing.T) {
 // policy's wording.
 func TestUpdateGitOpsProfile_ACMOnly(t *testing.T) {
 	f := servesGitOpsPolicy(t, acmFake(t))
-	delete(f.sub["metadata"].(map[string]interface{}), "annotations")
+	delete(f.sub["metadata"].(map[string]any), "annotations")
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged ||
 		!strings.Contains(result.Message, "An "+acmManagerText+" sets the image of CatalogSource "+CatalogName) || strings.Contains(result.Message, "Argo CD") {
@@ -121,10 +121,10 @@ func TestUpdateGitOpsProfile_ACMOnly(t *testing.T) {
 // A config-policy-controller entry that owns only the status, or nothing
 // at all, does not count: the profile refuses, naming both managers.
 func TestUpdateGitOpsProfile_RefusesACatalogNobodyManages(t *testing.T) {
-	for name, meta := range map[string]map[string]interface{}{
+	for name, meta := range map[string]map[string]any{
 		"nothing": {},
-		"status only": {"managedFields": []interface{}{map[string]interface{}{"manager": acmPolicyManager, "operation": "Update",
-			"fieldsV1": map[string]interface{}{"f:status": map[string]interface{}{}}}}},
+		"status only": {"managedFields": []any{map[string]any{"manager": acmPolicyManager, "operation": "Update",
+			"fieldsV1": map[string]any{"f:status": map[string]any{}}}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := servesGitOpsPolicy(t, gitOpsFake(t))
@@ -170,7 +170,7 @@ func TestUpdateDryRunGitOpsProfile_ACMManagedCatalog(t *testing.T) {
 func TestUpdateFullProfile_ACMManagedCatalog(t *testing.T) {
 	for name, setup := range map[string]func(*fakeOLM){
 		"Subscription in Argo CD": func(*fakeOLM) {},
-		"ACM only":                func(f *fakeOLM) { delete(f.sub["metadata"].(map[string]interface{}), "annotations") },
+		"ACM only":                func(f *fakeOLM) { delete(f.sub["metadata"].(map[string]any), "annotations") },
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := acmFake(t)
@@ -219,7 +219,7 @@ func TestUpdateFullProfile_ACMManagedCatalog(t *testing.T) {
 // Argo CD, and say so without naming Argo CD.
 func TestOperatorOperationsRefusedUnderACM(t *testing.T) {
 	f := acmFake(t)
-	delete(f.sub["metadata"].(map[string]interface{}), "annotations")
+	delete(f.sub["metadata"].(map[string]any), "annotations")
 	r, _ := ReinstallStreamWithOptions(f.client(context.Background()), "stable", "", "", OperationOptions{}, func(UpdateStepEvent) {})
 	if r.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(r.Message, "CatalogSource "+CatalogName+" is managed by an "+acmManagerText) ||
 		strings.Contains(r.Message, "Argo CD would") || !strings.Contains(r.Message, "Nothing was changed") {

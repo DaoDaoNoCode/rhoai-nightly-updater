@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"sort"
 	"strings"
@@ -100,9 +101,7 @@ func (f *fakeRegistry) answer(r *http.Request) (kind string, status int, body []
 	switch {
 	case r.URL.Host == "api.github.com":
 		h := http.Header{}
-		for k, v := range f.githubHeaders {
-			h[k] = v
-		}
+		maps.Copy(h, f.githubHeaders)
 		return "github", 200, []byte(fmt.Sprintf(`{"committer":{"date":%q}}`, f.githubDate)), h
 	case path == "/v2/auth":
 		f.scopes = append(f.scopes, r.URL.Query()["scope"])
@@ -131,7 +130,7 @@ func (f *fakeRegistry) answer(r *http.Request) (kind string, status int, body []
 		h := http.Header{"Content-Type": {"application/vnd.oci.image.manifest.v1+json"}}
 		if strings.HasPrefix(path, "/v2/rhoai/rhoai-fbc-fragment/") {
 			if _, ok := f.fbcLayers[ref]; ok {
-				b, _ := json.Marshal(map[string]interface{}{"config": map[string]string{"digest": "cfg-" + ref}, "layers": []map[string]string{{"digest": "layer-" + ref}}})
+				b, _ := json.Marshal(map[string]any{"config": map[string]string{"digest": "cfg-" + ref}, "layers": []map[string]string{{"digest": "layer-" + ref}}})
 				return "quay-manifest", 200, b, h
 			}
 		}
@@ -147,7 +146,7 @@ func (f *fakeRegistry) answer(r *http.Request) (kind string, status int, body []
 		}
 		// Every fake image was created at fakeImageCreated: the build date of
 		// an OpenShift CI image (whose build-date label is the base's).
-		b, _ := json.Marshal(map[string]interface{}{"created": fakeImageCreated, "config": map[string]interface{}{"Labels": labels}})
+		b, _ := json.Marshal(map[string]any{"created": fakeImageCreated, "config": map[string]any{"Labels": labels}})
 		return "quay-blob", 200, b, nil
 	}
 	return "other", 404, nil, nil

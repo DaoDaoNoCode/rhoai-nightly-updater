@@ -26,13 +26,13 @@ const (
 	rhodsOperator  = "/apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator"
 )
 
-func readFixture(t *testing.T, path string) map[string]interface{} {
+func readFixture(t *testing.T, path string) map[string]any {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var obj map[string]interface{}
+	var obj map[string]any
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func readFixture(t *testing.T, path string) map[string]interface{} {
 // managerWorld is a resourceFake holding the 3.6 fixtures, the installed CSV
 // and Subscription, and a ready rhods-operator. edit changes the live DSC
 // before it is stored.
-func managerWorld(t *testing.T, edit func(dsc map[string]interface{})) (*resourceFake, *Client) {
+func managerWorld(t *testing.T, edit func(dsc map[string]any)) (*resourceFake, *Client) {
 	t.Helper()
 	f, c := newResourceFake(t)
 	f.groups = map[string]string{"/apis/datasciencecluster.opendatahub.io": dscGroupDoc}
@@ -56,32 +56,32 @@ func managerWorld(t *testing.T, edit func(dsc map[string]interface{})) (*resourc
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.put(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), map[string]interface{}{"status": map[string]interface{}{"installedCSV": "rhods-operator.3.6.0"}})
-	f.put(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), map[string]interface{}{
-		"metadata": map[string]interface{}{"annotations": map[string]interface{}{"alm-examples": string(alm)}},
-		"spec": map[string]interface{}{"version": "3.6.0", "install": map[string]interface{}{"spec": map[string]interface{}{
-			"deployments": []interface{}{map[string]interface{}{"name": "rhods-operator"}}}}},
-		"status": map[string]interface{}{"phase": "Succeeded"},
+	f.put(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), map[string]any{"status": map[string]any{"installedCSV": "rhods-operator.3.6.0"}})
+	f.put(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), map[string]any{
+		"metadata": map[string]any{"annotations": map[string]any{"alm-examples": string(alm)}},
+		"spec": map[string]any{"version": "3.6.0", "install": map[string]any{"spec": map[string]any{
+			"deployments": []any{map[string]any{"name": "rhods-operator"}}}}},
+		"status": map[string]any{"phase": "Succeeded"},
 	})
-	f.put(rhodsOperator, map[string]interface{}{"status": map[string]interface{}{"readyReplicas": 1}})
+	f.put(rhodsOperator, map[string]any{"status": map[string]any{"readyReplicas": 1}})
 	return f, c
 }
 
 // comps returns spec.components of a stored DSC.
-func comps(obj map[string]interface{}) map[string]interface{} {
-	spec, _ := obj["spec"].(map[string]interface{})
-	c, _ := spec["components"].(map[string]interface{})
+func comps(obj map[string]any) map[string]any {
+	spec, _ := obj["spec"].(map[string]any)
+	c, _ := spec["components"].(map[string]any)
 	return c
 }
 
-func setPath(t *testing.T, obj map[string]interface{}, path string, value interface{}) {
+func setPath(t *testing.T, obj map[string]any, path string, value any) {
 	t.Helper()
 	keys := strings.Split(path, ".")
 	m := obj
 	for _, k := range keys[:len(keys)-1] {
-		next, ok := m[k].(map[string]interface{})
+		next, ok := m[k].(map[string]any)
 		if !ok {
-			next = map[string]interface{}{}
+			next = map[string]any{}
 			m[k] = next
 		}
 		m = next
@@ -106,9 +106,9 @@ func patchesTo(f *resourceFake) (dry, real []fakeCall) {
 	return dry, real
 }
 
-func decodeOps(t *testing.T, body string) []map[string]interface{} {
+func decodeOps(t *testing.T, body string) []map[string]any {
 	t.Helper()
-	var ops []map[string]interface{}
+	var ops []map[string]any
 	if err := json.Unmarshal([]byte(body), &ops); err != nil {
 		t.Fatalf("not a JSON patch: %s", body)
 	}
@@ -193,13 +193,13 @@ func TestDSCToggleTreeFromTheInstalledCRD(t *testing.T) {
 }
 
 func TestAllowedStatesFallsBackToThePatternOnlyWithoutEnum(t *testing.T) {
-	if got := allowedStates(map[string]interface{}{"enum": []interface{}{"Managed", "Removed"}, "pattern": "^(Managed|Unmanaged|Force|Removed)$"}); !reflect.DeepEqual(got, []string{"Managed", "Removed"}) {
+	if got := allowedStates(map[string]any{"enum": []any{"Managed", "Removed"}, "pattern": "^(Managed|Unmanaged|Force|Removed)$"}); !reflect.DeepEqual(got, []string{"Managed", "Removed"}) {
 		t.Fatalf("enum: %v", got)
 	}
-	if got := allowedStates(map[string]interface{}{"pattern": "^(Managed|Unmanaged|Force|Removed)$"}); !reflect.DeepEqual(got, []string{"Managed", "Unmanaged", "Force", "Removed"}) {
+	if got := allowedStates(map[string]any{"pattern": "^(Managed|Unmanaged|Force|Removed)$"}); !reflect.DeepEqual(got, []string{"Managed", "Unmanaged", "Force", "Removed"}) {
 		t.Fatalf("pattern: %v", got)
 	}
-	if got := allowedStates(map[string]interface{}{"pattern": "^[a-z]+$"}); got != nil {
+	if got := allowedStates(map[string]any{"pattern": "^[a-z]+$"}); got != nil {
 		t.Fatalf("an unparsable pattern gives no values, got %v", got)
 	}
 }
@@ -260,7 +260,7 @@ func TestDSCManagerOnTheLiveDSC(t *testing.T) {
 }
 
 func TestDSCManagerMismatches(t *testing.T) {
-	_, c := managerWorld(t, func(dsc map[string]interface{}) {
+	_, c := managerWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.dashboard.standard", nil) // an upgraded DSC that lost it
 		setPath(t, dsc, "spec.components.databaseservice", nil)    // added by a later release
 		setPath(t, dsc, "spec.components.aigateway.managementState", "Removed")
@@ -317,9 +317,9 @@ func TestDSCManagerComparisonOnTheLiveDSC(t *testing.T) {
 // Fields the installed CRD does not define are rows of the tree, under the
 // nearest node above them, as well as mismatches; Fix removes them.
 func TestDSCManagerUnknownFieldsAreRowsAndFixRemovesThem(t *testing.T) {
-	f, c := managerWorld(t, func(dsc map[string]interface{}) {
-		setPath(t, dsc, "spec.components.codeflare", map[string]interface{}{"managementState": "Removed"}) // a v2 component
-		setPath(t, dsc, "spec.components.kserve.serving", map[string]interface{}{"managementState": "Managed"})
+	f, c := managerWorld(t, func(dsc map[string]any) {
+		setPath(t, dsc, "spec.components.codeflare", map[string]any{"managementState": "Removed"}) // a v2 component
+		setPath(t, dsc, "spec.components.kserve.serving", map[string]any{"managementState": "Managed"})
 		setPath(t, dsc, "spec.components.kserve.oauthProxy.legacy", true) // under an object that is not a row
 		setPath(t, dsc, "spec.components.databaseservice", nil)
 	})
@@ -420,7 +420,7 @@ func diffList(a, b []string) []string {
 // Without a release default nothing is compared with it, and the
 // comparison says so rather than reporting nothing missing.
 func TestDSCManagerComparisonWithoutAReleaseDefault(t *testing.T) {
-	f, c := managerWorld(t, func(dsc map[string]interface{}) {
+	f, c := managerWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.dashboard.standard", nil)
 	})
 	csv := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0")
@@ -476,7 +476,7 @@ func TestToggleReplacesOnlyThatFieldAfterADryRun(t *testing.T) {
 }
 
 func TestToggleAddsMissingObjectsWithATestOfTheirParent(t *testing.T) {
-	f, c := managerWorld(t, func(dsc map[string]interface{}) {
+	f, c := managerWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.databaseservice", nil)
 		setPath(t, dsc, "spec.components.dashboard.maasPortal", nil)
 	})
@@ -488,11 +488,11 @@ func TestToggleAddsMissingObjectsWithATestOfTheirParent(t *testing.T) {
 	_, real := patchesTo(f)
 	ops := decodeOps(t, real[0].Body)
 	if len(ops) != 2 || ops[0]["op"] != "test" || ops[0]["path"] != "/spec/components" || !jsonEqual(ops[0]["value"], before) ||
-		ops[1]["op"] != "add" || ops[1]["path"] != "/spec/components/databaseservice" || !jsonEqual(ops[1]["value"], map[string]interface{}{"managementState": "Managed"}) {
+		ops[1]["op"] != "add" || ops[1]["path"] != "/spec/components/databaseservice" || !jsonEqual(ops[1]["value"], map[string]any{"managementState": "Managed"}) {
 		t.Fatalf("ops = %v", ops)
 	}
 
-	dashboard, _ := comps(f.get(dscV3Path))["dashboard"].(map[string]interface{})
+	dashboard, _ := comps(f.get(dscV3Path))["dashboard"].(map[string]any)
 	res, err = reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "dashboard.maasPortal", From: "", To: "Managed"})
 	if err != nil || !res.Success {
 		t.Fatalf("result = %+v, %v", res, err)
@@ -574,7 +574,7 @@ func TestToggleValidatesAgainstTheSchema(t *testing.T) {
 }
 
 func TestToggleToManagedUnderARemovedParent(t *testing.T) {
-	f, c := managerWorld(t, func(dsc map[string]interface{}) {
+	f, c := managerWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.aigateway.managementState", "Removed")
 		setPath(t, dsc, "spec.components.aigateway.modelsAsAService.managementState", "Removed")
 	})
@@ -615,7 +615,7 @@ func TestToggleToManagedUnderARemovedParent(t *testing.T) {
 // is unmet or cannot be read.
 func TestToggleToRemovedFailsClosed(t *testing.T) {
 	f, c := managerWorld(t, nil)
-	f.put(rhodsOperator, map[string]interface{}{"status": map[string]interface{}{"readyReplicas": 0}})
+	f.put(rhodsOperator, map[string]any{"status": map[string]any{"readyReplicas": 0}})
 	plan, err := PlanDSCChange(c, "toggle", "ray", "Removed", false, false)
 	if err != nil || len(plan.Blocked) != 1 || plan.Blocked[0].Component != "ray" || !strings.Contains(strings.Join(plan.Blocked[0].Reasons, " "), "RHOAI operator must be running to apply the change and clean up after it: Deployment redhat-ods-operator/rhods-operator has no ready pod") {
 		t.Fatalf("plan = %+v, %v", plan, err)
@@ -625,7 +625,7 @@ func TestToggleToRemovedFailsClosed(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 	// The module API cannot be discovered: refused, not skipped.
-	f.put(rhodsOperator, map[string]interface{}{"status": map[string]interface{}{"readyReplicas": 1}})
+	f.put(rhodsOperator, map[string]any{"status": map[string]any{"readyReplicas": 1}})
 	f.fail["GET /apis/components.platform.opendatahub.io"] = http.StatusServiceUnavailable
 	res, _ = reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed"})
 	if res.Success || !strings.Contains(res.Message, "could not read the ray module CR") {
@@ -647,12 +647,12 @@ func TestToggleToRemovedFailsClosed(t *testing.T) {
 }
 
 func TestDSCChangesRefusedUnderArgoCDAndACM(t *testing.T) {
-	for name, edit := range map[string]func(map[string]interface{}){
-		"argo": func(dsc map[string]interface{}) {
-			setPath(t, dsc, "metadata.annotations", map[string]interface{}{argoTrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"})
+	for name, edit := range map[string]func(map[string]any){
+		"argo": func(dsc map[string]any) {
+			setPath(t, dsc, "metadata.annotations", map[string]any{argoTrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"})
 		},
-		"acm": func(dsc map[string]interface{}) {
-			setPath(t, dsc, "metadata.managedFields", []interface{}{map[string]interface{}{"manager": acmPolicyManager, "operation": "Update", "fieldsType": "FieldsV1", "fieldsV1": map[string]interface{}{"f:spec": map[string]interface{}{}}}})
+		"acm": func(dsc map[string]any) {
+			setPath(t, dsc, "metadata.managedFields", []any{map[string]any{"manager": acmPolicyManager, "operation": "Update", "fieldsType": "FieldsV1", "fieldsV1": map[string]any{"f:spec": map[string]any{}}}})
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -680,7 +680,7 @@ func TestDSCChangesRefusedUnderArgoCDAndACM(t *testing.T) {
 // --- fix -------------------------------------------------------------------
 
 func TestFixAddsExactlyThePreviewedToggles(t *testing.T) {
-	f, c := managerWorld(t, func(dsc map[string]interface{}) {
+	f, c := managerWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.dashboard.standard", nil)
 		setPath(t, dsc, "spec.components.databaseservice", nil)
 	})
@@ -727,7 +727,7 @@ func TestFixAddsExactlyThePreviewedToggles(t *testing.T) {
 // --- soft reset --------------------------------------------------------------
 
 func TestSoftResetChangesOnlyWhatDiffersAndKeepsProtectedFields(t *testing.T) {
-	f, c := managerWorld(t, func(dsc map[string]interface{}) {
+	f, c := managerWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.workbenches.workbenchNamespace", "my-notebooks")
 		setPath(t, dsc, "spec.components.aiHub.instancesNamespace", "my-registries")
 		setPath(t, dsc, "spec.components.kserve.rawDeploymentServiceConfig", "Headed")
@@ -744,7 +744,7 @@ func TestSoftResetChangesOnlyWhatDiffersAndKeepsProtectedFields(t *testing.T) {
 	if !reflect.DeepEqual(paths, want) {
 		t.Fatalf("changes = %v, want %v", paths, want)
 	}
-	res, err := SoftResetDSC(c, types.DSCPlanRequest{Name: "default-dsc", UID: plan.UID, Token: plan.Token, KeepEnabled: boolPtr(false)})
+	res, err := SoftResetDSC(c, types.DSCPlanRequest{Name: "default-dsc", UID: plan.UID, Token: plan.Token, KeepEnabled: new(false)})
 	if err != nil || !res.Success {
 		t.Fatalf("reset = %+v, %v", res, err)
 	}
@@ -772,12 +772,12 @@ func TestSoftResetChangesOnlyWhatDiffersAndKeepsProtectedFields(t *testing.T) {
 
 func TestSoftResetRefusesWhileARemovalIsBlocked(t *testing.T) {
 	f, c := managerWorld(t, nil)
-	f.put(rhodsOperator, map[string]interface{}{"status": map[string]interface{}{"readyReplicas": 0}})
+	f.put(rhodsOperator, map[string]any{"status": map[string]any{"readyReplicas": 0}})
 	plan, _ := PlanDSCChange(c, "soft-reset", "", "", false, false)
 	if len(plan.Blocked) == 0 || plan.Blocked[0].Component != "aigateway" {
 		t.Fatalf("plan = %+v", plan)
 	}
-	res, _ := SoftResetDSC(c, types.DSCPlanRequest{Name: "default-dsc", UID: plan.UID, Token: plan.Token, KeepEnabled: boolPtr(false)})
+	res, _ := SoftResetDSC(c, types.DSCPlanRequest{Name: "default-dsc", UID: plan.UID, Token: plan.Token, KeepEnabled: new(false)})
 	if res.Success || res.ErrorCode != "prerequisites" {
 		t.Fatalf("reset = %+v", res)
 	}
@@ -789,7 +789,7 @@ func TestSoftResetRefusesWhileARemovalIsBlocked(t *testing.T) {
 // --- JSON patch builder -------------------------------------------------------
 
 func TestBuildJSONPatchGroupsMissingObjects(t *testing.T) {
-	obj := map[string]interface{}{"spec": map[string]interface{}{"components": map[string]interface{}{"kserve": map[string]interface{}{"managementState": "Managed"}}}}
+	obj := map[string]any{"spec": map[string]any{"components": map[string]any{"kserve": map[string]any{"managementState": "Managed"}}}}
 	ops, err := buildJSONPatch(obj, []dscAssign{
 		{Path: componentsPath("aigateway", "managementState"), Value: "Removed"},
 		{Path: componentsPath("aigateway", "batchGateway", "managementState"), Value: "Removed"},

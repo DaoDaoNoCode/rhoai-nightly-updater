@@ -154,28 +154,28 @@ func (l maasLimit) api() *types.MaaSLimit {
 
 // addTo sets the limit on a modelRefs entry: exactly one of unlimited and
 // tokenRateLimits.
-func (l maasLimit) addTo(ref map[string]interface{}) {
+func (l maasLimit) addTo(ref map[string]any) {
 	if l.unlimited {
 		ref["unlimited"] = true
 		return
 	}
-	var rates []interface{}
+	var rates []any
 	for _, r := range l.rates {
-		rates = append(rates, map[string]interface{}{"limit": r.limit, "window": r.window})
+		rates = append(rates, map[string]any{"limit": r.limit, "window": r.window})
 	}
 	ref["tokenRateLimits"] = rates
 }
 
 // maasLimitFromModelRef reads the limit of a modelRefs entry as the
 // cluster has it.
-func maasLimitFromModelRef(ref map[string]interface{}) (maasLimit, bool) {
+func maasLimitFromModelRef(ref map[string]any) (maasLimit, bool) {
 	if u, _ := ref["unlimited"].(bool); u {
 		return maasLimit{unlimited: true}, true
 	}
-	raw, _ := ref["tokenRateLimits"].([]interface{})
+	raw, _ := ref["tokenRateLimits"].([]any)
 	var out maasLimit
 	for _, item := range raw {
-		m, _ := item.(map[string]interface{})
+		m, _ := item.(map[string]any)
 		w, _ := m["window"].(string)
 		var n int64
 		switch v := m["limit"].(type) {
@@ -332,19 +332,19 @@ func openShiftGroupName(n string) bool {
 
 // owner is spec.owner of the subscription, and spec.subjects of the access
 // policy (same shape).
-func (a maasAudience) owner() map[string]interface{} {
-	groups := []interface{}{}
-	users := []interface{}{}
+func (a maasAudience) owner() map[string]any {
+	groups := []any{}
+	users := []any{}
 	if a.everyone {
-		groups = append(groups, map[string]interface{}{"name": maasSubjectGroup})
+		groups = append(groups, map[string]any{"name": maasSubjectGroup})
 	}
 	for _, g := range a.groups {
-		groups = append(groups, map[string]interface{}{"name": g})
+		groups = append(groups, map[string]any{"name": g})
 	}
 	for _, u := range a.users {
 		users = append(users, u)
 	}
-	out := map[string]interface{}{"groups": groups, "users": users}
+	out := map[string]any{"groups": groups, "users": users}
 	if len(groups) == 0 {
 		delete(out, "groups")
 	}
@@ -353,16 +353,16 @@ func (a maasAudience) owner() map[string]interface{} {
 
 // maasAudienceFromOwner reads spec.owner (or spec.subjects) as the
 // cluster has it; system:authenticated alone is everyone.
-func maasAudienceFromOwner(owner map[string]interface{}) maasAudience {
+func maasAudienceFromOwner(owner map[string]any) maasAudience {
 	var a maasAudience
-	groups, _ := owner["groups"].([]interface{})
+	groups, _ := owner["groups"].([]any)
 	for _, g := range groups {
-		m, _ := g.(map[string]interface{})
+		m, _ := g.(map[string]any)
 		if name, _ := m["name"].(string); name != "" {
 			a.groups = append(a.groups, name)
 		}
 	}
-	users, _ := owner["users"].([]interface{})
+	users, _ := owner["users"].([]any)
 	for _, u := range users {
 		if name, _ := u.(string); name != "" {
 			a.users = append(a.users, name)
@@ -498,8 +498,8 @@ func readMaaSToolSubscription(c *Client) (maasToolSub, error) {
 	var sub struct {
 		Metadata objectMeta `json:"metadata"`
 		Spec     struct {
-			Owner     map[string]interface{}   `json:"owner"`
-			ModelRefs []map[string]interface{} `json:"modelRefs"`
+			Owner     map[string]any   `json:"owner"`
+			ModelRefs []map[string]any `json:"modelRefs"`
 		} `json:"spec"`
 	}
 	if err := json.Unmarshal(body, &sub); err != nil {
@@ -563,32 +563,32 @@ func limitFor(limits map[string]maasLimit, p maasPub) maasLimit {
 
 // maasAccessObjects are this tool's MaaSSubscription and MaaSAuthPolicy for
 // the published models: each model with its limit, both for the audience.
-func maasAccessObjects(c *Client, pubs []maasPub, limits map[string]maasLimit, aud maasAudience, priority int) (map[string]interface{}, map[string]interface{}) {
+func maasAccessObjects(c *Client, pubs []maasPub, limits map[string]maasLimit, aud maasAudience, priority int) (map[string]any, map[string]any) {
 	sort.Slice(pubs, func(i, j int) bool { return pubs[i].key() < pubs[j].key() })
-	var subRefs, authRefs []interface{}
+	var subRefs, authRefs []any
 	for _, p := range pubs {
-		ref := map[string]interface{}{"name": p.model, "namespace": p.project}
+		ref := map[string]any{"name": p.model, "namespace": p.project}
 		limitFor(limits, p).addTo(ref)
 		subRefs = append(subRefs, ref)
-		authRefs = append(authRefs, map[string]interface{}{"name": p.model, "namespace": p.project})
+		authRefs = append(authRefs, map[string]any{"name": p.model, "namespace": p.project})
 	}
 	who := "Every signed-in user may use this tool's published models"
 	if !aud.everyone {
 		who = "Only " + aud.text() + " may use this tool's published models"
 	}
-	sub := map[string]interface{}{
+	sub := map[string]any{
 		"apiVersion": maasAPI(c),
 		"kind":       "MaaSSubscription",
-		"metadata": map[string]interface{}{"name": "rhoai-nightly-updater-subscription", "namespace": maasTenantNamespace, "labels": toolLabels(),
-			"annotations": map[string]interface{}{"openshift.io/display-name": "rhoai-nightly-updater models", "openshift.io/description": maasSubscriptionDescription(pubs, limits, aud)}},
-		"spec": map[string]interface{}{"owner": aud.owner(), "modelRefs": subRefs, "priority": priority},
+		"metadata": map[string]any{"name": "rhoai-nightly-updater-subscription", "namespace": maasTenantNamespace, "labels": toolLabels(),
+			"annotations": map[string]any{"openshift.io/display-name": "rhoai-nightly-updater models", "openshift.io/description": maasSubscriptionDescription(pubs, limits, aud)}},
+		"spec": map[string]any{"owner": aud.owner(), "modelRefs": subRefs, "priority": priority},
 	}
-	auth := map[string]interface{}{
+	auth := map[string]any{
 		"apiVersion": maasAPI(c),
 		"kind":       "MaaSAuthPolicy",
-		"metadata": map[string]interface{}{"name": "rhoai-nightly-updater-access", "namespace": maasTenantNamespace, "labels": toolLabels(),
-			"annotations": map[string]interface{}{"openshift.io/display-name": "rhoai-nightly-updater models", "openshift.io/description": who}},
-		"spec": map[string]interface{}{"modelRefs": authRefs, "subjects": aud.owner()},
+		"metadata": map[string]any{"name": "rhoai-nightly-updater-access", "namespace": maasTenantNamespace, "labels": toolLabels(),
+			"annotations": map[string]any{"openshift.io/display-name": "rhoai-nightly-updater models", "openshift.io/description": who}},
+		"spec": map[string]any{"modelRefs": authRefs, "subjects": aud.owner()},
 	}
 	return sub, auth
 }

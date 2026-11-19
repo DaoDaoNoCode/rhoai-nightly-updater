@@ -48,9 +48,9 @@ func argoApplication(annotations map[string]string, kind, namespace, name string
 }
 
 // argoApplicationOf is argoApplication for a decoded cluster-scoped object.
-func argoApplicationOf(obj map[string]interface{}, kind string) string {
-	meta, _ := obj["metadata"].(map[string]interface{})
-	raw, _ := meta["annotations"].(map[string]interface{})
+func argoApplicationOf(obj map[string]any, kind string) string {
+	meta, _ := obj["metadata"].(map[string]any)
+	raw, _ := meta["annotations"].(map[string]any)
 	id, _ := raw[argoTrackingAnnotation].(string)
 	name, _ := meta["name"].(string)
 	return argoApplication(map[string]string{argoTrackingAnnotation: id}, kind, "", name)
@@ -69,21 +69,21 @@ const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
 // CD neither shows it as missing nor changes it again (seen on a live
 // cluster without them). Finalizers and other runtime metadata are not
 // copied.
-func keepArgoTracking(previous, obj map[string]interface{}) {
-	prevMeta, _ := previous["metadata"].(map[string]interface{})
-	prevAnn, _ := prevMeta["annotations"].(map[string]interface{})
+func keepArgoTracking(previous, obj map[string]any) {
+	prevMeta, _ := previous["metadata"].(map[string]any)
+	prevAnn, _ := prevMeta["annotations"].(map[string]any)
 	id, _ := prevAnn[argoTrackingAnnotation].(string)
 	if id == "" {
 		return
 	}
-	meta, _ := obj["metadata"].(map[string]interface{})
+	meta, _ := obj["metadata"].(map[string]any)
 	if meta == nil {
-		meta = map[string]interface{}{}
+		meta = map[string]any{}
 		obj["metadata"] = meta
 	}
-	ann, _ := meta["annotations"].(map[string]interface{})
+	ann, _ := meta["annotations"].(map[string]any)
 	if ann == nil {
-		ann = map[string]interface{}{}
+		ann = map[string]any{}
 		meta["annotations"] = ann
 	}
 	for k, v := range prevAnn {
@@ -91,10 +91,10 @@ func keepArgoTracking(previous, obj map[string]interface{}) {
 			ann[k] = v
 		}
 	}
-	if prevLabels, _ := prevMeta["labels"].(map[string]interface{}); len(prevLabels) > 0 {
-		labels, _ := meta["labels"].(map[string]interface{})
+	if prevLabels, _ := prevMeta["labels"].(map[string]any); len(prevLabels) > 0 {
+		labels, _ := meta["labels"].(map[string]any)
 		if labels == nil {
-			labels = map[string]interface{}{}
+			labels = map[string]any{}
 			meta["labels"] = labels
 		}
 		for k, v := range prevLabels {
@@ -277,8 +277,8 @@ func readCatalogServes(c *Client, sub types.SubscriptionInfo, cs types.CatalogSo
 	if head == "" {
 		return nil
 	}
-	desc, _ := entry["currentCSVDesc"].(map[string]interface{})
-	ann, _ := desc["annotations"].(map[string]interface{})
+	desc, _ := entry["currentCSVDesc"].(map[string]any)
+	ann, _ := desc["annotations"].(map[string]any)
 	s := &types.CatalogServes{Channel: sub.Channel, CSV: head}
 	s.OperatorImage, _ = ann["containerImage"].(string)
 	s.Built, _ = ann["createdAt"].(string)

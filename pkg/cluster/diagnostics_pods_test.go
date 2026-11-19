@@ -12,24 +12,24 @@ var testNow = time.Date(2026, 10, 5, 22, 0, 0, 0, time.UTC)
 
 func ts(d time.Duration) string { return testNow.Add(-d).Format(time.RFC3339) }
 
-type podOpt func(map[string]interface{})
+type podOpt func(map[string]any)
 
 // makePod builds a ReplicaSet-owned pod JSON object like the API returns.
-func makePod(ns, deployment, hash, suffix string, age time.Duration, opts ...podOpt) map[string]interface{} {
+func makePod(ns, deployment, hash, suffix string, age time.Duration, opts ...podOpt) map[string]any {
 	ctrl := true
-	p := map[string]interface{}{
-		"metadata": map[string]interface{}{
+	p := map[string]any{
+		"metadata": map[string]any{
 			"name":              deployment + "-" + hash + "-" + suffix,
 			"namespace":         ns,
 			"uid":               "pod-" + suffix,
 			"creationTimestamp": ts(age),
-			"labels":            map[string]interface{}{"pod-template-hash": hash},
-			"ownerReferences": []interface{}{map[string]interface{}{
+			"labels":            map[string]any{"pod-template-hash": hash},
+			"ownerReferences": []any{map[string]any{
 				"kind": "ReplicaSet", "name": deployment + "-" + hash, "uid": "rs-" + hash, "controller": ctrl,
 			}},
 		},
-		"status": map[string]interface{}{"phase": "Running", "conditions": []interface{}{
-			map[string]interface{}{"type": "PodScheduled", "status": "True"},
+		"status": map[string]any{"phase": "Running", "conditions": []any{
+			map[string]any{"type": "PodScheduled", "status": "True"},
 		}},
 	}
 	for _, o := range opts {
@@ -38,49 +38,49 @@ func makePod(ns, deployment, hash, suffix string, age time.Duration, opts ...pod
 	return p
 }
 
-func status(p map[string]interface{}) map[string]interface{} {
-	return p["status"].(map[string]interface{})
+func status(p map[string]any) map[string]any {
+	return p["status"].(map[string]any)
 }
 
-func phase(ph string) podOpt { return func(p map[string]interface{}) { status(p)["phase"] = ph } }
+func phase(ph string) podOpt { return func(p map[string]any) { status(p)["phase"] = ph } }
 
 func unschedulable(msg string) podOpt {
-	return func(p map[string]interface{}) {
+	return func(p map[string]any) {
 		status(p)["phase"] = "Pending"
-		status(p)["conditions"] = []interface{}{map[string]interface{}{
+		status(p)["conditions"] = []any{map[string]any{
 			"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": msg,
 		}}
 	}
 }
 
 func waiting(container, reason, msg string, restarts int) podOpt {
-	return func(p map[string]interface{}) {
-		status(p)["containerStatuses"] = []interface{}{map[string]interface{}{
+	return func(p map[string]any) {
+		status(p)["containerStatuses"] = []any{map[string]any{
 			"name": container, "ready": false, "restartCount": restarts,
-			"state": map[string]interface{}{"waiting": map[string]interface{}{"reason": reason, "message": msg}},
+			"state": map[string]any{"waiting": map[string]any{"reason": reason, "message": msg}},
 		}}
 	}
 }
 
 func lastTerminated(reason string, code int, finishedAgo time.Duration) podOpt {
-	return func(p map[string]interface{}) {
-		css := status(p)["containerStatuses"].([]interface{})
-		css[0].(map[string]interface{})["lastState"] = map[string]interface{}{
-			"terminated": map[string]interface{}{"reason": reason, "exitCode": code, "finishedAt": ts(finishedAgo)},
+	return func(p map[string]any) {
+		css := status(p)["containerStatuses"].([]any)
+		css[0].(map[string]any)["lastState"] = map[string]any{
+			"terminated": map[string]any{"reason": reason, "exitCode": code, "finishedAt": ts(finishedAgo)},
 		}
 	}
 }
 
 func running(container string, restarts int) podOpt {
-	return func(p map[string]interface{}) {
-		status(p)["containerStatuses"] = []interface{}{map[string]interface{}{
+	return func(p map[string]any) {
+		status(p)["containerStatuses"] = []any{map[string]any{
 			"name": container, "ready": true, "restartCount": restarts,
-			"state": map[string]interface{}{"running": map[string]interface{}{"startedAt": ts(time.Minute)}},
+			"state": map[string]any{"running": map[string]any{"startedAt": ts(time.Minute)}},
 		}}
 	}
 }
 
-func toDiagPod(t *testing.T, raw map[string]interface{}) diagPod {
+func toDiagPod(t *testing.T, raw map[string]any) diagPod {
 	t.Helper()
 	b, _ := json.Marshal(raw)
 	var p diagPod
@@ -94,7 +94,7 @@ func TestClassifyPod(t *testing.T) {
 	const ns = "redhat-ods-applications"
 	tests := []struct {
 		name     string
-		pod      map[string]interface{}
+		pod      map[string]any
 		wantKind podIssueKind // "" means healthy / not reported
 		wantIn   string       // substring of Message
 	}{
@@ -127,11 +127,11 @@ func TestClassifyPod(t *testing.T) {
 			makePod(ns, "x", "h", "a", 72*time.Hour, running("c", 7), lastTerminated("Error", 1, 2*time.Hour)), "", ""},
 		{"completed pod", makePod(ns, "maas-ui", "d5d4dc448", "8868x", 48*time.Hour, phase("Succeeded")), "", ""},
 		{"terminating pod",
-			makePod(ns, "x", "h", "a", time.Hour, waiting("c", "CrashLoopBackOff", "", 9), func(p map[string]interface{}) {
-				p["metadata"].(map[string]interface{})["deletionTimestamp"] = ts(time.Second)
+			makePod(ns, "x", "h", "a", time.Hour, waiting("c", "CrashLoopBackOff", "", 9), func(p map[string]any) {
+				p["metadata"].(map[string]any)["deletionTimestamp"] = ts(time.Second)
 			}), "", ""},
-		{"never scheduled, no condition", makePod(ns, "x", "h", "a", 5*time.Minute, phase("Pending"), func(p map[string]interface{}) {
-			status(p)["conditions"] = []interface{}{}
+		{"never scheduled, no condition", makePod(ns, "x", "h", "a", 5*time.Minute, phase("Pending"), func(p map[string]any) {
+			status(p)["conditions"] = []any{}
 		}), issueNotScheduled, "scheduler"},
 	}
 	for _, tt := range tests {
@@ -151,10 +151,10 @@ func TestClassifyPod(t *testing.T) {
 }
 
 func TestClassifyPod_InitContainerCrashLoop(t *testing.T) {
-	p := makePod("ns", "x", "h", "a", time.Hour, phase("Pending"), func(p map[string]interface{}) {
-		status(p)["initContainerStatuses"] = []interface{}{map[string]interface{}{
+	p := makePod("ns", "x", "h", "a", time.Hour, phase("Pending"), func(p map[string]any) {
+		status(p)["initContainerStatuses"] = []any{map[string]any{
 			"name": "init", "restartCount": 4,
-			"state": map[string]interface{}{"waiting": map[string]interface{}{"reason": "CrashLoopBackOff"}},
+			"state": map[string]any{"waiting": map[string]any{"reason": "CrashLoopBackOff"}},
 		}}
 	})
 	got := classifyPod(toDiagPod(t, p), testNow)
@@ -176,7 +176,7 @@ func TestPodOwner(t *testing.T) {
 func observabilityCluster(t *testing.T, eventsForbidden bool) (*fakeAPI, *Client) {
 	f, c := newFakeAPI(t)
 	const ns = "redhat-ods-applications"
-	pods := []interface{}{
+	pods := []any{
 		makePod(ns, "odh-observability", "7b6d65d9b7", "vxzxh", 65*time.Hour, phase("Pending"), waiting("manager", "ContainerCreating", "", 0)),
 		makePod(ns, "odh-observability", "84f945d8bc", "g5kp6", 65*time.Hour, phase("Pending"), waiting("manager", "ContainerCreating", "", 0)),
 		makePod(ns, "trustyai-operator-module-controller-manager", "768dc89f6c", "ttk76", 65*time.Hour,
@@ -186,16 +186,16 @@ func observabilityCluster(t *testing.T, eventsForbidden bool) (*fakeAPI, *Client
 	}
 	// Creation times are relative to the real clock for scanPods.
 	for _, p := range pods {
-		meta := p.(map[string]interface{})["metadata"].(map[string]interface{})
+		meta := p.(map[string]any)["metadata"].(map[string]any)
 		meta["creationTimestamp"] = time.Now().Add(-65 * time.Hour).UTC().Format(time.RFC3339)
 	}
 	for _, p := range pods[2:3] {
-		css := status(p.(map[string]interface{}))["containerStatuses"].([]interface{})
-		css[0].(map[string]interface{})["lastState"] = map[string]interface{}{"terminated": map[string]interface{}{
+		css := status(p.(map[string]any))["containerStatuses"].([]any)
+		css[0].(map[string]any)["lastState"] = map[string]any{"terminated": map[string]any{
 			"reason": "Error", "exitCode": 1, "finishedAt": time.Now().Add(-time.Minute).UTC().Format(time.RFC3339),
 		}}
 	}
-	f.obj("/api/v1/namespaces/"+ns+"/pods", map[string]interface{}{"items": pods})
+	f.obj("/api/v1/namespaces/"+ns+"/pods", map[string]any{"items": pods})
 	if eventsForbidden {
 		f.status("GET", "/api/v1/namespaces/"+ns+"/events", http.StatusForbidden, "Forbidden")
 	} else {
@@ -267,8 +267,8 @@ func TestOperatorPods_CrashLoopIsCritical(t *testing.T) {
 	f, c := newFakeAPI(t)
 	pod := makePod(SubNS, "rhods-operator", "75bd6cd964", "abcde", time.Hour,
 		waiting("manager", "CrashLoopBackOff", "", 12), lastTerminated("Error", 2, time.Minute))
-	pod["metadata"].(map[string]interface{})["creationTimestamp"] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
-	f.obj("/api/v1/namespaces/"+SubNS+"/pods", map[string]interface{}{"items": []interface{}{pod}})
+	pod["metadata"].(map[string]any)["creationTimestamp"] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	f.obj("/api/v1/namespaces/"+SubNS+"/pods", map[string]any{"items": []any{pod}})
 	out := checkOperatorPods(c)
 	if len(out.problems) != 1 || out.problems[0].Severity != "critical" || out.problems[0].AutoFixable {
 		t.Fatalf("out = %+v", out)

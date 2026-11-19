@@ -25,28 +25,28 @@ func publishedMaaSCluster(t *testing.T) *modelsCluster {
 	return mc
 }
 
-func modelGateway(t *testing.T, mc *modelsCluster) map[string]interface{} {
+func modelGateway(t *testing.T, mc *modelsCluster) map[string]any {
 	t.Helper()
-	spec, _ := mc.f.get(testModelPath)["spec"].(map[string]interface{})
-	router, _ := spec["router"].(map[string]interface{})
-	gw, ok := router["gateway"].(map[string]interface{})
+	spec, _ := mc.f.get(testModelPath)["spec"].(map[string]any)
+	router, _ := spec["router"].(map[string]any)
+	gw, ok := router["gateway"].(map[string]any)
 	if !ok {
 		t.Fatalf("model router has no gateway object: %v", router)
 	}
 	return gw
 }
 
-func setModelRefs(mc *modelsCluster, refs []interface{}) {
+func setModelRefs(mc *modelsCluster, refs []any) {
 	mc.f.mu.Lock()
 	defer mc.f.mu.Unlock()
 	k, _ := parseFakePath(testModelPath)
 	spec := ensureMap(mc.f.objects[k], "spec")
 	router := ensureMap(spec, "router")
 	if refs == nil {
-		router["gateway"] = map[string]interface{}{}
+		router["gateway"] = map[string]any{}
 		return
 	}
-	router["gateway"] = map[string]interface{}{"refs": refs}
+	router["gateway"] = map[string]any{"refs": refs}
 }
 
 func deleteFakeObject(mc *modelsCluster, path string) {
@@ -104,7 +104,7 @@ func TestMaaSUnpublish_RemovesALeftOverGatewayRef(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("unpublish: %+v", res)
 	}
-	if spec, _ := mc.f.get(testModelPath)["spec"].(map[string]interface{}); spec["router"] != nil {
+	if spec, _ := mc.f.get(testModelPath)["spec"].(map[string]any); spec["router"] != nil {
 		t.Fatalf("model router after unpublish = %v", spec["router"])
 	}
 }
@@ -216,10 +216,10 @@ func TestMaaSTeardown_KeepsTheGatewayWhileRoutesAreAttached(t *testing.T) {
 		t.Fatalf("setup: %+v", res)
 	}
 	prev := mc.f.onGet
-	mc.f.onGet = func(k fakeKey, obj map[string]interface{}) {
+	mc.f.onGet = func(k fakeKey, obj map[string]any) {
 		prev(k, obj)
 		if k.plural == "gateways" && k.name == maasGatewayName {
-			obj["status"] = map[string]interface{}{"listeners": []interface{}{map[string]interface{}{"name": "https", "attachedRoutes": 1}}}
+			obj["status"] = map[string]any{"listeners": []any{map[string]any{"name": "https", "attachedRoutes": 1}}}
 		}
 	}
 	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"})
@@ -238,8 +238,8 @@ func TestMaaSTeardown_KeepsADSCValueSomeoneElseSetSinceSetup(t *testing.T) {
 	mc.f.mu.Lock()
 	k, _ := parseFakePath(tMaaSDSC)
 	meta := ensureMap(mc.f.objects[k], "metadata")
-	meta["managedFields"] = []interface{}{map[string]interface{}{"manager": "kubectl-edit", "operation": "Update",
-		"fieldsV1": map[string]interface{}{"f:spec": map[string]interface{}{"f:components": map[string]interface{}{"f:aigateway": map[string]interface{}{"f:modelsAsAService": map[string]interface{}{"f:managementState": map[string]interface{}{}}}}}}}}
+	meta["managedFields"] = []any{map[string]any{"manager": "kubectl-edit", "operation": "Update",
+		"fieldsV1": map[string]any{"f:spec": map[string]any{"f:components": map[string]any{"f:aigateway": map[string]any{"f:modelsAsAService": map[string]any{"f:managementState": map[string]any{}}}}}}}}
 	mc.f.mu.Unlock()
 	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"})
 	dsc, _ := json.Marshal(mc.f.get(tMaaSDSC))
@@ -250,7 +250,7 @@ func TestMaaSTeardown_KeepsADSCValueSomeoneElseSetSinceSetup(t *testing.T) {
 	// Following the message: the user turns MaaS off, and removal finishes.
 	mc.f.mu.Lock()
 	k, _ = parseFakePath(tMaaSDSC)
-	ensureMap(ensureMap(ensureMap(mc.f.objects[k], "spec"), "components"), "aigateway")["modelsAsAService"] = map[string]interface{}{"managementState": "Removed"}
+	ensureMap(ensureMap(ensureMap(mc.f.objects[k], "spec"), "components"), "aigateway")["modelsAsAService"] = map[string]any{"managementState": "Removed"}
 	mc.f.mu.Unlock()
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"}); !res.Success || mc.f.has(tMaaSGateway) || mc.f.has(tMaaSDB) {
 		t.Fatalf("teardown after turning MaaS off = %+v", res)
@@ -282,9 +282,9 @@ func TestMaaSUnpublish_FinishesWhenMaaSControllerIsGone(t *testing.T) {
 	mc := publishedMaaSCluster(t)
 	mc.f.mu.Lock()
 	k, _ := parseFakePath(tMaaSRef)
-	ensureMap(mc.f.objects[k], "metadata")["finalizers"] = []interface{}{"maas.opendatahub.io/model-cleanup"}
+	ensureMap(mc.f.objects[k], "metadata")["finalizers"] = []any{"maas.opendatahub.io/model-cleanup"}
 	dk, _ := parseFakePath(tMaaSDSC)
-	ensureMap(ensureMap(ensureMap(mc.f.objects[dk], "spec"), "components"), "aigateway")["modelsAsAService"] = map[string]interface{}{"managementState": "Removed"}
+	ensureMap(ensureMap(ensureMap(mc.f.objects[dk], "spec"), "components"), "aigateway")["modelsAsAService"] = map[string]any{"managementState": "Removed"}
 	mc.f.mu.Unlock()
 	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"})
 	if !res.Success || mc.f.has(tMaaSRef) || !strings.Contains(strings.Join(res.Logs, " "), "maas-controller") {

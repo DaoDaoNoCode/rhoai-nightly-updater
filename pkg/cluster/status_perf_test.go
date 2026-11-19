@@ -68,7 +68,7 @@ func (a *statusAPI) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = fmt.Fprint(w, body)
 	case p == namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, ""):
-		_, _ = fmt.Fprint(w, stableManifestJSON("redhat-operators", "stable-3.5", []map[string]interface{}{
+		_, _ = fmt.Fprint(w, stableManifestJSON("redhat-operators", "stable-3.5", []map[string]any{
 			{"name": "stable-3.5", "currentCSV": "rhods-operator.v3.5.0", "currentCSVDesc": map[string]string{"version": "3.5.0"}},
 		}))
 	case p == namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName):
@@ -125,7 +125,7 @@ func TestGetStatus_ReadsInstalledCSVByNameAndCachesStableTarget(t *testing.T) {
 		csvList: `{"items":[]}`,
 	}
 	c := newStatusAPI(t, a)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		status, err := GetStatus(c)
 		if err != nil {
 			t.Fatal(err)
@@ -180,7 +180,7 @@ func TestGetStatus_StableDiscoveryErrorIsNotCached(t *testing.T) {
 	pm := namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, "")
 	a := &statusAPI{csvList: `{"items":[]}`, failPath: map[string]int{pm: 503}}
 	c := newStatusAPI(t, a)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		status, _ := GetStatus(c)
 		if status.StableDiscoveryError == "" {
 			t.Fatal("expected discovery error")
@@ -234,8 +234,6 @@ func TestCSVForInstalledName(t *testing.T) {
 	}
 }
 
-func boolPtr(b bool) *bool { return &b }
-
 func TestGetNightlyStatus(t *testing.T) {
 	nightlySub := types.SubscriptionInfo{Source: CatalogName}
 	installedImg := quayImage + ":rhoai-3.6@" + digestOf(1)
@@ -250,8 +248,8 @@ func TestGetNightlyStatus(t *testing.T) {
 	}{
 		{name: "not on the nightly catalog", sub: types.SubscriptionInfo{Source: "redhat-operators"}, cs: types.CatalogSourceInfo{Exists: true, Image: installedImg}, wantNil: true},
 		{name: "no catalog source", sub: nightlySub, wantNil: true},
-		{name: "up to date", sub: nightlySub, cs: types.CatalogSourceInfo{Exists: true, Image: installedImg}, tagDigest: digestOf(1), wantUpdate: boolPtr(false)},
-		{name: "update available", sub: nightlySub, cs: types.CatalogSourceInfo{Exists: true, Image: installedImg}, tagDigest: digestOf(2), wantUpdate: boolPtr(true)},
+		{name: "up to date", sub: nightlySub, cs: types.CatalogSourceInfo{Exists: true, Image: installedImg}, tagDigest: digestOf(1), wantUpdate: new(false)},
+		{name: "update available", sub: nightlySub, cs: types.CatalogSourceInfo{Exists: true, Image: installedImg}, tagDigest: digestOf(2), wantUpdate: new(true)},
 		{name: "tag-only install: no comparison", sub: nightlySub, cs: types.CatalogSourceInfo{Exists: true, Image: quayImage + ":rhoai-3.6"}, tagDigest: digestOf(2)},
 		{name: "quay lookup fails", sub: nightlySub, cs: types.CatalogSourceInfo{Exists: true, Image: installedImg}, wantError: true},
 		{name: "custom catalog image", sub: nightlySub, cs: types.CatalogSourceInfo{Exists: true, Image: "quay.io/rhoai/rhoai-fbc-fragment@" + digestOf(3)}},
@@ -299,7 +297,7 @@ func TestGetNightlyStatus_CachedPerInstalledImage(t *testing.T) {
 	installFakeRegistry(t, f)
 	sub := types.SubscriptionInfo{Source: CatalogName}
 	old := types.CatalogSourceInfo{Exists: true, Image: quayImage + ":rhoai-3.6@" + digestOf(1)}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if got := getNightlyStatus(context.Background(), "a", sub, old); got.UpdateAvailable == nil || !*got.UpdateAvailable {
 			t.Fatalf("poll %d: %+v", i, got)
 		}

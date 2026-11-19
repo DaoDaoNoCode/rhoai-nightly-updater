@@ -88,7 +88,7 @@ func HandleReady(w http.ResponseWriter, r *http.Request) {
 		checks["server"] = "shutting down"
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]any{
 			"status": "draining",
 			"checks": checks,
 		}); err != nil {
@@ -102,7 +102,7 @@ func HandleReady(w http.ResponseWriter, r *http.Request) {
 		checks["kubernetes"] = "token unavailable"
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]any{
 			"status": "degraded",
 			"checks": checks,
 		}); err != nil {
@@ -116,7 +116,7 @@ func HandleReady(w http.ResponseWriter, r *http.Request) {
 		checks["kubernetes"] = "unreachable"
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]any{
 			"status": "degraded",
 			"checks": checks,
 		}); err != nil {
@@ -129,7 +129,7 @@ func HandleReady(w http.ResponseWriter, r *http.Request) {
 	if lastErr != nil {
 		checks["kubernetes"] = "ok (last check failed; within grace period)"
 	}
-	writeJSON(w, map[string]interface{}{
+	writeJSON(w, map[string]any{
 		"status": "ok",
 		"checks": checks,
 	}, "ready")

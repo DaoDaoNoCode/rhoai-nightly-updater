@@ -220,7 +220,7 @@ func TestMaaS_PruneKeepsTheOthersLimitsAndAudience(t *testing.T) {
 		t.Fatalf("prune: changed %t, %v", changed, err)
 	}
 	spec, _ := subSpec(t, mc)
-	refs, _ := spec["modelRefs"].([]interface{})
+	refs, _ := spec["modelRefs"].([]any)
 	if len(refs) != 1 {
 		t.Fatalf("modelRefs: %s", asJSON(refs))
 	}

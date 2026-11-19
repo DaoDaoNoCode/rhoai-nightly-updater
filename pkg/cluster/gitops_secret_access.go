@@ -31,10 +31,10 @@ var secretAccessProbes = []struct{ verb, namespace, name, where string }{
 // and the system:basic-user ClusterRoleBinding), so the check needs no RBAC
 // of its own.
 func canI(c *Client, verb, namespace, name string) (bool, error) {
-	body, _ := json.Marshal(map[string]interface{}{
+	body, _ := json.Marshal(map[string]any{
 		"apiVersion": "authorization.k8s.io/v1",
 		"kind":       "SelfSubjectAccessReview",
-		"spec": map[string]interface{}{"resourceAttributes": map[string]interface{}{
+		"spec": map[string]any{"resourceAttributes": map[string]any{
 			"group": "", "resource": "secrets", "verb": verb, "namespace": namespace, "name": name,
 		}},
 	})

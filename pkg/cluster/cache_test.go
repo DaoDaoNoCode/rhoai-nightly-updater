@@ -68,11 +68,11 @@ func TestLRUExpiry(t *testing.T) {
 func TestLRUConcurrentUse(t *testing.T) {
 	c := newLRU[int, int](50)
 	var wg sync.WaitGroup
-	for g := 0; g < 8; g++ {
+	for g := range 8 {
 		wg.Add(1)
 		go func(g int) {
 			defer wg.Done()
-			for i := 0; i < 500; i++ {
+			for i := range 500 {
 				c.Add(g*1000+i, i, time.Minute)
 				c.Get(g*1000 + i/2)
 			}
@@ -94,7 +94,7 @@ func flightGroupCollapsesConcurrentCalls(t *testing.T) {
 	release := make(chan struct{})
 	var wg sync.WaitGroup
 	results := make([]int, 10)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

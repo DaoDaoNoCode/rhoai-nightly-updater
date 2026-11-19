@@ -31,9 +31,9 @@ func postJSON(path, token, body string) *http.Request {
 	return r
 }
 
-func decodeError(t *testing.T, w *httptest.ResponseRecorder) map[string]interface{} {
+func decodeError(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
-	var body map[string]interface{}
+	var body map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("response is not JSON: %q", w.Body.String())
 	}
@@ -222,7 +222,7 @@ func TestUpdateEndpointOnlyRunsDryRuns(t *testing.T) {
 	if w.Code != 400 || calls != 0 {
 		t.Fatalf("non-dry-run update: status %d calls %d", w.Code, calls)
 	}
-	for i := 0; i < 2; i++ { // dry runs do not use up the rate limit
+	for i := range 2 { // dry runs do not use up the rate limit
 		w = httptest.NewRecorder()
 		HandleUpdate(w, postJSON("/api/update", "tok", `{"image":"`+image+`","dryRun":true}`))
 		if w.Code != 200 {
@@ -298,7 +298,7 @@ func TestBusyClusterReturnsRunningOperation(t *testing.T) {
 	w = httptest.NewRecorder()
 	HandleDashboardRevert(w, postJSON("/api/dashboard/revert", "user:bob", "{}"))
 	body := decodeError(t, w)
-	busyOp, _ := body["operation"].(map[string]interface{})
+	busyOp, _ := body["operation"].(map[string]any)
 	if w.Code != 409 || body["errorCode"] != "cluster_busy" || busyOp["user"] != "alice" || busyOp["type"] != "update" {
 		t.Fatalf("busy response: %d %s", w.Code, w.Body.String())
 	}
@@ -401,14 +401,12 @@ func TestConcurrentDuplicateMutationsRunOnce(t *testing.T) {
 	})
 	codes := make(chan int, 3)
 	var wg sync.WaitGroup
-	for i := 0; i < 3; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 3 {
+		wg.Go(func() {
 			w := httptest.NewRecorder()
 			h(w, postJSON("/api/dup", "user:alice", "{}"))
 			codes <- w.Code
-		}()
+		})
 	}
 	// Two duplicates are refused while the first one still runs.
 	deadline := time.After(5 * time.Second)
@@ -445,7 +443,7 @@ func TestRateLimitSlotReturnedOnFailure(t *testing.T) {
 	h := withMutationAuth(func(_ *cluster.Client, w http.ResponseWriter, _ *http.Request) {
 		writeError(w, "bad input", http.StatusBadRequest, "validation")
 	})
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		w := httptest.NewRecorder()
 		h(w, postJSON("/api/fails", "tok", "{}"))
 		if w.Code != 400 {
@@ -553,7 +551,7 @@ func TestReadinessCachesTheAPICheck(t *testing.T) {
 		HandleReady(w, httptest.NewRequest("GET", "/api/health/ready", nil))
 		return w.Code
 	}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if c := probe(); c != 200 {
 			t.Fatalf("probe %d: %d", i, c)
 		}
@@ -581,7 +579,7 @@ func TestReadinessCachesTheAPICheck(t *testing.T) {
 
 func TestMetricLabelsAreBounded(t *testing.T) {
 	setupDevMode(t)
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		RecordPageView("probe_" + strings.Repeat("x", i))
 	}
 	RecordFeatureUsage("teardown-minio")

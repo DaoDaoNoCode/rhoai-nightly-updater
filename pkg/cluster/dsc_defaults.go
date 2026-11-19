@@ -22,7 +22,7 @@ const dscSamplesBaseURL = "https://raw.githubusercontent.com/red-hat-data-servic
 var dscVersionPattern = regexp.MustCompile(`(?i)^(?:rhoai-|v)?([0-9]+)\.([0-9]+)(?:\.[0-9]+)?(?:[-.]([a-z]+)(?:\.?([0-9]+))?)?(?:[+.-].*)?$`)
 
 type dscDefaults struct {
-	Spec       map[string]interface{}
+	Spec       map[string]any
 	YAML       string
 	Version    string // operator version
 	APIVersion string // DataScienceCluster API version of Spec, e.g. "v3"
@@ -157,7 +157,7 @@ func getInstalledOperator(c *Client) (*installedOperator, error) {
 
 // dscExample is a usable DataScienceCluster example of alm-examples.
 type dscExample struct {
-	Spec map[string]interface{}
+	Spec map[string]any
 	YAML string
 }
 
@@ -171,7 +171,7 @@ func dscExamplesFromALM(almExamples string) map[string]dscExample {
 	if strings.TrimSpace(almExamples) == "" {
 		return out
 	}
-	var examples []map[string]interface{}
+	var examples []map[string]any
 	if err := json.Unmarshal([]byte(almExamples), &examples); err != nil {
 		return out
 	}
@@ -187,13 +187,13 @@ func dscExamplesFromALM(almExamples string) map[string]dscExample {
 		if _, dup := out[version]; dup {
 			continue
 		}
-		meta, _ := example["metadata"].(map[string]interface{})
+		meta, _ := example["metadata"].(map[string]any)
 		// Keep only what a user would write; never carry status or server fields.
-		cleanMeta := map[string]interface{}{"name": "default-dsc"}
-		if labels, ok := meta["labels"].(map[string]interface{}); ok && len(labels) > 0 {
+		cleanMeta := map[string]any{"name": "default-dsc"}
+		if labels, ok := meta["labels"].(map[string]any); ok && len(labels) > 0 {
 			cleanMeta["labels"] = labels
 		}
-		clean := map[string]interface{}{
+		clean := map[string]any{
 			"apiVersion": apiVersion,
 			"kind":       "DataScienceCluster",
 			"metadata":   cleanMeta,
@@ -204,7 +204,7 @@ func dscExamplesFromALM(almExamples string) map[string]dscExample {
 			continue
 		}
 		// Return a map decoded from the YAML so callers get their own copy.
-		var fresh map[string]interface{}
+		var fresh map[string]any
 		if err := yaml.Unmarshal(text, &fresh); err != nil {
 			continue
 		}
@@ -225,10 +225,10 @@ func dscAPIVersion(apiVersion string) (string, bool) {
 
 // isDefaultDSC reports whether a parsed sample is the default
 // DataScienceCluster (default-dsc, with components) of the given version.
-func isDefaultDSC(sample map[string]interface{}, version string) bool {
-	meta, _ := sample["metadata"].(map[string]interface{})
-	spec, _ := sample["spec"].(map[string]interface{})
-	components, _ := spec["components"].(map[string]interface{})
+func isDefaultDSC(sample map[string]any, version string) bool {
+	meta, _ := sample["metadata"].(map[string]any)
+	spec, _ := sample["spec"].(map[string]any)
+	components, _ := spec["components"].(map[string]any)
 	return sample["kind"] == "DataScienceCluster" && sample["apiVersion"] == dscGroup+"/"+version &&
 		meta["name"] == "default-dsc" && len(components) > 0
 }
@@ -342,7 +342,7 @@ func defaultDSCSpecFrom(ctx context.Context, op *installedOperator, versions api
 		if err != nil {
 			return nil, fmt.Errorf("fetching DSC defaults for %s (%s): %w", version, sourceURL, err)
 		}
-		var spec map[string]interface{}
+		var spec map[string]any
 		if err := yaml.Unmarshal([]byte(body), &spec); err != nil {
 			return nil, fmt.Errorf("invalid DSC sample: %w", err)
 		}
@@ -396,7 +396,7 @@ func fetchDSCSample(ctx context.Context, sourceURL, version string) (string, int
 		return "", resp.StatusCode, fmt.Errorf("DSC sample is too large")
 	}
 	// Do not cache malformed responses.
-	var sample map[string]interface{}
+	var sample map[string]any
 	if err := yaml.Unmarshal(body, &sample); err != nil {
 		return "", resp.StatusCode, err
 	}

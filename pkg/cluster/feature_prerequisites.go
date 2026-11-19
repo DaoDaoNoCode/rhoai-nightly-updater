@@ -48,13 +48,13 @@ var (
 // state the operator reports in status.components (DataScienceCluster v3
 // groups some components without a state of their own). found is false
 // when the DataScienceCluster does not name the component at all.
-func componentManagement(dsc map[string]interface{}, key string) (state string, found bool) {
-	spec, _ := dsc["spec"].(map[string]interface{})
-	specComponents, _ := spec["components"].(map[string]interface{})
-	status, _ := dsc["status"].(map[string]interface{})
-	statusComponents, _ := status["components"].(map[string]interface{})
-	specComp, inSpec := specComponents[key].(map[string]interface{})
-	statusComp, inStatus := statusComponents[key].(map[string]interface{})
+func componentManagement(dsc map[string]any, key string) (state string, found bool) {
+	spec, _ := dsc["spec"].(map[string]any)
+	specComponents, _ := spec["components"].(map[string]any)
+	status, _ := dsc["status"].(map[string]any)
+	statusComponents, _ := status["components"].(map[string]any)
+	specComp, inSpec := specComponents[key].(map[string]any)
+	statusComp, inStatus := statusComponents[key].(map[string]any)
 	if !inSpec && !inStatus {
 		return "", false
 	}
@@ -83,7 +83,7 @@ func componentBlock(r dscRead, fc featureComponent) *types.ComponentBlock {
 		return &types.ComponentBlock{Component: fc.keys[0],
 			Reason: fmt.Sprintf("%s is not turned on: this cluster has no DataScienceCluster. A cluster-admin creates one on the Components page.", fc.feature)}
 	}
-	meta, _ := r.Object["metadata"].(map[string]interface{})
+	meta, _ := r.Object["metadata"].(map[string]any)
 	name, _ := meta["name"].(string)
 	for _, key := range fc.keys {
 		state, found := componentManagement(r.Object, key)
