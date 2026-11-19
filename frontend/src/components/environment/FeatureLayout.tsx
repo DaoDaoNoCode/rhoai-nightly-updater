@@ -123,7 +123,7 @@ export const PartItem: React.FC<{
 }> = ({ id, title, scope, status, unmanaged, actions, menu, loading, statusText, children }) => {
   const hasMenu = !!menu && menu.length > 0;
   return (
-    <CardListItem labelledBy={partTitleId(id)} actionsBesideFrom="lg" actions={actions || hasMenu ? (
+    <CardListItem labelledBy={partTitleId(id)} actionsBesideFrom={actions ? "lg" : "always"} actions={actions || hasMenu ? (
       <ActionList>
         {actions && <ActionListGroup>{actions}</ActionListGroup>}
         {hasMenu && (

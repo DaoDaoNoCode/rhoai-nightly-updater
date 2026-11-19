@@ -31,28 +31,32 @@ interface CardListItemProps {
   /**
    * From which breakpoint the actions sit beside the content (default md).
    * A row with several wide actions uses a later one, so its text keeps a
-   * readable width on mid-size windows instead of being squeezed.
+   * readable width on mid-size windows instead of being squeezed; a row
+   * whose only action is a kebab menu keeps it beside the content always.
    */
-  actionsBesideFrom?: "md" | "lg" | "xl";
+  actionsBesideFrom?: "always" | "md" | "lg" | "xl";
   /** Shown under the row (for example an expanded form). */
   expanded?: React.ReactNode;
   children: React.ReactNode;
 }
 
-export const CardListItem: React.FC<CardListItemProps> = ({ labelledBy, actions, actionsBesideFrom = "md", children, expanded }) => (
-  <StackItem component="li" aria-labelledby={labelledBy}>
-    <div className="pf-v6-u-w-100">
-      <Flex
-        direction={{ default: "column", [actionsBesideFrom]: "row" }}
-        justifyContent={{ [actionsBesideFrom]: "justifyContentSpaceBetween" }}
-        alignItems={{ [actionsBesideFrom]: "alignItemsFlexStart" }}
-        gap={{ default: "gapSm", [actionsBesideFrom]: "gapLg" }}
-        flexWrap={{ default: "nowrap" }}
-      >
-        <FlexItem flex={{ default: "flex_1" }}>{children}</FlexItem>
-        {actions && <FlexItem>{actions}</FlexItem>}
-      </Flex>
-      {expanded}
-    </div>
-  </StackItem>
-);
+export const CardListItem: React.FC<CardListItemProps> = ({ labelledBy, actions, actionsBesideFrom = "md", children, expanded }) => {
+  const from = actionsBesideFrom === "always" ? "default" : actionsBesideFrom;
+  return (
+    <StackItem component="li" aria-labelledby={labelledBy}>
+      <div className="pf-v6-u-w-100">
+        <Flex
+          direction={from === "default" ? { default: "row" } : { default: "column", [from]: "row" }}
+          justifyContent={{ [from]: "justifyContentSpaceBetween" }}
+          alignItems={{ [from]: "alignItemsFlexStart" }}
+          gap={from === "default" ? { default: "gapLg" } : { default: "gapSm", [from]: "gapLg" }}
+          flexWrap={{ default: "nowrap" }}
+        >
+          <FlexItem flex={{ default: "flex_1" }}>{children}</FlexItem>
+          {actions && <FlexItem>{actions}</FlexItem>}
+        </Flex>
+        {expanded}
+      </div>
+    </StackItem>
+  );
+};

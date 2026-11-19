@@ -26,4 +26,11 @@ describe("CardListItem actions layout", () => {
     expect(flex).toHaveClass("pf-m-column", "pf-m-row-on-xl", "pf-m-justify-content-space-between-on-xl");
     expect(flex).not.toHaveClass("pf-m-row-on-md");
   });
+
+  it("keeps a lone menu beside the content at every width", () => {
+    row({ actionsBesideFrom: "always" });
+    const flex = screen.getByText("Text").closest(".pf-v6-l-flex");
+    expect(flex).toHaveClass("pf-m-row", "pf-m-justify-content-space-between");
+    expect(flex).not.toHaveClass("pf-m-column");
+  });
 });
