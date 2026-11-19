@@ -54,6 +54,8 @@ variables:
   # buildah builds the image (scripts/ci-build-image.sh); the multi-arch
   # index of the upstream image, which rebuilds the tag: the digest pins it.
   BUILDAH_IMAGE: quay.io/buildah/stable:v1.46.1@sha256:12132e724a8a5c7e6970c3fced03f3db6c8077d9afa08803df274df4cf3de846
+  # The scheduled renovate job (renovate.json5).
+  RENOVATE_IMAGE: ghcr.io/renovatebot/renovate:44.254.1@sha256:42f31a79fd1dc7ce0a3e4da42a7e57a80443fd9a3401c5b2631d76bc8b4a40dd
   # crane (go-containerregistry) moves and reads tags in release jobs; it is
   # installed with `go install`, which checks the module against the
   # checksum database, from a Go cache of its own (.crane).
@@ -64,10 +66,17 @@ variables:
   HELM_VERSION: v3.22.1
   HELM_SHA256: 896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea
 
+# Pipeline schedules run the renovate job only (end of this file): the test
+# jobs skip them, and so do the image jobs (a second build of a commit
+# would make publish-main refuse its commit tag).
 .test:
   stage: test
   interruptible: true
   needs: []
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - when: on_success
 
 # Go's module and build caches live in .cache/ (GitLab caches only paths in
 # the project directory; `./...` skips directories starting with a dot), one
@@ -252,7 +261,7 @@ build-main:
     paths: [image.tar]
     expire_in: 1 day
   rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_PIPELINE_SOURCE != "schedule"
 
 
 # Manual trigger for any other branch: builds the image, and pushes it as
@@ -267,7 +276,7 @@ build-branch:
   script:
     - sh scripts/ci-build-image.sh branch "$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA"
   rules:
-    - if: $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
       when: manual
       allow_failure: true
 
@@ -342,7 +351,7 @@ publish-main:
   script:
     - IMAGE_TARBALL=image.tar sh scripts/release.sh publish-main
   rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_PIPELINE_SOURCE != "schedule"
 
 # Pushes :vX.Y.Z (refused when it exists from another commit: release tags
 # are immutable), the commit tag when main has not published it, :vMAJOR
@@ -385,3 +394,26 @@ promote-latest:
     - if: $CI_COMMIT_TAG
       when: manual
       allow_failure: true
+
+# Self-hosted Renovate (renovate.json5): weekly dependency merge requests.
+# Inert until a Maintainer adds the project variable RENOVATE_TOKEN (a bot
+# token, protected and masked) and a pipeline schedule on main; a schedule
+# pipeline runs this job only. Optional GITHUB_COM_TOKEN (protected, masked,
+# a GitHub token with no scopes) for the GitHub Actions, Go and Node version
+# lookups and release notes. CONTRIBUTING.md, Dependency updates.
+renovate:
+  stage: test
+  image: $RENOVATE_IMAGE
+  needs: []
+  variables:
+    # Renovate clones the project itself, with the bot token.
+    GIT_STRATEGY: none
+    RENOVATE_PLATFORM: gitlab
+    RENOVATE_ENDPOINT: $CI_API_V4_URL
+    RENOVATE_REPOSITORIES: $CI_PROJECT_PATH
+    RENOVATE_ONBOARDING: "false"
+    LOG_LEVEL: info
+  script:
+    - renovate
+  rules:
+    - if: $RENOVATE_TOKEN && $CI_PIPELINE_SOURCE == "schedule"

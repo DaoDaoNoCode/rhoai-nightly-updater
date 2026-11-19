@@ -57,7 +57,7 @@ Open **http://127.0.0.1:9000** in your browser.
 
 ### Frontend Development
 
-**Changing frontend dependencies:** after editing `frontend/package.json`, run `make frontend-lock`. It updates `package-lock.json` with the npm of CI's pinned `node:22-alpine` image. A newer local npm (11) leaves out optional peer entries that npm 10 expects, and CI's `npm ci` then refuses the lock as out of sync.
+**Changing frontend dependencies:** after editing `frontend/package.json`, run `make frontend-lock`. It updates `package-lock.json` with the npm of CI's pinned `node:22-alpine` image. A newer local npm (11) leaves out optional peer entries that npm 10 expects, and CI's `npm ci` then refuses the lock as out of sync. Renovate's merge requests: [Dependency updates](#dependency-updates).
 
 The frontend uses:
 
@@ -289,6 +289,32 @@ The image tags are only as safe as the credentials that write them. Set these by
 GitHub Actions (`.github/workflows/ci.yml`) runs the same test-stage checks on pushes to `main` and on pull requests; `release.yml` runs them on release tags and creates the GitHub Release. Nothing is published to a registry from GitHub.
 
 Teammates install releases, so a broken `main` only reaches people who test `:main` on purpose.
+
+### Dependency updates
+
+`renovate.json5` configures [Renovate](https://docs.renovatebot.com/): merge requests every Monday before 6am (New York time) for Go modules (`go.mod`'s toolchain line moves, its `go` line stays), npm (`frontend/`), the container images of the Containerfile and of `.gitlab-ci.yml`'s `*_IMAGE` variables (tag and digest; digest-only references get digest updates), and the GitHub Actions (by commit SHA). Minor and patch updates are grouped (Go modules, npm dependencies, container image digests, GitHub Actions); the Go toolchain (go.mod, the golang images, the workflows' `go-version`) and golangci-lint (image and workflow version) each move in one merge request; major updates come one by one. Nothing is merged automatically; every merge request runs the normal pipeline. npm versions wait 3 days before a merge request. Labels: `dependencies`, plus `go`, `frontend` or `ci`.
+
+**The frontend lock.** Renovate updates `frontend/package-lock.json` with npm 10 (`constraints` in `renovate.json5`), the npm major of CI's `node:22-alpine` image, which is what `make frontend-lock` uses. If CI's `npm ci` still refuses a Renovate lock, check out the branch, run `make frontend-lock` and push. (Renovate's `postUpgradeTasks` could run that npm command itself, but only on a self-hosted Renovate whose admin allows the command, never on the Mend app; the version constraint covers both.) A Node major update (for example `node:24-alpine`) brings another npm: change the constraint in the same merge request.
+
+Not covered: the images the backend deploys on clusters (`pkg/cluster/*.go` constants such as SeaweedFS and rclone), Helm and shellcheck versions with their SHA-256s, and the chart's example `ose-cli` image (its tag follows the cluster's OCP version). Update those by hand.
+
+Renovate needs a host. Pick one:
+
+| | Mend Renovate app | Scheduled self-hosted job (`renovate` in `.gitlab-ci.yml`) |
+|---|---|---|
+| Setup | The hosted app for GitLab.com, through the [Mend Developer Platform](https://developer.mend.io) ([Renovate: Hosted GitLab.com App](https://docs.renovatebot.com/getting-started/installing-onboarding/#hosted-gitlabcom-app)). It installs on a **group** only, not a single project: someone with that right on the group (and the organisation's approval for a third-party app with write access) installs it and selects this project | A bot token, two variables and a pipeline schedule (below), by a Maintainer of this project |
+| Runs as | Mend's bot, on Mend's infrastructure | This project's pipeline, with this project's bot token |
+| `postUpgradeTasks` | not available | possible (not used) |
+| Note | Leave `RENOVATE_TOKEN` unset, so the `renovate` job stays inert: never run both | Nothing outside this project |
+
+The self-hosted job, step by step (a Maintainer):
+
+1. **Bot token.** Settings > Access tokens: a project access token, role **Developer** (it pushes `renovate/*` branches and opens merge requests; it cannot push to the protected `main`), scopes `api` and `write_repository`, with an expiry date (a year at most; put a reminder in the calendar).
+2. **Variables.** Settings > CI/CD > Variables: `RENOVATE_TOKEN` = that token, **Protect variable** and **Mask variable** on (Visibility: Masked and hidden). Optional: `GITHUB_COM_TOKEN`, a GitHub personal access token with no scopes (read-only public data), protected and masked: without it Renovate skips the GitHub Actions, the workflows' Go and Node versions and golangci-lint's workflow version (GitHub's API refuses anonymous lookups at this rate), and its merge requests carry no release notes.
+3. **Schedule.** Build > Pipeline schedules > New schedule: target branch `main` (protected, so the pipeline gets the protected token), for example `0 9 * * 1` (Mondays). A schedule pipeline runs the `renovate` job only; the test, image and publish jobs skip schedules. Renovate's own `schedule` in `renovate.json5` still decides which updates it opens, so a more frequent pipeline only rebases and refreshes.
+4. **First run.** Run the schedule once by hand (Play). The job log lists the dependencies found and the branches it would create; a dependency dashboard issue appears in the project's issues.
+
+Protected variables reach every job of a `main` pipeline, not just the job that reads them: in a push pipeline on `main`, `RENOVATE_TOKEN` is in the environment of the test jobs too (their `npm ci` runs the packages' install scripts), as `QUAY_TOKEN` is. A token with Developer role on this project only, with an expiry, limits what a leak can do.
 
 ## Releases
 

@@ -1,0 +1,115 @@
+// Renovate: weekly dependency merge requests, never merged automatically.
+// Where Renovate runs (the Mend app or the scheduled `renovate` job in
+// .gitlab-ci.yml): CONTRIBUTING.md, Dependency updates.
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  extends: ['config:recommended'],
+  timezone: 'America/New_York',
+  schedule: ['before 6am on monday'],
+  labels: ['dependencies'],
+  automerge: false,
+  platformAutomerge: false,
+  // Only these managers: helm-values would also pick up the chart's
+  // example values (deploy/chart/values.yaml), whose ose-cli tag follows
+  // the cluster's OCP version and must not move by itself.
+  enabledManagers: ['gomod', 'npm', 'dockerfile', 'gitlabci', 'github-actions', 'custom.regex'],
+  // Every container image and GitHub Action is pinned by digest, its tag
+  // (or version) kept beside it.
+  pinDigests: true,
+  // frontend/package-lock.json must be what CI's `npm ci` accepts: the npm
+  // of the pinned node:22 image (npm 10; a newer npm leaves out optional
+  // peer entries npm 10 expects). `make frontend-lock` does the same with
+  // that exact image; when CI's `npm ci` refuses a Renovate lock, run it on
+  // the branch.
+  constraints: {
+    npm: '^10',
+  },
+  postUpdateOptions: ['gomodTidy'],
+  // The image variables of .gitlab-ci.yml: jobs name them (`image:
+  // $GO_IMAGE`), which the gitlabci manager skips. The dockerfile manager
+  // reads the Containerfile itself (it resolves ${DOCKER_HUB} from the ARG
+  // default, docker.io), and the github-actions manager reads the
+  // workflows' actions, go-version, node-version and golangci-lint version.
+  customManagers: [
+    {
+      // $DOCKER_HUB is a Docker Hub mirror or proxy: these are Docker Hub
+      // images, named as the dockerfile manager names them.
+      customType: 'regex',
+      description: 'Docker Hub images in .gitlab-ci.yml variables',
+      managerFilePatterns: ['/(^|/)\\.gitlab-ci\\.yml$/'],
+      matchStrings: [
+        '_IMAGE: \\$DOCKER_HUB/(?<depName>[a-z0-9][a-z0-9._/-]*):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})',
+      ],
+      depNameTemplate: 'docker.io/{{{depName}}}',
+      datasourceTemplate: 'docker',
+    },
+    {
+      customType: 'regex',
+      description: 'Other registries in .gitlab-ci.yml variables',
+      managerFilePatterns: ['/(^|/)\\.gitlab-ci\\.yml$/'],
+      matchStrings: [
+        '_IMAGE: (?<depName>[a-z0-9][a-z0-9.-]*\\.[a-z]{2,}(?::[0-9]+)?/[a-z0-9._/-]+):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})',
+      ],
+      datasourceTemplate: 'docker',
+    },
+  ],
+  packageRules: [
+    {
+      // go.mod's go line stays 1.27.0: golangci-lint refuses a go line
+      // newer than the Go it was built with (go.mod). The toolchain line
+      // moves.
+      matchManagers: ['gomod'],
+      matchDepTypes: ['golang'],
+      enabled: false,
+    },
+    {
+      matchManagers: ['gomod'],
+      addLabels: ['go'],
+    },
+    {
+      matchManagers: ['npm'],
+      addLabels: ['frontend'],
+      // npm releases wait three days before a merge request, so a
+      // compromised version that is pulled quickly never gets one.
+      minimumReleaseAge: '3 days',
+    },
+    {
+      matchManagers: ['dockerfile', 'gitlabci', 'github-actions', 'custom.regex'],
+      addLabels: ['ci'],
+    },
+    {
+      groupName: 'Go modules',
+      matchManagers: ['gomod'],
+      matchDepTypes: ['require', 'indirect'],
+      matchUpdateTypes: ['minor', 'patch', 'digest'],
+    },
+    {
+      groupName: 'npm dependencies',
+      matchManagers: ['npm'],
+      matchUpdateTypes: ['minor', 'patch'],
+    },
+    {
+      groupName: 'container image digests',
+      matchManagers: ['dockerfile', 'gitlabci', 'custom.regex'],
+      matchUpdateTypes: ['digest', 'pinDigest'],
+    },
+    {
+      groupName: 'GitHub Actions',
+      matchManagers: ['github-actions'],
+      matchDepTypes: ['action'],
+    },
+    // Last, so they win over the groups above (later rules override).
+    {
+      // Kept in step (comments in .gitlab-ci.yml and the Containerfile):
+      // go.mod's toolchain, the golang images and the workflows'
+      // go-version move in one merge request.
+      groupName: 'Go toolchain',
+      matchDepNames: ['go', 'docker.io/library/golang'],
+    },
+    {
+      // GOLANGCI_IMAGE and the GitHub workflow's golangci-lint version.
+      groupName: 'golangci-lint',
+      matchDepNames: ['golangci/golangci-lint', 'docker.io/golangci/golangci-lint'],
+    },
+  ],
+}

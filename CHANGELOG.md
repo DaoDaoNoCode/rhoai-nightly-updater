@@ -389,6 +389,10 @@ only accepts a tag whose version is the top dated section. See
   is a docker-archive (uncompressed layers, a larger artifact). buildah
   needs a runner that allows user namespaces, as GitLab.com's hosted
   runners do (CONTRIBUTING.md, Automatic Image Publishing).
+- Dependency updates: `renovate.json5` (weekly, grouped, never merged
+  automatically) and an inert scheduled `renovate` job; CONTRIBUTING.md,
+  Dependency updates, describes the Mend app and the self-hosted job.
+  Pipeline schedules run that job only.
 
 ### Security
 
