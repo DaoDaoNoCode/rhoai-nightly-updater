@@ -208,6 +208,27 @@ only accepts a tag whose version is the top dated section. See
 
 ### Fixed
 
+- **Components: MaaS is no longer removed by a change that does not know
+  it is in use.** Setting `aigateway` or `aigateway.modelsAsAService` to
+  Removed, a soft or hard reset (the release default leaves both
+  Removed), Diagnostics' disable fix and the version-matched repair all
+  passed their checks on a cluster where this tool had set MaaS up and
+  published a model (live, RHOAI 3.6), and would have taken maas-api and
+  the gateway policies away: every published model and API key stops
+  working. Such a change is now refused while any MaaSModelRef,
+  MaaSSubscription or MaaSAuthPolicy exists or this tool's MaaS record
+  shows a setup or a publication, naming them and pointing at **Clean up
+  MaaS** on the MaaS tab (or keep `aigateway` Managed); a read that fails
+  refuses too. A hard reset that brings MaaS back warns that it is down
+  meanwhile. No new RBAC: the lists Clean up MaaS already reads.
+- **Resets keep the components you turned on.** Both reset dialogs offer
+  "Keep the components you turned on (N): ...", checked by default: what
+  is Managed (or Unmanaged) and deployed in the DSC but off in the release
+  default keeps its value, with the parents it needs, and the plan lists
+  it as "Kept: ... (you turned these on)"; toggling the option plans the
+  reset again. Unchecked, the reset is the pure release default and the
+  MaaS guard applies. The API takes `keepEnabled` on the plan (query) and
+  on both reset requests (required; bound to the reviewed plan's token).
 - Helper and error text under a field inside a radio's body (Change
   database's connection URL, custom token rate limits, the groups and users
   of Publish and Change access) sat on the field's edge: the radio group's
