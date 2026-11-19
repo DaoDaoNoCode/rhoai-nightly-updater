@@ -32,25 +32,39 @@ only accepts a tag whose version is the top dated section. See
   labelled as this tool's own option (it is in neither the MaaS nor the
   RHOAI docs). A `maas-db-config` someone else wrote is used as it is; a
   CloudNativePG database an earlier build made is kept and shown as such.
-  **Change database** switches between them for a database this tool set
-  up, while nobody else uses MaaS, after you confirm that every API key is
-  lost. Remove deletes only what the chosen option created. The status
-  warns when the development database's pod was replaced after maas-api
-  started (maas-api makes its tables only at startup).
+  The dialog lists the development database first, warns while it is
+  chosen that its keys are lost whenever it restarts, and marks the
+  CloudNativePG option "Not in the MaaS docs". **Change database**
+  switches between them for a database this tool set up that runs, while
+  nobody else uses MaaS, after you confirm that every API key is lost
+  (nothing is preselected; the loss is the dialog's data-loss alert). Set
+  up never changes your PostgreSQL's URL: Change database does. Remove
+  deletes only what the chosen option created. The development
+  database's Secret `postgres-creds` is never read or changed: the tool
+  records its UID when it creates it and deletes only that object. The
+  connection URL and the development password are redacted, in every
+  form, from any message an API server's refusal could quote them in.
+  The status warns when the development database's pod was replaced after
+  maas-api started (maas-api makes its tables only at startup).
 - **MaaS: who can use the published models, and each model's limit.**
-  Publish asks for the audience (everyone signed in, or OpenShift groups
-  and users; a group without a Group object is a warning) and the
-  model's token limit: the docs' free (100 a minute) and premium (100,000
-  a day) samples, unlimited (usage still metered), or custom rates checked
-  by the MaaSSubscription API's rules. **Change limit** and **Change who
-  can use them** edit them in place after a server-side dry run; API keys
-  keep working. Published models are adopted as they are (an earlier
-  build's 100 tokens a minute reads as the free sample). The
+  Publish asks for the audience: everyone signed in, or groups and users
+  named as your identity provider sends them (MaaS matches them exactly,
+  so an OIDC group such as `/admins` works). A group without an OpenShift
+  Group is a warning, while you type in the dialog and on the tab with
+  the commands that create it. The model's token limit: the docs' premium
+  example (100,000 tokens a day, the default) or free example (100 a
+  minute), unlimited where the cluster's MaaS offers it (read from its
+  MaaSSubscription CRD), or custom token rate limits checked row by row by
+  the MaaSSubscription API's rules, with a summary in words. **Change
+  limit** and **Change access** edit them in place after a server-side dry
+  run; API keys keep working. Published models are adopted as they are
+  (an earlier build's 100 tokens a minute reads as the free example). The
   subscription's description names the limits and the audience, so the
   dashboard's API-key dialog reads right. New RBAC (template revision 7,
-  SECURITY.md audit): Secret `postgres-creds` get, patch, delete;
-  Deployment `postgres` delete; Service `postgres` patch, delete; Groups
-  get.
+  SECURITY.md audit): Secret `postgres-creds` delete (only by the UID
+  this tool recorded); Deployment `postgres` delete; Service `postgres`
+  patch, delete; Groups get (also behind the cluster-admin-only
+  `GET /api/resources/maas/groups` the dialog uses).
 
 - **Set up what a feature needs on the cluster, from its tab (backend).**
   `GET /api/resources/prerequisites` reports, per feature, the parts it
