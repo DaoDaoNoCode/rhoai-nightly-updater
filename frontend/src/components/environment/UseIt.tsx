@@ -13,10 +13,13 @@ import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external
 import type { ComponentBlock } from "../../types";
 import { TechnicalDetails } from "./resourceRow";
 
-/** A few lines to copy (environment variables, a Python snippet), PatternFly's code block with a copy button. */
 /** s as one single-quoted POSIX shell word: nothing in it is expanded ($(), backticks, variables). */
 export const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
+/** s as one shell word: bare when it is a plain name (a Kubernetes name), single-quoted otherwise (shellQuote). */
+export const shellWord = (s: string) => (/^[A-Za-z0-9._/:=-]+$/.test(s) ? s : shellQuote(s));
+
+/** A few lines to copy (environment variables, a Python snippet), PatternFly's code block with a copy button. */
 export const CopyableCode: React.FC<{ id: string; code: string; label: string }> = ({ id, code, label }) => {
   const [copied, setCopied] = React.useState(false);
   const copy = async () => {
@@ -72,12 +75,13 @@ export const dashboardProjectsHref = (dashboardUrl: string | undefined) =>
   dashboardUrl?.startsWith("https://") ? `${dashboardUrl.replace(/\/$/, "")}/projects` : undefined;
 
 /** No data science project yet: where to make one. */
-export const NoProjectsAlert: React.FC<{ dashboardUrl?: string }> = ({ dashboardUrl }) => {
+/** things: what the tab makes in a project, as the sentence's subject ("Models"). */
+export const NoProjectsAlert: React.FC<{ dashboardUrl?: string; things: string }> = ({ dashboardUrl, things }) => {
   const href = dashboardProjectsHref(dashboardUrl);
   return (
     <Alert variant="info" isInline component="div" title="There are no data science projects yet"
       actionLinks={href ? <AlertActionLink component="a" href={href} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">Create a project in the dashboard</AlertActionLink> : undefined}>
-      <Content component="p">Pipeline servers and MLflow workspaces belong to a data science project: a project made in the RHOAI dashboard. Create one there, then choose it here.</Content>
+      <Content component="p">{things} belong to a data science project: a project made in the RHOAI dashboard. Create one there, then choose it here.</Content>
     </Alert>
   );
 };

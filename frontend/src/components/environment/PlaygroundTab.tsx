@@ -217,10 +217,13 @@ const PlaygroundPart: React.FC<PlaygroundTabProps & { project: string }> = ({ st
       {item && s === "setting-up" && !terminalReason(item) && !isTerminating(item) && <StartingNote state={item} typical="1 to 2 minutes" />}
       {exists && (
         <DescriptionList isCompact isHorizontal aria-label="Playground details">
-          <DescriptionListGroup>
-            <DescriptionListTerm>State</DescriptionListTerm>
-            <DescriptionListDescription>{item?.phase ?? "Not reported (unknown)"}</DescriptionListDescription>
-          </DescriptionListGroup>
+          {item?.phase !== "Ready" && (
+            // Ready is the part's own label; another phase says more than it.
+            <DescriptionListGroup>
+              <DescriptionListTerm>State</DescriptionListTerm>
+              <DescriptionListDescription>{item?.phase ?? "Not reported (unknown)"}</DescriptionListDescription>
+            </DescriptionListGroup>
+          )}
           {item?.name && (
             <DescriptionListGroup>
               <DescriptionListTerm>Server</DescriptionListTerm>
@@ -313,7 +316,7 @@ export const PlaygroundTab: React.FC<PlaygroundTabProps> = (props) => {
       {!playground?.blocked && playground?.operatorReady === "False" && (
         <StackItem><Alert variant="warning" isInline component="p" title="The playground's operator is not ready">{playground.operatorMessage || "The DataScienceCluster reports it not ready."} The Components page shows the details.</Alert></StackItem>
       )}
-      {noProjects && <StackItem><NoProjectsAlert dashboardUrl={status.dashboardUrl} /></StackItem>}
+      {noProjects && <StackItem><NoProjectsAlert dashboardUrl={status.dashboardUrl} things="Playgrounds" /></StackItem>}
       {missingProject && (
         <StackItem>
           <Alert variant="info" isInline component="p" title={`Project ${missingProject} no longer exists`}>

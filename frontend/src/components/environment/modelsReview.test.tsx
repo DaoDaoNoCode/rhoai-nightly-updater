@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { CatalogModel, InferenceGatewayState, ModelState, ResourcesStatus } from "../../types";
 import { IDLE, modelsState } from "./featureState";
-import { UseModel, agoWords, gatewayListRelease, modelsConfirm } from "./ModelsTab";
+import { UseModel, agoWords, exposureWords, gatewayListRelease, modelsConfirm } from "./ModelsTab";
 
 const gw: InferenceGatewayState = {
   deployed: true, ready: true, managedByTool: true, namespace: "openshift-ingress", name: "openshift-ai-inference", message: "Running",
@@ -35,7 +35,7 @@ describe("Models review fixes", () => {
     const spec = modelsConfirm({ kind: "teardown-model", project: "dev", model: "qwen25-05b-instruct", unpublish: true }, st)!;
     render(<>{spec.summary}{spec.changes.map((c, i) => <div key={i}>{c}</div>)}</>);
     expect(screen.getByText(/Unpublishes it from Models as a Service first \(its subscription entry and model reference go\)\./)).toBeInTheDocument();
-    expect(screen.getByText(/which was set up to be reached through MaaS only, so it is unpublished first/)).toBeInTheDocument();
+    expect(screen.getByText(/which is reached through MaaS only, so it is unpublished first/)).toBeInTheDocument();
   });
 
   it("deleting any other model says nothing about MaaS", () => {
@@ -49,9 +49,14 @@ describe("Models review fixes", () => {
     const m = model({ exposure: "maas", maasPublished: true, maasOnlySetup: true, servedName: "qwen25-05b-instruct" });
     render(<MemoryRouter><UseModel model={m} catalog={qwen} project="dev" onMaaS={() => {}} readOnly={false} baseReason={null} onSetUpAgain={() => {}} /></MemoryRouter>);
     expect(screen.getByText(/it has no direct address\./)).toBeInTheDocument();
-    expect(screen.getByText(/leaves it with no outside route, as it was set up/)).toBeInTheDocument();
+    expect(screen.getByText(/leaves it with no outside route, as before it was published/)).toBeInTheDocument();
     expect(screen.queryByText(/To call its direct address again/)).not.toBeInTheDocument();
     expect(screen.queryByText(/answers 404 until it is unpublished/)).not.toBeInTheDocument();
+  });
+
+  it("how a published model is reached matches what Use it says", () => {
+    expect(exposureWords({ exposure: "maas", maasOnlySetup: true })).toBe("Through MaaS only");
+    expect(exposureWords({ exposure: "maas" })).toBe("Through MaaS while published (Unpublish on the MaaS tab routes it as before)");
   });
 
   it("a model reached only inside the cluster has its own next steps", () => {

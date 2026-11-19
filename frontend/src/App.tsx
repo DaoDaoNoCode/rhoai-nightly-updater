@@ -104,6 +104,12 @@ const RouterNavLink = React.forwardRef<HTMLAnchorElement, React.AnchorHTMLAttrib
 );
 RouterNavLink.displayName = "RouterNavLink";
 
+/** /environment, the page's name, opens the Environment page (its address is /test-resources), with the same tab and project. */
+export const EnvironmentRoute: React.FC = () => {
+  const location = useLocation();
+  return <Navigate to={{ pathname: "/test-resources", search: location.search, hash: location.hash }} replace />;
+};
+
 /** /dashboard-dev?tab=resources was the Test resources tab; it is now the Environment page. */
 export const DashboardDevRoute: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -355,6 +361,7 @@ const AppLayout: React.FC = () => {
             <Route path="/builds" element={offInProfile("Build Explorer", <BuildExplorerPage />)} />
             <Route path="/dashboard-dev" element={offInProfile("Dashboard Dev", <DashboardDevRoute />)} />
             <Route path="/test-resources" element={offInProfile("The Environment page", <EnvironmentPage />)} />
+            <Route path="/environment" element={<EnvironmentRoute />} />
             <Route path="/diagnostics" element={<TroubleshootingPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>

@@ -358,13 +358,13 @@ async (page) => {
       await page.screenshot({ path: `${out}/themes/maas-overview-light.png` });
     },
 
-    // Not a docs image: Remove MaaS refused because others use MaaS, the
+    // Not a docs image: Clean up MaaS refused because others use MaaS, the
     // confirmation and then the run, light and dark (screenshots.sh
     // maas-remove-review, THEMES_DIR).
     async "maas-remove-review"() {
       for (const dark of [false, true]) {
         await open("/test-resources?tab=maas", "env-maas-in-use", { dark, width: 1440 });
-        await page.getByRole("button", { name: "Remove MaaS..." }).click();
+        await page.getByRole("button", { name: "Clean up MaaS..." }).click();
         await page.screenshot({ path: `${out}/themes/maas-remove-confirm-${dark ? "dark" : "light"}.png` });
         await page.getByRole("dialog").getByRole("button", { name: "Remove", exact: true }).click();
         await page.getByText("Others use this MaaS platform").first().waitFor();
@@ -567,7 +567,7 @@ async (page) => {
       // appearance button moves into a menu, and the crop window (CW) is
       // narrower. A crop's text size does not depend on the window width.
       await open("/components", "healthy", { width: W });
-      await crop("masthead-version", head, { notes: [{ at: page.getByText("v3.0.1", { exact: true }), n: 1, pos: "l" }] });
+      await crop("masthead-version", head, { notes: [{ at: page.getByText("v4.0.0", { exact: true }), n: 1, pos: "l" }] });
       // Tall enough for the whole Help dialog, so its body does not scroll.
       await page.setViewportSize({ width: vw, height: 2600 });
       await page.getByRole("button", { name: /help/i }).first().click();
@@ -754,7 +754,7 @@ async (page) => {
       await open("/test-resources?tab=maas", "env-maas-published");
       await crop("environment-maas", [panel().getByRole("heading", { name: "MaaS", level: 2 }), panel().getByRole("grid", { name: "This tool's models in MaaS" })], {
         notes: [
-          { at: part("Database (PostgreSQL) and maas-db-config"), n: 1, pos: "r" },
+          { at: part("Database"), n: 1, pos: "r" },
           { at: part("Authorino TLS"), n: 2, pos: "r" },
           { at: panel().getByRole("button", { name: "Unpublish" }), n: 3, pos: "r" },
         ],

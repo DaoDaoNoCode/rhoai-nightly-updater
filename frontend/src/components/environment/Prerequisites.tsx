@@ -2,10 +2,10 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertActionLink, Content, ExpandableSection, Skeleton, Stack, StackItem } from "@patternfly/react-core";
 import type { FeaturePrerequisites, ModelExposureKind, PrerequisiteFeature, PrerequisitePart, PrerequisitesStatus } from "../../types";
 import { getPrerequisites, toApiError } from "../../services/api";
-import { type ConfirmSpec, type Pending, type PrerequisitesPending } from "./resourceRow";
+import { type ConfirmSpec, type Pending, type PrerequisitesPending, WarningAlert } from "./resourceRow";
 import { FeatureSection, PartItem, PartList, PrimaryAction } from "./FeatureLayout";
 import { CopyableCode } from "./UseIt";
-import { type FeatureState, maasPartStatus } from "./featureState";
+import { type FeatureState, maasPartLabelStatus } from "./featureState";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
 import type { MaaSPart } from "../../types";
 
@@ -100,10 +100,10 @@ const PrerequisitePartItem: React.FC<{ part: PrerequisitePart; feature: Prerequi
   // part setting itself up: a grey "Waiting", not the blue spinner.
   const waiting = part.state === "waiting";
   return (
-    <PartItem id={`prereq-${feature}-${part.id}`} title={part.title} scope="Shared by the cluster" status={waiting ? "not-set-up" : maasPartStatus(part as MaaSPart)}
+    <PartItem id={`prereq-${feature}-${part.id}`} title={part.title} scope="Shared by the cluster" status={waiting ? "not-set-up" : maasPartLabelStatus(part as MaaSPart)}
       statusText={waiting ? "Waiting" : undefined} unmanaged={!!part.notManaged}>
       {part.message && <Content component="p">{part.message}</Content>}
-      {part.warning && <Alert variant="warning" isInline component="p" title="Needs attention">{part.warning}</Alert>}
+      {part.warning && <WarningAlert text={part.warning} />}
       {part.commands && part.state === "manual" && (
         <CopyableCode id={`prereq-${feature}-${part.id}-commands`} label="the commands for a cluster-admin" code={part.commands} />
       )}

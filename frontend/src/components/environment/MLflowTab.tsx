@@ -108,7 +108,7 @@ const UseMLflow: React.FC<{ url: string } & Pick<MLflowTabProps, "project" | "pr
       On RHOAI, MLflow keeps each data science project apart: a project is an MLflow workspace, with its own experiments, runs and models, and who can see them follows who can see the project.
       Choose the project to work in.
     </Content>
-    {projectsLoaded && projects.length === 0 ? <NoProjectsAlert dashboardUrl={status.dashboardUrl} /> : (
+    {projectsLoaded && projects.length === 0 ? <NoProjectsAlert dashboardUrl={status.dashboardUrl} things="MLflow workspaces" /> : (
       <Form isWidthLimited onSubmit={(e) => e.preventDefault()}>
         <FormGroup label="Project (workspace)" fieldId="mlflow-project">
           <ProjectSelect id="mlflow-project" projects={projects} selected={project} onSelect={onProject} onClear={onClearProject} />

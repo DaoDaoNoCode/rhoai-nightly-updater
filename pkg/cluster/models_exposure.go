@@ -322,6 +322,9 @@ type exposureReads struct {
 	maas      string
 	maasURL   string
 	maasKnown bool
+	// maasWho: who may use this tool's published models when it is not
+	// everyone signed in ("" for everyone).
+	maasWho string
 }
 
 func readExposureInputs(c *Client, project string, labels map[string]string, entry catalogModel, needMaaS bool) exposureReads {
@@ -353,6 +356,13 @@ func readExposureInputs(c *Client, project string, labels map[string]string, ent
 			r.maas = maasNotReadyReason(st)
 		default:
 			r.maasURL = st.URL
+		}
+		// Publish keeps the audience of this tool's subscription: who can
+		// already use its published models (everyone, when none is).
+		if err == nil && st.Access != nil && !st.Access.Everyone {
+			if aud, problem := parseMaaSAudience(&st.Access.MaaSAudience); problem == "" {
+				r.maasWho = aud.text()
+			}
 		}
 	}
 	return r
@@ -446,12 +456,15 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 	b := types.ModelExposureOption{Key: exposureMaaS, Exposure: exposureMaaS, GatewayRef: gatewayKey(inferenceGatewayNamespace, maasGatewayName),
 		Title:       "Through MaaS only",
 		Description: "Published to Models as a Service: anyone signed in to the cluster can call it with a MaaS API key, within their subscription's token limit. The dashboard's playground lists it as a MaaS model."}
+	if r.maasWho != "" {
+		b.Description = fmt.Sprintf("Published to Models as a Service: the same people as this tool's other published models (%s) can call it with a MaaS API key, within their subscription's token limit. The dashboard's playground lists it as a MaaS model.", r.maasWho)
+	}
 	bp := exposurePlan{exposure: exposureMaaS, gwNS: inferenceGatewayNamespace, gwName: maasGatewayName}
 	switch {
 	case r.entry.Type != modelTypeChat:
 		b.Reason = "Only chat models are published to MaaS."
 	case !r.maasKnown:
-		b.Reason = "Not checked."
+		b.Reason = "Whether MaaS is set up could not be checked yet."
 	case r.maas != "":
 		b.Reason = r.maas
 		b.Fix = "maas-tab"
@@ -459,7 +472,7 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 		b.Available = true
 		b.Changes = []string{
 			fmt.Sprintf("Gateway %s: admits routes from %s.", gatewayKey(inferenceGatewayNamespace, maasGatewayName), r.project),
-			fmt.Sprintf("Published to MaaS: MaaSModelRef %s in %s, and this tool's subscription and access policy list the model.", r.entry.Name, r.project),
+			fmt.Sprintf("Published to MaaS: MaaSModelRef %s in %s, and this tool's subscription and authorization policy list the model.", r.entry.Name, r.project),
 		}
 		if r.maasURL != "" {
 			b.Address = r.maasURL
@@ -528,7 +541,7 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 		out.DefaultReason = "works from your laptop with an OpenShift token, the way the dashboard deploys models."
 	case b.Available:
 		out.Default = b.Key
-		out.DefaultReason = "MaaS is set up and the inference gateway can't be used: anyone signed in calls the model with a MaaS API key."
+		out.DefaultReason = "MaaS is set up and the inference gateway can't be used: callers use a MaaS API key."
 	default:
 		for _, o := range others {
 			if o.Available && !plans[o.Key].authUncertain {
@@ -754,11 +767,7 @@ func exposureWords(e exposurePlan) string {
 func (m *modelsRun) publishToMaaS(project, name string) (*types.OperationResponse, error) {
 	m.step("publish", "running", "Publishing the model to MaaS (its route is on the MaaS gateway alone)...")
 	pub := &maasRun{c: m.c, activity: "publish-maas", target: fmt.Sprintf("model %s in %s", name, project), newModel: true}
-	pub.emit = func(e UpdateStepEvent) {
-		if e.Status != "failed" {
-			m.step("publish", "running", e.Message)
-		}
-	}
+	pub.emit = m.innerSteps("publish")
 	// No audience of its own: the subscription keeps who can use the
 	// published models (everyone signed in, when it is the first). The limit
 	// is the Publish dialog's default, the MaaS docs' premium example
@@ -767,8 +776,9 @@ func (m *modelsRun) publishToMaaS(project, name string) (*types.OperationRespons
 	if err != nil {
 		return nil, err
 	}
+	m.logs = append(m.logs, res.Logs...)
 	if !res.Success {
-		return m.fail("publish", fmt.Sprintf("The model was created, but publishing it to MaaS stopped: %s Publish it again on the MaaS tab, or delete the model.", res.Message), firstNonEmpty(res.ErrorCode, "partial_failure"), "publish failed")
+		return m.fail("publish", fmt.Sprintf("The model was created, but publishing it to MaaS stopped: %s Set it up again on the Models tab to publish it, or delete the model.", res.Message), firstNonEmpty(res.ErrorCode, "partial_failure"), "publish failed")
 	}
 	m.step("publish", "success", res.Message)
 	return nil, nil
@@ -780,7 +790,12 @@ func (m *modelsRun) publishToMaaS(project, name string) (*types.OperationRespons
 // "Can it be called?" check.
 func addModelRouting(c *Client, s *types.ModelState, m llmisvcObject, def kserveGateway, auth map[string]string) {
 	s.Exposure, s.Gateway = modelExposureOf(m, def)
-	s.ServedName = firstNonEmpty(m.Spec.Model.Name, m.Metadata.Name)
+	if served := firstNonEmpty(m.Spec.Model.Name, m.Metadata.Name); safeServedName(served) {
+		s.ServedName = served
+	} else {
+		s.ServedNameWithheld = true
+		s.Warning = strings.TrimSpace(s.Warning + " " + unsafeServedNameWarning)
+	}
 	s.InternalURL = withServicePort(c, modelInClusterURL(m))
 	if s.Exposure == exposureInternal {
 		// KServe keeps status.url from a route it has removed (live, RHOAI

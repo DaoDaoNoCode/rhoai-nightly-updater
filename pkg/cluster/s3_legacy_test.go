@@ -160,7 +160,7 @@ func TestGetResourcesStatus_EarlierStorageUnreadableIsAWarning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.LegacyStorage != nil || !st.MinIO.Ready || !strings.Contains(st.MinIO.Warning, "Cannot check namespace 'minio'") {
+	if st.LegacyStorage != nil || !st.MinIO.Ready || !strings.Contains(st.MinIO.Warning, "Cannot check namespace minio") {
 		t.Errorf("storage = %+v, legacy = %+v", st.MinIO, st.LegacyStorage)
 	}
 }
@@ -183,7 +183,7 @@ func TestTeardownS3Storage_RemovesEarlierStorage(t *testing.T) {
 		}
 	}
 	assertForeignUntouched(t, f, legacyAPIRoutePath, "spec", "someone-else")
-	if !f.has(legacyNSPath) || !f.has(s3NSPath) || !strings.Contains(resp.Message, "Namespaces 'seaweedfs' and 'minio' were kept") {
+	if !f.has(legacyNSPath) || !f.has(s3NSPath) || !strings.Contains(resp.Message, "Namespaces seaweedfs and minio were kept") {
 		t.Errorf("teardown = %+v", resp)
 	}
 }

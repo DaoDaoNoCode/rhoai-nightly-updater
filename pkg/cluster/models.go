@@ -319,6 +319,23 @@ func manifestUnknown(msg string) bool {
 	return true
 }
 
+// manifestUnknownMentioned: some source of the pull answered that the image
+// does not exist, though another may have refused the credentials (which
+// manifestUnknown waits on). Once that pull has failed for the whole grace
+// window, the image may be missing after all, so the released image is
+// offered again, worded as a possibility.
+func manifestUnknownMentioned(msg string) bool {
+	m := strings.ToLower(msg)
+	return strings.Contains(m, "manifest unknown") || strings.Contains(m, "manifest_unknown")
+}
+
+// olderThan: the object was created more than d ago (false when its
+// creation time cannot be read).
+func olderThan(meta objectMeta, d time.Duration) bool {
+	t, err := time.Parse(time.RFC3339, meta.CreationTimestamp)
+	return err == nil && time.Since(t) > d
+}
+
 // modelState reports one model. inspect reads its pods when it is not
 // ready. rec is the tool's record of its models (nil: it could not be
 // read, so no model counts as the tool's).
@@ -377,9 +394,15 @@ func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) type
 	if inspect {
 		if issue, err := inspectPods(c, m.Metadata.Namespace, modelPodSelector(m.Metadata.Name), ""); err == nil {
 			applyPodIssue(&s.ResourceState, issue)
-			if s.ImageKind == "preset" && (issue.Reason == "ErrImagePull" || issue.Reason == "ImagePullBackOff") && manifestUnknown(issue.Message) {
-				s.PresetImageMissing = true
-				s.TerminalError = true
+			if s.ImageKind == "preset" && (issue.Reason == "ErrImagePull" || issue.Reason == "ImagePullBackOff") {
+				switch {
+				case manifestUnknown(issue.Message):
+					s.PresetImageMissing = true
+					s.TerminalError = true
+				case manifestUnknownMentioned(issue.Message) && olderThan(m.Metadata, ModelImagePullGraceYoungNode):
+					// Past the longest grace window a setup waits on.
+					s.PresetImageMissing, s.PresetImageUncertain = true, true
+				}
 			}
 		}
 	}
@@ -394,6 +417,7 @@ func modelItems(c *Client, models []llmisvcObject, visible map[string]bool, rec 
 	// The MaaS record, read once for the first model of this tool: which
 	// models were set up through MaaS only (unreadable: none is said to be).
 	var maas *maasRecord
+	maasErr := false
 	for _, m := range models {
 		if !visible[m.Metadata.Namespace] {
 			continue
@@ -408,12 +432,14 @@ func modelItems(c *Client, models []llmisvcObject, visible map[string]bool, rec 
 				r, err := readMaaSRecord(c)
 				if err != nil {
 					slog.Debug("cannot read the MaaS record for the models", "error", err)
-					r = maasRecord{}
+					maasErr = true
 				}
 				maas = &r
 			}
-			refs, ok := maas.modelRefs(m.Metadata.Namespace, m.Metadata.Name)
-			s.MaaSOnlySetup = ok && refs.NoRoute
+			if !maasErr {
+				refs, ok := maas.routeBefore(m.Metadata.Namespace, m.Metadata.Name, modelGatewayRefsOf(m))
+				s.MaaSOnlySetup = ok && refs.NoRoute
+			}
 		}
 		out = append(out, s)
 	}
@@ -721,6 +747,18 @@ func (m *modelsRun) step(id, status, msg string) {
 	}
 }
 
+// innerSteps streams the steps of an operation run inside this one (a MaaS
+// publish or unpublish) as this one's step id, without logging them: the
+// inner run's own Logs, appended once it ends, hold them and its other
+// lines. Its failure is not streamed; the caller fails step id with it.
+func (m *modelsRun) innerSteps(id string) func(UpdateStepEvent) {
+	return func(e UpdateStepEvent) {
+		if e.Status != "failed" && m.emit != nil {
+			m.emit(UpdateStepEvent{Step: id, Status: "running", Message: e.Message})
+		}
+	}
+}
+
 func (m *modelsRun) fail(id, msg, code, activity string) (*types.OperationResponse, error) {
 	if m.emit != nil {
 		m.emit(UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: code})
@@ -965,8 +1003,8 @@ func (m *modelsRun) teardown(req types.ModelsRequest) (*types.OperationResponse,
 }
 
 // unpublishMaaSOnly is the teardown's step "unpublish" for a model set up
-// to be reached through MaaS only (maasOnlySetup): its publication was part
-// of its setup, so deleting it unpublishes it first, with the MaaS tab's
+// to be reached through MaaS only, or published with no route before
+// (maasOnlySetup): deleting it unpublishes it first, with the MaaS tab's
 // own unpublish, in the same operation. Any other published model is left
 // to TeardownModels, which refuses it. Fail closed: a check or an
 // unpublish that does not succeed stops the teardown before the model is
@@ -979,17 +1017,14 @@ func (m *modelsRun) unpublishMaaSOnly(project, name string) (*types.OperationRes
 	if !only {
 		return nil, nil
 	}
-	m.step("unpublish", "running", "The model was set up to be reached through MaaS only, so it is unpublished first...")
+	m.step("unpublish", "running", "The model is reached through MaaS only, so it is unpublished first...")
 	pub := &maasRun{c: m.c, activity: "unpublish-maas", target: fmt.Sprintf("model %s in %s", name, project)}
-	pub.emit = func(e UpdateStepEvent) {
-		if e.Status != "failed" {
-			m.step("unpublish", "running", e.Message)
-		}
-	}
+	pub.emit = m.innerSteps("unpublish")
 	res, err := pub.unpublish(project, name, true)
 	if err != nil {
 		return nil, err
 	}
+	m.logs = append(m.logs, res.Logs...)
 	if !res.Success {
 		return m.fail("unpublish", res.Message+" The model was not deleted.", firstNonEmpty(res.ErrorCode, "partial_failure"), "unpublish failed")
 	}
@@ -1014,9 +1049,12 @@ type modelPlan struct {
 	// ephemeral: the model requests ephemeral storage for its download.
 	ephemeral bool
 	// exp is how the model is reached (models_exposure.go); published: it
-	// is published to MaaS already.
+	// is published to MaaS already (or routed through its gateway); publish:
+	// the setup publishes it (a model reached through MaaS with no recorded
+	// publication).
 	exp       exposurePlan
 	published bool
+	publish   bool
 }
 
 func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, error) {
@@ -1145,7 +1183,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 		if allow != nil {
 			listed = fmt.Sprintf(" %s was added to the projects the inference gateway allows.", mp.project)
 		}
-		m.step("model", "success", fmt.Sprintf("LLMInferenceService %s/%s applied, on preset %s with %s. %s.%s%s", mp.project, mp.entry.Name, mp.preset, mp.image.describe(), exposureWords(mp.exp), tokenWords(mp.project, mp.entry.Name, mp.token), listed))
+		m.step("model", "success", fmt.Sprintf("LLMInferenceService %s/%s applied, on preset %s with %s. Reached %s.%s%s", mp.project, mp.entry.Name, mp.preset, mp.image.describe(), exposureWords(mp.exp), tokenWords(mp.project, mp.entry.Name, mp.token), listed))
 		m.step("model-ready", "running", "Waiting for the model to start (typically 3 to 5 minutes the first time)...")
 		timeout := ModelReadyTimeout
 		if dl, ok := c.ctx.Deadline(); ok {
@@ -1156,7 +1194,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 		// A model reached through MaaS is Ready only once published (its
 		// route needs the MaaS gateway to admit the project): its workload
 		// is waited on, then it is published.
-		publish := mp.exp.exposure == exposureMaaS && !mp.published
+		publish := mp.publish
 		res := waitModelReady(c, mp.project, mp.entry.Name, mp.image.Kind == "preset", publish, timeout, func(line string) { m.step("model-ready", "running", line) })
 		if res.err == nil && res.problem == "" && res.ready && publish {
 			m.step("model-ready", "success", "The model's server runs; publishing it to MaaS gives it its route.")
@@ -1170,6 +1208,8 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 			return m.fail("model-ready", fmt.Sprintf("Stopped waiting for the model: %v. It was created; the Models tab shows its state.", res.err), firstNonEmpty(errorCodeFromK8sErr(res.err), "cancelled"), "model wait failed")
 		case res.imageMissing:
 			return m.fail("model-ready", "The model cannot start: the cluster preset's image is not in the registry (this nightly build's runtime image is not published yet). Use the newest released Red Hat image instead: the Models tab offers it, and it replaces only the model's image. Technical details: "+res.problem, "image_unavailable", "preset image missing")
+		case res.imageMaybeMissing:
+			return m.fail("model-ready", "The model cannot start: "+res.problem+" A registry answered that the image does not exist (\"manifest unknown\"): if this nightly build's runtime image is not published yet, use the newest released Red Hat image instead: the Models tab offers it, and it replaces only the model's image.", "image_unavailable", "preset image may be missing")
 		case res.problem != "":
 			return m.fail("model-ready", "The model cannot start: "+res.problem+" It was created; delete it from the Models tab, or fix the cause and set it up again.", "not_ready", "model not starting")
 		case !res.ready && res.pulling != "":
@@ -1270,10 +1310,20 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	if msg != "" {
 		return nil, msg, code
 	}
-	published := false
+	published, publish := false, exp.exposure == exposureMaaS
 	if found {
 		if published, err = MaaSPublishedIn(c, req.Project, entry.Name); err != nil {
 			return nil, fmt.Sprintf("Cannot check whether %s in %s is published to MaaS: %v. Nothing was changed.", entry.Name, req.Project, err), errorCodeFromK8sErr(err)
+		}
+		// A model reached through MaaS is published again when no
+		// publication is recorded: its publish, part of its setup, stopped
+		// before it recorded one (the model is on the MaaS gateway alone).
+		if publish && published {
+			maasRec, err := readMaaSRecord(c)
+			if err != nil {
+				return nil, fmt.Sprintf("Cannot check whether %s in %s is published to MaaS: %v. Nothing was changed.", entry.Name, req.Project, err), errorCodeFromK8sErr(err)
+			}
+			publish = !maasRec.published(req.Project, entry.Name)
 		}
 	}
 	ephemeral := modelVolumeIsEmptyDir(c)
@@ -1285,7 +1335,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	}
 	return &modelPlan{entry: entry, project: req.Project, preset: preset.name, image: img, hardware: hw,
 		obj: modelManifest(req.Project, entry, preset.name, img, hw, published, ephemeral, exp), current: existing.Metadata, found: found, rec: rec, token: tok, ephemeral: ephemeral,
-		exp: exp, published: published}, "", ""
+		exp: exp, published: published, publish: publish}, "", ""
 }
 
 // applyModel writes the model (a server-side dry run when dryRun).
@@ -1528,6 +1578,9 @@ type modelProgress struct {
 	// than a missing image (credentials, network), in words; node is the
 	// pod's node. The wait gives it a grace window (modelPullGrace).
 	pullFailure, node string
+	// mentionsMissing: a source of that pull answered "manifest unknown"
+	// (manifestUnknownMentioned).
+	mentionsMissing bool
 }
 
 // readModelProgress reads the progress of the model's pods of the current
@@ -1612,9 +1665,10 @@ func describeModelPod(p modelPod, event string) modelProgress {
 				// Credentials can reach a new node a few minutes after it
 				// joins (ROSA HCP, seen live): the wait gives it time.
 				return modelProgress{
-					message:     fmt.Sprintf("Pulling the image of %s failed (%s: %s); the node keeps retrying.", s.Name, w.Reason, truncateMessage(w.Message)),
-					pullFailure: fmt.Sprintf("the image of container %s cannot be pulled (%s: %s)", s.Name, w.Reason, truncateMessage(w.Message)),
-					node:        p.Spec.NodeName,
+					message:         fmt.Sprintf("Pulling the image of %s failed (%s: %s); the node keeps retrying.", s.Name, w.Reason, truncateMessage(w.Message)),
+					pullFailure:     fmt.Sprintf("the image of container %s cannot be pulled (%s: %s)", s.Name, w.Reason, truncateMessage(w.Message)),
+					node:            p.Spec.NodeName,
+					mentionsMissing: manifestUnknownMentioned(w.Message),
 				}, true
 			case "CrashLoopBackOff":
 				last := ""
@@ -1666,6 +1720,9 @@ type modelWait struct {
 	url          string
 	problem      string
 	imageMissing bool
+	// imageMaybeMissing: the preset's image pull failed for the whole
+	// grace window, and a source answered that the image does not exist.
+	imageMaybeMissing bool
 	// pulling is the image pull failure the wait ended in, with what to
 	// check ("" when no pull was failing when it ended).
 	pulling string
@@ -1841,6 +1898,7 @@ func waitModelReady(c *Client, project, name string, presetImage, workloadOnly b
 			}
 			if clk.Since(pullSince) >= pullGrace {
 				res.problem = fmt.Sprintf("%s, for %s.%s Check that the cluster's pull secret can read it (on ROSA, the additional pull secret), that a mirror covers its registry if the cluster uses one, and that the image exists.", pr.pullFailure, clockText(pullGrace), pullNote)
+				res.imageMaybeMissing = pr.mentionsMissing && presetImage
 				return true, nil
 			}
 			res.pulling = fmt.Sprintf("%s.%s Check that the cluster's pull secret can read it (on ROSA, the additional pull secret), that a mirror covers its registry if the cluster uses one, and that the image exists.", pr.pullFailure, pullNote)

@@ -826,7 +826,7 @@ func TestMaaS_ForeignGatewayAdmittingAll(t *testing.T) {
 		t.Fatalf("part = %+v", p)
 	}
 	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"})
-	if res.Success || !strings.Contains(res.Message, "Gateway maas-default-gateway") {
+	if res.Success || !strings.Contains(res.Message, "MaaS gateway") {
 		t.Fatalf("res = %+v", res)
 	}
 }

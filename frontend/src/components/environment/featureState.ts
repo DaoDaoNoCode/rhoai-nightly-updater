@@ -496,7 +496,7 @@ function modelsIn(status: ResourcesStatus | null, project: string, busy: Busy, n
   // above: modelStatus reads it as needs-attention.)
   if (model.status === "ready") {
     const href = dashboardProjectHref(status?.dashboardUrl, project);
-    return { status: "ready", label: `Ready in ${project}`, ...owner(unmanaged), next: href ? { kind: "open", label: "Open in dashboard", href } : null, project };
+    return { status: "ready", label: `Ready in ${project}`, ...owner(unmanaged), next: href ? { kind: "open", label: "Open models in the dashboard", href } : null, project };
   }
   if (model.status === "unknown") return { status: "unknown", label: `Unknown in ${project}`, ...owner(model.unmanaged), next: null, project };
   const moving = parts.find((p) => MOVING.includes(p.status));
@@ -621,7 +621,7 @@ function playgroundInProject(status: ResourcesStatus | null, pg: PlaygroundStatu
   if (PROBLEM.includes(playground.status)) return { status: playground.status, label: `${envStatusText(playground.status)} in ${project}`, ...own, next: { kind: "show-issue", part: "playground" }, project };
   if (playground.status === "ready") {
     const href = playgroundHref(status?.dashboardUrl, project);
-    return { status: "ready", label: `Ready in ${project}`, ...own, next: href ? { kind: "open", label: "Open playground", href } : null, project };
+    return { status: "ready", label: `Ready in ${project}`, ...own, next: href ? { kind: "open", label: "Open the playground", href } : null, project };
   }
   if (MOVING.includes(playground.status)) return { status: playground.status, label: playground.status === "deleting" ? `Deleting in ${project}` : `Setting up in ${project}`, next: null, project };
   if (playground.status === "unknown") return { status: "unknown", label: `Unknown in ${project}`, ...own, next: null, project };
@@ -682,6 +682,12 @@ export function maasPartStatus(part: MaaSPart): EnvStatus {
   }
 }
 
+/** A part's own label: a ready part with a warning needs attention (the platform's state is maasPlatformStatus's). */
+export function maasPartLabelStatus(part: MaaSPart): EnvStatus {
+  const s = maasPartStatus(part);
+  return s === "ready" && part.warning ? "needs-attention" : s;
+}
+
 /** The MaaS platform as a whole. */
 export function maasPlatformStatus(m: MaaSStatus | null, busy: Busy): EnvStatus {
   if (!m) return "unknown";
@@ -719,9 +725,9 @@ export function maasState(m: MaaSStatus | null, busy: Busy = IDLE): FeatureState
   if (status === "ready") {
     const what = published.length === 0 ? "no model of this tool published" : `${published.length} ${published.length === 1 ? "model" : "models"} published`;
     const href = maasDashboardHref(m.dashboardUrl);
-    return { status, label: `Ready, ${what}`, ...own, next: href ? { kind: "open", label: "Open MaaS", href } : null, project: null };
+    return { status, label: `Ready, ${what}`, ...own, next: href ? { kind: "open", label: "Open MaaS governance", href } : null, project: null };
   }
-  if (MOVING.includes(status)) return { status, label: status === "deleting" ? "Removing" : "Setting up", next: null, project: null };
+  if (MOVING.includes(status)) return { status, label: status === "deleting" ? "Deleting" : "Setting up", next: null, project: null };
   if (PROBLEM.includes(status)) {
     const part = m.parts.find((p) => PROBLEM.includes(maasPartStatus(p)));
     return { status, label: envStatusText(status), ...own, next: { kind: "show-issue", part: `maas-${part?.id ?? "dsc"}` }, project: null };

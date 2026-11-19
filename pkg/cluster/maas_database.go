@@ -665,7 +665,7 @@ func readCNPGReadiness(c *Client, cnpg operatorState, readErr error) cnpgReadine
 }
 
 func cnpgInstallPlanText(p *operatorInstallPlan) string {
-	return fmt.Sprintf("Install CloudNativePG %s: %sSubscription %s/%s (package %s, channel %s, from certified-operators; in its own namespace, not openshift-operators, where an install can pull an OSSM upgrade that breaks the gateway; it stays after Remove)", p.head, operatorPlanPrefix(p), cnpgOperator.namespace, cnpgOperator.subName, cnpgOperator.pkg, p.channel)
+	return fmt.Sprintf("Install CloudNativePG %s: %sSubscription %s/%s (package %s, channel %s, from certified-operators; in its own namespace, not openshift-operators, where an install can pull an OSSM upgrade that breaks the gateway; it stays after Clean up)", p.head, operatorPlanPrefix(p), cnpgOperator.namespace, cnpgOperator.subName, cnpgOperator.pkg, p.channel)
 }
 
 // maasDBChoices are the databases Set up (or Change database) can make in
@@ -710,7 +710,7 @@ type maasDBStatus struct {
 func maasDatabaseStatus(c *Client, rec maasRecord, infra string, cnpg operatorState, cnpgReadErr error) maasDBStatus {
 	ns := firstNonEmpty(rec.DBNamespace, infra)
 	out := maasDBStatus{db: &types.MaaSDatabase{Namespace: ns, Default: maasDBDefault}}
-	part := types.MaaSPart{ID: "database", Title: "Database (PostgreSQL) and maas-db-config", DocURL: maasDocsBase + "install/maas-setup.md#database-setup"}
+	part := types.MaaSPart{ID: "database", Title: "Database", DocURL: maasDocsBase + "install/maas-setup.md#database-setup"}
 	done := func() maasDBStatus {
 		if rec.InfraNamespace != "" && rec.InfraNamespace == ns {
 			part.ManagedByTool = true

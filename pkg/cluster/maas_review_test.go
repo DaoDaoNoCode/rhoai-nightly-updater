@@ -86,6 +86,10 @@ func TestMaaSUnpublish_ModelRefsWriteHasAResourceVersionPrecondition(t *testing.
 
 // Finding 11: a model left only with the MaaS gateway ref (no reference, no
 // record) shows "Partly published", and Unpublish then takes the ref off.
+// With nothing recorded, the model on the MaaS gateway alone is taken to
+// have had no route (routeBefore: what a setup through MaaS only whose
+// publish stopped leaves), so it goes back to none, never onto a gateway
+// nobody chose for it.
 func TestMaaSUnpublish_RemovesALeftOverGatewayRef(t *testing.T) {
 	mc := publishedMaaSCluster(t)
 	deleteFakeObject(mc, tMaaSRef)
@@ -100,8 +104,8 @@ func TestMaaSUnpublish_RemovesALeftOverGatewayRef(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("unpublish: %+v", res)
 	}
-	if gw := modelGateway(t, mc); len(gw) != 0 {
-		t.Fatalf("model gateway after unpublish = %v", gw)
+	if spec, _ := mc.f.get(testModelPath)["spec"].(map[string]interface{}); spec["router"] != nil {
+		t.Fatalf("model router after unpublish = %v", spec["router"])
 	}
 }
 
@@ -117,7 +121,7 @@ func TestMaaSUnpublish_SaysWhenTheGatewayWasNotUpdated(t *testing.T) {
 }
 
 // Finding 2: a recorded project whose model and reference are gone is not
-// put back into the shared subscription and access policy.
+// put back into the shared subscription and authorization policy.
 func TestMaaSPublish_LeavesStaleRecordsOutOfTheSubscription(t *testing.T) {
 	mc := newMaaSCluster(t)
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
@@ -183,9 +187,9 @@ func TestTeardownModels_RefusesWhileAPublicationIsLeft(t *testing.T) {
 // someone else made exist: removing the platform would break them.
 func TestMaaSTeardown_RefusesWhileOthersUseMaaS(t *testing.T) {
 	for name, path := range map[string]string{
-		"model reference": "/apis/maas.opendatahub.io/v1alpha1/namespaces/team/maasmodelrefs/their-model",
-		"subscription":    "/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maassubscriptions/team-sub",
-		"access policy":   "/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maasauthpolicies/team-access",
+		"model reference":      "/apis/maas.opendatahub.io/v1alpha1/namespaces/team/maasmodelrefs/their-model",
+		"subscription":         "/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maassubscriptions/team-sub",
+		"authorization policy": "/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maasauthpolicies/team-access",
 	} {
 		t.Run(name, func(t *testing.T) {
 			mc := newMaaSCluster(t)

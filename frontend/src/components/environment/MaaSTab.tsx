@@ -27,13 +27,14 @@ import {
 import { getMaaS, toApiError } from "../../services/api";
 import { usePolling } from "../../hooks/usePolling";
 import { RESOURCE_SETTLE_MAX_MS } from "../../constants";
-import { type ConfirmSpec, type MaaSPending, type Pending, ExternalLink } from "./resourceRow";
+import { ImageRef } from "../ImageRef";
+import { type ConfirmSpec, type MaaSPending, type Pending, ExternalLink, WarningAlert } from "./resourceRow";
 import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
 import { ComponentAlert, CopyableCode, shellQuote } from "./UseIt";
 import { LoadFailed, PartsSkeleton, RowsSkeleton } from "./Loading";
 import { EnvStatusLabel } from "./resourceStatus";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
-import { type Busy, type FeatureState, maasDashboardHref, maasPartStatus } from "./featureState";
+import { type Busy, type FeatureState, maasDashboardHref, maasPartLabelStatus } from "./featureState";
 
 export const MAAS_POLL_MS = 5_000;
 
@@ -85,6 +86,10 @@ export interface MaaSTabProps {
   onModels: () => void;
 }
 
+/** This tool's MaaSSubscription and the display name it writes on it (pkg/cluster maas_subscription.go), as the dashboard lists it. */
+const TOOL_SUBSCRIPTION = "rhoai-nightly-updater-subscription";
+const TOOL_SUBSCRIPTION_DISPLAY = "rhoai-nightly-updater models";
+
 /** The key-mint, model list and chat requests of the MaaS docs (validation.md), with the user's own token. */
 export function maasCurl(url: string, subscription: string): string {
   return [
@@ -92,7 +97,7 @@ export function maasCurl(url: string, subscription: string): string {
     "# 1. A MaaS API key for the subscription (shown once: keep it)",
     `API_KEY=$(curl -sS -X POST "$HOST/maas-api/v1/api-keys" \\`,
     `  -H "Authorization: Bearer $(oc whoami -t)" -H "Content-Type: application/json" \\`,
-    `  -d '{"name":"my-key","expiresIn":"1h","subscription":"${subscription}"}' | jq -r .key)`,
+    `  -d ${shellQuote(JSON.stringify({ name: "my-key", expiresIn: "1h", subscription }))} | jq -r .key)`,
     "# 2. The models the key may use",
     `MODEL=$(curl -sS "$HOST/maas-api/v1/models" -H "Authorization: Bearer $API_KEY" | jq -r '[.data[] | select(.ready==true)][0].id')`,
     "# 3. Chat",
@@ -107,7 +112,9 @@ const PlatformPart: React.FC<{ part: MaaSPart; readOnly: boolean; reason: string
   // A "manual" part has only the commands; the others can be done here, so the commands are an alternative.
   const onlyCommands = part.state === "manual" && fixes.length === 0;
   return (
-    <PartItem id={`maas-${part.id}`} title={part.title} scope="Shared by the cluster" status={maasPartStatus(part)} unmanaged={!!part.notManaged}
+    <PartItem id={`maas-${part.id}`} title={part.title} scope="Shared by the cluster" unmanaged={!!part.notManaged}
+      // Waiting for something else is not this part setting itself up: a grey "Waiting", as on Prerequisites.
+      status={part.state === "waiting" ? "not-set-up" : maasPartLabelStatus(part)} statusText={part.state === "waiting" ? "Waiting" : undefined}
       actions={fixes.length > 0 || part.docUrl ? (
         <>
           {fixes.map((a) => (
@@ -116,11 +123,12 @@ const PlatformPart: React.FC<{ part: MaaSPart; readOnly: boolean; reason: string
                 onClick={() => setPending((a.id as string) === "change-database" ? { kind: "maas-database" } : { kind: "maas-action", action: a.id })}>{a.label}</Button>
             </ActionListItem>
           ))}
-          {part.docUrl && <ActionListItem><ExternalLink href={part.docUrl}>Docs</ExternalLink></ActionListItem>}
+          {/* Inline: below the title (narrow pages) it lines up with the text, not indented by a button's padding. */}
+          {part.docUrl && <ActionListItem><ExternalLink href={part.docUrl} isInline>Docs</ExternalLink></ActionListItem>}
         </>
       ) : undefined}>
       {part.message && <Content component="p">{part.message}</Content>}
-      {part.warning && <Alert variant="warning" isInline component="p" title="Needs attention">{part.warning}</Alert>}
+      {part.warning && <WarningAlert text={part.warning} />}
       {part.commands && (onlyCommands
         ? <CopyableCode id={`maas-${part.id}-commands`} label="the commands for a cluster-admin" code={part.commands} />
         : (
@@ -153,6 +161,12 @@ export function maasPublication(i: MaaSModel): string {
   if (i.ready) return "Published";
   return `Published, waiting (reference ${i.phase || "pending"}, access ${i.access || "pending"}, subscription ${i.subscription || "pending"})`;
 }
+
+/** A publication MaaS has accepted. */
+const publishedReady = (i: MaaSModel) => !!i.published && !i.partly && !!i.ready;
+
+/** A model MaaS does not take (an embedding model: pkg/cluster maasEmbeddingReason). */
+const notOffered = (i: MaaSModel) => !i.published && i.message === "Not offered for MaaS";
 
 /** This tool's models and their publication: Publish / Unpublish per model. */
 const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readOnly, setPending, onModels }) => {
@@ -201,8 +215,19 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
                   <Td dataLabel="Limit per user" modifier="wrap">{i.published && !i.partly ? limitText(i.limit) : "—"}</Td>
                   <Td dataLabel="In MaaS" modifier="wrap">
                     <Stack>
-                      {(i.published || running(project, model)) ? <StackItem><EnvStatusLabel status={running(project, model) ? (busy.maas?.action === "unpublish" ? "deleting" : "setting-up") : i.partly ? "needs-attention" : i.published ? (i.ready ? "ready" : "setting-up") : "not-set-up"} /></StackItem> : <StackItem><Label isCompact>Not published</Label></StackItem>}
-                      {(i.published || running(project, model)) && <StackItem><Content component="small">{maasPublication(i)}</Content></StackItem>}
+                      {publishedReady(i) && !running(project, model)
+                        // One green label: "Ready" above "Published" said the same twice.
+                        ? <StackItem><EnvStatusLabel status="ready" text="Published" /></StackItem>
+                        : (i.published || running(project, model))
+                          ? <>
+                            <StackItem><EnvStatusLabel status={running(project, model) ? (busy.maas?.action === "unpublish" ? "deleting" : "setting-up") : i.partly ? "needs-attention" : "setting-up"} /></StackItem>
+                            <StackItem><Content component="small">{maasPublication(i)}</Content></StackItem>
+                          </>
+                          : <>
+                            <StackItem><Label isCompact>{notOffered(i) ? "Not offered" : "Not published"}</Label></StackItem>
+                            {/* Why Publish is off, without hovering it. */}
+                            {notOffered(i) && <StackItem><Content component="small">Chat models only</Content></StackItem>}
+                          </>}
                     </Stack>
                   </Td>
                   <Td dataLabel="Actions" isActionCell>
@@ -235,11 +260,11 @@ const UseMaaS: React.FC<{ maas: MaaSStatus }> = ({ maas }) => {
       <DescriptionList aria-label="How to use MaaS">
         <DescriptionListGroup>
           <DescriptionListTerm>Address</DescriptionListTerm>
-          <DescriptionListDescription><code>{maas.url}</code></DescriptionListDescription>
+          <DescriptionListDescription>{maas.url ? <ImageRef image={maas.url} what="MaaS address" truncate={false} isCode={false} /> : "Not known yet"}</DescriptionListDescription>
         </DescriptionListGroup>
         <DescriptionListGroup>
           <DescriptionListTerm>Subscription</DescriptionListTerm>
-          <DescriptionListDescription><code>{maas.subscription}</code> <Label isCompact>{audienceText(maas.access)}</Label><br />The MaaS subscription that gives access and holds the limits; you choose it when you create an API key.</DescriptionListDescription>
+          <DescriptionListDescription>{maas.subscription === TOOL_SUBSCRIPTION ? <>{TOOL_SUBSCRIPTION_DISPLAY} (<code>{maas.subscription}</code>)</> : <code>{maas.subscription}</code>} <Label isCompact>{audienceText(maas.access)}</Label><br />The MaaS subscription that gives access and holds the limits; you choose it when you create an API key.</DescriptionListDescription>
         </DescriptionListGroup>
         <DescriptionListGroup>
           <DescriptionListTerm>From a terminal</DescriptionListTerm>
@@ -253,7 +278,7 @@ const UseMaaS: React.FC<{ maas: MaaSStatus }> = ({ maas }) => {
         {href && (
           <DescriptionListGroup>
             <DescriptionListTerm>In the dashboard</DescriptionListTerm>
-            <DescriptionListDescription><ExternalLink href={href}>Models as a Service</ExternalLink>: API keys, subscriptions and models</DescriptionListDescription>
+            <DescriptionListDescription><ExternalLink href={href} isInline>MaaS governance</ExternalLink>: subscriptions, authorization policies and models</DescriptionListDescription>
           </DescriptionListGroup>
         )}
       </DescriptionList>
@@ -316,18 +341,18 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
       <StackItem>
         <FeatureSection title="What this creates">
           <CreatesList items={[
-            <>Only what is missing, as the MaaS docs install it: Red Hat Connectivity Link from <code>redhat-operators</code> in <code>kuadrant-system</code>, set to deny traffic when rate limiting fails (the docs&apos; recommendation), and its Kuadrant CR; and Authorino TLS (the docs&apos; <code>setup-authorino-tls.sh</code>). These stay after Remove: other RHOAI features use them</>,
+            <>Only what is missing, as the MaaS docs install it: Red Hat Connectivity Link from <code>redhat-operators</code> in <code>kuadrant-system</code>, set to deny traffic when rate limiting fails (the docs&apos; recommendation), and its Kuadrant instance; and Authorino TLS (the docs&apos; <code>setup-authorino-tls.sh</code>). These stay after Clean up: other RHOAI features use them</>,
             <>The AI gateway&apos;s namespace (<code>{maas?.platform.namespace ?? "redhat-ai-gateway-infra"}</code>) when it does not exist yet; Remove deletes it when nothing else is in it</>,
-            <>MaaS&apos;s PostgreSQL, as you choose in Set up (the MaaS docs leave it to you): yours (only Secret <code>maas-db-config</code> is written), the docs&apos; development database (one pod, no volume: keys are lost when it restarts), or a persistent one on CloudNativePG, this tool&apos;s own option, which installs the CloudNativePG operator from <code>certified-operators</code> in <code>cnpg-system</code> (it stays after Remove). A <code>maas-db-config</code> someone else wrote is used as it is</>,
-            <>Gateway <code>maas-default-gateway</code> in <code>openshift-ingress</code> with an external load balancer at <code>maas.&lt;apps domain&gt;</code> (and GatewayClass <code>openshift-default</code> when the cluster has none; it stays after Remove, as OpenShift&apos;s shared class)</>,
+            <>MaaS&apos;s PostgreSQL, as you choose in Set up (the MaaS docs leave it to you): yours (only Secret <code>maas-db-config</code> is written), the docs&apos; development database (one pod, no volume: keys are lost when it restarts), or a persistent one on CloudNativePG, this tool&apos;s own option, which installs the CloudNativePG operator from <code>certified-operators</code> in <code>cnpg-system</code> (it stays after Clean up). A <code>maas-db-config</code> someone else wrote is used as it is</>,
+            <>Gateway <code>maas-default-gateway</code> in <code>openshift-ingress</code> with an external load balancer at <code>maas.&lt;apps domain&gt;</code> (and GatewayClass <code>openshift-default</code> when the cluster has none; it stays after Clean up, as OpenShift&apos;s shared class)</>,
             <>MaaS turned on in the DataScienceCluster (<code>aigateway</code> and <code>aigateway.modelsAsAService</code>); RHOAI&apos;s operator then runs maas-api and the default tenant</>,
-            <>Publishing: the model routes through the MaaS gateway only, and a MaaSModelRef, the subscription <code>{maas?.subscription ?? "rhoai-nightly-updater-subscription"}</code> and the access policy <code>rhoai-nightly-updater-access</code> list it. The subscription&apos;s priority is below every other subscription&apos;s, so it never takes a key meant for someone else&apos;s</>,
+            <>Publishing: the model routes through the MaaS gateway only, and a MaaSModelRef, the subscription <code>{maas?.subscription ?? "rhoai-nightly-updater-subscription"}</code> and the authorization policy <code>rhoai-nightly-updater-access</code> list it. The subscription&apos;s priority is below every other subscription&apos;s, so it never takes a key meant for someone else&apos;s</>,
           ]} />
         </FeatureSection>
       </StackItem>
       {!readOnly && maas?.platform.managedByTool && (
         <StackItem>
-          <CleanupSection id="maas-cleanup" label="Remove MaaS..." onClick={() => setPending({ kind: "teardown-maas" })} reason={baseReason}
+          <CleanupSection id="maas-cleanup" label="Clean up MaaS..." onClick={() => setPending({ kind: "teardown-maas" })} reason={baseReason}
             text="Unpublishes this tool's models, puts the DataScienceCluster back as it was before, then deletes the gateway, the database and the namespace this tool created. A PostgreSQL of your own is never touched. Connectivity Link, Kuadrant, Authorino TLS and CloudNativePG stay, also if this tool installed them: other RHOAI features use them." />
         </StackItem>
       )}
@@ -373,7 +398,7 @@ export function maasSteps(p: MaaSPending): { id: string; title: string }[] {
       ];
     case "maas-access":
       return [
-        { id: "check", title: "Check the subscription and the access policy" },
+        { id: "check", title: "Check the subscription and the authorization policy" },
         { id: "access", title: "Change who can use the published models" },
         { id: "ready", title: "Wait until MaaS applies it" },
       ];
@@ -388,10 +413,10 @@ export function maasSteps(p: MaaSPending): { id: string; title: string }[] {
       return [
         { id: "check", title: "Check what the platform needs" },
         { id: "rhcl", title: "Red Hat Connectivity Link" },
-        { id: "kuadrant", title: "Kuadrant CR" },
+        { id: "kuadrant", title: "Connectivity Link instance (Kuadrant)" },
         { id: "cnpg", title: "CloudNativePG operator (if chosen)" },
         { id: "database", title: "Database and its connection Secret" },
-        { id: "gateway", title: "Gateway maas-default-gateway" },
+        { id: "gateway", title: "MaaS gateway" },
         { id: "authorino-tls", title: "Authorino TLS" },
         { id: "dsc", title: "Turn on MaaS in the DataScienceCluster" },
         { id: "ready", title: "Wait for maas-api and the tenant" },
@@ -440,18 +465,24 @@ export function maasSteps(p: MaaSPending): { id: string; title: string }[] {
       return [
         { id: "check", title: "Check the platform and the model" },
         { id: "gateway", title: `Let the MaaS gateway admit ${p.project}` },
-        { id: "model", title: `Route ${p.model} through the MaaS gateway only` },
-        { id: "maas", title: "Model reference, subscription and access policy" },
+        { id: "model", title: "Route the model through the MaaS gateway only" },
+        { id: "maas", title: "Model reference, subscription and authorization policy" },
         { id: "ready", title: "Wait until MaaS lists the model" },
       ];
     default:
       return [
         { id: "check", title: "Check the publication" },
-        { id: "maas", title: `Remove ${p.model} from MaaS` },
-        { id: "model", title: `Route ${p.model} as before` },
+        { id: "maas", title: "Remove the model from MaaS" },
+        { id: "model", title: "Route the model as before" },
         { id: "gateway", title: `Stop admitting ${p.project}` },
       ];
   }
+}
+
+/** A model's short display name in MaaS's list (as the Models tab names it), or its resource name. */
+function maasModelName(m: MaaSStatus | null, project: string, model: string): string {
+  const d = m?.items?.find((i) => i.namespace === project && i.name === model)?.displayName;
+  return d ? d.replace(/\s*\([^)]*\)\s*$/, "") : model;
 }
 
 /** The confirmation of a MaaS change, or null for another feature's change. */
@@ -521,7 +552,7 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
       const item = (m?.items ?? []).find((i) => i.namespace === pending.project && i.name === pending.model);
       const form = pending.limit ?? defaultLimitForm(item?.limit);
       return {
-        title: `Change the limit of ${pending.model} in ${pending.project}?`, confirm: "Change limit", runTitle: `Change the limit of ${pending.model} in ${pending.project}`,
+        title: `Change the limit of ${maasModelName(m, pending.project, pending.model)} in ${pending.project}?`, confirm: "Change limit", runTitle: `Change the limit of ${maasModelName(m, pending.project, pending.model)} in ${pending.project}`,
         summary: <Content component="p">Now: {limitText(item?.limit)}. API keys keep working; MaaS applies the new limit within seconds.</Content>,
         choice: <LimitFields value={form} idPrefix="change" noUnlimited={m?.noUnlimited} onChange={(f) => setPending?.({ ...pending, limit: f })} />,
         confirmDisabled: !!limitProblem(form, m?.noUnlimited),
@@ -535,7 +566,7 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
         summary: <Content component="p">Now: {audienceText(m?.access)}. It applies to every model this tool published; anyone left out can no longer call them, also with a key they made before.</Content>,
         choice: <AudienceFields value={form} idPrefix="change" onChange={(f) => setPending?.({ ...pending, access: f })} />,
         confirmDisabled: !!audienceProblem(form),
-        changes: [<>In <code>models-as-a-service</code>: the owners of subscription <code>{m?.subscription ?? "rhoai-nightly-updater-subscription"}</code> and the subjects of access policy <code>rhoai-nightly-updater-access</code> (after a server-side dry run). The limits stay.</>],
+        changes: [<>In <code>models-as-a-service</code>: the owners of subscription <code>{m?.subscription ?? "rhoai-nightly-updater-subscription"}</code> and the subjects of authorization policy <code>rhoai-nightly-updater-access</code> (after a server-side dry run). The limits stay.</>],
       };
     }
     case "maas-action": {
@@ -549,14 +580,14 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
     }
     case "teardown-maas":
       return {
-        title: "Remove Models as a Service?", confirm: "Remove", danger: true, runTitle: "Remove Models as a Service",
+        title: "Clean up Models as a Service?", confirm: "Clean up", danger: true, runTitle: "Clean up Models as a Service",
         dataLoss: <>Every API key, with {createdDatabaseInSentence(m?.database?.current ?? "")} and its data. A PostgreSQL of your own is never touched.</>,
-        summary: <Content component="p">Removes what this tool set up, in reverse order. API keys stop working, and the database&apos;s data (the keys&apos; records) is deleted. It refuses, before changing anything, while others use MaaS: model references, subscriptions or access policies this tool did not create. It keeps the gateway while routes are attached to it.</Content>,
+        summary: <Content component="p">Removes what this tool set up, in reverse order. API keys stop working, and the database&apos;s data (the keys&apos; records) is deleted. It refuses, before changing anything, while others use MaaS: model references, subscriptions or authorization policies this tool did not create. It keeps the gateway while routes are attached to it.</Content>,
         changes: [
           <>Unpublished: this tool&apos;s models ({(m?.items ?? []).filter((i) => i.published).map((i) => `${i.name} in ${i.namespace}`).join(", ") || "none"}).</>,
           <>DataScienceCluster: <code>aigateway.modelsAsAService</code> and <code>aigateway</code> back to their values before setup (each only if this tool changed it and nobody has set it since).</>,
           <>Deleted: Gateway <code>maas-default-gateway</code>; {createdDatabaseInSentence(m?.database?.current ?? "")} with its objects and data, and Secret <code>maas-db-config</code> if this tool wrote it. A PostgreSQL of your own and a Secret someone else wrote are never touched; namespace <code>{m?.platform.namespace ?? "redhat-ai-gateway-infra"}</code> only if this tool created it and nothing else is in it.</>,
-          <>Kept, also if this tool installed or set them up: Red Hat Connectivity Link, its Kuadrant CR and Authorino TLS, and the CloudNativePG operator. They are shared platform pieces: RHOAI&apos;s inference gateway authentication uses Kuadrant. Remove them from the OpenShift console if nothing needs them.</>,
+          <>Kept, also if this tool installed or set them up: Red Hat Connectivity Link, its Kuadrant instance and Authorino TLS, and the CloudNativePG operator. They are shared platform pieces: RHOAI&apos;s inference gateway authentication uses Kuadrant. Remove them from the OpenShift console if nothing needs them.</>,
           <>Kept: GatewayClass <code>openshift-default</code>, also if this tool created it: it is OpenShift&apos;s shared class for gateways and costs nothing on its own. Also kept: the namespaces RHOAI made, and every object that was not created by this tool.</>,
         ],
       };
@@ -565,7 +596,7 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
       const limit = pending.limit ?? defaultLimitForm();
       const access = pending.access ?? defaultAudienceForm(m?.access);
       return {
-        title: `Publish ${pending.model} in ${pending.project} to MaaS?`, confirm: "Publish", runTitle: `Publish ${pending.model} in ${pending.project}`,
+        title: `Publish ${maasModelName(m, pending.project, pending.model)} in ${pending.project} to MaaS?`, confirm: "Publish", runTitle: `Publish ${maasModelName(m, pending.project, pending.model)} in ${pending.project}`,
         summary: <Content component="p">Who you choose can then call the model through MaaS with an API key, each up to the limit you choose. While it is published, the model is used through MaaS and the dashboard&apos;s playground; its direct address (the Models tab&apos;s commands) answers 404 until it is unpublished.</Content>,
         choice: (
           <Stack hasGutter>
@@ -578,19 +609,19 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
         changes: [
           <>Gateway <code>maas-default-gateway</code>: admits routes from {pending.project}.</>,
           <>LLMInferenceService <code>{pending.model}</code> in {pending.project}: routes through the MaaS gateway only (only its gateways are changed). The gateways it uses now are recorded, and Unpublish puts them back.</>,
-          <>Created: MaaSModelRef <code>{pending.model}</code> in {pending.project}; in <code>models-as-a-service</code>, subscription <code>{m?.subscription ?? "rhoai-nightly-updater-subscription"}</code> (with the model&apos;s limit) and access policy <code>rhoai-nightly-updater-access</code> list the model.</>,
+          <>Created: MaaSModelRef <code>{pending.model}</code> in {pending.project}; in <code>models-as-a-service</code>, subscription <code>{m?.subscription ?? "rhoai-nightly-updater-subscription"}</code> (with the model&apos;s limit) and authorization policy <code>rhoai-nightly-updater-access</code> list the model.</>,
         ],
       };
     }
     case "unpublish-maas": {
       const maasOnly = !!m?.items?.find((i) => i.namespace === pending.project && i.name === pending.model)?.maasOnlySetup;
       return {
-        title: `Unpublish ${pending.model} in ${pending.project}?`, confirm: "Unpublish", danger: true, runTitle: `Unpublish ${pending.model} in ${pending.project}`,
-        summary: <Content component="p">MaaS stops offering the model; API keys can no longer call it. The model keeps running in {pending.project}.</Content>,
+        title: `Unpublish ${maasModelName(m, pending.project, pending.model)} in ${pending.project}?`, confirm: "Unpublish", danger: true, runTitle: `Unpublish ${maasModelName(m, pending.project, pending.model)} in ${pending.project}`,
+        summary: <Content component="p">MaaS stops offering the model; API keys can no longer call it. The model keeps running in {pending.project}.{maasOnly ? " It had no outside route before it was published, so afterwards it has no outside address: only programs inside the cluster can call it, without a token." : ""}</Content>,
         changes: [
-          <>Deleted: MaaSModelRef <code>{pending.model}</code> in {pending.project}, and the model&apos;s entries in the subscription and access policy (both are deleted when no model is left).</>,
+          <>Deleted: MaaSModelRef <code>{pending.model}</code> in {pending.project}, and the model&apos;s entries in the subscription and authorization policy (both are deleted when no model is left).</>,
           maasOnly
-            ? <>The model was set up to be reached through MaaS only, so its route is removed: it then answers only at its in-cluster address, as a model set up &quot;Only inside the cluster&quot;. The MaaS gateway stops admitting {pending.project} unless another model of this tool is published there; the inference gateway is not changed.</>
+            ? <>The model had no route of its own before it was published, so its route is removed: it then answers only at its in-cluster address, as a model set up &quot;Only inside the cluster&quot;. The MaaS gateway stops admitting {pending.project} unless another model of this tool is published there; the inference gateway is not changed.</>
             : <>The model routes through the gateways it used before publishing, so its direct address answers again; the MaaS gateway stops admitting {pending.project} unless another model of this tool is published there.</>,
         ],
       };

@@ -505,7 +505,7 @@ func rhclWarning(version string) string {
 	case versionCore(version) == rhclAuthBypassVersion:
 		return fmt.Sprintf("Red Hat Connectivity Link %s silently lets requests past the gateway's authentication (the MaaS docs' prerequisites: \"RHCL v1.4.0 contains a Wasm shim bug that silently bypasses gateway authentication\"). This tool publishes nothing until it is upgraded: Upgrade Connectivity Link does it.", version)
 	}
-	return fmt.Sprintf("Red Hat Connectivity Link %s is installed; the MaaS docs ask for %s or later with RHOAI 3.6: on 1.4.x a caller with two or more subscriptions can hang. MaaS works for a single subscription meanwhile. Upgrade Connectivity Link takes the upgrade path OLM offers, one channel at a time, and sets up Authorino TLS again afterwards.", version, rhclDocsMinimum)
+	return fmt.Sprintf("Red Hat Connectivity Link %s is installed; the MaaS docs ask for %s or later: on 1.4.x a caller with two or more subscriptions can hang. MaaS works for a single subscription meanwhile. Upgrade Connectivity Link takes the upgrade path OLM offers, one channel at a time, and sets up Authorino TLS again afterwards.", version, rhclDocsMinimum)
 }
 
 // maasObjectPath is the path of a platform object this tool reads or
@@ -635,7 +635,7 @@ func maasNamespaceRefusal(c *Client, infra string) (string, string) {
 			continue
 		}
 		if who := meta.Annotations[projectRequesterAnnotation]; who != "" {
-			return fmt.Sprintf("Namespace %s was made through a project request by %s (annotation %s), not by RHOAI, and MaaS takes over a namespace of that name that exists. Its admins could attach routes to the MaaS gateway and change MaaS's subscriptions and access policies there, so this tool does not set up or publish MaaS while it exists. A cluster-admin checks it and, if it is not RHOAI's, deletes it; RHOAI makes it again. Nothing was changed.", ns, who, projectRequesterAnnotation), "not_managed"
+			return fmt.Sprintf("Namespace %s was made through a project request by %s (annotation %s), not by RHOAI, and MaaS takes over a namespace of that name that exists. Its admins could attach routes to the MaaS gateway and change MaaS's subscriptions and authorization policies there, so this tool does not set up or publish MaaS while it exists. A cluster-admin checks it and, if it is not RHOAI's, deletes it; RHOAI makes it again. Nothing was changed.", ns, who, projectRequesterAnnotation), "not_managed"
 		}
 	}
 	return "", ""
@@ -1177,7 +1177,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	// ready, create a Kuadrant instance").
 	kq, kErr := readKuadrant(c)
 	kuadrantNS := firstNonEmpty(kq.namespace, rhcl.csvNS, rhclOperator.namespace)
-	kPart := types.MaaSPart{ID: "kuadrant", Title: "Kuadrant CR", DocURL: maasDocsBase + "install/platform-setup.md#install-gateway-api-controller"}
+	kPart := types.MaaSPart{ID: "kuadrant", Title: "Connectivity Link instance (Kuadrant)", DocURL: maasDocsBase + "install/platform-setup.md#install-gateway-api-controller"}
 	_, kByTool := rec.Shared["kuadrant"]
 	switch {
 	case kErr != nil:
@@ -1187,7 +1187,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		kPart.Commands = kuadrantCommands(kuadrantNS)
 		plan(fmt.Sprintf("Create the Kuadrant CR %s/kuadrant", kuadrantNS))
 	case kq.ready:
-		kPart.State, kPart.Message = "ready", "Kuadrant "+kq.namespace+"/kuadrant is Ready"
+		kPart.State, kPart.Message = "ready", kq.namespace+"/kuadrant is ready"
 	default:
 		kPart.State, kPart.Message = "waiting", "Kuadrant is not Ready: "+firstNonEmpty(kq.message, "no message")
 	}
@@ -1208,7 +1208,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	st.Database = dbs.db
 
 	// The gateway.
-	gwPart := types.MaaSPart{ID: "gateway", Title: "Gateway maas-default-gateway", DocURL: maasDocsBase + "install/maas-setup.md#create-gateway"}
+	gwPart := types.MaaSPart{ID: "gateway", Title: "MaaS gateway", DocURL: maasDocsBase + "install/maas-setup.md#create-gateway"}
 	gw, gwErr := readMaaSGateway(c)
 	switch {
 	case gwErr != nil:
@@ -1229,7 +1229,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		case gw.acceptedErr != "":
 			gwPart.State, gwPart.Message = "problem", "Not accepted: "+truncateMessage(gw.acceptedErr)
 		case gw.programmed && gw.address != "":
-			gwPart.State, gwPart.Message = "ready", "Programmed at "+gw.address
+			gwPart.State, gwPart.Message = "ready", fmt.Sprintf("%s in %s, programmed at %s", maasGatewayName, inferenceGatewayNamespace, gw.address)
 		default:
 			gwPart.State, gwPart.Message = "waiting", "Waiting for its load balancer"
 		}
@@ -1511,7 +1511,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 				item.SetupBlockedReason = firstNonEmpty(item.SetupBlockedReason, "The model is not ready yet.")
 			}
 		}
-		if recorded, ok := rec.modelRefs(m.Metadata.Namespace, m.Metadata.Name); item.Published && recErr == nil && ok {
+		if recorded, ok := rec.routeBefore(m.Metadata.Namespace, m.Metadata.Name, modelGatewayRefsOf(m)); item.Published && recErr == nil && ok {
 			item.MaaSOnlySetup = recorded.NoRoute
 		}
 		st.Items = append(st.Items, item)
@@ -1644,7 +1644,7 @@ func maasPhase(c *Client, path string) (string, bool) {
 // model that is not publishable): its MaaSModelRef,
 // this tool's record of it, or the model's route through the MaaS gateway.
 // Unpublish removes all three (and the project from the shared
-// subscription, access policy and gateway), so the model goes after it.
+// subscription, authorization policy and gateway), so the model goes after it.
 func MaaSPublishedIn(c *Client, project, name string) (bool, error) {
 	refPath, ok := maasModelRefPath(c, project, name)
 	if !ok {
@@ -1675,10 +1675,12 @@ func MaaSPublishedIn(c *Client, project, name string) (bool, error) {
 }
 
 // maasOnlySetup reports whether this tool's model name in project is
-// published as part of its own setup: the Models tab set it up to be
-// reached through MaaS only, so the MaaS record says it had no route before
-// (maasModelRefs.NoRoute). The Models teardown unpublishes such a model
-// itself; a model published on the MaaS tab is unpublished there.
+// published and had no route before (maasModelRefs.NoRoute, or a setup
+// through MaaS only whose publish recorded nothing: routeBefore): the
+// Models tab set it up to be reached through MaaS only, or "Only inside
+// the cluster" and it was published on the MaaS tab. The Models teardown
+// unpublishes such a model itself (Unpublish leaves it with no route, as
+// before); any other published model is unpublished on the MaaS tab.
 func maasOnlySetup(c *Client, project, name string) (bool, error) {
 	published, err := MaaSPublishedIn(c, project, name)
 	if err != nil || !published {
@@ -1688,6 +1690,14 @@ func maasOnlySetup(c *Client, project, name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	refs, ok := rec.modelRefs(project, name)
+	model, found, err := readToolModel(c, project, name)
+	if err != nil {
+		return false, err
+	}
+	var current gatewayRefs
+	if found {
+		current = modelGatewayRefsOf(model)
+	}
+	refs, ok := rec.routeBefore(project, name, current)
 	return ok && refs.NoRoute, nil
 }

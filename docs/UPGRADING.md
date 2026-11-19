@@ -95,12 +95,12 @@ flowchart TD
 
 ### In the app
 
-<img src="images/masthead-version.png" alt="The masthead shows the release v3.0.1" width="380">
+<img src="images/masthead-version.png" alt="The masthead shows the release v4.0.0" width="380">
 
-1. The masthead shows the running release, for example `v3.0.1`. Builds of
+1. The masthead shows the running release, for example `v4.0.0`. Builds of
    `main` or of a commit show no version here.
 
-<img src="images/help-about.png" alt="The Help dialog, About this installation: Updater build v3.0.1 with its commit and build date" width="760">
+<img src="images/help-about.png" alt="The Help dialog, About this installation: Updater build v4.0.0 with its commit and build date" width="760">
 
 1. **Help** (`?`) → **About this installation** → **Updater build**: the
    release, its commit and its build date.
@@ -440,7 +440,7 @@ a commit build):
 you roll back, remove what 2.x cannot see, or it keeps running with no
 button to remove it: **Clean up everything** on the Overview, with the
 playgrounds, MaaS, the models and the inference gateway ticked (or
-**Remove MaaS** and each tab's Clean up). The inference gateway and the
+**Clean up MaaS** and each tab's Clean up). The inference gateway and the
 MaaS gateway each run a cloud load balancer, which costs money while it
 exists. By hand: the Rollback lines of
 [RUNBOOK §10.2 to §10.4](../RUNBOOK.md#102-models-the-inference-gateway-and-cpu-models).

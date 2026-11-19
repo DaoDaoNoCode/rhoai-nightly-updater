@@ -442,18 +442,18 @@ func MigrateS3Storage(c *Client, opts MigrateOptions, onStep func(UpdateStepEven
 	if opts.RemoveOldStorage {
 		m.op, m.kept = "Remove old storage", "nothing was deleted"
 	}
-	m.step("check", "running", fmt.Sprintf("Checking the storage in namespace '%s'...", legacyNamespace))
+	m.step("check", "running", fmt.Sprintf("Checking the storage in namespace %s...", legacyNamespace))
 	legacy, err := readLegacyStorage(c)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read the storage in namespace '%s'; nothing was changed: %v.%s", legacyNamespace, err, templateHint(err)), errorCodeFromK8sErr(err), "read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read the storage in namespace %s; nothing was changed: %v.%s", legacyNamespace, err, templateHint(err)), errorCodeFromK8sErr(err), "read failed")
 	}
 	if legacy == nil {
-		m.step("check", "success", fmt.Sprintf("No storage from an earlier version in namespace '%s'.", legacyNamespace))
+		m.step("check", "success", fmt.Sprintf("No storage from an earlier version in namespace %s.", legacyNamespace))
 		recordS3Activity(c, "migrate-storage", legacyNamespace+" (nothing to do)", true)
-		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Nothing to do: there is no storage from an earlier version in namespace '%s'.", legacyNamespace), Logs: m.logs}, nil
+		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Nothing to do: there is no storage from an earlier version in namespace %s.", legacyNamespace), Logs: m.logs}, nil
 	}
 	if legacy.terminating {
-		return m.fail("check", fmt.Sprintf("Namespace '%s' is being deleted, so its storage cannot be migrated. Nothing was changed.", legacyNamespace), "terminating", "namespace terminating")
+		return m.fail("check", fmt.Sprintf("Namespace %s is being deleted, so its storage cannot be migrated. Nothing was changed.", legacyNamespace), "terminating", "namespace terminating")
 	}
 	dspas, err := listDSPAs(c, "")
 	if err != nil && !errors.Is(err, errDSPACRDMissing) {
@@ -473,10 +473,10 @@ func MigrateS3Storage(c *Client, opts MigrateOptions, onStep func(UpdateStepEven
 func (m *migrateRun) sourceReady(legacy *legacyStorage, step string) (s3Keys, *types.OperationResponse) {
 	switch {
 	case legacy.server == "":
-		resp, _ := m.fail(step, fmt.Sprintf("No server runs in namespace '%s' any more, so its objects cannot be copied. Nothing was changed, and a retry gives the same result while no server runs there.", legacyNamespace), "prerequisites", "no server")
+		resp, _ := m.fail(step, fmt.Sprintf("No server runs in namespace %s any more, so its objects cannot be copied. Nothing was changed, and a retry gives the same result while no server runs there.", legacyNamespace), "prerequisites", "no server")
 		return s3Keys{}, resp
 	case !legacy.ready:
-		resp, _ := m.fail(step, fmt.Sprintf("%s in namespace '%s' is not running, so its objects cannot be copied. Nothing was changed. Start it again (Deployment %s), then retry.", legacy.server, legacyNamespace, map[string]string{"SeaweedFS": s3Deployment, "MinIO": legacyMinIODeployment}[legacy.server]), "prerequisites", "server not ready")
+		resp, _ := m.fail(step, fmt.Sprintf("%s in namespace %s is not running, so its objects cannot be copied. Nothing was changed. Start it again (Deployment %s), then retry.", legacy.server, legacyNamespace, map[string]string{"SeaweedFS": s3Deployment, "MinIO": legacyMinIODeployment}[legacy.server]), "prerequisites", "server not ready")
 		return s3Keys{}, resp
 	}
 	keys, err := readLegacyKeys(m.c)
@@ -507,11 +507,11 @@ func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo) (*types.Op
 	if resp != nil {
 		return resp, nil
 	}
-	m.step("check", "success", fmt.Sprintf("OK: %s in namespace '%s' is running", legacy.server, legacyNamespace))
+	m.step("check", "success", fmt.Sprintf("OK: %s in namespace %s is running", legacy.server, legacyNamespace))
 
 	// Step 1: the new storage, with keys of its own: the ones it has when
 	// it is set up already, else new random ones (s3Credentials).
-	m.step("storage", "running", fmt.Sprintf("Setting up the storage in namespace '%s' with new keys...", s3Namespace))
+	m.step("storage", "running", fmt.Sprintf("Setting up the storage in namespace %s with new keys...", s3Namespace))
 	ready, resp := m.newStorageReady("storage")
 	if resp != nil {
 		return resp, nil
@@ -563,14 +563,14 @@ func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo) (*types.Op
 		return resp, nil
 	}
 
-	msg := fmt.Sprintf("Migrated %s to namespace '%s'.", result.summary(), s3Namespace)
+	msg := fmt.Sprintf("Migrated %s to namespace %s.", result.summary(), s3Namespace)
 	if len(repointed) > 0 {
 		msg += fmt.Sprintf(" %s now %s it: %s.", countNoun(len(repointed), "pipeline server", "pipeline servers"), verb(len(repointed), "uses", "use"), strings.Join(repointed, ", "))
 	}
 	if len(listed) > 0 {
 		msg += fmt.Sprintf(" Not changed by this tool, still on the old storage: %s.", strings.Join(listed, "; "))
 	}
-	msg += fmt.Sprintf(" The old storage in namespace '%s' is kept: delete it later from the S3 storage's menu, once nothing else uses it.", legacyNamespace)
+	msg += fmt.Sprintf(" The old storage in namespace %s is kept: delete it later from the S3 storage's menu, once nothing else uses it.", legacyNamespace)
 	slog.Info("s3 storage migrated", "user", getUser(m.c), "objects", result.checked())
 	recordS3Activity(m.c, "migrate-storage", fmt.Sprintf("%s -> %s (%s, %d pipeline servers)", legacyNamespace, s3Namespace, result.summary(), len(repointed)), true)
 	return &types.OperationResponse{Success: true, Message: msg, Logs: m.logs}, nil
@@ -594,7 +594,7 @@ func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, oldK
 		resp, _ := m.fail(step, msg, code, activity)
 		return copyResult{}, resp
 	}
-	m.step(step, "running", fmt.Sprintf("Copying every bucket and object from '%s' to '%s' (Job %s)...", legacyNamespace, s3Namespace, migrateJobName))
+	m.step(step, "running", fmt.Sprintf("Copying every bucket and object from %s to %s (Job %s)...", legacyNamespace, s3Namespace, migrateJobName))
 
 	// Whether a pipeline server uses the new storage yet decides whether
 	// the copy may overwrite objects there (copyMode). Data connections and
@@ -1091,7 +1091,7 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 	writeSecrets := func(p *plan, dryRun bool) (string, string, error) {
 		for _, s := range p.secrets {
 			if _, err := writeProjectSecret(s, projectSecretPath(p.d.Meta.Namespace, s.name), withToolFieldManager(namespacedPath("v1", "secrets", p.d.Meta.Namespace, "")), dryRun); err != nil {
-				msg, code := pipelineWriteFailure(fmt.Sprintf("secret '%s'", s.name), p.d.Meta.Namespace, err)
+				msg, code := pipelineWriteFailure(fmt.Sprintf("secret %s", s.name), p.d.Meta.Namespace, err)
 				return msg, code, err
 			}
 		}
@@ -1235,9 +1235,9 @@ func waitObjectStore(c *Client, project, name string, generation int64) (dspaInf
 func toolNamespaceDeletable(name string, meta objectMeta) (bool, string) {
 	switch {
 	case !meta.hasToolLabel():
-		return false, fmt.Sprintf("Namespace '%s' is kept: it does not carry this tool's label (%s=%s).", name, managedByLabelKey, managedByLabelValue)
+		return false, fmt.Sprintf("Namespace %s is kept: it does not carry this tool's label (%s=%s).", name, managedByLabelKey, managedByLabelValue)
 	case !meta.hasManager(toolManagers):
-		return false, fmt.Sprintf("Namespace '%s' is kept: it carries this tool's label, but its managedFields show no write by this tool.", name)
+		return false, fmt.Sprintf("Namespace %s is kept: it carries this tool's label, but its managedFields show no write by this tool.", name)
 	}
 	return true, ""
 }
@@ -1366,7 +1366,7 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 		return resp, nil
 	}
 	if !ready {
-		return m.fail("check", fmt.Sprintf("The storage in namespace '%s' is not ready, so the old storage is kept. Run Migrate storage first.", s3Namespace), "prerequisites", "new storage not ready")
+		return m.fail("check", fmt.Sprintf("The storage in namespace %s is not ready, so the old storage is kept. Run Migrate storage first.", s3Namespace), "prerequisites", "new storage not ready")
 	}
 	if reason := s3TeardownBlocker(dspas, legacy.address); reason != "" {
 		instead := "Run Migrate storage to move those this tool created; point the others at the new storage or delete them."
@@ -1398,7 +1398,7 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 		result = r
 	}
 
-	m.step("remove", "running", fmt.Sprintf("Deleting the old storage in namespace '%s'...", legacyNamespace))
+	m.step("remove", "running", fmt.Sprintf("Deleting the old storage in namespace %s...", legacyNamespace))
 	var d storageDeletion
 	stopped := func(stage string) (*types.OperationResponse, error) {
 		code := "delete_failed"
@@ -1428,7 +1428,7 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 		deleteAll(legacyRemovalPhases.beforeServer)
 	}
 	if len(d.failed) > 0 {
-		return stopped(fmt.Sprintf(" The server's Deployment in namespace '%s' was not deleted.", legacyNamespace))
+		return stopped(fmt.Sprintf(" The server's Deployment in namespace %s was not deleted.", legacyNamespace))
 	}
 	// Phase 2: the server.
 	deleteAll(legacyRemovalPhases.server)
@@ -1461,9 +1461,9 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 	}
 	var msg string
 	if resume {
-		msg = fmt.Sprintf("The rest of the old storage in namespace '%s' was removed. Its data volumes were already being deleted, so nothing was copied this time.", legacyNamespace)
+		msg = fmt.Sprintf("The rest of the old storage in namespace %s was removed. Its data volumes were already being deleted, so nothing was copied this time.", legacyNamespace)
 	} else {
-		msg = fmt.Sprintf("The old storage in namespace '%s' was removed; its %s are in namespace '%s'.", legacyNamespace, result.summary(), s3Namespace)
+		msg = fmt.Sprintf("The old storage in namespace %s was removed; its %s are in namespace %s.", legacyNamespace, result.summary(), s3Namespace)
 	}
 	if len(d.kept) > 0 {
 		msg += fmt.Sprintf(" Left in place because this tool did not create them: %s.", strings.Join(d.kept, ", "))
@@ -1477,7 +1477,7 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 // sourceGoneMessage explains why the removal stops when the old storage
 // cannot be copied from and its data PVCs (pending) are not being deleted.
 func sourceGoneMessage(legacy *legacyStorage, why string, pending []string) string {
-	msg := fmt.Sprintf("The old storage in namespace '%s' cannot be copied from (%s), and its data %s %s %s not being deleted, so %s may hold objects that were never copied. Nothing was deleted.",
+	msg := fmt.Sprintf("The old storage in namespace %s cannot be copied from (%s), and its data %s %s %s not being deleted, so %s may hold objects that were never copied. Nothing was deleted.",
 		legacyNamespace, why, verb(len(pending), "volume", "volumes"), strings.Join(pending, ", "), verb(len(pending), "is", "are"), verb(len(pending), "it", "they"))
 	// A server whose data volume is being deleted cannot start again (a
 	// new pod cannot use a PVC with a deletionTimestamp): only the manual
@@ -1490,7 +1490,7 @@ func sourceGoneMessage(legacy *legacyStorage, why string, pending []string) stri
 	for _, p := range pending {
 		cmds = append(cmds, fmt.Sprintf("`oc delete pvc %s -n %s`", p, legacyNamespace))
 	}
-	return msg + fmt.Sprintf(" A retry gives the same result. If you have checked that namespace '%s' holds everything you need, delete the %s yourself (%s), then run Remove old storage again to remove the rest.",
+	return msg + fmt.Sprintf(" A retry gives the same result. If you have checked that namespace %s holds everything you need, delete the %s yourself (%s), then run Remove old storage again to remove the rest.",
 		s3Namespace, verb(len(pending), "volume", "volumes"), strings.Join(cmds, ", "))
 }
 
@@ -1525,27 +1525,27 @@ func (m *migrateRun) removeNamespace(requested bool) string {
 	meta, found, err := readLegacyNamespace(c)
 	switch {
 	case err != nil:
-		return fmt.Sprintf("!Cannot read namespace '%s', so it was kept: %v.%s", legacyNamespace, err, templateHint(err))
+		return fmt.Sprintf("!Cannot read namespace %s, so it was kept: %v.%s", legacyNamespace, err, templateHint(err))
 	case !found:
 		return ""
 	}
 	owned, reason := legacyNamespaceDeletable(meta)
 	switch {
 	case !requested && owned:
-		m.step("namespace", "skipped", fmt.Sprintf("Namespace '%s' is kept, as chosen", legacyNamespace))
-		return fmt.Sprintf("Namespace '%s' was kept, as chosen; delete it with `oc delete project %s` once you have checked it holds nothing else.", legacyNamespace, legacyNamespace)
+		m.step("namespace", "skipped", fmt.Sprintf("Namespace %s is kept, as chosen", legacyNamespace))
+		return fmt.Sprintf("Namespace %s was kept, as chosen; delete it with `oc delete project %s` once you have checked it holds nothing else.", legacyNamespace, legacyNamespace)
 	case !owned:
 		m.step("namespace", "skipped", reason)
 		return reason
 	case meta.terminating():
-		return fmt.Sprintf("Namespace '%s' is already being deleted.", legacyNamespace)
+		return fmt.Sprintf("Namespace %s is already being deleted.", legacyNamespace)
 	}
-	m.step("namespace", "running", fmt.Sprintf("Deleting namespace '%s'...", legacyNamespace))
+	m.step("namespace", "running", fmt.Sprintf("Deleting namespace %s...", legacyNamespace))
 	if _, err := deleteWithUID(c, "/api/v1/namespaces/"+legacyNamespace, meta.UID); err != nil && !IsK8sError(err, 404) {
 		// Nothing of the old storage is left, so a retry finds nothing to
 		// remove and is not offered (readLegacyStorage returns nil).
-		return fmt.Sprintf("!The old storage was removed, but namespace '%s' could not be deleted: %v.%s A retry finds nothing left to remove; delete the namespace with `oc delete project %s` once you have checked it holds nothing else.", legacyNamespace, err, templateHint(err), legacyNamespace)
+		return fmt.Sprintf("!The old storage was removed, but namespace %s could not be deleted: %v.%s A retry finds nothing left to remove; delete the namespace with `oc delete project %s` once you have checked it holds nothing else.", legacyNamespace, err, templateHint(err), legacyNamespace)
 	}
-	m.step("namespace", "success", fmt.Sprintf("OK: Namespace '%s' is being deleted, with everything else in it", legacyNamespace))
-	return fmt.Sprintf("Namespace '%s' is being deleted, with everything else in it.", legacyNamespace)
+	m.step("namespace", "success", fmt.Sprintf("OK: Namespace %s is being deleted, with everything else in it", legacyNamespace))
+	return fmt.Sprintf("Namespace %s is being deleted, with everything else in it.", legacyNamespace)
 }

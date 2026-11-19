@@ -69,7 +69,7 @@ func rhclChannel(p operatorPackage) (string, string) {
 	if ch := rhclTargetChannel(p); ch != "" {
 		return ch, ""
 	}
-	return "", fmt.Sprintf("No channel of %s in %s has %s or later, which the MaaS docs ask for with RHOAI 3.6. Nothing was changed.", "rhcl-operator", "redhat-operators", rhclDocsMinimum)
+	return "", fmt.Sprintf("No channel of %s in %s has %s or later, which the MaaS docs ask for. Nothing was changed.", "rhcl-operator", "redhat-operators", rhclDocsMinimum)
 }
 
 // rhclDenyOnFailureEnv is the Subscription env platform-setup.md gives so

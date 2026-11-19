@@ -790,6 +790,11 @@ type ModelState struct {
 	// yet); setting the model up again with the newest released image
 	// fixes it.
 	PresetImageMissing bool `json:"presetImageMissing,omitempty"`
+	// PresetImageUncertain (with PresetImageMissing): the pull has failed
+	// for longer than a setup waits, and a registry answered that the image
+	// does not exist while another refused the node's credentials, so the
+	// image may be missing or the node may lack the pull secret.
+	PresetImageUncertain bool `json:"presetImageUncertain,omitempty"`
 	// MaaSPublished: the model routes through the MaaS gateway (published
 	// on the MaaS tab), so it is used through MaaS and its direct address
 	// answers 404.
@@ -828,6 +833,10 @@ type ModelState struct {
 	// ServedName is the name the model answers to (spec.model.name): the
 	// "model" a request sends.
 	ServedName string `json:"servedName,omitempty"`
+	// ServedNameWithheld: spec.model.name has characters that are not safe
+	// in commands (safeServedName), so ServedName is empty and no command
+	// or call check uses it.
+	ServedNameWithheld bool `json:"servedNameWithheld,omitempty"`
 	// CallCheck is the last "Can it be called?" check of this model by this
 	// app (nil: not checked since the app started).
 	CallCheck *ModelCallCheck `json:"callCheck,omitempty"`

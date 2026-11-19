@@ -872,6 +872,8 @@ export interface ModelState extends ResourceState {
   hardwareProfile?: string;
   /** The preset's image is not in the registry (a nightly build's): setting it up with the newest released image fixes it. */
   presetImageMissing?: boolean;
+  /** With presetImageMissing: a registry answered "manifest unknown" while another refused the node's credentials, so the image may be missing or the node may lack the pull secret. */
+  presetImageUncertain?: boolean;
   /** Routes through the MaaS gateway (published on the MaaS tab): used through MaaS, and its direct address answers 404. */
   maasPublished?: boolean;
   /** Set up on the Models tab "Through MaaS only", published as part of that setup: Delete unpublishes it first, and Unpublish leaves it with no route (only inside the cluster). */
@@ -892,6 +894,8 @@ export interface ModelState extends ResourceState {
   internalUrl?: string;
   /** The name the model answers to: the "model" a request sends. */
   servedName?: string;
+  /** spec.model.name has characters that are not safe in commands, so servedName is left out and no command is shown. */
+  servedNameWithheld?: boolean;
   /** The last "Can it be called?" check since the app started. */
   callCheck?: ModelCallCheck;
 }

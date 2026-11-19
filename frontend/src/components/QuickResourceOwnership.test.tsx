@@ -148,6 +148,8 @@ describe("health and ownership are separate", () => {
     renderAt("/test-resources?tab=pipelines");
     expect(await screen.findByText("There are no data science projects yet")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Create a project in the dashboard/ })).toHaveAttribute("href", "https://rh-ai.apps.example.com/projects");
+    // The tab's own things, not another tab's.
+    expect(screen.getByText(/^Pipeline servers belong to a data science project/)).toBeInTheDocument();
     expect(await part("Pipeline server")).toHaveTextContent("Choose a project above");
   });
 

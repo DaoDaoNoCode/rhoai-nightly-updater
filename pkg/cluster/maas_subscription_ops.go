@@ -59,12 +59,12 @@ func (m *maasRun) changeLimit(project, name string, req *types.MaaSLimit) (*type
 		listed = listed || p == pub
 	}
 	if !listed {
-		return m.fail("check", fmt.Sprintf("%s in '%s' is not published by this tool, so it has no limit to change. Nothing was changed.", name, project), "prerequisites", "not published")
+		return m.fail("check", fmt.Sprintf("%s in %s is not published by this tool, so it has no limit to change. Nothing was changed.", name, project), "prerequisites", "not published")
 	}
 	before := cur.limitOf(pub)
 	if before.equal(limit) {
-		m.step("check", "success", fmt.Sprintf("%s in '%s' has that limit already: %s.", name, project, limit.text()))
-		return m.done(fmt.Sprintf("%s in '%s' already has %s; nothing changed.", name, project, limit.text()))
+		m.step("check", "success", fmt.Sprintf("%s in %s has that limit already: %s.", name, project, limit.text()))
+		return m.done(fmt.Sprintf("%s in %s already has %s; nothing changed.", name, project, limit.text()))
 	}
 	limits := map[string]maasLimit{}
 	for _, p := range live {
@@ -79,21 +79,21 @@ func (m *maasRun) changeLimit(project, name string, req *types.MaaSLimit) (*type
 		}
 		return m.fail("check", fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.", desc, err), maasWriteCode(err), "dry run failed")
 	}
-	m.step("check", "success", fmt.Sprintf("%s in '%s' can change from %s to %s.", name, project, before.text(), limit.text()))
+	m.step("check", "success", fmt.Sprintf("%s in %s can change from %s to %s.", name, project, before.text(), limit.text()))
 	m.step("limit", "running", "Changing the model's entry in the subscription...")
 	if err := applyMaaSObject(c, desc, maasAccessPath(c, "MaaSSubscription"), maasAccessCreatePath(c, "MaaSSubscription"), sub, false); err != nil {
 		return m.fail("limit", fmt.Sprintf("Failed to update %s: %v. The limit is unchanged; run it again to retry.", desc, err), maasWriteCode(err), "apply failed")
 	}
-	m.step("limit", "success", fmt.Sprintf("%s lists %s in '%s' with %s.", desc, name, project, limit.text()))
-	return m.waitAccessActive(fmt.Sprintf("%s in '%s' now has %s.", name, project, limit.text()), false)
+	m.step("limit", "success", fmt.Sprintf("%s lists %s in %s with %s.", desc, name, project, limit.text()))
+	return m.waitAccessActive(fmt.Sprintf("%s in %s now has %s.", name, project, limit.text()), false)
 }
 
 // changeAccess sets who may use the published models: the subscription's
-// owner and the access policy's subjects. Steps: "check", "access",
+// owner and the authorization policy's subjects. Steps: "check", "access",
 // "ready".
 func (m *maasRun) changeAccess(req *types.MaaSAudience) (*types.OperationResponse, error) {
 	c := m.c
-	m.step("check", "running", "Checking the subscription and the access policy...")
+	m.step("check", "running", "Checking the subscription and the authorization policy...")
 	aud, problem := parseMaaSAudience(req)
 	if problem != "" {
 		return m.fail("check", "Invalid audience: "+problem+". Nothing was changed.", "validation", "invalid audience")
@@ -131,7 +131,7 @@ func (m *maasRun) changeAccess(req *types.MaaSAudience) (*types.OperationRespons
 		return m.fail("check", fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.", authDesc, err), maasWriteCode(err), "dry run failed")
 	}
 	m.step("check", "success", fmt.Sprintf("Who can use the published models can change from %s to %s.", cur.audience.text(), aud.text()))
-	m.step("access", "running", "Changing the subscription's owners and the access policy's subjects...")
+	m.step("access", "running", "Changing the subscription's owners and the authorization policy's subjects...")
 	if err := applyMaaSObject(c, subDesc, maasAccessPath(c, "MaaSSubscription"), maasAccessCreatePath(c, "MaaSSubscription"), sub, false); err != nil {
 		return m.fail("access", fmt.Sprintf("Failed to update %s: %v. Nothing was changed.", subDesc, err), maasWriteCode(err), "apply failed")
 	}
@@ -139,12 +139,12 @@ func (m *maasRun) changeAccess(req *types.MaaSAudience) (*types.OperationRespons
 		return m.fail("access", fmt.Sprintf("Failed to update %s: %v. %s was changed already; run it again to finish.", authDesc, err, subDesc), maasWriteCode(err), "apply failed")
 	}
 	m.logs = append(m.logs, "OK: "+subDesc, "OK: "+authDesc)
-	m.step("access", "success", fmt.Sprintf("The subscription and the access policy are for %s. API keys of anyone else stop working for these models.", aud.text()))
+	m.step("access", "success", fmt.Sprintf("The subscription and the authorization policy are for %s. API keys of anyone else stop working for these models.", aud.text()))
 	return m.waitAccessActive("The published models are for "+aud.text()+" now.", true)
 }
 
 // waitAccessActive is the "ready" step: until maas-controller reports the
-// subscription (and the access policy) Active again.
+// subscription (and the authorization policy) Active again.
 func (m *maasRun) waitAccessActive(doneMsg string, withAuth bool) (*types.OperationResponse, error) {
 	c := m.c
 	m.step("ready", "running", "Waiting for MaaS to apply it...")

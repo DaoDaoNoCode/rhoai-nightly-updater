@@ -33,7 +33,7 @@ import { type ConfirmSpec, type ModelsPending, type Pending, ExternalLink, Probl
 import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { envStatusText, notManaged } from "./resourceStatus";
-import { ComponentAlert, CopyableCode, NoProjectsAlert, shellQuote } from "./UseIt";
+import { ComponentAlert, CopyableCode, NoProjectsAlert, shellQuote, shellWord } from "./UseIt";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
 import { type Busy, type FeatureState, callCheckFailed, catalogModel, dashboardProjectHref, gatewayStatus, modelIn, modelOptionReason, modelStatus, modelTypeWords, foreignGatewayStep, shortModelName } from "./featureState";
 
@@ -97,21 +97,32 @@ const auth = `-H "Authorization: Bearer $TOKEN"`;
  * with the user's own oc. Only for this tool's model with that Secret;
  * otherwise null, and no command calls the model: the user's own token
  * never goes to a model, whose pod is in a project its editors control
- * (SECURITY.md, "Which token is used where"). Secret and project names are
- * Kubernetes names (no shell quoting).
+ * (SECURITY.md, "Which token is used where"). The names are shell words
+ * (shellWord): bare when plain, single-quoted otherwise.
  */
 export function modelTokenLine(project: string, m: ModelState): string | null {
-  return m.managedByTool === true && m.tokenSecret ? `TOKEN=$(oc get secret ${m.tokenSecret} -n ${project} -o jsonpath='{.data.token}' | base64 -d)` : null;
+  return m.managedByTool === true && m.tokenSecret ? `TOKEN=$(oc get secret ${shellWord(m.tokenSecret)} -n ${shellWord(project)} -o jsonpath='{.data.token}' | base64 -d)` : null;
 }
 
-/** Commands that call a chat model with its token (modelTokenLine). Catalog names need no shell quoting; the address comes from the cluster, so it is single-quoted. */
+/**
+ * A request's JSON body as one single-quoted shell word. The model name is
+ * the model's spec.model.name, which anyone who can edit the project
+ * chooses: it goes in through JSON.stringify and the quoting, so no
+ * character of it can end the JSON string or the shell word.
+ */
+const jsonBody = (body: unknown) => shellQuote(JSON.stringify(body));
+
+const HELLO = [{ role: "user", content: "Say hello in one sentence." }];
+const EMBED_INPUT = ["Red Hat OpenShift AI serves models."];
+
+/** Commands that call a chat model with its token (modelTokenLine). The address (from the cluster) and the body are single-quoted. */
 export function modelCurl(url: string, model: string, token: string): string {
   const base = url.replace(/\/+$/, "");
   return [
     token,
     `curl -s ${auth} ${shellQuote(`${base}/v1/models`)}`,
     `curl -s ${auth} -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`,
-    `  -d '{"model":"${model}","messages":[{"role":"user","content":"Say hello in one sentence."}],"max_tokens":64}'`,
+    `  -d ${jsonBody({ model, messages: HELLO, max_tokens: 64 })}`,
   ].join("\n");
 }
 
@@ -126,18 +137,18 @@ export function thinkingCurl(url: string, model: string, token: string): string 
   return [
     token,
     `curl -N -s ${auth} -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`,
-    `  -d '{"model":"${model}","messages":[{"role":"user","content":"Is 1001 a prime number?"}],"max_tokens":1024,"stream":true,"chat_template_kwargs":{"enable_thinking":true}}'`,
+    `  -d ${jsonBody({ model, messages: [{ role: "user", content: "Is 1001 a prime number?" }], max_tokens: 1024, stream: true, chat_template_kwargs: { enable_thinking: true } })}`,
   ].join("\n");
 }
 
 /** A tool-calling request: the model answers with tool_calls when a tool fits. */
 export function toolCurl(url: string, model: string, token: string): string {
   const base = url.replace(/\/+$/, "");
-  const tool = `{"type":"function","function":{"name":"get_weather","description":"Current weather in a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}`;
+  const tool = { type: "function", function: { name: "get_weather", description: "Current weather in a city", parameters: { type: "object", properties: { city: { type: "string" } }, required: ["city"] } } };
   return [
     token,
     `curl -s ${auth} -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`,
-    `  -d '{"model":"${model}","messages":[{"role":"user","content":"What is the weather in Brno?"}],"tools":[${tool}],"max_tokens":256}'`,
+    `  -d ${jsonBody({ model, messages: [{ role: "user", content: "What is the weather in Brno?" }], tools: [tool], max_tokens: 256 })}`,
   ].join("\n");
 }
 
@@ -147,7 +158,7 @@ export function embeddingCurl(url: string, model: string, token: string): string
   return [
     token,
     `curl -s ${auth} -H "Content-Type: application/json" ${shellQuote(`${base}/v1/embeddings`)} \\`,
-    `  -d '{"model":"${model}","input":["Red Hat OpenShift AI serves models."]}'`,
+    `  -d ${jsonBody({ model, input: EMBED_INPUT })}`,
   ].join("\n");
 }
 
@@ -155,8 +166,8 @@ export function embeddingCurl(url: string, model: string, token: string): string
 export function internalCurl(url: string, model: string, embedding: boolean): string {
   const base = url.replace(/\/+$/, "");
   return embedding
-    ? [`curl -sk -H "Content-Type: application/json" ${shellQuote(`${base}/v1/embeddings`)} \\`, `  -d '{"model":"${model}","input":["Red Hat OpenShift AI serves models."]}'`].join("\n")
-    : [`curl -sk -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`, `  -d '{"model":"${model}","messages":[{"role":"user","content":"Say hello in one sentence."}],"max_tokens":64}'`].join("\n");
+    ? [`curl -sk -H "Content-Type: application/json" ${shellQuote(`${base}/v1/embeddings`)} \\`, `  -d ${jsonBody({ model, input: EMBED_INPUT })}`].join("\n")
+    : [`curl -sk -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`, `  -d ${jsonBody({ model, messages: HELLO, max_tokens: 64 })}`].join("\n");
 }
 
 /** The two 404s a caller can get, and what each means. */
@@ -407,10 +418,10 @@ export function useModelExposures(project: string | null, model: string, refresh
 }
 
 /** How a model is reached, in a few words. */
-export function exposureWords(m: Pick<ModelState, "exposure" | "gateway">): string {
+export function exposureWords(m: Pick<ModelState, "exposure" | "gateway" | "maasOnlySetup">): string {
   switch (m.exposure) {
     case "maas":
-      return "Through MaaS only";
+      return m.maasOnlySetup ? "Through MaaS only" : "Through MaaS while published (Unpublish on the MaaS tab routes it as before)";
     case "gateway":
       return `Through gateway ${m.gateway ?? ""}`;
     case "internal":
@@ -449,7 +460,6 @@ export const ExposureChooser: React.FC<{
       : null;
   return (
     <Stack hasGutter>
-      {exposures.defaultReason && <StackItem><Content component="small">Recommended: {exposures.defaultReason}</Content></StackItem>}
       {!exposures.default && exposures.recommendGateway && (
         <StackItem>
           <Alert variant="info" isInline component="div" title="No gateway can carry this model yet"
@@ -467,6 +477,9 @@ export const ExposureChooser: React.FC<{
               <HelperText>
                 <HelperTextItem variant="warning">{o.reason ?? "Not available now."}{fixLink(o) ? <> {fixLink(o)}</> : null}</HelperTextItem>
               </HelperText>
+            ) : o.key === exposures.default && exposures.defaultReason ? (
+              // Why it is the recommended one, next to its Recommended label.
+              <HelperText><HelperTextItem>{exposures.defaultReason.charAt(0).toUpperCase() + exposures.defaultReason.slice(1)}</HelperTextItem></HelperText>
             ) : undefined} />
         </StackItem>
       ))}
@@ -495,9 +508,11 @@ export function agoWords(at: string, now: number = Date.now()): string {
   return `${d} ${d === 1 ? "day" : "days"} ago`;
 }
 
-const CallCheckWords: React.FC<{ check: ModelCallCheck | undefined }> = ({ check }) => {
+/** The last check: its label and when; brief leaves out the message (a failed check's alert above the details says it). */
+const CallCheckWords: React.FC<{ check: ModelCallCheck | undefined; brief?: boolean }> = ({ check, brief }) => {
   if (!check) return <>Not checked since this app started. Check again calls the model once.</>;
-  const color = check.ok ? "green" : check.result === "not-checked" ? "grey" : check.result === "unauthenticated" ? "orange" : "red";
+  // A failed check needs attention (orange, as the part's status), never an error label.
+  const color = check.ok ? "green" : check.result === "not-checked" ? "grey" : "orange";
   const word = check.ok ? (check.result === "maas" ? "Listed by MaaS" : "Answers requests")
     : check.result === "not-checked" ? "Not checked" : check.result === "unauthenticated" ? "Answers without a token" : "Cannot be called";
   return (
@@ -506,7 +521,7 @@ const CallCheckWords: React.FC<{ check: ModelCallCheck | undefined }> = ({ check
         <Label isCompact color={color}>{word}</Label>{" "}
         <Tooltip content={new Date(check.at).toLocaleString()}><Content component="small" tabIndex={0}>Checked {agoWords(check.at)}</Content></Tooltip>
       </StackItem>
-      <StackItem>{check.message}</StackItem>
+      {!brief && <StackItem>{check.message}</StackItem>}
     </Stack>
   );
 };
@@ -559,10 +574,15 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
           ? <Content component="p">{modelPurpose(c)} It runs on vLLM on CPU in {project} and reserves {modelNeeds(c)}. The dashboard lists it with the project&apos;s deployments{c?.type === "embedding" ? "." : ", and its Gen AI playground can chat with it."}{model.ready && href && !isTerminating(model) ? <> <ExternalLink href={href} isInline>Open {project} in the dashboard</ExternalLink></> : null}</Content>
           : <Content component="p">{modelPurpose(c)} Not set up in {project} yet: it needs {modelNeeds(c)} on one worker, downloads about {c?.downloadSize ?? "1 GB"}, and takes 3 to 5 minutes the first time.</Content>}
       {model?.presetImageMissing && managed && (
-        <Alert variant="danger" isInline component="div" title="The cluster preset's image is not published yet"
+        <Alert variant="danger" isInline component="div" title={model.presetImageUncertain ? "The cluster preset's image may not be published" : "The cluster preset's image is not published yet"}
           actionLinks={!readOnly && !baseReason ? <AlertActionLink onClick={useReleased}>Use the newest released Red Hat image</AlertActionLink> : undefined}>
+          {model.presetImageUncertain && (
+            <Content component="p">
+              The image pull has failed for several minutes. One registry answered that the image does not exist, and another refused the node&apos;s credentials, so either the image is not published or the node lacks the pull secret. Details: {model.message}
+            </Content>
+          )}
           <Content component="p">
-            This cluster runs a nightly RHOAI build, whose CPU preset names a runtime image Red Hat has not published, so the model cannot start.
+            {model.presetImageUncertain ? "If it is not published: this" : "This"} cluster runs a nightly RHOAI build, whose CPU preset names a runtime image Red Hat has not published, so the model cannot start.
             Use the newest released Red Hat vLLM CPU image instead: only the model&apos;s image changes. To use the preset&apos;s own image, the cluster needs a mirror of <code>registry.redhat.io/rhaii</code> to <code>registry.stage.redhat.io/rhaii</code> and a credential for that registry.
           </Content>
           {readOnly ? <Content component="p">A cluster-admin makes this change.</Content> : baseReason && <Content component="p">Not available now: {baseReason}</Content>}
@@ -612,9 +632,10 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
         )}
         {model?.url && model.exposure !== "internal" && (
           <DescriptionListGroup>
-            <DescriptionListTerm>Address</DescriptionListTerm>
+            <DescriptionListTerm>{model.exposure === "maas" ? "MaaS address" : "Address"}</DescriptionListTerm>
             <DescriptionListDescription>
-              <ImageRef image={model.url} what="model address" truncate={false} isCode={false} />
+              <ImageRef image={model.url} what={model.exposure === "maas" ? "MaaS address" : "model address"} truncate={false} isCode={false} />
+              {model.exposure === "maas" && <HelperText><HelperTextItem>Call it with a MaaS API key: see the MaaS tab&apos;s commands.</HelperTextItem></HelperText>}
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}
@@ -643,8 +664,8 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
             <DescriptionListTerm>Can it be called?</DescriptionListTerm>
             <DescriptionListDescription>
               <Stack hasGutter>
-                <StackItem><CallCheckWords check={model.callCheck} /></StackItem>
-                {!readOnly && <StackItem>{checkButton}</StackItem>}
+                <StackItem><CallCheckWords check={model.callCheck} brief={callCheckFailed(model)} /></StackItem>
+                {!readOnly && !callCheckFailed(model) && <StackItem>{checkButton}</StackItem>}
                 {!readOnly && checkError && !isChecking && <StackItem><HelperText><HelperTextItem variant="warning">{checkError}</HelperTextItem></HelperText></StackItem>}
               </Stack>
             </DescriptionListDescription>
@@ -737,6 +758,16 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
   const published = !!model.maasPublished;
   const token = modelTokenLine(project, model);
   const ours = model.managedByTool === true;
+  if (model.servedNameWithheld && !published) {
+    // The backend withholds a served name that is not safe in commands (pkg/cluster safeServedName).
+    return (
+      <TabSection title="Use it" id="models-use">
+        <Content component="p">
+          There are no commands for this model: the name it serves (<code>spec.model.name</code>) has characters that are not safe to paste into a shell, so this tool does not show it. Someone who can edit {project} set it; check the model in the dashboard.
+        </Content>
+      </TabSection>
+    );
+  }
   return (
     <TabSection title="Use it" id="models-use">
       {callCheckFailed(model) && (
@@ -753,7 +784,7 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
                 <StackItem>
                   <Content component="p">
                     {model.maasOnlySetup
-                      ? "The model was set up to be reached through MaaS only: it is used through MaaS with an API key and in the dashboard's playground, and it has no direct address."
+                      ? "The model is reached through MaaS only: it is used through MaaS with an API key and in the dashboard's playground, and it has no direct address."
                       : "The model is published to Models as a Service. While it is published, it is used through MaaS with an API key and in the dashboard's playground; its direct address answers 404 until it is unpublished, because MaaS counts every call against a subscription, which a direct call does not have."}
                   </Content>
                 </StackItem>
@@ -826,7 +857,7 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
         <>Run the MaaS tab&apos;s commands: they get an API key and ask the model to say hello.</>,
         <>Try it in the dashboard&apos;s Gen AI studio: AI asset endpoints, then the playground.</>,
         model.maasOnlySetup
-          ? <>Unpublishing it on the MaaS tab leaves it with no outside route, as it was set up: it then answers only at its in-cluster address. Deleting it here unpublishes it first.</>
+          ? <>Unpublishing it on the MaaS tab leaves it with no outside route, as before it was published: it then answers only at its in-cluster address. Deleting it here unpublishes it first.</>
           : <>To call its direct address again, unpublish it on the MaaS tab.</>,
       ] : internal ? [
         <>Run the command above from a pod on the cluster (for example a workbench in {project}): it asks the model {embedding ? "for the vector of one sentence" : "to say hello"}.</>,
@@ -891,7 +922,7 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
   return (
     <Stack hasGutter>
       <StackItem><FeatureHeader title="Models" purpose={FEATURE_PURPOSE.models} state={state} /></StackItem>
-      {noProjects && <StackItem><NoProjectsAlert dashboardUrl={status.dashboardUrl} /></StackItem>}
+      {noProjects && <StackItem><NoProjectsAlert dashboardUrl={status.dashboardUrl} things="Models" /></StackItem>}
       {missingProject && (
         <StackItem>
           <Alert variant="info" isInline component="p" title={`Project ${missingProject} no longer exists`}>
@@ -1044,7 +1075,7 @@ export function modelsConfirm(pending: Pending, status: ResourcesStatus | null):
           <Stack hasGutter>
             {gateway && <StackItem><Content component="p">On the cluster: the inference gateway, the front door to models. It creates a cloud load balancer, which costs money while it exists.</Content></StackItem>}
             {project && <StackItem><Content component="p">Creates {c?.displayName ?? name}, {c ? `a ${modelTypeWords(c).toLowerCase()} model` : "a model"}, in {project}. It needs {modelNeeds(c)} on one worker, downloads about {c?.downloadSize ?? "1 GB"}, and takes 3 to 5 minutes the first time (the runtime image and the model are downloaded).</Content></StackItem>}
-            {project && option && <StackItem><Content component="p">Reached: {option.title.charAt(0).toLowerCase() + option.title.slice(1)}. {option.description}{option.exposure === "maas" ? " Everyone signed in to the cluster will be able to call it, up to 100,000 tokens a day each (the MaaS docs' premium example); change who and how much on the MaaS tab." : null}{option.address && !option.description.includes(option.address) ? <> It answers at <code>{option.address}</code>.</> : null}</Content></StackItem>}
+            {project && option && <StackItem><Content component="p">Reached: {option.title.charAt(0).toLowerCase() + option.title.slice(1)}. {option.description}{option.exposure === "maas" ? " Each caller can use up to 100,000 tokens a day (the MaaS docs' premium example); change who and how much on the MaaS tab." : null}{option.address && !option.description.includes(option.address) ? <> It answers at <code>{option.address}</code>.</> : null}</Content></StackItem>}
             {project && option?.warning && <StackItem><Alert variant="warning" isInline component="p" title="Before you set it up">{option.warning}</Alert></StackItem>}
             {project && <StackItem><Content component="p">Once it runs, the tool calls it once, as a user would, and reports whether it answers.</Content></StackItem>}
           </Stack>
@@ -1087,7 +1118,7 @@ export function modelsConfirm(pending: Pending, status: ResourcesStatus | null):
       const leaves = gatewayListRelease(status, pending.project, [pending.model]);
       return {
         title: `Delete ${short} in ${pending.project}?`, confirm: "Delete", danger: true, runTitle: `Delete ${short} in ${pending.project}`,
-        summary: <Content component="p">Deletes {short} in {pending.project}{pending.unpublish ? ", which was set up to be reached through MaaS only, so it is unpublished first" : ""}. The project, its other models, the inference gateway and everything else in the project stay{leaves ? `; ${pending.project} goes off the gateway's list of projects` : ""}. Set up brings it back (it is downloaded again).</Content>,
+        summary: <Content component="p">Deletes {short} in {pending.project}{pending.unpublish ? ", which is reached through MaaS only, so it is unpublished first" : ""}. The project, its other models, the inference gateway and everything else in the project stay{leaves ? `; ${pending.project} goes off the gateway's list of projects` : ""}. Set up brings it back (it is downloaded again).</Content>,
         changes: [
           ...(pending.unpublish ? [<>Unpublishes it from Models as a Service first (its subscription entry and model reference go).</>] : []),
           <>Project <code>{pending.project}</code>: LLMInferenceService <code>{pending.model}</code> is deleted; KServe then removes its Deployment, Service and route.</>,

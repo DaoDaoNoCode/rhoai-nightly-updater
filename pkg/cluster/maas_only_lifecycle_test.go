@@ -164,7 +164,7 @@ func TestMaaSOnlySetup_UnpublishRemovesTheRoute(t *testing.T) {
 	for _, e := range events {
 		all += " " + e.Message
 	}
-	if !strings.Contains(all, "The model has no outside route now, as it was set up (through MaaS only): it answers only at its in-cluster address.") {
+	if !strings.Contains(all, "The model has no outside route now, as before it was published: it answers only at its in-cluster address.") {
 		t.Fatalf("no route message: %s", all)
 	}
 	for _, wrong := range []string{"KServe's default gateway", "routes as before publishing", "Allow proj", "direct address does not answer"} {
@@ -250,7 +250,7 @@ func TestMaaSOnlySetup_UnpublishRefusesWhenSomeoneAddedAGateway(t *testing.T) {
 	mc.f.requests = nil
 	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"})
 	if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "team/team-gateway") ||
-		!strings.Contains(res.Message, "no route (it was set up through MaaS only)") || !strings.Contains(res.Message, "Nothing was changed") {
+		!strings.Contains(res.Message, "no route") || !strings.Contains(res.Message, "Nothing was changed") {
 		t.Fatalf("unpublish = %+v", res)
 	}
 	if muts := mc.f.mutations(); len(muts) != 0 {
@@ -454,10 +454,10 @@ func TestCleanUp_MaaSOnlyModelIsUnpublishedOnce(t *testing.T) {
 	if n := len(requestsTo(mc, "DELETE", "/maasmodelrefs/")); n != 1 {
 		t.Fatalf("MaaSModelRef deletes = %d", n)
 	}
-	// One unpublish: the access policy and the subscription (the last
+	// One unpublish: the authorization policy and the subscription (the last
 	// model leaves them) are deleted once each.
 	if n := len(requestsTo(mc, "DELETE", "/maasauthpolicies/")) + len(requestsTo(mc, "DELETE", "/maassubscriptions/")); n != 2 {
-		t.Fatalf("access policy and subscription deletes = %d", n)
+		t.Fatalf("authorization policy and subscription deletes = %d", n)
 	}
 	if mc.f.has(testModelPath) {
 		t.Fatal("the model is still there")

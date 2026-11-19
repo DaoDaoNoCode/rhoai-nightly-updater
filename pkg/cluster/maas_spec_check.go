@@ -168,5 +168,5 @@ func envEquals(raw interface{}, want []envVar) bool {
 
 // specChangedRefusal says why publish stops on a model whose spec differs.
 func specChangedRefusal(name, project string, fields []string, after string) string {
-	return fmt.Sprintf("The spec of %s in '%s' was changed since this tool set it up: %s. Set it up again on the Models tab, then publish; if a difference stays (a field someone added is kept), delete the model there and set it up again. %s", name, project, strings.Join(fields, ", "), after)
+	return fmt.Sprintf("The spec of %s in %s was changed since this tool set it up: %s. Set it up again on the Models tab, then publish; if a difference stays (a field someone added is kept), delete the model there and set it up again. %s", name, project, strings.Join(fields, ", "), after)
 }

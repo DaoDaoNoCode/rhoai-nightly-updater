@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { LegacyStorageState, ResourceState, ResourcesStatus } from "../../types";
-import { defaultProject, IDLE, loadingState, maasState, mlflowState, modelsState, pipelinesState, playgroundState, setUpBlocked, unreadableState } from "./featureState";
+import { defaultProject, IDLE, loadingState, maasPartLabelStatus, maasState, mlflowState, modelsState, pipelinesState, playgroundState, setUpBlocked, unreadableState } from "./featureState";
+
+describe("A platform part's own label", () => {
+  it("a ready part with a warning needs attention; without one it is ready", () => {
+    expect(maasPartLabelStatus({ id: "rhcl", title: "Red Hat Connectivity Link", state: "ready", warning: "Version 1.4.3 is below the docs' 1.5. Upgrade it." })).toBe("needs-attention");
+    expect(maasPartLabelStatus({ id: "rhcl", title: "Red Hat Connectivity Link", state: "ready" })).toBe("ready");
+  });
+
+  it("MaaS being cleaned up reads Deleting, as the other features", () => {
+    const m = { platform: { deployed: true, ready: true, managedByTool: true }, parts: [], subscription: "s" };
+    expect(maasState(m, { ...IDLE, maas: { action: "teardown", project: null } }).label).toBe("Deleting");
+  });
+});
 
 const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };
 const storage: ResourceState = { deployed: true, ready: true, managedByTool: true, namespace: "seaweedfs", message: "Running" };

@@ -45,7 +45,7 @@ describe("maasState", () => {
       items: [{ namespace: "p", deployed: true, ready: true, managedByTool: true, modelReady: true, published: true }],
     }), IDLE);
     expect(s.label).toBe("Ready, 1 model published");
-    expect(s.next).toEqual({ kind: "open", label: "Open MaaS", href: "https://rh-ai.apps.example.com/maas/maas-governance" });
+    expect(s.next).toEqual({ kind: "open", label: "Open MaaS governance", href: "https://rh-ai.apps.example.com/maas/maas-governance" });
   });
 
   it("a publication left half-way says what is left, is not counted, and does not keep the tab polling", () => {
@@ -83,7 +83,7 @@ describe("MaaS use and steps", () => {
     expect(maasSteps({ kind: "maas-action", action: "remove-tier-policies" }).map((s) => s.id)).toEqual(["check", "delete"]);
     expect(maasSteps({ kind: "teardown-maas" }).map((s) => s.id)).toEqual(["check", "unpublish", "dsc", "gateway", "database"]);
     expect(maasSteps({ kind: "publish-maas", project: "p", model: "qwen3-1-7b" }).map((s) => s.id)).toEqual(["check", "gateway", "model", "maas", "ready"]);
-    expect(maasSteps({ kind: "unpublish-maas", project: "p", model: "qwen3-1-7b" }).map((s) => s.title)).toContain("Remove qwen3-1-7b from MaaS");
+    expect(maasSteps({ kind: "unpublish-maas", project: "p", model: "qwen3-1-7b" }).map((s) => s.title)).toContain("Remove the model from MaaS");
   });
 });
 
@@ -95,8 +95,10 @@ describe("Unpublish of a model set up through MaaS only", () => {
   };
 
   it("says the model is left with no route, not that its direct address answers again", () => {
-    render(<>{confirmOf(true).changes.map((c, i) => <div key={i}>{c}</div>)}</>);
+    render(<>{confirmOf(true).summary}{confirmOf(true).changes.map((c, i) => <div key={i}>{c}</div>)}</>);
     expect(screen.getByText(/so its route is removed: it then answers only at its in-cluster address/)).toBeInTheDocument();
+    // The summary says it too, before the list of changes.
+    expect(screen.getByText(/afterwards it has no outside address: only programs inside the cluster can call it, without a token\./)).toBeInTheDocument();
     expect(screen.queryByText(/its direct address answers again/)).not.toBeInTheDocument();
   });
 
@@ -152,7 +154,7 @@ describe("MaaS run dialog", () => {
     expect(await screen.findByText(/While published, the model.s direct address answers 404/)).toBeInTheDocument();
     expect(screen.queryByText(/keep working/)).toBeNull();
     fireEvent.click(await screen.findByRole("button", { name: "Publish" }));
-    const confirm = await screen.findByRole("dialog", { name: /Publish qwen25-05b-instruct in dev to MaaS\?/ });
+    const confirm = await screen.findByRole("dialog", { name: /Publish Qwen2.5 0.5B Instruct in dev to MaaS\?/ });
     expect(within(confirm).getByText(/its direct address \(the Models tab's commands\) answers 404 until it is unpublished/)).toBeInTheDocument();
     expect(within(confirm).getByText(/routes through the MaaS gateway only/)).toBeInTheDocument();
     expect(within(confirm).queryByText(/keep working/)).toBeNull();
@@ -176,6 +178,23 @@ describe("MaaS run dialog", () => {
     expect(await within(run).findByText(/publish a model to offer it through MaaS/)).toBeInTheDocument();
     expect(within(run).queryByText(/import a pipeline/)).toBeNull();
     expect(within(run).queryByRole("link", { name: /Open pipelines/ })).toBeNull();
+  });
+
+  it("Use it names the subscription and the dashboard's page as the dashboard does", async () => {
+    stubApi({
+      "/api/resources/status": status,
+      "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/maas": base([{ id: "dsc", title: "MaaS in the DataScienceCluster", state: "ready" }], {
+        platform: { deployed: true, ready: true, managedByTool: true }, url: "https://maas.apps.example.com", dashboardUrl: "https://rh-ai.apps.example.com",
+        items: [{ namespace: "dev", name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", deployed: true, ready: true, managedByTool: true, modelReady: true, published: true }],
+      }),
+    });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
+    const term = await screen.findByText("Subscription");
+    expect(term.closest(".pf-v6-c-description-list__group")?.textContent).toContain("rhoai-nightly-updater models (rhoai-nightly-updater-subscription)");
+    expect(screen.getByRole("link", { name: /MaaS governance/ })).toHaveAttribute("href", "https://rh-ai.apps.example.com/maas/maas-governance");
+    expect(screen.getByText(/: subscriptions, authorization policies and models/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy MaaS address https://maas.apps.example.com" })).toBeInTheDocument();
   });
 
   it("Set up lists every change it will make before it runs", async () => {
@@ -213,6 +232,24 @@ describe("MaaS run dialog", () => {
     expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "upgrade-rhcl" }]);
   });
 
+  it("a part waiting for another is a grey Waiting, and a ready part with a warning needs attention", async () => {
+    stubApi({
+      "/api/resources/status": status,
+      "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/maas": base([
+        { id: "rhcl", title: "Red Hat Connectivity Link", state: "ready", warning: "Red Hat Connectivity Link 1.4.3 is installed. Upgrade it." },
+        { id: "kuadrant", title: "Connectivity Link instance (Kuadrant)", state: "waiting", message: "Not Ready yet" },
+      ], { platform: { deployed: true, ready: false, managedByTool: true } }),
+    });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
+    const kuadrant = await screen.findByRole("listitem", { name: "Connectivity Link instance (Kuadrant)" });
+    expect(within(kuadrant).getByText("Waiting")).toBeInTheDocument();
+    expect(within(kuadrant).queryByText("Setting up")).toBeNull();
+    const rhcl = screen.getByRole("listitem", { name: "Red Hat Connectivity Link" });
+    expect(within(rhcl).getByText("Needs attention")).toBeInTheDocument();
+    expect(within(rhcl).getByText("Red Hat Connectivity Link 1.4.3 is installed.")).toBeInTheDocument();
+  });
+
   it("publishes the row's model by name; the embedding model says why it is not offered", async () => {
     const reason = "This tool publishes chat models only. Use the embedding model at its own address (the Models tab shows it), or add it to the Gen AI playground.";
     const api = stubApi({
@@ -229,17 +266,18 @@ describe("MaaS run dialog", () => {
     });
     render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
     const granite = (await screen.findByText("Granite Embedding 125M English (CPU)")).closest("tr")!;
-    // Only "Not published" in the row; why it cannot be published is the button's tooltip.
+    // The row says it in short ("Chat models only"); the full reason is the button's tooltip.
     expect(within(granite).queryByText(reason)).toBeNull();
-    expect(within(granite).getByText("Not published")).toBeInTheDocument();
+    expect(within(granite).getByText("Not offered")).toBeInTheDocument();
+    expect(within(granite).getByText("Chat models only")).toBeInTheDocument();
     fireEvent.focus(within(granite).getByRole("button", { name: "Publish" }));
     expect((await screen.findByRole("tooltip")).textContent).toBe(reason);
     expect(within(granite).getByRole("button", { name: "Publish" })).toHaveAttribute("aria-disabled", "true");
     const qwen3 = screen.getByText("Qwen3 1.7B (CPU, tool calling)").closest("tr")!;
     fireEvent.click(within(qwen3).getByRole("button", { name: "Publish" }));
-    const confirm = await screen.findByRole("dialog", { name: /Publish qwen3-1-7b in dev to MaaS\?/ });
+    const confirm = await screen.findByRole("dialog", { name: /Publish Qwen3 1.7B in dev to MaaS\?/ });
     fireEvent.click(within(confirm).getByRole("button", { name: "Publish" }));
-    await screen.findByRole("dialog", { name: "Publish qwen3-1-7b in dev" });
+    await screen.findByRole("dialog", { name: "Publish Qwen3 1.7B in dev" });
     expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "publish", project: "dev", model: "qwen3-1-7b", limit: { preset: "premium" }, access: { everyone: true } }]);
   });
 
@@ -261,16 +299,19 @@ describe("MaaS run dialog", () => {
     render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
     const qwen25 = (await screen.findByText("Qwen2.5 0.5B Instruct (CPU)")).closest("tr")!;
     expect(within(qwen25).getByRole("button", { name: "Unpublish" })).toBeInTheDocument();
+    // One green Published, not Ready above Published.
+    expect(within(qwen25).getByText("Published")).toBeInTheDocument();
+    expect(within(qwen25).queryByText("Ready")).toBeNull();
     const qwen3 = screen.getByText("Qwen3 1.7B (CPU, tool calling)").closest("tr")!;
     expect(within(qwen3).getByRole("button", { name: "Publish" })).toBeInTheDocument();
     const smollm2 = screen.getByText("SmolLM2 135M Instruct (CPU)").closest("tr")!;
     expect(within(smollm2).getByText(added)).toBeInTheDocument();
     expect(within(smollm2).queryByText(/earlier build/)).toBeNull();
     fireEvent.click(within(smollm2).getByRole("button", { name: "Unpublish" }));
-    const confirm = await screen.findByRole("dialog", { name: /Unpublish smollm2-135m-instruct in dev\?/ });
+    const confirm = await screen.findByRole("dialog", { name: /Unpublish SmolLM2 135M Instruct in dev\?/ });
     expect(within(confirm).getByText(/unless another model of this tool is published there/)).toBeInTheDocument();
     fireEvent.click(within(confirm).getByRole("button", { name: "Unpublish" }));
-    await screen.findByRole("dialog", { name: "Unpublish smollm2-135m-instruct in dev" });
+    await screen.findByRole("dialog", { name: "Unpublish SmolLM2 135M Instruct in dev" });
     expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "unpublish", project: "dev", model: "smollm2-135m-instruct" }]);
   });
 });

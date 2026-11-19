@@ -108,6 +108,48 @@ func (g gatewayRefs) earlierBuildOriginal() gatewayRefs {
 	return others
 }
 
+// modelGatewayRefsOf are the gateway refs of a model as read.
+func modelGatewayRefsOf(m llmisvcObject) gatewayRefs {
+	if m.Spec.Router == nil || m.Spec.Router.Gateway == nil {
+		return nil
+	}
+	var out gatewayRefs
+	for _, r := range m.Spec.Router.Gateway.Refs {
+		ref := map[string]interface{}{"name": r.Name}
+		if r.Namespace != "" {
+			ref["namespace"] = r.Namespace
+		}
+		out = append(out, ref)
+	}
+	return out
+}
+
+// specHasRoute: the model's spec (as read whole) has spec.router.route, so
+// KServe makes an HTTPRoute for it; without it the model has none.
+func specHasRoute(spec map[string]interface{}) bool {
+	router, _ := spec["router"].(map[string]interface{})
+	_, ok := router["route"].(map[string]interface{})
+	return ok
+}
+
+// routeBefore is what the tool's model name in project had before it was
+// published, which Unpublish puts back: what publish recorded, or, with no
+// record, no route for a model on the MaaS gateway alone whose publication
+// is not recorded either. That is a model the Models tab set up through
+// MaaS only whose publish stopped before it recorded anything (it is
+// created on the MaaS gateway alone); a publication by an earlier build is
+// always recorded as published. false: nothing is known (an earlier
+// build's publication, or not published).
+func (r maasRecord) routeBefore(project, name string, refs gatewayRefs) (maasModelRefs, bool) {
+	if rec, ok := r.modelRefs(project, name); ok {
+		return rec, true
+	}
+	if !r.published(project, name) && refs.maasOnly() {
+		return maasModelRefs{NoRoute: true}, true
+	}
+	return maasModelRefs{}, false
+}
+
 func maasOnlyRefs() gatewayRefs {
 	return gatewayRefs{{"name": maasGatewayName, "namespace": inferenceGatewayNamespace}}
 }
@@ -141,10 +183,10 @@ func readModelGatewayRefsSpec(c *Client, project, name string) (gatewayRefs, obj
 		Spec map[string]interface{} `json:"spec"`
 	}
 	if err := json.Unmarshal(body, &model); err != nil {
-		return nil, objectMeta{}, nil, fmt.Errorf("parse %s in '%s': %w", name, project, err)
+		return nil, objectMeta{}, nil, fmt.Errorf("parse %s in %s: %w", name, project, err)
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, objectMeta{}, nil, fmt.Errorf("parse %s in '%s': %w", name, project, err)
+		return nil, objectMeta{}, nil, fmt.Errorf("parse %s in %s: %w", name, project, err)
 	}
 	return model.Spec.Router.Gateway.Refs, model.Metadata, raw.Spec, nil
 }
@@ -288,7 +330,7 @@ func (m *maasRun) routeModelThroughMaaS(project, name string, original maasModel
 	// someone else writes after it makes the write fail (409).
 	refs, meta, spec, err := readModelGatewayRefsSpec(c, project, name)
 	if err != nil {
-		return fmt.Sprintf("Cannot read %s in '%s': %v. Unpublish to undo.", name, project, err), errorCodeFromK8sErr(err)
+		return fmt.Sprintf("Cannot read %s in %s: %v. Unpublish to undo.", name, project, err), errorCodeFromK8sErr(err)
 	}
 	if d := expect.differences(spec); len(d) > 0 {
 		return specChangedRefusal(name, project, d, "Unpublish to undo what was done."), "conflict"
@@ -304,17 +346,26 @@ func (m *maasRun) routeModelThroughMaaS(project, name string, original maasModel
 			return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish to undo.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled")
 		}
 		if why != "" {
-			return fmt.Sprintf("Partly published: %s. The model reference, subscription and access policy were not made. Unpublish to undo.", why), "partial_failure"
+			return fmt.Sprintf("Partly published: %s. The model reference, subscription and authorization policy were not made. Unpublish to undo.", why), "partial_failure"
 		}
 		if refs, meta, spec, err = readModelGatewayRefsSpec(c, project, name); err != nil {
-			return fmt.Sprintf("Cannot read %s in '%s': %v. Unpublish to undo.", name, project, err), errorCodeFromK8sErr(err)
+			return fmt.Sprintf("Cannot read %s in %s: %v. Unpublish to undo.", name, project, err), errorCodeFromK8sErr(err)
 		}
 		if d := expect.differences(spec); len(d) > 0 {
 			return specChangedRefusal(name, project, d, "Unpublish to undo what was done."), "conflict"
 		}
 		rv = meta.ResourceVersion
 	}
-	if !refs.maasOnly() {
+	switch {
+	case !specHasRoute(spec):
+		// No route (set up "Only inside the cluster", or unpublished after
+		// a setup through MaaS only): KServe makes an HTTPRoute only for a
+		// spec.router.route, so the router is written whole, as the "Through
+		// MaaS only" exposure writes it.
+		if err := writeModelRouter(c, project, name, rv, exposurePlan{exposure: exposureMaaS, gwNS: inferenceGatewayNamespace, gwName: maasGatewayName}); err != nil {
+			return fmt.Sprintf("Failed to give the model a route through the MaaS gateway: %v. Unpublish to undo.", err), maasWriteCode(err)
+		}
+	case !refs.maasOnly():
 		if err := writeModelGatewayRefs(c, project, name, rv, maasOnlyRefs()); err != nil {
 			return fmt.Sprintf("Failed to route the model through the MaaS gateway: %v. Unpublish to undo.", err), maasWriteCode(err)
 		}
@@ -325,7 +376,7 @@ func (m *maasRun) routeModelThroughMaaS(project, name string, original maasModel
 		return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish to undo.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled")
 	}
 	if why != "" {
-		return fmt.Sprintf("Partly published: %s. The model reference, subscription and access policy were not made. Unpublish to undo.", why), "partial_failure"
+		return fmt.Sprintf("Partly published: %s. The model reference, subscription and authorization policy were not made. Unpublish to undo.", why), "partial_failure"
 	}
 	m.step("model", "success", "The model routes through "+maasGatewayName+" alone. "+maasUseWords)
 	return "", ""
@@ -339,12 +390,16 @@ func (m *maasRun) routeModelThroughMaaS(project, name string, original maasModel
 // returns a failure message and code, or "".
 func (m *maasRun) restoreModelRoute(project, name string, recorded maasModelRefs, hasRecord bool, say func(id, status, msg string)) (string, string) {
 	c := m.c
-	refs, rv, err := readModelGatewayRefs(c, project, name)
+	refs, meta, spec, err := readModelGatewayRefsSpec(c, project, name)
 	if err != nil {
-		return fmt.Sprintf("Cannot read %s in '%s': %v. Unpublish again to retry.", name, project, err), errorCodeFromK8sErr(err)
+		return fmt.Sprintf("Cannot read %s in %s: %v. Unpublish again to retry.", name, project, err), errorCodeFromK8sErr(err)
 	}
+	rv := meta.ResourceVersion
 	target, write := refs, refs.hasMaaS()
 	switch {
+	case hasRecord && recorded.NoRoute && !specHasRoute(spec):
+		// An earlier try already removed the route: only the wait is left.
+		return m.removeModelRoute(project, name, "", say)
 	case !write:
 		// No MaaS gateway on it (taken off by hand, or by an earlier try):
 		// its refs stay as they are.
@@ -382,14 +437,18 @@ func (m *maasRun) restoreModelRoute(project, name string, recorded maasModelRefs
 // the "Only inside the cluster" exposure writes: no spec.router, and token
 // authentication as that exposure decides it (internalAuthOff). Never
 // KServe's default gateway, which nobody chose for it. rv is the
-// resourceVersion read with the refs (MaaS gateway alone). It returns a
-// failure message and code, or "".
+// resourceVersion read with the refs (MaaS gateway alone); "" when the
+// route is already gone (an earlier try removed it), so nothing is
+// written. It returns a failure message and code, or "".
 func (m *maasRun) removeModelRoute(project, name, rv string, say func(id, status, msg string)) (string, string) {
 	c := m.c
-	auth, _, authErr := authReadiness(c)
-	internal := exposurePlan{exposure: exposureInternal, authOff: internalAuthOff(auth, authErr)}
-	if err := writeModelRouter(c, project, name, rv, internal); err != nil {
-		return fmt.Sprintf("Failed to remove the model's route: %v. Unpublish again to retry.", err), maasWriteCode(err)
+	internal := exposurePlan{exposure: exposureInternal}
+	if rv != "" {
+		auth, _, authErr := authReadiness(c)
+		internal.authOff = internalAuthOff(auth, authErr)
+		if err := writeModelRouter(c, project, name, rv, internal); err != nil {
+			return fmt.Sprintf("Failed to remove the model's route: %v. Unpublish again to retry.", err), maasWriteCode(err)
+		}
 	}
 	say("model", "running", "Waiting for KServe to remove the model's route...")
 	why, err := waitForModelRoute(c, project, name, false)
@@ -399,7 +458,7 @@ func (m *maasRun) removeModelRoute(project, name, rv string, say func(id, status
 	if why != "" {
 		return fmt.Sprintf("Partly published: %s. The model is no longer in MaaS; Unpublish again to check the route.", why), "partial_failure"
 	}
-	msg := "The model has no outside route now, as it was set up (through MaaS only): it answers only at its in-cluster address."
+	msg := "The model has no outside route now, as before it was published: it answers only at its in-cluster address."
 	if internal.authOff {
 		msg += " Its token authentication is off (security.opendatahub.io/enable-auth: \"false\"), as for any model reached only inside the cluster while Red Hat Connectivity Link is not installed."
 	}
@@ -454,9 +513,9 @@ func directRouteNote(c *Client, project, name string) string {
 		return ""
 	}
 	if gatewayOwned(gw.Metadata) {
-		return fmt.Sprintf(" Its direct address does not answer yet: the inference gateway does not list '%s' among the projects it allows. Allow %s on the Models tab (a cluster-admin).", project, project)
+		return fmt.Sprintf(" Its direct address does not answer yet: the inference gateway does not list %s among the projects it allows. Allow %s on the Models tab (a cluster-admin).", project, project)
 	}
-	return fmt.Sprintf(" Its direct address does not answer: Gateway %s/%s, which this tool did not create, does not let routes from '%s' attach; a cluster admin adds '%s' to the values array of its listeners' allowedRoutes, as RHOAI documents it.", inferenceGatewayNamespace, inferenceGatewayName, project, project)
+	return fmt.Sprintf(" Its direct address does not answer: Gateway %s/%s, which this tool did not create, does not let routes from %s attach; a cluster admin adds %s to the values array of its listeners' allowedRoutes, as RHOAI documents it.", inferenceGatewayNamespace, inferenceGatewayName, project, project)
 }
 
 // refsChangedRefusal is why Unpublish (or Publish again) does not write
@@ -464,14 +523,14 @@ func directRouteNote(c *Client, project, name string) string {
 // while it was published, and writing the recorded list would drop it.
 // then says what the operation does once the user has set the refs.
 func refsChangedRefusal(project, name string, refs gatewayRefs, recorded maasModelRefs, then string) string {
-	return fmt.Sprintf("%s in '%s' routes through %s: someone added a gateway since it was published, which set only %s. Writing back what the model had before, %s, would drop that gateway. Nothing was changed. %s. %s",
+	return fmt.Sprintf("%s in %s routes through %s: someone added a gateway since it was published, which set only %s. Writing back what the model had before, %s, would drop that gateway. Nothing was changed. %s. %s",
 		name, project, refs, maasGatewayName, recorded, setRefsYourself(project, name), then)
 }
 
 // String names what the model had before it was published.
 func (r maasModelRefs) String() string {
 	if r.NoRoute {
-		return "no route (it was set up through MaaS only)"
+		return "no route"
 	}
 	return r.Refs.String()
 }

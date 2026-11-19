@@ -232,7 +232,7 @@ func TestModelsSetup_TheChosenModel(t *testing.T) {
 	// 9 GiB free holds qwen25's 6 GiB, not Qwen3's 12 GiB.
 	warned := false
 	for _, e := range events {
-		warned = warned || (e.Step == "check" && e.Status == "success" && strings.Contains(e.Message, "it needs 4 CPUs and 12Gi of memory free"))
+		warned = warned || (e.Step == "check" && e.Status == "success" && strings.Contains(e.Message, "it needs 4 CPUs and 12 GiB of memory free"))
 	}
 	if !warned {
 		t.Errorf("no capacity warning for the chosen model: %v", events)
@@ -302,7 +302,7 @@ func TestModelsStatus_CatalogWithEachModelsRoom(t *testing.T) {
 			t.Errorf("%s: warning %q", name, got[name])
 		}
 	}
-	if !strings.Contains(got["qwen3-1-7b"], "4 CPUs and 12Gi of memory free (up to 14Gi)") {
+	if !strings.Contains(got["qwen3-1-7b"], "4 CPUs and 12 GiB of memory free (up to 14 GiB)") {
 		t.Errorf("qwen3 warning %q", got["qwen3-1-7b"])
 	}
 	pods := 0

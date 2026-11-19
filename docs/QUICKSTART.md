@@ -88,9 +88,9 @@ Open the printed URL, or use the grid icon in the OpenShift console (Red Hat App
 oc get route rhoai-nightly-updater -n rhoai-nightly-updater -o jsonpath='https://{.spec.host}{"\n"}'
 ```
 
-<img src="images/masthead-version.png" alt="The masthead: the release v3.0.1, the appearance button, Help, Applications and the user menu" width="380">
+<img src="images/masthead-version.png" alt="The masthead: the release v4.0.0, the appearance button, Help, Applications and the user menu" width="380">
 
-**What you should see:** the **Status** page. The masthead shows (1) the release you installed (`v3.0.1` in the picture), then the appearance button (color scheme and contrast), **Help** (`?`), the application menu and your user name. A fresh cluster shows **One-time cluster setup** first.
+**What you should see:** the **Status** page. The masthead shows (1) the release you installed (`v4.0.0` in the picture), then the appearance button (color scheme and contrast), **Help** (`?`), the application menu and your user name. A fresh cluster shows **One-time cluster setup** first.
 
 ## 3. One-time setup: pull secret and image mirror
 
@@ -257,13 +257,13 @@ Models as a Service lets everyone signed in to the cluster call a published mode
 
 Nothing has to be installed first: the tab lists every part MaaS needs and what Set up will do about each.
 
-1. Click **Set up** and choose where MaaS keeps its API keys: the preselected **Development database** (one pod with no storage, as the MaaS docs' `setup-database.sh` sets it up; API keys are lost whenever it restarts: fine for trying MaaS out), **Persistent development database (CloudNativePG)** (not in the MaaS docs: this tool's own option; installs the CloudNativePG operator), or **Your PostgreSQL** (enter its connection URL; for keys that must last). Read the changes it lists, and confirm (about 10 minutes on a cluster without any of it). It installs what is missing as the MaaS docs do: Red Hat Connectivity Link and its Kuadrant CR, the AI gateway's namespace, the database you chose, Gateway `maas-default-gateway` at `maas.<apps domain>` (another cloud load balancer), Authorino TLS, and `aigateway` with MaaS turned on in the DataScienceCluster. If a step fails, **Set up** again continues from there.
+1. Click **Set up** and choose where MaaS keeps its API keys: the preselected **Development database** (one pod with no storage, as the MaaS docs' `setup-database.sh` sets it up; API keys are lost whenever it restarts: fine for trying MaaS out), **Persistent development database (CloudNativePG)** (not in the MaaS docs: this tool's own option; installs the CloudNativePG operator), or **Your PostgreSQL** (enter its connection URL; for keys that must last). Read the changes it lists, and confirm (about 10 minutes on a cluster without any of it). It installs what is missing as the MaaS docs do: Red Hat Connectivity Link and its Kuadrant instance, the AI gateway's namespace, the database you chose, Gateway `maas-default-gateway` at `maas.<apps domain>` (another cloud load balancer), Authorino TLS, and `aigateway` with MaaS turned on in the DataScienceCluster. If a step fails, **Set up** again continues from there.
 2. If a part offers a fix of its own (**Upgrade Connectivity Link** on a version below the docs' 1.5, **Remove the old tier policies** after a tier-based MaaS), run it; each lists its changes first. **Do it from the CLI instead** under a part shows the same change as commands.
 3. **Publish** a chat model: choose who can use it (everyone signed in, or groups and users as your identity provider names them; a group with no OpenShift Group is flagged as you type) and its token limit for each user (the docs' premium example of 100,000 a day, preselected; their free example of 100 a minute; unlimited where the cluster's MaaS offers it; or your own token rate limits). While it is published, it is reached through MaaS only: its direct address answers 404 until you unpublish it. **Change limit** in the table and **Change who can use them** above it change these later.
 
 <img src="images/environment-maas.png" alt="MaaS tab: Ready, 1 model published; the platform's parts with their health, and the published models with their limit per user, Change limit and Unpublish" width="760">
 
-**What you should see:** MaaS **Ready**, and under **Use it** the commands to get an API key and call the model. **Remove MaaS** unpublishes and removes what the tool set up for MaaS alone (your own PostgreSQL is never touched); Connectivity Link, Kuadrant, Authorino TLS and CloudNativePG stay, since other RHOAI features use them. More: [README: MaaS](../README.md#maas-models-as-a-service), troubleshooting: [RUNBOOK §10.4](../RUNBOOK.md#104-maas-models-as-a-service).
+**What you should see:** MaaS **Ready**, and under **Use it** the commands to get an API key and call the model. **Clean up MaaS** unpublishes and removes what the tool set up for MaaS alone (your own PostgreSQL is never touched); Connectivity Link, Kuadrant, Authorino TLS and CloudNativePG stay, since other RHOAI features use them. More: [README: MaaS](../README.md#maas-models-as-a-service), troubleshooting: [RUNBOOK §10.4](../RUNBOOK.md#104-maas-models-as-a-service).
 
 Each tab has **Clean up** at the bottom, and the Overview has **Clean up everything**: one confirmed operation with a checkbox per part.
 

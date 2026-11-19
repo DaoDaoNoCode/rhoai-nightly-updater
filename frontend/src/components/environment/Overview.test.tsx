@@ -66,7 +66,7 @@ describe("Overview table", () => {
     const state: FeatureState = { ...zeta, label: "Error in 1 of 3 projects", next: { kind: "show-issue", part: "pipeline-server", project: "zeta" }, projects: [ready("alpha"), ready("beta"), zeta] };
     const r: OverviewRow = { id: "pipelines", name: "Pipelines", gives: "Run pipelines", state, href: "?tab=pipelines&project=zeta" };
     const h = renderRows([r]);
-    fireEvent.click(within(cell("Pipelines", "Next step")).getByRole("button", { name: "Open zeta" }));
+    fireEvent.click(within(cell("Pipelines", "Next step")).getByRole("button", { name: "Show issue in zeta" }));
     expect(h.onShowIssue).toHaveBeenCalledWith(r, "pipeline-server");
   });
 
