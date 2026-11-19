@@ -86,6 +86,10 @@ func TestMaaSUnpublish_ModelRefsWriteHasAResourceVersionPrecondition(t *testing.
 
 // Finding 11: a model left only with the MaaS gateway ref (no reference, no
 // record) shows "Partly published", and Unpublish then takes the ref off.
+// With nothing recorded, the model on the MaaS gateway alone is taken to
+// have had no route (routeBefore: what a setup through MaaS only whose
+// publish stopped leaves), so it goes back to none, never onto a gateway
+// nobody chose for it.
 func TestMaaSUnpublish_RemovesALeftOverGatewayRef(t *testing.T) {
 	mc := publishedMaaSCluster(t)
 	deleteFakeObject(mc, tMaaSRef)
@@ -100,8 +104,8 @@ func TestMaaSUnpublish_RemovesALeftOverGatewayRef(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("unpublish: %+v", res)
 	}
-	if gw := modelGateway(t, mc); len(gw) != 0 {
-		t.Fatalf("model gateway after unpublish = %v", gw)
+	if spec, _ := mc.f.get(testModelPath)["spec"].(map[string]interface{}); spec["router"] != nil {
+		t.Fatalf("model router after unpublish = %v", spec["router"])
 	}
 }
 

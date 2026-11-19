@@ -774,7 +774,7 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
                 <StackItem>
                   <Content component="p">
                     {model.maasOnlySetup
-                      ? "The model was set up to be reached through MaaS only: it is used through MaaS with an API key and in the dashboard's playground, and it has no direct address."
+                      ? "The model is reached through MaaS only: it is used through MaaS with an API key and in the dashboard's playground, and it has no direct address."
                       : "The model is published to Models as a Service. While it is published, it is used through MaaS with an API key and in the dashboard's playground; its direct address answers 404 until it is unpublished, because MaaS counts every call against a subscription, which a direct call does not have."}
                   </Content>
                 </StackItem>
@@ -847,7 +847,7 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
         <>Run the MaaS tab&apos;s commands: they get an API key and ask the model to say hello.</>,
         <>Try it in the dashboard&apos;s Gen AI studio: AI asset endpoints, then the playground.</>,
         model.maasOnlySetup
-          ? <>Unpublishing it on the MaaS tab leaves it with no outside route, as it was set up: it then answers only at its in-cluster address. Deleting it here unpublishes it first.</>
+          ? <>Unpublishing it on the MaaS tab leaves it with no outside route, as before it was published: it then answers only at its in-cluster address. Deleting it here unpublishes it first.</>
           : <>To call its direct address again, unpublish it on the MaaS tab.</>,
       ] : internal ? [
         <>Run the command above from a pod on the cluster (for example a workbench in {project}): it asks the model {embedding ? "for the vector of one sentence" : "to say hello"}.</>,
@@ -1108,7 +1108,7 @@ export function modelsConfirm(pending: Pending, status: ResourcesStatus | null):
       const leaves = gatewayListRelease(status, pending.project, [pending.model]);
       return {
         title: `Delete ${short} in ${pending.project}?`, confirm: "Delete", danger: true, runTitle: `Delete ${short} in ${pending.project}`,
-        summary: <Content component="p">Deletes {short} in {pending.project}{pending.unpublish ? ", which was set up to be reached through MaaS only, so it is unpublished first" : ""}. The project, its other models, the inference gateway and everything else in the project stay{leaves ? `; ${pending.project} goes off the gateway's list of projects` : ""}. Set up brings it back (it is downloaded again).</Content>,
+        summary: <Content component="p">Deletes {short} in {pending.project}{pending.unpublish ? ", which is reached through MaaS only, so it is unpublished first" : ""}. The project, its other models, the inference gateway and everything else in the project stay{leaves ? `; ${pending.project} goes off the gateway's list of projects` : ""}. Set up brings it back (it is downloaded again).</Content>,
         changes: [
           ...(pending.unpublish ? [<>Unpublishes it from Models as a Service first (its subscription entry and model reference go).</>] : []),
           <>Project <code>{pending.project}</code>: LLMInferenceService <code>{pending.model}</code> is deleted; KServe then removes its Deployment, Service and route.</>,

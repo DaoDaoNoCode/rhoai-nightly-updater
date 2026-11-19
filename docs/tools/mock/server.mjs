@@ -695,7 +695,7 @@ async function modelsStream(req, res) {
     // A model set up through MaaS only is unpublished first, in the same
     // operation (pkg/cluster unpublishMaaSOnly).
     if (project && (m.items ?? []).some((i) => i.namespace === project && i.name === model && i.maasOnlySetup)) {
-      send({ step: "unpublish", status: "running", message: "The model was set up to be reached through MaaS only, so it is unpublished first..." });
+      send({ step: "unpublish", status: "running", message: "The model is reached through MaaS only, so it is unpublished first..." });
       await nextStep();
       F.setMaaSPublished(world.resources, project, model, false);
       world.maas = { ...world.maas, items: (world.maas.items ?? []).map((i) => (i.namespace === project && i.name === model ? F.maasModel(false, { name: model }) : i)) };
@@ -847,7 +847,7 @@ async function maasStream(req, res) {
     publish: [["check", "The platform is ready and the model can be published."], ["gateway", `The MaaS gateway admits routes from '${project}'.`],
       ["model", "The model routes through maas-default-gateway alone. While it is published, the model is used through MaaS (with an API key) and the dashboard's playground; its direct address answers 404 until it is unpublished."],
       ["maas", "MaaSModelRef, MaaSSubscription and MaaSAuthPolicy are applied."], ["ready", "MaaS lists the model."]],
-    unpublish: [["check", "Unpublishing, in reverse order of publishing."], ["maas", "The model reference is deleted."], ["model", noRoute ? "The model has no outside route now, as it was set up (through MaaS only): it answers only at its in-cluster address." : "The model routes as before publishing: KServe's default gateway (no refs)."],
+    unpublish: [["check", "Unpublishing, in reverse order of publishing."], ["maas", "The model reference is deleted."], ["model", noRoute ? "The model has no outside route now, as before it was published: it answers only at its in-cluster address." : "The model routes as before publishing: KServe's default gateway (no refs)."],
       ["gateway", `The MaaS gateway no longer admits routes from '${project}'.`]],
     "change-limit": [["check", "The model's limit can change."], ["limit", "The subscription lists the model with its new limit."], ["ready", "MaaS applies it."]],
     "change-access": [["check", "Who can use the published models can change."], ["access", "The subscription and the access policy name the new audience."], ["ready", "MaaS applies it."]],

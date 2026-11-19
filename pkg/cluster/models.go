@@ -394,6 +394,7 @@ func modelItems(c *Client, models []llmisvcObject, visible map[string]bool, rec 
 	// The MaaS record, read once for the first model of this tool: which
 	// models were set up through MaaS only (unreadable: none is said to be).
 	var maas *maasRecord
+	maasErr := false
 	for _, m := range models {
 		if !visible[m.Metadata.Namespace] {
 			continue
@@ -408,12 +409,14 @@ func modelItems(c *Client, models []llmisvcObject, visible map[string]bool, rec 
 				r, err := readMaaSRecord(c)
 				if err != nil {
 					slog.Debug("cannot read the MaaS record for the models", "error", err)
-					r = maasRecord{}
+					maasErr = true
 				}
 				maas = &r
 			}
-			refs, ok := maas.modelRefs(m.Metadata.Namespace, m.Metadata.Name)
-			s.MaaSOnlySetup = ok && refs.NoRoute
+			if !maasErr {
+				refs, ok := maas.routeBefore(m.Metadata.Namespace, m.Metadata.Name, modelGatewayRefsOf(m))
+				s.MaaSOnlySetup = ok && refs.NoRoute
+			}
 		}
 		out = append(out, s)
 	}
@@ -721,6 +724,18 @@ func (m *modelsRun) step(id, status, msg string) {
 	}
 }
 
+// innerSteps streams the steps of an operation run inside this one (a MaaS
+// publish or unpublish) as this one's step id, without logging them: the
+// inner run's own Logs, appended once it ends, hold them and its other
+// lines. Its failure is not streamed; the caller fails step id with it.
+func (m *modelsRun) innerSteps(id string) func(UpdateStepEvent) {
+	return func(e UpdateStepEvent) {
+		if e.Status != "failed" && m.emit != nil {
+			m.emit(UpdateStepEvent{Step: id, Status: "running", Message: e.Message})
+		}
+	}
+}
+
 func (m *modelsRun) fail(id, msg, code, activity string) (*types.OperationResponse, error) {
 	if m.emit != nil {
 		m.emit(UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: code})
@@ -965,8 +980,8 @@ func (m *modelsRun) teardown(req types.ModelsRequest) (*types.OperationResponse,
 }
 
 // unpublishMaaSOnly is the teardown's step "unpublish" for a model set up
-// to be reached through MaaS only (maasOnlySetup): its publication was part
-// of its setup, so deleting it unpublishes it first, with the MaaS tab's
+// to be reached through MaaS only, or published with no route before
+// (maasOnlySetup): deleting it unpublishes it first, with the MaaS tab's
 // own unpublish, in the same operation. Any other published model is left
 // to TeardownModels, which refuses it. Fail closed: a check or an
 // unpublish that does not succeed stops the teardown before the model is
@@ -979,17 +994,14 @@ func (m *modelsRun) unpublishMaaSOnly(project, name string) (*types.OperationRes
 	if !only {
 		return nil, nil
 	}
-	m.step("unpublish", "running", "The model was set up to be reached through MaaS only, so it is unpublished first...")
+	m.step("unpublish", "running", "The model is reached through MaaS only, so it is unpublished first...")
 	pub := &maasRun{c: m.c, activity: "unpublish-maas", target: fmt.Sprintf("model %s in %s", name, project)}
-	pub.emit = func(e UpdateStepEvent) {
-		if e.Status != "failed" {
-			m.step("unpublish", "running", e.Message)
-		}
-	}
+	pub.emit = m.innerSteps("unpublish")
 	res, err := pub.unpublish(project, name, true)
 	if err != nil {
 		return nil, err
 	}
+	m.logs = append(m.logs, res.Logs...)
 	if !res.Success {
 		return m.fail("unpublish", res.Message+" The model was not deleted.", firstNonEmpty(res.ErrorCode, "partial_failure"), "unpublish failed")
 	}
@@ -1014,9 +1026,12 @@ type modelPlan struct {
 	// ephemeral: the model requests ephemeral storage for its download.
 	ephemeral bool
 	// exp is how the model is reached (models_exposure.go); published: it
-	// is published to MaaS already.
+	// is published to MaaS already (or routed through its gateway); publish:
+	// the setup publishes it (a model reached through MaaS with no recorded
+	// publication).
 	exp       exposurePlan
 	published bool
+	publish   bool
 }
 
 func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, error) {
@@ -1156,7 +1171,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 		// A model reached through MaaS is Ready only once published (its
 		// route needs the MaaS gateway to admit the project): its workload
 		// is waited on, then it is published.
-		publish := mp.exp.exposure == exposureMaaS && !mp.published
+		publish := mp.publish
 		res := waitModelReady(c, mp.project, mp.entry.Name, mp.image.Kind == "preset", publish, timeout, func(line string) { m.step("model-ready", "running", line) })
 		if res.err == nil && res.problem == "" && res.ready && publish {
 			m.step("model-ready", "success", "The model's server runs; publishing it to MaaS gives it its route.")
@@ -1270,10 +1285,20 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	if msg != "" {
 		return nil, msg, code
 	}
-	published := false
+	published, publish := false, exp.exposure == exposureMaaS
 	if found {
 		if published, err = MaaSPublishedIn(c, req.Project, entry.Name); err != nil {
 			return nil, fmt.Sprintf("Cannot check whether %s in %s is published to MaaS: %v. Nothing was changed.", entry.Name, req.Project, err), errorCodeFromK8sErr(err)
+		}
+		// A model reached through MaaS is published again when no
+		// publication is recorded: its publish, part of its setup, stopped
+		// before it recorded one (the model is on the MaaS gateway alone).
+		if publish && published {
+			maasRec, err := readMaaSRecord(c)
+			if err != nil {
+				return nil, fmt.Sprintf("Cannot check whether %s in %s is published to MaaS: %v. Nothing was changed.", entry.Name, req.Project, err), errorCodeFromK8sErr(err)
+			}
+			publish = !maasRec.published(req.Project, entry.Name)
 		}
 	}
 	ephemeral := modelVolumeIsEmptyDir(c)
@@ -1285,7 +1310,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	}
 	return &modelPlan{entry: entry, project: req.Project, preset: preset.name, image: img, hardware: hw,
 		obj: modelManifest(req.Project, entry, preset.name, img, hw, published, ephemeral, exp), current: existing.Metadata, found: found, rec: rec, token: tok, ephemeral: ephemeral,
-		exp: exp, published: published}, "", ""
+		exp: exp, published: published, publish: publish}, "", ""
 }
 
 // applyModel writes the model (a server-side dry run when dryRun).

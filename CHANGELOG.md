@@ -178,6 +178,17 @@ only accepts a tag whose version is the top dated section. See
   asked for Unpublish on the MaaS tab. When that unpublish stops, the model
   is not deleted. A model published on the MaaS tab still has to be
   unpublished there first.
+- A model with no route of its own goes back to none when it is
+  unpublished, in every case: a setup **Through MaaS only** whose publish
+  stopped before it recorded anything (its Unpublish put it on KServe's
+  default gateway, Delete refused it, and **Set up** again did not publish
+  it), and a model set up **Only inside the cluster** and then published
+  on the MaaS tab (Publish wrote only the gateway, so KServe made no route
+  and the model stayed partly published). Publish now gives such a model
+  its route on the MaaS gateway and records that it had none; Unpublish
+  again after a route removal that stopped waiting says the model has no
+  route. Models' Delete and Set up keep the log lines of the unpublish or
+  publish they run.
 
 ### Changed
 

@@ -815,22 +815,29 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 	if err != nil {
 		return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record read failed")
 	}
-	// The refs Unpublish writes back: the model's own while it has no MaaS
+	// The refs Unpublish writes back: no route for a model that has none
+	// (set up "Only inside the cluster", or unpublished after a setup
+	// through MaaS only), else the model's own while it has no MaaS
 	// gateway, else what this build recorded when it published, else no
-	// route for a model the Models tab just set up through MaaS only (it
-	// was created on the MaaS gateway alone), else (a publication by an
-	// earlier build) what that one replaced.
-	refs, _, err := readModelGatewayRefs(c, project, name)
+	// route for a model the Models tab set up through MaaS only (it was
+	// created on the MaaS gateway alone; nothing is recorded when its
+	// publish, part of the setup, stopped before the record was written, so
+	// a publish again from the MaaS tab finds it unpublished), else (a
+	// publication by an earlier build, always recorded as published) what
+	// that one replaced.
+	refs, _, spec, err := readModelGatewayRefsSpec(c, project, name)
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot read %s in '%s': %v. Nothing was changed.", name, project, err), errorCodeFromK8sErr(err), "model read failed")
 	}
 	original, recorded := rec.modelRefs(project, name)
 	switch {
+	case !specHasRoute(spec) && !refs.hasMaaS():
+		original = maasModelRefs{NoRoute: true}
 	case !refs.hasMaaS():
 		original = maasModelRefs{Refs: refs}
 	case recorded && !refs.maasOnly():
 		return m.fail("check", refsChangedRefusal(project, name, refs, original, "Then Publish again: it records them and routes the model through "+maasGatewayName+" alone."), "conflict", "model refs changed")
-	case !recorded && m.newModel && refs.maasOnly():
+	case !recorded && refs.maasOnly() && (m.newModel || !rec.published(project, name)):
 		original = maasModelRefs{NoRoute: true}
 	case !recorded:
 		original = maasModelRefs{Refs: refs.earlierBuildOriginal()}
@@ -1035,12 +1042,15 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 	// anything changes.
 	recordedRefs, hasRecordedRefs := rec.modelRefs(project, name)
 	recordedGenAI, hasRecordedGenAI := rec.GenAI[maasPub{project, name}.key()]
-	if routed && hasRecordedRefs {
+	if routed {
 		refs, _, err := readModelGatewayRefs(c, project, name)
 		if err != nil {
 			return m.fail("check", fmt.Sprintf("Cannot read %s in '%s': %v. Nothing was changed.", name, project, err), errorCodeFromK8sErr(err), "model read failed")
 		}
-		if !refs.maasOnly() {
+		// A setup through MaaS only whose publish stopped before it recorded
+		// anything goes back to no route too (routeBefore).
+		recordedRefs, hasRecordedRefs = rec.routeBefore(project, name, refs)
+		if hasRecordedRefs && !refs.maasOnly() {
 			return m.fail("check", refsChangedRefusal(project, name, refs, recordedRefs, "Then Unpublish again: it leaves the model's gateways as you set them."), "conflict", "model refs changed")
 		}
 	}

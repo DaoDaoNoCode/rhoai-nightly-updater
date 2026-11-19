@@ -754,11 +754,7 @@ func exposureWords(e exposurePlan) string {
 func (m *modelsRun) publishToMaaS(project, name string) (*types.OperationResponse, error) {
 	m.step("publish", "running", "Publishing the model to MaaS (its route is on the MaaS gateway alone)...")
 	pub := &maasRun{c: m.c, activity: "publish-maas", target: fmt.Sprintf("model %s in %s", name, project), newModel: true}
-	pub.emit = func(e UpdateStepEvent) {
-		if e.Status != "failed" {
-			m.step("publish", "running", e.Message)
-		}
-	}
+	pub.emit = m.innerSteps("publish")
 	// No audience of its own: the subscription keeps who can use the
 	// published models (everyone signed in, when it is the first). The limit
 	// is the Publish dialog's default, the MaaS docs' premium example
@@ -767,8 +763,9 @@ func (m *modelsRun) publishToMaaS(project, name string) (*types.OperationRespons
 	if err != nil {
 		return nil, err
 	}
+	m.logs = append(m.logs, res.Logs...)
 	if !res.Success {
-		return m.fail("publish", fmt.Sprintf("The model was created, but publishing it to MaaS stopped: %s Publish it again on the MaaS tab, or delete the model.", res.Message), firstNonEmpty(res.ErrorCode, "partial_failure"), "publish failed")
+		return m.fail("publish", fmt.Sprintf("The model was created, but publishing it to MaaS stopped: %s Set it up again on the Models tab to publish it, or delete the model.", res.Message), firstNonEmpty(res.ErrorCode, "partial_failure"), "publish failed")
 	}
 	m.step("publish", "success", res.Message)
 	return nil, nil

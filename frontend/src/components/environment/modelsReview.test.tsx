@@ -35,7 +35,7 @@ describe("Models review fixes", () => {
     const spec = modelsConfirm({ kind: "teardown-model", project: "dev", model: "qwen25-05b-instruct", unpublish: true }, st)!;
     render(<>{spec.summary}{spec.changes.map((c, i) => <div key={i}>{c}</div>)}</>);
     expect(screen.getByText(/Unpublishes it from Models as a Service first \(its subscription entry and model reference go\)\./)).toBeInTheDocument();
-    expect(screen.getByText(/which was set up to be reached through MaaS only, so it is unpublished first/)).toBeInTheDocument();
+    expect(screen.getByText(/which is reached through MaaS only, so it is unpublished first/)).toBeInTheDocument();
   });
 
   it("deleting any other model says nothing about MaaS", () => {
@@ -49,7 +49,7 @@ describe("Models review fixes", () => {
     const m = model({ exposure: "maas", maasPublished: true, maasOnlySetup: true, servedName: "qwen25-05b-instruct" });
     render(<MemoryRouter><UseModel model={m} catalog={qwen} project="dev" onMaaS={() => {}} readOnly={false} baseReason={null} onSetUpAgain={() => {}} /></MemoryRouter>);
     expect(screen.getByText(/it has no direct address\./)).toBeInTheDocument();
-    expect(screen.getByText(/leaves it with no outside route, as it was set up/)).toBeInTheDocument();
+    expect(screen.getByText(/leaves it with no outside route, as before it was published/)).toBeInTheDocument();
     expect(screen.queryByText(/To call its direct address again/)).not.toBeInTheDocument();
     expect(screen.queryByText(/answers 404 until it is unpublished/)).not.toBeInTheDocument();
   });

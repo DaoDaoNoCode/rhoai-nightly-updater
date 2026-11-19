@@ -1511,7 +1511,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 				item.SetupBlockedReason = firstNonEmpty(item.SetupBlockedReason, "The model is not ready yet.")
 			}
 		}
-		if recorded, ok := rec.modelRefs(m.Metadata.Namespace, m.Metadata.Name); item.Published && recErr == nil && ok {
+		if recorded, ok := rec.routeBefore(m.Metadata.Namespace, m.Metadata.Name, modelGatewayRefsOf(m)); item.Published && recErr == nil && ok {
 			item.MaaSOnlySetup = recorded.NoRoute
 		}
 		st.Items = append(st.Items, item)
@@ -1675,10 +1675,12 @@ func MaaSPublishedIn(c *Client, project, name string) (bool, error) {
 }
 
 // maasOnlySetup reports whether this tool's model name in project is
-// published as part of its own setup: the Models tab set it up to be
-// reached through MaaS only, so the MaaS record says it had no route before
-// (maasModelRefs.NoRoute). The Models teardown unpublishes such a model
-// itself; a model published on the MaaS tab is unpublished there.
+// published and had no route before (maasModelRefs.NoRoute, or a setup
+// through MaaS only whose publish recorded nothing: routeBefore): the
+// Models tab set it up to be reached through MaaS only, or "Only inside
+// the cluster" and it was published on the MaaS tab. The Models teardown
+// unpublishes such a model itself (Unpublish leaves it with no route, as
+// before); any other published model is unpublished on the MaaS tab.
 func maasOnlySetup(c *Client, project, name string) (bool, error) {
 	published, err := MaaSPublishedIn(c, project, name)
 	if err != nil || !published {
@@ -1688,6 +1690,14 @@ func maasOnlySetup(c *Client, project, name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	refs, ok := rec.modelRefs(project, name)
+	model, found, err := readToolModel(c, project, name)
+	if err != nil {
+		return false, err
+	}
+	var current gatewayRefs
+	if found {
+		current = modelGatewayRefsOf(model)
+	}
+	refs, ok := rec.routeBefore(project, name, current)
 	return ok && refs.NoRoute, nil
 }
