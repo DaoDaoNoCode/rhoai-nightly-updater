@@ -259,9 +259,9 @@ func TestRedactURL_EveryForm(t *testing.T) {
 
 // The development database is setup-database.sh's objects, field for field.
 func TestMaaSPOCObjects_AreTheDocsScript(t *testing.T) {
-	d := maasPOCDeploymentObject("ns", "img")
+	d := maasPOCDeploymentObject("ns", "img", "uid-7")
 	raw, _ := json.Marshal(d)
-	for _, want := range []string{`"replicas":1`, `"matchLabels":{"app":"postgres"}`, `"template":{"metadata":{"labels":{"app":"postgres"}}`,
+	for _, want := range []string{`"replicas":1`, `"matchLabels":{"app":"postgres"}`, `"template":{"metadata":{"annotations":{"rhoai-nightly-updater/postgres-creds-uid":"uid-7"},"labels":{"app":"postgres"}}`,
 		`{"name":"POSTGRESQL_USER","valueFrom":{"secretKeyRef":{"key":"POSTGRES_USER","name":"postgres-creds"}}}`,
 		`{"name":"POSTGRESQL_PASSWORD","valueFrom":{"secretKeyRef":{"key":"POSTGRES_PASSWORD","name":"postgres-creds"}}}`,
 		`{"name":"POSTGRESQL_DATABASE","valueFrom":{"secretKeyRef":{"key":"POSTGRES_DB","name":"postgres-creds"}}}`,
@@ -467,6 +467,116 @@ func TestMaaSDatabase_AdoptedAndForeignObjectsAreLeftAlone(t *testing.T) {
 	mc.f.requests = nil
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "development"}}); res.Success || res.ErrorCode != "not_managed" || len(mc.f.mutations()) > 0 {
 		t.Fatalf("setup over someone's Deployment: %+v %v", res, mc.f.mutations())
+	}
+}
+
+// credsRequests are the requests that name postgres-creds, other than its
+// delete (its create goes to the collection): a read or a change.
+func credsRequests(mc *modelsCluster) []string {
+	mc.f.mu.Lock()
+	defer mc.f.mu.Unlock()
+	var out []string
+	for _, r := range mc.f.requests {
+		if strings.HasSuffix(r, tPOCCreds) && !strings.HasPrefix(r, "DELETE ") {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func podCredsAnnotation(mc *modelsCluster) string {
+	tmpl := ensureMap(ensureMap(ensureMap(mc.f.get(tPOCDeploy), "spec"), "template"), "metadata")
+	v, _ := ensureMap(tmpl, "annotations")[maasPOCCredsAnnotation].(string)
+	return v
+}
+
+// postgres-creds is only created and deleted, never read or changed (the
+// template grants no get or patch on it): this tool knows it by the UID it
+// recorded, takes the password from its own maas-db-config, and deletes
+// only the object with that UID.
+func TestMaaSDatabase_PostgresCredsIsOnlyCreatedAndDeletedByUID(t *testing.T) {
+	mc := newMaaSCluster(t)
+	devDatabaseRuns(mc)
+	dev := types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "development"}}
+	if res, _ := runMaaSOp(t, mc.c, dev); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	uid := ensureMap(mc.f.get(tPOCCreds), "metadata")["uid"].(string)
+	if rec := readRecord(t, mc.c); rec.POCCredsUID != uid {
+		t.Fatalf("record %+v, Secret UID %s", rec, uid)
+	}
+	if got := podCredsAnnotation(mc); got != uid {
+		t.Fatalf("the pod names postgres-creds %q, want %q", got, uid)
+	}
+	// Set up again: the password comes from maas-db-config; postgres-creds
+	// is not touched.
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+		t.Fatalf("setup again: %+v", res)
+	}
+	if got := ensureMap(mc.f.get(tPOCCreds), "metadata")["uid"]; got != uid {
+		t.Fatal("postgres-creds was created again although its password was known")
+	}
+	// Without maas-db-config there is no password to keep: a new one, the
+	// recorded Secret deleted by its UID and created again, the pod rolled.
+	deleteFakeObject(mc, tMaaSDBConfig)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+		t.Fatalf("setup without maas-db-config: %+v", res)
+	}
+	uid2 := ensureMap(mc.f.get(tPOCCreds), "metadata")["uid"].(string)
+	creds := ensureMap(mc.f.get(tPOCCreds), "data")
+	pw, _ := base64.StdEncoding.DecodeString(creds["POSTGRES_PASSWORD"].(string))
+	if uid2 == uid || readRecord(t, mc.c).POCCredsUID != uid2 || podCredsAnnotation(mc) != uid2 || secretURL(t, mc) != maasPOCConnectionURL(string(pw)) {
+		t.Fatalf("recreate: uid %s -> %s, record %+v", uid, uid2, readRecord(t, mc.c))
+	}
+	if r := credsRequests(mc); len(r) != 0 {
+		t.Fatalf("postgres-creds was read or changed: %v", r)
+	}
+	// Someone replaces it: Remove keeps theirs (UID precondition) and says so.
+	deleteFakeObject(mc, tPOCCreds)
+	mc.f.putJSON(tPOCCreds, `{"data":{"POSTGRES_PASSWORD":"dGhlaXJz"}}`)
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"})
+	if !res.Success || !mc.f.has(tPOCCreds) || mc.f.has(tPOCDeploy) {
+		t.Fatalf("teardown: %+v", res)
+	}
+	if !strings.Contains(strings.Join(res.Logs, "\n"), "was replaced by one this tool did not create") {
+		t.Errorf("logs %v", res.Logs)
+	}
+	if rec := readRecord(t, mc.c); rec.POCCredsUID != "" {
+		t.Fatalf("record %+v", rec)
+	}
+	for _, r := range credsRequests(mc) {
+		if strings.HasPrefix(r, "GET ") || strings.Contains(r, "PATCH ") {
+			t.Fatalf("postgres-creds was read or changed: %s", r)
+		}
+	}
+}
+
+// A postgres-creds this tool did not record is someone else's: the
+// development choice is refused before any change (its create's dry run
+// answers 409), and Remove never deletes one without a record.
+func TestMaaSDatabase_UnrecordedPostgresCredsIsForeign(t *testing.T) {
+	mc := newMaaSCluster(t)
+	mc.f.putJSON(tPOCCreds, `{}`)
+	mc.f.requests = nil
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "development"}})
+	if res.Success || res.ErrorCode != "not_managed" || !strings.Contains(res.Message, "postgres-creds") || len(mc.f.mutations()) > 0 {
+		t.Fatalf("setup over someone's postgres-creds: %+v %v", res, mc.f.mutations())
+	}
+	// A development database of this tool's with no record of its Secret
+	// (an earlier run's record lost): Remove keeps the Secret, saying why.
+	mc = newMaaSCluster(t)
+	devDatabaseRuns(mc)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "development"}}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	rec := readRecord(t, mc.c)
+	rec.POCCredsUID = ""
+	if err := writeMaaSRecord(mc.c, rec); err != nil {
+		t.Fatal(err)
+	}
+	res, _ = runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"})
+	if !res.Success || !mc.f.has(tPOCCreds) || !strings.Contains(strings.Join(res.Logs, "\n"), "no record of creating it") {
+		t.Fatalf("teardown without a record: %+v", res)
 	}
 }
 

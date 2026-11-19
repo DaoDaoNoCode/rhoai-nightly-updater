@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -56,6 +57,9 @@ const (
 	maasPOCImageKey      = "postgresql_16_image"
 	maasPOCImageFallback = "registry.redhat.io/rhel9/postgresql-16:latest"
 	maasMaxURLBytes      = 2048
+	// maasPOCCredsAnnotation on the development pod names the postgres-creds
+	// it reads.
+	maasPOCCredsAnnotation = "rhoai-nightly-updater/postgres-creds-uid"
 )
 
 // MaaSDevDatabaseTimeout bounds the wait for the development database
@@ -252,11 +256,29 @@ type maasDBState struct {
 	clusterFound bool
 	clusterReady bool
 	clusterPhase string
-	poc          map[string]objectMeta
+	// poc: the development database's Deployment and Service as read.
+	poc map[string]objectMeta
+	// credsUID is the UID of the postgres-creds this tool created (the
+	// record's): this tool never reads that Secret, so it knows it only by
+	// the record ("" when it created none).
+	credsUID string
+}
+
+// hasPOC: the development database's object of kind k is there (for
+// postgres-creds: this tool recorded creating it).
+func (s maasDBState) hasPOC(k string) bool {
+	if k == "PostgresSecret" {
+		return s.credsUID != ""
+	}
+	_, ok := s.poc[k]
+	return ok
 }
 
 func readMaaSDBState(c *Client, rec maasRecord, ns string) (maasDBState, error) {
 	st := maasDBState{ns: ns, poc: map[string]objectMeta{}}
+	if rec.DBNamespace == "" || rec.DBNamespace == ns {
+		st.credsUID = rec.POCCredsUID
+	}
 	var err error
 	if st.secret, st.secretFound, err = readObjectMeta(c, maasObjectPath("Secret", ns)); err != nil {
 		return st, fmt.Errorf("read Secret %s/%s: %w", ns, maasDBConfigSecret, err)
@@ -264,7 +286,9 @@ func readMaaSDBState(c *Client, rec maasRecord, ns string) (maasDBState, error) 
 	if st.cluster, st.clusterFound, st.clusterReady, st.clusterPhase, err = readMaaSDBCluster(c, ns); err != nil && !IsK8sError(err, 404) {
 		return st, fmt.Errorf("read %s: %w", maasDesc("Cluster", ns), err)
 	}
-	for _, k := range []string{"PostgresSecret", "PostgresDeployment", "PostgresService"} {
+	// postgres-creds is not read: this tool may only create it and delete
+	// the one it created (by its recorded UID), never read or change it.
+	for _, k := range []string{"PostgresDeployment", "PostgresService"} {
 		meta, found, err := readObjectMeta(c, maasObjectPath(k, ns))
 		if err != nil {
 			return st, fmt.Errorf("read %s: %w", maasDesc(k, ns), err)
@@ -296,9 +320,10 @@ func readMaaSDBState(c *Client, rec maasRecord, ns string) (maasDBState, error) 
 }
 
 // foreignPOC names a development-database object of the script's names
-// that this tool did not create, or "".
+// that this tool did not create, or "" (a foreign postgres-creds shows
+// only when its create is refused: this tool does not read it).
 func (s maasDBState) foreignPOC() string {
-	for _, k := range []string{"PostgresSecret", "PostgresDeployment", "PostgresService"} {
+	for _, k := range []string{"PostgresDeployment", "PostgresService"} {
 		if meta, ok := s.poc[k]; ok && !toolOwned(meta) {
 			return maasDesc(k, s.ns)
 		}
@@ -333,7 +358,11 @@ func maasPOCCredsObject(ns, password string) map[string]interface{} {
 // field (it sets no security context: OpenShift's restricted SCC does).
 // The tool's label is on the Deployment only, so the selector and the pod
 // labels are the script's.
-func maasPOCDeploymentObject(ns, image string) map[string]interface{} {
+// The pod template names the UID of the postgres-creds it reads
+// (maasPOCCredsAnnotation), so a recreated Secret (a new password) rolls
+// the pod; the database is ephemeral, so nothing is lost but the keys a
+// new password loses anyway.
+func maasPOCDeploymentObject(ns, image, credsUID string) map[string]interface{} {
 	env := func(name, key string) map[string]interface{} {
 		return map[string]interface{}{"name": name, "valueFrom": map[string]interface{}{"secretKeyRef": map[string]interface{}{"name": maasPOCCreds, "key": key}}}
 	}
@@ -345,7 +374,7 @@ func maasPOCDeploymentObject(ns, image string) map[string]interface{} {
 			"replicas": 1,
 			"selector": map[string]interface{}{"matchLabels": map[string]interface{}{"app": "postgres"}},
 			"template": map[string]interface{}{
-				"metadata": map[string]interface{}{"labels": map[string]interface{}{"app": "postgres"}},
+				"metadata": map[string]interface{}{"labels": map[string]interface{}{"app": "postgres"}, "annotations": map[string]interface{}{maasPOCCredsAnnotation: credsUID}},
 				"spec": map[string]interface{}{
 					"containers": []interface{}{map[string]interface{}{
 						"name":  "postgres",
@@ -386,14 +415,65 @@ func maasPOCServiceObject(ns string) map[string]interface{} {
 	}
 }
 
-func maasPOCObject(kind, ns, password, image string) map[string]interface{} {
-	switch kind {
-	case "PostgresSecret":
-		return maasPOCCredsObject(ns, password)
-	case "PostgresDeployment":
-		return maasPOCDeploymentObject(ns, image)
+// maasPOCObject is the development database's Deployment or Service
+// (postgres-creds is only ever created, by createMaaSPOCCreds).
+func maasPOCObject(kind, ns, image, credsUID string) map[string]interface{} {
+	if kind == "PostgresDeployment" {
+		return maasPOCDeploymentObject(ns, image, credsUID)
 	}
 	return maasPOCServiceObject(ns)
+}
+
+// createMaaSPOCCreds creates Secret postgres-creds (the only write this
+// tool makes to it) and returns its UID. One that exists is someone
+// else's or a lost one of this tool's (409): this tool cannot tell, so it
+// refuses it as foreign.
+func createMaaSPOCCreds(c *Client, ns, password string, dryRun bool) (string, error) {
+	data, err := json.Marshal(maasPOCCredsObject(ns, password))
+	if err != nil {
+		return "", err
+	}
+	var query url.Values
+	if dryRun {
+		query = url.Values{"dryRun": {"All"}}
+	}
+	body, _, err := c.do(http.MethodPost, maasCreatePath("PostgresSecret", ns), "application/json", data, query)
+	if IsK8sError(err, http.StatusConflict) {
+		return "", &foreignObjectError{Desc: maasDesc("PostgresSecret", ns)}
+	}
+	if err != nil {
+		return "", err
+	}
+	var created struct {
+		Metadata objectMeta `json:"metadata"`
+	}
+	_ = json.Unmarshal(body, &created)
+	return created.Metadata.UID, nil
+}
+
+// maasPOCCredsPath is Secret postgres-creds. Only deleteMaaSPOCCreds uses
+// it: this tool never reads or changes that Secret (maasObjectPath does
+// not name it, so the RBAC coverage test sees the delete alone).
+func maasPOCCredsPath(ns string) string {
+	return namespacedPath("v1", "secrets", ns, maasPOCCreds)
+}
+
+// deleteMaaSPOCCreds deletes the postgres-creds this tool created: only the
+// object with the recorded UID (a UID precondition), so a Secret of that
+// name someone else made is kept. It says whether it is gone (deleted, or
+// not there) and, when kept, why.
+func deleteMaaSPOCCreds(c *Client, ns, uid string) (bool, string, error) {
+	if uid == "" {
+		return false, maasDesc("PostgresSecret", ns) + " is not deleted: this tool has no record of creating it, and it never reads that Secret, so it cannot tell whose it is.", nil
+	}
+	_, err := deleteWithUID(c, maasPOCCredsPath(ns), uid)
+	switch {
+	case err == nil || IsK8sError(err, http.StatusNotFound):
+		return true, "", nil
+	case IsK8sError(err, http.StatusConflict):
+		return false, maasDesc("PostgresSecret", ns) + " was replaced by one this tool did not create (another UID), so it is kept.", nil
+	}
+	return false, "", err
 }
 
 // maasPOCConnectionURL is the script's DB_CONNECTION_URL: every byte of the
@@ -424,24 +504,31 @@ func newMaaSPOCPassword() (string, error) {
 	}
 }
 
-// maasPOCPassword keeps the password of a postgres-creds this tool made
-// (the script reuses an existing one), else draws one.
-func maasPOCPassword(c *Client, st maasDBState) (string, error) {
-	if meta, ok := st.poc["PostgresSecret"]; ok && toolOwned(meta) {
-		body, _, err := c.get(maasObjectPath("PostgresSecret", st.ns))
+// maasPOCPassword is the development database's password: the one in this
+// tool's maas-db-config, when the development database is this tool's and
+// its postgres-creds is recorded (the script reuses an existing password
+// too), with keep true; else a new one, and postgres-creds is created
+// again with it (keep false). The tool never reads postgres-creds itself.
+func maasPOCPassword(c *Client, st maasDBState) (string, bool, error) {
+	if st.kind == maasDBDevelopment && st.credsUID != "" && st.secretFound && toolOwned(st.secret) {
+		body, _, err := c.get(maasObjectPath("Secret", st.ns))
 		if err != nil {
-			return "", fmt.Errorf("read %s: %w", maasDesc("PostgresSecret", st.ns), err)
+			return "", false, fmt.Errorf("read %s: %w", maasDesc("Secret", st.ns), err)
 		}
 		var s struct {
 			Data map[string]string `json:"data"`
 		}
 		if json.Unmarshal(body, &s) == nil {
-			if p, err := base64.StdEncoding.DecodeString(s.Data["POSTGRES_PASSWORD"]); err == nil && len(p) > 0 {
-				return string(p), nil
+			raw, _ := base64.StdEncoding.DecodeString(s.Data["DB_CONNECTION_URL"])
+			if u, err := url.Parse(string(raw)); err == nil && u.User != nil && u.User.Username() == maasPOCUser && u.Hostname() == maasPOCName {
+				if p, ok := u.User.Password(); ok && p != "" {
+					return p, true, nil
+				}
 			}
 		}
 	}
-	return newMaaSPOCPassword()
+	p, err := newMaaSPOCPassword()
+	return p, false, err
 }
 
 // maasPOCImage is the script's resolve_postgres_image: relatedImages
@@ -673,7 +760,7 @@ func maasDatabaseStatus(c *Client, rec maasRecord, infra string, cnpg operatorSt
 		part.ManagedByTool = true
 		var missing []string
 		for _, k := range []string{"PostgresSecret", "PostgresDeployment", "PostgresService"} {
-			if _, ok := st.poc[k]; !ok {
+			if !st.hasPOC(k) {
 				missing = append(missing, maasDesc(k, ns))
 			}
 		}
@@ -783,6 +870,9 @@ type maasDBPlan struct {
 	image      string
 	imageFrom  string
 	password   string
+	// keepCreds: postgres-creds is this tool's with password (read from
+	// its maas-db-config); else it is created (again) with a new one.
+	keepCreds bool
 }
 
 // planMaaSDatabase checks the database for Set up (switching false: what
@@ -829,7 +919,7 @@ func planMaaSDatabase(c *Client, rec maasRecord, ns string, nsFound bool, req *t
 		if foreign := p.state.foreignPOC(); foreign != "" {
 			return nil, foreign + " exists and was not created by this tool (the docs' setup-database.sh uses the same names), so it is left alone. Its owner removes it, or choose another database. Nothing was changed.", "not_managed"
 		}
-		if p.password, err = maasPOCPassword(c, p.state); err != nil {
+		if p.password, p.keepCreds, err = maasPOCPassword(c, p.state); err != nil {
 			return nil, fmt.Sprintf("Cannot prepare the development database's password; nothing was changed: %v.", err), errorCodeFromK8sErr(err)
 		}
 		p.image, p.imageFrom = maasPOCImage(c)
@@ -898,9 +988,17 @@ func (p *maasDBPlan) dryRun(c *Client) (string, error) {
 	var secretURL string
 	switch p.target {
 	case maasDBDevelopment:
-		for _, k := range []string{"PostgresSecret", "PostgresDeployment", "PostgresService"} {
+		// A postgres-creds not recorded as this tool's: its create, which a
+		// Secret of that name (someone else's) refuses. A recorded one is
+		// kept, or deleted by its UID and created again.
+		if !p.keepCreds && p.state.credsUID == "" {
+			if _, err := createMaaSPOCCreds(c, ns, p.password, true); err != nil {
+				return maasDesc("PostgresSecret", ns), err
+			}
+		}
+		for _, k := range []string{"PostgresDeployment", "PostgresService"} {
 			meta, found := p.state.poc[k]
-			if _, err := ensureMaaSDBObject(c, k, ns, maasPOCObject(k, ns, p.password, p.image), meta, found, true); err != nil {
+			if _, err := ensureMaaSDBObject(c, k, ns, maasPOCObject(k, ns, p.image, p.state.credsUID), meta, found, true); err != nil {
 				return maasDesc(k, ns), err
 			}
 		}
@@ -1010,9 +1108,38 @@ func (m *maasRun) makeDatabase(rec *maasRecord, p *maasDBPlan, maasOn, switching
 			return m.fail("database", foreign+" exists and was not created by this tool, so it is left alone.", "not_managed", "db foreign")
 		}
 		m.step("database", "running", fmt.Sprintf("Creating the MaaS docs' development database in %s (scripts/setup-database.sh; image %s, %s)...", ns, p.image, p.imageFrom))
-		for _, k := range []string{"PostgresSecret", "PostgresDeployment", "PostgresService"} {
+		credsUID := st.credsUID
+		if !p.keepCreds || credsUID == "" {
+			// A new password: the recorded postgres-creds goes (by its UID
+			// only), then this one is created and its UID recorded. The
+			// pod rolls to read it (maasPOCCredsAnnotation).
+			if credsUID != "" {
+				gone, why, err := deleteMaaSPOCCreds(c, ns, credsUID)
+				if err != nil {
+					return m.fail("database", fmt.Sprintf("Failed to delete %s to create it again: %v. Run it again to continue.", maasDesc("PostgresSecret", ns), err), maasWriteCode(err), "creds delete failed")
+				}
+				if !gone {
+					return m.fail("database", why+" Its owner removes it, or choose another database.", "not_managed", "creds foreign")
+				}
+				rec.POCCredsUID = ""
+				if err := writeMaaSRecord(c, *rec); err != nil {
+					return m.fail("database", err.Error(), errorCodeFromK8sErr(err), "record write failed")
+				}
+			}
+			uid, err := createMaaSPOCCreds(c, ns, p.password, false)
+			if err != nil {
+				return m.fail("database", p.redact(fmt.Sprintf("Failed to create %s: %v. A Secret of that name that this tool did not record is left alone: its owner removes it, or choose another database.", maasDesc("PostgresSecret", ns), err)), maasWriteCode(err), "creds create failed")
+			}
+			rec.POCCredsUID, rec.DBNamespace = uid, ns
+			if err := writeMaaSRecord(c, *rec); err != nil {
+				return m.fail("database", fmt.Sprintf("%s was created, but this tool could not record it: %v. Delete it (oc delete secret %s -n %s), then run it again.", maasDesc("PostgresSecret", ns), err, maasPOCCreds, ns), errorCodeFromK8sErr(err), "record write failed")
+			}
+			credsUID = uid
+			m.logs = append(m.logs, "OK: "+maasDesc("PostgresSecret", ns)+" created")
+		}
+		for _, k := range []string{"PostgresDeployment", "PostgresService"} {
 			meta, found := st.poc[k]
-			if _, err := ensureMaaSDBObject(c, k, ns, maasPOCObject(k, ns, p.password, p.image), meta, found, false); err != nil {
+			if _, err := ensureMaaSDBObject(c, k, ns, maasPOCObject(k, ns, p.image, credsUID), meta, found, false); err != nil {
 				return m.fail("database", p.redact(fmt.Sprintf("Failed to apply %s: %v. Run it again to continue.", maasDesc(k, ns), err)), maasWriteCode(err), "db apply failed")
 			}
 			m.logs = append(m.logs, "OK: "+maasDesc(k, ns))
@@ -1087,13 +1214,13 @@ func (m *maasRun) writeDBConfig(rec *maasRecord, p *maasDBPlan, st maasDBState, 
 // deleteDBObjects deletes the objects of a database of dbKind this tool
 // created in ns, besides maas-db-config (UID preconditions; "external" has
 // none: the database is the user's), and returns what it deleted.
-func (m *maasRun) deleteDBObjects(step, ns, dbKind string) ([]string, *types.OperationResponse) {
+func (m *maasRun) deleteDBObjects(step, ns, dbKind string, rec *maasRecord) ([]string, *types.OperationResponse) {
 	c := m.c
 	var deleted []string
 	kinds := []string{}
 	switch dbKind {
 	case maasDBDevelopment:
-		kinds = []string{"PostgresDeployment", "PostgresService", "PostgresSecret"}
+		kinds = []string{"PostgresDeployment", "PostgresService"}
 	case maasDBCNPG:
 		kinds = []string{"Cluster"}
 	}
@@ -1121,7 +1248,43 @@ func (m *maasRun) deleteDBObjects(step, ns, dbKind string) ([]string, *types.Ope
 		}
 		deleted = append(deleted, maasDesc(k, ns))
 	}
+	if dbKind == maasDBDevelopment {
+		gone, res := m.deletePOCCreds(step, ns, rec)
+		if res != nil {
+			return deleted, res
+		}
+		if gone {
+			deleted = append(deleted, maasDesc("PostgresSecret", ns))
+		}
+	}
 	return deleted, nil
+}
+
+// deletePOCCreds deletes the postgres-creds this tool recorded creating,
+// by its UID only, and clears the record. Without a record it deletes
+// nothing and says why (this tool never reads that Secret, so it cannot
+// tell whose one of that name is). It says whether the Secret is gone.
+func (m *maasRun) deletePOCCreds(step, ns string, rec *maasRecord) (bool, *types.OperationResponse) {
+	uid := rec.POCCredsUID
+	if uid != "" {
+		m.step(step, "running", "Deleting "+maasDesc("PostgresSecret", ns)+" (the one this tool created)...")
+	}
+	gone, why, err := deleteMaaSPOCCreds(m.c, ns, uid)
+	if err != nil {
+		res, _ := m.fail(step, fmt.Sprintf("Failed to delete %s: %v. Run it again to retry.", maasDesc("PostgresSecret", ns), err), maasWriteCode(err), "delete failed")
+		return false, res
+	}
+	if why != "" {
+		m.logs = append(m.logs, "Kept: "+why)
+	}
+	if uid != "" {
+		rec.POCCredsUID = ""
+		if err := writeMaaSRecord(m.c, *rec); err != nil {
+			res, _ := m.fail(step, err.Error(), errorCodeFromK8sErr(err), "record write failed")
+			return false, res
+		}
+	}
+	return gone && uid != "", nil
 }
 
 // --- Change database ------------------------------------------------------------------
@@ -1132,7 +1295,7 @@ func maasDBNotReady(c *Client, st maasDBState) string {
 	switch st.kind {
 	case maasDBDevelopment:
 		for _, k := range []string{"PostgresSecret", "PostgresDeployment", "PostgresService"} {
-			if _, ok := st.poc[k]; !ok {
+			if !st.hasPOC(k) {
 				return maasDesc(k, st.ns) + " is missing."
 			}
 		}
@@ -1197,7 +1360,7 @@ func (m *maasRun) changeDatabase(req *types.MaaSDatabaseRequest) (*types.Operati
 	var deleted []string
 	if old != p.target {
 		var res *types.OperationResponse
-		if deleted, res = m.deleteDBObjects("cleanup", ns, old); res != nil {
+		if deleted, res = m.deleteDBObjects("cleanup", ns, old, &rec); res != nil {
 			return res, nil
 		}
 	}

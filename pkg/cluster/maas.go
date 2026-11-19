@@ -151,6 +151,11 @@ type maasRecord struct {
 	// objects. Empty in records of earlier builds, which made only
 	// CloudNativePG databases.
 	Database string `json:"database,omitempty"`
+	// POCCredsUID is the UID of Secret postgres-creds (the development
+	// database's password) as this tool created it, in DBNamespace. The
+	// tool never reads that Secret (no get or patch on it): it knows it
+	// only by this record, and deletes only the object with this UID.
+	POCCredsUID string `json:"pocCredsUID,omitempty"`
 	// AIGatewayChanged: setup set aigateway's managementState to Managed,
 	// and PreviousAIGateway is what it was; removal restores it as it does
 	// modelsAsAService.
@@ -510,8 +515,6 @@ func maasObjectPath(kind, ns string) string {
 		return namespacedPath("postgresql.cnpg.io/v1", "clusters", ns, "maas-db")
 	case "Secret":
 		return namespacedPath("v1", "secrets", ns, "maas-db-config")
-	case "PostgresSecret":
-		return namespacedPath("v1", "secrets", ns, "postgres-creds")
 	case "PostgresDeployment":
 		return namespacedPath("apps/v1", "deployments", ns, "postgres")
 	case "PostgresService":

@@ -590,13 +590,18 @@ objects:
       # The MaaS docs' development database (scripts/setup-database.sh),
       # when chosen: Secret postgres-creds, Deployment postgres and Service
       # postgres in the infrastructure namespace, only these names (create,
-      # get and list are the existing rules above). Removed by Remove or
-      # Change database only when this tool created them. SECURITY.md, "MaaS
-      # database choice and subscription settings (4.0.0)".
+      # and get and list of the Deployment and Service, are the existing
+      # rules above). postgres-creds is never read or changed (no get, no
+      # patch): it is only created, and deleted by the UID this tool
+      # recorded when it created it. The Deployment and Service are removed
+      # by Remove or Change database only when this tool created them. The
+      # infrastructure namespace is found at run time and may not exist when
+      # this Template is applied, so these rules cannot be a Role there.
+      # SECURITY.md, "MaaS database choice and subscription settings (4.0.0)".
       - apiGroups: [""]
         resources: ["secrets"]
         resourceNames: ["postgres-creds"]
-        verbs: ["get", "patch", "delete"]
+        verbs: ["delete"]
       - apiGroups: ["apps"]
         resources: ["deployments"]
         resourceNames: ["postgres"]

@@ -439,7 +439,7 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 	// every database object of this tool, whichever kind it set up (a
 	// Change database that stopped half-way leaves two). The user's own
 	// database has no object here; one this tool did not create is kept.
-	for _, kind := range []string{"Gateway", "ConfigMap", "Secret", "Cluster", "PostgresDeployment", "PostgresService", "PostgresSecret"} {
+	for _, kind := range []string{"Gateway", "ConfigMap", "Secret", "Cluster", "PostgresDeployment", "PostgresService"} {
 		meta, found, err := readObjectMeta(c, maasObjectPath(kind, infra))
 		if err != nil && (kind != "Cluster" || !IsK8sError(err, 404)) {
 			return m.fail("check", fmt.Sprintf("Cannot read %s; nothing was deleted: %v.", maasDesc(kind, infra), err), errorCodeFromK8sErr(err), "read failed")
@@ -448,6 +448,11 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 		if found && toolOwned(meta) {
 			owned++
 		}
+	}
+	// postgres-creds is never read: the record says whether this tool made
+	// one (deletePOCCreds deletes it by its UID).
+	if rec.POCCredsUID != "" {
+		owned++
 	}
 	if owned == 0 && !rec.DSCChanged && !rec.AIGatewayChanged && rec.InfraNamespace == "" && len(rec.Published) == 0 {
 		m.step("check", "success", "Nothing of the MaaS platform was set up by this tool.")
@@ -573,13 +578,26 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 	}
 	m.step("gateway", "success", "The gateway this tool created is deleted; OpenShift removes its load balancer. GatewayClass "+maasGatewayClass+" stays: it is OpenShift's shared class for gateways and costs nothing on its own.")
 	var deleted []string
+	devOurs := false
 	for _, o := range objs[2:] {
+		devOurs = devOurs || (o.kind == "PostgresDeployment" && o.found && toolOwned(o.meta))
 		gone, res := del("database", o)
 		if res != nil {
 			return res, nil
 		}
 		if gone {
 			deleted = append(deleted, maasDesc(o.kind, infra))
+		}
+	}
+	// The development database's postgres-creds: by its recorded UID only;
+	// with no record it is kept, and the log says why.
+	if rec.POCCredsUID != "" || devOurs {
+		gone, res := m.deletePOCCreds("database", infra, &rec)
+		if res != nil {
+			return res, nil
+		}
+		if gone {
+			deleted = append(deleted, maasDesc("PostgresSecret", infra))
 		}
 	}
 	if rec.DBNamespace != "" || rec.Database != "" {
