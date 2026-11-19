@@ -49,10 +49,11 @@ only accepts a tag whose version is the top dated section. See
   checks run as three parallel jobs (checks, tests, build), the GitLab Go
   and golangci-lint jobs keep their module and build caches, and GitLab's
   image jobs skip the Containerfile's checks (`RUN_CHECKS=false`), which
-  the pipeline's test jobs already ran on the same commit. Docker Hub
-  images can come through GitLab's Dependency Proxy (project variable
-  `DOCKER_HUB`; unset, nothing changes), after Docker Hub's anonymous
-  pull limit stopped a job.
+  the pipeline's test jobs already ran on the same commit. GitLab pulls
+  Docker Hub images from `mirror.gcr.io`, Google's public cache of Docker
+  Hub, after Docker Hub's anonymous pull limit stopped jobs; the images stay
+  pinned by digest. A project variable `DOCKER_HUB` points it elsewhere
+  (`docker.io`, or GitLab's Dependency Proxy).
 
 ## [3.0.0] - 2026-11-18
 
