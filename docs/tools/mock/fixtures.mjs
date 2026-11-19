@@ -1483,7 +1483,7 @@ const DSC_PLAN_BINDING = "0".repeat(24);
 // The mock cluster's MaaS is in use (a published model, the tool's
 // subscription and access policy), as on the live cluster the guard was
 // written for (dsc_maas_guard.go).
-const DSC_MAAS_IN_USE = "MaaS is in use (published model dev-project/qwen25-05b-instruct; subscription models-as-a-service/rhoai-nightly-updater-subscription; access policy models-as-a-service/rhoai-nightly-updater-access; this tool set MaaS up (MaaS tab)).";
+const DSC_MAAS_IN_USE = "MaaS is in use (published model dev-project/qwen25-05b-instruct; subscription models-as-a-service/rhoai-nightly-updater-subscription; access policy models-as-a-service/rhoai-nightly-updater-access; set up by this tool on the MaaS tab).";
 
 /** What a change would do (GET /api/components/dsc/plan), for the mock's manager m. */
 export function dscPlan(m, action, path, to, withParent, keepEnabled = false) {
