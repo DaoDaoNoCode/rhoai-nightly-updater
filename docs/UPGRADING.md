@@ -303,8 +303,10 @@ and **MaaS** ([README tour](../README.md#environment-s3-storage-pipeline-servers
 Set up now refuses a namespace that is not a data science project instead
 of creating it: create the project in the RHOAI dashboard first.
 
-**RBAC (template revision 5).** Every new rule is audited in
-[SECURITY.md](../SECURITY.md#serviceaccount-rbac). In short:
+**RBAC (template revision 5).** Every new rule was audited in
+[SECURITY_HISTORY.md](SECURITY_HISTORY.md#audits-of-earlier-template-revisions)
+(since 4.0.0 the ServiceAccount holds none of the write rules:
+[SECURITY.md](../SECURITY.md#serviceaccount-rbac)). In short:
 
 - Roles in `openshift-ingress` and `openshift-ingress-operator`, for the
   inference gateway, the MaaS gateway and reading IngressController
@@ -323,7 +325,7 @@ of creating it: create the project in the RHOAI dashboard first.
 - 2.x could already create and patch Deployments in any namespace; 3.0.0
   adds Jobs, LLMInferenceServices, OGXServers and CloudNativePG Clusters.
   Together they give a leaked ServiceAccount token cluster-admin reach
-  ([SECURITY.md, Worst case](../SECURITY.md#worst-case-cluster-wide-workload-create)).
+  ([SECURITY_HISTORY.md, Worst case](SECURITY_HISTORY.md#worst-case-cluster-wide-workload-create)).
 - `get` on Infrastructure `cluster` (`config.openshift.io`, read-only), for
   the control plane topology: on a self-managed cluster the setup shows the
   command that adds `quay.io/rhoai` to `openshift-config/pull-secret`. Until
@@ -404,9 +406,8 @@ a commit build):
   someone made) is then cut off: the Models tab and the Overview name it,
   with **Allow <project>**. Allow only a project you trust, since anyone
   who can edit it can then attach routes to the shared gateway. Before, a route in any project could take
-  over a model's address and receive its callers' tokens (SECURITY.md,
-  "Route takeover on the inference gateway", just before
-  [Which models are the tool's](../SECURITY.md#which-models-are-the-tools)).
+  over a model's address and receive its callers' tokens ([SECURITY.md, The inference
+  gateway](../SECURITY.md#the-inference-gateway)).
   A gateway someone else made (RHOAI's install, an admin) is not changed.
 - *Which models are the tool's.* A model is the tool's only when its UID
   is in the tool's record. A model a pre-release build set up has none and
