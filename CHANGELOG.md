@@ -214,6 +214,12 @@ only accepts a tag whose version is the top dated section. See
 
 ### Changed
 
+- **API: the discovered names are reported.** The dashboard state and its
+  override carry `operatorName`/`operatorNamespace` (the dashboard module's
+  operator) and `noOperatorReason`/`namespace`; the components response
+  carries `applicationsNamespace`, `operatorNamespace` and
+  `applicationsNamespaceError`; the status's Subscription carries its
+  `namespace`. The UI names these instead of fixed ones.
 - **Every change runs with your own OpenShift token.** Users sign in
   through the install's own OAuthClient `<APP_NAME>-<NAMESPACE>`
   (`grantMethod: auto`, so no "Authorize Access" page; oauth-proxy
@@ -295,6 +301,32 @@ only accepts a tag whose version is the top dated section. See
 
 ### Fixed
 
+- **RHOAI's namespaces are read from the cluster, not assumed.** The
+  applications and monitoring namespaces come from the DSCInitialization
+  (`spec.applicationsNamespace`, `spec.monitoring.namespace`), read once per
+  30 seconds; the operator's is the namespace of the Subscription the tool
+  installs. Components, Debug info, Diagnostics (RHOAI pods, certificates,
+  conversion webhooks, operator-managed config), assist-rollout, the
+  deployment snapshot, MLflow, pipeline server removal, the dashboard
+  address, Models (CPU preset, hardware profile, KServe's gateway) and
+  MaaS's derived infrastructure namespace used `redhat-ods-applications`
+  or `redhat-ods-operator` by name, and the models code fell back to
+  `redhat-ods-applications` when the read failed. Now a change refuses
+  when the namespace cannot be read (assist-rollout allows only the
+  operator namespace then), and a status shows it as unknown.
+- **Dashboard Dev finds the Deployment it pauses instead of naming
+  `dashboard-operator`.** The dashboard module's operator is found as the
+  other module operators are (the Deployment in the applications namespace
+  owned by the Platform whose ServiceAccount may update `dashboards` and
+  `dashboards/finalizers`), and messages, banners and the page name it.
+  The legacy flow (patching `rhods-dashboard`) is chosen only when the
+  cluster definitely has no dashboard module: the component API or the
+  Dashboard kind is not served, or the installed CSV owns the Dashboard CRD
+  (RHOAI 3.4 and earlier). A 404 on a fixed name no longer selects it; when
+  the operator cannot be identified (a read error, several candidates, its
+  Deployment gone), deploy, revert and the operations' Dashboard Dev check
+  refuse and change nothing. The legacy flow reads the dashboard images
+  from the Deployment the installed CSV installs.
 - **Components and Diagnostics: module operators are found at run time,
   not from a list of names.** The list lacked `aigateway` and
   `mcplifecycleoperator`, so on RHOAI 3.6 a hard reset or a change that
