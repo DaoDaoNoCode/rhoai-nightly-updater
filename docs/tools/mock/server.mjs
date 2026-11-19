@@ -132,9 +132,15 @@ const scenarios = {
   },
   "template-outdated": (w) => { w.version = F.versionInfo({ templateRevision: "3", templateOutdated: true }); },
   "components-not-ready": (w) => { w.components = F.notReadyComponents(); },
-  // An upgraded DSC: things a later release added are not set, and
-  // modelsAsAService is Managed under a Removed aigateway.
-  "components-differences": (w) => { w.dscManager = F.dscManager({ "workbenches.workbenchesV2": null, databaseservice: null, aigateway: "Removed" }); },
+  // An upgraded DSC: things a later release added are not set,
+  // modelsAsAService is Managed under a Removed aigateway, and fields the
+  // installed CRD does not define (a v2 component, an old kserve setting).
+  "components-differences": (w) => {
+    w.dscManager = F.dscManager({ "workbenches.workbenchesV2": null, databaseservice: null, "dashboard.standard": null, aigateway: "Removed" },
+      { unknown: { codeflare: { managementState: "Removed" }, "kserve.serving": { managementState: "Managed" } } });
+  },
+  // The installed CSV ships no DataScienceCluster example: nothing to compare with.
+  "components-no-default": (w) => { w.dscManager = F.dscManager({}, { noDefault: true }); },
   // The page compared the DSC as v2; when the reset dialog opens, the defaults are v3 (the conversion recovered).
   "components-reset-stale": (w) => {
     w.components.dscCompatibility = { ...w.components.dscCompatibility, missingComponents: ["sparkoperator"], resetRemovals: ["trainer"] };

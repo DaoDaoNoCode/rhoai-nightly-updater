@@ -34,11 +34,17 @@ only accepts a tag whose version is the top dated section. See
   select limited to the CRD's values; the confirmation lists exactly what
   is deployed or removed, removals run the disable checks first (fail
   closed), and a sub-component set to Managed under a parent that is not is
-  offered with its parent. **Differences from the release default** lists
-  only real problems (a value the default sets and the DSC leaves unset,
-  Managed under a parent that is not Managed, fields the CRD does not
-  define), not user choices or values the API server fills in; **Fix**
-  adds or removes exactly the reviewed ones. **Reset to the release
+  offered with its parent. **The comparison with the release default** is
+  always shown at the top: the release default it read (operator version
+  and CSV), how many of its components the DSC has, and per kind of
+  difference (Missing, Not in the installed CRD, Deploys nothing, Changed
+  from the default) the count and paths or **None**, or **Not checked**
+  when there is no release default; each row carries the matching label,
+  whose popover says what it means and what Fix does, fields the CRD does
+  not define are rows of the tree, and **Show only differences** keeps the
+  rows that differ with their parents. Only real problems count as
+  differences to fix, not user choices or values the API server fills in;
+  **Fix** adds or removes exactly the reviewed ones. **Reset to the release
   default…**: a soft reset changes in place only what differs, keeping the
   workbench and AI hub namespaces; a hard reset (typed DSC name) deletes the
   DSC and creates the release default with the same name and namespaces,

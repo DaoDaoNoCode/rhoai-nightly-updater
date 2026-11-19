@@ -24,7 +24,51 @@ const manager: DSCManager = {
     node("ray", { condition: { type: "RayReady", status: "True" } }),
   ],
   mismatches: [{ kind: "unset", path: "dashboard.standard", default: "Managed", fixable: true, message: "Not set in the DataScienceCluster, so the operator treats it as Removed, but the release default is Managed. Fix sets it to Managed." }],
+  comparison: { defaultsRead: true, schemaRead: true, defaultsCSV: "rhods-operator.3.6.0", crdComponents: ["aigateway", "dashboard", "ray"], defaultComponents: ["aigateway", "dashboard", "ray"], dscComponents: ["aigateway", "dashboard", "ray"] },
 };
+
+/** The same DSC with nothing that differs from the release default but a user choice (the live cluster). */
+const matching: DSCManager = {
+  ...manager,
+  nodes: manager.nodes.map((n) => (n.path === "dashboard.standard" ? { ...n, specSet: true, spec: "Managed" } : n)),
+  mismatches: [],
+};
+
+/** A DSC with every kind of problem: missing values, a field the CRD does not define, Managed under a Removed parent. */
+const problems: DSCManager = {
+  ...manager,
+  nodes: [
+    node("aigateway", { spec: "Removed", default: "Removed" }),
+    node("aigateway.batchGateway", { spec: "Removed", default: "Removed" }),
+    node("aigateway.modelsAsAService", { default: "Removed", changed: true }),
+    node("dashboard", { toggle: false, allowed: undefined, specSet: false, spec: undefined, defaultSet: false, default: undefined }),
+    node("dashboard.standard", { specSet: false, spec: undefined }),
+    node("databaseservice", { specSet: false, spec: undefined, default: "Removed" }),
+    node("ray"),
+    { path: "ray.legacy", name: "legacy", parent: "ray", depth: 1, toggle: false, specSet: false, defaultSet: false, unknown: true },
+    { path: "codeflare", name: "codeflare", parent: "", depth: 0, toggle: false, specSet: false, defaultSet: false, unknown: true },
+  ],
+  mismatches: [
+    { kind: "unset", path: "dashboard.standard", default: "Managed", fixable: true, message: "Not set in the DataScienceCluster, so the operator treats it as Removed, but the release default is Managed. Fix sets it to Managed." },
+    { kind: "unset", path: "databaseservice", default: "Removed", fixable: true, message: "Not set in the DataScienceCluster, so the operator treats it as Removed, which is also the release default. Fix sets it explicitly." },
+    { kind: "parent-removed", path: "aigateway.modelsAsAService", parent: "aigateway", fixable: false, message: "Managed, but aigateway is Removed, so the operator deploys nothing for it. Set aigateway to Managed, or set this to Removed." },
+    { kind: "unknown-field", path: "codeflare", fixable: true, message: "The installed CRD does not define this field, so the operator never sees it. Fix removes it." },
+    { kind: "unknown-field", path: "ray.legacy", fixable: true, message: "The installed CRD does not define this field, so the operator never sees it. Fix removes it." },
+  ],
+  comparison: { defaultsRead: true, schemaRead: true, defaultsCSV: "rhods-operator.3.6.0", crdComponents: ["aigateway", "dashboard", "databaseservice", "ray"], defaultComponents: ["aigateway", "dashboard", "databaseservice", "ray"], dscComponents: ["aigateway", "codeflare", "dashboard", "ray"] },
+};
+
+/** The text of a row of the comparison summary. */
+function summaryRow(term: string): string {
+  const list = screen.getByLabelText("Comparison with the release default");
+  const group = within(list).getByText(term, { selector: "dt *, dt" }).closest(".pf-v6-c-description-list__group");
+  return group?.querySelector("dd")?.textContent ?? "";
+}
+
+/** The visible rows' component paths, by their first cell. */
+function rowNames(table: HTMLElement): string[] {
+  return within(table).getAllByRole("row").slice(1).map((r) => r.querySelector("code")?.textContent ?? "");
+}
 
 /** A button that is off: disabled, or aria-disabled (a TooltipButton with a reason). */
 const isOff = (el: HTMLElement) => el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true";
@@ -46,9 +90,144 @@ describe("DSCManagerSection", () => {
     expect(within(table).getByText("Changed from the default")).toBeInTheDocument();
     expect(within(table).getByText("Not set (Removed)")).toBeInTheDocument();
     expect(within(table).getByText("Group")).toBeInTheDocument();
-    const diffs = screen.getByRole("list", { name: "Differences from the release default" });
-    expect(within(diffs).getByText("dashboard.standard")).toBeInTheDocument();
+    expect(summaryRow("Missing")).toBe("1: dashboard.standard (default Managed)");
     expect(screen.getByRole("button", { name: "Fix" })).toBeEnabled();
+  });
+
+  describe("comparison summary", () => {
+    it("says what was compared and that nothing is missing when nothing differs", async () => {
+      stubApi({ "GET /api/components/dsc": matching });
+      renderSection();
+      expect(await screen.findByRole("heading", { name: /Nothing to fix compared with the release default/ })).toBeInTheDocument();
+      expect(summaryRow("Release default")).toBe("Operator 3.6.0: the DataScienceCluster example in CSV rhods-operator.3.6.0 (alm-examples)");
+      expect(summaryRow("Components")).toBe("All 3 components of the release default are in the DSC");
+      expect(summaryRow("Missing")).toBe("None");
+      expect(summaryRow("Not in the installed CRD")).toBe("None");
+      expect(summaryRow("Deploys nothing")).toBe("None");
+      expect(summaryRow("Changed from the default")).toBe("1: aigateway");
+      expect(screen.queryByRole("button", { name: "Fix" })).not.toBeInTheDocument();
+    });
+
+    it("counts each kind of problem with its paths and keeps Fix", async () => {
+      stubApi({ "GET /api/components/dsc": problems });
+      renderSection();
+      expect(await screen.findByRole("heading", { name: /5 differences from the release default to fix/ })).toBeInTheDocument();
+      expect(summaryRow("Components")).toBe("3 of 4 components of the release default are in the DSC; not in it: databaseservice");
+      expect(summaryRow("Missing")).toBe("2: dashboard.standard (default Managed), databaseservice (default Removed)");
+      expect(summaryRow("Not in the installed CRD")).toBe("2: codeflare, ray.legacy");
+      expect(summaryRow("Deploys nothing")).toBe("1: aigateway.modelsAsAService (parent aigateway)");
+      expect(summaryRow("Changed from the default")).toBe("1: aigateway.modelsAsAService");
+      expect(screen.getByRole("button", { name: "Fix" })).toBeEnabled();
+    });
+
+    it("says there is no release default instead of claiming nothing is missing", async () => {
+      const defaultsError = "The installed operator 3.6.0 ships no DataScienceCluster v3 example in its CSV's alm-examples, so there is no release default to compare with.";
+      stubApi({ "GET /api/components/dsc": {
+        ...matching, defaultsError,
+        nodes: matching.nodes.map((n) => ({ ...n, changed: false, defaultSet: false, default: undefined })),
+        comparison: { ...matching.comparison!, defaultsRead: false, defaultsCSV: undefined, defaultComponents: [] },
+      } });
+      renderSection();
+      expect(await screen.findByRole("heading", { name: /Not compared with a release default/ })).toBeInTheDocument();
+      expect(summaryRow("Release default")).toBe(defaultsError);
+      expect(summaryRow("Components")).toBe("3 in the DSC; the installed CRD defines 3");
+      expect(summaryRow("Missing")).toBe("Not checked: no release default");
+      expect(summaryRow("Changed from the default")).toBe("Not checked: no release default");
+      expect(summaryRow("Not in the installed CRD")).toBe("None");
+      expect(screen.queryByRole("button", { name: "Fix" })).not.toBeInTheDocument();
+      expect(isOff(screen.getByRole("button", { name: "Reset to the release default…" }))).toBe(true);
+    });
+
+    it("explains the comparison and deprecated fields in a popover", async () => {
+      stubApi({ "GET /api/components/dsc": matching });
+      renderSection();
+      fireEvent.click(await screen.findByRole("button", { name: "About this comparison" }));
+      const help = await screen.findByRole("dialog", { name: "About this comparison" });
+      expect(within(help).getByText(/marks only whole API versions as deprecated/)).toBeInTheDocument();
+      expect(within(help).getByText(/prunes fields the CRD does not define/)).toBeInTheDocument();
+      expect(within(help).getByText(/conversion webhook/)).toBeInTheDocument();
+    });
+  });
+
+  describe("row labels", () => {
+    it("labels each difference in its row, with an explanation and what Fix does", async () => {
+      stubApi({ "GET /api/components/dsc": problems });
+      renderSection();
+      const table = await screen.findByRole("treegrid");
+      const row = (path: string) => within(table).getAllByRole("row").find((r) => r.querySelector("code")?.textContent === path)!;
+      expect(within(row("standard")).getByRole("button", { name: "Missing — default Managed" })).toBeInTheDocument();
+      expect(within(row("databaseservice")).getByRole("button", { name: "Missing — default Removed" })).toBeInTheDocument();
+      expect(within(row("modelsAsAService")).getByRole("button", { name: "Deploys nothing — parent Removed" })).toBeInTheDocument();
+      expect(within(row("modelsAsAService")).getByRole("button", { name: "Changed from the default" })).toBeInTheDocument();
+      expect(within(row("codeflare")).getByRole("button", { name: "Not in the installed CRD" })).toBeInTheDocument();
+      expect(within(row("legacy")).getByRole("button", { name: "Not in the installed CRD" })).toBeInTheDocument();
+      // A field the CRD does not define has no control.
+      expect(within(row("codeflare")).queryByRole("combobox")).not.toBeInTheDocument();
+
+      fireEvent.click(within(row("standard")).getByRole("button", { name: "Missing — default Managed" }));
+      const missing = await screen.findByRole("dialog", { name: "Missing in the DSC" });
+      expect(within(missing).getByText(/Fix sets it to Managed/)).toBeInTheDocument();
+      fireEvent.click(within(row("codeflare")).getByRole("button", { name: "Not in the installed CRD" }));
+      const unknown = await screen.findByRole("dialog", { name: "Not in the installed CRD" });
+      expect(within(unknown).getByText(/Fix removes it/)).toBeInTheDocument();
+      fireEvent.click(within(row("modelsAsAService")).getByRole("button", { name: "Deploys nothing — parent Removed" }));
+      const parent = await screen.findByRole("dialog", { name: "Deploys nothing" });
+      expect(within(parent).getByText(/Fix does not change this/)).toBeInTheDocument();
+    });
+  });
+
+  describe("show only differences", () => {
+    it("keeps the rows that differ and their parents", async () => {
+      stubApi({ "GET /api/components/dsc": problems });
+      renderSection();
+      const table = await screen.findByRole("treegrid");
+      expect(rowNames(table)).toEqual(["aigateway", "batchGateway", "modelsAsAService", "dashboard", "standard", "databaseservice", "ray", "legacy", "codeflare"]);
+      fireEvent.click(screen.getByRole("switch", { name: "Show only differences" }));
+      // aigateway and ray match the release default, but stay as the
+      // parents of rows that differ; batchGateway matches and goes.
+      expect(rowNames(screen.getByRole("treegrid"))).toEqual(["aigateway", "modelsAsAService", "dashboard", "standard", "databaseservice", "ray", "legacy", "codeflare"]);
+      // The row it leaves out stays in the table, collapsed, so the columns keep their widths.
+      const gone = within(screen.getByRole("treegrid")).getAllByRole("row", { hidden: true }).find((r) => r.querySelector("code")?.textContent === "batchGateway")!;
+      expect(gone).toHaveAttribute("aria-hidden", "true");
+      expect(gone).toHaveStyle({ visibility: "collapse" });
+    });
+
+    it("hides rows that match the release default", async () => {
+      stubApi({ "GET /api/components/dsc": manager });
+      renderSection();
+      await screen.findByRole("treegrid");
+      fireEvent.click(screen.getByRole("switch", { name: "Show only differences" }));
+      expect(rowNames(screen.getByRole("treegrid"))).toEqual(["aigateway", "dashboard", "standard"]);
+      fireEvent.click(screen.getByRole("switch", { name: "Show only differences" }));
+      expect(rowNames(screen.getByRole("treegrid"))).toEqual(["aigateway", "batchGateway", "dashboard", "standard", "ray"]);
+    });
+
+    it("says so when nothing differs", async () => {
+      stubApi({ "GET /api/components/dsc": { ...matching, nodes: matching.nodes.map((n) => ({ ...n, changed: false })) } });
+      renderSection();
+      await screen.findByRole("treegrid");
+      fireEvent.click(screen.getByRole("switch", { name: "Show only differences" }));
+      expect(screen.getByRole("heading", { name: "Nothing differs from the release default" })).toBeInTheDocument();
+      expect(screen.queryByRole("treegrid")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Show all components" }));
+      expect(screen.getByRole("treegrid")).toBeInTheDocument();
+    });
+
+    it("does not claim nothing differs without a release default", async () => {
+      stubApi({ "GET /api/components/dsc": {
+        ...matching, defaultsError: "No example.",
+        nodes: matching.nodes.map((n) => ({ ...n, changed: false, defaultSet: false, default: undefined })),
+        comparison: { ...matching.comparison!, defaultsRead: false, defaultComponents: [] },
+      } });
+      renderSection();
+      await screen.findByRole("treegrid");
+      expect(screen.getByText("No release default to compare with; no row has a problem the CRD shows")).toBeInTheDocument();
+      expect(within(screen.getByRole("treegrid")).getAllByText("Unknown")).toHaveLength(4);
+      expect(within(screen.getByRole("treegrid")).queryByText("Not set")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("switch", { name: "Show only differences" }));
+      expect(screen.getByRole("heading", { name: "No problems found" })).toBeInTheDocument();
+      expect(screen.queryByText("Nothing differs from the release default")).not.toBeInTheDocument();
+    });
   });
 
   it("collapses a component's sub-components", async () => {

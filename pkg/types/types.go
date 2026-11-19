@@ -390,6 +390,9 @@ type DSCManager struct {
 	UpgradeGates []string      `json:"upgradeGates,omitempty"`
 	Nodes        []DSCNode     `json:"nodes"`
 	Mismatches   []DSCMismatch `json:"mismatches"`
+	// Comparison says what the comparison with the release default
+	// covered, so the page says "nothing missing" only when it was checked.
+	Comparison DSCComparison `json:"comparison"`
 	// PendingHardReset is a hard reset that deleted the DataScienceCluster
 	// and did not create its replacement (a failure, a timeout, a restart
 	// of the tool): shown only while no DataScienceCluster exists, so
@@ -470,6 +473,31 @@ type DSCNode struct {
 	Condition *DSCConditionView `json:"condition,omitempty"`
 	// Changed: a value the user chose that differs from the release default.
 	Changed bool `json:"changed,omitempty"`
+	// Unknown: a field in the DSC that the installed CRD does not define
+	// (an "unknown-field" mismatch with this path), shown in the tree under
+	// the nearest node above it; Name is its path below that node.
+	Unknown bool `json:"unknown,omitempty"`
+}
+
+// DSCComparison is what the comparison with the release default covered.
+type DSCComparison struct {
+	// DefaultsRead: the release default was read, so values missing from
+	// the DSC and values changed from the default were looked for
+	// (DSCManager.DefaultsError says why not).
+	DefaultsRead bool `json:"defaultsRead"`
+	// SchemaRead: the CRD's schema was read, so fields it does not define
+	// were looked for (DSCManager.SchemaError says why not).
+	SchemaRead bool `json:"schemaRead"`
+	// DefaultsCSV is the installed CSV whose alm-examples hold the release
+	// default.
+	DefaultsCSV string `json:"defaultsCSV,omitempty"`
+	// CRDComponents, DefaultComponents and DSCComponents are the components
+	// (keys of spec.components) the installed CRD defines, the release
+	// default lists and the DSC lists, each sorted; DefaultComponents is
+	// empty without a release default.
+	CRDComponents     []string `json:"crdComponents"`
+	DefaultComponents []string `json:"defaultComponents"`
+	DSCComponents     []string `json:"dscComponents"`
 }
 
 // DSCMismatch is a difference from the release default that is a real
