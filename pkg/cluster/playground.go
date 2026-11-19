@@ -396,7 +396,13 @@ type maasModel struct {
 // only, the Models as a Service that user may use (any error is none: MaaS
 // is optional and may be off). With the ServiceAccount's token it never
 // asks for MaaS models (genAICallAllowed).
-func (a genAIAPI) listProjectModels(ns string) ([]types.PlaygroundModel, error) {
+// listProjectModels lists the project's own models and, only when withMaaS
+// (a Set up that chose a MaaS model, on the user's own token), its Models as
+// a Service models. Listing MaaS models makes the gen-ai backend send the
+// caller's token through maas-default-gateway, where an editor of a
+// published project can attach a route; a Set up with project models only
+// must not send it there.
+func (a genAIAPI) listProjectModels(ns string, withMaaS bool) ([]types.PlaygroundModel, error) {
 	var own struct {
 		Data []namespaceModel `json:"data"`
 	}
@@ -414,7 +420,7 @@ func (a genAIAPI) listProjectModels(ns string) ([]types.PlaygroundModel, error) 
 			Ready: m.Status == "Running", Chat: chatModel(m.Capabilities, m.Usecase, m.ModelType),
 		})
 	}
-	if a.asUser {
+	if a.asUser && withMaaS {
 		var maas struct {
 			Data []maasModel `json:"data"`
 		}
@@ -897,7 +903,7 @@ func GetPlaygroundStatus(c *Client, token, project string) (*types.PlaygroundSta
 		pwg.Add(1)
 		go func() {
 			defer pwg.Done()
-			models, err := api.listProjectModels(project)
+			models, err := api.listProjectModels(project, false)
 			if err == nil {
 				markToolEmbeddingModels(c, project, models)
 				models = append(models, listMaaSPlaygroundModels(c)...)
@@ -1210,7 +1216,11 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 			return stop(fmt.Sprintf("The playground in %s is being deleted. Wait until it is gone, then set it up again.", p.project), "terminating", "terminating")
 		}
 	}
-	models, err := p.api.listProjectModels(p.project)
+	withMaaS := false
+	for _, w := range wanted {
+		withMaaS = withMaaS || w.Source == "maas"
+	}
+	models, err := p.api.listProjectModels(p.project, withMaaS)
 	if err != nil {
 		msg, code := apiProblem(err)
 		return stop(msg, code, "models")

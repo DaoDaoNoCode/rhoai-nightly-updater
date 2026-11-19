@@ -373,6 +373,34 @@ func TestPlayground_SetupWithTheUsersTokenAddsAMaaSModel(t *testing.T) {
 	}
 }
 
+// A Set up with the user's token that chose only the project's own models
+// never lists MaaS models: that call sends the user's token through
+// maas-default-gateway, where an editor of a published project can attach
+// a route. Choosing no models (the project's ready chat models) is the same.
+func TestPlayground_SetupWithProjectModelsOnlyNeverReachesMaaS(t *testing.T) {
+	for name, models := range map[string][]types.PlaygroundModelRef{
+		"project models chosen": {{Name: "qwen25-05b-instruct", Source: "namespace"}},
+		"no models chosen":      nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newPlaygroundEnv(t)
+			const userToken = "sha256~user-own-token"
+			uc := e.userPlaygroundClient(userToken)
+			req := setup("proj")
+			req.Models = models
+			res, err := RunPlayground(uc, req, userToken, nil)
+			if err != nil || !res.Success {
+				t.Fatalf("got %+v, %v", res, err)
+			}
+			for _, p := range e.g.paths {
+				if strings.Contains(p, "/maas/") {
+					t.Errorf("called %s although no MaaS model was chosen", p)
+				}
+			}
+		})
+	}
+}
+
 // The client refuses, before sending anything, every gen-ai call that the
 // dashboard passes on to Models as a Service with the caller's token: the
 // check guards the token whatever calls it.
