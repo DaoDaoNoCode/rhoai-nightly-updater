@@ -1325,7 +1325,10 @@ func (m *maasRun) changeDatabase(req *types.MaaSDatabaseRequest) (*types.Operati
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot read the DataScienceCluster; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "dsc read failed")
 	}
-	ns := firstNonEmpty(rec.DBNamespace, maasInfraNamespace(c))
+	ns, err := maasDBNamespace(c, rec)
+	if err != nil {
+		return m.fail("check", sentenceStart(err.Error())+". Nothing was changed.", "prerequisites", "infra namespace unknown")
+	}
 	_, nsFound, err := readObjectMeta(c, "/api/v1/namespaces/"+ns)
 	if err != nil || !nsFound {
 		return m.fail("check", fmt.Sprintf("Cannot read namespace %s, where the database is; nothing was changed%s.", ns, errSuffix(err)), firstNonEmpty(errorCodeFromK8sErr(err), "prerequisites"), "namespace read failed")

@@ -197,7 +197,13 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 
 	// The gateway.
 	m := &maasRun{c: c}
-	gwPlan, msg, code := planMaaSGateway(c, maasInfraNamespace(c), rec.projects())
+	var gwPlan *maasGatewayPlan
+	var msg, code string
+	if infra, err := maasInfraNamespace(c); err != nil {
+		msg = err.Error()
+	} else {
+		gwPlan, msg, code = planMaaSGateway(c, infra, rec.projects())
+	}
 	switch {
 	case msg != "":
 		failed = append(failed, fmt.Errorf("the MaaS gateway cannot be updated: %s", strings.TrimSuffix(msg, ".")))

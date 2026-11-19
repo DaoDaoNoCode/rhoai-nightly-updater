@@ -750,7 +750,12 @@ const genAIUIDeployment = "gen-ai-ui"
 // genAIUIState reads Deployment gen-ai-ui: "available", "unavailable",
 // "missing", or "" when it cannot be read.
 func genAIUIState(c *Client) string {
-	body, _, err := c.get(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", appsNamespace(c), genAIUIDeployment))
+	ns, err := appsNamespace(c)
+	if err != nil {
+		slog.Debug("cannot tell where the gen-ai-ui Deployment runs", "error", err)
+		return ""
+	}
+	body, _, err := c.get(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, genAIUIDeployment))
 	if IsK8sError(err, 404) {
 		return "missing"
 	}

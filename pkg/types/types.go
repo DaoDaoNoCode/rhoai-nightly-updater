@@ -749,6 +749,14 @@ type ComponentsResponse struct {
 	SnapshotTime       string              `json:"snapshotTime,omitempty"`
 	ChangedCount       int                 `json:"changedCount"`
 	ConsoleURL         string              `json:"consoleURL,omitempty"`
+	// ApplicationsNamespace is RHOAI's applications namespace, read from the
+	// DSCInitialization ("" when there is none yet). OperatorNamespace is
+	// where the RHOAI operator runs (its Subscription's namespace).
+	ApplicationsNamespace string `json:"applicationsNamespace,omitempty"`
+	OperatorNamespace     string `json:"operatorNamespace,omitempty"`
+	// ApplicationsNamespaceError says why the applications namespace could
+	// not be read; its Deployments are missing from the list then.
+	ApplicationsNamespaceError string `json:"applicationsNamespaceError,omitempty"`
 }
 
 // ContainerInfo holds per-container status within a pod.

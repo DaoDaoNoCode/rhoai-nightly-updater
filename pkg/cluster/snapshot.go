@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -19,11 +20,19 @@ type deploymentSnapshot struct {
 
 // SaveDeploymentSnapshot captures the current deployment image digests into a ConfigMap.
 func SaveDeploymentSnapshot(c *Client) error {
-	appDeps, err := getDeployments(c, "redhat-ods-applications")
-	if err != nil {
+	// No DSCInitialization: RHOAI has no applications yet, so only the
+	// operator's Deployments are recorded.
+	var appDeps []types.DeploymentInfo
+	appNS, err := appsNamespace(c)
+	switch {
+	case err == nil:
+		if appDeps, err = getDeployments(c, appNS); err != nil {
+			return fmt.Errorf("failed to get app deployments: %w", err)
+		}
+	case !errors.Is(err, errNoDSCInitialization):
 		return fmt.Errorf("failed to get app deployments: %w", err)
 	}
-	opDeps, err := getDeployments(c, "redhat-ods-operator")
+	opDeps, err := getDeployments(c, SubNS)
 	if err != nil {
 		return fmt.Errorf("failed to get operator deployments: %w", err)
 	}

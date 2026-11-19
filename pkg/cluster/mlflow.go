@@ -16,7 +16,6 @@ import (
 )
 
 const (
-	mlflowNamespace = "redhat-ods-applications"
 	mlflowCRName    = "mlflow"
 	mlflowAPIGroup  = "mlflow.opendatahub.io/v1"
 	mlflowImageRepo = "opendatahub/mlflow"
@@ -167,10 +166,17 @@ func getMLflowCR(c *Client) (mlflowCR, error) {
 	return cr, nil
 }
 
-// mlflowOwnedPVCs lists PVCs in the MLflow namespace whose owner is the CR,
-// which the garbage collector deletes together with it.
-func mlflowOwnedPVCs(c *Client, uid string) ([]string, error) {
-	body, _, err := c.get(namespacedPath("v1", "persistentvolumeclaims", mlflowNamespace, ""))
+// mlflowNamespace is where the MLflow operator creates the server: the
+// applications namespace (mlflow-operator internal/config/config.go,
+// APPLICATIONS_NAMESPACE, which the platform sets to the DSCInitialization's).
+func mlflowNamespace(c *Client) (string, error) {
+	return appsNamespace(c)
+}
+
+// mlflowOwnedPVCs lists PVCs in the MLflow namespace ns whose owner is the
+// CR, which the garbage collector deletes together with it.
+func mlflowOwnedPVCs(c *Client, ns, uid string) ([]string, error) {
+	body, _, err := c.get(namespacedPath("v1", "persistentvolumeclaims", ns, ""))
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +198,8 @@ func mlflowOwnedPVCs(c *Client, uid string) ([]string, error) {
 }
 
 func getMLflowStatus(c *Client) types.ResourceState {
-	state := types.ResourceState{Namespace: mlflowNamespace}
+	ns, nsErr := mlflowNamespace(c)
+	state := types.ResourceState{Namespace: ns}
 
 	cr, err := getMLflowCR(c)
 	if IsK8sError(err, 404) {
@@ -234,6 +241,13 @@ func getMLflowStatus(c *Client) types.ResourceState {
 	if state.Terminating {
 		state.Message = "Terminating"
 	}
+	if nsErr != nil {
+		// The server's Route, pods and PVC are in the applications
+		// namespace; without it they are not read.
+		state.Message += fmt.Sprintf(" (the namespace it runs in is unknown: %v)", nsErr)
+		state.UIRoute = mlflowUIURL(cr.Status.URL, "")
+		return state
+	}
 
 	var (
 		wg    sync.WaitGroup
@@ -246,19 +260,19 @@ func getMLflowStatus(c *Client) types.ResourceState {
 		defer wg.Done()
 		// The Route only matters on releases whose CR reports no URL.
 		if mlflowUIURL(cr.Status.URL, "") == "" {
-			host = routeHost(c, mlflowNamespace, "mlflow")
+			host = routeHost(c, ns, "mlflow")
 		}
 	}()
 	go func() {
 		defer wg.Done()
 		if !state.Ready && !state.Terminating {
-			issue, _ = inspectPods(c, mlflowNamespace, mlflowPodSelector, "")
+			issue, _ = inspectPods(c, ns, mlflowPodSelector, "")
 		}
 	}()
 	go func() {
 		defer wg.Done()
 		if state.ManagedByTool {
-			pvcs, _ = mlflowOwnedPVCs(c, cr.Metadata.UID)
+			pvcs, _ = mlflowOwnedPVCs(c, ns, cr.Metadata.UID)
 		}
 	}()
 	wg.Wait()
@@ -268,7 +282,8 @@ func getMLflowStatus(c *Client) types.ResourceState {
 	return state
 }
 
-// SetupMLflow creates the MLflow CR in redhat-ods-applications. It leaves
+// SetupMLflow creates the (cluster-scoped) MLflow CR; the operator runs the
+// server in the applications namespace. It leaves
 // spec.image unset so the operator deploys its platform default
 // (RELATED_IMAGE_ODH_MLFLOW_IMAGE, the RHOAI build, falling back to
 // MLFLOW_IMAGE; mlflow-operator internal/config/config.go and
@@ -343,7 +358,11 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 	logs = append(logs, "OK: MLflow CR created")
 
 	slog.Info("mlflow setup", "user", getUser(c))
-	recordActivity(c, "setup-mlflow", "MLflow CR created in "+mlflowNamespace, true)
+	detail := "MLflow CR created"
+	if ns, err := mlflowNamespace(c); err == nil {
+		detail += "; the server runs in " + ns
+	}
+	recordActivity(c, "setup-mlflow", detail, true)
 
 	return &types.OperationResponse{
 		Success: true, Message: "MLflow CR created. The operator will deploy MLflow shortly.",
@@ -377,7 +396,13 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 		return &types.OperationResponse{Success: false, Message: "MLflow is still being deleted." + mlflowFinalizerNote(cr), Logs: logs, ErrorCode: "in_progress"}, nil
 	}
 
-	pvcs, pvcErr := mlflowOwnedPVCs(c, cr.Metadata.UID)
+	// The PVC names are only a note: the garbage collector deletes them
+	// with the CR, wherever they are.
+	ns, pvcErr := mlflowNamespace(c)
+	var pvcs []string
+	if pvcErr == nil {
+		pvcs, pvcErr = mlflowOwnedPVCs(c, ns, cr.Metadata.UID)
+	}
 	logs = append(logs, "Deleting MLflow CR...")
 	crPath := clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName)
 	if _, delErr := deleteWithUID(c, crPath, cr.Metadata.UID); delErr != nil && !IsK8sError(delErr, 404) {
@@ -394,7 +419,7 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 		dataNote = fmt.Sprintf(" %s %v (tracking database, model registry and artifacts) %s garbage-collected with it.", verb(len(pvcs), "PVC", "PVCs"), pvcs, verb(len(pvcs), "is", "are"))
 	}
 	slog.Info("mlflow teardown", "user", getUser(c))
-	recordActivity(c, "teardown-mlflow", mlflowNamespace, true)
+	recordActivity(c, "teardown-mlflow", "MLflow CR deleted", true)
 
 	gone, waitErr := waitForDeletion(c, crPath, MLflowDeleteTimeout, MLflowDeletePoll)
 	if waitErr != nil {

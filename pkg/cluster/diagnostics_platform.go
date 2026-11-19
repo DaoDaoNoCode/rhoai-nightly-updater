@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -235,7 +236,12 @@ func checkManagedConfig(c *Client) checkOutput {
 	release := installed.Version
 	var details []string
 	count := 0
-	for _, ns := range rolloutNamespaces {
+	namespaces, nsErr := rolloutNamespaces(c)
+	if nsErr != nil && !errors.Is(nsErr, errNoDSCInitialization) {
+		details = append(details, fmt.Sprintf("could not tell the applications namespace, so its Deployments were not checked: %v", nsErr))
+		out.check.Status = "warn"
+	}
+	for _, ns := range namespaces {
 		body, _, err := c.do(http.MethodGet, namespacedPath("apps/v1", "deployments", ns, ""), "", nil, url.Values{})
 		if IsK8sError(err, http.StatusNotFound) {
 			continue

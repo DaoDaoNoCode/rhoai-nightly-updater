@@ -640,7 +640,11 @@ func replacePipelineServer(c *Client, project string, old *dspaInfo, logs []stri
 // dspoRunning reports whether a data-science-pipelines-operator replica is
 // ready, so a DSPA finalizer will be processed.
 func dspoRunning(c *Client) (bool, error) {
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", dashboardNamespace, "") + "?labelSelector=" + url.QueryEscape(dspoSelector))
+	ns, err := appsNamespace(c)
+	if err != nil {
+		return false, err
+	}
+	body, _, err := c.get(namespacedPath("apps/v1", "deployments", ns, "") + "?labelSelector=" + url.QueryEscape(dspoSelector))
 	if err != nil {
 		return false, err
 	}

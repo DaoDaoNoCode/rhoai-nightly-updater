@@ -54,6 +54,9 @@ type dscObject struct {
 	} `json:"metadata"`
 	Spec struct {
 		ApplicationsNamespace string `json:"applicationsNamespace"` // DSCInitialization
+		Monitoring            struct {
+			Namespace string `json:"namespace"` // DSCInitialization
+		} `json:"monitoring"`
 	} `json:"spec"`
 	Status struct {
 		Phase              string         `json:"phase"`
@@ -458,16 +461,6 @@ func analyzeCurrentDSC(c *Client, now time.Time) (*dscAnalysis, error) {
 		return nil, fmt.Errorf("no DataScienceCluster exists")
 	}
 	return analyzeDSC(c, dscs[0], now), nil
-}
-
-// applicationsNamespace is the DSCInitialization's applications namespace
-// ("" when it cannot be read).
-func applicationsNamespace(c *Client) string {
-	dscis, _, err := listFirstServed(c, dsciGroup, "/apis/dscinitialization.opendatahub.io/%s/dscinitializations", "dscinitializations", dsciFallbackVersions)
-	if err != nil || len(dscis) == 0 {
-		return ""
-	}
-	return dscis[0].Spec.ApplicationsNamespace
 }
 
 // conditionCauses explains one DSC condition and names the problems that

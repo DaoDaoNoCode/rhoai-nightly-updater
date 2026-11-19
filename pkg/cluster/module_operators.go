@@ -158,14 +158,11 @@ func (f *moduleOperatorFinder) load() error {
 }
 
 func (f *moduleOperatorFinder) read() error {
-	dscis, _, err := listFirstServed(f.c, dsciGroup, "/apis/dscinitialization.opendatahub.io/%s/dscinitializations", "dscinitializations", dsciFallbackVersions)
-	switch {
-	case err != nil:
-		return fmt.Errorf("read the DSCInitialization for the applications namespace: %w", err)
-	case len(dscis) == 0 || dscis[0].Spec.ApplicationsNamespace == "":
-		return fmt.Errorf("no DSCInitialization names the applications namespace")
+	appNS, err := appsNamespace(f.c)
+	if err != nil {
+		return err
 	}
-	f.appNS = dscis[0].Spec.ApplicationsNamespace
+	f.appNS = appNS
 
 	body, _, err := f.c.get(clusterPath("rbac.authorization.k8s.io/v1", "clusterroles", ""))
 	if err != nil {

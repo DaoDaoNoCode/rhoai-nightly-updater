@@ -721,7 +721,13 @@ func (g kserveGateway) isInferenceGateway() bool {
 // readKServeGateway reads KServe's default gateway. A missing ConfigMap or
 // key is unknown, not an error; err is set when it cannot be read.
 func readKServeGateway(c *Client) (kserveGateway, error) {
-	ns := appsNamespace(c)
+	ns, err := appsNamespace(c)
+	if errors.Is(err, errNoDSCInitialization) {
+		return kserveGateway{}, nil // no RHOAI, so no ConfigMap: unknown, as when it is missing
+	}
+	if err != nil {
+		return kserveGateway{}, fmt.Errorf("find ConfigMap %s: %w", kserveConfigMap, err)
+	}
 	body, _, err := c.get(namespacedPath("v1", "configmaps", ns, kserveConfigMap))
 	if IsK8sError(err, 404) {
 		return kserveGateway{}, nil

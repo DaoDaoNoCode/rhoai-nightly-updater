@@ -14,17 +14,25 @@ import (
 // GetDebugInfo collects pod details from RHOAI-related namespaces for debugging.
 // The three namespaces are read in parallel. If some namespace queries fail,
 // partial data is returned with warnings. If all fail, an error is returned.
+// The applications namespace is the DSCInitialization's; when it cannot be
+// read, its pods are missing and a warning says why.
 func GetDebugInfo(c *Client) (*types.DebugResponse, error) {
-	namespaces := []string{"redhat-ods-operator", "redhat-ods-applications", "openshift-marketplace"}
+	appNS, appNSErr := appsNamespace(c)
+	namespaces := []string{SubNS, appNS, CatalogNS}
 	pods := make([][]types.PodInfo, len(namespaces))
 	errs := make([]error, len(namespaces))
 	var wg sync.WaitGroup
 	for i, ns := range namespaces {
+		if i == 1 && appNSErr != nil {
+			errs[i] = appNSErr
+			continue
+		}
 		wg.Go(func() {
 			pods[i], errs[i] = getPodsInNamespace(c, ns)
 		})
 	}
 	wg.Wait()
+	namespaces[1] = firstNonEmpty(appNS, "the applications namespace")
 
 	resp := &types.DebugResponse{}
 	var warnings []string

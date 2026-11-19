@@ -39,7 +39,6 @@ const (
 	modelImageSourceAnnotation  = "rhoai-nightly-updater/runtime-image-source"
 	modelImageVersionAnnotation = "rhoai-nightly-updater/runtime-image-version"
 	llmDependenciesCondition    = "KserveLLMInferenceServiceDependencies"
-	defaultApplicationsNS       = "redhat-ods-applications"
 	// modelPodComponent is the label KServe puts on a model's workload pods
 	// (with app.kubernetes.io/name=<model>); the dashboard selects them so.
 	modelPodComponent = "llminferenceservice-workload"
@@ -500,12 +499,6 @@ func modelsBlock(dsc dscRead) (*types.ComponentBlock, string) {
 	return nil, deps
 }
 
-// appsNamespace is the RHOAI applications namespace (DSCInitialization
-// spec.applicationsNamespace), redhat-ods-applications when unreadable.
-func appsNamespace(c *Client) string {
-	return firstNonEmpty(applicationsNamespace(c), defaultApplicationsNS)
-}
-
 // cpuPreset is the CPU preset as found at run time.
 type cpuPreset struct {
 	name, image, problem string
@@ -515,8 +508,13 @@ type cpuPreset struct {
 // (Deployment llmisvc-controller-manager, env
 // LLM_INFERENCE_SERVICE_CONFIG_PREFIX, "v3-6-0-kserve-" on RHOAI 3.6)
 // followed by config-llm-template-cpu, in the applications namespace, and
-// its main container's image.
-func discoverCPUPreset(c *Client, ns string) cpuPreset {
+// its main container's image. An unknown applications namespace is a
+// problem: the preset cannot be found then.
+func discoverCPUPreset(c *Client) cpuPreset {
+	ns, err := appsNamespace(c)
+	if err != nil {
+		return cpuPreset{problem: fmt.Sprintf("Cannot tell which namespace RHOAI's applications (KServe's controller and presets) run in: %v.", err)}
+	}
 	body, _, err := c.get(namespacedPath("apps/v1", "deployments", ns, "llmisvc-controller-manager"))
 	if IsK8sError(err, 404) {
 		return cpuPreset{problem: fmt.Sprintf("KServe's LLMInferenceService controller (Deployment %s in %s) is not there: LLM serving is not installed.", llmisvcControllerName, ns)}
@@ -1313,8 +1311,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	if v := servedVersions(c, llmisvcGroup, nil); v.Discovered && !slices.Contains(v.Versions, "v1alpha2") {
 		return nil, fmt.Sprintf("This cluster's KServe does not serve LLMInferenceService %s (served: %s), which is the shape this tool writes. Nothing was changed.", llmisvcAPIVersion, strings.Join(v.Versions, ", ")), "prerequisites"
 	}
-	ns := appsNamespace(c)
-	preset := discoverCPUPreset(c, ns)
+	preset := discoverCPUPreset(c)
 	if preset.problem != "" {
 		return nil, preset.problem + " Nothing was changed.", "prerequisites"
 	}

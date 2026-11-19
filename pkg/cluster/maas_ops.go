@@ -442,7 +442,7 @@ func maasControllerGone(c *Client) string {
 	if dsc, err := readMaaSDSC(c); err == nil && dsc.read.Object != nil && dsc.maas != "Managed" {
 		return "MaaS is " + firstNonEmpty(dsc.maas, "not set") + " in the DataScienceCluster"
 	}
-	if ns := appsNamespace(c); ns != "" && deploymentAvailable(c, ns, "maas-controller") == "missing" {
+	if ns, err := appsNamespace(c); err == nil && deploymentAvailable(c, ns, "maas-controller") == "missing" {
 		return "Deployment " + ns + "/maas-controller does not exist"
 	}
 	return ""
@@ -515,7 +515,10 @@ func (m *maasRun) teardownCheck(t *maasTeardown) (*types.OperationResponse, erro
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot read the DataScienceCluster; nothing was deleted: %v.", err), errorCodeFromK8sErr(err), "dsc read failed")
 	}
-	infra := firstNonEmpty(rec.DBNamespace, maasInfraNamespace(c))
+	infra, err := maasDBNamespace(c, rec)
+	if err != nil {
+		return m.fail("check", sentenceStart(err.Error())+". Nothing was deleted.", "prerequisites", "infra namespace unknown")
+	}
 	var objs []maasTeardownObj
 	owned := 0
 	// The gateway and its options, then the database: maas-db-config and
@@ -943,7 +946,11 @@ func (m *maasRun) publishCheckPlatform(pl *maasPublish, limitReq *types.MaaSLimi
 	if len(others) > 0 && rhclBelowMinimum(rhcl.version) {
 		return m.fail("check", fmt.Sprintf("MaaS already has other subscriptions (%s), and with this tool's a signed-in user would have two or more. On Connectivity Link %s such a caller can hang (the MaaS docs ask for %s or later), so this tool does not publish until it is upgraded: Upgrade Connectivity Link on the MaaS tab does it. Nothing was changed.", strings.Join(others, ", "), rhcl.version, rhclDocsMinimum), "prerequisites", "rhcl too old for several subscriptions")
 	}
-	if msg, code := maasNamespaceRefusal(c, maasInfraNamespace(c)); msg != "" {
+	infra, err := maasInfraNamespace(c)
+	if err != nil {
+		return m.fail("check", sentenceStart(err.Error())+". Nothing was changed.", "prerequisites", "infra namespace unknown")
+	}
+	if msg, code := maasNamespaceRefusal(c, infra); msg != "" {
 		return m.fail("check", msg, code, "namespace not rhoai's")
 	}
 	pl.limit, pl.priority = limit, priority
@@ -1042,7 +1049,10 @@ func (m *maasRun) publishRecordRefs(pl *maasPublish) (*types.OperationResponse, 
 // a gateway someone else made has to admit it already.
 func (m *maasRun) publishCheckGateway(pl *maasPublish) (*types.OperationResponse, error) {
 	c, project, rec := m.c, pl.project, pl.rec
-	infra := maasInfraNamespace(c)
+	infra, err := maasInfraNamespace(c)
+	if err != nil {
+		return m.fail("check", sentenceStart(err.Error())+". Nothing was changed.", "prerequisites", "infra namespace unknown")
+	}
 	gwPlan, msg, code := planMaaSGateway(c, infra, rec.projects())
 	if msg != "" {
 		return m.fail("check", msg, code, "gateway check failed")
@@ -1456,11 +1466,17 @@ func (m *maasRun) unpublishGateway(u *maasUnpublish) (*types.OperationResponse, 
 	c, project, name, say, rec := m.c, u.project, u.name, u.say, u.rec
 	modelFound, modelOwned, recordedRefs := u.modelFound, u.modelOwned, u.recordedRefs
 	// The project on the gateway.
-	infra := maasInfraNamespace(c)
+	infra, infraErr := maasInfraNamespace(c)
 	if err := writeMaaSRecord(c, rec); err != nil {
 		return m.fail("gateway", err.Error(), errorCodeFromK8sErr(err), "record write failed")
 	}
-	gwPlan, msg, code := planMaaSGateway(c, infra, rec.projects())
+	var gwPlan *maasGatewayPlan
+	var msg, code string
+	if infraErr != nil {
+		msg = sentenceStart(infraErr.Error())
+	} else {
+		gwPlan, msg, code = planMaaSGateway(c, infra, rec.projects())
+	}
 	switch {
 	case msg != "":
 		// The publication is gone; only the gateway's list of projects is

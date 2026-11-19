@@ -12,8 +12,8 @@ import (
 // unknown.
 //
 // Current releases serve the dashboard behind the data-science gateway
-// (https://rh-ai.<apps domain>/), and the old Route
-// redhat-ods-applications/rhods-dashboard, now owned by the GatewayConfig,
+// (https://rh-ai.<apps domain>/), and the old Route rhods-dashboard in the
+// applications namespace, now owned by the GatewayConfig,
 // only serves an "OpenShift AI has a new address" page. The Dashboard
 // component CR (components.platform.opendatahub.io, kind Dashboard) reports
 // the address in status.url, which the operator's ConsoleLink uses too. So
@@ -25,7 +25,11 @@ func dashboardBaseURL(c *Client) string {
 	if u := dashboardURLFromComponent(c); u != "" {
 		return u
 	}
-	if host := routeHost(c, dashboardNamespace, "rhods-dashboard"); host != "" && snippetURL("https://"+host) {
+	ns, err := appsNamespace(c)
+	if err != nil {
+		return "" // the Route's namespace is unknown, and so is the address
+	}
+	if host := routeHost(c, ns, "rhods-dashboard"); host != "" && snippetURL("https://"+host) {
 		return "https://" + host
 	}
 	return ""
