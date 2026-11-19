@@ -120,7 +120,7 @@ const PlatformPart: React.FC<{ part: MaaSPart; readOnly: boolean; reason: string
           {fixes.map((a) => (
             <ActionListItem key={a.id}>
               <Button variant="secondary" size="sm" isDanger={a.danger} isAriaDisabled={!!reason}
-                onClick={() => setPending((a.id as string) === "change-database" ? { kind: "maas-database" } : { kind: "maas-action", action: a.id })}>{a.label}</Button>
+                onClick={() => setPending(a.id === "change-database" ? { kind: "maas-database" } : { kind: "maas-action", action: a.id })}>{a.label}</Button>
             </ActionListItem>
           ))}
           {/* Inline: below the title (narrow pages) it lines up with the text, not indented by a button's padding. */}
