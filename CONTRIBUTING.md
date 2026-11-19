@@ -6,7 +6,7 @@ This guide covers how to develop, test, and deploy changes to the RHOAI Nightly 
 
 ### Required Versions
 
-- **Go**: 1.27 (`go.mod`; CI and the Containerfile use golang 1.27.4)
+- **Go**: 1.27; `go.mod` names toolchain go1.27.4, the version CI and the Containerfile use, so an older local Go 1.21+ downloads and runs it (`GOTOOLCHAIN=auto`, the default)
 - **Node.js**: 22.x, ≥ 22.13 for the test tooling (CI uses `node:22-alpine`)
 - **TypeScript**: 5.x
 
