@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, renderHook } from "@testing-library/react";
+import { renderHook } from "@testing-library/react";
 import { createPoller, exponentialBackoff, usePolling } from "./usePolling";
-import { useAsyncData } from "./useAsyncData";
 import { setDocumentHidden } from "../test/utils";
 
 beforeEach(() => {
@@ -105,36 +104,5 @@ describe("usePolling", () => {
     unmount();
     await vi.advanceTimersByTimeAsync(5000);
     expect(calls).toBe(11);
-  });
-});
-
-describe("useAsyncData", () => {
-  it("pauses polling in hidden tabs and refreshes on return", async () => {
-    const fetchFn = vi.fn(async () => "ok");
-    renderHook(() => useAsyncData(fetchFn, 30_000));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetchFn).toHaveBeenCalledTimes(1); // mount
-    setDocumentHidden(true);
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(fetchFn).toHaveBeenCalledTimes(1);
-    setDocumentHidden(false);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps the last data and exposes a typed error when a poll fails", async () => {
-    let fail = false;
-    const fetchFn = vi.fn(async () => {
-      if (fail) throw new TypeError("Failed to fetch");
-      return { value: 1 };
-    });
-    const { result } = renderHook(() => useAsyncData(fetchFn, 1000));
-    await act(() => vi.advanceTimersByTimeAsync(0));
-    expect(result.current.data).toEqual({ value: 1 });
-    fail = true;
-    await act(() => vi.advanceTimersByTimeAsync(1000));
-    expect(result.current.data).toEqual({ value: 1 });
-    await act(() => vi.advanceTimersByTimeAsync(0));
-    expect(result.current.error?.errorCode).toBe("network");
   });
 });

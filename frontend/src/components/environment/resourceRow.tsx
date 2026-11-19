@@ -197,9 +197,6 @@ export const StartingNote: React.FC<{ state: ResourceState; typical: string }> =
   </Stack>
 );
 
-/** Who created a resource, for its details. */
-export const createdBy = (state: ResourceState | undefined) => state?.managedByTool === false ? "Not this tool: it is left alone" : "This tool";
-
 /** An external link as a full-size link button, for action rows (isInline is
  *  for links inside running text: it drops the button height, so the link
  *  would sit higher than the buttons beside it). */

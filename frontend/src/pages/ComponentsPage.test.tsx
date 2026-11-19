@@ -38,7 +38,7 @@ describe("ComponentsPage component causes", () => {
   });
 });
 
-describe("ComponentsPage DSC states (A05-8, A08-6)", () => {
+describe("ComponentsPage DSC states (A05-8)", () => {
   it("no-dsc shows the create flow with the operator's defaults, not 'not installed'", async () => {
     const api = stubApi({
       "/api/components": { components: [], deployments: [], dscName: "", dscPhase: "", changedCount: 0, dscExists: false, dscState: "no-dsc", operatorVersion: "3.6.0", operatorPhase: "Succeeded" },
@@ -85,7 +85,7 @@ describe("ComponentsPage DSC states (A05-8, A08-6)", () => {
   });
 });
 
-describe("ComponentsPage Deployments table (A08-14, A08-11)", () => {
+describe("ComponentsPage Deployments table", () => {
   const deployments = [
     dep("agent-ops-ui"),
     dep("odh-observability", { ready: 0, rolloutStuck: true, pods: [{ name: "odh-observability-1", namespace: "redhat-ods-applications", phase: "Pending", node: "n", ready: false, restarts: 0, image: "", imageID: "", age: "2d", containers: [{ name: "manager", ready: false, restarts: 0, state: "waiting", reason: "ContainerCreating" }] }] }),

@@ -110,7 +110,7 @@ describe("Dashboard Dev session panel (A04-1)", () => {
   });
 });
 
-describe("Dashboard Dev deploy confirmations (A04-4, A08-4) and flavor (A04-3)", () => {
+describe("Dashboard Dev deploy confirmations (A04-4) and flavor (A04-3)", () => {
   it("Deploy latest main asks first and says what changes", async () => {
     const api = stubApi({ "/api/dashboard/state": clean(), "POST /api/dashboard/deploy-main": { success: true, message: "Deploying main", logs: [] } });
     renderPage();

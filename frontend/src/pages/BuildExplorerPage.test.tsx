@@ -82,7 +82,7 @@ beforeEach(() => {
   };
 });
 
-describe("Build Explorer installed build and compare (A08-5)", () => {
+describe("Build Explorer installed build and compare", () => {
   it("names the installed build and marks the newer build of its stream", async () => {
     setup();
     renderPage();
@@ -445,7 +445,7 @@ describe("Build Explorer search in the URL (?q=)", () => {
   });
 });
 
-describe("Build Explorer rows (A08-9, A08-12)", () => {
+describe("Build Explorer rows", () => {
   it("shows the components at once and fills commits in when labels arrive", async () => {
     const labels = deferred<void>();
     setup({ "/api/build-explorer/content": contentHandler({ labels: labels.promise }) });
@@ -462,7 +462,7 @@ describe("Build Explorer rows (A08-9, A08-12)", () => {
     expect(screen.getByRole("button", { name: "Category for rhoai-3.5: Core" })).toHaveTextContent("1");
   });
 
-  it("a Quay error is classified, never shown as a missing pull secret (A08-6)", async () => {
+  it("a Quay error is classified, never shown as a missing pull secret", async () => {
     stubApi({ "/api/build-explorer/tags": () => jsonResponse({ error: "Quay token request returned HTTP 401", errorCode: "registry_auth" }, 502) });
     renderPage();
     expect(await screen.findByText(/^Quay rejected the pull secret/)).toBeInTheDocument();

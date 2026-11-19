@@ -42,12 +42,6 @@ export function operatorInstalled(status: StatusResponse | null): boolean {
   return !!(status?.subscription.source || (status?.csv.phase && status.csv.phase !== "Not Found"));
 }
 
-export function truncateImage(image: string, maxLen = 60): string {
-  if (image.length <= maxLen) return image;
-  const keep = Math.floor((maxLen - 3) / 2);
-  return image.slice(0, keep) + "..." + image.slice(-keep);
-}
-
 /** Elapsed time since startMs as "42s" or "3m 5s". */
 export function formatElapsed(startMs: number, now = Date.now()): string {
   const elapsed = Math.max(0, Math.floor((now - startMs) / 1000));

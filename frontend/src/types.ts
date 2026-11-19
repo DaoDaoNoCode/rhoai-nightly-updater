@@ -791,8 +791,6 @@ export interface DashboardOverride {
   lastAction?: DashboardDevAction;
 }
 
-export type DashboardFlavor = "rhoai" | "odh";
-
 export interface DashboardState {
   override?: DashboardOverride;
   flavor?: string;

@@ -97,12 +97,6 @@ export function describeOutcomeError(outcome: { message: string; errorCode?: str
   }, genericTitle);
 }
 
-/** True when the error means the user may not mutate (or is signed out). */
-export function isPermissionError(e: unknown): boolean {
-  const err = toApiError(e);
-  return err.status === 401 || err.status === 403 || err.errorCode === "unauthorized" || err.errorCode === "forbidden";
-}
-
 /**
  * Friendly text for a Quay lookup failure reported by the backend. The
  * backend has no errorCode for Quay failures yet, so this reads its own
