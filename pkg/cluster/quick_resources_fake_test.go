@@ -48,6 +48,14 @@ type resourceFake struct {
 	// failDryRun maps "METHOD /path" to an HTTP status to return for a
 	// server-side dry run (?dryRun=All) of that request.
 	failDryRun map[string]int
+	// failEcho maps "METHOD /path" (a write) or "DRYRUN METHOD /path" (its
+	// server-side dry run) to an HTTP status returned with a message that
+	// quotes the request's URL and body, as an API server's validation
+	// error can quote the object it refuses. Tests use it to check that no
+	// secret sent in a request comes back in a message.
+	failEcho map[string]int
+	// echoed are the request bodies failEcho quoted.
+	echoed []string
 	// onMergePatch, when set, sees each merge patch and the object it
 	// produces (under the lock), for example to record managedFields.
 	onMergePatch func(r *http.Request, k fakeKey, patch, next map[string]interface{})
@@ -61,7 +69,7 @@ type fakeKey struct {
 func newResourceFake(t *testing.T) (*resourceFake, *Client) {
 	t.Helper()
 	isolateClusterCaches(t)
-	f := &resourceFake{t: t, objects: map[fakeKey]map[string]interface{}{}, fail: map[string]int{}, failDryRun: map[string]int{}}
+	f := &resourceFake{t: t, objects: map[fakeKey]map[string]interface{}{}, fail: map[string]int{}, failDryRun: map[string]int{}, failEcho: map[string]int{}}
 	srv := httptest.NewTLSServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	c := &Client{baseURL: srv.URL, token: "test-token", httpClient: srv.Client(), ctx: context.Background()}
@@ -253,6 +261,10 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	dryRun := r.URL.Query().Get("dryRun") == "All"
+	echoKey := r.Method + " " + r.URL.Path
+	if dryRun {
+		echoKey = "DRYRUN " + echoKey
+	}
 	if dryRun {
 		f.requests = append(f.requests, "DRYRUN "+r.Method+" "+r.URL.Path)
 		if code, ok := f.failDryRun[r.Method+" "+r.URL.Path]; ok {
@@ -265,6 +277,12 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 			f.status(w, code, "injected failure")
 			return
 		}
+	}
+	// A JSON patch (the field-ownership upgrade) carries no object to quote.
+	if code, ok := f.failEcho[echoKey]; ok && !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json-patch+json") {
+		f.echoed = append(f.echoed, string(body))
+		f.status(w, code, fmt.Sprintf("%s %s is invalid: the request was %s", r.Method, r.URL.String(), body))
+		return
 	}
 	// API discovery documents (/apis/<group>): the ones a test set in
 	// groups, else 404, as for a group that is not served, so callers use

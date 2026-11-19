@@ -129,7 +129,7 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 		}
 	}
 	if what, err := dbPlan.dryRun(c); err != nil {
-		return m.fail("check", redactURL(fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", what, err, templateHint(err)), dbPlan.url), maasWriteCode(err), "dry run failed")
+		return m.fail("check", dbPlan.redact(fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", what, err, templateHint(err))), maasWriteCode(err), "dry run failed")
 	}
 	if !foreignGW {
 		if msg, code := m.applyGateway(gwPlan, true); msg != "" {

@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -137,24 +136,103 @@ func validateMaaSConnectionURL(raw string) string {
 	return ""
 }
 
-// redactURL removes a connection URL, its password and the password
-// decoded from msg: an API server's error could quote what was sent.
-func redactURL(msg, connURL string) string {
-	if connURL == "" {
+// secretForms are the ways a connection URL and the passwords (its own,
+// and any given) can show in an API server's message, which may quote the
+// object it refuses: as sent (a Secret's data is base64), as typed (the
+// URL's raw userinfo and password), percent-encoded every way a URL holds
+// a password (the development URL encodes every byte), and JSON-escaped.
+func secretForms(urls, passwords []string) []string {
+	var out []string
+	add := func(s string) {
+		if s == "" {
+			return
+		}
+		j, _ := json.Marshal(s)
+		out = append(out, s, base64.StdEncoding.EncodeToString([]byte(s)), string(j[1:len(j)-1]))
+	}
+	for _, connURL := range urls {
+		add(connURL)
+		if _, rest, ok := strings.Cut(connURL, "://"); ok {
+			authority := rest
+			if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+				authority = rest[:i]
+			}
+			if at := strings.LastIndex(authority, "@"); at >= 0 {
+				add(authority[:at])
+				if _, raw, ok := strings.Cut(authority[:at], ":"); ok {
+					add(raw)
+				}
+			}
+		}
+		if u, err := url.Parse(connURL); err == nil && u.User != nil {
+			if p, ok := u.User.Password(); ok {
+				passwords = append(passwords, p)
+			}
+		}
+	}
+	for _, p := range passwords {
+		if p == "" {
+			continue
+		}
+		var hex strings.Builder
+		for _, c := range []byte(p) {
+			fmt.Fprintf(&hex, "%%%02x", c)
+		}
+		for _, f := range []string{p, url.QueryEscape(p), url.PathEscape(p), url.UserPassword("", p).String()[1:], hex.String(), strings.ToUpper(hex.String())} {
+			add(f)
+		}
+	}
+	return out
+}
+
+// redactURL replaces every form of a connection URL and of the passwords
+// in msg (secretForms) with [redacted]: an API server's error could quote
+// what was sent. Any non-empty password counts, however short: the
+// message may become hard to read, never revealing. Overlapping finds are
+// redacted as one.
+func redactURL(msg, connURL string, passwords ...string) string {
+	return redactSecrets(msg, []string{connURL}, passwords)
+}
+
+// redact removes every secret the plan holds from msg: the URL given, and
+// the development database's password with its URL.
+func (p *maasDBPlan) redact(msg string, more ...string) string {
+	urls, passwords := append([]string{p.url}, more...), []string{}
+	if p.password != "" {
+		urls, passwords = append(urls, maasPOCConnectionURL(p.password)), append(passwords, p.password)
+	}
+	return redactSecrets(msg, urls, passwords)
+}
+
+func redactSecrets(msg string, urls, passwords []string) string {
+	covered := make([]bool, len(msg))
+	any := false
+	for _, f := range secretForms(urls, passwords) {
+		for from := 0; from < len(msg); {
+			i := strings.Index(msg[from:], f)
+			if i < 0 {
+				break
+			}
+			for k := from + i; k < from+i+len(f); k++ {
+				covered[k] = true
+			}
+			any = true
+			from += i + 1
+		}
+	}
+	if !any {
 		return msg
 	}
-	secrets := []string{connURL}
-	if u, err := url.Parse(connURL); err == nil && u.User != nil {
-		if p, ok := u.User.Password(); ok && p != "" {
-			secrets = append(secrets, p, url.UserPassword("", p).String()[1:])
+	var b strings.Builder
+	for i := 0; i < len(msg); i++ {
+		switch {
+		case !covered[i]:
+			b.WriteByte(msg[i])
+		case i == 0 || !covered[i-1]:
+			b.WriteString("[redacted]")
 		}
 	}
-	for _, s := range secrets {
-		if len(s) >= 4 {
-			msg = strings.ReplaceAll(msg, s, "[redacted]")
-		}
-	}
-	return msg
+	return b.String()
 }
 
 // --- the database as it is ------------------------------------------------------------
@@ -796,6 +874,7 @@ func (p *maasDBPlan) connURL(c *Client) (string, error) {
 
 // dryRun checks every write of the database with the API server, where its
 // namespace (and CloudNativePG's API) exist already.
+// Its error may quote what was sent: callers redact it (p.redact).
 func (p *maasDBPlan) dryRun(c *Client) (string, error) {
 	ns := p.state.ns
 	if p.cnpgPlan != nil {
@@ -830,7 +909,7 @@ func (p *maasDBPlan) dryRun(c *Client) (string, error) {
 		return "", nil
 	}
 	if _, err := ensureMaaSDBObject(c, "Secret", ns, maasDBConfigObject(ns, secretURL), p.state.secret, p.state.secretFound, true); err != nil {
-		return maasDesc("Secret", ns), errors.New(redactURL(err.Error(), secretURL))
+		return maasDesc("Secret", ns), err
 	}
 	return "", nil
 }
@@ -921,7 +1000,7 @@ func (m *maasRun) makeDatabase(rec *maasRecord, p *maasDBPlan, maasOn, switching
 		for _, k := range []string{"PostgresSecret", "PostgresDeployment", "PostgresService"} {
 			meta, found := st.poc[k]
 			if _, err := ensureMaaSDBObject(c, k, ns, maasPOCObject(k, ns, p.password, p.image), meta, found, false); err != nil {
-				return m.fail("database", fmt.Sprintf("Failed to apply %s: %v. Run it again to continue.", maasDesc(k, ns), err), maasWriteCode(err), "db apply failed")
+				return m.fail("database", p.redact(fmt.Sprintf("Failed to apply %s: %v. Run it again to continue.", maasDesc(k, ns), err)), maasWriteCode(err), "db apply failed")
 			}
 			m.logs = append(m.logs, "OK: "+maasDesc(k, ns))
 		}
@@ -970,7 +1049,7 @@ func (m *maasRun) writeDBConfig(rec *maasRecord, p *maasDBPlan, st maasDBState, 
 	}
 	written, err := ensureMaaSDBObject(c, "Secret", ns, maasDBConfigObject(ns, connURL), st.secret, st.secretFound, false)
 	if err != nil {
-		return m.fail("database", redactURL(fmt.Sprintf("Failed to write Secret %s/%s: %v.", ns, maasDBConfigSecret, err), connURL), maasWriteCode(err), "secret apply failed")
+		return m.fail("database", p.redact(fmt.Sprintf("Failed to write Secret %s/%s: %v.", ns, maasDBConfigSecret, err), connURL), maasWriteCode(err), "secret apply failed")
 	}
 	if switching {
 		rec.Database, rec.DBNamespace = p.target, ns
@@ -1066,7 +1145,7 @@ func (m *maasRun) changeDatabase(req *types.MaaSDatabaseRequest) (*types.Operati
 	}
 	old := p.state.kind
 	if what, err := p.dryRun(c); err != nil {
-		return m.fail("check", redactURL(fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", what, err, templateHint(err)), p.url), maasWriteCode(err), "dry run failed")
+		return m.fail("check", p.redact(fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", what, err, templateHint(err))), maasWriteCode(err), "dry run failed")
 	}
 	m.step("check", "success", fmt.Sprintf("MaaS can switch from %s to %s.", maasDBKindText(old), maasDBKindText(p.target)))
 	if r, err := m.ensureCNPG(&rec, p); r != nil || err != nil {

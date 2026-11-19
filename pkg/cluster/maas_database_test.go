@@ -1,8 +1,12 @@
 package cluster
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -45,21 +49,49 @@ func secretURL(t *testing.T, mc *modelsCluster) string {
 	return string(b)
 }
 
-// noLeak fails when the password shows anywhere but in maas-db-config:
-// responses, step events, logs, this tool's records and activity.
+// leakForms are the ways a secret could show: as it is, base64 (a
+// Secret's data), percent-encoded every way a URL holds it, and
+// JSON-escaped.
+func leakForms(secret string) []string {
+	var hex strings.Builder
+	for _, c := range []byte(secret) {
+		fmt.Fprintf(&hex, "%%%02x", c)
+	}
+	j, _ := json.Marshal(secret)
+	forms := []string{secret, base64.StdEncoding.EncodeToString([]byte(secret)), hex.String(), strings.ToUpper(hex.String()),
+		url.QueryEscape(secret), url.PathEscape(secret), string(j[1 : len(j)-1])}
+	return forms
+}
+
+// captureSlog sends the log to a buffer for the rest of the test.
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	orig := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(orig) })
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	return &buf
+}
+
+// noLeak fails when the secret shows, in any of its forms, anywhere but in
+// maas-db-config and postgres-creds: responses, step events, this tool's
+// records and every other object (activity included), and the status.
 func noLeak(t *testing.T, mc *modelsCluster, secret string, res *types.OperationResponse, events []UpdateStepEvent) {
 	t.Helper()
 	out, _ := json.Marshal(struct {
 		R *types.OperationResponse
 		E []UpdateStepEvent
 	}{res, events})
-	if strings.Contains(string(out), secret) {
-		t.Fatalf("the password is in the response or the steps: %s", out)
-	}
+	var status []byte
 	if st, err := GetMaaSStatus(mc.c); err == nil {
-		raw, _ := json.Marshal(st)
-		if strings.Contains(string(raw), secret) {
-			t.Fatal("the password is in the status")
+		status, _ = json.Marshal(st)
+	}
+	for _, form := range leakForms(secret) {
+		if strings.Contains(string(out), form) {
+			t.Fatalf("the secret (as %q) is in the response or the steps: %s", form, out)
+		}
+		if strings.Contains(string(status), form) {
+			t.Fatalf("the secret (as %q) is in the status", form)
 		}
 	}
 	mc.f.mu.Lock()
@@ -69,9 +101,97 @@ func noLeak(t *testing.T, mc *modelsCluster, secret string, res *types.Operation
 			continue
 		}
 		raw, _ := json.Marshal(obj)
-		if strings.Contains(string(raw), secret) || strings.Contains(string(raw), base64.StdEncoding.EncodeToString([]byte(tUserDBURL))) {
-			t.Fatalf("the password is in %+v", k)
+		for _, form := range append(leakForms(secret), base64.StdEncoding.EncodeToString([]byte(tUserDBURL))) {
+			if strings.Contains(string(raw), form) {
+				t.Fatalf("the secret (as %q) is in %+v", form, k)
+			}
 		}
+	}
+}
+
+// echoedSecrets are the connection URLs and passwords in the bodies the
+// fake quoted back: what a refusal could carry.
+func echoedSecrets(t *testing.T, mc *modelsCluster) []string {
+	t.Helper()
+	mc.f.mu.Lock()
+	defer mc.f.mu.Unlock()
+	var out []string
+	for _, body := range mc.f.echoed {
+		var obj struct {
+			Data map[string]string `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(body), &obj); err != nil {
+			t.Fatalf("echoed %q: %v", body, err)
+		}
+		for _, k := range []string{"DB_CONNECTION_URL", "POSTGRES_PASSWORD"} {
+			if v, err := base64.StdEncoding.DecodeString(obj.Data[k]); err == nil && len(v) > 0 {
+				out = append(out, string(v))
+			}
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("the fake quoted no secret back: the test checks nothing")
+	}
+	return out
+}
+
+// An API server's refusal can quote the object it refuses: the connection
+// URL (base64 in maas-db-config's data) and the development database's
+// password (base64 in postgres-creds'). No message carries them, in any
+// form, whichever write is refused: a dry run, a create, an apply of an
+// existing Secret, in Set up and in Change database.
+func TestMaaSDatabase_RefusalsQuotingTheSecretAreRedacted(t *testing.T) {
+	const secrets = "/api/v1/namespaces/redhat-ai-gateway-infra/secrets"
+	otherURL := "postgresql://other:" + "Tw0-%40th3r" + "@db2.example.com/maas?sslmode=require"
+	ext := func(u string) *types.MaaSDatabaseRequest {
+		return &types.MaaSDatabaseRequest{Kind: "external", ConnectionURL: u}
+	}
+	dev := &types.MaaSDatabaseRequest{Kind: "development"}
+	for _, tc := range []struct {
+		name string
+		prep *types.MaaSDatabaseRequest
+		req  types.MaaSRequest
+		echo string
+	}{
+		{"Set up, yours: the dry run of maas-db-config", nil, types.MaaSRequest{Action: "setup", Database: ext(tUserDBURL)}, "DRYRUN POST " + secrets},
+		{"Set up, yours: the write of maas-db-config", nil, types.MaaSRequest{Action: "setup", Database: ext(tUserDBURL)}, "POST " + secrets},
+		{"Set up, development: the dry run of postgres-creds", nil, types.MaaSRequest{Action: "setup", Database: dev}, "DRYRUN POST " + secrets},
+		{"Set up, development: the write of postgres-creds", nil, types.MaaSRequest{Action: "setup", Database: dev}, "POST " + secrets},
+		{"Change database, yours to yours: the dry run of the apply", ext(tUserDBURL), types.MaaSRequest{Action: "change-database", Database: ext(otherURL), ConfirmKeysLost: true}, "DRYRUN PATCH " + secrets + "/maas-db-config"},
+		{"Change database, yours to yours: the apply", ext(tUserDBURL), types.MaaSRequest{Action: "change-database", Database: ext(otherURL), ConfirmKeysLost: true}, "PATCH " + secrets + "/maas-db-config"},
+		{"Change database, yours to development: the write of postgres-creds", ext(tUserDBURL), types.MaaSRequest{Action: "change-database", Database: dev, ConfirmKeysLost: true}, "POST " + secrets},
+		{"Change database, yours to development: the apply of maas-db-config", ext(tUserDBURL), types.MaaSRequest{Action: "change-database", Database: dev, ConfirmKeysLost: true}, "PATCH " + secrets + "/maas-db-config"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureSlog(t)
+			mc := newMaaSCluster(t)
+			devDatabaseRuns(mc)
+			if tc.prep != nil {
+				if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tc.prep}); !res.Success {
+					t.Fatalf("prep: %+v", res)
+				}
+			}
+			mc.f.failEcho[tc.echo] = 422
+			res, events := runMaaSOp(t, mc.c, tc.req)
+			if res.Success {
+				t.Fatalf("succeeded although %s was refused: %+v", tc.echo, res)
+			}
+			for _, s := range echoedSecrets(t, mc) {
+				noLeak(t, mc, s, res, events)
+				if u, err := url.Parse(s); err == nil && u.User != nil {
+					p, _ := u.User.Password()
+					noLeak(t, mc, p, res, events)
+				}
+				for _, form := range leakForms(s) {
+					if strings.Contains(logs.String(), form) {
+						t.Fatalf("the secret (as %q) is in the log", form)
+					}
+				}
+			}
+			if !strings.Contains(res.Message, "[redacted]") {
+				t.Errorf("the refusal is not shown, redacted: %q", res.Message)
+			}
+		})
 	}
 }
 
@@ -111,6 +231,29 @@ func TestValidateMaaSConnectionURL(t *testing.T) {
 	}
 	if got := redactURL("rejected "+tUserDBURL+" and "+tUserDBPass, tUserDBURL); strings.Contains(got, tUserDBPass) {
 		t.Errorf("redactURL left the password: %q", got)
+	}
+}
+
+// redactURL covers every form a secret can take in a message, any
+// password however short, and overlapping finds as one.
+func TestRedactURL_EveryForm(t *testing.T) {
+	typed := "postgresql://u:p%40ss@db/maas" // the password is p@ss, typed percent-encoded
+	for _, leak := range []string{typed, base64.StdEncoding.EncodeToString([]byte(typed)), "u:p%40ss", "p%40ss", "p@ss", "p%40ss", "%70%40%73%73", "%70%40%73%73"} {
+		if got := redactURL("refused: "+leak+" here", typed); strings.Contains(got, "p@ss") || strings.Contains(got, "40ss") || got != "refused: [redacted] here" {
+			t.Errorf("%q: %q", leak, got)
+		}
+	}
+	dev := maasPOCConnectionURL("pw")
+	for _, leak := range []string{dev, base64.StdEncoding.EncodeToString([]byte(dev)), "%70%77", "pw", base64.StdEncoding.EncodeToString([]byte("pw"))} {
+		if got := (&maasDBPlan{password: "pw"}).redact("x " + leak + " y"); got != "x [redacted] y" {
+			t.Errorf("dev %q: %q", leak, got)
+		}
+	}
+	if got := redactURL("abcab", "postgresql://u:ab@h/d"); got != "[redacted]c[redacted]" {
+		t.Errorf("a 2-character password: %q", got)
+	}
+	if got := redactURL("nothing here", ""); got != "nothing here" {
+		t.Errorf("no secret: %q", got)
 	}
 }
 
