@@ -220,7 +220,10 @@ only accepts a tag whose version is the top dated section. See
   MaaSSubscription or MaaSAuthPolicy exists or this tool's MaaS record
   shows a setup or a publication, naming them and pointing at **Clean up
   MaaS** on the MaaS tab (or keep `aigateway` Managed); a read that fails
-  refuses too. A hard reset that brings MaaS back warns that it is down
+  refuses too, and so does a list that answers 404 while discovery serves
+  the MaaS API (the lists use the version discovery reports, never a
+  `v1alpha1` fallback). Clean up MaaS and Change database check others'
+  MaaS objects the same way. A hard reset that brings MaaS back warns that it is down
   meanwhile. No new RBAC: the lists Clean up MaaS already reads.
 - **Resets keep the components you turned on.** Both reset dialogs offer
   "Keep the components you turned on (N): ...", checked by default: what
