@@ -21,7 +21,7 @@ const database = (extra: Partial<MaaSDatabase> = {}): MaaSDatabase => ({
 });
 const maas = (extra: Partial<MaaSStatus>): MaaSStatus => ({
   platform: { deployed: false, ready: false, managedByTool: false }, subscription: "rhoai-nightly-updater-subscription",
-  parts: [{ id: "database", title: "Database (PostgreSQL) and maas-db-config", state: "missing" }], ...extra,
+  parts: [{ id: "database", title: "Database", state: "missing" }], ...extra,
 });
 const open = () => render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
 
@@ -127,7 +127,7 @@ describe("MaaS dialogs", () => {
   it("Change database from your PostgreSQL says it is not changed or deleted, and warns only for another database", async () => {
     stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: [] },
       "/api/resources/maas": maas({ database: database({ current: "external", needed: false }), platform: { deployed: true, ready: true, managedByTool: true },
-        parts: [{ id: "database", title: "Database (PostgreSQL) and maas-db-config", state: "ready", managedByTool: true,
+        parts: [{ id: "database", title: "Database", state: "ready", managedByTool: true,
           actions: [{ id: "change-database" as never, label: "Change database", summary: "", changes: [], danger: true }] }] }),
       "POST /api/resources/maas/stream": done });
     open();
@@ -147,7 +147,7 @@ describe("MaaS dialogs", () => {
   it("Change database is offered only by the database part, and needs the loss of every key confirmed", async () => {
     const api = stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: [] },
       "/api/resources/maas": maas({ database: database({ current: "development", needed: false }), platform: { deployed: true, ready: true, managedByTool: true },
-        parts: [{ id: "database", title: "Database (PostgreSQL) and maas-db-config", state: "ready", managedByTool: true,
+        parts: [{ id: "database", title: "Database", state: "ready", managedByTool: true,
           actions: [{ id: "change-database" as never, label: "Change database", summary: "", changes: [], danger: true }] }] }),
       "POST /api/resources/maas/stream": done });
     open();

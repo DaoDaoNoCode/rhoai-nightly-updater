@@ -316,7 +316,7 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
       <StackItem>
         <FeatureSection title="What this creates">
           <CreatesList items={[
-            <>Only what is missing, as the MaaS docs install it: Red Hat Connectivity Link from <code>redhat-operators</code> in <code>kuadrant-system</code>, set to deny traffic when rate limiting fails (the docs&apos; recommendation), and its Kuadrant CR; and Authorino TLS (the docs&apos; <code>setup-authorino-tls.sh</code>). These stay after Remove: other RHOAI features use them</>,
+            <>Only what is missing, as the MaaS docs install it: Red Hat Connectivity Link from <code>redhat-operators</code> in <code>kuadrant-system</code>, set to deny traffic when rate limiting fails (the docs&apos; recommendation), and its Kuadrant instance; and Authorino TLS (the docs&apos; <code>setup-authorino-tls.sh</code>). These stay after Remove: other RHOAI features use them</>,
             <>The AI gateway&apos;s namespace (<code>{maas?.platform.namespace ?? "redhat-ai-gateway-infra"}</code>) when it does not exist yet; Remove deletes it when nothing else is in it</>,
             <>MaaS&apos;s PostgreSQL, as you choose in Set up (the MaaS docs leave it to you): yours (only Secret <code>maas-db-config</code> is written), the docs&apos; development database (one pod, no volume: keys are lost when it restarts), or a persistent one on CloudNativePG, this tool&apos;s own option, which installs the CloudNativePG operator from <code>certified-operators</code> in <code>cnpg-system</code> (it stays after Remove). A <code>maas-db-config</code> someone else wrote is used as it is</>,
             <>Gateway <code>maas-default-gateway</code> in <code>openshift-ingress</code> with an external load balancer at <code>maas.&lt;apps domain&gt;</code> (and GatewayClass <code>openshift-default</code> when the cluster has none; it stays after Remove, as OpenShift&apos;s shared class)</>,
@@ -388,10 +388,10 @@ export function maasSteps(p: MaaSPending): { id: string; title: string }[] {
       return [
         { id: "check", title: "Check what the platform needs" },
         { id: "rhcl", title: "Red Hat Connectivity Link" },
-        { id: "kuadrant", title: "Kuadrant CR" },
+        { id: "kuadrant", title: "Connectivity Link instance (Kuadrant)" },
         { id: "cnpg", title: "CloudNativePG operator (if chosen)" },
         { id: "database", title: "Database and its connection Secret" },
-        { id: "gateway", title: "Gateway maas-default-gateway" },
+        { id: "gateway", title: "MaaS gateway" },
         { id: "authorino-tls", title: "Authorino TLS" },
         { id: "dsc", title: "Turn on MaaS in the DataScienceCluster" },
         { id: "ready", title: "Wait for maas-api and the tenant" },
@@ -556,7 +556,7 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
           <>Unpublished: this tool&apos;s models ({(m?.items ?? []).filter((i) => i.published).map((i) => `${i.name} in ${i.namespace}`).join(", ") || "none"}).</>,
           <>DataScienceCluster: <code>aigateway.modelsAsAService</code> and <code>aigateway</code> back to their values before setup (each only if this tool changed it and nobody has set it since).</>,
           <>Deleted: Gateway <code>maas-default-gateway</code>; the database this tool created ({databaseLabel(m?.database?.current ?? "")}: its objects, with its data) and Secret <code>maas-db-config</code> if this tool wrote it. A PostgreSQL of your own and a Secret someone else wrote are never touched; namespace <code>{m?.platform.namespace ?? "redhat-ai-gateway-infra"}</code> only if this tool created it and nothing else is in it.</>,
-          <>Kept, also if this tool installed or set them up: Red Hat Connectivity Link, its Kuadrant CR and Authorino TLS, and the CloudNativePG operator. They are shared platform pieces: RHOAI&apos;s inference gateway authentication uses Kuadrant. Remove them from the OpenShift console if nothing needs them.</>,
+          <>Kept, also if this tool installed or set them up: Red Hat Connectivity Link, its Kuadrant instance and Authorino TLS, and the CloudNativePG operator. They are shared platform pieces: RHOAI&apos;s inference gateway authentication uses Kuadrant. Remove them from the OpenShift console if nothing needs them.</>,
           <>Kept: GatewayClass <code>openshift-default</code>, also if this tool created it: it is OpenShift&apos;s shared class for gateways and costs nothing on its own. Also kept: the namespaces RHOAI made, and every object that was not created by this tool.</>,
         ],
       };

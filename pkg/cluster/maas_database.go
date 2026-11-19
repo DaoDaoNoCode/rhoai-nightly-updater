@@ -710,7 +710,7 @@ type maasDBStatus struct {
 func maasDatabaseStatus(c *Client, rec maasRecord, infra string, cnpg operatorState, cnpgReadErr error) maasDBStatus {
 	ns := firstNonEmpty(rec.DBNamespace, infra)
 	out := maasDBStatus{db: &types.MaaSDatabase{Namespace: ns, Default: maasDBDefault}}
-	part := types.MaaSPart{ID: "database", Title: "Database (PostgreSQL) and maas-db-config", DocURL: maasDocsBase + "install/maas-setup.md#database-setup"}
+	part := types.MaaSPart{ID: "database", Title: "Database", DocURL: maasDocsBase + "install/maas-setup.md#database-setup"}
 	done := func() maasDBStatus {
 		if rec.InfraNamespace != "" && rec.InfraNamespace == ns {
 			part.ManagedByTool = true

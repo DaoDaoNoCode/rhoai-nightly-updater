@@ -754,7 +754,7 @@ async (page) => {
       await open("/test-resources?tab=maas", "env-maas-published");
       await crop("environment-maas", [panel().getByRole("heading", { name: "MaaS", level: 2 }), panel().getByRole("grid", { name: "This tool's models in MaaS" })], {
         notes: [
-          { at: part("Database (PostgreSQL) and maas-db-config"), n: 1, pos: "r" },
+          { at: part("Database"), n: 1, pos: "r" },
           { at: part("Authorino TLS"), n: 2, pos: "r" },
           { at: panel().getByRole("button", { name: "Unpublish" }), n: 3, pos: "r" },
         ],

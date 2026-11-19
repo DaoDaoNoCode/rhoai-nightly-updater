@@ -439,7 +439,7 @@ func planKuadrantPart(c *Client, p *featurePlan) types.MaaSPart {
 		p.refuse(msg, errorCodeFromK8sErr(err))
 		pt.State, pt.Message = "unknown", msg
 	case k.found && k.ready:
-		pt.State, pt.Message, pt.NotManaged = "ready", "Kuadrant "+k.namespace+"/kuadrant is Ready", !toolOwned(k.meta)
+		pt.State, pt.Message, pt.NotManaged = "ready", k.namespace+"/kuadrant is ready", !toolOwned(k.meta)
 		pt.ManagedByTool = toolOwned(k.meta)
 	case k.found:
 		pt.State, pt.Message = "waiting", "Kuadrant "+k.namespace+"/kuadrant is not Ready yet: "+truncateMessage(firstNonEmpty(k.message, "no message"))

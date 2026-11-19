@@ -1177,7 +1177,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	// ready, create a Kuadrant instance").
 	kq, kErr := readKuadrant(c)
 	kuadrantNS := firstNonEmpty(kq.namespace, rhcl.csvNS, rhclOperator.namespace)
-	kPart := types.MaaSPart{ID: "kuadrant", Title: "Kuadrant CR", DocURL: maasDocsBase + "install/platform-setup.md#install-gateway-api-controller"}
+	kPart := types.MaaSPart{ID: "kuadrant", Title: "Connectivity Link instance (Kuadrant)", DocURL: maasDocsBase + "install/platform-setup.md#install-gateway-api-controller"}
 	_, kByTool := rec.Shared["kuadrant"]
 	switch {
 	case kErr != nil:
@@ -1187,7 +1187,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		kPart.Commands = kuadrantCommands(kuadrantNS)
 		plan(fmt.Sprintf("Create the Kuadrant CR %s/kuadrant", kuadrantNS))
 	case kq.ready:
-		kPart.State, kPart.Message = "ready", "Kuadrant "+kq.namespace+"/kuadrant is Ready"
+		kPart.State, kPart.Message = "ready", kq.namespace+"/kuadrant is ready"
 	default:
 		kPart.State, kPart.Message = "waiting", "Kuadrant is not Ready: "+firstNonEmpty(kq.message, "no message")
 	}
@@ -1208,7 +1208,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	st.Database = dbs.db
 
 	// The gateway.
-	gwPart := types.MaaSPart{ID: "gateway", Title: "Gateway maas-default-gateway", DocURL: maasDocsBase + "install/maas-setup.md#create-gateway"}
+	gwPart := types.MaaSPart{ID: "gateway", Title: "MaaS gateway", DocURL: maasDocsBase + "install/maas-setup.md#create-gateway"}
 	gw, gwErr := readMaaSGateway(c)
 	switch {
 	case gwErr != nil:
@@ -1229,7 +1229,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		case gw.acceptedErr != "":
 			gwPart.State, gwPart.Message = "problem", "Not accepted: "+truncateMessage(gw.acceptedErr)
 		case gw.programmed && gw.address != "":
-			gwPart.State, gwPart.Message = "ready", "Programmed at "+gw.address
+			gwPart.State, gwPart.Message = "ready", fmt.Sprintf("%s in %s, programmed at %s", maasGatewayName, inferenceGatewayNamespace, gw.address)
 		default:
 			gwPart.State, gwPart.Message = "waiting", "Waiting for its load balancer"
 		}

