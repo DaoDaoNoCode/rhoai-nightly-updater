@@ -52,6 +52,11 @@ var rbacCallsNotUsingTheSAToken = map[string]string{
 	"dsc_hard_reset_teardown.go:namespaceOwnerBlocker": "hard reset: lists the namespaces with the signed-in user's token",
 	"dsc_hard_reset_teardown.go:read":                  "hard reset: reads a namespace's owner, of any cluster-scoped kind, with the signed-in user's token",
 	"dsc_hard_reset_teardown.go:path":                  "hard reset: API discovery of the group of a namespace's owner, with the signed-in user's token",
+	// Removing a component that serves a CRD conversion webhook lists that
+	// CRD's objects (of any API group) with the signed-in cluster-admin's
+	// own client, and refuses without one (conversionBlocker). The
+	// ServiceAccount is granted none of those kinds on purpose.
+	"diagnostics_disable.go:listConversionObjects": "component removal: lists the objects of a CRD whose conversion webhook the component serves, with the signed-in user's token",
 }
 
 // Reads made with the signed-in user's own token by the read routes of

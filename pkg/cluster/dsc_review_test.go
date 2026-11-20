@@ -33,19 +33,25 @@ func blockReasons(p *types.DSCPlan, component string) string {
 
 // The live 3.6 bug: the plan showed no blocker for sparkoperator while the
 // change refused it. Plan and change run planToggle; the dialog gets the
-// refusal with the commands that check for objects.
+// refusal naming the objects that block it and how to delete them.
 func TestToggleOfAConversionWebhookComponentIsRefusedInThePlanAsInTheChange(t *testing.T) {
 	f, c := managerWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.sparkoperator.managementState", "Managed")
 	})
-	putConversionCRD(f, "sparkapplications.sparkoperator.k8s.io", "spark-operator-webhook-service")
-	putConversionCRD(f, "scheduledsparkapplications.sparkoperator.k8s.io", "spark-operator-webhook-service")
+	putSparkCRD(f, "sparkapplications")
+	putSparkCRD(f, "scheduledsparkapplications")
+	f.put("/apis/sparkoperator.k8s.io/v1beta2/namespaces/team-a/scheduledsparkapplications/nightly", map[string]any{})
+	f.put("/apis/sparkoperator.k8s.io/v1beta2/namespaces/team-b/sparkapplications/pi", map[string]any{})
 	plan, err := PlanDSCChange(c, "toggle", "sparkoperator", "Removed", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	why := blockReasons(plan, "sparkoperator")
-	for _, want := range []string{"oc get scheduledsparkapplications.sparkoperator.k8s.io -A", "oc get sparkapplications.sparkoperator.k8s.io -A", "If none exist, set sparkoperator to Removed yourself in the OpenShift console"} {
+	for _, want := range []string{
+		"1 object of scheduledsparkapplications.sparkoperator.k8s.io exists: team-a/nightly. Delete it first: oc delete scheduledsparkapplications.sparkoperator.k8s.io -n <namespace> <name>.",
+		"1 object of sparkapplications.sparkoperator.k8s.io exists: team-b/pi.",
+		"The tool does not remove sparkoperator until none remain.",
+	} {
 		if !strings.Contains(why, want) {
 			t.Fatalf("plan blocker %q lacks %q", why, want)
 		}
