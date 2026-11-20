@@ -18,6 +18,49 @@ version (`vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`, from 4.1.0 on) are tagged
 while its section still reads `- unreleased`, and get no section of their
 own. See [CONTRIBUTING.md](CONTRIBUTING.md#releases).
 
+## [5.0.0] - unreleased
+
+Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-to-v500)).
+Includes 4.1.0 below.
+
+### Changed
+
+- **Every RHOAI user can sign in, and sees what is theirs.** oauth-proxy's
+  sign-in gate is now "may `get` `auths.services.platform.opendatahub.io`",
+  which RHOAI grants to its Auth CR's allowed groups (by default every
+  OpenShift user); before, only users who could list pods in
+  `redhat-ods-operator` got in. Cluster-admins see everything as before.
+  Everyone else gets a reviewed cluster summary (new `GET /api/summary`:
+  the updater's version, RHOAI's version, channel and phase, the installed
+  and newest nightly build, the DataScienceCluster and its components),
+  Build Explorer, and the Environment page for their own projects, read
+  with their own token. Every other read answers 403 `admin_only`; a GET
+  route nobody classified is admin-only, and a test fails until it is
+  classified ([SECURITY.md](SECURITY.md#per-user-views-500)).
+- `GET /api/user/permissions` reports `role`: `admin` or `user`.
+- `GET /api/operation` gives a user who is not a cluster-admin only
+  `{running, label, startedAt}`: never who started it or what it acts on.
+- The projects list (`GET /api/resources/projects`) comes from the
+  OpenShift projects API with the user's own token, for everyone; the
+  Playground and MLflow samples status read with the user's own token
+  (the Playground's projects are the user's only), and a user who is not a
+  cluster-admin gets `GET /api/resources/status?project=` for one of their
+  projects, read with their token.
+- A refusal of a read made with the user's own token is
+  `forbidden_for_user` ("your account may not see this"), never the
+  ServiceAccount's "re-apply the template" hint.
+
+### Security
+
+- The app now receives the `user:full` token of every RHOAI user who signs
+  in, not only cluster-admins'; it uses a non-admin's token only for their
+  own reads.
+- The ServiceAccount gains no permission and loses three: `get` on the
+  MLflow samples' names, on ConfigMap `gen-ai-aa-custom-model-endpoints` and
+  on InferenceServices.
+- The MLflow samples status was cached per project for every user; caches
+  of reads made with a user's token are now keyed by that token.
+
 ## [4.1.0] - unreleased
 
 Same template as 4.0.0 (revision 7).

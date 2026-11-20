@@ -5,7 +5,8 @@ For anyone who installed the updater before releases existed (before
 `vMAJOR.MINOR.PATCH`; a new MAJOR means the deployment template changed and
 needs a full redeploy ([CHANGELOG.md](../CHANGELOG.md)). From 2.x to 3.0.0:
 [section 5](#5-upgrade-to-v300); to 4.0.0 (changes run with your own token, sign in again once):
-[Upgrade to v4.0.0](#upgrade-to-v400-changes-run-with-your-own-token).
+[Upgrade to v4.0.0](#upgrade-to-v400-changes-run-with-your-own-token); to 5.0.0 (every RHOAI user can sign in and sees their own part):
+[Upgrade to v5.0.0](#upgrade-to-v500).
 
 Releases: [GitHub](https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases)
 and [GitLab](https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases)
@@ -547,6 +548,47 @@ works after the namespace is gone (live-checked). Or delete the client with
 `oc delete oauthaccesstokens --field-selector clientName=$APP-$NS`.
 A client applied by a 4.0.0 test build has an ownerReference to the
 namespace, which never deleted it; deploy and upgrade remove it.
+
+## Upgrade to v5.0.0
+
+5.0.0 is a MAJOR release (template revision 8): run its `install.sh` (or
+`git checkout v5.0.0 && make upgrade`) as for 4.0.0. Sessions are kept;
+nobody signs in again. The template changes two things:
+
+1. **Who signs in.** oauth-proxy's gate becomes "may `get`
+   `auths.services.platform.opendatahub.io`", which RHOAI grants to its
+   Auth CR's `allowedGroups` (by default `system:authenticated`). So by
+   default **every OpenShift user can now open the updater**, not only
+   users who may list pods in `redhat-ods-operator` (in practice
+   cluster-admins). To limit who signs in, narrow RHOAI's allowed groups
+   (`oc edit auths.services.platform.opendatahub.io auth`, `spec.allowedGroups`):
+   that narrows the RHOAI dashboard too. Without RHOAI installed only
+   cluster-admins sign in.
+2. **The ServiceAccount loses rules it no longer uses**: `get` on the MLflow
+   samples' names, on ConfigMap `gen-ai-aa-custom-model-endpoints`, and on
+   InferenceServices. The Playground and MLflow samples status now read with
+   the signed-in user's own token. It gains nothing.
+
+What users notice:
+
+- **Cluster-admins** see every page as before.
+- **Everyone else** sees a short read-only Status page (the RHOAI version,
+  channel and phase, the installed nightly build and whether a newer one
+  exists, the DataScienceCluster and its components), Build Explorer, and
+  the Environment page for their own projects, read with their own
+  permissions. Components, Dashboard Dev and Diagnostics say "Only
+  cluster-admins can see this page". A running update shows without who
+  started it. Who sees what, and with which token:
+  [SECURITY.md, Per-user views](../SECURITY.md#per-user-views-500).
+
+**With Argo CD (the Helm chart).** The usual commit (`targetRevision:
+v5.0.0` and the v5.0.0 image by digest). Both profiles get the new sign-in
+gate; in `profile: gitops` every page still needs cluster-admin, so other
+users who sign in see only "Cluster-admin required".
+
+**Rolling back to 4.x** (`make rollback TAG=v4.0.0`) re-applies the 4.x
+template: the old gate (only users who may list pods in
+`redhat-ods-operator`) and the ServiceAccount's old rules.
 
 ## 6. Roll back
 

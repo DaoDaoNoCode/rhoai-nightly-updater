@@ -132,7 +132,7 @@ oc logs -n $NS deploy/$APP -c app --previous
 
 | Symptom | Meaning / fix |
 |---|---|
-| 403 from oauth-proxy right after login | The user can't `list pods` in `redhat-ods-operator` (the login gate). On a fresh cluster only cluster-admins pass |
+| 403 from oauth-proxy right after login | The user may not `get` `auths.services.platform.opendatahub.io` (the login gate since 5.0.0): they are not in RHOAI's allowed groups (`oc get auths.services.platform.opendatahub.io auth -o jsonpath='{.spec.allowedGroups}'`), or RHOAI is not installed, where only cluster-admins pass. Check with `oc auth can-i get auths.services.platform.opendatahub.io --as=<user>` |
 | UI is read-only ("Read-only access") | Changes need cluster-admin. Check with `oc auth can-i '*' '*' --all-namespaces`. On ROSA: `rosa grant user cluster-admin --user=<u> --cluster=<c>` |
 | "Sign in again" banner | The oauth-proxy session (23 h) or the OAuth token expired. Follow the link |
 | "Your sign-in expires in N minutes ... Log out and log in again" (401 `sign_in_again`), or the banner "Sign in again to make changes" with that reason | Since 4.0.0 changes run with your own token, which must outlive the change (the 15-minute deadline, the restore and a margin). Nothing was changed. Use **Log out** in the banner or the user menu, then log in again |
