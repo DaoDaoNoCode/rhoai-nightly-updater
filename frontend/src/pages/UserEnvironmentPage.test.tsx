@@ -94,9 +94,9 @@ describe("Environment for a user who is not a cluster-admin", () => {
       "/api/resources/samples/mlflow": { project: "dev-project", available: false, reason: "MLflow is not set up on this cluster.", samples: [] },
     });
     render();
-    expect(await within(await screen.findByRole("region", { name: "Pipelines" })).findByText("No pipeline server in dev-project. A cluster-admin sets this up.")).toBeInTheDocument();
-    expect(within(part("Models")).getByText("No models in dev-project. A cluster-admin sets this up.")).toBeInTheDocument();
-    expect(await within(part("Playground")).findByText("No playground in dev-project. A cluster-admin sets this up.")).toBeInTheDocument();
+    expect(await within(await screen.findByRole("region", { name: "Pipelines" })).findByText("No pipeline server in dev-project. Add one in the RHOAI dashboard, or ask a cluster-admin to set one up here.")).toBeInTheDocument();
+    expect(within(part("Models")).getByText("No models in dev-project. Add one in the RHOAI dashboard, or ask a cluster-admin to set one up here.")).toBeInTheDocument();
+    expect(await within(part("Playground")).findByText("No playground in dev-project. Add one in the RHOAI dashboard, or ask a cluster-admin to set one up here.")).toBeInTheDocument();
     expect(await within(part("MLflow sample data")).findByText("MLflow is not set up on this cluster. A cluster-admin sets this up.")).toBeInTheDocument();
   });
 

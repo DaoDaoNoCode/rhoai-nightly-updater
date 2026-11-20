@@ -27,6 +27,8 @@ import { LinesSkeleton } from "./Loading";
 
 /** What a cluster-admin does on this page for a user who is not one: set up or remove anything. */
 export const ADMIN_SETS_UP = "A cluster-admin sets this up.";
+// What a project's own admin can add themselves (a pipeline server, a model, a playground).
+export const IN_PROJECT_HINT = "Add one in the RHOAI dashboard, or ask a cluster-admin to set one up here.";
 
 interface ProjectRead<T> {
   data: T | null;
@@ -123,7 +125,7 @@ const PipelinesPart: React.FC<{ project: string; read: ProjectRead<ProjectStatus
   if (read.error && !read.data) body = <ReadProblem what="the pipeline server" error={read.error} onRetry={read.reload} />;
   else if (!read.data) body = <LinesSkeleton what="the pipeline server" lines={1} />;
   else if (read.data.pipelineServersProblem) body = <PartProblem what="the pipeline server" code={read.data.pipelineServersProblemCode} message={read.data.pipelineServersProblem} onRetry={read.reload} />;
-  else if (!server || (!server.deployed && !server.terminating)) body = <Note>No pipeline server in {project}. {ADMIN_SETS_UP}</Note>;
+  else if (!server || (!server.deployed && !server.terminating)) body = <Note>No pipeline server in {project}. {IN_PROJECT_HINT}</Note>;
   else {
     body = (
       <Stack hasGutter>
@@ -204,7 +206,7 @@ const ModelsPart: React.FC<{ project: string; read: ProjectRead<ProjectStatus> }
         </Table>
       ) : null;
     body = !llm && !isvc
-      ? <Note>No models in {project}. {ADMIN_SETS_UP}</Note>
+      ? <Note>No models in {project}. {IN_PROJECT_HINT}</Note>
       : <Stack hasGutter>{llm && <StackItem>{llm}</StackItem>}{isvc && <StackItem>{isvc}</StackItem>}</Stack>;
   }
   return <Part title="Models" id="user-env-models">{body}</Part>;
@@ -217,7 +219,7 @@ const PlaygroundPart: React.FC<{ project: string; read: ProjectRead<PlaygroundSt
   else if (!read.data) body = <LinesSkeleton what="the playground" lines={1} />;
   else if (!item && read.data.apiProblem) body = <PartProblem what="the playground" code={read.data.apiCode} message={read.data.apiProblem} onRetry={read.reload} />;
   else if (!item && read.data.blocked) body = <Note>{read.data.blocked.reason}</Note>;
-  else if (!item || (!item.deployed && !item.terminating)) body = <Note>No playground in {project}. {ADMIN_SETS_UP}</Note>;
+  else if (!item || (!item.deployed && !item.terminating)) body = <Note>No playground in {project}. {IN_PROJECT_HINT}</Note>;
   else {
     body = (
       <Stack hasGutter>
