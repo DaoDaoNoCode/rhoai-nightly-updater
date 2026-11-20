@@ -25,8 +25,10 @@ import (
 //     action applies them with dynamic ownership, R datasciencecluster
 //     controller WithDynamicOwnership and provisionModuleCRs/
 //     provisionComponents). Once the DSC is gone, the garbage collector
-//     deletes them. With propagationPolicy Background (what the operator's
-//     own deletion test uses, R tests/e2e/deletion_test.go TestDSCDeletion)
+//     deletes them. With propagationPolicy Background (the operator's own
+//     test TestDSCDeletion deletes the DSC with no propagationPolicy, R
+//     tests/e2e/deletion_test.go:108-112, which for a custom resource is
+//     the API server's default, background)
 //     they are deleted as any owner-less object: each module CR keeps its
 //     own finalizer until its module operator has cleaned up. With
 //     Foreground the collector would delete every dependent that has

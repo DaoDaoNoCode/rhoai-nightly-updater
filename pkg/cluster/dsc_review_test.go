@@ -185,7 +185,7 @@ func hardResetRecordOf(t *testing.T, f *resourceFake) string {
 	return v
 }
 
-func TestHardResetDeletesInTheForegroundAndClearsItsRecord(t *testing.T) {
+func TestHardResetDeletesInTheBackgroundAndClearsItsRecord(t *testing.T) {
 	f, c := managerWorld(t, nil)
 	operatorRemovesDSCAfter(f, 2)
 	res, _ := runHardReset(t, c, nil)
@@ -193,8 +193,8 @@ func TestHardResetDeletesInTheForegroundAndClearsItsRecord(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 	for _, d := range f.callsTo(http.MethodDelete, dscV3Path) {
-		if !strings.Contains(d.Body, `"propagationPolicy":"Foreground"`) {
-			t.Fatalf("delete not in the foreground: %s", d.Body)
+		if !strings.Contains(d.Body, `"propagationPolicy":"Background"`) {
+			t.Fatalf("delete not in the background: %s", d.Body)
 		}
 	}
 	// The new spec was validated against the live DSC before the delete.
@@ -269,7 +269,7 @@ func TestHardResetWaitsThroughReadErrors(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("result = %+v", res)
 	}
-	if !strings.Contains(stepsText(steps), "Cannot read the DataScienceCluster now") {
+	if !strings.Contains(stepsText(steps), "Cannot read the cluster now") {
 		t.Fatalf("steps = %v", steps)
 	}
 }

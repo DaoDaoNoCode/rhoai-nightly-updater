@@ -18,13 +18,17 @@ import (
 
 // Hard reset: delete the DataScienceCluster and create the release default
 // in its place, with the same name and the namespaces of the old one. The
-// operator's DSC finalizer (platform.opendatahub.io/finalizer, rhods-operator
-// 3.6 datasciencecluster_controller.go WithFinalizer(disableDSCModulesOnDelete))
-// sets every module to Removed and the modules are cleaned up in two phases;
-// only then is the DSC gone and the new one can be created (the validating
-// webhook allows one DataScienceCluster). User resources (Notebooks, DSPAs,
-// InferenceServices, model registries) are not owned by the DSC and survive;
-// their controllers are gone until the components come back.
+// operator's DSC finalizer (platform.opendatahub.io/finalizer) only marks
+// the DSC's modules Removed on the Platform and is removed in the same
+// reconcile; the module CRs the DSC owned are then garbage-collected and
+// the Platform controller cleans the modules up afterwards
+// (dsc_hard_reset_teardown.go, with the sources). The new DSC is created
+// only once that is done (the validating webhook allows one
+// DataScienceCluster). User resources (Notebooks, DSPAs, InferenceServices,
+// model registries) are not owned by the DSC and survive; their controllers
+// are gone until the components come back. A namespace the DSC (or what it
+// owns) owns would not survive, so a hard reset is refused while one exists
+// (namespaceOwnerBlocker).
 //
 // Before the delete, the new spec is validated against the live DSC (a
 // server-side dry run), and the object to create is recorded in the
@@ -126,6 +130,9 @@ func (v *dscView) planHardReset(c *Client, keep bool) *dscPlanned {
 	if why := operatorDeploymentsBlocker(c); why != "" {
 		return p.refuse("The RHOAI operator removes the DataScienceCluster's finalizer, so the deletion would hang: "+why+". Nothing was changed.", "prerequisites")
 	}
+	if why := namespaceOwnerBlocker(c); why != "" {
+		return p.refuse("A hard reset is not possible: "+why+". Remove those owner references first (oc edit namespace <name>). Nothing was changed.", "prerequisites")
+	}
 	obj := v.newDefaultObject(v.resetTarget(p.plan, keep))
 	created := v.asCreated(obj)
 	text, err := yaml.Marshal(created)
@@ -182,13 +189,15 @@ func (r *hardResetRun) fail(step, msg, code string) *types.OperationResponse {
 }
 
 // dscDeleteBody is the DeleteOptions of the hard reset: the DSC is deleted
-// only if it is still the one the user reviewed (its UID), and in the
-// foreground, so it stays (with finalizer foregroundDeletion) until the
-// objects it owns are gone: on 3.4 and 3.5 the component CRs, whose
-// cleanup the new DSC must not race (Kubernetes "Foreground cascading
-// deletion").
+// only if it is still the one the user reviewed (its UID), in the
+// background: the garbage collector then deletes what it owns as owner-less
+// objects, each module CR keeping its finalizer until its operator cleaned
+// up. Foreground would also delete, in the foreground, the workloads a
+// module CR owns while its operator may still need them (kubernetes v1.34
+// garbagecollector.go:591-623; dsc_hard_reset_teardown.go). The reset waits
+// for that cleanup itself (waitTeardown).
 func dscDeleteBody(uid string) []byte {
-	body, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Foreground", "preconditions": map[string]any{"uid": uid}})
+	body, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Background", "preconditions": map[string]any{"uid": uid}})
 	return body
 }
 
@@ -246,8 +255,20 @@ func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent
 	if err != nil {
 		return r.fail("check", "Cannot build the new DataScienceCluster: "+err.Error()+". Nothing was changed.", "internal"), nil
 	}
+	// The module operators whose removal (the platform's phase 2) the reset
+	// waits for after their module CRs are gone.
+	ops, refusal, err := hardResetOperators(c, v.uid)
+	if err != nil {
+		return r.fail("check", "Cannot read the module CRs the DataScienceCluster owns and their operators: "+err.Error()+". Nothing was changed.", nonEmpty(errorCodeFromK8sErr(err), "prerequisites")), nil
+	}
+	if refusal != "" {
+		return r.fail("check", "A hard reset is not possible: "+refusal+". Nothing was changed.", "prerequisites"), nil
+	}
 	rec := &types.DSCHardResetRecord{Name: v.name, OldUID: v.uid, APIVersion: v.apiVersion, Object: string(objJSON), YAML: createYAML,
 		OperatorCSV: v.op.Name, OperatorVersion: v.op.Version, User: getUser(c), StartedAt: clk.Now().UTC().Format(time.RFC3339)}
+	for _, o := range ops {
+		rec.ModuleOperators = append(rec.ModuleOperators, o.record())
+	}
 	if err := SaveDSCHardResetRecord(c, rec); err != nil {
 		return r.fail("check", "Cannot record the DataScienceCluster this reset creates, so the reset could not be finished after a failure: "+err.Error()+". Nothing was changed.", nonEmpty(errorCodeFromK8sErr(err), "internal")), nil
 	}
@@ -266,10 +287,10 @@ func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent
 		return r.fail("delete", "Deleting the DataScienceCluster failed: "+conversionMessage(err)+". Nothing was changed.", errorCodeFromK8sErr(err)), nil
 	}
 	recordActivity(c, "hard-reset-dsc", v.name+": deleted (uid "+v.uid+") for a hard reset", true)
-	r.step("delete", "success", "The operator is removing every component of DataScienceCluster "+v.name)
+	r.step("delete", "success", "Deleted DataScienceCluster "+v.name+" (propagation Background); the operator marks its modules Removed")
 
-	r.step("wait_deleted", "running", "Waiting for the operator to clean up and remove the DataScienceCluster")
-	if res := waitDSCGone(c, path, v, r, createYAML); res != nil {
+	r.step("wait_deleted", "running", "Waiting until the DataScienceCluster is gone and the platform has cleaned up its modules")
+	if res := waitDSCGone(c, path, v, ops, r, createYAML); res != nil {
 		recordActivity(c, "hard-reset-dsc", v.name+": "+firstLine(res.Message), false)
 		return res, nil
 	}
@@ -370,19 +391,24 @@ func stopCause(ctx context.Context) string {
 	return "stopped"
 }
 
-// waitDSCGone polls until the old DSC is gone. A read that fails is tried
-// again until the deadline (the API server or the conversion webhook can
-// be briefly unavailable while the operator cleans up). It returns the
-// failed result when the DSC is not gone in time, a DSC with another UID
-// appears, or the operation is stopped; nil once it is gone. Every failure
-// carries the planned object (yamlText) and the way to finish the reset.
-func waitDSCGone(c *Client, path string, v *dscView, r *hardResetRun, yamlText string) *types.OperationResponse {
+// waitDSCGone polls until the old DSC is gone and its teardown is done
+// (dsc_hard_reset_teardown.go): no module CR it owned is left, the module
+// operators of those CRs (ops) are removed, and the Platform reports no
+// module pending deletion. A read that fails is tried again until the
+// deadline (the API server or the conversion webhook can be briefly
+// unavailable while the operator cleans up). It returns the failed result
+// when that is not done in time, a DSC with another UID appears, or the
+// operation is stopped; nil once it is done. Every failure carries the
+// planned object (yamlText) and the way to finish the reset.
+func waitDSCGone(c *Client, path string, v *dscView, ops []hardResetOperator, r *hardResetRun, yamlText string) *types.OperationResponse {
 	deadline := clk.Now().Add(HardResetDeleteTimeout)
 	last := ""
 	var st dscWaitState
+	var td teardownState
 	var readErr error
+	gone := false
 	interrupted := func() *types.OperationResponse {
-		return r.fail("wait_deleted", fmt.Sprintf("The reset was stopped (%s) while DataScienceCluster %s was being deleted. Nothing was created. %s", stopCause(c.ctx), v.name, finishHelp(yamlText)), "interrupted")
+		return r.fail("wait_deleted", fmt.Sprintf("The reset was stopped (%s) while DataScienceCluster %s and its modules were being removed. Nothing was created. %s", stopCause(c.ctx), v.name, finishHelp(yamlText)), "interrupted")
 	}
 	for {
 		if c.ctx.Err() != nil {
@@ -390,18 +416,31 @@ func waitDSCGone(c *Client, path string, v *dscView, r *hardResetRun, yamlText s
 		}
 		var err error
 		st, err = readDSCWaitState(c, path)
+		if err == nil && !st.found {
+			if !gone {
+				gone = true
+				r.step("wait_deleted", "running", "DataScienceCluster "+v.name+" is gone")
+			}
+			td, err = readTeardown(c, v.uid, ops)
+		}
 		switch {
 		case err != nil && c.ctx.Err() != nil:
 			return interrupted()
 		case err != nil:
 			readErr = err
-			if msg := "Cannot read the DataScienceCluster now (" + err.Error() + "); trying again"; msg != last {
+			if msg := "Cannot read the cluster now (" + err.Error() + "); trying again"; msg != last {
 				last = msg
 				r.step("wait_deleted", "running", msg)
 			}
-		case !st.found:
-			r.step("wait_deleted", "success", "DataScienceCluster "+v.name+" is gone")
+		case !st.found && td.done():
+			r.step("wait_deleted", "success", "DataScienceCluster "+v.name+" is gone and the platform has cleaned up its modules")
 			return nil
+		case !st.found:
+			readErr = nil
+			if msg := td.progress(); msg != last {
+				last = msg
+				r.step("wait_deleted", "running", msg)
+			}
 		case st.uid != v.uid:
 			return r.fail("wait_deleted", fmt.Sprintf("A new DataScienceCluster %s appeared (UID %s) before this reset created one: someone else, or the operator, created it. This reset creates nothing. Review it on the Components page. The object this reset planned was:\n%s", v.name, st.uid, yamlText), "conflict")
 		default:
@@ -419,12 +458,16 @@ func waitDSCGone(c *Client, path string, v *dscView, r *hardResetRun, yamlText s
 		}
 	}
 	if readErr != nil {
-		return r.fail("wait_deleted", fmt.Sprintf("DataScienceCluster %s could not be read for the last poll of %s: %v. Nothing was created. Check it with oc get datasciencecluster %s -o yaml. %s",
-			v.name, HardResetDeleteTimeout, readErr, v.name, finishHelp(yamlText)), nonEmpty(errorCodeFromK8sErr(readErr), "timeout"))
+		return r.fail("wait_deleted", fmt.Sprintf("The cluster could not be read for the last poll of %s: %v. Nothing was created. Check the DataScienceCluster with oc get datasciencecluster %s -o yaml and the modules in Diagnostics (Platform modules). %s",
+			HardResetDeleteTimeout, readErr, v.name, finishHelp(yamlText)), nonEmpty(errorCodeFromK8sErr(readErr), "timeout"))
 	}
-	return r.fail("wait_deleted", fmt.Sprintf("DataScienceCluster %s is still being deleted after %s: finalizer %s remains. The operator removes it once every module is cleaned up (%s). Nothing was created. "+
-		"Do not remove the finalizer by hand: the operator would leave modules behind. Diagnostics (Platform modules) shows which module is stuck. %s",
-		v.name, HardResetDeleteTimeout, nonEmpty(strings.Join(st.finalizers, ", "), "none"), nonEmpty(modulesNote(st), "no module status reported"), finishHelp(yamlText)), "timeout")
+	if !st.found {
+		return r.fail("wait_deleted", fmt.Sprintf("DataScienceCluster %s is gone, but after %s %s. Nothing was created. %s",
+			v.name, HardResetDeleteTimeout, td.stuck(), finishHelp(yamlText)), "timeout")
+	}
+	return r.fail("wait_deleted", fmt.Sprintf("DataScienceCluster %s is still being deleted after %s: finalizer %s remains (%s). The RHOAI operator's DSC finalizer only marks the DSC's modules Removed on the Platform and is removed in the same reconcile, so a finalizer that stays means the operator has not processed the deletion: check that it runs and read its logs (its Deployment, named in the installed CSV, is in namespace %s). Nothing was created. "+
+		"Do not remove the finalizer by hand: the modules would not be marked Removed. %s",
+		v.name, HardResetDeleteTimeout, nonEmpty(strings.Join(st.finalizers, ", "), "none"), nonEmpty(modulesNote(st), "no module status reported"), SubNS, finishHelp(yamlText)), "timeout")
 }
 
 // deletionProgress words a poll of the DSC being deleted.
@@ -549,6 +592,22 @@ func FinishDSCHardReset(c *Client, req types.DSCFinishRequest) (*types.Operation
 		return refuse("The DataScienceCluster API is not installed now. Nothing was changed.", "prerequisites")
 	case DSCStatePresent:
 		return refuse(fmt.Sprintf("DataScienceCluster %s now exists, so there is nothing to finish. Nothing was changed.", v.name), "conflict")
+	}
+	// The same teardown the reset waits for (dsc_hard_reset_teardown.go).
+	var ops []hardResetOperator
+	for _, s := range rec.ModuleOperators {
+		o, ok := parseHardResetOperator(s)
+		if !ok {
+			return refuse(fmt.Sprintf("The recorded hard reset names a module operator the tool cannot read (%q). Nothing was changed.", s), "internal")
+		}
+		ops = append(ops, o)
+	}
+	td, err := readTeardown(c, rec.OldUID, ops)
+	if err != nil {
+		return refuse("Cannot check that the old DataScienceCluster's modules are cleaned up: "+err.Error()+". Nothing was changed.", nonEmpty(errorCodeFromK8sErr(err), "prerequisites"))
+	}
+	if !td.done() {
+		return refuse("The old DataScienceCluster's modules are not cleaned up yet: "+td.stuck()+". Nothing was changed; finish the hard reset once they are.", "prerequisites")
 	}
 	crd, err := readDSCCRD(c)
 	if err != nil {
