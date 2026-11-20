@@ -16,7 +16,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const SRC = resolve(here, "..");
 const SCENARIOS = resolve(SRC, "../../docs/tools/mock/scenarios.mjs");
 
-const IMPORTED = ["StatusResponse", "OperationStatusResponse", "UserPermissions", "ComponentsResponse", "DSCManager", "DiagnosticResult", "DashboardState", "ResourcesStatus", "MaaSStatus"];
+const IMPORTED = ["StatusResponse", "OperationStatusResponse", "UserPermissions", "ClusterSummary", "ComponentsResponse", "DSCManager", "DiagnosticResult", "DashboardState", "ResourcesStatus", "MaaSStatus"];
 
 // What the backend sends (pkg/types) and types.ts does not declare yet; the
 // app does not read it, and the mock sends it as the backend does. Remove
@@ -28,6 +28,7 @@ const TYPES: Record<string, string> = {
   "GET /api/status": "StatusResponse",
   "GET /api/operation": "OperationStatusResponse",
   "GET /api/user/permissions": "UserPermissions",
+  "GET /api/summary": "ClusterSummary",
   "GET /api/components": "ComponentsResponse",
   "GET /api/components/dsc": "DSCManager",
   "GET /api/diagnostics": "DiagnosticResult",

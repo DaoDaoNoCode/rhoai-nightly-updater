@@ -550,16 +550,51 @@ for (const name of ["healthy", "prerequisite-missing", "operand-missing", "modul
     if (name === "module-backoff") w.gated = true;
   };
 }
+// Per-user views: a signed-in user who is not a cluster-admin (role
+// "user"). The server answers them as the backend does: the summary, the
+// short operation, their own projects, and 403 admin_only for every read
+// only cluster-admins may make (server.mjs, userRead).
+scenarios.user = (w) => {
+  scenarios["env-overview-three"](w);
+  w.status = F.updateAvailableStatus();
+  w.role = "user";
+  w.canMutate = false;
+  w.userProjects = ["dev-project", "llm-eval"];
+  w.samples.mlflow["dev-project"] = F.mlflowSamples("dev-project", { "genai-demo": "present", training: "present" });
+};
+scenarios["user-no-projects"] = (w) => { scenarios.user(w); w.userProjects = []; };
+scenarios["user-update-running"] = (w) => {
+  scenarios.user(w);
+  w.operation = { inProgress: true, operation: { id: "op-update", type: "update", label: "Update to nightly", user: "qa-admin", startedAt: new Date(F.NOW - 4 * 60_000).toISOString(), updatedAt: new Date(F.NOW).toISOString() } };
+};
+
 // The leftover fixes refused: the module operator that recreates the
 // Deployment is not running (the backend's prerequisites refusal).
 scenarios["diag-leftovers-refused"] = (w) => { scenarios["diag-leftovers"](w); w.leftoverRefusal = true; };
 
 // The reads every page makes, as the server answers them; the frontend's
 // types check these (frontend/src/test/docsMockFixtures.test.ts).
+/** GET /api/summary (pkg/types ClusterSummary): the read-only summary every signed-in user may see. */
+function summaryOf(w) {
+  const s = w.status;
+  const installed = !!s.csv?.phase && s.csv.phase !== "Not Found";
+  return {
+    updaterVersion: w.version.version,
+    rhoai: { installed, version: installed ? s.csv.version || "" : "", channel: installed ? s.subscription?.channel || "" : "", phase: installed ? s.csv.phase : "" },
+    nightly: { installedBuild: s.nightly?.installed?.image || "", latestBuild: s.nightly?.latest?.image || "", newerAvailable: s.nightly?.updateAvailable === true },
+    dsc: {
+      exists: w.components.dscExists !== false,
+      ready: w.components.dscPhase === "Ready",
+      components: w.components.dscExists === false ? null : (w.components.components || []).map((c) => ({ name: c.name, managementState: c.managementState, ready: c.status === "Available" })),
+    },
+  };
+}
+
 export const reads = {
   "GET /api/status": (w) => w.status,
   "GET /api/operation": (w) => w.operation,
-  "GET /api/user/permissions": (w) => ({ canMutate: w.canMutate !== false, user: F.USER }),
+  "GET /api/user/permissions": (w) => ({ canMutate: w.canMutate !== false, user: F.USER, role: w.role || "admin" }),
+  "GET /api/summary": (w) => summaryOf(w),
   "GET /api/components": (w) => w.components,
   // The DSC manager: none without a DataScienceCluster, else the scenario's.
   "GET /api/components/dsc": (w) => (w.components.dscExists === false ? { exists: false, state: w.components.dscState || "no-dsc", dscCount: 0, conditions: [], nodes: [], mismatches: [] } : w.dscManager ?? F.dscManager()),

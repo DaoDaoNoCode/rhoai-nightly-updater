@@ -215,11 +215,12 @@ describe("GlobalBanners", () => {
   it("shows at most two notices and keeps the rest one click away", async () => {
     renderWithApp(<GlobalBanners />, {
       operation: async () => ({ inProgress: true, operation: { id: "1", type: "update", label: "Update to nightly", user: "alice", startedAt: new Date().toISOString() } }),
-      permissions: async () => { throw Object.assign(new Error("x"), { name: "ApiError", status: 503, errorCode: "authorization_unavailable", message: "Cannot verify mutation permissions" }); },
+      // A cluster-admin (the deployment notice is theirs) whose sign-in cannot carry a change.
+      permissions: async () => ({ canMutate: false, user: "me", role: "admin", reason: "Your sign-in expires in 3 minutes. Log out and log in again.", reasonCode: "sign_in_again" }),
       version: async () => ({ version: "4503bb7d", commit: "x", buildDate: "d", templateRevision: "1", expectedTemplateRevision: "2", templateOutdated: true }),
     }, "/components");
     expect(await screen.findByText(/alice is running "Update to nightly"/)).toBeInTheDocument();
-    expect(await screen.findByText("Your permissions could not be checked; changes are disabled")).toBeInTheDocument();
+    expect(await screen.findByText("Sign in again to make changes")).toBeInTheDocument();
     expect(screen.queryByText(/this updater's deployment is out of date/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "View 1 more notice" }));
     expect(screen.getByText(/this updater's deployment is out of date/)).toBeInTheDocument();

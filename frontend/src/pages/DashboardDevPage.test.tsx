@@ -228,7 +228,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
   it("refreshes the app-wide Dashboard Dev override after a change", async () => {
     stubApi({ "/api/dashboard/state": clean(), "POST /api/dashboard/deploy-main": { success: true, message: "Deploying main", logs: [] } });
     const dashboard = vi.fn(async () => clean());
-    renderWithApp(<DashboardDevPage />, { permissions: async () => ({ canMutate: true, user: "me" }), dashboard }, "/dashboard-dev");
+    renderWithApp(<DashboardDevPage />, { permissions: async () => ({ canMutate: true, user: "me", role: "admin" }), dashboard }, "/dashboard-dev");
     fireEvent.click(await screen.findByRole("button", { name: "Deploy latest main" }));
     await waitFor(() => expect(dashboard).toHaveBeenCalledTimes(1));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Deploy latest main" }));

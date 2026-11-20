@@ -545,6 +545,7 @@ const routes = {
   "GET /api/dashboard/builds": () => world.dashboardBuilds,
   "GET /api/resources/status": () => reads["GET /api/resources/status"](world),
   "GET /api/resources/projects": () => reads["GET /api/resources/projects"](world),
+  "GET /api/summary": () => reads["GET /api/summary"](world),
   "GET /api/resources/playground": (u) => playgroundOf(u.searchParams.get("project") || ""),
   "GET /api/resources/maas": () => reads["GET /api/resources/maas"](world),
   "GET /api/resources/maas/groups": (u) => F.maasGroupProblems(u.searchParams.getAll("name")),
@@ -574,6 +575,42 @@ const GITOPS_PROFILE_ROUTES = new Set([
   "GET /api/diagnostics", "GET /api/user/permissions", "POST /api/update", "POST /api/update/stream", "POST /api/pageview", "GET /api/version",
 ]);
 
+// The GET routes only cluster-admins may read (per-user views; pkg/api's
+// route classification): a user gets 403 admin_only.
+const ADMIN_ONLY_READS = [
+  "/api/status", "/api/activity", "/api/components", "/api/debug", "/api/dashboard/", "/api/diagnostics", "/api/setup/dsc/preview",
+  "/api/test-pull-secret", "/api/verify-nodes", "/api/latest-nightly", "/api/nightly-tags", "/api/resources/maas",
+  "/api/resources/prerequisites", "/api/resources/models/exposures", "/api/resources/s3/admin-password",
+];
+
+/**
+ * A user who is not a cluster-admin (world.role "user"): what the backend
+ * answers them differently (true once answered), or false for the reads
+ * every user makes.
+ */
+function userRead(res, key, u) {
+  const send = (code, body) => { json(res, code, body); return true; };
+  const adminOnly = () => send(403, { error: "Only cluster-admins can see this.", errorCode: "admin_only" });
+  if (key === "GET /api/operation") {
+    const op = world.operation.inProgress ? world.operation.operation : null;
+    return send(200, op ? { running: true, label: op.label, startedAt: op.startedAt } : { running: false });
+  }
+  if (key === "GET /api/resources/projects") return send(200, { projects: world.userProjects ?? [] });
+  if (key === "GET /api/resources/status") {
+    const project = u.searchParams.get("project");
+    if (!project) return adminOnly();
+    const all = reads["GET /api/resources/status"](world);
+    return send(200, {
+      ...all,
+      pipelineServers: all.pipelineServers.filter((ps) => ps.namespace === project),
+      models: { ...all.models, items: (all.models.items ?? []).filter((m) => m.namespace === project) },
+    });
+  }
+  if (key.startsWith("GET ") && ADMIN_ONLY_READS.some((p) => u.pathname.startsWith(p))) return adminOnly();
+  if (!key.startsWith("GET ") && key !== "POST /api/pageview") return adminOnly();
+  return false;
+}
+
 async function api(req, res, u) {
   const key = `${req.method} ${u.pathname}`;
   if (req.method === "GET" && heldReads.prefixes.some((p) => u.pathname.startsWith(p))) {
@@ -590,6 +627,7 @@ async function api(req, res, u) {
       return json(res, 403, { error: "This updater runs the gitops profile, where only cluster-admins can see what it reads from the cluster.", errorCode: "forbidden" });
     }
   }
+  if (world.role === "user" && userRead(res, key, u)) return;
   if (key === "POST /api/pageview") { res.writeHead(204); res.end(); return; }
   if (world.signIn) {
     // An expired sign-in fails the identity check; a sign-in from before

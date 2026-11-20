@@ -1,17 +1,15 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import type { DashboardOverride, DashboardState, ServerOperation, UpdateCheck, UserPermissions, VersionInfo } from "../types";
+import type { DashboardOverride, DashboardState, ServerOperation, UpdateCheck, VersionInfo } from "../types";
 import {
   getDashboardState,
-  getUserPermissions,
   getUpdateCheck,
   getVersion,
   isApiError,
-  isSessionExpired,
-  onSessionExpired,
   toApiError,
   type ApiError,
 } from "../services/api";
-import { DASHBOARD_OVERRIDE_POLL_MS, GITOPS_POLICY_POLL_MS, PERMISSION_RETRY_MS, UPDATE_CHECK_REFRESH_MS } from "../constants";
+import { DASHBOARD_OVERRIDE_POLL_MS, GITOPS_POLICY_POLL_MS, UPDATE_CHECK_REFRESH_MS } from "../constants";
+import { usePermissions, useRole } from "./Permissions";
 import { usePolling } from "../hooks/usePolling";
 import { OPERATION_NAMES, STEP_SETS, operationKindForServerType, stepLabel } from "../operationSteps";
 import { isRunning } from "./operation";
@@ -19,42 +17,22 @@ import { useClusterStatus, useOperation } from "./AppState";
 import { formatElapsed, isReleaseVersion } from "../utils";
 import { isGitOpsProfile } from "../profile";
 
-// ---------------------------------------------------------------------------
-// Permissions
-// ---------------------------------------------------------------------------
-
-/**
- * checking: the first answer has not arrived. allowed / denied: the backend
- * answered. unknown: it could not answer (503 authorization_unavailable, a
- * network error, an expired session); mutations stay disabled, never "allowed".
- */
-export type PermissionStatus = "checking" | "allowed" | "denied" | "unknown";
-
-export interface PermissionsValue {
-  status: PermissionStatus;
-  canMutate: boolean;
-  /** Why mutations are disabled for this user, or null when they are allowed. */
-  reason: string | null;
-  /** The backend's code for its reason (sign_in_again: the sign-in cannot carry a change), or null. */
-  reasonCode: string | null;
-  error: ApiError | null;
-  retry: () => void;
-}
-
-export const NO_PERMISSION_REASON = "Read-only access: changing the cluster through this tool requires the cluster-admin role.";
-export const PERMISSION_CHECKING_REASON = "Checking your permissions...";
-export const PERMISSION_UNKNOWN_REASON = "Your permissions could not be checked, so changes are disabled. Retry from the banner at the top of the page.";
-export const SESSION_EXPIRED_REASON = "Your session has expired. Sign in again to make changes.";
-
-function permissionReason(status: PermissionStatus, sessionExpired: boolean, deniedReason: string | null = null): string | null {
-  if (sessionExpired) return SESSION_EXPIRED_REASON;
-  switch (status) {
-    case "allowed": return null;
-    case "denied": return deniedReason ?? NO_PERMISSION_REASON;
-    case "checking": return PERMISSION_CHECKING_REASON;
-    case "unknown": return PERMISSION_UNKNOWN_REASON;
-  }
-}
+// Permissions, the role and the session live in PermissionsProvider (the
+// outermost provider: the role decides which reads the others make); the
+// hooks are re-exported here, where the pages import them from.
+export {
+  NO_PERMISSION_REASON,
+  PERMISSION_CHECKING_REASON,
+  PERMISSION_UNKNOWN_REASON,
+  SESSION_EXPIRED_REASON,
+  usePermissions,
+  useRole,
+  useSessionExpired,
+  useSignedInUser,
+  type PermissionStatus,
+  type PermissionsValue,
+  type ViewRole,
+} from "./Permissions";
 
 // ---------------------------------------------------------------------------
 // Dashboard Dev override (paused dashboard module operator)
@@ -82,14 +60,12 @@ export function overrideFromDashboardResponse(result: DashboardState | ApiError)
 // ---------------------------------------------------------------------------
 
 interface AppInfoValue {
-  permissions: PermissionsValue;
   version: VersionInfo | null;
   /** The backend's profile; null until /api/version answered (or failed: an older backend, "full"). */
   profile: "full" | "gitops" | null;
   /** Only for a running release; null until known. */
   update: UpdateCheck | null;
   dashboard: DashboardOverrideValue;
-  sessionExpired: boolean;
 }
 
 const AppInfoContext = createContext<AppInfoValue | null>(null);
@@ -98,10 +74,6 @@ function useAppInfo(): AppInfoValue {
   const value = useContext(AppInfoContext);
   if (!value) throw new Error("AppInfo hooks must be used inside AppInfoProvider");
   return value;
-}
-
-export function usePermissions(): PermissionsValue {
-  return useAppInfo().permissions;
 }
 
 export function useVersion(): VersionInfo | null {
@@ -129,77 +101,30 @@ export function useDashboardOverride(): DashboardOverrideValue {
   return useAppInfo().dashboard;
 }
 
-export function useSessionExpired(): boolean {
-  return useAppInfo().sessionExpired;
-}
-
 interface AppInfoProviderProps {
   /** Injected for tests. */
-  fetchPermissions?: () => Promise<UserPermissions>;
   fetchVersion?: (signal?: AbortSignal) => Promise<VersionInfo>;
   fetchUpdateCheck?: (signal?: AbortSignal) => Promise<UpdateCheck>;
   fetchDashboardState?: (signal?: AbortSignal) => Promise<DashboardState>;
 }
 
 /**
- * App-wide facts that every page needs: what the user may do, which build
- * of the updater runs, whether a Dashboard Dev session holds the dashboard,
- * and whether the session expired. Mount inside AppStateProvider.
+ * App-wide facts that every page needs: which build of the updater runs,
+ * whether a newer release exists, and whether a Dashboard Dev session holds
+ * the dashboard (read for cluster-admins only). Mount inside
+ * AppStateProvider, inside PermissionsProvider.
  */
 export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderProps>> = ({
   children,
-  fetchPermissions = getUserPermissions,
   fetchVersion = getVersion,
   fetchUpdateCheck = getUpdateCheck,
   fetchDashboardState = getDashboardState,
 }) => {
-  const fetchers = useRef({ fetchPermissions, fetchVersion, fetchUpdateCheck, fetchDashboardState });
+  const fetchers = useRef({ fetchVersion, fetchUpdateCheck, fetchDashboardState });
   useEffect(() => {
-    fetchers.current = { fetchPermissions, fetchVersion, fetchUpdateCheck, fetchDashboardState };
+    fetchers.current = { fetchVersion, fetchUpdateCheck, fetchDashboardState };
   });
-
-  // --- Session ---------------------------------------------------------------
-  const [sessionExpired, setSessionExpired] = useState(false);
-  useEffect(() => onSessionExpired(() => setSessionExpired(true)), []);
-
-  // --- Permissions -----------------------------------------------------------
-  const [permStatus, setPermStatus] = useState<PermissionStatus>("checking");
-  const [permError, setPermError] = useState<ApiError | null>(null);
-  // The backend's reason when a cluster-admin's sign-in cannot carry a change.
-  const [deniedReason, setDeniedReason] = useState<string | null>(null);
-  const [deniedCode, setDeniedCode] = useState<string | null>(null);
-  const permStatusRef = useRef(permStatus);
-  permStatusRef.current = permStatus;
-
-  const checkPermissions = useCallback(async () => {
-    try {
-      const p = await fetchers.current.fetchPermissions();
-      setPermStatus(p.canMutate ? "allowed" : "denied");
-      setDeniedReason(!p.canMutate && p.reason ? p.reason : null);
-      setDeniedCode(!p.canMutate && p.reason ? p.reasonCode ?? null : null);
-      setPermError(null);
-    } catch (e) {
-      const err = toApiError(e, "Could not check your permissions");
-      const expired = isSessionExpired(err);
-      // A JSON 403 is an answer (read-only). An expired session (oauth-proxy's
-      // HTML 403) and everything else, 503 authorization_unavailable
-      // included, is "unknown": fail closed.
-      setPermStatus(!expired && (err.status === 403 || err.errorCode === "forbidden") ? "denied" : "unknown");
-      setDeniedReason(null);
-      setDeniedCode(null);
-      setPermError(err);
-      if (expired) setSessionExpired(true);
-    }
-  }, []);
-  const permPoller = usePolling(checkPermissions, {
-    // Retry soon while unanswered; otherwise re-check rarely (roles change).
-    delay: () => (permStatusRef.current === "unknown" ? PERMISSION_RETRY_MS : 10 * 60_000),
-    runImmediately: true,
-  });
-  const retryPermissions = useCallback(() => {
-    setPermStatus("checking");
-    permPoller.reset({ runNow: true });
-  }, [permPoller]);
+  const role = useRole();
 
   // --- Version (once; the gitops profile polls it, below) ---------------------
   const [version, setVersion] = useState<VersionInfo | null>(null);
@@ -277,8 +202,9 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
       setOverrideLoaded(true);
     }
   }, []);
-  // Dashboard Dev does not exist in the gitops profile (403 profile_gitops).
-  const overridePoller = usePolling(loadOverride, { delay: DASHBOARD_OVERRIDE_POLL_MS, runImmediately: true, enabled: versionSettled && !gitOpsProfile });
+  // Dashboard Dev does not exist in the gitops profile (403 profile_gitops),
+  // and only cluster-admins read it (403 admin_only for the others).
+  const overridePoller = usePolling(loadOverride, { delay: DASHBOARD_OVERRIDE_POLL_MS, runImmediately: true, enabled: versionSettled && !gitOpsProfile && role === "admin" });
   const refreshOverride = useCallback(() => overridePoller.reset({ runNow: true }), [overridePoller]);
   useEffect(() => () => overrideController.current?.abort(), []);
 
@@ -290,20 +216,11 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
   }, [endedRunId, refreshOverride]);
 
   const value = useMemo<AppInfoValue>(() => ({
-    permissions: {
-      status: permStatus,
-      canMutate: permStatus === "allowed" && !sessionExpired,
-      reason: permissionReason(permStatus, sessionExpired, deniedReason),
-      reasonCode: permStatus === "denied" && !sessionExpired ? deniedCode : null,
-      error: permError,
-      retry: retryPermissions,
-    },
     version,
     profile: !versionSettled ? null : gitOpsProfile ? "gitops" : "full",
     update,
     dashboard: { override, loaded: overrideLoaded, refresh: refreshOverride },
-    sessionExpired,
-  }), [permStatus, sessionExpired, deniedReason, deniedCode, permError, retryPermissions, version, versionSettled, gitOpsProfile, update, override, overrideLoaded, refreshOverride]);
+  }), [version, versionSettled, gitOpsProfile, update, override, overrideLoaded, refreshOverride]);
 
   return <AppInfoContext.Provider value={value}>{children}</AppInfoContext.Provider>;
 };

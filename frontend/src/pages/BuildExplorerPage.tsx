@@ -48,6 +48,8 @@ import { BuildContents } from "../components/BuildContents";
 import { BuildCompare, type BuildSide } from "../components/BuildCompare";
 import { classifySearch, imageDigest, installedBuild, shortBuildRef, type InstalledBuild, type SearchQuery } from "../components/buildDiff";
 import { useClusterStatus } from "../state/AppState";
+import { useRole } from "../state/Permissions";
+import { summaryNightly, useSummary } from "../hooks/useSummary";
 import { useCommitSearch, type SearchBuild } from "../hooks/useCommitSearch";
 import { useContainsSearch } from "../hooks/useContainsSearch";
 import { ContainsSearchResults, DEFAULT_REPO } from "../components/ContainsSearchResults";
@@ -155,7 +157,17 @@ interface SubmittedSearch {
 
 export const BuildExplorerPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { status, loading: statusLoading } = useClusterStatus();
+  const { status: clusterStatus, loading: clusterStatusLoading } = useClusterStatus();
+  // A user who is not a cluster-admin has no status: the installed build comes from the summary.
+  const role = useRole();
+  const userView = role !== "admin";
+  const summaryRead = useSummary(role === "user");
+  const userStatus = useMemo(() => {
+    const nightly = summaryNightly(summaryRead.summary);
+    return nightly ? { nightly, catalogSource: { exists: false, name: "", image: "", state: "" }, subscription: { name: "", source: "", channel: "", state: "" } } : null;
+  }, [summaryRead.summary]);
+  const status = userView ? userStatus : clusterStatus;
+  const statusLoading = userView ? role === "checking" || summaryRead.loading : clusterStatusLoading;
   const [tags, setTags] = useState<NightlyTag[]>([]);
   const [loading, setLoading] = useState(true);
   const [datesLoading, setDatesLoading] = useState(false);

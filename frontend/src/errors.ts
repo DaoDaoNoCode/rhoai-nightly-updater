@@ -24,6 +24,19 @@ const SESSION_EXPIRED: ErrorDescription = {
   reload: true,
 };
 
+/** 403 forbidden_for_user: the user's own OpenShift account may not read this (per-user views). */
+export const FORBIDDEN_FOR_USER_TITLE = "You cannot see this";
+export const FORBIDDEN_FOR_USER_BODY = "Your OpenShift account has no access to it. A project admin or a cluster-admin can give you access.";
+/** 403 admin_only: a read only cluster-admins may make through the updater. */
+export const ADMIN_ONLY_TITLE = "Only cluster-admins can see this";
+export const ADMIN_ONLY_BODY = "A cluster-admin sets this up and looks after it.";
+
+/** True for the 403s that mean "not for you", not "something is broken". */
+export function isNotForUser(e: unknown): boolean {
+  const code = toApiError(e).errorCode;
+  return code === "forbidden_for_user" || code === "admin_only";
+}
+
 /** The backend's 409 body names the running operation ("alice is running ..."). */
 function clusterBusyBody(err: ApiError): string {
   const details = err.details as { operation?: unknown } | undefined;
@@ -59,6 +72,11 @@ function describeErrorRaw(e: unknown, genericTitle: string): ErrorDescription {
       return err.status === 401 ? SESSION_EXPIRED : { title: "The cluster rejected the updater's credentials", body: err.message, variant: "danger", hint: "Check the updater's ServiceAccount (oc get sa -n <namespace>) and redeploy it." };
     case "forbidden":
       return { title: "Access denied", body: err.message, variant: "danger" };
+    case "forbidden_for_user":
+      // A read with the user's own token that their OpenShift account may not make: nothing is broken.
+      return { title: FORBIDDEN_FOR_USER_TITLE, body: FORBIDDEN_FOR_USER_BODY, variant: "warning" };
+    case "admin_only":
+      return { title: ADMIN_ONLY_TITLE, body: ADMIN_ONLY_BODY, variant: "warning" };
     case "cluster_busy":
       return { title: "Cluster busy", body: clusterBusyBody(err), hint: "Nothing was changed. Wait for it to finish, then try again.", variant: "warning" };
     case "rate_limited":

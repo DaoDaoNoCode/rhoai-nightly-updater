@@ -51,12 +51,13 @@ import {
 import { trackPageView } from "./services/api";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { HelpButton } from "./components/HelpModal";
-import { AdminRequiredState, PageLoading, ProfileOffState, SessionExpiredState } from "./components/PageStates";
+import { AdminOnlyPageState, AdminRequiredState, PageLoading, PermissionsUnknownState, ProfileOffState, SessionExpiredState } from "./components/PageStates";
 import { StatusLabel } from "./components/StatusLabel";
-import { NAV_ITEMS } from "./constants";
+import { ADMIN_ONLY_PAGES, NAV_ITEMS } from "./constants";
 import { LOGO_SRC } from "./logo";
-import { AppStateProvider, useClusterStatus, useOperation } from "./state/AppState";
-import { AppInfoProvider, useGitOpsProfile, usePermissions, useSessionExpired, useVersion } from "./state/AppInfo";
+import { RoleAppStateProvider, useClusterStatus, useOperation } from "./state/AppState";
+import { AppInfoProvider, useGitOpsProfile, useVersion } from "./state/AppInfo";
+import { PermissionsProvider, usePermissions, useRole, useSessionExpired, useSignedInUser } from "./state/Permissions";
 import { GITOPS_PROFILE_PAGES } from "./profile";
 import { isReleaseVersion } from "./utils";
 import { LiveAnnouncerProvider } from "./state/LiveAnnouncer";
@@ -71,11 +72,15 @@ const BuildExplorerPage = lazy(() => import("./pages/BuildExplorerPage").then((m
 const DashboardDevPage = lazy(() => import("./pages/DashboardDevPage").then((m) => ({ default: m.DashboardDevPage })));
 const EnvironmentPage = lazy(() => import("./pages/EnvironmentPage").then((m) => ({ default: m.EnvironmentPage })));
 const TroubleshootingPage = lazy(() => import("./pages/TroubleshootingPage").then((m) => ({ default: m.TroubleshootingPage })));
+// What a user who is not a cluster-admin sees instead (docs/research/per-user-views.md).
+const UserStatusPage = lazy(() => import("./pages/UserStatusPage").then((m) => ({ default: m.UserStatusPage })));
+const UserEnvironmentPage = lazy(() => import("./pages/UserEnvironmentPage").then((m) => ({ default: m.UserEnvironmentPage })));
 
 const MAIN_CONTENT_ID = "main-content";
 
 const NotFoundPage: React.FC = () => {
   const navigate = useNavigate();
+  const admin = useRole() === "admin";
   return (
     <PageSection isFilled>
       <EmptyState headingLevel="h1" icon={SearchIcon} titleText="404 — Page not found" variant="full">
@@ -86,9 +91,11 @@ const NotFoundPage: React.FC = () => {
           <EmptyStateActions>
             <Button variant="primary" onClick={() => navigate("/")}>Go to Status</Button>
           </EmptyStateActions>
-          <EmptyStateActions>
-            <Button variant="link" onClick={() => navigate("/diagnostics")}>Open Diagnostics</Button>
-          </EmptyStateActions>
+          {admin && (
+            <EmptyStateActions>
+              <Button variant="link" onClick={() => navigate("/diagnostics")}>Open Diagnostics</Button>
+            </EmptyStateActions>
+          )}
         </EmptyStateFooter>
       </EmptyState>
     </PageSection>
@@ -134,10 +141,21 @@ const AppLayout: React.FC = () => {
   const reconciling = operationState.reconcile.active;
   // The gitops profile has only some pages, and only for cluster-admins.
   const gitOpsProfile = useGitOpsProfile();
-  const { status: permissionStatus } = usePermissions();
-  const adminRequired = gitOpsProfile && permissionStatus === "denied";
-  const navItems = NAV_ITEMS.filter((item) => !gitOpsProfile || GITOPS_PROFILE_PAGES.has(item.path));
+  const { status: permissionStatus, retry: retryPermissions } = usePermissions();
+  // admin: every page, as before 5.0.0; user: the summary, Build Explorer and
+  // their own projects; checking: nothing role-specific until the answer.
+  const role = useRole();
+  const signedInUser = useSignedInUser();
+  const adminRequired = gitOpsProfile && role !== "admin" && permissionStatus === "denied";
+  const permissionsUnknown = gitOpsProfile && role !== "admin" && permissionStatus === "unknown";
+  const navItems = NAV_ITEMS.filter((item) => (!gitOpsProfile || GITOPS_PROFILE_PAGES.has(item.path)) && (role === "admin" || !ADMIN_ONLY_PAGES.has(item.path)));
   const offInProfile = (feature: string, element: React.ReactElement) => (gitOpsProfile ? <ProfileOffState feature={feature} /> : element);
+  /** The page for the role: a loading state until it is known, never a cluster-admin page first. */
+  const byRole = (admin: React.ReactElement, user: React.ReactElement) => (role === "admin" ? admin : role === "user" ? user : <PageLoading title="Loading page" />);
+  const adminOnly = (element: React.ReactElement) => byRole(element, <AdminOnlyPageState />);
+  // The user menu names the signed-in user: from the status for a cluster-admin (as before), else from the permission check.
+  const userName = role === "admin" ? status?.cluster.user : signedInUser ?? undefined;
+  const hasUserMenu = role === "admin" ? !!status : !!signedInUser;
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [appLauncherOpen, setAppLauncherOpen] = useState(false);
   const [overflowMenuOpen, setOverflowMenuOpen] = useState(false);
@@ -200,7 +218,7 @@ const AppLayout: React.FC = () => {
               <ToolbarItem visibility={{ default: "hidden", lg: "visible" }}>
                 <ThemeSwitcher />
               </ToolbarItem>
-              {!status && (
+              {!hasUserMenu && (
                 <ToolbarItem visibility={{ default: "visible", lg: "hidden" }}>
                   <Dropdown
                     isOpen={overflowMenuOpen}
@@ -250,7 +268,7 @@ const AppLayout: React.FC = () => {
                   </Dropdown>
                 </ToolbarItem>
               )}
-              {status ? (
+              {hasUserMenu ? (
                 <ToolbarItem>
                   <Dropdown
                     isOpen={userMenuOpen}
@@ -263,9 +281,9 @@ const AppLayout: React.FC = () => {
                         onClick={() => setUserMenuOpen(!userMenuOpen)}
                         isExpanded={userMenuOpen}
                         variant="plainText"
-                        aria-label={`User menu for ${status.cluster.user}`}
+                        aria-label={`User menu for ${userName ?? ""}`}
                       >
-                        <Truncate content={status.cluster.user} maxCharsDisplayed={16} position="end" />
+                        <Truncate content={userName ?? ""} maxCharsDisplayed={16} position="end" />
                       </MenuToggle>
                     )}
                   >
@@ -282,7 +300,7 @@ const AppLayout: React.FC = () => {
                     {/* The theme button is hidden on small screens; its choices move here. */}
                     <ThemeMenuGroups className="pf-v6-u-display-none-on-lg" />
                     <Divider className="pf-v6-u-display-none-on-lg" />
-                    <DropdownGroup label={`Signed in as ${status.cluster.user}`} labelHeadingLevel="h2">
+                    <DropdownGroup label={`Signed in as ${userName ?? ""}`} labelHeadingLevel="h2">
                       <DropdownList>
                         {/* oauth-proxy's sign_out clears its session cookie (/oauth/sign_in only showed the
                             sign-in page and kept it). The OpenShift OAuth session stays: SECURITY.md. */}
@@ -353,16 +371,18 @@ const AppLayout: React.FC = () => {
         <SessionExpiredState />
       ) : adminRequired ? (
         <AdminRequiredState />
+      ) : permissionsUnknown ? (
+        <PermissionsUnknownState onRetry={retryPermissions} />
       ) : (
         <Suspense fallback={<PageLoading title="Loading page" />}>
           <Routes>
-            <Route path="/" element={<StatusPage />} />
-            <Route path="/components" element={<ComponentsPage />} />
+            <Route path="/" element={byRole(<StatusPage />, <UserStatusPage />)} />
+            <Route path="/components" element={adminOnly(<ComponentsPage />)} />
             <Route path="/builds" element={offInProfile("Build Explorer", <BuildExplorerPage />)} />
-            <Route path="/dashboard-dev" element={offInProfile("Dashboard Dev", <DashboardDevRoute />)} />
-            <Route path="/test-resources" element={offInProfile("The Environment page", <EnvironmentPage />)} />
+            <Route path="/dashboard-dev" element={offInProfile("Dashboard Dev", adminOnly(<DashboardDevRoute />))} />
+            <Route path="/test-resources" element={offInProfile("The Environment page", byRole(<EnvironmentPage />, <UserEnvironmentPage />))} />
             <Route path="/environment" element={<EnvironmentRoute />} />
-            <Route path="/diagnostics" element={<TroubleshootingPage />} />
+            <Route path="/diagnostics" element={adminOnly(<TroubleshootingPage />)} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </Suspense>
@@ -378,13 +398,15 @@ export const App: React.FC = () => {
       <ErrorBoundary>
         <ThemeProvider>
           <LiveAnnouncerProvider>
-            <AppStateProvider>
-              <AppInfoProvider>
-                <ProgressViewsProvider>
-                  <AppLayout />
-                </ProgressViewsProvider>
-              </AppInfoProvider>
-            </AppStateProvider>
+            <PermissionsProvider>
+              <RoleAppStateProvider>
+                <AppInfoProvider>
+                  <ProgressViewsProvider>
+                    <AppLayout />
+                  </ProgressViewsProvider>
+                </AppInfoProvider>
+              </RoleAppStateProvider>
+            </PermissionsProvider>
           </LiveAnnouncerProvider>
         </ThemeProvider>
       </ErrorBoundary>

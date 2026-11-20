@@ -1,6 +1,6 @@
 /** The RHOAI operator: status, the running operation, updates, reinstalls and refreshes, cluster setup, and usage tracking. */
 
-import { StatusResponse, OperationResponse, NodeSetupAction, NodeSetupPlan,LatestNightlyResponse, NightlyTagsResponse, UserPermissions, UpdateStep, OperationStatusResponse, VersionInfo, UpdateCheck } from '../../types';
+import { StatusResponse, OperationResponse, NodeSetupAction, NodeSetupPlan,LatestNightlyResponse, NightlyTagsResponse, UserPermissions, UpdateStep, OperationStatusResponse, VersionInfo, UpdateCheck, ClusterSummary, UserOperationStatus } from '../../types';
 import { request } from './client';
 import { StreamDoneHandler, StreamDetachHandler, streamSSE } from './stream';
 
@@ -8,9 +8,23 @@ export function getStatus(signal?: AbortSignal): Promise<StatusResponse> {
   return request('/api/status', { signal });
 }
 
-/** The cluster operation holding the backend lock, if any (cheap; safe to poll). */
-export function getOperation(signal?: AbortSignal): Promise<OperationStatusResponse> {
+/**
+ * The cluster operation holding the backend lock, if any (cheap; safe to
+ * poll). A cluster-admin gets the full answer; any other user only whether
+ * one runs, its label and its start (isUserOperation).
+ */
+export function getOperation(signal?: AbortSignal): Promise<OperationStatusResponse | UserOperationStatus> {
   return request('/api/operation', { signal });
+}
+
+/** True for the short answer GET /api/operation gives a user who is not a cluster-admin. */
+export function isUserOperation(res: OperationStatusResponse | UserOperationStatus): res is UserOperationStatus {
+  return typeof (res as Partial<OperationStatusResponse>).inProgress !== 'boolean' && typeof (res as Partial<UserOperationStatus>).running === 'boolean';
+}
+
+/** The read-only cluster summary every signed-in user may see. */
+export function getSummary(signal?: AbortSignal): Promise<ClusterSummary> {
+  return request('/api/summary', { signal });
 }
 
 /** Build and deployment-template information of the running updater. */
