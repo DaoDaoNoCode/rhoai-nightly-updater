@@ -130,16 +130,21 @@ export interface SubscriptionInfo {
 }
 
 /**
- * What the backend learnt from Argo CD about an object's
- * argocd.argoproj.io/tracking-id annotation (pkg/cluster/argocd.go):
- * - "managed": the Application lists the object among its resources;
- * - "stale": the annotation is left over (staleReason), the tool treats
- *   the object as not managed;
+ * What the backend learnt from Argo CD about an object: whether an
+ * Application lists it in status.resources (pkg/cluster/argocd.go). The
+ * tracking annotation or instance label only names the application.
+ * - "managed": an Application lists the object among its resources;
+ * - "stale": the object's tracking is left over (staleReason), the tool
+ *   treats the object as not managed;
  * - "unconfirmed": Argo CD could not be asked or did not answer clearly
  *   (reason), the tool treats the object as managed.
  */
 export interface ArgoCDTracking {
-  /** As the annotation names it: "name", or "namespace_name" outside Argo CD's own namespace. */
+  /**
+   * As the tracking annotation or label names it ("name", or "namespace_name" outside Argo CD's own
+   * namespace), the listing Application's name for an unmarked object, or "(unknown)" when Argo CD
+   * could not be asked about one.
+   */
   application: string;
   state: "managed" | "stale" | "unconfirmed";
   /** The namespace of the Application found. */
