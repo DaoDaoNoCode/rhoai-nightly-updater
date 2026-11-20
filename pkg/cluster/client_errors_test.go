@@ -108,6 +108,7 @@ func TestHTTPStatusForError(t *testing.T) {
 	}{
 		{"401", &K8sError{Status: 401}, 401, "unauthorized"},
 		{"403 wrapped", fmt.Errorf("fetching DSC list: %w", &K8sError{Status: 403}), 403, "forbidden"},
+		{"403 to the user's own token", fmt.Errorf("list projects: %w", &K8sError{Status: 403, User: true}), 403, "forbidden_for_user"},
 		{"404", &K8sError{Status: 404}, 404, "not_found"},
 		{"429 throttled by API priority and fairness", &K8sError{Status: 429}, 503, "rate_limited"},
 		{"500", &K8sError{Status: 500}, 502, "cluster_unavailable"},

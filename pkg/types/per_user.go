@@ -1,0 +1,108 @@
+package types
+
+// The answers of the per-user views (5.0.0; docs/research/per-user-views.md
+// and SECURITY.md "Who sees what"). Each is a fixed type: a field added
+// here is shown to every signed-in user, so it is a reviewed change. None
+// of them names a node, pod, project or user, and none says anything
+// about the pull secret.
+
+// Summary is GET /api/summary: the cluster's RHOAI state every signed-in
+// user may see, read by the ServiceAccount.
+type Summary struct {
+	// UpdaterVersion is this updater's version.
+	UpdaterVersion string         `json:"updaterVersion"`
+	RHOAI          SummaryRHOAI   `json:"rhoai"`
+	Nightly        SummaryNightly `json:"nightly"`
+	DSC            SummaryDSC     `json:"dsc"`
+}
+
+// SummaryRHOAI is the installed RHOAI operator.
+type SummaryRHOAI struct {
+	// Installed: the RHOAI operator's Subscription exists.
+	Installed bool `json:"installed"`
+	// Version and Phase are the installed CSV's; Channel is the
+	// Subscription's. Empty when unknown (not installed, or installing).
+	Version string `json:"version"`
+	Channel string `json:"channel"`
+	Phase   string `json:"phase"`
+}
+
+// SummaryNightly is the installed nightly build and the newest one of its
+// stream. Both builds are nil when RHOAI is not installed from the nightly
+// catalog; LatestBuild is nil while it is unknown.
+type SummaryNightly struct {
+	InstalledBuild *SummaryBuild `json:"installedBuild"`
+	LatestBuild    *SummaryBuild `json:"latestBuild"`
+	// NewerAvailable: the newest build of the installed stream is not the
+	// installed one (false when that is not known).
+	NewerAvailable bool `json:"newerAvailable"`
+}
+
+// SummaryBuild is a nightly build: its stream tag ("rhoai-3.6") and build
+// date ("" when unknown).
+type SummaryBuild struct {
+	Tag       string `json:"tag"`
+	BuildDate string `json:"buildDate"`
+}
+
+// SummaryDSC is the DataScienceCluster.
+type SummaryDSC struct {
+	Exists bool `json:"exists"`
+	// Ready: its Ready condition is True.
+	Ready bool `json:"ready"`
+	// Components are its components, by name: managementState as the
+	// DataScienceCluster sets it ("" for a condition without a component
+	// of the same name) and whether the operator reports it ready.
+	Components []SummaryComponent `json:"components"`
+}
+
+// SummaryComponent is one DataScienceCluster component.
+type SummaryComponent struct {
+	Name            string `json:"name"`
+	ManagementState string `json:"managementState"`
+	Ready           bool   `json:"ready"`
+}
+
+// OperationSummary is GET /api/operation for a user who is not a
+// cluster-admin: whether an operation runs, its kind's label ("Update to
+// nightly"; never its target or who started it) and when it started
+// (RFC 3339, "" when none runs).
+type OperationSummary struct {
+	Running   bool   `json:"running"`
+	Label     string `json:"label"`
+	StartedAt string `json:"startedAt"`
+}
+
+// ProjectStatus is GET /api/resources/status?project= for a user who is
+// not a cluster-admin: one of their data science projects, read with their
+// own token. It holds that project's objects only.
+type ProjectStatus struct {
+	Project string `json:"project"`
+	// PipelineServers are the project's pipeline servers
+	// (DataSciencePipelinesApplications), this tool's and others'
+	// (ManagedByTool). Nil when the project's pipeline servers cannot be
+	// read (PipelineServersProblem says why).
+	PipelineServers        []ResourceState `json:"pipelineServers"`
+	PipelineServersProblem string          `json:"pipelineServersProblem,omitempty"`
+	// Models are the project's LLMInferenceServices.
+	Models        []ModelState `json:"models"`
+	ModelsProblem string       `json:"modelsProblem,omitempty"`
+	// InferenceServices are the project's KServe InferenceServices.
+	InferenceServices        []ProjectInferenceService `json:"inferenceServices"`
+	InferenceServicesProblem string                    `json:"inferenceServicesProblem,omitempty"`
+	// DashboardURL is the RHOAI dashboard's address ("" when unknown), for
+	// links to its project pages.
+	DashboardURL string `json:"dashboardUrl,omitempty"`
+}
+
+// ProjectInferenceService is one InferenceService of a project.
+type ProjectInferenceService struct {
+	Name  string `json:"name"`
+	Ready bool   `json:"ready"`
+	// Message is its Ready condition's reason or message when not ready.
+	Message string `json:"message,omitempty"`
+	// URL is status.url ("" when it has none, or one the page must not
+	// link to).
+	URL         string `json:"url,omitempty"`
+	Terminating bool   `json:"terminating,omitempty"`
+}
