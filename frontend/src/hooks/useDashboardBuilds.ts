@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { DashboardContainerBuild, DashboardState } from "../types";
 import { ApiError, getDashboardBuilds, toApiError } from "../services/api";
 import { usePolling } from "./usePolling";
+import { useLatestRequest } from "./useLatestRequest";
 import { DASHBOARD_BUILDS_POLL_MS } from "../constants";
 
 /** What the Dashboard containers card needs to show build commits. */
@@ -47,22 +48,20 @@ export function useDashboardBuilds(state: DashboardState | null): DashboardBuild
   const [retryAfterSeconds, setRetryAfterSeconds] = useState<number | undefined>(undefined);
   const [supported, setSupported] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
-  const controller = useRef<AbortController | null>(null);
+  const latest = useLatestRequest();
 
   const fetchBuilds = useCallback(async () => {
-    controller.current?.abort();
-    const current = new AbortController();
-    controller.current = current;
+    const ticket = latest.start();
     setLoading(true);
     try {
-      const resp = await getDashboardBuilds(current.signal);
-      if (current.signal.aborted) return;
+      const resp = await getDashboardBuilds(ticket.signal);
+      if (!ticket.isLatest()) return;
       setBuilds(resp.builds ?? []);
       setRateLimited(!!resp.rateLimited);
       setRetryAfterSeconds(resp.retryAfterSeconds);
       setError(null);
     } catch (e) {
-      if (current.signal.aborted) return;
+      if (!ticket.isLatest()) return;
       const err = toApiError(e, "Could not load the build details");
       if (err.status === 404) {
         // An older backend, or no dashboard: nothing to show, nothing to say.
@@ -73,14 +72,14 @@ export function useDashboardBuilds(state: DashboardState | null): DashboardBuild
         setError(err);
       }
     } finally {
-      if (!current.signal.aborted) setLoading(false);
+      if (ticket.isLatest()) setLoading(false);
     }
-  }, []);
+  }, [latest]);
 
   const enabled = !!key && supported;
   useEffect(() => {
     if (!enabled) {
-      controller.current?.abort();
+      latest.cancel();
       setBuilds([]);
       setLoading(false);
       setError(null);
@@ -88,8 +87,8 @@ export function useDashboardBuilds(state: DashboardState | null): DashboardBuild
       return;
     }
     void fetchBuilds();
-    return () => controller.current?.abort();
-  }, [enabled, key, refreshKey, fetchBuilds]);
+    return () => latest.cancel();
+  }, [enabled, key, refreshKey, fetchBuilds, latest]);
 
   usePolling(fetchBuilds, { delay: DASHBOARD_BUILDS_POLL_MS, enabled });
 

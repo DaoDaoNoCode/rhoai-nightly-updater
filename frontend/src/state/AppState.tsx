@@ -40,6 +40,7 @@ import {
 } from "./operation";
 import { useAnnounce } from "./LiveAnnouncer";
 import { sameData } from "../utils";
+import { useLatestRequest } from "../hooks/useLatestRequest";
 import { useRole } from "./Permissions";
 
 // ---------------------------------------------------------------------------
@@ -372,7 +373,8 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
   const [error, setError] = useState<ApiError | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const statusRef = useRef<StatusResponse | null>(null);
-  const latestStatusRequest = useRef(0);
+  // Only the newest status read is shown; leaving aborts the one in flight.
+  const statusRequest = useLatestRequest();
   const fetchStatusRef = useRef(fetchStatus);
   const fetchOperationRef = useRef(fetchOperation);
   useEffect(() => {
@@ -395,13 +397,13 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
   const loadStatus = useCallback(async (background: boolean) => {
     // The one place /api/status is read: never for a user who may not.
     if (!statusEnabledRef.current) return;
-    const requestId = ++latestStatusRequest.current;
+    const ticket = statusRequest.start();
     const requestedAt = Date.now();
     if (!background || !statusRef.current) setLoading(true);
     try {
-      const s = await fetchStatusRef.current();
+      const s = await fetchStatusRef.current(ticket.signal);
       // An older poll must not overwrite a newer response.
-      if (requestId !== latestStatusRequest.current) return;
+      if (!ticket.isLatest()) return;
       // An unchanged status keeps its object: what reads it renders nothing again.
       if (!sameData(statusRef.current, s)) {
         statusRef.current = s;
@@ -422,12 +424,12 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
         if (activePollingTime.current >= RECONCILE_TIMEOUT_MS) dispatch({ type: "reconcileTimedOut" });
       }
     } catch (e) {
-      if (requestId !== latestStatusRequest.current) return;
+      if (!ticket.isLatest()) return;
       setError(toApiError(e, "Failed to fetch status"));
     } finally {
-      if (requestId === latestStatusRequest.current) setLoading(false);
+      if (ticket.isLatest()) setLoading(false);
     }
-  }, []);
+  }, [statusRequest]);
   const refresh = useCallback(() => loadStatus(false), [loadStatus]);
   const pollStatus = useCallback(() => loadStatus(true), [loadStatus]);
 
@@ -437,12 +439,12 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
       return;
     }
     // Not (or no longer) a cluster-admin: nothing of the status stays shown.
-    latestStatusRequest.current++;
+    statusRequest.cancel();
     statusRef.current = null;
     setStatus(null);
     setError(null);
     setLoading(false);
-  }, [refresh, statusEnabled]);
+  }, [refresh, statusEnabled, statusRequest]);
 
   // One poller for /api/status: adaptive while reconciling, 60 s otherwise.
   // While this tab streams an operation, SSE carries the progress, so the
@@ -637,10 +639,9 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
   const serverRef = useRef(server);
   serverRef.current = server;
 
-  // Every answer applied to `server` gets a number; an older answer that
-  // lands after a newer one (a poll reset while another was in flight, an
-  // idle poll after a 409 body) is dropped.
-  const operationSeq = useRef(0);
+  // An older answer that lands after a newer read started (a poll reset
+  // while another was in flight) or after a 409 body was applied is dropped.
+  const operationRequest = useLatestRequest();
 
   const applyServerOperation = useCallback((res: OperationStatusResponse) => {
     const op = res.inProgress ? res.operation : null;
@@ -697,16 +698,16 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
     const current = stateRef.current.run;
     // While this tab streams its own operation, the stream is the source.
     if (isRunning(current) && current.source === "stream" && Date.now() - current.startedAt < STREAM_MAX_MS) return;
-    const seq = ++operationSeq.current;
+    const ticket = operationRequest.start();
     try {
-      const res = await fetchOperationRef.current();
-      if (seq !== operationSeq.current) return;
+      const res = await fetchOperationRef.current(ticket.signal);
+      if (!ticket.isLatest()) return;
       if (isUserOperation(res)) applyUserOperation(res);
       else applyServerOperation(res);
     } catch {
       // Keep the last answer: a failed poll says nothing about the cluster.
     }
-  }, [applyServerOperation, applyUserOperation]);
+  }, [applyServerOperation, applyUserOperation, operationRequest]);
 
   const operationPoller = usePolling(pollServerOperation, {
     delay: () => (serverRef.current.inProgress || isRunning(stateRef.current.run) || stateRef.current.reconcile.awaitingServer ? OPERATION_POLL_BUSY_MS : OPERATION_POLL_IDLE_MS),
@@ -720,7 +721,7 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
   useEffect(() => {
     if (runId === undefined || !outcome) return;
     if (outcome.status === "failed" && outcome.busyOperation) {
-      operationSeq.current++;
+      operationRequest.cancel();
       applyServerOperation({ inProgress: true, operation: outcome.busyOperation });
     }
     if (outcome.status === "detached" && outcome.reason !== "server_lost") {
@@ -729,7 +730,7 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
     }
     const id = setTimeout(() => operationPoller.reset({ runNow: true }), 1_500);
     return () => clearTimeout(id);
-  }, [runId, outcome, applyServerOperation, operationPoller]);
+  }, [runId, outcome, applyServerOperation, operationPoller, operationRequest]);
 
   const dismissTimeout = useCallback(() => dispatch({ type: "dismissTimeout" }), []);
   const dismissFinished = useCallback(() => dispatch({ type: "dismissFinished" }), []);

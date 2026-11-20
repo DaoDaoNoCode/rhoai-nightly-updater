@@ -53,6 +53,7 @@ import { nightlyProblemText, summaryNightly, useSummary, type UserNightly } from
 import { useCommitSearch, type SearchBuild } from "../hooks/useCommitSearch";
 import { useContainsSearch } from "../hooks/useContainsSearch";
 import { ContainsSearchResults, DEFAULT_REPO } from "../components/ContainsSearchResults";
+import { useLatestRequest } from "../hooks/useLatestRequest";
 
 export function parseTagVersion(
   tag: string,
@@ -199,7 +200,7 @@ export const BuildExplorerPage: React.FC = () => {
   const [tags, setTags] = useState<NightlyTag[]>([]);
   const [loading, setLoading] = useState(true);
   const [datesLoading, setDatesLoading] = useState(false);
-  const tagsRequestId = useRef(0);
+  const tagsRequest = useLatestRequest();
   const [error, setError] = useState<ApiError | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
@@ -218,40 +219,39 @@ export const BuildExplorerPage: React.FC = () => {
   const installedSide: BuildSide | null = installed ? { image: installed.image, label: INSTALLED_LABEL, buildDate: installed.buildDate } : null;
 
   const fetchTags = useCallback(async () => {
-    const requestId = ++tagsRequestId.current;
+    const ticket = tagsRequest.start();
     setLoading(true);
     setDatesLoading(false);
     setError(null);
     try {
-      const res = await getBuildExplorerTags();
-      if (requestId !== tagsRequestId.current) return;
+      const res = await getBuildExplorerTags(false, ticket.signal);
+      if (!ticket.isLatest()) return;
       setTags(res.tags || []);
       setLastRefreshed(new Date());
       setDatesLoading(true);
       // Show versions immediately; build dates are optional and arrive later.
       // Only merge dates for the exact image already shown.
-      void getBuildExplorerTags(true)
+      void getBuildExplorerTags(true, ticket.signal)
         .then((enriched) => {
-          if (requestId !== tagsRequestId.current) return;
+          if (!ticket.isLatest()) return;
           const dates = new Map((enriched.tags ?? []).map((tag) => [tag.image, tag.buildDate]));
           setTags((current) => current.map((tag) => ({ ...tag, buildDate: dates.get(tag.image) || tag.buildDate })));
         })
         .catch(() => { /* Build dates are optional; keep the version list usable. */ })
         .finally(() => {
-          if (requestId === tagsRequestId.current) setDatesLoading(false);
+          if (ticket.isLatest()) setDatesLoading(false);
         });
     } catch (e) {
-      if (requestId === tagsRequestId.current) setError(toApiError(e, "Failed to fetch tags"));
+      if (ticket.isLatest()) setError(toApiError(e, "Failed to fetch tags"));
     } finally {
-      if (requestId === tagsRequestId.current) setLoading(false);
+      if (ticket.isLatest()) setLoading(false);
     }
-  }, []);
+  }, [tagsRequest]);
 
   useEffect(() => {
     fetchTags();
-    const requests = tagsRequestId;
-    return () => { requests.current++; };
-  }, [fetchTags]);
+    return () => tagsRequest.cancel();
+  }, [fetchTags, tagsRequest]);
 
   useEffect(() => {
     document.title = "Build Explorer — RHOAI Nightly Updater";

@@ -241,9 +241,12 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
     const dashboard = vi.fn(async () => clean());
     renderWithApp(<DashboardDevPage />, { permissions: async () => ({ canMutate: true, user: "me", role: "admin" }), dashboard }, "/dashboard-dev");
     fireEvent.click(await screen.findByRole("button", { name: "Deploy latest main" }));
-    await waitFor(() => expect(dashboard).toHaveBeenCalledTimes(1));
+    // While this page polls the state, the app takes its answers and does not read it too.
+    await settleApps();
+    expect(dashboard).not.toHaveBeenCalled();
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Deploy latest main" }));
-    await waitFor(() => expect(dashboard).toHaveBeenCalledTimes(2));
+    // After a change it asks at once, without waiting for the page's next poll.
+    await waitFor(() => expect(dashboard).toHaveBeenCalledTimes(1));
     await settleApps();
   });
 

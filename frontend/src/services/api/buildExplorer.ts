@@ -3,8 +3,8 @@
 import { NightlyTagsResponse, FBCContentResponse, PRContainsResponse } from '../../types';
 import { request } from './client';
 
-export function getBuildExplorerTags(includeDates = false): Promise<NightlyTagsResponse> {
-  return request('/api/build-explorer/tags?includeDates=' + includeDates);
+export function getBuildExplorerTags(includeDates = false, signal?: AbortSignal): Promise<NightlyTagsResponse> {
+  return request('/api/build-explorer/tags?includeDates=' + includeDates, { signal });
 }
 
 export function getBuildExplorerContent(image: string, labels?: boolean, signal?: AbortSignal): Promise<FBCContentResponse> {

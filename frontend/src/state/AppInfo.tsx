@@ -11,6 +11,7 @@ import {
 import { DASHBOARD_OVERRIDE_POLL_MS, GITOPS_POLICY_POLL_MS, UPDATE_CHECK_REFRESH_MS } from "../constants";
 import { usePermissions, useRole } from "./Permissions";
 import { usePolling } from "../hooks/usePolling";
+import { useLatestRequest } from "../hooks/useLatestRequest";
 import { OPERATION_NAMES, STEP_SETS, operationKindForServerType, stepLabel } from "../operationSteps";
 import { isRunning } from "./operation";
 import { useClusterStatus, useOperation } from "./AppState";
@@ -43,6 +44,13 @@ export interface DashboardOverrideValue {
   override: DashboardOverride | null;
   loaded: boolean;
   refresh: () => void;
+  /**
+   * For a page that polls GET /api/dashboard/state itself (Dashboard Dev):
+   * while it is mounted (watch() until its cleanup), the app does not poll
+   * the same endpoint, and report() takes the page's answers instead.
+   */
+  watch: () => () => void;
+  report: (result: DashboardState | ApiError) => void;
 }
 
 /** The override in a dashboard-state response, including a 404 dashboard_not_deployed body. */
@@ -144,15 +152,18 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
   // state, which changes while the page is open (Argo CD restores or
   // changes the policy): read it again, so Update turns back on, or off,
   // without a reload. A failed read keeps the last answer.
+  const versionRequest = useLatestRequest();
   const refreshVersion = useCallback(async () => {
+    const ticket = versionRequest.start();
     try {
-      const v = await fetchers.current.fetchVersion();
+      const v = await fetchers.current.fetchVersion(ticket.signal);
+      if (!ticket.isLatest()) return;
       // An unchanged answer keeps the last object: nothing renders again.
       setVersion((prev) => (sameData(prev, v) ? prev : v));
     } catch {
       /* keep the last answer */
     }
-  }, []);
+  }, [versionRequest]);
   usePolling(refreshVersion, { delay: GITOPS_POLICY_POLL_MS, enabled: gitOpsProfile });
 
   // --- Update check (releases only; again on window focus, at most every 6 h) --
@@ -185,18 +196,8 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
   // --- Dashboard Dev override -------------------------------------------------
   const [override, setOverride] = useState<DashboardOverride | null>(null);
   const [overrideLoaded, setOverrideLoaded] = useState(false);
-  const overrideController = useRef<AbortController | null>(null);
-  const loadOverride = useCallback(async () => {
-    overrideController.current?.abort();
-    const controller = new AbortController();
-    overrideController.current = controller;
-    let result: DashboardState | ApiError;
-    try {
-      result = await fetchers.current.fetchDashboardState(controller.signal);
-    } catch (e) {
-      result = toApiError(e);
-    }
-    if (controller.signal.aborted) return;
+  const overrideRequest = useLatestRequest();
+  const applyDashboardState = useCallback((result: DashboardState | ApiError) => {
     const next = overrideFromDashboardResponse(result);
     // undefined: the state could not be read; keep what we knew.
     if (next !== undefined) {
@@ -204,11 +205,38 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
       setOverrideLoaded(true);
     }
   }, []);
+  const loadOverride = useCallback(async () => {
+    const ticket = overrideRequest.start();
+    let result: DashboardState | ApiError;
+    try {
+      result = await fetchers.current.fetchDashboardState(ticket.signal);
+    } catch (e) {
+      result = toApiError(e);
+    }
+    if (!ticket.isLatest()) return;
+    applyDashboardState(result);
+  }, [overrideRequest, applyDashboardState]);
+  // A page that polls the same endpoint (Dashboard Dev) is the source while it is open.
+  const [pageReaders, setPageReaders] = useState(0);
+  const watchDashboardState = useCallback(() => {
+    setPageReaders((n) => n + 1);
+    return () => setPageReaders((n) => n - 1);
+  }, []);
+  const reportDashboardState = useCallback((result: DashboardState | ApiError) => {
+    // The page's answer is newer than a read of ours still in flight.
+    overrideRequest.cancel();
+    applyDashboardState(result);
+  }, [overrideRequest, applyDashboardState]);
   // Dashboard Dev does not exist in the gitops profile (403 profile_gitops),
   // and only cluster-admins read it (403 admin_only for the others).
-  const overridePoller = usePolling(loadOverride, { delay: DASHBOARD_OVERRIDE_POLL_MS, runImmediately: true, enabled: versionSettled && !gitOpsProfile && role === "admin" });
-  const refreshOverride = useCallback(() => overridePoller.reset({ runNow: true }), [overridePoller]);
-  useEffect(() => () => overrideController.current?.abort(), []);
+  const mayReadOverride = versionSettled && !gitOpsProfile && role === "admin";
+  const overridePoller = usePolling(loadOverride, { delay: DASHBOARD_OVERRIDE_POLL_MS, runImmediately: true, enabled: mayReadOverride && pageReaders === 0 });
+  const refreshOverride = useCallback(() => {
+    // Asked for at once (an operation ended, a session changed): a read on
+    // demand even while a page polls, as before; the poller resets otherwise.
+    if (pageReaders > 0 && mayReadOverride) void loadOverride();
+    else overridePoller.reset({ runNow: true });
+  }, [overridePoller, pageReaders, mayReadOverride, loadOverride]);
 
   // An ended operator operation may have reverted the session (revertDashboardDev).
   const { run } = useOperation();
@@ -221,8 +249,8 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
     version,
     profile: !versionSettled ? null : gitOpsProfile ? "gitops" : "full",
     update,
-    dashboard: { override, loaded: overrideLoaded, refresh: refreshOverride },
-  }), [version, versionSettled, gitOpsProfile, update, override, overrideLoaded, refreshOverride]);
+    dashboard: { override, loaded: overrideLoaded, refresh: refreshOverride, watch: watchDashboardState, report: reportDashboardState },
+  }), [version, versionSettled, gitOpsProfile, update, override, overrideLoaded, refreshOverride, watchDashboardState, reportDashboardState]);
 
   return <AppInfoContext.Provider value={value}>{children}</AppInfoContext.Provider>;
 };

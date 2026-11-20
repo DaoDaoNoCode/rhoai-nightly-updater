@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Alert, AlertActionLink, Content, ExpandableSection, Skeleton, Stack, StackItem } from "@patternfly/react-core";
 import type { FeaturePrerequisites, ModelExposureKind, PrerequisiteFeature, PrerequisitePart, PrerequisitesStatus } from "../../types";
 import { getPrerequisites, toApiError } from "../../services/api";
@@ -8,6 +8,7 @@ import { CopyableCode } from "./UseIt";
 import { type FeatureState, maasPartLabelStatus } from "./featureState";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
 import type { MaaSPart } from "../../types";
+import { useLatestRequest } from "../../hooks/useLatestRequest";
 
 /**
  * One-click prerequisites (pkg/cluster feature_setup.go): what a feature
@@ -37,20 +38,20 @@ const capitalized = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 export function usePrerequisites(refreshKey: number, exposure: ModelExposureKind | null, enabled = true) {
   const [data, setData] = useState<PrerequisitesStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const latest = useRef(0);
+  const latest = useLatestRequest();
   const fetchNow = useCallback(async () => {
     if (!enabled) return;
-    const id = ++latest.current;
+    const ticket = latest.start();
     try {
-      const d = await getPrerequisites(exposure);
-      if (id !== latest.current) return;
+      const d = await getPrerequisites(exposure, ticket.signal);
+      if (!ticket.isLatest()) return;
       setData(d);
       setError(null);
     } catch (e) {
-      if (id !== latest.current) return;
+      if (!ticket.isLatest()) return;
       setError(toApiError(e, "Cannot read what the features need on the cluster").message);
     }
-  }, [enabled, exposure]);
+  }, [enabled, exposure, latest]);
   useEffect(() => {
     void fetchNow();
   }, [fetchNow, refreshKey]);

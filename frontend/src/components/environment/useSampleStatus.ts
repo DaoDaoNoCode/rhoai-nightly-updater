@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toApiError } from "../../services/api";
 import { usePolling } from "../../hooks/usePolling";
+import { useLatestRequest } from "../../hooks/useLatestRequest";
 import { RESOURCE_SETTLE_MAX_MS } from "../../constants";
 
 /** How often a sample whose state changes on its own (a pipeline run) is read again. */
@@ -24,7 +25,7 @@ export interface SampleStatusResult<T> {
  * is dropped.
  */
 export function useSampleStatus<T>(
-  load: (project: string) => Promise<T>,
+  load: (project: string, signal: AbortSignal) => Promise<T>,
   project: string | null,
   refreshKey: number,
   active: (data: T) => boolean = () => false,
@@ -33,21 +34,23 @@ export function useSampleStatus<T>(
   const [loading, setLoading] = useState(false);
   const [gaveUp, setGaveUp] = useState(false);
   const [pollRound, setPollRound] = useState(0);
-  const current = useRef(project);
-  current.current = project;
+  // Only the newest read's answer is shown: another project's, and an
+  // earlier one for the same project, are dropped.
+  const latest = useLatestRequest();
 
   const fetchNow = useCallback(async () => {
     if (!project) return;
+    const ticket = latest.start();
     setLoading(true);
     try {
-      const data = await load(project);
-      if (current.current === project) setState({ project, data, error: null });
+      const data = await load(project, ticket.signal);
+      if (ticket.isLatest()) setState({ project, data, error: null });
     } catch (e) {
-      if (current.current === project) setState((s) => ({ project, data: s.project === project ? s.data : null, error: toApiError(e, "Cannot read the sample data").message }));
+      if (ticket.isLatest()) setState((s) => ({ project, data: s.project === project ? s.data : null, error: toApiError(e, "Cannot read the sample data").message }));
     } finally {
-      if (current.current === project) setLoading(false);
+      if (ticket.isLatest()) setLoading(false);
     }
-  }, [load, project]);
+  }, [load, project, latest]);
 
   useEffect(() => {
     setGaveUp(false);

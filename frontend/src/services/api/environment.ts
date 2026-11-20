@@ -10,12 +10,12 @@ export function getProjectStatus(project: string): Promise<ProjectStatus> {
 }
 
 /** The Environment status; project (the Pipelines tab's selected one) also reads its dashboard Connection. */
-export function getResourcesStatus(project?: string | null): Promise<ResourcesStatus> {
-  return request(project ? `/api/resources/status?project=${encodeURIComponent(project)}` : '/api/resources/status');
+export function getResourcesStatus(project?: string | null, signal?: AbortSignal): Promise<ResourcesStatus> {
+  return request(project ? `/api/resources/status?project=${encodeURIComponent(project)}` : '/api/resources/status', { signal });
 }
 
-export function getDSProjects(): Promise<{ projects: string[] | null }> {
-  return request('/api/resources/projects');
+export function getDSProjects(signal?: AbortSignal): Promise<{ projects: string[] | null }> {
+  return request('/api/resources/projects', { signal });
 }
 
 export function setupMLflow(): Promise<OperationResponse> {
@@ -158,8 +158,8 @@ export function getModelExposures(project: string, model: string): Promise<Model
 // --- One-click prerequisites ---
 
 /** What each feature needs on the cluster; Models planned for how its model is reached. */
-export function getPrerequisites(exposure?: ModelExposureKind | null): Promise<PrerequisitesStatus> {
-  return request(`/api/resources/prerequisites${exposure ? `?exposure=${encodeURIComponent(exposure)}` : ''}`);
+export function getPrerequisites(exposure?: ModelExposureKind | null, signal?: AbortSignal): Promise<PrerequisitesStatus> {
+  return request(`/api/resources/prerequisites${exposure ? `?exposure=${encodeURIComponent(exposure)}` : ''}`, { signal });
 }
 
 /** Sets up what a feature needs, streaming "prerequisites", "dsc", one step per operator, "kuadrant", "ready". */
@@ -177,8 +177,8 @@ export function streamPrerequisites(
  * projects, and the models a project's playground can use (cached on the
  * server for 10 s).
  */
-export function getPlayground(project: string | null): Promise<PlaygroundStatus> {
-  return request(`/api/resources/playground${project ? `?project=${encodeURIComponent(project)}` : ''}`);
+export function getPlayground(project: string | null, signal?: AbortSignal): Promise<PlaygroundStatus> {
+  return request(`/api/resources/playground${project ? `?project=${encodeURIComponent(project)}` : ''}`, { signal });
 }
 
 /**
@@ -196,8 +196,8 @@ export function streamPlayground(
 }
 
 /** Models as a Service: the platform part by part, and this tool's models with their publication. */
-export function getMaaS(): Promise<MaaSStatus> {
-  return request('/api/resources/maas');
+export function getMaaS(signal?: AbortSignal): Promise<MaaSStatus> {
+  return request('/api/resources/maas', { signal });
 }
 
 /** Which of the groups typed in a MaaS dialog have no OpenShift Group (cluster-admins only; at most 20 names). */
@@ -223,8 +223,8 @@ export function streamMaaS(
 }
 
 /** The MLflow samples of one project (named reads only; cached on the server for 15 s). */
-export function getMLflowSamples(project: string): Promise<MLflowSamplesStatus> {
-  return request(`/api/resources/samples/mlflow?project=${encodeURIComponent(project)}`);
+export function getMLflowSamples(project: string, signal?: AbortSignal): Promise<MLflowSamplesStatus> {
+  return request(`/api/resources/samples/mlflow?project=${encodeURIComponent(project)}`, { signal });
 }
 
 /** The body of POST /api/resources/samples/mlflow/stream (pkg/types MLflowSamplesRequest). */
