@@ -134,6 +134,11 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   logs the panic with its stack, ends the stream with a failed result
   ("stopped on an internal error ... check what it changed"), and gives
   the slot back; the dry run answers 500 `internal`.
+- **Dashboard Dev no longer reports the dashboard ready with one of its
+  pods missing.** With `spec.replicas: 2` and only one pod (the second not
+  created, for example refused by a quota), the dashboard state said
+  ready and not rolling out. Fewer pods than the Deployment asks for is now
+  "Rolling out", as `kubectl rollout status` treats it.
 
 ### Security
 

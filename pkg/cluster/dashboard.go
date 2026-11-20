@@ -234,7 +234,11 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 			}
 		}
 
-		if !allReady || !imageMatch || len(dashPods) > expectedReplicas {
+		// Fewer pods than spec.replicas is a rollout that has not
+		// finished either: kubectl rollout status waits while
+		// status.updatedReplicas < spec.replicas (k8s.io/kubectl
+		// pkg/polymorphichelpers/rollout_status.go).
+		if !allReady || !imageMatch || len(dashPods) != expectedReplicas {
 			state.RolloutPending = true
 			for _, pod := range dashPods {
 				if !pod.Ready || (specImage != "" && pod.Image != specImage) {
