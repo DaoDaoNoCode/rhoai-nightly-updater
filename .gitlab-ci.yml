@@ -7,6 +7,12 @@
 #                          GitLab Release
 #   promote-latest       → manual job of a tag pipeline: :latest moves to that
 #                          release across majors
+#   tag vX.Y.Z-rc.N      → a pre-release (-alpha.N, -beta.N, -rc.N; on main or
+#                          an integ/* branch): release guard, then
+#                          :vX.Y.Z-rc.N (immutable), the commit tag (when
+#                          new), install.sh and a GitLab Release named
+#                          "vX.Y.Z-rc.N (pre-release)". Never :vMAJOR or
+#                          :latest, and no promote-latest job.
 # :latest never moves to a new major automatically: deployments that still
 # pull :latest stay on their major line until someone upgrades on purpose.
 # Release logic lives in scripts/release.sh (tested by scripts/test-release.sh).
@@ -19,8 +25,11 @@ workflow:
     - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
       when: never
     - if: $CI_COMMIT_BRANCH
-    # Release tags only; other tags run no pipeline.
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    # Release and pre-release tags only; other tags run no pipeline. The
+    # pattern is RE2 (GitLab docs, ci/jobs/job_rules.md, "Compare a variable
+    # to a regular expression"); release-guard then refuses a pre-release
+    # number 0 or with a leading zero.
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(-(alpha|beta|rc)\.\d+)?$/
 
 stages:
   - test
@@ -205,8 +214,9 @@ chart:
     - bash scripts/test-chart.sh
 
 # Fails a tag pipeline before anything is built or published: the tag must
-# match the top dated section of CHANGELOG.md, and a TEMPLATE_REVISION change
-# since the previous release tag needs a higher MAJOR version.
+# match the top dated section of CHANGELOG.md (a pre-release: the top
+# undated one), and a TEMPLATE_REVISION change since the previous release
+# tag (pre-releases do not count) needs a higher MAJOR version.
 release-guard:
   extends: .test
   image: $GO_IMAGE
@@ -382,7 +392,8 @@ publish-main:
 # are immutable), the commit tag when main has not published it, :vMAJOR
 # when this is the newest release of its major, and :latest when this is
 # newer than :latest within the same major (a :latest without a version
-# label counts as v1).
+# label counts as v1). A pre-release pushes its own tag and the commit tag
+# only.
 release-publish:
   extends: .crane
   stage: publish
@@ -393,7 +404,8 @@ release-publish:
     - if: $CI_COMMIT_TAG
 
 # A GitLab Release with the CHANGELOG section, install.sh (and its SHA-256)
-# and a link to this tag's deploy/template.yaml. Uses the job token; an
+# and a link to this tag's deploy/template.yaml (a pre-release's is named
+# "vX.Y.Z-rc.N (pre-release)": GitLab has no pre-release flag). Uses the job token; an
 # existing Release is kept. After release-publish, so a Release never
 # points at an image that was not published.
 release-notes:
@@ -408,7 +420,8 @@ release-notes:
 # MANUAL, deliberate: move :latest to this release even when it is a new
 # major version. Every deployment that still pulls :latest gets this
 # version on its next restart and needs this release's template
-# (git checkout <tag> && make upgrade), so announce it first.
+# (git checkout <tag> && make upgrade), so announce it first. Release tags
+# only: a pre-release pipeline has no such job (and release.sh refuses one).
 promote-latest:
   extends: .crane
   stage: release
@@ -416,7 +429,7 @@ promote-latest:
   script:
     - sh scripts/release.sh promote-latest "$CI_COMMIT_TAG"
   rules:
-    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
       when: manual
       allow_failure: true
 
