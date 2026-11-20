@@ -7,6 +7,21 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
+// NodePullCheckImageProblem says why image cannot prove that the nodes can
+// pull ("" when it can). OLM's registry pod pulls a digest reference only
+// if it is not on the node yet (operator-framework-olm @9822880e
+// staging/operator-lifecycle-manager/pkg/lib/image/image.go:9-17,
+// InferImagePullPolicy: an "@" gives PullIfNotPresent, anything else
+// PullAlways), so a node that has the image cached would pass without
+// using any credential. Only a tag reference, always pulled, asks the
+// registry with the node's pull secret.
+func NodePullCheckImageProblem(image string) string {
+	if strings.Contains(image, "@") {
+		return "The check needs the image by tag, not by digest (" + image + "): a node that already has a digest's image would not pull it again, so the check could pass without the nodes' pull secret."
+	}
+	return ""
+}
+
 // CheckNodePull checks that the cluster's nodes can pull image, a nightly
 // catalog image, with their own pull secret: the same check as Update's
 // catalog verification (preflightReinstallCatalog), without its channel
@@ -18,6 +33,9 @@ import (
 // updater, which has no access to openshift-config/pull-secret, that the
 // nodes of a self-managed cluster have the quay.io/rhoai credentials.
 func CheckNodePull(c *Client, image string) (*types.OperationResponse, error) {
+	if msg := NodePullCheckImageProblem(image); msg != "" {
+		return &types.OperationResponse{Success: false, Message: msg + " Nothing was changed.", Logs: []string{}, ErrorCode: "validation"}, nil
+	}
 	logs := []string{"Image: " + image}
 	name, path, remove, err := createVerificationCatalog(c, image)
 	if err != nil {

@@ -7,6 +7,10 @@ import (
 	"testing"
 )
 
+// nodeCheckImage is a nightly catalog image by tag, as the check takes it
+// (NodePullCheckImageProblem).
+const nodeCheckImage = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6"
+
 // verificationCatalogWrites returns the writes CheckNodePull made, and
 // fails the test when it wrote anything but its own verification catalog
 // (one apply, one delete).
@@ -33,11 +37,11 @@ func verificationCatalogWrites(t *testing.T, f *fakeOLM) {
 func TestCheckNodePull_ImagePulled(t *testing.T) {
 	f := newFakeOLM(t)
 	f.topology = "HighlyAvailable"
-	result, err := CheckNodePull(f.client(context.Background()), testNightlyImage)
+	result, err := CheckNodePull(f.client(context.Background()), nodeCheckImage)
 	if err != nil || !result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if !strings.HasPrefix(result.Message, "A temporary catalog pod pulled "+testNightlyImage+" with the nodes' pull secret") || !strings.Contains(result.Message, "oc get mcp") {
+	if !strings.HasPrefix(result.Message, "A temporary catalog pod pulled "+nodeCheckImage+" with the nodes' pull secret") || !strings.Contains(result.Message, "oc get mcp") {
 		t.Fatalf("message %q", result.Message)
 	}
 	verificationCatalogWrites(t, f)
@@ -50,6 +54,25 @@ func TestCheckNodePull_ImagePulled(t *testing.T) {
 				t.Fatalf("labels %v", labels)
 			}
 		}
+	}
+}
+
+// A digest reference is refused before anything is created: OLM's registry
+// pod would not pull a cached digest again (InferImagePullPolicy), so the
+// check could pass without the nodes' credentials.
+func TestCheckNodePull_RefusesADigest(t *testing.T) {
+	f := newFakeOLM(t)
+	f.topology = "HighlyAvailable"
+	image := "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + strings.Repeat("a", 64)
+	result, err := CheckNodePull(f.client(context.Background()), image)
+	if err != nil || result.Success || result.ErrorCode != "validation" || !strings.Contains(result.Message, "by tag, not by digest") {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if len(f.writes()) != 0 {
+		t.Fatalf("writes %v", f.writes())
+	}
+	if NodePullCheckImageProblem("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6") != "" {
+		t.Fatal("a tag reference must be accepted")
 	}
 }
 
@@ -66,11 +89,11 @@ func TestCheckNodePull_PullFailsPerTopology(t *testing.T) {
 			f.topology = tc.topology
 			f.verifyState = "TRANSIENT_FAILURE"
 			f.catalogPods = `{"items":[{"status":{"containerStatuses":[{"state":{"waiting":{"reason":"ErrImagePull","message":"unauthorized: access to the requested resource is not authorized"}}}]}}]}`
-			result, err := CheckNodePull(f.client(context.Background()), testNightlyImage)
+			result, err := CheckNodePull(f.client(context.Background()), nodeCheckImage)
 			if err != nil || result.Success || result.ErrorCode != "catalog_image_pull" {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
-			if !strings.HasPrefix(result.Message, "The catalog image "+testNightlyImage+" cannot be pulled (ErrImagePull: unauthorized") ||
+			if !strings.HasPrefix(result.Message, "The catalog image "+nodeCheckImage+" cannot be pulled (ErrImagePull: unauthorized") ||
 				!strings.Contains(result.Message, tc.want) || strings.Contains(result.Message, tc.notWant) {
 				t.Fatalf("message %q", result.Message)
 			}
@@ -84,7 +107,7 @@ func TestCheckNodePull_PullFailsPerTopology(t *testing.T) {
 func TestCheckNodePull_NoAnswer(t *testing.T) {
 	f := newFakeOLM(t)
 	f.verifyState = "CONNECTING"
-	result, err := CheckNodePull(f.client(context.Background()), testNightlyImage)
+	result, err := CheckNodePull(f.client(context.Background()), nodeCheckImage)
 	if err != nil || result.Success || result.ErrorCode != "timeout" || !strings.Contains(result.Message, "catalog state is CONNECTING") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -103,7 +126,7 @@ func TestCheckNodePull_StoppedRemovesTheCatalog(t *testing.T) {
 		}
 		return false
 	}
-	result, err := CheckNodePull(c, testNightlyImage)
+	result, err := CheckNodePull(c, nodeCheckImage)
 	if err == nil || result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -121,7 +144,7 @@ func TestCheckNodePull_CreateRefused(t *testing.T) {
 		}
 		return false
 	}
-	result, err := CheckNodePull(f.client(context.Background()), testNightlyImage)
+	result, err := CheckNodePull(f.client(context.Background()), nodeCheckImage)
 	if err != nil || result.Success || result.ErrorCode != "forbidden" || !strings.Contains(result.Message, "Nothing was changed") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}

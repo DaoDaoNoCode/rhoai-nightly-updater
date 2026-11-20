@@ -177,6 +177,10 @@ var HandleNodePullCheck = withMutationAuth(func(c *cluster.Client, w http.Respon
 		writeError(w, fmt.Sprintf("image registry not allowed: %s (must be quay.io/rhoai/ or registry.redhat.io/rhoai/)", req.Image), http.StatusBadRequest, "validation")
 		return
 	}
+	if msg := cluster.NodePullCheckImageProblem(req.Image); msg != "" {
+		writeError(w, msg, http.StatusBadRequest, "validation")
+		return
+	}
 	// A check, not a change: it does not use up the user's slot. It is an
 	// operation all the same (a marker while it runs), because it creates
 	// a CatalogSource that an interrupted check leaves behind until the

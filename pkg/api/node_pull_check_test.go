@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -17,6 +18,11 @@ func TestNodePullCheckValidatesTheImage(t *testing.T) {
 		`{"image":"docker.io/evil/fbc:1"}`,
 		`{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6; rm -rf /"}`,
 		`not json`,
+		// A digest: OLM would not pull a cached image again
+		// (InferImagePullPolicy), so the check could pass without the
+		// nodes' credentials.
+		`{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:` + strings.Repeat("a", 64) + `"}`,
+		`{"image":"quay.io/rhoai/rhoai-fbc-fragment@sha256:` + strings.Repeat("a", 64) + `"}`,
 	} {
 		w := httptest.NewRecorder()
 		HandleNodePullCheck(w, postJSON("/api/setup/node-pull-check", "tok", body))

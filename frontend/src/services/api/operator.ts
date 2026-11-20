@@ -39,11 +39,27 @@ export function verifyNodes(signal?: AbortSignal): Promise<OperationResponse> {
   return request('/api/verify-nodes', { signal });
 }
 
-/** Runs a temporary catalog pod with image to see whether the nodes can pull it (about a minute). */
+/**
+ * image by tag: its digest dropped, or null when it has no tag. The node
+ * pull check takes only a tag: OLM pulls a digest reference only when the
+ * node does not have it yet (InferImagePullPolicy), so a cached image would
+ * pass without the nodes' credentials (pkg/cluster NodePullCheckImageProblem).
+ */
+export function imageByTag(image: string): string | null {
+  const ref = image.split('@')[0];
+  const lastPart = ref.slice(ref.lastIndexOf('/') + 1);
+  return lastPart.includes(':') ? ref : null;
+}
+
+/** Runs a temporary catalog pod with image, by its tag, to see whether the nodes can pull it (about a minute). */
 export function checkNodePull(image: string): Promise<OperationResponse> {
+  const byTag = imageByTag(image);
+  if (!byTag) {
+    return Promise.resolve({ success: false, errorCode: 'validation', message: `The check needs the image by tag, and ${image} has none.`, logs: [] });
+  }
   return request('/api/setup/node-pull-check', {
     method: 'POST',
-    body: JSON.stringify({ image }),
+    body: JSON.stringify({ image: byTag }),
   });
 }
 
