@@ -67,29 +67,15 @@ var HandleMaaSStream = withMutationAuth(func(c *cluster.Client, w http.ResponseW
 		writeError(w, problem, http.StatusBadRequest, "validation")
 		return
 	}
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("panic in maas handler", "error", rec)
-		}
-	}()
-	sseWriter, err := NewSSEWriter(w)
-	if err != nil {
-		writeError(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	defer sseWriter.Close()
-	done := make(chan struct{})
-	defer close(done)
-	go sseHeartbeat(sseWriter, done)
-
 	target := req.Action + " MaaS platform"
 	if req.Project != "" {
 		target = req.Action + " model in " + req.Project
 	}
 	beginOperation(w, target)
 	slog.Info("mutation", "op", "maas", "action", req.Action, "project", req.Project)
-	result, runErr := runMaaS(c, req, forwardSteps(sseWriter))
-	sendOperationResult(sseWriter, result, runErr)
+	_, runErr := streamOperation(w, "maas", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		return runMaaS(c, req, emit)
+	})
 	if runErr != nil {
 		slog.Error("maas failed", "error", runErr)
 	}

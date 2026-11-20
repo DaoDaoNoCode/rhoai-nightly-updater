@@ -96,6 +96,9 @@ type statusWriter struct {
 	// outcome is read; streams report it in their final event instead.
 	body      []byte
 	streaming bool
+	// panicked: the handler recovered a panic of its operation
+	// (reportOperationPanic), whatever status it had written.
+	panicked bool
 }
 
 // maxCapturedResponse bounds the response bytes kept for the outcome.

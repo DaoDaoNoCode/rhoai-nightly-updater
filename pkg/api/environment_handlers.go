@@ -123,25 +123,11 @@ var HandlePrerequisitesStream = withMutationAuth(func(c *cluster.Client, w http.
 		writeError(w, problem, http.StatusBadRequest, "validation")
 		return
 	}
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("panic in prerequisites handler", "error", rec)
-		}
-	}()
-	sseWriter, err := NewSSEWriter(w)
-	if err != nil {
-		writeError(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	defer sseWriter.Close()
-	done := make(chan struct{})
-	defer close(done)
-	go sseHeartbeat(sseWriter, done)
-
 	beginOperation(w, req.Feature+" prerequisites")
 	slog.Info("mutation", "op", "prerequisites", "feature", req.Feature)
-	result, runErr := runPrerequisites(c, req, forwardSteps(sseWriter))
-	sendOperationResult(sseWriter, result, runErr)
+	_, runErr := streamOperation(w, "prerequisites", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		return runPrerequisites(c, req, emit)
+	})
 	if runErr != nil {
 		slog.Error("prerequisites failed", "error", runErr)
 	}
@@ -202,23 +188,6 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		writeError(w, "nothing to clean up was selected", http.StatusBadRequest, "validation")
 		return
 	}
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("panic in cleanup handler", "error", rec)
-		}
-	}()
-
-	sseWriter, err := NewSSEWriter(w)
-	if err != nil {
-		writeError(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	defer sseWriter.Close()
-
-	done := make(chan struct{})
-	defer close(done)
-	go sseHeartbeat(sseWriter, done)
-
 	var target []string
 	if n := len(req.MaaSPublished); n > 0 {
 		target = append(target, fmt.Sprintf("%d MaaS %s", n, map[bool]string{true: "publication", false: "publications"}[n == 1]))
@@ -253,8 +222,9 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	beginOperation(w, strings.Join(target, ", "))
 	slog.Info("mutation", "op", "cleanup", "pipelineServers", req.PipelineServers, "storage", req.Storage, "deleteNamespace", req.DeleteNamespace, "mlflow", req.MLflow, "models", req.Models, "inferenceGateway", req.InferenceGateway, "playgrounds", req.Playgrounds, "maasPublished", req.MaaSPublished, "maasPlatform", req.MaaSPlatform, "components", req.Components)
 
-	result, cleanupErr := runCleanUp(c, req, forwardSteps(sseWriter))
-	sendOperationResult(sseWriter, result, cleanupErr)
+	_, cleanupErr := streamOperation(w, "cleanup", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		return runCleanUp(c, req, emit)
+	})
 	if cleanupErr != nil {
 		slog.Error("cleanup failed", "error", cleanupErr)
 	}

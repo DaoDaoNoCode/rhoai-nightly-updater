@@ -116,25 +116,11 @@ var HandleNodeSetupStream = withMutationAuth(func(c *cluster.Client, w http.Resp
 		writeError(w, "Give the resourceVersion of the plan you reviewed", http.StatusBadRequest, "validation")
 		return
 	}
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("panic in node setup handler", "error", rec)
-		}
-	}()
-	sseWriter, err := NewSSEWriter(w)
-	if err != nil {
-		writeError(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	defer sseWriter.Close()
-	done := make(chan struct{})
-	defer close(done)
-	go sseHeartbeat(sseWriter, done)
-
 	beginOperation(w, req.Action)
 	slog.Info("mutation", "op", "node-setup", "action", req.Action)
-	result, runErr := runNodeSetup(c, req, forwardSteps(sseWriter))
-	sendOperationResult(sseWriter, result, runErr)
+	_, runErr := streamOperation(w, "node setup", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		return runNodeSetup(c, req, emit)
+	})
 	if runErr != nil {
 		slog.Error("node setup failed", "action", req.Action, "error", runErr)
 	}

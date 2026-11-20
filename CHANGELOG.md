@@ -124,6 +124,16 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   verification) answer with the status and errorCode of their error. The
   UI titles a 409 `conflict` "The object changed in the meantime", not
   "Cluster busy".
+- **An operation that crashes on a bug ends cleanly.** A panic in one of
+  the 13 streamed operations (update, install, refresh, the DSC hard reset,
+  node setup, storage migration, models, MaaS, the playground, MLflow
+  samples, prerequisites, clean up) was logged without its stack, the
+  stream ended without a final event (the UI waited, then fell back to
+  polling) and the user's 30-second slot stayed taken; the update dry run
+  answered an empty 200. Every stream now runs through one helper that
+  logs the panic with its stack, ends the stream with a failed result
+  ("stopped on an internal error ... check what it changed"), and gives
+  the slot back; the dry run answers 500 `internal`.
 
 ### Security
 

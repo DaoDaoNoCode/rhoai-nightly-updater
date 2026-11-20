@@ -179,8 +179,9 @@ func mutationAuth(asUser bool, fn func(c *cluster.Client, w http.ResponseWriter,
 		defer func() {
 			// Rejected requests (4xx/5xx status, including 409 busy),
 			// requests that opt out (dry runs) and handlers that panicked
-			// do not use up the user's slot.
-			if !completed || sw.status >= 400 || sw.Header().Get("X-Skip-Rate-Limit") == "true" {
+			// (unrecovered, or recovered by reportOperationPanic) do not
+			// use up the user's slot.
+			if !completed || sw.panicked || sw.status >= 400 || sw.Header().Get("X-Skip-Rate-Limit") == "true" {
 				mutationLimiter.release(rateLimitKey, slot)
 			}
 		}()

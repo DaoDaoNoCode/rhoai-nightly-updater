@@ -66,12 +66,6 @@ var HandleS3StorageMigrateStream = withMutationAuth(func(c *cluster.Client, w ht
 		return
 	}
 	defer releaseClusterMutationLock()
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("panic in migrate-storage handler", "error", rec)
-		}
-	}()
-
 	var req types.MigrateStorageRequest
 	if !decodeBody(w, r, 4096, &req, true) {
 		return
@@ -97,17 +91,6 @@ var HandleS3StorageMigrateStream = withMutationAuth(func(c *cluster.Client, w ht
 		seen[p] = true
 	}
 
-	sseWriter, err := NewSSEWriter(w)
-	if err != nil {
-		writeError(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	defer sseWriter.Close()
-
-	done := make(chan struct{})
-	defer close(done)
-	go sseHeartbeat(sseWriter, done)
-
 	target := "migrate"
 	if req.RemoveOldStorage {
 		target = "remove old storage"
@@ -118,8 +101,9 @@ var HandleS3StorageMigrateStream = withMutationAuth(func(c *cluster.Client, w ht
 	beginOperation(w, target)
 	slog.Info("mutation", "op", "migrate-storage", "target", target, "confirmProjects", req.ConfirmProjects)
 
-	result, migrateErr := runMigrateStorage(c, cluster.MigrateOptions{RemoveOldStorage: req.RemoveOldStorage, DeleteNamespace: req.DeleteNamespace, ConfirmProjects: req.ConfirmProjects}, forwardSteps(sseWriter))
-	sendOperationResult(sseWriter, result, migrateErr)
+	_, migrateErr := streamOperation(w, "migrate-storage", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		return runMigrateStorage(c, cluster.MigrateOptions{RemoveOldStorage: req.RemoveOldStorage, DeleteNamespace: req.DeleteNamespace, ConfirmProjects: req.ConfirmProjects}, emit)
+	})
 	if migrateErr != nil {
 		slog.Error("migrate-storage failed", "error", migrateErr)
 	}
