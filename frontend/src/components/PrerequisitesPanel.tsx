@@ -71,7 +71,7 @@ const SelfManagedIDMSInstructions: React.FC = () => (
     <StackItem>
       Create the image mirror on the Status page does it with your own permissions, or a cluster-admin creates the
       ImageDigestMirrorSet with <code>oc</code>. Creating it does not drain or reboot the nodes; deleting it later
-      drains them one at a time, without a reboot.
+      drains them, one node at a time by default (the pool's maxUnavailable), without a reboot.
     </StackItem>
     <StackItem><MultiLineCommand id="cmd-image-mirror-oc" label="image mirror command">{MIRROR_CREATE_COMMAND}</MultiLineCommand></StackItem>
   </Stack>

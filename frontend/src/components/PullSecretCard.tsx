@@ -284,6 +284,17 @@ const NodePullSecret: React.FC<{
   );
 };
 
+/**
+ * What HyperShift does with additional-pull-secret on a hosted control
+ * plane (hypershift @0f43b296 docs/content/how-to/common/global-pull-secret.md:
+ * merged with the HostedCluster pull secret, which wins on conflicting
+ * entries, line 117; synced by a DaemonSet only to AWS and Azure Replace
+ * node pools, not InPlace ones, lines 21-28; the sync restarts the kubelet,
+ * line 139).
+ */
+const HOSTED_PULL_SECRET_TEXT =
+  "Credentials the cluster uses to pull nightly images from quay.io/rhoai. On ROSA HCP, HyperShift merges this secret with the cluster's own pull secret and writes the result to the nodes of AWS and Azure node pools that replace their nodes on an update (not in-place node pools), restarting the kubelet on each. Where the cluster's own pull secret already has a quay.io/rhoai entry, that entry is used, not this one.";
+
 const CREDENTIALS_HELP = (
   <>
     Get the base64 auth token for quay.io/rhoai from <a href="https://vault.bitwarden.com/#/vault?collectionId=75f54536-fa36-4ef9-8f1a-b09701646cac&itemId=e6e1fdde-6601-4e8b-8154-b211005518a1" target="_blank" rel="noopener noreferrer">Bitwarden</a> (OpenShift
@@ -491,7 +502,9 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
             ? "The gitops profile does not use additional-pull-secret: the cluster's pull secret is used. Git or ACM manage it here; the updater does not read or check it."
             : nodes
               ? "Credentials for quay.io/rhoai: the updater's copy here, and the cluster pull secret the nodes use."
-              : "Credentials the cluster uses to pull nightly images from quay.io/rhoai."}
+              : controlPlane === "hosted"
+                ? HOSTED_PULL_SECRET_TEXT
+                : "Credentials the cluster uses to pull nightly images from quay.io/rhoai."}
         </Content>
       </StackItem>
 

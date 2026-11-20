@@ -259,7 +259,7 @@ func nodeSetupPlatform(c *Client, action string) (cp, refusal, code string) {
 	managed, err := readRedHatManaged(c)
 	switch {
 	case err != nil && !mirror:
-		return "", "The updater cannot list the validating webhook configurations (" + err.Error() + "), so it cannot tell whether Red Hat runs this cluster (ROSA Classic or OpenShift Dedicated), where it does not change the cluster pull secret. So it is not changed. Nothing was changed. The command under Do it yourself instead does it, if you choose to.", "unknown_platform"
+		return "", "The updater cannot list the validating webhook configurations (" + err.Error() + "), so it cannot tell whether Red Hat runs this cluster (ROSA Classic or OpenShift Dedicated), where it does not change the cluster pull secret. Nothing was changed. The command under Do it yourself instead does it, if you choose to.", "unknown_platform"
 	case err != nil:
 		return "", "", ""
 	case managed && !mirror:

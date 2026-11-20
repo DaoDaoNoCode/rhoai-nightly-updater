@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
@@ -122,6 +123,18 @@ func TestMirrorCreateRefusesAConflictingSourcePolicy(t *testing.T) {
 			t.Fatalf("plan %+v", plan)
 		}
 	})
+}
+
+// The docs mock shows the refusal in the backend's own words.
+func TestDocsMockParentScopeRefusalIsTheBackends(t *testing.T) {
+	raw, err := os.ReadFile("../../docs/tools/mock/fixtures.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := parentScopeRefusal([]mirrorRule{{Kind: mirrorKindIDMS, Name: "corp-mirrors", Source: "registry.redhat.io", Mirrors: []string{"mirror.corp.example/redhat"}}})
+	if !strings.Contains(string(raw), `export const MIRROR_PARENT_SCOPE_REFUSAL = "`+want+`";`) {
+		t.Fatalf("docs/tools/mock/fixtures.mjs MIRROR_PARENT_SCOPE_REFUSAL is not:\n%s", want)
+	}
 }
 
 // Mirror objects that a mirror for exactly registry.redhat.io/rhoai does not

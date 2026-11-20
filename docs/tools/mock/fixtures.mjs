@@ -172,6 +172,13 @@ export function selfManaged(s, { known = true, pulled = false, managed = false, 
 export const NODE_PULL_RECORD = { at: "2026-11-18T10:00:00Z", by: "kube:admin", sameToken: true };
 
 /**
+ * Create the image mirror's refusal when a corporate mirror serves all of
+ * registry.redhat.io (pkg/cluster/node_setup_mirrors.go parentScopeRefusal,
+ * its words for ImageDigestMirrorSet corp-mirrors).
+ */
+export const MIRROR_PARENT_SCOPE_REFUSAL = "ImageDigestMirrorSet corp-mirrors maps registry.redhat.io to mirror.corp.example/redhat, so pulls of registry.redhat.io/rhoai images by digest go to mirror.corp.example/redhat/rhoai now. The nodes use only the mirrors of the most specific source that matches an image, and the Machine Config Operator copies a mirror to a namespace inside its source only while that namespace has no mirror of its own. Creating ImageDigestMirrorSet rhoai-quay-mirror, a mirror for exactly registry.redhat.io/rhoai, would take those pulls away from that mirror: pulls by digest would go to quay.io/rhoai, then to registry.redhat.io itself. So it is not created. Nothing was changed. To keep that mirror in use, the cluster's administrator adds an entry for registry.redhat.io/rhoai to that object, in spec.imageDigestMirrors of ImageDigestMirrorSet corp-mirrors: source registry.redhat.io/rhoai, mirrors mirror.corp.example/redhat/rhoai, quay.io/rhoai (that also sets up the image mirror). Or whoever runs that mirror makes it carry the nightly images at that path.";
+
+/**
  * What POST /api/setup/nodes/plan answers (pkg/cluster/node_setup.go, its
  * words): w.nodes holds what the mock cluster has (pullEntry: "none",
  * "same", the entry this tool added with the saved token, or "other",
@@ -186,10 +193,18 @@ export function nodeSetupPlan(w, action, replaceExisting = false) {
   if (cp === "hosted") {
     return refuse("hosted", mirror
       ? "This cluster has a hosted control plane (ROSA HCP): its image mirror is configured through OpenShift Cluster Manager with rosa create image-mirror, not with an object in the cluster. Nothing was changed."
-      : "This cluster has a hosted control plane (ROSA HCP): its nodes get kube-system/additional-pull-secret, which the Pull secret item sets; HyperShift merges it into their pull secret. Nothing was changed.");
+      : "This cluster has a hosted control plane (ROSA HCP): its nodes get kube-system/additional-pull-secret, which the Pull secret item sets. HyperShift merges it with the cluster's own pull secret for the nodes of AWS and Azure node pools that replace their nodes on an update (not in-place ones); where both have a quay.io/rhoai entry, the cluster's own wins. Nothing was changed.");
   }
   if (cp === "managed" && !mirror) {
     return refuse("managed", "Red Hat runs this cluster (ROSA Classic or OpenShift Dedicated). Red Hat creates its cluster pull secret, and the documentation of these services has no procedure for changing it, so the updater does not change it. The command under Do it yourself instead does it, if you choose to. Nothing was changed.");
+  }
+  // The platform unknown (the webhooks unreadable): the pull secret actions
+  // are refused, the mirror is attempted.
+  if (!cp && !mirror) {
+    return refuse("unknown_platform", "The updater cannot list the validating webhook configurations (list validating webhook configurations: k8s API error 403 (Forbidden)), so it cannot tell whether Red Hat runs this cluster (ROSA Classic or OpenShift Dedicated), where it does not change the cluster pull secret. Nothing was changed. The command under Do it yourself instead does it, if you choose to.");
+  }
+  if (action === "mirror-create" && w.parentScopeMirror) {
+    return refuse("parent_scope", MIRROR_PARENT_SCOPE_REFUSAL);
   }
   if (!cp && w.nodeSetupDenied) {
     return refuse("forbidden", "The cluster refused it in a dry run: admission webhook \"imagecontentpolicies-validation.managed.openshift.io\" denied the request: Managed OpenShift customers may not create ImageContentSourcePolicy, ImageDigestMirrorSet, or ImageTagMirrorSet resources that configure mirrors that would conflict with system registries. Nothing was changed. Your account, or an admission policy of this cluster, does not allow it: use the instructions under Do it yourself instead, or ask the cluster's administrator.");
@@ -199,22 +214,22 @@ export function nodeSetupPlan(w, action, replaceExisting = false) {
   const entry = w.nodes?.pullEntry ?? "none";
   switch (action) {
     case "mirror-create":
-      if (im.exists) return { ...plan, nothingToDo: true, state: `ImageDigestMirrorSet ${im.name} already redirects registry.redhat.io/rhoai, so the mirror is set up.` };
-      return { ...plan, ...pools, ready: true, state: "No ImageDigestMirrorSet redirects registry.redhat.io/rhoai.",
+      if (im.exists) return { ...plan, nothingToDo: true, state: `${im.kind ?? "ImageDigestMirrorSet"} ${im.name} already redirects registry.redhat.io/rhoai to quay.io/rhoai, so the mirror is set up.` };
+      return { ...plan, ...pools, ready: true, state: "No ImageDigestMirrorSet or ImageContentSourcePolicy redirects registry.redhat.io/rhoai to quay.io/rhoai.",
         changes: ["Create ImageDigestMirrorSet rhoai-quay-mirror (cluster-wide): pulls of registry.redhat.io/rhoai images by digest go to quay.io/rhoai."],
         nodeImpact: "The Machine Config Operator adds the mirror to /etc/containers/registries.conf on every node and reloads CRI-O, without draining or rebooting them: a new digest-only mirror is one of the changes OpenShift applies without a drain. oc get mcp shows UPDATED True for every pool once all nodes have it.",
-        undo: "Remove the image mirror (the same item offers it once it exists), or oc delete imagedigestmirrorset rhoai-quay-mirror. Removing it drains the nodes one at a time." };
+        undo: "Remove the image mirror (the same item offers it once it exists), or oc delete imagedigestmirrorset rhoai-quay-mirror. Removing it drains the nodes, one node at a time by default (the pool's maxUnavailable)." };
     case "mirror-remove":
-      if (!im.exists) return { ...plan, nothingToDo: true, state: "No ImageDigestMirrorSet redirects registry.redhat.io/rhoai." };
+      if (!im.exists) return { ...plan, nothingToDo: true, state: "No ImageDigestMirrorSet or ImageContentSourcePolicy redirects registry.redhat.io/rhoai to quay.io/rhoai." };
       return { ...plan, ...pools, ready: true, uid: "3f6c1d2e-mock", resourceVersion: "51234", state: "ImageDigestMirrorSet rhoai-quay-mirror redirects registry.redhat.io/rhoai to quay.io/rhoai.",
         changes: ["Delete ImageDigestMirrorSet rhoai-quay-mirror (cluster-wide)."],
-        nodeImpact: "The Machine Config Operator removes the mirror from every node. Removing a mirror drains each node first (its pods are evicted and start again on other nodes), then reloads CRI-O and makes the node schedulable again, without a reboot, one node at a time in each pool; a single-node cluster is not drained. After that, registry.redhat.io/rhoai images are pulled from registry.redhat.io again, where nightly builds do not exist: installing or updating a nightly fails until the mirror is back. Images already on a node stay.",
+        nodeImpact: "The Machine Config Operator removes the mirror from every node. Removing a mirror drains each node first (its pods are evicted and start again on other nodes), then reloads CRI-O and makes the node schedulable again, without a reboot, one node at a time by default (the pool's maxUnavailable); a single-node cluster is not drained. A PodDisruptionBudget that allows no eviction holds a node's drain: the machine config daemon waits up to an hour for it, then fails that node's update (event FailedToDrain). After that, registry.redhat.io/rhoai images are pulled from registry.redhat.io again, where nightly builds do not exist: installing or updating a nightly fails until the mirror is back. Images already on a node stay.",
         undo: "Create the image mirror again (one click, no drain)." };
     case "pull-secret-add": {
       const keys = entry === "none" ? {} : { existingKeys: ["quay.io/rhoai"] };
       if (entry === "same") return { ...plan, ...keys, entrySetBy: "tool", nothingToDo: true, state: "openshift-config/pull-secret already has the quay.io/rhoai entry this tool added on 2026-11-18T10:00:00Z by kube:admin, with the token saved under Pull secret, so the nodes have it (or get it as their pools update)." };
       const kept = "the other 4 registry logins stay as they are";
-      const nodeImpact = "The Machine Config Operator writes the new cluster pull secret to every node, one node at a time in each machine config pool, without draining or rebooting them (OpenShift applies pull secret changes that way). oc get mcp shows UPDATED True for every pool once all nodes have it; the kubelet uses it for the next pulls.";
+      const nodeImpact = "The Machine Config Operator writes the new cluster pull secret to every node of each machine config pool, one node at a time by default (the pool's maxUnavailable), without draining or rebooting them (OpenShift applies pull secret changes that way). oc get mcp shows UPDATED True for every pool once all nodes have it; the kubelet uses it for the next pulls.";
       if (entry === "other" && !replaceExisting) {
         return { ...plan, ...keys, entrySetBy: "other", replaceable: true, resourceVersion: "48211", uid: "7c2a9e10-mock", refusalCode: "foreign_entry",
           refusal: "openshift-config/pull-secret already has a quay.io/rhoai entry (quay.io/rhoai) that this tool did not add (this tool has no record of adding it), with another token. It is not replaced: if that entry works, the nodes need nothing more, and Check that the nodes can pull tells. Nothing was changed. To replace it anyway, acknowledge that its token is not kept and that this tool cannot restore it." };
@@ -240,7 +255,7 @@ export function nodeSetupPlan(w, action, replaceExisting = false) {
       }
       return { ...plan, ...pools, entrySetBy: "tool", existingKeys: ["quay.io/rhoai"], ready: true, resourceVersion: "48211", uid: "7c2a9e10-mock", state: "openshift-config/pull-secret has the quay.io/rhoai entry this tool added on 2026-11-18T10:00:00Z by kube:admin.",
         changes: ["Secret openshift-config/pull-secret: remove the quay.io/rhoai entry this tool added; the other 4 registry logins stay as they are."],
-        nodeImpact: "The Machine Config Operator writes the new cluster pull secret to every node, one node at a time in each machine config pool, without draining or rebooting them (OpenShift applies pull secret changes that way). oc get mcp shows UPDATED True for every pool once all nodes have it; the kubelet uses it for the next pulls. After that the nodes cannot pull from quay.io/rhoai: images already on a node stay and running pods keep running, but a new nightly, or a pod that starts on a node without its image, fails with an unauthorized pull error.",
+        nodeImpact: "The Machine Config Operator writes the new cluster pull secret to every node of each machine config pool, one node at a time by default (the pool's maxUnavailable), without draining or rebooting them (OpenShift applies pull secret changes that way). oc get mcp shows UPDATED True for every pool once all nodes have it; the kubelet uses it for the next pulls. After that the nodes cannot pull from quay.io/rhoai: images already on a node stay and running pods keep running, but a new nightly, or a pod that starts on a node without its image, fails with an unauthorized pull error.",
         undo: "Add to the nodes' pull secret again (it copies the token saved under Pull secret)." };
   }
 }
@@ -253,7 +268,7 @@ export function nodeSetupSteps(plan) {
     "pull-secret-add": "Added the quay.io/rhoai entry to openshift-config/pull-secret.",
     "pull-secret-remove": "Removed the quay.io/rhoai entry from openshift-config/pull-secret.",
   }[plan.action];
-  const note = "The nodes take it one at a time: oc get mcp shows UPDATED True for every pool once all have it.";
+  const note = "The nodes take it one node at a time by default (the pool's maxUnavailable): oc get mcp shows UPDATED True for every pool once all have it.";
   return [
     { step: "check", status: "running", message: "Reading what is on the cluster" },
     { step: "check", status: "success", message: plan.state },

@@ -219,7 +219,7 @@ export interface NodeSetupPlan {
   /** Machine config pools that will not take the change yet (paused or degraded). */
   pools?: string[];
   refusal?: string;
-  refusalCode?: "hosted" | "managed" | "unknown_topology" | "forbidden" | "foreign" | "foreign_entry" | "not_owned" | "unreadable" | "external_secrets" | "no_token" | "quay" | "conflict" | "failed";
+  refusalCode?: "hosted" | "managed" | "unknown_topology" | "unknown_platform" | "forbidden" | "parent_scope" | "policy_conflict" | "foreign" | "foreign_entry" | "not_owned" | "unreadable" | "external_secrets" | "no_token" | "quay" | "conflict" | "failed";
   resourceVersion?: string;
   uid?: string;
   /** Pull secret actions: who set the quay.io/rhoai entry ("tool": this tool's record matches it). */
@@ -234,6 +234,8 @@ export interface NodeSetupPlan {
 
 export interface ImageMirrorInfo {
   exists: boolean;
+  /** The object that mirrors registry.redhat.io/rhoai; absent when there is none. */
+  kind?: "ImageDigestMirrorSet" | "ImageContentSourcePolicy";
   name: string;
   source: string;
 }

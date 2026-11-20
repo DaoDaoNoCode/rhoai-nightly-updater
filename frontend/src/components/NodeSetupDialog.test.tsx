@@ -72,6 +72,17 @@ describe("NodeSetupDialog", () => {
     expect(screen.getAllByRole("button", { name: "Close" }).some((b) => b.textContent === "Close")).toBe(true);
   });
 
+  it.each([
+    ["parent_scope", "Another mirror serves these images now"],
+    ["policy_conflict", "Another mirror sets a different source policy"],
+    ["unknown_platform", "Not changed: this may be a Red Hat-managed cluster"],
+  ] as const)("titles the %s refusal", async (code, title) => {
+    stubBackend({ action: "mirror-create", ready: false, state: "", refusalCode: code, refusal: "Why. Nothing was changed." });
+    renderWithApp(<NodeSetupDialog action="mirror-create" onClose={vi.fn()} onChanged={vi.fn()} />);
+    expect(await screen.findByText(title)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create the image mirror" })).not.toBeInTheDocument();
+  });
+
   it("says when there is nothing to change", async () => {
     stubBackend({ action: "mirror-create", ready: false, nothingToDo: true, state: "ImageDigestMirrorSet team-mirrors already redirects registry.redhat.io/rhoai, so the mirror is set up." });
     renderWithApp(<NodeSetupDialog action="mirror-create" onClose={vi.fn()} onChanged={vi.fn()} />);
@@ -168,6 +179,13 @@ describe("The image mirror row, by control plane", () => {
   it("another mirror for the source counts as done and is not offered for removal", () => {
     renderWithApp(<ImageMirrorSetup status={mirrorStatus("self-managed", { exists: true, name: "team-mirrors", source: "registry.redhat.io/rhoai" })} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />);
     expect(screen.getByText("Ready")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove the image mirror" })).not.toBeInTheDocument();
+  });
+
+  it("an ImageContentSourcePolicy of the setup's name is someone else's: named with its kind, not offered for removal", () => {
+    renderWithApp(<ImageMirrorSetup status={mirrorStatus("self-managed", { ...OURS, kind: "ImageContentSourcePolicy" })} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />);
+    expect(screen.getByText("Ready")).toBeInTheDocument();
+    expect(screen.getByText(/rhoai-quay-mirror \(ImageContentSourcePolicy\)/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove the image mirror" })).not.toBeInTheDocument();
   });
 
