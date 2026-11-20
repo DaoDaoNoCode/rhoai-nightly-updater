@@ -338,7 +338,7 @@ var HandleUserPermissions = withAuth(func(c *cluster.Client, w http.ResponseWrit
 // withAdminRead gates a read that returns a credential: only a user who
 // passes the mutation gate (cluster-admin, see mutationRequirement) gets an
 // answer (403 admin_only otherwise; its routes are admin-only in
-// getRouteTiers too, so Register checks first). Such a user can read every Secret in the cluster with their own
+// getRouteTiers too, so Register checks first, and its answer is reused: adminVerified). Such a user can read every Secret in the cluster with their own
 // token, so the ServiceAccount reveals nothing they could not read
 // themselves. Unlike withMutationAuth it takes no lock and starts no
 // operation: nothing changes. The client also carries the user's own client
@@ -349,15 +349,18 @@ var HandleUserPermissions = withAuth(func(c *cluster.Client, w http.ResponseWrit
 // conversion webhook a component serves.
 func withAdminRead(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
 	return withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-		userToken := extractUserToken(r)
-		allowed, err := mutationPermission(r.Context(), userToken)
-		if err != nil {
-			writeAuthError(w, err, "Cannot verify your permissions. Nothing was read.")
-			return
-		}
-		if !allowed {
-			writeError(w, adminOnlyMessage, http.StatusForbidden, adminOnlyCode)
-			return
+		// Behind its route's adminOnly (Register) the check already passed
+		// for this request; mounted anywhere else it checks on its own.
+		if !adminVerified(r) {
+			allowed, err := mutationPermission(r.Context(), extractUserToken(r))
+			if err != nil {
+				writeAuthError(w, err, "Cannot verify your permissions. Nothing was read.")
+				return
+			}
+			if !allowed {
+				writeError(w, adminOnlyMessage, http.StatusForbidden, adminOnlyCode)
+				return
+			}
 		}
 		attachSignedInUser(c, r)
 		fn(c, w, r)

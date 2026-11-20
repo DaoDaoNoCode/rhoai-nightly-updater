@@ -77,6 +77,51 @@ func TestMaaSPruneJob_SkipsWhenTheLockIsHeld(t *testing.T) {
 	}
 }
 
+// Shutdown (SIGTERM -> DrainMutations in main) waits for a check that runs
+// under the lease: the check is a counted mutation, so the drain ends only
+// after it finished and released the lock and the lease; no check starts
+// once the drain began. Its context is not the signal's, on purpose: a
+// check cut off half-way would leave the gateway half-pruned.
+func TestShutdownDrainWaitsForARunningMaaSCheck(t *testing.T) {
+	withFreshMutationTracker(t)
+	setupDevMode(t)
+	var released int
+	releaseOperationLease = func(*cluster.Client, cluster.LeaseOwner) error { released++; return nil }
+	orig := pruneGoneMaaS
+	t.Cleanup(func() { pruneGoneMaaS = orig })
+	started, finish := make(chan struct{}), make(chan struct{})
+	pruneGoneMaaS = func(*cluster.Client) {
+		close(started)
+		<-finish
+	}
+	ran := make(chan bool)
+	go func() { ran <- runMaaSPruneOnce(context.Background()) }()
+	<-started
+
+	wait := mutations.startDrain()
+	drained := make(chan int)
+	go func() { drained <- wait(context.Background()) }()
+	// No new check (or change) starts while draining.
+	if runMaaSPruneOnce(context.Background()) {
+		t.Fatal("a check started during the drain")
+	}
+	select {
+	case <-drained:
+		t.Fatal("the drain ended while the check ran")
+	default:
+	}
+	close(finish)
+	if !<-ran {
+		t.Fatal("the running check did not complete")
+	}
+	if n := <-drained; n != 0 {
+		t.Fatalf("drain reported %d running", n)
+	}
+	if clusterMutationInProgress.Load() || inflight.snapshot() != nil || released != 1 {
+		t.Fatalf("not freed: lock %t, op %v, lease releases %d", clusterMutationInProgress.Load(), inflight.snapshot(), released)
+	}
+}
+
 // At start, then every interval on the clock; never in the gitops
 // profile.
 func TestMaaSPruneJob_RunsAtStartAndEveryInterval(t *testing.T) {

@@ -136,8 +136,20 @@ func adminOnly(next http.HandlerFunc) http.HandlerFunc {
 			writeError(w, adminOnlyMessage, http.StatusForbidden, adminOnlyCode)
 			return
 		}
-		next(w, r)
+		next(w, r.WithContext(context.WithValue(r.Context(), adminVerifiedKey{}, true)))
 	}
+}
+
+// adminVerifiedKey marks a request whose user passed adminOnly's check
+// (the mutation gate, with the request's own token), so withAdminRead
+// does not ask the API server again for the same request. Only adminOnly
+// sets it.
+type adminVerifiedKey struct{}
+
+// adminVerified reports whether adminOnly passed this request.
+func adminVerified(r *http.Request) bool {
+	v, _ := r.Context().Value(adminVerifiedKey{}).(bool)
+	return v
 }
 
 // requestRole is isAdmin for a per-role handler. A 401 (the sign-in

@@ -112,6 +112,36 @@ func TestWithAdminReadRefusesOnItsOwn(t *testing.T) {
 	}
 }
 
+// The three withAdminRead routes, mounted behind their route tier's
+// adminOnly, ask the API server once per request whether the user is a
+// cluster-admin (the tier's answer is reused), and still refuse a
+// non-admin before the handler.
+func TestAdminReadRoutesCheckThePermissionOnce(t *testing.T) {
+	for _, path := range []string{"/api/components/dsc/plan?action=fix", "/api/resources/s3/admin-password", "/api/resources/maas/groups"} {
+		for _, admin := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s admin=%v", path, admin), func(t *testing.T) {
+				setupDevMode(t)
+				countingAPIServer(t) // no ServiceAccount read reaches a cluster
+				calls := 0
+				mutationPermission = func(context.Context, string) (bool, error) { calls++; return admin, nil }
+				prevLogin := readS3AdminLogin
+				t.Cleanup(func() { readS3AdminLogin = prevLogin })
+				readS3AdminLogin = func(*cluster.Client) (cluster.S3Login, error) { return cluster.S3Login{}, errors.New("stub") }
+				mux := http.NewServeMux()
+				Register(mux)
+				w := httptest.NewRecorder()
+				mux.ServeHTTP(w, postJSONMethod(http.MethodGet, path, "user:alice", ""))
+				if calls != 1 {
+					t.Fatalf("%d permission checks for one request (status %d)", calls, w.Code)
+				}
+				if !admin && (w.Code != http.StatusForbidden || decodeError(t, w)["errorCode"] != adminOnlyCode) {
+					t.Fatalf("non-admin: status %d %s", w.Code, w.Body.String())
+				}
+			})
+		}
+	}
+}
+
 // Without the ServiceAccount token (no file, not DEV_MODE) both wrappers
 // answer 500 and never run the handler or check the gate.
 func TestWrappersRefuseWithoutTheServiceAccountToken(t *testing.T) {
