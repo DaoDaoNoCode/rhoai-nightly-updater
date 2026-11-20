@@ -10,17 +10,17 @@
         "Operator error: unable to patch components.platform.opendatahub.io/v1alpha1, Kind=TrustyAI /default-trustyai: failed to create manager for existing fields: failed to convert new object (/default-trustyai; components.platform.opendatahub.io/v1alpha1, Kind=TrustyAI) to smd typed: errors:\n  .spec.eval.lmeval.permitOnline: expected string, got \u0026value.valueUnstructured{Value:false}\n  .spec.eval.lmeval.permitCodeExecution: expected string, got \u0026value.valueUnstructured{Value:false}",
         "Field .spec.eval.lmeval.permitOnline: stored false; the installed CRD says string, one of allow, deny, default deny, optional",
         "Field .spec.eval.lmeval.permitCodeExecution: stored false; the installed CRD says string, one of allow, deny, default deny, optional",
-        "CRD trustyais.components.platform.opendatahub.io's schema was last written by platform.opendatahub.io at 2026-11-01T10:00:00Z, the running operator",
+        "CRD trustyais.components.platform.opendatahub.io's schema was last written by the RHOAI operator (field manager platform.opendatahub.io) at 2026-11-01T10:00:00Z",
         "Module operator redhat-ods-applications/trustyai-operator-module-controller-manager is crash-looping (1061 restarts): its last exit says it cannot sync its informer for TrustyAI: last exit: Error (exit code 1): failed waiting for *v1alpha1.TrustyAI Informer to sync"
       ],
       "fix": "Set each listed field to the installed CRD's default, or remove it where the CRD has none and it is optional (the table shows each change). The tool patches only these fields of TrustyAI default-trustyai, with your token, after a server-side dry run, and only if each still holds the value shown. The DataScienceCluster controller watches module CRs, so it applies the object again by itself.",
       "autoFixable": true,
       "autoFixAction": "fix-leftover-fields:TrustyAI/default-trustyai",
-      "confirmMessage": "This patches TrustyAI default-trustyai:\n- .spec.eval.lmeval.permitOnline: false -\u003e \"deny\"\n- .spec.eval.lmeval.permitCodeExecution: false -\u003e \"deny\"\n\nEach field is changed only if it still holds the value shown (a JSON Patch test), after the API server's dry run accepts the change. Nothing else changes.",
+      "confirmMessage": "This patches TrustyAI default-trustyai:\n- .spec.eval.lmeval.permitOnline: false -\u003e \"deny\"\n- .spec.eval.lmeval.permitCodeExecution: false -\u003e \"deny\"\n\nThe tool cannot know what a stored value of the older type meant, so a new value may not mean the same. The object is changed only if it is still the one you reviewed and each field still holds the value shown (JSON Patch tests), after the API server's dry run accepts the change. Nothing else changes.",
       "affectedObjects": [
         "TrustyAI default-trustyai"
       ],
-      "technicalCmd": "oc patch trustyai.components.platform.opendatahub.io default-trustyai --type=json -p '[{\"op\":\"test\",\"path\":\"/metadata/uid\",\"value\":\"trusty-uid\"},{\"op\":\"test\",\"path\":\"/spec/eval/lmeval/permitOnline\",\"value\":false},{\"op\":\"replace\",\"path\":\"/spec/eval/lmeval/permitOnline\",\"value\":\"deny\"},{\"op\":\"test\",\"path\":\"/spec/eval/lmeval/permitCodeExecution\",\"value\":false},{\"op\":\"replace\",\"path\":\"/spec/eval/lmeval/permitCodeExecution\",\"value\":\"deny\"}]'",
+      "technicalCmd": "oc patch trustyai.components.platform.opendatahub.io default-trustyai --type=json -p '[{\"op\":\"test\",\"path\":\"/metadata/uid\",\"value\":\"trusty-uid\"},{\"op\":\"test\",\"path\":\"/metadata/resourceVersion\",\"value\":\"100\"},{\"op\":\"test\",\"path\":\"/spec/eval/lmeval/permitOnline\",\"value\":false},{\"op\":\"replace\",\"path\":\"/spec/eval/lmeval/permitOnline\",\"value\":\"deny\"},{\"op\":\"test\",\"path\":\"/spec/eval/lmeval/permitCodeExecution\",\"value\":false},{\"op\":\"replace\",\"path\":\"/spec/eval/lmeval/permitCodeExecution\",\"value\":\"deny\"}]'",
       "fieldChanges": [
         {
           "object": "TrustyAI default-trustyai",
@@ -29,7 +29,8 @@
           "after": "\"deny\"",
           "change": "set-default",
           "schema": "string, one of allow, deny, default deny, optional",
-          "note": "the operator uses this value when the field is not set"
+          "note": "the installed CRD's default; the stored false may not mean the same as \"deny\", so check what the field means before you confirm",
+          "review": true
         },
         {
           "object": "TrustyAI default-trustyai",
@@ -38,9 +39,16 @@
           "after": "\"deny\"",
           "change": "set-default",
           "schema": "string, one of allow, deny, default deny, optional",
-          "note": "the operator uses this value when the field is not set"
+          "note": "the installed CRD's default; the stored false may not mean the same as \"deny\", so check what the field means before you confirm",
+          "review": true
         }
-      ]
+      ],
+      "acknowledge": "I checked what these fields mean, and the new values (which may not mean the same as the old ones) are right for this cluster: .spec.eval.lmeval.permitOnline (false -\u003e \"deny\"), .spec.eval.lmeval.permitCodeExecution (false -\u003e \"deny\").",
+      "acknowledgeBinding": {
+        "uid": "trusty-uid",
+        "resourceVersion": "100",
+        "hash": "2cda9d17471f3269f28a65c8a93f84ad685cf24f67c8ba36868fecaea2e4a749"
+      }
     },
     {
       "id": "leftover-recreate-deployment-redhat-ods-applications-trustyai-service-operator-controller-manager",
@@ -61,7 +69,12 @@
         "Deployment redhat-ods-applications/trustyai-service-operator-controller-manager"
       ],
       "technicalCmd": "oc delete deployment.apps trustyai-service-operator-controller-manager -n redhat-ods-applications",
-      "acknowledge": "I accept that Deployment redhat-ods-applications/trustyai-service-operator-controller-manager is down until the operator creates it again: the tool cannot tell whether trustyai is in use: it has no reader for that component's resources."
+      "acknowledge": "I accept that Deployment redhat-ods-applications/trustyai-service-operator-controller-manager is down until the operator creates it again: the tool cannot tell whether trustyai is in use: it has no reader for that component's resources.",
+      "acknowledgeBinding": {
+        "uid": "old-uid",
+        "resourceVersion": "7",
+        "hash": "88a483e5640b287beed0a983a70c9a7f8a7270457b29517c12fb73eb65f7632c"
+      }
     },
     {
       "id": "pod-crashloop-redhat-ods-applications-trustyai-operator-module-controller-manager",
@@ -69,7 +82,7 @@
       "title": "trustyai-operator-module-controller-manager is crash-looping (1061 restarts)",
       "description": "Container manager keeps exiting and Kubernetes is backing off before restarting it.",
       "evidence": [
-        "Pod redhat-ods-applications/trustyai-operator-module-controller-manager-6d9f7c8b5-x2x7q, container manager, CrashLoopBackOff, 1061 restarts, age 9d: last exit: Error (exit code 1): failed waiting for *v1alpha1.TrustyAI Informer to sync",
+        "Pod redhat-ods-applications/trustyai-operator-module-controller-manager-6d9f7c8b5-x2x7q, container manager, CrashLoopBackOff, 1061 restarts, age 10d: last exit: Error (exit code 1): failed waiting for *v1alpha1.TrustyAI Informer to sync",
         "Likely caused by \"TrustyAI default-trustyai has field values from an earlier release\""
       ],
       "fix": "Read the logs of the previous run of the container (command below). A crash right after an update usually means the build is broken or a dependency is missing.",

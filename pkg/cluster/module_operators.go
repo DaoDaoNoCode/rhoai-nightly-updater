@@ -26,7 +26,9 @@ import (
 //
 //   - runs in the applications namespace (the DSCInitialization's), as a
 //     ServiceAccount a ClusterRoleBinding lets update or patch the CR and
-//     <plural>/finalizers in components.platform.opendatahub.io
+//     <plural>/finalizers in the kind's own API group
+//     (components.platform.opendatahub.io or, for databaseservice,
+//     services.platform.opendatahub.io; component_cleanup.go)
 //     (<plural>/status when no ServiceAccount there holds that), and
 //   - is owned by the Platform or the DataScienceCluster: the platform
 //     applies the module operators with that owner (rhods-operator
@@ -61,6 +63,9 @@ type moduleOperator struct {
 	RHOAI bool
 	// Via says how it was identified.
 	Via string
+	// Owner is the Deployment's owner, "Platform <name>" or
+	// "DataScienceCluster <name>" ("" for the RHOAI operator).
+	Owner string
 }
 
 func (o moduleOperator) ref() string { return o.Namespace + "/" + o.Name }
@@ -140,6 +145,63 @@ type moduleOperatorFinder struct {
 	csvLoaded   bool
 	csv         *installedOperator
 	csvErr      error
+	// The applications namespace's Pods, read only by finalizerOwner.
+	podsLoaded bool
+	pods       []moduleOperatorPod
+	podsErr    error
+}
+
+// moduleOperatorPod is the part of a Pod finalizerOwner reads.
+type moduleOperatorPod struct {
+	Metadata struct {
+		Name string `json:"name"`
+	} `json:"metadata"`
+	Spec struct {
+		ServiceAccountName string `json:"serviceAccountName"`
+		ServiceAccount     string `json:"serviceAccount"` // deprecated alias
+	} `json:"spec"`
+	Status struct {
+		Phase string `json:"phase"`
+	} `json:"status"`
+}
+
+// serviceAccount is the ServiceAccount the Pod runs as. The API server sets
+// spec.serviceAccountName ("default" when the Pod names none) at admission
+// (ServiceAccount admission plugin); "default" is assumed only for a Pod
+// that names none, as the API server does.
+func (p moduleOperatorPod) serviceAccount() string {
+	return firstNonEmpty(p.Spec.ServiceAccountName, p.Spec.ServiceAccount, "default")
+}
+
+// mayRun: the Pod's containers may run or start (Pending, Running, or a
+// phase the tool does not know). Only Succeeded and Failed Pods are done:
+// all their containers have terminated and will not restart
+// (https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-phase).
+func (p moduleOperatorPod) mayRun() bool {
+	return p.Status.Phase != "Succeeded" && p.Status.Phase != "Failed"
+}
+
+// loadPods lists the applications namespace's Pods once. f.mu must be held
+// and load must have succeeded.
+func (f *moduleOperatorFinder) loadPods() error {
+	if f.podsLoaded {
+		return f.podsErr
+	}
+	f.podsLoaded = true
+	body, _, err := f.c.get(namespacedPath("v1", "pods", f.appNS, ""))
+	if err != nil {
+		f.podsErr = fmt.Errorf("list Pods in %s: %w", f.appNS, err)
+		return f.podsErr
+	}
+	var list struct {
+		Items []moduleOperatorPod `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		f.podsErr = fmt.Errorf("parse Pods in %s: %w", f.appNS, err)
+		return f.podsErr
+	}
+	f.pods = list.Items
+	return nil
 }
 
 func newModuleOperatorFinder(c *Client, api func() (componentAPI, error)) *moduleOperatorFinder {
@@ -225,12 +287,13 @@ func (f *moduleOperatorFinder) installedCSV() (*installedOperator, error) {
 func (f *moduleOperatorFinder) find(module, crName string) (op *moduleOperator, why string, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	plural, why, err := f.moduleResource(module)
+	kind, why, err := f.moduleResource(module)
 	if err != nil || why != "" {
 		return nil, why, err
 	}
+	plural := kind.Resource
 	for _, sub := range []string{"finalizers", "status"} {
-		scores := f.serviceAccountScores(plural, sub, crName)
+		scores := f.serviceAccountScores(kind.Group, plural, sub, crName)
 		if len(scores) == 0 {
 			continue
 		}
@@ -256,7 +319,7 @@ func (f *moduleOperatorFinder) find(module, crName string) (op *moduleOperator, 
 				f.appNS, strings.Join(holders, ", "), plural, plural, sub, verb(len(holders), "it", "them")), nil
 		case 1:
 			d := best[0]
-			return &moduleOperator{Namespace: f.appNS, Name: d.Metadata.Name,
+			return &moduleOperator{Namespace: f.appNS, Name: d.Metadata.Name, Owner: d.platformOwner(),
 				Via: fmt.Sprintf("owned by %s; its ServiceAccount %s may update %s and %s/%s", d.platformOwner(), d.serviceAccount(), plural, plural, sub)}, "", nil
 		default:
 			var names []string
@@ -271,7 +334,7 @@ func (f *moduleOperatorFinder) find(module, crName string) (op *moduleOperator, 
 	if err != nil {
 		return nil, "", fmt.Errorf("read the installed RHOAI CSV: %w", err)
 	}
-	crd := plural + "." + componentAPIGroup
+	crd := kind.crd()
 	if !slices.Contains(csv.OwnedCRDs, crd) {
 		return nil, fmt.Sprintf("no ServiceAccount in %s may update %s and %s/finalizers, and the installed CSV %s does not own CRD %s", f.appNS, plural, plural, csv.Name, crd), nil
 	}
@@ -282,31 +345,26 @@ func (f *moduleOperatorFinder) find(module, crName string) (op *moduleOperator, 
 		Via: fmt.Sprintf("the RHOAI operator: the installed CSV %s owns CRD %s", csv.Name, crd)}, "", nil
 }
 
-// moduleResource returns the resource of the cluster-scoped module kind
-// named after module, with the RBAC and Deployments loaded; why says why
-// the tool cannot identify its operator. f.mu must be held.
-func (f *moduleOperatorFinder) moduleResource(module string) (plural, why string, err error) {
+// moduleResource returns the cluster-scoped module kind named after module
+// (in either module API group), with the RBAC and Deployments loaded; why
+// says why the tool cannot identify its operator. f.mu must be held.
+func (f *moduleOperatorFinder) moduleResource(module string) (kind componentKind, why string, err error) {
 	api, err := f.api()
 	if err != nil {
-		return "", "", err
+		return componentKind{}, "", err
 	}
-	var kind *componentKind
-	for i := range api.Kinds {
-		if api.Kinds[i].Kind != "" && strings.ToLower(api.Kinds[i].Kind) == module {
-			kind = &api.Kinds[i]
-		}
-	}
+	kind, ok := api.kindForModule(module)
 	switch {
-	case kind == nil:
-		return "", fmt.Sprintf("no %s kind is named after %s", componentAPIGroup, module), nil
+	case !ok:
+		return componentKind{}, fmt.Sprintf("no %s kind is named after %s (or more than one)", strings.Join(moduleAPIGroups, " or "), module), nil
 	case kind.Namespaced:
 		// RoleBindings could grant a namespaced kind; they are not read.
-		return "", fmt.Sprintf("%s is namespaced; the tool identifies the operators of cluster-scoped module kinds only", kind.Kind), nil
+		return componentKind{}, fmt.Sprintf("%s is namespaced; the tool identifies the operators of cluster-scoped module kinds only", kind.Kind), nil
 	}
 	if err := f.load(); err != nil {
-		return "", "", err
+		return componentKind{}, "", err
 	}
-	return kind.Resource, "", nil
+	return kind, "", nil
 }
 
 // finalizerOwner is what decides whether a stuck module CR's finalizers may
@@ -321,9 +379,12 @@ func (f *moduleOperatorFinder) moduleResource(module string) (plural, why string
 // kept while the CR is deleting; the Platform finalizer
 // waitForModuleCRDeletion holds the Platform-owned operators during a
 // cascade delete). So the operator is gone when ServiceAccounts identify
-// it and no Deployment in the applications namespace runs as any
-// ServiceAccount that may update the CR together with its finalizers or
-// status, whatever owns that Deployment and however many replicas it has.
+// it and nothing in the applications namespace runs as any ServiceAccount
+// that may update the CR together with its finalizers or status: no
+// Deployment (whatever owns it and however many replicas it has) and no Pod
+// that may still run, whatever controls it (a ReplicaSet left by a deleted
+// Deployment, a StatefulSet, a Job, or none). A Pod is what acts on the CR;
+// a Deployment only makes Pods.
 type finalizerOwner struct {
 	Namespace string
 	// ServiceAccounts identify the operator: those that may update the CR
@@ -335,11 +396,23 @@ type finalizerOwner struct {
 	// Deployments run as a ServiceAccount that may update the CR and its
 	// finalizers or status: while one exists, it may still remove them.
 	Deployments []string
+	// Pods run as such a ServiceAccount and are not Succeeded or Failed.
+	Pods []string
 }
 
 // gone: the operator is identified and nothing that may be it exists.
 func (o finalizerOwner) gone() bool {
-	return o.Unknown == "" && len(o.ServiceAccounts) > 0 && len(o.Deployments) == 0
+	return o.Unknown == "" && len(o.ServiceAccounts) > 0 && len(o.Deployments) == 0 && len(o.Pods) == 0
+}
+
+// stillThere names the Deployments and Pods that may still be the operator.
+func (o finalizerOwner) stillThere() string {
+	var out []string
+	out = append(out, o.Deployments...)
+	for _, p := range o.Pods {
+		out = append(out, "Pod "+p)
+	}
+	return strings.Join(out, ", ")
 }
 
 // finalizerOwner returns the finalizerOwner of the module's CR crName. A
@@ -350,17 +423,18 @@ func (o finalizerOwner) gone() bool {
 func (f *moduleOperatorFinder) finalizerOwner(module, crName string) (finalizerOwner, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	plural, why, err := f.moduleResource(module)
+	kind, why, err := f.moduleResource(module)
 	if err != nil {
 		return finalizerOwner{}, err
 	}
 	if why != "" {
 		return finalizerOwner{Unknown: why}, nil
 	}
+	plural := kind.Resource
 	out := finalizerOwner{Namespace: f.appNS}
 	related := map[string]bool{}
 	for _, sub := range []string{"finalizers", "status"} {
-		scores := f.serviceAccountScores(plural, sub, crName)
+		scores := f.serviceAccountScores(kind.Group, plural, sub, crName)
 		for sa := range scores {
 			related[sa] = true
 		}
@@ -378,24 +452,36 @@ func (f *moduleOperatorFinder) finalizerOwner(module, crName string) (finalizerO
 		}
 	}
 	sort.Strings(out.Deployments)
+	if len(related) == 0 {
+		return out, nil
+	}
+	if err := f.loadPods(); err != nil {
+		return finalizerOwner{}, err
+	}
+	for _, p := range f.pods {
+		if related[p.serviceAccount()] && p.mayRun() {
+			out.Pods = append(out.Pods, f.appNS+"/"+p.Metadata.Name)
+		}
+	}
+	sort.Strings(out.Pods)
 	return out, nil
 }
 
 // serviceAccountScores returns, for each ServiceAccount of the applications
 // namespace that a ClusterRoleBinding names and lets update or patch both
-// the module CR and its subresource sub, the fewest wildcards its grant
-// needs (bestRuleScore). Group subjects are not followed: a binding to
-// every ServiceAccount (system:serviceaccounts, system:authenticated)
-// would make any Deployment look like the operator.
-func (f *moduleOperatorFinder) serviceAccountScores(plural, sub, crName string) map[string]int {
+// the module CR and its subresource sub (in the kind's API group), the
+// fewest wildcards its grant needs (bestRuleScore). Group subjects are not
+// followed: a binding to every ServiceAccount (system:serviceaccounts,
+// system:authenticated) would make any Deployment look like the operator.
+func (f *moduleOperatorFinder) serviceAccountScores(group, plural, sub, crName string) map[string]int {
 	out := map[string]int{}
 	for _, b := range f.bindings {
 		if b.RoleRef.Kind != "ClusterRole" {
 			continue
 		}
 		rules := f.roles[b.RoleRef.Name]
-		mainScore, okMain := bestRuleScore(rules, plural, "", crName)
-		subScore, okSub := bestRuleScore(rules, plural, sub, crName)
+		mainScore, okMain := bestRuleScore(rules, group, plural, "", crName)
+		subScore, okSub := bestRuleScore(rules, group, plural, sub, crName)
 		if !okMain || !okSub {
 			continue
 		}
@@ -412,14 +498,14 @@ func (f *moduleOperatorFinder) serviceAccountScores(plural, sub, crName string) 
 }
 
 // bestRuleScore is the fewest wildcards among the rules that allow update
-// or patch on plural (or its subresource sub) in the module API group, as
+// or patch on plural (or its subresource sub) in the kind's API group, as
 // the API server matches rules (k8s pkg/apis/rbac/v1 evaluation_helpers.go;
 // resourceNames limit the names). ok is false when no rule allows it. A
 // "*" verb or API group counts as one wildcard each. The rule must name the
 // resource: "*" and "*/<sub>" (cluster-admin and other broad roles) say
 // nothing about which kind a ServiceAccount reconciles, so they identify
 // no operator.
-func bestRuleScore(rules []clusterRoleRule, plural, sub, crName string) (best int, ok bool) {
+func bestRuleScore(rules []clusterRoleRule, group, plural, sub, crName string) (best int, ok bool) {
 	resource := plural
 	if sub != "" {
 		resource += "/" + sub
@@ -430,7 +516,7 @@ func bestRuleScore(rules []clusterRoleRule, plural, sub, crName string) (best in
 			continue
 		}
 		switch {
-		case slices.Contains(r.APIGroups, componentAPIGroup):
+		case slices.Contains(r.APIGroups, group):
 		case slices.Contains(r.APIGroups, "*"):
 			score++
 		default:

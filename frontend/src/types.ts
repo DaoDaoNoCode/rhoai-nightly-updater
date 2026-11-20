@@ -627,6 +627,19 @@ export interface Problem {
   fieldChanges?: FieldChange[] | null;
   /** A statement the user must confirm before the fix runs (sent to /api/diagnostics/fix/acknowledged). */
   acknowledge?: string;
+  /** What the statement is about; sent back with the acknowledged fix (backend cluster.AckBinding). */
+  acknowledgeBinding?: AcknowledgeBinding | null;
+}
+
+/**
+ * Binds an acknowledgement to what the user reviewed: the object's UID and
+ * resourceVersion (empty when the scan could not read it) and the hash of
+ * the statement.
+ */
+export interface AcknowledgeBinding {
+  uid: string;
+  resourceVersion: string;
+  hash: string;
 }
 
 /** One field of a fix's plan (backend cluster.FieldChange). */

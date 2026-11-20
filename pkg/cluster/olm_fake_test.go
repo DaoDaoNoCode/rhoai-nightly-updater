@@ -492,9 +492,20 @@ func lastStatus(events []UpdateStepEvent, step string) string {
 // for mocks that return a generic body for unknown paths.
 func dashboardOperatorAbsent(w http.ResponseWriter, r *http.Request) bool {
 	// No component API: the cluster has no dashboard module (legacy flow).
-	if p := r.URL.Path; p == "/apis/"+componentAPIGroup || strings.HasPrefix(p, "/apis/"+componentAPIGroup+"/") {
+	if p := r.URL.Path; moduleGroupPath(p) {
 		notFound(w)
 		return true
+	}
+	return false
+}
+
+// moduleGroupPath: the path is a module API group's discovery document or
+// below it (both groups, component_cleanup.go).
+func moduleGroupPath(p string) bool {
+	for _, g := range moduleAPIGroups {
+		if p == "/apis/"+g || strings.HasPrefix(p, "/apis/"+g+"/") {
+			return true
+		}
 	}
 	return false
 }

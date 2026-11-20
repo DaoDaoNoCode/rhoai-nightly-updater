@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 )
 
 // The Dashboard Dev fixtures run where nothing is named as on RHOAI: the
@@ -117,7 +116,7 @@ func legacyClusterRoute(w http.ResponseWriter, r *http.Request) bool {
 	switch {
 	case r.Method != http.MethodGet:
 		return false
-	case p == "/apis/"+componentAPIGroup || strings.HasPrefix(p, "/apis/"+componentAPIGroup+"/"),
+	case moduleGroupPath(p),
 		p == "/apis/dscinitialization.opendatahub.io":
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(w, `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`)

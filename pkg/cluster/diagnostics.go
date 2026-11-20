@@ -2,6 +2,8 @@ package cluster
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,6 +53,13 @@ type Problem struct {
 	// the fix runs: the fix is sent to /api/diagnostics/fix/acknowledged,
 	// and refused without it.
 	Acknowledge string `json:"acknowledge,omitempty"`
+	// AcknowledgeBinding is set with Acknowledge: what the statement is
+	// about, sent back with the acknowledged fix. The fix refuses
+	// ("conflict") unless the object it would change still has this UID
+	// and resourceVersion and the statement it would ask for now hashes
+	// the same, so an acknowledgement never covers an object or reasons
+	// the user did not review.
+	AcknowledgeBinding *AckBinding `json:"acknowledgeBinding,omitempty"`
 
 	// explains are objects (pods) whose problems this one likely causes:
 	// a pod problem whose objects are all listed links to this problem.
@@ -65,6 +74,22 @@ type Problem struct {
 	// pods are all covered, and webhook entries covered here, are folded
 	// into this problem.
 	covers []string
+}
+
+// AckBinding ties an acknowledgement to what the user reviewed: the UID and
+// resourceVersion of the object the fix changes (both empty when the scan
+// could not read it, and the statement says so) and the SHA-256 of the
+// acknowledgement statement, which lists the reasons.
+type AckBinding struct {
+	UID             string `json:"uid"`
+	ResourceVersion string `json:"resourceVersion"`
+	Hash            string `json:"hash"`
+}
+
+// newAckBinding binds statement to the object uid at resourceVersion.
+func newAckBinding(uid, resourceVersion, statement string) *AckBinding {
+	sum := sha256.Sum256([]byte(statement))
+	return &AckBinding{UID: uid, ResourceVersion: resourceVersion, Hash: hex.EncodeToString(sum[:])}
 }
 
 // FieldChange is one field of a fix's plan.
@@ -1147,18 +1172,20 @@ var removedFixes = map[string]string{
 // re-checks its precondition right before acting and reports what it
 // actually changed; errorCode "nothing_to_do" means nothing needed changing.
 func ApplyFix(c *Client, problemID string) (*types.OperationResponse, error) {
-	return applyFix(c, problemID, false)
+	return applyFix(c, problemID, nil)
 }
 
 // ApplyFixAcknowledged is ApplyFix after the user confirmed the problem's
-// Acknowledge statement (POST /api/diagnostics/fix/acknowledged). Fixes
-// that need no acknowledgement run as with ApplyFix.
-func ApplyFixAcknowledged(c *Client, problemID string) (*types.OperationResponse, error) {
-	return applyFix(c, problemID, true)
+// Acknowledge statement (POST /api/diagnostics/fix/acknowledged), with the
+// problem's AcknowledgeBinding they reviewed. A fix that needs the
+// acknowledgement refuses ("conflict") when the binding does not match
+// what it would act on now. Fixes that need none run as with ApplyFix.
+func ApplyFixAcknowledged(c *Client, problemID string, binding AckBinding) (*types.OperationResponse, error) {
+	return applyFix(c, problemID, &binding)
 }
 
-func applyFix(c *Client, problemID string, acknowledged bool) (*types.OperationResponse, error) {
-	if res, ok := applyLeftoverFix(c, problemID, acknowledged); ok {
+func applyFix(c *Client, problemID string, ack *AckBinding) (*types.OperationResponse, error) {
+	if res, ok := applyLeftoverFix(c, problemID, ack); ok {
 		return res, nil
 	}
 	switch problemID {

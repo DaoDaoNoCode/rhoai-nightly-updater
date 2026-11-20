@@ -118,7 +118,7 @@ objects:
         verbs: ["get"]
       # Module CRs (the kinds change with the operator version; see
       # deploy/template.yaml): read only here
-      - apiGroups: ["components.platform.opendatahub.io"]
+      - apiGroups: ["components.platform.opendatahub.io", "services.platform.opendatahub.io"]
         resources: ["*"]
         verbs: ["list"]
       # Which Deployment cleans up a module CR (its ServiceAccount's

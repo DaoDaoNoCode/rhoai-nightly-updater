@@ -95,8 +95,12 @@ const (
 	// to the CRD's schema for server-side apply ("failed to create manager
 	// for existing fields: failed to convert new object (...) to smd typed:
 	// errors: <path>: expected <type>, got ..."), live on RHOAI 3.6 after
-	// upgrades over several releases. The "Left over from an earlier
-	// release" check handles it (diagnostics_leftovers.go).
+	// upgrades over several releases. The API server raises it only when
+	// the live object has no managedFields (kubernetes v1.34
+	// staging/src/k8s.io/apimachinery/pkg/util/managedfields/internal/
+	// skipnonapplied.go:75-91; how an object loses them:
+	// fieldmanager.go:145-164). The "Left over from an earlier release"
+	// check handles it (diagnostics_leftovers.go).
 	applyStoredType applyFailureClass = "stored-type"
 )
 
@@ -340,7 +344,7 @@ func collectApplyFailures(found map[string]*reportedApplyFailure, r applyReporte
 
 // reporterScan is what scanApplyReporters read: the failures it kept, the
 // component API, the DataScienceClusters and the module CRs (each also as
-// the raw object, by kind and name).
+// the raw object, by moduleScanKey and name).
 type reporterScan struct {
 	api     componentAPI
 	found   map[string]*reportedApplyFailure
@@ -349,6 +353,9 @@ type reporterScan struct {
 	scanned int
 	errs    []string
 }
+
+// moduleScanKey keys reporterScan.modules: a kind in its API group.
+func moduleScanKey(group, kind string) string { return group + "|" + kind }
 
 // scanApplyReporters reads the conditions of the DataScienceCluster, the
 // Platform and every module CR (whatever kinds this operator version
@@ -386,9 +393,9 @@ func scanApplyReporters(c *Client, keep func(applyFailure) bool) reporterScan {
 	}
 	lists := make([]moduleList, len(api.Kinds))
 	parallelFor(len(api.Kinds), 6, func(i int) {
-		body, _, err := c.get(componentListPath(api.Version, api.Kinds[i].Resource))
+		body, _, err := c.get(api.Kinds[i].listPath())
 		if err != nil {
-			lists[i].err = fmt.Errorf("list %s: %w", api.Kinds[i].Resource, err)
+			lists[i].err = fmt.Errorf("list %s: %w", api.Kinds[i].crd(), err)
 			return
 		}
 		var list struct {
@@ -402,6 +409,7 @@ func scanApplyReporters(c *Client, keep func(applyFailure) bool) reporterScan {
 			s.errs = append(s.errs, lists[i].err.Error())
 			continue
 		}
+		key := moduleScanKey(k.Group, k.Kind)
 		for _, raw := range lists[i].items {
 			var it dscObject
 			var obj map[string]any
@@ -409,10 +417,10 @@ func scanApplyReporters(c *Client, keep func(applyFailure) bool) reporterScan {
 				continue
 			}
 			s.scanned++
-			if s.modules[k.Kind] == nil {
-				s.modules[k.Kind] = map[string]map[string]any{}
+			if s.modules[key] == nil {
+				s.modules[key] = map[string]map[string]any{}
 			}
-			s.modules[k.Kind][it.Metadata.Name] = obj
+			s.modules[key][it.Metadata.Name] = obj
 			collectApplyFailures(s.found, applyReporter{Kind: k.Kind, Name: it.Metadata.Name, UID: it.Metadata.UID, Module: strings.ToLower(k.Kind), rank: 2}, it.Status.Conditions, keep)
 		}
 	}
@@ -568,12 +576,8 @@ func applyFailureProblem(c *Client, api componentAPI, operators *moduleOperatorF
 // Platform. "" otherwise.
 func crdNameFor(api componentAPI, f applyFailure) string {
 	group := f.group()
-	if group == componentAPIGroup {
-		for _, k := range api.Kinds {
-			if k.Kind == f.Kind {
-				return k.Resource + "." + group
-			}
-		}
+	if k, ok := api.kindOf(group, f.Kind); ok {
+		return k.crd()
 	}
 	known := map[string]string{
 		"datasciencecluster.opendatahub.io/DataScienceCluster": "datascienceclusters.datasciencecluster.opendatahub.io",

@@ -185,7 +185,7 @@ func hardResetRecordOf(t *testing.T, f *resourceFake) string {
 	return v
 }
 
-func TestHardResetDeletesInTheForegroundAndClearsItsRecord(t *testing.T) {
+func TestHardResetDeletesInTheBackgroundAndClearsItsRecord(t *testing.T) {
 	f, c := managerWorld(t, nil)
 	operatorRemovesDSCAfter(f, 2)
 	res, _ := runHardReset(t, c, nil)
@@ -193,8 +193,8 @@ func TestHardResetDeletesInTheForegroundAndClearsItsRecord(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 	for _, d := range f.callsTo(http.MethodDelete, dscV3Path) {
-		if !strings.Contains(d.Body, `"propagationPolicy":"Foreground"`) {
-			t.Fatalf("delete not in the foreground: %s", d.Body)
+		if !strings.Contains(d.Body, `"propagationPolicy":"Background"`) {
+			t.Fatalf("delete not in the background: %s", d.Body)
 		}
 	}
 	// The new spec was validated against the live DSC before the delete.
@@ -269,7 +269,7 @@ func TestHardResetWaitsThroughReadErrors(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("result = %+v", res)
 	}
-	if !strings.Contains(stepsText(steps), "Cannot read the DataScienceCluster now") {
+	if !strings.Contains(stepsText(steps), "Cannot read the cluster now") {
 		t.Fatalf("steps = %v", steps)
 	}
 }
@@ -459,7 +459,7 @@ func TestRemovalChecksFailClosedOnModulesTheToolCannotCheck(t *testing.T) {
 	f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1/rays", http.StatusOK, `{"items":[]}`)
 	serveLive36ModuleOperators(f)
 	rc := newRemovalChecker(c)
-	if got := strings.Join(rc.partBlockers("data"), " "); !strings.Contains(got, "no components.platform.opendatahub.io kind is named after data") {
+	if got := strings.Join(rc.partBlockers("data"), " "); !strings.Contains(got, "no components.platform.opendatahub.io or services.platform.opendatahub.io kind is named after data") {
 		t.Fatalf("unknown kind: %q", got)
 	}
 	if got := strings.Join(rc.moduleBlockers("sparkoperator"), " "); !strings.Contains(got, "can't confirm its operator is running") {

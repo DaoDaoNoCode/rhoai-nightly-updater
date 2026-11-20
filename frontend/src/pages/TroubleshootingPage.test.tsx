@@ -250,6 +250,7 @@ describe("Diagnostics leftovers from an earlier release", () => {
         schema: "string, one of allow, deny, default deny, optional", note: "the installed CRD's default" },
     ],
     acknowledge: 'I checked what these fields mean and the new values are right for this cluster: .spec.eval.lmeval.permitOnline (true -> "deny").',
+    acknowledgeBinding: { uid: "trusty-uid", resourceVersion: "100", hash: "abc" },
   };
 
   it("shows each field's plan, and Fix waits for the acknowledgement, then uses the acknowledged endpoint", async () => {
@@ -274,8 +275,20 @@ describe("Diagnostics leftovers from an earlier release", () => {
     expect(confirm).toBeEnabled();
     fireEvent.click(confirm);
     expect(await screen.findByText("Changed TrustyAI default-trustyai.")).toBeInTheDocument();
-    expect(api.bodies["POST /api/diagnostics/fix/acknowledged"]).toEqual([{ problemId: fields.autoFixAction, acknowledged: true }]);
+    expect(api.bodies["POST /api/diagnostics/fix/acknowledged"]).toEqual([{ problemId: fields.autoFixAction, acknowledged: true, binding: { uid: "trusty-uid", resourceVersion: "100", hash: "abc" } }]);
     expect(api.bodies["POST /api/diagnostics/fix"]).toBeUndefined();
+  });
+
+  it("an acknowledgement without its binding cannot be sent", async () => {
+    stubApi({ "/api/diagnostics": result([{ ...fields, acknowledgeBinding: undefined }]) });
+    renderPage(<TroubleshootingPage />);
+    await screen.findByText(fields.title);
+    expand(fields.title);
+    await fixEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Fix" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: fields.acknowledge }));
+    expect(within(dialog).getByRole("button", { name: "Fix" })).toBeDisabled();
   });
 
   it("without an acknowledgement the plain endpoint is used, and a refusal is a warning", async () => {

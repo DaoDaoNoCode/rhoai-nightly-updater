@@ -157,6 +157,35 @@ func TestApplySchemaDefaults(t *testing.T) {
 	}
 }
 
+// A13: a null additionalProperties value whose schema is not nullable gets
+// that schema's default, then the defaults below it (kubernetes v1.34
+// apiextensions-apiserver pkg/apiserver/schema/defaulting/algorithm.go:53-55);
+// a nullable one, or one without a default, stays null.
+func TestApplySchemaDefaultsNullAdditionalProperties(t *testing.T) {
+	entry := func(extra map[string]any) map[string]any {
+		s := map[string]any{"default": map[string]any{"a": 1}, "properties": map[string]any{"b": map[string]any{"default": "x"}}}
+		for k, v := range extra {
+			s[k] = v
+		}
+		return s
+	}
+	for _, tc := range []struct {
+		name   string
+		schema map[string]any
+		want   any
+	}{
+		{"not nullable", entry(nil), map[string]any{"a": float64(1), "b": "x"}},
+		{"nullable", entry(map[string]any{"nullable": true}), nil},
+		{"no default", map[string]any{"properties": map[string]any{"b": map[string]any{"default": "x"}}}, nil},
+	} {
+		obj := map[string]any{"byName": map[string]any{"one": nil}}
+		applySchemaDefaults(obj, map[string]any{"properties": map[string]any{"byName": map[string]any{"additionalProperties": tc.schema}}})
+		if got := obj["byName"].(map[string]any)["one"]; !jsonEqual(got, tc.want) {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 // The plan carries what the dialog says: the wait before the reset stops
 // without creating anything, and the fields the reset keeps.
 func TestResetPlansCarryTheTimeoutAndTheProtectedFields(t *testing.T) {

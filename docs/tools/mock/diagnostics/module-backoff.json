@@ -27,7 +27,7 @@
       "evidence": [
         "DataScienceCluster default-dsc: TrainerReady=False (Error): dependency not met: JobSet Operator is not installed. Please install the JobSet Operator via OLM (OperatorHub) before deploying Trainer. It still reports JobSet Operator as not installed, but it is installed: Job Set Operator (CSV openshift-jobset-operator/jobset-operator.v1.0.1 Succeeded 1h0m ago; JobSetOperator/cluster exists)",
         "Trainer default-trainer: Ready=False (Error): dependency not met: JobSet Operator is not installed. Please install the JobSet Operator via OLM (OperatorHub) before deploying Trainer. It still reports JobSet Operator as not installed, but it is installed: Job Set Operator (CSV openshift-jobset-operator/jobset-operator.v1.0.1 Succeeded 1h0m ago; JobSetOperator/cluster exists)",
-        "Operator Deployment redhat-ods-applications/trainer-operator-controller-manager (known operator of module trainer): 1 of 1 pods available, strategy RollingUpdate with maxSurge 25% and maxUnavailable 25% for 1 replica (up to 0 unavailable)"
+        "Operator Deployment redhat-ods-applications/trainer-operator-controller-manager (owned by Platform default; its ServiceAccount trainer-operator-controller-manager may update trainers and trainers/finalizers): 1 of 1 pods available, strategy RollingUpdate with maxSurge 25% and maxUnavailable 25% for 1 replica (up to 0 unavailable)"
       ],
       "fix": "Restart redhat-ods-applications/trainer-operator-controller-manager. Kubernetes starts a new pod and stops the old one once the new one is ready.",
       "autoFixable": true,

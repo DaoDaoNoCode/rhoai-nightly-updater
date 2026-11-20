@@ -211,7 +211,7 @@ func listModuleObjects(c *Client, api componentAPI) ([]moduleObject, error) {
 	}
 	results := make([]result, len(api.Kinds))
 	parallelFor(len(api.Kinds), 6, func(i int) {
-		body, _, err := c.get(componentListPath(api.Version, api.Kinds[i].Resource))
+		body, _, err := c.get(api.Kinds[i].listPath())
 		if err != nil {
 			results[i].err = fmt.Errorf("list %s: %w", api.Kinds[i].Resource, err)
 			return
@@ -358,7 +358,7 @@ func analyzeDSC(c *Client, dsc dscObject, now time.Time) *dscAnalysis {
 	}
 
 	var modules []moduleObject
-	if api.Version != "" {
+	if api.served() {
 		modules, a.ModulesErr = listModuleObjects(c, api)
 	}
 	staleModules := map[string]string{}

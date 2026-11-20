@@ -153,6 +153,8 @@ type stuckModule struct {
 	Name       string
 	Finalizers []string
 	Since      time.Duration
+	// CRD names the kind for the oc command (<plural>.<group>).
+	CRD string
 }
 
 func stuckModuleCRs(c *Client, now time.Time) ([]stuckModule, error) {
@@ -166,7 +168,7 @@ func stuckModuleCRs(c *Client, now time.Time) ([]stuckModule, error) {
 	}
 	results := make([]listResult, len(api.Kinds))
 	parallelFor(len(api.Kinds), 6, func(i int) {
-		results[i].items, results[i].err = listModuleCRsIn(c, api, strings.ToLower(api.Kinds[i].Kind))
+		results[i].items, results[i].err = listKindCRs(c, api.Kinds[i])
 	})
 	var out []stuckModule
 	var errs []string
@@ -180,7 +182,7 @@ func stuckModuleCRs(c *Client, now time.Time) ([]stuckModule, error) {
 			if !ok || now.Sub(t) < moduleDeletionGrace {
 				continue
 			}
-			out = append(out, stuckModule{Module: strings.ToLower(k.Kind), Name: it.Metadata.Name, Finalizers: it.Metadata.Finalizers, Since: now.Sub(t)})
+			out = append(out, stuckModule{Module: k.module(), Name: it.Metadata.Name, Finalizers: it.Metadata.Finalizers, Since: now.Sub(t), CRD: k.crd()})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Module < out[j].Module })
@@ -229,7 +231,7 @@ func stuckModuleProblem(c *Client, operators *moduleOperatorFinder, m stuckModul
 		Evidence:        evidence,
 		AffectedObjects: []string{fmt.Sprintf("%s %s", m.Module, m.Name)},
 		Fix:             fix,
-		TechnicalCmd:    fmt.Sprintf("oc get %ss.components.platform.opendatahub.io %s -o yaml", m.Module, m.Name),
+		TechnicalCmd:    shellCommand("oc", "get", nonEmpty(m.CRD, m.Module+"s."+componentAPIGroup), m.Name, "-o", "yaml"),
 	}
 }
 

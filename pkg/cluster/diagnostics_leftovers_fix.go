@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -18,13 +19,14 @@ import (
 // the failure is still reported, the object is unchanged, and the user
 // acknowledged what the tool cannot check.
 
-// applyLeftoverFix runs a leftover fix; handled is false for other IDs.
-func applyLeftoverFix(c *Client, id string, acknowledged bool) (*types.OperationResponse, bool) {
+// applyLeftoverFix runs a leftover fix; handled is false for other IDs. ack
+// is what the user acknowledged (nil without an acknowledgement).
+func applyLeftoverFix(c *Client, id string, ack *AckBinding) (*types.OperationResponse, bool) {
 	if target, ok := strings.CutPrefix(id, fixLeftoverFields); ok {
-		return fixLeftoverStoredFields(c, target, acknowledged), true
+		return fixLeftoverStoredFields(c, target, ack), true
 	}
 	if target, ok := strings.CutPrefix(id, fixLeftoverRecreate); ok {
-		return fixLeftoverRecreateWorkload(c, target, acknowledged), true
+		return fixLeftoverRecreateWorkload(c, target, ack), true
 	}
 	if name, ok := strings.CutPrefix(id, fixLeftoverRetry); ok {
 		return fixLeftoverRetryDSC(c, name), true
@@ -39,6 +41,31 @@ func leftoverRefused(msg, code string, logs []string) *types.OperationResponse {
 // needsAcknowledgement refuses a fix whose acknowledgement was not given.
 func needsAcknowledgement(what string, reasons []string) *types.OperationResponse {
 	return leftoverRefused(fmt.Sprintf("%s needs your acknowledgement first: %s. Nothing was changed; confirm it in the Fix dialog.", what, strings.Join(reasons, "; ")), "acknowledgement_required", nil)
+}
+
+// ackMismatch refuses an acknowledged fix when what the user acknowledged
+// (got, sent back from the problem they reviewed) is not what the fix
+// would act on now (want, computed from a fresh read): the object's UID or
+// resourceVersion changed, or the acknowledgement statement differs (its
+// hash). nil when they match.
+func ackMismatch(what string, got AckBinding, want *AckBinding, logs []string) *types.OperationResponse {
+	if want == nil {
+		return leftoverRefused(fmt.Sprintf("%s: the tool cannot bind your acknowledgement to the object now. Nothing was changed. Run diagnostics again.", what), "conflict", logs)
+	}
+	var changed []string
+	if got.UID != want.UID {
+		changed = append(changed, "its UID (it was deleted and created again)")
+	}
+	if got.ResourceVersion != want.ResourceVersion {
+		changed = append(changed, "its resourceVersion (it was changed)")
+	}
+	if got.Hash != want.Hash {
+		changed = append(changed, "what needs your acknowledgement")
+	}
+	if len(changed) == 0 {
+		return nil
+	}
+	return leftoverRefused(fmt.Sprintf("%s changed since you reviewed it (%s), so your acknowledgement does not cover it. Nothing was changed. Run diagnostics again and review it.", what, strings.Join(changed, ", ")), "conflict", logs)
 }
 
 // leftoverWriteError words the API server's refusal of a leftover change:
@@ -61,13 +88,23 @@ func leftoverWriteError(err error, what string, dryRun bool) *types.OperationRes
 
 // --- Stored field types ------------------------------------------------------
 
-func fixLeftoverStoredFields(c *Client, target string, acknowledged bool) *types.OperationResponse {
+func fixLeftoverStoredFields(c *Client, target string, ack *AckBinding) *types.OperationResponse {
 	kind, name, ok := strings.Cut(target, "/")
 	if !ok || !kindPattern.MatchString(kind) || !dns1123Subdomain.MatchString(name) {
 		return leftoverRefused(fixLeftoverFields+" needs <Kind>/<name>", "validation", nil)
 	}
 	s := scanApplyReporters(c, allApplyFailures)
-	rf := leftoverObject(s, componentAPIGroup, kind, "", name, applyStoredType)
+	// The module CR is in one of the module API groups; a kind reported in
+	// both is ambiguous and refused.
+	var rf *reportedApplyFailure
+	for _, group := range moduleAPIGroups {
+		if found := leftoverObject(s, group, kind, "", name, applyStoredType); found != nil {
+			if rf != nil {
+				return leftoverRefused(fmt.Sprintf("%s %s is reported in more than one API group (%s), so the tool cannot tell which object to change. Nothing was changed.", kind, name, strings.Join(moduleAPIGroups, ", ")), "prerequisites", nil)
+			}
+			rf = found
+		}
+	}
 	if rf == nil {
 		if len(s.errs) > 0 {
 			return leftoverRefused(fmt.Sprintf("Could not read what the operator reports (%s). Nothing was changed.", strings.Join(s.errs, "; ")), "prerequisites", nil)
@@ -86,18 +123,23 @@ func fixLeftoverStoredFields(c *Client, target string, acknowledged bool) *types
 	if len(changes) == 0 {
 		return nothingToDo(fmt.Sprintf("every field the error names already matches the installed CRD. If %s still reports the error after a minute, use Retry now on its problem. Nothing was changed.", reportersText(rf)), logs)
 	}
-	if st.needsReview() && !acknowledged {
-		var reasons []string
-		for _, lf := range changes {
-			if lf.Review {
-				reasons = append(reasons, fmt.Sprintf("the stored %s of %s may not mean the same as the new value", fieldJSON(lf.Value), lf.Path))
+	if st.needsReview() {
+		if ack == nil {
+			var reasons []string
+			for _, lf := range changes {
+				if lf.Review {
+					reasons = append(reasons, fmt.Sprintf("%s: the stored %s may not mean the same as %s", lf.Path, fieldJSON(lf.Value), lf.afterText()))
+				}
 			}
+			return needsAcknowledgement("Changing "+st.ref(), reasons)
 		}
-		return needsAcknowledgement("Changing "+st.ref(), reasons)
+		if res := ackMismatch(st.ref(), *ack, st.problem().AcknowledgeBinding, logs); res != nil {
+			return res
+		}
 	}
 
 	ops := st.patchOps()
-	path := componentListPath(st.Version, st.Resource) + "/" + st.Name
+	path := componentListPath(st.Group, st.Version, st.Resource) + "/" + st.Name
 	if _, err := patchLeftoverObject(c, path, ops, true); err != nil {
 		return leftoverWriteError(err, st.ref(), true)
 	}
@@ -263,7 +305,7 @@ func deleteWorkload(c *Client, path, uid, resourceVersion string, dryRun bool) e
 	return err
 }
 
-func fixLeftoverRecreateWorkload(c *Client, target string, acknowledged bool) *types.OperationResponse {
+func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *types.OperationResponse {
 	parts := strings.Split(target, "/")
 	if len(parts) != 3 || workloadPath(parts[0], "x", "x") == "" || !dns1123Label.MatchString(parts[1]) || !dns1123Subdomain.MatchString(parts[2]) {
 		return leftoverRefused(fixLeftoverRecreate+" needs <Deployment|StatefulSet|DaemonSet|Job>/<namespace>/<name>", "validation", nil)
@@ -277,15 +319,44 @@ func fixLeftoverRecreateWorkload(c *Client, target string, acknowledged bool) *t
 		}
 		return nothingToDo(fmt.Sprintf("no CR reports that the selector of %s %s/%s changed any more. Nothing was deleted.", kind, ns, name), nil)
 	}
-	r := analyzeRecreate(c, rf, applicationsNamespace(c), readWorkloadAsUser, componentUsers)
+	appNS := applicationsNamespace(c)
+	r := analyzeRecreate(c, rf, appNS, readWorkloadAsUser, componentUsers)
 	logs := append([]string{"Reported by " + reportersText(rf)}, r.Warnings...)
 	switch {
 	case len(r.Blockers) > 0:
 		return leftoverRefused(fmt.Sprintf("Not deleting %s: %s. Nothing was deleted.", r.ref(), strings.Join(r.Blockers, "; ")), "prerequisites", logs)
 	case !r.Found:
 		return nothingToDo(fmt.Sprintf("%s no longer exists; the operator creates it on its next reconcile. Nothing was deleted.", r.ref()), logs)
-	case len(r.AckReasons) > 0 && !acknowledged:
-		return needsAcknowledgement("Deleting "+r.ref(), r.AckReasons)
+	case len(r.ackReasons()) > 0 && ack == nil:
+		return needsAcknowledgement("Deleting "+r.ref(), r.ackReasons())
+	case len(r.ackReasons()) > 0 && kind == "Deployment":
+		// The scan read it too: the user reviewed this object and these
+		// reasons.
+		if res := ackMismatch(r.ref(), *ack, r.problem().AcknowledgeBinding, logs); res != nil {
+			return res
+		}
+	case len(r.ackReasons()) > 0:
+		// The scan cannot read this kind (readDeploymentForScan), so the
+		// user reviewed it unread: their acknowledgement binds to the
+		// reasons the scan showed, which are worked out again here the way
+		// the scan does. What reading it with the user's token finds
+		// beyond them (for example the webhooks its pods serve) was never
+		// acknowledged, so it refuses.
+		scan := analyzeRecreate(c, rf, appNS, readDeploymentForScan, componentUsers)
+		if res := ackMismatch(r.ref(), *ack, scan.problem().AcknowledgeBinding, logs); res != nil {
+			return res
+		}
+		shown := scan.ackReasons()
+		var unseen []string
+		for _, reason := range r.ackReasons() {
+			if !slices.Contains(shown, reason) {
+				unseen = append(unseen, reason)
+			}
+		}
+		if len(unseen) > 0 {
+			return leftoverRefused(fmt.Sprintf("Reading %s with your token found what the scan could not show, and your acknowledgement does not cover it: %s. Nothing was deleted. Check it, then delete it yourself with: %s",
+				r.ref(), strings.Join(unseen, "; "), rf.ocCommand("delete")), "conflict", logs)
+		}
 	}
 	logs = append(logs, fmt.Sprintf("%s is owned by %s; %s creates it again", r.ref(), r.Owner, r.Recreator))
 	path := workloadPath(kind, ns, name)
