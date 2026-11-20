@@ -578,8 +578,20 @@ What users notice:
   the Environment page for their own projects, read with their own
   permissions. Components, Dashboard Dev and Diagnostics say "Only
   cluster-admins can see this page". A running update shows without who
-  started it. Who sees what, and with which token:
-  [SECURITY.md, Per-user views](../SECURITY.md#per-user-views-500).
+  started it. Their Help dialog describes only these pages. Who sees what,
+  and with which token:
+  [SECURITY.md, Per-user views](../SECURITY.md#per-user-views-500); the
+  pages: [README, Not a cluster-admin?](../README.md#not-a-cluster-admin-what-you-see).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/page-user-environment-dark.png">
+  <img src="images/page-user-environment-light.png" alt="Environment for a user who is not a cluster-admin: A cluster-admin sets up the shared parts; the project dev-project with its pipeline server dspa Ready, a model, the Gen AI playground, the MLflow sample data and the sample pipeline" width="640">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/page-user-admin-only-dark.png">
+  <img src="images/page-user-admin-only-light.png" alt="A page only cluster-admins see, opened by a user who is not one: the navigation has Status, Build Explorer and Environment; Only cluster-admins can see this page, with Go to Status" width="640">
+</picture>
 
 **With Argo CD (the Helm chart).** The usual commit (`targetRevision:
 v5.0.0` and the v5.0.0 image by digest). Both profiles get the new sign-in
