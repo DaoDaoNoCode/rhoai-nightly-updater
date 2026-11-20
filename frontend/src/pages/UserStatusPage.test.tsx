@@ -5,7 +5,8 @@ import { useLocation } from "react-router-dom";
 import { UserStatusPage } from "./UserStatusPage";
 import { USER_PERMISSIONS, renderPage } from "../test/providers";
 import { jsonResponse } from "../test/apiStub";
-import { USER_INSTALLED_BUILD, stubUserApi, summary } from "../test/userFixtures";
+import { stubUserApi, summary } from "../test/userFixtures";
+import { contract } from "../test/contract";
 import { useOperation } from "../state/AppState";
 
 const Where: React.FC = () => <span data-testid="where">{useLocation().pathname}</span>;
@@ -25,22 +26,23 @@ describe("Status for a user who is not a cluster-admin", () => {
     const api = stubUserApi();
     render();
     expect(await screen.findByRole("heading", { name: "RHOAI" })).toBeInTheDocument();
-    expect(within(row(document.body, "Updater version")).getByText("v5.0.0")).toBeInTheDocument();
+    // The values of the generated contract fixture (pkg/api TestFrontendContract).
+    expect(within(row(document.body, "Updater version")).getByText(contract.summary().updaterVersion)).toBeInTheDocument();
 
     const rhoai = card("RHOAI");
     expect(within(row(rhoai, "Operator")).getByText("Succeeded")).toBeInTheDocument();
     expect(within(row(rhoai, "Version")).getByText("3.6.0")).toBeInTheDocument();
-    expect(within(row(rhoai, "Channel")).getByText("stable-3.x")).toBeInTheDocument();
+    expect(within(row(rhoai, "Channel")).getByText("beta")).toBeInTheDocument();
 
     const nightly = card("Nightly build");
     expect(within(row(nightly, "Installed")).getByText("rhoai-3.6")).toBeInTheDocument();
-    expect(within(row(nightly, "Installed")).getByText("4eff06d60000")).toBeInTheDocument();
+    expect(within(row(nightly, "Installed")).getByText(/^built /)).toBeInTheDocument();
     expect(within(row(nightly, "Newer build")).getByText("A newer rhoai-3.6 build exists")).toBeInTheDocument();
 
     const dsc = card("DataScienceCluster");
     expect(within(dsc.querySelector(".pf-v6-c-card__header") as HTMLElement).getByText("Not ready")).toBeInTheDocument();
     const rows = within(within(dsc).getByRole("grid", { name: "DataScienceCluster components" })).getAllByRole("row").slice(1).map((r) => r.textContent);
-    expect(rows).toEqual(["aipipelinesManagedNot ready", "dashboardManagedReady", "trustyaiRemovedNot run by RHOAI"]);
+    expect(rows).toEqual(["dashboardManagedReady", "kserveManagedNot ready", "rayRemovedNot run by RHOAI"]);
 
     // Only the summary: no status, activity or nightly lookups.
     expect(api.calls.filter((c) => /\/api\/(status|activity|latest-nightly|nightly-tags)/.test(c))).toEqual([]);
@@ -57,15 +59,31 @@ describe("Status for a user who is not a cluster-admin", () => {
   });
 
   it("says the newest build is installed", async () => {
-    stubUserApi({ "/api/summary": summary({ nightly: { installedBuild: USER_INSTALLED_BUILD, latestBuild: USER_INSTALLED_BUILD, newerAvailable: false } }) });
+    const s = contract.summary();
+    stubUserApi({ "/api/summary": summary({ nightly: { ...s.nightly, latestBuild: s.nightly.installedBuild, newerAvailable: false } }) });
     render();
     expect(await screen.findByText("This is the newest build")).toBeInTheDocument();
+  });
+
+  it("says when it could not check for a newer build, never that this is the newest", async () => {
+    const s = contract.summary();
+    stubUserApi({ "/api/summary": summary({ nightly: { ...s.nightly, latestBuild: null, newerAvailable: false, problem: "lookup_failed" } }) });
+    render();
+    expect(await screen.findByText("Could not check for a newer build.")).toBeInTheDocument();
+    expect(screen.queryByText("This is the newest build")).not.toBeInTheDocument();
+  });
+
+  it("an unreadable catalog is not a cluster without a nightly build", async () => {
+    stubUserApi({ "/api/summary": summary({ nightly: { installedBuild: null, latestBuild: null, newerAvailable: false, problem: "catalog_unreadable" } }) });
+    render();
+    expect(await screen.findByText("Could not read which nightly build is installed.")).toBeInTheDocument();
+    expect(screen.queryByText(/was not installed from a nightly build/)).not.toBeInTheDocument();
   });
 
   it("without RHOAI, a nightly build or a DataScienceCluster says so", async () => {
     stubUserApi({ "/api/summary": summary({
       rhoai: { installed: false, version: "", channel: "", phase: "" },
-      nightly: { installedBuild: "", latestBuild: "", newerAvailable: false },
+      nightly: { installedBuild: null, latestBuild: null, newerAvailable: false, problem: "" },
       dsc: { exists: false, ready: false, components: null },
     }) });
     render();

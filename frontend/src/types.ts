@@ -403,6 +403,19 @@ export interface SummaryComponent {
   ready: boolean;
 }
 
+/** A nightly build in the summary (pkg/types SummaryBuild): its stream tag and build date ("" when unknown). No image reference. */
+export interface SummaryBuild {
+  tag: string;
+  buildDate: string;
+}
+
+/**
+ * Why the summary does not know the nightly comparison (pkg/types
+ * SummaryNightly.Problem): "" known (or not a nightly install),
+ * "catalog_unreadable", "lookup_failed", "no_stream" (a custom catalog image).
+ */
+export type NightlyProblem = "" | "catalog_unreadable" | "lookup_failed" | "no_stream";
+
 /**
  * GET /api/summary: the short read-only cluster summary every signed-in
  * user may see, read by the ServiceAccount with a reviewed field list. No
@@ -418,17 +431,50 @@ export interface ClusterSummary {
     phase: string;
   };
   nightly: {
-    /** The installed nightly build's image reference; "" when RHOAI was not installed from a nightly build. */
-    installedBuild: string;
-    /** The newest build of the same stream; "" when unknown. */
-    latestBuild: string;
+    /** The installed nightly build; null when RHOAI was not installed from a nightly build, or when that could not be read (problem). */
+    installedBuild: SummaryBuild | null;
+    /** The newest build of the same stream; null when unknown. */
+    latestBuild: SummaryBuild | null;
+    /** Meaningful only when problem is "". */
     newerAvailable: boolean;
+    problem: NightlyProblem;
   };
   dsc: {
     exists: boolean;
     ready: boolean;
     components: SummaryComponent[] | null;
   };
+}
+
+/** The kind of a ProjectStatus part's problem (pkg/types Problem*). */
+export type ProjectProblemCode = "" | "forbidden_for_user" | "not_installed" | "error";
+
+/** One KServe InferenceService of a user's project (pkg/types ProjectInferenceService). */
+export interface ProjectInferenceService {
+  name: string;
+  ready: boolean;
+  message?: string;
+  url?: string;
+  terminating?: boolean;
+}
+
+/**
+ * GET /api/resources/status?project= for a user who is not a cluster-admin
+ * (pkg/types ProjectStatus): one of their projects, read with their own
+ * token. A part that could not be read is null with its problem and code.
+ */
+export interface ProjectStatus {
+  project: string;
+  pipelineServers: ResourceState[] | null;
+  pipelineServersProblem?: string;
+  pipelineServersProblemCode?: ProjectProblemCode;
+  models: ModelState[] | null;
+  modelsProblem?: string;
+  modelsProblemCode?: ProjectProblemCode;
+  inferenceServices: ProjectInferenceService[] | null;
+  inferenceServicesProblem?: string;
+  inferenceServicesProblemCode?: ProjectProblemCode;
+  dashboardUrl?: string;
 }
 
 /** GET /api/operation as a user (role "user") reads it: no user, pod or interrupted operation. */

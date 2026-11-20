@@ -27,9 +27,11 @@
       "connectionState": "present",
       "deployed": true,
       "managedByTool": true,
+      "message": "Running",
       "name": "dspa",
       "namespace": "team-a",
-      "ready": true
+      "ready": true,
+      "uiRoute": "https://rh-ai.apps.example.com/develop-train/pipelines/definitions/team-a"
     }
   ],
   "project": "team-a"

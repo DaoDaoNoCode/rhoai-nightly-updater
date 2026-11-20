@@ -24,9 +24,8 @@ import { PageHeader } from "../components/PageHeader";
 import { LoadErrorAlert } from "../components/LoadErrorAlert";
 import { PageErrorState, PageLoading } from "../components/PageStates";
 import { StatusLabel, type StatusKind } from "../components/StatusLabel";
-import { ImageRef } from "../components/ImageRef";
-import { imageDigest, imageTag } from "../components/buildDiff";
-import { useSummary } from "../hooks/useSummary";
+import { RelativeTime } from "../components/RelativeTime";
+import { nightlyProblemText, useSummary } from "../hooks/useSummary";
 
 /** Operator CSV phases that mean OLM is still working on it. */
 const INSTALLING_PHASES = new Set(["Pending", "InstallReady", "Installing", "Replacing", "Upgrading"]);
@@ -69,8 +68,8 @@ const RHOAICard: React.FC<{ rhoai: ClusterSummary["rhoai"] }> = ({ rhoai }) => (
 const NightlyCard: React.FC<{ nightly: ClusterSummary["nightly"] }> = ({ nightly }) => {
   const navigate = useNavigate();
   const installed = nightly.installedBuild;
-  const tag = imageTag(installed);
-  const digest = imageDigest(installed).replace("sha256:", "").slice(0, 12);
+  const tag = installed?.tag ?? "";
+  const problem = nightlyProblemText(nightly.problem);
   return (
     <Card isFullHeight>
       <CardHeader actions={{ actions: <Button variant="link" isInline onClick={() => navigate("/builds")}>Open Build Explorer</Button>, hasNoOffset: true }}>
@@ -82,15 +81,19 @@ const NightlyCard: React.FC<{ nightly: ClusterSummary["nightly"] }> = ({ nightly
             <Row term="Installed">
               <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "wrap" }}>
                 {tag && <FlexItem><strong>{tag}</strong></FlexItem>}
-                <FlexItem><ImageRef image={installed} display={digest || undefined} what="installed image reference" /></FlexItem>
+                {installed.buildDate && <FlexItem><RelativeTime date={installed.buildDate} prefix="built " size="inherit" /></FlexItem>}
               </Flex>
             </Row>
             <Row term="Newer build">
-              {nightly.newerAvailable
-                ? <StatusLabel status="info">A newer {tag || "nightly"} build exists</StatusLabel>
-                : <StatusLabel status="success">This is the newest build</StatusLabel>}
+              {problem
+                ? <StatusLabel status="warning">{problem}</StatusLabel>
+                : nightly.newerAvailable
+                  ? <StatusLabel status="info">A newer {tag || "nightly"} build exists</StatusLabel>
+                  : <StatusLabel status="success">This is the newest build</StatusLabel>}
             </Row>
           </DescriptionList>
+        ) : problem ? (
+          <Content component="p" className="pf-v6-u-text-color-subtle">{problem}</Content>
         ) : (
           <Content component="p" className="pf-v6-u-text-color-subtle">RHOAI on this cluster was not installed from a nightly build.</Content>
         )}

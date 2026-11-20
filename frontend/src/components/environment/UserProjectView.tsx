@@ -16,11 +16,11 @@ import {
 } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
-import type { MLflowSamplesStatus, PlaygroundStatus, ResourcesStatus } from "../../types";
-import { getMLflowSamples, getPlayground, getResourcesStatus, toApiError, type ApiError } from "../../services/api";
-import { describeError, isNotForUser } from "../../errors";
+import type { MLflowSamplesStatus, PlaygroundStatus, ProjectProblemCode, ProjectStatus, ResourceState } from "../../types";
+import { getMLflowSamples, getPlayground, getProjectStatus, toApiError, type ApiError } from "../../services/api";
+import { FORBIDDEN_FOR_USER_BODY, FORBIDDEN_FOR_USER_TITLE, describeError, isNotForUser } from "../../errors";
 import { EnvStatusLabel, envStatus } from "./resourceStatus";
-import { pipelineServerIn, playgroundIn } from "./featureState";
+import { playgroundIn } from "./featureState";
 import { PipelineSample } from "./PipelineSample";
 import { SAMPLE_INFO, sampleLabel } from "./samples";
 import { LinesSkeleton } from "./Loading";
@@ -78,6 +78,30 @@ const ReadProblem: React.FC<{ what: string; error: ApiError; onRetry: () => void
   );
 };
 
+/**
+ * A part the backend answered but could not read (200 with a problem):
+ * the user may not see it ("You cannot see this"), it is not installed on
+ * the cluster, or the read failed (the message, with Try again).
+ */
+const PartProblem: React.FC<{ what: string; code?: ProjectProblemCode | string; message: string; onRetry: () => void }> = ({ what, code, message, onRetry }) => {
+  if (code === "forbidden_for_user" || code === "forbidden") {
+    return <Alert variant="info" isInline isPlain component="div" title={FORBIDDEN_FOR_USER_TITLE}><Content component="p">{FORBIDDEN_FOR_USER_BODY}</Content></Alert>;
+  }
+  if (code === "not_installed") return <Note>{message} {ADMIN_SETS_UP}</Note>;
+  return (
+    <Alert variant="warning" isInline component="div" title={`Cannot read ${what}`}
+      actionLinks={<AlertActionLink onClick={onRetry}>Try again</AlertActionLink>}>
+      <Content component="p">{message}</Content>
+    </Alert>
+  );
+};
+
+/** The project's pipeline server: the tool's first, else another one. */
+function projectServer(status: ProjectStatus | null, project: string): ResourceState | undefined {
+  const servers = (status?.pipelineServers ?? []).filter((ps) => !ps.namespace || ps.namespace === project);
+  return servers.find((ps) => ps.managedByTool) ?? servers[0];
+}
+
 const Part: React.FC<{ title: string; id: string; children: React.ReactNode }> = ({ title, id, children }) => (
   <Card component="section" aria-labelledby={id}>
     <CardHeader><CardTitle><Title headingLevel="h2" size="lg" id={id}>{title}</Title></CardTitle></CardHeader>
@@ -89,15 +113,16 @@ const Note: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <Content component="p" className="pf-v6-u-text-color-subtle">{children}</Content>
 );
 
-const loadStatus = (project: string) => getResourcesStatus(project);
+const loadStatus = (project: string) => getProjectStatus(project);
 const loadPlayground = (project: string) => getPlayground(project);
 const loadSamples = (project: string) => getMLflowSamples(project);
 
-const PipelinesPart: React.FC<{ project: string; read: ProjectRead<ResourcesStatus> }> = ({ project, read }) => {
-  const server = read.data ? pipelineServerIn(read.data, project) : undefined;
+const PipelinesPart: React.FC<{ project: string; read: ProjectRead<ProjectStatus> }> = ({ project, read }) => {
+  const server = projectServer(read.data, project);
   let body: React.ReactNode;
   if (read.error && !read.data) body = <ReadProblem what="the pipeline server" error={read.error} onRetry={read.reload} />;
   else if (!read.data) body = <LinesSkeleton what="the pipeline server" lines={1} />;
+  else if (read.data.pipelineServersProblem) body = <PartProblem what="the pipeline server" code={read.data.pipelineServersProblemCode} message={read.data.pipelineServersProblem} onRetry={read.reload} />;
   else if (!server || (!server.deployed && !server.terminating)) body = <Note>No pipeline server in {project}. {ADMIN_SETS_UP}</Note>;
   else {
     body = (
@@ -123,33 +148,64 @@ const PipelinesPart: React.FC<{ project: string; read: ProjectRead<ResourcesStat
   return <Part title="Pipelines" id="user-env-pipelines">{body}</Part>;
 };
 
-const ModelsPart: React.FC<{ project: string; read: ProjectRead<ResourcesStatus> }> = ({ project, read }) => {
-  const models = (read.data?.models?.items ?? []).filter((m) => m.namespace === project);
+const ModelsPart: React.FC<{ project: string; read: ProjectRead<ProjectStatus> }> = ({ project, read }) => {
+  const data = read.data;
+  const models = data?.models ?? [];
+  const inferenceServices = data?.inferenceServices ?? [];
   let body: React.ReactNode;
-  if (read.error && !read.data) body = <ReadProblem what="the models" error={read.error} onRetry={read.reload} />;
-  else if (!read.data) body = <LinesSkeleton what="the models" lines={2} />;
-  else if (models.length === 0) body = <Note>No models in {project}. {ADMIN_SETS_UP}</Note>;
+  if (read.error && !data) body = <ReadProblem what="the models" error={read.error} onRetry={read.reload} />;
+  else if (!data) body = <LinesSkeleton what="the models" lines={2} />;
   else {
-    body = (
-      <Table aria-label={`Models in ${project}`} variant="compact">
-        <Thead>
-          <Tr>
-            <Th width={30}>Model</Th>
-            <Th width={20}>Status</Th>
-            <Th width={50}>Address</Th>
-          </Tr>
-        </Thead>
-        <Tbody>
-          {models.map((m) => (
-            <Tr key={m.name ?? m.displayName}>
-              <Td dataLabel="Model">{m.displayName || m.name}</Td>
-              <Td dataLabel="Status"><EnvStatusLabel status={envStatus(m)} /></Td>
-              <Td dataLabel="Address">{m.url ? <code className="pf-v6-u-text-break-word">{m.url}</code> : <span className="pf-v6-u-text-color-subtle">None</span>}</Td>
+    const llm = data.modelsProblem
+      ? <PartProblem what="the models" code={data.modelsProblemCode} message={data.modelsProblem} onRetry={read.reload} />
+      : models.length > 0 ? (
+        <Table aria-label={`Models in ${project}`} variant="compact">
+          <Thead>
+            <Tr>
+              <Th width={30}>Model</Th>
+              <Th width={20}>Status</Th>
+              <Th width={50}>Address</Th>
             </Tr>
-          ))}
-        </Tbody>
-      </Table>
-    );
+          </Thead>
+          <Tbody>
+            {models.map((m) => (
+              <Tr key={m.name ?? m.displayName}>
+                <Td dataLabel="Model">{m.displayName || m.name}</Td>
+                <Td dataLabel="Status"><EnvStatusLabel status={envStatus(m)} /></Td>
+                <Td dataLabel="Address">{m.url ? <code className="pf-v6-u-text-break-word">{m.url}</code> : <span className="pf-v6-u-text-color-subtle">None</span>}</Td>
+              </Tr>
+            ))}
+          </Tbody>
+        </Table>
+      ) : null;
+    const isvc = data.inferenceServicesProblem
+      ? <PartProblem what="the InferenceServices" code={data.inferenceServicesProblemCode} message={data.inferenceServicesProblem} onRetry={read.reload} />
+      : inferenceServices.length > 0 ? (
+        <Table aria-label={`InferenceServices in ${project}`} variant="compact">
+          <Thead>
+            <Tr>
+              <Th width={30}>InferenceService</Th>
+              <Th width={20}>Status</Th>
+              <Th width={50}>Address</Th>
+            </Tr>
+          </Thead>
+          <Tbody>
+            {inferenceServices.map((s) => (
+              <Tr key={s.name}>
+                <Td dataLabel="InferenceService">{s.name}</Td>
+                <Td dataLabel="Status">
+                  <EnvStatusLabel status={s.terminating ? "deleting" : s.ready ? "ready" : "needs-attention"} text={s.terminating ? "Deleting" : s.ready ? "Ready" : "Not ready"} />
+                  {!s.ready && s.message && <div className="pf-v6-u-text-color-subtle pf-v6-u-font-size-sm">{s.message}</div>}
+                </Td>
+                <Td dataLabel="Address">{s.url ? <code className="pf-v6-u-text-break-word">{s.url}</code> : <span className="pf-v6-u-text-color-subtle">None</span>}</Td>
+              </Tr>
+            ))}
+          </Tbody>
+        </Table>
+      ) : null;
+    body = !llm && !isvc
+      ? <Note>No models in {project}. {ADMIN_SETS_UP}</Note>
+      : <Stack hasGutter>{llm && <StackItem>{llm}</StackItem>}{isvc && <StackItem>{isvc}</StackItem>}</Stack>;
   }
   return <Part title="Models" id="user-env-models">{body}</Part>;
 };
@@ -159,6 +215,8 @@ const PlaygroundPart: React.FC<{ project: string; read: ProjectRead<PlaygroundSt
   let body: React.ReactNode;
   if (read.error && !read.data) body = <ReadProblem what="the playground" error={read.error} onRetry={read.reload} />;
   else if (!read.data) body = <LinesSkeleton what="the playground" lines={1} />;
+  else if (!item && read.data.apiProblem) body = <PartProblem what="the playground" code={read.data.apiCode} message={read.data.apiProblem} onRetry={read.reload} />;
+  else if (!item && read.data.blocked) body = <Note>{read.data.blocked.reason}</Note>;
   else if (!item || (!item.deployed && !item.terminating)) body = <Note>No playground in {project}. {ADMIN_SETS_UP}</Note>;
   else {
     body = (
@@ -232,7 +290,7 @@ export const UserProjectView: React.FC<{ project: string; refreshKey: number }> 
   const status = useProjectRead(loadStatus, project, refreshKey);
   const playground = useProjectRead(loadPlayground, project, refreshKey);
   const samples = useProjectRead(loadSamples, project, refreshKey);
-  const server = status.data ? pipelineServerIn(status.data, project) : undefined;
+  const server = projectServer(status.data, project);
   return (
     <Stack hasGutter>
       <StackItem><PipelinesPart project={project} read={status} /></StackItem>

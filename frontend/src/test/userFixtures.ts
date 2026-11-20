@@ -1,60 +1,30 @@
-import type { ClusterSummary, MLflowSamplesStatus, PipelineSampleSpec, PlaygroundStatus, ResourcesStatus } from "../types";
+import type { ClusterSummary, MLflowSamplesStatus, PipelineSampleSpec, PlaygroundStatus, ProjectStatus } from "../types";
 import { stubApi, jsonResponse, type Handler } from "./apiStub";
+import { contract } from "./contract";
 
-// What a user who is not a cluster-admin reads (docs/research/per-user-views.md).
+// What a user who is not a cluster-admin reads (docs/research/per-user-views.md),
+// built from the JSON the Go handlers produce (./contract.ts): a fixture
+// here cannot drift from the backend's types.
 
 const FBC = "quay.io/rhoai/rhoai-fbc-fragment";
-export const USER_INSTALLED_BUILD = `${FBC}:rhoai-3.6@sha256:${"4eff06d6".padEnd(64, "0")}`;
+/** A build the Build Explorer lists (its tags carry image references; the summary does not). */
 export const USER_LATEST_BUILD = `${FBC}:rhoai-3.6@sha256:${"0b3f9b4d".padEnd(64, "1")}`;
 
 export function summary(overrides: Partial<ClusterSummary> = {}): ClusterSummary {
-  return {
-    updaterVersion: "v5.0.0",
-    rhoai: { installed: true, version: "3.6.0", channel: "stable-3.x", phase: "Succeeded" },
-    nightly: { installedBuild: USER_INSTALLED_BUILD, latestBuild: USER_LATEST_BUILD, newerAvailable: true },
-    dsc: {
-      exists: true,
-      ready: false,
-      components: [
-        { name: "dashboard", managementState: "Managed", ready: true },
-        { name: "aipipelines", managementState: "Managed", ready: false },
-        { name: "trustyai", managementState: "Removed", ready: false },
-      ],
-    },
-    ...overrides,
-  };
+  return { ...contract.summary(), ...overrides };
 }
 
-/** The project-scoped status of dev-project: a ready pipeline server and one model. */
-export function projectStatus(project = "dev-project"): ResourcesStatus {
-  return {
-    minio: { deployed: false, ready: false },
-    mlflow: { deployed: false, ready: false },
-    pipelineServers: [{
-      deployed: true, ready: true, message: "Running", namespace: project, name: "dspa",
-      apiRoute: `https://ds-pipeline-dspa-${project}.apps.example.com`, uiRoute: `https://rh-ai.apps.example.com/develop-train/pipelines/definitions/${project}`,
-    }],
-    inferenceGateway: { deployed: false, ready: false },
-    models: {
-      catalog: null,
-      items: [{ deployed: true, ready: true, namespace: project, name: "qwen3-0-6b", displayName: "Qwen3 0.6B", url: `https://inference.apps.example.com/${project}/qwen3-0-6b` }],
-    },
-  };
+/** The project-scoped status a user gets for one of their projects: a ready pipeline server, one model, one InferenceService. */
+export function projectStatus(project = "dev-project"): ProjectStatus {
+  return contract.projectStatus(project);
 }
 
 export function playground(project = "dev-project"): PlaygroundStatus {
-  return { items: [{ deployed: true, ready: true, namespace: project, managedByTool: true }], project, models: [] };
+  return contract.playground(project);
 }
 
 export function mlflowSamples(project = "dev-project"): MLflowSamplesStatus {
-  return {
-    project,
-    available: true,
-    samples: [
-      { id: "genai-demo", name: "Agent and prompt demo", state: "present", actions: ["remove"], link: "https://mlflow.apps.example.com/#/experiments/1" },
-      { id: "training", name: "Training run", state: "absent", actions: ["add"] },
-    ],
-  };
+  return contract.mlflowSamples(project);
 }
 
 export const PIPELINE_SPEC: PipelineSampleSpec = {
@@ -69,10 +39,10 @@ export const PIPELINE_SPEC: PipelineSampleSpec = {
 export function stubUserApi(extra: Record<string, Handler | unknown> = {}) {
   const adminOnly: Handler = () => jsonResponse({ error: "Only cluster-admins can see this.", errorCode: "admin_only" }, 403);
   return stubApi({
-    "/api/user/permissions": { canMutate: false, user: "dev-user", role: "user" },
+    "/api/user/permissions": { ...contract.permissionsUser(), user: "dev-user" },
     "/api/version": { version: "v5.0.0", commit: "c", buildDate: "d", templateOutdated: false },
     "/api/update-check": { updateAvailable: false, majorUpgrade: false },
-    "/api/operation": { running: false },
+    "/api/operation": { running: false, label: "", startedAt: "" },
     "/api/summary": summary(),
     "/api/build-explorer/tags": { tags: [{ tag: "rhoai-3.6", image: USER_LATEST_BUILD }] },
     "/api/resources/projects": { projects: ["dev-project", "llm-eval"] },

@@ -6,6 +6,7 @@ import { UserEnvironmentPage } from "./UserEnvironmentPage";
 import { USER_PERMISSIONS, renderPage } from "../test/providers";
 import { jsonResponse } from "../test/apiStub";
 import { ADMIN_ONLY_GETS, projectStatus, stubUserApi } from "../test/userFixtures";
+import { contract } from "../test/contract";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -30,7 +31,11 @@ describe("Environment for a user who is not a cluster-admin", () => {
     expect(await screen.findByRole("region", { name: "Run a sample pipeline" })).toBeInTheDocument();
     expect(await screen.findByRole("link", { name: "Download sample-artifact-check.yaml" })).toBeInTheDocument();
     // Models, playground, MLflow sample data.
-    expect(within(part("Models")).getByRole("grid", { name: "Models in dev-project" })).toHaveTextContent("Qwen3 0.6B");
+    // The models and InferenceServices of the generated contract fixture (pkg/api TestFrontendContract).
+    expect(within(part("Models")).getByRole("grid", { name: "Models in dev-project" })).toHaveTextContent("Qwen2.5 0.5B Instruct (CPU)");
+    const isvcs = within(part("Models")).getByRole("grid", { name: "InferenceServices in dev-project" });
+    expect(isvcs).toHaveTextContent("iris");
+    expect(isvcs).toHaveTextContent("Loading");
     expect(await within(part("Playground")).findByText("Gen AI playground")).toBeInTheDocument();
     const samples = await within(part("MLflow sample data")).findByRole("grid", { name: "MLflow sample data in dev-project" });
     expect(within(samples).getByText("Added")).toBeInTheDocument();
@@ -84,7 +89,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
 
   it("says a cluster-admin sets up what the project does not have", async () => {
     stubUserApi({
-      "/api/resources/status": { ...projectStatus(), pipelineServers: [], models: { catalog: null, items: [] } },
+      "/api/resources/status": { ...projectStatus(), pipelineServers: [], models: [], inferenceServices: [] },
       "/api/resources/playground": { items: [] },
       "/api/resources/samples/mlflow": { project: "dev-project", available: false, reason: "MLflow is not set up on this cluster.", samples: [] },
     });
@@ -93,6 +98,27 @@ describe("Environment for a user who is not a cluster-admin", () => {
     expect(within(part("Models")).getByText("No models in dev-project. A cluster-admin sets this up.")).toBeInTheDocument();
     expect(await within(part("Playground")).findByText("No playground in dev-project. A cluster-admin sets this up.")).toBeInTheDocument();
     expect(await within(part("MLflow sample data")).findByText("MLflow is not set up on this cluster. A cluster-admin sets this up.")).toBeInTheDocument();
+  });
+
+  it("a part the backend could not read says why: not yours to see, not installed, or the error", async () => {
+    let statusReads = 0;
+    stubUserApi({
+      "/api/resources/status": () => { statusReads++; return jsonResponse(contract.projectStatusProblems("dev-project")); },
+      "/api/resources/playground": contract.playgroundProblem("dev-project"),
+    });
+    render();
+    const pipelines = await screen.findByRole("region", { name: "Pipelines" });
+    expect(await within(pipelines).findByText("You cannot see this")).toBeInTheDocument();
+    expect(within(pipelines).queryByText(/No pipeline server/)).not.toBeInTheDocument();
+    const models = part("Models");
+    expect(within(models).getByText(/Model serving is not installed on this cluster/)).toBeInTheDocument();
+    expect(within(models).getByText("Cannot read the InferenceServices")).toBeInTheDocument();
+    expect(within(models).queryByText(/No models in/)).not.toBeInTheDocument();
+    expect(await within(part("Playground")).findByText("You cannot see this")).toBeInTheDocument();
+    expect(within(part("Playground")).queryByText(/No playground in/)).not.toBeInTheDocument();
+    const before = statusReads;
+    fireEvent.click(within(models).getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(statusReads).toBe(before + 1));
   });
 
   it("a part the user may not see says so, not Access denied", async () => {

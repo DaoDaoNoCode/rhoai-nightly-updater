@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ClusterSummary, NightlyStatus } from "../types";
+import type { ClusterSummary, NightlyProblem, SummaryBuild } from "../types";
 import { getSummary, toApiError, type ApiError } from "../services/api";
 import { SUMMARY_POLL_MS } from "../constants";
 import { usePolling } from "./usePolling";
@@ -59,13 +59,41 @@ export function useSummary(enabled = true): SummaryValue {
   return { summary, loading, error, lastRefreshed, refresh };
 }
 
-/** The summary's nightly builds in the shape the Build Explorer reads (status.nightly). */
-export function summaryNightly(summary: ClusterSummary | null): NightlyStatus | undefined {
+/**
+ * The summary's nightly part as a user sees it: the installed build's tag
+ * and build date (the summary carries no image reference, so there is
+ * nothing to compare by digest), whether a newer one exists (undefined
+ * when that could not be checked), and why not.
+ */
+export interface UserNightly {
+  installed: SummaryBuild | null;
+  latest: SummaryBuild | null;
+  /** undefined: not known (problem says why). */
+  newer: boolean | undefined;
+  problem: NightlyProblem;
+}
+
+export function summaryNightly(summary: ClusterSummary | null): UserNightly | null {
   const n = summary?.nightly;
-  if (!n?.installedBuild) return undefined;
+  if (!n) return null;
   return {
-    installed: { image: n.installedBuild },
-    ...(n.latestBuild ? { latest: { image: n.latestBuild } } : {}),
-    updateAvailable: n.newerAvailable,
+    installed: n.installedBuild,
+    latest: n.latestBuild,
+    newer: n.problem === "" ? n.newerAvailable : undefined,
+    problem: n.problem,
   };
+}
+
+/** Why the newest build is not known, in words; null when it is. */
+export function nightlyProblemText(problem: NightlyProblem): string | null {
+  switch (problem) {
+    case "catalog_unreadable":
+      return "Could not read which nightly build is installed.";
+    case "lookup_failed":
+      return "Could not check for a newer build.";
+    case "no_stream":
+      return "A custom catalog image: there is no stream to compare with.";
+    default:
+      return null;
+  }
 }

@@ -11,7 +11,8 @@
     "rootDir": "./src",
     "outDir": "./dist",
     "declaration": false,
-    "sourceMap": true
+    "sourceMap": true,
+    "resolveJsonModule": true
   },
   "include": ["src"]
 }

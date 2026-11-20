@@ -574,6 +574,21 @@ scenarios["diag-leftovers-refused"] = (w) => { scenarios["diag-leftovers"](w); w
 
 // The reads every page makes, as the server answers them; the frontend's
 // types check these (frontend/src/test/docsMockFixtures.test.ts).
+/** A nightly build as the summary names it (pkg/types SummaryBuild): tag and build date, no image. */
+const summaryBuildOf = (b) => (b ? { tag: b.tag || "", buildDate: b.buildDate || "" } : null);
+
+/** The summary's nightly part (pkg/types SummaryNightly): unknown comparisons carry a problem code. */
+function summaryNightlyOf(n) {
+  if (!n?.installed) return { installedBuild: null, latestBuild: null, newerAvailable: false, problem: "" };
+  const known = !!n.latest && typeof n.updateAvailable === "boolean" && !n.error;
+  return {
+    installedBuild: summaryBuildOf(n.installed),
+    latestBuild: summaryBuildOf(n.latest),
+    newerAvailable: known && n.updateAvailable === true,
+    problem: known ? "" : "lookup_failed",
+  };
+}
+
 /** GET /api/summary (pkg/types ClusterSummary): the read-only summary every signed-in user may see. */
 function summaryOf(w) {
   const s = w.status;
@@ -581,7 +596,7 @@ function summaryOf(w) {
   return {
     updaterVersion: w.version.version,
     rhoai: { installed, version: installed ? s.csv.version || "" : "", channel: installed ? s.subscription?.channel || "" : "", phase: installed ? s.csv.phase : "" },
-    nightly: { installedBuild: s.nightly?.installed?.image || "", latestBuild: s.nightly?.latest?.image || "", newerAvailable: s.nightly?.updateAvailable === true },
+    nightly: summaryNightlyOf(s.nightly),
     dsc: {
       exists: w.components.dscExists !== false,
       ready: w.components.dscPhase === "Ready",

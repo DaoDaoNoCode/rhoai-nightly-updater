@@ -593,17 +593,20 @@ function userRead(res, key, u) {
   const adminOnly = () => send(403, { error: "Only cluster-admins can see this.", errorCode: "admin_only" });
   if (key === "GET /api/operation") {
     const op = world.operation.inProgress ? world.operation.operation : null;
-    return send(200, op ? { running: true, label: op.label, startedAt: op.startedAt } : { running: false });
+    return send(200, op ? { running: true, label: op.label, startedAt: op.startedAt } : { running: false, label: "", startedAt: "" });
   }
   if (key === "GET /api/resources/projects") return send(200, { projects: world.userProjects ?? [] });
   if (key === "GET /api/resources/status") {
     const project = u.searchParams.get("project");
     if (!project) return adminOnly();
+    // pkg/types ProjectStatus: that project's objects only.
     const all = reads["GET /api/resources/status"](world);
     return send(200, {
-      ...all,
-      pipelineServers: all.pipelineServers.filter((ps) => ps.namespace === project),
-      models: { ...all.models, items: (all.models.items ?? []).filter((m) => m.namespace === project) },
+      project,
+      pipelineServers: [...(all.pipelineServers ?? []), ...(all.unmanagedPipelineServers ?? [])].filter((ps) => ps.namespace === project),
+      models: (all.models?.items ?? []).filter((m) => m.namespace === project),
+      inferenceServices: [],
+      dashboardUrl: all.dashboardUrl,
     });
   }
   if (key.startsWith("GET ") && ADMIN_ONLY_READS.some((p) => u.pathname.startsWith(p))) return adminOnly();

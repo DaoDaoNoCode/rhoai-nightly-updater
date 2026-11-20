@@ -8,6 +8,7 @@ import { LiveAnnouncerProvider } from "../state/LiveAnnouncer";
 import { ProgressViewsProvider } from "../components/ProgressViews";
 import { getUserPermissions } from "../services/api";
 import type { DashboardState, OperationStatusResponse, StatusResponse, UpdateCheck, UserOperationStatus, UserPermissions, VersionInfo } from "../types";
+import { contract } from "./contract";
 
 /** A healthy nightly install: rhoai-3.6, newer build available. */
 export function nightlyStatus(overrides: Partial<StatusResponse> = {}): StatusResponse {
@@ -56,10 +57,10 @@ export interface AppFetchers {
   dashboard?: () => Promise<DashboardState>;
 }
 
-/** A cluster-admin's permission answer (the default). */
-export const ADMIN_PERMISSIONS: UserPermissions = { canMutate: true, user: "me", role: "admin" };
+/** A cluster-admin's permission answer (the default), from the generated contract (./contract.ts). */
+export const ADMIN_PERMISSIONS: UserPermissions = { ...contract.permissionsAdmin(), user: "me" };
 /** A user who is not a cluster-admin (per-user views). */
-export const USER_PERMISSIONS: UserPermissions = { canMutate: false, user: "dev-user", role: "user" };
+export const USER_PERMISSIONS: UserPermissions = { ...contract.permissionsUser(), user: "dev-user" };
 
 /**
  * Renders a page inside the app's providers. The permission check goes
