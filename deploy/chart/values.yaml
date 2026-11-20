@@ -15,8 +15,9 @@ parameters: {}
   # Required, by digest. The updater image, of this chart's release: an
   # image only works with the template of its own release. install.sh
   # checks that by the image's commit; the chart can only check the tag: a
-  # release tag (vX.Y.Z) other than this chart's (appVersion) fails, but the
-  # digest itself is not verified (docs/GITOPS.md, section 3).
+  # release or pre-release tag (vX.Y.Z, vX.Y.Z-rc.1) other than this chart's
+  # (appVersion) fails, but the digest itself is not verified
+  # (docs/GITOPS.md, section 3).
   # IMAGE: quay.io/juntao_wang/rhoai-nightly-updater:v2.2.0@sha256:<digest>
   #
   # Default: the release namespace, which Argo CD sets to the Application's

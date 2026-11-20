@@ -1,8 +1,13 @@
 import type { StatusResponse } from "./types";
 
-/** A release version (vMAJOR.MINOR.PATCH); main and commit builds are not. */
+/**
+ * A release version (vMAJOR.MINOR.PATCH) or a pre-release of one
+ * (vX.Y.Z-alpha.N, -beta.N, -rc.N, as scripts/release.sh tags them); main
+ * and commit builds are not. The update check runs for both: the backend
+ * offers a pre-release its release once that exists, and never offers one.
+ */
 export function isReleaseVersion(version: string | undefined): version is string {
-  return !!version && /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version);
+  return !!version && /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(alpha|beta|rc)\.[1-9]\d*)?$/.test(version);
 }
 
 /**

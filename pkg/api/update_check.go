@@ -22,7 +22,9 @@ import (
 // tag of the updater's image repository (IMAGE_REPOSITORY, set by the
 // template). It reads the registry's tag list anonymously (OCI distribution
 // API), caches the answer for hours and ignores errors: an unreachable
-// registry only means no "update available" banner.
+// registry only means no "update available" banner. Pre-release tags
+// (vX.Y.Z-rc.N) are never offered; an updater that runs one is offered its
+// release once it exists (compareReleases).
 
 const (
 	updateCheckTTL      = 6 * time.Hour
@@ -33,6 +35,10 @@ const (
 )
 
 var releaseTagRe = regexp.MustCompile(`^v(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$`)
+
+// preReleaseRe is a pre-release as scripts/release.sh tags them:
+// vX.Y.Z-alpha.N, -beta.N or -rc.N, N from 1 without leading zeros.
+var preReleaseRe = regexp.MustCompile(`^(v[0-9.]+)-(?:alpha|beta|rc)\.[1-9]\d{0,8}$`)
 
 type releaseVersion [3]int
 
@@ -48,6 +54,16 @@ func parseRelease(s string) (releaseVersion, bool) {
 		v[i], _ = strconv.Atoi(m[i+1])
 	}
 	return v, true
+}
+
+// parsePreRelease parses a pre-release (v5.0.0-rc.1) into the release it
+// leads to (5.0.0).
+func parsePreRelease(s string) (releaseVersion, bool) {
+	m := preReleaseRe.FindStringSubmatch(s)
+	if m == nil {
+		return releaseVersion{}, false
+	}
+	return parseRelease(m[1])
 }
 
 func (a releaseVersion) less(b releaseVersion) bool {
@@ -73,10 +89,11 @@ func highestRelease(tags []string) string {
 
 // UpdateInfo is the answer of GET /api/update-check.
 type UpdateInfo struct {
-	// Current is the running release; empty for main and commit builds,
-	// which get no update check.
+	// Current is the running release or pre-release; empty for main and
+	// commit builds, which get no update check.
 	Current string `json:"current,omitempty"`
-	// Latest is the highest release in the image repository, when known.
+	// Latest is the highest release in the image repository, when known;
+	// never a pre-release.
 	Latest          string `json:"latest,omitempty"`
 	UpdateAvailable bool   `json:"updateAvailable"`
 	// MajorUpgrade: Latest has another MAJOR version, so it needs its own
@@ -128,10 +145,19 @@ func installerReleasesURL(releasesURL string) string {
 // sign-in page, and its public GitHub mirror publishes the same notes with
 // each release. releasesURL is used for the notes only when installerReleases
 // is not an https URL.
+//
+// A running pre-release of X.Y.Z is offered the latest release once that is
+// X.Y.Z or higher. latest is never a pre-release (highestRelease skips
+// them), so nobody is offered one. MajorUpgrade compares X with the latest
+// release's MAJOR, as for a release.
 func compareReleases(running, latest, releasesURL, installerReleases string) UpdateInfo {
 	cur, ok := parseRelease(running)
+	pre := false
 	if !ok {
-		return UpdateInfo{}
+		if cur, ok = parsePreRelease(running); !ok {
+			return UpdateInfo{}
+		}
+		pre = true
 	}
 	info := UpdateInfo{Current: running}
 	lv, ok := parseRelease(latest)
@@ -139,7 +165,7 @@ func compareReleases(running, latest, releasesURL, installerReleases string) Upd
 		return info
 	}
 	info.Latest = latest
-	if cur.less(lv) {
+	if cur.less(lv) || (pre && cur == lv) {
 		info.UpdateAvailable = true
 		info.MajorUpgrade = lv[0] != cur[0]
 		notes := installerReleases

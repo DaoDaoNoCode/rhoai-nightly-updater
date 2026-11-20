@@ -68,6 +68,14 @@ grep -qx "EMBEDDED_IMAGE='quay.io/example/app'" "$ASSET" && pass || fail "asset:
 expect_fail "asset installs only its version" "installs v9.8.7 only" bash "$ASSET" --version v1.0.0 --print-version
 expect_fail "installer needs IMAGE" "IMAGE must be set" sh -c "cd '$REPO' && IMAGE= sh scripts/release.sh installer v9.8.7"
 expect_eq "clone version" v9.8.7 "$(bash "$REPO/scripts/install.sh" --print-version)"
+# A pre-release's asset installs exactly that pre-release.
+PRE_ASSET="$WORK/install-pre.sh"
+(cd "$REPO" && IMAGE=quay.io/example/app sh scripts/release.sh installer v9.8.8-rc.2 v9.8.7) >"$PRE_ASSET"
+expect_eq "pre-release asset version" v9.8.8-rc.2 "$(bash "$PRE_ASSET" --print-version)"
+expect_eq "pre-release asset: its own version" v9.8.8-rc.2 "$(bash "$PRE_ASSET" --version v9.8.8-rc.2 --print-version)"
+expect_fail "pre-release asset: not its release" "installs v9.8.8-rc.2 only" bash "$PRE_ASSET" --version v9.8.8 --print-version
+expect_fail "pre-release asset: not another pre-release" "installs v9.8.8-rc.2 only" bash "$PRE_ASSET" --version v9.8.8-rc.1 --print-version
+expect_fail "installer: a malformed pre-release" "A pre-release version looks like" sh -c "cd '$REPO' && IMAGE=quay.io/example/app sh scripts/release.sh installer v9.8.8-rc.0"
 
 # --- Fake oc and curl ---------------------------------------------------------
 BIN="$WORK/bin"
@@ -385,6 +393,11 @@ FAKE_DIGEST="" FAKE_REVISION="" expect_fail "no such tag" "cannot resolve quay.i
 expect_fail "upgrade needs an install" "No deployment rhoai-nightly-updater" run bash "$ASSET" upgrade --dry-run
 FAKE_INSTALLED=1 FAKE_NS=1 expect_ok "asset: upgrade dry run" run bash "$ASSET" --dry-run
 expect_eq "upgrade dry run changes nothing" "" "$(mutations)"
+FAKE_INSTALLED=1 FAKE_NS=1 expect_ok "pre-release asset: upgrade dry run" run bash "$PRE_ASSET" --dry-run
+grep -q "manifests/v9.8.8-rc.2" "$LOG" && pass || fail "the pre-release asset did not resolve its own version"
+grep -qx "IMAGE=quay.io/example/app@$DIGEST" "$LOG.params" && pass || fail "pre-release asset: image not pinned by digest: $(cat "$LOG.params")"
+FAKE_REVISION=1111111111111111111111111111111111111111 \
+	expect_fail "pre-release asset: image from another commit" "not $COMMIT, the commit of v9.8.8-rc.2" run bash "$PRE_ASSET" --dry-run
 
 # --- The clone path (make deploy / upgrade / rollback call this) ---------------
 CLONE="$REPO/scripts/install.sh"
@@ -409,6 +422,21 @@ git -C "$REPO" checkout -q deploy/template.yaml
 
 git -C "$REPO" commit -q --allow-empty -m after-release
 FAKE_INSTALLED=1 expect_fail "clone: HEAD not on a release" "git checkout vX.Y.Z), or pass TAG=main / TAG=<commit>" run bash "$CLONE" upgrade --dry-run
+# A pre-release tag on HEAD is this checkout's version, and names its commit.
+PRE=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" tag -a v9.9.0-rc.1 -m v9.9.0-rc.1
+expect_eq "clone: a pre-release tag is the version" v9.9.0-rc.1 "$(bash "$CLONE" --print-version)"
+FAKE_INSTALLED=1 FAKE_NS=1 FAKE_REVISION="$PRE" expect_ok "clone: upgrade dry run on a pre-release tag" run bash "$CLONE" upgrade --dry-run
+grep -q "manifests/v9.9.0-rc.1" "$LOG" && pass || fail "clone: the pre-release tag was not resolved"
+FAKE_INSTALLED=1 FAKE_NS=1 expect_fail "clone: pre-release image from another commit" "not commit $PRE that its tag names" run bash "$CLONE" upgrade --dry-run
+if command -v make >/dev/null 2>&1; then
+	grep -q 'TAG        = v9.9.0-rc.1' <<<"$(make -s -C "$REPO" help)" && pass || fail "make: TAG does not default to the pre-release tag"
+fi
+FAKE_INSTALLED=1 FAKE_NS=1 FAKE_REVISION="$PRE" TAG=v9.9.0-rc.1 expect_ok "clone: rollback to a pre-release" run bash "$CLONE" rollback --dry-run
+git -C "$REPO" tag -d v9.9.0-rc.1 >/dev/null
+git -C "$REPO" tag -a v9.9.0-preview.1 -m x
+expect_eq "clone: a tag that is not a release is no version" none "$(bash "$CLONE" --print-version)"
+git -C "$REPO" tag -d v9.9.0-preview.1 >/dev/null
 FAKE_INSTALLED=1 FAKE_NS=1 TAG=main expect_ok "clone: TAG=main uses the image's label" run bash "$CLONE" upgrade --dry-run
 FAKE_INSTALLED=1 FAKE_NS=1 TAG=latest expect_ok "clone: TAG=latest still works" run bash "$CLONE" upgrade --dry-run
 FAKE_INSTALLED=1 FAKE_NS=1 TAG=latest expect_fail "clone: TAG=latest warns" "WARNING: :latest" run sh -c "bash '$CLONE' upgrade --dry-run 2>&1; exit 1"

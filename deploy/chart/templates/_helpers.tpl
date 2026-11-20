@@ -114,6 +114,10 @@ IMAGE whose tag names another release than this chart's (unless
 allowTemplateMismatch). That last one is a tag-consistency check only: it
 catches a tag that names another release, but it does not verify the
 digest, and a digest-only or non-release tag (main, a commit) passes it.
+A tag vX.Y.Z with a suffix (a pre-release, vX.Y.Z-rc.1) names that exact
+version too: a pre-release's chart (appVersion vX.Y.Z-rc.1) refuses the
+images of its release and of its other pre-releases, whose templates may
+differ, and a release's chart refuses its pre-releases' images.
 Nothing at render time can tell which commit a digest was built from
 (docs/GITOPS.md says how to check it).
 */ -}}
@@ -177,7 +181,7 @@ Nothing at render time can tell which commit a digest was built from
 {{- end -}}
 {{- if hasKey $params "IMAGE" -}}
 {{- $image := $params.IMAGE -}}
-{{- $tag := regexFind ":v[0-9]+\\.[0-9]+\\.[0-9]+@" $image | trimPrefix ":" | trimSuffix "@" -}}
+{{- $tag := regexFind ":v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?@" $image | trimPrefix ":" | trimSuffix "@" -}}
 {{- if and $tag (ne $tag .Chart.AppVersion) (not $.Values.allowTemplateMismatch) -}}
 {{- fail (printf "the tag of parameters.IMAGE names release %s, but this chart (targetRevision) holds the template of %s: an image only works with the template of its own release. Set the chart's targetRevision to %s, or allowTemplateMismatch: true. (This compares the tag only, not the digest.)" $tag .Chart.AppVersion $tag) -}}
 {{- end -}}

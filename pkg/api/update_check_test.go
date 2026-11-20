@@ -14,7 +14,9 @@ import (
 )
 
 func TestHighestRelease(t *testing.T) {
-	tags := []string{"latest", "main", "v1", "2cdcb42d", "v1.0.0", "v1.9.0", "v1.10.0", "v2.0.0-rc.1", "v01.0.0", "1.2.3", "v1.2"}
+	// Pre-releases are never the newest release: stable installs are never
+	// offered one.
+	tags := []string{"latest", "main", "v1", "2cdcb42d", "v1.0.0", "v1.9.0", "v1.10.0", "v2.0.0-rc.1", "v1.11.0-alpha.1", "v01.0.0", "1.2.3", "v1.2"}
 	if got := highestRelease(tags); got != "v1.10.0" {
 		t.Fatalf("highestRelease = %q, want v1.10.0 (numeric, releases only)", got)
 	}
@@ -98,6 +100,24 @@ func TestCompareReleases(t *testing.T) {
 		{"other notes page", "v2.0.0", "v2.0.1", "https://docs.example.com/app/releases", UpdateInfo{Current: "v2.0.0", Latest: "v2.0.1", UpdateAvailable: true,
 			ReleaseNotesURL: "https://docs.example.com/app/releases/v2.0.1"}},
 		{"no https notes", "v1.0.0", "v1.1.0", "http://example.com/releases", UpdateInfo{Current: "v1.0.0", Latest: "v1.1.0", UpdateAvailable: true}},
+		{"a pre-release is never the latest", "v1.0.0", "v1.1.0-rc.1", notes, UpdateInfo{Current: "v1.0.0"}},
+		// An updater that runs a pre-release of X.Y.Z is offered a release
+		// once one at or above X.Y.Z exists; a full redeploy when the MAJOR
+		// differs.
+		{"pre-release, its release not out", "v5.0.0-rc.1", "v4.1.0", notes, UpdateInfo{Current: "v5.0.0-rc.1", Latest: "v4.1.0"}},
+		{"pre-release of a minor, older release", "v4.1.0-alpha.2", "v4.0.0", notes, UpdateInfo{Current: "v4.1.0-alpha.2", Latest: "v4.0.0"}},
+		{"pre-release, its release", "v5.0.0-rc.1", "v5.0.0", notes, UpdateInfo{Current: "v5.0.0-rc.1", Latest: "v5.0.0", UpdateAvailable: true,
+			ReleaseNotesURL: "https://gitlab.example.com/group/app/-/releases/v5.0.0", InstallerURL: "https://gitlab.example.com/group/app/-/releases/v5.0.0/downloads/install.sh"}},
+		{"pre-release, a later minor", "v5.0.0-beta.3", "v5.1.0", notes, UpdateInfo{Current: "v5.0.0-beta.3", Latest: "v5.1.0", UpdateAvailable: true,
+			ReleaseNotesURL: "https://gitlab.example.com/group/app/-/releases/v5.1.0", InstallerURL: "https://gitlab.example.com/group/app/-/releases/v5.1.0/downloads/install.sh"}},
+		{"pre-release, a later major", "v5.0.0-alpha.1", "v6.0.0", notes, UpdateInfo{Current: "v5.0.0-alpha.1", Latest: "v6.0.0", UpdateAvailable: true, MajorUpgrade: true,
+			ReleaseNotesURL: "https://gitlab.example.com/group/app/-/releases/v6.0.0", InstallerURL: "https://gitlab.example.com/group/app/-/releases/v6.0.0/downloads/install.sh"}},
+		{"pre-release of a new major, the old major's release", "v5.0.0-rc.2", "v4.9.0", notes, UpdateInfo{Current: "v5.0.0-rc.2", Latest: "v4.9.0"}},
+		{"pre-release, unknown latest", "v5.0.0-rc.1", "", notes, UpdateInfo{Current: "v5.0.0-rc.1"}},
+		{"not a pre-release identifier", "v5.0.0-preview.1", "v5.0.0", notes, UpdateInfo{}},
+		{"pre-release number 0", "v5.0.0-rc.0", "v5.0.0", notes, UpdateInfo{}},
+		{"pre-release with a leading zero", "v5.0.0-rc.01", "v5.0.0", notes, UpdateInfo{}},
+		{"build metadata", "v5.0.0-rc.1+abc", "v5.0.0", notes, UpdateInfo{}},
 	}
 	for _, c := range cases {
 		if got := compareReleases(c.running, c.latest, c.url, c.url); got != c.want {
@@ -396,6 +416,15 @@ func TestHandleUpdateCheck(t *testing.T) {
 		t.Fatalf("a commit build gets no check: %+v (%d registry reads)", got, calls)
 	}
 
+	// A pre-release of 2.0.0 is offered the release 2.0.0 (same major: no
+	// full redeploy), from the cached tag list.
+	Version = "v2.0.0-rc.1"
+	want = UpdateInfo{Current: "v2.0.0-rc.1", Latest: "v2.0.0", UpdateAvailable: true, ReleaseNotesURL: "https://gitlab.example.com/group/app/-/releases/v2.0.0",
+		InstallerURL: "https://gitlab.example.com/group/app/-/releases/v2.0.0/downloads/install.sh", InstallerSHA256: strings.Repeat("ab", 32)}
+	if got := get(); got != want || calls != 1 {
+		t.Fatalf("v2.0.0-rc.1: %+v (%d registry reads)", got, calls)
+	}
+
 	Version = "v2.0.0"
 	t.Setenv("IMAGE_REPOSITORY", "")
 	if got := get(); got != (UpdateInfo{Current: "v2.0.0"}) {
@@ -521,5 +550,15 @@ func TestHandleUpdateCheckGitOps(t *testing.T) {
 	}
 	if info != (UpdateInfo{Current: "v1.0.0", PinnedInGit: true}) {
 		t.Fatalf("got %+v", info)
+	}
+	Version = "v1.1.0-rc.1"
+	w = httptest.NewRecorder()
+	HandleUpdateCheckGitOps(w, httptest.NewRequest("GET", "/api/update-check", nil))
+	info = UpdateInfo{}
+	if err := json.Unmarshal(w.Body.Bytes(), &info); err != nil {
+		t.Fatalf("decode %s: %v", w.Body.String(), err)
+	}
+	if info != (UpdateInfo{Current: "v1.1.0-rc.1", PinnedInGit: true}) {
+		t.Fatalf("pre-release: got %+v", info)
 	}
 }

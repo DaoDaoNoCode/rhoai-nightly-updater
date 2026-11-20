@@ -8,8 +8,10 @@ type: application
 # The release this chart belongs to, as in CHANGELOG.md: scripts/release.sh
 # check refuses a release tag whose version is not this one. Install the
 # chart from a release tag (targetRevision vX.Y.Z), with that release's image.
-version: 4.0.0
-appVersion: "v4.0.0"
+# A pre-release's commit names the pre-release itself (version X.Y.Z-rc.1,
+# appVersion "vX.Y.Z-rc.1"; Helm takes SemVer 2 versions).
+version: 4.1.0
+appVersion: "v4.1.0"
 home: https://github.com/DaoDaoNoCode/rhoai-nightly-updater
 sources:
   - https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater
