@@ -1,15 +1,16 @@
 # Security Model
 
-The updater runs as one pod with two containers: **oauth-proxy** (OpenShift sign-in) and **app** (the Go backend and the static UI). Since 4.0.0 every change to the cluster is made **with the signed-in user's own OpenShift token**: the API server checks each change against that user's RBAC, and its audit log names them. The app's ServiceAccount (SA) only reads (for the pages every signed-in user sees), keeps the app's own records, and runs one background job that only takes away (the MaaS prune job). A leaked SA token is read-mostly; it can no longer create workloads, Secrets or RBAC anywhere.
+The updater runs as one pod with two containers: **oauth-proxy** (OpenShift sign-in) and **app** (the Go backend and the static UI). Since 4.0.0 every change to the cluster is made **with the signed-in user's own OpenShift token**: the API server checks each change against that user's RBAC, and its audit log names them. Since 5.0.0 every user RHOAI allows can sign in and sees what is theirs: cluster-admins see everything, everyone else a reviewed cluster summary and their own projects, read with their own token ([Per-user views](#per-user-views-500)). The app's ServiceAccount (SA) only reads (the admin pages, the summary and the registry), keeps the app's own records, and runs one background job that only takes away (the MaaS prune job). A leaked SA token is read-mostly; it can no longer create workloads, Secrets or RBAC anywhere.
 
 **Contents**
 
 1. [Threat model](#threat-model): who can do what, which token goes where, the user token's exposures, network exposure, known limitations
-2. [Sign-in and access policy (4.0.0)](#sign-in-and-access-policy-400): the flow, every authorization check, the OAuthClient, sessions, abuse limits, local development
-3. [ServiceAccount RBAC](#serviceaccount-rbac): what the app's own token may do, the MaaS prune job, and the RBAC reads that find module operators
-4. [CI and release supply chain](#ci-and-release-supply-chain): where the image comes from
-5. [Per-feature notes](#per-feature-notes): credentials, S3 storage and pipelines, MLflow samples, models and the inference gateway, the playground, Models as a Service, prerequisites, the nodes' pull secret, the DataScienceCluster
-6. [History](#history): the RBAC audits of earlier template revisions ([docs/SECURITY_HISTORY.md](docs/SECURITY_HISTORY.md))
+2. [Per-user views (5.0.0)](#per-user-views-500): who signs in, the read tiers, what each user read reads, the summary's fields, caches and errors
+3. [Sign-in and access policy (4.0.0)](#sign-in-and-access-policy-400): the flow, every authorization check, the OAuthClient, sessions, abuse limits, local development
+4. [ServiceAccount RBAC](#serviceaccount-rbac): what the app's own token may do, the MaaS prune job, and the RBAC reads that find module operators
+5. [CI and release supply chain](#ci-and-release-supply-chain): where the image comes from
+6. [Per-feature notes](#per-feature-notes): credentials, S3 storage and pipelines, MLflow samples, models and the inference gateway, the playground, Models as a Service, prerequisites, the nodes' pull secret, the DataScienceCluster
+7. [History](#history): the RBAC audits of earlier template revisions ([docs/SECURITY_HISTORY.md](docs/SECURITY_HISTORY.md))
 
 ## Threat model
 
@@ -17,8 +18,8 @@ The updater runs as one pod with two containers: **oauth-proxy** (OpenShift sign
 
 | Who | Can |
 |---|---|
-| Anyone who signs in and can `list pods` in `redhat-ods-operator` (the oauth-proxy `--openshift-sar` gate) | Open the UI and read everything it shows (read-only) |
-| Users with the **cluster-admin** role | Also run every action that changes the cluster, with their own token |
+| Anyone RHOAI lets in: may `get` `auths.services.platform.opendatahub.io` (the oauth-proxy `--openshift-sar` gate; by default every OpenShift user, 5.0.0) | Open the UI; see the cluster summary, Build Explorer and their own projects' Environment parts, read with their own token ([Per-user views](#per-user-views-500)) |
+| Users with the **cluster-admin** role | See every page, and run every action that changes the cluster, with their own token |
 
 Changes require cluster-admin because the tool does cluster-admin work: it installs an operator (OLM grants whatever the CSV asks for), writes the node pull secret in `kube-system`, deletes admission webhooks and patches CRDs. Namespace `admin`/`edit` and `dedicated-admin` are not enough. The gate is checked before anything starts; the API server then checks every request of the change against the same user's RBAC.
 
@@ -28,8 +29,8 @@ The rule: a user's full OpenShift token goes only to Red Hat platform services (
 
 | Token | Sent by | Sent to | For |
 |---|---|---|---|
-| The signed-in user's own token (oauth-proxy's session, scope `user:full`, forwarded as `X-Forwarded-Access-Token`) | the updater's backend | the API server; MLflow (adding and removing samples) and the dashboard's gen-ai API (Set up, delete and Clean up of a playground, which may add a Models as a Service model), both platform services in RHOAI's namespaces | who the user is and whether they are a cluster-admin (on every request), the expiry and scope of their sign-in (before a change), and **every cluster change** (4.0.0). Never to a pipeline server's or a model's address |
-| The updater's ServiceAccount token (`DEV_TOKEN` in DEV_MODE) | the updater's backend | the API server; MLflow (samples status) and the dashboard's gen-ai API (Playground status: only `aaa/models` without `sources` and `lsd/status`) | the reads every signed-in user's pages make, the app's own records (activity, snapshot, operation lease and marker), the readiness probe, the background MaaS prune job, and the gitops profile's Update. Never to a gen-ai call that reaches Models as a Service (3.0.1) |
+| The signed-in user's own token (oauth-proxy's session, scope `user:full`, forwarded as `X-Forwarded-Access-Token`) | the updater's backend | the API server; MLflow (adding and removing samples, and since 5.0.0 the samples status) and the dashboard's gen-ai API (Set up, delete and Clean up of a playground, which may add a Models as a Service model; since 5.0.0 the Playground status), both platform services in RHOAI's namespaces | who the user is and whether they are a cluster-admin (on every request), the expiry and scope of their sign-in (before a change), **every cluster change** (4.0.0), and the user-token reads of 5.0.0 (their projects, the Playground and samples status, a user's project).  Never to a pipeline server's or a model's address |
+| The updater's ServiceAccount token (`DEV_TOKEN` in DEV_MODE) | the updater's backend | the API server | the admin pages' reads, the cluster summary and the registry lookups (5.0.0: no longer MLflow or the gen-ai API), the app's own records (activity, snapshot, operation lease and marker), the readiness probe, the background MaaS prune job, and the gitops profile's Update. Never to a gen-ai call that reaches Models as a Service (3.0.1) |
 | The user's own token, from `oc whoami -t` | the user, with commands the UI shows | `oc` itself; MLflow (`MLFLOW_TRACKING_TOKEN`); the dashboard's gen-ai API (the Playground's chat request) | the user's own MLflow and playground calls |
 | A model's own token (Secret `default-name-<model>-sa`; it may only `get` that model) | the user, with the Models tab's commands | the model's address on the gateway it is reached through | calling that model. Shown only for this tool's model with its recorded token Secret; never the user's token |
 | The same model's own token, read by the updater's backend (4.0.0) | the updater's backend, for "Can it be called?" (with the user's token, during the change; with the SA's, never: the SA cannot read token Secrets since 4.0.0) | that model's address as KServe reports it (`status.url`, `https` only, no redirects followed) | one minimal request after setup and on **Check again**. Read only from the Secret whose UID the tool recorded, of type `kubernetes.io/service-account-token` for `<model>-sa`; held for that one request, never logged, stored or shown. Never the user's token nor the updater's |
@@ -52,7 +53,7 @@ Until 3.0.1 the Playground's status and Set up sent the updater's ServiceAccount
 
 Now (`pkg/cluster/playground.go`):
 
-- **With the SA's token** (the status, which any signed-in user's page polls; `genAICallAllowed`): only `GET aaa/models` without `sources`, `GET lsd/status`, `DELETE lsd/delete` and `POST lsd/install` with the project's own models are allowed, and the status makes only the first two; anything else is refused before a request is sent. The status lists MaaS models from their MaaSModelRefs and the MaaSSubscriptions that offer them with the Kubernetes API.
+- **With the SA's token** (the status until 5.0.0; since then no SA client calls the gen-ai API, and the rule stays for any that would; `genAICallAllowed`): only `GET aaa/models` without `sources`, `GET lsd/status`, `DELETE lsd/delete` and `POST lsd/install` with the project's own models are allowed, and the status makes only the first two; anything else is refused before a request is sent. The status lists MaaS models from their MaaSModelRefs and the MaaSSubscriptions that offer them with the Kubernetes API.
 - **With the user's own token** (Set up, delete, Clean up; 4.0.0, `genAIUserCallAllowed`): also `GET maas/models` and `POST lsd/install` with a MaaS model, so Set up can add a Models as a Service model again, listed and installed by the dashboard for that user, as in the dashboard itself. Every install still has only the fields Set up sends (`enable_tracing` and `enable_guardrails` false, `vector_stores` empty, model fields `model_name`, `model_source_type`, `model_type`, `embedding_dimension`); `maas/tokens`, `lsd/responses` and any other path stay refused. A client that is not the user's own (`Client.ActsAsUser` and the token is the client's) gets the SA rules.
 
 Tests: the fake gen-ai API fails a test on any MaaS call made with a token other than the user's (`TestPlayground_GenAIClientRefusesCallsThatReachMaaS`, `TestPlayground_SetupWithTheServiceAccountNeverAddsAMaaSModel`, `TestPlayground_SetupWithTheUsersTokenAddsAMaaSModel`, `TestPlayground_StatusListsMaaSModelsFromTheirModelRefs`). Not yet checked live: a playground set up through this tool with a MaaS model on RHOAI 3.6.
@@ -97,6 +98,72 @@ Since 4.0.0 a leaked SA token is read-mostly. It can still read pod and Deployme
 - **Restarts.** A running operation delays a pod restart by up to ~17 minutes (see [README: cluster safety](README.md#how-the-tool-keeps-your-cluster-safe)). A SIGKILL or node loss still interrupts it. There is no durable job queue; the next start reports the interrupted operation. A replacement pod that starts while the old one drains refuses changes until the old operation ends (lease in the operation ConfigMap, no new RBAC).
 - **Mirror visibility.** The GitHub mirror contains team-internal links (Bitwarden collection, Slack channels, the IPA realm and AWS SAML alias). They are access-controlled, but internal. Decide with the team whether the mirror should be private.
 
+## Per-user views (5.0.0)
+
+The design and the owner's decisions: [docs/research/per-user-views.md](docs/research/per-user-views.md). Template revision 8.
+
+### Who signs in
+
+oauth-proxy's gate is now `--openshift-sar={"verb":"get","resourceAPIGroup":"services.platform.opendatahub.io","resource":"auths"}`: the user may `get` RHOAI's Auth CR type, cluster-wide.
+
+- **What oauth-proxy does with it.** openshift/oauth-proxy release-4.17 (a578b1d, the line of the pinned `ose-oauth-proxy-rhel9:v4.17`) wraps the flag's JSON in a list, adds `"scopes": []` (`providers/openshift/provider.go:202-207, 234-258`) and posts it with the user's token to `/apis/authorization.openshift.io/v1/subjectaccessreviews` (`:336`); a review that is not `allowed` refuses the sign-in (`ReviewUser`, `:489-526`, called for every session in `oauthproxy.go:349`). The body is the OpenShift `SubjectAccessReview`, whose inlined `Action` names the API group `resourceAPIGroup` (openshift/api release-4.17 `authorization/v1/types.go:351-373`): the Kubernetes key `group` would be dropped, and the review would ask for a core `auths`, which only cluster-admins pass. No `namespace`: "no distinction between no namespace and all namespaces" (same file), a cluster-wide check. Empty `user` and `groups`: the token's owner; `scopes: []`: their unscoped permissions (`:296-305`).
+- **Who passes.** RHOAI binds exactly `get`/`list`/`watch` on `auths` to its Auth CR's `allowedGroups`, as ClusterRole `data-science-allowedgroupcluster-role` (red-hat-data-services/rhods-operator rhoai-3.6 452b4a5, `internal/controller/services/auth/resources/data-science-allowedgroup-clusterrole.tmpl.yaml:1-19`, bound by `auth_controller_actions.go:201`). The Auth CR is cluster-scoped (`api/services/v1alpha1/auth_types.go:51`) and its default `allowedGroups` is `system:authenticated`, so **by default every OpenShift user signs in**; an admin who narrows RHOAI's allowed groups narrows the updater too. Cluster-admins always pass. On a cluster without RHOAI no binding exists and only cluster-admins (or someone bound to that rule by hand) pass.
+- **Both profiles.** The chart's gitops profile replaces only the OAuth client, scope and client Secret volume (`rnu.gitopsSignIn`), so it has the same gate; every read there still needs cluster-admin (`withGitOpsAdmin`) and every other route is refused, so its users who are not cluster-admins see only "Cluster-admin required".
+- `TestOAuthProxySignInGateIsRHOAIsAllowedGroups` pins the flag (exactly one review, exactly these keys, no `--openshift-sar-by-host`).
+
+**The app now receives the `user:full` token of every RHOAI user who signs in** (the session cookie and `X-Forwarded-Access-Token`), not only cluster-admins'. That widens the [threat model of the user token](#threat-model-of-the-user-token-400) to every such user: a stolen cookie (with the cookie secret) or `exec` into the app container exposes their tokens too. The backend uses a non-admin's token only for the reads below and for the checks every request makes (`users/~`, the cluster-admin review); it never logs, stores or returns it (`TestUserTokenIsNeverLoggedOrEchoed`). Changes still need the cluster-admin gate; nothing about them changed.
+
+### Roles and read tiers
+
+Two roles (`role` in `GET /api/user/permissions`): **admin** passes the mutation gate (`*`/`*`/`*` cluster-wide with the user's token, `mutationPermission`); **user** is everyone else, `rhods-admins` members who are not cluster-admins included. Every GET route has one tier (`pkg/api/route_tiers.go`, `getRouteTiers`); a GET route without one is admin-only (`tierOf`), and `TestEveryGetRouteHasATier` fails until a new route is classified.
+
+| Tier | Routes | Read with | A user gets |
+|---|---|---|---|
+| admin-only | `/api/status`, `/api/activity`, `/api/components`, `/api/components/dsc`, `/api/components/dsc/plan`, `/api/debug`, `/api/dashboard/state`, `/api/dashboard/builds`, `/api/diagnostics`, `/api/setup/dsc/preview`, `/api/test-pull-secret`, `/api/verify-nodes`, `/api/latest-nightly`, `/api/nightly-tags`, `/api/resources/maas`, `/api/resources/maas/groups`, `/api/resources/prerequisites`, `/api/resources/models/exposures`, `/api/resources/s3/admin-password` | SA (as before) | 403 `admin_only` "Only cluster-admins can see this.", from `Register` (`adminOnly`) before the handler runs, so before any SA read |
+| summary or registry | `/api/summary`, `/api/build-explorer/tags`, `/content`, `/contains` | SA | the reviewed summary below; Build Explorer as before (registry build metadata; the pull secret's credential is used, never returned) |
+| user token | `/api/user/permissions`, `/api/resources/projects`, `/api/resources/playground`, `/api/resources/samples/mlflow` | the user's own token (`withUserRead`, `cluster.NewUserClient`) | what their RBAC and the platform APIs' own access reviews allow |
+| no cluster read | `/api/update-check`, `/api/resources/samples/pipeline/spec` | none | as before |
+| per role | `/api/operation`, `/api/resources/status` | SA / the user's token | see below; an admin's answer is unchanged |
+
+Probes (`/api/health`, `/api/health/ready`, `/api/version`, `/metrics`) are outside `Register` and unchanged.
+
+### What each user read reads
+
+- **Projects** (`GET /api/resources/projects`, both roles): `project.openshift.io/v1` projects with `labelSelector=opendatahub.io/dashboard=true`, the user's token (`ListUserDSProjects`). The projects API lists the namespaces the user may `get`, filtered by the selector and the token's scopes (openshift/openshift-apiserver release-4.17 6ea968b `pkg/project/apiserver/registry/project/proxy/proxy.go:91-102`, `pkg/project/auth/cache.go:478-518`, `pkg/project/auth/reviewer.go:49-56`); every authenticated user may list projects (basic-user, `pkg/bootstrappolicy/policy.go:461`, bound at `:766`). A cluster-admin sees every project. The SA's namespace list is no longer used for this route.
+- **Playground status** (both roles): the projects as above; every gen-ai call (`aaa/models` without `sources`, `lsd/status`) with the user's token, so the dashboard's own access review (`list ogxservers` in the project) checks the user; the fan-out covers only the user's projects; the project's OGXServer (ownership check), the MaaS models list (MaaSModelRefs, usually not readable by a project user, then none) with the user's token. The SA reads what is no user data: the dashboard's address (Dashboard CR `status.url` or Route `rhods-dashboard`), the DSC's playground component state and whether Deployment `gen-ai-ui` is available, and the tool's own playground record, of which only the user's projects are used. A user who is not a cluster-admin gets those SA reads as fixed values only (`PlaygroundStatusForUser`): the operator's readiness (`True`/`False`), the gen-ai backend's state, and a block with the component key, its state (one of the CRD's values) and a fixed reason; never the DataScienceCluster's condition message or name (`TestPlaygroundStatusForUserHasNoServiceAccountText`, `TestPlaygroundStatusPerRole`). A failed SA read on a user route is answered with its HTTP status only, not its text (`TestUserReadErrorHidesServiceAccountText`).
+- **MLflow samples status** (both roles): the project must be one of the user's (projects API); every MLflow call with the user's token, so MLflow's own reviews (`mlflow.kubeflow.org` in that workspace) check the user. The SA reads MLflow's CR (`status.url`, readiness) and the dashboard's address.
+- **A user's Environment status** (`GET /api/resources/status?project=` for a user; without a project 403 `admin_only`): `types.ProjectStatus`, that project's DataSciencePipelinesApplications, LLMInferenceServices (with their pods when not ready), InferenceServices and, for the tool's pipeline server, its Connection Secret's metadata, all with the user's token in that namespace only (`GetProjectStatus`). A part the user may not read says so (`pipelineServersProblem`, `modelsProblem`, `inferenceServicesProblem`, each with a fixed `...ProblemCode`: `forbidden_for_user`, `not_installed` or `error`; a viewer's unreadable Connection is `unreadable`); the others are still shown. The SA finds the dashboard's address and reads the tool's records (which objects it made). The cluster-wide status (S3 storage, MLflow, the inference gateway, every project) stays admin-only.
+- A project that is not the user's is refused (403 `forbidden_for_user`) after the projects read and before any read of its objects.
+
+### The summary (`GET /api/summary`)
+
+A fixed type (`types.Summary`; a new field is a reviewed change), read by the SA with the reads `/api/status` and the Components page already make (`cluster.GetSummary`): `updaterVersion`; `rhoai {installed, version, channel, phase}` (the Subscription and its CSV); `nightly {installedBuild {tag, buildDate}, latestBuild {tag, buildDate}, newerAvailable}` (the nightly CatalogSource and the Quay lookup of its stream, using the pull secret's credential only; nothing about the Secret is reported); `dsc {exists, ready, components: [{name, managementState, ready}]}`. When the nightly comparison is not known, `nightly.problem` says why with a fixed code (`catalog_unreadable`, `lookup_failed`, `no_stream`), so an unreadable CatalogSource or a failed Quay lookup never reads as "not a nightly install" or "the newest build". No name of a node, pod, project or user, no condition message, no pull-secret detail (`TestGetSummary` checks the encoded answer for them). A read error fails the request (no partial guess).
+
+### The operation status for users
+
+`GET /api/operation` for a user is `{running, label, startedAt}` (`types.OperationSummary`): the label is the kind's fixed text (`operationTypes`, "Update to nightly"), never the target, who runs it, the pod, an interrupted operation or the last one (`TestOperationForAUserNamesNobody`). The record is still read, and a pending marker clear retried, by the SA. When the role cannot be checked the user's answer is given (fail closed); an ended sign-in is 401.
+
+### The frontend's fixtures
+
+The UI's tests of these answers load JSON that `TestFrontendContract` (pkg/api) generates from the Go types through the real handlers, with a user's role (`frontend/src/test/contract/`; regenerate with `go test ./pkg/api -run TestFrontendContract -update-contract`). The Go test fails when the checked-in files differ, and `frontend/src/test/contract.ts` fails `tsc` when they no longer fit the frontend's types, so a field the UI reads cannot drift from what the backend sends.
+
+### Caches
+
+- Every cache of a user-token read is keyed by the token (`tokenKey`, a SHA-256 prefix): the playground status and fan-out (as before), and the MLflow samples status, now `token|invalidations|project` (before 5.0.0 it was keyed by the project only, `TestMLflowSamplesStatus_CachedPerUser`, `TestPlayground_StatusIsTheUsers`).
+- The per-cluster caches (keyed by the API server URL) are filled only by the SA: API discovery read with a user's client neither reads nor fills `apiVersionsCache` (`servedVersions`); the other per-cluster caches are not reached by the user reads.
+
+### Errors
+
+A 403 answered to the user's own token is `forbidden_for_user` ("your OpenShift account may not see this"), never `forbidden` and never the "re-apply the template / make upgrade" hint (`HTTPStatusForError`, `templateHint`, `deniedReadHint`; `TestUserReadForbiddenIsTheUsers`).
+
+### RBAC
+
+The SA gains no permission. User-token reads are their own category in the RBAC coverage test (`rbacUserTokenReads`), and the access reviews the gen-ai API and MLflow make for the status reads are no longer SA requests (`userTokenReviewRequests`). The SA lost what only those reads needed: `get` on the samples' `mlflow.kubeflow.org` names (experiments, registeredmodels, mcpservers, skills), `get` ConfigMap `gen-ai-aa-custom-model-endpoints`, and `get` on InferenceServices (`list` stays for Diagnostics); `TestUserTokenReviewsAreNotTheServiceAccounts` keeps them out. Kept by the scan's over-approximation (shared helpers it cannot tell apart by token): `get` OGXServer `lsd-genai-playground` (read through `getServed`, now only with users' tokens).
+
+### Not verified (live checks pending)
+
+The four personas of the design (a cluster-admin, a `rhods-admins` member who is not one, a project admin, a user with no project) on a test instance: every page and GET route per persona, no other user's names or projects. In particular: whether project `view`/`edit` include `list ogxservers` (the gen-ai API's review; a refusal shows as the playground's API problem), and the projects API's answer for each persona.
+
 ## Sign-in and access policy (4.0.0)
 
 ### Authentication and authorization flow
@@ -119,13 +186,13 @@ Token rules (pkg/api/identity.go, auth_handlers.go):
 
 Since every change runs with the user's own token, the API server is the enforcement point for changes: it checks each request against the user's RBAC. The backend is a thin layer over it that adds only the app's own policy. This is the list of every authorization-like check, in three classes: **(a)** a copy of what the API server now enforces for user-token calls; **(b)** the app's own user-safety or product policy, which the API server does not know about; **(c)** the gate in front of reads made with the ServiceAccount's token, which the API server checks against the SA, not the user.
 
-**Access policy of 4.0.0 (deliberate).** Whoever passes the sign-in gate (oauth-proxy `--openshift-sar`: `list pods` in `redhat-ods-operator`) sees every page read-only; those reads use the ServiceAccount's token. Only cluster-admins change things, with their own token. The ServiceAccount's read path and the gate are unchanged in 4.0.0. Pages read with each user's own token (each user sees only what they may see) are planned after 4.0.0. `TestOAuthProxySignInGateIsListPodsInTheOperatorNamespace` pins the gate.
+**Access policy of 4.0.0 (replaced in 5.0.0 by the [per-user views](#per-user-views-500)).** Whoever passed the sign-in gate (oauth-proxy `--openshift-sar`: `list pods` in `redhat-ods-operator`) sees every page read-only; those reads use the ServiceAccount's token. Only cluster-admins change things, with their own token. The ServiceAccount's read path and the gate are unchanged in 4.0.0. Pages read with each user's own token came in 5.0.0; `TestOAuthProxySignInGateIsRHOAIsAllowedGroups` pins the new gate.
 
 #### Backend
 
 | # | Check | Token | What it checks / why | Class | 4.0.0 cleanup |
 |---|---|---|---|---|---|
-| 1 | Sign-in gate (oauth-proxy `--openshift-sar`) | user's (oauth-proxy) | `list pods` in `redhat-ods-operator`; who may open the UI at all | c | kept, now pinned by a test |
+| 1 | Sign-in gate (oauth-proxy `--openshift-sar`) | user's (oauth-proxy) | `list pods` in `redhat-ods-operator`; who may open the UI at all (5.0.0: `get` `auths.services.platform.opendatahub.io`, RHOAI's allowed groups) | c | kept, now pinned by a test |
 | 2 | `requestUser` / `authenticate` (`pkg/api/identity.go`) | user's | `users/~` with the token, cached 1 min; `X-Forwarded-User` not trusted; a bearer token outside `DEV_MODE` is refused (it did not come through oauth-proxy) | b | kept |
 | 3 | Cluster-admin gate (`mutationPermission`, `mutationRequirement`; `withMutationAuth`, `withGitOpsMutationAuth`) | user's | `authorization.openshift.io` SAR for `*`/`*`/`*`, cluster-wide. The app's policy: only cluster-admins start a change, before anything is touched, so a user with partial rights cannot leave a half-done change. The API server would refuse the individual requests, but only one by one, mid-change | b | kept; its comment no longer says the SA acts for the user |
 | 4 | Sign-in check (`sessionProblem`) | user's | the token has `user:full` and outlives the operation, before anything changes | b | kept; unused `SessionToken` fields (`InactivityTimeoutSeconds`, `ClientName`) removed |
@@ -145,7 +212,7 @@ Since every change runs with the user's own token, the API server is the enforce
 | 18 | Server-side dry runs before multi-step changes | user's | the API server itself, asked before the first write so a refusal changes nothing | b (not a copy: it is the API server's answer) | kept |
 | 19 | Gen-ai call allowlists (`genAICallAllowed` for the SA, `genAIUserCallAllowed` for the user) | per client | which dashboard gen-ai calls may carry which token, so no token reaches the MaaS gateway by the tool's choice (above) | b | kept. Removed the separately chosen gen-ai token (`genAIToken`, `genAIUserToken` and a `token` parameter through `GetPlaygroundStatus`, `RunPlayground`, `TeardownPlayground`, `CleanUp`): it always equalled the client's own token, so `playgroundAPI` now takes the client's token and `asUser` |
 | 20 | A model's own token for "Can it be called?" (recorded Secret UID, type, `https` only, no redirects) | user's (reads the Secret) | the token goes only to that model's address | b | kept |
-| 21 | Data science project check before status reads (playground, MLflow samples) | SA | a request may not make the SA read (or send its token to MLflow for) any namespace | c | kept |
+| 21 | Data science project check before status reads (playground, MLflow samples) | SA (5.0.0: the user's, projects API) | a request may not make the SA read (or send its token to MLflow for) any namespace; since 5.0.0 these reads use the user's token, and the project must be one of the user's | c | kept |
 | 22 | Error explanations of a 403: `templateHint` ("the updater's ServiceAccount is not allowed ... run `make upgrade`") | n/a | **a: SA-era wording.** Since 4.0.0 a 403 during a change is about the user's RBAC; `K8sError` already says so (`UserForbiddenMessage`) | a | `templateHint` now adds its hint only to a 403 answered to the SA (`TestTemplateHintOnlyForTheServiceAccountsRefusals`); same rule as `deniedHint` for MLflow |
 
 #### Tests that pin the split
@@ -254,7 +321,7 @@ The app's ServiceAccount has no right on OAuthClients or OAuth tokens (`TestServ
 | What | Verbs | Limited to names? |
 |---|---|---|
 | Secrets | `get` | only `seaweedfs-s3-credentials`, `minio-secret`, `rhoai-nightly-updater-s3`, `maas-db-config` (ownership checks and status of the Environment page; the S3 keys answer only a cluster-admin) |
-| ConfigMaps | `get` | only `odh-upgrade-acks`, `inferenceservice-config`, `gen-ai-aa-custom-model-endpoints` |
+| ConfigMaps | `get` | only `odh-upgrade-acks`, `inferenceservice-config` (`gen-ai-aa-custom-model-endpoints` removed in 5.0.0: the Playground status reads with the user's token) |
 | Namespaces | `get list` | no |
 | Deployments | `get list` | no |
 | Services | `get` | no |
@@ -273,11 +340,11 @@ The app's ServiceAccount has no right on OAuthClients or OAuth tokens (`TestServ
 | `operator.openshift.io/*` | `get` | only objects named `cluster` |
 | ClusterVersion, Console, Infrastructure, Ingress config | `get` | only `version` / `cluster` |
 | MLflows | `get` | only `mlflow` |
-| MLflow `mlflow.kubeflow.org` (MLflow's access reviews, not Kubernetes objects) | `get` | only the samples' names: experiments `MLflow Demo`, `nightly-sample-training`; registeredmodels `nightly-sample-classifier`; mcpservers `com.deepwiki/rhoai-nightly-sample`; skills `nightly-sample-mcp-builder` (the samples status; adding and removing a sample use the user's token) |
 | GatewayClasses | `get` | only `openshift-ai-inference`, `openshift-default` |
-| InferenceServices, LLMInferenceServices | `get list` | no (the Playground status's `aaa/models` with the caller's token, the models that use a gateway) |
+| LLMInferenceServices | `get list` | no (the models that use a gateway, the tool's catalog models) |
+| InferenceServices | `list` | no (the models that use a component; `get` removed in 5.0.0) |
 | LLMInferenceServiceConfigs | `get` | no (the CPU preset's name is found at run time) |
-| OGXServers | `list`; `get` | `get` only `lsd-genai-playground` (the gen-ai API's access review, the playground's UID) |
+| OGXServers | `list`; `get` | `get` only `lsd-genai-playground` (the playground's UID; since 5.0.0 read with users' tokens, kept by the coverage scan's over-approximation) |
 | CloudNativePG Clusters, Authorinos, AITenants, MaaSTenantConfigs | `get` | only `maas-db`, `authorino`, `models-as-a-service`, `default-tenant` |
 | HTTPRoutes | `get` | only the three chat models' `<model>-kserve-route` |
 | Groups (`user.openshift.io`) | `get` | no: [the MaaS groups check](#reading-openshift-groups-by-name-400), answered only to cluster-admins |
@@ -423,7 +490,7 @@ Every install runs `quay.io/juntao_wang/rhoai-nightly-updater` (the `IMAGE` defa
 | Tag | Written by | With | What protects it |
 |---|---|---|---|
 | `:vX.Y.Z` | GitLab `release-publish`, in a pipeline of a `vX.Y.Z` tag | `QUAY_USER`/`QUAY_TOKEN` | Protected `v*` tags (Maintainers create them), protected `QUAY_*` variables (only protected refs' pipelines get them), the release guard; `release.sh publish` refuses an existing `:vX.Y.Z` from another commit. Not Quay tag immutability: Quay offers it in organisations only, not in the personal namespace `juntao_wang` (quay-docs `modules/immutable-tag-overview.adoc`) |
-| `:vX.Y.Z-rc.N` (`-alpha.N`, `-beta.N`; since 4.1.0) | GitLab `release-publish`, in a pipeline of that pre-release tag, which may be on an `integ/*` branch | `QUAY_USER`/`QUAY_TOKEN` | As `:vX.Y.Z`. The tag pipeline runs the `.gitlab-ci.yml` of the tagged commit with the push token, so a Maintainer tagging an `integ/*` commit vouches for that branch's CI file as for `main`'s |
+| `:vX.Y.Z-rc.N` (`-alpha.N`, `-beta.N`; since 5.0.0) | GitLab `release-publish`, in a pipeline of that pre-release tag, which may be on an `integ/*` branch | `QUAY_USER`/`QUAY_TOKEN` | As `:vX.Y.Z`. The tag pipeline runs the `.gitlab-ci.yml` of the tagged commit with the push token, so a Maintainer tagging an `integ/*` commit vouches for that branch's CI file as for `main`'s |
 | `:vN`, `:latest` | `release-publish` (same major), `promote-latest` (manual, across majors) | `QUAY_USER`/`QUAY_TOKEN` | As above; they move only to a release this pipeline published, never to a pre-release |
 | `:main`, `:<8-char commit>` | GitLab `publish-main`, on `main` only | `QUAY_USER`/`QUAY_TOKEN` | Protected `main`; since 4.0.0 `:main` is always the pipeline's own image, and a commit tag that is not (a workstation push, a rebuild) stops the job |
 | `:dev-<commit>`, test tags | `make push` on a workstation | the developer's own `podman login` | Nothing beyond the developer's Quay rights; `make push` refuses a tree with uncommitted changes and never writes the tags above. Never install them on a shared cluster |
@@ -471,13 +538,13 @@ Now the tool records the UID of each pipeline server it sets up or moves, in its
 
 ### MLflow samples
 
-The Environment page adds sample data to one project: four MLflow samples (MLflow's own GenAI demo, a training experiment with a registered model, an MCP server entry, an agent skill). These calls go to MLflow (at its CR's `status.url`, the cluster's data-science gateway), not to the Kubernetes API: adding and removing a sample with the signed-in user's own token (since 4.0.0), the samples status with the app's own token (the ServiceAccount's in the pod, `DEV_TOKEN` in DEV_MODE). MLflow authorizes the token with access reviews:
+The Environment page adds sample data to one project: four MLflow samples (MLflow's own GenAI demo, a training experiment with a registered model, an MCP server entry, an agent skill). These calls go to MLflow (at its CR's `status.url`, the cluster's data-science gateway), not to the Kubernetes API: adding and removing a sample with the signed-in user's own token (since 4.0.0), and since 5.0.0 the samples status too (before, the app's own token). MLflow authorizes the token with access reviews:
 
 - MLflow (mlflow-kubernetes-plugins 2.1.1, SelfSubjectAccessReview mode) checks group `mlflow.kubeflow.org` in the namespace the `X-MLflow-Workspace` header names, first without a name and, when that is denied, with each resolved name (`auth/core.py:812-851`). So `resourceNames` limit these rules; `create` is never checked with a name (`auth/authorizer.py:131-140`).
 
-The ServiceAccount's rules for the status are therefore `get` on the samples' names only ([RBAC](#serviceaccount-rbac)). `mlflow.kubeflow.org` is not an API the API server serves, so `oc auth can-i` cannot resolve it (it answers `no` even for allowed rules); ask the API server with a SubjectAccessReview, as MLflow does (the `sar` helper in [the samples audit](docs/SECURITY_HISTORY.md#audits-of-earlier-template-revisions)).
+Until 5.0.0 the ServiceAccount had `get` on the samples' names for the status; the status now reads with the user's token, so those rules are gone ([Per-user views](#per-user-views-500)). `mlflow.kubeflow.org` is not an API the API server serves, so `oc auth can-i` cannot resolve it (it answers `no` even for allowed rules); ask the API server with a SubjectAccessReview, as MLflow does (the `sar` helper in [the samples audit](docs/SECURITY_HISTORY.md#audits-of-earlier-template-revisions)).
 
-Adding and removing are mutations behind the cluster-admin gate, the lock and the activity log; the status uses only named reads. Every MLflow samples call, the status read included, first checks that the project is a Data Science project (`isDSProject`), so a signed-in user cannot point the ServiceAccount's token at another namespace's MLflow workspace. `pkg/cluster/samples_rbac_test.go` derives the status's rules from the code's calls (the test MLflow server serves only the listed routes and decides every review with this template), so a missing or unused rule fails the tests. The servers' own access reviews are not derived from code: the MLflow and playground server-request lists (`mlflowFakeRules`, `playgroundServerRequests`) record the reviews MLflow and the dashboard's gen-ai API were seen to make, verified live on RHOAI 3.6 (2026-11-16 and 17). The tests prove the template satisfies those lists; a change in those servers is caught only by checking live again.
+Adding and removing are mutations behind the cluster-admin gate, the lock and the activity log; the status uses only named reads. Every MLflow samples call first checks that the project is a Data Science project (`isDSProject`; for the status since 5.0.0, one of the user's, through the projects API). The status is cached per user (token, project and the project's invalidation count). The test MLflow server serves only the listed routes (`pkg/cluster/samples_rbac_test.go`). The servers' own access reviews are not derived from code: the MLflow and playground server-request lists (`mlflowFakeRules`, `playgroundServerRequests`) record the reviews MLflow and the dashboard's gen-ai API were seen to make, verified live on RHOAI 3.6 (2026-11-16 and 17). Since 5.0.0 the template grants none of those reviews on the status's account (`TestUserTokenReviewsAreNotTheServiceAccounts`); a change in those servers is caught only by checking live again.
 
 What the samples touch, and how the tool keeps to its own:
 
@@ -527,7 +594,7 @@ Every name on the tool's gateway's list lets that project's editors attach route
 
 ### Playground
 
-The Environment page's Playground tab sets up and removes the RHOAI dashboard's Gen AI playground in a project by calling the installed dashboard's own gen-ai API on the dashboard's address (`https://rh-ai.<apps domain>`), exactly as a click in the dashboard's Gen AI studio does. The dashboard then writes whatever this RHOAI release's playground is made of; no playground configuration is copied into this tool. Which calls carry which token (Set up, delete and Clean up with the user's own; the status with the ServiceAccount's, never reaching MaaS): [The ServiceAccount token and Models as a Service](#the-serviceaccount-token-and-models-as-a-service-301). `POST /api/resources/playground/stream` is a mutation behind the cluster-admin gate, the lock, the rate limit and the activity log; the status route (`GET /api/resources/playground`) is a read for any signed-in user, like the other Environment status reads; the gitops profile refuses both.
+The Environment page's Playground tab sets up and removes the RHOAI dashboard's Gen AI playground in a project by calling the installed dashboard's own gen-ai API on the dashboard's address (`https://rh-ai.<apps domain>`), exactly as a click in the dashboard's Gen AI studio does. The dashboard then writes whatever this RHOAI release's playground is made of; no playground configuration is copied into this tool. Which calls carry which token (Set up, delete and Clean up with the user's own; the status with the ServiceAccount's until 5.0.0, never reaching MaaS, and with the user's own since): [The ServiceAccount token and Models as a Service](#the-serviceaccount-token-and-models-as-a-service-301). `POST /api/resources/playground/stream` is a mutation behind the cluster-admin gate, the lock, the rate limit and the activity log; the status route (`GET /api/resources/playground`) is a read for any signed-in user, of their own projects with their own token (5.0.0); the gitops profile refuses both.
 
 *Data flow of the tokens.* The host is the address the cluster's own Dashboard component reports (`status.url`, else Route `rhods-dashboard`), https only, verified against the system roots and the pod's CA bundles (the same client as the MLflow samples, `samplesTLSConfig`). A token is sent only in the `Authorization` header; it is never logged, put in an error, a step message, a response or the activity log (the playground tests check every message for it). The client (shared with the MLflow samples) never follows a redirect: Go's client would resend the `Authorization` header on a redirect to the same host, also to plain `http`, so a 3xx answer is reported as an error that names where it pointed and is not followed (`refuseRedirect`, `TestSamplesHTTPClient_DoesNotFollowRedirects`; since 3.0.0). The data-science gateway in front of the dashboard validates the token with a TokenReview (GatewayConfig `enableK8sTokenValidation`), and the dashboard's API then runs one access review (`list ogxservers` in the project) and acts with the token. The pgvector database and the copy of the router CA are made by the dashboard's own ServiceAccount.
 

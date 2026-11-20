@@ -162,8 +162,14 @@ func (g *genAIFake) serve(w http.ResponseWriter, r *http.Request) {
 type playgroundEnv struct {
 	k8s *resourceFake
 	c   *Client
-	g   *genAIFake
+	// reader is the signed-in user's client of a status read (pkg/api
+	// withUserRead): their token, c for the updater's own records.
+	reader *Client
+	g      *genAIFake
 }
+
+// testReaderToken is the token of the user who reads the status.
+const testReaderToken = "status-reader-token"
 
 const (
 	testQwenModels = `{"data":[{"model_name":"qwen25-05b-instruct","model_id":"qwen25-05b-instruct","serving_runtime":"Distributed inference with llm-d","api_protocol":"REST","usecase":"chat","endpoints":["internal: https://x.svc.cluster.local/"],"status":"Running","display_name":"Qwen2.5 0.5B Instruct (CPU)","model_source_type":"namespace","capabilities":["text-generation"]}]}`
@@ -212,7 +218,9 @@ func newPlaygroundEnv(t *testing.T) *playgroundEnv {
 	k8s.putJSON("/apis/apps/v1/namespaces/redhat-ods-applications/deployments/gen-ai-ui", `{"status":{"conditions":[{"type":"Available","status":"True"}]}}`)
 	k8s.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
 	k8s.putJSON("/api/v1/namespaces/other", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
-	e := &playgroundEnv{k8s: k8s, c: c, g: g}
+	k8s.putProject("proj")
+	k8s.putProject("other")
+	e := &playgroundEnv{k8s: k8s, c: c, g: g, reader: userClientOf(c, testReaderToken)}
 	installs := 0
 	g.onInstall = func(ns string) {
 		installs++
@@ -556,7 +564,7 @@ func TestPlayground_AStaleRecordDoesNotOwnANewPlayground(t *testing.T) {
 	e.g.servers["proj"] = &genAIServer{Name: "lsd-genai-playground", Phase: "Ready"}
 	e.putServer("proj", "uid-made-in-the-dashboard", clk.Now())
 	PurgePlaygroundStatus()
-	st, err := GetPlaygroundStatus(e.c, "proj")
+	st, err := GetPlaygroundStatus(e.c, e.reader, "proj")
 	if err != nil || len(st.Items) != 1 || st.Items[0].ManagedByTool {
 		t.Fatalf("status %+v, %v", st, err)
 	}
@@ -616,11 +624,11 @@ func TestPlayground_A404IsNotAbsence(t *testing.T) {
 // every project are cached apart from it.
 func TestPlayground_StatusFanOutIsSharedAcrossProjects(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	if _, err := GetPlaygroundStatus(e.c, "proj"); err != nil {
+	if _, err := GetPlaygroundStatus(e.c, e.reader, "proj"); err != nil {
 		t.Fatal(err)
 	}
 	before := len(e.g.paths)
-	if _, err := GetPlaygroundStatus(e.c, "other"); err != nil {
+	if _, err := GetPlaygroundStatus(e.c, e.reader, "other"); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range e.g.paths[before:] {
@@ -758,7 +766,7 @@ func TestPlayground_Status(t *testing.T) {
 	e.g.servers["other"] = &genAIServer{Name: "lsd-genai-playground", Phase: "Initializing"}
 	e.g.startingReads = 1 << 20
 	PurgePlaygroundStatus()
-	st, err := GetPlaygroundStatus(e.c, "proj")
+	st, err := GetPlaygroundStatus(e.c, e.reader, "proj")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -780,7 +788,7 @@ func TestPlayground_Status(t *testing.T) {
 	}
 	// Cached: a second read makes no call.
 	calls := len(e.g.auth)
-	if _, err := GetPlaygroundStatus(e.c, "proj"); err != nil || len(e.g.auth) != calls {
+	if _, err := GetPlaygroundStatus(e.c, e.reader, "proj"); err != nil || len(e.g.auth) != calls {
 		t.Errorf("not cached: %d calls, %v", len(e.g.auth)-calls, err)
 	}
 }
@@ -789,7 +797,7 @@ func TestPlayground_Status(t *testing.T) {
 func TestPlayground_StatusOfAnAPIThatDiffers(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.g.missing = true
-	st, err := GetPlaygroundStatus(e.c, "proj")
+	st, err := GetPlaygroundStatus(e.c, e.reader, "proj")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -800,10 +808,57 @@ func TestPlayground_StatusOfAnAPIThatDiffers(t *testing.T) {
 
 func TestPlayground_StatusWithoutToken(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	e.c.token = ""
-	st, err := GetPlaygroundStatus(e.c, "")
+	e.reader.token = ""
+	st, err := GetPlaygroundStatus(e.c, e.reader, "")
 	if err != nil || st.APICode != "no_token" || len(e.g.auth) != 0 {
 		t.Fatalf("got %+v, %v", st, err)
+	}
+}
+
+// A user's status: every gen-ai call carries their token, the fan-out
+// covers their projects only, and the tool's record shows only theirs; a
+// project that is not theirs is refused before any gen-ai call. Another
+// user's cached answer is never served.
+func TestPlayground_StatusIsTheUsers(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	e.g.models["other"] = testQwenModels
+	if res, _ := e.run(t, types.PlaygroundRequest{Action: "setup", Project: "other"}); !res.Success {
+		t.Fatalf("setup in other: %+v", res)
+	}
+	// The reader may see proj only.
+	e.k8s.deleteObject("/apis/project.openshift.io/v1/projects/other")
+	PurgePlaygroundStatus()
+	before := len(e.g.auth)
+	st, err := GetPlaygroundStatus(e.c, e.reader, "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range st.Items {
+		if it.Namespace != "proj" {
+			t.Errorf("another project's playground is shown: %+v", it)
+		}
+	}
+	for i, a := range e.g.auth[before:] {
+		if a != "Bearer "+testReaderToken {
+			t.Errorf("gen-ai call %s with %q", e.g.paths[before+i], a)
+		}
+		if strings.HasSuffix(e.g.paths[before+i], " other") {
+			t.Errorf("the fan-out read another project: %s", e.g.paths[before+i])
+		}
+	}
+	for _, call := range e.k8s.calls {
+		if call.Path == "/api/v1/namespaces" {
+			t.Errorf("the namespaces were listed (%s)", call.Token)
+		}
+	}
+	n := len(e.g.auth)
+	if _, err := GetPlaygroundStatus(e.c, e.reader, "other"); !errors.Is(err, ErrNotDSProject) || len(e.g.auth) != n {
+		t.Fatalf("another project: %v (%d gen-ai calls)", err, len(e.g.auth)-n)
+	}
+	// A second user with their own token reads afresh.
+	second := userClientOf(e.c, "second-user-token")
+	if _, err := GetPlaygroundStatus(e.c, second, "proj"); err != nil || len(e.g.auth) == n {
+		t.Fatalf("second user: %v, served from the first user's cache: %v", err, len(e.g.auth) == n)
 	}
 }
 
@@ -839,7 +894,7 @@ func TestValidatePlaygroundRequest(t *testing.T) {
 func TestPlayground_StatusListsMaaSModelsFromTheirModelRefs(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.putMaaSModels()
-	st, err := GetPlaygroundStatus(e.c, "proj")
+	st, err := GetPlaygroundStatus(e.c, e.reader, "proj")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -868,7 +923,7 @@ func TestPlayground_StatusWithoutReadableMaaSModels(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.putMaaSModels()
 	e.k8s.fail["GET /apis/maas.opendatahub.io/v1alpha1/maasmodelrefs"] = http.StatusForbidden
-	st, err := GetPlaygroundStatus(e.c, "proj")
+	st, err := GetPlaygroundStatus(e.c, e.reader, "proj")
 	if err != nil {
 		t.Fatal(err)
 	}

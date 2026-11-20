@@ -1,10 +1,11 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import type { CompletedOperation, OperationStatusResponse, ServerOperation, StatusResponse, UpdateStep } from "../types";
+import type { CompletedOperation, OperationStatusResponse, ServerOperation, StatusResponse, UpdateStep, UserOperationStatus } from "../types";
 import {
   ApiError,
   getOperation,
   getStatus,
+  isUserOperation,
   toApiError,
   type StreamDetachHandler,
   type StreamDetachReason,
@@ -38,6 +39,7 @@ import {
   type ServerResult,
 } from "./operation";
 import { useAnnounce } from "./LiveAnnouncer";
+import { useRole } from "./Permissions";
 
 // ---------------------------------------------------------------------------
 // Cluster status
@@ -98,6 +100,12 @@ export interface ServerOperationState {
   interrupted: OperationStatusResponse["interrupted"] | null;
   /** The most recently finished operation, when the backend reports one. */
   lastCompleted?: CompletedOperation | null;
+  /**
+   * What a user who is not a cluster-admin learns (GET /api/operation's
+   * short answer): the running operation's label and start, no names.
+   * Null for a cluster-admin, and while nothing runs.
+   */
+  brief?: { label: string; startedAt: string } | null;
 }
 
 export interface OperationContextValue {
@@ -236,7 +244,13 @@ interface AppStateProviderProps {
   /** Injected for tests. */
   fetchStatus?: (signal?: AbortSignal) => Promise<StatusResponse>;
   /** Injected for tests. */
-  fetchOperation?: (signal?: AbortSignal) => Promise<OperationStatusResponse>;
+  fetchOperation?: (signal?: AbortSignal) => Promise<OperationStatusResponse | UserOperationStatus>;
+  /**
+   * Whether GET /api/status is read (default true). Only cluster-admins
+   * may read it (403 admin_only for everyone else), so a user's tab never
+   * asks: RoleAppStateProvider sets this from the role.
+   */
+  statusEnabled?: boolean;
 }
 
 /**
@@ -346,12 +360,14 @@ export function busyOperationFrom(e: ApiError | undefined): ServerOperation | un
  * Owns the cluster status and the operator-operation lifecycle for the whole
  * app, so leaving the Dashboard page never aborts or forgets an operation.
  */
-export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProviderProps>> = ({ children, fetchStatus = getStatus, fetchOperation = getOperation }) => {
+export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProviderProps>> = ({ children, fetchStatus = getStatus, fetchOperation = getOperation, statusEnabled = true }) => {
   const announce = useAnnounce();
 
   // --- Status ---------------------------------------------------------------
   const [status, setStatus] = useState<StatusResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(statusEnabled);
+  const statusEnabledRef = useRef(statusEnabled);
+  statusEnabledRef.current = statusEnabled;
   const [error, setError] = useState<ApiError | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const statusRef = useRef<StatusResponse | null>(null);
@@ -376,6 +392,8 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
   // `background`: a poll, not a user's refresh. Polls do not toggle `loading`
   // once a status is shown, so status consumers re-render once per poll.
   const loadStatus = useCallback(async (background: boolean) => {
+    // The one place /api/status is read: never for a user who may not.
+    if (!statusEnabledRef.current) return;
     const requestId = ++latestStatusRequest.current;
     const requestedAt = Date.now();
     if (!background || !statusRef.current) setLoading(true);
@@ -410,8 +428,17 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
   const pollStatus = useCallback(() => loadStatus(true), [loadStatus]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (statusEnabled) {
+      void refresh();
+      return;
+    }
+    // Not (or no longer) a cluster-admin: nothing of the status stays shown.
+    latestStatusRequest.current++;
+    statusRef.current = null;
+    setStatus(null);
+    setError(null);
+    setLoading(false);
+  }, [refresh, statusEnabled]);
 
   // One poller for /api/status: adaptive while reconciling, 60 s otherwise.
   // While this tab streams an operation, SSE carries the progress, so the
@@ -424,6 +451,7 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
     },
     {
       delay: () => (stateRef.current.reconcile.active ? reconcilePollInterval(activePollingTime.current) : BACKGROUND_POLL_MS),
+      enabled: statusEnabled,
     },
   );
 
@@ -514,7 +542,7 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
       binding.last = now;
       fetchOperationRef.current()
         .then((res) => {
-          const op = res.inProgress ? res.operation : null;
+          const op = !isUserOperation(res) && res.inProgress ? res.operation : null;
           const latest = stateRef.current.run;
           if (!op || !latest || latest.id !== id || latest.outcome || latest.serverId) return;
           const opKind = operationKindForServerType(op.type, op.target);
@@ -601,7 +629,7 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
   }, []);
 
   // --- Server-side operation (GET /api/operation) ---------------------------
-  const [server, setServer] = useState<ServerOperationState>({ loaded: false, inProgress: false, operation: null, interrupted: null });
+  const [server, setServer] = useState<ServerOperationState>({ loaded: false, inProgress: false, operation: null, interrupted: null, brief: null });
   const serverRef = useRef(server);
   serverRef.current = server;
 
@@ -633,6 +661,7 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
       operation: ownFinishedRun ? null : op,
       interrupted: res.interrupted ?? null,
       lastCompleted: res.lastCompleted ?? null,
+      brief: null,
     };
     serverRef.current = next;
     setServer(next);
@@ -640,6 +669,20 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
     // as a server run from here on (banner, lock, steps).
     syncServerOperation(op && !ownFinishedRun ? snapshotFromServer(op) : null, res.lastCompleted);
   }, [syncServerOperation, pollStatus]);
+
+  /** A user's short answer: whether something runs, its label and start; never a run to follow. */
+  const applyUserOperation = useCallback((res: UserOperationStatus) => {
+    const next: ServerOperationState = {
+      loaded: true,
+      inProgress: res.running,
+      operation: null,
+      interrupted: null,
+      lastCompleted: null,
+      brief: res.running ? { label: res.label ?? "", startedAt: res.startedAt ?? "" } : null,
+    };
+    serverRef.current = next;
+    setServer(next);
+  }, []);
 
   const pollServerOperation = useCallback(async () => {
     const current = stateRef.current.run;
@@ -649,11 +692,12 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
     try {
       const res = await fetchOperationRef.current();
       if (seq !== operationSeq.current) return;
-      applyServerOperation(res);
+      if (isUserOperation(res)) applyUserOperation(res);
+      else applyServerOperation(res);
     } catch {
       // Keep the last answer: a failed poll says nothing about the cluster.
     }
-  }, [applyServerOperation]);
+  }, [applyServerOperation, applyUserOperation]);
 
   const operationPoller = usePolling(pollServerOperation, {
     delay: () => (serverRef.current.inProgress || isRunning(stateRef.current.run) || stateRef.current.reconcile.awaitingServer ? OPERATION_POLL_BUSY_MS : OPERATION_POLL_IDLE_MS),
@@ -716,4 +760,14 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
       <OperationContext.Provider value={operationValue}>{children}</OperationContext.Provider>
     </ClusterStatusContext.Provider>
   );
+};
+
+/**
+ * AppStateProvider with the cluster status read only for cluster-admins:
+ * a user (or a tab whose role is not known yet) never asks for
+ * /api/status. Mount inside PermissionsProvider.
+ */
+export const RoleAppStateProvider: React.FC<React.PropsWithChildren<Omit<AppStateProviderProps, "statusEnabled">>> = ({ children, ...props }) => {
+  const role = useRole();
+  return <AppStateProvider {...props} statusEnabled={role === "admin"}>{children}</AppStateProvider>;
 };

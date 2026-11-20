@@ -1,8 +1,13 @@
 /** The Environment page: S3 storage, pipeline servers, MLflow, models, playground, MaaS, samples, prerequisites and clean-up. */
 
-import { OperationResponse, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, PlaygroundRequest, PlaygroundStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest } from '../../types';
+import { OperationResponse, ProjectStatus, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, PlaygroundRequest, PlaygroundStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest } from '../../types';
 import { request } from './client';
 import { StreamDoneHandler, StreamDetachHandler, streamSSE } from './stream';
+
+/** A user's (not a cluster-admin's) status of one of their projects, read with their own token. */
+export function getProjectStatus(project: string): Promise<ProjectStatus> {
+  return request(`/api/resources/status?project=${encodeURIComponent(project)}`);
+}
 
 /** The Environment status; project (the Pipelines tab's selected one) also reads its dashboard Connection. */
 export function getResourcesStatus(project?: string | null): Promise<ResourcesStatus> {

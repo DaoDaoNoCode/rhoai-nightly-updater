@@ -1,0 +1,27 @@
+{
+  "genAiUi": "available",
+  "items": [
+    {
+      "deployed": true,
+      "managedByTool": true,
+      "message": "Ready",
+      "name": "lsd-genai-playground",
+      "namespace": "team-a",
+      "phase": "Ready",
+      "ready": true,
+      "requested": true
+    }
+  ],
+  "models": [
+    {
+      "chat": true,
+      "displayName": "Qwen2.5 0.5B Instruct (CPU)",
+      "name": "qwen25-05b-instruct",
+      "ready": true,
+      "source": "namespace",
+      "status": "Running"
+    }
+  ],
+  "operatorReady": "True",
+  "project": "team-a"
+}

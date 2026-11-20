@@ -96,6 +96,12 @@ const mlflowNoStatusURLReason = "This MLflow reports no https address in its CR 
 // unavailable. The address is the CR's status.url, the address the operator
 // reports and odh-dashboard links to (see mlflowCR).
 func mlflowSampleTarget(c *Client, project string) (*mlflowTarget, string, error) {
+	return mlflowSampleTargetAs(c, project, c.token)
+}
+
+// mlflowSampleTargetAs is mlflowSampleTarget whose MLflow calls carry
+// token: c finds MLflow, token is who asks it.
+func mlflowSampleTargetAs(c *Client, project, token string) (*mlflowTarget, string, error) {
 	cr, err := getMLflowCR(c)
 	switch {
 	case IsK8sError(err, 404):
@@ -118,7 +124,7 @@ func mlflowSampleTarget(c *Client, project string) (*mlflowTarget, string, error
 	}
 	return &mlflowTarget{
 		api: &sampleAPI{
-			ctx: c.ctx, base: base, token: c.token, server: "MLflow",
+			ctx: c.ctx, base: base, token: token, server: "MLflow",
 			headers: map[string]string{mlflowWorkspaceHeader: project},
 		},
 		ui: base, project: project, c: c, cr: cr, dashboard: httpsBase(cachedDashboardURL(c)),
@@ -180,7 +186,7 @@ func foreignMessage(what string) string {
 // statusFromError reports a status read that failed.
 func statusFromError(s types.SampleStatus, err error) types.SampleStatus {
 	s.State = "unknown"
-	s.Message = "Cannot read the sample's state: " + err.Error() + "." + deniedHint(err, false)
+	s.Message = "Cannot read the sample's state: " + err.Error() + "." + deniedReadHint(err)
 	s.Actions = []string{}
 	return s
 }
@@ -209,25 +215,33 @@ func mlflowSamples() map[string]mlflowSample {
 
 // GetMLflowSamplesStatus reports the MLflow samples of project. It makes
 // only named reads (one per sample, a few for the training sample) and is
-// cached for mlflowStatusCacheTTL, so it stays out of the main status poll.
+// cached for mlflowStatusCacheTTL per user and project, so it stays out of
+// the main status poll.
 //
-// project must be a Data Science project, checked before the cache, like
-// the playground's status and every samples operation: the reads go to
-// MLflow with the ServiceAccount's token, so a request must not choose any
-// namespace.
-func GetMLflowSamplesStatus(c *Client, project string) (*types.MLflowSamplesStatus, error) {
-	ok, err := isDSProject(c, project)
+// The reads go to MLflow with the signed-in user's own token (u), so
+// MLflow's own access reviews decide what they see (mlflow-kubernetes-
+// plugins: every request is reviewed with the caller's token, see
+// samples_rbac_test.go). project must be one of the user's data science
+// projects (ListUserDSProjects), checked before the cache. The
+// ServiceAccount (sa) only finds MLflow: its CR's status.url and the
+// dashboard's address, which are no user data.
+func GetMLflowSamplesStatus(sa, u *Client, project string) (*types.MLflowSamplesStatus, error) {
+	ok, err := isUserDSProject(u, project)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
-		return nil, fmt.Errorf("%w: '%s'", ErrNotDSProject, project)
-	}
-	if cached, ok := mlflowSamplesCache.Get(project); ok {
-		return &cached, nil
+		return nil, fmt.Errorf("%w: '%s' is not one of your data science projects", ErrNotDSProject, project)
 	}
 	gen := mlflowSamplesGen.current(project)
-	t, reason, err := mlflowSampleTarget(c, project)
+	// The token and the project's invalidation count key the cache: one
+	// user's answer is never another's, and a samples operation on the
+	// project makes every user's cached answer unreachable.
+	key := fmt.Sprintf("%s|%d|%s", tokenKey(u.token), gen, project)
+	if cached, ok := mlflowSamplesCache.Get(key); ok {
+		return &cached, nil
+	}
+	t, reason, err := mlflowSampleTargetAs(sa, project, u.token)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +268,7 @@ func GetMLflowSamplesStatus(c *Client, project string) (*types.MLflowSamplesStat
 	// A samples operation that ended during this read invalidated the
 	// project: what was read may predate it, so it is returned but not kept.
 	if mlflowSamplesGen.current(project) == gen {
-		mlflowSamplesCache.Add(project, st, mlflowStatusCacheTTL)
+		mlflowSamplesCache.Add(key, st, mlflowStatusCacheTTL)
 	}
 	return &st, nil
 }
@@ -281,11 +295,11 @@ func (g *samplesGenerations) bump(project string) {
 	g.gen[project]++
 }
 
-// InvalidateSamplesStatus drops the cached samples status of project, and
-// keeps a read that is under way from caching what it read before.
+// InvalidateSamplesStatus drops the cached samples status of project (the
+// count is part of every key), and keeps a read that is under way from
+// caching what it read before.
 func InvalidateSamplesStatus(project string) {
 	mlflowSamplesGen.bump(project)
-	mlflowSamplesCache.Remove(project)
 }
 
 // ValidateMLflowSamplesRequest checks a request before the operation

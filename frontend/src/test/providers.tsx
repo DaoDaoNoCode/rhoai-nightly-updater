@@ -1,12 +1,14 @@
 import React from "react";
 import { render } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { AppStateProvider } from "../state/AppState";
+import { RoleAppStateProvider } from "../state/AppState";
 import { AppInfoProvider } from "../state/AppInfo";
+import { PermissionsProvider } from "../state/Permissions";
 import { LiveAnnouncerProvider } from "../state/LiveAnnouncer";
 import { ProgressViewsProvider } from "../components/ProgressViews";
 import { getUserPermissions } from "../services/api";
-import type { DashboardState, OperationStatusResponse, StatusResponse, UpdateCheck, UserPermissions, VersionInfo } from "../types";
+import type { DashboardState, OperationStatusResponse, StatusResponse, UpdateCheck, UserOperationStatus, UserPermissions, VersionInfo } from "../types";
+import { contract } from "./contract";
 
 /** A healthy nightly install: rhoai-3.6, newer build available. */
 export function nightlyStatus(overrides: Partial<StatusResponse> = {}): StatusResponse {
@@ -48,38 +50,49 @@ export const IDLE_OPERATION: OperationStatusResponse = { inProgress: false, oper
 
 export interface AppFetchers {
   status?: () => Promise<StatusResponse>;
-  operation?: () => Promise<OperationStatusResponse>;
+  operation?: () => Promise<OperationStatusResponse | UserOperationStatus>;
   permissions?: () => Promise<UserPermissions>;
   version?: () => Promise<VersionInfo>;
   update?: () => Promise<UpdateCheck>;
   dashboard?: () => Promise<DashboardState>;
 }
 
+/** A cluster-admin's permission answer (the default), from the generated contract (./contract.ts). */
+export const ADMIN_PERMISSIONS: UserPermissions = { ...contract.permissionsAdmin(), user: "me" };
+/** A user who is not a cluster-admin (per-user views). */
+export const USER_PERMISSIONS: UserPermissions = { ...contract.permissionsUser(), user: "dev-user" };
+
 /**
  * Renders a page inside the app's providers. The permission check goes
- * through the global fetch, so stubApi's `/api/user/permissions` (canMutate
- * true by default) decides it; the other app-wide reads are injected.
+ * through the global fetch, so stubApi's `/api/user/permissions` (a
+ * cluster-admin by default) decides it; the other app-wide reads are injected.
  */
 export function renderPage(ui: React.ReactNode, route = "/", fetchers: AppFetchers = {}) {
   return renderWithApp(ui, { permissions: getUserPermissions, ...fetchers }, route);
 }
 
-/** Renders `ui` inside the app's providers with injected backend reads. */
+/**
+ * Renders `ui` inside the app's providers with injected backend reads. As
+ * in the app, the status is read only once the permission check said
+ * cluster-admin (the default answer).
+ */
 export function renderWithApp(ui: React.ReactNode, fetchers: AppFetchers = {}, route = "/") {
   const status = fetchers.status ?? (async () => nightlyStatus());
   const operation = fetchers.operation ?? (async () => IDLE_OPERATION);
-  const permissions = fetchers.permissions ?? (async () => ({ canMutate: true, user: "me" }));
+  const permissions = fetchers.permissions ?? (async () => ADMIN_PERMISSIONS);
   const version = fetchers.version ?? (async () => ({ version: "dev", commit: "unknown", buildDate: "unknown", templateOutdated: false }));
   const update = fetchers.update ?? (async () => ({ updateAvailable: false, majorUpgrade: false }));
   const dashboard = fetchers.dashboard ?? (async () => ({ currentImage: "", isCustomPR: false, managed: true, podStatus: "", podReady: true, containersReady: 1, containersTotal: 1, rolloutPending: false, canAssistRollout: false, override: { active: false, operatorPaused: false, sessionRecorded: false, stale: false, dashboardDeleting: false } } as DashboardState));
   return render(
     <LiveAnnouncerProvider>
       <MemoryRouter initialEntries={[route]}>
-        <AppStateProvider fetchStatus={status} fetchOperation={operation}>
-          <AppInfoProvider fetchPermissions={permissions} fetchVersion={version} fetchUpdateCheck={update} fetchDashboardState={dashboard}>
-            <ProgressViewsProvider>{ui}</ProgressViewsProvider>
-          </AppInfoProvider>
-        </AppStateProvider>
+        <PermissionsProvider fetchPermissions={permissions}>
+          <RoleAppStateProvider fetchStatus={status} fetchOperation={operation}>
+            <AppInfoProvider fetchVersion={version} fetchUpdateCheck={update} fetchDashboardState={dashboard}>
+              <ProgressViewsProvider>{ui}</ProgressViewsProvider>
+            </AppInfoProvider>
+          </RoleAppStateProvider>
+        </PermissionsProvider>
       </MemoryRouter>
     </LiveAnnouncerProvider>,
   );

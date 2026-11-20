@@ -24,19 +24,19 @@ func TestMLflowSamplesStatus_Unavailable(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newResourceFake(t)
-			f.putJSON("/api/v1/namespaces/"+fakeProject, `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
-			mlflowSamplesCache.Remove(fakeProject)
+			f.putProject(fakeProject)
+			InvalidateSamplesStatus(fakeProject)
 			if tc.deploy {
 				putMLflow(f, toolLabelJSON, toolFieldManager, "Update", "", `{}`, tc.status)
 			}
-			st, err := GetMLflowSamplesStatus(c, fakeProject)
+			st, err := GetMLflowSamplesStatus(c, userClientOf(c, samplesUserToken), fakeProject)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if st.Available || !strings.Contains(st.Reason, tc.want) || strings.Contains(st.Reason, "yet") || len(st.Samples) != 0 {
 				t.Errorf("got %+v", st)
 			}
-			mlflowSamplesCache.Remove(fakeProject)
+			InvalidateSamplesStatus(fakeProject)
 		})
 	}
 }
@@ -58,13 +58,13 @@ func TestMLflowSamplesStatus_AllAbsentAndHeaders(t *testing.T) {
 	}
 }
 
-// The status reads MLflow with the ServiceAccount's token, so it serves
-// only Data Science projects, like the samples operations.
+// The status serves only the user's own Data Science projects, checked
+// before MLflow is called.
 func TestMLflowSamplesStatus_OnlyDSProjects(t *testing.T) {
 	env := newSamplesEnv(t)
 	env.k8s.putJSON("/api/v1/namespaces/openshift-config", `{"metadata":{},"status":{"phase":"Active"}}`)
-	mlflowSamplesCache.Remove("openshift-config")
-	st, err := GetMLflowSamplesStatus(env.c, "openshift-config")
+	InvalidateSamplesStatus("openshift-config")
+	st, err := GetMLflowSamplesStatus(env.c, env.user, "openshift-config")
 	if !errors.Is(err, ErrNotDSProject) || st != nil {
 		t.Errorf("got %+v, %v; want ErrNotDSProject", st, err)
 	}
@@ -73,20 +73,41 @@ func TestMLflowSamplesStatus_OnlyDSProjects(t *testing.T) {
 	}
 }
 
+// The cache is per user: another user's token never gets the first
+// user's answer, and MLflow decides each one's reads with their token.
+func TestMLflowSamplesStatus_CachedPerUser(t *testing.T) {
+	env := newSamplesEnv(t)
+	first, err := GetMLflowSamplesStatus(env.c, env.user, fakeProject)
+	if err != nil || first.Samples[0].State != "absent" {
+		t.Fatalf("first user: %+v, %v", first, err)
+	}
+	// The second user's token is decided by allow: here nothing.
+	env.mlflow.allow = func(string, string, string, string) bool { return false }
+	second, err := GetMLflowSamplesStatus(env.c, userClientOf(env.c, "second-user-token"), fakeProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range second.Samples {
+		if s.State != "unknown" {
+			t.Errorf("the second user got %+v (the first user's answer?)", s)
+		}
+	}
+}
+
 func TestMLflowSamplesStatus_IsCached(t *testing.T) {
 	env := newSamplesEnv(t)
-	if _, err := GetMLflowSamplesStatus(env.c, fakeProject); err != nil {
+	if _, err := GetMLflowSamplesStatus(env.c, env.user, fakeProject); err != nil {
 		t.Fatal(err)
 	}
 	n := len(env.mlflow.requests)
-	if _, err := GetMLflowSamplesStatus(env.c, fakeProject); err != nil {
+	if _, err := GetMLflowSamplesStatus(env.c, env.user, fakeProject); err != nil {
 		t.Fatal(err)
 	}
 	if len(env.mlflow.requests) != n {
 		t.Errorf("second status read MLflow again: %v", env.mlflow.requests[n:])
 	}
 	InvalidateSamplesStatus(fakeProject)
-	if _, err := GetMLflowSamplesStatus(env.c, fakeProject); err != nil {
+	if _, err := GetMLflowSamplesStatus(env.c, env.user, fakeProject); err != nil {
 		t.Fatal(err)
 	}
 	if len(env.mlflow.requests) == n {
@@ -100,20 +121,20 @@ func TestMLflowSamplesStatus_ReadDuringInvalidationIsNotCached(t *testing.T) {
 	env := newSamplesEnv(t)
 	var once sync.Once
 	env.mlflow.onRequest = func(string, string) { once.Do(func() { InvalidateSamplesStatus(fakeProject) }) }
-	if _, err := GetMLflowSamplesStatus(env.c, fakeProject); err != nil {
+	if _, err := GetMLflowSamplesStatus(env.c, env.user, fakeProject); err != nil {
 		t.Fatal(err)
 	}
 	env.mlflow.mu.Lock()
 	n := len(env.mlflow.requests)
 	env.mlflow.mu.Unlock()
-	if _, err := GetMLflowSamplesStatus(env.c, fakeProject); err != nil {
+	if _, err := GetMLflowSamplesStatus(env.c, env.user, fakeProject); err != nil {
 		t.Fatal(err)
 	}
 	if len(env.mlflow.requests) == n {
 		t.Error("the read that overlapped an invalidation was cached")
 	}
 	n = len(env.mlflow.requests)
-	if _, err := GetMLflowSamplesStatus(env.c, fakeProject); err != nil {
+	if _, err := GetMLflowSamplesStatus(env.c, env.user, fakeProject); err != nil {
 		t.Fatal(err)
 	}
 	if len(env.mlflow.requests) != n {
@@ -183,9 +204,11 @@ func TestMLflowSamplesStatus_Demo(t *testing.T) {
 
 func TestMLflowSamplesStatus_PermissionDenied(t *testing.T) {
 	env := newSamplesEnv(t)
-	env.mlflow.allow = func(string, string, string, string) bool { return false }
+	// The status reads with the user's own token: a refusal is theirs,
+	// with no hint to re-apply the template.
+	env.mlflow.userAllow = func(string, string, string, string) bool { return false }
 	for id, s := range env.status(t) {
-		if s.State != "unknown" || !strings.Contains(s.Message, "403 PERMISSION_DENIED") || !strings.Contains(s.Message, "re-apply the template") || len(s.Actions) != 0 {
+		if s.State != "unknown" || !strings.Contains(s.Message, "403 PERMISSION_DENIED") || !strings.Contains(s.Message, "your own OpenShift permissions") || strings.Contains(s.Message, "template") || len(s.Actions) != 0 {
 			t.Errorf("%s = %+v", id, s)
 		}
 	}

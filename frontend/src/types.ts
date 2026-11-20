@@ -377,12 +377,111 @@ export interface PodInfo {
   version?: string;
 }
 
+/**
+ * What the signed-in user sees (docs/research/per-user-views.md): "admin"
+ * (cluster-admin: every page and change, as before 5.0.0) or "user"
+ * (every other RHOAI user: the summary, Build Explorer and their own
+ * projects, read-only).
+ */
+export type UserRole = "admin" | "user";
+
 export interface UserPermissions {
   canMutate: boolean;
   user: string;
+  /** The user's tier. The UI treats anything but "admin" (an absent field included) as "user". */
+  role?: UserRole;
   /** Why a user who may change the cluster cannot now (their sign-in cannot carry a change: an old session, or one about to expire). */
   reason?: string;
   reasonCode?: string;
+}
+
+/** One DataScienceCluster component in the summary. */
+export interface SummaryComponent {
+  name: string;
+  /** "Managed", "Removed" or "Unmanaged". */
+  managementState: string;
+  ready: boolean;
+}
+
+/** A nightly build in the summary (pkg/types SummaryBuild): its stream tag and build date ("" when unknown). No image reference. */
+export interface SummaryBuild {
+  tag: string;
+  buildDate: string;
+}
+
+/**
+ * Why the summary does not know the nightly comparison (pkg/types
+ * SummaryNightly.Problem): "" known (or not a nightly install),
+ * "catalog_unreadable", "lookup_failed", "no_stream" (a custom catalog image).
+ */
+export type NightlyProblem = "" | "catalog_unreadable" | "lookup_failed" | "no_stream";
+
+/**
+ * GET /api/summary: the short read-only cluster summary every signed-in
+ * user may see, read by the ServiceAccount with a reviewed field list. No
+ * node, pod, project or user names.
+ */
+export interface ClusterSummary {
+  updaterVersion: string;
+  rhoai: {
+    installed: boolean;
+    version: string;
+    channel: string;
+    /** The operator CSV's phase ("Succeeded", "Installing", "Failed"...). */
+    phase: string;
+  };
+  nightly: {
+    /** The installed nightly build; null when RHOAI was not installed from a nightly build, or when that could not be read (problem). */
+    installedBuild: SummaryBuild | null;
+    /** The newest build of the same stream; null when unknown. */
+    latestBuild: SummaryBuild | null;
+    /** Meaningful only when problem is "". */
+    newerAvailable: boolean;
+    problem: NightlyProblem;
+  };
+  dsc: {
+    exists: boolean;
+    ready: boolean;
+    components: SummaryComponent[] | null;
+  };
+}
+
+/** The kind of a ProjectStatus part's problem (pkg/types Problem*). */
+export type ProjectProblemCode = "" | "forbidden_for_user" | "not_installed" | "error";
+
+/** One KServe InferenceService of a user's project (pkg/types ProjectInferenceService). */
+export interface ProjectInferenceService {
+  name: string;
+  ready: boolean;
+  message?: string;
+  url?: string;
+  terminating?: boolean;
+}
+
+/**
+ * GET /api/resources/status?project= for a user who is not a cluster-admin
+ * (pkg/types ProjectStatus): one of their projects, read with their own
+ * token. A part that could not be read is null with its problem and code.
+ */
+export interface ProjectStatus {
+  project: string;
+  pipelineServers: ResourceState[] | null;
+  pipelineServersProblem?: string;
+  pipelineServersProblemCode?: ProjectProblemCode;
+  models: ModelState[] | null;
+  modelsProblem?: string;
+  modelsProblemCode?: ProjectProblemCode;
+  inferenceServices: ProjectInferenceService[] | null;
+  inferenceServicesProblem?: string;
+  inferenceServicesProblemCode?: ProjectProblemCode;
+  dashboardUrl?: string;
+}
+
+/** GET /api/operation as a user (role "user") reads it: no user, pod or interrupted operation. */
+export interface UserOperationStatus {
+  running: boolean;
+  label?: string;
+  startedAt?: string;
 }
 
 export interface DashboardState {

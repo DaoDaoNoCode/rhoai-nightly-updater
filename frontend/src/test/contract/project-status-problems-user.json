@@ -1,0 +1,12 @@
+{
+  "inferenceServices": null,
+  "inferenceServicesProblem": "Cannot read the InferenceServices of project team-denied: k8s API error 503 (ServiceUnavailable)",
+  "inferenceServicesProblemCode": "error",
+  "models": [],
+  "modelsProblem": "Model serving is not installed on this cluster: it has no LLMInferenceService API.",
+  "modelsProblemCode": "not_installed",
+  "pipelineServers": null,
+  "pipelineServersProblem": "Your OpenShift account may not read the pipeline servers of project team-denied.",
+  "pipelineServersProblemCode": "forbidden_for_user",
+  "project": "team-denied"
+}

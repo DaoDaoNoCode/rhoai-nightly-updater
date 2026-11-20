@@ -70,3 +70,13 @@ export const NAV_ITEMS = [
   { path: "/test-resources", label: "Environment" },
   { path: "/diagnostics", label: "Diagnostics" },
 ] as const;
+
+/**
+ * The pages only cluster-admins see (docs/research/per-user-views.md):
+ * every other user gets Status (the summary), Build Explorer and
+ * Environment (their own projects).
+ */
+export const ADMIN_ONLY_PAGES: ReadonlySet<string> = new Set(["/components", "/dashboard-dev", "/diagnostics"]);
+
+/** How often a user's Status page reads the cluster summary (GET /api/summary), in ms. */
+export const SUMMARY_POLL_MS = 60_000;

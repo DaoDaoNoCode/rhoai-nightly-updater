@@ -1,0 +1,42 @@
+{
+  "dsc": {
+    "components": [
+      {
+        "managementState": "Managed",
+        "name": "dashboard",
+        "ready": true
+      },
+      {
+        "managementState": "Managed",
+        "name": "kserve",
+        "ready": false
+      },
+      {
+        "managementState": "Removed",
+        "name": "ray",
+        "ready": false
+      }
+    ],
+    "exists": true,
+    "ready": false
+  },
+  "nightly": {
+    "installedBuild": {
+      "buildDate": "2026-11-19T03:12:00Z",
+      "tag": "rhoai-3.6"
+    },
+    "latestBuild": {
+      "buildDate": "2026-11-20T03:10:00Z",
+      "tag": "rhoai-3.6"
+    },
+    "newerAvailable": true,
+    "problem": ""
+  },
+  "rhoai": {
+    "channel": "beta",
+    "installed": true,
+    "phase": "Succeeded",
+    "version": "3.6.0"
+  },
+  "updaterVersion": "dev"
+}

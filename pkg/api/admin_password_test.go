@@ -82,7 +82,7 @@ func TestAdminPassword(t *testing.T) {
 		mutationPermission = func(context.Context, string) (bool, error) { return false, nil }
 		calls := stubAdminLogin(t, "admin", secret, nil)
 		w := getAdminPassword("user:reader")
-		if body := decodeError(t, w); w.Code != http.StatusForbidden || body["errorCode"] != "forbidden" {
+		if body := decodeError(t, w); w.Code != http.StatusForbidden || body["errorCode"] != adminOnlyCode {
 			t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 		}
 		if *calls != 0 || strings.Contains(w.Body.String(), secret) {

@@ -6,18 +6,22 @@ package cluster
 // withMutationAuth builds the client with cluster.NewUserClient), so the
 // API server checks it against that user's RBAC. The app's ServiceAccount
 // keeps only:
-//   - the reads of every handler outside withMutationAuth (any signed-in
-//     user sees Status, Components, Diagnostics, the Environment page...),
-//     the probes, and the admin reads;
+//   - the reads of every handler outside withMutationAuth (the admin-only
+//     reads, the cluster summary and the registry; pkg/api route_tiers.go),
+//     and the probes;
 //   - the background jobs main starts (the MaaS prune job);
 //   - the updater's own records, reached through c.bookkeeping() from any
-//     path, and the lease and marker that pkg/api writes;
-//   - the access reviews other servers make with its token for those reads
-//     (the gen-ai status calls, the MLflow samples status).
+//     path, and the lease and marker that pkg/api writes.
 //
-// deploy/template.yaml must grant exactly that (rbac_coverage_test.go's two
-// template tests), and no change may reach the ServiceAccount's token
-// (TestMutationPathsActWithTheUsersToken). The gitops profile is checked
+// Since 5.0.0 the reads of tier user-token (a user's projects, the
+// Playground and MLflow samples status, a user's project) use the
+// signed-in user's token too: their own functions are rbacUserTokenReads,
+// and the access reviews the gen-ai API and MLflow make for them check the
+// user (userTokenReviewRequests), not the ServiceAccount.
+//
+// deploy/template.yaml must grant exactly the ServiceAccount's part
+// (rbac_coverage_test.go's two template tests), and no change may reach
+// the ServiceAccount's token (TestMutationPathsActWithTheUsersToken). The gitops profile is checked
 // against deploy/rbac-gitops.yaml by rbac_gitops_test.go: its Update still
 // acts with the ServiceAccount, which its admission policy binds.
 
@@ -84,18 +88,17 @@ func templateSARequests(t *testing.T) []rbacRequest {
 		pg := loadProfileGraph(t)
 		reqs, _ := serviceAccountRequestsIn(t, pg.clusterFuncs(pg.saReach()))
 		reqs = append(reqs, bookkeepingRequests(t)...)
-		reqs = append(reqs, otherServerSARequests(t)...)
 		saRequestsMemo = reqs
 	}
 	return append([]rbacRequest(nil), saRequestsMemo...)
 }
 
-// otherServerSARequests are the access reviews other servers make with the
-// ServiceAccount's token: the playground status's (genAIDashboardRequests),
-// and MLflow's for the samples status, which only reads (get and list
-// checks).
-func otherServerSARequests(t *testing.T) []rbacRequest {
-	t.Helper()
+// userTokenReviewRequests are the access reviews other servers make for
+// the status reads of tier user-token, which since 5.0.0 send the
+// signed-in user's token: the Playground status's
+// (genAIDashboardRequests) and MLflow's for the samples status (get and
+// list checks).
+func userTokenReviewRequests() []rbacRequest {
 	out := playgroundServerRequests()
 	for _, r := range samplesReviewRequests() {
 		if r.Verb == "get" || r.Verb == "list" {
@@ -103,6 +106,43 @@ func otherServerSARequests(t *testing.T) []rbacRequest {
 		}
 	}
 	return out
+}
+
+// The ServiceAccount is granted none of those reviews on their account:
+// a review the template still grants is one the ServiceAccount's own reads
+// need (the models and OGX servers that use a component, for example).
+// The ones only those statuses needed (the samples' MLflow names, the
+// gen-ai custom endpoints ConfigMap) are gone.
+func TestUserTokenReviewsAreNotTheServiceAccounts(t *testing.T) {
+	saReqs := templateSARequests(t)
+	grants := templateGrants(t)
+	for _, r := range userTokenReviewRequests() {
+		granted := false
+		for _, g := range grants {
+			granted = granted || g.allows(r)
+		}
+		if !granted {
+			continue
+		}
+		needed := false
+		for _, s := range saReqs {
+			needed = needed || (s.Verb == r.Verb && s.Group == r.Group && s.Resource == r.Resource && (s.Name == r.Name || s.Name == anyNS || r.Name == ""))
+		}
+		if !needed {
+			t.Errorf("the template grants %s for a status read made with the user's token (%s)", r.key(), r.Site)
+		}
+	}
+	for _, r := range []rbacRequest{
+		{Verb: "get", Group: "", Resource: "configmaps", Namespace: "p", Name: "gen-ai-aa-custom-model-endpoints"},
+		{Verb: "get", Group: mlflowAuthGroup, Resource: "experiments", Namespace: "p", Name: "nightly-sample-training"},
+		{Verb: "get", Group: mlflowAuthGroup, Resource: "skills", Namespace: "p", Name: "nightly-sample-mcp-builder"},
+	} {
+		for _, g := range grants {
+			if g.allows(r) {
+				t.Errorf("%s grants %s, which only a user's status read needs", g.source, r.key())
+			}
+		}
+	}
 }
 
 // pathTo is a shortest path from roots to target in the graph, avoiding

@@ -455,26 +455,51 @@ type OperationStatus struct {
 // completed one, and an interrupted one, if any. While this process runs
 // an operation it answers from memory; otherwise it reads the operation
 // record, which also tells about another pod's operation.
+//
+// A user who is not a cluster-admin gets types.OperationSummary only:
+// whether one runs, its label and when it started; not who started it,
+// its target, its pod, or an interrupted one (tier per-role). The record
+// is read, and its marker retried, with the ServiceAccount for both.
 var HandleOperation = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	admin, ok := requestRole(w, r)
+	if !ok {
+		return
+	}
+	status := operationStatus(c)
+	if !admin {
+		writeJSON(w, operationSummary(status), "operation")
+		return
+	}
+	writeJSON(w, status, "operation")
+})
+
+// operationSummary is what a user who is not a cluster-admin sees of the
+// operation status.
+func operationSummary(status OperationStatus) types.OperationSummary {
+	if !status.InProgress || status.Operation == nil {
+		return types.OperationSummary{Running: status.InProgress}
+	}
+	return types.OperationSummary{Running: true, Label: status.Operation.Label, StartedAt: status.Operation.StartedAt.UTC().Format(time.RFC3339)}
+}
+
+// operationStatus is the operation status (HandleOperation).
+func operationStatus(c *cluster.Client) OperationStatus {
 	local := clusterMutationInProgress.Load()
 	status := OperationStatus{InProgress: local, Operation: inflight.snapshot()}
 	last := inflight.lastCompleted()
 	if local && last != nil {
 		status.LastCompleted = last
-		writeJSON(w, status, "operation")
-		return
+		return status
 	}
 	rec, err := readOperationState(c)
 	if err != nil || rec == nil {
 		slog.Debug("could not read the operation record", "error", err)
 		status.LastCompleted = last
-		writeJSON(w, status, "operation")
-		return
+		return status
 	}
 	status.LastCompleted = inflight.rememberLast(rec.LastCompleted)
 	if local {
-		writeJSON(w, status, "operation")
-		return
+		return status
 	}
 	remote := leaseHeldElsewhere(rec.Lease)
 	if remote {
@@ -495,8 +520,8 @@ var HandleOperation = withAuth(func(c *cluster.Client, w http.ResponseWriter, r 
 			}
 		}
 	}
-	writeJSON(w, status, "operation")
-})
+	return status
+}
 
 // Cluster operations used by the handlers; tests replace them.
 var (

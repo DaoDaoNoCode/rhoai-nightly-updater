@@ -1,6 +1,9 @@
 package api
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+)
 
 // Route is an endpoint of the API listener.
 type Route struct {
@@ -11,9 +14,12 @@ type Route struct {
 // routes are the API endpoints. Every route that is not a GET changes the
 // cluster and must go through withMutationAuth (the cluster-admin gate) and
 // lockCluster, except POST /api/pageview, which only counts page views.
-// TestEveryNonGetRouteIsGated checks this.
+// TestEveryNonGetRouteIsGated checks this. Every GET route has a tier in
+// getRouteTiers (route_tiers.go): who may read it; one without is
+// admin-only.
 var routes = []Route{
 	{"GET /api/status", HandleStatus},
+	{"GET /api/summary", HandleSummary},
 	{"GET /api/operation", HandleOperation},
 	{"POST /api/update", HandleUpdate}, // dry run only
 	{"POST /api/update/stream", HandleUpdateStream},
@@ -118,6 +124,7 @@ var gitOpsRoutes = map[string]http.HandlerFunc{
 // table, so a new route is off in the gitops profile until it is added
 // to gitOpsRoutes on purpose.
 var gitOpsRefused = map[string]string{
+	"GET /api/summary":                             "The cluster summary",
 	"POST /api/reinstall/stream":                   "Install a different build",
 	"POST /api/components/dsc/repair":              "Repairing the DataScienceCluster",
 	"GET /api/components/dsc/plan":                 "Changing the DataScienceCluster",
@@ -187,6 +194,11 @@ func Register(mux *http.ServeMux) {
 
 func handlerFor(p Profile, r Route) http.HandlerFunc {
 	if p != ProfileGitOps {
+		// An admin-only GET (or one without a tier) refuses non-admins
+		// before its handler runs (route_tiers.go).
+		if strings.HasPrefix(r.Pattern, http.MethodGet+" ") && tierOf(r.Pattern) == tierAdmin {
+			return adminOnly(r.Handler)
+		}
 		return r.Handler
 	}
 	if h, ok := gitOpsRoutes[r.Pattern]; ok {

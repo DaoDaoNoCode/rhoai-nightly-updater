@@ -315,7 +315,14 @@ var HandleUserPermissions = withAuth(func(c *cluster.Client, w http.ResponseWrit
 		writeAuthError(w, err, "Cannot verify mutation permissions")
 		return
 	}
-	resp := map[string]any{"canMutate": allowed, "user": username}
+	// role is the read tier (route_tiers.go): admin passes the same
+	// check as every mutation, before the session check below, which
+	// only says whether this sign-in can carry a change.
+	role := roleUser
+	if allowed {
+		role = roleAdmin
+	}
+	resp := map[string]any{"canMutate": allowed, "user": username, "role": role}
 	// A cluster-admin whose sign-in cannot carry a change (an old session,
 	// or one about to expire) sees why before trying, as every change would
 	// be refused with the same reason.
@@ -327,12 +334,10 @@ var HandleUserPermissions = withAuth(func(c *cluster.Client, w http.ResponseWrit
 	writeJSON(w, resp, "user-permissions")
 })
 
-// adminReadMessage explains a 403 from withAdminRead.
-const adminReadMessage = "Only cluster-admins can read this through the updater."
-
 // withAdminRead gates a read that returns a credential: only a user who
 // passes the mutation gate (cluster-admin, see mutationRequirement) gets an
-// answer. Such a user can read every Secret in the cluster with their own
+// answer (403 admin_only otherwise; its routes are admin-only in
+// getRouteTiers too, so Register checks first). Such a user can read every Secret in the cluster with their own
 // token, so the ServiceAccount reveals nothing they could not read
 // themselves. Unlike withMutationAuth it takes no lock and starts no
 // operation: nothing changes. The client also carries the user's own client
@@ -349,7 +354,7 @@ func withAdminRead(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Req
 			return
 		}
 		if !allowed {
-			writeError(w, adminReadMessage, http.StatusForbidden, "forbidden")
+			writeError(w, adminOnlyMessage, http.StatusForbidden, adminOnlyCode)
 			return
 		}
 		if userToken != "" {

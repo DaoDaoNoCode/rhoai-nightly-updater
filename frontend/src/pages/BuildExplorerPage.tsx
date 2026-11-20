@@ -48,6 +48,8 @@ import { BuildContents } from "../components/BuildContents";
 import { BuildCompare, type BuildSide } from "../components/BuildCompare";
 import { classifySearch, imageDigest, installedBuild, shortBuildRef, type InstalledBuild, type SearchQuery } from "../components/buildDiff";
 import { useClusterStatus } from "../state/AppState";
+import { useRole } from "../state/Permissions";
+import { nightlyProblemText, summaryNightly, useSummary, type UserNightly } from "../hooks/useSummary";
 import { useCommitSearch, type SearchBuild } from "../hooks/useCommitSearch";
 import { useContainsSearch } from "../hooks/useContainsSearch";
 import { ContainsSearchResults, DEFAULT_REPO } from "../components/ContainsSearchResults";
@@ -94,8 +96,37 @@ const InstalledBuildDetails: React.FC<{
   statusLoaded: boolean;
   latest?: { image: string; buildDate?: string };
   updateAvailable?: boolean;
-}> = ({ installed, statusLoaded, latest, updateAvailable }) => {
+  /** A user's view: the summary's nightly part (tag and build date only). */
+  userNightly?: UserNightly | null;
+}> = ({ installed, statusLoaded, latest, updateAvailable, userNightly }) => {
   if (!statusLoaded) return <Skeleton width="24rem" screenreaderText="Loading the installed build" />;
+  if (!installed && userNightly?.installed) {
+    const u = userNightly;
+    const tag = u.installed!.tag;
+    const problem = nightlyProblemText(u.problem);
+    return (
+      <DescriptionList isCompact isHorizontal horizontalTermWidthModifier={{ default: "14ch" }} aria-label="Installed build">
+        <DescriptionListGroup>
+          <DescriptionListTerm>Installed build</DescriptionListTerm>
+          <DescriptionListDescription>
+            <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "wrap" }}>
+              <FlexItem><strong>{tag}</strong></FlexItem>
+              {u.installed!.buildDate && <FlexItem><RelativeTime date={u.installed!.buildDate} prefix="built " size="inherit" /></FlexItem>}
+              <FlexItem className="pf-v6-u-text-color-subtle">
+                {problem
+                  ?? (u.newer
+                    ? <>A newer {tag} build exists{u.latest?.buildDate ? <> (built <RelativeTime date={u.latest.buildDate} size="inherit" />)</> : null}.</>
+                    : <>This is the newest {tag} build.</>)}
+              </FlexItem>
+            </Flex>
+          </DescriptionListDescription>
+        </DescriptionListGroup>
+      </DescriptionList>
+    );
+  }
+  if (!installed && userNightly && nightlyProblemText(userNightly.problem)) {
+    return <Content component="p" className="pf-v6-u-text-color-subtle">{nightlyProblemText(userNightly.problem)}</Content>;
+  }
   if (!installed) {
     return (
       <Content component="p" className="pf-v6-u-text-color-subtle">
@@ -155,7 +186,16 @@ interface SubmittedSearch {
 
 export const BuildExplorerPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { status, loading: statusLoading } = useClusterStatus();
+  const { status: clusterStatus, loading: clusterStatusLoading } = useClusterStatus();
+  // A user who is not a cluster-admin has no status: the installed build comes from the summary.
+  const role = useRole();
+  const userView = role !== "admin";
+  const summaryRead = useSummary(role === "user");
+  // The summary names the installed build by tag and build date only (no
+  // image reference): a user sees it, but nothing is compared with it.
+  const userNightly = useMemo(() => (userView ? summaryNightly(summaryRead.summary) : null), [userView, summaryRead.summary]);
+  const status = userView ? null : clusterStatus;
+  const statusLoading = userView ? role === "checking" || summaryRead.loading : clusterStatusLoading;
   const [tags, setTags] = useState<NightlyTag[]>([]);
   const [loading, setLoading] = useState(true);
   const [datesLoading, setDatesLoading] = useState(false);
@@ -331,6 +371,7 @@ export const BuildExplorerPage: React.FC = () => {
             statusLoaded={statusLoaded}
             latest={latest}
             updateAvailable={updateAvailable}
+            userNightly={userNightly}
           />
         }
       />
@@ -452,7 +493,9 @@ export const BuildExplorerPage: React.FC = () => {
                     const parsed = parseTagVersion(tag.tag);
                     const isEA = !!parsed && parsed.ea >= 0;
                     const isInstalled = isInstalledImage(tag.image);
-                    const isNewerThanInstalled = !!installed && !isInstalled && updateAvailable === true && installed.tag === tag.tag;
+                    const isNewerThanInstalled = installed
+                      ? !isInstalled && updateAvailable === true && installed.tag === tag.tag
+                      : userNightly?.newer === true && userNightly.installed?.tag === tag.tag;
                     const toggle = () => setExpandedRows((prev) => ({ ...prev, [key]: !prev[key] }));
                     const actions: IAction[] = [
                       ...(installedSide && !isInstalled

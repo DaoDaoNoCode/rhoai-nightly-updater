@@ -474,6 +474,12 @@ func (c *Client) GetVersion() (string, error) {
 	return info.GitVersion, nil
 }
 
+// ErrorCodeForbiddenForUser is the errorCode of a read the signed-in
+// user's own token was refused (pkg/api withUserRead): the user may not
+// see this. The UI shows "not yours to see", not the ServiceAccount's
+// "template out of date" hint (templateHint).
+const ErrorCodeForbiddenForUser = "forbidden_for_user"
+
 // HTTPStatusForError maps a cluster read error to the HTTP status and
 // errorCode a handler returns, so the UI can tell missing permissions,
 // throttling and outages apart instead of seeing a generic 500.
@@ -498,6 +504,10 @@ func HTTPStatusForError(err error) (int, string) {
 			return http.StatusUnauthorized, "session_expired"
 		case k8sErr.Status == http.StatusUnauthorized:
 			return http.StatusUnauthorized, "unauthorized"
+		case k8sErr.Status == http.StatusForbidden && k8sErr.User:
+			// The user's own RBAC: they may not see this. Not the app's
+			// RBAC ("forbidden"), which an admin fixes with make upgrade.
+			return http.StatusForbidden, ErrorCodeForbiddenForUser
 		case k8sErr.Status == http.StatusForbidden:
 			return http.StatusForbidden, "forbidden"
 		case k8sErr.Status == http.StatusNotFound:

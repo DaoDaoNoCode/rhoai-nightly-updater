@@ -14,7 +14,8 @@ export interface ApiStub {
 /**
  * Stub global fetch with handlers keyed by "METHOD /path" (query ignored) or
  * "/path" (any method). Unknown requests fail the test loudly with a 599.
- * `/api/user/permissions` defaults to canMutate:true, `/api/pageview` to 204.
+ * `/api/user/permissions` defaults to a cluster-admin (canMutate:true,
+ * role admin), `/api/pageview` to 204.
  */
 export function stubApi(handlers: Record<string, Handler | unknown>): ApiStub {
   const calls: string[] = [];
@@ -31,7 +32,7 @@ export function stubApi(handlers: Record<string, Handler | unknown>): ApiStub {
     }
     const handler = handlers[`${method} ${path}`] ?? handlers[path];
     if (handler === undefined) {
-      if (path === "/api/user/permissions") return jsonResponse({ canMutate: true, user: "tester" });
+      if (path === "/api/user/permissions") return jsonResponse({ canMutate: true, user: "tester", role: "admin" });
       if (path === "/api/pageview") return new Response(null, { status: 204 });
       return jsonResponse({ error: `unexpected request ${method} ${url}`, errorCode: "test_unexpected" }, 599);
     }

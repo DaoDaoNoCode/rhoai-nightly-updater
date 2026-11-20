@@ -2,14 +2,20 @@ import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
-import type { FBCContentResponse, RelatedImage, StatusResponse } from "../types";
+import type { ClusterSummary, FBCContentResponse, RelatedImage, StatusResponse } from "../types";
+import { contract } from "../test/contract";
 import { stubApi, jsonResponse, type Handler } from "../test/apiStub";
 import { deferred } from "../test/utils";
 
 const statusRef: { current: Partial<StatusResponse> | null } = { current: null };
 vi.mock("../state/AppState", () => ({
   useClusterStatus: () => ({ status: statusRef.current, loading: false, error: null, lastRefreshed: null, refresh: async () => {} }),
+  useOperation: () => ({ server: { loaded: true, inProgress: false, operation: null, interrupted: null } }),
 }));
+// A cluster-admin unless a test says otherwise (per-user views).
+const roleRef: { current: "admin" | "user" | "checking" } = { current: "admin" };
+vi.mock("../state/Permissions", () => ({ useRole: () => roleRef.current }));
+beforeEach(() => { roleRef.current = "admin"; });
 
 // The app-wide notices need the AppInfo provider; they are tested on their own.
 vi.mock("../components/GlobalBanners", () => ({ GlobalBanners: () => null }));
@@ -124,6 +130,48 @@ describe("Build Explorer installed build and compare", () => {
     expect(await screen.findByText(/was not installed from a nightly build/)).toBeInTheDocument();
     await screen.findByRole("grid", { name: "Nightly builds" });
     expect(screen.queryByRole("button", { name: /Compare .* with the installed build/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("Build Explorer for a user who is not a cluster-admin", () => {
+  // The summary as the backend sends it (pkg/types SummaryNightly, from the
+  // generated contract fixture): builds by tag and build date, no image.
+  const summary = (nightly: Partial<ClusterSummary["nightly"]> = {}): ClusterSummary => {
+    const s = contract.summary();
+    return { ...s, nightly: { ...s.nightly, ...nightly } };
+  };
+
+  it("shows the installed build from the summary, never the status, and compares nothing with it", async () => {
+    roleRef.current = "user";
+    statusRef.current = null;
+    const api = setup({ "/api/summary": summary() });
+    renderPage();
+    const installedBuild = (await screen.findByText("Installed build")).closest(".pf-v6-c-description-list__group") as HTMLElement;
+    expect(within(installedBuild).getByText("rhoai-3.6")).toBeInTheDocument();
+    expect(within(installedBuild).getByText(/A newer rhoai-3.6 build exists/)).toBeInTheDocument();
+    await screen.findByRole("grid", { name: "Nightly builds" });
+    expect(within(tagRow("rhoai-3.6")).getByText("Newer than installed")).toBeInTheDocument();
+    // The summary has no image reference: there is nothing to compare by digest.
+    expect(screen.queryByRole("button", { name: /Compare with the latest/ })).not.toBeInTheDocument();
+    expect(api.calls.some((c) => c.includes("/api/status"))).toBe(false);
+  });
+
+  it("says when it could not check for a newer build", async () => {
+    roleRef.current = "user";
+    statusRef.current = null;
+    setup({ "/api/summary": summary({ latestBuild: null, newerAvailable: false, problem: "lookup_failed" }) });
+    renderPage();
+    const installedBuild = (await screen.findByText("Installed build")).closest(".pf-v6-c-description-list__group") as HTMLElement;
+    expect(within(installedBuild).getByText("Could not check for a newer build.")).toBeInTheDocument();
+    expect(screen.queryByText(/This is the newest/)).not.toBeInTheDocument();
+  });
+
+  it("says there is no installed nightly build when the summary names none", async () => {
+    roleRef.current = "user";
+    statusRef.current = null;
+    setup({ "/api/summary": summary({ installedBuild: null, latestBuild: null, newerAvailable: false, problem: "" }) });
+    renderPage();
+    expect(await screen.findByText(/was not installed from a nightly build/)).toBeInTheDocument();
   });
 });
 

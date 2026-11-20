@@ -56,6 +56,13 @@ export function formatElapsed(startMs: number, now = Date.now()): string {
   return `${min}m ${sec}s`;
 }
 
+/** The local time of day of a timestamp as "HH:MM" (24-hour), or "" when it cannot be read. */
+export function formatClockTime(dateStr: string | undefined): string {
+  const date = dateStr ? new Date(dateStr) : null;
+  if (!date || Number.isNaN(date.getTime())) return "";
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 export function formatRelativeTime(dateStr: string): string {
   try {
     const date = new Date(dateStr);

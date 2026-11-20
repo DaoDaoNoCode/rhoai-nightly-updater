@@ -83,6 +83,10 @@ export function describeLoadError(e: unknown, genericTitle: string): LoadErrorDe
   switch (err.errorCode) {
     case "forbidden":
       return { title: "Access denied", body: `${err.message} Ask a cluster admin for read access.`, variant: "danger" };
+    case "forbidden_for_user":
+    case "admin_only":
+      // Not a failure: the user's own view does not include it (errors.ts says what).
+      break;
     case "unauthorized":
       // A 401 is the user's own session; a 502 means the cluster rejected the updater's credentials.
       if (err.status !== 401) {

@@ -60,9 +60,14 @@ var apiVersionsCache = newLRU[string, []string](64)
 // servedVersions reads the API discovery document of group (readable by
 // every authenticated user through system:discovery) and returns its
 // served versions, the preferred one first and the others newest first.
+//
+// The cache holds only what the ServiceAccount's client read: a client of
+// the signed-in user's token (a change's, or a user's read) reads
+// discovery afresh and caches nothing, so a per-cluster cache is never
+// fed by a user's token.
 func servedVersions(c *Client, group string, fallback []string) apiVersions {
 	key := c.baseURL + "|" + group
-	if v, ok := apiVersionsCache.Get(key); ok {
+	if v, ok := apiVersionsCache.Get(key); ok && !c.asUser {
 		return apiVersions{Versions: v, Discovered: true}
 	}
 	body, _, err := c.get("/apis/" + group)
@@ -73,7 +78,9 @@ func servedVersions(c *Client, group string, fallback []string) apiVersions {
 	if len(versions) == 0 {
 		return apiVersions{Versions: fallback}
 	}
-	apiVersionsCache.Add(key, versions, apiVersionsCacheTTL)
+	if !c.asUser {
+		apiVersionsCache.Add(key, versions, apiVersionsCacheTTL)
+	}
 	return apiVersions{Versions: versions, Discovered: true}
 }
 

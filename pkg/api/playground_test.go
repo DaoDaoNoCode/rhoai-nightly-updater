@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,7 +13,7 @@ import (
 
 // The playground's gen-ai calls carry the token of the client the handler
 // gets (pkg/cluster playgroundAPI): the user's own for Set up and delete,
-// the ServiceAccount's for the status.
+// the user's own too for the status (tier user-token).
 func TestPlaygroundStream(t *testing.T) {
 	setupDevMode(t)
 	allowMutations(t)
@@ -63,9 +64,9 @@ func TestPlaygroundStatusHandler(t *testing.T) {
 	orig := getPlaygroundStatus
 	t.Cleanup(func() { getPlaygroundStatus = orig })
 	var gotProject string
-	asUser := true
-	getPlaygroundStatus = func(c *cluster.Client, project string) (*types.PlaygroundStatus, error) {
-		gotProject, asUser = project, c.ActsAsUser()
+	var saUser, uUser bool
+	getPlaygroundStatus = func(sa, u *cluster.Client, project string) (*types.PlaygroundStatus, error) {
+		gotProject, saUser, uUser = project, sa.ActsAsUser(), u.ActsAsUser()
 		return &types.PlaygroundStatus{Project: project}, nil
 	}
 	w := httptest.NewRecorder()
@@ -75,9 +76,18 @@ func TestPlaygroundStatusHandler(t *testing.T) {
 	}
 	w = httptest.NewRecorder()
 	HandlePlaygroundStatus(w, postJSONMethod(http.MethodGet, "/api/resources/playground?project=proj", "tok", ""))
-	// The status reads with the ServiceAccount's client (so with its
-	// token, the gen-ai calls too), never the user's.
-	if w.Code != http.StatusOK || gotProject != "proj" || asUser || strings.Contains(w.Body.String(), "test-cluster-token") {
-		t.Errorf("%d %s (project %q, client acts as the user: %v)", w.Code, w.Body.String(), gotProject, asUser)
+	// The status reads the projects and calls the gen-ai API with the
+	// user's own client; the ServiceAccount's only finds the dashboard.
+	if w.Code != http.StatusOK || gotProject != "proj" || saUser || !uUser || strings.Contains(w.Body.String(), "test-cluster-token") {
+		t.Errorf("%d %s (project %q, sa as user %v, u as user %v)", w.Code, w.Body.String(), gotProject, saUser, uUser)
+	}
+	// A project that is not the user's: 403 forbidden_for_user.
+	getPlaygroundStatus = func(_, _ *cluster.Client, project string) (*types.PlaygroundStatus, error) {
+		return nil, fmt.Errorf("%w: '%s' is not one of your data science projects", cluster.ErrNotDSProject, project)
+	}
+	w = httptest.NewRecorder()
+	HandlePlaygroundStatus(w, postJSONMethod(http.MethodGet, "/api/resources/playground?project=other", "tok", ""))
+	if w.Code != http.StatusForbidden || decodeError(t, w)["errorCode"] != cluster.ErrorCodeForbiddenForUser {
+		t.Errorf("not the user's project: %d %s", w.Code, w.Body.String())
 	}
 }
