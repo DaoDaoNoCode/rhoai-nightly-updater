@@ -749,7 +749,18 @@ objects:
                 # a query parameter, which the API server ignores, so it
                 # signs users out (and can log the token on a network error).
                 - --cookie-expire=23h
-                - --cookie-samesite=strict
+                # Lax, as RHOAI's own gateway proxy (opendatahub-operator
+                # kube-auth-proxy-oauth-deployment.tmpl.yaml). The callback
+                # needs the CSRF cookie oauth-proxy set at the start, and it
+                # gets SameSite from this flag too (oauthproxy.go makeCookie).
+                # With Strict, a sign-in through an identity provider on
+                # another site (Red Hat SSO, OIDC) ended in "403 named cookie
+                # not present": the browser withheld the cookie on the
+                # redirect chain from that site. Cross-site requests still
+                # cannot change anything: changes need a JSON POST, which a
+                # browser sends cross-site only after a CORS preflight the
+                # app never grants, and no GET changes state.
+                - --cookie-samesite=lax
                 # The app trusts only the token of this proxy's own OAuth
                 # session (X-Forwarded-Access-Token) and refuses bearer
                 # tokens. Do not add --openshift-delegate-urls or

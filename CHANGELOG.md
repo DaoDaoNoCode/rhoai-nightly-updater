@@ -334,6 +334,15 @@ only accepts a tag whose version is the top dated section. See
 
 ### Fixed
 
+- **The first sign-in no longer ends in "403 Permission Denied: http: named
+  cookie not present".** It happened on every first sign-in through an
+  identity provider on another site (Red Hat SSO on ROSA, OIDC, GitHub), in
+  every release since 1.0; **Log In** then worked. oauth-proxy's CSRF cookie
+  had `SameSite=Strict`, which the browser withholds on the redirect chain
+  from that site, and the callback refuses without it (openshift/oauth-proxy
+  `oauthproxy.go`). The cookies are now `SameSite=Lax`, as RHOAI's own
+  gateway proxy sets them; changes still need a JSON POST, which no other
+  site can send (SECURITY.md, "Sessions and CSRF").
 - **Argo CD: a left-over tracking annotation no longer switches features
   off.** The tool trusted `argocd.argoproj.io/tracking-id` on the catalog,
   the Subscription and the DataScienceCluster alone, so after the

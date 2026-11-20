@@ -67,7 +67,7 @@ func TestTemplateOAuthProxySignsInThroughTheOAuthClient(t *testing.T) {
 		`--scope=user:full`,
 		`--pass-access-token=true`,
 		`--cookie-secret-file=/etc/proxy/secrets/session_secret`,
-		`--cookie-samesite=strict`,
+		`--cookie-samesite=lax`,
 	} {
 		if !regexp.MustCompile(`(?m)^\s*-\s*` + regexp.QuoteMeta(want) + `$`).Match(data) {
 			t.Errorf("deploy/template.yaml: oauth-proxy does not set %s", want)

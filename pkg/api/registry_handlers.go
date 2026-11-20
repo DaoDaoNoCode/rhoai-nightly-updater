@@ -12,7 +12,7 @@ import (
 
 // HandleTestPullSecret tests whether the pull secret is valid.
 var HandleTestPullSecret = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	slog.Info("mutation", "op", "test-pull-secret")
+	slog.Info("read check", "op", "test-pull-secret")
 
 	result, err := cluster.TestPullSecret(c)
 	if err != nil {
@@ -142,7 +142,7 @@ var HandleNodeSetupStream = withMutationAuth(func(c *cluster.Client, w http.Resp
 
 // HandleVerifyNodes verifies cluster node readiness and registry access.
 var HandleVerifyNodes = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	slog.Info("mutation", "op", "verify-nodes")
+	slog.Info("read check", "op", "verify-nodes")
 
 	result, err := cluster.VerifyNodeReadiness(c)
 	if err != nil {
