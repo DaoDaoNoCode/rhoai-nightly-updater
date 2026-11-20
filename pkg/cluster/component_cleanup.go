@@ -5,15 +5,50 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 )
 
-const componentAPIGroup = "components.platform.opendatahub.io"
+// The module CRs are in two API groups. RHOAI 3.6 serves most modules (and
+// Kueue, which the RHOAI operator still reconciles in-tree) in
+// components.platform.opendatahub.io, but the databaseservice module's CR in
+// services.platform.opendatahub.io: rhods-operator rhoai-3.6
+// pkg/cluster/gvk/gvk.go gives DatabaseService (and Monitoring) the group of
+// api/services/v1alpha1/groupversion_info.go, and
+// prefetched-charts/databaseservice/templates/rbac.authorization.k8s.io_v1_clusterrole.yaml
+// grants its operator databaseservices and databaseservices/finalizers in
+// that group. The Platform's module list (config.opendatahub.io Platform
+// spec.modules, api/config/v1alpha1/platform_types.go) has one field per
+// module whatever group its CR is in, so the kinds are discovered in both
+// groups and no caller assumes one. The services group also serves kinds
+// that are not modules (Auth, GatewayConfig), which the RHOAI operator
+// reconciles itself; callers treat them like any kind whose operator they
+// cannot identify (no ServiceAccount of the applications namespace may
+// update them), which refuses (fail closed).
+const (
+	componentAPIGroup = "components.platform.opendatahub.io"
+	servicesAPIGroup  = "services.platform.opendatahub.io"
+)
 
-// componentKind is one kind served by components.platform.opendatahub.io.
+// moduleAPIGroups are the groups whose kinds are module CRs (above).
+var moduleAPIGroups = []string{componentAPIGroup, servicesAPIGroup}
+
+// isModuleAPIGroup reports whether group is one of moduleAPIGroups.
+func isModuleAPIGroup(group string) bool { return slices.Contains(moduleAPIGroups, group) }
+
+// isModuleAPIVersion reports whether an apiVersion ("<group>/<version>") is
+// in a module API group.
+func isModuleAPIVersion(apiVersion string) bool {
+	group, _, _ := strings.Cut(apiVersion, "/")
+	return isModuleAPIGroup(group)
+}
+
+// componentKind is one kind served by a module API group.
 type componentKind struct {
+	Group    string // e.g. "components.platform.opendatahub.io"
+	Version  string // the group's preferred version
 	Resource string // plural, e.g. "kserves"
 	Kind     string // e.g. "Kserve"
 	Verbs    []string
@@ -21,20 +56,32 @@ type componentKind struct {
 	Namespaced bool
 }
 
-// componentAPI is the served version of components.platform.opendatahub.io
-// and its kinds, discovered so the list follows whatever operator version
-// installed the CRDs (3.6 added aihubs, aipipelines and
-// mcplifecycleoperators). Version is "" when the group is not served
-// (fresh cluster, or RHOAI 2.x).
+// listPath is the cluster-wide collection of the kind.
+func (k componentKind) listPath() string { return componentListPath(k.Group, k.Version, k.Resource) }
+
+// crd is the name of the kind's CustomResourceDefinition.
+func (k componentKind) crd() string { return k.Resource + "." + k.Group }
+
+// module is the module name of the kind: its lower-case kind, as used by
+// platform.opendatahub.io/part-of and by the tool's module names.
+func (k componentKind) module() string { return strings.ToLower(k.Kind) }
+
+// componentAPI is the served module API groups and their kinds, discovered
+// so the list follows whatever operator version installed the CRDs (3.6
+// added aihubs, aipipelines and mcplifecycleoperators, and databaseservices
+// in the services group). Groups maps each served group to its preferred
+// version; a group that is not served (fresh cluster, RHOAI 2.x) is absent.
 type componentAPI struct {
-	Version string
-	Kinds   []componentKind
+	Groups map[string]string
+	Kinds  []componentKind
 }
 
-// componentListPath is the cluster-wide collection of one component
-// resource at the discovered version.
-func componentListPath(version, resource string) string {
-	return "/apis/" + componentAPIGroup + "/" + version + "/" + resource
+// served reports whether any module API group is served.
+func (a componentAPI) served() bool { return len(a.Groups) > 0 }
+
+// componentListPath is the cluster-wide collection of one module resource.
+func componentListPath(group, version, resource string) string {
+	return "/apis/" + group + "/" + version + "/" + resource
 }
 
 // cachedComponentAPI returns a function that discovers the component API on
@@ -49,10 +96,10 @@ func cachedComponentAPI(c *Client) func() (componentAPI, error) {
 	}
 }
 
-// errModuleKindUnknown: no served components.platform.opendatahub.io kind
-// matches the module name (an unmapped part-of value, or the component API
-// is not served at all, e.g. while its CRDs are reinstalled).
-var errModuleKindUnknown = errors.New("no served " + componentAPIGroup + " kind matches it")
+// errModuleKindUnknown: no served module kind matches the module name (an
+// unmapped part-of value, or the module API is not served at all, e.g. while
+// its CRDs are reinstalled).
+var errModuleKindUnknown = errors.New("no served " + strings.Join(moduleAPIGroups, " or ") + " kind matches it")
 
 // moduleCRPresent reports whether any CR of the module (lower-case kind)
 // exists. A module whose kind is not served returns errModuleKindUnknown:
@@ -63,7 +110,7 @@ func moduleCRPresent(c *Client, discover func() (componentAPI, error), module st
 	if err != nil {
 		return false, err
 	}
-	if _, ok := api.resourceForModule(module); !ok {
+	if _, ok := api.kindForModule(module); !ok {
 		return false, fmt.Errorf("module %q: %w", module, errModuleKindUnknown)
 	}
 	items, err := listModuleCRs(c, discover, module)
@@ -73,9 +120,11 @@ func moduleCRPresent(c *Client, discover func() (componentAPI, error), module st
 // moduleCRItem is the metadata of a module CR.
 type moduleCRItem struct {
 	Metadata struct {
-		Name              string   `json:"name"`
-		Finalizers        []string `json:"finalizers"`
-		DeletionTimestamp string   `json:"deletionTimestamp"`
+		Name              string     `json:"name"`
+		UID               string     `json:"uid"`
+		Finalizers        []string   `json:"finalizers"`
+		DeletionTimestamp string     `json:"deletionTimestamp"`
+		OwnerReferences   []ownerRef `json:"ownerReferences"`
 	} `json:"metadata"`
 }
 
@@ -90,82 +139,107 @@ func listModuleCRs(c *Client, discover func() (componentAPI, error), module stri
 
 // listModuleCRsIn is listModuleCRs with the API already discovered.
 func listModuleCRsIn(c *Client, api componentAPI, module string) ([]moduleCRItem, error) {
-	resource, ok := api.resourceForModule(module)
+	k, ok := api.kindForModule(module)
 	if !ok {
 		return nil, nil
 	}
-	body, _, err := c.get(componentListPath(api.Version, resource))
+	return listKindCRs(c, k)
+}
+
+// listKindCRs lists the CRs of one module kind.
+func listKindCRs(c *Client, k componentKind) ([]moduleCRItem, error) {
+	body, _, err := c.get(k.listPath())
 	if err != nil {
-		return nil, fmt.Errorf("list %s: %w", resource, err)
+		return nil, fmt.Errorf("list %s: %w", k.crd(), err)
 	}
 	var list struct {
 		Items []moduleCRItem `json:"items"`
 	}
 	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", resource, err)
+		return nil, fmt.Errorf("parse %s: %w", k.crd(), err)
 	}
 	return list.Items, nil
 }
 
-// resourceForModule maps a module name (the lower-case kind, e.g. kserve,
-// aihub, ogx, as used by platform.opendatahub.io/part-of) to its resource.
-func (a componentAPI) resourceForModule(module string) (string, bool) {
+// kindForModule maps a module name (the lower-case kind, e.g. kserve, aihub,
+// databaseservice, as used by platform.opendatahub.io/part-of) to its kind.
+// A name that matches a kind in both groups is ambiguous and matches none:
+// callers then refuse as for an unknown kind.
+func (a componentAPI) kindForModule(module string) (componentKind, bool) {
+	var found []componentKind
 	for _, k := range a.Kinds {
-		if strings.ToLower(k.Kind) == module {
-			return k.Resource, true
+		if k.Kind != "" && k.module() == module {
+			found = append(found, k)
 		}
 	}
-	return "", false
+	if len(found) != 1 {
+		return componentKind{}, false
+	}
+	return found[0], true
 }
 
-// discoverComponentAPI reads the API discovery documents of the component
-// group (readable by every authenticated user through system:discovery). A
-// group that is not served yields an empty componentAPI and no error.
-func discoverComponentAPI(c *Client) (componentAPI, error) {
-	body, _, err := c.get("/apis/" + componentAPIGroup)
-	if IsK8sError(err, 404) {
-		return componentAPI{}, nil
-	}
-	if err != nil {
-		return componentAPI{}, fmt.Errorf("discover %s: %w", componentAPIGroup, err)
-	}
-	var group struct {
-		PreferredVersion struct {
-			GroupVersion string `json:"groupVersion"`
-			Version      string `json:"version"`
-		} `json:"preferredVersion"`
-	}
-	if err := json.Unmarshal(body, &group); err != nil {
-		return componentAPI{}, fmt.Errorf("parse %s discovery: %w", componentAPIGroup, err)
-	}
-	version := group.PreferredVersion.Version
-	if version == "" {
-		_, version, _ = strings.Cut(group.PreferredVersion.GroupVersion, "/")
-	}
-	if version == "" {
-		return componentAPI{}, fmt.Errorf("%s discovery lists no preferred version", componentAPIGroup)
-	}
-	body, _, err = c.get("/apis/" + componentAPIGroup + "/" + version)
-	if err != nil {
-		return componentAPI{}, fmt.Errorf("discover %s/%s resources: %w", componentAPIGroup, version, err)
-	}
-	var list struct {
-		Resources []struct {
-			Name       string   `json:"name"`
-			Kind       string   `json:"kind"`
-			Verbs      []string `json:"verbs"`
-			Namespaced bool     `json:"namespaced"`
-		} `json:"resources"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return componentAPI{}, fmt.Errorf("parse %s/%s resources: %w", componentAPIGroup, version, err)
-	}
-	api := componentAPI{Version: version}
-	for _, r := range list.Resources {
-		if strings.Contains(r.Name, "/") {
-			continue // subresource such as kserves/status
+// kindOf returns the served kind named kind in group.
+func (a componentAPI) kindOf(group, kind string) (componentKind, bool) {
+	for _, k := range a.Kinds {
+		if k.Group == group && k.Kind == kind {
+			return k, true
 		}
-		api.Kinds = append(api.Kinds, componentKind{Resource: r.Name, Kind: r.Kind, Verbs: r.Verbs, Namespaced: r.Namespaced})
+	}
+	return componentKind{}, false
+}
+
+// discoverComponentAPI reads the API discovery documents of the module
+// groups (readable by every authenticated user through system:discovery). A
+// group that is not served is left out, with no error; any other read error
+// is returned.
+func discoverComponentAPI(c *Client) (componentAPI, error) {
+	api := componentAPI{Groups: map[string]string{}}
+	for _, group := range moduleAPIGroups {
+		body, _, err := c.get("/apis/" + group)
+		if IsK8sError(err, 404) {
+			continue
+		}
+		if err != nil {
+			return componentAPI{}, fmt.Errorf("discover %s: %w", group, err)
+		}
+		var doc struct {
+			PreferredVersion struct {
+				GroupVersion string `json:"groupVersion"`
+				Version      string `json:"version"`
+			} `json:"preferredVersion"`
+		}
+		if err := json.Unmarshal(body, &doc); err != nil {
+			return componentAPI{}, fmt.Errorf("parse %s discovery: %w", group, err)
+		}
+		version := doc.PreferredVersion.Version
+		if version == "" {
+			_, version, _ = strings.Cut(doc.PreferredVersion.GroupVersion, "/")
+		}
+		if version == "" {
+			return componentAPI{}, fmt.Errorf("%s discovery lists no preferred version", group)
+		}
+		body, _, err = c.get("/apis/" + group + "/" + version)
+		if err != nil {
+			return componentAPI{}, fmt.Errorf("discover %s/%s resources: %w", group, version, err)
+		}
+		var list struct {
+			Resources []struct {
+				Name       string   `json:"name"`
+				Kind       string   `json:"kind"`
+				Verbs      []string `json:"verbs"`
+				Namespaced bool     `json:"namespaced"`
+			} `json:"resources"`
+		}
+		if err := json.Unmarshal(body, &list); err != nil {
+			return componentAPI{}, fmt.Errorf("parse %s/%s resources: %w", group, version, err)
+		}
+		api.Groups[group] = version
+		for _, r := range list.Resources {
+			if strings.Contains(r.Name, "/") {
+				continue // subresource such as kserves/status
+			}
+			api.Kinds = append(api.Kinds, componentKind{Group: group, Version: version, Resource: r.Name, Kind: r.Kind, Verbs: r.Verbs, Namespaced: r.Namespaced})
+		}
 	}
 	return api, nil
 }
@@ -174,15 +248,21 @@ func discoverComponentAPI(c *Client) (componentAPI, error) {
 // before its finalizers may be removed.
 var StuckComponentCRAge = 10 * time.Minute
 
-// cleanupStuckComponentCRs removes the finalizers of a component CR only when
-// nothing else can: the CR has been deleting for StuckComponentCRAge and the
-// module operator that owns its finalizer is gone (finalizerOwner: its
-// ServiceAccount is known from RBAC and no Deployment runs as it; module
-// operators are owned by the Platform, not by the CSV, so they keep running
-// while rhods-operator is reinstalled). Stripping a finalizer whose operator
-// still exists would skip that operator's cleanup and orphan its operands,
-// so every other case (an unknown operator, a read error) is left alone and
-// logged. This is the documented pattern for unblocking a stuck deletion:
+// cleanupStuckComponentCRs removes the finalizers of a module CR (in either
+// module API group) only when nothing else can: the CR has been deleting for
+// StuckComponentCRAge and the module operator that owns its finalizer is
+// gone (finalizerOwner: its ServiceAccount is known from RBAC, and no
+// Deployment and no running Pod runs as it; module operators are owned by
+// the Platform, not by the CSV, so they keep running while rhods-operator is
+// reinstalled). Stripping a finalizer whose operator still exists would skip
+// that operator's cleanup and orphan its operands, so every other case (an
+// unknown operator, a read error) is left alone and logged. Even with the
+// operator gone, the finalizer stood for cleanup that only its operator
+// does: what the CR owns is garbage-collected once it is gone, but anything
+// that operator would have removed that the CR does not own (objects in
+// other namespaces, cluster-scoped objects without an owner reference to
+// the CR) stays behind. This is the documented pattern for unblocking a
+// stuck deletion:
 // https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/
 // It returns the number of CRs unblocked and the problems or skips to log.
 func cleanupStuckComponentCRs(c *Client) (int, []string) {
@@ -198,8 +278,8 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 		if !strings.Contains(verbs, "list,") || !strings.Contains(verbs, "patch,") {
 			continue
 		}
-		resource := kind.Resource
-		listPath := componentListPath(api.Version, resource)
+		resource := kind.crd()
+		listPath := kind.listPath()
 		body, _, err := c.get(listPath)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("list %s: %v", resource, err))
@@ -231,7 +311,7 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 				warnings = append(warnings, fmt.Sprintf("%s is being deleted; its finalizers were left for its operator", id))
 				continue
 			}
-			owner, err := operators.finalizerOwner(strings.ToLower(kind.Kind), m.Name)
+			owner, err := operators.finalizerOwner(kind.module(), m.Name)
 			switch {
 			case err != nil:
 				warnings = append(warnings, fmt.Sprintf("cannot identify the operator that owns the finalizers of %s: %v; left untouched", id, err))
@@ -240,7 +320,7 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 				warnings = append(warnings, fmt.Sprintf("%s has been deleting since %s, but the operator that owns its finalizers %v is unknown (%s); left untouched", id, *m.DeletionTimestamp, m.Finalizers, owner.Unknown))
 				continue
 			case !owner.gone():
-				warnings = append(warnings, fmt.Sprintf("%s has been deleting since %s, but its operator %s still exists and will finish the deletion; left untouched", id, *m.DeletionTimestamp, strings.Join(owner.Deployments, ", ")))
+				warnings = append(warnings, fmt.Sprintf("%s has been deleting since %s, but its operator %s still exists and will finish the deletion; left untouched", id, *m.DeletionTimestamp, owner.stillThere()))
 				continue
 			}
 			if m.UID == "" || m.ResourceVersion == "" {
@@ -265,7 +345,7 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 				}
 				continue
 			}
-			slog.Info("removed stuck finalizer from component CR whose operator is gone",
+			slog.Info("removed stuck finalizer from module CR whose operator is gone",
 				"resource", resource, "name", m.Name, "finalizers", m.Finalizers,
 				"operatorServiceAccounts", owner.ServiceAccounts, "namespace", owner.Namespace, "grant", owner.Grant)
 			unstuck++

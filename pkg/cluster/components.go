@@ -503,8 +503,10 @@ func matchPodsToDeployments(c *Client, pods []types.PodInfo, namespace string, d
 	}
 }
 
-// ownerRef is the part of metadata.ownerReferences pod matching reads.
+// ownerRef is the part of metadata.ownerReferences pod matching (and the
+// hard reset's owner checks) read.
 type ownerRef struct {
+	APIVersion string `json:"apiVersion"`
 	Kind       string `json:"kind"`
 	Name       string `json:"name"`
 	UID        string `json:"uid"`

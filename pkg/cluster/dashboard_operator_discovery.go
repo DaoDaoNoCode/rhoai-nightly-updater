@@ -70,8 +70,8 @@ func discoverDashboardTarget(c *Client) (dashboardTarget, error) {
 		return dashboardTarget{}, &dashboardOperatorError{err: err}
 	}
 	legacy := ""
-	switch _, served := api.resourceForModule("dashboard"); {
-	case api.Version == "":
+	switch _, served := api.kindOf(componentAPIGroup, "Dashboard"); {
+	case api.Groups[componentAPIGroup] == "":
 		legacy = "the " + componentAPIGroup + " API is not served"
 	case !served:
 		legacy = "no Dashboard kind is served in " + componentAPIGroup
