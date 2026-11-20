@@ -28,10 +28,12 @@ an image that no job produces any more disappears.
 
 Scenarios (`GET /__docs/state` lists them) cover every state the docs show:
 the Status verdicts, update and install flows, remote and interrupted
-operations, update notices, Components, Dashboard Dev, the S3 storage states
-and each Diagnostics problem. In the flow scenarios the update steps and the
-S3 setup wait for `POST /__docs/advance` and `POST /__docs/release`, so every
-GIF frame shows a known state. `POST /__docs/hold?path=/api/resources/maas`
+operations, update notices, Components, Dashboard Dev, the S3 storage states,
+each Diagnostics problem, and the views of a user who is not a cluster-admin
+(`user`, `user-no-projects`, `user-update-running`, captured by the `user`
+job). In the flow scenarios the update steps and the S3 setup wait for
+`POST /__docs/advance` and `POST /__docs/release`, so every GIF frame shows a
+known state. `POST /__docs/hold?path=/api/resources/maas`
 holds the reads under a path until `POST /__docs/hold` without one, so a
 loading state can be captured (the `loading-review` job does, into
 `THEMES_DIR`); `make docs-mock DELAY=2000` answers every Environment read two
