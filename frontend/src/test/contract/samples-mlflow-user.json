@@ -1,0 +1,31 @@
+{
+  "available": true,
+  "mlflowURL": "https://mlflow.apps.example.com/mlflow",
+  "project": "team-a",
+  "samples": [
+    {
+      "actions": [
+        "add"
+      ],
+      "id": "genai-demo",
+      "name": "Agent and prompt demo",
+      "state": "absent"
+    },
+    {
+      "actions": [
+        "remove"
+      ],
+      "id": "training",
+      "link": "https://mlflow.apps.example.com/mlflow/#/experiments/3?workspace=team-a",
+      "name": "Training experiment and registered model",
+      "state": "present"
+    },
+    {
+      "actions": [],
+      "id": "mcp-server",
+      "message": "Cannot read the sample's state: MLflow answered 403 PERMISSION_DENIED.",
+      "name": "MCP server",
+      "state": "unknown"
+    }
+  ]
+}

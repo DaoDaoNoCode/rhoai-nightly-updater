@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // putProject stores a data science project as the projects API lists it
@@ -145,7 +147,7 @@ func TestGetProjectStatus(t *testing.T) {
 	// A part the user may not read.
 	k8s.failAs[fakeUserToken+" GET /apis/serving.kserve.io/v1beta1/namespaces/proj/inferenceservices"] = 403
 	st, err = GetProjectStatus(c, u, "proj")
-	if err != nil || st.InferenceServices != nil || !strings.Contains(st.InferenceServicesProblem, "may not read the InferenceServices") || len(st.Models) != 1 {
+	if err != nil || st.InferenceServices != nil || !strings.Contains(st.InferenceServicesProblem, "may not read the InferenceServices") || st.InferenceServicesProblemCode != types.ProblemForbiddenForUser || st.ModelsProblemCode != "" || len(st.Models) != 1 {
 		t.Fatalf("refused part: %+v, %v", st, err)
 	}
 

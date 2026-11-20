@@ -99,16 +99,29 @@ type ProjectStatus struct {
 	// read (PipelineServersProblem says why).
 	PipelineServers        []ResourceState `json:"pipelineServers"`
 	PipelineServersProblem string          `json:"pipelineServersProblem,omitempty"`
+	// PipelineServersProblemCode is the problem's kind (Problem*), "" for
+	// none; likewise for the others.
+	PipelineServersProblemCode string `json:"pipelineServersProblemCode,omitempty"`
 	// Models are the project's LLMInferenceServices.
-	Models        []ModelState `json:"models"`
-	ModelsProblem string       `json:"modelsProblem,omitempty"`
+	Models            []ModelState `json:"models"`
+	ModelsProblem     string       `json:"modelsProblem,omitempty"`
+	ModelsProblemCode string       `json:"modelsProblemCode,omitempty"`
 	// InferenceServices are the project's KServe InferenceServices.
-	InferenceServices        []ProjectInferenceService `json:"inferenceServices"`
-	InferenceServicesProblem string                    `json:"inferenceServicesProblem,omitempty"`
+	InferenceServices            []ProjectInferenceService `json:"inferenceServices"`
+	InferenceServicesProblem     string                    `json:"inferenceServicesProblem,omitempty"`
+	InferenceServicesProblemCode string                    `json:"inferenceServicesProblemCode,omitempty"`
 	// DashboardURL is the RHOAI dashboard's address ("" when unknown), for
 	// links to its project pages.
 	DashboardURL string `json:"dashboardUrl,omitempty"`
 }
+
+// ProjectStatus problem codes: the user's own account may not read the
+// part, the API is not installed on the cluster, or another error.
+const (
+	ProblemForbiddenForUser = "forbidden_for_user"
+	ProblemNotInstalled     = "not_installed"
+	ProblemError            = "error"
+)
 
 // ProjectInferenceService is one InferenceService of a project.
 type ProjectInferenceService struct {

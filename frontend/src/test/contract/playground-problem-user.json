@@ -1,0 +1,7 @@
+{
+  "apiCode": "forbidden",
+  "apiProblem": "The dashboard's gen-ai API refused the request (HTTP 403: Forbidden).",
+  "genAiUi": "available",
+  "operatorReady": "True",
+  "project": "team-denied"
+}

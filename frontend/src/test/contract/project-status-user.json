@@ -1,0 +1,36 @@
+{
+  "dashboardUrl": "https://rh-ai.apps.example.com",
+  "inferenceServices": [
+    {
+      "message": "Loading",
+      "name": "iris",
+      "ready": false,
+      "url": "https://iris.apps.example.com"
+    }
+  ],
+  "models": [
+    {
+      "deployed": true,
+      "displayName": "Qwen2.5 0.5B Instruct (CPU)",
+      "imageKind": "preset",
+      "managedByTool": true,
+      "message": "Running",
+      "name": "qwen25-05b-instruct",
+      "namespace": "team-a",
+      "ready": true,
+      "url": "https://qwen.apps.example.com"
+    }
+  ],
+  "pipelineServers": [
+    {
+      "apiRoute": "https://ds-pipeline-dspa-team-a.apps.example.com",
+      "connectionState": "present",
+      "deployed": true,
+      "managedByTool": true,
+      "name": "dspa",
+      "namespace": "team-a",
+      "ready": true
+    }
+  ],
+  "project": "team-a"
+}

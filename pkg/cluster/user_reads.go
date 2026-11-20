@@ -106,9 +106,10 @@ func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, erro
 
 	switch {
 	case errors.Is(dspaErr, errDSPACRDMissing):
-		st.PipelineServersProblem = "Data Science Pipelines is not installed on this cluster."
+		st.PipelineServersProblem, st.PipelineServersProblemCode = "Data Science Pipelines is not installed on this cluster.", types.ProblemNotInstalled
 	case dspaErr != nil:
-		st.PipelineServers, st.PipelineServersProblem = nil, userReadProblem("the pipeline servers", project, dspaErr)
+		st.PipelineServers = nil
+		st.PipelineServersProblem, st.PipelineServersProblemCode = userReadProblem("the pipeline servers", project, dspaErr)
 	default:
 		rec, recErr := readPipelineRecord(u)
 		if recErr != nil {
@@ -129,9 +130,10 @@ func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, erro
 
 	switch {
 	case errors.Is(modelsErr, errLLMISvcAPIMissing):
-		st.ModelsProblem = "Model serving is not installed on this cluster: it has no LLMInferenceService API."
+		st.ModelsProblem, st.ModelsProblemCode = "Model serving is not installed on this cluster: it has no LLMInferenceService API.", types.ProblemNotInstalled
 	case modelsErr != nil:
-		st.Models, st.ModelsProblem = nil, userReadProblem("the models", project, modelsErr)
+		st.Models = nil
+		st.ModelsProblem, st.ModelsProblemCode = userReadProblem("the models", project, modelsErr)
 	default:
 		rec, recErr := readModelsRecord(u)
 		if recErr != nil {
@@ -142,7 +144,8 @@ func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, erro
 		}
 	}
 	if isvcErr != nil {
-		st.InferenceServices, st.InferenceServicesProblem = nil, userReadProblem("the InferenceServices", project, isvcErr)
+		st.InferenceServices = nil
+		st.InferenceServicesProblem, st.InferenceServicesProblemCode = userReadProblem("the InferenceServices", project, isvcErr)
 	}
 	return st, nil
 }
@@ -157,7 +160,8 @@ func connectionState(u *Client, project string, terminating bool) (string, strin
 	meta, found, err := readObjectMeta(u, namespacedPath("v1", "secrets", project, connectionSecretName))
 	switch {
 	case err != nil:
-		return ConnectionUnreadable, userReadProblem("the connection", project, err)
+		msg, _ := userReadProblem("the connection", project, err)
+		return ConnectionUnreadable, msg
 	case !found:
 		return ConnectionMissing, ""
 	case !meta.hasToolLabel():
@@ -166,12 +170,13 @@ func connectionState(u *Client, project string, terminating bool) (string, strin
 	return ConnectionPresent, ""
 }
 
-// userReadProblem explains a part of a user's read that failed.
-func userReadProblem(what, project string, err error) string {
+// userReadProblem explains a part of a user's read that failed, with its
+// fixed code (types.Problem*).
+func userReadProblem(what, project string, err error) (string, string) {
 	if _, code := HTTPStatusForError(err); code == ErrorCodeForbiddenForUser {
-		return fmt.Sprintf("Your OpenShift account may not read %s of project %s.", what, project)
+		return fmt.Sprintf("Your OpenShift account may not read %s of project %s.", what, project), types.ProblemForbiddenForUser
 	}
-	return fmt.Sprintf("Cannot read %s of project %s: %v", what, project, err)
+	return fmt.Sprintf("Cannot read %s of project %s: %v", what, project, err), types.ProblemError
 }
 
 // listProjectLLMInferenceServices lists the LLMInferenceServices of one
