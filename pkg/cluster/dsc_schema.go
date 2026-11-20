@@ -225,7 +225,9 @@ func dscProtectedFields(spec map[string]any) map[string]bool {
 // pkg/apiserver/schema/defaulting/algorithm.go Default): in every object,
 // a property that is missing (or null and not nullable) gets its schema
 // default; then every property is defaulted below, a default just set
-// included; array items and additionalProperties alike. The API server
+// included; array items and additionalProperties alike: a null value of an
+// additionalProperties entry whose schema is not nullable gets that
+// schema's default too (kubernetes v1.34 algorithm.go:53-55). The API server
 // does this on every create, update and read, so a field it defaulted
 // (no field manager owns it) comes back by itself in a new object.
 func applySchemaDefaults(x any, schema map[string]any) {
@@ -250,6 +252,10 @@ func applySchemaDefaults(x any, schema map[string]any) {
 			if ps, ok := props[k].(map[string]any); ok {
 				applySchemaDefaults(v, ps)
 			} else if additional != nil {
+				if def, ok := additional["default"]; ok && v == nil && additional["nullable"] != true {
+					v = normalizeJSON(def)
+					x[k] = v
+				}
 				applySchemaDefaults(v, additional)
 			}
 		}
