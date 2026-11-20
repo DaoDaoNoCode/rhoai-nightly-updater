@@ -7,7 +7,6 @@ import (
 	"io"
 	"maps"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -206,7 +205,7 @@ func newPlaygroundEnv(t *testing.T) *playgroundEnv {
 	c.token = testGenAIToken
 	g := newGenAIFake(t)
 	g.models["proj"] = testQwenModels
-	srv := httptest.NewTLSServer(http.HandlerFunc(g.serve))
+	srv := newFakeServer(http.HandlerFunc(g.serve))
 	t.Cleanup(srv.Close)
 	origBase, origClient := genAIBaseURL, genAIHTTPClient
 	genAIBaseURL = func(*Client) string { return srv.URL }

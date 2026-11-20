@@ -38,7 +38,7 @@ RELEASES_URL ?=
 
 .PHONY: all build push deploy upgrade rollback resolve-image release undeploy dev lint lint-go lint-frontend \
 	test test-go test-frontend test-scripts test-chart chart check-chart vuln clean help env docs-fixtures docs-mock frontend-lock \
-	docs-screenshots docs-check
+	docs-screenshots docs-check shellcheck audit-frontend build-frontend release-check ci-go ci-checks ci-script-tests
 
 .DEFAULT_GOAL := help
 
@@ -136,8 +136,8 @@ lint-frontend:  ## Type-check and lint the frontend
 
 test: test-go test-frontend test-scripts test-chart  ## Run all tests
 
-test-go:  ## Run Go tests with the race detector
-	go test -race -count=1 ./...
+test-go:  ## Run Go tests with the race detector (pkg/cluster split over the CPUs; GO_TEST_SHARDS=1: one process)
+	sh scripts/test-go.sh
 
 test-frontend:  ## Run frontend tests
 	cd frontend && npm test
@@ -148,17 +148,52 @@ frontend-lock:  ## Update frontend/package-lock.json with CI's pinned node image
 	$(RUNTIME) run --rm -v "$(CURDIR)/frontend:/w:Z" -w /w "$$NODE_IMAGE" \
 		sh -c 'echo "npm $$(npm --version)"; npm install --package-lock-only --ignore-scripts --no-audit --no-fund'
 
-test-scripts:  ## Test the release and install scripts (offline)
-	sh scripts/test-release.sh
-	bash scripts/test-install.sh
-	bash scripts/test-node-pull-secret.sh
+# The three script tests run at the same time (each in its own temporary
+# directory); the summary names anything skipped (test-node-pull-secret.sh
+# without jq, unless REQUIRE_JQ=1).
+test-scripts:  ## Test the release and install scripts (offline, in parallel; the summary names anything skipped)
+	sh scripts/run-parallel.sh 'sh scripts/test-release.sh' 'bash scripts/test-install.sh' 'bash scripts/test-node-pull-secret.sh'
 
-test-chart:  ## Lint and render the Helm chart (offline; skipped without helm)
+test-chart:  ## Lint and render the Helm chart (offline; says SKIP without helm, fails then with REQUIRE_HELM=1)
 	bash scripts/test-chart.sh
+
+# What the GitLab test jobs run, to run them locally the same way (with the
+# jobs' tool versions: .gitlab-ci.yml). `make -k` runs every part and fails
+# at the end when one failed.
+ci-go:  ## The CI go job: gofmt, go mod verify, go vet, the race tests, govulncheck
+	@unformatted=$$(find . -path ./.cache -prune -o -path ./.claude -prune -o -path ./frontend/node_modules -prune -o -type f -name '*.go' ! -name '.*' -exec gofmt -l {} +); \
+		test -z "$$unformatted" || { echo "$$unformatted"; echo "Run gofmt -w ."; exit 1; }
+	go mod verify
+	go vet ./...
+	sh scripts/test-go.sh
+	go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+ci-checks: lint-frontend audit-frontend docs-check shellcheck  ## The CI checks job: typecheck, ESLint, npm audit, docs, shellcheck (make -k ci-checks)
+
+ci-script-tests: export REQUIRE_JQ = 1
+ci-script-tests: export REQUIRE_HELM = 1
+ci-script-tests: test-scripts test-chart  ## The CI script-tests job: the script tests and the chart, jq and helm required (make -k ci-script-tests)
+
+audit-frontend:  ## npm audit of the frontend's production dependencies (high and above fail)
+	cd frontend && npm audit --omit=dev --audit-level=high
+
+build-frontend:  ## Production build of the frontend (frontend/dist), as the CI frontend-build job
+	cd frontend && npm run build
+
+# node_pull_secret.sh is a command pasted into bash or zsh, not a script: a
+# shell directive in it would be shown on the setup card (and zsh does not
+# take comments at the prompt), so shellcheck is told the shell.
+shellcheck:  ## shellcheck every shell script (CI: shellcheck 0.11.0)
+	shellcheck scripts/*.sh dev.sh docs/tools/*.sh
+	shellcheck --shell=bash pkg/cluster/node_pull_secret.sh
+
+release-check:  ## The tag pipeline's release guard for TAG=vX.Y.Z (CHANGELOG, chart version, template revision)
+	@test -n "$(TAG)" || { echo "Usage: make release-check TAG=vX.Y.Z"; exit 1; }
+	sh scripts/release.sh check '$(TAG)' HEAD
 
 vuln:  ## Check Go and npm dependencies for known vulnerabilities
 	go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
-	cd frontend && npm audit --omit=dev --audit-level=high
+	$(MAKE) --no-print-directory audit-frontend
 
 docs-fixtures:  ## Regenerate the docs mock's Diagnostics answers from the backend's test fakes
 	DOCS_FIXTURES_DIR="$(CURDIR)/docs/tools/mock/diagnostics" go test ./pkg/cluster/ -run '^TestWriteDocsFixtures$$' -count=1

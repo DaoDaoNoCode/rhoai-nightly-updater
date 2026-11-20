@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"sort"
 	"strings"
 	"sync"
@@ -35,7 +34,7 @@ func newFakeAPI(t *testing.T) (*fakeAPI, *Client) {
 	t.Helper()
 	isolateClusterCaches(t)
 	f := &fakeAPI{routes: map[string]func(*http.Request, []byte) (int, string){}}
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newFakeServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
 		f.reqs = append(f.reqs, fakeReq{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Body: string(body)})

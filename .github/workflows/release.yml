@@ -23,6 +23,8 @@ jobs:
   release:
     needs: checks
     runs-on: ubuntu-latest
+    # wait-image waits up to 30 minutes for GitLab to publish the image.
+    timeout-minutes: 45
     permissions:
       contents: write
     env:
@@ -34,6 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           # The guard compares with the previous release tag.
           fetch-depth: 0
       - name: Release guard

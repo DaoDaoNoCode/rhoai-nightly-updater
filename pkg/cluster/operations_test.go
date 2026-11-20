@@ -26,7 +26,7 @@ type mockResponse struct {
 // The handler map keys are request paths; values are the responses to return.
 func newMockClient(responses map[string]mockResponse) (*Client, func()) {
 	resetClusterCaches()
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newFakeServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if dashboardOperatorAbsent(w, r) {
 			return
 		}
@@ -221,7 +221,7 @@ func newRecordingMockClient(responses map[string]mockResponse) (*Client, *[]requ
 	var mu sync.Mutex
 	var records []requestRecord
 
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newFakeServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if dashboardOperatorAbsent(w, r) {
 			return
 		}

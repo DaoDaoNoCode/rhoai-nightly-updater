@@ -597,10 +597,30 @@ else
 fi
 
 # --- wait-image (GitHub release) ------------------------------------------------
-waitimg() { env FAKE_REGISTRY="$REG" CRANE="$CRANE" IMAGE=quay.io/example/app WAIT_SECONDS=1 WAIT_INTERVAL=1 $SH "$RELEASE" wait-image "$@"; }
+# No real waiting: WAIT_SECONDS=0 gives up after the first look, and the
+# retry test's sleep (first on PATH) publishes the image instead of waiting.
+waitimg() { env FAKE_REGISTRY="$REG" CRANE="$CRANE" IMAGE=quay.io/example/app WAIT_SECONDS=0 $SH "$RELEASE" wait-image "$@"; }
 V1COMMIT=$(git rev-parse 'v1.0.0^{commit}')
 reset_registry
-expect_fail "wait-image: never published" "did not appear within 1 seconds" waitimg v1.0.0
+expect_fail "wait-image: never published" "did not appear within 0 seconds" waitimg v1.0.0
+mkdir -p "$WORK/sleepbin"
+config v1.0.0 "$V1COMMIT" >"$WORK/v1.config"
+# The fake sleep publishes v1.0.0 (as seed does); a second call fails, so a
+# loop that never sees the image stops instead of spinning.
+cat >"$WORK/sleepbin/sleep" <<EOF
+#!/bin/sh
+echo "sleep \$*" >>"$WORK/sleeps.log"
+[ "\$(wc -l <"$WORK/sleeps.log")" -eq 1 ] || exit 1
+cp "$WORK/v1.config" "$REG/blobs/sha256:seed-v1.0.0"
+echo sha256:seed-v1.0.0 >"$REG/tags/v1.0.0"
+touch "$REG/exists"
+EOF
+chmod +x "$WORK/sleepbin/sleep"
+: >"$WORK/sleeps.log"
+expect_ok "wait-image: published while waiting" env PATH="$WORK/sleepbin:$PATH" FAKE_REGISTRY="$REG" CRANE="$CRANE" \
+	IMAGE=quay.io/example/app WAIT_SECONDS=5 WAIT_INTERVAL=7 $SH "$RELEASE" wait-image v1.0.0
+expect_eq "wait-image: waited once, WAIT_INTERVAL" "sleep 7" "$(cat "$WORK/sleeps.log")"
+reset_registry
 seed v1.0.0 "$(config v1.0.0 "$SHA3")"
 expect_fail "wait-image: built from another commit" "was built from $SHA3" waitimg v1.0.0
 seed v1.0.0 "$(config v1.0.0 "$V1COMMIT")"
