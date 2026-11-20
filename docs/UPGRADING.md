@@ -22,7 +22,9 @@ NS=rhoai-nightly-updater APP=rhoai-nightly-updater
 ## Patch and minor releases
 
 When the app shows "vX.Y.Z is available" without "requires a full redeploy",
-the release has the same template as yours. Run that release's installer:
+the release has the same template as yours, or, when you run a pre-release of
+it, possibly a newer one: the installer applies the release's template either
+way. Run that release's installer:
 the notice shows the command to copy, for example
 
 ```bash

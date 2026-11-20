@@ -272,8 +272,12 @@ cmd_check() {
 			die "The top release section of CHANGELOG.md is [$top_version], not [$section]. A pre-release of $section needs '## [$section] - unreleased' at the top."
 		[ "$top_date" = unreleased ] ||
 			die "CHANGELOG.md section [$section] is dated '$top_date', but $version is a pre-release: its section reads '## [$section] - unreleased' until the release commit of $final dates it."
+		# A new pre-release comes before its release. The tag pipeline of an
+		# existing one (its tag already names $ref) is a re-run, which must
+		# keep passing once the release exists.
 		last=$(last_release)
-		if [ -n "$last" ] && ! version_gt "$final" "$last"; then
+		tagged=$(git rev-parse --verify --quiet "refs/tags/$version^{commit}" || true)
+		if [ "$tagged" != "$(git rev-parse "$ref^{commit}")" ] && [ -n "$last" ] && ! version_gt "$final" "$last"; then
 			die "$version is a pre-release of $final, but release $last is not lower than $final: a pre-release comes before its release. Pre-release a version above $last."
 		fi
 	else

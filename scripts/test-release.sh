@@ -202,6 +202,10 @@ printf '%s\n' "$out" | grep -qF 'previous release v1.0.0: 2' && pass || fail "re
 # The release exists: no more pre-releases of it, nor of anything below it.
 (cd "$WORK/pre" && changelog '## [2.0.0] - unreleased' '' '- New template.' >CHANGELOG.md && commit_all v2-again)
 expect_fail "pre-release of a released version" "release v2.0.0 is not lower than v2.0.0" inpre check v2.0.0-rc.1
+# A re-run of an existing pre-release's tag pipeline still passes after its release.
+out=$(inpre check v2.0.0-alpha.2 v2.0.0-alpha.2 2>&1) && pass || fail "pre-release: re-run after its release: $out"
+# The exemption is for the tag's own commit only.
+expect_fail "pre-release: its tag name on another commit" "release v2.0.0 is not lower than v2.0.0" inpre check v2.0.0-alpha.2
 (cd "$WORK/pre" && changelog '## [1.5.0] - unreleased' '' '- Old line.' >CHANGELOG.md && commit_all v1.5)
 expect_fail "pre-release below the last release" "Pre-release a version above v2.0.0" inpre check v1.5.0-alpha.1
 (cd "$WORK/pre" && changelog '## [2.1.0] - unreleased' '' '- Next.' >CHANGELOG.md && commit_all v2.1)
