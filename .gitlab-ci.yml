@@ -72,7 +72,7 @@ variables:
   # installed with `go install`, which checks the module against the
   # checksum database, from a Go cache of its own (.crane).
   CRANE_VERSION: v0.22.1
-  # Helm renders the chart in the chart job: the release tarball of this
+  # Helm renders the chart in the script-tests job: the release tarball of this
   # version, checked against its SHA-256 (get.helm.sh, also in the release
   # notes) before use. Keep in step with .github/workflows/ci.yml.
   HELM_VERSION: v3.22.1
@@ -155,11 +155,11 @@ golangci-lint:
     # The tree is lint-clean: every issue fails the pipeline.
     - golangci-lint run ./...
 
-# The frontend checks run as three parallel jobs, each with its own npm ci
-# from one npm cache (keyed on package-lock.json): the tests take longest,
-# and the other checks and the build finish within their time. Only
-# frontend-checks uploads the cache; the others only read it. The key needs
-# its prefix: without one GitLab names it after the file,
+# The frontend's jobs (checks, frontend-test, frontend-build) run in
+# parallel, each with its own npm ci from one npm cache (keyed on
+# package-lock.json): the tests take longest, and the other two finish
+# within their time. Only checks uploads the cache; the others only read
+# it. The key needs its prefix: without one GitLab names it after the file,
 # "0_frontend/package-lock-<sha>" (lib/gitlab/ci/build/cache.rb,
 # cache_prefix), and the runner refuses to restore a key with a "/"
 # ("must not contain '/'", gitlab-runner shells/abstract.go,
@@ -177,14 +177,27 @@ golangci-lint:
     - cd frontend
     - npm ci --cache .npm --prefer-offline
 
-frontend-checks:
+# A job's runner VM takes about two minutes to start (prepare_executor
+# 104-134 s in the job logs) and the docs, chart and script checks ran for
+# 5-28 s each, so they share jobs: checks (the frontend's typecheck, ESLint
+# and npm audit; the docs' links, anchors and images; shellcheck on every
+# shell script) and script-tests (the release, install and node pull secret
+# script tests, and the Helm chart). Each runs `make -k` on its Makefile
+# target, as `make -k ci-checks` / `make -k ci-script-tests` do locally:
+# every part runs even when an earlier one fails, make names each failing
+# part ("make: *** [Makefile:NN: docs-check] Error 1"), and the job fails at
+# the end. Alpine's make 4.4 and shellcheck 0.11.0, with whichever Alpine
+# revision the pinned image's release serves.
+checks:
   extends: .frontend
   cache:
     policy: pull-push
+  before_script:
+    - apk add --no-cache 'make~4.4' 'shellcheck~0.11.0' >/dev/null
+    - shellcheck --version
+    - (cd frontend && npm ci --cache .npm --prefer-offline)
   script:
-    - npm run typecheck
-    - npm run lint
-    - npm audit --omit=dev --audit-level=high
+    - make -k ci-checks
 
 frontend-test:
   extends: .frontend
@@ -196,49 +209,25 @@ frontend-build:
   script:
     - npm run build
 
-release-scripts:
+# The Go image (Debian) has no jq or helm. Debian's jq 1.7.1, with whichever
+# Debian security revision the pinned image's release serves; Helm's release
+# tarball of HELM_VERSION, checked against HELM_SHA256 before use. The
+# target sets REQUIRE_JQ=1 and REQUIRE_HELM=1, so a missing tool fails the
+# job instead of skipping tests. The chart tests (scripts/test-chart.sh):
+# the chart's copies of deploy/template.yaml and deploy/rbac-gitops.yaml,
+# helm lint and helm template.
+script-tests:
   extends: .test
   image: $GO_IMAGE
-  variables:
-    # test-node-pull-secret.sh fails instead of skipping without jq.
-    REQUIRE_JQ: "1"
   script:
-    # The Go image (Debian) has no jq. Debian's jq 1.7.1, with whichever
-    # Debian security revision the pinned image's release serves.
     - apt-get update -qq
     - apt-get install -y -qq --no-install-recommends 'jq=1.7.1-*' >/dev/null
     - jq --version
-    - sh scripts/test-release.sh
-    - bash scripts/test-install.sh
-    - bash scripts/test-node-pull-secret.sh
-
-# The docs' links, anchors and images (make docs-check), and shellcheck on
-# every shell script. node_pull_secret.sh is a command pasted into bash or
-# zsh, not a script: a shell directive in it would be shown on the setup
-# card (and zsh does not take comments at the prompt), so shellcheck is told
-# the shell. Alpine's make 4.4 and shellcheck 0.11.0, with whichever Alpine
-# revision the pinned image's release serves.
-docs:
-  extends: .test
-  image: $NODE_IMAGE
-  script:
-    - apk add --no-cache 'make~4.4' 'shellcheck~0.11.0' >/dev/null
-    - shellcheck --version
-    - make docs-check
-    - shellcheck scripts/*.sh dev.sh docs/tools/*.sh
-    - shellcheck --shell=bash pkg/cluster/node_pull_secret.sh
-
-# The Helm chart for Argo CD (deploy/chart): its copy of the template is
-# deploy/template.yaml, and it lints and renders (scripts/test-chart.sh).
-chart:
-  extends: .test
-  image: $GO_IMAGE
-  script:
     - curl -fsSLo /tmp/helm.tar.gz "https://get.helm.sh/helm-$HELM_VERSION-linux-amd64.tar.gz"
     - echo "$HELM_SHA256  /tmp/helm.tar.gz" | sha256sum -c -
     - tar -xzf /tmp/helm.tar.gz -C /usr/local/bin --strip-components=1 linux-amd64/helm
     - helm version
-    - bash scripts/test-chart.sh
+    - make -k ci-script-tests
 
 # Fails a tag pipeline before anything is built or published: the tag must
 # match the top dated section of CHANGELOG.md (a pre-release: the top
@@ -305,7 +294,7 @@ release-guard:
 # :latest: that only moves with releases.
 build-main:
   extends: .image-build
-  needs: [go, golangci-lint, frontend-checks, frontend-test, frontend-build, release-scripts, chart, docs]
+  needs: [go, golangci-lint, checks, frontend-test, frontend-build, script-tests]
   script:
     - sh scripts/ci-build-image.sh tarball "$CI_COMMIT_SHORT_SHA" image.tar
   artifacts:
@@ -323,7 +312,7 @@ build-main:
 # can push a branch can run this job with code of their own.
 build-branch:
   extends: .image-build
-  needs: [go, golangci-lint, frontend-checks, frontend-test, frontend-build, release-scripts, chart, docs]
+  needs: [go, golangci-lint, checks, frontend-test, frontend-build, script-tests]
   script:
     - sh scripts/ci-build-image.sh branch "$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA"
   rules:
@@ -336,7 +325,7 @@ build-branch:
 # the push cannot interleave with another release job.
 release-build:
   extends: .image-build
-  needs: [go, golangci-lint, frontend-checks, frontend-test, frontend-build, release-scripts, chart, docs, release-guard]
+  needs: [go, golangci-lint, checks, frontend-test, frontend-build, script-tests, release-guard]
   script:
     - sh scripts/ci-build-image.sh tarball "$CI_COMMIT_TAG" image.tar
   artifacts:
@@ -351,7 +340,8 @@ release-build:
 release-installer:
   stage: build
   image: $GO_IMAGE
-  needs: [release-scripts, release-guard]
+  timeout: 10m
+  needs: [script-tests, release-guard]
   script:
     - sh scripts/release.sh installer "$CI_COMMIT_TAG" HEAD > install.sh
     - bash -n install.sh
