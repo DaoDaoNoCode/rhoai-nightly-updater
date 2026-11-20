@@ -14,6 +14,7 @@ import LockIcon from "@patternfly/react-icons/dist/esm/icons/lock-icon";
 import BanIcon from "@patternfly/react-icons/dist/esm/icons/ban-icon";
 import { useNavigate } from "react-router-dom";
 import { describeLoadError } from "../outcomes";
+import { ADMIN_ONLY_BODY, describeError, isNotForUser } from "../errors";
 import { SIGN_IN_URL } from "./ErrorAlert";
 import { TechnicalDetails } from "./LongText";
 import { gitOpsProfileReason } from "../profile";
@@ -31,14 +32,18 @@ interface PageErrorStateProps {
   onRetry: () => void;
   /** In its own PageSection (the default), or inside one (a tab's panel). */
   inSection?: boolean;
+  /** Offer Diagnostics (default true); off for users who cannot open it. */
+  diagnostics?: boolean;
 }
 
 /**
  * A back-end failure that leaves the page with nothing to show: what
  * failed in plain words, Retry, Diagnostics, and the raw error on demand.
  */
-export const PageErrorState: React.FC<PageErrorStateProps> = ({ error, title, onRetry, inSection = true }) => {
+export const PageErrorState: React.FC<PageErrorStateProps> = ({ error, title, onRetry, inSection = true, diagnostics = true }) => {
   const navigate = useNavigate();
+  // A read the user may not make (per-user views) is not a failure: no Retry, no Diagnostics.
+  if (isNotForUser(error)) return <NotForUserState error={error} inSection={inSection} />;
   const { title: cause, body } = describeLoadError(error, title);
   const state = (
     <EmptyState
@@ -49,16 +54,18 @@ export const PageErrorState: React.FC<PageErrorStateProps> = ({ error, title, on
       variant={EmptyStateVariant.lg}
     >
       <EmptyStateBody>
-        {cause !== title && <><strong>{cause}.</strong>{" "}</>}Retry in a moment; Diagnostics checks the cluster and the operator.
+        {cause !== title && <><strong>{cause}.</strong>{" "}</>}{diagnostics ? "Retry in a moment; Diagnostics checks the cluster and the operator." : "Retry in a moment."}
         {body && <TechnicalDetails text={body} toggleText="Show the error" />}
       </EmptyStateBody>
       <EmptyStateFooter>
         <EmptyStateActions>
           <Button variant="primary" onClick={onRetry}>Retry</Button>
         </EmptyStateActions>
-        <EmptyStateActions>
-          <Button variant="link" onClick={() => navigate("/diagnostics")}>Open Diagnostics</Button>
-        </EmptyStateActions>
+        {diagnostics && (
+          <EmptyStateActions>
+            <Button variant="link" onClick={() => navigate("/diagnostics")}>Open Diagnostics</Button>
+          </EmptyStateActions>
+        )}
       </EmptyStateFooter>
     </EmptyState>
   );
@@ -115,6 +122,53 @@ export const AdminRequiredState: React.FC = () => (
       <EmptyStateFooter>
         <EmptyStateActions>
           <Button variant="link" onClick={() => window.location.reload()}>Reload page</Button>
+        </EmptyStateActions>
+      </EmptyStateFooter>
+    </EmptyState>
+  </PageSection>
+);
+
+/**
+ * A read the signed-in user may not make: 403 forbidden_for_user (their
+ * own OpenShift account may not read it) or admin_only (only
+ * cluster-admins read it through the updater). Says so plainly, without
+ * Retry or Diagnostics: nothing is broken.
+ */
+export const NotForUserState: React.FC<{ error: unknown; inSection?: boolean; headingLevel?: "h1" | "h2" | "h3" }> = ({ error, inSection = true, headingLevel = "h2" }) => {
+  const { title, body } = describeError(error);
+  const state = (
+    <EmptyState headingLevel={headingLevel} titleText={title} icon={LockIcon} variant={EmptyStateVariant.lg}>
+      <EmptyStateBody>{body}</EmptyStateBody>
+    </EmptyState>
+  );
+  return inSection ? <PageSection isFilled>{state}</PageSection> : state;
+};
+
+/** A page only cluster-admins see (Components, Dashboard Dev, Diagnostics), opened by a user who is not one. */
+export const AdminOnlyPageState: React.FC = () => {
+  const navigate = useNavigate();
+  return (
+    <PageSection isFilled>
+      <EmptyState headingLevel="h1" titleText="Only cluster-admins can see this page" icon={LockIcon} variant={EmptyStateVariant.lg}>
+        <EmptyStateBody>{ADMIN_ONLY_BODY}</EmptyStateBody>
+        <EmptyStateFooter>
+          <EmptyStateActions>
+            <Button variant="primary" onClick={() => navigate("/")}>Go to Status</Button>
+          </EmptyStateActions>
+        </EmptyStateFooter>
+      </EmptyState>
+    </PageSection>
+  );
+};
+
+/** The gitops profile when the permission check could not answer: nothing is shown until it does. */
+export const PermissionsUnknownState: React.FC<{ onRetry: () => void }> = ({ onRetry }) => (
+  <PageSection isFilled>
+    <EmptyState headingLevel="h1" titleText="Your permissions could not be checked" icon={ExclamationCircleIcon} status="warning" variant={EmptyStateVariant.lg}>
+      <EmptyStateBody>The OpenShift API did not answer. The check is retried automatically.</EmptyStateBody>
+      <EmptyStateFooter>
+        <EmptyStateActions>
+          <Button variant="primary" onClick={onRetry}>Retry</Button>
         </EmptyStateActions>
       </EmptyStateFooter>
     </EmptyState>

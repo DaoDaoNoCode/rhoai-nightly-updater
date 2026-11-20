@@ -17,13 +17,14 @@ import {
   serverOperationStep,
   useDashboardOverride,
   usePermissions,
+  useRole,
   useSessionExpired,
   useUpdateCheck,
   useVersion,
 } from "../state/AppInfo";
 import { isRunning } from "../state/operation";
 import { OPERATION_NAMES, STEP_SETS, operationKindForServerType, stepLabel } from "../operationSteps";
-import { formatElapsed, formatRelativeTime } from "../utils";
+import { formatClockTime, formatElapsed, formatRelativeTime } from "../utils";
 import { sentence, shortTarget } from "../build";
 import { BackgroundRunAlert, ViewProgressLink, useBackgroundRun, useViewServerOperation } from "./ProgressViews";
 import { dashboardOperatorLabel } from "./dashboardOperator";
@@ -127,6 +128,19 @@ function useOperationNotice(onStatusPage: boolean, pathname = ""): Notice | null
   }
   if (background) return { key: "operation", priority: 1, element: <BackgroundRunAlert run={background} /> };
   if (!server.inProgress) return null;
+  if (server.brief) {
+    // A user who is not a cluster-admin: when it started and what it is, never who runs it.
+    const clock = formatClockTime(server.brief.startedAt);
+    return {
+      key: "operation",
+      priority: 1,
+      element: (
+        <Alert variant="info" isInline component="p" customIcon={<InProgressIcon />} title={clock ? `An update is running since ${clock}` : "An update is running"}>
+          {server.brief.label ? `${sentence(server.brief.label)} ` : ""}What this page shows may change until it finishes.
+        </Alert>
+      ),
+    };
+  }
   if (!op) {
     return {
       key: "operation",
@@ -243,8 +257,10 @@ function useDashboardOverrideNotice(onDashboardDevPage: boolean): Notice | null 
 
 function useTemplateNotice(): Notice | null {
   const version = useVersion();
+  const admin = useRole() === "admin";
   const [dismissed, setDismissed] = useState(() => readSession(TEMPLATE_DISMISS_KEY) === "1");
-  if (!version?.templateOutdated || dismissed) return null;
+  // Only a cluster-admin can re-apply the deployment.
+  if (!admin || !version?.templateOutdated || dismissed) return null;
   return {
     key: "template",
     priority: 9,
@@ -287,8 +303,10 @@ function writeLocal(key: string, value: string): void {
 function useUpdateNotice(): Notice | null {
   const update = useUpdateCheck();
   const gitops = useVersion()?.installMethod === "gitops";
+  const admin = useRole() === "admin";
   const [dismissed, setDismissed] = useState(() => readLocal(UPDATE_DISMISS_KEY));
-  if (!update?.updateAvailable || !update.latest || dismissed === update.latest) return null;
+  // Only a cluster-admin can upgrade the updater.
+  if (!admin || !update?.updateAvailable || !update.latest || dismissed === update.latest) return null;
   const latest = update.latest;
   const gitRoute = <code>git checkout {latest} &amp;&amp; make upgrade</code>;
   // The no-clone installer of exactly that release (scripts/install.sh, attached to every release).
@@ -359,6 +377,7 @@ function useUpdateNotice(): Notice | null {
 function usePermissionNotice(): Notice | null {
   const permissions = usePermissions();
   const sessionExpired = useSessionExpired();
+  const role = useRole();
   if (sessionExpired) return null;
   if (permissions.status === "unknown") {
     return {
@@ -373,12 +392,15 @@ function usePermissionNotice(): Notice | null {
           title="Your permissions could not be checked; changes are disabled"
           actionLinks={<AlertActionLink onClick={permissions.retry}>Retry</AlertActionLink>}
         >
-          {sentence(permissions.error?.message || "The OpenShift API did not answer")} The page stays read-only until the check
-          succeeds; it is retried automatically.
+          {sentence(permissions.error?.message || "The OpenShift API did not answer")} The page stays read-only, and shows what every
+          user sees, until the check succeeds; it is retried automatically.
         </Alert>
       ),
     };
   }
+  // Read-only is what a user who is not a cluster-admin is: the navigation
+  // and the pages already show their view, nothing to add.
+  if (role !== "admin") return null;
   // The backend's reason: a cluster-admin whose sign-in cannot carry a change
   // (made before 4.0.0, or about to expire; pkg/api HandleUserPermissions).
   // Not the read-only notice, which is for users without the role.

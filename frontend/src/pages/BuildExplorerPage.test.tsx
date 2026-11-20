@@ -9,7 +9,12 @@ import { deferred } from "../test/utils";
 const statusRef: { current: Partial<StatusResponse> | null } = { current: null };
 vi.mock("../state/AppState", () => ({
   useClusterStatus: () => ({ status: statusRef.current, loading: false, error: null, lastRefreshed: null, refresh: async () => {} }),
+  useOperation: () => ({ server: { loaded: true, inProgress: false, operation: null, interrupted: null } }),
 }));
+// A cluster-admin unless a test says otherwise (per-user views).
+const roleRef: { current: "admin" | "user" | "checking" } = { current: "admin" };
+vi.mock("../state/Permissions", () => ({ useRole: () => roleRef.current }));
+beforeEach(() => { roleRef.current = "admin"; });
 
 // The app-wide notices need the AppInfo provider; they are tested on their own.
 vi.mock("../components/GlobalBanners", () => ({ GlobalBanners: () => null }));
@@ -124,6 +129,37 @@ describe("Build Explorer installed build and compare", () => {
     expect(await screen.findByText(/was not installed from a nightly build/)).toBeInTheDocument();
     await screen.findByRole("grid", { name: "Nightly builds" });
     expect(screen.queryByRole("button", { name: /Compare .* with the installed build/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("Build Explorer for a user who is not a cluster-admin", () => {
+  const summary = (installedBuild: string, latestBuild = LATEST, newerAvailable = true) => ({
+    updaterVersion: "v5.0.0",
+    rhoai: { installed: true, version: "3.6.0", channel: "stable-3.x", phase: "Succeeded" },
+    nightly: { installedBuild, latestBuild, newerAvailable },
+    dsc: { exists: true, ready: true, components: [] },
+  });
+
+  it("reads the installed build from the summary, never the status", async () => {
+    roleRef.current = "user";
+    statusRef.current = null;
+    const api = setup({ "/api/summary": summary(INSTALLED) });
+    renderPage();
+    const installedBuild = (await screen.findByText("Installed build")).closest(".pf-v6-c-description-list__group") as HTMLElement;
+    expect(within(installedBuild).getByText("rhoai-3.6")).toBeInTheDocument();
+    expect(within(installedBuild).getByText("444444444444")).toBeInTheDocument();
+    await screen.findByRole("grid", { name: "Nightly builds" });
+    expect(within(tagRow("rhoai-3.6")).getByText("Newer than installed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Compare with the latest rhoai-3.6" })).toBeInTheDocument();
+    expect(api.calls.some((c) => c.includes("/api/status"))).toBe(false);
+  });
+
+  it("says there is no installed nightly build when the summary names none", async () => {
+    roleRef.current = "user";
+    statusRef.current = null;
+    setup({ "/api/summary": summary("", "", false) });
+    renderPage();
+    expect(await screen.findByText(/was not installed from a nightly build/)).toBeInTheDocument();
   });
 });
 

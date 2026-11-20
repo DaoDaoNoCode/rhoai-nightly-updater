@@ -377,12 +377,65 @@ export interface PodInfo {
   version?: string;
 }
 
+/**
+ * What the signed-in user sees (docs/research/per-user-views.md): "admin"
+ * (cluster-admin: every page and change, as before 5.0.0) or "user"
+ * (every other RHOAI user: the summary, Build Explorer and their own
+ * projects, read-only).
+ */
+export type UserRole = "admin" | "user";
+
 export interface UserPermissions {
   canMutate: boolean;
   user: string;
+  /** The user's tier. The UI treats anything but "admin" (an absent field included) as "user". */
+  role?: UserRole;
   /** Why a user who may change the cluster cannot now (their sign-in cannot carry a change: an old session, or one about to expire). */
   reason?: string;
   reasonCode?: string;
+}
+
+/** One DataScienceCluster component in the summary. */
+export interface SummaryComponent {
+  name: string;
+  /** "Managed", "Removed" or "Unmanaged". */
+  managementState: string;
+  ready: boolean;
+}
+
+/**
+ * GET /api/summary: the short read-only cluster summary every signed-in
+ * user may see, read by the ServiceAccount with a reviewed field list. No
+ * node, pod, project or user names.
+ */
+export interface ClusterSummary {
+  updaterVersion: string;
+  rhoai: {
+    installed: boolean;
+    version: string;
+    channel: string;
+    /** The operator CSV's phase ("Succeeded", "Installing", "Failed"...). */
+    phase: string;
+  };
+  nightly: {
+    /** The installed nightly build's image reference; "" when RHOAI was not installed from a nightly build. */
+    installedBuild: string;
+    /** The newest build of the same stream; "" when unknown. */
+    latestBuild: string;
+    newerAvailable: boolean;
+  };
+  dsc: {
+    exists: boolean;
+    ready: boolean;
+    components: SummaryComponent[] | null;
+  };
+}
+
+/** GET /api/operation as a user (role "user") reads it: no user, pod or interrupted operation. */
+export interface UserOperationStatus {
+  running: boolean;
+  label?: string;
+  startedAt?: string;
 }
 
 export interface DashboardState {

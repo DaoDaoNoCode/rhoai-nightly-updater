@@ -65,7 +65,7 @@ describe("App shell", () => {
     const status = nightlyStatus({ consoleURL: "https://console-openshift-console.apps.example.com", dashboardURL });
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       const body = String(url).includes("/api/status") ? status
-        : String(url).includes("/api/permissions") ? { canMutate: true, user: "me" }
+        : String(url).includes("/api/user/permissions") ? { canMutate: true, user: "me", role: "admin" }
         : {};
       return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
     }));
@@ -83,7 +83,7 @@ describe("App shell", () => {
   it("logs out through oauth-proxy's sign_out", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       const body = String(url).includes("/api/status") ? nightlyStatus()
-        : String(url).includes("/api/permissions") ? { canMutate: true, user: "me" }
+        : String(url).includes("/api/user/permissions") ? { canMutate: true, user: "me", role: "admin" }
         : {};
       return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
     }));

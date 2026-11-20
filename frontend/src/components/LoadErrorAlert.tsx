@@ -1,6 +1,7 @@
 import React from "react";
 import { Alert, AlertActionLink, PageSection } from "@patternfly/react-core";
 import { describeLoadError } from "../outcomes";
+import { isNotForUser } from "../errors";
 import { TruncatedText } from "./LongText";
 
 interface LoadErrorAlertProps {
@@ -26,7 +27,7 @@ export const LoadErrorAlert: React.FC<LoadErrorAlertProps> = ({ error, genericTi
         isInline
         isLiveRegion
         component="p"
-        actionLinks={onRetry ? <AlertActionLink onClick={onRetry}>Retry</AlertActionLink> : undefined}
+        actionLinks={onRetry && !isNotForUser(error) ? <AlertActionLink onClick={onRetry}>Retry</AlertActionLink> : undefined}
       >
         <TruncatedText>
           {stale ? "The data below is from the last successful refresh. " : ""}{body}
