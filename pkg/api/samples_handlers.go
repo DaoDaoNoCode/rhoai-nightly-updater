@@ -21,25 +21,29 @@ func sampleProject(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return project, true
 }
 
-// HandleMLflowSamplesStatus reports the MLflow samples of one project
-// (cluster.GetMLflowSamplesStatus: named reads only, cached briefly).
-var HandleMLflowSamplesStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+// HandleMLflowSamplesStatus reports the MLflow samples of one of the
+// user's projects, read with their own token (tier user-token;
+// cluster.GetMLflowSamplesStatus: named reads only, cached briefly per
+// user).
+var HandleMLflowSamplesStatus = withUserRead(func(sa, u *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	project, ok := sampleProject(w, r)
 	if !ok {
 		return
 	}
-	st, err := cluster.GetMLflowSamplesStatus(c, project)
+	st, err := getMLflowSamplesStatus(sa, u, project)
 	if errors.Is(err, cluster.ErrNotDSProject) {
-		writeError(w, "Cannot read the MLflow samples: "+err.Error(), http.StatusBadRequest, "validation")
+		writeError(w, "Cannot read the MLflow samples: "+err.Error()+".", http.StatusForbidden, cluster.ErrorCodeForbiddenForUser)
 		return
 	}
 	if err != nil {
-		code, errorCode := cluster.HTTPStatusForError(err)
-		writeError(w, "Cannot read the MLflow samples: "+err.Error(), code, errorCode)
+		writeUserReadError(w, "Cannot read the MLflow samples", err)
 		return
 	}
 	writeJSON(w, st, "mlflow-samples")
 })
+
+// getMLflowSamplesStatus reads the samples status; tests replace it.
+var getMLflowSamplesStatus = cluster.GetMLflowSamplesStatus
 
 // HandlePipelineSampleSpec serves the sample pipeline's file. It makes no
 // cluster request: the user uploads and runs it with their own token.

@@ -171,13 +171,6 @@ objects:
         resources: ["configmaps"]
         resourceNames: ["odh-upgrade-acks", "inferenceservice-config"]
         verbs: ["get"]
-      # Playground status: the dashboard's gen-ai API reads the optional
-      # custom endpoints with the caller's token (this ServiceAccount's for
-      # the status; Set up and delete use the user's)
-      - apiGroups: [""]
-        resources: ["configmaps"]
-        resourceNames: ["gen-ai-aa-custom-model-endpoints"]
-        verbs: ["get"]
       # Webhook and CRD-conversion backing Services and their endpoints
       # (stale-webhook check), the S3 storage's Service, a model's KServe
       # Service
@@ -284,26 +277,6 @@ objects:
         resources: ["mlflows"]
         resourceNames: ["mlflow"]
         verbs: ["get"]
-      # Samples status (Environment page). Not Kubernetes objects: MLflow
-      # checks mlflow.kubeflow.org with access reviews of the caller's
-      # token (this ServiceAccount's for the status; adding and removing a
-      # sample use the user's). Only the samples' own names, only read.
-      - apiGroups: ["mlflow.kubeflow.org"]
-        resources: ["experiments"]
-        resourceNames: ["MLflow Demo", "nightly-sample-training"]
-        verbs: ["get"]
-      - apiGroups: ["mlflow.kubeflow.org"]
-        resources: ["registeredmodels"]
-        resourceNames: ["nightly-sample-classifier"]
-        verbs: ["get"]
-      - apiGroups: ["mlflow.kubeflow.org"]
-        resources: ["mcpservers"]
-        resourceNames: ["com.deepwiki/rhoai-nightly-sample"]
-        verbs: ["get"]
-      - apiGroups: ["mlflow.kubeflow.org"]
-        resources: ["skills"]
-        resourceNames: ["nightly-sample-mcp-builder"]
-        verbs: ["get"]
       # Diagnostics, prerequisite operators: whether an installed operator's
       # singleton operand (<Kind>/cluster) exists. The kind comes from the
       # operator's CSV, so the resource is "*"; only "cluster", only read.
@@ -325,16 +298,25 @@ objects:
         resources: ["gateways"]
         verbs: ["list"]
       # The tool's catalog models, every model (the models that use the
-      # gateway; the Playground status's aaa/models with the caller's
-      # token), and the CPU preset
+      # gateway; the InferenceServices that use a component, for
+      # Diagnostics and the hard reset), and the CPU preset. The
+      # Environment page's per-project reads (5.0.0: the Playground and
+      # samples status, a user's project) use the signed-in user's token.
       - apiGroups: ["serving.kserve.io"]
-        resources: ["inferenceservices", "llminferenceservices"]
+        resources: ["llminferenceservices"]
         verbs: ["get", "list"]
+      - apiGroups: ["serving.kserve.io"]
+        resources: ["inferenceservices"]
+        verbs: ["list"]
       - apiGroups: ["serving.kserve.io"]
         resources: ["llminferenceserviceconfigs"]
         verbs: ["get"]
-      # Playground status: the gen-ai API's access review (list) and the
-      # playground server (its UID marks the one the tool requested)
+      # The OGX servers that use a component (Diagnostics, the hard reset),
+      # and the playground server (its UID marks the one the tool
+      # requested). Since 5.0.0 the Playground status reads the latter
+      # with the signed-in user's token too; the grant stays because the
+      # read goes through the shared getServed, which the RBAC coverage
+      # test cannot tell apart by token.
       - apiGroups: ["ogx.io"]
         resources: ["ogxservers"]
         verbs: ["list"]

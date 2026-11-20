@@ -12,11 +12,10 @@ import (
 // (odh-dashboard rhoai-3.6 packages/gen-ai/bff: api/middleware.go
 // RequireAccessToService, integrations/kubernetes/token_k8s_client.go
 // GetAAModels; validated live on RHOAI 3.6 as the minimum, DESIGN.md §6).
-// The status calls it with the ServiceAccount's token, so the template
-// must grant these (otherServerSARequests). Set up, delete and Clean up
-// call it with the signed-in user's own token, so the API server checks
-// what the dashboard does then against that user's RBAC, and the template
-// grants none of it.
+// Since 5.0.0 the status, like Set up, delete and Clean up, calls it with
+// the signed-in user's own token, so the API server checks what the
+// dashboard does against that user's RBAC, and the template grants none of
+// it on the status's account (TestUserTokenReviewsAreNotTheServiceAccounts).
 var genAIDashboardRequests = []struct {
 	verb, group, resource, name string
 	why                         string

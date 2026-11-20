@@ -827,16 +827,23 @@ func apiProblem(err error) (string, string) {
 // playgroundAPI is the API for a request, or why it cannot be used. It
 // calls with the client's own token: the user's for a change's client
 // (NewUserClient), which allows genAIUserCallAllowed, the ServiceAccount's
-// for a read, which allows only genAICallAllowed.
+// otherwise, which allows only genAICallAllowed.
 func playgroundAPI(c *Client) (genAIAPI, string, string) {
-	if c.token == "" {
+	return playgroundAPIAs(c, c)
+}
+
+// playgroundAPIAs is playgroundAPI that finds the dashboard with find (the
+// ServiceAccount's client of a user's read: the Dashboard CR and its
+// Route are no user data) and calls it with as's token.
+func playgroundAPIAs(find, as *Client) (genAIAPI, string, string) {
+	if as.token == "" {
 		return genAIAPI{}, "No token is available to call the dashboard's gen-ai API with.", "no_token"
 	}
-	base := genAIBaseURL(c)
+	base := genAIBaseURL(find)
 	if base == "" {
 		return genAIAPI{}, "The RHOAI dashboard's address is unknown (no Dashboard component reports one), so its gen-ai API cannot be called.", "no_dashboard"
 	}
-	return genAIAPI{ctx: c.ctx, base: base, token: c.token, asUser: c.asUser}, "", ""
+	return genAIAPI{ctx: as.ctx, base: base, token: as.token, asUser: as.asUser}, "", ""
 }
 
 // playgroundItem is a playground (srv, nil for none) in a project as the
@@ -874,28 +881,49 @@ func playgroundItem(project string, srv *genAIServer, requested bool) types.Play
 }
 
 // GetPlaygroundStatus reports the playground feature: the cluster parts,
-// the playgrounds in the data science projects, and, for project, the
-// models it can use. The gen-ai API is called with the client's token.
-func GetPlaygroundStatus(c *Client, project string) (*types.PlaygroundStatus, error) {
+// the playgrounds in the signed-in user's data science projects, and, for
+// project (one of them), the models it can use.
+//
+// Everything about the projects is read with the user's own token (u):
+// the projects (ListUserDSProjects), the gen-ai API's calls, whose own
+// access reviews then check the user (genAIDashboardRequests), and the
+// project objects the ownership check reads. The ServiceAccount (sa)
+// reads what is no user data: where the dashboard is, whether the
+// playground's operator and the gen-ai backend run, and this tool's
+// record of the playgrounds it set up (u's bookkeeping), of which only the
+// user's projects are used. Cached per token.
+func GetPlaygroundStatus(sa, u *Client, project string) (*types.PlaygroundStatus, error) {
+	if !u.asUser {
+		return nil, errNotUserClient
+	}
+	c := u
 	key := fmt.Sprintf("%d|%s|%s", playgroundStatusGen.Load(), tokenKey(c.token), project)
 	if st, ok := playgroundStatusCache.Get(key); ok {
 		return st, nil
 	}
 	st := &types.PlaygroundStatus{Project: project}
-	projects, err := GetDSProjects(c)
+	projects, err := ListUserDSProjects(c)
 	if err != nil {
 		return nil, err
 	}
 	if project != "" && !slices.Contains(projects, project) {
-		return nil, fmt.Errorf("project '%s' is not a data science project", project)
+		return nil, fmt.Errorf("%w: '%s' is not one of your data science projects", ErrNotDSProject, project)
 	}
-	records, err := readPlaygroundRecords(c)
+	allRecords, err := readPlaygroundRecords(c)
 	if err != nil {
 		return nil, err
 	}
+	// Only the user's projects: the record names every project the tool
+	// set a playground up in.
+	records := map[string]playgroundRecord{}
+	for p, rec := range allRecords {
+		if slices.Contains(projects, p) {
+			records[p] = rec
+		}
+	}
 	var wg sync.WaitGroup
-	wg.Go(func() { playgroundClusterParts(c, st) })
-	api, problem, code := playgroundAPI(c)
+	wg.Go(func() { playgroundClusterParts(sa, st) })
+	api, problem, code := playgroundAPIAs(sa, c)
 	if problem != "" {
 		st.APIProblem, st.APICode = problem, code
 		wg.Wait()

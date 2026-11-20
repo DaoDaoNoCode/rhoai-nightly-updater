@@ -54,6 +54,22 @@ var rbacCallsNotUsingTheSAToken = map[string]string{
 	"dsc_hard_reset_teardown.go:path":                  "hard reset: API discovery of the group of a namespace's owner, with the signed-in user's token",
 }
 
+// Reads made with the signed-in user's own token by the read routes of
+// tier user-token and a user's project status (pkg/api route_tiers.go
+// withUserRead; pkg/cluster user_reads.go). These functions refuse a
+// client that does not carry the user's token (errNotUserClient,
+// TestUserReadsRefuseTheServiceAccount), so the API server checks them
+// against the user's RBAC, and the template grants the ServiceAccount
+// nothing on their account (it gains no permission for the per-user
+// views). Shared helpers those reads also call (listDSPAs, modelState,
+// getServed...) stay in the ServiceAccount's scan: the scan cannot tell
+// their callers' tokens apart, so it over-approximates.
+var rbacUserTokenReads = map[string]string{
+	"user_reads.go:ListUserDSProjects":              "the user's data science projects, through the projects API",
+	"user_reads.go:listProjectLLMInferenceServices": "the LLMInferenceServices of one of the user's projects",
+	"user_reads.go:listProjectInferenceServices":    "the InferenceServices of one of the user's projects",
+}
+
 // Best-effort reads of paths found by API discovery at run time, whose API
 // group and resource cannot be named in the template. A 403 is expected for
 // the resources the template does not grant, and is reported as not
@@ -968,6 +984,10 @@ func scanRequests(t *testing.T, only map[string]bool, onlyBookkeeping bool) ([]r
 					seenExcluded[site] = true
 					return true
 				}
+				if _, userRead := rbacUserTokenReads[site]; userRead {
+					seenExcluded[site] = true
+					return true
+				}
 				if _, gitOpsOnly := rbacGitOpsOnlyCalls[site]; gitOpsOnly && only == nil {
 					seenExcluded[site] = true
 					return true
@@ -1181,6 +1201,11 @@ func TestTemplateRBACCoversEveryServiceAccountCall(t *testing.T) {
 	for site := range rbacBestEffortCalls {
 		if !seenExcluded[site] {
 			t.Errorf("rbacBestEffortCalls lists %s, but that function no longer makes API calls; remove the entry", site)
+		}
+	}
+	for site := range rbacUserTokenReads {
+		if !seenExcluded[site] {
+			t.Errorf("rbacUserTokenReads lists %s, but that function no longer makes API calls; remove the entry", site)
 		}
 	}
 	for site := range rbacGitOpsOnlyCalls {

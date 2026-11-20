@@ -911,9 +911,10 @@ func newSamplesEnv(t *testing.T) *samplesEnv {
 	orig := samplesHTTPClient
 	samplesHTTPClient = env.srv.Client()
 	t.Cleanup(func() { samplesHTTPClient = orig })
-	t.Cleanup(func() { mlflowSamplesCache.Remove(fakeProject) })
-	mlflowSamplesCache.Remove(fakeProject)
+	t.Cleanup(func() { InvalidateSamplesStatus(fakeProject) })
+	InvalidateSamplesStatus(fakeProject)
 	k8s.putJSON("/api/v1/namespaces/"+fakeProject, `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
+	k8s.putProject(fakeProject)
 	putMLflow(k8s, toolLabelJSON, toolFieldManager, "Update", "", `{}`,
 		`{"url":"`+env.srv.URL+`/mlflow","conditions":[{"type":"Available","status":"True"}]}`)
 	return env
@@ -921,8 +922,8 @@ func newSamplesEnv(t *testing.T) *samplesEnv {
 
 func (env *samplesEnv) status(t *testing.T) map[string]typesSample {
 	t.Helper()
-	mlflowSamplesCache.Remove(fakeProject)
-	st, err := GetMLflowSamplesStatus(env.c, fakeProject)
+	InvalidateSamplesStatus(fakeProject)
+	st, err := GetMLflowSamplesStatus(env.c, env.user, fakeProject)
 	if err != nil {
 		t.Fatal(err)
 	}

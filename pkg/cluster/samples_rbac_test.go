@@ -12,10 +12,10 @@ import (
 // (mlflowFakeRules), which every samples test runs through:
 // a call outside the tables fails its test, a name outside a rule's names
 // fails it too, and TestSampleFakeRulesAreAllUsed fails for an entry no
-// code path uses. The status reads with the ServiceAccount's token, whose
-// reviews the fake decides with templateAllow, so each status test also
-// proves deploy/template.yaml sufficient; add and remove run with the
-// user's own token (userAllow), which the template does not grant.
+// code path uses. Since 5.0.0 the status, like add and remove, runs with
+// the signed-in user's own token (userAllow), which the template does not
+// grant; templateAllow decides any other token's reviews (the template
+// grants the ServiceAccount no MLflow name).
 
 const mlflowAuthGroup = "mlflow.kubeflow.org"
 

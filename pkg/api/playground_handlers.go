@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -15,18 +16,22 @@ var runPlayground = cluster.RunPlayground
 var getPlaygroundStatus = cluster.GetPlaygroundStatus
 
 // HandlePlaygroundStatus reports the Gen AI playground feature: what it
-// needs on the cluster, the playgrounds in the data science projects, and
-// the models the given project's playground can use (cached briefly).
-var HandlePlaygroundStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+// needs on the cluster, the playgrounds in the user's data science
+// projects, and the models the given project's playground can use, read
+// with the user's own token (tier user-token; cached briefly per user).
+var HandlePlaygroundStatus = withUserRead(func(sa, u *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	if project != "" && !namespaceRegex.MatchString(project) {
 		writeError(w, "invalid project name", http.StatusBadRequest, "validation")
 		return
 	}
-	st, err := getPlaygroundStatus(c, project)
+	st, err := getPlaygroundStatus(sa, u, project)
+	if errors.Is(err, cluster.ErrNotDSProject) {
+		writeError(w, "Cannot read the playground state: "+err.Error()+".", http.StatusForbidden, cluster.ErrorCodeForbiddenForUser)
+		return
+	}
 	if err != nil {
-		code, errorCode := cluster.HTTPStatusForError(err)
-		writeError(w, "Cannot read the playground state: "+err.Error(), code, errorCode)
+		writeUserReadError(w, "Cannot read the playground state", err)
 		return
 	}
 	writeJSON(w, st, "playground")
