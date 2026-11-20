@@ -64,6 +64,14 @@ printf '{"auths":{}}\n' >"$REGISTRY_AUTH_FILE"
 
 buildah version
 
+# What the runner gives this job, for the log (its configuration is set by
+# the runner's owners and not visible to this project): the effective
+# capabilities, and the block devices in /dev, which a privileged container
+# sees from its host. Names only; nothing is opened.
+info "Job capabilities: $(grep '^CapEff:' /proc/self/status | tr -s ' \t' ' ')"
+blk=$(find /dev -maxdepth 1 -type b 2>/dev/null | sed 's|^/dev/||' | sort | tr '\n' ' ')
+info "Block devices in /dev: ${blk:-none}"
+
 # The Containerfile's Docker Hub bases come through the Dependency Proxy
 # when DOCKER_HUB points at it: log in with the job's proxy credentials.
 hub=${DOCKER_HUB%%/*}

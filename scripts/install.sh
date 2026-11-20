@@ -280,8 +280,9 @@ registry_digest() {
 # followed here, not by curl -L: the token goes to the registry's own origin
 # only, never to the storage host a blob redirects to (Quay sends blobs to
 # its CDN), which curl -L with an -H header does on older curl versions.
+# A redirect is followed only to https (registry_redirect_ok).
 registry_fetch() {
-	local url=$1 out=$2 hops=0 w rest origin
+	local url=$1 out=$2 hops=0 w rest origin next
 	local -a auth
 	while :; do
 		rest=${url#*://}
@@ -302,7 +303,13 @@ registry_fetch() {
 				registry_why "GET ${url%%\?*}: HTTP $REG_STATUS, too many redirects or no Location"
 				return 1
 			fi
-			url=${w#* }
+			next=${w#* }
+			if ! registry_redirect_ok "$next"; then
+				# Without the query: a storage URL's is a signature.
+				registry_why "GET ${url%%\?*}: HTTP $REG_STATUS redirects to ${next%%\?*}, which is not https (only a registry on this machine may redirect to http, on this machine)"
+				return 1
+			fi
+			url=$next
 			;;
 		401)
 			[ -z "$REG_TOKEN" ] && [ "$origin" = "$REG_ORIGIN" ] || return 0
@@ -311,6 +318,26 @@ registry_fetch() {
 		*) return 0 ;;
 		esac
 	done
+}
+
+# registry_redirect_ok URL: whether registry_fetch follows a redirect to URL:
+# https, or http when the registry itself is on this machine (registry_endpoint
+# gives REG_ORIGIN http:// only for localhost and 127.0.0.1) and URL is on
+# this machine too. A host with user information (http://localhost@x/) is
+# another host.
+registry_redirect_ok() {
+	local host
+	case "$1" in
+	https://*) return 0 ;;
+	http://*)
+		[[ $REG_ORIGIN == http://* ]] || return 1
+		host=${1#http://}
+		host=${host%%[/?#]*}
+		[[ $host != *@* ]] || return 1
+		case "$host" in localhost | localhost:* | 127.0.0.1 | 127.0.0.1:*) return 0 ;; esac
+		;;
+	esac
+	return 1
 }
 
 # json_flat: the JSON on stdin as "path<TAB>value" lines, one per scalar
@@ -376,11 +403,19 @@ sha256_file() {
 # registry_config_label REF LABEL: the value of the label LABEL of the image
 # REF (REPO@DIGEST or REPO:TAG; of a manifest list, its $PLATFORM image),
 # from the image's config blob; nothing when the image has no such label.
-# Fails, saying why, when the registry does not serve the image.
+# Fails, saying why, when the registry does not serve the image. Every
+# manifest read by digest must be the bytes that digest names: REF's own
+# (REPO@sha256:...; another algorithm is not checked, so not read) and a
+# manifest list's entry for $PLATFORM, as the config blob is checked below.
 registry_config_label() {
-	local ref=$1 label=$2 repo reference url flat config os arch variant sum n
+	local ref=$1 label=$2 repo reference url flat config os arch variant sum n expect=""
 	if [[ $ref == *@* ]]; then
 		repo=${ref%@*} reference=${ref#*@}
+		if ! [[ $reference =~ ^sha256:[0-9a-f]{64}$ ]]; then
+			registry_why "$ref is not pinned by a sha256 digest, which this installer checks"
+			return 1
+		fi
+		expect=$reference
 	elif [[ ${ref##*/} == *:* ]]; then
 		repo=${ref%:*} reference=${ref##*:}
 	else
@@ -395,6 +430,16 @@ registry_config_label() {
 		if [ "$REG_STATUS" != 200 ]; then
 			registry_why "HTTP $REG_STATUS from $url"
 			return 1
+		fi
+		if [ -n "$expect" ]; then
+			if ! sum=$(sha256_file "$TMP/manifest.json"); then
+				registry_why "no sha256sum, shasum or openssl to check the manifest of $url"
+				return 1
+			fi
+			if [ "sha256:$sum" != "$expect" ]; then
+				registry_why "the manifest from $url does not match its digest"
+				return 1
+			fi
 		fi
 		flat=$(json_flat <"$TMP/manifest.json" || true)
 		config=$(printf '%s\n' "$flat" | awk -F'\t' '$1 == "config/digest" {print $2; exit}')
@@ -419,6 +464,9 @@ registry_config_label() {
 			registry_why "$url is neither an image manifest nor a manifest list with a $PLATFORM image"
 			return 1
 		fi
+		# The list (checked above when REF is a digest; a tag cannot be)
+		# names its image by digest: the image manifest must match it.
+		expect=$reference
 	done
 	if ! [[ $config =~ ^sha256:[0-9a-f]{64}$ ]]; then
 		registry_why "$url names no valid config digest"

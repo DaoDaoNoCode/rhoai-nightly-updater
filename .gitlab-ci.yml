@@ -37,7 +37,10 @@ variables:
   # Containerfile's node and golang bases (build arg DOCKER_HUB). Docker Hub
   # limits anonymous pulls per IP, which shared runners hit ("toomanyrequests"),
   # so they come from mirror.gcr.io, Google's public cache of Docker Hub, which
-  # needs no login and has no such limit. The digests below pin the images,
+  # needs no login; pulls from it do not count against Docker Hub's limits
+  # (Google, Artifact Registry "Pull cached Docker Hub images": "Pulling
+  # cached images does not count against Docker Hub rate limits"). The
+  # digests below pin the images,
   # so the mirror serves exactly the same content or nothing. The mirror holds
   # only images people pull often: if a new digest is not there yet, the job
   # fails to pull it; set a project CI/CD variable DOCKER_HUB to docker.io, or
@@ -225,26 +228,37 @@ release-guard:
 #
 # The build is scripts/ci-build-image.sh: buildah, chroot isolation, vfs
 # storage, linux/amd64, no layer cache (each job starts from an empty
-# storage, as kaniko did without --cache). buildah's RUN isolation needs
-# mounts in a user namespace, which Docker's default seccomp profile
-# refuses: the job needs a runner that allows them, such as GitLab.com's
-# hosted saas-linux-* runners (privileged, one ephemeral VM per job), where
-# untagged jobs run. On a runner with Docker's default profile the build
-# fails at the first RUN ("unshare(CLONE_NEWUSER): Operation not
-# permitted"); such a runner needs seccomp=unconfined plus its host's MAC
-# exemption, not privileged mode (CONTRIBUTING.md, Automatic Image
-# Publishing).
+# storage, as kaniko did without --cache).
 #
-# The build never uses the release credentials (QUAY_USER/QUAY_TOKEN; as
-# protected variables they are in the environment of every job of a main
-# or tag pipeline, SECURITY.md): the script does not read them, and
-# build-main and release-build log in to no registry but the Dependency
-# Proxy (when DOCKER_HUB points at it); the crane jobs below push their
-# tarballs. build-branch logs in to BRANCH_IMAGE's
-# registry only after the build. The RUN steps (npm ci with its packages'
-# install scripts, go mod download) run chrooted with buildah's default
-# capabilities: they do not see the auth file and cannot read the job's
-# process environments in /proc.
+# The image jobs have no tags. GitLab.com's hosted runners are off for this
+# project (project API: shared_runners_enabled=false); the job logs show
+# the redhat/ai group runner ("on pe-runners ...", executor docker+machine;
+# it has tag aipcc and takes untagged jobs). Whether it runs jobs
+# privileged is set by its owners and not visible to this project:
+# ci-build-image.sh prints the job's CapEff and the block devices in /dev,
+# so the build log tells. buildah needs a privileged container, or
+# seccomp=unconfined plus label=disable (buildah v1.46.1 in Podman 5.2.5,
+# SELinux enforcing, 2026-11-19). With Docker's default seccomp profile
+# (moby 29.10.0's) it stops at its start ("Error during
+# unshare(CLONE_NEWUSER): Operation not permitted"); with SELinux labels
+# at the first RUN ("masking non-directory .../proc/interrupts ...
+# permission denied"). Either way nothing is pushed: a runner that allows
+# neither makes the image jobs fail. CONTRIBUTING.md, Automatic Image
+# Publishing.
+#
+# The build never uses the release credentials (QUAY_USER/QUAY_TOKEN): the
+# script does not read them, and build-main and release-build log in to no
+# registry but the Dependency Proxy (when DOCKER_HUB points at it); the
+# crane jobs below push their tarballs. build-branch logs in to
+# BRANCH_IMAGE's registry only after the build. The RUN steps (npm ci with
+# its packages' install scripts, go mod download) run chrooted with
+# buildah's default capabilities (no CAP_SYS_PTRACE): the auth file is
+# outside the chroot, /proc lists the job's processes and the kernel
+# refuses reading their environ. On a privileged runner /dev in a RUN step
+# holds the host's block devices, and a RUN step can read them (rootful
+# Podman --privileged, 2026-11-19). So the build's isolation is not what
+# keeps the push token from it: the environment scope of QUAY_* is (they
+# reach only the quay-publish jobs, .crane below; SECURITY.md).
 .image-build:
   stage: build
   image: $BUILDAH_IMAGE
@@ -339,7 +353,10 @@ release-installer:
   # project's CI/CD variables (Environment scope: quay-publish), so only the
   # crane jobs receive them; every other job of a main or tag pipeline,
   # including npm ci with its packages' install scripts, does not.
-  # action: access records no deployment.
+  # action: access records no deployment. Set that scope only after this
+  # file (with the environment) is on main and its first publish-main has
+  # pushed: earlier .crane jobs declare no environment and would get no
+  # QUAY_* (CONTRIBUTING.md, GitLab and Quay settings).
   environment:
     name: quay-publish
     action: access
@@ -405,10 +422,19 @@ promote-latest:
 
 # Self-hosted Renovate (renovate.json5): weekly dependency merge requests.
 # Inert until a Maintainer adds the project variable RENOVATE_TOKEN (a bot
-# token, protected and masked) and a pipeline schedule on main; a schedule
+# token, protected and masked, Environment scope renovate) and a pipeline
+# schedule on main with the schedule variable RENOVATE_RUN=1; a schedule
 # pipeline runs this job only. Optional GITHUB_COM_TOKEN (protected, masked,
-# a GitHub token with no scopes) for the GitHub Actions, Go and Node version
-# lookups and release notes. CONTRIBUTING.md, Dependency updates.
+# a GitHub token with no scopes; Renovate also takes the name
+# RENOVATE_GITHUB_COM_TOKEN, per lib/workers/global/config/parse/env.ts
+# line 333 at 44.254.1)
+# for the GitHub Actions, Go and Node version lookups and release notes.
+# CONTRIBUTING.md, Dependency updates.
+#
+# The rule tests RENOVATE_RUN, not RENOVATE_TOKEN: GitLab's docs say "You
+# should not use environment-scoped variables with rules or include. The
+# variables might not be defined when GitLab validates the pipeline
+# configuration at pipeline creation" (doc/ci/environments/_index.md).
 renovate:
   stage: test
   image: $RENOVATE_IMAGE
@@ -427,6 +453,7 @@ renovate:
     RENOVATE_ONBOARDING: "false"
     LOG_LEVEL: info
   script:
+    - test -n "$RENOVATE_TOKEN" || { echo "RENOVATE_TOKEN is not set for this job (Environment scope renovate; CONTRIBUTING.md, Dependency updates)."; exit 1; }
     - renovate
   rules:
-    - if: $RENOVATE_TOKEN && $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $RENOVATE_RUN
