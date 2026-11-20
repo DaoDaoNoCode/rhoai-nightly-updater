@@ -326,9 +326,14 @@ func (c *Client) do(method, path, contentType string, body []byte, query url.Val
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	// One byte more than the limit tells a response over it from one that
+	// fits, which would otherwise come back cut and fail later as JSON.
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
 	if err != nil {
 		return nil, resp.StatusCode, err
+	}
+	if len(respBody) > maxResponseBody {
+		return nil, resp.StatusCode, fmt.Errorf("%s %s: the API server's response is larger than %d MiB", method, path, maxResponseBody>>20)
 	}
 	if resp.StatusCode >= 400 {
 		err := parseK8sError(respBody, resp.StatusCode)
