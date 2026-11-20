@@ -460,13 +460,14 @@ func (e *webhookEnv) moduleCRExists(module string) moduleState {
 
 // configModule returns the platform module that produces the configuration:
 // its platform.opendatahub.io/part-of label, or the kind of its owning
-// components.platform.opendatahub.io CR. "" when there is none.
+// module CR (either module API group, component_cleanup.go). "" when there
+// is none.
 func configModule(cfg admissionConfig) string {
 	if m := cfg.Metadata.Labels["platform.opendatahub.io/part-of"]; m != "" && m != "platform" {
 		return m
 	}
 	for _, o := range cfg.Metadata.OwnerReferences {
-		if strings.HasPrefix(o.APIVersion, "components.platform.opendatahub.io/") {
+		if isModuleAPIVersion(o.APIVersion) {
 			return strings.ToLower(o.Kind)
 		}
 	}

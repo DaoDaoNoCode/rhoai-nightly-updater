@@ -406,7 +406,7 @@ func (o finalizerOwner) gone() bool {
 func (o finalizerOwner) stillThere() string {
 	var out []string
 	for _, d := range o.Deployments {
-		out = append(out, "Deployment "+d)
+		out = append(out, d)
 	}
 	for _, p := range o.Pods {
 		out = append(out, "Pod "+p)

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // live36Operator is one module operator as the RHOAI 3.6 platform applies
@@ -54,6 +55,19 @@ type moduleOperatorWorld struct {
 	roles       []map[string]any
 	bindings    []map[string]any
 	deployments []map[string]any
+	// pods of the applications namespace (none unless a test adds them).
+	pods []map[string]any
+}
+
+// operatorPod is a Pod running as sa in the applications namespace, in
+// phase, controlled by controllerKind (ReplicaSet, StatefulSet, ... or
+// "" for none).
+func operatorPod(name, sa, phase, controllerKind string) map[string]any {
+	meta := map[string]any{"name": name, "namespace": liveAppsNS}
+	if controllerKind != "" {
+		meta["ownerReferences"] = []any{map[string]any{"apiVersion": "apps/v1", "kind": controllerKind, "name": name + "-owner", "controller": true}}
+	}
+	return map[string]any{"metadata": meta, "spec": map[string]any{"serviceAccountName": sa}, "status": map[string]any{"phase": phase}}
 }
 
 func rule(groups, resources, verbs []string, names ...string) map[string]any {
@@ -158,6 +172,13 @@ func (w *moduleOperatorWorld) serve(f *fakeAPI) {
 	f.obj("/apis/rbac.authorization.k8s.io/v1/clusterroles", map[string]any{"items": w.roles})
 	f.obj("/apis/rbac.authorization.k8s.io/v1/clusterrolebindings", map[string]any{"items": w.bindings})
 	f.obj("/apis/apps/v1/namespaces/"+liveAppsNS+"/deployments", map[string]any{"items": w.deployments})
+	if !f.routed("/api/v1/namespaces/" + liveAppsNS + "/pods") {
+		pods := w.pods
+		if pods == nil {
+			pods = []map[string]any{}
+		}
+		f.obj("/api/v1/namespaces/"+liveAppsNS+"/pods", map[string]any{"items": pods})
+	}
 }
 
 // serveLive36ModuleOperators serves the live 3.6 module operators' RBAC and
@@ -412,5 +433,139 @@ func TestStuckModuleNamesDiscoveredOperator(t *testing.T) {
 	q := stuckModuleProblem(c, newModuleOperatorFinder(c, nil), stuckModule{Module: "newmodule", Name: "default"})
 	if !strings.Contains(strings.Join(q.Evidence, "\n"), "Operator: not identified") {
 		t.Fatalf("%+v", q)
+	}
+}
+
+// The databaseservice module's CR is in services.platform.opendatahub.io
+// (rhods-operator rhoai-3.6 pkg/cluster/gvk/gvk.go), its operator's
+// ClusterRole grants databaseservices and databaseservices/finalizers in
+// that group (prefetched-charts/databaseservice/templates/
+// rbac.authorization.k8s.io_v1_clusterrole.yaml:204-221).
+const servicesV1 = "/apis/services.platform.opendatahub.io/v1alpha1/"
+
+func serveDatabaseService(f *fakeAPI, w *moduleOperatorWorld, deployment bool) {
+	f.json("GET", "/apis/"+servicesAPIGroup, 200, `{"kind":"APIGroup","name":"services.platform.opendatahub.io","preferredVersion":{"groupVersion":"services.platform.opendatahub.io/v1alpha1","version":"v1alpha1"}}`)
+	f.obj("/apis/services.platform.opendatahub.io/v1alpha1", map[string]any{"resources": []any{
+		map[string]any{"name": "databaseservices", "kind": "DatabaseService", "verbs": []string{"get", "list", "patch", "update"}},
+		map[string]any{"name": "databaseservices/status", "kind": "DatabaseService", "verbs": []string{"get", "patch", "update"}},
+		map[string]any{"name": "auths", "kind": "Auth", "verbs": []string{"get", "list", "patch", "update"}},
+	}})
+	sg := []string{servicesAPIGroup}
+	w.roles = append(w.roles, map[string]any{"metadata": map[string]any{"name": "databaseservice-manager-role"}, "rules": []any{
+		rule(sg, []string{"databaseservices"}, []string{"get", "list", "update", "watch"}),
+		rule(sg, []string{"databaseservices/finalizers"}, []string{"update"}),
+		rule(sg, []string{"databaseservices/status"}, []string{"get", "patch", "update"}),
+	}})
+	w.bindings = append(w.bindings, crb("databaseservice-manager-rolebinding", "databaseservice-manager-role", saSubject(liveAppsNS, "databaseservice-operator")))
+	if deployment {
+		w.deployments = append(w.deployments, platformDeployment("databaseservice-operator", "databaseservice-operator", "config.opendatahub.io/v1alpha1", "Platform", "default"))
+	}
+}
+
+// A14: the finder, the removal checks, the stuck-CR cleanup and the
+// Platform modules check find the databaseservice module in the services
+// group; a kind of that group that is not a module (Auth) stays unknown.
+func TestDatabaseServiceModuleInTheServicesGroup(t *testing.T) {
+	f, c := newFakeAPI(t)
+	serveLive36Kinds(f)
+	serveInstalledOperatorOwningKueue(f)
+	w := newLive36ModuleOperatorWorld()
+	serveDatabaseService(f, w, true)
+	w.serve(f)
+	finder := newModuleOperatorFinder(c, nil)
+	op, why, err := finder.find("databaseservice", "default-databaseservice")
+	if err != nil || op == nil || op.Name != "databaseservice-operator" || !strings.Contains(op.Via, "databaseservices/finalizers") {
+		t.Fatalf("databaseservice: %+v %q %v", op, why, err)
+	}
+	if op, why, err := finder.find("auth", "auth"); op != nil || err != nil || !strings.Contains(why, "does not own CRD auths.services.platform.opendatahub.io") {
+		t.Fatalf("auth: %+v %q %v", op, why, err)
+	}
+	// A rule for the same resource in the components group grants nothing.
+	f.json("GET", servicesV1+"databaseservices", 200, `{"items":[{"metadata":{"name":"default-databaseservice","finalizers":["platform.opendatahub.io/finalizer"]}}]}`)
+	f.json("GET", "/apis/apps/v1/namespaces/"+liveAppsNS+"/deployments/databaseservice-operator", 200, `{"status":{"readyReplicas":1}}`)
+	f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator", 200, `{"status":{"readyReplicas":1}}`)
+	if got := newRemovalChecker(c).moduleBlockers("databaseservice"); len(got) != 0 {
+		t.Fatalf("removal of databaseservice refused: %q", got)
+	}
+	old := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	f.json("GET", servicesV1+"databaseservices", 200, `{"items":[{"metadata":{"name":"default-databaseservice","uid":"u","resourceVersion":"3","deletionTimestamp":"`+old+`","finalizers":["platform.opendatahub.io/finalizer"]}}]}`)
+	for _, o := range live36Operators {
+		f.obj(componentsV1+o.Plural, map[string]any{"items": []any{}})
+	}
+	f.obj(componentsV1+"kueues", map[string]any{"items": []any{}})
+	f.obj(componentsV1+"newmodules", map[string]any{"items": []any{}})
+	f.obj(servicesV1+"auths", map[string]any{"items": []any{}})
+	stuck, err := stuckModuleCRs(c, time.Now())
+	if err != nil || len(stuck) != 1 || stuck[0].Module != "databaseservice" || stuck[0].CRD != "databaseservices.services.platform.opendatahub.io" {
+		t.Fatalf("stuck %+v %v", stuck, err)
+	}
+	if p := stuckModuleProblem(c, finder, stuck[0]); p.TechnicalCmd != "oc get databaseservices.services.platform.opendatahub.io default-databaseservice -o yaml" {
+		t.Fatalf("cmd %q", p.TechnicalCmd)
+	}
+	_, warnings := cleanupStuckComponentCRs(c)
+	cleanupWarnings(t, warnings, "databaseservices/default-databaseservice has been deleting since "+old+", but its operator redhat-ods-applications/databaseservice-operator still exists")
+	assertWrites(t, f)
+}
+
+// The services group's rule does not stand in for the components group:
+// RBAC is matched in the kind's own group.
+func TestModuleOperatorRBACIsMatchedInTheKindsGroup(t *testing.T) {
+	f, c := newFakeAPI(t)
+	serveLive36Kinds(f)
+	serveInstalledOperatorOwningKueue(f)
+	w := newLive36ModuleOperatorWorld()
+	serveDatabaseService(f, w, true)
+	for _, r := range w.roles {
+		if r["metadata"].(map[string]any)["name"] == "databaseservice-manager-role" {
+			r["rules"] = []any{rule(componentsGroup, []string{"databaseservices", "databaseservices/finalizers", "databaseservices/status"}, []string{"update"})}
+		}
+	}
+	w.serve(f)
+	if op, why, err := newModuleOperatorFinder(c, nil).find("databaseservice", "default-databaseservice"); op != nil || err != nil || !strings.Contains(why, "no ServiceAccount in redhat-ods-applications may update databaseservices") {
+		t.Fatalf("%+v %q %v", op, why, err)
+	}
+}
+
+// B(b): the operator is gone only when no Pod that may still run (whatever
+// controls it) runs as its ServiceAccounts; Succeeded and Failed Pods do not
+// count; a Pod list error is an error (callers leave the finalizer).
+func TestFinalizerOwnerCountsPods(t *testing.T) {
+	trusty := liveOperator("trustyai")
+	for _, tc := range []struct {
+		name     string
+		pods     []map[string]any
+		podsErr  bool
+		wantGone bool
+		wantPods []string
+	}{
+		{"no Pods", nil, false, true, nil},
+		{"a ReplicaSet left by the deleted Deployment", []map[string]any{operatorPod("op-rs-1", trusty.ServiceAccount, "Running", "ReplicaSet")}, false, false, []string{liveAppsNS + "/op-rs-1"}},
+		{"a bare Pod, Pending", []map[string]any{operatorPod("bare", trusty.ServiceAccount, "Pending", "")}, false, false, []string{liveAppsNS + "/bare"}},
+		{"a StatefulSet Pod in an unknown phase", []map[string]any{operatorPod("sts-0", trusty.ServiceAccount, "", "StatefulSet")}, false, false, []string{liveAppsNS + "/sts-0"}},
+		{"finished Pods", []map[string]any{operatorPod("done", trusty.ServiceAccount, "Succeeded", "Job"), operatorPod("failed", trusty.ServiceAccount, "Failed", "")}, false, true, nil},
+		{"another ServiceAccount", []map[string]any{operatorPod("other", "someone-else", "Running", "ReplicaSet")}, false, true, nil},
+		{"Pods unreadable", nil, true, false, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c := newFakeAPI(t)
+			serveLive36Kinds(f)
+			w := newLive36ModuleOperatorWorld()
+			w.dropDeployment(trusty.Deployment)
+			w.pods = tc.pods
+			if tc.podsErr {
+				f.status("GET", "/api/v1/namespaces/"+liveAppsNS+"/pods", http.StatusForbidden, "Forbidden")
+			}
+			w.serve(f)
+			owner, err := newModuleOperatorFinder(c, nil).finalizerOwner("trustyai", "default-trustyai")
+			if tc.podsErr {
+				if err == nil || !strings.Contains(err.Error(), "list Pods in redhat-ods-applications") {
+					t.Fatalf("err = %v", err)
+				}
+				return
+			}
+			if err != nil || owner.gone() != tc.wantGone || !slices.Equal(owner.Pods, tc.wantPods) {
+				t.Fatalf("owner %+v gone=%v err %v", owner, owner.gone(), err)
+			}
+		})
 	}
 }

@@ -56,16 +56,16 @@ func deploymentReady(c *Client, namespace, name string) (bool, string) {
 // moduleCR returns the module CR of a component (its name and
 // finalizers), or found=false. Discovery and list errors are returned, so a
 // precondition is never skipped because the CR could not be read.
-// kindUnknown: the component API is served, but none of its kinds is named
-// after the module, so the tool cannot tell which CR (if any) serves the
-// module.
+// kindUnknown: a module API group is served, but none of its kinds (in
+// either module group) is named after the module, so the tool cannot tell
+// which CR (if any) serves the module.
 func moduleCR(c *Client, discover func() (componentAPI, error), component string) (name string, finalizers []string, deleting, found, kindUnknown bool, err error) {
 	api, err := discover()
 	if err != nil {
 		return "", nil, false, false, false, err
 	}
-	if api.Version != "" {
-		if _, ok := api.resourceForModule(component); !ok {
+	if api.served() {
+		if _, ok := api.kindForModule(component); !ok {
 			return "", nil, false, false, true, nil
 		}
 	}
@@ -174,7 +174,7 @@ func (rc *removalChecker) teardownBlockers(component string) (blockers, conversi
 // component API is named after it, so the tool cannot tell which CR serves
 // it nor which operator cleans it up.
 func unknownModuleBlocker(component string) string {
-	return fmt.Sprintf("can't tell which module serves it (no %s kind is named after %s), so the tool can't confirm an operator is running to clean up and won't remove it. Check in the OpenShift console, then change it there", componentAPIGroup, component)
+	return fmt.Sprintf("can't tell which module serves it (no %s kind is named after %s), so the tool can't confirm an operator is running to clean up and won't remove it. Check in the OpenShift console, then change it there", strings.Join(moduleAPIGroups, " or "), component)
 }
 
 // unknownOperatorBlocker words a module CR whose operator the tool cannot
@@ -363,7 +363,7 @@ func (rc *removalChecker) serviceComponent(ref string) (string, error) {
 			break
 		}
 		for _, o := range svc.Metadata.OwnerReferences {
-			if strings.HasPrefix(o.APIVersion, componentAPIGroup+"/") {
+			if isModuleAPIVersion(o.APIVersion) {
 				owner = strings.ToLower(o.Kind)
 			}
 		}

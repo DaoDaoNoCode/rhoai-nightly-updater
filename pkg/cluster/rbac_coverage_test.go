@@ -90,6 +90,10 @@ var knownResourceGroups = map[string]string{
 // miss new ones.
 var discoveredResourceGroups = map[string]bool{
 	"components.platform.opendatahub.io": true,
+	// The databaseservice module CR, and the RHOAI operator's own services
+	// (rhods-operator rhoai-3.6 pkg/cluster/gvk/gvk.go), discovered the same
+	// way (component_cleanup.go).
+	"services.platform.opendatahub.io": true,
 	// Singleton operands (<Kind>/cluster) of prerequisite operators, whose
 	// kind comes from the operator's CSV (prerequisites.go); the rule is
 	// limited to the name "cluster".
@@ -344,11 +348,18 @@ func (r resolver) resolveCall(x *ast.CallExpr) []string {
 			return []string{maasGroup + "/" + unknownPart}
 		case "gitOpsAdmissionPolicyName":
 			return []string{gitOpsPolicyNameMarker}
+		case "componentListPath":
+			// A discovered kind of one of the module API groups.
+			return moduleKindPaths()
 		}
 		if _, ok := r.p.funcs[fun.Name]; ok {
 			return r.resolveCallResult(x, 0)
 		}
 	case *ast.SelectorExpr:
+		if fun.Sel.Name == "listPath" && len(x.Args) == 0 {
+			// componentKind.listPath: a discovered module kind.
+			return moduleKindPaths()
+		}
 		if pkg, ok := fun.X.(*ast.Ident); ok && pkg.Name == "fmt" && fun.Sel.Name == "Sprintf" && len(x.Args) > 0 {
 			formats := r.resolve(x.Args[0])
 			var args [][]string
@@ -373,6 +384,16 @@ func (r resolver) resolveCall(x *ast.CallExpr) []string {
 		}
 	}
 	return []string{unknownPart}
+}
+
+// moduleKindPaths are the collections of a discovered kind in each module
+// API group (component_cleanup.go), at a discovered version.
+func moduleKindPaths() []string {
+	var out []string
+	for _, g := range moduleAPIGroups {
+		out = append(out, "/apis/"+g+"/"+unknownPart+"/"+unknownPart)
+	}
+	return out
 }
 
 func combos(args [][]string) [][]string {

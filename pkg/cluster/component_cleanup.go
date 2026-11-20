@@ -278,7 +278,7 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 		if !strings.Contains(verbs, "list,") || !strings.Contains(verbs, "patch,") {
 			continue
 		}
-		resource := kind.crd()
+		resource := kind.Resource
 		listPath := kind.listPath()
 		body, _, err := c.get(listPath)
 		if err != nil {

@@ -459,7 +459,7 @@ func TestRemovalChecksFailClosedOnModulesTheToolCannotCheck(t *testing.T) {
 	f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1/rays", http.StatusOK, `{"items":[]}`)
 	serveLive36ModuleOperators(f)
 	rc := newRemovalChecker(c)
-	if got := strings.Join(rc.partBlockers("data"), " "); !strings.Contains(got, "no components.platform.opendatahub.io kind is named after data") {
+	if got := strings.Join(rc.partBlockers("data"), " "); !strings.Contains(got, "no components.platform.opendatahub.io or services.platform.opendatahub.io kind is named after data") {
 		t.Fatalf("unknown kind: %q", got)
 	}
 	if got := strings.Join(rc.moduleBlockers("sparkoperator"), " "); !strings.Contains(got, "can't confirm its operator is running") {

@@ -95,8 +95,12 @@ const (
 	// to the CRD's schema for server-side apply ("failed to create manager
 	// for existing fields: failed to convert new object (...) to smd typed:
 	// errors: <path>: expected <type>, got ..."), live on RHOAI 3.6 after
-	// upgrades over several releases. The "Left over from an earlier
-	// release" check handles it (diagnostics_leftovers.go).
+	// upgrades over several releases. The API server raises it only when
+	// the live object has no managedFields (kubernetes v1.34
+	// staging/src/k8s.io/apimachinery/pkg/util/managedfields/internal/
+	// skipnonapplied.go:75-91; how an object loses them:
+	// fieldmanager.go:145-164). The "Left over from an earlier release"
+	// check handles it (diagnostics_leftovers.go).
 	applyStoredType applyFailureClass = "stored-type"
 )
 

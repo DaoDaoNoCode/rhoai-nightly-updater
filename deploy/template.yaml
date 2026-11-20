@@ -241,8 +241,10 @@ objects:
         resources: ["platforms"]
         verbs: ["list"]
       # Module CRs, whose kinds the code discovers (they change with the
-      # operator version): stuck-deletion and webhook-owner checks
-      - apiGroups: ["components.platform.opendatahub.io"]
+      # operator version): stuck-deletion and webhook-owner checks. RHOAI
+      # 3.6 serves the databaseservice module's CR in the services group
+      # (rhods-operator pkg/cluster/gvk/gvk.go); list only, no Secrets
+      - apiGroups: ["components.platform.opendatahub.io", "services.platform.opendatahub.io"]
         resources: ["*"]
         verbs: ["list"]
       # Which Deployment cleans up a module CR: the one whose ServiceAccount
