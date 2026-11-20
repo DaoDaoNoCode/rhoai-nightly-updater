@@ -443,7 +443,7 @@ reset_registry
 config v1.0.0-alpha.1 "$SHA2" >"$WORK/image.tar"
 expect_ok "publish a pre-release to an empty repository" publish v1.0.0-alpha.1
 [ -f "$REG/tags/v1.0.0-alpha.1" ] && [ ! -e "$REG/tags/latest" ] && [ ! -e "$REG/tags/v1" ] && pass ||
-	fail "a pre-release in an empty repository: tags $(ls "$REG/tags" | tr '\n' ' ')"
+	fail "a pre-release in an empty repository: tags $(cd "$REG/tags" && echo *)"
 
 # Tags are compared literally: v2x0x1 is not v2.0.1 (a regex dot would match it).
 reset_registry
