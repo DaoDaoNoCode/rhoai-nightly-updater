@@ -167,15 +167,20 @@ FAKE
 cat >"$BIN/curl" <<'FAKE'
 #!/usr/bin/env bash
 # Fake curl: a registry v2 API; every call is logged.
-#   HEAD manifests/TAG: FAKE_DIGEST, or 404.
-#   GET manifests/REF: an image manifest naming the config blob (a tag
-#     only while FAKE_DIGEST is set). FAKE_INDEX=1: for a tag or FAKE_DIGEST,
-#     a manifest list whose linux/arm64 (sha256:ccc...) and linux/amd64
-#     (sha256:ddd...) entries are both that image.
+#   HEAD manifests/TAG: FAKE_DIGEST, or 404 (run sets FAKE_DIGEST to the
+#     digest of what GET serves for the tag, fake_digest).
+#   GET manifests/REF: content-addressed. The linux/amd64 and the linux/arm64
+#     image manifests (both naming the config blob; they differ in their
+#     layer) by their own digests; for a tag (only while FAKE_DIGEST is set)
+#     or any other digest, the linux/amd64 manifest, or with FAKE_INDEX=1 a
+#     manifest list of the two (so another digest gets bytes that do not
+#     match it). FAKE_CHILD_CORRUPT=1: the two image manifests come with
+#     other bytes than their digests name.
 #   GET blobs/DIGEST: the config, compact JSON, its revision label
 #     FAKE_REVISION (none when empty); FAKE_BLOB_CORRUPT=1 serves other bytes.
 #     FAKE_BLOB_REDIRECT: a 307 to that URL instead (another host), which
-#     serves the config.
+#     serves the config (https://cdn.example.net/ and
+#     http://127.0.0.1:5001/ serve it).
 #   FAKE_REALM: requests without a token get a Bearer challenge for that
 #     realm; -G (the token service) answers FAKE_TOKEN (anon).
 #   FAKE_GET_STATUS: the status of every GET of the registry.
@@ -222,7 +227,21 @@ config() {
 	# container_config and the history.
 	printf '{"architecture":"amd64","config":{"Env":["PATH=/usr/bin"],"Labels":{%s"org.opencontainers.image.version":"v9.8.7"}},"container_config":{"Labels":{"org.opencontainers.image.revision":"2222222222222222222222222222222222222222"}},"created":"2026-11-19T00:00:00Z","history":[{"created_by":"LABEL \\"org.opencontainers.image.revision\\":\\"3333333333333333333333333333333333333333\\""}],"os":"linux","rootfs":{"type":"layers","diff_ids":[]}}' "$label"
 }
-case "$url" in https://cdn.example.net/*)
+# sha: the hex SHA-256 of stdin.
+sha() {
+	local s
+	if command -v sha256sum >/dev/null 2>&1; then s=$(sha256sum); else s=$(shasum -a 256); fi
+	printf '%s' "${s%% *}"
+}
+# manifest LAYER: an image manifest naming the config blob, with a layer
+# of 64 times the character LAYER.
+manifest() {
+	local cfg layer
+	cfg=$(config | sha)
+	layer=$(printf "$1%.0s" $(seq 64))
+	printf '%s' "{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"config\":{\"mediaType\":\"application/vnd.oci.image.config.v1+json\",\"digest\":\"sha256:$cfg\",\"size\":1},\"layers\":[{\"mediaType\":\"application/vnd.oci.image.layer.v1.tar+gzip\",\"digest\":\"sha256:$layer\",\"size\":1}]}"
+}
+case "$url" in https://cdn.example.net/* | http://127.0.0.1:5001/*)
 	body=$(config)
 	[ -z "${FAKE_BLOB_CORRUPT:-}" ] || body="$body "
 	reply "200 OK" "" "$body"
@@ -237,24 +256,33 @@ fi
 ref=${url##*/}
 case "$url" in
 */manifests/*)
+	amd=$(manifest e)
+	arm=$(manifest f)
+	d=sha256:$(printf '%s' "$amd" | sha)
+	c=sha256:$(printf '%s' "$arm" | sha)
+	case "$ref" in
+	"$c" | "$d")
+		body=$amd
+		[ "$ref" = "$d" ] || body=$arm
+		[ -z "${FAKE_CHILD_CORRUPT:-}" ] || body="$body "
+		reply "200 OK" "" "$body"
+		;;
+	esac
 	[[ $ref == sha256:* ]] || [ -n "${FAKE_DIGEST:-}" ] || reply "404 Not Found" "" '{"errors":[{"code":"MANIFEST_UNKNOWN"}]}'
-	if [ -n "${FAKE_INDEX:-}" ] && [[ $ref != sha256:[cd]* ]]; then
+	if [ -n "${FAKE_INDEX:-}" ]; then
 		# Built in steps: bash 3.2 (macOS) mangles escaped quotes in a
 		# command substitution nested in a quoted one.
-		c=$(printf 'c%.0s' $(seq 64))
-		d=$(printf 'd%.0s' $(seq 64))
 		m='"mediaType": "application/vnd.oci.image.manifest.v1+json"'
 		index=$(printf '%s\n' '{' '  "schemaVersion": 2,' \
 			'  "mediaType": "application/vnd.oci.image.index.v1+json",' '  "manifests": [' \
-			"    {$m, \"digest\": \"sha256:$c\", \"size\": 1," \
+			"    {$m, \"digest\": \"$c\", \"size\": 1," \
 			'      "platform": {"architecture": "arm64", "os": "linux", "variant": "v8"}},' \
 			'    {"platform": {"os": "linux", "architecture": "amd64"},' \
-			"      $m, \"digest\": \"sha256:$d\", \"size\": 1}" \
+			"      $m, \"digest\": \"$d\", \"size\": 1}" \
 			'  ]' '}')
 		reply "200 OK" "" "$index"
 	fi
-	if command -v sha256sum >/dev/null 2>&1; then sum=$(config | sha256sum); else sum=$(config | shasum -a 256); fi
-	reply "200 OK" "" "{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"config\":{\"mediaType\":\"application/vnd.oci.image.config.v1+json\",\"digest\":\"sha256:${sum%% *}\",\"size\":1},\"layers\":[{\"mediaType\":\"application/vnd.oci.image.layer.v1.tar+gzip\",\"digest\":\"sha256:$(printf 'e%.0s' $(seq 64))\",\"size\":1}]}"
+	reply "200 OK" "" "$amd"
 	;;
 */blobs/*)
 	[ -z "${FAKE_BLOB_REDIRECT:-}" ] || reply "307 Temporary Redirect" "Location: $FAKE_BLOB_REDIRECT\r\n" "" "$FAKE_BLOB_REDIRECT"
@@ -293,13 +321,39 @@ END { OFS = "\t"; for (i = 1; i <= n; i++) print kind[i], subst(ns[i]), subst(in
 ' "${2:-/dev/null}" "$1"
 FAKE
 chmod +x "$BIN/oc" "$BIN/curl" "$BIN/template-objects"
-DIGEST="sha256:$(printf 'a%.0s' $(seq 64))"
+
+sha256_hex() {
+	local s
+	if command -v sha256sum >/dev/null 2>&1; then s=$(sha256sum); else s=$(shasum -a 256); fi
+	printf '%s\n' "${s%% *}"
+}
+# fake_manifest REVISION INDEX OUT: what the fake registry serves for a tag
+# (the image manifest, or with INDEX the manifest list), into OUT; the
+# fake's failure modes off.
+fake_manifest() {
+	FAKE_LOG=/dev/null FAKE_REVISION=$1 FAKE_INDEX=$2 FAKE_DIGEST=x FAKE_REALM="" FAKE_GET_STATUS="" \
+		FAKE_REGISTRY_DOWN="" FAKE_CHILD_CORRUPT="" "$BIN/curl" -o "$3" https://quay.io/v2/example/app/manifests/v1
+}
+# fake_digest REVISION [INDEX]: that manifest's digest, as a registry's
+# Docker-Content-Digest names it.
+fake_digest() {
+	fake_manifest "$1" "${2:-}" "$WORK/fake-manifest"
+	printf 'sha256:%s\n' "$(sha256_hex <"$WORK/fake-manifest")"
+}
+DIGEST=$(fake_digest "$COMMIT")
+INDEX_DIGEST=$(fake_digest "$COMMIT" 1)
+fake_manifest "$COMMIT" 1 "$WORK/index.json"
+ARM_DIGEST=$(grep -o 'sha256:[0-9a-f]\{64\}' "$WORK/index.json" | sed -n 1p)
+AMD_DIGEST=$(grep -o 'sha256:[0-9a-f]\{64\}' "$WORK/index.json" | sed -n 2p)
 
 # run ARGS...: the given command with the fakes, a fresh log, and the
-# defaults of a cluster without the app.
+# defaults of a cluster without the app. The tag resolves to the digest of
+# what the fake serves for it (fake_digest), unless FAKE_DIGEST is set.
 run() {
+	local digest=${FAKE_DIGEST-}
 	rm -f "$LOG" "$LOG.params" "$LOG.oauthclient" "$LOG.client-secret"
-	env PATH="$BIN:$PATH" FAKE_LOG="$LOG" FAKE_DIGEST="${FAKE_DIGEST-$DIGEST}" FAKE_REVISION="${FAKE_REVISION-$COMMIT}" FAKE_OCP_VERSION="${FAKE_OCP_VERSION-4.19.3}" "$@"
+	[ -n "${FAKE_DIGEST+set}" ] || digest=$(fake_digest "${FAKE_REVISION-$COMMIT}" "${FAKE_INDEX:-}")
+	env PATH="$BIN:$PATH" FAKE_LOG="$LOG" FAKE_DIGEST="$digest" FAKE_REVISION="${FAKE_REVISION-$COMMIT}" FAKE_OCP_VERSION="${FAKE_OCP_VERSION-4.19.3}" "$@"
 }
 mutations() { grep -E '^oc (create|new-project|delete|rollout|patch|apply -f|apply --server-side)' "$LOG" | grep -v -- '--dry-run=server' || true; }
 
@@ -415,8 +469,6 @@ FAKE_REALM=http://quay.io/v2/auth expect_fail "plain-http token realm: warning" 
 # not read the image (a broken credential helper), they refused a correct
 # image with "reports revision <none>".
 oc_info() { grep '^oc image info' "$LOG" || true; }
-CCC="sha256:$(printf 'c%.0s' $(seq 64))"
-DDD="sha256:$(printf 'd%.0s' $(seq 64))"
 OK_LINE="OK: quay.io/example/app@$DIGEST was built from $COMMIT, the commit of v9.8.7."
 # The config blob as Quay serves it: compact JSON, one line, with other
 # revisions in container_config and the history. Nothing asks oc.
@@ -445,11 +497,28 @@ grep -qxF "$OK_LINE" <<<"$out" && pass || fail "label without jq: $out"
 expect_eq "label without jq: oc not asked" "" "$(oc_info)"
 # A manifest list: its $PLATFORM entry, as oc's --filter-by-os.
 FAKE_INDEX=1 expect_ok "label: manifest list" run bash "$ASSET" resolve-image
-grep -q "manifests/$DDD" "$LOG" && ! grep -q "manifests/$CCC" "$LOG" && pass || fail "manifest list: not the linux/amd64 entry: $(grep manifests "$LOG")"
+grep -q "manifests/$AMD_DIGEST" "$LOG" && ! grep -q "manifests/$ARM_DIGEST" "$LOG" && pass || fail "manifest list: not the linux/amd64 entry: $(grep manifests "$LOG")"
+expect_eq "manifest list: read through the registry API, not oc" "" "$(oc_info)"
 FAKE_INDEX=1 PLATFORM=linux/arm64 expect_ok "label: manifest list, PLATFORM=linux/arm64" run bash "$ASSET" resolve-image
-grep -q "manifests/$CCC" "$LOG" && ! grep -q "manifests/$DDD" "$LOG" && pass || fail "manifest list: not the linux/arm64 entry"
+grep -q "manifests/$ARM_DIGEST" "$LOG" && ! grep -q "manifests/$AMD_DIGEST" "$LOG" && pass || fail "manifest list: not the linux/arm64 entry"
+expect_eq "manifest list, PLATFORM=linux/arm64: oc not asked" "" "$(oc_info)"
+# A manifest is believed only when its bytes are what the digest names: the
+# digest the installer pins (the registry serves other bytes for it) and,
+# in a manifest list, the entry's digest of its image manifest. The label
+# then comes from oc, which checks digests itself.
+BAD="sha256:$(printf 'a%.0s' $(seq 64))"
+out=$(FAKE_DIGEST=$BAD FAKE_OC_ERROR="error: no route" run bash "$ASSET" resolve-image 2>&1) && fail "manifest not matching its digest: accepted: $out" || pass
+grep -qF "Tried the registry API: the manifest from https://quay.io/v2/example/app/manifests/$BAD does not match its digest" <<<"$out" &&
+	pass || fail "manifest not matching its digest: no reason: $out"
+expect_eq "manifest not matching its digest: no config blob read" "" "$(grep '/blobs/' "$LOG" || true)"
+FAKE_DIGEST=$BAD expect_ok "manifest not matching its digest: oc decides" run bash "$ASSET" resolve-image
+grep -q "^oc image info quay.io/example/app@$BAD" "$LOG" && pass || fail "manifest not matching its digest: oc not asked"
+out=$(FAKE_INDEX=1 FAKE_CHILD_CORRUPT=1 FAKE_OC_ERROR="error: no route" run bash "$ASSET" resolve-image 2>&1) && fail "list entry not matching its digest: accepted: $out" || pass
+grep -qF "Tried the registry API: the manifest from https://quay.io/v2/example/app/manifests/$AMD_DIGEST does not match its digest" <<<"$out" &&
+	pass || fail "list entry not matching its digest: no reason: $out"
+expect_eq "list entry not matching its digest: no config blob read" "" "$(grep '/blobs/' "$LOG" || true)"
 FAKE_INDEX=1 PLATFORM=linux/s390x expect_ok "manifest list without PLATFORM: oc decides" run bash "$ASSET" resolve-image
-grep -q "^oc image info quay.io/example/app@$DIGEST --filter-by-os=linux/s390x" "$LOG" && pass || fail "manifest list without PLATFORM: oc not asked"
+grep -q "^oc image info quay.io/example/app@$INDEX_DIGEST --filter-by-os=linux/s390x" "$LOG" && pass || fail "manifest list without PLATFORM: oc not asked"
 # A blob redirected to storage on another host (Quay's CDN): the token
 # stays with the registry.
 FAKE_REALM=https://quay.io/v2/auth FAKE_BLOB_REDIRECT='https://cdn.example.net/sha256/aa?X-Amz-Signature=sig' \
@@ -466,6 +535,28 @@ grep -qF "Tried the registry API: the config blob from https://quay.io/v2/exampl
 grep -q "X-Amz-Signature" <<<"$out" && fail "corrupt blob: the storage URL's signature printed: $out" || pass
 FAKE_BLOB_CORRUPT=1 expect_ok "corrupt blob: oc decides" run bash "$ASSET" resolve-image
 grep -q '^oc image info' "$LOG" && pass || fail "corrupt blob: oc not asked"
+# Redirects are followed to https only: a registry on this machine (http,
+# as registry_endpoint picks it) may also redirect to http on this machine.
+for loc in 'http://cdn.example.net/sha256/aa?X-Amz-Signature=sig' 'http://127.0.0.1:5001/sha256/aa?X-Amz-Signature=sig' 'ftp://cdn.example.net/sha256/aa'; do
+	out=$(FAKE_REALM=https://quay.io/v2/auth FAKE_TOKEN=s3cr... FAKE_BLOB_REDIRECT=$loc FAKE_OC_ERROR="error: no route" \
+		run bash "$ASSET" resolve-image 2>&1) && fail "redirect to $loc: accepted: $out" || pass
+	grep -qF "Tried the registry API: GET https://quay.io/v2/example/app/blobs/sha256:" <<<"$out" &&
+		grep -qF "redirects to ${loc%%\?*}, which is not https" <<<"$out" && pass || fail "redirect to $loc: no reason: $out"
+	grep -q "X-Amz-Signature" <<<"$out" && fail "redirect to $loc: the signature printed: $out" || pass
+	grep -q "s3cr..." "$LOG" && pass || fail "redirect to $loc: the token was not used (the test proves nothing)"
+	grep -qiE 's3cr...|authorization|bearer' <<<"$out" && fail "redirect to $loc: the token or its header printed: $out" || pass
+	expect_eq "redirect to $loc: not followed" "" "$(grep -F "curl" "$LOG" | grep -F " ${loc%%\?*}" || true)"
+done
+FAKE_BLOB_REDIRECT='http://127.0.0.1:5001/sha256/aa' IMAGE=localhost:5000/example/app TAG=v9.8.7 \
+	expect_ok "local registry: http redirect on this machine" run bash "$CLONE" resolve-image
+grep -q '^curl .* http://localhost:5000/v2/example/app/blobs/sha256:' "$LOG" && grep -q '^curl .* http://127.0.0.1:5001/sha256/aa$' "$LOG" &&
+	pass || fail "local registry: the redirect was not followed: $(grep '^curl' "$LOG")"
+expect_eq "local registry: oc not asked" "" "$(oc_info)"
+for loc in 'http://cdn.example.net/sha256/aa' 'http://127.0.0.1:5001@cdn.example.net/sha256/aa' 'http://localhost:5000@cdn.example.net/sha256/aa'; do
+	out=$(FAKE_BLOB_REDIRECT=$loc FAKE_OC_ERROR="error: no route" IMAGE=localhost:5000/example/app TAG=v9.8.7 run bash "$CLONE" resolve-image 2>&1) || true
+	grep -qF "redirects to $loc, which is not https" <<<"$out" && pass || fail "local registry, redirect to $loc: no reason: $out"
+	expect_eq "local registry, redirect to $loc: not followed" "" "$(grep -F " $loc" "$LOG" || true)"
+done
 # Neither the registry API (it refuses the manifest) nor oc (a broken
 # credential helper) can read the image: the installer says both reasons,
 # and never the token.
@@ -517,14 +608,14 @@ grep -qF "WARNING: cannot read the revision label of quay.io/juntao_wang/rhoai-n
 # compact and indented JSON.
 sed -n '/^json_flat_jq() {/,/^}/p; /^json_flat_awk() {/,/^}/p' "$SRC/scripts/install.sh" >"$WORK/json-flat.sh"
 FAKE_LOG=/dev/null FAKE_REVISION=$COMMIT "$BIN/curl" -o "$WORK/config.json" https://cdn.example.net/x
-FAKE_LOG=/dev/null FAKE_INDEX=1 FAKE_DIGEST=$DIGEST "$BIN/curl" -o "$WORK/index.json" https://quay.io/v2/example/app/manifests/v1
+fake_manifest "$COMMIT" 1 "$WORK/index.json"
 FAKE_LOG=/dev/null FAKE_REVISION=$COMMIT "$BIN/oc" image info x >"$WORK/oc.json"
 for f in config index oc; do
 	awk_out=$(bash -c 'source "$1"; json_flat_awk <"$2"' _ "$WORK/json-flat.sh" "$WORK/$f.json")
 	case $f in
 	config) want=$(printf '%s\t%s\n' "config/Labels/org.opencontainers.image.revision" "$COMMIT" "container_config/Labels/org.opencontainers.image.revision" 2222222222222222222222222222222222222222 \
 		"history/0/created_by" 'LABEL "org.opencontainers.image.revision":"3333333333333333333333333333333333333333"' "rootfs/type" layers) ;;
-	index) want=$(printf '%s\t%s\n' "manifests/0/digest" "$CCC" "manifests/0/platform/variant" v8 "manifests/1/platform/architecture" amd64 "manifests/1/digest" "$DDD") ;;
+	index) want=$(printf '%s\t%s\n' "manifests/0/digest" "$ARM_DIGEST" "manifests/0/platform/variant" v8 "manifests/1/platform/architecture" amd64 "manifests/1/digest" "$AMD_DIGEST") ;;
 	oc) want=$(printf '%s\t%s\n' "config/config/Labels/org.opencontainers.image.revision" "$COMMIT") ;;
 	esac
 	while IFS= read -r line; do

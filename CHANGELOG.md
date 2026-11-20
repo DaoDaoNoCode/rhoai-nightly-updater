@@ -517,8 +517,12 @@ only accepts a tag whose version is the top dated section. See
   registry worked) they refused the correct v3.0.1 image. The label is now
   read from the registry's v2 API first, anonymously like the digest: the
   manifest (for a manifest list, the `PLATFORM` image's), then the config
-  blob. A blob redirected to another host (Quay's CDN) is fetched without
-  the registry token and must match its digest. `oc image info` is the
+  blob. Each must be the bytes its digest names: the pinned digest for the
+  manifest (list), the list's entry for the image manifest, the manifest's
+  config digest for the blob. Redirects are followed to `https` only (a
+  registry on `localhost`/`127.0.0.1` may also redirect to `http` there).
+  A blob redirected to another host (Quay's CDN) is fetched without the
+  registry token. `oc image info` is the
   fallback. When both fail, the installer stops with "cannot read the
   revision label" and each reason (the registry's HTTP status or curl's
   error, and oc's error), never a token. Resolving the digest and
