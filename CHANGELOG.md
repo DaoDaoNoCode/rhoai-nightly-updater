@@ -351,6 +351,9 @@ only accepts a tag whose version is the top dated section. See
   ([RUNBOOK §13](RUNBOOK.md#13-clusters-managed-by-argo-cd)). The
   ServiceAccount (both profiles) may now `list` Argo CD Applications
   ([SECURITY: Reading Argo CD Applications](SECURITY.md#reading-argo-cd-applications-400)).
+  The status pages reuse a successful list for up to 30 seconds
+  (concurrent polls share one request); every change and refusal check
+  lists again.
 - **Argo CD with label tracking is recognised (also affected 3.x).**
   OpenShift GitOps 1.12 to 1.18 track resources by the
   `app.kubernetes.io/instance` label unless the ArgoCD CR says otherwise

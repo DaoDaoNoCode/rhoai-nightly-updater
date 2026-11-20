@@ -149,6 +149,33 @@ func TestWithAuth_ValidToken_CallsHandler(t *testing.T) {
 	}
 }
 
+// Read requests get a client that may reuse a recent status answer (the
+// Argo CD Applications list); withAdminRead is a read too. Changes never do
+// (TestMutationClientActsAsTheUser).
+func TestWithAuth_ClientIsAStatusRead(t *testing.T) {
+	setupDevMode(t)
+	allowMutations(t)
+	for name, wrap := range map[string]func(func(*cluster.Client, http.ResponseWriter, *http.Request)) http.HandlerFunc{
+		"withAuth": withAuth, "withAdminRead": withAdminRead,
+	} {
+		var got *cluster.Client
+		handler := wrap(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+			got = c
+			w.WriteHeader(http.StatusOK)
+		})
+		req := httptest.NewRequest("GET", "/api/status", nil)
+		req.Header.Set("X-Forwarded-Access-Token", "user-oauth-token")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if got == nil {
+			t.Fatalf("%s: handler not called (code %d)", name, rec.Code)
+		}
+		if !got.StatusRead() || got.ActsAsUser() {
+			t.Fatalf("%s: status read %v, as user %v; want the ServiceAccount's client, marked as a status read", name, got.StatusRead(), got.ActsAsUser())
+		}
+	}
+}
+
 func TestWithAuth_AuthorizationBearer_Works(t *testing.T) {
 	setupDevMode(t)
 

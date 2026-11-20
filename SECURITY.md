@@ -266,7 +266,7 @@ The app's ServiceAccount has no right on OAuthClients or OAuth tokens (`TestServ
 | ClusterServiceVersions | `get list` | read-only |
 | Validating/Mutating webhook configurations, CRDs, DSCInitializations, Platforms, DSPAs, cert-manager Certificates, Gateways, Kuadrants, ImageDigestMirrorSets, ImageTagMirrorSets, ImageContentSourcePolicies | `list` | read-only; CRD `get` only the DSC's |
 | DataScienceClusters | `get list` | read-only: the hard reset's `delete` (template revision 7 before 4.0.0) now runs with the user's token |
-| `components.platform.opendatahub.io/*` (module CRs) | `list` | read-only; the kinds change between releases and are discovered |
+| `components.platform.opendatahub.io/*`, `services.platform.opendatahub.io/*` (module CRs) | `list` | read-only; the kinds change between releases and are discovered: [the services group](#reading-module-crs-in-the-services-group-400) |
 | ClusterRoles, ClusterRoleBindings | `list` | read-only: [which operator cleans up a module](#reading-rbac-to-find-module-operators-400); also ClusterRoleBinding `argocd-manager-role-binding` by field selector ([Argo CD on another cluster](#reading-argo-cd-applications-400)) |
 | Argo CD Applications (`argoproj.io`) | `list` | read-only, all of them: [does an Application list the object](#reading-argo-cd-applications-400) |
 | RoleBindings | `get`, only `argocd-manager-role-binding` | read-only: [an Argo CD on another cluster](#reading-argo-cd-applications-400) (`argocd cluster add --namespace`) |
@@ -280,7 +280,7 @@ The app's ServiceAccount has no right on OAuthClients or OAuth tokens (`TestServ
 | OGXServers | `list`; `get` | `get` only `lsd-genai-playground` (the gen-ai API's access review, the playground's UID) |
 | CloudNativePG Clusters, Authorinos, AITenants, MaaSTenantConfigs | `get` | only `maas-db`, `authorino`, `models-as-a-service`, `default-tenant` |
 | HTTPRoutes | `get` | only the three chat models' `<model>-kserve-route` |
-| Groups (`user.openshift.io`) | `get` | no (the MaaS groups check, answered only to cluster-admins) |
+| Groups (`user.openshift.io`) | `get` | no: [the MaaS groups check](#reading-openshift-groups-by-name-400), answered only to cluster-admins |
 | MaaSModelRefs, MaaSSubscriptions, MaaSAuthPolicies | `list`; MaaSModelRefs `get delete`; MaaSSubscription and MaaSAuthPolicy `get patch delete` | the writes only on the three chat models' MaaSModelRefs, `rhoai-nightly-updater-subscription` and `rhoai-nightly-updater-access`: [the MaaS prune job](#the-maas-prune-job-400) |
 
 There is no `create` outside the app's own namespace, no write on Secrets, ServiceAccounts, RBAC, namespaces, workloads, OLM objects, webhooks, CRDs or DataScienceClusters, and no cluster-wide `list` or general `get` on Secrets.
@@ -319,18 +319,39 @@ oc auth can-i list rolebindings.rbac.authorization.k8s.io -A --as=$SA      # no
 oc auth can-i update clusterroles.rbac.authorization.k8s.io --as=$SA       # no
 ```
 
+### Reading module CRs in the services group (4.0.0)
+
+RHOAI 3.6 serves the `databaseservice` module's CR in `services.platform.opendatahub.io`, not in `components.platform.opendatahub.io` (rhods-operator rhoai-3.6 `pkg/cluster/gvk/gvk.go`; `pkg/cluster/component_cleanup.go` cites the sources). So every check that looks at module CRs reads both groups: the stuck-deletion check, Diagnostics' apply-failure and leftover scans, the removal checks and the hard reset's teardown wait. The status and Diagnostics read them with the ServiceAccount, changes with the user's token. Without the rule the `databaseservice` module was invisible to those checks, and a hard reset was refused whenever it was on. The existing `list` on the components group's kinds now also covers the services group, in both profiles (`deploy/template.yaml`, `deploy/rbac-gitops.yaml` and their chart copies).
+
+| Rule | What it allows | Worst case if the SA token leaks |
+|---|---|---|
+| `services.platform.opendatahub.io` `*`: `list`, cluster-wide (in the components group's rule) | list every kind of the group: DatabaseService and Monitoring (module CRs), and Auth and GatewayConfig, which the RHOAI operator owns and reconciles itself | read those cluster-scoped platform settings: the modules' specs and status, the groups Auth names, the gateway's domain and the names of its certificate Secrets. None of them holds Secret data |
+
+Kept narrow: `list` only (no `get`, `watch` or any write). `resources: ["*"]` because the group's kinds are discovered and change between releases, as the components group's do; `resourceNames` cannot help, as the kinds are unknown. A kind that is not a module (Auth, GatewayConfig) has no module operator the tool can identify, so a removal that would depend on it is refused (fail closed), and so is one when the list fails.
+
+```bash
+oc auth can-i list databaseservices.services.platform.opendatahub.io --as=$SA       # yes
+oc auth can-i list gatewayconfigs.services.platform.opendatahub.io --as=$SA         # yes
+oc auth can-i get databaseservices.services.platform.opendatahub.io/x --as=$SA      # no
+oc auth can-i watch databaseservices.services.platform.opendatahub.io --as=$SA      # no
+oc auth can-i patch databaseservices.services.platform.opendatahub.io --as=$SA      # no
+oc auth can-i delete gatewayconfigs.services.platform.opendatahub.io --as=$SA       # no
+```
+
+Expected answers from the template; not checked live (no cluster access during this change). The same lines answer the same with the gitops profile's ServiceAccount.
+
 ### Reading Argo CD Applications (4.0.0)
 
-An Argo CD Application that manages the nightly catalog, the RHOAI Subscription, the DataScienceCluster or an operator Subscription the tool changes switches actions off (Argo CD would undo them). Argo CD's marks on an object (the `argocd.argoproj.io/tracking-id` annotation, or under label tracking, OpenShift GitOps' default up to 1.18, only `app.kubernetes.io/instance`) neither prove nor rule that out, so the tool lists every Application and looks for the object in each one's `status.resources` ([RUNBOOK §13](RUNBOOK.md#13-clusters-managed-by-argo-cd); `pkg/cluster/argocd.go`). The ServiceAccount (both profiles) reads it on every status poll, for non-admins too; changes read it with the user's token.
+An Argo CD Application that manages the nightly catalog, the RHOAI Subscription, the DataScienceCluster or an operator Subscription the tool changes switches actions off (Argo CD would undo them). Argo CD's marks on an object (the `argocd.argoproj.io/tracking-id` annotation, or under label tracking, OpenShift GitOps' default up to 1.18, only `app.kubernetes.io/instance`) neither prove nor rule that out, so the tool lists every Application and looks for the object in each one's `status.resources` ([RUNBOOK §13](RUNBOOK.md#13-clusters-managed-by-argo-cd); `pkg/cluster/argocd.go`). The ServiceAccount (both profiles) reads it for the status pages, for non-admins too; changes read it with the user's token (the gitops profile's Update with the ServiceAccount), fresh for every check.
 
 | Rule | What it allows | Worst case if the SA token leaks |
 |---|---|---|
 | Applications (`argoproj.io`): `list`, cluster-wide | read every Argo CD Application: its spec (source repository URLs, revisions, paths, Helm value files, inline `values`/`valuesObject`, parameters, plugin `env`, Kustomize settings, destination cluster and namespace, project, sync policy) and status (synced revision, resource list with health, images, conditions and operation messages) | an attacker learns where the cluster's configuration comes from (repository URLs, which may reveal private repository names and hosts), the other clusters Argo CD deploys to, and whatever an admin wrote inline into Helm values or plugin `env`. Application objects have no credential field: repository and cluster credentials live in Secrets labelled `argocd.argoproj.io/secret-type` in Argo CD's namespace, which the SA cannot read (no `list` or general `get` on Secrets). Inline values are as readable as the Git repository they come from, and Argo CD's docs advise against putting secrets there. Nothing can be changed: no `get` on other Argo CD kinds, no write |
 | ClusterRoleBindings: `list` (already granted, [above](#reading-rbac-to-find-module-operators-400)) | `?fieldSelector=metadata.name=argocd-manager-role-binding` | none added |
-| RoleBindings: `get` on `argocd-manager-role-binding` only, in any namespace (new in 4.0.0's last revision) | read the RoleBinding `argocd cluster add --namespace` makes (Argo CD `util/clusterauth/clusterauth.go`, `InstallClusterManagerRBAC`), in `redhat-ods-operator`, `openshift-marketplace`, RHOAI's applications namespace and the checked object's namespace: whether an Argo CD on another cluster may manage them | learn, per namespace, whether such a binding exists and whom it binds (the `argocd-manager` ServiceAccount, by default in `kube-system`). A RoleBinding holds no credential; any other RoleBinding stays unreadable (no `list`, no other name). A cluster-scoped grant because the applications namespace and the objects' namespaces are found at run time; `resourceNames` limits it to the one name |
+| RoleBindings: `get` on `argocd-manager-role-binding` only, in any namespace (both profiles; new in 4.0.0's last revision) | read the RoleBinding `argocd cluster add --namespace` makes (Argo CD `util/clusterauth/clusterauth.go`, `InstallClusterManagerRBAC`), in `redhat-ods-operator`, `openshift-marketplace`, RHOAI's applications namespace and the checked object's namespace: whether an Argo CD on another cluster may manage them | learn, per namespace, whether such a binding exists and whom it binds (the `argocd-manager` ServiceAccount, by default in `kube-system`). A RoleBinding holds no credential; any other RoleBinding stays unreadable (no `list`, no other name). A cluster-scoped grant because the applications namespace and the objects' namespaces are found at run time; `resourceNames` limits it to the one name |
 | Discovery of `argoproj.io/v1alpha1` and `work.open-cluster-management.io/v1` | which APIs the cluster serves | none: every authenticated user may (`system:discovery`) |
 
-Why nothing narrower works: the annotation names `<name>` for an Application in Argo CD's own namespace, which can be any namespace (`openshift-gitops` for OpenShift GitOps' default instance, another for a second instance or an upstream install), or `<namespace>_<name>` for one elsewhere ("apps in any namespace"). Both need a cluster-wide grant, and `resourceNames` cannot be used: the names come from the cluster. The rejected alternative, `get` on Applications plus `list` on ArgoCD instances (`argoproj.io` `argocds`) to find Argo CD's namespaces, needs two rules instead of one, misses an upstream Argo CD (no ArgoCD resource, so it would fail closed there forever), and reads ArgoCD instance specs, which carry SSO and RBAC configuration (an inline OIDC config can hold a client secret). The code lists them all, without a field selector: whether an Application manages the object is Argo CD's `status.resources`, not the name a mark gives (a mark can be missing, left over, or name another application than the one that now lists the object), so every Application must be read; the rule allowed that before too, as RBAC does not limit a `list` by its field selector. No `get` and no `watch`: the code only lists, once per status poll or operation check.
+Why nothing narrower works: the annotation names `<name>` for an Application in Argo CD's own namespace, which can be any namespace (`openshift-gitops` for OpenShift GitOps' default instance, another for a second instance or an upstream install), or `<namespace>_<name>` for one elsewhere ("apps in any namespace"). Both need a cluster-wide grant, and `resourceNames` cannot be used: the names come from the cluster. The rejected alternative, `get` on Applications plus `list` on ArgoCD instances (`argoproj.io` `argocds`) to find Argo CD's namespaces, needs two rules instead of one, misses an upstream Argo CD (no ArgoCD resource, so it would fail closed there forever), and reads ArgoCD instance specs, which carry SSO and RBAC configuration (an inline OIDC config can hold a client secret). The code lists them all, without a field selector: whether an Application manages the object is Argo CD's `status.resources`, not the name a mark gives (a mark can be missing, left over, or name another application than the one that now lists the object), so every Application must be read; the rule allowed that before too, as RBAC does not limit a `list` by its field selector. No `get` and no `watch`: the code only lists, once per operation check, and for the status pages at most once per 30 seconds (a status read reuses the last successful list for that long, and concurrent ones share one request; `pkg/cluster` `readArgoApplications`). A failed list is not reused, and no change or refusal uses the reused list.
 
 The check fails closed: a read error or a 403 (an install from before 4.0.0 whose template lacks the rule; a non-admin user's token during a change) keeps every object managed, marked or not, as does, for a marked object, an Application its mark names that Argo CD has not compared, or a sign of an Argo CD on another cluster; the actions stay off with the reason.
 
@@ -345,6 +366,23 @@ oc auth can-i list secrets -n openshift-gitops --as=$SA                         
 oc auth can-i get rolebindings.rbac.authorization.k8s.io/argocd-manager-role-binding -n redhat-ods-operator --as=$SA  # yes
 oc auth can-i get rolebindings.rbac.authorization.k8s.io/admin -n redhat-ods-operator --as=$SA                        # no
 oc auth can-i list rolebindings.rbac.authorization.k8s.io -A --as=$SA                                              # no
+```
+
+### Reading OpenShift Groups by name (4.0.0)
+
+The MaaS Publish dialog warns when a group it names has no OpenShift Group (`GET /api/resources/maas/groups?name=...`, at most 20 names; `pkg/cluster` `CheckMaaSGroups`). It is an admin read (`withAdminRead`): the user's token passes the cluster-admin gate, then the ServiceAccount gets each Group by its name, so only a cluster-admin, who may read groups anyway, gets an answer ([Models as a Service](#models-as-a-service)). The MaaS status (any signed-in user) makes the same check for the groups the tool's own MaaSSubscription names, and shows only whether each exists: the names are already in that subscription, never the members. Full profile only; the gitops profile refuses the MaaS routes.
+
+| Rule | What it allows | Worst case if the SA token leaks |
+|---|---|---|
+| Groups (`user.openshift.io`): `get`, cluster-scoped | read a Group whose name is known: whether it exists (the code keeps only that) | read the members (user names) of a group whose name the attacker knows or guesses. Groups cannot be enumerated (no `list`), a Group holds no credential, and nothing can be changed |
+
+Why nothing narrower works: the names are the ones the user types, so `resourceNames` cannot hold them. A 403 or 404 is only a warning (groups from an external identity provider have no Group object), never a refusal of Publish.
+
+```bash
+oc auth can-i get groups.user.openshift.io/ml-team --as=$SA       # yes
+oc auth can-i list groups.user.openshift.io --as=$SA              # no
+oc auth can-i watch groups.user.openshift.io --as=$SA             # no
+oc auth can-i patch groups.user.openshift.io/ml-team --as=$SA     # no
 ```
 
 ### The MaaS prune job (4.0.0)
@@ -554,7 +592,7 @@ The app reads Infrastructure `cluster` (`config.openshift.io`; `get` by name, th
 
 ### The DataScienceCluster
 
-The Components page's changes (one component, Fix, the soft reset) and the hard reset run with the user's token; the ServiceAccount only reads the DataScienceCluster, and `TestHardResetDeleteRule` fails if `deploy/template.yaml` or `deploy/rbac-gitops.yaml` grants it `delete`. The hard reset deletes the one DSC with a UID precondition (the one the user reviewed, after typing its name), after a server-side dry run of the new spec against the live DSC, so a spec the CRD or the operator's webhook refuses never costs the DSC, and records the object it creates so **Finish the hard reset** can create exactly that object after a failure or a restart (the same gates and lock; it only creates while no DSC exists). What it does step by step, and how to recover: [RUNBOOK §11.9](RUNBOOK.md#119-change-or-reset-the-datasciencecluster). Worst case of a hard reset by mistake: every RHOAI component is torn down cluster-wide until a DSC exists again (user resources such as notebooks and pipeline servers survive, but stop working); whoever may delete the DSC could already set every component to Removed.
+The Components page's changes (one component, Fix, the soft reset) and the hard reset run with the user's token; the ServiceAccount only reads the DataScienceCluster, and `TestHardResetDeleteRule` fails if `deploy/template.yaml` or `deploy/rbac-gitops.yaml` grants it `delete`. The hard reset deletes the one DSC with a UID precondition (the one the user reviewed, after typing its name), after a server-side dry run of the new spec against the live DSC, so a spec the CRD or the operator's webhook refuses never costs the DSC, and records the object it creates so **Finish the hard reset** can create exactly that object after a failure or a restart (the same gates and lock; it only creates while no DSC exists). Before the delete it refuses when a namespace is owned through an `opendatahub.io` object. The delete uses `propagationPolicy: Background` (Foreground would cascade foreground deletion into the workloads the module CRs own), and the reset creates the new DSC only once the old one is gone, no module CR it owned is left, their module operators are removed and the Platform reports no module pending deletion. What it does step by step, and how to recover: [RUNBOOK §11.9](RUNBOOK.md#119-change-or-reset-the-datasciencecluster). Worst case of a hard reset by mistake: every RHOAI component is torn down cluster-wide until a DSC exists again (user resources such as notebooks and pipeline servers survive, but stop working); whoever may delete the DSC could already set every component to Removed.
 
 ## History
 

@@ -1,11 +1,13 @@
 package cluster
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -135,8 +137,9 @@ func (t argoTracking) unconfirmedNote() string {
 
 // argoCheck asks Argo CD about objects. It reads each answer once
 // (discovery, the Applications, each remote sign), so one status poll or one
-// operation check asks once for all its objects. Not safe for concurrent
-// use.
+// operation check asks once for all its objects; status reads also share
+// the list of Applications across polls (readArgoApplications). Not safe
+// for concurrent use.
 type argoCheck struct {
 	c        *Client
 	served   *argoRead[bool]
@@ -433,21 +436,70 @@ func (a *argoCheck) applications() argoRead[[]argoApp] {
 		return *a.apps
 	}
 	var r argoRead[[]argoApp]
-	body, _, err := a.c.get(argoAPI + "/applications")
+	apps, err := readArgoApplications(a.c)
 	if err != nil {
 		r.err = fmt.Sprintf("listing Argo CD applications failed: %v", err)
 	} else {
-		var list struct {
-			Items []argoApp `json:"items"`
-		}
-		if err := json.Unmarshal(body, &list); err != nil {
-			r.err = fmt.Sprintf("listing Argo CD applications failed: %v", err)
-		} else {
-			r.value = list.Items
-		}
+		r.value = apps
 	}
 	a.apps = &r
 	return r
+}
+
+// argoApplicationsTTL bounds how long a status read reuses the list of
+// every Application: the pages poll every few seconds, each open page
+// asks, and the list holds every Application's status.resources. Only
+// clients of read requests use it (Client.statusRead); a change's checks
+// list again every time. Only successful lists are cached.
+const argoApplicationsTTL = 30 * time.Second
+
+var (
+	argoApplicationsCache  = newLRU[string, []argoApp](16)
+	argoApplicationsFlight flightGroup[[]argoApp]
+)
+
+// readArgoApplications lists every Application: for a status read the list
+// of the last argoApplicationsTTL, with concurrent status reads sharing one
+// request; otherwise always from the API server. The cached slice is shared
+// and must not be changed.
+func readArgoApplications(c *Client) ([]argoApp, error) {
+	if !c.statusRead {
+		return listArgoApplications(c)
+	}
+	key := c.baseURL
+	if apps, ok := argoApplicationsCache.Get(key); ok {
+		return apps, nil
+	}
+	ctx := c.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	apps, err, _ := argoApplicationsFlight.Do(ctx, key, func(context.Context) ([]argoApp, error) {
+		if apps, ok := argoApplicationsCache.Get(key); ok {
+			return apps, nil
+		}
+		apps, err := listArgoApplications(c)
+		if err == nil {
+			argoApplicationsCache.Add(key, apps, argoApplicationsTTL)
+		}
+		return apps, err
+	})
+	return apps, err
+}
+
+// listArgoApplications reads the list of every Application.
+func listArgoApplications(c *Client) ([]argoApp, error) {
+	body, _, err := c.get(argoAPI + "/applications")
+	if err != nil {
+		return nil, err
+	}
+	var list struct {
+		Items []argoApp `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, err
+	}
+	return list.Items, nil
 }
 
 // The signs that an Argo CD on another cluster may manage this one. Argo
