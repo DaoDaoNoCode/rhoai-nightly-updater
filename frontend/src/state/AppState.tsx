@@ -39,6 +39,7 @@ import {
   type ServerResult,
 } from "./operation";
 import { useAnnounce } from "./LiveAnnouncer";
+import { sameData } from "../utils";
 import { useRole } from "./Permissions";
 
 // ---------------------------------------------------------------------------
@@ -401,8 +402,11 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
       const s = await fetchStatusRef.current();
       // An older poll must not overwrite a newer response.
       if (requestId !== latestStatusRequest.current) return;
-      statusRef.current = s;
-      setStatus(s);
+      // An unchanged status keeps its object: what reads it renders nothing again.
+      if (!sameData(statusRef.current, s)) {
+        statusRef.current = s;
+        setStatus(s);
+      }
       setError(null);
       setLastRefreshed(new Date());
 
@@ -663,8 +667,11 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
       lastCompleted: res.lastCompleted ?? null,
       brief: null,
     };
-    serverRef.current = next;
-    setServer(next);
+    // An unchanged answer keeps the last state: no page renders again for it.
+    if (!sameData(serverRef.current, next)) {
+      serverRef.current = next;
+      setServer(next);
+    }
     // A detached run of this tab that still runs on the server is followed
     // as a server run from here on (banner, lock, steps).
     syncServerOperation(op && !ownFinishedRun ? snapshotFromServer(op) : null, res.lastCompleted);
@@ -680,8 +687,10 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
       lastCompleted: null,
       brief: res.running ? { label: res.label ?? "", startedAt: res.startedAt ?? "" } : null,
     };
-    serverRef.current = next;
-    setServer(next);
+    if (!sameData(serverRef.current, next)) {
+      serverRef.current = next;
+      setServer(next);
+    }
   }, []);
 
   const pollServerOperation = useCallback(async () => {

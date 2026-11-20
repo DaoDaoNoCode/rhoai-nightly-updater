@@ -14,7 +14,7 @@ import { usePolling } from "../hooks/usePolling";
 import { OPERATION_NAMES, STEP_SETS, operationKindForServerType, stepLabel } from "../operationSteps";
 import { isRunning } from "./operation";
 import { useClusterStatus, useOperation } from "./AppState";
-import { formatElapsed, isReleaseVersion } from "../utils";
+import { formatElapsed, isReleaseVersion, sameData } from "../utils";
 import { isGitOpsProfile } from "../profile";
 
 // Permissions, the role and the session live in PermissionsProvider (the
@@ -146,7 +146,9 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
   // without a reload. A failed read keeps the last answer.
   const refreshVersion = useCallback(async () => {
     try {
-      setVersion(await fetchers.current.fetchVersion());
+      const v = await fetchers.current.fetchVersion();
+      // An unchanged answer keeps the last object: nothing renders again.
+      setVersion((prev) => (sameData(prev, v) ? prev : v));
     } catch {
       /* keep the last answer */
     }
@@ -198,7 +200,7 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
     const next = overrideFromDashboardResponse(result);
     // undefined: the state could not be read; keep what we knew.
     if (next !== undefined) {
-      setOverride(next);
+      setOverride((prev) => (sameData(prev, next) ? prev : next));
       setOverrideLoaded(true);
     }
   }, []);

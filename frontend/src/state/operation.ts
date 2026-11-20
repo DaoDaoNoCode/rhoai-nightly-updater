@@ -1,6 +1,7 @@
 import type { ServerOperation, UpdateStep } from "../types";
 import type { StreamDetachReason } from "../services/api";
 import { OPERATION_NAMES, operationKindForServerType, reconcileKindFor, type OperationKind, type ReconcileKind } from "../operationSteps";
+import { sameData } from "../utils";
 
 /**
  * Where an operation's progress comes from: the SSE stream this tab opened,
@@ -187,6 +188,8 @@ export function operationReducer(state: OperationState, action: OperationAction)
     case "step": {
       const run = state.run;
       if (!run || run.id !== action.id || run.outcome) return state;
+      // A poll repeats the server's steps: an unchanged one changes nothing.
+      if (run.steps.some((s) => s.step === action.step.step && sameData(s, action.step))) return state;
       return { ...state, run: { ...run, steps: mergeStep(run.steps, action.step) } };
     }
     case "bindServerId": {
