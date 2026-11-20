@@ -161,8 +161,8 @@ const MISSING = { exists: false, name: "", source: "" };
 const OURS = { exists: true, name: "rhoai-quay-mirror", source: "registry.redhat.io/rhoai" };
 
 describe("The image mirror row, by control plane", () => {
-  it("self-managed: Create the image mirror, with the oc commands folded away", () => {
-    renderWithApp(<ImageMirrorSetup status={mirrorStatus("self-managed", MISSING)} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />);
+  it("self-managed: Create the image mirror, with the oc commands folded away", async () => {
+    await renderWithApp(<ImageMirrorSetup status={mirrorStatus("self-managed", MISSING)} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />).settled();
     expect(screen.getByRole("button", { name: "Create the image mirror" })).toHaveClass("pf-m-primary");
     expect(screen.queryByRole("button", { name: "How to create the image mirror" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Do it yourself instead" }));
@@ -170,45 +170,45 @@ describe("The image mirror row, by control plane", () => {
     expect(document.getElementById("image-mirror-remove-command-code")).toHaveTextContent("oc delete imagedigestmirrorset rhoai-quay-mirror");
   });
 
-  it("self-managed with the setup's mirror: Remove the image mirror", () => {
-    renderWithApp(<ImageMirrorSetup status={mirrorStatus("self-managed", OURS)} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />);
+  it("self-managed with the setup's mirror: Remove the image mirror", async () => {
+    await renderWithApp(<ImageMirrorSetup status={mirrorStatus("self-managed", OURS)} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />).settled();
     expect(screen.getByText("Ready")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove the image mirror" })).toHaveClass("pf-m-danger");
   });
 
-  it("another mirror for the source counts as done and is not offered for removal", () => {
-    renderWithApp(<ImageMirrorSetup status={mirrorStatus("self-managed", { exists: true, name: "team-mirrors", source: "registry.redhat.io/rhoai" })} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />);
+  it("another mirror for the source counts as done and is not offered for removal", async () => {
+    await renderWithApp(<ImageMirrorSetup status={mirrorStatus("self-managed", { exists: true, name: "team-mirrors", source: "registry.redhat.io/rhoai" })} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />).settled();
     expect(screen.getByText("Ready")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove the image mirror" })).not.toBeInTheDocument();
   });
 
-  it("an ImageContentSourcePolicy of the setup's name is someone else's: named with its kind, not offered for removal", () => {
-    renderWithApp(<ImageMirrorSetup status={mirrorStatus("self-managed", { ...OURS, kind: "ImageContentSourcePolicy" })} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />);
+  it("an ImageContentSourcePolicy of the setup's name is someone else's: named with its kind, not offered for removal", async () => {
+    await renderWithApp(<ImageMirrorSetup status={mirrorStatus("self-managed", { ...OURS, kind: "ImageContentSourcePolicy" })} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />).settled();
     expect(screen.getByText("Ready")).toBeInTheDocument();
     expect(screen.getByText(/rhoai-quay-mirror \(ImageContentSourcePolicy\)/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove the image mirror" })).not.toBeInTheDocument();
   });
 
-  it("managed classic: Create the image mirror too (its webhook allows registry.redhat.io/rhoai)", () => {
-    renderWithApp(<ImageMirrorSetup status={mirrorStatus("managed", MISSING)} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />);
+  it("managed classic: Create the image mirror too (its webhook allows registry.redhat.io/rhoai)", async () => {
+    await renderWithApp(<ImageMirrorSetup status={mirrorStatus("managed", MISSING)} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />).settled();
     expect(screen.getByRole("button", { name: "Create the image mirror" })).toBeInTheDocument();
   });
 
-  it("hosted: the rosa instructions, and why", () => {
-    renderWithApp(<ImageMirrorSetup status={mirrorStatus("hosted", MISSING)} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />);
+  it("hosted: the rosa instructions, and why", async () => {
+    await renderWithApp(<ImageMirrorSetup status={mirrorStatus("hosted", MISSING)} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />).settled();
     expect(screen.getByRole("button", { name: "How to create the image mirror" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create the image mirror" })).not.toBeInTheDocument();
     expect(screen.getByText(/configured through OpenShift Cluster Manager \(rosa create image-mirror\)/)).toBeInTheDocument();
   });
 
-  it("unknown: the instructions first, and an attempt", () => {
-    renderWithApp(<ImageMirrorSetup status={mirrorStatus(undefined, MISSING)} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />);
+  it("unknown: the instructions first, and an attempt", async () => {
+    await renderWithApp(<ImageMirrorSetup status={mirrorStatus(undefined, MISSING)} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />).settled();
     expect(screen.getByRole("button", { name: "How to create the image mirror" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try to create it here" })).toHaveClass("pf-m-secondary");
   });
 
-  it("the gitops profile only shows the state", () => {
-    renderWithApp(<ImageMirrorSetup status={mirrorStatus("self-managed", MISSING)} readOnly onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />);
+  it("the gitops profile only shows the state", async () => {
+    await renderWithApp(<ImageMirrorSetup status={mirrorStatus("self-managed", MISSING)} readOnly onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />).settled();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 

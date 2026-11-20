@@ -65,7 +65,8 @@ describe("profile (docs/GITOPS.md, Profiles)", () => {
       await waitFor(() => expect(screen.getByTestId("policy").textContent).toBe("The policy is not in place"));
       // Argo CD restored the policy; the server's next check says so.
       state = "enforced";
-      await vi.advanceTimersByTimeAsync(GITOPS_POLICY_POLL_MS);
+      // The polls this fires update the providers: advance inside act.
+      await act(() => vi.advanceTimersByTimeAsync(GITOPS_POLICY_POLL_MS));
       await waitFor(() => expect(screen.getByTestId("policy").textContent).toBe("none"));
     } finally {
       vi.useRealTimers();
@@ -78,7 +79,7 @@ describe("profile (docs/GITOPS.md, Profiles)", () => {
       const fetchVersion = vi.fn(async () => version("full"));
       renderWithApp(<pre />, { version: fetchVersion });
       await waitFor(() => expect(fetchVersion).toHaveBeenCalledTimes(1));
-      await vi.advanceTimersByTimeAsync(3 * GITOPS_POLICY_POLL_MS);
+      await act(() => vi.advanceTimersByTimeAsync(3 * GITOPS_POLICY_POLL_MS));
       expect(fetchVersion).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();

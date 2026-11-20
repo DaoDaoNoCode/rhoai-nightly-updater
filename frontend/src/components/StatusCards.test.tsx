@@ -5,9 +5,9 @@ import { GlobalBanners } from "./GlobalBanners";
 import type { LatestNightlyResponse, StatusResponse } from "../types";
 import { nightlyStatus, renderWithApp } from "../test/providers";
 
-function renderCard(status: StatusResponse, opts: { latest?: LatestNightlyResponse | null; blocker?: string | null; prerequisitesMet?: boolean } = {}) {
+async function renderCard(status: StatusResponse, opts: { latest?: LatestNightlyResponse | null; blocker?: string | null; prerequisitesMet?: boolean } = {}) {
   const onUpdate = vi.fn();
-  renderWithApp(
+  const { settled } = renderWithApp(
     <InstalledBuildCard
       status={status}
       latest={opts.latest ?? null}
@@ -20,6 +20,7 @@ function renderCard(status: StatusResponse, opts: { latest?: LatestNightlyRespon
       onRedeploy={vi.fn()}
     />,
   );
+  await settled();
   return { onUpdate };
 }
 
@@ -27,8 +28,8 @@ const installedRow = () => screen.getByText("Installed").closest(".pf-v6-c-descr
 const latestRow = () => screen.getByText(/^Latest/).closest(".pf-v6-c-description-list__group") as HTMLElement;
 
 describe("InstalledBuildCard", () => {
-  it("shows installed vs latest by tag, short digest, build date and dashboard commit, and offers Update", () => {
-    const { onUpdate } = renderCard(nightlyStatus());
+  it("shows installed vs latest by tag, short digest, build date and dashboard commit, and offers Update", async () => {
+    const { onUpdate } = await renderCard(nightlyStatus());
     expect(screen.getByText("Update available")).toBeInTheDocument();
     expect(within(installedRow()).getByText("rhoai-3.6")).toBeInTheDocument();
     expect(within(installedRow()).getByText("4eff06d60000")).toBeInTheDocument();
@@ -42,36 +43,36 @@ describe("InstalledBuildCard", () => {
     expect(onUpdate).toHaveBeenCalledWith(expect.objectContaining({ digest: "sha256:" + "0b3f9b4d".padEnd(64, "1") }));
   });
 
-  it("says Up to date and offers no primary Update when the digests match", () => {
+  it("says Up to date and offers no primary Update when the digests match", async () => {
     const s = nightlyStatus();
     s.nightly = { ...s.nightly!, latest: s.nightly!.installed, updateAvailable: false };
-    renderCard(s);
+    await renderCard(s);
     expect(screen.getByText("Up to date")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Update to latest/ })).not.toBeInTheDocument();
     expect(screen.getByText(/You have the newest rhoai-3.6 build/)).toBeInTheDocument();
   });
 
-  it("explains a failed Quay check instead of guessing", () => {
+  it("explains a failed Quay check instead of guessing", async () => {
     const s = nightlyStatus();
     s.nightly = { installed: s.nightly!.installed, error: "Could not read the latest rhoai-3.6 build from Quay: timeout" };
-    renderCard(s);
+    await renderCard(s);
     expect(screen.getByText("Not checked")).toBeInTheDocument();
     expect(screen.getByText(/Could not read the latest rhoai-3.6 build/)).toBeInTheDocument();
   });
 
-  it("on a GA install offers to switch to the newest nightly", () => {
+  it("on a GA install offers to switch to the newest nightly", async () => {
     const s = nightlyStatus({
       subscription: { name: "rhods-operator", source: "redhat-operators", channel: "stable-3.x", state: "AtLatestKnown" },
       csv: { name: "rhods-operator.3.5.1", version: "3.5.1", phase: "Succeeded" },
       nightly: undefined,
     });
-    renderCard(s, { latest: { tag: "rhoai-3.6", image: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + "c".repeat(64) } });
+    await renderCard(s, { latest: { tag: "rhoai-3.6", image: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + "c".repeat(64) } });
     expect(screen.getByText("Stable release")).toBeInTheDocument();
     expect(screen.getByText("RHOAI 3.5.1")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Switch to latest nightly (rhoai-3.6)" })).toBeInTheDocument();
   });
 
-  it("on a fresh cluster says nothing is installed and why Install is disabled", () => {
+  it("on a fresh cluster says nothing is installed and why Install is disabled", async () => {
     const s = nightlyStatus({
       subscription: { name: "", source: "", channel: "", state: "Not Installed" },
       csv: { name: "", version: "", phase: "Not Found" },
@@ -79,7 +80,7 @@ describe("InstalledBuildCard", () => {
       pullSecret: { exists: false, valid: false },
       nightly: undefined,
     });
-    renderCard(s, { prerequisitesMet: false });
+    await renderCard(s, { prerequisitesMet: false });
     // One "Not installed" label (the verdict); the operator row says it in words (UX-Status-4).
     expect(screen.getAllByText("Not installed", { selector: ".pf-v6-c-label__text" }).length).toBe(1);
     expect(screen.getByText("rhods-operator: not installed")).toBeInTheDocument();
@@ -89,19 +90,19 @@ describe("InstalledBuildCard", () => {
     expect(screen.getByText("Finish the cluster setup above first.")).toBeInTheDocument();
   });
 
-  it("keeps Update available from a Failed CSV and recommends it", () => {
-    renderCard(nightlyStatus({ csv: { name: "rhods-operator.3.6.0", version: "3.6.0", phase: "Failed" } }));
+  it("keeps Update available from a Failed CSV and recommends it", async () => {
+    await renderCard(nightlyStatus({ csv: { name: "rhods-operator.3.6.0", version: "3.6.0", phase: "Failed" } }));
     expect(screen.getByText("The operator is Failed")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Update to latest" })).not.toHaveAttribute("aria-disabled", "true");
   });
 
-  it("says the Subscription is missing instead of calling it a stable release", () => {
+  it("says the Subscription is missing instead of calling it a stable release", async () => {
     const s = nightlyStatus({
       subscription: { name: "", source: "", channel: "", state: "Not Installed" },
       csv: { name: "rhods-operator.3.6.0", version: "3.6.0", phase: "Succeeded" },
       nightly: undefined,
     });
-    renderCard(s, { latest: { tag: "rhoai-3.6", image: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + "c".repeat(64) } });
+    await renderCard(s, { latest: { tag: "rhoai-3.6", image: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + "c".repeat(64) } });
     expect(screen.getByText("No Subscription")).toBeInTheDocument();
     expect(screen.queryByText("Stable release")).not.toBeInTheDocument();
     expect(installedRow().textContent).toContain("RHOAI 3.6.0");
@@ -117,8 +118,8 @@ describe("InstalledBuildCard", () => {
     expect(screen.getByRole("button", { name: "Update to latest nightly (rhoai-3.6)" })).toBeInTheDocument();
   });
 
-  it("without a Subscription or a nightly catalog, says so", () => {
-    renderCard(nightlyStatus({
+  it("without a Subscription or a nightly catalog, says so", async () => {
+    await renderCard(nightlyStatus({
       subscription: { name: "", source: "", channel: "", state: "Not Installed" },
       catalogSource: { exists: false, name: "", image: "", state: "" },
       nightly: undefined,
@@ -127,24 +128,24 @@ describe("InstalledBuildCard", () => {
     expect(catalogRow.textContent).toContain("No Subscription and no nightly catalog");
   });
 
-  it("never says Up to date next to a Failed or installing operator", () => {
+  it("never says Up to date next to a Failed or installing operator", async () => {
     const failed = nightlyStatus({ csv: { name: "rhods-operator.3.6.0", version: "3.6.0", phase: "Failed" } });
     failed.nightly = { ...failed.nightly!, latest: failed.nightly!.installed, updateAvailable: false };
-    renderCard(failed);
+    await renderCard(failed);
     expect(screen.queryByText("Up to date")).not.toBeInTheDocument();
     expect(screen.getByText("Operator failed")).toBeInTheDocument();
   });
 
-  it("shows an installing operator as installing, not Up to date", () => {
+  it("shows an installing operator as installing, not Up to date", async () => {
     const s = nightlyStatus({ csv: { name: "rhods-operator.3.6.0", version: "3.6.0", phase: "Installing" } });
     s.nightly = { ...s.nightly!, latest: s.nightly!.installed, updateAvailable: false };
-    renderCard(s);
+    await renderCard(s);
     expect(screen.queryByText("Up to date")).not.toBeInTheDocument();
     expect(screen.getAllByText("Installing").length).toBe(2); // the verdict and the operator row
   });
 
-  it("disables Update with the reason while another operation runs", () => {
-    renderCard(nightlyStatus(), { blocker: 'alice is running "Update to nightly". Wait for it to finish.' });
+  it("disables Update with the reason while another operation runs", async () => {
+    await renderCard(nightlyStatus(), { blocker: 'alice is running "Update to nightly". Wait for it to finish.' });
     expect(screen.getByRole("button", { name: "Update to latest" })).toHaveAttribute("aria-disabled", "true");
   });
 });

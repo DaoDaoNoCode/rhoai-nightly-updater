@@ -128,21 +128,21 @@ describe("cluster_busy", () => {
 
 describe("Reinstall downgrades", () => {
   const status = nightlyStatus();
-  const renderPanel = () => {
+  const renderPanel = async () => {
     const runOperator = vi.fn(() => true);
-    renderWithApp(<ReinstallPanel status={status} nightlyTags={[]} tagsLoading={false} prerequisitesMet runOperator={runOperator} />);
+    await renderWithApp(<ReinstallPanel status={status} nightlyTags={[]} tagsLoading={false} prerequisitesMet runOperator={runOperator} />).settled();
     return runOperator;
   };
 
-  it("preselects no target and marks GA 3.5.1 as a downgrade from 3.6.0", () => {
-    renderPanel();
+  it("preselects no target and marks GA 3.5.1 as a downgrade from 3.6.0", async () => {
+    await renderPanel();
     for (const radio of screen.getAllByRole("radio")) expect(radio).not.toBeChecked();
     expect(screen.getByText("Downgrade")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Install\.\.\./ })).toHaveAttribute("aria-disabled", "true");
   });
 
   it("requires the typed confirmation and an explicit downgrade acknowledgement before sending allowDowngrade", async () => {
-    const runOperator = renderPanel();
+    const runOperator = await renderPanel();
     await waitFor(() => expect(screen.getByRole("button", { name: /^Install\.\.\./ })).toHaveAttribute("aria-disabled", "true"));
     fireEvent.click(screen.getByLabelText(/Latest stable \(GA\)/));
     await waitFor(() => expect(screen.getByRole("button", { name: /^Install\.\.\./ })).not.toHaveAttribute("aria-disabled", "true"));

@@ -231,27 +231,33 @@ describe("a detached stream is followed on the server", () => {
 describe("the outcome of an operation followed from the server", () => {
   const followAlice = async (last: OperationStatusResponse["lastCompleted"]) => {
     let answer: OperationStatusResponse = { inProgress: true, operation: aliceUpdate };
-    renderWithApp(<><Probe /><RefreshButton /></>, { operation: async () => answer });
+    const { settled } = renderWithApp(<><Probe /><RefreshButton /></>, { operation: async () => answer });
     await waitFor(() => expect(probe()).toMatchObject({ running: true, source: "server" }));
     answer = { inProgress: false, operation: null, lastCompleted: last };
-    fireEvent.click(screen.getByText("poll"));
+    // The poll answers at once: apply it inside act, before the caller waits.
+    await act(async () => { fireEvent.click(screen.getByText("poll")); });
+    return settled;
   };
 
   it("shows a failed update as failed, with the server's message", async () => {
-    await followAlice({ id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: aliceUpdate.startedAt, finishedAt: "2026-10-05T10:09:00Z", success: false, message: "The new CSV failed; the previous operator was restored." });
+    const settled = await followAlice({ id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: aliceUpdate.startedAt, finishedAt: "2026-10-05T10:09:00Z", success: false, message: "The new CSV failed; the previous operator was restored." });
     await waitFor(() => expect(probe()).toMatchObject({ outcome: "failed", phase: "idle", message: "The new CSV failed; the previous operator was restored." }));
+    // The ended run reads the status once more (AppState's run effect).
+    await settled();
   });
 
   it("shows a successful update as succeeded", async () => {
-    await followAlice({ id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: aliceUpdate.startedAt, success: true, message: "done" });
+    const settled = await followAlice({ id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: aliceUpdate.startedAt, success: true, message: "done" });
     await waitFor(() => expect(probe()).toMatchObject({ outcome: "succeeded", result: "succeeded" }));
+    await settled();
   });
 
   it("claims nothing when the backend sends no result, or the result of another operation", async () => {
-    await followAlice({ id: "someone-else", type: "update", label: "Update", user: "bob", startedAt: aliceUpdate.startedAt, success: true });
+    const settled = await followAlice({ id: "someone-else", type: "update", label: "Update", user: "bob", startedAt: aliceUpdate.startedAt, success: true });
     await waitFor(() => expect(probe()).toMatchObject({ outcome: "detached", reason: "server_lost" }));
     await waitFor(() => expect(probe().phase).toBe("complete"));
     expect(probe().result).toBe("unknown");
+    await settled();
   });
 });
 

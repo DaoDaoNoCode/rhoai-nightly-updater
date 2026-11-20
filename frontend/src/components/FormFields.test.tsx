@@ -96,8 +96,8 @@ describe("fields inside a radio's body get PatternFly's helper-text spacing", ()
 });
 
 describe("Install a different build: helper text is FormHelperText, not a bare HelperText touching the field", () => {
-  it("the FBC image's error and the channel override's help", () => {
-    renderWithApp(<ReinstallPanel status={nightlyStatus()} nightlyTags={[]} tagsLoading={false} prerequisitesMet runOperator={() => true} />);
+  it("the FBC image's error and the channel override's help", async () => {
+    await renderWithApp(<ReinstallPanel status={nightlyStatus()} nightlyTags={[]} tagsLoading={false} prerequisitesMet runOperator={() => true} />).settled();
     fireEvent.click(screen.getByLabelText(/A specific FBC image/));
     fireEvent.change(screen.getByRole("textbox", { name: /^FBC image/ }), { target: { value: "quay.io/other/image:1" } });
     const image = formHelperOf(/Only quay.io\/rhoai\/rhoai-fbc-fragment images/)!;

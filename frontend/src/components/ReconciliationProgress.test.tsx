@@ -124,8 +124,8 @@ describe("ActivityLog", () => {
     { timestamp: "2026-10-03T10:00:00Z", user: "bob", action: "revert-dashboard", detail: "", success: false, label: "Dashboard reverted", category: "dashboard-dev" },
   ];
 
-  it("shows operator changes with their build first and filters by category", () => {
-    renderWithApp(<ActivityLog activity={entries} />);
+  it("shows operator changes with their build first and filters by category", async () => {
+    await renderWithApp(<ActivityLog activity={entries} />).settled();
     expect(screen.getByText("Updated to nightly")).toBeInTheDocument();
     // Tag and digest are separate nowrap items (no separator glyph that could start or end a line).
     const build = screen.getByText("4eff06d60bd1").closest(".pf-v6-l-flex") as HTMLElement;
@@ -135,10 +135,12 @@ describe("ActivityLog", () => {
     fireEvent.click(screen.getByRole("option", { name: /Dashboard Dev\s*2/ }));
     expect(screen.getByText("Dashboard PR deployed")).toBeInTheDocument();
     expect(screen.getByText("(failed)")).toBeInTheDocument();
+    // The menu closes on PatternFly Popper's hide timer (setTimeout).
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
   });
 
-  it("falls back to readable labels for entries without backend labels", () => {
-    renderWithApp(<ActivityLog activity={[{ timestamp: "2026-10-01T10:00:00Z", user: "a", action: "repair-dsc", detail: "", success: true }]} defaultCategory="all" />);
+  it("falls back to readable labels for entries without backend labels", async () => {
+    await renderWithApp(<ActivityLog activity={[{ timestamp: "2026-10-01T10:00:00Z", user: "a", action: "repair-dsc", detail: "", success: true }]} defaultCategory="all" />).settled();
     expect(screen.getByText("Repair dsc")).toBeInTheDocument();
   });
 });

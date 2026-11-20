@@ -1,5 +1,5 @@
 import React from "react";
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { RoleAppStateProvider } from "../state/AppState";
 import { AppInfoProvider } from "../state/AppInfo";
@@ -77,13 +77,39 @@ export function renderPage(ui: React.ReactNode, route = "/", fetchers: AppFetche
  * cluster-admin (the default answer).
  */
 export function renderWithApp(ui: React.ReactNode, fetchers: AppFetchers = {}, route = "/") {
-  const status = fetchers.status ?? (async () => nightlyStatus());
-  const operation = fetchers.operation ?? (async () => IDLE_OPERATION);
-  const permissions = fetchers.permissions ?? (async () => ADMIN_PERMISSIONS);
-  const version = fetchers.version ?? (async () => ({ version: "dev", commit: "unknown", buildDate: "unknown", templateOutdated: false }));
-  const update = fetchers.update ?? (async () => ({ updateAvailable: false, majorUpgrade: false }));
-  const dashboard = fetchers.dashboard ?? (async () => ({ currentImage: "", isCustomPR: false, managed: true, podStatus: "", podReady: true, containersReady: 1, containersTotal: 1, rolloutPending: false, canAssistRollout: false, override: { active: false, operatorPaused: false, sessionRecorded: false, stale: false, dashboardDeleting: false } } as DashboardState));
-  return render(
+  // Every app-wide read in flight, so settled() can wait for their answers.
+  const pending = new Set<Promise<unknown>>();
+  const track = <T,>(read: () => Promise<T>) => (): Promise<T> => {
+    const p = read();
+    pending.add(p);
+    const done = () => { pending.delete(p); };
+    p.then(done, done);
+    return p;
+  };
+  const status = track(fetchers.status ?? (async () => nightlyStatus()));
+  const operation = track(fetchers.operation ?? (async () => IDLE_OPERATION));
+  const permissions = track(fetchers.permissions ?? (async () => ADMIN_PERMISSIONS));
+  const version = track(fetchers.version ?? (async () => ({ version: "dev", commit: "unknown", buildDate: "unknown", templateOutdated: false })));
+  const update = track(fetchers.update ?? (async () => ({ updateAvailable: false, majorUpgrade: false })));
+  const dashboard = track(fetchers.dashboard ?? (async () => ({ currentImage: "", isCustomPR: false, managed: true, podStatus: "", podReady: true, containersReady: 1, containersTotal: 1, rolloutPending: false, canAssistRollout: false, override: { active: false, operatorPaused: false, sessionRecorded: false, stale: false, dashboardDeleting: false } } as DashboardState)));
+  /**
+   * Waits, inside act, until the app-wide reads (permissions, status,
+   * operation, version, update check, dashboard state) answered and React
+   * rendered what they changed, including the reads those answers start
+   * (the status once the role is known). Assert on the page after this, not
+   * on one whose providers are still loading. Not for a test that holds a
+   * read open (a deferred it resolves later).
+   */
+  const settled = async () => {
+    for (let round = 0; round < 20; round++) {
+      await act(async () => {
+        await Promise.allSettled([...pending]);
+      });
+      if (pending.size === 0) return;
+    }
+    throw new Error("the app's reads did not settle: a read started after every answer (a poll without delay?)");
+  };
+  const result = render(
     <LiveAnnouncerProvider>
       <MemoryRouter initialEntries={[route]}>
         <PermissionsProvider fetchPermissions={permissions}>
@@ -96,4 +122,5 @@ export function renderWithApp(ui: React.ReactNode, fetchers: AppFetchers = {}, r
       </MemoryRouter>
     </LiveAnnouncerProvider>,
   );
+  return { ...result, settled };
 }

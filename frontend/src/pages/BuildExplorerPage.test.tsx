@@ -237,6 +237,8 @@ describe("Build Explorer search", () => {
     expect(within(table).getAllByText("Contains 6c8ac6e")).toHaveLength(2);
     fireEvent.click(within(table).getByRole("button", { name: "Actions for rhoai-3.6" }));
     expect(screen.getByRole("menuitem", { name: "GitHub comparison of commit 6c8ac6e with rhoai-3.6" })).toHaveAttribute("href", `https://github.com/red-hat-data-services/odh-dashboard/compare/${sha}...${build}`);
+    // The row actions menu shows on PatternFly Popper's timer (setTimeout); a closed one leaves on its own timer.
+    await waitFor(() => expect(screen.getByRole("menu")).toBeVisible());
   });
 
   it.each(["#9938", "PR 9938", "pr#9938", "9938"])("%s searches which builds contain the merged PR, with links and progress", async (query) => {
@@ -291,6 +293,8 @@ describe("Build Explorer search", () => {
     expect(screen.getByRole("menuitem", { name: /GitHub comparison of PR #9938's merge commit with rhoai-3.6/ }))
       .toHaveAttribute("href", `https://github.com/red-hat-data-services/odh-dashboard/compare/${merge}...a3b6b581b465f97f8701f220efadcf8787879dde`);
     expect(screen.getByRole("menuitem", { name: "Compare with installed" })).toBeInTheDocument();
+    // The row actions menu shows on PatternFly Popper's timer (setTimeout); a closed one leaves on its own timer.
+    await waitFor(() => expect(screen.getByRole("menu")).toBeVisible());
   });
 
   it("a PR URL of another component repository is searched in that repository", async () => {
@@ -387,6 +391,8 @@ describe("Build Explorer search", () => {
     expect(screen.queryByRole("button", { name: "Actions for rhoai-3.6" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Actions for rhoai-3.5" }));
     expect(screen.getByRole("menuitem", { name: "Compare with installed" })).toBeInTheDocument();
+    // The row actions menu shows on PatternFly Popper's timer (setTimeout); a closed one leaves on its own timer.
+    await waitFor(() => expect(screen.getByRole("menu")).toBeVisible());
   });
 
   it("a PR that is not merged stops after one request and says so", async () => {

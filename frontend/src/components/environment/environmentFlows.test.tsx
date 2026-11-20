@@ -157,6 +157,8 @@ describe("project picker", () => {
     expect(screen.queryByRole("button", { name: /^Set up/ })).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Project" })).toHaveValue("");
     fireEvent.click(screen.getByRole("button", { name: "Show projects" }));
+    // The menu shows on PatternFly Popper's timer (setTimeout).
+    await waitFor(() => expect(screen.getByRole("listbox")).toBeVisible());
     expect(screen.queryByRole("option", { name: "gone" })).not.toBeInTheDocument();
   });
 });

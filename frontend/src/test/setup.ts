@@ -12,6 +12,13 @@ import { setDocumentHidden } from "./utils";
 // testTimeout bounds the whole test).
 configure({ asyncUtilTimeout: 10_000 });
 
+// React warns about a state update outside act(...) only when this global is
+// true (react-dom-client's isConcurrentActEnvironment). Testing Library sets
+// it in a global beforeAll, and vitest has no globals here (no
+// `globals: true`), so without this line the warning never fires and an
+// update that lands after a test's assertions goes unnoticed.
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
 // React's development warnings (a list item without a key, a <div> inside a
 // <p>, an update outside act, ...) are bugs in what the UI renders, not
 // noise: a test that logs an error fails, with the message. React 19's

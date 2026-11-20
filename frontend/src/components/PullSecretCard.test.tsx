@@ -46,7 +46,10 @@ describe("PullSecretSetup gating", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Create secret" })).toHaveAttribute("aria-disabled", "true"));
     fireEvent.mouseEnter(screen.getByRole("button", { name: "Create secret" }));
     expect(await screen.findByRole("tooltip")).toHaveTextContent(/still running/);
+    // End the stream and wait until the run's end reached the page (the
+    // detach and the reads it starts), not after the test.
     sse.close();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create secret" })).not.toHaveAttribute("aria-disabled", "true"));
   });
 
   it("is disabled for a read-only user", async () => {
@@ -105,34 +108,34 @@ describe("PullSecretSetup actions of an existing secret", () => {
 describe("A missing pull secret in the gitops profile", () => {
   const noSecret = nightlyStatus({ pullSecret: { exists: false, valid: false, detail: "Secret not found" } });
 
-  it("is not used, not missing", () => {
-    renderWithApp(<PullSecretSetup pullSecret={noSecret.pullSecret} readOnly />);
+  it("is not used, not missing", async () => {
+    await renderWithApp(<PullSecretSetup pullSecret={noSecret.pullSecret} readOnly />).settled();
     expect(screen.getByText("Not used")).toBeInTheDocument();
     expect(screen.queryByText("Missing")).not.toBeInTheDocument();
     expect(screen.getByText(/the cluster's pull secret is used/)).toBeInTheDocument();
     cleanup();
     // The backend does not read the secret there, so whatever the status
     // says about it is not shown as a problem.
-    renderWithApp(<PullSecretSetup pullSecret={{ exists: true, valid: false, detail: "Credentials rejected" }} readOnly />);
+    await renderWithApp(<PullSecretSetup pullSecret={{ exists: true, valid: false, detail: "Credentials rejected" }} readOnly />).settled();
     expect(screen.getByText("Not used")).toBeInTheDocument();
     expect(screen.queryByText(/can't pull nightly images/)).not.toBeInTheDocument();
     cleanup();
-    renderWithApp(<PullSecretSetup pullSecret={noSecret.pullSecret} />);
+    await renderWithApp(<PullSecretSetup pullSecret={noSecret.pullSecret} />).settled();
     expect(screen.getByText("Missing")).toBeInTheDocument();
   });
 
-  it("does not hold back the cluster setup or Update", () => {
+  it("does not hold back the cluster setup or Update", async () => {
     expect(prerequisitesMet(noSecret, true)).toBe(true);
     expect(prerequisitesMet(noSecret)).toBe(false);
     // The gitops profile does not read it at all; the full profile still checks it.
     expect(prerequisitesMet(nightlyStatus({ pullSecret: { exists: true, valid: false } }), true)).toBe(true);
     expect(prerequisitesMet(nightlyStatus({ pullSecret: { exists: true, valid: false } }))).toBe(false);
-    renderWithApp(<ClusterSetupCard status={noSecret} onStatusRefresh={vi.fn()} onShowInstructions={vi.fn()} collapsible readOnly />);
+    await renderWithApp(<ClusterSetupCard status={noSecret} onStatusRefresh={vi.fn()} onShowInstructions={vi.fn()} collapsible readOnly />).settled();
     expect(screen.getByText("Ready")).toBeInTheDocument();
   });
 
-  it("says so in the setup instructions", () => {
-    renderWithApp(<SetupModal isOpen onClose={vi.fn()} status={noSecret} gitOpsProfile />);
+  it("says so in the setup instructions", async () => {
+    await renderWithApp(<SetupModal isOpen onClose={vi.fn()} status={noSecret} gitOpsProfile />).settled();
     expect(screen.getByText(/Not used: the gitops profile uses the cluster's pull secret/)).toBeInTheDocument();
     expect(screen.queryByText(/additional-pull-secret is missing/)).not.toBeInTheDocument();
   });

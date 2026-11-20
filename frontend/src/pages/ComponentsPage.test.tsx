@@ -136,6 +136,8 @@ describe("ComponentsPage Deployments table", () => {
     expect(screen.getByText("No deployments match the filters")).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: "Clear filters" })[0]);
     expect(rowNames()).toHaveLength(3);
+    // The status menu closes on PatternFly Popper's hide timer (setTimeout).
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
   });
 
   it("a base image's dash says it is not a build, a build image's dash says the label is missing", async () => {
