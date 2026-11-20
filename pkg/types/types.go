@@ -94,8 +94,8 @@ type StatusResponse struct {
 	// DSCManagedBy is the Argo CD application that manages the
 	// DataScienceCluster (ArgoCDTracking: managed or unconfirmed).
 	DSCManagedBy string `json:"dscManagedBy,omitempty"`
-	// DSCArgoCD is what Argo CD said about the DataScienceCluster's tracking
-	// annotation; absent when it has none.
+	// DSCArgoCD is what Argo CD said about the DataScienceCluster; absent
+	// when there is nothing to report (pkg/cluster/argocd.go).
 	DSCArgoCD *ArgoCDTracking `json:"dscArgoCD,omitempty"`
 	Nightly   *NightlyStatus  `json:"nightly,omitempty"`
 	// CatalogServes is the operator build the nightly catalog serves on the
@@ -131,37 +131,40 @@ type SubscriptionInfo struct {
 	// ManagedBy is the Argo CD application that manages the Subscription
 	// (ArgoCDTracking: managed or unconfirmed).
 	ManagedBy string `json:"managedBy,omitempty"`
-	// ArgoCD is what Argo CD said about the Subscription's tracking
-	// annotation; absent when it has none.
+	// ArgoCD is what Argo CD said about the Subscription; absent when there
+	// is nothing to report (pkg/cluster/argocd.go).
 	ArgoCD *ArgoCDTracking `json:"argoCD,omitempty"`
 }
 
 // Argo CD tracking states (ArgoCDTracking.State).
 const (
-	// ArgoCDManaged: the Application the annotation names lists the object
-	// among its resources.
+	// ArgoCDManaged: an Application lists the object among its resources.
 	ArgoCDManaged = "managed"
-	// ArgoCDStale: the annotation is left over (StaleReason says how the
-	// tool knows); the object is treated as not managed.
+	// ArgoCDStale: the object carries Argo CD's tracking, but no Argo CD
+	// manages it (StaleReason says how the tool knows); it is treated as not
+	// managed.
 	ArgoCDStale = "stale"
 	// ArgoCDUnconfirmed: Argo CD could not be asked, or did not answer
 	// clearly (Reason); the object is treated as managed.
 	ArgoCDUnconfirmed = "unconfirmed"
 )
 
-// Why a tracking annotation is left over (ArgoCDTracking.StaleReason).
+// Why Argo CD's tracking on an object is left over
+// (ArgoCDTracking.StaleReason).
 const (
 	ArgoCDNotInstalled      = "argo-cd-not-installed"
 	ArgoCDApplicationGone   = "application-missing"
 	ArgoCDNotAmongResources = "not-in-resources"
 )
 
-// ArgoCDTracking is what the tool learnt from Argo CD about an object's
-// argocd.argoproj.io/tracking-id annotation (pkg/cluster/argocd.go).
+// ArgoCDTracking is what the tool learnt from Argo CD about an object: whether
+// an Application lists it (pkg/cluster/argocd.go).
 type ArgoCDTracking struct {
-	// Application is the application as the annotation names it:
-	// "<name>", or "<namespace>_<name>" for an application outside Argo
-	// CD's own namespace.
+	// Application is the application as the object's tracking annotation
+	// or instance label names it ("<name>", or "<namespace>_<name>" for an
+	// application outside Argo CD's own namespace), the name of the
+	// Application that lists an object without them, or "(unknown)" when
+	// Argo CD could not be asked about such an object.
 	Application string `json:"application"`
 	State       string `json:"state"`
 	// Namespace is the namespace of the Application the tool found.
@@ -193,8 +196,8 @@ type CatalogSourceInfo struct {
 	// an ACM policy enforces its spec (config-policy-controller owns
 	// f:spec).
 	ManagedByACM bool `json:"managedByACM,omitempty"`
-	// ArgoCD is what Argo CD said about the CatalogSource's tracking
-	// annotation; absent when it has none.
+	// ArgoCD is what Argo CD said about the CatalogSource; absent when there
+	// is nothing to report (pkg/cluster/argocd.go).
 	ArgoCD *ArgoCDTracking `json:"argoCD,omitempty"`
 }
 

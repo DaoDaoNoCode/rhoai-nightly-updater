@@ -335,10 +335,11 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		f.status(w, code, fmt.Sprintf("%s %s is invalid: the request was %s", r.Method, r.URL.String(), body))
 		return
 	}
-	// API discovery documents (/apis/<group>): the ones a test set in
-	// groups, else 404, as for a group that is not served, so callers use
-	// their fallback versions.
-	if parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/"); parts[0] == "apis" && len(parts) < 3 {
+	// API discovery documents (/apis/<group> and /apis/<group>/<version>):
+	// the ones a test set in groups, else 404, as for a group that is not
+	// served, so callers use their fallback versions (and Argo CD's
+	// Application API reads as not installed: argocd.go).
+	if parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/"); parts[0] == "apis" && len(parts) <= 3 {
 		if doc, ok := f.groups[r.URL.Path]; ok {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(doc))

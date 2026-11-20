@@ -65,6 +65,7 @@ func TestUpdateGitOpsProfile_RefusesAnUnmanagedCatalog(t *testing.T) {
 		"subscription only": func() *fakeOLM {
 			f := servesGitOpsPolicy(t, gitOpsFake(t))
 			f.catalog["metadata"] = map[string]any{}
+			f.argo = argoManagingAllBut(argoCatalogObject)
 			return f
 		},
 		"no catalog": func() *fakeOLM {

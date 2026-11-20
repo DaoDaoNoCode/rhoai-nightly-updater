@@ -546,6 +546,7 @@ func TestPrerequisites_RefusesAGitOpsManagedDSC(t *testing.T) {
 	pc := newPrereqCluster(t)
 	dsc := pc.f.get(tDSC)
 	ensureMap(dsc, "metadata")["annotations"] = map[string]any{argoTrackingAnnotation: "rhoai:datasciencecluster.opendatahub.io/DataScienceCluster:/default-dsc"}
+	pc.f.argo = argoManagingAll(argoDSCObject("default-dsc"))
 	st := prereqStatus(t, pc.c, "pipelines")
 	if !strings.Contains(st.SetupBlockedReason, "Argo CD application") {
 		t.Fatalf("status = %+v", st)
@@ -733,6 +734,7 @@ func TestRestoreComponents(t *testing.T) {
 			"Argo CD takes it over": func(pc *prereqCluster) {
 				meta := ensureMap(pc.f.get(tDSC), "metadata")
 				meta["annotations"] = map[string]any{argoTrackingAnnotation: "rhoai:datasciencecluster.opendatahub.io/DataScienceCluster:/default-dsc"}
+				pc.f.argo.setApps(argoApplicationListing("openshift-gitops", argoDSCObject("default-dsc")))
 				pc.f.bumpRV(meta)
 			},
 			"the second read fails": func(pc *prereqCluster) {
@@ -743,6 +745,8 @@ func TestRestoreComponents(t *testing.T) {
 		} {
 			t.Run(name, func(t *testing.T) {
 				pc := setUp(t, "playground")
+				// Argo CD runs here and manages nothing until a case says so.
+				pc.f.argo = &fakeArgoCD{served: true}
 				changed := false
 				pc.f.beforeRequest = func(r *http.Request) {
 					if !changed && r.Method == http.MethodPatch && r.URL.Path == tDSC && r.URL.Query().Get("dryRun") == "" && r.URL.Query().Get("fieldManager") != "kubectl-edit" {
@@ -799,6 +803,7 @@ func TestRestoreComponents(t *testing.T) {
 	t.Run("gitops", func(t *testing.T) {
 		pc := setUp(t, "mlflow")
 		ensureMap(pc.f.get(tDSC), "metadata")["annotations"] = map[string]any{argoTrackingAnnotation: "rhoai:datasciencecluster.opendatahub.io/DataScienceCluster:/default-dsc"}
+		pc.f.argo = argoManagingAll(argoDSCObject("default-dsc"))
 		n := len(pc.f.mutations())
 		res, _ := RestoreComponents(pc.c, []string{"mlflowoperator"})
 		if res.Success || res.ErrorCode != ErrorCodeGitOpsManaged || len(pc.f.mutations()) != n {
