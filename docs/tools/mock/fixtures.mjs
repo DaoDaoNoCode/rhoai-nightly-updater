@@ -19,7 +19,7 @@ export const ago = (minutes) => new Date(NOW - minutes * 60_000).toISOString().r
 
 /** A stable, realistic-looking digest for a name. */
 export const digest = (seed) => "sha256:" + createHash("sha256").update(seed).digest("hex");
-const hex = (seed, n) => createHash("sha1").update(seed).digest("hex").slice(0, n);
+export const hex = (seed, n) => createHash("sha1").update(seed).digest("hex").slice(0, n);
 
 export const USER = "dev-user";
 // pkg/api writeAuthError and sessionProblem (scopeRefusal): an expired or

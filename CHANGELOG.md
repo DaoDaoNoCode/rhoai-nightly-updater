@@ -66,7 +66,10 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   Build Explorer, and the Environment page for their own projects, read
   with their own token. Every other read answers 403 `admin_only`; a GET
   route nobody classified is admin-only, and a test fails until it is
-  classified ([SECURITY.md](SECURITY.md#per-user-views-500)).
+  classified ([SECURITY.md](SECURITY.md#per-user-views-500)). Their Help
+  dialog describes only the pages they can open, with no update or upgrade
+  steps. The README shows these pages
+  ([Not a cluster-admin?](README.md#not-a-cluster-admin-what-you-see)).
 - `GET /api/user/permissions` reports `role`: `admin` or `user`.
 - `GET /api/operation` gives a user who is not a cluster-admin only
   `{running, label, startedAt}`: never who started it or what it acts on.

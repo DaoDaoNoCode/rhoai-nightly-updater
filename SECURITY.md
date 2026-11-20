@@ -485,7 +485,7 @@ oc auth can-i create configmaps -n openshift-ingress --as=$SA                   
 
 ### Where the updater's image comes from (trust root)
 
-Every install runs `quay.io/juntao_wang/rhoai-nightly-updater` (the `IMAGE` default), pinned by digest at install time. Whoever can push to that repository decides what code runs with the ServiceAccount above and with the token of every cluster-admin who signs in, on every cluster that installs or upgrades from it. That repository is in a **personal** Quay namespace (`juntao_wang`), so its owner's Quay account is part of the trust root; moving it to a team organisation is described in [CONTRIBUTING: Moving the image repository](CONTRIBUTING.md#moving-the-image-repository).
+Every install runs `quay.io/juntao_wang/rhoai-nightly-updater` (the `IMAGE` default), pinned by digest at install time. Whoever can push to that repository decides what code runs with the ServiceAccount above and with the token of every user who signs in (every user RHOAI lets in since 5.0.0, not only cluster-admins), on every cluster that installs or upgrades from it. That repository is in a **personal** Quay namespace (`juntao_wang`), so its owner's Quay account is part of the trust root; moving it to a team organisation is described in [CONTRIBUTING: Moving the image repository](CONTRIBUTING.md#moving-the-image-repository).
 
 | Tag | Written by | With | What protects it |
 |---|---|---|---|

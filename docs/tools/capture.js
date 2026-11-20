@@ -845,6 +845,29 @@ async (page) => {
       });
     },
 
+    // A signed-in user who is not a cluster-admin (5.0.0, per-user views):
+    // the pages they get, full size in both themes, and the running-update
+    // banner they see (when and what, never who).
+    async user() {
+      for (const dark of [false, true]) {
+        const theme = dark ? "dark" : "light";
+        await open("/", "user", { dark, width: W });
+        await card("DataScienceCluster").waitFor();
+        await fullPage(`page-user-status-${theme}`);
+        await open("/test-resources?project=dev-project", "user", { dark, width: W });
+        await card("Pipelines").waitFor();
+        await fullPage(`page-user-environment-${theme}`);
+        await open("/test-resources", "user-no-projects", { dark, width: W });
+        await page.getByRole("heading", { name: "You have no data science projects" }).waitFor();
+        await fullPage(`page-user-no-projects-${theme}`);
+        await open("/diagnostics", "user", { dark, width: W });
+        await page.getByRole("heading", { name: "Only cluster-admins can see this page" }).waitFor();
+        await fullPage(`page-user-admin-only-${theme}`);
+      }
+      await open("/", "user-update-running");
+      await crop("banner-user-update-running", alert("An update is running since"));
+    },
+
     async builds() {
       await open("/builds", "update-available");
       const search = page.getByPlaceholder("Image, commit SHA, PR # or PR URL");

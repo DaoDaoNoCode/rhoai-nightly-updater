@@ -22,7 +22,7 @@ What the tool itself changes: [docs/CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md)
 | What you see in the app | Section |
 |---|---|
 | The app does not load, the pod does not start, Route 503 | [§3](#3-app-down-or-pod-not-starting) |
-| 403 after login, "Read-only access", "Sign in again", "Log out and log in again", a change stopped because your sign-in ended or your account was refused | [§4](#4-sign-in-and-permissions) |
+| 403 after login, "Read-only access", "Only cluster-admins can see this page", "Sign in again", "Log out and log in again", a change stopped because your sign-in ended or your account was refused | [§4](#4-sign-in-and-permissions) |
 | An OAuth error page (`unauthorized_client`, `invalid_request`, `scope denied`), an OAuthClient left after deleting the namespace | [§4, Sign-in and the OAuthClient](#sign-in-and-the-oauthclient) |
 | "vX.Y.Z is available", "this updater's deployment is out of date" | [§2](#2-upgrade-roll-back-or-remove-the-updater) |
 | "... is running ... on updater pod ...", "... was interrupted", 409 `cluster_busy`, 503 `lock_unavailable` | [§5](#5-operations-busy-stuck-interrupted) |
@@ -134,6 +134,7 @@ oc logs -n $NS deploy/$APP -c app --previous
 |---|---|
 | 403 from oauth-proxy right after login | The user may not `get` `auths.services.platform.opendatahub.io` (the login gate since 5.0.0): they are not in RHOAI's allowed groups (`oc get auths.services.platform.opendatahub.io auth -o jsonpath='{.spec.allowedGroups}'`), or RHOAI is not installed, where only cluster-admins pass. Check with `oc auth can-i get auths.services.platform.opendatahub.io --as=<user>` |
 | UI is read-only ("Read-only access") | Changes need cluster-admin. Check with `oc auth can-i '*' '*' --all-namespaces`. On ROSA: `rosa grant user cluster-admin --user=<u> --cluster=<c>` |
+| Only Status, Build Explorer and Environment in the navigation; other pages say "Only cluster-admins can see this page"; Environment shows only your projects | You are signed in but not a cluster-admin: since 5.0.0 that is the view of everyone RHOAI lets in ([README](README.md#not-a-cluster-admin-what-you-see)). No projects listed: you are in none (`oc get projects -l opendatahub.io/dashboard=true` as that user). For every page and for changes, cluster-admin, as above |
 | "Sign in again" banner | The oauth-proxy session (23 h) or the OAuth token expired. Follow the link |
 | "Your sign-in expires in N minutes ... Log out and log in again" (401 `sign_in_again`), or the banner "Sign in again to make changes" with that reason | Since 4.0.0 changes run with your own token, which must outlive the change (the 15-minute deadline, the restore and a margin). Nothing was changed. Use **Log out** in the banner or the user menu, then log in again |
 | "Your sign-in cannot make changes ... Log out and log in again" (401 `sign_in_again`) | A session from before 4.0.0 (the cookie survives the upgrade; its token was made for the ServiceAccount OAuth client and can only identify you). Nothing was changed. Log out and log in again, once |

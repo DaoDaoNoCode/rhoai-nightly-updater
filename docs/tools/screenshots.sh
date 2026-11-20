@@ -20,7 +20,7 @@ PORT=${PORT:-18181}
 SESSION=${SESSION:-docs-screenshots}
 CONTRAST=${CONTRAST:-glass}
 case $CONTRAST in glass | default | high-contrast) ;; *) echo "ERROR: CONTRAST must be glass, default or high-contrast" >&2; exit 1 ;; esac
-ALL_JOBS=(pages status banners signin components builds dashdev resources diagnostics
+ALL_JOBS=(pages status banners signin user components builds dashdev resources diagnostics
   gif-update gif-install gif-migrate gif-repair gif-diagnostics gif-pr-search)
 if [ $# -gt 0 ]; then JOBS=("$@"); else JOBS=("${ALL_JOBS[@]}"); fi
 

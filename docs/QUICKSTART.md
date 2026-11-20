@@ -22,7 +22,7 @@ Before your first change, read **[How the tool keeps your cluster safe](../READM
 ## 0. Before you start
 
 - A ROSA HCP or OpenShift cluster, **OCP 4.15 or newer**. The `ose-oauth-proxy-rhel9` image has no v4.14 tag.
-- **cluster-admin** on that cluster. You need it to install the updater, and the app allows changes only to cluster-admins (everyone else is read-only). On ROSA, the cluster owner can grant it to a user of the cluster's identity provider:
+- **cluster-admin** on that cluster. You need it to install the updater and to make changes in the app; everyone else RHOAI lets in can sign in and look ([step 2](#2-open-the-app)). On ROSA, the cluster owner can grant it to a user of the cluster's identity provider:
   ```bash
   rosa grant user cluster-admin --user=<username> --cluster=<cluster-name>
   ```
@@ -93,6 +93,13 @@ oc get route rhoai-nightly-updater -n rhoai-nightly-updater -o jsonpath='https:/
 <img src="images/masthead-version.png" alt="The masthead: the release v4.0.0, the appearance button, Help, Applications and the user menu" width="380">
 
 **What you should see:** the **Status** page. The masthead shows (1) the release you installed (`v4.0.0` in the picture), then the appearance button (color scheme and contrast), **Help** (`?`), the application menu and your user name. A fresh cluster shows **One-time cluster setup** first.
+
+**Your teammates** open the same URL. Since 5.0.0 whoever RHOAI lets in can sign in: by default every OpenShift user, since RHOAI grants `get` on `auths.services.platform.opendatahub.io` to the allowed groups of its Auth CR (`oc get auths.services.platform.opendatahub.io auth -o jsonpath='{.spec.allowedGroups}'`). Narrow those groups to narrow who signs in (it narrows the RHOAI dashboard too). Until RHOAI is installed ([step 4](#4-install-rhoai)) only cluster-admins sign in. Cluster-admins see every page. Everyone else sees a short Status page, Build Explorer and the Environment page for their own projects, read with their own permissions, and changes nothing ([README: Not a cluster-admin?](../README.md#not-a-cluster-admin-what-you-see)):
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/page-user-status-dark.png">
+  <img src="images/page-user-status-light.png" alt="Status for a user who is not a cluster-admin: RHOAI Succeeded 3.6.0 on stable-3.x, the installed nightly with a newer build available, and the DataScienceCluster components" width="760">
+</picture>
 
 ## 3. One-time setup: pull secret and image mirror
 

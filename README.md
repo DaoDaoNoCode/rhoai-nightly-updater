@@ -6,6 +6,8 @@
 
 The RHOAI Nightly Updater is a web app that installs and updates Red Hat OpenShift AI (RHOAI) nightly builds on your own ROSA HCP or OpenShift cluster. It also deploys odh-dashboard pull requests, sets up test environments on its Environment page (S3 storage, pipeline servers, MLflow, a CPU model) and explains what is wrong when RHOAI is not healthy. You need no `oc` commands day to day: everything is a button, and every change asks for confirmation first.
 
+Cluster-admins make the changes. Since 5.0.0 everyone RHOAI lets in can sign in too and see what runs: a short Status page, Build Explorer and their own data science projects ([Not a cluster-admin?](#not-a-cluster-admin-what-you-see)).
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/page-status-dark.png">
@@ -258,6 +260,27 @@ Every setup has its removal on the same tab: **Delete** in the part's menu for t
 
 Diagnostics scans on load and only reads the cluster. Each problem shows what was **Observed**, the **Fix**, and a **Command** you copy and run yourself. A few problems have a **Fix** button, which asks for confirmation first.
 
+### Not a cluster-admin? What you see
+
+Since 5.0.0 whoever RHOAI lets in can sign in: anyone who may `get` `auths.services.platform.opendatahub.io`, which RHOAI grants to the allowed groups of its Auth CR (by default every OpenShift user; without RHOAI, only cluster-admins). Cluster-admins see everything above. Everyone else sees three pages, and changes nothing:
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/page-user-status-dark.png">
+    <img src="docs/images/page-user-status-light.png" alt="Status for a user who is not a cluster-admin: the updater version; RHOAI operator Succeeded, version 3.6.0, channel stable-3.x; the installed nightly rhoai-3.6 with A newer rhoai-3.6 build exists; the DataScienceCluster Ready with each component's management state and Ready" width="880">
+  </picture>
+</p>
+
+- **Status**: RHOAI's version, channel and phase, the nightly build the cluster runs and whether a newer one exists, and the DataScienceCluster with each component. No update, activity log or cluster setup.
+- **Build Explorer**: as above, without the comparison with the installed build.
+- **Environment**: their own data science projects only (the ones the projects API lists for them), read with their own permissions: the pipeline server, models, playground and MLflow sample data of the project they pick, and the sample pipeline. Setting up or removing anything, and the shared parts (S3 storage, the inference gateway, MaaS), stay a cluster-admin's. With no projects, the page says to create one in the RHOAI dashboard or to ask a project admin.
+- Components, Dashboard Dev and Diagnostics are not in the navigation; a direct link says **Only cluster-admins can see this page**.
+- A running update shows as a banner with its start time, never who started it:
+
+  <img src="docs/images/banner-user-update-running.png" alt="The banner a user who is not a cluster-admin sees: An update is running since 14:26, Update to nightly. What this page shows may change until it finishes." width="760">
+
+Which token each read uses, and the summary's exact fields: [SECURITY.md, Per-user views](SECURITY.md#per-user-views-500).
+
 <details>
 <summary><b>All pages, full size (light and dark)</b></summary>
 
@@ -268,6 +291,10 @@ Diagnostics scans on load and only reads the cluster. Each problem shows what wa
 | Dashboard Dev | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-dashboard-dev-dark.png"><img src="docs/images/page-dashboard-dev-light.png" alt="Dashboard Dev page" width="640"></picture> |
 | Environment | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-test-resources-dark.png"><img src="docs/images/page-test-resources-light.png" alt="Environment page" width="640"></picture> |
 | Diagnostics | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-diagnostics-dark.png"><img src="docs/images/page-diagnostics-light.png" alt="Diagnostics page" width="640"></picture> |
+| Status, not a cluster-admin | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-user-status-dark.png"><img src="docs/images/page-user-status-light.png" alt="Status page of a user who is not a cluster-admin" width="640"></picture> |
+| Environment, not a cluster-admin | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-user-environment-dark.png"><img src="docs/images/page-user-environment-light.png" alt="Environment page of a user who is not a cluster-admin, with one of their projects" width="640"></picture> |
+| Environment, no projects | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-user-no-projects-dark.png"><img src="docs/images/page-user-no-projects-light.png" alt="Environment page of a user with no data science projects" width="640"></picture> |
+| A cluster-admin's page, not a cluster-admin | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-user-admin-only-dark.png"><img src="docs/images/page-user-admin-only-light.png" alt="Only cluster-admins can see this page, with Go to Status" width="640"></picture> |
 
 The app follows your system's light or dark mode and contrast settings; the appearance button in the masthead sets the color scheme (System, Light, Dark) and the contrast mode (System, Default, High contrast, Glass) instead; on narrow screens the same choices are in the user menu. All screenshots come from a mock backend with made-up data, in the Glass contrast mode (`make docs-screenshots`, see [docs/tools](docs/tools/README.md)).
 
@@ -302,7 +329,7 @@ The updater changes a shared, stateful system (OLM and the RHOAI operator). Thes
 
 **Who can see and change things.** Every user RHOAI lets in (its allowed groups; by default every OpenShift user) can sign in (5.0.0). Cluster-admins see every page; everyone else sees a short cluster summary, Build Explorer and the Environment page for their own projects, read with their own permissions ([SECURITY.md, Per-user views](SECURITY.md#per-user-views-500)). Changes need the **cluster-admin** role, checked with your own token on every request, and since 4.0.0 every change is made with your own OpenShift token: the cluster checks it against your permissions and its audit log names you ([SECURITY.md](SECURITY.md)). The updater's own ServiceAccount only reads, keeps its records and runs one background clean-up of gone MaaS publications. Which token goes where, and why your own token is never sent to a model or a pipeline server: [SECURITY.md, Which token is used where](SECURITY.md#which-token-is-used-where). Every change asks for confirmation and names what it will touch.
 
-**One operation at a time.** A running operation shows a banner on every page, with who started it and the current step. Everyone sees it, and action buttons stay disabled until it finishes. A second request gets `409 cluster_busy` and changes nothing. Closing the tab doesn't stop an operation: after a reload, the page reattaches to the running operation. If the connection was lost, the result says "outcome unknown, see the activity log" unless the server reports the final outcome.
+**One operation at a time.** A running operation shows a banner on every page, with who started it and the current step (users who are not cluster-admins see only that an update runs and since when). Action buttons stay disabled until it finishes. A second request gets `409 cluster_busy` and changes nothing. Closing the tab doesn't stop an operation: after a reload, the page reattaches to the running operation. If the connection was lost, the result says "outcome unknown, see the activity log" unless the server reports the final outcome.
 
 **Refuse before changing.** Update, Re-deploy and Install a different build run all their checks first (pull secret, IDMS, a test catalog for the exact image, version, OperatorGroup, a second rhods-operator Subscription). A refusal says "Nothing was changed".
 
