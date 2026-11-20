@@ -7,6 +7,11 @@
 # Versions are vMAJOR.MINOR.PATCH. MAJOR changes when the deploy contract
 # changes (TEMPLATE_REVISION in deploy/template.yaml, RBAC, anything that
 # needs the template re-applied), MINOR for features, PATCH for fixes.
+# A pre-release of X.Y.Z is vX.Y.Z-alpha.N, vX.Y.Z-beta.N or vX.Y.Z-rc.N
+# (N from 1, no leading zeros; SemVer 2.0.0 item 9), ordered alpha < beta <
+# rc < vX.Y.Z (item 11). Pre-releases iterate a version before its one
+# final release: they are tagged on main or an integ/* branch, publish only
+# their own image tag, and never move :vMAJOR or :latest.
 #
 # Usage:
 #   release.sh check VERSION [REF]     the release guard (default REF: HEAD)
@@ -19,13 +24,17 @@
 #   release.sh tag VERSION             `make release`: guard, then an annotated
 #                                      tag; prints (never runs) the push commands
 #   release.sh publish VERSION         CI: push the image tarball as :VERSION,
-#                                      then move :vMAJOR and :latest
+#                                      then move :vMAJOR and :latest (not
+#                                      for a pre-release)
 #   release.sh promote-latest VERSION  CI, manual: move :latest to VERSION
+#                                      (a release, never a pre-release)
 #   release.sh publish-main            CI, main: push the image tarball as the
 #                                      commit tag (written once) and as :main
 #   release.sh wait-image VERSION      wait (bounded) until IMAGE:VERSION exists,
 #                                      built from the commit of tag VERSION
 #   release.sh gitlab-release VERSION  CI: create the GitLab Release
+#   release.sh kind VERSION            print "release" or "prerelease"; fails
+#                                      for anything else
 #   release.sh should-move NAME NEW CURRENT
 #                                      whether tag NAME (latest or vN) moves
 #                                      from CURRENT ("-" = no such tag, other
@@ -36,7 +45,8 @@
 # Environment for publish and promote-latest: IMAGE (repository, no tag),
 # IMAGE_TARBALL (publish), CI_COMMIT_SHA, CI_COMMIT_SHORT_SHA, CRANE (the
 # crane binary, default crane; it must be logged in to the registry).
-# For tag: RELEASE_BRANCH (default main), RELEASE_REMOTE (default origin),
+# For tag: RELEASE_BRANCH (default main; a pre-release may also be tagged on
+# an integ/* branch), RELEASE_REMOTE (default origin),
 # RELEASE_REMOTES (remotes to print push commands for, default
 # "origin github").
 set -eu
@@ -53,8 +63,44 @@ die() {
 
 # --- Versions ---------------------------------------------------------------
 
+CORE_RE='v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})'
+
+# one_line TEXT: TEXT has no newline (grep would match any one line).
+one_line() {
+	case $1 in *'
+'*) return 1 ;; esac
+}
+
+# is_final VERSION: a release, vX.Y.Z.
+is_final() {
+	one_line "$1" && printf '%s\n' "$1" | grep -Eq "^$CORE_RE\$"
+}
+
+# is_prerelease VERSION: vX.Y.Z-alpha.N, -beta.N or -rc.N, N >= 1 without
+# leading zeros. Only these three identifiers: anything else is refused.
+is_prerelease() {
+	one_line "$1" && printf '%s\n' "$1" | grep -Eq "^$CORE_RE-(alpha|beta|rc)\\.[1-9][0-9]{0,8}\$"
+}
+
+# is_release VERSION: a release or a pre-release.
 is_release() {
-	printf '%s\n' "$1" | grep -Eq '^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
+	is_final "$1" || is_prerelease "$1"
+}
+
+# require_version VERSION: stops with the expected format unless VERSION is
+# a release or a pre-release.
+require_version() {
+	is_release "$1" && return 0
+	case $1 in
+	v[0-9]*-*) die "A pre-release version looks like v1.2.3-alpha.1, v1.2.3-beta.1 or v1.2.3-rc.1 (the number from 1, no leading zeros; no other identifiers), not '$1'." ;;
+	esac
+	die "A release version looks like v1.2.3 (or v1.2.3-alpha.1, -beta.1, -rc.1 for a pre-release), not '$1'."
+}
+
+# final_of VERSION: the release a pre-release leads to (v1.2.3-rc.1 → v1.2.3);
+# a release itself.
+final_of() {
+	printf '%s\n' "${1%%-*}"
 }
 
 major() {
@@ -62,25 +108,57 @@ major() {
 	printf '%s\n' "${v%%.*}"
 }
 
-# version_gt A B: A is a higher release than B (both vX.Y.Z).
-version_gt() {
-	a=${1#v}
-	b=${2#v}
-	a1=${a%%.*} a=${a#*.}
-	b1=${b%%.*} b=${b#*.}
-	a2=${a%%.*} a3=${a#*.}
-	b2=${b%%.*} b3=${b#*.}
-	if [ "$a1" -ne "$b1" ]; then [ "$a1" -gt "$b1" ]; return; fi
-	if [ "$a2" -ne "$b2" ]; then [ "$a2" -gt "$b2" ]; return; fi
-	[ "$a3" -gt "$b3" ]
+# pre_rank IDENTIFIER: alpha < beta < rc < no pre-release (the release).
+pre_rank() {
+	case $1 in
+	alpha) echo 1 ;;
+	beta) echo 2 ;;
+	rc) echo 3 ;;
+	*) echo 4 ;;
+	esac
 }
 
-# previous_release VERSION: the highest vX.Y.Z tag lower than VERSION.
+# version_gt A B: A has higher precedence than B (both releases or
+# pre-releases): MAJOR, MINOR and PATCH numerically, then a release above
+# its pre-releases, then alpha < beta < rc, then N numerically (SemVer 2.0.0
+# item 11: v1.0.0-alpha.2 < v1.0.0-alpha.10 < v1.0.0-beta.1 < v1.0.0).
+# Its variables are prefixed: sh has no local variables, and callers loop.
+version_gt() {
+	vg_a=${1#v} vg_b=${2#v}
+	vg_ac=${vg_a%%-*} vg_bc=${vg_b%%-*}
+	vg_ap=${vg_a#"$vg_ac"} vg_bp=${vg_b#"$vg_bc"}
+	vg_a1=${vg_ac%%.*} vg_ac=${vg_ac#*.}
+	vg_b1=${vg_bc%%.*} vg_bc=${vg_bc#*.}
+	vg_a2=${vg_ac%%.*} vg_a3=${vg_ac#*.}
+	vg_b2=${vg_bc%%.*} vg_b3=${vg_bc#*.}
+	if [ "$vg_a1" -ne "$vg_b1" ]; then [ "$vg_a1" -gt "$vg_b1" ]; return; fi
+	if [ "$vg_a2" -ne "$vg_b2" ]; then [ "$vg_a2" -gt "$vg_b2" ]; return; fi
+	if [ "$vg_a3" -ne "$vg_b3" ]; then [ "$vg_a3" -gt "$vg_b3" ]; return; fi
+	vg_ap=${vg_ap#-} vg_bp=${vg_bp#-}
+	vg_ar=$(pre_rank "${vg_ap%%.*}") vg_br=$(pre_rank "${vg_bp%%.*}")
+	if [ "$vg_ar" -ne "$vg_br" ]; then [ "$vg_ar" -gt "$vg_br" ]; return; fi
+	[ -n "$vg_ap" ] || return 1
+	[ "${vg_ap#*.}" -gt "${vg_bp#*.}" ]
+}
+
+# previous_release VERSION: the highest release (vX.Y.Z) tag lower than
+# VERSION. Pre-release tags are never a previous release: the template rule
+# compares with releases only.
 previous_release() {
 	best=""
 	for t in $(git tag -l 'v*'); do
-		is_release "$t" || continue
+		is_final "$t" || continue
 		version_gt "$1" "$t" || continue
+		if [ -z "$best" ] || version_gt "$t" "$best"; then best=$t; fi
+	done
+	printf '%s\n' "$best"
+}
+
+# last_release: the highest release (vX.Y.Z) tag, empty when there is none.
+last_release() {
+	best=""
+	for t in $(git tag -l 'v*'); do
+		is_final "$t" || continue
 		if [ -z "$best" ] || version_gt "$t" "$best"; then best=$t; fi
 	done
 	printf '%s\n' "$best"
@@ -144,7 +222,10 @@ changelog_section() {
 # chart_check REF X.Y.Z: when REF has the Helm chart (deploy/chart, from
 # v2.2.0 on), its copy of the template is REF's deploy/template.yaml and
 # Chart.yaml names this release (version X.Y.Z, appVersion vX.Y.Z), so the
-# chart at a release tag deploys exactly that release's objects.
+# chart at a release tag deploys exactly that release's objects. A
+# pre-release names itself (X.Y.Z-rc.1, vX.Y.Z-rc.1): its template may
+# differ from its other pre-releases', so the chart's tag check must refuse
+# their images too.
 chart_field() {
 	git show "$1:deploy/chart/Chart.yaml" | sed -n "s/^$2: *\"\{0,1\}\([^\"]*\)\"\{0,1\} *\$/\1/p" | head -1
 }
@@ -161,42 +242,69 @@ chart_check() {
 	cv=$(chart_field "$1" version)
 	av=$(chart_field "$1" appVersion)
 	[ "$cv" = "$2" ] && [ "$av" = "v$2" ] ||
-		die "deploy/chart/Chart.yaml at $1 has version '$cv' and appVersion '$av'; set them to $2 and v$2 in a commit on main before tagging."
+		die "deploy/chart/Chart.yaml at $1 has version '$cv' and appVersion '$av'; set them to $2 and v$2 in a commit before tagging."
 }
 
 # --- check --------------------------------------------------------------------
 
+# cmd_check VERSION [REF]: the release guard. A release vX.Y.Z needs the top
+# CHANGELOG.md section [X.Y.Z] dated; a pre-release of X.Y.Z needs it
+# undated ("- unreleased": the release commit dates it) and X.Y.Z above
+# every release tag. Both need Chart.yaml to name VERSION itself, and a
+# TEMPLATE_REVISION change since the previous RELEASE tag (pre-releases do
+# not count) needs a higher MAJOR: pre-releases of one version may change
+# the template among themselves, their final is checked as any release.
 cmd_check() {
 	version=$1
 	ref=${2:-HEAD}
-	is_release "$version" || die "A release version looks like v1.2.3, not '$version'."
+	require_version "$version"
 	git rev-parse --verify --quiet "$ref^{commit}" >/dev/null || die "$ref is not a commit of this repository."
 	plain=${version#v}
+	final=$(final_of "$version")
+	section=${final#v}
 
 	top=$(changelog_top "$ref")
-	[ -n "$top" ] || die "CHANGELOG.md at $ref has no release section ('## [$plain] - YYYY-MM-DD')."
-	top_version=${top%% *}
-	top_date=${top#* }
-	[ "$top_version" = "$plain" ] ||
-		die "The top release section of CHANGELOG.md is [$top_version], not [$plain]. Add '## [$plain] - YYYY-MM-DD' above it."
-	printf '%s\n' "$top_date" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' ||
-		die "CHANGELOG.md section [$plain] is dated '$top_date'. Replace it with the release date (YYYY-MM-DD) in a commit on main before tagging."
-	[ -n "$(changelog_section "$ref" "$plain")" ] || die "CHANGELOG.md section [$plain] is empty."
+	if is_prerelease "$version"; then
+		[ -n "$top" ] || die "CHANGELOG.md at $ref has no release section ('## [$section] - unreleased')."
+		top_version=${top%% *}
+		top_date=${top#* }
+		[ "$top_version" = "$section" ] ||
+			die "The top release section of CHANGELOG.md is [$top_version], not [$section]. A pre-release of $section needs '## [$section] - unreleased' at the top."
+		[ "$top_date" = unreleased ] ||
+			die "CHANGELOG.md section [$section] is dated '$top_date', but $version is a pre-release: its section reads '## [$section] - unreleased' until the release commit of $final dates it."
+		last=$(last_release)
+		if [ -n "$last" ] && ! version_gt "$final" "$last"; then
+			die "$version is a pre-release of $final, but release $last is not lower than $final: a pre-release comes before its release. Pre-release a version above $last."
+		fi
+	else
+		[ -n "$top" ] || die "CHANGELOG.md at $ref has no release section ('## [$plain] - YYYY-MM-DD')."
+		top_version=${top%% *}
+		top_date=${top#* }
+		[ "$top_version" = "$plain" ] ||
+			die "The top release section of CHANGELOG.md is [$top_version], not [$plain]. Add '## [$plain] - YYYY-MM-DD' above it."
+		printf '%s\n' "$top_date" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' ||
+			die "CHANGELOG.md section [$plain] is dated '$top_date'. Replace it with the release date (YYYY-MM-DD) in a commit on main before tagging."
+	fi
+	[ -n "$(changelog_section "$ref" "$section")" ] || die "CHANGELOG.md section [$section] is empty."
 	chart_check "$ref" "$plain"
 
 	rev=$(template_revision "$ref")
 	[ -n "$rev" ] || die "$ref has no deploy/template.yaml."
 	prev=$(previous_release "$version")
 	if [ -z "$prev" ]; then
-		info "OK: CHANGELOG.md [$plain] - $top_date; no earlier release tag, so no template check (template revision $rev)."
+		info "OK: $version, CHANGELOG.md [$section] - $top_date; no earlier release tag, so no template check (template revision $rev)."
 		return 0
 	fi
 	prev_rev=$(template_revision "$prev")
 	[ -n "$prev_rev" ] || prev_rev=none
 	if [ "$rev" != "$prev_rev" ] && [ "$(major "$version")" -le "$(major "$prev")" ]; then
-		die "deploy/template.yaml changed TEMPLATE_REVISION from $prev_rev ($prev) to $rev, which needs a full redeploy, so the MAJOR version must be higher than $prev's: release v$(($(major "$prev") + 1)).0.0, not $version."
+		next_major=v$(($(major "$prev") + 1)).0.0
+		if is_prerelease "$version"; then
+			die "deploy/template.yaml changed TEMPLATE_REVISION from $prev_rev ($prev, the last release) to $rev, which needs a full redeploy, so the MAJOR version must be higher than $prev's: pre-release $next_major (for example $next_major-alpha.1), not $version."
+		fi
+		die "deploy/template.yaml changed TEMPLATE_REVISION from $prev_rev ($prev) to $rev, which needs a full redeploy, so the MAJOR version must be higher than $prev's: release $next_major, not $version."
 	fi
-	info "OK: CHANGELOG.md [$plain] - $top_date; template revision $rev (previous release $prev: $prev_rev)."
+	info "OK: $version, CHANGELOG.md [$section] - $top_date; template revision $rev (previous release $prev: $prev_rev)."
 }
 
 # --- notes ------------------------------------------------------------------
@@ -204,10 +312,16 @@ cmd_check() {
 cmd_notes() {
 	version=$1
 	ref=${2:-HEAD}
-	is_release "$version" || die "A release version looks like v1.2.3, not '$version'."
-	body=$(changelog_section "$ref" "${version#v}")
-	[ -n "$body" ] || die "CHANGELOG.md at $ref has no section [${version#v}]."
+	require_version "$version"
+	final=$(final_of "$version")
+	body=$(changelog_section "$ref" "${final#v}")
+	[ -n "$body" ] || die "CHANGELOG.md at $ref has no section [${final#v}]."
 	rev=$(template_revision "$ref")
+	# A pre-release says so first: its notes are its release's section so far.
+	if is_prerelease "$version"; then
+		printf '**Pre-release of %s, not for general use.** It is for testing %s before its release; the notes below are those of %s so far. `:latest` and `:v%s` do not move to it, and the app'"'"'s update check never offers it.\n\n' \
+			"${final#v}" "${final#v}" "${final#v}" "$(major "$version")"
+	fi
 	# The copy-paste install and upgrade block comes first, then the
 	# CHANGELOG section: a long section must not bury it.
 	if [ -n "${INSTALLER:-}" ]; then
@@ -247,7 +361,7 @@ EMBED_EOF=RHOAI_NIGHTLY_UPDATER_TEMPLATE_EOF
 cmd_installer() {
 	version=$1
 	ref=${2:-HEAD}
-	is_release "$version" || die "A release version looks like v1.2.3, not '$version'."
+	require_version "$version"
 	commit=$(git rev-parse --verify --quiet "$ref^{commit}") || die "$ref is not a commit of this repository."
 	image=${IMAGE:-}
 	printf '%s\n' "$image" | grep -Eq '^[a-z0-9][a-z0-9._:/-]*$' || die "IMAGE must be set to the image repository (got '$image')."
@@ -275,21 +389,34 @@ cmd_installer() {
 
 # --- tag (make release) -------------------------------------------------------
 
+# cmd_tag VERSION: a release is tagged on RELEASE_BRANCH (main); a
+# pre-release on main or on an integ/* branch, where a major is iterated.
 cmd_tag() {
 	version=$1
 	branch=${RELEASE_BRANCH:-main}
 	remote=${RELEASE_REMOTE:-origin}
-	is_release "$version" || die "Usage: make release VERSION=vX.Y.Z (got '$version')."
+	is_release "$version" || die "Usage: make release VERSION=vX.Y.Z, or VERSION=vX.Y.Z-alpha.N (-beta.N, -rc.N) for a pre-release (got '$version')."
 	[ -z "$(git status --porcelain)" ] || die "The working tree has changes; commit or stash them first."
 	current=$(git symbolic-ref --quiet --short HEAD || true)
-	[ "$current" = "$branch" ] || die "Releases are tagged on $branch; this checkout is on ${current:-a detached HEAD}."
+	if is_prerelease "$version"; then
+		case $current in
+		"$branch" | integ/?*) branch=$current ;;
+		*) die "Pre-releases are tagged on $branch or an integ/* branch; this checkout is on ${current:-a detached HEAD}." ;;
+		esac
+	else
+		[ "$current" = "$branch" ] || die "Releases are tagged on $branch; this checkout is on ${current:-a detached HEAD}."
+	fi
 	git fetch --quiet --tags "$remote" "$branch" || die "Cannot fetch $branch from $remote."
 	[ "$(git rev-parse HEAD)" = "$(git rev-parse "$remote/$branch")" ] ||
 		die "$branch is not the same commit as $remote/$branch; pull (or push) first."
 	! git rev-parse --verify --quiet "refs/tags/$version" >/dev/null || die "Tag $version already exists."
 	[ -z "$(git ls-remote --tags "$remote" "refs/tags/$version")" ] || die "Tag $version already exists on $remote."
 	cmd_check "$version" HEAD
-	git tag -a "$version" -m "Release $version"
+	if is_prerelease "$version"; then
+		git tag -a "$version" -m "Pre-release $version"
+	else
+		git tag -a "$version" -m "Release $version"
+	fi
 	info "Created the annotated tag $version on $(git rev-parse --short=8 HEAD). Nothing was pushed."
 	info "Push it to start the release pipeline (GitLab) and the GitHub release:"
 	for r in ${RELEASE_REMOTES-origin github}; do
@@ -342,8 +469,13 @@ version_label() {
 #            does not exist. Images from before releases carry a commit, not
 #            a version: for :latest they count as v1, and any release of the
 #            same major line is newer.
+# A pre-release NEW never moves either tag.
 decide() {
 	name=$1 new=$2 current=$3
+	if is_prerelease "$new"; then
+		echo "keep: $new is a pre-release; :$name moves to releases only"
+		return
+	fi
 	if [ "$current" = "-" ]; then
 		echo "move: :$name does not exist yet"
 		return
@@ -388,9 +520,11 @@ move_tag() {
 	esac
 }
 
+# cmd_publish VERSION: pushes :VERSION (written once) and the commit tag;
+# for a release also :vMAJOR and :latest (decide), never for a pre-release.
 cmd_publish() {
 	version=$1
-	is_release "$version" || die "A release version looks like v1.2.3, not '$version'."
+	require_version "$version"
 	require_publish_env
 	: "${CI_COMMIT_SHA:?CI_COMMIT_SHA is not set}"
 	TAGS=$(list_tags)
@@ -408,8 +542,12 @@ cmd_publish() {
 	digest=$(crane_cmd digest "$IMAGE:$version") || die "Cannot read the digest of $IMAGE:$version."
 	ref="$IMAGE@$digest"
 	[ -z "${CI_COMMIT_SHORT_SHA:-}" ] || commit_tag "$ref" "$digest"
-	move_tag "v$(major "$version")" "$version" "$ref"
-	move_tag latest "$version" "$ref"
+	if is_prerelease "$version"; then
+		info ":v$(major "$version") and :latest unchanged ($version is a pre-release; they move to releases only)"
+	else
+		move_tag "v$(major "$version")" "$version" "$ref"
+		move_tag latest "$version" "$ref"
+	fi
 	info "Published $ref as :$version."
 }
 
@@ -517,7 +655,7 @@ cmd_publish_main() {
 # an installer for an image GitLab has not published.
 cmd_wait_image() {
 	version=$1
-	is_release "$version" || die "A release version looks like v1.2.3, not '$version'."
+	require_version "$version"
 	require_publish_env
 	commit=$(git rev-parse --verify --quiet "$version^{commit}") || die "Tag $version is not in this repository."
 	deadline=$(($(date +%s) + ${WAIT_SECONDS:-1800}))
@@ -538,7 +676,8 @@ cmd_wait_image() {
 
 cmd_promote_latest() {
 	version=$1
-	is_release "$version" || die "A release version looks like v1.2.3, not '$version'."
+	require_version "$version"
+	is_final "$version" || die "$version is a pre-release; :latest moves to releases (vX.Y.Z) only. Nothing was changed."
 	require_publish_env
 	TAGS=$(list_tags)
 	has_tag "$version" || die "$IMAGE:$version does not exist; the release job publishes it first."
@@ -558,9 +697,16 @@ json_string() {
 		awk 'BEGIN { printf "%s", "\"" } NR > 1 { printf "%s", "\\n" } { printf "%s", $0 } END { printf "%s", "\"" }'
 }
 
+# cmd_gitlab_release VERSION: the GitLab Release of a release tag. GitLab
+# Releases have no pre-release flag (Releases API, "Create a release":
+# tag_name, name, description, ..., released_at), so a pre-release says so
+# in its name ("v1.2.3-rc.1 (pre-release)") and in the first line of its
+# notes.
 cmd_gitlab_release() {
 	version=$1
-	is_release "$version" || die "A release version looks like v1.2.3, not '$version'."
+	require_version "$version"
+	title=$version
+	! is_prerelease "$version" || title="$version (pre-release)"
 	: "${CI_API_V4_URL:?}" "${CI_PROJECT_ID:?}" "${CI_JOB_TOKEN:?}" "${CI_PROJECT_URL:?}"
 	api="$CI_API_V4_URL/projects/$CI_PROJECT_ID/releases"
 	code=$(curl -sS -o /dev/null -w '%{http_code}' --header "JOB-TOKEN: $CI_JOB_TOKEN" "$api/$version") || code=000
@@ -593,14 +739,23 @@ cmd_gitlab_release() {
 	tmp=$(mktemp)
 	trap 'rm -f "$tmp"' EXIT
 	printf '{"tag_name":%s,"name":%s,"description":%s,"assets":{"links":[{"name":%s,"url":%s,"direct_asset_path":"/install.sh","link_type":"package"},{"name":%s,"url":%s,"link_type":"other"}]}}\n' \
-		"$(json_string "$version")" "$(json_string "$version")" "$(json_string "$notes")" \
+		"$(json_string "$version")" "$(json_string "$title")" "$(json_string "$notes")" \
 		"$(json_string "install.sh (SHA-256 $(sha256 "$INSTALLER"))")" "$(json_string "$artifact_url")" \
 		"$(json_string "deploy/template.yaml (template revision $rev)")" \
 		"$(json_string "$CI_PROJECT_URL/-/raw/$version/deploy/template.yaml")" >"$tmp"
 	curl -sS --fail-with-body -o /dev/null --header "JOB-TOKEN: $CI_JOB_TOKEN" \
 		--header "Content-Type: application/json" --data "@$tmp" "$api" ||
 		die "Creating the GitLab Release $version failed."
-	info "Created the GitLab Release $version."
+	info "Created the GitLab Release $title."
+}
+
+# --- kind -----------------------------------------------------------------------
+
+# cmd_kind VERSION: "release" or "prerelease" (the GitHub release workflow
+# marks a pre-release); anything else stops.
+cmd_kind() {
+	require_version "$1"
+	if is_prerelease "$1"; then echo prerelease; else echo release; fi
 }
 
 # --- main -----------------------------------------------------------------------
@@ -623,6 +778,7 @@ promote-latest) [ $# -eq 1 ] || usage; cmd_promote_latest "$1" ;;
 publish-main) [ $# -eq 0 ] || usage; cmd_publish_main ;;
 wait-image) [ $# -eq 1 ] || usage; cmd_wait_image "$1" ;;
 gitlab-release) [ $# -eq 1 ] || usage; cmd_gitlab_release "$1" ;;
+kind) [ $# -eq 1 ] || usage; cmd_kind "$1" ;;
 should-move) [ $# -eq 3 ] || usage; cmd_should_move "$@" ;;
 *) usage ;;
 esac

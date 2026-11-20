@@ -3,9 +3,11 @@
 
 # Configurable variables — override via environment, command line, or .env file
 IMAGE     ?= quay.io/juntao_wang/rhoai-nightly-updater
-# The release tag HEAD is on (vX.Y.Z), else empty: deploy and upgrade then
-# ask for a release checkout or an explicit TAG=main / TAG=<commit>.
-RELEASE_TAG := $(shell v=$$(git describe --tags --exact-match --match 'v[0-9]*' HEAD 2>/dev/null); echo "$$v" | grep -Ex 'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)')
+# The release tag HEAD is on (vX.Y.Z, or a pre-release vX.Y.Z-alpha.N,
+# -beta.N, -rc.N), else empty: deploy and upgrade then ask for a release
+# checkout or an explicit TAG=main / TAG=<commit>. No two release tags share
+# a commit: the release guard wants each named in deploy/chart/Chart.yaml.
+RELEASE_TAG := $(shell v=$$(git describe --tags --exact-match --match 'v[0-9]*' HEAD 2>/dev/null); echo "$$v" | grep -Ex 'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.[1-9][0-9]*)?')
 ifeq ($(origin TAG),undefined)
 TAG := $(RELEASE_TAG)
 TAG_DEFAULTED := 1
@@ -43,11 +45,11 @@ RELEASES_URL ?=
 all: build push  ## Build, push and deploy this checkout's build (:dev-<commit>; needs a clean tree)
 	@$(MAKE) --no-print-directory deploy TAG=$(DEV_TAG)
 
-# :latest, :main, :vN, :vX.Y.Z and the commit tags (7 to 40 hex) are
-# published by CI only (release and commit tags are written once, :latest
-# follows releases). A local build is tagged dev-<commit> and, optionally,
-# with a TAG of your own.
-PUBLISHED_TAG = $(shell echo '$(TAG)' | grep -Ex 'latest|main|v[0-9]+|v[0-9]+\.[0-9]+\.[0-9]+|[0-9a-f]{7,40}')
+# :latest, :main, :vN, :vX.Y.Z, the pre-releases (:vX.Y.Z-rc.N, ...) and
+# the commit tags (7 to 40 hex) are published by CI only (release and commit
+# tags are written once, :latest follows releases). A local build is tagged
+# dev-<commit> and, optionally, with a TAG of your own.
+PUBLISHED_TAG = $(shell echo '$(TAG)' | grep -Ex 'latest|main|v[0-9]+|v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?|[0-9a-f]{7,40}')
 EXTRA_TAG = $(if $(PUBLISHED_TAG),,$(filter-out $(DEV_TAG),$(TAG)))
 
 build:  ## Build the image as :dev-<commit> (-dirty with uncommitted changes; :TAG for your own test tag; NO_CACHE=1 skips the cache)
@@ -96,8 +98,8 @@ rollback:  ## Roll back to an older build with its own template: TAG=<release or
 resolve-image:  ## Print the digest reference deploy/upgrade would apply for IMAGE:TAG, after the template check
 	@TAG='$(TAG)' $(INSTALL) resolve-image
 
-release:  ## Tag a release: VERSION=vX.Y.Z (checks main, CHANGELOG and the template guard; prints the push commands)
-	@test -n "$(VERSION)" || { echo "Usage: make release VERSION=vX.Y.Z"; exit 1; }
+release:  ## Tag a release VERSION=vX.Y.Z on main, or a pre-release VERSION=vX.Y.Z-rc.N on main or integ/* (checks the branch, CHANGELOG and the template guard; prints the push commands)
+	@test -n "$(VERSION)" || { echo "Usage: make release VERSION=vX.Y.Z (or vX.Y.Z-alpha.N, -beta.N, -rc.N for a pre-release)"; exit 1; }
 	@./scripts/release.sh tag '$(VERSION)'
 
 undeploy:  ## Remove the app, its OAuthClient (revoking its sign-ins), cluster-wide RBAC, Roles in other namespaces, the ConsoleLink and the namespace
@@ -205,6 +207,7 @@ help:  ## Show this help
 	@echo "  make rollback TAG=v1.0.0                Roll back to a release with that release's own template"
 	@echo "  make rollback TAG=4503bb7d DRY_RUN=1    Only validate a rollback to a commit build"
 	@echo "  make release VERSION=v2.1.0             Tag a release on main (prints the push commands)"
+	@echo "  make release VERSION=v5.0.0-rc.1        Tag a pre-release on main or integ/* (never :latest or :vN)"
 	@echo "  make build IMAGE=quay.io/myorg/myapp    Build with custom registry"
 	@echo "  make deploy NAMESPACE=my-ns             Deploy to custom namespace"
 	@echo "  make env                                Create .env file for persistent config"
