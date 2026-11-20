@@ -25,10 +25,12 @@ const Probe: React.FC = () => {
 };
 
 describe("isReleaseVersion", () => {
-  it("accepts vMAJOR.MINOR.PATCH only", () => {
-    expect(isReleaseVersion("v2.0.0")).toBe(true);
-    expect(isReleaseVersion("v10.2.33")).toBe(true);
-    for (const v of ["2cdcb42d", "dev", "main-2cdcb42d", "v2.0", "2.0.0", "v2.0.0-rc.1", "v02.0.0", undefined]) {
+  it("accepts vMAJOR.MINOR.PATCH and its pre-releases only", () => {
+    for (const v of ["v2.0.0", "v10.2.33", "v2.0.0-rc.1", "v2.0.0-alpha.1", "v2.0.0-beta.12"]) {
+      expect(isReleaseVersion(v)).toBe(true);
+    }
+    for (const v of ["2cdcb42d", "dev", "main-2cdcb42d", "v2.0", "2.0.0", "v02.0.0", "v2.0.0-rc.0", "v2.0.0-rc.01",
+      "v2.0.0-preview.1", "v2.0.0-rc", "v2.0.0-rc.1+abc", "dev-2cdcb42d-dirty", undefined]) {
       expect(isReleaseVersion(v)).toBe(false);
     }
   });
@@ -143,6 +145,16 @@ describe("update available notice", () => {
     await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("2cdcb42d|-"));
     expect(update).not.toHaveBeenCalled();
     expect(screen.queryByText(/is available/)).not.toBeInTheDocument();
+  });
+
+  it("checks for a pre-release, which the backend offers its release", async () => {
+    const update = vi.fn(async () => ({ current: "v5.0.0-rc.1", latest: "v5.0.0", updateAvailable: true, majorUpgrade: false }));
+    renderWithApp(<GlobalBanners />, { version: release("v5.0.0-rc.1"), update });
+    expect(await screen.findByText("v5.0.0 is available")).toBeInTheDocument();
+    expect(update).toHaveBeenCalled();
+    expect(screen.getByText(/This updater runs v5.0.0-rc.1/)).toBeInTheDocument();
+    expect(screen.queryByText(/requires a full redeploy/)).not.toBeInTheDocument();
+    expect(screen.getByText("git checkout v5.0.0 && make upgrade")).toBeInTheDocument();
   });
 
   it("shows nothing when the running release is current", async () => {
