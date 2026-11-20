@@ -563,6 +563,11 @@ type DSCHardResetRecord struct {
 	OperatorVersion string `json:"operatorVersion,omitempty"`
 	User            string `json:"user,omitempty"`
 	StartedAt       string `json:"startedAt"`
+	// ModuleOperators are the module operator Deployments of the module CRs
+	// the old DSC owned, as "<namespace>/<name>/<uid>": the platform deletes
+	// each once its module CR is gone, and the new DSC is created only
+	// after that.
+	ModuleOperators []string `json:"moduleOperators,omitempty"`
 }
 
 // DSCPendingHardReset is a recorded hard reset that can be finished.

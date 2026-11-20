@@ -63,6 +63,9 @@ type moduleOperator struct {
 	RHOAI bool
 	// Via says how it was identified.
 	Via string
+	// Owner is the Deployment's owner, "Platform <name>" or
+	// "DataScienceCluster <name>" ("" for the RHOAI operator).
+	Owner string
 }
 
 func (o moduleOperator) ref() string { return o.Namespace + "/" + o.Name }
@@ -316,7 +319,7 @@ func (f *moduleOperatorFinder) find(module, crName string) (op *moduleOperator, 
 				f.appNS, strings.Join(holders, ", "), plural, plural, sub, verb(len(holders), "it", "them")), nil
 		case 1:
 			d := best[0]
-			return &moduleOperator{Namespace: f.appNS, Name: d.Metadata.Name,
+			return &moduleOperator{Namespace: f.appNS, Name: d.Metadata.Name, Owner: d.platformOwner(),
 				Via: fmt.Sprintf("owned by %s; its ServiceAccount %s may update %s and %s/%s", d.platformOwner(), d.serviceAccount(), plural, plural, sub)}, "", nil
 		default:
 			var names []string
