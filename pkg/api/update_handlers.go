@@ -69,11 +69,7 @@ var HandleUpdate = withMutationAuth(func(c *cluster.Client, w http.ResponseWrite
 		return
 	}
 	defer releaseClusterMutationLock()
-	defer func() {
-		if r := recover(); r != nil {
-			slog.Error("panic in update handler", "error", r)
-		}
-	}()
+	defer recoverOperation(w, "update")
 
 	var req types.UpdateRequest
 	if !decodeBody(w, r, 4096, &req, false) {
@@ -104,7 +100,7 @@ var HandleUpdate = withMutationAuth(func(c *cluster.Client, w http.ResponseWrite
 	result, err := runUpdateDryRun(c, req.Image)
 	if err != nil {
 		slog.Error("update dry run failed", "error", err)
-		writeError(w, "update failed", http.StatusInternalServerError)
+		writeOperationError(w, "update failed", err)
 		return
 	}
 	writeOperationResult(w, result, "update")
@@ -116,35 +112,17 @@ var HandleUpdateStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 		return
 	}
 	defer releaseClusterMutationLock()
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("panic in update-stream handler", "error", rec)
-		}
-	}()
-
 	req, ok := decodeUpdateStreamRequest(w, r)
 	if !ok {
 		return
 	}
 
-	sseWriter, err := NewSSEWriter(w)
-	if err != nil {
-		writeError(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
-	defer sseWriter.Close()
-
-	done := make(chan struct{})
-	defer close(done)
-	go sseHeartbeat(sseWriter, done)
-
 	beginOperation(w, req.Image)
 	slog.Info("mutation", "op", "update-stream", "image", req.Image)
 
-	result, updateErr := runUpdateStream(c, req.Image, cluster.OperationOptions{RevertDashboardDev: req.RevertDashboardDev}, forwardSteps(sseWriter))
-
-	sendOperationResult(sseWriter, result, updateErr)
+	result, updateErr := streamOperation(w, "update-stream", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		return runUpdateStream(c, req.Image, cluster.OperationOptions{RevertDashboardDev: req.RevertDashboardDev}, emit)
+	})
 
 	if updateErr != nil {
 		slog.Error("update-stream failed", "error", updateErr)
@@ -181,7 +159,7 @@ var HandleUpdateGitOps = withGitOpsMutationAuth(func(c *cluster.Client, w http.R
 	result, err := runUpdateDryRunGitOps(c, req.Image)
 	if err != nil {
 		slog.Error("update dry run failed", "error", err)
-		writeError(w, "update failed", http.StatusInternalServerError)
+		writeOperationError(w, "update failed", err)
 		return
 	}
 	writeOperationResult(w, result, "update")
@@ -201,35 +179,17 @@ var HandleUpdateStreamGitOps = withGitOpsMutationAuth(func(c *cluster.Client, w 
 		return
 	}
 	defer releaseClusterMutationLock()
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("panic in gitops update-stream handler", "error", rec)
-		}
-	}()
-
 	req, ok := decodeUpdateStreamRequest(w, r)
 	if !ok {
 		return
 	}
 
-	sseWriter, err := NewSSEWriter(w)
-	if err != nil {
-		writeError(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
-	defer sseWriter.Close()
-
-	done := make(chan struct{})
-	defer close(done)
-	go sseHeartbeat(sseWriter, done)
-
 	beginOperation(w, req.Image)
 	slog.Info("mutation", "op", "update-stream", "image", req.Image, "profile", string(ProfileGitOps))
 
-	result, updateErr := runUpdateStreamGitOps(c, req.Image, forwardSteps(sseWriter))
-
-	sendOperationResult(sseWriter, result, updateErr)
+	result, updateErr := streamOperation(w, "gitops update-stream", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		return runUpdateStreamGitOps(c, req.Image, emit)
+	})
 
 	if updateErr != nil {
 		slog.Error("update-stream failed", "error", updateErr)
@@ -269,12 +229,6 @@ var HandleReinstallStream = withMutationAuth(func(c *cluster.Client, w http.Resp
 		return
 	}
 	defer releaseClusterMutationLock()
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("panic in reinstall-stream handler", "error", rec)
-		}
-	}()
-
 	var req types.ReinstallRequest
 	// Preserve the legacy empty-body stable rollback, but reject malformed JSON.
 	if !decodeBody(w, r, 4096, &req, true) {
@@ -285,18 +239,6 @@ var HandleReinstallStream = withMutationAuth(func(c *cluster.Client, w http.Resp
 		return
 	}
 
-	sseWriter, err := NewSSEWriter(w)
-	if err != nil {
-		writeError(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
-	defer sseWriter.Close()
-
-	done := make(chan struct{})
-	defer close(done)
-	go sseHeartbeat(sseWriter, done)
-
 	target := req.TargetType
 	if req.Image != "" {
 		target += " " + req.Image
@@ -305,9 +247,9 @@ var HandleReinstallStream = withMutationAuth(func(c *cluster.Client, w http.Resp
 	slog.Info("mutation", "op", "reinstall-stream", "targetType", req.TargetType, "image", req.Image)
 
 	opts := cluster.OperationOptions{AllowDowngrade: req.AllowDowngrade, RevertDashboardDev: req.RevertDashboardDev}
-	result, reinstallErr := runReinstallStream(c, req.TargetType, req.Image, req.Channel, opts, forwardSteps(sseWriter))
-
-	sendOperationResult(sseWriter, result, reinstallErr)
+	result, reinstallErr := streamOperation(w, "reinstall-stream", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		return runReinstallStream(c, req.TargetType, req.Image, req.Channel, opts, emit)
+	})
 
 	if reinstallErr != nil {
 		slog.Error("reinstall-stream failed", "error", reinstallErr)
@@ -329,35 +271,17 @@ var HandleRefreshStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		return
 	}
 	defer releaseClusterMutationLock()
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("panic in refresh-stream handler", "error", rec)
-		}
-	}()
-
 	var req types.RefreshRequest
 	if !decodeBody(w, r, 4096, &req, true) {
 		return
 	}
 
-	sseWriter, err := NewSSEWriter(w)
-	if err != nil {
-		writeError(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
-	defer sseWriter.Close()
-
-	done := make(chan struct{})
-	defer close(done)
-	go sseHeartbeat(sseWriter, done)
-
 	beginOperation(w, "")
 	slog.Info("mutation", "op", "refresh-stream")
 
-	result, refreshErr := runRefreshStream(c, cluster.OperationOptions{RevertDashboardDev: req.RevertDashboardDev}, forwardSteps(sseWriter))
-
-	sendOperationResult(sseWriter, result, refreshErr)
+	result, refreshErr := streamOperation(w, "refresh-stream", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		return runRefreshStream(c, cluster.OperationOptions{RevertDashboardDev: req.RevertDashboardDev}, emit)
+	})
 
 	if refreshErr != nil {
 		slog.Error("refresh-stream failed", "error", refreshErr)

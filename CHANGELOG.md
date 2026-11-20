@@ -108,6 +108,44 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   with the user's token, so its preview still refuses. The ServiceAccount
   gains no permission
   ([RUNBOOK §11.9](RUNBOOK.md#119-change-or-reset-the-datasciencecluster)).
+- **A failed DataScienceCluster repair names the real reason.** Every error
+  of `POST /api/components/dsc/repair` was answered 422 `validation`: a
+  DataScienceCluster that changed since it was read (the API server's 409),
+  an ended sign-in (401), a refusal by the user's RBAC (403) and an
+  unreachable API all read as "validation". They are now 409 `conflict`,
+  401 `session_expired`, 403 `forbidden` and 502 `network` (or the status
+  of the API server's answer); the repair's own refusals ("refresh and
+  review again") stay 422 `validation`. The other changes whose errors were
+  a bare 500 `internal` with no reason (MLflow, pipeline servers, the S3
+  storage, Dashboard Dev, the pull secret, the node pull check, assist
+  rollout, Diagnostics fixes, the update dry run, creating the
+  DataScienceCluster) answer the same way, and five reads (activity,
+  Diagnostics, Environment status, the pull secret test, node
+  verification) answer with the status and errorCode of their error. The
+  UI titles a 409 `conflict` "The object changed in the meantime", not
+  "Cluster busy".
+- **An operation that crashes on a bug ends cleanly.** A panic in one of
+  the 13 streamed operations (update, install, refresh, the DSC hard reset,
+  node setup, storage migration, models, MaaS, the playground, MLflow
+  samples, prerequisites, clean up) was logged without its stack, the
+  stream ended without a final event (the UI waited, then fell back to
+  polling) and the user's 30-second slot stayed taken; the update dry run
+  answered an empty 200. Every stream now runs through one helper that
+  logs the panic with its stack, ends the stream with a failed result
+  ("stopped on an internal error ... check what it changed"), and gives
+  the slot back; the dry run answers 500 `internal`.
+- **Dashboard Dev no longer reports the dashboard ready with one of its
+  pods missing.** With `spec.replicas: 2` and only one pod (the second not
+  created, for example refused by a quota), the dashboard state said
+  ready and not rolling out. Fewer pods than the Deployment asks for is now
+  "Rolling out", as `kubectl rollout status` treats it.
+- **An API response over 50 MiB says so.** The updater reads at most
+  50 MiB of one API server response; a larger one came back cut and
+  failed later as "unexpected end of JSON input". It is now an error that
+  names the request and the limit. The Quay token response is read with a
+  1 MiB bound like every other external read, and the three admin reads
+  (DSC plan, S3 credentials, MaaS groups) check the user's permission once
+  per request instead of twice.
 
 ### Security
 

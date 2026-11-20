@@ -74,25 +74,11 @@ var HandleMLflowSamplesStream = withMutationAuth(func(c *cluster.Client, w http.
 		writeError(w, problem, http.StatusBadRequest, "validation")
 		return
 	}
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("panic in mlflow-samples handler", "error", rec)
-		}
-	}()
-	sseWriter, err := NewSSEWriter(w)
-	if err != nil {
-		writeError(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	defer sseWriter.Close()
-	done := make(chan struct{})
-	defer close(done)
-	go sseHeartbeat(sseWriter, done)
-
 	beginOperation(w, fmt.Sprintf("%s %s in %s", req.Action, strings.Join(req.Samples, ", "), req.Project))
 	slog.Info("mutation", "op", "mlflow-samples", "action", req.Action, "samples", req.Samples, "project", req.Project)
-	result, runErr := runMLflowSamples(c, req, forwardSteps(sseWriter))
-	sendOperationResult(sseWriter, result, runErr)
+	_, runErr := streamOperation(w, "mlflow-samples", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		return runMLflowSamples(c, req, emit)
+	})
 	if runErr != nil {
 		slog.Error("mlflow-samples failed", "error", runErr)
 	}

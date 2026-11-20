@@ -63,25 +63,11 @@ var HandlePlaygroundStream = withMutationAuth(func(c *cluster.Client, w http.Res
 		writeError(w, problem, http.StatusBadRequest, "validation")
 		return
 	}
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("panic in playground handler", "error", rec)
-		}
-	}()
-	sseWriter, err := NewSSEWriter(w)
-	if err != nil {
-		writeError(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	defer sseWriter.Close()
-	done := make(chan struct{})
-	defer close(done)
-	go sseHeartbeat(sseWriter, done)
-
 	beginOperation(w, req.Action+" playground in "+req.Project)
 	slog.Info("mutation", "op", "playground", "action", req.Action, "project", req.Project, "models", len(req.Models))
-	result, runErr := runPlayground(c, req, forwardSteps(sseWriter))
-	sendOperationResult(sseWriter, result, runErr)
+	_, runErr := streamOperation(w, "playground", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		return runPlayground(c, req, emit)
+	})
 	if runErr != nil {
 		slog.Error("playground failed", "error", runErr)
 	}

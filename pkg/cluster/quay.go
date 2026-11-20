@@ -267,8 +267,10 @@ func fetchQuayToken(ctx context.Context, httpClient *http.Client, basicAuth stri
 		return "", &quayAuthError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
+	// A token is about 2.6 KB (quayTokenBatch); the bound keeps a response
+	// that does not end from being buffered whole.
 	var tokenData quayTokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tokenData); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tokenData); err != nil {
 		return "", fmt.Errorf("decoding auth response: %w", err)
 	}
 	if tokenData.Token == "" {

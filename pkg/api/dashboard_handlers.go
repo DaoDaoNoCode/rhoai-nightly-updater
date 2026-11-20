@@ -81,7 +81,7 @@ var HandleDashboardDeployPR = withMutationAuth(func(c *cluster.Client, w http.Re
 	result, err := cluster.DeployPRImageWithFlavor(c, req.PR, req.Flavor)
 	if err != nil {
 		slog.Error("deploy-pr failed", "error", err)
-		writeError(w, "deploy PR image failed", http.StatusInternalServerError)
+		writeOperationError(w, "deploy PR image failed", err)
 		return
 	}
 	writeOperationResult(w, result, "deploy-pr")
@@ -99,7 +99,7 @@ var HandleDashboardRevert = withMutationAuth(func(c *cluster.Client, w http.Resp
 	result, err := cluster.RevertDashboardImage(c)
 	if err != nil {
 		slog.Error("revert-dashboard failed", "error", err)
-		writeError(w, "revert dashboard failed", http.StatusInternalServerError)
+		writeOperationError(w, "revert dashboard failed", err)
 		return
 	}
 	writeOperationResult(w, result, "revert-dashboard")
@@ -124,7 +124,7 @@ var HandleDashboardDeployMain = withMutationAuth(func(c *cluster.Client, w http.
 	result, err := cluster.DeployDashboardMainWithFlavor(c, req.Flavor)
 	if err != nil {
 		slog.Error("deploy dashboard main failed", "error", err)
-		writeError(w, "deploy dashboard main failed", http.StatusInternalServerError)
+		writeOperationError(w, "deploy dashboard main failed", err)
 		return
 	}
 	writeOperationResult(w, result, "deploy-dashboard-main")
