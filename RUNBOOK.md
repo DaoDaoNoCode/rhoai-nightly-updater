@@ -941,14 +941,14 @@ With differences, the summary names each kind and offers **Fix**:
     while read -r role sas; do oc get clusterrole "$role" -o json | jq -e '.rules[] | select(.resources[]? == "trustyais/finalizers")' >/dev/null && echo "$role -> $sas"; done
   oc get deployments -n "$NS" -o custom-columns=NAME:.metadata.name,SA:.spec.template.spec.serviceAccountName,OWNER:.metadata.ownerReferences[0].kind
   ```
-- "X serves the conversion webhook of CRD ...": removing X deletes the webhook's Service but not the CRDs, so their objects could no longer be converted, garbage-collected or deleted with their namespace. The tool cannot list those objects; the message gives the commands, for example:
+- "X serves the conversion webhook of CRD ...": removing X deletes the webhook's Service but not the CRDs, so their objects could no longer be converted, garbage-collected or deleted with their namespace. The check lists each such CRD's objects in every namespace with your own token (the ServiceAccount may not read them), at the CRD's storage version, one page of 20. When none exist it does not block (the other checks still apply). When some do, the message says how many ("4 objects", or "20 or more" when the API server has more, with its estimate when it gives one), names up to five as `namespace/name`, and refuses until none remain; delete them first, for example:
 
   ```bash
-  oc get sparkapplications.sparkoperator.k8s.io -A            # any objects?
-  oc get scheduledsparkapplications.sparkoperator.k8s.io -A
+  oc get mcpservers.mcp.x-k8s.io -A                            # all of them
+  oc delete mcpservers.mcp.x-k8s.io -n <namespace> <name>
   ```
 
-  If any exist, delete them first. If none exist, set the component to Removed yourself in the OpenShift console (edit the DataScienceCluster).
+  "The objects of ... could not be listed with your sign-in: ..." refuses too: the list failed (your account may not list that kind, the conversion webhook failed for an object stored at an older version, a timeout), so the tool cannot tell whether any exist; the message quotes the error. Check with `oc get <crd> -A` and try again. "... which this check does not have" comes from the Components page's repair preview, which reads with the ServiceAccount: set the component to Removed with its own switch on the card instead, whose review and change list the objects with your sign-in.
 - Argo CD, an ACM policy or Helm (`meta.helm.sh/release-name` annotation, `app.kubernetes.io/managed-by: Helm` label) manages the DSC: change it in Git, in the policy or in the chart's values.
 
 **Keep the components you turned on.** Both resets offer it, checked by default, and name the components: every toggle that is Managed (or Unmanaged, where the CRD allows it) in the DSC and deployed, while the release default leaves it Removed or unset, with the parents it needs (for example `aigateway` and `aigateway.modelsAsAService` after MaaS setup, or `kueue` Unmanaged). Checked, the reset keeps their value and resets everything else; the soft reset lists them as "Kept: ... (you turned these on)", the hard reset creates them in the new DSC. Unchecked, the reset is the pure release default, and turning them off gets the removal checks (the MaaS guard above). Changing it plans the reset again; the option is part of what you review (`keepEnabled` in the plan and the request; the API requires it for both resets). A soft reset that would keep everything and change nothing else says so ("Nothing to change").
