@@ -200,11 +200,12 @@ func storedFalse() map[string]any {
 	return map[string]any{"permitOnline": false, "permitCodeExecution": false}
 }
 
-// ackFor scans and returns the acknowledgement binding of the problem whose
-// fix is id, as the Fix dialog sends it; a placeholder when the scan offers
+// recreateAck scans and returns the acknowledgement binding of the problem
+// whose fix recreates the live Deployment with the old selector, as the Fix dialog sends it; a placeholder when the scan offers
 // no acknowledged fix (the fix refuses before it compares).
-func ackFor(t *testing.T, w *leftoverWorld, id string) AckBinding {
+func recreateAck(t *testing.T, w *leftoverWorld) AckBinding {
 	t.Helper()
+	const id = "recreate-leftover:Deployment/redhat-ods-applications/trustyai-service-operator-controller-manager"
 	for _, p := range w.scan().problems {
 		if p.AutoFixAction == id && p.AcknowledgeBinding != nil {
 			return *p.AcknowledgeBinding
@@ -545,7 +546,7 @@ func TestLeftoverRecreateDeployment(t *testing.T) {
 	if res.ErrorCode != "acknowledgement_required" || len(w.deletes) != 0 {
 		t.Fatalf("%+v", res)
 	}
-	res, _ = ApplyFixAcknowledged(w.c, id, ackFor(t, w, id))
+	res, _ = ApplyFixAcknowledged(w.c, id, recreateAck(t, w))
 	if !res.Success || !strings.HasPrefix(res.Message, "Recreated Deployment redhat-ods-applications/trustyai-service-operator-controller-manager") {
 		t.Fatalf("%+v", res)
 	}
@@ -560,7 +561,7 @@ func TestLeftoverRecreateNotBackInTime(t *testing.T) {
 	w := newLeftoverWorld(t, nil, []string{msgTrustySelector}, storedFalse())
 	w.recreate = false
 	start := clk.Now()
-	res, _ := ApplyFixAcknowledged(w.c, "recreate-leftover:Deployment/redhat-ods-applications/trustyai-service-operator-controller-manager", ackFor(t, w, "recreate-leftover:Deployment/redhat-ods-applications/trustyai-service-operator-controller-manager"))
+	res, _ := ApplyFixAcknowledged(w.c, "recreate-leftover:Deployment/redhat-ods-applications/trustyai-service-operator-controller-manager", recreateAck(t, w))
 	if res.Success || res.ErrorCode != "not_recreated" || clk.Since(start) < leftoverRecreateWait {
 		t.Fatalf("%+v", res)
 	}
@@ -604,7 +605,7 @@ func TestLeftoverRecreateRefusals(t *testing.T) {
 		if p.AutoFixable || !strings.Contains(p.Fix, tc.want) {
 			t.Errorf("%s: scan %+v", tc.name, p)
 		}
-		res, _ := ApplyFixAcknowledged(w.c, id, ackFor(t, w, id))
+		res, _ := ApplyFixAcknowledged(w.c, id, recreateAck(t, w))
 		if res.ErrorCode != "prerequisites" || !strings.Contains(res.Message, tc.want) || len(w.deletes) != 0 {
 			t.Errorf("%s: fix %+v", tc.name, res)
 		}
@@ -626,7 +627,7 @@ func TestLeftoverRecreateRefusals(t *testing.T) {
 			}
 			return 200, `{}`
 		})
-		res, _ := ApplyFixAcknowledged(w.c, id, ackFor(t, w, id))
+		res, _ := ApplyFixAcknowledged(w.c, id, recreateAck(t, w))
 		if res.Success || res.ErrorCode != tc.code || w.dep == nil {
 			t.Errorf("%s: %+v", tc.name, res)
 		}
@@ -637,7 +638,7 @@ func TestLeftoverRecreateRefusals(t *testing.T) {
 			t.Errorf("%s: %+v", bad, res)
 		}
 	}
-	if res, _ := ApplyFixAcknowledged(w.c, id, ackFor(t, w, id)); res.ErrorCode != "nothing_to_do" || len(w.deletes) != 0 {
+	if res, _ := ApplyFixAcknowledged(w.c, id, recreateAck(t, w)); res.ErrorCode != "nothing_to_do" || len(w.deletes) != 0 {
 		t.Errorf("not reported: %+v", res)
 	}
 }

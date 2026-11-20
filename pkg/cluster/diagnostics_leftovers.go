@@ -1117,7 +1117,7 @@ func (r *recreateLeftover) problem() Problem {
 func (r *recreateLeftover) ackReasons() []string {
 	out := slices.Clone(r.AckReasons)
 	if !r.Read {
-		out = append(out, fmt.Sprintf("this scan could not read the %s (the fix checks its owner and namespace first)", r.rf.applyFailure.Kind))
+		out = append(out, fmt.Sprintf("this scan could not read the %s (the fix checks its owner and namespace first)", r.rf.Kind))
 	}
 	return out
 }

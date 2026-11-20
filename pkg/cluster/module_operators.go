@@ -408,9 +408,7 @@ func (o finalizerOwner) gone() bool {
 // stillThere names the Deployments and Pods that may still be the operator.
 func (o finalizerOwner) stillThere() string {
 	var out []string
-	for _, d := range o.Deployments {
-		out = append(out, d)
-	}
+	out = append(out, o.Deployments...)
 	for _, p := range o.Pods {
 		out = append(out, "Pod "+p)
 	}

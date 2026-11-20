@@ -355,7 +355,7 @@ func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *typ
 		}
 		if len(unseen) > 0 {
 			return leftoverRefused(fmt.Sprintf("Reading %s with your token found what the scan could not show, and your acknowledgement does not cover it: %s. Nothing was deleted. Check it, then delete it yourself with: %s",
-				r.ref(), strings.Join(unseen, "; "), rf.applyFailure.ocCommand("delete")), "conflict", logs)
+				r.ref(), strings.Join(unseen, "; "), rf.ocCommand("delete")), "conflict", logs)
 		}
 	}
 	logs = append(logs, fmt.Sprintf("%s is owned by %s; %s creates it again", r.ref(), r.Owner, r.Recreator))
