@@ -40,6 +40,9 @@ type mirrorRule struct {
 	Kind, Name string
 	Source     string
 	Mirrors    []string
+	// Policy is the mirrorSourcePolicy of an IDMS or ITMS entry; "" is the
+	// default, AllowContactingSource (an ICSP has none).
+	Policy string
 }
 
 // digest: the rule's mirrors serve pulls by digest (IDMS, ICSP); an ITMS's
@@ -107,7 +110,7 @@ func idmsRules(items []idmsItem) []mirrorRule {
 	var out []mirrorRule
 	for _, m := range items {
 		for _, e := range m.Spec.ImageDigestMirrors {
-			out = append(out, mirrorRule{Kind: mirrorKindIDMS, Name: m.Metadata.Name, Source: e.Source, Mirrors: e.Mirrors})
+			out = append(out, mirrorRule{Kind: mirrorKindIDMS, Name: m.Metadata.Name, Source: e.Source, Mirrors: e.Mirrors, Policy: e.MirrorSourcePolicy})
 		}
 	}
 	return out
@@ -166,8 +169,9 @@ func listITMSRules(c *Client) ([]mirrorRule, error) {
 			} `json:"metadata"`
 			Spec struct {
 				ImageTagMirrors []struct {
-					Source  string   `json:"source"`
-					Mirrors []string `json:"mirrors"`
+					Source             string   `json:"source"`
+					Mirrors            []string `json:"mirrors"`
+					MirrorSourcePolicy string   `json:"mirrorSourcePolicy"`
 				} `json:"imageTagMirrors"`
 			} `json:"spec"`
 		} `json:"items"`
@@ -178,7 +182,7 @@ func listITMSRules(c *Client) ([]mirrorRule, error) {
 	var out []mirrorRule
 	for _, s := range list.Items {
 		for _, e := range s.Spec.ImageTagMirrors {
-			out = append(out, mirrorRule{Kind: mirrorKindITMS, Name: s.Metadata.Name, Source: e.Source, Mirrors: e.Mirrors})
+			out = append(out, mirrorRule{Kind: mirrorKindITMS, Name: s.Metadata.Name, Source: e.Source, Mirrors: e.Mirrors, Policy: e.MirrorSourcePolicy})
 		}
 	}
 	return out, nil
@@ -224,6 +228,36 @@ func parentScopeRules(rules []mirrorRule) []mirrorRule {
 		}
 	}
 	return parents
+}
+
+// policyConflictRules are the rules for exactly IDMSSource whose
+// mirrorSourcePolicy is not the default. The Machine Config Operator
+// refuses the whole registries configuration when two IDMS, ITMS or ICSP
+// entries for one source set different policies ("conflicting
+// mirrorSourcePolicy is set for the same source"; machine-config-operator
+// @4dabc4b5 pkg/controller/container-runtime-config/helpers.go
+// validateRegistriesConfScopes, :961-975, before EditRegistriesConfig,
+// :590-596), and the setup's IDMS has the default (an ICSP counts as the
+// default too: convertICSPToIDMS sets none). Creating it next to one of
+// these would stop every mirror change from reaching the nodes.
+func policyConflictRules(rules []mirrorRule) []mirrorRule {
+	var out []mirrorRule
+	for _, r := range rules {
+		if r.Source == IDMSSource && r.Policy != "" && r.Policy != "AllowContactingSource" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// policyConflictRefusal explains the refusal of policyConflictRules.
+func policyConflictRefusal(conflicts []mirrorRule) string {
+	names := make([]string, len(conflicts))
+	for i, r := range conflicts {
+		names[i] = r.ref()
+	}
+	return fmt.Sprintf("%s sets mirrorSourcePolicy %s for %s. ImageDigestMirrorSet %s would leave it at the default, AllowContactingSource, and the Machine Config Operator refuses the cluster's whole mirror configuration while two objects set different policies for one source, so no mirror change would reach the nodes. So it is not created. Nothing was changed. "+
+		"To use %s, the cluster's administrator adds it to the mirrors of an ImageDigestMirrorSet entry for %s that has the same mirrorSourcePolicy (the entry there, if it is an ImageDigestMirrorSet's).", strings.Join(names, ", "), conflicts[0].Policy, IDMSSource, MirrorName, MirrorTarget, IDMSSource)
 }
 
 // parentScopeRefusal explains why the mirror is not created over parents:

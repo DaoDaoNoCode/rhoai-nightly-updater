@@ -287,7 +287,9 @@ type NodeSetupPlan struct {
 	// "managed", "unknown_topology", "unknown_platform" (the pull secret
 	// actions when the managed-cluster webhooks cannot be listed),
 	// "forbidden" (RBAC or an admission webhook refused the dry run),
-	// "parent_scope" (Create the image mirror: a mirror object maps a parent
+	// "policy_conflict" (Create the image mirror: an entry for the source
+	// sets mirrorSourcePolicy NeverContactSource, which the MCO would refuse
+	// next to the default), "parent_scope" (Create the image mirror: a mirror object maps a parent
 	// scope of registry.redhat.io/rhoai that the nodes use for it), "foreign"
 	// (an object of that name that is not this setup's), "foreign_entry" (Add: a quay.io/rhoai entry
 	// this tool did not add, with another token; Replaceable),

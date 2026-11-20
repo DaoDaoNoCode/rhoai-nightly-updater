@@ -352,6 +352,10 @@ func prepareMirrorCreate(c *Client, w *nodeSetupWork) {
 			return
 		}
 	}
+	if conflicts := policyConflictRules(rules); len(conflicts) > 0 {
+		w.refuse("policy_conflict", policyConflictRefusal(conflicts))
+		return
+	}
 	if parents := parentScopeRules(rules); len(parents) > 0 {
 		w.refuse("parent_scope", parentScopeRefusal(parents))
 		return

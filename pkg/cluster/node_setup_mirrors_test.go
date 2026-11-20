@@ -93,6 +93,37 @@ func TestMirrorCreateRefusesOverAParentScope(t *testing.T) {
 	})
 }
 
+// An entry for exactly the source with mirrorSourcePolicy NeverContactSource
+// (IDMS or ITMS): the setup's IDMS, with the default policy, would make the
+// Machine Config Operator refuse the whole mirror configuration
+// (helpers.go validateRegistriesConfScopes), so Create refuses first.
+func TestMirrorCreateRefusesAConflictingSourcePolicy(t *testing.T) {
+	for _, tc := range []struct{ name, path, obj, want string }{
+		{"IDMS", nsIDMSList + "/strict", `{"spec":{"imageDigestMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["mirror.corp.example/rhoai"],"mirrorSourcePolicy":"NeverContactSource"}]}}`, "ImageDigestMirrorSet strict sets mirrorSourcePolicy NeverContactSource"},
+		{"ITMS", nsITMSList + "/strict", `{"spec":{"imageTagMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["mirror.corp.example/rhoai"],"mirrorSourcePolicy":"NeverContactSource"}]}}`, "ImageTagMirrorSet strict sets mirrorSourcePolicy NeverContactSource"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c := nodeSetupFake(t, "HighlyAvailable", false)
+			f.putJSON(tc.path, tc.obj)
+			plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+			if plan.Ready || plan.RefusalCode != "policy_conflict" || !strings.Contains(plan.Refusal, tc.want) || !strings.Contains(plan.Refusal, "Nothing was changed") {
+				t.Fatalf("plan %+v", plan)
+			}
+			res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+			if res.Success || res.ErrorCode != "policy_conflict" || len(f.callsTo(http.MethodPost, nsIDMSList)) != 0 {
+				t.Fatalf("run %+v", res)
+			}
+		})
+	}
+	t.Run("the default policy spelled out is no conflict", func(t *testing.T) {
+		f, c := nodeSetupFake(t, "HighlyAvailable", false)
+		f.putJSON(nsITMSList+"/tags", `{"spec":{"imageTagMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["mirror.corp.example/rhoai"],"mirrorSourcePolicy":"AllowContactingSource"}]}}`)
+		if plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate}); !plan.Ready {
+			t.Fatalf("plan %+v", plan)
+		}
+	})
+}
+
 // Mirror objects that a mirror for exactly registry.redhat.io/rhoai does not
 // take anything away from: the setup goes ahead.
 func TestMirrorCreateGoesAheadWithoutAParentScope(t *testing.T) {
@@ -111,7 +142,7 @@ func TestMirrorCreateGoesAheadWithoutAParentScope(t *testing.T) {
 		// the parent's mirrors are not used for it now either
 		// (registries.go:331-345), so nothing is taken away.
 		{"a parent, and the source's own tag mirror", map[string]string{
-			nsIDMSList + "/corp": `{"spec":{"imageDigestMirrors":[{"source":"registry.redhat.io","mirrors":["mirror.corp.example/redhat"]}]}}`,
+			nsIDMSList + "/corp":  `{"spec":{"imageDigestMirrors":[{"source":"registry.redhat.io","mirrors":["mirror.corp.example/redhat"]}]}}`,
 			nsITMSList + "/rhoai": `{"spec":{"imageTagMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["mirror.corp.example/rhoai"]}]}}`,
 		}},
 	} {
