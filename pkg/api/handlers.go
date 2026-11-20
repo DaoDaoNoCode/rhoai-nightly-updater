@@ -168,6 +168,52 @@ func defaultErrorCode(httpStatus int) string {
 	}
 }
 
+// operationErrorStatus is the HTTP status and errorCode of the non-nil
+// error of a change (the second result of a cluster operation: see
+// CONTRIBUTING "Errors and operation results"), taken from the error
+// itself; known is false for an error of no known class.
+//
+// It is cluster.HTTPStatusForError (the reads' mapping) with two changes
+// for a change: the API server's 409 is "conflict" (the object changed
+// since it was read: a resourceVersion precondition, or it exists), not a
+// "cluster_error", and the user's own 403 is "forbidden" (their RBAC
+// refused the change, errorCodeFromK8sErr), not the reads'
+// "forbidden_for_user" ("you cannot see this"). A 401 to the user's token
+// stays "session_expired", as in writeAuthError: every operation that
+// returns an error does so before or at its first refused write.
+func operationErrorStatus(err error) (status int, errorCode string, known bool) {
+	switch {
+	case errors.Is(err, cluster.ErrUnauthenticated):
+		return http.StatusUnauthorized, "session_expired", true
+	case cluster.IsK8sError(err, http.StatusConflict):
+		return http.StatusConflict, "conflict", true
+	case cluster.IsK8sError(err, http.StatusForbidden):
+		return http.StatusForbidden, "forbidden", true
+	}
+	status, errorCode = cluster.HTTPStatusForError(err)
+	return status, errorCode, errorCode != "internal"
+}
+
+// writeOperationError answers the non-nil error of a change, which the
+// handler has logged: with the error's own status and errorCode
+// (operationErrorStatus) and msg followed by the error's text, or, for an
+// error of no known class, 500 "internal" with msg alone.
+func writeOperationError(w http.ResponseWriter, msg string, err error) {
+	if status, errorCode, known := operationErrorStatus(err); known {
+		writeError(w, msg+": "+err.Error(), status, errorCode)
+		return
+	}
+	writeError(w, msg, http.StatusInternalServerError, "internal")
+}
+
+// writeReadError answers the error of a read, which the handler has
+// logged, with msg and the status and errorCode of the reads' mapping
+// (cluster.HTTPStatusForError, as HandleDebug and the status do).
+func writeReadError(w http.ResponseWriter, msg string, err error) {
+	status, errorCode := cluster.HTTPStatusForError(err)
+	writeError(w, msg, status, errorCode)
+}
+
 // writeJSON encodes v as JSON and writes it to w, logging any encoding error.
 func writeJSON(w http.ResponseWriter, v any, label string) {
 	w.Header().Set("Content-Type", "application/json")

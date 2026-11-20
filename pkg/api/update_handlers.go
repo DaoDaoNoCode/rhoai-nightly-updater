@@ -104,7 +104,7 @@ var HandleUpdate = withMutationAuth(func(c *cluster.Client, w http.ResponseWrite
 	result, err := runUpdateDryRun(c, req.Image)
 	if err != nil {
 		slog.Error("update dry run failed", "error", err)
-		writeError(w, "update failed", http.StatusInternalServerError)
+		writeOperationError(w, "update failed", err)
 		return
 	}
 	writeOperationResult(w, result, "update")
@@ -181,7 +181,7 @@ var HandleUpdateGitOps = withGitOpsMutationAuth(func(c *cluster.Client, w http.R
 	result, err := runUpdateDryRunGitOps(c, req.Image)
 	if err != nil {
 		slog.Error("update dry run failed", "error", err)
-		writeError(w, "update failed", http.StatusInternalServerError)
+		writeOperationError(w, "update failed", err)
 		return
 	}
 	writeOperationResult(w, result, "update")

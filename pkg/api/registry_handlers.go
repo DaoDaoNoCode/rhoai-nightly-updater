@@ -17,7 +17,7 @@ var HandleTestPullSecret = withAuth(func(c *cluster.Client, w http.ResponseWrite
 	result, err := cluster.TestPullSecret(c)
 	if err != nil {
 		slog.Error("test-pull-secret failed", "error", err)
-		writeError(w, "test failed", http.StatusInternalServerError)
+		writeReadError(w, "test failed", err)
 		return
 	}
 	writeJSON(w, result, "test-pull-secret")
@@ -44,7 +44,7 @@ var HandleCreatePullSecret = withMutationAuth(func(c *cluster.Client, w http.Res
 	result, err := cluster.CreatePullSecret(c, req.Auth)
 	if err != nil {
 		slog.Error("create-pull-secret failed", "error", err)
-		writeError(w, "create pull secret failed", http.StatusInternalServerError)
+		writeOperationError(w, "create pull secret failed", err)
 		return
 	}
 	writeJSON(w, result, "create-pull-secret")
@@ -147,7 +147,7 @@ var HandleVerifyNodes = withAuth(func(c *cluster.Client, w http.ResponseWriter, 
 	result, err := cluster.VerifyNodeReadiness(c)
 	if err != nil {
 		slog.Error("verify-nodes failed", "error", err)
-		writeError(w, "verification failed", http.StatusInternalServerError)
+		writeReadError(w, "verification failed", err)
 		return
 	}
 	writeJSON(w, result, "verify-nodes")
@@ -192,7 +192,7 @@ var HandleNodePullCheck = withMutationAuth(func(c *cluster.Client, w http.Respon
 	result, err := cluster.CheckNodePull(c, req.Image)
 	if err != nil {
 		slog.Error("node-pull-check failed", "error", err)
-		writeError(w, "node pull check failed", http.StatusInternalServerError)
+		writeOperationError(w, "node pull check failed", err)
 		return
 	}
 	writeJSON(w, result, "node-pull-check")

@@ -79,6 +79,9 @@ function describeErrorRaw(e: unknown, genericTitle: string): ErrorDescription {
       return { title: ADMIN_ONLY_TITLE, body: ADMIN_ONLY_BODY, variant: "warning" };
     case "cluster_busy":
       return { title: "Cluster busy", body: clusterBusyBody(err), hint: "Nothing was changed. Wait for it to finish, then try again.", variant: "warning" };
+    case "conflict":
+      // pkg/api operationErrorStatus: the API server's 409, the object changed since it was read (not another operation).
+      return { title: "The object changed in the meantime", body: err.message, hint: "Reload the page and review it again.", variant: "warning" };
     case "rate_limited":
       return { title: "The OpenShift API is throttling requests", body: err.message, hint: "Wait a minute, then retry.", variant: "warning" };
     case "user_rate_limited":

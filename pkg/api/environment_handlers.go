@@ -58,7 +58,7 @@ var HandleResourcesStatus = withAuth(func(c *cluster.Client, w http.ResponseWrit
 	status, err := cluster.GetResourcesStatusFor(c, project)
 	if err != nil {
 		slog.Error("resources status error", "error", err)
-		writeError(w, "failed to get resources status", http.StatusInternalServerError)
+		writeReadError(w, "failed to get resources status", err)
 		return
 	}
 	writeJSON(w, status, "resources-status")

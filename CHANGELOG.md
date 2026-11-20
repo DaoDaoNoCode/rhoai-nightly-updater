@@ -108,6 +108,22 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   with the user's token, so its preview still refuses. The ServiceAccount
   gains no permission
   ([RUNBOOK §11.9](RUNBOOK.md#119-change-or-reset-the-datasciencecluster)).
+- **A failed DataScienceCluster repair names the real reason.** Every error
+  of `POST /api/components/dsc/repair` was answered 422 `validation`: a
+  DataScienceCluster that changed since it was read (the API server's 409),
+  an ended sign-in (401), a refusal by the user's RBAC (403) and an
+  unreachable API all read as "validation". They are now 409 `conflict`,
+  401 `session_expired`, 403 `forbidden` and 502 `network` (or the status
+  of the API server's answer); the repair's own refusals ("refresh and
+  review again") stay 422 `validation`. The other changes whose errors were
+  a bare 500 `internal` with no reason (MLflow, pipeline servers, the S3
+  storage, Dashboard Dev, the pull secret, the node pull check, assist
+  rollout, Diagnostics fixes, the update dry run, creating the
+  DataScienceCluster) answer the same way, and five reads (activity,
+  Diagnostics, Environment status, the pull secret test, node
+  verification) answer with the status and errorCode of their error. The
+  UI titles a 409 `conflict` "The object changed in the meantime", not
+  "Cluster busy".
 
 ### Security
 

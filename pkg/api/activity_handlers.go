@@ -12,7 +12,7 @@ var HandleActivity = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *
 	activity, err := cluster.GetActivity(c)
 	if err != nil {
 		slog.Error("activity error", "error", err)
-		writeError(w, "failed to get activity", http.StatusInternalServerError)
+		writeReadError(w, "failed to get activity", err)
 		return
 	}
 	writeJSON(w, activity, "activity")

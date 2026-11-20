@@ -83,7 +83,7 @@ var HandleAssistRollout = withMutationAuth(func(c *cluster.Client, w http.Respon
 	}
 	if err != nil {
 		slog.Error("assist-rollout failed", "error", err)
-		writeError(w, "assist-rollout failed", http.StatusInternalServerError)
+		writeOperationError(w, "assist-rollout failed", err)
 		return
 	}
 	writeOperationResult(w, result, "assist-rollout")

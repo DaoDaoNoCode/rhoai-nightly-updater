@@ -21,7 +21,7 @@ var HandleS3StorageSetup = withMutationAuth(func(c *cluster.Client, w http.Respo
 	result, err := cluster.SetupS3Storage(c)
 	if err != nil {
 		slog.Error("setup-s3 failed", "error", err)
-		writeError(w, "S3 storage setup failed", http.StatusInternalServerError)
+		writeOperationError(w, "S3 storage setup failed", err)
 		return
 	}
 	writeOperationResult(w, result, "setup-s3")
@@ -141,7 +141,7 @@ var HandleS3StorageTeardown = withMutationAuth(func(c *cluster.Client, w http.Re
 	result, err := cluster.TeardownS3Storage(c, req)
 	if err != nil {
 		slog.Error("teardown-s3 failed", "error", err)
-		writeError(w, "S3 storage teardown failed", http.StatusInternalServerError)
+		writeOperationError(w, "S3 storage teardown failed", err)
 		return
 	}
 	writeOperationResult(w, result, "teardown-s3")
@@ -171,7 +171,7 @@ var HandlePipelineServerSetup = withMutationAuth(func(c *cluster.Client, w http.
 	result, err := setup(c, req.Project)
 	if err != nil {
 		slog.Error("setup-pipeline-server failed", "error", err)
-		writeError(w, "pipeline server setup failed", http.StatusInternalServerError)
+		writeOperationError(w, "pipeline server setup failed", err)
 		return
 	}
 	writeOperationResult(w, result, "setup-pipeline-server")
@@ -197,7 +197,7 @@ var HandlePipelineServerTeardown = withMutationAuth(func(c *cluster.Client, w ht
 	result, err := cluster.TeardownPipelineServer(c, req.Project)
 	if err != nil {
 		slog.Error("teardown-pipeline-server failed", "error", err)
-		writeError(w, "pipeline server teardown failed", http.StatusInternalServerError)
+		writeOperationError(w, "pipeline server teardown failed", err)
 		return
 	}
 	writeOperationResult(w, result, "teardown-pipeline-server")
