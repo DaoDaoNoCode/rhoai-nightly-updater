@@ -282,7 +282,9 @@ func getClusterToken() string {
 // It verifies the user's token with the API server (the user's own token,
 // forwarded by oauth-proxy) and creates a Client using the ServiceAccount
 // token for k8s API calls. A request without a token, or whose token the API
-// server rejects, never reaches the handler.
+// server rejects, never reaches the handler. The client is marked as a
+// status read (Client.SetStatusRead): it may reuse a recent answer of an
+// expensive read, which a change's client (mutationAuth) never does.
 func withAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		RecordRequest()
@@ -296,6 +298,7 @@ func withAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Request)
 			return
 		}
 		client := cluster.NewClientWithContext(r.Context(), clusterToken)
+		client.SetStatusRead()
 		client.SetUsername(username)
 		fn(client, w, r)
 	}

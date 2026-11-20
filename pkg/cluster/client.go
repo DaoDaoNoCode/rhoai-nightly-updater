@@ -177,6 +177,11 @@ type Client struct {
 	// the app's ServiceAccount's. Errors then say that the user's sign-in
 	// or permissions, not the app's RBAC, refused a request.
 	asUser bool
+	// statusRead: the client serves a read request (pkg/api withAuth),
+	// whose pages poll every few seconds, so an expensive read may reuse a
+	// recent answer (argoApplicationsCache). Clients of changes never set
+	// it: every check that refuses or allows a change reads fresh.
+	statusRead bool
 }
 
 // NewUserClient is NewClientWithContext for the signed-in user's own token:
@@ -190,6 +195,14 @@ func NewUserClient(ctx context.Context, token string) *Client {
 // ActsAsUser reports whether the client carries the signed-in user's own
 // token (NewUserClient) rather than the app's ServiceAccount token.
 func (c *Client) ActsAsUser() bool { return c.asUser }
+
+// SetStatusRead marks the client as one of a read request (pkg/api
+// withAuth): it may reuse a recent answer of the reads that allow it. Never
+// for a change's client.
+func (c *Client) SetStatusRead() { c.statusRead = true }
+
+// StatusRead reports whether SetStatusRead marked the client.
+func (c *Client) StatusRead() bool { return c.statusRead }
 
 // SetUsername sets the logged-in user identity for audit logging.
 func (c *Client) SetUsername(username string) {

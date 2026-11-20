@@ -1006,6 +1006,8 @@ On a cluster where Argo CD (OpenShift GitOps) installs RHOAI from Git, for examp
 
 One exception follows Argo CD: an object whose tracking annotation names *another* object (copied from it; Argo CD compares namespace, name, group and kind, `isSelfReferencedObj` in `controller/state.go`) is listed without a sync status, and Argo CD neither syncs nor prunes it, so the tool does not count that entry.
 
+**How current the notice is.** The pages reuse Argo CD's list of Applications for up to 30 seconds, so a notice (or its absence) can trail a change in Argo CD by that long. Every action reads the list again before it changes anything, so a page that has not caught up never lets an action fight Argo CD: the action is refused with the current reason.
+
 **Signs of an Argo CD on another cluster.** Argo CD reaches another cluster with credentials made there; the tool looks for the marks two ways of making them leave:
 
 - This cluster serves ACM's AppliedManifestWork API: it is (or was) an ACM managed cluster, and a hub's GitOpsCluster can add it to the hub's Argo CD.

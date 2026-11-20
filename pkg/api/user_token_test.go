@@ -90,6 +90,11 @@ func TestMutationClientActsAsTheUser(t *testing.T) {
 		if opClient.ActsAsUser() != tc.asUser || bookkeeper.ActsAsUser() {
 			t.Errorf("%s: operation client as user %v, bookkeeping client as user %v", tc.name, opClient.ActsAsUser(), bookkeeper.ActsAsUser())
 		}
+		// A change's checks (Argo CD's Applications) never reuse a status
+		// read's answer.
+		if opClient.StatusRead() {
+			t.Errorf("%s: the operation client may reuse status reads", tc.name)
+		}
 		mu.Lock()
 		for _, c := range leaseClients {
 			if c.ActsAsUser() {

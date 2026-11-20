@@ -25,6 +25,7 @@ func resetClusterCaches() {
 	dashboardURLCache.Purge()
 	rhoaiNamespacesCache.Purge()
 	dashboardTargetCache.Purge()
+	argoApplicationsCache.Purge()
 	packageIndexMu.Lock()
 	packageIndexCache = map[string]packageIndex{}
 	packageIndexMu.Unlock()
@@ -50,6 +51,7 @@ func isolateClusterCaches(t *testing.T) {
 func TestResetClusterCachesCoversEveryURLKeyedCache(t *testing.T) {
 	want := map[string]int{
 		"api_versions.go":                 1, // apiVersionsCache
+		"argocd.go":                       1, // argoApplicationsCache
 		"components.go":                   1, // replicaSetOwnerCache
 		"control_plane.go":                2, // controlPlaneCache
 		"dashboard_operator_discovery.go": 2, // dashboardTargetCache
