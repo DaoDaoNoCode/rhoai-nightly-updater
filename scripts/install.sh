@@ -26,6 +26,7 @@
 #     --app-name NAME        default rhoai-nightly-updater            APP_NAME
 #     --image-repo REPO      image repository, without a tag          IMAGE
 #     --version TAG          vX.Y.Z, main or an 8-character commit    TAG
+#                            (or a pre-release: vX.Y.Z-rc.N, ...)
 #     --print-template       print the template this script applies
 #     --print-version        print the version this script installs
 #   More environment: OAUTH_PROXY_IMAGE (default: from the cluster version),
@@ -110,7 +111,9 @@ PROXY_SECRET="$APP_NAME-proxy"
 # scoped, so the namespace is in its name); its secret is in this Secret.
 CLIENT_SECRET="$APP_NAME-oauth-client"
 
-is_release() { [[ $1 =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; }
+# A release (vX.Y.Z) or a pre-release (vX.Y.Z-alpha.N, -beta.N, -rc.N; the
+# formats scripts/release.sh tags): its tag names its commit.
+is_release() { [[ $1 =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.[1-9][0-9]*)?$ ]]; }
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -546,7 +549,7 @@ pin_image() {
 	else
 		err "ERROR: cannot resolve $IMAGE:$tag to a digest (no such tag, or the registry is unreachable). Nothing was changed."
 		printf '%s\n' "$why" | sed 's/^/  Tried /' >&2
-		err "  Image tags are releases (vX.Y.Z, vN), main, latest or an 8-character commit. Set ALLOW_MUTABLE_TAG=1 to deploy the tag itself."
+		err "  Image tags are releases (vX.Y.Z, vN), pre-releases (vX.Y.Z-rc.N, ...), main, latest or an 8-character commit. Set ALLOW_MUTABLE_TAG=1 to deploy the tag itself."
 		exit 1
 	fi
 }
