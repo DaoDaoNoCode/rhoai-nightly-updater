@@ -49,7 +49,7 @@ import {
   useSearchParams,
 } from "react-router-dom";
 import { trackPageView } from "./services/api";
-import { ErrorBoundary } from "./components/ErrorBoundary";
+import { ErrorBoundary, PageErrorBoundary } from "./components/ErrorBoundary";
 import { HelpButton } from "./components/HelpModal";
 import { AdminOnlyPageState, AdminRequiredState, PageLoading, PermissionsUnknownState, ProfileOffState, SessionExpiredState } from "./components/PageStates";
 import { StatusLabel } from "./components/StatusLabel";
@@ -374,18 +374,23 @@ const AppLayout: React.FC = () => {
       ) : permissionsUnknown ? (
         <PermissionsUnknownState onRetry={retryPermissions} />
       ) : (
-        <Suspense fallback={<PageLoading title="Loading page" />}>
-          <Routes>
-            <Route path="/" element={byRole(<StatusPage />, <UserStatusPage />)} />
-            <Route path="/components" element={adminOnly(<ComponentsPage />)} />
-            <Route path="/builds" element={offInProfile("Build Explorer", <BuildExplorerPage />)} />
-            <Route path="/dashboard-dev" element={offInProfile("Dashboard Dev", adminOnly(<DashboardDevRoute />))} />
-            <Route path="/test-resources" element={offInProfile("The Environment page", byRole(<EnvironmentPage />, <UserEnvironmentPage />))} />
-            <Route path="/environment" element={<EnvironmentRoute />} />
-            <Route path="/diagnostics" element={adminOnly(<TroubleshootingPage />)} />
-            <Route path="*" element={<NotFoundPage />} />
-          </Routes>
-        </Suspense>
+        // Leaving a page that could not load clears its message (resetKey,
+        // not a key: a remount would show the fallback instead of keeping the
+        // current page while the next one's chunk loads).
+        <PageErrorBoundary resetKey={location.pathname}>
+          <Suspense fallback={<PageLoading title="Loading page" />}>
+            <Routes>
+              <Route path="/" element={byRole(<StatusPage />, <UserStatusPage />)} />
+              <Route path="/components" element={adminOnly(<ComponentsPage />)} />
+              <Route path="/builds" element={offInProfile("Build Explorer", <BuildExplorerPage />)} />
+              <Route path="/dashboard-dev" element={offInProfile("Dashboard Dev", adminOnly(<DashboardDevRoute />))} />
+              <Route path="/test-resources" element={offInProfile("The Environment page", byRole(<EnvironmentPage />, <UserEnvironmentPage />))} />
+              <Route path="/environment" element={<EnvironmentRoute />} />
+              <Route path="/diagnostics" element={adminOnly(<TroubleshootingPage />)} />
+              <Route path="*" element={<NotFoundPage />} />
+            </Routes>
+          </Suspense>
+        </PageErrorBoundary>
       )}
     </Page>
   );

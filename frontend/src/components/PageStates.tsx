@@ -72,6 +72,26 @@ export const PageErrorState: React.FC<PageErrorStateProps> = ({ error, title, on
   return inSection ? <PageSection isFilled>{state}</PageSection> : state;
 };
 
+/**
+ * The page's files could not be loaded (a chunk-load failure, usually after
+ * the updater was updated while the tab was open): only a reload loads them
+ * again. The masthead and navigation stay.
+ */
+export const PageLoadFailedState: React.FC<{ onReload: () => void }> = ({ onReload }) => (
+  <PageSection isFilled>
+    <EmptyState headingLevel="h1" titleText="This page could not be loaded" icon={ExclamationCircleIcon} status="warning" variant={EmptyStateVariant.lg}>
+      <EmptyStateBody>
+        A new version of the updater may have been installed since this tab was opened, or the connection dropped. Reload to load the page again.
+      </EmptyStateBody>
+      <EmptyStateFooter>
+        <EmptyStateActions>
+          <Button variant="primary" onClick={onReload}>Reload</Button>
+        </EmptyStateActions>
+      </EmptyStateFooter>
+    </EmptyState>
+  </PageSection>
+);
+
 /** The whole page once the OpenShift session expired: nothing else works until the user signs in again. */
 export const SessionExpiredState: React.FC = () => (
   <PageSection isFilled>
