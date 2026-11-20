@@ -122,9 +122,14 @@ objects:
       - apiGroups: ["rbac.authorization.k8s.io"]
         resources: ["clusterroles", "clusterrolebindings"]
         verbs: ["list"]
-      # Argo CD Applications, listed by name, to confirm that the
-      # application a tracking annotation names still manages the object
-      # (see deploy/template.yaml): read only
+      # RoleBinding argocd-manager-role-binding by that name only (`argocd
+      # cluster add --namespace`; see deploy/template.yaml): read only
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["rolebindings"]
+        resourceNames: ["argocd-manager-role-binding"]
+        verbs: ["get"]
+      # Argo CD Applications, all of them, to find the one that lists the
+      # object in status.resources (see deploy/template.yaml): read only
       - apiGroups: ["argoproj.io"]
         resources: ["applications"]
         verbs: ["list"]

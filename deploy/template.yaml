@@ -254,9 +254,17 @@ objects:
       - apiGroups: ["rbac.authorization.k8s.io"]
         resources: ["clusterroles", "clusterrolebindings"]
         verbs: ["list"]
-      # Argo CD Applications, listed by name (field selector), to confirm
-      # that the application a tracking annotation names on the catalog,
-      # the Subscription or the DSC still manages it. Applications hold no
+      # RoleBinding argocd-manager-role-binding, which `argocd cluster add
+      # --namespace` makes in each namespace it lets another cluster's Argo
+      # CD manage: read by that one name only, in RHOAI's and the catalog's
+      # namespaces (SECURITY.md, "Reading Argo CD Applications")
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["rolebindings"]
+        resourceNames: ["argocd-manager-role-binding"]
+        verbs: ["get"]
+      # Argo CD Applications, all of them, to find the one whose
+      # status.resources lists the catalog, the Subscription or the DSC (the
+      # tracking annotation or label only names it). Applications hold no
       # credentials; read only (SECURITY.md, "Reading Argo CD Applications")
       - apiGroups: ["argoproj.io"]
         resources: ["applications"]
