@@ -139,6 +139,13 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   created, for example refused by a quota), the dashboard state said
   ready and not rolling out. Fewer pods than the Deployment asks for is now
   "Rolling out", as `kubectl rollout status` treats it.
+- **An API response over 50 MiB says so.** The updater reads at most
+  50 MiB of one API server response; a larger one came back cut and
+  failed later as "unexpected end of JSON input". It is now an error that
+  names the request and the limit. The Quay token response is read with a
+  1 MiB bound like every other external read, and the three admin reads
+  (DSC plan, S3 credentials, MaaS groups) check the user's permission once
+  per request instead of twice.
 
 ### Security
 
