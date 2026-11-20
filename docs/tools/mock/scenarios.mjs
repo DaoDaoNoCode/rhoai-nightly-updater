@@ -83,6 +83,10 @@ export const scenarios = {
   // After Add to the nodes' pull secret: the tool's record is in the status.
   "self-managed-mirror-added": (w) => { scenarios["self-managed-mirror"](w); w.status.pullSecret.nodes.addedByTool = F.NODE_PULL_RECORD; w.nodes = { pullEntry: "same" }; },
   "self-managed-paused-pool": (w) => { scenarios["self-managed-mirror"](w); w.stuckPools = ["worker (paused)"]; },
+  // A corporate mirror serves all of registry.redhat.io: Create the image
+  // mirror refuses (a mirror for exactly registry.redhat.io/rhoai would take
+  // those pulls away from it) and says what to add instead.
+  "self-managed-mirror-parent-scope": (w) => { scenarios["self-managed-mirror"](w); w.parentScopeMirror = true; },
   "managed-classic": (w) => { scenarios["ready-to-install"](w); w.status.imageMirror = { exists: false, name: "", source: "" }; F.selfManaged(w.status, { managed: true }); },
   "unknown-denied": (w) => { scenarios["self-managed-unknown"](w); w.status.imageMirror = { exists: false, name: "", source: "" }; w.nodeSetupDenied = true; },
   "hosted-mirror-missing": (w) => { scenarios["ready-to-install"](w); w.status.imageMirror = { exists: false, name: "", source: "" }; },

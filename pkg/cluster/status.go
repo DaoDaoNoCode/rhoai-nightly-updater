@@ -875,8 +875,21 @@ func getIDMS(c *Client) (types.ImageMirrorInfo, error) {
 	for _, item := range result.Items {
 		for _, mirror := range item.Spec.ImageDigestMirrors {
 			if mirror.Source == IDMSSource {
-				return types.ImageMirrorInfo{Exists: true, Name: item.Metadata.Name, Source: mirror.Source}, nil
+				return types.ImageMirrorInfo{Exists: true, Kind: mirrorKindIDMS, Name: item.Metadata.Name, Source: mirror.Source}, nil
 			}
+		}
+	}
+	// An ImageContentSourcePolicy mirrors the source just as well: the
+	// Machine Config Operator merges its mirrors with the IDMSs' (runtime-utils
+	// @7bdb5b9c pkg/registries/registries.go mergedDigestMirrorSets,
+	// :165-183).
+	icsp, err := listICSPRules(c)
+	if err != nil {
+		return types.ImageMirrorInfo{Exists: false}, fmt.Errorf("list ImageContentSourcePolicies: %w", err)
+	}
+	for _, r := range icsp {
+		if r.Source == IDMSSource {
+			return types.ImageMirrorInfo{Exists: true, Kind: mirrorKindICSP, Name: r.Name, Source: r.Source}, nil
 		}
 	}
 	return types.ImageMirrorInfo{Exists: false}, nil

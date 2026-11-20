@@ -41,6 +41,12 @@ const (
 // ControlPlaneSelfManaged. A failed read, or a missing
 // status.controlPlaneTopology, is an error: the platform is then unknown,
 // and callers must not assume the nodes have the updater's credentials.
+//
+// The topology is read first on purpose: ROSA HCP has *.managed.openshift.io
+// webhooks too (managed-cluster-validating-webhooks @eb1c03ee
+// build/resources.go:1022-1078 packages every HypershiftEnabled webhook for
+// hosted clusters), so the webhooks alone would call a hosted cluster
+// managed (TestNodeSetupHostedCheckComesFirst).
 func readControlPlane(c *Client) (string, error) {
 	hosted, err := readTopologyHosted(c)
 	if err != nil {
@@ -85,7 +91,9 @@ func readTopologyHosted(c *Client) (bool, error) {
 // (github.com/openshift/managed-cluster-validating-webhooks build/resources.go:
 // configuration "sre-<hook>", webhook "<hook>.managed.openshift.io"). Hive
 // syncs them to ROSA Classic and OpenShift Dedicated clusters
-// (ClassicEnabled); a self-managed cluster has none. Among them,
+// (ClassicEnabled); a package brings the HypershiftEnabled ones to ROSA
+// HCP, which readControlPlane tells apart by its topology first; a
+// self-managed cluster has none. Among them,
 // imagecontentpolicies-validation refuses mirrors of registry.redhat.io
 // itself, quay.io and registry.access.redhat.com, but not of
 // registry.redhat.io/rhoai.

@@ -61,7 +61,9 @@ export const ImageMirrorSetup: React.FC<{
   const mirror = status.imageMirror;
   const onCluster = cp === "self-managed" || cp === "managed";
   const unknown = cp === undefined;
-  const ours = mirror.exists && mirror.name === MIRROR_NAME;
+  // Only an ImageDigestMirrorSet of that name can be this setup's (an
+  // ImageContentSourcePolicy is someone else's mirror configuration).
+  const ours = mirror.exists && mirror.name === MIRROR_NAME && mirror.kind !== "ImageContentSourcePolicy";
 
   return (
     <Stack hasGutter>
@@ -84,7 +86,10 @@ export const ImageMirrorSetup: React.FC<{
           <DescriptionList isCompact isHorizontal horizontalTermWidthModifier={{ default: "8ch" }}>
             <DescriptionListGroup>
               <DescriptionListTerm>Name</DescriptionListTerm>
-              <DescriptionListDescription>{mirror.name || "unknown"}</DescriptionListDescription>
+              <DescriptionListDescription>
+                {mirror.name || "unknown"}
+                {mirror.kind === "ImageContentSourcePolicy" && " (ImageContentSourcePolicy)"}
+              </DescriptionListDescription>
             </DescriptionListGroup>
             <DescriptionListGroup>
               <DescriptionListTerm>Source</DescriptionListTerm>

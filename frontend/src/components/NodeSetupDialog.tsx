@@ -44,6 +44,12 @@ function refusalTitle(plan: NodeSetupPlan): string {
       return "Not on a hosted control plane";
     case "managed":
       return "Not changed on a Red Hat-managed cluster";
+    case "unknown_platform":
+      return "Not changed: this may be a Red Hat-managed cluster";
+    case "parent_scope":
+      return "Another mirror serves these images now";
+    case "policy_conflict":
+      return "Another mirror sets a different source policy";
     case "forbidden":
       return "The cluster does not allow this change here";
     case "foreign":

@@ -14,6 +14,8 @@ import (
 const (
 	nsIDMSPath       = "/apis/config.openshift.io/v1/imagedigestmirrorsets/" + MirrorName
 	nsIDMSList       = "/apis/config.openshift.io/v1/imagedigestmirrorsets"
+	nsICSPList       = "/apis/operator.openshift.io/v1alpha1/imagecontentsourcepolicies"
+	nsITMSList       = "/apis/config.openshift.io/v1/imagetagmirrorsets"
 	nsPullSecretPath = "/api/v1/namespaces/openshift-config/secrets/pull-secret"
 	nsUpdaterPath    = "/api/v1/namespaces/kube-system/secrets/additional-pull-secret"
 	nsSREWebhookPath = "/apis/admissionregistration.k8s.io/v1/validatingwebhookconfigurations/sre-imagecontentpolicies-validation"
@@ -157,12 +159,42 @@ func TestMirrorCreateOnSelfManaged(t *testing.T) {
 }
 
 func TestMirrorCreateCountsAnExistingMirrorAndRefusesAForeignName(t *testing.T) {
-	t.Run("another IDMS redirects the source", func(t *testing.T) {
+	t.Run("another IDMS redirects the source to quay.io/rhoai", func(t *testing.T) {
+		f, c := nodeSetupFake(t, "HighlyAvailable", false)
+		f.putJSON("/apis/config.openshift.io/v1/imagedigestmirrorsets/team-mirrors", `{"spec":{"imageDigestMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["mirror.example.com/rhoai","quay.io/rhoai"]}]}}`)
+		res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+		if !res.Success || !strings.Contains(res.Message, "ImageDigestMirrorSet team-mirrors already redirects registry.redhat.io/rhoai to quay.io/rhoai") || len(writes(f)) != 0 {
+			t.Fatalf("result %+v, writes %v", res, writes(f))
+		}
+	})
+	t.Run("an ImageContentSourcePolicy redirects the source to quay.io/rhoai", func(t *testing.T) {
+		f, c := nodeSetupFake(t, "HighlyAvailable", false)
+		f.putJSON(nsICSPList+"/rhoai-icsp", `{"spec":{"repositoryDigestMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["quay.io/rhoai"]}]}}`)
+		plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+		if !plan.NothingToDo || !strings.Contains(plan.State, "ImageContentSourcePolicy rhoai-icsp already redirects") || len(writes(f)) != 0 {
+			t.Fatalf("plan %+v, writes %v", plan, writes(f))
+		}
+	})
+	// The source mapped to another mirror only is not set up: the nodes
+	// would not pull from quay.io/rhoai. The new IDMS adds it, and the plan
+	// says that both mirrors stay in use (they are merged).
+	t.Run("another IDMS maps the source elsewhere", func(t *testing.T) {
 		f, c := nodeSetupFake(t, "HighlyAvailable", false)
 		f.putJSON("/apis/config.openshift.io/v1/imagedigestmirrorsets/team-mirrors", `{"spec":{"imageDigestMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["mirror.example.com/rhoai"]}]}}`)
+		plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+		if !plan.Ready || !strings.Contains(plan.State, "ImageDigestMirrorSet team-mirrors maps it to mirror.example.com/rhoai") || !strings.Contains(plan.State, "merges the mirrors") {
+			t.Fatalf("plan %+v", plan)
+		}
 		res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
-		if !res.Success || !strings.Contains(res.Message, "team-mirrors already redirects") || len(writes(f)) != 0 {
-			t.Fatalf("result %+v, writes %v", res, writes(f))
+		if !res.Success || !f.has(nsIDMSPath) || !f.has("/apis/config.openshift.io/v1/imagedigestmirrorsets/team-mirrors") {
+			t.Fatalf("result %+v", res)
+		}
+	})
+	t.Run("the source mapped to quay.io/rhoai by tag only", func(t *testing.T) {
+		f, c := nodeSetupFake(t, "HighlyAvailable", false)
+		f.putJSON(nsITMSList+"/tags", `{"spec":{"imageTagMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["quay.io/rhoai"]}]}}`)
+		if plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate}); !plan.Ready {
+			t.Fatalf("an ITMS serves no pull by digest, so it does not count: plan %+v", plan)
 		}
 	})
 	t.Run("rhoai-quay-mirror exists for something else", func(t *testing.T) {
@@ -223,9 +255,67 @@ func TestNodeSetupPerPlatform(t *testing.T) {
 	}
 }
 
+// ROSA HCP also has Red Hat SRE's *.managed.openshift.io webhooks
+// (managed-cluster-validating-webhooks build/resources.go:1022-1078, the
+// HyperShift package), so a hosted control plane is told apart only by
+// reading the topology first: with both present every action is refused
+// as hosted, and the webhooks are not even listed.
+func TestNodeSetupHostedCheckComesFirst(t *testing.T) {
+	for _, action := range []string{NodeSetupMirrorCreate, NodeSetupMirrorRemove, NodeSetupPullAdd, NodeSetupPullRemove} {
+		t.Run(action, func(t *testing.T) {
+			f, c := nodeSetupFake(t, "External", true)
+			plan, err := PlanNodeSetup(c, types.NodeSetupRequest{Action: action})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.ControlPlane != ControlPlaneHosted || plan.RefusalCode != "hosted" {
+				t.Fatalf("plan %+v", plan)
+			}
+			if n := len(f.callsTo(http.MethodGet, webhookConfigsPath)); n != 0 {
+				t.Fatalf("the webhooks were listed %d times before the topology decided", n)
+			}
+			if len(writes(f)) != 0 {
+				t.Fatalf("writes %v", writes(f))
+			}
+		})
+	}
+	t.Run("the status's control plane", func(t *testing.T) {
+		f, c := nodeSetupFake(t, "External", true)
+		if cp, err := readControlPlane(c); err != nil || cp != ControlPlaneHosted {
+			t.Fatalf("readControlPlane = %q, %v", cp, err)
+		}
+		if n := len(f.callsTo(http.MethodGet, webhookConfigsPath)); n != 0 {
+			t.Fatalf("the webhooks were listed %d times before the topology decided", n)
+		}
+	})
+}
+
 // Unknown platform: the topology is not External but the webhooks cannot
-// be listed. The action is attempted; RBAC or admission refuses it in the
-// dry run, before anything changes.
+// be listed, so the cluster may be ROSA Classic or OSD. The pull secret
+// actions are refused before any read of the Secret or any dry run; the
+// mirror is attempted, and RBAC or admission refuses it in the dry run,
+// before anything changes.
+func TestNodeSetupUnknownPlatformRefusesThePullSecret(t *testing.T) {
+	for _, action := range []string{NodeSetupPullAdd, NodeSetupPullRemove} {
+		t.Run(action, func(t *testing.T) {
+			f, c := nodeSetupFake(t, "HighlyAvailable", false)
+			f.fail["GET "+webhookConfigsPath] = 403
+			plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: action})
+			if plan.Ready || plan.RefusalCode != "unknown_platform" || plan.ControlPlane != "" ||
+				!strings.Contains(plan.Refusal, "ROSA Classic or OpenShift Dedicated") || !strings.Contains(plan.Refusal, "Nothing was changed") {
+				t.Fatalf("plan %+v", plan)
+			}
+			res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: action, ResourceVersion: "42"})
+			if res.Success || res.ErrorCode != "unknown_platform" || len(writes(f)) != 0 {
+				t.Fatalf("run %+v, writes %v", res, writes(f))
+			}
+			if n := len(f.callsTo(http.MethodGet, nsPullSecretPath)) + len(f.callsTo(http.MethodPatch, nsPullSecretPath)); n != 0 {
+				t.Fatalf("the cluster pull secret was read or dry-run %d times", n)
+			}
+		})
+	}
+}
+
 func TestNodeSetupUnknownPlatformIsAttemptedAndItsRefusalHandled(t *testing.T) {
 	f, c := nodeSetupFake(t, "HighlyAvailable", false)
 	f.fail["GET /apis/admissionregistration.k8s.io/v1/validatingwebhookconfigurations"] = 403
@@ -309,6 +399,61 @@ func TestMirrorRemove(t *testing.T) {
 			t.Fatalf("plan %+v", plan)
 		}
 	})
+	t.Run("only an ImageContentSourcePolicy of someone else's", func(t *testing.T) {
+		f, c := nodeSetupFake(t, "HighlyAvailable", false)
+		f.putJSON(nsICSPList+"/rhoai-icsp", `{"spec":{"repositoryDigestMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["quay.io/rhoai"]}]}}`)
+		plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorRemove})
+		if plan.Ready || plan.RefusalCode != "foreign" || !strings.Contains(plan.Refusal, "ImageContentSourcePolicy rhoai-icsp") {
+			t.Fatalf("plan %+v", plan)
+		}
+	})
+}
+
+// What the nodes do when the setup's mirror is deleted depends on what
+// stays, and the plan says it precisely.
+func TestMirrorRemoveNodeImpact(t *testing.T) {
+	ours := `{"spec":{"imageDigestMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["quay.io/rhoai"]}]}}`
+	for _, tc := range []struct {
+		name, path, obj string
+		want, notWant   []string
+		undo            string
+	}{
+		{"nothing else: every node drains", "", "",
+			[]string{"drains each node", "one node at a time by default (the pool's maxUnavailable)", "single-node cluster is not drained", "PodDisruptionBudget", "up to an hour", "FailedToDrain", "pulled from registry.redhat.io again"}, nil, "no drain"},
+		{"an ICSP keeps quay.io/rhoai: nothing rolls out", nsICSPList + "/rhoai-icsp", `{"spec":{"repositoryDigestMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["quay.io/rhoai"]}]}}`,
+			[]string{"ImageContentSourcePolicy rhoai-icsp also redirects", "stays exactly as it is", "no node is drained or updated", "conflicting orders"}, []string{"drains each node"}, ""},
+		{"another IDMS keeps quay.io/rhoai among its mirrors", nsIDMSList + "/team", `{"spec":{"imageDigestMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["mirror.example.com/rhoai","quay.io/rhoai"]}]}}`,
+			[]string{"ImageDigestMirrorSet team also redirects", "no node is drained or updated"}, []string{"drains each node"}, ""},
+		{"another IDMS maps the source elsewhere", nsIDMSList + "/team", `{"spec":{"imageDigestMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["mirror.example.com/rhoai"]}]}}`,
+			[]string{"drains each node", "mirrors that stay for it (ImageDigestMirrorSet team maps it to mirror.example.com/rhoai)"}, []string{"pulled from registry.redhat.io again"}, ""},
+		{"a parent scope serves the source again", nsIDMSList + "/corp", `{"spec":{"imageDigestMirrors":[{"source":"registry.redhat.io","mirrors":["mirror.corp.example/redhat"]}]}}`,
+			[]string{"drains each node", "as before the mirror existed", "ImageDigestMirrorSet corp maps registry.redhat.io, so pulls by digest go to mirror.corp.example/redhat/rhoai"}, []string{"pulled from registry.redhat.io again"}, "refused while ImageDigestMirrorSet corp maps registry.redhat.io"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c := nodeSetupFake(t, "HighlyAvailable", false)
+			f.putJSON(nsIDMSPath, ours)
+			if tc.path != "" {
+				f.putJSON(tc.path, tc.obj)
+			}
+			plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorRemove})
+			if !plan.Ready {
+				t.Fatalf("plan %+v", plan)
+			}
+			for _, s := range tc.want {
+				if !strings.Contains(plan.NodeImpact, s) {
+					t.Errorf("node impact lacks %q: %s", s, plan.NodeImpact)
+				}
+			}
+			for _, s := range tc.notWant {
+				if strings.Contains(plan.NodeImpact, s) {
+					t.Errorf("node impact says %q: %s", s, plan.NodeImpact)
+				}
+			}
+			if tc.undo != "" && !strings.Contains(plan.Undo, tc.undo) {
+				t.Errorf("undo %q lacks %q", plan.Undo, tc.undo)
+			}
+		})
+	}
 }
 
 func TestPullSecretAddKeepsEveryOtherLogin(t *testing.T) {

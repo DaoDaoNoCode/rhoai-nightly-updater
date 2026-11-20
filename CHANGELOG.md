@@ -45,16 +45,33 @@ only accepts a tag whose version is the top dated section. See
   that its token is not kept and cannot be restored. When the nodes pull
   without a record the button reads **Already set up (not by this tool)**;
   the tool's own entry with an earlier token gets **Update the nodes' pull
-  secret**. The card says who set the entry. Any ImageDigestMirrorSet that
-  redirects `registry.redhat.io/rhoai` (for example a provisioner's
-  `quay-registry`) counts as the mirror; Create adds no second one and
-  Remove deletes only `rhoai-quay-mirror` with exactly its one mapping. The
+  secret**. The card says who set the entry. An ImageDigestMirrorSet or
+  ImageContentSourcePolicy that redirects `registry.redhat.io/rhoai` to
+  `quay.io/rhoai` (for example a provisioner's `quay-registry`) counts as
+  the mirror; Create adds no second one and Remove deletes only
+  `rhoai-quay-mirror` with exactly its one mapping. Create refuses, with
+  nothing changed, where its mirror would take pulls away from an existing
+  mirror of a parent scope (`registry.redhat.io`, `*.redhat.io`; IDMS, ICSP
+  or ITMS), naming the entry an administrator can add instead, and where an
+  entry for the source sets `mirrorSourcePolicy: NeverContactSource` (the
+  Machine Config Operator would refuse the whole mirror configuration). The
+  reviews say the nodes update one at a time by default (the pool's
+  `maxUnavailable`), that a PodDisruptionBudget can hold a removal's drain
+  for up to an hour, and when a removal rolls nothing out. The
   removal command under **Do it yourself instead** says that it removes
   whatever entry is there and asks for `yes`. ROSA Classic and OpenShift Dedicated
-  (detected by Red Hat SRE's `*.managed.openshift.io` webhooks) get the mirror
-  button but not the pull secret one (Red Hat manages that secret); ROSA HCP
-  keeps the `rosa` instructions. No new ServiceAccount permission. Sources:
-  [docs/research/node-setup.md](docs/research/node-setup.md).
+  (detected by Red Hat SRE's `*.managed.openshift.io` webhooks, read after
+  the topology, since ROSA HCP has them too) get the mirror button but not
+  the pull secret one (Red Hat manages that secret); where those webhooks
+  cannot be listed the pull secret actions refuse. ROSA HCP keeps the `rosa`
+  instructions, and the Pull secret item says how HyperShift merges
+  `additional-pull-secret` (the cluster's own entry wins; AWS and Azure
+  Replace node pools only; the kubelet restarts). **Check that the nodes can
+  pull** checks the catalog image by tag: OLM does not pull a cached digest
+  again, so a digest could pass without the nodes' credentials. One new
+  ServiceAccount rule, read-only: `list` of ImageContentSourcePolicies, so
+  the status counts one as the mirror ([SECURITY.md](SECURITY.md#reading-imagecontentsourcepolicies-400)).
+  Sources (each at a fixed commit): [docs/research/node-setup.md](docs/research/node-setup.md).
 - **Diagnostics: "Left over from an earlier release", with fixes.** Found
   from the operator's own failure reports (DataScienceCluster, Platform and
   every module CR) and confirmed with live reads, not from a list of known

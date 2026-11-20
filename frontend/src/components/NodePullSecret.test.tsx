@@ -4,6 +4,7 @@ import { PullSecretSetup } from "./PullSecretCard";
 import { ClusterSetupCard } from "./StatusCards";
 import { SetupModal } from "./PrerequisitesPanel";
 import { nodePullUnverified, prerequisitesMet } from "../utils";
+import { imageByTag } from "../services/api/operator";
 import { nightlyStatus, renderWithApp } from "../test/providers";
 import type { PullSecretInfo, StatusResponse } from "../types";
 
@@ -149,6 +150,15 @@ describe("The pull secret's node part, by control plane", () => {
   });
 });
 
+describe("imageByTag", () => {
+  it("drops the digest and needs a tag", () => {
+    expect(imageByTag(IMAGE)).toBe("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6");
+    expect(imageByTag("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6")).toBe("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6");
+    expect(imageByTag("quay.io/rhoai/rhoai-fbc-fragment@sha256:" + "a".repeat(64))).toBeNull();
+    expect(imageByTag("registry.example.com:5000/rhoai/fbc")).toBeNull();
+  });
+});
+
 describe("Check that the nodes can pull", () => {
   it("runs the check with the build Update would install and shows success", async () => {
     const fetchMock = stubCheck({ success: true, message: `A temporary catalog pod pulled ${IMAGE} with the nodes' pull secret, and was removed again.`, logs: [] });
@@ -159,7 +169,8 @@ describe("Check that the nodes can pull", () => {
     expect(await screen.findByText("The nodes can pull from quay.io/rhoai")).toBeInTheDocument();
     const call = fetchMock.mock.calls.find(([url]) => url === "/api/setup/node-pull-check");
     expect(call?.[1]?.method).toBe("POST");
-    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ image: IMAGE });
+    // By tag, without the digest: a cached digest is not pulled again.
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ image: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6" });
     expect(screen.getByText("Ready")).toBeInTheDocument();
     expect(screen.queryByText("Nodes not checked")).not.toBeInTheDocument();
   });

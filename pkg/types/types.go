@@ -284,9 +284,14 @@ type NodeSetupPlan struct {
 	// yet (paused or degraded).
 	Pools []string `json:"pools,omitempty"`
 	// Refusal says why it cannot be done here; RefusalCode is "hosted",
-	// "managed", "unknown_topology", "forbidden" (RBAC or an admission
-	// webhook refused the dry run), "foreign" (an object of that name that
-	// is not this setup's), "foreign_entry" (Add: a quay.io/rhoai entry
+	// "managed", "unknown_topology", "unknown_platform" (the pull secret
+	// actions when the managed-cluster webhooks cannot be listed),
+	// "forbidden" (RBAC or an admission webhook refused the dry run),
+	// "policy_conflict" (Create the image mirror: an entry for the source
+	// sets mirrorSourcePolicy NeverContactSource, which the MCO would refuse
+	// next to the default), "parent_scope" (Create the image mirror: a mirror object maps a parent
+	// scope of registry.redhat.io/rhoai that the nodes use for it), "foreign"
+	// (an object of that name that is not this setup's), "foreign_entry" (Add: a quay.io/rhoai entry
 	// this tool did not add, with another token; Replaceable),
 	// "not_owned" (Remove: the entry is not the one this tool added),
 	// "unreadable", "external_secrets", "no_token" or "quay".
@@ -319,7 +324,10 @@ type NodePullCheckRequest struct {
 
 // ImageMirrorInfo reports whether an ImageDigestMirrorSet exists for RHOAI images.
 type ImageMirrorInfo struct {
-	Exists bool   `json:"exists"`
+	Exists bool `json:"exists"`
+	// Kind is ImageDigestMirrorSet or ImageContentSourcePolicy, the object
+	// that mirrors the source; "" when there is none.
+	Kind   string `json:"kind,omitempty"`
 	Name   string `json:"name"`
 	Source string `json:"source"`
 }

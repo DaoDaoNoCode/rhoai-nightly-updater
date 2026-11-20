@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 
@@ -35,12 +36,19 @@ import (
 //     control plane (Infrastructure controlPlaneTopology External) refuses,
 //     as does an unreadable one (a hosted cluster cannot be ruled out);
 //   - Red Hat-managed classic clusters (ROSA Classic, OSD) refuse the pull
-//     secret actions: their docs have no procedure for changing it;
-//   - the mirror is not created when any ImageDigestMirrorSet already
-//     redirects the source (that counts as done), nor when one named
-//     rhoai-quay-mirror exists that does not; only an IDMS named
-//     rhoai-quay-mirror with exactly this one source and mirror is removed,
-//     with UID and resourceVersion preconditions;
+//     secret actions: their docs have no procedure for changing it; so does
+//     a cluster whose managed-cluster webhooks cannot be listed (it may be
+//     one of them); the mirror actions are attempted there, and RBAC or
+//     admission refuses them in the dry run;
+//   - the mirror is not created when an ImageDigestMirrorSet or
+//     ImageContentSourcePolicy already redirects the source to
+//     quay.io/rhoai (that counts as done), when a mirror object maps a
+//     parent scope of the source (registry.redhat.io, a wildcard host) that
+//     the nodes use for it now (a mirror for exactly the source would take
+//     those pulls away from it; node_setup_mirrors.go), nor when an IDMS
+//     named rhoai-quay-mirror exists that does not redirect it; only an
+//     IDMS named rhoai-quay-mirror with exactly this one source and mirror
+//     is removed, with UID and resourceVersion preconditions;
 //   - the pull secret must be readable, hold a non-empty registry list and
 //     not be kept in sync by External Secrets; only the quay.io/rhoai entry
 //     changes; the write is a merge patch of .dockerconfigjson carrying the
@@ -87,7 +95,8 @@ func NodeSetupNeedsVersion(a string) bool {
 
 const (
 	// MirrorName is the ImageDigestMirrorSet this setup creates, the name
-	// the docs and rosa-dev use on self-managed clusters.
+	// our docs (docs/QUICKSTART.md) and rosa-dev use on self-managed
+	// clusters.
 	MirrorName = "rhoai-quay-mirror"
 	// MirrorTarget is where nightly images are published.
 	MirrorTarget = "quay.io/rhoai"
@@ -105,17 +114,38 @@ const (
 )
 
 // What the nodes do when each change rolls out, with the default node
-// disruption policies (machine-config-operator pkg/apihelpers
+// disruption policies (machine-config-operator @4dabc4b5 pkg/apihelpers
 // defaultClusterPolicies; OpenShift 4.20 Machine configuration, "applies
 // the update without draining or rebooting the node: ... Changes to the
 // global pull secret"; Disconnected environments: "The MCO does not drain
 // the nodes for ImageDigestMirrorSet"; pkg/daemon/drain.go
-// isSafeContainerRegistryConfChanges, drainRequired).
+// isSafeContainerRegistryConfChanges, drainRequired). The nodes of a pool
+// update one at a time by default: the pool's maxUnavailable, default 1
+// (openshift/api @41d93514 machineconfiguration/v1/types.go:427-439, which
+// also says the drain respects PodDisruptionBudgets). The machine config
+// daemon waits up to an hour for a node's drain, then fails that node's
+// update (pkg/daemon/drain.go performDrain, :96-117: "failed to drain
+// node ... after 1 hour", event FailedToDrain).
 const (
-	pullSecretNodeImpact = "The Machine Config Operator writes the new cluster pull secret to every node, one node at a time in each machine config pool, without draining or rebooting them (OpenShift applies pull secret changes that way). oc get mcp shows UPDATED True for every pool once all nodes have it; the kubelet uses it for the next pulls."
+	poolPace             = "one node at a time by default (the pool's maxUnavailable)"
+	pullSecretNodeImpact = "The Machine Config Operator writes the new cluster pull secret to every node of each machine config pool, " + poolPace + ", without draining or rebooting them (OpenShift applies pull secret changes that way). oc get mcp shows UPDATED True for every pool once all nodes have it; the kubelet uses it for the next pulls."
 	pullRemoveNodeImpact = pullSecretNodeImpact + " After that the nodes cannot pull from quay.io/rhoai: images already on a node stay and running pods keep running, but a new nightly, or a pod that starts on a node without its image, fails with an unauthorized pull error."
 	mirrorCreateImpact   = "The Machine Config Operator adds the mirror to /etc/containers/registries.conf on every node and reloads CRI-O, without draining or rebooting them: a new digest-only mirror is one of the changes OpenShift applies without a drain. oc get mcp shows UPDATED True for every pool once all nodes have it."
-	mirrorRemoveImpact   = "The Machine Config Operator removes the mirror from every node. Removing a mirror drains each node first (its pods are evicted and start again on other nodes), then reloads CRI-O and makes the node schedulable again, without a reboot, one node at a time in each pool; a single-node cluster is not drained. After that, registry.redhat.io/rhoai images are pulled from registry.redhat.io again, where nightly builds do not exist: installing or updating a nightly fails until the mirror is back. Images already on a node stay."
+	mirrorRemoveDrain    = "The Machine Config Operator removes the mirror from every node. Removing a mirror drains each node first (its pods are evicted and start again on other nodes), then reloads CRI-O and makes the node schedulable again, without a reboot, " + poolPace + "; a single-node cluster is not drained. " +
+		"A PodDisruptionBudget that allows no eviction holds a node's drain: the machine config daemon waits up to an hour for it, then fails that node's update (event FailedToDrain)."
+	mirrorRemoveImpact = mirrorRemoveDrain + " After that, registry.redhat.io/rhoai images are pulled from registry.redhat.io again, where nightly builds do not exist: installing or updating a nightly fails until the mirror is back. Images already on a node stay."
+	// mirrorRemoveKeptImpact: another object still redirects the source to
+	// quay.io/rhoai. The MCO merges the mirrors of every IDMS and ICSP with
+	// the same source (runtime-utils registries.go mergedDigestMirrorSets),
+	// so the merged list keeps quay.io/rhoai; the removed object only added
+	// an edge quay.io/rhoai -> source that the remaining ones imply, which
+	// changes the order of a sorted list only when those objects list their
+	// mirrors in conflicting orders (registries.go mergedMirrors, topo.go
+	// Sorted). The MCO does not update a MachineConfig whose rendered
+	// content is the same (container-runtime-config
+	// container_runtime_config_controller.go syncIgnitionConfig,
+	// :1185-1201), so then no node is updated.
+	mirrorRemoveKeptImpact = "%s also redirects registry.redhat.io/rhoai to quay.io/rhoai and stays: the Machine Config Operator merges the mirrors of every object with the same source, so the nodes keep quay.io/rhoai. Unless those objects list their mirrors in conflicting orders, /etc/containers/registries.conf stays exactly as it is, the Machine Config Operator does not change the nodes' configuration, and no node is drained or updated."
 )
 
 // nodeSetupActivity names each action in the activity log.
@@ -202,8 +232,18 @@ func prepareNodeSetup(c *Client, req types.NodeSetupRequest) (*nodeSetupWork, er
 // nodeSetupPlatform reads the control plane with the user's token and says
 // why action cannot run on it ("" when it can). The platform is unknown
 // ("") when the topology is not External but the managed-cluster webhooks
-// cannot be listed: the action is then attempted, and RBAC or admission
-// refuses it in the dry run if the cluster does not allow it.
+// cannot be listed. The pull secret actions are then refused
+// ("unknown_platform"): the cluster may be ROSA Classic or OSD, where the
+// cluster pull secret is not changed, and nothing on the API server would
+// stop the write. The mirror actions are attempted: they are allowed on
+// those clusters too, and RBAC or admission refuses them in the dry run if
+// this cluster does not allow them.
+//
+// The hosted check must come first. ROSA HCP also has webhooks named
+// *.managed.openshift.io: managed-cluster-validating-webhooks @eb1c03ee
+// build/resources.go:1022-1078 packages every HypershiftEnabled webhook for
+// hosted clusters, with the same names as the classic SelectorSyncSet
+// (:937). Only the topology tells them apart (TestNodeSetupHostedCheckComesFirst).
 func nodeSetupPlatform(c *Client, action string) (cp, refusal, code string) {
 	mirror := action == NodeSetupMirrorCreate || action == NodeSetupMirrorRemove
 	hosted, err := readTopologyHosted(c)
@@ -214,10 +254,12 @@ func nodeSetupPlatform(c *Client, action string) (cp, refusal, code string) {
 		if mirror {
 			return ControlPlaneHosted, "This cluster has a hosted control plane (ROSA HCP): its image mirror is configured through OpenShift Cluster Manager with rosa create image-mirror, not with an object in the cluster. Nothing was changed.", "hosted"
 		}
-		return ControlPlaneHosted, "This cluster has a hosted control plane (ROSA HCP): its nodes get kube-system/additional-pull-secret, which the Pull secret item sets; HyperShift merges it into their pull secret. Nothing was changed.", "hosted"
+		return ControlPlaneHosted, "This cluster has a hosted control plane (ROSA HCP): its nodes get kube-system/additional-pull-secret, which the Pull secret item sets. HyperShift merges it with the cluster's own pull secret for the nodes of AWS and Azure node pools that replace their nodes on an update (not in-place ones); where both have a quay.io/rhoai entry, the cluster's own wins. Nothing was changed.", "hosted"
 	}
 	managed, err := readRedHatManaged(c)
 	switch {
+	case err != nil && !mirror:
+		return "", "The updater cannot list the validating webhook configurations (" + err.Error() + "), so it cannot tell whether Red Hat runs this cluster (ROSA Classic or OpenShift Dedicated), where it does not change the cluster pull secret. Nothing was changed. The command under Do it yourself instead does it, if you choose to.", "unknown_platform"
 	case err != nil:
 		return "", "", ""
 	case managed && !mirror:
@@ -261,15 +303,6 @@ type idmsItem struct {
 	} `json:"spec"`
 }
 
-func (m idmsItem) redirectsSource() bool {
-	for _, e := range m.Spec.ImageDigestMirrors {
-		if e.Source == IDMSSource {
-			return true
-		}
-	}
-	return false
-}
-
 // isSetupMirror: exactly the object mirrorObject describes (the name, the
 // one source and the one mirror, the default source policy), whoever
 // created it (the docs' and rosa-dev's commands make the same object
@@ -298,21 +331,38 @@ func listIDMS(c *Client) ([]idmsItem, error) {
 	return list.Items, nil
 }
 
+// prepareMirrorCreate decides Create the image mirror from every mirror
+// object (node_setup_mirrors.go):
+//   - an IDMS or ICSP that redirects the source to quay.io/rhoai: done
+//     (one that maps it elsewhere only is not: the new IDMS adds
+//     quay.io/rhoai, and the nodes merge both objects' mirrors for it);
+//   - an object whose mirrors the nodes use for the source through a
+//     parent scope: refused ("parent_scope"), since the new, more specific
+//     entry would take those pulls away from that mirror;
+//   - an IDMS named rhoai-quay-mirror that is not done: refused.
 func prepareMirrorCreate(c *Client, w *nodeSetupWork) {
-	items, err := listIDMS(c)
+	items, rules, what, err := listMirrorRules(c)
 	if err != nil {
-		w.refuse(refusalCodeFor(err), "Cannot list the ImageDigestMirrorSets: "+err.Error()+". Nothing was changed.")
+		w.refuse(refusalCodeFor(err), "Cannot list the "+what+": "+err.Error()+". Nothing was changed.")
 		return
 	}
-	for _, m := range items {
-		if m.redirectsSource() {
-			w.nothing(fmt.Sprintf("ImageDigestMirrorSet %s already redirects %s, so the mirror is set up.", m.Metadata.Name, IDMSSource))
+	for _, r := range rules {
+		if r.redirectsToQuay() {
+			w.nothing(fmt.Sprintf("%s already redirects %s to %s, so the mirror is set up.", r.ref(), IDMSSource, MirrorTarget))
 			return
 		}
 	}
+	if conflicts := policyConflictRules(rules); len(conflicts) > 0 {
+		w.refuse("policy_conflict", policyConflictRefusal(conflicts))
+		return
+	}
+	if parents := parentScopeRules(rules); len(parents) > 0 {
+		w.refuse("parent_scope", parentScopeRefusal(parents))
+		return
+	}
 	for _, m := range items {
 		if m.Metadata.Name == MirrorName {
-			w.refuse("foreign", fmt.Sprintf("An ImageDigestMirrorSet named %s already exists and does not redirect %s. It is someone else's mirror configuration, so it is not changed; look at it with oc get imagedigestmirrorset %s -o yaml.", MirrorName, IDMSSource, MirrorName))
+			w.refuse("foreign", fmt.Sprintf("An ImageDigestMirrorSet named %s already exists and does not redirect %s to %s. It is someone else's mirror configuration, so it is not changed; look at it with oc get imagedigestmirrorset %s -o yaml.", MirrorName, IDMSSource, MirrorTarget, MirrorName))
 			return
 		}
 	}
@@ -322,10 +372,18 @@ func prepareMirrorCreate(c *Client, w *nodeSetupWork) {
 		return err
 	}
 	w.plan.Ready = true
-	w.plan.State = fmt.Sprintf("No ImageDigestMirrorSet redirects %s.", IDMSSource)
+	w.plan.State = fmt.Sprintf("No ImageDigestMirrorSet or ImageContentSourcePolicy redirects %s to %s.", IDMSSource, MirrorTarget)
+	for _, r := range rules {
+		// The same source mapped elsewhere: the mirrors of every IDMS and
+		// ICSP with one source are merged (types_image_digest_mirror_set.go
+		// :56-59; registries.go mergedDigestMirrorSets).
+		if r.digest() && r.Source == IDMSSource && r.hasRealMirror() {
+			w.plan.State += fmt.Sprintf(" %s maps it to %s: OpenShift merges the mirrors of every object with the same source, so that mirror stays in use next to %s.", r.ref(), strings.Join(r.Mirrors, ", "), MirrorTarget)
+		}
+	}
 	w.plan.Changes = []string{fmt.Sprintf("Create ImageDigestMirrorSet %s (cluster-wide): pulls of %s images by digest go to %s.", MirrorName, IDMSSource, MirrorTarget)}
 	w.plan.NodeImpact = mirrorCreateImpact
-	w.plan.Undo = "Remove the image mirror (the same item offers it once it exists), or oc delete imagedigestmirrorset " + MirrorName + ". Removing it drains the nodes one at a time."
+	w.plan.Undo = "Remove the image mirror (the same item offers it once it exists), or oc delete imagedigestmirrorset " + MirrorName + ". Removing it drains the nodes, " + poolPace + "."
 	w.done = "Created ImageDigestMirrorSet " + MirrorName + "."
 	w.verify = func(c *Client) error {
 		_, _, err := c.get(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName))
@@ -333,29 +391,43 @@ func prepareMirrorCreate(c *Client, w *nodeSetupWork) {
 	}
 }
 
+// prepareMirrorRemove decides Remove the image mirror: only the IDMS this
+// setup creates (isSetupMirror) is deleted. What the nodes do then
+// depends on what stays (node_setup_mirrors.go): another IDMS or ICSP that
+// redirects the source to quay.io/rhoai keeps registries.conf as it is;
+// otherwise the remaining mirrors of the source, or of a parent scope,
+// serve it, or none.
 func prepareMirrorRemove(c *Client, w *nodeSetupWork) {
-	items, err := listIDMS(c)
+	items, rules, what, err := listMirrorRules(c)
 	if err != nil {
-		w.refuse(refusalCodeFor(err), "Cannot list the ImageDigestMirrorSets: "+err.Error()+". Nothing was changed.")
+		w.refuse(refusalCodeFor(err), "Cannot list the "+what+": "+err.Error()+". Nothing was changed.")
 		return
 	}
 	var ours *idmsItem
-	var others []string
 	for i, m := range items {
-		switch {
-		case m.Metadata.Name == MirrorName:
+		if m.Metadata.Name == MirrorName {
 			ours = &items[i]
-		case m.redirectsSource():
-			others = append(others, m.Metadata.Name)
+		}
+	}
+	// What stays: every rule but those of the IDMS this setup creates.
+	var remaining []mirrorRule
+	var others []string
+	for _, r := range rules {
+		if r.Kind == mirrorKindIDMS && r.Name == MirrorName {
+			continue
+		}
+		remaining = append(remaining, r)
+		if r.redirectsToQuay() && !slices.Contains(others, r.ref()) {
+			others = append(others, r.ref())
 		}
 	}
 	sort.Strings(others)
 	switch {
 	case ours == nil && len(others) > 0:
-		w.refuse("foreign", fmt.Sprintf("The mirror of %s is ImageDigestMirrorSet %s, which this setup did not create, so it is not deleted here. If you mean to remove it: oc delete imagedigestmirrorset %s", IDMSSource, others[0], others[0]))
+		w.refuse("foreign", fmt.Sprintf("The mirror of %s is %s, which this setup did not create, so it is not deleted here. If you mean to remove it: oc delete %s", IDMSSource, others[0], strings.ToLower(others[0])))
 		return
 	case ours == nil:
-		w.nothing(fmt.Sprintf("No ImageDigestMirrorSet redirects %s.", IDMSSource))
+		w.nothing(fmt.Sprintf("No ImageDigestMirrorSet or ImageContentSourcePolicy redirects %s to %s.", IDMSSource, MirrorTarget))
 		return
 	case !ours.isSetupMirror():
 		w.refuse("foreign", fmt.Sprintf("ImageDigestMirrorSet %s holds more than this setup's mirror (%s to %s), so it is someone's own mirror configuration and is not deleted. Look at it with oc get imagedigestmirrorset %s -o yaml.", MirrorName, IDMSSource, MirrorTarget, MirrorName))
@@ -370,12 +442,8 @@ func prepareMirrorRemove(c *Client, w *nodeSetupWork) {
 	w.plan.Ready = true
 	w.plan.UID, w.plan.ResourceVersion = ours.Metadata.UID, ours.Metadata.ResourceVersion
 	w.plan.State = fmt.Sprintf("ImageDigestMirrorSet %s redirects %s to %s.", MirrorName, IDMSSource, MirrorTarget)
-	if len(others) > 0 {
-		w.plan.State += fmt.Sprintf(" %s also redirects it and stays, so the nodes keep a mirror for it.", strings.Join(others, ", "))
-	}
 	w.plan.Changes = []string{fmt.Sprintf("Delete ImageDigestMirrorSet %s (cluster-wide).", MirrorName)}
-	w.plan.NodeImpact = mirrorRemoveImpact
-	w.plan.Undo = "Create the image mirror again (one click, no drain)."
+	w.plan.NodeImpact, w.plan.Undo = mirrorRemoveImpactFor(remaining, others)
 	w.done = "Deleted ImageDigestMirrorSet " + MirrorName + "."
 	w.verify = func(c *Client) error {
 		_, _, err := c.get(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName))
@@ -907,9 +975,9 @@ func RunNodeSetup(c *Client, req types.NodeSetupRequest, emit func(UpdateStepEve
 		emit(UpdateStepEvent{Step: "verify", Status: "failed", Message: msg})
 		return &types.OperationResponse{Success: false, Message: msg, ErrorCode: "verify", Logs: []string{}}, nil
 	}
-	note := "The nodes take it one at a time: oc get mcp shows UPDATED True for every pool once all have it."
+	note := "The nodes take it " + poolPace + ": oc get mcp shows UPDATED True for every pool once all have it."
 	if pools := stuckMachineConfigPools(c); len(pools) > 0 {
-		note = "These machine config pools will not take it until that is resolved: " + strings.Join(pools, ", ") + ". The others take it one node at a time (oc get mcp)."
+		note = "These machine config pools will not take it until that is resolved: " + strings.Join(pools, ", ") + ". The others take it " + poolPace + " (oc get mcp)."
 	}
 	emit(UpdateStepEvent{Step: "verify", Status: "success", Message: note})
 	return &types.OperationResponse{Success: true, Message: done + " " + note, Logs: []string{}}, nil
