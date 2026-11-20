@@ -255,7 +255,7 @@ Requires prior `docker login` or `podman login` to the registry. To test your bu
 
 ### Automatic Image Publishing
 
-GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release tags (`vX.Y.Z`; other tags run nothing):
+GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release tags (`vX.Y.Z`, and pre-releases `vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`; other tags run nothing):
 
 - **test** stage, all must pass, no lint exceptions:
   - `go`: gofmt, `go mod verify`, `go vet`, `go test -race`, govulncheck;
@@ -269,7 +269,7 @@ GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release t
 - **Image jobs** (`build-main`, `build-branch`, `release-build`) `need` every test job of their pipeline and build with `RUN_CHECKS=false`, so the Containerfile does not run those checks a second time.
 - **main**: `build-main` builds the image to a tarball; `publish-main` pushes it as the write-once `:$CI_COMMIT_SHORT_SHA` (8 characters) and as `:main`, the latter only while the commit is still the tip of `main`. `:main` is always the pipeline's own image. An existing commit tag is kept only when it is that same image, or the release image of the same commit (a tag pipeline that published first: its `:vX.Y.Z` has the same digest); anything else (another commit, an earlier build, a workstation push) stops the job before `:main` moves. Delete such a tag in Quay after checking it, then retry the job. It never touches `:latest`.
 - **Other branches**: the manual `build-branch` job builds the image. It pushes it as `$BRANCH_IMAGE:$CI_COMMIT_REF_SLUG` only when the project has the variables `BRANCH_IMAGE`, `QUAY_BRANCH_USER` and `QUAY_BRANCH_TOKEN` (below); without them it builds and pushes nothing. It never uses `QUAY_USER`/`QUAY_TOKEN`.
-- **Release tags**: `release-build` builds the image (`VERSION=<tag>`) to a tarball; `release-installer` generates `install.sh`; `release-publish` pushes `:vX.Y.Z` and moves `:vN` and `:latest` (every tag-writing job, main or release, holds the one resource group `publish-latest`); `release-notes` creates the GitLab Release. `promote-latest` is manual.
+- **Release tags**: `release-build` builds the image (`VERSION=<tag>`) to a tarball; `release-installer` generates `install.sh`; `release-publish` pushes `:vX.Y.Z` and moves `:vN` and `:latest` (every tag-writing job, main or release, holds the one resource group `publish-latest`); `release-notes` creates the GitLab Release. `promote-latest` is manual. A pre-release tag runs the same jobs, but `release-publish` pushes only `:vX.Y.Z-rc.N` (and the commit tag when new), never `:vN` or `:latest`, and there is no `promote-latest` job ([Pre-releases](#pre-releases)).
 - The registry comes from the `IMAGE` variable (a project CI/CD variable overrides the default) with `QUAY_USER`/`QUAY_TOKEN` as its credentials. Only the crane jobs (`publish-main`, `release-publish`, `promote-latest`) read them, and those run only on `main` and on release tags. The image jobs never log in with them: `build-main` and `release-build` build a tarball with no registry login (except the Dependency Proxy, when `DOCKER_HUB` points at it) and the crane job pushes it.
 - The image jobs build with buildah (`scripts/ci-build-image.sh`; `BUILDAH_IMAGE` pins `quay.io/buildah/stable` by digest): chroot isolation, vfs storage, `linux/amd64`, Docker image format, no layer cache. The Containerfile's `RUN` steps (`npm ci` with its packages' install scripts, `go mod download`) run chrooted with buildah's default capabilities: they do not see the job's registry logins, and reading the environments of the job's processes is refused; on a privileged runner they can read the host's block devices (what they can and cannot see: [SECURITY.md](SECURITY.md#where-the-updaters-image-comes-from-trust-root)).
 - **Which runner builds the image.** The image jobs have no tags. GitLab.com's hosted runners are turned off for this project (project API: `shared_runners_enabled: false`), and the job logs show the `redhat/ai` group runner (`on pe-runners …`, executor `docker+machine`; it has the tag `aipcc` and takes untagged jobs). Whether it runs jobs privileged is set by its owners and is not visible to this project; `ci-build-image.sh` prints the job's effective capabilities (`Job capabilities: CapEff: …`) and the block devices in `/dev`, so the build log tells (in Podman: privileged `000001ffffffffff` and the host's disks; not privileged `00000000800405fb` and `none`). buildah needs a privileged container, or `seccomp=unconfined` plus `label=disable` (tested with buildah v1.46.1 in Podman 5.2.5, SELinux enforcing, 2026-11-19). With Docker's default seccomp profile (moby 29.10.0's) it stops as it starts, `Error during unshare(CLONE_NEWUSER): Operation not permitted`; with SELinux labels it stops at the first `RUN`, `masking non-directory ".../proc/interrupts" in mount namespace: permission denied`. Either way nothing is pushed: if the runner changes to one that allows neither, the image jobs fail, safely. A host with AppArmor was not tested. kaniko, used before 4.0.0, ran without these settings but is archived upstream.
@@ -324,12 +324,14 @@ Version numbers (`vMAJOR.MINOR.PATCH`):
 
 - **MAJOR**: the deploy contract changed: `TEMPLATE_REVISION` in `deploy/template.yaml` (with `api.ExpectedTemplateRevision`), RBAC, or anything else that needs the template re-applied. Upgrading needs a full redeploy.
 - **MINOR**: features with the same template. **PATCH**: fixes.
+- Pre-releases (`vX.Y.Z-rc.N`, ...) iterate a version before its release: [Pre-releases](#pre-releases).
 
 Image tags:
 
 | Tag | Moves | Set by |
 |---|---|---|
 | `:vX.Y.Z` | never (refused if it exists from another commit) | the tag pipeline |
+| `:vX.Y.Z-rc.N` (`-alpha.N`, `-beta.N`) | never, as `:vX.Y.Z` | the pre-release's tag pipeline ([Pre-releases](#pre-releases)) |
 | `:vN` | to the newest release of major N | the tag pipeline |
 | `:latest` | to a newer release of the **same** major only; an unlabelled `:latest` (from before releases) counts as v1 | the tag pipeline; across majors only the manual `promote-latest` job |
 | `:main` | to every new tip of `main` | `publish-main` |
@@ -347,7 +349,25 @@ How to cut a release:
 4. Watch the tag pipeline. For a new MAJOR, `:latest` stays on the old major; when teammates have been told, run the manual `promote-latest` job of that pipeline.
 5. Start the next section: `## [X.Y.Z+1] - unreleased` (or the next planned version), and set `version` and `appVersion` in `deploy/chart/Chart.yaml` to that version (`X.Y.Z+1`, `"vX.Y.Z+1"`) in the same commit. If the plan changes, change both again.
 
-The guard (`scripts/release.sh check`, the same in `make release` and CI) fails when the tag is not the top dated CHANGELOG section, when `deploy/chart/Chart.yaml` does not name the release or its copy of the template is not `deploy/template.yaml` (`make test-chart` warns about both earlier), or when `TEMPLATE_REVISION` differs from the previous release tag's (the highest lower `v*` tag) and the MAJOR is not higher. A MAJOR bump without a template change is allowed. Retrying a release pipeline is safe: an image already published from the same commit is kept; one from another commit stops the job.
+The guard (`scripts/release.sh check`, the same in `make release` and CI) fails when the tag is not the top dated CHANGELOG section, when `deploy/chart/Chart.yaml` does not name the release or its copy of the template is not `deploy/template.yaml` (`make test-chart` warns about both earlier), or when `TEMPLATE_REVISION` differs from the previous release tag's (the highest lower `vX.Y.Z` tag; pre-release tags do not count) and the MAJOR is not higher. A MAJOR bump without a template change is allowed. Retrying a release pipeline is safe: an image already published from the same commit is kept; one from another commit stops the job.
+
+### Pre-releases
+
+Every template change needs a new MAJOR, so releasing each iteration of a template change burns a major each time (1.0.0 on 2026-10-06 to 4.0.0 on 2026-11-20). Iterate with pre-releases instead and release the version once: `vX.Y.Z-alpha.N`, `vX.Y.Z-beta.N` or `vX.Y.Z-rc.N` (N from 1, no leading zeros; no other identifiers), ordered alpha < beta < rc < `vX.Y.Z` ([SemVer 2.0.0](https://semver.org/spec/v2.0.0.html), items 9 and 11). Use them to test a version on a cluster before telling teammates about it, typically while a new major is worked on in an `integ/*` branch.
+
+1. On `main` or the `integ/*` branch, the top `CHANGELOG.md` section is the version's, still undated: `## [X.Y.Z] - unreleased`. Pre-releases get no section of their own; their notes are that section so far.
+2. In a commit, set `deploy/chart/Chart.yaml` to the pre-release itself: `version: X.Y.Z-rc.1`, `appVersion: "vX.Y.Z-rc.1"` (Helm takes SemVer 2 versions). The chart's tag check then takes only that pre-release's image: the templates of two pre-releases may differ.
+3. With that branch checked out, clean and pushed: `make release VERSION=vX.Y.Z-rc.1`, then push the tag to both remotes as printed.
+4. For the release: date the CHANGELOG section and set `Chart.yaml` back to `X.Y.Z` / `"vX.Y.Z"` in one commit on `main`, then `make release VERSION=vX.Y.Z` as above.
+
+The guard checks a pre-release as a release, except that its section must be undated, X.Y.Z must be higher than every release tag (no pre-release of a version that is out, or of an older line), and the template rule compares with the last release only: the pre-releases of one version may change the template among themselves, and the release is checked against the previous release as always.
+
+What a pre-release publishes, and what never moves:
+
+- `:vX.Y.Z-rc.N`, written once, and the 8-character commit tag when no pipeline wrote it yet. **Never** `:vN` or `:latest`; `promote-latest` refuses a pre-release, and its pipeline has no such job.
+- `install.sh`, which installs exactly that pre-release (its template and its image), and from a clone `git checkout vX.Y.Z-rc.N && make upgrade`; `make rollback TAG=vX.Y.Z-rc.N` works as for a release.
+- A GitHub Release marked as a pre-release and not as "Latest" (`gh release create --prerelease --latest=false`): `releases/latest`, which the README's install command and other tools download, is "the most recent non-prerelease, non-draft release" (GitHub REST API, "Get the latest release"). GitLab Releases have no pre-release flag, so it is named `vX.Y.Z-rc.N (pre-release)` and its notes start by saying so; GitLab's `/-/releases/permalink/latest` follows the release date and can point at it (nothing here uses that link).
+- The app's update check never offers a pre-release. An updater that runs one is offered the newest release once it is X.Y.Z or higher ("requires a full redeploy" when the MAJOR differs).
 
 ### Moving the image repository
 

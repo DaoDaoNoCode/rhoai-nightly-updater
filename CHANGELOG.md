@@ -13,8 +13,45 @@ All notable changes to the RHOAI Nightly Updater. The format follows
 
 A section reads `- unreleased` until the release commit replaces it with the
 release date (`YYYY-MM-DD`); the release guard (`scripts/release.sh check`)
-only accepts a tag whose version is the top dated section. See
-[CONTRIBUTING.md](CONTRIBUTING.md#releases).
+only accepts a tag whose version is the top dated section. Pre-releases of a
+version (`vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`, from 4.1.0 on) are tagged
+while its section still reads `- unreleased`, and get no section of their
+own. See [CONTRIBUTING.md](CONTRIBUTING.md#releases).
+
+## [4.1.0] - unreleased
+
+Same template as 4.0.0 (revision 7).
+
+### Added
+
+- **Pre-releases.** A version can now be tried out before it is released:
+  `make release VERSION=v5.0.0-rc.1` tags a pre-release (`-alpha.N`,
+  `-beta.N` or `-rc.N`, numbered from 1), on `main` or on an `integ/*`
+  branch; the release itself is still tagged on `main` only. A template
+  change still needs a new MAJOR version, but it is now checked against the
+  last release only: the pre-releases of one version may change the template
+  among themselves, so a new major is iterated with pre-releases and
+  released once, instead of a new major for every iteration (1.0.0 on
+  2026-10-06 to 4.0.0 on 2026-11-20). The release guard wants the
+  version's CHANGELOG section still `- unreleased`, the version above the
+  last release, and
+  `deploy/chart/Chart.yaml` naming the pre-release itself
+  (`version: 5.0.0-rc.1`, `appVersion: "v5.0.0-rc.1"`). A pre-release
+  publishes its own image tag (`:v5.0.0-rc.1`, written once), `install.sh`
+  and release notes that start by saying it is not for general use; it
+  never moves `:v5` or `:latest`, and `promote-latest` refuses it. On
+  GitHub it is marked as a pre-release and never "Latest", so
+  `releases/latest` (the README's install command) stays on the last
+  release; GitLab Releases have no such flag, so it is named
+  "v5.0.0-rc.1 (pre-release)". The app's update check never offers a
+  pre-release; an updater that runs one is offered its release (or a later
+  one) once it is out. `install.sh`, `make deploy`/`upgrade` on a
+  pre-release checkout, and `make rollback TAG=v5.0.0-rc.1` take
+  pre-release versions. The Helm chart's tag check reads pre-release tags
+  too: a chart refuses an `IMAGE` tagged with another pre-release or with
+  its release (`:v5.0.0-rc.1@sha256:...` in a 5.0.0 chart, and the other
+  way round), since their templates may differ; before, a tag with a suffix
+  passed the check. How to: [CONTRIBUTING.md](CONTRIBUTING.md#pre-releases).
 
 ## [4.0.0] - 2026-11-20
 
