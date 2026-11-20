@@ -29,6 +29,10 @@ type resourceFake struct {
 	nextID  int
 	// fail maps "METHOD /path" to an HTTP status to return instead.
 	fail map[string]int
+	// failAs maps "<token> METHOD /path" to an HTTP status returned to that
+	// token only (the ServiceAccount's is fakeSAToken, the signed-in user's
+	// fakeUserToken), as RBAC that grants one identity and not the other.
+	failAs map[string]int
 	// finalizeOnGet removes finalizers of terminating objects on the next
 	// GET, simulating a running operator.
 	finalizeOnGet bool
@@ -80,6 +84,8 @@ type resourceFake struct {
 type fakeCall struct {
 	Method, Path, ContentType, Body string
 	Query                           url.Values
+	// Token is the request's bearer token: who made it.
+	Token string
 }
 
 // callsTo returns the calls of method to path, in order.
@@ -99,13 +105,23 @@ type fakeKey struct {
 	gv, ns, plural, name string
 }
 
+// The tokens of newResourceFake's client (the ServiceAccount's) and of the
+// signed-in user's client it carries.
+const (
+	fakeSAToken   = "test-token"
+	fakeUserToken = "signed-in-user-token"
+)
+
 func newResourceFake(t *testing.T) (*resourceFake, *Client) {
 	t.Helper()
 	isolateClusterCaches(t)
-	f := &resourceFake{t: t, objects: map[fakeKey]map[string]any{}, fail: map[string]int{}, failDryRun: map[string]int{}, failEcho: map[string]int{}, failMessage: map[string]string{}}
+	f := &resourceFake{t: t, objects: map[fakeKey]map[string]any{}, fail: map[string]int{}, failAs: map[string]int{}, failDryRun: map[string]int{}, failEcho: map[string]int{}, failMessage: map[string]string{}}
 	srv := httptest.NewTLSServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
-	c := &Client{baseURL: srv.URL, token: "test-token", httpClient: srv.Client(), ctx: context.Background()}
+	c := &Client{baseURL: srv.URL, token: fakeSAToken, httpClient: srv.Client(), ctx: context.Background()}
+	// The signed-in user's own client, as pkg/api withAdminRead attaches it
+	// (the hard reset's namespace guard reads with it).
+	c.SetSignedInUser(&Client{baseURL: srv.URL, token: fakeUserToken, httpClient: srv.Client(), ctx: context.Background(), asUser: true})
 	// An installed RHOAI: its DSCInitialization names the applications
 	// namespace these fixtures put RHOAI's objects in (delete it to test a
 	// cluster without one).
@@ -316,7 +332,12 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 	if dryRun {
 		echoKey = "DRYRUN " + echoKey
 	}
-	f.calls = append(f.calls, fakeCall{Method: r.Method, Path: r.URL.Path, ContentType: r.Header.Get("Content-Type"), Body: string(body), Query: r.URL.Query()})
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	f.calls = append(f.calls, fakeCall{Method: r.Method, Path: r.URL.Path, ContentType: r.Header.Get("Content-Type"), Body: string(body), Query: r.URL.Query(), Token: token})
+	if code, ok := f.failAs[token+" "+r.Method+" "+r.URL.Path]; ok {
+		f.status(w, code, firstNonEmpty(f.failMessage[token+" "+r.Method+" "+r.URL.Path], "injected failure for this token"))
+		return
+	}
 	if dryRun {
 		f.requests = append(f.requests, "DRYRUN "+r.Method+" "+r.URL.Path)
 		if code, ok := f.failDryRun[r.Method+" "+r.URL.Path]; ok {

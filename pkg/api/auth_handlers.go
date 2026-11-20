@@ -335,10 +335,15 @@ const adminReadMessage = "Only cluster-admins can read this through the updater.
 // answer. Such a user can read every Secret in the cluster with their own
 // token, so the ServiceAccount reveals nothing they could not read
 // themselves. Unlike withMutationAuth it takes no lock and starts no
-// operation: nothing changes.
+// operation: nothing changes. The client also carries the user's own client
+// (Client.SetSignedInUser, the client withMutationAuth makes changes with)
+// for the reads that must be made with the user's permissions, not the
+// ServiceAccount's: the hard reset plan's namespace guard reads owners of
+// any kind.
 func withAdminRead(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
 	return withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-		allowed, err := mutationPermission(r.Context(), extractUserToken(r))
+		userToken := extractUserToken(r)
+		allowed, err := mutationPermission(r.Context(), userToken)
 		if err != nil {
 			writeAuthError(w, err, "Cannot verify your permissions. Nothing was read.")
 			return
@@ -346,6 +351,9 @@ func withAdminRead(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Req
 		if !allowed {
 			writeError(w, adminReadMessage, http.StatusForbidden, "forbidden")
 			return
+		}
+		if userToken != "" {
+			c.SetSignedInUser(cluster.NewUserClient(r.Context(), userToken))
 		}
 		fn(c, w, r)
 	})

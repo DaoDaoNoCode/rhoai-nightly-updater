@@ -27,8 +27,9 @@ import (
 // DataScienceCluster). User resources (Notebooks, DSPAs, InferenceServices,
 // model registries) are not owned by the DSC and survive; their controllers
 // are gone until the components come back. A namespace the DSC (or what it
-// owns) owns would not survive, so a hard reset is refused while one exists
-// (namespaceOwnerBlocker).
+// owns) owns, and no other owner keeps, would not survive, so a hard reset
+// is refused while one exists (namespaceOwnerBlocker, read with the
+// signed-in user's own token).
 //
 // Before the delete, the new spec is validated against the live DSC (a
 // server-side dry run), and the object to create is recorded in the
@@ -131,7 +132,7 @@ func (v *dscView) planHardReset(c *Client, keep bool) *dscPlanned {
 		return p.refuse("The RHOAI operator removes the DataScienceCluster's finalizer, so the deletion would hang: "+why+". Nothing was changed.", "prerequisites")
 	}
 	if why := namespaceOwnerBlocker(c); why != "" {
-		return p.refuse("A hard reset is not possible: "+why+". Remove those owner references first (oc edit namespace <name>). Nothing was changed.", "prerequisites")
+		return p.refuse("A hard reset is not possible. "+why+" Nothing was changed.", "prerequisites")
 	}
 	obj := v.newDefaultObject(v.resetTarget(p.plan, keep))
 	created := v.asCreated(obj)

@@ -177,6 +177,9 @@ type Client struct {
 	// the app's ServiceAccount's. Errors then say that the user's sign-in
 	// or permissions, not the app's RBAC, refused a request.
 	asUser bool
+	// signedInUser, when set, is the client of the signed-in user's own
+	// token for a ServiceAccount client (see SetSignedInUser).
+	signedInUser *Client
 	// statusRead: the client serves a read request (pkg/api withAuth),
 	// whose pages poll every few seconds, so an expensive read may reuse a
 	// recent answer (argoApplicationsCache). Clients of changes never set
@@ -195,6 +198,31 @@ func NewUserClient(ctx context.Context, token string) *Client {
 // ActsAsUser reports whether the client carries the signed-in user's own
 // token (NewUserClient) rather than the app's ServiceAccount token.
 func (c *Client) ActsAsUser() bool { return c.asUser }
+
+// SetSignedInUser gives a ServiceAccount client (a read request's, pkg/api
+// withAdminRead) the client of the signed-in user's own token (NewUserClient),
+// for the reads that must not use the ServiceAccount's RBAC: the hard reset's
+// namespace guard reads owners of any kind (namespaceOwnerBlocker).
+func (c *Client) SetSignedInUser(u *Client) { c.signedInUser = u }
+
+// SignedInUser returns the client that acts with the signed-in user's
+// own token: c itself when it carries it (a change's client), else the one
+// SetSignedInUser gave, with c's context and user; nil when there is none
+// (the gitops profile's Update, a background job).
+func (c *Client) SignedInUser() *Client {
+	if c.asUser {
+		return c
+	}
+	if c.signedInUser == nil {
+		return nil
+	}
+	u := *c.signedInUser
+	u.ctx, u.signedInUser, u.bookkeeper = c.ctx, nil, c.bookkeeper
+	if u.username == "" {
+		u.username = c.username
+	}
+	return &u
+}
 
 // SetStatusRead marks the client as one of a read request (pkg/api
 // withAuth): it may reuse a recent answer of the reads that allow it. Never
