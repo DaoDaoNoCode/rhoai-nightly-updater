@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -272,38 +274,205 @@ func (rc *removalChecker) moduleBlockers(component string) []string {
 	return blockers
 }
 
-// conversionBlocker refuses removing a component that serves a CRD
-// conversion webhook ("" when it serves none). The tool cannot list the
-// objects of those CRDs (its ServiceAccount reads no arbitrary resources),
-// so the reason gives the commands that do, and what to do when there are
-// none.
+// conversionBlocker refuses removing a component that serves the
+// conversion webhook of a CRD with objects ("" when it serves none, or
+// none of those CRDs has objects). Removing the component deletes the
+// webhook's Service but not the CRDs, so their objects could then not be
+// converted, garbage-collected or deleted with their namespace.
+//
+// The objects are listed with the signed-in user's own client
+// (SignedInUser), never the ServiceAccount's: the CRDs are of any API
+// group (mcpservers.mcp.x-k8s.io for mcplifecycleoperator), which the
+// ServiceAccount must not be granted. The user is a cluster-admin (the
+// plan's withAdminRead and the change's withMutationAuth check that).
+// The Components page's repair preview (GET /api/components) carries it
+// too in the full profile (pkg/api attachSignedInUser); the gitops
+// profile never acts with the user's token. Without that client, or when
+// a list fails, it refuses (fail closed): the tool never takes "could not
+// list" for "none".
 func (rc *removalChecker) conversionBlocker(component string) string {
-	crds, convErr := rc.conversionCRDsOf(component)
+	crds, convErr := rc.conversionCRDsServedBy(component)
 	switch {
 	case convErr != nil:
 		return fmt.Sprintf("could not check which CRD conversion webhooks %s serves: %v", component, convErr)
-	case len(crds) > 0:
-		cmds := make([]string, 0, len(crds))
-		for _, crd := range crds {
-			cmds = append(cmds, "oc get "+crd+" -A")
-		}
-		return fmt.Sprintf("%s serves the conversion webhook of %s %s. Removing it deletes that webhook's Service but not the %s, so objects of %s could then not be read at another version, garbage-collected or deleted with their namespace. "+
-			"This tool cannot list those objects, so it does not remove %s. Check for them with: %s. "+
-			"If any exist, delete them first. If none exist, set %s to Removed yourself in the OpenShift console (edit the DataScienceCluster)",
-			component, verb(len(crds), "CRD", "CRDs"), strings.Join(crds, ", "), verb(len(crds), "CRD", "CRDs"), verb(len(crds), "that CRD", "those CRDs"),
-			component, strings.Join(cmds, "; "), component)
+	case len(crds) == 0:
+		return ""
 	}
-	return ""
+	names := make([]string, 0, len(crds))
+	gets := make([]string, 0, len(crds))
+	for _, crd := range crds {
+		names = append(names, crd.Metadata.Name)
+		gets = append(gets, "oc get "+crd.Metadata.Name+" -A")
+	}
+	intro := fmt.Sprintf("%s serves the conversion webhook of %s %s. Removing it deletes that webhook's Service but not the %s, so objects of %s could then not be read at another version, garbage-collected or deleted with their namespace.",
+		component, verb(len(crds), "CRD", "CRDs"), strings.Join(names, ", "), verb(len(crds), "CRD", "CRDs"), verb(len(crds), "that CRD", "those CRDs"))
+	u := rc.c.SignedInUser()
+	if u == nil {
+		return intro + fmt.Sprintf(" The tool lists those objects only with your own sign-in, which this request does not carry (in the gitops profile no request does), so it cannot tell whether any exist and does not remove %s here. Check for them with: %s.",
+			component, strings.Join(gets, "; "))
+	}
+	var found, failed []string
+	for _, crd := range crds {
+		objs, err := listConversionObjects(u, crd)
+		switch {
+		case err != nil:
+			failed = append(failed, fmt.Sprintf("The objects of %s could not be listed with your sign-in: %s. Check for them with: oc get %s -A.",
+				crd.Metadata.Name, strings.TrimSuffix(err.Error(), "."), crd.Metadata.Name))
+		case len(objs.names) > 0:
+			found = append(found, objs.sentence(crd))
+		}
+	}
+	if len(found) == 0 && len(failed) == 0 {
+		return ""
+	}
+	out := append([]string{intro}, found...)
+	out = append(out, failed...)
+	if len(found) > 0 {
+		out = append(out, fmt.Sprintf("The tool does not remove %s until none remain.", component))
+	}
+	if len(failed) > 0 {
+		out = append(out, fmt.Sprintf("The tool cannot tell whether any exist, so it does not remove %s.", component))
+	}
+	return strings.Join(out, " ")
 }
 
-// conversionCRDsOf returns the RHOAI CRDs whose conversion webhook Service
-// belongs to the component: the Service's ownerReference to a
-// components.platform.opendatahub.io CR or its platform.opendatahub.io/part-of
-// label names the component (live: trustyai-service-operator-webhook-service
-// is owned by TrustyAI/default-trustyai), or, for a Service that is already
-// gone, its name contains the component name (mcp-lifecycle-operator-webhook-service
-// for mcplifecycleoperator), the same match the stale-conversion check uses.
+// conversionObjectsLimit is the one page of a CRD's objects the removal
+// check lists: enough to tell "none" from "some" and to name a few, cheap
+// on a cluster with many. conversionObjectsShown are named per CRD.
+const (
+	conversionObjectsLimit = 20
+	conversionObjectsShown = 5
+)
+
+// conversionObjects is the first page of a CRD's objects.
+type conversionObjects struct {
+	names []string // "namespace/name" ("name" when cluster-scoped), sorted
+	// more: the API server returned metadata.continue, so more exist.
+	more bool
+	// remaining is metadata.remainingItemCount (nil when not set): an
+	// estimate of the objects after this page.
+	remaining *int64
+}
+
+// listConversionObjects lists the first page of a CRD's objects in every
+// namespace with the client u (the signed-in user's).
+//
+// It lists at the CRD's storage version when that is served (listPath): the
+// API server sends to the conversion webhook only the objects not already
+// at the requested version (k8s.io/apiextensions-apiserver
+// pkg/apiserver/conversion/webhook_converter.go getObjectsToConvert), so
+// objects stored at the storage version need no conversion. Objects still
+// stored at an older version (status.storedVersions) are converted; when
+// that fails, so does the list, and the check refuses.
+//
+// The count follows the list semantics of k8s.io/apimachinery
+// pkg/apis/meta/v1/types.go (https://kubernetes.io/docs/reference/using-api/api-concepts/#retrieving-large-results-sets-in-chunks):
+// ListOptions.limit returns at most that many items and sets
+// metadata.continue when more exist ("clients should only use the presence
+// of the continue field to determine whether more results are available";
+// a server may ignore limit and return all); ListMeta.remainingItemCount
+// is meant for "*estimating* the size of a collection. Clients should not
+// rely on the remainingItemCount to be set or to be exact." So the count is
+// exact without continue, "N or more" with it, and remainingItemCount is
+// only quoted as an estimate. A page without items but with continue
+// (possible only for filtered lists, which this one is not) is not taken
+// for "none".
+func listConversionObjects(u *Client, crd conversionCRD) (conversionObjects, error) {
+	path := crd.listPath()
+	if path == "" {
+		return conversionObjects{}, fmt.Errorf("the CRD serves no version the tool could list it at")
+	}
+	body, _, err := u.do(http.MethodGet, path, "", nil, url.Values{"limit": {strconv.Itoa(conversionObjectsLimit)}})
+	if err != nil {
+		return conversionObjects{}, err
+	}
+	var list struct {
+		Metadata struct {
+			Continue           string `json:"continue"`
+			RemainingItemCount *int64 `json:"remainingItemCount"`
+		} `json:"metadata"`
+		Items []struct {
+			Metadata struct {
+				Namespace string `json:"namespace"`
+				Name      string `json:"name"`
+			} `json:"metadata"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return conversionObjects{}, fmt.Errorf("could not parse the list: %w", err)
+	}
+	if len(list.Items) == 0 && list.Metadata.Continue != "" {
+		return conversionObjects{}, fmt.Errorf("the API server returned no objects but says more exist")
+	}
+	out := conversionObjects{more: list.Metadata.Continue != "", remaining: list.Metadata.RemainingItemCount}
+	for _, it := range list.Items {
+		name := it.Metadata.Name
+		if it.Metadata.Namespace != "" {
+			name = it.Metadata.Namespace + "/" + name
+		}
+		out.names = append(out.names, name)
+	}
+	sort.Strings(out.names)
+	return out, nil
+}
+
+// sentence words the objects found for the refusal: how many, the first
+// few, and how to delete them.
+func (o conversionObjects) sentence(crd conversionCRD) string {
+	n := len(o.names)
+	crdName := crd.Metadata.Name
+	count := countNoun(n, "object", "objects") + " of " + crdName + " " + verb(n, "exists", "exist")
+	if o.more {
+		count = fmt.Sprintf("%d or more objects of %s exist", n, crdName)
+		if o.remaining != nil && *o.remaining > 0 {
+			count += fmt.Sprintf(" (about %d, the API server's estimate)", int64(n)+*o.remaining)
+		}
+	}
+	shown := o.names
+	rest := ""
+	switch {
+	case len(shown) > conversionObjectsShown && o.more:
+		shown, rest = shown[:conversionObjectsShown], " and more"
+	case len(shown) > conversionObjectsShown:
+		rest = fmt.Sprintf(" and %d more", len(shown)-conversionObjectsShown)
+		shown = shown[:conversionObjectsShown]
+	case o.more:
+		rest = " and more"
+	}
+	del := "oc delete " + crdName + " -n <namespace> <name>"
+	if crd.Spec.Scope == "Cluster" {
+		del = "oc delete " + crdName + " <name>"
+	}
+	s := fmt.Sprintf("%s: %s%s.", count, strings.Join(shown, ", "), rest)
+	if rest != "" {
+		s += " List them all with: oc get " + crdName + " -A."
+	}
+	return s + fmt.Sprintf(" Delete %s first: %s.", verb(n, "it", "them"), del)
+}
+
+// conversionCRDsOf returns the names of the CRDs conversionCRDsServedBy
+// returns.
 func (rc *removalChecker) conversionCRDsOf(component string) ([]string, error) {
+	crds, err := rc.conversionCRDsServedBy(component)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(crds))
+	for _, crd := range crds {
+		out = append(out, crd.Metadata.Name)
+	}
+	return out, nil
+}
+
+// conversionCRDsServedBy returns the RHOAI CRDs whose conversion webhook
+// Service belongs to the component, sorted by name: the Service's
+// ownerReference to a components.platform.opendatahub.io CR or its
+// platform.opendatahub.io/part-of label names the component (live:
+// trustyai-service-operator-webhook-service is owned by
+// TrustyAI/default-trustyai), or, for a Service that is already gone, its
+// name contains the component name (mcp-lifecycle-operator-webhook-service
+// for mcplifecycleoperator), the same match the stale-conversion check uses.
+func (rc *removalChecker) conversionCRDsServedBy(component string) ([]conversionCRD, error) {
 	if !rc.convLoaded {
 		rc.convLoaded = true
 		crds, err := listRHOAIConversionCRDs(rc.c)
@@ -315,7 +484,7 @@ func (rc *removalChecker) conversionCRDsOf(component string) ([]string, error) {
 	if rc.convErr != nil {
 		return nil, rc.convErr
 	}
-	var out []string
+	var out []conversionCRD
 	for _, crd := range rc.convCRDs {
 		ref := crd.conversionService()
 		if ref == "" {
@@ -327,10 +496,10 @@ func (rc *removalChecker) conversionCRDsOf(component string) ([]string, error) {
 		}
 		_, name, _ := strings.Cut(ref, "/")
 		if owner == component || strings.Contains(strings.ReplaceAll(name, "-", ""), component) {
-			out = append(out, crd.Metadata.Name)
+			out = append(out, crd)
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Metadata.Name < out[j].Metadata.Name })
 	return out, nil
 }
 

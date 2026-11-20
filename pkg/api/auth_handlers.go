@@ -344,7 +344,8 @@ var HandleUserPermissions = withAuth(func(c *cluster.Client, w http.ResponseWrit
 // (Client.SetSignedInUser, the client withMutationAuth makes changes with)
 // for the reads that must be made with the user's permissions, not the
 // ServiceAccount's: the hard reset plan's namespace guard reads owners of
-// any kind.
+// any kind, and the removal checks list the objects of CRDs whose
+// conversion webhook a component serves.
 func withAdminRead(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
 	return withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 		userToken := extractUserToken(r)
@@ -357,9 +358,19 @@ func withAdminRead(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Req
 			writeError(w, adminOnlyMessage, http.StatusForbidden, adminOnlyCode)
 			return
 		}
-		if userToken != "" {
-			c.SetSignedInUser(cluster.NewUserClient(r.Context(), userToken))
-		}
+		attachSignedInUser(c, r)
 		fn(c, w, r)
 	})
+}
+
+// attachSignedInUser gives a read's ServiceAccount client the client of the
+// request's signed-in user's own token (Client.SetSignedInUser), when the
+// request carries one. Only for a cluster-admin's read: withAdminRead, and
+// the handlers of admin-only routes that run behind their route's admin
+// check (adminOnly from getRouteTiers in the full profile,
+// withGitOpsAdmin in the gitops profile), so the check runs once.
+func attachSignedInUser(c *cluster.Client, r *http.Request) {
+	if userToken := extractUserToken(r); userToken != "" {
+		c.SetSignedInUser(cluster.NewUserClient(r.Context(), userToken))
+	}
 }

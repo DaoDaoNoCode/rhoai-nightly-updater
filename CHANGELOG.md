@@ -80,6 +80,32 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   `forbidden_for_user` ("your account may not see this"), never the
   ServiceAccount's "re-apply the template" hint.
 
+### Fixed
+
+- **A component that serves a CRD conversion webhook can be set to
+  Removed again when that CRD holds no objects.** Setting
+  `mcplifecycleoperator` (or any component whose Service converts a CRD)
+  to Removed was always refused with "This tool cannot list those objects": the check
+  was written when every read used the ServiceAccount, which may not read
+  arbitrary kinds. Since 4.0.0 the plan and the change carry the signed-in
+  cluster-admin's own token, so the check now lists each such CRD's objects
+  in every namespace with that token, at the CRD's storage version, one
+  page of 20. With none, this check no longer blocks (the other removal
+  checks still run). With some, the refusal says how many ("4", or "20 or
+  more" when the API server has more), names up to five
+  (`namespace/name`) and gives the `oc delete` command; the removal stays
+  refused until none remain. A list that fails (403, a conversion error, a
+  timeout) or a request without the user's sign-in still refuses, with the
+  error and the `oc get <crd> -A` command. The Components page's repair
+  preview (`GET /api/components`, admin-only) now also carries the
+  signed-in cluster-admin's own client in the full profile, as the plan
+  does, so it runs the same check and no longer blocks a "Reset to
+  defaults" or "Remove extra components" repair that removes such a
+  component while its CRD holds no objects. The gitops profile never acts
+  with the user's token, so its preview still refuses. The ServiceAccount
+  gains no permission
+  ([RUNBOOK §11.9](RUNBOOK.md#119-change-or-reset-the-datasciencecluster)).
+
 ### Security
 
 - The app now receives the `user:full` token of every RHOAI user who signs

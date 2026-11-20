@@ -138,6 +138,109 @@ func TestDSCCompatibility_PreviewFlagsBlockedRemovals(t *testing.T) {
 	}
 }
 
+// dscRepairMCPServer is dscRepairD3Server with a listable MCPServer CRD
+// (mcpCRDJSON: v1beta1 the storage version) whose objects are items (JSON
+// objects). It returns the ServiceAccount's client carrying the signed-in
+// user's (as pkg/api attaches it to GET /api/components), and the
+// Authorization headers of the MCPServer lists.
+func dscRepairMCPServer(t *testing.T, dsc, items string, patched *bool, mu *sync.Mutex) (*Client, func() []string) {
+	crd := dscCRDWith(t, "mcplifecycleoperator", "trainingoperator")
+	conv := `{"items":[` + mcpCRDJSON("Namespaced", mcpVersions) + `]}`
+	var lists []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == mcpStorage:
+			mu.Lock()
+			lists = append(lists, r.Header.Get("Authorization")+" "+r.URL.RawQuery)
+			mu.Unlock()
+			_, _ = io.WriteString(w, `{"metadata":{},"items":[`+items+`]}`)
+		case r.Method == http.MethodPatch:
+			mu.Lock()
+			*patched = true
+			mu.Unlock()
+			_, _ = io.WriteString(w, `{}`)
+		case r.URL.Path == "/apis/apiextensions.k8s.io/v1/customresourcedefinitions":
+			_, _ = io.WriteString(w, conv)
+		case strings.Contains(r.URL.Path, "customresourcedefinitions/"):
+			_, _ = io.WriteString(w, crd)
+		case strings.Contains(r.URL.Path, "datascienceclusters/"):
+			_, _ = io.WriteString(w, dsc)
+		case strings.HasSuffix(r.URL.Path, "/clusterserviceversions"):
+			_, _ = io.WriteString(w, csvListMock("3.6.0").body)
+		case strings.Contains(r.URL.Path, "/services/"):
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"kind":"Status","code":404}`)
+		case repairGuardMock(w, r):
+		default:
+			_, _ = io.WriteString(w, `{}`)
+		}
+	}))
+	t.Cleanup(server.Close)
+	c := &Client{baseURL: server.URL, token: "sa-token", httpClient: server.Client(), ctx: context.Background()}
+	c.SetSignedInUser(&Client{baseURL: server.URL, token: "admin-token", httpClient: server.Client(), ctx: context.Background(), asUser: true})
+	return c, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string{}, lists...)
+	}
+}
+
+// The repair preview (GET /api/components, whose client carries the
+// signed-in admin's) lists the MCPServers with the admin's token: none, and
+// a reset that removes mcplifecycleoperator is not blocked (and the repair
+// itself goes through); some, and the block names them.
+func TestRepairPreviewListsConversionObjectsWithTheUsersToken(t *testing.T) {
+	raw := `{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"my-dsc","resourceVersion":"42"},"spec":{"components":{"dashboard":{"managementState":"Managed"},"aipipelines":{"managementState":"Managed"},"mcplifecycleoperator":{"managementState":"Managed"},"trainingoperator":{"managementState":"Removed"}}}}`
+	var dsc map[string]any
+	_ = json.Unmarshal([]byte(raw), &dsc)
+
+	t.Run("no objects", func(t *testing.T) {
+		mockDSCSamples(t, func(*http.Request) (int, string) { return 200, testDSCSample })
+		var mu sync.Mutex
+		patched := false
+		c, lists := dscRepairMCPServer(t, raw, "", &patched, &mu)
+		result := checkDSCCompatibility(c, dsc)
+		if strings.Join(result.ResetRemovals, ",") != "mcplifecycleoperator" || len(result.RemovalBlocks) != 0 {
+			t.Fatalf("resetRemovals = %v, removalBlocks = %+v", result.ResetRemovals, result.RemovalBlocks)
+		}
+		if got := lists(); len(got) == 0 || got[0] != "Bearer admin-token limit=20" {
+			t.Fatalf("MCPServer lists = %q", got)
+		}
+		if patched {
+			t.Fatal("the preview changed the cluster")
+		}
+		// The repair runs with the admin's own client and goes through.
+		user := c.SignedInUser()
+		user.signedInUser = nil
+		r, err := RepairDSC(user, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v2", nil, []string{"mcplifecycleoperator"})
+		mu.Lock()
+		defer mu.Unlock()
+		if err != nil || !r.Success || !patched {
+			t.Fatalf("repair = %+v, %v (patched %v)", r, err, patched)
+		}
+	})
+
+	t.Run("objects", func(t *testing.T) {
+		mockDSCSamples(t, func(*http.Request) (int, string) { return 200, testDSCSample })
+		var mu sync.Mutex
+		patched := false
+		c, lists := dscRepairMCPServer(t, raw, mcpItems("team-a/github", "team-b/fetch"), &patched, &mu)
+		result := checkDSCCompatibility(c, dsc)
+		if len(result.RemovalBlocks) != 1 || result.RemovalBlocks[0].Component != "mcplifecycleoperator" ||
+			!strings.Contains(strings.Join(result.RemovalBlocks[0].Reasons, " "), "2 objects of "+mcpCRDName+" exist: team-a/github, team-b/fetch.") {
+			t.Fatalf("removalBlocks = %+v", result.RemovalBlocks)
+		}
+		for _, got := range lists() {
+			if !strings.HasPrefix(got, "Bearer admin-token ") {
+				t.Fatalf("listed with %q", got)
+			}
+		}
+		if patched {
+			t.Fatal("the preview changed the cluster")
+		}
+	})
+}
+
 // A refused component (dashboard, mlflowoperator, aipipelines) is never
 // removed by a repair either.
 func TestRepairDSC_RefusedComponents(t *testing.T) {
