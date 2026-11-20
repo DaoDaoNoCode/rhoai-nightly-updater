@@ -110,9 +110,13 @@
           "description": "Profile full only: a Sync hook Job that creates Secret <APP_NAME>-oauth-client once, and a PostSync hook Job that applies OAuthClient <APP_NAME>-<NAMESPACE> with it.",
           "type": "object",
           "additionalProperties": false,
-          "required": ["enabled"],
+          "required": ["enabled", "removeOnDelete"],
           "properties": {
-            "enabled": { "type": "boolean" }
+            "enabled": { "type": "boolean" },
+            "removeOnDelete": {
+              "description": "A PostDelete hook Job that removes the OAuthClient and its sign-ins when the Application is deleted with its resources. Needs Argo CD 2.12 or later (OpenShift GitOps 1.14 or later); set false on older versions.",
+              "type": "boolean"
+            }
           }
         },
         "subscriptionEnvAllowlist": {

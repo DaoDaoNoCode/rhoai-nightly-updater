@@ -105,7 +105,7 @@ expect_eq "the Template's PROFILE defaults to full (empty)" "" "$(default_of PRO
 # the full profile only: the gitops profile signs in through the
 # ServiceAccount.
 expected_objects() {
-	local ns=$1 app=$2 session=${3:-1} link=${4:-1} profile=${5:-gitops} oauth=${6:-1} objects=$template_objects
+	local ns=$1 app=$2 session=${3:-1} link=${4:-1} profile=${5:-gitops} oauth=${6:-1} removal=${7:-1} objects=$template_objects
 	if [ "$profile" = gitops ]; then
 		objects=$(grep -vE '^(ClusterRole|ClusterRoleBinding|Role|RoleBinding)/' <<<"$template_objects"; printf '%s\n' "$gitops_objects")
 	fi
@@ -124,9 +124,12 @@ expected_objects() {
 			printf '%s\n' "ServiceAccount/$app-oauth-secret/$ns" "Role/$app-oauth-secret/$ns" \
 				"RoleBinding/$app-oauth-secret/$ns" "Job/$app-oauth-secret/$ns" \
 				"ServiceAccount/$app-oauthclient/$ns" "Role/$app-oauthclient/$ns" "RoleBinding/$app-oauthclient/$ns" \
-				"ClusterRole/$app-$ns-oauthclient/" "ClusterRoleBinding/$app-$ns-oauthclient/" "Job/$app-oauthclient/$ns" \
-				"ServiceAccount/$app-oauthclient-removal/$ns" "ClusterRole/$app-$ns-oauthclient-removal/" \
-				"ClusterRoleBinding/$app-$ns-oauthclient-removal/" "Job/$app-oauthclient-removal/$ns"
+				"ClusterRole/$app-$ns-oauthclient/" "ClusterRoleBinding/$app-$ns-oauthclient/" "Job/$app-oauthclient/$ns"
+			if [ "$removal" = 1 ]; then
+				printf '%s\n' "ServiceAccount/$app-oauthclient-removal/$ns" "Role/$app-oauthclient-removal/$ns" \
+					"RoleBinding/$app-oauthclient-removal/$ns" "ClusterRole/$app-$ns-oauthclient-removal/" \
+					"ClusterRoleBinding/$app-$ns-oauthclient-removal/" "Job/$app-oauthclient-removal/$ns"
+			fi
 		fi
 		if [ "$link" = 1 ]; then
 			printf '%s\n' "ServiceAccount/$app-consolelink/$ns" "Role/$app-consolelink/$ns" \
@@ -490,7 +493,14 @@ expect_eq "ConsoleLink: the same object as install.sh's" "$install_link" "$(link
 expect_render "OAuthClient hooks" --namespace ns1 "${BASE[@]}" --set profile=full --set parameters.APP_NAME=upd --show-only templates/oauth-client.yaml
 expect_eq "OAuthClient: four Sync hooks" 4 "$(grep -c 'argocd.argoproj.io/hook: "Sync"' "$OUT")"
 expect_eq "OAuthClient: six PostSync hooks" 6 "$(grep -c 'argocd.argoproj.io/hook: "PostSync"' "$OUT")"
-expect_eq "OAuthClient: delete policy" 10 "$(grep -c 'hook-delete-policy: BeforeHookCreation,HookSucceeded' "$OUT")"
+# The PostSync RBAC that grants OAuthClient create is deleted when the sync
+# fails too (HookFailed); the Jobs stay after a failure for their logs.
+expect_eq "OAuthClient: delete policy, kept after a failure" 5 "$(grep -c 'hook-delete-policy: BeforeHookCreation,HookSucceeded$' "$OUT")"
+expect_eq "OAuthClient: delete policy, deleted after a failure" 5 "$(grep -c 'hook-delete-policy: BeforeHookCreation,HookSucceeded,HookFailed$' "$OUT")"
+for d in ServiceAccount/'"upd-oauthclient"' Role/'"upd-oauthclient"' RoleBinding/'"upd-oauthclient"' ClusterRole/'"upd-ns1-oauthclient"' ClusterRoleBinding/'"upd-ns1-oauthclient"'; do
+	doc "$d" | grep -qx '    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded,HookFailed' && pass || fail "OAuthClient: $d is not deleted after a failed sync"
+done
+doc Job/'"upd-oauthclient"' | grep -qx '    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded' && pass || fail "OAuthClient: the PostSync Job's delete policy"
 grep -qF 'resourceNames: ["upd-oauth-client"]' "$OUT" && pass || fail "OAuthClient: the Roles are not limited to the Secret's name"
 grep -qF 'resourceNames: ["upd-ns1"]' "$OUT" && pass || fail "OAuthClient: the ClusterRole is not limited to the client's name"
 grep -qF 'resourceNames: ["upd"]' "$OUT" && pass || fail "OAuthClient: the Role is not limited to the Route's name"
@@ -662,7 +672,18 @@ case "$1 $2" in
 	exists) echo "Error from server (AlreadyExists): secrets \"$4\" already exists" >&2; exit 1 ;;
 	*) echo "Error from server: cannot create secrets" >&2; exit 1 ;;
 	esac ;;
-"get route") [ -n "${FAKE_NO_HOST:-}" ] || printf 'app.example.com' ;;
+"get route")
+	# -o name: the PostDelete hook asks whether the Route exists
+	# (FAKE_ROUTE: absent, the default, present or error).
+	if [[ " $* " == *" -o name "* ]]; then
+		case "${FAKE_ROUTE:-absent}" in
+		present) echo "route.route.openshift.io/$3" ;;
+		error) echo "Error from server (Forbidden): routes.route.openshift.io \"$3\" is forbidden" >&2; exit 1 ;;
+		*) echo "Error from server (NotFound): routes.route.openshift.io \"$3\" not found" >&2; exit 1 ;;
+		esac
+		exit 0
+	fi
+	[ -n "${FAKE_NO_HOST:-}" ] || printf 'app.example.com' ;;
 "delete oauthclient") [ -z "${FAKE_DELETE_FAIL:-}" ] || { echo "Error from server: cannot delete oauthclients" >&2; exit 1; } ;;
 "delete oauthaccesstokens") [ -z "${FAKE_REVOKE_FAIL:-}" ] || { echo "Error from server: cannot delete oauthaccesstokens" >&2; exit 1; } ;;
 "patch oauthclient") [ -z "${FAKE_PATCH_FAIL:-}" ] || { echo "Error from server: cannot patch oauthclients" >&2; exit 1; } ;;
@@ -768,8 +789,21 @@ run_oauth "$OCLIENT_SH" FAKE_APPLY=fail
 # grantMethod auto hands a user's token to whoever later serves its host).
 # Profile full with the OAuth client hooks only; never run during a sync.
 expect_render "OAuthClient removal hook" --namespace ns1 "${BASE[@]}" --set profile=full --set parameters.APP_NAME=upd --show-only templates/oauth-client-removal.yaml
-expect_eq "OAuthClient removal: four PostDelete hooks" 4 "$(grep -c 'argocd.argoproj.io/hook: "PostDelete"' "$OUT")"
+expect_eq "OAuthClient removal: six PostDelete hooks" 6 "$(grep -c 'argocd.argoproj.io/hook: "PostDelete"' "$OUT")"
 expect_eq "OAuthClient removal: no other hook phase" "" "$(grep 'argocd.argoproj.io/hook: ' "$OUT" | grep -v PostDelete || true)"
+# Argo CD creates PostDelete hooks in one pass (controller/hook.go): a
+# sync-wave would order nothing, so there is none.
+expect_eq "OAuthClient removal: no sync-wave" "" "$(grep 'sync-wave' "$OUT" || true)"
+# Its RBAC goes after a failed run too (Argo CD 2.12-3.1 delete the hooks
+# whose policy matches the hooks' health); the Job stays for its log.
+for d in ServiceAccount/'"upd-oauthclient-removal"' Role/'"upd-oauthclient-removal"' RoleBinding/'"upd-oauthclient-removal"' \
+	ClusterRole/'"upd-ns1-oauthclient-removal"' ClusterRoleBinding/'"upd-ns1-oauthclient-removal"'; do
+	doc "$d" | grep -qx '    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded,HookFailed' && pass || fail "OAuthClient removal: $d is not deleted after a failed run"
+done
+doc Job/'"upd-oauthclient-removal"' | grep -qx '    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded' && pass || fail "OAuthClient removal: the Job's delete policy"
+# Whether the app still runs (a non-cascading deletion): get on its Route only.
+expect_eq "OAuthClient removal: the Role's rules" "$(printf '%s\n' 'resources: ["routes"]' 'resourceNames: ["upd"]' 'verbs: ["get"]')" \
+	"$(doc Role/'"upd-oauthclient-removal"' | grep -E '^ *(resources|resourceNames|verbs): ' | sed 's/^ *//; s/^- //')"
 removal_role=$(awk '/^---/ { if (keep) exit; buf = ""; next } { buf = buf $0 "\n" } /name: "upd-ns1-oauthclient-removal"/ && /^  name/ { keep = 1 } END { if (keep) printf "%s", buf }' "$OUT")
 expect_eq "OAuthClient removal: the rules" "$(printf '%s\n' 'resources: ["oauthclients"]' 'resourceNames: ["upd-ns1"]' 'verbs: ["get", "delete"]' \
 	'resources: ["oauthaccesstokens"]' 'verbs: ["list", "delete"]')" "$(grep -E '^ *(resources|resourceNames|verbs): ' <<<"$removal_role" | sed 's/^ *//; s/^- //')"
@@ -778,11 +812,35 @@ for off in "--set profile=gitops" "--set profile=full --set gitops.oauthClient.e
 	expect_render "OAuthClient removal hook: $off" --namespace ns1 "${BASE[@]}" $off
 	grep -q 'PostDelete' "$OUT" && fail "OAuthClient removal hook rendered with $off" || pass
 done
+# gitops.oauthClient.removeOnDelete=false (Argo CD 2.10/2.11): only the
+# PostDelete hook goes; the Sync and PostSync hooks stay.
+expect_render "OAuthClient removal hook off" --namespace ns1 "${BASE[@]}" --set profile=full --set gitops.oauthClient.removeOnDelete=false
+expect_eq "OAuthClient removal hook off: the objects" "$(expected_objects ns1 rhoai-nightly-updater 1 1 full 1 0)" "$(objects)"
+grep -q 'PostDelete' "$OUT" && fail "OAuthClient removal hook off: a PostDelete hook rendered" || pass
+grep -q 'hook: "PostSync"' "$OUT" && pass || fail "OAuthClient removal hook off: the PostSync hook went too"
+if helm template rnu "$CHART" --namespace ns1 "${BASE[@]}" --set profile=full --set gitops.oauthClient.removeOnDelete=yes >/dev/null 2>&1; then
+	fail "gitops.oauthClient.removeOnDelete accepts a non-boolean"
+else
+	pass
+fi
 REMOVAL_SH="$WORK/oauthclient-removal.sh"
 helm template rnu "$CHART" --namespace ns1 "${BASE[@]}" --set profile=full --show-only templates/oauth-client-removal.yaml 2>&1 |
 	awk '/^            - \|$/ { f = 1; next } f && /^          [a-z]/ { exit } f' | sed -e 's/^              //' >"$REMOVAL_SH"
 bash -n "$REMOVAL_SH" && grep -q 'oc delete oauthaccesstokens' "$REMOVAL_SH" && pass || fail "OAuthClient removal: script not extracted"
 deletes() { grep '^oc delete' "$HOOKLOG" || true; }
+# Argo CD runs the hook on every deletion of the Application, also without
+# its resources (appcontroller.go finalizeApplicationDeletion). The Route
+# is read first: still there means a non-cascading deletion and a running
+# app, so nothing is deleted; a read that fails is not a NotFound.
+run_oauth "$REMOVAL_SH" FAKE_CLIENT=ours FAKE_ROUTE=present
+expect_eq "OAuthClient removal, Route still there: kept with its sign-ins" "0 " "$HOOK_RC $(deletes)"
+expect_eq "OAuthClient removal, Route still there: only the Route read" "oc get route app -n ns1 -o name" "$(cat "$HOOKLOG")"
+grep -qF 'Keeping OAuthClient app-ns1 and its sign-ins: Route app still exists in ns1' "$HOOKOUT" && pass || fail "OAuthClient removal, Route still there: $(cat "$HOOKOUT")"
+run_oauth "$REMOVAL_SH" FAKE_CLIENT=ours FAKE_ROUTE=error
+[ "$HOOK_RC" -ne 0 ] && [ -z "$(deletes)" ] && pass || fail "OAuthClient removal, Route unreadable: $HOOK_RC $(deletes)"
+grep -qF 'Cannot read Route app in ns1' "$HOOKOUT" && pass || fail "OAuthClient removal, Route unreadable: $(cat "$HOOKOUT")"
+run_oauth "$REMOVAL_SH" FAKE_CLIENT=ours
+expect_eq "OAuthClient removal, Route gone: read first" "oc get route app -n ns1 -o name" "$(head -1 "$HOOKLOG")"
 run_oauth "$REMOVAL_SH" FAKE_CLIENT=ours
 expect_eq "OAuthClient removal, ours: deleted, then its sign-ins revoked" "0 $(printf '%s\n' 'oc delete oauthclient app-ns1 --ignore-not-found' \
 	'oc delete oauthaccesstokens --field-selector clientName=app-ns1')" "$HOOK_RC $(deletes)"
