@@ -122,8 +122,9 @@ only accepts a tag whose version is the top dated section. See
   workbench and AI hub namespaces; a hard reset (typed DSC name) deletes the
   DSC and creates the release default with the same name and namespaces,
   after validating the new spec against the live DSC in a dry run; it
-  deletes in the foreground, waits up to 10 minutes for the operator's
-  cleanup, never removes a finalizer and creates nothing when the old DSC
+  deletes it in the background, as the operator's own tests do, and waits
+  up to 10 minutes until it and the module CRs and operators it owned are
+  gone and the Platform reports its modules settled, never removes a finalizer and creates nothing when the old DSC
   is not gone; whatever stops it after the delete, **Finish the hard
   reset** creates exactly the object it planned. A change runs the checks
   its confirmation showed (the toggle is bound to the reviewed plan);

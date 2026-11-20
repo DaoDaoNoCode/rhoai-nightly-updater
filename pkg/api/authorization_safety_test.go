@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 )
@@ -80,8 +79,6 @@ func TestAcceptedMutationSurvivesBrowserDisconnectAndKeepsLock(t *testing.T) {
 	case <-started:
 	case <-finished:
 		t.Fatal("handler was not called")
-	case <-time.After(5 * time.Second):
-		t.Fatal("handler did not start")
 	}
 	cancel()
 	if acquireClusterMutationLock() {

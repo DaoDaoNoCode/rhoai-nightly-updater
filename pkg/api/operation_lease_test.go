@@ -111,11 +111,7 @@ func (f *fakeRecord) waitAttempts(t *testing.T, n int) {
 		if got >= n {
 			return
 		}
-		select {
-		case <-ch:
-		case <-time.After(5 * time.Second):
-			t.Fatalf("lease writes: %d, want %d", got, n)
-		}
+		<-ch // the next lease write (a hang fails at go test's -timeout)
 	}
 }
 

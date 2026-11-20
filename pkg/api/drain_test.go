@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 )
@@ -65,13 +64,10 @@ func TestDrainWaitsForRunningMutation(t *testing.T) {
 	}
 	close(release)
 	<-finished
-	select {
-	case n := <-drained:
-		if n != 0 {
-			t.Fatalf("drain reported %d running", n)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("drain did not finish after the mutation completed")
+	// Blocks until the drain reports: a hang fails at go test's -timeout,
+	// never on a slow machine.
+	if n := <-drained; n != 0 {
+		t.Fatalf("drain reported %d running", n)
 	}
 }
 

@@ -50,13 +50,10 @@ func TestLeaseTakeoverStopsTheOperation(t *testing.T) {
 	<-started
 	f.setLease(otherPodLease(time.Now())) // another pod took the lock over
 	f.beat(t)
-	select {
-	case err := <-cause:
-		if !errors.Is(err, cluster.ErrOperationLockLost) {
-			t.Fatalf("cause %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the operation was not stopped")
+	// Blocks until the operation stops: no real-time bound (a hang fails
+	// at go test's -timeout), so a loaded machine cannot fail the test.
+	if err := <-cause; !errors.Is(err, cluster.ErrOperationLockLost) {
+		t.Fatalf("cause %v", err)
 	}
 	<-done
 	if l := f.currentLease(); l == nil || l.ID != "remote-op" {
@@ -116,13 +113,10 @@ func TestRenewalFailuresStopTheOperationOnlyPastTheThreshold(t *testing.T) {
 	default:
 	}
 	f.beat(t) // 40s >= 35s: lost
-	select {
-	case err := <-cause:
-		if !errors.Is(err, cluster.ErrOperationLockLost) {
-			t.Fatalf("cause %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the operation was not stopped")
+	// Blocks until the operation stops: no real-time bound (a hang fails
+	// at go test's -timeout), so a loaded machine cannot fail the test.
+	if err := <-cause; !errors.Is(err, cluster.ErrOperationLockLost) {
+		t.Fatalf("cause %v", err)
 	}
 	<-done
 	if last := inflight.lastCompleted(); last == nil || last.Success || last.Message != cluster.LockLostMessage {

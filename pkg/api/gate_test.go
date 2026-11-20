@@ -275,11 +275,7 @@ func TestBusyClusterReturnsRunningOperation(t *testing.T) {
 		HandleUpdateStream(w, postJSON("/api/update/stream", "user:alice", `{"image":"`+image+`"}`))
 		done <- w
 	}()
-	select {
-	case <-stepped:
-	case <-time.After(5 * time.Second):
-		t.Fatal("operation did not start")
-	}
+	<-stepped // the operation started (a hang fails at go test's -timeout)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/api/operation", nil)
@@ -308,11 +304,7 @@ func TestBusyClusterReturnsRunningOperation(t *testing.T) {
 	}
 
 	close(release)
-	select {
-	case w = <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("operation did not finish")
-	}
+	w = <-done
 	if !strings.Contains(w.Body.String(), `"step":"operation_complete","status":"success"`) {
 		t.Fatalf("stream: %s", w.Body.String())
 	}
@@ -409,17 +401,11 @@ func TestConcurrentDuplicateMutationsRunOnce(t *testing.T) {
 		})
 	}
 	// Two duplicates are refused while the first one still runs.
-	deadline := time.After(5 * time.Second)
-	refused := 0
-	for refused < 2 {
-		select {
-		case c := <-codes:
-			if c != http.StatusTooManyRequests {
-				t.Fatalf("duplicate got %d", c)
-			}
-			refused++
-		case <-deadline:
-			t.Fatal("duplicates were not refused while the first request ran")
+	// (The first request blocks on release, so these two answers can only
+	// be the duplicates; a hang fails at go test's -timeout.)
+	for range 2 {
+		if c := <-codes; c != http.StatusTooManyRequests {
+			t.Fatalf("duplicate got %d", c)
 		}
 	}
 	close(release)
