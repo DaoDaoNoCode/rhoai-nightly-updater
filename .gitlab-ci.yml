@@ -72,10 +72,14 @@ variables:
   BUILDAH_IMAGE: quay.io/buildah/stable:v1.46.1@sha256:12132e724a8a5c7e6970c3fced03f3db6c8077d9afa08803df274df4cf3de846
   # The scheduled renovate job (renovate.json5).
   RENOVATE_IMAGE: ghcr.io/renovatebot/renovate:44.254.1@sha256:42f31a79fd1dc7ce0a3e4da42a7e57a80443fd9a3401c5b2631d76bc8b4a40dd
-  # crane (go-containerregistry) moves and reads tags in release jobs; it is
-  # installed with `go install`, which checks the module against the
-  # checksum database, from a Go cache of its own (.crane).
+  # crane (go-containerregistry) moves and reads tags in the publish jobs:
+  # the release tarball of this version for linux/amd64, checked against its
+  # SHA-256 before use (the release's checksums.txt, which GitHub's asset
+  # digest and the release's SLSA provenance, multiple.intoto.jsonl, also
+  # name). Change both together. The runner is amd64: the chart's helm
+  # linux-amd64 binary runs there.
   CRANE_VERSION: v0.22.1
+  CRANE_SHA256: 0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0
   # Helm renders the chart in the script-tests job: the release tarball of this
   # version, checked against its SHA-256 (get.helm.sh, also in the release
   # notes) before use. Keep in step with .github/workflows/ci.yml.
@@ -85,9 +89,14 @@ variables:
 # Pipeline schedules run the renovate job only (end of this file): the test
 # jobs skip them, and so do the image jobs (a second build of a commit
 # would make publish-main refuse its commit tag).
+# Job timeouts, from the successful jobs of 2026-10-30..11-20 (VM start
+# included): test jobs p90 at most 7.5 min (go 435 s, max 527 s), so 20 min;
+# go test's own 10-minute limit then still ends a hung test with its stack
+# first. Without them a job runs to the project's 60 minutes.
 .test:
   stage: test
   interruptible: true
+  timeout: 20m
   needs: []
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
@@ -135,13 +144,9 @@ go:
   extends: [.test, .go-cache]
   image: $GO_IMAGE
   script:
-    # gofmt -l . without the caches in .cache/ (gofmt walks dot directories).
-    - unformatted=$(find . -path ./.cache -prune -o -type f -name '*.go' ! -name '.*' -exec gofmt -l {} +)
-    - test -z "$unformatted" || { echo "$unformatted"; echo "Run gofmt -w ."; exit 1; }
-    - go mod verify
-    - go vet ./...
-    - sh scripts/test-go.sh
-    - go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+    # gofmt (without the caches in .cache/), go mod verify, go vet, the race
+    # tests (scripts/test-go.sh), govulncheck; `make ci-go` locally.
+    - make ci-go
 
 golangci-lint:
   extends: [.test, .go-cache]
@@ -245,7 +250,7 @@ release-guard:
     GIT_DEPTH: "0"
     GIT_FETCH_EXTRA_FLAGS: --prune --quiet --tags
   script:
-    - sh scripts/release.sh check "$CI_COMMIT_TAG" HEAD
+    - make release-check TAG="$CI_COMMIT_TAG"
   rules:
     - if: $CI_COMMIT_TAG
 
@@ -298,9 +303,11 @@ release-guard:
 # Podman --privileged, 2026-11-19). So the build's isolation is not what
 # keeps the push token from it: the environment scope of QUAY_* is (they
 # reach only the quay-publish jobs, .crane below; SECURITY.md).
+# p90 575 s (build-main) and 566 s (release-build), max 691 s.
 .image-build:
   stage: build
   image: $BUILDAH_IMAGE
+  timeout: 30m
 
 # Push to main → an image tarball; publish-main pushes it as the write-once
 # 8-character commit tag (CI_COMMIT_SHORT_SHA) and moves :main. Never
@@ -372,21 +379,22 @@ release-installer:
   rules:
     - if: $CI_COMMIT_TAG
 
+# The crane jobs use no cache and build nothing: a Go cache for `go install`
+# of crane could be written by a pipeline of any branch started by a
+# Maintainer (the same key and protected suffix), and it ran right before
+# `crane auth login` with the push token.
 .crane:
-  extends: .go-cache
   image: $GO_IMAGE
-  # One cache for the three crane jobs, per crane version: go install then
-  # reuses the downloaded module and the compiled packages instead of
-  # fetching and building crane in every job. Only main and release tags
-  # run these jobs, and protected refs have caches of their own.
-  cache:
-    key: crane-$CRANE_VERSION
-    paths: [.cache/go-mod/, .cache/go-build/]
+  timeout: 10m
   # Every job that writes image tags (publish-main, release-publish,
   # promote-latest) holds this one lock, so their "does the tag exist"
   # checks and writes never interleave
-  # (https://docs.gitlab.com/ci/resource_groups/). The group keeps its
-  # earlier name and process mode; set newest_first with the API (it cannot
+  # (https://docs.gitlab.com/ci/resource_groups/). Its process mode is
+  # GitLab's default, unordered (resource groups API, 2026-11-20): waiting
+  # jobs run in no set order. The jobs do not rely on an order: :main moves
+  # only while the job's commit is the tip of main, a release moves :vN and
+  # :latest only to a newer version, and commit and release tags are written
+  # once. A Maintainer can still choose newest_first with the API (it cannot
   # be set in this file):
   #   PUT /projects/:id/resource_groups/publish-latest  process_mode=newest_first
   resource_group: publish-latest
@@ -402,7 +410,10 @@ release-installer:
     name: quay-publish
     action: access
   before_script:
-    - go install github.com/google/go-containerregistry/cmd/crane@$CRANE_VERSION
+    - curl -fsSLo /tmp/crane.tar.gz "https://github.com/google/go-containerregistry/releases/download/$CRANE_VERSION/go-containerregistry_Linux_x86_64.tar.gz"
+    - echo "$CRANE_SHA256  /tmp/crane.tar.gz" | sha256sum -c -
+    - tar -xzf /tmp/crane.tar.gz -C /usr/local/bin crane
+    - crane version
     - printf '%s' "$QUAY_TOKEN" | crane auth login "${IMAGE%%/*}" -u "$QUAY_USER" --password-stdin
 
 # Main: the write-once commit tag (kept when it exists from this commit,
@@ -442,6 +453,7 @@ release-publish:
 release-notes:
   stage: release
   image: $GO_IMAGE
+  timeout: 10m
   needs: [release-publish, release-installer]
   script:
     - INSTALLER=install.sh sh scripts/release.sh gitlab-release "$CI_COMMIT_TAG"

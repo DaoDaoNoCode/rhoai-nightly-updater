@@ -19,8 +19,12 @@ concurrency:
 jobs:
   go:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No token in .git/config for the steps after it.
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.4"
@@ -32,8 +36,12 @@ jobs:
 
   golangci-lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No token in .git/config for the steps after it.
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.4"
@@ -45,11 +53,15 @@ jobs:
   # The frontend checks run as three parallel jobs (the tests take longest).
   frontend-checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: frontend
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No token in .git/config for the steps after it.
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "26"
@@ -62,11 +74,15 @@ jobs:
 
   frontend-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: frontend
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No token in .git/config for the steps after it.
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "26"
@@ -77,11 +93,15 @@ jobs:
 
   frontend-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: frontend
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No token in .git/config for the steps after it.
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "26"
@@ -92,8 +112,12 @@ jobs:
 
   release-scripts:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No token in .git/config for the steps after it.
+          persist-credentials: false
       - run: sh scripts/test-release.sh
       - run: bash scripts/test-install.sh
       # The runner image has jq (the GitLab job installs it); without it the
@@ -107,11 +131,15 @@ jobs:
   # own shellcheck is older.
   docs:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       SHELLCHECK_VERSION: v0.11.0
       SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No token in .git/config for the steps after it.
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "26"
@@ -124,11 +152,11 @@ jobs:
           echo "$RUNNER_TEMP/shellcheck" >> "$GITHUB_PATH"
       - run: shellcheck --version
       - run: make docs-check
-      - run: shellcheck scripts/*.sh dev.sh docs/tools/*.sh
-      - run: shellcheck --shell=bash pkg/cluster/node_pull_secret.sh
+      - run: make shellcheck
 
   chart:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       # The release tarball of this version, checked against its SHA-256
       # (get.helm.sh) before use; the runner's own helm is not used. Keep in
@@ -137,6 +165,9 @@ jobs:
       HELM_SHA256: 896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No token in .git/config for the steps after it.
+          persist-credentials: false
       - name: Install helm
         run: |
           curl -fsSLo "$RUNNER_TEMP/helm.tar.gz" "https://get.helm.sh/helm-$HELM_VERSION-linux-amd64.tar.gz"
