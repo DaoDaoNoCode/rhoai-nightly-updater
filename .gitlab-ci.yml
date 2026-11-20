@@ -16,8 +16,12 @@
 # :latest never moves to a new major automatically: deployments that still
 # pull :latest stay on their major line until someone upgrades on purpose.
 # Release logic lives in scripts/release.sh (tested by scripts/test-release.sh).
-# Every image job needs the Go and frontend test jobs of its pipeline and
-# builds the Containerfile with RUN_CHECKS=false (see .image-build).
+# build-main and release-build start with the tests; the jobs that publish
+# (publish-main, release-publish, and through them promote-latest and
+# release-notes) need every test job of the pipeline (a tag's: and the
+# release guard) as well as the build: nothing is published unless all of
+# them passed. The image jobs build the Containerfile with RUN_CHECKS=false
+# (see .image-build).
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -229,7 +233,7 @@ script-tests:
     - helm version
     - make -k ci-script-tests
 
-# Fails a tag pipeline before anything is built or published: the tag must
+# Fails a tag pipeline before anything is published: the tag must
 # match the top dated section of CHANGELOG.md (a pre-release: the top
 # undated one), and a TEMPLATE_REVISION change since the previous release
 # tag (pre-releases do not count) needs a higher MAJOR version.
@@ -247,10 +251,19 @@ release-guard:
 
 # The image jobs build with RUN_CHECKS=false: the Containerfile then skips
 # its own copy of the checks (frontend typecheck, lint and tests; go vet and
-# go test) but still installs and builds everything. Each image job `needs`
-# the test jobs of this pipeline, which ran those checks (and more: -race,
-# govulncheck, golangci-lint) on this same commit; a failing check stops the
-# pipeline before any image is built. `make build` keeps them on.
+# go test) but still installs and builds everything. build-main and
+# release-build start at once, alongside the test jobs (needs: []), and
+# build only a tarball: the publish jobs `need` the test jobs of this
+# pipeline, which ran those checks (and more: -race, govulncheck,
+# golangci-lint) on this same commit, so a failing check stops the pipeline
+# before anything is pushed (GitLab docs, ci/yaml "needs": a job runs when
+# every job it needs has finished; an empty array starts it with the
+# pipeline). A red pipeline still has built the tarball (an artifact for a
+# day, never pushed). build-main is interruptible like the tests, so a
+# newer push to main still cancels the older pipeline until publish-main
+# starts (auto-cancel stops a pipeline only while every running job is
+# interruptible: ci/yaml "interruptible"). build-branch, which pushes in
+# its own job, still needs the tests. `make build` keeps the checks on.
 #
 # The build is scripts/ci-build-image.sh: buildah, chroot isolation, vfs
 # storage, linux/amd64, no layer cache (each job starts from an empty
@@ -294,7 +307,8 @@ release-guard:
 # :latest: that only moves with releases.
 build-main:
   extends: .image-build
-  needs: [go, golangci-lint, checks, frontend-test, frontend-build, script-tests]
+  needs: []
+  interruptible: true
   script:
     - sh scripts/ci-build-image.sh tarball "$CI_COMMIT_SHORT_SHA" image.tar
   artifacts:
@@ -325,7 +339,7 @@ build-branch:
 # the push cannot interleave with another release job.
 release-build:
   extends: .image-build
-  needs: [go, golangci-lint, checks, frontend-test, frontend-build, script-tests, release-guard]
+  needs: []
   script:
     - sh scripts/ci-build-image.sh tarball "$CI_COMMIT_TAG" image.tar
   artifacts:
@@ -399,7 +413,7 @@ release-installer:
 publish-main:
   extends: .crane
   stage: publish
-  needs: [build-main]
+  needs: [build-main, go, golangci-lint, checks, frontend-test, frontend-build, script-tests]
   script:
     - IMAGE_TARBALL=image.tar sh scripts/release.sh publish-main
   rules:
@@ -414,7 +428,7 @@ publish-main:
 release-publish:
   extends: .crane
   stage: publish
-  needs: [release-build]
+  needs: [release-build, go, golangci-lint, checks, frontend-test, frontend-build, script-tests, release-guard]
   script:
     - IMAGE_TARBALL=image.tar sh scripts/release.sh publish "$CI_COMMIT_TAG"
   rules:
