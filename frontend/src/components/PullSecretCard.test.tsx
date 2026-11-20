@@ -1,6 +1,6 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { PullSecretSetup } from "./PullSecretCard";
 import { ClusterSetupCard } from "./StatusCards";
 import { SetupModal } from "./PrerequisitesPanel";
@@ -47,11 +47,12 @@ describe("PullSecretSetup gating", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Create secret" })).toHaveAttribute("aria-disabled", "true"));
     fireEvent.mouseEnter(screen.getByRole("button", { name: "Create secret" }));
     expect(await screen.findByRole("tooltip")).toHaveTextContent(/still running/);
-    // End the stream and wait until the run's end reached the page (the
-    // detach and the reads it starts), not after the test.
-    sse.close();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Create secret" })).not.toHaveAttribute("aria-disabled", "true"));
+    // End the stream inside act, so the run's end and the reads it starts
+    // (status, operation, Dashboard Dev state) are applied in act, then
+    // wait for those reads before looking.
+    await act(async () => { sse.close(); });
     await settleApps();
+    expect(screen.getByRole("button", { name: "Create secret" })).not.toHaveAttribute("aria-disabled", "true");
   });
 
   it("is disabled for a read-only user", async () => {
