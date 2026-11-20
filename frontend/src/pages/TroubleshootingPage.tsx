@@ -44,6 +44,7 @@ import { gitOpsProfileReason } from "../profile";
 import { GitOpsProfileNotice } from "../components/GitOpsNotice";
 import { useClusterStatus } from "../state/AppState";
 import { gitOpsFixReason } from "../gitops";
+import { useLatestRequest } from "../hooks/useLatestRequest";
 
 type ScanState = "idle" | "loading" | "done" | "error";
 
@@ -214,21 +215,25 @@ export const TroubleshootingPage: React.FC = () => {
   const onResult = useClusterBusyHandler();
   const mountedRef = useRef(true);
 
+  // A scan started after a fix while another runs (Re-scan) supersedes it:
+  // only the newest scan's answer is shown.
+  const scanRequest = useLatestRequest();
   const runScan = useCallback(async () => {
+    const ticket = scanRequest.start();
     setScanState("loading");
     setError(null);
     try {
-      const result = await getDiagnostics();
-      if (!mountedRef.current) return;
+      const result = await getDiagnostics(ticket.signal);
+      if (!ticket.isLatest()) return;
       setData(result);
       setLastScanned(new Date());
       setScanState("done");
     } catch (err) {
-      if (!mountedRef.current) return;
+      if (!ticket.isLatest()) return;
       setError(toApiError(err, "Diagnostics scan failed"));
       setScanState("error");
     }
-  }, []);
+  }, [scanRequest]);
 
   useEffect(() => {
     // The page view is counted once, by the router in App.

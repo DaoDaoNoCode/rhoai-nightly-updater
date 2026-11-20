@@ -49,7 +49,7 @@ import {
   useSearchParams,
 } from "react-router-dom";
 import { trackPageView } from "./services/api";
-import { ErrorBoundary } from "./components/ErrorBoundary";
+import { ErrorBoundary, PageErrorBoundary } from "./components/ErrorBoundary";
 import { HelpButton } from "./components/HelpModal";
 import { AdminOnlyPageState, AdminRequiredState, PageLoading, PermissionsUnknownState, ProfileOffState, SessionExpiredState } from "./components/PageStates";
 import { StatusLabel } from "./components/StatusLabel";
@@ -57,7 +57,7 @@ import { ADMIN_ONLY_PAGES, NAV_ITEMS } from "./constants";
 import { LOGO_SRC } from "./logo";
 import { RoleAppStateProvider, useClusterStatus, useOperation } from "./state/AppState";
 import { AppInfoProvider, useGitOpsProfile, useVersion } from "./state/AppInfo";
-import { PermissionsProvider, usePermissions, useRole, useSessionExpired, useSignedInUser } from "./state/Permissions";
+import { PermissionsProvider, usePermissions, useRole, useSessionExpired, useSignedInUser, type ViewRole } from "./state/Permissions";
 import { GITOPS_PROFILE_PAGES } from "./profile";
 import { isReleaseVersion } from "./utils";
 import { LiveAnnouncerProvider } from "./state/LiveAnnouncer";
@@ -133,6 +133,34 @@ const PAGE_VIEW_NAMES: Record<string, string> = {
   "/diagnostics": "diagnostics",
 };
 
+/**
+ * The page for the address. Memoized on what decides which page shows (the
+ * role and the profile): a re-render of the shell (a poll answer, the
+ * status's refresh time) does not render the page again; the pages read the
+ * app state they show themselves, and Routes follows the address.
+ */
+const RoutedPage = React.memo<{ role: ViewRole; gitOpsProfile: boolean }>(({ role, gitOpsProfile }) => {
+  const offInProfile = (feature: string, element: React.ReactElement) => (gitOpsProfile ? <ProfileOffState feature={feature} /> : element);
+  /** The page for the role: a loading state until it is known, never a cluster-admin page first. */
+  const byRole = (admin: React.ReactElement, user: React.ReactElement) => (role === "admin" ? admin : role === "user" ? user : <PageLoading title="Loading page" />);
+  const adminOnly = (element: React.ReactElement) => byRole(element, <AdminOnlyPageState />);
+  return (
+    <Suspense fallback={<PageLoading title="Loading page" />}>
+      <Routes>
+        <Route path="/" element={byRole(<StatusPage />, <UserStatusPage />)} />
+        <Route path="/components" element={adminOnly(<ComponentsPage />)} />
+        <Route path="/builds" element={offInProfile("Build Explorer", <BuildExplorerPage />)} />
+        <Route path="/dashboard-dev" element={offInProfile("Dashboard Dev", adminOnly(<DashboardDevRoute />))} />
+        <Route path="/test-resources" element={offInProfile("The Environment page", byRole(<EnvironmentPage />, <UserEnvironmentPage />))} />
+        <Route path="/environment" element={<EnvironmentRoute />} />
+        <Route path="/diagnostics" element={adminOnly(<TroubleshootingPage />)} />
+        <Route path="*" element={<NotFoundPage />} />
+      </Routes>
+    </Suspense>
+  );
+});
+RoutedPage.displayName = "RoutedPage";
+
 const AppLayout: React.FC = () => {
   const { status, error: statusError } = useClusterStatus();
   const { state: operationState } = useOperation();
@@ -149,10 +177,6 @@ const AppLayout: React.FC = () => {
   const adminRequired = gitOpsProfile && role !== "admin" && permissionStatus === "denied";
   const permissionsUnknown = gitOpsProfile && role !== "admin" && permissionStatus === "unknown";
   const navItems = NAV_ITEMS.filter((item) => (!gitOpsProfile || GITOPS_PROFILE_PAGES.has(item.path)) && (role === "admin" || !ADMIN_ONLY_PAGES.has(item.path)));
-  const offInProfile = (feature: string, element: React.ReactElement) => (gitOpsProfile ? <ProfileOffState feature={feature} /> : element);
-  /** The page for the role: a loading state until it is known, never a cluster-admin page first. */
-  const byRole = (admin: React.ReactElement, user: React.ReactElement) => (role === "admin" ? admin : role === "user" ? user : <PageLoading title="Loading page" />);
-  const adminOnly = (element: React.ReactElement) => byRole(element, <AdminOnlyPageState />);
   // The user menu names the signed-in user: from the status for a cluster-admin (as before), else from the permission check.
   const userName = role === "admin" ? status?.cluster.user : signedInUser ?? undefined;
   const hasUserMenu = role === "admin" ? !!status : !!signedInUser;
@@ -374,18 +398,12 @@ const AppLayout: React.FC = () => {
       ) : permissionsUnknown ? (
         <PermissionsUnknownState onRetry={retryPermissions} />
       ) : (
-        <Suspense fallback={<PageLoading title="Loading page" />}>
-          <Routes>
-            <Route path="/" element={byRole(<StatusPage />, <UserStatusPage />)} />
-            <Route path="/components" element={adminOnly(<ComponentsPage />)} />
-            <Route path="/builds" element={offInProfile("Build Explorer", <BuildExplorerPage />)} />
-            <Route path="/dashboard-dev" element={offInProfile("Dashboard Dev", adminOnly(<DashboardDevRoute />))} />
-            <Route path="/test-resources" element={offInProfile("The Environment page", byRole(<EnvironmentPage />, <UserEnvironmentPage />))} />
-            <Route path="/environment" element={<EnvironmentRoute />} />
-            <Route path="/diagnostics" element={adminOnly(<TroubleshootingPage />)} />
-            <Route path="*" element={<NotFoundPage />} />
-          </Routes>
-        </Suspense>
+        // Leaving a page that could not load clears its message (resetKey,
+        // not a key: a remount would show the fallback instead of keeping the
+        // current page while the next one's chunk loads).
+        <PageErrorBoundary resetKey={location.pathname}>
+          <RoutedPage role={role} gitOpsProfile={gitOpsProfile} />
+        </PageErrorBoundary>
       )}
     </Page>
   );

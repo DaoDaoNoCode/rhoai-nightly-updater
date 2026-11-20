@@ -61,7 +61,7 @@ import {
   type OperatorOperationOptions,
 } from "../services/api";
 import { describeError, describeQuayError, describeQuayText } from "../errors";
-import { useOperation } from "../state/AppState";
+import { useClusterStatus, useOperation } from "../state/AppState";
 import { useDashboardOverride, useGitOpsProfile, useMutationBlocker, useVersion } from "../state/AppInfo";
 import { GITOPS_PROFILE_UNMANAGED_CATALOG, gitOpsPolicyProblem } from "../profile";
 import { GITOPS_UPDATE_STEPS, STEP_SETS } from "../operationSteps";
@@ -383,10 +383,13 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
     ?? gitOpsInstallWaitReason(gitOpsState)
     ?? (olderLine ? `This build (${ref?.tag}) is from an older release line than the installed ${status?.csv.version}. Update can't go back; use Install a different build under Recovery.` : null);
 
-  // Warn when someone else changed the operator in the last 10 minutes.
+  // Warn when someone else changed the operator in the last 10 minutes,
+  // counted to the latest status answer: the text moves on with every poll,
+  // also one that read the same status (which keeps its object).
+  const { lastRefreshed } = useClusterStatus();
   const recentUpdateByOther = useMemo(() => {
     if (!status?.activity?.length) return null;
-    const now = Date.now();
+    const now = lastRefreshed?.getTime() ?? Date.now();
     for (let i = status.activity.length - 1; i >= 0; i--) {
       const entry = status.activity[i];
       if ((entry.category ?? (entry.action === "update" ? "operator" : "")) !== "operator") continue;
@@ -398,7 +401,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
       }
     }
     return null;
-  }, [status?.activity, status?.cluster.user]);
+  }, [status?.activity, status?.cluster.user, lastRefreshed]);
 
   const handleFetchLatest = useCallback(async () => {
     fetchLatestAbortRef.current?.abort();

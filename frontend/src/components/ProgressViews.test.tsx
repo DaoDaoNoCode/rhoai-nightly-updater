@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { GlobalBanners } from "./GlobalBanners";
 import { QuickResourceCreator } from "./QuickResourceCreator";
-import { renderWithApp } from "../test/providers";
+import { renderWithApp, settleApps } from "../test/providers";
 import { jsonResponse, stubApi } from "../test/apiStub";
 import type { OperationStatusResponse, ResourceState, ServerOperation } from "../types";
 
@@ -53,6 +53,7 @@ describe("View progress: a run of this page whose dialog was closed", () => {
     await act(async () => finish(jsonResponse({ success: true, message: "MLflow removed.", logs: [] })));
     expect(await within(third).findByText("MLflow removed.")).toBeInTheDocument();
     expect(screen.queryByText(/Delete MLflow is running/)).toBeNull();
+    await settleApps();
   });
 
   it("a run of several steps names the step it is on", async () => {
@@ -72,6 +73,7 @@ describe("View progress: a run of this page whose dialog was closed", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.getByText(/^Set up Pipelines in dev is running: step 2 of 3, Set up the S3 storage \(\d+s\)$/)).toBeInTheDocument();
     await act(async () => finish(jsonResponse({ success: false, message: "Refused.", errorCode: "validation", logs: [] })));
+    await settleApps();
   });
 });
 
@@ -104,6 +106,7 @@ describe("View progress: an operation started elsewhere", () => {
     expect(dialog).toHaveTextContent("StateFinished");
     fireEvent.click(footerClose(dialog));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await settleApps();
   });
 
   it("a streamed operator operation keeps its link to the Status page, where its steps are", async () => {
@@ -113,5 +116,6 @@ describe("View progress: an operation started elsewhere", () => {
     expect(within(alert).getAllByRole("button", { name: "View progress" })).toHaveLength(1);
     fireEvent.click(within(alert).getByRole("button", { name: "View progress" }));
     expect(screen.queryByRole("dialog")).toBeNull();
+    await settleApps();
   });
 });

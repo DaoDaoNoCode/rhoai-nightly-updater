@@ -5,7 +5,7 @@ import { busyOperationFrom, isOwnFinishedRun, matchesRun, snapshotFromServer, us
 import { useMutationBlocker } from "./AppInfo";
 import { ApiError, streamUpdate } from "../services/api";
 import type { OperationStatusResponse, ServerOperation } from "../types";
-import { IDLE_OPERATION, nightlyStatus, renderWithApp } from "../test/providers";
+import { IDLE_OPERATION, nightlyStatus, renderWithApp, settleApps } from "../test/providers";
 import { deferred, jsonResponse, sseEvent, sseResponse } from "../test/utils";
 import type { OperationRun } from "./operation";
 
@@ -96,6 +96,7 @@ describe("an operation another updater pod runs (remote)", () => {
     answer = { inProgress: false, operation: null, lastCompleted: { id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: aliceUpdate.startedAt, finishedAt: "2026-10-05T10:09:00Z", success: true, message: "Update complete" } };
     fireEvent.click(screen.getByText("poll"));
     await waitFor(() => expect(probe()).toMatchObject({ outcome: "succeeded", serverInProgress: false }));
+    await settleApps();
   });
 });
 
@@ -138,6 +139,7 @@ describe("GET /api/operation drives the operation store", () => {
     answer = IDLE_OPERATION;
     fireEvent.click(screen.getByText("poll"));
     await waitFor(() => expect(probe()).toMatchObject({ running: false, outcome: "detached", reason: "server_lost", serverInProgress: false }));
+    await settleApps();
   });
 
   it("reports an operation the previous pod never finished", async () => {
@@ -146,6 +148,7 @@ describe("GET /api/operation drives the operation store", () => {
     });
     await waitFor(() => expect(probe().interrupted).toBe("Reinstall operator"));
     expect(probe().running).toBe(false);
+    await settleApps();
   });
 
   it("does not create a run for operations without steps, but still blocks changes", async () => {
@@ -155,6 +158,7 @@ describe("GET /api/operation drives the operation store", () => {
     await waitFor(() => expect(probe().serverInProgress).toBe(true));
     expect(probe().running).toBe(false);
     expect(probe().blocker).toMatch(/alice is running "Deploy dashboard PR"/);
+    await settleApps();
   });
 
   it("takes the running operation from a 409 cluster_busy body at once (no wait for the next poll)", async () => {
@@ -163,11 +167,13 @@ describe("GET /api/operation drives the operation store", () => {
     await waitFor(() => expect(probe().serverInProgress).toBe(false));
     fireEvent.click(screen.getByText("start"));
     await waitFor(() => expect(probe()).toMatchObject({ serverInProgress: true, serverUser: "alice", source: "server", running: true }));
+    await settleApps();
   });
 
   it("fails closed while permissions are unknown", async () => {
     renderWithApp(<Probe />, { permissions: async () => { throw new ApiError({ status: 503, errorCode: "authorization_unavailable", message: "Cannot verify mutation permissions" }); } });
     await waitFor(() => expect(probe().blocker).toMatch(/permissions could not be checked/));
+    await settleApps();
   });
 });
 
@@ -197,6 +203,7 @@ describe("a detached stream is followed on the server", () => {
     answer = { inProgress: false, operation: null, lastCompleted: { id: "mine", type: "update", label: "Update to nightly", user: "me", startedAt: mine.startedAt, finishedAt: new Date().toISOString(), success: true, message: "Update complete" } };
     fireEvent.click(screen.getByText("poll"));
     await waitFor(() => expect(probe()).toMatchObject({ outcome: "succeeded", phase: "complete", result: "succeeded", serverInProgress: false }));
+    await settleApps();
   });
 
   it("does not hide a teammate's operation that starts right after this tab's run (other id)", async () => {
@@ -225,33 +232,40 @@ describe("a detached stream is followed on the server", () => {
     fireEvent.click(screen.getByText("poll"));
     await waitFor(() => expect(probe()).toMatchObject({ serverInProgress: true, serverUser: "alice", source: "server" }));
     expect(probe().blocker).toMatch(/alice is running/);
+    await settleApps();
   });
 });
 
 describe("the outcome of an operation followed from the server", () => {
   const followAlice = async (last: OperationStatusResponse["lastCompleted"]) => {
     let answer: OperationStatusResponse = { inProgress: true, operation: aliceUpdate };
-    renderWithApp(<><Probe /><RefreshButton /></>, { operation: async () => answer });
+    const { settled } = renderWithApp(<><Probe /><RefreshButton /></>, { operation: async () => answer });
     await waitFor(() => expect(probe()).toMatchObject({ running: true, source: "server" }));
     answer = { inProgress: false, operation: null, lastCompleted: last };
-    fireEvent.click(screen.getByText("poll"));
+    // The poll answers at once: apply it inside act, before the caller waits.
+    await act(async () => { fireEvent.click(screen.getByText("poll")); });
+    return settled;
   };
 
   it("shows a failed update as failed, with the server's message", async () => {
-    await followAlice({ id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: aliceUpdate.startedAt, finishedAt: "2026-10-05T10:09:00Z", success: false, message: "The new CSV failed; the previous operator was restored." });
+    const settled = await followAlice({ id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: aliceUpdate.startedAt, finishedAt: "2026-10-05T10:09:00Z", success: false, message: "The new CSV failed; the previous operator was restored." });
     await waitFor(() => expect(probe()).toMatchObject({ outcome: "failed", phase: "idle", message: "The new CSV failed; the previous operator was restored." }));
+    // The ended run reads the status once more (AppState's run effect).
+    await settled();
   });
 
   it("shows a successful update as succeeded", async () => {
-    await followAlice({ id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: aliceUpdate.startedAt, success: true, message: "done" });
+    const settled = await followAlice({ id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: aliceUpdate.startedAt, success: true, message: "done" });
     await waitFor(() => expect(probe()).toMatchObject({ outcome: "succeeded", result: "succeeded" }));
+    await settled();
   });
 
   it("claims nothing when the backend sends no result, or the result of another operation", async () => {
-    await followAlice({ id: "someone-else", type: "update", label: "Update", user: "bob", startedAt: aliceUpdate.startedAt, success: true });
+    const settled = await followAlice({ id: "someone-else", type: "update", label: "Update", user: "bob", startedAt: aliceUpdate.startedAt, success: true });
     await waitFor(() => expect(probe()).toMatchObject({ outcome: "detached", reason: "server_lost" }));
     await waitFor(() => expect(probe().phase).toBe("complete"));
     expect(probe().result).toBe("unknown");
+    await settled();
   });
 });
 
@@ -266,6 +280,7 @@ describe("GET /api/operation answers are applied in order", () => {
     await waitFor(() => expect(probe().serverInProgress).toBe(true));
     await act(async () => { first.resolve(IDLE_OPERATION); await first.promise; });
     expect(probe()).toMatchObject({ serverInProgress: true, serverUser: "alice", running: true });
+    await settleApps();
   });
 });
 
@@ -278,6 +293,7 @@ describe("a reinstall whose target arrives after the first poll", () => {
     fireEvent.click(screen.getByText("poll"));
     await waitFor(() => expect(probe().kind).toBe("reinstall_stable"));
     expect(probe().steps).toContain("create_subscription:running");
+    await settleApps();
   });
 });
 

@@ -9,7 +9,7 @@ import { STEP_SETS } from "./operationSteps";
 import { StatusPage } from "./pages/StatusPage";
 import { ComponentsPage, IMAGE_LABELS_OFF } from "./pages/ComponentsPage";
 import { HelpButton } from "./components/HelpModal";
-import { nightlyStatus, renderPage, renderWithApp } from "./test/providers";
+import { nightlyStatus, renderPage, renderWithApp, settleApps } from "./test/providers";
 import { stubApi } from "./test/apiStub";
 
 const GIT_IMAGE = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + "1".repeat(64);
@@ -125,6 +125,7 @@ describe("ComponentsPage under Argo CD", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Preview and create DataScienceCluster" })).toHaveAttribute("aria-disabled", "true"));
     fireEvent.mouseEnter(screen.getByRole("button", { name: "Preview and create DataScienceCluster" }));
     expect(await screen.findByText(/creates the DataScienceCluster from Git on its next sync/)).toBeInTheDocument();
+    await settleApps();
   });
 });
 
@@ -136,6 +137,7 @@ describe("StatusPage under Argo CD", () => {
     const recovery = screen.getByRole("list", { name: "Recovery actions" });
     await waitFor(() => expect(within(recovery).getByRole("button", { name: "Re-deploy operator..." })).toHaveAttribute("aria-disabled", "true"));
     expect(within(recovery).getByRole("button", { name: "Choose a build..." })).toHaveAttribute("aria-disabled", "true");
+    await settleApps();
   });
 
   it("does not offer to create the DataScienceCluster, which Git creates", async () => {
@@ -143,6 +145,7 @@ describe("StatusPage under Argo CD", () => {
     renderPage(<StatusPage />, "/", { status: async () => nightlyStatus({ ...synced, dscExists: false }) });
     expect(await screen.findByText("No DataScienceCluster yet")).toBeInTheDocument();
     expect(screen.queryByText("Create the DataScienceCluster")).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("shows no notice without Argo CD", async () => {
@@ -151,20 +154,21 @@ describe("StatusPage under Argo CD", () => {
     const recovery = await screen.findByRole("list", { name: "Recovery actions" });
     await waitFor(() => expect(within(recovery).getByRole("button", { name: "Choose a build..." })).not.toHaveAttribute("aria-disabled"));
     expect(screen.queryByText(/Argo CD manages/)).not.toBeInTheDocument();
+    await settleApps();
   });
 });
 
-function renderCard(status: typeof managed) {
+async function renderCard(status: typeof managed) {
   const onUpdate = vi.fn();
-  renderWithApp(
+  await renderWithApp(
     <InstalledBuildCard status={status} latest={null} latestLoading={false} blocker={null} prerequisitesMet onUpdate={onUpdate} onChooseBuild={vi.fn()} onPreview={vi.fn()} onRedeploy={vi.fn()} />,
-  );
+  ).settled();
   return { onUpdate };
 }
 
 describe("InstalledBuildCard under Argo CD", () => {
-  it("offers to install the build the catalog serves when the operator does not run it yet", () => {
-    const { onUpdate } = renderCard(managed);
+  it("offers to install the build the catalog serves when the operator does not run it yet", async () => {
+    const { onUpdate } = await renderCard(managed);
     expect(screen.getByText("Install pending")).toBeInTheDocument();
     const installed = screen.getByText("Installed").closest(".pf-v6-c-description-list__group") as HTMLElement;
     expect(within(installed).getByText("rhods-operator.3.6.0-ea.1")).toBeInTheDocument();
@@ -178,19 +182,19 @@ describe("InstalledBuildCard under Argo CD", () => {
     expect(screen.queryByText("Update available")).not.toBeInTheDocument();
   });
 
-  it("waits while the catalog pod is replaced or OLM runs the first install", () => {
-    renderCard(nightlyStatus({ ...synced, catalogServes: { ...synced.catalogServes!, installed: undefined, updating: true } }));
+  it("waits while the catalog pod is replaced or OLM runs the first install", async () => {
+    await renderCard(nightlyStatus({ ...synced, catalogServes: { ...synced.catalogServes!, installed: undefined, updating: true } }));
     expect(screen.getByText("Catalog updating")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Install the build the catalog serves" })).toHaveAttribute("aria-disabled", "true");
     cleanup();
-    renderCard(nightlyStatus({ ...synced, csv: { name: "", version: "", phase: "Not Found" }, installPlan: { name: "install-1", phase: "Installing", approved: true } }));
+    await renderCard(nightlyStatus({ ...synced, csv: { name: "", version: "", phase: "Not Found" }, installPlan: { name: "install-1", phase: "Installing", approved: true } }));
     expect(screen.getByText("OLM installing")).toBeInTheDocument();
     expect(screen.getAllByText(/OLM is installing the build Git set/).length).toBeGreaterThanOrEqual(2); // the Installed row and the alert
     expect(screen.getByRole("button", { name: "Install the build the catalog serves" })).toHaveAttribute("aria-disabled", "true");
   });
 
-  it("says the operator matches Git, and that a newer nightly is a change to make in Git", () => {
-    renderCard(synced);
+  it("says the operator matches Git, and that a newer nightly is a change to make in Git", async () => {
+    await renderCard(synced);
     expect(screen.getByText("Matches Git")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Install from the catalog again" })).toBeInTheDocument();
     expect(screen.getByText(/A newer rhoai-3.6 nightly exists; Git does not use it yet/)).toBeInTheDocument();
@@ -213,23 +217,24 @@ describe("UpdatePanel under Argo CD", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Install the build the catalog serves" })).not.toHaveAttribute("aria-disabled"));
     fireEvent.click(screen.getByRole("button", { name: "Install the build the catalog serves" }));
     expect(onRequestUpdate).toHaveBeenCalledWith(expect.objectContaining({ image: GIT_IMAGE }));
+    await settleApps();
   });
 
-  it("does not call the catalog's build installed while the catalog pod is replaced", () => {
+  it("does not call the catalog's build installed while the catalog pod is replaced", async () => {
     const updating = nightlyStatus({ ...synced, catalogServes: { ...synced.catalogServes!, updating: true } });
-    renderWithApp(<UpdateConfirmModal target={updating.nightly!.installed!} status={updating} onConfirm={vi.fn()} onClose={vi.fn()} />);
+    await renderWithApp(<UpdateConfirmModal target={updating.nightly!.installed!} status={updating} onConfirm={vi.fn()} onClose={vi.fn()} />).settled();
     expect(screen.queryByText(/already installed/)).not.toBeInTheDocument();
     cleanup();
     const unknown = nightlyStatus({ ...managed, catalogServes: undefined });
-    renderWithApp(<UpdateConfirmModal target={unknown.nightly!.installed!} status={unknown} onConfirm={vi.fn()} onClose={vi.fn()} />);
+    await renderWithApp(<UpdateConfirmModal target={unknown.nightly!.installed!} status={unknown} onConfirm={vi.fn()} onClose={vi.fn()} />).settled();
     expect(screen.queryByText(/already installed/)).not.toBeInTheDocument();
     cleanup();
-    renderWithApp(<UpdateConfirmModal target={synced.nightly!.installed!} status={synced} onConfirm={vi.fn()} onClose={vi.fn()} />);
+    await renderWithApp(<UpdateConfirmModal target={synced.nightly!.installed!} status={synced} onConfirm={vi.fn()} onClose={vi.fn()} />).settled();
     expect(screen.getByText(/already installed/)).toBeInTheDocument();
   });
 
-  it("explains the GitOps install in the confirmation", () => {
-    renderWithApp(<UpdateConfirmModal target={managed.nightly!.installed!} status={managed} onConfirm={vi.fn()} onClose={vi.fn()} />);
+  it("explains the GitOps install in the confirmation", async () => {
+    await renderWithApp(<UpdateConfirmModal target={managed.nightly!.installed!} status={managed} onConfirm={vi.fn()} onClose={vi.fn()} />).settled();
     expect(screen.getByText("Install the build the catalog serves?")).toBeInTheDocument();
     const installed = screen.getByText("Installed").closest(".pf-v6-c-description-list__group") as HTMLElement;
     expect(within(installed).getByText(/rhods-operator.3.6.0-ea.1/)).toBeInTheDocument();
@@ -276,11 +281,11 @@ describe("A catalog an ACM policy manages", () => {
     expect(screen.queryByText(/Argo CD/)).not.toBeInTheDocument();
   });
 
-  it("shows the policy as the source of the catalog image", () => {
-    renderCard(acmWithArgoSub);
+  it("shows the policy as the source of the catalog image", async () => {
+    await renderCard(acmWithArgoSub);
     expect(screen.getByText(/Catalog image set by an ACM policy \(config-policy-controller\); serves rhods-operator.3.6.0-ea.1/)).toBeInTheDocument();
     cleanup();
-    renderCard(nightlyStatus({ ...acmOnly, catalogServes: { ...acmOnly.catalogServes!, installed: true } }));
+    await renderCard(nightlyStatus({ ...acmOnly, catalogServes: { ...acmOnly.catalogServes!, installed: true } }));
     expect(screen.getByText(/An ACM policy \(config-policy-controller\) sets the catalog image\. To move to this build, change the image in the policy/)).toBeInTheDocument();
   });
 
@@ -290,6 +295,7 @@ describe("A catalog an ACM policy manages", () => {
     expect(screen.getByText("From the ACM policy")).toBeInTheDocument();
     expect(screen.getByText(/An ACM policy \(config-policy-controller\) sets this image/)).toBeInTheDocument();
     expect(screen.queryByText("Update is off for this catalog")).not.toBeInTheDocument();
+    await settleApps();
   });
 });
 
@@ -299,24 +305,24 @@ describe("A catalog an ACM policy manages", () => {
 describe("The gitops profile reads no registry", () => {
   const gitOpsStatus = nightlyStatus({ ...synced, nightly: { installed: synced.nightly!.installed }, pullSecret: { exists: false, valid: false } });
 
-  function renderGitOpsCard(status: typeof managed) {
-    renderWithApp(
+  async function renderGitOpsCard(status: typeof managed) {
+    await renderWithApp(
       <InstalledBuildCard status={status} latest={null} latestLoading={false} blocker={null} prerequisitesMet onUpdate={vi.fn()} onChooseBuild={vi.fn()} onRedeploy={vi.fn()} />,
       { version: gitOpsVersion },
-    );
+    ).settled();
   }
 
   it("says that Git or the ACM policy picks the build, without a Quay lookup or error", async () => {
-    renderGitOpsCard(nightlyStatus({ ...gitOpsStatus, nightly: { ...gitOpsStatus.nightly, error: "Could not read the latest rhoai-3.6 build from Quay: manifest HEAD returned 401" } }));
+    await renderGitOpsCard(nightlyStatus({ ...gitOpsStatus, nightly: { ...gitOpsStatus.nightly, error: "Could not read the latest rhoai-3.6 build from Quay: manifest HEAD returned 401" } }));
     expect(await screen.findByText(/^Git picks the build\. A newer nightly arrives as a change in Git \(for example a Renovate or Dependabot pull request\)/)).toBeInTheDocument();
     expect(screen.queryByText(/401/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Could not read the latest/)).not.toBeInTheDocument();
     cleanup();
-    renderGitOpsCard(nightlyStatus({ ...gitOpsStatus, catalogSource: acmCatalog }));
+    await renderGitOpsCard(nightlyStatus({ ...gitOpsStatus, catalogSource: acmCatalog }));
     expect(await screen.findByText(/^The ACM policy picks the build\. A newer nightly arrives as a change to the policy in Git/)).toBeInTheDocument();
     cleanup();
     // The full profile keeps its Quay lookup.
-    renderCard(nightlyStatus({ ...gitOpsStatus, nightly: { ...gitOpsStatus.nightly, error: "Could not read the latest rhoai-3.6 build from Quay: x" } }));
+    await renderCard(nightlyStatus({ ...gitOpsStatus, nightly: { ...gitOpsStatus.nightly, error: "Could not read the latest rhoai-3.6 build from Quay: x" } }));
     expect(screen.getByText(/Could not read the latest rhoai-3.6 build from Quay/)).toBeInTheDocument();
   });
 
@@ -330,6 +336,7 @@ describe("The gitops profile reads no registry", () => {
     fireEvent.click(screen.getByRole("button", { name: /help/i }));
     await screen.findByText("Updater build");
     expect(screen.queryByText(/The chart pins the updater's release in Git/)).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("shows the operator build from the CSV, and why the images have no labels", async () => {
@@ -342,5 +349,6 @@ describe("The gitops profile reads no registry", () => {
     renderPage(<ComponentsPage />, "/components", { status: async () => gitOpsStatus, version: gitOpsVersion });
     expect(await screen.findByText(new RegExp(IMAGE_LABELS_OFF.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))).toBeInTheDocument();
     expect(screen.getByText("registry.redhat.io/rhoai/odh-rhel9-operator@sha256:abc")).toBeInTheDocument();
+    await settleApps();
   });
 });

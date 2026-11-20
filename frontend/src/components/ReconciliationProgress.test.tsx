@@ -4,7 +4,7 @@ import { ReconciliationProgress } from "./ReconciliationProgress";
 import { OperationProgress } from "./OperationProgress";
 import { ActivityLog } from "./ActivityLog";
 import type { Problem } from "../types";
-import { nightlyStatus, renderWithApp } from "../test/providers";
+import { nightlyStatus, renderWithApp, settleApps } from "../test/providers";
 import { jsonResponse } from "../test/utils";
 import { compareTagToInstalled, sentence, shortTarget } from "../build";
 import { describeError } from "../errors";
@@ -45,6 +45,7 @@ describe("ReconciliationProgress stuck guidance", () => {
     await waitFor(() => expect(fixBodies).toEqual([{ problemId: "assist-rollout:redhat-ods-applications/foo" }]));
     const result = await screen.findByText("Nothing to do: the rollout is no longer blocked");
     expect(result.closest(".pf-v6-c-alert")).toHaveClass("pf-m-info");
+    await settleApps();
   });
 
   it("a cluster_busy refusal is a 'Cluster busy' warning, and the problems are scanned again", async () => {
@@ -68,6 +69,7 @@ describe("ReconciliationProgress stuck guidance", () => {
     const title = await screen.findByText("Cluster busy");
     expect(title.closest(".pf-v6-c-alert")).toHaveClass("pf-m-warning");
     await waitFor(() => expect(scans).toBe(2));
+    await settleApps();
   });
 
   it("shows guidance-only problems with instructions and no fix button", async () => {
@@ -79,6 +81,7 @@ describe("ReconciliationProgress stuck guidance", () => {
     expect(await screen.findByText(/stuck in ContainerCreating/)).toBeInTheDocument();
     expect(screen.getByText("What to do:")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Apply fix/ })).not.toBeInTheDocument();
+    await settleApps();
   });
 });
 
@@ -98,6 +101,7 @@ describe("Reconcile completion after a reload", () => {
     expect(screen.getByText(/Operator rhods-operator.3.6.0 is Succeeded/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Close/ }));
     await waitFor(() => expect(screen.queryByText("Re-deploy complete")).not.toBeInTheDocument());
+    await settleApps();
   });
 
   it("does not claim success when the result was never seen, unless the server reports it", async () => {
@@ -114,6 +118,7 @@ describe("Reconcile completion after a reload", () => {
       operation: async () => ({ inProgress: false, operation: null, lastCompleted: { id: "op-7", type: "refresh", label: "Re-deploy", user: "me", startedAt: "2026-10-05T10:00:00Z", success: true } }),
     });
     expect(await screen.findByText("Re-deploy complete")).toBeInTheDocument();
+    await settleApps();
   });
 });
 
@@ -124,8 +129,8 @@ describe("ActivityLog", () => {
     { timestamp: "2026-10-03T10:00:00Z", user: "bob", action: "revert-dashboard", detail: "", success: false, label: "Dashboard reverted", category: "dashboard-dev" },
   ];
 
-  it("shows operator changes with their build first and filters by category", () => {
-    renderWithApp(<ActivityLog activity={entries} />);
+  it("shows operator changes with their build first and filters by category", async () => {
+    await renderWithApp(<ActivityLog activity={entries} />).settled();
     expect(screen.getByText("Updated to nightly")).toBeInTheDocument();
     // Tag and digest are separate nowrap items (no separator glyph that could start or end a line).
     const build = screen.getByText("4eff06d60bd1").closest(".pf-v6-l-flex") as HTMLElement;
@@ -135,10 +140,12 @@ describe("ActivityLog", () => {
     fireEvent.click(screen.getByRole("option", { name: /Dashboard Dev\s*2/ }));
     expect(screen.getByText("Dashboard PR deployed")).toBeInTheDocument();
     expect(screen.getByText("(failed)")).toBeInTheDocument();
+    // The menu closes on PatternFly Popper's hide timer (setTimeout).
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
   });
 
-  it("falls back to readable labels for entries without backend labels", () => {
-    renderWithApp(<ActivityLog activity={[{ timestamp: "2026-10-01T10:00:00Z", user: "a", action: "repair-dsc", detail: "", success: true }]} defaultCategory="all" />);
+  it("falls back to readable labels for entries without backend labels", async () => {
+    await renderWithApp(<ActivityLog activity={[{ timestamp: "2026-10-01T10:00:00Z", user: "a", action: "repair-dsc", detail: "", success: true }]} defaultCategory="all" />).settled();
     expect(screen.getByText("Repair dsc")).toBeInTheDocument();
   });
 });

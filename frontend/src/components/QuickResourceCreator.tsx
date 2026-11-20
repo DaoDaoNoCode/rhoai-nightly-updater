@@ -92,6 +92,7 @@ import {
 import { FeatureLoading, LoadFailed } from "./environment/Loading";
 import { PrerequisitesSection, RECOMMENDED_EXPOSURE, headerWithPrerequisites, prerequisitesConfirm, prerequisitesReason, prerequisitesSteps, usePrerequisites, withPrerequisites } from "./environment/Prerequisites";
 import type { ModelExposureKind, PrerequisiteFeature } from "../types";
+import { useLatestRequest } from "../hooks/useLatestRequest";
 
 export { nextStep, terminalReason } from "./environment/resourceRow";
 
@@ -224,18 +225,18 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   // The project the status shown was read for: until the selected project's
   // is in, its Connection shows as loading (never another project's).
   const [statusProject, setStatusProject] = useState<string | null>(null);
-  const statusRequest = useRef(0);
+  const statusRequest = useLatestRequest();
   // The status and the projects load together, on every refresh and poll,
   // and are shown together: the first view never has part of the projects,
   // and a project deleted elsewhere leaves the picker with the next load.
   // Only the latest read is shown: an earlier one (a poll, another
   // project's) that answers later would show older data.
   const fetchResources = useCallback(async () => {
-    const req = ++statusRequest.current;
+    const ticket = statusRequest.start();
     const asked = selectedPipelinesProject.current;
     setStatusLoading(true);
-    const [s, p] = await Promise.allSettled([getResourcesStatus(asked), getDSProjects()]);
-    if (req !== statusRequest.current) return;
+    const [s, p] = await Promise.allSettled([getResourcesStatus(asked, ticket.signal), getDSProjects(ticket.signal)]);
+    if (!ticket.isLatest()) return;
     if (p.status === "fulfilled") {
       setProjectList(p.value.projects || []);
       setProjectsError(null);
@@ -253,7 +254,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       setResError(toApiError(s.reason, "Could not load resource status"));
     }
     setStatusLoading(false);
-  }, []);
+  }, [statusRequest]);
 
   useEffect(() => { void fetchResources(); }, [fetchResources]);
 

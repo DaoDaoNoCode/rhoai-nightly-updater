@@ -1,10 +1,16 @@
 import { useEffect } from "react";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThemeProvider, useTheme } from "./ThemeContext";
 import { Dropdown, MenuToggle } from "@patternfly/react-core";
 import { ThemeMenuGroups, ThemeSwitcher } from "./ThemeSwitcher";
 import { COLOR_SCHEME_KEY, CONTRAST_MODE_KEY, LEGACY_THEME_KEY, MEDIA_QUERIES } from "./themeCore";
+
+/** Opens the Appearance popover and waits until PatternFly's Popper shows it (its show timer sets the opacity). */
+async function openAppearance(name: RegExp) {
+  fireEvent.click(screen.getByRole("button", { name }));
+  await waitFor(() => expect(screen.getByRole("dialog", { name: "Appearance" })).toBeVisible());
+}
 
 /** A matchMedia whose answers can change, firing "change" like a browser does. */
 function liveSystem(initial: Record<string, boolean>) {
@@ -30,7 +36,7 @@ afterEach(() => {
 });
 
 describe("ThemeSwitcher", () => {
-  it("sets the color scheme and contrast mode, persists them, and never combines glass and high contrast", () => {
+  it("sets the color scheme and contrast mode, persists them, and never combines glass and high contrast", async () => {
     liveSystem({});
     render(<ThemeProvider><ThemeSwitcher /></ThemeProvider>);
     // System, no OS preference: light and glass, felt always on.
@@ -38,7 +44,7 @@ describe("ThemeSwitcher", () => {
     expect(html().contains("pf-v6-theme-dark")).toBe(false);
     expect(html().contains("pf-v6-theme-glass")).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: /^Appearance: System color scheme, System contrast mode/ }));
+    await openAppearance(/^Appearance: System color scheme, System contrast mode/);
     expect(screen.getByText("Color scheme follows the system: Light.")).toBeInTheDocument();
     expect(screen.getByText("Contrast mode follows the system: Glass.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Dark" }));
@@ -61,16 +67,16 @@ describe("ThemeSwitcher", () => {
     expect(screen.getByRole("button", { name: "Default" })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("says which choice follows the system when only the color scheme does", () => {
+  it("says which choice follows the system when only the color scheme does", async () => {
     localStorage.setItem(CONTRAST_MODE_KEY, "default");
     liveSystem({ [MEDIA_QUERIES.dark]: true });
     render(<ThemeProvider><ThemeSwitcher /></ThemeProvider>);
-    fireEvent.click(screen.getByRole("button", { name: /^Appearance: System color scheme, Default contrast mode/ }));
+    await openAppearance(/^Appearance: System color scheme, Default contrast mode/);
     expect(screen.getByText("Color scheme follows the system: Dark.")).toBeInTheDocument();
     expect(screen.queryByText(/^Contrast mode follows/)).not.toBeInTheDocument();
   });
 
-  it("puts the classes on <html> before descendants' effects run", () => {
+  it("puts the classes on <html> before descendants' effects run", async () => {
     // PatternFly's Popper re-measures its trigger in a passive effect when
     // the popover's content changes; the theme classes change the layout
     // (glass narrows the masthead's inline padding), so they must already
@@ -85,7 +91,7 @@ describe("ThemeSwitcher", () => {
       return null;
     };
     render(<ThemeProvider><ThemeSwitcher /><Probe /></ThemeProvider>);
-    fireEvent.click(screen.getByRole("button", { name: /^Appearance:/ }));
+    await openAppearance(/^Appearance:/);
     fireEvent.click(screen.getByRole("button", { name: "Default" }));
     fireEvent.click(screen.getByRole("button", { name: "Glass" }));
     expect(seen).toEqual(["system:glass", "default:solid", "glass:glass"]);

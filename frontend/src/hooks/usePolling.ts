@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef } from "react";
 
 export interface PollContext {
   /** Polls completed since the poller started or was last reset. */
@@ -155,10 +155,19 @@ export interface UsePollingOptions {
 }
 
 /**
+ * False once polling must stop for good in this tree: PermissionsProvider
+ * sets it when the session expired (every request then gets 401 or
+ * oauth-proxy's sign-in page, until the user signs in again with a reload).
+ */
+export const PollingAllowedContext = createContext(true);
+
+/**
  * React wrapper around createPoller. The task and delay are read from refs,
  * so callers can pass inline functions without restarting the poller.
+ * Nothing polls while PollingAllowedContext is false.
  */
 export function usePolling(task: () => unknown, options: UsePollingOptions): Pick<Poller, "reset"> {
+  const allowed = useContext(PollingAllowedContext);
   const taskRef = useRef(task);
   const delayRef = useRef(options.delay);
   useEffect(() => {
@@ -166,7 +175,8 @@ export function usePolling(task: () => unknown, options: UsePollingOptions): Pic
     delayRef.current = options.delay;
   });
   const pollerRef = useRef<Poller | null>(null);
-  const { enabled = true, pauseWhenHidden, refreshOnVisible, runImmediately, restartKey } = options;
+  const { enabled: wanted = true, pauseWhenHidden, refreshOnVisible, runImmediately, restartKey } = options;
+  const enabled = wanted && allowed;
 
   useEffect(() => {
     if (!enabled) return;

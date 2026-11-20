@@ -3,6 +3,7 @@ import type { ClusterSummary, NightlyProblem, SummaryBuild } from "../types";
 import { getSummary, toApiError, type ApiError } from "../services/api";
 import { SUMMARY_POLL_MS } from "../constants";
 import { usePolling } from "./usePolling";
+import { useLatestRequest } from "./useLatestRequest";
 import { useOperation } from "../state/AppState";
 
 export interface SummaryValue {
@@ -26,24 +27,24 @@ export function useSummary(enabled = true): SummaryValue {
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<ApiError | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
-  const latest = useRef(0);
+  const latest = useLatestRequest();
 
   const load = useCallback(async () => {
     if (!enabled) return;
-    const id = ++latest.current;
+    const ticket = latest.start();
     try {
-      const s = await getSummary();
-      if (id !== latest.current) return;
+      const s = await getSummary(ticket.signal);
+      if (!ticket.isLatest()) return;
       setSummary(s);
       setError(null);
       setLastRefreshed(new Date());
     } catch (e) {
-      if (id !== latest.current) return;
+      if (!ticket.isLatest()) return;
       setError(toApiError(e, "Could not load the cluster summary"));
     } finally {
-      if (id === latest.current) setLoading(false);
+      if (ticket.isLatest()) setLoading(false);
     }
-  }, [enabled]);
+  }, [enabled, latest]);
 
   const poller = usePolling(load, { delay: SUMMARY_POLL_MS, runImmediately: true, enabled });
   const refresh = useCallback(() => poller.reset({ runNow: true }), [poller]);

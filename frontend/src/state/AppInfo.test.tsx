@@ -1,10 +1,10 @@
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import { overrideFromDashboardResponse, useDashboardOverride, usePermissions, useSessionExpired } from "./AppInfo";
 import { ApiError, getComponents, getUserPermissions, isSessionExpired } from "../services/api";
-import { renderWithApp } from "../test/providers";
-import { jsonResponse } from "../test/utils";
+import { renderWithApp, settleApps } from "../test/providers";
+import { deferred, jsonResponse } from "../test/utils";
 
 const Probe: React.FC = () => {
   const p = usePermissions();
@@ -27,19 +27,27 @@ describe("permissions", () => {
   ])("%s", async (_name, permissions, expected) => {
     renderWithApp(<Probe />, { permissions });
     await waitFor(() => expect(probe()).toMatchObject(expected));
+    await settleApps();
   });
 
-  it("starts as 'checking' (disabled) until the first answer", () => {
-    renderWithApp(<Probe />, { permissions: () => new Promise(() => {}) });
+  it("starts as 'checking' (disabled) until the first answer", async () => {
+    const answer = deferred<{ canMutate: boolean; user: string }>();
+    const { settled } = renderWithApp(<Probe />, { permissions: () => answer.promise });
     expect(probe()).toMatchObject({ status: "checking", canMutate: false });
+    answer.resolve({ canMutate: true, user: "me" });
+    await settled();
+    expect(probe()).toMatchObject({ status: "allowed", canMutate: true });
   });
 });
 
 describe("session expiry", () => {
   it("any API call answered with 401 session_expired raises the app-wide flag and disables changes", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: "Your OpenShift session has expired. Log in again.", errorCode: "session_expired" }, 401)));
-    renderWithApp(<Probe />);
-    await expect(getComponents()).rejects.toMatchObject({ status: 401, errorCode: "session_expired" });
+    await renderWithApp(<Probe />).settled();
+    // The 401 raises the flag as the call fails: a state update, so inside act.
+    await act(async () => {
+      await expect(getComponents()).rejects.toMatchObject({ status: 401, errorCode: "session_expired" });
+    });
     await waitFor(() => expect(probe()).toMatchObject({ expired: true, canMutate: false }));
     expect(probe().reason).toMatch(/session has expired/);
   });
@@ -57,12 +65,14 @@ describe("session expiry", () => {
     renderWithApp(<Probe />, { permissions: getUserPermissions });
     await waitFor(() => expect(probe()).toMatchObject({ expired: true, canMutate: false, status: "unknown" }));
     expect(probe().reason).toMatch(/session has expired/);
+    await settleApps();
   });
 
   it("keeps a JSON 403 a permission answer", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: "Read-only access", errorCode: "forbidden" }, 403)));
     renderWithApp(<Probe />, { permissions: getUserPermissions });
     await waitFor(() => expect(probe()).toMatchObject({ expired: false, status: "denied" }));
+    await settleApps();
   });
 });
 
@@ -78,5 +88,6 @@ describe("Dashboard Dev override", () => {
   it("exposes an active session to every page", async () => {
     renderWithApp(<Probe />, { dashboard: async () => ({ override: { active: true, operatorPaused: true, sessionRecorded: true, stale: false, dashboardDeleting: false } }) as never });
     await waitFor(() => expect(probe().override).toBe(true));
+    await settleApps();
   });
 });

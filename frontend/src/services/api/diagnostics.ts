@@ -3,8 +3,8 @@
 import { OperationResponse, DiagnosticResult, AcknowledgeBinding } from '../../types';
 import { request } from './client';
 
-export function getDiagnostics(): Promise<DiagnosticResult> {
-  return request('/api/diagnostics');
+export function getDiagnostics(signal?: AbortSignal): Promise<DiagnosticResult> {
+  return request('/api/diagnostics', { signal });
 }
 
 /**

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QuickResourceCreator } from "../QuickResourceCreator";
-import { stubApi } from "../../test/apiStub";
+import { jsonResponse, stubApi } from "../../test/apiStub";
 import type { CatalogModel, InferenceGatewayState, ModelExposureOption, ModelExposures, ModelState, ModelsStatus, ResourceState, ResourcesStatus } from "../../types";
 import { IDLE, modelsState } from "./featureState";
 import { cleanupBlocked, cleanupCandidates, cleanupSteps } from "./CleanupModal";
@@ -419,10 +419,16 @@ describe("Models tab", () => {
   it("a ready model says how it is reached, the name to send, and whether it can be called, with Check again", async () => {
     const m = model("dev", { tokenSecret: "default-name-qwen25-05b-instruct-sa", exposure: "default-gateway", gateway: "openshift-ingress/openshift-ai-inference", gatewayAuth: "enforced", servedName: "qwen25-05b-instruct",
       callCheck: { result: "route", ok: false, status: 404, message: "Nothing answers at https://inference.apps.example.com/dev/qwen25-05b-instruct/v1/chat/completions (404 without the model's own answer).", at: "2026-11-18T18:00:00Z" } });
+    // The status read after the check carries its result.
+    let checked = false;
+    const answered = { ...m, callCheck: { result: "route", ok: true, status: 200, message: "Answers requests.", at: "2026-11-18T18:05:00Z" } } as typeof m;
     const api = stubApi({
-      "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [m] }) }),
+      "/api/resources/status": () => jsonResponse(status({ inferenceGateway: gateway, models: modelsStatus({ items: [checked ? answered : m] }) })),
       "/api/resources/projects": { projects: ["dev"] }, ...routing,
-      "POST /api/resources/models/stream": sse({ step: "callable", status: "success", message: "Answers requests.", elapsedMs: 1 }, { step: "operation_complete", status: "success", message: "Answers requests.", elapsedMs: 2 }),
+      "POST /api/resources/models/stream": () => {
+        checked = true;
+        return sse({ step: "callable", status: "success", message: "Answers requests.", elapsedMs: 1 }, { step: "operation_complete", status: "success", message: "Answers requests.", elapsedMs: 2 })();
+      },
     });
     renderAt("/test-resources?tab=models&project=dev");
     const part = await screen.findByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
@@ -443,6 +449,9 @@ describe("Models tab", () => {
     fireEvent.click(buttons[buttons.length - 1]);
     await vi.waitFor(() => expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "check", project: "dev", model: "qwen25-05b-instruct" }]));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // The result appears on the model once the status is read again.
+    expect(await within(part).findByText("Answers requests")).toBeInTheDocument();
+    expect(within(part).queryByText("Cannot be called")).not.toBeInTheDocument();
   });
 
   it("the gateway names projects no model uses or that no longer exist, and removes one after confirmation", async () => {
