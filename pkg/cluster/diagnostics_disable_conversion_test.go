@@ -165,15 +165,15 @@ func TestConversionBlockerFailsClosedWhenTheListFails(t *testing.T) {
 	}
 }
 
-// Without the signed-in user's client (the Components page's repair
-// preview, the gitops profile) it refuses, and the ServiceAccount does not
-// list the objects instead.
+// Without the signed-in user's client (a request that carried no token
+// of the user's) it refuses, and the ServiceAccount does not list the
+// objects instead.
 func TestConversionBlockerNeedsTheUsersSignIn(t *testing.T) {
 	w := newConvObjectsWorld(t, true, mcpCRDJSON("Namespaced", mcpVersions))
 	w.list(mcpStorage, func(*http.Request) (int, string) { return http.StatusOK, `{"items":[]}` })
 	why := newRemovalChecker(w.c).conversionBlocker("mcplifecycleoperator")
 	for _, want := range []string{
-		"The tool lists those objects with your own sign-in, which this check does not have, so it cannot tell whether any exist and does not remove mcplifecycleoperator here.",
+		"The tool lists those objects only with your own sign-in, which this request does not carry (in the gitops profile no request does), so it cannot tell whether any exist and does not remove mcplifecycleoperator here.",
 		"Check for them with: oc get " + mcpCRDName + " -A.",
 	} {
 		if !strings.Contains(why, want) {

@@ -95,10 +95,16 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   more" when the API server has more), names up to five
   (`namespace/name`) and gives the `oc delete` command; the removal stays
   refused until none remain. A list that fails (403, a conversion error, a
-  timeout) or a request without the user's sign-in (the Components page's
-  repair preview, which reads with the ServiceAccount) still refuses, with
-  the error and the `oc get <crd> -A` command. The ServiceAccount gains no
-  permission ([RUNBOOK §11.9](RUNBOOK.md#119-change-or-reset-the-datasciencecluster)).
+  timeout) or a request without the user's sign-in still refuses, with the
+  error and the `oc get <crd> -A` command. The Components page's repair
+  preview (`GET /api/components`, admin-only) now also carries the
+  signed-in cluster-admin's own client in the full profile, as the plan
+  does, so it runs the same check and no longer blocks a "Reset to
+  defaults" or "Remove extra components" repair that removes such a
+  component while its CRD holds no objects. The gitops profile never acts
+  with the user's token, so its preview still refuses. The ServiceAccount
+  gains no permission
+  ([RUNBOOK §11.9](RUNBOOK.md#119-change-or-reset-the-datasciencecluster)).
 
 ### Security
 

@@ -285,9 +285,11 @@ func (rc *removalChecker) moduleBlockers(component string) []string {
 // group (mcpservers.mcp.x-k8s.io for mcplifecycleoperator), which the
 // ServiceAccount must not be granted. The user is a cluster-admin (the
 // plan's withAdminRead and the change's withMutationAuth check that).
-// Without that client (the Components page's repair preview, which reads
-// with the ServiceAccount), or when a list fails, it refuses (fail
-// closed): the tool never takes "could not list" for "none".
+// The Components page's repair preview (GET /api/components) carries it
+// too in the full profile (pkg/api attachSignedInUser); the gitops
+// profile never acts with the user's token. Without that client, or when
+// a list fails, it refuses (fail closed): the tool never takes "could not
+// list" for "none".
 func (rc *removalChecker) conversionBlocker(component string) string {
 	crds, convErr := rc.conversionCRDsServedBy(component)
 	switch {
@@ -306,7 +308,7 @@ func (rc *removalChecker) conversionBlocker(component string) string {
 		component, verb(len(crds), "CRD", "CRDs"), strings.Join(names, ", "), verb(len(crds), "CRD", "CRDs"), verb(len(crds), "that CRD", "those CRDs"))
 	u := rc.c.SignedInUser()
 	if u == nil {
-		return intro + fmt.Sprintf(" The tool lists those objects with your own sign-in, which this check does not have, so it cannot tell whether any exist and does not remove %s here. Check for them with: %s.",
+		return intro + fmt.Sprintf(" The tool lists those objects only with your own sign-in, which this request does not carry (in the gitops profile no request does), so it cannot tell whether any exist and does not remove %s here. Check for them with: %s.",
 			component, strings.Join(gets, "; "))
 	}
 	var found, failed []string

@@ -9,16 +9,33 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// HandleComponents returns DSC component statuses and deployments.
+// The Components page's reads. Tests replace these.
+var (
+	getComponents       = cluster.GetComponents
+	getComponentsGitOps = cluster.GetComponentsGitOps
+)
+
+// HandleComponents returns DSC component statuses and deployments. The
+// route is admin-only (getRouteTiers: adminOnly runs before it), so the
+// client carries the signed-in cluster-admin's own client
+// (attachSignedInUser), as the plan's does (withAdminRead): the repair
+// preview's removal checks list the objects of CRDs whose conversion
+// webhook a component serves with it.
 var HandleComponents = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	includeLabels := r.URL.Query().Get("labels") == "true"
-	writeComponents(w)(cluster.GetComponents(c, includeLabels))
+	attachSignedInUser(c, r)
+	writeComponents(w)(getComponents(c, includeLabels))
 })
 
 // HandleComponentsGitOps is HandleComponents in the gitops profile: no image
-// labels, no GitHub DSC sample (cluster.GetComponentsGitOps).
+// labels, no GitHub DSC sample (cluster.GetComponentsGitOps). It runs the
+// repair preview too, but its client does not carry the user's: nothing in
+// that profile acts with the user's token, whose scopes (user:info
+// user:check-access, docs/GITOPS.md "Sign-in in the gitops profile")
+// cannot list objects anyway, and the profile has no repair. So the
+// preview's conversion-webhook check refuses (fail closed).
 var HandleComponentsGitOps = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	writeComponents(w)(cluster.GetComponentsGitOps(c))
+	writeComponents(w)(getComponentsGitOps(c))
 })
 
 func writeComponents(w http.ResponseWriter) func(*types.ComponentsResponse, error) {
