@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"slices"
 	"sort"
@@ -341,17 +342,32 @@ const maasEmbeddingReason = "This tool publishes chat models only. Use the embed
 // names are that script's documented mapping, applied to the discovered
 // applications namespace. err is set when neither is known; callers that
 // change something refuse then.
+//
+// The name is derived only when the tenant definitely reports none: it does
+// not exist (404: MaaS is off, or its API is not served) or its
+// status.infraNamespace is empty (the operator has not reported it yet). Any
+// other failure to read it (forbidden, a server error, a body that does not
+// parse) is returned: the tenant may name another namespace, and a read
+// failure is never replaced by a default name (rhoai_namespaces.go).
 func maasInfraNamespace(c *Client) (string, error) {
+	const what = "the default tenant (MaaSTenantConfig models-as-a-service/default-tenant)"
 	body, _, err := c.get(namespacedPath(maasAPI(c), "maastenantconfigs", "models-as-a-service", "default-tenant"))
-	if err == nil {
+	switch {
+	case err == nil:
 		var tc struct {
 			Status struct {
 				InfraNamespace string `json:"infraNamespace"`
 			} `json:"status"`
 		}
-		if json.Unmarshal(body, &tc) == nil && tc.Status.InfraNamespace != "" {
+		if err := json.Unmarshal(body, &tc); err != nil {
+			return "", fmt.Errorf("cannot tell where maas-api and its database go: %s cannot be parsed (%w)", what, err)
+		}
+		if tc.Status.InfraNamespace != "" {
 			return tc.Status.InfraNamespace, nil
 		}
+	case IsK8sError(err, http.StatusNotFound):
+	default:
+		return "", fmt.Errorf("cannot tell where maas-api and its database go: %s cannot be read (%w)", what, err)
 	}
 	apps, err := appsNamespace(c)
 	if err != nil {
