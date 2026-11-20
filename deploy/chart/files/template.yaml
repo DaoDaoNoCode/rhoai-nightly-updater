@@ -634,7 +634,7 @@ objects:
                 # Must match api.ExpectedTemplateRevision; bump both when a
                 # template change matters to the running code.
                 - name: TEMPLATE_REVISION
-                  value: "7"
+                  value: "8"
                 # The update check (GET /api/update-check).
                 - name: IMAGE_REPOSITORY
                   value: ${IMAGE_REPOSITORY}
@@ -749,7 +749,27 @@ objects:
                 # --pass-user-bearer-token, which accept client tokens.
                 - --pass-access-token=true
                 - --pass-user-headers=true
-                - --openshift-sar={"resource":"pods","verb":"list","namespace":"redhat-ods-operator"}
+                # The sign-in gate (5.0.0): whoever RHOAI lets in, that is
+                # who may get auths.services.platform.opendatahub.io (the
+                # cluster-scoped Auth CR). RHOAI binds exactly that, as
+                # ClusterRole data-science-allowedgroupcluster-role, to its
+                # Auth CR's allowedGroups (system:authenticated by default):
+                # rhods-operator rhoai-3.6 (452b4a5)
+                # internal/controller/services/auth/resources/data-science-allowedgroup-clusterrole.tmpl.yaml:1-19,
+                # auth_controller_actions.go:201. Cluster-admins always
+                # pass; without RHOAI only they do. What each user then
+                # sees is the app's own read tiers (pkg/api route_tiers.go).
+                # oauth-proxy (openshift/oauth-proxy release-4.17 a578b1d,
+                # providers/openshift/provider.go:202-207,234-258,336,489-526)
+                # posts this JSON, plus "scopes": [], as an
+                # authorization.openshift.io/v1 SubjectAccessReview with
+                # the user's token and refuses the sign-in unless it is
+                # allowed. Its fields are the OpenShift Action's
+                # (openshift/api release-4.17 authorization/v1/types.go:351-373):
+                # the API group is "resourceAPIGroup" (an unknown key such
+                # as "group" would be dropped, asking for core "auths"),
+                # and no namespace is a cluster-wide check.
+                - --openshift-sar={"verb":"get","resourceAPIGroup":"services.platform.opendatahub.io","resource":"auths"}
               ports:
                 - containerPort: 8443
                   name: https
