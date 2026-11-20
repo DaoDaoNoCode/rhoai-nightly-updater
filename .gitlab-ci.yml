@@ -137,13 +137,19 @@ golangci-lint:
 # The frontend checks run as three parallel jobs, each with its own npm ci
 # from one npm cache (keyed on package-lock.json): the tests take longest,
 # and the other checks and the build finish within their time. Only
-# frontend-checks uploads the cache; the others only read it.
+# frontend-checks uploads the cache; the others only read it. The key needs
+# its prefix: without one GitLab names it after the file,
+# "0_frontend/package-lock-<sha>" (lib/gitlab/ci/build/cache.rb,
+# cache_prefix), and the runner refuses to restore a key with a "/"
+# ("must not contain '/'", gitlab-runner shells/abstract.go,
+# sanitizeCacheKey), so the cache was uploaded but never read.
 .frontend:
   extends: .test
   image: $NODE_IMAGE
   cache:
     key:
       files: [frontend/package-lock.json]
+      prefix: npm
     paths: [frontend/.npm/]
     policy: pull
   before_script:
