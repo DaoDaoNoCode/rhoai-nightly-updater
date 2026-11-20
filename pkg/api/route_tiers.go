@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -184,11 +185,20 @@ func userReadClient(ctx context.Context, sa *cluster.Client, token, username str
 // writeUserReadError answers a failed read made with the user's own token.
 // A 403 there is the user's own RBAC (forbidden_for_user: "you cannot see
 // this"), never the ServiceAccount's (cluster.HTTPStatusForError).
+//
+// A failed ServiceAccount read on such a route (finding MLflow, the
+// tool's records) is answered without its text, which may name objects
+// the user may not see: only its kind; the error is logged.
 func writeUserReadError(w http.ResponseWriter, what string, err error) {
 	code, errorCode := cluster.HTTPStatusForError(err)
-	msg := what + ": " + err.Error()
-	if errorCode == cluster.ErrorCodeForbiddenForUser {
-		msg = what + ": your OpenShift account may not see this. " + err.Error()
+	var k8sErr *cluster.K8sError
+	switch {
+	case errorCode == cluster.ErrorCodeForbiddenForUser:
+		writeError(w, what+": your OpenShift account may not see this. "+err.Error(), code, errorCode)
+	case errors.As(err, &k8sErr) && !k8sErr.User:
+		slog.Warn("a ServiceAccount read of a user's request failed", "what", what, "error", err)
+		writeError(w, fmt.Sprintf("%s: the updater could not read what it needs (HTTP %d). Try again later, or ask a cluster-admin.", what, k8sErr.Status), code, errorCode)
+	default:
+		writeError(w, what+": "+err.Error(), code, errorCode)
 	}
-	writeError(w, msg, code, errorCode)
 }

@@ -53,14 +53,7 @@ func GetSummary(c *Client) (*types.Summary, error) {
 	if sub.found {
 		s.RHOAI.Channel, s.RHOAI.Version, s.RHOAI.Phase = sub.info.Channel, csv.Version, csv.Phase
 	}
-	// An unreadable CatalogSource leaves the nightly unknown.
-	if csErr == nil {
-		if n := getNightlyStatus(c.ctx, quayAuth, sub.info, cs); n != nil {
-			s.Nightly.InstalledBuild = summaryBuild(n.Installed)
-			s.Nightly.LatestBuild = summaryBuild(n.Latest)
-			s.Nightly.NewerAvailable = n.UpdateAvailable != nil && *n.UpdateAvailable
-		}
-	}
+	s.Nightly = summaryNightly(csErr, func() *types.NightlyStatus { return getNightlyStatus(c.ctx, quayAuth, sub.info, cs) })
 	if dsc.Object != nil {
 		s.DSC.Exists = true
 		s.DSC.Ready = dscReady(dsc.Object)
@@ -73,6 +66,31 @@ func GetSummary(c *Client) (*types.Summary, error) {
 		}
 	}
 	return s, nil
+}
+
+// summaryNightly is the summary's nightly part: the comparison status
+// returns, or why it is not known (a fixed code, never the read's text).
+// An unreadable CatalogSource is "catalog_unreadable", not "not a nightly
+// install"; a lookup that failed or has no digest is "lookup_failed", so
+// the page never says "the newest build" when it could not check.
+func summaryNightly(csErr error, status func() *types.NightlyStatus) types.SummaryNightly {
+	if csErr != nil {
+		return types.SummaryNightly{Problem: types.NightlyProblemCatalogUnreadable}
+	}
+	n := status()
+	if n == nil {
+		return types.SummaryNightly{}
+	}
+	out := types.SummaryNightly{InstalledBuild: summaryBuild(n.Installed), LatestBuild: summaryBuild(n.Latest)}
+	switch {
+	case n.Installed != nil && !isNightlyStreamImage(n.Installed.Image):
+		out.Problem = types.NightlyProblemNoStream
+	case n.Latest == nil || n.UpdateAvailable == nil || n.Error != "":
+		out.Problem = types.NightlyProblemLookupFailed
+	default:
+		out.NewerAvailable = *n.UpdateAvailable
+	}
+	return out
 }
 
 // summaryBuild is a nightly build's tag and build date, or nil.

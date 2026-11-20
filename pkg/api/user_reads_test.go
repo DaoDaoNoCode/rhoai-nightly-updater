@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -61,6 +63,53 @@ func TestMLflowSamplesStatusHandlerReadsAsTheUser(t *testing.T) {
 	HandleMLflowSamplesStatus(w, getAs("/api/resources/samples/mlflow?project=other", "user:carol"))
 	if w.Code != 403 || decodeError(t, w)["errorCode"] != cluster.ErrorCodeForbiddenForUser {
 		t.Fatalf("not the user's project: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// The Playground status: a cluster-admin gets what the ServiceAccount read
+// in full, anyone else fixed values only (no condition message, no DSC
+// name); an unknown role is a user's.
+func TestPlaygroundStatusPerRole(t *testing.T) {
+	setupDevMode(t)
+	setAdmin(t)
+	orig := getPlaygroundStatus
+	t.Cleanup(func() { getPlaygroundStatus = orig })
+	const sentinel = "SENTINEL-dsc-text"
+	getPlaygroundStatus = func(_, _ *cluster.Client, _ string) (*types.PlaygroundStatus, error) {
+		return &types.PlaygroundStatus{OperatorReady: "False", OperatorMessage: sentinel, GenAIUI: "available",
+			Blocked: &types.ComponentBlock{Component: "ogx", DSC: sentinel, State: "Removed", Reason: "off in " + sentinel}}, nil
+	}
+	w := httptest.NewRecorder()
+	HandlePlaygroundStatus(w, getAs("/api/resources/playground", "user:admin"))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), sentinel) {
+		t.Fatalf("admin: %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	HandlePlaygroundStatus(w, getAs("/api/resources/playground", "user:carol"))
+	if w.Code != 200 || strings.Contains(w.Body.String(), sentinel) || !strings.Contains(w.Body.String(), `"operatorReady":"False"`) || !strings.Contains(w.Body.String(), `"state":"Removed"`) {
+		t.Fatalf("user: %d %s", w.Code, w.Body.String())
+	}
+	mutationPermission = func(context.Context, string) (bool, error) { return true, errors.New("unavailable") }
+	w = httptest.NewRecorder()
+	HandlePlaygroundStatus(w, getAs("/api/resources/playground", "user:admin"))
+	if strings.Contains(w.Body.String(), sentinel) {
+		t.Fatalf("role unknown: %s", w.Body.String())
+	}
+}
+
+// A failed ServiceAccount read on a user route is answered without its
+// text (it may name what the user may not see); the user's own refusal
+// keeps its words.
+func TestUserReadErrorHidesServiceAccountText(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeUserReadError(w, "Cannot read X", fmt.Errorf("read the MLflow CR: %w", &cluster.K8sError{Status: 403, K8sMessage: "SENTINEL system:serviceaccount:ns:sa cannot get"}))
+	if w.Code != 403 || strings.Contains(w.Body.String(), "SENTINEL") || decodeError(t, w)["errorCode"] != "forbidden" {
+		t.Fatalf("SA error: %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	writeUserReadError(w, "Cannot read X", &cluster.K8sError{Status: 403, User: true, K8sMessage: "projects is forbidden"})
+	if w.Code != 403 || !strings.Contains(w.Body.String(), "projects is forbidden") || decodeError(t, w)["errorCode"] != cluster.ErrorCodeForbiddenForUser {
+		t.Fatalf("user error: %d %s", w.Code, w.Body.String())
 	}
 }
 

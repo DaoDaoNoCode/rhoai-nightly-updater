@@ -333,7 +333,7 @@ func TestSummaryHandler(t *testing.T) {
 	}
 	for part, want := range map[string]string{
 		"rhoai":   "channel,installed,phase,version",
-		"nightly": "installedBuild,latestBuild,newerAvailable",
+		"nightly": "installedBuild,latestBuild,newerAvailable,problem",
 		"dsc":     "components,exists,ready",
 	} {
 		if got := keys(raw[part]); got != want {

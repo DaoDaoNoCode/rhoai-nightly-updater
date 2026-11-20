@@ -241,6 +241,53 @@ func listProjectInferenceServices(u *Client, project string) ([]types.ProjectInf
 	return out, nil
 }
 
+// knownManagementStates are the DataScienceCluster managementState values
+// (its CRD's enum); anything else is not shown to a user.
+var knownManagementStates = map[string]bool{"Managed": true, "Removed": true, "Unmanaged": true}
+
+// userComponentBlock is b as a user who is not a cluster-admin sees it:
+// only fixed text. b's Reason names the DataScienceCluster (an SA read);
+// the user gets the component key (this tool's own constant), its state
+// when it is one of the CRD's values, and a fixed reason.
+func userComponentBlock(b *types.ComponentBlock) *types.ComponentBlock {
+	if b == nil {
+		return nil
+	}
+	out := &types.ComponentBlock{Component: b.Component,
+		Reason: "This feature is not turned on on this cluster. A cluster-admin turns it on."}
+	if knownManagementStates[b.State] {
+		out.State = b.State
+	}
+	return out
+}
+
+// PlaygroundStatusForUser is st as a user who is not a cluster-admin sees
+// it: what the ServiceAccount read is reduced to fixed values (the
+// operator's readiness, the gen-ai backend's state, whether the feature is
+// blocked), never text from the objects it read (the DataScienceCluster's
+// condition message, its name). What the user's own token read (their
+// projects' playgrounds and models, the gen-ai API's answers to them) is
+// kept. st itself (cached) is not changed.
+func PlaygroundStatusForUser(st *types.PlaygroundStatus) *types.PlaygroundStatus {
+	if st == nil {
+		return nil
+	}
+	out := *st
+	out.OperatorMessage = ""
+	out.Blocked = userComponentBlock(st.Blocked)
+	switch out.OperatorReady {
+	case "True", "False", "":
+	default:
+		out.OperatorReady = ""
+	}
+	switch out.GenAIUI {
+	case "available", "unavailable", "missing", "":
+	default:
+		out.GenAIUI = ""
+	}
+	return &out
+}
+
 // isUserDSProject reports whether project is one of the signed-in user's
 // data science projects (ListUserDSProjects).
 func isUserDSProject(u *Client, project string) (bool, error) {

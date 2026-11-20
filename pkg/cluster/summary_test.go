@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // The summary carries the reviewed fields only: the operator's version,
@@ -53,6 +55,39 @@ func TestGetSummary(t *testing.T) {
 		if call.Method != "GET" {
 			t.Errorf("the summary wrote: %s %s", call.Method, call.Path)
 		}
+	}
+}
+
+// The nightly part says when it does not know: an unreadable
+// CatalogSource is not "not a nightly install", and a failed lookup is
+// not "the newest build". Only fixed codes, never the read's text.
+func TestSummaryNightly(t *testing.T) {
+	yes, no := true, false
+	stream := "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + strings.Repeat("a", 64)
+	installed := &types.NightlyBuild{Image: stream, Tag: "rhoai-3.6", BuildDate: "2026-11-19"}
+	latest := &types.NightlyBuild{Image: stream, Tag: "rhoai-3.6", BuildDate: "2026-11-20"}
+	for _, tc := range []struct {
+		name    string
+		csErr   error
+		n       *types.NightlyStatus
+		problem string
+		newer   bool
+	}{
+		{"catalog unreadable", &K8sError{Status: 403, K8sMessage: "SENTINEL"}, nil, types.NightlyProblemCatalogUnreadable, false},
+		{"not a nightly install", nil, nil, "", false},
+		{"newer", nil, &types.NightlyStatus{Installed: installed, Latest: latest, UpdateAvailable: &yes}, "", true},
+		{"newest", nil, &types.NightlyStatus{Installed: installed, Latest: latest, UpdateAvailable: &no}, "", false},
+		{"lookup failed", nil, &types.NightlyStatus{Installed: installed, Error: "SENTINEL quay said no"}, types.NightlyProblemLookupFailed, false},
+		{"digest unknown", nil, &types.NightlyStatus{Installed: installed, Latest: latest}, types.NightlyProblemLookupFailed, false},
+		{"custom image", nil, &types.NightlyStatus{Installed: &types.NightlyBuild{Image: "quay.io/rhoai/rhoai-fbc-fragment@sha256:" + strings.Repeat("b", 64)}}, types.NightlyProblemNoStream, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := summaryNightly(tc.csErr, func() *types.NightlyStatus { return tc.n })
+			b, _ := json.Marshal(got)
+			if got.Problem != tc.problem || got.NewerAvailable != tc.newer || strings.Contains(string(b), "SENTINEL") {
+				t.Fatalf("got %s", b)
+			}
+		})
 	}
 }
 

@@ -34,6 +34,15 @@ var HandlePlaygroundStatus = withUserRead(func(sa, u *cluster.Client, w http.Res
 		writeUserReadError(w, "Cannot read the playground state", err)
 		return
 	}
+	// What the ServiceAccount read is shown in full to cluster-admins
+	// only; anyone else gets fixed values (cluster.PlaygroundStatusForUser).
+	admin, ok := requestRole(w, r)
+	if !ok {
+		return
+	}
+	if !admin {
+		st = cluster.PlaygroundStatusForUser(st)
+	}
 	writeJSON(w, st, "playground")
 })
 

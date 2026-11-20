@@ -29,14 +29,29 @@ type SummaryRHOAI struct {
 
 // SummaryNightly is the installed nightly build and the newest one of its
 // stream. Both builds are nil when RHOAI is not installed from the nightly
-// catalog; LatestBuild is nil while it is unknown.
+// catalog (Problem ""), or when that could not be read (Problem
+// "catalog_unreadable"); LatestBuild is nil while it is unknown.
 type SummaryNightly struct {
 	InstalledBuild *SummaryBuild `json:"installedBuild"`
 	LatestBuild    *SummaryBuild `json:"latestBuild"`
 	// NewerAvailable: the newest build of the installed stream is not the
-	// installed one (false when that is not known).
+	// installed one. Only meaningful when Problem is "".
 	NewerAvailable bool `json:"newerAvailable"`
+	// Problem says why the comparison is not known, as one of these codes
+	// (never text from what was read): "" (known, or not a nightly
+	// install), "catalog_unreadable" (the nightly CatalogSource could not
+	// be read), "lookup_failed" (the newest build could not be looked up
+	// yet), "no_stream" (a custom catalog image: there is no stream to
+	// compare with).
+	Problem string `json:"problem"`
 }
+
+// SummaryNightly.Problem codes.
+const (
+	NightlyProblemCatalogUnreadable = "catalog_unreadable"
+	NightlyProblemLookupFailed      = "lookup_failed"
+	NightlyProblemNoStream          = "no_stream"
+)
 
 // SummaryBuild is a nightly build: its stream tag ("rhoai-3.6") and build
 // date ("" when unknown).

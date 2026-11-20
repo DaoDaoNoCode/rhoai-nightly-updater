@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -157,6 +158,53 @@ func TestGetProjectStatus(t *testing.T) {
 		if call.Path != "/apis/project.openshift.io/v1/projects" {
 			t.Errorf("read for a project that is not the user's: %s", call.Path)
 		}
+	}
+}
+
+// A user who is not a cluster-admin and has no project: the Playground
+// status shows the operator's readiness and that the feature is blocked
+// as fixed values only, never the DataScienceCluster's condition message
+// or its name, which the ServiceAccount read.
+func TestPlaygroundStatusForUserHasNoServiceAccountText(t *testing.T) {
+	const sentinel = "SENTINEL-from-the-dsc"
+	for _, dsc := range []string{
+		// The operator reports not ready, with a message.
+		`{"metadata":{"name":"dsc-` + strings.ToLower(sentinel) + `"},"spec":{"components":{"ogx":{"managementState":"Managed"}}},"status":{"conditions":[{"type":"OGXReady","status":"False","message":"` + sentinel + `"}]}}`,
+		// The component is off: the block's reason names the DSC.
+		`{"metadata":{"name":"dsc-` + strings.ToLower(sentinel) + `"},"spec":{"components":{"ogx":{"managementState":"Removed"}}},"status":{"conditions":[{"type":"OGXReady","status":"False","message":"` + sentinel + `"}]}}`,
+	} {
+		e := newPlaygroundEnv(t)
+		e.k8s.deleteObject("/apis/project.openshift.io/v1/projects/proj")
+		e.k8s.deleteObject("/apis/project.openshift.io/v1/projects/other")
+		e.k8s.putJSON("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc", dsc)
+		PurgePlaygroundStatus()
+		full, err := GetPlaygroundStatus(e.c, e.reader, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The admin's answer keeps it (the precondition of this test).
+		raw, _ := json.Marshal(full)
+		if !strings.Contains(strings.ToLower(string(raw)), strings.ToLower(sentinel)) {
+			t.Fatalf("the fixture did not reach the status: %s", raw)
+		}
+		user := PlaygroundStatusForUser(full)
+		b, _ := json.Marshal(user)
+		if strings.Contains(strings.ToLower(string(b)), strings.ToLower(sentinel)) {
+			t.Errorf("a user's playground status carries the ServiceAccount's text: %s", b)
+		}
+		if user.OperatorReady != "False" || len(user.Items) != 0 {
+			t.Errorf("fixed values lost: %s", b)
+		}
+		if full.Blocked != nil && (user.Blocked == nil || user.Blocked.State != "Removed" || user.Blocked.DSC != "") {
+			t.Errorf("block: %+v", user.Blocked)
+		}
+		// The cached admin answer is unchanged.
+		if again, _ := json.Marshal(full); string(again) != string(raw) {
+			t.Error("the sanitizer changed the cached status")
+		}
+	}
+	if PlaygroundStatusForUser(nil) != nil {
+		t.Error("nil")
 	}
 }
 
