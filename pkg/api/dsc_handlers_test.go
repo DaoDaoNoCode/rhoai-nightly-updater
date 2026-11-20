@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -80,6 +81,47 @@ func TestDSCChangeRoutesValidateTheirRequest(t *testing.T) {
 	}
 	if len(finished) != 1 || finished[0].Name != "default-dsc" || finished[0].Token != token {
 		t.Fatalf("finished = %+v", finished)
+	}
+}
+
+// The hard reset's namespace guard reads owners of any kind, which the
+// ServiceAccount is not granted: the plan (a read, the ServiceAccount's
+// client) carries the signed-in cluster-admin's own client for it, and the
+// reset itself runs with that user's client (pkg/cluster
+// TestHardResetReadsNamespaceOwnersWithTheSignedInUsersToken).
+func TestDSCHardResetGuardGetsTheSignedInUsersClient(t *testing.T) {
+	inCluster(t)
+	allowMutations(t)
+	fakeSession(t, fullToken(sessionNow.Add(-time.Hour)), nil)
+	installFakeRecord(t)
+	mux := http.NewServeMux()
+	Register(mux)
+	prevPlan, prevHard := planDSCChange, hardResetDSC
+	t.Cleanup(func() { planDSCChange, hardResetDSC = prevPlan, prevHard })
+	var planned, reset *cluster.Client
+	planDSCChange = func(c *cluster.Client, _, _, _ string, _, _ bool) (*types.DSCPlan, error) {
+		planned = c
+		return &types.DSCPlan{}, nil
+	}
+	hardResetDSC = func(c *cluster.Client, _ types.DSCPlanRequest, _ func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		reset = c
+		return &types.OperationResponse{Success: true}, nil
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/components/dsc/plan?action=hard-reset&keepEnabled=true", nil)
+	r.Header.Set("X-Forwarded-Access-Token", "sha256~admin-token")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || planned == nil {
+		t.Fatalf("plan: %d %s", w.Code, w.Body.String())
+	}
+	if u := planned.SignedInUser(); planned.ActsAsUser() || u == nil || !u.ActsAsUser() || u.Context() != planned.Context() {
+		t.Fatalf("plan client as user %v, signed-in user's client %+v", planned.ActsAsUser(), u)
+	}
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, postJSON("/api/components/dsc/hard-reset/stream", "sha256~admin-token",
+		`{"name":"default-dsc","uid":"u-1","token":"0123456789abcdef01234567","confirm":"default-dsc","keepEnabled":false}`))
+	if reset == nil || !reset.ActsAsUser() || reset.SignedInUser() != reset {
+		t.Fatalf("reset client %+v (%d %s)", reset, w.Code, w.Body.String())
 	}
 }
 

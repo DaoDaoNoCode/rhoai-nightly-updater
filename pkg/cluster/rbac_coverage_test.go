@@ -45,6 +45,13 @@ var rbacCallsNotUsingTheSAToken = map[string]string{
 	"authz.go:CheckUserPermissionWithToken": "SubjectAccessReview sent with the user's token",
 	"authz.go:LookupUserWithToken":          "users/~ read with the user's token",
 	"authz.go:ReadSessionToken":             "the user's own OAuth access token, read with that token",
+	// The hard reset's namespace guard reads with the signed-in
+	// cluster-admin's own client (SignedInUser): the namespaces, the
+	// owners of any cluster-scoped kind and their API discovery. The
+	// ServiceAccount is granted none of those kinds on purpose.
+	"dsc_hard_reset_teardown.go:namespaceOwnerBlocker": "hard reset: lists the namespaces with the signed-in user's token",
+	"dsc_hard_reset_teardown.go:read":                  "hard reset: reads a namespace's owner, of any cluster-scoped kind, with the signed-in user's token",
+	"dsc_hard_reset_teardown.go:path":                  "hard reset: API discovery of the group of a namespace's owner, with the signed-in user's token",
 }
 
 // Best-effort reads of paths found by API discovery at run time, whose API
@@ -55,10 +62,6 @@ var rbacCallsNotUsingTheSAToken = map[string]string{
 var rbacBestEffortCalls = map[string]string{
 	"diagnostics_conversion.go:getDiscovered": "API versions check: one ?limit=1 list per resource and version of the multi-version *.opendatahub.io groups",
 	"diagnostics_webhooks.go:probeCRDObjects": "stale CRD conversions: one ?limit=1 list per RHOAI CRD whose conversion Service is down, to tell whether it holds objects",
-	// Not best effort in effect: a read that fails refuses the hard reset
-	// (fail closed). The kinds are whatever owns a namespace.
-	"dsc_hard_reset_teardown.go:leadsToRHOAI": "hard reset: reads the cluster-scoped owner of a namespace that has one, to follow its owner chain; any error refuses the reset",
-	"dsc_hard_reset_teardown.go:path":         "hard reset: API discovery of the group of a namespace's owner; any error refuses the reset",
 }
 
 // Calls only the gitops profile makes (api.StartGitOpsPolicyWatch and

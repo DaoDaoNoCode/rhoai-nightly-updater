@@ -137,7 +137,17 @@ only accepts a tag whose version is the top dated section. See
   shows the tree read-only), and on Managed RHOAI for the hard reset.
   Diagnostics' **disable** fix now uses the same change for any component
   the CRD defines, instead of a fixed list. The hard reset deletes the DSC with your own token (no new
-  ServiceAccount RBAC). The reset dialogs compare the DSC as the API server
+  ServiceAccount RBAC). Before the delete it refuses while the garbage
+  collector would delete a namespace with the DSC, decided as the collector
+  does: no owner of the namespace exists, is not being deleted and stays
+  (does not lead to an `opendatahub.io` object), and one of them leads
+  there or cannot be read. It reads the owners, of any
+  kind, with your own sign-in, in the plan and the reset (the ServiceAccount
+  may not read them, so on an ACM spoke, whose namespaces AppliedManifestWorks
+  own, a test build refused every hard reset). The refusal names the
+  namespace and its owner chain and suggests the soft reset or Fix, or says
+  which owner could not be read and gives its `oc get` command; it never
+  says to remove owner references. The reset dialogs compare the DSC as the API server
   stores it, so a field the installed CRD defaults is no change (the hard
   reset listed six such fields as "→ not set"); a blocked reset shows why
   first and collapses the rest; what stops working, the CRDs that cannot be

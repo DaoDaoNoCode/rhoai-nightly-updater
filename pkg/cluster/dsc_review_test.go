@@ -291,7 +291,7 @@ func TestHardResetStoppedWhileWaitingCanBeFinished(t *testing.T) {
 	})
 	plan, _ := PlanDSCChange(c, "hard-reset", "", "", false, false)
 	ctx, cancel := context.WithCancelCause(context.Background())
-	stopping := &Client{baseURL: c.baseURL, token: c.token, httpClient: c.httpClient, ctx: ctx}
+	stopping := c.WithContext(ctx)
 	f.beforeServe = func(method, p string) {
 		if method == http.MethodGet && p == dscV3Path {
 			cancel(ErrOperationLockLost)

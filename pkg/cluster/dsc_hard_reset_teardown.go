@@ -333,21 +333,50 @@ func readTeardown(c *Client, uid string, ops []hardResetOperator) (teardownState
 // maxOwnerDepth bounds how far namespaceOwnerBlocker follows owners.
 const maxOwnerDepth = 8
 
-// namespaceOwnerBlocker refuses the hard reset when a namespace could be
-// garbage-collected with the DSC: the collector deletes an object whose
-// owners are all gone (K garbagecollector.go attemptToDeleteItem), and a
-// namespace takes everything in it. A namespace is refused when the chain
-// of its ownerReferences reaches an object of an *.opendatahub.io (or
-// opendatahub.io) API group: the DataScienceCluster, a module CR or the
-// Platform, or anything else of RHOAI's, which the tool does not try to
-// tell apart. Owners of other groups are read and their owners followed
-// (cluster-scoped: a cluster-scoped object can only have cluster-scoped
-// owners). Anything that cannot be read or resolved refuses (fail closed).
-// It returns "" when no namespace is owned that way.
+// namespaceOwnerBlocker refuses the hard reset when the garbage collector
+// could delete a namespace, and everything in it, together with the DSC. It
+// decides as the collector does (K pkg/controller/garbagecollector/
+// garbagecollector.go): attemptToDeleteItem leaves an object without owner
+// references alone (:546-552) and one with at least one "solid" owner
+// (:565-590, it only drops the other references), and deletes it otherwise
+// (:591-623 in the foreground, :624-644). classifyReferences (:453-482)
+// calls an owner solid when it exists with the referenced UID (isDangling,
+// :429-450) and is not waiting for its dependents' deletion:
+// deletionTimestamp set and finalizer foregroundDeletion (:475,
+// hasDeleteDependentsFinalizer in graph_builder.go:586-588).
+//
+// So a namespace is safe while one of its owners keeps it: an owner that
+// is solid and stays solid when the DSC goes, i.e. it is not of an
+// *.opendatahub.io (or opendatahub.io) API group (the DSC, a module CR, the
+// Platform, anything else of RHOAI's, which the tool does not tell apart),
+// it is not being deleted at all (solid while a background deletion waits
+// for other finalizers, but dangling after it: "being deleted is an one-way
+// trip", :506-507), and it has no owners itself, or one of its own owners
+// keeps it the same way. A namespace no owner keeps is refused when one of
+// its owners leads to RHOAI or cannot be resolved (fail closed). A
+// namespace whose owners are all gone or being deleted, none of them
+// leading to RHOAI, is the collector's already, whatever the reset does,
+// and is not refused. Owners are cluster-scoped (a cluster-scoped object
+// cannot have a namespaced owner, :416-424). The collector itself retries,
+// and so does not delete, while an owner's kind cannot be mapped
+// (:408-411) or is namespaced (:346-348); the tool counts those as
+// unresolved and refuses.
+//
+// It reads with the signed-in user's own token (SignedInUser): owners
+// can be of any cluster-scoped kind (on an ACM spoke the open-cluster-
+// management namespaces are owned by AppliedManifestWorks), which the
+// ServiceAccount must not be granted. The user is a cluster-admin (the
+// plan's withAdminRead and the reset's withMutationAuth check that). With
+// no such client it refuses. It returns the refusal in whole sentences, ""
+// when no namespace is at risk.
 func namespaceOwnerBlocker(c *Client) string {
-	body, _, err := c.get("/api/v1/namespaces")
+	u := c.SignedInUser()
+	if u == nil {
+		return "The tool reads the namespaces' owners with your own sign-in, and this request has none, so it cannot tell whether the garbage collector would delete a namespace with the DataScienceCluster."
+	}
+	body, _, err := u.get("/api/v1/namespaces")
 	if err != nil {
-		return "the namespaces could not be listed to check that none would be deleted with the DataScienceCluster: " + err.Error()
+		return "The namespaces could not be listed with your sign-in to check that none would be deleted with the DataScienceCluster: " + strings.TrimSuffix(err.Error(), ".") + "."
 	}
 	var list struct {
 		Items []struct {
@@ -358,21 +387,32 @@ func namespaceOwnerBlocker(c *Client) string {
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(body, &list); err != nil {
-		return "the namespaces could not be read to check that none would be deleted with the DataScienceCluster: " + err.Error()
+		return "The namespaces could not be read to check that none would be deleted with the DataScienceCluster: " + err.Error() + "."
 	}
-	resolver := &ownerResolver{c: c, docs: map[string][]apiResource{}}
-	var why []string
+	resolver := &ownerResolver{c: u, docs: map[string][]apiResource{}, memo: map[string]ownerVerdict{}}
+	var lost, unknown []string
 	for _, ns := range list.Items {
-		for _, ref := range ns.Metadata.OwnerReferences {
-			if reason := resolver.leadsToRHOAI(ref, 1, map[string]bool{}); reason != "" {
-				why = append(why, fmt.Sprintf("namespace %s: %s", ns.Metadata.Name, reason))
-			}
+		if len(ns.Metadata.OwnerReferences) == 0 {
+			continue
+		}
+		v := resolver.owners(ns.Metadata.OwnerReferences, 1, map[string]bool{})
+		owned := ns.Metadata.Name + ", owned by " + strings.Join(v.chain, ", owned by ")
+		switch v.fate {
+		case ownerLeadsToRHOAI:
+			lost = append(lost, "namespace "+owned)
+		case ownerUnknown:
+			unknown = append(unknown, "Namespace "+owned+": "+v.why+". Check its owners with: "+v.check)
 		}
 	}
-	if len(why) == 0 {
-		return ""
+	var out []string
+	if len(lost) > 0 {
+		out = append(out, "Deleting the DataScienceCluster would make the garbage collector delete "+strings.Join(lost, "; ")+
+			map[bool]string{true: ", with everything in it", false: ", with everything in them"}[len(lost) == 1]+". Use the soft reset or Fix instead.")
 	}
-	return "deleting the DataScienceCluster could garbage-collect namespaces with everything in them: " + strings.Join(why, "; ")
+	if len(unknown) > 0 {
+		out = append(out, "The tool cannot tell whether the garbage collector would delete a namespace with the DataScienceCluster. "+strings.Join(unknown, " "))
+	}
+	return strings.Join(out, " ")
 }
 
 // isRHOAIGroup: opendatahub.io or one of its subdomains.
@@ -386,59 +426,150 @@ type apiResource struct {
 	Namespaced bool   `json:"namespaced"`
 }
 
-// ownerResolver reads owners of any cluster-scoped kind, finding their
-// resource from API discovery.
+// ownerResolver reads owners of any cluster-scoped kind with the signed-in
+// user's client, finding their resource from API discovery.
 type ownerResolver struct {
 	c    *Client
 	docs map[string][]apiResource
+	memo map[string]ownerVerdict // by owner UID
 }
 
-// leadsToRHOAI says how ref leads to an *.opendatahub.io object ("" when it
-// does not), or why the tool cannot tell.
-func (r *ownerResolver) leadsToRHOAI(ref ownerRef, depth int, seen map[string]bool) string {
+// ownerFate is what an owner reference means for its dependent once the
+// DSC is deleted (namespaceOwnerBlocker).
+type ownerFate int
+
+const (
+	// ownerKeeps: the owner is solid and stays solid; the collector keeps
+	// the dependent.
+	ownerKeeps ownerFate = iota
+	// ownerNotSolid: the owner is gone (or another object has its name) or
+	// is being deleted, whatever the reset does.
+	ownerNotSolid
+	// ownerLeadsToRHOAI: the owner is RHOAI's, or no owner keeps it and one
+	// leads to RHOAI.
+	ownerLeadsToRHOAI
+	// ownerUnknown: the tool cannot tell.
+	ownerUnknown
+)
+
+type ownerVerdict struct {
+	fate ownerFate
+	// chain: the owners from the dependent's own down to where the verdict
+	// was made (ownerLeadsToRHOAI and ownerUnknown).
+	chain []string
+	// why and check (ownerUnknown): what could not be read or resolved, and
+	// the oc command that shows the owners there.
+	why, check string
+}
+
+// owners is the verdict of an object with these owner references: kept
+// when one of them keeps it (the collector's "at least one solid owner"),
+// else leading to RHOAI when one does, else unknown when one cannot be
+// told, else not solid (all gone or being deleted).
+func (r *ownerResolver) owners(refs []ownerRef, depth int, path map[string]bool) ownerVerdict {
+	var rhoai, unknown *ownerVerdict
+	for _, ref := range refs {
+		v := r.owner(ref, depth, path)
+		switch v.fate {
+		case ownerKeeps:
+			return v
+		case ownerLeadsToRHOAI:
+			if rhoai == nil {
+				rhoai = &v
+			}
+		case ownerUnknown:
+			if unknown == nil {
+				unknown = &v
+			}
+		}
+	}
+	switch {
+	case rhoai != nil:
+		return *rhoai
+	case unknown != nil:
+		return *unknown
+	}
+	return ownerVerdict{fate: ownerNotSolid}
+}
+
+// owner is the verdict of one owner reference; path holds the UIDs of the
+// owners being followed, to tell a loop.
+func (r *ownerResolver) owner(ref ownerRef, depth int, path map[string]bool) ownerVerdict {
 	group, version, found := strings.Cut(ref.APIVersion, "/")
 	if !found {
 		group, version = "", ref.APIVersion
 	}
 	what := fmt.Sprintf("%s %s (%s)", ref.Kind, ref.Name, nonEmpty(ref.APIVersion, "no apiVersion"))
+	unknown := func(why string) ownerVerdict {
+		resource := strings.ToLower(ref.Kind)
+		if group != "" {
+			resource += "." + group
+		}
+		return ownerVerdict{fate: ownerUnknown, chain: []string{what}, why: ref.Kind + " " + ref.Name + " " + strings.TrimSuffix(why, "."),
+			check: fmt.Sprintf("oc get %s %s -o jsonpath='{.metadata.ownerReferences}'", resource, ref.Name)}
+	}
 	switch {
 	case isRHOAIGroup(group):
-		return "owned through " + what
+		return ownerVerdict{fate: ownerLeadsToRHOAI, chain: []string{what}}
 	case depth > maxOwnerDepth:
-		return "its owner chain is longer than the tool follows, at " + what
-	case seen[ref.UID]:
-		return ""
+		return unknown(fmt.Sprintf("is more than %d owners away, farther than the tool follows", maxOwnerDepth))
+	case path[ref.UID]:
+		return unknown("is its own owner through the chain (a loop)")
 	}
-	seen[ref.UID] = true
-	path, why := r.path(group, version, ref.Kind, ref.Name)
+	if v, ok := r.memo[ref.UID]; ok && ref.UID != "" {
+		return v
+	}
+	v := r.read(ref, group, version, what, unknown, depth, path)
+	if ref.UID != "" {
+		r.memo[ref.UID] = v
+	}
+	return v
+}
+
+// read reads the owner ref and decides from it and its own owners.
+func (r *ownerResolver) read(ref ownerRef, group, version, what string, unknown func(string) ownerVerdict, depth int, path map[string]bool) ownerVerdict {
+	apiPath, why := r.path(group, version, ref.Kind, ref.Name)
 	if why != "" {
-		return "the tool cannot tell whether its owner " + what + " leads to the DataScienceCluster: " + why
+		return unknown("cannot be looked up: " + why)
 	}
-	body, _, err := r.c.get(path)
+	body, _, err := r.c.get(apiPath)
 	if IsK8sError(err, http.StatusNotFound) {
-		return "" // gone: it leads nowhere
+		return ownerVerdict{fate: ownerNotSolid} // dangling (K :431-437)
 	}
 	if err != nil {
-		return "the tool cannot tell whether its owner " + what + " leads to the DataScienceCluster: " + err.Error()
+		return unknown("could not be read with your sign-in: " + err.Error())
 	}
 	var obj struct {
 		Metadata struct {
-			UID             string     `json:"uid"`
-			OwnerReferences []ownerRef `json:"ownerReferences"`
+			UID               string     `json:"uid"`
+			DeletionTimestamp string     `json:"deletionTimestamp"`
+			OwnerReferences   []ownerRef `json:"ownerReferences"`
 		} `json:"metadata"`
 	}
 	if err := json.Unmarshal(body, &obj); err != nil {
-		return "the tool cannot tell whether its owner " + what + " leads to the DataScienceCluster: " + err.Error()
+		return unknown("could not be read: " + err.Error())
 	}
-	if ref.UID != "" && obj.Metadata.UID != ref.UID {
-		return "" // another object of that name: the referenced owner is gone
+	m := obj.Metadata
+	switch {
+	case m.UID != ref.UID:
+		return ownerVerdict{fate: ownerNotSolid} // another object of that name: dangling (K :442-449)
+	case m.DeletionTimestamp != "":
+		// With finalizer foregroundDeletion it is not solid now
+		// (waitingForDependentsDeletion, K :475-476). Otherwise it is solid
+		// for now (K :477-478), but a deletion only ends in the object's
+		// removal (K :506-507), after which it is dangling: either way it
+		// does not keep the dependent once the DSC is gone.
+		return ownerVerdict{fate: ownerNotSolid}
+	case len(m.OwnerReferences) == 0:
+		return ownerVerdict{fate: ownerKeeps}
 	}
-	for _, next := range obj.Metadata.OwnerReferences {
-		if reason := r.leadsToRHOAI(next, depth+1, seen); reason != "" {
-			return what + " is " + reason
-		}
+	path[ref.UID] = true
+	defer delete(path, ref.UID)
+	v := r.owners(m.OwnerReferences, depth+1, path)
+	if v.fate == ownerLeadsToRHOAI || v.fate == ownerUnknown {
+		v.chain = append([]string{what}, v.chain...)
 	}
-	return ""
+	return v
 }
 
 // path is the API path of a cluster-scoped object of kind in group/version.
@@ -468,7 +599,7 @@ func (r *ownerResolver) path(group, version, kind, name string) (string, string)
 	for _, res := range resources {
 		if res.Kind == kind && !strings.Contains(res.Name, "/") {
 			if res.Namespaced {
-				return "", kind + " is namespaced, and a namespace cannot have a namespaced owner"
+				return "", kind + " is namespaced, which a namespace's owner cannot be"
 			}
 			return gv + "/" + res.Name + "/" + name, ""
 		}
