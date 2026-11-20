@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -10,13 +11,47 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// HandleResourcesStatus returns the state of test infrastructure (S3 storage, MLflow, pipeline servers).
-// Uses the SA client to list all DS projects -- this is an internal team tool
-// where all authenticated users see all projects.
+// HandleResourcesStatus returns the state of the Environment page (tier
+// per-role).
+//
+// A cluster-admin gets the cluster-wide status (S3 storage, MLflow, the
+// inference gateway, every data science project's pipeline servers and
+// models), read by the ServiceAccount; ?project= is the Pipelines tab's
+// selected project, whose Connection is read too.
+//
+// Anyone else must name one of their projects (?project=) and gets
+// types.ProjectStatus: that project's objects, read with their own token
+// (cluster.GetProjectStatus). Without a project the answer is 403
+// admin_only: the cluster-wide status is admin-only.
 var HandleResourcesStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	// ?project= is the Pipelines tab's selected project: its Connection is
-	// read too. An invalid name reads nothing more.
 	project := r.URL.Query().Get("project")
+	admin, ok := requestRole(w, r)
+	if !ok {
+		return
+	}
+	if !admin {
+		if project == "" {
+			writeError(w, "Only cluster-admins can see the whole cluster's Environment. Choose one of your projects.", http.StatusForbidden, adminOnlyCode)
+			return
+		}
+		if !namespaceRegex.MatchString(project) {
+			writeError(w, "invalid project name", http.StatusBadRequest, "validation")
+			return
+		}
+		u := userReadClient(r.Context(), c, extractUserToken(r), resolveUsername(r))
+		st, err := getProjectStatus(c, u, project)
+		if errors.Is(err, cluster.ErrNotDSProject) {
+			writeError(w, "Cannot read the project: "+err.Error()+".", http.StatusForbidden, cluster.ErrorCodeForbiddenForUser)
+			return
+		}
+		if err != nil {
+			writeUserReadError(w, "Cannot read the project", err)
+			return
+		}
+		writeJSON(w, st, "project-status")
+		return
+	}
+	// An invalid name reads nothing more.
 	if !namespaceRegex.MatchString(project) {
 		project = ""
 	}
@@ -29,18 +64,25 @@ var HandleResourcesStatus = withAuth(func(c *cluster.Client, w http.ResponseWrit
 	writeJSON(w, status, "resources-status")
 })
 
-// HandleDSProjects returns the list of Data Science projects.
-// Uses the SA client to list all DS projects -- this is an internal team tool
-// where all authenticated users see all projects.
-var HandleDSProjects = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	projects, err := cluster.GetDSProjects(c)
+// HandleDSProjects lists the user's data science projects, read with
+// their own token through the OpenShift projects API (tier user-token;
+// cluster.ListUserDSProjects): a cluster-admin sees every project, anyone
+// else the projects they may see.
+var HandleDSProjects = withUserRead(func(_, u *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	projects, err := listUserDSProjects(u)
 	if err != nil {
-		slog.Error("ds-projects error", "error", err)
-		writeError(w, "failed to list projects", http.StatusInternalServerError)
+		slog.Warn("ds-projects error", "error", err)
+		writeUserReadError(w, "Cannot list your data science projects", err)
 		return
 	}
 	writeJSON(w, map[string]any{"projects": projects}, "ds-projects")
 })
+
+// getProjectStatus reads a user's project; tests replace it.
+var getProjectStatus = cluster.GetProjectStatus
+
+// listUserDSProjects lists the user's projects; tests replace it.
+var listUserDSProjects = cluster.ListUserDSProjects
 
 // runPrerequisites sets up a feature's prerequisites; tests replace it.
 var runPrerequisites = cluster.RunPrerequisites

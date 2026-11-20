@@ -212,6 +212,16 @@ func deniedHint(err error, asUser bool) string {
 	return " The updater's ServiceAccount lacks the rights for this call: re-apply the template (deploy/template.yaml) so its ClusterRole has the samples rules. MLflow caches access decisions for up to 5 minutes, so a change can take that long to apply."
 }
 
+// deniedReadHint explains a refused read of the samples status, which is
+// made with the signed-in user's own token (GetMLflowSamplesStatus): the
+// user may not see it, nothing for an admin to re-apply.
+func deniedReadHint(err error) string {
+	if !isDenied(err) {
+		return ""
+	}
+	return " MLflow refused your own OpenShift permissions for this read: you cannot see this in the project's MLflow workspace, or your sign-in expired (log out and log in again)."
+}
+
 const maxSampleErrorMessage = 300
 
 // parseSampleAPIError reads an error body: MLflow's {"error_code","message"},

@@ -184,15 +184,17 @@ func TestOAuthProxyForwardsOnlyItsOwnSessionToken(t *testing.T) {
 	}
 }
 
-// TestOAuthProxySignInGateIsListPodsInTheOperatorNamespace pins the
-// sign-in gate, the 4.0.0 read policy (SECURITY.md, Authorization checks):
-// oauth-proxy lets a user in only when a SubjectAccessReview says they may
-// list pods in redhat-ods-operator, and whoever passes it sees every page
-// read-only, read with the ServiceAccount's token. Exactly one
-// --openshift-sar, with exactly that review: a wider gate would show the
-// ServiceAccount's reads to more people, and the app has no other gate on
-// reads (changes have mutationRequirement).
-func TestOAuthProxySignInGateIsListPodsInTheOperatorNamespace(t *testing.T) {
+// TestOAuthProxySignInGateIsRHOAIsAllowedGroups pins the sign-in gate of
+// 5.0.0 (SECURITY.md, "5.0.0: who sees what"): oauth-proxy lets a user in
+// only when a SubjectAccessReview says they may get
+// auths.services.platform.opendatahub.io cluster-wide, which RHOAI grants
+// to its Auth CR's allowedGroups. What a signed-in user then reads is the
+// app's own tiers (route_tiers.go; admin-only unless classified). Exactly
+// one --openshift-sar, with exactly that review. The OpenShift
+// SubjectAccessReview names the API group "resourceAPIGroup" (openshift/api
+// authorization/v1 Action): with any other key the check would ask for a
+// core "auths", which only cluster-admins pass.
+func TestOAuthProxySignInGateIsRHOAIsAllowedGroups(t *testing.T) {
 	data, err := os.ReadFile("../../deploy/template.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -241,7 +243,9 @@ func TestOAuthProxySignInGateIsListPodsInTheOperatorNamespace(t *testing.T) {
 	if err := json.Unmarshal([]byte(sars[0]), &review); err != nil {
 		t.Fatalf("--openshift-sar=%s: %v", sars[0], err)
 	}
-	want := map[string]string{"resource": "pods", "verb": "list", "namespace": "redhat-ods-operator"}
+	// No "namespace": a cluster-wide review. No "resourceName": the
+	// ClusterRole names none.
+	want := map[string]string{"verb": "get", "resourceAPIGroup": "services.platform.opendatahub.io", "resource": "auths"}
 	if len(review) != len(want) {
 		t.Fatalf("--openshift-sar=%s, want %v", sars[0], want)
 	}

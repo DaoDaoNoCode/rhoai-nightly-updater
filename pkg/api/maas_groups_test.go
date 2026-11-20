@@ -59,7 +59,7 @@ func TestMaaSGroups(t *testing.T) {
 		mutationPermission = func(context.Context, string) (bool, error) { return false, nil }
 		calls := stubMaaSGroups(t)
 		w := getMaaSGroups("?name=ml-team", "user:reader")
-		if body := decodeError(t, w); w.Code != http.StatusForbidden || body["errorCode"] != "forbidden" || len(*calls) != 0 {
+		if body := decodeError(t, w); w.Code != http.StatusForbidden || body["errorCode"] != adminOnlyCode || len(*calls) != 0 {
 			t.Fatalf("status=%d calls=%v body=%s", w.Code, *calls, w.Body.String())
 		}
 	})

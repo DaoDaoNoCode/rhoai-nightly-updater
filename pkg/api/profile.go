@@ -53,10 +53,12 @@ const gitOpsAdminMessage = "This updater runs the gitops profile, where only clu
 // withGitOpsAdmin guards a read in the gitops profile: the user must pass
 // the same cluster-admin check as every mutation (mutationPermission, with
 // the user's own token) before the handler makes any ServiceAccount call.
-// In the full profile reads only need the sign-in (oauth-proxy's
-// --openshift-sar); on the clusters the gitops profile is for, many people
-// can sign in, and what the ServiceAccount reads (pods, events, every
-// namespace's diagnostics) is not theirs to see.
+// In the full profile each GET route has a read tier (route_tiers.go);
+// the gitops profile keeps every read cluster-admin only: since 5.0.0
+// every user RHOAI allows passes the sign-in (oauth-proxy's
+// --openshift-sar, the same in both profiles), and what the ServiceAccount
+// reads (pods, events, every namespace's diagnostics) is not theirs to
+// see.
 func withGitOpsAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		_, r, ok := requestUser(w, r)
