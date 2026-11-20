@@ -62,6 +62,37 @@ export const ADMIN_PERMISSIONS: UserPermissions = { ...contract.permissionsAdmin
 /** A user who is not a cluster-admin (per-user views). */
 export const USER_PERMISSIONS: UserPermissions = { ...contract.permissionsUser(), user: "dev-user" };
 
+interface RenderedApp {
+  /** App-wide reads in flight. */
+  pending: Set<Promise<unknown>>;
+  /** A read started since the last settled() finished. */
+  unsettled: boolean;
+  settled: () => Promise<void>;
+}
+
+// The apps this test rendered (renderWithApp), for settleApps and setup.ts.
+let renderedApps: RenderedApp[] = [];
+
+/**
+ * Waits until every app this test rendered is settled (see renderWithApp's
+ * settled()). A test that renders the app ends with this.
+ */
+export async function settleApps(): Promise<void> {
+  for (const app of renderedApps) await app.settled();
+}
+
+/**
+ * How many apps this test rendered have reads that started after their last
+ * settled(), and forget the apps. setup.ts fails such a test: those answers
+ * would update the page after the test, outside act, at a moment that
+ * depends on the machine's load.
+ */
+export function unsettledApps(): number {
+  const n = renderedApps.filter((a) => a.unsettled).length;
+  renderedApps = [];
+  return n;
+}
+
 /**
  * Renders a page inside the app's providers. The permission check goes
  * through the global fetch, so stubApi's `/api/user/permissions` (a
@@ -79,8 +110,11 @@ export function renderPage(ui: React.ReactNode, route = "/", fetchers: AppFetche
 export function renderWithApp(ui: React.ReactNode, fetchers: AppFetchers = {}, route = "/") {
   // Every app-wide read in flight, so settled() can wait for their answers.
   const pending = new Set<Promise<unknown>>();
+  const app: RenderedApp = { pending, unsettled: false, settled: async () => {} };
+  renderedApps.push(app);
   const track = <T,>(read: () => Promise<T>) => (): Promise<T> => {
     const p = read();
+    app.unsettled = true;
     pending.add(p);
     const done = () => { pending.delete(p); };
     p.then(done, done);
@@ -105,10 +139,14 @@ export function renderWithApp(ui: React.ReactNode, fetchers: AppFetchers = {}, r
       await act(async () => {
         await Promise.allSettled([...pending]);
       });
-      if (pending.size === 0) return;
+      if (pending.size === 0) {
+        app.unsettled = false;
+        return;
+      }
     }
     throw new Error("the app's reads did not settle: a read started after every answer (a poll without delay?)");
   };
+  app.settled = settled;
   const result = render(
     <LiveAnnouncerProvider>
       <MemoryRouter initialEntries={[route]}>

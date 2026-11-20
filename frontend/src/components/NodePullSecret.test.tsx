@@ -5,7 +5,7 @@ import { ClusterSetupCard } from "./StatusCards";
 import { SetupModal } from "./PrerequisitesPanel";
 import { nodePullUnverified, prerequisitesMet } from "../utils";
 import { imageByTag } from "../services/api/operator";
-import { nightlyStatus, renderWithApp } from "../test/providers";
+import { nightlyStatus, renderWithApp, settleApps } from "../test/providers";
 import type { PullSecretInfo, StatusResponse } from "../types";
 
 // The command the backend sends (pkg/cluster/node_pull_secret.sh); the card
@@ -173,6 +173,7 @@ describe("Check that the nodes can pull", () => {
     expect(JSON.parse(String(call?.[1]?.body))).toEqual({ image: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6" });
     expect(screen.getByText("Ready")).toBeInTheDocument();
     expect(screen.queryByText("Nodes not checked")).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("shows why the nodes cannot pull", async () => {
@@ -184,19 +185,23 @@ describe("Check that the nodes can pull", () => {
     expect(await screen.findByText("The nodes cannot pull from quay.io/rhoai")).toBeInTheDocument();
     expect(screen.getByText(/ErrImagePull: unauthorized/)).toBeInTheDocument();
     expect(screen.getByText("Nodes can't pull")).toBeInTheDocument();
+    await settleApps();
   });
 
   it("waits for the build to check, and says why", async () => {
-    renderWithApp(<PullSecretSetup pullSecret={saved(unchecked)} controlPlane="self-managed" checkImageReason="The newest nightly build could not be looked up: quay down" />);
+    // Until the permission check answers, the tooltip says that instead: hover the settled page.
+    await renderWithApp(<PullSecretSetup pullSecret={saved(unchecked)} controlPlane="self-managed" checkImageReason="The newest nightly build could not be looked up: quay down" />).settled();
     const check = screen.getByRole("button", { name: "Check that the nodes can pull" });
     expect(check).toHaveAttribute("aria-disabled", "true");
     fireEvent.mouseEnter(check);
     expect(await screen.findByRole("tooltip")).toHaveTextContent(/quay down/);
+    await settleApps();
   });
 
   it("is disabled for a read-only user", async () => {
     renderWithApp(<PullSecretSetup pullSecret={saved(unchecked)} controlPlane="self-managed" checkImage={IMAGE} />, { permissions: async () => ({ canMutate: false, user: "viewer" }) });
     await waitFor(() => expect(screen.getByRole("button", { name: "Check that the nodes can pull" })).toHaveAttribute("aria-disabled", "true"));
+    await settleApps();
   });
 });
 
@@ -212,6 +217,7 @@ describe("The cluster setup on a self-managed cluster", () => {
     await screen.findByText("The nodes can pull from quay.io/rhoai");
     const header = screen.getByRole("heading", { name: "One-time cluster setup" }).closest(".pf-v6-c-card__header") as HTMLElement;
     expect(within(header).getByText("Ready")).toBeInTheDocument();
+    await settleApps();
   });
 
   it("keeps the card at the top (nodes unverified) but does not hold back Update", () => {

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { NodeSetupDialog } from "./NodeSetupDialog";
 import { ImageMirrorSetup } from "./ImageMirrorSetup";
-import { nightlyStatus, renderWithApp } from "../test/providers";
+import { nightlyStatus, renderWithApp, settleApps } from "../test/providers";
 import type { NodeSetupPlan, StatusResponse } from "../types";
 
 const READY_PLAN: NodeSetupPlan = {
@@ -61,6 +61,7 @@ describe("NodeSetupDialog", () => {
     const streamCall = fetchMock.mock.calls.find(([u]) => u === "/api/setup/nodes/stream");
     expect(JSON.parse(String(streamCall?.[1]?.body))).toEqual({ action: "pull-secret-add", resourceVersion: "42" });
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    await settleApps();
   });
 
   it("explains a refusal and offers no confirm button", async () => {
@@ -70,6 +71,7 @@ describe("NodeSetupDialog", () => {
     expect(screen.getByText(/denied the request/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create the image mirror" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Close" }).some((b) => b.textContent === "Close")).toBe(true);
+    await settleApps();
   });
 
   it.each([
@@ -81,6 +83,7 @@ describe("NodeSetupDialog", () => {
     renderWithApp(<NodeSetupDialog action="mirror-create" onClose={vi.fn()} onChanged={vi.fn()} />);
     expect(await screen.findByText(title)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create the image mirror" })).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("says when there is nothing to change", async () => {
@@ -88,6 +91,7 @@ describe("NodeSetupDialog", () => {
     renderWithApp(<NodeSetupDialog action="mirror-create" onClose={vi.fn()} onChanged={vi.fn()} />);
     expect(await screen.findByText("Nothing to change")).toBeInTheDocument();
     expect(screen.getByText(/team-mirrors already redirects/)).toBeInTheDocument();
+    await settleApps();
   });
 
   it("leaves an entry this tool did not add: offers the check, and replaces it only after the acknowledgement", async () => {
@@ -129,6 +133,7 @@ describe("NodeSetupDialog", () => {
     expect(await screen.findByText("Done")).toBeInTheDocument();
     const streamCall = fetchMock.mock.calls.find(([u]) => u === "/api/setup/nodes/stream");
     expect(JSON.parse(String(streamCall?.[1]?.body))).toEqual({ action: "pull-secret-add", resourceVersion: "42", replaceExisting: true });
+    await settleApps();
   });
 
   it("refuses to remove an entry this tool did not add", async () => {
@@ -138,6 +143,7 @@ describe("NodeSetupDialog", () => {
     expect(await screen.findByText("Not added by this tool")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove from the nodes' pull secret" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("shows a failed run's message", async () => {
@@ -151,6 +157,7 @@ describe("NodeSetupDialog", () => {
     fireEvent.click(confirm);
     expect(await screen.findByText("It stopped")).toBeInTheDocument();
     expect(screen.getAllByText(/It changed since you reviewed it/).length).toBeGreaterThan(0);
+    await settleApps();
   });
 });
 
@@ -215,6 +222,7 @@ describe("The image mirror row, by control plane", () => {
   it("is disabled for a read-only user", async () => {
     renderWithApp(<ImageMirrorSetup status={mirrorStatus("self-managed", MISSING)} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />, { permissions: async () => ({ canMutate: false, user: "viewer" }) });
     await waitFor(() => expect(screen.getByRole("button", { name: "Create the image mirror" })).toHaveAttribute("aria-disabled", "true"));
+    await settleApps();
   });
 
   it("opens the review dialog", async () => {
@@ -225,5 +233,6 @@ describe("The image mirror row, by control plane", () => {
     fireEvent.click(create);
     const dialog = await screen.findByRole("dialog");
     expect(await within(dialog).findByText("Create ImageDigestMirrorSet rhoai-quay-mirror (cluster-wide).")).toBeInTheDocument();
+    await settleApps();
   });
 });

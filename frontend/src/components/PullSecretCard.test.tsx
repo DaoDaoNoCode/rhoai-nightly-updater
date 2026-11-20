@@ -5,7 +5,7 @@ import { PullSecretSetup } from "./PullSecretCard";
 import { ClusterSetupCard } from "./StatusCards";
 import { SetupModal } from "./PrerequisitesPanel";
 import { prerequisitesMet } from "../utils";
-import { nightlyStatus, renderWithApp, IDLE_OPERATION } from "../test/providers";
+import { nightlyStatus, renderWithApp, IDLE_OPERATION, settleApps } from "../test/providers";
 import { useOperation } from "../state/AppState";
 import { streamUpdate } from "../services/api";
 import { sseResponse } from "../test/utils";
@@ -34,6 +34,7 @@ describe("PullSecretSetup gating", () => {
     renderWithApp(<PullSecretSetup pullSecret={missing} />);
     const save = await saveButton();
     await waitFor(() => expect(save).not.toHaveAttribute("aria-disabled", "true"));
+    await settleApps();
   });
 
   it("is disabled while this tab's own update stream runs, although GET /api/operation is not polled then", async () => {
@@ -50,12 +51,14 @@ describe("PullSecretSetup gating", () => {
     // detach and the reads it starts), not after the test.
     sse.close();
     await waitFor(() => expect(screen.getByRole("button", { name: "Create secret" })).not.toHaveAttribute("aria-disabled", "true"));
+    await settleApps();
   });
 
   it("is disabled for a read-only user", async () => {
     renderWithApp(<PullSecretSetup pullSecret={missing} />, { permissions: async () => ({ canMutate: false, user: "viewer" }) });
     await saveButton();
     await waitFor(() => expect(screen.getByRole("button", { name: "Create secret" })).toHaveAttribute("aria-disabled", "true"));
+    await settleApps();
   });
 });
 
@@ -75,6 +78,7 @@ describe("PullSecretSetup actions of an existing secret", () => {
     // Both in one ActionListGroup: PatternFly's action-to-action spacing.
     expect(test.closest(".pf-v6-c-action-list__group")).toBe(replace.closest(".pf-v6-c-action-list__group"));
     expect(test.closest(".pf-v6-c-action-list__group")).not.toBeNull();
+    await settleApps();
   });
 
   it("opens the form as the confirmation step: Replace token (danger) and Cancel, with focus moving in and back", async () => {
@@ -99,6 +103,7 @@ describe("PullSecretSetup actions of an existing secret", () => {
     fireEvent.click(cancel);
     expect(screen.queryByLabelText(/Auth token for quay.io\/rhoai/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Replace token" })).toHaveFocus();
+    await settleApps();
   });
 });
 

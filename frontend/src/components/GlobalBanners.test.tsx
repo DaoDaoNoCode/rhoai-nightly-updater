@@ -2,7 +2,7 @@ import React from "react";
 import { describe, expect, it, vi } from "vitest";
 import { act, screen, waitFor } from "@testing-library/react";
 import { GlobalBanners } from "./GlobalBanners";
-import { USER_PERMISSIONS, renderWithApp } from "../test/providers";
+import { USER_PERMISSIONS, renderWithApp, settleApps } from "../test/providers";
 import { ApiError } from "../services/api";
 import { formatClockTime } from "../utils";
 import type { ServerOperation } from "../types";
@@ -19,6 +19,7 @@ describe("the banner of an operation another updater pod runs", () => {
     renderWithApp(<GlobalBanners />, { operation: async () => ({ inProgress: true, operation: remoteUpdate }) }, "/components");
     expect(await screen.findByText(/on updater pod updater-old/)).toBeInTheDocument();
     expect(screen.getByText(/Latest progress: CSV rhods-operator\.3\.6\.0: Installing \(InstallWaiting\)\. Another updater pod runs it/)).toBeInTheDocument();
+    await settleApps();
   });
 });
 
@@ -36,6 +37,7 @@ describe("the permissions notice", () => {
     expect(screen.getByRole("link", { name: "Log out" })).toHaveAttribute("href", "/oauth/sign_out");
     expect(screen.queryByText(/Read-only access/)).not.toBeInTheDocument();
     expect(screen.queryByText(/cluster-admin role/)).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("shows another backend reason without Log out", async () => {
@@ -43,6 +45,7 @@ describe("the permissions notice", () => {
     expect(await screen.findByText("Changes are paused for maintenance. You can still view everything.")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Log out" })).not.toBeInTheDocument();
     expect(screen.queryByText(/cluster-admin role/)).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("keeps the read-only notice for a cluster-admin whose answer gives no reason", async () => {
@@ -51,6 +54,7 @@ describe("the permissions notice", () => {
     expect(screen.getByText(/requires the cluster-admin role/)).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Log out" })).not.toBeInTheDocument();
     expect(screen.queryByText(/Sign in again/)).not.toBeInTheDocument();
+    await settleApps();
   });
 
   // Per-user views: read-only is what a user is, and their pages already show their view.
@@ -63,12 +67,14 @@ describe("the permissions notice", () => {
     await act(async () => {});
     expect(screen.queryByText(/Read-only access/)).not.toBeInTheDocument();
     expect(screen.queryByText(/cluster-admin role/)).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("still warns a user when their permissions could not be checked", async () => {
     renderWithApp(<GlobalBanners />, { permissions: async () => { throw new ApiError({ status: 503, errorCode: "authorization_unavailable", message: "Cannot verify" }); } }, "/");
     expect(await screen.findByText("Your permissions could not be checked; changes are disabled", { exact: false })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    await settleApps();
   });
 });
 
@@ -85,6 +91,7 @@ describe("the operation banner for a user who is not a cluster-admin", () => {
     expect(screen.getByText(/Update to nightly\. What this page shows may change until it finishes\./)).toBeInTheDocument();
     expect(screen.queryByText(/qa-user|Someone|on updater pod|View progress/)).not.toBeInTheDocument();
     expect(clock).toMatch(/^\d\d:\d\d$/);
+    await settleApps();
   });
 
   it("shows nothing while no operation runs", async () => {
@@ -95,6 +102,7 @@ describe("the operation banner for a user who is not a cluster-admin", () => {
     await screen.findByText("loaded");
     await act(async () => {});
     expect(screen.queryByText(/is running/)).not.toBeInTheDocument();
+    await settleApps();
   });
 });
 
@@ -106,6 +114,7 @@ describe("notices only a cluster-admin can act on", () => {
     renderWithApp(<GlobalBanners />, { version: outdated, update: newer }, "/");
     expect(await screen.findByText("For admins: this updater's deployment is out of date", { exact: false })).toBeInTheDocument();
     expect(await screen.findByText("v5.1.0 is available", { exact: false })).toBeInTheDocument();
+    await settleApps();
   });
 
   it("does not show them to a user who is not a cluster-admin", async () => {
@@ -117,5 +126,6 @@ describe("notices only a cluster-admin can act on", () => {
     await act(async () => {});
     expect(screen.queryByText(/deployment is out of date/)).not.toBeInTheDocument();
     expect(screen.queryByText(/is available/)).not.toBeInTheDocument();
+    await settleApps();
   });
 });

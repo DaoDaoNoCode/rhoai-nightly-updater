@@ -9,7 +9,7 @@ import { STEP_SETS } from "./operationSteps";
 import { StatusPage } from "./pages/StatusPage";
 import { ComponentsPage, IMAGE_LABELS_OFF } from "./pages/ComponentsPage";
 import { HelpButton } from "./components/HelpModal";
-import { nightlyStatus, renderPage, renderWithApp } from "./test/providers";
+import { nightlyStatus, renderPage, renderWithApp, settleApps } from "./test/providers";
 import { stubApi } from "./test/apiStub";
 
 const GIT_IMAGE = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + "1".repeat(64);
@@ -125,6 +125,7 @@ describe("ComponentsPage under Argo CD", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Preview and create DataScienceCluster" })).toHaveAttribute("aria-disabled", "true"));
     fireEvent.mouseEnter(screen.getByRole("button", { name: "Preview and create DataScienceCluster" }));
     expect(await screen.findByText(/creates the DataScienceCluster from Git on its next sync/)).toBeInTheDocument();
+    await settleApps();
   });
 });
 
@@ -136,6 +137,7 @@ describe("StatusPage under Argo CD", () => {
     const recovery = screen.getByRole("list", { name: "Recovery actions" });
     await waitFor(() => expect(within(recovery).getByRole("button", { name: "Re-deploy operator..." })).toHaveAttribute("aria-disabled", "true"));
     expect(within(recovery).getByRole("button", { name: "Choose a build..." })).toHaveAttribute("aria-disabled", "true");
+    await settleApps();
   });
 
   it("does not offer to create the DataScienceCluster, which Git creates", async () => {
@@ -143,6 +145,7 @@ describe("StatusPage under Argo CD", () => {
     renderPage(<StatusPage />, "/", { status: async () => nightlyStatus({ ...synced, dscExists: false }) });
     expect(await screen.findByText("No DataScienceCluster yet")).toBeInTheDocument();
     expect(screen.queryByText("Create the DataScienceCluster")).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("shows no notice without Argo CD", async () => {
@@ -151,6 +154,7 @@ describe("StatusPage under Argo CD", () => {
     const recovery = await screen.findByRole("list", { name: "Recovery actions" });
     await waitFor(() => expect(within(recovery).getByRole("button", { name: "Choose a build..." })).not.toHaveAttribute("aria-disabled"));
     expect(screen.queryByText(/Argo CD manages/)).not.toBeInTheDocument();
+    await settleApps();
   });
 });
 
@@ -213,6 +217,7 @@ describe("UpdatePanel under Argo CD", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Install the build the catalog serves" })).not.toHaveAttribute("aria-disabled"));
     fireEvent.click(screen.getByRole("button", { name: "Install the build the catalog serves" }));
     expect(onRequestUpdate).toHaveBeenCalledWith(expect.objectContaining({ image: GIT_IMAGE }));
+    await settleApps();
   });
 
   it("does not call the catalog's build installed while the catalog pod is replaced", async () => {
@@ -290,6 +295,7 @@ describe("A catalog an ACM policy manages", () => {
     expect(screen.getByText("From the ACM policy")).toBeInTheDocument();
     expect(screen.getByText(/An ACM policy \(config-policy-controller\) sets this image/)).toBeInTheDocument();
     expect(screen.queryByText("Update is off for this catalog")).not.toBeInTheDocument();
+    await settleApps();
   });
 });
 
@@ -330,6 +336,7 @@ describe("The gitops profile reads no registry", () => {
     fireEvent.click(screen.getByRole("button", { name: /help/i }));
     await screen.findByText("Updater build");
     expect(screen.queryByText(/The chart pins the updater's release in Git/)).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("shows the operator build from the CSV, and why the images have no labels", async () => {
@@ -342,5 +349,6 @@ describe("The gitops profile reads no registry", () => {
     renderPage(<ComponentsPage />, "/components", { status: async () => gitOpsStatus, version: gitOpsVersion });
     expect(await screen.findByText(new RegExp(IMAGE_LABELS_OFF.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))).toBeInTheDocument();
     expect(screen.getByText("registry.redhat.io/rhoai/odh-rhel9-operator@sha256:abc")).toBeInTheDocument();
+    await settleApps();
   });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { ComponentsPage } from "./ComponentsPage";
 import { stubApi, jsonResponse } from "../test/apiStub";
-import { nightlyStatus, renderPage as renderInApp } from "../test/providers";
+import { nightlyStatus, renderPage as renderInApp, settleApps } from "../test/providers";
 import type { ComponentsResponse, DeploymentInfo } from "../types";
 import { NO_PERMISSION_REASON } from "../state/AppInfo";
 
@@ -36,6 +36,7 @@ describe("ComponentsPage component causes", () => {
     renderPage();
     expect(await screen.findByText(/Cause: Prerequisite operator not installed: JobSet Operator/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Diagnostics" })).toHaveAttribute("href", "/diagnostics");
+    await settleApps();
   });
 });
 
@@ -59,6 +60,7 @@ describe("ComponentsPage DSC states", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
     expect(await screen.findByText("DataScienceCluster default-dsc created")).toBeInTheDocument();
     expect(api.calls.filter((c) => c === "POST /api/setup/dsc")).toHaveLength(1);
+    await settleApps();
   });
 
   it("no-crd says RHOAI is not installed and links to the Dashboard", async () => {
@@ -66,6 +68,7 @@ describe("ComponentsPage DSC states", () => {
     renderPage();
     expect(await screen.findByRole("heading", { name: "RHOAI is not installed" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /install RHOAI/ })).toHaveAttribute("href", "/");
+    await settleApps();
   });
 
   it.each([
@@ -76,8 +79,10 @@ describe("ComponentsPage DSC states", () => {
     [500, "internal", "Can't load the components"],
   ])("HTTP %i %s is an error with Retry, never an empty state", async (status, errorCode, title) => {
     stubApi({ "/api/components": () => jsonResponse({ error: "Could not read components: boom", errorCode }, status) });
-    renderPage();
+    const { settled } = renderPage();
     expect(await screen.findByText(new RegExp(`^${title}`))).toBeInTheDocument();
+    // The page's error can show before the app's own reads answered: wait for those too.
+    await settled();
     // The raw error is one click away (UX-Global-9).
     fireEvent.click(screen.getByRole("button", { name: "Show the error" }));
     expect(screen.getByText(/Could not read components: boom/)).toBeInTheDocument();
@@ -112,6 +117,7 @@ describe("ComponentsPage Deployments table", () => {
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveAttribute("href", `https://github.com/red-hat-data-services/odh-dashboard/commit/${sha}`);
     expect(within(table).getAllByText(sha.slice(0, 7))).toHaveLength(2);
+    await settleApps();
   });
 
   it("shows problems first with their cause, and filters by status and text", async () => {
@@ -138,6 +144,7 @@ describe("ComponentsPage Deployments table", () => {
     expect(rowNames()).toHaveLength(3);
     // The status menu closes on PatternFly Popper's hide timer (setTimeout).
     await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+    await settleApps();
   });
 
   it("a base image's dash says it is not a build, a build image's dash says the label is missing", async () => {
@@ -154,6 +161,7 @@ describe("ComponentsPage Deployments table", () => {
     };
     await waitFor(() => expect(within(rowOf("dashboard-redirect")).getAllByText(/Not an RHOAI or ODH build/).length).toBeGreaterThan(0));
     expect(within(rowOf("gen-ai-ui")).getAllByText("Not recorded in the image labels").length).toBeGreaterThan(0);
+    await settleApps();
   });
 
   it("sorts by name when the Name header is clicked", async () => {
@@ -164,6 +172,7 @@ describe("ComponentsPage Deployments table", () => {
     expect(rowNames()).toEqual(["agent-ops-ui", "gen-ai-ui", "odh-observability"]);
     fireEvent.click(screen.getByRole("button", { name: "Name" }));
     expect(rowNames()).toEqual(["odh-observability", "gen-ai-ui", "agent-ops-ui"]);
+    await settleApps();
   });
 
   it("an expanded row shows the full image and a keyboard-reachable copy button", async () => {
@@ -174,6 +183,7 @@ describe("ComponentsPage Deployments table", () => {
     const image = deployments[0].image;
     expect(screen.getByRole("button", { name: `Copy image reference ${image}` }).closest(".pf-v6-c-clipboard-copy")).toHaveTextContent(image.slice(0, 20));
     expect(screen.getByRole("button", { name: `Copy image reference ${image}` })).toBeInTheDocument();
+    await settleApps();
   });
 
   it("Unblock rollout names the Deployment and sends it; nothing to do is info, not an error", async () => {
@@ -198,6 +208,7 @@ describe("ComponentsPage Deployments table", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Unblock rollout" }));
     expect(await screen.findByText("Nothing to do")).toBeInTheDocument();
     expect(api.bodies["POST /api/assist-rollout"]).toEqual([{ namespace: "redhat-ods-applications", deployment: "rhods-dashboard" }]);
+    await settleApps();
   });
 
   it("read-only users cannot open the unblock dialog", async () => {
@@ -214,6 +225,7 @@ describe("ComponentsPage Deployments table", () => {
     await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(NO_PERMISSION_REASON));
     fireEvent.click(screen.getByRole("menuitem", { name: "Unblock rollout" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await settleApps();
   });
 });
 
@@ -227,6 +239,7 @@ describe("ComponentsPage and the app-wide lock", () => {
     await waitFor(() => expect(create).toHaveAttribute("aria-disabled", "true"));
     fireEvent.mouseEnter(create);
     expect(await screen.findByRole("tooltip")).toHaveTextContent(/alice is running "Update to nightly"/);
+    await settleApps();
   });
 
   it("a DSC repair refused with a 422 OperationResponse keeps its errorCode and logs, and re-fetches", async () => {
@@ -243,6 +256,7 @@ describe("ComponentsPage and the app-wide lock", () => {
     expect(screen.getByText("No invalid fields left.").closest(".pf-v6-c-alert")).toHaveClass("pf-m-info");
     expect(screen.getByText("checked spec.components.foo")).toBeInTheDocument();
     await waitFor(() => expect(api.calls.filter((c) => c.startsWith("GET /api/components")).length).toBeGreaterThan(1));
+    await settleApps();
   });
 });
 
@@ -274,6 +288,7 @@ describe("ComponentsPage DSC repair preview", () => {
       mode: "reset-defaults", expectedOperatorVersion: "3.6.0", expectedAPIVersion: "datasciencecluster.opendatahub.io/v3",
       expectedResetRemovals: ["mcplifecycleoperator", "trainer"],
     });
+    await settleApps();
   });
 
   it("a reset with no removals sends an empty list, not none", async () => {
@@ -291,6 +306,7 @@ describe("ComponentsPage DSC repair preview", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Confirm" }));
     await waitFor(() => expect(api.bodies["POST /api/components/dsc/repair"]).toHaveLength(1));
     expect(api.bodies["POST /api/components/dsc/repair"][0]).toMatchObject({ expectedResetRemovals: [] });
+    await settleApps();
   });
 
   // HIGH (round 2): the page loaded while v3 could not be converted (removals worked out for v2); when the dialog
@@ -323,6 +339,7 @@ describe("ComponentsPage DSC repair preview", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(within(dialog).queryByText("The DataScienceCluster changed since this page loaded")).not.toBeInTheDocument());
     await waitFor(() => expect(within(dialog).getByRole("button", { name: "Confirm" })).toBeEnabled());
+    await settleApps();
   });
 
   it("an operator change between page load and dialog open also disables confirm", async () => {
@@ -337,6 +354,7 @@ describe("ComponentsPage DSC repair preview", () => {
     const dialog = await screen.findByRole("dialog");
     expect(await within(dialog).findByText("The DataScienceCluster changed since this page loaded")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Confirm" })).toBeDisabled();
+    await settleApps();
   });
 
   it("remove-invalid sends the API version the page compared", async () => {
@@ -354,6 +372,7 @@ describe("ComponentsPage DSC repair preview", () => {
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Confirm" }));
     await waitFor(() => expect(api.bodies["POST /api/components/dsc/repair"]).toHaveLength(1));
     expect(api.bodies["POST /api/components/dsc/repair"][0]).toMatchObject({ mode: "remove-invalid", expectedAPIVersion: "datasciencecluster.opendatahub.io/v2" });
+    await settleApps();
   });
 
   it("a blocked reset shows each blocked component and why, and offers no Confirm", async () => {
@@ -374,6 +393,7 @@ describe("ComponentsPage DSC repair preview", () => {
     fireEvent.click(within(dialog).getAllByRole("button", { name: "Close" }).slice(-1)[0]);
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(api.calls.filter((c) => c.startsWith("POST"))).toEqual([]);
+    await settleApps();
   });
 
   it("remove-extra is blocked only by its own components; a reset block does not block it", async () => {
@@ -387,6 +407,7 @@ describe("ComponentsPage DSC repair preview", () => {
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByRole("button", { name: "Confirm" })).toBeInTheDocument();
     expect(within(dialog).queryByText("This repair is not possible now")).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("remove-extra with a blocked extra component offers no Confirm", async () => {
@@ -401,6 +422,7 @@ describe("ComponentsPage DSC repair preview", () => {
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(/Its operator has no ready pod/)).toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: "Confirm" })).not.toBeInTheDocument();
+    await settleApps();
   });
 });
 
@@ -429,6 +451,7 @@ describe("ComponentsPage DSC API versions", () => {
     expect(screen.queryByText(/raw\.githubusercontent|HTTP 404/)).not.toBeInTheDocument();
     // No drift card: nothing was compared across versions.
     expect(screen.queryByText(/differs from operator/)).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("links the console to the version the DSC was read at, and shows unknown component keys as they are", async () => {
@@ -437,6 +460,7 @@ describe("ComponentsPage DSC API versions", () => {
     const edit = await screen.findByRole("link", { name: "Edit default-dsc in the OpenShift console" });
     expect(edit).toHaveAttribute("href", "https://console.example.com/k8s/cluster/datasciencecluster.opendatahub.io~v2~DataScienceCluster/default-dsc/yaml");
     expect(screen.getByText("someFutureComponent")).toBeInTheDocument();
+    await settleApps();
   });
 
   it("uses v3 in the console link when the DSC is read as v3", async () => {
@@ -445,6 +469,7 @@ describe("ComponentsPage DSC API versions", () => {
     const edit = await screen.findByRole("link", { name: "Edit default-dsc in the OpenShift console" });
     expect(edit.getAttribute("href")).toContain("datasciencecluster.opendatahub.io~v3~DataScienceCluster");
     expect(screen.queryByText(/is shown as/)).not.toBeInTheDocument();
+    await settleApps();
   });
 });
 
@@ -457,5 +482,6 @@ describe("ComponentsPage under Argo CD", () => {
     const remove = await screen.findByRole("button", { name: "Remove invalid fields" });
     await waitFor(() => expect(remove).toHaveAttribute("aria-disabled", "true"));
     expect(screen.getByText("Argo CD: rhai-on-openshift")).toBeInTheDocument();
+    await settleApps();
   });
 });

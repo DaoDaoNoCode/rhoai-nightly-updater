@@ -4,7 +4,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useOperatorActions, type OperatorRequest } from "./OperatorActions";
 import { ReinstallPanel, isValidCustomImage } from "./ReinstallPanel";
 import { UpdateConfirmModal } from "./UpdatePanel";
-import { nightlyStatus, renderWithApp } from "../test/providers";
+import { nightlyStatus, renderWithApp, settleApps } from "../test/providers";
 import { jsonResponse, sseEvent } from "../test/utils";
 
 const IMAGE = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + "b".repeat(64);
@@ -55,6 +55,7 @@ describe("dashboard_dev_active", () => {
     await waitFor(() => expect(bodies).toHaveLength(2));
     expect(urls[1]).toBe("/api/update/stream");
     expect(bodies[1]).toEqual({ image: IMAGE, revertDashboardDev: true });
+    await settleApps();
   });
 
   it("Cancel sends nothing more", async () => {
@@ -66,6 +67,7 @@ describe("dashboard_dev_active", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(bodies).toEqual([null]);
+    await settleApps();
   });
 
   it("does not ask again when the revert itself failed", async () => {
@@ -79,6 +81,7 @@ describe("dashboard_dev_active", () => {
     // The run's end is announced in the same render that would open the question.
     await waitFor(() => expect(screen.getByTestId("live-region-assertive")).toHaveTextContent("Could not end the Dashboard Dev session"));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("the Update dialog asks proactively when a session is known to be active", async () => {
@@ -91,6 +94,7 @@ describe("dashboard_dev_active", () => {
     expect(screen.getByText(/PR #7 by bob/)).toBeInTheDocument();
     fireEvent.click(button);
     expect(onConfirm).toHaveBeenCalledWith({ revertDashboardDev: true });
+    await settleApps();
   });
 });
 
@@ -107,12 +111,14 @@ describe("Update confirmation", () => {
       "Remove the old operator version", "Create the Subscription", "Wait for the operator install",
     ]);
     expect(within(dialog).getAllByRole("button").filter((b) => b.className.includes("pf-m-primary"))).toHaveLength(1);
+    await settleApps();
   });
 
   it("says Update is the usual fix when the CSV is Failed", async () => {
     renderWithApp(<UpdateConfirmModal target={{ image: IMAGE }} status={nightlyStatus({ csv: { name: "rhods-operator.3.6.0", version: "3.6.0", phase: "Failed" } })} onConfirm={vi.fn()} onClose={vi.fn()} />);
     expect(await screen.findByText("The installed operator is Failed.")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Update" })).not.toHaveAttribute("aria-disabled", "true"));
+    await settleApps();
   });
 });
 
@@ -123,6 +129,7 @@ describe("cluster_busy", () => {
     fireEvent.click(screen.getByText("go"));
     expect(await screen.findByText("Cluster busy: your request did not run")).toBeInTheDocument();
     expect(screen.getAllByText(/alice is running "Update to nightly"/).length).toBeGreaterThan(0);
+    await settleApps();
   });
 });
 
@@ -178,6 +185,7 @@ describe("Reinstall downgrades", () => {
     await waitFor(() => expect(bodies).toHaveLength(2));
     expect(bodies[0]).toEqual({ targetType: "custom", image: IMAGE });
     expect(bodies[1]).toEqual({ targetType: "custom", image: IMAGE, allowDowngrade: true });
+    await settleApps();
   });
 
   it("accepts only RHOAI FBC builds for custom images (backend allowlist)", () => {

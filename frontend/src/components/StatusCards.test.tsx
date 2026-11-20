@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { InstalledBuildCard } from "./StatusCards";
 import { GlobalBanners } from "./GlobalBanners";
 import type { LatestNightlyResponse, StatusResponse } from "../types";
-import { nightlyStatus, renderWithApp } from "../test/providers";
+import { nightlyStatus, renderWithApp, settleApps } from "../test/providers";
 
 async function renderCard(status: StatusResponse, opts: { latest?: LatestNightlyResponse | null; blocker?: string | null; prerequisitesMet?: boolean } = {}) {
   const onUpdate = vi.fn();
@@ -157,6 +157,7 @@ describe("GlobalBanners", () => {
     }, "/components");
     expect(await screen.findByText(/alice is running "Update to nightly": step 5 of 8: Detect the channel/)).toBeInTheDocument();
     expect(screen.getByText("rhoai-3.6 · aaaaaaaaaaaa")).toBeInTheDocument();
+    await settleApps();
   });
 
   it("names the other updater pod and the latest progress of a remote operation", async () => {
@@ -169,6 +170,7 @@ describe("GlobalBanners", () => {
     expect(await screen.findByText(/alice is running "Set up S3 storage" on updater pod updater-7d9f-abcde/)).toBeInTheDocument();
     expect(screen.getByText(/Latest progress: Waiting for the SeaweedFS pod\./)).toBeInTheDocument();
     expect(screen.getByText(/Another updater pod runs it/)).toBeInTheDocument();
+    await settleApps();
   });
 
   it("explains an interrupted operation and lets the user dismiss it", async () => {
@@ -182,6 +184,7 @@ describe("GlobalBanners", () => {
     expect(screen.getByText(/run the same operation again/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Close/ }));
     await waitFor(() => expect(screen.queryByText('"Update to nightly" was interrupted')).not.toBeInTheDocument());
+    await settleApps();
   });
 
   it("shows a paused dashboard-operator with who, what and the RHOAI update warning", async () => {
@@ -198,6 +201,7 @@ describe("GlobalBanners", () => {
     expect(screen.getByText(/bob deployed PR #222 \(RHOAI build\)/)).toBeInTheDocument();
     expect(screen.getByText(/RHOAI version changed from 3.6.0 to 3.6.1\./)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open Dashboard Dev" })).toBeInTheDocument();
+    await settleApps();
   });
 
   it("tells admins to run make upgrade when the template is outdated", async () => {
@@ -205,12 +209,14 @@ describe("GlobalBanners", () => {
     expect(await screen.findByText(/this updater's deployment is out of date/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Info alert details/ }));
     expect(screen.getByText("make upgrade")).toBeInTheDocument();
+    await settleApps();
   });
 
   it("explains unknown permissions with a Retry (503 is read-only)", async () => {
     renderWithApp(<GlobalBanners />, { permissions: async () => { throw Object.assign(new Error("x"), { name: "ApiError", status: 503, errorCode: "authorization_unavailable", message: "Cannot verify mutation permissions" }); } });
     expect(await screen.findByText("Your permissions could not be checked; changes are disabled")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    await settleApps();
   });
 
   it("shows at most two notices and keeps the rest one click away", async () => {
@@ -225,5 +231,6 @@ describe("GlobalBanners", () => {
     expect(screen.queryByText(/this updater's deployment is out of date/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "View 1 more notice" }));
     expect(screen.getByText(/this updater's deployment is out of date/)).toBeInTheDocument();
+    await settleApps();
   });
 });

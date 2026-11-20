@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { DashboardDevPage } from "./DashboardDevPage";
 import { overrideAlerts } from "../components/DashboardSessionPanel";
 import { stubApi, jsonResponse } from "../test/apiStub";
-import { renderWithApp } from "../test/providers";
+import { renderWithApp, settleApps } from "../test/providers";
 import { deferred } from "../test/utils";
 import type { DashboardBuildsResponse, DashboardDevImage, DashboardOverride, DashboardState } from "../types";
 
@@ -74,6 +74,7 @@ describe("Dashboard Dev session panel", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Revert to default" }));
     expect(await screen.findByText("Reverted")).toBeInTheDocument();
     expect(api.calls.filter((c) => c === "POST /api/dashboard/revert")).toHaveLength(1);
+    await settleApps();
   });
 
   it("a 404 with a paused operator still offers Revert and flags the blocked Dashboard deletion", async () => {
@@ -87,6 +88,7 @@ describe("Dashboard Dev session panel", () => {
     expect(await screen.findByText("The RHOAI dashboard is not deployed")).toBeInTheDocument();
     expect(screen.getByText("Dashboard deletion is blocked until you revert")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Revert to default" })).toBeInTheDocument();
+    await settleApps();
   });
 
   it.each([
@@ -98,6 +100,7 @@ describe("Dashboard Dev session panel", () => {
     renderPage();
     expect(await screen.findByText(new RegExp(`^${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`))).toBeInTheDocument();
     expect(screen.queryByText(/is not deployed/)).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("overrideAlerts titles each backend warning by its flag", () => {
@@ -123,6 +126,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
     // PatternFly 6.7 keeps a closing modal in the DOM for its close animation.
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(api.calls.some((c) => c.startsWith("POST /api/dashboard"))).toBe(false);
+    await settleApps();
   });
 
   it("deploys a PR with the chosen ODH flavor and names the session it replaces", async () => {
@@ -137,6 +141,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Deploy PR #333" }));
     await screen.findByText("Deploying PR #333");
     expect(api.bodies["POST /api/dashboard/deploy-pr"]).toEqual([{ pr: 333, flavor: "odh" }]);
+    await settleApps();
   });
 
   it("the default flavor is RHOAI and is sent explicitly", async () => {
@@ -147,6 +152,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Deploy latest main" }));
     await screen.findByText("ok");
     expect(api.bodies["POST /api/dashboard/deploy-main"]).toEqual([{ flavor: "rhoai" }]);
+    await settleApps();
   });
 
   it("a stuck rollout shows the server's reason and the container's waiting reason", async () => {
@@ -162,6 +168,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
     expect(screen.getByText(/has timed out progressing/)).toBeInTheDocument();
     expect(screen.getByText("ImagePullBackOff")).toBeInTheDocument();
     expect(screen.getByText("Pod: notebooks-ui-6c9f-x")).toBeInTheDocument();
+    await settleApps();
   });
 
   it("Assist rollout asks first and targets rhods-dashboard; nothing to do is info", async () => {
@@ -176,6 +183,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Assist rollout" }));
     expect(await screen.findByText("Nothing to do")).toBeInTheDocument();
     expect(api.bodies["POST /api/assist-rollout"]).toEqual([{ namespace: "custom-apps", deployment: "rhods-dashboard" }]);
+    await settleApps();
   });
 
   it("Assist rollout is available while the page waits for the rollout it rescues", async () => {
@@ -193,6 +201,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
     // Deploying again still waits for this rollout.
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Deploy latest main" })).toHaveAttribute("aria-disabled", "true");
+    await settleApps();
   });
 
   it("stops waiting as soon as a container reports a terminal waiting reason", async () => {
@@ -209,6 +218,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
     expect(screen.queryByText(/Waiting for the dashboard pods to roll out/)).not.toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Deploy latest main" })).not.toHaveAttribute("aria-disabled");
+    await settleApps();
   });
 
   it("a teammate's running operation disables deploys with the reason", async () => {
@@ -223,6 +233,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
     await waitFor(() => expect(main).toHaveAttribute("aria-disabled", "true"));
     fireEvent.mouseEnter(main);
     expect(await screen.findByRole("tooltip")).toHaveTextContent(/alice is running "Update to nightly"/);
+    await settleApps();
   });
 
   it("refreshes the app-wide Dashboard Dev override after a change", async () => {
@@ -233,6 +244,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
     await waitFor(() => expect(dashboard).toHaveBeenCalledTimes(1));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Deploy latest main" }));
     await waitFor(() => expect(dashboard).toHaveBeenCalledTimes(2));
+    await settleApps();
   });
 
   it("read-only users cannot open the deploy dialogs", async () => {
@@ -242,6 +254,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
     expect(main).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(main);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await settleApps();
   });
 });
 
@@ -301,6 +314,7 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
     expect(screen.queryByText(HOST_SHA)).not.toBeInTheDocument();
     // The notice above the containers card; the existing Deploy latest main picks the build up.
     expect(screen.getByText("A newer RHOAI main build exists for 1 container. Deploy latest main again to switch.")).toBeInTheDocument();
+    await settleApps();
   });
 
   it("uses the PR wording for a PR session", async () => {
@@ -325,6 +339,7 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
     expect(screen.getByText("PR #222 merged")).toBeInTheDocument();
     expect(screen.getByText("PR #222 has 2 newer commits")).toBeInTheDocument();
     expect(screen.getByText("PR #222 has a newer build for 1 container. Deploy PR #222 again to switch.")).toBeInTheDocument();
+    await settleApps();
   });
 
   it("a GitHub rate limit leaves the distance unknown with the retry time", async () => {
@@ -338,6 +353,7 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
     expect(await screen.findAllByText("Distance from main unknown")).toHaveLength(2);
     expect(screen.getByText(/GitHub's rate limit is reached/)).toHaveTextContent("25 min");
     expect(screen.queryByText(/newer/i)).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("shows Checking... until the builds arrive", async () => {
@@ -348,6 +364,7 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
     pending.resolve(jsonResponse(mainBuilds()));
     expect(await screen.findByText("Up to date with main")).toBeInTheDocument();
     expect(screen.queryByText("Checking...")).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("an older backend without the route (404) leaves the card as it was, with no error", async () => {
@@ -358,6 +375,7 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
     expect(screen.queryByText("Checking...")).not.toBeInTheDocument();
     expect(screen.queryByText(/Build details could not be loaded/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Distance from/)).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("the page's Refresh asks for the builds again, even when the images did not change", async () => {
@@ -367,6 +385,7 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
     await waitFor(() => expect(api.calls.filter((c) => c === "GET /api/dashboard/builds")).toHaveLength(1));
     fireEvent.click(screen.getByRole("button", { name: "Refresh dashboard dev" }));
     await waitFor(() => expect(api.calls.filter((c) => c === "GET /api/dashboard/builds")).toHaveLength(2));
+    await settleApps();
   });
 
   it("details of an image a container no longer runs are not shown next to the new one", async () => {
@@ -383,6 +402,7 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
     expect(screen.queryByText("3 commits behind main")).not.toBeInTheDocument();
     expect(screen.queryByText(/Newer build available/)).not.toBeInTheDocument();
     expect(screen.queryByText(/A newer RHOAI main build exists/)).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("does not ask for builds while every container runs the release image", async () => {
@@ -390,5 +410,6 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
     renderPage();
     await screen.findByRole("button", { name: "Deploy latest main" });
     expect(api.calls.some((c) => c.includes("/api/dashboard/builds"))).toBe(false);
+    await settleApps();
   });
 });

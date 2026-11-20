@@ -3,6 +3,7 @@ import { cleanup, configure } from "@testing-library/react";
 import { format } from "node:util";
 import { afterEach, beforeEach, vi } from "vitest";
 import { setDocumentHidden } from "./utils";
+import { unsettledApps } from "./providers";
 
 // findBy*/waitFor give up after 1s by default: on a loaded machine (a
 // CPU-limited build pod, parallel suites) a page whose stubbed reads
@@ -47,10 +48,15 @@ function blocksInParagraphs(): string[] {
 
 afterEach(() => {
   const nested = blocksInParagraphs();
+  const unsettled = unsettledApps();
   cleanup();
   setDocumentHidden(false, { silent: true });
   const found = reactWarnings;
   reactWarnings = [];
   if (found.length > 0) throw new Error(`Logged an error (a React warning, or another console.error):\n${found.join("\n\n")}`);
   if (nested.length > 0) throw new Error(`Invalid HTML, a block inside a paragraph:\n${nested.join("\n")}`);
+  // The app's own reads (permissions, status, operation, version...) answer
+  // on their own schedule: a test that ends before they did leaves updates
+  // for after it, outside act, and fails or not with the machine's load.
+  if (unsettled > 0) throw new Error("The test rendered the app (renderWithApp/renderPage) and ended before its reads settled: end it with await settleApps() (or the render's settled()).");
 });

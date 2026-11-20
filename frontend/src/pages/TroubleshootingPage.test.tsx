@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { TroubleshootingPage, buildDiagnosticReport, problemSummary } from "./TroubleshootingPage";
 import { stubApi, jsonResponse } from "../test/apiStub";
-import { renderPage } from "../test/providers";
+import { renderPage, settleApps } from "../test/providers";
 import type { DiagnosticResult, OperationStatusResponse, Problem } from "../types";
 import { NO_PERMISSION_REASON } from "../state/AppInfo";
 
@@ -72,6 +72,7 @@ describe("Diagnostics", () => {
     expect(screen.getByText(pods.title)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Fix" })).not.toBeInTheDocument();
     expect(screen.getByText("Info")).toBeInTheDocument();
+    await settleApps();
   });
 
   it("the fix confirmation lists the exact objects; nothing_to_do is info and the page re-scans", async () => {
@@ -93,6 +94,7 @@ describe("Diagnostics", () => {
     expect(screen.getByText("Nothing to do: every Service exists.").closest(".pf-v6-c-alert")).toHaveClass("pf-m-info");
     expect(api.bodies["POST /api/diagnostics/fix"]).toEqual([{ problemId: "delete-stale-webhooks" }]);
     expect(api.calls.filter((c) => c === "GET /api/diagnostics").length).toBe(2);
+    await settleApps();
   });
 
   it("prerequisites refusals are warnings with the server's blockers", async () => {
@@ -108,6 +110,7 @@ describe("Diagnostics", () => {
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Fix" }));
     expect(await screen.findByText("Blocked: prerequisites not met")).toBeInTheDocument();
     expect(screen.getByText("rhods-operator has no ready pod.")).toBeInTheDocument();
+    await settleApps();
   });
 
   it("read-only users get a disabled Fix with the reason", async () => {
@@ -121,6 +124,7 @@ describe("Diagnostics", () => {
     fireEvent.click(screen.getByRole("button", { name: "Fix" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Fix" })).toHaveAttribute("aria-disabled", "true");
+    await settleApps();
   });
 
   it("a teammate's running operation disables Fix with the reason", async () => {
@@ -134,6 +138,7 @@ describe("Diagnostics", () => {
     await waitFor(() => expect(fix).toHaveAttribute("aria-disabled", "true"));
     fireEvent.mouseEnter(fix);
     expect(await screen.findByRole("tooltip")).toHaveTextContent(/alice is running "Update to nightly"/);
+    await settleApps();
   });
 
   it("an expired session disables Fix at once", async () => {
@@ -147,6 +152,7 @@ describe("Diagnostics", () => {
     const fix = screen.getByRole("button", { name: "Fix" });
     fireEvent.mouseEnter(fix);
     expect(await screen.findByRole("tooltip")).toHaveTextContent(/session has expired/);
+    await settleApps();
   });
 
   it("a cluster_busy refusal asks the server which operation holds the lock", async () => {
@@ -167,6 +173,7 @@ describe("Diagnostics", () => {
     expect(await screen.findByText("Cluster busy")).toBeInTheDocument();
     await waitFor(() => expect(fetchOperation.mock.calls.length).toBeGreaterThan(before));
     await waitFor(() => expect(screen.getByRole("button", { name: "Fix" })).toHaveAttribute("aria-disabled", "true"));
+    await settleApps();
   });
 
   it("the summary counts the listed problems by severity (live: '4 issues' vs 'Problems (6)')", async () => {
@@ -178,6 +185,7 @@ describe("Diagnostics", () => {
     expect(screen.getByRole("heading", { name: "Need attention (4)" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Informational (2)" })).toBeInTheDocument();
     expect(screen.queryByText(/Problems \(/)).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it.each([
@@ -193,6 +201,7 @@ describe("Diagnostics", () => {
     renderPage(<TroubleshootingPage />);
     expect(await screen.findByText(/^The request timed out/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    await settleApps();
   });
 
   it("the copied report marks manual and automatic fixes and lists objects", () => {
@@ -227,6 +236,7 @@ describe("Diagnostics related problems", () => {
     await waitFor(() => expect(within(target).getByText(/Install it with the commands below/)).toBeInTheDocument());
     // The card is opened, then focused in an animation frame; wait for that frame so it runs inside this test.
     await waitFor(() => expect(target.contains(document.activeElement)).toBe(true));
+    await settleApps();
   });
 
   it("the report names related problems", () => {
@@ -277,6 +287,7 @@ describe("Diagnostics leftovers from an earlier release", () => {
     expect(await screen.findByText("Changed TrustyAI default-trustyai.")).toBeInTheDocument();
     expect(api.bodies["POST /api/diagnostics/fix/acknowledged"]).toEqual([{ problemId: fields.autoFixAction, acknowledged: true, binding: { uid: "trusty-uid", resourceVersion: "100", hash: "abc" } }]);
     expect(api.bodies["POST /api/diagnostics/fix"]).toBeUndefined();
+    await settleApps();
   });
 
   it("an acknowledgement without its binding cannot be sent", async () => {
@@ -289,6 +300,7 @@ describe("Diagnostics leftovers from an earlier release", () => {
     const dialog = await screen.findByRole("dialog");
     fireEvent.click(within(dialog).getByRole("checkbox", { name: fields.acknowledge }));
     expect(within(dialog).getByRole("button", { name: "Fix" })).toBeDisabled();
+    await settleApps();
   });
 
   it("without an acknowledgement the plain endpoint is used, and a refusal is a warning", async () => {
@@ -308,6 +320,7 @@ describe("Diagnostics leftovers from an earlier release", () => {
     expect(await screen.findByText("Not started: confirm the acknowledgement first")).toBeInTheDocument();
     expect(screen.getByText(/needs your acknowledgement first/).closest(".pf-v6-c-alert")).toHaveClass("pf-m-warning");
     expect(api.bodies["POST /api/diagnostics/fix"]).toEqual([{ problemId: plain.autoFixAction }]);
+    await settleApps();
   });
 
   it("the report lists each field's plan", () => {

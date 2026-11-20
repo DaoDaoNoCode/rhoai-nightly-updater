@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { act, screen, waitFor } from "@testing-library/react";
 import { overrideFromDashboardResponse, useDashboardOverride, usePermissions, useSessionExpired } from "./AppInfo";
 import { ApiError, getComponents, getUserPermissions, isSessionExpired } from "../services/api";
-import { renderWithApp } from "../test/providers";
+import { renderWithApp, settleApps } from "../test/providers";
 import { deferred, jsonResponse } from "../test/utils";
 
 const Probe: React.FC = () => {
@@ -27,6 +27,7 @@ describe("permissions", () => {
   ])("%s", async (_name, permissions, expected) => {
     renderWithApp(<Probe />, { permissions });
     await waitFor(() => expect(probe()).toMatchObject(expected));
+    await settleApps();
   });
 
   it("starts as 'checking' (disabled) until the first answer", async () => {
@@ -64,12 +65,14 @@ describe("session expiry", () => {
     renderWithApp(<Probe />, { permissions: getUserPermissions });
     await waitFor(() => expect(probe()).toMatchObject({ expired: true, canMutate: false, status: "unknown" }));
     expect(probe().reason).toMatch(/session has expired/);
+    await settleApps();
   });
 
   it("keeps a JSON 403 a permission answer", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: "Read-only access", errorCode: "forbidden" }, 403)));
     renderWithApp(<Probe />, { permissions: getUserPermissions });
     await waitFor(() => expect(probe()).toMatchObject({ expired: false, status: "denied" }));
+    await settleApps();
   });
 });
 
@@ -85,5 +88,6 @@ describe("Dashboard Dev override", () => {
   it("exposes an active session to every page", async () => {
     renderWithApp(<Probe />, { dashboard: async () => ({ override: { active: true, operatorPaused: true, sessionRecorded: true, stale: false, dashboardDeleting: false } }) as never });
     await waitFor(() => expect(probe().override).toBe(true));
+    await settleApps();
   });
 });

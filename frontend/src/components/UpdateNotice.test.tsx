@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, getDefaultNormalizer, screen, waitFor } from "@testing-library/react";
 import { GlobalBanners } from "./GlobalBanners";
 import { HelpButton } from "./HelpModal";
-import { renderWithApp } from "../test/providers";
+import { renderWithApp, settleApps } from "../test/providers";
 import { useUpdateCheck, useVersion } from "../state/AppInfo";
 import { UPDATE_CHECK_REFRESH_MS } from "../constants";
 import { isReleaseVersion } from "../utils";
@@ -49,6 +49,7 @@ describe("update available notice", () => {
     expect(screen.getByText(/requires a full redeploy/)).toBeInTheDocument();
     expect(screen.getByText("git checkout v2.0.0 && make upgrade")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Release notes" })).toHaveAttribute("href", MAJOR.releaseNotesURL);
+    await settleApps();
   });
 
   it("offers the release's no-clone installer as a copyable command, with the git route second", async () => {
@@ -74,6 +75,7 @@ describe("update available notice", () => {
     expect(screen.queryByText(/if this install does not use the default names/)).not.toBeInTheDocument();
     // A GitHub asset downloads anonymously: no sign-in hint.
     expect(screen.queryByText(/asks you to sign in/)).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("keeps the full-redeploy wording for a major release with an installer", async () => {
@@ -89,6 +91,7 @@ describe("update available notice", () => {
     expect(screen.getByText(/Before running it, check install.sh against the SHA-256 in the v3.0.0 release notes/)).toBeInTheDocument();
     // A GitLab release asset may need a sign-in.
     expect(screen.getByText(/asks you to sign in/)).toBeInTheDocument();
+    await settleApps();
   });
 
   it("checks the download against the release notes' SHA-256 before anything runs", async () => {
@@ -102,6 +105,7 @@ describe("update available notice", () => {
     expect(await screen.findByText(`curl -fsSLO '${installerURL}' && echo '${sum}  install.sh' | sha256sum -c - && bash install.sh`,
       { normalizer: getDefaultNormalizer({ collapseWhitespace: false }) })).toBeInTheDocument();
     expect(screen.getByText(/The command checks install.sh against the SHA-256 in the v2.0.1 release notes/)).toBeInTheDocument();
+    await settleApps();
   });
 
   it("never puts a checksum that is not 64 hex characters into the command", async () => {
@@ -112,6 +116,7 @@ describe("update available notice", () => {
     });
     expect(await screen.findByText(`curl -fsSLO '${installerURL}' && bash install.sh`)).toBeInTheDocument();
     expect(screen.queryByText(/\$\(id\)/)).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("names the upgrade command for a minor release, without a redeploy warning", async () => {
@@ -122,6 +127,7 @@ describe("update available notice", () => {
     expect(await screen.findByText("v2.1.0 is available")).toBeInTheDocument();
     expect(screen.queryByText(/full redeploy/)).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Release notes" })).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("stays dismissed for that release, and comes back for a newer one", async () => {
@@ -137,6 +143,7 @@ describe("update available notice", () => {
 
     renderWithApp(<GlobalBanners />, { version: release("v1.0.0"), update: async () => ({ ...MAJOR, latest: "v2.0.1" }) });
     expect(await screen.findByText("v2.0.1 is available")).toBeInTheDocument();
+    await settleApps();
   });
 
   it("does not check for main or commit builds", async () => {
@@ -145,6 +152,7 @@ describe("update available notice", () => {
     await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("2cdcb42d|-"));
     expect(update).not.toHaveBeenCalled();
     expect(screen.queryByText(/is available/)).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("checks for a pre-release, which the backend offers its release", async () => {
@@ -155,6 +163,7 @@ describe("update available notice", () => {
     expect(screen.getByText(/This updater runs v5.0.0-rc.1/)).toBeInTheDocument();
     expect(screen.queryByText(/requires a full redeploy/)).not.toBeInTheDocument();
     expect(screen.getByText("git checkout v5.0.0 && make upgrade")).toBeInTheDocument();
+    await settleApps();
   });
 
   it("shows nothing when the running release is current", async () => {
@@ -164,6 +173,7 @@ describe("update available notice", () => {
     });
     await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("v2.0.0|v2.0.0"));
     expect(screen.queryByText(/is available/)).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("keeps the template-outdated notice next to it", async () => {
@@ -173,6 +183,7 @@ describe("update available notice", () => {
     });
     expect(await screen.findByText(/this updater's deployment is out of date/)).toBeInTheDocument();
     expect(await screen.findByText("v2.0.0 is available")).toBeInTheDocument();
+    await settleApps();
   });
 
   describe("on a GitOps install (the Helm chart sets INSTALL_METHOD=gitops)", () => {
@@ -194,6 +205,7 @@ describe("update available notice", () => {
       expect(screen.queryByText(/curl -fsSLO/)).not.toBeInTheDocument();
       expect(screen.queryByText("git checkout v2.0.1 && make upgrade")).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: /Copy the v2.0.1 install command/ })).not.toBeInTheDocument();
+      await settleApps();
     });
 
     it("keeps the full-redeploy warning for a new major version", async () => {
@@ -201,6 +213,7 @@ describe("update available notice", () => {
       expect(await screen.findByText(/requires a full redeploy/)).toBeInTheDocument();
       expect(screen.getByText(/including the new template/)).toBeInTheDocument();
       expect(screen.queryByText("git checkout v2.0.0 && make upgrade")).not.toBeInTheDocument();
+      await settleApps();
     });
 
     it("words the template-outdated notice and the help dialog for Git", async () => {
@@ -217,6 +230,7 @@ describe("update available notice", () => {
       fireEvent.click(screen.getByRole("button", { name: /help/i }));
       expect(await screen.findByText(/in the GitOps repository to the release of the image/)).toBeInTheDocument();
       expect(screen.queryByText("make upgrade")).not.toBeInTheDocument();
+      await settleApps();
     });
   });
 
@@ -226,6 +240,7 @@ describe("update available notice", () => {
     fireEvent.click(screen.getByRole("button", { name: /help/i }));
     expect(await screen.findByText("Newer release")).toBeInTheDocument();
     expect(screen.getByText(/a new major version: a full redeploy/)).toBeInTheDocument();
+    await settleApps();
   });
 
   it("checks again on window focus, at most every six hours", async () => {
@@ -246,5 +261,6 @@ describe("update available notice", () => {
     act(() => { window.dispatchEvent(new Event("focus")); });
     expect(update).toHaveBeenCalledTimes(2);
     expect(await screen.findByText("v2.1.0 is available")).toBeInTheDocument();
+    await settleApps();
   });
 });
