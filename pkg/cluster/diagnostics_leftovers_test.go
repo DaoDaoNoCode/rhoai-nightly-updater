@@ -158,11 +158,25 @@ func lmevalSchema(withDefault bool) map[string]any {
 
 // serveCRD serves the TrustyAI CRD whose spec.versions manager wrote last.
 func (w *leftoverWorld) serveCRD(manager string, schema map[string]any) {
+	w.serveCRDManagers([]string{manager}, schema)
+}
+
+// serveCRDManagers serves the TrustyAI CRD whose spec.versions the managers
+// wrote at the same time; an empty name: no entry owns spec.versions.
+func (w *leftoverWorld) serveCRDManagers(managers []string, schema map[string]any) {
+	var entries []any
+	for _, m := range managers {
+		if m == "" {
+			continue
+		}
+		entries = append(entries, map[string]any{"manager": m, "operation": "Apply", "time": "2026-11-01T10:00:00Z", "fieldsV1": map[string]any{"f:spec": map[string]any{"f:versions": map[string]any{}}}})
+	}
+	// An older write by the RHOAI operator never counts once another
+	// manager wrote later.
+	entries = append(entries, map[string]any{"manager": platformCRDManager, "operation": "Apply", "time": "2026-10-01T10:00:00Z", "fieldsV1": map[string]any{"f:metadata": map[string]any{}}})
 	crd := map[string]any{
-		"metadata": map[string]any{"name": trustyCRD, "managedFields": []any{
-			map[string]any{"manager": manager, "operation": "Apply", "time": "2026-11-01T10:00:00Z", "fieldsV1": map[string]any{"f:spec": map[string]any{"f:versions": map[string]any{}}}},
-		}},
-		"spec": map[string]any{"versions": []any{map[string]any{"name": "v1alpha1", "served": true, "storage": true, "schema": map[string]any{"openAPIV3Schema": schema}}}},
+		"metadata": map[string]any{"name": trustyCRD, "managedFields": entries},
+		"spec":     map[string]any{"versions": []any{map[string]any{"name": "v1alpha1", "served": true, "storage": true, "schema": map[string]any{"openAPIV3Schema": schema}}}},
 	}
 	w.f.obj("/apis/apiextensions.k8s.io/v1/customresourcedefinitions", map[string]any{"items": []any{crd}})
 }
@@ -184,6 +198,30 @@ func onlyProblem(t *testing.T, out checkOutput) Problem {
 
 func storedFalse() map[string]any {
 	return map[string]any{"permitOnline": false, "permitCodeExecution": false}
+}
+
+// ackFor scans and returns the acknowledgement binding of the problem whose
+// fix is id, as the Fix dialog sends it; a placeholder when the scan offers
+// no acknowledged fix (the fix refuses before it compares).
+func ackFor(t *testing.T, w *leftoverWorld, id string) AckBinding {
+	t.Helper()
+	for _, p := range w.scan().problems {
+		if p.AutoFixAction == id && p.AcknowledgeBinding != nil {
+			return *p.AcknowledgeBinding
+		}
+	}
+	return AckBinding{Hash: "not-offered"}
+}
+
+// scannedWithBinding is the only problem of a scan, which must offer an
+// acknowledgement binding (as the Fix dialog sends it back).
+func scannedWithBinding(t *testing.T, w *leftoverWorld) Problem {
+	t.Helper()
+	p := onlyProblem(t, w.scan())
+	if p.AcknowledgeBinding == nil {
+		t.Fatalf("no binding: %+v", p)
+	}
+	return p
 }
 
 func TestParseStoredTypeFailure(t *testing.T) {
@@ -212,9 +250,10 @@ func TestParseStoredTypeFailure(t *testing.T) {
 }
 
 // The live case (a): booleans stored where the CRD now has a string enum
-// with a default. The plan sets the default, shows each field, needs no
-// acknowledgement (false is "off"), and the stuck module operator links
-// to it.
+// with a default. The plan sets the default and shows each field; even a
+// stored false needs an acknowledgement (nothing says false means the
+// default), bound to the object and the statement; the stuck module
+// operator links to it.
 func TestLeftoverStoredFieldsScan(t *testing.T) {
 	w := newLeftoverWorld(t, []string{msgStoredTypes}, nil, storedFalse())
 	w.f.json("GET", "/api/v1/namespaces/redhat-ods-applications/pods", 200, `{"items":[{"metadata":{"name":"trustyai-operator-module-controller-manager-abc","namespace":"redhat-ods-applications","creationTimestamp":"2026-11-10T00:00:00Z","labels":{"pod-template-hash":"abc"},
@@ -223,20 +262,25 @@ func TestLeftoverStoredFieldsScan(t *testing.T) {
 	out := w.scan()
 	p := onlyProblem(t, out)
 	if out.check.Status != "fail" || p.ID != "leftover-fields-trustyai-default-trustyai" || p.Severity != "critical" || !p.AutoFixable ||
-		p.AutoFixAction != "fix-leftover-fields:TrustyAI/default-trustyai" || p.Acknowledge != "" || p.Title != "TrustyAI default-trustyai has field values from an earlier release" {
+		p.AutoFixAction != "fix-leftover-fields:TrustyAI/default-trustyai" || p.Title != "TrustyAI default-trustyai has field values from an earlier release" ||
+		!strings.Contains(p.Acknowledge, `.spec.eval.lmeval.permitOnline (false -> "deny"), .spec.eval.lmeval.permitCodeExecution (false -> "deny")`) ||
+		!strings.Contains(p.Acknowledge, "may not mean the same") {
 		t.Fatalf("problem %+v", p)
+	}
+	if b := p.AcknowledgeBinding; b == nil || b.UID != "trusty-uid" || b.ResourceVersion != "100" || *b != *newAckBinding("trusty-uid", "100", p.Acknowledge) {
+		t.Fatalf("binding %+v", p.AcknowledgeBinding)
 	}
 	if len(p.FieldChanges) != 2 {
 		t.Fatalf("field changes %+v", p.FieldChanges)
 	}
 	for _, fc := range p.FieldChanges {
-		if fc.Change != "set-default" || fc.Now != "false" || fc.After != `"deny"` || fc.Review || fc.Schema != "string, one of allow, deny, default deny, optional" {
+		if fc.Change != "set-default" || fc.Now != "false" || fc.After != `"deny"` || !fc.Review || fc.Schema != "string, one of allow, deny, default deny, optional" {
 			t.Errorf("field change %+v", fc)
 		}
 	}
 	ev := strings.Join(p.Evidence, "\n")
 	for _, want := range []string{"Reported by DataScienceCluster default-dsc", "to smd typed", "Field .spec.eval.lmeval.permitOnline: stored false; the installed CRD says string",
-		"last written by platform.opendatahub.io", "crash-looping (1061 restarts)", msgInformer} {
+		"last written by the RHOAI operator (field manager platform.opendatahub.io)", "crash-looping (1061 restarts)", msgInformer} {
 		if !strings.Contains(ev, want) {
 			t.Errorf("evidence lacks %q:\n%s", want, ev)
 		}
@@ -262,7 +306,8 @@ func TestLeftoverStoredFieldsScan(t *testing.T) {
 // error offers Retry now, which adds and removes an annotation.
 func TestLeftoverStoredFieldsFixAndRetry(t *testing.T) {
 	w := newLeftoverWorld(t, []string{msgStoredTypes}, nil, storedFalse())
-	res, err := ApplyFix(w.c, "fix-leftover-fields:TrustyAI/default-trustyai")
+	p := scannedWithBinding(t, w)
+	res, err := ApplyFixAcknowledged(w.c, "fix-leftover-fields:TrustyAI/default-trustyai", *p.AcknowledgeBinding)
 	if err != nil || !res.Success || !strings.Contains(res.Message, `.spec.eval.lmeval.permitOnline false -> "deny"`) {
 		t.Fatalf("%+v %v", res, err)
 	}
@@ -273,7 +318,8 @@ func TestLeftoverStoredFieldsFixAndRetry(t *testing.T) {
 	}
 	var ops []map[string]any
 	_ = json.Unmarshal([]byte(patches[1].Body), &ops)
-	if len(ops) != 5 || ops[0]["op"] != "test" || ops[0]["path"] != "/metadata/uid" || ops[1]["op"] != "test" || ops[1]["value"] != false || ops[2]["op"] != "replace" || ops[2]["value"] != "deny" {
+	if len(ops) != 6 || ops[0]["op"] != "test" || ops[0]["path"] != "/metadata/uid" || ops[1]["path"] != "/metadata/resourceVersion" || ops[1]["value"] != "100" ||
+		ops[2]["op"] != "test" || ops[2]["value"] != false || ops[3]["op"] != "replace" || ops[3]["value"] != "deny" {
 		t.Fatalf("ops %+v", ops)
 	}
 	assertWrites(t, w.f, "PATCH "+trustyList+"/default-trustyai", "PATCH "+trustyList+"/default-trustyai")
@@ -283,7 +329,7 @@ func TestLeftoverStoredFieldsFixAndRetry(t *testing.T) {
 	}
 
 	// The DSC still shows its last error: Retry now.
-	p := onlyProblem(t, w.scan())
+	p = onlyProblem(t, w.scan())
 	if p.AutoFixAction != "retry-dsc-reconcile:default-dsc" || p.Severity != "warning" || !strings.Contains(p.Title, "already fixed") || p.FieldChanges[0].Change != "valid" {
 		t.Fatalf("retry problem %+v", p)
 	}
@@ -300,22 +346,58 @@ func TestLeftoverStoredFieldsFixAndRetry(t *testing.T) {
 	}
 }
 
-// A stored true may not mean the CRD default: the fix needs an
-// acknowledgement, and without one changes nothing.
+// Every value replaced (false and true alike) needs the acknowledgement,
+// and without one nothing changes.
 func TestLeftoverStoredFieldsReviewNeedsAcknowledgement(t *testing.T) {
 	w := newLeftoverWorld(t, []string{msgStoredTypes}, nil, map[string]any{"permitOnline": true, "permitCodeExecution": false})
 	p := onlyProblem(t, w.scan())
-	if p.Acknowledge == "" || !strings.Contains(p.Acknowledge, `.spec.eval.lmeval.permitOnline (true -> "deny")`) || strings.Contains(p.Acknowledge, "permitCodeExecution") {
+	if !strings.Contains(p.Acknowledge, `.spec.eval.lmeval.permitOnline (true -> "deny"), .spec.eval.lmeval.permitCodeExecution (false -> "deny")`) {
 		t.Fatalf("acknowledge %q", p.Acknowledge)
 	}
 	res, _ := ApplyFix(w.c, p.AutoFixAction)
-	if res.Success || res.ErrorCode != "acknowledgement_required" {
+	if res.Success || res.ErrorCode != "acknowledgement_required" || !strings.Contains(res.Message, `.spec.eval.lmeval.permitCodeExecution: the stored false may not mean the same as "deny"`) {
 		t.Fatalf("%+v", res)
 	}
 	assertWrites(t, w.f)
-	res, _ = ApplyFixAcknowledged(w.c, p.AutoFixAction)
+	res, _ = ApplyFixAcknowledged(w.c, p.AutoFixAction, *p.AcknowledgeBinding)
 	if !res.Success {
 		t.Fatalf("%+v", res)
+	}
+}
+
+// The acknowledgement binds to what the user reviewed: another UID or
+// resourceVersion, or another statement (a value changed between the scan
+// and the fix), is a conflict and nothing is written.
+func TestLeftoverStoredFieldsAcknowledgementBinding(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		edit   func(w *leftoverWorld, b *AckBinding)
+		reason string
+	}{
+		{"recreated (UID)", func(w *leftoverWorld, _ *AckBinding) {
+			w.cr["metadata"].(map[string]any)["uid"] = "trusty-uid-2"
+		}, "its UID"},
+		{"changed (resourceVersion)", func(w *leftoverWorld, _ *AckBinding) {
+			w.cr["metadata"].(map[string]any)["resourceVersion"] = "101"
+		}, "its resourceVersion"},
+		{"other reasons", func(w *leftoverWorld, _ *AckBinding) {
+			w.cr["spec"].(map[string]any)["eval"].(map[string]any)["lmeval"].(map[string]any)["permitOnline"] = true
+		}, "what needs your acknowledgement"},
+		{"forged hash", func(_ *leftoverWorld, b *AckBinding) { b.Hash = "0000" }, "what needs your acknowledgement"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newLeftoverWorld(t, []string{msgStoredTypes}, nil, storedFalse())
+			p := scannedWithBinding(t, w)
+			b := *p.AcknowledgeBinding
+			w.mu.Lock()
+			tc.edit(w, &b)
+			w.mu.Unlock()
+			res, _ := ApplyFixAcknowledged(w.c, p.AutoFixAction, b)
+			if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, tc.reason) || !strings.Contains(res.Message, "Nothing was changed") {
+				t.Fatalf("%+v", res)
+			}
+			assertWrites(t, w.f)
+		})
 	}
 }
 
@@ -325,10 +407,14 @@ func TestLeftoverStoredFieldsNoDefault(t *testing.T) {
 	w := newLeftoverWorld(t, []string{msgStoredTypes}, nil, storedFalse())
 	w.serveCRD("platform.opendatahub.io", lmevalSchema(false))
 	p := onlyProblem(t, w.scan())
-	if p.FieldChanges[0].Change != "remove" || p.FieldChanges[0].After != "" || !strings.Contains(p.ConfirmMessage, "false -> removed") {
-		t.Fatalf("%+v", p.FieldChanges)
+	if p.FieldChanges[0].Change != "remove" || p.FieldChanges[0].After != "" || !p.FieldChanges[0].Review || !strings.Contains(p.ConfirmMessage, "false -> removed") ||
+		!strings.Contains(p.Acknowledge, "(false -> removed)") {
+		t.Fatalf("%+v %q", p.FieldChanges, p.Acknowledge)
 	}
-	res, _ := ApplyFix(w.c, p.AutoFixAction)
+	if res, _ := ApplyFix(w.c, p.AutoFixAction); res.ErrorCode != "acknowledgement_required" {
+		t.Fatalf("removal without acknowledgement: %+v", res)
+	}
+	res, _ := ApplyFixAcknowledged(w.c, p.AutoFixAction, *p.AcknowledgeBinding)
 	lmeval := w.cr["spec"].(map[string]any)["eval"].(map[string]any)["lmeval"].(map[string]any)
 	if !res.Success || len(lmeval) != 0 {
 		t.Fatalf("%+v %+v", res, lmeval)
@@ -350,30 +436,41 @@ func TestLeftoverStoredFieldsNoDefault(t *testing.T) {
 	assertWrites(t, w.f)
 }
 
-// When the CRD may be the older side (OLM wrote it for a bundle the
-// installed CSV does not ship, or a person wrote it), nothing is changed.
+// The CRD counts as current only when (a) the installed CSV owns it or (b)
+// the RHOAI operator's field manager (platform.opendatahub.io) wrote its
+// spec.versions last. Any other writer, two writers at the same time, or
+// none means the tool cannot tell, and nothing is changed.
 func TestLeftoverStoredFieldsCRDNotCurrent(t *testing.T) {
-	for manager, want := range map[string]string{"catalog": "does not ship this CRD", "kubectl-client-side-apply": "by hand"} {
+	for manager, want := range map[string]string{
+		"catalog":                   "last written by catalog",
+		"kubectl-client-side-apply": "last written by kubectl-client-side-apply",
+		// Formerly taken as "the running operator": any manager that is
+		// not OLM or oc. Nothing says who that is.
+		"manager":                    "last written by manager",
+		"platform.opendatahub.io|oc": "last written by oc and platform.opendatahub.io at the same time",
+		"":                           "do not say who wrote its schema",
+	} {
 		w := newLeftoverWorld(t, []string{msgStoredTypes}, nil, storedFalse())
-		w.serveCRD(manager, lmevalSchema(true))
+		w.serveCRDManagers(strings.Split(manager, "|"), lmevalSchema(true))
 		serveInstalledOperator(w.f)
 		p := onlyProblem(t, w.scan())
-		if p.AutoFixable || !strings.Contains(p.Fix, want) {
-			t.Errorf("%s: %+v", manager, p)
+		if p.AutoFixable || !strings.Contains(p.Fix, want) || !strings.Contains(p.Fix, "can't tell that CRD "+trustyCRD+" is the newer side") ||
+			!strings.Contains(p.Fix, "the installed CSV rhods-operator.3.6.0 does not own it") {
+			t.Errorf("%q: %+v", manager, p.Fix)
 		}
-		res, _ := ApplyFix(w.c, "fix-leftover-fields:TrustyAI/default-trustyai")
+		res, _ := ApplyFixAcknowledged(w.c, "fix-leftover-fields:TrustyAI/default-trustyai", AckBinding{Hash: "x"})
 		if res.ErrorCode != "prerequisites" {
-			t.Errorf("%s: %+v", manager, res)
+			t.Errorf("%q: %+v", manager, res)
 		}
 		assertWrites(t, w.f)
 	}
-	// OLM wrote it and the installed CSV ships it: current.
+	// The installed CSV owns it: current, whoever wrote it last.
 	w := newLeftoverWorld(t, []string{msgStoredTypes}, nil, storedFalse())
-	w.serveCRD("catalog", lmevalSchema(true))
+	w.serveCRD("kubectl-edit", lmevalSchema(true))
 	w.f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
 	w.f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), 200,
 		`{"spec":{"customresourcedefinitions":{"owned":[{"name":"`+trustyCRD+`"}]}}}`)
-	if p := onlyProblem(t, w.scan()); !p.AutoFixable {
+	if p := onlyProblem(t, w.scan()); !p.AutoFixable || !strings.Contains(strings.Join(p.Evidence, "\n"), "the installed CSV rhods-operator.3.6.0 owns it") {
 		t.Errorf("owned CRD: %+v", p)
 	}
 }
@@ -393,7 +490,7 @@ func TestLeftoverStoredFieldsWriteRefusals(t *testing.T) {
 	} {
 		w := newLeftoverWorld(t, []string{msgStoredTypes}, nil, storedFalse())
 		w.f.json("PATCH", trustyList+"/default-trustyai", tc.dryStatus, tc.dryBody)
-		res, _ := ApplyFix(w.c, "fix-leftover-fields:TrustyAI/default-trustyai")
+		res, _ := ApplyFixAcknowledged(w.c, "fix-leftover-fields:TrustyAI/default-trustyai", *scannedWithBinding(t, w).AcknowledgeBinding)
 		if res.Success || res.ErrorCode != tc.code || !strings.Contains(res.Message, "Nothing was changed") && tc.code != "conflict" {
 			t.Errorf("%s: %+v", tc.name, res)
 		}
@@ -403,13 +500,14 @@ func TestLeftoverStoredFieldsWriteRefusals(t *testing.T) {
 	}
 	// The test op itself fails when the stored value moved after the read.
 	w := newLeftoverWorld(t, []string{msgStoredTypes}, nil, storedFalse())
+	ack := *scannedWithBinding(t, w).AcknowledgeBinding
 	w.f.handle("PATCH", trustyList+"/default-trustyai", func(r *http.Request, body []byte) (int, string) {
 		w.mu.Lock()
 		w.cr["spec"].(map[string]any)["eval"].(map[string]any)["lmeval"].(map[string]any)["permitOnline"] = true
 		w.mu.Unlock()
 		return w.patchCR(r, body)
 	})
-	res, _ := ApplyFix(w.c, "fix-leftover-fields:TrustyAI/default-trustyai")
+	res, _ := ApplyFixAcknowledged(w.c, "fix-leftover-fields:TrustyAI/default-trustyai", ack)
 	if res.ErrorCode != "conflict" || len(w.f.realWrites()) != 0 {
 		t.Fatalf("%+v %v", res, w.f.realWrites())
 	}
@@ -447,7 +545,7 @@ func TestLeftoverRecreateDeployment(t *testing.T) {
 	if res.ErrorCode != "acknowledgement_required" || len(w.deletes) != 0 {
 		t.Fatalf("%+v", res)
 	}
-	res, _ = ApplyFixAcknowledged(w.c, id)
+	res, _ = ApplyFixAcknowledged(w.c, id, ackFor(t, w, id))
 	if !res.Success || !strings.HasPrefix(res.Message, "Recreated Deployment redhat-ods-applications/trustyai-service-operator-controller-manager") {
 		t.Fatalf("%+v", res)
 	}
@@ -462,7 +560,7 @@ func TestLeftoverRecreateNotBackInTime(t *testing.T) {
 	w := newLeftoverWorld(t, nil, []string{msgTrustySelector}, storedFalse())
 	w.recreate = false
 	start := clk.Now()
-	res, _ := ApplyFixAcknowledged(w.c, "recreate-leftover:Deployment/redhat-ods-applications/trustyai-service-operator-controller-manager")
+	res, _ := ApplyFixAcknowledged(w.c, "recreate-leftover:Deployment/redhat-ods-applications/trustyai-service-operator-controller-manager", ackFor(t, w, "recreate-leftover:Deployment/redhat-ods-applications/trustyai-service-operator-controller-manager"))
 	if res.Success || res.ErrorCode != "not_recreated" || clk.Since(start) < leftoverRecreateWait {
 		t.Fatalf("%+v", res)
 	}
@@ -506,7 +604,7 @@ func TestLeftoverRecreateRefusals(t *testing.T) {
 		if p.AutoFixable || !strings.Contains(p.Fix, tc.want) {
 			t.Errorf("%s: scan %+v", tc.name, p)
 		}
-		res, _ := ApplyFixAcknowledged(w.c, id)
+		res, _ := ApplyFixAcknowledged(w.c, id, ackFor(t, w, id))
 		if res.ErrorCode != "prerequisites" || !strings.Contains(res.Message, tc.want) || len(w.deletes) != 0 {
 			t.Errorf("%s: fix %+v", tc.name, res)
 		}
@@ -528,18 +626,18 @@ func TestLeftoverRecreateRefusals(t *testing.T) {
 			}
 			return 200, `{}`
 		})
-		res, _ := ApplyFixAcknowledged(w.c, id)
+		res, _ := ApplyFixAcknowledged(w.c, id, ackFor(t, w, id))
 		if res.Success || res.ErrorCode != tc.code || w.dep == nil {
 			t.Errorf("%s: %+v", tc.name, res)
 		}
 	}
 	w := newLeftoverWorld(t, nil, nil, storedFalse())
 	for _, bad := range []string{"recreate-leftover:Service/redhat-ods-applications/x", "recreate-leftover:Deployment/x", "recreate-leftover:Deployment/NS/x"} {
-		if res, _ := ApplyFixAcknowledged(w.c, bad); res.ErrorCode != "validation" {
+		if res, _ := ApplyFixAcknowledged(w.c, bad, AckBinding{Hash: "x"}); res.ErrorCode != "validation" {
 			t.Errorf("%s: %+v", bad, res)
 		}
 	}
-	if res, _ := ApplyFixAcknowledged(w.c, id); res.ErrorCode != "nothing_to_do" || len(w.deletes) != 0 {
+	if res, _ := ApplyFixAcknowledged(w.c, id, ackFor(t, w, id)); res.ErrorCode != "nothing_to_do" || len(w.deletes) != 0 {
 		t.Errorf("not reported: %+v", res)
 	}
 }
@@ -590,10 +688,37 @@ func TestLeftoverRecreateStatefulSetNotReadInScan(t *testing.T) {
 	for _, r := range w.f.requests("GET", "/apis/apps/v1/namespaces/redhat-ods-applications/statefulsets/trustyai-service-operator-controller-manager") {
 		t.Errorf("scan read a StatefulSet: %+v", r)
 	}
+	// The scan did not read it: the binding carries no UID or
+	// resourceVersion, only the statement (which says so).
+	if b := p.AcknowledgeBinding; b == nil || b.UID != "" || b.ResourceVersion != "" || b.Hash == "" {
+		t.Fatalf("binding %+v", p.AcknowledgeBinding)
+	}
 	// The fix reads it with the user's token: it does not exist.
-	res, _ := ApplyFixAcknowledged(w.c, p.AutoFixAction)
+	res, _ := ApplyFixAcknowledged(w.c, p.AutoFixAction, *p.AcknowledgeBinding)
 	if res.ErrorCode != "nothing_to_do" {
 		t.Fatalf("%+v", res)
+	}
+	// It exists: the acknowledgement must still be the statement the scan
+	// showed, and what the user's read adds (here: whether trustyai is in
+	// use, which needs the owner the scan could not read, and the webhooks
+	// its pods serve) is not covered, so nothing is deleted.
+	sts := w.serviceDeployment("sts-uid")
+	sts["spec"].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["labels"] = map[string]any{"control-plane": "controller-manager"}
+	w.f.obj("/apis/apps/v1/namespaces/redhat-ods-applications/statefulsets/trustyai-service-operator-controller-manager", sts)
+	forged := *p.AcknowledgeBinding
+	forged.Hash = "0000"
+	if res, _ := ApplyFixAcknowledged(w.c, p.AutoFixAction, forged); res.ErrorCode != "conflict" || !strings.Contains(res.Message, "what needs your acknowledgement") {
+		t.Fatalf("forged: %+v", res)
+	}
+	w.f.obj("/apis/admissionregistration.k8s.io/v1/validatingwebhookconfigurations", map[string]any{"items": []any{map[string]any{
+		"metadata": map[string]any{"name": "trustyai-hooks"},
+		"webhooks": []any{map[string]any{"name": "v.trustyai.opendatahub.io", "failurePolicy": "Fail",
+			"clientConfig": map[string]any{"service": map[string]any{"namespace": "redhat-ods-applications", "name": "trusty-webhook"}}}},
+	}}})
+	w.f.obj("/api/v1/namespaces/redhat-ods-applications/services/trusty-webhook", map[string]any{"metadata": map[string]any{"name": "trusty-webhook"}, "spec": map[string]any{"selector": map[string]any{"control-plane": "controller-manager"}}})
+	res, _ = ApplyFixAcknowledged(w.c, p.AutoFixAction, *p.AcknowledgeBinding)
+	if res.ErrorCode != "conflict" || !strings.Contains(res.Message, "found what the scan could not show") || !strings.Contains(res.Message, "whether trustyai is in use") || len(w.f.writes()) != 0 {
+		t.Fatalf("unseen reasons: %+v writes %v", res, w.f.writes())
 	}
 }
 

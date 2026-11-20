@@ -28,7 +28,7 @@ import {
 } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import CopyIcon from "@patternfly/react-icons/dist/esm/icons/copy-icon";
-import type { OperationResponse, Problem, DiagnosticResult, FieldChange } from "../types";
+import type { AcknowledgeBinding, OperationResponse, Problem, DiagnosticResult, FieldChange } from "../types";
 import { getDiagnostics, fixProblem, toApiError, type ApiError } from "../services/api";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { LoadErrorAlert } from "../components/LoadErrorAlert";
@@ -240,12 +240,12 @@ export const TroubleshootingPage: React.FC = () => {
     };
   }, [runScan]);
 
-  const handleFix = async (autoFixAction: string, acknowledged: boolean) => {
+  const handleFix = async (autoFixAction: string, binding?: AcknowledgeBinding) => {
     setFixingId(autoFixAction);
     setFixResult(null);
     let result: OperationResponse;
     try {
-      result = await fixProblem(autoFixAction, acknowledged);
+      result = await fixProblem(autoFixAction, binding);
     } catch (err) {
       result = errorResult(err, "Fix failed");
     }
@@ -519,7 +519,7 @@ export const TroubleshootingPage: React.FC = () => {
           : [confirmFix?.confirmMessage || "Resources on the shared cluster involved in this problem."]}
         confirmLabel="Fix"
         isLoading={fixingId !== null}
-        confirmDisabled={!!fixReason || (!!confirmFix?.acknowledge && !acknowledged)}
+        confirmDisabled={!!fixReason || (!!confirmFix?.acknowledge && (!acknowledged || !confirmFix.acknowledgeBinding))}
         choice={confirmFix?.acknowledge ? (
           <Checkbox
             id="diagnostics-fix-acknowledge"
@@ -530,7 +530,8 @@ export const TroubleshootingPage: React.FC = () => {
         ) : undefined}
         onConfirm={() => {
           if (confirmFix?.autoFixAction) {
-            void handleFix(confirmFix.autoFixAction, !!confirmFix.acknowledge && acknowledged);
+            // An acknowledged fix sends back what the user reviewed.
+            void handleFix(confirmFix.autoFixAction, confirmFix.acknowledge && acknowledged ? confirmFix.acknowledgeBinding ?? undefined : undefined);
             setConfirmFix(null);
           }
         }}

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -14,8 +15,9 @@ import (
 // "Left over from an earlier release": objects that an older release left
 // in a shape the running operator cannot apply, found from the operator's
 // own failure reports (the conditions of the DataScienceCluster, the
-// Platform and every components.platform.opendatahub.io module CR) and
-// confirmed with live reads, never from a list of known objects.
+// Platform and every module CR, in components.platform.opendatahub.io and
+// services.platform.opendatahub.io) and confirmed with live reads, never
+// from a list of known objects.
 //
 // Live on RHOAI 3.6.0 (2026-11-19, a cluster upgraded over several
 // releases), the DataScienceCluster was Not Ready while every component
@@ -30,11 +32,21 @@ import (
 //     &value.valueUnstructured{Value:false}". The stored module CR had
 //     booleans that an earlier release wrote, and the CRD now says
 //     "type: string, enum [allow, deny], default deny". Kubernetes keeps a
-//     stored object as written, so the upgrade never changed it, and server
-//     -side apply cannot convert it. The module operator, whose typed
-//     informer cannot decode the object, crash-looped ("failed waiting for
+//     stored object as written, so the upgrade never changed it. This
+//     server-side apply error is raised only for a live object without
+//     managedFields: the apply then first records the live object's fields
+//     under the manager "before-first-apply", converting it to the schema's
+//     typed form, and a stored value of another type fails that conversion
+//     ("failed to create manager for existing fields", kubernetes v1.34
+//     staging/src/k8s.io/apimachinery/pkg/util/managedfields/internal/
+//     skipnonapplied.go:75-91). An object loses its managedFields when a
+//     non-apply update cannot track them, which is reported nowhere: the
+//     field manager removes them instead (fieldmanager.go:145-164,
+//     UpdateNoErrors). The module operator, whose typed informer cannot
+//     decode the object, crash-looped ("failed waiting for
 //     *v1alpha1.TrustyAI Informer to sync"). Fixed by setting both fields to
-//     the CRD default (false meant "not permitted", which is "deny").
+//     the CRD default, after a person checked that false meant "not
+//     permitted", which is "deny".
 //  2. Changed selector. Then the module CR reported "failure deploying
 //     resource redhat-ods-applications/trustyai-service-operator-controller
 //     -manager: apply failed apps/v1, Kind=Deployment: ... spec.selector:
@@ -294,27 +306,20 @@ func smdTypeName(s fieldSchema) string {
 	return map[string]string{"string": "string", "boolean": "boolean", "integer": "numeric", "number": "numeric", "object": "map", "array": "list"}[s.Type]
 }
 
-// zeroLike: a value that means "off" or "unset" in any type (false, 0, "",
-// null, empty). Replacing it with a CRD default needs no review.
-func zeroLike(v any) bool {
-	switch x := v.(type) {
-	case nil:
-		return true
-	case bool:
-		return !x
-	case float64:
-		return x == 0
-	case string:
-		return x == ""
-	case map[string]any:
-		return len(x) == 0
-	case []any:
-		return len(x) == 0
+// afterText words the field's value after the fix.
+func (lf *leftoverField) afterText() string {
+	if lf.Change == "set-default" {
+		return fieldJSON(lf.After)
 	}
-	return false
+	return "no value (removed)"
 }
 
 // decide fills in the field's plan from the live object and the schema.
+// Every change needs review (an acknowledgement): the tool cannot know
+// what a value of the older type meant, so it cannot tell that the
+// default, or no value, means the same. Nothing in the CRD or the
+// operator relates the old value to the new one; a value that looks like
+// "off" (false, 0, "") is no exception.
 func (lf *leftoverField) decide(obj map[string]any, root map[string]any) {
 	lf.Keys = fieldKeys(lf.Path)
 	if lf.Keys == nil {
@@ -337,19 +342,11 @@ func (lf *leftoverField) decide(obj map[string]any, root map[string]any) {
 		lf.Change, lf.Why = "none", fmt.Sprintf("the operator's error expects %s, but the installed CRD says %s, so the error is about another version of the schema", lf.Expected, nonEmpty(lf.Schema.Type, "no type"))
 		return
 	case lf.Schema.HasDefault && valueMatches(lf.Schema.Default, lf.Schema):
-		lf.Change, lf.After = "set-default", lf.Schema.Default
-		lf.Why = "the operator uses this value when the field is not set"
-		if !zeroLike(lf.Value) {
-			lf.Review = true
-			lf.Why += fmt.Sprintf("; the stored %s may not mean the same as %s, so check what the field means", fieldJSON(lf.Value), fieldText(lf.Schema.Default))
-		}
+		lf.Change, lf.After, lf.Review = "set-default", lf.Schema.Default, true
+		lf.Why = fmt.Sprintf("the installed CRD's default; the stored %s may not mean the same as %s, so check what the field means before you confirm", fieldJSON(lf.Value), fieldJSON(lf.Schema.Default))
 	case !lf.Schema.Required:
-		lf.Change = "remove"
-		lf.Why = "the field is optional and the CRD gives no default, so it is removed and the operator's next apply sets its own value"
-		if !zeroLike(lf.Value) {
-			lf.Review = true
-			lf.Why += fmt.Sprintf("; the stored %s may have meant something, so check what the field means", fieldJSON(lf.Value))
-		}
+		lf.Change, lf.Review = "remove", true
+		lf.Why = fmt.Sprintf("the field is optional and the installed CRD gives no default, so it is removed; the stored %s may have meant something that no value does not, so check what the field means before you confirm", fieldJSON(lf.Value))
 	default:
 		lf.Change, lf.Why = "none", "the field is required and the CRD gives no default, so the right value needs judgement"
 	}
@@ -357,15 +354,15 @@ func (lf *leftoverField) decide(obj map[string]any, root map[string]any) {
 
 // storedLeftover is a module CR whose stored fields have older types.
 type storedLeftover struct {
-	rf                                 *reportedApplyFailure
-	Kind, Name, Version, Resource, CRD string
-	UID, ResourceVersion               string
-	Fields                             []*leftoverField
-	Blocker                            string // why there is no automatic fix
-	CRDNote                            string
-	Crash                              *leftoverCrash
-	object                             map[string]any
-	notReady                           bool
+	rf                                        *reportedApplyFailure
+	Kind, Name, Group, Version, Resource, CRD string
+	UID, ResourceVersion                      string
+	Fields                                    []*leftoverField
+	Blocker                                   string // why there is no automatic fix
+	CRDNote                                   string
+	Crash                                     *leftoverCrash
+	object                                    map[string]any
+	notReady                                  bool
 }
 
 func (st *storedLeftover) ref() string { return st.Kind + " " + st.Name }
@@ -404,25 +401,23 @@ func analyzeStored(c *Client, s reporterScan, rf *reportedApplyFailure) *storedL
 			st.Fields = append(st.Fields, &leftoverField{Path: m[1], Expected: m[2]})
 		}
 	}
-	if f.group() != componentAPIGroup {
-		st.Blocker = fmt.Sprintf("the tool changes only module CRs (%s), and this is a %s", componentAPIGroup, f.GroupVersion)
+	st.Group = f.group()
+	if !isModuleAPIGroup(st.Group) {
+		st.Blocker = fmt.Sprintf("the tool changes only module CRs (%s), and this is a %s", strings.Join(moduleAPIGroups, ", "), f.GroupVersion)
 		return st
 	}
-	for _, k := range s.api.Kinds {
-		if k.Kind == f.Kind {
-			st.Resource = k.Resource
-		}
-	}
-	if st.Resource == "" {
-		st.Blocker = fmt.Sprintf("the component API does not serve the kind %s, so the tool cannot read the object", f.Kind)
+	k, ok := s.api.kindOf(st.Group, f.Kind)
+	if !ok {
+		st.Blocker = fmt.Sprintf("%s does not serve the kind %s, so the tool cannot read the object", st.Group, f.Kind)
 		return st
 	}
-	st.CRD = st.Resource + "." + componentAPIGroup
+	st.Resource = k.Resource
+	st.CRD = k.crd()
 
-	obj := s.modules[f.Kind][f.Name]
-	if st.Version != s.api.Version || obj == nil {
+	obj := s.modules[moduleScanKey(st.Group, f.Kind)][f.Name]
+	if st.Version != k.Version || obj == nil {
 		var err error
-		obj, err = listModuleObject(c, st.Version, st.Resource, f.Name)
+		obj, err = listModuleObject(c, st.Group, st.Version, st.Resource, f.Name)
 		if err != nil {
 			st.Blocker = fmt.Sprintf("could not read %s: %v", st.ref(), err)
 			return st
@@ -457,7 +452,7 @@ func analyzeStored(c *Client, s reporterScan, rf *reportedApplyFailure) *storedL
 		lf.decide(obj, root)
 	}
 	if !current {
-		st.Blocker = "the tool cannot tell that the installed CRD is the current one rather than the object: " + note
+		st.Blocker = note
 		return st
 	}
 	for _, lf := range st.Fields {
@@ -471,8 +466,8 @@ func analyzeStored(c *Client, s reporterScan, rf *reportedApplyFailure) *storedL
 
 // listModuleObject finds a module CR by listing its resource (the
 // ServiceAccount may list, not get, module CRs). nil when it does not exist.
-func listModuleObject(c *Client, version, resource, name string) (map[string]any, error) {
-	body, _, err := c.do(http.MethodGet, componentListPath(version, resource), "", nil,
+func listModuleObject(c *Client, group, version, resource, name string) (map[string]any, error) {
+	body, _, err := c.do(http.MethodGet, componentListPath(group, version, resource), "", nil,
 		url.Values{"fieldSelector": {"metadata.name=" + name}})
 	if err != nil {
 		return nil, err
@@ -530,49 +525,73 @@ func crdSchema(crd map[string]any, version string) map[string]any {
 	return nil
 }
 
+// platformCRDManager is the field manager the RHOAI operator writes the
+// module CRDs with: its deploy action applies every CRD it renders with
+// client.FieldOwner(resources.PlatformFieldOwner) (odh-platform-utilities
+// framework v0.3.1 controller/actions/deploy/action_deploy.go:389-396,
+// deployCRD), and PlatformFieldOwner is "platform.opendatahub.io"
+// (framework/resources/resources.go:30). rhods-operator rhoai-3.6 uses that
+// deploy action (pkg/controller/actions/deploy/action_deploy.go aliases it;
+// pkg/resources/resources.go:15 re-exports PlatformFieldOwner) in the
+// Platform controller that applies the module charts and manifests.
+const platformCRDManager = "platform.opendatahub.io"
+
 // crdCurrent decides whether the installed CRD, not the object, is the
 // current shape. A downgrade or a round trip can leave a CRD at an older
 // bundle's schema (diagnostics_apply_failures.go), and then changing the
-// object to match it would be wrong. The CRD is taken as current when the
-// last writer of its spec.versions (managedFields) is
-//   - OLM, and the installed CSV owns the CRD (OLM keeps it at the
-//     installed bundle's schema), or
-//   - a manager other than OLM and other than a person's oc or kubectl:
-//     the running operator, which applies its module CRDs itself.
+// object to match it would be wrong. The CRD counts as current only when
+//   - (a) the installed CSV owns it (spec.customresourcedefinitions.owned):
+//     it is part of the installed operator's bundle, which OLM installs, or
+//   - (b) its spec.versions was last written (managedFields, the newest
+//     entry that owns f:spec.f:versions) by platformCRDManager, the RHOAI
+//     operator's own field manager.
 //
-// Anything else, or anything that cannot be read, is not current (fail
-// closed).
+// Anything else (another or no manager, two managers with the same newest
+// time, anything that cannot be read) means the tool cannot tell that the
+// CRD is the newer side, and it refuses (fail closed).
 func crdCurrent(c *Client, crd map[string]any, name string) (bool, string) {
+	csv, owned, csvErr := installedCSVOwnsCRD(c, name)
+	if csvErr == nil && owned {
+		return true, fmt.Sprintf("CRD %s is part of the installed operator's bundle (the installed CSV %s owns it)", name, csv)
+	}
+	csvNote := fmt.Sprintf("the installed CSV %s does not own it", nonEmpty(csv, "(unknown)"))
+	if csvErr != nil {
+		csvNote = fmt.Sprintf("the installed CSV could not be read (%v)", csvErr)
+	}
 	meta, _ := crd["metadata"].(map[string]any)
 	entries, _ := meta["managedFields"].([]any)
-	manager, when := "", ""
+	when := ""
+	managers := map[string]bool{}
 	for _, e := range entries {
 		mf, _ := e.(map[string]any)
 		fields, _ := mf["fieldsV1"].(map[string]any)
 		spec, _ := fields["f:spec"].(map[string]any)
 		t, _ := mf["time"].(string)
-		if _, ok := spec["f:versions"]; ok && t >= when {
-			manager, _ = mf["manager"].(string)
-			when = t
+		if _, ok := spec["f:versions"]; !ok {
+			continue
 		}
-	}
-	lower := strings.ToLower(manager)
-	switch {
-	case manager == "":
-		return false, fmt.Sprintf("the managedFields of CRD %s do not say who wrote its schema", name)
-	case strings.HasPrefix(lower, "kubectl") || lower == "oc" || strings.HasPrefix(lower, "oc-"):
-		return false, fmt.Sprintf("CRD %s's schema was last written by %s at %s, by hand, so it may be any version", name, manager, nonEmpty(when, "an unknown time"))
-	case strings.Contains(lower, "catalog") || strings.Contains(lower, "olm"):
-		csv, owned, err := installedCSVOwnsCRD(c, name)
+		m, _ := mf["manager"].(string)
 		switch {
-		case err != nil:
-			return false, fmt.Sprintf("CRD %s's schema was last written by OLM (%s), and the installed CSV could not be read: %v", name, manager, err)
-		case !owned:
-			return false, fmt.Sprintf("CRD %s's schema was last written by OLM (%s) for a bundle, and the installed operator %s does not ship this CRD, so it may be an older bundle's", name, manager, nonEmpty(csv, "(unknown)"))
+		case t > when:
+			when, managers = t, map[string]bool{m: true}
+		case t == when:
+			managers[m] = true
 		}
-		return true, fmt.Sprintf("CRD %s's schema was last written by OLM (%s) at %s, and the installed operator %s ships it", name, manager, nonEmpty(when, "an unknown time"), csv)
 	}
-	return true, fmt.Sprintf("CRD %s's schema was last written by %s at %s, the running operator", name, manager, nonEmpty(when, "an unknown time"))
+	names := make([]string, 0, len(managers))
+	for m := range managers {
+		names = append(names, m)
+	}
+	sort.Strings(names)
+	switch {
+	case len(names) == 0:
+		return false, fmt.Sprintf("the tool can't tell that CRD %s is the newer side: %s, and its managedFields do not say who wrote its schema", name, csvNote)
+	case len(names) > 1:
+		return false, fmt.Sprintf("the tool can't tell that CRD %s is the newer side: %s, and its schema was last written by %s at the same time (%s)", name, csvNote, strings.Join(names, " and "), nonEmpty(when, "an unknown time"))
+	case names[0] != platformCRDManager:
+		return false, fmt.Sprintf("the tool can't tell that CRD %s is the newer side: %s, and its schema was last written by %s at %s, not by the RHOAI operator (field manager %s)", name, csvNote, nonEmpty(names[0], "(no name)"), nonEmpty(when, "an unknown time"), platformCRDManager)
+	}
+	return true, fmt.Sprintf("CRD %s's schema was last written by the RHOAI operator (field manager %s) at %s", name, platformCRDManager, nonEmpty(when, "an unknown time"))
 }
 
 // installedCSVOwnsCRD reports whether the installed RHOAI CSV lists the CRD
@@ -609,10 +628,11 @@ func installedCSVOwnsCRD(c *Client, crd string) (string, bool, error) {
 	return sub.InstalledCSV, false, nil
 }
 
-// patchOps is the JSON Patch of the fix: the object's UID and each field's
-// stored value are tested first, so nothing changes if anything moved.
+// patchOps is the JSON Patch of the fix: the object's UID and
+// resourceVersion (the object the user reviewed) and each field's stored
+// value are tested first, so nothing changes if anything moved.
 func (st *storedLeftover) patchOps() []jsonPatchOp {
-	ops := []jsonPatchOp{patchOp("test", []string{"metadata", "uid"}, st.UID)}
+	ops := []jsonPatchOp{patchOp("test", []string{"metadata", "uid"}, st.UID), patchOp("test", []string{"metadata", "resourceVersion"}, st.ResourceVersion)}
 	for _, lf := range st.changes() {
 		ops = append(ops, patchOp("test", lf.Keys, lf.Value))
 		if lf.Change == "set-default" {
@@ -754,7 +774,7 @@ func (st *storedLeftover) problem() Problem {
 		Severity:        severity,
 		AffectedObjects: []string{st.ref()},
 		FieldChanges:    st.fieldChanges(),
-		TechnicalCmd:    shellCommand("oc", "get", strings.ToLower(st.Kind)+"."+componentAPIGroup, st.Name, "-o", "yaml"),
+		TechnicalCmd:    shellCommand("oc", "get", strings.ToLower(st.Kind)+"."+st.Group, st.Name, "-o", "yaml"),
 	}
 	description := fmt.Sprintf("The operator cannot apply %s: the stored object has field values of a type an earlier release used, and the installed CRD now expects another type. "+
 		"Kubernetes keeps a stored object as it was written, so the upgrade did not change it, and server-side apply cannot convert it. Until it matches, %s stays not ready.", st.ref(), reporters)
@@ -809,7 +829,7 @@ func (st *storedLeftover) problem() Problem {
 			"The DataScienceCluster controller watches module CRs, so it applies the object again by itself.", st.ref())
 		p.AutoFixable = true
 		p.AutoFixAction = fixLeftoverFields + st.Kind + "/" + st.Name
-		p.ConfirmMessage = fmt.Sprintf("This patches %s:\n- %s\n\nEach field is changed only if it still holds the value shown (a JSON Patch test), after the API server's dry run accepts the change. Nothing else changes.", st.ref(), strings.Join(plan, "\n- "))
+		p.ConfirmMessage = fmt.Sprintf("This patches %s:\n- %s\n\nThe tool cannot know what a stored value of the older type meant, so a new value may not mean the same. The object is changed only if it is still the one you reviewed and each field still holds the value shown (JSON Patch tests), after the API server's dry run accepts the change. Nothing else changes.", st.ref(), strings.Join(plan, "\n- "))
 		if st.needsReview() {
 			var review []string
 			for _, lf := range changes {
@@ -821,10 +841,11 @@ func (st *storedLeftover) problem() Problem {
 					review = append(review, fmt.Sprintf("%s (%s -> %s)", lf.Path, fieldJSON(lf.Value), after))
 				}
 			}
-			p.Acknowledge = fmt.Sprintf("I checked what these fields mean and the new values are right for this cluster: %s.", strings.Join(review, ", "))
+			p.Acknowledge = fmt.Sprintf("I checked what these fields mean, and the new values (which may not mean the same as the old ones) are right for this cluster: %s.", strings.Join(review, ", "))
+			p.AcknowledgeBinding = newAckBinding(st.UID, st.ResourceVersion, p.Acknowledge)
 		}
 		raw, _ := json.Marshal(st.patchOps())
-		p.TechnicalCmd = shellCommand("oc", "patch", strings.ToLower(st.Kind)+"."+componentAPIGroup, st.Name, "--type=json", "-p", string(raw))
+		p.TechnicalCmd = shellCommand("oc", "patch", strings.ToLower(st.Kind)+"."+st.Group, st.Name, "--type=json", "-p", string(raw))
 	}
 	return p
 }
@@ -969,7 +990,7 @@ func analyzeRecreate(c *Client, rf *reportedApplyFailure, appNS string, read wor
 		}
 		ownerText = fmt.Sprintf("controller owner %s %s (%s)", o.Kind, o.Name, o.APIVersion)
 		group, _, _ := strings.Cut(o.APIVersion, "/")
-		if group != componentAPIGroup && (group != dscGroup || o.Kind != "DataScienceCluster") {
+		if !isModuleAPIGroup(group) && (group != dscGroup || o.Kind != "DataScienceCluster") {
 			continue
 		}
 		for i := range rf.reporters {
@@ -1082,11 +1103,21 @@ func (r *recreateLeftover) problem() Problem {
 	p.AutoFixable = true
 	p.AutoFixAction = fixLeftoverRecreate + f.Kind + "/" + f.Namespace + "/" + f.Name
 	p.ConfirmMessage = fmt.Sprintf("This deletes %s (propagation Background), after a server-side dry run, and only if its UID and resourceVersion are unchanged. %s", r.ref(), strings.Join(r.Warnings, " "))
-	if !r.Read {
-		r.AckReasons = append(r.AckReasons, fmt.Sprintf("this scan could not read the %s (the fix checks its owner and namespace first)", f.Kind))
-	}
-	if len(r.AckReasons) > 0 {
-		p.Acknowledge = fmt.Sprintf("I accept that %s is down until the operator creates it again: %s.", r.ref(), strings.Join(r.AckReasons, "; "))
+	if reasons := r.ackReasons(); len(reasons) > 0 {
+		p.Acknowledge = fmt.Sprintf("I accept that %s is down until the operator creates it again: %s.", r.ref(), strings.Join(reasons, "; "))
+		// The object as this scan read it; an object it could not read
+		// binds empty (the statement says so).
+		p.AcknowledgeBinding = newAckBinding(r.Obj.Metadata.UID, r.Obj.Metadata.ResourceVersion, p.Acknowledge)
 	}
 	return p
+}
+
+// ackReasons are the reasons the delete needs an acknowledgement:
+// AckReasons, and that the object was not read when it was not.
+func (r *recreateLeftover) ackReasons() []string {
+	out := slices.Clone(r.AckReasons)
+	if !r.Read {
+		out = append(out, fmt.Sprintf("this scan could not read the %s (the fix checks its owner and namespace first)", r.rf.applyFailure.Kind))
+	}
+	return out
 }
