@@ -63,6 +63,11 @@ objects:
       - apiGroups: ["config.openshift.io"]
         resources: ["imagedigestmirrorsets"]
         verbs: ["list"]
+      # An ImageContentSourcePolicy mirrors registry.redhat.io/rhoai as well
+      # as an IDMS does (Update's prerequisite check); read-only (SECURITY.md)
+      - apiGroups: ["operator.openshift.io"]
+        resources: ["imagecontentsourcepolicies"]
+        verbs: ["list"]
       - apiGroups: [""]
         resources: ["nodes", "events", "namespaces", "pods"]
         verbs: ["list"]

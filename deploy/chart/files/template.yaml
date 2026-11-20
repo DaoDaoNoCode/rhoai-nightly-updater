@@ -132,6 +132,12 @@ objects:
       - apiGroups: ["config.openshift.io"]
         resources: ["imagedigestmirrorsets", "imagetagmirrorsets"]
         verbs: ["list"]
+      # Mirrors: an ImageContentSourcePolicy mirrors registry.redhat.io/rhoai
+      # as well as an IDMS does (the MCO merges both); read-only,
+      # non-secret cluster config (SECURITY.md)
+      - apiGroups: ["operator.openshift.io"]
+        resources: ["imagecontentsourcepolicies"]
+        verbs: ["list"]
       # The apps domain, for the inference gateway's hostname
       - apiGroups: ["config.openshift.io"]
         resources: ["ingresses"]
