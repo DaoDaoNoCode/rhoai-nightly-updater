@@ -116,11 +116,7 @@ const PipelinesPart: React.FC<{ project: string; read: ProjectRead<ResourcesStat
           </Flex>
         </StackItem>
         {!server.ready && server.message && <StackItem><Note>{server.message}</Note></StackItem>}
-        {server.ready && (
-          <StackItem>
-            <PipelineSample project={project} dspa={server.name} apiRoute={server.apiRoute} uiRoute={server.uiRoute} />
-          </StackItem>
-        )}
+        {server.ready && <StackItem><Note>Run a sample pipeline below to check that runs work.</Note></StackItem>}
       </Stack>
     );
   }
@@ -195,8 +191,8 @@ const SamplesPart: React.FC<{ project: string; read: ProjectRead<MLflowSamplesSt
           <Table aria-label={`MLflow sample data in ${project}`} variant="compact">
             <Thead>
               <Tr>
-                <Th width={60}>Sample</Th>
-                <Th width={20}>State</Th>
+                <Th width={50}>Sample</Th>
+                <Th width={25}>State</Th>
                 <Th screenReaderText="Link" />
               </Tr>
             </Thead>
@@ -207,7 +203,7 @@ const SamplesPart: React.FC<{ project: string; read: ProjectRead<MLflowSamplesSt
                   <Tr key={s.id}>
                     <Td dataLabel="Sample">{SAMPLE_INFO[s.id]?.name ?? s.name}</Td>
                     <Td dataLabel="State">{label ? <EnvStatusLabel status={label.status} text={label.text} /> : null}</Td>
-                    <Td dataLabel="Link" modifier="fitContent">
+                    <Td dataLabel="Link" modifier="nowrap">
                       {s.link && (
                         <Button variant="link" isInline component="a" href={s.link} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">
                           Open in MLflow
@@ -236,12 +232,19 @@ export const UserProjectView: React.FC<{ project: string; refreshKey: number }> 
   const status = useProjectRead(loadStatus, project, refreshKey);
   const playground = useProjectRead(loadPlayground, project, refreshKey);
   const samples = useProjectRead(loadSamples, project, refreshKey);
+  const server = status.data ? pipelineServerIn(status.data, project) : undefined;
   return (
     <Stack hasGutter>
       <StackItem><PipelinesPart project={project} read={status} /></StackItem>
       <StackItem><ModelsPart project={project} read={status} /></StackItem>
       <StackItem><PlaygroundPart project={project} read={playground} /></StackItem>
       <StackItem><SamplesPart project={project} read={samples} /></StackItem>
+      {/* Last: the long how-to would push the project's state below the fold. */}
+      {server?.ready && (
+        <StackItem>
+          <Card><CardBody><PipelineSample project={project} dspa={server.name} apiRoute={server.apiRoute} uiRoute={server.uiRoute} /></CardBody></Card>
+        </StackItem>
+      )}
     </Stack>
   );
 };

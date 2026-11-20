@@ -27,7 +27,8 @@ describe("Environment for a user who is not a cluster-admin", () => {
     // Pipelines: the server and the sample pipeline.
     await within(part("Pipelines")).findByText("Ready");
     expect(within(part("Pipelines")).getByRole("link", { name: "Open pipelines in dev-project" })).toHaveAttribute("href", expect.stringContaining("/pipelines/definitions/dev-project"));
-    expect(await within(part("Pipelines")).findByRole("link", { name: "Download sample-artifact-check.yaml" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Run a sample pipeline" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Download sample-artifact-check.yaml" })).toBeInTheDocument();
     // Models, playground, MLflow sample data.
     expect(within(part("Models")).getByRole("grid", { name: "Models in dev-project" })).toHaveTextContent("Qwen3 0.6B");
     expect(await within(part("Playground")).findByText("Gen AI playground")).toBeInTheDocument();
