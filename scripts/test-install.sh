@@ -239,13 +239,19 @@ case "$url" in
 */manifests/*)
 	[[ $ref == sha256:* ]] || [ -n "${FAKE_DIGEST:-}" ] || reply "404 Not Found" "" '{"errors":[{"code":"MANIFEST_UNKNOWN"}]}'
 	if [ -n "${FAKE_INDEX:-}" ] && [[ $ref != sha256:[cd]* ]]; then
-		reply "200 OK" "" "$(printf '%s\n' '{' '  "schemaVersion": 2,' \
+		# Built in steps: bash 3.2 (macOS) mangles escaped quotes in a
+		# command substitution nested in a quoted one.
+		c=$(printf 'c%.0s' $(seq 64))
+		d=$(printf 'd%.0s' $(seq 64))
+		m='"mediaType": "application/vnd.oci.image.manifest.v1+json"'
+		index=$(printf '%s\n' '{' '  "schemaVersion": 2,' \
 			'  "mediaType": "application/vnd.oci.image.index.v1+json",' '  "manifests": [' \
-			"    {\"mediaType\": \"application/vnd.oci.image.manifest.v1+json\", \"digest\": \"sha256:$(printf 'c%.0s' $(seq 64))\", \"size\": 1," \
+			"    {$m, \"digest\": \"sha256:$c\", \"size\": 1," \
 			'      "platform": {"architecture": "arm64", "os": "linux", "variant": "v8"}},' \
 			'    {"platform": {"os": "linux", "architecture": "amd64"},' \
-			"      \"mediaType\": \"application/vnd.oci.image.manifest.v1+json\", \"digest\": \"sha256:$(printf 'd%.0s' $(seq 64))\", \"size\": 1}" \
-			'  ]' '}')"
+			"      $m, \"digest\": \"sha256:$d\", \"size\": 1}" \
+			'  ]' '}')
+		reply "200 OK" "" "$index"
 	fi
 	if command -v sha256sum >/dev/null 2>&1; then sum=$(config | sha256sum); else sum=$(config | shasum -a 256); fi
 	reply "200 OK" "" "{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"config\":{\"mediaType\":\"application/vnd.oci.image.config.v1+json\",\"digest\":\"sha256:${sum%% *}\",\"size\":1},\"layers\":[{\"mediaType\":\"application/vnd.oci.image.layer.v1.tar+gzip\",\"digest\":\"sha256:$(printf 'e%.0s' $(seq 64))\",\"size\":1}]}"
