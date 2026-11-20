@@ -620,24 +620,24 @@ func readCatalogSource(c *Client) (types.CatalogSourceInfo, *objectMeta, error) 
 }
 
 // gitOpsManagers sets on status who manages the operator Subscription, the
-// nightly catalog and the DataScienceCluster: the Argo CD application their
-// tracking annotation names, once Argo CD confirms it (argocd.go; one
-// argoCheck, so each answer is read once per poll), and an ACM policy that
+// nightly catalog and the DataScienceCluster: the Argo CD application that
+// lists them, as Argo CD answers (argocd.go; one argoCheck, so each answer
+// is read once per poll), and an ACM policy that
 // enforces the catalog when no Argo CD application manages it. A nil
 // metadata is an object the status did not find.
 func gitOpsManagers(c *Client, status *types.StatusResponse, sub, catalog, dsc *objectMeta) {
 	argo := newArgoCheck(c)
 	if sub != nil {
-		t := argo.object(sub.Annotations, argoSubscriptionObject)
+		t := argo.object(sub.Annotations, sub.Labels, argoSubscriptionObject)
 		status.Subscription.ManagedBy, status.Subscription.ArgoCD = t.managedBy(), t.info()
 	}
 	if catalog != nil {
-		t := argo.object(catalog.Annotations, argoCatalogObject)
+		t := argo.object(catalog.Annotations, catalog.Labels, argoCatalogObject)
 		status.CatalogSource.ManagedBy, status.CatalogSource.ArgoCD = t.managedBy(), t.info()
 		status.CatalogSource.ManagedByACM = t.managedBy() == "" && acmEnforcesSpec(*catalog)
 	}
 	if dsc != nil {
-		t := argo.object(dsc.Annotations, argoDSCObject(dsc.Name))
+		t := argo.object(dsc.Annotations, dsc.Labels, argoDSCObject(dsc.Name))
 		status.DSCManagedBy, status.DSCArgoCD = t.managedBy(), t.info()
 	}
 }

@@ -1,9 +1,7 @@
 {{- /*
 Removes the OAuthClient the PostSync hook applied (oauth-client.yaml) when
-the Application is deleted: an Argo CD PostDelete hook (Argo CD 2.10 or
-later, OpenShift GitOps 1.12 or later; older versions never run it). It
-runs after a cascading deletion has removed the app's objects, and does
-what `install.sh uninstall` does first: delete OAuthClient
+the Application is deleted with its resources: an Argo CD PostDelete hook.
+It does what `install.sh uninstall` does first: delete OAuthClient
 <APP_NAME>-<NAMESPACE> when its labels name this install, then revoke the
 access tokens issued under that name (deleting a client does not
 invalidate them). Why it matters: the OAuth server also answers the
@@ -16,19 +14,46 @@ client either (live-checked: the garbage collector did not delete it even
 with an ownerReference to the namespace); then `install.sh uninstall` or
 the commands in docs/GITOPS.md remove it.
 
+Argo CD runs PostDelete hooks on every deletion of an Application that has
+them, with or without its resources (controller/appcontroller.go
+finalizeApplicationDeletion in Argo CD 2.10.18: the post-delete finalizer
+is handled after the cascade branch, whether or not it ran). A cascading
+deletion first deletes every object of the app and waits until they are
+gone, Route <APP_NAME> included; a non-cascading one (no resources
+finalizer, `argocd app delete --cascade=false`, an ApplicationSet with
+preserveResourcesOnDeletion) leaves the app running. So the hook first reads
+the Route: when it still exists, the app still runs and its users still
+sign in through the client, so the hook keeps both and exits 0, saying so.
+Only NotFound goes on; any other answer fails the hook.
+
 A client without this install's labels is left alone (another install's,
 or one applied before the labels), and the hook says so; reading or
-deleting failing fails the hook (Argo CD keeps the Application until it
-succeeds, docs/GITOPS.md section 7).
+deleting failing fails the hook. What Argo CD does then depends on its
+version (docs/GITOPS.md section 7): 2.12 to 3.1 delete the Application
+anyway and keep the failed Job; 3.3 and later keep the Application and run
+the Job again.
 
-RBAC, a ClusterRole that exists only while the hook runs: get and delete
-on the one OAuthClient; list and delete on OAuthAccessTokens, which cannot
-be limited to names (each is a hash of its token).
+PostDelete hooks without a health check (ServiceAccount, Role, bindings)
+make Argo CD 2.10 and 2.11 panic (controller/hook.go dereferences a nil
+health; argoproj/argo-cd#18270, fixed by #18828 in 2.12), so deleting the
+Application hangs there. Use OpenShift GitOps 1.14 (Argo CD 2.12) or later,
+or set gitops.oauthClient.removeOnDelete=false and remove the client by
+hand (docs/GITOPS.md section 7).
 
-Profile full only, with gitops.oauthClient.enabled: the gitops profile has
-no OAuthClient, and without the hooks an admin manages the client.
+RBAC, created as hooks with this Job (one pass, no order: the first
+attempts may be refused until the bindings exist, and the Job retries,
+backoffLimit): a Role in the app's namespace, get on Route <APP_NAME>; a
+ClusterRole, get and delete on the one OAuthClient, list and delete on
+OAuthAccessTokens, which cannot be limited to names (each is a hash of its
+token). The RBAC objects carry HookFailed, so Argo CD 2.12 to 3.1 delete
+them after a failed run too (cleanupPostDeleteHooks deletes the hooks whose
+policy matches the hooks' aggregated health).
+
+Profile full only, with gitops.oauthClient.enabled and
+gitops.oauthClient.removeOnDelete: the gitops profile has no OAuthClient,
+and without the hooks an admin manages the client.
 */ -}}
-{{- if and .Values.gitops.oauthClient.enabled (eq (.Values.profile | default "gitops") "full") }}
+{{- if and .Values.gitops.oauthClient.enabled .Values.gitops.oauthClient.removeOnDelete (eq (.Values.profile | default "gitops") "full") }}
 {{- $p := include "rnu.params" . | fromJson }}
 {{- $instance := printf "%s-%s" $p.APP_NAME $p.NAMESPACE }}
 {{- $name := printf "%s-oauthclient-removal" $p.APP_NAME }}
@@ -38,7 +63,37 @@ metadata:
   name: {{ $name | quote }}
   namespace: {{ $p.NAMESPACE | quote }}
   annotations:
-    {{- include "rnu.hook" (dict "phase" "PostDelete" "wave" "-2") | nindent 4 }}
+    {{- include "rnu.hook" (dict "phase" "PostDelete" "deleteOnFailure" true) | nindent 4 }}
+---
+# Whether the app still runs: its Route, by name.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name | quote }}
+  namespace: {{ $p.NAMESPACE | quote }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "PostDelete" "deleteOnFailure" true) | nindent 4 }}
+rules:
+  - apiGroups: ["route.openshift.io"]
+    resources: ["routes"]
+    resourceNames: [{{ $p.APP_NAME | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name | quote }}
+  namespace: {{ $p.NAMESPACE | quote }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "PostDelete" "deleteOnFailure" true) | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name | quote }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name | quote }}
+    namespace: {{ $p.NAMESPACE | quote }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -47,7 +102,7 @@ metadata:
   labels:
     app.kubernetes.io/instance: {{ $instance | quote }}
   annotations:
-    {{- include "rnu.hook" (dict "phase" "PostDelete" "wave" "-2") | nindent 4 }}
+    {{- include "rnu.hook" (dict "phase" "PostDelete" "deleteOnFailure" true) | nindent 4 }}
 rules:
   - apiGroups: ["oauth.openshift.io"]
     resources: ["oauthclients"]
@@ -64,7 +119,7 @@ metadata:
   labels:
     app.kubernetes.io/instance: {{ $instance | quote }}
   annotations:
-    {{- include "rnu.hook" (dict "phase" "PostDelete" "wave" "-2") | nindent 4 }}
+    {{- include "rnu.hook" (dict "phase" "PostDelete" "deleteOnFailure" true) | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -80,7 +135,7 @@ metadata:
   name: {{ $name | quote }}
   namespace: {{ $p.NAMESPACE | quote }}
   annotations:
-    {{- include "rnu.hook" (dict "phase" "PostDelete" "wave" "-1") | nindent 4 }}
+    {{- include "rnu.hook" (dict "phase" "PostDelete") | nindent 4 }}
 spec:
   backoffLimit: 4
   activeDeadlineSeconds: 300
@@ -109,13 +164,24 @@ spec:
             # oc writes its cache under HOME; the root filesystem is read-only.
             - name: HOME
               value: /tmp
-          # The hook's ClusterRoleBinding is created with the Job, so the
-          # first attempt may be refused; the Job retries (backoffLimit).
+          # The hook's bindings are created with the Job, so the first
+          # attempt may be refused; the Job retries (backoffLimit).
           command:
             - /bin/bash
             - -c
             - |
               set -euo pipefail
+              if out=$(oc get route "$APP_NAME" -n "$NAMESPACE" -o name 2>&1); then
+                echo "Keeping OAuthClient $INSTANCE and its sign-ins: Route $APP_NAME still exists in $NAMESPACE, so the Application was deleted without its resources and the app still runs. Once the app is removed: oc delete oauthclient $INSTANCE; oc delete oauthaccesstokens --field-selector clientName=$INSTANCE"
+                exit 0
+              fi
+              case "$out" in
+              *NotFound* | *"not found"*) ;;
+              *)
+                echo "Cannot read Route $APP_NAME in $NAMESPACE, so whether the app still runs is not known: $out" >&2
+                exit 1
+                ;;
+              esac
               if out=$(oc get oauthclient "$INSTANCE" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/name}{"|"}{.metadata.labels.rhoai-nightly-updater/namespace}{"\n"}' 2>&1); then
                 IFS='|' read -r app ns _ <<<"$out" || true
                 if [ "$app" != "$APP_NAME" ] || [ "$ns" != "$NAMESPACE" ]; then

@@ -228,8 +228,10 @@ if other details of their templates differ.
 Both are Argo CD hooks, so Argo CD does not track them as part of the
 application. Each has its own ServiceAccount and RBAC, created as hooks one
 wave earlier, with `hook-delete-policy: BeforeHookCreation,HookSucceeded`:
-Argo CD deletes them once the whole sync has succeeded, and keeps them after
-a failure so you can read the Job's log; the next sync replaces them. The
+Argo CD deletes them once the whole sync operation has succeeded (not when
+their Job ends), and keeps them after a failure so you can read the Job's
+log; the next sync replaces them. The OAuth client hooks' RBAC also has
+`HookFailed`, so a failed sync removes it at once (below). The
 Jobs run `gitops.cliImage` with a non-root user (assigned by the
 `restricted-v2` SCC), no privilege escalation, all capabilities dropped, the
 `RuntimeDefault` seccomp profile, a read-only root filesystem, small
@@ -292,23 +294,42 @@ in through the app's ServiceAccount as with 3.x
   Role), and `get`/`patch` on that one OAuthClient plus `create` on
   OAuthClients (ClusterRole
   `<APP_NAME>-<NAMESPACE>-oauthclient`). `create`
-  cannot be limited to a name, so while the hook runs its ServiceAccount
-  could register any OAuth client; it exists only for the hook's run
+  cannot be limited to a name, so while the binding exists the hook's
+  ServiceAccount could register any OAuth client. The binding lives from
+  the hook's creation until the sync operation ends (Argo CD deletes
+  `HookSucceeded` hooks only once the whole operation succeeded); with
+  `HookFailed` on the ServiceAccount, Role, ClusterRole and bindings, a
+  failed sync removes them too, while the failed Job stays for its log
   ([SECURITY.md](../SECURITY.md#the-oauthclient-400)). The app's own
   ServiceAccount gets no right on OAuthClients.
-- A `PostDelete` hook (Job `<APP_NAME>-oauthclient-removal`) runs when the
-  Application is deleted with a cascading deletion: it deletes the
-  OAuthClient when its labels name this install, then revokes the sign-ins
-  issued under its name (`oc delete oauthaccesstokens --field-selector
-  clientName=...`), as `install.sh uninstall` does. RBAC: ClusterRole
+- A `PostDelete` hook (Job `<APP_NAME>-oauthclient-removal`,
+  `gitops.oauthClient.removeOnDelete`, on by default) runs when the
+  Application is deleted. Argo CD runs PostDelete hooks on **every**
+  deletion of the Application, with or without its resources
+  (`finalizeApplicationDeletion` in Argo CD's `controller/appcontroller.go`;
+  an ApplicationSet with `preserveResourcesOnDeletion` keeps the hook's
+  finalizer too, `applicationset_controller.go` from 2.12). So the hook
+  first reads Route `<APP_NAME>`: a cascading deletion has deleted it and
+  waited for it to be gone before the hook runs, so a Route that still
+  exists means a non-cascading deletion and an app that still runs, and the
+  hook keeps the client and its sign-ins and says so (remove them later as
+  in [section 7](#7-removing-it)). Otherwise it deletes the OAuthClient
+  when its labels name this install, then revokes the sign-ins issued under
+  its name (`oc delete oauthaccesstokens --field-selector clientName=...`),
+  as `install.sh uninstall` does. A Route it cannot read fails the hook.
+  RBAC: Role `<APP_NAME>-oauthclient-removal`, `get` on that Route; ClusterRole
   `<APP_NAME>-<NAMESPACE>-oauthclient-removal`, `get`/`delete` on that
-  OAuthClient and `list`/`delete` on OAuthAccessTokens. PostDelete hooks
-  need **Argo CD 2.10 or later** (OpenShift GitOps 1.12 or later); older
-  versions never run it, and then the client stays until you delete it
-  ([section 7](#7-removing-it)). While the hook fails (a read or delete
-  refused), Argo CD keeps the Application; to give up, remove its
-  `post-delete-finalizer.argocd.argoproj.io` finalizer and run the
-  commands of section 7.
+  OAuthClient and `list`/`delete` on OAuthAccessTokens. Argo CD creates
+  every PostDelete hook in one pass (no sync waves), so the Job's first
+  attempts may be refused until the bindings exist; it retries.
+  **It needs OpenShift GitOps 1.14 or later (Argo CD 2.12).** Argo CD 2.10
+  and 2.11 (OpenShift GitOps 1.12 and 1.13) panic on PostDelete hooks
+  without a health check, such as this hook's ServiceAccount and RBAC
+  (`controller/hook.go`; [argo-cd#18270](https://github.com/argoproj/argo-cd/issues/18270),
+  fixed in 2.12), and deleting the Application hangs. There, set
+  `gitops.oauthClient.removeOnDelete: false` and remove the client by hand
+  after deleting the Application ([section 7](#7-removing-it)). What a
+  failed run leaves depends on the version (section 7).
 
 Until the PostSync hook ran, signing in fails with `unauthorized_client`.
 Argo CD never prunes the OAuthClient; the PostDelete hook removes it, and
@@ -411,8 +432,10 @@ What stays even then:
   and the app's ConfigMaps (activity log, snapshot, operation marker);
 - ConsoleLink `<APP_NAME>-<NAMESPACE>`, created by a Job;
 - with `profile: full`: Secret `<APP_NAME>-oauth-client`, and, where the
-  PostDelete hook did not run (Argo CD before 2.10, a non-cascading
-  deletion, `gitops.oauthClient.enabled: false`), OAuthClient
+  PostDelete hook did not remove it (Argo CD before 2.10,
+  `gitops.oauthClient.removeOnDelete: false` or `gitops.oauthClient.enabled:
+  false`, a non-cascading deletion, whose hook keeps the client while the
+  app's Route exists, or a failed hook), OAuthClient
   `<APP_NAME>-<NAMESPACE>` and the sign-ins it issued. Remove that client:
   with `grantMethod: auto` and the OAuth server's implicit flow, whoever
   later serves its redirect host (a Route with that host, once the namespace
@@ -422,6 +445,37 @@ What stays even then:
   the client stays); `install.sh uninstall` below still removes both
   after the namespace is gone;
 - the hook objects of a failed last run.
+
+**When the PostDelete hook fails** (a read or delete refused), what Argo CD
+does depends on its version:
+
+- Argo CD 2.12 to 3.1 (OpenShift GitOps 1.14 to 1.19): a failed Job counts
+  as done (`executePostDeleteHooks` waits only while a hook is
+  `Progressing`), so Argo CD deletes the Application anyway. The hook
+  objects with a delete policy that matches the hooks' health go
+  (`cleanupPostDeleteHooks`): the ServiceAccount, Role, RoleBinding,
+  ClusterRole and ClusterRoleBinding carry `HookFailed`, so they are
+  deleted; the failed Job `<APP_NAME>-oauthclient-removal` stays with its
+  log, and the OAuthClient and its sign-ins stay. Remove them with the
+  commands below.
+- Argo CD 3.3 and later (OpenShift GitOps 1.20 and later): Argo CD deletes
+  the failed Job, keeps the Application and runs the hook again
+  (`executeHooks` in `controller/hook.go`), until it succeeds. To give up,
+  remove the Application's `post-delete-finalizer.argocd.argoproj.io`
+  finalizers and run the commands below.
+- Argo CD 2.10 and 2.11 (OpenShift GitOps 1.12 and 1.13): the controller
+  panics on the hook's RBAC objects and the deletion hangs; use
+  `gitops.oauthClient.removeOnDelete: false` there (section 4). If an
+  Application is already stuck, remove its
+  `post-delete-finalizer.argocd.argoproj.io` finalizers, then the hook
+  objects and the client with the commands below.
+
+If a hook's RBAC object was not deleted (by hand, or an Argo CD that
+stopped part way), the ClusterRoles `<APP_NAME>-<NAMESPACE>-oauthclient`
+(OAuthClient `create`) and `<APP_NAME>-<NAMESPACE>-oauthclient-removal`
+(list and delete every OAuthAccessToken) and their bindings carry the
+instance label, so the `clusterrole,clusterrolebinding -l` command below
+removes them; the namespaced ones go with the namespace.
 
 Remove those, or after a non-cascading deletion the whole app, once the
 Application is gone (with it still there, Argo CD would recreate the app),
@@ -433,6 +487,9 @@ by the instance label, then the namespace, or by hand:
 oc delete oauthclient <APP_NAME>-<NAMESPACE>   # check its labels name this install: oc get oauthclient <APP_NAME>-<NAMESPACE> --show-labels
 oc delete oauthaccesstokens --field-selector clientName=<APP_NAME>-<NAMESPACE>   # deleting the client does not end its sign-ins
 oc delete consolelink,clusterrole,clusterrolebinding -l app.kubernetes.io/instance=<APP_NAME>-<NAMESPACE>
+# hook RBAC a failed or interrupted run left (also matched by the line above):
+oc delete clusterrole,clusterrolebinding <APP_NAME>-<NAMESPACE>-oauthclient <APP_NAME>-<NAMESPACE>-oauthclient-removal --ignore-not-found
+oc delete job,serviceaccount,role,rolebinding -n <NAMESPACE> <APP_NAME>-oauthclient-removal --ignore-not-found
 # profile gitops only (install.sh uninstall does not know these):
 oc delete validatingadmissionpolicy,validatingadmissionpolicybinding -l app.kubernetes.io/instance=<APP_NAME>-<NAMESPACE>
 oc delete role,rolebinding -n redhat-ods-operator -l app.kubernetes.io/instance=<APP_NAME>-<NAMESPACE>
@@ -458,13 +515,25 @@ test resources) stay, as with `install.sh uninstall`.
   sync fails on that object; use `profile: full` there. When Argo CD reaches a managed cluster through a
   proxy identity, check that admission on that cluster allows a
   NetworkPolicy and Roles in those namespaces.
-- **Annotation-based resource tracking**, `application.resourceTrackingMethod:
-  annotation` in `argocd-cm`: the default since Argo CD 3.0
-  ([upgrade notes](https://argo-cd.readthedocs.io/en/stable/operator-manual/upgrading/2.14-3.0/),
-  [resource tracking](https://argo-cd.readthedocs.io/en/stable/user-guide/resource_tracking/)).
-  Argo CD then marks its objects with the `argocd.argoproj.io/tracking-id`
-  annotation only. The other two methods affect this chart in two separate
-  ways:
+- **Annotation-based resource tracking**. Argo CD then marks its objects
+  with the `argocd.argoproj.io/tracking-id` annotation only
+  ([resource tracking](https://argo-cd.readthedocs.io/en/stable/user-guide/resource_tracking/)).
+  Where to set it, and what you get without setting it:
+  - *OpenShift GitOps*: set `spec.resourceTrackingMethod: annotation` on the
+    `ArgoCD` CR (for the default instance, `openshift-gitops` in namespace
+    `openshift-gitops`). The operator writes `argocd-cm` from the CR on
+    every reconcile, so an edit of `argocd-cm` itself is undone; an
+    `application.resourceTrackingMethod` entry under `.spec.extraConfig`
+    also works and wins over the field. Unset, the default is `label` up to
+    OpenShift GitOps 1.18 and `annotation` from 1.19
+    ([gitops-operator docs/upgrading.md](https://github.com/redhat-developer/gitops-operator/blob/master/docs/upgrading.md),
+    "Resource tracking method default changed from `label` to
+    `annotation`").
+  - *Upstream Argo CD*: `application.resourceTrackingMethod: annotation` in
+    `argocd-cm`; the default since Argo CD 3.0
+    ([upgrade notes](https://argo-cd.readthedocs.io/en/stable/operator-manual/upgrading/2.14-3.0/)).
+
+  The other two methods affect this chart in two separate ways:
   - *The instance label is overwritten* with `label` and with
     `annotation+label`: both write the application name into the
     instance label, `app.kubernetes.io/instance` by default (`SetAppInstance`
@@ -491,13 +560,14 @@ test resources) stay, as with `install.sh uninstall`.
   CLI) with the cluster's global pull secret, as with `install.sh`.
 
 **When Argo CD also manages RHOAI.** Deploying the updater with Argo CD does
-not change how it works with an RHOAI that Argo CD manages: it notices Argo
-CD's tracking annotation on the catalog, Subscription and DataScienceCluster,
-confirms with Argo CD that the Application still manages them (it lists
-Applications by name: an Argo CD on another cluster, a hub, is only seen
-through ACM's AppliedManifestWork API or `argocd cluster add`'s
-ClusterRoleBinding, and counts as managing when either is there), and
-treats Git as the source of truth there
+not change how it works with an RHOAI that Argo CD manages, whatever its
+tracking method: it lists Argo CD's Applications and treats the catalog,
+Subscription and DataScienceCluster as managed when an Application lists
+them in `status.resources` (the tracking annotation or the instance label
+only names the application; an Argo CD on another cluster, a hub, is only
+seen through ACM's AppliedManifestWork API or `argocd cluster add`'s
+ClusterRoleBinding or RoleBindings, and counts as managing marked objects
+when one is there), and treats Git as the source of truth there
 ([CLUSTER_CHANGES: Update when Argo CD manages the operator](CLUSTER_CHANGES.md#update-when-argo-cd-manages-the-operator),
 [RUNBOOK §13](../RUNBOOK.md#13-clusters-managed-by-argo-cd)). Keep the
 updater in its own Application, apart from the one that manages RHOAI.
@@ -760,11 +830,10 @@ with these differences:
 
 - It refuses (`profile_gitops`) unless Argo CD or an ACM policy manages
   CatalogSource `rhoai-catalog-dev`:
-  - Argo CD: its `argocd.argoproj.io/tracking-id` names the catalog, and
-    Argo CD confirms it: the Application lists the catalog in its
-    `status.resources`, or it could not be asked (a read error counts as
-    managed). A left-over annotation does not count
-    ([RUNBOOK §13](../RUNBOOK.md#13-clusters-managed-by-argo-cd)).
+  - Argo CD: an Application lists the catalog in its `status.resources`
+    (with annotation or label tracking alike), or it could not be asked (a
+    read error counts as managed). A left-over annotation or label does not
+    count ([RUNBOOK §13](../RUNBOOK.md#13-clusters-managed-by-argo-cd)).
   - ACM: an enforced ConfigurationPolicy applies the catalog, so the
     catalog's `managedFields` show manager `config-policy-controller`
     owning `f:spec`. An entry that owns only `f:status` does not count.

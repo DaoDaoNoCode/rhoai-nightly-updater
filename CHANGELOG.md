@@ -351,6 +351,41 @@ only accepts a tag whose version is the top dated section. See
   ([RUNBOOK §13](RUNBOOK.md#13-clusters-managed-by-argo-cd)). The
   ServiceAccount (both profiles) may now `list` Argo CD Applications
   ([SECURITY: Reading Argo CD Applications](SECURITY.md#reading-argo-cd-applications-400)).
+- **Argo CD with label tracking is recognised (also affected 3.x).**
+  OpenShift GitOps 1.12 to 1.18 track resources by the
+  `app.kubernetes.io/instance` label unless the ArgoCD CR says otherwise
+  (`annotation` became the default in 1.19, gitops-operator
+  `docs/upgrading.md`), so the objects they sync carry no tracking
+  annotation, and every release up to 3.0.2 treated them as not managed:
+  Re-deploy, Install a different build, DSC changes and the gitops
+  profile's checks ran against a self-healing Argo CD that put the objects
+  back. The tool now lists every Argo CD Application and treats an object
+  as managed when one lists it in `status.resources` (group, kind,
+  namespace, name), with or without any mark; the annotation or the label
+  only names the application, and an annotation that names another object
+  (Argo CD compares the group too) does not count, as in Argo CD. A
+  marked object no Application here lists is left over only without signs
+  of an Argo CD on another cluster; RoleBinding
+  `argocd-manager-role-binding` (`argocd cluster add --namespace`) in
+  RHOAI's, the catalog's or the object's namespace is now one such sign
+  (the ServiceAccount may `get` RoleBindings of that one name). An
+  Update under label tracking now keeps the instance label on the
+  recreated Subscription. RUNBOOK §13 lists what leaves no sign.
+- **The chart's PostDelete hook no longer revokes sign-ins of a running
+  app.** Argo CD runs PostDelete hooks on every deletion of the
+  Application, also one that keeps its resources (non-cascading,
+  `preserveResourcesOnDeletion`), so the hook deleted the OAuthClient and
+  signed everyone out while the app kept running. It now keeps both while
+  the app's Route exists. It needs OpenShift GitOps 1.14 (Argo CD 2.12) or
+  later: 2.10 and 2.11 panic on its RBAC hooks and the deletion hangs; set
+  the new value `gitops.oauthClient.removeOnDelete: false` there and remove
+  the client by hand (docs/GITOPS.md §7, which now also says what a failed
+  hook leaves per Argo CD version). Its sync-wave annotations, which Argo
+  CD ignores for PostDelete hooks, are gone.
+- **docs/GITOPS.md: where to set annotation tracking on OpenShift GitOps.**
+  It said `application.resourceTrackingMethod` in `argocd-cm`, which the
+  operator overwrites from the ArgoCD CR: set `spec.resourceTrackingMethod`
+  on the CR. The default is `label` before OpenShift GitOps 1.19.
 - **RHOAI's namespaces are read from the cluster, not assumed.** The
   applications and monitoring namespaces come from the DSCInitialization
   (`spec.applicationsNamespace`, `spec.monitoring.namespace`), read once per
@@ -579,7 +614,10 @@ only accepts a tag whose version is the top dated section. See
   deleted with its sign-ins revoked by `install.sh uninstall` (which now
   stops before deleting the namespace when it cannot delete the client), by
   `make rollback` to a 3.x template, and by a new PostDelete hook when the
-  chart's Argo CD Application is deleted (Argo CD 2.10 or later).
+  chart's Argo CD Application is deleted with its resources (OpenShift
+  GitOps 1.14 / Argo CD 2.12 or later). The hooks' RBAC that may create
+  OAuthClients or delete access tokens carries `HookFailed`, so a failed
+  run no longer leaves it until the next sync.
   **Deleting the namespace by hand leaves the client and its sign-ins**
   (live-checked): run `install.sh uninstall` afterwards (it works once the
   namespace is gone, live-checked), or `oc delete oauthclient

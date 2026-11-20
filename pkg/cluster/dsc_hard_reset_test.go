@@ -182,7 +182,11 @@ func TestHardResetRefusals(t *testing.T) {
 			}
 			setPath(t, dsc, "metadata.deletionTimestamp", "2026-11-18T00:00:00Z")
 		}, nil, "conflict"},
-		{"argo cd", func(t *testing.T, _ *resourceFake, dsc map[string]any) {
+		{"argo cd", func(t *testing.T, f *resourceFake, dsc map[string]any) {
+			if f != nil {
+				// Argo CD answers that its Application lists the DSC.
+				f.argo = argoManagingAll(argoDSCObject("default-dsc"))
+			}
 			if dsc == nil {
 				return
 			}

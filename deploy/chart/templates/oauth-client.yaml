@@ -14,10 +14,14 @@ the Route's host, which the API server assigns.
   unauthorized_client.
 
 Only these short-lived hook ServiceAccounts get any right on OAuthClients,
-never the app's: create (which cannot be limited to a name, so for as long
-as the hook runs it could register any client; SECURITY.md audits it), and
-get and patch of this one name. The ClusterRole and its binding carry
-install.sh's instance label and are deleted with the hook. Argo CD does not
+never the app's: create (which cannot be limited to a name, so while the
+binding exists the hook's ServiceAccount could register any client;
+SECURITY.md audits it), and get and patch of this one name. The PostSync
+RBAC objects carry HookFailed besides BeforeHookCreation,HookSucceeded, so
+Argo CD deletes them when the sync operation ends, failed or not (without
+it they stay after a failure until the next sync); the failed Job stays for
+its log. The ClusterRole and its binding carry install.sh's instance label,
+so `install.sh uninstall` finds a leftover. Argo CD does not
 track the Secret or the OAuthClient and never prunes them; the PostDelete
 hook (oauth-client-removal.yaml) removes the OAuthClient and revokes the
 sign-ins it issued when the Application is deleted, as `install.sh
@@ -169,7 +173,7 @@ metadata:
   name: {{ $post | quote }}
   namespace: {{ $p.NAMESPACE | quote }}
   annotations:
-    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
+    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2" "deleteOnFailure" true) | nindent 4 }}
 ---
 # The Route's host and the client secret, each by its name.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -178,7 +182,7 @@ metadata:
   name: {{ $post | quote }}
   namespace: {{ $p.NAMESPACE | quote }}
   annotations:
-    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
+    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2" "deleteOnFailure" true) | nindent 4 }}
 rules:
   - apiGroups: ["route.openshift.io"]
     resources: ["routes"]
@@ -195,7 +199,7 @@ metadata:
   name: {{ $post | quote }}
   namespace: {{ $p.NAMESPACE | quote }}
   annotations:
-    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
+    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2" "deleteOnFailure" true) | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -216,7 +220,7 @@ metadata:
   labels:
     app.kubernetes.io/instance: {{ $instance | quote }}
   annotations:
-    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
+    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2" "deleteOnFailure" true) | nindent 4 }}
 rules:
   - apiGroups: ["oauth.openshift.io"]
     resources: ["oauthclients"]
@@ -233,7 +237,7 @@ metadata:
   labels:
     app.kubernetes.io/instance: {{ $instance | quote }}
   annotations:
-    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
+    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2" "deleteOnFailure" true) | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole

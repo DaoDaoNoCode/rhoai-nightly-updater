@@ -27,6 +27,7 @@ func acmCatalogMetadata(specOwner string) map[string]any {
 func acmFake(t *testing.T) *fakeOLM {
 	f := gitOpsFake(t)
 	f.catalog["metadata"] = acmCatalogMetadata(acmPolicyManager)
+	f.argo = argoManagingAllBut(argoCatalogObject)
 	return f
 }
 
@@ -50,6 +51,7 @@ func TestACMEnforcesSpec(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := gitOpsFake(t)
 			f.catalog["metadata"] = map[string]any{"managedFields": tc.fields}
+			f.argo = argoManagingAllBut(argoCatalogObject)
 			g, err := readOperatorGitOps(f.client(context.Background()))
 			if err != nil {
 				t.Fatal(err)
@@ -101,6 +103,7 @@ func TestUpdateGitOpsProfile_ACMManagedCatalog(t *testing.T) {
 func TestUpdateGitOpsProfile_ACMOnly(t *testing.T) {
 	f := servesGitOpsPolicy(t, acmFake(t))
 	delete(f.sub["metadata"].(map[string]any), "annotations")
+	f.argo = argoManagingAllBut(argoCatalogObject, argoSubscriptionObject)
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged ||
 		!strings.Contains(result.Message, "An "+acmManagerText+" sets the image of CatalogSource "+CatalogName) || strings.Contains(result.Message, "Argo CD") {
@@ -131,6 +134,7 @@ func TestUpdateGitOpsProfile_RefusesACatalogNobodyManages(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := servesGitOpsPolicy(t, gitOpsFake(t))
 			f.catalog["metadata"] = meta
+			f.argo = argoManagingAllBut(argoCatalogObject)
 			result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 			if err != nil || result.Success || result.ErrorCode != ErrorCodeProfileGitOps || result.Message != gitOpsProfileUnmanagedCatalog ||
 				!strings.Contains(result.Message, "Argo CD or an ACM policy") {
@@ -172,7 +176,10 @@ func TestUpdateDryRunGitOpsProfile_ACMManagedCatalog(t *testing.T) {
 func TestUpdateFullProfile_ACMManagedCatalog(t *testing.T) {
 	for name, setup := range map[string]func(*fakeOLM){
 		"Subscription in Argo CD": func(*fakeOLM) {},
-		"ACM only":                func(f *fakeOLM) { delete(f.sub["metadata"].(map[string]any), "annotations") },
+		"ACM only": func(f *fakeOLM) {
+			delete(f.sub["metadata"].(map[string]any), "annotations")
+			f.argo = argoManagingAllBut(argoCatalogObject, argoSubscriptionObject)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := acmFake(t)
@@ -222,6 +229,7 @@ func TestUpdateFullProfile_ACMManagedCatalog(t *testing.T) {
 func TestOperatorOperationsRefusedUnderACM(t *testing.T) {
 	f := acmFake(t)
 	delete(f.sub["metadata"].(map[string]any), "annotations")
+	f.argo = argoManagingAllBut(argoCatalogObject, argoSubscriptionObject)
 	r, _ := ReinstallStreamWithOptions(f.client(context.Background()), "stable", "", "", OperationOptions{}, func(UpdateStepEvent) {})
 	if r.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(r.Message, "CatalogSource "+CatalogName+" is managed by an "+acmManagerText) ||
 		strings.Contains(r.Message, "Argo CD would") || !strings.Contains(r.Message, "Nothing was changed") {
@@ -263,6 +271,7 @@ func TestStatusReportsACMManagedCatalog(t *testing.T) {
 	meta := acmCatalogMetadata(acmPolicyManager)
 	meta["annotations"] = trackingID("CatalogSource", CatalogNS, CatalogName)
 	f.catalog["metadata"] = meta
+	f.argo = argoManagingAll(argoGitOpsObjects...)
 	if cs := statusManagersOf(t, c).CatalogSource; cs.ManagedByACM || cs.ManagedBy != testArgoApp {
 		t.Fatalf("Argo CD must win: %+v", cs)
 	}

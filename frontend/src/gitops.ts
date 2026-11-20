@@ -1,10 +1,10 @@
 import type { ArgoCDTracking, StatusResponse } from "./types";
 
-// The backend trusts Argo CD's tracking annotation only once Argo CD confirms
-// it (pkg/cluster/argocd.go): managedBy is set for a confirmed application,
-// and for one Argo CD could not be asked about ("unconfirmed", treated as
-// managed); a left-over annotation ("stale") leaves managedBy empty and only
-// shows a note.
+// The backend asks Argo CD whether an Application lists the object in
+// status.resources (pkg/cluster/argocd.go): managedBy is set for such an
+// application, and for one Argo CD could not be asked about ("unconfirmed",
+// treated as managed); left-over tracking ("stale") leaves managedBy empty
+// and only shows a note.
 
 /** The objects Argo CD may manage, with their tracking verdicts, in display order. */
 function argoTrackings(status: StatusResponse | null | undefined): { object: string; tracking: ArgoCDTracking }[] {

@@ -11,13 +11,15 @@ import (
 )
 
 // Argo CD writes this annotation on every object it syncs when it tracks
-// resources by annotation (the default since Argo CD 3.0, and the
-// "annotation+label" method). Its value is
+// resources by annotation (the "annotation" and "annotation+label" methods;
+// the default of upstream Argo CD since 3.0 and of OpenShift GitOps since
+// 1.19, which defaulted to "label" before). Its value is
 // "<application>:<group>/<kind>:<namespace>/<name>"; the application part is
 // "<namespace>_<name>" for applications outside Argo CD's own namespace.
 //
-// The label method (app.kubernetes.io/instance) is not used: Helm and many
-// operators set that label too, so it does not show that Argo CD is the owner.
+// Neither this annotation nor the label method's app.kubernetes.io/instance
+// decides whether Argo CD manages an object: argocd.go asks Argo CD's
+// Applications, and the marks only name the application.
 const argoTrackingAnnotation = "argocd.argoproj.io/tracking-id"
 
 // ErrorCodeGitOpsManaged marks a refusal because Argo CD manages the object
@@ -25,15 +27,16 @@ const argoTrackingAnnotation = "argocd.argoproj.io/tracking-id"
 const ErrorCodeGitOpsManaged = "gitops_managed"
 
 // argoApplication returns the Argo CD application that the tracking
-// annotation among annotations names for the object of this kind, namespace
-// and name, or "" when none does. The annotation alone does not show that
-// the application still manages the object: argocd.go confirms it with Argo
-// CD, and every refusal reads that verdict (argoTracking.managedBy). The
-// tracking id must name the object itself: Argo CD ignores an
-// annotation copied from another object (a "non-self-referencing"
-// annotation), so the tool does too. namespace "" skips the namespace check:
-// for a cluster-scoped object Argo CD writes its destination namespace there.
-func argoApplication(annotations map[string]string, kind, namespace, name string) string {
+// annotation among annotations names for the object of this group, kind,
+// namespace and name, or "" when none does. The annotation alone does not
+// show that the application manages the object: argocd.go asks Argo CD, and
+// every refusal reads that verdict (argoTracking.managedBy). The tracking id
+// must name the object itself, as Argo CD checks it (controller/state.go,
+// isSelfReferencedObj: namespace, name, group and kind): Argo CD ignores an
+// annotation copied from another object, so the tool does too. namespace ""
+// skips the namespace check: for a cluster-scoped object Argo CD writes its
+// destination namespace there.
+func argoApplication(annotations map[string]string, group, kind, namespace, name string) string {
 	app, rest, ok := strings.Cut(annotations[argoTrackingAnnotation], ":")
 	if !ok || app == "" {
 		return ""
@@ -42,9 +45,12 @@ func argoApplication(annotations map[string]string, kind, namespace, name string
 	if !ok {
 		return ""
 	}
-	_, idKind, _ := strings.Cut(groupKind, "/")
-	idNS, idName, _ := strings.Cut(nsName, "/")
-	if idKind != kind || idName != name || (namespace != "" && idNS != namespace) {
+	idGroup, idKind, ok := strings.Cut(groupKind, "/")
+	if !ok {
+		return ""
+	}
+	idNS, idName, ok := strings.Cut(nsName, "/")
+	if !ok || idGroup != group || idKind != kind || idName != name || (namespace != "" && idNS != namespace) {
 		return ""
 	}
 	return app
@@ -54,20 +60,23 @@ func argoApplication(annotations map[string]string, kind, namespace, name string
 // default, keeps what it applied; it diffs against it.
 const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
 
-// keepArgoTracking copies, when Argo CD tracks previous, its annotations
-// (Argo CD's tracking id, installation id, sync options..., the last-applied
-// annotation, and any other Git sets) and its labels from previous to obj,
-// without overwriting what obj already has. A Subscription the tool
-// recreates then stays part of the same application and matches what Argo
-// CD applied (the chart's labels and annotations, its last apply), so Argo
-// CD neither shows it as missing nor changes it again (seen on a live
+// keepArgoTracking copies, when previous carries Argo CD's tracking (its
+// tracking annotation, or the instance label that label tracking writes),
+// its annotations (Argo CD's tracking id, installation id, sync options...,
+// the last-applied annotation, and any other Git sets) and its labels from
+// previous to obj, without overwriting what obj already has. A Subscription
+// the tool recreates then stays part of the same application and matches
+// what Argo CD applied (the chart's labels and annotations, its last apply),
+// so Argo CD neither shows it as missing nor changes it again (seen on a live
 // cluster without them). Finalizers and other runtime metadata are not
 // copied.
 func keepArgoTracking(previous, obj map[string]any) {
 	prevMeta, _ := previous["metadata"].(map[string]any)
 	prevAnn, _ := prevMeta["annotations"].(map[string]any)
+	prevLabels, _ := prevMeta["labels"].(map[string]any)
 	id, _ := prevAnn[argoTrackingAnnotation].(string)
-	if id == "" {
+	instance, _ := prevLabels[argoInstanceLabel].(string)
+	if id == "" && instance == "" {
 		return
 	}
 	meta, _ := obj["metadata"].(map[string]any)
@@ -85,7 +94,7 @@ func keepArgoTracking(previous, obj map[string]any) {
 			ann[k] = v
 		}
 	}
-	if prevLabels, _ := prevMeta["labels"].(map[string]any); len(prevLabels) > 0 {
+	if len(prevLabels) > 0 {
 		labels, _ := meta["labels"].(map[string]any)
 		if labels == nil {
 			labels = map[string]any{}
@@ -208,8 +217,8 @@ func sentenceStart(s string) string {
 }
 
 // readOperatorGitOps reads which Argo CD applications manage the nightly
-// CatalogSource and the operator Subscription (their tracking annotations,
-// confirmed with Argo CD: argocd.go), and whether an ACM policy enforces the
+// CatalogSource and the operator Subscription (Argo CD's answer, argocd.go),
+// and whether an ACM policy enforces the
 // catalog (from the managedFields of the same GET). A missing object is not
 // managed.
 func readOperatorGitOps(c *Client) (operatorGitOps, error) {
@@ -230,7 +239,7 @@ func readOperatorGitOps(c *Client) (operatorGitOps, error) {
 			return operatorGitOps{}, err
 		}
 		if found {
-			*r.tracking = argo.object(meta.Annotations, r.obj)
+			*r.tracking = argo.object(meta.Annotations, meta.Labels, r.obj)
 			*r.app = r.tracking.managedBy()
 			if r.isCatalog {
 				g.catalogACM = g.catalogApp == "" && acmEnforcesSpec(meta)

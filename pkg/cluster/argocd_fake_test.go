@@ -5,14 +5,16 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 )
 
 // fakeArgoCD answers what argocd.go reads: Argo CD's discovery document and
-// Application lists (by fieldSelector metadata.name, in a namespace or all),
-// ACM's work API discovery and the argocd-manager ClusterRoleBinding list.
-// The zero value is a cluster without Argo CD, without ACM and without
+// Application lists (all, or by fieldSelector metadata.name, in a namespace
+// or all), ACM's work API discovery, the argocd-manager ClusterRoleBinding
+// list and RoleBinding argocd-manager-role-binding by namespace. The zero
+// value is a cluster without Argo CD, without ACM and without
 // argocd-manager. Plug it into a fake with serve (it answers only these
 // paths) or register.
 type fakeArgoCD struct {
@@ -27,6 +29,9 @@ type fakeArgoCD struct {
 	acm bool
 	// argocdManager: ClusterRoleBinding argocd-manager-role-binding exists.
 	argocdManager bool
+	// managerRoleBindings: the namespaces with RoleBinding
+	// argocd-manager-role-binding (`argocd cluster add --namespace`).
+	managerRoleBindings []string
 	// fail answers a path (without query) with this status code.
 	fail map[string]int
 	// requests: the paths (with query) asked, in order.
@@ -38,6 +43,19 @@ type fakeArgoCD struct {
 // it".
 func argoManagingAll(objs ...argoObject) *fakeArgoCD {
 	return &fakeArgoCD{served: true, apps: []map[string]any{argoApplicationListing("openshift-gitops", objs...)}}
+}
+
+// argoManagingAllBut is argoManagingAll of the gitops fakes' objects
+// (argoGitOpsObjects) except these: a test that takes Argo CD's marks off an
+// object takes it out of the Application too, since Argo CD's list decides.
+func argoManagingAllBut(except ...argoObject) *fakeArgoCD {
+	var objs []argoObject
+	for _, o := range argoGitOpsObjects {
+		if !slices.Contains(except, o) {
+			objs = append(objs, o)
+		}
+	}
+	return argoManagingAll(objs...)
 }
 
 // argoApplicationListing is Application ns/testArgoApp, compared with Git
@@ -73,7 +91,8 @@ func (f *fakeArgoCD) serve(w http.ResponseWriter, r *http.Request) bool {
 	isArgo := strings.HasPrefix(p, argoDiscoveryPath)
 	isACM := p == acmWorkAPI
 	isBinding := p == "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings" && strings.Contains(r.URL.Query().Get("fieldSelector"), argoCDManagerBinding)
-	if r.Method != http.MethodGet || (!isArgo && !isACM && !isBinding) {
+	roleBindingNS, isRoleBinding := managerRoleBindingNamespace(p)
+	if r.Method != http.MethodGet || (!isArgo && !isACM && !isBinding && !isRoleBinding) {
 		return false
 	}
 	f.mu.Lock()
@@ -107,7 +126,7 @@ func (f *fakeArgoCD) serve(w http.ResponseWriter, r *http.Request) bool {
 		items := []any{}
 		for _, app := range f.apps {
 			meta := app["metadata"].(map[string]any)
-			if meta["name"] == name && (ns == "" || meta["namespace"] == ns) {
+			if (name == "" || meta["name"] == name) && (ns == "" || meta["namespace"] == ns) {
 				items = append(items, app)
 			}
 		}
@@ -124,8 +143,31 @@ func (f *fakeArgoCD) serve(w http.ResponseWriter, r *http.Request) bool {
 			items = append(items, map[string]any{"metadata": map[string]any{"name": argoCDManagerBinding}})
 		}
 		writeJSON(w, map[string]any{"items": items})
+	case isRoleBinding:
+		if !slices.Contains(f.managerRoleBindings, roleBindingNS) {
+			notFound(w)
+			return true
+		}
+		writeJSON(w, map[string]any{"kind": "RoleBinding", "metadata": map[string]any{"name": argoCDManagerBinding, "namespace": roleBindingNS}})
 	}
 	return true
+}
+
+// managerRoleBindingNamespace is the namespace of a path to RoleBinding
+// argocd-manager-role-binding; false for any other path.
+func managerRoleBindingNamespace(p string) (string, bool) {
+	rest, ok := strings.CutPrefix(p, "/apis/rbac.authorization.k8s.io/v1/namespaces/")
+	if !ok {
+		return "", false
+	}
+	ns, name, _ := strings.Cut(rest, "/")
+	return ns, name == "rolebindings/"+argoCDManagerBinding
+}
+
+// managerRoleBindingPath is the path of RoleBinding argocd-manager-role-binding
+// in ns.
+func managerRoleBindingPath(ns string) string {
+	return "/apis/rbac.authorization.k8s.io/v1/namespaces/" + ns + "/rolebindings/" + argoCDManagerBinding
 }
 
 // handler is an http.Handler that answers only the fake's paths (404
@@ -141,7 +183,11 @@ func (f *fakeArgoCD) handler() http.Handler {
 // register adds the fake's paths to a fakeAPI (which matches paths without
 // their query).
 func (f *fakeArgoCD) register(api *fakeAPI) {
-	for _, p := range []string{argoDiscoveryPath, argoDiscoveryPath + "/applications", acmWorkAPI, "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings"} {
+	paths := []string{argoDiscoveryPath, argoDiscoveryPath + "/applications", acmWorkAPI, "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings"}
+	for _, ns := range append([]string{SubNS, CatalogNS, "redhat-ods-applications"}, f.managerRoleBindings...) {
+		paths = append(paths, managerRoleBindingPath(ns))
+	}
+	for _, p := range paths {
 		api.handle(http.MethodGet, p, func(r *http.Request, _ []byte) (int, string) {
 			rec := httptest.NewRecorder()
 			if !f.serve(rec, r) {
@@ -150,6 +196,13 @@ func (f *fakeArgoCD) register(api *fakeAPI) {
 			return rec.Code, rec.Body.String()
 		})
 	}
+}
+
+// setApps replaces the Applications on the cluster.
+func (f *fakeArgoCD) setApps(apps ...map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.apps = apps
 }
 
 // requested returns the paths asked so far.

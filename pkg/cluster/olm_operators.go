@@ -107,11 +107,11 @@ func parseSubscription(raw []byte) (*olmSubscription, error) {
 	return &sub, nil
 }
 
-// withArgoManager sets sub.argoApp from its tracking annotation, confirmed
-// with Argo CD.
+// withArgoManager sets sub.argoApp: the Argo CD application that manages
+// it, as Argo CD answers (argocd.go).
 func withArgoManager(c *Client, sub *olmSubscription) *olmSubscription {
 	if sub != nil {
-		sub.argoApp = newArgoCheck(c).object(sub.Metadata.Annotations,
+		sub.argoApp = newArgoCheck(c).object(sub.Metadata.Annotations, sub.Metadata.Labels,
 			argoObject{group: argoSubscriptionObject.group, kind: "Subscription", namespace: sub.Metadata.Namespace, name: sub.Metadata.Name}).managedBy()
 	}
 	return sub

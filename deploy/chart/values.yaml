@@ -114,6 +114,14 @@ gitops:
     # removes it and revokes its sign-ins (docs/GITOPS.md). With false,
     # create both before the first sync: nobody can sign in without them.
     enabled: true
+    # A PostDelete hook Job that deletes the OAuthClient and revokes its
+    # sign-ins when the Application is deleted with its resources (it keeps
+    # them while the app's Route still exists: a non-cascading deletion).
+    # Needs Argo CD 2.12 or later (OpenShift GitOps 1.14 or later): Argo CD
+    # 2.10 and 2.11 panic on its RBAC hooks and the deletion hangs. Set
+    # false there, and remove the client by hand after deleting the
+    # Application (docs/GITOPS.md, section 7).
+    removeOnDelete: true
 
   consoleLink:
     # A PostSync hook Job that adds the app to the console's application

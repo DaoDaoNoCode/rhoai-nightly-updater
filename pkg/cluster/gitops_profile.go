@@ -298,7 +298,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 // ACM policy manages the nightly catalog: Update would then replace the
 // catalog itself, which the gitops profile never does.
 const gitOpsProfileUnmanagedCatalog = "This updater runs the gitops profile, which only installs the build that CatalogSource " + CatalogName +
-	" serves when Argo CD or an ACM policy manages that catalog, and neither does here (no " + argoTrackingAnnotation + " annotation names it, and " +
+	" serves when Argo CD or an ACM policy manages that catalog, and neither does here (no Argo CD application lists it, and " +
 	acmPolicyManager + " does not own its spec). Manage the catalog with Argo CD or an ACM policy, or deploy the updater with the full profile. Nothing was changed."
 
 // gitOpsProfileNoPullSecret is what Update and its dry run say in the gitops

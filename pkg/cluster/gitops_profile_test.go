@@ -65,6 +65,7 @@ func TestUpdateGitOpsProfile_RefusesAnUnmanagedCatalog(t *testing.T) {
 		"subscription only": func() *fakeOLM {
 			f := servesGitOpsPolicy(t, gitOpsFake(t))
 			f.catalog["metadata"] = map[string]any{}
+			f.argo = argoManagingAllBut(argoCatalogObject)
 			return f
 		},
 		"no catalog": func() *fakeOLM {
@@ -233,10 +234,12 @@ func TestUpdateGitOpsProfile_RefusesWhatThePolicyWouldRefuse(t *testing.T) {
 		// redhat-operators, so the restore could not re-apply it.
 		"catalog only, Subscription on redhat-operators": func(f *fakeOLM) {
 			f.sub["metadata"].(map[string]any)["annotations"] = map[string]any{}
+			f.argo = argoManagingAllBut(argoSubscriptionObject)
 			f.sub["spec"].(map[string]any)["source"] = "redhat-operators"
 		},
 		"another sourceNamespace": func(f *fakeOLM) {
 			f.sub["metadata"].(map[string]any)["annotations"] = map[string]any{}
+			f.argo = argoManagingAllBut(argoSubscriptionObject)
 			f.sub["spec"].(map[string]any)["sourceNamespace"] = "other-catalogs"
 		},
 	} {

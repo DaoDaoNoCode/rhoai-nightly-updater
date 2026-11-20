@@ -188,12 +188,21 @@ Nothing at render time can tell which commit a digest was built from
 {{- /*
 Annotations of an Argo CD hook: "rnu.hook" (dict "phase" "Sync" "wave" "-2").
 BeforeHookCreation replaces the previous run's object; HookSucceeded removes
-it once the whole sync succeeded, so a failed run stays for debugging.
+it once the whole operation succeeded (gitops-engine pkg/sync/
+sync_context.go: hooks are deleted when the operation ends, not when their
+Job ends), so a failed run stays for debugging. "deleteOnFailure" true adds
+HookFailed, for RBAC objects whose right should not outlive a failed run:
+Argo CD deletes them when the operation fails too, and the failed Job stays
+with its log. Without "wave" (PostDelete hooks) there is no sync-wave
+annotation: Argo CD creates every PostDelete hook in one pass and orders
+nothing (controller/hook.go, executePostDeleteHooks).
 */ -}}
 {{- define "rnu.hook" -}}
 argocd.argoproj.io/hook: {{ .phase | quote }}
+{{- if .wave }}
 argocd.argoproj.io/sync-wave: {{ .wave | quote }}
-argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+{{- end }}
+argocd.argoproj.io/hook-delete-policy: {{ if .deleteOnFailure }}BeforeHookCreation,HookSucceeded,HookFailed{{ else }}BeforeHookCreation,HookSucceeded{{ end }}
 {{- end -}}
 
 {{- /*
