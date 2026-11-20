@@ -264,6 +264,12 @@ func TestHardResetRefusesNamespacesTheCollectorWouldDelete(t *testing.T) {
 			ownedNamespace(f, "bg", dscRef(), ref("rbac.authorization.k8s.io/v1", "ClusterRole", "slow", "slow"))
 			putOwner(f, rolesPath+"slow", "slow", map[string]any{"deletionTimestamp": "2026-11-20T10:00:00Z", "finalizers": []any{"example.com/cleanup"}})
 		}, []string{"delete namespace bg, owned by DataScienceCluster default-dsc"}},
+		// Solid for now, but the collector then removes its reference from
+		// the namespace (orphanDependents :668-690): the DSC's remains.
+		{"the other owner is being deleted with orphaning", func(f *resourceFake) {
+			ownedNamespace(f, "orph", ref("rbac.authorization.k8s.io/v1", "ClusterRole", "orphaning", "o"), dscRef())
+			putOwner(f, rolesPath+"orphaning", "o", map[string]any{"deletionTimestamp": "2026-11-20T10:00:00Z", "finalizers": []any{"orphan"}})
+		}, []string{"delete namespace orph, owned by DataScienceCluster default-dsc"}},
 		// Not solid: a gone owner, and an object of the name with another
 		// UID (isDangling :431-449).
 		{"the other owners are gone", func(f *resourceFake) {

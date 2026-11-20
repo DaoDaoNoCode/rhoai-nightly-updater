@@ -554,11 +554,16 @@ func (r *ownerResolver) read(ref ownerRef, group, version, what string, unknown 
 	case m.UID != ref.UID:
 		return ownerVerdict{fate: ownerNotSolid} // another object of that name: dangling (K :442-449)
 	case m.DeletionTimestamp != "":
-		// With finalizer foregroundDeletion it is not solid now
-		// (waitingForDependentsDeletion, K :475-476). Otherwise it is solid
-		// for now (K :477-478), but a deletion only ends in the object's
-		// removal (K :506-507), after which it is dangling: either way it
-		// does not keep the dependent once the DSC is gone.
+		// An owner being deleted never keeps the namespace past the DSC,
+		// whichever propagation policy deletes it. Foreground (finalizer
+		// foregroundDeletion): not solid now (waitingForDependentsDeletion,
+		// K :475-476). Orphan (finalizer orphan): solid now, but the
+		// collector then removes its reference from every dependent
+		// (orphanDependents, K :668-690). Background: solid now (K :477-478)
+		// until the deletion ends in its removal (K :506-507), then
+		// dangling. In each case the DSC's reference is what remains, so
+		// judging by "solid at this instant" alone would let the namespace
+		// go later.
 		return ownerVerdict{fate: ownerNotSolid}
 	case len(m.OwnerReferences) == 0:
 		return ownerVerdict{fate: ownerKeeps}
