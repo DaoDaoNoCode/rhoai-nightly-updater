@@ -7,7 +7,6 @@ import (
 	"io"
 	"maps"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -67,7 +66,7 @@ func newDashboardDevFixture(t *testing.T) (*dashboardDevFixture, *Client) {
 	f.workloads["proxy"] = dashboardFixtureDeployment("proxy", "kube-rbac-proxy", "release-proxy", "dashboard-owner")
 	isolateClusterCaches(t)
 	f.discovery = dashboardModuleDiscoveryRoutes(fixtureAppsNS)
-	srv := httptest.NewServer(http.HandlerFunc(f.serve))
+	srv := newFakePlainServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	return f, &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
 }

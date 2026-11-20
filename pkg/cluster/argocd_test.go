@@ -3,7 +3,6 @@ package cluster
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -12,7 +11,7 @@ import (
 
 func argoClient(t *testing.T, f *fakeArgoCD) *Client {
 	t.Helper()
-	srv := httptest.NewServer(f.handler())
+	srv := newFakePlainServer(f.handler())
 	t.Cleanup(srv.Close)
 	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
 }

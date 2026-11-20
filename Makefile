@@ -136,8 +136,8 @@ lint-frontend:  ## Type-check and lint the frontend
 
 test: test-go test-frontend test-scripts test-chart  ## Run all tests
 
-test-go:  ## Run Go tests with the race detector
-	go test -race -count=1 ./...
+test-go:  ## Run Go tests with the race detector (pkg/cluster split over the CPUs; GO_TEST_SHARDS=1: one process)
+	sh scripts/test-go.sh
 
 test-frontend:  ## Run frontend tests
 	cd frontend && npm test

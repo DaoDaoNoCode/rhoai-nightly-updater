@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -110,7 +109,7 @@ func newStatusAPI(t *testing.T, a *statusAPI) *Client {
 	if a.failPath == nil {
 		a.failPath = map[string]int{}
 	}
-	srv := httptest.NewTLSServer(http.HandlerFunc(a.handler))
+	srv := newFakeServer(http.HandlerFunc(a.handler))
 	t.Cleanup(srv.Close)
 	stableTargetCache.Purge()
 	consoleURLCache.Purge()
