@@ -35,11 +35,15 @@ cmp -s "$SRC/deploy/rbac-gitops.yaml" "$CHART/files/rbac-gitops.yaml" && pass ||
 	fail "deploy/chart/files/rbac-gitops.yaml differs from deploy/rbac-gitops.yaml; run 'make chart'"
 
 # The chart's version is the release it belongs to: the top CHANGELOG section
-# (dated or not; scripts/release.sh check enforces it at the tag).
+# (dated or not; scripts/release.sh check enforces it at the tag), or a
+# pre-release of it (X.Y.Z-alpha.N, -beta.N, -rc.N) from that pre-release's
+# commit until the next one or the release.
 chart_field() { sed -n "s/^$1: *\"\{0,1\}\([^\"]*\)\"\{0,1\} *$/\1/p" "$CHART/Chart.yaml" | head -1; }
 top=$(sed -n 's/^## \[\([0-9][0-9.]*\)\].*/\1/p' "$SRC/CHANGELOG.md" | head -1)
-expect_eq "Chart.yaml version is the top CHANGELOG section" "$top" "$(chart_field version)"
-expect_eq "Chart.yaml appVersion" "v$top" "$(chart_field appVersion)"
+chart_version=$(chart_field version)
+[[ $chart_version =~ ^${top//./\\.}(-(alpha|beta|rc)\.[1-9][0-9]*)?$ ]] && pass ||
+	fail "Chart.yaml version is '$chart_version', not the top CHANGELOG section $top or a pre-release of it ($top-rc.1)"
+expect_eq "Chart.yaml appVersion" "v$chart_version" "$(chart_field appVersion)"
 
 if ! command -v helm >/dev/null 2>&1; then
 	if [ -n "${CI:-}" ]; then
@@ -413,6 +417,36 @@ expect_render "IMAGE of another release with allowTemplateMismatch" --namespace 
 # a digest's commit).
 expect_render "IMAGE by digest only" --namespace ns1 "${P[@]}" --set "parameters.IMAGE=quay.io/example/app@$DIGEST"
 expect_render "IMAGE of a main build" --namespace ns1 "${P[@]}" --set "parameters.IMAGE=quay.io/example/app:main@$DIGEST"
+# Pre-releases (vX.Y.Z-rc.N) name their exact version: a chart takes the
+# image of its own version only. A copy of the chart named as a pre-release
+# shows that Helm takes the SemVer 2 pre-release version (helm lint --strict)
+# and that it refuses the images of its release and its other pre-releases.
+# CORE: this chart's release (X.Y.Z), also while Chart.yaml names a
+# pre-release of it.
+CORE=${VERSION#v}
+CORE=${CORE%%-*}
+if [ "$VERSION" = "v$CORE" ]; then other="v$CORE-rc.1"; else other="v$CORE"; fi
+expect_render_fail "IMAGE of another version of this release ($other)" "names release $other, but this chart (targetRevision) holds the template of $VERSION" \
+	--namespace ns1 "${P[@]}" --set "parameters.IMAGE=quay.io/example/app:$other@$DIGEST"
+PRECHART="$WORK/prechart"
+cp -R "$CHART" "$PRECHART"
+sed -i.bak -e "s/^version: .*/version: $CORE-alpha.1/" -e "s/^appVersion: .*/appVersion: \"v$CORE-alpha.1\"/" "$PRECHART/Chart.yaml"
+rm "$PRECHART/Chart.yaml.bak"
+PRE_IMAGE="quay.io/example/app:v$CORE-alpha.1@$DIGEST"
+if helm lint --strict "$PRECHART" --namespace ns1 "${P[@]}" --set "parameters.IMAGE=$PRE_IMAGE" >"$WORK/lint" 2>&1; then pass; else fail "helm lint, pre-release chart: $(cat "$WORK/lint")"; fi
+helm show chart "$PRECHART" | grep -qx "version: $CORE-alpha.1" && pass || fail "helm show chart: $(helm show chart "$PRECHART")"
+prerender() { helm template rnu "$PRECHART" "$@" >"$OUT" 2>&1; }
+prerender --namespace ns1 "${P[@]}" --set "parameters.IMAGE=$PRE_IMAGE" && pass || fail "pre-release chart, its own image: $(cat "$OUT")"
+for other in "v$CORE-alpha.2" "v$CORE-alpha.10" "v$CORE-beta.1" "v$CORE"; do
+	if prerender --namespace ns1 "${P[@]}" --set "parameters.IMAGE=quay.io/example/app:$other@$DIGEST"; then
+		fail "pre-release chart took the image of $other"
+	else
+		grep -qF "names release $other, but this chart (targetRevision) holds the template of v$CORE-alpha.1" "$OUT" && pass || fail "pre-release chart, image of $other: $(cat "$OUT")"
+	fi
+done
+prerender --namespace ns1 "${P[@]}" --set "parameters.IMAGE=quay.io/example/app:v$CORE-alpha.2@$DIGEST" --set allowTemplateMismatch=true && pass ||
+	fail "pre-release chart, allowTemplateMismatch: $(cat "$OUT")"
+prerender --namespace ns1 "${P[@]}" --set "parameters.IMAGE=quay.io/example/app@$DIGEST" && pass || fail "pre-release chart, digest only: $(cat "$OUT")"
 expect_render_fail "allowMutableTag is gone" "allowMutableTag" --namespace ns1 "${BASE[@]}" --set allowMutableTag=true
 expect_render_fail "a value with a placeholder" 'must not contain "${"' --namespace ns1 "${BASE[@]}" --set 'parameters.RELEASES_URL=${APP_NAME}'
 

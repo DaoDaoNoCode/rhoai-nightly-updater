@@ -34,7 +34,9 @@ The render fails, instead of applying something half-done, when:
 - `IMAGE` or `OAUTH_PROXY_IMAGE` is missing, or an image is not pinned by
   digest ([section 3](#3-images-by-digest));
 - the tag of `IMAGE` names another release than the chart's
-  (`:vX.Y.Z@sha256:...`). This is a tag-consistency check only: it catches a
+  (`:vX.Y.Z@sha256:...`; a pre-release such as `:vX.Y.Z-rc.1` is another
+  release than `vX.Y.Z` and than `vX.Y.Z-rc.2`, so install a pre-release's
+  chart from its own tag with its own image). This is a tag-consistency check only: it catches a
   tag that names another release, but it does not verify the digest, and a
   digest without a release tag passes it
   ([section 3](#checking-that-the-image-matches-the-chart));
