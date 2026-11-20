@@ -590,26 +590,27 @@ ERROR: quay.io/juntao_wang/rhoai-nightly-updater@sha256:... reports revision <no
 ```
 
 Every release image carries its commit in the label
-`org.opencontainers.image.revision`. The 3.0.x installers read it only with
-`oc image info` on your machine and hid oc's error. Where oc cannot read the
-image (for example, a credential helper named in `~/.docker/config.json`
-fails, or `oc` is old), they report `<none>` for an image that is correct.
-See oc's own error with:
+`org.opencontainers.image.revision`. The installers up to 3.0.1 read it
+only with `oc image info` on your machine and hid oc's error. Where oc
+cannot read the image (for example, a credential helper named in
+`~/.docker/config.json` fails, or `oc` is old), they report `<none>` for an
+image that is correct. See oc's own error with:
 
 ```bash
 oc image info quay.io/juntao_wang/rhoai-nightly-updater@sha256:<digest> --filter-by-os=linux/amd64
 ```
 
-From 4.0.0 the installer reads the label from the registry's API
-first, anonymously (needs only `curl`; `oc` is the fallback), and when
-neither works it stops with "cannot read the revision label" and the reason
-each way failed: the registry's HTTP status or curl's error, and oc's error.
+From 3.0.2 the installer reads the label from the registry's API first,
+anonymously (needs only `curl`; `oc` is the fallback), and when neither
+works it stops with "cannot read the revision label" and the reason each
+way failed: the registry's HTTP status or curl's error, and oc's error.
 Fix what it names (network or proxy access to `quay.io`, the credential
-helper) and run it again.
+helper) and run it again. 3.0.2 is the same app as 3.0.1, so the simplest
+way past this error is the `install.sh` of 3.0.2 or later.
 
-To install anyway, first check the label yourself. Use the digest from the
-installer's `Resolved ... to ...@sha256:<digest>` line. With the
-registry's API (anonymous; needs `curl` and `jq`):
+To run an older installer anyway, first check the label yourself. Use the
+digest from the installer's `Resolved ... to ...@sha256:<digest>` line.
+With the registry's API (anonymous; needs `curl` and `jq`):
 
 ```bash
 REPO=juntao_wang/rhoai-nightly-updater

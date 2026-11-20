@@ -585,25 +585,13 @@ only accepts a tag whose version is the top dated section. See
   component is set to Managed); for CRDs with objects the advice brings the
   Service back, then deletes the objects and the CRDs before the component
   is set to Removed.
-- **`install.sh` no longer refuses a correct image with "reports revision
-  \<none\>".** The 3.0.x installers read the image's revision label only
-  with `oc image info` on your machine and hid its error, so where oc could
-  not read the image (reported on macOS, where the digest lookup through the
-  registry worked) they refused the correct v3.0.1 image. The label is now
-  read from the registry's v2 API first, anonymously like the digest: the
-  manifest (for a manifest list, the `PLATFORM` image's), then the config
-  blob. Each must be the bytes its digest names: the pinned digest for the
-  manifest (list), the list's entry for the image manifest, the manifest's
-  config digest for the blob. Redirects are followed to `https` only (a
-  registry on `localhost`/`127.0.0.1` may also redirect to `http` there).
-  A blob redirected to another host (Quay's CDN) is fetched without the
-  registry token. `oc image info` is the
-  fallback. When both fail, the installer stops with "cannot read the
-  revision label" and each reason (the registry's HTTP status or curl's
-  error, and oc's error), never a token. Resolving the digest and
-  `make rollback`'s tag lookup print their reasons the same way. Older
-  installers: see the [UPGRADING.md FAQ](docs/UPGRADING.md#7-faq) for how
-  to check the label yourself before `ALLOW_TEMPLATE_MISMATCH=1`.
+- **`install.sh` checks the manifests it reads against their digests.**
+  Since 3.0.2 it reads the revision label from the registry's v2 API and
+  checks the config blob's digest. Now each manifest must also
+  be the bytes its digest names: the pinned digest for the manifest (list),
+  the list's entry for the image manifest. Redirects are followed to
+  `https` only (a registry on `localhost`/`127.0.0.1` may also redirect to
+  `http` there).
 
 ### Security
 
@@ -721,6 +709,30 @@ only accepts a tag whose version is the top dated section. See
   ServiceAccount's token; only cluster-admins change things, with their
   own token. Pages read with each user's own token are planned after
   4.0.0.
+
+## [3.0.2] - 2026-11-19
+
+Same template as 3.0.1 (revision 5) and the same app: only `install.sh`
+changed.
+
+### Fixed
+
+- `install.sh` no longer refuses a correct image with "reports revision
+  \<none\>". The installers from 2.0.0 to 3.0.1 read the image's revision
+  label only with `oc image info` on your machine and hid its error, so
+  where oc could not read the image (reported on macOS, where the digest
+  lookup through the registry worked) they refused the correct v3.0.1
+  image. The label is now read from the registry's v2 API first,
+  anonymously like the digest: the manifest (for a manifest list, the
+  `PLATFORM` image's), then the config blob. A blob redirected to another
+  host (Quay's CDN) is fetched without the registry token and must match
+  its digest. `oc image info` is the fallback. When both fail, the
+  installer stops with "cannot read the revision label" and each reason
+  (the registry's HTTP status or curl's error, and oc's error), never a
+  token. Resolving the digest and `make rollback`'s tag lookup print their
+  reasons the same way. Older installers: see the
+  [UPGRADING.md FAQ](docs/UPGRADING.md#7-faq) for how to check the label
+  yourself before `ALLOW_TEMPLATE_MISMATCH=1`.
 
 ## [3.0.1] - 2026-11-18
 
