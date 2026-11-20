@@ -124,6 +124,10 @@ func parseFakePath(path string) (k fakeKey, isList bool) {
 		k.gv, rest = parts[1]+"/"+parts[2], parts[3:]
 	}
 	switch {
+	case len(rest) == 0:
+		// /apis/<group>/<version> without a document in groups (serve
+		// answers 404).
+		return k, true
 	case len(rest) == 1:
 		k.plural = rest[0]
 		return k, true
@@ -338,6 +342,13 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 	// API discovery documents (/apis/<group>): the ones a test set in
 	// groups, else 404, as for a group that is not served, so callers use
 	// their fallback versions.
+	// A version's resource list (/apis/<group>/<version>) a test set in
+	// groups too.
+	if doc, ok := f.groups[r.URL.Path]; ok && r.Method == http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(doc))
+		return
+	}
 	if parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/"); parts[0] == "apis" && len(parts) < 3 {
 		if doc, ok := f.groups[r.URL.Path]; ok {
 			w.Header().Set("Content-Type", "application/json")
@@ -348,6 +359,12 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	k, isList := parseFakePath(r.URL.Path)
+	if k.plural == "" {
+		// A version's resource list no test serves: an error that is not
+		// "not served" (the tests of unserved groups use the group path).
+		f.status(w, 500, "no resource list served for this version")
+		return
+	}
 
 	switch r.Method {
 	case http.MethodGet:
