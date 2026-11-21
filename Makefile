@@ -36,7 +36,7 @@ ROLLOUT_TIMEOUT ?= 20m
 # Where the app links release notes; empty keeps the template's default.
 RELEASES_URL ?=
 
-.PHONY: all build push deploy upgrade rollback resolve-image release undeploy dev lint lint-go lint-frontend \
+.PHONY: all build push deploy upgrade rollback resolve-image release undeploy dev lint lint-go lint-frontend frontend-deps \
 	test test-go test-frontend test-scripts test-chart chart check-chart vuln clean help env docs-fixtures docs-mock frontend-lock \
 	docs-screenshots docs-check shellcheck audit-frontend build-frontend release-check ci-go ci-checks ci-script-tests
 
@@ -131,7 +131,13 @@ lint-go:  ## Run Go linters (gofmt, go vet, golangci-lint v2 with .golangci.yml)
 	@command -v golangci-lint >/dev/null 2>&1 || { echo "Install golangci-lint v2: https://golangci-lint.run/docs/welcome/install/local/"; exit 1; }
 	golangci-lint run ./...
 
-lint-frontend:  ## Type-check and lint the frontend
+# The frontend targets need frontend/node_modules (npm ci; CI's jobs run it
+# first). Without it, npx finds some other TypeScript or ESLint and fails with
+# an error about the configuration instead of saying what is missing.
+frontend-deps:
+	@test -f frontend/node_modules/.package-lock.json || { echo "frontend/node_modules is missing: run 'cd frontend && npm ci' first." >&2; exit 1; }
+
+lint-frontend: frontend-deps  ## Type-check and lint the frontend
 	cd frontend && npm run typecheck && npm run lint
 
 test: test-go test-frontend test-scripts test-chart  ## Run all tests
@@ -139,7 +145,7 @@ test: test-go test-frontend test-scripts test-chart  ## Run all tests
 test-go:  ## Run Go tests with the race detector (pkg/cluster split over the CPUs; GO_TEST_SHARDS=1: one process)
 	sh scripts/test-go.sh
 
-test-frontend:  ## Run frontend tests
+test-frontend: frontend-deps  ## Run frontend tests
 	cd frontend && npm test
 
 frontend-lock:  ## Update frontend/package-lock.json with CI's pinned node image, so npm ci passes in CI (needs RUNTIME)
@@ -177,7 +183,7 @@ ci-script-tests: test-scripts test-chart  ## The CI script-tests job: the script
 audit-frontend:  ## npm audit of the frontend's production dependencies (high and above fail)
 	cd frontend && npm audit --omit=dev --audit-level=high
 
-build-frontend:  ## Production build of the frontend (frontend/dist), as the CI frontend-build job
+build-frontend: frontend-deps  ## Production build of the frontend (frontend/dist), as the CI frontend-build job
 	cd frontend && npm run build
 
 # node_pull_secret.sh is a command pasted into bash or zsh, not a script: a
