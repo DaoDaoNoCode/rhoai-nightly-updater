@@ -165,6 +165,46 @@ func TestConversionBlockerFailsClosedWhenTheListFails(t *testing.T) {
 	}
 }
 
+// A 200 answer that is not a list refuses the removal (fail closed): a list
+// always carries "items" (k8s.io/apimachinery pkg/apis/meta/v1 List and
+// unstructured.UnstructuredList, `json:"items"` without omitempty, encoded
+// as [] when empty), so an answer without it, or with null, is not "none".
+// An empty list still allows.
+func TestConversionBlockerFailsClosedWhenTheAnswerIsNotAList(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{"empty object", `{}`, "the API server's answer has no items, so it is not a list"},
+		{"null", `null`, "the API server's answer has no items, so it is not a list"},
+		{"items null", `{"metadata":{},"items":null}`, "the API server's answer has no items, so it is not a list"},
+		{"a Status", `{"kind":"Status","apiVersion":"v1","status":"Success"}`, "the API server's answer is a Status, not a list"},
+		{"a Status with items", `{"kind":"Status","items":[]}`, "the API server's answer is a Status, not a list"},
+		{"items not an array", `{"items":{}}`, "could not parse the list"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newConvObjectsWorld(t, false, mcpCRDJSON("Namespaced", mcpVersions))
+			w.list(mcpStorage, func(*http.Request) (int, string) { return http.StatusOK, tc.body })
+			why := newRemovalChecker(w.c).conversionBlocker("mcplifecycleoperator")
+			for _, want := range []string{
+				"The objects of " + mcpCRDName + " could not be listed with your sign-in: " + tc.want,
+				"Check for them with: oc get " + mcpCRDName + " -A.",
+				"The tool cannot tell whether any exist, so it does not remove mcplifecycleoperator.",
+			} {
+				if !strings.Contains(why, want) {
+					t.Fatalf("blocker %q lacks %q", why, want)
+				}
+			}
+		})
+	}
+	for _, body := range []string{`{"items":[]}`, `{"kind":"MCPServerList","apiVersion":"mcp.x-k8s.io/v1beta1","metadata":{"resourceVersion":"9"},"items":[]}`} {
+		w := newConvObjectsWorld(t, false, mcpCRDJSON("Namespaced", mcpVersions))
+		w.list(mcpStorage, func(*http.Request) (int, string) { return http.StatusOK, body })
+		if why := newRemovalChecker(w.c).conversionBlocker("mcplifecycleoperator"); why != "" {
+			t.Fatalf("%s: blocker %q, want none", body, why)
+		}
+	}
+}
+
 // Without the signed-in user's client (a request that carried no token
 // of the user's) it refuses, and the ServiceAccount does not list the
 // objects instead.

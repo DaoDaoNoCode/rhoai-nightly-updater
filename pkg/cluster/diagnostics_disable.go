@@ -377,6 +377,20 @@ type conversionObjects struct {
 // only quoted as an estimate. A page without items but with continue
 // (possible only for filtered lists, which this one is not) is not taken
 // for "none".
+//
+// Only a list is taken for "none": an answer without "items", with
+// "items": null, or of a kind that is not a list fails, so the check
+// refuses. Every list carries "items" (the API conventions, "Lists and
+// Simple kinds": "All lists use the required items field to contain the
+// array of objects they return. Any kind that has the items field must be
+// a list kind"; k8s.io/apimachinery pkg/apis/meta/v1/types.go List and
+// unstructured/unstructured_list.go UnstructuredList declare `json:"items"`
+// without omitempty, and unstructured/helpers.go doEncode, which encodes
+// a custom resource list, writes it as [] when there are none), and a
+// list's kind ends in "List" (decodeToList trims that suffix to name the
+// items' kind). The kind is only checked when the answer has one: an
+// API server always sets it on a list, so its absence is not taken for a
+// different kind.
 func listConversionObjects(u *Client, crd conversionCRD) (conversionObjects, error) {
 	path := crd.listPath()
 	if path == "" {
@@ -387,11 +401,14 @@ func listConversionObjects(u *Client, crd conversionCRD) (conversionObjects, err
 		return conversionObjects{}, err
 	}
 	var list struct {
+		Kind     string `json:"kind"`
 		Metadata struct {
 			Continue           string `json:"continue"`
 			RemainingItemCount *int64 `json:"remainingItemCount"`
 		} `json:"metadata"`
-		Items []struct {
+		// A pointer, so an answer without items (or with null) is told
+		// from an empty list.
+		Items *[]struct {
 			Metadata struct {
 				Namespace string `json:"namespace"`
 				Name      string `json:"name"`
@@ -401,11 +418,18 @@ func listConversionObjects(u *Client, crd conversionCRD) (conversionObjects, err
 	if err := json.Unmarshal(body, &list); err != nil {
 		return conversionObjects{}, fmt.Errorf("could not parse the list: %w", err)
 	}
-	if len(list.Items) == 0 && list.Metadata.Continue != "" {
+	if list.Kind != "" && !strings.HasSuffix(list.Kind, "List") {
+		return conversionObjects{}, fmt.Errorf("the API server's answer is a %s, not a list", list.Kind)
+	}
+	if list.Items == nil {
+		return conversionObjects{}, fmt.Errorf("the API server's answer has no items, so it is not a list")
+	}
+	items := *list.Items
+	if len(items) == 0 && list.Metadata.Continue != "" {
 		return conversionObjects{}, fmt.Errorf("the API server returned no objects but says more exist")
 	}
 	out := conversionObjects{more: list.Metadata.Continue != "", remaining: list.Metadata.RemainingItemCount}
-	for _, it := range list.Items {
+	for _, it := range items {
 		name := it.Metadata.Name
 		if it.Metadata.Namespace != "" {
 			name = it.Metadata.Namespace + "/" + name
