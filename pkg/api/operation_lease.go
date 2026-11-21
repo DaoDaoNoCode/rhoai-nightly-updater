@@ -44,11 +44,16 @@ var (
 
 // Lease timing. The holder renews the heartbeat every
 // leaseHeartbeatInterval; a lease whose heartbeat is older than leaseTTL is
-// free. The TTL covers three renewals that fail in a row (each bounded by
-// leaseWriteTimeout) and about 30s of clock skew between pods, and it is
-// also the longest a crashed pod's operation blocks a new one. A pod
-// restart takes longer than that anyway (the replacement pod is scheduled,
-// pulls the image and passes its readiness probe first).
+// free. The holder stops its operation leaseTTL-leaseHeartbeatInterval (35s)
+// after its last successful heartbeat (leaseLossAfter), so three renewals in
+// a row may fail. The remaining interval (10s) is the whole safety margin: it
+// covers the operation stopping and the clock skew between the holder and a
+// pod that takes over, since each pod compares HeartbeatAt with its own clock
+// (cluster.LeaseLive). OpenShift nodes keep their clocks synchronised with
+// chronyd, far inside that margin. The TTL is also the longest a crashed
+// pod's operation blocks a new one. A pod restart takes longer than that
+// anyway (the replacement pod is scheduled, pulls the image and passes its
+// readiness probe first).
 var (
 	leaseHeartbeatInterval = 10 * time.Second
 	leaseTTL               = 45 * time.Second
