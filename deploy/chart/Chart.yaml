@@ -10,8 +10,8 @@ type: application
 # chart from a release tag (targetRevision vX.Y.Z), with that release's image.
 # A pre-release's commit names the pre-release itself (version X.Y.Z-rc.1,
 # appVersion "vX.Y.Z-rc.1"; Helm takes SemVer 2 versions).
-version: 5.0.0-alpha.1
-appVersion: "v5.0.0-alpha.1"
+version: 5.0.0-alpha.2
+appVersion: "v5.0.0-alpha.2"
 home: https://github.com/DaoDaoNoCode/rhoai-nightly-updater
 sources:
   - https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater
