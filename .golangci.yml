@@ -14,8 +14,11 @@ linters:
     - unparam
     - wastedassign
     - misspell
-    # Requests, commands and listeners carry the caller's context (tests:
-    # t.Context()), so they stop with it.
+    # Requests and commands carry the caller's context (tests:
+    # t.Context()), so they stop with it. For net.ListenConfig.Listen the
+    # context is only "used while resolving the address on which to
+    # listen; it does not affect the returned Listener" (go doc), so
+    # listeners are still closed explicitly.
     - noctx
     # An `if err != nil` branch that returns nil instead of err.
     - nilnesserr
