@@ -869,7 +869,7 @@ func prerequisiteProblem(c *Client, d *dependency) Problem {
 	p := Problem{
 		ID:        d.problemID(),
 		Severity:  severity,
-		mergeable: true,
+		Mergeable: true,
 	}
 	name := d.displayName()
 

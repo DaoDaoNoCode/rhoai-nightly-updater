@@ -423,7 +423,7 @@ func certificateProblem(c *Client, ci certificateItem, cause certificateCause, c
 		}
 		if len(blocked) > 0 {
 			evidence = append(evidence, fmt.Sprintf("Cannot start without Secret %s: %s", ci.Spec.SecretName, strings.Join(blocked, ", ")))
-			p.covers = append(p.covers, blocked...)
+			p.Covers = append(p.Covers, blocked...)
 		}
 		if len(other) > 0 {
 			evidence = append(evidence, fmt.Sprintf("Also mount Secret %s but show no error about it (their own problems are kept): %s", ci.Spec.SecretName, strings.Join(other, ", ")))
@@ -438,9 +438,9 @@ func certificateProblem(c *Client, ci certificateItem, cause certificateCause, c
 	sort.Strings(hooks)
 	if len(hooks) > 0 {
 		evidence = append(evidence, fmt.Sprintf("CA injected from it (%s): %s", injectCAAnnotation, strings.Join(hooks, ", ")))
-		p.covers = append(p.covers, hooks...)
+		p.Covers = append(p.Covers, hooks...)
 	}
-	p.AffectedObjects = append(p.AffectedObjects, p.covers...)
+	p.AffectedObjects = append(p.AffectedObjects, p.Covers...)
 	p.Evidence = evidence
 	return p
 }
@@ -467,7 +467,7 @@ func mergeProblem(dst *Problem, src Problem) {
 			dst.RelatedProblems = append(dst.RelatedProblems, id)
 		}
 	}
-	dst.covers = append(dst.covers, src.covers...)
+	dst.Covers = append(dst.Covers, src.Covers...)
 	if r, ok := severityRank[src.Severity]; ok && r < severityRank[dst.Severity] {
 		dst.Severity = src.Severity
 	}
@@ -481,7 +481,7 @@ func linkProblems(problems []Problem) []Problem {
 	// keeps its own problem (the pods are really down) and links to the
 	// cause.
 	for i := range problems {
-		if len(problems[i].explains) == 0 {
+		if len(problems[i].Explains) == 0 {
 			continue
 		}
 		for j := range problems {
@@ -492,7 +492,7 @@ func linkProblems(problems []Problem) []Problem {
 			}
 			all := true
 			for _, o := range pj.AffectedObjects {
-				all = all && slices.Contains(problems[i].explains, o)
+				all = all && slices.Contains(problems[i].Explains, o)
 			}
 			if all && !slices.Contains(pj.RelatedProblems, problems[i].ID) {
 				pj.RelatedProblems = append(pj.RelatedProblems, problems[i].ID)
@@ -502,11 +502,11 @@ func linkProblems(problems []Problem) []Problem {
 	}
 	drop := map[int]bool{}
 	for i := range problems {
-		if len(problems[i].covers) == 0 {
+		if len(problems[i].Covers) == 0 {
 			continue
 		}
 		covered := map[string]bool{}
-		for _, o := range problems[i].covers {
+		for _, o := range problems[i].Covers {
 			covered[o] = true
 		}
 		for j := range problems {

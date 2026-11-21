@@ -786,7 +786,7 @@ func (st *storedLeftover) problem() Problem {
 			line += fmt.Sprintf("; its last exit message is not available here. If `oc logs --previous` shows \"failed waiting for *<version>.%s Informer to sync\", this object is the cause", st.Kind)
 		}
 		evidence = append(evidence, line)
-		p.explains = st.Crash.Pods
+		p.Explains = st.Crash.Pods
 	}
 	p.Description = description
 	p.Evidence = evidence

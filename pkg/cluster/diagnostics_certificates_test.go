@@ -60,12 +60,12 @@ func TestCertificatesCheck_CertManagerMissing(t *testing.T) {
 	}
 	p := byID["certificate-not-ready-redhat-ods-applications-odh-observability-webhook-cert"]
 	if !strings.Contains(p.Title, "cert-manager is not installed or not running") ||
-		strings.Join(p.covers, ",") != "Pod redhat-ods-applications/odh-observability-abc,ValidatingWebhookConfiguration odh-observability-webhook" ||
+		strings.Join(p.Covers, ",") != "Pod redhat-ods-applications/odh-observability-abc,ValidatingWebhookConfiguration odh-observability-webhook" ||
 		strings.Join(p.RelatedProblems, ",") != "prerequisite-missing-openshift-cert-manager-operator" {
 		t.Fatalf("certificate problem = %+v", p)
 	}
 	pre := byID["prerequisite-missing-openshift-cert-manager-operator"]
-	if pre.Severity != "warning" || !pre.mergeable || !strings.Contains(pre.Description, "RHOAI Certificates are not issued without it") ||
+	if pre.Severity != "warning" || !pre.Mergeable || !strings.Contains(pre.Description, "RHOAI Certificates are not issued without it") ||
 		!strings.Contains(strings.Join(pre.Evidence, "\n"), "Certificate redhat-ods-applications/odh-observability-webhook-cert") {
 		t.Fatalf("prerequisite = %+v", pre)
 	}
@@ -84,7 +84,7 @@ func TestCertificatesCheck_OnlyPodsBlockedOnThisSecret(t *testing.T) {
 		{"metadata":{"name":"other-secret"},"spec":{"volumes":[{"secret":{"secretName":"something-else"}}]},"status":{"phase":"Pending"}}]}`)
 	out := checkCertificates(c)
 	p := problemsByID(out)["certificate-not-ready-redhat-ods-applications-odh-observability-webhook-cert"]
-	if got := strings.Join(p.covers, ","); got != "Pod redhat-ods-applications/env-ref,Pod redhat-ods-applications/odh-observability-abc,ValidatingWebhookConfiguration odh-observability-webhook" {
+	if got := strings.Join(p.Covers, ","); got != "Pod redhat-ods-applications/env-ref,Pod redhat-ods-applications/odh-observability-abc,ValidatingWebhookConfiguration odh-observability-webhook" {
 		t.Fatalf("covers = %s", got)
 	}
 	if !strings.Contains(strings.Join(p.Evidence, "\n"), "show no error about it (their own problems are kept): Pod redhat-ods-applications/unschedulable") {
@@ -139,7 +139,7 @@ func TestCertificatesCheck_NoAPIAndYoungCertificates(t *testing.T) {
 
 func TestLinkProblems_FoldsSymptomsIntoRootCause(t *testing.T) {
 	root := Problem{ID: "certificate-not-ready-x", Title: "Certificate x is not issued", RelatedProblems: []string{"prerequisite-missing-a", "gone"},
-		covers: []string{"Pod ns/p1", "Pod ns/p2", "ValidatingWebhookConfiguration hook-a"}}
+		Covers: []string{"Pod ns/p1", "Pod ns/p2", "ValidatingWebhookConfiguration hook-a"}}
 	problems := []Problem{
 		{ID: "dsc-not-ready", RelatedProblems: []string{"prerequisite-missing-a", "dsc-not-ready"}},
 		root,
@@ -334,7 +334,7 @@ func TestCertificatesCheck_ReadyWithSecretIsReady(t *testing.T) {
 }
 
 func TestMergeProblem(t *testing.T) {
-	dst := Problem{ID: "p", Severity: "info", Evidence: []string{"a"}, mergeable: true}
+	dst := Problem{ID: "p", Severity: "info", Evidence: []string{"a"}, Mergeable: true}
 	mergeProblem(&dst, Problem{ID: "p", Severity: "warning", Evidence: []string{"a", "b"}, AffectedObjects: []string{"X y"}, RelatedProblems: []string{"r"}})
 	if dst.Severity != "warning" || strings.Join(dst.Evidence, ",") != "a,b" || len(dst.AffectedObjects) != 1 || len(dst.RelatedProblems) != 1 {
 		t.Fatalf("dst = %+v", dst)
