@@ -1,42 +1,26 @@
 package cluster
 
 import (
+	"go/ast"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
-// resetClusterCaches empties the package's caches keyed by an API server
-// URL. In production one URL is one cluster, so sharing them is right. In
-// tests every fake API server is https://127.0.0.1:<port> and the OS reuses
-// ports, so a later test's fake cluster could read what an earlier one
-// cached: a stale 15-minute catalog index made
+// resetClusterCaches empties the package's caches, among them those keyed
+// by an API server URL. In production one URL is one cluster, so sharing
+// them is right. In tests every fake API server is https://127.0.0.1:<port>
+// and the OS reuses ports, so a later test's fake cluster could read what
+// an earlier one cached: a stale 15-minute catalog index made
 // TestDSCCheck_OperandMessage_OperatorNotInstalled fail on a CI runner. The
-// shared fake constructors call it when a fake cluster starts and ends.
+// shared fake constructors call it when a fake cluster starts and ends. It
+// empties every registered cache (cache.go): each LRU registers itself, and
+// each hand-rolled cache registers its purge function.
 func resetClusterCaches() {
-	apiVersionsCache.Purge()
-	controlPlaneCache.Purge()
-	replicaSetOwnerCache.Purge()
-	capacityCache.Purge()
-	planCache.Purge()
-	stableTargetCache.Purge()
-	consoleURLCache.Purge()
-	dashboardURLCache.Purge()
-	rhoaiNamespacesCache.Purge()
-	dashboardTargetCache.Purge()
-	argoApplicationsCache.Purge()
-	packageIndexMu.Lock()
-	packageIndexCache = map[string]packageIndex{}
-	packageIndexMu.Unlock()
-	staleSeen.Lock()
-	staleSeen.m = map[string]staleObservation{}
-	staleSeen.Unlock()
-	callChecks.Lock()
-	for k := range callChecks.m {
-		delete(callChecks.m, k)
-	}
-	callChecks.Unlock()
+	purgeAllCaches()
 }
 
 // isolateClusterCaches gives a test's fake cluster empty URL-keyed caches.
@@ -46,51 +30,194 @@ func isolateClusterCaches(t *testing.T) {
 	t.Cleanup(resetClusterCaches)
 }
 
-// Every place the package keys state by the API server URL, per file. A new
-// one must be emptied by resetClusterCaches too; then update this list.
+// urlKeyedState is where pkg/cluster and the packages under it key state by
+// the API server URL (c.baseURL or c.BaseURL()): per file (base name, unique
+// across pkg/cluster/**), how many lines use it and the package-level caches
+// those lines read or write. Each cache must be registered (cache.go): made
+// with newLRU, or emptied by a function passed to registerCachePurge.
+type urlKeyedState struct {
+	lines  int
+	caches []string
+}
+
+// Every place the tree keys state by the API server URL, per file. A new
+// one needs its cache registered; then update this list.
 func TestResetClusterCachesCoversEveryURLKeyedCache(t *testing.T) {
-	want := map[string]int{
-		"api_versions.go":                 1, // apiVersionsCache
-		"argocd.go":                       1, // argoApplicationsCache
-		"components.go":                   1, // replicaSetOwnerCache
-		"control_plane.go":                2, // controlPlaneCache
-		"dashboard_operator_discovery.go": 2, // dashboardTargetCache
-		"diagnostics_dsc.go":              1, // staleSeen
-		"maas.go":                         1, // apiVersionsCache (read)
-		"models_call.go":                  1, // callChecks
-		"models_image.go":                 2, // capacityCache, planCache
-		"prerequisites.go":                2, // packageIndexCache
-		"rhoai_namespaces.go":             1, // rhoaiNamespacesCache
-		"status.go":                       5, // stableTargetCache, consoleURLCache, dashboardURLCache
+	want := map[string]urlKeyedState{
+		"api_versions.go":                 {1, []string{"apiVersionsCache"}},
+		"argocd.go":                       {1, []string{"argoApplicationsCache"}},
+		"components.go":                   {1, []string{"replicaSetOwnerCache"}},
+		"control_plane.go":                {2, []string{"controlPlaneCache"}},
+		"dashboard_operator_discovery.go": {2, []string{"dashboardTargetCache"}},
+		"diagnostics_dsc.go":              {1, []string{"staleSeen"}},
+		"maas.go":                         {1, []string{"apiVersionsCache"}}, // a read
+		"models_call.go":                  {1, []string{"callChecks"}},
+		"models_image.go":                 {2, []string{"capacityCache", "planCache"}},
+		"prerequisites.go":                {2, []string{"packageIndexCache"}},
+		"rhoai_namespaces.go":             {1, []string{"rhoaiNamespacesCache"}},
+		"status.go":                       {5, []string{"stableTargetCache", "consoleURLCache", "dashboardURLCache"}},
 	}
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
+	dirs := clusterSourceDirs(t)
 	got := map[string]int{}
-	for _, f := range files {
-		if strings.HasSuffix(f, "_test.go") || requestSourceFiles[f] {
-			continue
-		}
-		b, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for line := range strings.SplitSeq(string(b), "\n") {
-			if strings.Contains(line, "c.baseURL") && !strings.Contains(line, "return user, c.baseURL") {
-				got[f]++
+	for _, paths := range dirs {
+		for _, path := range paths {
+			f := filepath.Base(path)
+			if isRequestSourceFile(f) {
+				continue
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for line := range strings.SplitSeq(string(b), "\n") {
+				if (strings.Contains(line, "c.baseURL") || strings.Contains(line, ".BaseURL()")) && !strings.Contains(line, "return user, c.baseURL") {
+					got[f]++
+				}
 			}
 		}
 	}
 	for f, n := range got {
-		if want[f] != n {
-			t.Errorf("%s keys state by c.baseURL %d times, the list says %d: add any new cache to resetClusterCaches, then update this list", f, n, want[f])
+		if want[f].lines != n {
+			t.Errorf("%s keys state by the API server URL %d times, the list says %d: register any new cache (cache.go), then update this list", f, n, want[f].lines)
 		}
 	}
-	for f, n := range want {
+	for f, w := range want {
 		if got[f] == 0 {
-			t.Errorf("%s no longer uses c.baseURL (the list says %d): update resetClusterCaches and this list", f, n)
+			t.Errorf("%s no longer keys state by the API server URL (the list says %d): update this list", f, w.lines)
 		}
+	}
+	registered := registeredCaches(t)
+	for f, w := range want {
+		for _, name := range w.caches {
+			how, ok := registered[name]
+			switch {
+			case !ok:
+				t.Errorf("%s: cache %s is not registered: make it with newLRU, or pass a function that empties it to registerCachePurge next to its declaration", f, name)
+			case how == "":
+				t.Errorf("%s: cache %s is declared more than once under pkg/cluster; name the one meant", f, name)
+			}
+		}
+	}
+}
+
+// registeredCaches maps the name of each package-level variable under
+// pkg/cluster/** that is a registered cache to how it registers: "newLRU"
+// when its initializer calls newLRU, "purge" when a function literal passed
+// to registerCachePurge in a package-level declaration names it. A name
+// declared in two packages maps to "". The source does not change while the
+// tests run, so it is read once.
+func registeredCaches(t *testing.T) map[string]string {
+	t.Helper()
+	registeredCachesOnce.Do(func() { registeredCachesVal = readRegisteredCaches(t) })
+	if registeredCachesVal == nil {
+		t.Fatal("the cache registry could not be read")
+	}
+	return registeredCachesVal
+}
+
+var (
+	registeredCachesOnce sync.Once
+	registeredCachesVal  map[string]string
+)
+
+func readRegisteredCaches(t *testing.T) map[string]string {
+	t.Helper()
+	calls := func(call *ast.CallExpr, name string) bool {
+		fun := call.Fun
+		switch f := fun.(type) {
+		case *ast.IndexListExpr: // newLRU[K, V](...)
+			fun = f.X
+		case *ast.IndexExpr:
+			fun = f.X
+		}
+		switch f := fun.(type) {
+		case *ast.Ident:
+			return f.Name == name
+		case *ast.SelectorExpr:
+			return f.Sel.Name == name
+		}
+		return false
+	}
+	out := map[string]string{}
+	set := func(name, how string) {
+		if old, ok := out[name]; ok && old != how {
+			out[name] = ""
+			return
+		}
+		out[name] = how
+	}
+	ps := clusterSource(t)
+	byDir := map[string][]*ast.File{}
+	for name, f := range ps.files {
+		dir := filepath.Dir(ps.paths[name])
+		byDir[dir] = append(byDir[dir], f)
+	}
+	for _, files := range byDir {
+		declared := map[string]bool{} // this package's package-level vars
+		purged := map[string]bool{}   // names in its registerCachePurge functions
+		for _, f := range files {
+			// Package-level var declarations only: a cache registers next
+			// to its declaration.
+			for _, decl := range f.Decls {
+				gd, ok := decl.(*ast.GenDecl)
+				if !ok || gd.Tok != token.VAR {
+					continue
+				}
+				for _, spec := range gd.Specs {
+					vs := spec.(*ast.ValueSpec)
+					for i, n := range vs.Names {
+						if n.Name == "_" {
+							continue
+						}
+						declared[n.Name] = true
+						if i < len(vs.Values) {
+							if call, ok := vs.Values[i].(*ast.CallExpr); ok && (calls(call, "newLRU") || calls(call, "NewLRU")) {
+								set(n.Name, "newLRU")
+							}
+						}
+					}
+					for _, v := range vs.Values {
+						call, ok := v.(*ast.CallExpr)
+						if !ok || len(call.Args) != 1 || !calls(call, "registerCachePurge") && !calls(call, "RegisterCachePurge") {
+							continue
+						}
+						if lit, ok := call.Args[0].(*ast.FuncLit); ok {
+							ast.Inspect(lit.Body, func(n ast.Node) bool {
+								if id, ok := n.(*ast.Ident); ok {
+									purged[id.Name] = true
+								}
+								return true
+							})
+						}
+					}
+				}
+			}
+		}
+		for name := range purged {
+			if declared[name] {
+				set(name, "purge")
+			}
+		}
+	}
+	return out
+}
+
+// The registry check itself: an LRU registers by being made, a hand-rolled
+// cache only through registerCachePurge.
+func TestRegisteredCachesSeesEveryKind(t *testing.T) {
+	reg := registeredCaches(t)
+	for name, want := range map[string]string{
+		"apiVersionsCache":  "newLRU",
+		"packageIndexCache": "purge",
+		"staleSeen":         "purge",
+		"callChecks":        "purge",
+	} {
+		if reg[name] != want {
+			t.Errorf("registeredCaches()[%s] = %q, want %q", name, reg[name], want)
+		}
+	}
+	if _, ok := reg["packageIndexTTL"]; ok {
+		t.Error("a variable declared next to a registered cache is not a cache")
 	}
 }
 

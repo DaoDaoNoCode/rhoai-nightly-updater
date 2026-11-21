@@ -3,9 +3,11 @@ package cluster
 // RBAC coverage: every Kubernetes API call the ServiceAccount makes must be
 // granted by deploy/template.yaml, and every grant must be used by the code.
 //
-// The test parses this package's source, finds each call to a Client request
-// method (get, post, put, patch, strategicPatch, apply, dryRunApply, delete),
-// resolves the request path statically, and maps it to the RBAC request
+// The test parses the source of pkg/cluster and of every package under it,
+// finds each call to a Client request method (get, post, put, patch,
+// strategicPatch, apply, dryRunApply, delete), resolves the request path
+// statically (through plain f(...) and qualified pkg.F(...) calls and
+// constants of those packages), and maps it to the RBAC request
 // attributes the API server checks (verb, API group, resource, namespace and
 // name; https://kubernetes.io/docs/reference/access-authn-authz/authorization/#determine-the-request-verb).
 // Error, rollback and restore branches are ordinary calls, so they are
@@ -24,6 +26,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -143,10 +146,13 @@ var methodVerbs = map[string][]string{
 	// "get" becomes "get" or "list" depending on the path.
 }
 
-// requestSourceFiles define the Client request methods (client.go) and the
-// REST helpers on top of them (rest.go). Their calls take a path parameter,
-// not a path: the scans attribute each request to the helper's call site.
-var requestSourceFiles = map[string]bool{"client.go": true, "rest.go": true}
+// isRequestSourceFile reports whether a file (by base name) defines the
+// Client request methods (client*.go) or the REST helpers on top of them
+// (rest.go). Their calls take a path parameter, not a path: the scans
+// attribute each request to the helper's call site.
+func isRequestSourceFile(base string) bool {
+	return strings.HasPrefix(base, "client") || base == "rest.go"
+}
 
 // helperMethods maps each REST helper (rest.go) to the Client request
 // method it sends for its path argument (the first, as for the request
@@ -204,13 +210,27 @@ func (r rbacRequest) key() string {
 	return fmt.Sprintf("%s %s/%s ns=%s name=%s", r.Verb, r.Group, r.Resource, r.Namespace, r.Name)
 }
 
+// symID names a package-level declaration (function, constant, variable or
+// type) of one of the packages under pkg/cluster: its package's import path
+// and its name.
+type symID struct{ pkg, name string }
+
+// sourcePkg is the source of pkg/cluster and every package under it. Files
+// are keyed by base name, unique across the tree (loadClusterSource checks
+// it), so call sites ("file:Func") and function positions ("file:line")
+// keep their keys when a file moves to another package.
 type sourcePkg struct {
-	fset   *token.FileSet
-	files  map[string]*ast.File
-	consts map[string]string
-	lits   map[string]*ast.CompositeLit
-	funcs  map[string]*ast.FuncDecl
-	fileOf map[*ast.FuncDecl]string
+	fset  *token.FileSet
+	files map[string]*ast.File
+	// pkgOf is the import path of each file's package; imports maps each
+	// file's local import names to the import paths of the packages under
+	// pkg/cluster it imports.
+	pkgOf   map[string]string
+	imports map[string]map[string]string
+	consts  map[symID]string
+	lits    map[symID]*ast.CompositeLit
+	funcs   map[symID]*ast.FuncDecl
+	fileOf  map[*ast.FuncDecl]string
 	// only, when set, limits the scan to these functions (funcPos keys):
 	// their API calls, and the call sites a parameter is resolved from.
 	only map[string]bool
@@ -220,7 +240,8 @@ type sourcePkg struct {
 	// result it met, which made the RBAC tests time out under -race.
 	identMemo  map[identKey][]string
 	resultMemo map[resultKey][]string
-	callers    map[string][]callSite // by callee name; built on first use
+	callers    map[symID][]callSite // by callee; built on first use
+	locals     map[*ast.FuncDecl]map[string]bool
 }
 
 // identKey and resultKey keep the depth, so a memo answers exactly what the
@@ -232,37 +253,124 @@ type identKey struct {
 }
 
 type resultKey struct {
-	callee string
+	callee symID
 	i      int
 	depth  int
 }
 
-// callSite is a call by plain name (f(...)) in a scanned function.
+// callSite is a call of a package function, by plain name (f(...)) or
+// qualified by an imported package under pkg/cluster (pkg.F(...)), in a
+// scanned function.
 type callSite struct {
 	caller *ast.FuncDecl
 	call   *ast.CallExpr
 }
 
-// callSitesOf returns the calls of the package function name in the
-// scanned functions, indexing every function body once.
-func (p *sourcePkg) callSitesOf(name string) []callSite {
+// pkgOfFunc is the import path of fn's package.
+func (p *sourcePkg) pkgOfFunc(fn *ast.FuncDecl) string {
+	if fn == nil {
+		return clusterPkg
+	}
+	return p.pkgOf[p.fileOf[fn]]
+}
+
+// localNames is every name fn declares, which could shadow an import: its
+// receiver, parameters and results (closures' too), := and range := names,
+// and var and const declarations in its body.
+func (p *sourcePkg) localNames(fn *ast.FuncDecl) map[string]bool {
+	if l, ok := p.locals[fn]; ok {
+		return l
+	}
+	l := map[string]bool{}
+	fields := func(fl *ast.FieldList) {
+		if fl == nil {
+			return
+		}
+		for _, f := range fl.List {
+			for _, n := range f.Names {
+				l[n.Name] = true
+			}
+		}
+	}
+	define := func(exprs ...ast.Expr) {
+		for _, e := range exprs {
+			if id, ok := e.(*ast.Ident); ok {
+				l[id.Name] = true
+			}
+		}
+	}
+	fields(fn.Recv)
+	ast.Inspect(fn, func(n ast.Node) bool {
+		switch s := n.(type) {
+		case *ast.FuncType:
+			fields(s.Params)
+			fields(s.Results)
+		case *ast.AssignStmt:
+			if s.Tok == token.DEFINE {
+				define(s.Lhs...)
+			}
+		case *ast.RangeStmt:
+			if s.Tok == token.DEFINE {
+				define(s.Key, s.Value)
+			}
+		case *ast.ValueSpec:
+			for _, n := range s.Names {
+				l[n.Name] = true
+			}
+		}
+		return true
+	})
+	p.locals[fn] = l
+	return l
+}
+
+// qualified resolves pkg.Name in fn, where pkg is the file's name for an
+// imported package under pkg/cluster (and not a local of fn), to that
+// package's declaration Name.
+func (p *sourcePkg) qualified(fn *ast.FuncDecl, x *ast.SelectorExpr) (symID, bool) {
+	base, ok := x.X.(*ast.Ident)
+	if !ok || fn == nil {
+		return symID{}, false
+	}
+	imp, ok := p.imports[p.fileOf[fn]][base.Name]
+	if !ok || p.localNames(fn)[base.Name] {
+		return symID{}, false
+	}
+	return symID{imp, x.Sel.Name}, true
+}
+
+// callee is the package function a call in fn names: f(...) in fn's own
+// package, or pkg.F(...) through the file's imports.
+func (p *sourcePkg) callee(fn *ast.FuncDecl, call *ast.CallExpr) (symID, bool) {
+	switch f := call.Fun.(type) {
+	case *ast.Ident:
+		return symID{p.pkgOfFunc(fn), f.Name}, true
+	case *ast.SelectorExpr:
+		return p.qualified(fn, f)
+	}
+	return symID{}, false
+}
+
+// callSitesOf returns the calls of the package function id in the scanned
+// functions, indexing every function body once.
+func (p *sourcePkg) callSitesOf(id symID) []callSite {
 	if p.callers == nil {
-		p.callers = map[string][]callSite{}
+		p.callers = map[symID][]callSite{}
 		for caller := range p.fileOf {
 			if caller.Body == nil || !p.scans(caller) {
 				continue
 			}
 			ast.Inspect(caller.Body, func(n ast.Node) bool {
 				if call, ok := n.(*ast.CallExpr); ok {
-					if f, ok := call.Fun.(*ast.Ident); ok {
-						p.callers[f.Name] = append(p.callers[f.Name], callSite{caller, call})
+					if id, ok := p.callee(caller, call); ok {
+						p.callers[id] = append(p.callers[id], callSite{caller, call})
 					}
 				}
 				return true
 			})
 		}
 	}
-	return p.callers[name]
+	return p.callers[id]
 }
 
 // frozen returns s with its capacity cut to its length, so a caller that
@@ -279,23 +387,131 @@ func (p *sourcePkg) scans(fn *ast.FuncDecl) bool {
 	return p.only == nil || p.only[p.funcPos(fn)]
 }
 
-func loadClusterSource(t *testing.T) *sourcePkg {
+// clusterSourceDirs are pkg/cluster and every directory under it that the
+// go command builds (not testdata, nor names starting with "." or "_"),
+// relative to pkg/cluster, with their non-test Go files.
+func clusterSourceDirs(t *testing.T) map[string][]string {
 	t.Helper()
-	p := &sourcePkg{fset: token.NewFileSet(), files: map[string]*ast.File{}, consts: map[string]string{}, lits: map[string]*ast.CompositeLit{}, funcs: map[string]*ast.FuncDecl{}, fileOf: map[*ast.FuncDecl]string{},
-		identMemo: map[identKey][]string{}, resultMemo: map[resultKey][]string{}}
-	matches, err := filepath.Glob("*.go")
+	dirs := map[string][]string{}
+	err := filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		name := d.Name()
+		if d.IsDir() {
+			if path != "." && (name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go") && !strings.HasPrefix(name, ".") && !strings.HasPrefix(name, "_") {
+			dir := filepath.Dir(path)
+			dirs[dir] = append(dirs[dir], path)
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range matches {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
+	return dirs
+}
+
+// clusterImportPath is the import path of a directory relative to pkg/cluster.
+func clusterImportPath(dir string) string {
+	if dir == "." {
+		return clusterPkg
+	}
+	return clusterPkg + "/" + filepath.ToSlash(dir)
+}
+
+// parsedSource is the non-test source of pkg/cluster and of every package
+// under it, files keyed by base name.
+type parsedSource struct {
+	fset  *token.FileSet
+	files map[string]*ast.File
+	paths map[string]string // relative to pkg/cluster
+}
+
+// clusterSource parses the tree once per test binary: the source does not
+// change while the tests run, and the scans only read the syntax trees.
+// The scans key files by base name, so two files with the same base name
+// anywhere in the tree fail it.
+func clusterSource(t *testing.T) *parsedSource {
+	t.Helper()
+	clusterSourceOnce.Do(func() {
+		ps := &parsedSource{fset: token.NewFileSet(), files: map[string]*ast.File{}, paths: map[string]string{}}
+		var all []string
+		for _, paths := range clusterSourceDirs(t) {
+			all = append(all, paths...)
 		}
-		f, err := parser.ParseFile(p.fset, name, nil, 0)
-		if err != nil {
-			t.Fatal(err)
+		sort.Strings(all)
+		for _, path := range all {
+			name := filepath.Base(path)
+			if other, dup := ps.paths[name]; dup {
+				clusterSourceErr = fmt.Errorf("pkg/cluster/%s and pkg/cluster/%s share the base name %s; the RBAC scans key call sites and functions by base name (rbacCallsNotUsingTheSAToken, funcPos), so rename one", filepath.ToSlash(other), filepath.ToSlash(path), name)
+				return
+			}
+			f, err := parser.ParseFile(ps.fset, path, nil, 0)
+			if err != nil {
+				clusterSourceErr = err
+				return
+			}
+			ps.files[name] = f
+			ps.paths[name] = path
 		}
+		clusterSourceVal = ps
+	})
+	if clusterSourceErr != nil {
+		t.Fatal(clusterSourceErr)
+	}
+	if clusterSourceVal == nil {
+		t.Fatal("the pkg/cluster source could not be read")
+	}
+	return clusterSourceVal
+}
+
+var (
+	clusterSourceOnce sync.Once
+	clusterSourceVal  *parsedSource
+	clusterSourceErr  error
+)
+
+// loadClusterSource indexes the source of pkg/cluster and of every package
+// under it for one scan.
+func loadClusterSource(t *testing.T) *sourcePkg {
+	t.Helper()
+	ps := clusterSource(t)
+	p := &sourcePkg{fset: ps.fset, files: map[string]*ast.File{}, pkgOf: map[string]string{}, imports: map[string]map[string]string{},
+		consts: map[symID]string{}, lits: map[symID]*ast.CompositeLit{}, funcs: map[symID]*ast.FuncDecl{}, fileOf: map[*ast.FuncDecl]string{},
+		identMemo: map[identKey][]string{}, resultMemo: map[resultKey][]string{}, locals: map[*ast.FuncDecl]map[string]bool{}}
+	pkgNames := map[string]string{}
+	names := make([]string, 0, len(ps.files))
+	for name, f := range ps.files {
+		names = append(names, name)
+		pkgNames[clusterImportPath(filepath.Dir(ps.paths[name]))] = f.Name.Name
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		f := ps.files[name]
+		pkg := clusterImportPath(filepath.Dir(ps.paths[name]))
 		p.files[name] = f
+		p.pkgOf[name] = pkg
+		imports := map[string]string{}
+		for _, spec := range f.Imports {
+			imp, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			local, ok := pkgNames[imp]
+			if !ok {
+				continue // not a package under pkg/cluster
+			}
+			if spec.Name != nil {
+				local = spec.Name.Name
+			}
+			imports[local] = imp
+		}
+		p.imports[name] = imports
 		for _, decl := range f.Decls {
 			switch d := decl.(type) {
 			case *ast.GenDecl:
@@ -307,11 +523,11 @@ func loadClusterSource(t *testing.T) *sourcePkg {
 					for i, n := range vs.Names {
 						if i < len(vs.Values) {
 							if cl, ok := vs.Values[i].(*ast.CompositeLit); ok {
-								p.lits[n.Name] = cl
+								p.lits[symID{pkg, n.Name}] = cl
 							}
 							if lit, ok := vs.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
 								if s, err := strconv.Unquote(lit.Value); err == nil {
-									p.consts[n.Name] = s
+									p.consts[symID{pkg, n.Name}] = s
 								}
 							}
 						}
@@ -319,7 +535,7 @@ func loadClusterSource(t *testing.T) *sourcePkg {
 				}
 			case *ast.FuncDecl:
 				if d.Recv == nil {
-					p.funcs[d.Name.Name] = d
+					p.funcs[symID{pkg, d.Name.Name}] = d
 				}
 				p.fileOf[d] = name
 			}
@@ -378,38 +594,7 @@ func (r resolver) resolve(e ast.Expr) []string {
 }
 
 func (r resolver) resolveCall(x *ast.CallExpr) []string {
-	switch fun := x.Fun.(type) {
-	case *ast.Ident:
-		switch fun.Name {
-		case "namespacedPath", "clusterPath":
-			var args [][]string
-			for _, a := range x.Args {
-				args = append(args, r.resolve(a))
-			}
-			var out []string
-			for _, combo := range combos(args) {
-				if fun.Name == "namespacedPath" {
-					out = append(out, namespacedPath(combo[0], combo[1], combo[2], combo[3]))
-				} else {
-					out = append(out, clusterPath(combo[0], combo[1], combo[2]))
-				}
-			}
-			return out
-		case "getActivityNamespace":
-			return []string{appNSMarker}
-		case "maasAPI":
-			// maas.opendatahub.io at its served version
-			return []string{maasGroup + "/" + unknownPart}
-		case "gitOpsAdmissionPolicyName":
-			return []string{gitOpsPolicyNameMarker}
-		case "componentListPath":
-			// A discovered kind of one of the module API groups.
-			return moduleKindPaths()
-		}
-		if _, ok := r.p.funcs[fun.Name]; ok {
-			return r.resolveCallResult(x, 0)
-		}
-	case *ast.SelectorExpr:
+	if fun, ok := x.Fun.(*ast.SelectorExpr); ok {
 		if fun.Sel.Name == "listPath" && len(x.Args) == 0 {
 			// componentKind.listPath: a discovered module kind.
 			return moduleKindPaths()
@@ -436,6 +621,40 @@ func (r resolver) resolveCall(x *ast.CallExpr) []string {
 			}
 			return out
 		}
+	}
+	// A package function, by plain name or qualified by its package.
+	callee, ok := r.p.callee(r.fn, x)
+	if !ok {
+		return []string{unknownPart}
+	}
+	switch callee.name {
+	case "namespacedPath", "clusterPath":
+		var args [][]string
+		for _, a := range x.Args {
+			args = append(args, r.resolve(a))
+		}
+		var out []string
+		for _, combo := range combos(args) {
+			if callee.name == "namespacedPath" {
+				out = append(out, namespacedPath(combo[0], combo[1], combo[2], combo[3]))
+			} else {
+				out = append(out, clusterPath(combo[0], combo[1], combo[2]))
+			}
+		}
+		return out
+	case "getActivityNamespace":
+		return []string{appNSMarker}
+	case "maasAPI":
+		// maas.opendatahub.io at its served version
+		return []string{maasGroup + "/" + unknownPart}
+	case "gitOpsAdmissionPolicyName":
+		return []string{gitOpsPolicyNameMarker}
+	case "componentListPath":
+		// A discovered kind of one of the module API groups.
+		return moduleKindPaths()
+	}
+	if _, ok := r.p.funcs[callee]; ok {
+		return r.resolveCallResult(x, 0)
 	}
 	return []string{unknownPart}
 }
@@ -466,7 +685,7 @@ func combos(args [][]string) [][]string {
 }
 
 func (r resolver) resolveIdent(id *ast.Ident) []string {
-	if v, ok := r.p.consts[id.Name]; ok && !r.isLocal(id.Name) {
+	if v, ok := r.p.consts[symID{r.p.pkgOfFunc(r.fn), id.Name}]; ok && !r.isLocal(id.Name) {
 		return []string{v}
 	}
 	if r.depth > rbacResolveDepth || r.fn == nil {
@@ -518,7 +737,7 @@ func (r resolver) resolveIdentUncached(id *ast.Ident) []string {
 	}
 	// A function parameter: resolve the argument at every call site.
 	if idx := paramIndex(r.fn, id.Name); idx >= 0 && r.fn.Recv == nil {
-		for _, cs := range r.p.callSitesOf(r.fn.Name.Name) {
+		for _, cs := range r.p.callSitesOf(symID{r.p.pkgOfFunc(r.fn), r.fn.Name.Name}) {
 			if idx < len(cs.call.Args) {
 				out = append(out, resolver{r.p, cs.caller, r.depth + 1}.resolve(cs.call.Args[idx])...)
 			}
@@ -533,15 +752,15 @@ func (r resolver) resolveIdentUncached(id *ast.Ident) []string {
 // resolveCallResult resolves result i of a call to a package function from
 // that function's return statements (ignoring empty-string error returns).
 func (r resolver) resolveCallResult(call *ast.CallExpr, i int) []string {
-	id, ok := call.Fun.(*ast.Ident)
+	id, ok := r.p.callee(r.fn, call)
 	if !ok || r.depth > rbacResolveDepth {
 		return []string{unknownPart}
 	}
-	fn, ok := r.p.funcs[id.Name]
+	fn, ok := r.p.funcs[id]
 	if !ok || fn.Body == nil {
 		return []string{unknownPart}
 	}
-	key := resultKey{id.Name, i, r.depth}
+	key := resultKey{id, i, r.depth}
 	if v, ok := r.p.resultMemo[key]; ok {
 		return v
 	}
@@ -611,8 +830,13 @@ func paramIndex(fn *ast.FuncDecl, name string) int {
 func (r resolver) rangeElements(x ast.Expr, field string) []string {
 	lit, ok := x.(*ast.CompositeLit)
 	if !ok {
-		if id, isIdent := x.(*ast.Ident); isIdent {
-			lit = r.findCompositeLit(id.Name)
+		switch v := x.(type) {
+		case *ast.Ident:
+			lit = r.findCompositeLit(v.Name)
+		case *ast.SelectorExpr:
+			if id, ok := r.p.qualified(r.fn, v); ok {
+				lit = r.p.lits[id]
+			}
 		}
 		if lit == nil {
 			return []string{unknownPart}
@@ -680,7 +904,7 @@ func (r resolver) findCompositeLit(name string) *ast.CompositeLit {
 		return true
 	})
 	if found == nil && !r.isLocal(name) {
-		found = r.p.lits[name]
+		found = r.p.lits[symID{r.p.pkgOfFunc(r.fn), name}]
 	}
 	return found
 }
@@ -700,6 +924,15 @@ func (r resolver) resolveSelector(x *ast.SelectorExpr) []string {
 		return true
 	})
 	if len(out) == 0 {
+		// pkg.Name: a constant of an imported package under pkg/cluster.
+		if id, ok := r.p.qualified(r.fn, x); ok {
+			if v, ok := r.p.consts[id]; ok {
+				return []string{v}
+			}
+			return []string{unknownPart}
+		}
+	}
+	if len(out) == 0 {
 		out = r.resolveStepField(base.Name, x.Sel.Name)
 	}
 	if len(out) == 0 {
@@ -711,10 +944,12 @@ func (r resolver) resolveSelector(x *ast.SelectorExpr) []string {
 // resolveStepField resolves base.field where base is a parameter of type *T,
 // the state a run's steps share (maasPublish, maasUnpublish, ...): one step
 // sets the field (base.field = v) and a later one reads it. It resolves v
-// in every scanned function that takes a *T and assigns the field.
+// in every scanned function that takes a *T and assigns the field. T is
+// keyed by package, so the steps may live in other packages under
+// pkg/cluster.
 func (r resolver) resolveStepField(base, field string) []string {
-	typ := pointerParamType(r.fn, base)
-	if typ == "" || r.depth > rbacResolveDepth {
+	typ, ok := r.p.pointerParamType(r.fn, base)
+	if !ok || r.depth > rbacResolveDepth {
 		return nil
 	}
 	var out []string
@@ -722,7 +957,7 @@ func (r resolver) resolveStepField(base, field string) []string {
 		if fn.Body == nil || !r.p.scans(fn) {
 			continue
 		}
-		params := pointerParamsOf(fn, typ)
+		params := r.p.pointerParamsOf(fn, typ)
 		if len(params) == 0 {
 			continue
 		}
@@ -746,39 +981,52 @@ func (r resolver) resolveStepField(base, field string) []string {
 	return out
 }
 
-// pointerParamType is T when fn's parameter name has type *T, else "".
-func pointerParamType(fn *ast.FuncDecl, name string) string {
+// pointerTarget is T, keyed by package, when typ is *T or *pkg.T (pkg an
+// imported package under pkg/cluster) in fn.
+func (p *sourcePkg) pointerTarget(fn *ast.FuncDecl, typ ast.Expr) (symID, bool) {
+	star, ok := typ.(*ast.StarExpr)
+	if !ok {
+		return symID{}, false
+	}
+	switch x := star.X.(type) {
+	case *ast.Ident:
+		return symID{p.pkgOfFunc(fn), x.Name}, true
+	case *ast.SelectorExpr:
+		if base, ok := x.X.(*ast.Ident); ok {
+			if imp, ok := p.imports[p.fileOf[fn]][base.Name]; ok {
+				return symID{imp, x.Sel.Name}, true
+			}
+		}
+	}
+	return symID{}, false
+}
+
+// pointerParamType is T when fn's parameter name has type *T.
+func (p *sourcePkg) pointerParamType(fn *ast.FuncDecl, name string) (symID, bool) {
 	if fn == nil {
-		return ""
+		return symID{}, false
 	}
 	for _, f := range fn.Type.Params.List {
 		for _, n := range f.Names {
 			if n.Name != name {
 				continue
 			}
-			if star, ok := f.Type.(*ast.StarExpr); ok {
-				if id, ok := star.X.(*ast.Ident); ok {
-					return id.Name
-				}
-			}
-			return ""
+			return p.pointerTarget(fn, f.Type)
 		}
 	}
-	return ""
+	return symID{}, false
 }
 
 // pointerParamsOf names fn's parameters of type *typ.
-func pointerParamsOf(fn *ast.FuncDecl, typ string) map[string]bool {
+func (p *sourcePkg) pointerParamsOf(fn *ast.FuncDecl, typ symID) map[string]bool {
 	var out map[string]bool
 	for _, f := range fn.Type.Params.List {
-		if star, ok := f.Type.(*ast.StarExpr); ok {
-			if id, ok := star.X.(*ast.Ident); ok && id.Name == typ {
-				for _, n := range f.Names {
-					if out == nil {
-						out = map[string]bool{}
-					}
-					out[n.Name] = true
+		if id, ok := p.pointerTarget(fn, f.Type); ok && id == typ {
+			for _, n := range f.Names {
+				if out == nil {
+					out = map[string]bool{}
 				}
+				out[n.Name] = true
 			}
 		}
 	}
@@ -976,7 +1224,7 @@ func scanRequests(t *testing.T, only map[string]bool, onlyBookkeeping bool) ([]r
 	for _, file := range names {
 		for _, decl := range p.files[file].Decls {
 			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil || requestSourceFiles[file] || !p.scans(fn) {
+			if !ok || fn.Body == nil || isRequestSourceFile(file) || !p.scans(fn) {
 				continue
 			}
 			fnPos := p.funcPos(fn)

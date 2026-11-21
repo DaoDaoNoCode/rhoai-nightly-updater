@@ -259,6 +259,14 @@ var callChecks = struct {
 	check types.ModelCallCheck
 }{}}
 
+var _ = registerCachePurge(func() {
+	callChecks.Lock()
+	for k := range callChecks.m {
+		delete(callChecks.m, k)
+	}
+	callChecks.Unlock()
+})
+
 func callCheckKey(c *Client, project, name string) string {
 	return c.baseURL + "|" + project + "/" + name
 }

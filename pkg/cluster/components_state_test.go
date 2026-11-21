@@ -162,8 +162,9 @@ func TestGetComponents_ReadsRunInParallel(t *testing.T) {
 func TestGetComponents_UsesCachedLabelsWithoutQuay(t *testing.T) {
 	f := newFakeRegistry()
 	installFakeRegistry(t, f)
-	labelCache.Add("rhoai/odh-dashboard-rhel9@sha256:"+strings.Repeat("1", 64), labelCacheValue{labels: ImageLabels{GitCommit: "abc", BuildDate: "2026-10-01"}}, 0)
 	c, _ := componentsAPI(t, nil, mockResponse{body: `{"items":[]}`}, notFoundResp, "")
+	// After the fake cluster starts, which empties every cache.
+	labelCache.Add("rhoai/odh-dashboard-rhel9@sha256:"+strings.Repeat("1", 64), labelCacheValue{labels: ImageLabels{GitCommit: "abc", BuildDate: "2026-10-01"}}, 0)
 	resp, err := GetComponents(c, false)
 	if err != nil {
 		t.Fatal(err)

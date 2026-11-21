@@ -1,8 +1,6 @@
 package cluster
 
 import (
-	"container/list"
-
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -91,14 +89,6 @@ func (c *lruCache[K, V]) Len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.ll.Len()
-}
-
-// Purge removes every entry.
-func (c *lruCache[K, V]) Purge() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.ll.Init()
-	c.items = make(map[K]*list.Element)
 }
 
 // GetOperationState returns the running-operation marker and the last

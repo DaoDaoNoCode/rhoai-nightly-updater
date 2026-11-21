@@ -177,6 +177,12 @@ var staleSeen = struct {
 	m map[string]staleObservation
 }{m: map[string]staleObservation{}}
 
+var _ = registerCachePurge(func() {
+	staleSeen.Lock()
+	staleSeen.m = map[string]staleObservation{}
+	staleSeen.Unlock()
+})
+
 type staleObservation struct {
 	generation int64
 	first      time.Time

@@ -280,6 +280,12 @@ var (
 	// default catalogs), so it is read only when a condition names a
 	// dependency, and then at most this often.
 	packageIndexTTL = 15 * time.Minute
+
+	_ = registerCachePurge(func() {
+		packageIndexMu.Lock()
+		packageIndexCache = map[string]packageIndex{}
+		packageIndexMu.Unlock()
+	})
 )
 
 // loadPackageIndex lists the PackageManifests of the global catalogs.

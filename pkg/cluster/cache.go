@@ -26,8 +26,41 @@ type lruEntry[K comparable, V any] struct {
 	expires time.Time // zero: never expires
 }
 
+// newLRU makes an LRU cache and registers it (registerCachePurge).
 func newLRU[K comparable, V any](max int) *lruCache[K, V] {
-	return &lruCache[K, V]{max: max, ll: list.New(), items: make(map[K]*list.Element), now: time.Now}
+	c := &lruCache[K, V]{max: max, ll: list.New(), items: make(map[K]*list.Element), now: time.Now}
+	registerCachePurge(c.Purge)
+	return c
+}
+
+// The registry of the package's caches: every LRU (newLRU) and every
+// hand-rolled cache, which registers the function that empties it next to
+// its declaration (var _ = registerCachePurge(...)). Production never
+// purges; the tests' fake clusters empty them all (resetClusterCaches), as
+// every fake API server is https://127.0.0.1:<port> and the OS reuses ports.
+var cacheRegistry struct {
+	sync.Mutex
+	purges []func()
+}
+
+// registerCachePurge adds a cache's purge function to the registry. Its
+// result means nothing: it lets a hand-rolled cache register in a
+// package-level declaration next to the cache, without an init function.
+func registerCachePurge(purge func()) struct{} { //nolint:unparam // the result exists only for var _ = registerCachePurge(...)
+	cacheRegistry.Lock()
+	defer cacheRegistry.Unlock()
+	cacheRegistry.purges = append(cacheRegistry.purges, purge)
+	return struct{}{}
+}
+
+// purgeAllCaches empties every registered cache.
+func purgeAllCaches() {
+	cacheRegistry.Lock()
+	purges := append([]func(){}, cacheRegistry.purges...)
+	cacheRegistry.Unlock()
+	for _, purge := range purges {
+		purge()
+	}
 }
 
 // Get returns the value for key if present and not expired.
@@ -86,6 +119,14 @@ func (c *lruCache[K, V]) Remove(key K) {
 		c.ll.Remove(el)
 		delete(c.items, key)
 	}
+}
+
+// Purge removes every entry.
+func (c *lruCache[K, V]) Purge() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ll.Init()
+	c.items = make(map[K]*list.Element)
 }
 
 // flightGroup collapses concurrent calls for the same key into one, like

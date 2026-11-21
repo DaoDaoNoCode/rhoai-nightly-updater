@@ -157,7 +157,7 @@ func TestOwnConfigMapsAreReachedOnlyThroughBookkeeping(t *testing.T) {
 	for _, file := range files {
 		for _, decl := range p.files[file].Decls {
 			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil || requestSourceFiles[file] {
+			if !ok || fn.Body == nil || isRequestSourceFile(file) {
 				continue
 			}
 			ast.Inspect(fn.Body, func(n ast.Node) bool {

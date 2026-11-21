@@ -3,10 +3,11 @@ package cluster
 // RBAC of the gitops profile: deploy/rbac-gitops.yaml must grant exactly the
 // ServiceAccount requests that the gitops profile can make, as
 // rbac_coverage_test.go checks deploy/template.yaml against every request
-// the package makes.
+// the packages make.
 //
 // What the profile can make is found from the code: a reference graph over
-// the type-checked sources of main.go, pkg/api and this package. A function
+// the type-checked sources of main.go, pkg/api, pkg/cluster and every
+// package under pkg/cluster. A function
 // reaches every function, method and package-level variable its body
 // (closures included) names, called or not, and a variable reaches what its
 // initializer and every assignment to it name; a function value passed
@@ -14,7 +15,7 @@ package cluster
 // functions, with api.Register replaced by the gitops profile's handlers
 // (api.gitOpsRoutes): Register adds no other handler in that profile, and
 // refusedInGitOpsProfile answers without a call. The ServiceAccount
-// requests of the reached functions of this package are then derived as
+// requests of the reached functions of those packages are then derived as
 // for the full profile, with each parameter that makes up a path resolved
 // from reached call sites only.
 //
@@ -65,13 +66,14 @@ var (
 	exportErr   error
 )
 
-// exportData maps each import path the three packages depend on to its
-// compiled export data, from `go list -export` (the go command builds them
-// into its cache), so the packages type-check without any other module.
+// exportData maps each import path that main and the packages under
+// pkg/cluster depend on to its compiled export data, from `go list -export`
+// (the go command builds them into its cache), so the packages type-check
+// without any other module.
 func exportData(t *testing.T) map[string]string {
 	t.Helper()
 	exportOnce.Do(func() {
-		cmd := exec.CommandContext(t.Context(), "go", "list", "-export", "-deps", "-f", "{{.ImportPath}}\t{{.Export}}", modulePath)
+		cmd := exec.CommandContext(t.Context(), "go", "list", "-export", "-deps", "-f", "{{.ImportPath}}\t{{.Export}}", modulePath, "./pkg/cluster/...")
 		cmd.Dir = "../.."
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
@@ -296,10 +298,13 @@ func (g refGraph) reach(roots []string, pruned map[string]bool) map[string]bool 
 
 // profileGraph is the reference graph of the binary, and what it needs.
 type profileGraph struct {
-	graph   refGraph
-	cluster *typedPkg
-	// funcPositions maps this package's function keys to their funcPos
-	// ("file:line"), the key serviceAccountRequestsIn uses.
+	graph refGraph
+	// clusterPkgs are the import paths of pkg/cluster and of every package
+	// under it, each type-checked from its source.
+	clusterPkgs []string
+	// funcPositions maps the function keys of those packages to their
+	// funcPos ("file:line", file by base name, unique across the tree), the
+	// key serviceAccountRequestsIn uses.
 	funcPositions map[string]string
 }
 
@@ -311,24 +316,34 @@ var (
 func loadProfileGraph(t *testing.T) *profileGraph {
 	t.Helper()
 	profileGraphOnce.Do(func() {
-		clusterTP := typeCheck(t, clusterPkg, ".")
-		apiTP := typeCheck(t, apiPkg, "../api")
-		mainTP := typeCheck(t, "main", "../..", "main.go")
 		g := refGraph{}
-		g.addPackage(clusterTP)
-		g.addPackage(apiTP)
-		g.addPackage(mainTP)
 		positions := map[string]string{}
-		for name, f := range clusterTP.files {
-			for _, decl := range f.Decls {
-				if d, ok := decl.(*ast.FuncDecl); ok {
-					if fn, _ := clusterTP.info.Defs[d.Name].(*types.Func); fn != nil {
-						positions[funcKey(fn)] = fmt.Sprintf("%s:%d", name, clusterTP.fset.Position(d.Pos()).Line)
+		var pkgs []string
+		dirs := clusterSourceDirs(t)
+		names := make([]string, 0, len(dirs))
+		for dir := range dirs {
+			names = append(names, dir)
+		}
+		sort.Strings(names)
+		for _, dir := range names {
+			path := clusterImportPath(dir)
+			tp := typeCheck(t, path, dir)
+			g.addPackage(tp)
+			pkgs = append(pkgs, path)
+			// The positions of this directory's functions.
+			for name, f := range tp.files {
+				for _, decl := range f.Decls {
+					if d, ok := decl.(*ast.FuncDecl); ok {
+						if fn, _ := tp.info.Defs[d.Name].(*types.Func); fn != nil {
+							positions[funcKey(fn)] = fmt.Sprintf("%s:%d", name, tp.fset.Position(d.Pos()).Line)
+						}
 					}
 				}
 			}
 		}
-		profileGraphVal = &profileGraph{graph: g, cluster: clusterTP, funcPositions: positions}
+		g.addPackage(typeCheck(t, apiPkg, "../api"))
+		g.addPackage(typeCheck(t, "main", "../..", "main.go"))
+		profileGraphVal = &profileGraph{graph: g, clusterPkgs: pkgs, funcPositions: positions}
 	})
 	if profileGraphVal == nil {
 		t.Fatal("the reference graph could not be built")
@@ -338,7 +353,7 @@ func loadProfileGraph(t *testing.T) *profileGraph {
 
 func (pg *profileGraph) roots() []string {
 	roots := []string{"main.main"}
-	for _, p := range []string{"main", apiPkg, clusterPkg} {
+	for _, p := range append([]string{"main", apiPkg}, pg.clusterPkgs...) {
 		roots = append(roots, p+".init")
 	}
 	return roots
@@ -356,7 +371,7 @@ func (pg *profileGraph) fullReach() map[string]bool {
 	return pg.graph.reach(pg.roots(), nil)
 }
 
-// clusterFuncs turns a reach into the funcPos set of this package.
+// clusterFuncs turns a reach into the funcPos set of the cluster packages.
 func (pg *profileGraph) clusterFuncs(reach map[string]bool) map[string]bool {
 	out := map[string]bool{}
 	for key, pos := range pg.funcPositions {
