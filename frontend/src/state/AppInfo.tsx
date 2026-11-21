@@ -47,10 +47,14 @@ export interface DashboardOverrideValue {
   /**
    * For a page that polls GET /api/dashboard/state itself (Dashboard Dev):
    * while it is mounted (watch() until its cleanup), the app does not poll
-   * the same endpoint, and report() takes the page's answers instead.
+   * the same endpoint, and report() takes the page's answers instead. The
+   * page calls beginRead() just before each read and reports its answer with
+   * that number: of the page's and the app's reads, the one that started
+   * last wins, whatever order the answers arrive in.
    */
   watch: () => () => void;
-  report: (result: DashboardState | ApiError) => void;
+  beginRead: () => number;
+  report: (read: number, result: DashboardState | ApiError) => void;
 }
 
 /** The override in a dashboard-state response, including a 404 dashboard_not_deployed body. */
@@ -205,8 +209,21 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
       setOverrideLoaded(true);
     }
   }, []);
+  // Every read of the endpoint, the app's and a page's (beginRead), gets a
+  // number when it starts. An answer is applied only when its read started
+  // after the one last applied: a later read describes the cluster later.
+  const dashboardReads = useRef({ started: 0, applied: 0, ownInFlight: 0 });
+  const beginDashboardRead = useCallback(() => ++dashboardReads.current.started, []);
+  const applyInOrder = useCallback((read: number, result: DashboardState | ApiError) => {
+    // A read that could not tell (undefined) changes nothing, not even the order.
+    if (read <= dashboardReads.current.applied || overrideFromDashboardResponse(result) === undefined) return;
+    dashboardReads.current.applied = read;
+    applyDashboardState(result);
+  }, [applyDashboardState]);
   const loadOverride = useCallback(async () => {
     const ticket = overrideRequest.start();
+    const read = beginDashboardRead();
+    dashboardReads.current.ownInFlight = read;
     let result: DashboardState | ApiError;
     try {
       result = await fetchers.current.fetchDashboardState(ticket.signal);
@@ -214,19 +231,25 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
       result = toApiError(e);
     }
     if (!ticket.isLatest()) return;
-    applyDashboardState(result);
-  }, [overrideRequest, applyDashboardState]);
+    dashboardReads.current.ownInFlight = 0;
+    applyInOrder(read, result);
+  }, [overrideRequest, beginDashboardRead, applyInOrder]);
   // A page that polls the same endpoint (Dashboard Dev) is the source while it is open.
   const [pageReaders, setPageReaders] = useState(0);
   const watchDashboardState = useCallback(() => {
     setPageReaders((n) => n + 1);
     return () => setPageReaders((n) => n - 1);
   }, []);
-  const reportDashboardState = useCallback((result: DashboardState | ApiError) => {
-    // The page's answer is newer than a read of ours still in flight.
-    overrideRequest.cancel();
-    applyDashboardState(result);
-  }, [overrideRequest, applyDashboardState]);
+  const reportDashboardState = useCallback((read: number, result: DashboardState | ApiError) => {
+    // A read of ours in flight that started before the page's is outdated by
+    // this answer; one that started after it is newer and goes on.
+    const own = dashboardReads.current.ownInFlight;
+    if (own && own < read) {
+      overrideRequest.cancel();
+      dashboardReads.current.ownInFlight = 0;
+    }
+    applyInOrder(read, result);
+  }, [overrideRequest, applyInOrder]);
   // Dashboard Dev does not exist in the gitops profile (403 profile_gitops),
   // and only cluster-admins read it (403 admin_only for the others).
   const mayReadOverride = versionSettled && !gitOpsProfile && role === "admin";
@@ -249,8 +272,8 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
     version,
     profile: !versionSettled ? null : gitOpsProfile ? "gitops" : "full",
     update,
-    dashboard: { override, loaded: overrideLoaded, refresh: refreshOverride, watch: watchDashboardState, report: reportDashboardState },
-  }), [version, versionSettled, gitOpsProfile, update, override, overrideLoaded, refreshOverride, watchDashboardState, reportDashboardState]);
+    dashboard: { override, loaded: overrideLoaded, refresh: refreshOverride, watch: watchDashboardState, beginRead: beginDashboardRead, report: reportDashboardState },
+  }), [version, versionSettled, gitOpsProfile, update, override, overrideLoaded, refreshOverride, watchDashboardState, beginDashboardRead, reportDashboardState]);
 
   return <AppInfoContext.Provider value={value}>{children}</AppInfoContext.Provider>;
 };

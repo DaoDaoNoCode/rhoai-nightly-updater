@@ -119,7 +119,7 @@ export const DashboardDevPage: React.FC = () => {
   // operation lock (R4b c, N1).
   const blocker = useMutationBlocker();
   const onBusy = useClusterBusyHandler();
-  const { refresh: refreshOverride, watch: watchDashboardState, report: reportDashboardState } = useDashboardOverride();
+  const { refresh: refreshOverride, watch: watchDashboardState, beginRead: beginDashboardRead, report: reportDashboardState } = useDashboardOverride();
   // This page polls GET /api/dashboard/state more often than the app does:
   // the app takes this page's answers instead of reading it too.
   useEffect(() => watchDashboardState(), [watchDashboardState]);
@@ -147,19 +147,20 @@ export const DashboardDevPage: React.FC = () => {
 
   const fetchState = useCallback(async (background = false) => {
     const ticket = stateRequest.start();
+    const read = beginDashboardRead();
     inFlight.current++;
     if (!background) setLoading(true);
     try {
       const s = await getDashboardState(ticket.signal);
       if (!ticket.isLatest()) return;
-      reportDashboardState(s);
+      reportDashboardState(read, s);
       setDashState(s);
       setError(null);
       setLastRefreshed(new Date());
     } catch (e) {
       if (!ticket.isLatest()) return;
       const err = toApiError(e, "Could not load the dashboard state");
-      reportDashboardState(err);
+      reportDashboardState(read, err);
       setError(err);
       // "Not deployed" is a state: drop the old data. Other errors keep it (shown as stale).
       if (isNotDeployed(err)) setDashState(null);
@@ -167,7 +168,7 @@ export const DashboardDevPage: React.FC = () => {
       inFlight.current--;
       if (ticket.isLatest()) setLoading(false);
     }
-  }, [stateRequest, reportDashboardState]);
+  }, [stateRequest, beginDashboardRead, reportDashboardState]);
 
   useEffect(() => { void fetchState(); }, [fetchState]);
 
