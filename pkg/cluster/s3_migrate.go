@@ -170,9 +170,7 @@ func migrationCopied(c *Client) (bool, error) {
 // recordMigrationCopied sets migrationCopiedAnnotation (a merge patch of
 // one annotation: setup's server-side apply owns the rest of the Secret).
 func recordMigrationCopied(c *Client) error {
-	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{migrationCopiedAnnotation: clk.Now().UTC().Format(time.RFC3339)}}})
-	_, _, err := c.patch(namespacedPath("v1", "secrets", s3Namespace, s3Secret), patch)
-	return err
+	return c.patchJSON(namespacedPath("v1", "secrets", s3Namespace, s3Secret), map[string]any{"metadata": map[string]any{"annotations": map[string]string{migrationCopiedAnnotation: clk.Now().UTC().Format(time.RFC3339)}}})
 }
 
 // rcloneImage returns the copy Job's image, overridable with RCLONE_IMAGE
@@ -423,15 +421,14 @@ func (m *migrateRun) fail(id, msg, code, activity string) (*types.OperationRespo
 // readLegacyKeys reads the old storage's keys from minio-secret.
 func readLegacyKeys(c *Client) (s3Keys, error) {
 	path, _ := legacyGetPath("Secret", legacySecret)
-	body, _, err := c.get(path)
-	if err != nil {
-		return s3Keys{}, fmt.Errorf("read Secret %s/%s: %w", legacyNamespace, legacySecret, err)
-	}
 	var secret struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &secret); err != nil {
-		return s3Keys{}, fmt.Errorf("parse Secret %s/%s: %w", legacyNamespace, legacySecret, err)
+	if err := c.getInto(path, &secret); err != nil {
+		if isDecodeError(err) {
+			return s3Keys{}, fmt.Errorf("parse Secret %s/%s: %w", legacyNamespace, legacySecret, err)
+		}
+		return s3Keys{}, fmt.Errorf("read Secret %s/%s: %w", legacyNamespace, legacySecret, err)
 	}
 	keys := s3Keys{AccessKey: decodeBase64Field(secret.Data[legacyAccessKeyField]), SecretKey: decodeBase64Field(secret.Data[legacySecretKeyField])}
 	if keys.AccessKey == "" || keys.SecretKey == "" {
@@ -668,7 +665,7 @@ func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, oldK
 				m.step(step, "running", "A copy an earlier run started with other settings is still running: stopping it")
 			}
 			if !job.Meta.terminating() {
-				if _, err := deleteWithUIDPropagation(c, migrateJobPath(), job.Meta.UID, policy); err != nil && !IsK8sError(err, 404) {
+				if _, err := deleteWithUIDPropagation(c, migrateJobPath(), job.Meta.UID, policy); err != nil && !isK8sNotFound(err) {
 					return fail(fmt.Sprintf("Cannot delete the Job %s/%s of an earlier run: %v.%s", s3Namespace, migrateJobName, err, templateHint(err)), errorCodeFromK8sErr(err), "old job delete failed")
 				}
 			}
@@ -756,7 +753,7 @@ func writeMigrateSource(c *Client, keys s3Keys) error {
 		if !meta.hasToolLabel() {
 			return fmt.Errorf("it exists and was not created by this tool")
 		}
-		if _, err := deleteWithUID(c, migrateSourcePath(), meta.UID); err != nil && !IsK8sError(err, 404) {
+		if _, err := deleteWithUID(c, migrateSourcePath(), meta.UID); err != nil && !isK8sNotFound(err) {
 			return fmt.Errorf("delete an earlier run's copy: %w", err)
 		}
 	}
@@ -782,18 +779,16 @@ func ownMigrateSource(c *Client, jobUID string) error {
 	if !found || !meta.hasToolLabel() {
 		return fmt.Errorf("secret %s/%s is gone or not this tool's", s3Namespace, migrateSourceSecret)
 	}
-	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{
+	return c.patchJSON(migrateSourcePath(), map[string]any{"metadata": map[string]any{
 		"resourceVersion": meta.ResourceVersion,
 		"ownerReferences": []any{map[string]any{"apiVersion": "batch/v1", "kind": "Job", "name": migrateJobName, "uid": jobUID}},
 	}})
-	_, _, err = c.patch(migrateSourcePath(), patch)
-	return err
 }
 
 // deleteMigrateJob deletes the copy Job by UID; its pod goes with it
 // (background propagation).
 func (m *migrateRun) deleteMigrateJob(job migrateJobInfo) {
-	if _, err := deleteWithUID(m.c, migrateJobPath(), job.Meta.UID); err != nil && !IsK8sError(err, 404) {
+	if _, err := deleteWithUID(m.c, migrateJobPath(), job.Meta.UID); err != nil && !isK8sNotFound(err) {
 		m.logs = append(m.logs, fmt.Sprintf("Warning: cannot delete Job %s/%s: %v (it removes itself a day after it finished)", s3Namespace, migrateJobName, err))
 		return
 	}
@@ -891,12 +886,12 @@ func parseMigrateJob(body []byte) (migrateJobInfo, error) {
 }
 
 func readMigrateJob(c *Client) (migrateJobInfo, bool, error) {
-	body, _, err := c.get(migrateJobPath())
-	if IsK8sError(err, 404) {
-		return migrateJobInfo{}, false, nil
-	}
+	body, found, err := c.getOptional(migrateJobPath())
 	if err != nil {
 		return migrateJobInfo{}, false, err
+	}
+	if !found {
+		return migrateJobInfo{}, false, nil
 	}
 	j, err := parseMigrateJob(body)
 	return j, err == nil, err
@@ -1142,7 +1137,7 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 		}
 		if _, err := patchDSPA(p, true); err != nil {
 			code := errorCodeFromK8sErr(err)
-			if IsK8sError(err, http.StatusConflict) {
+			if isK8sConflict(err) {
 				code = "conflict"
 			}
 			return failed(fmt.Sprintf("The API server rejects the change to pipeline server %s: %v. No pipeline server was moved.%s", name, err, templateHint(err)), firstNonEmpty(code, "validation"), "DSPA dry run failed")
@@ -1171,7 +1166,7 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 		body, err := patchDSPA(p, false)
 		if err != nil {
 			code := errorCodeFromK8sErr(err)
-			if IsK8sError(err, http.StatusConflict) {
+			if isK8sConflict(err) {
 				code = "conflict"
 			}
 			return failed(fmt.Sprintf("Cannot move pipeline server %s: %v. Already moved: %s. The old storage is kept; run Migrate storage again.%s", name, err, done, templateHint(err)), code, "DSPA patch failed")
@@ -1346,7 +1341,7 @@ func readCopySource(c *Client, legacy *legacyStorage) (copySource, error) {
 	switch {
 	case err == nil:
 		s.keys, s.keysFound = keys, true
-	case !IsK8sError(err, http.StatusNotFound):
+	case !isK8sNotFound(err):
 		return s, err
 	}
 	switch {
@@ -1568,7 +1563,7 @@ func (m *migrateRun) removeNamespace(requested bool) string {
 		return fmt.Sprintf("Namespace %s is already being deleted.", legacyNamespace)
 	}
 	m.step("namespace", "running", fmt.Sprintf("Deleting namespace %s...", legacyNamespace))
-	if _, err := deleteWithUID(c, "/api/v1/namespaces/"+legacyNamespace, meta.UID); err != nil && !IsK8sError(err, 404) {
+	if _, err := deleteWithUID(c, "/api/v1/namespaces/"+legacyNamespace, meta.UID); err != nil && !isK8sNotFound(err) {
 		// Nothing of the old storage is left, so a retry finds nothing to
 		// remove and is not offered (readLegacyStorage returns nil).
 		return fmt.Sprintf("!The old storage was removed, but namespace %s could not be deleted: %v.%s A retry finds nothing left to remove; delete the namespace with `oc delete project %s` once you have checked it holds nothing else.", legacyNamespace, err, templateHint(err), legacyNamespace)

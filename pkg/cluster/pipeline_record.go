@@ -48,18 +48,18 @@ func (r pipelineRecord) owns(meta objectMeta) bool {
 
 // readPipelineRecord reads the record (empty when nothing is recorded).
 func readPipelineRecord(c *Client) (pipelineRecord, error) {
-	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
-	if IsK8sError(err, http.StatusNotFound) {
-		return pipelineRecord{}, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read this tool's record of its pipeline servers: %w", err)
-	}
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &cm); err != nil {
-		return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
+	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
+		}
+		return nil, fmt.Errorf("read this tool's record of its pipeline servers: %w", err)
+	}
+	if !found {
+		return pipelineRecord{}, nil
 	}
 	rec := pipelineRecord{}
 	if raw := cm.Data[pipelineRecordKey]; raw != "" {

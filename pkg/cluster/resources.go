@@ -166,12 +166,12 @@ func parseObjectMeta(body []byte) (objectMeta, error) {
 // readObjectMeta reads the metadata of the object at path. found is false on
 // 404; any other error is returned.
 func readObjectMeta(c *Client, path string) (meta objectMeta, found bool, err error) {
-	body, _, err := c.get(path)
-	if IsK8sError(err, 404) {
-		return objectMeta{}, false, nil
-	}
+	body, exists, err := c.getOptional(path)
 	if err != nil {
 		return objectMeta{}, false, err
+	}
+	if !exists {
+		return objectMeta{}, false, nil
 	}
 	meta, err = parseObjectMeta(body)
 	return meta, err == nil, err
@@ -267,7 +267,7 @@ func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]a
 				current, found = afterWrite(created, current, found, dryRun)
 				return "created", current, found, nil
 			}
-			if !IsK8sError(postErr, http.StatusConflict) {
+			if !isK8sConflict(postErr) {
 				return "", current, found, postErr
 			}
 			if current, found, err = read(); err != nil {
@@ -283,7 +283,7 @@ func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]a
 		}
 		upgraded, upErr := upgradeToolFieldOwnership(c, path, current)
 		if upErr != nil {
-			if !IsK8sError(upErr, http.StatusConflict) {
+			if !isK8sConflict(upErr) {
 				return "", current, found, fmt.Errorf("upgrade the field ownership of %s to server-side apply: %w", desc, upErr)
 			}
 			if current, found, err = read(); err != nil {
@@ -313,7 +313,7 @@ func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]a
 			current, found = afterWrite(appliedBody, current, found, dryRun)
 			return "updated", current, found, nil
 		}
-		if !IsK8sError(applyErr, http.StatusConflict) {
+		if !isK8sConflict(applyErr) {
 			return "", current, found, applyErr
 		}
 		if current, found, err = read(); err != nil {
@@ -504,7 +504,7 @@ func waitForGone(c *Client, timeout, interval time.Duration, gone func(cc *Clien
 func waitForDeletion(c *Client, path string, timeout, interval time.Duration) (bool, error) {
 	return waitForGone(c, timeout, interval, func(cc *Client) (bool, error) {
 		_, _, err := cc.get(path)
-		if IsK8sError(err, http.StatusNotFound) {
+		if isK8sNotFound(err) {
 			return true, nil
 		}
 		return false, err
@@ -535,32 +535,29 @@ var terminalWaitingReasons = map[string]bool{
 // terminal reasons. An empty Reason means nothing specific was found. When
 // wantImage is set, only pods with a container running that image count.
 func inspectPods(c *Client, namespace, selector, wantImage string) (workloadPodIssue, error) {
-	body, _, err := c.get(namespacedPath("v1", "pods", namespace, "") + "?labelSelector=" + url.QueryEscape(selector))
-	if err != nil {
+	var items []struct {
+		Metadata objectMeta `json:"metadata"`
+		Spec     struct {
+			Containers []struct {
+				Image string `json:"image"`
+			} `json:"containers"`
+		} `json:"spec"`
+		Status struct {
+			Conditions []struct {
+				Type    string `json:"type"`
+				Status  string `json:"status"`
+				Reason  string `json:"reason"`
+				Message string `json:"message"`
+			} `json:"conditions"`
+			InitContainerStatuses []containerStatus `json:"initContainerStatuses"`
+			ContainerStatuses     []containerStatus `json:"containerStatuses"`
+		} `json:"status"`
+	}
+	if err := c.listInto(namespacedPath("v1", "pods", namespace, "")+"?labelSelector="+url.QueryEscape(selector), &items); err != nil {
+		if isDecodeError(err) {
+			return workloadPodIssue{}, fmt.Errorf("parse pod list: %w", err)
+		}
 		return workloadPodIssue{}, err
-	}
-	var list struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-			Spec     struct {
-				Containers []struct {
-					Image string `json:"image"`
-				} `json:"containers"`
-			} `json:"spec"`
-			Status struct {
-				Conditions []struct {
-					Type    string `json:"type"`
-					Status  string `json:"status"`
-					Reason  string `json:"reason"`
-					Message string `json:"message"`
-				} `json:"conditions"`
-				InitContainerStatuses []containerStatus `json:"initContainerStatuses"`
-				ContainerStatuses     []containerStatus `json:"containerStatuses"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return workloadPodIssue{}, fmt.Errorf("parse pod list: %w", err)
 	}
 	var best workloadPodIssue
 	consider := func(p workloadPodIssue) {
@@ -571,7 +568,7 @@ func inspectPods(c *Client, namespace, selector, wantImage string) (workloadPodI
 			best = p
 		}
 	}
-	for _, pod := range list.Items {
+	for _, pod := range items {
 		if pod.Metadata.terminating() {
 			continue
 		}
@@ -802,16 +799,12 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 
 // routeHost returns a route's host, or "" when it cannot be read.
 func routeHost(c *Client, namespace, name string) string {
-	body, _, err := c.get(namespacedPath("route.openshift.io/v1", "routes", namespace, name))
-	if err != nil {
-		return ""
-	}
 	var route struct {
 		Spec struct {
 			Host string `json:"host"`
 		} `json:"spec"`
 	}
-	if json.Unmarshal(body, &route) != nil {
+	if c.getInto(namespacedPath("route.openshift.io/v1", "routes", namespace, name), &route) != nil {
 		return ""
 	}
 	return route.Spec.Host
@@ -820,27 +813,23 @@ func routeHost(c *Client, namespace, name string) string {
 // GetDSProjects returns namespaces with the opendatahub.io/dashboard label.
 func GetDSProjects(c *Client) ([]string, error) {
 	path := "/api/v1/namespaces?labelSelector=opendatahub.io/dashboard=true"
-	body, _, err := c.get(path)
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Status struct {
+			Phase string `json:"phase"`
+		} `json:"status"`
+	}
+	if err := c.listInto(path, &items); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse namespace list: %w", err)
+		}
 		return nil, fmt.Errorf("list DS projects: %w", err)
 	}
 
-	var nsList struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Status struct {
-				Phase string `json:"phase"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &nsList); err != nil {
-		return nil, fmt.Errorf("parse namespace list: %w", err)
-	}
-
 	var projects []string
-	for _, ns := range nsList.Items {
+	for _, ns := range items {
 		if ns.Status.Phase != "Terminating" {
 			projects = append(projects, ns.Metadata.Name)
 		}

@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { NodeSetupDialog } from "./NodeSetupDialog";
 import { ImageMirrorSetup } from "./ImageMirrorSetup";
 import { nightlyStatus, renderWithApp, settleApps } from "../test/providers";
+import { jsonBody } from "../test/utils";
 import type { NodeSetupPlan, StatusResponse } from "../types";
 
 const READY_PLAN: NodeSetupPlan = {
@@ -48,18 +49,19 @@ describe("NodeSetupDialog", () => {
     ]);
     const onChanged = vi.fn();
     renderWithApp(<NodeSetupDialog action="pull-secret-add" onClose={vi.fn()} onChanged={onChanged} />);
+    await settleApps();
     expect(await screen.findByText(/add a quay.io\/rhoai entry with the token saved under Pull secret/)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "What the nodes do" })).toBeInTheDocument();
     expect(screen.getByText(/without draining or rebooting them/)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "How to undo it" })).toBeInTheDocument();
     const planCall = fetchMock.mock.calls.find(([u]) => u === "/api/setup/nodes/plan");
-    expect(JSON.parse(String(planCall?.[1]?.body))).toEqual({ action: "pull-secret-add" });
+    expect(jsonBody(planCall?.[1])).toEqual({ action: "pull-secret-add" });
 
     fireEvent.click(screen.getByRole("button", { name: "Add to the nodes' pull secret" }));
     expect(await screen.findByText("Done")).toBeInTheDocument();
     expect(screen.getAllByText(/Added the quay.io\/rhoai entry to openshift-config\/pull-secret/).length).toBeGreaterThan(0);
     const streamCall = fetchMock.mock.calls.find(([u]) => u === "/api/setup/nodes/stream");
-    expect(JSON.parse(String(streamCall?.[1]?.body))).toEqual({ action: "pull-secret-add", resourceVersion: "42" });
+    expect(jsonBody(streamCall?.[1])).toEqual({ action: "pull-secret-add", resourceVersion: "42" });
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     await settleApps();
   });
@@ -67,6 +69,7 @@ describe("NodeSetupDialog", () => {
   it("explains a refusal and offers no confirm button", async () => {
     stubBackend({ action: "mirror-create", ready: false, state: "", refusalCode: "forbidden", refusal: "The cluster refused it in a dry run: admission webhook \"x.managed.openshift.io\" denied the request. Nothing was changed. Use the instructions under Do it yourself instead." });
     renderWithApp(<NodeSetupDialog action="mirror-create" onClose={vi.fn()} onChanged={vi.fn()} />);
+    await settleApps();
     expect(await screen.findByText("The cluster does not allow this change here")).toBeInTheDocument();
     expect(screen.getByText(/denied the request/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create the image mirror" })).not.toBeInTheDocument();
@@ -81,14 +84,15 @@ describe("NodeSetupDialog", () => {
   ] as const)("titles the %s refusal", async (code, title) => {
     stubBackend({ action: "mirror-create", ready: false, state: "", refusalCode: code, refusal: "Why. Nothing was changed." });
     renderWithApp(<NodeSetupDialog action="mirror-create" onClose={vi.fn()} onChanged={vi.fn()} />);
+    await settleApps();
     expect(await screen.findByText(title)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create the image mirror" })).not.toBeInTheDocument();
-    await settleApps();
   });
 
   it("says when there is nothing to change", async () => {
     stubBackend({ action: "mirror-create", ready: false, nothingToDo: true, state: "ImageDigestMirrorSet team-mirrors already redirects registry.redhat.io/rhoai, so the mirror is set up." });
     renderWithApp(<NodeSetupDialog action="mirror-create" onClose={vi.fn()} onChanged={vi.fn()} />);
+    await settleApps();
     expect(await screen.findByText("Nothing to change")).toBeInTheDocument();
     expect(screen.getByText(/team-mirrors already redirects/)).toBeInTheDocument();
     await settleApps();
@@ -107,7 +111,7 @@ describe("NodeSetupDialog", () => {
     };
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url === "/api/setup/nodes/plan") {
-        const body = JSON.parse(String(init?.body));
+        const body = jsonBody(init);
         return new Response(JSON.stringify(body.replaceExisting ? replacing : refused), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       if (url === "/api/setup/nodes/stream") return sse({ step: "operation_complete", status: "success", message: "Replaced." });
@@ -116,6 +120,7 @@ describe("NodeSetupDialog", () => {
     vi.stubGlobal("fetch", fetchMock);
     const onCheck = vi.fn();
     renderWithApp(<NodeSetupDialog action="pull-secret-add" onClose={vi.fn()} onChanged={vi.fn()} onCheck={onCheck} />);
+    await settleApps();
     expect(await screen.findByText("An entry this tool did not add is already there")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add to the nodes' pull secret" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Check that the nodes can pull" }));
@@ -127,12 +132,12 @@ describe("NodeSetupDialog", () => {
     fireEvent.click(ack);
     const confirm = await screen.findByRole("button", { name: "Replace the entry" });
     expect(confirm).toHaveClass("pf-m-danger");
-    const planCalls = fetchMock.mock.calls.filter(([u]) => u === "/api/setup/nodes/plan").map(([, i]) => JSON.parse(String(i?.body)));
+    const planCalls = fetchMock.mock.calls.filter(([u]) => u === "/api/setup/nodes/plan").map(([, i]) => jsonBody(i));
     expect(planCalls).toEqual([{ action: "pull-secret-add" }, { action: "pull-secret-add", replaceExisting: true }]);
     fireEvent.click(confirm);
     expect(await screen.findByText("Done")).toBeInTheDocument();
     const streamCall = fetchMock.mock.calls.find(([u]) => u === "/api/setup/nodes/stream");
-    expect(JSON.parse(String(streamCall?.[1]?.body))).toEqual({ action: "pull-secret-add", resourceVersion: "42", replaceExisting: true });
+    expect(jsonBody(streamCall?.[1])).toEqual({ action: "pull-secret-add", resourceVersion: "42", replaceExisting: true });
     await settleApps();
   });
 
@@ -140,6 +145,7 @@ describe("NodeSetupDialog", () => {
     stubBackend({ action: "pull-secret-remove", ready: false, state: "", refusalCode: "not_owned", entrySetBy: "other",
       refusal: "The quay.io/rhoai entry in openshift-config/pull-secret was not added by this tool (or was changed since), so it is not removed here (this tool has no record of adding it). Nothing was changed." });
     renderWithApp(<NodeSetupDialog action="pull-secret-remove" onClose={vi.fn()} onChanged={vi.fn()} />);
+    await settleApps();
     expect(await screen.findByText("Not added by this tool")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove from the nodes' pull secret" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
@@ -152,6 +158,7 @@ describe("NodeSetupDialog", () => {
       { step: "operation_complete", status: "failed", errorCode: "conflict", message: "It changed since you reviewed it, so nothing was changed. Review it again." },
     ]);
     renderWithApp(<NodeSetupDialog action="pull-secret-remove" onClose={vi.fn()} onChanged={vi.fn()} />);
+    await settleApps();
     const confirm = await screen.findByRole("button", { name: "Remove from the nodes' pull secret" });
     expect(confirm).toHaveClass("pf-m-danger");
     fireEvent.click(confirm);
@@ -221,6 +228,7 @@ describe("The image mirror row, by control plane", () => {
 
   it("is disabled for a read-only user", async () => {
     renderWithApp(<ImageMirrorSetup status={mirrorStatus("self-managed", MISSING)} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />, { permissions: async () => ({ canMutate: false, user: "viewer" }) });
+    await settleApps();
     await waitFor(() => expect(screen.getByRole("button", { name: "Create the image mirror" })).toHaveAttribute("aria-disabled", "true"));
     await settleApps();
   });
@@ -229,6 +237,7 @@ describe("The image mirror row, by control plane", () => {
     stubBackend({ ...READY_PLAN, action: "mirror-create", changes: ["Create ImageDigestMirrorSet rhoai-quay-mirror (cluster-wide)."] });
     renderWithApp(<ImageMirrorSetup status={mirrorStatus("self-managed", MISSING)} readOnly={false} onShowInstructions={vi.fn()} onStatusRefresh={vi.fn()} />);
     const create = screen.getByRole("button", { name: "Create the image mirror" });
+    await settleApps();
     await waitFor(() => expect(create).not.toHaveAttribute("aria-disabled", "true"));
     fireEvent.click(create);
     const dialog = await screen.findByRole("dialog");

@@ -23,13 +23,6 @@ const maasDocsSamplePriority = 10
 // must never take a key meant for someone else's. It also returns the
 // others' names. The API server validates the value (the publish dry run).
 func maasSubscriptionPriority(c *Client) (int, []string, error) {
-	body, _, err := c.get(namespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""))
-	if IsK8sError(err, 404) {
-		return maasDocsSamplePriority, nil, nil
-	}
-	if err != nil {
-		return 0, nil, err
-	}
 	var list struct {
 		Items []struct {
 			Metadata objectMeta `json:"metadata"`
@@ -38,8 +31,15 @@ func maasSubscriptionPriority(c *Client) (int, []string, error) {
 			} `json:"spec"`
 		} `json:"items"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return 0, nil, fmt.Errorf("parse the MaaSSubscription list: %w", err)
+	found, err := c.getIntoOptional(namespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""), &list)
+	if err != nil {
+		if isDecodeError(err) {
+			return 0, nil, fmt.Errorf("parse the MaaSSubscription list: %w", err)
+		}
+		return 0, nil, err
+	}
+	if !found {
+		return maasDocsSamplePriority, nil, nil
 	}
 	var others []string
 	lowest := 0

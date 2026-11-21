@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -44,25 +43,22 @@ func ListUserDSProjects(u *Client) ([]string, error) {
 	if !u.asUser {
 		return nil, errNotUserClient
 	}
-	body, _, err := u.get("/apis/project.openshift.io/v1/projects?labelSelector=" + url.QueryEscape(dsProjectSelector))
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Status struct {
+			Phase string `json:"phase"`
+		} `json:"status"`
+	}
+	if err := u.listInto("/apis/project.openshift.io/v1/projects?labelSelector="+url.QueryEscape(dsProjectSelector), &items); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse the project list: %w", err)
+		}
 		return nil, fmt.Errorf("list your data science projects: %w", err)
 	}
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Status struct {
-				Phase string `json:"phase"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse the project list: %w", err)
-	}
 	projects := []string{}
-	for _, p := range list.Items {
+	for _, p := range items {
 		if p.Status.Phase != "Terminating" {
 			projects = append(projects, p.Metadata.Name)
 		}
@@ -185,18 +181,18 @@ func listProjectLLMInferenceServices(u *Client, project string) ([]llmisvcObject
 	if !u.asUser {
 		return nil, errNotUserClient
 	}
-	body, _, err := u.get(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, ""))
-	if IsK8sError(err, 404) {
-		return nil, errLLMISvcAPIMissing
-	}
-	if err != nil {
-		return nil, fmt.Errorf("list LLMInferenceServices: %w", err)
-	}
 	var list struct {
 		Items []llmisvcObject `json:"items"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse LLMInferenceServices: %w", err)
+	found, err := u.getIntoOptional(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, ""), &list)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse LLMInferenceServices: %w", err)
+		}
+		return nil, fmt.Errorf("list LLMInferenceServices: %w", err)
+	}
+	if !found {
+		return nil, errLLMISvcAPIMissing
 	}
 	slices.SortFunc(list.Items, func(a, b llmisvcObject) int { return strings.Compare(a.Metadata.Name, b.Metadata.Name) })
 	return list.Items, nil
@@ -209,13 +205,6 @@ func listProjectInferenceServices(u *Client, project string) ([]types.ProjectInf
 		return nil, errNotUserClient
 	}
 	out := []types.ProjectInferenceService{}
-	body, _, err := u.get(namespacedPath("serving.kserve.io/v1beta1", "inferenceservices", project, ""))
-	if IsK8sError(err, 404) {
-		return out, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("list InferenceServices: %w", err)
-	}
 	var list struct {
 		Items []struct {
 			Metadata objectMeta `json:"metadata"`
@@ -225,8 +214,15 @@ func listProjectInferenceServices(u *Client, project string) ([]types.ProjectInf
 			} `json:"status"`
 		} `json:"items"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse InferenceServices: %w", err)
+	found, err := u.getIntoOptional(namespacedPath("serving.kserve.io/v1beta1", "inferenceservices", project, ""), &list)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse InferenceServices: %w", err)
+		}
+		return nil, fmt.Errorf("list InferenceServices: %w", err)
+	}
+	if !found {
+		return out, nil
 	}
 	for _, it := range list.Items {
 		s := types.ProjectInferenceService{Name: it.Metadata.Name, Terminating: it.Metadata.terminating()}

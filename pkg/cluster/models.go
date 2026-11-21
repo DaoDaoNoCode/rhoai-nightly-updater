@@ -258,18 +258,18 @@ func (m llmisvcObject) mainImage() string {
 }
 
 func listLLMInferenceServices(c *Client) ([]llmisvcObject, error) {
-	body, _, err := c.get(clusterPath("serving.kserve.io/v1alpha2", "llminferenceservices", ""))
-	if IsK8sError(err, 404) {
-		return nil, errLLMISvcAPIMissing
-	}
-	if err != nil {
-		return nil, fmt.Errorf("list LLMInferenceServices: %w", err)
-	}
 	var list struct {
 		Items []llmisvcObject `json:"items"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse LLMInferenceServices: %w", err)
+	found, err := c.getIntoOptional(clusterPath("serving.kserve.io/v1alpha2", "llminferenceservices", ""), &list)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse LLMInferenceServices: %w", err)
+		}
+		return nil, fmt.Errorf("list LLMInferenceServices: %w", err)
+	}
+	if !found {
+		return nil, errLLMISvcAPIMissing
 	}
 	return list.Items, nil
 }
@@ -279,16 +279,16 @@ func readToolModel(c *Client, project, name string) (llmisvcObject, bool, error)
 	if !ok {
 		return llmisvcObject{}, false, fmt.Errorf("%s is not a model of this tool's catalog", name)
 	}
-	body, _, err := c.get(path)
-	if IsK8sError(err, 404) {
-		return llmisvcObject{}, false, nil
-	}
+	var m llmisvcObject
+	found, err := c.getIntoOptional(path, &m)
 	if err != nil {
+		if isDecodeError(err) {
+			return llmisvcObject{}, false, fmt.Errorf("parse LLMInferenceService %s/%s: %w", project, name, err)
+		}
 		return llmisvcObject{}, false, err
 	}
-	var m llmisvcObject
-	if err := json.Unmarshal(body, &m); err != nil {
-		return llmisvcObject{}, false, fmt.Errorf("parse LLMInferenceService %s/%s: %w", project, name, err)
+	if !found {
+		return llmisvcObject{}, false, nil
 	}
 	return m, true, nil
 }
@@ -515,12 +515,12 @@ func discoverCPUPreset(c *Client) cpuPreset {
 	if err != nil {
 		return cpuPreset{problem: fmt.Sprintf("Cannot tell which namespace RHOAI's applications (KServe's controller and presets) run in: %v.", err)}
 	}
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", ns, "llmisvc-controller-manager"))
-	if IsK8sError(err, 404) {
-		return cpuPreset{problem: fmt.Sprintf("KServe's LLMInferenceService controller (Deployment %s in %s) is not there: LLM serving is not installed.", llmisvcControllerName, ns)}
-	}
+	body, exists, err := c.getOptional(namespacedPath("apps/v1", "deployments", ns, "llmisvc-controller-manager"))
 	if err != nil {
 		return cpuPreset{problem: fmt.Sprintf("Cannot read Deployment %s/%s: %v.%s", ns, llmisvcControllerName, err, templateHint(err))}
+	}
+	if !exists {
+		return cpuPreset{problem: fmt.Sprintf("KServe's LLMInferenceService controller (Deployment %s in %s) is not there: LLM serving is not installed.", llmisvcControllerName, ns)}
 	}
 	var dep struct {
 		Spec struct {
@@ -551,12 +551,12 @@ func discoverCPUPreset(c *Client) cpuPreset {
 		return cpuPreset{problem: fmt.Sprintf("Deployment %s/%s sets no %s, so the CPU preset's name is unknown on this release.", ns, llmisvcControllerName, llmisvcConfigPrefixEnv)}
 	}
 	name := prefix + cpuPresetSuffix
-	body, _, err = c.get(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceserviceconfigs", ns, name))
-	if IsK8sError(err, 404) {
-		return cpuPreset{name: name, problem: fmt.Sprintf("This RHOAI release has no CPU preset: LLMInferenceServiceConfig %s does not exist in %s.", name, ns)}
-	}
+	body, exists, err = c.getOptional(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceserviceconfigs", ns, name))
 	if err != nil {
 		return cpuPreset{name: name, problem: fmt.Sprintf("Cannot read the CPU preset %s/%s: %v.%s", ns, name, err, templateHint(err))}
+	}
+	if !exists {
+		return cpuPreset{name: name, problem: fmt.Sprintf("This RHOAI release has no CPU preset: LLMInferenceServiceConfig %s does not exist in %s.", name, ns)}
 	}
 	var cfg struct {
 		Spec struct {
@@ -695,21 +695,21 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 // going away, and be a data science project (the dashboard lists models
 // only there). It returns a refusal, or "".
 func projectNamespace(c *Client, project string) (map[string]string, string, string) {
-	body, _, err := c.get("/api/v1/namespaces/" + project)
-	if IsK8sError(err, 404) {
-		return nil, fmt.Sprintf("Project %s does not exist. Choose a data science project, or create one in the dashboard.", project), "validation"
-	}
-	if err != nil {
-		return nil, fmt.Sprintf("Cannot read project %s: %v.", project, err), errorCodeFromK8sErr(err)
-	}
 	var ns struct {
 		Metadata objectMeta `json:"metadata"`
 		Status   struct {
 			Phase string `json:"phase"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &ns); err != nil {
-		return nil, fmt.Sprintf("Cannot parse project %s: %v.", project, err), "internal"
+	found, err := c.getIntoOptional("/api/v1/namespaces/"+project, &ns)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Sprintf("Cannot parse project %s: %v.", project, err), "internal"
+		}
+		return nil, fmt.Sprintf("Cannot read project %s: %v.", project, err), errorCodeFromK8sErr(err)
+	}
+	if !found {
+		return nil, fmt.Sprintf("Project %s does not exist. Choose a data science project, or create one in the dashboard.", project), "validation"
 	}
 	if ns.Metadata.terminating() || ns.Status.Phase == "Terminating" {
 		return nil, fmt.Sprintf("Project %s is being deleted.", project), "terminating"
@@ -1398,7 +1398,7 @@ func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 		// Its UID is what makes it the tool's (models_record.go). A model
 		// that cannot be recorded would be nobody's: it is deleted again.
 		if recErr := recordModel(c, meta); recErr != nil {
-			if _, delErr := deleteWithUID(c, path, meta.UID); delErr != nil && !IsK8sError(delErr, 404) {
+			if _, delErr := deleteWithUID(c, path, meta.UID); delErr != nil && !isK8sNotFound(delErr) {
 				return fmt.Sprintf("%s was created, but this tool could not record it (%v) nor delete it again (%v). Delete it yourself (oc delete llminferenceservice %s -n %s), then set up again.", desc, recErr, delErr, p.entry.Name, p.project), errorCodeFromK8sErr(recErr)
 			}
 			return fmt.Sprintf("%s was created, but this tool could not record it as its own (%v), so it was deleted again. Set up again to retry.", desc, recErr), firstNonEmpty(errorCodeFromK8sErr(recErr), "internal")
@@ -1413,7 +1413,7 @@ func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 	switch {
 	case errors.As(err, &foreign):
 		code = "not_managed"
-	case errors.Is(err, errObjectChanged) || IsK8sError(err, 409):
+	case errors.Is(err, errObjectChanged) || isK8sConflict(err):
 		code = "conflict"
 	}
 	if dryRun {
@@ -1439,7 +1439,7 @@ func (m *modelsRun) applyToken(p *modelPlan) (string, string) {
 	}
 	if err := recordTokenSecret(c, p.project, p.entry.Name, secretUID); err != nil {
 		path := tokenSecretPathOf(p.project, p.entry.Name)
-		if _, delErr := deleteWithUID(c, path, secretUID); delErr != nil && !IsK8sError(delErr, 404) {
+		if _, delErr := deleteWithUID(c, path, secretUID); delErr != nil && !isK8sNotFound(delErr) {
 			slog.Warn("cannot delete the unrecorded token Secret; garbage collection removes it with the model", "error", delErr)
 		}
 		return fmt.Sprintf("Secret %s/%s was created, but this tool could not record it (%v), so it was deleted again. Set up again to retry.", p.project, tokenSecretName(p.entry.Name), err), firstNonEmpty(errorCodeFromK8sErr(err), "internal")
@@ -1505,9 +1505,9 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 		if !model.Metadata.terminating() {
 			logs = append(logs, deleteModelToken(c, project, entry.Name, model.Metadata.UID, rec[modelRecordKey(project, entry.Name)].TokenSecretUID)...)
 			logs = append(logs, fmt.Sprintf("Deleting LLMInferenceService %s/%s...", project, entry.Name))
-			if _, err := deleteWithUID(c, path, model.Metadata.UID); err != nil && !IsK8sError(err, 404) {
+			if _, err := deleteWithUID(c, path, model.Metadata.UID); err != nil && !isK8sNotFound(err) {
 				code := errorCodeFromK8sErr(err)
-				if IsK8sError(err, 409) {
+				if isK8sConflict(err) {
 					code = "conflict"
 				}
 				return fail(fmt.Sprintf("Failed to delete LLMInferenceService %s/%s: %v.%s", project, entry.Name, err, templateHint(err)), code, "delete failed")
@@ -1804,37 +1804,34 @@ func (w modelWorkload) current(p modelPod) bool {
 // readModelWorkload reads the model's workload Deployments.
 func readModelWorkload(c *Client, project, name string) (modelWorkload, error) {
 	q := url.Values{"labelSelector": {modelPodSelector(name)}}
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", project, "") + "?" + q.Encode())
-	if err != nil {
+	var items []struct {
+		Metadata objectMeta `json:"metadata"`
+		Spec     struct {
+			Replicas *int32 `json:"replicas"`
+			Template struct {
+				Spec struct {
+					Containers []modelContainerSpec `json:"containers"`
+				} `json:"spec"`
+			} `json:"template"`
+		} `json:"spec"`
+		Status struct {
+			ObservedGeneration int64 `json:"observedGeneration"`
+			Replicas           int32 `json:"replicas"`
+			UpdatedReplicas    int32 `json:"updatedReplicas"`
+			AvailableReplicas  int32 `json:"availableReplicas"`
+		} `json:"status"`
+	}
+	if err := c.listInto(namespacedPath("apps/v1", "deployments", project, "")+"?"+q.Encode(), &items); err != nil {
+		if isDecodeError(err) {
+			return modelWorkload{}, fmt.Errorf("parse the model's Deployments: %w", err)
+		}
 		return modelWorkload{}, err
 	}
-	var list struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-			Spec     struct {
-				Replicas *int32 `json:"replicas"`
-				Template struct {
-					Spec struct {
-						Containers []modelContainerSpec `json:"containers"`
-					} `json:"spec"`
-				} `json:"template"`
-			} `json:"spec"`
-			Status struct {
-				ObservedGeneration int64 `json:"observedGeneration"`
-				Replicas           int32 `json:"replicas"`
-				UpdatedReplicas    int32 `json:"updatedReplicas"`
-				AvailableReplicas  int32 `json:"availableReplicas"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return modelWorkload{}, fmt.Errorf("parse the model's Deployments: %w", err)
-	}
-	if len(list.Items) == 0 {
+	if len(items) == 0 {
 		return modelWorkload{message: "Waiting for KServe to create the model's Deployment..."}, nil
 	}
 	w := modelWorkload{observed: true, rolledOut: true, images: map[string]bool{}}
-	for _, d := range list.Items {
+	for _, d := range items {
 		want := int32(1)
 		if d.Spec.Replicas != nil {
 			want = *d.Spec.Replicas

@@ -210,9 +210,9 @@ func readServed(c *Client, group, pathFmt string, named bool, query url.Values, 
 	for _, version := range versions.Versions {
 		body, _, err := c.do(http.MethodGet, fmt.Sprintf(pathFmt, version), "", nil, query)
 		switch {
-		case IsK8sError(err, http.StatusNotFound) && named && versions.Discovered:
+		case isK8sNotFound(err) && named && versions.Discovered:
 			return out, err // the version is served, so the object does not exist
-		case IsK8sError(err, http.StatusNotFound):
+		case isK8sNotFound(err):
 			notFound = err // the version is not served
 			continue
 		case isConversionWebhookError(err):

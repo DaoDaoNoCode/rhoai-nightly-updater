@@ -28,11 +28,11 @@ func stubMaaSGroups(t *testing.T) *[][]string {
 	return &calls
 }
 
-func getMaaSGroups(query, token string) *httptest.ResponseRecorder {
+func getMaaSGroups(t testing.TB, query, token string) *httptest.ResponseRecorder {
 	mux := http.NewServeMux()
 	Register(mux)
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSONMethod(http.MethodGet, "/api/resources/maas/groups"+query, token, ""))
+	mux.ServeHTTP(w, postJSONMethod(t, http.MethodGet, "/api/resources/maas/groups"+query, token, ""))
 	return w
 }
 
@@ -41,7 +41,7 @@ func TestMaaSGroups(t *testing.T) {
 		setupDevMode(t)
 		allowMutations(t)
 		calls := stubMaaSGroups(t)
-		w := getMaaSGroups("?name=nobody-yet&name=%2Fadmins", "user:admin")
+		w := getMaaSGroups(t, "?name=nobody-yet&name=%2Fadmins", "user:admin")
 		if w.Code != http.StatusOK {
 			t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 		}
@@ -58,7 +58,7 @@ func TestMaaSGroups(t *testing.T) {
 		setupDevMode(t)
 		mutationPermission = func(context.Context, string) (bool, error) { return false, nil }
 		calls := stubMaaSGroups(t)
-		w := getMaaSGroups("?name=ml-team", "user:reader")
+		w := getMaaSGroups(t, "?name=ml-team", "user:reader")
 		if body := decodeError(t, w); w.Code != http.StatusForbidden || body["errorCode"] != adminOnlyCode || len(*calls) != 0 {
 			t.Fatalf("status=%d calls=%v body=%s", w.Code, *calls, w.Body.String())
 		}
@@ -73,7 +73,7 @@ func TestMaaSGroups(t *testing.T) {
 			many += "&name=g"
 		}
 		for _, q := range []string{"", "?" + many[1:], "?name=system:authenticated"} {
-			w := getMaaSGroups(q, "user:admin")
+			w := getMaaSGroups(t, q, "user:admin")
 			if body := decodeError(t, w); w.Code != http.StatusBadRequest || body["errorCode"] != "validation" {
 				t.Errorf("%q: status=%d body=%s", q, w.Code, w.Body.String())
 			}

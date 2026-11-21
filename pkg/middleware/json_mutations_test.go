@@ -27,7 +27,7 @@ func TestRequireJSONForMutations(t *testing.T) {
 	for _, tc := range cases {
 		called := false
 		h := RequireJSONForMutations(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
-		r := httptest.NewRequest(tc.method, tc.path, nil)
+		r := httptest.NewRequestWithContext(t.Context(), tc.method, tc.path, nil)
 		if tc.contentType != "" {
 			r.Header.Set("Content-Type", tc.contentType)
 		}

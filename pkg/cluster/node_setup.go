@@ -318,17 +318,14 @@ func (m idmsItem) isSetupMirror() bool {
 }
 
 func listIDMS(c *Client) ([]idmsItem, error) {
-	body, _, err := c.get(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""))
-	if err != nil {
+	var items []idmsItem
+	if err := c.listInto(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""), &items); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse ImageDigestMirrorSets: %w", err)
+		}
 		return nil, err
 	}
-	var list struct {
-		Items []idmsItem `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse ImageDigestMirrorSets: %w", err)
-	}
-	return list.Items, nil
+	return items, nil
 }
 
 // prepareMirrorCreate decides Create the image mirror from every mirror
@@ -446,14 +443,14 @@ func prepareMirrorRemove(c *Client, w *nodeSetupWork) {
 	w.plan.NodeImpact, w.plan.Undo = mirrorRemoveImpactFor(remaining, others)
 	w.done = "Deleted ImageDigestMirrorSet " + MirrorName + "."
 	w.verify = func(c *Client) error {
-		_, _, err := c.get(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName))
-		if IsK8sError(err, http.StatusNotFound) {
-			return nil
+		_, found, err := c.getOptional(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName))
+		if err != nil {
+			return err
 		}
-		if err == nil {
+		if found {
 			return errors.New("it is still there")
 		}
-		return err
+		return nil
 	}
 }
 
@@ -462,12 +459,12 @@ func prepareMirrorRemove(c *Client, w *nodeSetupWork) {
 // and its Quay lookups use), padded as CRI-O needs it; "" with the reason
 // when there is none.
 func updaterQuayToken(c *Client) (string, string, string) {
-	body, _, err := c.get(namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret"))
+	body, found, err := c.getOptional(namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret"))
 	if err != nil {
-		if IsK8sError(err, http.StatusNotFound) {
-			return "", "no_token", "The updater has no quay.io/rhoai token yet: save it under Pull secret first. Nothing was changed."
-		}
 		return "", refusalCodeFor(err), "Cannot read the updater's token in kube-system/additional-pull-secret: " + err.Error() + ". Nothing was changed."
+	}
+	if !found {
+		return "", "no_token", "The updater has no quay.io/rhoai token yet: save it under Pull secret first. Nothing was changed."
 	}
 	cfg, problem := decodeDockerConfigSecret(body)
 	if problem != "" {
@@ -878,31 +875,25 @@ func writeRefusal(w *nodeSetupWork, err error, dryRun bool) string {
 // take a change until someone acts: paused, or Degraded. Read with the
 // user's token; an unreadable list names none.
 func stuckMachineConfigPools(c *Client) []string {
-	body, _, err := c.get(clusterPath("machineconfiguration.openshift.io/v1", "machineconfigpools", ""))
-	if err != nil {
-		return nil
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Spec struct {
+			Paused bool `json:"paused"`
+		} `json:"spec"`
+		Status struct {
+			Conditions []struct {
+				Type   string `json:"type"`
+				Status string `json:"status"`
+			} `json:"conditions"`
+		} `json:"status"`
 	}
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Spec struct {
-				Paused bool `json:"paused"`
-			} `json:"spec"`
-			Status struct {
-				Conditions []struct {
-					Type   string `json:"type"`
-					Status string `json:"status"`
-				} `json:"conditions"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if json.Unmarshal(body, &list) != nil {
+	if c.listInto(clusterPath("machineconfiguration.openshift.io/v1", "machineconfigpools", ""), &items) != nil {
 		return nil
 	}
 	var out []string
-	for _, p := range list.Items {
+	for _, p := range items {
 		degraded := false
 		for _, cond := range p.Status.Conditions {
 			if cond.Type == "Degraded" && cond.Status == "True" {

@@ -3,9 +3,12 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -189,6 +192,14 @@ func serveToggleDSC(f *fakeAPI, version, dsc, patchBody string, components ...st
 	}
 	meta, _ := obj["metadata"].(map[string]any)
 	name, _ := meta["name"].(string)
+	// The API server sets a uid and a resourceVersion on every object, and
+	// moves the resourceVersion on every write.
+	if meta["uid"] == nil {
+		meta["uid"] = "uid-" + name
+	}
+	if meta["resourceVersion"] == nil {
+		meta["resourceVersion"] = "1"
+	}
 	var mu sync.Mutex
 	current := func() string {
 		raw, _ := json.Marshal(obj)
@@ -217,15 +228,31 @@ func serveToggleDSC(f *fakeAPI, version, dsc, patchBody string, components ...st
 			return 400, `{"kind":"Status","status":"Failure","code":400}`
 		}
 		next, err := applyJSONPatch(obj, ops)
+		if _, ok := errors.AsType[*errJSONPatchTest](err); ok {
+			return 422, apiServerPatchTestFailed
+		}
 		if err != nil {
 			return 422, `{"kind":"Status","status":"Failure","code":422,"message":"` + err.Error() + `"}`
 		}
 		if r.URL.Query().Get("dryRun") != "All" {
+			bumpResourceVersion(next)
 			obj = next
 		}
 		raw, _ := json.Marshal(next)
 		return 200, string(raw)
 	})
+}
+
+// bumpResourceVersion moves an object's resourceVersion, as the API
+// server does on every write.
+func bumpResourceVersion(obj map[string]any) {
+	m, _ := obj["metadata"].(map[string]any)
+	if m == nil {
+		m = map[string]any{}
+		obj["metadata"] = m
+	}
+	n, _ := strconv.Atoi(fmt.Sprint(m["resourceVersion"]))
+	m["resourceVersion"] = strconv.Itoa(n + 1)
 }
 
 // realWrites are the writes that are not server-side dry runs.

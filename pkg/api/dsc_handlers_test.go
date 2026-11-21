@@ -64,7 +64,7 @@ func TestDSCChangeRoutesValidateTheirRequest(t *testing.T) {
 		{"/api/components/dsc/hard-reset/finish", `{"name":"default-dsc","token":"` + token + `"}`, http.StatusOK},
 	} {
 		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, postJSON(tc.path, "user:admin", tc.body))
+		mux.ServeHTTP(w, postJSON(t, tc.path, "user:admin", tc.body))
 		if w.Code != tc.want {
 			t.Errorf("%s %s: %d %s", tc.path, tc.body, w.Code, w.Body.String())
 		}
@@ -107,7 +107,7 @@ func TestDSCHardResetGuardGetsTheSignedInUsersClient(t *testing.T) {
 		reset = c
 		return &types.OperationResponse{Success: true}, nil
 	}
-	r := httptest.NewRequest(http.MethodGet, "/api/components/dsc/plan?action=hard-reset&keepEnabled=true", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/components/dsc/plan?action=hard-reset&keepEnabled=true", nil)
 	r.Header.Set("X-Forwarded-Access-Token", "sha256~admin-token")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, r)
@@ -118,7 +118,7 @@ func TestDSCHardResetGuardGetsTheSignedInUsersClient(t *testing.T) {
 		t.Fatalf("plan client as user %v, signed-in user's client %+v", planned.ActsAsUser(), u)
 	}
 	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSON("/api/components/dsc/hard-reset/stream", "sha256~admin-token",
+	mux.ServeHTTP(w, postJSON(t, "/api/components/dsc/hard-reset/stream", "sha256~admin-token",
 		`{"name":"default-dsc","uid":"u-1","token":"0123456789abcdef01234567","confirm":"default-dsc","keepEnabled":false}`))
 	if reset == nil || !reset.ActsAsUser() || reset.SignedInUser() != reset {
 		t.Fatalf("reset client %+v (%d %s)", reset, w.Code, w.Body.String())
@@ -139,7 +139,7 @@ func TestDSCPlanNeedsClusterAdmin(t *testing.T) {
 		called = true
 		return &types.DSCPlan{}, nil
 	}
-	r := httptest.NewRequest(http.MethodGet, "/api/components/dsc/plan?action=hard-reset&keepEnabled=true", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/components/dsc/plan?action=hard-reset&keepEnabled=true", nil)
 	r.Header.Set("X-Forwarded-Access-Token", "user:reader")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, r)
@@ -152,7 +152,7 @@ func TestDSCPlanNeedsClusterAdmin(t *testing.T) {
 	if w.Code != http.StatusOK || !called {
 		t.Fatalf("admin: %d %s", w.Code, w.Body.String())
 	}
-	r = httptest.NewRequest(http.MethodGet, "/api/components/dsc/plan?action=toggle&path=a/b&to=Managed", nil)
+	r = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/components/dsc/plan?action=toggle&path=a/b&to=Managed", nil)
 	r.Header.Set("X-Forwarded-Access-Token", "user:admin")
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, r)
@@ -190,7 +190,7 @@ func TestDSCResetPlanNeedsKeepEnabled(t *testing.T) {
 		{"action=fix", http.StatusOK},
 		{"action=fix&keepEnabled=true", http.StatusOK},
 	} {
-		r := httptest.NewRequest(http.MethodGet, "/api/components/dsc/plan?"+tc.query, nil)
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/components/dsc/plan?"+tc.query, nil)
 		r.Header.Set("X-Forwarded-Access-Token", "user:admin")
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, r)

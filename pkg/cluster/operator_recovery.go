@@ -2,7 +2,6 @@ package cluster
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -219,7 +218,7 @@ func (r *operatorRecovery) restoreNightlyCatalog(c *Client) []string {
 		}
 		return nil
 	}
-	if _, err := c.delete(catalogPath); err != nil && !IsK8sError(err, 404) {
+	if _, err := c.deleteIfExists(catalogPath); err != nil {
 		return []string{"remove the new CatalogSource: " + err.Error()}
 	}
 	return nil
@@ -271,16 +270,16 @@ func captureOperatorRecovery(c *Client) (*operatorRecovery, error) {
 		{subscriptionPath(), &r.subscription},
 		{namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName), &r.catalog},
 	} {
-		body, _, err := c.get(resource.path)
-		if IsK8sError(err, 404) {
-			continue
-		}
+		var obj map[string]any
+		found, err := c.getIntoOptional(resource.path, &obj)
 		if err != nil {
+			if isDecodeError(err) {
+				return nil, err
+			}
 			return nil, fmt.Errorf("capture operator recovery state: %w", err)
 		}
-		var obj map[string]any
-		if err := json.Unmarshal(body, &obj); err != nil {
-			return nil, err
+		if !found {
+			continue
 		}
 		if obj["spec"] != nil {
 			*resource.target = obj
@@ -522,13 +521,6 @@ type rhoaiCSV struct {
 // listRHOAICSVs lists the RHOAI CSVs (rhods-operator.*, not copied) in the
 // operator namespace. A missing namespace is an empty list.
 func listRHOAICSVs(c *Client) ([]rhoaiCSV, error) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""))
-	if IsK8sError(err, 404) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
 	var list struct {
 		Items []struct {
 			Metadata struct {
@@ -538,8 +530,12 @@ func listRHOAICSVs(c *Client) ([]rhoaiCSV, error) {
 			} `json:"metadata"`
 		} `json:"items"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
+	found, err := c.getIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""), &list)
+	if err != nil {
 		return nil, err
+	}
+	if !found {
+		return nil, nil
 	}
 	var out []rhoaiCSV
 	for _, item := range list.Items {
@@ -601,20 +597,17 @@ func (r *operatorRecovery) attemptCSVsToRemove(c *Client) ([]rhoaiCSV, error) {
 	// Fall back to the CSVs the attempt was seen installing and the ones it
 	// deleted, read one by one for their UIDs.
 	for _, name := range append(append([]string{}, r.attemptCSVs...), r.removedCSVs...) {
-		body, _, getErr := c.get(csvPath(name))
-		if IsK8sError(getErr, 404) {
-			continue
-		}
-		if getErr != nil {
-			return out, err
-		}
 		var obj struct {
 			Metadata struct {
 				UID string `json:"uid"`
 			} `json:"metadata"`
 		}
-		if json.Unmarshal(body, &obj) != nil {
+		found, getErr := c.getIntoOptional(csvPath(name), &obj)
+		if getErr != nil {
 			return out, err
+		}
+		if !found {
+			continue
 		}
 		add(rhoaiCSV{Name: name, UID: obj.Metadata.UID})
 	}
@@ -631,9 +624,9 @@ func deleteCSVByUIDAndWait(c *Client, csv rhoaiCSV) (gone bool, err error) {
 	path := csvPath(csv.Name)
 	if _, err := deleteWithUID(c, path, csv.UID); err != nil {
 		switch {
-		case IsK8sError(err, 404):
+		case isK8sNotFound(err):
 			return true, nil
-		case IsK8sError(err, 409):
+		case isK8sConflict(err):
 			return false, errReplacedMeanwhile
 		default:
 			return false, err
@@ -714,9 +707,9 @@ func deleteSubscriptionWithUID(c *Client, uid string) error {
 	}
 	if _, err := deleteWithUID(c, subscriptionPath(), uid); err != nil {
 		switch {
-		case IsK8sError(err, 404):
+		case isK8sNotFound(err):
 			return nil
-		case IsK8sError(err, 409):
+		case isK8sConflict(err):
 			return errReplacedMeanwhile
 		default:
 			return err

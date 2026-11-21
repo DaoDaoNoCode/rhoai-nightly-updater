@@ -5,7 +5,7 @@ import { useOperatorActions, type OperatorRequest } from "./OperatorActions";
 import { ReinstallPanel, isValidCustomImage } from "./ReinstallPanel";
 import { UpdateConfirmModal } from "./UpdatePanel";
 import { nightlyStatus, renderWithApp, settleApps } from "../test/providers";
-import { jsonResponse, sseEvent } from "../test/utils";
+import { jsonBody, jsonResponse, sseEvent } from "../test/utils";
 
 const IMAGE = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + "b".repeat(64);
 
@@ -16,7 +16,7 @@ function stubStreams(responses: Array<() => Response>) {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/pageview") return jsonResponse({});
     urls.push(url);
-    bodies.push(init?.body ? JSON.parse(String(init.body)) : null);
+    bodies.push(init?.body ? jsonBody(init) : null);
     const next = responses.shift();
     if (!next) throw new Error("unexpected request " + url);
     return next();
@@ -46,6 +46,7 @@ describe("dashboard_dev_active", () => {
     renderWithApp(<Harness request={{ kind: "update", image: IMAGE }} />);
     fireEvent.click(screen.getByText("go"));
 
+    await settleApps();
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Revert Dashboard Dev before the update?")).toBeInTheDocument();
     expect(within(dialog).getByText(/nothing was changed/)).toBeInTheDocument();
@@ -62,6 +63,7 @@ describe("dashboard_dev_active", () => {
     const { bodies } = stubStreams([sse(sseEvent("operation_complete", "failed", "active", { errorCode: "dashboard_dev_active" }))]);
     renderWithApp(<Harness request={{ kind: "refresh" }} />);
     fireEvent.click(screen.getByText("go"));
+    await settleApps();
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Revert Dashboard Dev before the re-deploy?")).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -79,6 +81,7 @@ describe("dashboard_dev_active", () => {
     renderWithApp(<AlreadyReverting />);
     fireEvent.click(screen.getByText("go"));
     // The run's end is announced in the same render that would open the question.
+    await settleApps();
     await waitFor(() => expect(screen.getByTestId("live-region-assertive")).toHaveTextContent("Could not end the Dashboard Dev session"));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await settleApps();
@@ -90,6 +93,7 @@ describe("dashboard_dev_active", () => {
       <UpdateConfirmModal target={{ image: IMAGE, tag: "rhoai-3.6", digest: "sha256:" + "b".repeat(64) }} status={nightlyStatus()} onConfirm={onConfirm} onClose={vi.fn()} />,
       { dashboard: async () => ({ override: { active: true, operatorPaused: true, sessionRecorded: true, mode: "pr", prNumber: 7, startedBy: "bob", stale: false, dashboardDeleting: false } }) as never },
     );
+    await settleApps();
     const button = await screen.findByRole("button", { name: "Revert Dashboard Dev and update" });
     expect(screen.getByText(/PR #7 by bob/)).toBeInTheDocument();
     fireEvent.click(button);
@@ -101,6 +105,7 @@ describe("dashboard_dev_active", () => {
 describe("Update confirmation", () => {
   it("names the target build and lists the backend's real steps with one primary button", async () => {
     renderWithApp(<UpdateConfirmModal target={{ image: IMAGE, tag: "rhoai-3.6", digest: "sha256:" + "b".repeat(64), buildDate: "2026-10-05T21:47:53Z" }} status={nightlyStatus()} onConfirm={vi.fn()} onClose={vi.fn()} />);
+    await settleApps();
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("bbbbbbbbbbbb")).toBeInTheDocument();
     // The steps are collapsed under "What happens (8 steps)", drawn like the progress view.
@@ -116,6 +121,7 @@ describe("Update confirmation", () => {
 
   it("says Update is the usual fix when the CSV is Failed", async () => {
     renderWithApp(<UpdateConfirmModal target={{ image: IMAGE }} status={nightlyStatus({ csv: { name: "rhods-operator.3.6.0", version: "3.6.0", phase: "Failed" } })} onConfirm={vi.fn()} onClose={vi.fn()} />);
+    await settleApps();
     expect(await screen.findByText("The installed operator is Failed.")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Update" })).not.toHaveAttribute("aria-disabled", "true"));
     await settleApps();
@@ -127,6 +133,7 @@ describe("cluster_busy", () => {
     stubStreams([() => jsonResponse({ error: "alice is running \"Update to nightly\". Wait for it to finish.", errorCode: "cluster_busy", operation: { id: "x", type: "update", label: "Update to nightly", user: "alice", startedAt: new Date().toISOString() } }, 409)]);
     renderWithApp(<Harness request={{ kind: "update", image: IMAGE }} />);
     fireEvent.click(screen.getByText("go"));
+    await settleApps();
     expect(await screen.findByText("Cluster busy: your request did not run")).toBeInTheDocument();
     expect(screen.getAllByText(/alice is running "Update to nightly"/).length).toBeGreaterThan(0);
     await settleApps();
@@ -176,6 +183,7 @@ describe("Reinstall downgrades", () => {
     ]);
     renderWithApp(<Harness request={{ kind: "reinstall", targetType: "custom", image: IMAGE, detail: IMAGE }} />);
     fireEvent.click(screen.getByText("go"));
+    await settleApps();
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(message)).toBeInTheDocument();
     const confirm = within(dialog).getByRole("button", { name: "Install the older version" });

@@ -102,12 +102,8 @@ type csvForDefaults struct {
 }
 
 func readCSVForDefaults(c *Client, name string) (*installedOperator, error) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, name))
-	if err != nil {
-		return nil, err
-	}
 	var csv csvForDefaults
-	if err := json.Unmarshal(body, &csv); err != nil {
+	if err := c.getInto(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, name), &csv); err != nil {
 		return nil, err
 	}
 	op := &installedOperator{Name: name, Version: csv.Spec.Version, Phase: csv.Status.Phase, ALMExamples: csv.Metadata.Annotations["alm-examples"],
@@ -148,7 +144,7 @@ func getInstalledOperator(c *Client) (*installedOperator, error) {
 			}
 			return op, nil
 		}
-	} else if !IsK8sError(err, http.StatusNotFound) {
+	} else if !isK8sNotFound(err) {
 		return nil, err
 	}
 	csv, err := getCSV(c)

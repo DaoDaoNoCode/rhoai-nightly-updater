@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { deployDashboardLatestMain, deployDashboardPR, getBuildExplorerTags, repairDSC, revertDashboard, streamSSE } from "../services/api";
-import { jsonResponse } from "./utils";
+import { jsonBody, jsonResponse } from "./utils";
 
 describe("Build Explorer tags", () => {
   it("requests versions without waiting for build dates", async () => {
@@ -34,7 +34,7 @@ describe("Dashboard Dev requests", () => {
     expect(calls.every((c) => c.method === "POST")).toBe(true);
     // Body-less POSTs must still declare JSON: the backend rejects other types.
     expect(calls.map((c) => c.contentType)).toEqual(["application/json", "application/json", "application/json"]);
-    expect(JSON.parse(String(calls[1].body))).toEqual({ pr: 123 });
+    expect(jsonBody(calls[1])).toEqual({ pr: 123 });
   });
 });
 

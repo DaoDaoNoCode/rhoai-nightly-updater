@@ -111,7 +111,7 @@ func TestWithAuth_MissingToken_Returns401(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	req := httptest.NewRequest("GET", "/api/status", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/status", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -135,7 +135,7 @@ func TestWithAuth_ValidToken_CallsHandler(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	req := httptest.NewRequest("GET", "/api/status", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/status", nil)
 	req.Header.Set("X-Forwarded-Access-Token", "user-oauth-token")
 	req.Header.Set("X-Forwarded-User", "alice")
 	rec := httptest.NewRecorder()
@@ -163,7 +163,7 @@ func TestWithAuth_ClientIsAStatusRead(t *testing.T) {
 			got = c
 			w.WriteHeader(http.StatusOK)
 		})
-		req := httptest.NewRequest("GET", "/api/status", nil)
+		req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/status", nil)
 		req.Header.Set("X-Forwarded-Access-Token", "user-oauth-token")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -185,7 +185,7 @@ func TestWithAuth_AuthorizationBearer_Works(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	req := httptest.NewRequest("GET", "/api/status", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/status", nil)
 	req.Header.Set("Authorization", "Bearer my-token")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -200,7 +200,7 @@ func TestWithMutationAuth_MissingToken_Returns401(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	req := httptest.NewRequest("POST", "/api/update", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "POST", "/api/update", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -217,7 +217,7 @@ func TestWithMutationAuth_RateLimiting(t *testing.T) {
 	})
 
 	// First call succeeds
-	req1 := httptest.NewRequest("POST", "/api/test-endpoint", nil)
+	req1 := httptest.NewRequestWithContext(t.Context(), "POST", "/api/test-endpoint", nil)
 	req1.Header.Set("X-Forwarded-Access-Token", "token")
 	req1.Header.Set("X-Forwarded-User", "rate-test-user")
 	rec1 := httptest.NewRecorder()
@@ -228,7 +228,7 @@ func TestWithMutationAuth_RateLimiting(t *testing.T) {
 	}
 
 	// Second call is rate limited
-	req2 := httptest.NewRequest("POST", "/api/test-endpoint", nil)
+	req2 := httptest.NewRequestWithContext(t.Context(), "POST", "/api/test-endpoint", nil)
 	req2.Header.Set("X-Forwarded-Access-Token", "token")
 	req2.Header.Set("X-Forwarded-User", "rate-test-user")
 	rec2 := httptest.NewRecorder()
@@ -253,7 +253,7 @@ func TestWithMutationAuth_SkipRateLimit_Header(t *testing.T) {
 	})
 
 	// First call with skip header
-	req1 := httptest.NewRequest("POST", "/api/skip-test", nil)
+	req1 := httptest.NewRequestWithContext(t.Context(), "POST", "/api/skip-test", nil)
 	req1.Header.Set("X-Forwarded-Access-Token", "token")
 	req1.Header.Set("X-Forwarded-User", "skip-test-user")
 	rec1 := httptest.NewRecorder()
@@ -264,7 +264,7 @@ func TestWithMutationAuth_SkipRateLimit_Header(t *testing.T) {
 	}
 
 	// Second call should NOT be rate limited because first had X-Skip-Rate-Limit
-	req2 := httptest.NewRequest("POST", "/api/skip-test", nil)
+	req2 := httptest.NewRequestWithContext(t.Context(), "POST", "/api/skip-test", nil)
 	req2.Header.Set("X-Forwarded-Access-Token", "token")
 	req2.Header.Set("X-Forwarded-User", "skip-test-user")
 	rec2 := httptest.NewRecorder()
@@ -283,7 +283,7 @@ func TestWithMutationAuth_DifferentEndpoints_IndependentRateLimiting(t *testing.
 	})
 
 	// Call endpoint A
-	req1 := httptest.NewRequest("POST", "/api/endpoint-a", nil)
+	req1 := httptest.NewRequestWithContext(t.Context(), "POST", "/api/endpoint-a", nil)
 	req1.Header.Set("X-Forwarded-Access-Token", "token")
 	req1.Header.Set("X-Forwarded-User", "multi-endpoint-user")
 	rec1 := httptest.NewRecorder()
@@ -293,7 +293,7 @@ func TestWithMutationAuth_DifferentEndpoints_IndependentRateLimiting(t *testing.
 	}
 
 	// Call endpoint B — should NOT be rate limited (different path)
-	req2 := httptest.NewRequest("POST", "/api/endpoint-b", nil)
+	req2 := httptest.NewRequestWithContext(t.Context(), "POST", "/api/endpoint-b", nil)
 	req2.Header.Set("X-Forwarded-Access-Token", "token")
 	req2.Header.Set("X-Forwarded-User", "multi-endpoint-user")
 	rec2 := httptest.NewRecorder()

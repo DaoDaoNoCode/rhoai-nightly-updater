@@ -26,7 +26,7 @@ func TestProjectsAreReadWithTheUsersToken(t *testing.T) {
 			return []string{"mine"}, nil
 		}
 		w := httptest.NewRecorder()
-		HandleDSProjects(w, getAs("/api/resources/projects", who))
+		HandleDSProjects(w, getAs(t, "/api/resources/projects", who))
 		if w.Code != 200 || !asUser || strings.TrimSpace(w.Body.String()) != `{"projects":["mine"]}` {
 			t.Errorf("%s: %d %s (as user %v)", who, w.Code, w.Body.String(), asUser)
 		}
@@ -36,7 +36,7 @@ func TestProjectsAreReadWithTheUsersToken(t *testing.T) {
 		return nil, fmt.Errorf("list: %w", &cluster.K8sError{Status: 403, User: true})
 	}
 	w := httptest.NewRecorder()
-	HandleDSProjects(w, getAs("/api/resources/projects", "user:carol"))
+	HandleDSProjects(w, getAs(t, "/api/resources/projects", "user:carol"))
 	if w.Code != 403 || decodeError(t, w)["errorCode"] != cluster.ErrorCodeForbiddenForUser || strings.Contains(w.Body.String(), "make upgrade") {
 		t.Errorf("refused: %d %s", w.Code, w.Body.String())
 	}
@@ -55,12 +55,12 @@ func TestMLflowSamplesStatusHandlerReadsAsTheUser(t *testing.T) {
 		return &types.MLflowSamplesStatus{Project: project}, nil
 	}
 	w := httptest.NewRecorder()
-	HandleMLflowSamplesStatus(w, getAs("/api/resources/samples/mlflow?project=proj", "user:carol"))
+	HandleMLflowSamplesStatus(w, getAs(t, "/api/resources/samples/mlflow?project=proj", "user:carol"))
 	if w.Code != 200 || saUser || !uUser {
 		t.Fatalf("%d %s (sa as user %v, u as user %v)", w.Code, w.Body.String(), saUser, uUser)
 	}
 	w = httptest.NewRecorder()
-	HandleMLflowSamplesStatus(w, getAs("/api/resources/samples/mlflow?project=other", "user:carol"))
+	HandleMLflowSamplesStatus(w, getAs(t, "/api/resources/samples/mlflow?project=other", "user:carol"))
 	if w.Code != 403 || decodeError(t, w)["errorCode"] != cluster.ErrorCodeForbiddenForUser {
 		t.Fatalf("not the user's project: %d %s", w.Code, w.Body.String())
 	}
@@ -80,18 +80,18 @@ func TestPlaygroundStatusPerRole(t *testing.T) {
 			Blocked: &types.ComponentBlock{Component: "ogx", DSC: sentinel, State: "Removed", Reason: "off in " + sentinel}}, nil
 	}
 	w := httptest.NewRecorder()
-	HandlePlaygroundStatus(w, getAs("/api/resources/playground", "user:admin"))
+	HandlePlaygroundStatus(w, getAs(t, "/api/resources/playground", "user:admin"))
 	if w.Code != 200 || !strings.Contains(w.Body.String(), sentinel) {
 		t.Fatalf("admin: %d %s", w.Code, w.Body.String())
 	}
 	w = httptest.NewRecorder()
-	HandlePlaygroundStatus(w, getAs("/api/resources/playground", "user:carol"))
+	HandlePlaygroundStatus(w, getAs(t, "/api/resources/playground", "user:carol"))
 	if w.Code != 200 || strings.Contains(w.Body.String(), sentinel) || !strings.Contains(w.Body.String(), `"operatorReady":"False"`) || !strings.Contains(w.Body.String(), `"state":"Removed"`) {
 		t.Fatalf("user: %d %s", w.Code, w.Body.String())
 	}
 	mutationPermission = func(context.Context, string) (bool, error) { return true, errors.New("unavailable") }
 	w = httptest.NewRecorder()
-	HandlePlaygroundStatus(w, getAs("/api/resources/playground", "user:admin"))
+	HandlePlaygroundStatus(w, getAs(t, "/api/resources/playground", "user:admin"))
 	if strings.Contains(w.Body.String(), sentinel) {
 		t.Fatalf("role unknown: %s", w.Body.String())
 	}
@@ -141,7 +141,7 @@ func TestResourcesStatusForAUser(t *testing.T) {
 		{"?project=other", http.StatusForbidden, cluster.ErrorCodeForbiddenForUser},
 	} {
 		w := httptest.NewRecorder()
-		HandleResourcesStatus(w, getAs("/api/resources/status"+tc.query, "user:carol"))
+		HandleResourcesStatus(w, getAs(t, "/api/resources/status"+tc.query, "user:carol"))
 		if w.Code != tc.code || decodeError(t, w)["errorCode"] != tc.ec {
 			t.Errorf("%q: %d %s", tc.query, w.Code, w.Body.String())
 		}
@@ -150,7 +150,7 @@ func TestResourcesStatusForAUser(t *testing.T) {
 		t.Errorf("project status read %d times", calls)
 	}
 	w := httptest.NewRecorder()
-	HandleResourcesStatus(w, getAs("/api/resources/status?project=proj", "user:carol"))
+	HandleResourcesStatus(w, getAs(t, "/api/resources/status?project=proj", "user:carol"))
 	if w.Code != 200 || !uUser || !strings.Contains(w.Body.String(), `"project":"proj"`) {
 		t.Fatalf("own project: %d %s (as user %v)", w.Code, w.Body.String(), uUser)
 	}

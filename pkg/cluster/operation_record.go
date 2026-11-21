@@ -59,18 +59,18 @@ func clearDSCHardResetRecord(c *Client) {
 // readDSCHardResetRecord returns the recorded hard reset, nil when there is
 // none. A record that cannot be parsed is an error: it is never guessed at.
 func readDSCHardResetRecord(c *Client) (*types.DSCHardResetRecord, error) {
-	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
-	if IsK8sError(err, 404) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get operation record: %w", err)
-	}
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &cm); err != nil {
-		return nil, fmt.Errorf("parse operation record: %w", err)
+	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName), &cm)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse operation record: %w", err)
+		}
+		return nil, fmt.Errorf("get operation record: %w", err)
+	}
+	if !found {
+		return nil, nil
 	}
 	raw := cm.Data[dscHardResetKey]
 	if raw == "" {
@@ -100,21 +100,21 @@ type OperationRecord struct {
 // an empty record. An unreadable value is logged and ignored rather than
 // hiding the others.
 func ReadOperationRecord(c *Client) (*OperationRecord, error) {
-	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
-	if IsK8sError(err, 404) {
-		return &OperationRecord{}, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get operation record: %w", err)
-	}
 	var cm struct {
 		Metadata struct {
 			ResourceVersion string `json:"resourceVersion"`
 		} `json:"metadata"`
 		Data map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &cm); err != nil {
-		return nil, fmt.Errorf("parse operation record: %w", err)
+	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName), &cm)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse operation record: %w", err)
+		}
+		return nil, fmt.Errorf("get operation record: %w", err)
+	}
+	if !found {
+		return &OperationRecord{}, nil
 	}
 	return &OperationRecord{
 		Marker:          decodeRecordValue[types.OperationMarker](cm.Data, operationKey),
@@ -220,7 +220,7 @@ func SaveCompletedOperation(c *Client, done *types.CompletedOperation, owner *Le
 			return nil
 		}
 		err = writeOperationRecord(c, rec, data)
-		if IsK8sError(err, 409) {
+		if isK8sConflict(err) {
 			continue
 		}
 		if err != nil {
@@ -281,13 +281,9 @@ func patchOperationRecord(c *Client, resourceVersion string, data map[string]str
 	if resourceVersion != "" {
 		body["metadata"] = map[string]any{"resourceVersion": resourceVersion}
 	}
-	patch, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
 	ns := getActivityNamespace()
-	_, _, err = c.bookkeeping().patch(namespacedPath("v1", "configmaps", ns, operationConfigMapName), patch)
-	if resourceVersion == "" && IsK8sError(err, 404) {
+	err := c.bookkeeping().patchJSON(namespacedPath("v1", "configmaps", ns, operationConfigMapName), body)
+	if resourceVersion == "" && isK8sNotFound(err) {
 		return writeOperationRecord(c, &OperationRecord{}, data)
 	}
 	return err
@@ -337,7 +333,7 @@ func WriteOperationLease(c *Client, lease *types.OperationLease, heldElsewhere f
 			return rec.Lease, nil
 		}
 		err = writeOperationRecord(c, rec, map[string]string{leaseKey: string(value)})
-		if IsK8sError(err, 409) {
+		if isK8sConflict(err) {
 			slog.Debug("operation lease write conflict, retrying", "attempt", attempt+1)
 			continue
 		}
@@ -362,7 +358,7 @@ func ReleaseOperationLease(c *Client, owner LeaseOwner) error {
 			return nil
 		}
 		err = writeOperationRecord(c, rec, map[string]string{leaseKey: ""})
-		if IsK8sError(err, 409) {
+		if isK8sConflict(err) {
 			continue
 		}
 		if err != nil {

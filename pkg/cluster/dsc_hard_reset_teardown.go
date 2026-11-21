@@ -3,7 +3,6 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"sort"
 	"strings"
 )
@@ -172,18 +171,18 @@ func hardResetOperators(c *Client, dscUID string) ([]hardResetOperator, string, 
 func operatorsLeft(c *Client, ops []hardResetOperator) ([]hardResetOperator, error) {
 	var left []hardResetOperator
 	for _, o := range ops {
-		body, _, err := c.get(namespacedPath("apps/v1", "deployments", o.Namespace, o.Name))
-		if IsK8sError(err, http.StatusNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("read Deployment %s/%s: %w", o.Namespace, o.Name, err)
-		}
 		var d struct {
 			Metadata objectMeta `json:"metadata"`
 		}
-		if err := json.Unmarshal(body, &d); err != nil {
-			return nil, fmt.Errorf("parse Deployment %s/%s: %w", o.Namespace, o.Name, err)
+		found, err := c.getIntoOptional(namespacedPath("apps/v1", "deployments", o.Namespace, o.Name), &d)
+		if err != nil {
+			if isDecodeError(err) {
+				return nil, fmt.Errorf("parse Deployment %s/%s: %w", o.Namespace, o.Name, err)
+			}
+			return nil, fmt.Errorf("read Deployment %s/%s: %w", o.Namespace, o.Name, err)
+		}
+		if !found {
+			continue
 		}
 		if d.Metadata.UID == o.UID {
 			left = append(left, o)
@@ -203,7 +202,7 @@ func operatorsLeft(c *Client, ops []hardResetOperator) ([]hardResetOperator, err
 func platformModulesSettled(c *Client) (bool, string, error) {
 	r, err := listServed(c, platformGroup, platformListFmt, nil, platformFallbackVersions)
 	switch {
-	case IsK8sError(err, http.StatusNotFound), err == nil && r.Version == "":
+	case isK8sNotFound(err), err == nil && r.Version == "":
 		return true, "no Platform API is served", nil
 	case err != nil:
 		return false, "", fmt.Errorf("read the Platform: %w", err)
@@ -374,24 +373,21 @@ func namespaceOwnerBlocker(c *Client) string {
 	if u == nil {
 		return "The tool reads the namespaces' owners with your own sign-in, and this request has none, so it cannot tell whether the garbage collector would delete a namespace with the DataScienceCluster."
 	}
-	body, _, err := u.get("/api/v1/namespaces")
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name            string     `json:"name"`
+			OwnerReferences []ownerRef `json:"ownerReferences"`
+		} `json:"metadata"`
+	}
+	if err := u.listInto("/api/v1/namespaces", &items); err != nil {
+		if isDecodeError(err) {
+			return "The namespaces could not be read to check that none would be deleted with the DataScienceCluster: " + err.Error() + "."
+		}
 		return "The namespaces could not be listed with your sign-in to check that none would be deleted with the DataScienceCluster: " + strings.TrimSuffix(err.Error(), ".") + "."
-	}
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name            string     `json:"name"`
-				OwnerReferences []ownerRef `json:"ownerReferences"`
-			} `json:"metadata"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return "The namespaces could not be read to check that none would be deleted with the DataScienceCluster: " + err.Error() + "."
 	}
 	resolver := &ownerResolver{c: u, docs: map[string][]apiResource{}, memo: map[string]ownerVerdict{}}
 	var lost, unknown []string
-	for _, ns := range list.Items {
+	for _, ns := range items {
 		if len(ns.Metadata.OwnerReferences) == 0 {
 			continue
 		}
@@ -532,13 +528,6 @@ func (r *ownerResolver) read(ref ownerRef, group, version, what string, unknown 
 	if why != "" {
 		return unknown("cannot be looked up: " + why)
 	}
-	body, _, err := r.c.get(apiPath)
-	if IsK8sError(err, http.StatusNotFound) {
-		return ownerVerdict{fate: ownerNotSolid} // dangling (K :431-437)
-	}
-	if err != nil {
-		return unknown("could not be read with your sign-in: " + err.Error())
-	}
 	var obj struct {
 		Metadata struct {
 			UID               string     `json:"uid"`
@@ -546,8 +535,15 @@ func (r *ownerResolver) read(ref ownerRef, group, version, what string, unknown 
 			OwnerReferences   []ownerRef `json:"ownerReferences"`
 		} `json:"metadata"`
 	}
-	if err := json.Unmarshal(body, &obj); err != nil {
-		return unknown("could not be read: " + err.Error())
+	found, err := r.c.getIntoOptional(apiPath, &obj)
+	if err != nil {
+		if isDecodeError(err) {
+			return unknown("could not be read: " + err.Error())
+		}
+		return unknown("could not be read with your sign-in: " + err.Error())
+	}
+	if !found {
+		return ownerVerdict{fate: ownerNotSolid} // dangling (K :431-437)
 	}
 	m := obj.Metadata
 	switch {
@@ -588,14 +584,10 @@ func (r *ownerResolver) path(group, version, kind, name string) (string, string)
 	}
 	resources, ok := r.docs[gv]
 	if !ok {
-		body, _, err := r.c.get(gv)
-		if err != nil {
-			return "", "API discovery of " + strings.TrimPrefix(gv, "/") + ": " + err.Error()
-		}
 		var doc struct {
 			Resources []apiResource `json:"resources"`
 		}
-		if err := json.Unmarshal(body, &doc); err != nil {
+		if err := r.c.getInto(gv, &doc); err != nil {
 			return "", "API discovery of " + strings.TrimPrefix(gv, "/") + ": " + err.Error()
 		}
 		resources = doc.Resources

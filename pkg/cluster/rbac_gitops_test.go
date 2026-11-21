@@ -71,7 +71,7 @@ var (
 func exportData(t *testing.T) map[string]string {
 	t.Helper()
 	exportOnce.Do(func() {
-		cmd := exec.Command("go", "list", "-export", "-deps", "-f", "{{.ImportPath}}\t{{.Export}}", modulePath)
+		cmd := exec.CommandContext(t.Context(), "go", "list", "-export", "-deps", "-f", "{{.ImportPath}}\t{{.Export}}", modulePath)
 		cmd.Dir = "../.."
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr

@@ -27,7 +27,7 @@ func TestMutationAuthorizationAndPermissionsAgree(t *testing.T) {
 			mutationPermission = func(context.Context, string) (bool, error) { return tc.allowed, tc.err }
 			called := false
 			h := withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) { called = true })
-			r := httptest.NewRequest("POST", "/api/auth-safety-"+strings.ReplaceAll(tc.name, " ", "-"), nil)
+			r := httptest.NewRequestWithContext(t.Context(), "POST", "/api/auth-safety-"+strings.ReplaceAll(tc.name, " ", "-"), nil)
 			r.Header.Set("X-Forwarded-Access-Token", "user-token")
 			w := httptest.NewRecorder()
 			h(w, r)
@@ -73,7 +73,7 @@ func TestAcceptedMutationSurvivesBrowserDisconnectAndKeepsLock(t *testing.T) {
 			t.Error("operation has no deadline")
 		}
 	})
-	r := httptest.NewRequest("POST", "/api/disconnect-safety", nil).WithContext(ctx)
+	r := httptest.NewRequestWithContext(t.Context(), "POST", "/api/disconnect-safety", nil).WithContext(ctx)
 	go func() { defer close(finished); h(httptest.NewRecorder(), r) }()
 	select {
 	case <-started:

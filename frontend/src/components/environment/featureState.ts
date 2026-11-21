@@ -92,6 +92,9 @@ export interface FeatureState {
 export const loadingState = (project: string | null = null): FeatureState => ({ status: "unknown", label: "Loading", next: null, project, loading: true });
 
 /** The state of a feature whose status could not be read, and never was: not a state, and nothing to do but read it again. */
+/** A project tab after the project was cleared (or is gone): the tab says so instead of a summary across projects. */
+export const noProjectState = (): FeatureState => ({ status: "unknown", label: "No project chosen", next: { kind: "choose-project" }, project: null });
+
 export const unreadableState = (project: string | null = null): FeatureState => ({ status: "unknown", label: "Unknown: cannot be read", next: null, project });
 
 /** One part of a feature, with its health and ownership. */

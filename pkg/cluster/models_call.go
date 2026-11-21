@@ -225,17 +225,16 @@ func readModelToken(c *Client, project, model, recordedUID string) (string, erro
 	if recordedUID == "" {
 		return "", errors.New("the model has no token of its own yet (set it up again to make it)")
 	}
-	body, _, err := c.get(tokenSecretPathOf(project, model))
-	if err != nil {
-		return "", fmt.Errorf("read the model's token Secret %s/%s: %w", project, tokenSecretName(model), err)
-	}
 	var sec struct {
 		Metadata objectMeta        `json:"metadata"`
 		Type     string            `json:"type"`
 		Data     map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &sec); err != nil {
-		return "", fmt.Errorf("parse the model's token Secret: %w", err)
+	if err := c.getInto(tokenSecretPathOf(project, model), &sec); err != nil {
+		if isDecodeError(err) {
+			return "", fmt.Errorf("parse the model's token Secret: %w", err)
+		}
+		return "", fmt.Errorf("read the model's token Secret %s/%s: %w", project, tokenSecretName(model), err)
 	}
 	if sec.Metadata.UID != recordedUID || sec.Type != tokenSecretType || sec.Metadata.Annotations[saNameAnnotation] != tokenSAName(model) {
 		return "", fmt.Errorf("the Secret %s/%s is not the token this tool made for the model", project, tokenSecretName(model))

@@ -28,10 +28,10 @@ import {
 import ArrowCircleUpIcon from "@patternfly/react-icons/dist/esm/icons/arrow-circle-up-icon";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import SearchIcon from "@patternfly/react-icons/dist/esm/icons/search-icon";
-import { useNavigate } from "react-router-dom";
+import { OpenDiagnosticsLink } from "./NavigationActions";
 import type { LatestNightlyResponse, NightlyBuild, OperationResponse, StatusResponse } from "../types";
 import { isOnNightly, tagLine } from "../build";
-import { operatorInstalled, prerequisitesMet as setupComplete, pullSecretReady } from "../utils";
+import { SETUP_FIRST_REASON, operatorInstalled, prerequisitesMet as setupComplete, pullSecretReady } from "../utils";
 import { BuildSummary } from "./BuildSummary";
 import { nodePullState, PullSecretSetup } from "./PullSecretCard";
 import { CardList, CardListItem } from "./CardList";
@@ -93,7 +93,6 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
   onPreview,
   onRedeploy,
 }) => {
-  const navigate = useNavigate();
   const gitOpsProfile = useGitOpsProfile();
   const installed = operatorInstalled(status);
   const onNightly = isOnNightly(status);
@@ -116,7 +115,7 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
   const serves = status.catalogServes;
   const previewBuild = catalogBuild ?? target;
   const csvMissing = !csv.name || csv.phase === "Not Found";
-  const setupReason = !prerequisitesMet ? "Finish the one-time cluster setup first (pull secret and image mirror)." : null;
+  const setupReason = !prerequisitesMet ? SETUP_FIRST_REASON : null;
   const actionReason = blocker ?? setupReason;
   // An operator version is installed but its Subscription is gone (for
   // example after an interrupted Update or Reinstall): neither nightly nor
@@ -373,7 +372,7 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
                 actionLinks={
                   <>
                     {!gitOpsApp && !gitOpsProfile && <AlertActionLink onClick={onRedeploy}>Re-deploy the same version</AlertActionLink>}
-                    <AlertActionLink onClick={() => navigate("/diagnostics")}>Open Diagnostics</AlertActionLink>
+                    <OpenDiagnosticsLink />
                     {safeConsoleURL && (
                       <AlertActionLink
                         component="a"
@@ -403,7 +402,7 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
                 isInline
                 component="p"
                 title="The operator has no Subscription"
-                actionLinks={<AlertActionLink onClick={() => navigate("/diagnostics")}>Open Diagnostics</AlertActionLink>}
+                actionLinks={<OpenDiagnosticsLink />}
               >
                 {csv.name || "The operator"} is installed, but its Subscription is missing, so OLM does not update or repair it.
                 This usually means an Update or Reinstall was interrupted. Update or Reinstall recreates the Subscription with

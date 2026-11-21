@@ -368,15 +368,14 @@ func CheckGitOpsAdmissionPolicy(c *Client) error {
 		{"ValidatingAdmissionPolicy", "validatingadmissionpolicies", wantPolicy},
 		{"ValidatingAdmissionPolicyBinding", "validatingadmissionpolicybindings", wantBinding},
 	} {
-		body, _, err := c.get(clusterPath("admissionregistration.k8s.io/v1", o.resource, name))
-		if err != nil {
-			return fmt.Errorf("read %s %s: %w", o.kind, name, err)
-		}
 		var live struct {
 			Spec map[string]any `json:"spec"`
 		}
-		if err := json.Unmarshal(body, &live); err != nil {
-			return fmt.Errorf("parse %s %s: %w", o.kind, name, err)
+		if err := c.getInto(clusterPath("admissionregistration.k8s.io/v1", o.resource, name), &live); err != nil {
+			if isDecodeError(err) {
+				return fmt.Errorf("parse %s %s: %w", o.kind, name, err)
+			}
+			return fmt.Errorf("read %s %s: %w", o.kind, name, err)
 		}
 		got := withoutAdmissionDefaults(live.Spec)
 		want := withoutAdmissionDefaults(o.want)

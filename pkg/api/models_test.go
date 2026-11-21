@@ -31,13 +31,13 @@ func TestModelsStream(t *testing.T) {
 		`{"action":"teardown","project":"p","releasedImage":true}`,
 	} {
 		w := httptest.NewRecorder()
-		HandleModelsStream(w, postJSON("/api/resources/models/stream", "tok", body))
+		HandleModelsStream(w, postJSON(t, "/api/resources/models/stream", "tok", body))
 		if w.Code != http.StatusBadRequest || clusterMutationInProgress.Load() {
 			t.Errorf("%s: %d %s", body, w.Code, w.Body.String())
 		}
 	}
 	w := httptest.NewRecorder()
-	HandleModelsStream(w, postJSON("/api/resources/models/stream", "tok", `{"action":"setup","gateway":true,"project":"p","releasedImage":true}`))
+	HandleModelsStream(w, postJSON(t, "/api/resources/models/stream", "tok", `{"action":"setup","gateway":true,"project":"p","releasedImage":true}`))
 	out := w.Body.String()
 	if w.Code != http.StatusOK || !strings.Contains(out, `"step":"gateway"`) || !strings.Contains(out, `"step":"model"`) || !strings.Contains(out, `"step":"operation_complete"`) {
 		t.Errorf("%d %s", w.Code, out)

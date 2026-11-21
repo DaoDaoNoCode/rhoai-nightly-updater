@@ -57,7 +57,7 @@ func serveUpdateStream(t *testing.T, run func(emit func(cluster.UpdateStepEvent)
 	mux := http.NewServeMux()
 	Register(mux)
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSON("/api/update/stream", "user:admin", updateStreamBody))
+	mux.ServeHTTP(w, postJSON(t, "/api/update/stream", "user:admin", updateStreamBody))
 	return w
 }
 
@@ -163,7 +163,7 @@ func TestUpdateDryRunPanicAnswers500(t *testing.T) {
 	mux := http.NewServeMux()
 	Register(mux)
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSON("/api/update", "user:admin", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.4-nightly","dryRun":true}`))
+	mux.ServeHTTP(w, postJSON(t, "/api/update", "user:admin", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.4-nightly","dryRun":true}`))
 	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), `"errorCode":"internal"`) {
 		t.Errorf("status %d body %q", w.Code, w.Body.String())
 	}

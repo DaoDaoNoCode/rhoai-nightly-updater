@@ -29,7 +29,7 @@ func TestComponentMutationsShareTheClusterLock(t *testing.T) {
 		"/api/resources/mlflow/revert":    HandleMLflowRevert,
 	}
 	for path, h := range handlers {
-		r := httptest.NewRequest("POST", path, strings.NewReader(`{"pr":1}`))
+		r := httptest.NewRequestWithContext(t.Context(), "POST", path, strings.NewReader(`{"pr":1}`))
 		r.Header.Set("X-Forwarded-Access-Token", "user-token")
 		r.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()

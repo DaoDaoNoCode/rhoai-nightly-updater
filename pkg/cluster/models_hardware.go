@@ -142,19 +142,16 @@ func pickHardwareProfile(c *Client, entry catalogModel) (hardwareProfile, string
 	if err != nil {
 		return hardwareProfile{}, fmt.Sprintf("the dashboard's namespace is not known (%v)", err)
 	}
-	body, _, err := c.get(namespacedPath("infrastructure.opendatahub.io/v1", "hardwareprofiles", ns, ""))
-	if err != nil {
+	var items []hardwareProfileObject
+	if err := c.listInto(namespacedPath("infrastructure.opendatahub.io/v1", "hardwareprofiles", ns, ""), &items); err != nil {
+		if isDecodeError(err) {
+			return hardwareProfile{}, "the hardware profiles cannot be parsed"
+		}
 		return hardwareProfile{}, fmt.Sprintf("the hardware profiles in %s cannot be read (%v)", ns, err)
 	}
-	var list struct {
-		Items []hardwareProfileObject `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return hardwareProfile{}, "the hardware profiles cannot be parsed"
-	}
-	sort.Slice(list.Items, func(i, j int) bool { return list.Items[i].Metadata.Name < list.Items[j].Metadata.Name })
+	sort.Slice(items, func(i, j int) bool { return items[i].Metadata.Name < items[j].Metadata.Name })
 	var why []string
-	for _, p := range list.Items {
+	for _, p := range items {
 		reason := p.fits(entry)
 		if reason == "" {
 			return hardwareProfile{Name: p.Metadata.Name, Namespace: ns, ResourceVersion: p.Metadata.ResourceVersion}, ""

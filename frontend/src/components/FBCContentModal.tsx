@@ -15,7 +15,7 @@ import {
   Stack,
   StackItem,
 } from "@patternfly/react-core";
-import { Link } from "react-router-dom";
+import { linkTo } from "./NavigationActions";
 import { useFbcContent } from "../hooks/useFbcContent";
 import { CategorySelect, ComponentImagesTable } from "./BuildContents";
 import { TruncatedText } from "./LongText";
@@ -91,7 +91,7 @@ export const FBCContentModal: React.FC<FBCContentModalProps> = ({ image, isOpen,
       </ModalBody>
       <ModalFooter>
         <Button variant="primary" onClick={onClose}>Close</Button>
-        <Button variant="link" component={(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <Link {...props} to="/builds" />} onClick={onClose}>
+        <Button variant="link" component={linkTo("/builds")} onClick={onClose}>
           Open Build Explorer
         </Button>
       </ModalFooter>

@@ -188,19 +188,16 @@ func (f *moduleOperatorFinder) loadPods() error {
 		return f.podsErr
 	}
 	f.podsLoaded = true
-	body, _, err := f.c.get(namespacedPath("v1", "pods", f.appNS, ""))
-	if err != nil {
+	var items []moduleOperatorPod
+	if err := f.c.listInto(namespacedPath("v1", "pods", f.appNS, ""), &items); err != nil {
+		if isDecodeError(err) {
+			f.podsErr = fmt.Errorf("parse Pods in %s: %w", f.appNS, err)
+			return f.podsErr
+		}
 		f.podsErr = fmt.Errorf("list Pods in %s: %w", f.appNS, err)
 		return f.podsErr
 	}
-	var list struct {
-		Items []moduleOperatorPod `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		f.podsErr = fmt.Errorf("parse Pods in %s: %w", f.appNS, err)
-		return f.podsErr
-	}
-	f.pods = list.Items
+	f.pods = items
 	return nil
 }
 

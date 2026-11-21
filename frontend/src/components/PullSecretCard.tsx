@@ -221,7 +221,7 @@ const NodePullSecret: React.FC<{
             <FlexItem>
               <TooltipButton
                 variant="secondary"
-                onClick={handleCheck}
+                onClick={() => void handleCheck()}
                 isLoading={checking || undefined}
                 isDisabled={checking}
                 disabledReason={checkReason}
@@ -460,7 +460,7 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
           <ActionListItem>
             <TooltipButton
               variant={pullSecret.exists ? "danger" : "primary"}
-              onClick={handleSave}
+              onClick={() => void handleSave()}
               isLoading={authLoading || undefined}
               isDisabled={authLoading}
               disabledReason={saveReason}
@@ -523,7 +523,7 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
             <ActionList>
               <ActionListGroup>
                 <ActionListItem>
-                  <Button variant="secondary" onClick={handleTest} isLoading={testLoading} isDisabled={testLoading}>
+                  <Button variant="secondary" onClick={() => void handleTest()} isLoading={testLoading} isDisabled={testLoading}>
                     Test with Quay
                   </Button>
                 </ActionListItem>

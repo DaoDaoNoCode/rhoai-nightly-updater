@@ -269,7 +269,12 @@ async (page) => {
         for (let i = 0; i < 12 && (await more.count()) > 0; i++) await more.first().click();
         await wait(400);
       };
-      const shot = async (name) => { await fit(); await page.screenshot({ path: `${out}/themes/leftovers-${name}.png` }); };
+      // fit() only grows the window; a rescan after a fix makes the page shorter again.
+      const shot = async (name) => {
+        await page.setViewportSize({ width: page.viewportSize().width, height: H });
+        await fit();
+        await page.screenshot({ path: `${out}/themes/leftovers-${name}.png` });
+      };
       const dialogShot = async (name) => { await wait(400); await page.getByRole("dialog").screenshot({ path: `${out}/themes/leftovers-${name}.png` }); };
       const fixOf = (title) => problem(title).getByRole("button", { name: "Fix", exact: true });
       for (const dark of [false, true]) {
@@ -288,6 +293,8 @@ async (page) => {
         await settle();
         await alert("Recreated Deployment").waitFor(); await settle(); await shot(`recreated-${theme}`);
         await fixOf(fieldsTitle).click();
+        // Both fixes ask the user to acknowledge what they change.
+        await page.getByRole("dialog").getByRole("checkbox").check();
         await page.getByRole("dialog").getByRole("button", { name: "Fix", exact: true }).click();
         await settle();
         await alert("Changed TrustyAI default-trustyai").waitFor(); await settle(); await shot(`fields-fixed-${theme}`);
@@ -349,16 +356,18 @@ async (page) => {
         await shoot("4-check-failed", dark, card("One-time cluster setup"));
         await open("/", "self-managed-unknown", { dark, width: 1440 });
         await shoot("5-topology-unknown", dark, card("One-time cluster setup"));
+        // The oc commands are under each item's "Do it yourself instead"
+        // (the one-click setup, node-setup-review, comes first).
+        const item = (scope, title) => scope.getByRole("listitem").filter({ has: page.getByText(title, { exact: true }) }).first();
         await open("/", "self-managed-installed", { dark, width: 1440 });
         await page.locator("#cluster-setup-toggle").click();
-        await page.getByRole("button", { name: "The command that adds the quay.io/rhoai entry" }).click();
+        await item(card("Cluster setup"), "Pull secret").getByRole("button", { name: "Do it yourself instead" }).click();
         await wait(300);
         await shoot("6-installed", dark, card("Cluster setup"));
         await open("/", "self-managed", { dark, width: 1440 });
-        await page.getByRole("button", { name: "How to create the image mirror" }).click();
-        await page.getByRole("dialog").waitFor();
+        await item(card("One-time cluster setup"), "Image mirror (IDMS)").getByRole("button", { name: "Do it yourself instead" }).click();
         await wait(300);
-        await shoot("7-mirror-instructions", dark, page.locator(".pf-v6-c-modal-box"));
+        await shoot("7-mirror-instructions", dark, card("One-time cluster setup"));
       }
     },
 
@@ -508,7 +517,7 @@ async (page) => {
         await open("/test-resources?tab=maas", "env-maas-in-use", { dark, width: 1440 });
         await page.getByRole("button", { name: "Clean up MaaS..." }).click();
         await page.screenshot({ path: `${out}/themes/maas-remove-confirm-${dark ? "dark" : "light"}.png` });
-        await page.getByRole("dialog").getByRole("button", { name: "Remove", exact: true }).click();
+        await page.getByRole("dialog").getByRole("button", { name: "Clean up", exact: true }).click();
         await page.getByText("Others use this MaaS platform").first().waitFor();
         await page.screenshot({ path: `${out}/themes/maas-in-use-${dark ? "dark" : "light"}.png` });
       }

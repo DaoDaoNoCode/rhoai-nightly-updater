@@ -42,11 +42,11 @@ func captureLogs(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
-func getAdminPassword(token string) *httptest.ResponseRecorder {
+func getAdminPassword(t testing.TB, token string) *httptest.ResponseRecorder {
 	mux := http.NewServeMux()
 	Register(mux)
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSONMethod(http.MethodGet, adminPasswordPath, token, ""))
+	mux.ServeHTTP(w, postJSONMethod(t, http.MethodGet, adminPasswordPath, token, ""))
 	return w
 }
 
@@ -58,7 +58,7 @@ func TestAdminPassword(t *testing.T) {
 		allowMutations(t)
 		logs := captureLogs(t)
 		calls := stubAdminLogin(t, "admin", secret, nil)
-		w := getAdminPassword("user:admin")
+		w := getAdminPassword(t, "user:admin")
 		if w.Code != http.StatusOK || *calls != 1 {
 			t.Fatalf("status=%d calls=%d body=%s", w.Code, *calls, w.Body.String())
 		}
@@ -81,7 +81,7 @@ func TestAdminPassword(t *testing.T) {
 		setupDevMode(t)
 		mutationPermission = func(context.Context, string) (bool, error) { return false, nil }
 		calls := stubAdminLogin(t, "admin", secret, nil)
-		w := getAdminPassword("user:reader")
+		w := getAdminPassword(t, "user:reader")
 		if body := decodeError(t, w); w.Code != http.StatusForbidden || body["errorCode"] != adminOnlyCode {
 			t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 		}
@@ -94,7 +94,7 @@ func TestAdminPassword(t *testing.T) {
 		setupDevMode(t)
 		allowMutations(t)
 		calls := stubAdminLogin(t, "admin", secret, nil)
-		if w := getAdminPassword(expiredToken); w.Code != http.StatusUnauthorized || *calls != 0 {
+		if w := getAdminPassword(t, expiredToken); w.Code != http.StatusUnauthorized || *calls != 0 {
 			t.Fatalf("status=%d calls=%d", w.Code, *calls)
 		}
 	})
@@ -103,7 +103,7 @@ func TestAdminPassword(t *testing.T) {
 		setupDevMode(t)
 		mutationPermission = func(context.Context, string) (bool, error) { return false, errors.New("connection refused") }
 		calls := stubAdminLogin(t, "admin", secret, nil)
-		w := getAdminPassword("user:admin")
+		w := getAdminPassword(t, "user:admin")
 		if body := decodeError(t, w); w.Code != http.StatusServiceUnavailable || body["errorCode"] != "authorization_unavailable" || *calls != 0 {
 			t.Fatalf("status=%d calls=%d body=%s", w.Code, *calls, w.Body.String())
 		}
@@ -113,7 +113,7 @@ func TestAdminPassword(t *testing.T) {
 		setupDevMode(t)
 		allowMutations(t)
 		stubAdminLogin(t, "", "", &cluster.S3AdminLoginUnavailable{Reason: "The S3 storage is not set up."})
-		w := getAdminPassword("user:admin")
+		w := getAdminPassword(t, "user:admin")
 		if body := decodeError(t, w); w.Code != http.StatusConflict || body["errorCode"] != "unavailable" || body["error"] != "The S3 storage is not set up." {
 			t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 		}
@@ -130,7 +130,7 @@ func TestAdminPassword(t *testing.T) {
 			t.Fatal("lock unexpectedly held")
 		}
 		defer releaseClusterMutationLock()
-		if w := getAdminPassword("user:admin"); w.Code != http.StatusOK {
+		if w := getAdminPassword(t, "user:admin"); w.Code != http.StatusOK {
 			t.Fatalf("refused while another operation runs: %d %s", w.Code, w.Body.String())
 		}
 	})
@@ -140,7 +140,7 @@ func TestAdminPassword(t *testing.T) {
 		calls := stubAdminLogin(t, "admin", secret, nil)
 		mux := gitOpsMux(t)
 		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, postJSONMethod(http.MethodGet, adminPasswordPath, "user:admin", ""))
+		mux.ServeHTTP(w, postJSONMethod(t, http.MethodGet, adminPasswordPath, "user:admin", ""))
 		if body := decodeError(t, w); w.Code != http.StatusForbidden || body["errorCode"] != "profile_gitops" || *calls != 0 {
 			t.Fatalf("status=%d calls=%d body=%s", w.Code, *calls, w.Body.String())
 		}

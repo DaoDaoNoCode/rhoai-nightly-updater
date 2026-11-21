@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -283,7 +284,9 @@ func NewClientWithContext(ctx context.Context, token string) *Client {
 	}
 
 	return &Client{
-		baseURL: fmt.Sprintf("https://%s:%s", host, port),
+		// An IPv6 KUBERNETES_SERVICE_HOST needs brackets, as in client-go's
+		// rest.InClusterConfig.
+		baseURL: "https://" + net.JoinHostPort(host, port),
 		token:   token,
 		ctx:     ctx,
 		httpClient: &http.Client{

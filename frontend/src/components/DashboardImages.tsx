@@ -48,6 +48,8 @@ export function runningLabel(image: DashboardDevImage): { text: string; color: "
       return { text: "Release", color: "grey" };
     case "other":
       return { text: "Other image", color: "orange" };
+    case undefined:
+      break;
   }
   // Older backends: infer from the tag.
   const tag = imageTagOf(image.currentImage);

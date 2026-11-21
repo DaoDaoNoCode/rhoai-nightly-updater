@@ -392,13 +392,12 @@ func getClusterInfo(c *Client) (string, string) {
 }
 
 func getClusterVersion(c *Client) (string, error) {
-	body, _, err := c.get(clusterPath("config.openshift.io/v1", "clusterversions", "version"))
-	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
-	}
 	var result map[string]any
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("unmarshal: %w", err)
+	if err := c.getInto(clusterPath("config.openshift.io/v1", "clusterversions", "version"), &result); err != nil {
+		if isDecodeError(err) {
+			return "", fmt.Errorf("unmarshal: %w", err)
+		}
+		return "", fmt.Errorf("request failed: %w", err)
 	}
 	statusMap, _ := result["status"].(map[string]any)
 	if statusMap == nil {
@@ -423,13 +422,6 @@ type subscriptionDetails struct {
 
 func readSubscription(c *Client) (subscriptionDetails, error) {
 	path := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
-	body, _, err := c.get(path)
-	if err != nil {
-		if IsK8sError(err, 404) {
-			return subscriptionDetails{info: types.SubscriptionInfo{State: "Not Installed", Namespace: SubNS}}, nil
-		}
-		return subscriptionDetails{}, fmt.Errorf("request failed: %w", err)
-	}
 	var sub struct {
 		Metadata objectMeta `json:"metadata"`
 		Spec     struct {
@@ -441,8 +433,15 @@ func readSubscription(c *Client) (subscriptionDetails, error) {
 			InstalledCSV string  `json:"installedCSV"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &sub); err != nil {
-		return subscriptionDetails{}, fmt.Errorf("unmarshal: %w", err)
+	exists, err := c.getIntoOptional(path, &sub)
+	if err != nil {
+		if isDecodeError(err) {
+			return subscriptionDetails{}, fmt.Errorf("unmarshal: %w", err)
+		}
+		return subscriptionDetails{}, fmt.Errorf("request failed: %w", err)
+	}
+	if !exists {
+		return subscriptionDetails{info: types.SubscriptionInfo{State: "Not Installed", Namespace: SubNS}}, nil
 	}
 	state := "Unknown"
 	installed := ""
@@ -521,7 +520,7 @@ func csvForInstalledName(c *Client, installedName string) (types.CSVInfo, error)
 			if csv.Metadata.Name == installedName {
 				return csv.info(), nil
 			}
-		} else if !IsK8sError(err, 404) {
+		} else if !isK8sNotFound(err) {
 			return types.CSVInfo{}, fmt.Errorf("request failed: %w", err)
 		}
 	}
@@ -529,21 +528,18 @@ func csvForInstalledName(c *Client, installedName string) (types.CSVInfo, error)
 	// installed elsewhere with olm.copiedFrom; they are never the RHOAI CSV.
 	path := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "") +
 		"?labelSelector=" + url.QueryEscape("!olm.copiedFrom")
-	body, _, err := c.get(path)
-	if err != nil {
+	var items []csvSummary
+	if err := c.listInto(path, &items); err != nil {
+		if isDecodeError(err) {
+			return types.CSVInfo{}, fmt.Errorf("unmarshal: %w", err)
+		}
 		return types.CSVInfo{}, fmt.Errorf("request failed: %w", err)
-	}
-	var result struct {
-		Items []csvSummary `json:"items"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return types.CSVInfo{}, fmt.Errorf("unmarshal: %w", err)
 	}
 
 	// Primary: match by displayName (most specific)
 	// Fallback: match by name prefix "rhods-operator." (resilient to branding changes)
 	var fallback *types.CSVInfo
-	for _, item := range result.Items {
+	for _, item := range items {
 		info := item.info()
 		name, displayName := item.Metadata.Name, item.Spec.DisplayName
 		if installedName != "" {
@@ -583,14 +579,6 @@ func getCatalogSource(c *Client) (types.CatalogSourceInfo, error) {
 
 func readCatalogSource(c *Client) (types.CatalogSourceInfo, *objectMeta, error) {
 	path := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
-	body, _, err := c.get(path)
-	if err != nil {
-		// 404 is expected when the CatalogSource does not exist yet
-		if IsK8sError(err, 404) {
-			return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, nil
-		}
-		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, fmt.Errorf("request failed: %w", err)
-	}
 	var result struct {
 		Metadata objectMeta `json:"metadata"`
 		Spec     struct {
@@ -602,8 +590,16 @@ func readCatalogSource(c *Client) (types.CatalogSourceInfo, *objectMeta, error) 
 			} `json:"connectionState"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, fmt.Errorf("unmarshal: %w", err)
+	found, err := c.getIntoOptional(path, &result)
+	if err != nil {
+		if isDecodeError(err) {
+			return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, fmt.Errorf("unmarshal: %w", err)
+		}
+		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, fmt.Errorf("request failed: %w", err)
+	}
+	if !found {
+		// expected when the CatalogSource does not exist yet
+		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, nil
 	}
 
 	state := "Unknown"
@@ -698,12 +694,12 @@ func getPullSecret(c *Client) (types.PullSecretInfo, error) {
 // credential it holds, so status polling does not read the Secret twice.
 func readPullSecret(c *Client) (types.PullSecretInfo, string, error) {
 	path := namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret")
-	body, _, err := c.get(path)
+	body, exists, err := c.getOptional(path)
 	if err != nil {
-		if IsK8sError(err, 404) {
-			return types.PullSecretInfo{Exists: false, Detail: "Secret not found"}, "", nil
-		}
 		return types.PullSecretInfo{Exists: false}, "", err
+	}
+	if !exists {
+		return types.PullSecretInfo{Exists: false, Detail: "Secret not found"}, "", nil
 	}
 
 	dockerConfig, problem := decodeDockerConfigSecret(body)
@@ -733,16 +729,12 @@ func readPullSecret(c *Client) (types.PullSecretInfo, string, error) {
 }
 
 func getConsoleURL(c *Client) string {
-	body, _, err := c.get(clusterPath("config.openshift.io/v1", "consoles", "cluster"))
-	if err != nil {
-		return ""
-	}
 	var result struct {
 		Status struct {
 			ConsoleURL string `json:"consoleURL"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := c.getInto(clusterPath("config.openshift.io/v1", "consoles", "cluster"), &result); err != nil {
 		return ""
 	}
 	return result.Status.ConsoleURL
@@ -752,13 +744,6 @@ func getConsoleURL(c *Client) string {
 // whose clusterServiceVersionNames include "rhods-operator".
 func getInstallPlan(c *Client) (*types.InstallPlanInfo, error) {
 	path := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, "")
-	body, _, err := c.get(path)
-	if err != nil {
-		if IsK8sError(err, 404) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
 	var result struct {
 		Items []struct {
 			Metadata struct {
@@ -774,8 +759,15 @@ func getInstallPlan(c *Client) (*types.InstallPlanInfo, error) {
 			} `json:"status"`
 		} `json:"items"`
 	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("unmarshal: %w", err)
+	found, err := c.getIntoOptional(path, &result)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("unmarshal: %w", err)
+		}
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	if !found {
+		return nil, nil
 	}
 
 	var latest *types.InstallPlanInfo
@@ -814,33 +806,30 @@ func getInstallPlan(c *Client) (*types.InstallPlanInfo, error) {
 // getCatalogPod finds the pod backing the rhoai-catalog-dev CatalogSource.
 func getCatalogPod(c *Client) (*types.CatalogPodInfo, error) {
 	path := namespacedPath("v1", "pods", CatalogNS, "") + "?labelSelector=olm.catalogSource%3D" + CatalogName
-	body, _, err := c.get(path)
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Status struct {
+			Phase             string `json:"phase"`
+			ContainerStatuses []struct {
+				Ready        bool `json:"ready"`
+				RestartCount int  `json:"restartCount"`
+			} `json:"containerStatuses"`
+		} `json:"status"`
+	}
+	if err := c.listInto(path, &items); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("unmarshal: %w", err)
+		}
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	var result struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Status struct {
-				Phase             string `json:"phase"`
-				ContainerStatuses []struct {
-					Ready        bool `json:"ready"`
-					RestartCount int  `json:"restartCount"`
-				} `json:"containerStatuses"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("unmarshal: %w", err)
-	}
-	if len(result.Items) == 0 {
+	if len(items) == 0 {
 		return nil, nil
 	}
 
 	// Take the first (usually only) catalog pod
-	pod := result.Items[0]
+	pod := items[0]
 	info := &types.CatalogPodInfo{Name: pod.Metadata.Name, Phase: pod.Status.Phase}
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.Ready {
@@ -853,26 +842,23 @@ func getCatalogPod(c *Client) (*types.CatalogPodInfo, error) {
 
 func getIDMS(c *Client) (types.ImageMirrorInfo, error) {
 	path := clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", "")
-	body, _, err := c.get(path)
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Spec struct {
+			ImageDigestMirrors []struct {
+				Source string `json:"source"`
+			} `json:"imageDigestMirrors"`
+		} `json:"spec"`
+	}
+	if err := c.listInto(path, &items); err != nil {
+		if isDecodeError(err) {
+			return types.ImageMirrorInfo{Exists: false}, fmt.Errorf("unmarshal: %w", err)
+		}
 		return types.ImageMirrorInfo{Exists: false}, fmt.Errorf("request failed: %w", err)
 	}
-	var result struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Spec struct {
-				ImageDigestMirrors []struct {
-					Source string `json:"source"`
-				} `json:"imageDigestMirrors"`
-			} `json:"spec"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return types.ImageMirrorInfo{Exists: false}, fmt.Errorf("unmarshal: %w", err)
-	}
-	for _, item := range result.Items {
+	for _, item := range items {
 		for _, mirror := range item.Spec.ImageDigestMirrors {
 			if mirror.Source == IDMSSource {
 				return types.ImageMirrorInfo{Exists: true, Kind: mirrorKindIDMS, Name: item.Metadata.Name, Source: mirror.Source}, nil

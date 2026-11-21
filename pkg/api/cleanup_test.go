@@ -44,7 +44,7 @@ func TestCleanupStream_RefusesBadRequestsBeforeAnything(t *testing.T) {
 		"a playground project twice": `{"playgrounds":["a","a"]}`,
 	} {
 		w := httptest.NewRecorder()
-		HandleCleanupStream(w, postJSON("/api/resources/cleanup/stream", "user:"+strings.ReplaceAll(name, " ", "-"), body))
+		HandleCleanupStream(w, postJSON(t, "/api/resources/cleanup/stream", "user:"+strings.ReplaceAll(name, " ", "-"), body))
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("%s: %d %s", name, w.Code, w.Body.String())
 		}
@@ -65,7 +65,7 @@ func TestCleanupStream_StreamsEachPartAsOneOperation(t *testing.T) {
 		return &types.OperationResponse{Success: true, Message: "Deleted everything."}
 	})
 	w := httptest.NewRecorder()
-	HandleCleanupStream(w, postJSON("/api/resources/cleanup/stream", "user:alice", `{"pipelineServers":["a","b"],"storage":true,"deleteNamespace":true}`))
+	HandleCleanupStream(w, postJSON(t, "/api/resources/cleanup/stream", "user:alice", `{"pipelineServers":["a","b"],"storage":true,"deleteNamespace":true}`))
 	body := w.Body.String()
 	for _, want := range []string{`"step":"pipeline-server:a"`, `"step":"pipeline-server:b"`, `"step":"storage"`, `"step":"operation_complete","status":"success","message":"Deleted everything."`} {
 		if !strings.Contains(body, want) {
@@ -77,7 +77,7 @@ func TestCleanupStream_StreamsEachPartAsOneOperation(t *testing.T) {
 	}
 	// One request is one rate-limit slot: a second clean-up right after is refused.
 	w = httptest.NewRecorder()
-	HandleCleanupStream(w, postJSON("/api/resources/cleanup/stream", "user:alice", `{"mlflow":true}`))
+	HandleCleanupStream(w, postJSON(t, "/api/resources/cleanup/stream", "user:alice", `{"mlflow":true}`))
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("second clean-up within the window: %d", w.Code)
 	}
@@ -94,7 +94,7 @@ func TestCleanupStream_TakesTheClusterLock(t *testing.T) {
 	}
 	defer releaseClusterMutationLock()
 	w := httptest.NewRecorder()
-	HandleCleanupStream(w, postJSON("/api/resources/cleanup/stream", "user:bob", `{"mlflow":true}`))
+	HandleCleanupStream(w, postJSON(t, "/api/resources/cleanup/stream", "user:bob", `{"mlflow":true}`))
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "cluster_busy") {
 		t.Fatalf("while another operation runs: %d %s", w.Code, w.Body.String())
 	}
@@ -111,7 +111,7 @@ func TestCleanupStream_NeedsMutationPermission(t *testing.T) {
 		return nil
 	})
 	w := httptest.NewRecorder()
-	HandleCleanupStream(w, postJSON("/api/resources/cleanup/stream", "user:reader", `{"mlflow":true}`))
+	HandleCleanupStream(w, postJSON(t, "/api/resources/cleanup/stream", "user:reader", `{"mlflow":true}`))
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("got %d %s", w.Code, w.Body.String())
 	}

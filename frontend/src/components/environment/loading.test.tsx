@@ -116,13 +116,13 @@ describe("Environment loading: the Overview", () => {
     await tick();
     await g.projects.send(projects);
     await g.status.send({ error: "the cluster API answered 503", errorCode: "cluster_unavailable" }, 503);
-    expect(screen.getByRole("heading", { name: "Cannot load the environment" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Can't load the environment" })).toBeInTheDocument();
     expect(panel()).not.toHaveTextContent(NEGATIVE);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await tick();
     await g.projects.send(projects);
     await g.status.send(status);
-    expect(screen.queryByRole("heading", { name: "Cannot load the environment" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Can't load the environment" })).toBeNull();
     expect(within(screen.getByRole("grid", { name: "Features" })).getByText("Not set up", { selector: ".pf-v6-c-label *" })).toBeInTheDocument();
   });
 

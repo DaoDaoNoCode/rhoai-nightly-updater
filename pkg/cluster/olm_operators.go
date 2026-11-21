@@ -134,12 +134,12 @@ func readOperatorSubscription(c *Client, ns, name string) (*olmSubscription, err
 		}
 		return nil, nil
 	}
-	body, _, err := c.get(path)
-	if IsK8sError(err, 404) {
-		return nil, nil
-	}
+	body, found, err := c.getOptional(path)
 	if err != nil {
 		return nil, fmt.Errorf("read Subscription %s/%s: %w", ns, name, err)
+	}
+	if !found {
+		return nil, nil
 	}
 	sub, err := parseSubscription(body)
 	if err != nil {
@@ -155,15 +155,14 @@ func listSubscriptions(c *Client, ns string) ([]*olmSubscription, error) {
 	if ns != "" {
 		path = namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", ns, "")
 	}
-	body, _, err := c.get(path)
-	if err != nil {
-		return nil, fmt.Errorf("list Subscriptions: %w", err)
-	}
 	var list struct {
 		Items []json.RawMessage `json:"items"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse the Subscription list: %w", err)
+	if err := c.getInto(path, &list); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse the Subscription list: %w", err)
+		}
+		return nil, fmt.Errorf("list Subscriptions: %w", err)
 	}
 	out := make([]*olmSubscription, 0, len(list.Items))
 	for _, raw := range list.Items {
@@ -339,26 +338,23 @@ func (p operatorPackage) channel(name string) (packageChannel, bool) {
 func readOperatorPackage(c *Client, pkg, source string) (operatorPackage, bool, error) {
 	path := namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, "") +
 		"?labelSelector=" + url.QueryEscape("catalog="+source) + "&fieldSelector=" + url.QueryEscape("metadata.name="+pkg)
-	body, _, err := c.get(path)
-	if err != nil {
+	var items []struct {
+		Metadata objectMeta `json:"metadata"`
+		Status   struct {
+			PackageName            string           `json:"packageName"`
+			CatalogSource          string           `json:"catalogSource"`
+			CatalogSourceNamespace string           `json:"catalogSourceNamespace"`
+			DefaultChannel         string           `json:"defaultChannel"`
+			Channels               []packageChannel `json:"channels"`
+		} `json:"status"`
+	}
+	if err := c.listInto(path, &items); err != nil {
+		if isDecodeError(err) {
+			return operatorPackage{}, false, fmt.Errorf("parse package %s: %w", pkg, err)
+		}
 		return operatorPackage{}, false, fmt.Errorf("read package %s from catalog %s: %w", pkg, source, err)
 	}
-	var list struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-			Status   struct {
-				PackageName            string           `json:"packageName"`
-				CatalogSource          string           `json:"catalogSource"`
-				CatalogSourceNamespace string           `json:"catalogSourceNamespace"`
-				DefaultChannel         string           `json:"defaultChannel"`
-				Channels               []packageChannel `json:"channels"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return operatorPackage{}, false, fmt.Errorf("parse package %s: %w", pkg, err)
-	}
-	for _, it := range list.Items {
+	for _, it := range items {
 		if it.Metadata.Name == pkg && firstNonEmpty(it.Status.PackageName, pkg) == pkg && it.Status.CatalogSource == source && firstNonEmpty(it.Status.CatalogSourceNamespace, CatalogNS) == CatalogNS {
 			return operatorPackage{defaultChannel: it.Status.DefaultChannel, channels: it.Status.Channels}, true, nil
 		}
@@ -487,14 +483,10 @@ func (gs operatorGroups) names() []string {
 }
 
 func readOperatorGroups(c *Client, ns string) (operatorGroups, error) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1", "operatorgroups", ns, ""))
-	if err != nil {
-		return nil, err
-	}
 	var list struct {
 		Items operatorGroups `json:"items"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
+	if err := c.getInto(namespacedPath("operators.coreos.com/v1", "operatorgroups", ns, ""), &list); err != nil {
 		return nil, err
 	}
 	return list.Items, nil
@@ -565,21 +557,18 @@ func createOperatorObjects(c *Client, plan *operatorInstallPlan, dryRun bool) ([
 
 // csvPhase reads a CSV's phase and message ("" when it does not exist yet).
 func csvPhase(c *Client, ns, name string) (string, string, error) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name))
-	if IsK8sError(err, 404) {
-		return "", "", nil
-	}
-	if err != nil {
-		return "", "", err
-	}
 	var csv struct {
 		Status struct {
 			Phase   string `json:"phase"`
 			Message string `json:"message"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &csv); err != nil {
+	found, err := c.getIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name), &csv)
+	if err != nil {
 		return "", "", err
+	}
+	if !found {
+		return "", "", nil
 	}
 	return csv.Status.Phase, csv.Status.Message, nil
 }
@@ -691,21 +680,15 @@ func patchSubscription(c *Client, sub *olmSubscription, spec map[string]any, dry
 // are never reconciled. The field selector narrows the list on a real API
 // server; the name is checked here too.
 func controllerDeployed(c *Client, name string) (bool, error) {
-	body, _, err := c.get("/apis/apps/v1/deployments?fieldSelector=" + url.QueryEscape("metadata.name="+name))
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+	}
+	if err := c.listInto("/apis/apps/v1/deployments?fieldSelector="+url.QueryEscape("metadata.name="+name), &items); err != nil {
 		return false, fmt.Errorf("list Deployments named %s: %w", name, err)
 	}
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return false, fmt.Errorf("list Deployments named %s: %w", name, err)
-	}
-	for _, d := range list.Items {
+	for _, d := range items {
 		if d.Metadata.Name == name {
 			return true, nil
 		}

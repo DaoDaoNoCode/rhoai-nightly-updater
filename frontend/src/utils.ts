@@ -39,6 +39,9 @@ export function nodePullUnverified(status: StatusResponse | null, gitOpsProfile 
   return !gitOpsProfile && !!nodes && !nodes.pulled && pullSecretReady(status);
 }
 
+/** Why a change waits for prerequisitesMet: the disabled reason of Update, Reinstall and their actions. */
+export const SETUP_FIRST_REASON = "Finish the one-time cluster setup first (pull secret and image mirror).";
+
 export function prerequisitesMet(status: StatusResponse | null, gitOpsProfile = false): boolean {
   return pullSecretReady(status, gitOpsProfile) && !!status?.imageMirror.exists;
 }

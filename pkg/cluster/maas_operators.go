@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 
@@ -199,10 +198,6 @@ type operatorContainer struct {
 // csvContainers reads the containers of a CSV's Deployments (its install
 // strategy), which OLM gives a Subscription's spec.config.resources to.
 func csvContainers(c *Client, ns, name string) ([]operatorContainer, error) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name))
-	if err != nil {
-		return nil, err
-	}
 	var csv struct {
 		Spec struct {
 			Install struct {
@@ -224,7 +219,7 @@ func csvContainers(c *Client, ns, name string) ([]operatorContainer, error) {
 			} `json:"install"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &csv); err != nil {
+	if err := c.getInto(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name), &csv); err != nil {
 		return nil, err
 	}
 	var out []operatorContainer
@@ -243,36 +238,30 @@ func oomKilledContainers(c *Client, st operatorState) ([]string, error) {
 	if !st.installed() || len(st.deployments) == 0 {
 		return nil, nil
 	}
-	body, _, err := c.get(namespacedPath("v1", "pods", st.csvNS, ""))
-	if err != nil {
-		return nil, err
+	var items []struct {
+		Metadata objectMeta `json:"metadata"`
+		Status   struct {
+			ContainerStatuses []struct {
+				Name         string `json:"name"`
+				RestartCount int    `json:"restartCount"`
+				State        struct {
+					Terminated *struct {
+						Reason string `json:"reason"`
+					} `json:"terminated"`
+				} `json:"state"`
+				LastState struct {
+					Terminated *struct {
+						Reason string `json:"reason"`
+					} `json:"terminated"`
+				} `json:"lastState"`
+			} `json:"containerStatuses"`
+		} `json:"status"`
 	}
-	var list struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-			Status   struct {
-				ContainerStatuses []struct {
-					Name         string `json:"name"`
-					RestartCount int    `json:"restartCount"`
-					State        struct {
-						Terminated *struct {
-							Reason string `json:"reason"`
-						} `json:"terminated"`
-					} `json:"state"`
-					LastState struct {
-						Terminated *struct {
-							Reason string `json:"reason"`
-						} `json:"terminated"`
-					} `json:"lastState"`
-				} `json:"containerStatuses"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
+	if err := c.listInto(namespacedPath("v1", "pods", st.csvNS, ""), &items); err != nil {
 		return nil, err
 	}
 	var out []string
-	for _, p := range list.Items {
+	for _, p := range items {
 		ofOperator := false
 		for _, d := range st.deployments {
 			ofOperator = ofOperator || strings.HasPrefix(p.Metadata.Name, d+"-")

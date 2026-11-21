@@ -89,14 +89,15 @@ describe("an operation another updater pod runs (remote)", () => {
     const remote: ServerOperation = { ...aliceUpdate, remote: true, pod: "updater-old" };
     let answer: OperationStatusResponse = { inProgress: true, operation: remote };
     renderWithApp(<><Probe /><RefreshButton /></>, { operation: async () => answer });
+    await settleApps();
     await waitFor(() => expect(probe()).toMatchObject({ running: true, source: "server", serverInProgress: true, serverId: "op1" }));
     expect(probe().blocker).toMatch(/alice is running "Update to nightly" on updater pod updater-old/);
     expect(probe().steps).toContain("wait_catalog_ready:running");
 
     answer = { inProgress: false, operation: null, lastCompleted: { id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: aliceUpdate.startedAt, finishedAt: "2026-10-05T10:09:00Z", success: true, message: "Update complete" } };
     fireEvent.click(screen.getByText("poll"));
-    await waitFor(() => expect(probe()).toMatchObject({ outcome: "succeeded", serverInProgress: false }));
     await settleApps();
+    expect(probe()).toMatchObject({ outcome: "succeeded", serverInProgress: false });
   });
 });
 
@@ -132,20 +133,22 @@ describe("GET /api/operation drives the operation store", () => {
     const fetchOperation = vi.fn(async () => answer);
     renderWithApp(<><Probe /><RefreshButton /></>, { operation: fetchOperation });
 
+    await settleApps();
     await waitFor(() => expect(probe()).toMatchObject({ running: true, source: "server", kind: "update", user: "alice", serverInProgress: true }));
     expect(probe().steps).toContain("wait_catalog_ready:running");
     expect(probe().blocker).toMatch(/alice is running "Update to nightly"/);
 
     answer = IDLE_OPERATION;
     fireEvent.click(screen.getByText("poll"));
-    await waitFor(() => expect(probe()).toMatchObject({ running: false, outcome: "detached", reason: "server_lost", serverInProgress: false }));
     await settleApps();
+    expect(probe()).toMatchObject({ running: false, outcome: "detached", reason: "server_lost", serverInProgress: false });
   });
 
   it("reports an operation the previous pod never finished", async () => {
     renderWithApp(<Probe />, {
       operation: async () => ({ inProgress: false, operation: null, interrupted: { type: "reinstall", label: "Reinstall operator", user: "alice", startedAt: "2026-10-05T09:00:00Z" } }),
     });
+    await settleApps();
     await waitFor(() => expect(probe().interrupted).toBe("Reinstall operator"));
     expect(probe().running).toBe(false);
     await settleApps();
@@ -155,6 +158,7 @@ describe("GET /api/operation drives the operation store", () => {
     renderWithApp(<Probe />, {
       operation: async () => ({ inProgress: true, operation: { ...aliceUpdate, type: "deploy-dashboard-pr", label: "Deploy dashboard PR", step: undefined } }),
     });
+    await settleApps();
     await waitFor(() => expect(probe().serverInProgress).toBe(true));
     expect(probe().running).toBe(false);
     expect(probe().blocker).toMatch(/alice is running "Deploy dashboard PR"/);
@@ -164,14 +168,17 @@ describe("GET /api/operation drives the operation store", () => {
   it("takes the running operation from a 409 cluster_busy body at once (no wait for the next poll)", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: "alice is running \"Update to nightly\". Wait for it to finish.", errorCode: "cluster_busy", operation: aliceUpdate }, 409)));
     renderWithApp(<><Probe /><StartUpdate /></>);
-    await waitFor(() => expect(probe().serverInProgress).toBe(false));
-    fireEvent.click(screen.getByText("start"));
-    await waitFor(() => expect(probe()).toMatchObject({ serverInProgress: true, serverUser: "alice", source: "server", running: true }));
     await settleApps();
+    expect(probe().serverInProgress).toBe(false);
+    // The 409 answers at once: apply it, and the reads it starts, inside act.
+    await act(async () => { fireEvent.click(screen.getByText("start")); });
+    await settleApps();
+    expect(probe()).toMatchObject({ serverInProgress: true, serverUser: "alice", source: "server", running: true });
   });
 
   it("fails closed while permissions are unknown", async () => {
     renderWithApp(<Probe />, { permissions: async () => { throw new ApiError({ status: 503, errorCode: "authorization_unavailable", message: "Cannot verify mutation permissions" }); } });
+    await settleApps();
     await waitFor(() => expect(probe().blocker).toMatch(/permissions could not be checked/));
     await settleApps();
   });
@@ -186,24 +193,28 @@ describe("a detached stream is followed on the server", () => {
     const fetchOperation = vi.fn(async () => answer);
     // The old operator stays Succeeded throughout.
     renderWithApp(<><Probe /><StartUpdate /><RefreshButton /></>, { operation: fetchOperation, status: async () => nightlyStatus() });
-    await waitFor(() => expect(fetchOperation).toHaveBeenCalled());
+    await settleApps();
+    expect(fetchOperation).toHaveBeenCalled();
 
+    // Each stream event, and the reads it starts, inside act.
     fireEvent.click(screen.getByText("start"));
     answer = { inProgress: true, operation: mine };
-    sse.push(sseEvent("validate_prerequisites", "running"));
+    await act(async () => { sse.push(sseEvent("validate_prerequisites", "running")); });
+    await settleApps();
     // The first event binds the run to its backend id.
-    await waitFor(() => expect(probe()).toMatchObject({ running: true, source: "stream", serverId: "mine" }));
+    expect(probe()).toMatchObject({ running: true, source: "stream", serverId: "mine" });
 
-    sse.fail();
+    await act(async () => { sse.fail(); });
+    await settleApps();
     // The stream is gone but the server still runs it: followed as a server run, still locked.
-    await waitFor(() => expect(probe()).toMatchObject({ running: true, source: "server", serverInProgress: true, serverId: "mine" }));
+    expect(probe()).toMatchObject({ running: true, source: "server", serverInProgress: true, serverId: "mine" });
     expect(probe().blocker).toMatch(/You are running "Update to nightly"/);
     expect(probe().phase).toBe("streaming");
 
     answer = { inProgress: false, operation: null, lastCompleted: { id: "mine", type: "update", label: "Update to nightly", user: "me", startedAt: mine.startedAt, finishedAt: new Date().toISOString(), success: true, message: "Update complete" } };
     fireEvent.click(screen.getByText("poll"));
-    await waitFor(() => expect(probe()).toMatchObject({ outcome: "succeeded", phase: "complete", result: "succeeded", serverInProgress: false }));
     await settleApps();
+    expect(probe()).toMatchObject({ outcome: "succeeded", phase: "complete", result: "succeeded", serverInProgress: false });
   });
 
   it("does not hide a teammate's operation that starts right after this tab's run (other id)", async () => {
@@ -213,26 +224,33 @@ describe("a detached stream is followed on the server", () => {
     let answer: OperationStatusResponse = IDLE_OPERATION;
     const fetchOperation = vi.fn(async () => answer);
     renderWithApp(<><Probe /><StartUpdate /><RefreshButton /></>, { operation: fetchOperation });
-    await waitFor(() => expect(fetchOperation).toHaveBeenCalled());
+    await settleApps();
+    expect(fetchOperation).toHaveBeenCalled();
+    // Each stream event, and the reads it starts, inside act.
     fireEvent.click(screen.getByText("start"));
     answer = { inProgress: true, operation: mine };
-    sse.push(sseEvent("validate_prerequisites", "running"));
-    await waitFor(() => expect(probe().serverId).toBe("mine"));
+    await act(async () => { sse.push(sseEvent("validate_prerequisites", "running")); });
+    await settleApps();
+    expect(probe().serverId).toBe("mine");
 
     // This tab's own operation, still holding the lock right after its last event: hidden.
-    sse.push(sseEvent("operation_complete", "success", "Update applied"));
-    sse.close();
-    await waitFor(() => expect(probe().outcome).toBe("succeeded"));
+    await act(async () => {
+      sse.push(sseEvent("operation_complete", "success", "Update applied"));
+      sse.close();
+    });
+    await settleApps();
+    expect(probe().outcome).toBe("succeeded");
     fireEvent.click(screen.getByText("poll"));
-    await waitFor(() => expect(fetchOperation.mock.calls.length).toBeGreaterThan(2));
+    await settleApps();
+    expect(fetchOperation.mock.calls.length).toBeGreaterThan(2);
     expect(probe().serverInProgress).toBe(false);
 
     // Alice's update a second later is shown and blocks changes at once.
     answer = { inProgress: true, operation: { ...aliceUpdate, startedAt: new Date().toISOString() } };
     fireEvent.click(screen.getByText("poll"));
-    await waitFor(() => expect(probe()).toMatchObject({ serverInProgress: true, serverUser: "alice", source: "server" }));
-    expect(probe().blocker).toMatch(/alice is running/);
     await settleApps();
+    expect(probe()).toMatchObject({ serverInProgress: true, serverUser: "alice", source: "server" });
+    expect(probe().blocker).toMatch(/alice is running/);
   });
 });
 
@@ -240,32 +258,29 @@ describe("the outcome of an operation followed from the server", () => {
   const followAlice = async (last: OperationStatusResponse["lastCompleted"]) => {
     let answer: OperationStatusResponse = { inProgress: true, operation: aliceUpdate };
     const { settled } = renderWithApp(<><Probe /><RefreshButton /></>, { operation: async () => answer });
-    await waitFor(() => expect(probe()).toMatchObject({ running: true, source: "server" }));
+    await settled();
+    expect(probe()).toMatchObject({ running: true, source: "server" });
     answer = { inProgress: false, operation: null, lastCompleted: last };
-    // The poll answers at once: apply it inside act, before the caller waits.
-    await act(async () => { fireEvent.click(screen.getByText("poll")); });
-    return settled;
+    fireEvent.click(screen.getByText("poll"));
+    // The poll's answer, and the status read the ended run starts (AppState's run effect).
+    await settled();
   };
 
   it("shows a failed update as failed, with the server's message", async () => {
-    const settled = await followAlice({ id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: aliceUpdate.startedAt, finishedAt: "2026-10-05T10:09:00Z", success: false, message: "The new CSV failed; the previous operator was restored." });
-    await waitFor(() => expect(probe()).toMatchObject({ outcome: "failed", phase: "idle", message: "The new CSV failed; the previous operator was restored." }));
-    // The ended run reads the status once more (AppState's run effect).
-    await settled();
+    await followAlice({ id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: aliceUpdate.startedAt, finishedAt: "2026-10-05T10:09:00Z", success: false, message: "The new CSV failed; the previous operator was restored." });
+    expect(probe()).toMatchObject({ outcome: "failed", phase: "idle", message: "The new CSV failed; the previous operator was restored." });
   });
 
   it("shows a successful update as succeeded", async () => {
-    const settled = await followAlice({ id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: aliceUpdate.startedAt, success: true, message: "done" });
-    await waitFor(() => expect(probe()).toMatchObject({ outcome: "succeeded", result: "succeeded" }));
-    await settled();
+    await followAlice({ id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: aliceUpdate.startedAt, success: true, message: "done" });
+    expect(probe()).toMatchObject({ outcome: "succeeded", result: "succeeded" });
   });
 
   it("claims nothing when the backend sends no result, or the result of another operation", async () => {
-    const settled = await followAlice({ id: "someone-else", type: "update", label: "Update", user: "bob", startedAt: aliceUpdate.startedAt, success: true });
-    await waitFor(() => expect(probe()).toMatchObject({ outcome: "detached", reason: "server_lost" }));
-    await waitFor(() => expect(probe().phase).toBe("complete"));
+    await followAlice({ id: "someone-else", type: "update", label: "Update", user: "bob", startedAt: aliceUpdate.startedAt, success: true });
+    expect(probe()).toMatchObject({ outcome: "detached", reason: "server_lost" });
+    expect(probe().phase).toBe("complete");
     expect(probe().result).toBe("unknown");
-    await settled();
   });
 });
 
@@ -275,9 +290,11 @@ describe("GET /api/operation answers are applied in order", () => {
     const calls: Array<Promise<OperationStatusResponse>> = [first.promise, Promise.resolve({ inProgress: true, operation: aliceUpdate })];
     const fetchOperation = vi.fn(() => calls.shift() ?? Promise.resolve({ inProgress: true, operation: aliceUpdate }));
     renderWithApp(<><Probe /><RefreshButton /></>, { operation: fetchOperation });
-    await waitFor(() => expect(fetchOperation).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByText("poll"));
-    await waitFor(() => expect(probe().serverInProgress).toBe(true));
+    // The first operation read stays open: let the others answer, in act.
+    await act(async () => {});
+    expect(fetchOperation).toHaveBeenCalledTimes(1);
+    await act(async () => { fireEvent.click(screen.getByText("poll")); });
+    expect(probe().serverInProgress).toBe(true);
     await act(async () => { first.resolve(IDLE_OPERATION); await first.promise; });
     expect(probe()).toMatchObject({ serverInProgress: true, serverUser: "alice", running: true });
     await settleApps();
@@ -288,12 +305,13 @@ describe("a reinstall whose target arrives after the first poll", () => {
   it("switches the run to the stable reinstall steps", async () => {
     let answer: OperationStatusResponse = { inProgress: true, operation: { ...aliceUpdate, id: "r1", type: "reinstall", label: "Reinstall", target: undefined, step: "save_snapshot" } };
     renderWithApp(<><Probe /><RefreshButton /></>, { operation: async () => answer });
+    await settleApps();
     await waitFor(() => expect(probe()).toMatchObject({ kind: "reinstall_nightly", running: true }));
     answer = { inProgress: true, operation: { ...aliceUpdate, id: "r1", type: "reinstall", label: "Reinstall", target: "stable", step: "create_subscription" } };
     fireEvent.click(screen.getByText("poll"));
-    await waitFor(() => expect(probe().kind).toBe("reinstall_stable"));
-    expect(probe().steps).toContain("create_subscription:running");
     await settleApps();
+    expect(probe().kind).toBe("reinstall_stable");
+    expect(probe().steps).toContain("create_subscription:running");
   });
 });
 

@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
-  AlertActionCloseButton,
   AlertActionLink,
   Button,
   Card,
@@ -38,15 +37,15 @@ import { SetupModal } from "../components/PrerequisitesPanel";
 import { ActivityLog } from "../components/ActivityLog";
 import { PageErrorState, PageLoading } from "../components/PageStates";
 import { CardList, CardListItem } from "../components/CardList";
-import { TechnicalDetails } from "../components/LongText";
 import { StepsPreview } from "../components/StepsPreview";
 import { PageHeader } from "../components/PageHeader";
 import { FBCContentModal } from "../components/FBCContentModal";
 import { OperationProgress, useHasOperationProgress } from "../components/OperationProgress";
-import { REVERT_DASHBOARD_EXPLANATION, describeDashboardSession, useOperatorActions } from "../components/OperatorActions";
+import { DashboardSessionAlert, useOperatorActions } from "../components/OperatorActions";
 import { TooltipButton } from "../components/TooltipButton";
 import { describeError } from "../errors";
-import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
+import { errorResult } from "../outcomes";
+import { OutcomeAlert } from "../components/OutcomeAlert";
 import { isSessionExpired } from "../services/api";
 import { useClusterStatus, useOperation } from "../state/AppState";
 import { useClusterBusyHandler, useDashboardOverride, useGitOpsProfile, useMutationBlocker, useProfile, useVersion } from "../state/AppInfo";
@@ -54,7 +53,6 @@ import { GITOPS_PROFILE_UNMANAGED_CATALOG, gitOpsPolicyProblem } from "../profil
 import { STEP_SETS } from "../operationSteps";
 import { argoTrackingGroups, catalogManaged, gitOpsOperatorReason, operatorGitOpsApp, operatorManaged } from "../gitops";
 import { ArgoCDLeftOverNote, GitOpsNotice, GitOpsProfileNotice } from "../components/GitOpsNotice";
-import { dashboardOperatorLabel } from "../components/dashboardOperator";
 
 const REFRESH_PLAN = STEP_SETS.refresh;
 
@@ -131,7 +129,7 @@ export const StatusPage: React.FC = () => {
       setTagsLoading(false);
     }
   }, [prerequisitesMet, installed, profile]);
-  useEffect(() => { loadTags(); }, [loadTags]);
+  useEffect(() => { void loadTags(); }, [loadTags]);
 
   useEffect(() => {
     const nightlyTag = status?.nightly?.installed?.tag;
@@ -328,23 +326,13 @@ export const StatusPage: React.FC = () => {
                   </Content>
                 </StackItem>
                 <StackItem>
-                  <TooltipButton variant="primary" onClick={openDscPreview} isLoading={dscLoading} isDisabled={dscLoading} disabledReason={blocker}>
+                  <TooltipButton variant="primary" onClick={() => void openDscPreview()} isLoading={dscLoading} isDisabled={dscLoading} disabledReason={blocker}>
                     Create DataScienceCluster...
                   </TooltipButton>
                 </StackItem>
                 {dscResult && (
                   <StackItem>
-                    <Alert
-                      variant={outcomeVariant(dscResult)}
-                      title={outcomeTitle(dscResult, "Could not create the DataScienceCluster")}
-                      isInline
-                      isLiveRegion
-                      component="p"
-                      actionClose={<AlertActionCloseButton onClose={() => setDscResult(null)} />}
-                    >
-                      {dscResult.success ? undefined : dscResult.message}
-                      {(dscResult.logs?.length ?? 0) > 0 && <TechnicalDetails text={dscResult.logs!} />}
-                    </Alert>
+                    <OutcomeAlert result={dscResult} failedTitle="Could not create the DataScienceCluster" onClose={() => setDscResult(null)} logs />
                   </StackItem>
                 )}
               </Stack>
@@ -374,7 +362,7 @@ export const StatusPage: React.FC = () => {
             <ModalFooter>
               <TooltipButton
                 variant="primary"
-                onClick={() => { setDscModalOpen(false); handleCreateDSC(); }}
+                onClick={() => { setDscModalOpen(false); void handleCreateDSC(); }}
                 isDisabled={dscLoading || dscPreviewLoading || !dscPreviewYAML || !!dscPreviewError}
                 disabledReason={blocker}
               >
@@ -507,10 +495,7 @@ export const StatusPage: React.FC = () => {
             </StackItem>
             {override?.active && (
               <StackItem>
-                <Alert variant="warning" isInline component="p" title="A Dashboard Dev session is active">
-                  {dashboardOperatorLabel(override?.operatorName)} is paused ({describeDashboardSession(override)}). The re-deploy ends that session first.
-                  {" "}{REVERT_DASHBOARD_EXPLANATION}
-                </Alert>
+                <DashboardSessionAlert override={override}>The re-deploy ends that session first.</DashboardSessionAlert>
               </StackItem>
             )}
             <StackItem>

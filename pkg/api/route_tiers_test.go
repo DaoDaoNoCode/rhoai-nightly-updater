@@ -77,8 +77,8 @@ func stubHandler(ran *bool) http.HandlerFunc {
 	}
 }
 
-func getAs(path, token string) *http.Request {
-	r := httptest.NewRequest(http.MethodGet, path, nil)
+func getAs(t testing.TB, path, token string) *http.Request {
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
 	r.Header.Set("X-Forwarded-Access-Token", token)
 	return r
 }
@@ -101,7 +101,7 @@ func TestTierGateInFrontOfEveryGetRoute(t *testing.T) {
 		for _, who := range []string{"user:admin", "user:carol"} {
 			ran := false
 			w := httptest.NewRecorder()
-			handlerFor(ProfileFull, Route{Pattern: pattern, Handler: stubHandler(&ran)})(w, getAs(path, who))
+			handlerFor(ProfileFull, Route{Pattern: pattern, Handler: stubHandler(&ran)})(w, getAs(t, path, who))
 			refused := tier == tierAdmin && who != "user:admin"
 			switch {
 			case refused && (ran || w.Code != http.StatusForbidden || decodeError(t, w)["errorCode"] != adminOnlyCode):
@@ -123,12 +123,12 @@ func TestUnclassifiedGetRouteIsAdminOnly(t *testing.T) {
 	ran := false
 	h := handlerFor(ProfileFull, Route{Pattern: "GET /api/something-new", Handler: stubHandler(&ran)})
 	w := httptest.NewRecorder()
-	h(w, getAs("/api/something-new", "user:carol"))
+	h(w, getAs(t, "/api/something-new", "user:carol"))
 	if ran || w.Code != http.StatusForbidden || decodeError(t, w)["errorCode"] != adminOnlyCode || decodeError(t, w)["error"] != adminOnlyMessage {
 		t.Fatalf("non-admin: ran=%v %d %s", ran, w.Code, w.Body.String())
 	}
 	w = httptest.NewRecorder()
-	h(w, getAs("/api/something-new", "user:admin"))
+	h(w, getAs(t, "/api/something-new", "user:admin"))
 	if !ran {
 		t.Fatalf("admin: %d %s", w.Code, w.Body.String())
 	}
@@ -150,7 +150,7 @@ func TestRegisteredAdminOnlyRoutesRefuseUsers(t *testing.T) {
 		n++
 		_, path, _ := strings.Cut(pattern, " ")
 		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, getAs(path, "user:carol"))
+		mux.ServeHTTP(w, getAs(t, path, "user:carol"))
 		if w.Code != http.StatusForbidden || decodeError(t, w)["errorCode"] != adminOnlyCode {
 			t.Errorf("%s: %d %s", pattern, w.Code, w.Body.String())
 		}
@@ -179,7 +179,7 @@ func TestAdminOnlyGateErrors(t *testing.T) {
 			mutationPermission = func(context.Context, string) (bool, error) { return false, tc.perm }
 			ran := false
 			w := httptest.NewRecorder()
-			adminOnly(stubHandler(&ran))(w, getAs("/api/status", tc.token))
+			adminOnly(stubHandler(&ran))(w, getAs(t, "/api/status", tc.token))
 			if ran || w.Code != tc.code || decodeError(t, w)["errorCode"] != tc.ec {
 				t.Fatalf("ran=%v %d %s", ran, w.Code, w.Body.String())
 			}
@@ -195,7 +195,7 @@ func TestGitOpsProfileKeepsItsOwnGate(t *testing.T) {
 	ran := false
 	h := handlerFor(ProfileGitOps, Route{Pattern: "GET /api/summary", Handler: stubHandler(&ran)})
 	w := httptest.NewRecorder()
-	h(w, getAs("/api/summary", "user:admin"))
+	h(w, getAs(t, "/api/summary", "user:admin"))
 	if ran || w.Code != http.StatusForbidden || decodeError(t, w)["errorCode"] != cluster.ErrorCodeProfileGitOps {
 		t.Fatalf("summary in the gitops profile: ran=%v %d %s", ran, w.Code, w.Body.String())
 	}
@@ -206,7 +206,7 @@ func TestUserPermissionsReportsTheRole(t *testing.T) {
 	setAdmin(t)
 	for token, want := range map[string]string{"user:admin": roleAdmin, "user:carol": roleUser} {
 		w := httptest.NewRecorder()
-		HandleUserPermissions(w, getAs("/api/user/permissions", token))
+		HandleUserPermissions(w, getAs(t, "/api/user/permissions", token))
 		var body map[string]any
 		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != 200 {
 			t.Fatalf("%s: %d %s", token, w.Code, w.Body.String())
@@ -235,7 +235,7 @@ func TestOperationForAUserNamesNobody(t *testing.T) {
 		}, nil
 	}
 	w := httptest.NewRecorder()
-	HandleOperation(w, getAs("/api/operation", "user:carol"))
+	HandleOperation(w, getAs(t, "/api/operation", "user:carol"))
 	if w.Code != 200 {
 		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
@@ -259,7 +259,7 @@ func TestOperationForAUserNamesNobody(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	HandleOperation(w, getAs("/api/operation", "user:admin"))
+	HandleOperation(w, getAs(t, "/api/operation", "user:admin"))
 	for _, name := range []string{"alice", "dave", "erin", "alice-project"} {
 		if !strings.Contains(w.Body.String(), name) {
 			t.Errorf("an admin's operation lost %q: %s", name, w.Body.String())
@@ -269,7 +269,7 @@ func TestOperationForAUserNamesNobody(t *testing.T) {
 	// Nothing running: running false, no label.
 	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) { return &cluster.OperationRecord{}, nil }
 	w = httptest.NewRecorder()
-	HandleOperation(w, getAs("/api/operation", "user:carol"))
+	HandleOperation(w, getAs(t, "/api/operation", "user:carol"))
 	if strings.TrimSpace(w.Body.String()) != `{"running":false,"label":"","startedAt":""}` {
 		t.Errorf("idle: %s", w.Body.String())
 	}
@@ -284,13 +284,13 @@ func TestOperationRoleCheckFailsClosed(t *testing.T) {
 	}
 	mutationPermission = func(context.Context, string) (bool, error) { return true, errors.New("unavailable") }
 	w := httptest.NewRecorder()
-	HandleOperation(w, getAs("/api/operation", "user:admin"))
+	HandleOperation(w, getAs(t, "/api/operation", "user:admin"))
 	if w.Code != 200 || strings.Contains(w.Body.String(), "erin") {
 		t.Fatalf("role unknown: %d %s", w.Code, w.Body.String())
 	}
 	mutationPermission = func(context.Context, string) (bool, error) { return false, cluster.ErrUnauthenticated }
 	w = httptest.NewRecorder()
-	HandleOperation(w, getAs("/api/operation", "user:admin"))
+	HandleOperation(w, getAs(t, "/api/operation", "user:admin"))
 	if w.Code != 401 || decodeError(t, w)["errorCode"] != "session_expired" {
 		t.Fatalf("ended sign-in: %d %s", w.Code, w.Body.String())
 	}
@@ -308,7 +308,7 @@ func TestSummaryHandler(t *testing.T) {
 			DSC: types.SummaryDSC{Exists: true, Components: []types.SummaryComponent{{Name: "dashboard", ManagementState: "Managed", Ready: true}}}}, nil
 	}
 	w := httptest.NewRecorder()
-	HandleSummary(w, getAs("/api/summary", "user:carol"))
+	HandleSummary(w, getAs(t, "/api/summary", "user:carol"))
 	if w.Code != 200 {
 		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
@@ -348,7 +348,7 @@ func TestSummaryHandler(t *testing.T) {
 		return nil, &cluster.K8sError{Status: 503}
 	}
 	w = httptest.NewRecorder()
-	HandleSummary(w, getAs("/api/summary", "user:carol"))
+	HandleSummary(w, getAs(t, "/api/summary", "user:carol"))
 	if w.Code != http.StatusBadGateway || decodeError(t, w)["errorCode"] != "cluster_unavailable" {
 		t.Fatalf("error: %d %s", w.Code, w.Body.String())
 	}

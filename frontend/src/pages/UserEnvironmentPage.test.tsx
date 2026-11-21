@@ -21,6 +21,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
   it("shows the first of their projects, read-only, with the cluster-admin note", async () => {
     const api = stubUserApi();
     render();
+    await settleApps();
     expect(await screen.findByRole("combobox", { name: "Project" })).toHaveValue("dev-project");
     expect(screen.getByText("A cluster-admin sets up the shared parts", { exact: false })).toBeInTheDocument();
     expect(screen.getByText(/S3 storage, the inference gateway, Models as a Service and the operators/)).toBeInTheDocument();
@@ -59,6 +60,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
   it("switches to another project and reads it", async () => {
     const api = stubUserApi();
     render();
+    await settleApps();
     const box = await screen.findByRole("combobox", { name: "Project" });
     fireEvent.click(box);
     fireEvent.click(await screen.findByRole("option", { name: "llm-eval" }));
@@ -71,6 +73,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
   it("opens the project in the address", async () => {
     stubUserApi();
     render("/test-resources?project=llm-eval");
+    await settleApps();
     expect(await screen.findByRole("combobox", { name: "Project" })).toHaveValue("llm-eval");
     await settleApps();
   });
@@ -78,6 +81,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
   it("says when the project in the address is not one of theirs", async () => {
     stubUserApi();
     render("/test-resources?project=someone-elses");
+    await settleApps();
     expect(await screen.findByText("someone-elses is not one of your projects", { exact: false })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Project" })).toHaveValue("dev-project");
     await settleApps();
@@ -86,6 +90,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
   it("without projects, says how to get one", async () => {
     const api = stubUserApi({ "/api/resources/projects": { projects: null } });
     render();
+    await settleApps();
     expect(await screen.findByRole("heading", { name: "You have no data science projects" })).toBeInTheDocument();
     expect(screen.getByText(/Create one in the RHOAI dashboard/)).toBeInTheDocument();
     expect(api.calls.filter((c) => c.includes("/api/resources/status"))).toEqual([]);
@@ -99,6 +104,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
       "/api/resources/samples/mlflow": { project: "dev-project", available: false, reason: "MLflow is not set up on this cluster.", samples: [] },
     });
     render();
+    await settleApps();
     expect(await within(await screen.findByRole("region", { name: "Pipelines" })).findByText("No pipeline server in dev-project. Add one in the RHOAI dashboard, or ask a cluster-admin to set one up here.")).toBeInTheDocument();
     expect(within(part("Models")).getByText("No models in dev-project. Add one in the RHOAI dashboard, or ask a cluster-admin to set one up here.")).toBeInTheDocument();
     expect(await within(part("Playground")).findByText("No playground in dev-project. Add one in the RHOAI dashboard, or ask a cluster-admin to set one up here.")).toBeInTheDocument();
@@ -113,6 +119,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
       "/api/resources/playground": contract.playgroundProblem("dev-project"),
     });
     render();
+    await settleApps();
     const pipelines = await screen.findByRole("region", { name: "Pipelines" });
     expect(await within(pipelines).findByText("You cannot see this")).toBeInTheDocument();
     expect(within(pipelines).queryByText(/No pipeline server/)).not.toBeInTheDocument();
@@ -131,6 +138,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
   it("a part the user may not see says so, not Access denied", async () => {
     stubUserApi({ "/api/resources/playground": () => jsonResponse({ error: "projects \"dev-project\" is forbidden", errorCode: "forbidden_for_user" }, 403) });
     render();
+    await settleApps();
     expect(await within(await screen.findByRole("region", { name: "Playground" })).findByText("You cannot see this")).toBeInTheDocument();
     expect(within(part("Playground")).getByText(/Your OpenShift account has no access to it/)).toBeInTheDocument();
     expect(screen.queryByText(/Access denied/)).not.toBeInTheDocument();
@@ -142,6 +150,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
   it("an admin_only answer shows the cluster-admin note", async () => {
     stubUserApi({ "/api/resources/samples/mlflow": () => jsonResponse({ error: "Only cluster-admins", errorCode: "admin_only" }, 403) });
     render();
+    await settleApps();
     expect(await within(await screen.findByRole("region", { name: "MLflow sample data" })).findByText("Only cluster-admins can see this")).toBeInTheDocument();
     expect(screen.queryByText(/Access denied/)).not.toBeInTheDocument();
     await settleApps();
@@ -151,6 +160,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
     let fail = true;
     const api = stubUserApi({ "/api/resources/playground": () => (fail ? jsonResponse({ error: "The cluster API did not answer", errorCode: "cluster_unavailable" }, 503) : jsonResponse({ items: [{ deployed: true, ready: true, namespace: "dev-project" }] })) });
     render();
+    await settleApps();
     const playground = await screen.findByRole("region", { name: "Playground" });
     expect(await within(playground).findByText("Cannot read the playground")).toBeInTheDocument();
     fail = false;
@@ -163,6 +173,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
   it("a project list the user may not read says so, without Diagnostics", async () => {
     stubUserApi({ "/api/resources/projects": () => jsonResponse({ error: "no", errorCode: "forbidden_for_user" }, 403) });
     render();
+    await settleApps();
     expect(await screen.findByRole("heading", { name: "You cannot see this" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open Diagnostics" })).not.toBeInTheDocument();
     await settleApps();

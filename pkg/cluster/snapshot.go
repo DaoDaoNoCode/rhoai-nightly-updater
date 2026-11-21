@@ -80,7 +80,7 @@ func GetDeploymentSnapshot(c *Client) (map[string]string, string) {
 
 	body, _, err := c.bookkeeping().get(cmPath)
 	if err != nil {
-		if !IsK8sError(err, 404) {
+		if !isK8sNotFound(err) {
 			slog.Warn("snapshot: failed to read", "error", err)
 		}
 		return nil, ""
@@ -182,18 +182,18 @@ func saveSubscriptionSnapshot(c *Client, sub map[string]any) error {
 // loadSubscriptionSnapshot returns the recorded Subscription, or nil when
 // none was recorded.
 func loadSubscriptionSnapshot(c *Client) (*subscriptionSnapshot, error) {
-	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
-	if IsK8sError(err, 404) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read the recorded operator Subscription: %w", err)
-	}
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &cm); err != nil {
-		return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
+	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
+		}
+		return nil, fmt.Errorf("read the recorded operator Subscription: %w", err)
+	}
+	if !found {
+		return nil, nil
 	}
 	raw := cm.Data[subscriptionSnapshotKey]
 	if raw == "" {

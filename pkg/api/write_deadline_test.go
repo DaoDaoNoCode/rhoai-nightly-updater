@@ -27,7 +27,7 @@ func TestLongMutationOutlastsServerWriteTimeout(t *testing.T) {
 	srv.Start()
 	defer srv.Close()
 
-	req, _ := http.NewRequest("POST", srv.URL+"/api/long-op", nil)
+	req, _ := http.NewRequestWithContext(t.Context(), "POST", srv.URL+"/api/long-op", nil)
 	req.Header.Set("X-Forwarded-Access-Token", "user-token")
 	resp, err := srv.Client().Do(req)
 	if err != nil {

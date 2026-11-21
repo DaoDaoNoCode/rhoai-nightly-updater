@@ -42,8 +42,8 @@ func writeDist(t *testing.T) string {
 	return dir
 }
 
-func serve(h http.Handler, method, path, acceptEncoding string) *httptest.ResponseRecorder {
-	r := httptest.NewRequest(method, path, nil)
+func serve(t testing.TB, h http.Handler, method, path, acceptEncoding string) *httptest.ResponseRecorder {
+	r := httptest.NewRequestWithContext(t.Context(), method, path, nil)
 	if acceptEncoding != "" {
 		r.Header.Set("Accept-Encoding", acceptEncoding)
 	}
@@ -82,7 +82,7 @@ func TestStaticFiles(t *testing.T) {
 		{"/favicon.ico", cacheRevalidate, "image/x-icon", 200},
 		{"/index.html", cacheRevalidate, "text/html", 200},
 	} {
-		w := serve(h, "GET", tc.path, "")
+		w := serve(t, h, "GET", tc.path, "")
 		if w.Code != tc.wantStatus || w.Header().Get("Cache-Control") != tc.wantCache || !strings.Contains(w.Header().Get("Content-Type"), tc.wantType) {
 			t.Errorf("%s: %d cache=%q type=%q", tc.path, w.Code, w.Header().Get("Cache-Control"), w.Header().Get("Content-Type"))
 		}
@@ -96,22 +96,22 @@ func TestStaticFiles(t *testing.T) {
 
 	// Missing files with an extension are 404, not the app shell.
 	for _, p := range []string{"/bundle.deadbeef.js", "/styles.00000000.css", "/missing.png"} {
-		if w := serve(h, "GET", p, ""); w.Code != 404 || strings.Contains(w.Body.String(), "<html>") {
+		if w := serve(t, h, "GET", p, ""); w.Code != 404 || strings.Contains(w.Body.String(), "<html>") {
 			t.Errorf("%s: %d %q", p, w.Code, w.Body.String())
 		}
 	}
 	// Unknown API paths get a JSON 404.
 	for _, p := range []string{"/api/does-not-exist", "/api"} {
-		w := serve(h, "GET", p, "")
+		w := serve(t, h, "GET", p, "")
 		if w.Code != 404 || !strings.Contains(w.Header().Get("Content-Type"), "application/json") || !strings.Contains(w.Body.String(), `"errorCode":"not_found"`) {
 			t.Errorf("%s: %d %s %q", p, w.Code, w.Header().Get("Content-Type"), w.Body.String())
 		}
 	}
 	// Path traversal stays inside the directory.
-	if w := serve(h, "GET", "/../../etc/passwd", ""); strings.Contains(w.Body.String(), "root:") || (w.Code == 200 && w.Body.String() != "<html>app</html>") {
+	if w := serve(t, h, "GET", "/../../etc/passwd", ""); strings.Contains(w.Body.String(), "root:") || (w.Code == 200 && w.Body.String() != "<html>app</html>") {
 		t.Errorf("traversal: %d", w.Code)
 	}
-	if w := serve(h, "POST", "/bundle.435605b5.js", ""); w.Code != http.StatusMethodNotAllowed {
+	if w := serve(t, h, "POST", "/bundle.435605b5.js", ""); w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST to a file: %d", w.Code)
 	}
 }
@@ -121,7 +121,7 @@ func TestStaticFilesGzip(t *testing.T) {
 	h := StaticFiles(dir)
 	orig, _ := os.ReadFile(filepath.Join(dir, "bundle.435605b5.js"))
 
-	w := serve(h, "GET", "/bundle.435605b5.js", "gzip, deflate, br")
+	w := serve(t, h, "GET", "/bundle.435605b5.js", "gzip, deflate, br")
 	if w.Header().Get("Content-Encoding") != "gzip" || !strings.Contains(w.Header().Get("Vary"), "Accept-Encoding") {
 		t.Fatalf("no gzip: %v", w.Header())
 	}
@@ -132,15 +132,15 @@ func TestStaticFilesGzip(t *testing.T) {
 		t.Fatalf("gzip did not shrink: %d >= %d", w.Body.Len(), len(orig))
 	}
 	// Second request is served from the cache with the same bytes.
-	if w2 := serve(h, "GET", "/bundle.435605b5.js", "gzip"); !bytes.Equal(w2.Body.Bytes(), w.Body.Bytes()) {
+	if w2 := serve(t, h, "GET", "/bundle.435605b5.js", "gzip"); !bytes.Equal(w2.Body.Bytes(), w.Body.Bytes()) {
 		t.Fatal("cached gzip differs")
 	}
 	// Precompressed sibling wins.
-	if w := serve(h, "GET", "/precompressed.11223344.js", "gzip"); gunzip(t, w.Body.Bytes()) != "PRECOMPRESSED" {
+	if w := serve(t, h, "GET", "/precompressed.11223344.js", "gzip"); gunzip(t, w.Body.Bytes()) != "PRECOMPRESSED" {
 		t.Fatal("precompressed .gz not used")
 	}
 	// The app shell is compressed too.
-	if w := serve(h, "GET", "/components", "gzip"); w.Header().Get("Content-Encoding") != "gzip" || gunzip(t, w.Body.Bytes()) != "<html>app</html>" {
+	if w := serve(t, h, "GET", "/components", "gzip"); w.Header().Get("Content-Encoding") != "gzip" || gunzip(t, w.Body.Bytes()) != "<html>app</html>" {
 		t.Fatalf("index.html not gzipped: %v", w.Header())
 	}
 	// No gzip unless accepted; fonts are never recompressed.
@@ -150,7 +150,7 @@ func TestStaticFilesGzip(t *testing.T) {
 		{"/bundle.435605b5.js", "identity"},
 		{"/7d2c1e0f9a8b7c6d5e4f.woff2", "gzip"},
 	} {
-		w := serve(h, "GET", tc.path, tc.ae)
+		w := serve(t, h, "GET", tc.path, tc.ae)
 		if w.Header().Get("Content-Encoding") != "" {
 			t.Errorf("%s with %q: unexpected gzip", tc.path, tc.ae)
 		}

@@ -368,7 +368,7 @@ func TestHandleUpdateCheck_NeedsASignedInUser(t *testing.T) {
 	}
 	t.Setenv("IMAGE_REPOSITORY", "quay.io/example/app")
 	w := httptest.NewRecorder()
-	HandleUpdateCheck(w, httptest.NewRequest("GET", "/api/update-check", nil))
+	HandleUpdateCheck(w, httptest.NewRequestWithContext(t.Context(), "GET", "/api/update-check", nil))
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("anonymous: %d %s", w.Code, w.Body.String())
 	}
@@ -393,7 +393,7 @@ func TestHandleUpdateCheck(t *testing.T) {
 
 	get := func() UpdateInfo {
 		w := httptest.NewRecorder()
-		HandleUpdateCheck(w, postJSONMethod(http.MethodGet, "/api/update-check", "tok", ""))
+		HandleUpdateCheck(w, postJSONMethod(t, http.MethodGet, "/api/update-check", "tok", ""))
 		var info UpdateInfo
 		if err := json.Unmarshal(w.Body.Bytes(), &info); err != nil {
 			t.Fatalf("decode %s: %v", w.Body.String(), err)
@@ -543,7 +543,7 @@ func TestHandleUpdateCheckGitOps(t *testing.T) {
 	t.Setenv("IMAGE_REPOSITORY", "quay.io/example/app")
 	Version = "v1.0.0"
 	w := httptest.NewRecorder()
-	HandleUpdateCheckGitOps(w, httptest.NewRequest("GET", "/api/update-check", nil))
+	HandleUpdateCheckGitOps(w, httptest.NewRequestWithContext(t.Context(), "GET", "/api/update-check", nil))
 	var info UpdateInfo
 	if err := json.Unmarshal(w.Body.Bytes(), &info); err != nil {
 		t.Fatalf("decode %s: %v", w.Body.String(), err)
@@ -553,7 +553,7 @@ func TestHandleUpdateCheckGitOps(t *testing.T) {
 	}
 	Version = "v1.1.0-rc.1"
 	w = httptest.NewRecorder()
-	HandleUpdateCheckGitOps(w, httptest.NewRequest("GET", "/api/update-check", nil))
+	HandleUpdateCheckGitOps(w, httptest.NewRequestWithContext(t.Context(), "GET", "/api/update-check", nil))
 	info = UpdateInfo{}
 	if err := json.Unmarshal(w.Body.Bytes(), &info); err != nil {
 		t.Fatalf("decode %s: %v", w.Body.String(), err)

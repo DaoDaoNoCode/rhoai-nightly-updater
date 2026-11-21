@@ -115,6 +115,19 @@ func decodeOps(t *testing.T, body string) []map[string]any {
 	return ops
 }
 
+// fieldOps decodes a JSON patch of the fixture DSC, checks that it starts
+// with the tests of the DSC's uid and resourceVersion (write) and returns
+// the operations after them.
+func fieldOps(t *testing.T, body string) []map[string]any {
+	t.Helper()
+	ops := decodeOps(t, body)
+	if len(ops) < 2 || ops[0]["op"] != "test" || ops[0]["path"] != "/metadata/uid" || ops[0]["value"] != dscFixtureUID ||
+		ops[1]["op"] != "test" || ops[1]["path"] != "/metadata/resourceVersion" {
+		t.Fatalf("the patch does not start with the tests of the DSC's uid and resourceVersion: %s", body)
+	}
+	return ops[2:]
+}
+
 // reviewedToggle plans the toggle as the dialog does, then sends it with
 // the plan's UID and token.
 func reviewedToggle(t *testing.T, c *Client, req types.DSCToggleRequest) (*types.OperationResponse, error) {
@@ -465,7 +478,8 @@ func TestToggleReplacesOnlyThatFieldAfterADryRun(t *testing.T) {
 		if call.ContentType != "application/json-patch+json" || call.Query.Get("fieldManager") != dscComponentsManager || call.Query.Get("fieldValidation") != "Strict" {
 			t.Fatalf("call = %+v", call)
 		}
-		want := `[{"op":"test","path":"/spec/components/kserve/modelExpress/managementState","value":"Removed"},{"op":"replace","path":"/spec/components/kserve/modelExpress/managementState","value":"Managed"}]`
+		want := `[{"op":"test","path":"/metadata/uid","value":"` + dscFixtureUID + `"},{"op":"test","path":"/metadata/resourceVersion","value":"` + dscFixtureRV + `"},` +
+			`{"op":"test","path":"/spec/components/kserve/modelExpress/managementState","value":"Removed"},{"op":"replace","path":"/spec/components/kserve/modelExpress/managementState","value":"Managed"}]`
 		if call.Body != want {
 			t.Fatalf("body = %s", call.Body)
 		}
@@ -486,7 +500,7 @@ func TestToggleAddsMissingObjectsWithATestOfTheirParent(t *testing.T) {
 		t.Fatalf("result = %+v, %v", res, err)
 	}
 	_, real := patchesTo(f)
-	ops := decodeOps(t, real[0].Body)
+	ops := fieldOps(t, real[0].Body)
 	if len(ops) != 2 || ops[0]["op"] != "test" || ops[0]["path"] != "/spec/components" || !jsonEqual(ops[0]["value"], before) ||
 		ops[1]["op"] != "add" || ops[1]["path"] != "/spec/components/databaseservice" || !jsonEqual(ops[1]["value"], map[string]any{"managementState": "Managed"}) {
 		t.Fatalf("ops = %v", ops)
@@ -498,7 +512,7 @@ func TestToggleAddsMissingObjectsWithATestOfTheirParent(t *testing.T) {
 		t.Fatalf("result = %+v, %v", res, err)
 	}
 	_, real = patchesTo(f)
-	ops = decodeOps(t, real[1].Body)
+	ops = fieldOps(t, real[1].Body)
 	if len(ops) != 2 || ops[0]["path"] != "/spec/components/dashboard" || !jsonEqual(ops[0]["value"], dashboard) ||
 		ops[1]["op"] != "add" || ops[1]["path"] != "/spec/components/dashboard/maasPortal" {
 		t.Fatalf("ops = %v", ops)
@@ -516,6 +530,7 @@ func TestToggleRefusesWhenTheFieldChangedMeanwhile(t *testing.T) {
 				f.mu.Lock()
 				k, _ := parseFakePath(dscV3Path)
 				setPath(t, f.objects[k], "spec.components.ray.managementState", "Removed")
+				f.bumpRV(ensureMap(f.objects[k], "metadata"))
 				f.mu.Unlock()
 			})
 		}
@@ -602,7 +617,7 @@ func TestToggleToManagedUnderARemovedParent(t *testing.T) {
 		t.Fatalf("with parent: %+v", res)
 	}
 	_, real := patchesTo(f)
-	if ops := decodeOps(t, real[0].Body); len(ops) != 4 || ops[0]["op"] != "test" || ops[1]["op"] != "test" || ops[2]["op"] != "replace" || ops[3]["op"] != "replace" {
+	if ops := fieldOps(t, real[0].Body); len(ops) != 4 || ops[0]["op"] != "test" || ops[1]["op"] != "test" || ops[2]["op"] != "replace" || ops[3]["op"] != "replace" {
 		t.Fatalf("ops = %v", ops)
 	}
 	stored := comps(f.get(dscV3Path))

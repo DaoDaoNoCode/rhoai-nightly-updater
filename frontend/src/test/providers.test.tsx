@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
 import { useClusterStatus } from "../state/AppState";
 import { ADMIN_PERMISSIONS, nightlyStatus, renderWithApp } from "./providers";
 import type { StatusResponse } from "../types";
@@ -53,7 +53,9 @@ describe("renderWithApp's injected reads", () => {
   it("abort a pending app-wide read when the app unmounts", async () => {
     const status = heldReads<StatusResponse>();
     const { unmount, settled } = renderWithApp(<Probe />, { status: status.read });
-    await waitFor(() => expect(status.calls).toHaveLength(1));
+    // The status read stays open; the others answer, inside act.
+    await act(async () => {});
+    expect(status.calls).toHaveLength(1);
     const signal = status.calls[0].signal;
     expect(signal).toBeInstanceOf(AbortSignal);
     expect(signal?.aborted).toBe(false);
@@ -65,7 +67,8 @@ describe("renderWithApp's injected reads", () => {
   it("abort the older read when a newer one starts, and show the newer answer", async () => {
     const status = heldReads<StatusResponse>();
     const { settled } = renderWithApp(<Probe />, { status: status.read });
-    await waitFor(() => expect(status.calls).toHaveLength(1));
+    await act(async () => {});
+    expect(status.calls).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "refresh" }));
     expect(status.calls).toHaveLength(2);
     expect(status.calls[0].signal?.aborted).toBe(true);
@@ -81,7 +84,8 @@ describe("renderWithApp's injected reads", () => {
     const read = (signal?: AbortSignal) => new Promise<StatusResponse>((resolve) => { calls.push({ signal, resolve }); });
     const server = (name: string) => nightlyStatus({ cluster: { server: name, version: "4.22.8", user: "me" } });
     const { settled } = renderWithApp(<Probe />, { status: read });
-    await waitFor(() => expect(calls).toHaveLength(1));
+    await act(async () => {});
+    expect(calls).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "refresh" }));
     expect(calls).toHaveLength(2);
     expect(calls[0].signal?.aborted).toBe(true);

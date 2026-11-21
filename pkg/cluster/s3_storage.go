@@ -154,18 +154,18 @@ type s3Keys struct {
 // readS3Keys reads the keys stored in the storage's Secret. found is false
 // when the Secret does not exist.
 func readS3Keys(c *Client) (keys s3Keys, found bool, err error) {
-	body, _, err := c.get(namespacedPath("v1", "secrets", s3Namespace, s3Secret))
-	if IsK8sError(err, 404) {
-		return s3Keys{}, false, nil
-	}
-	if err != nil {
-		return s3Keys{}, false, fmt.Errorf("read Secret %s/%s: %w", s3Namespace, s3Secret, err)
-	}
 	var secret struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &secret); err != nil {
-		return s3Keys{}, false, fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
+	exists, err := c.getIntoOptional(namespacedPath("v1", "secrets", s3Namespace, s3Secret), &secret)
+	if err != nil {
+		if isDecodeError(err) {
+			return s3Keys{}, false, fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
+		}
+		return s3Keys{}, false, fmt.Errorf("read Secret %s/%s: %w", s3Namespace, s3Secret, err)
+	}
+	if !exists {
+		return s3Keys{}, false, nil
 	}
 	return s3Keys{
 		AccessKey: decodeBase64Field(secret.Data[s3AccessKeyField]), SecretKey: decodeBase64Field(secret.Data[s3SecretKeyField]),
@@ -206,19 +206,19 @@ func S3AdminLogin(c *Client) (login S3Login, err error) {
 	case !ns.Managed:
 		return unavailable(fmt.Sprintf("Namespace %s was not created by this tool, so it does not read the password there.", s3Namespace))
 	}
-	body, _, err := c.get(namespacedPath("v1", "secrets", s3Namespace, s3Secret))
-	if IsK8sError(err, 404) {
-		return unavailable(fmt.Sprintf("Secret %s does not exist in namespace %s. Repair re-creates it.", s3Secret, s3Namespace))
-	}
-	if err != nil {
-		return S3Login{}, fmt.Errorf("read Secret %s/%s: %w", s3Namespace, s3Secret, err)
-	}
 	var secret struct {
 		Metadata objectMeta        `json:"metadata"`
 		Data     map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &secret); err != nil {
-		return S3Login{}, fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
+	found, err := c.getIntoOptional(namespacedPath("v1", "secrets", s3Namespace, s3Secret), &secret)
+	if err != nil {
+		if isDecodeError(err) {
+			return S3Login{}, fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
+		}
+		return S3Login{}, fmt.Errorf("read Secret %s/%s: %w", s3Namespace, s3Secret, err)
+	}
+	if !found {
+		return unavailable(fmt.Sprintf("Secret %s does not exist in namespace %s. Repair re-creates it.", s3Secret, s3Namespace))
 	}
 	if !storageObjectOwned(secret.Metadata) {
 		return unavailable(fmt.Sprintf("Secret %s in namespace %s was not created by this tool, so it does not read it.", s3Secret, s3Namespace))
@@ -304,21 +304,21 @@ func (n s3NamespaceInfo) terminating() bool {
 
 // lookupS3Namespace reads the storage namespace.
 func lookupS3Namespace(c *Client) (s3NamespaceInfo, error) {
-	body, _, err := c.get("/api/v1/namespaces/" + s3Namespace)
-	if IsK8sError(err, 404) {
-		return s3NamespaceInfo{}, nil
-	}
-	if err != nil {
-		return s3NamespaceInfo{}, fmt.Errorf("read namespace %s: %w", s3Namespace, err)
-	}
 	var nsObj struct {
 		Metadata objectMeta `json:"metadata"`
 		Status   struct {
 			Phase string `json:"phase"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &nsObj); err != nil {
-		return s3NamespaceInfo{}, fmt.Errorf("parse namespace %s: %w", s3Namespace, err)
+	found, err := c.getIntoOptional("/api/v1/namespaces/"+s3Namespace, &nsObj)
+	if err != nil {
+		if isDecodeError(err) {
+			return s3NamespaceInfo{}, fmt.Errorf("parse namespace %s: %w", s3Namespace, err)
+		}
+		return s3NamespaceInfo{}, fmt.Errorf("read namespace %s: %w", s3Namespace, err)
+	}
+	if !found {
+		return s3NamespaceInfo{}, nil
 	}
 	return s3NamespaceInfo{Exists: true, Meta: nsObj.Metadata, Phase: nsObj.Status.Phase, Managed: nsObj.Metadata.hasToolLabel()}, nil
 }
@@ -342,28 +342,25 @@ type storagePVC struct {
 // listPVCs lists the PVCs of a namespace. PVCs are listed rather than read
 // by name, so the RBAC rules need no "get" on them.
 func listPVCs(c *Client, namespace string) ([]storagePVC, error) {
-	body, _, err := c.get(namespacedPath("v1", "persistentvolumeclaims", namespace, ""))
-	if err != nil {
+	var items []struct {
+		Metadata objectMeta `json:"metadata"`
+		Spec     struct {
+			Resources struct {
+				Requests map[string]string `json:"requests"`
+			} `json:"resources"`
+		} `json:"spec"`
+		Status struct {
+			Capacity map[string]string `json:"capacity"`
+		} `json:"status"`
+	}
+	if err := c.listInto(namespacedPath("v1", "persistentvolumeclaims", namespace, ""), &items); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse PVC list: %w", err)
+		}
 		return nil, err
 	}
-	var list struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-			Spec     struct {
-				Resources struct {
-					Requests map[string]string `json:"requests"`
-				} `json:"resources"`
-			} `json:"spec"`
-			Status struct {
-				Capacity map[string]string `json:"capacity"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse PVC list: %w", err)
-	}
-	out := make([]storagePVC, 0, len(list.Items))
-	for _, item := range list.Items {
+	out := make([]storagePVC, 0, len(items))
+	for _, item := range items {
 		out = append(out, storagePVC{Meta: item.Metadata, Size: firstNonEmpty(item.Status.Capacity["storage"], item.Spec.Resources.Requests["storage"])})
 	}
 	return out, nil
@@ -495,12 +492,12 @@ type serviceSpec struct {
 // readService reads a Service; found is false when it does not exist. Any
 // other read or parse error is returned.
 func readService(c *Client, namespace, name string) (serviceSpec, error) {
-	body, _, err := c.get(namespacedPath("v1", "services", namespace, name))
+	body, exists, err := c.getOptional(namespacedPath("v1", "services", namespace, name))
 	switch {
-	case IsK8sError(err, 404):
-		return serviceSpec{}, nil
 	case err != nil:
 		return serviceSpec{}, fmt.Errorf("read Service %s: %w", name, err)
+	case !exists:
+		return serviceSpec{}, nil
 	}
 	var svc struct {
 		Spec struct {
@@ -663,7 +660,7 @@ func s3StatusAndEndpoints(c *Client) (types.ResourceState, s3Endpoints, error) {
 	}
 
 	if deployErr != nil {
-		if IsK8sError(deployErr, 404) {
+		if isK8sNotFound(deployErr) {
 			state.Message = "Namespace exists but the S3 storage is not deployed"
 		} else {
 			state.Message = fmt.Sprintf("Cannot read the SeaweedFS deployment: %v", deployErr)
@@ -1142,7 +1139,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 		case err == nil:
 			log.add("OK: Namespace created")
 			ns = s3NamespaceInfo{Exists: true, Managed: true}
-		case IsK8sError(err, 409):
+		case isK8sConflict(err):
 			// Created concurrently: decide ownership again.
 			if ns, err = lookupS3Namespace(c); err != nil {
 				return fail(fmt.Sprintf("Cannot check namespace %s: %v.%s", s3Namespace, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace check failed"), nil
@@ -1219,7 +1216,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 				return fail(fmt.Sprintf("%s was created by someone else while setup was running, so it was left unchanged. Already applied: %s. %s", foreignErr.Desc, done, retry.foreignHint()), "not_managed", r.name+" became foreign")
 			}
 			code := errorCodeFromK8sErr(err)
-			if errors.Is(err, errObjectChanged) || IsK8sError(err, 409) {
+			if errors.Is(err, errObjectChanged) || isK8sConflict(err) {
 				code = "conflict"
 			}
 			if dryRun {
@@ -1362,7 +1359,7 @@ func waitS3Ready(c *Client, image string) (workloadPodIssue, error) {
 					}
 				}
 			}
-		} else if !IsK8sError(err, 404) && !IsNetworkError(err) {
+		} else if !isK8sNotFound(err) && !IsNetworkError(err) {
 			return last, err
 		}
 		if clk.Sleep(ctx, S3ReadyPoll) != nil {
@@ -1468,7 +1465,7 @@ func (d *storageDeletion) deleteOwnedObject(c *Client, namespace, kind, name str
 			return
 		}
 		*logs = append(*logs, fmt.Sprintf("Deleting %s...", desc))
-		if _, err := deleteWithUID(c, path, meta.UID); err != nil && !IsK8sError(err, 404) {
+		if _, err := deleteWithUID(c, path, meta.UID); err != nil && !isK8sNotFound(err) {
 			d.failed = append(d.failed, fmt.Sprintf("%s: %v", desc, err))
 			*logs = append(*logs, fmt.Sprintf("Failed to delete %s: %v", desc, err))
 			if IsK8sError(err, http.StatusForbidden) {
@@ -1670,7 +1667,7 @@ func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.Operatio
 		if ok, reason := toolNamespaceDeletable(s3Namespace, ns.Meta); !ok {
 			nsNote = " " + reason
 			logs = append(logs, reason)
-		} else if _, err := deleteWithUID(c, "/api/v1/namespaces/"+s3Namespace, ns.Meta.UID); err != nil && !IsK8sError(err, 404) {
+		} else if _, err := deleteWithUID(c, "/api/v1/namespaces/"+s3Namespace, ns.Meta.UID); err != nil && !isK8sNotFound(err) {
 			d.failed = append(d.failed, fmt.Sprintf("namespace %s: %v", s3Namespace, err))
 			d.forbidden = err
 		} else {
@@ -1749,10 +1746,6 @@ func s3OtherObjects(pvcs []storagePVC, pvcErr error, deploys []objectMeta, deplo
 // NamespaceFinalizersRemaining conditions) for a namespace that is
 // terminating (deleted by someone else), or "".
 func namespaceDeletionDetail(c *Client, namespace string) string {
-	body, _, err := c.get("/api/v1/namespaces/" + namespace)
-	if err != nil {
-		return ""
-	}
 	var ns struct {
 		Status struct {
 			Conditions []struct {
@@ -1762,7 +1755,7 @@ func namespaceDeletionDetail(c *Client, namespace string) string {
 			} `json:"conditions"`
 		} `json:"status"`
 	}
-	if json.Unmarshal(body, &ns) != nil {
+	if c.getInto("/api/v1/namespaces/"+namespace, &ns) != nil {
 		return ""
 	}
 	var details []string

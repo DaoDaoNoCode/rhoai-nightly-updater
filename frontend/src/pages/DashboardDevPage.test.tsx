@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { DashboardDevPage } from "./DashboardDevPage";
 import { overrideAlerts } from "../components/DashboardSessionPanel";
 import { stubApi, jsonResponse } from "../test/apiStub";
@@ -58,6 +58,7 @@ describe("Dashboard Dev session panel", () => {
       "/api/resources/status": { minio: { deployed: false, ready: false }, mlflow: { deployed: false, ready: false }, pipelineServers: [] },
     });
     renderPage();
+    await settleApps();
     expect(await screen.findByText("Dashboard Dev session active: PR #222")).toBeInTheDocument();
     expect(screen.getByText("alice")).toBeInTheDocument();
     expect(screen.getAllByText("RHOAI build (Konflux)").length).toBeGreaterThan(0);
@@ -85,6 +86,7 @@ describe("Dashboard Dev session panel", () => {
       }, 404),
     });
     renderPage();
+    await settleApps();
     expect(await screen.findByText("The RHOAI dashboard is not deployed")).toBeInTheDocument();
     expect(screen.getByText("Dashboard deletion is blocked until you revert")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Revert to default" })).toBeInTheDocument();
@@ -98,9 +100,9 @@ describe("Dashboard Dev session panel", () => {
   ])("HTTP %i %s is an error, not 'not deployed'", async (status, errorCode, title) => {
     stubApi({ "/api/dashboard/state": () => jsonResponse({ error: "boom", errorCode }, status) });
     renderPage();
+    await settleApps();
     expect(await screen.findByText(new RegExp(`^${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`))).toBeInTheDocument();
     expect(screen.queryByText(/is not deployed/)).not.toBeInTheDocument();
-    await settleApps();
   });
 
   it("overrideAlerts titles each backend warning by its flag", () => {
@@ -117,6 +119,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
   it("Deploy latest main asks first and says what changes", async () => {
     const api = stubApi({ "/api/dashboard/state": clean(), "POST /api/dashboard/deploy-main": { success: true, message: "Deploying main", logs: [] } });
     renderPage();
+    await settleApps();
     fireEvent.click(await screen.findByRole("button", { name: "Deploy latest main" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(/is scaled to 0 so it stops resetting the dashboard images/)).toBeInTheDocument();
@@ -132,6 +135,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
   it("deploys a PR with the chosen ODH flavor and names the session it replaces", async () => {
     const api = stubApi({ "/api/dashboard/state": active(), "POST /api/dashboard/deploy-pr": { success: true, message: "Deploying PR #333", logs: [] } });
     renderPage();
+    await settleApps();
     fireEvent.click(await screen.findByRole("radio", { name: /ODH build/ }));
     fireEvent.change(screen.getByRole("textbox", { name: "Pull request number" }), { target: { value: "333" } });
     fireEvent.click(screen.getByRole("button", { name: "Deploy PR" }));
@@ -147,6 +151,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
   it("the default flavor is RHOAI and is sent explicitly", async () => {
     const api = stubApi({ "/api/dashboard/state": clean(), "POST /api/dashboard/deploy-main": { success: true, message: "ok", logs: [] } });
     renderPage();
+    await settleApps();
     expect(await screen.findByRole("radio", { name: /RHOAI build/ })).toBeChecked();
     fireEvent.click(screen.getByRole("button", { name: "Deploy latest main" }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Deploy latest main" }));
@@ -164,6 +169,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
       }),
     });
     renderPage();
+    await settleApps();
     expect(await screen.findByText("The dashboard rollout is stuck")).toBeInTheDocument();
     expect(screen.getByText(/has timed out progressing/)).toBeInTheDocument();
     expect(screen.getByText("ImagePullBackOff")).toBeInTheDocument();
@@ -177,6 +183,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
       "POST /api/assist-rollout": () => jsonResponse({ success: false, message: "Nothing to do: the pod is scheduled now.", logs: [], errorCode: "nothing_to_do" }, 422),
     });
     renderPage();
+    await settleApps();
     fireEvent.click(await screen.findByRole("button", { name: "Assist rollout" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("custom-apps/rhods-dashboard")).toBeInTheDocument();
@@ -193,6 +200,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
       return jsonResponse({ success: true, message: "Deploying main", logs: [] });
     } });
     renderPage();
+    await settleApps();
     fireEvent.click(await screen.findByRole("button", { name: "Deploy latest main" }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Deploy latest main" }));
     expect(await screen.findByText(/Waiting for the dashboard pods to roll out/)).toBeInTheDocument();
@@ -212,6 +220,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
       return jsonResponse({ success: true, message: "Deploying main", logs: [] });
     } });
     renderPage();
+    await settleApps();
     fireEvent.click(await screen.findByRole("button", { name: "Deploy latest main" }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Deploy latest main" }));
     expect(await screen.findByText("A dashboard container cannot start")).toBeInTheDocument();
@@ -229,6 +238,7 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
       permissions: async () => ({ canMutate: true, user: "me" }),
       operation: async () => ({ inProgress: true, operation: { id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: new Date().toISOString() } }),
     }, "/dashboard-dev");
+    await settleApps();
     const main = await screen.findByRole("button", { name: "Deploy latest main" });
     await waitFor(() => expect(main).toHaveAttribute("aria-disabled", "true"));
     fireEvent.mouseEnter(main);
@@ -240,19 +250,23 @@ describe("Dashboard Dev deploy confirmations and flavor", () => {
     stubApi({ "/api/dashboard/state": clean(), "POST /api/dashboard/deploy-main": { success: true, message: "Deploying main", logs: [] } });
     const dashboard = vi.fn(async () => clean());
     renderWithApp(<DashboardDevPage />, { permissions: async () => ({ canMutate: true, user: "me", role: "admin" }), dashboard }, "/dashboard-dev");
+    await settleApps();
     fireEvent.click(await screen.findByRole("button", { name: "Deploy latest main" }));
     // While this page polls the state, the app takes its answers and does not read it too.
     await settleApps();
     expect(dashboard).not.toHaveBeenCalled();
-    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Deploy latest main" }));
-    // After a change it asks at once, without waiting for the page's next poll.
-    await waitFor(() => expect(dashboard).toHaveBeenCalledTimes(1));
+    const dialog = await screen.findByRole("dialog");
+    // The deploy answers at once: apply it, and the read it starts, inside act.
+    await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: "Deploy latest main" })); });
     await settleApps();
+    // After a change it asks at once, without waiting for the page's next poll.
+    expect(dashboard).toHaveBeenCalledTimes(1);
   });
 
   it("read-only users cannot open the deploy dialogs", async () => {
     stubApi({ "/api/dashboard/state": clean() });
     renderPage(false);
+    await settleApps();
     const main = await screen.findByRole("button", { name: "Deploy latest main" });
     expect(main).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(main);
@@ -303,6 +317,7 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
   it("shows each container's commit, its distance from main and the newer build", async () => {
     stubApi({ "/api/dashboard/state": mainSession(), "/api/dashboard/builds": mainBuilds() });
     renderPage();
+    await settleApps();
     const host = await screen.findByRole("link", { name: "1111111" });
     expect(host).toHaveAttribute("href", `https://github.com/${REPO}/commit/${HOST_SHA}`);
     expect(host).toHaveAttribute("rel", "noopener noreferrer");
@@ -338,6 +353,7 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
     };
     stubApi({ "/api/dashboard/state": state, "/api/dashboard/builds": builds });
     renderPage();
+    await settleApps();
     expect(await screen.findByText("Latest commit of PR #222")).toBeInTheDocument();
     expect(screen.getByText("PR #222 merged")).toBeInTheDocument();
     expect(screen.getByText("PR #222 has 2 newer commits")).toBeInTheDocument();
@@ -353,6 +369,7 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
     }
     stubApi({ "/api/dashboard/state": mainSession(), "/api/dashboard/builds": { ...builds, rateLimited: true, retryAfterSeconds: 1500 } });
     renderPage();
+    await settleApps();
     expect(await screen.findAllByText("Distance from main unknown")).toHaveLength(2);
     expect(screen.getByText(/GitHub's rate limit is reached/)).toHaveTextContent("25 min");
     expect(screen.queryByText(/newer/i)).not.toBeInTheDocument();
@@ -363,6 +380,7 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
     const pending = deferred<Response>();
     stubApi({ "/api/dashboard/state": mainSession(), "/api/dashboard/builds": () => pending.promise });
     renderPage();
+    await settleApps();
     expect(await screen.findAllByText("Checking...")).toHaveLength(2);
     pending.resolve(jsonResponse(mainBuilds()));
     expect(await screen.findByText("Up to date with main")).toBeInTheDocument();
@@ -373,6 +391,7 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
   it("an older backend without the route (404) leaves the card as it was, with no error", async () => {
     const api = stubApi({ "/api/dashboard/state": active(), "/api/dashboard/builds": () => jsonResponse({ error: "404 page not found", errorCode: "not_found" }, 404) });
     renderPage();
+    await settleApps();
     expect(await screen.findByText("odh-pr-222")).toBeInTheDocument();
     await waitFor(() => expect(api.calls.filter((c) => c === "GET /api/dashboard/builds")).toHaveLength(1));
     expect(screen.queryByText("Checking...")).not.toBeInTheDocument();
@@ -384,6 +403,7 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
   it("the page's Refresh asks for the builds again, even when the images did not change", async () => {
     const api = stubApi({ "/api/dashboard/state": mainSession(), "/api/dashboard/builds": mainBuilds() });
     renderPage();
+    await settleApps();
     await screen.findByText("Up to date with main");
     await waitFor(() => expect(api.calls.filter((c) => c === "GET /api/dashboard/builds")).toHaveLength(1));
     fireEvent.click(screen.getByRole("button", { name: "Refresh dashboard dev" }));
@@ -399,6 +419,7 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
     stale.builds[1].image = pinned("odh-mod-arch-gen-ai", "0000000000000000000000000000000000000000", "8");
     stubApi({ "/api/dashboard/state": mainSession(), "/api/dashboard/builds": stale });
     renderPage();
+    await settleApps();
     await screen.findByRole("button", { name: "Revert to default" });
     await screen.findByText("1111111");
     expect(screen.queryByText("Up to date with main")).not.toBeInTheDocument();
@@ -411,6 +432,7 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
   it("does not ask for builds while every container runs the release image", async () => {
     const api = stubApi({ "/api/dashboard/state": clean() });
     renderPage();
+    await settleApps();
     await screen.findByRole("button", { name: "Deploy latest main" });
     expect(api.calls.some((c) => c.includes("/api/dashboard/builds"))).toBe(false);
     await settleApps();

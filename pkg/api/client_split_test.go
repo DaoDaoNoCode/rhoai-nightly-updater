@@ -32,7 +32,7 @@ func TestMutationKeepsItsLeaseAndMarkerOnTheBookkeepingClient(t *testing.T) {
 		writeJSON(w, types.OperationResponse{Success: true}, "t")
 	})
 	w := httptest.NewRecorder()
-	h(w, postJSON("/api/refresh/stream", "user:alice", "{}"))
+	h(w, postJSON(t, "/api/refresh/stream", "user:alice", "{}"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}

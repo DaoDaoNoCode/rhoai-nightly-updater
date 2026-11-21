@@ -13,10 +13,6 @@ import (
 )
 
 func dscSpecSchema(c *Client, apiVersion string) (map[string]any, error) {
-	body, _, err := c.get("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io")
-	if err != nil {
-		return nil, err
-	}
 	var crd struct {
 		Spec struct {
 			Versions []struct {
@@ -28,7 +24,7 @@ func dscSpecSchema(c *Client, apiVersion string) (map[string]any, error) {
 			} `json:"versions"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &crd); err != nil {
+	if err := c.getInto("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io", &crd); err != nil {
 		return nil, err
 	}
 	version := strings.TrimPrefix(apiVersion, "datasciencecluster.opendatahub.io/")
@@ -551,14 +547,10 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 		}
 		detail += ". Components set to Removed: " + strings.Join(removals, ", ")
 	}
-	patch, err := json.Marshal(map[string]any{
+	if err := c.patchJSON(path, map[string]any{
 		"metadata": map[string]any{"resourceVersion": resourceVersion},
 		"spec":     replacementMergePatch(oldSpec, nextSpec),
-	})
-	if err != nil {
-		return nil, err
-	}
-	if _, _, err := c.patch(path, patch); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	RecordActivity(c, types.ActivityEntry{Timestamp: nowRFC3339(), User: getUser(c), Action: "repair-dsc", Detail: name + ": " + detail, Success: true})

@@ -249,6 +249,13 @@ func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent
 	// test of the UID makes it about this DSC only.
 	validate := []jsonPatchOp{patchOp("test", []string{"metadata", "uid"}, v.uid), patchOp("replace", []string{"spec"}, obj["spec"])}
 	if _, err := patchDSCFields(c, path, validate, true); err != nil {
+		// A failed test of the UID gets the same bare 422 as a refused
+		// spec (see dsc_manager.go): the DSC read again tells them apart.
+		if IsK8sError(err, http.StatusUnprocessableEntity) {
+			if meta, found, rerr := readObjectMeta(c, path); rerr == nil && (!found || meta.UID != v.uid) {
+				return r.fail("check", fmt.Sprintf("DataScienceCluster %s was deleted or created again after it was checked. Nothing was changed. Review the hard reset again.", v.name), "conflict"), nil
+			}
+		}
 		return r.fail("check", "The API server refused the release default in a dry run against DataScienceCluster "+v.name+": "+conversionMessage(err)+". Nothing was changed.", nonEmpty(errorCodeFromK8sErr(err), "validation")), nil
 	}
 	createYAML := p.plan.NewObject
@@ -282,7 +289,7 @@ func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent
 	r.step("delete", "running", "Deleting DataScienceCluster "+v.name)
 	if _, _, err := c.do(http.MethodDelete, path, "application/json", dscDeleteBody(v.uid), nil); err != nil {
 		clearDSCHardResetRecord(c)
-		if IsK8sError(err, http.StatusNotFound) || IsK8sError(err, http.StatusConflict) {
+		if isK8sNotFound(err) || isK8sConflict(err) {
 			return r.fail("delete", "DataScienceCluster "+v.name+" was deleted or replaced by someone else since the check, so nothing was changed by this reset. Reload the page.", "conflict"), nil
 		}
 		return r.fail("delete", "Deleting the DataScienceCluster failed: "+conversionMessage(err)+". Nothing was changed.", errorCodeFromK8sErr(err)), nil
@@ -364,12 +371,12 @@ type dscWaitState struct {
 }
 
 func readDSCWaitState(c *Client, path string) (dscWaitState, error) {
-	body, _, err := c.get(path)
-	if IsK8sError(err, http.StatusNotFound) {
-		return dscWaitState{}, nil
-	}
+	body, exists, err := c.getOptional(path)
 	if err != nil {
 		return dscWaitState{}, err
+	}
+	if !exists {
+		return dscWaitState{}, nil
 	}
 	var obj map[string]any
 	if err := json.Unmarshal(body, &obj); err != nil {

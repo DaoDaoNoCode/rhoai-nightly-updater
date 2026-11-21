@@ -564,54 +564,85 @@ func TestAdminAckReported(t *testing.T) {
 
 // Review fix 2: an operation whose cross-pod lock was lost stops, and the
 // automatic restore does not run (another pod may be changing the same
-// Subscription and catalog).
+// Subscription and catalog). The heartbeat cancels the operation's context
+// with ErrOperationLockLost; requestHooks put that at a defined point of the
+// Subscription apply, so each case takes its own path in every run.
 func TestLostLockSkipsTheRestore(t *testing.T) {
-	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
-	ctx, cancel := context.WithCancelCause(context.Background())
-	defer cancel(nil)
-	writesAtLoss := -1
-	f.onSubscribe = func(f *fakeOLM, _ map[string]any) {
-		// The heartbeat saw another holder right after the Subscription
-		// was created; OLM never installs.
-		for _, r := range f.requests {
-			if r.Method != http.MethodGet && !strings.Contains(r.Path, "/configmaps") {
-				writesAtLoss++
+	isSubscriptionApply := func(r *http.Request) bool {
+		return r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/subscriptions/"+SubName)
+	}
+	for _, tc := range []struct {
+		name string
+		// afterApply: the loss is seen once the apply answered, else just
+		// before the apply is sent.
+		afterApply bool
+		// The apply step's own log line.
+		wantLog string
+		// Subscription applies the fake received.
+		wantApplies int
+	}{
+		// The heartbeat saw another holder right after the Subscription was
+		// created; OLM never installs. The wait for OLM stops.
+		{name: "right after the Subscription was applied", afterApply: true, wantLog: "OK: Subscription applied", wantApplies: 1},
+		// The loss is seen while the apply is being sent: the apply fails,
+		// and the wait before its retry stops.
+		{name: "while the Subscription apply was sent", wantLog: "Subscription apply attempt 1 failed", wantApplies: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+			ctx, cancel := context.WithCancelCause(context.Background())
+			defer cancel(nil)
+			writesAtLoss := -1
+			loseLock := func(r *http.Request) {
+				if writesAtLoss < 0 && isSubscriptionApply(r) {
+					writesAtLoss = len(f.writes())
+					cancel(ErrOperationLockLost)
+				}
 			}
-		}
-		writesAtLoss++ // this Subscription write
-		cancel(ErrOperationLockLost)
-	}
-	var events []UpdateStepEvent
-	result, err := UpdateStream(f.client(ctx), testNightlyImage, func(e UpdateStepEvent) { events = append(events, e) })
-	if err != nil || result.Success || result.ErrorCode != "lock_lost" || result.Message != LockLostMessage {
-		t.Fatalf("result %+v err %v", result, err)
-	}
-	if writesAtLoss < 0 {
-		t.Fatal("the Subscription was never created")
-	}
-	if after := f.writes()[writesAtLoss:]; len(after) != 0 {
-		t.Fatalf("cluster writes after the lock was lost: %v", after)
-	}
-	skipped := false
-	for _, e := range events {
-		skipped = skipped || (e.Step == restoreStepName && e.Status == "skipped" && e.ErrorCode == "lock_lost")
-	}
-	if !skipped || !strings.Contains(strings.Join(result.Logs, "\n"), "Automatic operator recovery skipped") {
-		t.Fatalf("restore not reported as skipped: events %+v", events)
-	}
-	// Bookkeeping of the updater itself still happens; cluster cleanup does not.
-	if c := f.client(ctx); !operationLockLost(c) {
-		t.Fatal("cause not seen")
-	}
-	pctx, pcancel := postOperationContext(f.client(ctx), time.Minute)
-	defer pcancel()
-	if pctx.Err() == nil {
-		t.Fatal("postOperationContext is usable after the lock was lost")
-	}
-	bctx, bcancel := bookkeepingContext(f.client(ctx), time.Minute)
-	defer bcancel()
-	if bctx.Err() != nil {
-		t.Fatal("bookkeeping context cancelled")
+			hooks := requestHooks{before: loseLock}
+			if tc.afterApply {
+				hooks = requestHooks{answered: loseLock}
+			}
+			var events []UpdateStepEvent
+			result, err := UpdateStream(withRequestHooks(f.client(ctx), hooks), testNightlyImage, func(e UpdateStepEvent) { events = append(events, e) })
+			if err != nil || result.Success || result.ErrorCode != "lock_lost" || result.Message != LockLostMessage {
+				t.Fatalf("result %+v err %v", result, err)
+			}
+			if writesAtLoss < 0 {
+				t.Fatal("the Subscription was never applied")
+			}
+			if n := len(f.subscriptionApplies()); n != tc.wantApplies {
+				t.Fatalf("%d Subscription applies reached the API server, want %d", n, tc.wantApplies)
+			}
+			if after := f.writes()[writesAtLoss:]; len(after) != 0 {
+				t.Fatalf("cluster writes after the lock was lost: %v", after)
+			}
+			logs := strings.Join(result.Logs, "\n")
+			if !strings.Contains(logs, tc.wantLog) {
+				t.Fatalf("logs lack %q:\n%s", tc.wantLog, logs)
+			}
+			skipped := false
+			for _, e := range events {
+				skipped = skipped || (e.Step == restoreStepName && e.Status == "skipped" && e.ErrorCode == "lock_lost")
+			}
+			if !skipped || !strings.Contains(logs, "Automatic operator recovery skipped") {
+				t.Fatalf("restore not reported as skipped: events %+v", events)
+			}
+			// Bookkeeping of the updater itself still happens; cluster cleanup does not.
+			if c := f.client(ctx); !operationLockLost(c) {
+				t.Fatal("cause not seen")
+			}
+			pctx, pcancel := postOperationContext(f.client(ctx), time.Minute)
+			defer pcancel()
+			if pctx.Err() == nil {
+				t.Fatal("postOperationContext is usable after the lock was lost")
+			}
+			bctx, bcancel := bookkeepingContext(f.client(ctx), time.Minute)
+			defer bcancel()
+			if bctx.Err() != nil {
+				t.Fatal("bookkeeping context cancelled")
+			}
+		})
 	}
 }
 

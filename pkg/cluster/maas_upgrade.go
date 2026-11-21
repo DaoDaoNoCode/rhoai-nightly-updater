@@ -340,7 +340,7 @@ func (m *maasRun) removeTierPolicies() (*types.OperationResponse, error) {
 	for _, p := range legacy {
 		path := legacyTierPolicyPath(p.Kind, p.Version)
 		opts, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": map[string]any{"uid": p.UID}})
-		if _, _, err := c.do(http.MethodDelete, path, "application/json", opts, url.Values{"dryRun": {"All"}}); err != nil && !IsK8sError(err, 404) {
+		if _, _, err := c.do(http.MethodDelete, path, "application/json", opts, url.Values{"dryRun": {"All"}}); err != nil && !isK8sNotFound(err) {
 			return m.fail("check", fmt.Sprintf("The API server rejects deleting %s %s: %v. Nothing was deleted.%s", p.Kind, p.Name, err, templateHint(err)), maasWriteCode(err), "dry run failed")
 		}
 	}
@@ -348,7 +348,7 @@ func (m *maasRun) removeTierPolicies() (*types.OperationResponse, error) {
 	m.step("delete", "running", "Deleting the old tier policies...")
 	for _, p := range legacy {
 		path := legacyTierPolicyPath(p.Kind, p.Version)
-		if _, err := deleteWithUID(c, path, p.UID); err != nil && !IsK8sError(err, 404) {
+		if _, err := deleteWithUID(c, path, p.UID); err != nil && !isK8sNotFound(err) {
 			return m.fail("delete", fmt.Sprintf("Failed to delete %s %s: %v. Run it again to retry.", p.Kind, p.Name, err), maasWriteCode(err), "delete failed")
 		}
 		m.logs = append(m.logs, fmt.Sprintf("OK: %s %s/%s deleted", p.Kind, inferenceGatewayNamespace, p.Name))

@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   Alert,
-  AlertActionCloseButton,
   Button,
   Card,
   CardBody,
@@ -19,7 +18,8 @@ import { getDSCManager, getDSCPlan, runDSCPlan, setDSCManagementState, toApiErro
 import { ConfirmActionModal } from "../ConfirmActionModal";
 import { TooltipButton } from "../TooltipButton";
 import { TechnicalDetails } from "../LongText";
-import { errorResult, outcomeTitle, outcomeVariant } from "../../outcomes";
+import { errorResult } from "../../outcomes";
+import { OutcomeAlert } from "../OutcomeAlert";
 import { PlanAlerts, changeText } from "./planText";
 import { ComponentTree } from "./ComponentTree";
 import { ComparisonSummary } from "./ComparisonSummary";
@@ -156,10 +156,7 @@ export const DSCManagerSection: React.FC<{
             )}
             {result && (
               <StackItem>
-                <Alert component="p" isInline isLiveRegion variant={outcomeVariant(result)} title={outcomeTitle(result, "Could not change the DataScienceCluster")}
-                  actionClose={<AlertActionCloseButton onClose={() => setResult(null)} />}>
-                  {result.success ? undefined : result.message}
-                </Alert>
+                <OutcomeAlert result={result} failedTitle="Could not change the DataScienceCluster" onClose={() => setResult(null)} />
               </StackItem>
             )}
           </Stack>
@@ -180,7 +177,7 @@ export const DSCManagerSection: React.FC<{
           confirmLabel={pending.confirmLabel}
           confirmVariant={plan?.changes.some((c) => c.effect === "removes") ? "danger" : "primary"}
           confirmDisabled={planBlocked || !!disabledReason}
-          onConfirm={confirmPending}
+          onConfirm={() => void confirmPending()}
           onCancel={() => setPending(null)}
         >
           <Stack hasGutter>

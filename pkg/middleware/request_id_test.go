@@ -11,7 +11,7 @@ func TestRequestID_GeneratesIDWhenMissing(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -29,7 +29,7 @@ func TestRequestID_PreservesExistingID(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/", nil)
 	req.Header.Set("X-Request-Id", "my-custom-id-123")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -47,7 +47,7 @@ func TestRequestID_UniquePerRequest(t *testing.T) {
 
 	ids := make(map[string]bool)
 	for range 100 {
-		req := httptest.NewRequest("GET", "/", nil)
+		req := httptest.NewRequestWithContext(t.Context(), "GET", "/", nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		id := rec.Header().Get("X-Request-Id")

@@ -55,6 +55,7 @@ describe("lock_unavailable (the backend fails closed on the cross-pod lock)", ()
     };
     renderWithApp(<Probe />);
     fireEvent.click(screen.getByText("start"));
+    await settleApps();
     await waitFor(() => expect(JSON.parse(screen.getByTestId("probe").textContent || "{}")).toEqual({ running: false, status: "failed", rejected: true, code: "lock_unavailable" }));
     await settleApps();
   });

@@ -618,9 +618,20 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// apiServerPatchTestFailed is the API server's whole answer to a JSON Patch
+// whose "test" operation failed (live on OpenShift's kube-apiserver,
+// 2026-11-20): k8s.io/apiserver pkg/endpoints/handlers/patch.go
+// applyJSPatch turns the json-patch error into
+// errors.NewGenericServerResponse(422, "", schema.GroupResource{}, "",
+// err.Error(), 0, false), and with isUnexpectedResponse false that keeps
+// only the generic message of reason Invalid: no cause, no path, no
+// "testing value". It is the answer of any failed test, whatever its path.
+const apiServerPatchTestFailed = `{"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"the server rejected our request due to an error in our request","reason":"Invalid","details":{},"code":422}`
+
 // serveJSONPatch implements a JSON patch (RFC 6902: test, add, replace,
 // remove) as the API server does: the whole patch or nothing, a failed
-// "test" answering 422 with the API server's wording. Replacing
+// "test" answering 422 with the API server's body
+// (apiServerPatchTestFailed). Replacing
 // metadata.resourceVersion with another value than the stored one fails
 // with 409, as the API server's update precondition does (a field-ownership
 // upgrade sends that). A change to spec bumps metadata.generation, and the
@@ -651,7 +662,9 @@ func (f *resourceFake) serveJSONPatch(w http.ResponseWriter, r *http.Request, k 
 	next, err := applyJSONPatch(obj, ops)
 	if err != nil {
 		if _, ok := errors.AsType[*errJSONPatchTest](err); ok {
-			f.status(w, 422, "the server rejected our request due to an error in our request: "+err.Error()+": test failed")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = io.WriteString(w, apiServerPatchTestFailed)
 			return
 		}
 		f.status(w, 422, err.Error())

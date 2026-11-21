@@ -552,7 +552,7 @@ func scanPods(c *Client, namespaces []string, now time.Time) (issues []podIssue,
 	for _, ns := range namespaces {
 		pods, err := listDiagPods(c, ns, "")
 		if err != nil {
-			if IsK8sError(err, http.StatusNotFound) {
+			if isK8sNotFound(err) {
 				continue
 			}
 			errs = append(errs, fmt.Sprintf("%s: %v", ns, err))
