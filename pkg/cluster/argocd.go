@@ -113,7 +113,7 @@ type argoTracking struct {
 // when none does. Every refusal because of Argo CD reads this.
 func (t argoTracking) managedBy() string {
 	if t.state == types.ArgoCDManaged || t.state == types.ArgoCDUnconfirmed {
-		return nonEmpty(t.app, argoUnknownApplication)
+		return kube.NonEmpty(t.app, argoUnknownApplication)
 	}
 	return ""
 }
@@ -123,7 +123,7 @@ func (t argoTracking) info() *types.ArgoCDTracking {
 	if t.state == "" {
 		return nil
 	}
-	return &types.ArgoCDTracking{Application: nonEmpty(t.app, argoUnknownApplication), State: t.state, Namespace: t.namespace,
+	return &types.ArgoCDTracking{Application: kube.NonEmpty(t.app, argoUnknownApplication), State: t.state, Namespace: t.namespace,
 		StaleReason: t.staleReason, Reason: t.reason, SyncStatus: t.sync}
 }
 
@@ -212,7 +212,7 @@ func argoMarksOf(annotations, labels map[string]string, o argoObject) argoMarks 
 // name is the application the marks name: the annotation's, else the
 // label's.
 func (m argoMarks) name() string {
-	return nonEmpty(m.annotation, m.label)
+	return kube.NonEmpty(m.annotation, m.label)
 }
 
 // object asks Argo CD about object o, which carries these annotations and
@@ -232,7 +232,7 @@ func (a *argoCheck) object(annotations, labels map[string]string, o argoObject) 
 	// object: not confirmed when an Argo CD elsewhere may manage it.
 	remote := func(here string) (argoTracking, bool) {
 		if r := a.remoteArgoCD(o); r.err != "" || r.value != "" {
-			return unconfirmed(here + ", but " + nonEmpty(r.value, r.err)), true
+			return unconfirmed(here + ", but " + kube.NonEmpty(r.value, r.err)), true
 		}
 		return t, false
 	}
@@ -422,7 +422,7 @@ func (ap argoApp) notCompared() string {
 	for _, cond := range ap.Status.Conditions {
 		switch cond.Type {
 		case "ComparisonError", "InvalidSpecError", "UnknownError":
-			return fmt.Sprintf("application %s reports %s: %s", qualified, cond.Type, truncateText(cond.Message, 200))
+			return fmt.Sprintf("application %s reports %s: %s", qualified, cond.Type, kube.TruncateText(cond.Message, 200))
 		}
 	}
 	if ap.Status.ReconciledAt == "" || ap.Status.Sync.Status == "" || ap.Status.Sync.Status == "Unknown" {

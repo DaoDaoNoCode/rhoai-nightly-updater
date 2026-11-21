@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -129,7 +130,7 @@ func TestModelManifest_UsesTheEntrysSettings(t *testing.T) {
 			t.Errorf("%s: annotations %v", entry.Name, ann)
 		}
 		labels := meta["labels"].(map[string]any)
-		if labels["opendatahub.io/dashboard"] != "true" || labels["opendatahub.io/genai-asset"] != "true" || labels[managedByLabelKey] != managedByLabelValue {
+		if labels["opendatahub.io/dashboard"] != "true" || labels["opendatahub.io/genai-asset"] != "true" || labels[kube.ManagedByLabelKey] != kube.ManagedByLabelValue {
 			t.Errorf("%s: labels %v", entry.Name, labels)
 		}
 		spec := obj["spec"].(map[string]any)

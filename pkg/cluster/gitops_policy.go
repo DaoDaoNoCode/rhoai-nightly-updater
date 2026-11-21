@@ -62,7 +62,7 @@ func gitOpsSubscriptionProblem(namespace, name string, spec map[string]any, allo
 	}
 	for field, want := range map[string]string{"name": SubName, "source": CatalogName, "sourceNamespace": CatalogNS} {
 		if got, _ := spec[field].(string); got != want {
-			return fmt.Sprintf("its spec.%s is %q, and the gitops profile may only write a Subscription with %s %q", field, nonEmpty(got, "unset"), field, want)
+			return fmt.Sprintf("its spec.%s is %q, and the gitops profile may only write a Subscription with %s %q", field, kube.NonEmpty(got, "unset"), field, want)
 		}
 	}
 	raw, present := spec["config"]

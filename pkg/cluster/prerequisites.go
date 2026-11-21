@@ -177,7 +177,7 @@ func (e almExample) group() string {
 }
 
 // objName is the operand's name ("cluster" when the example has none).
-func (e almExample) objName() string { return nonEmpty(e.Name, "cluster") }
+func (e almExample) objName() string { return kube.NonEmpty(e.Name, "cluster") }
 
 // ref is "<Kind>/<name>".
 func (e almExample) ref() string { return e.Kind + "/" + e.objName() }
@@ -227,7 +227,7 @@ func (p catalogPackage) supports(mode string) bool { return slices.Contains(p.In
 
 func (p catalogPackage) describe() string {
 	return fmt.Sprintf("package %s in catalog %s (provider %s), default channel %s, head %s",
-		p.Name, p.Catalog, nonEmpty(p.Provider, "unknown"), p.DefaultChannel, nonEmpty(p.CurrentCSV, "unknown"))
+		p.Name, p.Catalog, kube.NonEmpty(p.Provider, "unknown"), p.DefaultChannel, kube.NonEmpty(p.CurrentCSV, "unknown"))
 }
 
 // matchKeys are the normalised names the package is known by.
@@ -354,7 +354,7 @@ func parsePackageManifests(body []byte) ([]catalogPackage, error) {
 			p.Catalog = it.Metadata.Labels["catalog"]
 		}
 		if p.CatalogNamespace == "" {
-			p.CatalogNamespace = nonEmpty(it.Metadata.Labels["catalog-namespace"], CatalogNS)
+			p.CatalogNamespace = kube.NonEmpty(it.Metadata.Labels["catalog-namespace"], CatalogNS)
 		}
 		if p.Provider == "" {
 			p.Provider = it.Metadata.Labels["provider"]
@@ -898,8 +898,8 @@ func prerequisiteProblem(c *Client, d *dependency) Problem {
 		}
 	case d.CSV != nil && !d.installed():
 		csv := d.CSV
-		evidence = append(evidence, fmt.Sprintf("CSV %s/%s is in phase %s", csv.Namespace, csv.Name, nonEmpty(csv.Phase, "unknown")))
-		p.Title = fmt.Sprintf("%s is installed but not ready (CSV phase %s)", name, nonEmpty(csv.Phase, "unknown"))
+		evidence = append(evidence, fmt.Sprintf("CSV %s/%s is in phase %s", csv.Namespace, csv.Name, kube.NonEmpty(csv.Phase, "unknown")))
+		p.Title = fmt.Sprintf("%s is installed but not ready (CSV phase %s)", name, kube.NonEmpty(csv.Phase, "unknown"))
 		p.Description = fmt.Sprintf("OLM has an install of %s, but its CSV is not Succeeded, so modules treat it as missing. %s", name, impact)
 		p.AffectedObjects = []string{fmt.Sprintf("ClusterServiceVersion %s/%s", csv.Namespace, csv.Name)}
 		fixes = append(fixes, "Read the CSV's status message (command below). Installing usually finishes within minutes; a Failed CSV needs its cause fixed, after which OLM retries.")
@@ -926,7 +926,7 @@ func prerequisiteProblem(c *Client, d *dependency) Problem {
 		}
 		evidence = append(evidence, plan.evidence...)
 		if g, err := readOperatorGitOps(c); err == nil && g.active() {
-			if app := nonEmpty(g.subscriptionApp, g.catalogApp); app != "" {
+			if app := kube.NonEmpty(g.subscriptionApp, g.catalogApp); app != "" {
 				fixes = append(fixes, fmt.Sprintf("Argo CD application %q manages RHOAI here: add %s to Git (with the odh-gitops chart, enable it under dependencies in the values) rather than applying the objects below by hand, which Argo CD would not know about; they are listed for reference.", app, name))
 			} else {
 				fixes = append(fixes, fmt.Sprintf("%s manages the RHOAI catalog here: add %s where the cluster's configuration is kept (an ACM policy, or Git) rather than applying the objects below by hand; they are listed for reference.", sentenceStart(acmCatalogManager), name))
@@ -1022,7 +1022,7 @@ func planInstall(c *Client, p catalogPackage, operand *almExample) (prerequisite
 			plan.notes = append(plan.notes, note)
 		}
 	default:
-		return prerequisiteInstall{}, fmt.Errorf("the CSV supports only the install modes %s, which need a target namespace chosen by you", nonEmpty(strings.Join(p.InstallModes, ", "), "(none)"))
+		return prerequisiteInstall{}, fmt.Errorf("the CSV supports only the install modes %s, which need a target namespace chosen by you", kube.NonEmpty(strings.Join(p.InstallModes, ", "), "(none)"))
 	}
 	objects = append(objects, fmt.Sprintf("apiVersion: operators.coreos.com/v1alpha1\nkind: Subscription\nmetadata:\n  name: %s\n  namespace: %s\nspec:\n  channel: %s\n  name: %s\n  source: %s\n  sourceNamespace: %s\n  installPlanApproval: Automatic",
 		p.Name, ns, p.DefaultChannel, p.Name, p.Catalog, p.CatalogNamespace))
@@ -1032,7 +1032,7 @@ func planInstall(c *Client, p catalogPackage, operand *almExample) (prerequisite
 		"oc wait csv/\"$(oc get subscription/" + p.Name + " -n " + ns + " -o jsonpath='{.status.installedCSV}')\" -n " + ns + " --for=jsonpath='{.status.phase}'=Succeeded --timeout=10m",
 	}
 	plan.notes = append(plan.notes, fmt.Sprintf("The Subscription follows the default channel %s of %s with automatic updates; the two oc wait lines return once the operator is installed.", p.DefaultChannel, p.Catalog))
-	plan.evidence = append(plan.evidence, fmt.Sprintf("Install modes supported by %s: %s; suggested namespace: %s", nonEmpty(p.CurrentCSV, p.Name), strings.Join(p.InstallModes, ", "), nonEmpty(p.SuggestedNS, "none")))
+	plan.evidence = append(plan.evidence, fmt.Sprintf("Install modes supported by %s: %s; suggested namespace: %s", kube.NonEmpty(p.CurrentCSV, p.Name), strings.Join(p.InstallModes, ", "), kube.NonEmpty(p.SuggestedNS, "none")))
 	if operand != nil {
 		cmd, err := operandCommand(*operand)
 		if err == nil {
@@ -1131,7 +1131,7 @@ func reuseOperatorGroup(p catalogPackage, ns string, ogs []operatorGroup) (strin
 		return "", fmt.Errorf("namespace %s has OperatorGroup %s, which picks its target namespaces with a label selector; check that it gives an install mode the CSV supports (%s) and install from the console", ns, og.Metadata.Name, strings.Join(p.InstallModes, ", "))
 	case !p.supports(mode):
 		return "", fmt.Errorf("namespace %s has OperatorGroup %s with install mode %s (targetNamespaces %s), which %s does not support (%s); OLM would fail the install. Use another namespace or change that OperatorGroup",
-			ns, og.Metadata.Name, mode, nonEmpty(strings.Join(og.Spec.TargetNamespaces, ", "), "all"), nonEmpty(p.CurrentCSV, p.Name), strings.Join(p.InstallModes, ", "))
+			ns, og.Metadata.Name, mode, kube.NonEmpty(strings.Join(og.Spec.TargetNamespaces, ", "), "all"), kube.NonEmpty(p.CurrentCSV, p.Name), strings.Join(p.InstallModes, ", "))
 	}
 	return fmt.Sprintf("%s already has OperatorGroup %s (install mode %s, which the CSV supports), so none is created: a namespace may have only one.", ns, og.Metadata.Name, mode), nil
 }

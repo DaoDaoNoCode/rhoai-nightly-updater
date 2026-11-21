@@ -333,7 +333,7 @@ func defaultDSCSpecFrom(ctx context.Context, op *installedOperator, versions api
 	}
 	if fetchSample == nil {
 		return nil, fmt.Errorf("operator %s has no DataScienceCluster %s defaults in the alm-examples of %s; the gitops profile does not read the GitHub sample",
-			version, nonEmpty(want, strings.Join(order, ", ")), nonEmpty(op.Name, "its CSV"))
+			version, kube.NonEmpty(want, strings.Join(order, ", ")), kube.NonEmpty(op.Name, "its CSV"))
 	}
 	// An explicit ref can accommodate future naming conventions without a code change.
 	if override != "" {

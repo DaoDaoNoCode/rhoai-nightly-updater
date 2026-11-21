@@ -142,8 +142,8 @@ const acmCatalogManager = "an ACM policy (" + acmPolicyManager + ")"
 // managedFields as they are, until another manager takes over those fields). The updater then still treats the catalog as
 // managed, which is the safe direction: it refuses to replace the catalog,
 // and the gitops profile only installs what the catalog serves.
-func acmEnforcesSpec(meta objectMeta) bool {
-	return meta.ownsField(acmPolicyManager, "f:spec")
+func acmEnforcesSpec(meta kube.ObjectMeta) bool {
+	return meta.OwnsField(acmPolicyManager, "f:spec")
 }
 
 // operatorGitOps is how Argo CD or ACM manages the operator's catalog and
@@ -231,7 +231,7 @@ func readOperatorGitOps(c *Client) (operatorGitOps, error) {
 		{namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName), argoCatalogObject, &g.catalogArgo, &g.catalogApp, true},
 		{subscriptionPath(), argoSubscriptionObject, &g.subscriptionArgo, &g.subscriptionApp, false},
 	} {
-		meta, found, err := readObjectMeta(c, r.path)
+		meta, found, err := kube.ReadObjectMeta(c, r.path)
 		if err != nil {
 			return operatorGitOps{}, err
 		}
@@ -307,7 +307,7 @@ func readCatalogServes(c *Client, sub types.SubscriptionInfo, cs types.CatalogSo
 		s.Installed = new(bool)
 		return s
 	}
-	meta, found, err := readObjectMeta(c, namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, csv.Name))
+	meta, found, err := kube.ReadObjectMeta(c, namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, csv.Name))
 	if err != nil {
 		slog.Warn("catalog head: reading the installed CSV failed", "csv", csv.Name, "error", err)
 		return s
@@ -353,9 +353,9 @@ func (s catalogServing) describe(target catalogTarget) string {
 	case !s.podReady || s.stalePods > 0:
 		return "OLM is replacing the catalog pod"
 	case s.state != "READY":
-		return "catalog state " + nonEmpty(s.state, "unknown")
+		return "catalog state " + kube.NonEmpty(s.state, "unknown")
 	case s.head != target.HeadCSV:
-		return fmt.Sprintf("channel %s lists %s, waiting for %s", target.Channel, nonEmpty(s.head, "nothing"), target.HeadCSV)
+		return fmt.Sprintf("channel %s lists %s, waiting for %s", target.Channel, kube.NonEmpty(s.head, "nothing"), target.HeadCSV)
 	default:
 		return "waiting for the catalog to list the new build"
 	}

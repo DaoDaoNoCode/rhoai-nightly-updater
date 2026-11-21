@@ -31,11 +31,11 @@ func (m *maasRun) upgradeRHCL() (*types.OperationResponse, error) {
 	m.step("check", "running", "Checking Connectivity Link and the upgrade path its catalog offers...")
 	rec, err := readMaaSRecord(c)
 	if err != nil {
-		return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record read failed")
+		return m.fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
 	}
 	st, err := readOperator(c, rhclOperator)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read the installed operators; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "csv read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read the installed operators; nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "csv read failed")
 	}
 	if st.installed() && !rhclBelowMinimum(st.version) {
 		m.step("check", "success", fmt.Sprintf("Connectivity Link %s is installed, which meets the docs' minimum (%s).", st.version, rhclDocsMinimum))
@@ -46,7 +46,7 @@ func (m *maasRun) upgradeRHCL() (*types.OperationResponse, error) {
 	}
 	pkg, found, err := readOperatorPackage(c, rhclOperator.pkg, st.sub.Spec.Source)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read the catalog's channels; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "package read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read the catalog's channels; nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "package read failed")
 	}
 	if !found {
 		return m.fail("check", fmt.Sprintf("Catalog %s does not offer %s. Nothing was changed.", st.sub.Spec.Source, rhclOperator.pkg), "prerequisites", "package missing")
@@ -60,7 +60,7 @@ func (m *maasRun) upgradeRHCL() (*types.OperationResponse, error) {
 		return m.fail("check", fmt.Sprintf("The API server rejects the channel change of Subscription %s/%s: %v. Nothing was changed.%s", st.sub.Metadata.Namespace, st.sub.Metadata.Name, err, templateHint(err)), maasWriteCode(err), "dry run failed")
 	}
 	ns, name := st.sub.Metadata.Namespace, st.sub.Metadata.Name
-	m.step("check", "success", fmt.Sprintf("Upgrading from %s (channel %s) to channel %s (%s).", st.version, firstNonEmpty(st.sub.Spec.Channel, "not set"), target, targetCh.head()))
+	m.step("check", "success", fmt.Sprintf("Upgrading from %s (channel %s) to channel %s (%s).", st.version, kube.FirstNonEmpty(st.sub.Spec.Channel, "not set"), target, targetCh.head()))
 
 	want := target
 	hopped := ""
@@ -71,7 +71,7 @@ func (m *maasRun) upgradeRHCL() (*types.OperationResponse, error) {
 		wantCh, _ := pkg.channel(want)
 		sub, err := readOperatorSubscription(c, ns, name)
 		if err != nil || sub == nil {
-			return m.fail("upgrade", fmt.Sprintf("Cannot read Subscription %s/%s: %v.", ns, name, err), errorCodeFromK8sErr(err), "subscription read failed")
+			return m.fail("upgrade", fmt.Sprintf("Cannot read Subscription %s/%s: %v.", ns, name, err), kube.ErrorCodeFromK8sErr(err), "subscription read failed")
 		}
 		if sub.Spec.Channel != want {
 			m.step("upgrade", "running", fmt.Sprintf("Switching Subscription %s/%s to channel %s...", ns, name, want))
@@ -82,7 +82,7 @@ func (m *maasRun) upgradeRHCL() (*types.OperationResponse, error) {
 		}
 		reached, p, err := m.waitForChannelHead(ns, name, wantCh.CurrentCSV)
 		if err != nil {
-			return m.fail("upgrade", fmt.Sprintf("Stopped waiting for OLM: %v. Channel %s is set; run the upgrade again to continue.", err, want), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled"), "upgrade wait failed")
+			return m.fail("upgrade", fmt.Sprintf("Stopped waiting for OLM: %v. Channel %s is set; run the upgrade again to continue.", err, want), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "upgrade wait failed")
 		}
 		if p.failed != "" {
 			return m.fail("upgrade", fmt.Sprintf("OLM does not upgrade Connectivity Link on channel %s: %s. A cluster-admin checks Subscription %s/%s.", want, p.failed, ns, name), "not_ready", "upgrade failed")
@@ -97,7 +97,7 @@ func (m *maasRun) upgradeRHCL() (*types.OperationResponse, error) {
 			continue
 		}
 		if !p.done {
-			return m.fail("upgrade", fmt.Sprintf("OLM has not finished after %s (%s). Run the upgrade again to continue.", clockText(MaaSOperatorTimeout), firstNonEmpty(p.text, "no progress")), "not_ready", "upgrade not done")
+			return m.fail("upgrade", fmt.Sprintf("OLM has not finished after %s (%s). Run the upgrade again to continue.", clockText(MaaSOperatorTimeout), kube.FirstNonEmpty(p.text, "no progress")), "not_ready", "upgrade not done")
 		}
 		// AtLatestKnown below the head: OLM has no edge from here on this
 		// channel.
@@ -120,7 +120,7 @@ func (m *maasRun) upgradeRHCL() (*types.OperationResponse, error) {
 	m.step("ready", "running", "Checking the operator's pods...")
 	st, err = readOperator(c, rhclOperator)
 	if err != nil {
-		return m.fail("ready", fmt.Sprintf("Cannot read the installed operators: %v. The upgrade itself is done.", err), errorCodeFromK8sErr(err), "csv read failed")
+		return m.fail("ready", fmt.Sprintf("Cannot read the installed operators: %v. The upgrade itself is done.", err), kube.ErrorCodeFromK8sErr(err), "csv read failed")
 	}
 	note := ""
 	if action, n := rhclMemoryOffer(c, st); n != "" {
@@ -148,7 +148,7 @@ func (m *maasRun) waitForChannelHead(ns, name, head string) (bool, subscriptionP
 	var last subscriptionProgress
 	var settledSince, failedSince time.Time
 	reached, failedLong := false, false
-	_, err := waitForGone(m.c, MaaSOperatorTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+	_, err := kube.WaitForGone(m.c, MaaSOperatorTimeout, MaaSPoll, func(cc *Client) (bool, error) {
 		p, err := readSubscriptionProgress(cc, ns, name)
 		if err != nil {
 			return false, err
@@ -195,25 +195,25 @@ func (m *maasRun) rhclMemory() (*types.OperationResponse, error) {
 	m.step("check", "running", "Checking the operator's memory...")
 	rec, err := readMaaSRecord(c)
 	if err != nil {
-		return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record read failed")
+		return m.fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
 	}
 	st, err := readOperator(c, rhclOperator)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read the installed operators; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "csv read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read the installed operators; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err), "csv read failed")
 	}
 	if why := rhclUpgradeRefusal(st); why != "" {
 		return m.fail("check", why+" Nothing was changed.", "prerequisites", "memory refused")
 	}
 	killed, err := oomKilledContainers(c, st)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read the operator's pods, so this tool cannot tell whether it ran out of memory; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "pods read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read the operator's pods, so this tool cannot tell whether it ran out of memory; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err), "pods read failed")
 	}
 	if len(killed) == 0 {
 		return m.fail("check", "No container of the Connectivity Link operator was OOMKilled, so its memory limit stays as its CSV sets it. Nothing was changed.", "prerequisites", "not oomkilled")
 	}
 	containers, err := csvContainers(c, st.csvNS, st.csv)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read CSV %s/%s; nothing was changed: %v.", st.csvNS, st.csv, err), errorCodeFromK8sErr(err), "csv read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read CSV %s/%s; nothing was changed: %v.", st.csvNS, st.csv, err), kube.ErrorCodeFromK8sErr(err), "csv read failed")
 	}
 	resources, why := rhclMemoryResources(containers)
 	if why != "" {
@@ -228,7 +228,7 @@ func (m *maasRun) rhclMemory() (*types.OperationResponse, error) {
 	m.step("memory", "running", fmt.Sprintf("Setting spec.config.resources on Subscription %s/%s (%s)...", st.sub.Metadata.Namespace, st.sub.Metadata.Name, resourcesText(resources)))
 	rec.setShared("rhcl-memory", fmt.Sprintf("Subscription %s/%s spec.config.resources (memory limit %s)", st.sub.Metadata.Namespace, st.sub.Metadata.Name, rhclMemoryLimit))
 	if err := writeMaaSRecord(c, rec); err != nil {
-		return m.fail("memory", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
+		return m.fail("memory", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 	}
 	if err := patchSubscription(c, st.sub, spec, false); err != nil {
 		return m.fail("memory", fmt.Sprintf("Failed to change Subscription %s/%s: %v.", st.sub.Metadata.Namespace, st.sub.Metadata.Name, err), maasWriteCode(err), "subscription patch failed")
@@ -253,11 +253,11 @@ func (m *maasRun) rhclDenyOnFailure() (*types.OperationResponse, error) {
 	m.step("check", "running", "Checking Connectivity Link's Subscription...")
 	rec, err := readMaaSRecord(c)
 	if err != nil {
-		return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record read failed")
+		return m.fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
 	}
 	st, err := readOperator(c, rhclOperator)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read the installed operators; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "csv read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read the installed operators; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err), "csv read failed")
 	}
 	if why := rhclUpgradeRefusal(st); why != "" {
 		return m.fail("check", why+" Nothing was changed.", "prerequisites", "env refused")
@@ -274,7 +274,7 @@ func (m *maasRun) rhclDenyOnFailure() (*types.OperationResponse, error) {
 	m.step("env", "running", "Setting RATELIMIT_CHECK_SERVICE_FAILURE_MODE and RATELIMIT_REPORT_SERVICE_FAILURE_MODE to deny...")
 	rec.setShared("rhcl-deny-on-failure", fmt.Sprintf("Subscription %s/%s spec.config.env deny on failure", st.sub.Metadata.Namespace, st.sub.Metadata.Name))
 	if err := writeMaaSRecord(c, rec); err != nil {
-		return m.fail("env", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
+		return m.fail("env", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 	}
 	if err := patchSubscription(c, st.sub, spec, false); err != nil {
 		return m.fail("env", fmt.Sprintf("Failed to change Subscription %s/%s: %v.", st.sub.Metadata.Namespace, st.sub.Metadata.Name, err), maasWriteCode(err), "subscription patch failed")
@@ -298,12 +298,12 @@ func (m *maasRun) authorinoTLSOnly() (*types.OperationResponse, error) {
 	m.step("check", "running", "Checking Kuadrant's Authorino...")
 	rec, err := readMaaSRecord(c)
 	if err != nil {
-		return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record read failed")
+		return m.fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
 	}
 	kq, err := readKuadrant(c)
 	switch {
 	case err != nil:
-		return m.fail("check", fmt.Sprintf("Cannot read the Kuadrant CR; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "kuadrant read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read the Kuadrant CR; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err), "kuadrant read failed")
 	case !kq.found:
 		return m.fail("check", "There is no Kuadrant CR, so there is no Authorino to configure. Set up creates it. Nothing was changed.", "prerequisites", "no kuadrant")
 	}
@@ -326,7 +326,7 @@ func (m *maasRun) removeTierPolicies() (*types.OperationResponse, error) {
 	m.step("check", "running", "Listing the policies on the MaaS gateway...")
 	policies, err := maasGatewayPolicies(c)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot list the policies on %s; nothing was deleted: %v.%s", maasGatewayName, err, templateHint(err)), errorCodeFromK8sErr(err), "policy list failed")
+		return m.fail("check", fmt.Sprintf("Cannot list the policies on %s; nothing was deleted: %v.%s", maasGatewayName, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "policy list failed")
 	}
 	var legacy []gatewayPolicy
 	for _, p := range policies {
@@ -349,7 +349,7 @@ func (m *maasRun) removeTierPolicies() (*types.OperationResponse, error) {
 	m.step("delete", "running", "Deleting the old tier policies...")
 	for _, p := range legacy {
 		path := legacyTierPolicyPath(p.Kind, p.Version)
-		if _, err := deleteWithUID(c, path, p.UID); err != nil && !kube.IsK8sNotFound(err) {
+		if _, err := kube.DeleteWithUID(c, path, p.UID); err != nil && !kube.IsK8sNotFound(err) {
 			return m.fail("delete", fmt.Sprintf("Failed to delete %s %s: %v. Run it again to retry.", p.Kind, p.Name, err), maasWriteCode(err), "delete failed")
 		}
 		m.logs = append(m.logs, fmt.Sprintf("OK: %s %s/%s deleted", p.Kind, inferenceGatewayNamespace, p.Name))

@@ -58,14 +58,14 @@ func goneMaaSPublications(c *Client, rec maasRecord) ([]maasGonePub, error) {
 	models, modelsErr := readModelsRecord(c)
 	var out []maasGonePub
 	for _, p := range pubs {
-		meta, found, err := readObjectMeta(c, "/api/v1/namespaces/"+p.project)
+		meta, found, err := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+p.project)
 		switch {
 		case err != nil:
 			continue
 		case !found:
 			out = append(out, maasGonePub{p, fmt.Sprintf("project %s no longer exists", p.project), true})
 			continue
-		case meta.terminating():
+		case meta.Terminating():
 			out = append(out, maasGonePub{p, fmt.Sprintf("project %s is being deleted", p.project), true})
 			continue
 		}
@@ -132,11 +132,11 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 			failed = append(failed, fmt.Errorf("read MaaSModelRef %s: %w", g.pub.key(), err))
 			continue
 		}
-		if !found || !toolOwned(ref.Metadata) || ref.Metadata.terminating() {
+		if !found || !toolOwned(ref.Metadata) || ref.Metadata.Terminating() {
 			continue
 		}
 		path, _ := maasModelRefPath(c, g.pub.project, g.pub.model)
-		if _, err := deleteWithUID(c, path, ref.Metadata.UID); err != nil && !kube.IsK8sNotFound(err) {
+		if _, err := kube.DeleteWithUID(c, path, ref.Metadata.UID); err != nil && !kube.IsK8sNotFound(err) {
 			failed = append(failed, fmt.Errorf("delete MaaSModelRef %s: %w", g.pub.key(), err))
 			continue
 		}
@@ -169,7 +169,7 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 			obj  map[string]any
 		}{{"MaaSAuthPolicy", auth}, {"MaaSSubscription", sub}} {
 			accessPath := maasAccessPath(c, w.kind)
-			meta, found, err := readObjectMeta(c, accessPath)
+			meta, found, err := kube.ReadObjectMeta(c, accessPath)
 			if err != nil {
 				failed = append(failed, fmt.Errorf("read %s: %w", w.kind, err))
 				continue
@@ -178,7 +178,7 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 				continue
 			}
 			if len(live) == 0 {
-				if _, err := deleteWithUID(c, accessPath, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
+				if _, err := kube.DeleteWithUID(c, accessPath, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 					failed = append(failed, fmt.Errorf("delete %s: %w", w.kind, err))
 					continue
 				}
@@ -186,7 +186,7 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 				logs = append(logs, fmt.Sprintf("OK: %s deleted (no publication is left)", w.kind))
 				continue
 			}
-			read := func() (objectMeta, bool, error) { return readObjectMeta(c, accessPath) }
+			read := func() (kube.ObjectMeta, bool, error) { return kube.ReadObjectMeta(c, accessPath) }
 			if err := updateToolObject(c, w.kind, accessPath, w.obj, meta, read, toolOwned); err != nil {
 				failed = append(failed, fmt.Errorf("update %s: %w", w.kind, err))
 				continue
@@ -243,7 +243,7 @@ func narrowMaaSGateway(c *Client, plan *maasGatewayPlan) error {
 		if kind == "ConfigMap" {
 			owned = toolOwned
 		}
-		read := func() (objectMeta, bool, error) { return readObjectMeta(c, path) }
+		read := func() (kube.ObjectMeta, bool, error) { return kube.ReadObjectMeta(c, path) }
 		if err := updateToolObject(c, maasDesc(kind, ""), path, plan.objects[kind], plan.current[kind], read, owned); err != nil {
 			return fmt.Errorf("update %s: %w", maasDesc(kind, ""), err)
 		}
@@ -267,12 +267,12 @@ func maasGatewayObjectPath(kind string) string {
 // create too, which the ServiceAccount does not have. The MaaS prune job
 // runs with the ServiceAccount, so the ServiceAccount needs only patch on
 // the tool's named MaaS objects (deploy/template.yaml).
-func updateToolObject(c *Client, desc, path string, obj map[string]any, current objectMeta, read toolObjectReader, owned func(objectMeta) bool) error {
+func updateToolObject(c *Client, desc, path string, obj map[string]any, current kube.ObjectMeta, read toolObjectReader, owned func(kube.ObjectMeta) bool) error {
 	for range 3 {
 		if !owned(current) {
 			return &foreignObjectError{Desc: desc}
 		}
-		if current.terminating() {
+		if current.Terminating() {
 			return fmt.Errorf("%s is being deleted", desc)
 		}
 		upgraded, err := upgradeToolFieldOwnership(c, path, current)
@@ -342,7 +342,7 @@ func PruneGoneMaaSPublicationsInBackground(c *Client) {
 		Timestamp: nowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "prune-maas-publications",
-		Detail:    truncateText(detail, 300),
+		Detail:    kube.TruncateText(detail, 300),
 		Success:   err == nil,
 	})
 }

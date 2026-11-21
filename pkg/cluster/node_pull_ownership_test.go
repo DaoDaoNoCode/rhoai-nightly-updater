@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -189,7 +190,7 @@ func TestPullSecretAddLeavesAnEntryItDidNotAdd(t *testing.T) {
 			if authFromEntry(pullSecretAuths(t, f)[tc.key]) != nsOldRHOAI {
 				t.Fatal("the entry changed")
 			}
-			if after := nsReadRecord(t, f); !jsonEqual(before, after) {
+			if after := nsReadRecord(t, f); !kube.JSONEqual(before, after) {
 				t.Fatalf("record %+v, was %+v", after, before)
 			}
 			assertNoCredentials(t, f, plan, res, steps)
@@ -371,7 +372,7 @@ func TestPullSecretRemoveRefusesAnEntryItDidNotAdd(t *testing.T) {
 			if authFromEntry(pullSecretAuths(t, f)[tc.key]) != nsOldRHOAI {
 				t.Fatal("the entry changed")
 			}
-			if after := nsReadRecord(t, f); !jsonEqual(before, after) {
+			if after := nsReadRecord(t, f); !kube.JSONEqual(before, after) {
 				t.Fatalf("record %+v, was %+v", after, before)
 			}
 			assertNoCredentials(t, f, plan, res, steps)
@@ -506,7 +507,7 @@ func TestNodePullRecordInfo(t *testing.T) {
 		{"the saved token", &nodePullRecord{Salt: "aa", AuthSHA256: hashPullAuth("aa", padded), At: "t", By: "u"}, &types.NodePullSecretRecord{At: "t", By: "u", SameToken: true}},
 		{"an earlier token", &nodePullRecord{Salt: "aa", AuthSHA256: hashPullAuth("aa", nsOldRHOAI), At: "t", By: "u"}, &types.NodePullSecretRecord{At: "t", By: "u"}},
 	} {
-		if got := nodePullRecordInfo(tc.rec, saved); !jsonEqual(got, tc.want) {
+		if got := nodePullRecordInfo(tc.rec, saved); !kube.JSONEqual(got, tc.want) {
 			t.Errorf("%s: %+v, want %+v", tc.name, got, tc.want)
 		}
 	}

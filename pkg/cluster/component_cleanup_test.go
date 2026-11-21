@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 const componentsV1 = "/apis/components.platform.opendatahub.io/v1alpha1/"
@@ -256,7 +258,7 @@ func TestCleanupStuckComponentCRsRefusals(t *testing.T) {
 			if tc.api != nil {
 				tc.api(f)
 			}
-			name := firstNonEmpty(tc.cr, crName(tc.module))
+			name := kube.FirstNonEmpty(tc.cr, crName(tc.module))
 			since := old
 			if !tc.since.IsZero() {
 				since = tc.since

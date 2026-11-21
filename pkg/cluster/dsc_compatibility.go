@@ -390,7 +390,7 @@ func errDSCVersionChanged(previewed, now string) error {
 		return fmt.Errorf("this page did not say which DataScienceCluster API version it previewed (it was loaded before an update of this app); refresh and review the changes again. Nothing was changed")
 	}
 	return fmt.Errorf("the DataScienceCluster's API version changed since the preview (previewed %s, now %s); refresh and review the changes again. Nothing was changed",
-		strings.TrimPrefix(previewed, dscGroup+"/"), nonEmpty(now, "not readable"))
+		strings.TrimPrefix(previewed, dscGroup+"/"), kube.NonEmpty(now, "not readable"))
 }
 
 // errResetRemovalsChanged: a reset would now remove other management paths
@@ -400,7 +400,7 @@ func errResetRemovalsChanged(previewed []string, now []string) error {
 		return fmt.Errorf("this page did not say which components the reset would switch to Removed (it was loaded before an update of this app); refresh and review the changes again. Nothing was changed")
 	}
 	return fmt.Errorf("the components a reset would switch to Removed changed since the preview (previewed: %s; now: %s); refresh and review the changes again. Nothing was changed",
-		nonEmpty(strings.Join(previewed, ", "), "none"), nonEmpty(strings.Join(now, ", "), "none"))
+		kube.NonEmpty(strings.Join(previewed, ", "), "none"), kube.NonEmpty(strings.Join(now, ", "), "none"))
 }
 
 // RepairDSC repairs the named DSC in one of the modes the Components page

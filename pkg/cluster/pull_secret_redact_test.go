@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // An API error that quotes the object it was sent (an admission webhook or
@@ -64,7 +66,7 @@ func TestCreatePullSecret_RedactsTheCredentialFromWriteErrors(t *testing.T) {
 					t.Errorf("the message shows %q:\n%s", secret, out)
 				}
 			}
-			if !strings.Contains(res.Message, "admission webhook denied") || !strings.Contains(res.Message, redactedText) {
+			if !strings.Contains(res.Message, "admission webhook denied") || !strings.Contains(res.Message, kube.RedactedText) {
 				t.Errorf("the error is not kept with the values redacted: %s", res.Message)
 			}
 		})
@@ -72,7 +74,7 @@ func TestCreatePullSecret_RedactsTheCredentialFromWriteErrors(t *testing.T) {
 }
 
 func TestRedactSecrets(t *testing.T) {
-	got := redactSecrets(`a "xx\"yy" abcdefgh abcdefghij ab`, `xx"yy`, "abcdefgh", "abcdefghij", "ab")
+	got := kube.RedactSecrets(`a "xx\"yy" abcdefgh abcdefghij ab`, `xx"yy`, "abcdefgh", "abcdefghij", "ab")
 	if want := `a "[redacted]" [redacted] [redacted] ab`; got != want {
 		t.Fatalf("got %s, want %s", got, want)
 	}

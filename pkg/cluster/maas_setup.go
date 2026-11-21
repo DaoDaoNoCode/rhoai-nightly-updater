@@ -25,11 +25,11 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 	m.step("check", "running", "Checking what the MaaS platform needs...")
 	rec, err := readMaaSRecord(c)
 	if err != nil {
-		return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record read failed")
+		return m.fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
 	}
 	dsc, err := readMaaSDSC(c)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read the DataScienceCluster; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "dsc read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read the DataScienceCluster; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err), "dsc read failed")
 	}
 	needDSC := dsc.aigateway != "Managed" || dsc.maas != "Managed"
 	switch {
@@ -42,18 +42,18 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 	// Connectivity Link and its Kuadrant CR.
 	rhcl, err := readOperator(c, rhclOperator)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read the installed operators, so this tool cannot tell whether Connectivity Link is installed; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "csv read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read the installed operators, so this tool cannot tell whether Connectivity Link is installed; nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "csv read failed")
 	}
 	kVersion, err := kuadrantServedVersion(c)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read the Kuadrant API; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "kuadrant read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read the Kuadrant API; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err), "kuadrant read failed")
 	}
 	// Kuadrant's API served without an rhcl-operator CSV counts as installed
 	// only while its controller runs (CRDs stay after an uninstall).
 	kRuns := kVersion != ""
 	if kRuns && !rhcl.installed() {
 		if kRuns, err = controllerDeployed(c, kuadrantController); err != nil {
-			return m.fail("check", fmt.Sprintf("Cannot tell whether Kuadrant's operator runs; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "controller read failed")
+			return m.fail("check", fmt.Sprintf("Cannot tell whether Kuadrant's operator runs; nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "controller read failed")
 		}
 	}
 	var rhclPlan *operatorInstallPlan
@@ -69,18 +69,18 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 	}
 	kq, err := readKuadrant(c)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read the Kuadrant CR; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "kuadrant read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read the Kuadrant CR; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err), "kuadrant read failed")
 	}
-	kuadrantNS := firstNonEmpty(kq.namespace, rhcl.csvNS, rhclOperator.namespace)
+	kuadrantNS := kube.FirstNonEmpty(kq.namespace, rhcl.csvNS, rhclOperator.namespace)
 
 	// The infrastructure namespace and the database.
 	infra, err := maasInfraNamespace(c)
 	if err != nil {
 		return m.fail("check", sentenceStart(err.Error())+". Nothing was changed.", "prerequisites", "infra namespace unknown")
 	}
-	_, infraFound, err := readObjectMeta(c, "/api/v1/namespaces/"+infra)
+	_, infraFound, err := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+infra)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read namespace %s; nothing was changed: %v.%s", infra, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read namespace %s; nothing was changed: %v.%s", infra, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace read failed")
 	}
 	if _, ours := maasInfraNamespacePath(infra); !infraFound && !ours {
 		return m.fail("check", fmt.Sprintf("Namespace %s, where maas-api and its database go, does not exist, and this tool creates only the AI gateway's own infrastructure namespaces. A cluster-admin creates it. Nothing was changed.", infra), "prerequisites", "no infra namespace")
@@ -189,9 +189,9 @@ func (m *maasRun) setupDryRuns(k maasSetupChecks) (*types.OperationResponse, err
 		// Only where its namespace exists: Kuadrant's API can be served
 		// (CRDs left by an uninstall) before the install makes the
 		// namespace, and the API server refuses the dry run there (seen live).
-		_, kNSFound, err := readObjectMeta(c, "/api/v1/namespaces/"+kuadrantNS)
+		_, kNSFound, err := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+kuadrantNS)
 		if err != nil {
-			return m.fail("check", fmt.Sprintf("Cannot read namespace %s; nothing was changed: %v.%s", kuadrantNS, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace read failed")
+			return m.fail("check", fmt.Sprintf("Cannot read namespace %s; nothing was changed: %v.%s", kuadrantNS, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace read failed")
 		}
 		if kNSFound {
 			if err := createKuadrant(c, kVersion, kuadrantNS, true); err != nil {
@@ -234,7 +234,7 @@ func (m *maasRun) setupRHCL(rec *maasRecord, rhcl operatorState, rhclPlan *opera
 		m.step("rhcl", "running", fmt.Sprintf("Installing Red Hat Connectivity Link %s (channel %s) from redhat-operators...", rhclPlan.head, rhclPlan.channel))
 		rec.setShared("rhcl", fmt.Sprintf("Subscription %s/%s, channel %s", rhclOperator.namespace, rhclOperator.subName, rhclPlan.channel))
 		if err := writeMaaSRecord(c, *rec); err != nil {
-			return m.fail("rhcl", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
+			return m.fail("rhcl", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 		}
 		made, err := createOperatorObjects(c, rhclPlan, false)
 		for _, d := range made {
@@ -269,16 +269,16 @@ func (m *maasRun) setupKuadrant(rec *maasRecord, kq *kuadrantState, kVersion, ku
 	} else {
 		m.step("kuadrant", "running", "Waiting for Connectivity Link's Kuadrant API...")
 		version := kVersion
-		if _, err := waitForGone(c, MaaSOperatorTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+		if _, err := kube.WaitForGone(c, MaaSOperatorTimeout, MaaSPoll, func(cc *Client) (bool, error) {
 			v, err := kuadrantServedVersion(cc)
 			version = v
 			return v != "", err
 		}); err != nil || version == "" {
-			return m.fail("kuadrant", fmt.Sprintf("Connectivity Link's Kuadrant API is not served after %s%s. Set up again to continue; the MaaS tab shows Connectivity Link's state.", clockText(MaaSOperatorTimeout), errSuffix(err)), firstNonEmpty(errorCodeFromK8sErr(err), "not_ready"), "kuadrant api missing")
+			return m.fail("kuadrant", fmt.Sprintf("Connectivity Link's Kuadrant API is not served after %s%s. Set up again to continue; the MaaS tab shows Connectivity Link's state.", clockText(MaaSOperatorTimeout), errSuffix(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "not_ready"), "kuadrant api missing")
 		}
 		rec.setShared("kuadrant", "Kuadrant "+kuadrantNS+"/kuadrant")
 		if err := writeMaaSRecord(c, *rec); err != nil {
-			return m.fail("kuadrant", err.Error(), errorCodeFromK8sErr(err), "record write failed")
+			return m.fail("kuadrant", err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
 		}
 		m.step("kuadrant", "running", fmt.Sprintf("Creating the Kuadrant CR %s/kuadrant...", kuadrantNS))
 		if err := createKuadrant(c, version, kuadrantNS, false); err != nil {
@@ -287,7 +287,7 @@ func (m *maasRun) setupKuadrant(rec *maasRecord, kq *kuadrantState, kVersion, ku
 		m.logs = append(m.logs, "OK: Kuadrant "+kuadrantNS+"/kuadrant created")
 	}
 	m.step("kuadrant", "running", "Waiting for Kuadrant to be Ready (it starts Authorino and Limitador)...")
-	ready, err := waitForGone(c, MaaSKuadrantTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+	ready, err := kube.WaitForGone(c, MaaSKuadrantTimeout, MaaSPoll, func(cc *Client) (bool, error) {
 		k, err := readKuadrant(cc)
 		if err == nil && k.found {
 			*kq = k
@@ -296,9 +296,9 @@ func (m *maasRun) setupKuadrant(rec *maasRecord, kq *kuadrantState, kVersion, ku
 	})
 	switch {
 	case err != nil:
-		return m.fail("kuadrant", fmt.Sprintf("Stopped waiting for Kuadrant: %v.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled"), "kuadrant wait failed")
+		return m.fail("kuadrant", fmt.Sprintf("Stopped waiting for Kuadrant: %v.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "kuadrant wait failed")
 	case !ready:
-		m.step("kuadrant", "success", fmt.Sprintf("Kuadrant is not Ready after %s (%s); continuing.", clockText(MaaSKuadrantTimeout), firstNonEmpty(kq.message, "no message")))
+		m.step("kuadrant", "success", fmt.Sprintf("Kuadrant is not Ready after %s (%s); continuing.", clockText(MaaSKuadrantTimeout), kube.FirstNonEmpty(kq.message, "no message")))
 	default:
 		m.step("kuadrant", "success", "Kuadrant "+kq.namespace+"/kuadrant is Ready.")
 	}
@@ -313,7 +313,7 @@ func (m *maasRun) createMaaSInfraNamespace(rec *maasRecord, infra string) (*type
 	m.step("database", "running", fmt.Sprintf("Creating namespace %s, the AI gateway's infrastructure namespace, as the docs' setup-database.sh does...", infra))
 	rec.InfraNamespace = infra
 	if err := writeMaaSRecord(c, *rec); err != nil {
-		return m.fail("database", err.Error(), errorCodeFromK8sErr(err), "record write failed")
+		return m.fail("database", err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
 	}
 	if err := createInfraNamespace(c, infra, false); err != nil && !kube.IsK8sConflict(err) {
 		return m.fail("database", fmt.Sprintf("Failed to create namespace %s: %v. Set up again to retry.", infra, err), maasWriteCode(err), "namespace create failed")
@@ -321,7 +321,7 @@ func (m *maasRun) createMaaSInfraNamespace(rec *maasRecord, infra string) (*type
 		// Made meanwhile (by RHOAI, or someone): it is not this tool's.
 		rec.InfraNamespace = ""
 		if err := writeMaaSRecord(c, *rec); err != nil {
-			return m.fail("database", err.Error(), errorCodeFromK8sErr(err), "record write failed")
+			return m.fail("database", err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
 		}
 		if msg, code := maasNamespaceRefusal(c, infra); msg != "" {
 			return m.fail("database", msg, code, "namespace not rhoai's")
@@ -341,16 +341,16 @@ func (m *maasRun) setupDSC(rec *maasRecord, dsc maasDSC, needDSC bool) (*types.O
 	} else {
 		var fields []string
 		if dsc.aigateway != "Managed" {
-			fields = append(fields, "aigateway "+firstNonEmpty(dsc.aigateway, "not set"))
+			fields = append(fields, "aigateway "+kube.FirstNonEmpty(dsc.aigateway, "not set"))
 			rec.AIGatewayChanged, rec.PreviousAIGateway = true, dsc.aigateway
 		}
 		if dsc.maas != "Managed" {
-			fields = append(fields, "modelsAsAService "+firstNonEmpty(dsc.maas, "not set"))
+			fields = append(fields, "modelsAsAService "+kube.FirstNonEmpty(dsc.maas, "not set"))
 			rec.DSCChanged, rec.PreviousModelsAsAService = true, dsc.maas
 		}
 		m.step("dsc", "running", fmt.Sprintf("Setting aigateway and its modelsAsAService to Managed in DataScienceCluster %s (it was %s; removal restores that)...", dsc.name, strings.Join(fields, ", ")))
 		if err := writeMaaSRecord(c, *rec); err != nil {
-			return m.fail("dsc", err.Error()+" The DataScienceCluster was not changed.", errorCodeFromK8sErr(err), "record write failed")
+			return m.fail("dsc", err.Error()+" The DataScienceCluster was not changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 		}
 		ag, maas := "", ""
 		if dsc.aigateway != "Managed" {
@@ -360,7 +360,7 @@ func (m *maasRun) setupDSC(rec *maasRecord, dsc maasDSC, needDSC bool) (*types.O
 			maas = "Managed"
 		}
 		if err := patchMaaSDSC(c, ag, maas, false); err != nil {
-			return m.fail("dsc", fmt.Sprintf("Failed to turn on MaaS in the DataScienceCluster: %v.", err), errorCodeFromK8sErr(err), "dsc patch failed")
+			return m.fail("dsc", fmt.Sprintf("Failed to turn on MaaS in the DataScienceCluster: %v.", err), kube.ErrorCodeFromK8sErr(err), "dsc patch failed")
 		}
 		m.step("dsc", "success", "aigateway and modelsAsAService are Managed.")
 	}
@@ -388,11 +388,11 @@ func (m *maasRun) waitOperator(step, ns, name, title string) (*types.OperationRe
 	p, err := waitForSubscription(m.c, ns, name, func(s string) { m.step(step, "running", s) })
 	switch {
 	case err != nil:
-		return m.fail(step, fmt.Sprintf("Stopped waiting for %s: %v. Its Subscription stays; Set up again to continue.", title, err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled"), "operator wait failed")
+		return m.fail(step, fmt.Sprintf("Stopped waiting for %s: %v. Its Subscription stays; Set up again to continue.", title, err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "operator wait failed")
 	case p.failed != "":
 		return m.fail(step, fmt.Sprintf("%s does not install: %s. Its Subscription %s/%s stays; a cluster-admin checks it (oc describe subscription %s -n %s).", title, p.failed, ns, name, name, ns), "not_ready", "operator install failed")
 	case !p.done:
-		return m.fail(step, fmt.Sprintf("%s is not installed after %s (%s). Set up again to continue once it is.", title, clockText(MaaSOperatorTimeout), firstNonEmpty(p.text, "no progress")), "not_ready", "operator not ready")
+		return m.fail(step, fmt.Sprintf("%s is not installed after %s (%s). Set up again to continue once it is.", title, clockText(MaaSOperatorTimeout), kube.FirstNonEmpty(p.text, "no progress")), "not_ready", "operator not ready")
 	}
 	m.step(step, "success", fmt.Sprintf("%s is installed (%s).", title, p.installedCSV))
 	return nil, nil
@@ -410,17 +410,17 @@ func (m *maasRun) setupGateway(gwPlan *maasGatewayPlan, foreign bool) (*types.Op
 		return m.fail("gateway", msg, code, "gateway apply failed")
 	}
 	m.step("gateway", "running", "Waiting for the gateway to be programmed (up to "+clockText(MaaSGatewayTimeout)+")...")
-	programmed, err := waitForGone(c, MaaSGatewayTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+	programmed, err := kube.WaitForGone(c, MaaSGatewayTimeout, MaaSPoll, func(cc *Client) (bool, error) {
 		gw, err := readMaaSGateway(cc)
 		return gw.programmed && gw.address != "", err
 	})
 	switch {
 	case err != nil:
-		return m.fail("gateway", fmt.Sprintf("Stopped waiting for the gateway: %v. It was created.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled"), "gateway wait failed")
+		return m.fail("gateway", fmt.Sprintf("Stopped waiting for the gateway: %v. It was created.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "gateway wait failed")
 	case !programmed:
 		m.step("gateway", "success", fmt.Sprintf("Created; not programmed after %s. It may still come up; the MaaS tab shows its state.", clockText(MaaSGatewayTimeout)))
 	default:
-		published, _ := waitForGone(c, InferenceGatewayDNSTimeout, MaaSPoll, func(cc *Client) (bool, error) { return dnsPublished(cc, gwPlan.host) == "published", nil })
+		published, _ := kube.WaitForGone(c, InferenceGatewayDNSTimeout, MaaSPoll, func(cc *Client) (bool, error) { return dnsPublished(cc, gwPlan.host) == "published", nil })
 		if published {
 			m.step("gateway", "success", fmt.Sprintf("Programmed; https://%s is published in DNS.", gwPlan.host))
 		} else {
@@ -448,7 +448,7 @@ func (m *maasRun) applyAuthorinoTLS(rec *maasRecord, ns, step string) (*types.Op
 	m.step(step, "running", "Configuring Authorino TLS in "+ns+" as the docs' setup-authorino-tls.sh does...")
 	var changes []string
 	var lastErr error
-	done, err := waitForGone(c, MaaSKuadrantTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+	done, err := kube.WaitForGone(c, MaaSKuadrantTimeout, MaaSPoll, func(cc *Client) (bool, error) {
 		ch, err := configureAuthorinoTLS(cc, ns, false)
 		changes = append(changes, ch...)
 		lastErr = err
@@ -495,11 +495,11 @@ func (m *maasRun) waitPlatformReady(infra string) (*types.OperationResponse, err
 	c := m.c
 	m.step("ready", "running", "Waiting for the operator: maas-api, the default tenant, and the gateway's authentication (usually 2 to 3 minutes)...")
 	last := ""
-	ready, err := waitForGone(c, MaaSPlatformTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+	ready, err := kube.WaitForGone(c, MaaSPlatformTimeout, MaaSPoll, func(cc *Client) (bool, error) {
 		api := deploymentAvailable(cc, infra, "maas-api")
 		ai, _ := readyCondition(cc, namespacedPath(maasAPI(c), "aitenants", "ai-tenants", "models-as-a-service"))
 		auth := maasGatewayAuth(cc)
-		msg := fmt.Sprintf("maas-api: %s; tenant: %s; gateway authentication: %s", map[string]string{"True": "available", "False": "starting", "missing": "not created yet"}[api], firstNonEmpty(map[string]string{"True": "ready", "False": "not ready", "missing": "not created yet"}[ai], "unknown"), firstNonEmpty(auth, "unknown"))
+		msg := fmt.Sprintf("maas-api: %s; tenant: %s; gateway authentication: %s", map[string]string{"True": "available", "False": "starting", "missing": "not created yet"}[api], kube.FirstNonEmpty(map[string]string{"True": "ready", "False": "not ready", "missing": "not created yet"}[ai], "unknown"), kube.FirstNonEmpty(auth, "unknown"))
 		if msg != last {
 			last = msg
 			m.step("ready", "running", msg)
@@ -507,7 +507,7 @@ func (m *maasRun) waitPlatformReady(infra string) (*types.OperationResponse, err
 		return api == "True" && ai == "True" && auth == "enforced", nil
 	})
 	if err != nil {
-		return m.fail("ready", fmt.Sprintf("Stopped waiting: %v. Setup itself is done; the MaaS tab shows the platform's state.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled"), "ready wait failed")
+		return m.fail("ready", fmt.Sprintf("Stopped waiting: %v. Setup itself is done; the MaaS tab shows the platform's state.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "ready wait failed")
 	}
 	if !ready {
 		m.step("ready", "success", fmt.Sprintf("Still starting after %s (%s). The MaaS tab shows each part.", clockText(MaaSPlatformTimeout), last))
@@ -549,7 +549,7 @@ func patchMaaSDSC(c *Client, aigateway, maas string, dryRun bool) error {
 // aigateway.managementState (nobody has set it since setup).
 func dscAIGatewayOwned(d maasDSC) bool {
 	raw, _ := json.Marshal(d.read.Object["metadata"])
-	var meta objectMeta
+	var meta kube.ObjectMeta
 	_ = json.Unmarshal(raw, &meta)
-	return meta.ownsFieldPath([]string{maasDSCManager}, "f:spec", "f:components", "f:aigateway", "f:managementState")
+	return meta.OwnsFieldPath([]string{maasDSCManager}, "f:spec", "f:components", "f:aigateway", "f:managementState")
 }

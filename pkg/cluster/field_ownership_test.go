@@ -77,7 +77,7 @@ func TestSetupS3Storage_RemovesAFieldTheToolNoLongerApplies(t *testing.T) {
 	if got := strings.Join(deploymentAdminPorts(f), " "); got != `k:{"containerPort":8333,"protocol":"TCP"} k:{"containerPort":12535,"protocol":"TCP"}` {
 		t.Errorf("container ports after the repair = %s", got)
 	}
-	var entries []managedFieldsEntry
+	var entries []kube.ManagedFieldsEntry
 	raw, _ := json.Marshal(ensureMap(f.get(s3DeployPath), "metadata")["managedFields"])
 	_ = json.Unmarshal(raw, &entries)
 	var ours, others []string
@@ -109,7 +109,7 @@ func TestUpgradeToolFieldOwnership(t *testing.T) {
 
 	t.Run("folds Update into Apply and keeps other entries", func(t *testing.T) {
 		f, c := newResourceFake(t)
-		cur := objectMeta{ResourceVersion: "7", ManagedFields: []managedFieldsEntry{
+		cur := kube.ObjectMeta{ResourceVersion: "7", ManagedFields: []kube.ManagedFieldsEntry{
 			{Manager: toolFieldManager, Operation: "Apply", APIVersion: "apps/v1", Time: "2026-10-20T10:00:00Z", FieldsType: "FieldsV1", FieldsV1: fields("f:replicas")},
 			{Manager: "kubectl-edit", Operation: "Update", APIVersion: "apps/v1", Time: "2026-10-19T10:00:00Z", FieldsType: "FieldsV1", FieldsV1: fields("f:paused")},
 			{Manager: toolFieldManager, Operation: "Update", APIVersion: "apps/v1", Time: "2026-10-01T10:00:00Z", FieldsType: "FieldsV1", FieldsV1: fields("f:strategy", "f:replicas")},
@@ -135,20 +135,20 @@ func TestUpgradeToolFieldOwnership(t *testing.T) {
 
 	t.Run("converts a lone Update entry", func(t *testing.T) {
 		f, c := newResourceFake(t)
-		cur := objectMeta{ResourceVersion: "3", CreationTimestamp: "2026-10-01T10:00:00Z", ManagedFields: []managedFieldsEntry{
+		cur := kube.ObjectMeta{ResourceVersion: "3", CreationTimestamp: "2026-10-01T10:00:00Z", ManagedFields: []kube.ManagedFieldsEntry{
 			{Manager: toolFieldManager, Operation: "Update", APIVersion: "v1", Time: "2026-10-01T10:00:00Z", FieldsType: "FieldsV1", FieldsV1: fields("f:ports")},
 		}}
 		raw, _ := json.Marshal(map[string]any{"metadata": cur})
 		f.putJSON(path, string(raw))
 		got, err := upgradeToolFieldOwnership(c, path, cur)
-		if err != nil || len(got.ManagedFields) != 1 || got.ManagedFields[0].Operation != "Apply" || !got.ownsFieldPath([]string{toolFieldManager}, "f:spec", "f:ports") {
+		if err != nil || len(got.ManagedFields) != 1 || got.ManagedFields[0].Operation != "Apply" || !got.OwnsFieldPath([]string{toolFieldManager}, "f:spec", "f:ports") {
 			t.Fatalf("after = %+v, %v", got, err)
 		}
 	})
 
 	t.Run("nothing to do: no request", func(t *testing.T) {
 		f, c := newResourceFake(t)
-		cur := objectMeta{ResourceVersion: "3", ManagedFields: []managedFieldsEntry{
+		cur := kube.ObjectMeta{ResourceVersion: "3", ManagedFields: []kube.ManagedFieldsEntry{
 			{Manager: toolFieldManager, Operation: "Apply", APIVersion: "v1", FieldsV1: fields("f:ports")},
 			{Manager: legacyPostManager, Operation: "Update", APIVersion: "v1", FieldsV1: fields("f:selector")},
 		}}
@@ -160,7 +160,7 @@ func TestUpgradeToolFieldOwnership(t *testing.T) {
 
 	t.Run("an object changed since it was read is not touched", func(t *testing.T) {
 		f, c := newResourceFake(t)
-		cur := objectMeta{ResourceVersion: "3", ManagedFields: []managedFieldsEntry{
+		cur := kube.ObjectMeta{ResourceVersion: "3", ManagedFields: []kube.ManagedFieldsEntry{
 			{Manager: toolFieldManager, Operation: "Update", APIVersion: "v1", FieldsV1: fields("f:ports")},
 		}}
 		stored := cur

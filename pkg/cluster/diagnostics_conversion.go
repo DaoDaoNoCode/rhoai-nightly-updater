@@ -248,16 +248,16 @@ func checkConversionFailures(c *Client) checkOutput {
 	case verifiedKinds == 0:
 		out.check.Status = "warn"
 		details = append(details, fmt.Sprintf("Could not verify any conversion: no resource of the %s returned an object at every served version",
-			countNoun(groups, "multi-version RHOAI API group", "multi-version RHOAI API groups")))
+			kube.CountNoun(groups, "multi-version RHOAI API group", "multi-version RHOAI API groups")))
 	default:
 		details = append(details, fmt.Sprintf("Every served version of %s in %s converts its first object (a sample)",
-			countNoun(verifiedKinds, "resource", "resources"), countNoun(groups, "multi-version RHOAI API group", "multi-version RHOAI API groups")))
+			kube.CountNoun(verifiedKinds, "resource", "resources"), kube.CountNoun(groups, "multi-version RHOAI API group", "multi-version RHOAI API groups")))
 	}
 	if emptyKinds > 0 {
-		details = append(details, fmt.Sprintf("%s without objects, nothing to convert", countNoun(emptyKinds, "resource", "resources")))
+		details = append(details, fmt.Sprintf("%s without objects, nothing to convert", kube.CountNoun(emptyKinds, "resource", "resources")))
 	}
 	if forbidden > 0 {
-		details = append(details, fmt.Sprintf("%s not checked (this app may not list %s)", countNoun(forbidden, "read", "reads"), verb(forbidden, "it", "them")))
+		details = append(details, fmt.Sprintf("%s not checked (this app may not list %s)", kube.CountNoun(forbidden, "read", "reads"), kube.Verb(forbidden, "it", "them")))
 	}
 	if len(errs) > 0 {
 		details = append(details, "could not verify: "+strings.Join(errs, "; "))
@@ -284,7 +284,7 @@ func conversionProblem(group, resource, kind string, failed, working []conversio
 	failedVersions := joinVersions(failed)
 	evidence := []string{}
 	for _, p := range failed {
-		evidence = append(evidence, fmt.Sprintf("GET %s?limit=1: HTTP %d: %s", p.path(), k8sStatus(p.Err), truncateText(conversionMessage(p.Err), 400)))
+		evidence = append(evidence, fmt.Sprintf("GET %s?limit=1: HTTP %d: %s", p.path(), k8sStatus(p.Err), kube.TruncateText(conversionMessage(p.Err), 400)))
 	}
 	for _, p := range working {
 		evidence = append(evidence, fmt.Sprintf("GET %s?limit=1: OK", p.path()))

@@ -132,7 +132,7 @@ type genAIError struct {
 }
 
 func (e *genAIError) Error() string {
-	msg := firstNonEmpty(e.Message, http.StatusText(e.Status))
+	msg := kube.FirstNonEmpty(e.Message, http.StatusText(e.Status))
 	return fmt.Sprintf("the dashboard's gen-ai API answered %d to %s %s: %s", e.Status, e.Method, e.Path, msg)
 }
 
@@ -169,7 +169,7 @@ func parseGenAIError(method, path string, status int, body []byte) *genAIError {
 	case json.Unmarshal(body, &nested) == nil && nested.Error.Message != "":
 		e.Code, e.Message = nested.Error.Code, nested.Error.Message
 	case json.Unmarshal(body, &flat) == nil && (flat.Message != "" || flat.Error != ""):
-		e.Message = firstNonEmpty(flat.Message, flat.Error)
+		e.Message = kube.FirstNonEmpty(flat.Message, flat.Error)
 	default:
 		e.Message = strings.TrimSpace(string(body))
 	}
@@ -414,12 +414,12 @@ func (a genAIAPI) listProjectModels(ns string, withMaaS bool) ([]types.Playgroun
 	}
 	var out []types.PlaygroundModel
 	for _, m := range own.Data {
-		name := firstNonEmpty(m.ModelName, m.ModelID)
+		name := kube.FirstNonEmpty(m.ModelName, m.ModelID)
 		if name == "" {
 			continue
 		}
 		out = append(out, types.PlaygroundModel{
-			Name: name, DisplayName: m.DisplayName, Source: "namespace", Status: firstNonEmpty(m.Status, "unknown"),
+			Name: name, DisplayName: m.DisplayName, Source: "namespace", Status: kube.FirstNonEmpty(m.Status, "unknown"),
 			Ready: m.Status == "Running", Chat: chatModel(m.Capabilities, m.Usecase, m.ModelType),
 		})
 	}
@@ -479,7 +479,7 @@ const (
 // optional.
 func listMaaSPlaygroundModels(c *Client) []types.PlaygroundModel {
 	var items []struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 		Spec     struct {
 			ModelRef struct {
 				Kind string `json:"kind"`
@@ -508,11 +508,11 @@ func listMaaSPlaygroundModels(c *Client) []types.PlaygroundModel {
 		if r.Spec.ModelRef.Kind == "ExternalModel" && r.Spec.ModelRef.Name != "" {
 			name = r.Spec.ModelRef.Name
 		}
-		name = firstNonEmpty(r.Status.ResolvedModelAlias, name)
+		name = kube.FirstNonEmpty(r.Status.ResolvedModelAlias, name)
 		offered := subs[r.Metadata.Namespace+"/"+r.Metadata.Name]
 		// A reference no MaaSSubscription lists is offered to nobody: not
 		// shown as published.
-		if name == "" || r.Metadata.terminating() || len(offered) == 0 {
+		if name == "" || r.Metadata.Terminating() || len(offered) == 0 {
 			continue
 		}
 		var caps []string
@@ -521,7 +521,7 @@ func listMaaSPlaygroundModels(c *Client) []types.PlaygroundModel {
 		}
 		out = append(out, types.PlaygroundModel{
 			Name: name, DisplayName: r.Metadata.Annotations[maasDisplayNameAnnotation], Source: "maas",
-			Status: firstNonEmpty(r.Status.Phase, "Not ready"), Ready: r.Status.Phase == "Ready",
+			Status: kube.FirstNonEmpty(r.Status.Phase, "Not ready"), Ready: r.Status.Phase == "Ready",
 			Chat: chatModel(caps, r.Metadata.Annotations[genAIUseCaseAnnotation], ""), Subscriptions: offered,
 		})
 	}
@@ -534,7 +534,7 @@ func listMaaSPlaygroundModels(c *Client) []types.PlaygroundModel {
 func maasSubscriptionsByModel(c *Client) map[string][]string {
 	out := map[string][]string{}
 	var items []struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 		Spec     struct {
 			ModelRefs []struct {
 				Name      string `json:"name"`
@@ -588,22 +588,22 @@ const playgroundServerName = "lsd-genai-playground"
 
 // readPlaygroundServer reads the playground's OGXServer (the
 // ServiceAccount's own read, at a served version of ogx.io).
-func readPlaygroundServer(c *Client, project, name string) (objectMeta, bool, error) {
+func readPlaygroundServer(c *Client, project, name string) (kube.ObjectMeta, bool, error) {
 	if name != playgroundServerName {
-		return objectMeta{}, false, nil
+		return kube.ObjectMeta{}, false, nil
 	}
 	r, err := getServed(c, "ogx.io", "/apis/ogx.io/%s/namespaces/"+project+"/ogxservers/"+playgroundServerName, []string{"v1beta1"})
 	if kube.IsK8sNotFound(err) {
-		return objectMeta{}, false, nil
+		return kube.ObjectMeta{}, false, nil
 	}
 	if err != nil {
-		return objectMeta{}, false, fmt.Errorf("read OGXServer %s/%s: %w", project, name, err)
+		return kube.ObjectMeta{}, false, fmt.Errorf("read OGXServer %s/%s: %w", project, name, err)
 	}
 	var obj struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 	}
 	if err := json.Unmarshal(r.Body, &obj); err != nil {
-		return objectMeta{}, false, fmt.Errorf("parse OGXServer %s/%s: %w", project, name, err)
+		return kube.ObjectMeta{}, false, fmt.Errorf("parse OGXServer %s/%s: %w", project, name, err)
 	}
 	return obj.Metadata, true, nil
 }
@@ -749,7 +749,7 @@ func genAIUIState(c *Client) string {
 	}
 	var d struct {
 		Status struct {
-			Conditions []k8sCondition `json:"conditions"`
+			Conditions []kube.Condition `json:"conditions"`
 		} `json:"status"`
 	}
 	found, err := c.GetIntoOptional(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, genAIUIDeployment), &d)
@@ -763,7 +763,7 @@ func genAIUIState(c *Client) string {
 	if !found {
 		return "missing"
 	}
-	if cond, ok := findCondition(d.Status.Conditions, "Available"); ok {
+	if cond, ok := kube.FindCondition(d.Status.Conditions, "Available"); ok {
 		if cond.Status == "True" {
 			return "available"
 		}
@@ -807,9 +807,9 @@ func apiProblem(err error) (string, string) {
 	if e, ok := asGenAIError(err); ok {
 		switch e.Status {
 		case http.StatusUnauthorized, http.StatusForbidden:
-			return fmt.Sprintf("The dashboard's gen-ai API refused the request (HTTP %d: %s).", e.Status, firstNonEmpty(e.Message, http.StatusText(e.Status))), "forbidden"
+			return fmt.Sprintf("The dashboard's gen-ai API refused the request (HTTP %d: %s).", e.Status, kube.FirstNonEmpty(e.Message, http.StatusText(e.Status))), "forbidden"
 		case http.StatusNotFound:
-			return fmt.Sprintf("This RHOAI release's dashboard gen-ai API differs from the one this tool knows: %s %s answered 404 (%s). Use the playground from the dashboard's Gen AI studio instead.", e.Method, e.Path, firstNonEmpty(e.Message, "not found")), "api_missing"
+			return fmt.Sprintf("This RHOAI release's dashboard gen-ai API differs from the one this tool knows: %s %s answered 404 (%s). Use the playground from the dashboard's Gen AI studio instead.", e.Method, e.Path, kube.FirstNonEmpty(e.Message, "not found")), "api_missing"
 		}
 		return fmt.Sprintf("The dashboard's gen-ai API answered an error: %v.", err), "api_error"
 	}
@@ -1202,7 +1202,7 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 		return stop(st.Blocked.Reason, "component_off", "component off")
 	}
 	if st.OperatorReady == "False" {
-		return stop(fmt.Sprintf("The playground's operator is not ready: the DataScienceCluster reports it not ready (%s). The dashboard cannot create a playground until it is; the Components page shows the details.", firstNonEmpty(st.OperatorMessage, "no message")), "component_not_ready", "operator not ready")
+		return stop(fmt.Sprintf("The playground's operator is not ready: the DataScienceCluster reports it not ready (%s). The dashboard cannot create a playground until it is; the Components page shows the details.", kube.FirstNonEmpty(st.OperatorMessage, "no message")), "component_not_ready", "operator not ready")
 	}
 	switch st.GenAIUI {
 	case "missing":
@@ -1225,10 +1225,10 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 	if srv != nil {
 		owned, err := p.owned(srv)
 		if err != nil {
-			return stop(fmt.Sprintf("Cannot tell whether the playground in %s is this tool's: %v.", p.project, err), errorCodeFromK8sErr(err), "ownership")
+			return stop(fmt.Sprintf("Cannot tell whether the playground in %s is this tool's: %v.", p.project, err), kube.ErrorCodeFromK8sErr(err), "ownership")
 		}
 		if !owned {
-			return stop(fmt.Sprintf("Project %s already has a playground (%s), which this tool did not set up. Use it from the dashboard's Gen AI studio; this tool does not change it.", p.project, firstNonEmpty(srv.Name, "unnamed")), "not_managed", "exists")
+			return stop(fmt.Sprintf("Project %s already has a playground (%s), which this tool did not set up. Use it from the dashboard's Gen AI studio; this tool does not change it.", p.project, kube.FirstNonEmpty(srv.Name, "unnamed")), "not_managed", "exists")
 		}
 		if srv.Phase == "Terminating" {
 			return stop(fmt.Sprintf("The playground in %s is being deleted. Wait until it is gone, then set it up again.", p.project), "terminating", "terminating")
@@ -1254,7 +1254,7 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 			case m.Source == "namespace" && m.Ready && (m.Chat || m.EmbeddingDimension > 0):
 				chosen = append(chosen, m)
 			case m.Source == "namespace" && m.Chat:
-				left = append(left, fmt.Sprintf("%s (%s)", m.Name, firstNonEmpty(m.Status, "not ready")))
+				left = append(left, fmt.Sprintf("%s (%s)", m.Name, kube.FirstNonEmpty(m.Status, "not ready")))
 			}
 		}
 		if len(left) > 0 {
@@ -1358,7 +1358,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 		// Recorded before the install, so a playground whose install
 		// outlives this process is still known as this tool's.
 		if err := setPlaygroundRecord(p.c, p.project, newPlaygroundRecord(p.c)); err != nil {
-			return p.fail("install", fmt.Sprintf("Cannot record the request in this tool's namespace; nothing was set up: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "record")
+			return p.fail("install", fmt.Sprintf("Cannot record the request in this tool's namespace; nothing was set up: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "record")
 		}
 		body := map[string]any{"enable_guardrails": false, "enable_tracing": false, "vector_stores": []any{}}
 		// model_type and embedding_dimension per model: odh-dashboard
@@ -1416,20 +1416,20 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 		if srv != nil {
 			owned, err := p.owned(srv)
 			if err != nil {
-				return p.fail("install", fmt.Sprintf("The dashboard set up a playground in %s, but this tool cannot tell whether it is the one it requested: %v.", p.project, err), errorCodeFromK8sErr(err), "ownership")
+				return p.fail("install", fmt.Sprintf("The dashboard set up a playground in %s, but this tool cannot tell whether it is the one it requested: %v.", p.project, err), kube.ErrorCodeFromK8sErr(err), "ownership")
 			}
 			if !owned {
-				return p.fail("install", fmt.Sprintf("Someone else set up a playground in %s at the same time (%s), and the dashboard kept theirs. It is not this tool's, so this tool does not change it; use it from the dashboard's Gen AI studio.", p.project, firstNonEmpty(srv.Name, "unnamed")), "not_managed", "exists")
+				return p.fail("install", fmt.Sprintf("Someone else set up a playground in %s at the same time (%s), and the dashboard kept theirs. It is not this tool's, so this tool does not change it; use it from the dashboard's Gen AI studio.", p.project, kube.FirstNonEmpty(srv.Name, "unnamed")), "not_managed", "exists")
 			}
 		}
 		p.step("install", "success", fmt.Sprintf("The dashboard is setting up the playground in %s.", p.project))
 	} else {
-		p.step("install", "success", fmt.Sprintf("The playground in %s exists (phase %s); waiting for it.", p.project, firstNonEmpty(existing.Phase, "unknown")))
+		p.step("install", "success", fmt.Sprintf("The playground in %s exists (phase %s); waiting for it.", p.project, kube.FirstNonEmpty(existing.Phase, "unknown")))
 	}
 	p.step("ready", "running", "Waiting until the playground is ready (typically 1 to 2 minutes)...")
 	var last, problem string
 	var srv *genAIServer
-	ready, err := waitForGone(p.c, PlaygroundReadyTimeout, PlaygroundPoll, func(cc *Client) (bool, error) {
+	ready, err := kube.WaitForGone(p.c, PlaygroundReadyTimeout, PlaygroundPoll, func(cc *Client) (bool, error) {
 		s, err := p.api.with(cc.Context()).playgroundStatus(p.project)
 		if err != nil {
 			return false, err
@@ -1445,7 +1445,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 			problem = "the playground's server reports phase Failed. The events of project " + p.project + " and its playground pods say why; delete it and set it up again."
 			return true, nil
 		}
-		if msg := fmt.Sprintf("The playground is starting (phase %s)...", firstNonEmpty(s.Phase, "not reported")); msg != last {
+		if msg := fmt.Sprintf("The playground is starting (phase %s)...", kube.FirstNonEmpty(s.Phase, "not reported")); msg != last {
 			last = msg
 			p.step("ready", "running", msg)
 		}
@@ -1457,7 +1457,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 	case problem != "":
 		return p.fail("ready", "The dashboard set up the playground, but "+problem, "not_ready", "not ready")
 	case !ready:
-		return p.fail("ready", fmt.Sprintf("The playground in %s is not ready after %s (phase %s). It may still start: the tab shows its state.", p.project, clockText(PlaygroundReadyTimeout), firstNonEmpty(srvPhase(srv), "unknown")), "timeout", "timeout")
+		return p.fail("ready", fmt.Sprintf("The playground in %s is not ready after %s (phase %s). It may still start: the tab shows its state.", p.project, clockText(PlaygroundReadyTimeout), kube.FirstNonEmpty(srvPhase(srv), "unknown")), "timeout", "timeout")
 	}
 	p.step("ready", "success", fmt.Sprintf("The playground in %s is ready.", p.project))
 	p.record("project="+p.project, true)
@@ -1484,7 +1484,7 @@ func (p *playgroundRun) forgetIfAbsent() {
 func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 	records, err := readPlaygroundRecords(p.c)
 	if err != nil {
-		return p.fail("delete", fmt.Sprintf("Cannot read this tool's records; nothing was deleted: %v.", err), errorCodeFromK8sErr(err), "records")
+		return p.fail("delete", fmt.Sprintf("Cannot read this tool's records; nothing was deleted: %v.", err), kube.ErrorCodeFromK8sErr(err), "records")
 	}
 	_, recorded := records[p.project]
 	srv, err := p.api.playgroundStatus(p.project)
@@ -1494,7 +1494,7 @@ func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 	if srv == nil {
 		if recorded {
 			if err := setPlaygroundRecord(p.c, p.project, nil); err != nil {
-				return p.fail("delete", fmt.Sprintf("No playground is left in %s, but this tool's record of it cannot be cleared: %v.", p.project, err), errorCodeFromK8sErr(err), "record")
+				return p.fail("delete", fmt.Sprintf("No playground is left in %s, but this tool's record of it cannot be cleared: %v.", p.project, err), kube.ErrorCodeFromK8sErr(err), "record")
 			}
 		}
 		p.record("project="+p.project+" (none)", true)
@@ -1502,7 +1502,7 @@ func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 	}
 	ours, err := p.owned(srv)
 	if err != nil {
-		return p.fail("delete", fmt.Sprintf("Cannot tell whether the playground in %s is this tool's, so nothing was deleted: %v.", p.project, err), errorCodeFromK8sErr(err), "ownership")
+		return p.fail("delete", fmt.Sprintf("Cannot tell whether the playground in %s is this tool's, so nothing was deleted: %v.", p.project, err), kube.ErrorCodeFromK8sErr(err), "ownership")
 	}
 	if !ours {
 		return p.fail("delete", fmt.Sprintf("The playground in %s was not set up by this tool, so it was not deleted. Delete it in the dashboard's Gen AI studio if you no longer need it.", p.project), "not_managed", "not managed")
@@ -1518,7 +1518,7 @@ func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 	}
 	p.step("delete", "success", fmt.Sprintf("The dashboard is deleting the playground in %s.", p.project))
 	p.step("gone", "running", "Waiting until the playground is gone...")
-	gone, err := waitForGone(p.c, PlaygroundDeleteTimeout, PlaygroundPoll, func(cc *Client) (bool, error) {
+	gone, err := kube.WaitForGone(p.c, PlaygroundDeleteTimeout, PlaygroundPoll, func(cc *Client) (bool, error) {
 		s, err := p.api.with(cc.Context()).playgroundStatus(p.project)
 		return err == nil && s == nil, err
 	})
@@ -1529,7 +1529,7 @@ func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 		return p.fail("gone", fmt.Sprintf("The playground in %s is still being deleted after %s. Delete again to check.", p.project, clockText(PlaygroundDeleteTimeout)), "in_progress", "still deleting")
 	}
 	if err := setPlaygroundRecord(p.c, p.project, nil); err != nil {
-		return p.fail("gone", fmt.Sprintf("The playground in %s is deleted, but this tool's record of it cannot be cleared: %v.%s", p.project, err, templateHint(err)), errorCodeFromK8sErr(err), "record")
+		return p.fail("gone", fmt.Sprintf("The playground in %s is deleted, but this tool's record of it cannot be cleared: %v.%s", p.project, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "record")
 	}
 	p.step("gone", "success", fmt.Sprintf("The playground in %s is gone.", p.project))
 	p.record("project="+p.project, true)

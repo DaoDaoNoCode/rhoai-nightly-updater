@@ -82,7 +82,7 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 	var wg sync.WaitGroup
 	var quayAuth string
 	// The metadata of the objects Argo CD may manage (gitOpsManagers).
-	var subMeta, catalogMeta, dscMeta *objectMeta
+	var subMeta, catalogMeta, dscMeta *kube.ObjectMeta
 
 	addErr := func(msg string) {
 		mu.Lock()
@@ -418,13 +418,13 @@ type subscriptionDetails struct {
 	info         types.SubscriptionInfo
 	installedCSV string
 	found        bool
-	meta         objectMeta
+	meta         kube.ObjectMeta
 }
 
 func readSubscription(c *Client) (subscriptionDetails, error) {
 	path := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
 	var sub struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 		Spec     struct {
 			Source  string `json:"source"`
 			Channel string `json:"channel"`
@@ -578,10 +578,10 @@ func getCatalogSource(c *Client) (types.CatalogSourceInfo, error) {
 	return cs, err
 }
 
-func readCatalogSource(c *Client) (types.CatalogSourceInfo, *objectMeta, error) {
+func readCatalogSource(c *Client) (types.CatalogSourceInfo, *kube.ObjectMeta, error) {
 	path := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
 	var result struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 		Spec     struct {
 			Image string `json:"image"`
 		} `json:"spec"`
@@ -622,7 +622,7 @@ func readCatalogSource(c *Client) (types.CatalogSourceInfo, *objectMeta, error) 
 // is read once per poll), and an ACM policy that
 // enforces the catalog when no Argo CD application manages it. A nil
 // metadata is an object the status did not find.
-func gitOpsManagers(c *Client, status *types.StatusResponse, sub, catalog, dsc *objectMeta) {
+func gitOpsManagers(c *Client, status *types.StatusResponse, sub, catalog, dsc *kube.ObjectMeta) {
 	argo := newArgoCheck(c)
 	if sub != nil {
 		t := argo.object(sub.Annotations, sub.Labels, argoSubscriptionObject)
@@ -885,7 +885,7 @@ func getIDMS(c *Client) (types.ImageMirrorInfo, error) {
 // checkDSCExists returns the metadata of the first DataScienceCluster,
 // listed at the newest served version that works (listServed), or nil when
 // there is none. No served version (CRD not installed) is not an error.
-func checkDSCExists(c *Client) (*objectMeta, error) {
+func checkDSCExists(c *Client) (*kube.ObjectMeta, error) {
 	// limit=1: only existence matters, not the (large) objects.
 	r, err := listServed(c, dscGroup, dscListFmt, url.Values{"limit": {"1"}}, dscFallbackVersions)
 	if err != nil {
@@ -896,7 +896,7 @@ func checkDSCExists(c *Client) (*objectMeta, error) {
 	}
 	var dscList struct {
 		Items []struct {
-			Metadata objectMeta `json:"metadata"`
+			Metadata kube.ObjectMeta `json:"metadata"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(r.Body, &dscList); err != nil {

@@ -80,7 +80,7 @@ func operatorSubscriptionPath(ns, name string) (string, bool) {
 
 // olmSubscription is a Subscription as read.
 type olmSubscription struct {
-	Metadata objectMeta `json:"metadata"`
+	Metadata kube.ObjectMeta `json:"metadata"`
 	Spec     struct {
 		Channel             string         `json:"channel"`
 		Name                string         `json:"name"`
@@ -90,11 +90,11 @@ type olmSubscription struct {
 		Config              map[string]any `json:"config"`
 	} `json:"spec"`
 	Status struct {
-		State        string         `json:"state"`
-		InstalledCSV string         `json:"installedCSV"`
-		CurrentCSV   string         `json:"currentCSV"`
-		LastUpdated  string         `json:"lastUpdated"`
-		Conditions   []k8sCondition `json:"conditions"`
+		State        string           `json:"state"`
+		InstalledCSV string           `json:"installedCSV"`
+		CurrentCSV   string           `json:"currentCSV"`
+		LastUpdated  string           `json:"lastUpdated"`
+		Conditions   []kube.Condition `json:"conditions"`
 	} `json:"status"`
 	// argoApp is the Argo CD application managing it (argoTracking.managedBy),
 	// set by readOperatorSubscription.
@@ -249,7 +249,7 @@ func readOperatorIn(c *Client, op operatorSpec, csvs []clusterCSV, subs []*olmSu
 			st.csv, st.csvNS, st.version, st.phase, st.deployments = csv.Name, csv.Namespace, v, csv.Phase, csv.Deployments
 		}
 	}
-	ns := firstNonEmpty(st.csvNS, op.namespace)
+	ns := kube.FirstNonEmpty(st.csvNS, op.namespace)
 	for _, name := range op.subNames {
 		sub, err := readOperatorSubscription(c, ns, name)
 		if err != nil {
@@ -296,7 +296,7 @@ type packageChannel struct {
 
 // head is the version of the channel's newest CSV.
 func (ch packageChannel) head() string {
-	return versionCore(firstNonEmpty(ch.CurrentCSVDesc.Version, csvVersion(ch.CurrentCSV)))
+	return versionCore(kube.FirstNonEmpty(ch.CurrentCSVDesc.Version, csvVersion(ch.CurrentCSV)))
 }
 
 func (ch packageChannel) has(csv string) bool {
@@ -341,7 +341,7 @@ func readOperatorPackage(c *Client, pkg, source string) (operatorPackage, bool, 
 	path := namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, "") +
 		"?labelSelector=" + url.QueryEscape("catalog="+source) + "&fieldSelector=" + url.QueryEscape("metadata.name="+pkg)
 	var items []struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 		Status   struct {
 			PackageName            string           `json:"packageName"`
 			CatalogSource          string           `json:"catalogSource"`
@@ -357,7 +357,7 @@ func readOperatorPackage(c *Client, pkg, source string) (operatorPackage, bool, 
 		return operatorPackage{}, false, fmt.Errorf("read package %s from catalog %s: %w", pkg, source, err)
 	}
 	for _, it := range items {
-		if it.Metadata.Name == pkg && firstNonEmpty(it.Status.PackageName, pkg) == pkg && it.Status.CatalogSource == source && firstNonEmpty(it.Status.CatalogSourceNamespace, CatalogNS) == CatalogNS {
+		if it.Metadata.Name == pkg && kube.FirstNonEmpty(it.Status.PackageName, pkg) == pkg && it.Status.CatalogSource == source && kube.FirstNonEmpty(it.Status.CatalogSourceNamespace, CatalogNS) == CatalogNS {
 			return operatorPackage{defaultChannel: it.Status.DefaultChannel, channels: it.Status.Channels}, true, nil
 		}
 	}
@@ -386,7 +386,7 @@ func planOperatorInstall(c *Client, op operatorSpec) (*operatorInstallPlan, stri
 	pkg, found, err := readOperatorPackage(c, op.pkg, op.source)
 	switch {
 	case err != nil:
-		return nil, fmt.Sprintf("Cannot read the %s package from catalog %s, so this tool cannot tell which channel to install; nothing was changed: %v.%s", op.title, op.source, err, templateHint(err)), firstNonEmpty(errorCodeFromK8sErr(err), "internal")
+		return nil, fmt.Sprintf("Cannot read the %s package from catalog %s, so this tool cannot tell which channel to install; nothing was changed: %v.%s", op.title, op.source, err, templateHint(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
 	case !found:
 		return nil, fmt.Sprintf("Catalog %s in %s does not offer package %s, so %s cannot be installed from it. A cluster-admin checks the catalog (oc get packagemanifests -n %s -l catalog=%s). Nothing was changed.", op.source, CatalogNS, op.pkg, op.title, CatalogNS, op.source), "prerequisites"
 	}
@@ -417,9 +417,9 @@ func planOperatorInstall(c *Client, op operatorSpec) (*operatorInstallPlan, stri
 		return ""
 	}
 
-	_, nsFound, err := readObjectMeta(c, "/api/v1/namespaces/"+op.namespace)
+	_, nsFound, err := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+op.namespace)
 	if err != nil {
-		return nil, fmt.Sprintf("Cannot read namespace %s; nothing was changed: %v.%s", op.namespace, err, templateHint(err)), firstNonEmpty(errorCodeFromK8sErr(err), "internal")
+		return nil, fmt.Sprintf("Cannot read namespace %s; nothing was changed: %v.%s", op.namespace, err, templateHint(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
 	}
 	plan.nsMissing = !nsFound
 	if !nsFound {
@@ -434,7 +434,7 @@ func planOperatorInstall(c *Client, op operatorSpec) (*operatorInstallPlan, stri
 	}
 	groups, err := readOperatorGroups(c, op.namespace)
 	if err != nil {
-		return nil, fmt.Sprintf("Cannot read the OperatorGroups in %s; nothing was changed: %v.%s", op.namespace, err, templateHint(err)), firstNonEmpty(errorCodeFromK8sErr(err), "internal")
+		return nil, fmt.Sprintf("Cannot read the OperatorGroups in %s; nothing was changed: %v.%s", op.namespace, err, templateHint(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
 	}
 	switch {
 	case len(groups) > 1:
@@ -594,11 +594,11 @@ func readSubscriptionProgress(c *Client, ns, name string) (subscriptionProgress,
 		return subscriptionProgress{}, fmt.Errorf("subscription %s/%s is gone", ns, name)
 	}
 	p := subscriptionProgress{installedCSV: sub.Status.InstalledCSV, currentCSV: sub.Status.CurrentCSV, state: sub.Status.State}
-	if cond, ok := findCondition(sub.Status.Conditions, "ResolutionFailed"); ok && cond.Status == "True" {
-		p.failed = "OLM cannot resolve it: " + truncateText(firstNonEmpty(cond.Message, cond.Reason), 300)
+	if cond, ok := kube.FindCondition(sub.Status.Conditions, "ResolutionFailed"); ok && cond.Status == "True" {
+		p.failed = "OLM cannot resolve it: " + kube.TruncateText(kube.FirstNonEmpty(cond.Message, cond.Reason), 300)
 	}
 	if p.installedCSV == "" {
-		p.text = "OLM is resolving the Subscription (" + firstNonEmpty(p.state, "no state yet") + ")"
+		p.text = "OLM is resolving the Subscription (" + kube.FirstNonEmpty(p.state, "no state yet") + ")"
 		return p, nil
 	}
 	phase, msg, err := csvPhase(c, ns, p.installedCSV)
@@ -608,11 +608,11 @@ func readSubscriptionProgress(c *Client, ns, name string) (subscriptionProgress,
 	p.phase = phase
 	switch {
 	case phase == "Failed":
-		p.failed = fmt.Sprintf("CSV %s failed: %s", p.installedCSV, truncateText(firstNonEmpty(msg, "no message"), 300))
+		p.failed = fmt.Sprintf("CSV %s failed: %s", p.installedCSV, kube.TruncateText(kube.FirstNonEmpty(msg, "no message"), 300))
 	case phase == "Succeeded" && (p.currentCSV == "" || p.currentCSV == p.installedCSV):
 		p.done = true
 	}
-	p.text = fmt.Sprintf("%s: %s", p.installedCSV, firstNonEmpty(phase, "being created"))
+	p.text = fmt.Sprintf("%s: %s", p.installedCSV, kube.FirstNonEmpty(phase, "being created"))
 	if p.currentCSV != "" && p.currentCSV != p.installedCSV {
 		p.text += "; upgrading to " + p.currentCSV
 	}
@@ -624,7 +624,7 @@ func readSubscriptionProgress(c *Client, ns, name string) (subscriptionProgress,
 func waitForSubscription(c *Client, ns, name string, progress func(string)) (subscriptionProgress, error) {
 	var last subscriptionProgress
 	var failedSince time.Time
-	_, err := waitForGone(c, MaaSOperatorTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+	_, err := kube.WaitForGone(c, MaaSOperatorTimeout, MaaSPoll, func(cc *Client) (bool, error) {
 		p, err := readSubscriptionProgress(cc, ns, name)
 		if err != nil {
 			return false, err
@@ -668,7 +668,7 @@ func patchSubscription(c *Client, sub *olmSubscription, spec map[string]any, dry
 		return err
 	}
 	if !dryRun {
-		if meta, perr := parseObjectMeta(body); perr == nil {
+		if meta, perr := kube.ParseObjectMeta(body); perr == nil {
 			sub.Metadata.ResourceVersion = meta.ResourceVersion
 		}
 	}

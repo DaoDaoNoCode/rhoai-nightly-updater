@@ -42,7 +42,7 @@ type hardwareProfile struct {
 }
 
 type hardwareProfileObject struct {
-	Metadata objectMeta `json:"metadata"`
+	Metadata kube.ObjectMeta `json:"metadata"`
 	Spec     struct {
 		Identifiers []struct {
 			Identifier string `json:"identifier"`
@@ -125,7 +125,7 @@ func (p hardwareProfileObject) fits(entry catalogModel) string {
 		for _, v := range values {
 			n, _ := parseQuantity(v)
 			if (okLo && n < lo) || (okHi && n > hi) {
-				return fmt.Sprintf("%s %s is outside %s-%s", id.Identifier, v, quantityString(id.MinCount), firstNonEmpty(quantityString(id.MaxCount), "any"))
+				return fmt.Sprintf("%s %s is outside %s-%s", id.Identifier, v, quantityString(id.MinCount), kube.FirstNonEmpty(quantityString(id.MaxCount), "any"))
 			}
 		}
 	}

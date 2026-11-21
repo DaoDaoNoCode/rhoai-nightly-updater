@@ -166,14 +166,14 @@ func readModelGatewayRefs(c *Client, project, name string) (gatewayRefs, string,
 
 // readModelGatewayRefsSpec is readModelGatewayRefs with the model's
 // metadata and its whole spec from the same read.
-func readModelGatewayRefsSpec(c *Client, project, name string) (gatewayRefs, objectMeta, map[string]any, error) {
+func readModelGatewayRefsSpec(c *Client, project, name string) (gatewayRefs, kube.ObjectMeta, map[string]any, error) {
 	path, _ := toolModelPath(project, name)
 	body, _, err := c.Get(path)
 	if err != nil {
-		return nil, objectMeta{}, nil, err
+		return nil, kube.ObjectMeta{}, nil, err
 	}
 	var model struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 		Spec     struct {
 			Router struct {
 				Gateway struct {
@@ -186,10 +186,10 @@ func readModelGatewayRefsSpec(c *Client, project, name string) (gatewayRefs, obj
 		Spec map[string]any `json:"spec"`
 	}
 	if err := json.Unmarshal(body, &model); err != nil {
-		return nil, objectMeta{}, nil, fmt.Errorf("parse %s in %s: %w", name, project, err)
+		return nil, kube.ObjectMeta{}, nil, fmt.Errorf("parse %s in %s: %w", name, project, err)
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, objectMeta{}, nil, fmt.Errorf("parse %s in %s: %w", name, project, err)
+		return nil, kube.ObjectMeta{}, nil, fmt.Errorf("parse %s in %s: %w", name, project, err)
 	}
 	return model.Spec.Router.Gateway.Refs, model.Metadata, raw.Spec, nil
 }
@@ -255,7 +255,7 @@ func readModelRoute(c *Client, project, name string) ([]string, bool, error) {
 	}
 	parents := make([]string, 0, len(route.Spec.ParentRefs))
 	for _, p := range route.Spec.ParentRefs {
-		parents = append(parents, firstNonEmpty(p.Namespace, project)+"/"+p.Name)
+		parents = append(parents, kube.FirstNonEmpty(p.Namespace, project)+"/"+p.Name)
 	}
 	return parents, true, nil
 }
@@ -268,7 +268,7 @@ func waitForModelRoute(c *Client, project, name string, published bool) (string,
 	maas := inferenceGatewayNamespace + "/" + maasGatewayName
 	route := fmt.Sprintf("HTTPRoute %s/%s-kserve-route", project, name)
 	why, stop := "", false
-	done, err := waitForGone(c, MaaSRouteTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+	done, err := kube.WaitForGone(c, MaaSRouteTimeout, MaaSPoll, func(cc *Client) (bool, error) {
 		parents, found, err := readModelRoute(cc, project, name)
 		if err != nil {
 			return false, err
@@ -299,10 +299,10 @@ func waitForModelRoute(c *Client, project, name string, published bool) (string,
 			why = "KServe has not applied the change to the model yet"
 			return false, nil
 		}
-		if cond, ok := findCondition(model.Status.Conditions, "Ready"); !ok || cond.Status != "True" {
+		if cond, ok := kube.FindCondition(model.Status.Conditions, "Ready"); !ok || cond.Status != "True" {
 			why = "the model is not Ready"
 			if ok {
-				why += " (" + firstNonEmpty(truncateText(cond.Message, 300), cond.Reason) + ")"
+				why += " (" + kube.FirstNonEmpty(kube.TruncateText(cond.Message, 300), cond.Reason) + ")"
 			}
 			return false, nil
 		}
@@ -333,7 +333,7 @@ func (m *maasRun) routeModelThroughMaaS(project, name string, original maasModel
 	// someone else writes after it makes the write fail (409).
 	refs, meta, spec, err := readModelGatewayRefsSpec(c, project, name)
 	if err != nil {
-		return fmt.Sprintf("Cannot read %s in %s: %v. Unpublish to undo.", name, project, err), errorCodeFromK8sErr(err)
+		return fmt.Sprintf("Cannot read %s in %s: %v. Unpublish to undo.", name, project, err), kube.ErrorCodeFromK8sErr(err)
 	}
 	if d := expect.differences(spec); len(d) > 0 {
 		return specChangedRefusal(name, project, d, "Unpublish to undo what was done."), "conflict"
@@ -346,13 +346,13 @@ func (m *maasRun) routeModelThroughMaaS(project, name string, original maasModel
 		}
 		why, err := waitForModelRoute(c, project, name, false)
 		if err != nil {
-			return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish to undo.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled")
+			return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish to undo.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled")
 		}
 		if why != "" {
 			return fmt.Sprintf("Partly published: %s. The model reference, subscription and authorization policy were not made. Unpublish to undo.", why), "partial_failure"
 		}
 		if refs, meta, spec, err = readModelGatewayRefsSpec(c, project, name); err != nil {
-			return fmt.Sprintf("Cannot read %s in %s: %v. Unpublish to undo.", name, project, err), errorCodeFromK8sErr(err)
+			return fmt.Sprintf("Cannot read %s in %s: %v. Unpublish to undo.", name, project, err), kube.ErrorCodeFromK8sErr(err)
 		}
 		if d := expect.differences(spec); len(d) > 0 {
 			return specChangedRefusal(name, project, d, "Unpublish to undo what was done."), "conflict"
@@ -376,7 +376,7 @@ func (m *maasRun) routeModelThroughMaaS(project, name string, original maasModel
 	m.step("model", "running", "Waiting for KServe to move the model's route to the MaaS gateway...")
 	why, err := waitForModelRoute(c, project, name, true)
 	if err != nil {
-		return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish to undo.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled")
+		return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish to undo.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled")
 	}
 	if why != "" {
 		return fmt.Sprintf("Partly published: %s. The model reference, subscription and authorization policy were not made. Unpublish to undo.", why), "partial_failure"
@@ -395,7 +395,7 @@ func (m *maasRun) restoreModelRoute(project, name string, recorded maasModelRefs
 	c := m.c
 	refs, meta, spec, err := readModelGatewayRefsSpec(c, project, name)
 	if err != nil {
-		return fmt.Sprintf("Cannot read %s in %s: %v. Unpublish again to retry.", name, project, err), errorCodeFromK8sErr(err)
+		return fmt.Sprintf("Cannot read %s in %s: %v. Unpublish again to retry.", name, project, err), kube.ErrorCodeFromK8sErr(err)
 	}
 	rv := meta.ResourceVersion
 	target, write := refs, refs.hasMaaS()
@@ -425,7 +425,7 @@ func (m *maasRun) restoreModelRoute(project, name string, recorded maasModelRefs
 	say("model", "running", "Waiting for KServe to move the model's route off the MaaS gateway...")
 	why, err := waitForModelRoute(c, project, name, false)
 	if err != nil {
-		return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish again to check.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled")
+		return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish again to check.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled")
 	}
 	if why != "" {
 		return fmt.Sprintf("Partly published: %s. The model is no longer in MaaS; Unpublish again to check the route.", why), "partial_failure"
@@ -456,7 +456,7 @@ func (m *maasRun) removeModelRoute(project, name, rv string, say func(id, status
 	say("model", "running", "Waiting for KServe to remove the model's route...")
 	why, err := waitForModelRoute(c, project, name, false)
 	if err != nil {
-		return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish again to check.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled")
+		return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish again to check.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled")
 	}
 	if why != "" {
 		return fmt.Sprintf("Partly published: %s. The model is no longer in MaaS; Unpublish again to check the route.", why), "partial_failure"

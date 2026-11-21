@@ -142,7 +142,7 @@ func TestSetupS3Storage_FreshClusterUsesTheNewNamesLabelsEverythingAndWaitsForRe
 			t.Fatalf("%s was not created", path)
 		}
 		labels, _ := obj["metadata"].(map[string]any)["labels"].(map[string]any)
-		if labels[managedByLabelKey] != managedByLabelValue {
+		if labels[kube.ManagedByLabelKey] != kube.ManagedByLabelValue {
 			t.Errorf("%s lacks the ownership label: %v", path, labels)
 		}
 	}
@@ -699,10 +699,10 @@ func TestStorageAddressAliases(t *testing.T) {
 	}
 	legacy := storageAddress{service: "minio-service", namespace: "minio", routeHosts: []string{"minio-api-minio.apps.example.com"}}
 	dspas := []dspaInfo{
-		{Meta: objectMeta{Namespace: "a", Name: "x"}, Host: "http://seaweedfs-s3.seaweedfs.svc.cluster.local:8333"},
-		{Meta: objectMeta{Namespace: "b", Name: "y"}, Host: "minio-api-minio.apps.example.com"},
-		{Meta: objectMeta{Namespace: "c", Name: "z"}, Host: "s3.amazonaws.com"},
-		{Meta: objectMeta{Namespace: "d", Name: "w", DeletionTimestamp: "2026-10-01T00:00:00Z"}, Host: "minio-service.minio.svc:9000"},
+		{Meta: kube.ObjectMeta{Namespace: "a", Name: "x"}, Host: "http://seaweedfs-s3.seaweedfs.svc.cluster.local:8333"},
+		{Meta: kube.ObjectMeta{Namespace: "b", Name: "y"}, Host: "minio-api-minio.apps.example.com"},
+		{Meta: kube.ObjectMeta{Namespace: "c", Name: "z"}, Host: "s3.amazonaws.com"},
+		{Meta: kube.ObjectMeta{Namespace: "d", Name: "w", DeletionTimestamp: "2026-10-01T00:00:00Z"}, Host: "minio-service.minio.svc:9000"},
 	}
 	got := s3TeardownBlocker(dspas, a, legacy)
 	if !strings.Contains(got, "2 pipeline servers use this S3 storage: a/x, b/y.") || strings.Contains(got, "c/z") || !strings.Contains(got, "still being deleted: d/w") {
@@ -982,7 +982,7 @@ func TestTeardownS3Storage_DeletesTheCopyJob(t *testing.T) {
 // again" (it cannot start).
 func TestSourceGone_UncopiableAndTerminatingPVCs(t *testing.T) {
 	pvc := func(name string, terminating bool) storagePVC {
-		p := storagePVC{Meta: objectMeta{Name: name}}
+		p := storagePVC{Meta: kube.ObjectMeta{Name: name}}
 		if terminating {
 			now := "2026-11-17T12:00:00Z"
 			p.Meta.DeletionTimestamp = now

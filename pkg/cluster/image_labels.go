@@ -220,7 +220,7 @@ func resolveImageLabels(ctx context.Context, basicAuth string, refs []string, wi
 			labels, err := imageLabelsWithAuth(imageCtx, basicAuth, ref, withCommitDate)
 			if err != nil {
 				if !errors.Is(err, errNoImageLabels) {
-					slog.Warn("failed to fetch image labels", "image", truncateText(ref, 80), "error", err)
+					slog.Warn("failed to fetch image labels", "image", kube.TruncateText(ref, 80), "error", err)
 				}
 				return
 			}

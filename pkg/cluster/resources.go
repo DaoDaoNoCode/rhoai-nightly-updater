@@ -8,11 +8,9 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -20,65 +18,20 @@ import (
 
 // Ownership of the quick resources (S3 storage, pipeline servers, MLflow).
 //
-// Everything the tool creates carries managedByLabelKey=managedByLabelValue,
+// Everything the tool creates carries kube.ManagedByLabelKey=ManagedByLabelValue,
 // and only labelled objects are listed for teardown. Objects created by older
 // versions carry no label; they are recognised by the managedFields entry the
 // API server recorded when the tool created them (see createdBy): a
 // server-side apply with fieldManager "rhoai-nightly-updater", or a POST with
 // no User-Agent, which the API server records as manager "Go-http-client".
 const (
-	managedByLabelKey   = "app.kubernetes.io/managed-by"
-	managedByLabelValue = "rhoai-nightly-updater"
-	toolFieldManager    = "rhoai-nightly-updater"
-	legacyPostManager   = "Go-http-client"
+	toolFieldManager  = "rhoai-nightly-updater"
+	legacyPostManager = "Go-http-client"
 )
 
 // toolLabels returns the ownership labels set on every object the tool creates.
 func toolLabels() map[string]any {
-	return map[string]any{managedByLabelKey: managedByLabelValue}
-}
-
-// objectMeta is the subset of metadata the ownership checks read.
-type objectMeta struct {
-	Name              string               `json:"name"`
-	Namespace         string               `json:"namespace"`
-	UID               string               `json:"uid"`
-	ResourceVersion   string               `json:"resourceVersion"`
-	Generation        int64                `json:"generation"`
-	CreationTimestamp string               `json:"creationTimestamp"`
-	DeletionTimestamp string               `json:"deletionTimestamp"`
-	Labels            map[string]string    `json:"labels"`
-	Annotations       map[string]string    `json:"annotations"`
-	Finalizers        []string             `json:"finalizers"`
-	ManagedFields     []managedFieldsEntry `json:"managedFields"`
-	OwnerReferences   []struct {
-		Kind string `json:"kind"`
-		Name string `json:"name"`
-		UID  string `json:"uid"`
-	} `json:"ownerReferences"`
-}
-
-// managedFieldsEntry is one metadata.managedFields entry, with every field of
-// the Kubernetes type (metav1.ManagedFieldsEntry), so an entry read here
-// can be written back unchanged.
-type managedFieldsEntry struct {
-	Manager    string `json:"manager,omitempty"`
-	Operation  string `json:"operation,omitempty"`
-	APIVersion string `json:"apiVersion,omitempty"`
-	Time       string `json:"time,omitempty"`
-	FieldsType string `json:"fieldsType,omitempty"`
-	// FieldsV1 is the set of fields the manager owns, as a tree keyed by
-	// "f:<field>", "k:<list key>", "v:<value>" or "." (the node itself).
-	FieldsV1    map[string]json.RawMessage `json:"fieldsV1,omitempty"`
-	Subresource string                     `json:"subresource,omitempty"`
-}
-
-func (m objectMeta) hasToolLabel() bool {
-	return m.Labels[managedByLabelKey] == managedByLabelValue
-}
-
-func (m objectMeta) terminating() bool {
-	return m.DeletionTimestamp != ""
+	return map[string]any{kube.ManagedByLabelKey: kube.ManagedByLabelValue}
 }
 
 // toolManagers are the field managers this tool's versions wrote with:
@@ -91,113 +44,6 @@ func (m objectMeta) terminating() bool {
 // sends no User-Agent (backend/src/utils/directCallUtils.ts), its Go BFF
 // forwards the browser's (distributions/core-bff, httputil.ReverseProxy).
 var toolManagers = []string{toolFieldManager, legacyPostManager}
-
-// ownsFieldPath reports whether one of managers owns the field at path, a
-// chain of fieldsV1 keys such as "f:spec", "f:objectStorage", through the
-// object itself (not a subresource). The API server gives a field to
-// whoever last set it to a new value, so a field the tool still owns is one
-// the tool wrote and nobody has changed since: proof of who made the
-// object's content that, unlike an entry's time (the manager's last write),
-// does not break when the tool updates the object again.
-func (m objectMeta) ownsFieldPath(managers []string, path ...string) bool {
-	for _, e := range m.ManagedFields {
-		if e.Subresource != "" || !slices.Contains(managers, e.Manager) || len(path) == 0 {
-			continue
-		}
-		raw, ok := e.FieldsV1[path[0]]
-		for _, key := range path[1:] {
-			if !ok {
-				break
-			}
-			var node map[string]json.RawMessage
-			if json.Unmarshal(raw, &node) != nil {
-				ok = false
-				break
-			}
-			raw, ok = node[key]
-		}
-		if ok {
-			return true
-		}
-	}
-	return false
-}
-
-// hasManager reports whether one of managers wrote the object itself at
-// any time (any operation, not a subresource).
-func (m objectMeta) hasManager(managers []string) bool {
-	for _, e := range m.ManagedFields {
-		if e.Subresource == "" && slices.Contains(managers, e.Manager) {
-			return true
-		}
-	}
-	return false
-}
-
-// ownsField reports whether manager owns the top-level field (a fieldsV1
-// key such as "f:spec") through the object itself, not a subresource.
-func (m objectMeta) ownsField(manager, field string) bool {
-	for _, f := range m.ManagedFields {
-		if _, owns := f.FieldsV1[field]; owns && f.Manager == manager && f.Subresource == "" {
-			return true
-		}
-	}
-	return false
-}
-
-func (m objectMeta) ownedBy(uid string) bool {
-	for _, o := range m.OwnerReferences {
-		if o.UID == uid {
-			return true
-		}
-	}
-	return false
-}
-
-func parseObjectMeta(body []byte) (objectMeta, error) {
-	var obj struct {
-		Metadata objectMeta `json:"metadata"`
-	}
-	if err := json.Unmarshal(body, &obj); err != nil {
-		return objectMeta{}, err
-	}
-	return obj.Metadata, nil
-}
-
-// readObjectMeta reads the metadata of the object at path. found is false on
-// 404; any other error is returned.
-func readObjectMeta(c *Client, path string) (meta objectMeta, found bool, err error) {
-	body, exists, err := c.GetOptional(path)
-	if err != nil {
-		return objectMeta{}, false, err
-	}
-	if !exists {
-		return objectMeta{}, false, nil
-	}
-	meta, err = parseObjectMeta(body)
-	return meta, err == nil, err
-}
-
-// deleteWithUID deletes path only if the object still has the given UID, so a
-// check-then-delete never removes an object recreated in between.
-func deleteWithUID(c *Client, path, uid string) (int, error) {
-	return deleteWithUIDPropagation(c, path, uid, "Background")
-}
-
-// deleteWithUIDPropagation is deleteWithUID with a propagation policy.
-// "Foreground" keeps the object (with a deletionTimestamp) until the garbage
-// collector deleted its dependents that set blockOwnerDeletion (Kubernetes
-// docs, Garbage Collection, "Foreground cascading deletion").
-func deleteWithUIDPropagation(c *Client, path, uid, policy string) (int, error) {
-	body, _ := json.Marshal(map[string]any{
-		"apiVersion":        "v1",
-		"kind":              "DeleteOptions",
-		"preconditions":     map[string]any{"uid": uid},
-		"propagationPolicy": policy,
-	})
-	_, status, err := c.Do(http.MethodDelete, path, "application/json", body, nil)
-	return status, err
-}
 
 // withToolFieldManager adds fieldManager to a POST path so created objects
 // record this tool as their manager.
@@ -221,7 +67,7 @@ var errObjectChanged = errors.New("it changed while the tool was updating it; re
 
 // toolObjectReader returns the current metadata of one object, and whether it
 // exists.
-type toolObjectReader func() (objectMeta, bool, error)
+type toolObjectReader func() (kube.ObjectMeta, bool, error)
 
 // ensureToolObject creates obj when it is absent and updates it when this
 // tool owns it, without ever writing to an object someone else created:
@@ -252,7 +98,7 @@ type toolObjectReader func() (objectMeta, bool, error)
 // the object path. It returns "created" or "updated", and the object's
 // metadata and existence as last seen, which change when the ownership was
 // upgraded: pass them to the real write after a dry run.
-func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]any, current objectMeta, found bool, read toolObjectReader, owned func(objectMeta) bool, dryRun bool) (string, objectMeta, bool, error) {
+func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]any, current kube.ObjectMeta, found bool, read toolObjectReader, owned func(kube.ObjectMeta) bool, dryRun bool) (string, kube.ObjectMeta, bool, error) {
 	data, err := json.Marshal(obj)
 	if err != nil {
 		return "", current, found, err
@@ -279,7 +125,7 @@ func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]a
 		if !owned(current) {
 			return "", current, found, &foreignObjectError{Desc: desc}
 		}
-		if current.terminating() {
+		if current.Terminating() {
 			return "", current, found, fmt.Errorf("%s is being deleted; wait until it is gone, then retry", desc)
 		}
 		upgraded, upErr := upgradeToolFieldOwnership(c, path, current)
@@ -327,11 +173,11 @@ func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]a
 // afterWrite returns the metadata of the object a write returned, so a later
 // write of the same object is guarded by its new resourceVersion. A dry run
 // persisted nothing: the object is still as it was.
-func afterWrite(body []byte, current objectMeta, found, dryRun bool) (objectMeta, bool) {
+func afterWrite(body []byte, current kube.ObjectMeta, found, dryRun bool) (kube.ObjectMeta, bool) {
 	if dryRun {
 		return current, found
 	}
-	if m, err := parseObjectMeta(body); err == nil && m.ResourceVersion != "" {
+	if m, err := kube.ParseObjectMeta(body); err == nil && m.ResourceVersion != "" {
 		return m, true
 	}
 	return current, found
@@ -360,11 +206,11 @@ func afterWrite(body []byte, current objectMeta, found, dryRun bool) (objectMeta
 // current was read (csaupgrade.UpgradeManagedFieldsPatch does the same). It
 // writes nothing when the tool has no Update entry, and returns the
 // object's metadata after the change.
-func upgradeToolFieldOwnership(c *Client, path string, current objectMeta) (objectMeta, error) {
-	ours := func(e managedFieldsEntry, op string) bool {
+func upgradeToolFieldOwnership(c *Client, path string, current kube.ObjectMeta) (kube.ObjectMeta, error) {
+	ours := func(e kube.ManagedFieldsEntry, op string) bool {
 		return e.Manager == toolFieldManager && e.Operation == op && e.Subresource == ""
 	}
-	entries := make([]managedFieldsEntry, len(current.ManagedFields))
+	entries := make([]kube.ManagedFieldsEntry, len(current.ManagedFields))
 	copy(entries, current.ManagedFields)
 	target := -1
 	for i, e := range entries {
@@ -400,7 +246,7 @@ func upgradeToolFieldOwnership(c *Client, path string, current objectMeta) (obje
 		}
 		entries[target].FieldsV1 = merged
 	}
-	kept := make([]managedFieldsEntry, 0, len(entries))
+	kept := make([]kube.ManagedFieldsEntry, 0, len(entries))
 	for _, e := range entries {
 		if !ours(e, "Update") {
 			kept = append(kept, e)
@@ -420,7 +266,7 @@ func upgradeToolFieldOwnership(c *Client, path string, current objectMeta) (obje
 	if err != nil {
 		return current, err
 	}
-	return parseObjectMeta(body)
+	return kube.ParseObjectMeta(body)
 }
 
 // unionFieldsV1 returns the union of two field sets in their fieldsV1 form:
@@ -472,46 +318,6 @@ func unionFieldsV1(a, b map[string]json.RawMessage) (map[string]json.RawMessage,
 	return out, nil
 }
 
-// waitForGone polls until gone reports true, an error occurs, or the timeout
-// passes. Every poll runs under one context bounded by the timeout, so a call
-// that starts just before the deadline cannot overrun it. It returns
-// (false, nil) on timeout and (false, err) on any read error, including
-// 401/403: an unreadable object is not "still being deleted".
-func waitForGone(c *Client, timeout, interval time.Duration, gone func(cc *Client) (bool, error)) (bool, error) {
-	ctx, cancel := kube.Clock().WithTimeout(c.Context(), timeout)
-	defer cancel()
-	cc := c.WithContext(ctx)
-	for {
-		done, err := gone(cc)
-		if done && err == nil {
-			return true, nil
-		}
-		if ctx.Err() != nil {
-			// The caller's own context ended (client gone): report it. The
-			// local deadline only means "not gone yet".
-			if c.Context().Err() != nil {
-				return false, c.Context().Err()
-			}
-			return false, nil
-		}
-		if err != nil {
-			return false, err
-		}
-		_ = kube.Clock().Sleep(ctx, interval) // the deadline is checked after the next poll
-	}
-}
-
-// waitForDeletion polls path until it returns 404. See waitForGone.
-func waitForDeletion(c *Client, path string, timeout, interval time.Duration) (bool, error) {
-	return waitForGone(c, timeout, interval, func(cc *Client) (bool, error) {
-		_, _, err := cc.Get(path)
-		if kube.IsK8sNotFound(err) {
-			return true, nil
-		}
-		return false, err
-	})
-}
-
 // workloadPodIssue is the most relevant reason a workload's pods are not ready.
 type workloadPodIssue struct {
 	Reason   string
@@ -537,7 +343,7 @@ var terminalWaitingReasons = map[string]bool{
 // wantImage is set, only pods with a container running that image count.
 func inspectPods(c *Client, namespace, selector, wantImage string) (workloadPodIssue, error) {
 	var items []struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 		Spec     struct {
 			Containers []struct {
 				Image string `json:"image"`
@@ -570,7 +376,7 @@ func inspectPods(c *Client, namespace, selector, wantImage string) (workloadPodI
 		}
 	}
 	for _, pod := range items {
-		if pod.Metadata.terminating() {
+		if pod.Metadata.Terminating() {
 			continue
 		}
 		if wantImage != "" {
@@ -584,7 +390,7 @@ func inspectPods(c *Client, namespace, selector, wantImage string) (workloadPodI
 		}
 		for _, cond := range pod.Status.Conditions {
 			if cond.Type == "PodScheduled" && cond.Status == "False" {
-				consider(workloadPodIssue{Reason: firstNonEmpty(cond.Reason, "Unschedulable"), Message: cond.Message})
+				consider(workloadPodIssue{Reason: kube.FirstNonEmpty(cond.Reason, "Unschedulable"), Message: cond.Message})
 			}
 		}
 		statuses := append(append([]containerStatus{}, pod.Status.InitContainerStatuses...), pod.Status.ContainerStatuses...)
@@ -616,15 +422,6 @@ type containerStatus struct {
 	} `json:"lastState"`
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 // applyPodIssue copies a pod issue into a resource state.
 func applyPodIssue(state *types.ResourceState, issue workloadPodIssue) {
 	if issue.Reason == "" {
@@ -634,18 +431,8 @@ func applyPodIssue(state *types.ResourceState, issue workloadPodIssue) {
 	state.TerminalError = issue.Terminal
 	state.Message = issue.Reason
 	if issue.Message != "" {
-		state.Message = issue.Reason + ": " + truncateText(issue.Message, 300)
+		state.Message = issue.Reason + ": " + kube.TruncateText(issue.Message, 300)
 	}
-}
-
-// truncateText trims s and cuts it to its first n characters (runes, so a
-// multi-byte character is never split), marking the cut with an ellipsis.
-func truncateText(s string, n int) string {
-	s = strings.TrimSpace(s)
-	if r := []rune(s); len(r) > n {
-		return string(r[:n]) + "…"
-	}
-	return s
 }
 
 // GetResourcesStatus checks the state of test infrastructure resources. It

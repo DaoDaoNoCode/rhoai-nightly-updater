@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // A published model leaves Gen AI studio's AI assets, as the dashboard's
@@ -31,7 +33,7 @@ type maasGenAI struct {
 	HadUseCase bool   `json:"hadUseCase,omitempty"`
 }
 
-func genAIOf(meta objectMeta) maasGenAI {
+func genAIOf(meta kube.ObjectMeta) maasGenAI {
 	var g maasGenAI
 	g.Asset, g.HadAsset = meta.Labels[genAIAssetLabel]
 	g.UseCase, g.HadUseCase = meta.Annotations[genAIUseCaseAnnotation]

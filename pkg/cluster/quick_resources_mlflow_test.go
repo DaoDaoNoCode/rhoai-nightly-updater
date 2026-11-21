@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 const mlflowPath = "/apis/" + mlflowAPIGroup + "/mlflows/" + mlflowCRName
@@ -81,7 +83,7 @@ func TestSetupMLflow(t *testing.T) {
 			t.Fatalf("got %+v", resp)
 		}
 		cr := f.get(mlflowPath)
-		if cr["metadata"].(map[string]any)["labels"].(map[string]any)[managedByLabelKey] != managedByLabelValue {
+		if cr["metadata"].(map[string]any)["labels"].(map[string]any)[kube.ManagedByLabelKey] != kube.ManagedByLabelValue {
 			t.Error("CR lacks the ownership label")
 		}
 		if _, set := mlflowImageOf(f); set {

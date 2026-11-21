@@ -283,7 +283,7 @@ func TestNewDefaultObjectIsTheReleaseDefault(t *testing.T) {
 	if !strings.Contains(string(raw), `"name":"default-dsc"`) || strings.Contains(string(raw), "workbenchNamespace") {
 		t.Fatalf("object = %s", raw)
 	}
-	if !jsonEqual(comps(obj), v.defaultComponents()) {
+	if !kube.JSONEqual(comps(obj), v.defaultComponents()) {
 		t.Fatalf("not the release default: %s", raw)
 	}
 }

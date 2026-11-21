@@ -43,7 +43,7 @@ type recordedPipelineServer struct {
 type pipelineRecord map[string]recordedPipelineServer
 
 // owns: meta is a pipeline server whose UID the tool recorded.
-func (r pipelineRecord) owns(meta objectMeta) bool {
+func (r pipelineRecord) owns(meta kube.ObjectMeta) bool {
 	e, ok := r[meta.Namespace+"/"+meta.Name]
 	return ok && e.UID != "" && e.UID == meta.UID
 }
@@ -92,7 +92,7 @@ func writePipelineRecord(c *Client, rec pipelineRecord) error {
 }
 
 // recordPipelineServer records meta (a DSPA as read or written) as the tool's.
-func recordPipelineServer(c *Client, meta objectMeta) error {
+func recordPipelineServer(c *Client, meta kube.ObjectMeta) error {
 	if meta.UID == "" {
 		return fmt.Errorf("record this tool's pipeline servers: %s/%s has no UID", meta.Namespace, meta.Name)
 	}

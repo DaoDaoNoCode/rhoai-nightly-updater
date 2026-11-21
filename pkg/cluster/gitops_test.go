@@ -754,7 +754,7 @@ func statusManagersOf(t *testing.T, c *Client) *types.StatusResponse {
 		t.Fatal(err)
 	}
 	status := &types.StatusResponse{Subscription: sub.info, CatalogSource: cs}
-	var subMeta *objectMeta
+	var subMeta *kube.ObjectMeta
 	if sub.found {
 		subMeta = &sub.meta
 	}

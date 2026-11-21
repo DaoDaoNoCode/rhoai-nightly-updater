@@ -3,7 +3,6 @@ package cluster
 import (
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -337,29 +336,6 @@ func applySubscriptionWithRetry(c *Client, path string, sub map[string]any, reco
 	return applyErr, nil
 }
 
-// errorCodeFromK8sErr maps a K8s API error to a user-facing error code string.
-func errorCodeFromK8sErr(err error) string {
-	if kube.IsNetworkError(err) {
-		return "network"
-	}
-	var k8sErr *K8sError
-	if errors.As(err, &k8sErr) && k8sErr.Status == 401 && k8sErr.User {
-		// The signed-in user's token, which a change acts with, was
-		// rejected while the operation ran: their sign-in ended (expired or
-		// revoked), and part of the change may have run. Not the app's
-		// credentials ("unauthorized"); a sign-in that ends before anything
-		// runs is refused by the gate with "session_expired".
-		return "sign_in_ended"
-	}
-	if kube.IsK8sError(err, 401) {
-		return "unauthorized"
-	}
-	if kube.IsK8sError(err, 403) {
-		return "forbidden"
-	}
-	return ""
-}
-
 // VerifyNodeReadiness checks that the pull secret credentials can authenticate
 // to quay.io/rhoai and that a known nightly image is accessible.
 // This is a server-side registry API check, not a pod-level test.
@@ -375,7 +351,7 @@ func VerifyNodeReadiness(c *Client) (*types.OperationResponse, error) {
 			Success:   false,
 			Message:   "Could not read the pull secret kube-system/additional-pull-secret: " + err.Error(),
 			Logs:      []string{fmt.Sprintf("Reading kube-system/additional-pull-secret failed: %v", err)},
-			ErrorCode: errorCodeFromK8sErr(err),
+			ErrorCode: kube.ErrorCodeFromK8sErr(err),
 		}, nil
 	}
 	if !ps.Exists {
@@ -403,7 +379,7 @@ func VerifyNodeReadiness(c *Client) (*types.OperationResponse, error) {
 			Success:   false,
 			Message:   "Could not read the image mirror (IDMS) configuration: " + err.Error(),
 			Logs:      append(logs, fmt.Sprintf("Listing ImageDigestMirrorSets failed: %v", err)),
-			ErrorCode: errorCodeFromK8sErr(err),
+			ErrorCode: kube.ErrorCodeFromK8sErr(err),
 		}, nil
 	}
 	if !idms.Exists {
@@ -578,7 +554,7 @@ func updateCheckCluster(c *Client, image string, opts OperationOptions, chk *upd
 	emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Checking prerequisites..."})
 	refusal, revertDashboard, guardErr := dashboardDevGuard(c, opts, "Update")
 	if guardErr != nil {
-		return fail(guardErr.Error(), errorCodeFromK8sErr(guardErr))
+		return fail(guardErr.Error(), kube.ErrorCodeFromK8sErr(guardErr))
 	}
 	if refusal != "" {
 		return fail(refusal, errorCodeDashboardDevActive)
@@ -591,7 +567,7 @@ func updateCheckCluster(c *Client, image string, opts OperationOptions, chk *upd
 
 	ps, err := getPullSecret(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Failed to check pull secret: %v", err), errorCodeFromK8sErr(err))
+		return fail(fmt.Sprintf("Failed to check pull secret: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	if !ps.Exists {
 		return fail("additional-pull-secret not found in kube-system. Run the one-time setup first.", "prerequisites")
@@ -609,7 +585,7 @@ func updateCheckCluster(c *Client, image string, opts OperationOptions, chk *upd
 
 	idms, err := getIDMS(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Failed to check IDMS: %v", err), errorCodeFromK8sErr(err))
+		return fail(fmt.Sprintf("Failed to check IDMS: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	if !idms.Exists {
 		return fail(fmt.Sprintf("No IDMS found mirroring %s. Run the one-time setup first.", IDMSSource), "prerequisites")
@@ -624,12 +600,12 @@ func updateCheckCluster(c *Client, image string, opts OperationOptions, chk *upd
 
 	currentCSV, csvCheckErr := getCSV(c)
 	if csvCheckErr != nil {
-		return fail("Cannot identify installed CSV: "+csvCheckErr.Error(), errorCodeOr(csvCheckErr, "prerequisites"))
+		return fail("Cannot identify installed CSV: "+csvCheckErr.Error(), kube.ErrorCodeOr(csvCheckErr, "prerequisites"))
 	}
 
 	gitOps, channelOverride, gitOpsProblem, gitOpsErr := updateGitOpsPlan(c, image, currentCSV, logs)
 	if gitOpsErr != nil {
-		return fail("Cannot check whether Argo CD manages the operator: "+gitOpsErr.Error()+". Nothing was changed.", errorCodeFromK8sErr(gitOpsErr))
+		return fail("Cannot check whether Argo CD manages the operator: "+gitOpsErr.Error()+". Nothing was changed.", kube.ErrorCodeFromK8sErr(gitOpsErr))
 	}
 	if gitOpsProblem != "" {
 		return fail(gitOpsProblem, kube.ErrorCodeGitOpsManaged)
@@ -674,7 +650,7 @@ func updateVerifyTarget(c *Client, image string, chk *updateChecks, logs *[]stri
 	// Dashboard Dev session, so "Nothing was changed" stays true.
 	captured, recoveryErr := captureOperatorRecovery(c)
 	if recoveryErr != nil {
-		return fail(recoveryErr.Error()+". Nothing was changed.", errorCodeOr(recoveryErr, "prerequisites"))
+		return fail(recoveryErr.Error()+". Nothing was changed.", kube.ErrorCodeOr(recoveryErr, "prerequisites"))
 	}
 	if blocked := foreignSubscriptionRefusal(c); blocked != "" {
 		return fail(blocked, "prerequisites")
@@ -713,7 +689,7 @@ func updateApplyCatalog(c *Client, image string, recovery *operatorRecovery, log
 	if recovery.subscription != nil {
 		recovery.subscriptionChanged = true
 		if _, err := c.DeleteIfExists(subscriptionPath()); err != nil {
-			return fail("Cannot remove the current Subscription: "+err.Error(), errorCodeFromK8sErr(err))
+			return fail("Cannot remove the current Subscription: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 		}
 		*logs = append(*logs, "OK: Subscription removed while the catalog is replaced (the operator keeps running)")
 	}
@@ -724,10 +700,10 @@ func updateApplyCatalog(c *Client, image string, recovery *operatorRecovery, log
 	// Recreate this source so READY and PackageManifest cannot describe its
 	// previous image. The verified temporary catalog remains separate.
 	if _, deleteErr := c.DeleteIfExists(csPath); deleteErr != nil {
-		return fail("Cannot replace nightly catalog: "+deleteErr.Error(), errorCodeFromK8sErr(deleteErr))
+		return fail("Cannot replace nightly catalog: "+deleteErr.Error(), kube.ErrorCodeFromK8sErr(deleteErr))
 	}
 	if _, _, err := c.Apply(csPath, buildCatalogSourceSpec(image)); err != nil {
-		return fail(fmt.Sprintf("Failed to apply CatalogSource: %v", err), errorCodeFromK8sErr(err))
+		return fail(fmt.Sprintf("Failed to apply CatalogSource: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	*logs = append(*logs, "OK: CatalogSource applied")
 	emit(UpdateStepEvent{Step: "apply_catalog_source", Status: "success", Message: "CatalogSource applied", Detail: image})
@@ -797,13 +773,13 @@ func updateDeleteCSV(c *Client, currentCSV types.CSVInfo, recovery *operatorReco
 	if ipName := recovery.installPlanName(); ipName != "" {
 		ipPath := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ipName)
 		if _, err := c.DeleteIfExists(ipPath); err != nil {
-			return fail("Cannot delete old InstallPlan: "+err.Error(), errorCodeFromK8sErr(err))
+			return fail("Cannot delete old InstallPlan: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 		}
 		*logs = append(*logs, fmt.Sprintf("OK: InstallPlan %s deleted", ipName))
 	}
 	if currentCSV.Name != "" {
 		if _, err := c.DeleteIfExists(csvPath(currentCSV.Name)); err != nil {
-			return fail("Cannot delete current CSV: "+err.Error(), errorCodeFromK8sErr(err))
+			return fail("Cannot delete current CSV: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 		}
 		recovery.noteCSVRemoved(currentCSV.Name)
 		gone, err := waitForCSVGone(c, currentCSV.Name)
@@ -833,7 +809,7 @@ func applyUpdateSubscription(c *Client, sub map[string]any, channel string, reco
 		return &types.OperationResponse{Success: false, Message: "Operation stopped during Subscription apply retry", Logs: *logs}, cancelErr
 	}
 	if subApplyErr != nil {
-		return fail(fmt.Sprintf("Failed to apply Subscription after 3 attempts: %v", subApplyErr), errorCodeFromK8sErr(subApplyErr))
+		return fail(fmt.Sprintf("Failed to apply Subscription after 3 attempts: %v", subApplyErr), kube.ErrorCodeFromK8sErr(subApplyErr))
 	}
 	*logs = append(*logs, fmt.Sprintf("OK: Subscription applied (channel=%s, installPlanApproval=%v)", channel, sub["spec"].(map[string]any)["installPlanApproval"]))
 	emit(UpdateStepEvent{Step: "apply_subscription", Status: "success", Message: "Subscription applied", Detail: channel})
@@ -843,9 +819,9 @@ func applyUpdateSubscription(c *Client, sub map[string]any, channel string, reco
 // readCSVMetaRetrying reads the metadata of an installed CSV, retrying a
 // transient API error a few times: the read decides whether the install
 // is reported as the verified build.
-func readCSVMetaRetrying(c *Client, csv string) (meta objectMeta, found bool, err error) {
+func readCSVMetaRetrying(c *Client, csv string) (meta kube.ObjectMeta, found bool, err error) {
 	for attempt := 0; ; attempt++ {
-		meta, found, err = readObjectMeta(c, csvPath(csv))
+		meta, found, err = kube.ReadObjectMeta(c, csvPath(csv))
 		if err == nil || attempt == 2 || c.Context().Err() != nil {
 			return meta, found, err
 		}
@@ -885,7 +861,7 @@ func verifyUpdateInstall(c *Client, target catalogTarget, recovery *operatorReco
 		default:
 			if got := buildFingerprint(meta.Annotations["containerImage"], meta.Annotations["createdAt"]); got != target.Fingerprint {
 				recovery.keepNewInstall = true // a Succeeded operator is not torn down
-				what := fmt.Sprintf("operator image %s, built %s", nonEmpty(meta.Annotations["containerImage"], "unknown"), nonEmpty(meta.Annotations["createdAt"], "unknown"))
+				what := fmt.Sprintf("operator image %s, built %s", kube.NonEmpty(meta.Annotations["containerImage"], "unknown"), kube.NonEmpty(meta.Annotations["createdAt"], "unknown"))
 				if got == "" {
 					what = "it carries no build annotations"
 				}
@@ -948,7 +924,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 			Success:   false,
 			Message:   fmt.Sprintf("Failed to check pull secret: %v", err),
 			Logs:      logs,
-			ErrorCode: errorCodeFromK8sErr(err),
+			ErrorCode: kube.ErrorCodeFromK8sErr(err),
 		}, nil
 	}
 	if !ps.Exists {
@@ -967,7 +943,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 			Success:   false,
 			Message:   fmt.Sprintf("Failed to check IDMS: %v", err),
 			Logs:      logs,
-			ErrorCode: errorCodeFromK8sErr(err),
+			ErrorCode: kube.ErrorCodeFromK8sErr(err),
 		}, nil
 	}
 	if !idms.Exists {
@@ -1012,13 +988,13 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 	// from the FBC image itself because a dry run creates no catalog.
 	dryRunCSV, dryRunCSVErr := getCSV(c)
 	if dryRunCSVErr != nil {
-		return &types.OperationResponse{Success: false, Message: "Cannot identify installed CSV: " + dryRunCSVErr.Error(), Logs: logs, ErrorCode: nonEmpty(errorCodeFromK8sErr(dryRunCSVErr), "prerequisites")}, nil
+		return &types.OperationResponse{Success: false, Message: "Cannot identify installed CSV: " + dryRunCSVErr.Error(), Logs: logs, ErrorCode: kube.NonEmpty(kube.ErrorCodeFromK8sErr(dryRunCSVErr), "prerequisites")}, nil
 	}
 	// Under Argo CD only the catalog's own image can be installed: refuse
 	// before reading any catalog content.
 	gitOps, channelOverride, gitOpsProblem, gitOpsErr := updateGitOpsPlan(c, image, dryRunCSV, &logs)
 	if gitOpsErr != nil {
-		return &types.OperationResponse{Success: false, Message: "Cannot check whether Argo CD manages the operator: " + gitOpsErr.Error(), Logs: logs, ErrorCode: errorCodeFromK8sErr(gitOpsErr)}, nil
+		return &types.OperationResponse{Success: false, Message: "Cannot check whether Argo CD manages the operator: " + gitOpsErr.Error(), Logs: logs, ErrorCode: kube.ErrorCodeFromK8sErr(gitOpsErr)}, nil
 	}
 	if gitOpsProblem != "" {
 		logs = append(logs, "[DRY-RUN] FAILED: "+gitOpsProblem)
@@ -1044,7 +1020,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 			Success:   false,
 			Message:   fmt.Sprintf("Failed to check CatalogSource: %v", err),
 			Logs:      logs,
-			ErrorCode: errorCodeFromK8sErr(err),
+			ErrorCode: kube.ErrorCodeFromK8sErr(err),
 		}, nil
 	}
 	// Server-side dry run: attempt CatalogSource apply with ?dryRun=All
@@ -1061,7 +1037,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 			Success:   false,
 			Message:   fmt.Sprintf("Dry run failed: CatalogSource would be rejected: %v", csDryErr),
 			Logs:      logs,
-			ErrorCode: errorCodeOr(csDryErr, "validation"),
+			ErrorCode: kube.ErrorCodeOr(csDryErr, "validation"),
 		}, nil
 	}
 	if gitOps.active() {
@@ -1080,12 +1056,12 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 			Success:   false,
 			Message:   fmt.Sprintf("Failed to check Subscription: %v", err),
 			Logs:      logs,
-			ErrorCode: errorCodeFromK8sErr(err),
+			ErrorCode: kube.ErrorCodeFromK8sErr(err),
 		}, nil
 	}
 	switch {
 	case gitOps.active():
-		channel := nonEmpty(channelOverride, "the one the build publishes")
+		channel := kube.NonEmpty(channelOverride, "the one the build publishes")
 		if channelOverride != "" {
 			channel += " (kept from Git)"
 		}
@@ -1237,14 +1213,14 @@ func reinstallCheckRequest(c *Client, targetType, image string, opts OperationOp
 		return fail("An FBC image is required", "validation")
 	}
 	if g, err := readOperatorGitOps(c); err != nil {
-		return fail("Cannot check whether Argo CD manages the operator: "+err.Error()+". Nothing was changed.", errorCodeFromK8sErr(err))
+		return fail("Cannot check whether Argo CD manages the operator: "+err.Error()+". Nothing was changed.", kube.ErrorCodeFromK8sErr(err))
 	} else if msg := g.refusal("Install a different build", "the Subscription and the catalog for several minutes"); msg != "" {
 		rs.recordActivity = false
 		return fail(msg+" Update works with Argo CD: it installs the build the catalog serves and keeps the channel Git sets.", kube.ErrorCodeGitOpsManaged)
 	}
 	refusal, revertDashboard, guardErr := dashboardDevGuard(c, opts, "Install a different build")
 	if guardErr != nil {
-		return fail(guardErr.Error(), errorCodeFromK8sErr(guardErr))
+		return fail(guardErr.Error(), kube.ErrorCodeFromK8sErr(guardErr))
 	}
 	if refusal != "" {
 		rs.recordActivity = false
@@ -1294,7 +1270,7 @@ func reinstallResolveTarget(c *Client, targetType, image string, rs *reinstallCh
 
 	sub, err := getSubscription(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Failed to get subscription: %v", err), errorCodeFromK8sErr(err))
+		return fail(fmt.Sprintf("Failed to get subscription: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 
 	if !isNightly {
@@ -1312,14 +1288,14 @@ func reinstallResolveTarget(c *Client, targetType, image string, rs *reinstallCh
 		stableSource, stableChannel = target.Source, target.Channel
 		rs.activityTarget = stableSource + "/" + stableChannel
 		targetCSV = SubName + "." + target.Version
-		approveCSV = nonEmpty(target.HeadCSV, targetCSV)
+		approveCSV = kube.NonEmpty(target.HeadCSV, targetCSV)
 		targetCRDs = target.OwnedCRDs
 		*logs = append(*logs, fmt.Sprintf("Catalog target: %s / %s (GA %s)", stableSource, stableChannel, target.Version))
 	}
 
 	csv, csvErr := getCSV(c)
 	if csvErr != nil {
-		return fail("Cannot identify installed CSV: "+csvErr.Error(), errorCodeOr(csvErr, "prerequisites"))
+		return fail("Cannot identify installed CSV: "+csvErr.Error(), kube.ErrorCodeOr(csvErr, "prerequisites"))
 	}
 
 	// Already on the stable target: nothing to do when that install is
@@ -1420,7 +1396,7 @@ func reinstallCaptureRecovery(c *Client, rs *reinstallChecks, logs *[]string, em
 	// Dashboard Dev session, so "Nothing was changed" stays true.
 	captured, recoveryErr := captureOperatorRecovery(c)
 	if recoveryErr != nil {
-		return fail(recoveryErr.Error()+". Nothing was changed.", errorCodeOr(recoveryErr, "prerequisites"))
+		return fail(recoveryErr.Error()+". Nothing was changed.", kube.ErrorCodeOr(recoveryErr, "prerequisites"))
 	}
 	if blocked := foreignSubscriptionRefusal(c); blocked != "" {
 		return fail(blocked, "prerequisites")
@@ -1446,7 +1422,7 @@ func reinstallRemoveOperator(c *Client, csv types.CSVInfo, recovery *operatorRec
 	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
 	switch existed, delErr := c.DeleteIfExists(csPath); {
 	case delErr != nil:
-		return fail("Cannot remove nightly CatalogSource: "+delErr.Error(), errorCodeFromK8sErr(delErr))
+		return fail("Cannot remove nightly CatalogSource: "+delErr.Error(), kube.ErrorCodeFromK8sErr(delErr))
 	case !existed:
 		*logs = append(*logs, "OK: nightly CatalogSource already absent")
 		emit(UpdateStepEvent{Step: "delete_catalog_source", Status: "skipped", Message: "Nightly CatalogSource already absent"})
@@ -1460,7 +1436,7 @@ func reinstallRemoveOperator(c *Client, csv types.CSVInfo, recovery *operatorRec
 	emit(UpdateStepEvent{Step: "delete_subscription", Status: "running", Message: "Removing operator Subscription..."})
 	switch existed, delErr := c.DeleteIfExists(subscriptionPath()); {
 	case delErr != nil:
-		return fail(fmt.Sprintf("Failed to delete Subscription: %v", delErr), errorCodeFromK8sErr(delErr))
+		return fail(fmt.Sprintf("Failed to delete Subscription: %v", delErr), kube.ErrorCodeFromK8sErr(delErr))
 	case !existed:
 		*logs = append(*logs, "OK: Subscription already absent")
 		emit(UpdateStepEvent{Step: "delete_subscription", Status: "skipped", Message: "Subscription already absent"})
@@ -1474,7 +1450,7 @@ func reinstallRemoveOperator(c *Client, csv types.CSVInfo, recovery *operatorRec
 	emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Removing current CSV..."})
 	if csv.Name != "" {
 		if _, err := c.DeleteIfExists(csvPath(csv.Name)); err != nil {
-			return fail("Cannot delete current CSV: "+err.Error(), errorCodeFromK8sErr(err))
+			return fail("Cannot delete current CSV: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 		}
 		recovery.noteCSVRemoved(csv.Name)
 		gone, err := waitForCSVGone(c, csv.Name)
@@ -1509,7 +1485,7 @@ func reinstallCleanUp(c *Client, logs *[]string, emit func(UpdateStepEvent)) (*t
 	// during deletion. Remove finalizers to unblock (K8s finalizer docs pattern).
 	unstuckCount, componentWarnings := cleanupStuckComponentCRs(c)
 	if unstuckCount > 0 {
-		*logs = append(*logs, fmt.Sprintf("Unblocked %s by removing finalizers", countNoun(unstuckCount, "stuck component CR", "stuck component CRs")))
+		*logs = append(*logs, fmt.Sprintf("Unblocked %s by removing finalizers", kube.CountNoun(unstuckCount, "stuck component CR", "stuck component CRs")))
 	}
 	for _, w := range componentWarnings {
 		slog.Warn("stuck component CR cleanup issue", "detail", w)
@@ -1568,7 +1544,7 @@ func reinstallNightlySteps(c *Client, image, channel, approveCSV string, recover
 	csApplyPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
 	recovery.noteCatalogChanged()
 	if _, _, err := c.Apply(csApplyPath, buildCatalogSourceSpec(image)); err != nil {
-		return fail(fmt.Sprintf("Failed to create nightly CatalogSource: %v", err), errorCodeFromK8sErr(err))
+		return fail(fmt.Sprintf("Failed to create nightly CatalogSource: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	logs = append(logs, "OK: CatalogSource created with nightly image")
 	emit(UpdateStepEvent{Step: "create_catalog_source", Status: "success", Message: "CatalogSource created", Detail: image})
@@ -1636,7 +1612,7 @@ func createSubscriptionAndWait(c *Client, source, channel, kind, approveCSV stri
 		msg := fmt.Sprintf("Failed to create %s Subscription after 3 attempts: %v", kind, applyErr)
 		slog.Error("all attempts to create Subscription failed", "target", kind, "error", applyErr)
 		logs = append(logs, msg)
-		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: errorCodeFromK8sErr(applyErr)}, nil
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: kube.ErrorCodeFromK8sErr(applyErr)}, nil
 	}
 	logs = append(logs, fmt.Sprintf("OK: Subscription created (%s / %s, installPlanApproval=%v)", source, channel, newSub["spec"].(map[string]any)["installPlanApproval"]))
 	emit(UpdateStepEvent{Step: "create_subscription", Status: "success", Message: "Subscription created", Detail: channel})
@@ -1833,7 +1809,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	emit(UpdateStepEvent{Step: "verify_csv", Status: "running", Message: "Verifying operator is installed..."})
 
 	if g, err := readOperatorGitOps(c); err != nil {
-		return fail("Cannot check whether Argo CD manages the operator: "+err.Error()+". Nothing was changed.", errorCodeFromK8sErr(err))
+		return fail("Cannot check whether Argo CD manages the operator: "+err.Error()+". Nothing was changed.", kube.ErrorCodeFromK8sErr(err))
 	} else if msg := g.refusal("Re-deploy", "the Subscription until the old CSV is gone"); msg != "" {
 		recordActivity = false
 		return fail(msg+" To re-deploy the installed build, run Update: it installs the build the catalog serves again.", kube.ErrorCodeGitOpsManaged)
@@ -1841,11 +1817,11 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 
 	csv, err := getCSV(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Failed to look up CSV: %v", err), errorCodeOr(err, "prerequisites"))
+		return fail(fmt.Sprintf("Failed to look up CSV: %v", err), kube.ErrorCodeOr(err, "prerequisites"))
 	}
 	sub, err := getSubscription(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Failed to get Subscription: %v", err), errorCodeFromK8sErr(err))
+		return fail(fmt.Sprintf("Failed to get Subscription: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	subMissing := sub.State == "Not Installed"
 	// target is the CSV Refresh re-deploys: the installed one or, when an
@@ -1856,7 +1832,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	if subMissing {
 		recorded, err = loadSubscriptionSnapshot(c)
 		if err != nil {
-			return fail(fmt.Sprintf("Failed to read the recorded Subscription: %v", err), errorCodeOr(err, "prerequisites"))
+			return fail(fmt.Sprintf("Failed to read the recorded Subscription: %v", err), kube.ErrorCodeOr(err, "prerequisites"))
 		}
 	}
 	if csv.Name == "" {
@@ -1880,7 +1856,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	}
 	refusal, revertDashboard, guardErr := dashboardDevGuard(c, opts, "Refresh")
 	if guardErr != nil {
-		return fail(guardErr.Error(), errorCodeFromK8sErr(guardErr))
+		return fail(guardErr.Error(), kube.ErrorCodeFromK8sErr(guardErr))
 	}
 	if refusal != "" {
 		recordActivity = false
@@ -1920,7 +1896,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	// reinstalls the operator, as Update and Reinstall do.
 	captured, recoveryErr := captureOperatorRecovery(c)
 	if recoveryErr != nil {
-		return fail(recoveryErr.Error()+". Nothing was changed.", errorCodeOr(recoveryErr, "prerequisites"))
+		return fail(recoveryErr.Error()+". Nothing was changed.", kube.ErrorCodeOr(recoveryErr, "prerequisites"))
 	}
 
 	// Refresh re-deploys the installed version, so it must not become an
@@ -1945,7 +1921,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 			return fail(fmt.Sprintf("Cannot check which version channel %s of %s would install, so Refresh cannot confirm it re-deploys %s: %v. Nothing was changed.", sub.Channel, sub.Source, target, headErr), "prerequisites")
 		case head != target:
 			recordActivity = false
-			return fail(fmt.Sprintf("Refresh re-deploys %s, but channel %s of %s now installs %s, so recreating the Subscription would change the version. Nothing was changed. Use Update or Install a different build to move to %s.", target, sub.Channel, sub.Source, nonEmpty(head, "nothing"), nonEmpty(head, "another version")), "validation")
+			return fail(fmt.Sprintf("Refresh re-deploys %s, but channel %s of %s now installs %s, so recreating the Subscription would change the version. Nothing was changed. Use Update or Install a different build to move to %s.", target, sub.Channel, sub.Source, kube.NonEmpty(head, "nothing"), kube.NonEmpty(head, "another version")), "validation")
 		}
 		logs = append(logs, fmt.Sprintf("OK: channel %s still installs %s", sub.Channel, target))
 	}
@@ -1964,7 +1940,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	// Subscription afterwards would garbage-collect that plan mid-install.
 	emit(UpdateStepEvent{Step: "delete_subscription", Status: "running", Message: "Deleting Subscription..."})
 	if _, subDelErr := c.DeleteIfExists(subscriptionPath()); subDelErr != nil {
-		return fail(fmt.Sprintf("Failed to delete Subscription: %v", subDelErr), errorCodeFromK8sErr(subDelErr))
+		return fail(fmt.Sprintf("Failed to delete Subscription: %v", subDelErr), kube.ErrorCodeFromK8sErr(subDelErr))
 	}
 	recovery.subscriptionChanged = true
 	logs = append(logs, "OK: Subscription deleted")
@@ -1977,7 +1953,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 		emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting CSV to trigger a fresh install..."})
 		logs = append(logs, fmt.Sprintf("Deleting CSV %s...", csv.Name))
 		if _, csvDelErr := c.DeleteIfExists(csvPath(csv.Name)); csvDelErr != nil {
-			return fail(fmt.Sprintf("Failed to delete CSV %s: %v", csv.Name, csvDelErr), errorCodeFromK8sErr(csvDelErr))
+			return fail(fmt.Sprintf("Failed to delete CSV %s: %v", csv.Name, csvDelErr), kube.ErrorCodeFromK8sErr(csvDelErr))
 		}
 		recovery.noteCSVRemoved(csv.Name)
 		emit(UpdateStepEvent{Step: "delete_csv", Status: "success", Message: fmt.Sprintf("CSV %s deleted", csv.Name)})
@@ -2017,7 +1993,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 		return &types.OperationResponse{Success: false, Message: "Operation cancelled during Subscription recreation retry.", Logs: logs}, cancelErr
 	}
 	if applyErr != nil {
-		return fail(fmt.Sprintf("Failed to recreate Subscription after 3 attempts: %v", applyErr), errorCodeFromK8sErr(applyErr))
+		return fail(fmt.Sprintf("Failed to recreate Subscription after 3 attempts: %v", applyErr), kube.ErrorCodeFromK8sErr(applyErr))
 	}
 	logs = append(logs, "OK: Subscription recreated")
 	emit(UpdateStepEvent{Step: "recreate_subscription", Status: "success", Message: "Subscription recreated", Detail: sub.Channel})
@@ -2128,7 +2104,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 	// a validation error may quote the object it was sent.
 	_, pass, _ := strings.Cut(string(decoded), ":")
 	credentials := []string{auth, base64.StdEncoding.EncodeToString([]byte(auth)), string(decoded), pass}
-	redact := func(err error) string { return redactSecrets(err.Error(), credentials...) }
+	redact := func(err error) string { return kube.RedactSecrets(err.Error(), credentials...) }
 
 	// Check if secret already exists. Its other registry credentials must be
 	// preserved: only the quay.io/rhoai entry is replaced.
@@ -2139,7 +2115,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 			Success:   false,
 			Message:   "Failed to check existing secret: " + redact(getErr),
 			Logs:      logs,
-			ErrorCode: errorCodeFromK8sErr(getErr),
+			ErrorCode: kube.ErrorCodeFromK8sErr(getErr),
 		}, nil
 	}
 
@@ -2220,7 +2196,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 				Success:   false,
 				Message:   "Failed to update pull secret: " + redact(err),
 				Logs:      logs,
-				ErrorCode: errorCodeFromK8sErr(err),
+				ErrorCode: kube.ErrorCodeFromK8sErr(err),
 			}, nil
 		}
 		logs = append(logs, "OK: Pull secret updated")
@@ -2237,7 +2213,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 				Success:   false,
 				Message:   "Failed to create pull secret: " + redact(err),
 				Logs:      logs,
-				ErrorCode: errorCodeFromK8sErr(err),
+				ErrorCode: kube.ErrorCodeFromK8sErr(err),
 			}, nil
 		}
 		logs = append(logs, "OK: Pull secret created")
@@ -2294,7 +2270,7 @@ func TestPullSecret(c *Client) (*types.OperationResponse, error) {
 			Success:   false,
 			Message:   fmt.Sprintf("Failed to check pull secret: %v", err),
 			Logs:      logs,
-			ErrorCode: errorCodeFromK8sErr(err),
+			ErrorCode: kube.ErrorCodeFromK8sErr(err),
 		}, nil
 	}
 

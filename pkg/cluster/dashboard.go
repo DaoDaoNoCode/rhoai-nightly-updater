@@ -316,7 +316,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 	// operator resets.
 	target, err := discoverDashboardTarget(c)
 	if err != nil {
-		return &types.OperationResponse{Success: false, Message: sentenceStart(err.Error()) + ". No changes were made.", ErrorCode: nonEmpty(errorCodeFromK8sErr(err), "prerequisites")}, nil
+		return &types.OperationResponse{Success: false, Message: sentenceStart(err.Error()) + ". No changes were made.", ErrorCode: kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "prerequisites")}, nil
 	}
 	if target.Operator != nil {
 		return deployDashboardBuild(c, "pr", prNumber, flavor)
@@ -424,7 +424,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 		if err != nil {
 			return &types.OperationResponse{
 				Success: false, Message: fmt.Sprintf("Cannot read %s before patching: %v. No changes were made.", dashboardDeploymentName, err),
-				Logs: logs, ErrorCode: errorCodeFromK8sErr(err),
+				Logs: logs, ErrorCode: kube.ErrorCodeFromK8sErr(err),
 			}, nil
 		}
 		var containerPatches []map[string]any
@@ -461,7 +461,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 			})
 			return &types.OperationResponse{
 				Success: false, Message: fmt.Sprintf("Failed to patch dashboard deployment: %v", err),
-				Logs: logs, ErrorCode: errorCodeFromK8sErr(err),
+				Logs: logs, ErrorCode: kube.ErrorCodeFromK8sErr(err),
 			}, nil
 		}
 	}
@@ -570,7 +570,7 @@ func splitLegacyDashboardTargets(c *Client, ns string, images map[string]string,
 func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	target, err := discoverDashboardTarget(c)
 	if err != nil {
-		return &types.OperationResponse{Success: false, Message: sentenceStart(err.Error()) + ". No changes were made; retry Revert to default.", ErrorCode: nonEmpty(errorCodeFromK8sErr(err), "prerequisites")}, nil
+		return &types.OperationResponse{Success: false, Message: sentenceStart(err.Error()) + ". No changes were made; retry Revert to default.", ErrorCode: kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "prerequisites")}, nil
 	}
 	if target.Operator != nil {
 		result, _ := revertDashboardOperatorTo(c, target)
@@ -610,7 +610,7 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	// Revert the main dashboard deployment
 	var containerPatches []map[string]any
 	for _, name := range coreNames {
-		logs = append(logs, fmt.Sprintf("  %s: %s", name, truncateText(coreImages[name], 80)))
+		logs = append(logs, fmt.Sprintf("  %s: %s", name, kube.TruncateText(coreImages[name], 80)))
 		containerPatches = append(containerPatches, map[string]any{
 			"name":  name,
 			"image": coreImages[name],
@@ -622,7 +622,7 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	if err != nil {
 		return &types.OperationResponse{
 			Success: false, Message: fmt.Sprintf("Cannot read %s before reverting: %v", dashboardDeploymentName, err),
-			Logs: logs, ErrorCode: errorCodeFromK8sErr(err),
+			Logs: logs, ErrorCode: kube.ErrorCodeFromK8sErr(err),
 		}, nil
 	}
 	revertPatch := map[string]any{
@@ -647,7 +647,7 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	if err != nil {
 		return &types.OperationResponse{
 			Success: false, Message: fmt.Sprintf("Failed to patch deployment: %v", err),
-			Logs: logs, ErrorCode: errorCodeFromK8sErr(err),
+			Logs: logs, ErrorCode: kube.ErrorCodeFromK8sErr(err),
 		}, nil
 	}
 	logs = append(logs, fmt.Sprintf("OK: %d container images restored", len(containerPatches)))
@@ -670,7 +670,7 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 			failedModules = append(failedModules, name)
 		} else {
 			totalReverted++
-			logs = append(logs, fmt.Sprintf("  %s: %s", name, truncateText(image, 80)))
+			logs = append(logs, fmt.Sprintf("  %s: %s", name, kube.TruncateText(image, 80)))
 		}
 	}
 

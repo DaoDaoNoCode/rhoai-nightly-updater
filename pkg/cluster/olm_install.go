@@ -113,7 +113,7 @@ func ensureOperatorNamespaceAndGroup(c *Client, dryRun bool) (logs []string, pro
 		slog.Info("creating operator namespace", "namespace", SubNS)
 		ns := map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": SubNS}}
 		if _, _, err := c.Apply(nsPath, ns); err != nil {
-			return logs, fmt.Sprintf("Failed to create namespace %s: %v", SubNS, err), errorCodeFromK8sErr(err)
+			return logs, fmt.Sprintf("Failed to create namespace %s: %v", SubNS, err), kube.ErrorCodeFromK8sErr(err)
 		}
 		logs = append(logs, fmt.Sprintf("OK: Created namespace %s", SubNS))
 	}
@@ -136,7 +136,7 @@ func ensureOperatorNamespaceAndGroup(c *Client, dryRun bool) (logs []string, pro
 			"spec":       map[string]any{},
 		}
 		if _, _, err := c.Apply(namespacedPath("operators.coreos.com/v1", "operatorgroups", SubNS, "rhods-operator"), og); err != nil {
-			return logs, fmt.Sprintf("Failed to create OperatorGroup in %s: %v", SubNS, err), errorCodeFromK8sErr(err)
+			return logs, fmt.Sprintf("Failed to create OperatorGroup in %s: %v", SubNS, err), kube.ErrorCodeFromK8sErr(err)
 		}
 		logs = append(logs, fmt.Sprintf("OK: Created OperatorGroup in %s", SubNS))
 	}
@@ -161,13 +161,13 @@ func readOperatorNamespaceAndGroups(c *Client) (nsMissing bool, groups []rhoaiOp
 	_, found, err := c.GetOptional("/api/v1/namespaces/" + SubNS)
 	switch {
 	case err != nil:
-		return false, nil, fmt.Sprintf("Failed to check namespace %s: %v", SubNS, err), errorCodeFromK8sErr(err)
+		return false, nil, fmt.Sprintf("Failed to check namespace %s: %v", SubNS, err), kube.ErrorCodeFromK8sErr(err)
 	case !found:
 		return true, nil, "", ""
 	}
 	body, found, err := c.GetOptional(namespacedPath("operators.coreos.com/v1", "operatorgroups", SubNS, ""))
 	if err != nil {
-		return false, nil, fmt.Sprintf("Failed to check OperatorGroups in %s: %v", SubNS, err), errorCodeFromK8sErr(err)
+		return false, nil, fmt.Sprintf("Failed to check OperatorGroups in %s: %v", SubNS, err), kube.ErrorCodeFromK8sErr(err)
 	}
 	if found {
 		var list struct {
@@ -596,7 +596,7 @@ func checkInstallPlan(c *Client, name, expectedCSV string, approved map[string]b
 			}, true
 		}
 		if _, _, err := c.Patch(path, []byte(`{"spec":{"approved":true}}`)); err != nil {
-			return installOutcome{message: fmt.Sprintf("InstallPlan %s needs manual approval and approving it failed: %v", name, err), errorCode: errorCodeOr(err, "approval_required")}, true
+			return installOutcome{message: fmt.Sprintf("InstallPlan %s needs manual approval and approving it failed: %v", name, err), errorCode: kube.ErrorCodeOr(err, "approval_required")}, true
 		}
 		approved[name] = true
 		*logs = append(*logs, fmt.Sprintf("OK: Approved InstallPlan %s for %s (the Subscription keeps Manual approval for later upgrades)", name, strings.Join(ip.Spec.CSVNames, ", ")))
@@ -607,13 +607,6 @@ func checkInstallPlan(c *Client, name, expectedCSV string, approved map[string]b
 		progress(fmt.Sprintf("InstallPlan %s: %s", name, ip.Status.Phase))
 	}
 	return installOutcome{}, false
-}
-
-func errorCodeOr(err error, fallback string) string {
-	if code := errorCodeFromK8sErr(err); code != "" {
-		return code
-	}
-	return fallback
 }
 
 // versionVerdict is the outcome of comparing a target operator version with
@@ -803,7 +796,7 @@ type upgradeGate struct {
 }
 
 func (g upgradeGate) String() string {
-	return fmt.Sprintf("%s %s=%s (%s): %s", g.where, g.cond.Type, g.cond.Status, g.cond.Reason, truncateText(g.cond.Message, 300))
+	return fmt.Sprintf("%s %s=%s (%s): %s", g.where, g.cond.Type, g.cond.Status, g.cond.Reason, kube.TruncateText(g.cond.Message, 300))
 }
 
 // isUpgradeGateCondition: reason AdminAckRequired, or a message about

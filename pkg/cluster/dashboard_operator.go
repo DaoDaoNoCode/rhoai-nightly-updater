@@ -955,25 +955,25 @@ func pinDashboardMainBuild(ctx context.Context, repo, floatingTag, image string)
 	labels, err := imageLabelsWithAuth(labelsCtx, "", image, false)
 	cancel()
 	if err != nil {
-		slog.Debug("dashboard main build keeps its floating tag: labels unreadable", "image", truncateText(image, 80), "error", err)
+		slog.Debug("dashboard main build keeps its floating tag: labels unreadable", "image", kube.TruncateText(image, 80), "error", err)
 		return image
 	}
 	commitTag := dashboardCommitTag(floatingTag, labels.GitCommit)
 	if commitTag == "" {
-		slog.Debug("dashboard main build keeps its floating tag: no commit label", "image", truncateText(image, 80), "commit", labels.GitCommit)
+		slog.Debug("dashboard main build keeps its floating tag: no commit label", "image", kube.TruncateText(image, 80), "commit", labels.GitCommit)
 		return image
 	}
 	pinned, found, err := resolveDashboardBuild(ctx, repo, commitTag)
 	switch {
 	case err != nil:
-		slog.Debug("dashboard main build keeps its floating tag: commit tag lookup failed", "image", truncateText(image, 80), "tag", commitTag, "error", err)
+		slog.Debug("dashboard main build keeps its floating tag: commit tag lookup failed", "image", kube.TruncateText(image, 80), "tag", commitTag, "error", err)
 		return image
 	case !found:
-		slog.Debug("dashboard main build keeps its floating tag: commit tag not published", "image", truncateText(image, 80), "tag", commitTag)
+		slog.Debug("dashboard main build keeps its floating tag: commit tag not published", "image", kube.TruncateText(image, 80), "tag", commitTag)
 		return image
 	}
 	if _, pinnedDigest, _ := extractRepoAndDigest(pinned); pinnedDigest != digest {
-		slog.Debug("dashboard main build keeps its floating tag: commit tag has another digest", "image", truncateText(image, 80), "tag", commitTag, "tagDigest", pinnedDigest)
+		slog.Debug("dashboard main build keeps its floating tag: commit tag has another digest", "image", kube.TruncateText(image, 80), "tag", commitTag, "tagDigest", pinnedDigest)
 		return image
 	}
 	return pinned
@@ -1020,7 +1020,7 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 	defer dashboardDevMu.Unlock()
 	target, operator, err := loadDashboardOperator(c, true)
 	if err != nil {
-		return fail(sentenceStart(err.Error())+". No changes were made.", errorCodeOr(err, "prerequisites"))
+		return fail(sentenceStart(err.Error())+". No changes were made.", kube.ErrorCodeOr(err, "prerequisites"))
 	}
 	if operator == nil {
 		return fail("Latest-main deployment needs the dashboard module's operator, and this cluster has no dashboard module ("+target.Legacy+"). No changes were made.", "prerequisites")
@@ -1044,7 +1044,7 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 	// Pausing while a Dashboard CR deletion is pending would block that
 	// deletion on the finalizer only the dashboard operator removes (D1).
 	if deleting, err := dashboardCRDeleting(c); err != nil {
-		return fail("Cannot check whether the Dashboard is being deleted: "+err.Error()+". No changes were made.", errorCodeOr(err, "prerequisites"))
+		return fail("Cannot check whether the Dashboard is being deleted: "+err.Error()+". No changes were made.", kube.ErrorCodeOr(err, "prerequisites"))
 	} else if deleting {
 		return fail("The Dashboard CR is being deleted (dashboard removal or RHOAI uninstall in progress). Pausing "+opName+" now would block that deletion. No changes were made.", "prerequisites")
 	}
@@ -1128,7 +1128,7 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 	session.OperatorImage = dashboardOperatorImage(operator)
 	action := &types.DashboardDevAction{Action: "deploy-" + mode, By: user, At: now, Detail: "Deploying " + label}
 	if err := patchDashboardOperator(c, operator, 0, session, action); err != nil {
-		return fail("Could not pause "+opName+": "+err.Error(), errorCodeFromK8sErr(err))
+		return fail("Could not pause "+opName+": "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 	}
 	logs = append(logs, "Dashboard Dev recovery information saved; "+opName+" scaled to 0.")
 	if err := waitDashboardOperatorStopped(c, operator); err != nil {
@@ -1171,7 +1171,7 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 		if mode == "pr" {
 			retry = fmt.Sprintf("Deploy PR #%d", pr)
 		}
-		message = fmt.Sprintf("Partial deployment of %s: %s failed. Retry %s to finish, or Revert to default to resume operator reconciliation.", label, countNoun(len(failures), "deployment", "deployments"), retry)
+		message = fmt.Sprintf("Partial deployment of %s: %s failed. Retry %s to finish, or Revert to default to resume operator reconciliation.", label, kube.CountNoun(len(failures), "deployment", "deployments"), retry)
 	}
 	RecordActivity(c, types.ActivityEntry{Timestamp: now, User: user, Action: "deploy-dashboard-" + mode, Detail: message, Success: success})
 	code := ""

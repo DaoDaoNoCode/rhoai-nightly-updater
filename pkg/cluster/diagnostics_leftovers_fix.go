@@ -87,7 +87,7 @@ func leftoverWriteError(err error, what string, dryRun bool) *types.OperationRes
 	if dryRun {
 		stage = "The API server refused the change in its dry run"
 	}
-	return leftoverRefused(fmt.Sprintf("%s: %s. Nothing was changed.", stage, msg), nonEmpty(errorCodeFromK8sErr(err), "validation"), []string{msg})
+	return leftoverRefused(fmt.Sprintf("%s: %s. Nothing was changed.", stage, msg), kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "validation"), []string{msg})
 }
 
 // leftoverChanged refuses a leftover change because the object changed
@@ -107,7 +107,7 @@ func leftoverChanged(what, serverMsg string) *types.OperationResponse {
 // was changed either way).
 func (st *storedLeftover) patchError(c *Client, err error, dryRun bool) *types.OperationResponse {
 	if kube.IsK8sError(err, http.StatusUnprocessableEntity) {
-		meta, found, rerr := readObjectMeta(c, componentListPath(st.Group, st.Version, st.Resource)+"/"+st.Name)
+		meta, found, rerr := kube.ReadObjectMeta(c, componentListPath(st.Group, st.Version, st.Resource)+"/"+st.Name)
 		if rerr == nil && (!found || meta.UID != st.UID || meta.ResourceVersion != st.ResourceVersion) {
 			var k *K8sError
 			msg := err.Error()
@@ -200,7 +200,7 @@ func fixLeftoverStoredFields(c *Client, target string, ack *AckBinding) *types.O
 	if err := json.Unmarshal(body, &after); err == nil {
 		for _, lf := range changes {
 			got, present := lookupPath(after, lf.Keys)
-			if (lf.Change == "set-default" && (!present || !jsonEqual(got, lf.After))) || (lf.Change == "remove" && present) {
+			if (lf.Change == "set-default" && (!present || !kube.JSONEqual(got, lf.After))) || (lf.Change == "remove" && present) {
 				return &types.OperationResponse{Success: false, ErrorCode: "internal", Logs: logs,
 					Message: fmt.Sprintf("The API server accepted the change, but %s is %s in the object it returned. Run diagnostics again and check %s.", lf.Path, fieldJSON(got), st.ref())}
 			}
@@ -215,7 +215,7 @@ func fixLeftoverStoredFields(c *Client, target string, ack *AckBinding) *types.O
 
 // patchLeftoverObject sends a JSON Patch with fieldValidation=Strict, as a
 // server-side dry run when dryRun is set.
-func patchLeftoverObject(c *Client, path string, ops []jsonPatchOp, dryRun bool) ([]byte, error) {
+func patchLeftoverObject(c *Client, path string, ops []kube.JSONPatchOp, dryRun bool) ([]byte, error) {
 	body, err := json.Marshal(ops)
 	if err != nil {
 		return nil, err
@@ -263,7 +263,7 @@ func fixLeftoverRetryDSC(c *Client, name string) *types.OperationResponse {
 	}
 	path, err := dataScienceClusterPath(c)
 	if err != nil {
-		return leftoverRefused(fmt.Sprintf("Cannot find the DataScienceCluster: %v. Nothing was changed.", err), nonEmpty(errorCodeFromK8sErr(err), "prerequisites"), nil)
+		return leftoverRefused(fmt.Sprintf("Cannot find the DataScienceCluster: %v. Nothing was changed.", err), kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "prerequisites"), nil)
 	}
 	if !strings.HasSuffix(path, "/"+name) {
 		return leftoverRefused(fmt.Sprintf("DataScienceCluster %s is not the cluster's DataScienceCluster. Nothing was changed.", name), "validation", nil)

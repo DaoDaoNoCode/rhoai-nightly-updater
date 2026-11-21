@@ -155,12 +155,12 @@ func leftoversCheck(c *Client, users usersReader) checkOutput {
 	switch {
 	case len(out.problems) > 0:
 		out.check.Status = "fail"
-		out.check.Detail = fmt.Sprintf("%s left over from an earlier release", countNoun(len(out.problems), "object", "objects"))
+		out.check.Detail = fmt.Sprintf("%s left over from an earlier release", kube.CountNoun(len(out.problems), "object", "objects"))
 	case len(s.errs) > 0:
 		out.check.Status = "warn"
 		out.check.Detail = "Nothing left over in the CRs that could be read"
 	default:
-		out.check.Detail = fmt.Sprintf("No stored field of an older type and no changed selector reported (%s checked)", countNoun(s.scanned, "CR", "CRs"))
+		out.check.Detail = fmt.Sprintf("No stored field of an older type and no changed selector reported (%s checked)", kube.CountNoun(s.scanned, "CR", "CRs"))
 	}
 	if len(s.errs) > 0 {
 		out.check.Detail += "; could not read: " + strings.Join(s.errs, "; ")
@@ -179,7 +179,7 @@ type fieldSchema struct {
 }
 
 func (s fieldSchema) text() string {
-	parts := []string{nonEmpty(s.Type, "any type")}
+	parts := []string{kube.NonEmpty(s.Type, "any type")}
 	if s.IntOrString {
 		parts[0] = "integer or string"
 	}
@@ -292,7 +292,7 @@ func valueMatches(v any, s fieldSchema) bool {
 	if ok && len(s.Enum) > 0 {
 		found := false
 		for _, e := range s.Enum {
-			found = found || jsonEqual(e, v)
+			found = found || kube.JSONEqual(e, v)
 		}
 		ok = found
 	}
@@ -341,7 +341,7 @@ func (lf *leftoverField) decide(obj map[string]any, root map[string]any) {
 		lf.Change, lf.Why = "valid", "the stored value already matches the installed CRD"
 		return
 	case lf.Expected != "" && smdTypeName(lf.Schema) != lf.Expected:
-		lf.Change, lf.Why = "none", fmt.Sprintf("the operator's error expects %s, but the installed CRD says %s, so the error is about another version of the schema", lf.Expected, nonEmpty(lf.Schema.Type, "no type"))
+		lf.Change, lf.Why = "none", fmt.Sprintf("the operator's error expects %s, but the installed CRD says %s, so the error is about another version of the schema", lf.Expected, kube.NonEmpty(lf.Schema.Type, "no type"))
 		return
 	case lf.Schema.HasDefault && valueMatches(lf.Schema.Default, lf.Schema):
 		lf.Change, lf.After, lf.Review = "set-default", lf.Schema.Default, true
@@ -556,7 +556,7 @@ func crdCurrent(c *Client, crd map[string]any, name string) (bool, string) {
 	if csvErr == nil && owned {
 		return true, fmt.Sprintf("CRD %s is part of the installed operator's bundle (the installed CSV %s owns it)", name, csv)
 	}
-	csvNote := fmt.Sprintf("the installed CSV %s does not own it", nonEmpty(csv, "(unknown)"))
+	csvNote := fmt.Sprintf("the installed CSV %s does not own it", kube.NonEmpty(csv, "(unknown)"))
 	if csvErr != nil {
 		csvNote = fmt.Sprintf("the installed CSV could not be read (%v)", csvErr)
 	}
@@ -589,11 +589,11 @@ func crdCurrent(c *Client, crd map[string]any, name string) (bool, string) {
 	case len(names) == 0:
 		return false, fmt.Sprintf("the tool can't tell that CRD %s is the newer side: %s, and its managedFields do not say who wrote its schema", name, csvNote)
 	case len(names) > 1:
-		return false, fmt.Sprintf("the tool can't tell that CRD %s is the newer side: %s, and its schema was last written by %s at the same time (%s)", name, csvNote, strings.Join(names, " and "), nonEmpty(when, "an unknown time"))
+		return false, fmt.Sprintf("the tool can't tell that CRD %s is the newer side: %s, and its schema was last written by %s at the same time (%s)", name, csvNote, strings.Join(names, " and "), kube.NonEmpty(when, "an unknown time"))
 	case names[0] != platformCRDManager:
-		return false, fmt.Sprintf("the tool can't tell that CRD %s is the newer side: %s, and its schema was last written by %s at %s, not by the RHOAI operator (field manager %s)", name, csvNote, nonEmpty(names[0], "(no name)"), nonEmpty(when, "an unknown time"), platformCRDManager)
+		return false, fmt.Sprintf("the tool can't tell that CRD %s is the newer side: %s, and its schema was last written by %s at %s, not by the RHOAI operator (field manager %s)", name, csvNote, kube.NonEmpty(names[0], "(no name)"), kube.NonEmpty(when, "an unknown time"), platformCRDManager)
 	}
-	return true, fmt.Sprintf("CRD %s's schema was last written by the RHOAI operator (field manager %s) at %s", name, platformCRDManager, nonEmpty(when, "an unknown time"))
+	return true, fmt.Sprintf("CRD %s's schema was last written by the RHOAI operator (field manager %s) at %s", name, platformCRDManager, kube.NonEmpty(when, "an unknown time"))
 }
 
 // installedCSVOwnsCRD reports whether the installed RHOAI CSV lists the CRD
@@ -632,8 +632,8 @@ func installedCSVOwnsCRD(c *Client, crd string) (string, bool, error) {
 // patchOps is the JSON Patch of the fix: the object's UID and
 // resourceVersion (the object the user reviewed) and each field's stored
 // value are tested first, so nothing changes if anything moved.
-func (st *storedLeftover) patchOps() []jsonPatchOp {
-	ops := []jsonPatchOp{patchOp("test", []string{"metadata", "uid"}, st.UID), patchOp("test", []string{"metadata", "resourceVersion"}, st.ResourceVersion)}
+func (st *storedLeftover) patchOps() []kube.JSONPatchOp {
+	ops := []kube.JSONPatchOp{patchOp("test", []string{"metadata", "uid"}, st.UID), patchOp("test", []string{"metadata", "resourceVersion"}, st.ResourceVersion)}
 	for _, lf := range st.changes() {
 		ops = append(ops, patchOp("test", lf.Keys, lf.Value))
 		if lf.Change == "set-default" {
@@ -705,7 +705,7 @@ func moduleOperatorCrash(c *Client, st *storedLeftover, now time.Time) *leftover
 func (st *storedLeftover) fieldChanges() []FieldChange {
 	var out []FieldChange
 	for _, lf := range st.Fields {
-		fc := FieldChange{Object: st.ref(), Field: lf.Path, Change: nonEmpty(lf.Change, "none"), Note: lf.Why, Review: lf.Review}
+		fc := FieldChange{Object: st.ref(), Field: lf.Path, Change: kube.NonEmpty(lf.Change, "none"), Note: lf.Why, Review: lf.Review}
 		if lf.Present {
 			fc.Now = fieldJSON(lf.Value)
 		}
@@ -750,7 +750,7 @@ func (st *storedLeftover) problem() Problem {
 	reporters := reportersText(rf)
 	evidence := []string{"Reported by " + reporters}
 	for _, d := range rf.details {
-		evidence = append(evidence, "Operator error: "+truncateText(d, 500))
+		evidence = append(evidence, "Operator error: "+kube.TruncateText(d, 500))
 	}
 	for _, lf := range st.Fields {
 		line := fmt.Sprintf("Field %s: ", lf.Path)
@@ -782,7 +782,7 @@ func (st *storedLeftover) problem() Problem {
 	if st.Crash != nil {
 		line := fmt.Sprintf("Module operator %s is crash-looping (%d restarts)", st.Crash.Deployment, st.Crash.Restarts)
 		if st.Crash.Confirmed {
-			line += ": its last exit says it cannot sync its informer for " + st.Kind + ": " + truncateText(st.Crash.Message, 300)
+			line += ": its last exit says it cannot sync its informer for " + st.Kind + ": " + kube.TruncateText(st.Crash.Message, 300)
 			description += " Its module operator crash-loops because it cannot read the object either."
 		} else {
 			line += fmt.Sprintf("; its last exit message is not available here. If `oc logs --previous` shows \"failed waiting for *<version>.%s Informer to sync\", this object is the cause", st.Kind)
@@ -1030,7 +1030,7 @@ func analyzeRecreate(c *Client, rf *reportedApplyFailure, appNS string, read wor
 	}
 
 	// What stops while it is gone.
-	r.Warnings = append(r.Warnings, fmt.Sprintf("%s and its pods stop now; %s creates it again with the current selector on its next reconcile, usually within seconds; the old ReplicaSets and pods are removed in the background.", r.ref(), nonEmpty(r.Recreator, "its operator")))
+	r.Warnings = append(r.Warnings, fmt.Sprintf("%s and its pods stop now; %s creates it again with the current selector on its next reconcile, usually within seconds; the old ReplicaSets and pods are removed in the background.", r.ref(), kube.NonEmpty(r.Recreator, "its operator")))
 	switch {
 	case r.Module != "" && usersCheckedComponents[r.Module] && users == nil:
 		r.AckReasons = append(r.AckReasons, fmt.Sprintf("this scan does not check what uses %s", r.Module))
@@ -1044,7 +1044,7 @@ func analyzeRecreate(c *Client, rf *reportedApplyFailure, appNS string, read wor
 			r.AckReasons = append(r.AckReasons, fmt.Sprintf("%s is in use (%s)", r.Module, strings.Join(inUse, ", ")))
 		}
 	default:
-		r.AckReasons = append(r.AckReasons, fmt.Sprintf("the tool cannot tell whether %s is in use: it has no reader for that component's resources", nonEmpty(r.Module, r.Owner)))
+		r.AckReasons = append(r.AckReasons, fmt.Sprintf("the tool cannot tell whether %s is in use: it has no reader for that component's resources", kube.NonEmpty(r.Module, r.Owner)))
 	}
 	if labels := obj.Spec.Template.Metadata.Labels; len(labels) > 0 {
 		hooks, err := webhooksServedBy(c, operatorDeployment{Namespace: f.Namespace, Name: f.Name, TemplateLabels: labels})
@@ -1068,7 +1068,7 @@ func (r *recreateLeftover) problem() Problem {
 	reporters := reportersText(rf)
 	evidence := []string{"Reported by " + reporters}
 	for _, d := range rf.details {
-		evidence = append(evidence, "Operator error: "+truncateText(d, 500))
+		evidence = append(evidence, "Operator error: "+kube.TruncateText(d, 500))
 	}
 	p := Problem{
 		ID:              leftoverRecreateID(f.Kind, f.Namespace, f.Name),
@@ -1089,7 +1089,7 @@ func (r *recreateLeftover) problem() Problem {
 		p.Evidence = evidence
 		return p
 	case r.Owner != "":
-		evidence = append(evidence, fmt.Sprintf("%s is owned by %s; %s", r.ref(), r.Owner, nonEmpty(r.Recreator, "its operator")+" creates it again"))
+		evidence = append(evidence, fmt.Sprintf("%s is owned by %s; %s", r.ref(), r.Owner, kube.NonEmpty(r.Recreator, "its operator")+" creates it again"))
 	}
 	for _, b := range r.Blockers {
 		evidence = append(evidence, "Not deleted automatically: "+b)

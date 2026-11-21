@@ -128,7 +128,7 @@ func operatorDeploymentsBlocker(c *Client) string {
 		return "the RHOAI operator must be running, but its installed CSV could not be read to find its Deployment: " + err.Error()
 	}
 	if len(op.Deployments) == 0 {
-		return fmt.Sprintf("the RHOAI operator must be running, but the installed CSV %s lists no Deployment, so the tool cannot check it", nonEmpty(op.Name, "(unknown)"))
+		return fmt.Sprintf("the RHOAI operator must be running, but the installed CSV %s lists no Deployment, so the tool cannot check it", kube.NonEmpty(op.Name, "(unknown)"))
 	}
 	var why []string
 	for _, d := range op.Deployments {
@@ -307,7 +307,7 @@ func (rc *removalChecker) conversionBlocker(component string) string {
 		gets = append(gets, "oc get "+crd.Metadata.Name+" -A")
 	}
 	intro := fmt.Sprintf("%s serves the conversion webhook of %s %s. Removing it deletes that webhook's Service but not the %s, so objects of %s could then not be read at another version, garbage-collected or deleted with their namespace.",
-		component, verb(len(crds), "CRD", "CRDs"), strings.Join(names, ", "), verb(len(crds), "CRD", "CRDs"), verb(len(crds), "that CRD", "those CRDs"))
+		component, kube.Verb(len(crds), "CRD", "CRDs"), strings.Join(names, ", "), kube.Verb(len(crds), "CRD", "CRDs"), kube.Verb(len(crds), "that CRD", "those CRDs"))
 	u := rc.c.SignedInUser()
 	if u == nil {
 		return intro + fmt.Sprintf(" The tool lists those objects only with your own sign-in, which this request does not carry (in the gitops profile no request does), so it cannot tell whether any exist and does not remove %s here. Check for them with: %s.",
@@ -454,7 +454,7 @@ func listConversionObjects(u *Client, crd conversionCRD) (conversionObjects, err
 func (o conversionObjects) sentence(crd conversionCRD) string {
 	n := len(o.names)
 	crdName := crd.Metadata.Name
-	count := countNoun(n, "object", "objects") + " of " + crdName + " " + verb(n, "exists", "exist")
+	count := kube.CountNoun(n, "object", "objects") + " of " + crdName + " " + kube.Verb(n, "exists", "exist")
 	if o.more {
 		count = fmt.Sprintf("%d or more objects of %s exist", n, crdName)
 		if o.remaining != nil && *o.remaining > 0 {
@@ -480,7 +480,7 @@ func (o conversionObjects) sentence(crd conversionCRD) string {
 	if rest != "" {
 		s += " List them all with: oc get " + crdName + " -A."
 	}
-	return s + fmt.Sprintf(" Delete %s first: %s.", verb(n, "it", "them"), del)
+	return s + fmt.Sprintf(" Delete %s first: %s.", kube.Verb(n, "it", "them"), del)
 }
 
 // conversionCRDsOf returns the names of the CRDs conversionCRDsServedBy

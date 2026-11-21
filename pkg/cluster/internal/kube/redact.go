@@ -1,4 +1,4 @@
-package cluster
+package kube
 
 import (
 	"encoding/json"
@@ -6,15 +6,15 @@ import (
 	"strings"
 )
 
-// redactedText replaces a credential in a message.
-const redactedText = "[redacted]"
+// RedactedText replaces a credential in a message.
+const RedactedText = "[redacted]"
 
-// redactSecrets replaces every occurrence of each secret in msg, as it is
+// RedactSecrets replaces every occurrence of each secret in msg, as it is
 // and as a JSON string would carry it (an API error may quote the object it
 // was sent), longest first, so a secret that contains another is replaced
 // whole. Values shorter than 4 characters are left: they would blank out
 // ordinary words, and no credential is that short.
-func redactSecrets(msg string, secrets ...string) string {
+func RedactSecrets(msg string, secrets ...string) string {
 	var forms []string
 	for _, s := range secrets {
 		if len(s) < 4 {
@@ -29,7 +29,7 @@ func redactSecrets(msg string, secrets ...string) string {
 	}
 	sort.Slice(forms, func(i, j int) bool { return len(forms[i]) > len(forms[j]) })
 	for _, f := range forms {
-		msg = strings.ReplaceAll(msg, f, redactedText)
+		msg = strings.ReplaceAll(msg, f, RedactedText)
 	}
 	return msg
 }

@@ -502,8 +502,8 @@ func TestToggleAddsMissingObjectsWithATestOfTheirParent(t *testing.T) {
 	}
 	_, real := patchesTo(f)
 	ops := fieldOps(t, real[0].Body)
-	if len(ops) != 2 || ops[0]["op"] != "test" || ops[0]["path"] != "/spec/components" || !jsonEqual(ops[0]["value"], before) ||
-		ops[1]["op"] != "add" || ops[1]["path"] != "/spec/components/databaseservice" || !jsonEqual(ops[1]["value"], map[string]any{"managementState": "Managed"}) {
+	if len(ops) != 2 || ops[0]["op"] != "test" || ops[0]["path"] != "/spec/components" || !kube.JSONEqual(ops[0]["value"], before) ||
+		ops[1]["op"] != "add" || ops[1]["path"] != "/spec/components/databaseservice" || !kube.JSONEqual(ops[1]["value"], map[string]any{"managementState": "Managed"}) {
 		t.Fatalf("ops = %v", ops)
 	}
 
@@ -514,7 +514,7 @@ func TestToggleAddsMissingObjectsWithATestOfTheirParent(t *testing.T) {
 	}
 	_, real = patchesTo(f)
 	ops = fieldOps(t, real[1].Body)
-	if len(ops) != 2 || ops[0]["path"] != "/spec/components/dashboard" || !jsonEqual(ops[0]["value"], dashboard) ||
+	if len(ops) != 2 || ops[0]["path"] != "/spec/components/dashboard" || !kube.JSONEqual(ops[0]["value"], dashboard) ||
 		ops[1]["op"] != "add" || ops[1]["path"] != "/spec/components/dashboard/maasPortal" {
 		t.Fatalf("ops = %v", ops)
 	}
@@ -860,7 +860,7 @@ func TestBuildJSONPatchGroupsMissingObjects(t *testing.T) {
 	if string(raw) != want {
 		t.Fatalf("ops = %s", raw)
 	}
-	after, err := applyJSONPatch(obj, ops)
+	after, err := kube.ApplyJSONPatch(obj, ops)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -868,7 +868,7 @@ func TestBuildJSONPatchGroupsMissingObjects(t *testing.T) {
 		t.Fatalf("after = %v", after)
 	}
 	// The original is unchanged; a failed test applies nothing.
-	if _, err := applyJSONPatch(obj, []jsonPatchOp{patchOp("test", componentsPath("kserve", "managementState"), "Removed")}); err == nil {
+	if _, err := kube.ApplyJSONPatch(obj, []kube.JSONPatchOp{patchOp("test", componentsPath("kserve", "managementState"), "Removed")}); err == nil {
 		t.Fatal("test passed on another value")
 	}
 	if s, _ := lookupState(comps(obj), []string{"kserve"}); s != "Managed" {

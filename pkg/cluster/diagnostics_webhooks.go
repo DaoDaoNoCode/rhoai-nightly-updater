@@ -181,7 +181,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 		out.problems = append(out.problems, Problem{
 			ID:       "stale-webhooks",
 			Severity: severity,
-			Title:    fmt.Sprintf("%s %s to a Service that cannot serve %s", countNoun(len(deletable), "leftover RHOAI webhook configuration", "leftover RHOAI webhook configurations"), verb(len(deletable), "points", "point"), verb(len(deletable), "it", "them")),
+			Title:    fmt.Sprintf("%s %s to a Service that cannot serve %s", kube.CountNoun(len(deletable), "leftover RHOAI webhook configuration", "leftover RHOAI webhook configurations"), kube.Verb(len(deletable), "points", "point"), kube.Verb(len(deletable), "it", "them")),
 			Description: "The API server calls these webhooks, but nothing serves them and their owner is gone, so nothing will recreate them. " +
 				"With failurePolicy Fail (the default), every matching request is rejected until the configuration is deleted.",
 			Evidence: evidence,
@@ -216,7 +216,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 		out.problems = append(out.problems, Problem{
 			ID:       "webhook-service-missing",
 			Severity: severity,
-			Title:    fmt.Sprintf("%s %s a Service that cannot serve %s", countNoun(len(guidance), "RHOAI webhook configuration", "RHOAI webhook configurations"), verb(len(guidance), "calls", "call"), verb(len(guidance), "it", "them")),
+			Title:    fmt.Sprintf("%s %s a Service that cannot serve %s", kube.CountNoun(len(guidance), "RHOAI webhook configuration", "RHOAI webhook configurations"), kube.Verb(len(guidance), "calls", "call"), kube.Verb(len(guidance), "it", "them")),
 			Description: "Requests that these webhooks intercept are rejected while their Service is missing or has no ready pods. Their owner still exists (or is unknown), " +
 				"so deleting them would not help: the owner recreates them, or they may still be needed.",
 			Evidence:        evidence,
@@ -231,7 +231,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 		for _, sc := range conversions {
 			line := fmt.Sprintf("CRD %s: conversion Service %s (storedVersions %s)", sc.CRD, sc.Health.describe(sc.Service), strings.Join(sc.StoredVersions, ", "))
 			if sc.Module != "" {
-				line += fmt.Sprintf("; the Service belongs to DSC component %s, which is %s", sc.Module, nonEmpty(sc.ModuleState, "not set"))
+				line += fmt.Sprintf("; the Service belongs to DSC component %s, which is %s", sc.Module, kube.NonEmpty(sc.ModuleState, "not set"))
 			}
 			switch sc.Objects {
 			case crdObjectsNone:
@@ -248,7 +248,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 		out.problems = append(out.problems, Problem{
 			ID:       "stale-crd-conversion",
 			Severity: "critical",
-			Title:    fmt.Sprintf("%s %s a conversion webhook whose Service cannot serve", countNoun(len(conversions), "CRD", "CRDs"), verb(len(conversions), "uses", "use")),
+			Title:    fmt.Sprintf("%s %s a conversion webhook whose Service cannot serve", kube.CountNoun(len(conversions), "CRD", "CRDs"), kube.Verb(len(conversions), "uses", "use")),
 			Description: "Reading or writing these objects at a version other than the one they are stored in fails, which also breaks garbage collection " +
 				"and makes namespace deletion hang in Terminating. The tool does not change this automatically: switching the CRD to conversion strategy None changes how stored objects are read.",
 			Evidence:        evidence,
@@ -265,7 +265,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 		details = append(details, "No RHOAI webhook or CRD conversion points to a Service that cannot serve it")
 	default:
 		out.check.Status = "fail"
-		details = append(details, fmt.Sprintf("%s and %s point to a Service that cannot serve them", countNoun(len(scan.Verdicts), "webhook configuration", "webhook configurations"), countNoun(len(conversions), "CRD conversion", "CRD conversions")))
+		details = append(details, fmt.Sprintf("%s and %s point to a Service that cannot serve them", kube.CountNoun(len(scan.Verdicts), "webhook configuration", "webhook configurations"), kube.CountNoun(len(conversions), "CRD conversion", "CRD conversions")))
 	}
 	if scan.Upgrading != "" {
 		details = append(details, "webhook configurations not checked while an operator install is in progress ("+scan.Upgrading+")")
@@ -333,16 +333,16 @@ func staleConversionFix(conversions []staleConversion) (fix, technicalCmd string
 	var parts []string
 	if len(empty) > 0 {
 		parts = append(parts, fmt.Sprintf("%s %s no objects, so %s can be deleted: `oc delete crd %s`. The operator applies %s again when the component%s is set to Managed again.",
-			verb(len(empty), "CRD", "CRDs")+" "+strings.Join(empty, ", "), verb(len(empty), "holds", "hold"), verb(len(empty), "it", "they"),
-			strings.Join(empty, " "), verb(len(empty), "it", "them"), here(emptyOwners)))
+			kube.Verb(len(empty), "CRD", "CRDs")+" "+strings.Join(empty, ", "), kube.Verb(len(empty), "holds", "hold"), kube.Verb(len(empty), "it", "they"),
+			strings.Join(empty, " "), kube.Verb(len(empty), "it", "them"), here(emptyOwners)))
 	}
 	if len(unknown) > 0 {
 		parts = append(parts, fmt.Sprintf("This app could not check whether %s %s objects. Check with `oc get %s -A`: if it lists none, delete %s (`oc delete crd %s`); otherwise %s",
-			verb(len(unknown), "CRD", "CRDs")+" "+strings.Join(unknown, ", "), verb(len(unknown), "holds", "hold"), strings.Join(unknown, ","),
-			verb(len(unknown), "it", "them"), strings.Join(unknown, " "), restore))
+			kube.Verb(len(unknown), "CRD", "CRDs")+" "+strings.Join(unknown, ", "), kube.Verb(len(unknown), "holds", "hold"), strings.Join(unknown, ","),
+			kube.Verb(len(unknown), "it", "them"), strings.Join(unknown, " "), restore))
 	}
 	if len(held) > 0 {
-		parts = append(parts, fmt.Sprintf("For %s: %s", verb(len(held), "CRD", "CRDs")+" "+strings.Join(held, ", "), restore))
+		parts = append(parts, fmt.Sprintf("For %s: %s", kube.Verb(len(held), "CRD", "CRDs")+" "+strings.Join(held, ", "), restore))
 	}
 	switch {
 	case len(held) > 0:
@@ -418,7 +418,7 @@ func applyFixDeleteStaleWebhooks(c *Client) (*types.OperationResponse, error) {
 	}
 	return &types.OperationResponse{
 		Success: true,
-		Message: fmt.Sprintf("Deleted %s: %s.", countNoun(len(d.Deleted), "leftover webhook configuration", "leftover webhook configurations"), strings.Join(d.Deleted, ", ")),
+		Message: fmt.Sprintf("Deleted %s: %s.", kube.CountNoun(len(d.Deleted), "leftover webhook configuration", "leftover webhook configurations"), strings.Join(d.Deleted, ", ")),
 		Logs:    logs,
 	}, nil
 }

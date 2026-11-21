@@ -82,7 +82,7 @@ type deploymentJSON struct {
 func (j deploymentJSON) toOperatorDeployment(via string) operatorDeployment {
 	d := operatorDeployment{
 		Namespace: j.Metadata.Namespace, Name: j.Metadata.Name, UID: j.Metadata.UID, ResourceVersion: j.Metadata.ResourceVersion,
-		Strategy: nonEmpty(j.Spec.Strategy.Type, "RollingUpdate"), Replicas: 1, Available: j.Status.AvailableReplicas,
+		Strategy: kube.NonEmpty(j.Spec.Strategy.Type, "RollingUpdate"), Replicas: 1, Available: j.Status.AvailableReplicas,
 		TemplateLabels: j.Spec.Template.Metadata.Labels, PartOf: j.Metadata.Labels["platform.opendatahub.io/part-of"], Via: via,
 	}
 	if j.Spec.Replicas != nil {
@@ -198,7 +198,7 @@ func (d operatorDeployment) strategyText() string {
 	}
 	unavailable, _ := d.maxUnavailablePods()
 	return fmt.Sprintf("RollingUpdate with maxSurge %s and maxUnavailable %s for %s (up to %d unavailable)",
-		show(d.MaxSurge), show(d.MaxUnavailable), countNoun(d.Replicas, "replica", "replicas"), unavailable)
+		show(d.MaxSurge), show(d.MaxUnavailable), kube.CountNoun(d.Replicas, "replica", "replicas"), unavailable)
 }
 
 // webhooksServedBy lists the failurePolicy Fail webhooks whose Service
@@ -326,7 +326,7 @@ func applyFixRestartModuleOperator(c *Client, module string) (*types.OperationRe
 	}
 	a, err := analyzeCurrentDSC(c, time.Now())
 	if err != nil {
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read the DataScienceCluster: %v. Nothing was restarted.%s", err, templateHint(err)), ErrorCode: errorCodeFromK8sErr(err)}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read the DataScienceCluster: %v. Nothing was restarted.%s", err, templateHint(err)), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
 	var b *moduleBackoff
 	for _, cand := range a.Backoffs {
@@ -358,7 +358,7 @@ func applyFixRestartModuleOperator(c *Client, module string) (*types.OperationRe
 	case kube.IsK8sNotFound(err):
 		return nothingToDo(fmt.Sprintf("Deployment %s no longer exists. Nothing was restarted.", d.ref()), logs), nil
 	default:
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Could not restart %s: %v.%s", d.ref(), err, templateHint(err)), Logs: logs, ErrorCode: errorCodeFromK8sErr(err)}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Could not restart %s: %v.%s", d.ref(), err, templateHint(err)), Logs: logs, ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),

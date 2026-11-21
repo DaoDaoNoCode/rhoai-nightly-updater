@@ -30,7 +30,7 @@ func assertForeignUntouched(t *testing.T, f *resourceFake, path, field, want str
 	}
 	meta := obj["metadata"].(map[string]any)
 	labels, _ := meta["labels"].(map[string]any)
-	if meta["uid"] != "foreign-uid" || labels[managedByLabelKey] != nil || labels["owner"] != "someone" {
+	if meta["uid"] != "foreign-uid" || labels[kube.ManagedByLabelKey] != nil || labels["owner"] != "someone" {
 		t.Errorf("%s metadata changed: %v", path, meta)
 	}
 	if field != "" {
@@ -131,7 +131,7 @@ func TestWaitForDeletion_DeadlineAndErrors(t *testing.T) {
 	t.Run("stalled API call does not overrun the deadline", func(t *testing.T) {
 		c := stallServer(t, 0)
 		start := kube.Clock().Now()
-		gone, err := waitForDeletion(c, "/api/v1/namespaces/minio", 200*time.Millisecond, 10*time.Millisecond)
+		gone, err := kube.WaitForDeletion(c, "/api/v1/namespaces/minio", 200*time.Millisecond, 10*time.Millisecond)
 		if gone || err != nil {
 			t.Fatalf("gone=%v err=%v, want a plain timeout", gone, err)
 		}
@@ -142,7 +142,7 @@ func TestWaitForDeletion_DeadlineAndErrors(t *testing.T) {
 	for _, status := range []int{401, 403, 500} {
 		t.Run("HTTP "+itoa(status)+" is an error, not still-deleting", func(t *testing.T) {
 			c := stallServer(t, status)
-			gone, err := waitForDeletion(c, "/api/v1/namespaces/minio", time.Second, 10*time.Millisecond)
+			gone, err := kube.WaitForDeletion(c, "/api/v1/namespaces/minio", time.Second, 10*time.Millisecond)
 			if gone || !kube.IsK8sError(err, status) {
 				t.Fatalf("gone=%v err=%v", gone, err)
 			}
@@ -152,7 +152,7 @@ func TestWaitForDeletion_DeadlineAndErrors(t *testing.T) {
 		c := stallServer(t, 0)
 		ctx, cancel := kube.Clock().WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
-		gone, err := waitForDeletion(c.WithContext(ctx), "/x", time.Second, 10*time.Millisecond)
+		gone, err := kube.WaitForDeletion(c.WithContext(ctx), "/x", time.Second, 10*time.Millisecond)
 		if gone || !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("gone=%v err=%v, want the caller's context error", gone, err)
 		}

@@ -282,7 +282,7 @@ func TestMigrate_FullRunMovesDataAndToolPipelineServersOnly(t *testing.T) {
 		assertOwnedByDSPA(t, f, secretPath(ps[0], connectionSecretName), ps[0], ps[1])
 	}
 	labels, _ := ensureMap(f.get(dspaPath("juntao-test", legacyDSPAName)), "metadata")["labels"].(map[string]any)
-	if labels[managedByLabelKey] != managedByLabelValue {
+	if labels[kube.ManagedByLabelKey] != kube.ManagedByLabelValue {
 		t.Error("the earlier version's pipeline server did not get the tool label")
 	}
 	// The hand-made one is untouched, and nothing old was deleted.
@@ -510,7 +510,7 @@ func TestDeleteWithUIDPropagation_SendsPreconditionAndPolicy(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := newTestClient(testClientOptions{BaseURL: srv.URL, Token: "t", HTTPClient: srv.Client(), Ctx: context.Background()})
-	if _, err := deleteWithUIDPropagation(c, migrateJobPath(), "job-uid", "Foreground"); err != nil {
+	if _, err := kube.DeleteWithUIDPropagation(c, migrateJobPath(), "job-uid", "Foreground"); err != nil {
 		t.Fatal(err)
 	}
 	if got["propagationPolicy"] != "Foreground" || ensureMap(got, "preconditions")["uid"] != "job-uid" {
@@ -906,7 +906,7 @@ func TestMigrate_Refusals(t *testing.T) {
 		}
 	})
 	t.Run("a pipeline server with its own port is listed, not moved", func(t *testing.T) {
-		d := dspaInfo{Meta: objectMeta{Name: previousDSPAName, Namespace: "p", Labels: map[string]string{managedByLabelKey: managedByLabelValue}}, Host: legacyS3Host(), Scheme: "http", Port: "9000"}
+		d := dspaInfo{Meta: kube.ObjectMeta{Name: previousDSPAName, Namespace: "p", Labels: map[string]string{kube.ManagedByLabelKey: kube.ManagedByLabelValue}}, Host: legacyS3Host(), Scheme: "http", Port: "9000"}
 		if why, ok := repointable(d); ok || !strings.Contains(why, "port") {
 			t.Errorf("repointable = %v %q", ok, why)
 		}
@@ -1006,21 +1006,21 @@ const liveMinioNamespace = `{"metadata":{"uid":"ns-uid","creationTimestamp":"202
 	"status":{"phase":"Active"}}`
 
 func TestLegacyNamespaceDeletable(t *testing.T) {
-	label := map[string]string{managedByLabelKey: managedByLabelValue}
-	at := func(manager, op, time string) []managedFieldsEntry {
-		return []managedFieldsEntry{{Manager: manager, Operation: op, Time: time}}
+	label := map[string]string{kube.ManagedByLabelKey: kube.ManagedByLabelValue}
+	at := func(manager, op, time string) []kube.ManagedFieldsEntry {
+		return []kube.ManagedFieldsEntry{{Manager: manager, Operation: op, Time: time}}
 	}
 	cases := []struct {
 		name   string
-		meta   objectMeta
+		meta   kube.ObjectMeta
 		want   bool
 		reason string
 	}{
-		{"created by this version", objectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at(toolFieldManager, "Update", created)}, true, ""},
-		{"labelled later by an earlier version", objectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at(legacyPostManager, "Update", "2026-10-06T03:49:35Z")}, true, ""},
-		{"label only", objectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at("kubectl-label", "Update", created)}, false, "show no write by this tool"},
-		{"no label", objectMeta{CreationTimestamp: created, ManagedFields: at(toolFieldManager, "Update", created)}, false, "does not carry this tool's label"},
-		{"a subresource write only", objectMeta{CreationTimestamp: created, Labels: label, ManagedFields: []managedFieldsEntry{{Manager: toolFieldManager, Operation: "Update", Subresource: "status"}}}, false, "show no write by this tool"},
+		{"created by this version", kube.ObjectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at(toolFieldManager, "Update", created)}, true, ""},
+		{"labelled later by an earlier version", kube.ObjectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at(legacyPostManager, "Update", "2026-10-06T03:49:35Z")}, true, ""},
+		{"label only", kube.ObjectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at("kubectl-label", "Update", created)}, false, "show no write by this tool"},
+		{"no label", kube.ObjectMeta{CreationTimestamp: created, ManagedFields: at(toolFieldManager, "Update", created)}, false, "does not carry this tool's label"},
+		{"a subresource write only", kube.ObjectMeta{CreationTimestamp: created, Labels: label, ManagedFields: []kube.ManagedFieldsEntry{{Manager: toolFieldManager, Operation: "Update", Subresource: "status"}}}, false, "show no write by this tool"},
 	}
 	for _, tc := range cases {
 		got, why := legacyNamespaceDeletable(tc.meta)
@@ -1096,7 +1096,7 @@ func TestManagedByTool_FieldOwnership(t *testing.T) {
 		return `{"manager":"` + manager + `","operation":"` + op + `","time":"` + time + `","fieldsType":"FieldsV1","fieldsV1":` + fields + `}`
 	}
 	dspa := func(entries ...string) dspaInfo {
-		var meta objectMeta
+		var meta kube.ObjectMeta
 		raw := `{"name":"dspa","namespace":"juntao-test","creationTimestamp":"2026-09-02T22:32:19Z","managedFields":[` + strings.Join(entries, ",") + `]}`
 		if err := json.Unmarshal([]byte(raw), &meta); err != nil {
 			t.Fatal(err)
@@ -1200,7 +1200,7 @@ func TestLegacyStorageState_RemoveNeedsProof(t *testing.T) {
 	l := &legacyStorage{address: storageAddress{service: legacyService, namespace: legacyNamespace}}
 	moved := func(storeReady string) dspaInfo {
 		return dspaInfo{
-			Meta: objectMeta{Name: previousDSPAName, Namespace: "team-a", Labels: map[string]string{managedByLabelKey: managedByLabelValue}, Generation: 2},
+			Meta: kube.ObjectMeta{Name: previousDSPAName, Namespace: "team-a", Labels: map[string]string{kube.ManagedByLabelKey: kube.ManagedByLabelValue}, Generation: 2},
 			Host: s3Host(), ObjectStore: &dspaCondition{Status: storeReady, ObservedGeneration: 2},
 		}
 	}

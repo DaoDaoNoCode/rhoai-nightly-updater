@@ -236,7 +236,7 @@ func pickReleasedImage(body []byte, repository string) (releasedImage, error) {
 			if !r.Published || r.Repository != repository {
 				continue
 			}
-			digest := firstNonEmpty(r.ManifestListDigest, r.ManifestDigest)
+			digest := kube.FirstNonEmpty(r.ManifestListDigest, r.ManifestDigest)
 			if !strings.HasPrefix(digest, "sha256:") {
 				continue
 			}
@@ -427,7 +427,7 @@ func freeRoom(c *Client, project, model string) (map[string]*nodeRoom, error) {
 	}
 	var nodes struct {
 		Items []struct {
-			Metadata objectMeta `json:"metadata"`
+			Metadata kube.ObjectMeta `json:"metadata"`
 			Spec     struct {
 				Unschedulable bool `json:"unschedulable"`
 				Taints        []struct {
@@ -470,7 +470,7 @@ func freeRoom(c *Client, project, model string) (map[string]*nodeRoom, error) {
 	}
 	var pods struct {
 		Items []struct {
-			Metadata objectMeta `json:"metadata"`
+			Metadata kube.ObjectMeta `json:"metadata"`
 			Spec     struct {
 				NodeName   string `json:"nodeName"`
 				Containers []struct {
@@ -533,7 +533,7 @@ func roomWarning(entry catalogModel, free map[string]*nodeRoom) string {
 			if !r.ephKnown || r.eph >= eph {
 				return ""
 			}
-			diskOnly = firstNonEmpty(diskOnly, n)
+			diskOnly = kube.FirstNonEmpty(diskOnly, n)
 		}
 		if best == "" || r.cpu > free[best].cpu {
 			best = n

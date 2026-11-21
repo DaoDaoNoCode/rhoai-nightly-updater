@@ -446,15 +446,15 @@ func aigatewayMaaSReady(c *Client) (string, string) {
 	var list struct {
 		Items []struct {
 			Status struct {
-				Conditions []k8sCondition `json:"conditions"`
+				Conditions []kube.Condition `json:"conditions"`
 			} `json:"status"`
 		} `json:"items"`
 	}
 	if json.Unmarshal(read.Body, &list) != nil || len(list.Items) != 1 {
 		return "", ""
 	}
-	if cond, ok := findCondition(list.Items[0].Status.Conditions, "ModelsAsAServiceReady"); ok {
-		return cond.Status, firstNonEmpty(cond.Message, cond.Reason)
+	if cond, ok := kube.FindCondition(list.Items[0].Status.Conditions, "ModelsAsAServiceReady"); ok {
+		return cond.Status, kube.FirstNonEmpty(cond.Message, cond.Reason)
 	}
 	return "", ""
 }
@@ -484,7 +484,7 @@ type kuadrantState struct {
 	found, ready bool
 	namespace    string
 	message      string
-	meta         objectMeta
+	meta         kube.ObjectMeta
 }
 
 func readKuadrant(c *Client) (kuadrantState, error) {
@@ -501,9 +501,9 @@ func readKuadrant(c *Client) (kuadrantState, error) {
 	}
 	var list struct {
 		Items []struct {
-			Metadata objectMeta `json:"metadata"`
+			Metadata kube.ObjectMeta `json:"metadata"`
 			Status   struct {
-				Conditions []k8sCondition `json:"conditions"`
+				Conditions []kube.Condition `json:"conditions"`
 			} `json:"status"`
 		} `json:"items"`
 	}
@@ -515,9 +515,9 @@ func readKuadrant(c *Client) (kuadrantState, error) {
 	}
 	k := list.Items[0]
 	st := kuadrantState{found: true, namespace: k.Metadata.Namespace, meta: k.Metadata}
-	if cond, ok := findCondition(k.Status.Conditions, "Ready"); ok {
+	if cond, ok := kube.FindCondition(k.Status.Conditions, "Ready"); ok {
 		st.ready = cond.Status == "True"
-		st.message = firstNonEmpty(cond.Message, cond.Reason)
+		st.message = kube.FirstNonEmpty(cond.Message, cond.Reason)
 	}
 	return st, nil
 }
@@ -635,14 +635,14 @@ func readMaaSGateway(c *Client) (maasGatewayState, error) {
 		return st, fmt.Errorf("parse Gateway %s/%s: %w", inferenceGatewayNamespace, maasGatewayName, err)
 	}
 	st.owned = gatewayOwned(st.gw.Metadata)
-	if cond, ok := findCondition(st.gw.Status.Conditions, "Accepted"); ok && cond.Status == "False" {
-		st.acceptedErr = firstNonEmpty(cond.Message, cond.Reason)
+	if cond, ok := kube.FindCondition(st.gw.Status.Conditions, "Accepted"); ok && cond.Status == "False" {
+		st.acceptedErr = kube.FirstNonEmpty(cond.Message, cond.Reason)
 	}
-	if cond, ok := findCondition(st.gw.Status.Conditions, "Programmed"); ok && cond.Status == "True" {
+	if cond, ok := kube.FindCondition(st.gw.Status.Conditions, "Programmed"); ok && cond.Status == "True" {
 		st.programmed = true
 	}
 	for _, a := range st.gw.Status.Addresses {
-		st.address = firstNonEmpty(st.address, a.Value)
+		st.address = kube.FirstNonEmpty(st.address, a.Value)
 	}
 	return st, nil
 }
@@ -662,9 +662,9 @@ func readMaaSGateway(c *Client) (maasGatewayState, error) {
 // creates it). It returns a message and an error code, or "".
 func maasNamespaceRefusal(c *Client, infra string) (string, string) {
 	for _, ns := range []string{maasTenantNamespace, infra} {
-		meta, found, err := readObjectMeta(c, "/api/v1/namespaces/"+ns)
+		meta, found, err := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+ns)
 		if err != nil {
-			return fmt.Sprintf("Cannot read namespace %s, so this tool cannot tell who made it; nothing was changed: %v.%s", ns, err, templateHint(err)), firstNonEmpty(errorCodeFromK8sErr(err), "internal")
+			return fmt.Sprintf("Cannot read namespace %s, so this tool cannot tell who made it; nothing was changed: %v.%s", ns, err, templateHint(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
 		}
 		if !found {
 			continue
@@ -828,9 +828,9 @@ func maasConnectionURL(c *Client, ns string) (string, error) {
 }
 
 // readMaaSDBCluster reads the database: found, owned, ready, a message.
-func readMaaSDBCluster(c *Client, ns string) (objectMeta, bool, bool, string, error) {
+func readMaaSDBCluster(c *Client, ns string) (kube.ObjectMeta, bool, bool, string, error) {
 	var cl struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 		Spec     struct {
 			Instances int `json:"instances"`
 		} `json:"spec"`
@@ -842,15 +842,15 @@ func readMaaSDBCluster(c *Client, ns string) (objectMeta, bool, bool, string, er
 	found, err := c.GetIntoOptional(maasObjectPath("Cluster", ns), &cl)
 	if err != nil {
 		if kube.IsDecodeError(err) {
-			return objectMeta{}, true, false, "", err
+			return kube.ObjectMeta{}, true, false, "", err
 		}
-		return objectMeta{}, false, false, "", err
+		return kube.ObjectMeta{}, false, false, "", err
 	}
 	if !found {
-		return objectMeta{}, false, false, "", nil
+		return kube.ObjectMeta{}, false, false, "", nil
 	}
 	ready := cl.Status.ReadyInstances >= 1 && cl.Status.ReadyInstances >= cl.Spec.Instances
-	return cl.Metadata, true, ready, firstNonEmpty(cl.Status.Phase, "Starting"), nil
+	return cl.Metadata, true, ready, kube.FirstNonEmpty(cl.Status.Phase, "Starting"), nil
 }
 
 // deploymentAvailable reads a Deployment's Available condition: "True",
@@ -858,7 +858,7 @@ func readMaaSDBCluster(c *Client, ns string) (objectMeta, bool, bool, string, er
 func deploymentAvailable(c *Client, ns, name string) string {
 	var d struct {
 		Status struct {
-			Conditions []k8sCondition `json:"conditions"`
+			Conditions []kube.Condition `json:"conditions"`
 		} `json:"status"`
 	}
 	found, err := c.GetIntoOptional(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, name), &d)
@@ -868,7 +868,7 @@ func deploymentAvailable(c *Client, ns, name string) string {
 	if !found {
 		return "missing"
 	}
-	if cond, ok := findCondition(d.Status.Conditions, "Available"); ok {
+	if cond, ok := kube.FindCondition(d.Status.Conditions, "Available"); ok {
 		return cond.Status
 	}
 	return ""
@@ -879,7 +879,7 @@ func deploymentAvailable(c *Client, ns, name string) string {
 func readyCondition(c *Client, path string) (string, string) {
 	var obj struct {
 		Status struct {
-			Conditions []k8sCondition `json:"conditions"`
+			Conditions []kube.Condition `json:"conditions"`
 		} `json:"status"`
 	}
 	found, err := c.GetIntoOptional(path, &obj)
@@ -889,8 +889,8 @@ func readyCondition(c *Client, path string) (string, string) {
 	if !found {
 		return "missing", ""
 	}
-	if cond, ok := findCondition(obj.Status.Conditions, "Ready"); ok {
-		return cond.Status, firstNonEmpty(cond.Message, cond.Reason)
+	if cond, ok := kube.FindCondition(obj.Status.Conditions, "Ready"); ok {
+		return cond.Status, kube.FirstNonEmpty(cond.Message, cond.Reason)
 	}
 	return "", ""
 }
@@ -969,14 +969,14 @@ func authorinoTLS(c *Client, ns string) (string, bool, string) {
 			} `json:"spec"`
 		}
 		if json.Unmarshal(body, &a) == nil {
-			secret = firstNonEmpty(a.Spec.Listener.TLS.CertSecretRef.Name, secret)
+			secret = kube.FirstNonEmpty(a.Spec.Listener.TLS.CertSecretRef.Name, secret)
 			tlsOK = a.Spec.Listener.TLS.Enabled
 		}
 	}
 	// Which Secret the Service must name is the CR's: without the CR it is
 	// unknown, not missing.
 	if known {
-		meta, found, err := readObjectMeta(c, fmt.Sprintf("/api/v1/namespaces/%s/services/%s", ns, "authorino-authorino-authorization"))
+		meta, found, err := kube.ReadObjectMeta(c, fmt.Sprintf("/api/v1/namespaces/%s/services/%s", ns, "authorino-authorino-authorization"))
 		switch {
 		case err != nil:
 			known = false
@@ -1077,10 +1077,10 @@ func authorinoTrustsServiceCA(deployment []byte) bool {
 // substitution is shell-quoted as well.
 func authorinoTLSCommands(ns, secret string) (cmds, why string) {
 	if len(ns) > 63 || !dns1123Label.MatchString(ns) {
-		return "", fmt.Sprintf("Connectivity Link's namespace %s is not a valid Kubernetes name", strconv.Quote(truncateText(ns, 300)))
+		return "", fmt.Sprintf("Connectivity Link's namespace %s is not a valid Kubernetes name", strconv.Quote(kube.TruncateText(ns, 300)))
 	}
 	if len(secret) > 253 || !dns1123Subdomain.MatchString(secret) {
-		return "", fmt.Sprintf("Authorino's CR names its certificate Secret %s (spec.listener.tls.certSecretRef.name), which is not a valid Kubernetes name, so no commands are shown. A cluster-admin checks Authorino authorino in %s", strconv.Quote(truncateText(secret, 300)), ns)
+		return "", fmt.Sprintf("Authorino's CR names its certificate Secret %s (spec.listener.tls.certSecretRef.name), which is not a valid Kubernetes name, so no commands are shown. A cluster-admin checks Authorino authorino in %s", strconv.Quote(kube.TruncateText(secret, 300)), ns)
 	}
 	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"listener": map[string]any{"tls": map[string]any{
 		"enabled": true, "certSecretRef": map[string]any{"name": secret}}}}})
@@ -1183,13 +1183,13 @@ func (r *maasStatusRun) statusRHCL() (rhcl, cnpg operatorState, cnpgReadErr erro
 		rhclPart.NotManaged = !rhclPart.ManagedByTool
 		where := "its Subscription is not one of the names the docs use (kuadrant-operator, rhcl-operator)"
 		if rhcl.sub != nil {
-			where = fmt.Sprintf("Subscription %s/%s, channel %s", rhcl.sub.Metadata.Namespace, rhcl.sub.Metadata.Name, firstNonEmpty(rhcl.sub.Spec.Channel, "not set"))
+			where = fmt.Sprintf("Subscription %s/%s, channel %s", rhcl.sub.Metadata.Namespace, rhcl.sub.Metadata.Name, kube.FirstNonEmpty(rhcl.sub.Spec.Channel, "not set"))
 		}
 		switch {
 		case versionCore(rhcl.version) == rhclAuthBypassVersion:
 			rhclPart.State, rhclPart.Message = "problem", fmt.Sprintf("Version %s (%s). ", rhcl.version, where)+rhclWarning(rhcl.version)
 		case rhcl.phase != "Succeeded":
-			rhclPart.State, rhclPart.Message = "waiting", fmt.Sprintf("Version %s is being installed (%s; CSV %s)", rhcl.version, where, firstNonEmpty(rhcl.phase, "pending"))
+			rhclPart.State, rhclPart.Message = "waiting", fmt.Sprintf("Version %s is being installed (%s; CSV %s)", rhcl.version, where, kube.FirstNonEmpty(rhcl.phase, "pending"))
 		default:
 			rhclPart.State, rhclPart.Message = "ready", fmt.Sprintf("Version %s runs (%s)", rhcl.version, where)
 			rhclPart.Warning = rhclWarning(rhcl.version)
@@ -1223,7 +1223,7 @@ func (r *maasStatusRun) statusRHCL() (rhcl, cnpg operatorState, cnpgReadErr erro
 	case rhcl.pending() != nil:
 		p := rhcl.pending()
 		rhclPart.ManagedByTool, rhclPart.NotManaged = rhclByTool, !rhclByTool
-		rhclPart.State, rhclPart.Message = "waiting", fmt.Sprintf("Subscription %s/%s exists; OLM is installing it (%s)", p.Metadata.Namespace, p.Metadata.Name, firstNonEmpty(p.Status.State, "no state yet"))
+		rhclPart.State, rhclPart.Message = "waiting", fmt.Sprintf("Subscription %s/%s exists; OLM is installing it (%s)", p.Metadata.Namespace, p.Metadata.Name, kube.FirstNonEmpty(p.Status.State, "no state yet"))
 	default:
 		rhclPart.State = "missing"
 		if p, msg, _ := planOperatorInstall(c, rhclOperator); msg != "" {
@@ -1245,7 +1245,7 @@ func (r *maasStatusRun) statusKuadrant(rhcl operatorState) kuadrantState {
 	// The Kuadrant CR (platform-setup.md: "Once the RHCL operator is
 	// ready, create a Kuadrant instance").
 	kq, kErr := readKuadrant(c)
-	kuadrantNS := firstNonEmpty(kq.namespace, rhcl.csvNS, rhclOperator.namespace)
+	kuadrantNS := kube.FirstNonEmpty(kq.namespace, rhcl.csvNS, rhclOperator.namespace)
 	kPart := types.MaaSPart{ID: "kuadrant", Title: "Connectivity Link instance (Kuadrant)", DocURL: maasDocsBase + "install/platform-setup.md#install-gateway-api-controller"}
 	_, kByTool := rec.Shared["kuadrant"]
 	switch {
@@ -1258,7 +1258,7 @@ func (r *maasStatusRun) statusKuadrant(rhcl operatorState) kuadrantState {
 	case kq.ready:
 		kPart.State, kPart.Message = "ready", kq.namespace+"/kuadrant is ready"
 	default:
-		kPart.State, kPart.Message = "waiting", "Kuadrant is not Ready: "+firstNonEmpty(kq.message, "no message")
+		kPart.State, kPart.Message = "waiting", "Kuadrant is not Ready: "+kube.FirstNonEmpty(kq.message, "no message")
 	}
 	if kq.found {
 		kPart.ManagedByTool = kByTool && toolOwned(kq.meta)
@@ -1297,8 +1297,8 @@ func (r *maasStatusRun) statusGateway() {
 	case gwErr != nil:
 		gwPart.State, gwPart.Message = "unknown", "Cannot read the gateway: "+gwErr.Error()
 	case !gw.found:
-		gwPart.State, gwPart.Message = "missing", "Set up creates it with an external load balancer at "+firstNonEmpty(st.URL, "maas.<apps domain>")
-		plan(fmt.Sprintf("Create Gateway %s/%s with an external load balancer at %s (a cloud cost while it exists), and GatewayClass %s if the cluster has none", inferenceGatewayNamespace, maasGatewayName, firstNonEmpty(strings.TrimPrefix(st.URL, "https://"), "maas.<apps domain>"), maasGatewayClass))
+		gwPart.State, gwPart.Message = "missing", "Set up creates it with an external load balancer at "+kube.FirstNonEmpty(st.URL, "maas.<apps domain>")
+		plan(fmt.Sprintf("Create Gateway %s/%s with an external load balancer at %s (a cloud cost while it exists), and GatewayClass %s if the cluster has none", inferenceGatewayNamespace, maasGatewayName, kube.FirstNonEmpty(strings.TrimPrefix(st.URL, "https://"), "maas.<apps domain>"), maasGatewayClass))
 	default:
 		gwPart.ManagedByTool, gwPart.NotManaged = gw.owned, !gw.owned
 		switch {
@@ -1312,7 +1312,7 @@ func (r *maasStatusRun) statusGateway() {
 				gwPart.Commands = gatewayAllowedRoutesCommand(gw.gw, maasGatewayNamespaces(infra, rec.projects()))
 			}
 		case gw.acceptedErr != "":
-			gwPart.State, gwPart.Message = "problem", "Not accepted: "+truncateText(gw.acceptedErr, 300)
+			gwPart.State, gwPart.Message = "problem", "Not accepted: "+kube.TruncateText(gw.acceptedErr, 300)
 		case gw.programmed && gw.address != "":
 			gwPart.State, gwPart.Message = "ready", fmt.Sprintf("%s in %s, programmed at %s", maasGatewayName, inferenceGatewayNamespace, gw.address)
 		default:
@@ -1393,7 +1393,7 @@ func (r *maasStatusRun) statusTierPolicies(kVersion string, kvErr error) {
 		case len(foreign) > 0:
 			polPart.State, polPart.NotManaged = "manual", true
 			polPart.Message = fmt.Sprintf("%s %s on %s and %s not managed by maas-controller. RHOAI's upgrade from the tier-based MaaS leaves its gateway policies in place, and with old and new gateway policies \"Kuadrant behavior is undefined\" (the MaaS docs' upgrade guide), so this tool publishes nothing until they are gone.",
-				strings.Join(policyNames(foreign), ", "), verb(len(foreign), "is", "are"), maasGatewayName, verb(len(foreign), "is", "are"))
+				strings.Join(policyNames(foreign), ", "), kube.Verb(len(foreign), "is", "are"), maasGatewayName, kube.Verb(len(foreign), "is", "are"))
 			var legacy, other []gatewayPolicy
 			for _, p := range foreign {
 				if legacyTierPolicy(p) {
@@ -1406,7 +1406,7 @@ func (r *maasStatusRun) statusTierPolicies(kVersion string, kvErr error) {
 				polPart.Actions = []types.MaaSAction{tierPoliciesAction(legacy)}
 			}
 			if len(other) > 0 {
-				polPart.Message += fmt.Sprintf(" %s %s not among the names the docs give for the old policies, so this tool leaves %s to a cluster-admin.", strings.Join(policyNames(other), ", "), verb(len(other), "is", "are"), verb(len(other), "it", "them"))
+				polPart.Message += fmt.Sprintf(" %s %s not among the names the docs give for the old policies, so this tool leaves %s to a cluster-admin.", strings.Join(policyNames(other), ", "), kube.Verb(len(other), "is", "are"), kube.Verb(len(other), "it", "them"))
 			}
 			polPart.Commands = legacyPolicyCommands(foreign)
 			part(polPart)
@@ -1430,20 +1430,20 @@ func (r *maasStatusRun) statusDSC(dsc maasDSC, dscErr error) {
 		dscPart.ManagedByTool, dscPart.NotManaged = rec.DSCChanged, !rec.DSCChanged
 		switch dsc.ready {
 		case "False":
-			dscPart.State, dscPart.Message = "waiting", "modelsAsAService is Managed; not ready: "+truncateText(dsc.readyMsg, 300)
+			dscPart.State, dscPart.Message = "waiting", "modelsAsAService is Managed; not ready: "+kube.TruncateText(dsc.readyMsg, 300)
 		default:
 			dscPart.State, dscPart.Message = "ready", "aigateway and modelsAsAService are Managed"
 		}
 	default:
 		var fields []string
 		if dsc.aigateway != "Managed" {
-			fields = append(fields, fmt.Sprintf("aigateway.managementState %s to Managed", firstNonEmpty(dsc.aigateway, "not set")))
+			fields = append(fields, fmt.Sprintf("aigateway.managementState %s to Managed", kube.FirstNonEmpty(dsc.aigateway, "not set")))
 		}
 		if dsc.maas != "Managed" {
-			fields = append(fields, fmt.Sprintf("aigateway.modelsAsAService.managementState %s to Managed", firstNonEmpty(dsc.maas, "not set")))
+			fields = append(fields, fmt.Sprintf("aigateway.modelsAsAService.managementState %s to Managed", kube.FirstNonEmpty(dsc.maas, "not set")))
 		}
 		dscPart.State = "missing"
-		dscPart.Message = fmt.Sprintf("aigateway is %s and modelsAsAService is %s. Set up sets them to Managed, last, as the docs' DataScienceCluster step does; Remove puts back what this tool changed.", firstNonEmpty(dsc.aigateway, "not set"), firstNonEmpty(dsc.maas, "not set"))
+		dscPart.Message = fmt.Sprintf("aigateway is %s and modelsAsAService is %s. Set up sets them to Managed, last, as the docs' DataScienceCluster step does; Remove puts back what this tool changed.", kube.FirstNonEmpty(dsc.aigateway, "not set"), kube.FirstNonEmpty(dsc.maas, "not set"))
 		dscPart.Commands = maasDSCCommand(dsc.name)
 		dscPart.ManagedByTool = rec.AIGatewayChanged
 		if dsc.argoApp != "" {
@@ -1483,7 +1483,7 @@ func (r *maasStatusRun) statusDSC(dsc maasDSC, dscErr error) {
 		case ai == "True" && tc == "True" && auth == "enforced":
 			tenantPart.State, tenantPart.Message = "ready", "Tenant models-as-a-service is Ready; the gateway's authentication is enforced"
 		case ai == "False" || tc == "False":
-			tenantPart.State, tenantPart.Message = "waiting", "Tenant not ready: "+truncateText(firstNonEmpty(aiMsg, tcMsg, "no message"), 300)
+			tenantPart.State, tenantPart.Message = "waiting", "Tenant not ready: "+kube.TruncateText(kube.FirstNonEmpty(aiMsg, tcMsg, "no message"), 300)
 		case ai == "" || tc == "" || auth == "":
 			tenantPart.State, tenantPart.Message = "unknown", "Not reported yet"
 		default:
@@ -1611,7 +1611,7 @@ func (r *maasStatusRun) modelRow(m llmisvcObject, entry catalogModel, v maasMode
 	item := types.MaaSModel{Namespace: m.Metadata.Namespace, Name: m.Metadata.Name, ManagedByTool: true}
 	// The catalog's name: the object's annotation is the project's to change.
 	item.DisplayName = entry.DisplayName
-	if cond, ok := findCondition(m.Status.Conditions, "Ready"); ok && cond.Status == "True" {
+	if cond, ok := kube.FindCondition(m.Status.Conditions, "Ready"); ok && cond.Status == "True" {
 		item.ModelReady = true
 	}
 	if entry.Type != modelTypeChat {
@@ -1644,7 +1644,7 @@ func (r *maasStatusRun) modelRow(m llmisvcObject, entry catalogModel, v maasMode
 		case item.Ready:
 			item.Message = "Published"
 		default:
-			item.Message = fmt.Sprintf("Published; waiting (model reference %s, access %s, subscription %s)", firstNonEmpty(item.Phase, "pending"), firstNonEmpty(authPhase, "pending"), firstNonEmpty(subPhase, "pending"))
+			item.Message = fmt.Sprintf("Published; waiting (model reference %s, access %s, subscription %s)", kube.FirstNonEmpty(item.Phase, "pending"), kube.FirstNonEmpty(authPhase, "pending"), kube.FirstNonEmpty(subPhase, "pending"))
 		}
 	} else if left := maasLeftovers(c, m, recErr == nil && rec.published(m.Metadata.Namespace, m.Metadata.Name)); !found && len(left) > 0 {
 		// A publication undone half-way (live: Unpublish deleted the
@@ -1659,9 +1659,9 @@ func (r *maasStatusRun) modelRow(m llmisvcObject, entry catalogModel, v maasMode
 			item.SetupBlockedReason = item.Message + "; it is left alone."
 		}
 		if !p.Ready {
-			item.SetupBlockedReason = firstNonEmpty(item.SetupBlockedReason, maasNotReadyRowReason(st))
+			item.SetupBlockedReason = kube.FirstNonEmpty(item.SetupBlockedReason, maasNotReadyRowReason(st))
 		} else if !item.ModelReady {
-			item.SetupBlockedReason = firstNonEmpty(item.SetupBlockedReason, "The model is not ready yet.")
+			item.SetupBlockedReason = kube.FirstNonEmpty(item.SetupBlockedReason, "The model is not ready yet.")
 		}
 	}
 	if recorded, ok := rec.routeBefore(m.Metadata.Namespace, m.Metadata.Name, modelGatewayRefsOf(m)); item.Published && recErr == nil && ok {
@@ -1716,7 +1716,9 @@ func maasLeftovers(c *Client, m llmisvcObject, recorded bool) []string {
 }
 
 // toolOwned: this tool created the object (its label, and a write by it).
-func toolOwned(meta objectMeta) bool { return meta.hasToolLabel() && meta.hasManager(toolManagers) }
+func toolOwned(meta kube.ObjectMeta) bool {
+	return meta.HasToolLabel() && meta.HasManager(toolManagers)
+}
 
 // dashboardURLOrEmpty is the dashboard's address, or "".
 func dashboardURLOrEmpty(c *Client) string {
@@ -1725,7 +1727,7 @@ func dashboardURLOrEmpty(c *Client) string {
 
 // maasModelRefObject is a MaaS custom resource as read.
 type maasModelRefObject struct {
-	Metadata objectMeta `json:"metadata"`
+	Metadata kube.ObjectMeta `json:"metadata"`
 	Spec     struct {
 		ModelRefs []map[string]any `json:"modelRefs"`
 	} `json:"spec"`
@@ -1793,7 +1795,7 @@ func MaaSPublishedIn(c *Client, project, name string) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	_, found, err := readObjectMeta(c, refPath)
+	_, found, err := kube.ReadObjectMeta(c, refPath)
 	if err != nil && !kube.IsK8sNotFound(err) {
 		return false, err
 	}

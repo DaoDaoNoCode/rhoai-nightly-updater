@@ -265,18 +265,11 @@ func describeTermination(t *diagTerminated, fallback string) string {
 	if t == nil {
 		return fallback
 	}
-	parts := []string{fmt.Sprintf("last exit: %s (exit code %d)", nonEmpty(t.Reason, "Terminated"), t.ExitCode)}
+	parts := []string{fmt.Sprintf("last exit: %s (exit code %d)", kube.NonEmpty(t.Reason, "Terminated"), t.ExitCode)}
 	if msg := strings.TrimSpace(t.Message); msg != "" {
-		parts = append(parts, truncateText(msg, 300))
+		parts = append(parts, kube.TruncateText(msg, 300))
 	}
 	return strings.Join(parts, ": ")
-}
-
-func nonEmpty(s, fallback string) string {
-	if s == "" {
-		return fallback
-	}
-	return s
 }
 
 // errEventsForbidden marks an events lookup refused by RBAC.
@@ -349,7 +342,7 @@ func shortCause(is podIssue) string {
 	}
 	switch is.Kind {
 	case issueUnschedulable:
-		return truncateText(is.Message, 160)
+		return kube.TruncateText(is.Message, 160)
 	case issueImagePull, issueContainerConfig:
 		return is.Reason
 	}
@@ -463,7 +456,7 @@ func podGroupProblem(c *Client, g podIssueGroup, critical bool) Problem {
 		}
 		line += fmt.Sprintf(", age %s", formatDuration(is.Age))
 		if is.Message != "" {
-			line += ": " + truncateText(is.Message, 400)
+			line += ": " + kube.TruncateText(is.Message, 400)
 		}
 		evidence = append(evidence, line)
 		affected = append(affected, fmt.Sprintf("Pod %s/%s", is.Namespace, is.Pod))
@@ -491,7 +484,7 @@ func podGroupProblem(c *Client, g podIssueGroup, critical bool) Problem {
 
 	switch g.Kind {
 	case issueStuckCreating:
-		p.Title = withCause(fmt.Sprintf("%s: %d %s stuck in %s", g.Owner, n, podWord, nonEmpty(stuckState(g.Issues), "ContainerCreating")))
+		p.Title = withCause(fmt.Sprintf("%s: %d %s stuck in %s", g.Owner, n, podWord, kube.NonEmpty(stuckState(g.Issues), "ContainerCreating")))
 		p.Description = fmt.Sprintf("The %s %s scheduled on a node, but the containers have not started for %s. This is not a capacity problem: the kubelet is waiting for something the pod needs.", podWord, isAre(n), formatDuration(first.Age))
 		if strings.Contains(strings.ToLower(first.Reason+first.Message), "failedmount") || missingObjectPattern.MatchString(strings.ToLower(first.Message)) {
 			p.Fix = "The pod mounts an object that does not exist yet (see the message). The pod starts on its own once the object exists. Check which component should create it in the operator logs and on the Components page."

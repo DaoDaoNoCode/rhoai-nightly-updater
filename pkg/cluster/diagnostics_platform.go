@@ -48,7 +48,7 @@ func checkPlatformModules(c *Client) checkOutput {
 				switch cond.Reason {
 				case "AdminAckRequired":
 					out.check.Status = "fail"
-					evidence := []string{fmt.Sprintf("Platform %s: ProvisioningProgress=False (AdminAckRequired): %s", pl.Metadata.Name, truncateText(cond.Message, 400))}
+					evidence := []string{fmt.Sprintf("Platform %s: ProvisioningProgress=False (AdminAckRequired): %s", pl.Metadata.Name, kube.TruncateText(cond.Message, 400))}
 					keys, values, keysErr := pendingUpgradeAckKeys(c)
 					cmd := upgradeAckCommand("<key>")
 					fix := "Read what the gate is about, then acknowledge it in the OpenShift console or with the command below (replace <key>)."
@@ -62,7 +62,7 @@ func checkPlatformModules(c *Client) checkOutput {
 							cmds = append(cmds, upgradeAckCommand(k))
 						}
 						cmd = strings.Join(cmds, "\n")
-						fix = fmt.Sprintf("Read what each gate is about (the operator's release notes name it), then acknowledge %s with the commands below.", verb(len(keys), "it", "them"))
+						fix = fmt.Sprintf("Read what each gate is about (the operator's release notes name it), then acknowledge %s with the commands below.", kube.Verb(len(keys), "it", "them"))
 					}
 					out.problems = append(out.problems, Problem{
 						ID:              "platform-admin-ack-required",
@@ -83,14 +83,14 @@ func checkPlatformModules(c *Client) checkOutput {
 						Severity:    "warning",
 						Title:       "Some modules were provisioned before the modules they wait for became ready",
 						Description: "The operator provisions modules in run levels and waits up to 10 minutes for each level. It moved on because a module of an earlier level did not become ready; modules that depend on it may not work.",
-						Evidence:    []string{fmt.Sprintf("Platform %s: ProvisioningProgress=False (RunlevelTimeoutExceeded): %s", pl.Metadata.Name, truncateText(cond.Message, 400))},
+						Evidence:    []string{fmt.Sprintf("Platform %s: ProvisioningProgress=False (RunlevelTimeoutExceeded): %s", pl.Metadata.Name, kube.TruncateText(cond.Message, 400))},
 						Fix:         "Fix the module named in the message (see the DataScienceCluster and RHOAI pods results).",
 					})
 				}
 			}
 			// The phase is the Platform's own state, not this check's result:
 			// label it, and point to where a non-Ready phase is explained.
-			phase := nonEmpty(pl.Status.Phase, "unknown")
+			phase := kube.NonEmpty(pl.Status.Phase, "unknown")
 			platform := fmt.Sprintf("Platform %s phase: %s", pl.Metadata.Name, phase)
 			if phase != "Ready" {
 				platform += " (the DataScienceCluster check shows why)"
@@ -194,7 +194,7 @@ func stuckModuleCRs(c *Client, now time.Time) ([]stuckModule, error) {
 }
 
 func stuckModuleProblem(c *Client, operators *moduleOperatorFinder, m stuckModule) Problem {
-	evidence := []string{fmt.Sprintf("%s %s has been deleting for %s; finalizers: %s", m.Module, m.Name, formatDuration(m.Since), nonEmpty(strings.Join(m.Finalizers, ", "), "none"))}
+	evidence := []string{fmt.Sprintf("%s %s has been deleting for %s; finalizers: %s", m.Module, m.Name, formatDuration(m.Since), kube.NonEmpty(strings.Join(m.Finalizers, ", "), "none"))}
 	fix := "The finalizer is removed by the module's operator; make sure it is running and read its logs."
 	op, why, err := operators.find(m.Module, m.Name)
 	switch {
@@ -232,7 +232,7 @@ func stuckModuleProblem(c *Client, operators *moduleOperatorFinder, m stuckModul
 		Evidence:        evidence,
 		AffectedObjects: []string{fmt.Sprintf("%s %s", m.Module, m.Name)},
 		Fix:             fix,
-		TechnicalCmd:    shellCommand("oc", "get", nonEmpty(m.CRD, m.Module+"s."+componentAPIGroup), m.Name, "-o", "yaml"),
+		TechnicalCmd:    shellCommand("oc", "get", kube.NonEmpty(m.CRD, m.Module+"s."+componentAPIGroup), m.Name, "-o", "yaml"),
 	}
 }
 
@@ -272,7 +272,7 @@ func checkManagedConfig(c *Client) checkOutput {
 				out.check.Status = "fail"
 				evidence := []string{fmt.Sprintf("Deployment %s has opendatahub.io/managed=false", target)}
 				if v := ann["platform.opendatahub.io/version"]; v != "" {
-					evidence = append(evidence, fmt.Sprintf("It was last applied for version %s; the platform is at %s", v, nonEmpty(release, "unknown")))
+					evidence = append(evidence, fmt.Sprintf("It was last applied for version %s; the platform is at %s", v, kube.NonEmpty(release, "unknown")))
 				}
 				out.problems = append(out.problems, Problem{
 					ID:       "deployment-unmanaged-" + d.Metadata.Name,
@@ -311,7 +311,7 @@ func checkManagedConfig(c *Client) checkOutput {
 					Severity:        "info",
 					Title:           fmt.Sprintf("%s still has the rollout strategy set by assist-rollout", d.Metadata.Name),
 					Description:     "assist-rollout set maxUnavailable=1 to unblock a rollout and saved the original value. Nothing resets it automatically.",
-					Evidence:        []string{fmt.Sprintf("Deployment %s: maxUnavailable=%s, saved: %s", target, nonEmpty(d.currentMaxUnavailable(), "unset"), raw)},
+					Evidence:        []string{fmt.Sprintf("Deployment %s: maxUnavailable=%s, saved: %s", target, kube.NonEmpty(d.currentMaxUnavailable(), "unset"), raw)},
 					AffectedObjects: []string{"Deployment " + target},
 				}
 				if d.rolloutComplete() {
@@ -327,9 +327,9 @@ func checkManagedConfig(c *Client) checkOutput {
 		}
 	}
 	if out.check.Status == "pass" {
-		details = append([]string{fmt.Sprintf("%s under operator management", countNoun(count, "deployment", "deployments"))}, details...)
+		details = append([]string{fmt.Sprintf("%s under operator management", kube.CountNoun(count, "deployment", "deployments"))}, details...)
 	} else if len(out.problems) > 0 {
-		details = append([]string{countNoun(len(out.problems), "finding", "findings")}, details...)
+		details = append([]string{kube.CountNoun(len(out.problems), "finding", "findings")}, details...)
 	}
 	out.check.Detail = strings.Join(details, "; ")
 	return out

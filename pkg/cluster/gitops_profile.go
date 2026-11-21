@@ -61,7 +61,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Checking prerequisites..."})
 	g, err := readOperatorGitOps(c)
 	if err != nil {
-		return fail("Cannot check whether Argo CD manages the operator: "+err.Error()+". Nothing was changed.", errorCodeFromK8sErr(err))
+		return fail("Cannot check whether Argo CD manages the operator: "+err.Error()+". Nothing was changed.", kube.ErrorCodeFromK8sErr(err))
 	}
 	if !g.catalogManaged() {
 		return fail(gitOpsProfileUnmanagedCatalog, kube.ErrorCodeProfileGitOps)
@@ -70,7 +70,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 
 	active, operator, err := dashboardDevActive(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot check for a Dashboard Dev session: %v. Nothing was changed.", err), errorCodeFromK8sErr(err))
+		return fail(fmt.Sprintf("Cannot check for a Dashboard Dev session: %v. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	if active {
 		end := "end it with the full profile"
@@ -88,7 +88,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 
 	idms, err := getIDMS(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Failed to check IDMS: %v", err), errorCodeFromK8sErr(err))
+		return fail(fmt.Sprintf("Failed to check IDMS: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	if !idms.Exists {
 		return fail(fmt.Sprintf("No IDMS found mirroring %s. Create it first (docs/QUICKSTART.md). Nothing was changed.", IDMSSource), "prerequisites")
@@ -103,12 +103,12 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 
 	currentCSV, csvCheckErr := getCSV(c)
 	if csvCheckErr != nil {
-		return fail("Cannot identify installed CSV: "+csvCheckErr.Error(), errorCodeOr(csvCheckErr, "prerequisites"))
+		return fail("Cannot identify installed CSV: "+csvCheckErr.Error(), kube.ErrorCodeOr(csvCheckErr, "prerequisites"))
 	}
 
 	gitOps, channelOverride, gitOpsProblem, gitOpsErr := updateGitOpsPlan(c, image, currentCSV, &logs)
 	if gitOpsErr != nil {
-		return fail("Cannot check whether Argo CD manages the operator: "+gitOpsErr.Error()+". Nothing was changed.", errorCodeFromK8sErr(gitOpsErr))
+		return fail("Cannot check whether Argo CD manages the operator: "+gitOpsErr.Error()+". Nothing was changed.", kube.ErrorCodeFromK8sErr(gitOpsErr))
 	}
 	if gitOpsProblem != "" {
 		return fail(gitOpsProblem, kube.ErrorCodeGitOpsManaged)
@@ -153,7 +153,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	}
 	captured, recoveryErr := captureOperatorRecovery(c)
 	if recoveryErr != nil {
-		return fail(recoveryErr.Error()+". Nothing was changed.", errorCodeOr(recoveryErr, "prerequisites"))
+		return fail(recoveryErr.Error()+". Nothing was changed.", kube.ErrorCodeOr(recoveryErr, "prerequisites"))
 	}
 	if blocked := foreignSubscriptionRefusal(c); blocked != "" {
 		return fail(blocked, "prerequisites")
@@ -217,7 +217,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 	}
 	g, err := readOperatorGitOps(c)
 	if err != nil {
-		return fail("Cannot check whether Argo CD manages the operator: "+err.Error(), errorCodeFromK8sErr(err))
+		return fail("Cannot check whether Argo CD manages the operator: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 	}
 	if !g.catalogManaged() {
 		return fail(gitOpsProfileUnmanagedCatalog, kube.ErrorCodeProfileGitOps)
@@ -229,7 +229,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 	logs = append(logs, gitOpsProfileNoPullSecret)
 	idms, err := getIDMS(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Failed to check IDMS: %v", err), errorCodeFromK8sErr(err))
+		return fail(fmt.Sprintf("Failed to check IDMS: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	if !idms.Exists {
 		return fail(fmt.Sprintf("No IDMS found mirroring %s. Create it first (docs/QUICKSTART.md).", IDMSSource), "prerequisites")
@@ -242,21 +242,21 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 	logs = append(logs, ogLog)
 	currentCSV, err := getCSV(c)
 	if err != nil {
-		return fail("Cannot identify installed CSV: "+err.Error(), errorCodeOr(err, "prerequisites"))
+		return fail("Cannot identify installed CSV: "+err.Error(), kube.ErrorCodeOr(err, "prerequisites"))
 	}
 	planned, channelOverride, problem, err := updateGitOpsPlan(c, image, currentCSV, &logs)
 	if err != nil {
-		return fail("Cannot check whether Argo CD manages the operator: "+err.Error(), errorCodeFromK8sErr(err))
+		return fail("Cannot check whether Argo CD manages the operator: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 	}
 	if problem != "" {
 		return fail(problem, kube.ErrorCodeGitOpsManaged)
 	}
 	live, found, err := readSubscriptionObject(c)
 	if err != nil {
-		return fail("Cannot read the Subscription: "+err.Error(), errorCodeFromK8sErr(err))
+		return fail("Cannot read the Subscription: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 	}
 	if found {
-		if msg := gitOpsSubscriptionsProblem(buildSubscription(live, CatalogName, nonEmpty(channelOverride, "unknown")), live); msg != "" {
+		if msg := gitOpsSubscriptionsProblem(buildSubscription(live, CatalogName, kube.NonEmpty(channelOverride, "unknown")), live); msg != "" {
 			return fail(msg, kube.ErrorCodeProfileGitOps)
 		}
 		logs = append(logs, "OK: The admission policy allows recreating the Subscription and restoring it")
@@ -277,7 +277,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 	if blocked != "" {
 		return fail(blocked, "validation")
 	}
-	channel := nonEmpty(channelOverride, "the one the build publishes")
+	channel := kube.NonEmpty(channelOverride, "the one the build publishes")
 	if channelOverride != "" {
 		channel += " (kept from Git)"
 	}
@@ -390,7 +390,7 @@ func liveCatalogTargetOnce(c *Client, image, override string) (target catalogTar
 	case cs.Image != image:
 		return catalogTarget{}, "the CatalogSource image is " + cs.Image, cs.Image
 	case cs.State != "READY":
-		return catalogTarget{}, "catalog state " + nonEmpty(cs.State, "unknown"), ""
+		return catalogTarget{}, "catalog state " + kube.NonEmpty(cs.State, "unknown"), ""
 	}
 	ready, stale, ok := readCatalogPods(c, image)
 	switch {

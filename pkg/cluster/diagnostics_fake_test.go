@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // fakeAPI is a strict Kubernetes API fake for diagnostics tests. Routes are
@@ -223,12 +225,12 @@ func serveToggleDSC(f *fakeAPI, version, dsc, patchBody string, components ...st
 		if patchBody != "" {
 			return 200, patchBody
 		}
-		var ops []jsonPatchOp
+		var ops []kube.JSONPatchOp
 		if err := json.Unmarshal(body, &ops); err != nil {
 			return 400, `{"kind":"Status","status":"Failure","code":400}`
 		}
-		next, err := applyJSONPatch(obj, ops)
-		if _, ok := errors.AsType[*errJSONPatchTest](err); ok {
+		next, err := kube.ApplyJSONPatch(obj, ops)
+		if _, ok := errors.AsType[*kube.JSONPatchTestError](err); ok {
 			return 422, apiServerPatchTestFailed
 		}
 		if err != nil {

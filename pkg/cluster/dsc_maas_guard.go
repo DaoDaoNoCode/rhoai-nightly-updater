@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -50,13 +51,13 @@ func (u maasUse) inUse() bool {
 func (u maasUse) text() string {
 	var parts []string
 	if len(u.models) > 0 {
-		parts = append(parts, verb(len(u.models), "published model ", "published models ")+strings.Join(u.models, ", "))
+		parts = append(parts, kube.Verb(len(u.models), "published model ", "published models ")+strings.Join(u.models, ", "))
 	}
 	if len(u.subscriptions) > 0 {
-		parts = append(parts, verb(len(u.subscriptions), "subscription ", "subscriptions ")+strings.Join(u.subscriptions, ", "))
+		parts = append(parts, kube.Verb(len(u.subscriptions), "subscription ", "subscriptions ")+strings.Join(u.subscriptions, ", "))
 	}
 	if len(u.policies) > 0 {
-		parts = append(parts, verb(len(u.policies), "access policy ", "access policies ")+strings.Join(u.policies, ", "))
+		parts = append(parts, kube.Verb(len(u.policies), "access policy ", "access policies ")+strings.Join(u.policies, ", "))
 	}
 	if u.setUp {
 		parts = append(parts, "set up by this tool on the MaaS tab")
@@ -92,7 +93,7 @@ func readMaaSUse(c *Client) (maasUse, error) {
 	}
 	for _, o := range objs {
 		name := o.meta.Namespace + "/" + o.meta.Name
-		if o.meta.terminating() {
+		if o.meta.Terminating() {
 			name += " (being deleted)"
 		}
 		switch o.kind {

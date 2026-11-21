@@ -6,6 +6,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -113,28 +114,28 @@ func legacyDeletePath(kind, name string) (string, bool) {
 }
 
 // readLegacyObject reads one named object of the earlier storage.
-func readLegacyObject(c *Client, kind, name string) (objectMeta, bool, error) {
+func readLegacyObject(c *Client, kind, name string) (kube.ObjectMeta, bool, error) {
 	if kind == "PersistentVolumeClaim" {
 		p, found, err := findPVC(c, legacyNamespace, name)
 		return p.Meta, found, err
 	}
 	path, ok := legacyGetPath(kind, name)
 	if !ok {
-		return objectMeta{}, false, fmt.Errorf("internal error: unexpected object %s %s of the earlier storage", kind, name)
+		return kube.ObjectMeta{}, false, fmt.Errorf("internal error: unexpected object %s %s of the earlier storage", kind, name)
 	}
-	return readObjectMeta(c, path)
+	return kube.ReadObjectMeta(c, path)
 }
 
 // legacyObject is an object of the earlier storage that this tool created.
 type legacyObject struct {
 	kind, name string
-	meta       objectMeta
+	meta       kube.ObjectMeta
 }
 
 // legacyStorage is the storage an earlier version left in namespace minio.
 type legacyStorage struct {
-	terminating bool       // the namespace is being deleted
-	nsMeta      objectMeta // the namespace's metadata
+	terminating bool            // the namespace is being deleted
+	nsMeta      kube.ObjectMeta // the namespace's metadata
 	// objects are the objects this tool created there, in
 	// legacyStorageObjects order.
 	objects []legacyObject
@@ -173,14 +174,14 @@ const projectRequesterAnnotation = "openshift.io/requester"
 //     (SECURITY.md, inference gateway);
 //   - else the earliest versions' plain POST (manager Go-http-client), but
 //     never on a namespace a ProjectRequest made (openshift.io/requester).
-func legacyNamespaceOurs(meta objectMeta) bool {
-	if meta.hasToolLabel() {
+func legacyNamespaceOurs(meta kube.ObjectMeta) bool {
+	if meta.HasToolLabel() {
 		return true
 	}
 	if meta.Annotations[projectRequesterAnnotation] != "" {
 		return false
 	}
-	return meta.hasManager([]string{legacyPostManager})
+	return meta.HasManager([]string{legacyPostManager})
 }
 
 // readLegacyStorage reports the storage an earlier version left in
@@ -206,7 +207,7 @@ func readLegacyStorageOwner(c *Client) (*legacyStorage, bool, error) {
 		return nil, false, nil
 	}
 	var nsObj struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 		Status   struct {
 			Phase string `json:"phase"`
 		} `json:"status"`
@@ -219,7 +220,7 @@ func readLegacyStorageOwner(c *Client) (*legacyStorage, bool, error) {
 	}
 
 	type result struct {
-		meta  objectMeta
+		meta  kube.ObjectMeta
 		found bool
 		body  []byte
 		err   error
@@ -231,7 +232,7 @@ func readLegacyStorageOwner(c *Client) (*legacyStorage, bool, error) {
 		pvcErr    error
 		address   storageAddress
 		addrErr   error
-		deploys   []objectMeta
+		deploys   []kube.ObjectMeta
 		deployErr error
 	)
 	for i, o := range legacyStorageObjects {
@@ -248,7 +249,7 @@ func readLegacyStorageOwner(c *Client) (*legacyStorage, bool, error) {
 				results[i].err = err
 			case !present:
 			default:
-				results[i].meta, results[i].err = parseObjectMeta(b)
+				results[i].meta, results[i].err = kube.ParseObjectMeta(b)
 				results[i].found, results[i].body = results[i].err == nil, b
 			}
 		}(i, o.kind, o.name)
@@ -262,7 +263,7 @@ func readLegacyStorageOwner(c *Client) (*legacyStorage, bool, error) {
 	if pvcErr != nil {
 		return nil, false, fmt.Errorf("list PVCs in namespace %s: %w", legacyNamespace, pvcErr)
 	}
-	l := &legacyStorage{terminating: nsObj.Metadata.terminating() || nsObj.Status.Phase == "Terminating", nsMeta: nsObj.Metadata, address: address, addressErr: addrErr}
+	l := &legacyStorage{terminating: nsObj.Metadata.Terminating() || nsObj.Status.Phase == "Terminating", nsMeta: nsObj.Metadata, address: address, addressErr: addrErr}
 	deployments := map[string]s3DeploymentSpec{}
 	for i, o := range legacyStorageObjects {
 		r := results[i]
@@ -323,14 +324,14 @@ func readLegacyStorageOwner(c *Client) (*legacyStorage, bool, error) {
 }
 
 // listDeploymentMetas lists the metadata of a namespace's Deployments.
-func listDeploymentMetas(c *Client, namespace string) ([]objectMeta, error) {
+func listDeploymentMetas(c *Client, namespace string) ([]kube.ObjectMeta, error) {
 	var items []struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 	}
 	if err := c.ListInto(namespacedPath("apps/v1", "deployments", namespace, ""), &items); err != nil {
 		return nil, err
 	}
-	out := make([]objectMeta, 0, len(items))
+	out := make([]kube.ObjectMeta, 0, len(items))
 	for _, item := range items {
 		out = append(out, item.Metadata)
 	}
@@ -379,7 +380,7 @@ func (l *legacyStorage) hasPVC(name string) bool {
 func (l *legacyStorage) pvcsNotDeleting() []string {
 	var names []string
 	for _, p := range l.pvcs {
-		if !p.Meta.terminating() {
+		if !p.Meta.Terminating() {
 			names = append(names, p.Meta.Name)
 		}
 	}
@@ -406,7 +407,7 @@ func (l *legacyStorage) copiablePVCsNotDeleting() []string {
 // anyPVCTerminating reports whether a data PVC is being deleted.
 func (l *legacyStorage) anyPVCTerminating() bool {
 	for _, p := range l.pvcs {
-		if p.Meta.terminating() {
+		if p.Meta.Terminating() {
 			return true
 		}
 	}
@@ -455,7 +456,7 @@ func legacyStorageState(l *legacyStorage, dspas []dspaInfo, rec pipelineRecord, 
 			continue
 		}
 		name := d.Meta.Namespace + "/" + d.Meta.Name
-		if !d.Meta.terminating() {
+		if !d.Meta.Terminating() {
 			state.UsedBy = append(state.UsedBy, name)
 		}
 		if why, ok := repointable(d); ok {
@@ -473,7 +474,7 @@ func legacyStorageState(l *legacyStorage, dspas []dspaInfo, rec pipelineRecord, 
 	sort.Strings(state.Unrecorded)
 	movedReady := true
 	for _, d := range dspas {
-		if d.managedByTool() && !d.Meta.terminating() && !l.address.usedBy(d.Meta.Namespace, d.Host) && !d.objectStoreReady() {
+		if d.managedByTool() && !d.Meta.Terminating() && !l.address.usedBy(d.Meta.Namespace, d.Host) && !d.objectStoreReady() {
 			movedReady = false
 		}
 	}

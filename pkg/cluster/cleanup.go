@@ -165,7 +165,7 @@ func cleanupStopped(c *Client, notDone []cleanupPart, done, logs []string, reaso
 		msg += " Not done: " + joinTitles(titles) + "."
 	}
 	recordCleanupActivity(c, "stopped: "+reason, false)
-	return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: firstNonEmpty(code, "partial_failure")}
+	return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: kube.FirstNonEmpty(code, "partial_failure")}
 }
 
 // joinTitles joins "a", "b" and "c" as "a, b and c".

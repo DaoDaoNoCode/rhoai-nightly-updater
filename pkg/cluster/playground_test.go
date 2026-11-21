@@ -80,7 +80,7 @@ func (g *genAIFake) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	asUser := g.userToken != "" && r.Header.Get("Authorization") == "Bearer "+g.userToken
 	if asUser && r.Method+" "+r.URL.Path == "GET /gen-ai/api/v1/maas/models" {
-		_, _ = io.WriteString(w, firstNonEmpty(g.maasModels, `{"data":[]}`))
+		_, _ = io.WriteString(w, kube.FirstNonEmpty(g.maasModels, `{"data":[]}`))
 		return
 	}
 	for _, forwarding := range []string{"/gen-ai/api/v1/maas/", "/gen-ai/api/v1/lsd/responses", "/gen-ai/api/v1/genai-proxy/"} {
@@ -95,7 +95,7 @@ func (g *genAIFake) serve(w http.ResponseWriter, r *http.Request) {
 		if src := r.URL.Query()["sources"]; len(src) > 0 {
 			g.t.Errorf("aaa/models with sources %v: for sources=maas the dashboard asks MaaS with the caller's token", src)
 		}
-		_, _ = io.WriteString(w, firstNonEmpty(g.models[ns], `{"data":[]}`))
+		_, _ = io.WriteString(w, kube.FirstNonEmpty(g.models[ns], `{"data":[]}`))
 	case "GET /gen-ai/api/v1/lsd/status":
 		srv := g.servers[ns]
 		if srv == nil {

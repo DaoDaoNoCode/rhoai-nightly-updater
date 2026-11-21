@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -291,7 +292,7 @@ func (f *mlflowFake) resolveName(kind string, r *http.Request, body map[string]a
 		}
 		return out
 	case "path":
-		return []string{firstNonEmpty(params["mcp"], params["skill"])}
+		return []string{kube.FirstNonEmpty(params["mcp"], params["skill"])}
 	}
 	return nil
 }
@@ -687,7 +688,7 @@ func (f *mlflowFake) mlflowDeleteDemo() {
 
 func (f *mlflowFake) handleRegistry(w http.ResponseWriter, rule mlflowFakeRule, params map[string]string, body map[string]any) {
 	str := func(k string) string { s, _ := body[k].(string); return s }
-	name := firstNonEmpty(params["mcp"], params["skill"])
+	name := kube.FirstNonEmpty(params["mcp"], params["skill"])
 	srv, sk := f.mcp[name], f.skills[name]
 	notFound := func() { f.mlflowError(w, 404, "RESOURCE_DOES_NOT_EXIST", name+" not found") }
 	switch rule.key() {
@@ -770,7 +771,7 @@ func (f *mlflowFake) handleRegistry(w http.ResponseWriter, rule mlflowFakeRule, 
 			f.mlflowError(w, 400, "RESOURCE_ALREADY_EXISTS", "version exists")
 			return
 		}
-		srv.versions[v] = firstNonEmpty(str("status"), "draft")
+		srv.versions[v] = kube.FirstNonEmpty(str("status"), "draft")
 		f.writeJSON(w, map[string]string{"name": name, "version": v, "status": srv.versions[v], "created_by": fakeCaller})
 	case "GET /api/3.0/mlflow/mcp-servers/{mcp}/versions/{v}":
 		if srv == nil {

@@ -106,7 +106,7 @@ func conditionLine(cond dscCondition) string {
 	if cond.Reason != "" {
 		line += fmt.Sprintf(" (%s)", cond.Reason)
 	}
-	if msg := truncateText(cond.Message, 300); msg != "" {
+	if msg := kube.TruncateText(cond.Message, 300); msg != "" {
 		line += ": " + msg
 	}
 	return line
@@ -121,7 +121,7 @@ func failingConditions(conds []dscCondition) []string {
 		if !conditionFailing(cond) {
 			continue
 		}
-		msg := truncateText(cond.Message, 300)
+		msg := kube.TruncateText(cond.Message, 300)
 		if seen[msg] && msg != "" {
 			continue
 		}
@@ -503,7 +503,7 @@ func (a *dscAnalysis) conditionCauses(cc *classifiedCondition, titles map[string
 				}
 				state := "not installed"
 				if d.CSV != nil {
-					state = "installed but not ready (CSV " + nonEmpty(d.CSV.Phase, "phase unknown") + ")"
+					state = "installed but not ready (CSV " + kube.NonEmpty(d.CSV.Phase, "phase unknown") + ")"
 				}
 				add(fmt.Sprintf("%s %s is %s", kind, d.displayName(), state), d.problemID())
 			case b != nil:
@@ -635,7 +635,7 @@ func gateProblem(c *Client, gates []*classifiedCondition) Problem {
 				evidence = append(evidence, fmt.Sprintf("Not acknowledged: %s=%q", k, values[k]))
 				cmds = append(cmds, upgradeAckCommand(k))
 			}
-			fixes = append(fixes, fmt.Sprintf("Read what each gate is about (the operator's release notes name it), then acknowledge %s with the commands below.", verb(len(keys), "it", "them")))
+			fixes = append(fixes, fmt.Sprintf("Read what each gate is about (the operator's release notes name it), then acknowledge %s with the commands below.", kube.Verb(len(keys), "it", "them")))
 			p.TechnicalCmd = strings.Join(cmds, "\n")
 		}
 	}
@@ -742,7 +742,7 @@ func checkDataScienceCluster(c *Client) checkOutput {
 		default:
 			out.check.Status = "fail"
 			p, failing := a.notReadyProblem(dsc, titles, dsciProblem)
-			details = append(details, fmt.Sprintf("%s is not ready (%s)", dsc.Metadata.Name, countNoun(failing, "failing condition", "failing conditions")))
+			details = append(details, fmt.Sprintf("%s is not ready (%s)", dsc.Metadata.Name, kube.CountNoun(failing, "failing condition", "failing conditions")))
 			out.problems = append(out.problems, p)
 		}
 		for _, p := range causeProblems {
@@ -766,7 +766,7 @@ func checkDataScienceCluster(c *Client) checkOutput {
 			out.check.Status = "fail"
 			out.problems = append(out.problems, *dsciProblem)
 		}
-		details = append(details, fmt.Sprintf("DSCInitialization %s phase %s", dscis[0].Metadata.Name, nonEmpty(dscis[0].Status.Phase, "unknown")))
+		details = append(details, fmt.Sprintf("DSCInitialization %s phase %s", dscis[0].Metadata.Name, kube.NonEmpty(dscis[0].Status.Phase, "unknown")))
 	}
 
 	out.check.Detail = strings.Join(details, "; ")
@@ -778,7 +778,7 @@ func checkDataScienceCluster(c *Client) checkOutput {
 // failing conditions.
 func (a *dscAnalysis) notReadyProblem(dsc dscObject, titles map[string]string, dsciProblem *Problem) (Problem, int) {
 	ready := a.Ready
-	evidence := []string{fmt.Sprintf("DataScienceCluster %s: Ready=%s (%s): %s", dsc.Metadata.Name, ready.Status, ready.Reason, truncateText(ready.Message, 400))}
+	evidence := []string{fmt.Sprintf("DataScienceCluster %s: Ready=%s (%s): %s", dsc.Metadata.Name, ready.Status, ready.Reason, kube.TruncateText(ready.Message, 400))}
 	var related, unclassified, fixes []string
 	failing := 0
 	seen := map[string]bool{}

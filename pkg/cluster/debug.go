@@ -32,7 +32,7 @@ func GetDebugInfo(c *Client) (*types.DebugResponse, error) {
 		})
 	}
 	wg.Wait()
-	namespaces[1] = firstNonEmpty(appNS, "the applications namespace")
+	namespaces[1] = kube.FirstNonEmpty(appNS, "the applications namespace")
 
 	resp := &types.DebugResponse{}
 	var warnings []string

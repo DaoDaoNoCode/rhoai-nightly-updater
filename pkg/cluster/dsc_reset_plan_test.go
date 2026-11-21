@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -14,7 +15,7 @@ import (
 func changeList(plan *types.DSCPlan) []string {
 	var out []string
 	for _, ch := range plan.Changes {
-		from, to := nonEmpty(ch.From, "-"), nonEmpty(ch.To, "-")
+		from, to := kube.NonEmpty(ch.From, "-"), kube.NonEmpty(ch.To, "-")
 		if !ch.FromSet {
 			from = "-"
 		}
@@ -149,7 +150,7 @@ func TestApplySchemaDefaults(t *testing.T) {
 	applySchemaDefaults(obj, schema)
 	want := map[string]any{"present": map[string]any{"a": "x"}, "made": map[string]any{"a": "x"}, "null": "d", "nullOK": nil,
 		"list": []any{map[string]any{"b": float64(1)}, map[string]any{"b": 2}}, "byName": map[string]any{"one": map[string]any{"c": true}}}
-	if !jsonEqual(obj, want) {
+	if !kube.JSONEqual(obj, want) {
 		t.Fatalf("defaulted = %v\nwant      %v", obj, want)
 	}
 	if _, ok := obj["absent"]; ok {
@@ -180,7 +181,7 @@ func TestApplySchemaDefaultsNullAdditionalProperties(t *testing.T) {
 	} {
 		obj := map[string]any{"byName": map[string]any{"one": nil}}
 		applySchemaDefaults(obj, map[string]any{"properties": map[string]any{"byName": map[string]any{"additionalProperties": tc.schema}}})
-		if got := obj["byName"].(map[string]any)["one"]; !jsonEqual(got, tc.want) {
+		if got := obj["byName"].(map[string]any)["one"]; !kube.JSONEqual(got, tc.want) {
 			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
 		}
 	}

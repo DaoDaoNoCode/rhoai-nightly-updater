@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -389,7 +390,7 @@ func TestMaaSSetup_FreshClusterDoesEveryStep(t *testing.T) {
 	if og := mc.f.get("/apis/operators.coreos.com/v1/namespaces/kuadrant-system/operatorgroups/kuadrant-operator-group"); og == nil || og["spec"] != nil {
 		t.Fatalf("operator group = %v", og)
 	}
-	if ns := mc.f.get("/api/v1/namespaces/redhat-ai-gateway-infra"); ns == nil || ns["metadata"].(map[string]any)["labels"].(map[string]any)[managedByLabelKey] != managedByLabelValue {
+	if ns := mc.f.get("/api/v1/namespaces/redhat-ai-gateway-infra"); ns == nil || ns["metadata"].(map[string]any)["labels"].(map[string]any)[kube.ManagedByLabelKey] != kube.ManagedByLabelValue {
 		t.Fatalf("infra namespace = %v", ns)
 	}
 	svc := mc.f.get("/api/v1/namespaces/kuadrant-system/services/authorino-authorino-authorization")

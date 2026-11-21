@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // resourceFake is a small stateful Kubernetes API server for the quick-resource
@@ -334,19 +336,19 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	f.calls = append(f.calls, fakeCall{Method: r.Method, Path: r.URL.Path, ContentType: r.Header.Get("Content-Type"), Body: string(body), Query: r.URL.Query(), Token: token})
 	if code, ok := f.failAs[token+" "+r.Method+" "+r.URL.Path]; ok {
-		f.status(w, code, firstNonEmpty(f.failMessage[token+" "+r.Method+" "+r.URL.Path], "injected failure for this token"))
+		f.status(w, code, kube.FirstNonEmpty(f.failMessage[token+" "+r.Method+" "+r.URL.Path], "injected failure for this token"))
 		return
 	}
 	if dryRun {
 		f.requests = append(f.requests, "DRYRUN "+r.Method+" "+r.URL.Path)
 		if code, ok := f.failDryRun[r.Method+" "+r.URL.Path]; ok {
-			f.status(w, code, firstNonEmpty(f.failMessage[echoKey], "injected dry-run failure"))
+			f.status(w, code, kube.FirstNonEmpty(f.failMessage[echoKey], "injected dry-run failure"))
 			return
 		}
 	} else {
 		f.requests = append(f.requests, r.Method+" "+r.URL.Path)
 		if code, ok := f.fail[r.Method+" "+r.URL.Path]; ok {
-			f.status(w, code, firstNonEmpty(f.failMessage[echoKey], "injected failure"))
+			f.status(w, code, kube.FirstNonEmpty(f.failMessage[echoKey], "injected failure"))
 			return
 		}
 	}
@@ -443,7 +445,7 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		meta["resourceVersion"] = "1"
 		now := time.Now().UTC().Format(time.RFC3339)
 		meta["creationTimestamp"] = now
-		manager := firstNonEmpty(r.URL.Query().Get("fieldManager"), legacyPostManager)
+		manager := kube.FirstNonEmpty(r.URL.Query().Get("fieldManager"), legacyPostManager)
 		entry := map[string]any{"manager": manager, "operation": "Update", "apiVersion": k.gv, "time": now, "fieldsType": "FieldsV1"}
 		setOwnedPorts(entry, containerPorts(obj))
 		meta["managedFields"] = []any{entry}
@@ -641,7 +643,7 @@ func (f *resourceFake) serveJSONPatch(w http.ResponseWriter, r *http.Request, k 
 		f.status(w, 404, "not found")
 		return
 	}
-	var ops []jsonPatchOp
+	var ops []kube.JSONPatchOp
 	if err := json.Unmarshal(body, &ops); err != nil {
 		f.status(w, 400, "bad JSON patch")
 		return
@@ -659,9 +661,9 @@ func (f *resourceFake) serveJSONPatch(w http.ResponseWriter, r *http.Request, k 
 		}
 		spec = spec || strings.HasPrefix(op.Path, "/spec") && op.Op != "test"
 	}
-	next, err := applyJSONPatch(obj, ops)
+	next, err := kube.ApplyJSONPatch(obj, ops)
 	if err != nil {
-		if _, ok := errors.AsType[*errJSONPatchTest](err); ok {
+		if _, ok := errors.AsType[*kube.JSONPatchTestError](err); ok {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			_, _ = io.WriteString(w, apiServerPatchTestFailed)

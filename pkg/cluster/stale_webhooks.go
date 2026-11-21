@@ -519,7 +519,7 @@ func (e *webhookEnv) evaluate(cfg admissionConfig) *webhookVerdict {
 			v.Reason = fmt.Sprintf("it belongs to another operator's CSV (%s)", owner)
 			break
 		}
-		p := e.csvPresent(nonEmpty(labels["olm.owner.namespace"], SubNS), owner)
+		p := e.csvPresent(kube.NonEmpty(labels["olm.owner.namespace"], SubNS), owner)
 		switch {
 		case p.err != nil:
 			v.Reason = fmt.Sprintf("could not check its CSV %s: %v", owner, p.err)

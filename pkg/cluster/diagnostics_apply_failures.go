@@ -9,6 +9,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // "Objects the operator cannot update": leftovers of an upgrade, downgrade
@@ -447,12 +449,12 @@ func checkApplyFailures(c *Client) checkOutput {
 	switch {
 	case len(out.problems) > 0:
 		out.check.Status = "fail"
-		out.check.Detail = fmt.Sprintf("%s the operator cannot update", countNoun(len(out.problems), "object", "objects"))
+		out.check.Detail = fmt.Sprintf("%s the operator cannot update", kube.CountNoun(len(out.problems), "object", "objects"))
 	case len(errs) > 0:
 		out.check.Status = "warn"
 		out.check.Detail = "No apply failures in the CRs that could be read"
 	default:
-		out.check.Detail = fmt.Sprintf("No apply failures reported (%s checked)", countNoun(scanned, "CR", "CRs"))
+		out.check.Detail = fmt.Sprintf("No apply failures reported (%s checked)", kube.CountNoun(scanned, "CR", "CRs"))
 	}
 	if len(errs) > 0 {
 		out.check.Detail += "; could not read: " + strings.Join(errs, "; ")
@@ -496,7 +498,7 @@ func applyFailureProblem(c *Client, api componentAPI, operators *moduleOperatorF
 	f := rf.applyFailure
 	evidence := []string{fmt.Sprintf("Reported by %s", strings.Join(names, ", "))}
 	for _, d := range rf.details {
-		evidence = append(evidence, fmt.Sprintf("Failure deploying %s (%s): %s", f.object(), f.GroupVersion, truncateText(d, 500)))
+		evidence = append(evidence, fmt.Sprintf("Failure deploying %s (%s): %s", f.object(), f.GroupVersion, kube.TruncateText(d, 500)))
 	}
 	p := Problem{
 		ID:              f.genericProblemID(),
@@ -522,7 +524,7 @@ func applyFailureProblem(c *Client, api componentAPI, operators *moduleOperatorF
 			evidence = append(evidence, crdWriterEvidence(c, crd)...)
 			p.AffectedObjects = append(p.AffectedObjects, "CustomResourceDefinition "+crd)
 		}
-		crdRef := nonEmpty(crd, fmt.Sprintf("the CRD of %s in group %s", f.Kind, f.group()))
+		crdRef := kube.NonEmpty(crd, fmt.Sprintf("the CRD of %s in group %s", f.Kind, f.group()))
 		fixes = append(fixes, fmt.Sprintf("Re-apply %s from the installed operator version's bundle, then correct the listed fields of %s to the type that CRD expects. "+
 			"The right value needs judgement, so there is no automatic fix.", crdRef, f.object()))
 		cmds = append(cmds, f.ocCommand("get", "-o", "yaml"))
@@ -534,7 +536,7 @@ func applyFailureProblem(c *Client, api componentAPI, operators *moduleOperatorF
 	}
 	recreate := rf.has(applyImmutable) || rf.has(applyControllerOwner)
 	if rf.has(applyImmutable) {
-		fields := nonEmpty(strings.Join(rf.fields[applyImmutable], ", "), "a field")
+		fields := kube.NonEmpty(strings.Join(rf.fields[applyImmutable], ", "), "a field")
 		titles = append(titles, fmt.Sprintf("must be recreated: %s cannot be changed", fields))
 		descriptions = append(descriptions, fmt.Sprintf("The operator cannot apply its version of %s because %s is immutable; an older version created the object with a different value. "+
 			"The operator keeps failing until the object is deleted.", f.object(), fields))
@@ -621,7 +623,7 @@ func crdWriterEvidence(c *Client, crd string) []string {
 	if manager == "" {
 		return []string{fmt.Sprintf("CRD %s: its managedFields do not say who wrote spec.versions", crd)}
 	}
-	line := fmt.Sprintf("CRD %s: spec.versions last written by %s (%s) at %s", crd, manager, operation, nonEmpty(when, "an unknown time"))
+	line := fmt.Sprintf("CRD %s: spec.versions last written by %s (%s) at %s", crd, manager, operation, kube.NonEmpty(when, "an unknown time"))
 	if strings.Contains(strings.ToLower(manager), "catalog") || strings.Contains(strings.ToLower(manager), "olm") {
 		line += "; OLM's catalog operator writes the CRDs of a bundle when it installs it"
 	}

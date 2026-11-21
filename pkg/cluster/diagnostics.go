@@ -341,7 +341,7 @@ func checkRHOAIPods(c *Client) checkOutput {
 func podIssuesOutput(c *Client, name string, issues []podIssue, podCount int, scanned []string, critical bool) checkOutput {
 	if len(issues) == 0 {
 		return checkOutput{check: CheckResult{Name: name, Status: "pass",
-			Detail: fmt.Sprintf("%s healthy in %s", countNoun(podCount, "pod", "pods"), strings.Join(scanned, ", "))}}
+			Detail: fmt.Sprintf("%s healthy in %s", kube.CountNoun(podCount, "pod", "pods"), strings.Join(scanned, ", "))}}
 	}
 	out := checkOutput{}
 	var summaries []string
@@ -509,7 +509,7 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 			Severity:     fc.severity,
 			Title:        fmt.Sprintf("OLM reports %s for the operator Subscription", cond.Type),
 			Description:  fmt.Sprintf("Subscription %s (source %s, channel %s) has condition %s=True.", SubName, sub.Source, sub.Channel, cond.Type),
-			Evidence:     []string{fmt.Sprintf("%s (%s): %s", cond.Type, cond.Reason, truncateText(cond.Message, 600))},
+			Evidence:     []string{fmt.Sprintf("%s (%s): %s", cond.Type, cond.Reason, kube.TruncateText(cond.Message, 600))},
 			Fix:          subscriptionConditionFix(cond.Type),
 			TechnicalCmd: "oc get subscription " + SubName + " -n " + SubNS + " -o jsonpath='{.status.conditions}'",
 		})
@@ -535,7 +535,7 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 	case "UpgradePending":
 		if !sub.settled(now) {
 			if out.check.Detail == "" {
-				out.check = CheckResult{Name: name, Status: "pass", Detail: fmt.Sprintf("Upgrade in progress (InstallPlan %s, %s)", nonEmpty(sub.InstallPlan, "pending"), age)}
+				out.check = CheckResult{Name: name, Status: "pass", Detail: fmt.Sprintf("Upgrade in progress (InstallPlan %s, %s)", kube.NonEmpty(sub.InstallPlan, "pending"), age)}
 			}
 			break
 		}
@@ -546,8 +546,8 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 			ID:           "subscription-upgrade-pending",
 			Severity:     "warning",
 			Title:        fmt.Sprintf("The operator upgrade has been pending for %s", age),
-			Description:  fmt.Sprintf("OLM created InstallPlan %s for %s but has not finished it. UpgradePending is normal for a few minutes during every update; after %s it usually means the InstallPlan or the new CSV is stuck.", nonEmpty(sub.InstallPlan, "(none)"), nonEmpty(sub.CurrentCSV, "the new version"), formatDuration(operatorStuckAfter)),
-			Evidence:     []string{fmt.Sprintf("Subscription state UpgradePending since %s, InstallPlan %s, currentCSV %s", sub.Changed.UTC().Format(time.RFC3339), nonEmpty(sub.InstallPlan, "-"), nonEmpty(sub.CurrentCSV, "-"))},
+			Description:  fmt.Sprintf("OLM created InstallPlan %s for %s but has not finished it. UpgradePending is normal for a few minutes during every update; after %s it usually means the InstallPlan or the new CSV is stuck.", kube.NonEmpty(sub.InstallPlan, "(none)"), kube.NonEmpty(sub.CurrentCSV, "the new version"), formatDuration(operatorStuckAfter)),
+			Evidence:     []string{fmt.Sprintf("Subscription state UpgradePending since %s, InstallPlan %s, currentCSV %s", sub.Changed.UTC().Format(time.RFC3339), kube.NonEmpty(sub.InstallPlan, "-"), kube.NonEmpty(sub.CurrentCSV, "-"))},
 			Fix:          "Check the Install plan and Operator installed results below for the cause. " + recoveryGuidance,
 			TechnicalCmd: "oc get subscription " + SubName + " -n " + SubNS + " -o jsonpath='{.status}'",
 		})
@@ -557,7 +557,7 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 			ID:           "subscription-failed",
 			Severity:     "critical",
 			Title:        "The operator Subscription is Failed",
-			Description:  fmt.Sprintf("OLM marked the Subscription Failed because the InstallPlan or CSV for %s failed.", nonEmpty(sub.CurrentCSV, "the target version")),
+			Description:  fmt.Sprintf("OLM marked the Subscription Failed because the InstallPlan or CSV for %s failed.", kube.NonEmpty(sub.CurrentCSV, "the target version")),
 			Fix:          recoveryGuidance,
 			TechnicalCmd: "oc describe subscription " + SubName + " -n " + SubNS,
 		})
@@ -645,7 +645,7 @@ func checkCSVHealth(c *Client) checkOutput {
 				} `json:"status"`
 			}
 			if json.Unmarshal(body, &full) == nil && (full.Status.Reason != "" || full.Status.Message != "") {
-				evidence = append(evidence, fmt.Sprintf("Reason %s: %s", full.Status.Reason, truncateText(full.Status.Message, 600)))
+				evidence = append(evidence, fmt.Sprintf("Reason %s: %s", full.Status.Reason, kube.TruncateText(full.Status.Message, 600)))
 			}
 		}
 		out.check = CheckResult{Name: name, Status: "fail", Detail: fmt.Sprintf("Operator installation failed (%s)", csv.Name)}
@@ -809,7 +809,7 @@ func checkInstallPlanHealth(c *Client) checkOutput {
 		sort.Strings(affected)
 		evidence = append(evidence, fmt.Sprintf("Install plan: %s, Phase: Failed, CSVs: %s", latest.Metadata.Name, strings.Join(latest.Spec.ClusterServiceVersionNames, ", ")))
 		if reason != "" {
-			evidence = append(evidence, fmt.Sprintf("Reason: %s", truncateText(reason, 600)))
+			evidence = append(evidence, fmt.Sprintf("Reason: %s", kube.TruncateText(reason, 600)))
 		}
 		for _, k := range kept {
 			evidence = append(evidence, "Not deleted automatically: "+k)
@@ -818,7 +818,7 @@ func checkInstallPlanHealth(c *Client) checkOutput {
 			ID:           "installplan-failed",
 			Severity:     "critical",
 			Title:        "The install plan failed",
-			Description:  fmt.Sprintf("OLM could not execute install plan %s. %s", latest.Metadata.Name, truncateText(reason, 300)),
+			Description:  fmt.Sprintf("OLM could not execute install plan %s. %s", latest.Metadata.Name, kube.TruncateText(reason, 300)),
 			Evidence:     evidence,
 			Fix:          "Update to a newer nightly or use Refresh operator. If the same build fails again, the build itself is broken.",
 			LearnMore:    "OLM documentation, \"Opting into UnsafeFailForward upgrades\": to recover from a failed InstallPlan, the user deletes it and a new InstallPlan is generated.",
@@ -1042,7 +1042,7 @@ func checkNodeCapacity(c *Client) checkOutput {
 		out.problems = append(out.problems, Problem{
 			ID:           "nodes-not-ready",
 			Severity:     "warning",
-			Title:        fmt.Sprintf("%s %s not ready", countNoun(len(notReadyNodes), "cluster node", "cluster nodes"), verb(len(notReadyNodes), "is", "are")),
+			Title:        fmt.Sprintf("%s %s not ready", kube.CountNoun(len(notReadyNodes), "cluster node", "cluster nodes"), kube.Verb(len(notReadyNodes), "is", "are")),
 			Description:  "Some cluster nodes are not in a Ready state. This can prevent pods from being scheduled and cause deployments to get stuck.",
 			Evidence:     append([]string{fmt.Sprintf("Not-ready nodes: %s", strings.Join(notReadyNodes, ", "))}, fmt.Sprintf("Total nodes: %d", totalNodes)),
 			Fix:          "Check the cluster infrastructure. Node issues are typically caused by resource exhaustion, network problems, or infrastructure failures.",
@@ -1144,13 +1144,13 @@ func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error
 		return &types.OperationResponse{
 			Success:   false,
 			Message:   fmt.Sprintf("Failed to list install plans: %v", err),
-			ErrorCode: errorCodeFromK8sErr(err),
+			ErrorCode: kube.ErrorCodeFromK8sErr(err),
 		}, nil
 	}
 
 	sub, err := readSubscriptionState(c)
 	if err != nil {
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Failed to read the Subscription: %v", err), ErrorCode: errorCodeFromK8sErr(err)}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Failed to read the Subscription: %v", err), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
 	var logs, deleted, failed, changed []string
 	for _, ip := range plans {
@@ -1187,7 +1187,7 @@ func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error
 
 	switch {
 	case len(deleted) == 0 && len(failed) == 0 && len(changed) > 0:
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("%s %s changed after %s checked, so nothing was deleted. Run diagnostics again.", verb(len(changed), "Install plan", "Install plans"), strings.Join(changed, ", "), verb(len(changed), "it was", "they were")), Logs: logs, ErrorCode: "conflict"}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("%s %s changed after %s checked, so nothing was deleted. Run diagnostics again.", kube.Verb(len(changed), "Install plan", "Install plans"), strings.Join(changed, ", "), kube.Verb(len(changed), "it was", "they were")), Logs: logs, ErrorCode: "conflict"}, nil
 	case len(deleted) == 0 && len(failed) == 0:
 		return nothingToDo("no failed install plan can be deleted safely (see the log). Nothing was deleted.", logs), nil
 	case len(failed) > 0 && len(deleted) == 0:
@@ -1202,7 +1202,7 @@ func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error
 	}
 	return &types.OperationResponse{
 		Success: true,
-		Message: fmt.Sprintf("Deleted %s: %s. OLM resolves the Subscription again if it was waiting on one of them.", countNoun(len(deleted), "failed install plan", "failed install plans"), strings.Join(deleted, ", ")),
+		Message: fmt.Sprintf("Deleted %s: %s. OLM resolves the Subscription again if it was waiting on one of them.", kube.CountNoun(len(deleted), "failed install plan", "failed install plans"), strings.Join(deleted, ", ")),
 		Logs:    logs,
 	}, nil
 }
@@ -1219,7 +1219,7 @@ func applyFixDisableComponent(c *Client, compName string) (*types.OperationRespo
 	}
 	v, err := readDSCView(c)
 	if err != nil {
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot find the DataScienceCluster: %v", err), ErrorCode: errorCodeFromK8sErr(err)}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot find the DataScienceCluster: %v", err), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
 	switch {
 	case v.state == DSCStateNoCRD:
@@ -1245,7 +1245,7 @@ func applyFixDisableComponent(c *Client, compName string) (*types.OperationRespo
 	}
 	res := v.setManagementState(c, types.DSCToggleRequest{Name: v.name, Path: compName, From: state, To: "Removed"}, "disable-component", false)
 	if res.Success {
-		res.Message = fmt.Sprintf("Set %s to Removed (was %s). The operator will clean up the component.", compName, nonEmpty(state, "unset"))
+		res.Message = fmt.Sprintf("Set %s to Removed (was %s). The operator will clean up the component.", compName, kube.NonEmpty(state, "unset"))
 	}
 	return res, nil
 }

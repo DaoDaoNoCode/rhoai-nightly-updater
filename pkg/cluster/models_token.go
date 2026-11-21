@@ -195,7 +195,7 @@ func tokenObject(kind, project, model, modelUID string) map[string]any {
 		"labels":    labels,
 		"ownerReferences": []any{map[string]any{
 			"apiVersion": llmisvcAPIVersion, "kind": "LLMInferenceService", "name": model,
-			"uid": firstNonEmpty(modelUID, placeholderUID), "blockOwnerDeletion": false,
+			"uid": kube.FirstNonEmpty(modelUID, placeholderUID), "blockOwnerDeletion": false,
 		}},
 	}
 	obj := map[string]any{"metadata": meta}
@@ -254,15 +254,15 @@ func planModelToken(c *Client, project, model, modelUID, secretUID string) (toke
 	plan := tokenPlan{missing: map[string]bool{}}
 	for _, kind := range tokenParts[:3] {
 		path := tokenObjectPath(kind, project, model)
-		meta, found, err := readObjectMeta(c, path)
+		meta, found, err := kube.ReadObjectMeta(c, path)
 		if err != nil {
-			return plan, fmt.Sprintf("Cannot read %s %s/%s: %v. Nothing was changed.%s", kind, project, tokenObjectName(kind, model), err, templateHint(err)), errorCodeFromK8sErr(err)
+			return plan, fmt.Sprintf("Cannot read %s %s/%s: %v. Nothing was changed.%s", kind, project, tokenObjectName(kind, model), err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 		if !found {
 			plan.missing[kind] = true
 			continue
 		}
-		if modelUID == "" || !meta.ownedBy(modelUID) {
+		if modelUID == "" || !meta.OwnedBy(modelUID) {
 			return plan, foreignTokenRefusal(kind, project, model), "not_managed"
 		}
 	}
@@ -270,7 +270,7 @@ func planModelToken(c *Client, project, model, modelUID, secretUID string) (toke
 	if secretUID != "" {
 		state, err := probeWithUID(c, tokenSecretPathOf(project, model), secretUID)
 		if err != nil {
-			return plan, fmt.Sprintf("Cannot check Secret %s/%s: %v. Nothing was changed.%s", project, tokenSecretName(model), err, templateHint(err)), errorCodeFromK8sErr(err)
+			return plan, fmt.Sprintf("Cannot check Secret %s/%s: %v. Nothing was changed.%s", project, tokenSecretName(model), err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 		if state == "other" {
 			return plan, foreignTokenRefusal(tokenPartSecret, project, model), "not_managed"
@@ -307,7 +307,7 @@ func applyModelToken(c *Client, project, model, modelUID string, plan tokenPlan,
 		switch {
 		case err == nil:
 			if kind == tokenPartSecret && !dryRun {
-				meta, perr := parseObjectMeta(body)
+				meta, perr := kube.ParseObjectMeta(body)
 				if perr != nil || meta.UID == "" {
 					return "", fmt.Sprintf("%s was created, but its UID could not be read from the answer. Delete it (oc delete secret %s -n %s) and set up again.", desc, tokenSecretName(model), project), "internal"
 				}
@@ -317,8 +317,8 @@ func applyModelToken(c *Client, project, model, modelUID string, plan tokenPlan,
 			// The Role is made first in the real run.
 		case kube.IsK8sConflict(err) && kind != tokenPartSecret && !dryRun:
 			// Made meanwhile: it must be the model's.
-			meta, found, rerr := readObjectMeta(c, tokenObjectPath(kind, project, model))
-			if rerr != nil || !found || !meta.ownedBy(modelUID) {
+			meta, found, rerr := kube.ReadObjectMeta(c, tokenObjectPath(kind, project, model))
+			if rerr != nil || !found || !meta.OwnedBy(modelUID) {
 				return "", foreignTokenRefusal(kind, project, model), "not_managed"
 			}
 		case kube.IsK8sConflict(err):
@@ -328,7 +328,7 @@ func applyModelToken(c *Client, project, model, modelUID string, plan tokenPlan,
 			if dryRun {
 				verb = "The API server rejects"
 			}
-			return "", fmt.Sprintf("%s %s: %v.%s", verb, desc, err, templateHint(err)), errorCodeFromK8sErr(err)
+			return "", fmt.Sprintf("%s %s: %v.%s", verb, desc, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 	}
 	return secretUID, "", ""
@@ -344,18 +344,18 @@ func deleteModelToken(c *Client, project, model, modelUID, secretUID string) []s
 	var logs []string
 	for _, kind := range tokenParts[:3] {
 		path := tokenObjectPath(kind, project, model)
-		meta, found, err := readObjectMeta(c, path)
-		if err != nil || !found || !meta.ownedBy(modelUID) {
+		meta, found, err := kube.ReadObjectMeta(c, path)
+		if err != nil || !found || !meta.OwnedBy(modelUID) {
 			continue
 		}
-		if _, err := deleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
+		if _, err := kube.DeleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 			slog.Warn("cannot delete a model's token object; garbage collection removes it with the model", "kind", kind, "project", project, "model", model, "error", err)
 			continue
 		}
 		logs = append(logs, fmt.Sprintf("OK: %s %s/%s deleted", kind, project, tokenObjectName(kind, model)))
 	}
 	if secretUID != "" {
-		_, err := deleteWithUID(c, tokenSecretPathOf(project, model), secretUID)
+		_, err := kube.DeleteWithUID(c, tokenSecretPathOf(project, model), secretUID)
 		switch {
 		case err == nil:
 			logs = append(logs, fmt.Sprintf("OK: Secret %s/%s deleted", project, tokenSecretName(model)))

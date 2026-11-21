@@ -23,7 +23,7 @@ func (m *maasRun) deleteInfraNamespace(rec *maasRecord, ns string) (string, erro
 	if !ok {
 		return "", forget()
 	}
-	meta, found, err := readObjectMeta(c, path)
+	meta, found, err := kube.ReadObjectMeta(c, path)
 	switch {
 	case err != nil:
 		return fmt.Sprintf("Kept namespace %s, which this tool created: it cannot be read (%v). Remove again to retry.", ns, err), nil
@@ -31,7 +31,7 @@ func (m *maasRun) deleteInfraNamespace(rec *maasRecord, ns string) (string, erro
 		return "", forget()
 	case !toolOwned(meta):
 		return fmt.Sprintf("Kept namespace %s: it no longer carries this tool's label.", ns), forget()
-	case meta.terminating():
+	case meta.Terminating():
 		return "", forget()
 	}
 	if dsc, err := readMaaSDSC(c); err != nil || dsc.maas == "Managed" {
@@ -44,7 +44,7 @@ func (m *maasRun) deleteInfraNamespace(rec *maasRecord, ns string) (string, erro
 	if len(left) > 0 {
 		return fmt.Sprintf("Kept namespace %s, which this tool created: it still holds %s. Remove again once they are gone.", ns, strings.Join(left, ", ")), nil
 	}
-	if _, err := deleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
+	if _, err := kube.DeleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 		return fmt.Sprintf("Kept namespace %s: deleting it failed (%v). Remove again to retry.", ns, err), nil
 	}
 	m.logs = append(m.logs, "OK: Namespace "+ns+" deleted")

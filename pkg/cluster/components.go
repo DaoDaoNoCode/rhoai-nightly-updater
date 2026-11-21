@@ -658,7 +658,7 @@ func componentCause(cond dscCondition) string {
 		return "An upgrade gate holds provisioning"
 	case len(parseMissingDependencies(cond.Message)) > 0:
 		deps := parseMissingDependencies(cond.Message)
-		return fmt.Sprintf("Prerequisite %s not installed: %s", verb(len(deps), "operator", "operators"), strings.Join(deps, ", "))
+		return fmt.Sprintf("Prerequisite %s not installed: %s", kube.Verb(len(deps), "operator", "operators"), strings.Join(deps, ", "))
 	case strings.Contains(lower, "observedgeneration < generation") || strings.Contains(lower, "status is stale"):
 		return "Its module operator has not reconciled the current spec yet"
 	case len(parseApplyFailures(cond.Message)) > 0:
@@ -700,12 +700,12 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 			Success:   false,
 			Message:   fmt.Sprintf("Failed to check for existing DSC: %v", err),
 			Logs:      logs,
-			ErrorCode: errorCodeFromK8sErr(err),
+			ErrorCode: kube.ErrorCodeFromK8sErr(err),
 		}, nil
 	}
 	if g, err := readOperatorGitOps(c); err != nil {
-		return &types.OperationResponse{Success: false, Message: "Cannot check whether Argo CD manages the operator: " + err.Error(), Logs: logs, ErrorCode: errorCodeFromK8sErr(err)}, nil
-	} else if app := nonEmpty(g.subscriptionApp, g.catalogApp); app != "" {
+		return &types.OperationResponse{Success: false, Message: "Cannot check whether Argo CD manages the operator: " + err.Error(), Logs: logs, ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
+	} else if app := kube.NonEmpty(g.subscriptionApp, g.catalogApp); app != "" {
 		// Argo CD only: an Argo CD application that installs the operator
 		// (the odh-gitops chart) renders the DSC too. An ACM policy that
 		// enforces the catalog says nothing about the DSC.
@@ -733,7 +733,7 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 	logs = append(logs, "Creating default DataScienceCluster...")
 	defaults, fetchErr := fetchDefaultDSCSpec(c, "")
 	if fetchErr != nil {
-		return &types.OperationResponse{Success: false, Message: "Failed to fetch version-matched DSC defaults: " + fetchErr.Error(), Logs: logs, ErrorCode: nonEmpty(errorCodeFromK8sErr(fetchErr), "prerequisites")}, nil
+		return &types.OperationResponse{Success: false, Message: "Failed to fetch version-matched DSC defaults: " + fetchErr.Error(), Logs: logs, ErrorCode: kube.NonEmpty(kube.ErrorCodeFromK8sErr(fetchErr), "prerequisites")}, nil
 	}
 	logs = append(logs, fmt.Sprintf("DSC spec source: %s (%s)", defaults.SourceDescription, defaults.Version))
 
@@ -752,7 +752,7 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 			Success:   false,
 			Message:   fmt.Sprintf("Failed to create DataScienceCluster: %v", createErr),
 			Logs:      logs,
-			ErrorCode: errorCodeFromK8sErr(createErr),
+			ErrorCode: kube.ErrorCodeFromK8sErr(createErr),
 		}, nil
 	}
 

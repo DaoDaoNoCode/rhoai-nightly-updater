@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -808,7 +809,7 @@ func TestMaaSDatabase_EarlierBuildsCNPGIsAdoptedAsCNPG(t *testing.T) {
 
 func toolOwnedFake(obj map[string]any) bool {
 	raw, _ := json.Marshal(obj["metadata"])
-	var meta objectMeta
+	var meta kube.ObjectMeta
 	_ = json.Unmarshal(raw, &meta)
 	return toolOwned(meta)
 }

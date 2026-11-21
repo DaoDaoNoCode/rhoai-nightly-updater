@@ -239,7 +239,7 @@ func parseSampleAPIError(server string, status int, body []byte) *sampleAPIError
 	}
 	if json.Unmarshal(body, &parsed) == nil {
 		e.Code = parsed.ErrorCode
-		e.Message = firstNonEmpty(parsed.Message, parsed.Error)
+		e.Message = kube.FirstNonEmpty(parsed.Message, parsed.Error)
 		if e.Message == "" && len(parsed.Detail) > 0 {
 			var s string
 			if json.Unmarshal(parsed.Detail, &s) == nil {

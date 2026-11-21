@@ -44,7 +44,7 @@ type dscView struct {
 	state      string
 	count      int
 	obj        map[string]any
-	meta       objectMeta
+	meta       kube.ObjectMeta
 	name, uid  string
 	version    string // the version the DSC was read at, "v3"
 	apiVersion string // "datasciencecluster.opendatahub.io/v3"
@@ -74,7 +74,7 @@ type dscView struct {
 // app.kubernetes.io/managed-by: Helm (RHOAI-Build-Config ships such a chart,
 // rhai-on-openshift-chart, with a DataScienceCluster). "" when neither is
 // set.
-func helmManagerOf(meta objectMeta) string {
+func helmManagerOf(meta kube.ObjectMeta) string {
 	if name := meta.Annotations["meta.helm.sh/release-name"]; name != "" {
 		if ns := meta.Annotations["meta.helm.sh/release-namespace"]; ns != "" {
 			return ns + "/" + name
@@ -151,10 +151,10 @@ func (v *dscView) readDefaults(c *Client) {
 	v.op = op
 	ex, ok := dscExamplesFromALM(op.ALMExamples)[v.version]
 	if !ok {
-		v.defaultsErr = fmt.Sprintf("The installed operator %s ships no DataScienceCluster %s example in its CSV's alm-examples, so there is no release default to compare with.", nonEmpty(op.Version, op.Name), v.version)
+		v.defaultsErr = fmt.Sprintf("The installed operator %s ships no DataScienceCluster %s example in its CSV's alm-examples, so there is no release default to compare with.", kube.NonEmpty(op.Version, op.Name), v.version)
 		return
 	}
-	spec, _ := normalizeJSON(ex.Spec["spec"]).(map[string]any)
+	spec, _ := kube.NormalizeJSON(ex.Spec["spec"]).(map[string]any)
 	if spec == nil {
 		v.defaultsErr = "The release default has no spec."
 		return
@@ -170,21 +170,7 @@ func (v *dscView) readDefaults(c *Client) {
 	}
 	v.defaults = spec
 	meta, _ := ex.Spec["metadata"].(map[string]any)
-	v.defaultsLabel, _ = normalizeJSON(meta["labels"]).(map[string]any)
-}
-
-// normalizeJSON returns v as encoding/json decodes it (YAML numbers become
-// float64), so values compare and patch alike.
-func normalizeJSON(v any) any {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return nil
-	}
-	var out any
-	if json.Unmarshal(raw, &out) != nil {
-		return nil
-	}
-	return out
+	v.defaultsLabel, _ = kube.NormalizeJSON(meta["labels"]).(map[string]any)
 }
 
 func (v *dscView) components() map[string]any {
@@ -311,11 +297,11 @@ func (v *dscView) readOnlyReason() (string, string) {
 	case v.helm != "":
 		return fmt.Sprintf("DataScienceCluster %s is managed by Helm (release %s): the next helm upgrade would undo a change made here, and a hard reset would replace the object Helm tracks. Change the chart's values instead. Nothing was changed.", v.name, v.helm), kube.ErrorCodeGitOpsManaged
 	case v.meta.DeletionTimestamp != "":
-		return fmt.Sprintf("DataScienceCluster %s is being deleted (finalizers: %s). Nothing was changed.", v.name, nonEmpty(strings.Join(v.meta.Finalizers, ", "), "none")), "conflict"
+		return fmt.Sprintf("DataScienceCluster %s is being deleted (finalizers: %s). Nothing was changed.", v.name, kube.NonEmpty(strings.Join(v.meta.Finalizers, ", "), "none")), "conflict"
 	case v.crdErr != nil:
 		return "Cannot read the DataScienceCluster CRD, so changes cannot be checked against it: " + v.crdErr.Error(), "prerequisites"
 	case v.crd.storage() != v.version:
-		return fmt.Sprintf("The DataScienceCluster is read as %s, but the CRD stores %s: the operator's conversion does not work now, so this page changes nothing. Diagnostics explains the conversion failure.", v.version, nonEmpty(v.crd.storage(), "no version")), "prerequisites"
+		return fmt.Sprintf("The DataScienceCluster is read as %s, but the CRD stores %s: the operator's conversion does not work now, so this page changes nothing. Diagnostics explains the conversion failure.", v.version, kube.NonEmpty(v.crd.storage(), "no version")), "prerequisites"
 	}
 	return "", ""
 }
@@ -376,7 +362,7 @@ func (v *dscView) model() *types.DSCManager {
 	}
 	for _, cd := range conds {
 		if isUpgradeGateCondition(dscCondition{Type: cd.Type, Status: cd.Status, Reason: cd.Reason, Message: cd.Message}) && cd.Status != "True" {
-			out.UpgradeGates = append(out.UpgradeGates, fmt.Sprintf("%s (%s): %s", cd.Type, cd.Reason, truncateText(cd.Message, 300)))
+			out.UpgradeGates = append(out.UpgradeGates, fmt.Sprintf("%s (%s): %s", cd.Type, cd.Reason, kube.TruncateText(cd.Message, 300)))
 		}
 	}
 	statusComps, _ := st["components"].(map[string]any)
@@ -543,7 +529,7 @@ func (v *dscView) mismatches() []types.DSCMismatch {
 // dscPlanned is a plan and the JSON Patch that carries it out.
 type dscPlanned struct {
 	plan *types.DSCPlan
-	ops  []jsonPatchOp
+	ops  []kube.JSONPatchOp
 	// sets are checked in the API server's answer: a value it pruned
 	// silently would otherwise pass as done.
 	sets []dscAssign
@@ -569,7 +555,7 @@ func (v *dscView) finish(c *Client, p *dscPlanned, teardown bool) *dscPlanned {
 	if len(p.ops) == 0 {
 		return p.refuse("The DataScienceCluster already matches. Nothing to change.", "nothing_to_do")
 	}
-	after, err := applyJSONPatch(v.obj, p.ops)
+	after, err := kube.ApplyJSONPatch(v.obj, p.ops)
 	if err != nil {
 		return p.refuse("Cannot work out the change: "+err.Error(), "internal")
 	}
@@ -668,7 +654,7 @@ func diffFields(before, after map[string]any, path []string, out *[]types.DSCCha
 			diffFields(bm, nil, p, out)
 		case aIsMap && !bOK:
 			diffFields(nil, am, p, out)
-		case !jsonEqual(b, a) || bOK != aOK:
+		case !kube.JSONEqual(b, a) || bOK != aOK:
 			*out = append(*out, types.DSCChange{Path: strings.Join(p, "."), From: fieldText(b), FromSet: bOK, To: fieldText(a), ToSet: aOK})
 		}
 	}
@@ -1038,7 +1024,7 @@ func (v *dscView) turnedOn() []dscToggle {
 // in the plan's TurnedOn (always, so the dialog can offer the option) and
 // Kept (with keep).
 func (v *dscView) resetTarget(plan *types.DSCPlan, keep bool) map[string]any {
-	target, _ := normalizeJSON(v.defaultComponents()).(map[string]any)
+	target, _ := kube.NormalizeJSON(v.defaultComponents()).(map[string]any)
 	if target == nil {
 		target = map[string]any{}
 	}
@@ -1123,7 +1109,7 @@ func (v *dscView) resetDiff(schema, live, target map[string]any, path []string, 
 			tm, tIsMap := tv.(map[string]any)
 			if lIsMap && tIsMap {
 				v.resetDiff(child, lm, tm, p, sets, removes)
-			} else if !jsonEqual(lv, tv) {
+			} else if !kube.JSONEqual(lv, tv) {
 				*sets = append(*sets, dscAssign{Path: componentsPath(p...), Value: tv})
 			}
 		case tok:
@@ -1183,7 +1169,7 @@ func dscWriteError(err error, dryRun bool) *types.OperationResponse {
 	if errors.As(err, &k) && k.K8sMessage != "" {
 		msg = k.K8sMessage
 	}
-	return &types.OperationResponse{Success: false, ErrorCode: nonEmpty(errorCodeFromK8sErr(err), "validation"), Logs: []string{msg},
+	return &types.OperationResponse{Success: false, ErrorCode: kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "validation"), Logs: []string{msg},
 		Message: what + ": " + msg + ". Nothing was changed."}
 }
 
@@ -1202,7 +1188,7 @@ func dscObjectPath(version, name string) string {
 // patchDSCFields sends a JSON Patch to the DataScienceCluster with the
 // components field manager and fieldValidation=Strict, as a server-side dry
 // run when dryRun is set.
-func patchDSCFields(c *Client, path string, ops []jsonPatchOp, dryRun bool) ([]byte, error) {
+func patchDSCFields(c *Client, path string, ops []kube.JSONPatchOp, dryRun bool) ([]byte, error) {
 	body, err := json.Marshal(ops)
 	if err != nil {
 		return nil, err
@@ -1230,7 +1216,7 @@ func (v *dscView) write(c *Client, p *dscPlanned) (res *types.OperationResponse,
 		return &types.OperationResponse{Success: false, ErrorCode: "internal",
 			Message: fmt.Sprintf("DataScienceCluster %s was read without a uid or resourceVersion, so the change cannot be limited to the object that was checked. Nothing was changed.", v.name)}, false
 	}
-	ops := append([]jsonPatchOp{
+	ops := append([]kube.JSONPatchOp{
 		patchOp("test", []string{"metadata", "uid"}, v.uid),
 		patchOp("test", []string{"metadata", "resourceVersion"}, v.meta.ResourceVersion),
 	}, p.ops...)
@@ -1247,9 +1233,9 @@ func (v *dscView) write(c *Client, p *dscPlanned) (res *types.OperationResponse,
 		return &types.OperationResponse{Success: false, ErrorCode: "internal", Message: "The change was sent, but the API server's answer could not be read: " + err.Error() + ". Reload the page to see the DataScienceCluster."}, false
 	}
 	for _, s := range p.sets {
-		if got, ok := lookupPath(after, s.Path); !ok || !jsonEqual(got, s.Value) {
+		if got, ok := lookupPath(after, s.Path); !ok || !kube.JSONEqual(got, s.Value) {
 			return &types.OperationResponse{Success: false, ErrorCode: "internal",
-				Message: fmt.Sprintf("The API server accepted the change, but %s is %s instead of %s in the DataScienceCluster it returned. Reload the page and check it.", strings.Join(s.Path[2:], "."), nonEmpty(fieldText(got), "unset"), fieldText(s.Value))}, false
+				Message: fmt.Sprintf("The API server accepted the change, but %s is %s instead of %s in the DataScienceCluster it returned. Reload the page and check it.", strings.Join(s.Path[2:], "."), kube.NonEmpty(fieldText(got), "unset"), fieldText(s.Value))}, false
 		}
 	}
 	return nil, false
@@ -1284,7 +1270,7 @@ func writeChecked(c *Client, v *dscView, plan func(v *dscView) (*dscPlanned, *ty
 		next, err := readDSCView(c)
 		switch {
 		case err != nil:
-			return nil, nil, &types.OperationResponse{Success: false, ErrorCode: errorCodeFromK8sErr(err), Logs: res.Logs,
+			return nil, nil, &types.OperationResponse{Success: false, ErrorCode: kube.ErrorCodeFromK8sErr(err), Logs: res.Logs,
 				Message: fmt.Sprintf("The API server refused the change to DataScienceCluster %s, and it could not be read again to tell whether it changed since it was checked: %v. Nothing was changed.", name, err)}
 		case next.state != DSCStatePresent || next.uid != uid:
 			return nil, nil, &types.OperationResponse{Success: false, ErrorCode: "conflict",
@@ -1307,10 +1293,10 @@ func changeSummary(changes []types.DSCChange) string {
 		if !ch.Toggle || (ch.From == ch.To && ch.FromSet == ch.ToSet) {
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("%s %s → %s", ch.Path, nonEmpty(ch.From, "not set"), nonEmpty(ch.To, "not set")))
+		parts = append(parts, fmt.Sprintf("%s %s → %s", ch.Path, kube.NonEmpty(ch.From, "not set"), kube.NonEmpty(ch.To, "not set")))
 	}
 	if len(parts) == 0 {
-		return fmt.Sprintf("%d %s", len(changes), verb(len(changes), "field", "fields"))
+		return fmt.Sprintf("%d %s", len(changes), kube.Verb(len(changes), "field", "fields"))
 	}
 	return strings.Join(parts, "; ")
 }
@@ -1375,7 +1361,7 @@ func (v *dscView) checkToggle(c *Client, req types.DSCToggleRequest, reviewed bo
 	if t, ok := v.byKey[req.Path]; ok && t.Toggle && v.state == DSCStatePresent {
 		if cur, _ := lookupState(v.components(), t.Path); cur != req.From {
 			return nil, &types.OperationResponse{Success: false, ErrorCode: "conflict",
-				Message: fmt.Sprintf("%s changed since you looked: it is %s now, not %s. Reload the page and try again. Nothing was changed.", req.Path, nonEmpty(cur, "not set"), nonEmpty(req.From, "not set"))}
+				Message: fmt.Sprintf("%s changed since you looked: it is %s now, not %s. Reload the page and try again. Nothing was changed.", req.Path, kube.NonEmpty(cur, "not set"), kube.NonEmpty(req.From, "not set"))}
 		}
 	}
 	p := v.planToggle(c, req.Path, req.To, req.WithParent)

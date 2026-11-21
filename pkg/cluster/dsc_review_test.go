@@ -132,10 +132,10 @@ func TestHelmManagedDSCIsReadOnly(t *testing.T) {
 
 func TestJSONPointerEscapesTildeAndSlash(t *testing.T) {
 	keys := []string{"spec", "a/b", "c~d", "~1"}
-	if p := pointerOf(keys); p != "/spec/a~1b/c~0d/~01" {
+	if p := kube.PointerOf(keys); p != "/spec/a~1b/c~0d/~01" {
 		t.Fatalf("pointer = %s", p)
 	}
-	if got := pointerKeys(pointerOf(keys)); !reflect.DeepEqual(got, keys) {
+	if got := kube.PointerKeys(kube.PointerOf(keys)); !reflect.DeepEqual(got, keys) {
 		t.Fatalf("keys = %v", got)
 	}
 	obj := map[string]any{"spec": map[string]any{"a/b": "old", "c~d": map[string]any{}}}
@@ -143,7 +143,7 @@ func TestJSONPointerEscapesTildeAndSlash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	after, err := applyJSONPatch(obj, ops)
+	after, err := kube.ApplyJSONPatch(obj, ops)
 	if err != nil {
 		t.Fatal(err)
 	}

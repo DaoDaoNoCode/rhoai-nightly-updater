@@ -154,7 +154,7 @@ func TestRepointedGeneration(t *testing.T) {
 			t.Errorf("%s: %d, want %d", tc.name, got, tc.want)
 		}
 	}
-	stale := dspaInfo{Meta: objectMeta{Generation: 3}, ObjectStore: &dspaCondition{Status: "True", ObservedGeneration: 3}}
+	stale := dspaInfo{Meta: kube.ObjectMeta{Generation: 3}, ObjectStore: &dspaCondition{Status: "True", ObservedGeneration: 3}}
 	if stale.objectStoreReadyAt(repointedGeneration([]byte(`not json`), 3)) {
 		t.Error("a condition from before the patch counts")
 	}

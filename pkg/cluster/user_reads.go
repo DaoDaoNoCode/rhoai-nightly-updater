@@ -154,14 +154,14 @@ func connectionState(u *Client, project string, terminating bool) (string, strin
 	if terminating {
 		return "", ""
 	}
-	meta, found, err := readObjectMeta(u, namespacedPath("v1", "secrets", project, connectionSecretName))
+	meta, found, err := kube.ReadObjectMeta(u, namespacedPath("v1", "secrets", project, connectionSecretName))
 	switch {
 	case err != nil:
 		msg, _ := userReadProblem("the connection", project, err)
 		return ConnectionUnreadable, msg
 	case !found:
 		return ConnectionMissing, ""
-	case !meta.hasToolLabel():
+	case !meta.HasToolLabel():
 		return ConnectionForeign, ""
 	}
 	return ConnectionPresent, ""
@@ -208,10 +208,10 @@ func listProjectInferenceServices(u *Client, project string) ([]types.ProjectInf
 	out := []types.ProjectInferenceService{}
 	var list struct {
 		Items []struct {
-			Metadata objectMeta `json:"metadata"`
+			Metadata kube.ObjectMeta `json:"metadata"`
 			Status   struct {
-				URL        string         `json:"url"`
-				Conditions []k8sCondition `json:"conditions"`
+				URL        string           `json:"url"`
+				Conditions []kube.Condition `json:"conditions"`
 			} `json:"status"`
 		} `json:"items"`
 	}
@@ -226,14 +226,14 @@ func listProjectInferenceServices(u *Client, project string) ([]types.ProjectInf
 		return out, nil
 	}
 	for _, it := range list.Items {
-		s := types.ProjectInferenceService{Name: it.Metadata.Name, Terminating: it.Metadata.terminating()}
+		s := types.ProjectInferenceService{Name: it.Metadata.Name, Terminating: it.Metadata.Terminating()}
 		if snippetURL(it.Status.URL) {
 			s.URL = it.Status.URL
 		}
-		if cond, ok := findCondition(it.Status.Conditions, "Ready"); ok && cond.Status == "True" {
+		if cond, ok := kube.FindCondition(it.Status.Conditions, "Ready"); ok && cond.Status == "True" {
 			s.Ready = true
 		} else if ok {
-			s.Message = firstNonEmpty(truncateText(cond.Message, 300), cond.Reason, "Not ready")
+			s.Message = kube.FirstNonEmpty(kube.TruncateText(cond.Message, 300), cond.Reason, "Not ready")
 		} else {
 			s.Message = "Reports no Ready condition"
 		}

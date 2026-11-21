@@ -125,7 +125,7 @@ func gatewayRoutedIn(c *Client, gw gatewayObject, project string) ([]string, err
 	}
 	var out []string
 	for _, m := range routedModels(models, def, gw) {
-		if m.Metadata.Namespace == project && !m.Metadata.terminating() {
+		if m.Metadata.Namespace == project && !m.Metadata.Terminating() {
 			out = append(out, m.Metadata.Namespace+"/"+m.Metadata.Name)
 		}
 	}
@@ -143,7 +143,7 @@ func planGatewayRemove(c *Client, project string) (*gatewayPlan, string, string)
 	gw, found, err := readInferenceGateway(c)
 	switch {
 	case err != nil:
-		return nil, fmt.Sprintf("Cannot read the inference gateway, so %s stays on its list: %v.%s", project, err, templateHint(err)), errorCodeFromK8sErr(err)
+		return nil, fmt.Sprintf("Cannot read the inference gateway, so %s stays on its list: %v.%s", project, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
 	case !found:
 		return nil, "", ""
 	case !gatewayOwned(gw.Metadata):
@@ -235,7 +235,7 @@ func releaseGoneGatewayProjects(c *Client) string {
 	}
 	var released, kept []string
 	for _, project := range recorded {
-		if _, exists, err := readObjectMeta(c, clusterPath("v1", "namespaces", project)); err != nil || exists {
+		if _, exists, err := kube.ReadObjectMeta(c, clusterPath("v1", "namespaces", project)); err != nil || exists {
 			continue
 		}
 		if msg, _ := removeGatewayProject(c, project, func(string) {}); msg != "" {
@@ -251,10 +251,10 @@ func releaseGoneGatewayProjects(c *Client) string {
 	}
 	out := ""
 	if len(released) > 0 {
-		out += fmt.Sprintf(" Project %s no longer %s, so %s taken off the projects the inference gateway allows.", strings.Join(released, ", "), verb(len(released), "exists", "exist"), verb(len(released), "it was", "they were"))
+		out += fmt.Sprintf(" Project %s no longer %s, so %s taken off the projects the inference gateway allows.", strings.Join(released, ", "), kube.Verb(len(released), "exists", "exist"), kube.Verb(len(released), "it was", "they were"))
 	}
 	if len(kept) > 0 {
-		out += fmt.Sprintf(" Project %s no longer %s but %s on the inference gateway's list; remove %s on the Models tab.", strings.Join(kept, ", "), verb(len(kept), "exists", "exist"), verb(len(kept), "stays", "stay"), verb(len(kept), "it", "them"))
+		out += fmt.Sprintf(" Project %s no longer %s but %s on the inference gateway's list; remove %s on the Models tab.", strings.Join(kept, ", "), kube.Verb(len(kept), "exists", "exist"), kube.Verb(len(kept), "stays", "stay"), kube.Verb(len(kept), "it", "them"))
 	}
 	return out
 }
@@ -319,7 +319,7 @@ func listedProjectsState(c *Client, state *types.InferenceGatewayState, gw gatew
 		}
 		seen[ns] = true
 		state.UnusedProjects = append(state.UnusedProjects, ns)
-		if _, found, err := readObjectMeta(c, clusterPath("v1", "namespaces", ns)); err == nil && !found {
+		if _, found, err := kube.ReadObjectMeta(c, clusterPath("v1", "namespaces", ns)); err == nil && !found {
 			state.GoneProjects = append(state.GoneProjects, ns)
 		}
 	}

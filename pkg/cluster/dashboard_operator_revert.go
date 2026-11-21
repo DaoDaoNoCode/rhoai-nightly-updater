@@ -36,7 +36,7 @@ func revertDashboardOperatorTo(c *Client, target dashboardTarget) (*types.Operat
 		// Re-read after acquiring the shared deploy/revert lock and on conflicts.
 		operator, err := readDashboardOperatorAt(c, ns, name)
 		if err != nil {
-			code := errorCodeFromK8sErr(err)
+			code := kube.ErrorCodeFromK8sErr(err)
 			if code == "" {
 				code = "prerequisites"
 			}
@@ -76,7 +76,7 @@ func revertDashboardOperatorTo(c *Client, target dashboardTarget) (*types.Operat
 			if kube.IsK8sConflict(err) && attempt < 2 {
 				continue
 			}
-			return fail("Failed to resume "+name+": "+err.Error()+". Retry Revert to default.", errorCodeFromK8sErr(err))
+			return fail("Failed to resume "+name+": "+err.Error()+". Retry Revert to default.", kube.ErrorCodeFromK8sErr(err))
 		}
 		message := fmt.Sprintf("%s restored to %d replicas. It will reconcile all dashboard images to the installed release.", name, replicas)
 		code := ""

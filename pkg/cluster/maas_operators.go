@@ -3,8 +3,9 @@ package cluster
 import (
 	"fmt"
 	"sort"
-
 	"strings"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // The operators MaaS needs, installed from OperatorHub the way the MaaS
@@ -239,7 +240,7 @@ func oomKilledContainers(c *Client, st operatorState) ([]string, error) {
 		return nil, nil
 	}
 	var items []struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 		Status   struct {
 			ContainerStatuses []struct {
 				Name         string `json:"name"`
@@ -273,7 +274,7 @@ func oomKilledContainers(c *Client, st operatorState) ([]string, error) {
 			oom := (cs.LastState.Terminated != nil && cs.LastState.Terminated.Reason == "OOMKilled") ||
 				(cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled")
 			if oom {
-				out = append(out, fmt.Sprintf("%s/%s (%d %s)", p.Metadata.Name, cs.Name, cs.RestartCount, verb(cs.RestartCount, "restart", "restarts")))
+				out = append(out, fmt.Sprintf("%s/%s (%d %s)", p.Metadata.Name, cs.Name, cs.RestartCount, kube.Verb(cs.RestartCount, "restart", "restarts")))
 			}
 		}
 	}

@@ -109,7 +109,7 @@ func mlflowSampleTargetAs(c *Client, project, token string) (*mlflowTarget, stri
 		return nil, "MLflow is not deployed. Set it up first.", nil
 	case err != nil:
 		return nil, "", fmt.Errorf("read the MLflow CR: %w", err)
-	case cr.Metadata.terminating():
+	case cr.Metadata.Terminating():
 		return nil, "MLflow is being deleted.", nil
 	case !mlflowCRReady(cr):
 		return nil, "MLflow is not ready.", nil
@@ -375,14 +375,14 @@ func RunMLflowSamples(c *Client, req types.MLflowSamplesRequest, onStep func(Upd
 	emit(UpdateStepEvent{Step: "check", Status: "running", Message: fmt.Sprintf("Checking MLflow for project '%s'...", req.Project)})
 	ok, err := isDSProject(c, req.Project)
 	if err != nil {
-		return fail("check", fmt.Sprintf("Cannot list the projects: %v", err), errorCodeFromK8sErr(err))
+		return fail("check", fmt.Sprintf("Cannot list the projects: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	if !ok {
 		return fail("check", fmt.Sprintf("'%s' is not a Data Science project.", req.Project), "validation")
 	}
 	t, reason, err := mlflowSampleTarget(c, req.Project)
 	if err != nil {
-		return fail("check", fmt.Sprintf("Cannot read MLflow: %v", err), errorCodeFromK8sErr(err))
+		return fail("check", fmt.Sprintf("Cannot read MLflow: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	if t == nil {
 		return fail("check", reason, "prerequisites")
@@ -411,7 +411,7 @@ func RunMLflowSamples(c *Client, req types.MLflowSamplesRequest, onStep func(Upd
 		name := mlflowSampleNames[id]
 		if fn == nil {
 			failed = append(failed, name)
-			code = firstNonEmpty(code, "validation")
+			code = kube.FirstNonEmpty(code, "validation")
 			emit(UpdateStepEvent{Step: id, Status: "failed", Message: fmt.Sprintf("%s: %s is not available for this sample.", name, req.Action), ErrorCode: "validation"})
 			continue
 		}
@@ -429,7 +429,7 @@ func RunMLflowSamples(c *Client, req types.MLflowSamplesRequest, onStep func(Upd
 			case errors.Is(err, errMLflowRestarting):
 				stepCode = "in_progress"
 			}
-			code = firstNonEmpty(code, stepCode)
+			code = kube.FirstNonEmpty(code, stepCode)
 			emit(UpdateStepEvent{Step: id, Status: "failed", Message: fmt.Sprintf("%s: %v%s", name, err, deniedHint(err, c.ActsAsUser())), ErrorCode: stepCode})
 			continue
 		}

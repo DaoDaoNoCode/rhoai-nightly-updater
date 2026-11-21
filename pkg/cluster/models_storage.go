@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // Where a model's download lands. KServe rhoai-3.6 (red-hat-data-services/
@@ -55,7 +57,7 @@ func modelVolumeIsEmptyDir(c *Client) bool {
 // stop. Unreadable quotas are no warning (unknown is not a failure).
 func quotaWarning(c *Client, project string, entry catalogModel, ephemeral bool) string {
 	var items []struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 		Status   struct {
 			Hard map[string]string `json:"hard"`
 			Used map[string]string `json:"used"`

@@ -205,7 +205,7 @@ func (l maasLimit) text() string {
 	}
 	var parts []string
 	for _, r := range l.rates {
-		parts = append(parts, fmt.Sprintf("%s %s %s", thousands(r.limit), verb(int(min(r.limit, 2)), "token", "tokens"), windowText(r.window)))
+		parts = append(parts, fmt.Sprintf("%s %s %s", thousands(r.limit), kube.Verb(int(min(r.limit, 2)), "token", "tokens"), windowText(r.window)))
 	}
 	return joinWords(parts)
 }
@@ -410,7 +410,7 @@ func (a maasAudience) text() string {
 			take = take[:left]
 		}
 		shown += len(take)
-		return verb(len(names), singular, plural) + " " + strings.Join(take, ", ")
+		return kube.Verb(len(names), singular, plural) + " " + strings.Join(take, ", ")
 	}
 	var parts []string
 	if g := name("group", "groups", a.groups); g != "" {
@@ -441,7 +441,7 @@ func maasGroupProblems(c *Client, groups []string) []types.MaaSGroupProblem {
 			out = append(out, missing(g))
 			continue
 		}
-		_, found, err := readObjectMeta(c, clusterPath("user.openshift.io/v1", "groups", url.PathEscape(g)))
+		_, found, err := kube.ReadObjectMeta(c, clusterPath("user.openshift.io/v1", "groups", url.PathEscape(g)))
 		switch {
 		case err != nil:
 			out = append(out, types.MaaSGroupProblem{Name: g, Message: fmt.Sprintf("Cannot check whether group %s exists (%v). Check it with oc get group %s.", g, err, shellQuoteArg(g))})
@@ -490,7 +490,7 @@ type maasToolSub struct {
 
 func readMaaSToolSubscription(c *Client) (maasToolSub, error) {
 	var sub struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 		Spec     struct {
 			Owner     map[string]any   `json:"owner"`
 			ModelRefs []map[string]any `json:"modelRefs"`
@@ -546,7 +546,7 @@ func maasSubscriptionDescription(pubs []maasPub, limits map[string]maasLimit, au
 	var parts []string
 	for _, p := range pubs {
 		entry, _ := catalogEntry(p.model)
-		label := firstNonEmpty(entry.DisplayName, p.model)
+		label := kube.FirstNonEmpty(entry.DisplayName, p.model)
 		if names[p.model] > 1 {
 			label += " in " + p.project
 		}

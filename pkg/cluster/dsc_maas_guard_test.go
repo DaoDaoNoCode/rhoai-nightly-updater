@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -245,7 +246,7 @@ func TestTurnedOnListsDeployedTogglesTheDefaultLeavesOff(t *testing.T) {
 		t.Fatalf("modelsAsAService = %s (an orphan was kept)", s)
 	}
 	plan = &types.DSCPlan{}
-	if target := v.resetTarget(plan, false); !jsonEqual(target, v.defaultComponents()) || len(plan.Kept) != 0 || len(plan.TurnedOn) != 2 {
+	if target := v.resetTarget(plan, false); !kube.JSONEqual(target, v.defaultComponents()) || len(plan.Kept) != 0 || len(plan.TurnedOn) != 2 {
 		t.Fatalf("without keep: kept %v, turned on %v, target %v", plan.Kept, plan.TurnedOn, target)
 	}
 }

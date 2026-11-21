@@ -26,7 +26,7 @@ const maasDocsSamplePriority = 10
 func maasSubscriptionPriority(c *Client) (int, []string, error) {
 	var list struct {
 		Items []struct {
-			Metadata objectMeta `json:"metadata"`
+			Metadata kube.ObjectMeta `json:"metadata"`
 			Spec     struct {
 				Priority int `json:"priority"`
 			} `json:"spec"`

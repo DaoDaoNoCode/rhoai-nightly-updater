@@ -41,7 +41,7 @@ func modelPullGrace(c *Client, node string) (time.Duration, string) {
 	}
 	var list struct {
 		Items []struct {
-			Metadata objectMeta `json:"metadata"`
+			Metadata kube.ObjectMeta `json:"metadata"`
 		} `json:"items"`
 	}
 	if json.Unmarshal(body, &list) != nil || len(list.Items) != 1 {

@@ -53,7 +53,7 @@ var (
 )
 
 type mlflowCR struct {
-	Metadata objectMeta `json:"metadata"`
+	Metadata kube.ObjectMeta `json:"metadata"`
 	Spec     struct {
 		Image *struct {
 			Image *string `json:"image"`
@@ -106,7 +106,7 @@ func (m mlflowCR) image() string {
 // from the console or dashboard is never claimed, because the MLflow CRD only
 // allows the single name "mlflow" and deleting it garbage-collects mlflow-pvc.
 func (m mlflowCR) managedByTool() bool {
-	return m.Metadata.hasToolLabel() || m.Metadata.ownsFieldPath([]string{toolFieldManager}, "f:spec")
+	return m.Metadata.HasToolLabel() || m.Metadata.OwnsFieldPath([]string{toolFieldManager}, "f:spec")
 }
 
 // oldToolResources: spec.resources is exactly what SetupMLflow set before
@@ -177,14 +177,14 @@ func mlflowNamespace(c *Client) (string, error) {
 // CR, which the garbage collector deletes together with it.
 func mlflowOwnedPVCs(c *Client, ns, uid string) ([]string, error) {
 	var items []struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 	}
 	if err := c.ListInto(namespacedPath("v1", "persistentvolumeclaims", ns, ""), &items); err != nil {
 		return nil, err
 	}
 	var names []string
 	for _, item := range items {
-		if item.Metadata.ownedBy(uid) {
+		if item.Metadata.OwnedBy(uid) {
 			names = append(names, item.Metadata.Name)
 		}
 	}
@@ -206,7 +206,7 @@ func getMLflowStatus(c *Client) types.ResourceState {
 	}
 	state.Deployed = true
 	state.ManagedByTool = cr.managedByTool()
-	state.Terminating = cr.Metadata.terminating()
+	state.Terminating = cr.Metadata.Terminating()
 	state.CurrentImage = cr.image()
 	// Reported regardless of readiness, so Revert stays available when a PR
 	// image breaks the pod.
@@ -224,7 +224,7 @@ func getMLflowStatus(c *Client) types.ResourceState {
 				state.Ready = true
 				state.Message = "Running"
 			} else {
-				state.Message = firstNonEmpty(truncateText(cond.Message, 300), cond.Reason, "Not ready")
+				state.Message = kube.FirstNonEmpty(kube.TruncateText(cond.Message, 300), cond.Reason, "Not ready")
 			}
 			break
 		}
@@ -337,7 +337,7 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 	data, _ := json.Marshal(mlflowCR)
 	if _, _, err := c.Post(withToolFieldManager(clusterPath(mlflowAPIGroup, "mlflows", "")), data); err != nil {
 		msg := fmt.Sprintf("Failed to create MLflow CR: %v", err)
-		code := errorCodeFromK8sErr(err)
+		code := kube.ErrorCodeFromK8sErr(err)
 		switch {
 		case kube.IsK8sNotFound(err):
 			msg = "The MLflow CRD is not installed. Set the mlflowoperator component to Managed in the DataScienceCluster first."
@@ -380,12 +380,12 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 		return &types.OperationResponse{Success: true, Message: "MLflow is not deployed; nothing to remove.", Logs: logs}, nil
 	}
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot read the MLflow CR; nothing was deleted: %v", err), errorCodeFromK8sErr(err), fmt.Sprintf("CR read failed: %v", err))
+		return fail(fmt.Sprintf("Cannot read the MLflow CR; nothing was deleted: %v", err), kube.ErrorCodeFromK8sErr(err), fmt.Sprintf("CR read failed: %v", err))
 	}
 	if !cr.managedByTool() {
 		return fail("This MLflow instance was not created by this tool, so it was not deleted.", "not_managed", "not managed")
 	}
-	if cr.Metadata.terminating() {
+	if cr.Metadata.Terminating() {
 		logs = append(logs, "MLflow CR is already being deleted")
 		return &types.OperationResponse{Success: false, Message: "MLflow is still being deleted." + mlflowFinalizerNote(cr), Logs: logs, ErrorCode: "in_progress"}, nil
 	}
@@ -399,8 +399,8 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 	}
 	logs = append(logs, "Deleting MLflow CR...")
 	crPath := clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName)
-	if _, delErr := deleteWithUID(c, crPath, cr.Metadata.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
-		code := errorCodeFromK8sErr(delErr)
+	if _, delErr := kube.DeleteWithUID(c, crPath, cr.Metadata.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
+		code := kube.ErrorCodeFromK8sErr(delErr)
 		if kube.IsK8sConflict(delErr) {
 			code = "conflict"
 		}
@@ -410,16 +410,16 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 
 	dataNote := " Its PVC (tracking database, model registry and artifacts) is garbage-collected with it."
 	if pvcErr == nil && len(pvcs) > 0 {
-		dataNote = fmt.Sprintf(" %s %v (tracking database, model registry and artifacts) %s garbage-collected with it.", verb(len(pvcs), "PVC", "PVCs"), pvcs, verb(len(pvcs), "is", "are"))
+		dataNote = fmt.Sprintf(" %s %v (tracking database, model registry and artifacts) %s garbage-collected with it.", kube.Verb(len(pvcs), "PVC", "PVCs"), pvcs, kube.Verb(len(pvcs), "is", "are"))
 	}
 	slog.Info("mlflow teardown", "user", kube.GetUser(c))
 	recordActivity(c, "teardown-mlflow", "MLflow CR deleted", true)
 
-	gone, waitErr := waitForDeletion(c, crPath, MLflowDeleteTimeout, MLflowDeletePoll)
+	gone, waitErr := kube.WaitForDeletion(c, crPath, MLflowDeleteTimeout, MLflowDeletePoll)
 	if waitErr != nil {
 		return &types.OperationResponse{
 			Success: false, Message: fmt.Sprintf("MLflow deletion was requested, but whether the CR is gone cannot be checked: %v.%s", waitErr, dataNote),
-			Logs: logs, ErrorCode: firstNonEmpty(errorCodeFromK8sErr(waitErr), "in_progress"),
+			Logs: logs, ErrorCode: kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(waitErr), "in_progress"),
 		}, nil
 	}
 	if !gone {
@@ -476,9 +476,9 @@ func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 		return fail("MLflow is not deployed. Set it up first.", "prerequisites", "not deployed")
 	}
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot read the MLflow CR: %v", err), errorCodeFromK8sErr(err), "CR read failed")
+		return fail(fmt.Sprintf("Cannot read the MLflow CR: %v", err), kube.ErrorCodeFromK8sErr(err), "CR read failed")
 	}
-	if cr.Metadata.terminating() {
+	if cr.Metadata.Terminating() {
 		return fail("MLflow is being deleted.", "terminating", "terminating")
 	}
 
@@ -512,7 +512,7 @@ func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 		annotations[mlflowOriginalImageAnnotation] = original
 	}
 	if err := patchMLflowCR(c, cr, annotations, imageSpec(image)); err != nil {
-		code := errorCodeFromK8sErr(err)
+		code := kube.ErrorCodeFromK8sErr(err)
 		msg := fmt.Sprintf("Failed to patch MLflow CR: %v", err)
 		if kube.IsK8sConflict(err) {
 			code = "conflict"
@@ -545,7 +545,7 @@ func RevertMLflowImage(c *Client) (*types.OperationResponse, error) {
 		return fail("MLflow is not deployed.", "prerequisites", "not deployed")
 	}
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot read the MLflow CR: %v", err), errorCodeFromK8sErr(err), "CR read failed")
+		return fail(fmt.Sprintf("Cannot read the MLflow CR: %v", err), kube.ErrorCodeFromK8sErr(err), "CR read failed")
 	}
 	active, revertImage := cr.prOverride()
 	if !active {
@@ -554,7 +554,7 @@ func RevertMLflowImage(c *Client) (*types.OperationResponse, error) {
 			// The image was set by hand after the PR deploy: keep it, and drop
 			// the saved image so nothing restores it later.
 			if err := patchMLflowCR(c, cr, map[string]any{mlflowOriginalImageAnnotation: nil}, nil); err != nil {
-				return fail(fmt.Sprintf("No PR image is active; the image saved before the PR deploy could not be dropped: %v", err), errorCodeFromK8sErr(err), "no override, stale annotation kept")
+				return fail(fmt.Sprintf("No PR image is active; the image saved before the PR deploy could not be dropped: %v", err), kube.ErrorCodeFromK8sErr(err), "no override, stale annotation kept")
 			}
 			current := cr.image()
 			if current == "" {
@@ -572,7 +572,7 @@ func RevertMLflowImage(c *Client) (*types.OperationResponse, error) {
 		target = revertImage
 	}
 	if err := patchMLflowCR(c, cr, map[string]any{mlflowOriginalImageAnnotation: nil}, imageSpec(image)); err != nil {
-		code := errorCodeFromK8sErr(err)
+		code := kube.ErrorCodeFromK8sErr(err)
 		msg := fmt.Sprintf("Failed to revert MLflow image: %v", err)
 		if kube.IsK8sConflict(err) {
 			code = "conflict"
@@ -598,5 +598,5 @@ func mlflowFinalizerNote(cr mlflowCR) string {
 	if len(cr.Metadata.Finalizers) == 0 {
 		return ""
 	}
-	return fmt.Sprintf(" It is waiting on %s %s; the controller that added %s must be running to remove %s.", verb(len(cr.Metadata.Finalizers), "finalizer", "finalizers"), strings.Join(cr.Metadata.Finalizers, ", "), verb(len(cr.Metadata.Finalizers), "it", "them"), verb(len(cr.Metadata.Finalizers), "it", "them"))
+	return fmt.Sprintf(" It is waiting on %s %s; the controller that added %s must be running to remove %s.", kube.Verb(len(cr.Metadata.Finalizers), "finalizer", "finalizers"), strings.Join(cr.Metadata.Finalizers, ", "), kube.Verb(len(cr.Metadata.Finalizers), "it", "them"), kube.Verb(len(cr.Metadata.Finalizers), "it", "them"))
 }

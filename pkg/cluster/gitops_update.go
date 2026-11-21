@@ -28,7 +28,7 @@ func updateGitOpsPlan(c *Client, image string, currentCSV types.CSVInfo, logs *[
 	if err != nil || !g.active() {
 		return g, "", "", err
 	}
-	manager := nonEmpty(g.catalogManager(), fmt.Sprintf("Argo CD application %q", g.subscriptionApp))
+	manager := kube.NonEmpty(g.catalogManager(), fmt.Sprintf("Argo CD application %q", g.subscriptionApp))
 	cs, err := getCatalogSource(c)
 	if err != nil {
 		return g, "", "", err
@@ -62,7 +62,7 @@ func updateGitOpsPlan(c *Client, image string, currentCSV types.CSVInfo, logs *[
 		switch {
 		case sub.info.Source != CatalogName:
 			return g, "", fmt.Sprintf("Argo CD application %q sets the Subscription's source to %s in Git. Update installs from %s, and Argo CD would switch the source back. Set the source to %s in Git first. Nothing was changed.",
-				g.subscriptionApp, nonEmpty(sub.info.Source, "nothing"), CatalogName, CatalogName), nil
+				g.subscriptionApp, kube.NonEmpty(sub.info.Source, "nothing"), CatalogName, CatalogName), nil
 		case sub.info.Channel == "":
 			return g, "", fmt.Sprintf("The Subscription managed by Argo CD application %q has no channel, so Update cannot keep it. Set the channel in Git first. Nothing was changed.", g.subscriptionApp), nil
 		}
@@ -73,7 +73,7 @@ func updateGitOpsPlan(c *Client, image string, currentCSV types.CSVInfo, logs *[
 		if ip, phase, err := pendingInstallPlan(c); err != nil {
 			return g, "", "", err
 		} else if ip != "" {
-			return g, "", fmt.Sprintf("OLM is still installing the build Git set (InstallPlan %s is %s), and Update would delete the Subscription it works on. Wait for it to finish, or check Diagnostics if it is stuck. Nothing was changed.", ip, nonEmpty(phase, "pending")), nil
+			return g, "", fmt.Sprintf("OLM is still installing the build Git set (InstallPlan %s is %s), and Update would delete the Subscription it works on. Wait for it to finish, or check Diagnostics if it is stuck. Nothing was changed.", ip, kube.NonEmpty(phase, "pending")), nil
 		}
 	}
 	return g, channelOverride, "", nil
@@ -192,7 +192,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	// Last checks before anything is deleted: Git may have moved on while
 	// the catalog was verified.
 	if cs, err := getCatalogSource(c); err != nil {
-		return fail("Cannot re-read the CatalogSource: "+err.Error(), errorCodeFromK8sErr(err))
+		return fail("Cannot re-read the CatalogSource: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 	} else if cs.Image != image {
 		return fail("Update stopped: "+(&errCatalogImageChanged{by: changedBy, image: cs.Image}).Error()+". The operator was not changed.", kube.ErrorCodeGitOpsManaged)
 	}
@@ -211,7 +211,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	if policy != nil {
 		live, found, err := readSubscriptionObject(c)
 		if err != nil {
-			return fail("Cannot re-read the Subscription: "+err.Error()+". Nothing was changed.", errorCodeFromK8sErr(err))
+			return fail("Cannot re-read the Subscription: "+err.Error()+". Nothing was changed.", kube.ErrorCodeFromK8sErr(err))
 		}
 		base := recovery.subscriptionBase()
 		if found {
@@ -233,7 +233,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	if ipName := recovery.installPlanName(); ipName != "" {
 		ipPath := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ipName)
 		if _, err := c.DeleteIfExists(ipPath); err != nil {
-			return fail("Cannot delete old InstallPlan: "+err.Error(), errorCodeFromK8sErr(err))
+			return fail("Cannot delete old InstallPlan: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 		}
 		*logs = append(*logs, fmt.Sprintf("OK: InstallPlan %s deleted", ipName))
 	}
@@ -252,7 +252,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 		case err != nil && c.Context().Err() != nil:
 			return stopped("Operation stopped while waiting for the current CSV to be deleted")
 		case err != nil:
-			return fail("Cannot delete current CSV: "+err.Error(), errorCodeFromK8sErr(err))
+			return fail("Cannot delete current CSV: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 		case gone:
 			*logs = append(*logs, "OK: CSV "+currentCSV.Name+" deleted")
 		default:
@@ -271,7 +271,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	base := recovery.subscriptionBase()
 	live, found, err := readSubscriptionObject(c)
 	if err != nil {
-		return fail("Cannot re-read the Subscription: "+err.Error(), errorCodeFromK8sErr(err))
+		return fail("Cannot re-read the Subscription: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 	}
 	if found && policy != nil {
 		// Git changed the Subscription after the check above to settings the
@@ -333,7 +333,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 			recovery.subscriptionReplaced = true
 			return fail("The Subscription was replaced by someone else while Update ran, so it was left unchanged. Check it before running Update again.", "conflict")
 		} else if err != nil {
-			return fail("Cannot remove the current Subscription: "+err.Error(), errorCodeFromK8sErr(err))
+			return fail("Cannot remove the current Subscription: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 		}
 	}
 	if r, err := applyUpdateSubscription(c, newSub, target.Channel, recovery, logs, emit, fail); r != nil || err != nil {

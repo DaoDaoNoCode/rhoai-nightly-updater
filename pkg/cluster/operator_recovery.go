@@ -623,7 +623,7 @@ func (r *operatorRecovery) attemptCSVsToRemove(c *Client) ([]rhoaiCSV, error) {
 // name but another UID is never deleted (errReplacedMeanwhile).
 func deleteCSVByUIDAndWait(c *Client, csv rhoaiCSV) (gone bool, err error) {
 	path := csvPath(csv.Name)
-	if _, err := deleteWithUID(c, path, csv.UID); err != nil {
+	if _, err := kube.DeleteWithUID(c, path, csv.UID); err != nil {
 		switch {
 		case kube.IsK8sNotFound(err):
 			return true, nil
@@ -635,7 +635,7 @@ func deleteCSVByUIDAndWait(c *Client, csv rhoaiCSV) (gone bool, err error) {
 	}
 	deadline := kube.Clock().Now().Add(CSVDeletionTimeout)
 	for {
-		meta, found, err := readObjectMeta(c, path)
+		meta, found, err := kube.ReadObjectMeta(c, path)
 		if err != nil {
 			return false, err
 		}
@@ -661,11 +661,11 @@ func (r *operatorRecovery) noteAttemptSubscription(c *Client, applied []byte) {
 	if r == nil {
 		return
 	}
-	if meta, err := parseObjectMeta(applied); err == nil && meta.UID != "" {
+	if meta, err := kube.ParseObjectMeta(applied); err == nil && meta.UID != "" {
 		r.attemptSubscriptionUID = meta.UID
 		return
 	}
-	if meta, found, err := readObjectMeta(c, subscriptionPath()); err == nil && found {
+	if meta, found, err := kube.ReadObjectMeta(c, subscriptionPath()); err == nil && found {
 		r.attemptSubscriptionUID = meta.UID
 	}
 }
@@ -690,7 +690,7 @@ func (r *operatorRecovery) deleteOwnSubscription(c *Client) error {
 	if uid := r.subscriptionToDelete(); uid != "" {
 		return deleteSubscriptionWithUID(c, uid)
 	}
-	_, found, err := readObjectMeta(c, subscriptionPath())
+	_, found, err := kube.ReadObjectMeta(c, subscriptionPath())
 	switch {
 	case err != nil:
 		return err
@@ -706,7 +706,7 @@ func deleteSubscriptionWithUID(c *Client, uid string) error {
 	if uid == "" {
 		return fmt.Errorf("the Subscription has no UID to guard its deletion")
 	}
-	if _, err := deleteWithUID(c, subscriptionPath(), uid); err != nil {
+	if _, err := kube.DeleteWithUID(c, subscriptionPath(), uid); err != nil {
 		switch {
 		case kube.IsK8sNotFound(err):
 			return nil

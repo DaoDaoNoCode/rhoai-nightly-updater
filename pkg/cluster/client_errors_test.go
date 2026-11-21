@@ -51,7 +51,7 @@ func TestErrorCodeFromK8sErr(t *testing.T) {
 		{&K8sError{Status: 500}, ""},
 		{errors.New("x"), ""},
 	} {
-		if got := errorCodeFromK8sErr(tc.err); got != tc.want {
+		if got := kube.ErrorCodeFromK8sErr(tc.err); got != tc.want {
 			t.Errorf("%v: %q, want %q", tc.err, got, tc.want)
 		}
 	}

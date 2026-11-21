@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -197,7 +198,7 @@ func TestGetStatus_NodePullRecord(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if status.PullSecret.Nodes == nil || !jsonEqual(status.PullSecret.Nodes.AddedByTool, tc.want) {
+			if status.PullSecret.Nodes == nil || !kube.JSONEqual(status.PullSecret.Nodes.AddedByTool, tc.want) {
 				t.Fatalf("nodes %+v, want addedByTool %+v", status.PullSecret.Nodes, tc.want)
 			}
 			if len(status.Errors) != 0 {

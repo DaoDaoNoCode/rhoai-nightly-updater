@@ -87,7 +87,7 @@ type ownedModuleCR struct {
 func (o ownedModuleCR) text() string {
 	s := o.Kind.Kind + " " + o.Name
 	if o.Deleting != "" {
-		s += fmt.Sprintf(" (deleting since %s, finalizers %s)", o.Deleting, nonEmpty(strings.Join(o.Finalizers, ", "), "none"))
+		s += fmt.Sprintf(" (deleting since %s, finalizers %s)", o.Deleting, kube.NonEmpty(strings.Join(o.Finalizers, ", "), "none"))
 	}
 	return s
 }
@@ -157,7 +157,7 @@ func hardResetOperators(c *Client, dscUID string) ([]hardResetOperator, string, 
 			return nil, "", fmt.Errorf("read Deployment %s: %w", op.ref(), err)
 		}
 		var d struct {
-			Metadata objectMeta `json:"metadata"`
+			Metadata kube.ObjectMeta `json:"metadata"`
 		}
 		if err := json.Unmarshal(body, &d); err != nil || d.Metadata.UID == "" {
 			return nil, "", fmt.Errorf("read Deployment %s: no uid", op.ref())
@@ -174,7 +174,7 @@ func operatorsLeft(c *Client, ops []hardResetOperator) ([]hardResetOperator, err
 	var left []hardResetOperator
 	for _, o := range ops {
 		var d struct {
-			Metadata objectMeta `json:"metadata"`
+			Metadata kube.ObjectMeta `json:"metadata"`
 		}
 		found, err := c.GetIntoOptional(namespacedPath("apps/v1", "deployments", o.Namespace, o.Name), &d)
 		if err != nil {
@@ -211,7 +211,7 @@ func platformModulesSettled(c *Client) (bool, string, error) {
 	}
 	var list struct {
 		Items []struct {
-			Metadata objectMeta `json:"metadata"`
+			Metadata kube.ObjectMeta `json:"metadata"`
 			Status   struct {
 				Conditions []struct {
 					dscCondition
@@ -228,7 +228,7 @@ func platformModulesSettled(c *Client) (bool, string, error) {
 			continue
 		}
 		if p.Metadata.DeletionTimestamp != "" {
-			return false, fmt.Sprintf("Platform default is being deleted (finalizers %s)", nonEmpty(strings.Join(p.Metadata.Finalizers, ", "), "none")), nil
+			return false, fmt.Sprintf("Platform default is being deleted (finalizers %s)", kube.NonEmpty(strings.Join(p.Metadata.Finalizers, ", "), "none")), nil
 		}
 		var provisioned, modules *dscCondition
 		var observed int64
@@ -246,11 +246,11 @@ func platformModulesSettled(c *Client) (bool, string, error) {
 		case modules == nil:
 			return false, "Platform default reports no ModulesReady condition", nil
 		case modules.Reason == "ConditionNotSet":
-			return false, "Platform default's last reconcile stopped before it checked the modules (ModulesReady: " + truncateText(modules.Message, 300) + "; ProvisioningSucceeded: " + truncateText(provisioned.Message, 300) + ")", nil
+			return false, "Platform default's last reconcile stopped before it checked the modules (ModulesReady: " + kube.TruncateText(modules.Message, 300) + "; ProvisioningSucceeded: " + kube.TruncateText(provisioned.Message, 300) + ")", nil
 		case modules.Reason == "Removed" || strings.Contains(modules.Message, "pending deletion"):
-			return false, "Platform default: ModulesReady " + modules.Status + " (" + modules.Reason + "): " + truncateText(modules.Message, 300), nil
+			return false, "Platform default: ModulesReady " + modules.Status + " (" + modules.Reason + "): " + kube.TruncateText(modules.Message, 300), nil
 		}
-		return true, "Platform default reports no module pending deletion (ModulesReady " + modules.Status + ", " + nonEmpty(modules.Reason, "no reason") + ")", nil
+		return true, "Platform default reports no module pending deletion (ModulesReady " + modules.Status + ", " + kube.NonEmpty(modules.Reason, "no reason") + ")", nil
 	}
 	return true, "no Platform default exists", nil
 }
@@ -497,7 +497,7 @@ func (r *ownerResolver) owner(ref ownerRef, depth int, path map[string]bool) own
 	if !found {
 		group, version = "", ref.APIVersion
 	}
-	what := fmt.Sprintf("%s %s (%s)", ref.Kind, ref.Name, nonEmpty(ref.APIVersion, "no apiVersion"))
+	what := fmt.Sprintf("%s %s (%s)", ref.Kind, ref.Name, kube.NonEmpty(ref.APIVersion, "no apiVersion"))
 	unknown := func(why string) ownerVerdict {
 		resource := strings.ToLower(ref.Kind)
 		if group != "" {

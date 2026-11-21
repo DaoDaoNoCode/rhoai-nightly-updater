@@ -120,18 +120,18 @@ func gatewayExclusion(g gatewayObject) string {
 // gatewayProblem says why a gateway cannot carry a model now ("" when it
 // is accepted and programmed).
 func gatewayProblem(g gatewayObject) string {
-	if g.Metadata.terminating() {
+	if g.Metadata.Terminating() {
 		return "it is being deleted"
 	}
-	if cond, ok := findCondition(g.Status.Conditions, "Accepted"); ok && cond.Status == "False" {
-		return "its gateway controller does not accept it (" + firstNonEmpty(truncateText(cond.Message, 300), cond.Reason) + ")"
+	if cond, ok := kube.FindCondition(g.Status.Conditions, "Accepted"); ok && cond.Status == "False" {
+		return "its gateway controller does not accept it (" + kube.FirstNonEmpty(kube.TruncateText(cond.Message, 300), cond.Reason) + ")"
 	}
-	cond, ok := findCondition(g.Status.Conditions, "Programmed")
+	cond, ok := kube.FindCondition(g.Status.Conditions, "Programmed")
 	switch {
 	case !ok:
 		return "it does not report Programmed yet"
 	case cond.Status != "True":
-		return "it is not programmed (" + firstNonEmpty(truncateText(cond.Message, 300), cond.Reason, "no reason given") + ")"
+		return "it is not programmed (" + kube.FirstNonEmpty(kube.TruncateText(cond.Message, 300), cond.Reason, "no reason given") + ")"
 	}
 	return ""
 }
@@ -441,7 +441,7 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 			a.Reason = fmt.Sprintf("Gateway %s, which KServe's configuration names as its default, does not exist. Its owner creates it, or choose another way.", defKey)
 		}
 	}
-	a.Description = fmt.Sprintf("Reachable from outside the cluster at %s. Each call needs an OpenShift token that can see %s.", firstNonEmpty(a.Address, "https://inference.<apps domain>/"+r.project+"/"+r.entry.Name), r.project)
+	a.Description = fmt.Sprintf("Reachable from outside the cluster at %s. Each call needs an OpenShift token that can see %s.", kube.FirstNonEmpty(a.Address, "https://inference.<apps domain>/"+r.project+"/"+r.entry.Name), r.project)
 	if a.NeedsAuth {
 		a.Warning = strings.TrimSpace(a.Warning + " " + authWords + " Set up installs it first.")
 	}
@@ -623,7 +623,7 @@ func (m *modelsRun) planModelExposure(req types.ModelsRequest, labels map[string
 	auth := func() (bool, string, string) {
 		ok, why, err := authReadiness(c)
 		if err != nil {
-			return false, fmt.Sprintf("Cannot tell whether Red Hat Connectivity Link is set up, which authenticates the model's calls; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err)
+			return false, fmt.Sprintf("Cannot tell whether Red Hat Connectivity Link is set up, which authenticates the model's calls; nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 		return ok, why, ""
 	}
@@ -631,7 +631,7 @@ func (m *modelsRun) planModelExposure(req types.ModelsRequest, labels map[string
 		def, err := readKServeGateway(c)
 		switch {
 		case err != nil:
-			return exposurePlan{}, fmt.Sprintf("KServe's default gateway cannot be read (%v), so the model may not route through the inference gateway this request sets up. Set the inference gateway up on its own, then choose it by name for the model. Nothing was changed.", err), errorCodeFromK8sErr(err)
+			return exposurePlan{}, fmt.Sprintf("KServe's default gateway cannot be read (%v), so the model may not route through the inference gateway this request sets up. Set the inference gateway up on its own, then choose it by name for the model. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err)
 		case !def.Known:
 			return exposurePlan{}, "KServe's configuration names no default gateway, so the model would not route through the inference gateway this request sets up. Set the inference gateway up on its own, then choose it by name for the model. Nothing was changed.", "prerequisites"
 		case !def.isInferenceGateway():
@@ -774,7 +774,7 @@ func (m *modelsRun) publishToMaaS(project, name string) (*types.OperationRespons
 	}
 	m.logs = append(m.logs, res.Logs...)
 	if !res.Success {
-		return m.fail("publish", fmt.Sprintf("The model was created, but publishing it to MaaS stopped: %s Set it up again on the Models tab to publish it, or delete the model.", res.Message), firstNonEmpty(res.ErrorCode, "partial_failure"), "publish failed")
+		return m.fail("publish", fmt.Sprintf("The model was created, but publishing it to MaaS stopped: %s Set it up again on the Models tab to publish it, or delete the model.", res.Message), kube.FirstNonEmpty(res.ErrorCode, "partial_failure"), "publish failed")
 	}
 	m.step("publish", "success", res.Message)
 	return nil, nil
@@ -786,7 +786,7 @@ func (m *modelsRun) publishToMaaS(project, name string) (*types.OperationRespons
 // "Can it be called?" check.
 func addModelRouting(c *Client, s *types.ModelState, m llmisvcObject, def kserveGateway, auth map[string]string) {
 	s.Exposure, s.Gateway = modelExposureOf(m, def)
-	if served := firstNonEmpty(m.Spec.Model.Name, m.Metadata.Name); safeServedName(served) {
+	if served := kube.FirstNonEmpty(m.Spec.Model.Name, m.Metadata.Name); safeServedName(served) {
 		s.ServedName = served
 	} else {
 		s.ServedNameWithheld = true
@@ -826,9 +826,9 @@ func modelExposureOf(m llmisvcObject, def kserveGateway) (string, string) {
 		return exposureDefault, def.String()
 	}
 	ref := r.Gateway.Refs[0]
-	ns := firstNonEmpty(ref.Namespace, m.Metadata.Namespace)
+	ns := kube.FirstNonEmpty(ref.Namespace, m.Metadata.Namespace)
 	for _, x := range r.Gateway.Refs {
-		if isMaaSGatewayRef(x.Name, firstNonEmpty(x.Namespace, m.Metadata.Namespace)) {
+		if isMaaSGatewayRef(x.Name, kube.FirstNonEmpty(x.Namespace, m.Metadata.Namespace)) {
 			return exposureMaaS, gatewayKey(inferenceGatewayNamespace, maasGatewayName)
 		}
 	}

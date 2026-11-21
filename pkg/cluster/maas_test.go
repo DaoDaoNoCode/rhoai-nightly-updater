@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -179,7 +180,7 @@ func TestMaaSSetup_FollowsTheDocumentedOrderAndShapes(t *testing.T) {
 	if want := "postgresql" + "://" + userinfo + "@maas-db-rw.redhat-ai-gateway-infra.svc.cluster.local:5432/maas?sslmode=require"; string(raw) != want {
 		t.Fatalf("DB_CONNECTION_URL = %s", raw)
 	}
-	if labels := sec["metadata"].(map[string]any)["labels"].(map[string]any); labels["app"] != "maas-api" || labels[managedByLabelKey] != managedByLabelValue {
+	if labels := sec["metadata"].(map[string]any)["labels"].(map[string]any); labels["app"] != "maas-api" || labels[kube.ManagedByLabelKey] != kube.ManagedByLabelValue {
 		t.Fatalf("secret labels = %v", labels)
 	}
 	all, _ := json.Marshal(res)

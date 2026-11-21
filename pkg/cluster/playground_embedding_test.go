@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -22,7 +23,7 @@ const testGranitePath = "/apis/serving.kserve.io/v1alpha2/namespaces/proj/llminf
 func (e *playgroundEnv) putGranite(ours bool) {
 	meta := `{"name":"granite-embedding-125m-english","namespace":"proj"}`
 	if ours {
-		meta = `{"name":"granite-embedding-125m-english","namespace":"proj","labels":{"` + managedByLabelKey + `":"` + managedByLabelValue + `"},
+		meta = `{"name":"granite-embedding-125m-english","namespace":"proj","labels":{"` + kube.ManagedByLabelKey + `":"` + kube.ManagedByLabelValue + `"},
 			"managedFields":[{"manager":"` + toolFieldManager + `","operation":"Apply"}]}`
 	}
 	e.k8s.putJSON(testGranitePath, `{"metadata":`+meta+`}`)

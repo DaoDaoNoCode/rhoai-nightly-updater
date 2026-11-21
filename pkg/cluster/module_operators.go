@@ -113,7 +113,7 @@ type moduleOperatorDeployment struct {
 }
 
 func (d moduleOperatorDeployment) serviceAccount() string {
-	return firstNonEmpty(d.Spec.Template.Spec.ServiceAccountName, d.Spec.Template.Spec.ServiceAccount, "default")
+	return kube.FirstNonEmpty(d.Spec.Template.Spec.ServiceAccountName, d.Spec.Template.Spec.ServiceAccount, "default")
 }
 
 // platformOwner names the Platform or DataScienceCluster that owns the
@@ -172,7 +172,7 @@ type moduleOperatorPod struct {
 // (ServiceAccount admission plugin); "default" is assumed only for a Pod
 // that names none, as the API server does.
 func (p moduleOperatorPod) serviceAccount() string {
-	return firstNonEmpty(p.Spec.ServiceAccountName, p.Spec.ServiceAccount, "default")
+	return kube.FirstNonEmpty(p.Spec.ServiceAccountName, p.Spec.ServiceAccount, "default")
 }
 
 // mayRun: the Pod's containers may run or start (Pending, Running, or a
@@ -315,7 +315,7 @@ func (f *moduleOperatorFinder) find(module, crName string) (op *moduleOperator, 
 		case 0:
 			holders := slices.Sorted(maps.Keys(scores))
 			return nil, fmt.Sprintf("in %s, %s may update %s and %s/%s, but no Deployment owned by the Platform runs as %s",
-				f.appNS, strings.Join(holders, ", "), plural, plural, sub, verb(len(holders), "it", "them")), nil
+				f.appNS, strings.Join(holders, ", "), plural, plural, sub, kube.Verb(len(holders), "it", "them")), nil
 		case 1:
 			d := best[0]
 			return &moduleOperator{Namespace: f.appNS, Name: d.Metadata.Name, Owner: d.platformOwner(),

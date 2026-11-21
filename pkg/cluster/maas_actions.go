@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -52,7 +53,7 @@ func rhclUpgradeRefusal(st operatorState) string {
 		return gitOpsRefusal("Subscription "+st.sub.Metadata.Namespace+"/"+st.sub.Metadata.Name, st.sub.argoApp, "changing its channel") + " Change the channel in Git."
 	case st.sub.Spec.InstallPlanApproval == "Manual":
 		return fmt.Sprintf("Subscription %s/%s approves InstallPlans by hand (Manual), and this tool does not approve someone else's plans. A cluster-admin switches its channel and approves the plans.", st.sub.Metadata.Namespace, st.sub.Metadata.Name)
-	case firstNonEmpty(st.sub.Spec.SourceNamespace, CatalogNS) != CatalogNS:
+	case kube.FirstNonEmpty(st.sub.Spec.SourceNamespace, CatalogNS) != CatalogNS:
 		return fmt.Sprintf("Subscription %s/%s uses catalog %s/%s, outside %s, which this tool does not read.", st.sub.Metadata.Namespace, st.sub.Metadata.Name, st.sub.Spec.SourceNamespace, st.sub.Spec.Source, CatalogNS)
 	}
 	return ""
@@ -77,7 +78,7 @@ func rhclUpgradeOffer(c *Client, st operatorState) (*types.MaaSAction, string) {
 		return nil, ""
 	}
 	targetCh, _ := pkg.channel(target)
-	changes := []string{fmt.Sprintf("Subscription %s/%s: channel %s to %s (version %s). OLM upgrades the operator; there is no way back to %s.", st.sub.Metadata.Namespace, st.sub.Metadata.Name, firstNonEmpty(st.sub.Spec.Channel, "not set"), target, targetCh.head(), st.version)}
+	changes := []string{fmt.Sprintf("Subscription %s/%s: channel %s to %s (version %s). OLM upgrades the operator; there is no way back to %s.", st.sub.Metadata.Namespace, st.sub.Metadata.Name, kube.FirstNonEmpty(st.sub.Spec.Channel, "not set"), target, targetCh.head(), st.version)}
 	cmds := []string{rhclChannelCommand(st.sub.Metadata.Namespace, st.sub.Metadata.Name, target)}
 	if hop := hopChannel(pkg, st.csv, target); hop != "" && !targetCh.has(st.csv) {
 		hopCh, _ := pkg.channel(hop)

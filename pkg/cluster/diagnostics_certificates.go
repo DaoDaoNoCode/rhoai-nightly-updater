@@ -125,7 +125,7 @@ func certManagerOperatorState(c *Client, d *dependency) (evidence, cmds []string
 			evidence = append(evidence, fmt.Sprintf("%s has managementState %s, so the operator does not run cert-manager", d.Operand.ref(), state))
 			cmds = append(cmds, shellCommand("oc", "patch", d.Operand.resourceArg(), d.Operand.objName(), "--type", "merge", "-p", `{"spec":{"managementState":"Managed"}}`))
 		default:
-			evidence = append(evidence, fmt.Sprintf("%s has managementState %s", d.Operand.ref(), nonEmpty(state, "unset")))
+			evidence = append(evidence, fmt.Sprintf("%s has managementState %s", d.Operand.ref(), kube.NonEmpty(state, "unset")))
 		}
 	}
 	return evidence, cmds
@@ -324,12 +324,12 @@ func checkCertificates(c *Client) checkOutput {
 			errs = append(errs, "webhook configurations: "+strings.Join(cfgErrs, "; "))
 		}
 		out.check.Status = "fail"
-		out.check.Detail = fmt.Sprintf("%s not issued", countNoun(len(pending), "Certificate", "Certificates"))
+		out.check.Detail = fmt.Sprintf("%s not issued", kube.CountNoun(len(pending), "Certificate", "Certificates"))
 		if stale > 0 {
-			out.check.Detail += fmt.Sprintf(" (%d %s Ready, but %s Secret is missing: stale)", stale, verb(stale, "reports", "report"), verb(stale, "its", "their"))
+			out.check.Detail += fmt.Sprintf(" (%d %s Ready, but %s Secret is missing: stale)", stale, kube.Verb(stale, "reports", "report"), kube.Verb(stale, "its", "their"))
 		}
 	} else {
-		out.check.Detail = fmt.Sprintf("%s Ready in %s", countNoun(ready, "Certificate", "Certificates"), strings.Join(namespaces, ", "))
+		out.check.Detail = fmt.Sprintf("%s Ready in %s", kube.CountNoun(ready, "Certificate", "Certificates"), strings.Join(namespaces, ", "))
 	}
 	if len(errs) > 0 {
 		if out.check.Status == "pass" {
@@ -358,16 +358,16 @@ func certificateProblem(c *Client, ci certificateItem, cause certificateCause, c
 	staleReady := rc != nil && rc.Status == "True" && len(mounts.blocked) > 0
 	evidence := []string{}
 	if rc == nil {
-		evidence = append(evidence, fmt.Sprintf("Certificate %s (Secret %s) has no Ready condition", ci.ref(), nonEmpty(ci.Spec.SecretName, "unset")))
+		evidence = append(evidence, fmt.Sprintf("Certificate %s (Secret %s) has no Ready condition", ci.ref(), kube.NonEmpty(ci.Spec.SecretName, "unset")))
 	} else {
-		evidence = append(evidence, fmt.Sprintf("Certificate %s (Secret %s): %s", ci.ref(), nonEmpty(ci.Spec.SecretName, "unset"), conditionLine(*rc)))
+		evidence = append(evidence, fmt.Sprintf("Certificate %s (Secret %s): %s", ci.ref(), kube.NonEmpty(ci.Spec.SecretName, "unset"), conditionLine(*rc)))
 	}
 	p := Problem{
 		ID:              "certificate-not-ready-" + ci.Metadata.Namespace + "-" + ci.Metadata.Name,
 		Severity:        "warning",
 		AffectedObjects: []string{"Certificate " + ci.ref()},
 		Description: fmt.Sprintf("cert-manager issues Secret %s from this Certificate. Until it does, pods that mount the Secret stay in ContainerCreating, "+
-			"and webhooks whose CA it injects (%s) have no serving certificate. Those symptoms are listed here instead of as separate problems.", nonEmpty(ci.Spec.SecretName, "(unset)"), injectCAAnnotation),
+			"and webhooks whose CA it injects (%s) have no serving certificate. Those symptoms are listed here instead of as separate problems.", kube.NonEmpty(ci.Spec.SecretName, "(unset)"), injectCAAnnotation),
 		TechnicalCmd: shellCommand("oc", "describe", "certificate.cert-manager.io", ci.Metadata.Name, "-n", ci.Metadata.Namespace),
 	}
 	subject := fmt.Sprintf("Certificate %s is not issued", ci.ref())
@@ -379,7 +379,7 @@ func certificateProblem(c *Client, ci certificateItem, cause certificateCause, c
 	}
 	switch {
 	case rc != nil && rc.Status == "False" && rc.Message != "":
-		p.Title = fmt.Sprintf("Certificate %s is not issued: %s", ci.ref(), truncateText(rc.Message, 120))
+		p.Title = fmt.Sprintf("Certificate %s is not issued: %s", ci.ref(), kube.TruncateText(rc.Message, 120))
 		p.Fix = "Fix what the Certificate's Ready condition names (for example a missing Issuer); cert-manager retries on its own."
 	case cause.runErr != nil:
 		p.Title = subject

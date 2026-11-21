@@ -180,7 +180,7 @@ func TestModelsSetup_CreatesTheGatewayThenTheModel(t *testing.T) {
 		t.Errorf("a released cluster's model must use the preset's image, got %v", main["image"])
 	}
 	labels := model["metadata"].(map[string]any)["labels"].(map[string]any)
-	if labels["opendatahub.io/dashboard"] != "true" || labels["opendatahub.io/genai-asset"] != "true" || labels[managedByLabelKey] != managedByLabelValue {
+	if labels["opendatahub.io/dashboard"] != "true" || labels["opendatahub.io/genai-asset"] != "true" || labels[kube.ManagedByLabelKey] != kube.ManagedByLabelValue {
 		t.Errorf("labels: %v", labels)
 	}
 	// Access: only the dashboard's token-authentication objects

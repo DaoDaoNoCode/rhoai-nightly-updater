@@ -74,7 +74,7 @@ var (
 
 // dspaInfo is the part of a DataSciencePipelinesApplication the tool reads.
 type dspaInfo struct {
-	Meta objectMeta
+	Meta kube.ObjectMeta
 	Host string
 	// Scheme and Port of the external object storage. DSPO appends Port to
 	// Host when it is set (controllers/storage.go joinHostPort); the tool
@@ -114,15 +114,15 @@ type dspaCondition struct {
 // secretName. A DSPA the dashboard created, or whose storage someone else
 // changed since, is not the tool's.
 func (d dspaInfo) managedByTool() bool {
-	if d.Meta.hasToolLabel() {
+	if d.Meta.HasToolLabel() {
 		return true
 	}
 	storage := []string{"f:spec", "f:objectStorage", "f:externalStorage"}
 	return d.Meta.Name == legacyDSPAName &&
 		d.Host == legacyS3Host() &&
 		d.SecretName == legacyDSPASecretName &&
-		d.Meta.ownsFieldPath(toolManagers, append(storage, "f:host")...) &&
-		d.Meta.ownsFieldPath(toolManagers, append(storage, "f:s3CredentialsSecret", "f:secretName")...)
+		d.Meta.OwnsFieldPath(toolManagers, append(storage, "f:host")...) &&
+		d.Meta.OwnsFieldPath(toolManagers, append(storage, "f:s3CredentialsSecret", "f:secretName")...)
 }
 
 func (d dspaInfo) hasFinalizer() bool {
@@ -165,7 +165,7 @@ func dspaCollectionPath(namespace string) string {
 func listDSPAs(c *Client, namespace string) ([]dspaInfo, error) {
 	var list struct {
 		Items []struct {
-			Metadata objectMeta `json:"metadata"`
+			Metadata kube.ObjectMeta `json:"metadata"`
 			Spec     struct {
 				ObjectStorage struct {
 					ExternalStorage *struct {
@@ -306,7 +306,7 @@ func pipelineServerState(d dspaInfo, dashboardURL string) types.ResourceState {
 		Name:          d.Meta.Name,
 		Deployed:      true,
 		ManagedByTool: true,
-		Terminating:   d.Meta.terminating(),
+		Terminating:   d.Meta.Terminating(),
 		// Workbench pipelines need the name dspa (see dspaName).
 		NonStandardName: d.Meta.Name != dspaName,
 	}
@@ -342,7 +342,7 @@ func pipelineServerState(d dspaInfo, dashboardURL string) types.ResourceState {
 	default:
 		// The Ready reason is often a success-sounding word such as
 		// "MinimumReplicasAvailable"; the message carries the cause.
-		state.Message = firstNonEmpty(truncateText(d.Ready.Message, 300), d.Ready.Reason, "Not ready")
+		state.Message = kube.FirstNonEmpty(kube.TruncateText(d.Ready.Message, 300), d.Ready.Reason, "Not ready")
 	}
 	// Stuck, like the dashboard's hasServerTimedOut: the API server is not
 	// ready 5 minutes after creation. Ready=False with a ready API server
@@ -395,7 +395,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	// MLflow samples: the project is the user's (made in the dashboard),
 	// and setup never creates or changes it.
 	if ok, err := isDSProject(c, project); err != nil {
-		return fail(fmt.Sprintf("Cannot list the projects; nothing was changed: %v", err), errorCodeFromK8sErr(err), "project list failed")
+		return fail(fmt.Sprintf("Cannot list the projects; nothing was changed: %v", err), kube.ErrorCodeFromK8sErr(err), "project list failed")
 	} else if !ok {
 		return fail(fmt.Sprintf("%s is not a Data Science project. Create it in the RHOAI dashboard first. Nothing was changed.", project), "validation", "not a Data Science project")
 	}
@@ -407,20 +407,20 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	case errors.Is(err, errDSPACRDMissing):
 		return fail("Data Science Pipelines is not installed (no DataSciencePipelinesApplication CRD). Set the aipipelines component to Managed in the DataScienceCluster first.", "prerequisites", "DSPA CRD missing")
 	case err != nil:
-		return fail(fmt.Sprintf("Cannot check for existing pipeline servers: %v", err), errorCodeFromK8sErr(err), "list failed")
+		return fail(fmt.Sprintf("Cannot check for existing pipeline servers: %v", err), kube.ErrorCodeFromK8sErr(err), "list failed")
 	}
-	var dspaMeta objectMeta
+	var dspaMeta kube.ObjectMeta
 	dspaFound := false
 	var old *dspaInfo
 	for i, d := range existing {
 		switch {
-		case d.Meta.Name == dspaName && d.Meta.hasToolLabel():
-			if d.Meta.terminating() {
+		case d.Meta.Name == dspaName && d.Meta.HasToolLabel():
+			if d.Meta.Terminating() {
 				return fail(fmt.Sprintf("The pipeline server in %s is still being deleted. Wait for it to finish, then retry.", project), "terminating", "terminating")
 			}
 			dspaMeta, dspaFound = d.Meta, true
 		case d.Meta.Name == previousDSPAName && d.managedByTool():
-			if d.Meta.terminating() {
+			if d.Meta.Terminating() {
 				return fail(fmt.Sprintf("Pipeline server %s in %s is still being deleted. Wait for it to finish, then set up again. Nothing was changed.", d.Meta.Name, project), "terminating", "earlier name terminating")
 			}
 			if !recreate {
@@ -441,7 +441,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	logs = append(logs, "Reading S3 storage credentials...")
 	keys, found, err := readS3Keys(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Failed to read the S3 storage credentials: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "S3 secret read failed")
+		return fail(fmt.Sprintf("Failed to read the S3 storage credentials: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "S3 secret read failed")
 	}
 	if !found || keys.AccessKey == "" || keys.SecretKey == "" {
 		return fail(fmt.Sprintf("The S3 credentials are empty. Check that Secret %s in namespace %s has the keys %s and %s, or repair the S3 storage.", s3Secret, s3Namespace, s3AccessKeyField, s3SecretKeyField), "prerequisites", "S3 credentials empty")
@@ -457,9 +457,9 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	}
 	for _, s := range secrets {
 		if err := readProjectSecret(s, projectSecretPath(project, s.name)); err != nil {
-			return fail(fmt.Sprintf("Cannot read secret %s: %v", s.name, err), errorCodeFromK8sErr(err), s.what+" read failed")
+			return fail(fmt.Sprintf("Cannot read secret %s: %v", s.name, err), kube.ErrorCodeFromK8sErr(err), s.what+" read failed")
 		}
-		if s.found && !s.meta.hasToolLabel() {
+		if s.found && !s.meta.HasToolLabel() {
 			return fail(fmt.Sprintf("Secret %s already exists in %s and was not created by this tool. It was left unchanged.", s.name, project), "not_managed", s.what+" exists")
 		}
 		// Owned by the DSPA once it exists (below, or now on a re-run).
@@ -513,15 +513,15 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 		"spec": spec,
 	}
 	dspaPath := namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, dspaName)
-	readDSPA := func() (objectMeta, bool, error) {
+	readDSPA := func() (kube.ObjectMeta, bool, error) {
 		body, present, getErr := c.GetOptional(dspaPath)
 		if getErr != nil {
-			return objectMeta{}, false, getErr
+			return kube.ObjectMeta{}, false, getErr
 		}
 		if !present {
-			return objectMeta{}, false, nil
+			return kube.ObjectMeta{}, false, nil
 		}
-		meta, perr := parseObjectMeta(body)
+		meta, perr := kube.ParseObjectMeta(body)
 		return meta, true, perr
 	}
 	// POST when absent, resourceVersion-guarded apply when owned, so an
@@ -531,7 +531,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	writeDSPA := func(dryRun bool) (string, error) {
 		action, meta, found, err := ensureToolObject(c, fmt.Sprintf("DataSciencePipelinesApplication %s/%s", project, dspaName), dspaPath,
 			withToolFieldManager(namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, ""))+"&fieldValidation=Strict",
-			dspa, dspaMeta, dspaFound, readDSPA, objectMeta.hasToolLabel, dryRun)
+			dspa, dspaMeta, dspaFound, readDSPA, kube.ObjectMeta.HasToolLabel, dryRun)
 		dspaMeta, dspaFound = meta, found
 		return action, err
 	}
@@ -676,7 +676,7 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 		all, err = nil, nil
 	}
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot list pipeline servers in %s; nothing was deleted: %v", project, err), errorCodeFromK8sErr(err), "list failed")
+		return fail(fmt.Sprintf("Cannot list pipeline servers in %s; nothing was deleted: %v", project, err), kube.ErrorCodeFromK8sErr(err), "list failed")
 	}
 	var target *dspaInfo
 	var unmanaged []string
@@ -695,7 +695,7 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 		}
 		logs = append(logs, "No pipeline server created by this tool in this project")
 		// A previous run may have removed the DSPA but not its secret.
-		orphan := &dspaInfo{Meta: objectMeta{UID: "none"}, SecretName: dspaSecretName}
+		orphan := &dspaInfo{Meta: kube.ObjectMeta{UID: "none"}, SecretName: dspaSecretName}
 		note := deleteDSPASecret(c, project, orphan, all, &logs) + deleteConnection(c, project, &logs)
 		if note != "" {
 			return fail(fmt.Sprintf("No pipeline server created by this tool remains in %s.%s", project, note), "partial_failure", "orphan secret")
@@ -707,7 +707,7 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 	if !ok {
 		return fail(fmt.Sprintf("Pipeline server %s does not have a name this tool creates, so it was not deleted.", target.Meta.Name), "not_managed", "unexpected DSPA name")
 	}
-	if target.Meta.terminating() {
+	if target.Meta.Terminating() {
 		logs = append(logs, fmt.Sprintf("Pipeline server %s is already being deleted", target.Meta.Name))
 	} else {
 		// The DSPA finalizer is removed only by the running operator. Deleting
@@ -715,15 +715,15 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 		if target.hasFinalizer() {
 			running, opErr := dspoRunning(c)
 			if opErr != nil {
-				return fail(fmt.Sprintf("Cannot verify that the data-science-pipelines operator is running; nothing was deleted: %v", opErr), errorCodeFromK8sErr(opErr), "operator check failed")
+				return fail(fmt.Sprintf("Cannot verify that the data-science-pipelines operator is running; nothing was deleted: %v", opErr), kube.ErrorCodeFromK8sErr(opErr), "operator check failed")
 			}
 			if !running {
 				return fail("The data-science-pipelines operator is not running, so the pipeline server's finalizer could not complete and it would stay in Terminating. Nothing was deleted. Make sure the aipipelines component is Managed and its operator is ready, then retry.", "prerequisites", "operator not running")
 			}
 		}
 		logs = append(logs, fmt.Sprintf("Deleting pipeline server %s...", target.Meta.Name))
-		if _, delErr := deleteWithUID(c, dspaPath, target.Meta.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
-			code := errorCodeFromK8sErr(delErr)
+		if _, delErr := kube.DeleteWithUID(c, dspaPath, target.Meta.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
+			code := kube.ErrorCodeFromK8sErr(delErr)
 			if kube.IsK8sConflict(delErr) {
 				code = "conflict"
 			}
@@ -737,14 +737,14 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 	// secret behind with no pipeline server left to show a Tear down button.
 	secretNote := deleteDSPASecret(c, project, target, all, &logs) + deleteConnection(c, project, &logs)
 
-	gone, waitErr := waitForDeletion(c, dspaPath, PipelineServerDeleteTimeout, PipelineServerDeletePoll)
+	gone, waitErr := kube.WaitForDeletion(c, dspaPath, PipelineServerDeleteTimeout, PipelineServerDeletePoll)
 	if waitErr != nil {
 		recordActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (cannot confirm deletion: %v)", project, waitErr), false)
 		return &types.OperationResponse{
 			Success:   false,
 			Message:   fmt.Sprintf("Deletion of pipeline server %s was requested, but whether it is gone cannot be checked: %v.%s", target.Meta.Name, waitErr, secretNote),
 			Logs:      logs,
-			ErrorCode: firstNonEmpty(errorCodeFromK8sErr(waitErr), "in_progress"),
+			ErrorCode: kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(waitErr), "in_progress"),
 		}, nil
 	}
 	if !gone {
@@ -784,7 +784,7 @@ func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInf
 		return ""
 	}
 	for _, d := range all {
-		if d.Meta.UID != target.Meta.UID && !d.Meta.terminating() && d.SecretName == name {
+		if d.Meta.UID != target.Meta.UID && !d.Meta.Terminating() && d.SecretName == name {
 			*logs = append(*logs, fmt.Sprintf("Kept secret %s: pipeline server %s also uses it", name, d.Meta.Name))
 			return ""
 		}
@@ -803,17 +803,17 @@ func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInf
 		*logs = append(*logs, "OK: Secret already absent")
 		return ""
 	}
-	meta, err := parseObjectMeta(body)
+	meta, err := kube.ParseObjectMeta(body)
 	if err != nil {
 		return fmt.Sprintf(" The credentials secret %s could not be parsed and was left in place.", name)
 	}
 	// The tool's label, or an earlier version's managers own its keys.
-	if !meta.hasToolLabel() && !meta.ownsFieldPath(toolManagers, "f:data") && !meta.ownsFieldPath(toolManagers, "f:stringData") {
+	if !meta.HasToolLabel() && !meta.OwnsFieldPath(toolManagers, "f:data") && !meta.OwnsFieldPath(toolManagers, "f:stringData") {
 		*logs = append(*logs, fmt.Sprintf("Kept secret %s: it was not created by this tool", name))
 		return ""
 	}
 	*logs = append(*logs, fmt.Sprintf("Deleting secret %s...", name))
-	if _, err := deleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
+	if _, err := kube.DeleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 		*logs = append(*logs, fmt.Sprintf("Warning: failed to delete secret: %v", err))
 		return fmt.Sprintf(" The credentials secret %s could not be deleted: %v. Re-run teardown or delete it manually.", name, err)
 	}
@@ -905,7 +905,7 @@ type projectSecret struct {
 	project, name string
 	what          string // "secret" or "connection", for the activity log
 	obj           map[string]any
-	meta          objectMeta
+	meta          kube.ObjectMeta
 	found         bool
 }
 
@@ -921,7 +921,7 @@ func projectSecretPath(project, name string) string {
 }
 
 func readProjectSecret(s *projectSecret, path string) error {
-	meta, found, err := readObjectMeta(s.c, path)
+	meta, found, err := kube.ReadObjectMeta(s.c, path)
 	if err == nil {
 		s.meta, s.found = meta, found
 	}
@@ -929,9 +929,9 @@ func readProjectSecret(s *projectSecret, path string) error {
 }
 
 func writeProjectSecret(s *projectSecret, path, createPath string, dryRun bool) (string, error) {
-	reader := func() (objectMeta, bool, error) { return readObjectMeta(s.c, path) }
+	reader := func() (kube.ObjectMeta, bool, error) { return kube.ReadObjectMeta(s.c, path) }
 	action, meta, found, err := ensureToolObject(s.c, fmt.Sprintf("Secret %s/%s", s.project, s.name), path,
-		createPath, s.obj, s.meta, s.found, reader, objectMeta.hasToolLabel, dryRun)
+		createPath, s.obj, s.meta, s.found, reader, kube.ObjectMeta.HasToolLabel, dryRun)
 	s.meta, s.found = meta, found
 	return action, err
 }
@@ -1068,13 +1068,13 @@ func GetResourcesStatusFor(c *Client, project string) (*types.ResourcesStatus, e
 		if ps.Namespace != project || ps.Terminating {
 			continue
 		}
-		meta, found, err := readObjectMeta(c, namespacedPath("v1", "secrets", project, connectionSecretName))
+		meta, found, err := kube.ReadObjectMeta(c, namespacedPath("v1", "secrets", project, connectionSecretName))
 		switch {
 		case err != nil:
 			ps.ConnectionState, ps.ConnectionMessage = ConnectionUnreadable, err.Error()
 		case !found:
 			ps.ConnectionState = ConnectionMissing
-		case !meta.hasToolLabel():
+		case !meta.HasToolLabel():
 			ps.ConnectionState = ConnectionForeign
 		default:
 			ps.ConnectionState = ConnectionPresent
@@ -1090,19 +1090,19 @@ func GetResourcesStatusFor(c *Client, project string) (*types.ResourcesStatus, e
 // had to be left behind on an error.
 func deleteConnection(c *Client, project string, logs *[]string) string {
 	path := namespacedPath("v1", "secrets", project, connectionSecretName)
-	meta, found, err := readObjectMeta(c, path)
+	meta, found, err := kube.ReadObjectMeta(c, path)
 	switch {
 	case err != nil:
 		*logs = append(*logs, fmt.Sprintf("Warning: cannot read connection %s: %v", connectionSecretName, err))
 		return fmt.Sprintf(" The dashboard connection %s could not be checked and was left in place: %v.", connectionSecretName, err)
 	case !found:
 		return ""
-	case !meta.hasToolLabel():
+	case !meta.HasToolLabel():
 		*logs = append(*logs, fmt.Sprintf("Kept secret %s: it was not created by this tool", connectionSecretName))
 		return ""
 	}
 	*logs = append(*logs, fmt.Sprintf("Deleting dashboard connection %s...", connectionSecretName))
-	if _, err := deleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
+	if _, err := kube.DeleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 		*logs = append(*logs, fmt.Sprintf("Warning: failed to delete connection: %v", err))
 		return fmt.Sprintf(" The dashboard connection %s could not be deleted: %v. Re-run teardown or delete it manually.", connectionSecretName, err)
 	}
@@ -1122,5 +1122,5 @@ func pipelineWriteFailure(what, project string, err error) (string, string) {
 	case kube.IsK8sConflict(err):
 		return fmt.Sprintf("The %s in %s changed while setup was updating it, so it was not changed. Re-run setup.", what, project), "conflict"
 	}
-	return fmt.Sprintf("Failed to create or update the %s in %s: %v.", what, project, err), errorCodeFromK8sErr(err)
+	return fmt.Sprintf("Failed to create or update the %s in %s: %v.", what, project, err), kube.ErrorCodeFromK8sErr(err)
 }

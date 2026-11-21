@@ -132,12 +132,12 @@ func (w *leftoverWorld) list(obj map[string]any) string {
 func (w *leftoverWorld) patchCR(r *http.Request, body []byte) (int, string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	var ops []jsonPatchOp
+	var ops []kube.JSONPatchOp
 	if err := json.Unmarshal(body, &ops); err != nil {
 		return 400, `{"kind":"Status","code":400}`
 	}
-	next, err := applyJSONPatch(w.cr, ops)
-	if _, ok := errors.AsType[*errJSONPatchTest](err); ok {
+	next, err := kube.ApplyJSONPatch(w.cr, ops)
+	if _, ok := errors.AsType[*kube.JSONPatchTestError](err); ok {
 		return 422, apiServerPatchTestFailed
 	}
 	if err != nil {

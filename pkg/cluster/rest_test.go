@@ -106,7 +106,7 @@ func TestGetInto(t *testing.T) {
 		"/no":    {403, forbiddenBody},
 	})
 	var obj struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 	}
 	if err := c.GetInto("/there", &obj); err != nil || obj.Metadata.Name != "a" {
 		t.Fatalf("getInto: %+v %v", obj, err)

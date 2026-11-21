@@ -535,7 +535,7 @@ func AssistRolloutFor(c *Client, namespace, name string) (*types.OperationRespon
 	if !ok || !dns1123Name.MatchString(name) || len(name) > 253 {
 		return &types.OperationResponse{
 			Success:   false,
-			Message:   firstNonEmpty(why, "Unknown Deployment."),
+			Message:   kube.FirstNonEmpty(why, "Unknown Deployment."),
 			ErrorCode: "validation",
 		}, nil
 	}
@@ -598,13 +598,13 @@ func assistTargets(c *Client, targets []string, logs []string) (*types.Operation
 // assist-rollout saved in its annotation, once the rollout has finished.
 func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.OperationResponse, error) {
 	if ok, why := isRolloutNamespace(c, namespace); !ok || !dns1123Name.MatchString(name) {
-		return &types.OperationResponse{Success: false, Message: firstNonEmpty(why, "Unknown Deployment."), ErrorCode: "validation"}, nil
+		return &types.OperationResponse{Success: false, Message: kube.FirstNonEmpty(why, "Unknown Deployment."), ErrorCode: "validation"}, nil
 	}
 	target := namespace + "/" + name
 	path := namespacedPath("apps/v1", "deployments", namespace, name)
 	body, found, err := c.GetOptional(path)
 	if err != nil {
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read Deployment %s: %v", target, err), ErrorCode: errorCodeFromK8sErr(err)}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read Deployment %s: %v", target, err), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
 	if !found {
 		return nothingToDo(fmt.Sprintf("Deployment %s no longer exists. Nothing was changed.", target), nil), nil
@@ -646,7 +646,7 @@ func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.Operation
 		if kube.IsK8sConflict(err) {
 			return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Deployment %s changed while it was being checked; nothing was changed. Run diagnostics again.", target), ErrorCode: "conflict"}, nil
 		}
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Failed to patch Deployment %s: %v", target, err), ErrorCode: errorCodeFromK8sErr(err)}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Failed to patch Deployment %s: %v", target, err), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
 
 	original := "unset (Kubernetes default 25%)"
@@ -655,7 +655,7 @@ func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.Operation
 	}
 	msg := fmt.Sprintf("Restored maxUnavailable on %s to %s and removed the saved note.", target, original)
 	if !restoring {
-		msg = fmt.Sprintf("maxUnavailable on %s is already %s (changed by its owner), so it was left as is; the saved note was removed.", target, nonEmpty(current, "unset"))
+		msg = fmt.Sprintf("maxUnavailable on %s is already %s (changed by its owner), so it was left as is; the saved note was removed.", target, kube.NonEmpty(current, "unset"))
 	}
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 func dspaPath(ns, name string) string {
@@ -15,7 +17,7 @@ func secretPath(ns, name string) string {
 	return "/api/v1/namespaces/" + ns + "/secrets/" + name
 }
 
-const toolLabelJSON = `{"` + managedByLabelKey + `":"` + managedByLabelValue + `"}`
+const toolLabelJSON = `{"` + kube.ManagedByLabelKey + `":"` + kube.ManagedByLabelValue + `"}`
 
 // putDSPA stores a DSPA. labels is a JSON object, manager the creator.
 func putDSPA(f *resourceFake, ns, name, labels, manager, op, host, secret, extraMeta, status string) {
@@ -220,7 +222,7 @@ func TestSetupPipelineServer_CreatesTheStandardName(t *testing.T) {
 			t.Fatalf("%s not created", path)
 		}
 		l := obj["metadata"].(map[string]any)["labels"].(map[string]any)
-		if l[managedByLabelKey] != managedByLabelValue {
+		if l[kube.ManagedByLabelKey] != kube.ManagedByLabelValue {
 			t.Errorf("%s lacks the ownership label", path)
 		}
 	}
@@ -339,7 +341,7 @@ func TestSetupPipelineServer_SecretOwnedByTheDSPA(t *testing.T) {
 		}
 		assertOwnedByDSPA(t, f, secretPath("proj", dspaSecretName), "proj", dspaName)
 		labels, _ := ensureMap(f.get(secretPath("proj", dspaSecretName)), "metadata")["labels"].(map[string]any)
-		if labels["opendatahub.io/dashboard"] != "true" || labels[managedByLabelKey] != managedByLabelValue {
+		if labels["opendatahub.io/dashboard"] != "true" || labels[kube.ManagedByLabelKey] != kube.ManagedByLabelValue {
 			t.Errorf("run %d: secret labels = %v", run, labels)
 		}
 	}
@@ -612,10 +614,10 @@ func TestPipelineTeardown_RerunRemovesOrphanSecret(t *testing.T) {
 }
 
 func TestCountNounAndVerbAgree(t *testing.T) {
-	if got := countNoun(1, "pipeline server", "pipeline servers") + " " + verb(1, "uses", "use"); got != "1 pipeline server uses" {
+	if got := kube.CountNoun(1, "pipeline server", "pipeline servers") + " " + kube.Verb(1, "uses", "use"); got != "1 pipeline server uses" {
 		t.Errorf("singular: %q", got)
 	}
-	if got := countNoun(2, "pipeline server", "pipeline servers") + " " + verb(2, "uses", "use"); got != "2 pipeline servers use" {
+	if got := kube.CountNoun(2, "pipeline server", "pipeline servers") + " " + kube.Verb(2, "uses", "use"); got != "2 pipeline servers use" {
 		t.Errorf("plural: %q", got)
 	}
 }

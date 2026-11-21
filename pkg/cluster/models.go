@@ -192,7 +192,7 @@ func toolModelPath(project, name string) (string, bool) {
 }
 
 type llmisvcObject struct {
-	Metadata objectMeta `json:"metadata"`
+	Metadata kube.ObjectMeta `json:"metadata"`
 	Spec     struct {
 		Model struct {
 			URI  string `json:"uri"`
@@ -221,8 +221,8 @@ type llmisvcObject struct {
 		Addresses []struct {
 			URL string `json:"url"`
 		} `json:"addresses"`
-		ObservedGeneration int64          `json:"observedGeneration"`
-		Conditions         []k8sCondition `json:"conditions"`
+		ObservedGeneration int64            `json:"observedGeneration"`
+		Conditions         []kube.Condition `json:"conditions"`
 	} `json:"status"`
 }
 
@@ -238,7 +238,7 @@ func (m llmisvcObject) routesThroughInferenceGateway(def kserveGateway) bool {
 		return def.isInferenceGateway()
 	}
 	for _, ref := range m.Spec.Router.Gateway.Refs {
-		ns := firstNonEmpty(ref.Namespace, m.Metadata.Namespace)
+		ns := kube.FirstNonEmpty(ref.Namespace, m.Metadata.Namespace)
 		if ref.Name == inferenceGatewayName && ns == inferenceGatewayNamespace {
 			return true
 		}
@@ -332,7 +332,7 @@ func manifestUnknownMentioned(msg string) bool {
 
 // olderThan: the object was created more than d ago (false when its
 // creation time cannot be read).
-func olderThan(meta objectMeta, d time.Duration) bool {
+func olderThan(meta kube.ObjectMeta, d time.Duration) bool {
 	t, err := time.Parse(time.RFC3339, meta.CreationTimestamp)
 	return err == nil && time.Since(t) > d
 }
@@ -347,7 +347,7 @@ func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) type
 		s.TokenSecret, s.TokenServiceAccount = tokenSecretName(m.Metadata.Name), tokenSAName(m.Metadata.Name)
 	}
 	s.TokenAuthOff = m.Metadata.Annotations[enableAuthAnnot] == "false"
-	s.Terminating = m.Metadata.terminating()
+	s.Terminating = m.Metadata.Terminating()
 	s.DisplayName = m.Metadata.Annotations["openshift.io/display-name"]
 	if m.Status.URL != "" {
 		if snippetURL(m.Status.URL) {
@@ -358,7 +358,7 @@ func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) type
 	}
 	s.MaaSPublished = modelHasMaaSRef(m)
 	s.CurrentImage = m.mainImage()
-	s.ImageKind = firstNonEmpty(m.Metadata.Annotations[modelImageSourceAnnotation], "preset")
+	s.ImageKind = kube.FirstNonEmpty(m.Metadata.Annotations[modelImageSourceAnnotation], "preset")
 	s.ImageVersion = m.Metadata.Annotations[modelImageVersionAnnotation]
 	if name := m.Metadata.Annotations[hardwareProfileNameAnnotation]; name != "" {
 		s.HardwareProfile = m.Metadata.Annotations[hardwareProfileNamespaceAnnotation] + "/" + name
@@ -369,8 +369,8 @@ func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) type
 	case !s.ManagedByTool:
 		s.TeardownBlockedReason = "This model was not created by this tool (for example in the dashboard), so the tool does not change or delete it."
 	}
-	ready, hasReady := findCondition(m.Status.Conditions, "Ready")
-	presets, hasPresets := findCondition(m.Status.Conditions, "PresetsCombined")
+	ready, hasReady := kube.FindCondition(m.Status.Conditions, "Ready")
+	presets, hasPresets := kube.FindCondition(m.Status.Conditions, "PresetsCombined")
 	switch {
 	case s.Terminating:
 		s.Message = "Terminating"
@@ -380,12 +380,12 @@ func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) type
 		s.Message = "Running"
 		return s
 	case hasPresets && presets.Status == "False":
-		s.Message = firstNonEmpty(truncateText(presets.Message, 300), presets.Reason, "Its preset cannot be resolved")
-		s.WaitingReason = firstNonEmpty(presets.Reason, "PresetsCombined")
+		s.Message = kube.FirstNonEmpty(kube.TruncateText(presets.Message, 300), presets.Reason, "Its preset cannot be resolved")
+		s.WaitingReason = kube.FirstNonEmpty(presets.Reason, "PresetsCombined")
 		s.TerminalError = true
 		return s
 	case hasReady:
-		s.Message = firstNonEmpty(truncateText(ready.Message, 300), ready.Reason, "Not ready")
+		s.Message = kube.FirstNonEmpty(kube.TruncateText(ready.Message, 300), ready.Reason, "Not ready")
 	case s.ManagedByTool:
 		s.Message = "Starting"
 	default:
@@ -495,7 +495,7 @@ func modelsBlock(dsc dscRead) (*types.ComponentBlock, string) {
 		meta, _ := dsc.Object["metadata"].(map[string]any)
 		name, _ := meta["name"].(string)
 		return &types.ComponentBlock{Component: "kserve",
-			Reason: fmt.Sprintf("KServe cannot serve LLMInferenceServices yet: DataScienceCluster %s reports %s=False (%s). A cluster-admin installs what it names; the Components page shows the details.", name, llmDependenciesCondition, firstNonEmpty(msg, "no message"))}, deps
+			Reason: fmt.Sprintf("KServe cannot serve LLMInferenceServices yet: DataScienceCluster %s reports %s=False (%s). A cluster-admin installs what it names; the Components page shows the details.", name, llmDependenciesCondition, kube.FirstNonEmpty(msg, "no message"))}, deps
 	}
 	return nil, deps
 }
@@ -569,14 +569,14 @@ func discoverCPUPreset(c *Client) cpuPreset {
 			} `json:"template"`
 		} `json:"spec"`
 		Status struct {
-			Conditions []k8sCondition `json:"conditions"`
+			Conditions []kube.Condition `json:"conditions"`
 		} `json:"status"`
 	}
 	if err := json.Unmarshal(body, &cfg); err != nil {
 		return cpuPreset{name: name, problem: fmt.Sprintf("Cannot parse the CPU preset %s/%s: %v.", ns, name, err)}
 	}
-	if cond, ok := findCondition(cfg.Status.Conditions, "Ready"); ok && cond.Status == "False" {
-		return cpuPreset{name: name, problem: fmt.Sprintf("The CPU preset %s/%s is not ready: %s.", ns, name, firstNonEmpty(cond.Message, cond.Reason))}
+	if cond, ok := kube.FindCondition(cfg.Status.Conditions, "Ready"); ok && cond.Status == "False" {
+		return cpuPreset{name: name, problem: fmt.Sprintf("The CPU preset %s/%s is not ready: %s.", ns, name, kube.FirstNonEmpty(cond.Message, cond.Reason))}
 	}
 	p := cpuPreset{name: name}
 	if cfg.Spec.Template != nil {
@@ -647,7 +647,7 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 		}
 	}
 	labels := map[string]any{
-		managedByLabelKey:          managedByLabelValue,
+		kube.ManagedByLabelKey:     kube.ManagedByLabelValue,
 		"opendatahub.io/dashboard": "true",
 		genAIAssetLabel:            "true",
 	}
@@ -697,7 +697,7 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 // only there). It returns a refusal, or "".
 func projectNamespace(c *Client, project string) (map[string]string, string, string) {
 	var ns struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 		Status   struct {
 			Phase string `json:"phase"`
 		} `json:"status"`
@@ -707,12 +707,12 @@ func projectNamespace(c *Client, project string) (map[string]string, string, str
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Sprintf("Cannot parse project %s: %v.", project, err), "internal"
 		}
-		return nil, fmt.Sprintf("Cannot read project %s: %v.", project, err), errorCodeFromK8sErr(err)
+		return nil, fmt.Sprintf("Cannot read project %s: %v.", project, err), kube.ErrorCodeFromK8sErr(err)
 	}
 	if !found {
 		return nil, fmt.Sprintf("Project %s does not exist. Choose a data science project, or create one in the dashboard.", project), "validation"
 	}
-	if ns.Metadata.terminating() || ns.Status.Phase == "Terminating" {
+	if ns.Metadata.Terminating() || ns.Status.Phase == "Terminating" {
 		return nil, fmt.Sprintf("Project %s is being deleted.", project), "terminating"
 	}
 	if ns.Metadata.Labels["opendatahub.io/dashboard"] != "true" {
@@ -826,7 +826,7 @@ func RunModels(c *Client, req types.ModelsRequest, onStep func(UpdateStepEvent))
 		parts = append(parts, fmt.Sprintf("project %s on the inference gateway", req.Project))
 	} else if req.Project != "" {
 		entry, _ := catalogEntry(req.Model)
-		parts = append(parts, fmt.Sprintf("model %s in %s", firstNonEmpty(entry.Name, req.Model), req.Project))
+		parts = append(parts, fmt.Sprintf("model %s in %s", kube.FirstNonEmpty(entry.Name, req.Model), req.Project))
 	}
 	if req.Gateway {
 		parts = append(parts, "inference gateway")
@@ -872,11 +872,11 @@ func (m *modelsRun) check(req types.ModelsRequest) (*types.OperationResponse, er
 	m.step("callable", "running", fmt.Sprintf("Calling %s in %s once...", entry.Name, req.Project))
 	model, found, err := readToolModel(c, req.Project, entry.Name)
 	if err != nil {
-		return m.fail("callable", fmt.Sprintf("Cannot read %s in %s: %v.", entry.Name, req.Project, err), errorCodeFromK8sErr(err), "model read failed")
+		return m.fail("callable", fmt.Sprintf("Cannot read %s in %s: %v.", entry.Name, req.Project, err), kube.ErrorCodeFromK8sErr(err), "model read failed")
 	}
 	rec, err := readModelsRecord(c)
 	if err != nil {
-		return m.fail("callable", err.Error(), errorCodeFromK8sErr(err), "record read failed")
+		return m.fail("callable", err.Error(), kube.ErrorCodeFromK8sErr(err), "record read failed")
 	}
 	switch {
 	case !found:
@@ -884,7 +884,7 @@ func (m *modelsRun) check(req types.ModelsRequest) (*types.OperationResponse, er
 	case !rec.owns(model.Metadata):
 		return m.fail("callable", fmt.Sprintf("%s in %s was not created by this tool, so this tool has no token of the model's own to call it with.", entry.Name, req.Project), "not_managed", "model foreign")
 	}
-	if cond, ok := findCondition(model.Status.Conditions, "Ready"); !ok || cond.Status != "True" {
+	if cond, ok := kube.FindCondition(model.Status.Conditions, "Ready"); !ok || cond.Status != "True" {
 		return m.fail("callable", fmt.Sprintf("%s in %s is not ready yet; check once it is.", entry.Name, req.Project), "not_ready", "model not ready")
 	}
 	return m.callable(req.Project, entry.Name, rec)
@@ -919,7 +919,7 @@ func (m *modelsRun) allow(project string) (*types.OperationResponse, error) {
 	gw, found, err := readInferenceGateway(c)
 	switch {
 	case err != nil:
-		return m.fail("check", fmt.Sprintf("Cannot read the inference gateway: %v. Nothing was changed.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "gateway read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read the inference gateway: %v. Nothing was changed.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "gateway read failed")
 	case !found:
 		return m.fail("check", "The inference gateway is not set up. Setting up a model sets it up, with the model's project on its list. Nothing was changed.", "prerequisites", "no gateway")
 	case !gatewayOwned(gw.Metadata):
@@ -943,7 +943,7 @@ func (m *modelsRun) allow(project string) (*types.OperationResponse, error) {
 	m.step("check", "success", "The gateway is this tool's; the project exists.")
 	m.step("gateway", "running", fmt.Sprintf("Adding %s to the projects the inference gateway allows...", project))
 	if err := recordGatewayProject(c, project); err != nil {
-		return m.fail("gateway", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
+		return m.fail("gateway", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 	}
 	written, msg, code := writeInferenceGateway(c, plan, func(line string) { m.step("gateway", "running", line) })
 	if msg != "" {
@@ -1005,7 +1005,7 @@ func (m *modelsRun) teardown(req types.ModelsRequest) (*types.OperationResponse,
 func (m *modelsRun) unpublishMaaSOnly(project, name string) (*types.OperationResponse, error) {
 	only, err := maasOnlySetup(m.c, project, name)
 	if err != nil {
-		return m.fail("unpublish", fmt.Sprintf("Cannot check whether %s in %s is published to MaaS; nothing was deleted: %v.", name, project, err), errorCodeFromK8sErr(err), "maas check failed")
+		return m.fail("unpublish", fmt.Sprintf("Cannot check whether %s in %s is published to MaaS; nothing was deleted: %v.", name, project, err), kube.ErrorCodeFromK8sErr(err), "maas check failed")
 	}
 	if !only {
 		return nil, nil
@@ -1019,7 +1019,7 @@ func (m *modelsRun) unpublishMaaSOnly(project, name string) (*types.OperationRes
 	}
 	m.logs = append(m.logs, res.Logs...)
 	if !res.Success {
-		return m.fail("unpublish", res.Message+" The model was not deleted.", firstNonEmpty(res.ErrorCode, "partial_failure"), "unpublish failed")
+		return m.fail("unpublish", res.Message+" The model was not deleted.", kube.FirstNonEmpty(res.ErrorCode, "partial_failure"), "unpublish failed")
 	}
 	m.step("unpublish", "success", res.Message)
 	return nil, nil
@@ -1033,7 +1033,7 @@ type modelPlan struct {
 	image    imagePlan
 	hardware hardwareProfile
 	obj      map[string]any
-	current  objectMeta
+	current  kube.ObjectMeta
 	found    bool
 	// rec is the tool's record of its models, as read by the plan.
 	rec modelsRecord
@@ -1169,7 +1169,7 @@ func (m *modelsRun) setupGateway(req types.ModelsRequest, s *modelsSetup) (*type
 		m.step("gateway", "running", "Creating the inference gateway...")
 		if listed, _ := gw.gateway.listedNamespaces(); req.Project != "" && !slices.Contains(listed, req.Project) {
 			if err := recordGatewayProject(c, req.Project); err != nil {
-				return m.fail("gateway", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
+				return m.fail("gateway", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 			}
 		}
 		written, msg, code := writeInferenceGateway(c, gw, func(line string) { m.step("gateway", "running", line) })
@@ -1181,13 +1181,13 @@ func (m *modelsRun) setupGateway(req types.ModelsRequest, s *modelsSetup) (*type
 		ready, dns, problem, pending, err := waitInferenceGateway(c, gw.host, func(line string) { m.step("gateway-ready", "running", line) })
 		switch {
 		case err != nil:
-			return m.fail("gateway-ready", fmt.Sprintf("Stopped waiting for the gateway: %v. It was created; the Models tab shows its state.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled"), "gateway wait failed")
+			return m.fail("gateway-ready", fmt.Sprintf("Stopped waiting for the gateway: %v. It was created; the Models tab shows its state.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "gateway wait failed")
 		case problem != "":
 			return m.fail("gateway-ready", problem+" Its objects were created; delete the gateway to remove them.", "not_ready", "gateway not accepted")
 		case !ready:
 			why := ""
 			if pending != "" {
-				why = " The gateway controller says: " + truncateText(pending, 300) + "."
+				why = " The gateway controller says: " + kube.TruncateText(pending, 300) + "."
 			}
 			m.step("gateway-ready", "success", fmt.Sprintf("Created, but not programmed after %s. It may still come up; the Models tab shows its state.%s", clockText(InferenceGatewayReadyTimeout), why))
 		case dns == "published":
@@ -1207,7 +1207,7 @@ func (m *modelsRun) setupModelApply(s *modelsSetup) (*types.OperationResponse, e
 	if allow != nil {
 		m.step("model", "running", fmt.Sprintf("Adding %s to the projects the inference gateway allows...", mp.project))
 		if err := recordGatewayProject(c, mp.project); err != nil {
-			return m.fail("model", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
+			return m.fail("model", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 		}
 		if _, msg, code := writeInferenceGateway(c, allow, func(line string) { m.step("model", "running", line) }); msg != "" {
 			return m.fail("model", msg, code, "gateway list failed")
@@ -1253,7 +1253,7 @@ func (m *modelsRun) setupModelReady(s *modelsSetup) (*types.OperationResponse, e
 	}
 	switch {
 	case res.err != nil:
-		return m.fail("model-ready", fmt.Sprintf("Stopped waiting for the model: %v. It was created; the Models tab shows its state.", res.err), firstNonEmpty(errorCodeFromK8sErr(res.err), "cancelled"), "model wait failed")
+		return m.fail("model-ready", fmt.Sprintf("Stopped waiting for the model: %v. It was created; the Models tab shows its state.", res.err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(res.err), "cancelled"), "model wait failed")
 	case res.imageMissing:
 		return m.fail("model-ready", "The model cannot start: the cluster preset's image is not in the registry (this nightly build's runtime image is not published yet). Use the newest released Red Hat image instead: the Models tab offers it, and it replaces only the model's image. Technical details: "+res.problem, "image_unavailable", "preset image missing")
 	case res.imageMaybeMissing:
@@ -1270,7 +1270,7 @@ func (m *modelsRun) setupModelReady(s *modelsSetup) (*types.OperationResponse, e
 		s.summary = append(s.summary, fmt.Sprintf("The model in %s is still starting.", mp.project))
 	default:
 		if !publish {
-			m.step("model-ready", "success", fmt.Sprintf("Ready at %s.", firstNonEmpty(res.url, "its address")))
+			m.step("model-ready", "success", fmt.Sprintf("Ready at %s.", kube.FirstNonEmpty(res.url, "its address")))
 		}
 		// Ready is not enough: one request through the way it is
 		// reached tells whether a caller gets an answer.
@@ -1319,16 +1319,16 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 
 	existing, found, err := readToolModel(c, req.Project, entry.Name)
 	if err != nil {
-		return nil, fmt.Sprintf("Cannot read LLMInferenceService %s/%s: %v. Nothing was changed.%s", req.Project, entry.Name, err, templateHint(err)), errorCodeFromK8sErr(err)
+		return nil, fmt.Sprintf("Cannot read LLMInferenceService %s/%s: %v. Nothing was changed.%s", req.Project, entry.Name, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
 	}
 	rec, err := readModelsRecord(c)
 	if err != nil {
-		return nil, err.Error() + " Nothing was changed.", errorCodeFromK8sErr(err)
+		return nil, err.Error() + " Nothing was changed.", kube.ErrorCodeFromK8sErr(err)
 	}
 	if found && !rec.owns(existing.Metadata) {
 		return nil, fmt.Sprintf("Project %s already has an LLMInferenceService named %s that this tool did not create. It was left unchanged.", req.Project, entry.Name), "not_managed"
 	}
-	if found && existing.Metadata.terminating() {
+	if found && existing.Metadata.Terminating() {
 		return nil, fmt.Sprintf("The model %s in %s is still being deleted. Wait until it is gone, then set it up again.", entry.Name, req.Project), "terminating"
 	}
 	exp, msg, code := m.planModelExposure(req, labels, entry, gw, existing, found)
@@ -1357,7 +1357,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	published, publish := false, exp.exposure == exposureMaaS
 	if found {
 		if published, err = MaaSPublishedIn(c, req.Project, entry.Name); err != nil {
-			return nil, fmt.Sprintf("Cannot check whether %s in %s is published to MaaS: %v. Nothing was changed.", entry.Name, req.Project, err), errorCodeFromK8sErr(err)
+			return nil, fmt.Sprintf("Cannot check whether %s in %s is published to MaaS: %v. Nothing was changed.", entry.Name, req.Project, err), kube.ErrorCodeFromK8sErr(err)
 		}
 		// A model reached through MaaS is published again when no
 		// publication is recorded: its publish, part of its setup, stopped
@@ -1365,7 +1365,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 		if publish && published {
 			maasRec, err := readMaaSRecord(c)
 			if err != nil {
-				return nil, fmt.Sprintf("Cannot check whether %s in %s is published to MaaS: %v. Nothing was changed.", entry.Name, req.Project, err), errorCodeFromK8sErr(err)
+				return nil, fmt.Sprintf("Cannot check whether %s in %s is published to MaaS: %v. Nothing was changed.", entry.Name, req.Project, err), kube.ErrorCodeFromK8sErr(err)
 			}
 			publish = !maasRec.published(req.Project, entry.Name)
 		}
@@ -1388,7 +1388,7 @@ func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 	path, _ := toolModelPath(p.project, p.entry.Name)
 	createPath := withToolFieldManager(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", p.project, ""))
 	project, name := p.project, p.entry.Name
-	read := func() (objectMeta, bool, error) {
+	read := func() (kube.ObjectMeta, bool, error) {
 		obj, found, err := readToolModel(c, project, name)
 		return obj.Metadata, found, err
 	}
@@ -1399,17 +1399,17 @@ func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 		// Its UID is what makes it the tool's (models_record.go). A model
 		// that cannot be recorded would be nobody's: it is deleted again.
 		if recErr := recordModel(c, meta); recErr != nil {
-			if _, delErr := deleteWithUID(c, path, meta.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
-				return fmt.Sprintf("%s was created, but this tool could not record it (%v) nor delete it again (%v). Delete it yourself (oc delete llminferenceservice %s -n %s), then set up again.", desc, recErr, delErr, p.entry.Name, p.project), errorCodeFromK8sErr(recErr)
+			if _, delErr := kube.DeleteWithUID(c, path, meta.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
+				return fmt.Sprintf("%s was created, but this tool could not record it (%v) nor delete it again (%v). Delete it yourself (oc delete llminferenceservice %s -n %s), then set up again.", desc, recErr, delErr, p.entry.Name, p.project), kube.ErrorCodeFromK8sErr(recErr)
 			}
-			return fmt.Sprintf("%s was created, but this tool could not record it as its own (%v), so it was deleted again. Set up again to retry.", desc, recErr), firstNonEmpty(errorCodeFromK8sErr(recErr), "internal")
+			return fmt.Sprintf("%s was created, but this tool could not record it as its own (%v), so it was deleted again. Set up again to retry.", desc, recErr), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(recErr), "internal")
 		}
 		p.rec[modelRecordKey(meta.Namespace, meta.Name)] = recordedModel{UID: meta.UID}
 	}
 	if err == nil {
 		return "", ""
 	}
-	code := errorCodeFromK8sErr(err)
+	code := kube.ErrorCodeFromK8sErr(err)
 	var foreign *foreignObjectError
 	switch {
 	case errors.As(err, &foreign):
@@ -1440,10 +1440,10 @@ func (m *modelsRun) applyToken(p *modelPlan) (string, string) {
 	}
 	if err := recordTokenSecret(c, p.project, p.entry.Name, secretUID); err != nil {
 		path := tokenSecretPathOf(p.project, p.entry.Name)
-		if _, delErr := deleteWithUID(c, path, secretUID); delErr != nil && !kube.IsK8sNotFound(delErr) {
+		if _, delErr := kube.DeleteWithUID(c, path, secretUID); delErr != nil && !kube.IsK8sNotFound(delErr) {
 			slog.Warn("cannot delete the unrecorded token Secret; garbage collection removes it with the model", "error", delErr)
 		}
-		return fmt.Sprintf("Secret %s/%s was created, but this tool could not record it (%v), so it was deleted again. Set up again to retry.", p.project, tokenSecretName(p.entry.Name), err), firstNonEmpty(errorCodeFromK8sErr(err), "internal")
+		return fmt.Sprintf("Secret %s/%s was created, but this tool could not record it (%v), so it was deleted again. Set up again to retry.", p.project, tokenSecretName(p.entry.Name), err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
 	}
 	return "", ""
 }
@@ -1472,14 +1472,14 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 	// and access entries would point at nothing.
 	for _, entry := range entries {
 		if published, err := MaaSPublishedIn(c, project, entry.Name); err != nil {
-			return fail(fmt.Sprintf("Cannot check whether %s in %s is published to MaaS; nothing was deleted: %v.", entry.Name, project, err), errorCodeFromK8sErr(err), "maas check failed")
+			return fail(fmt.Sprintf("Cannot check whether %s in %s is published to MaaS; nothing was deleted: %v.", entry.Name, project, err), kube.ErrorCodeFromK8sErr(err), "maas check failed")
 		} else if published {
 			return fail(fmt.Sprintf("%s in %s is published to Models as a Service. Unpublish it on the MaaS tab first; nothing was deleted.", entry.Name, project), "in_use", "published to maas")
 		}
 	}
 	rec, err := readModelsRecord(c)
 	if err != nil {
-		return fail(err.Error()+" Nothing was deleted.", errorCodeFromK8sErr(err), "record read failed")
+		return fail(err.Error()+" Nothing was deleted.", kube.ErrorCodeFromK8sErr(err), "record read failed")
 	}
 	var deleted, kept, forget []string
 	// The record is updated once at the end, also when a step fails: a
@@ -1492,7 +1492,7 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 	for _, entry := range entries {
 		model, found, err := readToolModel(c, project, entry.Name)
 		if err != nil {
-			return fail(fmt.Sprintf("Cannot read LLMInferenceService %s/%s; nothing was deleted: %v.%s", project, entry.Name, err, templateHint(err)), errorCodeFromK8sErr(err), "read failed")
+			return fail(fmt.Sprintf("Cannot read LLMInferenceService %s/%s; nothing was deleted: %v.%s", project, entry.Name, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "read failed")
 		}
 		if !found {
 			forget = append(forget, modelRecordKey(project, entry.Name))
@@ -1503,25 +1503,25 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 			continue
 		}
 		path, _ := toolModelPath(project, entry.Name)
-		if !model.Metadata.terminating() {
+		if !model.Metadata.Terminating() {
 			logs = append(logs, deleteModelToken(c, project, entry.Name, model.Metadata.UID, rec[modelRecordKey(project, entry.Name)].TokenSecretUID)...)
 			logs = append(logs, fmt.Sprintf("Deleting LLMInferenceService %s/%s...", project, entry.Name))
-			if _, err := deleteWithUID(c, path, model.Metadata.UID); err != nil && !kube.IsK8sNotFound(err) {
-				code := errorCodeFromK8sErr(err)
+			if _, err := kube.DeleteWithUID(c, path, model.Metadata.UID); err != nil && !kube.IsK8sNotFound(err) {
+				code := kube.ErrorCodeFromK8sErr(err)
 				if kube.IsK8sConflict(err) {
 					code = "conflict"
 				}
 				return fail(fmt.Sprintf("Failed to delete LLMInferenceService %s/%s: %v.%s", project, entry.Name, err, templateHint(err)), code, "delete failed")
 			}
 		}
-		gone, err := waitForDeletion(c, path, ModelDeleteTimeout, ModelDeletePoll)
+		gone, err := kube.WaitForDeletion(c, path, ModelDeleteTimeout, ModelDeletePoll)
 		if err != nil {
-			return fail(fmt.Sprintf("The model %s/%s is being deleted, but whether it is gone cannot be checked: %v.", project, entry.Name, err), firstNonEmpty(errorCodeFromK8sErr(err), "in_progress"), "wait failed")
+			return fail(fmt.Sprintf("The model %s/%s is being deleted, but whether it is gone cannot be checked: %v.", project, entry.Name, err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "in_progress"), "wait failed")
 		}
 		if !gone {
 			note := ""
 			if latest, ok, err := readToolModel(c, project, entry.Name); err == nil && ok && len(latest.Metadata.Finalizers) > 0 {
-				note = fmt.Sprintf(" It waits on %s %s, which KServe's LLMInferenceService controller removes once it has deleted the model's Deployment, Service and route; that controller must be running.", verb(len(latest.Metadata.Finalizers), "finalizer", "finalizers"), strings.Join(latest.Metadata.Finalizers, ", "))
+				note = fmt.Sprintf(" It waits on %s %s, which KServe's LLMInferenceService controller removes once it has deleted the model's Deployment, Service and route; that controller must be running.", kube.Verb(len(latest.Metadata.Finalizers), "finalizer", "finalizers"), strings.Join(latest.Metadata.Finalizers, ", "))
 			}
 			return fail(fmt.Sprintf("The model %s/%s is still being deleted after %s.%s Delete again to check.", project, entry.Name, clockText(ModelDeleteTimeout), note), "in_progress", "still deleting")
 		}
@@ -1555,13 +1555,13 @@ func clockText(d time.Duration) string {
 
 // modelPod is the part of a pod the model wait reads.
 type modelPod struct {
-	Metadata objectMeta `json:"metadata"`
+	Metadata kube.ObjectMeta `json:"metadata"`
 	Spec     struct {
 		NodeName   string               `json:"nodeName"`
 		Containers []modelContainerSpec `json:"containers"`
 	} `json:"spec"`
 	Status struct {
-		Conditions            []k8sCondition       `json:"conditions"`
+		Conditions            []kube.Condition     `json:"conditions"`
 		InitContainerStatuses []modelContainerStat `json:"initContainerStatuses"`
 		ContainerStatuses     []modelContainerStat `json:"containerStatuses"`
 	} `json:"status"`
@@ -1605,7 +1605,7 @@ type modelEvent struct {
 	} `json:"involvedObject"`
 }
 
-func (e modelEvent) when() string { return firstNonEmpty(e.LastTimestamp, e.EventTime) }
+func (e modelEvent) when() string { return kube.FirstNonEmpty(e.LastTimestamp, e.EventTime) }
 
 // modelProgress describes where a starting model is, in words, from its
 // pods and their newest event: waiting for a node, pulling, downloading
@@ -1670,11 +1670,11 @@ func readModelProgress(c *Client, project, name string, w modelWorkload) (modelP
 func describeModelPods(pods []modelPod, newest *modelEvent) modelProgress {
 	event := ""
 	if newest != nil && newest.Reason != "" {
-		event = fmt.Sprintf(" (%s: %s)", newest.Reason, truncateText(newest.Message, 300))
+		event = fmt.Sprintf(" (%s: %s)", newest.Reason, kube.TruncateText(newest.Message, 300))
 	}
 	var first *modelProgress
 	for _, p := range pods {
-		if p.Metadata.terminating() {
+		if p.Metadata.Terminating() {
 			continue
 		}
 		pr := describeModelPod(p, event)
@@ -1693,21 +1693,21 @@ func describeModelPods(pods []modelPod, newest *modelEvent) modelProgress {
 
 // describeModelPod is one live pod's progress; event is its newest event, in words.
 func describeModelPod(p modelPod, event string) modelProgress {
-	if cond, ok := findCondition(p.Status.Conditions, "PodScheduled"); ok && cond.Status == "False" {
-		return modelProgress{message: fmt.Sprintf("Waiting for a worker with room for the model: %s", firstNonEmpty(truncateText(cond.Message, 300), cond.Reason))}
+	if cond, ok := kube.FindCondition(p.Status.Conditions, "PodScheduled"); ok && cond.Status == "False" {
+		return modelProgress{message: fmt.Sprintf("Waiting for a worker with room for the model: %s", kube.FirstNonEmpty(kube.TruncateText(cond.Message, 300), cond.Reason))}
 	}
 	check := func(s modelContainerStat, init bool) (modelProgress, bool) {
 		if w := s.State.Waiting; w != nil {
 			switch w.Reason {
 			case "ErrImagePull", "ImagePullBackOff":
 				if manifestUnknown(w.Message) {
-					return modelProgress{problem: fmt.Sprintf("%s: %s", w.Reason, truncateText(w.Message, 300)), imageMissing: true}, true
+					return modelProgress{problem: fmt.Sprintf("%s: %s", w.Reason, kube.TruncateText(w.Message, 300)), imageMissing: true}, true
 				}
 				// Credentials can reach a new node a few minutes after it
 				// joins (ROSA HCP, seen live): the wait gives it time.
 				return modelProgress{
-					message:         fmt.Sprintf("Pulling the image of %s failed (%s: %s); the node keeps retrying.", s.Name, w.Reason, truncateText(w.Message, 300)),
-					pullFailure:     fmt.Sprintf("the image of container %s cannot be pulled (%s: %s)", s.Name, w.Reason, truncateText(w.Message, 300)),
+					message:         fmt.Sprintf("Pulling the image of %s failed (%s: %s); the node keeps retrying.", s.Name, w.Reason, kube.TruncateText(w.Message, 300)),
+					pullFailure:     fmt.Sprintf("the image of container %s cannot be pulled (%s: %s)", s.Name, w.Reason, kube.TruncateText(w.Message, 300)),
 					node:            p.Spec.NodeName,
 					mentionsMissing: manifestUnknownMentioned(w.Message),
 				}, true
@@ -1721,7 +1721,7 @@ func describeModelPod(p modelPod, event string) modelProgress {
 				}
 				return modelProgress{problem: fmt.Sprintf("container %s keeps crashing.%s Its logs say why.", s.Name, last)}, true
 			case "CreateContainerConfigError", "CreateContainerError", "InvalidImageName":
-				return modelProgress{problem: fmt.Sprintf("container %s cannot be created (%s: %s).", s.Name, w.Reason, truncateText(w.Message, 300))}, true
+				return modelProgress{problem: fmt.Sprintf("container %s cannot be created (%s: %s).", s.Name, w.Reason, kube.TruncateText(w.Message, 300))}, true
 			case "ContainerCreating", "PodInitializing":
 				if init {
 					return modelProgress{}, false
@@ -1806,7 +1806,7 @@ func (w modelWorkload) current(p modelPod) bool {
 func readModelWorkload(c *Client, project, name string) (modelWorkload, error) {
 	q := url.Values{"labelSelector": {modelPodSelector(name)}}
 	var items []struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 		Spec     struct {
 			Replicas *int32 `json:"replicas"`
 			Template struct {
@@ -1879,7 +1879,7 @@ func waitModelReady(c *Client, project, name string, presetImage, workloadOnly b
 			progress(msg)
 		}
 	}
-	ready, err := waitForGone(c, timeout, ModelPoll, func(cc *Client) (bool, error) {
+	ready, err := kube.WaitForGone(c, timeout, ModelPoll, func(cc *Client) (bool, error) {
 		model, found, err := readToolModel(cc, project, name)
 		if err != nil {
 			return false, err
@@ -1894,8 +1894,8 @@ func waitModelReady(c *Client, project, name string, presetImage, workloadOnly b
 			say("Waiting for KServe to apply the change...")
 			return false, nil
 		}
-		if cond, ok := findCondition(model.Status.Conditions, "PresetsCombined"); ok && cond.Status == "False" {
-			res.problem = fmt.Sprintf("KServe cannot resolve its preset: %s.", firstNonEmpty(cond.Message, cond.Reason))
+		if cond, ok := kube.FindCondition(model.Status.Conditions, "PresetsCombined"); ok && cond.Status == "False" {
+			res.problem = fmt.Sprintf("KServe cannot resolve its preset: %s.", kube.FirstNonEmpty(cond.Message, cond.Reason))
 			return true, nil
 		}
 		w, err := readModelWorkload(cc, project, name)
@@ -1905,7 +1905,7 @@ func waitModelReady(c *Client, project, name string, presetImage, workloadOnly b
 		// Ready counts only once the workload has rolled out: after a
 		// change, KServe reports Ready while the old pod still serves and
 		// the new one starts (seen live).
-		cond, ok := findCondition(model.Status.Conditions, "Ready")
+		cond, ok := kube.FindCondition(model.Status.Conditions, "Ready")
 		ready := ok && cond.Status == "True"
 		if (ready || workloadOnly) && w.rolledOut && w.observed {
 			res.url = model.Status.URL

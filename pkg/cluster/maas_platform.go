@@ -118,7 +118,7 @@ func infraNamespaceLeftovers(c *Client, ns string) ([]string, error) {
 		{"PersistentVolumeClaim", namespacedPath("v1", "persistentvolumeclaims", ns, "")},
 	} {
 		var items []struct {
-			Metadata objectMeta `json:"metadata"`
+			Metadata kube.ObjectMeta `json:"metadata"`
 		}
 		if err := c.ListInto(l.path, &items); err != nil {
 			if kube.IsDecodeError(err) {
@@ -130,7 +130,7 @@ func infraNamespaceLeftovers(c *Client, ns string) ([]string, error) {
 			out = append(out, l.kind+" "+it.Metadata.Name)
 		}
 	}
-	meta, found, err := readObjectMeta(c, maasObjectPath("Secret", ns))
+	meta, found, err := kube.ReadObjectMeta(c, maasObjectPath("Secret", ns))
 	if err != nil {
 		return nil, fmt.Errorf("read Secret %s/%s: %w", ns, maasDBConfigSecret, err)
 	}
@@ -183,7 +183,7 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 		return nil, fmt.Errorf("read Authorino %s/authorino: %w", ns, err)
 	}
 	var cr struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 		Spec     struct {
 			Listener struct {
 				TLS struct {
@@ -198,9 +198,9 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 	if err := json.Unmarshal(read.Body, &cr); err != nil {
 		return nil, fmt.Errorf("parse Authorino %s/authorino: %w", ns, err)
 	}
-	secret := firstNonEmpty(cr.Spec.Listener.TLS.CertSecretRef.Name, authorinoDefaultSecret)
+	secret := kube.FirstNonEmpty(cr.Spec.Listener.TLS.CertSecretRef.Name, authorinoDefaultSecret)
 	if len(secret) > 253 || !dns1123Subdomain.MatchString(secret) {
-		return nil, fmt.Errorf("authorino's CR names its certificate Secret %q, which is not a valid Kubernetes name", truncateText(secret, 300))
+		return nil, fmt.Errorf("authorino's CR names its certificate Secret %q, which is not a valid Kubernetes name", kube.TruncateText(secret, 300))
 	}
 	query := url.Values{"fieldManager": {toolFieldManager}}
 	if dryRun {
@@ -208,7 +208,7 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 	}
 	var changes []string
 	svcPath := namespacedPath("v1", "services", ns, "authorino-authorino-authorization")
-	svc, found, err := readObjectMeta(c, svcPath)
+	svc, found, err := kube.ReadObjectMeta(c, svcPath)
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("read Service %s/authorino-authorino-authorization: %w", ns, err)
@@ -336,7 +336,7 @@ func maasGatewayPolicies(c *Client) ([]gatewayPolicy, error) {
 		}
 		var list struct {
 			Items []struct {
-				Metadata objectMeta `json:"metadata"`
+				Metadata kube.ObjectMeta `json:"metadata"`
 				Spec     struct {
 					TargetRef struct {
 						Kind string `json:"kind"`
@@ -344,7 +344,7 @@ func maasGatewayPolicies(c *Client) ([]gatewayPolicy, error) {
 					} `json:"targetRef"`
 				} `json:"spec"`
 				Status struct {
-					Conditions []k8sCondition `json:"conditions"`
+					Conditions []kube.Condition `json:"conditions"`
 				} `json:"status"`
 			} `json:"items"`
 		}
@@ -355,8 +355,8 @@ func maasGatewayPolicies(c *Client) ([]gatewayPolicy, error) {
 			if it.Spec.TargetRef.Kind != "Gateway" || it.Spec.TargetRef.Name != maasGatewayName {
 				continue
 			}
-			p := gatewayPolicy{Kind: l.kind, Name: it.Metadata.Name, UID: it.Metadata.UID, Version: read.Version, Managed: it.Metadata.Labels[managedByLabelKey] == maasControllerLabel}
-			if cond, ok := findCondition(it.Status.Conditions, "Enforced"); ok {
+			p := gatewayPolicy{Kind: l.kind, Name: it.Metadata.Name, UID: it.Metadata.UID, Version: read.Version, Managed: it.Metadata.Labels[kube.ManagedByLabelKey] == maasControllerLabel}
+			if cond, ok := kube.FindCondition(it.Status.Conditions, "Enforced"); ok {
 				p.Enforced = cond.Status
 			}
 			out = append(out, p)
@@ -532,7 +532,7 @@ func legacyPolicyCommands(ps []gatewayPolicy) string {
 // maasDSCCommand turns on the AI gateway and MaaS in the DataScienceCluster
 // (maas-setup.md "Configure DataScienceCluster").
 func maasDSCCommand(dsc string) string {
-	return fmt.Sprintf(`oc patch datasciencecluster %s --type=merge -p '{"spec":{"components":{"aigateway":{"managementState":"Managed","modelsAsAService":{"managementState":"Managed"}}}}}'`, shellQuote(firstNonEmpty(dsc, "default-dsc")))
+	return fmt.Sprintf(`oc patch datasciencecluster %s --type=merge -p '{"spec":{"components":{"aigateway":{"managementState":"Managed","modelsAsAService":{"managementState":"Managed"}}}}}'`, shellQuote(kube.FirstNonEmpty(dsc, "default-dsc")))
 }
 
 // gatewayAllowedRoutesCommand narrows a gateway someone else made from

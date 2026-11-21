@@ -142,22 +142,6 @@ var (
 // Service, the hostname of its "https" listener.
 const inferenceGatewayInternalHost = "openshift-ai-inference-openshift-ai-inference.openshift-ingress.svc.cluster.local"
 
-type k8sCondition struct {
-	Type    string `json:"type"`
-	Status  string `json:"status"`
-	Reason  string `json:"reason"`
-	Message string `json:"message"`
-}
-
-func findCondition(conds []k8sCondition, typ string) (k8sCondition, bool) {
-	for _, c := range conds {
-		if c.Type == typ {
-			return c, true
-		}
-	}
-	return k8sCondition{}, false
-}
-
 type labelSelector struct {
 	MatchLabels      map[string]string `json:"matchLabels"`
 	MatchExpressions []json.RawMessage `json:"matchExpressions"`
@@ -175,7 +159,7 @@ type gatewayListener struct {
 }
 
 type gatewayObject struct {
-	Metadata objectMeta `json:"metadata"`
+	Metadata kube.ObjectMeta `json:"metadata"`
 	Spec     struct {
 		GatewayClassName string            `json:"gatewayClassName"`
 		Listeners        []gatewayListener `json:"listeners"`
@@ -184,7 +168,7 @@ type gatewayObject struct {
 		Addresses []struct {
 			Value string `json:"value"`
 		} `json:"addresses"`
-		Conditions []k8sCondition `json:"conditions"`
+		Conditions []kube.Condition `json:"conditions"`
 		Listeners  []struct {
 			Name           string `json:"name"`
 			AttachedRoutes int    `json:"attachedRoutes"`
@@ -255,7 +239,7 @@ func (g gatewayObject) allowedProjects() (names []string, all, known bool) {
 	for _, l := range g.Spec.Listeners {
 		from := "Same"
 		if l.AllowedRoutes != nil && l.AllowedRoutes.Namespaces != nil {
-			from = firstNonEmpty(l.AllowedRoutes.Namespaces.From, "Same")
+			from = kube.FirstNonEmpty(l.AllowedRoutes.Namespaces.From, "Same")
 		}
 		var these []string
 		switch from {
@@ -319,7 +303,7 @@ func (g gatewayObject) admits(namespace string, labels map[string]string) string
 	for _, l := range g.Spec.Listeners {
 		from, sel := "Same", (*labelSelector)(nil)
 		if l.AllowedRoutes != nil && l.AllowedRoutes.Namespaces != nil {
-			from = firstNonEmpty(l.AllowedRoutes.Namespaces.From, "Same")
+			from = kube.FirstNonEmpty(l.AllowedRoutes.Namespaces.From, "Same")
 			sel = l.AllowedRoutes.Namespaces.Selector
 		}
 		switch from {
@@ -392,8 +376,8 @@ func matchExpressions(exprs []json.RawMessage, namespace string, labels map[stri
 
 // gatewayOwned: this tool created the object. It carries the tool label
 // and the tool wrote it; a copied label alone is not enough.
-func gatewayOwned(meta objectMeta) bool {
-	return meta.hasToolLabel() && meta.hasManager(toolManagers)
+func gatewayOwned(meta kube.ObjectMeta) bool {
+	return meta.HasToolLabel() && meta.HasManager(toolManagers)
 }
 
 // gatewayObjectPath returns the path of an inference gateway object this
@@ -439,9 +423,9 @@ func gatewayDesc(kind string) string {
 	return "Gateway " + inferenceGatewayNamespace + "/" + inferenceGatewayName
 }
 
-func readGatewayObject(c *Client, kind string) (objectMeta, bool, error) {
+func readGatewayObject(c *Client, kind string) (kube.ObjectMeta, bool, error) {
 	path := gatewayObjectPath(kind)
-	return readObjectMeta(c, path)
+	return kube.ReadObjectMeta(c, path)
 }
 
 func readInferenceGateway(c *Client) (gatewayObject, bool, error) {
@@ -550,7 +534,7 @@ func inferenceGatewayObjects(domain, certificate string, namespaces []string) ma
 				"namespace": inferenceGatewayNamespace,
 				// The chart's label: the gateway runs on OpenShift's own
 				// Istio revision.
-				"labels": map[string]any{managedByLabelKey: managedByLabelValue, "istio.io/rev": "openshift-gateway"},
+				"labels": map[string]any{kube.ManagedByLabelKey: kube.ManagedByLabelValue, "istio.io/rev": "openshift-gateway"},
 			},
 			"spec": map[string]any{
 				"gatewayClassName": inferenceGatewayClass,
@@ -620,7 +604,7 @@ func authPolicyStateOf(c *Client, ns, gateway string) string {
 				return ""
 			}
 			for _, raw := range items.Items {
-				meta, perr := parseObjectMeta(raw)
+				meta, perr := kube.ParseObjectMeta(raw)
 				if perr == nil && meta.Name == gateway+"-authn" {
 					body = raw
 				}
@@ -635,13 +619,13 @@ func authPolicyStateOf(c *Client, ns, gateway string) string {
 	}
 	var ap struct {
 		Status struct {
-			Conditions []k8sCondition `json:"conditions"`
+			Conditions []kube.Condition `json:"conditions"`
 		} `json:"status"`
 	}
 	if json.Unmarshal(body, &ap) != nil {
 		return ""
 	}
-	if cond, ok := findCondition(ap.Status.Conditions, "Enforced"); ok {
+	if cond, ok := kube.FindCondition(ap.Status.Conditions, "Enforced"); ok {
 		switch cond.Status {
 		case "True":
 			return "enforced"
@@ -663,7 +647,7 @@ func dnsPublished(c *Client, host string) string {
 		} `json:"spec"`
 		Status struct {
 			Zones []struct {
-				Conditions []k8sCondition `json:"conditions"`
+				Conditions []kube.Condition `json:"conditions"`
 			} `json:"zones"`
 		} `json:"status"`
 	}
@@ -678,7 +662,7 @@ func dnsPublished(c *Client, host string) string {
 			return "pending"
 		}
 		for _, z := range rec.Status.Zones {
-			if cond, ok := findCondition(z.Conditions, "Published"); !ok || cond.Status != "True" {
+			if cond, ok := kube.FindCondition(z.Conditions, "Published"); !ok || cond.Status != "True" {
 				return "pending"
 			}
 		}
@@ -815,7 +799,7 @@ func notAllowedModels(c *Client, models []llmisvcObject, def kserveGateway, gw g
 			var labels map[string]string
 			readable := true
 			if !byName {
-				meta, ok, err := readObjectMeta(c, clusterPath("v1", "namespaces", ns))
+				meta, ok, err := kube.ReadObjectMeta(c, clusterPath("v1", "namespaces", ns))
 				readable = err == nil && ok
 				labels = meta.Labels
 			}
@@ -874,7 +858,7 @@ func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr erro
 	}
 	state.Deployed = true
 	state.ManagedByTool = gatewayOwned(gw.Metadata)
-	state.Terminating = gw.Metadata.terminating()
+	state.Terminating = gw.Metadata.Terminating()
 	if host := gw.externalHost(); host != "" {
 		state.ExternalURL = "https://" + host
 	}
@@ -884,14 +868,14 @@ func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr erro
 			break
 		}
 	}
-	accepted, hasAccepted := findCondition(gw.Status.Conditions, "Accepted")
-	programmed, hasProgrammed := findCondition(gw.Status.Conditions, "Programmed")
+	accepted, hasAccepted := kube.FindCondition(gw.Status.Conditions, "Accepted")
+	programmed, hasProgrammed := kube.FindCondition(gw.Status.Conditions, "Programmed")
 	switch {
 	case state.Terminating:
 		state.Message = "Terminating"
 	case hasAccepted && accepted.Status == "False":
-		state.Message = firstNonEmpty(truncateText(accepted.Message, 300), accepted.Reason, "Not accepted by the gateway controller")
-		state.WaitingReason = firstNonEmpty(accepted.Reason, "NotAccepted")
+		state.Message = kube.FirstNonEmpty(kube.TruncateText(accepted.Message, 300), accepted.Reason, "Not accepted by the gateway controller")
+		state.WaitingReason = kube.FirstNonEmpty(accepted.Reason, "NotAccepted")
 		state.TerminalError = true
 	case hasProgrammed && programmed.Status == "True" && state.Address != "":
 		state.Ready = true
@@ -899,7 +883,7 @@ func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr erro
 	case hasProgrammed && programmed.Status == "True":
 		state.Message = "Programmed, waiting for an address"
 	case hasProgrammed:
-		state.Message = firstNonEmpty(truncateText(programmed.Message, 300), programmed.Reason, "Not programmed yet")
+		state.Message = kube.FirstNonEmpty(kube.TruncateText(programmed.Message, 300), programmed.Reason, "Not programmed yet")
 	case state.ManagedByTool:
 		state.Message = "Waiting for the gateway controller"
 	default:
@@ -941,7 +925,7 @@ func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr erro
 	case modelsErr != nil:
 		state.TeardownBlockedReason = "Cannot check which models use the gateway: " + modelsErr.Error()
 	case len(state.UsedBy) > 0:
-		state.TeardownBlockedReason = fmt.Sprintf("Models route through it: %s. Delete %s first.", strings.Join(state.UsedBy, ", "), verb(len(state.UsedBy), "that model", "those models"))
+		state.TeardownBlockedReason = fmt.Sprintf("Models route through it: %s. Delete %s first.", strings.Join(state.UsedBy, ", "), kube.Verb(len(state.UsedBy), "that model", "those models"))
 	case gw.attachedRoutes() > 0:
 		state.TeardownBlockedReason = attachedRoutesReason(gw.attachedRoutes())
 	}
@@ -953,7 +937,7 @@ func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr erro
 // cluster-wide, read-only: another one can be in any namespace.
 func otherGatewaysOfClass(c *Client) ([]string, error) {
 	var items []struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 		Spec     struct {
 			GatewayClassName string `json:"gatewayClassName"`
 		} `json:"spec"`
@@ -977,7 +961,7 @@ func otherGatewaysOfClass(c *Client) ([]string, error) {
 
 // attachedRoutesReason says why a gateway with n attached routes stays.
 func attachedRoutesReason(n int) string {
-	return fmt.Sprintf("At least %d %s attached to the inference gateway (models, or routes made by hand; `oc get httproute -A` lists them). Delete them first.", n, verb(n, "route is", "routes are"))
+	return fmt.Sprintf("At least %d %s attached to the inference gateway (models, or routes made by hand; `oc get httproute -A` lists them). Delete them first.", n, kube.Verb(n, "route is", "routes are"))
 }
 
 // gatewayServiceWarning checks that the gateway's Service has the name the
@@ -991,7 +975,7 @@ func gatewayServiceWarning(c *Client) string {
 	if !found {
 		return missing
 	}
-	meta, err := parseObjectMeta(body)
+	meta, err := kube.ParseObjectMeta(body)
 	if err != nil || meta.Labels[gatewayNameLabel] == inferenceGatewayName {
 		return ""
 	}
@@ -1007,7 +991,7 @@ type gatewayPlan struct {
 	gateway gatewayObject
 	// objects to apply, by kind, with what was read of each.
 	objects map[string]map[string]any
-	current map[string]objectMeta
+	current map[string]kube.ObjectMeta
 	found   map[string]bool
 	// classForeign: the GatewayClass exists and is not this tool's (it is
 	// used, never changed).
@@ -1048,12 +1032,12 @@ func planInferenceGateway(c *Client, add []string) (*gatewayPlan, string, string
 func planInferenceGatewayList(c *Client, add, remove []string) (*gatewayPlan, string, string) {
 	gw, found, err := readInferenceGateway(c)
 	if err != nil {
-		return nil, fmt.Sprintf("Cannot read Gateway %s/%s; nothing was changed: %v.%s", inferenceGatewayNamespace, inferenceGatewayName, err, templateHint(err)), errorCodeFromK8sErr(err)
+		return nil, fmt.Sprintf("Cannot read Gateway %s/%s; nothing was changed: %v.%s", inferenceGatewayNamespace, inferenceGatewayName, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
 	}
 	if found && !gatewayOwned(gw.Metadata) {
 		return &gatewayPlan{foreign: true, gateway: gw}, "", ""
 	}
-	if found && gw.Metadata.terminating() {
+	if found && gw.Metadata.Terminating() {
 		return nil, fmt.Sprintf("Gateway %s/%s is still being deleted. Wait until it is gone, then set it up again.", inferenceGatewayNamespace, inferenceGatewayName), "terminating"
 	}
 	for _, project := range remove {
@@ -1062,19 +1046,19 @@ func planInferenceGatewayList(c *Client, add, remove []string) (*gatewayPlan, st
 		}
 		users, err := gatewayRoutedIn(c, gw, project)
 		if err != nil {
-			return nil, fmt.Sprintf("Cannot check which models in %s use the inference gateway, so it stays on its list: %v.%s", project, err, templateHint(err)), errorCodeFromK8sErr(err)
+			return nil, fmt.Sprintf("Cannot check which models in %s use the inference gateway, so it stays on its list: %v.%s", project, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 		if len(users) > 0 {
-			return nil, fmt.Sprintf("%s stays on the inference gateway's list: %s %s through it.", project, strings.Join(users, ", "), verb(len(users), "routes", "route")), "in_use"
+			return nil, fmt.Sprintf("%s stays on the inference gateway's list: %s %s through it.", project, strings.Join(users, ", "), kube.Verb(len(users), "routes", "route")), "in_use"
 		}
 	}
-	plan := &gatewayPlan{current: map[string]objectMeta{}, found: map[string]bool{}, gateway: gw, add: add, remove: remove}
+	plan := &gatewayPlan{current: map[string]kube.ObjectMeta{}, found: map[string]bool{}, gateway: gw, add: add, remove: remove}
 	listed, shaped := gw.listedNamespaces()
 	var routed []string
 	if found && !shaped {
 		models, err := listLLMInferenceServices(c)
 		if err != nil && !errors.Is(err, errLLMISvcAPIMissing) {
-			return nil, fmt.Sprintf("Cannot check which models use the inference gateway, so its list of allowed projects was not written (that could cut a model off); nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err)
+			return nil, fmt.Sprintf("Cannot check which models use the inference gateway, so its list of allowed projects was not written (that could cut a model off); nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 		// Only this tool's own models (by its record): anyone may make an
 		// LLMInferenceService that points at the gateway, and listing its
@@ -1082,7 +1066,7 @@ func planInferenceGatewayList(c *Client, add, remove []string) (*gatewayPlan, st
 		// shared gateway. The others are Allow candidates in the status.
 		rec, err := readModelsRecord(c)
 		if err != nil {
-			return nil, fmt.Sprintf("Cannot read this tool's record of its models, so the inference gateway's list of allowed projects was not written (that could cut one of its models off); nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err)
+			return nil, fmt.Sprintf("Cannot read this tool's record of its models, so the inference gateway's list of allowed projects was not written (that could cut one of its models off); nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 		var ours []llmisvcObject
 		for _, m := range models {
@@ -1113,11 +1097,11 @@ func planInferenceGatewayList(c *Client, add, remove []string) (*gatewayPlan, st
 			meta, ok, err = readGatewayObject(c, kind)
 		}
 		if err != nil {
-			return nil, fmt.Sprintf("Cannot read %s; nothing was changed: %v.%s", gatewayDesc(kind), err, templateHint(err)), errorCodeFromK8sErr(err)
+			return nil, fmt.Sprintf("Cannot read %s; nothing was changed: %v.%s", gatewayDesc(kind), err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 		plan.current[kind], plan.found[kind] = meta, ok
 		if !ok || gatewayOwned(meta) {
-			if ok && meta.terminating() {
+			if ok && meta.Terminating() {
 				return nil, fmt.Sprintf("%s is still being deleted. Wait until it is gone, then set the gateway up again.", gatewayDesc(kind)), "terminating"
 			}
 			continue
@@ -1129,7 +1113,7 @@ func planInferenceGatewayList(c *Client, add, remove []string) (*gatewayPlan, st
 		// is OpenShift's gateway controller's.
 		controller, err := gatewayClassController(c)
 		if err != nil {
-			return nil, fmt.Sprintf("Cannot read GatewayClass %s; nothing was changed: %v.", inferenceGatewayClass, err), errorCodeFromK8sErr(err)
+			return nil, fmt.Sprintf("Cannot read GatewayClass %s; nothing was changed: %v.", inferenceGatewayClass, err), kube.ErrorCodeFromK8sErr(err)
 		}
 		if controller != gatewayControllerName {
 			return nil, fmt.Sprintf("GatewayClass %s exists, was not created by this tool, and belongs to controller %q instead of OpenShift's (%s). Nothing was changed.", inferenceGatewayClass, controller, gatewayControllerName), "not_managed"
@@ -1138,11 +1122,11 @@ func planInferenceGatewayList(c *Client, add, remove []string) (*gatewayPlan, st
 	}
 	domain, err := clusterAppsDomain(c)
 	if err != nil {
-		return nil, fmt.Sprintf("Cannot find the cluster's apps domain for the gateway's hostname; nothing was changed: %v.%s", err, templateHint(err)), firstNonEmpty(errorCodeFromK8sErr(err), "prerequisites")
+		return nil, fmt.Sprintf("Cannot find the cluster's apps domain for the gateway's hostname; nothing was changed: %v.%s", err, templateHint(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "prerequisites")
 	}
 	cert, err := defaultIngressCertificate(c)
 	if err != nil {
-		return nil, fmt.Sprintf("Cannot find the cluster's default ingress certificate; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err)
+		return nil, fmt.Sprintf("Cannot find the cluster's default ingress certificate; nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
 	}
 	plan.objects = inferenceGatewayObjects(domain, cert, plan.names)
 	plan.host = inferenceHostPrefix + domain
@@ -1205,12 +1189,12 @@ func applyInferenceGateway(c *Client, plan *gatewayPlan, dryRun bool, logf func(
 		path := gatewayObjectPath(kind)
 		createPath, _ := gatewayCreatePath(kind)
 		k := kind
-		read := func() (objectMeta, bool, error) { return readGatewayObject(c, k) }
+		read := func() (kube.ObjectMeta, bool, error) { return readGatewayObject(c, k) }
 		if kind == "Gateway" {
 			// The list was computed from what the plan read: a write
 			// refused because the Gateway changed is planned again, never
 			// retried with the old list.
-			read = func() (objectMeta, bool, error) {
+			read = func() (kube.ObjectMeta, bool, error) {
 				meta, ok, err := readGatewayObject(c, k)
 				if err == nil {
 					err = errGatewayChanged
@@ -1224,7 +1208,7 @@ func applyInferenceGateway(c *Client, plan *gatewayPlan, dryRun bool, logf func(
 			if errors.Is(err, errGatewayChanged) && !dryRun {
 				return "", "", true
 			}
-			code := errorCodeFromK8sErr(err)
+			code := kube.ErrorCodeFromK8sErr(err)
 			var foreign *foreignObjectError
 			switch {
 			case errors.As(err, &foreign):
@@ -1260,20 +1244,20 @@ func applyInferenceGateway(c *Client, plan *gatewayPlan, dryRun bool, logf func(
 // pending, for the message when the wait ends without the gateway ready.
 func waitInferenceGateway(c *Client, host string, progress func(string)) (ready bool, dns string, problem string, pending string, err error) {
 	last := ""
-	ready, err = waitForGone(c, InferenceGatewayReadyTimeout, InferenceGatewayPoll, func(cc *Client) (bool, error) {
+	ready, err = kube.WaitForGone(c, InferenceGatewayReadyTimeout, InferenceGatewayPoll, func(cc *Client) (bool, error) {
 		gw, found, err := readInferenceGateway(cc)
 		if err != nil || !found {
 			return false, err
 		}
-		accepted, hasAccepted := findCondition(gw.Status.Conditions, "Accepted")
+		accepted, hasAccepted := kube.FindCondition(gw.Status.Conditions, "Accepted")
 		if hasAccepted && accepted.Status == "False" {
-			problem = fmt.Sprintf("The gateway controller does not accept the gateway: %s.", firstNonEmpty(accepted.Message, accepted.Reason))
+			problem = fmt.Sprintf("The gateway controller does not accept the gateway: %s.", kube.FirstNonEmpty(accepted.Message, accepted.Reason))
 			return true, nil
 		}
-		programmed, ok := findCondition(gw.Status.Conditions, "Programmed")
+		programmed, ok := kube.FindCondition(gw.Status.Conditions, "Programmed")
 		addr := ""
 		for _, a := range gw.Status.Addresses {
-			addr = firstNonEmpty(addr, a.Value)
+			addr = kube.FirstNonEmpty(addr, a.Value)
 		}
 		msg := "Waiting for the gateway controller..."
 		switch {
@@ -1283,7 +1267,7 @@ func waitInferenceGateway(c *Client, host string, progress func(string)) (ready 
 			msg = "Programmed; waiting for the load balancer's address..."
 		case ok:
 			msg = "Waiting for OpenShift to create the gateway's load balancer (usually under a minute)..."
-			pending = firstNonEmpty(programmed.Message, programmed.Reason)
+			pending = kube.FirstNonEmpty(programmed.Message, programmed.Reason)
 		}
 		if msg != last {
 			last = msg
@@ -1295,7 +1279,7 @@ func waitInferenceGateway(c *Client, host string, progress func(string)) (ready 
 		return ready && problem == "", "", problem, pending, err
 	}
 	progress("Programmed; waiting for " + host + " to be published in DNS...")
-	published, werr := waitForGone(c, InferenceGatewayDNSTimeout, InferenceGatewayPoll, func(cc *Client) (bool, error) {
+	published, werr := kube.WaitForGone(c, InferenceGatewayDNSTimeout, InferenceGatewayPoll, func(cc *Client) (bool, error) {
 		return dnsPublished(cc, host) == "published", nil
 	})
 	if werr != nil {
@@ -1320,7 +1304,7 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}
 	}
 	type current struct {
-		meta  objectMeta
+		meta  kube.ObjectMeta
 		found bool
 	}
 	objs := map[string]current{}
@@ -1328,7 +1312,7 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 	for _, kind := range gatewayKinds {
 		meta, found, err := readGatewayObject(c, kind)
 		if err != nil {
-			return fail(fmt.Sprintf("Cannot read %s; nothing was deleted: %v.%s", gatewayDesc(kind), err, templateHint(err)), errorCodeFromK8sErr(err), "read failed"), nil
+			return fail(fmt.Sprintf("Cannot read %s; nothing was deleted: %v.%s", gatewayDesc(kind), err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "read failed"), nil
 		}
 		objs[kind] = current{meta, found}
 		if found && gatewayOwned(meta) {
@@ -1346,13 +1330,13 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 	// models cannot be listed.
 	models, err := listLLMInferenceServices(c)
 	if err != nil && !errors.Is(err, errLLMISvcAPIMissing) {
-		return fail(fmt.Sprintf("Cannot check which models use the gateway, so it was not deleted: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "model list failed"), nil
+		return fail(fmt.Sprintf("Cannot check which models use the gateway, so it was not deleted: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "model list failed"), nil
 	}
 	// A model on the default route uses this gateway unless KServe's
 	// default is known to be another one (unreadable counts as this one).
 	def, _ := readKServeGateway(c)
 	if users := gatewayUsers(models, def); len(users) > 0 {
-		return fail(fmt.Sprintf("Models route through the inference gateway: %s. Delete %s first; nothing was deleted.", strings.Join(users, ", "), verb(len(users), "that model", "those models")), "in_use", "in use"), nil
+		return fail(fmt.Sprintf("Models route through the inference gateway: %s. Delete %s first; nothing was deleted.", strings.Join(users, ", "), kube.Verb(len(users), "that model", "those models")), "in_use", "in use"), nil
 	}
 	// The gateway controller's count of attached routes also sees models
 	// that inherit their route from a preset, and routes made by hand.
@@ -1362,7 +1346,7 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 		if err == nil && found && current.attachedRoutes() > 0 && modelsJustDeleted {
 			// The controller updates the count after the routes go.
 			logs = append(logs, "Waiting for the gateway controller to stop counting the deleted models' routes...")
-			_, err = waitForGone(c, InferenceGatewayRoutesTimeout, InferenceGatewayPoll, func(cc *Client) (bool, error) {
+			_, err = kube.WaitForGone(c, InferenceGatewayRoutesTimeout, InferenceGatewayPoll, func(cc *Client) (bool, error) {
 				g, ok, err := readInferenceGateway(cc)
 				if err == nil {
 					current, found = g, ok
@@ -1371,7 +1355,7 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 			})
 		}
 		if err != nil {
-			return fail(fmt.Sprintf("Cannot read the gateway's attached routes, so it was not deleted: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "gateway read failed"), nil
+			return fail(fmt.Sprintf("Cannot read the gateway's attached routes, so it was not deleted: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "gateway read failed"), nil
 		}
 		if found && current.attachedRoutes() > 0 {
 			return fail(attachedRoutesReason(current.attachedRoutes())+" Nothing was deleted.", "in_use", "routes attached"), nil
@@ -1395,7 +1379,7 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 			case err != nil:
 				why = fmt.Sprintf("this tool cannot list the Gateways to check that no other one uses it (%v)", err)
 			case len(users) > 0:
-				why = fmt.Sprintf("Gateway %s %s it", strings.Join(users, ", Gateway "), verb(len(users), "uses", "use"))
+				why = fmt.Sprintf("Gateway %s %s it", strings.Join(users, ", Gateway "), kube.Verb(len(users), "uses", "use"))
 			}
 			if why != "" {
 				msg := fmt.Sprintf("GatewayClass %s was kept: %s.", inferenceGatewayClass, why)
@@ -1406,12 +1390,12 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 		}
 		path := gatewayObjectPath(kind)
 		logs = append(logs, fmt.Sprintf("Deleting %s...", gatewayDesc(kind)))
-		if _, err := deleteWithUID(c, path, cur.meta.UID); err != nil && !kube.IsK8sNotFound(err) {
+		if _, err := kube.DeleteWithUID(c, path, cur.meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 			done := ""
 			if len(deleted) > 0 {
 				done = " Deleted before: " + strings.Join(deleted, ", ") + "."
 			}
-			code := errorCodeFromK8sErr(err)
+			code := kube.ErrorCodeFromK8sErr(err)
 			if kube.IsK8sConflict(err) {
 				code = "conflict"
 			}
@@ -1422,7 +1406,7 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 		if kind == "Gateway" {
 			// The class and options go after the Gateway, so its
 			// controller removes the load balancer first.
-			gone, werr := waitForDeletion(c, path, InferenceGatewayDeleteTimeout, InferenceGatewayPoll)
+			gone, werr := kube.WaitForDeletion(c, path, InferenceGatewayDeleteTimeout, InferenceGatewayPoll)
 			if werr == nil && !gone {
 				logs = append(logs, "The Gateway is still being deleted")
 			}

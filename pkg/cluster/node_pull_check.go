@@ -44,7 +44,7 @@ func CheckNodePull(c *Client, image string) (*types.OperationResponse, error) {
 			Success:   false,
 			Message:   fmt.Sprintf("The check could not start: %v. Nothing was changed.", err),
 			Logs:      logs,
-			ErrorCode: errorCodeFromK8sErr(err),
+			ErrorCode: kube.ErrorCodeFromK8sErr(err),
 		}, nil
 	}
 	defer remove()

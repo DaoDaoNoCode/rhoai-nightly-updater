@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // assertConnection checks the dashboard S3 Connection in ns: the shape
@@ -18,7 +20,7 @@ func assertConnection(t *testing.T, f *resourceFake, ns, accessKey, secretKey st
 	}
 	meta := ensureMap(obj, "metadata")
 	labels, _ := meta["labels"].(map[string]any)
-	if labels["opendatahub.io/dashboard"] != "true" || labels["opendatahub.io/managed"] != "true" || labels[managedByLabelKey] != managedByLabelValue {
+	if labels["opendatahub.io/dashboard"] != "true" || labels["opendatahub.io/managed"] != "true" || labels[kube.ManagedByLabelKey] != kube.ManagedByLabelValue {
 		t.Errorf("labels = %v", labels)
 	}
 	ann, _ := meta["annotations"].(map[string]any)

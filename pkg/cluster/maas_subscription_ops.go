@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -18,11 +19,11 @@ import (
 func maasPublished(c *Client) (maasToolSub, []maasPub, string, string) {
 	rec, err := readMaaSRecord(c)
 	if err != nil {
-		return maasToolSub{}, nil, err.Error() + " Nothing was changed.", errorCodeFromK8sErr(err)
+		return maasToolSub{}, nil, err.Error() + " Nothing was changed.", kube.ErrorCodeFromK8sErr(err)
 	}
 	cur, err := readMaaSToolSubscription(c)
 	if err != nil {
-		return cur, nil, err.Error() + " Nothing was changed.", errorCodeFromK8sErr(err)
+		return cur, nil, err.Error() + " Nothing was changed.", kube.ErrorCodeFromK8sErr(err)
 	}
 	switch {
 	case !cur.found:
@@ -32,7 +33,7 @@ func maasPublished(c *Client) (maasToolSub, []maasPub, string, string) {
 	}
 	live, err := maasLivePubs(c, rec, maasPub{}, maasPub{})
 	if err != nil {
-		return cur, nil, fmt.Sprintf("Cannot check the publications: %v. Nothing was changed.", err), errorCodeFromK8sErr(err)
+		return cur, nil, fmt.Sprintf("Cannot check the publications: %v. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err)
 	}
 	if len(live) == 0 {
 		return cur, nil, "No model of this tool is published now. Nothing was changed.", "prerequisites"
@@ -102,10 +103,10 @@ func (m *maasRun) changeAccess(req *types.MaaSAudience) (*types.OperationRespons
 	if msg != "" {
 		return m.fail("check", msg, code, "subscription check failed")
 	}
-	authMeta, authFound, err := readObjectMeta(c, maasAccessPath(c, "MaaSAuthPolicy"))
+	authMeta, authFound, err := kube.ReadObjectMeta(c, maasAccessPath(c, "MaaSAuthPolicy"))
 	switch {
 	case err != nil:
-		return m.fail("check", fmt.Sprintf("Cannot read MaaSAuthPolicy %s: %v. Nothing was changed.", maasAuthPolicyName, err), errorCodeFromK8sErr(err), "read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read MaaSAuthPolicy %s: %v. Nothing was changed.", maasAuthPolicyName, err), kube.ErrorCodeFromK8sErr(err), "read failed")
 	case authFound && !toolOwned(authMeta):
 		return m.fail("check", fmt.Sprintf("MaaSAuthPolicy %s/%s was not created by this tool, so it is left alone. Nothing was changed.", maasTenantNamespace, maasAuthPolicyName), "not_managed", "auth foreign")
 	}
@@ -149,13 +150,13 @@ func (m *maasRun) waitAccessActive(doneMsg string, withAuth bool) (*types.Operat
 	c := m.c
 	m.step("ready", "running", "Waiting for MaaS to apply it...")
 	last := ""
-	ready, err := waitForGone(c, MaaSPublishTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+	ready, err := kube.WaitForGone(c, MaaSPublishTimeout, MaaSPoll, func(cc *Client) (bool, error) {
 		s := maasPhase(cc, maasAccessPath(c, "MaaSSubscription"))
 		a := "Active"
 		if withAuth {
 			a = maasPhase(cc, maasAccessPath(c, "MaaSAuthPolicy"))
 		}
-		msg := fmt.Sprintf("subscription: %s; access: %s", firstNonEmpty(s, "pending"), firstNonEmpty(a, "pending"))
+		msg := fmt.Sprintf("subscription: %s; access: %s", kube.FirstNonEmpty(s, "pending"), kube.FirstNonEmpty(a, "pending"))
 		if msg != last {
 			last = msg
 			m.step("ready", "running", strings.ToUpper(msg[:1])+msg[1:])
@@ -163,7 +164,7 @@ func (m *maasRun) waitAccessActive(doneMsg string, withAuth bool) (*types.Operat
 		return s == "Active" && a == "Active", nil
 	})
 	if err != nil {
-		return m.fail("ready", fmt.Sprintf("Stopped waiting: %v. The change is written; the MaaS tab shows its state.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled"), "wait failed")
+		return m.fail("ready", fmt.Sprintf("Stopped waiting: %v. The change is written; the MaaS tab shows its state.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "wait failed")
 	}
 	if !ready {
 		m.step("ready", "success", fmt.Sprintf("Not active after %s (%s). The MaaS tab shows its state.", clockText(MaaSPublishTimeout), last))

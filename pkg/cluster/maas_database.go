@@ -247,14 +247,14 @@ type maasDBState struct {
 	// lostSecret: this tool set up "external", and its Secret is gone; Set
 	// up asks for the URL again.
 	lostSecret   bool
-	secret       objectMeta
+	secret       kube.ObjectMeta
 	secretFound  bool
-	cluster      objectMeta
+	cluster      kube.ObjectMeta
 	clusterFound bool
 	clusterReady bool
 	clusterPhase string
 	// poc: the development database's Deployment and Service as read.
-	poc map[string]objectMeta
+	poc map[string]kube.ObjectMeta
 	// credsUID is the UID of the postgres-creds this tool created (the
 	// record's): this tool never reads that Secret, so it knows it only by
 	// the record ("" when it created none).
@@ -272,12 +272,12 @@ func (s maasDBState) hasPOC(k string) bool {
 }
 
 func readMaaSDBState(c *Client, rec maasRecord, ns string) (maasDBState, error) {
-	st := maasDBState{ns: ns, poc: map[string]objectMeta{}}
+	st := maasDBState{ns: ns, poc: map[string]kube.ObjectMeta{}}
 	if rec.DBNamespace == "" || rec.DBNamespace == ns {
 		st.credsUID = rec.POCCredsUID
 	}
 	var err error
-	if st.secret, st.secretFound, err = readObjectMeta(c, maasObjectPath("Secret", ns)); err != nil {
+	if st.secret, st.secretFound, err = kube.ReadObjectMeta(c, maasObjectPath("Secret", ns)); err != nil {
 		return st, fmt.Errorf("read Secret %s/%s: %w", ns, maasDBConfigSecret, err)
 	}
 	if st.cluster, st.clusterFound, st.clusterReady, st.clusterPhase, err = readMaaSDBCluster(c, ns); err != nil && !kube.IsK8sNotFound(err) {
@@ -286,7 +286,7 @@ func readMaaSDBState(c *Client, rec maasRecord, ns string) (maasDBState, error) 
 	// postgres-creds is not read: this tool may only create it and delete
 	// the one it created (by its recorded UID), never read or change it.
 	for _, k := range []string{"PostgresDeployment", "PostgresService"} {
-		meta, found, err := readObjectMeta(c, maasObjectPath(k, ns))
+		meta, found, err := kube.ReadObjectMeta(c, maasObjectPath(k, ns))
 		if err != nil {
 			return st, fmt.Errorf("read %s: %w", maasDesc(k, ns), err)
 		}
@@ -442,7 +442,7 @@ func createMaaSPOCCreds(c *Client, ns, password string, dryRun bool) (string, er
 		return "", err
 	}
 	var created struct {
-		Metadata objectMeta `json:"metadata"`
+		Metadata kube.ObjectMeta `json:"metadata"`
 	}
 	_ = json.Unmarshal(body, &created)
 	return created.Metadata.UID, nil
@@ -463,7 +463,7 @@ func deleteMaaSPOCCreds(c *Client, ns, uid string) (bool, string, error) {
 	if uid == "" {
 		return false, maasDesc("PostgresSecret", ns) + " is not deleted: this tool has no record of creating it, and it never reads that Secret, so it cannot tell whose it is.", nil
 	}
-	_, err := deleteWithUID(c, maasPOCCredsPath(ns), uid)
+	_, err := kube.DeleteWithUID(c, maasPOCCredsPath(ns), uid)
 	switch {
 	case err == nil || kube.IsK8sNotFound(err):
 		return true, "", nil
@@ -699,7 +699,7 @@ type maasDBStatus struct {
 // maasDatabaseStatus reports the database (and CloudNativePG while it is
 // the database), the choice Set up asks for, and what Set up does about it.
 func maasDatabaseStatus(c *Client, rec maasRecord, infra string, cnpg operatorState, cnpgReadErr error) maasDBStatus {
-	ns := firstNonEmpty(rec.DBNamespace, infra)
+	ns := kube.FirstNonEmpty(rec.DBNamespace, infra)
 	out := maasDBStatus{db: &types.MaaSDatabase{Namespace: ns, Default: maasDBDefault}}
 	part := types.MaaSPart{ID: "database", Title: "Database", DocURL: maasDocsBase + "install/maas-setup.md#database-setup"}
 	done := func() maasDBStatus {
@@ -709,7 +709,7 @@ func maasDatabaseStatus(c *Client, rec maasRecord, infra string, cnpg operatorSt
 		out.parts = append(out.parts, part)
 		return out
 	}
-	_, nsFound, err := readObjectMeta(c, "/api/v1/namespaces/"+ns)
+	_, nsFound, err := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+ns)
 	if err != nil {
 		part.State, part.Message = "unknown", fmt.Sprintf("Cannot read namespace %s: %v", ns, err)
 		return done()
@@ -871,10 +871,10 @@ type maasDBPlan struct {
 // (true: req's kind instead of the current one). It returns the refusal's
 // message and code instead.
 func planMaaSDatabase(c *Client, rec maasRecord, ns string, nsFound bool, req *types.MaaSDatabaseRequest, switching bool) (*maasDBPlan, string, string) {
-	p := &maasDBPlan{nsFrom: nsFound, state: maasDBState{ns: ns, poc: map[string]objectMeta{}}}
+	p := &maasDBPlan{nsFrom: nsFound, state: maasDBState{ns: ns, poc: map[string]kube.ObjectMeta{}}}
 	var err error
 	if p.state, err = readMaaSDBState(c, rec, ns); err != nil {
-		return nil, fmt.Sprintf("Cannot read the database; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err)
+		return nil, fmt.Sprintf("Cannot read the database; nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
 	}
 	cur := p.state.kind
 	switch {
@@ -911,7 +911,7 @@ func planMaaSDatabase(c *Client, rec maasRecord, ns string, nsFound bool, req *t
 			return nil, foreign + " exists and was not created by this tool (the docs' setup-database.sh uses the same names), so it is left alone. Its owner removes it, or choose another database. Nothing was changed.", "not_managed"
 		}
 		if p.password, p.keepCreds, err = maasPOCPassword(c, p.state); err != nil {
-			return nil, fmt.Sprintf("Cannot prepare the development database's password; nothing was changed: %v.", err), errorCodeFromK8sErr(err)
+			return nil, fmt.Sprintf("Cannot prepare the development database's password; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err)
 		}
 		p.image, p.imageFrom = maasPOCImage(c)
 	case maasDBCNPG:
@@ -925,17 +925,17 @@ func planMaaSDatabase(c *Client, rec maasRecord, ns string, nsFound bool, req *t
 func (p *maasDBPlan) planCNPG(c *Client) (string, string) {
 	served, err := groupServed(c, cnpgGroup)
 	if err != nil {
-		return fmt.Sprintf("Cannot tell whether CloudNativePG is installed; nothing was changed: %v.", err), errorCodeFromK8sErr(err)
+		return fmt.Sprintf("Cannot tell whether CloudNativePG is installed; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err)
 	}
 	if served {
 		if served, err = controllerDeployed(c, cnpgController); err != nil {
-			return fmt.Sprintf("Cannot tell whether CloudNativePG's operator runs; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err)
+			return fmt.Sprintf("Cannot tell whether CloudNativePG's operator runs; nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 	}
 	p.cnpgServed = served
 	if !served {
 		if p.cnpg, err = readOperator(c, cnpgOperator); err != nil {
-			return fmt.Sprintf("Cannot read the installed operators; nothing was changed: %v.", err), errorCodeFromK8sErr(err)
+			return fmt.Sprintf("Cannot read the installed operators; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err)
 		}
 		if !p.cnpg.installed() && p.cnpg.pending() == nil {
 			plan, msg, code := planOperatorInstall(c, cnpgOperator)
@@ -1015,8 +1015,8 @@ func (p *maasDBPlan) dryRun(c *Client) (string, error) {
 
 // ensureMaaSDBObject creates or updates one of the database's objects
 // (only this tool's).
-func ensureMaaSDBObject(c *Client, kind, ns string, obj map[string]any, cur objectMeta, found, dryRun bool) (objectMeta, error) {
-	read := func() (objectMeta, bool, error) { return readObjectMeta(c, maasObjectPath(kind, ns)) }
+func ensureMaaSDBObject(c *Client, kind, ns string, obj map[string]any, cur kube.ObjectMeta, found, dryRun bool) (kube.ObjectMeta, error) {
+	read := func() (kube.ObjectMeta, bool, error) { return kube.ReadObjectMeta(c, maasObjectPath(kind, ns)) }
 	_, written, _, err := ensureToolObject(c, maasDesc(kind, ns), maasObjectPath(kind, ns), maasCreatePath(kind, ns), obj, cur, found, read, toolOwned, dryRun)
 	return written, err
 }
@@ -1027,7 +1027,7 @@ func (m *maasRun) ensureCNPG(rec *maasRecord, p *maasDBPlan) (*types.OperationRe
 	c := m.c
 	switch {
 	case p.target != maasDBCNPG:
-		m.step("cnpg", "success", "Not needed: the database is "+maasDBKindText(firstNonEmpty(p.target, p.state.kind))+".")
+		m.step("cnpg", "success", "Not needed: the database is "+maasDBKindText(kube.FirstNonEmpty(p.target, p.state.kind))+".")
 		return nil, nil
 	case p.cnpgServed:
 		m.step("cnpg", "success", "CloudNativePG is installed"+byWhom(rec.Shared["cnpg"] != "")+".")
@@ -1038,7 +1038,7 @@ func (m *maasRun) ensureCNPG(rec *maasRecord, p *maasDBPlan) (*types.OperationRe
 		m.step("cnpg", "running", fmt.Sprintf("Installing CloudNativePG %s (channel %s) from certified-operators...", p.cnpgPlan.head, p.cnpgPlan.channel))
 		rec.setShared("cnpg", fmt.Sprintf("Subscription %s/%s, channel %s", cnpgOperator.namespace, cnpgOperator.subName, p.cnpgPlan.channel))
 		if err := writeMaaSRecord(c, *rec); err != nil {
-			return m.fail("cnpg", err.Error(), errorCodeFromK8sErr(err), "record write failed")
+			return m.fail("cnpg", err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
 		}
 		made, err := createOperatorObjects(c, p.cnpgPlan, false)
 		for _, d := range made {
@@ -1055,9 +1055,9 @@ func (m *maasRun) ensureCNPG(rec *maasRecord, p *maasDBPlan) (*types.OperationRe
 			return r, msg
 		}
 	}
-	served, err := waitForGone(c, MaaSOperatorTimeout, MaaSPoll, func(cc *Client) (bool, error) { return groupServed(cc, cnpgGroup) })
+	served, err := kube.WaitForGone(c, MaaSOperatorTimeout, MaaSPoll, func(cc *Client) (bool, error) { return groupServed(cc, cnpgGroup) })
 	if err != nil || !served {
-		return m.fail("cnpg", fmt.Sprintf("CloudNativePG's API (postgresql.cnpg.io) is not served after %s%s. Run it again to continue.", clockText(MaaSOperatorTimeout), errSuffix(err)), firstNonEmpty(errorCodeFromK8sErr(err), "not_ready"), "cnpg api missing")
+		return m.fail("cnpg", fmt.Sprintf("CloudNativePG's API (postgresql.cnpg.io) is not served after %s%s. Run it again to continue.", clockText(MaaSOperatorTimeout), errSuffix(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "not_ready"), "cnpg api missing")
 	}
 	p.cnpgServed = true
 	m.step("cnpg", "success", "CloudNativePG runs.")
@@ -1085,13 +1085,13 @@ func (m *maasRun) makeDatabase(rec *maasRecord, p *maasDBPlan, maasOn, switching
 	if !switching && p.target != maasDBExternal && (rec.Database != p.target || rec.DBNamespace != ns) {
 		rec.Database, rec.DBNamespace = p.target, ns
 		if err := writeMaaSRecord(c, *rec); err != nil {
-			return m.fail("database", err.Error(), errorCodeFromK8sErr(err), "record write failed")
+			return m.fail("database", err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
 		}
 	}
 	// Read again: the namespace or CloudNativePG's API may be new.
 	st, err := readMaaSDBState(c, *rec, ns)
 	if err != nil {
-		return m.fail("database", fmt.Sprintf("Cannot read the database: %v.", err), errorCodeFromK8sErr(err), "db read failed")
+		return m.fail("database", fmt.Sprintf("Cannot read the database: %v.", err), kube.ErrorCodeFromK8sErr(err), "db read failed")
 	}
 	switch p.target {
 	case maasDBDevelopment:
@@ -1114,7 +1114,7 @@ func (m *maasRun) makeDatabase(rec *maasRecord, p *maasDBPlan, maasOn, switching
 				}
 				rec.POCCredsUID = ""
 				if err := writeMaaSRecord(c, *rec); err != nil {
-					return m.fail("database", err.Error(), errorCodeFromK8sErr(err), "record write failed")
+					return m.fail("database", err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
 				}
 			}
 			uid, err := createMaaSPOCCreds(c, ns, p.password, false)
@@ -1123,7 +1123,7 @@ func (m *maasRun) makeDatabase(rec *maasRecord, p *maasDBPlan, maasOn, switching
 			}
 			rec.POCCredsUID, rec.DBNamespace = uid, ns
 			if err := writeMaaSRecord(c, *rec); err != nil {
-				return m.fail("database", fmt.Sprintf("%s was created, but this tool could not record it: %v. Delete it (oc delete secret %s -n %s), then run it again.", maasDesc("PostgresSecret", ns), err, maasPOCCreds, ns), errorCodeFromK8sErr(err), "record write failed")
+				return m.fail("database", fmt.Sprintf("%s was created, but this tool could not record it: %v. Delete it (oc delete secret %s -n %s), then run it again.", maasDesc("PostgresSecret", ns), err, maasPOCCreds, ns), kube.ErrorCodeFromK8sErr(err), "record write failed")
 			}
 			credsUID = uid
 			m.logs = append(m.logs, "OK: "+maasDesc("PostgresSecret", ns)+" created")
@@ -1136,11 +1136,11 @@ func (m *maasRun) makeDatabase(rec *maasRecord, p *maasDBPlan, maasOn, switching
 			m.logs = append(m.logs, "OK: "+maasDesc(k, ns))
 		}
 		m.step("database", "running", "Waiting for the development database to be available (up to "+clockText(MaaSDevDatabaseTimeout)+", as the script waits)...")
-		ready, err := waitForGone(c, MaaSDevDatabaseTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+		ready, err := kube.WaitForGone(c, MaaSDevDatabaseTimeout, MaaSPoll, func(cc *Client) (bool, error) {
 			return deploymentAvailable(cc, ns, maasPOCName) == "True", nil
 		})
 		if err != nil {
-			return m.fail("database", fmt.Sprintf("Stopped waiting for the database: %v. It was created; run it again to continue.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled"), "db wait failed")
+			return m.fail("database", fmt.Sprintf("Stopped waiting for the database: %v. It was created; run it again to continue.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "db wait failed")
 		}
 		if !ready {
 			return m.fail("database", fmt.Sprintf("The development database is not available after %s (the script fails here too). Run it again to continue; the MaaS tab shows its state.", clockText(MaaSDevDatabaseTimeout)), "not_ready", "db not ready")
@@ -1154,12 +1154,12 @@ func (m *maasRun) makeDatabase(rec *maasRecord, p *maasDBPlan, maasOn, switching
 			return m.fail("database", fmt.Sprintf("Failed to apply %s: %v.", maasDesc("Cluster", ns), err), maasWriteCode(err), "db apply failed")
 		}
 		m.step("database", "running", "Waiting for the database to start (usually 1 to 2 minutes)...")
-		ready, err := waitForGone(c, MaaSDatabaseTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+		ready, err := kube.WaitForGone(c, MaaSDatabaseTimeout, MaaSPoll, func(cc *Client) (bool, error) {
 			_, _, ok, _, err := readMaaSDBCluster(cc, ns)
 			return ok, err
 		})
 		if err != nil {
-			return m.fail("database", fmt.Sprintf("Stopped waiting for the database: %v. It was created; run it again to continue.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled"), "db wait failed")
+			return m.fail("database", fmt.Sprintf("Stopped waiting for the database: %v. It was created; run it again to continue.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "db wait failed")
 		}
 		if !ready {
 			return m.fail("database", fmt.Sprintf("The database is not running after %s, and maas-api needs it before MaaS is turned on. Run it again to continue; the MaaS tab shows its state.", clockText(MaaSDatabaseTimeout)), "not_ready", "db not ready")
@@ -1176,7 +1176,7 @@ func (m *maasRun) writeDBConfig(rec *maasRecord, p *maasDBPlan, st maasDBState, 
 	ns := st.ns
 	connURL, err := p.connURL(c)
 	if err != nil {
-		return m.fail("database", err.Error()+" Run it again to retry.", errorCodeFromK8sErr(err), "db secret read failed")
+		return m.fail("database", err.Error()+" Run it again to retry.", kube.ErrorCodeFromK8sErr(err), "db secret read failed")
 	}
 	written, err := ensureMaaSDBObject(c, "Secret", ns, maasDBConfigObject(ns, connURL), st.secret, st.secretFound, false)
 	if err != nil {
@@ -1185,14 +1185,14 @@ func (m *maasRun) writeDBConfig(rec *maasRecord, p *maasDBPlan, st maasDBState, 
 	if switching || rec.Database != p.target || rec.DBNamespace != ns {
 		rec.Database, rec.DBNamespace = p.target, ns
 		if err := writeMaaSRecord(c, *rec); err != nil {
-			return m.fail("database", err.Error()+" The Secret names the new database already.", errorCodeFromK8sErr(err), "record write failed")
+			return m.fail("database", err.Error()+" The Secret names the new database already.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 		}
 	}
 	// The API server keeps the resourceVersion when an apply changes nothing.
 	if changed := !st.secretFound || written.ResourceVersion != st.secret.ResourceVersion; changed && maasOn {
 		restarted, err := restartMaaSAPI(c, ns)
 		if err != nil {
-			return m.fail("database", fmt.Sprintf("Secret %s/%s was written, but maas-api could not be restarted to read it: %v. Restart it (oc rollout restart deployment/maas-api -n %s) or run it again.", ns, maasDBConfigSecret, err, ns), errorCodeFromK8sErr(err), "maas-api restart failed")
+			return m.fail("database", fmt.Sprintf("Secret %s/%s was written, but maas-api could not be restarted to read it: %v. Restart it (oc rollout restart deployment/maas-api -n %s) or run it again.", ns, maasDBConfigSecret, err, ns), kube.ErrorCodeFromK8sErr(err), "maas-api restart failed")
 		}
 		if restarted {
 			m.step("database", "running", "maas-api restarts to read the new connection Secret.")
@@ -1217,9 +1217,9 @@ func (m *maasRun) deleteDBObjects(step, ns, dbKind string, rec *maasRecord) ([]s
 	}
 	for _, k := range kinds {
 		path := maasObjectPath(k, ns)
-		meta, found, err := readObjectMeta(c, path)
+		meta, found, err := kube.ReadObjectMeta(c, path)
 		if err != nil {
-			res, _ := m.fail(step, fmt.Sprintf("Cannot read %s: %v. Run it again to retry.", maasDesc(k, ns), err), errorCodeFromK8sErr(err), "read failed")
+			res, _ := m.fail(step, fmt.Sprintf("Cannot read %s: %v. Run it again to retry.", maasDesc(k, ns), err), kube.ErrorCodeFromK8sErr(err), "read failed")
 			return deleted, res
 		}
 		if !found {
@@ -1230,11 +1230,11 @@ func (m *maasRun) deleteDBObjects(step, ns, dbKind string, rec *maasRecord) ([]s
 			continue
 		}
 		m.step(step, "running", "Deleting "+maasDesc(k, ns)+"...")
-		if _, err := deleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
+		if _, err := kube.DeleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 			res, _ := m.fail(step, fmt.Sprintf("Failed to delete %s: %v. Run it again to retry.", maasDesc(k, ns), err), maasWriteCode(err), "delete failed")
 			return deleted, res
 		}
-		if gone, _ := waitForDeletion(c, path, MaaSDeleteTimeout, MaaSPoll); !gone {
+		if gone, _ := kube.WaitForDeletion(c, path, MaaSDeleteTimeout, MaaSPoll); !gone {
 			m.logs = append(m.logs, maasDesc(k, ns)+" is still being deleted")
 		}
 		deleted = append(deleted, maasDesc(k, ns))
@@ -1271,7 +1271,7 @@ func (m *maasRun) deletePOCCreds(step, ns string, rec *maasRecord) (bool, *types
 	if uid != "" {
 		rec.POCCredsUID = ""
 		if err := writeMaaSRecord(m.c, *rec); err != nil {
-			res, _ := m.fail(step, err.Error(), errorCodeFromK8sErr(err), "record write failed")
+			res, _ := m.fail(step, err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
 			return false, res
 		}
 	}
@@ -1314,22 +1314,22 @@ func (m *maasRun) changeDatabase(req *types.MaaSDatabaseRequest) (*types.Operati
 	m.step("check", "running", "Checking the database and who uses MaaS...")
 	rec, err := readMaaSRecord(c)
 	if err != nil {
-		return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record read failed")
+		return m.fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
 	}
 	dsc, err := readMaaSDSC(c)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read the DataScienceCluster; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "dsc read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read the DataScienceCluster; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err), "dsc read failed")
 	}
 	ns, err := maasDBNamespace(c, rec)
 	if err != nil {
 		return m.fail("check", sentenceStart(err.Error())+". Nothing was changed.", "prerequisites", "infra namespace unknown")
 	}
-	_, nsFound, err := readObjectMeta(c, "/api/v1/namespaces/"+ns)
+	_, nsFound, err := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+ns)
 	if err != nil || !nsFound {
-		return m.fail("check", fmt.Sprintf("Cannot read namespace %s, where the database is; nothing was changed%s.", ns, errSuffix(err)), firstNonEmpty(errorCodeFromK8sErr(err), "prerequisites"), "namespace read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read namespace %s, where the database is; nothing was changed%s.", ns, errSuffix(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "prerequisites"), "namespace read failed")
 	}
 	if others, err := foreignMaaSObjects(c); err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot check whether others use MaaS, so the database was not changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "maas list failed")
+		return m.fail("check", fmt.Sprintf("Cannot check whether others use MaaS, so the database was not changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "maas list failed")
 	} else if len(others) > 0 {
 		return m.fail("check", fmt.Sprintf("Others use this MaaS platform: %s. Changing the database would lose their API keys too, so it was not changed.", strings.Join(others, ", ")), "in_use", "maas in use")
 	}

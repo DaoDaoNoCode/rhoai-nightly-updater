@@ -185,7 +185,7 @@ func (w *nodeSetupWork) nothing(state string) {
 }
 
 func (w *nodeSetupWork) redact(err error) string {
-	return redactSecrets(err.Error(), w.credentials...)
+	return kube.RedactSecrets(err.Error(), w.credentials...)
 }
 
 // PlanNodeSetup works out what req's action would do, with c (the user's
@@ -612,7 +612,7 @@ func preparePullSecret(c *Client, w *nodeSetupWork, add, replaceExisting bool) {
 	ps, creds, code, msg := readClusterPullSecret(c)
 	w.credentials = append(w.credentials, creds...)
 	if ps == nil {
-		w.refuse(code, redactSecrets(msg, w.credentials...))
+		w.refuse(code, kube.RedactSecrets(msg, w.credentials...))
 		return
 	}
 	w.plan.ResourceVersion, w.plan.UID = ps.resourceVersion, ps.uid
@@ -689,7 +689,7 @@ func preparePullSecret(c *Client, w *nodeSetupWork, add, replaceExisting bool) {
 
 // keptLogins says that n other registry logins stay.
 func keptLogins(n int) string {
-	return fmt.Sprintf("the other %s %s as %s", countNoun(n, "registry login", "registry logins"), verb(n, "stays", "stay"), verb(n, "it is", "they are"))
+	return fmt.Sprintf("the other %s %s as %s", kube.CountNoun(n, "registry login", "registry logins"), kube.Verb(n, "stays", "stay"), kube.Verb(n, "it is", "they are"))
 }
 
 // recordedWhen words when and by whom the record says the entry was added.

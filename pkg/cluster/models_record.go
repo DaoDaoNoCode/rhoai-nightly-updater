@@ -53,13 +53,13 @@ type modelsRecord map[string]recordedModel
 func modelRecordKey(project, name string) string { return project + "/" + name }
 
 // owns: meta is the model the tool created (its UID is the recorded one).
-func (r modelsRecord) owns(meta objectMeta) bool {
+func (r modelsRecord) owns(meta kube.ObjectMeta) bool {
 	e, ok := r[modelRecordKey(meta.Namespace, meta.Name)]
 	return ok && e.UID != "" && e.UID == meta.UID
 }
 
 // ownsModel reads the record and says whether meta is the tool's model.
-func ownsModel(c *Client, meta objectMeta) (bool, error) {
+func ownsModel(c *Client, meta kube.ObjectMeta) (bool, error) {
 	rec, err := readModelsRecord(c)
 	if err != nil {
 		return false, err
@@ -114,7 +114,7 @@ func writeModelsRecord(c *Client, rec modelsRecord) error {
 
 // recordModel records the model the tool just created (meta as the create
 // returned it).
-func recordModel(c *Client, meta objectMeta) error {
+func recordModel(c *Client, meta kube.ObjectMeta) error {
 	rec, err := readModelsRecord(c)
 	if err != nil {
 		return err
