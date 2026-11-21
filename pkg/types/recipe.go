@@ -204,3 +204,159 @@ type RecipeProblem struct {
 	Field   string `json:"field,omitempty"`
 	Message string `json:"message"`
 }
+
+// RecipeRequest is the body of POST /api/recipes/plan and /api/recipes/run:
+// the recipe as a JSON object, read strictly (pkg/cluster internal/recipe
+// Validate).
+type RecipeRequest struct {
+	Recipe json.RawMessage `json:"recipe"`
+}
+
+// RecipeResumeRequest is the body of POST /api/recipes/resume.
+type RecipeResumeRequest struct {
+	// RunID is the run to resume: the recorded run's ID.
+	RunID string `json:"runId"`
+	// ReresolveBuild resolves the recipe's build again (a newer nightly of
+	// the line) instead of keeping the one the run pinned.
+	ReresolveBuild bool `json:"reresolveBuild,omitempty"`
+}
+
+// RecipeRunAccepted is the 202 answer of POST /api/recipes/run and resume.
+type RecipeRunAccepted struct {
+	RunID string `json:"runId"`
+}
+
+// The actions of a planned step.
+const (
+	RecipeStepRun     = "run"     // the step will set something up
+	RecipeStepSkip    = "skip"    // already set up
+	RecipeStepBlocked = "blocked" // the run would stop here; Reason says why
+	RecipeStepLater   = "later"   // checked when the run gets there (it depends on an earlier step)
+)
+
+// RecipePlan is the answer of POST /api/recipes/plan: what a run would do.
+// The run refuses while Problems is not empty; nothing was changed.
+type RecipePlan struct {
+	Recipe   EnvironmentRecipe `json:"recipe"`
+	Steps    []RecipePlanStep  `json:"steps"`
+	Problems []RecipeProblem   `json:"problems"`
+	// Pinned is the build the run installs when the RHOAI step runs.
+	Pinned *RecipePinnedBuild `json:"pinned,omitempty"`
+	// TypicalSeconds and MaxSeconds add up the steps that run (or are
+	// checked later).
+	TypicalSeconds int `json:"typicalSeconds"`
+	MaxSeconds     int `json:"maxSeconds"`
+}
+
+// RecipePlanStep is one step of a plan.
+type RecipePlanStep struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Action string `json:"action"` // RecipeStepRun, Skip, Blocked or Later
+	Reason string `json:"reason,omitempty"`
+	// TypicalSeconds and MaxSeconds: how long the step usually takes, and
+	// at most.
+	TypicalSeconds int `json:"typicalSeconds"`
+	MaxSeconds     int `json:"maxSeconds"`
+}
+
+// RecipePinnedBuild is the RHOAI build a run installs, resolved once when
+// the run starts, so a resume does not move to a newer nightly.
+type RecipePinnedBuild struct {
+	Tag    string `json:"tag,omitempty"`
+	Image  string `json:"image"`
+	Digest string `json:"digest"`
+}
+
+// RecipeProjectRef is the project of a run: its name, and with mode create
+// the UID of the namespace the recipe created (once it did).
+type RecipeProjectRef struct {
+	Name  string `json:"name"`
+	UID   string `json:"uid,omitempty"`
+	Owned bool   `json:"owned,omitempty"`
+}
+
+// The states of a recipe run.
+const (
+	RecipeRunRunning   = "running"
+	RecipeRunSucceeded = "succeeded"
+	RecipeRunFailed    = "failed"
+	RecipeRunStopped   = "stopped"
+)
+
+// The statuses of a run's step.
+const (
+	RecipeStepPending = "pending"
+	RecipeStepRunning = "running"
+	RecipeStepSuccess = "success"
+	RecipeStepFailed  = "failed"
+	RecipeStepSkipped = "skipped"
+)
+
+// RecipeRun is the record of the last recipe run (key recipeRun of the
+// operation ConfigMap), written when a step starts and ends.
+type RecipeRun struct {
+	ID string `json:"id"`
+	// OperationID is the cluster operation of the run (the lock's), BootID
+	// and Pod the updater process that runs it.
+	OperationID string `json:"operationId"`
+	BootID      string `json:"bootId"`
+	Pod         string `json:"pod,omitempty"`
+	User        string `json:"user"`
+	StartedAt   string `json:"startedAt"`
+	// ResumedAt is when the run was last resumed.
+	ResumedAt  string `json:"resumedAt,omitempty"`
+	FinishedAt string `json:"finishedAt,omitempty"`
+	State      string `json:"state"`
+	// StopReason says why a run that is not running ended: "requested"
+	// (Stop after this step), "restart" (the updater was restarting), or
+	// the step's failure.
+	StopReason string `json:"stopReason,omitempty"`
+	// ErrorCode is the code of why the run stopped or failed:
+	// sign_in_again, session_expired, forbidden, lock_lost, internal, or
+	// the failed step's.
+	ErrorCode string             `json:"errorCode,omitempty"`
+	Recipe    EnvironmentRecipe  `json:"recipe"`
+	Pinned    *RecipePinnedBuild `json:"pinned,omitempty"`
+	Project   *RecipeProjectRef  `json:"project,omitempty"`
+	Steps     []RecipeRunStep    `json:"steps"`
+}
+
+// RecipeRunStep is one step of a run.
+type RecipeRunStep struct {
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	Status     string `json:"status"`
+	Message    string `json:"message,omitempty"`
+	ErrorCode  string `json:"errorCode,omitempty"`
+	StartedAt  string `json:"startedAt,omitempty"`
+	FinishedAt string `json:"finishedAt,omitempty"`
+}
+
+// RecipeRunStatus is the answer of GET /api/recipes/run.
+type RecipeRunStatus struct {
+	// Run is the last run, nil when none was recorded.
+	Run *RecipeRun `json:"run"`
+	// Running: the run is running now, in this updater process or
+	// (Remote) in another one (Pod).
+	Running bool   `json:"running"`
+	Remote  bool   `json:"remote,omitempty"`
+	Pod     string `json:"pod,omitempty"`
+	// Interrupted: the record says running, but the updater process that
+	// ran it is gone (crash, kill, node loss). Resume continues it.
+	Interrupted bool `json:"interrupted,omitempty"`
+	// StopRequested: Stop after this step was asked for.
+	StopRequested bool `json:"stopRequested,omitempty"`
+	// Step is the latest progress of the running step (from the
+	// operation), when it runs.
+	Step *UpdateStepEvent `json:"step,omitempty"`
+}
+
+// RecipeOwnedProject is a project a recipe created: Clean up deletes it
+// only while it still has this UID and the recipe label.
+type RecipeOwnedProject struct {
+	Name      string `json:"name"`
+	UID       string `json:"uid"`
+	Recipe    string `json:"recipe"`
+	CreatedAt string `json:"createdAt"`
+}

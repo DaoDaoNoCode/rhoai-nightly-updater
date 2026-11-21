@@ -1747,6 +1747,15 @@ type CleanupRequest struct {
 	// tool turned on that go back to what they were, last, each only while
 	// this tool still owns the field and nothing on the cluster uses it.
 	Components []string `json:"components,omitempty"`
+	// RecipeProject is a project a recipe created, deleted after the parts
+	// that live in it and before the components: only while it carries
+	// the recipe's label and the UID the recipe recorded.
+	RecipeProject string `json:"recipeProject,omitempty"`
+	// ConfirmProjectContents are what the recipe project still holds that
+	// this tool did not create ("Pod x", "PersistentVolumeClaim y", ...), as
+	// a refusal listed them: the project is deleted with them only when
+	// every one is confirmed.
+	ConfirmProjectContents []string `json:"confirmProjectContents,omitempty"`
 }
 
 // S3TeardownRequest is the body of POST /api/resources/s3/teardown.

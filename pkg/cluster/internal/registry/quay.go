@@ -885,6 +885,18 @@ func FetchLatestNightly(ctx context.Context, c *kube.Client) (*types.LatestNight
 	return resp, nil
 }
 
+// ResolveNightlyTag returns the newest build of one nightly line (the tag,
+// such as rhoai-3.6) pinned by its digest, from the same cached Quay token
+// and tag digest as FetchLatestNightly. A tag Quay does not have is an
+// error.
+func ResolveNightlyTag(ctx context.Context, c *kube.Client, tag string) (*types.LatestNightlyResponse, error) {
+	digest, err := cachedTagDigest(ctx, QuayAuth(c), tag, tagScanCacheTTL)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s:%s: %w", FBCImage, tag, err)
+	}
+	return &types.LatestNightlyResponse{Tag: tag, Image: fmt.Sprintf("%s:%s@%s", FBCImage, tag, digest), Digest: digest}, nil
+}
+
 // ParseCSVVersion extracts a parsedTag from a CSV name like "rhods-operator.3.5.0-ea.1".
 // It handles three cases:
 //  1. Full EA suffix:       "rhods-operator.3.5.0-ea.1" -> ea=1

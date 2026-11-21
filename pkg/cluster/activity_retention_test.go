@@ -80,7 +80,7 @@ func TestEveryRecordedActionIsDescribed(t *testing.T) {
 		"revert-dashboard", "setup-s3", "teardown-s3", "setup-pipeline-server", "teardown-pipeline-server", "setup-mlflow",
 		"teardown-mlflow", "deploy-mlflow-pr", "revert-mlflow", "create-pull-secret", "create-dsc", "repair-dsc", "assist-rollout",
 		"fix-delete-stale-webhooks", "fix-recreate-subscription", "fix-delete-stale-installplans", "fix-maas-gateway",
-		"disable-component", "restart-operator"} {
+		"disable-component", "restart-operator", "recipe-start", "recipe", "create-recipe-project", "delete-recipe-project"} {
 		if _, ok := record.ActivityActions[a]; !ok {
 			t.Errorf("action %q has no label", a)
 		}

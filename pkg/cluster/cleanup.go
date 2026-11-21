@@ -8,6 +8,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -26,12 +27,16 @@ var (
 	cleanupUnpublish    = serving.UnpublishMaaSModel
 	cleanupMaaSPlatform = serving.TeardownMaaSPlatform
 	cleanupComponents   = features.RestoreComponents
+	cleanupProject      = recipe.DeleteProject
+	// recipeProjectProblem is recipe.ProjectTeardownProblem; tests replace it.
+	recipeProjectProblem = recipe.ProjectTeardownProblem
 )
 
 // CleanupStepID is the step id of each part of a clean-up, as streamed:
 // "pipeline-server:<project>", "storage", "mlflow", "playground:<project>",
 // "model:<project>", "inference-gateway", "maas-unpublish:<project>"
-// (first), "maas-platform", and "components" (last).
+// (first), "maas-platform", "recipe-project:<project>", and "components"
+// (last).
 func CleanupStepID(part, project string) string {
 	if project != "" {
 		return part + ":" + project
@@ -50,9 +55,10 @@ type cleanupPart struct {
 // the playgrounds (which use the models), then the models and, after them, the inference gateway they route through
 // (its teardown refuses while a model uses it). A model published to MaaS
 // is unpublished before anything else (the Models teardown refuses while it
-// is published), and the MaaS platform goes last but for the
-// DataScienceCluster components this tool turned on, which go back to what
-// they were once nothing of the clean-up uses them.
+// is published), and the MaaS platform goes last but for a project a
+// recipe created, which goes once the parts that live in it are gone, and
+// the DataScienceCluster components this tool turned on, which go back to
+// what they were once nothing of the clean-up uses them.
 func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 	var parts []cleanupPart
 	for _, project := range req.MaaSPublished {
@@ -101,6 +107,18 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 	if req.MaaSPlatform {
 		parts = append(parts, cleanupPart{id: CleanupStepID("maas-platform", ""), title: "the MaaS platform", run: func() (*types.OperationResponse, error) { return cleanupMaaSPlatform(c) }})
 	}
+	if req.RecipeProject != "" {
+		// After every part that lives in a project (MaaS publications,
+		// pipeline servers, playgrounds, models), so its own teardown
+		// runs first.
+		parts = append(parts, cleanupPart{
+			id:    CleanupStepID("recipe-project", req.RecipeProject),
+			title: fmt.Sprintf("project '%s', which a recipe created", req.RecipeProject),
+			run: func() (*types.OperationResponse, error) {
+				return cleanupProject(c, req.RecipeProject, req.ConfirmProjectContents)
+			},
+		})
+	}
 	if len(req.Components) > 0 {
 		// Last: what used the components is gone by now.
 		parts = append(parts, cleanupPart{id: CleanupStepID("components", ""), title: "the DataScienceCluster components this tool turned on", run: func() (*types.OperationResponse, error) { return cleanupComponents(c, req.Components) }})
@@ -125,6 +143,21 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 	}
 	parts := cleanupParts(c, req)
 	var done []string
+	// A recipe project that would be refused (not the recipe's any more,
+	// or holding what the user did not confirm) refuses the whole clean-up
+	// before anything is deleted; its part checks again before deleting.
+	if req.RecipeProject != "" {
+		problem, code, err := recipeProjectProblem(c, req.RecipeProject, req.ConfirmProjectContents)
+		if err != nil {
+			problem, code = fmt.Sprintf("Cannot check project %s: %v.", req.RecipeProject, err), kube.ErrorCodeOr(err, "prerequisites")
+		}
+		if problem != "" {
+			step := CleanupStepID("recipe-project", req.RecipeProject)
+			emit(UpdateStepEvent{Step: step, Status: "failed", Message: problem, ErrorCode: code})
+			recordCleanupActivity(c, "refused: "+problem, false)
+			return &types.OperationResponse{Success: false, Message: problem + " Nothing was deleted.", ErrorCode: code}, nil
+		}
+	}
 	// Projects of MaaS publications that are gone leave the MaaS gateway
 	// first (maas_prune.go), whatever is selected.
 	logs := serving.ReleaseGoneMaaSProjects(c)
