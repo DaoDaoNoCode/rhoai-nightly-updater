@@ -115,19 +115,16 @@ func infraNamespaceLeftovers(c *Client, ns string) ([]string, error) {
 		{"Deployment", namespacedPath("apps/v1", "deployments", ns, "")},
 		{"PersistentVolumeClaim", namespacedPath("v1", "persistentvolumeclaims", ns, "")},
 	} {
-		body, _, err := c.get(l.path)
-		if err != nil {
+		var items []struct {
+			Metadata objectMeta `json:"metadata"`
+		}
+		if err := c.listInto(l.path, &items); err != nil {
+			if isDecodeError(err) {
+				return nil, fmt.Errorf("parse the %s list: %w", l.kind, err)
+			}
 			return nil, fmt.Errorf("list the %ss in %s: %w", l.kind, ns, err)
 		}
-		var list struct {
-			Items []struct {
-				Metadata objectMeta `json:"metadata"`
-			} `json:"items"`
-		}
-		if err := json.Unmarshal(body, &list); err != nil {
-			return nil, fmt.Errorf("parse the %s list: %w", l.kind, err)
-		}
-		for _, it := range list.Items {
+		for _, it := range items {
 			out = append(out, l.kind+" "+it.Metadata.Name)
 		}
 	}

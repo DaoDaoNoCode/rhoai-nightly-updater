@@ -44,25 +44,22 @@ func ListUserDSProjects(u *Client) ([]string, error) {
 	if !u.asUser {
 		return nil, errNotUserClient
 	}
-	body, _, err := u.get("/apis/project.openshift.io/v1/projects?labelSelector=" + url.QueryEscape(dsProjectSelector))
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Status struct {
+			Phase string `json:"phase"`
+		} `json:"status"`
+	}
+	if err := u.listInto("/apis/project.openshift.io/v1/projects?labelSelector="+url.QueryEscape(dsProjectSelector), &items); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse the project list: %w", err)
+		}
 		return nil, fmt.Errorf("list your data science projects: %w", err)
 	}
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Status struct {
-				Phase string `json:"phase"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse the project list: %w", err)
-	}
 	projects := []string{}
-	for _, p := range list.Items {
+	for _, p := range items {
 		if p.Status.Phase != "Terminating" {
 			projects = append(projects, p.Metadata.Name)
 		}

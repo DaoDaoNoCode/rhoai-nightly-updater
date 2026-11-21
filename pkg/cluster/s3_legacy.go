@@ -324,20 +324,14 @@ func readLegacyStorageOwner(c *Client) (*legacyStorage, bool, error) {
 
 // listDeploymentMetas lists the metadata of a namespace's Deployments.
 func listDeploymentMetas(c *Client, namespace string) ([]objectMeta, error) {
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", namespace, ""))
-	if err != nil {
+	var items []struct {
+		Metadata objectMeta `json:"metadata"`
+	}
+	if err := c.listInto(namespacedPath("apps/v1", "deployments", namespace, ""), &items); err != nil {
 		return nil, err
 	}
-	var list struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, err
-	}
-	out := make([]objectMeta, 0, len(list.Items))
-	for _, item := range list.Items {
+	out := make([]objectMeta, 0, len(items))
+	for _, item := range items {
 		out = append(out, item.Metadata)
 	}
 	return out, nil

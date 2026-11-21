@@ -489,17 +489,11 @@ func readArgoApplications(c *Client) ([]argoApp, error) {
 
 // listArgoApplications reads the list of every Application.
 func listArgoApplications(c *Client) ([]argoApp, error) {
-	body, _, err := c.get(argoAPI + "/applications")
-	if err != nil {
+	var items []argoApp
+	if err := c.listInto(argoAPI+"/applications", &items); err != nil {
 		return nil, err
 	}
-	var list struct {
-		Items []argoApp `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, err
-	}
-	return list.Items, nil
+	return items, nil
 }
 
 // The signs that an Argo CD on another cluster may manage this one. Argo

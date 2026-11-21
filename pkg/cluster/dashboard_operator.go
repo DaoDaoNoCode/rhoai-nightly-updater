@@ -234,17 +234,11 @@ func dashboardOwner(d dashboardDeployment) string {
 }
 
 func listDashboardNamespaceDeployments(c *Client, ns string) ([]dashboardDeployment, error) {
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", ns, ""))
-	if err != nil {
+	var items []dashboardDeployment
+	if err := c.listInto(namespacedPath("apps/v1", "deployments", ns, ""), &items); err != nil {
 		return nil, err
 	}
-	var list struct {
-		Items []dashboardDeployment `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, err
-	}
-	return list.Items, nil
+	return items, nil
 }
 
 func discoverDashboardImages(c *Client, operator *dashboardDeployment) ([]types.DashboardDevImage, error) {
@@ -737,16 +731,13 @@ func addDashboardRolloutDiagnostics(c *Client, ns string, images []types.Dashboa
 		return
 	}
 	// One namespace-wide list, only while something is not ready.
-	body, _, err := c.get("/api/v1/namespaces/" + ns + "/pods")
-	if err != nil {
+	var items []dashboardPod
+	if err := c.listInto("/api/v1/namespaces/"+ns+"/pods", &items); err != nil {
+		if isDecodeError(err) {
+			slog.Warn("cannot parse dashboard pods for rollout diagnostics", "error", err)
+			return
+		}
 		slog.Warn("cannot list dashboard pods for rollout diagnostics", "error", err)
-		return
-	}
-	var pods struct {
-		Items []dashboardPod `json:"items"`
-	}
-	if err := json.Unmarshal(body, &pods); err != nil {
-		slog.Warn("cannot parse dashboard pods for rollout diagnostics", "error", err)
 		return
 	}
 	for i := range images {
@@ -759,8 +750,8 @@ func addDashboardRolloutDiagnostics(c *Client, ns string, images []types.Dashboa
 		}
 		var best *dashboardPod
 		bestScore := -1
-		for p := range pods.Items {
-			pod := &pods.Items[p]
+		for p := range items {
+			pod := &items[p]
 			if pod.Metadata.DeletionTimestamp != "" || !dashboardLabelsMatch(d.Spec.Selector.MatchLabels, pod.Metadata.Labels) {
 				continue
 			}

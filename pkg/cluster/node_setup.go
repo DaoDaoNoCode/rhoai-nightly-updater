@@ -318,17 +318,14 @@ func (m idmsItem) isSetupMirror() bool {
 }
 
 func listIDMS(c *Client) ([]idmsItem, error) {
-	body, _, err := c.get(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""))
-	if err != nil {
+	var items []idmsItem
+	if err := c.listInto(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""), &items); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse ImageDigestMirrorSets: %w", err)
+		}
 		return nil, err
 	}
-	var list struct {
-		Items []idmsItem `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse ImageDigestMirrorSets: %w", err)
-	}
-	return list.Items, nil
+	return items, nil
 }
 
 // prepareMirrorCreate decides Create the image mirror from every mirror
@@ -878,31 +875,25 @@ func writeRefusal(w *nodeSetupWork, err error, dryRun bool) string {
 // take a change until someone acts: paused, or Degraded. Read with the
 // user's token; an unreadable list names none.
 func stuckMachineConfigPools(c *Client) []string {
-	body, _, err := c.get(clusterPath("machineconfiguration.openshift.io/v1", "machineconfigpools", ""))
-	if err != nil {
-		return nil
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Spec struct {
+			Paused bool `json:"paused"`
+		} `json:"spec"`
+		Status struct {
+			Conditions []struct {
+				Type   string `json:"type"`
+				Status string `json:"status"`
+			} `json:"conditions"`
+		} `json:"status"`
 	}
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Spec struct {
-				Paused bool `json:"paused"`
-			} `json:"spec"`
-			Status struct {
-				Conditions []struct {
-					Type   string `json:"type"`
-					Status string `json:"status"`
-				} `json:"conditions"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if json.Unmarshal(body, &list) != nil {
+	if c.listInto(clusterPath("machineconfiguration.openshift.io/v1", "machineconfigpools", ""), &items) != nil {
 		return nil
 	}
 	var out []string
-	for _, p := range list.Items {
+	for _, p := range items {
 		degraded := false
 		for _, cond := range p.Status.Conditions {
 			if cond.Type == "Degraded" && cond.Status == "True" {

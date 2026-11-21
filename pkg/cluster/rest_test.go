@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -94,6 +96,108 @@ func TestGetOptional(t *testing.T) {
 	}
 }
 
+func TestGetInto(t *testing.T) {
+	c, s := newRESTClient(t, map[string]restAnswer{
+		"/there": {200, `{"metadata":{"name":"a"}}`},
+		"/bad":   {200, `{"metadata":{"name":1}}`},
+		"/no":    {403, forbiddenBody},
+	})
+	var obj struct {
+		Metadata objectMeta `json:"metadata"`
+	}
+	if err := c.getInto("/there", &obj); err != nil || obj.Metadata.Name != "a" {
+		t.Fatalf("getInto: %+v %v", obj, err)
+	}
+	_, _, wantErr := c.get("/no")
+	if err := c.getInto("/no", &obj); err == nil || err.Error() != wantErr.Error() || !IsK8sError(err, 403) || isDecodeError(err) {
+		t.Fatalf("refused read: %v, want get's %v", err, wantErr)
+	}
+	wantDecode := json.Unmarshal([]byte(`{"metadata":{"name":1}}`), &obj)
+	err := c.getInto("/bad", &obj)
+	if err == nil || err.Error() != wantDecode.Error() || !isDecodeError(err) {
+		t.Fatalf("bad body: %v, want json.Unmarshal's %v", err, wantDecode)
+	}
+	if _, ok := errors.AsType[*json.UnmarshalTypeError](fmt.Errorf("parse: %w", err)); !ok {
+		t.Fatalf("a wrapped decode error does not unwrap to the JSON error: %#v", err)
+	}
+	if fmt.Sprintf("parse: %v", err) != "parse: "+wantDecode.Error() {
+		t.Fatalf("a decode error formats as %q", fmt.Sprintf("%v", err))
+	}
+
+	found, err := c.getIntoOptional("/gone", &obj)
+	if found || err != nil {
+		t.Fatalf("getIntoOptional missing: found=%v err=%v", found, err)
+	}
+	if found, err := c.getIntoOptional("/there", &obj); !found || err != nil {
+		t.Fatalf("getIntoOptional existing: found=%v err=%v", found, err)
+	}
+	if found, err := c.getIntoOptional("/no", &obj); found || err == nil || err.Error() != wantErr.Error() {
+		t.Fatalf("getIntoOptional refused: found=%v err=%v", found, err)
+	}
+	if found, err := c.getIntoOptional("/bad", &obj); !found || !isDecodeError(err) || err.Error() != wantDecode.Error() {
+		t.Fatalf("getIntoOptional bad body: found=%v err=%v", found, err)
+	}
+	want := []string{"GET /there", "GET /no", "GET /no", "GET /bad", "GET /gone", "GET /there", "GET /no", "GET /bad"}
+	if fmt.Sprint(s.requests) != fmt.Sprint(want) {
+		t.Fatalf("requests %v, want %v", s.requests, want)
+	}
+}
+
+// listInto's decode errors are, byte for byte, those of json.Unmarshal
+// into the unnamed list struct the call sites declared.
+func TestListInto(t *testing.T) {
+	type item struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+	}
+	bodies := map[string]string{
+		"/ok":        `{"kind":"List","items":[{"metadata":{"name":"a"}},{"metadata":{"name":"b"}}]}`,
+		"/empty":     `{"kind":"List"}`,
+		"/null":      `{"items":null}`,
+		"/wrongtype": `{"items":[{"metadata":{"name":1}}]}`,
+		"/notlist":   `{"items":"x"}`,
+		"/syntax":    `{"items":[`,
+		"/notjson":   `<html>`,
+	}
+	answers := map[string]restAnswer{"/no": {403, forbiddenBody}}
+	for p, b := range bodies {
+		answers[p] = restAnswer{200, b}
+	}
+	c, _ := newRESTClient(t, answers)
+	for p, b := range bodies {
+		var list struct {
+			Items []item `json:"items"`
+		}
+		wantErr := json.Unmarshal([]byte(b), &list)
+		var items []item
+		err := c.listInto(p, &items)
+		switch {
+		case wantErr == nil && err != nil:
+			t.Errorf("%s: %v", p, err)
+		case wantErr != nil && (err == nil || err.Error() != wantErr.Error() || !isDecodeError(err)):
+			t.Errorf("%s: error %v, want %v", p, err, wantErr)
+		case wantErr == nil && fmt.Sprint(items) != fmt.Sprint(list.Items):
+			t.Errorf("%s: items %v, want %v", p, items, list.Items)
+		}
+		if p == "/wrongtype" && !strings.Contains(err.Error(), "Go struct field .items.0.metadata.name") {
+			t.Errorf("unnamed list struct path missing from %q", err)
+		}
+	}
+	_, _, wantErr := c.get("/no")
+	var items []json.RawMessage
+	if err := c.listInto("/no", &items); err == nil || err.Error() != wantErr.Error() || isDecodeError(err) {
+		t.Fatalf("refused list: %v, want get's %v", err, wantErr)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("listInto accepted a non-slice")
+		}
+	}()
+	var notSlice struct{}
+	_ = c.listInto("/ok", &notSlice)
+}
+
 func TestDeleteIfExists(t *testing.T) {
 	c, s := newRESTClient(t, map[string]restAnswer{
 		"/there": {200, `{}`},
@@ -126,6 +230,13 @@ func TestRESTHelpersAreKnownToTheRBACScan(t *testing.T) {
 	for _, decl := range f.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Recv == nil {
+			continue
+		}
+		star, ok := fn.Recv.List[0].Type.(*ast.StarExpr)
+		if !ok {
+			continue
+		}
+		if id, ok := star.X.(*ast.Ident); !ok || id.Name != "Client" {
 			continue
 		}
 		if _, known := helperMethods[fn.Name.Name]; !known {

@@ -788,17 +788,14 @@ type installPlanItem struct {
 }
 
 func listInstallPlans(c *Client) ([]installPlanItem, error) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ""))
-	if err != nil {
+	var items []installPlanItem
+	if err := c.listInto(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ""), &items); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse install plans: %w", err)
+		}
 		return nil, err
 	}
-	var list struct {
-		Items []installPlanItem `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse install plans: %w", err)
-	}
-	return list.Items, nil
+	return items, nil
 }
 
 func installPlanFailureReason(ip installPlanItem) string {
@@ -1088,38 +1085,34 @@ func checkNodeCapacity(c *Client) checkOutput {
 	out := checkOutput{check: CheckResult{Name: "Node capacity", Status: "pass", Detail: "All nodes healthy"}}
 
 	path := clusterPath("v1", "nodes", "")
-	body, _, err := c.get(path)
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Status struct {
+			Conditions []struct {
+				Type   string `json:"type"`
+				Status string `json:"status"`
+			} `json:"conditions"`
+		} `json:"status"`
+	}
+	if err := c.listInto(path, &items); err != nil {
+		if isDecodeError(err) {
+			out.check = CheckResult{Name: "Node capacity", Status: "warn", Detail: "Could not parse node list"}
+			return out
+		}
 		out.check = CheckResult{Name: "Node capacity", Status: "warn", Detail: "Could not query nodes"}
 		return out
 	}
 
-	var nodeList struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Status struct {
-				Conditions []struct {
-					Type   string `json:"type"`
-					Status string `json:"status"`
-				} `json:"conditions"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &nodeList); err != nil {
-		out.check = CheckResult{Name: "Node capacity", Status: "warn", Detail: "Could not parse node list"}
-		return out
-	}
-
-	if len(nodeList.Items) == 0 {
+	if len(items) == 0 {
 		out.check = CheckResult{Name: "Node capacity", Status: "warn", Detail: "No nodes found"}
 		return out
 	}
 
-	totalNodes := len(nodeList.Items)
+	totalNodes := len(items)
 	var notReadyNodes []string
-	for _, node := range nodeList.Items {
+	for _, node := range items {
 		nodeReady := false
 		for _, cond := range node.Status.Conditions {
 			if cond.Type == "Ready" && cond.Status == "True" {

@@ -576,34 +576,28 @@ func maasPOCImage(c *Client) (string, string) {
 // maas-api/internal/api_keys/db_driver.go: migrations run in
 // NewPostgresStoreFromURLs, at startup). Best effort: "" when unreadable.
 func maasPOCRestartWarning(c *Client, ns string) string {
-	body, _, err := c.get(namespacedPath("v1", "pods", ns, ""))
-	if err != nil {
-		return ""
+	var items []struct {
+		Metadata struct {
+			Name              string            `json:"name"`
+			Labels            map[string]string `json:"labels"`
+			CreationTimestamp string            `json:"creationTimestamp"`
+			DeletionTimestamp string            `json:"deletionTimestamp"`
+		} `json:"metadata"`
+		Status struct {
+			ContainerStatuses []struct {
+				State struct {
+					Running *struct {
+						StartedAt string `json:"startedAt"`
+					} `json:"running"`
+				} `json:"state"`
+			} `json:"containerStatuses"`
+		} `json:"status"`
 	}
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name              string            `json:"name"`
-				Labels            map[string]string `json:"labels"`
-				CreationTimestamp string            `json:"creationTimestamp"`
-				DeletionTimestamp string            `json:"deletionTimestamp"`
-			} `json:"metadata"`
-			Status struct {
-				ContainerStatuses []struct {
-					State struct {
-						Running *struct {
-							StartedAt string `json:"startedAt"`
-						} `json:"running"`
-					} `json:"state"`
-				} `json:"containerStatuses"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if json.Unmarshal(body, &list) != nil {
+	if c.listInto(namespacedPath("v1", "pods", ns, ""), &items) != nil {
 		return ""
 	}
 	var dbCreated, apiStarted time.Time
-	for _, p := range list.Items {
+	for _, p := range items {
 		if p.Metadata.DeletionTimestamp != "" {
 			continue
 		}

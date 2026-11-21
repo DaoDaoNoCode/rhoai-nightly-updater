@@ -661,26 +661,20 @@ func authPolicyStateOf(c *Client, ns, gateway string) string {
 // it cannot be read. The record for the in-cluster listener is never
 // published (UnmanagedDNS); it is not this host's.
 func dnsPublished(c *Client, host string) string {
-	body, _, err := c.get(namespacedPath("ingress.operator.openshift.io/v1", "dnsrecords", "openshift-ingress", ""))
-	if err != nil {
+	var items []struct {
+		Spec struct {
+			DNSName string `json:"dnsName"`
+		} `json:"spec"`
+		Status struct {
+			Zones []struct {
+				Conditions []k8sCondition `json:"conditions"`
+			} `json:"zones"`
+		} `json:"status"`
+	}
+	if c.listInto(namespacedPath("ingress.operator.openshift.io/v1", "dnsrecords", "openshift-ingress", ""), &items) != nil {
 		return ""
 	}
-	var list struct {
-		Items []struct {
-			Spec struct {
-				DNSName string `json:"dnsName"`
-			} `json:"spec"`
-			Status struct {
-				Zones []struct {
-					Conditions []k8sCondition `json:"conditions"`
-				} `json:"zones"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if json.Unmarshal(body, &list) != nil {
-		return ""
-	}
-	for _, rec := range list.Items {
+	for _, rec := range items {
 		if strings.TrimSuffix(rec.Spec.DNSName, ".") != host {
 			continue
 		}
@@ -962,23 +956,20 @@ func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr erro
 // inference gateway that use its GatewayClass. Gateways are listed
 // cluster-wide, read-only: another one can be in any namespace.
 func otherGatewaysOfClass(c *Client) ([]string, error) {
-	body, _, err := c.get(clusterPath("gateway.networking.k8s.io/v1", "gateways", ""))
-	if err != nil {
+	var items []struct {
+		Metadata objectMeta `json:"metadata"`
+		Spec     struct {
+			GatewayClassName string `json:"gatewayClassName"`
+		} `json:"spec"`
+	}
+	if err := c.listInto(clusterPath("gateway.networking.k8s.io/v1", "gateways", ""), &items); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse the Gateways: %w", err)
+		}
 		return nil, err
 	}
-	var list struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-			Spec     struct {
-				GatewayClassName string `json:"gatewayClassName"`
-			} `json:"spec"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse the Gateways: %w", err)
-	}
 	var out []string
-	for _, g := range list.Items {
+	for _, g := range items {
 		if g.Spec.GatewayClassName != inferenceGatewayClass || (g.Metadata.Namespace == inferenceGatewayNamespace && g.Metadata.Name == inferenceGatewayName) {
 			continue
 		}

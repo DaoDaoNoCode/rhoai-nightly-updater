@@ -436,30 +436,24 @@ type operatorCSV struct {
 }
 
 func listOperatorCSVs(c *Client) ([]operatorCSV, error) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""))
-	if err != nil {
-		return nil, err
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Spec struct {
+			Version string `json:"version"`
+		} `json:"spec"`
+		Status struct {
+			Phase   string `json:"phase"`
+			Reason  string `json:"reason"`
+			Message string `json:"message"`
+		} `json:"status"`
 	}
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Spec struct {
-				Version string `json:"version"`
-			} `json:"spec"`
-			Status struct {
-				Phase   string `json:"phase"`
-				Reason  string `json:"reason"`
-				Message string `json:"message"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
+	if err := c.listInto(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""), &items); err != nil {
 		return nil, err
 	}
 	var out []operatorCSV
-	for _, it := range list.Items {
+	for _, it := range items {
 		if !strings.HasPrefix(it.Metadata.Name, SubName+".") {
 			continue
 		}

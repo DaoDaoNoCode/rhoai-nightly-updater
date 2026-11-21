@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -76,29 +75,26 @@ func resolveStableTarget(c *Client) (stableTarget, error) {
 	path := namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, "") +
 		"?labelSelector=" + url.QueryEscape("catalog="+target.Source) +
 		"&fieldSelector=" + url.QueryEscape("metadata.name="+SubName)
-	body, _, err := c.get(path)
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Status struct {
+			PackageName            string                 `json:"packageName"`
+			CatalogSource          string                 `json:"catalogSource"`
+			CatalogSourceNamespace string                 `json:"catalogSourceNamespace"`
+			DefaultChannel         string                 `json:"defaultChannel"`
+			Channels               []stablePackageChannel `json:"channels"`
+		} `json:"status"`
+	}
+	if err := c.listInto(path, &items); err != nil {
+		if isDecodeError(err) {
+			return target, fmt.Errorf("parse RHOAI catalog releases: %w", err)
+		}
 		return target, fmt.Errorf("read RHOAI releases from catalog %q: %w", target.Source, err)
 	}
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Status struct {
-				PackageName            string                 `json:"packageName"`
-				CatalogSource          string                 `json:"catalogSource"`
-				CatalogSourceNamespace string                 `json:"catalogSourceNamespace"`
-				DefaultChannel         string                 `json:"defaultChannel"`
-				Channels               []stablePackageChannel `json:"channels"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return target, fmt.Errorf("parse RHOAI catalog releases: %w", err)
-	}
 	override := strings.TrimSpace(os.Getenv("STABLE_CHANNEL"))
-	for _, item := range list.Items {
+	for _, item := range items {
 		if item.Metadata.Name != SubName || item.Status.PackageName != SubName ||
 			item.Status.CatalogSource != target.Source || item.Status.CatalogSourceNamespace != CatalogNS {
 			continue

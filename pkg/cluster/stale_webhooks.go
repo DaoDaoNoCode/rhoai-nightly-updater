@@ -558,19 +558,16 @@ func listAdmissionConfigs(c *Client) ([]admissionConfig, []string) {
 	var out []admissionConfig
 	var errs []string
 	for _, wk := range webhookKinds {
-		body, _, err := c.get(clusterPath("admissionregistration.k8s.io/v1", wk.resource, ""))
-		if err != nil {
+		var items []admissionConfig
+		if err := c.listInto(clusterPath("admissionregistration.k8s.io/v1", wk.resource, ""), &items); err != nil {
+			if isDecodeError(err) {
+				errs = append(errs, fmt.Sprintf("parse %s: %v", wk.resource, err))
+				continue
+			}
 			errs = append(errs, fmt.Sprintf("list %s: %v", wk.resource, err))
 			continue
 		}
-		var list struct {
-			Items []admissionConfig `json:"items"`
-		}
-		if err := json.Unmarshal(body, &list); err != nil {
-			errs = append(errs, fmt.Sprintf("parse %s: %v", wk.resource, err))
-			continue
-		}
-		for _, item := range list.Items {
+		for _, item := range items {
 			item.Kind, item.Resource = wk.kind, wk.resource
 			if item.isRHOAI() {
 				out = append(out, item)

@@ -644,21 +644,15 @@ func dspoRunning(c *Client) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", ns, "") + "?labelSelector=" + url.QueryEscape(dspoSelector))
-	if err != nil {
+	var items []struct {
+		Status struct {
+			ReadyReplicas int `json:"readyReplicas"`
+		} `json:"status"`
+	}
+	if err := c.listInto(namespacedPath("apps/v1", "deployments", ns, "")+"?labelSelector="+url.QueryEscape(dspoSelector), &items); err != nil {
 		return false, err
 	}
-	var list struct {
-		Items []struct {
-			Status struct {
-				ReadyReplicas int `json:"readyReplicas"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return false, err
-	}
-	for _, d := range list.Items {
+	for _, d := range items {
 		if d.Status.ReadyReplicas > 0 {
 			return true, nil
 		}

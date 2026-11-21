@@ -148,17 +148,14 @@ func listModuleCRsIn(c *Client, api componentAPI, module string) ([]moduleCRItem
 
 // listKindCRs lists the CRs of one module kind.
 func listKindCRs(c *Client, k componentKind) ([]moduleCRItem, error) {
-	body, _, err := c.get(k.listPath())
-	if err != nil {
+	var items []moduleCRItem
+	if err := c.listInto(k.listPath(), &items); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse %s: %w", k.crd(), err)
+		}
 		return nil, fmt.Errorf("list %s: %w", k.crd(), err)
 	}
-	var list struct {
-		Items []moduleCRItem `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", k.crd(), err)
-	}
-	return list.Items, nil
+	return items, nil
 }
 
 // kindForModule maps a module name (the lower-case kind, e.g. kserve, aihub,
@@ -280,27 +277,24 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 		}
 		resource := kind.Resource
 		listPath := kind.listPath()
-		body, _, err := c.get(listPath)
-		if err != nil {
+		var items []struct {
+			Metadata struct {
+				Name              string   `json:"name"`
+				UID               string   `json:"uid"`
+				ResourceVersion   string   `json:"resourceVersion"`
+				Finalizers        []string `json:"finalizers"`
+				DeletionTimestamp *string  `json:"deletionTimestamp"`
+			} `json:"metadata"`
+		}
+		if err := c.listInto(listPath, &items); err != nil {
+			if isDecodeError(err) {
+				warnings = append(warnings, fmt.Sprintf("parse %s: %v", resource, err))
+				continue
+			}
 			warnings = append(warnings, fmt.Sprintf("list %s: %v", resource, err))
 			continue
 		}
-		var list struct {
-			Items []struct {
-				Metadata struct {
-					Name              string   `json:"name"`
-					UID               string   `json:"uid"`
-					ResourceVersion   string   `json:"resourceVersion"`
-					Finalizers        []string `json:"finalizers"`
-					DeletionTimestamp *string  `json:"deletionTimestamp"`
-				} `json:"metadata"`
-			} `json:"items"`
-		}
-		if err := json.Unmarshal(body, &list); err != nil {
-			warnings = append(warnings, fmt.Sprintf("parse %s: %v", resource, err))
-			continue
-		}
-		for _, item := range list.Items {
+		for _, item := range items {
 			m := item.Metadata
 			if m.DeletionTimestamp == nil || len(m.Finalizers) == 0 {
 				continue

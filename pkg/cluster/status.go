@@ -529,21 +529,18 @@ func csvForInstalledName(c *Client, installedName string) (types.CSVInfo, error)
 	// installed elsewhere with olm.copiedFrom; they are never the RHOAI CSV.
 	path := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "") +
 		"?labelSelector=" + url.QueryEscape("!olm.copiedFrom")
-	body, _, err := c.get(path)
-	if err != nil {
+	var items []csvSummary
+	if err := c.listInto(path, &items); err != nil {
+		if isDecodeError(err) {
+			return types.CSVInfo{}, fmt.Errorf("unmarshal: %w", err)
+		}
 		return types.CSVInfo{}, fmt.Errorf("request failed: %w", err)
-	}
-	var result struct {
-		Items []csvSummary `json:"items"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return types.CSVInfo{}, fmt.Errorf("unmarshal: %w", err)
 	}
 
 	// Primary: match by displayName (most specific)
 	// Fallback: match by name prefix "rhods-operator." (resilient to branding changes)
 	var fallback *types.CSVInfo
-	for _, item := range result.Items {
+	for _, item := range items {
 		info := item.info()
 		name, displayName := item.Metadata.Name, item.Spec.DisplayName
 		if installedName != "" {
@@ -814,33 +811,30 @@ func getInstallPlan(c *Client) (*types.InstallPlanInfo, error) {
 // getCatalogPod finds the pod backing the rhoai-catalog-dev CatalogSource.
 func getCatalogPod(c *Client) (*types.CatalogPodInfo, error) {
 	path := namespacedPath("v1", "pods", CatalogNS, "") + "?labelSelector=olm.catalogSource%3D" + CatalogName
-	body, _, err := c.get(path)
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Status struct {
+			Phase             string `json:"phase"`
+			ContainerStatuses []struct {
+				Ready        bool `json:"ready"`
+				RestartCount int  `json:"restartCount"`
+			} `json:"containerStatuses"`
+		} `json:"status"`
+	}
+	if err := c.listInto(path, &items); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("unmarshal: %w", err)
+		}
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	var result struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Status struct {
-				Phase             string `json:"phase"`
-				ContainerStatuses []struct {
-					Ready        bool `json:"ready"`
-					RestartCount int  `json:"restartCount"`
-				} `json:"containerStatuses"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("unmarshal: %w", err)
-	}
-	if len(result.Items) == 0 {
+	if len(items) == 0 {
 		return nil, nil
 	}
 
 	// Take the first (usually only) catalog pod
-	pod := result.Items[0]
+	pod := items[0]
 	info := &types.CatalogPodInfo{Name: pod.Metadata.Name, Phase: pod.Status.Phase}
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.Ready {
@@ -853,26 +847,23 @@ func getCatalogPod(c *Client) (*types.CatalogPodInfo, error) {
 
 func getIDMS(c *Client) (types.ImageMirrorInfo, error) {
 	path := clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", "")
-	body, _, err := c.get(path)
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Spec struct {
+			ImageDigestMirrors []struct {
+				Source string `json:"source"`
+			} `json:"imageDigestMirrors"`
+		} `json:"spec"`
+	}
+	if err := c.listInto(path, &items); err != nil {
+		if isDecodeError(err) {
+			return types.ImageMirrorInfo{Exists: false}, fmt.Errorf("unmarshal: %w", err)
+		}
 		return types.ImageMirrorInfo{Exists: false}, fmt.Errorf("request failed: %w", err)
 	}
-	var result struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Spec struct {
-				ImageDigestMirrors []struct {
-					Source string `json:"source"`
-				} `json:"imageDigestMirrors"`
-			} `json:"spec"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return types.ImageMirrorInfo{Exists: false}, fmt.Errorf("unmarshal: %w", err)
-	}
-	for _, item := range result.Items {
+	for _, item := range items {
 		for _, mirror := range item.Spec.ImageDigestMirrors {
 			if mirror.Source == IDMSSource {
 				return types.ImageMirrorInfo{Exists: true, Kind: mirrorKindIDMS, Name: item.Metadata.Name, Source: mirror.Source}, nil

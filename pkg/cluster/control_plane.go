@@ -103,21 +103,18 @@ const redHatManagedWebhookSuffix = ".managed.openshift.io"
 // ServiceAccount's existing list rule, also used by the stale-webhook
 // check): whether one holds a Red Hat SRE webhook.
 func readRedHatManaged(c *Client) (bool, error) {
-	body, _, err := c.get(clusterPath("admissionregistration.k8s.io/v1", "validatingwebhookconfigurations", ""))
-	if err != nil {
+	var items []struct {
+		Webhooks []struct {
+			Name string `json:"name"`
+		} `json:"webhooks"`
+	}
+	if err := c.listInto(clusterPath("admissionregistration.k8s.io/v1", "validatingwebhookconfigurations", ""), &items); err != nil {
+		if isDecodeError(err) {
+			return false, fmt.Errorf("parse validating webhook configurations: %w", err)
+		}
 		return false, fmt.Errorf("list validating webhook configurations: %w", err)
 	}
-	var list struct {
-		Items []struct {
-			Webhooks []struct {
-				Name string `json:"name"`
-			} `json:"webhooks"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return false, fmt.Errorf("parse validating webhook configurations: %w", err)
-	}
-	for _, item := range list.Items {
+	for _, item := range items {
 		for _, wh := range item.Webhooks {
 			if strings.HasSuffix(wh.Name, redHatManagedWebhookSuffix) {
 				return true, nil

@@ -339,26 +339,23 @@ func (p operatorPackage) channel(name string) (packageChannel, bool) {
 func readOperatorPackage(c *Client, pkg, source string) (operatorPackage, bool, error) {
 	path := namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, "") +
 		"?labelSelector=" + url.QueryEscape("catalog="+source) + "&fieldSelector=" + url.QueryEscape("metadata.name="+pkg)
-	body, _, err := c.get(path)
-	if err != nil {
+	var items []struct {
+		Metadata objectMeta `json:"metadata"`
+		Status   struct {
+			PackageName            string           `json:"packageName"`
+			CatalogSource          string           `json:"catalogSource"`
+			CatalogSourceNamespace string           `json:"catalogSourceNamespace"`
+			DefaultChannel         string           `json:"defaultChannel"`
+			Channels               []packageChannel `json:"channels"`
+		} `json:"status"`
+	}
+	if err := c.listInto(path, &items); err != nil {
+		if isDecodeError(err) {
+			return operatorPackage{}, false, fmt.Errorf("parse package %s: %w", pkg, err)
+		}
 		return operatorPackage{}, false, fmt.Errorf("read package %s from catalog %s: %w", pkg, source, err)
 	}
-	var list struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-			Status   struct {
-				PackageName            string           `json:"packageName"`
-				CatalogSource          string           `json:"catalogSource"`
-				CatalogSourceNamespace string           `json:"catalogSourceNamespace"`
-				DefaultChannel         string           `json:"defaultChannel"`
-				Channels               []packageChannel `json:"channels"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return operatorPackage{}, false, fmt.Errorf("parse package %s: %w", pkg, err)
-	}
-	for _, it := range list.Items {
+	for _, it := range items {
 		if it.Metadata.Name == pkg && firstNonEmpty(it.Status.PackageName, pkg) == pkg && it.Status.CatalogSource == source && firstNonEmpty(it.Status.CatalogSourceNamespace, CatalogNS) == CatalogNS {
 			return operatorPackage{defaultChannel: it.Status.DefaultChannel, channels: it.Status.Channels}, true, nil
 		}
@@ -691,21 +688,15 @@ func patchSubscription(c *Client, sub *olmSubscription, spec map[string]any, dry
 // are never reconciled. The field selector narrows the list on a real API
 // server; the name is checked here too.
 func controllerDeployed(c *Client, name string) (bool, error) {
-	body, _, err := c.get("/apis/apps/v1/deployments?fieldSelector=" + url.QueryEscape("metadata.name="+name))
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+	}
+	if err := c.listInto("/apis/apps/v1/deployments?fieldSelector="+url.QueryEscape("metadata.name="+name), &items); err != nil {
 		return false, fmt.Errorf("list Deployments named %s: %w", name, err)
 	}
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return false, fmt.Errorf("list Deployments named %s: %w", name, err)
-	}
-	for _, d := range list.Items {
+	for _, d := range items {
 		if d.Metadata.Name == name {
 			return true, nil
 		}

@@ -535,32 +535,29 @@ var terminalWaitingReasons = map[string]bool{
 // terminal reasons. An empty Reason means nothing specific was found. When
 // wantImage is set, only pods with a container running that image count.
 func inspectPods(c *Client, namespace, selector, wantImage string) (workloadPodIssue, error) {
-	body, _, err := c.get(namespacedPath("v1", "pods", namespace, "") + "?labelSelector=" + url.QueryEscape(selector))
-	if err != nil {
+	var items []struct {
+		Metadata objectMeta `json:"metadata"`
+		Spec     struct {
+			Containers []struct {
+				Image string `json:"image"`
+			} `json:"containers"`
+		} `json:"spec"`
+		Status struct {
+			Conditions []struct {
+				Type    string `json:"type"`
+				Status  string `json:"status"`
+				Reason  string `json:"reason"`
+				Message string `json:"message"`
+			} `json:"conditions"`
+			InitContainerStatuses []containerStatus `json:"initContainerStatuses"`
+			ContainerStatuses     []containerStatus `json:"containerStatuses"`
+		} `json:"status"`
+	}
+	if err := c.listInto(namespacedPath("v1", "pods", namespace, "")+"?labelSelector="+url.QueryEscape(selector), &items); err != nil {
+		if isDecodeError(err) {
+			return workloadPodIssue{}, fmt.Errorf("parse pod list: %w", err)
+		}
 		return workloadPodIssue{}, err
-	}
-	var list struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-			Spec     struct {
-				Containers []struct {
-					Image string `json:"image"`
-				} `json:"containers"`
-			} `json:"spec"`
-			Status struct {
-				Conditions []struct {
-					Type    string `json:"type"`
-					Status  string `json:"status"`
-					Reason  string `json:"reason"`
-					Message string `json:"message"`
-				} `json:"conditions"`
-				InitContainerStatuses []containerStatus `json:"initContainerStatuses"`
-				ContainerStatuses     []containerStatus `json:"containerStatuses"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return workloadPodIssue{}, fmt.Errorf("parse pod list: %w", err)
 	}
 	var best workloadPodIssue
 	consider := func(p workloadPodIssue) {
@@ -571,7 +568,7 @@ func inspectPods(c *Client, namespace, selector, wantImage string) (workloadPodI
 			best = p
 		}
 	}
-	for _, pod := range list.Items {
+	for _, pod := range items {
 		if pod.Metadata.terminating() {
 			continue
 		}
@@ -820,27 +817,23 @@ func routeHost(c *Client, namespace, name string) string {
 // GetDSProjects returns namespaces with the opendatahub.io/dashboard label.
 func GetDSProjects(c *Client) ([]string, error) {
 	path := "/api/v1/namespaces?labelSelector=opendatahub.io/dashboard=true"
-	body, _, err := c.get(path)
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Status struct {
+			Phase string `json:"phase"`
+		} `json:"status"`
+	}
+	if err := c.listInto(path, &items); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse namespace list: %w", err)
+		}
 		return nil, fmt.Errorf("list DS projects: %w", err)
 	}
 
-	var nsList struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Status struct {
-				Phase string `json:"phase"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &nsList); err != nil {
-		return nil, fmt.Errorf("parse namespace list: %w", err)
-	}
-
 	var projects []string
-	for _, ns := range nsList.Items {
+	for _, ns := range items {
 		if ns.Status.Phase != "Terminating" {
 			projects = append(projects, ns.Metadata.Name)
 		}

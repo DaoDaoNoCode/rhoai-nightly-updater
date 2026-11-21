@@ -342,28 +342,25 @@ type storagePVC struct {
 // listPVCs lists the PVCs of a namespace. PVCs are listed rather than read
 // by name, so the RBAC rules need no "get" on them.
 func listPVCs(c *Client, namespace string) ([]storagePVC, error) {
-	body, _, err := c.get(namespacedPath("v1", "persistentvolumeclaims", namespace, ""))
-	if err != nil {
+	var items []struct {
+		Metadata objectMeta `json:"metadata"`
+		Spec     struct {
+			Resources struct {
+				Requests map[string]string `json:"requests"`
+			} `json:"resources"`
+		} `json:"spec"`
+		Status struct {
+			Capacity map[string]string `json:"capacity"`
+		} `json:"status"`
+	}
+	if err := c.listInto(namespacedPath("v1", "persistentvolumeclaims", namespace, ""), &items); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse PVC list: %w", err)
+		}
 		return nil, err
 	}
-	var list struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-			Spec     struct {
-				Resources struct {
-					Requests map[string]string `json:"requests"`
-				} `json:"resources"`
-			} `json:"spec"`
-			Status struct {
-				Capacity map[string]string `json:"capacity"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse PVC list: %w", err)
-	}
-	out := make([]storagePVC, 0, len(list.Items))
-	for _, item := range list.Items {
+	out := make([]storagePVC, 0, len(items))
+	for _, item := range items {
 		out = append(out, storagePVC{Meta: item.Metadata, Size: firstNonEmpty(item.Status.Capacity["storage"], item.Spec.Resources.Requests["storage"])})
 	}
 	return out, nil

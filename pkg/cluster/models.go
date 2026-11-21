@@ -1804,37 +1804,34 @@ func (w modelWorkload) current(p modelPod) bool {
 // readModelWorkload reads the model's workload Deployments.
 func readModelWorkload(c *Client, project, name string) (modelWorkload, error) {
 	q := url.Values{"labelSelector": {modelPodSelector(name)}}
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", project, "") + "?" + q.Encode())
-	if err != nil {
+	var items []struct {
+		Metadata objectMeta `json:"metadata"`
+		Spec     struct {
+			Replicas *int32 `json:"replicas"`
+			Template struct {
+				Spec struct {
+					Containers []modelContainerSpec `json:"containers"`
+				} `json:"spec"`
+			} `json:"template"`
+		} `json:"spec"`
+		Status struct {
+			ObservedGeneration int64 `json:"observedGeneration"`
+			Replicas           int32 `json:"replicas"`
+			UpdatedReplicas    int32 `json:"updatedReplicas"`
+			AvailableReplicas  int32 `json:"availableReplicas"`
+		} `json:"status"`
+	}
+	if err := c.listInto(namespacedPath("apps/v1", "deployments", project, "")+"?"+q.Encode(), &items); err != nil {
+		if isDecodeError(err) {
+			return modelWorkload{}, fmt.Errorf("parse the model's Deployments: %w", err)
+		}
 		return modelWorkload{}, err
 	}
-	var list struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-			Spec     struct {
-				Replicas *int32 `json:"replicas"`
-				Template struct {
-					Spec struct {
-						Containers []modelContainerSpec `json:"containers"`
-					} `json:"spec"`
-				} `json:"template"`
-			} `json:"spec"`
-			Status struct {
-				ObservedGeneration int64 `json:"observedGeneration"`
-				Replicas           int32 `json:"replicas"`
-				UpdatedReplicas    int32 `json:"updatedReplicas"`
-				AvailableReplicas  int32 `json:"availableReplicas"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return modelWorkload{}, fmt.Errorf("parse the model's Deployments: %w", err)
-	}
-	if len(list.Items) == 0 {
+	if len(items) == 0 {
 		return modelWorkload{message: "Waiting for KServe to create the model's Deployment..."}, nil
 	}
 	w := modelWorkload{observed: true, rolledOut: true, images: map[string]bool{}}
-	for _, d := range list.Items {
+	for _, d := range items {
 		want := int32(1)
 		if d.Spec.Replicas != nil {
 			want = *d.Spec.Replicas

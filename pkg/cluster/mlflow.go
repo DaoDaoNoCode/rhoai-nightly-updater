@@ -176,20 +176,14 @@ func mlflowNamespace(c *Client) (string, error) {
 // mlflowOwnedPVCs lists PVCs in the MLflow namespace ns whose owner is the
 // CR, which the garbage collector deletes together with it.
 func mlflowOwnedPVCs(c *Client, ns, uid string) ([]string, error) {
-	body, _, err := c.get(namespacedPath("v1", "persistentvolumeclaims", ns, ""))
-	if err != nil {
-		return nil, err
+	var items []struct {
+		Metadata objectMeta `json:"metadata"`
 	}
-	var list struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
+	if err := c.listInto(namespacedPath("v1", "persistentvolumeclaims", ns, ""), &items); err != nil {
 		return nil, err
 	}
 	var names []string
-	for _, item := range list.Items {
+	for _, item := range items {
 		if item.Metadata.ownedBy(uid) {
 			names = append(names, item.Metadata.Name)
 		}

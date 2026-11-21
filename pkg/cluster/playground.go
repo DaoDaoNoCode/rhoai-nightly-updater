@@ -477,35 +477,32 @@ const (
 // error, an API that is not served included, is no models: MaaS is
 // optional.
 func listMaaSPlaygroundModels(c *Client) []types.PlaygroundModel {
-	body, _, err := c.get("/apis/" + maasAPI(c) + "/maasmodelrefs")
-	if err != nil {
+	var items []struct {
+		Metadata objectMeta `json:"metadata"`
+		Spec     struct {
+			ModelRef struct {
+				Kind string `json:"kind"`
+				Name string `json:"name"`
+			} `json:"modelRef"`
+		} `json:"spec"`
+		Status struct {
+			Phase              string `json:"phase"`
+			ResolvedModelAlias string `json:"resolvedModelAlias"`
+		} `json:"status"`
+	}
+	if err := c.listInto("/apis/"+maasAPI(c)+"/maasmodelrefs", &items); err != nil {
+		if isDecodeError(err) {
+			slog.Debug("cannot parse the MaaS model references", "error", err)
+			return nil
+		}
 		if !isK8sNotFound(err) {
 			slog.Debug("cannot list the MaaS models for the playground", "error", err)
 		}
 		return nil
 	}
-	var refs struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-			Spec     struct {
-				ModelRef struct {
-					Kind string `json:"kind"`
-					Name string `json:"name"`
-				} `json:"modelRef"`
-			} `json:"spec"`
-			Status struct {
-				Phase              string `json:"phase"`
-				ResolvedModelAlias string `json:"resolvedModelAlias"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &refs); err != nil {
-		slog.Debug("cannot parse the MaaS model references", "error", err)
-		return nil
-	}
 	subs := maasSubscriptionsByModel(c)
 	var out []types.PlaygroundModel
-	for _, r := range refs.Items {
+	for _, r := range items {
 		name := r.Metadata.Name
 		if r.Spec.ModelRef.Kind == "ExternalModel" && r.Spec.ModelRef.Name != "" {
 			name = r.Spec.ModelRef.Name
@@ -535,25 +532,19 @@ func listMaaSPlaygroundModels(c *Client) []types.PlaygroundModel {
 // the MaaSSubscriptions that offer it (none when they cannot be read).
 func maasSubscriptionsByModel(c *Client) map[string][]string {
 	out := map[string][]string{}
-	body, _, err := c.get(namespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""))
-	if err != nil {
+	var items []struct {
+		Metadata objectMeta `json:"metadata"`
+		Spec     struct {
+			ModelRefs []struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+			} `json:"modelRefs"`
+		} `json:"spec"`
+	}
+	if c.listInto(namespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""), &items) != nil {
 		return out
 	}
-	var list struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-			Spec     struct {
-				ModelRefs []struct {
-					Name      string `json:"name"`
-					Namespace string `json:"namespace"`
-				} `json:"modelRefs"`
-			} `json:"spec"`
-		} `json:"items"`
-	}
-	if json.Unmarshal(body, &list) != nil {
-		return out
-	}
-	for _, s := range list.Items {
+	for _, s := range items {
 		for _, ref := range s.Spec.ModelRefs {
 			k := ref.Namespace + "/" + ref.Name
 			if !slices.Contains(out[k], s.Metadata.Name) {

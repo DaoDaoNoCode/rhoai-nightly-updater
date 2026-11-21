@@ -865,59 +865,55 @@ func getDashboardPods(c *Client, ns, deployment, deploymentUID string, matchLabe
 	selector := strings.Join(parts, ",")
 
 	path := fmt.Sprintf("/api/v1/namespaces/%s/pods?labelSelector=%s", ns, url.QueryEscape(selector))
-	body, _, err := c.get(path)
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name            string            `json:"name"`
+			Namespace       string            `json:"namespace"`
+			Labels          map[string]string `json:"labels"`
+			OwnerReferences []ownerRef        `json:"ownerReferences"`
+		} `json:"metadata"`
+		Spec struct {
+			NodeName   string `json:"nodeName"`
+			Containers []struct {
+				Name  string `json:"name"`
+				Image string `json:"image"`
+			} `json:"containers"`
+		} `json:"spec"`
+		Status struct {
+			Phase      string `json:"phase"`
+			Conditions []struct {
+				Type    string `json:"type"`
+				Status  string `json:"status"`
+				Reason  string `json:"reason"`
+				Message string `json:"message"`
+			} `json:"conditions"`
+			ContainerStatuses []struct {
+				Name         string `json:"name"`
+				Ready        bool   `json:"ready"`
+				RestartCount int    `json:"restartCount"`
+				State        struct {
+					Running *struct{} `json:"running"`
+					Waiting *struct {
+						Reason string `json:"reason"`
+					} `json:"waiting"`
+					Terminated *struct {
+						Reason string `json:"reason"`
+					} `json:"terminated"`
+				} `json:"state"`
+			} `json:"containerStatuses"`
+		} `json:"status"`
+	}
+	if err := c.listInto(path, &items); err != nil {
+		if isDecodeError(err) {
+			slog.Warn("failed to parse dashboard pod list", "error", err)
+			return nil
+		}
 		slog.Warn("failed to list dashboard pods", "error", err)
 		return nil
 	}
 
-	var podList struct {
-		Items []struct {
-			Metadata struct {
-				Name            string            `json:"name"`
-				Namespace       string            `json:"namespace"`
-				Labels          map[string]string `json:"labels"`
-				OwnerReferences []ownerRef        `json:"ownerReferences"`
-			} `json:"metadata"`
-			Spec struct {
-				NodeName   string `json:"nodeName"`
-				Containers []struct {
-					Name  string `json:"name"`
-					Image string `json:"image"`
-				} `json:"containers"`
-			} `json:"spec"`
-			Status struct {
-				Phase      string `json:"phase"`
-				Conditions []struct {
-					Type    string `json:"type"`
-					Status  string `json:"status"`
-					Reason  string `json:"reason"`
-					Message string `json:"message"`
-				} `json:"conditions"`
-				ContainerStatuses []struct {
-					Name         string `json:"name"`
-					Ready        bool   `json:"ready"`
-					RestartCount int    `json:"restartCount"`
-					State        struct {
-						Running *struct{} `json:"running"`
-						Waiting *struct {
-							Reason string `json:"reason"`
-						} `json:"waiting"`
-						Terminated *struct {
-							Reason string `json:"reason"`
-						} `json:"terminated"`
-					} `json:"state"`
-				} `json:"containerStatuses"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &podList); err != nil {
-		slog.Warn("failed to parse dashboard pod list", "error", err)
-		return nil
-	}
-
 	var pods []types.PodInfo
-	for _, item := range podList.Items {
+	for _, item := range items {
 		// Only the Deployment's own pods: its selector may also match others.
 		if !ownedByDeployment(c, ns, deployment, deploymentUID, item.Metadata.Labels, controllerOf(item.Metadata.OwnerReferences)) {
 			continue

@@ -373,24 +373,21 @@ func namespaceOwnerBlocker(c *Client) string {
 	if u == nil {
 		return "The tool reads the namespaces' owners with your own sign-in, and this request has none, so it cannot tell whether the garbage collector would delete a namespace with the DataScienceCluster."
 	}
-	body, _, err := u.get("/api/v1/namespaces")
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name            string     `json:"name"`
+			OwnerReferences []ownerRef `json:"ownerReferences"`
+		} `json:"metadata"`
+	}
+	if err := u.listInto("/api/v1/namespaces", &items); err != nil {
+		if isDecodeError(err) {
+			return "The namespaces could not be read to check that none would be deleted with the DataScienceCluster: " + err.Error() + "."
+		}
 		return "The namespaces could not be listed with your sign-in to check that none would be deleted with the DataScienceCluster: " + strings.TrimSuffix(err.Error(), ".") + "."
-	}
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name            string     `json:"name"`
-				OwnerReferences []ownerRef `json:"ownerReferences"`
-			} `json:"metadata"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return "The namespaces could not be read to check that none would be deleted with the DataScienceCluster: " + err.Error() + "."
 	}
 	resolver := &ownerResolver{c: u, docs: map[string][]apiResource{}, memo: map[string]ownerVerdict{}}
 	var lost, unknown []string
-	for _, ns := range list.Items {
+	for _, ns := range items {
 		if len(ns.Metadata.OwnerReferences) == 0 {
 			continue
 		}
