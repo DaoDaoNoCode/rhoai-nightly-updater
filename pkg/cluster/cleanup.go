@@ -147,13 +147,16 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 	// or holding what the user did not confirm) refuses the whole clean-up
 	// before anything is deleted; its part checks again before deleting.
 	if req.RecipeProject != "" {
-		problem, code, err := recipeProjectProblem(c, req.RecipeProject, req.ConfirmProjectContents)
+		problem, code, unconfirmed, err := recipeProjectProblem(c, req.RecipeProject, req.ConfirmProjectContents)
 		if err != nil {
 			problem, code = fmt.Sprintf("Cannot check project %s: %v.", req.RecipeProject, err), kube.ErrorCodeOr(err, "prerequisites")
 		}
 		if problem != "" {
 			step := CleanupStepID("recipe-project", req.RecipeProject)
-			emit(UpdateStepEvent{Step: step, Status: "failed", Message: problem, ErrorCode: code})
+			// Detail lists what is to confirm, one per line, exactly as
+			// confirmProjectContents takes it (names cannot hold a line
+			// break): the browser shows the list and sends it back.
+			emit(UpdateStepEvent{Step: step, Status: "failed", Message: problem, ErrorCode: code, Detail: strings.Join(unconfirmed, "\n")})
 			recordCleanupActivity(c, "refused: "+problem, false)
 			return &types.OperationResponse{Success: false, Message: problem + " Nothing was deleted.", ErrorCode: code}, nil
 		}

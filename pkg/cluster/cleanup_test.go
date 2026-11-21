@@ -167,11 +167,11 @@ func fakeRecipeProjectTeardown(t *testing.T, ran *[]string, problem string) {
 	t.Helper()
 	pr, cp, co := recipeProjectProblem, cleanupProject, cleanupComponents
 	t.Cleanup(func() { recipeProjectProblem, cleanupProject, cleanupComponents = pr, cp, co })
-	recipeProjectProblem = func(_ *Client, name string, confirmed []string) (string, string, error) {
+	recipeProjectProblem = func(_ *Client, name string, confirmed []string) (string, string, []string, error) {
 		if problem != "" {
-			return problem, "confirm_project_contents", nil
+			return problem, "confirm_project_contents", []string{"Notebook wb", "PersistentVolumeClaim wb-data"}, nil
 		}
-		return "", "", nil
+		return "", "", nil, nil
 	}
 	cleanupProject = func(_ *Client, name string, confirmed []string) (*types.OperationResponse, error) {
 		*ran = append(*ran, CleanupStepID("recipe-project", name)+":"+strings.Join(confirmed, "|"))
@@ -217,7 +217,8 @@ func TestCleanUp_RecipeProjectRefusalDeletesNothing(t *testing.T) {
 	if len(*ran) != 0 || len(f.mutations()) != 0 {
 		t.Fatalf("ran %v, changed %v", *ran, f.mutations())
 	}
-	if len(events) != 1 || events[0].Step != "recipe-project:recipe-dev" || events[0].Status != "failed" {
+	// The browser reads what to confirm from Detail, one per line.
+	if len(events) != 1 || events[0].Step != "recipe-project:recipe-dev" || events[0].Status != "failed" || events[0].Detail != "Notebook wb\nPersistentVolumeClaim wb-data" {
 		t.Fatalf("events %+v", events)
 	}
 }

@@ -328,26 +328,28 @@ func labelProject(c *kube.Client, name, recipeName string) error {
 // hold nothing the tool did not create that the user did not confirm
 // (projectLeftovers). A project that is gone, or being deleted, needs
 // nothing. A read that fails refuses (fail closed). CleanUp runs it
-// before any part, and DeleteProject again just before the delete.
-func ProjectTeardownProblem(c *kube.Client, name string, confirmed []string) (string, string, error) {
+// before any part, and DeleteProject again just before the delete. With
+// ErrorCodeConfirmContents it also returns what the user has not confirmed,
+// as confirmProjectContents takes it.
+func ProjectTeardownProblem(c *kube.Client, name string, confirmed []string) (string, string, []string, error) {
 	found, rec, err := findProject(c, name)
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	r, recorded := rec.recorded(name)
 	switch {
 	case !recorded:
-		return fmt.Sprintf("Project %s was not created by a recipe (there is no record of it), so Clean up does not delete it.", name), "validation", nil
+		return fmt.Sprintf("Project %s was not created by a recipe (there is no record of it), so Clean up does not delete it.", name), "validation", nil, nil
 	case !found.found || found.meta.Terminating():
-		return "", "", nil
+		return "", "", nil, nil
 	case found.meta.UID != r.UID:
-		return fmt.Sprintf("Project %s is not the one a recipe created (it was deleted and made again), so Clean up does not delete it.", name), "prerequisites", nil
+		return fmt.Sprintf("Project %s is not the one a recipe created (it was deleted and made again), so Clean up does not delete it.", name), "prerequisites", nil, nil
 	case !found.meta.HasToolLabel():
-		return fmt.Sprintf("Project %s no longer carries this tool's label, so Clean up does not delete it.", name), "prerequisites", nil
+		return fmt.Sprintf("Project %s no longer carries this tool's label, so Clean up does not delete it.", name), "prerequisites", nil, nil
 	}
 	left, err := projectLeftovers(c, name)
 	if err != nil {
-		return "", "", fmt.Errorf("this tool cannot tell what else is in project %s: %w", name, err)
+		return "", "", nil, fmt.Errorf("this tool cannot tell what else is in project %s: %w", name, err)
 	}
 	var unconfirmed []string
 	for _, l := range left {
@@ -356,9 +358,9 @@ func ProjectTeardownProblem(c *kube.Client, name string, confirmed []string) (st
 		}
 	}
 	if len(unconfirmed) > 0 {
-		return fmt.Sprintf("Project %s still holds what this tool did not create: %s. Deleting the project deletes them too; confirm them to go ahead.", name, strings.Join(unconfirmed, ", ")), ErrorCodeConfirmContents, nil
+		return fmt.Sprintf("Project %s still holds what this tool did not create: %s. Deleting the project deletes them too; confirm them to go ahead.", name, strings.Join(unconfirmed, ", ")), ErrorCodeConfirmContents, unconfirmed, nil
 	}
-	return "", "", nil
+	return "", "", nil, nil
 }
 
 // ProjectLeftovers lists what is in recipe project name that this tool did
@@ -440,7 +442,7 @@ func DeleteProject(c *kube.Client, name string, confirmed []string) (*types.Oper
 		record.Action(c, "delete-recipe-project", fmt.Sprintf("project=%s (%s)", name, msg), false)
 		return &types.OperationResponse{Success: false, Message: msg, ErrorCode: code}, nil
 	}
-	problem, code, err := ProjectTeardownProblem(c, name, confirmed)
+	problem, code, _, err := ProjectTeardownProblem(c, name, confirmed)
 	if err != nil {
 		return fail(fmt.Sprintf("Kept project %s: %v.", name, err), kube.ErrorCodeOr(err, "prerequisites"))
 	}

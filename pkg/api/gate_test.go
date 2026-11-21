@@ -570,11 +570,16 @@ func TestMetricLabelsAreBounded(t *testing.T) {
 	}
 	RecordFeatureUsage("teardown-minio")
 	RecordFeatureUsage("dry_run")
+	// The Recipes page (frontend App.tsx PAGE_VIEW_NAMES) has its own label.
+	RecordPageView("recipes")
 	pageViewsMu.RLock()
 	for k := range pageViews {
 		if !knownPages[k] && k != "other" {
 			t.Errorf("unbounded page label %q", k)
 		}
+	}
+	if pageViews["recipes"] == nil {
+		t.Error("the Recipes page must be counted under its own label")
 	}
 	pageViewsMu.RUnlock()
 	featureUsageMu.RLock()
