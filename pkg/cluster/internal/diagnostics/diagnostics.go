@@ -625,7 +625,8 @@ func checkCSVHealth(c *kube.Client) CheckOutput {
 			out.Check = report.CheckResult{Name: name, Status: "pass", Detail: "No operator installed yet (normal for fresh clusters)"}
 			return out
 		}
-		if !sub.settled(wallNow()) {
+		now := wallNow()
+		if !sub.settled(now) {
 			out.Check = report.CheckResult{Name: name, Status: "warn", Detail: "Waiting for OLM to install the operator"}
 			return out
 		}
@@ -634,7 +635,7 @@ func checkCSVHealth(c *kube.Client) CheckOutput {
 			ID:          "csv-not-found",
 			Severity:    "critical",
 			Title:       "Operator not installed (no CSV found)",
-			Description: fmt.Sprintf("A Subscription exists (source: %s, channel: %s, state: %q) but OLM has not created a ClusterServiceVersion for %s.", sub.Source, sub.Channel, sub.State, components.FormatDuration(time.Since(sub.Changed))),
+			Description: fmt.Sprintf("A Subscription exists (source: %s, channel: %s, state: %q) but OLM has not created a ClusterServiceVersion for %s.", sub.Source, sub.Channel, sub.State, components.FormatDuration(now.Sub(sub.Changed))),
 			Fix:         "Check the Subscription health and Install plan results for the cause. " + recoveryGuidance,
 			LearnMore: "The operator CSV is created by OLM after the InstallPlan completes. If the CSV doesn't appear, check:\n\n" +
 				"1. Is the Subscription pointing to the correct catalog?\n" +

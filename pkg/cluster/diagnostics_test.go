@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -330,6 +331,61 @@ func TestDiagnostics_NoCSV(t *testing.T) {
 			}
 			break
 		}
+	}
+}
+
+// The Subscription's age in the csv-not-found description is measured on
+// the clock that decided it has settled (wallNow), so a pinned clock gives
+// both: 3h25m after its last update it is settled and says so, 5 minutes
+// after it is still waiting.
+func TestDiagnostics_NoCSVAgeUsesWallClock(t *testing.T) {
+	changed := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name   string
+		after  time.Duration
+		status string
+		age    string
+	}{
+		{"settled", 3*time.Hour + 25*time.Minute, "fail", "for 3h25m."},
+		{"waiting", 5 * time.Minute, "warn", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			restore := diagnostics.SetWallClockForTest(func() time.Time { return changed.Add(tc.after) })
+			defer restore()
+			responses := buildAllHealthyResponses()
+			paths := diagnosticPaths()
+			responses[paths["csvList"]] = mockResponse{body: `{"items":[]}`}
+			sub, _ := json.Marshal(map[string]any{
+				"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS},
+				"spec":     map[string]any{"source": rhoai.CatalogName, "channel": "fast"},
+				"status":   map[string]any{"state": "UpgradePending", "lastUpdated": changed.Format(time.RFC3339)},
+			})
+			responses[paths["subscription"]] = mockResponse{body: string(sub)}
+			client, cleanup := newMockClient(responses)
+			defer cleanup()
+
+			resp, err := RunDiagnostics(client)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			for _, ch := range resp.Checks {
+				if ch.Name == "Operator installed" && ch.Status != tc.status {
+					t.Errorf("Operator installed: status %q, want %q (%s)", ch.Status, tc.status, ch.Detail)
+				}
+			}
+			var desc string
+			for _, p := range resp.Problems {
+				if p.ID == "csv-not-found" {
+					desc = p.Description
+				}
+			}
+			switch {
+			case tc.age == "" && desc != "":
+				t.Errorf("csv-not-found reported while the Subscription is still settling: %s", desc)
+			case tc.age != "" && !strings.HasSuffix(desc, tc.age):
+				t.Errorf("csv-not-found description %q, want it to end %q", desc, tc.age)
+			}
+		})
 	}
 }
 
