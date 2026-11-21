@@ -7,9 +7,13 @@ package cluster
 // finds each call to a Client request method (Get, Post, Put, Patch,
 // StrategicPatch, Apply, DryRunApply, Delete, Do, and the REST helpers on
 // top of them; calls are told apart by type, so a cache's Get or an
-// http.Client's Do is none), resolves the request path
-// statically (through plain f(...) and qualified pkg.F(...) calls and
-// constants of those packages), and maps it to the RBAC request
+// http.Client's Do is none, while a call through an interface or constraint
+// *Client implements, or through a method expression, is one; a request
+// method used as a function value fails the test), resolves the request
+// path statically (through plain f(...) and qualified pkg.F(...) calls and
+// constants of those packages, each name resolved in its lexical scope by
+// go/types; rbac_scanner_cases_test.go pins these rules on fixtures), and
+// maps it to the RBAC request
 // attributes the API server checks (verb, API group, resource, namespace and
 // name; https://kubernetes.io/docs/reference/access-authn-authz/authorization/#determine-the-request-verb).
 // Error, rollback and restore branches are ordinary calls, so they are
@@ -29,6 +33,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -154,21 +159,29 @@ var methodVerbs = map[string][]string{
 	// "get" becomes "get" or "list" depending on the path.
 }
 
-// requestSourceFiles are the files (by base name) that define the Client
-// request methods and accessors (client.go, client_context.go) and the REST
-// helpers on top of them (rest.go). Their calls take a path parameter, not
-// a path: the scans attribute each request to the helper's call site. Named
-// one by one, so any other file, a client_*.go feature file too, is scanned.
-var requestSourceFiles = map[string]bool{
-	"client.go":         true,
-	"client_context.go": true,
-	"rest.go":           true,
+// transportMethods are the Client methods that implement the requests
+// besides the request methods and REST helpers themselves (requestMethods,
+// helperMethods). Like them they take a path parameter, not a path, so the
+// scans leave these declarations out and attribute each request to the call
+// site of the request method. Every other function is scanned, in client.go,
+// client_context.go and rest.go too: one there that sends a path it takes
+// is refused, as anywhere else.
+var transportMethods = map[string]string{
+	"applyWithOptions": "the body of Apply and DryRunApply",
 }
 
-// isRequestSourceFile reports whether a file (by base name) is one of
-// requestSourceFiles.
-func isRequestSourceFile(base string) bool {
-	return requestSourceFiles[base]
+// isTransport reports whether fn is a Client method that implements the
+// requests: one of requestMethods, helperMethods or transportMethods.
+func (p *sourcePkg) isTransport(fn *ast.FuncDecl) bool {
+	name := fn.Name.Name
+	_, request := requestMethods[name]
+	_, helper := helperMethods[name]
+	_, transport := transportMethods[name]
+	if fn.Recv == nil || (!request && !helper && !transport) {
+		return false
+	}
+	obj, ok := p.defs[fn.Name].(*types.Func)
+	return ok && isClientType(obj.Signature().Recv().Type())
 }
 
 // requestMethods maps the Client request methods (client.go) to the names
@@ -198,14 +211,9 @@ var helperMethods = map[string]string{
 	"PatchJSON":       "Patch",
 }
 
-// requestMethod is the request a call sends when sel names a Client
-// request method or REST helper (by type: clientMethodCalls), as a
-// requestMethods value; false for any other call.
-func (p *sourcePkg) requestMethod(sel *ast.SelectorExpr) (string, bool) {
-	name, ok := p.clientCalls[sel]
-	if !ok {
-		return "", false
-	}
+// requestMethod is the request a call of the method name sends, as a
+// requestMethods value, when name is a request method or REST helper.
+func requestMethod(name string) (string, bool) {
 	if m, ok := helperMethods[name]; ok {
 		name = m
 	}
@@ -223,11 +231,19 @@ var rawMethods = map[string]string{
 	"MethodDelete": "delete",
 }
 
-func selectorName(e ast.Expr) string {
-	if sel, ok := e.(*ast.SelectorExpr); ok {
-		return sel.Sel.Name
+// httpMethod is the request method of e when it names one of the net/http
+// constants of rawMethods.
+func (p *sourcePkg) httpMethod(e ast.Expr) (string, bool) {
+	sel, ok := ast.Unparen(e).(*ast.SelectorExpr)
+	if !ok {
+		return "", false
 	}
-	return ""
+	c, ok := p.uses[sel.Sel].(*types.Const)
+	if !ok || c.Pkg() == nil || c.Pkg().Path() != "net/http" {
+		return "", false
+	}
+	m, ok := rawMethods[c.Name()]
+	return m, ok
 }
 
 type rbacRequest struct {
@@ -249,8 +265,8 @@ func (r rbacRequest) key() string {
 }
 
 // symID names a package-level declaration (function, constant, variable or
-// type) of one of the packages under pkg/cluster: its package's import path
-// and its name.
+// type) by its package's import path and its name; a method by
+// "Type.Method".
 type symID struct{ pkg, name string }
 
 // sourcePkg is the source of pkg/cluster and every package under it. Files
@@ -260,18 +276,25 @@ type symID struct{ pkg, name string }
 type sourcePkg struct {
 	fset  *token.FileSet
 	files map[string]*ast.File
-	// pkgOf is the import path of each file's package; imports maps each
-	// file's local import names to the import paths of the packages under
-	// pkg/cluster it imports.
-	pkgOf   map[string]string
-	imports map[string]map[string]string
-	consts  map[symID]string
-	lits    map[symID]*ast.CompositeLit
-	funcs   map[symID]*ast.FuncDecl
-	fileOf  map[*ast.FuncDecl]string
-	// clientCalls maps each selector that calls a Client method to the
-	// method's name (clientMethodCalls).
-	clientCalls map[*ast.SelectorExpr]string
+	// pkgOf is the import path of each file's package.
+	pkgOf  map[string]string
+	consts map[symID]string
+	lits   map[symID]*ast.CompositeLit
+	funcs  map[symID]*ast.FuncDecl
+	fileOf map[*ast.FuncDecl]string
+	// methods are the method declarations, by type ("Type.Method").
+	methods map[symID]*ast.FuncDecl
+	// uses and defs are what each identifier refers to (go/types): names
+	// are resolved in their lexical scope, never by spelling.
+	uses map[*ast.Ident]types.Object
+	defs map[*ast.Ident]types.Object
+	// selections are the type checker's selectors (methods and fields).
+	selections map[*ast.SelectorExpr]*types.Selection
+	// clientCalls are the selectors that name a Client method (by type).
+	clientCalls map[*ast.SelectorExpr]clientCall
+	// outsideCalls counts the direct calls of the functions of pkg/cluster
+	// from the packages the scan does not read (pkg/api, main).
+	outsideCalls map[symID]int
 	// only, when set, limits the scan to these functions (funcPos keys):
 	// their API calls, and the call sites a parameter is resolved from.
 	only map[string]bool
@@ -282,7 +305,6 @@ type sourcePkg struct {
 	identMemo  map[identKey][]string
 	resultMemo map[resultKey][]string
 	callers    map[symID][]callSite // by callee; built on first use
-	locals     map[*ast.FuncDecl]map[string]bool
 }
 
 // identKey and resultKey keep the depth, so a memo answers exactly what the
@@ -300,8 +322,8 @@ type resultKey struct {
 }
 
 // callSite is a call of a package function, by plain name (f(...)) or
-// qualified by an imported package under pkg/cluster (pkg.F(...)), in a
-// scanned function.
+// qualified by its package (pkg.F(...)), with or without type arguments,
+// in a scanned function.
 type callSite struct {
 	caller *ast.FuncDecl
 	call   *ast.CallExpr
@@ -315,81 +337,82 @@ func (p *sourcePkg) pkgOfFunc(fn *ast.FuncDecl) string {
 	return p.pkgOf[p.fileOf[fn]]
 }
 
-// localNames is every name fn declares, which could shadow an import: its
-// receiver, parameters and results (closures' too), := and range := names,
-// and var and const declarations in its body.
-func (p *sourcePkg) localNames(fn *ast.FuncDecl) map[string]bool {
-	if l, ok := p.locals[fn]; ok {
-		return l
+// funcIdent is the identifier that names the function a call expression
+// calls (f, pkg.F, a method's name), without parentheses and type
+// arguments; nil for any other expression.
+func funcIdent(fun ast.Expr) *ast.Ident {
+	fun = ast.Unparen(fun)
+	switch x := fun.(type) {
+	case *ast.IndexExpr:
+		fun = ast.Unparen(x.X)
+	case *ast.IndexListExpr:
+		fun = ast.Unparen(x.X)
 	}
-	l := map[string]bool{}
-	fields := func(fl *ast.FieldList) {
-		if fl == nil {
-			return
-		}
-		for _, f := range fl.List {
-			for _, n := range f.Names {
-				l[n.Name] = true
-			}
-		}
-	}
-	define := func(exprs ...ast.Expr) {
-		for _, e := range exprs {
-			if id, ok := e.(*ast.Ident); ok {
-				l[id.Name] = true
-			}
-		}
-	}
-	fields(fn.Recv)
-	ast.Inspect(fn, func(n ast.Node) bool {
-		switch s := n.(type) {
-		case *ast.FuncType:
-			fields(s.Params)
-			fields(s.Results)
-		case *ast.AssignStmt:
-			if s.Tok == token.DEFINE {
-				define(s.Lhs...)
-			}
-		case *ast.RangeStmt:
-			if s.Tok == token.DEFINE {
-				define(s.Key, s.Value)
-			}
-		case *ast.ValueSpec:
-			for _, n := range s.Names {
-				l[n.Name] = true
-			}
-		}
-		return true
-	})
-	p.locals[fn] = l
-	return l
-}
-
-// qualified resolves pkg.Name in fn, where pkg is the file's name for an
-// imported package under pkg/cluster (and not a local of fn), to that
-// package's declaration Name.
-func (p *sourcePkg) qualified(fn *ast.FuncDecl, x *ast.SelectorExpr) (symID, bool) {
-	base, ok := x.X.(*ast.Ident)
-	if !ok || fn == nil {
-		return symID{}, false
-	}
-	imp, ok := p.imports[p.fileOf[fn]][base.Name]
-	if !ok || p.localNames(fn)[base.Name] {
-		return symID{}, false
-	}
-	return symID{imp, x.Sel.Name}, true
-}
-
-// callee is the package function a call in fn names: f(...) in fn's own
-// package, or pkg.F(...) through the file's imports.
-func (p *sourcePkg) callee(fn *ast.FuncDecl, call *ast.CallExpr) (symID, bool) {
-	switch f := call.Fun.(type) {
+	switch x := fun.(type) {
 	case *ast.Ident:
-		return symID{p.pkgOfFunc(fn), f.Name}, true
+		return x
 	case *ast.SelectorExpr:
-		return p.qualified(fn, f)
+		return x.Sel
 	}
-	return symID{}, false
+	return nil
+}
+
+// funcRef is the package function id names (not a method, nor a local
+// closure or variable of the same name), by the type checker.
+func (p *sourcePkg) funcRef(id *ast.Ident) (symID, bool) {
+	return funcRefIn(p.uses, id)
+}
+
+// pkgLevel is the package-level constant, variable or function id refers
+// to, in the scope where it appears.
+func (p *sourcePkg) pkgLevel(id *ast.Ident) (symID, bool) {
+	obj := p.uses[id]
+	if obj == nil || obj.Pkg() == nil || obj.Parent() != obj.Pkg().Scope() {
+		return symID{}, false
+	}
+	return symID{obj.Pkg().Path(), obj.Name()}, true
+}
+
+// isPackageName reports whether e names an imported package.
+func (p *sourcePkg) isPackageName(e ast.Expr) bool {
+	id, ok := e.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	_, ok = p.uses[id].(*types.PkgName)
+	return ok
+}
+
+// methodOf is the method sel names, as {its type's package, "Type.Method"}.
+func (p *sourcePkg) methodOf(sel *ast.SelectorExpr) (symID, bool) {
+	s, ok := p.selections[sel]
+	if !ok || s.Kind() == types.FieldVal {
+		return symID{}, false
+	}
+	return methodID(s.Obj().(*types.Func))
+}
+
+// methodID names a method by its receiver's named type and package.
+func methodID(fn *types.Func) (symID, bool) {
+	recv := fn.Signature().Recv()
+	if recv == nil {
+		return symID{}, false
+	}
+	t := recv.Type()
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+	named, ok := types.Unalias(t).(*types.Named)
+	if !ok || named.Obj().Pkg() == nil {
+		return symID{}, false
+	}
+	return symID{named.Obj().Pkg().Path(), named.Obj().Name() + "." + fn.Name()}, true
+}
+
+// callee is the package function a call names: f(...), pkg.F(...), with or
+// without type arguments.
+func (p *sourcePkg) callee(call *ast.CallExpr) (symID, bool) {
+	return p.funcRef(funcIdent(call.Fun))
 }
 
 // callSitesOf returns the calls of the package function id in the scanned
@@ -401,51 +424,84 @@ func (p *sourcePkg) callSitesOf(id symID) []callSite {
 			if caller.Body == nil || !p.scans(caller) {
 				continue
 			}
-			ast.Inspect(caller.Body, func(n ast.Node) bool {
-				if call, ok := n.(*ast.CallExpr); ok {
-					if id, ok := p.callee(caller, call); ok {
-						p.callers[id] = append(p.callers[id], callSite{caller, call})
-					}
-				}
-				return true
-			})
+			for ref, call := range funcCalls(caller.Body, p.funcRef) {
+				p.callers[ref] = append(p.callers[ref], callSite{caller, call})
+			}
 		}
 	}
 	return p.callers[id]
 }
 
-// paramCallSitesOf is callSitesOf for resolving a parameter of id. A call
-// from a facade wrapper in pkg/cluster that only forwards its own
-// parameters (func W(c *Client, p string) { return pkg.F(c, p) }) stands
-// for the calls of W, so it is replaced by W's call sites: none when only
-// pkg/api calls W, which the scan never reads. Before the split those
-// places called F directly; counting the wrapper's call as one more caller
-// would derive every path built from the parameter once more (step 13b:
-// TeardownPipelineServer, called by replacePipelineServer and, through the
-// facade, by pkg/api).
-func (p *sourcePkg) paramCallSitesOf(id symID) []callSite {
-	if id.pkg == clusterPkg {
-		return p.callSitesOf(id)
+// funcCalls yields each call in node of a function that ref resolves (with
+// or without type arguments, in parentheses or not).
+func funcCalls(node ast.Node, ref func(*ast.Ident) (symID, bool)) func(yield func(symID, *ast.CallExpr) bool) {
+	return func(yield func(symID, *ast.CallExpr) bool) {
+		ok := true
+		ast.Inspect(node, func(n ast.Node) bool {
+			if !ok {
+				return false
+			}
+			if call, isCall := n.(*ast.CallExpr); isCall {
+				if id, isFunc := ref(funcIdent(call.Fun)); isFunc {
+					ok = yield(id, call)
+				}
+			}
+			return true
+		})
 	}
-	var out []callSite
-	for _, cs := range p.callSitesOf(id) {
-		if p.forwards(cs.caller, cs.call) {
-			out = append(out, p.callSitesOf(symID{clusterPkg, cs.caller.Name.Name})...)
-			continue
-		}
-		out = append(out, cs)
-	}
-	return out
 }
 
-// forwards reports whether fn is a function of pkg/cluster whose whole body
-// is `return call`, call passing fn's parameters unchanged and in order.
-func (p *sourcePkg) forwards(fn *ast.FuncDecl, call *ast.CallExpr) bool {
-	if fn.Recv != nil || p.pkgOfFunc(fn) != clusterPkg || len(fn.Body.List) != 1 || call.Ellipsis.IsValid() {
+// paramCallSitesOf is callSitesOf for resolving a parameter of id; unknown
+// reports that the parameter can also take a value only known at run time,
+// from callers that cannot be listed.
+//
+// A call from a facade declaration (facadeForward) stands for the facade's
+// own calls, so it is replaced by the facade's call sites in the scan.
+// pkg/api's direct calls of the facade add nothing, as before the split,
+// when pkg/api called the function itself and the scan never read pkg/api
+// (step 13b: TeardownPipelineServer, called by replacePipelineServer and,
+// through the facade, by pkg/api). A facade that nothing calls directly
+// (used only as a function value, in the scanned source or in pkg/api, or
+// not at all) keeps an unknown alternative, as an ordinary adapter without
+// call sites would. Uses as a function value of a function that also has
+// direct callers are not followed, for a facade as for any function, as
+// before the split.
+func (p *sourcePkg) paramCallSitesOf(id symID) (sites []callSite, unknown bool) {
+	for _, cs := range p.callSitesOf(id) {
+		if id.pkg == clusterPkg || !p.facadeForward(cs.caller, cs.call) {
+			sites = append(sites, cs)
+			continue
+		}
+		w := symID{clusterPkg, cs.caller.Name.Name}
+		calls := p.callSitesOf(w)
+		sites = append(sites, calls...)
+		if len(calls)+p.outsideCalls[w] == 0 {
+			unknown = true
+		}
+	}
+	return sites, unknown
+}
+
+// facadeForward reports whether fn is a facade declaration that only
+// forwards to call: an exported, non-generic function of pkg/cluster (not a
+// method) whose whole body is `return call`, or the call statement when it
+// returns nothing, call passing fn's parameters unchanged and in order (and
+// not spread with ...).
+func (p *sourcePkg) facadeForward(fn *ast.FuncDecl, call *ast.CallExpr) bool {
+	if fn.Recv != nil || fn.Type.TypeParams != nil || !fn.Name.IsExported() || p.pkgOfFunc(fn) != clusterPkg ||
+		len(fn.Body.List) != 1 || call.Ellipsis.IsValid() {
 		return false
 	}
-	ret, ok := fn.Body.List[0].(*ast.ReturnStmt)
-	if !ok || len(ret.Results) != 1 || ret.Results[0] != call {
+	switch st := fn.Body.List[0].(type) {
+	case *ast.ReturnStmt:
+		if len(st.Results) != 1 || st.Results[0] != call {
+			return false
+		}
+	case *ast.ExprStmt:
+		if st.X != call || fn.Type.Results != nil {
+			return false
+		}
+	default:
 		return false
 	}
 	var params []string
@@ -571,90 +627,226 @@ var (
 	clusterSourceErr  error
 )
 
-// clientMethodCalls maps each selector in the parsed tree (clusterSource)
-// that calls a method of Client to the method's name. The selectors are
-// told apart by type, not by name: a cache's Get, a header's Get or an
-// http.Client's Do is no API request. Each package under pkg/cluster is
-// type-checked from the same syntax trees once per test binary, its
+// clusterTypes type-checks the parsed tree (clusterSource) once per test
+// binary: each package under pkg/cluster from the same syntax trees, its
 // imports from their export data (exportData). It fails when a name in
-// requestMethods or helperMethods is not a Client method, so a renamed
-// request method cannot drop out of the scans.
-func clientMethodCalls(t *testing.T) map[*ast.SelectorExpr]string {
+// requestMethods, helperMethods or transportMethods is not a Client method,
+// so a renamed request method cannot drop out of the scans.
+func clusterTypes(t *testing.T) *typedSource {
 	t.Helper()
-	clientCallsOnce.Do(func() {
+	clusterTypesOnce.Do(func() {
 		ps := clusterSource(t)
-		for name := range requestSourceFiles {
-			if _, ok := ps.files[name]; !ok {
-				clientCallsErr = fmt.Errorf("requestSourceFiles names %s, which no package under pkg/cluster has: update the list", name)
-				return
-			}
-		}
-		exports := exportData(t)
 		byDir := map[string][]string{}
 		for name := range ps.files {
 			dir := filepath.Dir(ps.paths[name])
 			byDir[dir] = append(byDir[dir], name)
 		}
-		dirs := make([]string, 0, len(byDir))
-		for dir := range byDir {
-			dirs = append(dirs, dir)
+		pkgs := make([]pkgFiles, 0, len(byDir))
+		for dir, names := range byDir {
+			pkgs = append(pkgs, pkgFiles{path: clusterImportPath(dir), names: names})
 		}
-		sort.Strings(dirs)
-		imp := importer.ForCompiler(ps.fset, "gc", func(path string) (io.ReadCloser, error) {
-			file, ok := exports[path]
-			if !ok {
-				return nil, fmt.Errorf("no export data for %s", path)
-			}
-			return os.Open(file)
-		})
-		calls := map[*ast.SelectorExpr]string{}
-		var client *types.Named
-		for _, dir := range dirs {
-			names := byDir[dir]
-			sort.Strings(names)
-			files := make([]*ast.File, 0, len(names))
-			for _, name := range names {
-				files = append(files, ps.files[name])
-			}
-			info := &types.Info{Selections: map[*ast.SelectorExpr]*types.Selection{}}
-			pkg, err := (&types.Config{Importer: imp}).Check(clusterImportPath(dir), ps.fset, files, info)
-			if err != nil {
-				clientCallsErr = fmt.Errorf("type-check %s: %w", clusterImportPath(dir), err)
-				return
-			}
-			if tn, ok := pkg.Scope().Lookup("Client").(*types.TypeName); ok {
-				client, _ = tn.Type().(*types.Named)
-			}
-			for sel, s := range info.Selections {
-				if s.Kind() != types.MethodVal {
-					continue
-				}
-				if isClientType(s.Obj().(*types.Func).Signature().Recv().Type()) {
-					calls[sel] = s.Obj().Name()
-				}
-			}
-		}
-		if client == nil {
-			clientCallsErr = errors.New("no package under pkg/cluster declares Client")
+		ts, err := typeCheckSource(ps.fset, ps.files, pkgs, exportImporter(t, ps.fset), nil)
+		if err != nil {
+			clusterTypesErr = err
 			return
 		}
-		for _, m := range []map[string]string{requestMethods, helperMethods} {
+		if err := ts.checkClientMethods(); err != nil {
+			clusterTypesErr = err
+			return
+		}
+		clusterTypesVal = ts
+	})
+	if clusterTypesErr != nil {
+		t.Fatal(clusterTypesErr)
+	}
+	if clusterTypesVal == nil {
+		t.Fatal("the pkg/cluster source could not be type-checked")
+	}
+	return clusterTypesVal
+}
+
+var (
+	clusterTypesOnce sync.Once
+	clusterTypesVal  *typedSource
+	clusterTypesErr  error
+)
+
+// exportImporter imports packages from their compiled export data
+// (exportData).
+func exportImporter(t *testing.T, fset *token.FileSet) types.Importer {
+	t.Helper()
+	exports := exportData(t)
+	return importer.ForCompiler(fset, "gc", func(path string) (io.ReadCloser, error) {
+		file, ok := exports[path]
+		if !ok {
+			return nil, fmt.Errorf("no export data for %s", path)
+		}
+		return os.Open(file)
+	})
+}
+
+// pkgFiles is one package to type-check: its import path and its files (by
+// base name).
+type pkgFiles struct {
+	path  string
+	names []string
+}
+
+// typedSource is what the scans take from the type checker: what every
+// identifier and selector of the checked files refers to, and the selectors
+// that name a Client method.
+type typedSource struct {
+	uses        map[*ast.Ident]types.Object
+	defs        map[*ast.Ident]types.Object
+	selections  map[*ast.SelectorExpr]*types.Selection
+	clientCalls map[*ast.SelectorExpr]clientCall
+	// clients are the Client types the packages declare.
+	clients []*types.Named
+}
+
+// clientCall is a selector that names a Client method: a method of Client
+// (also one promoted from an embedded Client), or a method of an interface
+// or type constraint that *Client implements, which may be Client's at run
+// time.
+type clientCall struct {
+	name string
+	// argOffset is where the method's own arguments start in a call: 1 for
+	// a method expression ((*kube.Client).Get(c, path)), whose first
+	// argument is the receiver; else 0.
+	argOffset int
+	// called: the selector is the function of a call expression. Any other
+	// use is a function value, whose calls the scans cannot follow.
+	called bool
+}
+
+// typeCheckSource type-checks pkgs (in this order) from files. Each
+// package's imports come from imp; when checked is not nil, every package
+// checked is added to it (an importer that reads it imports them from this
+// source: the scanner fixtures).
+func typeCheckSource(fset *token.FileSet, files map[string]*ast.File, pkgs []pkgFiles, imp types.Importer, checked map[string]*types.Package) (*typedSource, error) {
+	ts := &typedSource{uses: map[*ast.Ident]types.Object{}, defs: map[*ast.Ident]types.Object{},
+		selections: map[*ast.SelectorExpr]*types.Selection{}, clientCalls: map[*ast.SelectorExpr]clientCall{}}
+	if checked == nil {
+		pkgs = slices.Clone(pkgs)
+		slices.SortFunc(pkgs, func(a, b pkgFiles) int { return strings.Compare(a.path, b.path) })
+	}
+	called := map[*ast.SelectorExpr]bool{}
+	for _, pf := range pkgs {
+		names := slices.Sorted(slices.Values(pf.names))
+		fl := make([]*ast.File, 0, len(names))
+		for _, name := range names {
+			f := files[name]
+			fl = append(fl, f)
+			ast.Inspect(f, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					if sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr); ok {
+						called[sel] = true
+					}
+				}
+				return true
+			})
+		}
+		info := &types.Info{Uses: ts.uses, Defs: ts.defs, Selections: ts.selections}
+		pkg, err := (&types.Config{Importer: imp}).Check(pf.path, fset, fl, info)
+		if err != nil {
+			return nil, fmt.Errorf("type-check %s: %w", pf.path, err)
+		}
+		if checked != nil {
+			checked[pf.path] = pkg
+		}
+		if tn, ok := pkg.Scope().Lookup("Client").(*types.TypeName); ok && !tn.IsAlias() {
+			if named, ok := tn.Type().(*types.Named); ok && isClientType(named) {
+				ts.clients = append(ts.clients, named)
+			}
+		}
+	}
+	for sel, s := range ts.selections {
+		if s.Kind() == types.FieldVal {
+			continue
+		}
+		fn := s.Obj().(*types.Func)
+		if recv := fn.Signature().Recv().Type(); !isClientType(recv) {
+			iface, ok := types.Unalias(recv).Underlying().(*types.Interface)
+			if !ok || !ts.clientMayImplement(iface) {
+				continue
+			}
+		}
+		cc := clientCall{name: fn.Name(), called: called[sel]}
+		if s.Kind() == types.MethodExpr {
+			cc.argOffset = 1
+		}
+		ts.clientCalls[sel] = cc
+	}
+	return ts, nil
+}
+
+// clientMayImplement reports whether *Client of one of the packages may
+// implement iface: it has every method of iface, by name, with as many
+// parameters and results (and as variadic). Shapes, not types, are
+// compared, so an interface declared in a package checked from export data
+// matches the Client checked from source; it over-approximates and never
+// misses an interface Client implements. Type terms of a constraint are
+// ignored, which over-approximates too.
+func (ts *typedSource) clientMayImplement(iface *types.Interface) bool {
+	if iface.NumMethods() == 0 {
+		return false
+	}
+	shape := func(sig *types.Signature) [3]int {
+		v := 0
+		if sig.Variadic() {
+			v = 1
+		}
+		return [3]int{sig.Params().Len(), sig.Results().Len(), v}
+	}
+	for _, client := range ts.clients {
+		all := true
+		for i := range iface.NumMethods() {
+			m := iface.Method(i)
+			obj, _, _ := types.LookupFieldOrMethod(types.NewPointer(client), false, m.Pkg(), m.Name())
+			cm, ok := obj.(*types.Func)
+			if !ok || shape(cm.Signature()) != shape(m.Signature()) {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
+	return false
+}
+
+// checkClientMethods fails when no package declares Client, or when a name
+// in requestMethods, helperMethods or transportMethods is not a method of
+// Client.
+func (ts *typedSource) checkClientMethods() error {
+	if len(ts.clients) == 0 {
+		return errors.New("no package under pkg/cluster declares Client")
+	}
+	for _, client := range ts.clients {
+		for _, m := range []map[string]string{requestMethods, helperMethods, transportMethods} {
 			for name := range m {
 				if fn, _, _ := types.LookupFieldOrMethod(client, true, client.Obj().Pkg(), name); fn == nil {
-					clientCallsErr = fmt.Errorf("the RBAC scans know a Client request method %s that Client does not have: update requestMethods/helperMethods", name)
-					return
+					return fmt.Errorf("the RBAC scans know a Client request method %s that Client does not have: update requestMethods/helperMethods/transportMethods", name)
 				}
 			}
 		}
-		clientCallsVal = calls
-	})
-	if clientCallsErr != nil {
-		t.Fatal(clientCallsErr)
 	}
-	if clientCallsVal == nil {
-		t.Fatal("the Client calls could not be found")
+	return nil
+}
+
+// sourceImporter imports the packages in pkgs (type-checked from source)
+// and every other package through fallback.
+type sourceImporter struct {
+	pkgs     map[string]*types.Package
+	fallback types.Importer
+}
+
+func (i sourceImporter) Import(path string) (*types.Package, error) {
+	if p, ok := i.pkgs[path]; ok {
+		return p, nil
 	}
-	return clientCallsVal
+	return i.fallback.Import(path)
 }
 
 // isClientType reports whether t is Client or *Client of a package under
@@ -663,7 +855,7 @@ func isClientType(t types.Type) bool {
 	if ptr, ok := t.(*types.Pointer); ok {
 		t = ptr.Elem()
 	}
-	named, ok := t.(*types.Named)
+	named, ok := types.Unalias(t).(*types.Named)
 	if !ok || named.Obj().Name() != "Client" || named.Obj().Pkg() == nil {
 		return false
 	}
@@ -671,49 +863,114 @@ func isClientType(t types.Type) bool {
 	return path == clusterPkg || strings.HasPrefix(path, clusterPkg+"/")
 }
 
+// funcRefIn is the package function id names, by uses.
+func funcRefIn(uses map[*ast.Ident]types.Object, id *ast.Ident) (symID, bool) {
+	if id == nil {
+		return symID{}, false
+	}
+	fn, ok := uses[id].(*types.Func)
+	if !ok || fn.Pkg() == nil || fn.Signature().Recv() != nil {
+		return symID{}, false
+	}
+	return symID{fn.Pkg().Path(), fn.Name()}, true
+}
+
+// countCalls adds the calls in files of package functions to counts.
+func countCalls(files []*ast.File, uses map[*ast.Ident]types.Object, counts map[symID]int) {
+	ref := func(id *ast.Ident) (symID, bool) { return funcRefIn(uses, id) }
+	for _, f := range files {
+		for id := range funcCalls(f, ref) {
+			counts[id]++
+		}
+	}
+}
+
+// outsideCalls counts the direct calls of pkg/api and main.go of the
+// functions of pkg/cluster, once per test binary.
+func outsideCalls(t *testing.T) map[symID]int {
+	t.Helper()
+	outsideOnce.Do(func() {
+		counts := map[symID]int{}
+		for _, tp := range []*typedPkg{typeCheck(t, apiPkg, "../api"), typeCheck(t, "main", "../..", "main.go")} {
+			files := make([]*ast.File, 0, len(tp.files))
+			for _, name := range slices.Sorted(maps.Keys(tp.files)) {
+				files = append(files, tp.files[name])
+			}
+			countCalls(files, tp.info.Uses, counts)
+		}
+		outsideVal = counts
+	})
+	if outsideVal == nil {
+		t.Fatal("the calls of pkg/api and main.go could not be counted")
+	}
+	return outsideVal
+}
+
 var (
-	clientCallsOnce sync.Once
-	clientCallsVal  map[*ast.SelectorExpr]string
-	clientCallsErr  error
+	outsideOnce sync.Once
+	outsideVal  map[symID]int
 )
+
+// pathHelpers are the functions (and the method, "Type.Method") whose
+// results the resolver computes instead of reading their bodies, told by
+// package and name: a function of the same name elsewhere is resolved from
+// its own body.
+var (
+	namespacedPathFunc    = symID{rhoaiPkg, "NamespacedPath"}
+	clusterPathFunc       = symID{rhoaiPkg, "ClusterPath"}
+	activityNamespaceFunc = symID{recordPkg, "GetActivityNamespace"}
+	maasAPIFunc           = symID{servingPkg, "MaaSAPI"}
+	gitOpsPolicyNameFunc  = symID{clusterPkg, "gitOpsAdmissionPolicyName"}
+	componentListPathFunc = symID{rhoaiPkg, "ComponentListPath"}
+	componentKindListPath = symID{rhoaiPkg, "ComponentKind.ListPath"}
+	sprintfFunc           = symID{"fmt", "Sprintf"}
+)
+
+// checkPathHelpers fails when a path helper the resolver knows is no
+// longer declared where it says: renamed or moved, it would be resolved
+// from its body, or not at all.
+func (p *sourcePkg) checkPathHelpers() error {
+	for _, id := range []symID{namespacedPathFunc, clusterPathFunc, activityNamespaceFunc, maasAPIFunc, gitOpsPolicyNameFunc, componentListPathFunc} {
+		if p.funcs[id] == nil {
+			return fmt.Errorf("the RBAC resolver computes %s.%s, which no package under pkg/cluster declares: update the path helpers", id.pkg, id.name)
+		}
+	}
+	if p.methods[componentKindListPath] == nil {
+		return fmt.Errorf("the RBAC resolver computes %s.%s, which no package under pkg/cluster declares: update the path helpers", componentKindListPath.pkg, componentKindListPath.name)
+	}
+	return nil
+}
 
 // loadClusterSource indexes the source of pkg/cluster and of every package
 // under it for one scan.
 func loadClusterSource(t *testing.T) *sourcePkg {
 	t.Helper()
 	ps := clusterSource(t)
-	p := &sourcePkg{fset: ps.fset, files: map[string]*ast.File{}, pkgOf: map[string]string{}, imports: map[string]map[string]string{},
-		consts: map[symID]string{}, lits: map[symID]*ast.CompositeLit{}, funcs: map[symID]*ast.FuncDecl{}, fileOf: map[*ast.FuncDecl]string{},
-		identMemo: map[identKey][]string{}, resultMemo: map[resultKey][]string{}, locals: map[*ast.FuncDecl]map[string]bool{},
-		clientCalls: clientMethodCalls(t)}
-	pkgNames := map[string]string{}
-	names := make([]string, 0, len(ps.files))
-	for name, f := range ps.files {
-		names = append(names, name)
-		pkgNames[clusterImportPath(filepath.Dir(ps.paths[name]))] = f.Name.Name
+	pkgOf := make(map[string]string, len(ps.files))
+	for name := range ps.files {
+		pkgOf[name] = clusterImportPath(filepath.Dir(ps.paths[name]))
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		f := ps.files[name]
-		pkg := clusterImportPath(filepath.Dir(ps.paths[name]))
+	p := newSourcePkg(ps.fset, ps.files, pkgOf, clusterTypes(t), outsideCalls(t))
+	if err := p.checkPathHelpers(); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// newSourcePkg indexes files (by base name; pkgOf is each one's package
+// import path) for one scan; outsideCalls counts the direct calls of their
+// functions from packages the scan does not read.
+func newSourcePkg(fset *token.FileSet, files map[string]*ast.File, pkgOf map[string]string, ts *typedSource, outsideCalls map[symID]int) *sourcePkg {
+	p := &sourcePkg{fset: fset, files: map[string]*ast.File{}, pkgOf: map[string]string{},
+		consts: map[symID]string{}, lits: map[symID]*ast.CompositeLit{}, funcs: map[symID]*ast.FuncDecl{}, fileOf: map[*ast.FuncDecl]string{},
+		methods: map[symID]*ast.FuncDecl{}, uses: ts.uses, defs: ts.defs, selections: ts.selections, clientCalls: ts.clientCalls,
+		outsideCalls: outsideCalls,
+		identMemo:    map[identKey][]string{}, resultMemo: map[resultKey][]string{}}
+	for _, name := range slices.Sorted(maps.Keys(files)) {
+		f := files[name]
+		pkg := pkgOf[name]
 		p.files[name] = f
 		p.pkgOf[name] = pkg
-		imports := map[string]string{}
-		for _, spec := range f.Imports {
-			imp, err := strconv.Unquote(spec.Path.Value)
-			if err != nil {
-				t.Fatal(err)
-			}
-			local, ok := pkgNames[imp]
-			if !ok {
-				continue // not a package under pkg/cluster
-			}
-			if spec.Name != nil {
-				local = spec.Name.Name
-			}
-			imports[local] = imp
-		}
-		p.imports[name] = imports
 		for _, decl := range f.Decls {
 			switch d := decl.(type) {
 			case *ast.GenDecl:
@@ -738,6 +995,10 @@ func loadClusterSource(t *testing.T) *sourcePkg {
 			case *ast.FuncDecl:
 				if d.Recv == nil {
 					p.funcs[symID{pkg, d.Name.Name}] = d
+				} else if fn, ok := p.defs[d.Name].(*types.Func); ok {
+					if id, ok := methodID(fn); ok {
+						p.methods[id] = d
+					}
 				}
 				p.fileOf[d] = name
 			}
@@ -796,62 +1057,64 @@ func (r resolver) resolve(e ast.Expr) []string {
 }
 
 func (r resolver) resolveCall(x *ast.CallExpr) []string {
-	if fun, ok := x.Fun.(*ast.SelectorExpr); ok {
-		if fun.Sel.Name == "ListPath" && len(x.Args) == 0 {
+	if fun, ok := ast.Unparen(x.Fun).(*ast.SelectorExpr); ok {
+		if m, ok := r.p.methodOf(fun); ok && m == componentKindListPath && len(x.Args) == 0 {
 			// rhoai.ComponentKind.ListPath: a discovered module kind.
 			return moduleKindPaths()
 		}
-		if pkg, ok := fun.X.(*ast.Ident); ok && pkg.Name == "fmt" && fun.Sel.Name == "Sprintf" && len(x.Args) > 0 {
-			formats := r.resolve(x.Args[0])
-			var args [][]string
-			for _, a := range x.Args[1:] {
-				args = append(args, r.resolve(a))
-			}
-			var out []string
-			verb := regexp.MustCompile(`%[sdvq]`)
-			for _, format := range formats {
-				for _, combo := range combos(args) {
-					i := 0
-					out = append(out, verb.ReplaceAllStringFunc(format, func(string) string {
-						if i < len(combo) {
-							i++
-							return combo[i-1]
-						}
-						return unknownPart
-					}))
-				}
-			}
-			return out
-		}
 	}
 	// A package function, by plain name or qualified by its package.
-	callee, ok := r.p.callee(r.fn, x)
+	callee, ok := r.p.callee(x)
 	if !ok {
 		return []string{unknownPart}
 	}
-	switch callee.name {
-	case "NamespacedPath", "ClusterPath":
+	switch callee {
+	case sprintfFunc:
+		if len(x.Args) == 0 {
+			return []string{unknownPart}
+		}
+		formats := r.resolve(x.Args[0])
+		var args [][]string
+		for _, a := range x.Args[1:] {
+			args = append(args, r.resolve(a))
+		}
+		var out []string
+		verb := regexp.MustCompile(`%[sdvq]`)
+		for _, format := range formats {
+			for _, combo := range combos(args) {
+				i := 0
+				out = append(out, verb.ReplaceAllStringFunc(format, func(string) string {
+					if i < len(combo) {
+						i++
+						return combo[i-1]
+					}
+					return unknownPart
+				}))
+			}
+		}
+		return out
+	case namespacedPathFunc, clusterPathFunc:
 		var args [][]string
 		for _, a := range x.Args {
 			args = append(args, r.resolve(a))
 		}
 		var out []string
 		for _, combo := range combos(args) {
-			if callee.name == "NamespacedPath" {
+			if callee == namespacedPathFunc {
 				out = append(out, rhoai.NamespacedPath(combo[0], combo[1], combo[2], combo[3]))
 			} else {
 				out = append(out, rhoai.ClusterPath(combo[0], combo[1], combo[2]))
 			}
 		}
 		return out
-	case "GetActivityNamespace":
+	case activityNamespaceFunc:
 		return []string{appNSMarker}
-	case "MaaSAPI":
+	case maasAPIFunc:
 		// maas.opendatahub.io at its served version
 		return []string{serving.MaaSGroup + "/" + unknownPart}
-	case "gitOpsAdmissionPolicyName":
+	case gitOpsPolicyNameFunc:
 		return []string{gitOpsPolicyNameMarker}
-	case "ComponentListPath":
+	case componentListPathFunc:
 		// A discovered kind of one of the module API groups.
 		return moduleKindPaths()
 	}
@@ -887,8 +1150,11 @@ func combos(args [][]string) [][]string {
 }
 
 func (r resolver) resolveIdent(id *ast.Ident) []string {
-	if v, ok := r.p.consts[symID{r.p.pkgOfFunc(r.fn), id.Name}]; ok && !r.isLocal(id.Name) {
-		return []string{v}
+	// A package constant, as the identifier refers to it where it is.
+	if pid, ok := r.p.pkgLevel(id); ok {
+		if v, ok := r.p.consts[pid]; ok {
+			return []string{v}
+		}
 	}
 	if r.depth > rbacResolveDepth || r.fn == nil {
 		return []string{unknownPart}
@@ -937,12 +1203,18 @@ func (r resolver) resolveIdentUncached(id *ast.Ident) []string {
 	if len(out) > 0 {
 		return out
 	}
-	// A function parameter: resolve the argument at every call site.
+	// A function parameter: resolve the argument at every call site, and
+	// keep a value known only at run time when the function has callers
+	// that cannot be listed.
 	if idx := paramIndex(r.fn, id.Name); idx >= 0 && r.fn.Recv == nil {
-		for _, cs := range r.p.paramCallSitesOf(symID{r.p.pkgOfFunc(r.fn), r.fn.Name.Name}) {
+		sites, unknown := r.p.paramCallSitesOf(symID{r.p.pkgOfFunc(r.fn), r.fn.Name.Name})
+		for _, cs := range sites {
 			if idx < len(cs.call.Args) {
 				out = append(out, resolver{r.p, cs.caller, r.depth + 1}.resolve(cs.call.Args[idx])...)
 			}
+		}
+		if unknown {
+			out = append(out, unknownPart)
 		}
 		if len(out) > 0 {
 			return out
@@ -954,7 +1226,7 @@ func (r resolver) resolveIdentUncached(id *ast.Ident) []string {
 // resolveCallResult resolves result i of a call to a package function from
 // that function's return statements (ignoring empty-string error returns).
 func (r resolver) resolveCallResult(call *ast.CallExpr, i int) []string {
-	id, ok := r.p.callee(r.fn, call)
+	id, ok := r.p.callee(call)
 	if !ok || r.depth > rbacResolveDepth {
 		return []string{unknownPart}
 	}
@@ -993,24 +1265,6 @@ func (r resolver) resolveResultOf(fn *ast.FuncDecl, i int) []string {
 	return out
 }
 
-func (r resolver) isLocal(name string) bool {
-	if r.fn == nil {
-		return false
-	}
-	local := paramIndex(r.fn, name) >= 0
-	ast.Inspect(r.fn.Body, func(n ast.Node) bool {
-		if s, ok := n.(*ast.AssignStmt); ok && s.Tok == token.DEFINE {
-			for _, lhs := range s.Lhs {
-				if l, ok := lhs.(*ast.Ident); ok && l.Name == name {
-					local = true
-				}
-			}
-		}
-		return true
-	})
-	return local
-}
-
 func paramIndex(fn *ast.FuncDecl, name string) int {
 	i := 0
 	for _, field := range fn.Type.Params.List {
@@ -1034,9 +1288,9 @@ func (r resolver) rangeElements(x ast.Expr, field string) []string {
 	if !ok {
 		switch v := x.(type) {
 		case *ast.Ident:
-			lit = r.findCompositeLit(v.Name)
+			lit = r.findCompositeLit(v)
 		case *ast.SelectorExpr:
-			if id, ok := r.p.qualified(r.fn, v); ok {
+			if id, ok := r.p.pkgLevel(v.Sel); ok && r.p.isPackageName(v.X) {
 				lit = r.p.lits[id]
 			}
 		}
@@ -1091,7 +1345,8 @@ func (r resolver) rangeElements(x ast.Expr, field string) []string {
 	return out
 }
 
-func (r resolver) findCompositeLit(name string) *ast.CompositeLit {
+func (r resolver) findCompositeLit(ident *ast.Ident) *ast.CompositeLit {
+	name := ident.Name
 	var found *ast.CompositeLit
 	ast.Inspect(r.fn.Body, func(n ast.Node) bool {
 		if s, ok := n.(*ast.AssignStmt); ok && len(s.Lhs) == len(s.Rhs) {
@@ -1105,8 +1360,10 @@ func (r resolver) findCompositeLit(name string) *ast.CompositeLit {
 		}
 		return true
 	})
-	if found == nil && !r.isLocal(name) {
-		found = r.p.lits[symID{r.p.pkgOfFunc(r.fn), name}]
+	if found == nil {
+		if id, ok := r.p.pkgLevel(ident); ok {
+			found = r.p.lits[id]
+		}
 	}
 	return found
 }
@@ -1127,9 +1384,11 @@ func (r resolver) resolveSelector(x *ast.SelectorExpr) []string {
 	})
 	if len(out) == 0 {
 		// pkg.Name: a constant of an imported package under pkg/cluster.
-		if id, ok := r.p.qualified(r.fn, x); ok {
-			if v, ok := r.p.consts[id]; ok {
-				return []string{v}
+		if r.p.isPackageName(x.X) {
+			if id, ok := r.p.pkgLevel(x.Sel); ok {
+				if v, ok := r.p.consts[id]; ok {
+					return []string{v}
+				}
 			}
 			return []string{unknownPart}
 		}
@@ -1183,24 +1442,27 @@ func (r resolver) resolveStepField(base, field string) []string {
 	return out
 }
 
-// pointerTarget is T, keyed by package, when typ is *T or *pkg.T (pkg an
-// imported package under pkg/cluster) in fn.
-func (p *sourcePkg) pointerTarget(fn *ast.FuncDecl, typ ast.Expr) (symID, bool) {
+// pointerTarget is T, keyed by package, when typ is *T or *pkg.T (by the
+// type checker; T of any package).
+func (p *sourcePkg) pointerTarget(typ ast.Expr) (symID, bool) {
 	star, ok := typ.(*ast.StarExpr)
 	if !ok {
 		return symID{}, false
 	}
+	var name *ast.Ident
 	switch x := star.X.(type) {
 	case *ast.Ident:
-		return symID{p.pkgOfFunc(fn), x.Name}, true
+		name = x
 	case *ast.SelectorExpr:
-		if base, ok := x.X.(*ast.Ident); ok {
-			if imp, ok := p.imports[p.fileOf[fn]][base.Name]; ok {
-				return symID{imp, x.Sel.Name}, true
-			}
-		}
+		name = x.Sel
+	default:
+		return symID{}, false
 	}
-	return symID{}, false
+	tn, ok := p.uses[name].(*types.TypeName)
+	if !ok || tn.Pkg() == nil {
+		return symID{}, false
+	}
+	return symID{tn.Pkg().Path(), tn.Name()}, true
 }
 
 // pointerParamType is T when fn's parameter name has type *T.
@@ -1213,7 +1475,7 @@ func (p *sourcePkg) pointerParamType(fn *ast.FuncDecl, name string) (symID, bool
 			if n.Name != name {
 				continue
 			}
-			return p.pointerTarget(fn, f.Type)
+			return p.pointerTarget(f.Type)
 		}
 	}
 	return symID{}, false
@@ -1223,7 +1485,7 @@ func (p *sourcePkg) pointerParamType(fn *ast.FuncDecl, name string) (symID, bool
 func (p *sourcePkg) pointerParamsOf(fn *ast.FuncDecl, typ symID) map[string]bool {
 	var out map[string]bool
 	for _, f := range fn.Type.Params.List {
-		if id, ok := p.pointerTarget(fn, f.Type); ok && id == typ {
+		if id, ok := p.pointerTarget(f.Type); ok && id == typ {
 			for _, n := range f.Names {
 				if out == nil {
 					out = map[string]bool{}
@@ -1413,7 +1675,17 @@ func bookkeepingRequests(t *testing.T) []rbacRequest {
 // or only the calls on c.Bookkeeping() with onlyBookkeeping.
 func scanRequests(t *testing.T, only map[string]bool, onlyBookkeeping bool) ([]rbacRequest, map[string]bool) {
 	t.Helper()
-	p := loadClusterSource(t)
+	reqs, seenExcluded, problems := loadClusterSource(t).scan(only, onlyBookkeeping)
+	if len(problems) > 0 {
+		t.Fatalf("cannot derive the RBAC needed by these API calls; resolve the path statically or extend the test:\n%s", strings.Join(problems, "\n"))
+	}
+	return reqs, seenExcluded
+}
+
+// scan scans the functions in only (nil: all) for Client calls, or only the
+// calls on c.Bookkeeping() with onlyBookkeeping. problems are the calls
+// whose request it cannot derive.
+func (p *sourcePkg) scan(only map[string]bool, onlyBookkeeping bool) ([]rbacRequest, map[string]bool, []string) {
 	p.only = only
 	var reqs []rbacRequest
 	seenExcluded := map[string]bool{}
@@ -1426,62 +1698,45 @@ func scanRequests(t *testing.T, only map[string]bool, onlyBookkeeping bool) ([]r
 	for _, file := range names {
 		for _, decl := range p.files[file].Decls {
 			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil || isRequestSourceFile(file) || !p.scans(fn) {
+			if !ok {
+				// A Client request method stored by a package-level variable.
+				_, refused := p.requestCalls(file, decl)
+				problems = append(problems, refused...)
+				continue
+			}
+			if fn.Body == nil || p.isTransport(fn) || !p.scans(fn) {
 				continue
 			}
 			fnPos := p.funcPos(fn)
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || len(call.Args) == 0 {
-					return true
-				}
-				method, ok := p.requestMethod(sel)
-				if !ok {
-					return true
-				}
-				pathArg := call.Args[0]
-				if method == "do" {
-					// c.Do(http.MethodX, path, ...): the raw request method.
-					m, ok := rawMethods[selectorName(call.Args[0])]
-					if !ok || len(call.Args) < 2 {
-						problems = append(problems, fmt.Sprintf("%s:%d do: request method is not an http.Method constant", file, p.fset.Position(call.Pos()).Line))
-						return true
-					}
-					method, pathArg = m, call.Args[1]
-				}
-				if _, known := methodVerbs[method]; !known && method != "get" {
-					return true
-				}
-				if inner, ok := sel.X.(*ast.CallExpr); onlyBookkeeping && (!ok || selectorName(inner.Fun) != "Bookkeeping") {
-					return true
+			calls, refused := p.requestCalls(file, fn.Body)
+			problems = append(problems, refused...)
+			for _, rc := range calls {
+				if onlyBookkeeping && !p.isBookkeeping(rc.client) {
+					continue
 				}
 				site := fmt.Sprintf("%s:%s", file, fn.Name.Name)
 				if _, excluded := rbacCallsNotUsingTheSAToken[site]; excluded {
 					seenExcluded[site] = true
-					return true
+					continue
 				}
 				if _, bestEffort := rbacBestEffortCalls[site]; bestEffort {
 					seenExcluded[site] = true
-					return true
+					continue
 				}
 				if _, userRead := rbacUserTokenReads[site]; userRead {
 					seenExcluded[site] = true
-					return true
+					continue
 				}
 				if _, gitOpsOnly := rbacGitOpsOnlyCalls[site]; gitOpsOnly && only == nil {
 					seenExcluded[site] = true
-					return true
+					continue
 				}
-				pos := p.fset.Position(call.Pos())
+				pos := p.fset.Position(rc.call.Pos())
 				manifests := manifestNames(resolver{p: p, fn: fn})
-				for _, path := range (resolver{p: p, fn: fn}).resolve(pathArg) {
-					rs, err := toRequests(method, path, fmt.Sprintf("%s:%d", file, pos.Line))
+				for _, path := range (resolver{p: p, fn: fn}).resolve(rc.path) {
+					rs, err := toRequests(rc.method, path, fmt.Sprintf("%s:%d", file, pos.Line))
 					if err != nil {
-						problems = append(problems, fmt.Sprintf("%s:%d %s: %v", file, pos.Line, method, err))
+						problems = append(problems, fmt.Sprintf("%s:%d %s: %v", file, pos.Line, rc.method, err))
 						continue
 					}
 					for _, r := range rs {
@@ -1499,14 +1754,89 @@ func scanRequests(t *testing.T, only map[string]bool, onlyBookkeeping bool) ([]r
 						reqs = append(reqs, r)
 					}
 				}
-				return true
-			})
+			}
 		}
 	}
-	if len(problems) > 0 {
-		t.Fatalf("cannot derive the RBAC needed by these API calls; resolve the path statically or extend the test:\n%s", strings.Join(problems, "\n"))
+	return reqs, seenExcluded, problems
+}
+
+// requestCall is a call of a Client request method or REST helper.
+type requestCall struct {
+	call *ast.CallExpr
+	// method is the request it sends (a requestMethods value; Do's is its
+	// http.Method's), path its path argument.
+	method string
+	path   ast.Expr
+	// client is the expression of the client it is sent with: the
+	// selector's receiver, or a method expression's first argument.
+	client ast.Expr
+}
+
+// requestCalls lists the calls of Client request methods and REST helpers
+// in node, by type (clientCalls): on a Client, an embedded Client, an
+// interface or constraint *Client implements, or through a method
+// expression. refused are the ones whose request cannot be derived: a Do
+// whose method is not an http.Method constant, and a request method used as
+// a function value (stored, passed, assigned), whose calls cannot be
+// followed.
+func (p *sourcePkg) requestCalls(file string, node ast.Node) (calls []requestCall, refused []string) {
+	ast.Inspect(node, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.SelectorExpr:
+			if cc, ok := p.clientCalls[x]; ok && !cc.called {
+				if _, request := requestMethod(cc.name); request {
+					refused = append(refused, fmt.Sprintf("%s:%d %s: a Client request method used as a function value; the scan cannot follow its calls, so call it directly", file, p.fset.Position(x.Pos()).Line, cc.name))
+				}
+			}
+		case *ast.CallExpr:
+			sel, ok := ast.Unparen(x.Fun).(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			cc, ok := p.clientCalls[sel]
+			if !ok || len(x.Args) <= cc.argOffset {
+				return true
+			}
+			method, ok := requestMethod(cc.name)
+			if !ok {
+				return true
+			}
+			args := x.Args[cc.argOffset:]
+			rc := requestCall{call: x, method: method, path: args[0], client: sel.X}
+			if cc.argOffset > 0 {
+				rc.client = x.Args[0]
+			}
+			if method == "do" {
+				// c.Do(http.MethodX, path, ...): the raw request method.
+				m, ok := p.httpMethod(args[0])
+				if !ok || len(args) < 2 {
+					refused = append(refused, fmt.Sprintf("%s:%d do: request method is not an http.Method constant", file, p.fset.Position(x.Pos()).Line))
+					return true
+				}
+				rc.method, rc.path = m, args[1]
+			}
+			if _, known := methodVerbs[rc.method]; !known && rc.method != "get" {
+				return true
+			}
+			calls = append(calls, rc)
+		}
+		return true
+	})
+	return calls, refused
+}
+
+// isBookkeeping reports whether client is a call of Client.Bookkeeping().
+func (p *sourcePkg) isBookkeeping(client ast.Expr) bool {
+	call, ok := ast.Unparen(client).(*ast.CallExpr)
+	if !ok {
+		return false
 	}
-	return reqs, seenExcluded
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	cc, ok := p.clientCalls[sel]
+	return ok && cc.name == "Bookkeeping"
 }
 
 // --- template side ---

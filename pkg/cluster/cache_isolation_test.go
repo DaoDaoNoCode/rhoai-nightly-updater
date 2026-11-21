@@ -69,7 +69,7 @@ func TestResetClusterCachesCoversEveryURLKeyedCache(t *testing.T) {
 	for _, paths := range dirs {
 		for _, path := range paths {
 			f := filepath.Base(path)
-			if isRequestSourceFile(f) {
+			if clientOwnFiles[f] {
 				continue
 			}
 			b, err := os.ReadFile(path)
@@ -289,4 +289,13 @@ func TestFakeClusterStartsWithEmptyURLKeyedCaches(t *testing.T) {
 	if _, ok := rhoai.APIVersionsCache.Get(earlier + "|kuadrant.io"); ok || n != 0 {
 		t.Fatalf("a new fake cluster still sees an earlier one's caches: package index %d entries, api versions cached %v", n, ok)
 	}
+}
+
+// clientOwnFiles are the files of internal/kube that declare Client, its
+// accessors and its REST helpers: they read the API server URL to send the
+// requests, not as a cache key.
+var clientOwnFiles = map[string]bool{
+	"client.go":         true,
+	"client_context.go": true,
+	"rest.go":           true,
 }

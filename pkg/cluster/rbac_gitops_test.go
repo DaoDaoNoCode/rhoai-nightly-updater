@@ -52,6 +52,9 @@ const (
 	kubePkg       = clusterPkg + "/internal/kube"
 	registryPkg   = clusterPkg + "/internal/registry"
 	mlflowPkg     = clusterPkg + "/internal/mlflow"
+	rhoaiPkg      = clusterPkg + "/internal/rhoai"
+	recordPkg     = clusterPkg + "/internal/record"
+	servingPkg    = clusterPkg + "/internal/serving"
 	apiPkg        = modulePath + "/pkg/api"
 	rbacGitOpsRel = "../../deploy/rbac-gitops.yaml"
 )

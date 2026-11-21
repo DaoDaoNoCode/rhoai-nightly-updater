@@ -161,36 +161,16 @@ func TestOwnConfigMapsAreReachedOnlyThroughBookkeeping(t *testing.T) {
 	for _, file := range files {
 		for _, decl := range p.files[file].Decls {
 			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil || isRequestSourceFile(file) {
+			if !ok || fn.Body == nil || p.isTransport(fn) {
 				continue
 			}
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok || len(call.Args) == 0 {
-					return true
-				}
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				method, ok := p.requestMethod(sel)
-				if !ok {
-					return true
-				}
-				pathArg := call.Args[0]
-				if method == "do" && len(call.Args) >= 2 {
-					method, pathArg = rawMethods[selectorName(call.Args[0])], call.Args[1]
-				}
-				if _, known := methodVerbs[method]; !known && method != "get" {
-					return true
-				}
-				viaBookkeeping := false
-				if inner, ok := sel.X.(*ast.CallExpr); ok && selectorName(inner.Fun) == "Bookkeeping" {
-					viaBookkeeping = true
-				}
+			// Refused calls fail the RBAC scans (scanRequests).
+			calls, _ := p.requestCalls(file, fn.Body)
+			for _, rc := range calls {
+				viaBookkeeping := p.isBookkeeping(rc.client)
 				own := false
-				for _, path := range (resolver{p: p, fn: fn}).resolve(pathArg) {
-					rs, err := toRequests(method, path, file)
+				for _, path := range (resolver{p: p, fn: fn}).resolve(rc.path) {
+					rs, err := toRequests(rc.method, path, file)
 					if err != nil {
 						continue
 					}
@@ -200,15 +180,14 @@ func TestOwnConfigMapsAreReachedOnlyThroughBookkeeping(t *testing.T) {
 						}
 					}
 				}
-				pos := p.fset.Position(call.Pos())
+				pos := p.fset.Position(rc.call.Pos())
 				switch {
 				case own && !viaBookkeeping:
 					problems = append(problems, fmt.Sprintf("%s:%d %s: the updater's own ConfigMap is not reached through c.Bookkeeping()", file, pos.Line, fn.Name.Name))
 				case viaBookkeeping && !own:
 					problems = append(problems, fmt.Sprintf("%s:%d %s: c.Bookkeeping() is only for the updater's own ConfigMaps", file, pos.Line, fn.Name.Name))
 				}
-				return true
-			})
+			}
 		}
 	}
 	if len(problems) > 0 {
