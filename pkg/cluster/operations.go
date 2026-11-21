@@ -247,15 +247,9 @@ func buildCatalogSourceSpec(image string) map[string]any {
 	}
 }
 
-// UpdateStepEvent represents a single step in the update pipeline.
-// Defined here so operations.go doesn't depend on the api package.
-type UpdateStepEvent struct {
-	Step      string `json:"step"`
-	Status    string `json:"status"` // "running", "success", "failed", "skipped"
-	Message   string `json:"message"`
-	Detail    string `json:"detail,omitempty"`
-	ErrorCode string `json:"errorCode,omitempty"`
-}
+// UpdateStepEvent represents a single step in the update pipeline
+// (types.UpdateStepEvent, so the packages under pkg/cluster share it).
+type UpdateStepEvent = types.UpdateStepEvent
 
 // waitForNightlyCatalogReady polls the nightly CatalogSource until it reports
 // READY, logging and emitting each observed state. The PackageManifest will not

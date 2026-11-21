@@ -392,6 +392,16 @@ type OperationResponse struct {
 	ErrorCode string   `json:"errorCode,omitempty"` // "unauthorized", "forbidden", "prerequisites", "network", "validation"
 }
 
+// UpdateStepEvent represents a single step in the update pipeline (and the
+// other streamed operations): one event of their step stream.
+type UpdateStepEvent struct {
+	Step      string `json:"step"`
+	Status    string `json:"status"` // "running", "success", "failed", "skipped"
+	Message   string `json:"message"`
+	Detail    string `json:"detail,omitempty"`
+	ErrorCode string `json:"errorCode,omitempty"`
+}
+
 // LatestNightlyResponse contains the latest nightly tag and full image reference.
 type LatestNightlyResponse struct {
 	Tag       string `json:"tag"`
