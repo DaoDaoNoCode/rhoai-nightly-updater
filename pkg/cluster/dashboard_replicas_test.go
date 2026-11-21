@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 // dashboardStateWith reads the dashboard state of a rhods-dashboard
@@ -94,14 +95,14 @@ func TestDeploymentChecksKeepTheirQuestions(t *testing.T) {
 		t.Error("a template the controller has not seen is ready")
 	}
 
-	var s s3DeploymentSpec
+	var s storage.S3DeploymentSpec
 	s.Metadata.Generation, s.Status.ObservedGeneration = 2, 2
 	s.Status.UpdatedReplicas, s.Status.ReadyReplicas = 1, 1
-	if !s.rolledOut() {
+	if !s.RolledOut() {
 		t.Error("an updated, ready S3 server is not rolled out")
 	}
 	s.Status.ObservedGeneration = 1
-	if s.rolledOut() {
+	if s.RolledOut() {
 		t.Error("an unobserved template is rolled out")
 	}
 }

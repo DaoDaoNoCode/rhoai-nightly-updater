@@ -82,3 +82,8 @@ func SnippetURL(s string) bool {
 	u, err := url.Parse(s)
 	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil
 }
+
+// UnsafeAddressWarning says why an address is not shown.
+func UnsafeAddressWarning(what string) string {
+	return "The " + what + " the cluster reports is not a plain https address, so this tool does not show it or put it in commands."
+}

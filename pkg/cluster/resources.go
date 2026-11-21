@@ -10,7 +10,9 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -24,12 +26,12 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		wg          sync.WaitGroup
 		projects    []string
 		projectsErr error
-		dspas       []dspaInfo
+		dspas       []storage.DSPA
 		dspasErr    error
 		dashURL     string
-		s3EP        s3Endpoints
+		s3EP        storage.S3Endpoints
 		s3EPErr     error
-		legacy      *legacyStorage
+		legacy      *storage.Legacy
 		legacyErr   error
 		foreignNS   bool
 		dsc         rhoai.DSCRead
@@ -41,9 +43,9 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	wg.Add(8)
 	go func() { defer wg.Done(); models, modelsErr = listLLMInferenceServices(c) }()
 	go func() { defer wg.Done(); projects, projectsErr = envkit.DSProjects(c) }()
-	go func() { defer wg.Done(); dspas, dspasErr = listDSPAs(c, "") }()
-	go func() { defer wg.Done(); status.MinIO, s3EP, s3EPErr = s3StatusAndEndpoints(c) }()
-	go func() { defer wg.Done(); legacy, foreignNS, legacyErr = readLegacyStorageOwner(c) }()
+	go func() { defer wg.Done(); dspas, dspasErr = storage.ListDSPAs(c, "") }()
+	go func() { defer wg.Done(); status.MinIO, s3EP, s3EPErr = storage.S3StatusAndEndpoints(c) }()
+	go func() { defer wg.Done(); legacy, foreignNS, legacyErr = storage.ReadLegacyOwner(c) }()
 	go func() { defer wg.Done(); status.MLflow = getMLflowStatus(c) }()
 	go func() { defer wg.Done(); dashURL = dashdev.DashboardURL(c) }()
 	go func() { defer wg.Done(); dsc, dscErr = rhoai.ReadFirstDSC(c) }()
@@ -51,7 +53,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	if projectsErr != nil {
 		return nil, projectsErr
 	}
-	if dspasErr != nil && !errors.Is(dspasErr, errDSPACRDMissing) {
+	if dspasErr != nil && !errors.Is(dspasErr, storage.ErrDSPACRDMissing) {
 		return nil, dspasErr
 	}
 
@@ -65,7 +67,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		status.PipelinesBlocked = envkit.ComponentBlock(dsc, envkit.PipelinesComponent)
 		status.MLflowBlocked = envkit.ComponentBlock(dsc, envkit.MLflowComponent)
 	}
-	if status.PipelinesBlocked == nil && errors.Is(dspasErr, errDSPACRDMissing) {
+	if status.PipelinesBlocked == nil && errors.Is(dspasErr, storage.ErrDSPACRDMissing) {
 		status.PipelinesBlocked = &types.ComponentBlock{Component: envkit.PipelinesComponent.Keys[0],
 			Reason: "Data Science Pipelines is not installed yet: this cluster has no DataSciencePipelinesApplication API. If the component was just turned on, wait for the operator; otherwise check the Components page."}
 	}
@@ -84,27 +86,27 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 
 	// A record that cannot be read leaves every pipeline server unrecorded
 	// (fail closed: Migrate storage then asks before moving one).
-	pipelineRec, recErr := readPipelineRecord(c)
+	pipelineRec, recErr := storage.ReadPipelineRecord(c)
 	if recErr != nil {
 		slog.Debug("cannot read the pipeline server record", "error", recErr)
-		pipelineRec = pipelineRecord{}
+		pipelineRec = storage.PipelineRecord{}
 	}
 	unmanaged := map[string]bool{}
 	for _, d := range dspas {
 		if !visible[d.Meta.Namespace] {
 			continue
 		}
-		if !d.managedByTool() {
+		if !d.ManagedByTool() {
 			unmanaged[d.Meta.Namespace] = true
-			foreign := pipelineServerState(d, dashURL)
+			foreign := storage.PipelineServerState(d, dashURL)
 			foreign.ManagedByTool = false
 			foreign.DataPVCs = nil
 			foreign.TeardownBlockedReason = "This pipeline server was not created by this tool, so the tool will not delete it."
 			status.UnmanagedPipelineServers = append(status.UnmanagedPipelineServers, foreign)
 			continue
 		}
-		ps := pipelineServerState(d, dashURL)
-		ps.Unrecorded = !pipelineRec.owns(d.Meta)
+		ps := storage.PipelineServerState(d, dashURL)
+		ps.Unrecorded = !pipelineRec.Owns(d.Meta)
 		status.PipelineServers = append(status.PipelineServers, ps)
 	}
 	for ns := range unmanaged {
@@ -127,12 +129,12 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	// and teardown removes it with the current storage.
 	switch {
 	case legacyErr != nil:
-		status.MinIO.Warning = strings.TrimSpace(fmt.Sprintf("Cannot check namespace %s for storage from an earlier version: %v. %s", legacyNamespace, legacyErr, status.MinIO.Warning))
+		status.MinIO.Warning = strings.TrimSpace(fmt.Sprintf("Cannot check namespace %s for storage from an earlier version: %v. %s", storage.LegacyNamespace, legacyErr, status.MinIO.Warning))
 	case legacy != nil:
 		newReady := status.MinIO.Ready && status.MinIO.ManagedByTool && status.MinIO.RepairNeeded == ""
 		// Unreadable counts as not copied: the stage stays "migrate".
-		copied, _ := migrationCopied(c)
-		status.LegacyStorage = legacyStorageState(legacy, dspas, pipelineRec, newReady, copied)
+		copied, _ := storage.MigrationCopied(c)
+		status.LegacyStorage = storage.LegacyState(legacy, dspas, pipelineRec, newReady, copied)
 		status.MinIO.MigrationPending = true
 	}
 
@@ -140,25 +142,66 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	// deletes it under the same guard.
 	current := status.MinIO.ManagedByTool && (status.MinIO.Deployed || len(status.MinIO.DataPVCs) > 0)
 	if current || legacy != nil {
-		var addresses []storageAddress
+		var addresses []storage.Address
 		var addrErr error
 		if current {
-			addresses, addrErr = append(addresses, s3EP.address), s3EPErr
+			addresses, addrErr = append(addresses, s3EP.Address), s3EPErr
 		}
 		if legacy != nil {
-			addresses = append(addresses, legacy.address)
+			addresses = append(addresses, legacy.Address)
 			if addrErr == nil {
-				addrErr = legacy.addressErr
+				addrErr = legacy.AddressErr
 			}
 		}
 		if addrErr != nil && len(dspas) > 0 {
 			status.MinIO.TeardownBlockedReason = "Cannot verify which pipeline servers use the S3 storage: " + addrErr.Error()
-		} else if reason := s3TeardownBlocker(dspas, addresses...); reason != "" {
+		} else if reason := storage.S3TeardownBlocker(dspas, addresses...); reason != "" {
 			status.MinIO.TeardownBlockedReason = reason
 		}
 		if addrErr == nil {
-			live, deleting := storageUsers(dspas, addresses...)
+			live, deleting := storage.Users(dspas, addresses...)
 			status.MinIO.UsedBy = append(live, deleting...)
+		}
+	}
+	return status, nil
+}
+
+// What the selected project's Connection Secret says (ResourceState.
+// ConnectionState).
+const (
+	ConnectionPresent    = "present"
+	ConnectionMissing    = "missing"
+	ConnectionForeign    = "foreign"
+	ConnectionUnreadable = "unreadable"
+)
+
+// GetResourcesStatusFor is GetResourcesStatus plus, for the tool's pipeline
+// server in project (the Pipelines tab's selected project), the state of
+// its dashboard Connection read from the Secret itself: the DSPA's
+// annotation only says the tool created one, which the dashboard may since
+// have deleted. One named GET, only when the project has the tool's
+// server (so only in a visible Data Science project); other projects, and
+// an empty project, read no Secret.
+func GetResourcesStatusFor(c *Client, project string) (*types.ResourcesStatus, error) {
+	status, err := GetResourcesStatus(c)
+	if err != nil || project == "" {
+		return status, err
+	}
+	for i := range status.PipelineServers {
+		ps := &status.PipelineServers[i]
+		if ps.Namespace != project || ps.Terminating {
+			continue
+		}
+		meta, found, err := kube.ReadObjectMeta(c, rhoai.NamespacedPath("v1", "secrets", project, storage.ConnectionSecretName))
+		switch {
+		case err != nil:
+			ps.ConnectionState, ps.ConnectionMessage = ConnectionUnreadable, err.Error()
+		case !found:
+			ps.ConnectionState = ConnectionMissing
+		case !meta.HasToolLabel():
+			ps.ConnectionState = ConnectionForeign
+		default:
+			ps.ConnectionState = ConnectionPresent
 		}
 	}
 	return status, nil

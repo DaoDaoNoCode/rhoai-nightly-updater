@@ -11,6 +11,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -30,15 +31,10 @@ const (
 // clears the environment overrides.
 func fastS3Timings(t *testing.T) *int {
 	t.Helper()
-	oldReady, oldPoll, oldDel, oldDelPoll, oldBucket, oldRetry := S3ReadyTimeout, S3ReadyPoll, S3DeleteTimeout, S3DeletePoll, s3BucketCreator, s3BucketRetryDelay
-	s3BucketRetryDelay = time.Millisecond
-	S3ReadyTimeout, S3ReadyPoll = 300*time.Millisecond, 10*time.Millisecond
-	S3DeleteTimeout, S3DeletePoll = 100*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(storage.SetBucketRetryDelayForTest(time.Millisecond))
+	t.Cleanup(storage.SetS3TimingsForTest(300*time.Millisecond, 10*time.Millisecond, 100*time.Millisecond, 10*time.Millisecond))
 	calls := 0
-	s3BucketCreator = func(*Client, string) error { calls++; return nil }
-	t.Cleanup(func() {
-		S3ReadyTimeout, S3ReadyPoll, S3DeleteTimeout, S3DeletePoll, s3BucketCreator, s3BucketRetryDelay = oldReady, oldPoll, oldDel, oldDelPoll, oldBucket, oldRetry
-	})
+	t.Cleanup(storage.SetBucketCreatorForTest(func(*Client, string) error { calls++; return nil }))
 	for _, env := range []string{"SEAWEEDFS_IMAGE", "SEAWEEDFS_ACCESS_KEY_ID", "SEAWEEDFS_SECRET_ACCESS_KEY", "MINIO_IMAGE", "MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"} {
 		t.Setenv(env, "")
 	}
@@ -71,7 +67,7 @@ func putS3Namespace(f *resourceFake, labels string) {
 // putS3Deployment puts the tool's SeaweedFS Deployment.
 func putS3Deployment(f *resourceFake, ready int) {
 	f.putJSON(s3DeployPath, `{"metadata":{"labels":`+toolLabelJSON+`,"generation":1},
-		"spec":{"template":{"spec":{"containers":[{"name":"seaweedfs","image":"`+seaweedfsDefaultImage+`"}]}}},
+		"spec":{"template":{"spec":{"containers":[{"name":"seaweedfs","image":"`+storage.SeaweedFSDefaultImage+`"}]}}},
 		"status":{"observedGeneration":1,"replicas":1,"readyReplicas":`+itoa(ready)+`,"updatedReplicas":1}}`)
 }
 
@@ -95,7 +91,7 @@ func putReadyManagedS3(f *resourceFake) {
 // the current generation, like the deployment controller would.
 func readyAfterApply(f *resourceFake) {
 	f.onGet = func(k fakeKey, obj map[string]any) {
-		if k.plural == "deployments" && k.ns == s3Namespace && k.name == s3Deployment {
+		if k.plural == "deployments" && k.ns == storage.S3Namespace && k.name == storage.S3Deployment {
 			obj["status"] = map[string]any{"observedGeneration": 1, "replicas": 1, "readyReplicas": 1, "updatedReplicas": 1}
 		}
 	}
@@ -103,7 +99,7 @@ func readyAfterApply(f *resourceFake) {
 
 func notReadyAfterApply(f *resourceFake) {
 	f.onGet = func(k fakeKey, obj map[string]any) {
-		if k.plural == "deployments" && k.ns == s3Namespace && k.name == s3Deployment {
+		if k.plural == "deployments" && k.ns == storage.S3Namespace && k.name == storage.S3Deployment {
 			obj["status"] = map[string]any{"observedGeneration": 1, "replicas": 1, "readyReplicas": 0, "updatedReplicas": 1}
 		}
 	}
@@ -186,7 +182,7 @@ func TestSetupS3Storage_FreshClusterUsesTheNewNamesLabelsEverythingAndWaitsForRe
 	}
 	_ = json.Unmarshal(raw, &deploy)
 	ctr := deploy.Spec.Template.Spec.Containers[0]
-	if ctr.Image != seaweedfsDefaultImage || !strings.HasPrefix(ctr.Image, "ghcr.io/chrislusf/seaweedfs@sha256:") {
+	if ctr.Image != storage.SeaweedFSDefaultImage || !strings.HasPrefix(ctr.Image, "ghcr.io/chrislusf/seaweedfs@sha256:") {
 		t.Errorf("image = %q, want the digest-pinned SeaweedFS", ctr.Image)
 	}
 	if deploy.Spec.Template.Spec.Volumes[0].PVC.ClaimName != "seaweedfs-data" {
@@ -208,7 +204,7 @@ func TestSetupS3Storage_FreshClusterUsesTheNewNamesLabelsEverythingAndWaitsForRe
 			t.Errorf("env %s = %s, want Secret seaweedfs-s3-credentials key %s", name, envs[name], key)
 		}
 	}
-	if envs["WEED_ADMIN_USER"] != s3AdminUser || len(envs) != 4 {
+	if envs["WEED_ADMIN_USER"] != storage.S3AdminUser || len(envs) != 4 {
 		t.Errorf("env = %v", envs)
 	}
 	svc, _ := json.Marshal(f.get(s3SvcPath)["spec"])
@@ -409,16 +405,16 @@ func TestSetupS3Storage_ObjectReplacedBetweenCheckAndUpdate(t *testing.T) {
 
 func TestSetupS3Storage_StopsEarlyOnImagePullBackOff(t *testing.T) {
 	fastS3Timings(t)
-	S3ReadyTimeout = 5 * time.Second
+	storage.SetS3ReadyTimeoutForTest(5 * time.Second)
 	f, c := newResourceFake(t)
 	notReadyAfterApply(f)
-	putS3Pod(f, "seaweedfs-1", seaweedfsDefaultImage, "ImagePullBackOff", "Back-off pulling image")
+	putS3Pod(f, "seaweedfs-1", storage.SeaweedFSDefaultImage, "ImagePullBackOff", "Back-off pulling image")
 	start := kube.Clock().Now()
 	resp, _ := SetupS3Storage(c)
 	if resp.Success || resp.ErrorCode != "not_ready" || !strings.Contains(resp.Message, "ImagePullBackOff") {
 		t.Fatalf("setup = %+v", resp)
 	}
-	if kube.Clock().Since(start) >= S3ReadyTimeout {
+	if kube.Clock().Since(start) >= storage.S3ReadyTimeout {
 		t.Error("setup must stop at a terminal pod reason, not wait for the timeout")
 	}
 }
@@ -451,7 +447,7 @@ func TestSetupS3Storage_BucketFailureSaysReRunSetup(t *testing.T) {
 	fastS3Timings(t)
 	f, c := newResourceFake(t)
 	readyAfterApply(f)
-	s3BucketCreator = func(*Client, string) error { return errors.New("connection refused") }
+	storage.SetBucketCreatorForTest(func(*Client, string) error { return errors.New("connection refused") })
 	resp, _ := SetupS3Storage(c)
 	if resp.Success || !strings.Contains(resp.Message, "Re-run setup to retry, or create bucket pipelines from the admin UI") || strings.Contains(resp.Message, "Migrate") {
 		t.Fatalf("setup = %+v", resp)
@@ -504,8 +500,8 @@ func TestS3Credentials(t *testing.T) {
 		fastS3Timings(t)
 		_, c1 := newResourceFake(t)
 		_, c2 := newResourceFake(t)
-		k1, err1 := s3Credentials(c1)
-		k2, err2 := s3Credentials(c2)
+		k1, err1 := storage.S3Credentials(c1)
+		k2, err2 := storage.S3Credentials(c2)
 		if err1 != nil || err2 != nil || k1 == k2 {
 			t.Fatalf("keys %v %v (%v %v)", k1, k2, err1, err2)
 		}
@@ -519,7 +515,7 @@ func TestS3Credentials(t *testing.T) {
 		t.Setenv("SEAWEEDFS_ACCESS_KEY_ID", "env-key")
 		f, c := newResourceFake(t)
 		putReadyManagedS3(f)
-		k, err := s3Credentials(c)
+		k, err := storage.S3Credentials(c)
 		if err != nil || k.AccessKey != "seaweedfs-key" || k.SecretKey != "pass" || k.AdminPassword != "admin-pass" {
 			t.Fatalf("keys = %+v (%v)", k, err)
 		}
@@ -529,7 +525,7 @@ func TestS3Credentials(t *testing.T) {
 		f, c := newResourceFake(t)
 		putReadyManagedS3(f)
 		f.putJSON(s3SecretPath, `{"metadata":{"labels":`+toolLabelJSON+`},"data":{"AWS_ACCESS_KEY_ID":"`+exampleAuth("seaweedfs-key")+`","AWS_SECRET_ACCESS_KEY":"`+exampleAuth("pass")+`"}}`)
-		k, err := s3Credentials(c)
+		k, err := storage.S3Credentials(c)
 		if err != nil || k.AccessKey != "seaweedfs-key" || k.SecretKey != "pass" || len(k.AdminPassword) != 32 || k.AdminPassword == k.SecretKey {
 			t.Fatalf("keys = %+v (%v)", k, err)
 		}
@@ -539,7 +535,7 @@ func TestS3Credentials(t *testing.T) {
 		t.Setenv("SEAWEEDFS_ACCESS_KEY_ID", "env-key")
 		t.Setenv("SEAWEEDFS_SECRET_ACCESS_KEY", "env-secret")
 		_, c := newResourceFake(t)
-		k, err := s3Credentials(c)
+		k, err := storage.S3Credentials(c)
 		if err != nil || k.AccessKey != "env-key" || k.SecretKey != "env-secret" {
 			t.Fatalf("keys = %+v (%v)", k, err)
 		}
@@ -548,7 +544,7 @@ func TestS3Credentials(t *testing.T) {
 		fastS3Timings(t)
 		f, c := newResourceFake(t)
 		f.fail["GET "+s3SecretPath] = 500
-		if k, err := s3Credentials(c); err == nil {
+		if k, err := storage.S3Credentials(c); err == nil {
 			t.Fatalf("keys = %+v, want the read error", k)
 		}
 	})
@@ -573,7 +569,7 @@ func TestSetupS3Storage_ResponseDoesNotLeakTheSecretKey(t *testing.T) {
 func TestGetS3Status(t *testing.T) {
 	t.Run("not deployed", func(t *testing.T) {
 		_, c := newResourceFake(t)
-		if st := getS3Status(c); st.Deployed || st.Message != "Not deployed" || st.Namespace != "seaweedfs" {
+		if st := storage.S3Status(c); st.Deployed || st.Message != "Not deployed" || st.Namespace != "seaweedfs" {
 			t.Errorf("status = %+v", st)
 		}
 	})
@@ -581,7 +577,7 @@ func TestGetS3Status(t *testing.T) {
 		f, c := newResourceFake(t)
 		putReadyManagedS3(f)
 		f.putJSON(s3PVCPath, `{"metadata":{"labels":`+toolLabelJSON+`}}`)
-		st := getS3Status(c)
+		st := storage.S3Status(c)
 		if !st.Ready || !st.ManagedByTool || st.UIRoute != "https://seaweedfs-admin-seaweedfs.apps.example.com" || st.UIUser != "admin" || st.RepairNeeded != "" || st.MigrationPending {
 			t.Errorf("status = %+v", st)
 		}
@@ -592,14 +588,14 @@ func TestGetS3Status(t *testing.T) {
 	t.Run("terminating namespace", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		f.putJSON(s3NSPath, `{"metadata":{"labels":`+toolLabelJSON+`,"deletionTimestamp":"2026-10-01T00:00:00Z"},"status":{"phase":"Terminating"}}`)
-		if st := getS3Status(c); !st.Terminating || st.SetupBlockedReason == "" {
+		if st := storage.S3Status(c); !st.Terminating || st.SetupBlockedReason == "" {
 			t.Errorf("status = %+v", st)
 		}
 	})
 	t.Run("namespace not created by the tool", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		putS3Namespace(f, `{}`)
-		if st := getS3Status(c); st.ManagedByTool || st.SetupBlockedReason == "" || st.TeardownBlockedReason == "" {
+		if st := storage.S3Status(c); st.ManagedByTool || st.SetupBlockedReason == "" || st.TeardownBlockedReason == "" {
 			t.Errorf("status = %+v", st)
 		}
 	})
@@ -607,8 +603,8 @@ func TestGetS3Status(t *testing.T) {
 		f, c := newResourceFake(t)
 		putReadyManagedS3(f)
 		putS3Deployment(f, 0)
-		putS3Pod(f, "seaweedfs-1", seaweedfsDefaultImage, "CrashLoopBackOff", "boom")
-		st := getS3Status(c)
+		putS3Pod(f, "seaweedfs-1", storage.SeaweedFSDefaultImage, "CrashLoopBackOff", "boom")
+		st := storage.S3Status(c)
 		if st.Ready || st.WaitingReason != "CrashLoopBackOff" || !st.TerminalError {
 			t.Errorf("status = %+v", st)
 		}
@@ -616,8 +612,8 @@ func TestGetS3Status(t *testing.T) {
 	t.Run("scaled to zero", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		putReadyManagedS3(f)
-		f.putJSON(s3DeployPath, `{"metadata":{"labels":`+toolLabelJSON+`,"generation":1},"spec":{"replicas":0,"template":{"spec":{"containers":[{"name":"seaweedfs","image":"`+seaweedfsDefaultImage+`"}]}}},"status":{"observedGeneration":1}}`)
-		st := getS3Status(c)
+		f.putJSON(s3DeployPath, `{"metadata":{"labels":`+toolLabelJSON+`,"generation":1},"spec":{"replicas":0,"template":{"spec":{"containers":[{"name":"seaweedfs","image":"`+storage.SeaweedFSDefaultImage+`"}]}}},"status":{"observedGeneration":1}}`)
+		st := storage.S3Status(c)
 		if st.Ready || !st.TerminalError || !strings.Contains(st.RepairNeeded, "scaled to 0") {
 			t.Errorf("status = %+v", st)
 		}
@@ -626,7 +622,7 @@ func TestGetS3Status(t *testing.T) {
 		f, c := newResourceFake(t)
 		putReadyManagedS3(f)
 		t.Setenv("SEAWEEDFS_IMAGE", "mirror.example.com/seaweedfs:4.54")
-		st := getS3Status(c)
+		st := storage.S3Status(c)
 		if !st.Ready || !strings.Contains(st.RepairNeeded, "not the image this version deploys") {
 			t.Errorf("status = %+v", st)
 		}
@@ -660,7 +656,7 @@ func TestGetS3Status(t *testing.T) {
 			default:
 				f.putJSON(s3RoutePath, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":`+tc.route+`}`)
 			}
-			st := getS3Status(c)
+			st := storage.S3Status(c)
 			if st.Ready || !st.TerminalError || !strings.Contains(st.RepairNeeded, tc.want) {
 				t.Errorf("status = %+v, want repair reason with %q", st, tc.want)
 			}
@@ -669,7 +665,7 @@ func TestGetS3Status(t *testing.T) {
 }
 
 func TestStorageAddressAliases(t *testing.T) {
-	a := storageAddress{service: "seaweedfs-s3", namespace: "seaweedfs", clusterIP: "172.30.20.30", routeHosts: []string{"seaweedfs-admin-seaweedfs.apps.example.com", ""}}
+	a := storage.Address{Service: "seaweedfs-s3", Namespace: "seaweedfs", ClusterIP: "172.30.20.30", RouteHosts: []string{"seaweedfs-admin-seaweedfs.apps.example.com", ""}}
 	cases := []struct {
 		ns, host string
 		want     bool
@@ -694,22 +690,22 @@ func TestStorageAddressAliases(t *testing.T) {
 		{"team", "", false},
 	}
 	for _, tc := range cases {
-		if got := a.usedBy(tc.ns, tc.host); got != tc.want {
+		if got := a.UsedBy(tc.ns, tc.host); got != tc.want {
 			t.Errorf("usedBy(%q, %q) = %v, want %v", tc.ns, tc.host, got, tc.want)
 		}
 	}
-	legacy := storageAddress{service: "minio-service", namespace: "minio", routeHosts: []string{"minio-api-minio.apps.example.com"}}
-	dspas := []dspaInfo{
+	legacy := storage.Address{Service: "minio-service", Namespace: "minio", RouteHosts: []string{"minio-api-minio.apps.example.com"}}
+	dspas := []storage.DSPA{
 		{Meta: kube.ObjectMeta{Namespace: "a", Name: "x"}, Host: "http://seaweedfs-s3.seaweedfs.svc.cluster.local:8333"},
 		{Meta: kube.ObjectMeta{Namespace: "b", Name: "y"}, Host: "minio-api-minio.apps.example.com"},
 		{Meta: kube.ObjectMeta{Namespace: "c", Name: "z"}, Host: "s3.amazonaws.com"},
 		{Meta: kube.ObjectMeta{Namespace: "d", Name: "w", DeletionTimestamp: "2026-10-01T00:00:00Z"}, Host: "minio-service.minio.svc:9000"},
 	}
-	got := s3TeardownBlocker(dspas, a, legacy)
+	got := storage.S3TeardownBlocker(dspas, a, legacy)
 	if !strings.Contains(got, "2 pipeline servers use this S3 storage: a/x, b/y.") || strings.Contains(got, "c/z") || !strings.Contains(got, "still being deleted: d/w") {
 		t.Errorf("blocker = %q", got)
 	}
-	if got := s3TeardownBlocker(dspas, a); strings.Contains(got, "b/y") || strings.Contains(got, "d/w") {
+	if got := storage.S3TeardownBlocker(dspas, a); strings.Contains(got, "b/y") || strings.Contains(got, "d/w") {
 		t.Errorf("blocker without the earlier storage = %q", got)
 	}
 }
@@ -772,7 +768,7 @@ func TestTeardownS3Storage_DeleteNamespace(t *testing.T) {
 		putDeployedS3(f)
 		putToolNamespace(f)
 		f.onGet = func(k fakeKey, obj map[string]any) {
-			if k.plural == "namespaces" && k.name == s3Namespace {
+			if k.plural == "namespaces" && k.name == storage.S3Namespace {
 				obj["metadata"].(map[string]any)["uid"] = "uid-seen-by-check"
 			}
 		}
@@ -822,12 +818,12 @@ func TestGetS3Status_NamespaceDeletion(t *testing.T) {
 	putToolNamespace(f)
 	f.putJSON("/apis/apps/v1/namespaces/seaweedfs/deployments/notes-app", `{"metadata":{}}`)
 	f.putJSON("/api/v1/namespaces/seaweedfs/persistentvolumeclaims/scratch", `{"metadata":{}}`)
-	st := getS3Status(c)
+	st := storage.S3Status(c)
 	if !st.NamespaceDeletable || st.NamespaceKeptReason != "" || strings.Join(st.OtherObjects, ", ") != "Deployment notes-app, PersistentVolumeClaim scratch" {
 		t.Fatalf("status = %+v", st)
 	}
 	putS3Namespace(f, toolLabelJSON)
-	if st := getS3Status(c); st.NamespaceDeletable || !strings.Contains(st.NamespaceKeptReason, "no write by this tool") {
+	if st := storage.S3Status(c); st.NamespaceDeletable || !strings.Contains(st.NamespaceKeptReason, "no write by this tool") {
 		t.Fatalf("status = %+v", st)
 	}
 }
@@ -851,7 +847,7 @@ func TestTeardownS3Storage_DeleteUsesUIDPrecondition(t *testing.T) {
 	// The ownership check sees a different object than the one the DELETE
 	// reaches, as if the Deployment had been recreated in between.
 	f.onGet = func(k fakeKey, obj map[string]any) {
-		if k.plural == "deployments" && k.name == s3Deployment {
+		if k.plural == "deployments" && k.name == storage.S3Deployment {
 			obj["metadata"].(map[string]any)["uid"] = "uid-seen-by-check"
 		}
 	}
@@ -923,11 +919,11 @@ func TestTeardownS3Storage_NothingDeployed(t *testing.T) {
 
 func TestWaitS3Ready_StalledAPIDoesNotOverrunDeadline(t *testing.T) {
 	fastS3Timings(t)
-	S3ReadyTimeout = 200 * time.Millisecond
+	storage.SetS3ReadyTimeoutForTest(200 * time.Millisecond)
 	c := stallServer(t, 0)
 	start := kube.Clock().Now()
-	_, err := waitS3Ready(c, seaweedfsDefaultImage)
-	if !errors.Is(err, errS3NotReady) {
+	_, err := storage.WaitS3Ready(c, storage.SeaweedFSDefaultImage)
+	if !errors.Is(err, storage.ErrS3NotReady) {
 		t.Fatalf("err = %v, want errS3NotReady", err)
 	}
 	if d := kube.Clock().Since(start); d != 200*time.Millisecond {
@@ -938,10 +934,10 @@ func TestWaitS3Ready_StalledAPIDoesNotOverrunDeadline(t *testing.T) {
 // The admin UI reads its own password from the storage's Secret, never the
 // S3 secret key; the pipeline projects' copies carry only the S3 keys.
 func TestS3AdminPasswordIsItsOwn(t *testing.T) {
-	keys := s3Keys{AccessKey: "ak", SecretKey: "sk", AdminPassword: "ap"}
-	for _, r := range s3Resources(keys) {
-		b, _ := json.Marshal(r.obj)
-		switch r.kind {
+	keys := storage.S3Keys{AccessKey: "ak", SecretKey: "sk", AdminPassword: "ap"}
+	for _, r := range storage.S3Resources(keys) {
+		b, _ := json.Marshal(r.Obj)
+		switch r.Kind {
 		case "Secret":
 			if !strings.Contains(string(b), `"WEED_ADMIN_PASSWORD":"ap"`) {
 				t.Errorf("the Secret does not hold the admin password: %s", b)
@@ -952,9 +948,9 @@ func TestS3AdminPasswordIsItsOwn(t *testing.T) {
 			}
 		}
 	}
-	var old s3DeploymentSpec
+	var old storage.S3DeploymentSpec
 	_ = json.Unmarshal([]byte(`{"spec":{"template":{"spec":{"containers":[{"name":"seaweedfs","env":[{"name":"WEED_ADMIN_PASSWORD","valueFrom":{"secretKeyRef":{"name":"seaweedfs-s3-credentials","key":"AWS_SECRET_ACCESS_KEY"}}}]}]}}}}`), &old)
-	if !old.adminPasswordIsS3Key() {
+	if !old.AdminPasswordIsS3Key() {
 		t.Error("a Deployment whose admin password is the S3 secret key is not noticed")
 	}
 }
@@ -982,20 +978,20 @@ func TestTeardownS3Storage_DeletesTheCopyJob(t *testing.T) {
 // a server whose data volume is being deleted is not offered as "start it
 // again" (it cannot start).
 func TestSourceGone_UncopiableAndTerminatingPVCs(t *testing.T) {
-	pvc := func(name string, terminating bool) storagePVC {
-		p := storagePVC{Meta: kube.ObjectMeta{Name: name}}
+	pvc := func(name string, terminating bool) storage.PVC {
+		p := storage.PVC{Meta: kube.ObjectMeta{Name: name}}
 		if terminating {
 			now := "2026-11-17T12:00:00Z"
 			p.Meta.DeletionTimestamp = now
 		}
 		return p
 	}
-	l := &legacyStorage{server: "SeaweedFS", pvcs: []storagePVC{pvc(legacyMinIOPVC, false), pvc("seaweedfs-pvc", true)}}
-	if got := l.copiablePVCsNotDeleting(); len(got) != 0 {
+	l := &storage.Legacy{Server: "SeaweedFS", PVCs: []storage.PVC{pvc(storage.LegacyMinIOPVC, false), pvc("seaweedfs-pvc", true)}}
+	if got := l.CopiablePVCsNotDeleting(); len(got) != 0 {
 		t.Errorf("pending = %v, want none (minio-pvc cannot be copied)", got)
 	}
-	l = &legacyStorage{server: "SeaweedFS", pvcs: []storagePVC{pvc("seaweedfs-pvc", true), pvc("other-data", false)}}
-	msg := sourceGoneMessage(l, "SeaweedFS there is not running", l.copiablePVCsNotDeleting())
+	l = &storage.Legacy{Server: "SeaweedFS", PVCs: []storage.PVC{pvc("seaweedfs-pvc", true), pvc("other-data", false)}}
+	msg := storage.SourceGoneMessage(l, "SeaweedFS there is not running", l.CopiablePVCsNotDeleting())
 	if strings.Contains(msg, "Start the server again") || !strings.Contains(msg, "oc delete pvc other-data -n minio") {
 		t.Errorf("message = %s", msg)
 	}

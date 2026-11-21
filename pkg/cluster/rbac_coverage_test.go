@@ -413,6 +413,60 @@ func (p *sourcePkg) callSitesOf(id symID) []callSite {
 	return p.callers[id]
 }
 
+// paramCallSitesOf is callSitesOf for resolving a parameter of id. A call
+// from a facade wrapper in pkg/cluster that only forwards its own
+// parameters (func W(c *Client, p string) { return pkg.F(c, p) }) stands
+// for the calls of W, so it is replaced by W's call sites: none when only
+// pkg/api calls W, which the scan never reads. Before the split those
+// places called F directly; counting the wrapper's call as one more caller
+// would derive every path built from the parameter once more (step 13b:
+// TeardownPipelineServer, called by replacePipelineServer and, through the
+// facade, by pkg/api).
+func (p *sourcePkg) paramCallSitesOf(id symID) []callSite {
+	if id.pkg == clusterPkg {
+		return p.callSitesOf(id)
+	}
+	var out []callSite
+	for _, cs := range p.callSitesOf(id) {
+		if p.forwards(cs.caller, cs.call) {
+			out = append(out, p.callSitesOf(symID{clusterPkg, cs.caller.Name.Name})...)
+			continue
+		}
+		out = append(out, cs)
+	}
+	return out
+}
+
+// forwards reports whether fn is a function of pkg/cluster whose whole body
+// is `return call`, call passing fn's parameters unchanged and in order.
+func (p *sourcePkg) forwards(fn *ast.FuncDecl, call *ast.CallExpr) bool {
+	if fn.Recv != nil || p.pkgOfFunc(fn) != clusterPkg || len(fn.Body.List) != 1 || call.Ellipsis.IsValid() {
+		return false
+	}
+	ret, ok := fn.Body.List[0].(*ast.ReturnStmt)
+	if !ok || len(ret.Results) != 1 || ret.Results[0] != call {
+		return false
+	}
+	var params []string
+	for _, f := range fn.Type.Params.List {
+		if len(f.Names) == 0 {
+			return false
+		}
+		for _, n := range f.Names {
+			params = append(params, n.Name)
+		}
+	}
+	if len(call.Args) != len(params) {
+		return false
+	}
+	for i, a := range call.Args {
+		if id, ok := a.(*ast.Ident); !ok || id.Name != params[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // frozen returns s with its capacity cut to its length, so a caller that
 // appends to a memoized result gets a copy instead of writing into it.
 func frozen(s []string) []string { return s[:len(s):len(s)] }
@@ -884,7 +938,7 @@ func (r resolver) resolveIdentUncached(id *ast.Ident) []string {
 	}
 	// A function parameter: resolve the argument at every call site.
 	if idx := paramIndex(r.fn, id.Name); idx >= 0 && r.fn.Recv == nil {
-		for _, cs := range r.p.callSitesOf(symID{r.p.pkgOfFunc(r.fn), r.fn.Name.Name}) {
+		for _, cs := range r.p.paramCallSitesOf(symID{r.p.pkgOfFunc(r.fn), r.fn.Name.Name}) {
 			if idx < len(cs.call.Args) {
 				out = append(out, resolver{r.p, cs.caller, r.depth + 1}.resolve(cs.call.Args[idx])...)
 			}

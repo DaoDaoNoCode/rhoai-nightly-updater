@@ -7,6 +7,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 const seaweedfs448 = "ghcr.io/chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d"
@@ -25,7 +26,7 @@ func putOlderToolObjects(t *testing.T, f *resourceFake) {
 		raw, _ := json.Marshal(f.get(path))
 		old := strings.ReplaceAll(string(raw), "12535", "23646")
 		old = strings.ReplaceAll(old, `,"-admin.port=23646","-admin.port.legacy=0"`, "")
-		old = strings.ReplaceAll(old, seaweedfsDefaultImage, seaweedfs448)
+		old = strings.ReplaceAll(old, storage.SeaweedFSDefaultImage, seaweedfs448)
 		var obj map[string]any
 		_ = json.Unmarshal([]byte(old), &obj)
 		meta := ensureMap(obj, "metadata")
@@ -238,13 +239,13 @@ func TestSetupPipelineServer_DryRunFailureChangesNothing(t *testing.T) {
 	putManagedDSC(f)
 	putReadyManagedS3(f)
 	f.putJSON("/api/v1/namespaces/team-a", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
-	f.failDryRun["POST /apis/"+dspaAPIGroup+"/namespaces/team-a/datasciencepipelinesapplications"] = 422
+	f.failDryRun["POST /apis/"+storage.DSPAAPIGroup+"/namespaces/team-a/datasciencepipelinesapplications"] = 422
 
 	resp, _ := SetupPipelineServer(c, "team-a")
 	if resp.Success || !strings.Contains(resp.Message, "Nothing was changed") {
 		t.Fatalf("setup = %s (%s)", resp.Message, resp.ErrorCode)
 	}
-	if f.has(secretPath("team-a", dspaSecretName)) || f.has(dspaPath("team-a", dspaName)) {
+	if f.has(secretPath("team-a", storage.DSPASecretName)) || f.has(dspaPath("team-a", storage.DSPAName)) {
 		t.Error("a write was made although a dry run failed")
 	}
 	for _, m := range f.mutations() {

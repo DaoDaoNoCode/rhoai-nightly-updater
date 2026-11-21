@@ -356,7 +356,7 @@ func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) type
 		if kube.SnippetURL(m.Status.URL) {
 			s.URL = m.Status.URL
 		} else {
-			s.Warning = unsafeAddressWarning("model address")
+			s.Warning = kube.UnsafeAddressWarning("model address")
 		}
 	}
 	s.MaaSPublished = modelHasMaaSRef(m)

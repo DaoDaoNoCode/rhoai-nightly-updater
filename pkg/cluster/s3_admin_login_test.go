@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 // The admin UI has its own password, not the S3 secret key that every
@@ -104,7 +105,7 @@ func TestResourcesStatusDoesNotCarryTheAdminPassword(t *testing.T) {
 		t.Fatalf("status carries the password: %s", b)
 	}
 	for _, r := range f.requests {
-		if strings.Contains(r, "/secrets/"+s3Secret) {
+		if strings.Contains(r, "/secrets/"+storage.S3Secret) {
 			t.Errorf("status read the storage's Secret: %s", r)
 		}
 	}

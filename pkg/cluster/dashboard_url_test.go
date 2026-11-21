@@ -5,6 +5,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 const (
@@ -81,7 +82,7 @@ func TestGetResourcesStatus_PipelineLinkUsesTheDashboardAddress(t *testing.T) {
 			f.putJSON(dsciV2List+"/default-dsci", `{"metadata":{"name":"default-dsci"},"spec":{"applicationsNamespace":"redhat-ods-applications"}}`)
 			putReadyManagedS3(f)
 			putDSProject(f, "team-a")
-			putDSPA(f, "team-a", dspaName, toolLabelJSON, envkit.ToolFieldManager, "Apply", s3Host(), dspaSecretName, "", `{"conditions":[{"type":"Ready","status":"True"}]}`)
+			putDSPA(f, "team-a", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", `{"conditions":[{"type":"Ready","status":"True"}]}`)
 			tc.setup(f)
 			st, err := GetResourcesStatus(c)
 			if err != nil {

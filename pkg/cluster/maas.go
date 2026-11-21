@@ -19,6 +19,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -673,8 +674,8 @@ func maasNamespaceRefusal(c *Client, infra string) (string, string) {
 		if !found {
 			continue
 		}
-		if who := meta.Annotations[projectRequesterAnnotation]; who != "" {
-			return fmt.Sprintf("Namespace %s was made through a project request by %s (annotation %s), not by RHOAI, and MaaS takes over a namespace of that name that exists. Its admins could attach routes to the MaaS gateway and change MaaS's subscriptions and authorization policies there, so this tool does not set up or publish MaaS while it exists. A cluster-admin checks it and, if it is not RHOAI's, deletes it; RHOAI makes it again. Nothing was changed.", ns, who, projectRequesterAnnotation), "not_managed"
+		if who := meta.Annotations[storage.ProjectRequesterAnnotation]; who != "" {
+			return fmt.Sprintf("Namespace %s was made through a project request by %s (annotation %s), not by RHOAI, and MaaS takes over a namespace of that name that exists. Its admins could attach routes to the MaaS gateway and change MaaS's subscriptions and authorization policies there, so this tool does not set up or publish MaaS while it exists. A cluster-admin checks it and, if it is not RHOAI's, deletes it; RHOAI makes it again. Nothing was changed.", ns, who, storage.ProjectRequesterAnnotation), "not_managed"
 		}
 	}
 	return "", ""

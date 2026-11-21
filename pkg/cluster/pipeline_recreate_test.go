@@ -5,14 +5,15 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 // putOldToolServer stores a pipeline server this tool set up under its
 // earlier name, nightly-dspa, with its labelled S3 secret.
 func putOldToolServer(f *resourceFake, ns, extraMeta string) {
-	putDSPA(f, ns, previousDSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", s3Host(), dspaSecretName, extraMeta,
+	putDSPA(f, ns, storage.PreviousDSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, extraMeta,
 		`{"conditions":[{"type":"APIServerReady","status":"True"},{"type":"Ready","status":"True"}]}`)
-	f.putJSON(secretPath(ns, dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+	f.putJSON(secretPath(ns, storage.DSPASecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 }
 
 func requestIndex(f *resourceFake, req string) int {
@@ -34,7 +35,7 @@ func TestGetResourcesStatus_FlagsTheEarlierName(t *testing.T) {
 		putDSProject(f, ns)
 	}
 	putOldToolServer(f, "old", "")
-	putDSPA(f, "new", dspaName, toolLabelJSON, envkit.ToolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
+	putDSPA(f, "new", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", "")
 	st, err := GetResourcesStatus(c)
 	if err != nil || len(st.PipelineServers) != 2 {
 		t.Fatalf("st=%+v err=%v", st, err)
@@ -58,21 +59,21 @@ func TestRecreatePipelineServer_ReplacesTheEarlierName(t *testing.T) {
 	if !resp.Success {
 		t.Fatalf("recreate failed: %+v", resp)
 	}
-	if f.has(dspaPath("proj", previousDSPAName)) {
+	if f.has(dspaPath("proj", storage.PreviousDSPAName)) {
 		t.Error("nightly-dspa is still there")
 	}
-	if !f.has(dspaPath("proj", dspaName)) {
+	if !f.has(dspaPath("proj", storage.DSPAName)) {
 		t.Fatal("dspa was not created")
 	}
-	assertOwnedByDSPA(t, f, secretPath("proj", dspaSecretName), "proj", dspaName)
+	assertOwnedByDSPA(t, f, secretPath("proj", storage.DSPASecretName), "proj", storage.DSPAName)
 	// Everything the new server needs was checked with the API server
 	// before the old one was deleted.
-	del := requestIndex(f, "DELETE "+dspaPath("proj", previousDSPAName))
-	dry := requestIndex(f, "DRYRUN POST /apis/"+dspaAPIGroup+"/namespaces/proj/datasciencepipelinesapplications")
+	del := requestIndex(f, "DELETE "+dspaPath("proj", storage.PreviousDSPAName))
+	dry := requestIndex(f, "DRYRUN POST /apis/"+storage.DSPAAPIGroup+"/namespaces/proj/datasciencepipelinesapplications")
 	if del < 0 || dry < 0 || dry > del {
 		t.Errorf("dry run of dspa at %d, delete of nightly-dspa at %d: the dry run must come first", dry, del)
 	}
-	if !strings.Contains(resp.Message, dspaName) || !strings.Contains(resp.Message, previousDSPAName) {
+	if !strings.Contains(resp.Message, storage.DSPAName) || !strings.Contains(resp.Message, storage.PreviousDSPAName) {
 		t.Errorf("message = %q", resp.Message)
 	}
 }
@@ -88,7 +89,7 @@ func TestRecreatePipelineServer_RefusalsDeleteNothing(t *testing.T) {
 			putReadyManagedS3(f)
 			putDSProject(f, "proj")
 			putOldToolServer(f, "proj", "")
-			f.failDryRun["POST /apis/"+dspaAPIGroup+"/namespaces/proj/datasciencepipelinesapplications"] = 422
+			f.failDryRun["POST /apis/"+storage.DSPAAPIGroup+"/namespaces/proj/datasciencepipelinesapplications"] = 422
 		}, ""},
 		{"S3 storage not ready", func(f *resourceFake) {
 			putDSProject(f, "proj")
@@ -101,7 +102,7 @@ func TestRecreatePipelineServer_RefusalsDeleteNothing(t *testing.T) {
 		{"old server already terminating", func(f *resourceFake) {
 			putReadyManagedS3(f)
 			putDSProject(f, "proj")
-			putOldToolServer(f, "proj", `,"deletionTimestamp":"`+created+`","finalizers":["`+dspaFinalizer+`"]`)
+			putOldToolServer(f, "proj", `,"deletionTimestamp":"`+created+`","finalizers":["`+storage.DSPAFinalizer+`"]`)
 		}, "terminating"},
 		{"another pipeline server in the project", func(f *resourceFake) {
 			putReadyManagedS3(f)
@@ -112,12 +113,12 @@ func TestRecreatePipelineServer_RefusalsDeleteNothing(t *testing.T) {
 		{"nightly-dspa not created by this tool", func(f *resourceFake) {
 			putReadyManagedS3(f)
 			putDSProject(f, "proj")
-			putDSPA(f, "proj", previousDSPAName, `{}`, "Mozilla", "Update", "s3.amazonaws.com", "secret-abcdef", "", "")
+			putDSPA(f, "proj", storage.PreviousDSPAName, `{}`, "Mozilla", "Update", "s3.amazonaws.com", "secret-abcdef", "", "")
 		}, "not_managed"},
 		{"operator not running for the finalizer", func(f *resourceFake) {
 			putReadyManagedS3(f)
 			putDSProject(f, "proj")
-			putOldToolServer(f, "proj", `,"finalizers":["`+dspaFinalizer+`"]`)
+			putOldToolServer(f, "proj", `,"finalizers":["`+storage.DSPAFinalizer+`"]`)
 			putDSPO(f, 0)
 		}, "prerequisites"},
 	}
@@ -148,13 +149,13 @@ func TestRecreatePipelineServer_OldServerStillTerminating(t *testing.T) {
 	putManagedDSC(f)
 	putReadyManagedS3(f)
 	putDSProject(f, "proj")
-	putOldToolServer(f, "proj", `,"finalizers":["`+dspaFinalizer+`"]`)
+	putOldToolServer(f, "proj", `,"finalizers":["`+storage.DSPAFinalizer+`"]`)
 	putDSPO(f, 1)
 	resp, _ := RecreatePipelineServer(c, "proj")
 	if resp.Success || resp.ErrorCode != "in_progress" || !strings.Contains(resp.Message, "Set up") {
 		t.Fatalf("got %+v", resp)
 	}
-	if f.has(dspaPath("proj", dspaName)) {
+	if f.has(dspaPath("proj", storage.DSPAName)) {
 		t.Error("dspa created while nightly-dspa is still terminating")
 	}
 }
@@ -165,10 +166,10 @@ func TestTeardownPipelineServer_EarlierName(t *testing.T) {
 	f, c := newResourceFake(t)
 	putOldToolServer(f, "proj", "")
 	resp, _ := TeardownPipelineServer(c, "proj")
-	if !resp.Success || f.has(dspaPath("proj", previousDSPAName)) || f.has(secretPath("proj", dspaSecretName)) {
+	if !resp.Success || f.has(dspaPath("proj", storage.PreviousDSPAName)) || f.has(secretPath("proj", storage.DSPASecretName)) {
 		t.Fatalf("got %+v", resp)
 	}
-	if !strings.Contains(resp.Message, "mariadb-"+previousDSPAName) {
+	if !strings.Contains(resp.Message, "mariadb-"+storage.PreviousDSPAName) {
 		t.Errorf("message = %q", resp.Message)
 	}
 }

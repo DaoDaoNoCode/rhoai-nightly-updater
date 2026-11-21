@@ -18,6 +18,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -946,8 +947,8 @@ func componentUsers(c *Client, key string) ([]string, error) {
 	}
 	switch key {
 	case "aipipelines", "datasciencepipelines":
-		dspas, err := listDSPAs(c, "")
-		if errors.Is(err, errDSPACRDMissing) {
+		dspas, err := storage.ListDSPAs(c, "")
+		if errors.Is(err, storage.ErrDSPACRDMissing) {
 			return nil, nil
 		}
 		if err != nil {

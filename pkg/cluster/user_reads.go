@@ -11,6 +11,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -44,35 +45,35 @@ func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, erro
 	st := &types.ProjectStatus{Project: project, PipelineServers: []types.ResourceState{}, Models: []types.ModelState{}, InferenceServices: []types.ProjectInferenceService{}}
 	var (
 		wg                 sync.WaitGroup
-		dspas              []dspaInfo
+		dspas              []storage.DSPA
 		dspaErr, modelsErr error
 		models             []llmisvcObject
 		isvcErr            error
 	)
 	wg.Go(func() { st.DashboardURL = dashdev.DashboardURL(sa) })
-	wg.Go(func() { dspas, dspaErr = listDSPAs(u, project) })
+	wg.Go(func() { dspas, dspaErr = storage.ListDSPAs(u, project) })
 	wg.Go(func() { models, modelsErr = listProjectLLMInferenceServices(u, project) })
 	wg.Go(func() { st.InferenceServices, isvcErr = listProjectInferenceServices(u, project) })
 	wg.Wait()
 
 	switch {
-	case errors.Is(dspaErr, errDSPACRDMissing):
+	case errors.Is(dspaErr, storage.ErrDSPACRDMissing):
 		st.PipelineServersProblem, st.PipelineServersProblemCode = "Data Science Pipelines is not installed on this cluster.", types.ProblemNotInstalled
 	case dspaErr != nil:
 		st.PipelineServers = nil
 		st.PipelineServersProblem, st.PipelineServersProblemCode = userReadProblem("the pipeline servers", project, dspaErr)
 	default:
-		rec, recErr := readPipelineRecord(u)
+		rec, recErr := storage.ReadPipelineRecord(u)
 		if recErr != nil {
-			rec = pipelineRecord{}
+			rec = storage.PipelineRecord{}
 		}
 		for _, d := range dspas {
-			ps := pipelineServerState(d, st.DashboardURL)
-			if !d.managedByTool() {
+			ps := storage.PipelineServerState(d, st.DashboardURL)
+			if !d.ManagedByTool() {
 				ps.ManagedByTool, ps.DataPVCs = false, nil
 				ps.TeardownBlockedReason = "This pipeline server was not created by this tool, so the tool will not delete it."
 			} else {
-				ps.Unrecorded = !rec.owns(d.Meta)
+				ps.Unrecorded = !rec.Owns(d.Meta)
 				ps.ConnectionState, ps.ConnectionMessage = connectionState(u, project, ps.Terminating)
 			}
 			st.PipelineServers = append(st.PipelineServers, ps)
@@ -108,7 +109,7 @@ func connectionState(u *Client, project string, terminating bool) (string, strin
 	if terminating {
 		return "", ""
 	}
-	meta, found, err := kube.ReadObjectMeta(u, rhoai.NamespacedPath("v1", "secrets", project, connectionSecretName))
+	meta, found, err := kube.ReadObjectMeta(u, rhoai.NamespacedPath("v1", "secrets", project, storage.ConnectionSecretName))
 	switch {
 	case err != nil:
 		msg, _ := userReadProblem("the connection", project, err)

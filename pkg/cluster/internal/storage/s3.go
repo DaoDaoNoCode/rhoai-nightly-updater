@@ -1,4 +1,4 @@
-package cluster
+package storage
 
 import (
 	"context"
@@ -29,7 +29,7 @@ var s3HTTPClient = &http.Client{
 	},
 }
 
-func decodeBase64Field(s string) string {
+func DecodeBase64Field(s string) string {
 	decoded, err := base64.StdEncoding.DecodeString(s)
 	if err != nil {
 		return ""
@@ -68,12 +68,12 @@ func s3PutBucket(ctx context.Context, endpoint, accessKey, secretKey, bucket str
 	stringToSign := fmt.Sprintf("AWS4-HMAC-SHA256\n%s\n%s\n%s", amzdate, credentialScope, hex.EncodeToString(hash[:]))
 
 	// Signing key
-	kDate := hmacSHA256([]byte("AWS4"+secretKey), []byte(datestamp))
-	kRegion := hmacSHA256(kDate, []byte(region))
-	kService := hmacSHA256(kRegion, []byte(service))
-	kSigning := hmacSHA256(kService, []byte("aws4_request"))
+	kDate := HMACSHA256([]byte("AWS4"+secretKey), []byte(datestamp))
+	kRegion := HMACSHA256(kDate, []byte(region))
+	kService := HMACSHA256(kRegion, []byte(service))
+	kSigning := HMACSHA256(kService, []byte("aws4_request"))
 
-	sigHash := hmacSHA256(kSigning, []byte(stringToSign))
+	sigHash := HMACSHA256(kSigning, []byte(stringToSign))
 	signature := hex.EncodeToString(sigHash)
 
 	req.Header.Set("Authorization", fmt.Sprintf(
@@ -95,7 +95,7 @@ func s3PutBucket(ctx context.Context, endpoint, accessKey, secretKey, bucket str
 	return nil
 }
 
-func hmacSHA256(key, data []byte) []byte {
+func HMACSHA256(key, data []byte) []byte {
 	h := hmac.New(sha256.New, key)
 	h.Write(data)
 	return h.Sum(nil)

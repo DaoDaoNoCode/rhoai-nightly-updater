@@ -21,8 +21,3 @@ func safeServedName(s string) bool {
 
 // unsafeServedNameWarning says why a model's served name is not shown.
 const unsafeServedNameWarning = "The name the model serves (spec.model.name) has characters other than letters, digits and . _ / : -, so this tool does not show it, put it in commands or call the model with it."
-
-// unsafeAddressWarning says why an address is not shown.
-func unsafeAddressWarning(what string) string {
-	return "The " + what + " the cluster reports is not a plain https address, so this tool does not show it or put it in commands."
-}

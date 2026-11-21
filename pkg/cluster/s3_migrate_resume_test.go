@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 const pvcProtection = "kubernetes.io/pvc-protection"
@@ -20,8 +21,8 @@ func migratedForRemoval(t *testing.T) (*resourceFake, *Client) {
 	fastMigrateTimings(t)
 	f, c := newResourceFake(t)
 	putMigrationCase(f)
-	delete(f.objects, fakeKey{gv: dspaAPIGroup, ns: "hand-made", plural: "datasciencepipelinesapplications", name: legacyDSPAName})
-	f.putJSON(secretPath("juntao-test", legacyDSPASecretName), `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(envkit.LegacyPostManager, "Update")+`}}`)
+	delete(f.objects, fakeKey{gv: storage.DSPAAPIGroup, ns: "hand-made", plural: "datasciencepipelinesapplications", name: storage.LegacyDSPAName})
+	f.putJSON(secretPath("juntao-test", storage.LegacyDSPASecretName), `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(envkit.LegacyPostManager, "Update")+`}}`)
 	ensureMap(f.get(legacyS3PVCPath), "metadata")["finalizers"] = []any{pvcProtection}
 	simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
 	if ok, msg, _, _ := runMigrate(t, c, MigrateOptions{}); !ok {
@@ -40,8 +41,8 @@ func releasePVCWhenServerGone(f *resourceFake, stuck *bool) {
 		next(method, path)
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		dep := fakeKey{gv: "apps/v1", ns: legacyNamespace, plural: "deployments", name: s3Deployment}
-		pvc := fakeKey{gv: "v1", ns: legacyNamespace, plural: "persistentvolumeclaims", name: legacySeaweedFSPVC}
+		dep := fakeKey{gv: "apps/v1", ns: storage.LegacyNamespace, plural: "deployments", name: storage.S3Deployment}
+		pvc := fakeKey{gv: "v1", ns: storage.LegacyNamespace, plural: "persistentvolumeclaims", name: storage.LegacySeaweedFSPVC}
 		if obj := f.objects[pvc]; obj != nil && f.objects[dep] == nil && !*stuck && ensureMap(obj, "metadata")["deletionTimestamp"] != nil {
 			delete(f.objects, pvc)
 		}
@@ -206,7 +207,7 @@ func TestRemoveOldStorage_DeletionOrder(t *testing.T) {
 		return -1
 	}
 	order := []string{
-		"DELETE " + secretPath("juntao-test", legacyDSPASecretName),
+		"DELETE " + secretPath("juntao-test", storage.LegacyDSPASecretName),
 		"DELETE " + legacyUIRoutePath,
 		"DELETE " + legacyS3PVCPath,
 		"DELETE " + legacyMinIOPVCPath,
@@ -233,27 +234,9 @@ func TestWaitPVCsGone_ReportsWhatIsLeftAtTheDeadline(t *testing.T) {
 	fastS3Timings(t)
 	f, c := newResourceFake(t)
 	f.putJSON(legacyS3PVCPath, `{"metadata":{"uid":"pvc-1","finalizers":["`+pvcProtection+`"],"deletionTimestamp":"2026-11-17T00:00:00Z"}}`)
-	remaining, err := waitPVCsGone(c, map[string]string{"pvc-1": legacyNamespace})
+	remaining, err := storage.WaitPVCsGone(c, map[string]string{"pvc-1": storage.LegacyNamespace})
 	if err != nil || strings.Join(remaining, ",") != "minio/seaweedfs-pvc" {
 		t.Fatalf("remaining = %v, %v", remaining, err)
-	}
-}
-
-func TestLegacyRemovalPhases_CoverEveryLegacyObject(t *testing.T) {
-	seen := map[legacyObjectName]int{}
-	for _, phase := range [][]legacyObjectName{legacyRemovalPhases.beforeServer, legacyRemovalPhases.server, legacyRemovalPhases.afterServer} {
-		for _, o := range phase {
-			seen[o]++
-		}
-	}
-	for _, o := range legacyStorageObjects {
-		if seen[legacyObjectName{o.kind, o.name}] != 1 {
-			t.Errorf("%s %s is deleted %d times by Remove old storage", o.kind, o.name, seen[legacyObjectName{o.kind, o.name}])
-		}
-		delete(seen, legacyObjectName{o.kind, o.name})
-	}
-	if len(seen) > 0 {
-		t.Errorf("Remove old storage deletes objects teardown does not know: %v", seen)
 	}
 }
 
@@ -264,7 +247,7 @@ func TestRemoveOldStorage_ServerGoneWithoutRemovalDeletesNothing(t *testing.T) {
 	t.Run("server deleted by someone else", func(t *testing.T) {
 		f, c := migratedForRemoval(t)
 		f.mu.Lock()
-		delete(f.objects, fakeKey{gv: "apps/v1", ns: legacyNamespace, plural: "deployments", name: s3Deployment})
+		delete(f.objects, fakeKey{gv: "apps/v1", ns: storage.LegacyNamespace, plural: "deployments", name: storage.S3Deployment})
 		f.mu.Unlock()
 		before := len(f.mutations())
 		ok, msg, code, _ := runMigrate(t, c, MigrateOptions{RemoveOldStorage: true})
@@ -295,7 +278,7 @@ func TestMigrate_MessagesNeverPointAtTearDown(t *testing.T) {
 		f, c := newResourceFake(t)
 		putMigrationCase(f)
 		f.mu.Lock()
-		delete(f.objects, fakeKey{gv: "apps/v1", ns: legacyNamespace, plural: "deployments", name: s3Deployment})
+		delete(f.objects, fakeKey{gv: "apps/v1", ns: storage.LegacyNamespace, plural: "deployments", name: storage.S3Deployment})
 		f.mu.Unlock()
 		ok, msg, _, _ := runMigrate(t, c, MigrateOptions{})
 		if ok || !strings.Contains(msg, "No server runs in namespace minio any more") || !strings.Contains(msg, "a retry gives the same result") {

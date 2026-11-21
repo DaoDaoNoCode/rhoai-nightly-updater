@@ -7,6 +7,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 const dscPath = "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc"
@@ -97,7 +98,7 @@ func TestGetResourcesStatus_ReportsFeatureBlocks(t *testing.T) {
 	t.Run("pipelines managed but its API not there yet", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		putManagedDSC(f)
-		f.fail["GET /apis/"+dspaAPIGroup+"/datasciencepipelinesapplications"] = 404
+		f.fail["GET /apis/"+storage.DSPAAPIGroup+"/datasciencepipelinesapplications"] = 404
 		s, err := GetResourcesStatus(c)
 		if err != nil {
 			t.Fatal(err)
@@ -130,7 +131,7 @@ func TestSetups_RefuseWhenTheComponentIsOff(t *testing.T) {
 		if resp.Success || resp.ErrorCode != "prerequisites" || !strings.Contains(resp.Message, "Nothing was changed") {
 			t.Fatalf("got %+v", resp)
 		}
-		if hasMutation(f, "POST /api/v1/namespaces") || f.get(dspaPath("p1", dspaName)) != nil {
+		if hasMutation(f, "POST /api/v1/namespaces") || f.get(dspaPath("p1", storage.DSPAName)) != nil {
 			t.Error("nothing may be created")
 		}
 	})
@@ -157,8 +158,8 @@ func TestGetResourcesStatus_PipelineServerAPIAddress(t *testing.T) {
 	ready := func(url string) string {
 		return `{"conditions":[{"type":"Ready","status":"True"}],"components":{"apiServer":{"externalUrl":"` + url + `"}}}`
 	}
-	putDSPA(f, "p1", dspaName, toolLabelJSON, envkit.ToolFieldManager, "Apply", s3Host(), dspaSecretName, "", ready("https://ds-pipeline-nightly-dspa-p1.apps.example.com"))
-	putDSPA(f, "p2", dspaName, toolLabelJSON, envkit.ToolFieldManager, "Apply", s3Host(), dspaSecretName, "", ready("javascript:alert(1)"))
+	putDSPA(f, "p1", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", ready("https://ds-pipeline-nightly-dspa-p1.apps.example.com"))
+	putDSPA(f, "p2", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", ready("javascript:alert(1)"))
 	s, err := GetResourcesStatus(c)
 	if err != nil {
 		t.Fatal(err)

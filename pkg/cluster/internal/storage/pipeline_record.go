@@ -1,4 +1,4 @@
-package cluster
+package storage
 
 import (
 	"encoding/json"
@@ -31,27 +31,27 @@ import (
 // adopts in the project the user chose. Pipeline servers set up before
 // 3.0.1 have no record: Migrate storage lists them for that confirmation.
 const (
-	pipelineRecordKey     = "pipelineServers"
+	PipelineRecordKey     = "pipelineServers"
 	pipelineRecordManager = "rhoai-nightly-updater-pipelines"
 )
 
-type recordedPipelineServer struct {
+type RecordedPipelineServer struct {
 	UID string `json:"uid"`
 	At  string `json:"at,omitempty"`
 	By  string `json:"by,omitempty"`
 }
 
-// pipelineRecord is the record, by "<project>/<name>".
-type pipelineRecord map[string]recordedPipelineServer
+// PipelineRecord is the record, by "<project>/<name>".
+type PipelineRecord map[string]RecordedPipelineServer
 
 // owns: meta is a pipeline server whose UID the tool recorded.
-func (r pipelineRecord) owns(meta kube.ObjectMeta) bool {
+func (r PipelineRecord) Owns(meta kube.ObjectMeta) bool {
 	e, ok := r[meta.Namespace+"/"+meta.Name]
 	return ok && e.UID != "" && e.UID == meta.UID
 }
 
-// readPipelineRecord reads the record (empty when nothing is recorded).
-func readPipelineRecord(c *Client) (pipelineRecord, error) {
+// ReadPipelineRecord reads the record (empty when nothing is recorded).
+func ReadPipelineRecord(c *kube.Client) (PipelineRecord, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
@@ -63,10 +63,10 @@ func readPipelineRecord(c *Client) (pipelineRecord, error) {
 		return nil, fmt.Errorf("read this tool's record of its pipeline servers: %w", err)
 	}
 	if !found {
-		return pipelineRecord{}, nil
+		return PipelineRecord{}, nil
 	}
-	rec := pipelineRecord{}
-	if raw := cm.Data[pipelineRecordKey]; raw != "" {
+	rec := PipelineRecord{}
+	if raw := cm.Data[PipelineRecordKey]; raw != "" {
 		if err := json.Unmarshal([]byte(raw), &rec); err != nil {
 			return nil, fmt.Errorf("parse this tool's record of its pipeline servers: %w", err)
 		}
@@ -74,7 +74,7 @@ func readPipelineRecord(c *Client) (pipelineRecord, error) {
 	return rec, nil
 }
 
-func writePipelineRecord(c *Client, rec pipelineRecord) error {
+func WritePipelineRecord(c *kube.Client, rec PipelineRecord) error {
 	data, err := json.Marshal(rec)
 	if err != nil {
 		return err
@@ -84,7 +84,7 @@ func writePipelineRecord(c *Client, rec pipelineRecord) error {
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
 		"metadata":   map[string]any{"name": record.SnapshotConfigMapName, "namespace": ns},
-		"data":       map[string]any{pipelineRecordKey: string(data)},
+		"data":       map[string]any{PipelineRecordKey: string(data)},
 	})
 	query := url.Values{"fieldManager": {pipelineRecordManager}, "force": {"true"}}
 	if _, _, err := c.Bookkeeping().Do(http.MethodPatch, rhoai.NamespacedPath("v1", "configmaps", ns, record.SnapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
@@ -94,22 +94,22 @@ func writePipelineRecord(c *Client, rec pipelineRecord) error {
 }
 
 // recordPipelineServer records meta (a DSPA as read or written) as the tool's.
-func recordPipelineServer(c *Client, meta kube.ObjectMeta) error {
+func recordPipelineServer(c *kube.Client, meta kube.ObjectMeta) error {
 	if meta.UID == "" {
 		return fmt.Errorf("record this tool's pipeline servers: %s/%s has no UID", meta.Namespace, meta.Name)
 	}
-	rec, err := readPipelineRecord(c)
+	rec, err := ReadPipelineRecord(c)
 	if err != nil {
 		return err
 	}
-	rec[meta.Namespace+"/"+meta.Name] = recordedPipelineServer{UID: meta.UID, At: record.NowRFC3339(), By: kube.GetUser(c)}
-	return writePipelineRecord(c, rec)
+	rec[meta.Namespace+"/"+meta.Name] = RecordedPipelineServer{UID: meta.UID, At: record.NowRFC3339(), By: kube.GetUser(c)}
+	return WritePipelineRecord(c, rec)
 }
 
 // forgetPipelineServer drops project/name from the record (nothing is
 // written when it is not recorded).
-func forgetPipelineServer(c *Client, project, name string) error {
-	rec, err := readPipelineRecord(c)
+func forgetPipelineServer(c *kube.Client, project, name string) error {
+	rec, err := ReadPipelineRecord(c)
 	if err != nil {
 		return err
 	}
@@ -117,5 +117,5 @@ func forgetPipelineServer(c *Client, project, name string) error {
 		return nil
 	}
 	delete(rec, project+"/"+name)
-	return writePipelineRecord(c, rec)
+	return WritePipelineRecord(c, rec)
 }

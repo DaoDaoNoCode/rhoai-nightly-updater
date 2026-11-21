@@ -1,4 +1,4 @@
-package cluster
+package storage
 
 import (
 	"encoding/json"
@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	// dspaName is the name odh-dashboard gives its pipeline server
+	// DSPAName is the name odh-dashboard gives its pipeline server
 	// (frontend/src/concepts/pipelines/const.ts DEFAULT_PIPELINE_DEFINITION_NAME,
 	// createPipelinesCR in api/pipelines/k8s.ts, rhoai-3.6). The dashboard
 	// finds a project's pipeline server by listing DSPAs
@@ -33,32 +33,32 @@ const (
 	// L149). Any other name leaves workbenches without pipelines. Setup
 	// refuses a project that already has a DSPA, so the name never meets
 	// the dashboard's; the tool's label marks the one it created.
-	dspaName = "dspa"
-	// dspaSecretName stays the tool's own: odh-dashboard's Delete pipeline
+	DSPAName = "dspa"
+	// DSPASecretName stays the tool's own: odh-dashboard's Delete pipeline
 	// server deletes "dashboard-dspa-secret" by name (concepts/pipelines/
 	// utils.ts deleteServer), and a dashboard secret must never be mistaken
 	// for the tool's. The DSPA owns it (setDSPAOwner).
-	dspaSecretName = "nightly-dspa-s3"
-	// previousDSPAName is the name the tool used before it used "dspa"
+	DSPASecretName = "nightly-dspa-s3"
+	// PreviousDSPAName is the name the tool used before it used "dspa"
 	// (2.x and early 3.0.0). Such servers keep working and are still the
 	// tool's everywhere (status, teardown, Migrate storage, Clean up); the
 	// Pipelines tab offers to recreate them as "dspa".
-	previousDSPAName = "nightly-dspa"
+	PreviousDSPAName = "nightly-dspa"
 	// Names used by the earliest versions; see dspaInfo.managedByTool. The
 	// DSPA name is the current one again.
-	legacyDSPAName       = dspaName
-	legacyDSPASecretName = "dashboard-dspa-secret"
-	dspaAPIGroup         = "datasciencepipelinesapplications.opendatahub.io/v1"
-	// dspaFinalizer is removed by the data-science-pipelines-operator once
+	LegacyDSPAName       = DSPAName
+	LegacyDSPASecretName = "dashboard-dspa-secret"
+	DSPAAPIGroup         = "datasciencepipelinesapplications.opendatahub.io/v1"
+	// DSPAFinalizer is removed by the data-science-pipelines-operator once
 	// it has cleaned up (DSPO controllers/dspipeline_controller.go, rhoai-3.6).
-	dspaFinalizer = "datasciencepipelinesapplications.opendatahub.io/finalizer"
+	DSPAFinalizer = "datasciencepipelinesapplications.opendatahub.io/finalizer"
 	// dspoSelector selects the data-science-pipelines-operator Deployment
 	// in the applications namespace (live RHOAI 3.6 label).
 	dspoSelector = "app.kubernetes.io/name=data-science-pipelines-operator"
-	// dspaStuckAfter matches odh-dashboard's SERVER_TIMEOUT (5 minutes,
+	// DSPAStuckAfter matches odh-dashboard's SERVER_TIMEOUT (5 minutes,
 	// frontend/src/utilities/const.ts), after which the dashboard reports a
 	// pipeline server whose API server is still not ready as having issues.
-	dspaStuckAfter = 5 * time.Minute
+	DSPAStuckAfter = 5 * time.Minute
 	// dspaAPIServerCondition is DSPO's APIServerReady condition. The
 	// dashboard's pipelines pages work once it is True (dspaLoaded), and its
 	// timeout is measured against it, not against Ready
@@ -72,11 +72,11 @@ var (
 	PipelineServerDeleteTimeout = 60 * time.Second
 	PipelineServerDeletePoll    = 2 * time.Second
 
-	errDSPACRDMissing = errors.New("the DataSciencePipelinesApplication CRD is not installed")
+	ErrDSPACRDMissing = errors.New("the DataSciencePipelinesApplication CRD is not installed")
 )
 
-// dspaInfo is the part of a DataSciencePipelinesApplication the tool reads.
-type dspaInfo struct {
+// DSPA is the part of a DataSciencePipelinesApplication the tool reads.
+type DSPA struct {
 	Meta kube.ObjectMeta
 	Host string
 	// Scheme and Port of the external object storage. DSPO appends Port to
@@ -86,28 +86,28 @@ type dspaInfo struct {
 	Port       string
 	SecretName string
 	ExternalDB bool
-	Ready      *dspaCondition
+	Ready      *DSPACondition
 	// APIServer is DSPO's APIServerReady condition (dspaAPIServerCondition).
-	APIServer *dspaCondition
+	APIServer *DSPACondition
 	// ObjectStore is DSPO's ObjectStoreAvailable condition: True once its
 	// connection check to the object storage passed (or was skipped by the
 	// DSPA's own settings), for the generation in ObservedGeneration
 	// (controllers/dspastatus/dspa_status.go, rhoai-3.6).
-	ObjectStore *dspaCondition
+	ObjectStore *DSPACondition
 	// APIURL is the pipeline API's external address, which DSPO reports in
 	// status.components.apiServer.externalUrl (api/v1 ComponentStatus): the
 	// host for the KFP SDK.
 	APIURL string
 }
 
-type dspaCondition struct {
+type DSPACondition struct {
 	Status             string `json:"status"`
 	Reason             string `json:"reason"`
 	Message            string `json:"message"`
 	ObservedGeneration int64  `json:"observedGeneration"`
 }
 
-// managedByTool reports whether this tool created the DSPA. Current versions
+// ManagedByTool reports whether this tool created the DSPA. Current versions
 // label it. Older versions named it "dspa", pointed it at the tool's storage
 // in namespace minio (legacyS3Host) with secret "dashboard-dspa-secret", and
 // set no label (pipeline_server.go:235 at 5051672). odh-dashboard creates
@@ -116,20 +116,20 @@ type dspaCondition struct {
 // spec.objectStorage.externalStorage.host and its s3CredentialsSecret's
 // secretName. A DSPA the dashboard created, or whose storage someone else
 // changed since, is not the tool's.
-func (d dspaInfo) managedByTool() bool {
+func (d DSPA) ManagedByTool() bool {
 	if d.Meta.HasToolLabel() {
 		return true
 	}
 	storage := []string{"f:spec", "f:objectStorage", "f:externalStorage"}
-	return d.Meta.Name == legacyDSPAName &&
-		d.Host == legacyS3Host() &&
-		d.SecretName == legacyDSPASecretName &&
+	return d.Meta.Name == LegacyDSPAName &&
+		d.Host == LegacyS3Host() &&
+		d.SecretName == LegacyDSPASecretName &&
 		d.Meta.OwnsFieldPath(envkit.ToolManagers, append(storage, "f:host")...) &&
 		d.Meta.OwnsFieldPath(envkit.ToolManagers, append(storage, "f:s3CredentialsSecret", "f:secretName")...)
 }
 
-func (d dspaInfo) hasFinalizer() bool {
-	return slices.Contains(d.Meta.Finalizers, dspaFinalizer)
+func (d DSPA) hasFinalizer() bool {
+	return slices.Contains(d.Meta.Finalizers, DSPAFinalizer)
 }
 
 // toolDSPAPath returns the path of a pipeline server only for the names this
@@ -137,10 +137,10 @@ func (d dspaInfo) hasFinalizer() bool {
 // another DSPA, and the RBAC rule stays limited to these names.
 func toolDSPAPath(project, name string) (string, bool) {
 	switch name {
-	case dspaName:
-		return rhoai.NamespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, dspaName), true
-	case previousDSPAName:
-		return rhoai.NamespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, previousDSPAName), true
+	case DSPAName:
+		return rhoai.NamespacedPath(DSPAAPIGroup, "datasciencepipelinesapplications", project, DSPAName), true
+	case PreviousDSPAName:
+		return rhoai.NamespacedPath(DSPAAPIGroup, "datasciencepipelinesapplications", project, PreviousDSPAName), true
 	}
 	return "", false
 }
@@ -148,24 +148,24 @@ func toolDSPAPath(project, name string) (string, bool) {
 // toolDSPASecretPath is toolDSPAPath for the pipeline server's S3 secret.
 func toolDSPASecretPath(project, name string) (string, bool) {
 	switch name {
-	case dspaSecretName:
-		return rhoai.NamespacedPath("v1", "secrets", project, dspaSecretName), true
-	case legacyDSPASecretName:
-		return rhoai.NamespacedPath("v1", "secrets", project, legacyDSPASecretName), true
+	case DSPASecretName:
+		return rhoai.NamespacedPath("v1", "secrets", project, DSPASecretName), true
+	case LegacyDSPASecretName:
+		return rhoai.NamespacedPath("v1", "secrets", project, LegacyDSPASecretName), true
 	}
 	return "", false
 }
 
 func dspaCollectionPath(namespace string) string {
 	if namespace == "" {
-		return rhoai.ClusterPath(dspaAPIGroup, "datasciencepipelinesapplications", "")
+		return rhoai.ClusterPath(DSPAAPIGroup, "datasciencepipelinesapplications", "")
 	}
-	return rhoai.NamespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", namespace, "")
+	return rhoai.NamespacedPath(DSPAAPIGroup, "datasciencepipelinesapplications", namespace, "")
 }
 
-// listDSPAs lists pipeline servers in namespace, or cluster-wide when
+// ListDSPAs lists pipeline servers in namespace, or cluster-wide when
 // namespace is "". A missing CRD returns errDSPACRDMissing.
-func listDSPAs(c *Client, namespace string) ([]dspaInfo, error) {
+func ListDSPAs(c *kube.Client, namespace string) ([]DSPA, error) {
 	var list struct {
 		Items []struct {
 			Metadata kube.ObjectMeta `json:"metadata"`
@@ -192,7 +192,7 @@ func listDSPAs(c *Client, namespace string) ([]dspaInfo, error) {
 				} `json:"components"`
 				Conditions []struct {
 					Type string `json:"type"`
-					dspaCondition
+					DSPACondition
 				} `json:"conditions"`
 			} `json:"status"`
 		} `json:"items"`
@@ -205,17 +205,17 @@ func listDSPAs(c *Client, namespace string) ([]dspaInfo, error) {
 		return nil, fmt.Errorf("list pipeline servers: %w", err)
 	}
 	if !found {
-		return nil, errDSPACRDMissing
+		return nil, ErrDSPACRDMissing
 	}
-	out := make([]dspaInfo, 0, len(list.Items))
+	out := make([]DSPA, 0, len(list.Items))
 	for _, item := range list.Items {
-		d := dspaInfo{Meta: item.Metadata, ExternalDB: item.Spec.Database.ExternalDB != nil, APIURL: item.Status.Components.APIServer.ExternalURL}
+		d := DSPA{Meta: item.Metadata, ExternalDB: item.Spec.Database.ExternalDB != nil, APIURL: item.Status.Components.APIServer.ExternalURL}
 		if es := item.Spec.ObjectStorage.ExternalStorage; es != nil {
 			d.Host, d.Scheme, d.Port = es.Host, es.Scheme, es.Port
 			d.SecretName = es.S3CredentialsSecret.SecretName
 		}
 		for _, cond := range item.Status.Conditions {
-			cc := cond.dspaCondition
+			cc := cond.DSPACondition
 			switch cond.Type {
 			case "Ready":
 				d.Ready = &cc
@@ -249,7 +249,7 @@ type routeSpec struct {
 
 // readRoute reads a Route; found is false when the Route (or the Route API)
 // does not exist. Any other read or parse error is returned.
-func readRoute(c *Client, namespace, name string) (routeSpec, error) {
+func readRoute(c *kube.Client, namespace, name string) (routeSpec, error) {
 	body, exists, err := c.GetOptional(rhoai.NamespacedPath("route.openshift.io/v1", "routes", namespace, name))
 	switch {
 	case err != nil:
@@ -302,8 +302,8 @@ func endpointHostname(raw string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.Trim(s, "[]")), ".")
 }
 
-// pipelineServerState converts a tool-owned DSPA into its status entry.
-func pipelineServerState(d dspaInfo, dashboardURL string) types.ResourceState {
+// PipelineServerState converts a tool-owned DSPA into its status entry.
+func PipelineServerState(d DSPA, dashboardURL string) types.ResourceState {
 	state := types.ResourceState{
 		Namespace:     d.Meta.Namespace,
 		Name:          d.Meta.Name,
@@ -311,10 +311,10 @@ func pipelineServerState(d dspaInfo, dashboardURL string) types.ResourceState {
 		ManagedByTool: true,
 		Terminating:   d.Meta.Terminating(),
 		// Workbench pipelines need the name dspa (see dspaName).
-		NonStandardName: d.Meta.Name != dspaName,
+		NonStandardName: d.Meta.Name != DSPAName,
 	}
-	if d.Meta.Annotations[dspaConnectionAnnotation] == connectionSecretName {
-		state.Connection = connectionSecretName
+	if d.Meta.Annotations[DSPAConnectionAnnotation] == ConnectionSecretName {
+		state.Connection = ConnectionSecretName
 	}
 	if !d.ExternalDB {
 		// DSPO's MariaDB PVC is named mariadb-<dspa> and owned by the DSPA
@@ -340,7 +340,7 @@ func pipelineServerState(d dspaInfo, dashboardURL string) types.ResourceState {
 		case kube.SnippetURL(d.APIURL):
 			state.APIRoute = d.APIURL
 		case d.APIURL != "":
-			state.Warning = unsafeAddressWarning("pipeline server's API address")
+			state.Warning = kube.UnsafeAddressWarning("pipeline server's API address")
 		}
 	default:
 		// The Ready reason is often a success-sounding word such as
@@ -352,7 +352,7 @@ func pipelineServerState(d dspaInfo, dashboardURL string) types.ResourceState {
 	// (another component restarting) is not.
 	apiServerReady := d.APIServer != nil && d.APIServer.Status == "True"
 	if !state.Ready && !state.Terminating && !apiServerReady {
-		if created, err := time.Parse(time.RFC3339, d.Meta.CreationTimestamp); err == nil && time.Since(created) > dspaStuckAfter {
+		if created, err := time.Parse(time.RFC3339, d.Meta.CreationTimestamp); err == nil && time.Since(created) > DSPAStuckAfter {
 			state.TerminalError = true
 		}
 	}
@@ -360,7 +360,7 @@ func pipelineServerState(d dspaInfo, dashboardURL string) types.ResourceState {
 }
 
 // SetupPipelineServer creates a pipeline server (DSPA) in the given project.
-func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, error) {
+func SetupPipelineServer(c *kube.Client, project string) (*types.OperationResponse, error) {
 	return setupPipelineServer(c, project, false)
 }
 
@@ -370,11 +370,11 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 // come first; only then is the old server deleted (its database, and so its
 // run history, goes with it; artifacts in the S3 storage stay) and the new
 // one set up. Without an old server it is a plain setup.
-func RecreatePipelineServer(c *Client, project string) (*types.OperationResponse, error) {
+func RecreatePipelineServer(c *kube.Client, project string) (*types.OperationResponse, error) {
 	return setupPipelineServer(c, project, true)
 }
 
-func setupPipelineServer(c *Client, project string, recreate bool) (*types.OperationResponse, error) {
+func setupPipelineServer(c *kube.Client, project string, recreate bool) (*types.OperationResponse, error) {
 	logs := []string{}
 	op := "setup-pipeline-server"
 	if recreate {
@@ -390,7 +390,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	if block := envkit.SetupComponentBlock(c, envkit.PipelinesComponent); block != nil {
 		return fail(block.Reason+" Nothing was changed.", "prerequisites", "component not managed")
 	}
-	storage := getS3Status(c)
+	storage := S3Status(c)
 	if !storage.Deployed || !storage.ManagedByTool || !storage.Ready {
 		return fail("The S3 storage is not deployed or not ready. Set it up first (or, with storage from an earlier version, migrate it).", "prerequisites", "S3 storage not ready")
 	}
@@ -405,49 +405,49 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 
 	// Never add a second pipeline server next to one this tool did not
 	// create: odh-dashboard shows only the first DSPA of a project.
-	existing, err := listDSPAs(c, project)
+	existing, err := ListDSPAs(c, project)
 	switch {
-	case errors.Is(err, errDSPACRDMissing):
+	case errors.Is(err, ErrDSPACRDMissing):
 		return fail("Data Science Pipelines is not installed (no DataSciencePipelinesApplication CRD). Set the aipipelines component to Managed in the DataScienceCluster first.", "prerequisites", "DSPA CRD missing")
 	case err != nil:
 		return fail(fmt.Sprintf("Cannot check for existing pipeline servers: %v", err), kube.ErrorCodeFromK8sErr(err), "list failed")
 	}
 	var dspaMeta kube.ObjectMeta
 	dspaFound := false
-	var old *dspaInfo
+	var old *DSPA
 	for i, d := range existing {
 		switch {
-		case d.Meta.Name == dspaName && d.Meta.HasToolLabel():
+		case d.Meta.Name == DSPAName && d.Meta.HasToolLabel():
 			if d.Meta.Terminating() {
 				return fail(fmt.Sprintf("The pipeline server in %s is still being deleted. Wait for it to finish, then retry.", project), "terminating", "terminating")
 			}
 			dspaMeta, dspaFound = d.Meta, true
-		case d.Meta.Name == previousDSPAName && d.managedByTool():
+		case d.Meta.Name == PreviousDSPAName && d.ManagedByTool():
 			if d.Meta.Terminating() {
 				return fail(fmt.Sprintf("Pipeline server %s in %s is still being deleted. Wait for it to finish, then set up again. Nothing was changed.", d.Meta.Name, project), "terminating", "earlier name terminating")
 			}
 			if !recreate {
-				return fail(fmt.Sprintf("Project %s already has pipeline server %s, which an earlier version of this tool set up. Workbench pipelines need it to be named %s: use Recreate with the standard name on the Pipelines tab (its run history is lost), or keep it as it is. Nothing was changed.", project, d.Meta.Name, dspaName), "validation", "earlier name exists")
+				return fail(fmt.Sprintf("Project %s already has pipeline server %s, which an earlier version of this tool set up. Workbench pipelines need it to be named %s: use Recreate with the standard name on the Pipelines tab (its run history is lost), or keep it as it is. Nothing was changed.", project, d.Meta.Name, DSPAName), "validation", "earlier name exists")
 			}
 			old = &existing[i]
-		case d.managedByTool():
+		case d.ManagedByTool():
 			return fail(fmt.Sprintf("Project %s already has a pipeline server (%s) created by an earlier version of this tool. Delete it first to recreate it.", project, d.Meta.Name), "validation", "legacy pipeline server exists")
 		default:
 			return fail(fmt.Sprintf("Project %s already has a pipeline server (%s) that this tool did not create. It was left unchanged.", project, d.Meta.Name), "not_managed", "unmanaged pipeline server exists")
 		}
 	}
 	if old != nil && dspaFound {
-		return fail(fmt.Sprintf("Project %s has both %s and %s from this tool; delete one of them first. Nothing was changed.", project, previousDSPAName, dspaName), "validation", "both names exist")
+		return fail(fmt.Sprintf("Project %s has both %s and %s from this tool; delete one of them first. Nothing was changed.", project, PreviousDSPAName, DSPAName), "validation", "both names exist")
 	}
 
 	// Step 1: Read the S3 credentials
 	logs = append(logs, "Reading S3 storage credentials...")
-	keys, found, err := readS3Keys(c)
+	keys, found, err := ReadS3Keys(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Failed to read the S3 storage credentials: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "S3 secret read failed")
 	}
 	if !found || keys.AccessKey == "" || keys.SecretKey == "" {
-		return fail(fmt.Sprintf("The S3 credentials are empty. Check that Secret %s in namespace %s has the keys %s and %s, or repair the S3 storage.", s3Secret, s3Namespace, s3AccessKeyField, s3SecretKeyField), "prerequisites", "S3 credentials empty")
+		return fail(fmt.Sprintf("The S3 credentials are empty. Check that Secret %s in namespace %s has the keys %s and %s, or repair the S3 storage.", S3Secret, S3Namespace, S3AccessKeyField, S3SecretKeyField), "prerequisites", "S3 credentials empty")
 	}
 	logs = append(logs, "OK: S3 storage credentials read")
 
@@ -455,8 +455,8 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	// without taking over a secret of the same name someone else created.
 	logs = append(logs, "Creating pipeline server secret and dashboard connection...")
 	secrets := []*projectSecret{
-		{c: c, project: project, name: dspaSecretName, what: "secret", obj: dspaS3Secret(project, keys)},
-		{c: c, project: project, name: connectionSecretName, what: "connection", obj: dashboardS3Connection(project, keys)},
+		{c: c, project: project, name: DSPASecretName, what: "secret", obj: dspaS3Secret(project, keys)},
+		{c: c, project: project, name: ConnectionSecretName, what: "connection", obj: dashboardS3Connection(project, keys)},
 	}
 	for _, s := range secrets {
 		if err := readProjectSecret(s, projectSecretPath(project, s.name)); err != nil {
@@ -467,7 +467,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 		}
 		// Owned by the DSPA once it exists (below, or now on a re-run).
 		if dspaFound {
-			setDSPAOwner(s.obj, dspaName, dspaMeta.UID)
+			setDSPAOwner(s.obj, DSPAName, dspaMeta.UID)
 		}
 	}
 	secretsOwned := dspaFound
@@ -488,14 +488,14 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 		"dspVersion": "v2",
 		"objectStorage": map[string]any{
 			"externalStorage": map[string]any{
-				"host":   s3Host(),
+				"host":   S3Host(),
 				"scheme": "http",
 				"bucket": s3Bucket,
-				"region": s3Region,
+				"region": S3Region,
 				"s3CredentialsSecret": map[string]any{
-					"accessKey":  s3AccessKeyField,
-					"secretKey":  s3SecretKeyField,
-					"secretName": dspaSecretName,
+					"accessKey":  S3AccessKeyField,
+					"secretKey":  S3SecretKeyField,
+					"secretName": DSPASecretName,
 				},
 			},
 		},
@@ -503,19 +503,19 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	}
 	logs = append(logs, addDashboardDSPASettings(c, spec, apiServer)...)
 	dspa := map[string]any{
-		"apiVersion": dspaAPIGroup,
+		"apiVersion": DSPAAPIGroup,
 		"kind":       "DataSciencePipelinesApplication",
 		"metadata": map[string]any{
-			"name":      dspaName,
+			"name":      DSPAName,
 			"namespace": project,
 			"labels":    envkit.ToolLabels(),
 			// Which Connection goes with it, for the status: the status
 			// reads only the DSPA list, so it costs no request per project.
-			"annotations": map[string]any{dspaConnectionAnnotation: connectionSecretName},
+			"annotations": map[string]any{DSPAConnectionAnnotation: ConnectionSecretName},
 		},
 		"spec": spec,
 	}
-	dspaPath := rhoai.NamespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, dspaName)
+	dspaPath := rhoai.NamespacedPath(DSPAAPIGroup, "datasciencepipelinesapplications", project, DSPAName)
 	readDSPA := func() (kube.ObjectMeta, bool, error) {
 		body, present, getErr := c.GetOptional(dspaPath)
 		if getErr != nil {
@@ -532,8 +532,8 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	// Every write is sent as a server-side dry run first, so a pipeline
 	// server the API server rejects leaves no secret behind.
 	writeDSPA := func(dryRun bool) (string, error) {
-		action, meta, found, err := envkit.EnsureToolObject(c, fmt.Sprintf("DataSciencePipelinesApplication %s/%s", project, dspaName), dspaPath,
-			envkit.WithToolFieldManager(rhoai.NamespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, ""))+"&fieldValidation=Strict",
+		action, meta, found, err := envkit.EnsureToolObject(c, fmt.Sprintf("DataSciencePipelinesApplication %s/%s", project, DSPAName), dspaPath,
+			envkit.WithToolFieldManager(rhoai.NamespacedPath(DSPAAPIGroup, "datasciencepipelinesapplications", project, ""))+"&fieldValidation=Strict",
 			dspa, dspaMeta, dspaFound, readDSPA, kube.ObjectMeta.HasToolLabel, dryRun)
 		dspaMeta, dspaFound = meta, found
 		return action, err
@@ -546,7 +546,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 		}
 	}
 	if _, err := writeDSPA(true); err != nil {
-		msg, code := pipelineWriteFailure(fmt.Sprintf("pipeline server %s", dspaName), project, err)
+		msg, code := pipelineWriteFailure(fmt.Sprintf("pipeline server %s", DSPAName), project, err)
 		return fail(msg+" Nothing was changed.", code, "DSPA dry run failed")
 	}
 	if old != nil {
@@ -564,8 +564,8 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	logs = append(logs, "Creating pipeline server (DSPA)...")
 	dspaAction, err := writeDSPA(false)
 	if err != nil {
-		msg, code := pipelineWriteFailure(fmt.Sprintf("pipeline server %s", dspaName), project, err)
-		return fail(fmt.Sprintf("%s Secrets %s and %s are in place; re-run setup, or delete the pipeline server to clean up.", msg, dspaSecretName, connectionSecretName), code, "DSPA write failed")
+		msg, code := pipelineWriteFailure(fmt.Sprintf("pipeline server %s", DSPAName), project, err)
+		return fail(fmt.Sprintf("%s Secrets %s and %s are in place; re-run setup, or delete the pipeline server to clean up.", msg, DSPASecretName, ConnectionSecretName), code, "DSPA write failed")
 	}
 	logs = append(logs, "OK: Pipeline server "+dspaAction)
 	// Recorded as the tool's (pipeline_record.go): Migrate storage writes
@@ -583,8 +583,8 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	// deletes them with the DSPA, also when the dashboard deletes it.
 	if !secretsOwned {
 		for _, s := range secrets {
-			logs = append(logs, fmt.Sprintf("Making pipeline server %s the owner of secret %s...", dspaName, s.name))
-			setDSPAOwner(s.obj, dspaName, dspaMeta.UID)
+			logs = append(logs, fmt.Sprintf("Making pipeline server %s the owner of secret %s...", DSPAName, s.name))
+			setDSPAOwner(s.obj, DSPAName, dspaMeta.UID)
 			if _, err := writeProjectSecret(s, projectSecretPath(project, s.name), envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, "")), false); err != nil {
 				record.RecordAction(c, "setup-pipeline-server", fmt.Sprintf("project=%s (%s owner not set: %v)", project, s.what, err), false)
 				return &types.OperationResponse{
@@ -598,7 +598,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	logs = append(logs, "The pipeline server will take 1-3 minutes to become ready.")
 
 	slog.Info("pipeline server setup", "project", project, "user", kube.GetUser(c))
-	record.RecordAction(c, "setup-pipeline-server", fmt.Sprintf("project=%s dspa=%s", project, dspaName), true)
+	record.RecordAction(c, "setup-pipeline-server", fmt.Sprintf("project=%s dspa=%s", project, DSPAName), true)
 
 	return &types.OperationResponse{
 		Success: true, Message: "Pipeline server created. It will take 1-3 minutes to become ready." + recordNote,
@@ -611,7 +611,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 // checks the operator before deleting and waits for the finalizer), then
 // sets up the new one from scratch, so every check runs again on what is
 // there now.
-func replacePipelineServer(c *Client, project string, old *dspaInfo, logs []string) (*types.OperationResponse, error) {
+func replacePipelineServer(c *kube.Client, project string, old *DSPA, logs []string) (*types.OperationResponse, error) {
 	logs = append(logs, "OK: The API server accepts the new pipeline server", fmt.Sprintf("Deleting pipeline server %s...", old.Meta.Name))
 	down, err := TeardownPipelineServer(c, project)
 	if err != nil {
@@ -622,7 +622,7 @@ func replacePipelineServer(c *Client, project string, old *dspaInfo, logs []stri
 		record.RecordAction(c, "recreate-pipeline-server", fmt.Sprintf("project=%s (teardown of %s: %s)", project, old.Meta.Name, down.ErrorCode), false)
 		msg := down.Message
 		if !strings.Contains(msg, "Nothing was deleted") {
-			msg += fmt.Sprintf(" Pipeline server %s was not created; once %s is gone, use Set up.", dspaName, old.Meta.Name)
+			msg += fmt.Sprintf(" Pipeline server %s was not created; once %s is gone, use Set up.", DSPAName, old.Meta.Name)
 		}
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: down.ErrorCode}, nil
 	}
@@ -632,18 +632,18 @@ func replacePipelineServer(c *Client, project string, old *dspaInfo, logs []stri
 	}
 	up.Logs = append(logs, up.Logs...)
 	if !up.Success {
-		up.Message = fmt.Sprintf("Pipeline server %s was deleted, but %s could not be set up: %s Use Set up to try again.", old.Meta.Name, dspaName, up.Message)
+		up.Message = fmt.Sprintf("Pipeline server %s was deleted, but %s could not be set up: %s Use Set up to try again.", old.Meta.Name, DSPAName, up.Message)
 		record.RecordAction(c, "recreate-pipeline-server", fmt.Sprintf("project=%s (setup failed)", project), false)
 		return up, nil
 	}
-	record.RecordAction(c, "recreate-pipeline-server", fmt.Sprintf("project=%s %s -> %s", project, old.Meta.Name, dspaName), true)
-	up.Message = fmt.Sprintf("Pipeline server %s replaced by %s, which workbench pipelines use. It will take 1-3 minutes to become ready.", old.Meta.Name, dspaName)
+	record.RecordAction(c, "recreate-pipeline-server", fmt.Sprintf("project=%s %s -> %s", project, old.Meta.Name, DSPAName), true)
+	up.Message = fmt.Sprintf("Pipeline server %s replaced by %s, which workbench pipelines use. It will take 1-3 minutes to become ready.", old.Meta.Name, DSPAName)
 	return up, nil
 }
 
 // dspoRunning reports whether a data-science-pipelines-operator replica is
 // ready, so a DSPA finalizer will be processed.
-func dspoRunning(c *Client) (bool, error) {
+func dspoRunning(c *kube.Client) (bool, error) {
 	ns, err := rhoai.AppsNamespace(c)
 	if err != nil {
 		return false, err
@@ -667,24 +667,24 @@ func dspoRunning(c *Client) (bool, error) {
 // TeardownPipelineServer removes the tool-created DSPA and its credentials
 // secret from the given project. It is safe to re-run: a DSPA that is already
 // terminating is not deleted again, and missing objects count as removed.
-func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse, error) {
+func TeardownPipelineServer(c *kube.Client, project string) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
 		record.RecordAction(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (%s)", project, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
-	all, err := listDSPAs(c, project)
-	if errors.Is(err, errDSPACRDMissing) {
+	all, err := ListDSPAs(c, project)
+	if errors.Is(err, ErrDSPACRDMissing) {
 		all, err = nil, nil
 	}
 	if err != nil {
 		return fail(fmt.Sprintf("Cannot list pipeline servers in %s; nothing was deleted: %v", project, err), kube.ErrorCodeFromK8sErr(err), "list failed")
 	}
-	var target *dspaInfo
+	var target *DSPA
 	var unmanaged []string
 	for i := range all {
-		if all[i].managedByTool() {
+		if all[i].ManagedByTool() {
 			if target == nil {
 				target = &all[i]
 			}
@@ -698,7 +698,7 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 		}
 		logs = append(logs, "No pipeline server created by this tool in this project")
 		// A previous run may have removed the DSPA but not its secret.
-		orphan := &dspaInfo{Meta: kube.ObjectMeta{UID: "none"}, SecretName: dspaSecretName}
+		orphan := &DSPA{Meta: kube.ObjectMeta{UID: "none"}, SecretName: DSPASecretName}
 		note := deleteDSPASecret(c, project, orphan, all, &logs) + deleteConnection(c, project, &logs)
 		if note != "" {
 			return fail(fmt.Sprintf("No pipeline server created by this tool remains in %s.%s", project, note), "partial_failure", "orphan secret")
@@ -781,7 +781,7 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 // deleteDSPASecret deletes the DSPA's credentials secret when the tool created
 // it and no other live pipeline server in the project uses it. It returns a
 // note for the response when the secret had to be left behind on an error.
-func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInfo, logs *[]string) string {
+func deleteDSPASecret(c *kube.Client, project string, target *DSPA, all []DSPA, logs *[]string) string {
 	name := target.SecretName
 	if name == "" {
 		return ""
@@ -830,19 +830,19 @@ func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInf
 // createObjectStorageSecret, assembleSecret in api/k8s/secrets.ts,
 // rhoai-3.6); without a connection-type annotation the dashboard does not
 // list it as a Connection (connectionTypeUtils.ts isConnection).
-func dspaS3Secret(project string, keys s3Keys) map[string]any {
+func dspaS3Secret(project string, keys S3Keys) map[string]any {
 	labels := envkit.ToolLabels()
 	labels[dashboardLabelKey] = "true"
 	return map[string]any{
 		"apiVersion": "v1", "kind": "Secret",
 		"metadata": map[string]any{
-			"name":      dspaSecretName,
+			"name":      DSPASecretName,
 			"namespace": project,
 			"labels":    labels,
 		},
 		"stringData": map[string]any{
-			s3AccessKeyField: keys.AccessKey,
-			s3SecretKeyField: keys.SecretKey,
+			S3AccessKeyField: keys.AccessKey,
+			S3SecretKeyField: keys.SecretKey,
 		},
 	}
 }
@@ -852,15 +852,15 @@ func dspaS3Secret(project string, keys s3Keys) map[string]any {
 const dashboardLabelKey = "opendatahub.io/dashboard"
 
 const (
-	// connectionSecretName is the dashboard S3 Connection the tool creates
+	// ConnectionSecretName is the dashboard S3 Connection the tool creates
 	// next to each pipeline server: the shared S3 storage, usable from the
 	// project's workbenches and model deployments.
-	connectionSecretName = "rhoai-nightly-updater-s3"
+	ConnectionSecretName = "rhoai-nightly-updater-s3"
 	// connectionDisplayName is how the dashboard lists it.
 	connectionDisplayName = "Shared S3 storage (RHOAI Nightly Updater)"
-	// dspaConnectionAnnotation on the DSPA names the Connection that goes
+	// DSPAConnectionAnnotation on the DSPA names the Connection that goes
 	// with it (set when the tool wrote both).
-	dspaConnectionAnnotation = "rhoai-nightly-updater/connection"
+	DSPAConnectionAnnotation = "rhoai-nightly-updater/connection"
 )
 
 // dashboardS3Connection is a dashboard Connection of type s3 to the shared
@@ -874,14 +874,14 @@ const (
 // opendatahub.io/connection-type s3; the s3 type's fields as data. The
 // endpoint is the in-cluster Service: it works from pods, not from outside
 // the cluster.
-func dashboardS3Connection(project string, keys s3Keys) map[string]any {
+func dashboardS3Connection(project string, keys S3Keys) map[string]any {
 	labels := envkit.ToolLabels()
 	labels[dashboardLabelKey] = "true"
 	labels["opendatahub.io/managed"] = "true"
 	return map[string]any{
 		"apiVersion": "v1", "kind": "Secret",
 		"metadata": map[string]any{
-			"name":      connectionSecretName,
+			"name":      ConnectionSecretName,
 			"namespace": project,
 			"labels":    labels,
 			"annotations": map[string]any{
@@ -892,10 +892,10 @@ func dashboardS3Connection(project string, keys s3Keys) map[string]any {
 			},
 		},
 		"stringData": map[string]any{
-			s3AccessKeyField:     keys.AccessKey,
-			s3SecretKeyField:     keys.SecretKey,
-			"AWS_S3_ENDPOINT":    s3Endpoint(),
-			"AWS_DEFAULT_REGION": s3Region,
+			S3AccessKeyField:     keys.AccessKey,
+			S3SecretKeyField:     keys.SecretKey,
+			"AWS_S3_ENDPOINT":    S3Endpoint(),
+			"AWS_DEFAULT_REGION": S3Region,
 			"AWS_S3_BUCKET":      s3Bucket,
 		},
 	}
@@ -904,7 +904,7 @@ func dashboardS3Connection(project string, keys s3Keys) map[string]any {
 // projectSecret is one Secret the tool writes in a pipeline project: read
 // its current metadata, then write it with envkit.EnsureToolObject.
 type projectSecret struct {
-	c             *Client
+	c             *kube.Client
 	project, name string
 	what          string // "secret" or "connection", for the activity log
 	obj           map[string]any
@@ -917,10 +917,10 @@ type projectSecret struct {
 // reaches the API (and the RBAC coverage test resolves the paths
 // statically). The read and write helpers take it as an argument.
 func projectSecretPath(project, name string) string {
-	if name == connectionSecretName {
-		return rhoai.NamespacedPath("v1", "secrets", project, connectionSecretName)
+	if name == ConnectionSecretName {
+		return rhoai.NamespacedPath("v1", "secrets", project, ConnectionSecretName)
 	}
-	return rhoai.NamespacedPath("v1", "secrets", project, dspaSecretName)
+	return rhoai.NamespacedPath("v1", "secrets", project, DSPASecretName)
 }
 
 func readProjectSecret(s *projectSecret, path string) error {
@@ -954,22 +954,22 @@ func writeProjectSecret(s *projectSecret, path, createPath string, dryRun bool) 
 func setDSPAOwner(obj map[string]any, name, uid string) {
 	meta, _ := obj["metadata"].(map[string]any)
 	meta["ownerReferences"] = []any{map[string]any{
-		"apiVersion": dspaAPIGroup,
+		"apiVersion": DSPAAPIGroup,
 		"kind":       "DataSciencePipelinesApplication",
 		"name":       name,
 		"uid":        uid,
 	}}
 }
 
-// dspaCRDName is the DataSciencePipelinesApplication CRD.
-const dspaCRDName = "datasciencepipelinesapplications.datasciencepipelinesapplications.opendatahub.io"
+// DSPACRDName is the DataSciencePipelinesApplication CRD.
+const DSPACRDName = "datasciencepipelinesapplications.datasciencepipelinesapplications.opendatahub.io"
 
 // dspaSpecSchema returns the OpenAPI schema of spec in the served v1 of the
 // installed DSPA CRD. It lists CRDs by name (the cluster-wide list the
 // diagnostics already use), so it needs no rule of its own.
-func dspaSpecSchema(c *Client) (map[string]any, error) {
+func dspaSpecSchema(c *kube.Client) (map[string]any, error) {
 	body, _, err := c.Do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil,
-		url.Values{"fieldSelector": {"metadata.name=" + dspaCRDName}})
+		url.Values{"fieldSelector": {"metadata.name=" + DSPACRDName}})
 	if err != nil {
 		return nil, err
 	}
@@ -989,7 +989,7 @@ func dspaSpecSchema(c *Client) (map[string]any, error) {
 	if err := json.Unmarshal(body, &list); err != nil {
 		return nil, err
 	}
-	version := strings.TrimPrefix(dspaAPIGroup, "datasciencepipelinesapplications.opendatahub.io/")
+	version := strings.TrimPrefix(DSPAAPIGroup, "datasciencepipelinesapplications.opendatahub.io/")
 	for _, item := range list.Items {
 		for _, v := range item.Spec.Versions {
 			if v.Name != version || !v.Served {
@@ -1030,7 +1030,7 @@ func schemaHasField(schema map[string]any, path ...string) bool {
 // omitted one gets the operator's default, which is the same value
 // (api/v1 dspipeline_types.go ManagedPipelinesEnabled, MLflowConfig
 // kubebuilder defaults). It returns log lines.
-func addDashboardDSPASettings(c *Client, spec, apiServer map[string]any) []string {
+func addDashboardDSPASettings(c *kube.Client, spec, apiServer map[string]any) []string {
 	schema, err := dspaSpecSchema(c)
 	if err != nil {
 		slog.Info("cannot read the DSPA CRD; leaving managed pipelines and MLflow to the operator's defaults", "error", err)
@@ -1045,69 +1045,28 @@ func addDashboardDSPASettings(c *Client, spec, apiServer map[string]any) []strin
 	return nil
 }
 
-// What the selected project's Connection Secret says (ResourceState.
-// ConnectionState).
-const (
-	ConnectionPresent    = "present"
-	ConnectionMissing    = "missing"
-	ConnectionForeign    = "foreign"
-	ConnectionUnreadable = "unreadable"
-)
-
-// GetResourcesStatusFor is GetResourcesStatus plus, for the tool's pipeline
-// server in project (the Pipelines tab's selected project), the state of
-// its dashboard Connection read from the Secret itself: the DSPA's
-// annotation only says the tool created one, which the dashboard may since
-// have deleted. One named GET, only when the project has the tool's
-// server (so only in a visible Data Science project); other projects, and
-// an empty project, read no Secret.
-func GetResourcesStatusFor(c *Client, project string) (*types.ResourcesStatus, error) {
-	status, err := GetResourcesStatus(c)
-	if err != nil || project == "" {
-		return status, err
-	}
-	for i := range status.PipelineServers {
-		ps := &status.PipelineServers[i]
-		if ps.Namespace != project || ps.Terminating {
-			continue
-		}
-		meta, found, err := kube.ReadObjectMeta(c, rhoai.NamespacedPath("v1", "secrets", project, connectionSecretName))
-		switch {
-		case err != nil:
-			ps.ConnectionState, ps.ConnectionMessage = ConnectionUnreadable, err.Error()
-		case !found:
-			ps.ConnectionState = ConnectionMissing
-		case !meta.HasToolLabel():
-			ps.ConnectionState = ConnectionForeign
-		default:
-			ps.ConnectionState = ConnectionPresent
-		}
-	}
-	return status, nil
-}
-
 // deleteConnection deletes the dashboard Connection the tool created in
 // project (its label, by UID). The DSPA owns it, so the garbage collector
 // would delete it too; deleting it here also covers one an interrupted
 // setup left without an owner. It returns a note for the response when it
 // had to be left behind on an error.
-func deleteConnection(c *Client, project string, logs *[]string) string {
-	path := rhoai.NamespacedPath("v1", "secrets", project, connectionSecretName)
+func deleteConnection(c *kube.Client, project string, logs *[]string) string {
+	path := rhoai.NamespacedPath("v1", "secrets", project, ConnectionSecretName)
 	meta, found, err := kube.ReadObjectMeta(c, path)
 	switch {
 	case err != nil:
-		*logs = append(*logs, fmt.Sprintf("Warning: cannot read connection %s: %v", connectionSecretName, err))
-		return fmt.Sprintf(" The dashboard connection %s could not be checked and was left in place: %v.", connectionSecretName, err)
+		*logs = append(*logs, fmt.Sprintf("Warning: cannot read connection %s: %v", ConnectionSecretName, err))
+		return fmt.Sprintf(" The dashboard connection %s could not be checked and was left in place: %v.", ConnectionSecretName, err)
 	case !found:
 		return ""
 	case !meta.HasToolLabel():
-		*logs = append(*logs, fmt.Sprintf("Kept secret %s: it was not created by this tool", connectionSecretName))
+		*logs = append(*logs, fmt.Sprintf("Kept secret %s: it was not created by this tool", ConnectionSecretName))
 		return ""
 	}
-	*logs = append(*logs, fmt.Sprintf("Deleting dashboard connection %s...", connectionSecretName))
+	*logs = append(*logs, fmt.Sprintf("Deleting dashboard connection %s...", ConnectionSecretName))
 	if _, err := kube.DeleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 		*logs = append(*logs, fmt.Sprintf("Warning: failed to delete connection: %v", err))
-		return fmt.Sprintf(" The dashboard connection %s could not be deleted: %v. Re-run teardown or delete it manually.", connectionSecretName, err)
+		return fmt.Sprintf(" The dashboard connection %s could not be deleted: %v. Re-run teardown or delete it manually.", ConnectionSecretName, err)
 	}
 	*logs = append(*logs, "OK: Connection deleted")
 	return ""

@@ -1,9 +1,13 @@
 package cluster
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
+)
 
 func TestS3BucketEndpoint(t *testing.T) {
-	inCluster := s3Endpoint()
+	inCluster := storage.S3Endpoint()
 	for _, tc := range []struct {
 		name string
 		env  map[string]string
@@ -23,7 +27,7 @@ func TestS3BucketEndpoint(t *testing.T) {
 		{"lookalike host refused", map[string]string{"DEV_MODE": "true", "DEV_S3_ENDPOINT": "http://127.0.0.1.example.com:18333"}, inCluster},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := s3BucketEndpoint(func(k string) string { return tc.env[k] })
+			got := storage.S3BucketEndpoint(func(k string) string { return tc.env[k] })
 			if got != tc.want {
 				t.Errorf("s3BucketEndpoint() = %q, want %q", got, tc.want)
 			}
