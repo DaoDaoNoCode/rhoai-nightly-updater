@@ -83,7 +83,19 @@ func runMaaSPruneOnce(ctx context.Context) bool {
 		runCtx, cancel = maasPruneClock.WithTimeout(opCtx, maasPruneTimeout)
 		c = cluster.NewClientWithContext(runCtx, token)
 		c.SetUsername(maasPruneUser)
-		return inflight.startBackground("prune-maas-publications", "Drop MaaS publications that are gone", maasPruneUser, c)
+		op := inflight.startBackground("prune-maas-publications", "Drop MaaS publications that are gone", maasPruneUser, c)
+		inflight.update(op.ID, func(o *Operation) {
+			o.freshBookkeeper = func(ctx context.Context) *cluster.Client {
+				fresh := getClusterToken()
+				if fresh == "" {
+					fresh = token
+				}
+				b := cluster.NewClientWithContext(ctx, fresh)
+				b.SetUsername(maasPruneUser)
+				return b
+			}
+		})
+		return op
 	}, cancelOp)
 	if refusal != nil {
 		if refusal.busy {

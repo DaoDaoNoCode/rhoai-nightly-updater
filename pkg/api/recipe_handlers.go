@@ -65,6 +65,9 @@ var HandleRecipeRun = withMutationAuth(func(c *cluster.Client, w http.ResponseWr
 	if !ok {
 		return
 	}
+	// Until the runner owns the lock, a return or a panic gives it back.
+	defer start.abandon()
+	defer recoverOperation(w, "recipe-run")
 	rcp, ok := decodeRecipe(w, r)
 	if !ok {
 		start.abandon()
@@ -83,6 +86,8 @@ var HandleRecipeResume = withMutationAuth(func(c *cluster.Client, w http.Respons
 	if !ok {
 		return
 	}
+	defer start.abandon()
+	defer recoverOperation(w, "recipe-resume")
 	var req types.RecipeResumeRequest
 	if !decodeBody(w, r, 1024, &req, false) {
 		start.abandon()
