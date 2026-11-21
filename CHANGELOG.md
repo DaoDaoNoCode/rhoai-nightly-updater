@@ -124,10 +124,12 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   each importing only the ones below it; `pkg/cluster` is a facade over
   them plus the views that combine several (CONTRIBUTING.md, "Backend
   layout"). No change in what the app does or asks the cluster for: the
-  HTTP handlers are untouched, the RBAC scan's list of requests and the
-  frontend contract fixtures are byte-identical, every test still runs.
-  `scripts/test-go.sh` runs the packages' race test binaries side by side,
-  so the race tests take no longer than before the split.
+  HTTP handlers are untouched, the RBAC scan's list of requests is the
+  same (one user-token read is now named by its new file), the frontend
+  contract fixtures are byte-identical, and every test still runs.
+  `scripts/test-go.sh` runs the packages' race test binaries side by side:
+  on 2 CPUs with a warm build cache the Go job's tests take about as long
+  as before the split (35 s against 34 s in the CI image) and use less CPU.
 - The Environment page's load failure reads "Can't load the environment",
   like every other page's ("Cannot load the environment" before).
 
