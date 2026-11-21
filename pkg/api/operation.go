@@ -70,22 +70,31 @@ func lockCluster(w http.ResponseWriter) bool {
 		sw.opID = op.ID
 		return op
 	}, cancelOp)
-	switch {
-	case refusal == nil:
+	if refusal == nil {
 		return true
+	}
+	writeLockRefusal(w, refusal)
+	return false
+}
+
+// writeLockRefusal answers a refusal of acquireRunnerLock: 409
+// cluster_busy naming the operation that holds the lock (in this pod or
+// another), or 503 lock_unavailable when the lease could not be read or
+// written.
+func writeLockRefusal(w http.ResponseWriter, refusal *lockRefusal) {
+	switch {
 	case refusal.busy:
 		writeClusterBusy(w, inflight.snapshot(), "")
-		return false
+		return
 	case refusal.holder != nil:
 		holder := refusal.holder
 		slog.Info("operation refused: another updater pod runs one", "holder", holder.ID, "holderPod", holder.Pod, "type", holder.Type)
 		writeClusterBusy(w, remoteOperation(holder), "")
-		return false
+		return
 	}
 	slog.Warn("operation refused: the cross-pod operation lock could not be read or written", "error", refusal.err)
 	w.Header().Set("Retry-After", strconv.Itoa(int(lockUnavailableRetryAfter.Seconds())))
 	writeError(w, lockUnavailableMessage, http.StatusServiceUnavailable, "lock_unavailable")
-	return false
 }
 
 // lockRefusal is why acquireRunnerLock did not take the lock. Exactly one
@@ -191,6 +200,24 @@ func beginOperation(w http.ResponseWriter, target string) {
 	}
 }
 
+// beginHeldOperation is beginOperation for the operation with this ID,
+// which holds the lock without a request (a recipe run): it records its
+// target and, the first time, writes its marker.
+func beginHeldOperation(id, target string) {
+	var marker *types.OperationMarker
+	var bookkeeper *cluster.Client
+	inflight.update(id, func(op *Operation) {
+		op.Target = truncateText(target, maxOperationTargetBytes)
+		if !op.begun {
+			op.begun = true
+			marker, bookkeeper = operationMarker(op), op.bookkeeper
+		}
+	})
+	if marker != nil && bookkeeper != nil {
+		markers.start(bookkeeper, marker)
+	}
+}
+
 // setOperationTarget records what an accepted request acts on without
 // making it an operation that can be interrupted: dry runs change nothing,
 // so they write no marker and are not reported as lastCompleted.
@@ -266,6 +293,14 @@ var operationTypes = map[string][2]string{
 	"/api/resources/samples/mlflow/stream":    {"mlflow-samples", "MLflow samples"},
 	"/api/diagnostics/fix":                    {"diagnostics-fix", "Apply diagnostics fix"},
 	"/api/diagnostics/fix/acknowledged":       {"diagnostics-fix", "Apply diagnostics fix"},
+	"/api/recipes/plan":                       {"recipe-plan", "Review an environment recipe"},
+	// A run holds the lock for all its steps (recipe_runner.go) under
+	// this type and label; a user who is not a cluster-admin sees only
+	// the label.
+	"/api/recipes/run":    {"recipe", "Environment recipe"},
+	"/api/recipes/resume": {"recipe", "Environment recipe"},
+	// Stop takes no lock (it asks the running run to stop after its step).
+	"/api/recipes/stop": {"recipe-stop", "Stop an environment recipe"},
 }
 
 // Size bounds of what is kept and persisted about an operation.

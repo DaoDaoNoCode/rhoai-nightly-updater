@@ -33,6 +33,7 @@ func TestEveryNonGetRouteIsGated(t *testing.T) {
 		if method == http.MethodGet || rt.Pattern == "POST /api/pageview" {
 			continue
 		}
+		lockFree := lockFreeMutationRoutes[rt.Pattern]
 		gated++
 		if _, ok := operationTypes[path]; !ok {
 			t.Errorf("%s has no entry in operationTypes (type and label shown to other users)", rt.Pattern)
@@ -55,6 +56,9 @@ func TestEveryNonGetRouteIsGated(t *testing.T) {
 		w = httptest.NewRecorder()
 		mux.ServeHTTP(w, postJSONMethod(t, method, path, "user:admin", "{}"))
 		releaseClusterMutationLock()
+		if lockFree != "" {
+			continue // TestRecipeStopTakesNoLockAndMakesNoClusterCall
+		}
 		if w.Code != http.StatusConflict || decodeError(t, w)["errorCode"] != "cluster_busy" {
 			t.Errorf("%s while another operation runs: %d %s", rt.Pattern, w.Code, w.Body.String())
 		}
@@ -67,6 +71,12 @@ func TestEveryNonGetRouteIsGated(t *testing.T) {
 			t.Errorf("operationTypes lists %s, which is not a registered POST route", path)
 		}
 	}
+}
+
+// lockFreeMutationRoutes are the gated routes that take no cluster lock,
+// with why. Each has a test that it makes no cluster call.
+var lockFreeMutationRoutes = map[string]string{
+	"POST /api/recipes/stop": "asks the running recipe run, which holds the lock, to stop after its step",
 }
 
 func postJSONMethod(t testing.TB, method, path, token, body string) *http.Request {
@@ -122,12 +132,25 @@ func TestEveryMutationHandlerBeginsItsOperation(t *testing.T) {
 				return true
 			})
 			checked++
+			// A recipe run holds the lock beyond its request
+			// (lockRecipeRunner) and begins it once planned
+			// (beginRecipeRun, which calls beginHeldOperation). Stop
+			// takes no lock (lockFreeMutationRoutes).
+			if name == "HandleRecipeStop" {
+				continue
+			}
+			if calls["lockRecipeRunner"] {
+				if !calls["beginRecipeRun"] {
+					t.Errorf("%s takes the runner lock but does not call beginRecipeRun", name)
+				}
+				continue
+			}
 			if !calls["lockCluster"] {
 				t.Errorf("%s does not call lockCluster", name)
 			}
 			want := "beginOperation"
 			// Dry runs and plans change nothing: no marker, no lastCompleted.
-			if name == "HandleUpdate" || name == "HandleUpdateGitOps" || name == "HandleNodeSetupPlan" {
+			if name == "HandleUpdate" || name == "HandleUpdateGitOps" || name == "HandleNodeSetupPlan" || name == "HandleRecipePlan" {
 				want = "setOperationTarget"
 			}
 			if !calls[want] {

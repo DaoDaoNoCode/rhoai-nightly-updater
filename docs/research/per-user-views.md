@@ -74,8 +74,9 @@ The gitops profile stays cluster-admin only.
   `/api/diagnostics`, `/api/setup/dsc/preview`, `/api/test-pull-secret`,
   `/api/verify-nodes`, `/api/latest-nightly`, `/api/nightly-tags`,
   `/api/resources/maas*`, `/api/resources/prerequisites`,
-  `/api/resources/models/exposures`, `/api/resources/s3/admin-password`, and
-  the full (cluster-wide) `/api/resources/status`.
+  `/api/resources/models/exposures`, `/api/resources/s3/admin-password`,
+  `/api/recipes/run` (5.0.0, environment recipes), and the full
+  (cluster-wide) `/api/resources/status`.
 - Unchanged for all: `/api/update-check`, `/api/version`, health, metrics,
   Build Explorer routes.
 

@@ -139,6 +139,9 @@ var runCleanUp = cluster.CleanUp
 // maxCleanupProjects bounds the pipeline servers one clean-up deletes.
 const maxCleanupProjects = 200
 
+// maxConfirmedContents bounds the confirmed contents of a recipe project.
+const maxConfirmedContents = 500
+
 // HandleCleanupStream deletes what this tool created, as one operation
 // (one lock, one rate-limit slot): the pipeline servers in the given
 // projects, then the S3 storage, then MLflow, then the models in the given
@@ -172,6 +175,20 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 			seen[p] = true
 		}
 	}
+	if req.RecipeProject != "" && !namespaceRegex.MatchString(req.RecipeProject) {
+		writeError(w, "invalid recipe project name", http.StatusBadRequest, "validation")
+		return
+	}
+	if len(req.ConfirmProjectContents) > maxConfirmedContents || (len(req.ConfirmProjectContents) > 0 && req.RecipeProject == "") {
+		writeError(w, fmt.Sprintf("confirmProjectContents lists at most %d entries, and only with recipeProject", maxConfirmedContents), http.StatusBadRequest, "validation")
+		return
+	}
+	for _, c := range req.ConfirmProjectContents {
+		if c == "" || len(c) > 300 {
+			writeError(w, "invalid confirmProjectContents entry", http.StatusBadRequest, "validation")
+			return
+		}
+	}
 	if req.DeleteNamespace && !req.Storage {
 		writeError(w, "deleteNamespace needs storage", http.StatusBadRequest, "validation")
 		return
@@ -184,7 +201,7 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		}
 		seenComponents[k] = true
 	}
-	if len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow && len(req.Models) == 0 && !req.InferenceGateway && len(req.Playgrounds) == 0 && len(req.MaaSPublished) == 0 && !req.MaaSPlatform && len(req.Components) == 0 {
+	if len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow && len(req.Models) == 0 && !req.InferenceGateway && len(req.Playgrounds) == 0 && len(req.MaaSPublished) == 0 && !req.MaaSPlatform && len(req.Components) == 0 && req.RecipeProject == "" {
 		writeError(w, "nothing to clean up was selected", http.StatusBadRequest, "validation")
 		return
 	}
@@ -216,11 +233,14 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	if req.MaaSPlatform {
 		target = append(target, "MaaS platform")
 	}
+	if req.RecipeProject != "" {
+		target = append(target, "recipe project "+req.RecipeProject)
+	}
 	if len(req.Components) > 0 {
 		target = append(target, "DataScienceCluster "+strings.Join(req.Components, ", "))
 	}
 	beginOperation(w, strings.Join(target, ", "))
-	slog.Info("mutation", "op", "cleanup", "pipelineServers", req.PipelineServers, "storage", req.Storage, "deleteNamespace", req.DeleteNamespace, "mlflow", req.MLflow, "models", req.Models, "inferenceGateway", req.InferenceGateway, "playgrounds", req.Playgrounds, "maasPublished", req.MaaSPublished, "maasPlatform", req.MaaSPlatform, "components", req.Components)
+	slog.Info("mutation", "op", "cleanup", "pipelineServers", req.PipelineServers, "storage", req.Storage, "deleteNamespace", req.DeleteNamespace, "mlflow", req.MLflow, "models", req.Models, "inferenceGateway", req.InferenceGateway, "playgrounds", req.Playgrounds, "maasPublished", req.MaaSPublished, "maasPlatform", req.MaaSPlatform, "components", req.Components, "recipeProject", req.RecipeProject)
 
 	_, cleanupErr := streamOperation(w, "cleanup", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 		return runCleanUp(c, req, emit)

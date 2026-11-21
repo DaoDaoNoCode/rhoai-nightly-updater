@@ -13,7 +13,9 @@ type Route struct {
 
 // routes are the API endpoints. Every route that is not a GET changes the
 // cluster and must go through withMutationAuth (the cluster-admin gate) and
-// lockCluster, except POST /api/pageview, which only counts page views.
+// lockCluster (a recipe run and resume: lockRecipeRunner), except POST
+// /api/pageview, which only counts page views, and POST /api/recipes/stop,
+// which only asks the running recipe run (which holds the lock) to stop.
 // TestEveryNonGetRouteIsGated checks this. Every GET route has a tier in
 // getRouteTiers (route_tiers.go): who may read it; one without is
 // admin-only.
@@ -85,6 +87,11 @@ var routes = []Route{
 	{"POST /api/diagnostics/fix/acknowledged", HandleDiagnosticsFixAcknowledged},
 	{"GET /api/setup/dsc/preview", HandleDSCPreview},
 	{"POST /api/setup/dsc", HandleCreateDSC},
+	{"POST /api/recipes/plan", HandleRecipePlan},
+	{"POST /api/recipes/run", HandleRecipeRun},
+	{"POST /api/recipes/resume", HandleRecipeResume},
+	{"POST /api/recipes/stop", HandleRecipeStop},
+	{"GET /api/recipes/run", HandleRecipeRunStatus},
 	{"POST /api/pageview", HandlePageView},
 }
 
@@ -181,6 +188,11 @@ var gitOpsRefused = map[string]string{
 	"POST /api/diagnostics/fix/acknowledged":       "Diagnostics fixes",
 	"GET /api/setup/dsc/preview":                   "Creating the DataScienceCluster",
 	"POST /api/setup/dsc":                          "Creating the DataScienceCluster",
+	"POST /api/recipes/plan":                       "Environment recipes",
+	"POST /api/recipes/run":                        "Environment recipes",
+	"POST /api/recipes/resume":                     "Environment recipes",
+	"POST /api/recipes/stop":                       "Environment recipes",
+	"GET /api/recipes/run":                         "Environment recipes",
 }
 
 // Register adds the API endpoints of the active profile to mux. In the
