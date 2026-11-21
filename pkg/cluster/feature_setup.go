@@ -747,18 +747,18 @@ func RunPrerequisites(c *Client, req types.PrerequisitesRequest, onStep func(Upd
 
 	// 2. The operators.
 	for _, o := range p.operators {
-		if r, err := m.ensureOperator(&p.rec, o); r != nil || err != nil {
+		if r, err := ensureOperator(m, &p.rec, o); r != nil || err != nil {
 			return r, err
 		}
 	}
 	if fs.kuadrant {
-		if r, err := m.ensureKuadrant(&p.rec); r != nil || err != nil {
+		if r, err := ensureKuadrant(m, &p.rec); r != nil || err != nil {
 			return r, err
 		}
 	}
 
 	// 3. Ready.
-	return m.waitPrerequisitesReady(p)
+	return waitPrerequisitesReady(m, p)
 }
 
 func componentKeys(cps []componentPlan) []string {
@@ -771,7 +771,7 @@ func componentKeys(cps []componentPlan) []string {
 
 // ensureOperator installs o when it is missing, or waits for the install
 // OLM is doing, on the operator's own step.
-func (m *maasRun) ensureOperator(rec *prereqRecord, o operatorPlan) (*types.OperationResponse, error) {
+func ensureOperator(m *maasRun, rec *prereqRecord, o operatorPlan) (*types.OperationResponse, error) {
 	op := o.op
 	switch {
 	case o.install != nil:
@@ -808,7 +808,7 @@ func (m *maasRun) ensureOperator(rec *prereqRecord, o operatorPlan) (*types.Oper
 // Connectivity Link serves its API (step "kuadrant"), in the namespace
 // Connectivity Link runs in, as the MaaS setup does. It stays after Clean
 // up: Connectivity Link's policies are shared.
-func (m *maasRun) ensureKuadrant(rec *prereqRecord) (*types.OperationResponse, error) {
+func ensureKuadrant(m *maasRun, rec *prereqRecord) (*types.OperationResponse, error) {
 	c := m.c
 	k, err := readKuadrant(c)
 	if err != nil {
@@ -855,7 +855,7 @@ func (m *maasRun) ensureKuadrant(rec *prereqRecord) (*types.OperationResponse, e
 // Ready and, for KServe, until its dependency condition no longer names an
 // operator this setup installs. A condition that is never reported is not a
 // failure (an older RHOAI does not report it).
-func (m *maasRun) waitPrerequisitesReady(p *featurePlan) (*types.OperationResponse, error) {
+func waitPrerequisitesReady(m *maasRun, p *featurePlan) (*types.OperationResponse, error) {
 	c := m.c
 	m.step("ready", "running", fmt.Sprintf("Waiting for RHOAI's operator to report %s ready (usually 1 to 3 minutes)...", joinTitles(componentKeys(p.components))))
 	last := ""
