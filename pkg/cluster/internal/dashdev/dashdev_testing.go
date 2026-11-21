@@ -31,3 +31,13 @@ func mustBeTest(what string) {
 		panic(what + " is only for tests")
 	}
 }
+
+// SetDeploymentsReadyTimingForTest sets WaitDeploymentsReady's timeout and
+// poll and returns the function that puts the previous ones back. It
+// panics outside a test binary.
+func SetDeploymentsReadyTimingForTest(timeout, poll time.Duration) (restore func()) {
+	mustBeTest("SetDeploymentsReadyTimingForTest")
+	prevTimeout, prevPoll := DeploymentsReadyTimeout, deploymentsReadyPoll
+	DeploymentsReadyTimeout, deploymentsReadyPoll = timeout, poll
+	return func() { DeploymentsReadyTimeout, deploymentsReadyPoll = prevTimeout, prevPoll }
+}

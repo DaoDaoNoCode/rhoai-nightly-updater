@@ -28,6 +28,14 @@ func SetDeleteTimingForTest(timeout, poll time.Duration) (restore func()) {
 	return func() { deleteTimeout, deletePoll = prevTimeout, prevPoll }
 }
 
+// SetReadyTimingForTest sets WaitReady's timeout and poll.
+func SetReadyTimingForTest(timeout, poll time.Duration) (restore func()) {
+	mustBeTest("SetReadyTimingForTest")
+	prevTimeout, prevPoll := ReadyTimeout, readyPoll
+	ReadyTimeout, readyPoll = timeout, poll
+	return func() { ReadyTimeout, readyPoll = prevTimeout, prevPoll }
+}
+
 // SetSamplesHTTPClientForTest makes client send the samples' requests.
 func SetSamplesHTTPClientForTest(client *http.Client) (restore func()) {
 	mustBeTest("SetSamplesHTTPClientForTest")

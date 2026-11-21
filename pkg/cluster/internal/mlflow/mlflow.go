@@ -205,7 +205,7 @@ func Status(c *kube.Client) types.ResourceState {
 		return state
 	}
 	if err != nil {
-		state.Message = "Cannot read MLflow status: " + err.Error()
+		state.Message = statusReadFailed + err.Error()
 		return state
 	}
 	state.Deployed = true
