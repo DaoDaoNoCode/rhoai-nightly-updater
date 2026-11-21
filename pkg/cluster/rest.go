@@ -17,3 +17,15 @@ func isK8sNotFound(err error) bool { return IsK8sError(err, http.StatusNotFound)
 // isK8sConflict reports whether err is the API server's 409: the object
 // already exists (a create) or changed since it was read (an update).
 func isK8sConflict(err error) bool { return IsK8sError(err, http.StatusConflict) }
+
+// deleteIfExists deletes the object at path. An object that is already gone
+// (404) is no error: existed is then false. Other errors are delete's.
+func (c *Client) deleteIfExists(path string) (existed bool, err error) {
+	if _, err := c.delete(path); err != nil {
+		if isK8sNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}

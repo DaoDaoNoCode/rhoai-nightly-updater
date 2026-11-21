@@ -717,7 +717,7 @@ func updateApplyCatalog(c *Client, image string, recovery *operatorRecovery, log
 	emit(UpdateStepEvent{Step: "apply_catalog_source", Status: "running", Message: "Applying CatalogSource..."})
 	if recovery.subscription != nil {
 		recovery.subscriptionChanged = true
-		if _, err := c.delete(subscriptionPath()); err != nil && !isK8sNotFound(err) {
+		if _, err := c.deleteIfExists(subscriptionPath()); err != nil {
 			return fail("Cannot remove the current Subscription: "+err.Error(), errorCodeFromK8sErr(err))
 		}
 		*logs = append(*logs, "OK: Subscription removed while the catalog is replaced (the operator keeps running)")
@@ -728,7 +728,7 @@ func updateApplyCatalog(c *Client, image string, recovery *operatorRecovery, log
 	recovery.noteCatalogChanged()
 	// Recreate this source so READY and PackageManifest cannot describe its
 	// previous image. The verified temporary catalog remains separate.
-	if _, deleteErr := c.delete(csPath); deleteErr != nil && !isK8sNotFound(deleteErr) {
+	if _, deleteErr := c.deleteIfExists(csPath); deleteErr != nil {
 		return fail("Cannot replace nightly catalog: "+deleteErr.Error(), errorCodeFromK8sErr(deleteErr))
 	}
 	if _, _, err := c.apply(csPath, buildCatalogSourceSpec(image)); err != nil {
@@ -801,13 +801,13 @@ func updateDeleteCSV(c *Client, currentCSV types.CSVInfo, recovery *operatorReco
 	emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting old CSV and InstallPlan..."})
 	if ipName := recovery.installPlanName(); ipName != "" {
 		ipPath := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ipName)
-		if _, err := c.delete(ipPath); err != nil && !isK8sNotFound(err) {
+		if _, err := c.deleteIfExists(ipPath); err != nil {
 			return fail("Cannot delete old InstallPlan: "+err.Error(), errorCodeFromK8sErr(err))
 		}
 		*logs = append(*logs, fmt.Sprintf("OK: InstallPlan %s deleted", ipName))
 	}
 	if currentCSV.Name != "" {
-		if _, err := c.delete(csvPath(currentCSV.Name)); err != nil && !isK8sNotFound(err) {
+		if _, err := c.deleteIfExists(csvPath(currentCSV.Name)); err != nil {
 			return fail("Cannot delete current CSV: "+err.Error(), errorCodeFromK8sErr(err))
 		}
 		recovery.noteCSVRemoved(currentCSV.Name)
@@ -1449,13 +1449,13 @@ func reinstallRemoveOperator(c *Client, csv types.CSVInfo, recovery *operatorRec
 	// --- Step 3: delete_catalog_source ---
 	emit(UpdateStepEvent{Step: "delete_catalog_source", Status: "running", Message: "Removing nightly CatalogSource..."})
 	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
-	if _, delErr := c.delete(csPath); delErr != nil {
-		if !isK8sNotFound(delErr) {
-			return fail("Cannot remove nightly CatalogSource: "+delErr.Error(), errorCodeFromK8sErr(delErr))
-		}
+	switch existed, delErr := c.deleteIfExists(csPath); {
+	case delErr != nil:
+		return fail("Cannot remove nightly CatalogSource: "+delErr.Error(), errorCodeFromK8sErr(delErr))
+	case !existed:
 		*logs = append(*logs, "OK: nightly CatalogSource already absent")
 		emit(UpdateStepEvent{Step: "delete_catalog_source", Status: "skipped", Message: "Nightly CatalogSource already absent"})
-	} else {
+	default:
 		recovery.noteCatalogChanged()
 		*logs = append(*logs, "OK: nightly CatalogSource deleted")
 		emit(UpdateStepEvent{Step: "delete_catalog_source", Status: "success", Message: "Nightly CatalogSource deleted"})
@@ -1463,13 +1463,13 @@ func reinstallRemoveOperator(c *Client, csv types.CSVInfo, recovery *operatorRec
 
 	// --- Step 4: delete_subscription ---
 	emit(UpdateStepEvent{Step: "delete_subscription", Status: "running", Message: "Removing operator Subscription..."})
-	if _, delErr := c.delete(subscriptionPath()); delErr != nil {
-		if !isK8sNotFound(delErr) {
-			return fail(fmt.Sprintf("Failed to delete Subscription: %v", delErr), errorCodeFromK8sErr(delErr))
-		}
+	switch existed, delErr := c.deleteIfExists(subscriptionPath()); {
+	case delErr != nil:
+		return fail(fmt.Sprintf("Failed to delete Subscription: %v", delErr), errorCodeFromK8sErr(delErr))
+	case !existed:
 		*logs = append(*logs, "OK: Subscription already absent")
 		emit(UpdateStepEvent{Step: "delete_subscription", Status: "skipped", Message: "Subscription already absent"})
-	} else {
+	default:
 		recovery.subscriptionChanged = true
 		*logs = append(*logs, "OK: Subscription deleted")
 		emit(UpdateStepEvent{Step: "delete_subscription", Status: "success", Message: "Subscription deleted"})
@@ -1478,7 +1478,7 @@ func reinstallRemoveOperator(c *Client, csv types.CSVInfo, recovery *operatorRec
 	// --- Step 5: delete_csv ---
 	emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Removing current CSV..."})
 	if csv.Name != "" {
-		if _, err := c.delete(csvPath(csv.Name)); err != nil && !isK8sNotFound(err) {
+		if _, err := c.deleteIfExists(csvPath(csv.Name)); err != nil {
 			return fail("Cannot delete current CSV: "+err.Error(), errorCodeFromK8sErr(err))
 		}
 		recovery.noteCSVRemoved(csv.Name)
@@ -1971,7 +1971,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	// new InstallPlan as soon as the CSV disappears, and deleting the
 	// Subscription afterwards would garbage-collect that plan mid-install.
 	emit(UpdateStepEvent{Step: "delete_subscription", Status: "running", Message: "Deleting Subscription..."})
-	if _, subDelErr := c.delete(subscriptionPath()); subDelErr != nil && !isK8sNotFound(subDelErr) {
+	if _, subDelErr := c.deleteIfExists(subscriptionPath()); subDelErr != nil {
 		return fail(fmt.Sprintf("Failed to delete Subscription: %v", subDelErr), errorCodeFromK8sErr(subDelErr))
 	}
 	recovery.subscriptionChanged = true
@@ -1984,7 +1984,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	} else {
 		emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting CSV to trigger a fresh install..."})
 		logs = append(logs, fmt.Sprintf("Deleting CSV %s...", csv.Name))
-		if _, csvDelErr := c.delete(csvPath(csv.Name)); csvDelErr != nil && !isK8sNotFound(csvDelErr) {
+		if _, csvDelErr := c.deleteIfExists(csvPath(csv.Name)); csvDelErr != nil {
 			return fail(fmt.Sprintf("Failed to delete CSV %s: %v", csv.Name, csvDelErr), errorCodeFromK8sErr(csvDelErr))
 		}
 		recovery.noteCSVRemoved(csv.Name)

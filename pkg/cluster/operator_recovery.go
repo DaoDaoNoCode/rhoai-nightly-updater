@@ -219,7 +219,7 @@ func (r *operatorRecovery) restoreNightlyCatalog(c *Client) []string {
 		}
 		return nil
 	}
-	if _, err := c.delete(catalogPath); err != nil && !isK8sNotFound(err) {
+	if _, err := c.deleteIfExists(catalogPath); err != nil {
 		return []string{"remove the new CatalogSource: " + err.Error()}
 	}
 	return nil

@@ -231,7 +231,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting old CSV and InstallPlan..."})
 	if ipName := recovery.installPlanName(); ipName != "" {
 		ipPath := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ipName)
-		if _, err := c.delete(ipPath); err != nil && !isK8sNotFound(err) {
+		if _, err := c.deleteIfExists(ipPath); err != nil {
 			return fail("Cannot delete old InstallPlan: "+err.Error(), errorCodeFromK8sErr(err))
 		}
 		*logs = append(*logs, fmt.Sprintf("OK: InstallPlan %s deleted", ipName))

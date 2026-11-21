@@ -169,7 +169,7 @@ func TestOwnConfigMapsAreReachedOnlyThroughBookkeeping(t *testing.T) {
 				if !ok {
 					return true
 				}
-				method, pathArg := sel.Sel.Name, call.Args[0]
+				method, pathArg := requestMethod(sel.Sel.Name), call.Args[0]
 				if method == "do" && len(call.Args) >= 2 {
 					method, pathArg = rawMethods[selectorName(call.Args[0])], call.Args[1]
 				}

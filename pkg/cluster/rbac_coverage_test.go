@@ -148,6 +148,27 @@ var methodVerbs = map[string][]string{
 // not a path: the scans attribute each request to the helper's call site.
 var requestSourceFiles = map[string]bool{"client.go": true, "rest.go": true}
 
+// helperMethods maps each REST helper (rest.go) to the Client request
+// method it sends for its path argument (the first, as for the request
+// methods).
+var helperMethods = map[string]string{
+	"getOptional":     "get",
+	"getInto":         "get",
+	"getIntoOptional": "get",
+	"listInto":        "get",
+	"deleteIfExists":  "delete",
+	"patchJSON":       "patch",
+}
+
+// requestMethod is the Client request method a call by this method name
+// sends: a helper's (helperMethods), or the name itself.
+func requestMethod(name string) string {
+	if m, ok := helperMethods[name]; ok {
+		return m
+	}
+	return name
+}
+
 // rawMethods maps the http.Method constants passed to Client.do to the
 // Client method with the same RBAC verbs.
 var rawMethods = map[string]string{
@@ -968,7 +989,7 @@ func scanRequests(t *testing.T, only map[string]bool, onlyBookkeeping bool) ([]r
 				if !ok || len(call.Args) == 0 {
 					return true
 				}
-				method := sel.Sel.Name
+				method := requestMethod(sel.Sel.Name)
 				pathArg := call.Args[0]
 				if method == "do" {
 					// c.do(http.MethodX, path, ...): the raw request method.
