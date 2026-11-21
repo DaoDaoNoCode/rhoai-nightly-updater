@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -270,8 +271,8 @@ func TestDSCWriteKeepsTheRefusalWhenTheStatusMovesMeanwhile(t *testing.T) {
 			if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, invalid) || strings.Count(res.Message, "Nothing was changed") != 1 {
 				t.Fatalf("result = %+v", res)
 			}
-			if _, real := patchesTo(f); len(real) != dscWriteAttempts {
-				t.Fatalf("real patches = %d, want %d", len(real), dscWriteAttempts)
+			if _, real := patchesTo(f); len(real) != dsc.WriteAttempts {
+				t.Fatalf("real patches = %d, want %d", len(real), dsc.WriteAttempts)
 			}
 			if rayState(f) != "Managed" {
 				t.Fatalf("ray = %q", rayState(f))
@@ -290,8 +291,8 @@ func TestDSCWriteGivesUpWhenTheDSCKeepsChanging(t *testing.T) {
 			if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "changed each time") || !strings.Contains(res.Message, "Nothing was changed") {
 				t.Fatalf("result = %+v", res)
 			}
-			if _, real := patchesTo(f); len(real) != dscWriteAttempts {
-				t.Fatalf("real patches = %d, want %d", len(real), dscWriteAttempts)
+			if _, real := patchesTo(f); len(real) != dsc.WriteAttempts {
+				t.Fatalf("real patches = %d, want %d", len(real), dsc.WriteAttempts)
 			}
 			if rayState(f) != "Managed" {
 				t.Fatalf("ray = %q", rayState(f))

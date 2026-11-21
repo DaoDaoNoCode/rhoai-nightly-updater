@@ -1,4 +1,4 @@
-package cluster
+package dsc
 
 import (
 	"encoding/json"
@@ -62,20 +62,22 @@ import (
 // read error is retried until the deadline; the reset then stops and says
 // what is still there.
 
-// hardResetOperator is the operator Deployment of a module CR the old DSC
+// HardResetOperator is the operator Deployment of a module CR the old DSC
 // owned, as it was before the delete.
-type hardResetOperator struct {
+type HardResetOperator struct {
 	Module, Namespace, Name, UID string
 }
 
-func (o hardResetOperator) record() string { return o.Namespace + "/" + o.Name + "/" + o.UID }
+// Record is o as the hard-reset record stores it: namespace/name/uid.
+func (o HardResetOperator) Record() string { return o.Namespace + "/" + o.Name + "/" + o.UID }
 
-func parseHardResetOperator(s string) (hardResetOperator, bool) {
+// ParseHardResetOperator reads Record's form back; false when s is not one.
+func ParseHardResetOperator(s string) (HardResetOperator, bool) {
 	parts := strings.Split(s, "/")
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return hardResetOperator{}, false
+		return HardResetOperator{}, false
 	}
-	return hardResetOperator{Namespace: parts[0], Name: parts[1], UID: parts[2]}, true
+	return HardResetOperator{Namespace: parts[0], Name: parts[1], UID: parts[2]}, true
 }
 
 // ownedModuleCR is an object of a module kind owned by the old DSC.
@@ -96,7 +98,7 @@ func (o ownedModuleCR) text() string {
 
 // moduleCRsOwnedBy lists the objects of every module kind (both module API
 // groups) that have an ownerReference to uid.
-func moduleCRsOwnedBy(c *Client, uid string) ([]ownedModuleCR, error) {
+func moduleCRsOwnedBy(c *kube.Client, uid string) ([]ownedModuleCR, error) {
 	api, err := rhoai.DiscoverComponentAPI(c)
 	if err != nil {
 		return nil, err
@@ -122,18 +124,18 @@ func moduleCRsOwnedBy(c *Client, uid string) ([]ownedModuleCR, error) {
 	return out, nil
 }
 
-// hardResetOperators returns the operator Deployments of the module CRs the
+// HardResetOperators returns the operator Deployments of the module CRs the
 // DSC owns. A module CR whose operator the tool cannot identify, or whose
 // operator the DSC itself owns (the collector would delete it with the DSC
 // while the CR still needs it), is a refusal. Kinds the RHOAI operator
 // reconciles itself (Kueue) have no Deployment to wait for.
-func hardResetOperators(c *Client, dscUID string) ([]hardResetOperator, string, error) {
+func HardResetOperators(c *kube.Client, dscUID string) ([]HardResetOperator, string, error) {
 	owned, err := moduleCRsOwnedBy(c, dscUID)
 	if err != nil {
 		return nil, "", err
 	}
 	finder := components.NewModuleOperatorFinder(c, nil)
-	var out []hardResetOperator
+	var out []HardResetOperator
 	seen := map[string]bool{}
 	var refusals []string
 	for _, cr := range owned {
@@ -164,16 +166,16 @@ func hardResetOperators(c *Client, dscUID string) ([]hardResetOperator, string, 
 		if err := json.Unmarshal(body, &d); err != nil || d.Metadata.UID == "" {
 			return nil, "", fmt.Errorf("read Deployment %s: no uid", op.Ref())
 		}
-		out = append(out, hardResetOperator{Module: cr.Kind.Module(), Namespace: op.Namespace, Name: op.Name, UID: d.Metadata.UID})
+		out = append(out, HardResetOperator{Module: cr.Kind.Module(), Namespace: op.Namespace, Name: op.Name, UID: d.Metadata.UID})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].record() < out[j].record() })
+	sort.Slice(out, func(i, j int) bool { return out[i].Record() < out[j].Record() })
 	return out, strings.Join(refusals, "; "), nil
 }
 
-// operatorsLeft returns the recorded operator Deployments that still exist
+// OperatorsLeft returns the recorded operator Deployments that still exist
 // with the recorded UID.
-func operatorsLeft(c *Client, ops []hardResetOperator) ([]hardResetOperator, error) {
-	var left []hardResetOperator
+func OperatorsLeft(c *kube.Client, ops []HardResetOperator) ([]HardResetOperator, error) {
+	var left []HardResetOperator
 	for _, o := range ops {
 		var d struct {
 			Metadata kube.ObjectMeta `json:"metadata"`
@@ -195,7 +197,7 @@ func operatorsLeft(c *Client, ops []hardResetOperator) ([]hardResetOperator, err
 	return left, nil
 }
 
-// platformModulesSettled reports whether the Platform "default" says, for
+// PlatformModulesSettled reports whether the Platform "default" says, for
 // the generation it is at, that no module is pending deletion (see the top
 // of this file). Without the Platform API (operators before 3.6) or without
 // a Platform "default" there is nothing to wait for: the modules
@@ -203,7 +205,7 @@ func operatorsLeft(c *Client, ops []hardResetOperator) ([]hardResetOperator, err
 // module CRs are checked separately. A Platform being deleted is not
 // settled (its finalizer waitForModuleCRDeletion holds it while module CRs
 // exist, R modules_controller_actions.go:343-391).
-func platformModulesSettled(c *Client) (bool, string, error) {
+func PlatformModulesSettled(c *kube.Client) (bool, string, error) {
 	r, err := rhoai.ListServed(c, rhoai.PlatformGroup, rhoai.PlatformListFmt, nil, rhoai.PlatformFallbackVersions)
 	switch {
 	case kube.IsK8sNotFound(err), err == nil && r.Version == "":
@@ -257,20 +259,20 @@ func platformModulesSettled(c *Client) (bool, string, error) {
 	return true, "no Platform default exists", nil
 }
 
-// teardownState is what still stands between the deleted DSC and the
+// TeardownState is what still stands between the deleted DSC and the
 // create: "" when nothing.
-type teardownState struct {
+type TeardownState struct {
 	ModuleCRs []ownedModuleCR
-	Operators []hardResetOperator
+	Operators []HardResetOperator
 	Platform  string // why the Platform is not settled
 }
 
-func (s teardownState) done() bool {
+func (s TeardownState) done() bool {
 	return len(s.ModuleCRs) == 0 && len(s.Operators) == 0 && s.Platform == ""
 }
 
-// progress words the state for a step message.
-func (s teardownState) progress() string {
+// Progress words the state for a step message.
+func (s TeardownState) Progress() string {
 	switch {
 	case len(s.ModuleCRs) > 0:
 		var names []string
@@ -290,8 +292,8 @@ func (s teardownState) progress() string {
 	return "Every module the DataScienceCluster owned is cleaned up"
 }
 
-// stuck words, for the timeout, what is still there and what to check.
-func (s teardownState) stuck() string {
+// Stuck words, for the timeout, what is still there and what to check.
+func (s TeardownState) Stuck() string {
 	switch {
 	case len(s.ModuleCRs) > 0:
 		var names []string
@@ -312,16 +314,16 @@ func (s teardownState) stuck() string {
 }
 
 // readTeardown reads what is still there after the DSC uid is gone.
-func readTeardown(c *Client, uid string, ops []hardResetOperator) (teardownState, error) {
-	var st teardownState
+func readTeardown(c *kube.Client, uid string, ops []HardResetOperator) (TeardownState, error) {
+	var st TeardownState
 	var err error
 	if st.ModuleCRs, err = moduleCRsOwnedBy(c, uid); err != nil || len(st.ModuleCRs) > 0 {
 		return st, err
 	}
-	if st.Operators, err = operatorsLeft(c, ops); err != nil || len(st.Operators) > 0 {
+	if st.Operators, err = OperatorsLeft(c, ops); err != nil || len(st.Operators) > 0 {
 		return st, err
 	}
-	settled, why, err := platformModulesSettled(c)
+	settled, why, err := PlatformModulesSettled(c)
 	if err != nil {
 		return st, err
 	}
@@ -372,7 +374,7 @@ const maxOwnerDepth = 8
 // plan's withAdminRead and the reset's withMutationAuth check that). With
 // no such client it refuses. It returns the refusal in whole sentences, ""
 // when no namespace is at risk.
-func namespaceOwnerBlocker(c *Client) string {
+func namespaceOwnerBlocker(c *kube.Client) string {
 	u := c.SignedInUser()
 	if u == nil {
 		return "The tool reads the namespaces' owners with your own sign-in, and this request has none, so it cannot tell whether the garbage collector would delete a namespace with the DataScienceCluster."
@@ -429,7 +431,7 @@ type apiResource struct {
 // ownerResolver reads owners of any cluster-scoped kind with the signed-in
 // user's client, finding their resource from API discovery.
 type ownerResolver struct {
-	c    *Client
+	c    *kube.Client
 	docs map[string][]apiResource
 	memo map[string]ownerVerdict // by owner UID
 }

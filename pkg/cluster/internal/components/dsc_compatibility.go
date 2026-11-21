@@ -164,7 +164,7 @@ var dscPartModules = map[string]string{
 }
 
 // GuardModule maps a management path to the module the removal
-// preconditions (removalChecker.blockers) are about. The preconditions are
+// preconditions (dsc.RemovalChecker.blockers) are about. The preconditions are
 // per module CR: the refused components, the CR's finalizers, the module
 // operator that removes them, and the conversion webhook Services the
 // module serves. A part is configured on its component's module CR

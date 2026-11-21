@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -100,12 +101,12 @@ func leftoverObject(s components.ReporterScan, group, kind, namespace, name stri
 	return rf
 }
 
-// usersReader lists what still uses a component (componentUsers); nil when
+// usersReader lists what still uses a component (dsc.ComponentUsers); nil when
 // the caller cannot read that.
 type usersReader func(c *Client, component string) ([]string, error)
 
 // checkLeftovers is the "Left over from an earlier release" check.
-func checkLeftovers(c *Client) checkOutput { return leftoversCheck(c, componentUsers) }
+func checkLeftovers(c *Client) checkOutput { return leftoversCheck(c, dsc.ComponentUsers) }
 
 // checkLeftoversGitOps is checkLeftovers in the gitops profile, whose
 // ServiceAccount does not read the resources that tell what uses a
@@ -177,12 +178,12 @@ func (s fieldSchema) text() string {
 	if len(s.Enum) > 0 {
 		var vals []string
 		for _, e := range s.Enum {
-			vals = append(vals, fieldText(e))
+			vals = append(vals, dsc.FieldText(e))
 		}
 		parts = append(parts, "one of "+strings.Join(vals, ", "))
 	}
 	if s.HasDefault {
-		parts = append(parts, "default "+fieldText(s.Default))
+		parts = append(parts, "default "+dsc.FieldText(s.Default))
 	}
 	if s.Required {
 		parts = append(parts, "required")
@@ -1001,7 +1002,7 @@ func analyzeRecreate(c *Client, rf *components.ReportedApplyFailure, appNS strin
 
 	// The operator that recreates it must be running.
 	if r.Module == "" {
-		if why := operatorDeploymentsBlocker(c); why != "" {
+		if why := dsc.OperatorDeploymentsBlocker(c); why != "" {
 			r.Blockers = append(r.Blockers, why)
 		} else {
 			r.Recreator = "the RHOAI operator"
@@ -1023,9 +1024,9 @@ func analyzeRecreate(c *Client, rf *components.ReportedApplyFailure, appNS strin
 	// What stops while it is gone.
 	r.Warnings = append(r.Warnings, fmt.Sprintf("%s and its pods stop now; %s creates it again with the current selector on its next reconcile, usually within seconds; the old ReplicaSets and pods are removed in the background.", r.ref(), kube.NonEmpty(r.Recreator, "its operator")))
 	switch {
-	case r.Module != "" && usersCheckedComponents[r.Module] && users == nil:
+	case r.Module != "" && dsc.UsersCheckedComponents[r.Module] && users == nil:
 		r.AckReasons = append(r.AckReasons, fmt.Sprintf("this scan does not check what uses %s", r.Module))
-	case r.Module != "" && usersCheckedComponents[r.Module]:
+	case r.Module != "" && dsc.UsersCheckedComponents[r.Module]:
 		inUse, err := users(c, r.Module)
 		switch {
 		case err != nil:

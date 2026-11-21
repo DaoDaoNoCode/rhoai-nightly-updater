@@ -1,4 +1,4 @@
-package cluster
+package dsc
 
 import (
 	"fmt"
@@ -71,7 +71,7 @@ func (u maasUse) text() string {
 // the MaaSModelRefs, MaaSSubscriptions and MaaSAuthPolicies at the version
 // discovery reports (serving.ListMaaSObjects). Any read that fails is returned,
 // a 404 on a list of a served group included.
-func readMaaSUse(c *Client) (maasUse, error) {
+func readMaaSUse(c *kube.Client) (maasUse, error) {
 	var u maasUse
 	rec, err := serving.ReadMaaSRecord(c)
 	if err != nil {
@@ -111,7 +111,7 @@ func readMaaSUse(c *Client) (maasUse, error) {
 }
 
 // maasUse reads what uses MaaS once per checker.
-func (rc *removalChecker) maasUse() (maasUse, error) {
+func (rc *RemovalChecker) maasUse() (maasUse, error) {
 	if !rc.maasLoaded {
 		rc.maasLoaded = true
 		rc.maas, rc.maasErr = readMaaSUse(rc.c)
@@ -122,7 +122,7 @@ func (rc *removalChecker) maasUse() (maasUse, error) {
 // maasBlocker says why path must not stop being deployed now: it takes
 // MaaS away while MaaS is in use, or the tool cannot tell whether it is.
 // "" for other paths and when MaaS is not in use.
-func (rc *removalChecker) maasBlocker(path string) string {
+func (rc *RemovalChecker) maasBlocker(path string) string {
 	if !takesMaaSAway(path) {
 		return ""
 	}
@@ -142,10 +142,10 @@ func (rc *removalChecker) maasBlocker(path string) string {
 // down only meanwhile: it returns that path and what stops working until
 // it is back (the published models and the API keys), while a read that
 // fails still blocks.
-func (v *dscView) maasBlocks(rc *removalChecker, before, after map[string]any, teardown bool) (*types.DSCRemovalBlock, string, []string) {
+func (v *View) maasBlocks(rc *RemovalChecker, before, after map[string]any, teardown bool) (*types.DSCRemovalBlock, string, []string) {
 	gone, down := "", ""
 	for _, p := range dscMaaSPaths {
-		t, ok := v.byKey[p]
+		t, ok := v.ByKey[p]
 		if !ok || !t.Toggle || !v.deployed(before, t.Path) {
 			continue
 		}

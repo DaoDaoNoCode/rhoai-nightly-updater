@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -89,7 +90,7 @@ func getComponents(c *Client, reads componentRegistryReads, includeLabels bool) 
 		resp.DSCAPIVersion, _ = read.Object["apiVersion"].(string)
 		resp.DSCVersionFallback = read.VersionFallback()
 		<-installedOpReadyCh
-		resp.DSCCompatibility = checkDSCCompatibilityFor(c, read, installedOp, installedOpErr, reads.dscSample)
+		resp.DSCCompatibility = dsc.CheckCompatibilityFor(c, read, installedOp, installedOpErr, reads.dscSample)
 		components.AddDSCComponents(resp, read.Object)
 	}
 	wg.Wait()

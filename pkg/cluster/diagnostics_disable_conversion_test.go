@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -110,7 +111,7 @@ func TestConversionBlockerNamesTheObjectsThatExist(t *testing.T) {
 	w.list(mcpStorage, func(*http.Request) (int, string) {
 		return http.StatusOK, `{"metadata":{"resourceVersion":"9"},"items":[` + mcpItems("team-b/search", "team-a/github", "team-a/fetch", "team-b/time") + `]}`
 	})
-	why := newRemovalChecker(w.c).conversionBlocker("mcplifecycleoperator")
+	why := dsc.NewRemovalChecker(w.c).ConversionBlocker("mcplifecycleoperator")
 	for _, want := range []string{
 		"mcplifecycleoperator serves the conversion webhook of CRD " + mcpCRDName,
 		"4 objects of " + mcpCRDName + " exist: team-a/fetch, team-a/github, team-b/search, team-b/time.",
@@ -133,15 +134,15 @@ func TestConversionBlockerNamesTheObjectsThatExist(t *testing.T) {
 func TestConversionBlockerAllowsWhenNoObjectsExist(t *testing.T) {
 	w := newConvObjectsWorld(t, false, mcpCRDJSON("Namespaced", mcpVersions))
 	w.list(mcpStorage, func(*http.Request) (int, string) { return http.StatusOK, `{"metadata":{},"items":[]}` })
-	rc := newRemovalChecker(w.c)
-	if why := rc.conversionBlocker("mcplifecycleoperator"); why != "" {
+	rc := dsc.NewRemovalChecker(w.c)
+	if why := rc.ConversionBlocker("mcplifecycleoperator"); why != "" {
 		t.Fatalf("blocker = %q, want none", why)
 	}
 	if got := w.calls(mcpStorage); len(got) != 1 || !strings.HasPrefix(got[0], convUserAuth) {
 		t.Fatalf("lists = %q", got)
 	}
 	// A component that serves no conversion webhook lists nothing.
-	if why := rc.conversionBlocker("ray"); why != "" {
+	if why := rc.ConversionBlocker("ray"); why != "" {
 		t.Fatalf("ray: %q", why)
 	}
 	if got := w.calls(mcpStorage); len(got) != 1 {
@@ -167,7 +168,7 @@ func TestConversionBlockerFailsClosedWhenTheListFails(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newConvObjectsWorld(t, false, mcpCRDJSON("Namespaced", mcpVersions))
 			w.list(mcpStorage, func(*http.Request) (int, string) { return tc.status, tc.body })
-			why := newRemovalChecker(w.c).conversionBlocker("mcplifecycleoperator")
+			why := dsc.NewRemovalChecker(w.c).ConversionBlocker("mcplifecycleoperator")
 			for _, want := range []string{
 				"The objects of " + mcpCRDName + " could not be listed with your sign-in: ",
 				tc.want,
@@ -201,7 +202,7 @@ func TestConversionBlockerFailsClosedWhenTheAnswerIsNotAList(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newConvObjectsWorld(t, false, mcpCRDJSON("Namespaced", mcpVersions))
 			w.list(mcpStorage, func(*http.Request) (int, string) { return http.StatusOK, tc.body })
-			why := newRemovalChecker(w.c).conversionBlocker("mcplifecycleoperator")
+			why := dsc.NewRemovalChecker(w.c).ConversionBlocker("mcplifecycleoperator")
 			for _, want := range []string{
 				"The objects of " + mcpCRDName + " could not be listed with your sign-in: " + tc.want,
 				"Check for them with: oc get " + mcpCRDName + " -A.",
@@ -216,7 +217,7 @@ func TestConversionBlockerFailsClosedWhenTheAnswerIsNotAList(t *testing.T) {
 	for _, body := range []string{`{"items":[]}`, `{"kind":"MCPServerList","apiVersion":"mcp.x-k8s.io/v1beta1","metadata":{"resourceVersion":"9"},"items":[]}`} {
 		w := newConvObjectsWorld(t, false, mcpCRDJSON("Namespaced", mcpVersions))
 		w.list(mcpStorage, func(*http.Request) (int, string) { return http.StatusOK, body })
-		if why := newRemovalChecker(w.c).conversionBlocker("mcplifecycleoperator"); why != "" {
+		if why := dsc.NewRemovalChecker(w.c).ConversionBlocker("mcplifecycleoperator"); why != "" {
 			t.Fatalf("%s: blocker %q, want none", body, why)
 		}
 	}
@@ -257,7 +258,7 @@ func TestConversionBlockerChecksTheCRDsOwnListKind(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newConvObjectsWorld(t, false, mcpCRDNamed("Namespaced", mcpVersions, tc.names, tc.accepted))
 			w.list(mcpStorage, func(*http.Request) (int, string) { return http.StatusOK, tc.body })
-			why := newRemovalChecker(w.c).conversionBlocker("mcplifecycleoperator")
+			why := dsc.NewRemovalChecker(w.c).ConversionBlocker("mcplifecycleoperator")
 			if tc.want == "" {
 				if why != "" {
 					t.Fatalf("blocker %q, want none", why)
@@ -283,7 +284,7 @@ func TestConversionBlockerChecksTheCRDsOwnListKind(t *testing.T) {
 func TestConversionBlockerNeedsTheUsersSignIn(t *testing.T) {
 	w := newConvObjectsWorld(t, true, mcpCRDJSON("Namespaced", mcpVersions))
 	w.list(mcpStorage, func(*http.Request) (int, string) { return http.StatusOK, `{"items":[]}` })
-	why := newRemovalChecker(w.c).conversionBlocker("mcplifecycleoperator")
+	why := dsc.NewRemovalChecker(w.c).ConversionBlocker("mcplifecycleoperator")
 	for _, want := range []string{
 		"The tool lists those objects only with your own sign-in, which this request does not carry (in the gitops profile no request does), so it cannot tell whether any exist and does not remove mcplifecycleoperator here.",
 		"Check for them with: oc get " + mcpCRDName + " -A.",
@@ -311,7 +312,7 @@ func TestConversionBlockerListsAtTheStorageVersion(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newConvObjectsWorld(t, false, mcpCRDJSON("Namespaced", tc.versions))
 			w.list(tc.path, func(*http.Request) (int, string) { return http.StatusOK, `{"items":[]}` })
-			if why := newRemovalChecker(w.c).conversionBlocker("mcplifecycleoperator"); why != "" {
+			if why := dsc.NewRemovalChecker(w.c).ConversionBlocker("mcplifecycleoperator"); why != "" {
 				t.Fatalf("blocker %q", why)
 			}
 			if got := w.calls(tc.path); len(got) != 1 {
@@ -321,7 +322,7 @@ func TestConversionBlockerListsAtTheStorageVersion(t *testing.T) {
 	}
 	// No served version: nothing to list it at, so it refuses.
 	w := newConvObjectsWorld(t, false, mcpCRDJSON("Namespaced", `[{"name":"v1beta1","served":false,"storage":true}]`))
-	if why := newRemovalChecker(w.c).conversionBlocker("mcplifecycleoperator"); !strings.Contains(why, "could not be listed with your sign-in: the CRD serves no version") {
+	if why := dsc.NewRemovalChecker(w.c).ConversionBlocker("mcplifecycleoperator"); !strings.Contains(why, "could not be listed with your sign-in: the CRD serves no version") {
 		t.Fatalf("blocker %q", why)
 	}
 }
@@ -356,7 +357,7 @@ func TestConversionBlockerCountsHonestly(t *testing.T) {
 			w.list(mcpStorage, func(*http.Request) (int, string) {
 				return http.StatusOK, `{"metadata":` + tc.meta + `,"items":[` + tc.items + `]}`
 			})
-			why := newRemovalChecker(w.c).conversionBlocker("mcplifecycleoperator")
+			why := dsc.NewRemovalChecker(w.c).ConversionBlocker("mcplifecycleoperator")
 			for _, want := range tc.want {
 				if !strings.Contains(why, want) {
 					t.Fatalf("blocker %q lacks %q", why, want)
@@ -374,7 +375,7 @@ func TestConversionBlockerCountsHonestly(t *testing.T) {
 	// continue field"), so it is not "none".
 	w := newConvObjectsWorld(t, false, mcpCRDJSON("Namespaced", mcpVersions))
 	w.list(mcpStorage, func(*http.Request) (int, string) { return http.StatusOK, `{"metadata":{"continue":"tok"},"items":[]}` })
-	if why := newRemovalChecker(w.c).conversionBlocker("mcplifecycleoperator"); !strings.Contains(why, "could not be listed with your sign-in: the API server returned no objects but says more exist") {
+	if why := dsc.NewRemovalChecker(w.c).ConversionBlocker("mcplifecycleoperator"); !strings.Contains(why, "could not be listed with your sign-in: the API server returned no objects but says more exist") {
 		t.Fatalf("blocker %q", why)
 	}
 }
@@ -388,7 +389,7 @@ func TestConversionBlockerClusterScopedAndSeveralCRDs(t *testing.T) {
 		return http.StatusOK, `{"items":[` + mcpItems("shared", "global") + `]}`
 	})
 	w.list("/apis/mcp.x-k8s.io/v1beta1/mcpcatalogs", func(*http.Request) (int, string) { return http.StatusOK, `{"items":[]}` })
-	why := newRemovalChecker(w.c).conversionBlocker("mcplifecycleoperator")
+	why := dsc.NewRemovalChecker(w.c).ConversionBlocker("mcplifecycleoperator")
 	for _, want := range []string{
 		"of CRDs mcpcatalogs.mcp.x-k8s.io, " + mcpCRDName,
 		"2 objects of " + mcpCRDName + " exist: global, shared. Delete them first: oc delete " + mcpCRDName + " <name>.",

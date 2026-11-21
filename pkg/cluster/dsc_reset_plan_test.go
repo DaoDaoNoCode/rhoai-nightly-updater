@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -195,7 +196,7 @@ func TestResetPlansCarryTheTimeoutAndTheProtectedFields(t *testing.T) {
 		setPath(t, dsc, "spec.components.workbenches.workbenchNamespace", "my-notebooks")
 	})
 	hard := mustPlan(t, c, "hard-reset", "", "", true)
-	if hard.DeleteTimeoutSeconds != int(HardResetDeleteTimeout.Seconds()) || hard.DeleteTimeoutSeconds == 0 {
+	if hard.DeleteTimeoutSeconds != int(dsc.HardResetDeleteTimeout.Seconds()) || hard.DeleteTimeoutSeconds == 0 {
 		t.Fatalf("deleteTimeoutSeconds = %d", hard.DeleteTimeoutSeconds)
 	}
 	want := []string{"aiHub.instancesNamespace", "workbenches.workbenchNamespace"}
@@ -227,7 +228,7 @@ func TestHardResetListsWhatStopsWorkingOncePerResource(t *testing.T) {
 // The shared blocker for a module CR whose operator the tool does not
 // know: short, and says what to do.
 func TestUnknownOperatorBlockerIsPlain(t *testing.T) {
-	got := unknownOperatorBlocker()
+	got := dsc.UnknownOperatorBlocker()
 	if got != "can't confirm its operator is running to clean up, so the tool won't remove it. Check in the OpenShift console, then change it there" {
 		t.Fatalf("blocker = %q", got)
 	}

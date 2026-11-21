@@ -1,4 +1,4 @@
-package cluster
+package dsc
 
 import (
 	"encoding/json"
@@ -56,7 +56,7 @@ func errResetRemovalsChanged(previewed []string, now []string) error {
 		kube.NonEmpty(strings.Join(previewed, ", "), "none"), kube.NonEmpty(strings.Join(now, ", "), "none"))
 }
 
-// RepairDSC repairs the named DSC in one of the modes the Components page
+// Repair repairs the named DSC in one of the modes the Components page
 // previews. expectedAPIVersion is the apiVersion the preview was computed
 // at ("datasciencecluster.opendatahub.io/v2"): the repair runs only when the
 // DSC is still read at exactly that version, so a conversion that starts
@@ -65,7 +65,7 @@ func errResetRemovalsChanged(previewed []string, now []string) error {
 // management paths the preview said it would switch to Removed
 // (expectedResetRemovals, never nil from a current page) and runs only
 // when it would remove exactly those.
-func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersion string, expectedExtraComponents, expectedResetRemovals []string) (*types.OperationResponse, error) {
+func Repair(c *kube.Client, name, mode, expectedOperatorVersion, expectedAPIVersion string, expectedExtraComponents, expectedResetRemovals []string) (*types.OperationResponse, error) {
 	if mode != "remove-invalid" && mode != "remove-extra-components" && mode != "reset-defaults" {
 		return nil, fmt.Errorf("invalid DSC repair mode")
 	}

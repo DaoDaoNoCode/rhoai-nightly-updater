@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
@@ -72,7 +73,7 @@ func TestDeploymentChecksKeepTheirQuestions(t *testing.T) {
 		{deployment(1, 0), false},
 	} {
 		c, cleanup := newMockClient(map[string]mockResponse{"/apis/apps/v1/namespaces/ns/deployments/op": {body: tc.body}})
-		if ok, why := deploymentReady(c, "ns", "op"); ok != tc.want {
+		if ok, why := dsc.DeploymentReady(c, "ns", "op"); ok != tc.want {
 			t.Errorf("deploymentReady(%s) = %v %q", tc.body, ok, why)
 		}
 		cleanup()

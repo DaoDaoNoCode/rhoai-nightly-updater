@@ -12,6 +12,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -178,7 +179,7 @@ func stuckModuleProblem(c *Client, operators *components.ModuleOperatorFinder, m
 	case op == nil:
 		evidence = append(evidence, "Operator: not identified: "+why)
 	default:
-		ok, why := deploymentReady(c, op.Namespace, op.Name)
+		ok, why := dsc.DeploymentReady(c, op.Namespace, op.Name)
 		if ok {
 			evidence = append(evidence, fmt.Sprintf("Operator %s is running (%s)", op.Ref(), op.Via))
 			fix = fmt.Sprintf("The operator %s is running; read its logs for why it does not finish the cleanup.", op.Name)

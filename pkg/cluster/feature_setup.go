@@ -2,7 +2,6 @@ package cluster
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,13 +13,12 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -937,90 +935,6 @@ func RestorableComponentKey(key string) bool {
 	return false
 }
 
-// componentUsers names what on the cluster still uses a component (objects
-// being deleted do not count). A read that fails is returned: the caller
-// keeps the component on (fail closed).
-func componentUsers(c *Client, key string) ([]string, error) {
-	var out []string
-	live := func(meta kube.ObjectMeta, kind string) {
-		if meta.DeletionTimestamp == "" {
-			out = append(out, fmt.Sprintf("%s %s/%s", kind, meta.Namespace, meta.Name))
-		}
-	}
-	switch key {
-	case "aipipelines", "datasciencepipelines":
-		dspas, err := storage.ListDSPAs(c, "")
-		if errors.Is(err, storage.ErrDSPACRDMissing) {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		for _, d := range dspas {
-			live(d.Meta, "pipeline server")
-		}
-	case "mlflowoperator":
-		cr, err := mlflow.ReadCR(c)
-		if kube.IsK8sNotFound(err) {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, fmt.Errorf("read the MLflow CR: %w", err)
-		}
-		if cr.Metadata.DeletionTimestamp == "" {
-			out = append(out, "MLflow "+cr.Metadata.Name)
-		}
-	case "kserve":
-		models, err := serving.ListLLMInferenceServices(c)
-		if err != nil && !errors.Is(err, serving.ErrLLMISvcAPIMissing) {
-			return nil, err
-		}
-		for _, m := range models {
-			live(m.Metadata, "LLMInferenceService")
-		}
-		body, found, err := c.GetOptional(rhoai.ClusterPath("serving.kserve.io/v1beta1", "inferenceservices", ""))
-		if err != nil {
-			return nil, fmt.Errorf("list InferenceServices: %w", err)
-		}
-		if found {
-			var list struct {
-				Items []struct {
-					Metadata kube.ObjectMeta `json:"metadata"`
-				} `json:"items"`
-			}
-			if err := json.Unmarshal(body, &list); err != nil {
-				return nil, fmt.Errorf("parse InferenceServices: %w", err)
-			}
-			for _, it := range list.Items {
-				live(it.Metadata, "InferenceService")
-			}
-		}
-	case "ogx", "llamastackoperator", "dashboard":
-		// The playground's servers (the dashboard serves their gen-ai API).
-		read, err := rhoai.ListServed(c, "ogx.io", "/apis/ogx.io/%s/ogxservers", nil, []string{"v1beta1"})
-		if err != nil {
-			return nil, fmt.Errorf("list OGXServers: %w", err)
-		}
-		if read.Body != nil {
-			var list struct {
-				Items []struct {
-					Metadata kube.ObjectMeta `json:"metadata"`
-				} `json:"items"`
-			}
-			if err := json.Unmarshal(read.Body, &list); err != nil {
-				return nil, fmt.Errorf("parse OGXServers: %w", err)
-			}
-			for _, it := range list.Items {
-				live(it.Metadata, "playground server")
-			}
-		}
-	default:
-		return nil, fmt.Errorf("component %s is not one this tool turns on", key)
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
 // restoreVerdict is what Clean up does with one component, decided on one
 // read of the DataScienceCluster.
 type restoreVerdict struct {
@@ -1033,28 +947,28 @@ type restoreVerdict struct {
 	refusal, code string
 }
 
-// restoreCheck runs every check of turning key back, on dsc: the record
+// restoreCheck runs every check of turning key back, on dscRead: the record
 // says this tool turned it on, it is still Managed, this tool's field
 // manager still owns it (nobody changed it since: dscComponentOwned),
 // Argo CD does not manage the DataScienceCluster, and nothing on the
 // cluster uses it (a list that fails refuses).
-func restoreCheck(c *Client, rec prereqRecord, dsc rhoai.DSCRead, key string) restoreVerdict {
+func restoreCheck(c *Client, rec prereqRecord, dscRead rhoai.DSCRead, key string) restoreVerdict {
 	rc, ok := rec.Components[key]
 	if !ok {
 		return restoreVerdict{kept: key + " (this tool did not turn it on)"}
 	}
 	prev := kube.FirstNonEmpty(rc.Previous, "Removed")
-	state, _ := envkit.ComponentManagement(dsc.Object, key)
+	state, _ := envkit.ComponentManagement(dscRead.Object, key)
 	switch {
-	case dsc.Object == nil || state != "Managed":
+	case dscRead.Object == nil || state != "Managed":
 		return restoreVerdict{drop: true, log: key + " is " + kube.FirstNonEmpty(state, "not set") + " already"}
-	case !dscComponentOwned(dsc.Object, key):
+	case !dscComponentOwned(dscRead.Object, key):
 		return restoreVerdict{drop: true, kept: key + " (changed by someone since this tool's setup)"}
 	}
-	if argoCD := argo.TrackingOf(c, dsc.Object, rhoai.DSCGroup, "DataScienceCluster"); argoCD.ManagedBy() != "" {
+	if argoCD := argo.TrackingOf(c, dscRead.Object, rhoai.DSCGroup, "DataScienceCluster"); argoCD.ManagedBy() != "" {
 		return restoreVerdict{refusal: argo.GitOpsRefusal("The DataScienceCluster", argoCD.ManagedBy(), "turning "+key+" back to "+prev) + argoCD.UnconfirmedNote(), code: kube.ErrorCodeGitOpsManaged}
 	}
-	users, err := componentUsers(c, key)
+	users, err := dsc.ComponentUsers(c, key)
 	if err != nil {
 		return restoreVerdict{refusal: fmt.Sprintf("Cannot tell whether anything still uses %s, so it stays Managed: %v.%s", key, err, kube.TemplateHint(err)), code: kube.ErrorCodeFromK8sErr(err)}
 	}

@@ -1,4 +1,4 @@
-package cluster
+package dsc
 
 import (
 	"errors"
@@ -8,14 +8,15 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// checkDSCCompatibilityFor compares a DSC with the installed schema and the
+// CheckCompatibilityFor compares a DSC with the installed schema and the
 // defaults of the already-read installed operator, in the API version the
 // DSC was read at.
-func checkDSCCompatibilityFor(c *Client, read rhoai.DSCRead, op *components.InstalledOperator, opErr error, fetchSample components.DSCSampleFetcher) *types.DSCCompatibility {
+func CheckCompatibilityFor(c *kube.Client, read rhoai.DSCRead, op *components.InstalledOperator, opErr error, fetchSample components.DSCSampleFetcher) *types.DSCCompatibility {
 	dsc := read.Object
 	result := &types.DSCCompatibility{InvalidFields: []string{}, MissingComponents: []string{}, ExtraComponents: []string{}}
 	apiVersion, _ := dsc["apiVersion"].(string)
@@ -108,12 +109,12 @@ func defaultsErrorMessage(read rhoai.DSCRead, err error) string {
 // removalGuard checks removal preconditions per management path, each
 // module once.
 type removalGuard struct {
-	rc     *removalChecker
+	rc     *RemovalChecker
 	byName map[string][]string
 }
 
-func newRemovalGuard(c *Client) *removalGuard {
-	return &removalGuard{rc: newRemovalChecker(c), byName: map[string][]string{}}
+func newRemovalGuard(c *kube.Client) *removalGuard {
+	return &removalGuard{rc: NewRemovalChecker(c), byName: map[string][]string{}}
 }
 
 // blockers returns why the management path must not be removed now.

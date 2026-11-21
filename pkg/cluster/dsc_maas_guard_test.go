@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
@@ -235,12 +236,12 @@ func TestTurnedOnListsDeployedTogglesTheDefaultLeavesOff(t *testing.T) {
 		setPath(t, dsc, "spec.components.aigateway.managementState", "Removed")
 		setPath(t, dsc, "spec.components.aigateway.batchGateway.managementState", "Managed")
 	})
-	v, err := readDSCView(c)
+	v, err := dsc.ReadView(c)
 	if err != nil {
 		t.Fatal(err)
 	}
 	plan := &types.DSCPlan{}
-	target := v.resetTarget(plan, true)
+	target := v.ResetTarget(plan, true)
 	if want := []string{"kserve.modelExpress", "kueue"}; !reflect.DeepEqual(plan.Kept, want) {
 		t.Fatalf("kept = %v, want %v", plan.Kept, want)
 	}
@@ -251,7 +252,7 @@ func TestTurnedOnListsDeployedTogglesTheDefaultLeavesOff(t *testing.T) {
 		t.Fatalf("modelsAsAService = %s (an orphan was kept)", s)
 	}
 	plan = &types.DSCPlan{}
-	if target := v.resetTarget(plan, false); !kube.JSONEqual(target, v.defaultComponents()) || len(plan.Kept) != 0 || len(plan.TurnedOn) != 2 {
+	if target := v.ResetTarget(plan, false); !kube.JSONEqual(target, v.DefaultComponents()) || len(plan.Kept) != 0 || len(plan.TurnedOn) != 2 {
 		t.Fatalf("without keep: kept %v, turned on %v, target %v", plan.Kept, plan.TurnedOn, target)
 	}
 }
@@ -262,9 +263,9 @@ func TestKeptSubComponentKeepsItsParent(t *testing.T) {
 		setPath(t, dsc, "spec.components.aigateway.modelsAsAService.managementState", "Removed")
 		setPath(t, dsc, "spec.components.aigateway.batchGateway.managementState", "Managed")
 	})
-	v, _ := readDSCView(c)
+	v, _ := dsc.ReadView(c)
 	plan := &types.DSCPlan{}
-	target := v.resetTarget(plan, true)
+	target := v.ResetTarget(plan, true)
 	if want := []string{"aigateway", "aigateway.batchGateway"}; !reflect.DeepEqual(plan.Kept, want) {
 		t.Fatalf("kept = %v, want %v", plan.Kept, want)
 	}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -104,7 +105,7 @@ func TestHardResetDeletesWaitsAndCreatesTheReleaseDefault(t *testing.T) {
 		}
 	}
 	posts := f.callsTo(http.MethodPost, dscV3List)
-	if len(posts) != 2 || posts[0].Query.Get("dryRun") != "All" || posts[1].Query.Get("fieldValidation") != "Strict" || posts[1].Query.Get("fieldManager") != dscComponentsManager {
+	if len(posts) != 2 || posts[0].Query.Get("dryRun") != "All" || posts[1].Query.Get("fieldValidation") != "Strict" || posts[1].Query.Get("fieldManager") != dsc.ComponentsManager {
 		t.Fatalf("creates = %+v", posts)
 	}
 	created := f.get(dscV3Path)
@@ -278,16 +279,16 @@ func TestNewDefaultObjectIsTheReleaseDefault(t *testing.T) {
 	_, c := managerWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.workbenches.workbenchNamespace", nil)
 	})
-	v, err := readDSCView(c)
+	v, err := dsc.ReadView(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	obj := v.newDefaultObject(v.resetTarget(&types.DSCPlan{}, false))
+	obj := v.NewDefaultObject(v.ResetTarget(&types.DSCPlan{}, false))
 	raw, _ := json.Marshal(obj)
 	if !strings.Contains(string(raw), `"name":"default-dsc"`) || strings.Contains(string(raw), "workbenchNamespace") {
 		t.Fatalf("object = %s", raw)
 	}
-	if !kube.JSONEqual(comps(obj), v.defaultComponents()) {
+	if !kube.JSONEqual(comps(obj), v.DefaultComponents()) {
 		t.Fatalf("not the release default: %s", raw)
 	}
 }

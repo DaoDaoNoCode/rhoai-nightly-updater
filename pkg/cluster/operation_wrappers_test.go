@@ -3,6 +3,7 @@ package cluster
 import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -81,11 +82,11 @@ func patchControlledDashboardImage(c *Client, operator *dashdev.Deployment, imag
 	return dashdev.PatchControlledImages(c, operator, []dashdev.ImagePatch{{Image: image, Target: target}})
 }
 
-func checkDSCCompatibility(c *Client, dsc map[string]any) *types.DSCCompatibility {
+func checkDSCCompatibility(c *Client, obj map[string]any) *types.DSCCompatibility {
 	op, err := components.ReadInstalledOperator(c)
-	apiVersion, _ := dsc["apiVersion"].(string)
+	apiVersion, _ := obj["apiVersion"].(string)
 	version, _ := components.DSCAPIVersion(apiVersion)
-	return checkDSCCompatibilityFor(c, rhoai.DSCRead{Object: dsc, State: rhoai.DSCStatePresent, Version: version}, op, err, components.FetchDSCSample)
+	return dsc.CheckCompatibilityFor(c, rhoai.DSCRead{Object: obj, State: rhoai.DSCStatePresent, Version: version}, op, err, components.FetchDSCSample)
 }
 
 // GetOperationState returns the running-operation marker and the last

@@ -12,6 +12,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -479,7 +480,7 @@ func TestToggleReplacesOnlyThatFieldAfterADryRun(t *testing.T) {
 		t.Fatalf("the dry run did not come first: %v", f.requests)
 	}
 	for _, call := range append(dry, real...) {
-		if call.ContentType != "application/json-patch+json" || call.Query.Get("fieldManager") != dscComponentsManager || call.Query.Get("fieldValidation") != "Strict" {
+		if call.ContentType != "application/json-patch+json" || call.Query.Get("fieldManager") != dsc.ComponentsManager || call.Query.Get("fieldValidation") != "Strict" {
 			t.Fatalf("call = %+v", call)
 		}
 		want := `[{"op":"test","path":"/metadata/uid","value":"` + dscFixtureUID + `"},{"op":"test","path":"/metadata/resourceVersion","value":"` + dscFixtureRV + `"},` +
@@ -850,9 +851,9 @@ func TestSoftResetRefusesWhileARemovalIsBlocked(t *testing.T) {
 func TestBuildJSONPatchGroupsMissingObjects(t *testing.T) {
 	obj := map[string]any{"spec": map[string]any{"components": map[string]any{"kserve": map[string]any{"managementState": "Managed"}}}}
 	ops, err := components.BuildJSONPatch(obj, []components.DSCAssign{
-		{Path: componentsPath("aigateway", "managementState"), Value: "Removed"},
-		{Path: componentsPath("aigateway", "batchGateway", "managementState"), Value: "Removed"},
-		{Path: componentsPath("kserve", "managementState"), Value: "Removed"},
+		{Path: dsc.ComponentsPath("aigateway", "managementState"), Value: "Removed"},
+		{Path: dsc.ComponentsPath("aigateway", "batchGateway", "managementState"), Value: "Removed"},
+		{Path: dsc.ComponentsPath("kserve", "managementState"), Value: "Removed"},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -871,7 +872,7 @@ func TestBuildJSONPatchGroupsMissingObjects(t *testing.T) {
 		t.Fatalf("after = %v", after)
 	}
 	// The original is unchanged; a failed test applies nothing.
-	if _, err := kube.ApplyJSONPatch(obj, []kube.JSONPatchOp{components.PatchOp("test", componentsPath("kserve", "managementState"), "Removed")}); err == nil {
+	if _, err := kube.ApplyJSONPatch(obj, []kube.JSONPatchOp{components.PatchOp("test", dsc.ComponentsPath("kserve", "managementState"), "Removed")}); err == nil {
 		t.Fatal("test passed on another value")
 	}
 	if s, _ := components.LookupState(comps(obj), []string{"kserve"}); s != "Managed" {

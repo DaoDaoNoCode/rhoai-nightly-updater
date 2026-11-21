@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -371,7 +372,7 @@ func TestModuleOperatorFinderFailsClosed(t *testing.T) {
 			if _, _, err := components.NewModuleOperatorFinder(c, nil).Find("aigateway", "default-aigateway"); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v", err)
 			}
-			got := strings.Join(newRemovalChecker(c).moduleBlockers("aigateway"), "; ")
+			got := strings.Join(dsc.NewRemovalChecker(c).ModuleBlockers("aigateway"), "; ")
 			if !strings.Contains(got, "could not identify its operator") || !strings.Contains(got, tc.want) || !strings.Contains(got, "won't remove it") {
 				t.Fatalf("blockers = %q", got)
 			}
@@ -401,20 +402,20 @@ func TestRemovalChecksUseDiscoveredOperators(t *testing.T) {
 	}
 	f.json("GET", "/apis/apps/v1/namespaces/"+liveAppsNS+"/deployments/ai-gateway-operator", http.StatusOK, `{"status":{"readyReplicas":1}}`)
 	f.json("GET", "/apis/apps/v1/namespaces/"+liveAppsNS+"/deployments/mcp-lifecycle-module-operator-controller-manager", http.StatusOK, `{"status":{"readyReplicas":0}}`)
-	rc := newRemovalChecker(c)
-	if got := rc.moduleBlockers("aigateway"); len(got) != 0 {
+	rc := dsc.NewRemovalChecker(c)
+	if got := rc.ModuleBlockers("aigateway"); len(got) != 0 {
 		t.Errorf("aigateway: %q", got)
 	}
-	if got := strings.Join(rc.moduleBlockers("mcplifecycleoperator"), "; "); !strings.Contains(got, "its operator redhat-ods-applications/mcp-lifecycle-module-operator-controller-manager removes the finalizers of the module CR (finalizer platform.opendatahub.io/finalizer) and its operands, but Deployment redhat-ods-applications/mcp-lifecycle-module-operator-controller-manager has no ready pod") {
+	if got := strings.Join(rc.ModuleBlockers("mcplifecycleoperator"), "; "); !strings.Contains(got, "its operator redhat-ods-applications/mcp-lifecycle-module-operator-controller-manager removes the finalizers of the module CR (finalizer platform.opendatahub.io/finalizer) and its operands, but Deployment redhat-ods-applications/mcp-lifecycle-module-operator-controller-manager has no ready pod") {
 		t.Errorf("mcplifecycleoperator: %q", got)
 	}
-	if got := rc.moduleBlockers("kueue"); len(got) != 0 {
+	if got := rc.ModuleBlockers("kueue"); len(got) != 0 {
 		t.Errorf("kueue (the RHOAI operator's own): %q", got)
 	}
-	if got := strings.Join(rc.moduleBlockers("trustyai"), "; "); got != unknownOperatorBlocker() {
+	if got := strings.Join(rc.ModuleBlockers("trustyai"), "; "); got != dsc.UnknownOperatorBlocker() {
 		t.Errorf("trustyai without its operator: %q", got)
 	}
-	if got := strings.Join(rc.partBlockers("trustyai"), "; "); got != unknownOperatorBlocker() {
+	if got := strings.Join(rc.PartBlockers("trustyai"), "; "); got != dsc.UnknownOperatorBlocker() {
 		t.Errorf("trustyai part: %q", got)
 	}
 }
@@ -487,7 +488,7 @@ func TestDatabaseServiceModuleInTheServicesGroup(t *testing.T) {
 	f.json("GET", servicesV1+"databaseservices", 200, `{"items":[{"metadata":{"name":"default-databaseservice","finalizers":["platform.opendatahub.io/finalizer"]}}]}`)
 	f.json("GET", "/apis/apps/v1/namespaces/"+liveAppsNS+"/deployments/databaseservice-operator", 200, `{"status":{"readyReplicas":1}}`)
 	f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator", 200, `{"status":{"readyReplicas":1}}`)
-	if got := newRemovalChecker(c).moduleBlockers("databaseservice"); len(got) != 0 {
+	if got := dsc.NewRemovalChecker(c).ModuleBlockers("databaseservice"); len(got) != 0 {
 		t.Fatalf("removal of databaseservice refused: %q", got)
 	}
 	old := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)

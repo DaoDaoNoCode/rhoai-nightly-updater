@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -355,7 +356,7 @@ func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *typ
 		return components.NothingToDo(fmt.Sprintf("no CR reports that the selector of %s %s/%s changed any more. Nothing was deleted.", kind, ns, name), nil)
 	}
 	appNS := rhoai.ApplicationsNamespace(c)
-	r := analyzeRecreate(c, rf, appNS, readWorkloadAsUser, componentUsers)
+	r := analyzeRecreate(c, rf, appNS, readWorkloadAsUser, dsc.ComponentUsers)
 	logs := append([]string{"Reported by " + reportersText(rf)}, r.Warnings...)
 	switch {
 	case len(r.Blockers) > 0:
@@ -377,7 +378,7 @@ func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *typ
 		// the scan does. What reading it with the user's token finds
 		// beyond them (for example the webhooks its pods serve) was never
 		// acknowledged, so it refuses.
-		scan := analyzeRecreate(c, rf, appNS, readDeploymentForScan, componentUsers)
+		scan := analyzeRecreate(c, rf, appNS, readDeploymentForScan, dsc.ComponentUsers)
 		if res := ackMismatch(r.ref(), *ack, scan.problem().AcknowledgeBinding, logs); res != nil {
 			return res
 		}

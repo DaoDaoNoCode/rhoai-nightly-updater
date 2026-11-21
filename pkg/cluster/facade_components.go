@@ -13,11 +13,6 @@ func GetDefaultDSCYAML(c *Client) (*components.DSCDefaults, error) {
 	return components.DefaultDSCYAML(c)
 }
 
-// CreateDefaultDSC is components.CreateDefaultDSC.
-func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
-	return components.CreateDefaultDSC(c)
-}
-
 // GetDebugInfo is components.DebugInfo.
 func GetDebugInfo(c *Client) (*types.DebugResponse, error) {
 	return components.DebugInfo(c)
