@@ -107,7 +107,7 @@ func CheckPlatformModules(c *kube.Client) CheckOutput {
 
 	// What this check is about (modules stuck in deletion) comes first.
 	var moduleDetails []string
-	stuck, err := StuckModuleCRs(c, time.Now())
+	stuck, err := StuckModuleCRs(c, wallNow())
 	if err != nil {
 		moduleDetails = append(moduleDetails, fmt.Sprintf("Module CRs not checked: %v", err))
 		if out.Check.Status == "pass" {

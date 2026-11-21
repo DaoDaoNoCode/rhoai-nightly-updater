@@ -126,6 +126,10 @@ func TestWriteDocsFixtures(t *testing.T) {
 	// Left over from an earlier release (the live RHOAI 3.6.0 case): the
 	// DSC reports the TrustyAI CR's stored booleans, the CR reports its
 	// Deployment's old selector, and the module operator crash-loops.
+	// The pod was created on a fixed date, so the checks measure its age
+	// against a fixed now (age 10d) and the file is the same on any day.
+	restore := diagnostics.SetWallClockForTest(func() time.Time { return time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC) })
+	defer restore()
 	lw := newLeftoverWorld(t, []string{msgStoredTypes}, []string{msgTrustySelector}, storedFalse())
 	lw.f.json("GET", "/api/v1/namespaces/redhat-ods-applications/pods", 200, `{"items":[{"metadata":{"name":"trustyai-operator-module-controller-manager-6d9f7c8b5-x2x7q","namespace":"redhat-ods-applications","creationTimestamp":"2026-11-10T00:00:00Z","labels":{"pod-template-hash":"6d9f7c8b5"},
 		"ownerReferences":[{"kind":"ReplicaSet","name":"trustyai-operator-module-controller-manager-6d9f7c8b5","controller":true}]},

@@ -233,7 +233,7 @@ func CheckCertificates(c *kube.Client) CheckOutput {
 	out := CheckOutput{Check: report.CheckResult{Name: name, Status: "pass"}}
 	rhoaiNS, nsErr := RHOAIPodNamespaces(c)
 	namespaces := append([]string{rhoai.SubNS}, rhoaiNS...)
-	now := time.Now()
+	now := wallNow()
 	var certs []certificateItem
 	var errs []string
 	if nsErr != nil {

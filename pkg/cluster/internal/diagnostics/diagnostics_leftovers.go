@@ -138,7 +138,7 @@ func leftoversCheck(c *kube.Client, users UsersReader) CheckOutput {
 		switch {
 		case rf.Has(components.ApplyStoredType):
 			st := analyzeStored(c, s, rf)
-			st.Crash = moduleOperatorCrash(c, st, time.Now())
+			st.Crash = moduleOperatorCrash(c, st, wallNow())
 			out.Problems = append(out.Problems, st.problem())
 		case rf.Has(components.ApplyImmutable):
 			r := AnalyzeRecreate(c, rf, appNS, ReadDeploymentForScan, users)

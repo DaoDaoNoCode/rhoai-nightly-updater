@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -61,7 +60,7 @@ func CheckDataScienceCluster(c *kube.Client) CheckOutput {
 		})
 	default:
 		dsc := dscs[0]
-		a := components.AnalyzeDSC(c, dsc, time.Now())
+		a := components.AnalyzeDSC(c, dsc, wallNow())
 		titles := map[string]string{}
 		var causeProblems []report.Problem
 		for _, d := range a.Deps {

@@ -27,6 +27,13 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
+// wallNow is the wall clock the checks measure object ages and how long a
+// state has lasted against (pod ages, a Subscription settling, stuck
+// module CRs, certificates): times recorded by the cluster, compared with
+// the time package's clock, not kube.Clock() (see kube/clock.go). Tests
+// that pin an object's date pin this too (SetWallClockForTest).
+var wallNow = time.Now
+
 // NewAckBinding binds statement to the object uid at resourceVersion.
 func NewAckBinding(uid, resourceVersion, statement string) *report.AckBinding {
 	sum := sha256.Sum256([]byte(statement))
@@ -280,7 +287,7 @@ func RHOAIPodNamespaces(c *kube.Client) ([]string, error) {
 
 func CheckOperatorPods(c *kube.Client) CheckOutput {
 	const name = "Operator pods"
-	issues, podCount, scanned, errs := components.ScanPods(c, []string{rhoai.SubNS}, time.Now())
+	issues, podCount, scanned, errs := components.ScanPods(c, []string{rhoai.SubNS}, wallNow())
 	if len(errs) > 0 {
 		return CheckOutput{Check: report.CheckResult{Name: name, Status: "warn", Detail: "Could not list operator pods: " + strings.Join(errs, "; ")}}
 	}
@@ -322,7 +329,7 @@ func CheckRHOAIPods(c *kube.Client) CheckOutput {
 		}
 	}
 
-	issues, podCount, scanned, errs := components.ScanPods(c, namespaces, time.Now())
+	issues, podCount, scanned, errs := components.ScanPods(c, namespaces, wallNow())
 	out := podIssuesOutput(c, name, issues, podCount, scanned, false)
 	if len(errs) > 0 {
 		if out.Check.Status == "pass" {
@@ -457,7 +464,7 @@ const recoveryGuidance = "Use Update on the Status page to move to a newer night
 func checkSubscriptionHealth(c *kube.Client) CheckOutput {
 	const name = "Subscription health"
 	out := CheckOutput{Check: report.CheckResult{Name: name, Status: "pass"}}
-	now := time.Now()
+	now := wallNow()
 
 	sub, err := readSubscriptionState(c)
 	if err != nil {
@@ -618,7 +625,7 @@ func checkCSVHealth(c *kube.Client) CheckOutput {
 			out.Check = report.CheckResult{Name: name, Status: "pass", Detail: "No operator installed yet (normal for fresh clusters)"}
 			return out
 		}
-		if !sub.settled(time.Now()) {
+		if !sub.settled(wallNow()) {
 			out.Check = report.CheckResult{Name: name, Status: "warn", Detail: "Waiting for OLM to install the operator"}
 			return out
 		}
@@ -758,7 +765,7 @@ func CheckInstallPlanHealth(c *kube.Client) CheckOutput {
 		if !sub.Exists {
 			return CheckOutput{Check: report.CheckResult{Name: name, Status: "pass", Detail: "No install plans (no subscription active)"}}
 		}
-		if !sub.settled(time.Now()) {
+		if !sub.settled(wallNow()) {
 			return CheckOutput{Check: report.CheckResult{Name: name, Status: "pass", Detail: "No install plan yet (OLM is resolving the Subscription)"}}
 		}
 		return CheckOutput{
