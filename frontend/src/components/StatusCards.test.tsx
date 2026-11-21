@@ -155,6 +155,7 @@ describe("GlobalBanners", () => {
     renderWithApp(<GlobalBanners />, {
       operation: async () => ({ inProgress: true, operation: { id: "1", type: "update", label: "Update to nightly", user: "alice", startedAt: new Date().toISOString(), step: "detect_channel", target: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + "a".repeat(64) } }),
     }, "/components");
+    await settleApps();
     expect(await screen.findByText(/alice is running "Update to nightly": step 5 of 8: Detect the channel/)).toBeInTheDocument();
     expect(screen.getByText("rhoai-3.6 · aaaaaaaaaaaa")).toBeInTheDocument();
     await settleApps();
@@ -167,6 +168,7 @@ describe("GlobalBanners", () => {
         operation: { id: "1", type: "setup-s3", label: "Set up S3 storage", user: "alice", startedAt: new Date().toISOString(), remote: true, pod: "updater-7d9f-abcde", message: "Waiting for the SeaweedFS pod" },
       }),
     }, "/components");
+    await settleApps();
     expect(await screen.findByText(/alice is running "Set up S3 storage" on updater pod updater-7d9f-abcde/)).toBeInTheDocument();
     expect(screen.getByText(/Latest progress: Waiting for the SeaweedFS pod\./)).toBeInTheDocument();
     expect(screen.getByText(/Another updater pod runs it/)).toBeInTheDocument();
@@ -177,6 +179,7 @@ describe("GlobalBanners", () => {
     renderWithApp(<GlobalBanners />, {
       operation: async () => ({ inProgress: false, operation: null, interrupted: { type: "update", label: "Update to nightly", user: "alice", startedAt: "2026-10-05T09:00:00Z", pod: "old-pod" } }),
     });
+    await settleApps();
     expect(await screen.findByText('"Update to nightly" was interrupted')).toBeInTheDocument();
     // The explanation is one click away, so the title stays one line.
     expect(screen.queryByText(/run the same operation again/)).not.toBeInTheDocument();
@@ -196,6 +199,7 @@ describe("GlobalBanners", () => {
         },
       }) as never,
     });
+    await settleApps();
     expect(await screen.findByText("RHOAI was updated while the dashboard was paused")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Warning alert details/ }));
     expect(screen.getByText(/bob deployed PR #222 \(RHOAI build\)/)).toBeInTheDocument();
@@ -206,6 +210,7 @@ describe("GlobalBanners", () => {
 
   it("tells admins to run make upgrade when the template is outdated", async () => {
     renderWithApp(<GlobalBanners />, { version: async () => ({ version: "4503bb7d", commit: "x", buildDate: "d", templateRevision: "1", expectedTemplateRevision: "2", templateOutdated: true }) });
+    await settleApps();
     expect(await screen.findByText(/this updater's deployment is out of date/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Info alert details/ }));
     expect(screen.getByText("make upgrade")).toBeInTheDocument();
@@ -214,6 +219,7 @@ describe("GlobalBanners", () => {
 
   it("explains unknown permissions with a Retry (503 is read-only)", async () => {
     renderWithApp(<GlobalBanners />, { permissions: async () => { throw Object.assign(new Error("x"), { name: "ApiError", status: 503, errorCode: "authorization_unavailable", message: "Cannot verify mutation permissions" }); } });
+    await settleApps();
     expect(await screen.findByText("Your permissions could not be checked; changes are disabled")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
     await settleApps();
@@ -226,6 +232,7 @@ describe("GlobalBanners", () => {
       permissions: async () => ({ canMutate: false, user: "me", role: "admin", reason: "Your sign-in expires in 3 minutes. Log out and log in again.", reasonCode: "sign_in_again" }),
       version: async () => ({ version: "4503bb7d", commit: "x", buildDate: "d", templateRevision: "1", expectedTemplateRevision: "2", templateOutdated: true }),
     }, "/components");
+    await settleApps();
     expect(await screen.findByText(/alice is running "Update to nightly"/)).toBeInTheDocument();
     expect(await screen.findByText("Sign in again to make changes")).toBeInTheDocument();
     expect(screen.queryByText(/this updater's deployment is out of date/)).not.toBeInTheDocument();

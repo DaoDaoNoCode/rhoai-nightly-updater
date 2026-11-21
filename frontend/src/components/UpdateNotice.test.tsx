@@ -45,6 +45,7 @@ describe("update available notice", () => {
 
   it("asks for a full redeploy for a new major version, with the release notes", async () => {
     renderWithApp(<GlobalBanners />, { version: release("v1.0.0"), update: async () => MAJOR });
+    await settleApps();
     expect(await screen.findByText("v2.0.0 is available")).toBeInTheDocument();
     expect(screen.getByText(/requires a full redeploy/)).toBeInTheDocument();
     expect(screen.getByText("git checkout v2.0.0 && make upgrade")).toBeInTheDocument();
@@ -61,6 +62,7 @@ describe("update available notice", () => {
         releaseNotesURL: "https://github.com/example/app/releases/v2.0.1", installerURL,
       }),
     });
+    await settleApps();
     expect(await screen.findByText("v2.0.1 is available")).toBeInTheDocument();
     expect(screen.getByText(/An admin upgrades with the v2.0.1 installer/)).toBeInTheDocument();
     expect(screen.getByText(`curl -fsSLO '${installerURL}' && bash install.sh`)).toBeInTheDocument();
@@ -84,6 +86,7 @@ describe("update available notice", () => {
       version: release("v2.0.1"),
       update: async () => ({ current: "v2.0.1", latest: "v3.0.0", updateAvailable: true, majorUpgrade: true, installerURL }),
     });
+    await settleApps();
     expect(await screen.findByText(/v3.0.0 is a new major version and requires a full redeploy/)).toBeInTheDocument();
     expect(screen.getByText(/An admin redeploys with the v3.0.0 installer/)).toBeInTheDocument();
     expect(screen.getByText(`curl -fsSLO '${installerURL}' && bash install.sh`)).toBeInTheDocument();
@@ -102,6 +105,7 @@ describe("update available notice", () => {
       update: async () => ({ current: "v2.0.0", latest: "v2.0.1", updateAvailable: true, majorUpgrade: false, installerURL, installerSHA256: sum }),
     });
     // sha256sum -c reads "<sum><two spaces><file>": compare without collapsing whitespace.
+    await settleApps();
     expect(await screen.findByText(`curl -fsSLO '${installerURL}' && echo '${sum}  install.sh' | sha256sum -c - && bash install.sh`,
       { normalizer: getDefaultNormalizer({ collapseWhitespace: false }) })).toBeInTheDocument();
     expect(screen.getByText(/The command checks install.sh against the SHA-256 in the v2.0.1 release notes/)).toBeInTheDocument();
@@ -114,6 +118,7 @@ describe("update available notice", () => {
       version: release("v2.0.0"),
       update: async () => ({ current: "v2.0.0", latest: "v2.0.1", updateAvailable: true, majorUpgrade: false, installerURL, installerSHA256: "$(id)" }),
     });
+    await settleApps();
     expect(await screen.findByText(`curl -fsSLO '${installerURL}' && bash install.sh`)).toBeInTheDocument();
     expect(screen.queryByText(/\$\(id\)/)).not.toBeInTheDocument();
     await settleApps();
@@ -124,6 +129,7 @@ describe("update available notice", () => {
       version: release("v2.0.0"),
       update: async () => ({ current: "v2.0.0", latest: "v2.1.0", updateAvailable: true, majorUpgrade: false }),
     });
+    await settleApps();
     expect(await screen.findByText("v2.1.0 is available")).toBeInTheDocument();
     expect(screen.queryByText(/full redeploy/)).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Release notes" })).not.toBeInTheDocument();
@@ -132,23 +138,26 @@ describe("update available notice", () => {
 
   it("stays dismissed for that release, and comes back for a newer one", async () => {
     const { unmount } = renderWithApp(<GlobalBanners />, { version: release("v1.0.0"), update: async () => MAJOR });
+    await settleApps();
     fireEvent.click(await screen.findByRole("button", { name: /Close Info alert: .*v2.0.0 is available/ }));
     expect(screen.queryByText("v2.0.0 is available")).not.toBeInTheDocument();
     unmount();
 
     const again = renderWithApp(<><GlobalBanners /><Probe /></>, { version: release("v1.0.0"), update: async () => MAJOR });
-    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("v1.0.0|v2.0.0"));
+    await settleApps();
+    expect(screen.getByTestId("probe")).toHaveTextContent("v1.0.0|v2.0.0");
     expect(screen.queryByText("v2.0.0 is available")).not.toBeInTheDocument();
     again.unmount();
 
     renderWithApp(<GlobalBanners />, { version: release("v1.0.0"), update: async () => ({ ...MAJOR, latest: "v2.0.1" }) });
-    expect(await screen.findByText("v2.0.1 is available")).toBeInTheDocument();
     await settleApps();
+    expect(screen.getByText("v2.0.1 is available")).toBeInTheDocument();
   });
 
   it("does not check for main or commit builds", async () => {
     const update = vi.fn(async () => MAJOR);
     renderWithApp(<><GlobalBanners /><Probe /></>, { version: release("2cdcb42d"), update });
+    await settleApps();
     await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("2cdcb42d|-"));
     expect(update).not.toHaveBeenCalled();
     expect(screen.queryByText(/is available/)).not.toBeInTheDocument();
@@ -158,6 +167,7 @@ describe("update available notice", () => {
   it("checks for a pre-release, which the backend offers its release", async () => {
     const update = vi.fn(async () => ({ current: "v5.0.0-rc.1", latest: "v5.0.0", updateAvailable: true, majorUpgrade: false }));
     renderWithApp(<GlobalBanners />, { version: release("v5.0.0-rc.1"), update });
+    await settleApps();
     expect(await screen.findByText("v5.0.0 is available")).toBeInTheDocument();
     expect(update).toHaveBeenCalled();
     expect(screen.getByText(/This updater runs v5.0.0-rc.1/)).toBeInTheDocument();
@@ -171,6 +181,7 @@ describe("update available notice", () => {
       version: release("v2.0.0"),
       update: async () => ({ current: "v2.0.0", latest: "v2.0.0", updateAvailable: false, majorUpgrade: false }),
     });
+    await settleApps();
     await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("v2.0.0|v2.0.0"));
     expect(screen.queryByText(/is available/)).not.toBeInTheDocument();
     await settleApps();
@@ -181,6 +192,7 @@ describe("update available notice", () => {
       version: async () => ({ version: "v1.0.0", commit: "x", buildDate: "d", templateRevision: "", expectedTemplateRevision: "2", templateOutdated: true }),
       update: async () => MAJOR,
     });
+    await settleApps();
     expect(await screen.findByText(/this updater's deployment is out of date/)).toBeInTheDocument();
     expect(await screen.findByText("v2.0.0 is available")).toBeInTheDocument();
     await settleApps();
@@ -196,6 +208,7 @@ describe("update available notice", () => {
         version: gitops("v2.0.0"),
         update: async () => ({ current: "v2.0.0", latest: "v2.0.1", updateAvailable: true, majorUpgrade: false, installerURL }),
       });
+      await settleApps();
       expect(await screen.findByText("v2.0.1 is available")).toBeInTheDocument();
       expect(screen.getByText(/an admin upgrades in Git/)).toBeInTheDocument();
       for (const text of ["targetRevision", "parameters.IMAGE", "docs/GITOPS.md"]) {
@@ -210,6 +223,7 @@ describe("update available notice", () => {
 
     it("keeps the full-redeploy warning for a new major version", async () => {
       renderWithApp(<GlobalBanners />, { version: gitops("v1.0.0"), update: async () => MAJOR });
+      await settleApps();
       expect(await screen.findByText(/requires a full redeploy/)).toBeInTheDocument();
       expect(screen.getByText(/including the new template/)).toBeInTheDocument();
       expect(screen.queryByText("git checkout v2.0.0 && make upgrade")).not.toBeInTheDocument();
@@ -219,6 +233,7 @@ describe("update available notice", () => {
     it("words the template-outdated notice and the help dialog for Git", async () => {
       const outdated = gitops("v1.0.0", { templateRevision: "3", expectedTemplateRevision: "4", templateOutdated: true });
       const { unmount } = renderWithApp(<GlobalBanners />, { version: outdated });
+      await settleApps();
       expect(await screen.findByText(/this updater's deployment is out of date/)).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: /Info alert details/ }));
       expect(screen.getByText(/Argo CD installed it from the Helm chart/)).toBeInTheDocument();
@@ -226,16 +241,17 @@ describe("update available notice", () => {
       unmount();
 
       renderWithApp(<><HelpButton /><Probe /></>, { version: outdated, update: async () => ({ updateAvailable: false, majorUpgrade: false }) });
-      await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("v1.0.0|-"));
+      await settleApps();
+      expect(screen.getByTestId("probe")).toHaveTextContent("v1.0.0|-");
       fireEvent.click(screen.getByRole("button", { name: /help/i }));
       expect(await screen.findByText(/in the GitOps repository to the release of the image/)).toBeInTheDocument();
       expect(screen.queryByText("make upgrade")).not.toBeInTheDocument();
-      await settleApps();
     });
   });
 
   it("lists the newer release in the help dialog", async () => {
     renderWithApp(<><HelpButton /><Probe /></>, { version: release("v1.0.0"), update: async () => MAJOR });
+    await settleApps();
     await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("v1.0.0|v2.0.0"));
     fireEvent.click(screen.getByRole("button", { name: /help/i }));
     expect(await screen.findByText("Newer release")).toBeInTheDocument();
@@ -249,6 +265,7 @@ describe("update available notice", () => {
     let latest = "v2.0.0";
     const update = vi.fn(async () => ({ ...MAJOR, latest }));
     renderWithApp(<><GlobalBanners /><Probe /></>, { version: release("v1.0.0"), update });
+    await settleApps();
     await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("v1.0.0|v2.0.0"));
     expect(update).toHaveBeenCalledTimes(1);
 
@@ -260,7 +277,7 @@ describe("update available notice", () => {
     vi.setSystemTime(new Date(Date.now() + 120_000));
     act(() => { window.dispatchEvent(new Event("focus")); });
     expect(update).toHaveBeenCalledTimes(2);
-    expect(await screen.findByText("v2.1.0 is available")).toBeInTheDocument();
     await settleApps();
+    expect(screen.getByText("v2.1.0 is available")).toBeInTheDocument();
   });
 });

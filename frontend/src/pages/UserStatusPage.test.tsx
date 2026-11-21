@@ -25,6 +25,7 @@ describe("Status for a user who is not a cluster-admin", () => {
   it("shows the summary: updater, RHOAI, nightly build and the DataScienceCluster", async () => {
     const api = stubUserApi();
     render();
+    await settleApps();
     expect(await screen.findByRole("heading", { name: "RHOAI" })).toBeInTheDocument();
     // The values of the generated contract fixture (pkg/api TestFrontendContract).
     expect(within(row(document.body, "Updater version")).getByText(contract.summary().updaterVersion)).toBeInTheDocument();
@@ -52,6 +53,7 @@ describe("Status for a user who is not a cluster-admin", () => {
   it("has nothing to change: no update, reinstall, pull secret, activity or Argo CD", async () => {
     stubUserApi();
     render();
+    await settleApps();
     await screen.findByRole("heading", { name: "RHOAI" });
     for (const text of [/Update to/, /Re-deploy/, /Install a different build/, /Pull secret/i, /Activity/, /Argo CD/, /Recovery/]) {
       expect(screen.queryByText(text)).not.toBeInTheDocument();
@@ -64,6 +66,7 @@ describe("Status for a user who is not a cluster-admin", () => {
     const s = contract.summary();
     stubUserApi({ "/api/summary": summary({ nightly: { ...s.nightly, latestBuild: s.nightly.installedBuild, newerAvailable: false } }) });
     render();
+    await settleApps();
     expect(await screen.findByText("This is the newest build")).toBeInTheDocument();
     await settleApps();
   });
@@ -72,6 +75,7 @@ describe("Status for a user who is not a cluster-admin", () => {
     const s = contract.summary();
     stubUserApi({ "/api/summary": summary({ nightly: { ...s.nightly, latestBuild: null, newerAvailable: false, problem: "lookup_failed" } }) });
     render();
+    await settleApps();
     expect(await screen.findByText("Could not check for a newer build.")).toBeInTheDocument();
     expect(screen.queryByText("This is the newest build")).not.toBeInTheDocument();
     await settleApps();
@@ -80,6 +84,7 @@ describe("Status for a user who is not a cluster-admin", () => {
   it("an unreadable catalog is not a cluster without a nightly build", async () => {
     stubUserApi({ "/api/summary": summary({ nightly: { installedBuild: null, latestBuild: null, newerAvailable: false, problem: "catalog_unreadable" } }) });
     render();
+    await settleApps();
     expect(await screen.findByText("Could not read which nightly build is installed.")).toBeInTheDocument();
     expect(screen.queryByText(/was not installed from a nightly build/)).not.toBeInTheDocument();
     await settleApps();
@@ -92,6 +97,7 @@ describe("Status for a user who is not a cluster-admin", () => {
       dsc: { exists: false, ready: false, components: null },
     }) });
     render();
+    await settleApps();
     expect(await screen.findByText("Not installed")).toBeInTheDocument();
     expect(screen.getByText("RHOAI on this cluster was not installed from a nightly build.")).toBeInTheDocument();
     expect(screen.getByText("There is no DataScienceCluster. A cluster-admin creates it.")).toBeInTheDocument();
@@ -101,6 +107,7 @@ describe("Status for a user who is not a cluster-admin", () => {
   it("opens the Build Explorer from the nightly build", async () => {
     stubUserApi();
     renderPage(<><UserStatusPage /><Where /></>, "/", { permissions: async () => USER_PERMISSIONS });
+    await settleApps();
     fireEvent.click(await screen.findByRole("button", { name: "Open Build Explorer" }));
     expect(screen.getByTestId("where")).toHaveTextContent("/builds");
     await settleApps();
@@ -109,6 +116,7 @@ describe("Status for a user who is not a cluster-admin", () => {
   it("a summary that cannot be read shows Retry, without Diagnostics", async () => {
     stubUserApi({ "/api/summary": () => jsonResponse({ error: "The cluster API did not answer", errorCode: "cluster_unavailable" }, 503) });
     render();
+    await settleApps();
     expect(await screen.findByRole("heading", { name: "Can't load the cluster summary" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open Diagnostics" })).not.toBeInTheDocument();
@@ -118,6 +126,7 @@ describe("Status for a user who is not a cluster-admin", () => {
   it("a summary the user may not read says so, not Access denied", async () => {
     stubUserApi({ "/api/summary": () => jsonResponse({ error: "no", errorCode: "forbidden_for_user" }, 403) });
     render();
+    await settleApps();
     expect(await screen.findByRole("heading", { name: "You cannot see this" })).toBeInTheDocument();
     expect(screen.queryByText(/Access denied/)).not.toBeInTheDocument();
     expect(screen.queryByText(/make upgrade/)).not.toBeInTheDocument();
@@ -132,14 +141,15 @@ describe("Status for a user who is not a cluster-admin", () => {
       permissions: async () => USER_PERMISSIONS,
       operation: async () => (running ? { running: true, label: "Update to nightly", startedAt: "2026-10-06T14:05:00Z" } : { running: false }),
     });
+    await settleApps();
     await screen.findByRole("heading", { name: "RHOAI" });
     expect(await screen.findByText(/An update is running since/)).toBeInTheDocument();
     const reads = () => api.calls.filter((c) => c.includes("/api/summary")).length;
     const before = reads();
     running = false;
     fireEvent.click(screen.getByRole("button", { name: "Poll operation" }));
-    await waitFor(() => expect(screen.queryByText(/An update is running since/)).not.toBeInTheDocument());
-    await waitFor(() => expect(reads()).toBe(before + 1));
     await settleApps();
+    expect(screen.queryByText(/An update is running since/)).not.toBeInTheDocument();
+    await waitFor(() => expect(reads()).toBe(before + 1));
   });
 });

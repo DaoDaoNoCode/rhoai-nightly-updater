@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -114,23 +115,60 @@ func TestCheckNodePull_NoAnswer(t *testing.T) {
 	verificationCatalogWrites(t, f)
 }
 
-// A stopped request removes the catalog all the same.
+// A stopped request removes the catalog all the same, whether it is stopped
+// while the check reads the catalog's state (the read fails) or right after
+// a read answered (the next step finds the request stopped). requestHooks
+// put the stop at that point, so each case takes its own path in every run.
 func TestCheckNodePull_StoppedRemovesTheCatalog(t *testing.T) {
-	f := newFakeOLM(t)
-	f.verifyState = "CONNECTING"
-	ctx, cancel := context.WithCancel(context.Background())
-	c := f.client(ctx)
-	f.intercept = func(f *fakeOLM, w http.ResponseWriter, r *http.Request) bool {
-		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/catalogsources/"+verificationCatalogPrefix()) {
-			cancel()
+	isStateRead := func(r *http.Request) bool {
+		return r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/catalogsources/"+verificationCatalogPrefix())
+	}
+	stateReads := func(f *fakeOLM) int {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		n := 0
+		for _, r := range f.requests {
+			if r.Method == http.MethodGet && strings.Contains(r.Path, "/catalogsources/"+verificationCatalogPrefix()) {
+				n++
+			}
 		}
-		return false
+		return n
 	}
-	result, err := CheckNodePull(c, nodeCheckImage)
-	if err == nil || result.Success {
-		t.Fatalf("result=%+v err=%v", result, err)
+	for _, tc := range []struct {
+		name string
+		// afterRead: stopped once the state read answered, else just before
+		// it is sent.
+		afterRead bool
+		// State reads the fake answered.
+		wantReads int
+	}{
+		{name: "while the state is read", wantReads: 0},
+		{name: "after the state was read", afterRead: true, wantReads: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeOLM(t)
+			f.verifyState = "CONNECTING"
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			stop := func(r *http.Request) {
+				if isStateRead(r) {
+					cancel()
+				}
+			}
+			hooks := requestHooks{before: stop}
+			if tc.afterRead {
+				hooks = requestHooks{answered: stop}
+			}
+			result, err := CheckNodePull(withRequestHooks(f.client(ctx), hooks), nodeCheckImage)
+			if !errors.Is(err, context.Canceled) || result.Success || result.Message != "The check was stopped" {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			if n := stateReads(f); n != tc.wantReads {
+				t.Fatalf("%d state reads reached the API server, want %d", n, tc.wantReads)
+			}
+			verificationCatalogWrites(t, f)
+		})
 	}
-	verificationCatalogWrites(t, f)
 }
 
 // The catalog cannot be created: nothing else is attempted.

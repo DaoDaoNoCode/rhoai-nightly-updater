@@ -165,6 +165,7 @@ describe("Check that the nodes can pull", () => {
     const fetchMock = stubCheck({ success: true, message: `A temporary catalog pod pulled ${IMAGE} with the nodes' pull secret, and was removed again.`, logs: [] });
     renderWithApp(<PullSecretSetup pullSecret={saved(unchecked)} controlPlane="self-managed" checkImage={IMAGE} />);
     const check = screen.getByRole("button", { name: "Check that the nodes can pull" });
+    await settleApps();
     await waitFor(() => expect(check).not.toHaveAttribute("aria-disabled", "true"));
     fireEvent.click(check);
     expect(await screen.findByText("The nodes can pull from quay.io/rhoai")).toBeInTheDocument();
@@ -181,6 +182,7 @@ describe("Check that the nodes can pull", () => {
     stubCheck({ success: false, errorCode: "catalog_image_pull", message: "The catalog image x cannot be pulled (ErrImagePull: unauthorized).", logs: [] });
     renderWithApp(<PullSecretSetup pullSecret={saved(unchecked)} controlPlane="self-managed" checkImage={IMAGE} />);
     const check = screen.getByRole("button", { name: "Check that the nodes can pull" });
+    await settleApps();
     await waitFor(() => expect(check).not.toHaveAttribute("aria-disabled", "true"));
     fireEvent.click(check);
     expect(await screen.findByText("The nodes cannot pull from quay.io/rhoai")).toBeInTheDocument();
@@ -201,6 +203,7 @@ describe("Check that the nodes can pull", () => {
 
   it("is disabled for a read-only user", async () => {
     renderWithApp(<PullSecretSetup pullSecret={saved(unchecked)} controlPlane="self-managed" checkImage={IMAGE} />, { permissions: async () => ({ canMutate: false, user: "viewer" }) });
+    await settleApps();
     await waitFor(() => expect(screen.getByRole("button", { name: "Check that the nodes can pull" })).toHaveAttribute("aria-disabled", "true"));
     await settleApps();
   });
@@ -213,6 +216,7 @@ describe("The cluster setup on a self-managed cluster", () => {
     renderWithApp(<ClusterSetupCard status={status} onStatusRefresh={vi.fn()} onShowInstructions={vi.fn()} checkImage={IMAGE} />);
     expect(screen.getByText("1 of 2 ready")).toBeInTheDocument();
     const check = screen.getByRole("button", { name: "Check that the nodes can pull" });
+    await settleApps();
     await waitFor(() => expect(check).not.toHaveAttribute("aria-disabled", "true"));
     fireEvent.click(check);
     await screen.findByText("The nodes can pull from quay.io/rhoai");

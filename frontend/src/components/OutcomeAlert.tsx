@@ -33,15 +33,13 @@ export const OutcomeAlert: React.FC<OutcomeAlertProps> = ({ result, failedTitle,
     isLiveRegion: true,
     actionClose: onClose ? <AlertActionCloseButton onClose={onClose} /> : undefined,
   };
-  const message = result.success ? undefined : result.message;
-  // Alert shows its description only when it has children: a lone message
-  // that is empty (a success) leaves none.
-  if (!logs) return <Alert {...props}>{message}</Alert>;
-  return (
-    <Alert {...props}>
-      {message}
-      {children}
-      {(result.logs?.length ?? 0) > 0 && <TechnicalDetails text={result.logs!} />}
-    </Alert>
-  );
+  const message = result.success ? undefined : result.message || undefined;
+  const words = logs && React.Children.toArray(children).length > 0 ? children : undefined;
+  // TechnicalDetails renders nothing for blank logs.
+  const details = logs && (result.logs ?? []).join("\n").trim() ? <TechnicalDetails text={result.logs!} /> : undefined;
+  // Alert renders its description whenever its children are truthy, and an
+  // array of empty parts is: a success with nothing under its title would
+  // get an empty description and space under the title.
+  const body = message || words || details ? <>{message}{words}{details}</> : undefined;
+  return <Alert {...props}>{body}</Alert>;
 };

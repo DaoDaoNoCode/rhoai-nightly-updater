@@ -17,6 +17,7 @@ const remoteUpdate: ServerOperation = {
 describe("the banner of an operation another updater pod runs", () => {
   it("ends the latest progress with a full stop, also after a parenthesis", async () => {
     renderWithApp(<GlobalBanners />, { operation: async () => ({ inProgress: true, operation: remoteUpdate }) }, "/components");
+    await settleApps();
     expect(await screen.findByText(/on updater pod updater-old/)).toBeInTheDocument();
     expect(screen.getByText(/Latest progress: CSV rhods-operator\.3\.6\.0: Installing \(InstallWaiting\)\. Another updater pod runs it/)).toBeInTheDocument();
     await settleApps();
@@ -32,16 +33,17 @@ describe("the permissions notice", () => {
     ["a sign-in about to expire", expiring],
   ])("shows the backend's reason with Log out for %s, not read-only access", async (_name, reason) => {
     renderWithApp(<GlobalBanners />, { permissions: async () => ({ canMutate: false, user: "admin", role: "admin", reason, reasonCode: "sign_in_again" }) }, "/components");
-    expect(await screen.findByText("Sign in again to make changes", { exact: false })).toBeInTheDocument();
+    await settleApps();
+    expect(screen.getByText("Sign in again to make changes", { exact: false })).toBeInTheDocument();
     expect(screen.getByText(`${reason} You can still view everything.`)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Log out" })).toHaveAttribute("href", "/oauth/sign_out");
     expect(screen.queryByText(/Read-only access/)).not.toBeInTheDocument();
     expect(screen.queryByText(/cluster-admin role/)).not.toBeInTheDocument();
-    await settleApps();
   });
 
   it("shows another backend reason without Log out", async () => {
     renderWithApp(<GlobalBanners />, { permissions: async () => ({ canMutate: false, user: "admin", role: "admin", reason: "Changes are paused for maintenance" }) }, "/components");
+    await settleApps();
     expect(await screen.findByText("Changes are paused for maintenance. You can still view everything.")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Log out" })).not.toBeInTheDocument();
     expect(screen.queryByText(/cluster-admin role/)).not.toBeInTheDocument();
@@ -50,6 +52,7 @@ describe("the permissions notice", () => {
 
   it("keeps the read-only notice for a cluster-admin whose answer gives no reason", async () => {
     renderWithApp(<GlobalBanners />, { permissions: async () => ({ canMutate: false, user: "viewer", role: "admin" }) }, "/components");
+    await settleApps();
     expect(await screen.findByText("Read-only access", { exact: false })).toBeInTheDocument();
     expect(screen.getByText(/requires the cluster-admin role/)).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Log out" })).not.toBeInTheDocument();
@@ -63,15 +66,15 @@ describe("the permissions notice", () => {
     ["no role (fail closed)", { canMutate: false, user: "dev-user" }],
   ])("shows a user who is not a cluster-admin no read-only notice (%s)", async (_name, answer) => {
     renderWithApp(<><GlobalBanners /><p>loaded</p></>, { permissions: async () => answer }, "/test-resources");
-    await screen.findByText("loaded");
-    await act(async () => {});
+    await settleApps();
+    expect(screen.getByText("loaded")).toBeInTheDocument();
     expect(screen.queryByText(/Read-only access/)).not.toBeInTheDocument();
     expect(screen.queryByText(/cluster-admin role/)).not.toBeInTheDocument();
-    await settleApps();
   });
 
   it("still warns a user when their permissions could not be checked", async () => {
     renderWithApp(<GlobalBanners />, { permissions: async () => { throw new ApiError({ status: 503, errorCode: "authorization_unavailable", message: "Cannot verify" }); } }, "/");
+    await settleApps();
     expect(await screen.findByText("Your permissions could not be checked; changes are disabled", { exact: false })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
     await settleApps();
@@ -87,6 +90,7 @@ describe("the operation banner for a user who is not a cluster-admin", () => {
       permissions: async () => USER_PERMISSIONS,
       operation: async () => ({ running: true, label: "Update to nightly", startedAt }),
     }, "/");
+    await settleApps();
     expect(await screen.findByText(`An update is running since ${clock}`, { exact: false })).toBeInTheDocument();
     expect(screen.getByText(/Update to nightly\. What this page shows may change until it finishes\./)).toBeInTheDocument();
     expect(screen.queryByText(/qa-user|Someone|on updater pod|View progress/)).not.toBeInTheDocument();
@@ -99,6 +103,7 @@ describe("the operation banner for a user who is not a cluster-admin", () => {
       permissions: async () => USER_PERMISSIONS,
       operation: async () => ({ running: false }),
     }, "/");
+    await settleApps();
     await screen.findByText("loaded");
     await act(async () => {});
     expect(screen.queryByText(/is running/)).not.toBeInTheDocument();
@@ -112,6 +117,7 @@ describe("notices only a cluster-admin can act on", () => {
 
   it("shows the deployment and new-release notices to a cluster-admin", async () => {
     renderWithApp(<GlobalBanners />, { version: outdated, update: newer }, "/");
+    await settleApps();
     expect(await screen.findByText("For admins: this updater's deployment is out of date", { exact: false })).toBeInTheDocument();
     expect(await screen.findByText("v5.1.0 is available", { exact: false })).toBeInTheDocument();
     await settleApps();
@@ -120,6 +126,7 @@ describe("notices only a cluster-admin can act on", () => {
   it("does not show them to a user who is not a cluster-admin", async () => {
     const update = vi.fn(newer);
     renderWithApp(<><GlobalBanners /><p>loaded</p></>, { permissions: async () => USER_PERMISSIONS, version: outdated, update }, "/");
+    await settleApps();
     await screen.findByText("loaded");
     // The release check itself is allowed for everyone; only the notice is a cluster-admin's.
     await waitFor(() => expect(update).toHaveBeenCalled());

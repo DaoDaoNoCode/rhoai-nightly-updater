@@ -32,6 +32,7 @@ async function saveButton(): Promise<HTMLElement> {
 describe("PullSecretSetup gating", () => {
   it("is enabled when nothing blocks it", async () => {
     renderWithApp(<PullSecretSetup pullSecret={missing} />);
+    await settleApps();
     const save = await saveButton();
     await waitFor(() => expect(save).not.toHaveAttribute("aria-disabled", "true"));
     await settleApps();
@@ -41,6 +42,7 @@ describe("PullSecretSetup gating", () => {
     const sse = sseResponse();
     vi.stubGlobal("fetch", vi.fn(async () => sse.response));
     renderWithApp(<><StartButton /><PullSecretSetup pullSecret={missing} /></>, { operation: async () => IDLE_OPERATION });
+    await settleApps();
     const save = await saveButton();
     await waitFor(() => expect(save).not.toHaveAttribute("aria-disabled", "true"));
     fireEvent.click(screen.getByRole("button", { name: "start" }));
@@ -57,6 +59,7 @@ describe("PullSecretSetup gating", () => {
 
   it("is disabled for a read-only user", async () => {
     renderWithApp(<PullSecretSetup pullSecret={missing} />, { permissions: async () => ({ canMutate: false, user: "viewer" }) });
+    await settleApps();
     await saveButton();
     await waitFor(() => expect(screen.getByRole("button", { name: "Create secret" })).toHaveAttribute("aria-disabled", "true"));
     await settleApps();
@@ -68,6 +71,7 @@ describe("PullSecretSetup actions of an existing secret", () => {
 
   it("offers Test with Quay and Replace token as buttons of the same weight; Replace token is the danger one", async () => {
     renderWithApp(<PullSecretSetup pullSecret={ready} />);
+    await settleApps();
     const test = await screen.findByRole("button", { name: "Test with Quay" });
     const replace = screen.getByRole("button", { name: "Replace token" });
     for (const b of [test, replace]) {
@@ -84,6 +88,7 @@ describe("PullSecretSetup actions of an existing secret", () => {
 
   it("opens the form as the confirmation step: Replace token (danger) and Cancel, with focus moving in and back", async () => {
     renderWithApp(<PullSecretSetup pullSecret={ready} />);
+    await settleApps();
     fireEvent.click(await screen.findByRole("button", { name: "Replace token" }));
 
     // The toggle is hidden while the form is open; Test with Quay stays.

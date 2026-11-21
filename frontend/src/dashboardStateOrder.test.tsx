@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
 import { DashboardDevPage } from "./pages/DashboardDevPage";
 import { useDashboardOverride } from "./state/AppInfo";
 import { stubApi, jsonResponse } from "./test/apiStub";
@@ -48,13 +48,16 @@ const appRefresh = () => fireEvent.click(screen.getByRole("button", { name: "app
 const pageRefresh = () => fireEvent.click(screen.getByRole("button", { name: "Refresh dashboard dev" }));
 
 describe("the Dashboard Dev state read by the page and by the app", () => {
+  // Both reads stay open until the test answers them; in between, every
+  // other read answers inside act (await act(async () => {})).
   it("page read starts, then the app's: the app's answer stays when the page's arrives last", async () => {
     const { page, app } = setup();
-    await waitFor(() => expect(page).toHaveLength(1));
+    await act(async () => {});
+    expect(page).toHaveLength(1);
     appRefresh();
-    await waitFor(() => expect(app).toHaveLength(1));
+    expect(app).toHaveLength(1);
     await act(async () => app[0](state("newer")));
-    await waitFor(() => expect(shown()).toBe("newer"));
+    expect(shown()).toBe("newer");
     await act(async () => page[0](state("older")));
     await settleApps();
     expect(shown()).toBe("newer");
@@ -62,9 +65,10 @@ describe("the Dashboard Dev state read by the page and by the app", () => {
 
   it("page read starts, then the app's: the app's answer wins when the page's arrives first", async () => {
     const { page, app } = setup();
-    await waitFor(() => expect(page).toHaveLength(1));
+    await act(async () => {});
+    expect(page).toHaveLength(1);
     appRefresh();
-    await waitFor(() => expect(app).toHaveLength(1));
+    expect(app).toHaveLength(1);
     await act(async () => page[0](state("older")));
     await act(async () => app[0](state("newer")));
     await settleApps();
@@ -73,13 +77,15 @@ describe("the Dashboard Dev state read by the page and by the app", () => {
 
   it("app read starts, then the page's: the page's answer wins when it arrives first", async () => {
     const { page, app } = setup();
-    await waitFor(() => expect(page).toHaveLength(1));
+    await act(async () => {});
+    expect(page).toHaveLength(1);
     await act(async () => page[0](state("first")));
-    await waitFor(() => expect(shown()).toBe("first"));
+    expect(shown()).toBe("first");
     appRefresh();
-    await waitFor(() => expect(app).toHaveLength(1));
+    expect(app).toHaveLength(1);
     pageRefresh();
-    await waitFor(() => expect(page).toHaveLength(2));
+    await act(async () => {});
+    expect(page).toHaveLength(2);
     await act(async () => page[1](state("newer")));
     await act(async () => app[0](state("older")));
     await settleApps();
@@ -88,13 +94,15 @@ describe("the Dashboard Dev state read by the page and by the app", () => {
 
   it("app read starts, then the page's: the page's answer wins when it arrives last", async () => {
     const { page, app } = setup();
-    await waitFor(() => expect(page).toHaveLength(1));
+    await act(async () => {});
+    expect(page).toHaveLength(1);
     await act(async () => page[0](state("first")));
-    await waitFor(() => expect(shown()).toBe("first"));
+    expect(shown()).toBe("first");
     appRefresh();
-    await waitFor(() => expect(app).toHaveLength(1));
+    expect(app).toHaveLength(1);
     pageRefresh();
-    await waitFor(() => expect(page).toHaveLength(2));
+    await act(async () => {});
+    expect(page).toHaveLength(2);
     await act(async () => app[0](state("older")));
     await act(async () => page[1](state("newer")));
     await settleApps();

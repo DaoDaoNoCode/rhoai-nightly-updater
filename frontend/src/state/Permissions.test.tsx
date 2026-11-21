@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import { usePermissions, useRole, useSignedInUser } from "./Permissions";
 import { useClusterStatus, useOperation } from "./AppState";
 import { ApiError } from "../services/api";
@@ -27,8 +27,8 @@ describe("the role", () => {
     ["an unknown role (fail closed)", { canMutate: true, user: "me", role: "superuser" }, "user"],
   ])("%s", async (_name, answer, role) => {
     renderWithApp(<Probe />, { permissions: async () => answer as UserPermissions });
-    await waitFor(() => expect(probe().role).toBe(role));
     await settleApps();
+    expect(probe().role).toBe(role);
   });
 
   it.each([
@@ -36,9 +36,9 @@ describe("the role", () => {
     ["503 authorization_unavailable", () => new ApiError({ status: 503, errorCode: "authorization_unavailable", message: "Cannot verify" })],
   ])("%s is a user's view (fail closed)", async (_name, err) => {
     renderWithApp(<Probe />, { permissions: async () => { throw err(); } });
-    await waitFor(() => expect(probe().perm).not.toBe("checking"));
-    expect(probe().role).toBe("user");
     await settleApps();
+    expect(probe().perm).not.toBe("checking");
+    expect(probe().role).toBe("user");
   });
 
   it("is 'checking' until the first answer, and the status is not read before it", async () => {
@@ -48,34 +48,32 @@ describe("the role", () => {
     await act(async () => {});
     expect(probe()).toMatchObject({ role: "checking", status: false });
     expect(status).not.toHaveBeenCalled();
-    answer.resolve({ canMutate: true, user: "me", role: "admin" });
-    await waitFor(() => expect(probe()).toMatchObject({ role: "admin", status: true }));
-    expect(status).toHaveBeenCalledTimes(1);
+    await act(async () => { answer.resolve({ canMutate: true, user: "me", role: "admin" }); });
     await settleApps();
+    expect(probe()).toMatchObject({ role: "admin", status: true });
+    expect(status).toHaveBeenCalledTimes(1);
   });
 
   it("a user's tab never reads the status", async () => {
     const status = vi.fn(async () => nightlyStatus());
     renderWithApp(<Probe />, { permissions: async () => USER_PERMISSIONS, status });
-    await waitFor(() => expect(probe()).toMatchObject({ role: "user", user: "dev-user", loading: false }));
-    await act(async () => {});
-    expect(status).not.toHaveBeenCalled();
     await settleApps();
+    expect(probe()).toMatchObject({ role: "user", user: "dev-user", loading: false });
+    expect(status).not.toHaveBeenCalled();
   });
 });
 
 describe("GET /api/operation for a user", () => {
   it("keeps the label and start of a running operation, no names", async () => {
     renderWithApp(<Probe />, { permissions: async () => USER_PERMISSIONS, operation: async () => ({ running: true, label: "Update to nightly", startedAt: "2026-10-06T14:05:00Z" }) });
-    await waitFor(() => expect(probe()).toMatchObject({ inProgress: true, brief: { label: "Update to nightly", startedAt: "2026-10-06T14:05:00Z" } }));
     await settleApps();
+    expect(probe()).toMatchObject({ inProgress: true, brief: { label: "Update to nightly", startedAt: "2026-10-06T14:05:00Z" } });
   });
 
   it("is idle when nothing runs", async () => {
     renderWithApp(<Probe />, { permissions: async () => USER_PERMISSIONS, operation: async () => ({ running: false }) });
-    await waitFor(() => expect(probe().role).toBe("user"));
-    await act(async () => {});
-    expect(probe()).toMatchObject({ inProgress: false, brief: null });
     await settleApps();
+    expect(probe().role).toBe("user");
+    expect(probe()).toMatchObject({ inProgress: false, brief: null });
   });
 });

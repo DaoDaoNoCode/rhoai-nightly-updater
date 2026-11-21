@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, expect, it } from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, within } from "@testing-library/react";
 import { HelpButton } from "./HelpModal";
 import { ADMIN_PERMISSIONS, USER_PERMISSIONS, nightlyStatus, renderWithApp, type AppFetchers, settleApps } from "../test/providers";
 import { useUpdateCheck, useVersion } from "../state/AppInfo";
@@ -27,7 +27,9 @@ const Probe: React.FC = () => {
 
 async function openHelp(fetchers: AppFetchers, settled: string) {
   renderWithApp(<><HelpButton /><Probe /></>, { version: async () => OUTDATED, update: async () => NEWER, ...fetchers });
-  if (settled) await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent(settled));
+  // The reads that answer do so inside act (a test may hold the permission check open).
+  await act(async () => {});
+  expect(screen.getByTestId("probe")).toHaveTextContent(settled);
   fireEvent.click(screen.getByRole("button", { name: "Help" }));
   return screen.findByRole("dialog");
 }

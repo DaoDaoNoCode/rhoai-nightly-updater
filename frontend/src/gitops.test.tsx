@@ -121,6 +121,7 @@ describe("ComponentsPage under Argo CD", () => {
       "/api/components": { components: [], deployments: [], dscName: "", dscPhase: "", changedCount: 0, dscExists: false, dscState: "no-dsc", operatorVersion: "3.6.0", operatorPhase: "Succeeded" },
     });
     renderPage(<ComponentsPage />, "/components", { status: async () => nightlyStatus({ ...synced, dscExists: false }) });
+    await settleApps();
     expect(await screen.findByRole("heading", { name: "No DataScienceCluster yet" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Preview and create DataScienceCluster" })).toHaveAttribute("aria-disabled", "true"));
     fireEvent.mouseEnter(screen.getByRole("button", { name: "Preview and create DataScienceCluster" }));
@@ -133,6 +134,7 @@ describe("StatusPage under Argo CD", () => {
   it("shows the notice and turns off Re-deploy and Install a different build with the reason", async () => {
     stubApi({ "/api/latest-nightly": { latest: managed.nightly?.latest }, "/api/nightly-tags": { tags: [] } });
     renderPage(<StatusPage />, "/", { status: async () => managed });
+    await settleApps();
     expect(await screen.findByText(/Argo CD manages the operator Subscription/)).toBeInTheDocument();
     const recovery = screen.getByRole("list", { name: "Recovery actions" });
     await waitFor(() => expect(within(recovery).getByRole("button", { name: "Re-deploy operator..." })).toHaveAttribute("aria-disabled", "true"));
@@ -143,6 +145,7 @@ describe("StatusPage under Argo CD", () => {
   it("does not offer to create the DataScienceCluster, which Git creates", async () => {
     stubApi({ "/api/latest-nightly": { latest: managed.nightly?.latest }, "/api/nightly-tags": { tags: [] } });
     renderPage(<StatusPage />, "/", { status: async () => nightlyStatus({ ...synced, dscExists: false }) });
+    await settleApps();
     expect(await screen.findByText("No DataScienceCluster yet")).toBeInTheDocument();
     expect(screen.queryByText("Create the DataScienceCluster")).not.toBeInTheDocument();
     await settleApps();
@@ -151,6 +154,7 @@ describe("StatusPage under Argo CD", () => {
   it("shows no notice without Argo CD", async () => {
     stubApi({ "/api/latest-nightly": { latest: managed.nightly?.latest }, "/api/nightly-tags": { tags: [] } });
     renderPage(<StatusPage />, "/", { status: async () => nightlyStatus() });
+    await settleApps();
     const recovery = await screen.findByRole("list", { name: "Recovery actions" });
     await waitFor(() => expect(within(recovery).getByRole("button", { name: "Choose a build..." })).not.toHaveAttribute("aria-disabled"));
     expect(screen.queryByText(/Argo CD manages/)).not.toBeInTheDocument();
@@ -214,6 +218,7 @@ describe("UpdatePanel under Argo CD", () => {
     expect(screen.getByText(/sets this image in Git/)).toBeInTheDocument();
     expect(screen.getByText(/The catalog serves rhods-operator.3.6.0-ea.1 \(built Oct 8, .*\), which is not installed/)).toBeInTheDocument();
     // The button is remounted once the permission check ends (TooltipButton drops its Tooltip), so query it again.
+    await settleApps();
     await waitFor(() => expect(screen.getByRole("button", { name: "Install the build the catalog serves" })).not.toHaveAttribute("aria-disabled"));
     fireEvent.click(screen.getByRole("button", { name: "Install the build the catalog serves" }));
     expect(onRequestUpdate).toHaveBeenCalledWith(expect.objectContaining({ image: GIT_IMAGE }));
@@ -291,6 +296,7 @@ describe("A catalog an ACM policy manages", () => {
 
   it("fixes the image to the policy's, also in the gitops profile", async () => {
     renderWithApp(<UpdatePanel status={acmOnly} latest={null} onRequestUpdate={vi.fn()} />, { version: gitOpsVersion });
+    await settleApps();
     await waitFor(() => expect((screen.getByLabelText("FBC image") as HTMLInputElement).value).toBe(GIT_IMAGE));
     expect(screen.getByText("From the ACM policy")).toBeInTheDocument();
     expect(screen.getByText(/An ACM policy \(config-policy-controller\) sets this image/)).toBeInTheDocument();
@@ -328,15 +334,16 @@ describe("The gitops profile reads no registry", () => {
 
   it("says in the help dialog that the updater's releases come through Git", async () => {
     renderWithApp(<HelpButton />, { version: gitOpsVersion, update: async () => ({ current: "v2.2.0", updateAvailable: false, majorUpgrade: false, pinnedInGit: true }) });
+    await settleApps();
     await waitFor(() => expect(screen.getByRole("button", { name: /help/i })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /help/i }));
     expect(await screen.findByText(/The chart pins the updater's release in Git/)).toBeInTheDocument();
     cleanup();
     renderWithApp(<HelpButton />);
+    await settleApps();
     fireEvent.click(screen.getByRole("button", { name: /help/i }));
     await screen.findByText("Updater build");
     expect(screen.queryByText(/The chart pins the updater's release in Git/)).not.toBeInTheDocument();
-    await settleApps();
   });
 
   it("shows the operator build from the CSV, and why the images have no labels", async () => {
@@ -347,6 +354,7 @@ describe("The gitops profile reads no registry", () => {
         imageLabelsOff: true, operatorImage: "registry.redhat.io/rhoai/odh-rhel9-operator@sha256:abc", operatorBuilt: "2026-10-08T04:00:00Z" },
     });
     renderPage(<ComponentsPage />, "/components", { status: async () => gitOpsStatus, version: gitOpsVersion });
+    await settleApps();
     expect(await screen.findByText(new RegExp(IMAGE_LABELS_OFF.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))).toBeInTheDocument();
     expect(screen.getByText("registry.redhat.io/rhoai/odh-rhel9-operator@sha256:abc")).toBeInTheDocument();
     await settleApps();
