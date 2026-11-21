@@ -56,7 +56,7 @@ describe("an aborted read", () => {
       // The first read gets a 403 whose body is still arriving when the reload supersedes it.
       return reads === 1 ? bodyStillArriving(403, init?.signal) : jsonResponse(MAAS);
     }));
-    let reload: () => void = () => {};
+    let reload: () => Promise<void> = async () => {};
     const Probe = () => {
       const m = useMaaSStatus(0, false);
       reload = m.reload;
@@ -65,7 +65,7 @@ describe("an aborted read", () => {
     const app = renderWithApp(<Probe />);
     await app.settled();
     expect(reads).toBe(1);
-    await act(async () => { reload(); });
+    await act(() => reload());
     await app.settled();
     expect(screen.getByTestId("probe")).toHaveTextContent("false|s");
     const before = reads;

@@ -52,7 +52,8 @@ export interface ClusterStatusValue {
   loading: boolean;
   error: ApiError | null;
   lastRefreshed: Date | null;
-  refresh: () => Promise<void>;
+  /** Reads the status again; a failure is kept in `error`. */
+  refresh: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -430,12 +431,13 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
       if (ticket.isLatest()) setLoading(false);
     }
   }, [statusRequest]);
-  const refresh = useCallback(() => loadStatus(false), [loadStatus]);
+  // loadStatus catches its own errors (they become `error`), so nothing waits on it.
+  const refresh = useCallback(() => { void loadStatus(false); }, [loadStatus]);
   const pollStatus = useCallback(() => loadStatus(true), [loadStatus]);
 
   useEffect(() => {
     if (statusEnabled) {
-      void refresh();
+      refresh();
       return;
     }
     // Not (or no longer) a cluster-admin: nothing of the status stays shown.

@@ -6,6 +6,7 @@ import { SetupModal } from "./PrerequisitesPanel";
 import { nodePullUnverified, prerequisitesMet } from "../utils";
 import { imageByTag } from "../services/api/operator";
 import { nightlyStatus, renderWithApp, settleApps } from "../test/providers";
+import { jsonBody } from "../test/utils";
 import type { PullSecretInfo, StatusResponse } from "../types";
 
 // The command the backend sends (pkg/cluster/node_pull_secret.sh); the card
@@ -170,7 +171,7 @@ describe("Check that the nodes can pull", () => {
     const call = fetchMock.mock.calls.find(([url]) => url === "/api/setup/node-pull-check");
     expect(call?.[1]?.method).toBe("POST");
     // By tag, without the digest: a cached digest is not pulled again.
-    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ image: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6" });
+    expect(jsonBody(call?.[1])).toEqual({ image: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6" });
     expect(screen.getByText("Ready")).toBeInTheDocument();
     expect(screen.queryByText("Nodes not checked")).not.toBeInTheDocument();
     await settleApps();

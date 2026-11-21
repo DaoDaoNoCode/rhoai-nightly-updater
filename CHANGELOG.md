@@ -108,6 +108,17 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   `make release-check TAG=vX.Y.Z`. The frontend targets say when
   `frontend/node_modules` is missing (`cd frontend && npm ci`) instead of
   failing on a TypeScript option.
+- Internal, frontend only: ESLint reads the TypeScript types and checks
+  promises (none left unhandled, none passed where nothing waits for them),
+  `await` of non-promises, switch exhaustiveness and object-to-string
+  conversions. The Environment page's component (`QuickResourceCreator`,
+  1,011 lines) is split into its URL state, status reads, run actions and
+  their requests (`frontend/src/components/environment/`), and repeated UI
+  pieces (outcome alerts, the Dashboard Dev session alert, Open
+  Diagnostics, Go to Status) are one component each. No change in what
+  the app does.
+- The Environment page's load failure reads "Can't load the environment",
+  like every other page's ("Cannot load the environment" before).
 
 ### Fixed
 

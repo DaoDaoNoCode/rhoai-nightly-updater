@@ -5,7 +5,7 @@ import { OperationProgress } from "./OperationProgress";
 import { ActivityLog } from "./ActivityLog";
 import type { Problem } from "../types";
 import { nightlyStatus, renderWithApp, settleApps } from "../test/providers";
-import { jsonResponse } from "../test/utils";
+import { jsonBody, jsonResponse } from "../test/utils";
 import { compareTagToInstalled, sentence, shortTarget } from "../build";
 import { describeError } from "../errors";
 
@@ -14,7 +14,7 @@ function stubDiagnostics(problems: Problem[], fixResponse: unknown, fixStatus = 
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/diagnostics") return jsonResponse({ problems, checks: [] });
     if (url === "/api/diagnostics/fix") {
-      fixBodies.push(JSON.parse(String(init?.body)));
+      fixBodies.push(jsonBody(init));
       return jsonResponse(fixResponse, fixStatus);
     }
     if (url === "/api/assist-rollout") throw new Error("assist-rollout must not be called directly");

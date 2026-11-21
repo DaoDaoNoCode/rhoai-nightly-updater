@@ -14,6 +14,7 @@ import {
   Title,
 } from "@patternfly/react-core";
 import { Link, useNavigate } from "react-router-dom";
+import { OpenDiagnosticsLink } from "./NavigationActions";
 import { UpdatePipeline } from "./UpdatePipeline";
 import { ReconciliationProgress } from "./ReconciliationProgress";
 import { BuildSummary } from "./BuildSummary";
@@ -210,7 +211,7 @@ export const OperationProgress: React.FC = () => {
             title={failed ? FAILED_TITLES[reconcile.kind] : COMPLETE_TITLES[reconcile.kind]}
             actionClose={<AlertActionCloseButton onClose={dismissFinished} />}
             actionLinks={failed ? (
-              <AlertActionLink onClick={() => navigate("/diagnostics")}>Open Diagnostics</AlertActionLink>
+              <OpenDiagnosticsLink />
             ) : (
               <AlertActionLink onClick={() => navigate("/components")}>Check components</AlertActionLink>
             )}

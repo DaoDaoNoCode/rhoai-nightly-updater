@@ -54,6 +54,16 @@ export function describeDashboardSession(o: DashboardOverride | null): string {
 export const REVERT_DASHBOARD_EXPLANATION =
   "Reverting resumes the dashboard operator, which puts the release dashboard images back; the Dashboard Dev deployment ends. You can deploy it again afterwards.";
 
+/**
+ * In an operator action's confirmation: a Dashboard Dev session pauses the
+ * dashboard operator. `children` says what the action does about it.
+ */
+export const DashboardSessionAlert: React.FC<{ override: DashboardOverride | null; children: string }> = ({ override, children }) => (
+  <Alert variant="warning" isInline component="p" title="A Dashboard Dev session is active">
+    {dashboardOperatorLabel(override?.operatorName)} is paused ({describeDashboardSession(override)}). {children}{" "}{REVERT_DASHBOARD_EXPLANATION}
+  </Alert>
+);
+
 interface PendingFollowUp {
   request: OperatorRequest;
   options: OperatorOperationOptions;

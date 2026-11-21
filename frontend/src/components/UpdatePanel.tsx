@@ -48,8 +48,8 @@ import { TooltipButton } from "./TooltipButton";
 import { BuildSummary } from "./BuildSummary";
 import { TagLabel } from "./StatusLabel";
 import { StepsPreview } from "./StepsPreview";
-import { REVERT_DASHBOARD_EXPLANATION, describeDashboardSession } from "./OperatorActions";
-import { prerequisitesMet as prerequisitesReady, pullSecretNotUsed } from "../utils";
+import { DashboardSessionAlert } from "./OperatorActions";
+import { SETUP_FIRST_REASON, prerequisitesMet as prerequisitesReady, pullSecretNotUsed } from "../utils";
 import type { LatestNightlyResponse, NightlyBuild, OperationResponse, StatusResponse } from "../types";
 import {
   updateOperator,
@@ -67,7 +67,6 @@ import { GITOPS_PROFILE_UNMANAGED_CATALOG, gitOpsPolicyProblem } from "../profil
 import { GITOPS_UPDATE_STEPS, STEP_SETS } from "../operationSteps";
 import { catalogImageSetter, catalogManaged, catalogManagedByACM, catalogSpecFrom, gitOpsInstallState, gitOpsInstallWaitReason, operatorGitOpsApp, operatorManaged } from "../gitops";
 import { buildFromImage, compareTagToInstalled, formatBuildDate, parseImageRef } from "../build";
-import { dashboardOperatorLabel } from "./dashboardOperator";
 
 // ---------------------------------------------------------------------------
 // Shared confirmation dialog (hero "Update to latest" and the form below)
@@ -211,10 +210,7 @@ export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, 
             )}
             {dashboardActive && (
               <StackItem>
-                <Alert variant="warning" isInline component="p" title="A Dashboard Dev session is active">
-                  {dashboardOperatorLabel(override?.operatorName)} is paused ({describeDashboardSession(override)}). The update ends that session first, or the
-                  dashboard would stay on its old images. {REVERT_DASHBOARD_EXPLANATION}
-                </Alert>
+                <DashboardSessionAlert override={override}>The update ends that session first, or the dashboard would stay on its old images.</DashboardSessionAlert>
               </StackItem>
             )}
 
@@ -234,7 +230,7 @@ export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, 
                 <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
                   <FlexItem><Content component="small">Just set up the pull secret or image mirror?</Content></FlexItem>
                   <FlexItem>
-                    <Button variant="link" isInline onClick={handleVerifyNodes} isLoading={verifying} isDisabled={verifying}>
+                    <Button variant="link" isInline onClick={() => void handleVerifyNodes()} isLoading={verifying} isDisabled={verifying}>
                       Check that the nodes can pull nightly images
                     </Button>
                   </FlexItem>
@@ -378,7 +374,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
   }, [status, override, blocker, gitOpsState, gitOpsProfile, operation.server.inProgress, operation.running, operation.state.reconcile.active]);
 
   const disabledReason = blocker
-    ?? (!prerequisitesMet ? "Finish the one-time cluster setup first (pull secret and image mirror)." : null)
+    ?? (!prerequisitesMet ? SETUP_FIRST_REASON : null)
     ?? (!trimmed ? (gitImage !== null ? "The nightly catalog has no image in Git." : "Enter an FBC image, or click Fetch latest.") : null)
     ?? gitOpsInstallWaitReason(gitOpsState)
     ?? (olderLine ? `This build (${ref?.tag}) is from an older release line than the installed ${status?.csv.version}. Update can't go back; use Install a different build under Recovery.` : null);
@@ -494,10 +490,10 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
                     variant="control"
                     icon={<SyncAltIcon />}
                     aria-label="Fetch latest"
-                    onClick={handleFetchLatest}
+                    onClick={() => void handleFetchLatest()}
                     isLoading={fetchingLatest}
                     isDisabled={fetchingLatest}
-                    disabledReason={!prerequisitesMet ? "Finish the one-time cluster setup first (pull secret and image mirror)." : null}
+                    disabledReason={!prerequisitesMet ? SETUP_FIRST_REASON : null}
                   >
                     <span className="pf-v6-u-display-none pf-v6-u-display-inline-on-sm">Fetch latest</span>
                   </TooltipButton>
@@ -554,7 +550,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
             <FlexItem>
               <TooltipButton
                 variant="secondary"
-                onClick={handleDryRun}
+                onClick={() => void handleDryRun()}
                 isLoading={dryRunning}
                 isDisabled={dryRunning}
                 disabledReason={disabledReason}

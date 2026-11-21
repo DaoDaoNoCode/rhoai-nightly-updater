@@ -32,7 +32,8 @@ export function useFbcContent(image: string | null, refreshKey?: unknown): FbcCo
     const controller = new AbortController();
     const { signal } = controller;
     setState({ ...EMPTY, loading: true });
-    (async () => {
+    // Both reads catch their errors and put them in the state.
+    void (async () => {
       let content: FBCContentResponse;
       try {
         content = await getBuildExplorerContent(image, false, signal);

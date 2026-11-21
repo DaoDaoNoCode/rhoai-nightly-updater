@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { linkTo } from "../components/NavigationActions";
 import {
   Alert,
-  AlertActionCloseButton,
   Button,
   Card,
   CardBody,
@@ -57,7 +56,8 @@ import { DashboardSessionPanel, flavorName, sessionTitle } from "../components/D
 import { ConfirmActionModal } from "../components/ConfirmActionModal";
 import { TooltipButton } from "../components/TooltipButton";
 import { COMPONENTS_POLL_MS } from "../constants";
-import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
+import { errorResult } from "../outcomes";
+import { OutcomeAlert } from "../components/OutcomeAlert";
 import { formatRelativeTime } from "../utils";
 import { useClusterBusyHandler, useDashboardOverride, useMutationBlocker } from "../state/AppInfo";
 import { dashboardOperatorLabel } from "../components/dashboardOperator";
@@ -349,10 +349,10 @@ export const DashboardDevPage: React.FC = () => {
             </EmptyStateBody>
             <EmptyStateFooter>
               <EmptyStateActions>
-                <Button variant="primary" component={(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <Link {...props} to="/components" />}>Open Components</Button>
+                <Button variant="primary" component={linkTo("/components")}>Open Components</Button>
               </EmptyStateActions>
               <EmptyStateActions>
-                <Button variant="link" component={(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <Link {...props} to="/" />}>Install RHOAI from the Status page</Button>
+                <Button variant="link" component={linkTo("/")}>Install RHOAI from the Status page</Button>
               </EmptyStateActions>
             </EmptyStateFooter>
           </EmptyState>
@@ -364,11 +364,7 @@ export const DashboardDevPage: React.FC = () => {
           <Stack hasGutter>
             {result && (
               <StackItem>
-                <Alert variant={outcomeVariant(result)} title={outcomeTitle(result, "The action failed")} isInline isLiveRegion component="p"
-                  actionClose={<AlertActionCloseButton onClose={() => setResult(null)} />}>
-                  {result.success ? undefined : result.message}
-                  {(result.logs?.length ?? 0) > 0 && <TechnicalDetails text={result.logs!} />}
-                </Alert>
+                <OutcomeAlert result={result} failedTitle="The action failed" onClose={() => setResult(null)} logs />
               </StackItem>
             )}
 
@@ -526,7 +522,7 @@ export const DashboardDevPage: React.FC = () => {
         changes={confirm === "pr" || confirm === "main" ? deployChanges(confirm) : []}
         confirmLabel={confirm === "pr" ? `Deploy PR #${parsedPR}` : "Deploy latest main"}
         isLoading={running === "pr" || running === "main"}
-        onConfirm={() => confirm && run(confirm)}
+        onConfirm={() => { if (confirm) void run(confirm); }}
         onCancel={() => setConfirm(null)}
       >
         {flavors.length > 1 && !legacy && <Content component="p">Build: <strong>{flavorName(chosenFlavor)}</strong>.</Content>}
@@ -545,7 +541,7 @@ export const DashboardDevPage: React.FC = () => {
         ]}
         confirmLabel="Revert to default"
         isLoading={running === "revert"}
-        onConfirm={() => run("revert")}
+        onConfirm={() => void run("revert")}
         onCancel={() => setConfirm(null)}
       >
         <Content component="p">The dashboard restarts and may be unavailable briefly. Reverting twice is safe.</Content>
@@ -559,7 +555,7 @@ export const DashboardDevPage: React.FC = () => {
         ]}
         confirmLabel="Assist rollout"
         isLoading={running === "assist"}
-        onConfirm={() => run("assist")}
+        onConfirm={() => void run("assist")}
         onCancel={() => setConfirm(null)}
       >
         <Content component="p">

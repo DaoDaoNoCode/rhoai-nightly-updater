@@ -5,7 +5,7 @@ import { useOperatorActions, type OperatorRequest } from "./OperatorActions";
 import { ReinstallPanel, isValidCustomImage } from "./ReinstallPanel";
 import { UpdateConfirmModal } from "./UpdatePanel";
 import { nightlyStatus, renderWithApp, settleApps } from "../test/providers";
-import { jsonResponse, sseEvent } from "../test/utils";
+import { jsonBody, jsonResponse, sseEvent } from "../test/utils";
 
 const IMAGE = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + "b".repeat(64);
 
@@ -16,7 +16,7 @@ function stubStreams(responses: Array<() => Response>) {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/pageview") return jsonResponse({});
     urls.push(url);
-    bodies.push(init?.body ? JSON.parse(String(init.body)) : null);
+    bodies.push(init?.body ? jsonBody(init) : null);
     const next = responses.shift();
     if (!next) throw new Error("unexpected request " + url);
     return next();

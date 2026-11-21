@@ -19,6 +19,16 @@ import { SIGN_IN_URL } from "./ErrorAlert";
 import { TechnicalDetails } from "./LongText";
 import { gitOpsProfileReason } from "../profile";
 
+/** An empty state's way back: Go to Status. */
+export const GoToStatusAction: React.FC = () => {
+  const navigate = useNavigate();
+  return (
+    <EmptyStateActions>
+      <Button variant="primary" onClick={() => navigate("/")}>Go to Status</Button>
+    </EmptyStateActions>
+  );
+};
+
 /** First load of a page, or of a large part of it: PatternFly's loading empty state. */
 export const PageLoading: React.FC<{ title: string; inSection?: boolean }> = ({ title, inSection = true }) => {
   const state = <EmptyState headingLevel="h2" titleText={title} icon={Spinner} variant={EmptyStateVariant.lg} />;
@@ -116,15 +126,12 @@ export const SessionExpiredState: React.FC = () => (
  * what is missing and why, and the way back to Status.
  */
 export const ProfileOffState: React.FC<{ feature: string }> = ({ feature }) => {
-  const navigate = useNavigate();
   return (
     <PageSection isFilled>
       <EmptyState headingLevel="h1" titleText={`${feature} is not available here`} icon={BanIcon} variant={EmptyStateVariant.lg}>
         <EmptyStateBody>{gitOpsProfileReason(feature)} Change the cluster in Git instead.</EmptyStateBody>
         <EmptyStateFooter>
-          <EmptyStateActions>
-            <Button variant="primary" onClick={() => navigate("/")}>Go to Status</Button>
-          </EmptyStateActions>
+          <GoToStatusAction />
         </EmptyStateFooter>
       </EmptyState>
     </PageSection>
@@ -166,15 +173,12 @@ export const NotForUserState: React.FC<{ error: unknown; inSection?: boolean; he
 
 /** A page only cluster-admins see (Components, Dashboard Dev, Diagnostics), opened by a user who is not one. */
 export const AdminOnlyPageState: React.FC = () => {
-  const navigate = useNavigate();
   return (
     <PageSection isFilled>
       <EmptyState headingLevel="h1" titleText="Only cluster-admins can see this page" icon={LockIcon} variant={EmptyStateVariant.lg}>
         <EmptyStateBody>{ADMIN_ONLY_BODY}</EmptyStateBody>
         <EmptyStateFooter>
-          <EmptyStateActions>
-            <Button variant="primary" onClick={() => navigate("/")}>Go to Status</Button>
-          </EmptyStateActions>
+          <GoToStatusAction />
         </EmptyStateFooter>
       </EmptyState>
     </PageSection>

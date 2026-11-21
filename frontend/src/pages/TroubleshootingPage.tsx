@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActionListItem,
   Alert,
-  AlertActionCloseButton,
   Button,
   Checkbox,
   Card,
@@ -30,14 +29,15 @@ import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import CopyIcon from "@patternfly/react-icons/dist/esm/icons/copy-icon";
 import type { AcknowledgeBinding, OperationResponse, Problem, DiagnosticResult, FieldChange } from "../types";
 import { getDiagnostics, fixProblem, toApiError, type ApiError } from "../services/api";
-import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
+import { errorResult } from "../outcomes";
+import { OutcomeAlert } from "../components/OutcomeAlert";
 import { LoadErrorAlert } from "../components/LoadErrorAlert";
 import { PageHeader } from "../components/PageHeader";
 import { withImageRefs } from "../components/ImageRef";
 import { PageErrorState, PageLoading } from "../components/PageStates";
 import { ConfirmActionModal } from "../components/ConfirmActionModal";
 import { StatusLabel, TagLabel, type StatusKind } from "../components/StatusLabel";
-import { TechnicalDetails, TruncatedText } from "../components/LongText";
+import { TruncatedText } from "../components/LongText";
 import { TooltipButton } from "../components/TooltipButton";
 import { useClusterBusyHandler, useGitOpsProfile, useMutationBlocker } from "../state/AppInfo";
 import { gitOpsProfileReason } from "../profile";
@@ -239,7 +239,7 @@ export const TroubleshootingPage: React.FC = () => {
     // The page view is counted once, by the router in App.
     document.title = "Diagnostics — RHOAI Nightly Updater";
     mountedRef.current = true;
-    runScan();
+    void runScan();
     return () => {
       mountedRef.current = false;
     };
@@ -301,7 +301,7 @@ export const TroubleshootingPage: React.FC = () => {
         description="Live health checks of the RHOAI install, with the cause of each problem and how to fix it."
         lastRefreshed={lastScanned}
         loading={scanState === "loading"}
-        onRefresh={runScan}
+        onRefresh={() => void runScan()}
         refreshText="Re-scan"
         actions={data && (
           <ActionListItem>
@@ -322,10 +322,10 @@ export const TroubleshootingPage: React.FC = () => {
       {scanState === "loading" && !data && <PageLoading title="Scanning the cluster health" />}
 
       {scanState === "error" && error && data && (
-        <LoadErrorAlert error={error} genericTitle="The diagnostic scan failed" onRetry={runScan} stale />
+        <LoadErrorAlert error={error} genericTitle="The diagnostic scan failed" onRetry={() => void runScan()} stale />
       )}
       {scanState === "error" && error && !data && (
-        <PageErrorState error={error} title="The diagnostic scan failed" onRetry={runScan} />
+        <PageErrorState error={error} title="The diagnostic scan failed" onRetry={() => void runScan()} />
       )}
 
       {data && (
@@ -346,12 +346,9 @@ export const TroubleshootingPage: React.FC = () => {
 
             {fixResult && (
               <StackItem>
-                <Alert variant={outcomeVariant(fixResult)} title={outcomeTitle(fixResult, "Fix failed")} isInline isLiveRegion component="p"
-                  actionClose={<AlertActionCloseButton onClose={() => setFixResult(null)} />}>
-                  {fixResult.success ? undefined : fixResult.message}
+                <OutcomeAlert result={fixResult} failedTitle="Fix failed" onClose={() => setFixResult(null)} logs>
                   {fixResult.errorCode === "conflict" ? " The scan was refreshed; check the problem again before retrying." : ""}
-                  {(fixResult.logs?.length ?? 0) > 0 && <TechnicalDetails text={fixResult.logs!} />}
-                </Alert>
+                </OutcomeAlert>
               </StackItem>
             )}
 
