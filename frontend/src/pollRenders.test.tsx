@@ -11,7 +11,8 @@ import type { OperationStatusResponse } from "./types";
 // React's <Profiler> calls onRender once per commit in which anything
 // inside it rendered (https://react.dev/reference/react/Profiler#onrender-callback).
 // The page here reads no app state itself, so it renders again only when
-// the app shell above it does.
+// the app shell above it does. Each test asserts the polls and the page's
+// commits together, so a failure shows both numbers.
 const commits = vi.hoisted(() => ({ page: 0 }));
 const countingPage = (name: string) => () => (
   <Profiler id={name} onRender={() => { commits.page += 1; }}>
@@ -82,10 +83,7 @@ describe("polls with unchanged answers", () => {
     // 16 idle operation polls; 4 status and 2 dashboard-state polls in the same 240 s.
     for (let i = 0; i < 16; i++) await tick(OPERATION_POLL_IDLE_MS);
     const polls = { operation: at("/api/operation") - before.operation, status: at("/api/status") - before.status, dashboard: at("/api/dashboard/state") - before.dashboard };
-    const pageCommits = commits.page - before.page;
-    console.info(`[F3] admin idle: ${polls.operation} operation + ${polls.status} status + ${polls.dashboard} dashboard-state polls -> ${pageCommits} page commits`);
-    expect(polls).toEqual({ operation: 16, status: 4, dashboard: 2 });
-    expect(pageCommits).toBe(0);
+    expect({ ...polls, pageCommits: commits.page - before.page }).toEqual({ operation: 16, status: 4, dashboard: 2, pageCommits: 0 });
   });
 
   it("cluster-admin, a teammate's operation runs: operation polls every 3 s", async () => {
@@ -98,11 +96,7 @@ describe("polls with unchanged answers", () => {
     await openAndSettle("/components");
     const before = { page: commits.page, operation: calls["/api/operation"] };
     for (let i = 0; i < 10; i++) await tick(OPERATION_POLL_BUSY_MS);
-    const polls = calls["/api/operation"] - before.operation;
-    const pageCommits = commits.page - before.page;
-    console.info(`[F3] admin busy: ${polls} operation polls -> ${pageCommits} page commits`);
-    expect(polls).toBe(10);
-    expect(pageCommits).toBe(0);
+    expect({ polls: calls["/api/operation"] - before.operation, pageCommits: commits.page - before.page }).toEqual({ polls: 10, pageCommits: 0 });
   });
 
   it("a user who is not a cluster-admin: operation polls every 15 s, no status", async () => {
@@ -113,12 +107,8 @@ describe("polls with unchanged answers", () => {
     await openAndSettle("/");
     const before = { page: commits.page, operation: calls["/api/operation"] };
     for (let i = 0; i < 4; i++) await tick(OPERATION_POLL_IDLE_MS);
-    const polls = calls["/api/operation"] - before.operation;
-    const pageCommits = commits.page - before.page;
-    console.info(`[F3] user idle: ${polls} operation polls -> ${pageCommits} page commits`);
-    expect(polls).toBe(4);
+    expect({ polls: calls["/api/operation"] - before.operation, pageCommits: commits.page - before.page }).toEqual({ polls: 4, pageCommits: 0 });
     expect(calls["/api/status"]).toBeUndefined();
-    expect(pageCommits).toBe(0);
   });
 
   it("(the status poll's interval, for the numbers above)", () => {
