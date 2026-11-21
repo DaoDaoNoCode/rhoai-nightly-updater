@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 )
 
 func pullSecretBody(t *testing.T, auths map[string]any) string {
@@ -94,7 +96,7 @@ func TestSelectQuayAuth_PrefersMostSpecificDeterministically(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Map iteration order is random; repeat to prove determinism.
 			for i := range 200 {
-				if auth := selectQuayAuth(tc.auths); auth != tc.wantAuth {
+				if auth := registry.SelectQuayAuth(tc.auths); auth != tc.wantAuth {
 					t.Fatalf("iteration %d: got %q, want %q", i, auth, tc.wantAuth)
 				}
 			}
@@ -113,16 +115,14 @@ func TestGetQuayAuthAndStatusUseSameCredential(t *testing.T) {
 	defer cleanup()
 
 	var verified []string
-	orig := verifyQuayCredentials
-	verifyQuayCredentials = func(auth string) error { verified = append(verified, auth); return nil }
-	defer func() { verifyQuayCredentials = orig }()
+	defer registry.SetVerifyQuayCredentialsForTest(func(auth string) error { verified = append(verified, auth); return nil })()
 
 	for range 50 {
-		if got := getQuayAuth(client); got != exampleAuth("rhoai:y") {
+		if got := registry.QuayAuth(client); got != exampleAuth("rhoai:y") {
 			t.Fatalf("getQuayAuth = %q, want the quay.io/rhoai credential", got)
 		}
 	}
-	ps, err := getPullSecret(client)
+	ps, err := registry.PullSecret(client)
 	if err != nil || !ps.Valid {
 		t.Fatalf("getPullSecret = %+v, %v", ps, err)
 	}
@@ -139,7 +139,7 @@ func TestGetPullSecret_GenericQuayLoginIsUsable(t *testing.T) {
 		"/api/v1/namespaces/kube-system/secrets/additional-pull-secret": {body: body},
 	})
 	defer cleanup()
-	ps, err := getPullSecret(client)
+	ps, err := registry.PullSecret(client)
 	if err != nil || !ps.Exists || !ps.Valid {
 		t.Fatalf("getPullSecret = %+v, %v; a quay.io login also grants quay.io/rhoai pulls", ps, err)
 	}
@@ -153,17 +153,14 @@ func TestGetPullSecret_DistinguishesOutageFromRejection(t *testing.T) {
 		"/api/v1/namespaces/kube-system/secrets/additional-pull-secret": {body: body},
 	})
 	defer cleanup()
-	orig := verifyQuayCredentials
-	defer func() { verifyQuayCredentials = orig }()
-
-	verifyQuayCredentials = func(string) error { return &quayAuthError{StatusCode: 401, Body: "unauthorized"} }
-	ps, _ := getPullSecret(client)
+	defer registry.SetVerifyQuayCredentialsForTest(func(string) error { return &registry.QuayAuthError{StatusCode: 401, Body: "unauthorized"} })()
+	ps, _ := registry.PullSecret(client)
 	if ps.Valid || !strings.HasPrefix(ps.Detail, "Credentials rejected by Quay") {
 		t.Fatalf("401 should be a rejection, got %+v", ps)
 	}
 
-	verifyQuayCredentials = func(string) error { return errors.New("dial tcp: i/o timeout") }
-	ps, _ = getPullSecret(client)
+	registry.SetVerifyQuayCredentialsForTest(func(string) error { return errors.New("dial tcp: i/o timeout") })
+	ps, _ = registry.PullSecret(client)
 	if ps.Valid || !strings.HasPrefix(ps.Detail, "Could not verify credentials with Quay") {
 		t.Fatalf("network failure should not be reported as a rejection, got %+v", ps)
 	}
@@ -172,8 +169,7 @@ func TestGetPullSecret_DistinguishesOutageFromRejection(t *testing.T) {
 func TestVerifyQuayCredentialsCached_CachesOnlyDefinitiveAnswers(t *testing.T) {
 	var mu sync.Mutex
 	calls := map[string]int{}
-	original := quayHTTPClient
-	quayHTTPClient = &http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
+	defer registry.SetHTTPClientForTest(&http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
 		auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Basic ")
 		mu.Lock()
 		calls[auth]++
@@ -186,20 +182,17 @@ func TestVerifyQuayCredentialsCached_CachesOnlyDefinitiveAnswers(t *testing.T) {
 		default:
 			return nil, errors.New("connection refused")
 		}
-	})}
-	defer func() { quayHTTPClient = original }()
-	quayCredentialCacheMu.Lock()
-	quayCredentialCache = map[[32]byte]quayCredentialVerdict{}
-	quayCredentialCacheMu.Unlock()
+	})})()
+	registry.ResetQuayCredentialCacheForTest()
 
 	for range 3 {
-		if err := verifyQuayCredentialsCached("good"); err != nil {
+		if err := registry.VerifyQuayCredentialsCached("good"); err != nil {
 			t.Fatalf("good credentials: %v", err)
 		}
-		if err := verifyQuayCredentialsCached("bad"); !isQuayCredentialRejection(err) {
+		if err := registry.VerifyQuayCredentialsCached("bad"); !registry.IsCredentialRejection(err) {
 			t.Fatalf("bad credentials: want rejection, got %v", err)
 		}
-		if err := verifyQuayCredentialsCached("down"); err == nil || isQuayCredentialRejection(err) {
+		if err := registry.VerifyQuayCredentialsCached("down"); err == nil || registry.IsCredentialRejection(err) {
 			t.Fatalf("outage: want non-rejection error, got %v", err)
 		}
 	}
@@ -286,16 +279,16 @@ func TestCreatePullSecret_PreservesOtherRegistries(t *testing.T) {
 		t.Fatalf("expected one write, got %d", len(w))
 	}
 	auths := writtenAuths(t, w[0])
-	if got := authFromEntry(auths["registry.example.com"]); got != exampleAuth("example:x") {
+	if got := registry.AuthFromEntry(auths["registry.example.com"]); got != exampleAuth("example:x") {
 		t.Errorf("unrelated registry credential lost: %v", auths)
 	}
-	if got := authFromEntry(auths["quay.io"]); got != exampleAuth("generic:x") {
+	if got := registry.AuthFromEntry(auths["quay.io"]); got != exampleAuth("generic:x") {
 		t.Errorf("generic quay.io credential lost: %v", auths)
 	}
 	if _, ok := auths["https://quay.io/rhoai/"]; ok {
 		t.Errorf("old equivalent quay.io/rhoai key should be replaced: %v", auths)
 	}
-	if auth := selectQuayAuth(auths); auth != "bmV3OnBhc3M=" {
+	if auth := registry.SelectQuayAuth(auths); auth != "bmV3OnBhc3M=" {
 		t.Errorf("new credential not selected: %q", auth)
 	}
 }
@@ -311,7 +304,7 @@ func TestCreatePullSecret_CreatesWhenMissing(t *testing.T) {
 		t.Fatalf("expected one write, got %d", len(w))
 	}
 	auths := writtenAuths(t, w[0])
-	if len(auths) != 1 || authFromEntry(auths["quay.io/rhoai"]) != "bmV3OnBhc3M=" {
+	if len(auths) != 1 || registry.AuthFromEntry(auths["quay.io/rhoai"]) != "bmV3OnBhc3M=" {
 		t.Fatalf("unexpected auths: %v", auths)
 	}
 }

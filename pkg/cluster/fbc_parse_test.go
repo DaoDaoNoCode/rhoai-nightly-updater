@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 )
 
 const fbcPackage = `{"schema":"olm.package","name":"rhods-operator","defaultChannel":"stable"}`
@@ -33,7 +35,7 @@ func prettyJSON(t *testing.T, raw string) string {
 	return buf.String()
 }
 
-func imageNames(images []fbcRelatedImage) string {
+func imageNames(images []registry.FBCRelatedImage) string {
 	var names []string
 	for _, img := range images {
 		names = append(names, img.Name)
@@ -69,7 +71,7 @@ relatedImages:
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
-			images, bundle := parseFBCContent([]byte(content), "rhoai-3.5")
+			images, bundle := registry.ParseFBCContent([]byte(content), "rhoai-3.5")
 			if bundle != "rhods-operator.3.5.0" || imageNames(images) != "img_dash,img_ctrl" {
 				t.Fatalf("got bundle %q images %q", bundle, imageNames(images))
 			}
@@ -79,7 +81,7 @@ relatedImages:
 
 func TestParseFBCContent_MalformedJSONLineIsSkipped(t *testing.T) {
 	content := fbcPackage + "\n{not json\n" + fbcBundleJSON("rhods-operator.3.5.0", "dash") + "\n"
-	images, bundle := parseFBCContent([]byte(content), "rhoai-3.5")
+	images, bundle := registry.ParseFBCContent([]byte(content), "rhoai-3.5")
 	if bundle != "rhods-operator.3.5.0" || imageNames(images) != "img_dash" {
 		t.Fatalf("got bundle %q images %q", bundle, imageNames(images))
 	}
@@ -87,7 +89,7 @@ func TestParseFBCContent_MalformedJSONLineIsSkipped(t *testing.T) {
 
 func TestParseFBCContent_FallbackUsesHighestVersionNotLexicalName(t *testing.T) {
 	content := fbcBundleJSON("rhods-operator.3.10.0", "new") + "\n" + fbcBundleJSON("rhods-operator.3.9.0", "old")
-	images, bundle := parseFBCContent([]byte(content), "not-a-release-tag")
+	images, bundle := registry.ParseFBCContent([]byte(content), "not-a-release-tag")
 	if bundle != "rhods-operator.3.10.0" || imageNames(images) != "img_new" {
 		t.Fatalf("got bundle %q images %q", bundle, imageNames(images))
 	}
@@ -95,7 +97,7 @@ func TestParseFBCContent_FallbackUsesHighestVersionNotLexicalName(t *testing.T) 
 
 func TestParseFBCContent_SkipsAnnotationImages(t *testing.T) {
 	content := `{"schema":"olm.bundle","name":"rhods-operator.3.5.0","relatedImages":[{"name":"x-annotation","image":"a"},{"name":"keep","image":"b"}]}`
-	images, _ := parseFBCContent([]byte(content), "rhoai-3.5")
+	images, _ := registry.ParseFBCContent([]byte(content), "rhoai-3.5")
 	if imageNames(images) != "keep" {
 		t.Fatalf("got %q", imageNames(images))
 	}
@@ -127,7 +129,7 @@ func blobClient(blob []byte) *http.Client {
 
 func TestDownloadAndParseLayer_ParsesCatalog(t *testing.T) {
 	blob := gzipTar(t, map[string][]byte{"configs/rhods-operator/catalog.json": []byte(fbcPackage + "\n" + fbcBundleJSON("rhods-operator.3.5.0", "dash"))})
-	images, bundle, err := downloadAndParseLayer(context.Background(), blobClient(blob), "t", "sha256:x", "rhoai-3.5")
+	images, bundle, err := registry.DownloadAndParseLayer(context.Background(), blobClient(blob), "t", "sha256:x", "rhoai-3.5")
 	if err != nil || bundle != "rhods-operator.3.5.0" || imageNames(images) != "img_dash" {
 		t.Fatalf("got %q %q %v", bundle, imageNames(images), err)
 	}
@@ -135,18 +137,18 @@ func TestDownloadAndParseLayer_ParsesCatalog(t *testing.T) {
 
 func TestDownloadAndParseLayer_TruncatedArchiveIsAnError(t *testing.T) {
 	blob := gzipTar(t, map[string][]byte{"configs/rhods-operator/catalog.json": bytes.Repeat([]byte("x"), 4096)})
-	_, _, err := downloadAndParseLayer(context.Background(), blobClient(blob[:len(blob)/2]), "t", "sha256:x", "rhoai-3.5")
+	_, _, err := registry.DownloadAndParseLayer(context.Background(), blobClient(blob[:len(blob)/2]), "t", "sha256:x", "rhoai-3.5")
 	if err == nil {
 		t.Fatal("a truncated layer must not parse as an empty catalog")
 	}
 }
 
 func TestSizeLimitedReader(t *testing.T) {
-	exact, err := io.ReadAll(&sizeLimitedReader{r: strings.NewReader("12345"), remaining: 5, what: "x"})
+	exact, err := io.ReadAll(&registry.SizeLimitedReader{R: strings.NewReader("12345"), Remaining: 5, What: "x"})
 	if err != nil || string(exact) != "12345" {
 		t.Fatalf("exact size: %q %v", exact, err)
 	}
-	_, err = io.ReadAll(&sizeLimitedReader{r: strings.NewReader("123456"), remaining: 5, what: "x"})
+	_, err = io.ReadAll(&registry.SizeLimitedReader{R: strings.NewReader("123456"), Remaining: 5, What: "x"})
 	if err == nil || !strings.Contains(err.Error(), "exceeds the size limit") {
 		t.Fatalf("oversize: want limit error, got %v", err)
 	}
@@ -157,8 +159,7 @@ func TestExtractFBCContent_CachesOnlyDigestPinnedReferences(t *testing.T) {
 	t.Cleanup(resetRegistryCaches)
 	blob := gzipTar(t, map[string][]byte{"configs/rhods-operator/catalog.json": []byte(fbcBundleJSON("rhods-operator.3.5.0", "dash"))})
 	var manifests atomic.Int32
-	original := quayHTTPClient
-	quayHTTPClient = &http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
+	defer registry.SetHTTPClientForTest(&http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
 		body := []byte(`{"token":"t"}`)
 		switch {
 		case strings.Contains(r.URL.Path, "/manifests/"):
@@ -168,8 +169,7 @@ func TestExtractFBCContent_CachesOnlyDigestPinnedReferences(t *testing.T) {
 			body = blob
 		}
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(body))}, nil
-	})}
-	defer func() { quayHTTPClient = original }()
+	})})()
 	client, cleanup := newMockClient(map[string]mockResponse{})
 	defer cleanup()
 

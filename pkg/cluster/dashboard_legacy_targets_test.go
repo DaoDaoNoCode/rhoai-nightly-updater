@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 )
 
 // legacyDashboardServer simulates a cluster without dashboard-operator. deployments
@@ -90,11 +92,9 @@ func legacyDashboardServer(t *testing.T, deployments map[string][]string) (*Clie
 // allPRImagesPublished makes every PR image appear to exist on Quay.
 func allPRImagesPublished(t *testing.T) {
 	t.Helper()
-	original := quayHTTPClient
-	quayHTTPClient = &http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
+	t.Cleanup(registry.SetHTTPClientForTest(&http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
-	})}
-	t.Cleanup(func() { quayHTTPClient = original })
+	})}))
 }
 
 func TestLegacyDeployPR_SidecarPatchesOnlyInstalledContainers(t *testing.T) {
@@ -155,15 +155,13 @@ func TestLegacyRevert_SkipsUninstalledContainers(t *testing.T) {
 }
 
 func TestLegacyDeployPR_NothingInstalledMakesNoChanges(t *testing.T) {
-	original := quayHTTPClient
-	quayHTTPClient = &http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
+	t.Cleanup(registry.SetHTTPClientForTest(&http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
 		status := 404
 		if strings.Contains(r.URL.Path, "/odh-mod-arch-agent-ops/") {
 			status = 200
 		}
 		return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
-	})}
-	t.Cleanup(func() { quayHTTPClient = original })
+	})}))
 	client, patched := legacyDashboardServer(t, map[string][]string{
 		"rhods-dashboard": {"rhods-dashboard", "gen-ai-ui"},
 	})

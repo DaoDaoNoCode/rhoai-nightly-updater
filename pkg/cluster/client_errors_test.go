@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -120,8 +121,8 @@ func TestHTTPStatusForError(t *testing.T) {
 		{"network", &NetworkError{Err: errors.New("connection refused")}, 502, "network"},
 		{"timeout inside network error", &NetworkError{Err: &url.Error{Op: "Get", URL: "x", Err: context.DeadlineExceeded}}, 504, "timeout"},
 		{"canceled", fmt.Errorf("x: %w", context.Canceled), 503, "canceled"},
-		{"quay rejects credentials", fmt.Errorf("x: %w", &quayAuthError{StatusCode: 401}), 502, "registry_auth"},
-		{"quay outage", &quayAuthError{StatusCode: 503}, 502, "registry_unavailable"},
+		{"quay rejects credentials", fmt.Errorf("x: %w", &registry.QuayAuthError{StatusCode: 401}), 502, "registry_auth"},
+		{"quay outage", &registry.QuayAuthError{StatusCode: 503}, 502, "registry_unavailable"},
 		{"other", errors.New("parse failure"), 500, "internal"},
 	}
 	for _, tc := range cases {

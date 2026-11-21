@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -22,12 +23,10 @@ func TestCustomReinstallPinsOldBuildAndSelectsOlderChannel(t *testing.T) {
 			var appliedImage, appliedChannel string
 			var deletedCSV bool
 			// A moved tag must not be consulted for custom reinstall.
-			oldQuayClient := quayHTTPClient
-			quayHTTPClient = &http.Client{Transport: dscSampleTransport(func(*http.Request) (*http.Response, error) {
+			t.Cleanup(registry.SetHTTPClientForTest(&http.Client{Transport: dscSampleTransport(func(*http.Request) (*http.Response, error) {
 				t.Error("custom reinstall attempted to resolve the current tag instead of respecting the digest")
 				return nil, context.Canceled
-			})}
-			t.Cleanup(func() { quayHTTPClient = oldQuayClient })
+			})}))
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if dashboardOperatorAbsent(w, r) {
 					return

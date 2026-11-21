@@ -1,4 +1,4 @@
-package cluster
+package registry
 
 import (
 	"context"
@@ -42,21 +42,21 @@ const (
 	commitDateNegativeTTL = 10 * time.Minute
 	// Parallel registry reads per batch. quayHTTPClient keeps 16 idle
 	// connections per host and negotiates HTTP/2 with quay.io.
-	labelFetchConcurrency = 16
-	// labelFetchTimeout bounds each image of a batch.
-	labelFetchTimeout = 8 * time.Second
+	LabelFetchConcurrency = 16
+	// LabelFetchTimeout bounds each image of a batch.
+	LabelFetchTimeout = 8 * time.Second
 )
 
-var errNoImageLabels = errors.New("no labels in config")
+var ErrNoImageLabels = errors.New("no labels in config")
 
-type labelCacheValue struct {
-	labels   ImageLabels // CommitDate is never stored here
-	noLabels bool
+type LabelCacheValue struct {
+	Labels   ImageLabels // CommitDate is never stored here
+	NoLabels bool
 }
 
 var (
-	labelCache      = kube.NewLRU[string, labelCacheValue](labelCacheMax)
-	labelFlight     kube.FlightGroup[labelCacheValue]
+	LabelCache      = kube.NewLRU[string, LabelCacheValue](labelCacheMax)
+	labelFlight     kube.FlightGroup[LabelCacheValue]
 	commitDateCache = kube.NewLRU[string, string](commitDateCacheMax)
 	commitFlight    kube.FlightGroup[string]
 )
@@ -68,23 +68,23 @@ func isHTTPSURL(s string) bool {
 	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil
 }
 
-// isRHOAIImage checks whether an image reference is an RHOAI component
+// IsRHOAIImage checks whether an image reference is an RHOAI component
 // image: registry.redhat.io/rhoai/ or its quay.io mirror, quay.io/rhoai/.
 // The registry is matched as a prefix, not anywhere in the reference: labels
 // are always read from quay.io (imageLabelsWithAuth), so
 // "evil.example/x/rhoai/y" would otherwise read quay.io/x/rhoai/y.
-func isRHOAIImage(imageRef string) bool {
+func IsRHOAIImage(imageRef string) bool {
 	ref := strings.TrimPrefix(imageRef, "docker-pullable://")
 	return strings.HasPrefix(ref, "registry.redhat.io/rhoai/") || strings.HasPrefix(ref, "quay.io/rhoai/")
 }
 
-// extractRepoAndDigest parses an imageID like
+// RepoAndDigest parses an imageID like
 //
 //	"registry.redhat.io/rhoai/odh-dashboard-rhel9@sha256:abc123..."
 //
 // and returns ("rhoai/odh-dashboard-rhel9", "sha256:abc123...").
 // It also handles the quay.io prefix directly.
-func extractRepoAndDigest(imageID string) (repo, digest string, ok bool) {
+func RepoAndDigest(imageID string) (repo, digest string, ok bool) {
 	// imageID typically looks like:
 	//   registry.redhat.io/rhoai/odh-dashboard-rhel9@sha256:...
 	//   or docker-pullable://registry.redhat.io/rhoai/odh-dashboard-rhel9@sha256:...
@@ -117,71 +117,71 @@ func extractRepoAndDigest(imageID string) (repo, digest string, ok bool) {
 	return repo, digest, true
 }
 
-// imageLabelsWithAuth returns the labels of a digest-pinned image. Images are
+// ImageLabelsWithAuth returns the labels of a digest-pinned image. Images are
 // read from quay.io (IDMS mirrors registry.redhat.io/rhoai to quay.io/rhoai).
 // Identical concurrent lookups share one registry read.
-func imageLabelsWithAuth(ctx context.Context, basicAuth, imageID string, withCommitDate bool) (*ImageLabels, error) {
-	repo, digest, ok := extractRepoAndDigest(imageID)
+func ImageLabelsWithAuth(ctx context.Context, basicAuth, imageID string, withCommitDate bool) (*ImageLabels, error) {
+	repo, digest, ok := RepoAndDigest(imageID)
 	if !ok {
 		return nil, fmt.Errorf("cannot parse image reference: %s", imageID)
 	}
 	key := repo + "@" + digest
-	v, cached := labelCache.Get(key)
+	v, cached := LabelCache.Get(key)
 	if !cached {
 		var err error
-		v, err, _ = labelFlight.Do(ctx, key, func(ctx context.Context) (labelCacheValue, error) {
-			if v, ok := labelCache.Get(key); ok {
+		v, err, _ = labelFlight.Do(ctx, key, func(ctx context.Context) (LabelCacheValue, error) {
+			if v, ok := LabelCache.Get(key); ok {
 				return v, nil
 			}
 			labels, err := fetchImageLabels(ctx, basicAuth, repo, digest)
-			if errors.Is(err, errNoImageLabels) || errors.Is(err, errManifestUnknown) {
-				v := labelCacheValue{noLabels: true}
-				labelCache.Add(key, v, labelNegativeTTL)
+			if errors.Is(err, ErrNoImageLabels) || errors.Is(err, errManifestUnknown) {
+				v := LabelCacheValue{NoLabels: true}
+				LabelCache.Add(key, v, labelNegativeTTL)
 				return v, nil
 			}
 			if err != nil {
-				return labelCacheValue{}, err
+				return LabelCacheValue{}, err
 			}
-			v := labelCacheValue{labels: *labels}
-			labelCache.Add(key, v, 0)
+			v := LabelCacheValue{Labels: *labels}
+			LabelCache.Add(key, v, 0)
 			return v, nil
 		})
 		if err != nil {
 			return nil, err
 		}
 	}
-	if v.noLabels {
-		return nil, errNoImageLabels
+	if v.NoLabels {
+		return nil, ErrNoImageLabels
 	}
-	out := v.labels
+	out := v.Labels
 	if withCommitDate && out.GitURL != "" && out.GitCommit != "" {
-		out.CommitDate = fetchCommitDate(ctx, out.GitURL, out.GitCommit)
+		out.CommitDate = FetchCommitDate(ctx, out.GitURL, out.GitCommit)
 	}
 	return &out, nil
 }
 
-// cachedImageLabels returns labels already in the cache without any network
+// CachedImageLabels returns labels already in the cache without any network
 // call. The commit date is included when it is cached too.
-func cachedImageLabels(imageID string) (*ImageLabels, bool) {
-	repo, digest, ok := extractRepoAndDigest(imageID)
+func CachedImageLabels(imageID string) (*ImageLabels, bool) {
+	repo, digest, ok := RepoAndDigest(imageID)
 	if !ok {
 		return nil, false
 	}
-	v, ok := labelCache.Get(repo + "@" + digest)
-	if !ok || v.noLabels {
+	v, ok := LabelCache.Get(repo + "@" + digest)
+	if !ok || v.NoLabels {
 		return nil, false
 	}
-	out := v.labels
+	out := v.Labels
 	if key, ok := commitDateKey(out.GitURL, out.GitCommit); ok {
 		out.CommitDate, _ = commitDateCache.Get(key)
 	}
 	return &out, true
 }
 
-// resolveImageLabels fetches labels for a batch of image references with one
+// ResolveImageLabels fetches labels for a batch of image references with one
 // Quay credential, bounded concurrency and a per-image timeout. Images whose
 // labels cannot be read are left out of the result.
-func resolveImageLabels(ctx context.Context, basicAuth string, refs []string, withCommitDate bool) map[string]*ImageLabels {
+func ResolveImageLabels(ctx context.Context, basicAuth string, refs []string, withCommitDate bool) map[string]*ImageLabels {
 	unique := make([]string, 0, len(refs))
 	seen := make(map[string]bool, len(refs))
 	var repos []string
@@ -191,8 +191,8 @@ func resolveImageLabels(ctx context.Context, basicAuth string, refs []string, wi
 		}
 		seen[ref] = true
 		unique = append(unique, ref)
-		if repo, digest, ok := extractRepoAndDigest(ref); ok {
-			if _, cached := labelCache.Get(repo + "@" + digest); !cached {
+		if repo, digest, ok := RepoAndDigest(ref); ok {
+			if _, cached := LabelCache.Get(repo + "@" + digest); !cached {
 				repos = append(repos, repo)
 			}
 		}
@@ -204,7 +204,7 @@ func resolveImageLabels(ctx context.Context, basicAuth string, refs []string, wi
 	out := make(map[string]*ImageLabels, len(unique))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, labelFetchConcurrency)
+	sem := make(chan struct{}, LabelFetchConcurrency)
 	for _, ref := range unique {
 		wg.Add(1)
 		go func(ref string) {
@@ -215,11 +215,11 @@ func resolveImageLabels(ctx context.Context, basicAuth string, refs []string, wi
 				return
 			}
 			defer func() { <-sem }()
-			imageCtx, cancel := context.WithTimeout(ctx, labelFetchTimeout)
+			imageCtx, cancel := context.WithTimeout(ctx, LabelFetchTimeout)
 			defer cancel()
-			labels, err := imageLabelsWithAuth(imageCtx, basicAuth, ref, withCommitDate)
+			labels, err := ImageLabelsWithAuth(imageCtx, basicAuth, ref, withCommitDate)
 			if err != nil {
-				if !errors.Is(err, errNoImageLabels) {
+				if !errors.Is(err, ErrNoImageLabels) {
 					slog.Warn("failed to fetch image labels", "image", kube.TruncateText(ref, 80), "error", err)
 				}
 				return
@@ -238,7 +238,7 @@ func resolveImageLabels(ctx context.Context, basicAuth string, refs []string, wi
 // for this repository alone.
 func fetchImageLabels(ctx context.Context, basicAuth, repo, digest string) (*ImageLabels, error) {
 	for attempt := 0; ; attempt++ {
-		bearerToken, err := cachedQuayToken(ctx, basicAuth, repo)
+		bearerToken, err := CachedQuayToken(ctx, basicAuth, repo)
 		if err != nil {
 			return nil, err
 		}
@@ -410,9 +410,9 @@ func extractConfigDigest(manifestBody []byte) (string, error) {
 	return manifest.Config.Digest, nil
 }
 
-// stripAuthOnRedirect is the blob client's CheckRedirect: it follows the
+// StripAuthOnRedirect is the blob client's CheckRedirect: it follows the
 // redirect without the registry's Authorization header.
-func stripAuthOnRedirect(req *http.Request, _ []*http.Request) error {
+func StripAuthOnRedirect(req *http.Request, _ []*http.Request) error {
 	req.Header.Del("Authorization")
 	return nil
 }
@@ -424,7 +424,7 @@ func fetchConfigLabels(ctx context.Context, httpClient *http.Client, bearerToken
 	blobClient := &http.Client{
 		Timeout:       httpClient.Timeout,
 		Transport:     httpClient.Transport,
-		CheckRedirect: stripAuthOnRedirect,
+		CheckRedirect: StripAuthOnRedirect,
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", blobURL, nil)
@@ -462,12 +462,12 @@ func fetchConfigLabels(ctx context.Context, httpClient *http.Client, bearerToken
 
 	labels := config.Config.Labels
 	if labels == nil {
-		return nil, errNoImageLabels
+		return nil, ErrNoImageLabels
 	}
-	return parseImageLabels(labels, config.Created), nil
+	return ParseImageLabels(labels, config.Created), nil
 }
 
-// parseImageLabels reads the build metadata out of an image's config labels.
+// ParseImageLabels reads the build metadata out of an image's config labels.
 // Konflux images (quay.io/rhoai, the odh-* push builds) carry git.commit,
 // git.url, vcs-ref and their own build-date; OpenShift CI images (opendatahub
 // pr-N and main) carry the io.openshift.build.* keys but no git.url: a main
@@ -479,7 +479,7 @@ func fetchConfigLabels(ctx context.Context, httpClient *http.Client, bearerToken
 // from a commit of 22:42): the build date is the config's created time and
 // there is no version. org.opencontainers.image.revision is never read: on
 // the OpenShift CI images it is not the source commit.
-func parseImageLabels(labels map[string]string, created string) *ImageLabels {
+func ParseImageLabels(labels map[string]string, created string) *ImageLabels {
 	result := &ImageLabels{}
 	_, hasOpenShiftKeys := labels["io.openshift.build.commit.id"]
 	openshiftCI := hasOpenShiftKeys && labels["git.commit"] == ""
@@ -561,9 +561,9 @@ func setGitHubBackoff(until time.Time) {
 	}
 }
 
-// githubRateLimitReset reads when a rate-limited request may be retried
+// GitHubRateLimitReset reads when a rate-limited request may be retried
 // (Retry-After for secondary limits, x-ratelimit-reset for the primary one).
-func githubRateLimitReset(resp *http.Response, now time.Time) time.Time {
+func GitHubRateLimitReset(resp *http.Response, now time.Time) time.Time {
 	if s, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && s > 0 {
 		return now.Add(time.Duration(s) * time.Second)
 	}
@@ -575,11 +575,11 @@ func githubRateLimitReset(resp *http.Response, now time.Time) time.Time {
 	return now.Add(5 * time.Minute)
 }
 
-// fetchCommitDate gets the commit timestamp from the GitHub API. It returns
+// FetchCommitDate gets the commit timestamp from the GitHub API. It returns
 // an empty string on any error: the date is optional, and a rate limit must
 // never fail the page. Set GITHUB_TOKEN to raise the limit from 60 to 5000
 // requests per hour.
-func fetchCommitDate(ctx context.Context, gitURL, sha string) string {
+func FetchCommitDate(ctx context.Context, gitURL, sha string) string {
 	key, ok := commitDateKey(gitURL, sha)
 	if !ok {
 		return ""
@@ -624,7 +624,7 @@ func requestCommitDate(ctx context.Context, key string) (string, error) {
 	case resp.StatusCode == http.StatusOK:
 	case resp.StatusCode == http.StatusTooManyRequests ||
 		(resp.StatusCode == http.StatusForbidden && (resp.Header.Get("X-Ratelimit-Remaining") == "0" || resp.Header.Get("Retry-After") != "")):
-		until := githubRateLimitReset(resp, time.Now())
+		until := GitHubRateLimitReset(resp, time.Now())
 		setGitHubBackoff(until)
 		slog.Warn("GitHub API rate limit reached; commit dates are skipped until it resets (set GITHUB_TOKEN to raise the limit)",
 			"status", resp.StatusCode, "until", until.UTC().Format(time.RFC3339))

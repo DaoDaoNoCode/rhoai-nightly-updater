@@ -13,65 +13,10 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
-
-// parseCSVVersion extracts a parsedTag from a CSV name like "rhods-operator.3.5.0-ea.1".
-// It handles three cases:
-//  1. Full EA suffix:       "rhods-operator.3.5.0-ea.1" -> ea=1
-//  2. GA (no suffix):       "rhods-operator.3.5.0"      -> ea=-1 (ranks above EA)
-//  3. Non-EA pre-release:   "rhods-operator.3.5.0-rc.1" -> ea=-1000 (ranks below GA and EA)
-//
-// Returns the parsed version and true on success, or zero value and false if unparseable.
-func parseCSVVersion(csv string) (parsedTag, bool) {
-	// Normalize: strip optional "v" prefix from version portion.
-	// CSV names may use "rhods-operator.v3.5.0" or "rhods-operator.3.5.0".
-	normalized := csv
-	dotIdx := strings.Index(csv, ".")
-	if dotIdx >= 0 {
-		after := csv[dotIdx+1:]
-		if strings.HasPrefix(after, "v") {
-			normalized = csv[:dotIdx+1] + after[1:]
-		}
-	}
-
-	var major, minor, patch, eaNum int
-	// Try full EA parse: "rhods-operator.M.m.p-ea.N"
-	n, _ := fmt.Sscanf(normalized, "rhods-operator.%d.%d.%d-ea.%d", &major, &minor, &patch, &eaNum)
-	if n == 4 {
-		return parsedTag{raw: csv, major: major, minor: minor, patch: patch, ea: eaNum}, true
-	}
-	// Recognize unnumbered EA and build metadata using the same parser as release tags.
-	version := strings.TrimPrefix(normalized, "rhods-operator.")
-	if strings.HasPrefix(normalized, "rhods-operator.") {
-		if parsed, ok := parseTag("rhoai-" + strings.SplitN(version, "+", 2)[0]); ok {
-			parsed.raw = csv
-			return parsed, true
-		}
-	}
-
-	// Try GA parse (no suffix): "rhods-operator.M.m.p"
-	n, _ = fmt.Sscanf(normalized, "rhods-operator.%d.%d.%d", &major, &minor, &patch)
-	if n == 3 {
-		// Check if the normalized CSV has any suffix after the patch number.
-		// Build the canonical GA prefix and see if the normalized string is longer.
-		gaPrefix := fmt.Sprintf("rhods-operator.%d.%d.%d", major, minor, patch)
-		remainder := strings.TrimPrefix(normalized, gaPrefix)
-		if strings.HasPrefix(remainder, "-") {
-			// Has a non-EA suffix (e.g., "-rc.1", "-beta.2") — treat as pre-release,
-			// ranking below both GA (ea=-1) and any EA build (ea>=0).
-			slog.Debug("CSV has non-EA pre-release suffix, ranking below GA and EA",
-				"csv", csv, "suffix", remainder)
-			return parsedTag{raw: csv, major: major, minor: minor, patch: patch, ea: -1000}, true
-		}
-		// Genuine GA — no suffix at all.
-		return parsedTag{raw: csv, major: major, minor: minor, patch: patch, ea: -1}, true
-	}
-
-	slog.Debug("failed to parse CSV version", "csv", csv)
-	return parsedTag{}, false
-}
 
 // extractTargetVersion parses the target major.minor from an FBC image tag.
 // e.g., "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5@sha256:..." → (3, 5, true)
@@ -115,13 +60,13 @@ func detectBestChannel(channels []any, imageRef string) (string, error) {
 	}
 
 	targetMajor, targetMinor, hasTarget := extractTargetVersion(imageRef)
-	targetRelease, hasRelease := parseTag(extractTagFromRef(imageRef))
+	targetRelease, hasRelease := registry.ParseTag(registry.TagFromRef(imageRef))
 	if hasTarget {
 		slog.Info("detectNightlyChannel: filtering to target version", "major", targetMajor, "minor", targetMinor, "image", imageRef)
 	}
 
 	bestChannel := ""
-	var bestParsed *parsedTag
+	var bestParsed *registry.Tag
 	for _, ch := range channels {
 		channel, _ := ch.(map[string]any)
 		name, _ := channel["name"].(string)
@@ -132,27 +77,27 @@ func detectBestChannel(channels []any, imageRef string) (string, error) {
 			continue
 		}
 
-		parsed, ok := parseCSVVersion(csv)
+		parsed, ok := registry.ParseCSVVersion(csv)
 		if !ok {
 			slog.Debug("skipping channel with unparseable CSV", "channel", name, "csv", csv)
 			continue
 		}
 
 		// If we know the target version, only consider channels with matching major.minor
-		if hasTarget && (parsed.major != targetMajor || parsed.minor != targetMinor) {
+		if hasTarget && (parsed.Major != targetMajor || parsed.Minor != targetMinor) {
 			continue
 		}
 
-		if hasRelease && parsed.ea != targetRelease.ea {
+		if hasRelease && parsed.EA != targetRelease.EA {
 			continue
 		}
 
 		cmp := 0
 		if bestParsed != nil {
-			cmp = compareTags(parsed, *bestParsed)
+			cmp = registry.CompareTags(parsed, *bestParsed)
 		}
 
-		if bestParsed == nil || cmp > 0 || (cmp == 0 && channelPriority(name, parsed.ea) > channelPriority(bestChannel, bestParsed.ea)) {
+		if bestParsed == nil || cmp > 0 || (cmp == 0 && channelPriority(name, parsed.EA) > channelPriority(bestChannel, bestParsed.EA)) {
 			bestParsed = &parsed
 			bestChannel = name
 		}
@@ -161,7 +106,7 @@ func detectBestChannel(channels []any, imageRef string) (string, error) {
 	if bestChannel == "" {
 		slog.Warn("detectNightlyChannel: no matching channels found", "targetMajor", targetMajor, "targetMinor", targetMinor)
 	} else {
-		slog.Info("detected nightly channel", "channel", bestChannel, "csv", bestParsed.raw)
+		slog.Info("detected nightly channel", "channel", bestChannel, "csv", bestParsed.Raw)
 	}
 
 	return bestChannel, nil
@@ -346,7 +291,7 @@ func VerifyNodeReadiness(c *Client) (*types.OperationResponse, error) {
 	logs := []string{}
 
 	// Step 1: Check pull secret exists and is valid
-	ps, err := getPullSecret(c)
+	ps, err := registry.PullSecret(c)
 	if err != nil {
 		// A read that failed (403, 5xx, network) says nothing about whether
 		// the Secret exists.
@@ -397,7 +342,7 @@ func VerifyNodeReadiness(c *Client) (*types.OperationResponse, error) {
 
 	// Step 3: Test registry access by fetching a manifest from quay.io/rhoai
 	logs = append(logs, "Testing registry access to quay.io/rhoai...")
-	quayAuth := getQuayAuth(c)
+	quayAuth := registry.QuayAuth(c)
 	if quayAuth == "" {
 		return &types.OperationResponse{
 			Success:   false,
@@ -408,7 +353,7 @@ func VerifyNodeReadiness(c *Client) (*types.OperationResponse, error) {
 	}
 
 	httpClient := &http.Client{Timeout: 15 * time.Second}
-	bearerToken, err := getQuayBearerToken(c.Context(), httpClient, quayAuth)
+	bearerToken, err := registry.QuayBearerToken(c.Context(), httpClient, quayAuth)
 	if err != nil {
 		return &types.OperationResponse{
 			Success:   false,
@@ -568,7 +513,7 @@ func updateCheckCluster(c *Client, image string, opts OperationOptions, chk *upd
 		}
 	}
 
-	ps, err := getPullSecret(c)
+	ps, err := registry.PullSecret(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Failed to check pull secret: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
@@ -642,7 +587,7 @@ func updateVerifyTarget(c *Client, image string, chk *updateChecks, logs *[]stri
 		return fail("Replacement catalog validation failed: "+preflightErr.Error()+". Nothing was changed."+hint, "validation")
 	}
 	*logs = append(*logs, fmt.Sprintf("OK: Catalog image verified (channel %s, head %s)", target.Channel, target.HeadCSV))
-	blocked, note := downgradeCheck(currentCSV, extractTagFromRef(image), target.HeadCSV)
+	blocked, note := downgradeCheck(currentCSV, registry.TagFromRef(image), target.HeadCSV)
 	if note != "" {
 		*logs = append(*logs, note)
 	}
@@ -921,7 +866,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 	logs = append(logs, fmt.Sprintf("Target image: %s", image))
 	logs = append(logs, "[DRY-RUN] Checking prerequisites...")
 
-	ps, err := getPullSecret(c)
+	ps, err := registry.PullSecret(c)
 	if err != nil {
 		return &types.OperationResponse{
 			Success:   false,
@@ -967,13 +912,13 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 	}
 
 	// Validate image exists on Quay
-	quayAuth := getQuayAuth(c)
-	bearerToken, tokenErr := getQuayBearerToken(c.Context(), quayHTTPClient, quayAuth)
+	quayAuth := registry.QuayAuth(c)
+	bearerToken, tokenErr := registry.QuayBearerToken(c.Context(), registry.HTTPClient(), quayAuth)
 	if tokenErr != nil {
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] WARNING: Could not authenticate with Quay: %v", tokenErr))
 	} else {
-		tag := extractTagFromRef(image)
-		_, digestErr := getTagDigest(c.Context(), quayHTTPClient, bearerToken, tag)
+		tag := registry.TagFromRef(image)
+		_, digestErr := registry.TagDigest(c.Context(), registry.HTTPClient(), bearerToken, tag)
 		if digestErr != nil {
 			logs = append(logs, fmt.Sprintf("[DRY-RUN] WARNING: Image tag %q not found on Quay — the image may not exist", tag))
 		} else {
@@ -1008,7 +953,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 	if bundleErr != nil {
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] WARNING: Could not read the operator bundle from the catalog image: %v", bundleErr))
 	}
-	blocked, note := downgradeCheck(dryRunCSV, extractTagFromRef(image), bundle)
+	blocked, note := downgradeCheck(dryRunCSV, registry.TagFromRef(image), bundle)
 	if note != "" {
 		logs = append(logs, note)
 	}
@@ -2124,7 +2069,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 
 	dockerConfig := map[string]any{}
 	if secretExists {
-		existing, problem := decodeDockerConfigSecret(existingBody)
+		existing, problem := registry.DecodeDockerConfigSecret(existingBody)
 		switch problem {
 		case "":
 			dockerConfig = existing
@@ -2142,14 +2087,14 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 	}
 	preserved := 0
 	for key := range auths {
-		if normalizeRegistryKey(key) == quayRHOAIRegistry {
+		if registry.NormalizeKey(key) == registry.QuayRHOAI {
 			// Remove equivalent spellings so the new credential is the one used.
 			delete(auths, key)
 			continue
 		}
 		preserved++
 	}
-	auths[quayRHOAIRegistry] = map[string]any{"auth": auth}
+	auths[registry.QuayRHOAI] = map[string]any{"auth": auth}
 	dockerConfig["auths"] = auths
 	if preserved > 0 {
 		logs = append(logs, fmt.Sprintf("Preserving %d other registry credential(s) in the pull secret", preserved))
@@ -2223,7 +2168,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 	}
 
 	// Validate by reading it back
-	ps, err := getPullSecret(c)
+	ps, err := registry.PullSecret(c)
 	if err != nil {
 		logs = append(logs, "Warning: failed to verify secret after creation: "+redact(err))
 		return &types.OperationResponse{
@@ -2267,7 +2212,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 func TestPullSecret(c *Client) (*types.OperationResponse, error) {
 	logs := []string{}
 
-	ps, err := getPullSecret(c)
+	ps, err := registry.PullSecret(c)
 	if err != nil {
 		return &types.OperationResponse{
 			Success:   false,

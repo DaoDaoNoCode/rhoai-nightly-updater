@@ -13,6 +13,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -469,12 +470,12 @@ func updaterQuayToken(c *Client) (string, string, string) {
 	if !found {
 		return "", "no_token", "The updater has no quay.io/rhoai token yet: save it under Pull secret first. Nothing was changed."
 	}
-	cfg, problem := decodeDockerConfigSecret(body)
+	cfg, problem := registry.DecodeDockerConfigSecret(body)
 	if problem != "" {
 		return "", "no_token", "kube-system/additional-pull-secret is not usable (" + problem + "): replace the token under Pull secret first. Nothing was changed."
 	}
 	auths, _ := cfg["auths"].(map[string]any)
-	auth := selectQuayAuth(auths)
+	auth := registry.SelectQuayAuth(auths)
 	if auth == "" {
 		return "", "no_token", "kube-system/additional-pull-secret has no quay.io/rhoai token: save it under Pull secret first. Nothing was changed."
 	}
@@ -526,7 +527,7 @@ func readClusterPullSecret(c *Client) (*clusterPullSecret, []string, string, str
 		} `json:"metadata"`
 	}
 	_ = json.Unmarshal(body, &meta)
-	cfg, problem := decodeDockerConfigSecret(body)
+	cfg, problem := registry.DecodeDockerConfigSecret(body)
 	var creds []string
 	if cfg != nil {
 		creds = dockerConfigCredentials(cfg)
@@ -582,7 +583,7 @@ func dockerConfigCredentials(cfg map[string]any) []string {
 func rhoaiKeys(auths map[string]any) []string {
 	var keys []string
 	for k := range auths {
-		if normalizeRegistryKey(k) == quayRHOAIRegistry {
+		if registry.NormalizeKey(k) == registry.QuayRHOAI {
 			keys = append(keys, k)
 		}
 	}
@@ -602,8 +603,8 @@ func preparePullSecret(c *Client, w *nodeSetupWork, add, replaceExisting bool) {
 		decoded, _ := base64.StdEncoding.DecodeString(token)
 		_, pass, _ := strings.Cut(string(decoded), ":")
 		w.credentials = append(w.credentials, token, string(decoded), pass)
-		if err := verifyQuayCredentials(token); err != nil {
-			if isQuayCredentialRejection(err) {
+		if err := registry.VerifyQuayCredentials(token); err != nil {
+			if registry.IsCredentialRejection(err) {
 				w.refuse("quay", "Quay refuses the token saved under Pull secret, so it is not given to the nodes: replace it there first. Nothing was changed.")
 			} else {
 				w.refuse("quay", "Quay could not be asked whether the saved token works ("+w.redact(err)+"), so it is not given to the nodes. Nothing was changed; try again.")
@@ -665,7 +666,7 @@ func preparePullSecret(c *Client, w *nodeSetupWork, add, replaceExisting bool) {
 	others := len(ps.auths) - len(entries.keys)
 	keptRHOAI := map[string]bool{}
 	for k := range newAuths {
-		if normalizeRegistryKey(k) == quayRHOAIRegistry && (!add || k != quayRHOAIRegistry) {
+		if registry.NormalizeKey(k) == registry.QuayRHOAI && (!add || k != registry.QuayRHOAI) {
 			keptRHOAI[k] = true
 		}
 	}
@@ -676,7 +677,7 @@ func preparePullSecret(c *Client, w *nodeSetupWork, add, replaceExisting bool) {
 		}
 		keys := rhoaiKeys(got.auths)
 		switch {
-		case add && (len(keys) != 1 || authFromEntry(got.auths[quayRHOAIRegistry]) != token):
+		case add && (len(keys) != 1 || registry.AuthFromEntry(got.auths[registry.QuayRHOAI]) != token):
 			return errors.New("the quay.io/rhoai entry is not the updater's token")
 		case !add && got.auths[entries.own] != nil:
 			return errors.New("the quay.io/rhoai entry this tool added is still there")
@@ -723,7 +724,7 @@ func recordedWhen(rec *nodePullRecord) string {
 func planPullAdd(w *nodeSetupWork, ps *clusterPullSecret, rec *nodePullRecord, entries pullEntries, token string, replaceExisting bool) map[string]any {
 	same := len(entries.keys) > 0
 	for _, k := range entries.keys {
-		if authFromEntry(ps.auths[k]) != token {
+		if registry.AuthFromEntry(ps.auths[k]) != token {
 			same = false
 		}
 	}
@@ -738,11 +739,11 @@ func planPullAdd(w *nodeSetupWork, ps *clusterPullSecret, rec *nodePullRecord, e
 	}
 	newAuths := map[string]any{}
 	for k, v := range ps.auths {
-		if normalizeRegistryKey(k) != quayRHOAIRegistry {
+		if registry.NormalizeKey(k) != registry.QuayRHOAI {
 			newAuths[k] = v
 		}
 	}
-	newAuths[quayRHOAIRegistry] = map[string]any{"auth": token}
+	newAuths[registry.QuayRHOAI] = map[string]any{"auth": token}
 	kept := keptLogins(len(ps.auths) - len(entries.keys))
 	switch entries.setBy() {
 	case EntrySetByNone:

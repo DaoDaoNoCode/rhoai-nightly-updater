@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -101,9 +102,7 @@ func TestTestPullSecret_Valid(t *testing.T) {
 }
 
 func TestTestPullSecret_RejectedByQuay(t *testing.T) {
-	orig := verifyQuayCredentials
-	verifyQuayCredentials = func(string) error { return &quayAuthError{StatusCode: 401, Body: "unauthorized"} }
-	defer func() { verifyQuayCredentials = orig }()
+	defer registry.SetVerifyQuayCredentialsForTest(func(string) error { return &registry.QuayAuthError{StatusCode: 401, Body: "unauthorized"} })()
 
 	dockerConfig := map[string]any{
 		"auths": map[string]any{
@@ -334,24 +333,24 @@ func TestParseCSVVersion(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := parseCSVVersion(tt.input)
+			got, ok := registry.ParseCSVVersion(tt.input)
 			if ok != tt.wantOK {
 				t.Fatalf("parseCSVVersion(%q) ok = %v, want %v", tt.input, ok, tt.wantOK)
 			}
 			if !ok {
 				return
 			}
-			if got.major != tt.major {
-				t.Errorf("major = %d, want %d", got.major, tt.major)
+			if got.Major != tt.major {
+				t.Errorf("major = %d, want %d", got.Major, tt.major)
 			}
-			if got.minor != tt.minor {
-				t.Errorf("minor = %d, want %d", got.minor, tt.minor)
+			if got.Minor != tt.minor {
+				t.Errorf("minor = %d, want %d", got.Minor, tt.minor)
 			}
-			if got.patch != tt.patch {
-				t.Errorf("patch = %d, want %d", got.patch, tt.patch)
+			if got.Patch != tt.patch {
+				t.Errorf("patch = %d, want %d", got.Patch, tt.patch)
 			}
-			if got.ea != tt.ea {
-				t.Errorf("ea = %d, want %d", got.ea, tt.ea)
+			if got.EA != tt.ea {
+				t.Errorf("ea = %d, want %d", got.EA, tt.ea)
 			}
 		})
 	}
@@ -360,81 +359,81 @@ func TestParseCSVVersion(t *testing.T) {
 func TestCompareTags(t *testing.T) {
 	tests := []struct {
 		name string
-		a    parsedTag
-		b    parsedTag
+		a    registry.Tag
+		b    registry.Tag
 		want string // "a>b", "a<b", "a==b"
 	}{
 		{
 			name: "GA beats EA of same version",
-			a:    parsedTag{raw: "ga", major: 3, minor: 5, patch: 0, ea: -1},
-			b:    parsedTag{raw: "ea", major: 3, minor: 5, patch: 0, ea: 2},
+			a:    registry.Tag{Raw: "ga", Major: 3, Minor: 5, Patch: 0, EA: -1},
+			b:    registry.Tag{Raw: "ea", Major: 3, Minor: 5, Patch: 0, EA: 2},
 			want: "a>b",
 		},
 		{
 			name: "EA2 beats EA1",
-			a:    parsedTag{raw: "ea2", major: 3, minor: 5, patch: 0, ea: 2},
-			b:    parsedTag{raw: "ea1", major: 3, minor: 5, patch: 0, ea: 1},
+			a:    registry.Tag{Raw: "ea2", Major: 3, Minor: 5, Patch: 0, EA: 2},
+			b:    registry.Tag{Raw: "ea1", Major: 3, Minor: 5, Patch: 0, EA: 1},
 			want: "a>b",
 		},
 		{
 			name: "higher minor wins",
-			a:    parsedTag{raw: "3.5.0", major: 3, minor: 5, patch: 0, ea: -1},
-			b:    parsedTag{raw: "3.4.1", major: 3, minor: 4, patch: 1, ea: -1},
+			a:    registry.Tag{Raw: "3.5.0", Major: 3, Minor: 5, Patch: 0, EA: -1},
+			b:    registry.Tag{Raw: "3.4.1", Major: 3, Minor: 4, Patch: 1, EA: -1},
 			want: "a>b",
 		},
 		{
 			name: "pre-release below EA",
-			a:    parsedTag{raw: "rc", major: 3, minor: 5, patch: 0, ea: -1000},
-			b:    parsedTag{raw: "ea1", major: 3, minor: 5, patch: 0, ea: 1},
+			a:    registry.Tag{Raw: "rc", Major: 3, Minor: 5, Patch: 0, EA: -1000},
+			b:    registry.Tag{Raw: "ea1", Major: 3, Minor: 5, Patch: 0, EA: 1},
 			want: "a<b",
 		},
 		{
 			name: "pre-release below GA",
-			a:    parsedTag{raw: "rc", major: 3, minor: 5, patch: 0, ea: -1000},
-			b:    parsedTag{raw: "ga", major: 3, minor: 5, patch: 0, ea: -1},
+			a:    registry.Tag{Raw: "rc", Major: 3, Minor: 5, Patch: 0, EA: -1000},
+			b:    registry.Tag{Raw: "ga", Major: 3, Minor: 5, Patch: 0, EA: -1},
 			want: "a<b",
 		},
 		{
 			name: "EA below GA",
-			a:    parsedTag{raw: "ea", major: 3, minor: 5, patch: 0, ea: 3},
-			b:    parsedTag{raw: "ga", major: 3, minor: 5, patch: 0, ea: -1},
+			a:    registry.Tag{Raw: "ea", Major: 3, Minor: 5, Patch: 0, EA: 3},
+			b:    registry.Tag{Raw: "ga", Major: 3, Minor: 5, Patch: 0, EA: -1},
 			want: "a<b",
 		},
 		{
 			name: "same GA versions are equal",
-			a:    parsedTag{raw: "a", major: 3, minor: 5, patch: 0, ea: -1},
-			b:    parsedTag{raw: "b", major: 3, minor: 5, patch: 0, ea: -1},
+			a:    registry.Tag{Raw: "a", Major: 3, Minor: 5, Patch: 0, EA: -1},
+			b:    registry.Tag{Raw: "b", Major: 3, Minor: 5, Patch: 0, EA: -1},
 			want: "a==b",
 		},
 		{
 			name: "higher major wins",
-			a:    parsedTag{raw: "4.0.0", major: 4, minor: 0, patch: 0, ea: -1},
-			b:    parsedTag{raw: "3.9.9", major: 3, minor: 9, patch: 9, ea: -1},
+			a:    registry.Tag{Raw: "4.0.0", Major: 4, Minor: 0, Patch: 0, EA: -1},
+			b:    registry.Tag{Raw: "3.9.9", Major: 3, Minor: 9, Patch: 9, EA: -1},
 			want: "a>b",
 		},
 		{
 			name: "higher patch wins",
-			a:    parsedTag{raw: "3.5.2", major: 3, minor: 5, patch: 2, ea: -1},
-			b:    parsedTag{raw: "3.5.1", major: 3, minor: 5, patch: 1, ea: -1},
+			a:    registry.Tag{Raw: "3.5.2", Major: 3, Minor: 5, Patch: 2, EA: -1},
+			b:    registry.Tag{Raw: "3.5.1", Major: 3, Minor: 5, Patch: 1, EA: -1},
 			want: "a>b",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := compareTags(tt.a, tt.b)
+			result := registry.CompareTags(tt.a, tt.b)
 			switch tt.want {
 			case "a>b":
 				if result <= 0 {
-					t.Errorf("compareTags(%s, %s) = %d, want > 0", tt.a.raw, tt.b.raw, result)
+					t.Errorf("compareTags(%s, %s) = %d, want > 0", tt.a.Raw, tt.b.Raw, result)
 				}
 			case "a<b":
 				if result >= 0 {
-					t.Errorf("compareTags(%s, %s) = %d, want < 0", tt.a.raw, tt.b.raw, result)
+					t.Errorf("compareTags(%s, %s) = %d, want < 0", tt.a.Raw, tt.b.Raw, result)
 				}
 			case "a==b":
 				if result != 0 {
-					t.Errorf("compareTags(%s, %s) = %d, want 0", tt.a.raw, tt.b.raw, result)
+					t.Errorf("compareTags(%s, %s) = %d, want 0", tt.a.Raw, tt.b.Raw, result)
 				}
 			}
 		})

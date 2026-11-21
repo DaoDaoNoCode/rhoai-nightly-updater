@@ -31,15 +31,13 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 const (
 	// dashboardBuildsTimeout bounds one request.
 	dashboardBuildsTimeout = 12 * time.Second
-	// dashboardBranchHeadTTL is how long main's head SHA is reused: main
-	// moves many times a day, and one call per repository per TTL is cheap.
-	dashboardBranchHeadTTL = 5 * time.Minute
 	// dashboardFloatingTagTTL is how long a floating tag's digest is reused,
 	// so the page's polling does not hammer quay.io.
 	dashboardFloatingTagTTL = time.Minute
@@ -52,12 +50,6 @@ var dashboardPRHeadTTL = 5 * time.Minute
 // dashboardBuildContainerTimeout bounds one container's registry and GitHub
 // reads; a variable so tests can shorten it.
 var dashboardBuildContainerTimeout = 10 * time.Second
-
-// branchHead is a branch's head commit when it was read.
-type branchHead struct {
-	sha       string
-	checkedAt time.Time
-}
 
 // divergenceResult is how a build commit relates to a base commit.
 type divergenceResult struct {
@@ -74,12 +66,10 @@ type dashboardTagResolution struct {
 }
 
 var (
-	branchHeadCache    = kube.NewLRU[string, branchHead](64)
-	branchHeadFlight   kube.FlightGroup[branchHead]
 	divergenceCache    = kube.NewLRU[string, divergenceResult](2048)
 	divergenceFlight   kube.FlightGroup[divergenceResult]
-	dashboardPRCache   = kube.NewLRU[string, prInfo](256)
-	dashboardPRFlight  kube.FlightGroup[prInfo]
+	dashboardPRCache   = kube.NewLRU[string, registry.PullRequest](256)
+	dashboardPRFlight  kube.FlightGroup[registry.PullRequest]
 	dashboardTagCache  = kube.NewLRU[string, dashboardTagResolution](256)
 	dashboardTagFlight kube.FlightGroup[dashboardTagResolution]
 )
@@ -123,7 +113,7 @@ func dashboardBuilds(ctx context.Context, images []types.DashboardDevImage) *typ
 			resp.RetryAfterSeconds = secs
 		}
 	}
-	sem := make(chan struct{}, labelFetchConcurrency)
+	sem := make(chan struct{}, registry.LabelFetchConcurrency)
 	var wg sync.WaitGroup
 	for i, image := range selected {
 		wg.Go(func() {
@@ -171,32 +161,32 @@ func dashboardContainerBuild(ctx context.Context, image types.DashboardDevImage,
 		return out
 	}
 
-	_, digest, ok := extractRepoAndDigest(image.CurrentImage)
+	_, digest, ok := registry.RepoAndDigest(image.CurrentImage)
 	if !ok {
 		// A bare tag (set outside Deploy): the labels are those of what the
 		// tag points to now, and there is no newer build to tell apart.
-		resolved, err := resolveDashboardBuildCached(ctx, repo, extractTagFromRef(image.CurrentImage))
+		resolved, err := resolveDashboardBuildCached(ctx, repo, registry.TagFromRef(image.CurrentImage))
 		if err != nil {
 			return registryError("Resolving the image tag failed", err)
 		}
 		if !resolved.found {
 			return registryError("Resolving the image tag failed", errors.New("the tag is not on quay.io"))
 		}
-		_, digest, _ = extractRepoAndDigest(resolved.image)
+		_, digest, _ = registry.RepoAndDigest(resolved.image)
 	}
 
-	labelsCtx, cancel := context.WithTimeout(ctx, labelFetchTimeout)
-	labels, err := imageLabelsWithAuth(labelsCtx, "", "quay.io/"+repo+"@"+digest, false)
+	labelsCtx, cancel := context.WithTimeout(ctx, registry.LabelFetchTimeout)
+	labels, err := registry.ImageLabelsWithAuth(labelsCtx, "", "quay.io/"+repo+"@"+digest, false)
 	cancel()
 	switch {
-	case errors.Is(err, errNoImageLabels):
+	case errors.Is(err, registry.ErrNoImageLabels):
 		out.Reason, out.Message = "no_commit_label", "The image has no labels, so its commit is unknown."
 	case err != nil:
 		return registryError("Reading the image labels failed", err)
 	default:
 		commit := strings.ToLower(labels.GitCommit)
-		switch githubRepo, ok := githubRepoFromURL(labels.GitURL); {
-		case !dashboardCommitSHAPattern.MatchString(commit):
+		switch githubRepo, ok := registry.GitHubRepoFromURL(labels.GitURL); {
+		case !registry.CommitSHAPattern.MatchString(commit):
 			out.Reason, out.Message = "no_commit_label", "The image has no commit label."
 			if image.Running == "pr" && image.Flavor == DashboardFlavorODH {
 				// OpenShift CI leaves vcs-ref empty on PR builds (not on main builds).
@@ -221,7 +211,7 @@ func dashboardContainerBuild(ctx context.Context, image types.DashboardDevImage,
 			divergence := dashboardDivergence(ctx, githubRepo, commit, image.Running, image.RunningPR, noteRateLimit)
 			out.Divergence = &divergence
 			// One request per new SHA, cached for good; skipped while rate limited.
-			out.CommitDate = fetchCommitDate(ctx, gitURL, commit)
+			out.CommitDate = registry.FetchCommitDate(ctx, gitURL, commit)
 		}
 	}
 
@@ -233,24 +223,24 @@ func dashboardContainerBuild(ctx context.Context, image types.DashboardDevImage,
 	if !resolved.found {
 		return out
 	}
-	if _, newDigest, ok := extractRepoAndDigest(resolved.image); ok && newDigest != digest {
+	if _, newDigest, ok := registry.RepoAndDigest(resolved.image); ok && newDigest != digest {
 		newer := &types.DashboardNewerBuild{Image: resolved.image, Tag: floatingTag}
 		if image.Running == "main" {
 			// As Deploy latest main would write it: under its commit tag.
 			newer.Image = pinDashboardMainBuild(ctx, repo, floatingTag, resolved.image)
 		}
-		labelsCtx, cancel := context.WithTimeout(ctx, labelFetchTimeout)
-		newLabels, err := imageLabelsWithAuth(labelsCtx, "", resolved.image, false)
+		labelsCtx, cancel := context.WithTimeout(ctx, registry.LabelFetchTimeout)
+		newLabels, err := registry.ImageLabelsWithAuth(labelsCtx, "", resolved.image, false)
 		cancel()
 		if err == nil {
 			newer.BuildDate = newLabels.BuildDate
-			if commit := strings.ToLower(newLabels.GitCommit); dashboardCommitSHAPattern.MatchString(commit) {
+			if commit := strings.ToLower(newLabels.GitCommit); registry.CommitSHAPattern.MatchString(commit) {
 				newer.Commit = commit
-				if githubRepo, ok := githubRepoFromURL(newLabels.GitURL); ok {
+				if githubRepo, ok := registry.GitHubRepoFromURL(newLabels.GitURL); ok {
 					newer.CommitURL = "https://github.com/" + githubRepo + "/commit/" + commit
 				}
 			}
-		} else if !errors.Is(err, errNoImageLabels) {
+		} else if !errors.Is(err, registry.ErrNoImageLabels) {
 			slog.Warn("dashboard builds: cannot read the newer build's labels", "image", kube.TruncateText(resolved.image, 80), "error", err)
 		}
 		out.Newer = newer
@@ -291,26 +281,26 @@ func dashboardDivergence(ctx context.Context, repo, commit, running string, pr i
 		if dashboardGitHubFailed(err, noteRateLimit, &d) {
 			return d
 		}
-		if info.notFound {
+		if info.NotFound {
 			d.Reason, d.Message = "pr_not_found", fmt.Sprintf("%s has no pull request #%d.", repo, pr)
 			return d
 		}
-		d.PRState, d.PRTitle = info.state, info.title
-		if info.merged {
+		d.PRState, d.PRTitle = info.State, info.Title
+		if info.Merged {
 			d.PRState = "merged"
 		}
-		if info.headSHA == "" {
+		if info.HeadSHA == "" {
 			d.Reason, d.Message = "github_error", "GitHub did not report the pull request's head commit."
 			return d
 		}
-		baseHead = info.headSHA
+		baseHead = info.HeadSHA
 		d.CompareURL = fmt.Sprintf("https://github.com/%s/compare/%s...%s", repo, commit, baseHead)
 	} else {
-		head, err := lookupBranchHead(ctx, repo, "main")
+		head, err := registry.LookupBranchHead(ctx, repo, "main")
 		if dashboardGitHubFailed(err, noteRateLimit, &d) {
 			return d
 		}
-		baseHead = head.sha
+		baseHead = head.SHA
 		d.CompareURL = fmt.Sprintf("https://github.com/%s/compare/%s...main", repo, commit)
 	}
 	d.BaseHead = baseHead
@@ -320,7 +310,7 @@ func dashboardDivergence(ctx context.Context, repo, commit, running string, pr i
 	}
 	d.CheckedAt = result.checkedAt.UTC().Format(time.RFC3339)
 	if result.notFound {
-		d.Reason, d.Message = "commit_not_found", fmt.Sprintf("GitHub does not know commit %s in %s.", shortSHA(commit), repo)
+		d.Reason, d.Message = "commit_not_found", fmt.Sprintf("GitHub does not know commit %s in %s.", registry.ShortSHA(commit), repo)
 		return d
 	}
 	d.Status, d.Behind, d.Ahead = result.status, result.behind, result.ahead
@@ -331,14 +321,14 @@ func dashboardDivergence(ctx context.Context, repo, commit, running string, pr i
 // there was one. A rate limit is noted on the response; other errors are
 // named, and not cached, so the next request retries.
 func dashboardGitHubFailed(err error, noteRateLimit func(time.Time), d *types.DashboardBuildDivergence) bool {
-	var limited *githubRateLimitError
+	var limited *registry.GitHubRateLimitError
 	switch {
 	case err == nil:
 		return false
 	case errors.As(err, &limited):
-		noteRateLimit(limited.until)
+		noteRateLimit(limited.Until)
 		d.Reason = "rate_limited"
-		d.Message = fmt.Sprintf("GitHub's API rate limit is reached; it resets at %s. Set GITHUB_TOKEN on the updater to raise it.", limited.until.UTC().Format(time.RFC3339))
+		d.Message = fmt.Sprintf("GitHub's API rate limit is reached; it resets at %s. Set GITHUB_TOKEN on the updater to raise it.", limited.Until.UTC().Format(time.RFC3339))
 	default:
 		slog.Warn("dashboard builds: GitHub read failed", "base", d.Base, "error", err)
 		d.Reason, d.Message = "github_error", err.Error()
@@ -346,65 +336,24 @@ func dashboardGitHubFailed(err error, noteRateLimit func(time.Time), d *types.Da
 	return true
 }
 
-// lookupBranchHead reads a branch's head commit, reused for dashboardBranchHeadTTL.
-func lookupBranchHead(ctx context.Context, repo, branch string) (branchHead, error) {
-	key := repo + "|" + branch
-	if v, ok := branchHeadCache.Get(key); ok {
-		return v, nil
-	}
-	v, err, _ := branchHeadFlight.Do(ctx, key, func(ctx context.Context) (branchHead, error) {
-		if v, ok := branchHeadCache.Get(key); ok {
-			return v, nil
-		}
-		resp, err := githubGet(ctx, fmt.Sprintf("/repos/%s/branches/%s", repo, branch))
-		if err != nil {
-			return branchHead{}, err
-		}
-		defer resp.Body.Close()
-		body, err := io.ReadAll(io.LimitReader(resp.Body, githubBodyLimit))
-		if err != nil {
-			return branchHead{}, err
-		}
-		if resp.StatusCode != http.StatusOK {
-			return branchHead{}, fmt.Errorf("GitHub returned %d for branch %s of %s", resp.StatusCode, branch, repo)
-		}
-		var b struct {
-			Commit struct {
-				SHA string `json:"sha"`
-			} `json:"commit"`
-		}
-		if err := json.Unmarshal(body, &b); err != nil {
-			return branchHead{}, fmt.Errorf("parse branch: %w", err)
-		}
-		sha := strings.ToLower(b.Commit.SHA)
-		if !dashboardCommitSHAPattern.MatchString(sha) {
-			return branchHead{}, fmt.Errorf("GitHub reported no usable head commit for branch %s of %s", branch, repo)
-		}
-		v := branchHead{sha: sha, checkedAt: time.Now()}
-		branchHeadCache.Add(key, v, dashboardBranchHeadTTL)
-		return v, nil
-	})
-	return v, err
-}
-
 // lookupPRHead reads a pull request for its head commit and state. Open and
 // closed PRs are reused for dashboardPRHeadTTL (a closed PR can be reopened
 // and pushed to); merged ones for good.
-func lookupPRHead(ctx context.Context, repo string, number int) (prInfo, error) {
+func lookupPRHead(ctx context.Context, repo string, number int) (registry.PullRequest, error) {
 	key := fmt.Sprintf("%s#%d", repo, number)
 	if info, ok := dashboardPRCache.Get(key); ok {
 		return info, nil
 	}
-	info, err, _ := dashboardPRFlight.Do(ctx, key, func(ctx context.Context) (prInfo, error) {
+	info, err, _ := dashboardPRFlight.Do(ctx, key, func(ctx context.Context) (registry.PullRequest, error) {
 		if info, ok := dashboardPRCache.Get(key); ok {
 			return info, nil
 		}
-		info, err := fetchPullRequest(ctx, repo, number)
+		info, err := registry.FetchPullRequest(ctx, repo, number)
 		if err != nil {
-			return prInfo{}, err
+			return registry.PullRequest{}, err
 		}
 		ttl := dashboardPRHeadTTL
-		if !info.notFound && info.merged {
+		if !info.NotFound && info.Merged {
 			ttl = 0
 		}
 		dashboardPRCache.Add(key, info, ttl)
@@ -429,19 +378,19 @@ func compareDivergence(ctx context.Context, repo, base, head string) (divergence
 		}
 		// Page 2 of one commit per page carries the status and the counts
 		// without the commit list or the changed files (see compareContains).
-		resp, err := githubGet(ctx, fmt.Sprintf("/repos/%s/compare/%s...%s?per_page=1&page=2", repo, base, head))
+		resp, err := registry.GitHubGet(ctx, fmt.Sprintf("/repos/%s/compare/%s...%s?per_page=1&page=2", repo, base, head))
 		if err != nil {
 			return divergenceResult{}, err
 		}
 		defer resp.Body.Close()
-		body, err := io.ReadAll(io.LimitReader(resp.Body, githubBodyLimit))
+		body, err := io.ReadAll(io.LimitReader(resp.Body, registry.GitHubBodyLimit))
 		if err != nil {
 			return divergenceResult{}, err
 		}
 		switch {
 		case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusUnprocessableEntity:
 			v := divergenceResult{notFound: true, checkedAt: time.Now()}
-			divergenceCache.Add(key, v, compareNegativeTTL)
+			divergenceCache.Add(key, v, registry.CompareNegativeTTL)
 			return v, nil
 		case resp.StatusCode != http.StatusOK:
 			return divergenceResult{}, fmt.Errorf("GitHub compare returned %d", resp.StatusCode)

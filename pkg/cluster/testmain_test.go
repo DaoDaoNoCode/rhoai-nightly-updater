@@ -7,6 +7,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/clock/clocktest"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 )
 
 func TestMain(m *testing.M) {
@@ -36,7 +37,7 @@ func TestMain(m *testing.M) {
 
 	// Skip real Quay credential verification in tests.
 	// Individual tests override this to test rejection behavior.
-	verifyQuayCredentials = func(string) error { return nil }
+	registry.SetVerifyQuayCredentialsForTest(func(string) error { return nil })
 
 	os.Exit(m.Run())
 }

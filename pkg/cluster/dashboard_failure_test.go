@@ -7,18 +7,18 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 )
 
 func TestDashboardPartialDeployAndRevertReportActualFailures(t *testing.T) {
-	original := quayHTTPClient
-	quayHTTPClient = &http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
+	defer registry.SetHTTPClientForTest(&http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
 		status := 404
 		if strings.Contains(r.URL.Path, "/odh-dashboard/") || strings.Contains(r.URL.Path, "/odh-mod-arch-modular-architecture/") {
 			status = 200
 		}
 		return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
-	})}
-	defer func() { quayHTTPClient = original }()
+	})})()
 	for _, action := range []string{"deploy", "revert"} {
 		t.Run(action, func(t *testing.T) {
 			var mainPatched, moduleAttempted bool

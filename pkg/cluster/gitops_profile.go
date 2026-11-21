@@ -8,6 +8,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -146,7 +147,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 		return fail("The catalog "+from+" manages does not serve a usable build: "+preflightErr.Error()+". Nothing was changed."+hint, "validation")
 	}
 	logs = append(logs, fmt.Sprintf("OK: The catalog serves %s on channel %s", target.HeadCSV, target.Channel))
-	blocked, note := downgradeCheck(currentCSV, extractTagFromRef(image), target.HeadCSV)
+	blocked, note := downgradeCheck(currentCSV, registry.TagFromRef(image), target.HeadCSV)
 	if note != "" {
 		logs = append(logs, note)
 	}
@@ -272,7 +273,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 	} else {
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] Note: the catalog does not serve this build yet (%s), so the version check uses the release tag; Update waits for the catalog and checks the version it serves", problem))
 	}
-	blocked, note := downgradeCheck(currentCSV, extractTagFromRef(image), bundle)
+	blocked, note := downgradeCheck(currentCSV, registry.TagFromRef(image), bundle)
 	if note != "" {
 		logs = append(logs, note)
 	}

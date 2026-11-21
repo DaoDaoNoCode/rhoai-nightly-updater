@@ -1,4 +1,4 @@
-package cluster
+package registry
 
 import (
 	"context"
@@ -55,42 +55,42 @@ var (
 	dashboardWarmFlight   kube.FlightGroup[bool]
 )
 
-// nightlyBuildFromImage describes the catalog image configured on the
+// NightlyBuildFromImage describes the catalog image configured on the
 // nightly CatalogSource.
-func nightlyBuildFromImage(image string) *types.NightlyBuild {
-	b := &types.NightlyBuild{Image: image, Tag: extractTagFromRef(image)}
-	if _, digest, ok := extractRepoAndDigest(image); ok {
+func NightlyBuildFromImage(image string) *types.NightlyBuild {
+	b := &types.NightlyBuild{Image: image, Tag: TagFromRef(image)}
+	if _, digest, ok := RepoAndDigest(image); ok {
 		b.Digest = digest
 	}
 	return b
 }
 
-// isNightlyStreamImage reports whether image is a quay.io/rhoai FBC fragment
+// IsNightlyStreamImage reports whether image is a quay.io/rhoai FBC fragment
 // whose tag names a release stream (e.g. rhoai-3.6), so the newest build of
 // the same stream can be looked up.
-func isNightlyStreamImage(image string) bool {
+func IsNightlyStreamImage(image string) bool {
 	repoAndTag := image
 	if at := strings.Index(repoAndTag, "@"); at >= 0 {
 		repoAndTag = repoAndTag[:at]
 	}
-	if !strings.HasPrefix(repoAndTag, quayImage+":") {
+	if !strings.HasPrefix(repoAndTag, FBCImage+":") {
 		return false
 	}
-	_, ok := parseTag(extractTagFromRef(image))
+	_, ok := ParseTag(TagFromRef(image))
 	return ok
 }
 
-// getNightlyStatus compares the installed nightly catalog with the newest
+// NightlyStatus compares the installed nightly catalog with the newest
 // build of its stream. It returns nil when the Subscription does not use the
 // nightly CatalogSource. Lookups are cached per installed image: a changed
 // CatalogSource image (an update) is always checked against Quay right away,
 // so the result never hides the effect of an update.
-func getNightlyStatus(ctx context.Context, basicAuth string, sub types.SubscriptionInfo, cs types.CatalogSourceInfo) *types.NightlyStatus {
+func NightlyStatus(ctx context.Context, basicAuth string, sub types.SubscriptionInfo, cs types.CatalogSourceInfo) *types.NightlyStatus {
 	if !cs.Exists || cs.Image == "" || sub.Source != rhoai.CatalogName {
 		return nil
 	}
-	installed := nightlyBuildFromImage(cs.Image)
-	if !isNightlyStreamImage(cs.Image) {
+	installed := NightlyBuildFromImage(cs.Image)
+	if !IsNightlyStreamImage(cs.Image) {
 		// A custom catalog image: show it, but there is no stream to compare with.
 		status := types.NightlyStatus{Installed: installed}
 		addCachedBuildDetails(&status)
@@ -145,7 +145,7 @@ func lookupNightlyStatus(ctx context.Context, basicAuth, key string, installed *
 		return status
 	}
 	status.Latest = &types.NightlyBuild{
-		Image:  fmt.Sprintf("%s:%s@%s", quayImage, installed.Tag, digest),
+		Image:  fmt.Sprintf("%s:%s@%s", FBCImage, installed.Tag, digest),
 		Tag:    installed.Tag,
 		Digest: digest,
 	}
@@ -159,7 +159,7 @@ func lookupNightlyStatus(ctx context.Context, basicAuth, key string, installed *
 	if installed.Digest != "" {
 		refs = append(refs, installed.Image)
 	}
-	labels := resolveImageLabels(ctx, basicAuth, refs, false)
+	labels := ResolveImageLabels(ctx, basicAuth, refs, false)
 	if l := labels[status.Installed.Image]; l != nil {
 		status.Installed.BuildDate = l.BuildDate
 	}
@@ -194,7 +194,7 @@ func addCachedBuildDetails(status *types.NightlyStatus) {
 			continue
 		}
 		if b.BuildDate == "" {
-			if l, ok := cachedImageLabels(b.Image); ok {
+			if l, ok := CachedImageLabels(b.Image); ok {
 				b.BuildDate = l.BuildDate
 			}
 		}
@@ -220,7 +220,7 @@ func dashboardRelatedImage(content *types.FBCContentResponse) string {
 }
 
 func cachedDashboardCommit(fbcImage string) (string, string) {
-	content, ok := cachedFBCContent(fbcImage)
+	content, ok := CachedFBCContent(fbcImage)
 	if !ok {
 		return "", ""
 	}
@@ -228,7 +228,7 @@ func cachedDashboardCommit(fbcImage string) (string, string) {
 	if dashboard == "" {
 		return "", ""
 	}
-	labels, ok := cachedImageLabels(dashboard)
+	labels, ok := CachedImageLabels(dashboard)
 	if !ok {
 		return "", ""
 	}
@@ -239,7 +239,7 @@ func cachedDashboardCommit(fbcImage string) (string, string) {
 // labels of its dashboard image into the caches. At most one attempt per
 // image runs per 10 minutes, whatever the outcome.
 func warmDashboardCommit(basicAuth, fbcImage string) {
-	if _, _, ok := extractRepoAndDigest(fbcImage); !ok {
+	if _, _, ok := RepoAndDigest(fbcImage); !ok {
 		return
 	}
 	if commit, _ := cachedDashboardCommit(fbcImage); commit != "" {
@@ -255,13 +255,13 @@ func warmDashboardCommit(basicAuth, fbcImage string) {
 			return true, nil
 		}
 		defer dashboardWarmAttempts.Add(fbcImage, true, 10*time.Minute)
-		content, err := extractFBCContentWithAuth(ctx, basicAuth, fbcImage)
+		content, err := ExtractFBCContentWithAuth(ctx, basicAuth, fbcImage)
 		if err != nil {
 			slog.Debug("dashboard commit: reading FBC catalog failed", "image", kube.TruncateText(fbcImage, 80), "error", err)
 			return false, nil
 		}
 		if dashboard := dashboardRelatedImage(content); dashboard != "" {
-			if _, err := imageLabelsWithAuth(ctx, basicAuth, dashboard, false); err != nil {
+			if _, err := ImageLabelsWithAuth(ctx, basicAuth, dashboard, false); err != nil {
 				slog.Debug("dashboard commit: reading labels failed", "image", kube.TruncateText(dashboard, 80), "error", err)
 			}
 		}

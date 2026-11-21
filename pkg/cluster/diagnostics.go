@@ -19,6 +19,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -871,7 +872,7 @@ func checkInstallPlanHealth(c *Client) checkOutput {
 }
 
 func checkPullSecretHealth(c *Client) checkOutput {
-	ps, err := getPullSecret(c)
+	ps, err := registry.PullSecret(c)
 	if err != nil {
 		return checkOutput{
 			check: CheckResult{Name: "Pull secret", Status: "fail", Detail: fmt.Sprintf("Failed to check pull secret: %v", err)},

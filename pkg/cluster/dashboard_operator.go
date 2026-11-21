@@ -17,6 +17,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -63,7 +64,6 @@ var dashboardDigestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 // scheme holds for every module repository.
 var (
 	dashboardODHCommitTagPattern = regexp.MustCompile(`^main-[0-9a-f]{7,40}$`)
-	dashboardCommitSHAPattern    = regexp.MustCompile(`^[0-9a-f]{40}$`)
 )
 
 type dashboardContainer struct {
@@ -211,7 +211,7 @@ func parseDashboardBuild(repo, image string) (kind string, pr int, flavor string
 	}
 	tag, _, _ := strings.Cut(strings.TrimPrefix(image, prefix), "@")
 	switch {
-	case tag == "odh-stable", dashboardCommitSHAPattern.MatchString(tag):
+	case tag == "odh-stable", registry.CommitSHAPattern.MatchString(tag):
 		return "main", 0, DashboardFlavorRHOAI
 	case tag == "main", dashboardODHCommitTagPattern.MatchString(tag):
 		return "main", 0, DashboardFlavorODH
@@ -896,7 +896,7 @@ func resolveDashboardBuild(ctx context.Context, repo, tag string) (string, bool,
 		return "", false, err
 	}
 	req.Header.Set("Accept", "application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.docker.distribution.manifest.list.v2+json")
-	resp, err := quayHTTPClient.Do(req)
+	resp, err := registry.HTTPClient().Do(req)
 	if err != nil {
 		return "", false, err
 	}
@@ -930,7 +930,7 @@ func resolveDashboardBuildTags(ctx context.Context, repo string, tags []string) 
 // the tag is not a main tag.
 func dashboardCommitTag(floatingTag, commit string) string {
 	commit = strings.ToLower(commit)
-	if !dashboardCommitSHAPattern.MatchString(commit) {
+	if !registry.CommitSHAPattern.MatchString(commit) {
 		return ""
 	}
 	switch floatingTag {
@@ -949,12 +949,12 @@ func dashboardCommitTag(floatingTag, commit string) string {
 // repositories are public. Without a commit label, without the tag, or when
 // the tag has moved to another digest, the floating tag is kept.
 func pinDashboardMainBuild(ctx context.Context, repo, floatingTag, image string) string {
-	_, digest, ok := extractRepoAndDigest(image)
+	_, digest, ok := registry.RepoAndDigest(image)
 	if !ok {
 		return image
 	}
-	labelsCtx, cancel := context.WithTimeout(ctx, labelFetchTimeout)
-	labels, err := imageLabelsWithAuth(labelsCtx, "", image, false)
+	labelsCtx, cancel := context.WithTimeout(ctx, registry.LabelFetchTimeout)
+	labels, err := registry.ImageLabelsWithAuth(labelsCtx, "", image, false)
 	cancel()
 	if err != nil {
 		slog.Debug("dashboard main build keeps its floating tag: labels unreadable", "image", kube.TruncateText(image, 80), "error", err)
@@ -974,7 +974,7 @@ func pinDashboardMainBuild(ctx context.Context, repo, floatingTag, image string)
 		slog.Debug("dashboard main build keeps its floating tag: commit tag not published", "image", kube.TruncateText(image, 80), "tag", commitTag)
 		return image
 	}
-	if _, pinnedDigest, _ := extractRepoAndDigest(pinned); pinnedDigest != digest {
+	if _, pinnedDigest, _ := registry.RepoAndDigest(pinned); pinnedDigest != digest {
 		slog.Debug("dashboard main build keeps its floating tag: commit tag has another digest", "image", kube.TruncateText(image, 80), "tag", commitTag, "tagDigest", pinnedDigest)
 		return image
 	}

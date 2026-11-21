@@ -11,6 +11,7 @@ import (
 	"testing/synctest"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -166,7 +167,7 @@ func TestGetComponents_UsesCachedLabelsWithoutQuay(t *testing.T) {
 	installFakeRegistry(t, f)
 	c, _ := componentsAPI(t, nil, mockResponse{body: `{"items":[]}`}, notFoundResp, "")
 	// After the fake cluster starts, which empties every cache.
-	labelCache.Add("rhoai/odh-dashboard-rhel9@sha256:"+strings.Repeat("1", 64), labelCacheValue{labels: ImageLabels{GitCommit: "abc", BuildDate: "2026-10-01"}}, 0)
+	registry.LabelCache.Add("rhoai/odh-dashboard-rhel9@sha256:"+strings.Repeat("1", 64), registry.LabelCacheValue{Labels: registry.ImageLabels{GitCommit: "abc", BuildDate: "2026-10-01"}}, 0)
 	resp, err := GetComponents(c, false)
 	if err != nil {
 		t.Fatal(err)

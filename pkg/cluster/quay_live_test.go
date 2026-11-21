@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -31,15 +32,14 @@ func TestReleaseDiscoveryLiveQuay(t *testing.T) {
 	})
 	defer cleanup()
 	var calls atomic.Int32
-	original := quayHTTPClient
+	original := registry.HTTPClient()
 	counted := &http.Client{Timeout: original.Timeout, Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
 		calls.Add(1)
 		return original.Transport.RoundTrip(r)
 	})}
-	quayHTTPClient = counted
-	t.Cleanup(func() { quayHTTPClient = original })
+	t.Cleanup(registry.SetHTTPClientForTest(counted))
 	started := time.Now()
-	latest, err := FetchLatestNightly(ctx, c)
+	latest, err := registry.FetchLatestNightly(ctx, c)
 	if err != nil {
 		t.Fatalf("cold latest lookup: %v", err)
 	}

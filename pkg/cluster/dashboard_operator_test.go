@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -367,8 +368,7 @@ func TestDashboardPartialStateDoesNotClaimMainIsApplied(t *testing.T) {
 
 func mockDashboardRegistry(t *testing.T, statuses map[string]int) {
 	t.Helper()
-	original := quayHTTPClient
-	quayHTTPClient = &http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
+	t.Cleanup(registry.SetHTTPClientForTest(&http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
 		status := http.StatusOK
 		for key, s := range statuses {
 			if strings.Contains(r.URL.Path, key) {
@@ -376,8 +376,7 @@ func mockDashboardRegistry(t *testing.T, statuses map[string]int) {
 			}
 		}
 		return &http.Response{StatusCode: status, Header: http.Header{"Docker-Content-Digest": []string{"sha256:" + strings.Repeat("a", 64)}}, Body: io.NopCloser(strings.NewReader(""))}, nil
-	})}
-	t.Cleanup(func() { quayHTTPClient = original })
+	})}))
 }
 
 func TestDashboardMainDiscoversOwnedComponentsAndRecoversAfterRestart(t *testing.T) {

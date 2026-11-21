@@ -9,6 +9,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -40,7 +41,7 @@ func installDashboardBuildsFakes(t *testing.T, published ...string) (*dashboardT
 	g := newFakeGitHub()
 	g.compareRepos[upstreamRepo] = true
 	g.branches[upstreamRepo+":main"] = mainHead
-	quayHTTPClient = &http.Client{Transport: splitTransport{quay: m, github: githubTransport{github: g}}, Timeout: 10 * time.Second}
+	registry.SetHTTPClientForTest(&http.Client{Transport: splitTransport{quay: m, github: githubTransport{github: g}}, Timeout: 10 * time.Second})
 	return m, g
 }
 

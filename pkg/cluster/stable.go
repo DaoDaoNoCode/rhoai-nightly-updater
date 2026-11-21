@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -59,15 +60,15 @@ func productionChannel(name string) bool {
 	return false
 }
 
-func stableChannelVersion(channel stablePackageChannel) (parsedTag, string, bool) {
+func stableChannelVersion(channel stablePackageChannel) (registry.Tag, string, bool) {
 	version := channel.CurrentCSVDesc.Version
 	if version == "" {
 		version = strings.TrimPrefix(channel.CurrentCSV, rhoai.SubName+".")
 	}
 	version = strings.TrimPrefix(version, "v")
-	parsed, ok := parseTag("rhoai-" + strings.SplitN(version, "+", 2)[0])
+	parsed, ok := registry.ParseTag("rhoai-" + strings.SplitN(version, "+", 2)[0])
 	// Only GA heads qualify. EA, RC, beta, and other prereleases are excluded.
-	return parsed, version, ok && parsed.ea == -1 && channel.CurrentCSV != ""
+	return parsed, version, ok && parsed.EA == -1 && channel.CurrentCSV != ""
 }
 
 // resolveStableTarget reads the same catalog metadata used by OperatorHub.
@@ -102,7 +103,7 @@ func resolveStableTarget(c *Client) (stableTarget, error) {
 			item.Status.CatalogSource != target.Source || item.Status.CatalogSourceNamespace != rhoai.CatalogNS {
 			continue
 		}
-		var best parsedTag
+		var best registry.Tag
 		bestPreference := -1
 		for _, channel := range item.Status.Channels {
 			version, displayVersion, ga := stableChannelVersion(channel)
@@ -128,7 +129,7 @@ func resolveStableTarget(c *Client) (stableTarget, error) {
 			if channel.Name == item.Status.DefaultChannel {
 				preference = 2
 			}
-			comparison := compareTags(version, best)
+			comparison := registry.CompareTags(version, best)
 			if target.Channel == "" || comparison > 0 || (comparison == 0 &&
 				(preference > bestPreference || (preference == bestPreference && channel.Name < target.Channel))) {
 				target.Channel, target.Version, target.HeadCSV = channel.Name, displayVersion, channel.CurrentCSV

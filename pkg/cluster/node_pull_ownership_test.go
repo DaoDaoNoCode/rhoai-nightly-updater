@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -187,7 +188,7 @@ func TestPullSecretAddLeavesAnEntryItDidNotAdd(t *testing.T) {
 			if calls := f.callsTo(http.MethodPatch, nsPullSecretPath); len(calls) != 0 {
 				t.Fatalf("not even a dry run may be sent: %+v", calls)
 			}
-			if authFromEntry(pullSecretAuths(t, f)[tc.key]) != nsOldRHOAI {
+			if registry.AuthFromEntry(pullSecretAuths(t, f)[tc.key]) != nsOldRHOAI {
 				t.Fatal("the entry changed")
 			}
 			if after := nsReadRecord(t, f); !kube.JSONEqual(before, after) {
@@ -220,7 +221,7 @@ func TestPullSecretAddReplacesAForeignEntryOnlyWhenAcknowledged(t *testing.T) {
 		t.Fatalf("result %+v", res)
 	}
 	auths := pullSecretAuths(t, f)
-	if _, old := auths["https://quay.io/rhoai/"]; old || len(auths) != 3 || authFromEntry(auths["quay.io/rhoai"]) != nsTokenPadded {
+	if _, old := auths["https://quay.io/rhoai/"]; old || len(auths) != 3 || registry.AuthFromEntry(auths["quay.io/rhoai"]) != nsTokenPadded {
 		t.Fatalf("auths %v", auths)
 	}
 	rec := nsReadRecord(t, f)
@@ -283,7 +284,7 @@ func TestPullSecretAddUpdatesItsOwnEntry(t *testing.T) {
 	if !res.Success || !strings.Contains(res.Message, "Updated the quay.io/rhoai entry this tool added") {
 		t.Fatalf("result %+v", res)
 	}
-	if got := authFromEntry(pullSecretAuths(t, f)["quay.io/rhoai"]); got != nsTokenPadded {
+	if got := registry.AuthFromEntry(pullSecretAuths(t, f)["quay.io/rhoai"]); got != nsTokenPadded {
 		t.Fatal("the entry was not updated")
 	}
 	if rec := nsReadRecord(t, f); rec == nil || !rec.matches(nsTokenPadded) || rec.matches(nsOldRHOAI) || rec.SecretUID != nsPullSecretUID {
@@ -320,7 +321,7 @@ func TestPullSecretRemoveTakesOutOnlyItsOwnEntry(t *testing.T) {
 		t.Fatalf("result %+v", res)
 	}
 	auths := pullSecretAuths(t, f)
-	if _, ok := auths["quay.io/rhoai"]; ok || len(auths) != 4 || authFromEntry(auths["https://quay.io/rhoai/"]) != nsOldRHOAI || auths["quay.io/rhoai/other-app"] == nil {
+	if _, ok := auths["quay.io/rhoai"]; ok || len(auths) != 4 || registry.AuthFromEntry(auths["https://quay.io/rhoai/"]) != nsOldRHOAI || auths["quay.io/rhoai/other-app"] == nil {
 		t.Fatalf("auths %v: only the tool's entry goes", auths)
 	}
 	if rec := nsReadRecord(t, f); rec != nil {
@@ -369,7 +370,7 @@ func TestPullSecretRemoveRefusesAnEntryItDidNotAdd(t *testing.T) {
 			if res.Success || res.ErrorCode != "not_owned" || len(writes(f)) != 0 || len(f.callsTo(http.MethodPatch, nsPullSecretPath)) != 0 {
 				t.Fatalf("result %+v, writes %v", res, writes(f))
 			}
-			if authFromEntry(pullSecretAuths(t, f)[tc.key]) != nsOldRHOAI {
+			if registry.AuthFromEntry(pullSecretAuths(t, f)[tc.key]) != nsOldRHOAI {
 				t.Fatal("the entry changed")
 			}
 			if after := nsReadRecord(t, f); !kube.JSONEqual(before, after) {
@@ -410,7 +411,7 @@ func TestPullSecretAddSaysWhenItCannotRecordTheEntry(t *testing.T) {
 	if !res.Success || !strings.Contains(res.Message, "could not record that it added the entry, so it will not remove it") {
 		t.Fatalf("result %+v", res)
 	}
-	if authFromEntry(pullSecretAuths(t, f)["quay.io/rhoai"]) != nsTokenPadded {
+	if registry.AuthFromEntry(pullSecretAuths(t, f)["quay.io/rhoai"]) != nsTokenPadded {
 		t.Fatal("the entry was not added")
 	}
 	if remove := nsPlan(t, c, types.NodeSetupRequest{Action: NodeSetupPullRemove}); remove.RefusalCode != "not_owned" {

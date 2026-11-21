@@ -14,6 +14,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -70,8 +71,8 @@ func TestResolveRelatedImageLabels_OneSecretReadAndBatchedTokens(t *testing.T) {
 		t.Fatalf("token requests %d, want 2 multi-scope tokens for 20 repositories", n)
 	}
 	for _, scopes := range f.scopes {
-		if len(scopes) > quayTokenBatch {
-			t.Fatalf("token with %d scopes exceeds the header-size bound %d", len(scopes), quayTokenBatch)
+		if len(scopes) > registry.QuayTokenBatch {
+			t.Fatalf("token with %d scopes exceeds the header-size bound %d", len(scopes), registry.QuayTokenBatch)
 		}
 	}
 	if f.count("github") != 0 {
@@ -112,7 +113,7 @@ func TestImageLabels_NoLabelsIsCachedBrieflyErrorsAreNot(t *testing.T) {
 	installFakeRegistry(t, f)
 	ref := "quay.io/rhoai/nolabels@" + digestOf(1)
 	for range 2 {
-		if _, err := imageLabelsWithAuth(context.Background(), "a", ref, false); !errors.Is(err, errNoImageLabels) {
+		if _, err := registry.ImageLabelsWithAuth(context.Background(), "a", ref, false); !errors.Is(err, registry.ErrNoImageLabels) {
 			t.Fatalf("want errNoImageLabels, got %v", err)
 		}
 	}
@@ -123,7 +124,7 @@ func TestImageLabels_NoLabelsIsCachedBrieflyErrorsAreNot(t *testing.T) {
 	f.setStatus("quay-blob", 500)
 	ref2 := "quay.io/rhoai/flaky@" + digestOf(2)
 	for range 2 {
-		if _, err := imageLabelsWithAuth(context.Background(), "a", ref2, false); err == nil {
+		if _, err := registry.ImageLabelsWithAuth(context.Background(), "a", ref2, false); err == nil {
 			t.Fatal("expected error")
 		}
 	}
@@ -138,17 +139,17 @@ func TestImageLabels_RejectedTokenIsReplacedOnce(t *testing.T) {
 	installFakeRegistry(t, f)
 	ref := "quay.io/rhoai/img0@" + digestOf(0)
 	// Seed a cached token, then have the registry reject the first manifest read.
-	if _, err := cachedQuayToken(context.Background(), "a", "rhoai/img0"); err != nil {
+	if _, err := registry.CachedQuayToken(context.Background(), "a", "rhoai/img0"); err != nil {
 		t.Fatal(err)
 	}
 	var rejected atomic.Bool
-	quayHTTPClient.Transport = dscSampleTransport(func(r *http.Request) (*http.Response, error) {
+	registry.HTTPClient().Transport = dscSampleTransport(func(r *http.Request) (*http.Response, error) {
 		if strings.Contains(r.URL.Path, "/manifests/") && !rejected.Swap(true) {
 			return &http.Response{StatusCode: 401, Header: http.Header{}, Body: http.NoBody, Request: r}, nil
 		}
 		return f.RoundTrip(r)
 	})
-	labels, err := imageLabelsWithAuth(context.Background(), "a", ref, false)
+	labels, err := registry.ImageLabelsWithAuth(context.Background(), "a", ref, false)
 	if err != nil || labels.GitCommit == "" {
 		t.Fatalf("labels=%+v err=%v", labels, err)
 	}
@@ -172,7 +173,7 @@ func TestQuayTokenTTL(t *testing.T) {
 		{"bad payload", "a.!!!.c", 30 * time.Second},
 	}
 	for _, tc := range cases {
-		if got := quayTokenTTL(tc.token, now); got != tc.want {
+		if got := registry.QuayTokenTTL(tc.token, now); got != tc.want {
 			t.Errorf("%s: got %v want %v", tc.name, got, tc.want)
 		}
 	}
@@ -183,18 +184,18 @@ func TestCachedQuayToken_ReusedPerCredentialAndRepo(t *testing.T) {
 	installFakeRegistry(t, f)
 	ctx := context.Background()
 	for range 3 {
-		if _, err := cachedQuayToken(ctx, "cred-a", quayFBCRepo); err != nil {
+		if _, err := registry.CachedQuayToken(ctx, "cred-a", registry.FBCRepo); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := cachedQuayToken(ctx, "cred-b", quayFBCRepo); err != nil {
+	if _, err := registry.CachedQuayToken(ctx, "cred-b", registry.FBCRepo); err != nil {
 		t.Fatal(err)
 	}
 	if n := f.count("quay-token"); n != 2 {
 		t.Fatalf("token requests %d, want 2 (one per credential)", n)
 	}
 	f.setStatus("quay-token", 401)
-	if _, err := cachedQuayToken(ctx, "cred-c", quayFBCRepo); !isQuayCredentialRejection(err) {
+	if _, err := registry.CachedQuayToken(ctx, "cred-c", registry.FBCRepo); !registry.IsCredentialRejection(err) {
 		t.Fatalf("rejection must surface, got %v", err)
 	}
 }
@@ -208,7 +209,7 @@ func TestEnrichTagsWithBuildDates_NoGitHubAndCached(t *testing.T) {
 		tags = append(tags, types.NightlyTag{Tag: fmt.Sprint(i), Image: fmt.Sprintf("quay.io/rhoai/rhoai-fbc-fragment:t%d@%s", i, digestOf(1000+i))})
 	}
 	tags = append(tags, types.NightlyTag{Tag: "unpinned", Image: "quay.io/rhoai/rhoai-fbc-fragment:unpinned"})
-	enrichTagsWithBuildDates(context.Background(), "a", tags)
+	registry.EnrichTagsWithBuildDates(context.Background(), "a", tags)
 	for _, tg := range tags[:24] {
 		if tg.BuildDate == "" {
 			t.Fatalf("missing build date: %+v", tg)
@@ -217,7 +218,7 @@ func TestEnrichTagsWithBuildDates_NoGitHubAndCached(t *testing.T) {
 	if f.count("github") != 0 {
 		t.Fatalf("build dates must not call GitHub, got %d calls", f.count("github"))
 	}
-	enrichTagsWithBuildDates(context.Background(), "a", tags)
+	registry.EnrichTagsWithBuildDates(context.Background(), "a", tags)
 	if f.count("quay-blob") != 24 {
 		t.Fatalf("second call should be served from cache, blob fetches %d", f.count("quay-blob"))
 	}
@@ -228,10 +229,10 @@ func TestFetchCommitDate_CachesAndBacksOffOnRateLimit(t *testing.T) {
 	installFakeRegistry(t, f)
 	ctx := context.Background()
 	sha := strings.Repeat("a", 40)
-	if d := fetchCommitDate(ctx, "https://github.com/o/r", sha); d != "2026-10-01T00:00:00Z" {
+	if d := registry.FetchCommitDate(ctx, "https://github.com/o/r", sha); d != "2026-10-01T00:00:00Z" {
 		t.Fatalf("date %q", d)
 	}
-	fetchCommitDate(ctx, "https://github.com/o/r/", sha)
+	registry.FetchCommitDate(ctx, "https://github.com/o/r/", sha)
 	if f.count("github") != 1 {
 		t.Fatalf("commit dates are immutable per SHA; GitHub calls %d", f.count("github"))
 	}
@@ -239,17 +240,17 @@ func TestFetchCommitDate_CachesAndBacksOffOnRateLimit(t *testing.T) {
 	// Rate limited: the date is skipped (no error) and further calls stop until the reset.
 	f.setStatus("github", 403)
 	f.githubHeaders = http.Header{"X-Ratelimit-Remaining": {"0"}, "X-Ratelimit-Reset": {strconv.FormatInt(time.Now().Add(30*time.Minute).Unix(), 10)}}
-	if d := fetchCommitDate(ctx, "https://github.com/o/r", strings.Repeat("b", 40)); d != "" {
+	if d := registry.FetchCommitDate(ctx, "https://github.com/o/r", strings.Repeat("b", 40)); d != "" {
 		t.Fatalf("rate-limited date %q", d)
 	}
 	for range 5 {
-		fetchCommitDate(ctx, "https://github.com/o/r", strings.Repeat("c", 40))
+		registry.FetchCommitDate(ctx, "https://github.com/o/r", strings.Repeat("c", 40))
 	}
 	if f.count("github") != 2 {
 		t.Fatalf("calls during back-off: %d, want 2 total", f.count("github"))
 	}
 	// Cached dates are still served during the back-off.
-	if d := fetchCommitDate(ctx, "https://github.com/o/r", sha); d == "" {
+	if d := registry.FetchCommitDate(ctx, "https://github.com/o/r", sha); d == "" {
 		t.Fatal("cached date lost")
 	}
 }
@@ -259,13 +260,13 @@ func TestFetchCommitDate_UsesGitHubTokenAndRejectsUnsafeInput(t *testing.T) {
 	installFakeRegistry(t, f)
 	t.Setenv("GITHUB_TOKEN", "ghp_test")
 	var auth string
-	quayHTTPClient.Transport = dscSampleTransport(func(r *http.Request) (*http.Response, error) {
+	registry.HTTPClient().Transport = dscSampleTransport(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Host == "api.github.com" {
 			auth = r.Header.Get("Authorization")
 		}
 		return f.RoundTrip(r)
 	})
-	fetchCommitDate(context.Background(), "https://github.com/o/r.git", strings.Repeat("d", 40))
+	registry.FetchCommitDate(context.Background(), "https://github.com/o/r.git", strings.Repeat("d", 40))
 	if auth != "Bearer ghp_test" {
 		t.Fatalf("Authorization %q", auth)
 	}
@@ -275,7 +276,7 @@ func TestFetchCommitDate_UsesGitHubTokenAndRejectsUnsafeInput(t *testing.T) {
 		{"https://github.com/o/r/extra", strings.Repeat("a", 40)},
 		{"https://github.com/o", strings.Repeat("a", 40)},
 	} {
-		if d := fetchCommitDate(context.Background(), tc.url, tc.sha); d != "" {
+		if d := registry.FetchCommitDate(context.Background(), tc.url, tc.sha); d != "" {
 			t.Fatalf("%v: %q", tc, d)
 		}
 	}
@@ -287,13 +288,13 @@ func TestFetchCommitDate_UsesGitHubTokenAndRejectsUnsafeInput(t *testing.T) {
 func TestGitHubRateLimitReset(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	h := func(k, v string) *http.Response { return &http.Response{Header: http.Header{k: {v}}} }
-	if got := githubRateLimitReset(h("Retry-After", "60"), now); !got.Equal(now.Add(time.Minute)) {
+	if got := registry.GitHubRateLimitReset(h("Retry-After", "60"), now); !got.Equal(now.Add(time.Minute)) {
 		t.Fatalf("retry-after: %v", got)
 	}
-	if got := githubRateLimitReset(h("X-Ratelimit-Reset", strconv.FormatInt(now.Add(10*time.Minute).Unix(), 10)), now); !got.Equal(now.Add(10 * time.Minute)) {
+	if got := registry.GitHubRateLimitReset(h("X-Ratelimit-Reset", strconv.FormatInt(now.Add(10*time.Minute).Unix(), 10)), now); !got.Equal(now.Add(10 * time.Minute)) {
 		t.Fatalf("reset: %v", got)
 	}
-	if got := githubRateLimitReset(h("X-Ratelimit-Reset", "garbage"), now); !got.Equal(now.Add(5 * time.Minute)) {
+	if got := registry.GitHubRateLimitReset(h("X-Ratelimit-Reset", "garbage"), now); !got.Equal(now.Add(5 * time.Minute)) {
 		t.Fatalf("default: %v", got)
 	}
 }
@@ -304,14 +305,14 @@ func TestImageLabels_OversizedTokenAndUnknownManifest(t *testing.T) {
 	installFakeRegistry(t, f)
 	// Quay answers 400 when the bearer header is too large; the image must
 	// then be read with a single-scope token instead of failing.
-	quayHTTPClient.Transport = dscSampleTransport(func(r *http.Request) (*http.Response, error) {
+	registry.HTTPClient().Transport = dscSampleTransport(func(r *http.Request) (*http.Response, error) {
 		if strings.Contains(r.URL.Path, "/manifests/") && strings.HasSuffix(r.Header.Get("Authorization"), "BIG") {
 			return &http.Response{StatusCode: 400, Header: http.Header{}, Body: http.NoBody, Request: r}, nil
 		}
 		return f.RoundTrip(r)
 	})
-	quayTokenCache.Add(quayTokenKey("a", "rhoai/img0"), "BIG", time.Hour)
-	if labels, err := imageLabelsWithAuth(context.Background(), "a", "quay.io/rhoai/img0@"+digestOf(0), false); err != nil || labels.GitCommit == "" {
+	registry.QuayTokenCache.Add(registry.QuayTokenKey("a", "rhoai/img0"), "BIG", time.Hour)
+	if labels, err := registry.ImageLabelsWithAuth(context.Background(), "a", "quay.io/rhoai/img0@"+digestOf(0), false); err != nil || labels.GitCommit == "" {
 		t.Fatalf("labels=%+v err=%v", labels, err)
 	}
 
@@ -319,7 +320,7 @@ func TestImageLabels_OversizedTokenAndUnknownManifest(t *testing.T) {
 	f.setStatus("quay-manifest", 404)
 	gone := "quay.io/rhoai/rhoai-fbc-fragment:rhoai-2.17@" + digestOf(5)
 	for range 3 {
-		if _, err := imageLabelsWithAuth(context.Background(), "a", gone, false); err == nil {
+		if _, err := registry.ImageLabelsWithAuth(context.Background(), "a", gone, false); err == nil {
 			t.Fatal("expected an error for an unknown manifest")
 		}
 	}

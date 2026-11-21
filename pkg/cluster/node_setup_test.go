@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -76,9 +77,7 @@ func nodeSetupFake(t *testing.T, topology string, managed bool) (*resourceFake, 
 		"metadata": map[string]any{"resourceVersion": "42"},
 		"data":     map[string]any{".dockerconfigjson": nsDockerConfig(t, map[string]any{"auths": clusterLogins(nil)})},
 	})
-	orig := verifyQuayCredentials
-	verifyQuayCredentials = func(string) error { return nil }
-	t.Cleanup(func() { verifyQuayCredentials = orig })
+	t.Cleanup(registry.SetVerifyQuayCredentialsForTest(func(string) error { return nil }))
 	return f, c
 }
 
@@ -567,10 +566,10 @@ func TestPullSecretFailsClosed(t *testing.T) {
 			f.mu.Unlock()
 		}, "no_token"},
 		{"Quay refuses the token", func(t *testing.T, f *resourceFake) {
-			verifyQuayCredentials = func(string) error { return &quayAuthError{StatusCode: 401, Body: "unauthorized"} }
+			registry.SetVerifyQuayCredentialsForTest(func(string) error { return &registry.QuayAuthError{StatusCode: 401, Body: "unauthorized"} })
 		}, "quay"},
 		{"Quay cannot be asked", func(t *testing.T, f *resourceFake) {
-			verifyQuayCredentials = func(string) error { return &quayAuthError{StatusCode: 503, Body: "down"} }
+			registry.SetVerifyQuayCredentialsForTest(func(string) error { return &registry.QuayAuthError{StatusCode: 503, Body: "down"} })
 		}, "quay"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -33,11 +34,9 @@ func TestS3TeardownDependencyFailure(t *testing.T) {
 }
 
 func TestMLflowQuay503DoesNotDeploy(t *testing.T) {
-	previous := quayHTTPClient
-	quayHTTPClient = &http.Client{Transport: dscSampleTransport(func(*http.Request) (*http.Response, error) {
+	defer registry.SetHTTPClientForTest(&http.Client{Transport: dscSampleTransport(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(strings.NewReader("unavailable")), Header: http.Header{}}, nil
-	})}
-	defer func() { quayHTTPClient = previous }()
+	})})()
 	patched := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "PATCH" && strings.HasSuffix(r.URL.Path, "/mlflows/"+mlflowCRName) {

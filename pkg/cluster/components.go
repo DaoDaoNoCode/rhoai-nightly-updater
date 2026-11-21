@@ -17,6 +17,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -330,10 +331,10 @@ func fetchImageLabelsForDeployments(c *Client, deployments []types.DeploymentInf
 	if len(refs) == 0 {
 		return
 	}
-	labels := make(map[string]*ImageLabels, len(refs))
+	labels := make(map[string]*registry.ImageLabels, len(refs))
 	var missing []string
 	for _, ref := range refs {
-		if l, ok := cachedImageLabels(ref); ok && (l.CommitDate != "" || l.GitURL == "" || l.GitCommit == "") {
+		if l, ok := registry.CachedImageLabels(ref); ok && (l.CommitDate != "" || l.GitURL == "" || l.GitCommit == "") {
 			labels[ref] = l
 		} else {
 			missing = append(missing, ref)
@@ -342,10 +343,10 @@ func fetchImageLabelsForDeployments(c *Client, deployments []types.DeploymentInf
 	if fetch && len(missing) > 0 {
 		labelCtx, cancel := context.WithTimeout(c.Context(), 30*time.Second)
 		defer cancel()
-		maps.Copy(labels, resolveImageLabels(labelCtx, getQuayAuth(c), missing, true))
+		maps.Copy(labels, registry.ResolveImageLabels(labelCtx, registry.QuayAuth(c), missing, true))
 	} else {
 		for _, ref := range missing {
-			if l, ok := cachedImageLabels(ref); ok {
+			if l, ok := registry.CachedImageLabels(ref); ok {
 				labels[ref] = l
 			}
 		}
@@ -404,7 +405,7 @@ func labelImageRef(dep types.DeploymentInfo) string {
 	if dep.Image == "" || !isBuildImage(dep.Image) {
 		return ""
 	}
-	if _, _, ok := extractRepoAndDigest(dep.Image); ok {
+	if _, _, ok := registry.RepoAndDigest(dep.Image); ok {
 		return dep.Image
 	}
 	repo := imageRepoOf(dep.Image)
@@ -415,7 +416,7 @@ func labelImageRef(dep types.DeploymentInfo) string {
 		if !pod.Ready || pod.Image != dep.Image {
 			continue
 		}
-		if r, _, ok := extractRepoAndDigest(pod.ImageID); ok && r == repo {
+		if r, _, ok := registry.RepoAndDigest(pod.ImageID); ok && r == repo {
 			return pod.ImageID
 		}
 	}
@@ -426,7 +427,7 @@ func labelImageRef(dep types.DeploymentInfo) string {
 // repository, so its labels carry a commit: registry.redhat.io/rhoai (and
 // its quay.io mirror) or quay.io/opendatahub.
 func isBuildImage(imageRef string) bool {
-	return isRHOAIImage(imageRef) || strings.HasPrefix(strings.TrimPrefix(imageRef, "docker-pullable://"), "quay.io/opendatahub/")
+	return registry.IsRHOAIImage(imageRef) || strings.HasPrefix(strings.TrimPrefix(imageRef, "docker-pullable://"), "quay.io/opendatahub/")
 }
 
 // imageRepoOf is the repository path of a reference with a tag and no

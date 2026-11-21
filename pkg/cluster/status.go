@@ -2,7 +2,6 @@ package cluster
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -39,7 +39,7 @@ type statusRegistryReads struct {
 // GetStatus aggregates cluster, operator, and RHOAI status into a single response.
 // All K8s API calls run in parallel since none depend on each other.
 func GetStatus(c *Client) (*types.StatusResponse, error) {
-	return getStatus(c, statusRegistryReads{pullSecret: readPullSecret, nightly: getNightlyStatus, controlPlane: rhoai.CachedControlPlane})
+	return getStatus(c, statusRegistryReads{pullSecret: registry.ReadPullSecret, nightly: registry.NightlyStatus, controlPlane: rhoai.CachedControlPlane})
 }
 
 // GetStatusGitOps is GetStatus in the gitops profile, which reads no Secret
@@ -59,7 +59,7 @@ func gitOpsNightlyStatus(sub types.SubscriptionInfo, cs types.CatalogSourceInfo)
 	if !cs.Exists || cs.Image == "" || sub.Source != rhoai.CatalogName {
 		return nil
 	}
-	return &types.NightlyStatus{Installed: nightlyBuildFromImage(cs.Image)}
+	return &types.NightlyStatus{Installed: registry.NightlyBuildFromImage(cs.Image)}
 }
 
 func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, error) {
@@ -426,96 +426,6 @@ func gitOpsManagers(c *Client, status *types.StatusResponse, sub, catalog, dsc *
 		t := argoCD.Object(dsc.Annotations, dsc.Labels, argo.DSCObject(dsc.Name))
 		status.DSCManagedBy, status.DSCArgoCD = t.ManagedBy(), t.Info()
 	}
-}
-
-// quayCredentialCacheTTL bounds how long a Quay verdict on a credential is
-// reused. Status is polled every few seconds; without a cache every poll calls
-// Quay's token endpoint.
-const quayCredentialCacheTTL = 5 * time.Minute
-
-type quayCredentialVerdict struct {
-	err error // nil when accepted; a rejection error otherwise
-	at  time.Time
-}
-
-var (
-	quayCredentialCacheMu sync.Mutex
-	quayCredentialCache   = map[[sha256.Size]byte]quayCredentialVerdict{}
-)
-
-// verifyQuayCredentials confirms Quay accepts the credentials. Tests override
-// it to skip the real network call.
-var verifyQuayCredentials = verifyQuayCredentialsCached
-
-// verifyQuayCredentialsCached calls the Quay token endpoint to confirm the
-// credentials are accepted. Definitive answers (accepted or rejected) are cached
-// per credential; transient failures are not.
-func verifyQuayCredentialsCached(basicAuth string) error {
-	key := sha256.Sum256([]byte(basicAuth))
-	quayCredentialCacheMu.Lock()
-	cached, ok := quayCredentialCache[key]
-	quayCredentialCacheMu.Unlock()
-	if ok && time.Since(cached.at) < quayCredentialCacheTTL {
-		return cached.err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_, err := getQuayBearerToken(ctx, quayHTTPClient, basicAuth)
-	if err == nil || isQuayCredentialRejection(err) {
-		quayCredentialCacheMu.Lock()
-		for k, v := range quayCredentialCache {
-			if time.Since(v.at) >= quayCredentialCacheTTL {
-				delete(quayCredentialCache, k)
-			}
-		}
-		quayCredentialCache[key] = quayCredentialVerdict{err: err, at: time.Now()}
-		quayCredentialCacheMu.Unlock()
-	}
-	return err
-}
-
-func getPullSecret(c *Client) (types.PullSecretInfo, error) {
-	info, _, err := readPullSecret(c)
-	return info, err
-}
-
-// readPullSecret validates the pull secret and also returns the quay.io/rhoai
-// credential it holds, so status polling does not read the Secret twice.
-func readPullSecret(c *Client) (types.PullSecretInfo, string, error) {
-	path := rhoai.NamespacedPath("v1", "secrets", "kube-system", "additional-pull-secret")
-	body, exists, err := c.GetOptional(path)
-	if err != nil {
-		return types.PullSecretInfo{Exists: false}, "", err
-	}
-	if !exists {
-		return types.PullSecretInfo{Exists: false, Detail: "Secret not found"}, "", nil
-	}
-
-	dockerConfig, problem := decodeDockerConfigSecret(body)
-	if problem != "" {
-		return types.PullSecretInfo{Exists: true, Detail: problem}, "", nil
-	}
-
-	auths, ok := dockerConfig["auths"].(map[string]any)
-	if !ok {
-		return types.PullSecretInfo{Exists: true, Detail: "Missing 'auths' key in docker config"}, "", nil
-	}
-
-	// Validate the same credential that registry calls use.
-	basicAuth := selectQuayAuth(auths)
-	if basicAuth == "" {
-		return types.PullSecretInfo{Exists: true, Detail: "No quay.io/rhoai entry found in auths"}, "", nil
-	}
-
-	if err := verifyQuayCredentials(basicAuth); err != nil {
-		if isQuayCredentialRejection(err) {
-			return types.PullSecretInfo{Exists: true, Detail: fmt.Sprintf("Credentials rejected by Quay: %v", err)}, basicAuth, nil
-		}
-		return types.PullSecretInfo{Exists: true, Detail: fmt.Sprintf("Could not verify credentials with Quay: %v", err)}, basicAuth, nil
-	}
-
-	return types.PullSecretInfo{Exists: true, Valid: true}, basicAuth, nil
 }
 
 func getConsoleURL(c *Client) string {

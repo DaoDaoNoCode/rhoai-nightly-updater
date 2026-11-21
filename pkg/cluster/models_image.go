@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -166,7 +167,7 @@ func fetchReleasedImage(ctx context.Context, repository string) (releasedImage, 
 		return releasedImage{}, err
 	}
 	req.Header.Set("Accept", "application/json")
-	resp, err := quayHTTPClient.Do(req)
+	resp, err := registry.HTTPClient().Do(req)
 	if err != nil {
 		return releasedImage{}, fmt.Errorf("the Red Hat container catalog cannot be reached: %w", err)
 	}

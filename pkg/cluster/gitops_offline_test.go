@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -22,7 +23,7 @@ func noOutsideHosts(t *testing.T) {
 		t.Errorf("the gitops profile sent a request to %s", r.URL.Host)
 		return nil, errors.New("no outside hosts in the gitops profile")
 	})
-	quayHTTPClient.Transport = fail
+	registry.HTTPClient().Transport = fail
 	orig := http.DefaultClient.Transport
 	http.DefaultClient.Transport = fail
 	t.Cleanup(func() { http.DefaultClient.Transport = orig })
@@ -123,7 +124,7 @@ func TestGetStatusGitOps(t *testing.T) {
 // come from the CSV's alm-examples or are reported missing.
 func TestGetComponentsGitOps(t *testing.T) {
 	noOutsideHosts(t)
-	labelCache.Add("rhoai/odh-dashboard-rhel9@sha256:"+strings.Repeat("1", 64), labelCacheValue{labels: ImageLabels{GitCommit: "abc", BuildDate: "2026-10-01"}}, 0)
+	registry.LabelCache.Add("rhoai/odh-dashboard-rhel9@sha256:"+strings.Repeat("1", 64), registry.LabelCacheValue{Labels: registry.ImageLabels{GitCommit: "abc", BuildDate: "2026-10-01"}}, 0)
 	dsc := mockResponse{body: `{"items":[{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"default-dsc"},"spec":{"components":{"dashboard":{"managementState":"Managed"}}}}]}`}
 	c, _ := componentsAPI(t, nil, dsc, notFoundResp, "")
 	resp, err := GetComponentsGitOps(c)
@@ -259,7 +260,7 @@ func TestGitOpsProfileReachesNoRegistry(t *testing.T) {
 	all := outboundFuncs(pg)
 	// The check must see the registry clients of the full profile, or it
 	// proves nothing.
-	for _, want := range []string{clusterPkg + ".fetchQuayToken", apiPkg + ".registryGet"} {
+	for _, want := range []string{registryPkg + ".FetchQuayToken", apiPkg + ".registryGet"} {
 		found := false
 		for _, f := range all {
 			found = found || f == want

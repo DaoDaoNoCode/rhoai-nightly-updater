@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -37,7 +38,7 @@ func GetSummary(c *Client) (*types.Summary, error) {
 	})
 	wg.Go(func() { cs, _, csErr = rhoai.ReadCatalogSource(c) })
 	// The credential only: whether the Secret is valid is not reported.
-	wg.Go(func() { _, quayAuth, _ = readPullSecret(c) })
+	wg.Go(func() { _, quayAuth, _ = registry.ReadPullSecret(c) })
 	wg.Go(func() { dsc, dscErr = rhoai.ReadFirstDSC(c) })
 	wg.Wait()
 	switch {
@@ -54,7 +55,7 @@ func GetSummary(c *Client) (*types.Summary, error) {
 	if sub.Found {
 		s.RHOAI.Channel, s.RHOAI.Version, s.RHOAI.Phase = sub.Info.Channel, csv.Version, csv.Phase
 	}
-	s.Nightly = summaryNightly(csErr, func() *types.NightlyStatus { return getNightlyStatus(c.Context(), quayAuth, sub.Info, cs) })
+	s.Nightly = summaryNightly(csErr, func() *types.NightlyStatus { return registry.NightlyStatus(c.Context(), quayAuth, sub.Info, cs) })
 	if dsc.Object != nil {
 		s.DSC.Exists = true
 		s.DSC.Ready = dscReady(dsc.Object)
@@ -84,7 +85,7 @@ func summaryNightly(csErr error, status func() *types.NightlyStatus) types.Summa
 	}
 	out := types.SummaryNightly{InstalledBuild: summaryBuild(n.Installed), LatestBuild: summaryBuild(n.Latest)}
 	switch {
-	case n.Installed != nil && !isNightlyStreamImage(n.Installed.Image):
+	case n.Installed != nil && !registry.IsNightlyStreamImage(n.Installed.Image):
 		out.Problem = types.NightlyProblemNoStream
 	case n.Latest == nil || n.UpdateAvailable == nil || n.Error != "":
 		out.Problem = types.NightlyProblemLookupFailed

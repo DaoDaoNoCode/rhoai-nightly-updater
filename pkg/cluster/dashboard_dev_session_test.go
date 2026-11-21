@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -73,10 +74,9 @@ func mockDashboardTags(t *testing.T, published ...string) *dashboardTagMock {
 	}
 	// Labels and tag digests are cached per digest across tests.
 	resetRegistryCaches()
-	original := quayHTTPClient
-	quayHTTPClient = &http.Client{Transport: m}
+	restore := registry.SetHTTPClientForTest(&http.Client{Transport: m})
 	t.Cleanup(func() {
-		quayHTTPClient = original
+		restore()
 		resetRegistryCaches()
 	})
 	return m

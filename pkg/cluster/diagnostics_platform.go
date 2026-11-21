@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -371,7 +372,7 @@ func channelHeadBehind(c *Client, sub subscriptionState) *Problem {
 	if !sub.Exists || sub.Source == "" || sub.Channel == "" || sub.InstalledCSV == "" {
 		return nil
 	}
-	installed, ok := parseCSVVersion(sub.InstalledCSV)
+	installed, ok := registry.ParseCSVVersion(sub.InstalledCSV)
 	if !ok {
 		return nil
 	}
@@ -385,8 +386,8 @@ func channelHeadBehind(c *Client, sub subscriptionState) *Problem {
 			continue
 		}
 		head, _ := m["currentCSV"].(string)
-		parsed, ok := parseCSVVersion(head)
-		if !ok || compareTags(parsed, installed) >= 0 {
+		parsed, ok := registry.ParseCSVVersion(head)
+		if !ok || registry.CompareTags(parsed, installed) >= 0 {
 			return nil
 		}
 		return &Problem{

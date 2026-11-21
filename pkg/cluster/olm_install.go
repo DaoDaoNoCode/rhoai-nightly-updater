@@ -13,6 +13,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -629,13 +630,13 @@ const (
 // installedCSVVersion returns the version of the installed CSV. The CSV's
 // spec.version is authoritative (OLM orders bundles by it); the
 // "<package>.<version>" naming convention is the fallback.
-func installedCSVVersion(installed types.CSVInfo) (parsedTag, bool) {
+func installedCSVVersion(installed types.CSVInfo) (registry.Tag, bool) {
 	if installed.Version != "" {
-		if v, ok := parseCSVVersion(rhoai.SubName + "." + installed.Version); ok {
+		if v, ok := registry.ParseCSVVersion(rhoai.SubName + "." + installed.Version); ok {
 			return v, true
 		}
 	}
-	return parseCSVVersion(installed.Name)
+	return registry.ParseCSVVersion(installed.Name)
 }
 
 // csvInstalled reports whether getCSV found an installed RHOAI CSV.
@@ -653,14 +654,14 @@ func compareWithInstalled(installed types.CSVInfo, targetCSV string) (verdict ve
 	if !ok {
 		return verdictUnknown, fmt.Sprintf("the version of the installed CSV %s (spec.version %q) cannot be read", installed.Name, installed.Version)
 	}
-	target, ok := parseCSVVersion(targetCSV)
+	target, ok := registry.ParseCSVVersion(targetCSV)
 	if !ok {
 		if targetCSV == "" {
 			return verdictUnknown, "the operator version the target installs is unknown"
 		}
 		return verdictUnknown, fmt.Sprintf("the target bundle version %q cannot be read", targetCSV)
 	}
-	if compareTags(target, current) < 0 {
+	if registry.CompareTags(target, current) < 0 {
 		return verdictOlder, ""
 	}
 	return verdictNotOlder, ""
@@ -692,14 +693,14 @@ func downgradeCheck(installed types.CSVInfo, targetTag, targetCSV string) (block
 			return "", fmt.Sprintf("Target operator version: %s (installed: %s)", targetCSV, installed.Name)
 		}
 	}
-	target, ok := parseTag(targetTag)
+	target, ok := registry.ParseTag(targetTag)
 	if !ok {
 		return fmt.Sprintf(unknown, fmt.Sprintf("the operator version that %q installs is unknown", targetTag)), ""
 	}
-	if m := tagParseRegex.FindStringSubmatch(targetTag); m != nil && m[3] == "" {
-		target.patch = current.patch
+	if m := registry.TagParseRegex.FindStringSubmatch(targetTag); m != nil && m[3] == "" {
+		target.Patch = current.Patch
 	}
-	if compareTags(target, current) < 0 {
+	if registry.CompareTags(target, current) < 0 {
 		return fmt.Sprintf("Downgrade detected: target %s is older than the installed %s. OLM does not support downgrades. Use Install a different build (Recovery) instead.", targetTag, installed.Name), ""
 	}
 	return "", fmt.Sprintf("Warning: the bundle version of %s is unknown; compared the release tag only", targetTag)

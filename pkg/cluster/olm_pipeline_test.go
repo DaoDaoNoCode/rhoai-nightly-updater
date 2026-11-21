@@ -13,6 +13,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -295,11 +296,11 @@ func TestDowngradeCheck(t *testing.T) {
 // A10-5: the dry run asks the API server (dryRun=All) and fails when the
 // server rejects the CatalogSource; the downgrade rule matches the real run.
 func TestUpdateDryRun(t *testing.T) {
-	oldLookup, oldQuay := lookupTargetBundle, quayHTTPClient
-	t.Cleanup(func() { lookupTargetBundle, quayHTTPClient = oldLookup, oldQuay })
-	quayHTTPClient = &http.Client{Transport: dscSampleTransport(func(*http.Request) (*http.Response, error) {
+	oldLookup := lookupTargetBundle
+	t.Cleanup(func() { lookupTargetBundle = oldLookup })
+	t.Cleanup(registry.SetHTTPClientForTest(&http.Client{Transport: dscSampleTransport(func(*http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("offline")
-	})}
+	})}))
 	for _, tc := range []struct {
 		name, installed, bundle string
 		bundleErr               bool

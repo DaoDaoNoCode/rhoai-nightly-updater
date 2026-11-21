@@ -1,4 +1,4 @@
-package cluster
+package registry
 
 import (
 	"context"
@@ -24,7 +24,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-const quayImage = "quay.io/rhoai/rhoai-fbc-fragment"
+const FBCImage = "quay.io/rhoai/rhoai-fbc-fragment"
 
 // quayHTTPClient is a shared HTTP client for all Quay/GitHub API calls,
 // avoiding per-request client allocation and enabling connection reuse.
@@ -40,24 +40,27 @@ var quayHTTPClient = &http.Client{
 	},
 }
 
+// HTTPClient is the client of every Quay and GitHub call.
+func HTTPClient() *http.Client { return quayHTTPClient }
+
 // Matches clean version tags:
 //
 //	rhoai-3.4, rhoai-3.5.0, rhoai-3.5.0-ea.1, rhoai-3.5-ea.2
-var cleanTagRegex = regexp.MustCompile(`^rhoai-\d+\.\d+(\.\d+)?(-ea(\.\d+)?)?$`)
-var tagParseRegex = regexp.MustCompile(`^rhoai-(\d+)\.(\d+)(?:\.(\d+))?(-ea(?:\.(\d+))?)?$`)
+var CleanTagRegex = regexp.MustCompile(`^rhoai-\d+\.\d+(\.\d+)?(-ea(\.\d+)?)?$`)
+var TagParseRegex = regexp.MustCompile(`^rhoai-(\d+)\.(\d+)(?:\.(\d+))?(-ea(?:\.(\d+))?)?$`)
 
-type parsedTag struct {
-	raw   string
-	major int
-	minor int
-	patch int
-	ea    int // -1 = GA, 0 = unnumbered EA, positive values = numbered EA
+type Tag struct {
+	Raw   string
+	Major int
+	Minor int
+	Patch int
+	EA    int // -1 = GA, 0 = unnumbered EA, positive values = numbered EA
 }
 
-func parseTag(tag string) (parsedTag, bool) {
-	m := tagParseRegex.FindStringSubmatch(tag)
+func ParseTag(tag string) (Tag, bool) {
+	m := TagParseRegex.FindStringSubmatch(tag)
 	if m == nil {
-		return parsedTag{}, false
+		return Tag{}, false
 	}
 	// The regex only captures digits, so Atoi fails only on overflow.
 	num := func(s string) (int, bool) {
@@ -75,46 +78,46 @@ func parseTag(tag string) (parsedTag, bool) {
 		ea, ok4 = num(m[5])
 	}
 	if !ok1 || !ok2 || !ok3 || !ok4 {
-		return parsedTag{}, false
+		return Tag{}, false
 	}
-	return parsedTag{raw: tag, major: major, minor: minor, patch: patch, ea: ea}, true
+	return Tag{Raw: tag, Major: major, Minor: minor, Patch: patch, EA: ea}, true
 }
 
 // Sort order: 3.4.0-ea.1 < 3.4.0-ea.2 < 3.4.0 (GA) < 3.5.0-ea.1 < 3.5.0 (GA)
-func compareTags(a, b parsedTag) int {
-	if a.major != b.major {
-		return a.major - b.major
+func CompareTags(a, b Tag) int {
+	if a.Major != b.Major {
+		return a.Major - b.Major
 	}
-	if a.minor != b.minor {
-		return a.minor - b.minor
+	if a.Minor != b.Minor {
+		return a.Minor - b.Minor
 	}
-	if a.patch != b.patch {
-		return a.patch - b.patch
+	if a.Patch != b.Patch {
+		return a.Patch - b.Patch
 	}
 	// Same version: GA (ea=-1) is greater than any EA
-	if a.ea == -1 && b.ea == -1 {
+	if a.EA == -1 && b.EA == -1 {
 		return 0
 	}
-	if a.ea == -1 {
+	if a.EA == -1 {
 		return 1
 	}
-	if b.ea == -1 {
+	if b.EA == -1 {
 		return -1
 	}
-	return a.ea - b.ea
+	return a.EA - b.EA
 }
 
 type quayTokenResponse struct {
 	Token string `json:"token"`
 }
 
-// quayRHOAIRegistry is the registry path whose credentials the updater needs.
-const quayRHOAIRegistry = "quay.io/rhoai"
+// QuayRHOAI is the registry path whose credentials the updater needs.
+const QuayRHOAI = "quay.io/rhoai"
 
-// decodeDockerConfigSecret extracts the docker config from a
+// DecodeDockerConfigSecret extracts the docker config from a
 // kubernetes.io/dockerconfigjson Secret API response. On failure it returns a
 // user-facing reason instead of a config.
-func decodeDockerConfigSecret(body []byte) (map[string]any, string) {
+func DecodeDockerConfigSecret(body []byte) (map[string]any, string) {
 	var secret struct {
 		Data map[string]string `json:"data"`
 	}
@@ -139,16 +142,16 @@ func decodeDockerConfigSecret(body []byte) (map[string]any, string) {
 	return dockerConfig, ""
 }
 
-// normalizeRegistryKey strips the optional scheme and trailing slash that
+// NormalizeKey strips the optional scheme and trailing slash that
 // docker config auth keys may carry ("https://quay.io/" -> "quay.io").
-func normalizeRegistryKey(key string) string {
+func NormalizeKey(key string) string {
 	key = strings.TrimPrefix(strings.TrimPrefix(key, "https://"), "http://")
 	return strings.TrimSuffix(key, "/")
 }
 
-// authFromEntry returns the base64 "user:password" credential of a docker
+// AuthFromEntry returns the base64 "user:password" credential of a docker
 // config auth entry, accepting either the "auth" field or username/password.
-func authFromEntry(val any) string {
+func AuthFromEntry(val any) string {
 	entry, _ := val.(map[string]any)
 	if auth, _ := entry["auth"].(string); auth != "" {
 		return auth
@@ -161,21 +164,21 @@ func authFromEntry(val any) string {
 	return ""
 }
 
-// selectQuayAuth picks the credential that container runtimes use for
+// SelectQuayAuth picks the credential that container runtimes use for
 // quay.io/rhoai images: the most specific matching registry key wins, so an
 // exact quay.io/rhoai entry is preferred over repository-scoped entries, which
 // are preferred over a generic quay.io login. The choice is deterministic.
-func selectQuayAuth(auths map[string]any) string {
+func SelectQuayAuth(auths map[string]any) string {
 	keys := make([]string, 0, len(auths))
 	for key := range auths {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	rank := func(key string) int {
-		switch k := normalizeRegistryKey(key); {
-		case k == quayRHOAIRegistry:
+		switch k := NormalizeKey(key); {
+		case k == QuayRHOAI:
 			return 0
-		case strings.HasPrefix(k, quayRHOAIRegistry+"/"):
+		case strings.HasPrefix(k, QuayRHOAI+"/"):
 			return 1
 		case k == "quay.io":
 			return 2
@@ -189,68 +192,68 @@ func selectQuayAuth(auths map[string]any) string {
 		if r < 0 || r >= bestRank {
 			continue
 		}
-		if auth := authFromEntry(auths[key]); auth != "" {
+		if auth := AuthFromEntry(auths[key]); auth != "" {
 			bestAuth, bestRank = auth, r
 		}
 	}
 	return bestAuth
 }
 
-// getQuayAuth extracts the quay.io/rhoai auth credential from the cluster pull secret.
-func getQuayAuth(c *Client) string {
+// QuayAuth extracts the quay.io/rhoai auth credential from the cluster pull secret.
+func QuayAuth(c *kube.Client) string {
 	path := rhoai.NamespacedPath("v1", "secrets", "kube-system", "additional-pull-secret")
 	body, _, err := c.Get(path)
 	if err != nil {
 		slog.Warn("quay auth: failed to read pull secret", "error", err)
 		return ""
 	}
-	dockerCfg, problem := decodeDockerConfigSecret(body)
+	dockerCfg, problem := DecodeDockerConfigSecret(body)
 	if problem != "" {
 		slog.Warn("quay auth: unusable pull secret", "reason", problem)
 		return ""
 	}
 	auths, _ := dockerCfg["auths"].(map[string]any)
-	auth := selectQuayAuth(auths)
+	auth := SelectQuayAuth(auths)
 	if auth == "" {
 		slog.Warn("quay auth: no quay.io/rhoai or quay.io entry found in pull secret auths")
 	}
 	return auth
 }
 
-// quayAuthError is returned when the Quay token endpoint answers with a
+// QuayAuthError is returned when the Quay token endpoint answers with a
 // non-200 status, letting callers tell rejected credentials from outages.
-type quayAuthError struct {
+type QuayAuthError struct {
 	StatusCode int
 	Body       string
 }
 
-func (e *quayAuthError) Error() string {
+func (e *QuayAuthError) Error() string {
 	return fmt.Sprintf("quay auth returned %d: %s", e.StatusCode, e.Body)
 }
 
 // CredentialsRejected reports whether Quay refused the credentials (401 or
 // 403), not answered with an outage (HTTPStatusForError).
-func (e *quayAuthError) CredentialsRejected() bool {
+func (e *QuayAuthError) CredentialsRejected() bool {
 	return e.StatusCode == http.StatusUnauthorized || e.StatusCode == http.StatusForbidden
 }
 
-// isQuayCredentialRejection reports whether err means Quay refused the credentials.
-func isQuayCredentialRejection(err error) bool {
-	var authErr *quayAuthError
+// IsCredentialRejection reports whether err means Quay refused the credentials.
+func IsCredentialRejection(err error) bool {
+	var authErr *QuayAuthError
 	return errors.As(err, &authErr) && authErr.CredentialsRejected()
 }
 
-func getQuayBearerToken(ctx context.Context, httpClient *http.Client, basicAuth string) (string, error) {
-	return fetchQuayToken(ctx, httpClient, basicAuth, []string{quayFBCRepo})
+func QuayBearerToken(ctx context.Context, httpClient *http.Client, basicAuth string) (string, error) {
+	return FetchQuayToken(ctx, httpClient, basicAuth, []string{FBCRepo})
 }
 
-// quayFBCRepo is the repository of the nightly FBC catalog images.
-const quayFBCRepo = "rhoai/rhoai-fbc-fragment"
+// FBCRepo is the repository of the nightly FBC catalog images.
+const FBCRepo = "rhoai/rhoai-fbc-fragment"
 
-// fetchQuayToken requests one pull token for the given repositories. Quay
+// FetchQuayToken requests one pull token for the given repositories. Quay
 // honours repeated scope parameters (the Docker token protocol allows them),
 // so a single token can cover a whole batch of images.
-func fetchQuayToken(ctx context.Context, httpClient *http.Client, basicAuth string, repos []string) (string, error) {
+func FetchQuayToken(ctx context.Context, httpClient *http.Client, basicAuth string, repos []string) (string, error) {
 	var authURL strings.Builder
 	authURL.WriteString("https://quay.io/v2/auth?service=quay.io")
 	for _, repo := range repos {
@@ -272,7 +275,7 @@ func fetchQuayToken(ctx context.Context, httpClient *http.Client, basicAuth stri
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return "", &quayAuthError{StatusCode: resp.StatusCode, Body: string(body)}
+		return "", &QuayAuthError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
 	// A token is about 2.6 KB (quayTokenBatch); the bound keeps a response
@@ -288,27 +291,27 @@ func fetchQuayToken(ctx context.Context, httpClient *http.Client, basicAuth stri
 }
 
 var (
-	quayTokenCache  = kube.NewLRU[string, string](1024)
+	QuayTokenCache  = kube.NewLRU[string, string](1024)
 	quayTokenFlight kube.FlightGroup[string]
 )
 
-// quayTokenBatch bounds the scopes of one token. The token lists every
+// QuayTokenBatch bounds the scopes of one token. The token lists every
 // scope, growing ~180 bytes per repository (measured live: 10 scopes 2.6 KB,
 // 40 scopes 8 KB), and Quay's nginx rejects a 40-scope bearer header with
 // "400 Request Header Or Cookie Too Large". 10 keeps the header near 2.6 KB.
-const quayTokenBatch = 10
+const QuayTokenBatch = 10
 
-func quayTokenKey(basicAuth, repo string) string {
+func QuayTokenKey(basicAuth, repo string) string {
 	sum := sha256.Sum256([]byte(basicAuth))
 	return hex.EncodeToString(sum[:]) + "|" + repo
 }
 
-// quayTokenTTL returns how long a bearer token may be reused: until five
+// QuayTokenTTL returns how long a bearer token may be reused: until five
 // minutes before the "exp" claim of the JWT Quay issues (3600s lifetime,
 // verified live). The token is only decoded to read its expiry; checking its
 // signature is Quay's job. Without a readable expiry the token is kept for
 // 30s, half of the Docker token protocol's 60s default lifetime.
-func quayTokenTTL(token string, now time.Time) time.Duration {
+func QuayTokenTTL(token string, now time.Time) time.Duration {
 	const fallback = 30 * time.Second
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -340,23 +343,23 @@ func quayTokenTTL(token string, now time.Time) time.Duration {
 }
 
 func storeQuayToken(basicAuth, repo, token string) {
-	if ttl := quayTokenTTL(token, time.Now()); ttl > 0 {
-		quayTokenCache.Add(quayTokenKey(basicAuth, repo), token, ttl)
+	if ttl := QuayTokenTTL(token, time.Now()); ttl > 0 {
+		QuayTokenCache.Add(QuayTokenKey(basicAuth, repo), token, ttl)
 	}
 }
 
-// cachedQuayToken returns a pull token for repo, reusing it until shortly
+// CachedQuayToken returns a pull token for repo, reusing it until shortly
 // before it expires. Concurrent requests for the same token share one call.
-func cachedQuayToken(ctx context.Context, basicAuth, repo string) (string, error) {
-	key := quayTokenKey(basicAuth, repo)
-	if token, ok := quayTokenCache.Get(key); ok {
+func CachedQuayToken(ctx context.Context, basicAuth, repo string) (string, error) {
+	key := QuayTokenKey(basicAuth, repo)
+	if token, ok := QuayTokenCache.Get(key); ok {
 		return token, nil
 	}
 	token, err, _ := quayTokenFlight.Do(ctx, key, func(ctx context.Context) (string, error) {
-		if token, ok := quayTokenCache.Get(key); ok {
+		if token, ok := QuayTokenCache.Get(key); ok {
 			return token, nil
 		}
-		token, err := fetchQuayToken(ctx, quayHTTPClient, basicAuth, []string{repo})
+		token, err := FetchQuayToken(ctx, quayHTTPClient, basicAuth, []string{repo})
 		if err != nil {
 			return "", err
 		}
@@ -377,18 +380,18 @@ func prefetchQuayTokens(ctx context.Context, basicAuth string, repos []string) {
 			continue
 		}
 		seen[repo] = true
-		if _, ok := quayTokenCache.Get(quayTokenKey(basicAuth, repo)); !ok {
+		if _, ok := QuayTokenCache.Get(QuayTokenKey(basicAuth, repo)); !ok {
 			missing = append(missing, repo)
 		}
 	}
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 4)
-	for start := 0; start < len(missing); start += quayTokenBatch {
-		batch := missing[start:min(start+quayTokenBatch, len(missing))]
+	for start := 0; start < len(missing); start += QuayTokenBatch {
+		batch := missing[start:min(start+QuayTokenBatch, len(missing))]
 		wg.Go(func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			token, err := fetchQuayToken(ctx, quayHTTPClient, basicAuth, batch)
+			token, err := FetchQuayToken(ctx, quayHTTPClient, basicAuth, batch)
 			if err != nil {
 				slog.Debug("quay token prefetch failed", "repos", len(batch), "error", err)
 				return
@@ -403,10 +406,10 @@ func prefetchQuayTokens(ctx context.Context, basicAuth string, repos []string) {
 
 // forgetQuayToken drops a cached token that a registry rejected.
 func forgetQuayToken(basicAuth, repo string) {
-	quayTokenCache.Remove(quayTokenKey(basicAuth, repo))
+	QuayTokenCache.Remove(QuayTokenKey(basicAuth, repo))
 }
 
-func getTagDigest(ctx context.Context, httpClient *http.Client, bearerToken, tag string) (string, error) {
+func TagDigest(ctx context.Context, httpClient *http.Client, bearerToken, tag string) (string, error) {
 	url := fmt.Sprintf("https://quay.io/v2/rhoai/rhoai-fbc-fragment/manifests/%s", tag)
 	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
 	if err != nil {
@@ -438,7 +441,7 @@ func getTagDigest(ctx context.Context, httpClient *http.Client, bearerToken, tag
 // Nightly tags such as rhoai-3.6 are re-pushed with every build, so a tag's
 // digest is reused for at most the caller's maxAge.
 var (
-	tagDigestCache  = kube.NewLRU[string, string](512)
+	TagDigestCache  = kube.NewLRU[string, string](512)
 	tagDigestFlight kube.FlightGroup[string]
 )
 
@@ -446,7 +449,7 @@ var (
 // older than maxAge.
 func cachedTagDigest(ctx context.Context, basicAuth, tag string, maxAge time.Duration) (string, error) {
 	fresh := func() (string, bool) {
-		digest, stored, ok := tagDigestCache.GetWithAge(tag)
+		digest, stored, ok := TagDigestCache.GetWithAge(tag)
 		return digest, ok && time.Since(stored) < maxAge
 	}
 	if digest, ok := fresh(); ok {
@@ -457,20 +460,20 @@ func cachedTagDigest(ctx context.Context, basicAuth, tag string, maxAge time.Dur
 			return digest, nil
 		}
 		for attempt := 0; ; attempt++ {
-			token, err := cachedQuayToken(ctx, basicAuth, quayFBCRepo)
+			token, err := CachedQuayToken(ctx, basicAuth, FBCRepo)
 			if err != nil {
 				return "", err
 			}
-			digest, err := getTagDigest(ctx, quayHTTPClient, token, tag)
+			digest, err := TagDigest(ctx, quayHTTPClient, token, tag)
 			var authErr *registryAuthError
 			if attempt == 0 && errors.As(err, &authErr) {
-				forgetQuayToken(basicAuth, quayFBCRepo)
+				forgetQuayToken(basicAuth, FBCRepo)
 				continue
 			}
 			if err != nil {
 				return "", err
 			}
-			tagDigestCache.Add(tag, digest, tagScanCacheTTL)
+			TagDigestCache.Add(tag, digest, tagScanCacheTTL)
 			return digest, nil
 		}
 	})
@@ -479,14 +482,14 @@ func cachedTagDigest(ctx context.Context, basicAuth, tag string, maxAge time.Dur
 
 // FetchNightlyTags returns the top `limit` nightly version tags (sorted descending),
 // each with its full image reference including digest.
-func FetchNightlyTags(ctx context.Context, c *Client, limit int) (*types.NightlyTagsResponse, error) {
-	return fetchNightlyTags(ctx, getQuayAuth(c), limit, false)
+func FetchNightlyTags(ctx context.Context, c *kube.Client, limit int) (*types.NightlyTagsResponse, error) {
+	return fetchNightlyTags(ctx, QuayAuth(c), limit, false)
 }
 
 // FetchNightlyTagsWithBuildDates is FetchNightlyTags plus each build's date,
 // read from the (cached) FBC image labels. It never calls GitHub.
-func FetchNightlyTagsWithBuildDates(ctx context.Context, c *Client, limit int) (*types.NightlyTagsResponse, error) {
-	return fetchNightlyTags(ctx, getQuayAuth(c), limit, true)
+func FetchNightlyTagsWithBuildDates(ctx context.Context, c *kube.Client, limit int) (*types.NightlyTagsResponse, error) {
+	return fetchNightlyTags(ctx, QuayAuth(c), limit, true)
 }
 
 func fetchNightlyTags(ctx context.Context, basicAuth string, limit int, buildDates bool) (*types.NightlyTagsResponse, error) {
@@ -500,7 +503,7 @@ func fetchNightlyTags(ctx context.Context, basicAuth string, limit int, buildDat
 	}
 
 	// Take the top N tags (already sorted ascending, so take from the end)
-	var topTags []parsedTag
+	var topTags []Tag
 	if limit == 0 {
 		topTags = parsed
 	} else {
@@ -520,50 +523,50 @@ func fetchNightlyTags(ctx context.Context, basicAuth string, limit int, buildDat
 			defer func() { <-sem }()
 
 			t := topTags[len(topTags)-1-i]
-			digest, err := cachedTagDigest(ctx, basicAuth, t.raw, tagScanCacheTTL)
+			digest, err := cachedTagDigest(ctx, basicAuth, t.Raw, tagScanCacheTTL)
 			var image string
 			if err != nil {
-				image = fmt.Sprintf("%s:%s", quayImage, t.raw)
+				image = fmt.Sprintf("%s:%s", FBCImage, t.Raw)
 			} else {
-				image = fmt.Sprintf("%s:%s@%s", quayImage, t.raw, digest)
+				image = fmt.Sprintf("%s:%s@%s", FBCImage, t.Raw, digest)
 			}
-			tags[i] = types.NightlyTag{Tag: t.raw, Image: image}
+			tags[i] = types.NightlyTag{Tag: t.Raw, Image: image}
 		}(idx)
 	}
 	wg.Wait()
 
 	if buildDates {
-		enrichTagsWithBuildDates(ctx, basicAuth, tags)
+		EnrichTagsWithBuildDates(ctx, basicAuth, tags)
 	}
 	return &types.NightlyTagsResponse{Tags: tags}, nil
 }
 
 // scanNightlyTags returns the parsed release tags. A failed scan drops the
 // cached token so a rejected token is not reused until it expires.
-func scanNightlyTags(ctx context.Context, basicAuth string) ([]parsedTag, error) {
-	bearerToken, err := cachedQuayToken(ctx, basicAuth, quayFBCRepo)
+func scanNightlyTags(ctx context.Context, basicAuth string) ([]Tag, error) {
+	bearerToken, err := CachedQuayToken(ctx, basicAuth, FBCRepo)
 	if err != nil {
 		return nil, err
 	}
-	parsed, err := fetchAndParseTags(ctx, quayHTTPClient, bearerToken)
+	parsed, err := FetchAndParseTags(ctx, quayHTTPClient, bearerToken)
 	if err != nil {
-		forgetQuayToken(basicAuth, quayFBCRepo)
+		forgetQuayToken(basicAuth, FBCRepo)
 		return nil, err
 	}
 	return parsed, nil
 }
 
-// enrichTagsWithBuildDates reads the build-date label of each digest-pinned
+// EnrichTagsWithBuildDates reads the build-date label of each digest-pinned
 // tag image. Labels are cached by digest. The GitHub commit date is not
 // fetched: the response only carries the build date.
-func enrichTagsWithBuildDates(ctx context.Context, basicAuth string, tags []types.NightlyTag) {
+func EnrichTagsWithBuildDates(ctx context.Context, basicAuth string, tags []types.NightlyTag) {
 	refs := make([]string, 0, len(tags))
 	for _, t := range tags {
 		if strings.Contains(t.Image, "@sha256:") {
 			refs = append(refs, t.Image)
 		}
 	}
-	labels := resolveImageLabels(ctx, basicAuth, refs, false)
+	labels := ResolveImageLabels(ctx, basicAuth, refs, false)
 	for i := range tags {
 		if l := labels[tags[i].Image]; l != nil && l.BuildDate != "" {
 			tags[i].BuildDate = l.BuildDate
@@ -573,7 +576,7 @@ func enrichTagsWithBuildDates(ctx context.Context, basicAuth string, tags []type
 
 // tagScanCache caches the full tag scan result (tags change at most once/day).
 var (
-	tagScanCache     []parsedTag
+	tagScanCache     []Tag
 	tagScanCacheMu   sync.RWMutex
 	tagScanCacheAt   time.Time
 	tagScanRefreshMu sync.Mutex // serializes cache refresh to prevent stampede
@@ -613,7 +616,7 @@ func probeTag(ctx context.Context, httpClient *http.Client, bearerToken, tag str
 				return false, err
 			}
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodHead, fmt.Sprintf("https://quay.io/v2/%s/manifests/%s", quayFBCRepo, tag), nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodHead, fmt.Sprintf("https://quay.io/v2/%s/manifests/%s", FBCRepo, tag), nil)
 		if err != nil {
 			return false, err
 		}
@@ -629,7 +632,7 @@ func probeTag(ctx context.Context, httpClient *http.Client, bearerToken, tag str
 		case resp.StatusCode == http.StatusOK:
 			// The digest comes for free; the tag list resolves it next.
 			if d := resp.Header.Get("Docker-Content-Digest"); d != "" {
-				tagDigestCache.Add(tag, d, 0)
+				TagDigestCache.Add(tag, d, 0)
 			}
 			return true, nil
 		case resp.StatusCode == http.StatusNotFound:
@@ -770,13 +773,13 @@ func (p *tagProber) major(m int) bool {
 	return found
 }
 
-// fetchAndParseTags returns the release tags of the FBC repository, from
+// FetchAndParseTags returns the release tags of the FBC repository, from
 // the cache when it is fresh. A scan that could not probe every name is
 // returned but not cached, so the next request scans again.
-func fetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken string) ([]parsedTag, error) {
+func FetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken string) ([]Tag, error) {
 	tagScanCacheMu.RLock()
 	if len(tagScanCache) > 0 && time.Since(tagScanCacheAt) < tagScanCacheTTL {
-		result := make([]parsedTag, len(tagScanCache))
+		result := make([]Tag, len(tagScanCache))
 		copy(result, tagScanCache)
 		tagScanCacheMu.RUnlock()
 		return result, nil
@@ -790,7 +793,7 @@ func fetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken
 	// Double-check: another goroutine may have refreshed while we waited for the lock.
 	tagScanCacheMu.RLock()
 	if len(tagScanCache) > 0 && time.Since(tagScanCacheAt) < tagScanCacheTTL {
-		result := make([]parsedTag, len(tagScanCache))
+		result := make([]Tag, len(tagScanCache))
 		copy(result, tagScanCache)
 		tagScanCacheMu.RUnlock()
 		return result, nil
@@ -818,9 +821,9 @@ func fetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken
 		return nil, fmt.Errorf("no rhoai release tags found")
 	}
 
-	var parsed []parsedTag
+	var parsed []Tag
 	for tag := range p.found {
-		if q, ok := parseTag(tag); ok {
+		if q, ok := ParseTag(tag); ok {
 			parsed = append(parsed, q)
 		}
 	}
@@ -829,7 +832,7 @@ func fetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken
 	}
 
 	sort.Slice(parsed, func(i, j int) bool {
-		return compareTags(parsed[i], parsed[j]) < 0
+		return CompareTags(parsed[i], parsed[j]) < 0
 	})
 
 	// A partial scan can miss the newest releases, so it is returned for this
@@ -841,7 +844,7 @@ func fetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken
 
 	// Update the cache so subsequent callers get the cached result.
 	tagScanCacheMu.Lock()
-	tagScanCache = make([]parsedTag, len(parsed))
+	tagScanCache = make([]Tag, len(parsed))
 	copy(tagScanCache, parsed)
 	tagScanCacheAt = time.Now()
 	tagScanCacheMu.Unlock()
@@ -852,32 +855,88 @@ func fetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken
 // FetchLatestNightly returns the highest-versioned nightly tag, its digest
 // and, when its labels can be read, its build date. It shares the cached tag
 // scan, token and tag digest with the tag list.
-func FetchLatestNightly(ctx context.Context, c *Client) (*types.LatestNightlyResponse, error) {
-	basicAuth := getQuayAuth(c)
+func FetchLatestNightly(ctx context.Context, c *kube.Client) (*types.LatestNightlyResponse, error) {
+	basicAuth := QuayAuth(c)
 	parsed, err := scanNightlyTags(ctx, basicAuth)
 	if err != nil {
 		return nil, err
 	}
 
-	latest := parsed[len(parsed)-1].raw
+	latest := parsed[len(parsed)-1].Raw
 	digest, err := cachedTagDigest(ctx, basicAuth, latest, tagScanCacheTTL)
 	if err != nil {
 		// Fall back to tag-only if digest fetch fails
 		return &types.LatestNightlyResponse{
 			Tag:   latest,
-			Image: fmt.Sprintf("%s:%s", quayImage, latest),
+			Image: fmt.Sprintf("%s:%s", FBCImage, latest),
 		}, nil
 	}
 
 	resp := &types.LatestNightlyResponse{
 		Tag:    latest,
-		Image:  fmt.Sprintf("%s:%s@%s", quayImage, latest, digest),
+		Image:  fmt.Sprintf("%s:%s@%s", FBCImage, latest, digest),
 		Digest: digest,
 	}
-	labelCtx, cancel := context.WithTimeout(ctx, labelFetchTimeout)
+	labelCtx, cancel := context.WithTimeout(ctx, LabelFetchTimeout)
 	defer cancel()
-	if labels, err := imageLabelsWithAuth(labelCtx, basicAuth, resp.Image, false); err == nil {
+	if labels, err := ImageLabelsWithAuth(labelCtx, basicAuth, resp.Image, false); err == nil {
 		resp.BuildDate = labels.BuildDate
 	}
 	return resp, nil
+}
+
+// ParseCSVVersion extracts a parsedTag from a CSV name like "rhods-operator.3.5.0-ea.1".
+// It handles three cases:
+//  1. Full EA suffix:       "rhods-operator.3.5.0-ea.1" -> ea=1
+//  2. GA (no suffix):       "rhods-operator.3.5.0"      -> ea=-1 (ranks above EA)
+//  3. Non-EA pre-release:   "rhods-operator.3.5.0-rc.1" -> ea=-1000 (ranks below GA and EA)
+//
+// Returns the parsed version and true on success, or zero value and false if unparseable.
+func ParseCSVVersion(csv string) (Tag, bool) {
+	// Normalize: strip optional "v" prefix from version portion.
+	// CSV names may use "rhods-operator.v3.5.0" or "rhods-operator.3.5.0".
+	normalized := csv
+	dotIdx := strings.Index(csv, ".")
+	if dotIdx >= 0 {
+		after := csv[dotIdx+1:]
+		if strings.HasPrefix(after, "v") {
+			normalized = csv[:dotIdx+1] + after[1:]
+		}
+	}
+
+	var major, minor, patch, eaNum int
+	// Try full EA parse: "rhods-operator.M.m.p-ea.N"
+	n, _ := fmt.Sscanf(normalized, "rhods-operator.%d.%d.%d-ea.%d", &major, &minor, &patch, &eaNum)
+	if n == 4 {
+		return Tag{Raw: csv, Major: major, Minor: minor, Patch: patch, EA: eaNum}, true
+	}
+	// Recognize unnumbered EA and build metadata using the same parser as release tags.
+	version := strings.TrimPrefix(normalized, "rhods-operator.")
+	if strings.HasPrefix(normalized, "rhods-operator.") {
+		if parsed, ok := ParseTag("rhoai-" + strings.SplitN(version, "+", 2)[0]); ok {
+			parsed.Raw = csv
+			return parsed, true
+		}
+	}
+
+	// Try GA parse (no suffix): "rhods-operator.M.m.p"
+	n, _ = fmt.Sscanf(normalized, "rhods-operator.%d.%d.%d", &major, &minor, &patch)
+	if n == 3 {
+		// Check if the normalized CSV has any suffix after the patch number.
+		// Build the canonical GA prefix and see if the normalized string is longer.
+		gaPrefix := fmt.Sprintf("rhods-operator.%d.%d.%d", major, minor, patch)
+		remainder := strings.TrimPrefix(normalized, gaPrefix)
+		if strings.HasPrefix(remainder, "-") {
+			// Has a non-EA suffix (e.g., "-rc.1", "-beta.2") — treat as pre-release,
+			// ranking below both GA (ea=-1) and any EA build (ea>=0).
+			slog.Debug("CSV has non-EA pre-release suffix, ranking below GA and EA",
+				"csv", csv, "suffix", remainder)
+			return Tag{Raw: csv, Major: major, Minor: minor, Patch: patch, EA: -1000}, true
+		}
+		// Genuine GA — no suffix at all.
+		return Tag{Raw: csv, Major: major, Minor: minor, Patch: patch, EA: -1}, true
+	}
+
+	slog.Debug("failed to parse CSV version", "csv", csv)
+	return Tag{}, false
 }
