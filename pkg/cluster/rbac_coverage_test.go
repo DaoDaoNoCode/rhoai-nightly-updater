@@ -920,7 +920,7 @@ var (
 	clusterPathFunc       = symID{rhoaiPkg, "ClusterPath"}
 	activityNamespaceFunc = symID{recordPkg, "GetActivityNamespace"}
 	maasAPIFunc           = symID{servingPkg, "MaaSAPI"}
-	gitOpsPolicyNameFunc  = symID{clusterPkg, "gitOpsAdmissionPolicyName"}
+	gitOpsPolicyNameFunc  = symID{gitopsPkg, "gitOpsAdmissionPolicyName"}
 	componentListPathFunc = symID{rhoaiPkg, "ComponentListPath"}
 	componentKindListPath = symID{rhoaiPkg, "ComponentKind.ListPath"}
 	sprintfFunc           = symID{"fmt", "Sprintf"}

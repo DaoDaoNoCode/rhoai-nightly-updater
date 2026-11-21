@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/gitops"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -140,7 +141,7 @@ func TestUpdateGitOpsProfile_RefusesACatalogNobodyManages(t *testing.T) {
 			f.catalog["metadata"] = meta
 			f.argo = argoManagingAllBut(argo.CatalogObject)
 			result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-			if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeProfileGitOps || result.Message != gitOpsProfileUnmanagedCatalog ||
+			if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeProfileGitOps || result.Message != gitops.ProfileUnmanagedCatalog ||
 				!strings.Contains(result.Message, "Argo CD or an ACM policy") {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}

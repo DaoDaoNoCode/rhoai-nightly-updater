@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/gitops"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/node"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
@@ -285,7 +286,7 @@ func TestLiveCatalogTarget_GitOpsProfilePullAdvice(t *testing.T) {
 	f.catalog["spec"].(map[string]any)["image"] = testNightlyImage
 	f.catalogPods = `{"items":[{"status":{"containerStatuses":[{"state":{"waiting":{"reason":"ImagePullBackOff","message":"unauthorized"}}}]}}]}`
 	var logs []string
-	_, err := liveCatalogTarget(f.client(context.Background()), testNightlyImage, "", "Argo CD application rhoai", func(UpdateStepEvent) {}, &logs)
+	_, err := gitops.LiveCatalogTarget(f.client(context.Background()), testNightlyImage, "", "Argo CD application rhoai", func(UpdateStepEvent) {}, &logs)
 	if !catalog.IsImagePullError(err) {
 		t.Fatalf("err %v", err)
 	}

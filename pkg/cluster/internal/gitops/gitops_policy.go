@@ -1,4 +1,4 @@
-package cluster
+package gitops
 
 import (
 	"encoding/json"
@@ -34,9 +34,9 @@ const SubscriptionEnvAllowlistEnv = "SUBSCRIPTION_ENV_ALLOWLIST"
 // (opendatahub-io/odh-gitops charts/rhai-on-openshift-chart/templates/operator/operator.yaml).
 const DefaultSubscriptionEnvAllowlist = "DISABLE_DSC_CONFIG"
 
-// subscriptionEnvAllowlist reads the allowlist. It splits on commas only, as
+// SubscriptionEnvAllowlist reads the allowlist. It splits on commas only, as
 // the policy's split(',') does, so both see the same names.
-func subscriptionEnvAllowlist() []string {
+func SubscriptionEnvAllowlist() []string {
 	v, ok := os.LookupEnv(SubscriptionEnvAllowlistEnv)
 	if !ok {
 		v = DefaultSubscriptionEnvAllowlist
@@ -44,7 +44,7 @@ func subscriptionEnvAllowlist() []string {
 	return strings.Split(v, ",")
 }
 
-// gitOpsSubscriptionProblem says why the policy would refuse the
+// SubscriptionProblem says why the policy would refuse the
 // ServiceAccount creating or updating Subscription name in namespace with
 // spec; "" when it allows it. The rule: Subscription rhods-operator in the
 // operator namespace, for package rhods-operator from CatalogSource
@@ -55,7 +55,7 @@ func subscriptionEnvAllowlist() []string {
 // pkg/operators/v1alpha1/subscription_types.go, which OLM applies to the
 // operator's Deployment), each entry only name and value, the name in
 // allowedEnv.
-func gitOpsSubscriptionProblem(namespace, name string, spec map[string]any, allowedEnv []string) string {
+func SubscriptionProblem(namespace, name string, spec map[string]any, allowedEnv []string) string {
 	if namespace != rhoai.SubNS || name != rhoai.SubName {
 		return fmt.Sprintf("the gitops profile may only write Subscription %s in %s, not %s in %s", rhoai.SubName, rhoai.SubNS, name, namespace)
 	}
@@ -139,12 +139,12 @@ func subscriptionSpec(obj map[string]any) map[string]any {
 // Subscription it would create and the one the restore would re-apply
 // (nil when there is none). It returns the refusal, or "".
 func gitOpsSubscriptionsProblem(newSub, restoreSub map[string]any) string {
-	allowed := subscriptionEnvAllowlist()
-	if why := gitOpsSubscriptionProblem(rhoai.SubNS, rhoai.SubName, subscriptionSpec(newSub), allowed); why != "" {
+	allowed := SubscriptionEnvAllowlist()
+	if why := SubscriptionProblem(rhoai.SubNS, rhoai.SubName, subscriptionSpec(newSub), allowed); why != "" {
 		return "The Subscription Update would create could not be written in the gitops profile: " + why + ". " + gitOpsPolicyFix
 	}
 	if restoreSub != nil {
-		if why := gitOpsSubscriptionProblem(rhoai.SubNS, rhoai.SubName, subscriptionSpec(restoreSub), allowed); why != "" {
+		if why := SubscriptionProblem(rhoai.SubNS, rhoai.SubName, subscriptionSpec(restoreSub), allowed); why != "" {
 			return "The current Subscription could not be restored after a failure in the gitops profile: " + why + ". " + gitOpsPolicyFix
 		}
 	}
@@ -168,20 +168,20 @@ func gitOpsAdmissionPolicyName() string {
 // of this release.
 var gitOpsPolicyTemplate []byte
 
-// SetGitOpsPolicyTemplate sets the deploy/rbac-gitops.yaml that
+// SetPolicyTemplate sets the deploy/rbac-gitops.yaml that
 // CheckGitOpsAdmissionPolicy compares the cluster's policy with.
-func SetGitOpsPolicyTemplate(data []byte) {
+func SetPolicyTemplate(data []byte) {
 	gitOpsPolicyTemplate = data
 }
 
-// expectedGitOpsAdmission renders the ValidatingAdmissionPolicy and binding
+// ExpectedAdmission renders the ValidatingAdmissionPolicy and binding
 // of deploy/rbac-gitops.yaml as the chart does, with this pod's values:
 // NAMESPACE is the pod's namespace, APP_NAME the rest of the policy's name
 // (<APP_NAME>-<NAMESPACE>-gitops), SUBSCRIPTION_ENV_ALLOWLIST this pod's
 // allowlist, OPERATOR_NAMESPACE and MARKETPLACE_NAMESPACE the namespaces the
 // code writes to. Other parameters keep their defaults. It returns both
 // specs.
-func expectedGitOpsAdmission(name string) (policy, binding map[string]any, err error) {
+func ExpectedAdmission(name string) (policy, binding map[string]any, err error) {
 	if len(gitOpsPolicyTemplate) == 0 {
 		return nil, nil, fmt.Errorf("this build has no deploy/rbac-gitops.yaml to compare the policy with")
 	}
@@ -208,7 +208,7 @@ func expectedGitOpsAdmission(name string) (policy, binding map[string]any, err e
 	values["APP_NAME"] = app
 	values["OPERATOR_NAMESPACE"] = rhoai.SubNS
 	values["MARKETPLACE_NAMESPACE"] = rhoai.CatalogNS
-	values["SUBSCRIPTION_ENV_ALLOWLIST"] = strings.Join(subscriptionEnvAllowlist(), ",")
+	values["SUBSCRIPTION_ENV_ALLOWLIST"] = strings.Join(SubscriptionEnvAllowlist(), ",")
 	for _, o := range tmpl.Objects {
 		kind, _ := o["kind"].(string)
 		if kind != "ValidatingAdmissionPolicy" && kind != "ValidatingAdmissionPolicyBinding" {
@@ -355,12 +355,12 @@ func differingKeys(a, b map[string]any) []string {
 // prove that the API server enforces them (a policy that does not compile
 // denies by failurePolicy Fail); it proves that nobody removed or changed
 // them.
-func CheckGitOpsAdmissionPolicy(c *Client) error {
+func CheckGitOpsAdmissionPolicy(c *kube.Client) error {
 	name := gitOpsAdmissionPolicyName()
 	if name == "" {
 		return fmt.Errorf("%s is not set, so the admission policy cannot be checked", GitOpsAdmissionPolicyEnv)
 	}
-	wantPolicy, wantBinding, err := expectedGitOpsAdmission(name)
+	wantPolicy, wantBinding, err := ExpectedAdmission(name)
 	if err != nil {
 		return err
 	}

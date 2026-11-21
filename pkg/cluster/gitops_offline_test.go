@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/gitops"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -59,12 +60,12 @@ func TestGitOpsProfileUpdateReadsNoSecretAndNoRegistry(t *testing.T) {
 	f := servesGitOpsPolicy(t, gitOpsFake(t))
 	emit, events := eventsRecorder()
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, emit)
-	if err != nil || !result.Success || indexOf(result.Logs, gitOpsProfileNoPullSecret) < 0 {
+	if err != nil || !result.Success || indexOf(result.Logs, gitops.ProfileNoPullSecret) < 0 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	said := false
 	for _, e := range events() {
-		said = said || e.Message == gitOpsProfileNoPullSecret
+		said = said || e.Message == gitops.ProfileNoPullSecret
 	}
 	if !said || requestedSecret(f) {
 		t.Fatalf("said=%v, Secret requested=%v", said, requestedSecret(f))
@@ -72,7 +73,7 @@ func TestGitOpsProfileUpdateReadsNoSecretAndNoRegistry(t *testing.T) {
 
 	f = servesGitOpsPolicy(t, gitOpsFake(t))
 	dry, err := UpdateDryRunGitOpsProfile(f.client(context.Background()), gitOpsImage)
-	if err != nil || !dry.Success || indexOf(dry.Logs, gitOpsProfileNoPullSecret) < 0 || requestedSecret(f) ||
+	if err != nil || !dry.Success || indexOf(dry.Logs, gitops.ProfileNoPullSecret) < 0 || requestedSecret(f) ||
 		indexOf(dry.Logs, "OK: The catalog serves "+gitOpsCSV+" on channel "+gitOpsChannel) < 0 {
 		t.Fatalf("dry run: %+v %v", dry, err)
 	}

@@ -42,6 +42,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/gitops"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"gopkg.in/yaml.v3"
 )
@@ -55,6 +56,7 @@ const (
 	rhoaiPkg      = clusterPkg + "/internal/rhoai"
 	recordPkg     = clusterPkg + "/internal/record"
 	servingPkg    = clusterPkg + "/internal/serving"
+	gitopsPkg     = clusterPkg + "/internal/gitops"
 	apiPkg        = modulePath + "/pkg/api"
 	rbacGitOpsRel = "../../deploy/rbac-gitops.yaml"
 )
@@ -606,7 +608,7 @@ func TestGitOpsAdmissionPolicyMatchesTheCode(t *testing.T) {
 	}
 	meta := policy["metadata"].(map[string]any)
 	if meta["name"] != "${APP_NAME}-${NAMESPACE}-gitops" || binding["metadata"].(map[string]any)["name"] != meta["name"] {
-		t.Errorf("the policy and binding must be named ${APP_NAME}-${NAMESPACE}-gitops, the name the Template passes in %s", GitOpsAdmissionPolicyEnv)
+		t.Errorf("the policy and binding must be named ${APP_NAME}-${NAMESPACE}-gitops, the name the Template passes in %s", gitops.GitOpsAdmissionPolicyEnv)
 	}
 	spec := policy["spec"].(map[string]any)
 	if spec["failurePolicy"] != "Fail" {

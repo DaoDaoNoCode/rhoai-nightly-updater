@@ -238,7 +238,7 @@ func nodePullAdviceFor(controlPlane string) string {
 }
 
 // GitOpsProfilePullAdvice is the gitops profile's: it does not set up or
-// read pull secrets (gitOpsProfileNoPullSecret).
+// read pull secrets (gitops.ProfileNoPullSecret).
 func GitOpsProfilePullAdvice(*kube.Client) string {
 	return "Check that the cluster's pull secrets, which Git or ACM manage here, have access to quay.io/rhoai (the nodes pull with openshift-config/pull-secret, and on a hosted control plane also with kube-system/additional-pull-secret) and that the image exists"
 }

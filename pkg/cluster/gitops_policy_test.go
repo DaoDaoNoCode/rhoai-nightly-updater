@@ -10,6 +10,7 @@ import (
 
 	"cel.dev/cel-go/cel"
 	"cel.dev/cel-go/ext"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/gitops"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"gopkg.in/yaml.v3"
 )
@@ -204,7 +205,7 @@ func TestGitOpsPolicyPredicateMatchesTheCEL(t *testing.T) {
 		op := c.Request["operation"]
 		if res == "subscriptions" && c.User == "" && (op == "CREATE" || op == "UPDATE") {
 			spec, _ := c.Object["spec"].(map[string]any)
-			problem := gitOpsSubscriptionProblem(c.Request["namespace"], c.Request["name"], spec, strings.Split(DefaultSubscriptionEnvAllowlist, ","))
+			problem := gitops.SubscriptionProblem(c.Request["namespace"], c.Request["name"], spec, strings.Split(gitops.DefaultSubscriptionEnvAllowlist, ","))
 			if (problem == "") != c.Allow {
 				t.Errorf("%s: the Go predicate says %q, the policy allowed=%v", c.Name, problem, c.Allow)
 			}
@@ -225,16 +226,16 @@ func TestGitOpsPolicyPredicateMatchesTheCEL(t *testing.T) {
 // The allowlist is read the way the policy reads it: split on commas, no
 // trimming; unset means the Template's default.
 func TestSubscriptionEnvAllowlist(t *testing.T) {
-	t.Setenv(SubscriptionEnvAllowlistEnv, "A,B")
-	if got := subscriptionEnvAllowlist(); strings.Join(got, "|") != "A|B" {
+	t.Setenv(gitops.SubscriptionEnvAllowlistEnv, "A,B")
+	if got := gitops.SubscriptionEnvAllowlist(); strings.Join(got, "|") != "A|B" {
 		t.Fatalf("got %v", got)
 	}
-	t.Setenv(SubscriptionEnvAllowlistEnv, "")
-	if got := subscriptionEnvAllowlist(); len(got) != 1 || got[0] != "" {
+	t.Setenv(gitops.SubscriptionEnvAllowlistEnv, "")
+	if got := gitops.SubscriptionEnvAllowlist(); len(got) != 1 || got[0] != "" {
 		t.Fatalf("empty: got %v", got)
 	}
-	os.Unsetenv(SubscriptionEnvAllowlistEnv)
-	if got := subscriptionEnvAllowlist(); strings.Join(got, ",") != DefaultSubscriptionEnvAllowlist {
+	os.Unsetenv(gitops.SubscriptionEnvAllowlistEnv)
+	if got := gitops.SubscriptionEnvAllowlist(); strings.Join(got, ",") != gitops.DefaultSubscriptionEnvAllowlist {
 		t.Fatalf("unset: got %v", got)
 	}
 }
@@ -250,11 +251,11 @@ func useGitOpsPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prev := gitOpsPolicyTemplate
+	prev := gitops.PolicyTemplateForTest()
 	SetGitOpsPolicyTemplate(data)
 	t.Cleanup(func() { SetGitOpsPolicyTemplate(prev) })
 	t.Setenv("NAMESPACE", "ns1")
-	t.Setenv(GitOpsAdmissionPolicyEnv, testGitOpsPolicyName)
+	t.Setenv(gitops.GitOpsAdmissionPolicyEnv, testGitOpsPolicyName)
 }
 
 // livePolicy returns the policy and binding of deploy/rbac-gitops.yaml as
@@ -262,7 +263,7 @@ func useGitOpsPolicy(t *testing.T) {
 // OpenShift 4.21 cluster returns its policies).
 func livePolicy(t *testing.T) (policy, binding map[string]any) {
 	t.Helper()
-	p, b, err := expectedGitOpsAdmission(testGitOpsPolicyName)
+	p, b, err := gitops.ExpectedAdmission(testGitOpsPolicyName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,21 +343,21 @@ func TestCheckGitOpsAdmissionPolicy(t *testing.T) {
 	}
 	t.Run("this pod's allowlist differs from the policy's", func(t *testing.T) {
 		f := servesGitOpsPolicy(t, newFakeOLM(t))
-		t.Setenv(SubscriptionEnvAllowlistEnv, "DISABLE_DSC_CONFIG,OTHER")
+		t.Setenv(gitops.SubscriptionEnvAllowlistEnv, "DISABLE_DSC_CONFIG,OTHER")
 		if err := CheckGitOpsAdmissionPolicy(f.client(context.Background())); err == nil || !strings.Contains(err.Error(), "spec.variables") {
 			t.Fatalf("err = %v", err)
 		}
 	})
 	t.Run("no policy name", func(t *testing.T) {
 		useGitOpsPolicy(t)
-		t.Setenv(GitOpsAdmissionPolicyEnv, "")
+		t.Setenv(gitops.GitOpsAdmissionPolicyEnv, "")
 		if err := CheckGitOpsAdmissionPolicy(newFakeOLM(t).client(context.Background())); err == nil {
 			t.Fatal("want an error")
 		}
 	})
 	t.Run("a name of another namespace", func(t *testing.T) {
 		useGitOpsPolicy(t)
-		t.Setenv(GitOpsAdmissionPolicyEnv, "rhoai-nightly-updater-ns2-gitops")
+		t.Setenv(gitops.GitOpsAdmissionPolicyEnv, "rhoai-nightly-updater-ns2-gitops")
 		if err := CheckGitOpsAdmissionPolicy(newFakeOLM(t).client(context.Background())); err == nil || !strings.Contains(err.Error(), "not <APP_NAME>-ns1-gitops") {
 			t.Fatalf("err = %v", err)
 		}
@@ -374,8 +375,8 @@ func TestCheckGitOpsAdmissionPolicy(t *testing.T) {
 // the allowlist and ServiceAccount are this pod's.
 func TestExpectedGitOpsAdmission(t *testing.T) {
 	useGitOpsPolicy(t)
-	t.Setenv(SubscriptionEnvAllowlistEnv, "A,B")
-	policy, binding, err := expectedGitOpsAdmission(testGitOpsPolicyName)
+	t.Setenv(gitops.SubscriptionEnvAllowlistEnv, "A,B")
+	policy, binding, err := gitops.ExpectedAdmission(testGitOpsPolicyName)
 	if err != nil {
 		t.Fatal(err)
 	}
