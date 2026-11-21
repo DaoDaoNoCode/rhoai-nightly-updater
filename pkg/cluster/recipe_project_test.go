@@ -87,14 +87,7 @@ func TestRecipeProject_CreatedLikeTheDashboardAndRecorded(t *testing.T) {
 	// Again: skipped, nothing written.
 	before := len(f.mutations())
 	s2 := &recipe.State{Recipe: tRecipe(t, "create")}
-	steps := recipe.Steps(s2.Recipe)
-	var projectStep recipe.Step
-	for _, st := range steps {
-		if st.ID == recipe.StepProject {
-			projectStep = st
-		}
-	}
-	chk, err := projectStep.Check(c, s2)
+	chk, err := recipeStep(t, s2.Recipe, recipe.StepProject).Check(c, s2)
 	if err != nil || !chk.Done || s2.Project == nil || s2.Project.UID != meta["uid"] {
 		t.Fatalf("check after create: %+v %v %+v", chk, err, s2.Project)
 	}
