@@ -142,7 +142,7 @@ lint-frontend: frontend-deps  ## Type-check and lint the frontend
 
 test: test-go test-frontend test-scripts test-chart  ## Run all tests
 
-test-go:  ## Run Go tests with the race detector (pkg/cluster/... split over the CPUs; GO_TEST_SHARDS=1: one process)
+test-go:  ## Run Go tests with the race detector (test binaries side by side, a package with many tests in parts; GO_TEST_SHARDS=1: no parts)
 	sh scripts/test-go.sh
 
 test-frontend: frontend-deps  ## Run frontend tests

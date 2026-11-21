@@ -41,19 +41,33 @@ printf 'module example.com/fake\n\ngo 1.22\n' >"$REPO/go.mod"
 
 # package_with_tests DIR NAME SUBTESTS TEST...: a package whose tests
 # append their full names (subtests too) to $RAN, and fail when named in
-# $FAIL_TEST. With SUBTESTS=yes the first test has the subtests "sub" and
-# "other".
+# $FAIL_TEST (names separated by spaces). With $MEET set, the tests named
+# in it meet: each writes its name into the directory $MEET_DIR and waits
+# up to $MEET_SECONDS for the others', so they pass only when they run at
+# the same time. With SUBTESTS=yes the first test has the subtests "sub"
+# and "other".
 package_with_tests() {
 	dir=$1 name=$2 first=$3
 	shift 3
 	{
-		printf 'package %s\n\nimport (\n\t"os"\n\t"testing"\n)\n\n' "$name"
+		printf 'package %s\n\nimport (\n\t"os"\n\t"path/filepath"\n\t"strconv"\n\t"strings"\n\t"testing"\n\t"time"\n)\n\n' "$name"
 		printf 'func record(t *testing.T) {\n'
 		printf '\tf, err := os.OpenFile(os.Getenv("RAN"), os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)\n'
 		printf '\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n'
 		printf '\tdefer f.Close()\n'
 		printf '\tif _, err := f.WriteString(t.Name() + "\\n"); err != nil {\n\t\tt.Fatal(err)\n\t}\n'
-		printf '\tif os.Getenv("FAIL_TEST") == t.Name() {\n\t\tt.Fatal("failing as asked")\n\t}\n}\n'
+		printf '\tif strings.Contains(" "+os.Getenv("FAIL_TEST")+" ", " "+t.Name()+" ") {\n\t\tt.Fatal("failing as asked")\n\t}\n'
+		printf '\tif meet := strings.Fields(os.Getenv("MEET")); strings.Contains(" "+os.Getenv("MEET")+" ", " "+t.Name()+" ") {\n'
+		printf '\t\tdir := os.Getenv("MEET_DIR")\n'
+		printf '\t\tif err := os.WriteFile(filepath.Join(dir, t.Name()), nil, 0o644); err != nil {\n\t\t\tt.Fatal(err)\n\t\t}\n'
+		printf '\t\tsecs, _ := strconv.Atoi(os.Getenv("MEET_SECONDS"))\n'
+		printf '\t\tdeadline := time.Now().Add(time.Duration(secs) * time.Second)\n'
+		printf '\t\tfor _, other := range meet {\n'
+		printf '\t\t\tfor {\n'
+		printf '\t\t\t\tif _, err := os.Stat(filepath.Join(dir, other)); err == nil {\n\t\t\t\t\tbreak\n\t\t\t\t}\n'
+		printf '\t\t\t\tif time.Now().After(deadline) {\n\t\t\t\t\tt.Fatalf("%%s did not run at the same time", other)\n\t\t\t\t}\n'
+		printf '\t\t\t\ttime.Sleep(10 * time.Millisecond)\n'
+		printf '\t\t\t}\n\t\t}\n\t}\n}\n'
 		for t in "$@"; do
 			if [ "$first" = yes ]; then
 				printf '\nfunc %s(t *testing.T) {\n\trecord(t)\n' "$t"
@@ -82,14 +96,16 @@ TestB2
 TestB3
 TestOther1'
 
-# run NAME [FLAG...]: runs test-go.sh in 3 parts; $out is its output, $rc
-# its exit status, $ran the tests that ran (sorted, duplicates kept).
+# run NAME [FLAG...]: runs test-go.sh with each pkg/cluster package in 3
+# parts (a part per test at most: GO_TEST_PART_TESTS=1); $out is its
+# output, $rc its exit status, $ran the tests that ran (sorted, duplicates
+# kept). The caller may set GO_TEST_SHARDS and GO_TEST_JOBS.
 run() {
 	name=$1
 	shift
 	: >"$WORK/ran"
 	rc=0
-	out=$(RAN="$WORK/ran" GO_TEST_SHARDS=3 $SH "$REPO/scripts/test-go.sh" "$@" 2>&1) || rc=$?
+	out=$(RAN="$WORK/ran" GO_TEST_SHARDS=${GO_TEST_SHARDS:-3} GO_TEST_PART_TESTS=1 $SH "$REPO/scripts/test-go.sh" "$@" 2>&1) || rc=$?
 	ran=$(sort "$WORK/ran")
 }
 
@@ -97,7 +113,9 @@ run() {
 run all
 expect_eq "all: exit status" 0 "$rc"
 expect_eq "all: every test once" "$ALL" "$ran"
-expect_in "all: dealt across packages" "pkg/cluster/... (7 tests in 2 package(s)) in 3 process(es)" "$out"
+expect_in "all: the jobs" "3 package(s) with tests, as 7 process(es)" "$out"
+expect_in "all: the split packages" "split: example.com/fake/pkg/cluster/a (4 tests, 3 parts) example.com/fake/pkg/cluster/b (3 tests, 3 parts)" "$out"
+expect_in "all: a part's line" "example.com/fake/pkg/cluster/b	part 3 of 3, 1 tests" "$out"
 
 # A caller's -run filters every part of every package, not only the part
 # whose own selection it would replace. A file whose name the pattern
@@ -141,7 +159,43 @@ expect_eq "failing pkg/cluster test: every test ran once" "$ALL" "$ran"
 
 FAIL_TEST=TestOther1 run "failing other test"
 expect_eq "failing other test: exit status" 1 "$rc"
-expect_in "failing other test: the summary" "FAILED: other-packages" "$out"
+expect_in "failing other test: the failure" "--- FAIL: TestOther1" "$out"
+expect_in "failing other test: the summary" "FAILED: pkg/other" "$out"
+
+# Failures in two packages at once: both reported, every test still ran.
+FAIL_TEST="TestA3 TestOther1" run "failing tests in two packages"
+expect_eq "two failures: exit status" 1 "$rc"
+expect_in "two failures: the first" "--- FAIL: TestA3" "$out"
+expect_in "two failures: the second" "--- FAIL: TestOther1" "$out"
+expect_in "two failures: pkg/other named" "pkg/other" "$(printf '%s' "$out" | grep '^FAILED:')"
+expect_in "two failures: pkg/cluster/a named" "pkg/cluster/a-part-" "$(printf '%s' "$out" | grep '^FAILED:')"
+expect_eq "two failures: every test ran once" "$ALL" "$ran"
+
+# A variable set for a function call stays set after it (POSIX sh).
+unset FAIL_TEST
+
+# Test binaries run at the same time: TestA1 (pkg/cluster/a) and TestB1
+# (pkg/cluster/b) wait for each other. Two at a time, they meet; one at a
+# time (GO_TEST_JOBS=1) the first waits in vain and fails, which proves
+# the check can fail.
+mkdir "$WORK/meet1" "$WORK/meet2"
+MEET="TestA1 TestB1" MEET_DIR="$WORK/meet1" MEET_SECONDS=30 GO_TEST_SHARDS=1 GO_TEST_JOBS=2 run "two at a time"
+expect_eq "two at a time: exit status" 0 "$rc"
+[ "$rc" = 0 ] || printf '%s\n' "$out" >&2
+expect_eq "two at a time: every test once" "$ALL" "$ran"
+MEET="TestA1 TestB1" MEET_DIR="$WORK/meet2" MEET_SECONDS=1 GO_TEST_SHARDS=1 GO_TEST_JOBS=1 run "one at a time"
+expect_eq "one at a time: exit status" 1 "$rc"
+expect_in "one at a time: they did not meet" "did not run at the same time" "$out"
+
+unset MEET MEET_DIR MEET_SECONDS GO_TEST_SHARDS GO_TEST_JOBS
+
+# Two packages whose test binaries would share a name are refused.
+mkdir -p "$REPO/pkg/dup/a"
+package_with_tests pkg/dup/a a no TestDup
+run "same binary name"
+expect_eq "same binary name: exit status" 1 "$rc"
+expect_in "same binary name: says so" "several packages with tests end in: a" "$out"
+rm -r "$REPO/pkg/dup"
 
 # Not flags, and patterns in a separate argument, are refused.
 run "not a flag" -run TestA1
