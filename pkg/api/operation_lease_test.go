@@ -148,7 +148,7 @@ func TestLiveForeignLeaseRefusesWithTheRemoteOperation(t *testing.T) {
 	setupDevMode(t)
 	allowMutations(t)
 	f := installFakeRecord(t)
-	f.setLease(otherPodLease(time.Now().Add(-5 * time.Second)))
+	f.setLease(otherPodLease(clk.Now().Add(-5 * time.Second)))
 	ran := false
 	runUpdateDryRun = func(*cluster.Client, string) (*types.OperationResponse, error) {
 		ran = true
@@ -190,7 +190,7 @@ func TestLiveForeignLeaseRefusesWithTheRemoteOperation(t *testing.T) {
 func TestLeaseHeldElsewhere(t *testing.T) {
 	t.Setenv("HOSTNAME", "updater-new-pod")
 	setDevMode(t, false)
-	now := time.Now()
+	now := clk.Now() // the clock leaseHeldElsewhere compares heartbeats with
 	live := otherPodLease(now.Add(-10 * time.Second))
 	expired := otherPodLease(now.Add(-time.Minute))
 	ownProcess := otherPodLease(now)
@@ -228,7 +228,7 @@ func TestExpiredLeaseIsTakenOver(t *testing.T) {
 	setupDevMode(t)
 	allowMutations(t)
 	f := installFakeRecord(t)
-	f.setLease(otherPodLease(time.Now().Add(-2 * leaseTTL)))
+	f.setLease(otherPodLease(clk.Now().Add(-2 * leaseTTL)))
 	refreshResult(&types.OperationResponse{Success: true, Message: "refreshed"})
 	w := httptest.NewRecorder()
 	HandleRefreshStream(w, postJSON("/api/refresh/stream", "user:bob", "{}"))
@@ -395,10 +395,10 @@ func TestLeaseErrorPolicy(t *testing.T) {
 func TestOperationClassification(t *testing.T) {
 	setupDevMode(t)
 	t.Setenv("HOSTNAME", "updater-new-pod")
-	now := time.Now()
-	recent := now.Add(-time.Minute).UTC().Format(time.RFC3339)
-	live := otherPodLease(now.Add(-5 * time.Second))
-	expired := otherPodLease(now.Add(-2 * leaseTTL))
+	recent := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	beat := clk.Now() // lease heartbeats are on clk (leaseHeldElsewhere)
+	live := otherPodLease(beat.Add(-5 * time.Second))
+	expired := otherPodLease(beat.Add(-2 * leaseTTL))
 	markerOf := func(boot string) *types.OperationMarker {
 		return &types.OperationMarker{ID: "remote-op", Type: "update", Label: "Update to nightly", User: "alice", StartedAt: recent, Pod: "updater-old-pod", BootID: boot}
 	}
