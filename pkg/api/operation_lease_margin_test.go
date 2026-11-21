@@ -1,10 +1,16 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/clock/clocktest"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -159,4 +165,140 @@ func TestLeaseLostOneIntervalBeforeExpiryDuringAHangingRenewal(t *testing.T) {
 		t.Fatalf("%d successful lease writes, want the acquire only", len(f.writes))
 	}
 	requireHeartbeatAt(t, f.writes[0], stamped)
+}
+
+// lockedBuffer is a log sink that goroutines may write while the test reads.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) count(s string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return strings.Count(b.buf.String(), s)
+}
+
+// The deadline stops the operation by itself: a renewal write that hangs
+// and ignores its context (the deadline cancels it) does not keep the
+// operation running. When that write later returns, even with success, the
+// lease stays lost, and the stop is reported once.
+func TestLeaseLostAtTheDeadlineWhileARenewalIgnoresItsContext(t *testing.T) {
+	setupDevMode(t)
+	allowMutations(t)
+	f := installFakeRecord(t)
+	logs := &lockedBuffer{}
+	orig := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(orig) })
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
+	leaseHeartbeatInterval, leaseTTL = 10*time.Second, 45*time.Second
+	entered, release, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	inner := writeOperationLease
+	writeOperationLease = func(c *cluster.Client, l *types.OperationLease, held func(*types.OperationLease) bool) (*types.OperationLease, error) {
+		holder, err := inner(c, l, held) // succeeds: the write goes through, but answers late
+		f.mu.Lock()
+		n := f.attempts
+		f.mu.Unlock()
+		if n == 2 { // the first renewal hangs until released, whatever its context does
+			defer close(returned)
+			close(entered)
+			<-release
+		}
+		return holder, err
+	}
+	// Refresh reports the stop, then waits to return until the test lets it,
+	// so the heartbeat is not stopped by the operation's end meanwhile.
+	started, cause, finish := make(chan struct{}), make(chan error, 1), make(chan struct{})
+	runRefreshStream = func(c *cluster.Client, _ cluster.OperationOptions, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		emit(cluster.UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Waiting"})
+		close(started)
+		<-c.Context().Done()
+		cause <- context.Cause(c.Context())
+		<-finish
+		return &types.OperationResponse{Success: false, Message: "stopped"}, c.Context().Err()
+	}
+	done := runRefreshInBackground()
+	<-started
+	stamped := testClock.Now()
+	testClock.Advance(leaseHeartbeatInterval) // the first renewal starts and hangs
+	<-entered
+	testClock.Advance(stamped.Add(leaseLossAfter()).Sub(testClock.Now()))
+	// Blocks until the operation stops (no real-time bound, see above);
+	// release is still open, so the write has not returned.
+	if err := <-cause; !errors.Is(err, cluster.ErrOperationLockLost) {
+		t.Fatalf("cause %v", err)
+	}
+	if !testClock.Now().Equal(stamped.Add(leaseLossAfter())) {
+		t.Fatalf("clock moved to %s", testClock.Now())
+	}
+	close(release)
+	<-returned
+	testClock.WaitForTicksHandled() // the heartbeat handled the late result and stopped its ticker
+	if n := logs.count("operation stopped"); n != 1 {
+		t.Fatalf("the stop was reported %d times, want once", n)
+	}
+	if !heartbeatStopped() {
+		t.Fatal("the operation is not marked as having lost its lock")
+	}
+	close(finish)
+	<-done
+	if last := inflight.lastCompleted(); last == nil || last.Success || last.Message != cluster.LockLostMessage {
+		t.Fatalf("lastCompleted %+v", last)
+	}
+	if leases.stop() != nil {
+		t.Fatal("the heartbeat is still registered after the operation ended")
+	}
+}
+
+// Lease heartbeats are whole seconds (RFC 3339): one stamped at x.7s reads
+// as x.0s to every pod. The holder's deadline follows that truncated
+// heartbeat, so it never stops later than one interval before the other
+// pods count the lease as expired (cluster.LeaseLive).
+func TestLeaseDeadlineFollowsTheHeartbeatTruncatedToTheSecond(t *testing.T) {
+	setupDevMode(t)
+	allowMutations(t)
+	f := installFakeRecord(t)
+	leaseHeartbeatInterval, leaseTTL = 10*time.Second, 45*time.Second
+	testClock.Advance(700 * time.Millisecond) // every stamp below falls at .7s
+	started, cause, _ := refreshUntilStopped()
+	done := runRefreshInBackground()
+	<-started
+	f.beat(t) // the renewal at 10.7s succeeds: heartbeatAt 10s
+	f.mu.Lock()
+	f.failNext = 1 << 30
+	last := f.writes[len(f.writes)-1]
+	f.mu.Unlock()
+	beat, err := cluster.LeaseHeartbeat(&last)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := clocktest.Epoch.Add(10 * time.Second); !beat.Equal(want) {
+		t.Fatalf("heartbeat %s, want %s (the stamp at 10.7s truncated)", beat, want)
+	}
+	margin := leaseTTL - leaseLossAfter()
+	stopBy := beat.Add(leaseLossAfter()) // 45s, not 45.7s
+	// Other pods count the lease as expired exactly margin after stopBy.
+	if !cluster.LeaseLive(&last, stopBy.Add(margin-time.Nanosecond), leaseTTL) || cluster.LeaseLive(&last, stopBy.Add(margin), leaseTTL) {
+		t.Fatalf("the lease does not expire at %s", stopBy.Add(margin))
+	}
+	for range 3 { // renewals at 20.7s, 30.7s and 40.7s fail
+		f.beat(t)
+		requireNotStopped(t)
+	}
+	stepTo(stopBy)
+	// Blocks until the operation stops (see above). Stopping later, at
+	// 45.7s (the untruncated stamp + 35s), would hang here.
+	if err := <-cause; !errors.Is(err, cluster.ErrOperationLockLost) {
+		t.Fatalf("cause %v", err)
+	}
+	<-done
+	if !testClock.Now().Equal(stopBy) {
+		t.Fatalf("clock moved to %s", testClock.Now())
+	}
 }

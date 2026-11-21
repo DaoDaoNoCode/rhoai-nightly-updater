@@ -28,6 +28,11 @@ type Fake struct {
 	sleepers int
 	pending  int           // tickers with a tick their reader has not handled
 	changed  chan struct{} // closed and replaced when sleepers or pending changes
+
+	// beforeFire, when set (by this package's tests), runs where advance
+	// has released the lock and is about to run a due timer's callback:
+	// what another goroutine may do in that window.
+	beforeFire func()
 }
 
 type timer struct {
@@ -208,6 +213,9 @@ func (f *Fake) advance(target time.Time, stop func() bool) {
 			}
 		}
 		f.mu.Unlock()
+		if f.beforeFire != nil {
+			f.beforeFire()
+		}
 		next.fire()
 		if stop != nil && stop() {
 			return
@@ -244,9 +252,14 @@ func (f *Fake) NewTicker(d time.Duration) clock.Ticker {
 	ft.t = f.addTimer(f.Now().Add(d), d, func() {
 		// The send and the pending mark happen under the lock that C()
 		// takes, so a reader that handles the tick at once cannot come back
-		// for the next one before the tick counts as pending.
+		// for the next one before the tick counts as pending. advance
+		// runs this after releasing the lock: a Stop in between wins, as
+		// time.Ticker.Stop does ("no more ticks will be sent").
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		if ft.stopped {
+			return
+		}
 		select {
 		case ft.c <- f.now:
 			ft.setPendingLocked(true)
@@ -261,6 +274,7 @@ type fakeTicker struct {
 	t       *timer
 	c       chan time.Time
 	pending bool // a tick was delivered and the reader has not come back for the next one; guarded by f.mu
+	stopped bool // guarded by f.mu
 }
 
 // C returns the tick channel. A call with the channel empty means the
@@ -278,6 +292,7 @@ func (t *fakeTicker) C() <-chan time.Time {
 func (t *fakeTicker) Stop() {
 	t.f.mu.Lock()
 	defer t.f.mu.Unlock()
+	t.stopped = true
 	delete(t.f.timers, t.t)
 	t.setPendingLocked(false)
 }
