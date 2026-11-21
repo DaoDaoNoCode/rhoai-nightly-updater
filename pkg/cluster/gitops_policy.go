@@ -115,13 +115,13 @@ func gitOpsSubscriptionProblem(namespace, name string, spec map[string]any, allo
 }
 
 // subscriptionSpec returns obj's spec (nil when it has none). obj may be a
-// decoded object or one built by buildSubscription.
+// decoded object or one built by operator.BuildSubscription.
 func subscriptionSpec(obj map[string]any) map[string]any {
 	spec, _ := obj["spec"].(map[string]any)
 	if spec == nil {
 		return nil
 	}
-	// Normalise typed values (buildSubscription copies decoded JSON, but a
+	// Normalise typed values (operator.BuildSubscription copies decoded JSON, but a
 	// test or a caller may hold []map[string]interface{}): compare what the
 	// API server would see.
 	data, err := json.Marshal(spec)

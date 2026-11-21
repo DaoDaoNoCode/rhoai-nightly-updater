@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -304,7 +305,7 @@ func TestReinstallWebhookCleanup_DeletesOnlyStaleConfigsWithPreconditions(t *tes
 	f.status("DELETE", mwcPath+"/kuberay-mutating-webhook-configuration", http.StatusInternalServerError, "InternalError")
 
 	var logs []string
-	removed := cleanupStaleWebhooksForReinstall(c, &logs)
+	removed := operator.CleanupStaleWebhooksForReinstall(c, &logs)
 	if removed != 1 {
 		t.Fatalf("removed = %d, logs = %v", removed, logs)
 	}
@@ -325,7 +326,7 @@ func TestReinstallWebhookCleanup_SkippedDuringAnInstall(t *testing.T) {
 	f, c := newFakeAPI(t)
 	serveWebhooks(f, []whFixture{{name: "dsci.opendatahub.io-gone", labels: olmOwned("rhods-operator.3.5.0"), services: []string{rhoai.SubNS + "/gone"}}}, "Installing", nil, nil)
 	var logs []string
-	if removed := cleanupStaleWebhooksForReinstall(c, &logs); removed != 0 || !strings.Contains(strings.Join(logs, "\n"), "install is in progress") {
+	if removed := operator.CleanupStaleWebhooksForReinstall(c, &logs); removed != 0 || !strings.Contains(strings.Join(logs, "\n"), "install is in progress") {
 		t.Fatalf("removed=%d logs=%v", removed, logs)
 	}
 	assertWrites(t, f)

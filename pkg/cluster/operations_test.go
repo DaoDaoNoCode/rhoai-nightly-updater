@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -518,7 +519,7 @@ func TestDetectNightlyChannel(t *testing.T) {
 			})
 			defer cleanup()
 
-			got, _ := detectNightlyChannel(client, "")
+			got, _ := operator.DetectNightlyChannel(client, "")
 			if got != tt.want {
 				t.Errorf("detectNightlyChannel() = %q, want %q", got, tt.want)
 			}
@@ -535,7 +536,7 @@ func TestDetectNightlyChannel_APIError(t *testing.T) {
 	})
 	defer cleanup()
 
-	got, err := detectNightlyChannel(client, "")
+	got, err := operator.DetectNightlyChannel(client, "")
 	if got != "" {
 		t.Errorf("detectNightlyChannel() on API error = %q, want empty string", got)
 	}
@@ -1604,7 +1605,7 @@ func TestUpdateStream(t *testing.T) {
 		mu.Unlock()
 	}
 
-	result, err := UpdateStream(client, testImage, emit)
+	result, err := operator.UpdateStream(client, testImage, emit)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1820,7 +1821,7 @@ func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
 		mu.Unlock()
 	}
 
-	result, _ := UpdateStream(client, testImage, emit)
+	result, _ := operator.UpdateStream(client, testImage, emit)
 
 	// The operation should fail (either context cancelled or timeout)
 	if result.Success {

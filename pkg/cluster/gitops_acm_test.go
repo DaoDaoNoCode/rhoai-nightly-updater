@@ -7,6 +7,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -155,9 +156,7 @@ func TestUpdateGitOpsProfile_RefusesACatalogNobodyManages(t *testing.T) {
 }
 
 func TestUpdateDryRunGitOpsProfile_ACMManagedCatalog(t *testing.T) {
-	orig := lookupTargetBundle
-	t.Cleanup(func() { lookupTargetBundle = orig })
-	lookupTargetBundle = func(*Client, string) (string, error) { return gitOpsCSV, nil }
+	t.Cleanup(operator.SetLookupTargetBundleForTest(func(*Client, string) (string, error) { return gitOpsCSV, nil }))
 
 	f := servesGitOpsPolicy(t, acmFake(t))
 	result, err := UpdateDryRunGitOpsProfile(f.client(context.Background()), gitOpsImage)
@@ -188,14 +187,14 @@ func TestUpdateFullProfile_ACMManagedCatalog(t *testing.T) {
 			f := acmFake(t)
 			setup(f)
 			csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
-			result, err := UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
+			result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 			if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, gitOpsImage) {
 				t.Fatalf("another image: result=%+v err=%v", result, err)
 			}
 			if w := f.writes(); len(w) != 0 {
 				t.Fatalf("writes = %v", w)
 			}
-			result, err = UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+			result, err = operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 			if err != nil || !result.Success {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
@@ -208,9 +207,7 @@ func TestUpdateFullProfile_ACMManagedCatalog(t *testing.T) {
 				t.Fatalf("logs do not name the ACM policy: %v", result.Logs)
 			}
 
-			orig := lookupTargetBundle
-			t.Cleanup(func() { lookupTargetBundle = orig })
-			lookupTargetBundle = func(*Client, string) (string, error) { return gitOpsCSV, nil }
+			t.Cleanup(operator.SetLookupTargetBundleForTest(func(*Client, string) (string, error) { return gitOpsCSV, nil }))
 			before := len(f.requests)
 			dry, err := Update(f.client(context.Background()), gitOpsImage, true)
 			if err != nil || !dry.Success || !strings.Contains(strings.Join(dry.Logs, "\n"), "left as the ACM policy sets it") {
@@ -254,7 +251,7 @@ func TestCatalogImageChangedNamesTheManager(t *testing.T) {
 		{CatalogACM: true}:                   "most likely by an " + acmManagerText + " enforcing a change",
 		{SubscriptionApp: "s"}:               `most likely by Argo CD application "s" syncing a change from Git`,
 	} {
-		if got := (&errCatalogImageChanged{by: g.CatalogChanger(), image: "img"}).Error(); !strings.Contains(got, want) {
+		if got := (&operator.CatalogImageChangedError{By: g.CatalogChanger(), Image: "img"}).Error(); !strings.Contains(got, want) {
 			t.Errorf("%+v: %q lacks %q", g, got, want)
 		}
 	}

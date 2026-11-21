@@ -9,6 +9,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -133,7 +134,7 @@ func TestUpdateGitOpsProfile_RefusesADashboardDevSession(t *testing.T) {
 	f := servesGitOpsPolicy(t, gitOpsFake(t))
 	f.dashboardOp = `{"metadata":{"uid":"u1","annotations":{"` + dashdev.SessionAnnotation + `":"{}"}},"spec":{"replicas":0}}`
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != errorCodeDashboardDevActive || !strings.Contains(result.Message, "full profile") || !strings.Contains(result.Message, "scale Deployment "+fixtureAppsNS+"/"+fixtureOperatorName+" back up") {
+	if err != nil || result.Success || result.ErrorCode != operator.ErrorCodeDashboardDevActive || !strings.Contains(result.Message, "full profile") || !strings.Contains(result.Message, "scale Deployment "+fixtureAppsNS+"/"+fixtureOperatorName+" back up") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	if w := f.writes(); len(w) != 0 {
@@ -155,9 +156,7 @@ func TestUpdateGitOpsProfile_RefusesAnotherImage(t *testing.T) {
 
 // The gitops profile's dry run makes no change and refuses what Update would.
 func TestUpdateDryRunGitOpsProfile(t *testing.T) {
-	orig := lookupTargetBundle
-	t.Cleanup(func() { lookupTargetBundle = orig })
-	lookupTargetBundle = func(*Client, string) (string, error) { return gitOpsCSV, nil }
+	t.Cleanup(operator.SetLookupTargetBundleForTest(func(*Client, string) (string, error) { return gitOpsCSV, nil }))
 
 	f := servesGitOpsPolicy(t, gitOpsFake(t))
 	result, err := UpdateDryRunGitOpsProfile(f.client(context.Background()), gitOpsImage)

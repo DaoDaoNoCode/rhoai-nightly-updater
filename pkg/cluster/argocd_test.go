@@ -8,6 +8,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -555,9 +556,7 @@ func TestOperatorOperationsUnderLabelTracking(t *testing.T) {
 // Update with a left-over annotation is the plain Update: it may install
 // any build (it writes the catalog), not only the one Git's catalog serves.
 func TestUpdateWithLeftOverArgoCDTracking(t *testing.T) {
-	oldLookup := lookupTargetBundle
-	t.Cleanup(func() { lookupTargetBundle = oldLookup })
-	lookupTargetBundle = func(*Client, string) (string, error) { return gitOpsCSV, nil }
+	t.Cleanup(operator.SetLookupTargetBundleForTest(func(*Client, string) (string, error) { return gitOpsCSV, nil }))
 	f := gitOpsFake(t)
 	f.argo = &fakeArgoCD{}
 	result, err := Update(f.client(context.Background()), testNightlyImage, true)

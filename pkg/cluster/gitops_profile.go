@@ -12,6 +12,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/node"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -19,7 +20,7 @@ import (
 
 // UpdateStreamGitOpsProfile is Update in the gitops profile, the profile the
 // Helm chart runs on clusters where Argo CD manages RHOAI. It runs only
-// Update's Argo CD path (updateUnderGitOps): install the build the catalog
+// Update's Argo CD path (operator.UpdateUnderGitOps): install the build the catalog
 // Git manages serves, with the steps and checks Update uses there, and
 // nothing that the profile's RBAC (deploy/rbac-gitops.yaml) leaves out:
 //
@@ -50,11 +51,11 @@ import (
 // and compares it with deploy/rbac-gitops.yaml.
 func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEvent)) (result *types.OperationResponse, opErr error) {
 	logs := []string{}
-	tracker := &stepTracker{emit: emit}
-	emit = tracker.send
-	var recovery *operatorRecovery
+	tracker := &operator.StepTracker{Emit: emit}
+	emit = tracker.Send
+	var recovery *operator.Recovery
 	defer func() {
-		tracker.finish(c, &result, &opErr, logs, recovery, func(ok bool, reason string) { recordUpdateActivity(c, image, ok, reason) })
+		tracker.Finish(c, &result, &opErr, logs, recovery, func(ok bool, reason string) { operator.RecordUpdateActivity(c, image, ok, reason) })
 	}()
 	fail := func(msg, code string) (*types.OperationResponse, error) {
 		logs = append(logs, msg)
@@ -75,17 +76,17 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	}
 	logs = append(logs, fmt.Sprintf("OK: %s manages CatalogSource %s", kube.SentenceStart(g.CatalogManager()), rhoai.CatalogName))
 
-	active, operator, err := dashdev.ActiveOperator(c)
+	active, dashOperator, err := dashdev.ActiveOperator(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Cannot check for a Dashboard Dev session: %v. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	if active {
 		end := "end it with the full profile"
-		if operator != "" {
-			end += ", or scale Deployment " + operator + " back up"
+		if dashOperator != "" {
+			end += ", or scale Deployment " + dashOperator + " back up"
 		}
-		return fail("A Dashboard Dev session is active ("+dashdev.PausedOperatorText(operator)+"), and Update would keep the dashboard paused under the new operator. "+
-			"The gitops profile cannot end the session: "+end+". Nothing was changed.", errorCodeDashboardDevActive)
+		return fail("A Dashboard Dev session is active ("+dashdev.PausedOperatorText(dashOperator)+"), and Update would keep the dashboard paused under the new operator. "+
+			"The gitops profile cannot end the session: "+end+". Nothing was changed.", operator.ErrorCodeDashboardDevActive)
 	}
 
 	// No pull secret read: the profile reads no Secret and contacts no
@@ -113,7 +114,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 		return fail("Cannot identify installed CSV: "+csvCheckErr.Error(), kube.ErrorCodeOr(csvCheckErr, "prerequisites"))
 	}
 
-	gitOps, channelOverride, gitOpsProblem, gitOpsErr := updateGitOpsPlan(c, image, currentCSV, &logs)
+	gitOps, channelOverride, gitOpsProblem, gitOpsErr := operator.PlanGitOpsUpdate(c, image, currentCSV, &logs)
 	if gitOpsErr != nil {
 		return fail("Cannot check whether Argo CD manages the operator: "+gitOpsErr.Error()+". Nothing was changed.", kube.ErrorCodeFromK8sErr(gitOpsErr))
 	}
@@ -135,7 +136,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Waiting for the catalog " + from + " manages to serve the build..."})
 	target, preflightErr := liveCatalogTarget(c, image, channelOverride, gitOps.CatalogChanger(), emit, &logs)
 	if preflightErr != nil {
-		var changed *errCatalogImageChanged
+		var changed *operator.CatalogImageChangedError
 		switch {
 		case c.Context().Err() != nil:
 			return &types.OperationResponse{Success: false, Message: "Operation stopped while waiting for the catalog", Logs: logs}, c.Context().Err()
@@ -151,24 +152,24 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 		return fail("The catalog "+from+" manages does not serve a usable build: "+preflightErr.Error()+". Nothing was changed."+hint, "validation")
 	}
 	logs = append(logs, fmt.Sprintf("OK: The catalog serves %s on channel %s", target.HeadCSV, target.Channel))
-	blocked, note := downgradeCheck(currentCSV, registry.TagFromRef(image), target.HeadCSV)
+	blocked, note := operator.DowngradeCheck(currentCSV, registry.TagFromRef(image), target.HeadCSV)
 	if note != "" {
 		logs = append(logs, note)
 	}
 	if blocked != "" {
 		return fail(blocked, "validation")
 	}
-	captured, recoveryErr := captureOperatorRecovery(c)
+	captured, recoveryErr := operator.CaptureRecovery(c)
 	if recoveryErr != nil {
 		return fail(recoveryErr.Error()+". Nothing was changed.", kube.ErrorCodeOr(recoveryErr, "prerequisites"))
 	}
-	if blocked := foreignSubscriptionRefusal(c); blocked != "" {
+	if blocked := operator.ForeignSubscriptionRefusal(c); blocked != "" {
 		return fail(blocked, "prerequisites")
 	}
 	// The admission policy must allow what Update writes back: the new
 	// Subscription and, on failure, the previous one (checked again on the
 	// live Subscription right before the first deletion).
-	if msg := gitOpsSubscriptionsProblem(buildSubscription(captured.subscriptionBase(), rhoai.CatalogName, target.Channel), captured.subscription); msg != "" {
+	if msg := gitOpsSubscriptionsProblem(operator.BuildSubscription(captured.SubscriptionBase(), rhoai.CatalogName, target.Channel), captured.Subscription); msg != "" {
 		return fail(msg+" Nothing was changed.", kube.ErrorCodeProfileGitOps)
 	}
 	emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "success", Message: "Prerequisites validated"})
@@ -185,10 +186,10 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	}
 
 	recovery = captured
-	if note := captured.recordedNote(); note != "" {
+	if note := captured.RecordedNote(); note != "" {
 		logs = append(logs, note)
 	}
-	return updateUnderGitOps(c, image, target, currentCSV, gitOps, recovery, &logs, emit, fail, gitOpsWriteProblem(c), rhoai.GitOpsProfilePullAdvice)
+	return operator.UpdateUnderGitOps(c, image, target, currentCSV, gitOps, recovery, &logs, emit, fail, gitOpsWriteProblem(c), rhoai.GitOpsProfilePullAdvice)
 }
 
 // gitOpsWriteProblem is Update's check before each deletion in the gitops
@@ -213,7 +214,7 @@ func gitOpsWriteProblem(c *Client) func(newSub, restoreSub map[string]any) strin
 // UpdateDryRunGitOpsProfile is Update's dry run in the gitops profile: the
 // checks UpdateStreamGitOpsProfile makes before its first change, with
 // reads only. Update's own dry run cannot be used there: it reaches the
-// namespace and OperatorGroup creation (ensureOperatorNamespaceAndGroup)
+// namespace and OperatorGroup creation (operator.EnsureNamespaceAndGroup)
 // and the server-side dry-run apply of the catalog, which the profile's
 // RBAC does not grant.
 func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationResponse, error) {
@@ -251,19 +252,19 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 	if err != nil {
 		return fail("Cannot identify installed CSV: "+err.Error(), kube.ErrorCodeOr(err, "prerequisites"))
 	}
-	planned, channelOverride, problem, err := updateGitOpsPlan(c, image, currentCSV, &logs)
+	planned, channelOverride, problem, err := operator.PlanGitOpsUpdate(c, image, currentCSV, &logs)
 	if err != nil {
 		return fail("Cannot check whether Argo CD manages the operator: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 	}
 	if problem != "" {
 		return fail(problem, kube.ErrorCodeGitOpsManaged)
 	}
-	live, found, err := readSubscriptionObject(c)
+	live, found, err := operator.ReadSubscriptionObject(c)
 	if err != nil {
 		return fail("Cannot read the Subscription: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 	}
 	if found {
-		if msg := gitOpsSubscriptionsProblem(buildSubscription(live, rhoai.CatalogName, kube.NonEmpty(channelOverride, "unknown")), live); msg != "" {
+		if msg := gitOpsSubscriptionsProblem(operator.BuildSubscription(live, rhoai.CatalogName, kube.NonEmpty(channelOverride, "unknown")), live); msg != "" {
 			return fail(msg, kube.ErrorCodeProfileGitOps)
 		}
 		logs = append(logs, "OK: The admission policy allows recreating the Subscription and restoring it")
@@ -277,7 +278,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 	} else {
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] Note: the catalog does not serve this build yet (%s), so the version check uses the release tag; Update waits for the catalog and checks the version it serves", problem))
 	}
-	blocked, note := downgradeCheck(currentCSV, registry.TagFromRef(image), bundle)
+	blocked, note := operator.DowngradeCheck(currentCSV, registry.TagFromRef(image), bundle)
 	if note != "" {
 		logs = append(logs, note)
 	}
@@ -318,12 +319,12 @@ const gitOpsProfileUnmanagedCatalog = "This updater runs the gitops profile, whi
 // Update reports and recovers from like any failed install (the restore).
 const gitOpsProfileNoPullSecret = "Pull secret: not read. The gitops profile pulls with the cluster's own pull secrets, which Git or ACM manage here, and does not check them"
 
-// checkOperatorNamespaceAndGroup is ensureOperatorNamespaceAndGroup without
+// checkOperatorNamespaceAndGroup is operator.EnsureNamespaceAndGroup without
 // the creating half: in the gitops profile Git creates the operator
 // namespace and its OperatorGroup, so a missing one is a refusal. It returns
 // the log line, or the problem and its error code.
 func checkOperatorNamespaceAndGroup(c *Client) (ok, problem, errorCode string) {
-	nsMissing, groups, problem, errorCode := readOperatorNamespaceAndGroups(c)
+	nsMissing, groups, problem, errorCode := operator.ReadNamespaceAndGroups(c)
 	switch {
 	case problem != "":
 		return "", problem, errorCode
@@ -332,7 +333,7 @@ func checkOperatorNamespaceAndGroup(c *Client) (ok, problem, errorCode string) {
 	case len(groups) == 0:
 		return "", fmt.Sprintf("Namespace %s has no OperatorGroup. The gitops profile does not create one: define a global OperatorGroup in Git. Nothing was changed.", rhoai.SubNS), "prerequisites"
 	}
-	ok, problem = operatorGroupsUsable(groups)
+	ok, problem = operator.GroupsUsable(groups)
 	if problem != "" {
 		return "", problem, "prerequisites"
 	}
@@ -346,7 +347,7 @@ func checkOperatorNamespaceAndGroup(c *Client) (ok, problem, errorCode string) {
 // conditions waitForCatalogServing uses), then reads the channel's head and
 // build from that catalog's PackageManifest. The channel is override (Git's)
 // or the one the image's release publishes. A change of the catalog image
-// meanwhile returns an *errCatalogImageChanged (by changedBy); a failing
+// meanwhile returns an *operator.CatalogImageChangedError (by changedBy); a failing
 // pull a *catalogImagePullError.
 //
 // Unlike a fresh verification catalog, the PackageManifest of a catalog
@@ -363,7 +364,7 @@ func liveCatalogTarget(c *Client, image, override, changedBy string, emit func(U
 		target, problem, changedTo := liveCatalogTargetOnce(c, image, override)
 		switch {
 		case changedTo != "":
-			return catalog.Target{}, &errCatalogImageChanged{by: changedBy, image: changedTo}
+			return catalog.Target{}, &operator.CatalogImageChangedError{By: changedBy, Image: changedTo}
 		case problem == "":
 			return target, nil
 		}
@@ -399,7 +400,7 @@ func liveCatalogTargetOnce(c *Client, image, override string) (target catalog.Ta
 	case cs.State != "READY":
 		return catalog.Target{}, "catalog state " + kube.NonEmpty(cs.State, "unknown"), ""
 	}
-	ready, stale, ok := readCatalogPods(c, image)
+	ready, stale, ok := operator.ReadCatalogPods(c, image)
 	switch {
 	case !ok:
 		return catalog.Target{}, "cannot read the catalog pods", ""

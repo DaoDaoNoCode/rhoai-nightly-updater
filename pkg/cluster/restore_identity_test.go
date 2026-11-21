@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -43,15 +44,15 @@ func TestRestore_OperationRemovedCSV_DeletesOnlyTheAttemptsCSV(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"channel": "fast"})
 	f.addCSV("rhods-operator.3.5.0", "Replacing")
 	c := f.client(context.Background())
-	r, err := captureOperatorRecovery(c)
+	r, err := operator.CaptureRecovery(c)
 	if err != nil {
 		t.Fatal(err)
 	}
 	keptUID := csvUID(f, "rhods-operator.3.5.0")
 	// The operation deletes the installed CSV, then the attempt installs a
 	// new one that fails.
-	r.subscriptionChanged = true
-	r.noteCSVRemoved("rhods-operator.3.6.0")
+	r.SubscriptionChanged = true
+	r.NoteCSVRemoved("rhods-operator.3.6.0")
 	f.mu.Lock()
 	delete(f.csvs, "rhods-operator.3.6.0")
 	f.addCSV("rhods-operator.3.6.1", "Failed")
@@ -59,8 +60,8 @@ func TestRestore_OperationRemovedCSV_DeletesOnlyTheAttemptsCSV(t *testing.T) {
 	newUID := csvUID(f, "rhods-operator.3.6.1")
 
 	emit, events := eventsRecorder()
-	r.restore(c, &types.OperationResponse{Message: "failed"}, emit)
-	if lastStatus(events(), restoreStepName) != "success" {
+	r.Restore(c, &types.OperationResponse{Message: "failed"}, emit)
+	if lastStatus(events(), operator.RestoreStepName) != "success" {
 		t.Fatalf("restore: %v", events())
 	}
 	dels := csvDeletes(f)
@@ -76,23 +77,21 @@ func TestRestore_OperationRemovedCSV_DeletesOnlyTheAttemptsCSV(t *testing.T) {
 // waited for (OLM cannot reinstall that name until it is gone), with its own
 // UID as the precondition; the other pre-existing CSV is kept.
 func TestRestore_OperationRemovedCSVStillTerminatingIsWaitedFor(t *testing.T) {
-	oldDel := CSVDeletionTimeout
-	CSVDeletionTimeout = 50 * time.Millisecond
-	t.Cleanup(func() { CSVDeletionTimeout = oldDel })
+	t.Cleanup(operator.SetCSVDeletionTimeoutForTest(50 * time.Millisecond))
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 	f.addCSV("rhods-operator.3.5.0", "Replacing")
 	c := f.client(context.Background())
-	r, _ := captureOperatorRecovery(c)
+	r, _ := operator.CaptureRecovery(c)
 	removedUID := csvUID(f, "rhods-operator.3.6.0")
-	r.subscriptionChanged = true
-	r.noteCSVRemoved("rhods-operator.3.6.0")
+	r.SubscriptionChanged = true
+	r.NoteCSVRemoved("rhods-operator.3.6.0")
 	f.mu.Lock()
 	f.stuckCSVs["rhods-operator.3.6.0"] = true
 	f.mu.Unlock()
 
 	result := &types.OperationResponse{}
 	emit, _ := eventsRecorder()
-	r.restore(c, result, emit)
+	r.Restore(c, result, emit)
 	dels := csvDeletes(f)
 	if len(dels) != 1 || dels["rhods-operator.3.6.0"] != removedUID {
 		t.Fatalf("CSV deletes = %v, want only rhods-operator.3.6.0 with uid %s", dels, removedUID)
@@ -108,8 +107,8 @@ func TestRestore_ObjectsReplacedMeanwhileAreNotDeleted(t *testing.T) {
 	t.Run("CSV", func(t *testing.T) {
 		f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 		c := f.client(context.Background())
-		r, _ := captureOperatorRecovery(c)
-		r.subscriptionChanged = true
+		r, _ := operator.CaptureRecovery(c)
+		r.SubscriptionChanged = true
 		f.mu.Lock()
 		f.addCSV("rhods-operator.3.6.1", "Failed")
 		f.intercept = func(f *fakeOLM, _ http.ResponseWriter, req *http.Request) bool {
@@ -122,19 +121,19 @@ func TestRestore_ObjectsReplacedMeanwhileAreNotDeleted(t *testing.T) {
 		f.mu.Unlock()
 		result := &types.OperationResponse{}
 		emit, events := eventsRecorder()
-		r.restore(c, result, emit)
+		r.Restore(c, result, emit)
 		if csvUID(f, "rhods-operator.3.6.1") != "admin-uid" {
 			t.Fatal("the replaced CSV was deleted")
 		}
-		if lastStatus(events(), restoreStepName) != "failed" || !strings.Contains(result.Message, "was replaced by another one") {
+		if lastStatus(events(), operator.RestoreStepName) != "failed" || !strings.Contains(result.Message, "was replaced by another one") {
 			t.Fatalf("events=%v message=%q", events(), result.Message)
 		}
 	})
 	t.Run("Subscription", func(t *testing.T) {
 		f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"channel": "fast"})
 		c := f.client(context.Background())
-		r, _ := captureOperatorRecovery(c)
-		r.subscriptionChanged = true
+		r, _ := operator.CaptureRecovery(c)
+		r.SubscriptionChanged = true
 		f.mu.Lock()
 		f.intercept = func(f *fakeOLM, _ http.ResponseWriter, req *http.Request) bool {
 			if req.Method == http.MethodDelete && strings.HasSuffix(req.URL.Path, "/subscriptions/"+rhoai.SubName) {
@@ -146,13 +145,13 @@ func TestRestore_ObjectsReplacedMeanwhileAreNotDeleted(t *testing.T) {
 		f.mu.Unlock()
 		result := &types.OperationResponse{}
 		emit, events := eventsRecorder()
-		r.restore(c, result, emit)
+		r.Restore(c, result, emit)
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		if f.sub == nil || f.sub["metadata"].(map[string]any)["uid"] != "admin-sub" || f.sub["spec"].(map[string]any)["channel"] != "admin-channel" {
 			t.Fatalf("the replaced Subscription was deleted or overwritten: %v", f.sub)
 		}
-		if lastStatus(events(), restoreStepName) != "failed" || !strings.Contains(result.Message, "Subscription was replaced by someone else") {
+		if lastStatus(events(), operator.RestoreStepName) != "failed" || !strings.Contains(result.Message, "Subscription was replaced by someone else") {
 			t.Fatalf("events=%v message=%q", events(), result.Message)
 		}
 	})
@@ -163,10 +162,10 @@ func TestRestore_ObjectsReplacedMeanwhileAreNotDeleted(t *testing.T) {
 func TestRestore_ListFailureFallsBackToUIDGuardedDeletes(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 	c := f.client(context.Background())
-	r, _ := captureOperatorRecovery(c)
-	r.subscriptionChanged = true
-	r.noteAttemptCSV("rhods-operator.3.6.1")
-	r.noteAttemptCSV("rhods-operator.3.6.0") // existed before: kept
+	r, _ := operator.CaptureRecovery(c)
+	r.SubscriptionChanged = true
+	r.NoteAttemptCSV("rhods-operator.3.6.1")
+	r.NoteAttemptCSV("rhods-operator.3.6.0") // existed before: kept
 	f.mu.Lock()
 	f.addCSV("rhods-operator.3.6.1", "Failed")
 	f.intercept = func(_ *fakeOLM, w http.ResponseWriter, req *http.Request) bool {
@@ -181,7 +180,7 @@ func TestRestore_ListFailureFallsBackToUIDGuardedDeletes(t *testing.T) {
 	newUID := csvUID(f, "rhods-operator.3.6.1")
 	result := &types.OperationResponse{}
 	emit, _ := eventsRecorder()
-	r.restore(c, result, emit)
+	r.Restore(c, result, emit)
 	dels := csvDeletes(f)
 	if len(dels) != 1 || dels["rhods-operator.3.6.1"] != newUID {
 		t.Fatalf("CSV deletes = %v, want only rhods-operator.3.6.1 with uid %s", dels, newUID)

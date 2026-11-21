@@ -1,4 +1,4 @@
-package cluster
+package operator
 
 import (
 	"encoding/json"
@@ -12,7 +12,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// updateGitOpsPlan reads whether Argo CD manages the nightly CatalogSource or
+// PlanGitOpsUpdate reads whether Argo CD manages the nightly CatalogSource or
 // the operator Subscription, or an ACM policy the catalog, and how Update
 // must work with it. Git (or the policy, for the catalog) is then the source
 // of truth for the catalog image and the Subscription:
@@ -26,7 +26,7 @@ import (
 //     Subscription's InstallPlan (the first install Argo CD started), Update
 //     waits its turn (problem): deleting that Subscription would orphan the
 //     half-created CSV.
-func updateGitOpsPlan(c *Client, image string, currentCSV types.CSVInfo, logs *[]string) (g argo.OperatorGitOps, channelOverride, problem string, err error) {
+func PlanGitOpsUpdate(c *kube.Client, image string, currentCSV types.CSVInfo, logs *[]string) (g argo.OperatorGitOps, channelOverride, problem string, err error) {
 	g, err = argo.ReadOperatorGitOps(c)
 	if err != nil || !g.Active() {
 		return g, "", "", err
@@ -73,7 +73,7 @@ func updateGitOpsPlan(c *Client, image string, currentCSV types.CSVInfo, logs *[
 		*logs = append(*logs, fmt.Sprintf("Argo CD application %q manages the Subscription: Update keeps its channel %s and recreates the Subscription only once the old CSV is gone", g.SubscriptionApp, channelOverride))
 	}
 	if currentCSV.Name == "" || currentCSV.Phase == "Not Found" {
-		if ip, phase, err := pendingInstallPlan(c); err != nil {
+		if ip, phase, err := PendingInstallPlan(c); err != nil {
 			return g, "", "", err
 		} else if ip != "" {
 			return g, "", fmt.Sprintf("OLM is still installing the build Git set (InstallPlan %s is %s), and Update would delete the Subscription it works on. Wait for it to finish, or check Diagnostics if it is stuck. Nothing was changed.", ip, kube.NonEmpty(phase, "pending")), nil
@@ -82,11 +82,11 @@ func updateGitOpsPlan(c *Client, image string, currentCSV types.CSVInfo, logs *[
 	return g, channelOverride, "", nil
 }
 
-// pendingInstallPlan returns the Subscription's current InstallPlan and its
+// PendingInstallPlan returns the Subscription's current InstallPlan and its
 // phase while OLM is still working on it ("" once it is Complete or Failed,
 // or when there is none). An answer it cannot parse is an error, so Update
 // refuses rather than delete a Subscription OLM may still be working on.
-func pendingInstallPlan(c *Client) (name, phase string, err error) {
+func PendingInstallPlan(c *kube.Client) (name, phase string, err error) {
 	body, found, err := c.GetOptional(rhoai.SubscriptionPath())
 	if err != nil {
 		return "", "", err
@@ -130,9 +130,9 @@ func pendingInstallPlan(c *Client) (name, phase string, err error) {
 	return name, ip.Status.Phase, nil
 }
 
-// updateUnderGitOps runs the changing steps of Update when Argo CD manages
+// UpdateUnderGitOps runs the changing steps of Update when Argo CD manages
 // the catalog or the Subscription, or an ACM policy the catalog. The catalog
-// already has the image Git chose (updateGitOpsPlan), so it is left alone;
+// already has the image Git chose (PlanGitOpsUpdate), so it is left alone;
 // Argo CD recreates a managed
 // object as soon as it is deleted (automated sync with self-heal), so
 // nothing it manages is deleted for longer than one request:
@@ -159,9 +159,9 @@ func pendingInstallPlan(c *Client) (name, phase string, err error) {
 //
 // pullAdvice words a catalog image pull failure for the profile
 // (pullFailureWatch.advice).
-func updateUnderGitOps(c *Client, image string, target catalog.Target, currentCSV types.CSVInfo, g argo.OperatorGitOps,
-	recovery *operatorRecovery, logs *[]string, emit func(UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error),
-	policy func(newSub, restoreSub map[string]any) string, pullAdvice func(*Client) string,
+func UpdateUnderGitOps(c *kube.Client, image string, target catalog.Target, currentCSV types.CSVInfo, g argo.OperatorGitOps,
+	recovery *Recovery, logs *[]string, emit func(types.UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error),
+	policy func(newSub, restoreSub map[string]any) string, pullAdvice func(*kube.Client) string,
 ) (*types.OperationResponse, error) {
 	stopped := func(msg string) (*types.OperationResponse, error) {
 		return &types.OperationResponse{Success: false, Message: msg, Logs: *logs}, c.Context().Err()
@@ -171,13 +171,13 @@ func updateUnderGitOps(c *Client, image string, target catalog.Target, currentCS
 	// --- Step 3: apply_catalog_source (nothing to write) ---
 	leftAs := "CatalogSource left as " + g.CatalogSpecFrom() + " sets it"
 	*logs = append(*logs, "OK: "+leftAs)
-	emit(UpdateStepEvent{Step: "apply_catalog_source", Status: "success", Message: leftAs, Detail: image})
+	emit(types.UpdateStepEvent{Step: "apply_catalog_source", Status: "success", Message: leftAs, Detail: image})
 
 	// --- Steps 4 and 5: wait_catalog_ready, detect_channel ---
-	emit(UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "Waiting for the catalog to serve the build..."})
+	emit(types.UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "Waiting for the catalog to serve the build..."})
 	*logs = append(*logs, "Waiting for the catalog to serve the build...")
 	serving, err := waitForCatalogServing(c, image, target, changedBy, emit, logs, pullAdvice)
-	var changed *errCatalogImageChanged
+	var changed *CatalogImageChangedError
 	switch {
 	case errors.As(err, &changed):
 		return fail("Update stopped: "+changed.Error()+". The operator was not changed.", kube.ErrorCodeGitOpsManaged)
@@ -189,20 +189,20 @@ func updateUnderGitOps(c *Client, image string, target catalog.Target, currentCS
 		return fail(fmt.Sprintf("The catalog did not serve %s on channel %s within %s. The operator was not changed.", target.HeadCSV, target.Channel, catalog.ReadyTimeout+catalog.PackageManifestPropagationWait), "timeout")
 	}
 	*logs = append(*logs, fmt.Sprintf("OK: The catalog serves %s on channel %s", target.HeadCSV, target.Channel))
-	emit(UpdateStepEvent{Step: "wait_catalog_ready", Status: "success", Message: "CatalogSource serves the build"})
-	emit(UpdateStepEvent{Step: "detect_channel", Status: "success", Message: fmt.Sprintf("Channel: %s", target.Channel), Detail: target.Channel})
+	emit(types.UpdateStepEvent{Step: "wait_catalog_ready", Status: "success", Message: "CatalogSource serves the build"})
+	emit(types.UpdateStepEvent{Step: "detect_channel", Status: "success", Message: fmt.Sprintf("Channel: %s", target.Channel), Detail: target.Channel})
 
 	// Last checks before anything is deleted: Git may have moved on while
 	// the catalog was verified.
 	if cs, err := rhoai.GetCatalogSource(c); err != nil {
 		return fail("Cannot re-read the CatalogSource: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 	} else if cs.Image != image {
-		return fail("Update stopped: "+(&errCatalogImageChanged{by: changedBy, image: cs.Image}).Error()+". The operator was not changed.", kube.ErrorCodeGitOpsManaged)
+		return fail("Update stopped: "+(&CatalogImageChangedError{By: changedBy, Image: cs.Image}).Error()+". The operator was not changed.", kube.ErrorCodeGitOpsManaged)
 	}
 	// A managed Subscription's startingCSV pin from Git must be the verified
 	// head; the new Subscription pins that head in any case (below).
 	if g.SubscriptionApp != "" {
-		prevSpec, _ := recovery.subscriptionBase()["spec"].(map[string]any)
+		prevSpec, _ := recovery.SubscriptionBase()["spec"].(map[string]any)
 		startingCSV, _ := prevSpec["startingCSV"].(string)
 		if startingCSV != "" && startingCSV != target.HeadCSV {
 			return fail(fmt.Sprintf("The Subscription pins startingCSV %s in Git, but the catalog serves %s on channel %s. Change the pin in Git, or the catalog image, so they agree. Nothing was changed.", startingCSV, target.HeadCSV, target.Channel), kube.ErrorCodeGitOpsManaged)
@@ -212,16 +212,16 @@ func updateUnderGitOps(c *Client, image string, target catalog.Target, currentCS
 	// The policy holds for the Subscription as Git sets it now: nothing is
 	// deleted that could not be written back.
 	if policy != nil {
-		live, found, err := readSubscriptionObject(c)
+		live, found, err := ReadSubscriptionObject(c)
 		if err != nil {
 			return fail("Cannot re-read the Subscription: "+err.Error()+". Nothing was changed.", kube.ErrorCodeFromK8sErr(err))
 		}
-		base := recovery.subscriptionBase()
+		base := recovery.SubscriptionBase()
 		if found {
 			base = live
 		}
-		preview := buildSubscription(base, rhoai.CatalogName, target.Channel)
-		if msg := policy(preview, recovery.subscription); msg != "" {
+		preview := BuildSubscription(base, rhoai.CatalogName, target.Channel)
+		if msg := policy(preview, recovery.Subscription); msg != "" {
 			return fail(msg+" Nothing was changed.", kube.ErrorCodeProfileGitOps)
 		}
 		if found {
@@ -232,7 +232,7 @@ func updateUnderGitOps(c *Client, image string, target catalog.Target, currentCS
 	}
 
 	// --- Step 6: delete_csv ---
-	emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting old CSV and InstallPlan..."})
+	emit(types.UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting old CSV and InstallPlan..."})
 	if ipName := recovery.installPlanName(); ipName != "" {
 		ipPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, ipName)
 		if _, err := c.DeleteIfExists(ipPath); err != nil {
@@ -241,7 +241,7 @@ func updateUnderGitOps(c *Client, image string, target catalog.Target, currentCS
 		*logs = append(*logs, fmt.Sprintf("OK: InstallPlan %s deleted", ipName))
 	}
 	if uid := recovery.preCSVs[currentCSV.Name]; currentCSV.Name != "" && uid != "" {
-		recovery.noteCSVRemoved(currentCSV.Name)
+		recovery.NoteCSVRemoved(currentCSV.Name)
 		// The catalog may serve another version than the PackageManifest
 		// said (see startingCSV below): the restore pins the removed CSV, so
 		// it reinstalls that one or nothing, never an older build.
@@ -262,17 +262,17 @@ func updateUnderGitOps(c *Client, image string, target catalog.Target, currentCS
 			*logs = append(*logs, fmt.Sprintf("Warning: CSV %s is still being deleted after %s; continuing", currentCSV.Name, CSVDeletionTimeout))
 		}
 	}
-	emit(UpdateStepEvent{Step: "delete_csv", Status: "success", Message: "Old CSV and InstallPlan deleted"})
+	emit(types.UpdateStepEvent{Step: "delete_csv", Status: "success", Message: "Old CSV and InstallPlan deleted"})
 
 	// --- Step 7: apply_subscription ---
-	emit(UpdateStepEvent{Step: "apply_subscription", Status: "running", Message: "Recreating the Subscription..."})
+	emit(types.UpdateStepEvent{Step: "apply_subscription", Status: "running", Message: "Recreating the Subscription..."})
 	// The live Subscription is Git's spec as Argo CD last synced it, which
 	// may be newer than the one read at the start; the recreated one must
 	// still install what was verified. When Git moved it elsewhere
 	// meanwhile, the restore recreates it with Git's current settings (the
 	// old CSV is gone, and OLM installs nothing for the existing one).
-	base := recovery.subscriptionBase()
-	live, found, err := readSubscriptionObject(c)
+	base := recovery.SubscriptionBase()
+	live, found, err := ReadSubscriptionObject(c)
 	if err != nil {
 		return fail("Cannot re-read the Subscription: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 	}
@@ -281,7 +281,7 @@ func updateUnderGitOps(c *Client, image string, target catalog.Target, currentCS
 		// profile may not write, or the policy changed: deleting it now
 		// could not be undone, and the restore would delete it too, so both
 		// are skipped.
-		if msg := policy(buildSubscription(live, rhoai.CatalogName, target.Channel), live); msg != "" {
+		if msg := policy(BuildSubscription(live, rhoai.CatalogName, target.Channel), live); msg != "" {
 			recovery.keepNewInstall = true
 			return fail("Update stopped before it recreated the Subscription. "+msg+" The old CSV was already deleted and the Subscription was left as Git sets it, so OLM does not install the operator again until the Subscription is fixed in Git (Argo CD then syncs it) or recreated.", kube.ErrorCodeProfileGitOps)
 		}
@@ -292,17 +292,17 @@ func updateUnderGitOps(c *Client, image string, target catalog.Target, currentCS
 			liveStartingCSV, _ := liveSpec["startingCSV"].(string)
 			switch {
 			case liveSpec["source"] != rhoai.CatalogName || liveSpec["channel"] != target.Channel:
-				recovery.subscription = live
+				recovery.Subscription = live
 				return fail(fmt.Sprintf("The Subscription changed while Update ran (source %v, channel %v; Argo CD may have synced a change from Git). It is recreated with Git's current settings, so OLM installs that channel's build; check the Status page, then run Update if needed.", liveSpec["source"], liveSpec["channel"]), "conflict")
 			case liveStartingCSV != "" && liveStartingCSV != target.HeadCSV:
-				recovery.subscription = live
+				recovery.Subscription = live
 				return fail(fmt.Sprintf("The Subscription now pins startingCSV %s in Git, but the catalog serves %s on channel %s. It is recreated with Git's current settings; make the pin and the catalog image agree in Git, then run Update again.", liveStartingCSV, target.HeadCSV, target.Channel), "conflict")
 			}
 			// A pin Git sets now is the head (checked above): newSub pins it.
 		}
 		base = live
 	}
-	newSub := buildSubscription(base, rhoai.CatalogName, target.Channel)
+	newSub := BuildSubscription(base, rhoai.CatalogName, target.Channel)
 	// The new Subscription pins startingCSV to the verified head, also when
 	// Git sets no pin (a pin Git sets is that head: checked above). The head
 	// comes from the catalog's PackageManifest, which OLM's packageserver
@@ -326,7 +326,7 @@ func updateUnderGitOps(c *Client, image string, target catalog.Target, currentCS
 	newSub["spec"].(map[string]any)["startingCSV"] = target.HeadCSV
 	*logs = append(*logs, fmt.Sprintf("The new Subscription pins startingCSV %s: OLM installs exactly that CSV, or reports that the catalog does not have it", target.HeadCSV))
 	argo.KeepTracking(base, newSub)
-	recovery.subscriptionChanged = true
+	recovery.SubscriptionChanged = true
 	if found {
 		// Delete exactly the object just validated: a replacement with
 		// another UID is left alone.
@@ -345,8 +345,8 @@ func updateUnderGitOps(c *Client, image string, target catalog.Target, currentCS
 	return verifyUpdateInstall(c, target, recovery, logs, emit)
 }
 
-// readSubscriptionObject reads the operator Subscription as a decoded object.
-func readSubscriptionObject(c *Client) (obj map[string]any, found bool, err error) {
+// ReadSubscriptionObject reads the operator Subscription as a decoded object.
+func ReadSubscriptionObject(c *kube.Client) (obj map[string]any, found bool, err error) {
 	body, exists, err := c.GetOptional(rhoai.SubscriptionPath())
 	if err != nil {
 		return nil, false, err

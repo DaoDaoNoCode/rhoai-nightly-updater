@@ -31,7 +31,7 @@ var (
 //   - OperationDeadline: the context deadline pkg/api gives every mutation
 //     (withMutationAuth in pkg/api/auth_handlers.go). Every step, including the
 //     Dashboard Dev revert, runs inside it; the install wait ends
-//     installDeadlineReserve before it.
+//     operator.InstallDeadlineReserve before it.
 //   - RecoveryTimeout: the automatic restore after a failure, after the
 //     operation stopped.
 //   - postOperationBookkeeping: the activity entry, recording the

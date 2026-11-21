@@ -16,6 +16,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/node"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -279,7 +280,7 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 	// can run ahead of the installed operator (a same-version build OLM does
 	// not install by itself), so say what the catalog serves.
 	if status.CatalogSource.ManagedBy != "" || status.CatalogSource.ManagedByACM || status.Subscription.ManagedBy != "" {
-		status.CatalogServes = readCatalogServes(c, status.Subscription, status.CatalogSource, status.CSV)
+		status.CatalogServes = operator.ReadCatalogServes(c, status.Subscription, status.CatalogSource, status.CSV)
 	}
 
 	if len(errs) > 0 {

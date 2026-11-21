@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -50,12 +51,10 @@ func requestedSecret(f *fakeOLM) bool {
 // secrets are used, and take the build from the catalog's PackageManifest.
 func TestGitOpsProfileUpdateReadsNoSecretAndNoRegistry(t *testing.T) {
 	noOutsideHosts(t)
-	orig := lookupTargetBundle
-	t.Cleanup(func() { lookupTargetBundle = orig })
-	lookupTargetBundle = func(*Client, string) (string, error) {
+	t.Cleanup(operator.SetLookupTargetBundleForTest(func(*Client, string) (string, error) {
 		t.Error("the gitops dry run read the bundle from the registry")
 		return "", errors.New("registry")
-	}
+	}))
 
 	f := servesGitOpsPolicy(t, gitOpsFake(t))
 	emit, events := eventsRecorder()

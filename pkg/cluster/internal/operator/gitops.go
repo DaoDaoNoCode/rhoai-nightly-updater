@@ -1,4 +1,4 @@
-package cluster
+package operator
 
 import (
 	"encoding/json"
@@ -12,11 +12,11 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// readCatalogServes reads the head of the nightly catalog's channel (the
+// ReadCatalogServes reads the head of the nightly catalog's channel (the
 // Subscription's) and whether the installed CSV is that build. It returns nil
 // when the Subscription has no channel or the catalog does not list it; read
 // errors are logged, not returned, because the rest of the status stands.
-func readCatalogServes(c *Client, sub types.SubscriptionInfo, cs types.CatalogSourceInfo, csv types.CSVInfo) *types.CatalogServes {
+func ReadCatalogServes(c *kube.Client, sub types.SubscriptionInfo, cs types.CatalogSourceInfo, csv types.CSVInfo) *types.CatalogServes {
 	if sub.Channel == "" || sub.Source != rhoai.CatalogName || !cs.Exists {
 		return nil
 	}
@@ -42,7 +42,7 @@ func readCatalogServes(c *Client, sub types.SubscriptionInfo, cs types.CatalogSo
 	// still lists the old build until OLM has replaced the registry pod; the
 	// comparison below would then wrongly match the installed operator.
 	if cs.Image != "" {
-		if ready, stale, ok := readCatalogPods(c, cs.Image); ok && (!ready || stale > 0) {
+		if ready, stale, ok := ReadCatalogPods(c, cs.Image); ok && (!ready || stale > 0) {
 			s.Updating = true
 			return s
 		}
@@ -68,50 +68,50 @@ func readCatalogServes(c *Client, sub types.SubscriptionInfo, cs types.CatalogSo
 	return s
 }
 
-// errCatalogImageChanged: the CatalogSource image changed while the tool
+// CatalogImageChangedError: the CatalogSource image changed while the tool
 // waited for the catalog to serve the build, which happens when Argo CD syncs
 // a new image from Git, or an ACM policy enforces one, meanwhile. by is
 // operatorGitOps.catalogChanger.
-type errCatalogImageChanged struct{ by, image string }
+type CatalogImageChangedError struct{ By, Image string }
 
-func (e *errCatalogImageChanged) Error() string {
+func (e *CatalogImageChangedError) Error() string {
 	return fmt.Sprintf("the CatalogSource image was changed to %s while Update waited, most likely by %s. "+
-		"Run Update again to install the build the catalog serves now", e.image, e.by)
+		"Run Update again to install the build the catalog serves now", e.Image, e.By)
 }
 
-// catalogServing is what the nightly catalog serves, as one poll reads it.
-type catalogServing struct {
-	image       string // spec.image
-	state       string // connectionState.lastObservedState
-	podReady    bool   // a registry pod runs image and is Ready
-	stalePods   int    // registry pods that run another image and are not terminating
-	head        string // currentCSV of the target channel
-	fingerprint string // headFingerprint of that channel
+// CatalogServing is what the nightly catalog serves, as one poll reads it.
+type CatalogServing struct {
+	Image       string // spec.image
+	State       string // connectionState.lastObservedState
+	PodReady    bool   // a registry pod runs image and is Ready
+	StalePods   int    // registry pods that run another image and are not terminating
+	Head        string // currentCSV of the target channel
+	Fingerprint string // headFingerprint of that channel
 }
 
-// servesTarget reports whether the catalog serves the verified build.
-func (s catalogServing) servesTarget(image string, target catalog.Target) bool {
-	return s.image == image && s.state == "READY" && s.podReady && s.stalePods == 0 &&
-		s.head == target.HeadCSV && (target.Fingerprint == "" || s.fingerprint == target.Fingerprint)
+// ServesTarget reports whether the catalog serves the verified build.
+func (s CatalogServing) ServesTarget(image string, target catalog.Target) bool {
+	return s.Image == image && s.State == "READY" && s.PodReady && s.StalePods == 0 &&
+		s.Head == target.HeadCSV && (target.Fingerprint == "" || s.Fingerprint == target.Fingerprint)
 }
 
-func (s catalogServing) describe(target catalog.Target) string {
+func (s CatalogServing) describe(target catalog.Target) string {
 	switch {
-	case !s.podReady || s.stalePods > 0:
+	case !s.PodReady || s.StalePods > 0:
 		return "OLM is replacing the catalog pod"
-	case s.state != "READY":
-		return "catalog state " + kube.NonEmpty(s.state, "unknown")
-	case s.head != target.HeadCSV:
-		return fmt.Sprintf("channel %s lists %s, waiting for %s", target.Channel, kube.NonEmpty(s.head, "nothing"), target.HeadCSV)
+	case s.State != "READY":
+		return "catalog state " + kube.NonEmpty(s.State, "unknown")
+	case s.Head != target.HeadCSV:
+		return fmt.Sprintf("channel %s lists %s, waiting for %s", target.Channel, kube.NonEmpty(s.Head, "nothing"), target.HeadCSV)
 	default:
 		return "waiting for the catalog to list the new build"
 	}
 }
 
-// readCatalogPods reads the nightly catalog's registry pods: whether one
+// ReadCatalogPods reads the nightly catalog's registry pods: whether one
 // runs image and is Ready, and how many run another image and are not
 // terminating. ok is false when the list could not be read.
-func readCatalogPods(c *Client, image string) (ready bool, stale int, ok bool) {
+func ReadCatalogPods(c *kube.Client, image string) (ready bool, stale int, ok bool) {
 	path := rhoai.NamespacedPath("v1", "pods", rhoai.CatalogNS, "") + "?labelSelector=" + url.QueryEscape("olm.catalogSource="+rhoai.CatalogName)
 	body, _, err := c.Get(path)
 	if err != nil {
@@ -169,16 +169,16 @@ func readCatalogPods(c *Client, image string) (ready bool, stale int, ok bool) {
 // readCatalogServing reads the CatalogSource, its registry pods and its
 // PackageManifest entry for target's channel. Read errors leave fields
 // empty; the caller keeps polling.
-func readCatalogServing(c *Client, image string, target catalog.Target) catalogServing {
-	var s catalogServing
+func readCatalogServing(c *kube.Client, image string, target catalog.Target) CatalogServing {
+	var s CatalogServing
 	if cs, err := rhoai.GetCatalogSource(c); err == nil {
-		s.image, s.state = cs.Image, cs.State
+		s.Image, s.State = cs.Image, cs.State
 	}
-	s.podReady, s.stalePods, _ = readCatalogPods(c, image)
+	s.PodReady, s.StalePods, _ = ReadCatalogPods(c, image)
 	if channels, err := catalog.Channels(c, rhoai.CatalogName); err == nil {
 		if entry := catalog.FindChannel(channels, target.Channel); entry != nil {
-			s.head, _ = entry["currentCSV"].(string)
-			s.fingerprint = catalog.HeadFingerprint(entry)
+			s.Head, _ = entry["currentCSV"].(string)
+			s.Fingerprint = catalog.HeadFingerprint(entry)
 		}
 	}
 	return s
@@ -190,10 +190,10 @@ func readCatalogServing(c *Client, image string, target catalog.Target) catalogS
 // verification catalog. A catalog whose image Argo CD changed in place
 // reports READY and its old channels until OLM has replaced the pod, so READY
 // alone proves nothing. It returns false on timeout; the error is the context
-// error, a *catalogImagePullError, or an *errCatalogImageChanged (by
+// error, a *catalogImagePullError, or an *CatalogImageChangedError (by
 // changedBy) when the image changed meanwhile. pullAdvice words the pull
 // error (pullFailureWatch.advice).
-func waitForCatalogServing(c *Client, image string, target catalog.Target, changedBy string, emit func(UpdateStepEvent), logs *[]string, pullAdvice func(*Client) string) (bool, error) {
+func waitForCatalogServing(c *kube.Client, image string, target catalog.Target, changedBy string, emit func(types.UpdateStepEvent), logs *[]string, pullAdvice func(*kube.Client) string) (bool, error) {
 	deadline := kube.Clock().Now().Add(catalog.ReadyTimeout + catalog.PackageManifestPropagationWait)
 	pull := catalog.PullFailureWatch{Advice: pullAdvice}
 	last := ""
@@ -202,16 +202,16 @@ func waitForCatalogServing(c *Client, image string, target catalog.Target, chang
 			return false, err
 		}
 		s := readCatalogServing(c, image, target)
-		if s.image != "" && s.image != image {
-			return false, &errCatalogImageChanged{by: changedBy, image: s.image}
+		if s.Image != "" && s.Image != image {
+			return false, &CatalogImageChangedError{By: changedBy, Image: s.Image}
 		}
-		if s.servesTarget(image, target) {
+		if s.ServesTarget(image, target) {
 			return true, nil
 		}
 		if msg := s.describe(target); msg != last {
 			last = msg
 			*logs = append(*logs, "  "+msg)
-			emit(UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "CatalogSource: " + msg})
+			emit(types.UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "CatalogSource: " + msg})
 		}
 		if err := pull.Check(c, rhoai.CatalogName, image); err != nil {
 			return false, err

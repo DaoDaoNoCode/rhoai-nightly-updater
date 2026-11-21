@@ -1,9 +1,10 @@
-package cluster
+package operator
 
 import (
 	"fmt"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // OperationOptions are the confirmations a caller can give for Update,
@@ -22,14 +23,14 @@ type OperationOptions struct {
 }
 
 const (
-	errorCodeDashboardDevActive = "dashboard_dev_active"
-	errorCodeDowngrade          = "downgrade_requires_confirmation"
+	ErrorCodeDashboardDevActive = "dashboard_dev_active"
+	ErrorCodeDowngrade          = "downgrade_requires_confirmation"
 )
 
 // dashboardDevGuard checks for an active Dashboard Dev session. It returns a
 // refusal message when one is active and the caller did not ask to revert it,
 // and whether a revert is needed before the first change.
-func dashboardDevGuard(c *Client, opts OperationOptions, operation string) (refusal string, revert bool, err error) {
+func dashboardDevGuard(c *kube.Client, opts OperationOptions, operation string) (refusal string, revert bool, err error) {
 	active, operator, err := dashdev.ActiveOperator(c)
 	if err != nil {
 		return "", false, fmt.Errorf("cannot check for a Dashboard Dev session: %w", err)
@@ -45,8 +46,8 @@ func dashboardDevGuard(c *Client, opts OperationOptions, operation string) (refu
 
 // dashboardPRNote describes a dashboard PR image that this operation leaves in
 // place (legacy PR deployments are unmanaged, so the operator keeps them).
-func dashboardPRNote(c *Client) string {
-	state, err := GetDashboardState(c)
+func dashboardPRNote(c *kube.Client) string {
+	state, err := dashdev.State(c)
 	if err != nil || !state.IsCustomPR {
 		return ""
 	}

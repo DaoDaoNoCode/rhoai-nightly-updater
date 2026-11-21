@@ -14,6 +14,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -93,7 +94,7 @@ func TestUpdateStream_WaitsForOLMOutcome(t *testing.T) {
 				}
 			}
 			emit, events := eventsRecorder()
-			result, err := UpdateStream(f.client(context.Background()), testNightlyImage, emit)
+			result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, emit)
 			if err != nil || result == nil {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
@@ -108,7 +109,7 @@ func TestUpdateStream_WaitsForOLMOutcome(t *testing.T) {
 			if got := lastStatus(ev, "verify_installplan"); got != wantVerify {
 				t.Fatalf("verify_installplan ended %q, want %q", got, wantVerify)
 			}
-			restored := lastStatus(ev, restoreStepName) == "success"
+			restored := lastStatus(ev, operator.RestoreStepName) == "success"
 			if restored != tc.wantRestore {
 				t.Fatalf("restore ran=%v, want %v (events %v)", restored, tc.wantRestore, ev)
 			}
@@ -135,7 +136,7 @@ func TestUpdateStream_WaitsForOLMOutcome(t *testing.T) {
 func TestUpdateStream_OrderAndSingleSubscriptionApply(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 	f.onSubscribe = olmInstalls("rhods-operator.3.6.0")
-	result, err := UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
+	result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 	if err != nil || !result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -147,7 +148,7 @@ func TestUpdateStream_OrderAndSingleSubscriptionApply(t *testing.T) {
 			idx[w] = i + 1
 		}
 	}
-	order := []string{"DELETE " + subPath, "DELETE " + csPath, "PATCH " + csPath, "DELETE " + csvPath("rhods-operator.3.6.0"), "PATCH " + subPath}
+	order := []string{"DELETE " + subPath, "DELETE " + csPath, "PATCH " + csPath, "DELETE " + operator.CSVPath("rhods-operator.3.6.0"), "PATCH " + subPath}
 	for i := 1; i < len(order); i++ {
 		if idx[order[i-1]] == 0 || idx[order[i]] == 0 || idx[order[i-1]] > idx[order[i]] {
 			t.Fatalf("expected %q before %q; writes: %v", order[i-1], order[i], f.writes())
@@ -177,7 +178,7 @@ func TestOperationsPreserveSubscriptionSettings(t *testing.T) {
 			var msg string
 			switch op {
 			case "update":
-				r, err := UpdateStream(c, testNightlyImage, func(UpdateStepEvent) {})
+				r, err := operator.UpdateStream(c, testNightlyImage, func(UpdateStepEvent) {})
 				ok, msg = err == nil && r.Success, fmt.Sprint(r, err)
 			case "refresh":
 				r, err := RefreshOperator(c)
@@ -223,7 +224,7 @@ func TestManualApprovalNotGivenForOtherOperators(t *testing.T) {
 		f.installPlans["install-new"] = map[string]any{"spec": map[string]any{"clusterServiceVersionNames": []any{"rhods-operator.3.6.0", "other-operator.v1.0.0"}}, "status": map[string]any{"phase": "RequiresApproval"}}
 		f.sub["status"] = map[string]any{"installPlanRef": map[string]any{"name": "install-new"}}
 	}
-	result, err := UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
+	result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != "approval_required" {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -249,7 +250,7 @@ func TestUpdateStream_DowngradeUsesTargetBundle(t *testing.T) {
 			f := newFakeOLM(t).installed(tc.installed, nil)
 			f.channels = `[{"name":"stable-3.x","currentCSV":"` + tc.head + `"}]`
 			f.onSubscribe = olmInstalls(tc.head)
-			result, err := UpdateStream(f.client(context.Background()), "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5@sha256:x", func(UpdateStepEvent) {})
+			result, err := operator.UpdateStream(f.client(context.Background()), "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5@sha256:x", func(UpdateStepEvent) {})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -288,7 +289,7 @@ func TestDowngradeCheck(t *testing.T) {
 		{"rhods-operator.custom", "rhoai-3.6", "rhods-operator.3.6.0", true}, // installed unknown: fail closed
 		{"", "rhoai-3.5", "", false},                                         // nothing installed
 	} {
-		blocked, _ := downgradeCheck(types.CSVInfo{Name: tc.installed}, tc.tag, tc.bundle)
+		blocked, _ := operator.DowngradeCheck(types.CSVInfo{Name: tc.installed}, tc.tag, tc.bundle)
 		if (blocked != "") != tc.blocked {
 			t.Errorf("%s -> %s (bundle %q): blocked=%q, want %v", tc.installed, tc.tag, tc.bundle, blocked, tc.blocked)
 		}
@@ -298,8 +299,6 @@ func TestDowngradeCheck(t *testing.T) {
 // A10-5: the dry run asks the API server (dryRun=All) and fails when the
 // server rejects the CatalogSource; the downgrade rule matches the real run.
 func TestUpdateDryRun(t *testing.T) {
-	oldLookup := lookupTargetBundle
-	t.Cleanup(func() { lookupTargetBundle = oldLookup })
 	t.Cleanup(registry.SetHTTPClientForTest(&http.Client{Transport: dscSampleTransport(func(*http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("offline")
 	})}))
@@ -316,12 +315,12 @@ func TestUpdateDryRun(t *testing.T) {
 		{name: "bundle unknown, same minor", installed: "rhods-operator.3.5.2", bundleErr: true, wantSuccess: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			lookupTargetBundle = func(*Client, string) (string, error) {
+			t.Cleanup(operator.SetLookupTargetBundleForTest(func(*Client, string) (string, error) {
 				if tc.bundleErr {
 					return "", fmt.Errorf("registry unavailable")
 				}
 				return tc.bundle, nil
-			}
+			}))
 			f := newFakeOLM(t).installed(tc.installed, nil)
 			f.rejectDryRun = tc.reject
 			result, err := Update(f.client(context.Background()), "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5@sha256:x", true)
@@ -352,7 +351,7 @@ func TestUpdateStream_CatalogImagePullFailsFast(t *testing.T) {
 	f.catalogPods = `{"items":[{"status":{"containerStatuses":[{"state":{"waiting":{"reason":"ImagePullBackOff","message":"Back-off pulling image: unauthorized: access to the requested resource is not authorized"}}}]}}]}`
 	t.Cleanup(catalog.SetReadyTimeoutForTest(10 * time.Second))
 	start := kube.Clock().Now()
-	result, err := UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
+	result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != "catalog_image_pull" || !strings.Contains(result.Message, "unauthorized") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -403,7 +402,7 @@ func TestEnsureOperatorNamespaceAndGroup(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeOLM(t)
 			f.operatorGrps = tc.groups
-			_, problem, _ := ensureOperatorNamespaceAndGroup(f.client(context.Background()), false)
+			_, problem, _ := operator.EnsureNamespaceAndGroup(f.client(context.Background()), false)
 			if (tc.problem == "") != (problem == "") || !strings.Contains(problem, tc.problem) {
 				t.Fatalf("problem = %q, want %q", problem, tc.problem)
 			}
@@ -445,7 +444,7 @@ func TestReinstallStableTargets(t *testing.T) {
 	}{
 		{name: "healthy stable", installed: "rhods-operator.3.5.1", phase: "Succeeded", source: "redhat-operators", wantSuccess: true, wantMsg: "Already on the GA release"},
 		{name: "failed stable is reinstalled", installed: "rhods-operator.3.5.1", phase: "Failed", source: "redhat-operators", wantSuccess: true, wantMsg: "is installed", wantWrites: true},
-		{name: "nightly to older GA refused", installed: "rhods-operator.3.6.0", phase: "Succeeded", source: rhoai.CatalogName, wantCode: errorCodeDowngrade, wantMsg: "older than the installed"},
+		{name: "nightly to older GA refused", installed: "rhods-operator.3.6.0", phase: "Succeeded", source: rhoai.CatalogName, wantCode: operator.ErrorCodeDowngrade, wantMsg: "older than the installed"},
 		{name: "nightly to older GA confirmed", installed: "rhods-operator.3.6.0", phase: "Succeeded", source: rhoai.CatalogName, allow: true, wantSuccess: true, wantMsg: "is installed", wantWrites: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -475,7 +474,7 @@ func TestOperationsRefuseActiveDashboardDev(t *testing.T) {
 			var code string
 			switch op {
 			case "update":
-				r, _ := UpdateStream(c, testNightlyImage, func(UpdateStepEvent) {})
+				r, _ := operator.UpdateStream(c, testNightlyImage, func(UpdateStepEvent) {})
 				code = r.ErrorCode
 			case "reinstall":
 				r, _ := Reinstall(c, "nightly", testNightlyImage, "")
@@ -484,7 +483,7 @@ func TestOperationsRefuseActiveDashboardDev(t *testing.T) {
 				r, _ := RefreshOperator(c)
 				code = r.ErrorCode
 			}
-			if code != errorCodeDashboardDevActive {
+			if code != operator.ErrorCodeDashboardDevActive {
 				t.Fatalf("errorCode = %q", code)
 			}
 			if w := f.writes(); len(w) > 0 {
@@ -499,14 +498,14 @@ func TestOperationsRefuseActiveDashboardDev(t *testing.T) {
 func TestFailuresMarkStepAndKeepLogs(t *testing.T) {
 	t.Run("delete fails mid-way", func(t *testing.T) {
 		f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
-		f.failDelete[csvPath("rhods-operator.3.6.0")] = 1
+		f.failDelete[operator.CSVPath("rhods-operator.3.6.0")] = 1
 		emit, events := eventsRecorder()
-		result, err := UpdateStream(f.client(context.Background()), testNightlyImage, emit)
+		result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, emit)
 		if err != nil || result.Success || !strings.Contains(result.Message, "Cannot delete current CSV") {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
 		ev := events()
-		if lastStatus(ev, "delete_csv") != "failed" || lastStatus(ev, restoreStepName) != "success" {
+		if lastStatus(ev, "delete_csv") != "failed" || lastStatus(ev, operator.RestoreStepName) != "success" {
 			t.Fatalf("events = %v", ev)
 		}
 		if !strings.Contains(result.Message, "installed operator was not changed") {
@@ -526,11 +525,11 @@ func TestFailuresMarkStepAndKeepLogs(t *testing.T) {
 			return false
 		}
 		emit, events := eventsRecorder()
-		result, err := UpdateStream(f.client(ctx), testNightlyImage, emit)
+		result, err := operator.UpdateStream(f.client(ctx), testNightlyImage, emit)
 		if err != nil || result == nil || result.Success || result.ErrorCode != "cancelled" || len(result.Logs) == 0 {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
-		if lastStatus(events(), "verify_installplan") != "failed" || lastStatus(events(), restoreStepName) != "success" {
+		if lastStatus(events(), "verify_installplan") != "failed" || lastStatus(events(), operator.RestoreStepName) != "success" {
 			t.Fatalf("events = %v", events())
 		}
 	})
@@ -542,7 +541,7 @@ func TestUpdateStream_ChannelDetectionFailureRestores(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"channel": "fast"})
 	empty := `[]`
 	f.mainChannels = &empty
-	result, err := UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
+	result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != "channel_detection" {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -560,7 +559,7 @@ func TestAdminAckReported(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 	f.onSubscribe = olmInstalls("rhods-operator.3.6.0")
 	f.platform = `{"status":{"conditions":[{"type":"ProvisioningProgress","status":"False","reason":"AdminAckRequired","message":"gate kserve-3.7 not acknowledged"}]}}`
-	result, err := UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
+	result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 	if err != nil || !result.Success || !strings.Contains(result.Message, "AdminAckRequired") || !strings.Contains(result.Message, "odh-upgrade-acks") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -608,7 +607,7 @@ func TestLostLockSkipsTheRestore(t *testing.T) {
 				hooks = requestHooks{answered: loseLock}
 			}
 			var events []UpdateStepEvent
-			result, err := UpdateStream(withRequestHooks(f.client(ctx), hooks), testNightlyImage, func(e UpdateStepEvent) { events = append(events, e) })
+			result, err := operator.UpdateStream(withRequestHooks(f.client(ctx), hooks), testNightlyImage, func(e UpdateStepEvent) { events = append(events, e) })
 			if err != nil || result.Success || result.ErrorCode != "lock_lost" || result.Message != LockLostMessage {
 				t.Fatalf("result %+v err %v", result, err)
 			}
@@ -627,7 +626,7 @@ func TestLostLockSkipsTheRestore(t *testing.T) {
 			}
 			skipped := false
 			for _, e := range events {
-				skipped = skipped || (e.Step == restoreStepName && e.Status == "skipped" && e.ErrorCode == "lock_lost")
+				skipped = skipped || (e.Step == operator.RestoreStepName && e.Status == "skipped" && e.ErrorCode == "lock_lost")
 			}
 			if !skipped || !strings.Contains(logs, "Automatic operator recovery skipped") {
 				t.Fatalf("restore not reported as skipped: events %+v", events)
@@ -655,9 +654,7 @@ func TestLostLockSkipsTheRestore(t *testing.T) {
 // condition, waits a bounded time for the new operator to report, and stays
 // quiet when nothing is gated.
 func TestUpgradeGateNoteFromTheDSC(t *testing.T) {
-	oldWait, oldPoll := upgradeGateWait, upgradeGatePoll
-	upgradeGateWait, upgradeGatePoll = 300*time.Millisecond, 20*time.Millisecond
-	t.Cleanup(func() { upgradeGateWait, upgradeGatePoll = oldWait, oldPoll })
+	t.Cleanup(operator.SetUpgradeGateTimingForTest(300*time.Millisecond, 20*time.Millisecond))
 	now := time.Now().UTC().Format(time.RFC3339)
 	old := time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339)
 	dsc := func(release string, conds ...string) string {
@@ -688,7 +685,7 @@ func TestUpgradeGateNoteFromTheDSC(t *testing.T) {
 			f.onSubscribe = olmInstalls("rhods-operator.3.6.0")
 			f.dsc = tc.dsc
 			start := kube.Clock().Now()
-			note := adminAckNote(f.client(context.Background()), "rhods-operator.3.6.0", time.Now())
+			note := operator.AdminAckNote(f.client(context.Background()), "rhods-operator.3.6.0", time.Now())
 			if tc.quiet != (note == "") || kube.Clock().Since(start) > tc.maxTime {
 				t.Fatalf("note %q after %s", note, kube.Clock().Since(start))
 			}
@@ -705,9 +702,7 @@ func TestUpgradeGateNoteFromTheDSC(t *testing.T) {
 // evidence as a DSC gate; one that only an earlier operator could have set
 // is reported as possibly stale.
 func TestUpgradeGateNotePlatformFreshness(t *testing.T) {
-	oldWait, oldPoll := upgradeGateWait, upgradeGatePoll
-	upgradeGateWait, upgradeGatePoll = 200*time.Millisecond, 20*time.Millisecond
-	t.Cleanup(func() { upgradeGateWait, upgradeGatePoll = oldWait, oldPoll })
+	t.Cleanup(operator.SetUpgradeGateTimingForTest(200*time.Millisecond, 20*time.Millisecond))
 	now := time.Now().UTC().Format(time.RFC3339)
 	old := time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339)
 	platform := func(at string) string {
@@ -729,7 +724,7 @@ func TestUpgradeGateNotePlatformFreshness(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeOLM(t)
 			f.platform, f.dsc = tc.platform, tc.dsc
-			note := adminAckNote(f.client(context.Background()), "rhods-operator.3.6.0", time.Now())
+			note := operator.AdminAckNote(f.client(context.Background()), "rhods-operator.3.6.0", time.Now())
 			if !strings.Contains(note, "AdminAckRequired") || strings.Contains(note, hedge) != tc.hedged {
 				t.Fatalf("note %q", note)
 			}
@@ -740,17 +735,15 @@ func TestUpgradeGateNotePlatformFreshness(t *testing.T) {
 // Review fix 6: the whole gate wait, every read included, ends with
 // upgradeGateWait even when the API server does not answer.
 func TestUpgradeGateWaitIsBoundedBySlowReads(t *testing.T) {
-	oldWait, oldPoll := upgradeGateWait, upgradeGatePoll
-	upgradeGateWait, upgradeGatePoll = 150*time.Millisecond, 20*time.Millisecond
-	t.Cleanup(func() { upgradeGateWait, upgradeGatePoll = oldWait, oldPoll })
+	t.Cleanup(operator.SetUpgradeGateTimingForTest(150*time.Millisecond, 20*time.Millisecond))
 	// Every read takes 10s (on the fake clock) unless the client gives up.
 	c := withLatency(stallServer(t, 0), 10*time.Second)
 	start := kube.Clock().Now()
-	if note := adminAckNote(c, "rhods-operator.3.6.0", time.Now()); note != "" {
+	if note := operator.AdminAckNote(c, "rhods-operator.3.6.0", time.Now()); note != "" {
 		t.Fatalf("note %q", note)
 	}
-	if d := kube.Clock().Since(start); d != upgradeGateWait {
-		t.Fatalf("the wait took %s, want %s", d, upgradeGateWait)
+	if d := kube.Clock().Since(start); d != operator.UpgradeGateWait {
+		t.Fatalf("the wait took %s, want %s", d, operator.UpgradeGateWait)
 	}
 }
 
@@ -783,8 +776,8 @@ func TestWaitIgnoresDeletingCSV(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 	f.csvs["rhods-operator.3.6.0"]["metadata"] = map[string]any{"name": "rhods-operator.3.6.0", "deletionTimestamp": "2026-10-05T00:00:00Z"}
 	var logs []string
-	outcome := waitForOperatorInstall(f.client(context.Background()), func(UpdateStepEvent) {}, &logs, &operatorRecovery{}, "")
-	if outcome.succeeded || outcome.errorCode != "install_timeout" {
+	outcome := operator.WaitForInstall(f.client(context.Background()), func(UpdateStepEvent) {}, &logs, &operator.Recovery{}, "")
+	if outcome.Succeeded || outcome.ErrorCode != "install_timeout" {
 		t.Fatalf("outcome = %+v", outcome)
 	}
 }
@@ -803,11 +796,11 @@ func TestUpdateStream_FailedFirstInstallRemovesTheAttemptCSV(t *testing.T) {
 		f.sub["status"] = map[string]any{"currentCSV": newCSV, "installedCSV": newCSV, "installPlanRef": map[string]any{"name": "install-new"}}
 	}
 	emit, events := eventsRecorder()
-	result, err := UpdateStream(f.client(context.Background()), testNightlyImage, emit)
+	result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, emit)
 	if err != nil || result.Success || result.ErrorCode != "csv_failed" {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if lastStatus(events(), restoreStepName) != "success" || !strings.Contains(result.Message, "There was no previous Subscription") {
+	if lastStatus(events(), operator.RestoreStepName) != "success" || !strings.Contains(result.Message, "There was no previous Subscription") {
 		t.Fatalf("restore: %v / %q", events(), result.Message)
 	}
 	f.mu.Lock()
@@ -823,29 +816,29 @@ func TestUpdateStream_FailedFirstInstallRemovesTheAttemptCSV(t *testing.T) {
 func TestRestore_KeepsAPreExistingCSV(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 	c := f.client(context.Background())
-	r, err := captureOperatorRecovery(c)
+	r, err := operator.CaptureRecovery(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.subscriptionChanged = true
+	r.SubscriptionChanged = true
 	f.mu.Lock()
 	f.sub = nil
 	f.mu.Unlock()
 	emit, events := eventsRecorder()
 	result := &types.OperationResponse{Message: "failed"}
-	r.restore(c, result, emit)
+	r.Restore(c, result, emit)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.csvs["rhods-operator.3.6.0"]; !ok {
 		t.Fatalf("the pre-existing CSV was deleted; writes=%v", f.requests)
 	}
-	if lastStatus(events(), restoreStepName) != "success" || f.sub == nil {
+	if lastStatus(events(), operator.RestoreStepName) != "success" || f.sub == nil {
 		t.Fatalf("restore: %v sub=%v", events(), f.sub)
 	}
 	// A CSV with the same name but a new UID was created by the attempt.
 	f.csvs["rhods-operator.3.6.0"]["metadata"].(map[string]any)["uid"] = "recreated"
 	f.mu.Unlock()
-	csvs, err := r.attemptCSVsToRemove(c)
+	csvs, err := r.AttemptCSVsToRemove(c)
 	f.mu.Lock()
 	if err != nil || fmt.Sprint(csvs) != "[{rhods-operator.3.6.0 recreated}]" {
 		t.Fatalf("attempt CSVs = %v, %v", csvs, err)
@@ -858,11 +851,11 @@ func TestRestore_KeepsAPreExistingCSV(t *testing.T) {
 func TestRestore_CSVDeletionTimeoutIsIncomplete(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"channel": "fast"})
 	c := f.client(context.Background())
-	r, err := captureOperatorRecovery(c)
+	r, err := operator.CaptureRecovery(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.subscriptionChanged, r.csvRemoved = true, true
+	r.SubscriptionChanged, r.CSVRemoved = true, true
 	f.mu.Lock()
 	delete(f.csvs, "rhods-operator.3.6.0")
 	f.addCSV("rhods-operator.3.6.1", "Failed")
@@ -870,8 +863,8 @@ func TestRestore_CSVDeletionTimeoutIsIncomplete(t *testing.T) {
 	f.mu.Unlock()
 	emit, events := eventsRecorder()
 	result := &types.OperationResponse{Message: "CSV failed."}
-	r.restore(c, result, emit)
-	if lastStatus(events(), restoreStepName) != "failed" || !strings.Contains(result.Message, "recovery is incomplete") ||
+	r.Restore(c, result, emit)
+	if lastStatus(events(), operator.RestoreStepName) != "failed" || !strings.Contains(result.Message, "recovery is incomplete") ||
 		!strings.Contains(result.Message, "rhods-operator.3.6.1 from the failed attempt is still being deleted") {
 		t.Fatalf("events=%v message=%q", events(), result.Message)
 	}
@@ -886,15 +879,13 @@ func TestRestore_CSVDeletionTimeoutIsIncomplete(t *testing.T) {
 // Subscription re-apply always runs with a fresh context.
 func TestRestore_ReapplyRunsAfterTheDeletionBudget(t *testing.T) {
 	t.Cleanup(record.SetRestoreCSVBudgetForTest(30 * time.Millisecond))
-	oldDel := CSVDeletionTimeout
-	CSVDeletionTimeout = time.Second
-	t.Cleanup(func() { CSVDeletionTimeout = oldDel })
+	t.Cleanup(operator.SetCSVDeletionTimeoutForTest(time.Second))
 
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"channel": "fast"})
 	c := f.client(context.Background())
-	r, _ := captureOperatorRecovery(c)
-	r.subscriptionChanged, r.csvRemoved = true, true
-	r.noteCatalogChanged()
+	r, _ := operator.CaptureRecovery(c)
+	r.SubscriptionChanged, r.CSVRemoved = true, true
+	r.NoteCatalogChanged()
 	f.mu.Lock()
 	delete(f.csvs, "rhods-operator.3.6.0")
 	f.addCSV("rhods-operator.3.6.1", "Failed")
@@ -905,7 +896,7 @@ func TestRestore_ReapplyRunsAfterTheDeletionBudget(t *testing.T) {
 	result := &types.OperationResponse{}
 	emit, _ := eventsRecorder()
 	start := kube.Clock().Now()
-	r.restore(c, result, emit)
+	r.Restore(c, result, emit)
 	if kube.Clock().Since(start) > 900*time.Millisecond {
 		t.Fatalf("restore took %s: the CSV waits did not respect the budget", kube.Clock().Since(start))
 	}
@@ -939,7 +930,7 @@ func TestManualApproval_OnlyTheConfirmedCSV(t *testing.T) {
 			c := f.client(context.Background())
 			var r *types.OperationResponse
 			if op == "update" {
-				r, _ = UpdateStream(c, testNightlyImage, func(UpdateStepEvent) {})
+				r, _ = operator.UpdateStream(c, testNightlyImage, func(UpdateStepEvent) {})
 			} else {
 				r, _ = RefreshOperator(c)
 			}
@@ -976,7 +967,7 @@ func TestRefresh_AfterACrashUsesTheRecordedSubscription(t *testing.T) {
 	config := map[string]any{"nodeSelector": map[string]any{"node-role.kubernetes.io/infra": ""}}
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"config": config})
 	c := f.client(context.Background())
-	if _, err := captureOperatorRecovery(c); err != nil { // an operation starts and records it
+	if _, err := operator.CaptureRecovery(c); err != nil { // an operation starts and records it
 		t.Fatal(err)
 	}
 	f.mu.Lock()
@@ -1127,7 +1118,7 @@ func TestOperations_UnreadableCSVsCarryTheRequestsCode(t *testing.T) {
 			c := f.client(context.Background())
 			var r *types.OperationResponse
 			if op == "update" {
-				r, _ = UpdateStream(c, testNightlyImage, func(UpdateStepEvent) {})
+				r, _ = operator.UpdateStream(c, testNightlyImage, func(UpdateStepEvent) {})
 			} else {
 				r, _ = Reinstall(c, "nightly", testNightlyImage, "")
 			}
@@ -1199,7 +1190,7 @@ func TestOperationsRefuseAForeignSubscription(t *testing.T) {
 			var r *types.OperationResponse
 			switch op {
 			case "update":
-				r, _ = UpdateStream(c, testNightlyImage, func(UpdateStepEvent) {})
+				r, _ = operator.UpdateStream(c, testNightlyImage, func(UpdateStepEvent) {})
 			case "reinstall":
 				r, _ = Reinstall(c, "nightly", testNightlyImage, "")
 			case "refresh":
@@ -1239,7 +1230,7 @@ func TestReinstallDowngrade_StoredVersionsCheck(t *testing.T) {
 		{name: "CSV describes only v1 of a CRD storing v2: warning, installed", owned: `[{"name":"` + dsc + `","version":"v1"}]`, crds: liveCRDs, confirmed: true,
 			wantSuccess: true, wantInMsg: "is installed", wantInLogs: "may not serve every version the live CRDs store"},
 		{name: "unconfirmed: the confirmation carries the warning", owned: `[{"name":"` + dsc + `","version":"v1"}]`, crds: liveCRDs,
-			wantCode: errorCodeDowngrade, wantInMsg: "stores objects as v2"},
+			wantCode: operator.ErrorCodeDowngrade, wantInMsg: "stores objects as v2"},
 		{name: "CSV describes the stored version", owned: `[{"name":"` + dsc + `","version":"v1"},{"name":"` + dsc + `","version":"v2"}]`, crds: liveCRDs, confirmed: true,
 			wantSuccess: true, wantInMsg: "is installed", wantInLogs: "describes every stored version"},
 		{name: "CRD list unreadable: warning, installed", owned: `[{"name":"` + dsc + `","version":"v1"}]`, crds: `not json`, confirmed: true,
@@ -1294,20 +1285,20 @@ func TestWaitRequiresTheCSVToStaySucceeded(t *testing.T) {
 	t.Run("flips back and stays down", func(t *testing.T) {
 		f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 		phaseOverTime(f, func(elapsed time.Duration) string {
-			if elapsed >= CSVSucceededSettle/2 {
+			if elapsed >= operator.CSVSucceededSettle/2 {
 				return "Pending"
 			}
 			return ""
 		})
 		var logs []string
-		outcome := waitForOperatorInstall(f.client(context.Background()), func(UpdateStepEvent) {}, &logs, &operatorRecovery{}, "")
-		if outcome.succeeded {
+		outcome := operator.WaitForInstall(f.client(context.Background()), func(UpdateStepEvent) {}, &logs, &operator.Recovery{}, "")
+		if outcome.Succeeded {
 			t.Fatalf("a CSV that left Succeeded within the settle window was reported installed: %+v", outcome)
 		}
 	})
 	t.Run("flips back and recovers", func(t *testing.T) {
 		f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
-		pendingFrom, pendingUntil := CSVSucceededSettle/2, CSVSucceededSettle/2+2*CSVSucceededSettle
+		pendingFrom, pendingUntil := operator.CSVSucceededSettle/2, operator.CSVSucceededSettle/2+2*operator.CSVSucceededSettle
 		phaseOverTime(f, func(elapsed time.Duration) string {
 			switch {
 			case elapsed >= pendingUntil:
@@ -1319,11 +1310,11 @@ func TestWaitRequiresTheCSVToStaySucceeded(t *testing.T) {
 		})
 		start := kube.Clock().Now()
 		var logs []string
-		outcome := waitForOperatorInstall(f.client(context.Background()), func(UpdateStepEvent) {}, &logs, &operatorRecovery{}, "")
-		if !outcome.succeeded {
+		outcome := operator.WaitForInstall(f.client(context.Background()), func(UpdateStepEvent) {}, &logs, &operator.Recovery{}, "")
+		if !outcome.Succeeded {
 			t.Fatalf("outcome = %+v", outcome)
 		}
-		if min := pendingUntil + CSVSucceededSettle; kube.Clock().Since(start) < min {
+		if min := pendingUntil + operator.CSVSucceededSettle; kube.Clock().Since(start) < min {
 			t.Fatalf("succeeded after %s, before the CSV had settled (%s)", kube.Clock().Since(start), min)
 		}
 	})

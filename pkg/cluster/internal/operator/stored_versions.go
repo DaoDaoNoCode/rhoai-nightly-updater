@@ -1,4 +1,4 @@
-package cluster
+package operator
 
 import (
 	"encoding/json"
@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // spaced returns " "+s, or "" for an empty s.
@@ -27,7 +28,7 @@ func spaced(s string) string {
 // which a downgrade can hit (live: DSC and DSCI store v2, which 2.x bundles
 // lack). Only the operator's own CRDs (OLM package label) are read; CRDs
 // the target does not list are skipped.
-func storedVersionConflicts(c *Client, owned map[string][]string) ([]string, error) {
+func storedVersionConflicts(c *kube.Client, owned map[string][]string) ([]string, error) {
 	body, _, err := c.Do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil, url.Values{"labelSelector": {components.RHOAICRDSelectors[0]}})
 	if err != nil {
 		return nil, fmt.Errorf("list the operator's CRDs: %w", err)

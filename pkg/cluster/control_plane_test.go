@@ -9,6 +9,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/node"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -255,7 +256,7 @@ func TestUpdateStream_CatalogImagePullAdvicePerTopology(t *testing.T) {
 			f.topology = tc.topology
 			f.verifyState = "TRANSIENT_FAILURE"
 			f.catalogPods = `{"items":[{"status":{"containerStatuses":[{"state":{"waiting":{"reason":"ErrImagePull","message":"unauthorized: access to the requested resource is not authorized"}}}]}}]}`
-			result, err := UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
+			result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 			if err != nil || result.Success || result.ErrorCode != "catalog_image_pull" {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}

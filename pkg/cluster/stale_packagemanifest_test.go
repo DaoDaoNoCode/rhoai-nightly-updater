@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 )
 
 const rolledBackCSV = "rhods-operator.3.5.0"
@@ -33,7 +35,7 @@ func catalogServesOlder(f *fakeOLM) {
 func TestUpdateUnderGitOps_StalePackageManifestCannotDowngrade(t *testing.T) {
 	for name, run := range map[string]func(f *fakeOLM) (string, string, bool){
 		"full profile": func(f *fakeOLM) (string, string, bool) {
-			r, _ := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+			r, _ := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 			return r.ErrorCode, r.Message, r.Success
 		},
 		"gitops profile": func(f *fakeOLM) (string, string, bool) {

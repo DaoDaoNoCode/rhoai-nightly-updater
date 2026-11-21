@@ -1,4 +1,4 @@
-package cluster
+package operator
 
 import (
 	"errors"
@@ -15,34 +15,34 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-const restoreStepName = "restore_previous_operator"
+const RestoreStepName = "restore_previous_operator"
 
-// operatorRecovery holds the desired state captured before an operation and
+// Recovery holds the desired state captured before an operation and
 // what the operation has changed, so a failure restores exactly that.
-type operatorRecovery struct {
-	subscription map[string]any
+type Recovery struct {
+	Subscription map[string]any
 	catalog      map[string]any
 
 	// catalogChanged: the nightly CatalogSource was replaced or deleted
-	// (noteCatalogChanged, which also sets catalogRestore).
+	// (NoteCatalogChanged, which also sets catalogRestore).
 	catalogChanged bool
 	// catalogRestore puts the previous nightly catalog back. It is a field,
 	// set only by the operations that change the catalog, so the gitops
 	// profile's Update, which never does, does not reach a CatalogSource
 	// write through the restore (pkg/cluster/rbac_gitops_test.go).
-	catalogRestore func(r *operatorRecovery, c *Client) []string
-	// subscriptionChanged: the Subscription was deleted or replaced.
-	subscriptionChanged bool
+	catalogRestore func(r *Recovery, c *kube.Client) []string
+	// SubscriptionChanged: the Subscription was deleted or replaced.
+	SubscriptionChanged bool
 	// subscriptionReplaced: the operation found another Subscription in
 	// place of the one it was about to delete (a UID-guarded delete
 	// conflicted). The restore leaves that one alone: it neither deletes
 	// nor overwrites it.
 	subscriptionReplaced bool
-	// attemptSubscriptionUID is the UID of the Subscription the operation
+	// AttemptSubscriptionUID is the UID of the Subscription the operation
 	// applied (noteAttemptSubscription). The restore deletes only that one,
 	// or the previous Subscription when the operation applied none
 	// (subscriptionToDelete); another object under the name is left alone.
-	attemptSubscriptionUID string
+	AttemptSubscriptionUID string
 	// restoreStartingCSV, when set (Update's managed path, which leaves the
 	// catalog as Git or a policy sets it), is the CSV the operation removed:
 	// the restored Subscription pins it as startingCSV (unless its spec, Git's,
@@ -51,9 +51,9 @@ type operatorRecovery struct {
 	// another build of the catalog in its place (operator-lifecycle-manager
 	// pkg/controller/registry/resolver/resolver.go, getSubscriptionVariables).
 	restoreStartingCSV string
-	// csvRemoved: the operation deleted the previously installed CSV
+	// CSVRemoved: the operation deleted the previously installed CSV
 	// (removedCSVs names it), so OLM must reinstall the previous version.
-	csvRemoved  bool
+	CSVRemoved  bool
 	removedCSVs []string
 	// keepNewInstall: OLM was still installing the new target when the
 	// operation stopped waiting; the new state is kept instead of undone.
@@ -71,16 +71,16 @@ type operatorRecovery struct {
 	preCSVs map[string]string
 }
 
-// noteCatalogChanged records that the operation replaced or deleted the
+// NoteCatalogChanged records that the operation replaced or deleted the
 // nightly catalog, so a failure restores it.
-func (r *operatorRecovery) noteCatalogChanged() {
+func (r *Recovery) NoteCatalogChanged() {
 	r.catalogChanged = true
-	r.catalogRestore = (*operatorRecovery).restoreNightlyCatalog
+	r.catalogRestore = (*Recovery).restoreNightlyCatalog
 }
 
 // restoreNightlyCatalog re-applies the catalog captured before the
 // operation, or deletes the one it created. It returns the failures.
-func (r *operatorRecovery) restoreNightlyCatalog(c *Client) []string {
+func (r *Recovery) restoreNightlyCatalog(c *kube.Client) []string {
 	catalogPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	if r.catalog != nil {
 		obj := map[string]any{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
@@ -96,14 +96,14 @@ func (r *operatorRecovery) restoreNightlyCatalog(c *Client) []string {
 	return nil
 }
 
-func (r *operatorRecovery) installPlanName() string {
-	status, _ := r.subscription["status"].(map[string]any)
+func (r *Recovery) installPlanName() string {
+	status, _ := r.Subscription["status"].(map[string]any)
 	ref, _ := status["installPlanRef"].(map[string]any)
 	name, _ := ref["name"].(string)
 	return name
 }
 
-func (r *operatorRecovery) noteAttemptCSV(name string) {
+func (r *Recovery) NoteAttemptCSV(name string) {
 	if r == nil || name == "" {
 		return
 	}
@@ -113,20 +113,20 @@ func (r *operatorRecovery) noteAttemptCSV(name string) {
 	r.attemptCSVs = append(r.attemptCSVs, name)
 }
 
-// noteCSVRemoved records that the operation deleted the CSV name, which
+// NoteCSVRemoved records that the operation deleted the CSV name, which
 // existed before it.
-func (r *operatorRecovery) noteCSVRemoved(name string) {
+func (r *Recovery) NoteCSVRemoved(name string) {
 	if r == nil {
 		return
 	}
-	r.csvRemoved = true
+	r.CSVRemoved = true
 	if name != "" && !slices.Contains(r.removedCSVs, name) {
 		r.removedCSVs = append(r.removedCSVs, name)
 	}
 }
 
-func captureOperatorRecovery(c *Client) (*operatorRecovery, error) {
-	r := &operatorRecovery{}
+func CaptureRecovery(c *kube.Client) (*Recovery, error) {
+	r := &Recovery{}
 	pre, err := listRHOAICSVs(c)
 	if err != nil {
 		return nil, fmt.Errorf("capture operator recovery state: list CSVs: %w", err)
@@ -139,7 +139,7 @@ func captureOperatorRecovery(c *Client) (*operatorRecovery, error) {
 		path   string
 		target *map[string]any
 	}{
-		{rhoai.SubscriptionPath(), &r.subscription},
+		{rhoai.SubscriptionPath(), &r.Subscription},
 		{rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName), &r.catalog},
 	} {
 		var obj map[string]any
@@ -157,10 +157,10 @@ func captureOperatorRecovery(c *Client) (*operatorRecovery, error) {
 			*resource.target = obj
 		}
 	}
-	if r.subscription != nil {
+	if r.Subscription != nil {
 		// Recorded so a later operation can recreate it after a crash left
 		// no Subscription. Failing to record it never blocks the operation.
-		if err := record.SaveSubscriptionSnapshot(c, r.subscription); err != nil {
+		if err := record.SaveSubscriptionSnapshot(c, r.Subscription); err != nil {
 			slog.Warn("could not record the operator Subscription", "error", err)
 		}
 	} else if rec, err := record.LoadSubscriptionSnapshot(c); err != nil {
@@ -171,14 +171,14 @@ func captureOperatorRecovery(c *Client) (*operatorRecovery, error) {
 	return r, nil
 }
 
-// subscriptionBase is the Subscription whose settings (spec.config, approval
+// SubscriptionBase is the Subscription whose settings (spec.config, approval
 // mode) a new Subscription carries over: the live one, else the recorded one.
-func (r *operatorRecovery) subscriptionBase() map[string]any {
+func (r *Recovery) SubscriptionBase() map[string]any {
 	if r == nil {
 		return nil
 	}
-	if r.subscription != nil {
-		return r.subscription
+	if r.Subscription != nil {
+		return r.Subscription
 	}
 	if r.recorded != nil && r.recorded.Spec != nil {
 		return map[string]any{"spec": r.recorded.Spec}
@@ -186,16 +186,16 @@ func (r *operatorRecovery) subscriptionBase() map[string]any {
 	return nil
 }
 
-// recordedNote is logged when the recorded Subscription replaces a missing
+// RecordedNote is logged when the recorded Subscription replaces a missing
 // live one.
-func (r *operatorRecovery) recordedNote() string {
-	if r == nil || r.subscription != nil || r.recorded == nil {
+func (r *Recovery) RecordedNote() string {
+	if r == nil || r.Subscription != nil || r.recorded == nil {
 		return ""
 	}
 	return fmt.Sprintf("No operator Subscription exists; its settings (config, approval mode) are taken from the Subscription recorded at %s", r.recorded.RecordedAt)
 }
 
-// restore puts back what a failed operation changed:
+// Restore puts back what a failed operation changed:
 //   - Only the catalog changed: the previous catalog is re-applied (or the
 //     one this attempt created is deleted); the running operator is left
 //     alone.
@@ -208,23 +208,23 @@ func (r *operatorRecovery) recordedNote() string {
 // CRD conversion webhooks and operator webhooks of a deleted CSV, so every
 // step is safe to repeat. Re-running Update or Reinstall recovers from any
 // point where this restore stops.
-func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, emit func(UpdateStepEvent)) {
+func (r *Recovery) Restore(c *kube.Client, result *types.OperationResponse, emit func(types.UpdateStepEvent)) {
 	if r == nil || (result != nil && result.Success) || r.keepNewInstall {
 		return
 	}
-	operatorTouched := r.subscriptionChanged || r.csvRemoved
+	operatorTouched := r.SubscriptionChanged || r.CSVRemoved
 	if !operatorTouched && !r.catalogChanged {
 		return
 	}
 	if record.OperationLockLost(c) {
 		// Another updater pod holds the lock and may be changing the same
 		// Subscription and catalog: a restore would undo its work.
-		msg := "Automatic operator recovery skipped: " + LockLostMessage
+		msg := "Automatic operator recovery skipped: " + record.LockLostMessage
 		slog.Warn("operator restore skipped: the cross-pod operation lock was lost")
 		if result != nil {
 			result.Logs = append(result.Logs, msg)
 		}
-		emit(UpdateStepEvent{Step: restoreStepName, Status: "skipped", Message: msg, ErrorCode: "lock_lost"})
+		emit(types.UpdateStepEvent{Step: RestoreStepName, Status: "skipped", Message: msg, ErrorCode: "lock_lost"})
 		return
 	}
 
@@ -242,24 +242,24 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 	if r.catalogChanged && r.catalogRestore != nil {
 		failures = append(failures, r.catalogRestore(r, c)...)
 	}
-	if operatorTouched && r.subscription != nil && !subReplaced {
+	if operatorTouched && r.Subscription != nil && !subReplaced {
 		failures = append(failures, r.reapplySubscription(c)...)
 	}
 
-	gitManaged := r.subscription != nil && argo.TrackingOf(c, r.subscription, argo.SubscriptionObject.Group, "Subscription").ManagedBy() != ""
+	gitManaged := r.Subscription != nil && argo.TrackingOf(c, r.Subscription, argo.SubscriptionObject.Group, "Subscription").ManagedBy() != ""
 	status, message := r.restoreMessage(failures, stillDeleting, operatorTouched, gitManaged)
 	if result != nil {
 		result.Logs = append(result.Logs, message)
 		result.Message = strings.TrimSpace(result.Message + " " + message)
 	}
-	emit(UpdateStepEvent{Step: restoreStepName, Status: status, Message: message})
+	emit(types.UpdateStepEvent{Step: RestoreStepName, Status: status, Message: message})
 }
 
 // removeAttempt deletes the attempt's Subscription and the CSVs installed
 // for it, within restoreCSVBudget. It returns failures with what failed
 // added, the CSVs still being deleted, and whether the Subscription turned
 // out to be replaced by someone else (subReplaced: already known).
-func (r *operatorRecovery) removeAttempt(c *Client, failures []string, subReplaced bool) ([]string, []string, bool) {
+func (r *Recovery) removeAttempt(c *kube.Client, failures []string, subReplaced bool) ([]string, []string, bool) {
 	var stillDeleting []string
 	delCtx, cancelDel := record.PostOperationContext(c, record.RestoreCSVBudget)
 	cd := c.WithContext(delCtx)
@@ -269,7 +269,7 @@ func (r *operatorRecovery) removeAttempt(c *Client, failures []string, subReplac
 	// the operation already found replaced is not even read.
 	replacedNow := false
 	if !subReplaced {
-		if err := r.deleteOwnSubscription(cd); errors.Is(err, errReplacedMeanwhile) && r.attemptSubscriptionUID != "" {
+		if err := r.deleteOwnSubscription(cd); errors.Is(err, errReplacedMeanwhile) && r.AttemptSubscriptionUID != "" {
 			subReplaced, replacedNow = true, true
 			failures = append(failures, "another Subscription replaced the one this operation created, so it and the CSVs installed for it were left unchanged")
 		} else if errors.Is(err, errReplacedMeanwhile) {
@@ -284,7 +284,7 @@ func (r *operatorRecovery) removeAttempt(c *Client, failures []string, subReplac
 	var csvs []rhoaiCSV
 	var err error
 	if !replacedNow {
-		csvs, err = r.attemptCSVsToRemove(cd)
+		csvs, err = r.AttemptCSVsToRemove(cd)
 	}
 	if err != nil {
 		failures = append(failures, "list CSVs: "+err.Error())
@@ -312,11 +312,11 @@ func (r *operatorRecovery) removeAttempt(c *Client, failures []string, subReplac
 // reapplySubscription re-applies the previous Subscription, pinned to the
 // CSV that was installed when the operation removed it; what failed, if
 // anything.
-func (r *operatorRecovery) reapplySubscription(c *Client) []string {
+func (r *Recovery) reapplySubscription(c *kube.Client) []string {
 	var failures []string
-	spec := r.subscription["spec"]
+	spec := r.Subscription["spec"]
 	// A pin the restored spec sets itself (Git's) is kept.
-	if prev, _ := spec.(map[string]any); r.csvRemoved && r.restoreStartingCSV != "" && prev != nil && prev["startingCSV"] == nil {
+	if prev, _ := spec.(map[string]any); r.CSVRemoved && r.restoreStartingCSV != "" && prev != nil && prev["startingCSV"] == nil {
 		pinned := make(map[string]any, len(prev)+1)
 		maps.Copy(pinned, prev)
 		pinned["startingCSV"] = r.restoreStartingCSV
@@ -324,7 +324,7 @@ func (r *operatorRecovery) reapplySubscription(c *Client) []string {
 	}
 	obj := map[string]any{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
 		"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS}, "spec": spec}
-	argo.KeepTracking(r.subscription, obj)
+	argo.KeepTracking(r.Subscription, obj)
 	if _, _, err := c.Apply(rhoai.SubscriptionPath(), obj); err != nil {
 		failures = append(failures, "Subscription: "+err.Error())
 	}
@@ -333,7 +333,7 @@ func (r *operatorRecovery) reapplySubscription(c *Client) []string {
 
 // restoreMessage is the restore step's status and message. gitManaged: Argo
 // CD manages the restored Subscription (argoTracking.managedBy).
-func (r *operatorRecovery) restoreMessage(failures, stillDeleting []string, operatorTouched, gitManaged bool) (string, string) {
+func (r *Recovery) restoreMessage(failures, stillDeleting []string, operatorTouched, gitManaged bool) (string, string) {
 	var message string
 	status := "success"
 	switch {
@@ -349,26 +349,26 @@ func (r *operatorRecovery) restoreMessage(failures, stillDeleting []string, oper
 		// look.
 		status = "failed"
 		restored := "The Subscription and catalog were restored to their previous state"
-		if r.subscription != nil {
+		if r.Subscription != nil {
 			restored = "The previous catalog and Subscription were re-applied"
 		}
 		message = fmt.Sprintf("Automatic operator recovery is incomplete. %s, but %s", restored, stillDeletingNote(stillDeleting))
 	case !operatorTouched:
 		message = "The previous nightly catalog was restored; the Subscription and CSV were not changed."
-	case !r.csvRemoved && r.subscription != nil:
+	case !r.CSVRemoved && r.Subscription != nil:
 		message = "The previous catalog and Subscription were restored; the installed operator was not changed."
-	case r.subscription == nil:
+	case r.Subscription == nil:
 		message = "There was no previous Subscription, so the Subscription and CSV created by this attempt were removed and the catalog was restored to its previous state."
 	case gitManaged:
 		// Git's catalog serves one build: the restore makes OLM install it
 		// again, which is the build that just failed.
 		message = "The Subscription was recreated with Git's settings; OLM installs the build the catalog serves again. To go back to another build, change the catalog image in Git."
-		if spec, _ := r.subscription["spec"].(map[string]any); r.csvRemoved && r.restoreStartingCSV != "" && spec["startingCSV"] == nil {
+		if spec, _ := r.Subscription["spec"].(map[string]any); r.CSVRemoved && r.restoreStartingCSV != "" && spec["startingCSV"] == nil {
 			message = fmt.Sprintf("The Subscription was recreated with Git's settings and startingCSV %s, the CSV that was installed: OLM installs the build the catalog serves again if the catalog has that CSV, and nothing else. To go back to another build, change the catalog image in Git.", r.restoreStartingCSV)
 		}
 	default:
 		message = "The previous catalog and Subscription were restored; OLM will reinstall the previous operator version. Watch the operator status before retrying."
-		if spec, _ := r.subscription["spec"].(map[string]any); r.csvRemoved && spec["installPlanApproval"] == "Manual" {
+		if spec, _ := r.Subscription["spec"].(map[string]any); r.CSVRemoved && spec["installPlanApproval"] == "Manual" {
 			message += " The Subscription uses Manual approval: approve its InstallPlan in the console to reinstall the operator."
 		}
 	}
@@ -392,7 +392,7 @@ type rhoaiCSV struct {
 
 // listRHOAICSVs lists the RHOAI CSVs (rhods-operator.*, not copied) in the
 // operator namespace. A missing namespace is an empty list.
-func listRHOAICSVs(c *Client) ([]rhoaiCSV, error) {
+func listRHOAICSVs(c *kube.Client) ([]rhoaiCSV, error) {
 	var list struct {
 		Items []struct {
 			Metadata struct {
@@ -423,7 +423,7 @@ func listRHOAICSVs(c *Client) ([]rhoaiCSV, error) {
 // match), so nothing was deleted.
 var errReplacedMeanwhile = errors.New("replaced by another object")
 
-// attemptCSVsToRemove lists the RHOAI CSVs the restore deletes, each with the
+// AttemptCSVsToRemove lists the RHOAI CSVs the restore deletes, each with the
 // UID its delete is conditioned on:
 //   - a CSV that did not exist before the operation, or whose name now has
 //     another UID: the attempt created it (also after a failed first
@@ -435,7 +435,7 @@ var errReplacedMeanwhile = errors.New("replaced by another object")
 // Every other CSV that existed before the operation is kept, also when the
 // operation deleted the previous CSV (for example a second CSV left in
 // Replacing or Pending): the restored Subscription adopts it.
-func (r *operatorRecovery) attemptCSVsToRemove(c *Client) ([]rhoaiCSV, error) {
+func (r *Recovery) AttemptCSVsToRemove(c *kube.Client) ([]rhoaiCSV, error) {
 	remove := func(csv rhoaiCSV) bool {
 		if csv.UID == "" {
 			return false // nothing to guard the delete with
@@ -474,7 +474,7 @@ func (r *operatorRecovery) attemptCSVsToRemove(c *Client) ([]rhoaiCSV, error) {
 				UID string `json:"uid"`
 			} `json:"metadata"`
 		}
-		found, getErr := c.GetIntoOptional(csvPath(name), &obj)
+		found, getErr := c.GetIntoOptional(CSVPath(name), &obj)
 		if getErr != nil {
 			return out, err
 		}
@@ -492,8 +492,8 @@ func (r *operatorRecovery) attemptCSVsToRemove(c *Client) ([]rhoaiCSV, error) {
 // finalizer removes the webhooks and cluster RBAC first; a new CSV with the
 // same name cannot be created until then). A CSV with the same
 // name but another UID is never deleted (errReplacedMeanwhile).
-func deleteCSVByUIDAndWait(c *Client, csv rhoaiCSV) (gone bool, err error) {
-	path := csvPath(csv.Name)
+func deleteCSVByUIDAndWait(c *kube.Client, csv rhoaiCSV) (gone bool, err error) {
+	path := CSVPath(csv.Name)
 	if _, err := kube.DeleteWithUID(c, path, csv.UID); err != nil {
 		switch {
 		case kube.IsK8sNotFound(err):
@@ -528,27 +528,27 @@ func deleteCSVByUIDAndWait(c *Client, csv rhoaiCSV) (gone bool, err error) {
 // staging/src/k8s.io/apiserver/pkg/endpoints/handlers/patch.go,
 // PatchResource: transformResponseObject); only when that answer has no UID
 // is the Subscription read once. r nil records nothing.
-func (r *operatorRecovery) noteAttemptSubscription(c *Client, applied []byte) {
+func (r *Recovery) noteAttemptSubscription(c *kube.Client, applied []byte) {
 	if r == nil {
 		return
 	}
 	if meta, err := kube.ParseObjectMeta(applied); err == nil && meta.UID != "" {
-		r.attemptSubscriptionUID = meta.UID
+		r.AttemptSubscriptionUID = meta.UID
 		return
 	}
 	if meta, found, err := kube.ReadObjectMeta(c, rhoai.SubscriptionPath()); err == nil && found {
-		r.attemptSubscriptionUID = meta.UID
+		r.AttemptSubscriptionUID = meta.UID
 	}
 }
 
 // subscriptionToDelete is the UID of the Subscription the restore may
 // delete: the one the operation applied, else (it applied none) the
 // previous one, which the restore then applies again.
-func (r *operatorRecovery) subscriptionToDelete() string {
-	if r.attemptSubscriptionUID != "" {
-		return r.attemptSubscriptionUID
+func (r *Recovery) subscriptionToDelete() string {
+	if r.AttemptSubscriptionUID != "" {
+		return r.AttemptSubscriptionUID
 	}
-	meta, _ := r.subscription["metadata"].(map[string]any)
+	meta, _ := r.Subscription["metadata"].(map[string]any)
 	uid, _ := meta["uid"].(string)
 	return uid
 }
@@ -557,7 +557,7 @@ func (r *operatorRecovery) subscriptionToDelete() string {
 // guarded by its UID: errReplacedMeanwhile when another object holds the
 // name, nil when none does. Without a UID to delete, any Subscription found
 // is someone else's.
-func (r *operatorRecovery) deleteOwnSubscription(c *Client) error {
+func (r *Recovery) deleteOwnSubscription(c *kube.Client) error {
 	if uid := r.subscriptionToDelete(); uid != "" {
 		return deleteSubscriptionWithUID(c, uid)
 	}
@@ -573,7 +573,7 @@ func (r *operatorRecovery) deleteOwnSubscription(c *Client) error {
 
 // deleteSubscriptionWithUID deletes the operator Subscription only while it
 // is the object with that UID; errReplacedMeanwhile when it is another one.
-func deleteSubscriptionWithUID(c *Client, uid string) error {
+func deleteSubscriptionWithUID(c *kube.Client, uid string) error {
 	if uid == "" {
 		return fmt.Errorf("the Subscription has no UID to guard its deletion")
 	}

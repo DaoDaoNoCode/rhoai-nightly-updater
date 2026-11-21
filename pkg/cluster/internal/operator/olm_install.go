@@ -1,4 +1,4 @@
-package cluster
+package operator
 
 import (
 	"context"
@@ -39,10 +39,10 @@ import (
 //   - CatalogSourcesUnhealthy describes every catalog in scope, not only the
 //     Subscription's, so it is reported but never treated as a failure.
 var (
-	// OperatorInstallTimeout bounds the wait for OLM to install the new
+	// InstallTimeout bounds the wait for OLM to install the new
 	// operator. Together with the catalog waits before it, an operation stays
 	// within the 15-minute mutation deadline.
-	OperatorInstallTimeout = 8 * time.Minute
+	InstallTimeout = 8 * time.Minute
 	// ResolutionFailedGrace is how long ResolutionFailed may persist before
 	// the operation is treated as failed.
 	ResolutionFailedGrace = 60 * time.Second
@@ -64,15 +64,15 @@ var (
 	CSVDeletionTimeout = 60 * time.Second
 )
 
-func csvPath(name string) string {
+func CSVPath(name string) string {
 	return rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, name)
 }
 
-// buildSubscription returns the Subscription for source/channel. Settings the
+// BuildSubscription returns the Subscription for source/channel. Settings the
 // user put on the previous Subscription are carried over: spec.config (env,
 // resources, nodeSelector, tolerations, ...) and installPlanApproval. Only
 // startingCSV is dropped, because it names a version of the previous channel.
-func buildSubscription(previous map[string]any, source, channel string) map[string]any {
+func BuildSubscription(previous map[string]any, source, channel string) map[string]any {
 	spec := map[string]any{}
 	if prevSpec, ok := previous["spec"].(map[string]any); ok {
 		maps.Copy(spec, prevSpec)
@@ -93,16 +93,16 @@ func buildSubscription(previous map[string]any, source, channel string) map[stri
 	}
 }
 
-// ensureOperatorNamespaceAndGroup makes sure the operator namespace has
+// EnsureNamespaceAndGroup makes sure the operator namespace has
 // exactly one OperatorGroup that RHOAI can use. RHOAI CSVs support only the
 // AllNamespaces install mode, which needs a global OperatorGroup (no
 // targetNamespaces, no selector); with two OperatorGroups OLM fails the CSV
 // with TooManyOperatorGroups (OLM doc/design/operatorgroups.md). A missing
 // namespace or OperatorGroup is created; an existing unusable one is reported
 // and left alone. With dryRun nothing is created.
-func ensureOperatorNamespaceAndGroup(c *Client, dryRun bool) (logs []string, problem string, errorCode string) {
+func EnsureNamespaceAndGroup(c *kube.Client, dryRun bool) (logs []string, problem string, errorCode string) {
 	nsPath := "/api/v1/namespaces/" + rhoai.SubNS
-	nsMissing, groups, problem, errorCode := readOperatorNamespaceAndGroups(c)
+	nsMissing, groups, problem, errorCode := ReadNamespaceAndGroups(c)
 	if problem != "" {
 		return logs, problem, errorCode
 	}
@@ -120,7 +120,7 @@ func ensureOperatorNamespaceAndGroup(c *Client, dryRun bool) (logs []string, pro
 
 	switch {
 	case len(groups) > 0:
-		ok, problem := operatorGroupsUsable(groups)
+		ok, problem := GroupsUsable(groups)
 		if problem != "" {
 			return logs, problem, "prerequisites"
 		}
@@ -154,10 +154,10 @@ type rhoaiOperatorGroup struct {
 	} `json:"spec"`
 }
 
-// readOperatorNamespaceAndGroups reads whether the operator namespace exists
+// ReadNamespaceAndGroups reads whether the operator namespace exists
 // and its OperatorGroups (none when the namespace is missing). It only
 // reads; problem is set when either could not be read.
-func readOperatorNamespaceAndGroups(c *Client) (nsMissing bool, groups []rhoaiOperatorGroup, problem string, errorCode string) {
+func ReadNamespaceAndGroups(c *kube.Client) (nsMissing bool, groups []rhoaiOperatorGroup, problem string, errorCode string) {
 	_, found, err := c.GetOptional("/api/v1/namespaces/" + rhoai.SubNS)
 	switch {
 	case err != nil:
@@ -185,10 +185,10 @@ func readOperatorNamespaceAndGroups(c *Client) (nsMissing bool, groups []rhoaiOp
 	return false, groups, "", ""
 }
 
-// operatorGroupsUsable checks one or more existing OperatorGroups: exactly
+// GroupsUsable checks one or more existing OperatorGroups: exactly
 // one, and global. It returns the log line when they are usable, else the
 // problem.
-func operatorGroupsUsable(groups []rhoaiOperatorGroup) (ok, problem string) {
+func GroupsUsable(groups []rhoaiOperatorGroup) (ok, problem string) {
 	if len(groups) > 1 {
 		var names []string
 		for _, g := range groups {
@@ -206,10 +206,10 @@ func operatorGroupsUsable(groups []rhoaiOperatorGroup) (ok, problem string) {
 // waitForCSVGone waits, up to CSVDeletionTimeout, until a deleted CSV no
 // longer exists. It returns false on timeout and the context error if the
 // operation is canceled.
-func waitForCSVGone(c *Client, name string) (bool, error) {
+func waitForCSVGone(c *kube.Client, name string) (bool, error) {
 	deadline := kube.Clock().Now().Add(CSVDeletionTimeout)
 	for {
-		_, _, err := c.Get(csvPath(name))
+		_, _, err := c.Get(CSVPath(name))
 		if kube.IsK8sNotFound(err) {
 			return true, nil
 		}
@@ -222,12 +222,12 @@ func waitForCSVGone(c *Client, name string) (bool, error) {
 	}
 }
 
-// installOutcome is OLM's verdict on a new Subscription.
-type installOutcome struct {
-	succeeded bool
+// InstallOutcome is OLM's verdict on a new Subscription.
+type InstallOutcome struct {
+	Succeeded bool
 	csv       string
-	message   string
-	errorCode string
+	Message   string
+	ErrorCode string
 	// keepNewInstall is set when the wait ended while OLM was still
 	// installing (InstallPlan created, CSV not Failed): undoing that would
 	// throw away a probably working install.
@@ -255,14 +255,14 @@ func describeCondition(c olmCondition) string {
 	}
 }
 
-// installDeadlineReserve is kept free before the operation's own deadline so
+// InstallDeadlineReserve is kept free before the operation's own deadline so
 // the install wait ends with its own, explicit outcome instead of a
 // cancelled request.
-const installDeadlineReserve = 10 * time.Second
+const InstallDeadlineReserve = 10 * time.Second
 
-// waitForOperatorInstall follows the Subscription until OLM has installed its
+// WaitForInstall follows the Subscription until OLM has installed its
 // CSV (phase Succeeded and recorded as installedCSV), reports a failure, or
-// OperatorInstallTimeout passes (or the operation's deadline comes near,
+// InstallTimeout passes (or the operation's deadline comes near,
 // whichever is first). Every wait is bounded. Progress is emitted under
 // step.
 //
@@ -272,13 +272,13 @@ const installDeadlineReserve = 10 * time.Second
 // Anything else OLM proposes is reported and left for an administrator:
 // Manual approval is how admins hold back upgrades, and OLM cannot undo an
 // approved upgrade (RHOAI operator notes §1.3, §1.4).
-func waitForOperatorInstall(c *Client, emit func(UpdateStepEvent), logs *[]string, recovery *operatorRecovery, expectedCSV string) installOutcome {
-	// waitStart is compared with the cluster's condition times (adminAckNote).
+func WaitForInstall(c *kube.Client, emit func(types.UpdateStepEvent), logs *[]string, recovery *Recovery, expectedCSV string) InstallOutcome {
+	// waitStart is compared with the cluster's condition times (AdminAckNote).
 	waitStart := time.Now()
-	deadline := kube.Clock().Now().Add(OperatorInstallTimeout)
+	deadline := kube.Clock().Now().Add(InstallTimeout)
 	budgetLimited := false
-	if opDeadline, ok := c.Context().Deadline(); ok && opDeadline.Add(-installDeadlineReserve).Before(deadline) {
-		deadline, budgetLimited = opDeadline.Add(-installDeadlineReserve), true
+	if opDeadline, ok := c.Context().Deadline(); ok && opDeadline.Add(-InstallDeadlineReserve).Before(deadline) {
+		deadline, budgetLimited = opDeadline.Add(-InstallDeadlineReserve), true
 	}
 	w := &installWait{c: c, emit: emit, logs: logs}
 	approved := map[string]bool{}
@@ -295,7 +295,7 @@ func waitForOperatorInstall(c *Client, emit func(UpdateStepEvent), logs *[]strin
 			if budgetLimited {
 				return stopped("install_timeout", "OLM did not finish installing the operator within the operation's time budget")
 			}
-			return stopped("install_timeout", fmt.Sprintf("OLM did not finish installing the operator within %s", OperatorInstallTimeout))
+			return stopped("install_timeout", fmt.Sprintf("OLM did not finish installing the operator within %s", InstallTimeout))
 		}
 
 		var sub installWaitSubscription
@@ -324,7 +324,7 @@ func waitForOperatorInstall(c *Client, emit func(UpdateStepEvent), logs *[]strin
 		if w.ipName != "" {
 			if outcome, done := checkInstallPlan(c, w.ipName, expectedCSV, approved, logs, progress); done {
 				outcome.csv = w.csvName
-				*logs = append(*logs, outcome.message)
+				*logs = append(*logs, outcome.Message)
 				return outcome
 			}
 		}
@@ -340,18 +340,18 @@ func waitForOperatorInstall(c *Client, emit func(UpdateStepEvent), logs *[]strin
 			continue
 		}
 		w.csvName = name
-		recovery.noteAttemptCSV(name)
+		recovery.NoteAttemptCSV(name)
 		if outcome, done := w.checkCSV(name, sub.Status.InstalledCSV, deadline, waitStart); done {
 			return outcome
 		}
 	}
 }
 
-// installWait is the state of one waitForOperatorInstall, kept across its
+// installWait is the state of one WaitForInstall, kept across its
 // polls.
 type installWait struct {
-	c    *Client
-	emit func(UpdateStepEvent)
+	c    *kube.Client
+	emit func(types.UpdateStepEvent)
 	logs *[]string
 	// When each failing condition was first seen in a row (zero: not
 	// failing).
@@ -385,19 +385,19 @@ func (w *installWait) progress(msg string) {
 	if msg != w.lastProgress {
 		w.lastProgress = msg
 		*w.logs = append(*w.logs, "  "+msg)
-		w.emit(UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: msg})
+		w.emit(types.UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: msg})
 	}
 }
 
 // failed is the outcome of an install OLM failed.
-func (w *installWait) failed(code, msg string) installOutcome {
+func (w *installWait) failed(code, msg string) InstallOutcome {
 	*w.logs = append(*w.logs, msg)
-	return installOutcome{csv: w.csvName, message: msg, errorCode: code}
+	return InstallOutcome{csv: w.csvName, Message: msg, ErrorCode: code}
 }
 
 // stopped is the outcome of a wait that ended before OLM did: the new
 // install is kept while OLM is still installing it.
-func (w *installWait) stopped(code, why string) installOutcome {
+func (w *installWait) stopped(code, why string) InstallOutcome {
 	keep := w.ipName != "" && !w.sawCSVFailed
 	state := w.lastState
 	if state == "" {
@@ -408,13 +408,13 @@ func (w *installWait) stopped(code, why string) installOutcome {
 		msg += " The new Subscription was kept because OLM is still installing it; watch the operator status and re-run Update or Install a different build if it does not finish."
 	}
 	*w.logs = append(*w.logs, msg)
-	return installOutcome{csv: w.csvName, message: msg, errorCode: code, keepNewInstall: keep}
+	return InstallOutcome{csv: w.csvName, Message: msg, ErrorCode: code, keepNewInstall: keep}
 }
 
 // subscriptionConditions reads the Subscription's conditions: whether OLM's
 // resolution or the bundle pull is failing (and still retried), or the
 // failed outcome when done.
-func (w *installWait) subscriptionConditions(sub installWaitSubscription) (resolutionFailing, pullFailing bool, outcome installOutcome, done bool) {
+func (w *installWait) subscriptionConditions(sub installWaitSubscription) (resolutionFailing, pullFailing bool, outcome InstallOutcome, done bool) {
 	progress, failed, logs := w.progress, w.failed, w.logs
 	for _, cond := range sub.Status.Conditions {
 		if cond.Status != "True" {
@@ -459,13 +459,13 @@ func (w *installWait) subscriptionConditions(sub installWaitSubscription) (resol
 	if !pullFailing {
 		w.pullSince = time.Time{}
 	}
-	return resolutionFailing, pullFailing, installOutcome{}, false
+	return resolutionFailing, pullFailing, InstallOutcome{}, false
 }
 
 // checkCSV reads CSV name, the Subscription's current one: the outcome when
 // it failed for CSVFailedGrace or kept Succeeded (as installedCSV) for
 // CSVSucceededSettle, else done is false and the wait goes on.
-func (w *installWait) checkCSV(name, installedCSV string, deadline, waitStart time.Time) (installOutcome, bool) {
+func (w *installWait) checkCSV(name, installedCSV string, deadline, waitStart time.Time) (InstallOutcome, bool) {
 	c, progress, failed, logs, ipName := w.c, w.progress, w.failed, w.logs, w.ipName
 	var csv struct {
 		Metadata struct {
@@ -477,20 +477,20 @@ func (w *installWait) checkCSV(name, installedCSV string, deadline, waitStart ti
 			Message string `json:"message"`
 		} `json:"status"`
 	}
-	found, err := c.GetIntoOptional(csvPath(name), &csv)
+	found, err := c.GetIntoOptional(CSVPath(name), &csv)
 	if err != nil {
-		return installOutcome{}, false
+		return InstallOutcome{}, false
 	}
 	if !found {
 		if ipName != "" {
 			progress(fmt.Sprintf("InstallPlan %s: waiting for OLM to create CSV %s", ipName, name))
 		}
-		return installOutcome{}, false
+		return InstallOutcome{}, false
 	}
 	if csv.Metadata.DeletionTimestamp != nil {
 		// The previous CSV of the same name is still being removed.
 		progress(fmt.Sprintf("Waiting for the previous CSV %s to finish deleting", name))
-		return installOutcome{}, false
+		return InstallOutcome{}, false
 	}
 	phase := csv.Status.Phase
 	if phase == "Failed" {
@@ -503,7 +503,7 @@ func (w *installWait) checkCSV(name, installedCSV string, deadline, waitStart ti
 			return failed("csv_failed", fmt.Sprintf("CSV %s failed to install: %s", name, detail)), true
 		}
 		progress(fmt.Sprintf("CSV %s: Failed (%s); waiting to see whether OLM retries", name, detail))
-		return installOutcome{}, false
+		return InstallOutcome{}, false
 	}
 	w.csvFailedSince = time.Time{}
 	if phase != "Succeeded" {
@@ -518,10 +518,10 @@ func (w *installWait) checkCSV(name, installedCSV string, deadline, waitStart ti
 		// Succeeded then is reported as installed.
 		if kube.Clock().Since(w.succeededSince) < CSVSucceededSettle && kube.Clock().Now().Add(InstallPlanPollInterval).Before(deadline) {
 			progress(fmt.Sprintf("CSV %s: Succeeded; confirming that OLM keeps it installed", name))
-			return installOutcome{}, false
+			return InstallOutcome{}, false
 		}
 		*logs = append(*logs, fmt.Sprintf("OK: CSV %s is Succeeded", name))
-		outcome := installOutcome{succeeded: true, csv: name, note: adminAckNote(c, name, waitStart)}
+		outcome := InstallOutcome{Succeeded: true, csv: name, note: AdminAckNote(c, name, waitStart)}
 		if outcome.note != "" {
 			*logs = append(*logs, "Warning: "+outcome.note)
 		}
@@ -531,7 +531,7 @@ func (w *installWait) checkCSV(name, installedCSV string, deadline, waitStart ti
 		phase = "created"
 	}
 	progress(fmt.Sprintf("CSV %s: %s", name, strings.TrimSpace(phase+" "+parenthesize(csv.Status.Reason))))
-	return installOutcome{}, false
+	return InstallOutcome{}, false
 }
 
 func parenthesize(s string) string {
@@ -544,11 +544,11 @@ func parenthesize(s string) string {
 // checkInstallPlan inspects the Subscription's InstallPlan. It returns done
 // with a failed outcome when the plan failed or needs an approval this tool
 // must not give: it approves only a plan that installs exactly expectedCSV.
-func checkInstallPlan(c *Client, name, expectedCSV string, approved map[string]bool, logs *[]string, progress func(string)) (installOutcome, bool) {
+func checkInstallPlan(c *kube.Client, name, expectedCSV string, approved map[string]bool, logs *[]string, progress func(string)) (InstallOutcome, bool) {
 	path := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, name)
 	body, _, err := c.Get(path)
 	if err != nil {
-		return installOutcome{}, false
+		return InstallOutcome{}, false
 	}
 	var ip struct {
 		Spec struct {
@@ -562,7 +562,7 @@ func checkInstallPlan(c *Client, name, expectedCSV string, approved map[string]b
 		} `json:"status"`
 	}
 	if json.Unmarshal(body, &ip) != nil {
-		return installOutcome{}, false
+		return InstallOutcome{}, false
 	}
 	switch ip.Status.Phase {
 	case "Failed":
@@ -575,10 +575,10 @@ func checkInstallPlan(c *Client, name, expectedCSV string, approved map[string]b
 		if detail == "" {
 			detail = "no reason given"
 		}
-		return installOutcome{message: fmt.Sprintf("OLM InstallPlan %s failed: %s", name, detail), errorCode: "installplan_failed"}, true
+		return InstallOutcome{Message: fmt.Sprintf("OLM InstallPlan %s failed: %s", name, detail), ErrorCode: "installplan_failed"}, true
 	case "RequiresApproval":
 		if ip.Spec.Approved || approved[name] {
-			return installOutcome{}, false
+			return InstallOutcome{}, false
 		}
 		proposed := strings.Join(ip.Spec.CSVNames, ", ")
 		if proposed == "" {
@@ -589,43 +589,43 @@ func checkInstallPlan(c *Client, name, expectedCSV string, approved map[string]b
 			if expectedCSV != "" {
 				want = "the confirmed target is " + expectedCSV
 			}
-			return installOutcome{
-				message: fmt.Sprintf("InstallPlan %s needs manual approval and OLM proposes to install %s, but %s, so the tool did not approve it. "+
+			return InstallOutcome{
+				Message: fmt.Sprintf("InstallPlan %s needs manual approval and OLM proposes to install %s, but %s, so the tool did not approve it. "+
 					"The Subscription uses Manual approval, which is how upgrades are held back; approve the plan in the console (Operators > Installed Operators) only if that version is intended.", name, proposed, want),
-				errorCode: "approval_required",
+				ErrorCode: "approval_required",
 			}, true
 		}
 		if _, _, err := c.Patch(path, []byte(`{"spec":{"approved":true}}`)); err != nil {
-			return installOutcome{message: fmt.Sprintf("InstallPlan %s needs manual approval and approving it failed: %v", name, err), errorCode: kube.ErrorCodeOr(err, "approval_required")}, true
+			return InstallOutcome{Message: fmt.Sprintf("InstallPlan %s needs manual approval and approving it failed: %v", name, err), ErrorCode: kube.ErrorCodeOr(err, "approval_required")}, true
 		}
 		approved[name] = true
 		*logs = append(*logs, fmt.Sprintf("OK: Approved InstallPlan %s for %s (the Subscription keeps Manual approval for later upgrades)", name, strings.Join(ip.Spec.CSVNames, ", ")))
-		return installOutcome{}, false
+		return InstallOutcome{}, false
 	case "":
 		progress(fmt.Sprintf("InstallPlan %s created", name))
 	default:
 		progress(fmt.Sprintf("InstallPlan %s: %s", name, ip.Status.Phase))
 	}
-	return installOutcome{}, false
+	return InstallOutcome{}, false
 }
 
-// versionVerdict is the outcome of comparing a target operator version with
+// Verdict is the outcome of comparing a target operator version with
 // the installed CSV.
-type versionVerdict int
+type Verdict int
 
 const (
-	// verdictNotInstalled: no RHOAI CSV exists, so nothing can be downgraded.
-	verdictNotInstalled versionVerdict = iota
-	// verdictNotOlder: the target is the same version or newer.
-	verdictNotOlder
-	// verdictOlder: the target is older than the installed CSV.
-	verdictOlder
-	// verdictUnknown: a CSV is installed, but its version or the target's
+	// VerdictNotInstalled: no RHOAI CSV exists, so nothing can be downgraded.
+	VerdictNotInstalled Verdict = iota
+	// VerdictNotOlder: the target is the same version or newer.
+	VerdictNotOlder
+	// VerdictOlder: the target is older than the installed CSV.
+	VerdictOlder
+	// VerdictUnknown: a CSV is installed, but its version or the target's
 	// cannot be determined. Callers must treat this like a possible
 	// downgrade (fail closed): OLM has no downgrade path, and a silently
 	// allowed downgrade can leave CRDs the older operator cannot serve
 	// (RHOAI_OPERATOR_NOTES §1.4).
-	verdictUnknown
+	VerdictUnknown
 )
 
 // installedCSVVersion returns the version of the installed CSV. The CSV's
@@ -645,30 +645,30 @@ func csvInstalled(installed types.CSVInfo) bool {
 	return installed.Name != ""
 }
 
-// compareWithInstalled compares the bundle targetCSV with the installed CSV.
-// reason explains a verdictUnknown.
-func compareWithInstalled(installed types.CSVInfo, targetCSV string) (verdict versionVerdict, reason string) {
+// CompareWithInstalled compares the bundle targetCSV with the installed CSV.
+// reason explains a VerdictUnknown.
+func CompareWithInstalled(installed types.CSVInfo, targetCSV string) (verdict Verdict, reason string) {
 	if !csvInstalled(installed) {
-		return verdictNotInstalled, ""
+		return VerdictNotInstalled, ""
 	}
 	current, ok := installedCSVVersion(installed)
 	if !ok {
-		return verdictUnknown, fmt.Sprintf("the version of the installed CSV %s (spec.version %q) cannot be read", installed.Name, installed.Version)
+		return VerdictUnknown, fmt.Sprintf("the version of the installed CSV %s (spec.version %q) cannot be read", installed.Name, installed.Version)
 	}
 	target, ok := registry.ParseCSVVersion(targetCSV)
 	if !ok {
 		if targetCSV == "" {
-			return verdictUnknown, "the operator version the target installs is unknown"
+			return VerdictUnknown, "the operator version the target installs is unknown"
 		}
-		return verdictUnknown, fmt.Sprintf("the target bundle version %q cannot be read", targetCSV)
+		return VerdictUnknown, fmt.Sprintf("the target bundle version %q cannot be read", targetCSV)
 	}
 	if registry.CompareTags(target, current) < 0 {
-		return verdictOlder, ""
+		return VerdictOlder, ""
 	}
-	return verdictNotOlder, ""
+	return VerdictNotOlder, ""
 }
 
-// downgradeCheck is Update's guard (the real run and the dry run). targetCSV
+// DowngradeCheck is Update's guard (the real run and the dry run). targetCSV
 // is the bundle the target catalog installs (its channel head); when it is
 // unknown the release tag is used, and a tag without a patch number
 // ("rhoai-3.5") is treated as matching the installed patch, because a
@@ -676,21 +676,21 @@ func compareWithInstalled(installed types.CSVInfo, targetCSV string) (verdict ve
 // confirmation, so a downgrade and an undeterminable version both block
 // (fail closed) and point to Reinstall, which can confirm one. It returns
 // the blocking message, plus a note to log.
-func downgradeCheck(installed types.CSVInfo, targetTag, targetCSV string) (blocked string, note string) {
+func DowngradeCheck(installed types.CSVInfo, targetTag, targetCSV string) (blocked string, note string) {
 	if !csvInstalled(installed) {
 		return "", "No RHOAI operator is installed; no downgrade check needed"
 	}
 	const unknown = "Cannot rule out a downgrade: %s. OLM does not support downgrades, so Update refuses to continue. Nothing was changed. Use Install a different build (Recovery), which asks you to confirm."
 	current, ok := installedCSVVersion(installed)
 	if !ok {
-		_, reason := compareWithInstalled(installed, targetCSV)
+		_, reason := CompareWithInstalled(installed, targetCSV)
 		return fmt.Sprintf(unknown, reason), ""
 	}
 	if targetCSV != "" {
-		switch verdict, _ := compareWithInstalled(installed, targetCSV); verdict {
-		case verdictOlder:
+		switch verdict, _ := CompareWithInstalled(installed, targetCSV); verdict {
+		case VerdictOlder:
 			return fmt.Sprintf("Downgrade detected: the selected build installs %s, which is older than the installed %s. OLM does not support downgrades. Use Install a different build (Recovery) instead.", targetCSV, installed.Name), ""
-		case verdictNotOlder:
+		case VerdictNotOlder:
 			return "", fmt.Sprintf("Target operator version: %s (installed: %s)", targetCSV, installed.Name)
 		}
 	}
@@ -707,27 +707,27 @@ func downgradeCheck(installed types.CSVInfo, targetTag, targetCSV string) (block
 	return "", fmt.Sprintf("Warning: the bundle version of %s is unknown; compared the release tag only", targetTag)
 }
 
-// stepTracker remembers the last pipeline step so a failure that returns
+// StepTracker remembers the last pipeline step so a failure that returns
 // early can mark the step that was running as failed.
-type stepTracker struct {
-	emit   func(UpdateStepEvent)
+type StepTracker struct {
+	Emit   func(types.UpdateStepEvent)
 	step   string
 	status string
 }
 
-func (t *stepTracker) send(e UpdateStepEvent) {
-	if e.Step != restoreStepName {
+func (t *StepTracker) Send(e types.UpdateStepEvent) {
+	if e.Step != RestoreStepName {
 		t.step, t.status = e.Step, e.Status
 	}
-	t.emit(e)
+	t.Emit(e)
 }
 
-// finish runs on every return path of a pipeline. It guarantees a result that
+// Finish runs on every return path of a pipeline. It guarantees a result that
 // keeps the collected logs, turns a context error into a failed result (so
 // the message and restore details reach the user), marks the running step
 // failed, restores the previous operator on failure, and records the
 // activity once.
-func (t *stepTracker) finish(c *Client, result **types.OperationResponse, opErr *error, logs []string, recovery *operatorRecovery, recordOutcome func(ok bool, reason string)) {
+func (t *StepTracker) Finish(c *kube.Client, result **types.OperationResponse, opErr *error, logs []string, recovery *Recovery, recordOutcome func(ok bool, reason string)) {
 	if *result == nil {
 		*result = &types.OperationResponse{Success: false, Message: "Operation failed", Logs: logs}
 	}
@@ -748,15 +748,15 @@ func (t *stepTracker) finish(c *Client, result **types.OperationResponse, opErr 
 	}
 	if record.OperationLockLost(c) {
 		r.Success, r.ErrorCode = false, "lock_lost"
-		if !strings.Contains(r.Message, LockLostMessage) {
-			r.Message = LockLostMessage
+		if !strings.Contains(r.Message, record.LockLostMessage) {
+			r.Message = record.LockLostMessage
 		}
 	}
 	if !r.Success && t.status == "running" {
-		t.send(UpdateStepEvent{Step: t.step, Status: "failed", Message: r.Message, ErrorCode: r.ErrorCode})
+		t.Send(types.UpdateStepEvent{Step: t.step, Status: "failed", Message: r.Message, ErrorCode: r.ErrorCode})
 	}
 	if recovery != nil {
-		recovery.restore(c, r, t.send)
+		recovery.Restore(c, r, t.Send)
 		if r.Success {
 			record.RecordLiveSubscription(c)
 		}
@@ -772,14 +772,14 @@ func (t *stepTracker) finish(c *Client, result **types.OperationResponse, opErr 
 
 // Waiting for the upgrade-gate note. After OLM reports the CSV Succeeded,
 // the new operator still has to start and reconcile before it reports a
-// gate, so the note polls for at most upgradeGateWait. The wait runs on the
-// operation's own context and ends installDeadlineReserve before its
+// gate, so the note polls for at most UpgradeGateWait. The wait runs on the
+// operation's own context and ends InstallDeadlineReserve before its
 // deadline, so it stays inside the operation's time budget
 // (operator_recovery.go). It ends at once when there is no
 // DataScienceCluster, and as soon as the DSC reports the installed version.
 var (
-	upgradeGateWait = 45 * time.Second
-	upgradeGatePoll = 5 * time.Second
+	UpgradeGateWait = 45 * time.Second
+	UpgradeGatePoll = 5 * time.Second
 )
 
 // upgradeGateSkew is how much older than the start of the install wait a
@@ -810,7 +810,7 @@ func (g upgradeGate) String() string {
 // the installed version. The Platform has no release of its own and is
 // left alone by operators older than 3.6, so its gates follow the same
 // rule: a gate that only an earlier operator could have set is stale.
-func readUpgradeGates(c *Client, version string, since time.Time) (gates []upgradeGate, reported, dscFound bool) {
+func readUpgradeGates(c *kube.Client, version string, since time.Time) (gates []upgradeGate, reported, dscFound bool) {
 	type statusObject struct {
 		Metadata struct {
 			Name string `json:"name"`
@@ -856,18 +856,18 @@ func readUpgradeGates(c *Client, version string, since time.Time) (gates []upgra
 	return gates, reported, dscFound
 }
 
-// adminAckNote reports when the newly installed operator (CSV csvName)
+// AdminAckNote reports when the newly installed operator (CSV csvName)
 // holds provisioning at an upgrade gate: an admin acknowledgement
 // (AdminAckRequired) or a gate it cannot resolve, on the Platform or on
 // any DataScienceCluster condition. That is a manual step, not a failed
 // install. It is quiet when nothing is gated; since is when the install
 // wait began. A gate that may date from before the install is reported
 // with that caveat once the wait ends.
-func adminAckNote(c *Client, csvName string, since time.Time) string {
+func AdminAckNote(c *kube.Client, csvName string, since time.Time) string {
 	version := strings.TrimPrefix(csvName, rhoai.SubName+".")
-	end := kube.Clock().Now().Add(upgradeGateWait)
-	if d, ok := c.Context().Deadline(); ok && d.Add(-installDeadlineReserve).Before(end) {
-		end = d.Add(-installDeadlineReserve)
+	end := kube.Clock().Now().Add(UpgradeGateWait)
+	if d, ok := c.Context().Deadline(); ok && d.Add(-InstallDeadlineReserve).Before(end) {
+		end = d.Add(-InstallDeadlineReserve)
 	}
 	// Every read, discovery included, ends with the wait: a slow API server
 	// cannot stretch it.
@@ -896,7 +896,7 @@ func adminAckNote(c *Client, csvName string, since time.Time) string {
 				stale = append(stale, g.String())
 			}
 		}
-		last := !dscFound || !kube.Clock().Now().Add(upgradeGatePoll).Before(end)
+		last := !dscFound || !kube.Clock().Now().Add(UpgradeGatePoll).Before(end)
 		switch {
 		case len(fresh) > 0:
 			return upgradeGateMessage(fresh, "")
@@ -906,7 +906,7 @@ func adminAckNote(c *Client, csvName string, since time.Time) string {
 			// Nothing more to wait for: no DSC, or the wait is over.
 			return ended()
 		}
-		if kube.Clock().Sleep(ctx, upgradeGatePoll) != nil {
+		if kube.Clock().Sleep(ctx, UpgradeGatePoll) != nil {
 			return ended()
 		}
 	}
@@ -918,7 +918,7 @@ func upgradeGateMessage(gates []string, hedge string) string {
 		" (oc get configmap odh-upgrade-acks -n " + rhoai.SubNS + " shows them); a gate the operator cannot resolve usually means it is older than the resources it found. Check the Components page."
 }
 
-// foreignSubscriptionRefusal reports another Subscription for the
+// ForeignSubscriptionRefusal reports another Subscription for the
 // rhods-operator package in the operator namespace (for example one created
 // by GitOps under a different name). The tool manages only the Subscription
 // named rhods-operator; creating it next to another one for the same
@@ -928,7 +928,7 @@ func upgradeGateMessage(gates []string, hedge string) string {
 // them: each carries an ownerReference to its Subscription (live:
 // install-wpkpm is owned by Subscription/rhods-operator). It returns "" when
 // there is none; a failed lookup refuses, since nothing was changed yet.
-func foreignSubscriptionRefusal(c *Client) string {
+func ForeignSubscriptionRefusal(c *kube.Client) string {
 	var list struct {
 		Items []struct {
 			Metadata struct {

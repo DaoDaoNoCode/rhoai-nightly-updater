@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -30,7 +31,7 @@ func TestPendingInstallPlan(t *testing.T) {
 			if tc.ip != "" {
 				f.json("GET", ipPath, 200, tc.ip)
 			}
-			name, phase, err := pendingInstallPlan(c)
+			name, phase, err := operator.PendingInstallPlan(c)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) || name != "" {
 					t.Fatalf("pendingInstallPlan = %q, %q, %v; want an error with %q", name, phase, err, tc.wantErr)

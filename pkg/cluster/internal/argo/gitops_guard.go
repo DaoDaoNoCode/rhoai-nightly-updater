@@ -222,7 +222,7 @@ func (g OperatorGitOps) CatalogSpecFrom() string {
 }
 
 // CatalogChanger says who most likely changed the catalog image while
-// Update waited (errCatalogImageChanged).
+// Update waited (operator.CatalogImageChangedError).
 func (g OperatorGitOps) CatalogChanger() string {
 	switch {
 	case g.CatalogApp != "":

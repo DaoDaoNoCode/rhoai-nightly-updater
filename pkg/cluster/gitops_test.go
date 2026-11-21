@@ -12,6 +12,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -163,7 +164,7 @@ func TestKeepArgoTracking(t *testing.T) {
 func TestUpdateUnderGitOps_InstallsWhatTheCatalogServes(t *testing.T) {
 	f := gitOpsFake(t)
 	emit, events := eventsRecorder()
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, emit)
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, emit)
 	if err != nil || !result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -182,7 +183,7 @@ func TestUpdateUnderGitOps_InstallsWhatTheCatalogServes(t *testing.T) {
 		}
 	}
 	order := []string{"DELETE " + rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, "install-old"),
-		"DELETE " + csvPath(gitOpsCSV), "DELETE " + subPath, "PATCH " + subPath}
+		"DELETE " + operator.CSVPath(gitOpsCSV), "DELETE " + subPath, "PATCH " + subPath}
 	for i := 1; i < len(order); i++ {
 		a, b := indexOf(writes, order[i-1]), indexOf(writes, order[i])
 		if a < 0 || b < 0 || a > b {
@@ -221,7 +222,7 @@ func TestUpdateUnderGitOps_InstallsWhatTheCatalogServes(t *testing.T) {
 // any change, and says where to change it.
 func TestUpdateUnderGitOps_RefusesAnotherImage(t *testing.T) {
 	f := gitOpsFake(t)
-	result, err := UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
+	result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged ||
 		!strings.Contains(result.Message, "change the image in Git") || !strings.Contains(result.Message, gitOpsImage) || !strings.Contains(result.Message, testArgoApp) {
 		t.Fatalf("result=%+v err=%v", result, err)
@@ -248,7 +249,7 @@ func TestUpdateUnderGitOps_ImageChangesMeanwhile(t *testing.T) {
 		}
 		return false
 	}
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged ||
 		!strings.Contains(result.Message, "while Update waited") || !strings.Contains(result.Message, testArgoApp) || !strings.Contains(result.Message, "sha256:newer") {
 		t.Fatalf("result=%+v err=%v", result, err)
@@ -266,11 +267,11 @@ func TestUpdateUnderGitOps_RestoreKeepsTracking(t *testing.T) {
 	f := gitOpsFake(t)
 	f.onSubscribe = func(*fakeOLM, map[string]any) {} // OLM never acts
 	emit, events := eventsRecorder()
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, emit)
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, emit)
 	if err != nil || result.Success || result.ErrorCode != "install_timeout" {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if lastStatus(events(), restoreStepName) != "success" {
+	if lastStatus(events(), operator.RestoreStepName) != "success" {
 		t.Fatalf("restore did not succeed: %v", events())
 	}
 	if !strings.Contains(result.Message, "OLM installs the build the catalog serves again") || strings.Contains(result.Message, "previous operator version") {
@@ -302,7 +303,7 @@ func TestUpdateUnderGitOps_WaitsForTheNewBuild(t *testing.T) {
 	f := gitOpsFake(t)
 	stale := strings.Replace(f.channels, "sha256:new", "sha256:older", 1)
 	f.mainChannels = &stale
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != "timeout" || !strings.Contains(result.Message, "did not serve") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -315,24 +316,24 @@ func TestUpdateUnderGitOps_WaitsForTheNewBuild(t *testing.T) {
 
 func TestCatalogServing(t *testing.T) {
 	target := catalog.Target{Channel: "beta", HeadCSV: gitOpsCSV, Fingerprint: "op@sha256:new t1"}
-	ok := catalogServing{image: "img:new", state: "READY", podReady: true, head: gitOpsCSV, fingerprint: "op@sha256:new t1"}
-	if !ok.servesTarget("img:new", target) {
+	ok := operator.CatalogServing{Image: "img:new", State: "READY", PodReady: true, Head: gitOpsCSV, Fingerprint: "op@sha256:new t1"}
+	if !ok.ServesTarget("img:new", target) {
 		t.Fatal("a ready catalog serving the build was not accepted")
 	}
-	for name, s := range map[string]catalogServing{
-		"old pod still serving": {image: "img:new", state: "READY", podReady: true, stalePods: 1, head: gitOpsCSV, fingerprint: ok.fingerprint},
-		"new pod not ready":     {image: "img:new", state: "READY", head: gitOpsCSV, fingerprint: ok.fingerprint},
-		"old build listed":      {image: "img:new", state: "READY", podReady: true, head: gitOpsCSV, fingerprint: "op@sha256:old t0"},
-		"not READY":             {image: "img:new", state: "CONNECTING", podReady: true, head: gitOpsCSV, fingerprint: ok.fingerprint},
-		"other head":            {image: "img:new", state: "READY", podReady: true, head: "rhods-operator.3.5.0", fingerprint: ok.fingerprint},
+	for name, s := range map[string]operator.CatalogServing{
+		"old pod still serving": {Image: "img:new", State: "READY", PodReady: true, StalePods: 1, Head: gitOpsCSV, Fingerprint: ok.Fingerprint},
+		"new pod not ready":     {Image: "img:new", State: "READY", Head: gitOpsCSV, Fingerprint: ok.Fingerprint},
+		"old build listed":      {Image: "img:new", State: "READY", PodReady: true, Head: gitOpsCSV, Fingerprint: "op@sha256:old t0"},
+		"not READY":             {Image: "img:new", State: "CONNECTING", PodReady: true, Head: gitOpsCSV, Fingerprint: ok.Fingerprint},
+		"other head":            {Image: "img:new", State: "READY", PodReady: true, Head: "rhods-operator.3.5.0", Fingerprint: ok.Fingerprint},
 	} {
-		if s.servesTarget("img:new", target) {
+		if s.ServesTarget("img:new", target) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
 	noFingerprint := target
 	noFingerprint.Fingerprint = ""
-	if !(catalogServing{image: "img:new", state: "READY", podReady: true, head: gitOpsCSV}).servesTarget("img:new", noFingerprint) {
+	if !(operator.CatalogServing{Image: "img:new", State: "READY", PodReady: true, Head: gitOpsCSV}).ServesTarget("img:new", noFingerprint) {
 		t.Fatal("a catalog without fingerprint annotations is judged by its head")
 	}
 }
@@ -342,7 +343,7 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 	t.Run("source not the nightly catalog", func(t *testing.T) {
 		f := gitOpsFake(t)
 		f.sub["spec"].(map[string]any)["source"] = "redhat-operators"
-		result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+		result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 		if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "redhat-operators") {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
@@ -353,7 +354,7 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 	t.Run("no catalog to install from", func(t *testing.T) {
 		f := gitOpsFake(t)
 		f.catalog = nil
-		result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+		result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 		if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "does not exist") || !strings.Contains(result.Message, "in Git") {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
@@ -367,7 +368,7 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 		delete(f.csvs, gitOpsCSV)
 		f.sub["status"] = map[string]any{"state": "UpgradePending", "installPlanRef": map[string]any{"name": "install-first"}}
 		f.installPlans["install-first"] = map[string]any{"spec": map[string]any{"clusterServiceVersionNames": []string{gitOpsCSV}}, "status": map[string]any{"phase": "Installing"}}
-		result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+		result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 		if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "install-first is Installing") {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
@@ -376,14 +377,14 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 		}
 		// Once that plan is done (Failed here), Update proceeds.
 		f.installPlans["install-first"]["status"].(map[string]any)["phase"] = "Failed"
-		if result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {}); err != nil || !result.Success {
+		if result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {}); err != nil || !result.Success {
 			t.Fatalf("after the plan ended: result=%+v err=%v", result, err)
 		}
 	})
 	t.Run("startingCSV pinned to another build", func(t *testing.T) {
 		f := gitOpsFake(t)
 		f.sub["spec"].(map[string]any)["startingCSV"] = "rhods-operator.3.5.0"
-		result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+		result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 		if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "pins startingCSV rhods-operator.3.5.0") {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
@@ -396,7 +397,7 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 	t.Run("build without Git's channel", func(t *testing.T) {
 		f := gitOpsFake(t)
 		f.channels = `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.6.0"}]`
-		result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+		result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 		if err != nil || result.Success || result.ErrorCode != "validation" || !strings.Contains(result.Message, `channel "beta" is not in the catalog`) ||
 			!strings.Contains(result.Message, "change it in Git") {
 			t.Fatalf("result=%+v err=%v", result, err)
@@ -414,7 +415,7 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 func TestUpdateUnderGitOps_KeepsStartingCSV(t *testing.T) {
 	f := gitOpsFake(t)
 	f.sub["spec"].(map[string]any)["startingCSV"] = gitOpsCSV
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || !result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -437,7 +438,7 @@ func TestUpdateUnderGitOps_ImageChangesBeforeTheDeletions(t *testing.T) {
 		}
 		return false
 	}
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "sha256:newer") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -460,13 +461,13 @@ func TestUpdateUnderGitOps_SubscriptionChangesMeanwhile(t *testing.T) {
 		return false
 	}
 	emit, events := eventsRecorder()
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, emit)
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, emit)
 	if err != nil || result.Success || result.ErrorCode != "conflict" || !strings.Contains(result.Message, "channel fast") || !strings.Contains(result.Message, "Git's current settings") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	// Only the restore writes the Subscription: it recreates it from Git's
 	// current spec (the old CSV is gone), with Argo CD's tracking.
-	if lastStatus(events(), restoreStepName) != "success" {
+	if lastStatus(events(), operator.RestoreStepName) != "success" {
 		t.Fatalf("restore did not run: %v", events())
 	}
 	f.mu.Lock()
@@ -492,7 +493,7 @@ func TestUpdateUnderGitOps_StartingCSVChangesMeanwhile(t *testing.T) {
 				}
 				return false
 			}
-			result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+			result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -520,7 +521,7 @@ func TestUpdateUnderGitOps_CatalogOnlyManaged(t *testing.T) {
 	f.argo = argoManagingAllBut(argo.SubscriptionObject)
 	f.sub["spec"].(map[string]any)["channel"] = "fast"
 	f.sub["spec"].(map[string]any)["startingCSV"] = "rhods-operator.3.5.0"
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || !result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -541,7 +542,7 @@ func TestUpdateUnderGitOps_BuildWithoutAnnotations(t *testing.T) {
 		f.csvAnnotations = nil
 		olmInstalls(gitOpsCSV)(f, spec)
 	}
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != "install_mismatch" || !strings.Contains(result.Message, "carries no build annotations") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -557,7 +558,7 @@ func TestUpdateUnderGitOps_RecreatesFromTheLiveSubscription(t *testing.T) {
 		}
 		return false
 	}
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || !result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -578,11 +579,11 @@ func TestUpdateUnderGitOps_AnotherBuildInstalled(t *testing.T) {
 		olmInstalls(gitOpsCSV)(f, spec)
 	}
 	emit, events := eventsRecorder()
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, emit)
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, emit)
 	if err != nil || result.Success || result.ErrorCode != "install_mismatch" || !strings.Contains(result.Message, "sha256:other") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if lastStatus(events(), restoreStepName) != "" {
+	if lastStatus(events(), operator.RestoreStepName) != "" {
 		t.Fatalf("a Succeeded operator was torn down: %v", events())
 	}
 	if _, ok := f.csvs[gitOpsCSV]; !ok {
@@ -639,9 +640,7 @@ func TestOperatorOperationsRefusedUnderGitOps(t *testing.T) {
 }
 
 func TestUpdateDryRunUnderGitOps(t *testing.T) {
-	oldLookup := lookupTargetBundle
-	t.Cleanup(func() { lookupTargetBundle = oldLookup })
-	lookupTargetBundle = func(*Client, string) (string, error) { return gitOpsCSV, nil }
+	t.Cleanup(operator.SetLookupTargetBundleForTest(func(*Client, string) (string, error) { return gitOpsCSV, nil }))
 	f := gitOpsFake(t)
 	result, err := Update(f.client(context.Background()), gitOpsImage, true)
 	if err != nil || !result.Success {
@@ -674,28 +673,28 @@ func TestStatusReportsWhatTheCatalogServes(t *testing.T) {
 	}
 
 	delete(f.csvs[gitOpsCSV]["metadata"].(map[string]any), "annotations")
-	s := readCatalogServes(c, sub, cs, csv)
+	s := operator.ReadCatalogServes(c, sub, cs, csv)
 	if s == nil || s.Channel != gitOpsChannel || s.CSV != gitOpsCSV || s.OperatorImage != gitOpsOperatorImage || s.Built != gitOpsBuilt || s.Installed != nil || s.Updating {
 		t.Fatalf("without CSV annotations: %+v", s)
 	}
 	annotate(gitOpsOperatorImage, gitOpsBuilt)
-	if s := readCatalogServes(c, sub, cs, csv); s == nil || s.Installed == nil || !*s.Installed {
+	if s := operator.ReadCatalogServes(c, sub, cs, csv); s == nil || s.Installed == nil || !*s.Installed {
 		t.Fatalf("same build: %+v", s)
 	}
 	annotate("registry.redhat.io/rhoai/odh-rhel9-operator@sha256:older", "2026-09-18T04:00:00Z")
-	if s := readCatalogServes(c, sub, cs, csv); s == nil || s.Installed == nil || *s.Installed {
+	if s := operator.ReadCatalogServes(c, sub, cs, csv); s == nil || s.Installed == nil || *s.Installed {
 		t.Fatalf("older build of the same version: %+v", s)
 	}
-	if s := readCatalogServes(c, sub, cs, types.CSVInfo{Name: "rhods-operator.3.5.0", Phase: "Succeeded"}); s == nil || s.Installed == nil || *s.Installed {
+	if s := operator.ReadCatalogServes(c, sub, cs, types.CSVInfo{Name: "rhods-operator.3.5.0", Phase: "Succeeded"}); s == nil || s.Installed == nil || *s.Installed {
 		t.Fatalf("another version: %+v", s)
 	}
-	if s := readCatalogServes(c, sub, cs, types.CSVInfo{Phase: "Not Found"}); s == nil || s.Installed != nil {
+	if s := operator.ReadCatalogServes(c, sub, cs, types.CSVInfo{Phase: "Not Found"}); s == nil || s.Installed != nil {
 		t.Fatalf("nothing installed: %+v", s)
 	}
-	if s := readCatalogServes(c, types.SubscriptionInfo{Source: rhoai.CatalogName, Channel: "fast"}, cs, csv); s != nil {
+	if s := operator.ReadCatalogServes(c, types.SubscriptionInfo{Source: rhoai.CatalogName, Channel: "fast"}, cs, csv); s != nil {
 		t.Fatalf("channel not in the catalog: %+v", s)
 	}
-	if s := readCatalogServes(c, types.SubscriptionInfo{Source: "redhat-operators", Channel: "stable-3.x"}, cs, csv); s != nil {
+	if s := operator.ReadCatalogServes(c, types.SubscriptionInfo{Source: "redhat-operators", Channel: "stable-3.x"}, cs, csv); s != nil {
 		t.Fatalf("another source: %+v", s)
 	}
 	// Argo CD just changed the image: the registry pod still runs the old
@@ -703,11 +702,11 @@ func TestStatusReportsWhatTheCatalogServes(t *testing.T) {
 	moved := types.CatalogSourceInfo{Exists: true, Image: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:newer"}
 	f.gitOpsPods = false
 	f.catalogPods = `{"items":[{"metadata":{"name":"old"},"spec":{"containers":[{"image":"` + gitOpsImage + `"}]},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`
-	if s := readCatalogServes(c, sub, moved, csv); s == nil || !s.Updating || s.Installed != nil {
+	if s := operator.ReadCatalogServes(c, sub, moved, csv); s == nil || !s.Updating || s.Installed != nil {
 		t.Fatalf("catalog pod being replaced: %+v", s)
 	}
 	f.channels = `[{"name":"beta"}]`
-	if s := readCatalogServes(c, sub, cs, csv); s != nil {
+	if s := operator.ReadCatalogServes(c, sub, cs, csv); s != nil {
 		t.Fatalf("channel without a head: %+v", s)
 	}
 }

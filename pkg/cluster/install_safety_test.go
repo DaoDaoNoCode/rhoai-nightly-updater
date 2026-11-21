@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -35,8 +36,8 @@ func TestNightlyCatalogNeverFallsBackToStable(t *testing.T) {
 			}))
 			defer srv.Close()
 			c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
-			ch, _ := detectNightlyChannel(c, "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.7")
-			exists, _ := channelExistsInCatalog(c, "fast")
+			ch, _ := operator.DetectNightlyChannel(c, "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.7")
+			exists, _ := operator.ChannelExistsInCatalog(c, "fast")
 			if ch != "" || exists || ambiguousQuery {
 				t.Fatalf("channel=%q exists=%v ambiguous=%v", ch, exists, ambiguousQuery)
 			}
@@ -53,7 +54,7 @@ func TestInstallPreflightFailureDoesNotRemoveOperator(t *testing.T) {
 			responses[listPath] = mockResponse{body: `{"items":[]}`}
 			c, requests, cleanup := newRecordingMockClient(responses)
 			defer cleanup()
-			result, err := UpdateStream(c, image, func(UpdateStepEvent) {})
+			result, err := operator.UpdateStream(c, image, func(UpdateStepEvent) {})
 			if action == "reinstall" {
 				result, err = Reinstall(c, "nightly", image, "")
 			}
@@ -84,7 +85,7 @@ func TestInstallCleanupFailureRestoresPreviousDesiredState(t *testing.T) {
 			var resultMessage string
 			var success bool
 			if action == "update" {
-				r, err := UpdateStream(c, image, emit)
+				r, err := operator.UpdateStream(c, image, emit)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -176,7 +177,7 @@ func TestInstallStaleCSVIdentityDoesNotRemoveOperator(t *testing.T) {
 			defer cleanup()
 			var message string
 			if action == "update" {
-				result, err := UpdateStream(c, image, func(UpdateStepEvent) {})
+				result, err := operator.UpdateStream(c, image, func(UpdateStepEvent) {})
 				if err != nil || result == nil || result.Success {
 					t.Fatalf("result=%+v err=%v", result, err)
 				}

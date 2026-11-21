@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -55,7 +56,7 @@ func TestReinstallDowngradeGuard_EveryCSVLookupPath(t *testing.T) {
 			fx.apply(f)
 			f.onSubscribe = olmInstalls("rhods-operator.3.6.0")
 			result, err := Reinstall(f.client(context.Background()), "nightly", testNightlyImage, "")
-			if err != nil || result.Success || result.ErrorCode != errorCodeDowngrade || !strings.Contains(result.Message, "older than the installed") {
+			if err != nil || result.Success || result.ErrorCode != operator.ErrorCodeDowngrade || !strings.Contains(result.Message, "older than the installed") {
 				t.Fatalf("3.7.0 -> 3.6.0 was not refused: %+v, %v", result, err)
 			}
 			assertOnlyVerificationWrites(t, f)
@@ -73,7 +74,7 @@ func TestReinstallDowngradeGuard_UnknownInstalledVersionNeedsConfirmation(t *tes
 			f.onSubscribe = olmInstalls("rhods-operator.3.6.0")
 			c := f.client(context.Background())
 			refused, err := Reinstall(c, "nightly", testNightlyImage, "")
-			if err != nil || refused.Success || refused.ErrorCode != errorCodeDowngrade || !strings.Contains(refused.Message, "Cannot tell whether") {
+			if err != nil || refused.Success || refused.ErrorCode != operator.ErrorCodeDowngrade || !strings.Contains(refused.Message, "Cannot tell whether") {
 				t.Fatalf("unknown installed version was not refused: %+v, %v", refused, err)
 			}
 			assertOnlyVerificationWrites(t, f)
@@ -112,7 +113,7 @@ func TestUpdateDowngradeGuard_EveryCSVLookupPath(t *testing.T) {
 			f := newFakeOLM(t)
 			fx.apply(f)
 			f.onSubscribe = olmInstalls("rhods-operator.3.6.0")
-			result, err := UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
+			result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 			want := "Downgrade detected"
 			if fx.version == "" && !strings.Contains(fx.csvName, "3.7.0") {
 				want = "Cannot rule out a downgrade"
@@ -127,9 +128,7 @@ func TestUpdateDowngradeGuard_EveryCSVLookupPath(t *testing.T) {
 
 // The dry run reports the same verdict as the real update.
 func TestUpdateDryRunDowngradeGuard_EveryCSVLookupPath(t *testing.T) {
-	old := lookupTargetBundle
-	t.Cleanup(func() { lookupTargetBundle = old })
-	lookupTargetBundle = func(*Client, string) (string, error) { return "rhods-operator.3.6.0", nil }
+	t.Cleanup(operator.SetLookupTargetBundleForTest(func(*Client, string) (string, error) { return "rhods-operator.3.6.0", nil }))
 	for _, fx := range append(downgradeFixtures, installedCSVFixture{name: "unknown", csvName: "rhods-operator.custom-build"}) {
 		t.Run(fx.name, func(t *testing.T) {
 			f := newFakeOLM(t)
@@ -149,20 +148,20 @@ func TestCompareWithInstalled(t *testing.T) {
 	for _, tc := range []struct {
 		installed types.CSVInfo
 		target    string
-		want      versionVerdict
+		want      operator.Verdict
 	}{
-		{types.CSVInfo{Phase: "Not Found"}, "rhods-operator.3.6.0", verdictNotInstalled},
-		{types.CSVInfo{Name: "rhods-operator.3.6.0"}, "rhods-operator.3.5.2", verdictOlder},
-		{types.CSVInfo{Name: "rhods-operator.3.6.0"}, "rhods-operator.v3.6.0", verdictNotOlder},
-		{types.CSVInfo{Name: "rhods-operator.x", Version: "3.6.0"}, "rhods-operator.3.6.1", verdictNotOlder},
-		{types.CSVInfo{Name: "rhods-operator.x", Version: "3.6.0"}, "rhods-operator.3.5.0", verdictOlder},
+		{types.CSVInfo{Phase: "Not Found"}, "rhods-operator.3.6.0", operator.VerdictNotInstalled},
+		{types.CSVInfo{Name: "rhods-operator.3.6.0"}, "rhods-operator.3.5.2", operator.VerdictOlder},
+		{types.CSVInfo{Name: "rhods-operator.3.6.0"}, "rhods-operator.v3.6.0", operator.VerdictNotOlder},
+		{types.CSVInfo{Name: "rhods-operator.x", Version: "3.6.0"}, "rhods-operator.3.6.1", operator.VerdictNotOlder},
+		{types.CSVInfo{Name: "rhods-operator.x", Version: "3.6.0"}, "rhods-operator.3.5.0", operator.VerdictOlder},
 		// spec.version wins over a name that disagrees.
-		{types.CSVInfo{Name: "rhods-operator.3.5.0", Version: "3.6.0"}, "rhods-operator.3.5.2", verdictOlder},
-		{types.CSVInfo{Name: "rhods-operator.x"}, "rhods-operator.3.6.0", verdictUnknown},
-		{types.CSVInfo{Name: "rhods-operator.3.6.0"}, "", verdictUnknown},
-		{types.CSVInfo{Name: "rhods-operator.3.6.0"}, "something-else", verdictUnknown},
+		{types.CSVInfo{Name: "rhods-operator.3.5.0", Version: "3.6.0"}, "rhods-operator.3.5.2", operator.VerdictOlder},
+		{types.CSVInfo{Name: "rhods-operator.x"}, "rhods-operator.3.6.0", operator.VerdictUnknown},
+		{types.CSVInfo{Name: "rhods-operator.3.6.0"}, "", operator.VerdictUnknown},
+		{types.CSVInfo{Name: "rhods-operator.3.6.0"}, "something-else", operator.VerdictUnknown},
 	} {
-		if got, reason := compareWithInstalled(tc.installed, tc.target); got != tc.want || (got == verdictUnknown) != (reason != "") {
+		if got, reason := operator.CompareWithInstalled(tc.installed, tc.target); got != tc.want || (got == operator.VerdictUnknown) != (reason != "") {
 			t.Errorf("%+v -> %q: got %v (%q), want %v", tc.installed, tc.target, got, reason, tc.want)
 		}
 	}

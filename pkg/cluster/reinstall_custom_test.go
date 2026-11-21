@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -75,7 +76,7 @@ func TestCustomReinstallPinsOldBuildAndSelectsOlderChannel(t *testing.T) {
 			defer server.Close()
 			c := newTestClient(testClientOptions{BaseURL: server.URL, HTTPClient: server.Client(), Ctx: context.Background()})
 			// 3.6.0 -> 3.3 is a downgrade, which needs explicit confirmation.
-			if refused, _ := Reinstall(c, tc.target, image, override); refused.ErrorCode != errorCodeDowngrade || deletedCSV {
+			if refused, _ := Reinstall(c, tc.target, image, override); refused.ErrorCode != operator.ErrorCodeDowngrade || deletedCSV {
 				t.Fatalf("unconfirmed downgrade: %+v deletedCSV=%v", refused, deletedCSV)
 			}
 			result, err := ReinstallWithOptions(c, tc.target, image, override, OperationOptions{AllowDowngrade: true})
