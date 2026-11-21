@@ -92,7 +92,7 @@ func leftoverWriteError(err error, what string, dryRun bool) *types.OperationRes
 // leftoverChanged refuses a leftover change because the object changed
 // after it was checked.
 func leftoverChanged(what, serverMsg string) *types.OperationResponse {
-	return leftoverRefused(fmt.Sprintf("%s changed after it was checked, so nothing was changed. Run diagnostics again.", what), "conflict", []string{serverMsg})
+	return leftoverRefused(fmt.Sprintf("%s changed after it was checked, and the API server refused the change (%s). The refusal may be that change or one of its own. Nothing was changed. Run diagnostics again.", what, serverMsg), "conflict", []string{serverMsg})
 }
 
 // --- Stored field types ------------------------------------------------------

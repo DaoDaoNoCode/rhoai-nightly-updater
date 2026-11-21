@@ -253,6 +253,32 @@ func TestDSCWriteShowsARejectionOfAnUnchangedDSC(t *testing.T) {
 	}
 }
 
+// A real refusal (a webhook or validation 422) while the operator keeps
+// writing the status: the moved resourceVersion makes it look stale, so it
+// is retried within the bound, and the result still quotes the API server's
+// refusal instead of hiding it behind "it changed".
+func TestDSCWriteKeepsTheRefusalWhenTheStatusMovesMeanwhile(t *testing.T) {
+	const invalid = `admission webhook "vdatasciencecluster.opendatahub.io" denied the request: ray cannot be removed while RayClusters exist`
+	for name, change := range dscRemoveRay {
+		t.Run(name, func(t *testing.T) {
+			f, c := managerWorld(t, nil)
+			f.fail["PATCH "+dscV3Path] = http.StatusUnprocessableEntity
+			f.failMessage["PATCH "+dscV3Path] = invalid
+			onRealPatch(f, -1, statusWrite(f))
+			res := change(t, c)
+			if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, invalid) || !strings.Contains(res.Message, "Nothing was changed") {
+				t.Fatalf("result = %+v", res)
+			}
+			if _, real := patchesTo(f); len(real) != dscWriteAttempts {
+				t.Fatalf("real patches = %d, want %d", len(real), dscWriteAttempts)
+			}
+			if rayState(f) != "Managed" {
+				t.Fatalf("ray = %q", rayState(f))
+			}
+		})
+	}
+}
+
 // A DSC that changes before every patch: bounded, then a conflict.
 func TestDSCWriteGivesUpWhenTheDSCKeepsChanging(t *testing.T) {
 	for name, change := range dscRemoveRay {
@@ -260,7 +286,7 @@ func TestDSCWriteGivesUpWhenTheDSCKeepsChanging(t *testing.T) {
 			f, c := managerWorld(t, nil)
 			onRealPatch(f, -1, statusWrite(f))
 			res := change(t, c)
-			if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "kept changing") || !strings.Contains(res.Message, "Nothing was changed") {
+			if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "changed each time") || !strings.Contains(res.Message, "Nothing was changed") {
 				t.Fatalf("result = %+v", res)
 			}
 			if _, real := patchesTo(f); len(real) != dscWriteAttempts {
