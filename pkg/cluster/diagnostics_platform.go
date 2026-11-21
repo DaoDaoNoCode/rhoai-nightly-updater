@@ -25,7 +25,7 @@ func checkPlatformModules(c *Client) checkOutput {
 	r, err := listServed(c, platformGroup, platformListFmt, nil, platformFallbackVersions)
 	body := r.Body
 	switch {
-	case IsK8sError(err, http.StatusNotFound), err == nil && r.Version == "":
+	case isK8sNotFound(err), err == nil && r.Version == "":
 		details = append(details, "no Platform API (operator older than 3.6 or not installed)")
 	case IsK8sError(err, http.StatusForbidden):
 		details = append(details, "Platform not checked: this app cannot read platforms (RBAC)")
@@ -122,15 +122,14 @@ func checkPlatformModules(c *Client) checkOutput {
 // not "true", sorted. The Platform and DataScienceCluster gate problems
 // turn each into its own acknowledgement command.
 func pendingUpgradeAckKeys(c *Client) ([]string, map[string]string, error) {
-	body, _, err := c.get(namespacedPath("v1", "configmaps", SubNS, "odh-upgrade-acks"))
-	if err != nil {
-		return nil, nil, err
-	}
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &cm); err != nil {
-		return nil, nil, fmt.Errorf("parse ConfigMap odh-upgrade-acks: %w", err)
+	if err := c.getInto(namespacedPath("v1", "configmaps", SubNS, "odh-upgrade-acks"), &cm); err != nil {
+		if isDecodeError(err) {
+			return nil, nil, fmt.Errorf("parse ConfigMap odh-upgrade-acks: %w", err)
+		}
+		return nil, nil, err
 	}
 	var keys []string
 	for k, v := range cm.Data {
@@ -249,7 +248,7 @@ func checkManagedConfig(c *Client) checkOutput {
 	}
 	for _, ns := range namespaces {
 		body, _, err := c.do(http.MethodGet, namespacedPath("apps/v1", "deployments", ns, ""), "", nil, url.Values{})
-		if IsK8sError(err, http.StatusNotFound) {
+		if isK8sNotFound(err) {
 			continue
 		}
 		if err != nil {

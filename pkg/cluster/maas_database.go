@@ -279,7 +279,7 @@ func readMaaSDBState(c *Client, rec maasRecord, ns string) (maasDBState, error) 
 	if st.secret, st.secretFound, err = readObjectMeta(c, maasObjectPath("Secret", ns)); err != nil {
 		return st, fmt.Errorf("read Secret %s/%s: %w", ns, maasDBConfigSecret, err)
 	}
-	if st.cluster, st.clusterFound, st.clusterReady, st.clusterPhase, err = readMaaSDBCluster(c, ns); err != nil && !IsK8sError(err, 404) {
+	if st.cluster, st.clusterFound, st.clusterReady, st.clusterPhase, err = readMaaSDBCluster(c, ns); err != nil && !isK8sNotFound(err) {
 		return st, fmt.Errorf("read %s: %w", maasDesc("Cluster", ns), err)
 	}
 	// postgres-creds is not read: this tool may only create it and delete
@@ -434,7 +434,7 @@ func createMaaSPOCCreds(c *Client, ns, password string, dryRun bool) (string, er
 		query = url.Values{"dryRun": {"All"}}
 	}
 	body, _, err := c.do(http.MethodPost, maasCreatePath("PostgresSecret", ns), "application/json", data, query)
-	if IsK8sError(err, http.StatusConflict) {
+	if isK8sConflict(err) {
 		return "", &foreignObjectError{Desc: maasDesc("PostgresSecret", ns)}
 	}
 	if err != nil {
@@ -464,9 +464,9 @@ func deleteMaaSPOCCreds(c *Client, ns, uid string) (bool, string, error) {
 	}
 	_, err := deleteWithUID(c, maasPOCCredsPath(ns), uid)
 	switch {
-	case err == nil || IsK8sError(err, http.StatusNotFound):
+	case err == nil || isK8sNotFound(err):
 		return true, "", nil
-	case IsK8sError(err, http.StatusConflict):
+	case isK8sConflict(err):
 		return false, maasDesc("PostgresSecret", ns) + " was replaced by one this tool did not create (another UID), so it is kept.", nil
 	}
 	return false, "", err
@@ -576,34 +576,28 @@ func maasPOCImage(c *Client) (string, string) {
 // maas-api/internal/api_keys/db_driver.go: migrations run in
 // NewPostgresStoreFromURLs, at startup). Best effort: "" when unreadable.
 func maasPOCRestartWarning(c *Client, ns string) string {
-	body, _, err := c.get(namespacedPath("v1", "pods", ns, ""))
-	if err != nil {
-		return ""
+	var items []struct {
+		Metadata struct {
+			Name              string            `json:"name"`
+			Labels            map[string]string `json:"labels"`
+			CreationTimestamp string            `json:"creationTimestamp"`
+			DeletionTimestamp string            `json:"deletionTimestamp"`
+		} `json:"metadata"`
+		Status struct {
+			ContainerStatuses []struct {
+				State struct {
+					Running *struct {
+						StartedAt string `json:"startedAt"`
+					} `json:"running"`
+				} `json:"state"`
+			} `json:"containerStatuses"`
+		} `json:"status"`
 	}
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name              string            `json:"name"`
-				Labels            map[string]string `json:"labels"`
-				CreationTimestamp string            `json:"creationTimestamp"`
-				DeletionTimestamp string            `json:"deletionTimestamp"`
-			} `json:"metadata"`
-			Status struct {
-				ContainerStatuses []struct {
-					State struct {
-						Running *struct {
-							StartedAt string `json:"startedAt"`
-						} `json:"running"`
-					} `json:"state"`
-				} `json:"containerStatuses"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if json.Unmarshal(body, &list) != nil {
+	if c.listInto(namespacedPath("v1", "pods", ns, ""), &items) != nil {
 		return ""
 	}
 	var dbCreated, apiStarted time.Time
-	for _, p := range list.Items {
+	for _, p := range items {
 		if p.Metadata.DeletionTimestamp != "" {
 			continue
 		}
@@ -1235,7 +1229,7 @@ func (m *maasRun) deleteDBObjects(step, ns, dbKind string, rec *maasRecord) ([]s
 			continue
 		}
 		m.step(step, "running", "Deleting "+maasDesc(k, ns)+"...")
-		if _, err := deleteWithUID(c, path, meta.UID); err != nil && !IsK8sError(err, 404) {
+		if _, err := deleteWithUID(c, path, meta.UID); err != nil && !isK8sNotFound(err) {
 			res, _ := m.fail(step, fmt.Sprintf("Failed to delete %s: %v. Run it again to retry.", maasDesc(k, ns), err), maasWriteCode(err), "delete failed")
 			return deleted, res
 		}

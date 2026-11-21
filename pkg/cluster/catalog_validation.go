@@ -19,27 +19,24 @@ import (
 func catalogChannels(c *Client, source string) ([]any, error) {
 	path := namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, "") +
 		"?labelSelector=" + url.QueryEscape("catalog="+source) + "&fieldSelector=" + url.QueryEscape("metadata.name="+SubName)
-	body, _, err := c.get(path)
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Status struct {
+			PackageName string `json:"packageName"`
+			Source      string `json:"catalogSource"`
+			Namespace   string `json:"catalogSourceNamespace"`
+			Channels    []any  `json:"channels"`
+		} `json:"status"`
+	}
+	if err := c.listInto(path, &items); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse catalog packages: %w", err)
+		}
 		return nil, fmt.Errorf("catalog %s package lookup: %w", source, err)
 	}
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Status struct {
-				PackageName string `json:"packageName"`
-				Source      string `json:"catalogSource"`
-				Namespace   string `json:"catalogSourceNamespace"`
-				Channels    []any  `json:"channels"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse catalog packages: %w", err)
-	}
-	for _, item := range list.Items {
+	for _, item := range items {
 		if item.Metadata.Name == SubName && item.Status.PackageName == SubName && item.Status.Source == source && item.Status.Namespace == CatalogNS {
 			return item.Status.Channels, nil
 		}
@@ -190,7 +187,7 @@ func createVerificationCatalog(c *Client, image string) (name, path string, remo
 	remove = func() {
 		ctx, cancel := postOperationContext(c, 30*time.Second)
 		defer cancel()
-		if _, err := c.WithContext(ctx).delete(path); err != nil && !IsK8sError(err, 404) {
+		if _, err := c.WithContext(ctx).deleteIfExists(path); err != nil {
 			slog.Warn("failed to delete verification CatalogSource; the next operation removes it", "name", name, "error", err)
 		}
 	}
@@ -209,10 +206,6 @@ func createVerificationCatalog(c *Client, image string) (name, path string, remo
 // verificationCatalogState reads a verification catalog's
 // status.connectionState.lastObservedState ("unknown" while it has none).
 func verificationCatalogState(c *Client, path string) (string, error) {
-	body, _, err := c.get(path)
-	if err != nil {
-		return "", fmt.Errorf("read verification catalog: %w", err)
-	}
 	var cs struct {
 		Status struct {
 			Connection struct {
@@ -220,8 +213,11 @@ func verificationCatalogState(c *Client, path string) (string, error) {
 			} `json:"connectionState"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &cs); err != nil {
-		return "", fmt.Errorf("parse verification catalog: %w", err)
+	if err := c.getInto(path, &cs); err != nil {
+		if isDecodeError(err) {
+			return "", fmt.Errorf("parse verification catalog: %w", err)
+		}
+		return "", fmt.Errorf("read verification catalog: %w", err)
 	}
 	if cs.Status.Connection.State == "" {
 		return "unknown", nil
@@ -245,25 +241,22 @@ func findChannel(channels []any, name string) map[string]any {
 // catalogs from older versions are recognised by their generated name. Young
 // catalogs may belong to a running preflight and are kept.
 func cleanupStaleVerificationCatalogs(c *Client) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, ""))
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name              string            `json:"name"`
+			Labels            map[string]string `json:"labels"`
+			CreationTimestamp string            `json:"creationTimestamp"`
+		} `json:"metadata"`
+	}
+	if err := c.listInto(namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, ""), &items); err != nil {
+		if isDecodeError(err) {
+			slog.Warn("cannot parse CatalogSources to remove stale verification catalogs", "error", err)
+			return
+		}
 		slog.Warn("cannot list CatalogSources to remove stale verification catalogs", "error", err)
 		return
 	}
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name              string            `json:"name"`
-				Labels            map[string]string `json:"labels"`
-				CreationTimestamp string            `json:"creationTimestamp"`
-			} `json:"metadata"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		slog.Warn("cannot parse CatalogSources to remove stale verification catalogs", "error", err)
-		return
-	}
-	for _, item := range list.Items {
+	for _, item := range items {
 		m := item.Metadata
 		if m.Labels[catalogPurposeLabel] != verificationCatalogRole && !strings.HasPrefix(m.Name, verificationCatalogPrefix()) {
 			continue
@@ -273,7 +266,7 @@ func cleanupStaleVerificationCatalogs(c *Client) {
 			continue
 		}
 		path := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, m.Name)
-		if _, err := c.delete(path); err != nil && !IsK8sError(err, 404) {
+		if _, err := c.deleteIfExists(path); err != nil {
 			slog.Warn("failed to delete stale verification CatalogSource", "name", m.Name, "error", err)
 			continue
 		}
@@ -347,22 +340,16 @@ var imagePullFailureReasons = map[string]bool{
 // ignored: the caller keeps polling the CatalogSource state.
 func catalogPodPullFailure(c *Client, source string) (string, string) {
 	path := namespacedPath("v1", "pods", CatalogNS, "") + "?labelSelector=" + url.QueryEscape("olm.catalogSource="+source)
-	body, _, err := c.get(path)
-	if err != nil {
+	var items []struct {
+		Status struct {
+			InitContainerStatuses []containerWaitStatus `json:"initContainerStatuses"`
+			ContainerStatuses     []containerWaitStatus `json:"containerStatuses"`
+		} `json:"status"`
+	}
+	if c.listInto(path, &items) != nil {
 		return "", ""
 	}
-	var pods struct {
-		Items []struct {
-			Status struct {
-				InitContainerStatuses []containerWaitStatus `json:"initContainerStatuses"`
-				ContainerStatuses     []containerWaitStatus `json:"containerStatuses"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if json.Unmarshal(body, &pods) != nil {
-		return "", ""
-	}
-	for _, pod := range pods.Items {
+	for _, pod := range items {
 		for _, cs := range append(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses...) {
 			if waiting := cs.State.Waiting; waiting != nil && imagePullFailureReasons[waiting.Reason] {
 				detail := waiting.Reason

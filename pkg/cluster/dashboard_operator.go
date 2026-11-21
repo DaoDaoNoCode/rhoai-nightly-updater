@@ -234,17 +234,11 @@ func dashboardOwner(d dashboardDeployment) string {
 }
 
 func listDashboardNamespaceDeployments(c *Client, ns string) ([]dashboardDeployment, error) {
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", ns, ""))
-	if err != nil {
+	var items []dashboardDeployment
+	if err := c.listInto(namespacedPath("apps/v1", "deployments", ns, ""), &items); err != nil {
 		return nil, err
 	}
-	var list struct {
-		Items []dashboardDeployment `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, err
-	}
-	return list.Items, nil
+	return items, nil
 }
 
 func discoverDashboardImages(c *Client, operator *dashboardDeployment) ([]types.DashboardDevImage, error) {
@@ -449,7 +443,7 @@ func dashboardExternalPauseWarning(op string) string {
 // A missing CRD means there is nothing to delete.
 func dashboardCRDeleting(c *Client) (bool, error) {
 	r, err := listServed(c, componentAPIGroup, "/apis/components.platform.opendatahub.io/%s/dashboards", nil, []string{"v1alpha1"})
-	if IsK8sError(err, http.StatusNotFound) || (err == nil && r.Version == "") {
+	if isK8sNotFound(err) || (err == nil && r.Version == "") {
 		return false, nil
 	}
 	if err != nil {
@@ -737,16 +731,13 @@ func addDashboardRolloutDiagnostics(c *Client, ns string, images []types.Dashboa
 		return
 	}
 	// One namespace-wide list, only while something is not ready.
-	body, _, err := c.get("/api/v1/namespaces/" + ns + "/pods")
-	if err != nil {
+	var items []dashboardPod
+	if err := c.listInto("/api/v1/namespaces/"+ns+"/pods", &items); err != nil {
+		if isDecodeError(err) {
+			slog.Warn("cannot parse dashboard pods for rollout diagnostics", "error", err)
+			return
+		}
 		slog.Warn("cannot list dashboard pods for rollout diagnostics", "error", err)
-		return
-	}
-	var pods struct {
-		Items []dashboardPod `json:"items"`
-	}
-	if err := json.Unmarshal(body, &pods); err != nil {
-		slog.Warn("cannot parse dashboard pods for rollout diagnostics", "error", err)
 		return
 	}
 	for i := range images {
@@ -759,8 +750,8 @@ func addDashboardRolloutDiagnostics(c *Client, ns string, images []types.Dashboa
 		}
 		var best *dashboardPod
 		bestScore := -1
-		for p := range pods.Items {
-			pod := &pods.Items[p]
+		for p := range items {
+			pod := &items[p]
 			if pod.Metadata.DeletionTimestamp != "" || !dashboardLabelsMatch(d.Spec.Selector.MatchLabels, pod.Metadata.Labels) {
 				continue
 			}
@@ -843,15 +834,10 @@ func patchDashboardOperator(c *Client, operator *dashboardDeployment, replicas i
 		}
 		annotations[dashboardDevLastActionAnnotation] = string(raw)
 	}
-	data, err := json.Marshal(map[string]any{
+	return c.patchJSON(namespacedPath("apps/v1", "deployments", operator.Metadata.Namespace, operator.Metadata.Name), map[string]any{
 		"metadata": map[string]any{"uid": operator.Metadata.UID, "resourceVersion": operator.Metadata.ResourceVersion, "annotations": annotations},
 		"spec":     map[string]any{"replicas": replicas},
 	})
-	if err != nil {
-		return err
-	}
-	_, _, err = c.patch(namespacedPath("apps/v1", "deployments", operator.Metadata.Namespace, operator.Metadata.Name), data)
-	return err
 }
 
 func waitDashboardOperatorStopped(c *Client, operator *dashboardDeployment) error {
@@ -1219,12 +1205,8 @@ func patchControlledDashboardImages(c *Client, operator *dashboardDeployment, pa
 		if current == nil || current.Metadata.UID != operator.Metadata.UID || current.Spec.Replicas == nil || *current.Spec.Replicas != 0 {
 			return fmt.Errorf("%s is no longer paused", operator.Metadata.Name)
 		}
-		body, _, err := c.get(path)
-		if err != nil {
-			return err
-		}
 		var d dashboardDeployment
-		if err := json.Unmarshal(body, &d); err != nil {
+		if err := c.getInto(path, &d); err != nil {
 			return err
 		}
 		var containers []map[string]string
@@ -1257,7 +1239,7 @@ func patchControlledDashboardImages(c *Client, operator *dashboardDeployment, pa
 		if err == nil {
 			return nil
 		}
-		if !IsK8sError(err, http.StatusConflict) || attempt == 4 {
+		if !isK8sConflict(err) || attempt == 4 {
 			return err
 		}
 		if err := clk.Sleep(c.ctx, time.Duration(attempt+1)*100*time.Millisecond); err != nil {
@@ -1284,8 +1266,8 @@ func clearDashboardManagedAnnotations(c *Client, ns, operatorName string) (clear
 		if _, ok := d.Metadata.Annotations["opendatahub.io/managed"]; !ok {
 			continue
 		}
-		data, _ := json.Marshal(map[string]any{"metadata": map[string]any{"uid": d.Metadata.UID, "annotations": map[string]any{"opendatahub.io/managed": nil}}})
-		if _, _, err := c.patch(namespacedPath("apps/v1", "deployments", ns, d.Metadata.Name), data); err != nil && !IsK8sError(err, http.StatusNotFound) {
+		patch := map[string]any{"metadata": map[string]any{"uid": d.Metadata.UID, "annotations": map[string]any{"opendatahub.io/managed": nil}}}
+		if err := c.patchJSON(namespacedPath("apps/v1", "deployments", ns, d.Metadata.Name), patch); err != nil && !isK8sNotFound(err) {
 			failures = append(failures, d.Metadata.Name+": "+err.Error())
 			continue
 		}

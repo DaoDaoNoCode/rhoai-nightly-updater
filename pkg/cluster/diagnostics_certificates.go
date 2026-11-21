@@ -236,21 +236,21 @@ func checkCertificates(c *Client) checkOutput {
 	}
 	served := true
 	for _, ns := range namespaces {
-		body, _, err := c.get(namespacedPath("cert-manager.io/v1", "certificates", ns, ""))
-		if IsK8sError(err, http.StatusNotFound) {
-			served = false
-			break
-		}
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v%s", ns, err, templateHint(err)))
-			continue
-		}
 		var list struct {
 			Items []certificateItem `json:"items"`
 		}
-		if err := json.Unmarshal(body, &list); err != nil {
-			errs = append(errs, fmt.Sprintf("parse certificates in %s: %v", ns, err))
+		found, err := c.getIntoOptional(namespacedPath("cert-manager.io/v1", "certificates", ns, ""), &list)
+		if err != nil {
+			if isDecodeError(err) {
+				errs = append(errs, fmt.Sprintf("parse certificates in %s: %v", ns, err))
+				continue
+			}
+			errs = append(errs, fmt.Sprintf("%s: %v%s", ns, err, templateHint(err)))
 			continue
+		}
+		if !found {
+			served = false
+			break
 		}
 		for _, ci := range list.Items {
 			if ci.Metadata.Namespace == "" {

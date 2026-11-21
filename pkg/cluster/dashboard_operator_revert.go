@@ -1,11 +1,9 @@
 package cluster
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 	"time"
 
@@ -74,7 +72,7 @@ func revertDashboardOperatorTo(c *Client, target dashboardTarget) (*types.Operat
 		detail := fmt.Sprintf("Resumed %s (%d replicas)", name, replicas)
 		action := &types.DashboardDevAction{Action: "revert", By: getUser(c), At: now, Detail: detail}
 		if err := patchDashboardOperator(c, operator, replicas, keep, action); err != nil {
-			if IsK8sError(err, http.StatusConflict) && attempt < 2 {
+			if isK8sConflict(err) && attempt < 2 {
 				continue
 			}
 			return fail("Failed to resume "+name+": "+err.Error()+". Retry Revert to default.", errorCodeFromK8sErr(err))
@@ -147,16 +145,13 @@ func pausedOperatorText(operator string) string {
 }
 
 func legacyDashboardDevActive(c *Client, ns string) (bool, error) {
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName))
-	if IsK8sError(err, http.StatusNotFound) {
-		return false, nil
-	}
+	var d dashboardDeployment
+	found, err := c.getIntoOptional(namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName), &d)
 	if err != nil {
 		return false, err
 	}
-	var d dashboardDeployment
-	if err := json.Unmarshal(body, &d); err != nil {
-		return false, err
+	if !found {
+		return false, nil
 	}
 	if _, saved := d.Metadata.Annotations[legacyOriginalManagedAnnotation]; saved || d.Metadata.Annotations["opendatahub.io/managed"] == "false" {
 		return true, nil

@@ -2,7 +2,6 @@ package cluster
 
 import (
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -68,17 +67,16 @@ func readControlPlane(c *Client) (string, error) {
 // readTopologyHosted reads Infrastructure "cluster": whether its
 // status.controlPlaneTopology is External (a hosted control plane).
 func readTopologyHosted(c *Client) (bool, error) {
-	body, _, err := c.get(clusterPath("config.openshift.io/v1", "infrastructures", "cluster"))
-	if err != nil {
-		return false, fmt.Errorf("read Infrastructure cluster: %w", err)
-	}
 	var infra struct {
 		Status struct {
 			ControlPlaneTopology string `json:"controlPlaneTopology"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &infra); err != nil {
-		return false, fmt.Errorf("parse Infrastructure cluster: %w", err)
+	if err := c.getInto(clusterPath("config.openshift.io/v1", "infrastructures", "cluster"), &infra); err != nil {
+		if isDecodeError(err) {
+			return false, fmt.Errorf("parse Infrastructure cluster: %w", err)
+		}
+		return false, fmt.Errorf("read Infrastructure cluster: %w", err)
 	}
 	if infra.Status.ControlPlaneTopology == "" {
 		return false, fmt.Errorf("infrastructure cluster has no status.controlPlaneTopology")
@@ -103,21 +101,18 @@ const redHatManagedWebhookSuffix = ".managed.openshift.io"
 // ServiceAccount's existing list rule, also used by the stale-webhook
 // check): whether one holds a Red Hat SRE webhook.
 func readRedHatManaged(c *Client) (bool, error) {
-	body, _, err := c.get(clusterPath("admissionregistration.k8s.io/v1", "validatingwebhookconfigurations", ""))
-	if err != nil {
+	var items []struct {
+		Webhooks []struct {
+			Name string `json:"name"`
+		} `json:"webhooks"`
+	}
+	if err := c.listInto(clusterPath("admissionregistration.k8s.io/v1", "validatingwebhookconfigurations", ""), &items); err != nil {
+		if isDecodeError(err) {
+			return false, fmt.Errorf("parse validating webhook configurations: %w", err)
+		}
 		return false, fmt.Errorf("list validating webhook configurations: %w", err)
 	}
-	var list struct {
-		Items []struct {
-			Webhooks []struct {
-				Name string `json:"name"`
-			} `json:"webhooks"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return false, fmt.Errorf("parse validating webhook configurations: %w", err)
-	}
-	for _, item := range list.Items {
+	for _, item := range items {
 		for _, wh := range item.Webhooks {
 			if strings.HasSuffix(wh.Name, redHatManagedWebhookSuffix) {
 				return true, nil

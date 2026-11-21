@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
@@ -99,13 +98,12 @@ func (j deploymentJSON) toOperatorDeployment(via string) operatorDeployment {
 }
 
 func readOperatorDeployment(c *Client, namespace, name, via string) (*operatorDeployment, error) {
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", namespace, name))
-	if err != nil {
-		return nil, err
-	}
 	var j deploymentJSON
-	if err := json.Unmarshal(body, &j); err != nil {
-		return nil, fmt.Errorf("parse Deployment %s/%s: %w", namespace, name, err)
+	if err := c.getInto(namespacedPath("apps/v1", "deployments", namespace, name), &j); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse Deployment %s/%s: %w", namespace, name, err)
+		}
+		return nil, err
 	}
 	if j.Metadata.Namespace == "" {
 		j.Metadata.Namespace = namespace
@@ -239,20 +237,20 @@ func webhooksServedBy(c *Client, d operatorDeployment) ([]string, error) {
 }
 
 func serviceSelects(c *Client, namespace, name string, podLabels map[string]string) (bool, error) {
-	body, _, err := c.get(namespacedPath("v1", "services", namespace, name))
-	if IsK8sError(err, http.StatusNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("read Service %s/%s: %w", namespace, name, err)
-	}
 	var svc struct {
 		Spec struct {
 			Selector map[string]string `json:"selector"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &svc); err != nil {
-		return false, fmt.Errorf("parse Service %s/%s: %w", namespace, name, err)
+	found, err := c.getIntoOptional(namespacedPath("v1", "services", namespace, name), &svc)
+	if err != nil {
+		if isDecodeError(err) {
+			return false, fmt.Errorf("parse Service %s/%s: %w", namespace, name, err)
+		}
+		return false, fmt.Errorf("read Service %s/%s: %w", namespace, name, err)
+	}
+	if !found {
+		return false, nil
 	}
 	if len(svc.Spec.Selector) == 0 {
 		return false, nil
@@ -346,18 +344,17 @@ func applyFixRestartModuleOperator(c *Client, module string) (*types.OperationRe
 	if !b.Restart.OK {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Not restarting %s: %s. Nothing was changed.", d.ref(), b.Restart.Reason), Logs: logs, ErrorCode: "prerequisites"}, nil
 	}
-	patch, _ := json.Marshal(map[string]any{
+	err = c.patchJSON(namespacedPath("apps/v1", "deployments", d.Namespace, d.Name), map[string]any{
 		"metadata": map[string]any{"uid": d.UID, "resourceVersion": d.ResourceVersion},
 		"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
 			"annotations": map[string]string{restartAnnotation: nowRFC3339()},
 		}}},
 	})
-	_, _, err = c.patch(namespacedPath("apps/v1", "deployments", d.Namespace, d.Name), patch)
 	switch {
 	case err == nil:
-	case IsK8sError(err, http.StatusConflict) || IsK8sError(err, http.StatusUnprocessableEntity):
+	case isK8sConflict(err) || IsK8sError(err, http.StatusUnprocessableEntity):
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Deployment %s changed after it was checked, so it was not restarted. Run diagnostics again.", d.ref()), Logs: logs, ErrorCode: "conflict"}, nil
-	case IsK8sError(err, http.StatusNotFound):
+	case isK8sNotFound(err):
 		return nothingToDo(fmt.Sprintf("Deployment %s no longer exists. Nothing was restarted.", d.ref()), logs), nil
 	default:
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Could not restart %s: %v.%s", d.ref(), err, templateHint(err)), Logs: logs, ErrorCode: errorCodeFromK8sErr(err)}, nil

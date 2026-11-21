@@ -488,13 +488,6 @@ type maasToolSub struct {
 }
 
 func readMaaSToolSubscription(c *Client) (maasToolSub, error) {
-	body, _, err := c.get(maasAccessPath(c, "MaaSSubscription"))
-	if IsK8sError(err, 404) {
-		return maasToolSub{audience: maasAudience{everyone: true}, limits: map[string]maasLimit{}}, nil
-	}
-	if err != nil {
-		return maasToolSub{}, fmt.Errorf("read MaaSSubscription %s/%s: %w", maasTenantNamespace, maasSubscriptionName, err)
-	}
 	var sub struct {
 		Metadata objectMeta `json:"metadata"`
 		Spec     struct {
@@ -502,8 +495,15 @@ func readMaaSToolSubscription(c *Client) (maasToolSub, error) {
 			ModelRefs []map[string]any `json:"modelRefs"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &sub); err != nil {
-		return maasToolSub{}, fmt.Errorf("parse MaaSSubscription %s: %w", maasSubscriptionName, err)
+	exists, err := c.getIntoOptional(maasAccessPath(c, "MaaSSubscription"), &sub)
+	if err != nil {
+		if isDecodeError(err) {
+			return maasToolSub{}, fmt.Errorf("parse MaaSSubscription %s: %w", maasSubscriptionName, err)
+		}
+		return maasToolSub{}, fmt.Errorf("read MaaSSubscription %s/%s: %w", maasTenantNamespace, maasSubscriptionName, err)
+	}
+	if !exists {
+		return maasToolSub{audience: maasAudience{everyone: true}, limits: map[string]maasLimit{}}, nil
 	}
 	out := maasToolSub{found: true, owned: toolOwned(sub.Metadata), audience: maasAudienceFromOwner(sub.Spec.Owner), limits: map[string]maasLimit{}}
 	for _, ref := range sub.Spec.ModelRefs {

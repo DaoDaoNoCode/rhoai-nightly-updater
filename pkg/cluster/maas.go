@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"net/url"
 	"slices"
 	"sort"
@@ -184,18 +183,18 @@ func (r *maasRecord) setShared(key, what string) {
 
 func readMaaSRecord(c *Client) (maasRecord, error) {
 	var rec maasRecord
-	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
-	if IsK8sError(err, 404) {
-		return rec, nil
-	}
-	if err != nil {
-		return rec, fmt.Errorf("read this tool's MaaS record: %w", err)
-	}
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &cm); err != nil {
-		return rec, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
+	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	if err != nil {
+		if isDecodeError(err) {
+			return rec, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
+		}
+		return rec, fmt.Errorf("read this tool's MaaS record: %w", err)
+	}
+	if !found {
+		return rec, nil
 	}
 	if raw := cm.Data[maasRecordKey]; raw != "" {
 		if err := json.Unmarshal([]byte(raw), &rec); err != nil {
@@ -365,7 +364,7 @@ func maasInfraNamespace(c *Client) (string, error) {
 		if tc.Status.InfraNamespace != "" {
 			return tc.Status.InfraNamespace, nil
 		}
-	case IsK8sError(err, http.StatusNotFound):
+	case isK8sNotFound(err):
 	default:
 		return "", fmt.Errorf("cannot tell where maas-api and its database go: %s cannot be read (%w)", what, err)
 	}
@@ -623,12 +622,12 @@ type maasGatewayState struct {
 }
 
 func readMaaSGateway(c *Client) (maasGatewayState, error) {
-	body, _, err := c.get(maasObjectPath("Gateway", ""))
-	if IsK8sError(err, 404) {
-		return maasGatewayState{}, nil
-	}
+	body, exists, err := c.getOptional(maasObjectPath("Gateway", ""))
 	if err != nil {
 		return maasGatewayState{}, err
+	}
+	if !exists {
+		return maasGatewayState{}, nil
 	}
 	st := maasGatewayState{found: true}
 	if err := json.Unmarshal(body, &st.gw); err != nil {
@@ -808,15 +807,14 @@ func maasDBConfigObject(ns, connURL string) map[string]any {
 // (maas-setup.md "Connection string format"). The URL holds the password:
 // it is only ever written to the Secret, never logged or returned.
 func maasConnectionURL(c *Client, ns string) (string, error) {
-	body, _, err := c.get(namespacedPath("v1", "secrets", ns, "maas-db-app"))
-	if err != nil {
-		return "", fmt.Errorf("read the database's application Secret %s/%s: %w", ns, maasDBAppSecret, err)
-	}
 	var s struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &s); err != nil {
-		return "", errors.New("the database's application Secret cannot be parsed")
+	if err := c.getInto(namespacedPath("v1", "secrets", ns, "maas-db-app"), &s); err != nil {
+		if isDecodeError(err) {
+			return "", errors.New("the database's application Secret cannot be parsed")
+		}
+		return "", fmt.Errorf("read the database's application Secret %s/%s: %w", ns, maasDBAppSecret, err)
 	}
 	user, err1 := base64.StdEncoding.DecodeString(s.Data["username"])
 	pass, err2 := base64.StdEncoding.DecodeString(s.Data["password"])
@@ -830,13 +828,6 @@ func maasConnectionURL(c *Client, ns string) (string, error) {
 
 // readMaaSDBCluster reads the database: found, owned, ready, a message.
 func readMaaSDBCluster(c *Client, ns string) (objectMeta, bool, bool, string, error) {
-	body, _, err := c.get(maasObjectPath("Cluster", ns))
-	if IsK8sError(err, 404) {
-		return objectMeta{}, false, false, "", nil
-	}
-	if err != nil {
-		return objectMeta{}, false, false, "", err
-	}
 	var cl struct {
 		Metadata objectMeta `json:"metadata"`
 		Spec     struct {
@@ -847,8 +838,15 @@ func readMaaSDBCluster(c *Client, ns string) (objectMeta, bool, bool, string, er
 			ReadyInstances int    `json:"readyInstances"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &cl); err != nil {
-		return objectMeta{}, true, false, "", err
+	found, err := c.getIntoOptional(maasObjectPath("Cluster", ns), &cl)
+	if err != nil {
+		if isDecodeError(err) {
+			return objectMeta{}, true, false, "", err
+		}
+		return objectMeta{}, false, false, "", err
+	}
+	if !found {
+		return objectMeta{}, false, false, "", nil
 	}
 	ready := cl.Status.ReadyInstances >= 1 && cl.Status.ReadyInstances >= cl.Spec.Instances
 	return cl.Metadata, true, ready, firstNonEmpty(cl.Status.Phase, "Starting"), nil
@@ -857,20 +855,17 @@ func readMaaSDBCluster(c *Client, ns string) (objectMeta, bool, bool, string, er
 // deploymentAvailable reads a Deployment's Available condition: "True",
 // "False", "missing" or "" (unreadable).
 func deploymentAvailable(c *Client, ns, name string) string {
-	body, _, err := c.get(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, name))
-	if IsK8sError(err, 404) {
-		return "missing"
-	}
-	if err != nil {
-		return ""
-	}
 	var d struct {
 		Status struct {
 			Conditions []k8sCondition `json:"conditions"`
 		} `json:"status"`
 	}
-	if json.Unmarshal(body, &d) != nil {
+	found, err := c.getIntoOptional(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, name), &d)
+	if err != nil {
 		return ""
+	}
+	if !found {
+		return "missing"
 	}
 	if cond, ok := findCondition(d.Status.Conditions, "Available"); ok {
 		return cond.Status
@@ -881,20 +876,17 @@ func deploymentAvailable(c *Client, ns, name string) string {
 // readyCondition reads an object's Ready condition: "True", "False",
 // "missing" or "" (unreadable or not reported), with its message.
 func readyCondition(c *Client, path string) (string, string) {
-	body, _, err := c.get(path)
-	if IsK8sError(err, 404) {
-		return "missing", ""
-	}
-	if err != nil {
-		return "", ""
-	}
 	var obj struct {
 		Status struct {
 			Conditions []k8sCondition `json:"conditions"`
 		} `json:"status"`
 	}
-	if json.Unmarshal(body, &obj) != nil {
+	found, err := c.getIntoOptional(path, &obj)
+	if err != nil {
 		return "", ""
+	}
+	if !found {
+		return "missing", ""
 	}
 	if cond, ok := findCondition(obj.Status.Conditions, "Ready"); ok {
 		return cond.Status, firstNonEmpty(cond.Message, cond.Reason)
@@ -931,12 +923,12 @@ func groupServed(c *Client, group string) (bool, error) {
 	if v, ok := apiVersionsCache.Get(c.baseURL + "|" + group); ok && len(v) > 0 {
 		return true, nil
 	}
-	body, _, err := c.get("/apis/" + group)
-	if IsK8sError(err, 404) {
-		return false, nil
-	}
+	body, found, err := c.getOptional("/apis/" + group)
 	if err != nil {
 		return false, fmt.Errorf("read the API group %s: %w", group, err)
+	}
+	if !found {
+		return false, nil
 	}
 	return len(parseGroupVersions(body)) > 0, nil
 }
@@ -1770,15 +1762,12 @@ func readMaaSModelRef(c *Client, project, name string) (maasModelRefObject, bool
 
 func readMaaSObject(c *Client, path string) (maasModelRefObject, bool, error) {
 	var obj maasModelRefObject
-	body, _, err := c.get(path)
-	if IsK8sError(err, 404) {
-		return obj, false, nil
-	}
+	found, err := c.getIntoOptional(path, &obj)
 	if err != nil {
 		return obj, false, err
 	}
-	if err := json.Unmarshal(body, &obj); err != nil {
-		return obj, false, err
+	if !found {
+		return obj, false, nil
 	}
 	return obj, true, nil
 }
@@ -1804,7 +1793,7 @@ func MaaSPublishedIn(c *Client, project, name string) (bool, error) {
 		return false, nil
 	}
 	_, found, err := readObjectMeta(c, refPath)
-	if err != nil && !IsK8sError(err, 404) {
+	if err != nil && !isK8sNotFound(err) {
 		return false, err
 	}
 	if found {

@@ -233,13 +233,6 @@ func modelRoutePath(project, name string) (string, bool) {
 // made it.
 func readModelRoute(c *Client, project, name string) ([]string, bool, error) {
 	path, _ := modelRoutePath(project, name)
-	body, _, err := c.get(path)
-	if IsK8sError(err, http.StatusNotFound) {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
 	var route struct {
 		Spec struct {
 			ParentRefs []struct {
@@ -248,8 +241,15 @@ func readModelRoute(c *Client, project, name string) ([]string, bool, error) {
 			} `json:"parentRefs"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &route); err != nil {
-		return nil, false, fmt.Errorf("parse HTTPRoute %s/%s-kserve-route: %w", project, name, err)
+	found, err := c.getIntoOptional(path, &route)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, false, fmt.Errorf("parse HTTPRoute %s/%s-kserve-route: %w", project, name, err)
+		}
+		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
 	}
 	parents := make([]string, 0, len(route.Spec.ParentRefs))
 	for _, p := range route.Spec.ParentRefs {

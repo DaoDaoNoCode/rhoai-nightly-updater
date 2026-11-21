@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -58,60 +57,55 @@ func GetDebugInfo(c *Client) (*types.DebugResponse, error) {
 
 func getPodsInNamespace(c *Client, namespace string) ([]types.PodInfo, error) {
 	path := namespacedPath("v1", "pods", namespace, "")
-	body, _, err := c.get(path)
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name              string            `json:"name"`
+			Namespace         string            `json:"namespace"`
+			CreationTimestamp string            `json:"creationTimestamp"`
+			Labels            map[string]string `json:"labels"`
+			OwnerReferences   []ownerRef        `json:"ownerReferences"`
+		} `json:"metadata"`
+		Spec struct {
+			NodeName   string `json:"nodeName"`
+			Containers []struct {
+				Name  string `json:"name"`
+				Image string `json:"image"`
+			} `json:"containers"`
+		} `json:"spec"`
+		Status struct {
+			Phase      string `json:"phase"`
+			Conditions []struct {
+				Type    string `json:"type"`
+				Status  string `json:"status"`
+				Reason  string `json:"reason"`
+				Message string `json:"message"`
+			} `json:"conditions"`
+			ContainerStatuses []struct {
+				Name         string `json:"name"`
+				Ready        bool   `json:"ready"`
+				RestartCount int    `json:"restartCount"`
+				ImageID      string `json:"imageID"`
+				State        struct {
+					Running *struct{} `json:"running"`
+					Waiting *struct {
+						Reason string `json:"reason"`
+					} `json:"waiting"`
+					Terminated *struct {
+						Reason string `json:"reason"`
+					} `json:"terminated"`
+				} `json:"state"`
+			} `json:"containerStatuses"`
+		} `json:"status"`
+	}
+	if err := c.listInto(path, &items); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("failed to parse response: %w", err)
+		}
 		return nil, fmt.Errorf("API request failed: %w", err)
 	}
 
-	var podList struct {
-		Items []struct {
-			Metadata struct {
-				Name              string            `json:"name"`
-				Namespace         string            `json:"namespace"`
-				CreationTimestamp string            `json:"creationTimestamp"`
-				Labels            map[string]string `json:"labels"`
-				OwnerReferences   []ownerRef        `json:"ownerReferences"`
-			} `json:"metadata"`
-			Spec struct {
-				NodeName   string `json:"nodeName"`
-				Containers []struct {
-					Name  string `json:"name"`
-					Image string `json:"image"`
-				} `json:"containers"`
-			} `json:"spec"`
-			Status struct {
-				Phase      string `json:"phase"`
-				Conditions []struct {
-					Type    string `json:"type"`
-					Status  string `json:"status"`
-					Reason  string `json:"reason"`
-					Message string `json:"message"`
-				} `json:"conditions"`
-				ContainerStatuses []struct {
-					Name         string `json:"name"`
-					Ready        bool   `json:"ready"`
-					RestartCount int    `json:"restartCount"`
-					ImageID      string `json:"imageID"`
-					State        struct {
-						Running *struct{} `json:"running"`
-						Waiting *struct {
-							Reason string `json:"reason"`
-						} `json:"waiting"`
-						Terminated *struct {
-							Reason string `json:"reason"`
-						} `json:"terminated"`
-					} `json:"state"`
-				} `json:"containerStatuses"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-
-	if err := json.Unmarshal(body, &podList); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
 	var pods []types.PodInfo
-	for _, item := range podList.Items {
+	for _, item := range items {
 		pod := types.PodInfo{
 			Name:      item.Metadata.Name,
 			Namespace: item.Metadata.Namespace,

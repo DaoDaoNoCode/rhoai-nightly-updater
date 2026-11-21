@@ -54,20 +54,14 @@ func modelVolumeIsEmptyDir(c *Client) bool {
 // then, not left pending, until the quota is raised or other workloads
 // stop. Unreadable quotas are no warning (unknown is not a failure).
 func quotaWarning(c *Client, project string, entry catalogModel, ephemeral bool) string {
-	body, _, err := c.get(namespacedPath("v1", "resourcequotas", project, ""))
-	if err != nil {
-		return ""
+	var items []struct {
+		Metadata objectMeta `json:"metadata"`
+		Status   struct {
+			Hard map[string]string `json:"hard"`
+			Used map[string]string `json:"used"`
+		} `json:"status"`
 	}
-	var list struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-			Status   struct {
-				Hard map[string]string `json:"hard"`
-				Used map[string]string `json:"used"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if json.Unmarshal(body, &list) != nil {
+	if c.listInto(namespacedPath("v1", "resourcequotas", project, ""), &items) != nil {
 		return ""
 	}
 	need := map[string]string{
@@ -80,8 +74,8 @@ func quotaWarning(c *Client, project string, entry catalogModel, ephemeral bool)
 		need["ephemeral-storage"] = entry.ephemeralStorage
 	}
 	var short []string
-	sort.Slice(list.Items, func(i, j int) bool { return list.Items[i].Metadata.Name < list.Items[j].Metadata.Name })
-	for _, q := range list.Items {
+	sort.Slice(items, func(i, j int) bool { return items[i].Metadata.Name < items[j].Metadata.Name })
+	for _, q := range items {
 		keys := make([]string, 0, len(q.Status.Hard))
 		for k := range q.Status.Hard {
 			keys = append(keys, k)

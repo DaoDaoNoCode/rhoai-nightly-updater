@@ -180,18 +180,18 @@ func writePrereqRecord(c *Client, rec prereqRecord) error {
 // readSnapshotKey reads one key of this tool's snapshot ConfigMap ("" when
 // it or the ConfigMap is missing).
 func readSnapshotKey(c *Client, key string) (string, error) {
-	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
-	if IsK8sError(err, 404) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &cm); err != nil {
-		return "", fmt.Errorf("parse the snapshot ConfigMap: %w", err)
+	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	if err != nil {
+		if isDecodeError(err) {
+			return "", fmt.Errorf("parse the snapshot ConfigMap: %w", err)
+		}
+		return "", err
+	}
+	if !found {
+		return "", nil
 	}
 	return cm.Data[key], nil
 }
@@ -986,7 +986,7 @@ func componentUsers(c *Client, key string) ([]string, error) {
 		}
 	case "mlflowoperator":
 		cr, err := getMLflowCR(c)
-		if IsK8sError(err, 404) {
+		if isK8sNotFound(err) {
 			return nil, nil
 		}
 		if err != nil {
@@ -1003,11 +1003,11 @@ func componentUsers(c *Client, key string) ([]string, error) {
 		for _, m := range models {
 			live(m.Metadata, "LLMInferenceService")
 		}
-		body, _, err := c.get(clusterPath("serving.kserve.io/v1beta1", "inferenceservices", ""))
-		if err != nil && !IsK8sError(err, 404) {
+		body, found, err := c.getOptional(clusterPath("serving.kserve.io/v1beta1", "inferenceservices", ""))
+		if err != nil {
 			return nil, fmt.Errorf("list InferenceServices: %w", err)
 		}
-		if err == nil {
+		if found {
 			var list struct {
 				Items []struct {
 					Metadata objectMeta `json:"metadata"`
@@ -1181,7 +1181,7 @@ func RestoreComponents(c *Client, keys []string) (*types.OperationResponse, erro
 				logs = append(logs, "OK: "+key+" "+v.prev)
 				break
 			}
-			if !IsK8sError(err, http.StatusConflict) {
+			if !isK8sConflict(err) {
 				return stop(fmt.Sprintf("Failed to turn %s back to %s: %v.%s", key, v.prev, err, templateHint(err)), errorCodeFromK8sErr(err))
 			}
 			if attempt == 3 {

@@ -83,12 +83,12 @@ func updateGitOpsPlan(c *Client, image string, currentCSV types.CSVInfo, logs *[
 // or when there is none). An answer it cannot parse is an error, so Update
 // refuses rather than delete a Subscription OLM may still be working on.
 func pendingInstallPlan(c *Client) (name, phase string, err error) {
-	body, _, err := c.get(subscriptionPath())
-	if IsK8sError(err, 404) {
-		return "", "", nil
-	}
+	body, found, err := c.getOptional(subscriptionPath())
 	if err != nil {
 		return "", "", err
+	}
+	if !found {
+		return "", "", nil
 	}
 	var sub struct {
 		Status struct {
@@ -104,12 +104,12 @@ func pendingInstallPlan(c *Client) (name, phase string, err error) {
 		return "", "", nil
 	}
 	name = sub.Status.InstallPlanRef.Name
-	body, _, err = c.get(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, name))
-	if IsK8sError(err, 404) {
-		return "", "", nil
-	}
+	body, found, err = c.getOptional(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, name))
 	if err != nil {
 		return "", "", err
+	}
+	if !found {
+		return "", "", nil
 	}
 	var ip struct {
 		Status struct {
@@ -231,7 +231,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting old CSV and InstallPlan..."})
 	if ipName := recovery.installPlanName(); ipName != "" {
 		ipPath := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ipName)
-		if _, err := c.delete(ipPath); err != nil && !IsK8sError(err, 404) {
+		if _, err := c.deleteIfExists(ipPath); err != nil {
 			return fail("Cannot delete old InstallPlan: "+err.Error(), errorCodeFromK8sErr(err))
 		}
 		*logs = append(*logs, fmt.Sprintf("OK: InstallPlan %s deleted", ipName))
@@ -343,12 +343,12 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 
 // readSubscriptionObject reads the operator Subscription as a decoded object.
 func readSubscriptionObject(c *Client) (obj map[string]any, found bool, err error) {
-	body, _, err := c.get(subscriptionPath())
-	if IsK8sError(err, 404) {
-		return nil, false, nil
-	}
+	body, exists, err := c.getOptional(subscriptionPath())
 	if err != nil {
 		return nil, false, err
+	}
+	if !exists {
+		return nil, false, nil
 	}
 	if err := json.Unmarshal(body, &obj); err != nil {
 		return nil, false, fmt.Errorf("parse Subscription: %w", err)

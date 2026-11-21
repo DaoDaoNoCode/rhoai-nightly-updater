@@ -477,35 +477,32 @@ const (
 // error, an API that is not served included, is no models: MaaS is
 // optional.
 func listMaaSPlaygroundModels(c *Client) []types.PlaygroundModel {
-	body, _, err := c.get("/apis/" + maasAPI(c) + "/maasmodelrefs")
-	if err != nil {
-		if !IsK8sError(err, http.StatusNotFound) {
+	var items []struct {
+		Metadata objectMeta `json:"metadata"`
+		Spec     struct {
+			ModelRef struct {
+				Kind string `json:"kind"`
+				Name string `json:"name"`
+			} `json:"modelRef"`
+		} `json:"spec"`
+		Status struct {
+			Phase              string `json:"phase"`
+			ResolvedModelAlias string `json:"resolvedModelAlias"`
+		} `json:"status"`
+	}
+	if err := c.listInto("/apis/"+maasAPI(c)+"/maasmodelrefs", &items); err != nil {
+		if isDecodeError(err) {
+			slog.Debug("cannot parse the MaaS model references", "error", err)
+			return nil
+		}
+		if !isK8sNotFound(err) {
 			slog.Debug("cannot list the MaaS models for the playground", "error", err)
 		}
 		return nil
 	}
-	var refs struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-			Spec     struct {
-				ModelRef struct {
-					Kind string `json:"kind"`
-					Name string `json:"name"`
-				} `json:"modelRef"`
-			} `json:"spec"`
-			Status struct {
-				Phase              string `json:"phase"`
-				ResolvedModelAlias string `json:"resolvedModelAlias"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &refs); err != nil {
-		slog.Debug("cannot parse the MaaS model references", "error", err)
-		return nil
-	}
 	subs := maasSubscriptionsByModel(c)
 	var out []types.PlaygroundModel
-	for _, r := range refs.Items {
+	for _, r := range items {
 		name := r.Metadata.Name
 		if r.Spec.ModelRef.Kind == "ExternalModel" && r.Spec.ModelRef.Name != "" {
 			name = r.Spec.ModelRef.Name
@@ -535,25 +532,19 @@ func listMaaSPlaygroundModels(c *Client) []types.PlaygroundModel {
 // the MaaSSubscriptions that offer it (none when they cannot be read).
 func maasSubscriptionsByModel(c *Client) map[string][]string {
 	out := map[string][]string{}
-	body, _, err := c.get(namespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""))
-	if err != nil {
+	var items []struct {
+		Metadata objectMeta `json:"metadata"`
+		Spec     struct {
+			ModelRefs []struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+			} `json:"modelRefs"`
+		} `json:"spec"`
+	}
+	if c.listInto(namespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""), &items) != nil {
 		return out
 	}
-	var list struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-			Spec     struct {
-				ModelRefs []struct {
-					Name      string `json:"name"`
-					Namespace string `json:"namespace"`
-				} `json:"modelRefs"`
-			} `json:"spec"`
-		} `json:"items"`
-	}
-	if json.Unmarshal(body, &list) != nil {
-		return out
-	}
-	for _, s := range list.Items {
+	for _, s := range items {
 		for _, ref := range s.Spec.ModelRefs {
 			k := ref.Namespace + "/" + ref.Name
 			if !slices.Contains(out[k], s.Metadata.Name) {
@@ -601,7 +592,7 @@ func readPlaygroundServer(c *Client, project, name string) (objectMeta, bool, er
 		return objectMeta{}, false, nil
 	}
 	r, err := getServed(c, "ogx.io", "/apis/ogx.io/%s/namespaces/"+project+"/ogxservers/"+playgroundServerName, []string{"v1beta1"})
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return objectMeta{}, false, nil
 	}
 	if err != nil {
@@ -645,18 +636,18 @@ func playgroundOwnership(c *Client, project string, rec playgroundRecord, has bo
 // readPlaygroundRecords returns the recorded projects (none when nothing is
 // recorded).
 func readPlaygroundRecords(c *Client) (map[string]playgroundRecord, error) {
-	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
-	if IsK8sError(err, 404) {
-		return map[string]playgroundRecord{}, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read this tool's playground records: %w", err)
-	}
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &cm); err != nil {
-		return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
+	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
+		}
+		return nil, fmt.Errorf("read this tool's playground records: %w", err)
+	}
+	if !found {
+		return map[string]playgroundRecord{}, nil
 	}
 	out := map[string]playgroundRecord{}
 	if raw := cm.Data[playgroundRecordKey]; raw != "" {
@@ -755,21 +746,21 @@ func genAIUIState(c *Client) string {
 		slog.Debug("cannot tell where the gen-ai-ui Deployment runs", "error", err)
 		return ""
 	}
-	body, _, err := c.get(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, genAIUIDeployment))
-	if IsK8sError(err, 404) {
-		return "missing"
-	}
-	if err != nil {
-		slog.Debug("cannot read the gen-ai-ui Deployment", "error", err)
-		return ""
-	}
 	var d struct {
 		Status struct {
 			Conditions []k8sCondition `json:"conditions"`
 		} `json:"status"`
 	}
-	if json.Unmarshal(body, &d) != nil {
+	found, err := c.getIntoOptional(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, genAIUIDeployment), &d)
+	if err != nil {
+		if isDecodeError(err) {
+			return ""
+		}
+		slog.Debug("cannot read the gen-ai-ui Deployment", "error", err)
 		return ""
+	}
+	if !found {
+		return "missing"
 	}
 	if cond, ok := findCondition(d.Status.Conditions, "Available"); ok {
 		if cond.Status == "True" {

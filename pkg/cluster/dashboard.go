@@ -109,14 +109,6 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 		return nil, fmt.Errorf("find the dashboard: %w", err)
 	}
 	deployPath := namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName)
-	body, _, err := c.get(deployPath)
-	if IsK8sError(err, http.StatusNotFound) {
-		return nil, fmt.Errorf("%w (no %s Deployment in %s)", ErrDashboardNotDeployed, dashboardDeploymentName, ns)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get dashboard deployment: %w", err)
-	}
-
 	var deploy struct {
 		Metadata struct {
 			UID         string            `json:"uid"`
@@ -137,8 +129,15 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 			} `json:"template"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &deploy); err != nil {
-		return nil, fmt.Errorf("parse dashboard deployment: %w", err)
+	found, err := c.getIntoOptional(deployPath, &deploy)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse dashboard deployment: %w", err)
+		}
+		return nil, fmt.Errorf("get dashboard deployment: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("%w (no %s Deployment in %s)", ErrDashboardNotDeployed, dashboardDeploymentName, ns)
 	}
 
 	state := &types.DashboardState{Namespace: ns}
@@ -542,7 +541,7 @@ func splitLegacyDashboardTargets(c *Client, ns string, images map[string]string,
 		if standalone && moduleContainers[name] {
 			moduleNames, moduleErr := getDeploymentContainerNames(c, ns, name)
 			switch {
-			case IsK8sError(moduleErr, 404):
+			case isK8sNotFound(moduleErr):
 				*logs = append(*logs, fmt.Sprintf("  %s: module not installed; unchanged", name))
 			case moduleErr != nil:
 				*logs = append(*logs, fmt.Sprintf("  %s: cannot read module deployment (%v)", name, moduleErr))
@@ -708,16 +707,12 @@ type legacyManagedRecord struct {
 }
 
 func getDeploymentAnnotations(c *Client, ns, name string) (map[string]string, error) {
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", ns, name))
-	if err != nil {
-		return nil, err
-	}
 	var d struct {
 		Metadata struct {
 			Annotations map[string]string `json:"annotations"`
 		} `json:"metadata"`
 	}
-	if err := json.Unmarshal(body, &d); err != nil {
+	if err := c.getInto(namespacedPath("apps/v1", "deployments", ns, name), &d); err != nil {
 		return nil, err
 	}
 	return d.Metadata.Annotations, nil
@@ -798,11 +793,6 @@ func getOriginalImages(c *Client) (map[string]string, error) {
 		return nil, fmt.Errorf("the installed CSV %s installs %d Deployments, so which one holds the dashboard images is unknown", csv.Name, len(csv.Deployments))
 	}
 	operatorPath := namespacedPath("apps/v1", "deployments", SubNS, csv.Deployments[0])
-	body, _, err := c.get(operatorPath)
-	if err != nil {
-		return nil, fmt.Errorf("get operator deployment: %w", err)
-	}
-
 	var deploy struct {
 		Spec struct {
 			Template struct {
@@ -817,8 +807,11 @@ func getOriginalImages(c *Client) (map[string]string, error) {
 			} `json:"template"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &deploy); err != nil {
-		return nil, fmt.Errorf("parse operator deployment: %w", err)
+	if err := c.getInto(operatorPath, &deploy); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse operator deployment: %w", err)
+		}
+		return nil, fmt.Errorf("get operator deployment: %w", err)
 	}
 
 	// Build env var lookup
@@ -865,59 +858,55 @@ func getDashboardPods(c *Client, ns, deployment, deploymentUID string, matchLabe
 	selector := strings.Join(parts, ",")
 
 	path := fmt.Sprintf("/api/v1/namespaces/%s/pods?labelSelector=%s", ns, url.QueryEscape(selector))
-	body, _, err := c.get(path)
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name            string            `json:"name"`
+			Namespace       string            `json:"namespace"`
+			Labels          map[string]string `json:"labels"`
+			OwnerReferences []ownerRef        `json:"ownerReferences"`
+		} `json:"metadata"`
+		Spec struct {
+			NodeName   string `json:"nodeName"`
+			Containers []struct {
+				Name  string `json:"name"`
+				Image string `json:"image"`
+			} `json:"containers"`
+		} `json:"spec"`
+		Status struct {
+			Phase      string `json:"phase"`
+			Conditions []struct {
+				Type    string `json:"type"`
+				Status  string `json:"status"`
+				Reason  string `json:"reason"`
+				Message string `json:"message"`
+			} `json:"conditions"`
+			ContainerStatuses []struct {
+				Name         string `json:"name"`
+				Ready        bool   `json:"ready"`
+				RestartCount int    `json:"restartCount"`
+				State        struct {
+					Running *struct{} `json:"running"`
+					Waiting *struct {
+						Reason string `json:"reason"`
+					} `json:"waiting"`
+					Terminated *struct {
+						Reason string `json:"reason"`
+					} `json:"terminated"`
+				} `json:"state"`
+			} `json:"containerStatuses"`
+		} `json:"status"`
+	}
+	if err := c.listInto(path, &items); err != nil {
+		if isDecodeError(err) {
+			slog.Warn("failed to parse dashboard pod list", "error", err)
+			return nil
+		}
 		slog.Warn("failed to list dashboard pods", "error", err)
 		return nil
 	}
 
-	var podList struct {
-		Items []struct {
-			Metadata struct {
-				Name            string            `json:"name"`
-				Namespace       string            `json:"namespace"`
-				Labels          map[string]string `json:"labels"`
-				OwnerReferences []ownerRef        `json:"ownerReferences"`
-			} `json:"metadata"`
-			Spec struct {
-				NodeName   string `json:"nodeName"`
-				Containers []struct {
-					Name  string `json:"name"`
-					Image string `json:"image"`
-				} `json:"containers"`
-			} `json:"spec"`
-			Status struct {
-				Phase      string `json:"phase"`
-				Conditions []struct {
-					Type    string `json:"type"`
-					Status  string `json:"status"`
-					Reason  string `json:"reason"`
-					Message string `json:"message"`
-				} `json:"conditions"`
-				ContainerStatuses []struct {
-					Name         string `json:"name"`
-					Ready        bool   `json:"ready"`
-					RestartCount int    `json:"restartCount"`
-					State        struct {
-						Running *struct{} `json:"running"`
-						Waiting *struct {
-							Reason string `json:"reason"`
-						} `json:"waiting"`
-						Terminated *struct {
-							Reason string `json:"reason"`
-						} `json:"terminated"`
-					} `json:"state"`
-				} `json:"containerStatuses"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &podList); err != nil {
-		slog.Warn("failed to parse dashboard pod list", "error", err)
-		return nil
-	}
-
 	var pods []types.PodInfo
-	for _, item := range podList.Items {
+	for _, item := range items {
 		// Only the Deployment's own pods: its selector may also match others.
 		if !ownedByDeployment(c, ns, deployment, deploymentUID, item.Metadata.Labels, controllerOf(item.Metadata.OwnerReferences)) {
 			continue
@@ -1007,10 +996,6 @@ func isStandaloneMode(containers []string) bool {
 // getDeploymentContainerNames returns the list of container names in a deployment.
 func getDeploymentContainerNames(c *Client, namespace, deployName string) ([]string, error) {
 	path := namespacedPath("apps/v1", "deployments", namespace, deployName)
-	body, _, err := c.get(path)
-	if err != nil {
-		return nil, err
-	}
 	var deploy struct {
 		Spec struct {
 			Template struct {
@@ -1022,7 +1007,7 @@ func getDeploymentContainerNames(c *Client, namespace, deployName string) ([]str
 			} `json:"template"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &deploy); err != nil {
+	if err := c.getInto(path, &deploy); err != nil {
 		return nil, err
 	}
 	var names []string

@@ -470,13 +470,6 @@ type subscriptionState struct {
 }
 
 func readSubscriptionState(c *Client) (subscriptionState, error) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName))
-	if err != nil {
-		if IsK8sError(err, http.StatusNotFound) {
-			return subscriptionState{}, nil
-		}
-		return subscriptionState{}, err
-	}
 	var sub struct {
 		Metadata struct {
 			CreationTimestamp string `json:"creationTimestamp"`
@@ -502,8 +495,15 @@ func readSubscriptionState(c *Client) (subscriptionState, error) {
 			} `json:"conditions"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &sub); err != nil {
-		return subscriptionState{}, fmt.Errorf("parse subscription: %w", err)
+	found, err := c.getIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), &sub)
+	if err != nil {
+		if isDecodeError(err) {
+			return subscriptionState{}, fmt.Errorf("parse subscription: %w", err)
+		}
+		return subscriptionState{}, err
+	}
+	if !found {
+		return subscriptionState{}, nil
 	}
 	s := subscriptionState{
 		Exists: true, Source: sub.Spec.Source, Channel: sub.Spec.Channel, State: sub.Status.State,
@@ -788,17 +788,14 @@ type installPlanItem struct {
 }
 
 func listInstallPlans(c *Client) ([]installPlanItem, error) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ""))
-	if err != nil {
+	var items []installPlanItem
+	if err := c.listInto(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ""), &items); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse install plans: %w", err)
+		}
 		return nil, err
 	}
-	var list struct {
-		Items []installPlanItem `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse install plans: %w", err)
-	}
-	return list.Items, nil
+	return items, nil
 }
 
 func installPlanFailureReason(ip installPlanItem) string {
@@ -861,7 +858,7 @@ func checkInstallPlanHealth(c *Client) checkOutput {
 
 	plans, err := listInstallPlans(c)
 	if err != nil {
-		if IsK8sError(err, http.StatusNotFound) {
+		if isK8sNotFound(err) {
 			return missing()
 		}
 		return checkOutput{check: CheckResult{Name: name, Status: "fail", Detail: fmt.Sprintf("Failed to check install plans: %v", err)}}
@@ -1088,38 +1085,34 @@ func checkNodeCapacity(c *Client) checkOutput {
 	out := checkOutput{check: CheckResult{Name: "Node capacity", Status: "pass", Detail: "All nodes healthy"}}
 
 	path := clusterPath("v1", "nodes", "")
-	body, _, err := c.get(path)
-	if err != nil {
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Status struct {
+			Conditions []struct {
+				Type   string `json:"type"`
+				Status string `json:"status"`
+			} `json:"conditions"`
+		} `json:"status"`
+	}
+	if err := c.listInto(path, &items); err != nil {
+		if isDecodeError(err) {
+			out.check = CheckResult{Name: "Node capacity", Status: "warn", Detail: "Could not parse node list"}
+			return out
+		}
 		out.check = CheckResult{Name: "Node capacity", Status: "warn", Detail: "Could not query nodes"}
 		return out
 	}
 
-	var nodeList struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Status struct {
-				Conditions []struct {
-					Type   string `json:"type"`
-					Status string `json:"status"`
-				} `json:"conditions"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &nodeList); err != nil {
-		out.check = CheckResult{Name: "Node capacity", Status: "warn", Detail: "Could not parse node list"}
-		return out
-	}
-
-	if len(nodeList.Items) == 0 {
+	if len(items) == 0 {
 		out.check = CheckResult{Name: "Node capacity", Status: "warn", Detail: "No nodes found"}
 		return out
 	}
 
-	totalNodes := len(nodeList.Items)
+	totalNodes := len(items)
 	var notReadyNodes []string
-	for _, node := range nodeList.Items {
+	for _, node := range items {
 		nodeReady := false
 		for _, cond := range node.Status.Conditions {
 			if cond.Type == "Ready" && cond.Status == "True" {
@@ -1233,7 +1226,7 @@ func nothingToDo(msg string, logs []string) *types.OperationResponse {
 func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error) {
 	plans, err := listInstallPlans(c)
 	if err != nil {
-		if IsK8sError(err, http.StatusNotFound) {
+		if isK8sNotFound(err) {
 			return nothingToDo("there are no install plans. Nothing was deleted.", nil), nil
 		}
 		return &types.OperationResponse{
@@ -1259,9 +1252,9 @@ func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error
 		case err == nil:
 			deleted = append(deleted, ip.Metadata.Name)
 			logs = append(logs, fmt.Sprintf("Deleted install plan %s (phase Failed)", ip.Metadata.Name))
-		case IsK8sError(err, http.StatusNotFound):
+		case isK8sNotFound(err):
 			logs = append(logs, fmt.Sprintf("Install plan %s was already gone", ip.Metadata.Name))
-		case IsK8sError(err, http.StatusConflict):
+		case isK8sConflict(err):
 			changed = append(changed, ip.Metadata.Name)
 			logs = append(logs, fmt.Sprintf("Kept install plan %s: it changed after it was checked", ip.Metadata.Name))
 		default:

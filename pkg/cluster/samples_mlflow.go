@@ -104,7 +104,7 @@ func mlflowSampleTarget(c *Client, project string) (*mlflowTarget, string, error
 func mlflowSampleTargetAs(c *Client, project, token string) (*mlflowTarget, string, error) {
 	cr, err := getMLflowCR(c)
 	switch {
-	case IsK8sError(err, 404):
+	case isK8sNotFound(err):
 		return nil, "MLflow is not deployed. Set it up first.", nil
 	case err != nil:
 		return nil, "", fmt.Errorf("read the MLflow CR: %w", err)

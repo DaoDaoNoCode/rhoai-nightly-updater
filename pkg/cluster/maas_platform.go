@@ -57,7 +57,7 @@ func createKuadrant(c *Client, version, ns string, dryRun bool) error {
 		query = url.Values{"dryRun": {"All"}}
 	}
 	_, _, err := c.do(http.MethodPost, withToolFieldManager("/apis/kuadrant.io/"+version+"/namespaces/"+ns+"/kuadrants"), "application/json", data, query)
-	if IsK8sError(err, 409) {
+	if isK8sConflict(err) {
 		return nil
 	}
 	return err
@@ -115,19 +115,16 @@ func infraNamespaceLeftovers(c *Client, ns string) ([]string, error) {
 		{"Deployment", namespacedPath("apps/v1", "deployments", ns, "")},
 		{"PersistentVolumeClaim", namespacedPath("v1", "persistentvolumeclaims", ns, "")},
 	} {
-		body, _, err := c.get(l.path)
-		if err != nil {
+		var items []struct {
+			Metadata objectMeta `json:"metadata"`
+		}
+		if err := c.listInto(l.path, &items); err != nil {
+			if isDecodeError(err) {
+				return nil, fmt.Errorf("parse the %s list: %w", l.kind, err)
+			}
 			return nil, fmt.Errorf("list the %ss in %s: %w", l.kind, ns, err)
 		}
-		var list struct {
-			Items []struct {
-				Metadata objectMeta `json:"metadata"`
-			} `json:"items"`
-		}
-		if err := json.Unmarshal(body, &list); err != nil {
-			return nil, fmt.Errorf("parse the %s list: %w", l.kind, err)
-		}
-		for _, it := range list.Items {
+		for _, it := range items {
 			out = append(out, l.kind+" "+it.Metadata.Name)
 		}
 	}
@@ -177,7 +174,7 @@ const authorinoDefaultSecret = "authorino-server-cert"
 // made (none when all was set).
 func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) {
 	read, err := getServed(c, authorinoGroup, "/apis/"+authorinoGroup+"/%s/namespaces/"+ns+"/authorinos/authorino", []string{"v1beta1"})
-	if IsK8sError(err, 404) || (err == nil && read.Body == nil) {
+	if isK8sNotFound(err) || (err == nil && read.Body == nil) {
 		return nil, fmt.Errorf("%w: no Authorino authorino in %s", errAuthorinoNotYet, ns)
 	}
 	if err != nil {
@@ -230,12 +227,12 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 		}
 		changes = append(changes, "Authorino's listener serves TLS with "+secret)
 	}
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", ns, "authorino"))
-	if IsK8sError(err, 404) {
-		return changes, fmt.Errorf("%w: no Deployment %s/authorino", errAuthorinoNotYet, ns)
-	}
+	body, exists, err := c.getOptional(namespacedPath("apps/v1", "deployments", ns, "authorino"))
 	if err != nil {
 		return changes, fmt.Errorf("read Deployment %s/authorino: %w", ns, err)
+	}
+	if !exists {
+		return changes, fmt.Errorf("%w: no Deployment %s/authorino", errAuthorinoNotYet, ns)
 	}
 	if !authorinoTrustsServiceCA(body) {
 		var d struct {

@@ -198,12 +198,12 @@ func readLegacyStorage(c *Client) (*legacyStorage, error) {
 // readLegacyStorageOwner is readLegacyStorage, and also reports a
 // namespace minio this tool did not make (foreign), for the status.
 func readLegacyStorageOwner(c *Client) (*legacyStorage, bool, error) {
-	body, _, err := c.get("/api/v1/namespaces/" + legacyNamespace)
-	if IsK8sError(err, 404) {
-		return nil, false, nil
-	}
+	body, exists, err := c.getOptional("/api/v1/namespaces/" + legacyNamespace)
 	if err != nil {
 		return nil, false, fmt.Errorf("read namespace %s: %w", legacyNamespace, err)
+	}
+	if !exists {
+		return nil, false, nil
 	}
 	var nsObj struct {
 		Metadata objectMeta `json:"metadata"`
@@ -242,11 +242,11 @@ func readLegacyStorageOwner(c *Client) (*legacyStorage, bool, error) {
 		go func(i int, kind, name string) {
 			defer wg.Done()
 			path, _ := legacyGetPath(kind, name)
-			b, _, err := c.get(path)
+			b, present, err := c.getOptional(path)
 			switch {
-			case IsK8sError(err, 404):
 			case err != nil:
 				results[i].err = err
+			case !present:
 			default:
 				results[i].meta, results[i].err = parseObjectMeta(b)
 				results[i].found, results[i].body = results[i].err == nil, b
@@ -324,20 +324,14 @@ func readLegacyStorageOwner(c *Client) (*legacyStorage, bool, error) {
 
 // listDeploymentMetas lists the metadata of a namespace's Deployments.
 func listDeploymentMetas(c *Client, namespace string) ([]objectMeta, error) {
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", namespace, ""))
-	if err != nil {
+	var items []struct {
+		Metadata objectMeta `json:"metadata"`
+	}
+	if err := c.listInto(namespacedPath("apps/v1", "deployments", namespace, ""), &items); err != nil {
 		return nil, err
 	}
-	var list struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, err
-	}
-	out := make([]objectMeta, 0, len(list.Items))
-	for _, item := range list.Items {
+	out := make([]objectMeta, 0, len(items))
+	for _, item := range items {
 		out = append(out, item.Metadata)
 	}
 	return out, nil

@@ -69,7 +69,7 @@ func TestResetClusterCachesCoversEveryURLKeyedCache(t *testing.T) {
 	}
 	got := map[string]int{}
 	for _, f := range files {
-		if strings.HasSuffix(f, "_test.go") || f == "client.go" {
+		if strings.HasSuffix(f, "_test.go") || requestSourceFiles[f] {
 			continue
 		}
 		b, err := os.ReadFile(f)

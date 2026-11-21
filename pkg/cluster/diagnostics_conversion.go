@@ -187,7 +187,7 @@ func checkConversionFailures(c *Client) checkOutput {
 		}
 		k.probes = append(k.probes, p)
 		switch {
-		case p.Err == nil, isConversionWebhookError(p.Err), IsK8sError(p.Err, http.StatusNotFound):
+		case p.Err == nil, isConversionWebhookError(p.Err), isK8sNotFound(p.Err):
 		case IsK8sError(p.Err, http.StatusForbidden):
 			forbidden++
 		default:

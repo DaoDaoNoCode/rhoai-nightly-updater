@@ -257,12 +257,12 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 		isNew := false
 
 		// Step 1: GET the ConfigMap with its resourceVersion
-		body, _, err := c.bookkeeping().get(cmPath)
+		body, found, err := c.bookkeeping().getOptional(cmPath)
 		if err != nil {
-			if !IsK8sError(err, 404) {
-				slog.Warn("failed to get activity configmap", "error", err)
-				return
-			}
+			slog.Warn("failed to get activity configmap", "error", err)
+			return
+		}
+		if !found {
 			// ConfigMap does not exist yet — we will create it
 			isNew = true
 			entries = []types.ActivityEntry{}
@@ -331,7 +331,7 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 
 		if err != nil {
 			// Step 4: If 409 Conflict, retry from step 1
-			if IsK8sError(err, 409) {
+			if isK8sConflict(err) {
 				slog.Warn("activity configmap conflict, will retry", "attempt", attempt+1)
 				continue
 			}
@@ -351,17 +351,16 @@ func GetActivity(c *Client) ([]types.ActivityEntry, error) {
 	ns := getActivityNamespace()
 	cmPath := namespacedPath("v1", "configmaps", ns, activityConfigMapName)
 
-	body, _, err := c.bookkeeping().get(cmPath)
+	var cm map[string]any
+	found, err := c.bookkeeping().getIntoOptional(cmPath, &cm)
 	if err != nil {
-		if IsK8sError(err, 404) {
-			return []types.ActivityEntry{}, nil
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse activity configmap: %w", err)
 		}
 		return nil, fmt.Errorf("get activity configmap: %w", err)
 	}
-
-	var cm map[string]any
-	if err := json.Unmarshal(body, &cm); err != nil {
-		return nil, fmt.Errorf("parse activity configmap: %w", err)
+	if !found {
+		return []types.ActivityEntry{}, nil
 	}
 
 	data, _ := cm["data"].(map[string]any)

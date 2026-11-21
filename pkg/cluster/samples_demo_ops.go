@@ -158,7 +158,7 @@ var errMLflowRestarting = errors.New("MLflow restarts with the operator's defaul
 // next Add.
 func (t *mlflowTarget) raiseOldMemoryLimit(log func(string)) error {
 	if err := patchMLflowCR(t.c, t.cr, nil, map[string]any{"resources": nil}); err != nil {
-		if IsK8sError(err, 409) {
+		if isK8sConflict(err) {
 			return fmt.Errorf("MLflow changed while its memory limit was being removed; nothing was changed, refresh and retry: %w", err)
 		}
 		return fmt.Errorf("remove the 2Gi memory limit from MLflow CR %s: %w", mlflowCRName, err)

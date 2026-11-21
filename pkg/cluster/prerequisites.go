@@ -564,14 +564,14 @@ func readSingletonOperand(c *Client, e almExample) (operandState, error) {
 	if !found {
 		return operandMissing, nil // its CRD is not served
 	}
-	_, _, err = c.get("/apis/" + operandAPIGroup + "/" + version + "/" + resource + "/cluster")
+	_, found, err = c.getOptional("/apis/" + operandAPIGroup + "/" + version + "/" + resource + "/cluster")
 	switch {
-	case err == nil:
-		return operandPresent, nil
-	case IsK8sError(err, http.StatusNotFound):
+	case err != nil:
+		return operandUnverified, err
+	case !found:
 		return operandMissing, nil
 	default:
-		return operandUnverified, err
+		return operandPresent, nil
 	}
 }
 
@@ -586,17 +586,16 @@ func operandManagementState(c *Client, e almExample) (string, error) {
 	if err != nil || !found {
 		return "", err
 	}
-	body, _, err := c.get("/apis/" + operandAPIGroup + "/" + version + "/" + resource + "/cluster")
-	if err != nil {
-		return "", err
-	}
 	var obj struct {
 		Spec struct {
 			ManagementState string `json:"managementState"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &obj); err != nil {
-		return "", fmt.Errorf("parse %s: %w", e.ref(), err)
+	if err := c.getInto("/apis/"+operandAPIGroup+"/"+version+"/"+resource+"/cluster", &obj); err != nil {
+		if isDecodeError(err) {
+			return "", fmt.Errorf("parse %s: %w", e.ref(), err)
+		}
+		return "", err
 	}
 	return obj.Spec.ManagementState, nil
 }
@@ -604,21 +603,21 @@ func operandManagementState(c *Client, e almExample) (string, error) {
 // discoverPlural finds the resource of a kind in operandAPIGroup from API
 // discovery (readable by every authenticated user).
 func discoverPlural(c *Client, version, kind string) (string, bool, error) {
-	body, _, err := c.get("/apis/" + operandAPIGroup + "/" + version)
-	if IsK8sError(err, http.StatusNotFound) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("discover %s/%s: %w", operandAPIGroup, version, err)
-	}
 	var list struct {
 		Resources []struct {
 			Name string `json:"name"`
 			Kind string `json:"kind"`
 		} `json:"resources"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return "", false, fmt.Errorf("parse %s/%s discovery: %w", operandAPIGroup, version, err)
+	found, err := c.getIntoOptional("/apis/"+operandAPIGroup+"/"+version, &list)
+	if err != nil {
+		if isDecodeError(err) {
+			return "", false, fmt.Errorf("parse %s/%s discovery: %w", operandAPIGroup, version, err)
+		}
+		return "", false, fmt.Errorf("discover %s/%s: %w", operandAPIGroup, version, err)
+	}
+	if !found {
+		return "", false, nil
 	}
 	for _, r := range list.Resources {
 		if r.Kind == kind && !strings.Contains(r.Name, "/") && dns1123Label.MatchString(r.Name) {
@@ -1088,18 +1087,18 @@ func (og operatorGroup) installMode(ns string) string {
 // listOperatorGroups returns the OperatorGroups of a namespace (none when
 // it does not exist).
 func listOperatorGroups(c *Client, namespace string) ([]operatorGroup, error) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1", "operatorgroups", namespace, ""))
-	if IsK8sError(err, http.StatusNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
 	var list struct {
 		Items []operatorGroup `json:"items"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse OperatorGroups in %s: %w", namespace, err)
+	found, err := c.getIntoOptional(namespacedPath("operators.coreos.com/v1", "operatorgroups", namespace, ""), &list)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse OperatorGroups in %s: %w", namespace, err)
+		}
+		return nil, err
+	}
+	if !found {
+		return nil, nil
 	}
 	return list.Items, nil
 }
