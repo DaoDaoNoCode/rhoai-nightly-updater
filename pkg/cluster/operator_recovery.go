@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -245,7 +246,7 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 		failures = append(failures, r.reapplySubscription(c)...)
 	}
 
-	gitManaged := r.subscription != nil && argoTrackingOf(c, r.subscription, argoSubscriptionObject.group, "Subscription").managedBy() != ""
+	gitManaged := r.subscription != nil && argo.TrackingOf(c, r.subscription, argo.SubscriptionObject.Group, "Subscription").ManagedBy() != ""
 	status, message := r.restoreMessage(failures, stillDeleting, operatorTouched, gitManaged)
 	if result != nil {
 		result.Logs = append(result.Logs, message)
@@ -323,7 +324,7 @@ func (r *operatorRecovery) reapplySubscription(c *Client) []string {
 	}
 	obj := map[string]any{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
 		"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS}, "spec": spec}
-	keepArgoTracking(r.subscription, obj)
+	argo.KeepTracking(r.subscription, obj)
 	if _, _, err := c.Apply(rhoai.SubscriptionPath(), obj); err != nil {
 		failures = append(failures, "Subscription: "+err.Error())
 	}

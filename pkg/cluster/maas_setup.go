@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -37,7 +38,7 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 	case dsc.read.Object == nil:
 		return m.fail("check", "This cluster has no DataScienceCluster. A cluster-admin creates one on the Components page. Nothing was changed.", "prerequisites", "no dsc")
 	case needDSC && dsc.argoApp != "":
-		return m.fail("check", gitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning on Models as a Service")+" Set aigateway and aigateway.modelsAsAService to Managed in Git. Nothing was changed."+dsc.argo.unconfirmedNote(), kube.ErrorCodeGitOpsManaged, "dsc gitops")
+		return m.fail("check", argo.GitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning on Models as a Service")+" Set aigateway and aigateway.modelsAsAService to Managed in Git. Nothing was changed."+dsc.argo.UnconfirmedNote(), kube.ErrorCodeGitOpsManaged, "dsc gitops")
 	}
 
 	// Connectivity Link and its Kuadrant CR.
@@ -77,7 +78,7 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 	// The infrastructure namespace and the database.
 	infra, err := maasInfraNamespace(c)
 	if err != nil {
-		return m.fail("check", sentenceStart(err.Error())+". Nothing was changed.", "prerequisites", "infra namespace unknown")
+		return m.fail("check", kube.SentenceStart(err.Error())+". Nothing was changed.", "prerequisites", "infra namespace unknown")
 	}
 	_, infraFound, err := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+infra)
 	if err != nil {

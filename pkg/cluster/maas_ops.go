@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -516,7 +517,7 @@ func (m *maasRun) teardownCheck(t *maasTeardown) (*types.OperationResponse, erro
 	}
 	infra, err := maasDBNamespace(c, rec)
 	if err != nil {
-		return m.fail("check", sentenceStart(err.Error())+". Nothing was deleted.", "prerequisites", "infra namespace unknown")
+		return m.fail("check", kube.SentenceStart(err.Error())+". Nothing was deleted.", "prerequisites", "infra namespace unknown")
 	}
 	var objs []maasTeardownObj
 	owned := 0
@@ -544,7 +545,7 @@ func (m *maasRun) teardownCheck(t *maasTeardown) (*types.OperationResponse, erro
 		return m.done("The MaaS platform was not set up by this tool; nothing to remove.")
 	}
 	if rec.DSCChanged && dsc.maas == "Managed" && dsc.argoApp != "" {
-		return m.fail("check", gitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning off Models as a Service")+" Nothing was deleted."+dsc.argo.unconfirmedNote(), kube.ErrorCodeGitOpsManaged, "dsc gitops")
+		return m.fail("check", argo.GitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning off Models as a Service")+" Nothing was deleted."+dsc.argo.UnconfirmedNote(), kube.ErrorCodeGitOpsManaged, "dsc gitops")
 	}
 	if !rec.DSCChanged && dsc.maas == "Managed" && owned > 0 {
 		return m.fail("check", "MaaS was turned on in the DataScienceCluster by someone else, and it uses the gateway and database this tool created: removing them would break it. Turn MaaS off first (aigateway.modelsAsAService Removed), then remove. Nothing was deleted.", "in_use", "maas on, not by tool")
@@ -947,7 +948,7 @@ func (m *maasRun) publishCheckPlatform(pl *maasPublish, limitReq *types.MaaSLimi
 	}
 	infra, err := maasInfraNamespace(c)
 	if err != nil {
-		return m.fail("check", sentenceStart(err.Error())+". Nothing was changed.", "prerequisites", "infra namespace unknown")
+		return m.fail("check", kube.SentenceStart(err.Error())+". Nothing was changed.", "prerequisites", "infra namespace unknown")
 	}
 	if msg, code := maasNamespaceRefusal(c, infra); msg != "" {
 		return m.fail("check", msg, code, "namespace not rhoai's")
@@ -1050,7 +1051,7 @@ func (m *maasRun) publishCheckGateway(pl *maasPublish) (*types.OperationResponse
 	c, project, rec := m.c, pl.project, pl.rec
 	infra, err := maasInfraNamespace(c)
 	if err != nil {
-		return m.fail("check", sentenceStart(err.Error())+". Nothing was changed.", "prerequisites", "infra namespace unknown")
+		return m.fail("check", kube.SentenceStart(err.Error())+". Nothing was changed.", "prerequisites", "infra namespace unknown")
 	}
 	gwPlan, msg, code := planMaaSGateway(c, infra, rec.projects())
 	if msg != "" {
@@ -1472,7 +1473,7 @@ func (m *maasRun) unpublishGateway(u *maasUnpublish) (*types.OperationResponse, 
 	var gwPlan *maasGatewayPlan
 	var msg, code string
 	if infraErr != nil {
-		msg = sentenceStart(infraErr.Error())
+		msg = kube.SentenceStart(infraErr.Error())
 	} else {
 		gwPlan, msg, code = planMaaSGateway(c, infra, rec.projects())
 	}

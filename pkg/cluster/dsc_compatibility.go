@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -438,8 +439,8 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 	if err := json.Unmarshal(read.Body, &dsc); err != nil {
 		return nil, err
 	}
-	if argo := argoTrackingOf(c, dsc, rhoai.DSCGroup, "DataScienceCluster"); argo.managedBy() != "" {
-		return &types.OperationResponse{Success: false, Message: gitOpsRefusal("DataScienceCluster "+name, argo.managedBy(), "this change") + argo.unconfirmedNote(), ErrorCode: kube.ErrorCodeGitOpsManaged}, nil
+	if argoCD := argo.TrackingOf(c, dsc, rhoai.DSCGroup, "DataScienceCluster"); argoCD.ManagedBy() != "" {
+		return &types.OperationResponse{Success: false, Message: argo.GitOpsRefusal("DataScienceCluster "+name, argoCD.ManagedBy(), "this change") + argoCD.UnconfirmedNote(), ErrorCode: kube.ErrorCodeGitOpsManaged}, nil
 	}
 	oldSpec, _ := dsc["spec"].(map[string]any)
 	apiVersion, _ := dsc["apiVersion"].(string)

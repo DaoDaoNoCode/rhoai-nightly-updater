@@ -1022,7 +1022,7 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 	defer dashboardDevMu.Unlock()
 	target, operator, err := loadDashboardOperator(c, true)
 	if err != nil {
-		return fail(sentenceStart(err.Error())+". No changes were made.", kube.ErrorCodeOr(err, "prerequisites"))
+		return fail(kube.SentenceStart(err.Error())+". No changes were made.", kube.ErrorCodeOr(err, "prerequisites"))
 	}
 	if operator == nil {
 		return fail("Latest-main deployment needs the dashboard module's operator, and this cluster has no dashboard module ("+target.Legacy+"). No changes were made.", "prerequisites")

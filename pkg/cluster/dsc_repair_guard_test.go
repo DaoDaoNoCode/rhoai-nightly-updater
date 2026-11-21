@@ -58,12 +58,12 @@ func dscCRDWith(t *testing.T, names ...string) string {
 // mcplifecycleoperator enabled (the fix for the live D3) must not lose it to
 // a reset or an extra-component removal: the Service would go away again,
 // the CRD would not (R5-F1).
-func dscRepairD3Server(t *testing.T, dsc string, patched *bool, mu *sync.Mutex, argo ...*fakeArgoCD) *Client {
+func dscRepairD3Server(t *testing.T, dsc string, patched *bool, mu *sync.Mutex, argoCD ...*fakeArgoCD) *Client {
 	crd := dscCRDWith(t, "mcplifecycleoperator", "trainingoperator")
 	conv := `{"items":[{"metadata":{"name":"mcpservers.mcp.x-k8s.io"},"spec":{"conversion":{"strategy":"Webhook","webhook":{"clientConfig":{"service":{"namespace":"redhat-ods-applications","name":"mcp-lifecycle-operator-webhook-service"}}}}},"status":{"storedVersions":["v1alpha1","v1beta1"]}}]}`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case len(argo) > 0 && argo[0].serve(w, r):
+		case len(argoCD) > 0 && argoCD[0].serve(w, r):
 		case r.Method == http.MethodPatch:
 			mu.Lock()
 			*patched = true

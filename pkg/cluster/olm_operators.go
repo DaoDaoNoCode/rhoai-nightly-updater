@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -114,8 +115,8 @@ func parseSubscription(raw []byte) (*olmSubscription, error) {
 // it, as Argo CD answers (argocd.go).
 func withArgoManager(c *Client, sub *olmSubscription) *olmSubscription {
 	if sub != nil {
-		sub.argoApp = newArgoCheck(c).object(sub.Metadata.Annotations, sub.Metadata.Labels,
-			argoObject{group: argoSubscriptionObject.group, kind: "Subscription", namespace: sub.Metadata.Namespace, name: sub.Metadata.Name}).managedBy()
+		sub.argoApp = argo.NewCheck(c).Object(sub.Metadata.Annotations, sub.Metadata.Labels,
+			argo.Object{Group: argo.SubscriptionObject.Group, Kind: "Subscription", Namespace: sub.Metadata.Namespace, Name: sub.Metadata.Name}).ManagedBy()
 	}
 	return sub
 }

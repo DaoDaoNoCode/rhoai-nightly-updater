@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -60,14 +61,14 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 
 	// --- Step 1: validate_prerequisites ---
 	emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Checking prerequisites..."})
-	g, err := readOperatorGitOps(c)
+	g, err := argo.ReadOperatorGitOps(c)
 	if err != nil {
 		return fail("Cannot check whether Argo CD manages the operator: "+err.Error()+". Nothing was changed.", kube.ErrorCodeFromK8sErr(err))
 	}
-	if !g.catalogManaged() {
+	if !g.CatalogManaged() {
 		return fail(gitOpsProfileUnmanagedCatalog, kube.ErrorCodeProfileGitOps)
 	}
-	logs = append(logs, fmt.Sprintf("OK: %s manages CatalogSource %s", sentenceStart(g.catalogManager()), rhoai.CatalogName))
+	logs = append(logs, fmt.Sprintf("OK: %s manages CatalogSource %s", kube.SentenceStart(g.CatalogManager()), rhoai.CatalogName))
 
 	active, operator, err := dashboardDevActive(c)
 	if err != nil {
@@ -114,7 +115,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	if gitOpsProblem != "" {
 		return fail(gitOpsProblem, kube.ErrorCodeGitOpsManaged)
 	}
-	if !gitOps.catalogManaged() {
+	if !gitOps.CatalogManaged() {
 		// Argo CD and ACM stopped managing the catalog since the first read.
 		return fail(gitOpsProfileUnmanagedCatalog, kube.ErrorCodeProfileGitOps)
 	}
@@ -125,9 +126,9 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	// see; operator-lifecycle-manager
 	// pkg/controller/operators/catalogtemplate/operator.go). The build is
 	// read from the managed catalog once it serves the image.
-	from := gitOps.catalogSpecFrom()
+	from := gitOps.CatalogSpecFrom()
 	emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Waiting for the catalog " + from + " manages to serve the build..."})
-	target, preflightErr := liveCatalogTarget(c, image, channelOverride, gitOps.catalogChanger(), emit, &logs)
+	target, preflightErr := liveCatalogTarget(c, image, channelOverride, gitOps.CatalogChanger(), emit, &logs)
 	if preflightErr != nil {
 		var changed *errCatalogImageChanged
 		switch {
@@ -140,7 +141,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 		}
 		hint := ""
 		if channelOverride != "" {
-			hint = fmt.Sprintf(" Argo CD application %q sets the Subscription's channel %s in Git, so Update keeps it: the catalog must publish that channel.", gitOps.subscriptionApp, channelOverride)
+			hint = fmt.Sprintf(" Argo CD application %q sets the Subscription's channel %s in Git, so Update keeps it: the catalog must publish that channel.", gitOps.SubscriptionApp, channelOverride)
 		}
 		return fail("The catalog "+from+" manages does not serve a usable build: "+preflightErr.Error()+". Nothing was changed."+hint, "validation")
 	}
@@ -216,14 +217,14 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 		logs = append(logs, "[DRY-RUN] FAILED: "+msg)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
-	g, err := readOperatorGitOps(c)
+	g, err := argo.ReadOperatorGitOps(c)
 	if err != nil {
 		return fail("Cannot check whether Argo CD manages the operator: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 	}
-	if !g.catalogManaged() {
+	if !g.CatalogManaged() {
 		return fail(gitOpsProfileUnmanagedCatalog, kube.ErrorCodeProfileGitOps)
 	}
-	logs = append(logs, fmt.Sprintf("OK: %s manages CatalogSource %s", sentenceStart(g.catalogManager()), rhoai.CatalogName))
+	logs = append(logs, fmt.Sprintf("OK: %s manages CatalogSource %s", kube.SentenceStart(g.CatalogManager()), rhoai.CatalogName))
 	if active, err := DashboardDevActive(c); err == nil && active {
 		logs = append(logs, "[DRY-RUN] WARNING: A Dashboard Dev session is active. Update refuses to run while it is (the gitops profile cannot end it).")
 	}
@@ -282,7 +283,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 	if channelOverride != "" {
 		channel += " (kept from Git)"
 	}
-	from := planned.catalogSpecFrom()
+	from := planned.CatalogSpecFrom()
 	if bundle != "" {
 		channel += ", startingCSV " + bundle
 	}
@@ -296,7 +297,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 // catalog itself, which the gitops profile never does.
 const gitOpsProfileUnmanagedCatalog = "This updater runs the gitops profile, which only installs the build that CatalogSource " + rhoai.CatalogName +
 	" serves when Argo CD or an ACM policy manages that catalog, and neither does here (no Argo CD application lists it, and " +
-	acmPolicyManager + " does not own its spec). Manage the catalog with Argo CD or an ACM policy, or deploy the updater with the full profile. Nothing was changed."
+	argo.ACMPolicyManager + " does not own its spec). Manage the catalog with Argo CD or an ACM policy, or deploy the updater with the full profile. Nothing was changed."
 
 // gitOpsProfileNoPullSecret is what Update and its dry run say in the gitops
 // profile, which never reads kube-system/additional-pull-secret (or any

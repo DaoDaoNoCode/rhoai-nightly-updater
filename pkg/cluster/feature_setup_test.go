@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -546,8 +547,8 @@ func TestPrerequisites_CertManagerWithoutOLM(t *testing.T) {
 func TestPrerequisites_RefusesAGitOpsManagedDSC(t *testing.T) {
 	pc := newPrereqCluster(t)
 	dsc := pc.f.get(tDSC)
-	ensureMap(dsc, "metadata")["annotations"] = map[string]any{argoTrackingAnnotation: "rhoai:datasciencecluster.opendatahub.io/DataScienceCluster:/default-dsc"}
-	pc.f.argo = argoManagingAll(argoDSCObject("default-dsc"))
+	ensureMap(dsc, "metadata")["annotations"] = map[string]any{argo.TrackingAnnotation: "rhoai:datasciencecluster.opendatahub.io/DataScienceCluster:/default-dsc"}
+	pc.f.argo = argoManagingAll(argo.DSCObject("default-dsc"))
 	st := prereqStatus(t, pc.c, "pipelines")
 	if !strings.Contains(st.SetupBlockedReason, "Argo CD application") {
 		t.Fatalf("status = %+v", st)
@@ -734,8 +735,8 @@ func TestRestoreComponents(t *testing.T) {
 			},
 			"Argo CD takes it over": func(pc *prereqCluster) {
 				meta := ensureMap(pc.f.get(tDSC), "metadata")
-				meta["annotations"] = map[string]any{argoTrackingAnnotation: "rhoai:datasciencecluster.opendatahub.io/DataScienceCluster:/default-dsc"}
-				pc.f.argo.setApps(argoApplicationListing("openshift-gitops", argoDSCObject("default-dsc")))
+				meta["annotations"] = map[string]any{argo.TrackingAnnotation: "rhoai:datasciencecluster.opendatahub.io/DataScienceCluster:/default-dsc"}
+				pc.f.argo.setApps(argoApplicationListing("openshift-gitops", argo.DSCObject("default-dsc")))
 				pc.f.bumpRV(meta)
 			},
 			"the second read fails": func(pc *prereqCluster) {
@@ -803,8 +804,8 @@ func TestRestoreComponents(t *testing.T) {
 	})
 	t.Run("gitops", func(t *testing.T) {
 		pc := setUp(t, "mlflow")
-		ensureMap(pc.f.get(tDSC), "metadata")["annotations"] = map[string]any{argoTrackingAnnotation: "rhoai:datasciencecluster.opendatahub.io/DataScienceCluster:/default-dsc"}
-		pc.f.argo = argoManagingAll(argoDSCObject("default-dsc"))
+		ensureMap(pc.f.get(tDSC), "metadata")["annotations"] = map[string]any{argo.TrackingAnnotation: "rhoai:datasciencecluster.opendatahub.io/DataScienceCluster:/default-dsc"}
+		pc.f.argo = argoManagingAll(argo.DSCObject("default-dsc"))
 		n := len(pc.f.mutations())
 		res, _ := RestoreComponents(pc.c, []string{"mlflowoperator"})
 		if res.Success || res.ErrorCode != kube.ErrorCodeGitOpsManaged || len(pc.f.mutations()) != n {

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -655,9 +656,9 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 			ErrorCode: kube.ErrorCodeFromK8sErr(err),
 		}, nil
 	}
-	if g, err := readOperatorGitOps(c); err != nil {
+	if g, err := argo.ReadOperatorGitOps(c); err != nil {
 		return &types.OperationResponse{Success: false, Message: "Cannot check whether Argo CD manages the operator: " + err.Error(), Logs: logs, ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
-	} else if app := kube.NonEmpty(g.subscriptionApp, g.catalogApp); app != "" {
+	} else if app := kube.NonEmpty(g.SubscriptionApp, g.CatalogApp); app != "" {
 		// Argo CD only: an Argo CD application that installs the operator
 		// (the odh-gitops chart) renders the DSC too. An ACM policy that
 		// enforces the catalog says nothing about the DSC.

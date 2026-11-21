@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -29,7 +30,7 @@ const (
 )
 
 func trackingID(kind, ns, name string) map[string]any {
-	return map[string]any{argoTrackingAnnotation: fmt.Sprintf("%s:operators.coreos.com/%s:%s/%s", testArgoApp, kind, ns, name)}
+	return map[string]any{argo.TrackingAnnotation: fmt.Sprintf("%s:operators.coreos.com/%s:%s/%s", testArgoApp, kind, ns, name)}
 }
 
 // gitOpsFake is a cluster where Argo CD manages the nightly catalog and the
@@ -40,7 +41,7 @@ func gitOpsFake(t *testing.T) *fakeOLM {
 		"config":  map[string]any{"env": []any{map[string]any{"name": "DISABLE_DSC_CONFIG", "value": "true"}}},
 	})
 	subAnn := trackingID("Subscription", rhoai.SubNS, rhoai.SubName)
-	subAnn[lastAppliedAnnotation] = `{"kind":"Subscription","spec":{"channel":"beta"}}`
+	subAnn[argo.LastAppliedAnnotation] = `{"kind":"Subscription","spec":{"channel":"beta"}}`
 	f.sub["metadata"].(map[string]any)["annotations"] = subAnn
 	f.sub["metadata"].(map[string]any)["labels"] = map[string]any{"helm.sh/chart": "rhai-on-openshift-chart-3.4.0", "app.kubernetes.io/managed-by": "Helm"}
 	f.catalog["metadata"] = map[string]any{"annotations": trackingID("CatalogSource", rhoai.CatalogNS, rhoai.CatalogName)}
@@ -67,7 +68,7 @@ func indexOf(list []string, want string) int {
 
 func TestArgoApplication(t *testing.T) {
 	sub := func(id string) string {
-		return argoApplication(map[string]string{argoTrackingAnnotation: id}, "operators.coreos.com", "Subscription", rhoai.SubNS, rhoai.SubName)
+		return argo.TrackingApplication(map[string]string{argo.TrackingAnnotation: id}, "operators.coreos.com", "Subscription", rhoai.SubNS, rhoai.SubName)
 	}
 	for id, want := range map[string]string{
 		"rhai-on-openshift:operators.coreos.com/Subscription:redhat-ods-operator/rhods-operator": "rhai-on-openshift",
@@ -88,12 +89,12 @@ func TestArgoApplication(t *testing.T) {
 			t.Errorf("argoApplication(%q) = %q, want %q", id, got, want)
 		}
 	}
-	if got := argoApplication(map[string]string{"app.kubernetes.io/instance": "rhai-on-openshift"}, "operators.coreos.com", "Subscription", rhoai.SubNS, rhoai.SubName); got != "" {
+	if got := argo.TrackingApplication(map[string]string{"app.kubernetes.io/instance": "rhai-on-openshift"}, "operators.coreos.com", "Subscription", rhoai.SubNS, rhoai.SubName); got != "" {
 		t.Errorf("the instance label is not a tracking annotation, got %q", got)
 	}
 	// A cluster-scoped object carries the application's destination
 	// namespace in the id; only group, kind and name are checked.
-	if got := argoApplication(map[string]string{argoTrackingAnnotation: "rhai-on-openshift:datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"}, rhoai.DSCGroup, "DataScienceCluster", "", "default-dsc"); got != testArgoApp {
+	if got := argo.TrackingApplication(map[string]string{argo.TrackingAnnotation: "rhai-on-openshift:datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"}, rhoai.DSCGroup, "DataScienceCluster", "", "default-dsc"); got != testArgoApp {
 		t.Errorf("cluster-scoped DSC: got %q", got)
 	}
 }
@@ -104,18 +105,18 @@ func TestArgoApplication(t *testing.T) {
 func TestKeepArgoTracking(t *testing.T) {
 	prev := map[string]any{"metadata": map[string]any{
 		"annotations": map[string]any{
-			argoTrackingAnnotation:                "app:operators.coreos.com/Subscription:ns/name",
+			argo.TrackingAnnotation:               "app:operators.coreos.com/Subscription:ns/name",
 			"argocd.argoproj.io/installation-id":  "inst-1",
 			"argocd.argoproj.io/sync-options":     "Prune=false",
-			lastAppliedAnnotation:                 "{}",
+			argo.LastAppliedAnnotation:            "{}",
 			"olm.operatorframework.io/managed-by": "x",
 		},
 		"labels": map[string]any{"helm.sh/chart": "c"},
 	}}
 	obj := map[string]any{"metadata": map[string]any{"name": "name"}}
-	keepArgoTracking(prev, obj)
+	argo.KeepTracking(prev, obj)
 	ann := obj["metadata"].(map[string]any)["annotations"].(map[string]any)
-	for _, k := range []string{argoTrackingAnnotation, "argocd.argoproj.io/installation-id", "argocd.argoproj.io/sync-options", lastAppliedAnnotation} {
+	for _, k := range []string{argo.TrackingAnnotation, "argocd.argoproj.io/installation-id", "argocd.argoproj.io/sync-options", argo.LastAppliedAnnotation} {
 		if ann[k] == nil {
 			t.Errorf("annotation %s not kept: %v", k, ann)
 		}
@@ -123,32 +124,32 @@ func TestKeepArgoTracking(t *testing.T) {
 	if ann["olm.operatorframework.io/managed-by"] != "x" {
 		t.Errorf("an annotation Git may set was not copied: %v", ann)
 	}
-	kept := map[string]any{"metadata": map[string]any{"annotations": map[string]any{lastAppliedAnnotation: "mine"}}}
-	keepArgoTracking(prev, kept)
-	if kept["metadata"].(map[string]any)["annotations"].(map[string]any)[lastAppliedAnnotation] != "mine" {
+	kept := map[string]any{"metadata": map[string]any{"annotations": map[string]any{argo.LastAppliedAnnotation: "mine"}}}
+	argo.KeepTracking(prev, kept)
+	if kept["metadata"].(map[string]any)["annotations"].(map[string]any)[argo.LastAppliedAnnotation] != "mine" {
 		t.Errorf("an annotation of the new object was overwritten: %v", kept)
 	}
 	if labels := obj["metadata"].(map[string]any)["labels"].(map[string]any); labels["helm.sh/chart"] != "c" {
 		t.Errorf("labels = %v", labels)
 	}
 	untracked := map[string]any{"metadata": map[string]any{"name": "name"}}
-	keepArgoTracking(map[string]any{"metadata": map[string]any{"labels": map[string]any{"a": "b"}}}, untracked)
+	argo.KeepTracking(map[string]any{"metadata": map[string]any{"labels": map[string]any{"a": "b"}}}, untracked)
 	if untracked["metadata"].(map[string]any)["labels"] != nil {
 		t.Error("labels copied from an untracked object")
 	}
 	// Label tracking (OpenShift GitOps up to 1.18): no tracking annotation,
 	// only the instance label; the recreated object keeps it and the rest.
 	labelTracked := map[string]any{"metadata": map[string]any{
-		"annotations": map[string]any{lastAppliedAnnotation: "{}"},
-		"labels":      map[string]any{argoInstanceLabel: testArgoApp, "helm.sh/chart": "c"},
+		"annotations": map[string]any{argo.LastAppliedAnnotation: "{}"},
+		"labels":      map[string]any{argo.InstanceLabel: testArgoApp, "helm.sh/chart": "c"},
 	}}
 	recreated := map[string]any{"metadata": map[string]any{"name": "name"}}
-	keepArgoTracking(labelTracked, recreated)
+	argo.KeepTracking(labelTracked, recreated)
 	meta := recreated["metadata"].(map[string]any)
-	if labels, _ := meta["labels"].(map[string]any); labels[argoInstanceLabel] != testArgoApp || labels["helm.sh/chart"] != "c" {
+	if labels, _ := meta["labels"].(map[string]any); labels[argo.InstanceLabel] != testArgoApp || labels["helm.sh/chart"] != "c" {
 		t.Errorf("label tracking: labels = %v", meta["labels"])
 	}
-	if ann, _ := meta["annotations"].(map[string]any); ann[lastAppliedAnnotation] != "{}" {
+	if ann, _ := meta["annotations"].(map[string]any); ann[argo.LastAppliedAnnotation] != "{}" {
 		t.Errorf("label tracking: annotations = %v", meta["annotations"])
 	}
 }
@@ -202,7 +203,7 @@ func TestUpdateUnderGitOps_InstallsWhatTheCatalogServes(t *testing.T) {
 	if subSpec["channel"] != gitOpsChannel || subSpec["config"] == nil {
 		t.Fatalf("Subscription spec = %v, want channel %s and the config Git sets", subSpec, gitOpsChannel)
 	}
-	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argoTrackingAnnotation] == nil || ann[lastAppliedAnnotation] == nil {
+	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argo.TrackingAnnotation] == nil || ann[argo.LastAppliedAnnotation] == nil {
 		t.Fatalf("the recreated Subscription lacks Argo CD's tracking or last-applied annotation: %v", ann)
 	}
 	// The chart's labels too: without them Argo CD syncs the Subscription
@@ -285,7 +286,7 @@ func TestUpdateUnderGitOps_RestoreKeepsTracking(t *testing.T) {
 	if image := f.catalog["spec"].(map[string]any)["image"]; image != gitOpsImage {
 		t.Fatalf("catalog image = %v, want Git's", image)
 	}
-	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argoTrackingAnnotation] == nil {
+	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argo.TrackingAnnotation] == nil {
 		t.Fatal("the restored Subscription has no Argo CD tracking annotation")
 	}
 	if f.sub["spec"].(map[string]any)["channel"] != gitOpsChannel {
@@ -472,7 +473,7 @@ func TestUpdateUnderGitOps_SubscriptionChangesMeanwhile(t *testing.T) {
 	if f.sub["spec"].(map[string]any)["channel"] != "fast" {
 		t.Fatalf("the restore put the old channel back over Git's: %v", f.sub["spec"])
 	}
-	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argoTrackingAnnotation] == nil {
+	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argo.TrackingAnnotation] == nil {
 		t.Fatalf("the restored Subscription lost Argo CD's tracking: %v", f.sub["metadata"])
 	}
 }
@@ -515,7 +516,7 @@ func TestUpdateUnderGitOps_StartingCSVChangesMeanwhile(t *testing.T) {
 func TestUpdateUnderGitOps_CatalogOnlyManaged(t *testing.T) {
 	f := gitOpsFake(t)
 	delete(f.sub["metadata"].(map[string]any), "annotations")
-	f.argo = argoManagingAllBut(argoSubscriptionObject)
+	f.argo = argoManagingAllBut(argo.SubscriptionObject)
 	f.sub["spec"].(map[string]any)["channel"] = "fast"
 	f.sub["spec"].(map[string]any)["startingCSV"] = "rhods-operator.3.5.0"
 	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
@@ -628,7 +629,7 @@ func TestOperatorOperationsRefusedUnderGitOps(t *testing.T) {
 	t.Run("only the catalog managed", func(t *testing.T) {
 		f := gitOpsFake(t)
 		delete(f.sub["metadata"].(map[string]any), "annotations")
-		f.argo = argoManagingAllBut(argoSubscriptionObject)
+		f.argo = argoManagingAllBut(argo.SubscriptionObject)
 		r, _ := ReinstallStreamWithOptions(f.client(context.Background()), "stable", "", "", OperationOptions{}, func(UpdateStepEvent) {})
 		if r.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(r.Message, "CatalogSource "+rhoai.CatalogName) {
 			t.Fatalf("result=%+v", r)
@@ -713,7 +714,7 @@ func TestStatusReportsWhatTheCatalogServes(t *testing.T) {
 // The DSC repairs and Diagnostics' disable-component refuse a DSC that Argo
 // CD manages: it would put the old spec back.
 func TestDSCChangesRefusedUnderGitOps(t *testing.T) {
-	tracked := `"annotations":{"` + argoTrackingAnnotation + `":"` + testArgoApp + `:datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"}`
+	tracked := `"annotations":{"` + argo.TrackingAnnotation + `":"` + testArgoApp + `:datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"}`
 	t.Run("repair", func(t *testing.T) {
 		mockDSCSamples(t, func(*http.Request) (int, string) { return 200, testDSCSample })
 		var mu sync.Mutex
@@ -786,7 +787,7 @@ func TestStatusReportsArgoCDApplications(t *testing.T) {
 	if s := statusManagersOf(t, c); s.CatalogSource.ManagedBy != testArgoApp || s.CatalogSource.ArgoCD == nil || *s.CatalogSource.ArgoCD != want {
 		t.Fatalf("unmarked catalog the Application lists: %+v %+v", s.CatalogSource, s.CatalogSource.ArgoCD)
 	}
-	f.argo.setApps(argoApplicationListing("openshift-gitops", argoSubscriptionObject))
+	f.argo.setApps(argoApplicationListing("openshift-gitops", argo.SubscriptionObject))
 	if s := statusManagersOf(t, c); s.CatalogSource.ManagedBy != "" || s.CatalogSource.ArgoCD != nil {
 		t.Fatalf("unmarked catalog no Application lists: %+v", s.CatalogSource)
 	}

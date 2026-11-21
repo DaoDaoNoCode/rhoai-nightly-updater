@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -68,7 +69,7 @@ func TestUpdateGitOpsProfile_RefusesAnUnmanagedCatalog(t *testing.T) {
 		"subscription only": func() *fakeOLM {
 			f := servesGitOpsPolicy(t, gitOpsFake(t))
 			f.catalog["metadata"] = map[string]any{}
-			f.argo = argoManagingAllBut(argoCatalogObject)
+			f.argo = argoManagingAllBut(argo.CatalogObject)
 			return f
 		},
 		"no catalog": func() *fakeOLM {
@@ -206,7 +207,7 @@ func TestUpdateGitOpsProfile_RestoreStaysInsideTheProfile(t *testing.T) {
 	if f.sub == nil {
 		t.Fatal("the Subscription was not restored")
 	}
-	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argoTrackingAnnotation] == nil {
+	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argo.TrackingAnnotation] == nil {
 		t.Fatalf("the restored Subscription lost Argo CD's tracking: %v", f.sub["metadata"])
 	}
 }
@@ -237,12 +238,12 @@ func TestUpdateGitOpsProfile_RefusesWhatThePolicyWouldRefuse(t *testing.T) {
 		// redhat-operators, so the restore could not re-apply it.
 		"catalog only, Subscription on redhat-operators": func(f *fakeOLM) {
 			f.sub["metadata"].(map[string]any)["annotations"] = map[string]any{}
-			f.argo = argoManagingAllBut(argoSubscriptionObject)
+			f.argo = argoManagingAllBut(argo.SubscriptionObject)
 			f.sub["spec"].(map[string]any)["source"] = "redhat-operators"
 		},
 		"another sourceNamespace": func(f *fakeOLM) {
 			f.sub["metadata"].(map[string]any)["annotations"] = map[string]any{}
-			f.argo = argoManagingAllBut(argoSubscriptionObject)
+			f.argo = argoManagingAllBut(argo.SubscriptionObject)
 			f.sub["spec"].(map[string]any)["sourceNamespace"] = "other-catalogs"
 		},
 	} {

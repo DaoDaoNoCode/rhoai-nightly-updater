@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -1229,7 +1230,7 @@ func applyFixDisableComponent(c *Client, compName string) (*types.OperationRespo
 	case v.state != rhoai.DSCStatePresent:
 		return &types.OperationResponse{Success: false, Message: "Cannot find the DataScienceCluster: no DataScienceCluster exists", ErrorCode: "prerequisites"}, nil
 	case v.argoApp != "":
-		return &types.OperationResponse{Success: false, Message: gitOpsRefusal("The DataScienceCluster", v.argoApp, "removing "+compName) + fmt.Sprintf(" Set %s to Removed in Git.", compName), ErrorCode: kube.ErrorCodeGitOpsManaged}, nil
+		return &types.OperationResponse{Success: false, Message: argo.GitOpsRefusal("The DataScienceCluster", v.argoApp, "removing "+compName) + fmt.Sprintf(" Set %s to Removed in Git.", compName), ErrorCode: kube.ErrorCodeGitOpsManaged}, nil
 	}
 	if reason, refused := refusedComponents[compName]; refused {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("The tool does not remove %s. %s", compName, reason), ErrorCode: "validation"}, nil

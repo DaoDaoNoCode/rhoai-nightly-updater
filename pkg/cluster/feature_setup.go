@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -309,7 +310,7 @@ type featurePlan struct {
 	rec               prereqRecord
 	dsc               rhoai.DSCRead
 	dscName, argoApp  string // argoApp: argo.managedBy
-	argo              argoTracking
+	argo              argo.Tracking
 	components        []componentPlan
 	operators         []operatorPlan
 	depStatus, depMsg string
@@ -371,8 +372,8 @@ func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
 	if r.dscErr == nil && r.dsc.Object != nil {
 		meta, _ := r.dsc.Object["metadata"].(map[string]any)
 		p.dscName, _ = meta["name"].(string)
-		p.argo = argoTrackingOf(c, r.dsc.Object, rhoai.DSCGroup, "DataScienceCluster")
-		p.argoApp = p.argo.managedBy()
+		p.argo = argo.TrackingOf(c, r.dsc.Object, rhoai.DSCGroup, "DataScienceCluster")
+		p.argoApp = p.argo.ManagedBy()
 		for _, fc := range fs.components {
 			key := fc.keyIn(r.dsc)
 			state, _ := componentManagement(r.dsc.Object, key)
@@ -409,7 +410,7 @@ func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
 			}
 		}
 		if len(turnOn) > 0 && p.argoApp != "" {
-			p.refuse(gitOpsRefusal("The DataScienceCluster", p.argoApp, "turning on "+strings.Join(turnOn, " and "))+p.argo.unconfirmedNote(), kube.ErrorCodeGitOpsManaged)
+			p.refuse(argo.GitOpsRefusal("The DataScienceCluster", p.argoApp, "turning on "+strings.Join(turnOn, " and "))+p.argo.UnconfirmedNote(), kube.ErrorCodeGitOpsManaged)
 		}
 		if fs.dependency != "" {
 			p.depStatus, p.depMsg = dscConditionStatus(r.dsc.Object, fs.dependency)
@@ -1079,8 +1080,8 @@ func restoreCheck(c *Client, rec prereqRecord, dsc rhoai.DSCRead, key string) re
 	case !dscComponentOwned(dsc.Object, key):
 		return restoreVerdict{drop: true, kept: key + " (changed by someone since this tool's setup)"}
 	}
-	if argo := argoTrackingOf(c, dsc.Object, rhoai.DSCGroup, "DataScienceCluster"); argo.managedBy() != "" {
-		return restoreVerdict{refusal: gitOpsRefusal("The DataScienceCluster", argo.managedBy(), "turning "+key+" back to "+prev) + argo.unconfirmedNote(), code: kube.ErrorCodeGitOpsManaged}
+	if argoCD := argo.TrackingOf(c, dsc.Object, rhoai.DSCGroup, "DataScienceCluster"); argoCD.ManagedBy() != "" {
+		return restoreVerdict{refusal: argo.GitOpsRefusal("The DataScienceCluster", argoCD.ManagedBy(), "turning "+key+" back to "+prev) + argoCD.UnconfirmedNote(), code: kube.ErrorCodeGitOpsManaged}
 	}
 	users, err := componentUsers(c, key)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -51,7 +52,7 @@ func rhclUpgradeRefusal(st operatorState) string {
 	case st.sub == nil:
 		return fmt.Sprintf("Its Subscription in %s is not named as the MaaS docs name it (kuadrant-operator, or rhcl-operator on RHOAI-managed clusters), so this tool does not change it. A cluster-admin switches its channel with the commands below.", st.csvNS)
 	case st.sub.argoApp != "":
-		return gitOpsRefusal("Subscription "+st.sub.Metadata.Namespace+"/"+st.sub.Metadata.Name, st.sub.argoApp, "changing its channel") + " Change the channel in Git."
+		return argo.GitOpsRefusal("Subscription "+st.sub.Metadata.Namespace+"/"+st.sub.Metadata.Name, st.sub.argoApp, "changing its channel") + " Change the channel in Git."
 	case st.sub.Spec.InstallPlanApproval == "Manual":
 		return fmt.Sprintf("Subscription %s/%s approves InstallPlans by hand (Manual), and this tool does not approve someone else's plans. A cluster-admin switches its channel and approves the plans.", st.sub.Metadata.Namespace, st.sub.Metadata.Name)
 	case kube.FirstNonEmpty(st.sub.Spec.SourceNamespace, rhoai.CatalogNS) != rhoai.CatalogNS:

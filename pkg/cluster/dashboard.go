@@ -318,14 +318,14 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 	// operator resets.
 	target, err := discoverDashboardTarget(c)
 	if err != nil {
-		return &types.OperationResponse{Success: false, Message: sentenceStart(err.Error()) + ". No changes were made.", ErrorCode: kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "prerequisites")}, nil
+		return &types.OperationResponse{Success: false, Message: kube.SentenceStart(err.Error()) + ". No changes were made.", ErrorCode: kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "prerequisites")}, nil
 	}
 	if target.Operator != nil {
 		return deployDashboardBuild(c, "pr", prNumber, flavor)
 	}
 	ns := target.Namespace
 	if ns == "" {
-		return &types.OperationResponse{Success: false, Message: sentenceStart(rhoai.ErrNoDSCInitialization.Error()) + ". No changes were made.", ErrorCode: "prerequisites"}, nil
+		return &types.OperationResponse{Success: false, Message: kube.SentenceStart(rhoai.ErrNoDSCInitialization.Error()) + ". No changes were made.", ErrorCode: "prerequisites"}, nil
 	}
 	logs := []string{"This cluster has no dashboard module (" + target.Legacy + "); the legacy flow patches " + dashboardDeploymentName + " in " + ns + "."}
 	if flavor == DashboardFlavorRHOAI {
@@ -572,7 +572,7 @@ func splitLegacyDashboardTargets(c *Client, ns string, images map[string]string,
 func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	target, err := discoverDashboardTarget(c)
 	if err != nil {
-		return &types.OperationResponse{Success: false, Message: sentenceStart(err.Error()) + ". No changes were made; retry Revert to default.", ErrorCode: kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "prerequisites")}, nil
+		return &types.OperationResponse{Success: false, Message: kube.SentenceStart(err.Error()) + ". No changes were made; retry Revert to default.", ErrorCode: kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "prerequisites")}, nil
 	}
 	if target.Operator != nil {
 		result, _ := revertDashboardOperatorTo(c, target)
@@ -580,7 +580,7 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	}
 	ns := target.Namespace
 	if ns == "" {
-		return &types.OperationResponse{Success: false, Message: sentenceStart(rhoai.ErrNoDSCInitialization.Error()) + ", so there is no dashboard to revert. No changes were made.", ErrorCode: "prerequisites"}, nil
+		return &types.OperationResponse{Success: false, Message: kube.SentenceStart(rhoai.ErrNoDSCInitialization.Error()) + ", so there is no dashboard to revert. No changes were made.", ErrorCode: "prerequisites"}, nil
 	}
 	logs := []string{"This cluster has no dashboard module (" + target.Legacy + "); reverting the legacy flow's changes to " + dashboardDeploymentName + " in " + ns + "."}
 

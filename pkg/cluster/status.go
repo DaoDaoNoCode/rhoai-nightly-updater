@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -411,19 +412,19 @@ func getClusterVersion(c *Client) (string, error) {
 // enforces the catalog when no Argo CD application manages it. A nil
 // metadata is an object the status did not find.
 func gitOpsManagers(c *Client, status *types.StatusResponse, sub, catalog, dsc *kube.ObjectMeta) {
-	argo := newArgoCheck(c)
+	argoCD := argo.NewCheck(c)
 	if sub != nil {
-		t := argo.object(sub.Annotations, sub.Labels, argoSubscriptionObject)
-		status.Subscription.ManagedBy, status.Subscription.ArgoCD = t.managedBy(), t.info()
+		t := argoCD.Object(sub.Annotations, sub.Labels, argo.SubscriptionObject)
+		status.Subscription.ManagedBy, status.Subscription.ArgoCD = t.ManagedBy(), t.Info()
 	}
 	if catalog != nil {
-		t := argo.object(catalog.Annotations, catalog.Labels, argoCatalogObject)
-		status.CatalogSource.ManagedBy, status.CatalogSource.ArgoCD = t.managedBy(), t.info()
-		status.CatalogSource.ManagedByACM = t.managedBy() == "" && acmEnforcesSpec(*catalog)
+		t := argoCD.Object(catalog.Annotations, catalog.Labels, argo.CatalogObject)
+		status.CatalogSource.ManagedBy, status.CatalogSource.ArgoCD = t.ManagedBy(), t.Info()
+		status.CatalogSource.ManagedByACM = t.ManagedBy() == "" && argo.ACMEnforcesSpec(*catalog)
 	}
 	if dsc != nil {
-		t := argo.object(dsc.Annotations, dsc.Labels, argoDSCObject(dsc.Name))
-		status.DSCManagedBy, status.DSCArgoCD = t.managedBy(), t.info()
+		t := argoCD.Object(dsc.Annotations, dsc.Labels, argo.DSCObject(dsc.Name))
+		status.DSCManagedBy, status.DSCArgoCD = t.ManagedBy(), t.Info()
 	}
 }
 

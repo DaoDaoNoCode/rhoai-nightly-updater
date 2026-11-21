@@ -1323,7 +1323,7 @@ func (m *maasRun) changeDatabase(req *types.MaaSDatabaseRequest) (*types.Operati
 	}
 	ns, err := maasDBNamespace(c, rec)
 	if err != nil {
-		return m.fail("check", sentenceStart(err.Error())+". Nothing was changed.", "prerequisites", "infra namespace unknown")
+		return m.fail("check", kube.SentenceStart(err.Error())+". Nothing was changed.", "prerequisites", "infra namespace unknown")
 	}
 	_, nsFound, err := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+ns)
 	if err != nil || !nsFound {

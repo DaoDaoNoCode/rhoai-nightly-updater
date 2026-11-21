@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -666,15 +667,15 @@ func TestToggleToRemovedFailsClosed(t *testing.T) {
 func TestDSCChangesRefusedUnderArgoCDAndACM(t *testing.T) {
 	for name, edit := range map[string]func(map[string]any){
 		"argo": func(dsc map[string]any) {
-			setPath(t, dsc, "metadata.annotations", map[string]any{argoTrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"})
+			setPath(t, dsc, "metadata.annotations", map[string]any{argo.TrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"})
 		},
 		"acm": func(dsc map[string]any) {
-			setPath(t, dsc, "metadata.managedFields", []any{map[string]any{"manager": acmPolicyManager, "operation": "Update", "fieldsType": "FieldsV1", "fieldsV1": map[string]any{"f:spec": map[string]any{}}}})
+			setPath(t, dsc, "metadata.managedFields", []any{map[string]any{"manager": argo.ACMPolicyManager, "operation": "Update", "fieldsType": "FieldsV1", "fieldsV1": map[string]any{"f:spec": map[string]any{}}}})
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, c := managerWorld(t, edit)
-			f.argo = argoManagingAll(argoDSCObject("default-dsc"))
+			f.argo = argoManagingAll(argo.DSCObject("default-dsc"))
 			m, _ := GetDSCManager(c)
 			if m.ReadOnlyReason == "" {
 				t.Fatal("no read-only reason")
@@ -699,17 +700,17 @@ func TestDSCChangesRefusedUnderArgoCDAndACM(t *testing.T) {
 // tool's to change; Argo CD not reachable, it stays read-only and says why.
 func TestDSCManagerConfirmsArgoCDTracking(t *testing.T) {
 	tracked := func(dsc map[string]any) {
-		setPath(t, dsc, "metadata.annotations", map[string]any{argoTrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"})
+		setPath(t, dsc, "metadata.annotations", map[string]any{argo.TrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"})
 	}
-	for name, argo := range map[string]*fakeArgoCD{
+	for name, argoCD := range map[string]*fakeArgoCD{
 		"argo cd not installed": {},
 		"application gone":      {served: true},
 		"not among its resources": {served: true, apps: []map[string]any{
-			argoApplicationListing("openshift-gitops", argoSubscriptionObject)}},
+			argoApplicationListing("openshift-gitops", argo.SubscriptionObject)}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, c := managerWorld(t, tracked)
-			f.argo = argo
+			f.argo = argoCD
 			m, err := GetDSCManager(c)
 			if err != nil || m.ReadOnlyReason != "" || m.ManagedBy != "" {
 				t.Fatalf("manager = %+v, %v", m, err)

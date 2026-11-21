@@ -1,4 +1,4 @@
-package cluster
+package argo
 
 import (
 	"context"
@@ -71,79 +71,79 @@ import (
 // argoAPI is the path of Argo CD's Application API.
 const argoAPI = "/apis/argoproj.io/v1alpha1"
 
-// argoInstanceLabel is the label Argo CD's label tracking writes, under its
+// InstanceLabel is the label Argo CD's label tracking writes, under its
 // default application.instanceLabelKey (common.LabelKeyAppInstance in Argo
 // CD).
-const argoInstanceLabel = "app.kubernetes.io/instance"
+const InstanceLabel = "app.kubernetes.io/instance"
 
-// argoUnknownApplication names the application when Argo CD could not be
+// UnknownApplication names the application when Argo CD could not be
 // asked about an object that carries no mark of one. Parentheses cannot
 // occur in an Application's name.
-const argoUnknownApplication = "(unknown)"
+const UnknownApplication = "(unknown)"
 
-// argoObject is an object Argo CD may manage, as status.resources lists it.
-type argoObject struct {
-	group, kind, namespace, name string
-	clusterScoped                bool
+// Object is an object Argo CD may manage, as status.resources lists it.
+type Object struct {
+	Group, Kind, Namespace, Name string
+	ClusterScoped                bool
 }
 
 var (
-	argoSubscriptionObject = argoObject{group: "operators.coreos.com", kind: "Subscription", namespace: rhoai.SubNS, name: rhoai.SubName}
-	argoCatalogObject      = argoObject{group: "operators.coreos.com", kind: "CatalogSource", namespace: rhoai.CatalogNS, name: rhoai.CatalogName}
+	SubscriptionObject = Object{Group: "operators.coreos.com", Kind: "Subscription", Namespace: rhoai.SubNS, Name: rhoai.SubName}
+	CatalogObject      = Object{Group: "operators.coreos.com", Kind: "CatalogSource", Namespace: rhoai.CatalogNS, Name: rhoai.CatalogName}
 )
 
-func argoDSCObject(name string) argoObject {
-	return argoObject{group: rhoai.DSCGroup, kind: "DataScienceCluster", name: name, clusterScoped: true}
+func DSCObject(name string) Object {
+	return Object{Group: rhoai.DSCGroup, Kind: "DataScienceCluster", Name: name, ClusterScoped: true}
 }
 
-// argoTracking is the verdict on one object.
-type argoTracking struct {
-	// app is the application as the object's mark names it, or the name of
+// Tracking is the verdict on one object.
+type Tracking struct {
+	// App is the application as the object's mark names it, or the name of
 	// the Application that lists an unmarked object; "" when neither.
-	app   string
-	state string // types.ArgoCD*; "" when not managed and nothing to report
+	App   string
+	State string // types.ArgoCD*; "" when not managed and nothing to report
 	// staleReason: types.ArgoCDNotInstalled, ArgoCDApplicationGone or
 	// ArgoCDNotAmongResources.
-	staleReason string
-	reason      string // why Argo CD could not confirm (unconfirmed)
-	namespace   string // the namespace of the Application found
-	sync        string // its status.sync.status (managed)
+	StaleReason string
+	Reason      string // why Argo CD could not confirm (unconfirmed)
+	Namespace   string // the namespace of the Application found
+	Sync        string // its status.sync.status (managed)
 }
 
-// managedBy is the application the tool treats as managing the object, ""
+// ManagedBy is the application the tool treats as managing the object, ""
 // when none does. Every refusal because of Argo CD reads this.
-func (t argoTracking) managedBy() string {
-	if t.state == types.ArgoCDManaged || t.state == types.ArgoCDUnconfirmed {
-		return kube.NonEmpty(t.app, argoUnknownApplication)
+func (t Tracking) ManagedBy() string {
+	if t.State == types.ArgoCDManaged || t.State == types.ArgoCDUnconfirmed {
+		return kube.NonEmpty(t.App, UnknownApplication)
 	}
 	return ""
 }
 
-// info is the verdict for the status; nil when there is nothing to report.
-func (t argoTracking) info() *types.ArgoCDTracking {
-	if t.state == "" {
+// Info is the verdict for the status; nil when there is nothing to report.
+func (t Tracking) Info() *types.ArgoCDTracking {
+	if t.State == "" {
 		return nil
 	}
-	return &types.ArgoCDTracking{Application: kube.NonEmpty(t.app, argoUnknownApplication), State: t.state, Namespace: t.namespace,
-		StaleReason: t.staleReason, Reason: t.reason, SyncStatus: t.sync}
+	return &types.ArgoCDTracking{Application: kube.NonEmpty(t.App, UnknownApplication), State: t.State, Namespace: t.Namespace,
+		StaleReason: t.StaleReason, Reason: t.Reason, SyncStatus: t.Sync}
 }
 
-// unconfirmedNote is appended to a refusal when Argo CD could not confirm
+// UnconfirmedNote is appended to a refusal when Argo CD could not confirm
 // the tracking; "" otherwise.
-func (t argoTracking) unconfirmedNote() string {
-	if t.state != types.ArgoCDUnconfirmed {
+func (t Tracking) UnconfirmedNote() string {
+	if t.State != types.ArgoCDUnconfirmed {
 		return ""
 	}
-	return fmt.Sprintf(" (The tool could not confirm this with Argo CD: %s. It treats the object as managed until it can.)", t.reason)
+	return fmt.Sprintf(" (The tool could not confirm this with Argo CD: %s. It treats the object as managed until it can.)", t.Reason)
 }
 
-// argoCheck asks Argo CD about objects. It reads each answer once
+// Check asks Argo CD about objects. It reads each answer once
 // (discovery, the Applications, each remote sign), so one status poll or one
 // operation check asks once for all its objects; status reads also share
 // the list of Applications across polls (readArgoApplications). Not safe
 // for concurrent use.
-type argoCheck struct {
-	c        *Client
+type Check struct {
+	c        *kube.Client
 	served   *argoRead[bool]
 	apps     *argoRead[[]argoApp]
 	remote   *argoRead[string]
@@ -157,23 +157,23 @@ type argoRead[T any] struct {
 	err   string
 }
 
-func newArgoCheck(c *Client) *argoCheck {
-	return &argoCheck{c: c, bindings: map[string]argoRead[string]{}}
+func NewCheck(c *kube.Client) *Check {
+	return &Check{c: c, bindings: map[string]argoRead[string]{}}
 }
 
-// argoTrackingOf asks Argo CD about one decoded object (a Subscription, the
+// TrackingOf asks Argo CD about one decoded object (a Subscription, the
 // DataScienceCluster) of this group and kind. Its metadata gives the name,
 // the namespace ("" for a cluster-scoped object) and the marks.
-func argoTrackingOf(c *Client, obj map[string]any, group, kind string) argoTracking {
-	return newArgoCheck(c).objectOf(obj, group, kind)
+func TrackingOf(c *kube.Client, obj map[string]any, group, kind string) Tracking {
+	return NewCheck(c).objectOf(obj, group, kind)
 }
 
-func (a *argoCheck) objectOf(obj map[string]any, group, kind string) argoTracking {
+func (a *Check) objectOf(obj map[string]any, group, kind string) Tracking {
 	meta, _ := obj["metadata"].(map[string]any)
 	name, _ := meta["name"].(string)
 	ns, _ := meta["namespace"].(string)
-	o := argoObject{group: group, kind: kind, namespace: ns, name: name, clusterScoped: ns == ""}
-	return a.object(stringMap(meta["annotations"]), stringMap(meta["labels"]), o)
+	o := Object{Group: group, Kind: kind, Namespace: ns, Name: name, ClusterScoped: ns == ""}
+	return a.Object(stringMap(meta["annotations"]), stringMap(meta["labels"]), o)
 }
 
 // stringMap is the string entries of a decoded map.
@@ -200,13 +200,13 @@ type argoMarks struct {
 	label string
 }
 
-func argoMarksOf(annotations, labels map[string]string, o argoObject) argoMarks {
-	idNS := o.namespace
-	if o.clusterScoped {
+func argoMarksOf(annotations, labels map[string]string, o Object) argoMarks {
+	idNS := o.Namespace
+	if o.ClusterScoped {
 		idNS = ""
 	}
-	m := argoMarks{annotation: argoApplication(annotations, o.group, o.kind, idNS, o.name), label: labels[argoInstanceLabel]}
-	m.copied = m.annotation == "" && annotations[argoTrackingAnnotation] != ""
+	m := argoMarks{annotation: TrackingApplication(annotations, o.Group, o.Kind, idNS, o.Name), label: labels[InstanceLabel]}
+	m.copied = m.annotation == "" && annotations[TrackingAnnotation] != ""
 	return m
 }
 
@@ -216,22 +216,22 @@ func (m argoMarks) name() string {
 	return kube.NonEmpty(m.annotation, m.label)
 }
 
-// object asks Argo CD about object o, which carries these annotations and
+// Object asks Argo CD about object o, which carries these annotations and
 // labels.
-func (a *argoCheck) object(annotations, labels map[string]string, o argoObject) argoTracking {
+func (a *Check) Object(annotations, labels map[string]string, o Object) Tracking {
 	marks := argoMarksOf(annotations, labels, o)
-	t := argoTracking{app: marks.name()}
-	unconfirmed := func(reason string) argoTracking {
-		t.state, t.reason = types.ArgoCDUnconfirmed, reason
+	t := Tracking{App: marks.name()}
+	unconfirmed := func(reason string) Tracking {
+		t.State, t.Reason = types.ArgoCDUnconfirmed, reason
 		return t
 	}
-	stale := func(why string) argoTracking {
-		t.state, t.staleReason = types.ArgoCDStale, why
+	stale := func(why string) Tracking {
+		t.State, t.StaleReason = types.ArgoCDStale, why
 		return t
 	}
 	// remote is the verdict when no Application here manages a marked
 	// object: not confirmed when an Argo CD elsewhere may manage it.
-	remote := func(here string) (argoTracking, bool) {
+	remote := func(here string) (Tracking, bool) {
 		if r := a.remoteArgoCD(o); r.err != "" || r.value != "" {
 			return unconfirmed(here + ", but " + kube.NonEmpty(r.value, r.err)), true
 		}
@@ -244,13 +244,13 @@ func (a *argoCheck) object(annotations, labels map[string]string, o argoObject) 
 	}
 	if !served.value {
 		if marks.name() == "" {
-			return argoTracking{}
+			return Tracking{}
 		}
 		if v, ok := remote("Argo CD is not installed on this cluster"); ok {
 			return v
 		}
 		if marks.annotation == "" {
-			return argoTracking{}
+			return Tracking{}
 		}
 		return stale(types.ArgoCDNotInstalled)
 	}
@@ -271,38 +271,38 @@ func (a *argoCheck) object(annotations, labels map[string]string, o argoObject) 
 	if len(listing) > 0 {
 		found := listing[0]
 		for _, ap := range listing {
-			if ap.isNamed(t.app) {
+			if ap.isNamed(t.App) {
 				found = ap
 				break
 			}
 		}
-		if !found.isNamed(t.app) {
-			t.app = found.Metadata.Name
+		if !found.isNamed(t.App) {
+			t.App = found.Metadata.Name
 		}
-		t.state, t.namespace, t.sync = types.ArgoCDManaged, found.Metadata.Namespace, found.Status.Sync.Status
+		t.State, t.Namespace, t.Sync = types.ArgoCDManaged, found.Metadata.Namespace, found.Status.Sync.Status
 		return t
 	}
 	for _, ap := range named {
 		if why := ap.notCompared(); why != "" {
-			t.namespace = ap.Metadata.Namespace
+			t.Namespace = ap.Metadata.Namespace
 			return unconfirmed(why)
 		}
 	}
 	if marks.name() == "" {
-		return argoTracking{}
+		return Tracking{}
 	}
 	if len(named) > 0 {
-		t.namespace = named[0].Metadata.Namespace
+		t.Namespace = named[0].Metadata.Namespace
 		if v, ok := remote(fmt.Sprintf("application %s/%s does not list it", named[0].Metadata.Namespace, named[0].Metadata.Name)); ok {
 			return v
 		}
 		return stale(types.ArgoCDNotAmongResources)
 	}
-	if v, ok := remote(fmt.Sprintf("no application %q is on this cluster", t.app)); ok {
+	if v, ok := remote(fmt.Sprintf("no application %q is on this cluster", t.App)); ok {
 		return v
 	}
 	if marks.annotation == "" {
-		return argoTracking{}
+		return Tracking{}
 	}
 	return stale(types.ArgoCDApplicationGone)
 }
@@ -311,7 +311,7 @@ func (a *argoCheck) object(annotations, labels map[string]string, o argoObject) 
 // every authenticated user, system:discovery): 404 when the group version
 // is not served. argoproj.io is also Argo Rollouts' and Argo Workflows'
 // group, so the applications resource must be in it.
-func (a *argoCheck) applicationsServed() argoRead[bool] {
+func (a *Check) applicationsServed() argoRead[bool] {
 	if a.served != nil {
 		return *a.served
 	}
@@ -381,9 +381,9 @@ type argoApp struct {
 // isSelfReferencedObj): an object whose tracking annotation names another
 // object (copied from it) is listed without a sync status, and Argo CD
 // neither syncs nor prunes it; an object Git holds always gets one.
-func (ap argoApp) manages(o argoObject, marks argoMarks) bool {
+func (ap argoApp) manages(o Object, marks argoMarks) bool {
 	for _, r := range ap.Status.Resources {
-		if r.Group != o.group || r.Kind != o.kind || r.Name != o.name || (!o.clusterScoped && r.Namespace != o.namespace) {
+		if r.Group != o.Group || r.Kind != o.Kind || r.Name != o.Name || (!o.ClusterScoped && r.Namespace != o.Namespace) {
 			continue
 		}
 		if marks.copied && r.Status == "" && !r.Hook {
@@ -433,7 +433,7 @@ func (ap argoApp) notCompared() string {
 }
 
 // applications lists every Argo CD Application on the cluster.
-func (a *argoCheck) applications() argoRead[[]argoApp] {
+func (a *Check) applications() argoRead[[]argoApp] {
 	if a.apps != nil {
 		return *a.apps
 	}
@@ -448,15 +448,15 @@ func (a *argoCheck) applications() argoRead[[]argoApp] {
 	return r
 }
 
-// argoApplicationsTTL bounds how long a status read reuses the list of
+// ApplicationsTTL bounds how long a status read reuses the list of
 // every Application: the pages poll every few seconds, each open page
 // asks, and the list holds every Application's status.resources. Only
 // clients of read requests use it (Client.statusRead); a change's checks
 // list again every time. Only successful lists are cached.
-const argoApplicationsTTL = 30 * time.Second
+const ApplicationsTTL = 30 * time.Second
 
 var (
-	argoApplicationsCache  = kube.NewLRU[string, []argoApp](16)
+	ApplicationsCache      = kube.NewLRU[string, []argoApp](16)
 	argoApplicationsFlight kube.FlightGroup[[]argoApp]
 )
 
@@ -464,12 +464,12 @@ var (
 // of the last argoApplicationsTTL, with concurrent status reads sharing one
 // request; otherwise always from the API server. The cached slice is shared
 // and must not be changed.
-func readArgoApplications(c *Client) ([]argoApp, error) {
+func readArgoApplications(c *kube.Client) ([]argoApp, error) {
 	if !c.StatusRead() {
 		return listArgoApplications(c)
 	}
 	key := c.BaseURL()
-	if apps, ok := argoApplicationsCache.Get(key); ok {
+	if apps, ok := ApplicationsCache.Get(key); ok {
 		return apps, nil
 	}
 	ctx := c.Context()
@@ -477,12 +477,12 @@ func readArgoApplications(c *Client) ([]argoApp, error) {
 		ctx = context.Background()
 	}
 	apps, err, _ := argoApplicationsFlight.Do(ctx, key, func(context.Context) ([]argoApp, error) {
-		if apps, ok := argoApplicationsCache.Get(key); ok {
+		if apps, ok := ApplicationsCache.Get(key); ok {
 			return apps, nil
 		}
 		apps, err := listArgoApplications(c)
 		if err == nil {
-			argoApplicationsCache.Add(key, apps, argoApplicationsTTL)
+			ApplicationsCache.Add(key, apps, ApplicationsTTL)
 		}
 		return apps, err
 	})
@@ -490,7 +490,7 @@ func readArgoApplications(c *Client) ([]argoApp, error) {
 }
 
 // listArgoApplications reads the list of every Application.
-func listArgoApplications(c *Client) ([]argoApp, error) {
+func listArgoApplications(c *kube.Client) ([]argoApp, error) {
 	var items []argoApp
 	if err := c.ListInto(argoAPI+"/applications", &items); err != nil {
 		return nil, err
@@ -527,14 +527,14 @@ func listArgoApplications(c *Client) ([]argoApp, error) {
 // cmd/argocd/commands/cluster.go NewClusterAddCommand), and cluster Secrets
 // made by hand.
 const (
-	acmWorkAPI             = "/apis/work.open-cluster-management.io/v1"
-	argoCDManagerBinding   = "argocd-manager-role-binding"
-	argoCDManagerFieldPath = "metadata.name=" + argoCDManagerBinding
+	ACMWorkAPI             = "/apis/work.open-cluster-management.io/v1"
+	ManagerBinding         = "argocd-manager-role-binding"
+	argoCDManagerFieldPath = "metadata.name=" + ManagerBinding
 )
 
 // remoteArgoCD says why an Argo CD on another cluster may manage o (value),
 // or why that could not be read (err); both "" when there is no sign of one.
-func (a *argoCheck) remoteArgoCD(o argoObject) argoRead[string] {
+func (a *Check) remoteArgoCD(o Object) argoRead[string] {
 	if r := a.remoteCluster(); r.err != "" || r.value != "" {
 		return r
 	}
@@ -546,8 +546,8 @@ func (a *argoCheck) remoteArgoCD(o argoObject) argoRead[string] {
 	if appsNS.value != "" {
 		namespaces = append(namespaces, appsNS.value)
 	}
-	if !o.clusterScoped && o.namespace != "" {
-		namespaces = append(namespaces, o.namespace)
+	if !o.ClusterScoped && o.Namespace != "" {
+		namespaces = append(namespaces, o.Namespace)
 	}
 	for _, ns := range namespaces {
 		if r := a.managerRoleBinding(ns); r.err != "" || r.value != "" {
@@ -559,13 +559,13 @@ func (a *argoCheck) remoteArgoCD(o argoObject) argoRead[string] {
 
 // remoteCluster reads the cluster-wide signs: ACM's AppliedManifestWork
 // API, and ClusterRoleBinding argocd-manager-role-binding.
-func (a *argoCheck) remoteCluster() argoRead[string] {
+func (a *Check) remoteCluster() argoRead[string] {
 	if a.remote != nil {
 		return *a.remote
 	}
 	var r argoRead[string]
 	defer func() { a.remote = &r }()
-	body, exists, err := a.c.GetOptional(acmWorkAPI)
+	body, exists, err := a.c.GetOptional(ACMWorkAPI)
 	switch {
 	case err != nil:
 		r.err = fmt.Sprintf("whether an ACM hub manages this cluster could not be read: %v", err)
@@ -595,25 +595,25 @@ func (a *argoCheck) remoteCluster() argoRead[string] {
 		return r
 	}
 	if len(list.Items) > 0 {
-		r.value = "ClusterRoleBinding " + argoCDManagerBinding + " (made by `argocd cluster add`) lets an Argo CD on another cluster manage this one"
+		r.value = "ClusterRoleBinding " + ManagerBinding + " (made by `argocd cluster add`) lets an Argo CD on another cluster manage this one"
 	}
 	return r
 }
 
 // managerRoleBinding reads RoleBinding argocd-manager-role-binding in ns,
 // which `argocd cluster add --namespace` makes.
-func (a *argoCheck) managerRoleBinding(ns string) argoRead[string] {
+func (a *Check) managerRoleBinding(ns string) argoRead[string] {
 	if r, ok := a.bindings[ns]; ok {
 		return r
 	}
 	var r argoRead[string]
-	_, found, err := a.c.GetOptional(rhoai.NamespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", ns, argoCDManagerBinding))
+	_, found, err := a.c.GetOptional(rhoai.NamespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", ns, ManagerBinding))
 	switch {
 	case err != nil:
 		r.err = fmt.Sprintf("whether an Argo CD on another cluster manages namespace %s could not be read: %v", ns, err)
 	case !found:
 	default:
-		r.value = fmt.Sprintf("RoleBinding %s in namespace %s (made by `argocd cluster add --namespace`) lets an Argo CD on another cluster manage that namespace", argoCDManagerBinding, ns)
+		r.value = fmt.Sprintf("RoleBinding %s in namespace %s (made by `argocd cluster add --namespace`) lets an Argo CD on another cluster manage that namespace", ManagerBinding, ns)
 	}
 	a.bindings[ns] = r
 	return r
@@ -621,7 +621,7 @@ func (a *argoCheck) managerRoleBinding(ns string) argoRead[string] {
 
 // applicationsNamespace is RHOAI's applications namespace, "" when RHOAI
 // has none (no DSCInitialization), or why it could not be read.
-func (a *argoCheck) applicationsNamespace() argoRead[string] {
+func (a *Check) applicationsNamespace() argoRead[string] {
 	if a.appsNS != nil {
 		return *a.appsNS
 	}

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -403,7 +404,7 @@ type maasDSC struct {
 	ready     string // ModelsAsAServiceReady: True, False or "" (unknown)
 	readyMsg  string
 	argoApp   string // the Argo CD application managing it (argo.managedBy)
-	argo      argoTracking
+	argo      argo.Tracking
 }
 
 func readMaaSDSC(c *Client) (maasDSC, error) {
@@ -417,8 +418,8 @@ func readMaaSDSC(c *Client) (maasDSC, error) {
 	}
 	meta, _ := r.Object["metadata"].(map[string]any)
 	d.name, _ = meta["name"].(string)
-	d.argo = argoTrackingOf(c, r.Object, rhoai.DSCGroup, "DataScienceCluster")
-	d.argoApp = d.argo.managedBy()
+	d.argo = argo.TrackingOf(c, r.Object, rhoai.DSCGroup, "DataScienceCluster")
+	d.argoApp = d.argo.ManagedBy()
 	d.aigateway, _ = componentManagement(r.Object, "aigateway")
 	spec, _ := r.Object["spec"].(map[string]any)
 	comps, _ := spec["components"].(map[string]any)
@@ -1112,7 +1113,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	r := &maasStatusRun{c: c, st: st, rec: rec}
 	r.infra, r.infraErr = maasInfraNamespace(c)
 	if r.infraErr != nil {
-		r.blockers = append(r.blockers, sentenceStart(r.infraErr.Error())+".")
+		r.blockers = append(r.blockers, kube.SentenceStart(r.infraErr.Error())+".")
 	}
 	domain, _ := clusterAppsDomain(c)
 	if u := "https://" + maasHostPrefix + domain; domain != "" && snippetURL(u) {
@@ -1277,7 +1278,7 @@ func (r *maasStatusRun) statusDatabase(cnpg operatorState, cnpgReadErr error) {
 	// it is the database.
 	if rec.DBNamespace == "" && r.infraErr != nil {
 		part(types.MaaSPart{ID: "database", Title: "Database", DocURL: maasDocsBase + "install/maas-setup.md#database-setup",
-			State: "unknown", Message: sentenceStart(r.infraErr.Error())})
+			State: "unknown", Message: kube.SentenceStart(r.infraErr.Error())})
 		return
 	}
 	dbs := maasDatabaseStatus(c, rec, infra, cnpg, cnpgReadErr)
@@ -1450,7 +1451,7 @@ func (r *maasStatusRun) statusDSC(dsc maasDSC, dscErr error) {
 		dscPart.ManagedByTool = rec.AIGatewayChanged
 		if dsc.argoApp != "" {
 			dscPart.State = "problem"
-			dscPart.Message = gitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning on Models as a Service") + " Set " + strings.Join(fields, " and ") + " in Git." + dsc.argo.unconfirmedNote()
+			dscPart.Message = argo.GitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning on Models as a Service") + " Set " + strings.Join(fields, " and ") + " in Git." + dsc.argo.UnconfirmedNote()
 			r.blockers = append(r.blockers, dscPart.Message)
 		} else {
 			plan(fmt.Sprintf("DataScienceCluster %s: %s (the values before are recorded, and Remove restores them)", dsc.name, strings.Join(fields, ", ")))
@@ -1475,7 +1476,7 @@ func (r *maasStatusRun) statusDSC(dsc maasDSC, dscErr error) {
 		default:
 			apiPart.State, apiPart.Message = "unknown", "Cannot read Deployment maas-api"
 			if r.infraErr != nil {
-				apiPart.Message = sentenceStart(r.infraErr.Error())
+				apiPart.Message = kube.SentenceStart(r.infraErr.Error())
 			}
 		}
 		ai, aiMsg := readyCondition(c, rhoai.NamespacedPath(maasAPI(c), "aitenants", "ai-tenants", "models-as-a-service"))

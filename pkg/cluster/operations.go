@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -502,7 +503,7 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 		logs = append(logs, note)
 	}
 
-	if gitOps.active() {
+	if gitOps.Active() {
 		return updateUnderGitOps(c, image, target, currentCSV, gitOps, recovery, &logs, emit, fail, nil, rhoai.NodePullAdvice)
 	}
 
@@ -542,7 +543,7 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 type updateChecks struct {
 	revertDashboard bool
 	currentCSV      types.CSVInfo
-	gitOps          operatorGitOps
+	gitOps          argo.OperatorGitOps
 	channelOverride string
 	target          catalogTarget
 	captured        *operatorRecovery
@@ -633,7 +634,7 @@ func updateVerifyTarget(c *Client, image string, chk *updateChecks, logs *[]stri
 		}
 		hint := ""
 		if channelOverride != "" {
-			hint = fmt.Sprintf(" Argo CD application %q sets the Subscription's channel %s in Git, so Update keeps it: pick a build that has that channel, or change it in Git.", gitOps.subscriptionApp, channelOverride)
+			hint = fmt.Sprintf(" Argo CD application %q sets the Subscription's channel %s in Git, so Update keeps it: pick a build that has that channel, or change it in Git.", gitOps.SubscriptionApp, channelOverride)
 		}
 		if isCatalogImagePullError(preflightErr) {
 			return fail("Replacement catalog validation failed: "+preflightErr.Error()+". Nothing was changed.", "catalog_image_pull")
@@ -1030,7 +1031,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 	catalogSpec := buildCatalogSourceSpec(image)
 	csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	var csDryErr error
-	if !gitOps.active() {
+	if !gitOps.Active() {
 		_, _, csDryErr = c.DryRunApply(csPath, catalogSpec)
 	}
 	if csDryErr != nil {
@@ -1042,8 +1043,8 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 			ErrorCode: kube.ErrorCodeOr(csDryErr, "validation"),
 		}, nil
 	}
-	if gitOps.active() {
-		logs = append(logs, "OK: CatalogSource left as "+gitOps.catalogSpecFrom()+" sets it (not validated: it is not written)")
+	if gitOps.Active() {
+		logs = append(logs, "OK: CatalogSource left as "+gitOps.CatalogSpecFrom()+" sets it (not validated: it is not written)")
 	} else if cs.Exists && cs.Image == image {
 		logs = append(logs, "OK: CatalogSource already points to this image — no change needed (validated)")
 	} else if cs.Exists {
@@ -1062,12 +1063,12 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 		}, nil
 	}
 	switch {
-	case gitOps.active():
+	case gitOps.Active():
 		channel := kube.NonEmpty(channelOverride, "the one the build publishes")
 		if channelOverride != "" {
 			channel += " (kept from Git)"
 		}
-		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would leave the CatalogSource as %s sets it and wait until the catalog serves the build. Then, after the old CSV is gone, would delete and at once recreate the Subscription with channel %s, keeping its config, approval mode and Argo CD tracking", gitOps.catalogSpecFrom(), channel))
+		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would leave the CatalogSource as %s sets it and wait until the catalog serves the build. Then, after the old CSV is gone, would delete and at once recreate the Subscription with channel %s, keeping its config, approval mode and Argo CD tracking", gitOps.CatalogSpecFrom(), channel))
 	case sub.State == "Not Installed" || sub.Source == "":
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create Subscription pointing to %s", rhoai.CatalogName))
 	default:
@@ -1214,9 +1215,9 @@ func reinstallCheckRequest(c *Client, targetType, image string, opts OperationOp
 		rs.recordActivity = false
 		return fail("An FBC image is required", "validation")
 	}
-	if g, err := readOperatorGitOps(c); err != nil {
+	if g, err := argo.ReadOperatorGitOps(c); err != nil {
 		return fail("Cannot check whether Argo CD manages the operator: "+err.Error()+". Nothing was changed.", kube.ErrorCodeFromK8sErr(err))
-	} else if msg := g.refusal("Install a different build", "the Subscription and the catalog for several minutes"); msg != "" {
+	} else if msg := g.Refusal("Install a different build", "the Subscription and the catalog for several minutes"); msg != "" {
 		rs.recordActivity = false
 		return fail(msg+" Update works with Argo CD: it installs the build the catalog serves and keeps the channel Git sets.", kube.ErrorCodeGitOpsManaged)
 	}
@@ -1810,9 +1811,9 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	// --- Step 1: verify_csv ---
 	emit(UpdateStepEvent{Step: "verify_csv", Status: "running", Message: "Verifying operator is installed..."})
 
-	if g, err := readOperatorGitOps(c); err != nil {
+	if g, err := argo.ReadOperatorGitOps(c); err != nil {
 		return fail("Cannot check whether Argo CD manages the operator: "+err.Error()+". Nothing was changed.", kube.ErrorCodeFromK8sErr(err))
-	} else if msg := g.refusal("Re-deploy", "the Subscription until the old CSV is gone"); msg != "" {
+	} else if msg := g.Refusal("Re-deploy", "the Subscription until the old CSV is gone"); msg != "" {
 		recordActivity = false
 		return fail(msg+" To re-deploy the installed build, run Update: it installs the build the catalog serves again.", kube.ErrorCodeGitOpsManaged)
 	}

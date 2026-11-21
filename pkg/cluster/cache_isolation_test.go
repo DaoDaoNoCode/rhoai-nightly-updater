@@ -49,7 +49,7 @@ type urlKeyedState struct {
 func TestResetClusterCachesCoversEveryURLKeyedCache(t *testing.T) {
 	want := map[string]urlKeyedState{
 		"api_versions.go":                 {1, []string{"APIVersionsCache"}},
-		"argocd.go":                       {1, []string{"argoApplicationsCache"}},
+		"argocd.go":                       {1, []string{"ApplicationsCache"}},
 		"client_testing.go":               {1, nil}, // TestOptions copies the field for a test; no state
 		"components.go":                   {1, []string{"replicaSetOwnerCache"}},
 		"control_plane.go":                {2, []string{"ControlPlaneCache"}},

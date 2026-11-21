@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -926,11 +927,11 @@ func prerequisiteProblem(c *Client, d *dependency) Problem {
 			break
 		}
 		evidence = append(evidence, plan.evidence...)
-		if g, err := readOperatorGitOps(c); err == nil && g.active() {
-			if app := kube.NonEmpty(g.subscriptionApp, g.catalogApp); app != "" {
+		if g, err := argo.ReadOperatorGitOps(c); err == nil && g.Active() {
+			if app := kube.NonEmpty(g.SubscriptionApp, g.CatalogApp); app != "" {
 				fixes = append(fixes, fmt.Sprintf("Argo CD application %q manages RHOAI here: add %s to Git (with the odh-gitops chart, enable it under dependencies in the values) rather than applying the objects below by hand, which Argo CD would not know about; they are listed for reference.", app, name))
 			} else {
-				fixes = append(fixes, fmt.Sprintf("%s manages the RHOAI catalog here: add %s where the cluster's configuration is kept (an ACM policy, or Git) rather than applying the objects below by hand; they are listed for reference.", sentenceStart(acmCatalogManager), name))
+				fixes = append(fixes, fmt.Sprintf("%s manages the RHOAI catalog here: add %s where the cluster's configuration is kept (an ACM policy, or Git) rather than applying the objects below by hand; they are listed for reference.", kube.SentenceStart(argo.ACMCatalogManager), name))
 			}
 		}
 		fixes = append(fixes, fmt.Sprintf("Install %s with the commands below (as a cluster administrator; the tool does not install operators). %s", name, strings.Join(plan.notes, " ")))
