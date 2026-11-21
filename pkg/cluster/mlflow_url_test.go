@@ -1,6 +1,10 @@
 package cluster
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
+)
 
 func TestMLflowUIURL(t *testing.T) {
 	for _, tc := range []struct{ name, statusURL, route, want string }{
@@ -16,7 +20,7 @@ func TestMLflowUIURL(t *testing.T) {
 		{"a Route host with shell characters is not used", "", "x.example.com`id`", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := mlflowUIURL(tc.statusURL, tc.route); got != tc.want {
+			if got := mlflow.UIURL(tc.statusURL, tc.route); got != tc.want {
 				t.Errorf("mlflowUIURL(%q, %q) = %q, want %q", tc.statusURL, tc.route, got, tc.want)
 			}
 		})

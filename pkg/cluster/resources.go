@@ -11,6 +11,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -46,7 +47,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	go func() { defer wg.Done(); dspas, dspasErr = storage.ListDSPAs(c, "") }()
 	go func() { defer wg.Done(); status.MinIO, s3EP, s3EPErr = storage.S3StatusAndEndpoints(c) }()
 	go func() { defer wg.Done(); legacy, foreignNS, legacyErr = storage.ReadLegacyOwner(c) }()
-	go func() { defer wg.Done(); status.MLflow = getMLflowStatus(c) }()
+	go func() { defer wg.Done(); status.MLflow = mlflow.Status(c) }()
 	go func() { defer wg.Done(); dashURL = dashdev.DashboardURL(c) }()
 	go func() { defer wg.Done(); dsc, dscErr = rhoai.ReadFirstDSC(c) }()
 	wg.Wait()

@@ -1,4 +1,4 @@
-package cluster
+package mlflow
 
 import (
 	"context"
@@ -21,27 +21,27 @@ import (
 )
 
 const (
-	mlflowCRName    = "mlflow"
-	mlflowAPIGroup  = "mlflow.opendatahub.io/v1"
+	CRName          = "mlflow"
+	APIGroup        = "mlflow.opendatahub.io/v1"
 	mlflowImageRepo = "opendatahub/mlflow"
 	// mlflowPodSelector matches the MLflow server pods; the operator's helm
 	// chart labels them app=mlflow<resourceSuffix> (charts/mlflow/templates/
 	// deployment.yaml), and the suffix is empty for the singleton "mlflow".
 	mlflowPodSelector = "app=mlflow"
-	// mlflowOriginalImageAnnotation records spec.image.image as it was before
+	// OriginalImageAnnotation records spec.image.image as it was before
 	// the first PR deploy ("" when unset, meaning the operator default), so
 	// Revert restores exactly that. The mlflow-operator only ever removes its
 	// own force-migrate annotation (internal/controller/migration.go), so
 	// this annotation is left alone.
-	mlflowOriginalImageAnnotation = "rhoai-nightly-updater/original-image"
+	OriginalImageAnnotation = "rhoai-nightly-updater/original-image"
 )
 
 var (
-	// MLflowDeleteTimeout bounds how long teardown waits for the CR to go.
+	// DeleteTimeout bounds how long teardown waits for the CR to go.
 	// The MLflow CR has no finalizer (mlflow-operator rhoai-3.6), so this
 	// normally returns at once.
-	MLflowDeleteTimeout = 15 * time.Second
-	MLflowDeletePoll    = time.Second
+	DeleteTimeout = 15 * time.Second
+	DeletePoll    = time.Second
 
 	mlflowPRTagPattern = regexp.MustCompile(`:odh-pr-(\d+)(?:@|$)`)
 
@@ -80,12 +80,12 @@ type mlflowCR struct {
 	} `json:"status"`
 }
 
-// mlflowUIURL is MLflow's public address: the CR's status.url when it is an
+// UIURL is MLflow's public address: the CR's status.url when it is an
 // https URL, else the Route named "mlflow" (releases before the gateway).
 //
 // The address goes into the client settings users paste into a shell, so
 // only a plain https address (kube.SnippetURL) is used.
-func mlflowUIURL(statusURL, routeHost string) string {
+func UIURL(statusURL, routeHost string) string {
 	if u, err := url.Parse(strings.TrimSpace(statusURL)); err == nil && u.Scheme == "https" && u.Host != "" {
 		if s := strings.TrimRight(u.String(), "/"); kube.SnippetURL(s) {
 			return s
@@ -149,19 +149,19 @@ func (m mlflowCR) prOverride() (active bool, revertImage string) {
 	if prNumberFromImage(m.image()) == 0 {
 		return false, ""
 	}
-	return true, m.Metadata.Annotations[mlflowOriginalImageAnnotation]
+	return true, m.Metadata.Annotations[OriginalImageAnnotation]
 }
 
 // staleOriginal: the image saved before a PR deploy is still on the CR,
 // but no PR image runs any more.
 func (m mlflowCR) staleOriginal() bool {
-	_, saved := m.Metadata.Annotations[mlflowOriginalImageAnnotation]
+	_, saved := m.Metadata.Annotations[OriginalImageAnnotation]
 	return saved && prNumberFromImage(m.image()) == 0
 }
 
-func getMLflowCR(c *Client) (mlflowCR, error) {
+func ReadCR(c *kube.Client) (mlflowCR, error) {
 	var cr mlflowCR
-	if err := c.GetInto(rhoai.ClusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), &cr); err != nil {
+	if err := c.GetInto(rhoai.ClusterPath(APIGroup, "mlflows", CRName), &cr); err != nil {
 		if kube.IsDecodeError(err) {
 			return mlflowCR{}, fmt.Errorf("parse MLflow CR: %w", err)
 		}
@@ -173,13 +173,13 @@ func getMLflowCR(c *Client) (mlflowCR, error) {
 // mlflowNamespace is where the MLflow operator creates the server: the
 // applications namespace (mlflow-operator internal/config/config.go,
 // APPLICATIONS_NAMESPACE, which the platform sets to the DSCInitialization's).
-func mlflowNamespace(c *Client) (string, error) {
+func mlflowNamespace(c *kube.Client) (string, error) {
 	return rhoai.AppsNamespace(c)
 }
 
 // mlflowOwnedPVCs lists PVCs in the MLflow namespace ns whose owner is the
 // CR, which the garbage collector deletes together with it.
-func mlflowOwnedPVCs(c *Client, ns, uid string) ([]string, error) {
+func mlflowOwnedPVCs(c *kube.Client, ns, uid string) ([]string, error) {
 	var items []struct {
 		Metadata kube.ObjectMeta `json:"metadata"`
 	}
@@ -195,11 +195,11 @@ func mlflowOwnedPVCs(c *Client, ns, uid string) ([]string, error) {
 	return names, nil
 }
 
-func getMLflowStatus(c *Client) types.ResourceState {
+func Status(c *kube.Client) types.ResourceState {
 	ns, nsErr := mlflowNamespace(c)
 	state := types.ResourceState{Namespace: ns}
 
-	cr, err := getMLflowCR(c)
+	cr, err := ReadCR(c)
 	if kube.IsK8sNotFound(err) {
 		state.Message = "Not deployed"
 		return state
@@ -243,7 +243,7 @@ func getMLflowStatus(c *Client) types.ResourceState {
 		// The server's Route, pods and PVC are in the applications
 		// namespace; without it they are not read.
 		state.Message += fmt.Sprintf(" (the namespace it runs in is unknown: %v)", nsErr)
-		state.UIRoute = mlflowUIURL(cr.Status.URL, "")
+		state.UIRoute = UIURL(cr.Status.URL, "")
 		return state
 	}
 
@@ -257,7 +257,7 @@ func getMLflowStatus(c *Client) types.ResourceState {
 	go func() {
 		defer wg.Done()
 		// The Route only matters on releases whose CR reports no URL.
-		if mlflowUIURL(cr.Status.URL, "") == "" {
+		if UIURL(cr.Status.URL, "") == "" {
 			host = rhoai.RouteHost(c, ns, "mlflow")
 		}
 	}()
@@ -274,22 +274,22 @@ func getMLflowStatus(c *Client) types.ResourceState {
 		}
 	}()
 	wg.Wait()
-	state.UIRoute = mlflowUIURL(cr.Status.URL, host)
+	state.UIRoute = UIURL(cr.Status.URL, host)
 	envkit.ApplyPodIssue(&state, issue)
 	state.DataPVCs = pvcs
 	return state
 }
 
-// SetupMLflow creates the (cluster-scoped) MLflow CR; the operator runs the
+// Setup creates the (cluster-scoped) MLflow CR; the operator runs the
 // server in the applications namespace. It leaves
 // spec.image unset so the operator deploys its platform default
 // (RELATED_IMAGE_ODH_MLFLOW_IMAGE, the RHOAI build, falling back to
 // MLFLOW_IMAGE; mlflow-operator internal/config/config.go and
 // internal/controller/helm.go).
-func SetupMLflow(c *Client) (*types.OperationResponse, error) {
+func Setup(c *kube.Client) (*types.OperationResponse, error) {
 	logs := []string{}
 
-	existing := getMLflowStatus(c)
+	existing := Status(c)
 	if existing.Deployed {
 		return &types.OperationResponse{
 			Success: false, Message: "MLflow is already deployed.",
@@ -305,10 +305,10 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 
 	logs = append(logs, "Creating MLflow CR...")
 	mlflowCR := map[string]any{
-		"apiVersion": mlflowAPIGroup,
+		"apiVersion": APIGroup,
 		"kind":       "MLflow",
 		"metadata": map[string]any{
-			"name":   mlflowCRName,
+			"name":   CRName,
 			"labels": envkit.ToolLabels(),
 		},
 		"spec": map[string]any{
@@ -339,7 +339,7 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 	// Create, never apply: the CR is a singleton, and a forced apply would
 	// take over one that someone created a moment ago.
 	data, _ := json.Marshal(mlflowCR)
-	if _, _, err := c.Post(envkit.WithToolFieldManager(rhoai.ClusterPath(mlflowAPIGroup, "mlflows", "")), data); err != nil {
+	if _, _, err := c.Post(envkit.WithToolFieldManager(rhoai.ClusterPath(APIGroup, "mlflows", "")), data); err != nil {
 		msg := fmt.Sprintf("Failed to create MLflow CR: %v", err)
 		code := kube.ErrorCodeFromK8sErr(err)
 		switch {
@@ -368,17 +368,17 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 	}, nil
 }
 
-// TeardownMLflow deletes the MLflow CR if this tool created it. The operator
+// Teardown deletes the MLflow CR if this tool created it. The operator
 // owns mlflow-pvc through the CR, so the garbage collector deletes the
 // tracking database and artifacts with it.
-func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
+func Teardown(c *kube.Client) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
 		record.RecordAction(c, "teardown-mlflow", activity, false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
-	cr, err := getMLflowCR(c)
+	cr, err := ReadCR(c)
 	if kube.IsK8sNotFound(err) {
 		logs = append(logs, "MLflow CR already absent")
 		return &types.OperationResponse{Success: true, Message: "MLflow is not deployed; nothing to remove.", Logs: logs}, nil
@@ -402,7 +402,7 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 		pvcs, pvcErr = mlflowOwnedPVCs(c, ns, cr.Metadata.UID)
 	}
 	logs = append(logs, "Deleting MLflow CR...")
-	crPath := rhoai.ClusterPath(mlflowAPIGroup, "mlflows", mlflowCRName)
+	crPath := rhoai.ClusterPath(APIGroup, "mlflows", CRName)
 	if _, delErr := kube.DeleteWithUID(c, crPath, cr.Metadata.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
 		code := kube.ErrorCodeFromK8sErr(delErr)
 		if kube.IsK8sConflict(delErr) {
@@ -419,7 +419,7 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 	slog.Info("mlflow teardown", "user", kube.GetUser(c))
 	record.RecordAction(c, "teardown-mlflow", "MLflow CR deleted", true)
 
-	gone, waitErr := kube.WaitForDeletion(c, crPath, MLflowDeleteTimeout, MLflowDeletePoll)
+	gone, waitErr := kube.WaitForDeletion(c, crPath, DeleteTimeout, DeletePoll)
 	if waitErr != nil {
 		return &types.OperationResponse{
 			Success: false, Message: fmt.Sprintf("MLflow deletion was requested, but whether the CR is gone cannot be checked: %v.%s", waitErr, dataNote),
@@ -428,11 +428,11 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 	}
 	if !gone {
 		note := ""
-		if latest, err := getMLflowCR(c); err == nil {
+		if latest, err := ReadCR(c); err == nil {
 			note = mlflowFinalizerNote(latest)
 		}
 		return &types.OperationResponse{
-			Success: false, Message: fmt.Sprintf("MLflow deletion was requested but the CR still exists after %s.%s Re-run teardown to check again.%s", MLflowDeleteTimeout, note, dataNote),
+			Success: false, Message: fmt.Sprintf("MLflow deletion was requested but the CR still exists after %s.%s Re-run teardown to check again.%s", DeleteTimeout, note, dataNote),
 			Logs: logs, ErrorCode: "in_progress",
 		}, nil
 	}
@@ -442,7 +442,7 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 // patchMLflowCR merge-patches the CR, guarded by resourceVersion so a
 // concurrent change is reported instead of overwritten. spec nil leaves the
 // spec alone.
-func patchMLflowCR(c *Client, cr mlflowCR, annotations, spec map[string]any) error {
+func patchMLflowCR(c *kube.Client, cr mlflowCR, annotations, spec map[string]any) error {
 	meta := map[string]any{"resourceVersion": cr.Metadata.ResourceVersion}
 	if len(annotations) > 0 {
 		meta["annotations"] = annotations
@@ -451,7 +451,7 @@ func patchMLflowCR(c *Client, cr mlflowCR, annotations, spec map[string]any) err
 	if spec != nil {
 		body["spec"] = spec
 	}
-	return c.PatchJSON(rhoai.ClusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), body)
+	return c.PatchJSON(rhoai.ClusterPath(APIGroup, "mlflows", CRName), body)
 }
 
 // imageSpec is the spec patch that sets spec.image.image (nil removes it).
@@ -459,9 +459,9 @@ func imageSpec(image any) map[string]any {
 	return map[string]any{"image": map[string]any{"image": image}}
 }
 
-// DeployMLflowPR points the MLflow CR at the PR image, pinned by digest. The
+// DeployPR points the MLflow CR at the PR image, pinned by digest. The
 // image in place before the first PR deploy is saved for Revert.
-func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
+func DeployPR(c *kube.Client, prNumber int) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
 		record.RecordAction(c, "deploy-mlflow-pr", fmt.Sprintf("PR #%d (%s)", prNumber, activity), false)
@@ -475,7 +475,7 @@ func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 		}, nil
 	}
 
-	cr, err := getMLflowCR(c)
+	cr, err := ReadCR(c)
 	if kube.IsK8sNotFound(err) {
 		return fail("MLflow is not deployed. Set it up first.", "prerequisites", "not deployed")
 	}
@@ -506,14 +506,14 @@ func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 	annotations := map[string]any{}
 	// A saved image is replaced when no PR image runs now: someone set the
 	// current image after the last PR deploy, and Revert restores that one.
-	if _, saved := cr.Metadata.Annotations[mlflowOriginalImageAnnotation]; !saved || cr.staleOriginal() {
+	if _, saved := cr.Metadata.Annotations[OriginalImageAnnotation]; !saved || cr.staleOriginal() {
 		original := cr.image()
 		if prNumberFromImage(original) > 0 {
 			// A PR image set by an older version: the original is unknown,
 			// so Revert returns to the operator default.
 			original = ""
 		}
-		annotations[mlflowOriginalImageAnnotation] = original
+		annotations[OriginalImageAnnotation] = original
 	}
 	if err := patchMLflowCR(c, cr, annotations, imageSpec(image)); err != nil {
 		code := kube.ErrorCodeFromK8sErr(err)
@@ -535,16 +535,16 @@ func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 	}, nil
 }
 
-// RevertMLflowImage restores the image saved by the first PR deploy, or, when
+// RevertImage restores the image saved by the first PR deploy, or, when
 // none was saved, removes spec.image.image so the operator default applies.
-func RevertMLflowImage(c *Client) (*types.OperationResponse, error) {
+func RevertImage(c *kube.Client) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
 		record.RecordAction(c, "revert-mlflow", activity, false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
-	cr, err := getMLflowCR(c)
+	cr, err := ReadCR(c)
 	if kube.IsK8sNotFound(err) {
 		return fail("MLflow is not deployed.", "prerequisites", "not deployed")
 	}
@@ -557,7 +557,7 @@ func RevertMLflowImage(c *Client) (*types.OperationResponse, error) {
 		if cr.staleOriginal() {
 			// The image was set by hand after the PR deploy: keep it, and drop
 			// the saved image so nothing restores it later.
-			if err := patchMLflowCR(c, cr, map[string]any{mlflowOriginalImageAnnotation: nil}, nil); err != nil {
+			if err := patchMLflowCR(c, cr, map[string]any{OriginalImageAnnotation: nil}, nil); err != nil {
 				return fail(fmt.Sprintf("No PR image is active; the image saved before the PR deploy could not be dropped: %v", err), kube.ErrorCodeFromK8sErr(err), "no override, stale annotation kept")
 			}
 			current := cr.image()
@@ -575,7 +575,7 @@ func RevertMLflowImage(c *Client) (*types.OperationResponse, error) {
 		image = revertImage
 		target = revertImage
 	}
-	if err := patchMLflowCR(c, cr, map[string]any{mlflowOriginalImageAnnotation: nil}, imageSpec(image)); err != nil {
+	if err := patchMLflowCR(c, cr, map[string]any{OriginalImageAnnotation: nil}, imageSpec(image)); err != nil {
 		code := kube.ErrorCodeFromK8sErr(err)
 		msg := fmt.Sprintf("Failed to revert MLflow image: %v", err)
 		if kube.IsK8sConflict(err) {

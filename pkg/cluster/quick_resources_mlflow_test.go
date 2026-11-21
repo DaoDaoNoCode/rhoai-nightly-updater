@@ -9,9 +9,10 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 )
 
-const mlflowPath = "/apis/" + mlflowAPIGroup + "/mlflows/" + mlflowCRName
+const mlflowPath = "/apis/" + mlflow.APIGroup + "/mlflows/" + mlflow.CRName
 
 func putMLflow(f *resourceFake, labels, manager, op, extraMeta, spec, status string) {
 	f.putJSON(mlflowPath, `{"metadata":{"labels":`+labels+`,"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(manager, op)+extraMeta+`},
@@ -32,9 +33,7 @@ func mlflowAnnotations(f *resourceFake) map[string]any {
 
 func stubPRResolver(t *testing.T, fn func(pr int) (string, bool, error)) {
 	t.Helper()
-	orig := resolveMLflowPRImage
-	resolveMLflowPRImage = func(_ context.Context, pr int) (string, bool, error) { return fn(pr) }
-	t.Cleanup(func() { resolveMLflowPRImage = orig })
+	t.Cleanup(mlflow.SetResolvePRImageForTest(func(_ context.Context, pr int) (string, bool, error) { return fn(pr) }))
 }
 
 const notAvailable = `{"conditions":[{"type":"Available","status":"False","reason":"DeploymentNotReady","message":"MLflow deployment is not ready"}]}`
@@ -44,7 +43,7 @@ func TestGetMLflowStatus_BrowserCreatedCRIsNotManaged(t *testing.T) {
 	putMLflow(f, `{}`, "Mozilla", "Update", "", `{"image":{"image":"quay.io/opendatahub/mlflow:odh-stable"}}`,
 		`{"conditions":[{"type":"Available","status":"True"}]}`)
 	f.putJSON("/api/v1/namespaces/redhat-ods-applications/persistentvolumeclaims/mlflow-pvc", `{"metadata":{}}`)
-	st := getMLflowStatus(c)
+	st := mlflow.Status(c)
 	if !st.Deployed || !st.Ready || st.ManagedByTool || st.TeardownBlockedReason == "" || len(st.DataPVCs) != 0 || st.PROverride {
 		t.Errorf("state = %+v", st)
 	}
@@ -52,11 +51,11 @@ func TestGetMLflowStatus_BrowserCreatedCRIsNotManaged(t *testing.T) {
 
 func TestGetMLflowStatus_PROverrideIsReportedWhileBroken(t *testing.T) {
 	f, c := newResourceFake(t)
-	putMLflow(f, toolLabelJSON, envkit.ToolFieldManager, "Update", `,"annotations":{"`+mlflowOriginalImageAnnotation+`":""}`,
+	putMLflow(f, toolLabelJSON, envkit.ToolFieldManager, "Update", `,"annotations":{"`+mlflow.OriginalImageAnnotation+`":""}`,
 		`{"image":{"image":"quay.io/opendatahub/mlflow:odh-pr-42@sha256:`+strings.Repeat("a", 64)+`"}}`, notAvailable)
 	f.putJSON("/api/v1/namespaces/redhat-ods-applications/pods/mlflow-1", `{"metadata":{"labels":{"app":"mlflow"}},"spec":{"containers":[{"image":"x"}]},
 		"status":{"containerStatuses":[{"state":{"waiting":{"reason":"CrashLoopBackOff","message":"back-off restarting"}},"lastState":{"terminated":{"reason":"Error","exitCode":1}}}]}}`)
-	st := getMLflowStatus(c)
+	st := mlflow.Status(c)
 	if st.Ready || !st.ManagedByTool || !st.PROverride || st.PRNumber != 42 || st.RevertImage != "" {
 		t.Errorf("state = %+v", st)
 	}
@@ -70,7 +69,7 @@ func TestGetMLflowStatus_LegacyApplyIsManagedAndOwnedPVCListed(t *testing.T) {
 	putMLflow(f, `{}`, envkit.ToolFieldManager, "Apply", `,"uid":"cr-uid"`, `{}`, `{}`)
 	f.putJSON("/api/v1/namespaces/redhat-ods-applications/persistentvolumeclaims/mlflow-pvc", `{"metadata":{"ownerReferences":[{"kind":"MLflow","name":"mlflow","uid":"cr-uid"}]}}`)
 	f.putJSON("/api/v1/namespaces/redhat-ods-applications/persistentvolumeclaims/other", `{"metadata":{}}`)
-	st := getMLflowStatus(c)
+	st := mlflow.Status(c)
 	if !st.ManagedByTool || len(st.DataPVCs) != 1 || st.DataPVCs[0] != "mlflow-pvc" || st.Message != "Provisioning" {
 		t.Errorf("state = %+v", st)
 	}
@@ -102,7 +101,7 @@ func TestSetupMLflow(t *testing.T) {
 	t.Run("CRD missing", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		putManagedDSC(f)
-		f.fail["POST /apis/"+mlflowAPIGroup+"/mlflows"] = 404
+		f.fail["POST /apis/"+mlflow.APIGroup+"/mlflows"] = 404
 		if resp, _ := SetupMLflow(c); resp.Success || resp.ErrorCode != "prerequisites" {
 			t.Fatalf("got %+v", resp)
 		}
@@ -110,7 +109,7 @@ func TestSetupMLflow(t *testing.T) {
 	t.Run("created concurrently", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		putManagedDSC(f)
-		f.fail["POST /apis/"+mlflowAPIGroup+"/mlflows"] = 409
+		f.fail["POST /apis/"+mlflow.APIGroup+"/mlflows"] = 409
 		if resp, _ := SetupMLflow(c); resp.Success || resp.ErrorCode != "conflict" {
 			t.Fatalf("got %+v", resp)
 		}
@@ -119,9 +118,7 @@ func TestSetupMLflow(t *testing.T) {
 
 func TestTeardownMLflow(t *testing.T) {
 	fast := func(t *testing.T) {
-		oldT, oldP := MLflowDeleteTimeout, MLflowDeletePoll
-		MLflowDeleteTimeout, MLflowDeletePoll = 50*time.Millisecond, 10*time.Millisecond
-		t.Cleanup(func() { MLflowDeleteTimeout, MLflowDeletePoll = oldT, oldP })
+		t.Cleanup(mlflow.SetDeleteTimingForTest(50*time.Millisecond, 10*time.Millisecond))
 	}
 	t.Run("browser-created CR is never deleted", func(t *testing.T) {
 		fast(t)
@@ -189,7 +186,7 @@ func TestDeployAndRevertMLflowPR(t *testing.T) {
 		if img, _ := mlflowImageOf(f); img != digestA {
 			t.Fatalf("image = %q, want the digest-pinned PR build", img)
 		}
-		if mlflowAnnotations(f)[mlflowOriginalImageAnnotation] != "registry.example.com/custom-mlflow:1" {
+		if mlflowAnnotations(f)[mlflow.OriginalImageAnnotation] != "registry.example.com/custom-mlflow:1" {
 			t.Fatalf("original not saved: %v", mlflowAnnotations(f))
 		}
 		// The PR tag moved: a redeploy must change the image so it rolls out.
@@ -200,11 +197,11 @@ func TestDeployAndRevertMLflowPR(t *testing.T) {
 		if img, _ := mlflowImageOf(f); img != digestB {
 			t.Fatalf("redeploy did not pick up the new build: %q", img)
 		}
-		if mlflowAnnotations(f)[mlflowOriginalImageAnnotation] != "registry.example.com/custom-mlflow:1" {
+		if mlflowAnnotations(f)[mlflow.OriginalImageAnnotation] != "registry.example.com/custom-mlflow:1" {
 			t.Fatal("the saved original must survive redeploys")
 		}
 		// Status reports the override even though MLflow is not ready.
-		if st := getMLflowStatus(c); !st.PROverride || st.RevertImage != "registry.example.com/custom-mlflow:1" || st.PRNumber != 7 {
+		if st := mlflow.Status(c); !st.PROverride || st.RevertImage != "registry.example.com/custom-mlflow:1" || st.PRNumber != 7 {
 			t.Errorf("status = %+v", st)
 		}
 		if resp, _ := RevertMLflowImage(c); !resp.Success {
@@ -213,7 +210,7 @@ func TestDeployAndRevertMLflowPR(t *testing.T) {
 		if img, _ := mlflowImageOf(f); img != "registry.example.com/custom-mlflow:1" {
 			t.Errorf("revert restored %q", img)
 		}
-		if _, ok := mlflowAnnotations(f)[mlflowOriginalImageAnnotation]; ok {
+		if _, ok := mlflowAnnotations(f)[mlflow.OriginalImageAnnotation]; ok {
 			t.Error("revert must clear the saved original")
 		}
 	})
@@ -236,7 +233,7 @@ func TestDeployAndRevertMLflowPR(t *testing.T) {
 	t.Run("PR image from an older version reverts to the operator default", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		putMLflow(f, `{}`, envkit.ToolFieldManager, "Apply", "", `{"image":{"image":"quay.io/opendatahub/mlflow:odh-pr-3"}}`, `{}`)
-		if st := getMLflowStatus(c); !st.PROverride || st.PRNumber != 3 {
+		if st := mlflow.Status(c); !st.PROverride || st.PRNumber != 3 {
 			t.Fatalf("legacy PR image not detected: %+v", st)
 		}
 		if resp, _ := RevertMLflowImage(c); !resp.Success {
@@ -250,7 +247,7 @@ func TestDeployAndRevertMLflowPR(t *testing.T) {
 	t.Run("same build is a no-op", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		current = digestA
-		putMLflow(f, toolLabelJSON, envkit.ToolFieldManager, "Update", `,"annotations":{"`+mlflowOriginalImageAnnotation+`":""}`, `{"image":{"image":"`+digestA+`"}}`, `{}`)
+		putMLflow(f, toolLabelJSON, envkit.ToolFieldManager, "Update", `,"annotations":{"`+mlflow.OriginalImageAnnotation+`":""}`, `{"image":{"image":"`+digestA+`"}}`, `{}`)
 		if resp, _ := DeployMLflowPR(c, 7); !resp.Success || hasMutation(f, "PATCH") {
 			t.Fatalf("got %+v %v", resp, f.mutations())
 		}
@@ -294,9 +291,9 @@ func TestDeployAndRevertMLflowPR(t *testing.T) {
 	// their image instead.
 	t.Run("image changed by hand after a PR deploy", func(t *testing.T) {
 		f, c := newResourceFake(t)
-		saved := `,"annotations":{"` + mlflowOriginalImageAnnotation + `":"registry.example.com/old:1"}`
+		saved := `,"annotations":{"` + mlflow.OriginalImageAnnotation + `":"registry.example.com/old:1"}`
 		putMLflow(f, toolLabelJSON, envkit.ToolFieldManager, "Update", saved, `{"image":{"image":"registry.example.com/manual:2"}}`, `{}`)
-		if st := getMLflowStatus(c); st.PROverride || st.RevertImage != "" {
+		if st := mlflow.Status(c); st.PROverride || st.RevertImage != "" {
 			t.Errorf("status offers Revert for a hand-set image: %+v", st)
 		}
 		resp, _ := RevertMLflowImage(c)
@@ -306,7 +303,7 @@ func TestDeployAndRevertMLflowPR(t *testing.T) {
 		if img, _ := mlflowImageOf(f); img != "registry.example.com/manual:2" {
 			t.Errorf("revert changed the hand-set image to %q", img)
 		}
-		if _, ok := mlflowAnnotations(f)[mlflowOriginalImageAnnotation]; ok {
+		if _, ok := mlflowAnnotations(f)[mlflow.OriginalImageAnnotation]; ok {
 			t.Error("the stale saved image must be dropped")
 		}
 
@@ -315,7 +312,7 @@ func TestDeployAndRevertMLflowPR(t *testing.T) {
 		if resp, _ := DeployMLflowPR(c, 7); !resp.Success {
 			t.Fatalf("deploy: %+v", resp)
 		}
-		if got := mlflowAnnotations(f)[mlflowOriginalImageAnnotation]; got != "registry.example.com/manual:2" {
+		if got := mlflowAnnotations(f)[mlflow.OriginalImageAnnotation]; got != "registry.example.com/manual:2" {
 			t.Errorf("deploy kept the stale original %v; Revert would skip the hand-set image", got)
 		}
 	})

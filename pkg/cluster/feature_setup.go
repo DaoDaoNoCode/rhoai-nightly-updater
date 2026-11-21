@@ -16,6 +16,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
@@ -958,7 +959,7 @@ func componentUsers(c *Client, key string) ([]string, error) {
 			live(d.Meta, "pipeline server")
 		}
 	case "mlflowoperator":
-		cr, err := getMLflowCR(c)
+		cr, err := mlflow.ReadCR(c)
 		if kube.IsK8sNotFound(err) {
 			return nil, nil
 		}

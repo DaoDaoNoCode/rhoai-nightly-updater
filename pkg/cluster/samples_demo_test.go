@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 )
 
 func demoTagWrites(f *mlflowFake, from int) []string {
@@ -53,8 +54,8 @@ func TestGenAIDemo_AddAfterMLflowRemovalIsComplete(t *testing.T) {
 			t.Fatal(msg)
 		}
 		env.mlflow.mlflowDeleteDemo()
-		target, _, _ := mlflowSampleTarget(env.user, fakeProject)
-		if _, _, err := target.generateDemo(func(string) {}); err != nil {
+		target, _, _ := mlflow.SampleTarget(env.user, fakeProject)
+		if _, _, err := target.GenerateDemo(func(string) {}); err != nil {
 			t.Fatal(err)
 		}
 		if !env.mlflow.demo.broken["evaluation"] || !env.mlflow.demo.broken["issues"] {
@@ -80,7 +81,7 @@ func TestGenAIDemo_AddAfterMLflowRemovalIsComplete(t *testing.T) {
 			t.Errorf("writes: %v", writes)
 		}
 		allDemoFeaturesHealthy(t, env.mlflow)
-		if e := env.mlflow.expByName(demoExperiment); e.tags[demoVersionTagPrefix+"evaluation"] != "2" || e.tags[demoVersionTagPrefix+"issues"] != "4" {
+		if e := env.mlflow.expByName(mlflow.DemoExperiment); e.tags[mlflow.DemoVersionTagPrefix+"evaluation"] != "2" || e.tags[mlflow.DemoVersionTagPrefix+"issues"] != "4" {
 			t.Errorf("tags %v", e.tags)
 		}
 	})
@@ -131,12 +132,12 @@ func TestGenAIDemo_ForeignExperimentIsLeftAlone(t *testing.T) {
 		tags  map[string]string
 	}{
 		{"someone's experiment", "active", map[string]string{}},
-		{"demo made in the MLflow UI", "active", map[string]string{demoVersionTagPrefix + "traces": "1"}},
-		{"deleted demo made in the MLflow UI", "deleted", map[string]string{demoVersionTagPrefix + "traces": "1"}},
+		{"demo made in the MLflow UI", "active", map[string]string{mlflow.DemoVersionTagPrefix + "traces": "1"}},
+		{"deleted demo made in the MLflow UI", "deleted", map[string]string{mlflow.DemoVersionTagPrefix + "traces": "1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := newSamplesEnv(t)
-			env.mlflow.experiments["9"] = &fakeExperiment{id: "9", name: demoExperiment, stage: tc.stage, tags: tc.tags}
+			env.mlflow.experiments["9"] = &fakeExperiment{id: "9", name: mlflow.DemoExperiment, stage: tc.stage, tags: tc.tags}
 			for _, action := range []string{"add", "regenerate"} {
 				n := len(env.mlflow.requests)
 				ok, msg, steps := env.run(t, action, SampleGenAIDemo)
@@ -158,14 +159,14 @@ func TestGenAIDemo_AddMarksTheExperimentFirst(t *testing.T) {
 	if ok, msg, _ := env.run(t, "add", SampleGenAIDemo); !ok {
 		t.Fatal(msg)
 	}
-	if e := env.mlflow.expByName(demoExperiment); e == nil || e.tags[sampleMarkerKey] != SampleGenAIDemo {
+	if e := env.mlflow.expByName(mlflow.DemoExperiment); e == nil || e.tags[mlflow.SampleMarkerKey] != SampleGenAIDemo {
 		t.Fatalf("demo experiment not marked: %+v", e)
 	}
 
 	env = newSamplesEnv(t)
 	env.mlflow.onRequest = func(method, path string) {
-		if method == "POST" && strings.HasSuffix(path, "/experiments/create") && env.mlflow.expByName(demoExperiment) == nil {
-			env.mlflow.experiments["9"] = &fakeExperiment{id: "9", name: demoExperiment, stage: "active", tags: map[string]string{}}
+		if method == "POST" && strings.HasSuffix(path, "/experiments/create") && env.mlflow.expByName(mlflow.DemoExperiment) == nil {
+			env.mlflow.experiments["9"] = &fakeExperiment{id: "9", name: mlflow.DemoExperiment, stage: "active", tags: map[string]string{}}
 		}
 	}
 	if ok, msg, _ := env.run(t, "add", SampleGenAIDemo); ok || !strings.Contains(msg, "not_managed") || env.mlflow.generates != 0 {
@@ -180,7 +181,7 @@ func TestGenAIDemo_StaleFeatureVersionIsDropped(t *testing.T) {
 	if ok, msg, _ := env.run(t, "add", SampleGenAIDemo); !ok {
 		t.Fatal(msg)
 	}
-	env.mlflow.expByName(demoExperiment).tags[demoVersionTagPrefix+"retired_feature"] = "0"
+	env.mlflow.expByName(mlflow.DemoExperiment).tags[mlflow.DemoVersionTagPrefix+"retired_feature"] = "0"
 	if s := env.status(t)[SampleGenAIDemo]; s.State != "partial" {
 		t.Fatalf("status %+v", s)
 	}
@@ -191,10 +192,10 @@ func TestGenAIDemo_StaleFeatureVersionIsDropped(t *testing.T) {
 		if s := env.status(t)[SampleGenAIDemo]; s.State != "present" {
 			t.Errorf("after %s: %+v", action, s)
 		}
-		if _, ok := env.mlflow.expByName(demoExperiment).tags[demoVersionTagPrefix+"retired_feature"]; ok {
+		if _, ok := env.mlflow.expByName(mlflow.DemoExperiment).tags[mlflow.DemoVersionTagPrefix+"retired_feature"]; ok {
 			t.Errorf("after %s: the stale version tag is still there", action)
 		}
-		env.mlflow.expByName(demoExperiment).tags[demoVersionTagPrefix+"retired_feature"] = "1"
+		env.mlflow.expByName(mlflow.DemoExperiment).tags[mlflow.DemoVersionTagPrefix+"retired_feature"] = "1"
 	}
 }
 

@@ -1,4 +1,4 @@
-package cluster
+package mlflow
 
 import (
 	"fmt"
@@ -22,7 +22,7 @@ var trainingRunSpecs = []struct {
 }
 
 const (
-	trainingEpochs    = 20
+	TrainingEpochs    = 20
 	trainingStartLoss = 2.3
 	// trainingV1LR and trainingChampionLR are the runs registered as
 	// versions 1 and 2; version 2 (the lowest loss) gets the alias.
@@ -45,7 +45,7 @@ type trainingRun struct {
 // a named get of each requested experiment id (rules_base.py:653-656;
 // collection_filters.py 123-139, 161-174), so the named get on the sample
 // experiment suffices.
-func (t *mlflowTarget) trainingRuns(experimentID string) (map[string]trainingRun, error) {
+func (t *Target) trainingRuns(experimentID string) (map[string]trainingRun, error) {
 	var out struct {
 		Runs []struct {
 			Info struct {
@@ -60,7 +60,7 @@ func (t *mlflowTarget) trainingRuns(experimentID string) (map[string]trainingRun
 	}
 	req := map[string]any{
 		"experiment_ids": []string{experimentID},
-		"filter":         fmt.Sprintf("tags.`%s` = '%s'", sampleMarkerKey, SampleTraining),
+		"filter":         fmt.Sprintf("tags.`%s` = '%s'", SampleMarkerKey, SampleTraining),
 		"run_view_type":  "ACTIVE_ONLY",
 		"max_results":    100,
 	}
@@ -94,7 +94,7 @@ func (t *mlflowTarget) trainingRuns(experimentID string) (map[string]trainingRun
 // with the params and 2x20 step metrics (well under MLflow's 1000 metrics
 // per batch), runs/update FINISHED. All three are experiments update on the
 // sample experiment (rules_base.py:403-431).
-func (t *mlflowTarget) createTrainingRun(experimentID, lr string, decay, floor float64) (string, error) {
+func (t *Target) createTrainingRun(experimentID, lr string, decay, floor float64) (string, error) {
 	var created struct {
 		Run struct {
 			Info struct {
@@ -106,7 +106,7 @@ func (t *mlflowTarget) createTrainingRun(experimentID, lr string, decay, floor f
 		"experiment_id": experimentID,
 		"run_name":      "lr-" + lr,
 		"start_time":    time.Now().UnixMilli(),
-		"tags":          []mlflowTag{{Key: sampleMarkerKey, Value: SampleTraining}},
+		"tags":          []mlflowTag{{Key: SampleMarkerKey, Value: SampleTraining}},
 	}, &created)
 	if err != nil {
 		return "", err
@@ -118,7 +118,7 @@ func (t *mlflowTarget) createTrainingRun(experimentID, lr string, decay, floor f
 // finishTrainingRun logs the run's params and metrics unless they are
 // logged already, then marks it FINISHED. It completes a run an earlier Add
 // left RUNNING, so a retry adds no second run for the same rate.
-func (t *mlflowTarget) finishTrainingRun(run trainingRun, lr string, decay, floor float64) error {
+func (t *Target) finishTrainingRun(run trainingRun, lr string, decay, floor float64) error {
 	start := time.Now().UnixMilli()
 	runID := run.id
 	if !run.logged {
@@ -127,13 +127,13 @@ func (t *mlflowTarget) finishTrainingRun(run trainingRun, lr string, decay, floo
 		}
 	}
 	return t.api.sendJSON("POST", "/api/2.0/mlflow/runs/update", nil, map[string]any{
-		"run_id": runID, "status": "FINISHED", "end_time": start + trainingEpochs*1000,
+		"run_id": runID, "status": "FINISHED", "end_time": start + TrainingEpochs*1000,
 	}, nil)
 }
 
-func (t *mlflowTarget) logTrainingRun(runID, lr string, decay, floor float64, start int64) error {
+func (t *Target) logTrainingRun(runID, lr string, decay, floor float64, start int64) error {
 	var metrics []map[string]any
-	for step := range trainingEpochs {
+	for step := range TrainingEpochs {
 		loss := floor + (trainingStartLoss-floor)*math.Exp(-decay*float64(step))
 		accuracy := math.Max(0, 1-loss/trainingStartLoss)
 		ts := start + int64(step)*1000
@@ -143,7 +143,7 @@ func (t *mlflowTarget) logTrainingRun(runID, lr string, decay, floor float64, st
 	}
 	return t.api.sendJSON("POST", "/api/2.0/mlflow/runs/log-batch", nil, map[string]any{
 		"run_id":  runID,
-		"params":  []mlflowTag{{Key: "learning_rate", Value: lr}, {Key: "epochs", Value: strconv.Itoa(trainingEpochs)}},
+		"params":  []mlflowTag{{Key: "learning_rate", Value: lr}, {Key: "epochs", Value: strconv.Itoa(TrainingEpochs)}},
 		"metrics": metrics,
 	}, nil)
 }
@@ -154,7 +154,7 @@ func (t *mlflowTarget) logTrainingRun(runID, lr string, decay, floor float64, st
 // RESOURCE_DOES_NOT_EXIST. Versions are numbered from 1 per model; a gap
 // left by a deleted version ends the scan early, which only costs a new
 // version.
-func (t *mlflowTarget) modelVersionRuns() (map[string]string, error) {
+func (t *Target) modelVersionRuns() (map[string]string, error) {
 	out := map[string]string{}
 	for v := 1; v <= maxSampleModelVersions; v++ {
 		var mv struct {
@@ -163,8 +163,8 @@ func (t *mlflowTarget) modelVersionRuns() (map[string]string, error) {
 				RunID   string `json:"run_id"`
 			} `json:"model_version"`
 		}
-		err := t.api.sendJSON("GET", "/api/2.0/mlflow/model-versions/get", url.Values{"name": {trainingModel}, "version": {strconv.Itoa(v)}}, nil, &mv)
-		if isNotFound(err) {
+		err := t.api.sendJSON("GET", "/api/2.0/mlflow/model-versions/get", url.Values{"name": {TrainingModel}, "version": {strconv.Itoa(v)}}, nil, &mv)
+		if IsNotFound(err) {
 			break
 		}
 		if err != nil {
@@ -183,33 +183,33 @@ const maxSampleModelVersions = 20
 // createModelVersion registers runID's (absent) model as a new version. The
 // server only checks that the runs:/ URI names run_id (handlers.py:
 // 3214-3221), so no artifact is needed.
-func (t *mlflowTarget) createModelVersion(runID, lr string) (string, error) {
+func (t *Target) createModelVersion(runID, lr string) (string, error) {
 	var out struct {
 		ModelVersion struct {
 			Version string `json:"version"`
 		} `json:"model_version"`
 	}
 	err := t.api.sendJSON("POST", "/api/2.0/mlflow/model-versions/create", nil, map[string]any{
-		"name": trainingModel, "source": "runs:/" + runID + "/model", "run_id": runID,
+		"name": TrainingModel, "source": "runs:/" + runID + "/model", "run_id": runID,
 		"description": "Sample version from run lr-" + lr + " (metadata only: no model files).",
 	}, &out)
 	return out.ModelVersion.Version, err
 }
 
-func (t *mlflowTarget) trainingObjects() (*mlflowExperiment, *mlflowRegisteredModel, error) {
-	exp, err := t.experimentByName(trainingExperiment)
+func (t *Target) trainingObjects() (*mlflowExperiment, *mlflowRegisteredModel, error) {
+	exp, err := t.experimentByName(TrainingExperiment)
 	if err != nil {
 		return nil, nil, err
 	}
-	model, err := t.registeredModel(trainingModel)
+	model, err := t.registeredModel(TrainingModel)
 	if err != nil {
 		return nil, nil, err
 	}
 	if exp != nil && !experimentMarked(exp, SampleTraining) {
-		return nil, nil, &sampleRefusal{foreignMessage("Experiment '" + trainingExperiment + "'")}
+		return nil, nil, &sampleRefusal{foreignMessage("Experiment '" + TrainingExperiment + "'")}
 	}
 	if model != nil && !model.marked(SampleTraining) {
-		return nil, nil, &sampleRefusal{foreignMessage("Registered model '" + trainingModel + "'")}
+		return nil, nil, &sampleRefusal{foreignMessage("Registered model '" + TrainingModel + "'")}
 	}
 	return exp, model, nil
 }
@@ -217,7 +217,7 @@ func (t *mlflowTarget) trainingObjects() (*mlflowExperiment, *mlflowRegisteredMo
 // addTraining creates what is missing of the training sample. A soft-deleted
 // sample experiment is restored (its name cannot be reused until mlflow gc;
 // sqlalchemy_store.py:668-672), which also brings its runs back.
-func addTraining(t *mlflowTarget, log func(string)) (string, error) {
+func addTraining(t *Target, log func(string)) (string, error) {
 	exp, model, err := t.trainingObjects()
 	if err != nil {
 		return "", err
@@ -229,19 +229,19 @@ func addTraining(t *mlflowTarget, log func(string)) (string, error) {
 			ExperimentID string `json:"experiment_id"`
 		}
 		if err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/create", nil, map[string]any{
-			"name": trainingExperiment,
-			"tags": []mlflowTag{{Key: sampleMarkerKey, Value: SampleTraining}, {Key: "mlflow.note.content", Value: "Sample training runs created by rhoai-nightly-updater. Metadata only: no artifacts."}},
+			"name": TrainingExperiment,
+			"tags": []mlflowTag{{Key: SampleMarkerKey, Value: SampleTraining}, {Key: "mlflow.note.content", Value: "Sample training runs created by rhoai-nightly-updater. Metadata only: no artifacts."}},
 		}, &created); err != nil {
 			return "", err
 		}
 		expID = created.ExperimentID
-		log("Created experiment '" + trainingExperiment + "'")
+		log("Created experiment '" + TrainingExperiment + "'")
 	case !exp.active():
 		if err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/restore", nil, map[string]any{"experiment_id": exp.ExperimentID}, nil); err != nil {
 			return "", err
 		}
 		expID = exp.ExperimentID
-		log("Restored experiment '" + trainingExperiment + "'")
+		log("Restored experiment '" + TrainingExperiment + "'")
 	default:
 		expID = exp.ExperimentID
 	}
@@ -272,31 +272,31 @@ func addTraining(t *mlflowTarget, log func(string)) (string, error) {
 			return "", fmt.Errorf("run lr-%s: %w", spec.lr, err)
 		}
 		runIDs[spec.lr] = id
-		log("Logged run lr-" + spec.lr + " (" + strconv.Itoa(trainingEpochs) + " steps of loss and accuracy)")
+		log("Logged run lr-" + spec.lr + " (" + strconv.Itoa(TrainingEpochs) + " steps of loss and accuracy)")
 	}
 
 	if model == nil {
 		err := t.api.sendJSON("POST", "/api/2.0/mlflow/registered-models/create", nil, map[string]any{
-			"name":        trainingModel,
+			"name":        TrainingModel,
 			"description": "Sample registered model created by rhoai-nightly-updater (metadata only).",
-			"tags":        []mlflowTag{{Key: sampleMarkerKey, Value: SampleTraining}},
+			"tags":        []mlflowTag{{Key: SampleMarkerKey, Value: SampleTraining}},
 		}, nil)
 		switch {
-		case isAlreadyExists(err):
+		case IsAlreadyExists(err):
 			// Created by someone in the meantime: use it only if it is the tool's.
-			if model, err = t.registeredModel(trainingModel); err != nil {
+			if model, err = t.registeredModel(TrainingModel); err != nil {
 				return "", err
 			}
 			if model == nil || !model.marked(SampleTraining) {
-				return "", &sampleRefusal{foreignMessage("Registered model '" + trainingModel + "'")}
+				return "", &sampleRefusal{foreignMessage("Registered model '" + TrainingModel + "'")}
 			}
 		case err != nil:
 			return "", err
 		default:
-			log("Created registered model '" + trainingModel + "'")
+			log("Created registered model '" + TrainingModel + "'")
 		}
 	}
-	if model == nil || !model.hasAlias(trainingAlias) {
+	if model == nil || !model.hasAlias(TrainingAlias) {
 		// A model that existed before this Add may hold the versions an
 		// earlier Add registered before it stopped: reuse those whose run
 		// matches, so a retry adds no extra versions.
@@ -320,20 +320,20 @@ func addTraining(t *mlflowTarget, log func(string)) (string, error) {
 			return "", err
 		}
 		if err := t.api.sendJSON("POST", "/api/2.0/mlflow/registered-models/alias", nil, map[string]any{
-			"name": trainingModel, "alias": trainingAlias, "version": v,
+			"name": TrainingModel, "alias": TrainingAlias, "version": v,
 		}, nil); err != nil {
 			return "", err
 		}
-		log("Registered two versions; alias '" + trainingAlias + "' on version " + v)
+		log("Registered two versions; alias '" + TrainingAlias + "' on version " + v)
 	}
-	return "added (3 runs, a registered model with 2 versions and the alias " + trainingAlias + ")", nil
+	return "added (3 runs, a registered model with 2 versions and the alias " + TrainingAlias + ")", nil
 }
 
 // removeTraining deletes the registered model (a hard delete with its
 // versions: model_registry sqlalchemy_store.py:504-517) and soft-deletes
 // the experiment (its runs with it; Add restores both). Both are checked
 // for the marker before either is deleted.
-func removeTraining(t *mlflowTarget, log func(string)) (string, error) {
+func removeTraining(t *Target, log func(string)) (string, error) {
 	exp, model, err := t.trainingObjects()
 	if err != nil {
 		return "", err
@@ -342,16 +342,16 @@ func removeTraining(t *mlflowTarget, log func(string)) (string, error) {
 		return "nothing to remove", nil
 	}
 	if model != nil {
-		if err := t.api.sendJSON("DELETE", "/api/2.0/mlflow/registered-models/delete", nil, map[string]any{"name": trainingModel}, nil); err != nil && !isNotFound(err) {
+		if err := t.api.sendJSON("DELETE", "/api/2.0/mlflow/registered-models/delete", nil, map[string]any{"name": TrainingModel}, nil); err != nil && !IsNotFound(err) {
 			return "", err
 		}
-		log("Deleted registered model '" + trainingModel + "'")
+		log("Deleted registered model '" + TrainingModel + "'")
 	}
 	if exp != nil && exp.active() {
 		if err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/delete", nil, map[string]any{"experiment_id": exp.ExperimentID}, nil); err != nil {
 			return "", err
 		}
-		log("Deleted experiment '" + trainingExperiment + "' (MLflow keeps it in its deleted view until garbage collection)")
+		log("Deleted experiment '" + TrainingExperiment + "' (MLflow keeps it in its deleted view until garbage collection)")
 	}
 	return "removed", nil
 }

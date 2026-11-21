@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -39,7 +40,7 @@ func TestMLflowQuay503DoesNotDeploy(t *testing.T) {
 	})})()
 	patched := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PATCH" && strings.HasSuffix(r.URL.Path, "/mlflows/"+mlflowCRName) {
+		if r.Method == "PATCH" && strings.HasSuffix(r.URL.Path, "/mlflows/"+mlflow.CRName) {
 			patched = true
 		}
 		io.WriteString(w, `{}`)

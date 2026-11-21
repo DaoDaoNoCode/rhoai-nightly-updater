@@ -39,15 +39,15 @@ var saReachPruned = map[string]string{
 	// The samples table (samples_mlflow.go mlflowSamples) names each
 	// sample's add, remove and regenerate next to its status; the status
 	// (GetMLflowSamplesStatus) calls only the status functions.
-	clusterPkg + ".addGenAIDemo":        "samples table: a change, run by RunMLflowSamples only",
-	clusterPkg + ".regenerateGenAIDemo": "samples table: a change, run by RunMLflowSamples only",
-	clusterPkg + ".addTraining":         "samples table: a change, run by RunMLflowSamples only",
-	clusterPkg + ".removeTraining":      "samples table: a change, run by RunMLflowSamples only",
-	clusterPkg + ".addMCP":              "samples table: a change, run by RunMLflowSamples only",
-	clusterPkg + ".removeMCP":           "samples table: a change, run by RunMLflowSamples only",
-	clusterPkg + ".addSkill":            "samples table: a change, run by RunMLflowSamples only",
-	clusterPkg + ".removeSkill":         "samples table: a change, run by RunMLflowSamples only",
-	apiPkg + ".StartGitOpsPolicyWatch":  "returns at once outside the gitops profile (rbac_coverage_test.go rbacGitOpsOnlyCalls)",
+	mlflowPkg + ".addGenAIDemo":        "samples table: a change, run by RunMLflowSamples only",
+	mlflowPkg + ".regenerateGenAIDemo": "samples table: a change, run by RunMLflowSamples only",
+	mlflowPkg + ".addTraining":         "samples table: a change, run by RunMLflowSamples only",
+	mlflowPkg + ".removeTraining":      "samples table: a change, run by RunMLflowSamples only",
+	mlflowPkg + ".addMCP":              "samples table: a change, run by RunMLflowSamples only",
+	mlflowPkg + ".removeMCP":           "samples table: a change, run by RunMLflowSamples only",
+	mlflowPkg + ".addSkill":            "samples table: a change, run by RunMLflowSamples only",
+	mlflowPkg + ".removeSkill":         "samples table: a change, run by RunMLflowSamples only",
+	apiPkg + ".StartGitOpsPolicyWatch": "returns at once outside the gitops profile (rbac_coverage_test.go rbacGitOpsOnlyCalls)",
 }
 
 // mutationHandlerVars are the handler variables of pkg/api built with

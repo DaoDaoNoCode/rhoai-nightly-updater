@@ -15,6 +15,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -137,15 +138,15 @@ type mlflowFakeRule struct {
 	cite  string
 }
 
-var demoNames = []string{demoExperiment}
-var trainingExpNames = []string{trainingExperiment}
+var demoNames = []string{mlflow.DemoExperiment}
+var trainingExpNames = []string{mlflow.TrainingExperiment}
 
 // mlflowFakeRules lists every MLflow route the samples call, with the
 // authorization of mlflow-kubernetes-plugins v2.1.1 (9694e137).
 var mlflowFakeRules = []mlflowFakeRule{
-	{"GET", "/api/2.0/mlflow/experiments/get-by-name", []fakeCheck{{"experiments", "get"}}, "query:experiment_name", []string{demoExperiment, trainingExperiment}, "rules_base.py:323-326"},
+	{"GET", "/api/2.0/mlflow/experiments/get-by-name", []fakeCheck{{"experiments", "get"}}, "query:experiment_name", []string{mlflow.DemoExperiment, mlflow.TrainingExperiment}, "rules_base.py:323-326"},
 	{"POST", "/api/2.0/mlflow/experiments/create", []fakeCheck{{"experiments", "create"}}, "", nil, "rules_base.py:319"},
-	{"POST", "/api/2.0/mlflow/experiments/restore", []fakeCheck{{"experiments", "update"}}, "body:experiment_id", []string{demoExperiment, trainingExperiment}, "rules_base.py:331-334"},
+	{"POST", "/api/2.0/mlflow/experiments/restore", []fakeCheck{{"experiments", "update"}}, "body:experiment_id", []string{mlflow.DemoExperiment, mlflow.TrainingExperiment}, "rules_base.py:331-334"},
 	{"POST", "/api/2.0/mlflow/experiments/delete", []fakeCheck{{"experiments", "delete"}}, "body:experiment_id", trainingExpNames, "rules_base.py:327-330"},
 	{"POST", "/api/2.0/mlflow/experiments/set-experiment-tag", []fakeCheck{{"experiments", "update"}}, "body:experiment_id", demoNames, "rules_base.py:342-345"},
 	{"POST", "/api/2.0/mlflow/experiments/delete-experiment-tag", []fakeCheck{{"experiments", "update"}}, "body:experiment_id", demoNames, "rules_base.py:347-350"},
@@ -156,33 +157,33 @@ var mlflowFakeRules = []mlflowFakeRule{
 	{"POST", "/api/2.0/mlflow/runs/create", []fakeCheck{{"experiments", "update"}}, "body:experiment_id", trainingExpNames, "rules_base.py:403-407"},
 	{"POST", "/api/2.0/mlflow/runs/log-batch", []fakeCheck{{"experiments", "update"}}, "body:run_id", trainingExpNames, "rules_base.py:428-431"},
 	{"POST", "/api/2.0/mlflow/runs/update", []fakeCheck{{"experiments", "update"}}, "body:run_id", trainingExpNames, "rules_base.py:420-423"},
-	{"GET", "/api/2.0/mlflow/registered-models/get", []fakeCheck{{"registeredmodels", "get"}}, "query:name", []string{trainingModel}, "rules_base.py:659-662"},
+	{"GET", "/api/2.0/mlflow/registered-models/get", []fakeCheck{{"registeredmodels", "get"}}, "query:name", []string{mlflow.TrainingModel}, "rules_base.py:659-662"},
 	{"POST", "/api/2.0/mlflow/registered-models/create", []fakeCheck{{"registeredmodels", "create"}}, "", nil, "rules_base.py:658"},
-	{"DELETE", "/api/2.0/mlflow/registered-models/delete", []fakeCheck{{"registeredmodels", "delete"}}, "body:name", []string{trainingModel}, "rules_base.py:663-666"},
-	{"GET", "/api/2.0/mlflow/model-versions/get", []fakeCheck{{"registeredmodels", "get"}}, "query:name", []string{trainingModel}, "rules_base.py:738-741"},
-	{"POST", "/api/2.0/mlflow/model-versions/create", []fakeCheck{{"registeredmodels", "update"}}, "body:name", []string{trainingModel}, "rules_base.py:682-685"},
-	{"POST", "/api/2.0/mlflow/registered-models/alias", []fakeCheck{{"registeredmodels", "update"}}, "body:name", []string{trainingModel}, "rules_base.py:714-717"},
+	{"DELETE", "/api/2.0/mlflow/registered-models/delete", []fakeCheck{{"registeredmodels", "delete"}}, "body:name", []string{mlflow.TrainingModel}, "rules_base.py:663-666"},
+	{"GET", "/api/2.0/mlflow/model-versions/get", []fakeCheck{{"registeredmodels", "get"}}, "query:name", []string{mlflow.TrainingModel}, "rules_base.py:738-741"},
+	{"POST", "/api/2.0/mlflow/model-versions/create", []fakeCheck{{"registeredmodels", "update"}}, "body:name", []string{mlflow.TrainingModel}, "rules_base.py:682-685"},
+	{"POST", "/api/2.0/mlflow/registered-models/alias", []fakeCheck{{"registeredmodels", "update"}}, "body:name", []string{mlflow.TrainingModel}, "rules_base.py:714-717"},
 	{"POST", "/ajax-api/3.0/mlflow/demo/generate", []fakeCheck{{"experiments", "create"}, {"datasets", "create"}, {"registeredmodels", "create"}}, "", nil, "rules_base.py:1178-1182"},
-	{"GET", "/api/3.0/mlflow/mcp-servers/{mcp}", []fakeCheck{{"mcpservers", "get"}}, "path", []string{mcpSampleName}, "rules_base.py:1432-1435"},
-	{"PATCH", "/api/3.0/mlflow/mcp-servers/{mcp}", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mcpSampleName}, "rules_base.py:1436-1439"},
-	{"DELETE", "/api/3.0/mlflow/mcp-servers/{mcp}", []fakeCheck{{"mcpservers", "delete"}}, "path", []string{mcpSampleName}, "rules_base.py:1440-1443"},
+	{"GET", "/api/3.0/mlflow/mcp-servers/{mcp}", []fakeCheck{{"mcpservers", "get"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1432-1435"},
+	{"PATCH", "/api/3.0/mlflow/mcp-servers/{mcp}", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1436-1439"},
+	{"DELETE", "/api/3.0/mlflow/mcp-servers/{mcp}", []fakeCheck{{"mcpservers", "delete"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1440-1443"},
 	// A version POST auto-creates a missing parent server
 	// (sqlalchemy_mixin.py:272-330) and is checked as update on it.
-	{"POST", "/api/3.0/mlflow/mcp-servers/{mcp}/versions", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mcpSampleName}, "rules_base.py:1351-1354"},
-	{"GET", "/api/3.0/mlflow/mcp-servers/{mcp}/versions", []fakeCheck{{"mcpservers", "get"}}, "path", []string{mcpSampleName}, "rules_base.py:1355-1358"},
-	{"GET", "/api/3.0/mlflow/mcp-servers/{mcp}/versions/{v}", []fakeCheck{{"mcpservers", "get"}}, "path", []string{mcpSampleName}, "rules_base.py:1359-1362"},
-	{"DELETE", "/api/3.0/mlflow/mcp-servers/{mcp}/versions/{v}", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mcpSampleName}, "rules_base.py:1367-1373"},
-	{"PATCH", "/api/3.0/mlflow/mcp-servers/{mcp}/versions/{v}", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mcpSampleName}, "rules_base.py:1363-1366"},
-	{"POST", "/api/3.0/mlflow/mcp-servers/{mcp}/endpoints", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mcpSampleName}, "rules_base.py:1388-1391"},
-	{"POST", "/api/3.0/mlflow/mcp-servers/{mcp}/tags", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mcpSampleName}, "rules_base.py:1411-1414"},
-	{"GET", "/api/3.0/mlflow/skills/{skill}", []fakeCheck{{"skills", "get"}}, "path", []string{skillSampleName}, "rules_skill_registry.py:111-113"},
-	{"DELETE", "/api/3.0/mlflow/skills/{skill}", []fakeCheck{{"skills", "delete"}}, "path", []string{skillSampleName}, "rules_skill_registry.py:117-119"},
+	{"POST", "/api/3.0/mlflow/mcp-servers/{mcp}/versions", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1351-1354"},
+	{"GET", "/api/3.0/mlflow/mcp-servers/{mcp}/versions", []fakeCheck{{"mcpservers", "get"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1355-1358"},
+	{"GET", "/api/3.0/mlflow/mcp-servers/{mcp}/versions/{v}", []fakeCheck{{"mcpservers", "get"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1359-1362"},
+	{"DELETE", "/api/3.0/mlflow/mcp-servers/{mcp}/versions/{v}", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1367-1373"},
+	{"PATCH", "/api/3.0/mlflow/mcp-servers/{mcp}/versions/{v}", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1363-1366"},
+	{"POST", "/api/3.0/mlflow/mcp-servers/{mcp}/endpoints", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1388-1391"},
+	{"POST", "/api/3.0/mlflow/mcp-servers/{mcp}/tags", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1411-1414"},
+	{"GET", "/api/3.0/mlflow/skills/{skill}", []fakeCheck{{"skills", "get"}}, "path", []string{mlflow.SkillSampleName}, "rules_skill_registry.py:111-113"},
+	{"DELETE", "/api/3.0/mlflow/skills/{skill}", []fakeCheck{{"skills", "delete"}}, "path", []string{mlflow.SkillSampleName}, "rules_skill_registry.py:117-119"},
 	// "Like MCP, version registration uses parent update even if MLflow
 	// creates the parent" (rules_skill_registry.py:30-33).
-	{"POST", "/api/3.0/mlflow/skills/{skill}/versions", []fakeCheck{{"skills", "update"}}, "path", []string{skillSampleName}, "rules_skill_registry.py:78-80"},
-	{"POST", "/api/3.0/mlflow/skills/{skill}/tags", []fakeCheck{{"skills", "update"}}, "path", []string{skillSampleName}, "rules_skill_registry.py:105-107"},
-	{"GET", "/api/3.0/mlflow/skills/{skill}/versions", []fakeCheck{{"skills", "get"}}, "path", []string{skillSampleName}, "rules_skill_registry.py:80-82"},
-	{"DELETE", "/api/3.0/mlflow/skills/{skill}/versions/{v}", []fakeCheck{{"skills", "update"}}, "path", []string{skillSampleName}, "rules_skill_registry.py:89-91"},
+	{"POST", "/api/3.0/mlflow/skills/{skill}/versions", []fakeCheck{{"skills", "update"}}, "path", []string{mlflow.SkillSampleName}, "rules_skill_registry.py:78-80"},
+	{"POST", "/api/3.0/mlflow/skills/{skill}/tags", []fakeCheck{{"skills", "update"}}, "path", []string{mlflow.SkillSampleName}, "rules_skill_registry.py:105-107"},
+	{"GET", "/api/3.0/mlflow/skills/{skill}/versions", []fakeCheck{{"skills", "get"}}, "path", []string{mlflow.SkillSampleName}, "rules_skill_registry.py:80-82"},
+	{"DELETE", "/api/3.0/mlflow/skills/{skill}/versions/{v}", []fakeCheck{{"skills", "update"}}, "path", []string{mlflow.SkillSampleName}, "rules_skill_registry.py:89-91"},
 }
 
 func (r mlflowFakeRule) key() string { return r.method + " " + r.route }
@@ -358,7 +359,7 @@ func (f *mlflowFake) serve(w http.ResponseWriter, r *http.Request) {
 		f.mlflowError(w, 404, "ENDPOINT_NOT_FOUND", "Endpoint not found.")
 		return
 	}
-	ns := r.Header.Get(mlflowWorkspaceHeader)
+	ns := r.Header.Get(mlflow.WorkspaceHeader)
 	if ns == "" {
 		f.mlflowError(w, 400, "INVALID_PARAMETER_VALUE", "Workspace context is required for this request.")
 		return
@@ -506,7 +507,7 @@ func (f *mlflowFake) handle(w http.ResponseWriter, r *http.Request, rule mlflowF
 			if run.stage != "active" || len(ids) == 0 || fmt.Sprint(ids[0]) != run.exp {
 				continue
 			}
-			if filter != "" && !strings.Contains(filter, "'"+run.tags[sampleMarkerKey]+"'") {
+			if filter != "" && !strings.Contains(filter, "'"+run.tags[mlflow.SampleMarkerKey]+"'") {
 				continue
 			}
 			var ps []map[string]string
@@ -628,12 +629,12 @@ func (f *mlflowFake) generate(w http.ResponseWriter) {
 		features = append(features, name)
 	}
 	sort.Strings(features)
-	e := f.expByName(demoExperiment)
+	e := f.expByName(mlflow.DemoExperiment)
 	isGenerated := func(name string) bool {
 		if e == nil || e.stage != "active" || !f.demo.data[name] {
 			return false
 		}
-		stored, err := strconv.Atoi(e.tags[demoVersionTagPrefix+name])
+		stored, err := strconv.Atoi(e.tags[mlflow.DemoVersionTagPrefix+name])
 		if err != nil || stored != f.demo.versions[name] {
 			// delete_demo() of that generator
 			f.demo.data[name], f.demo.broken[name] = false, false
@@ -654,7 +655,7 @@ func (f *mlflowFake) generate(w http.ResponseWriter) {
 		}
 	}
 	if e == nil {
-		e = &fakeExperiment{id: f.newID(), name: demoExperiment, stage: "active", tags: map[string]string{}}
+		e = &fakeExperiment{id: f.newID(), name: mlflow.DemoExperiment, stage: "active", tags: map[string]string{}}
 		f.experiments[e.id] = e
 	}
 	e.stage = "active" // the generators restore a deleted demo experiment
@@ -664,7 +665,7 @@ func (f *mlflowFake) generate(w http.ResponseWriter) {
 			continue
 		}
 		f.demo.data[name] = true
-		e.tags[demoVersionTagPrefix+name] = strconv.Itoa(f.demo.versions[name])
+		e.tags[mlflow.DemoVersionTagPrefix+name] = strconv.Itoa(f.demo.versions[name])
 		generated = append(generated, name)
 	}
 	f.writeJSON(w, map[string]any{"status": "created", "experiment_id": e.id, "features_generated": generated, "navigation_url": "/experiments/" + e.id})
@@ -682,7 +683,7 @@ func (f *mlflowFake) mlflowDeleteDemo() {
 	for _, name := range []string{"evaluation", "issues"} {
 		f.demo.data[name], f.demo.broken[name] = true, true
 	}
-	if e := f.expByName(demoExperiment); e != nil {
+	if e := f.expByName(mlflow.DemoExperiment); e != nil {
 		e.stage = "deleted"
 	}
 }
@@ -779,25 +780,25 @@ func (f *mlflowFake) handleRegistry(w http.ResponseWriter, rule mlflowFakeRule, 
 			notFound()
 			return
 		}
-		s, ok := srv.versions[mcpSampleVersion]
+		s, ok := srv.versions[mlflow.MCPSampleVersion]
 		if !ok {
 			notFound()
 			return
 		}
-		f.writeJSON(w, map[string]string{"name": name, "version": mcpSampleVersion, "status": s})
+		f.writeJSON(w, map[string]string{"name": name, "version": mlflow.MCPSampleVersion, "status": s})
 	case "PATCH /api/3.0/mlflow/mcp-servers/{mcp}/versions/{v}":
 		if srv == nil {
 			notFound()
 			return
 		}
-		cur, ok := srv.versions[mcpSampleVersion]
+		cur, ok := srv.versions[mlflow.MCPSampleVersion]
 		next := str("status")
 		allowed := map[string][]string{"draft": {"active", "deleted"}, "active": {"draft", "deprecated"}, "deprecated": {"active", "deleted"}}
 		if !ok || !contains(allowed[cur], next) {
 			f.mlflowError(w, 400, "INVALID_PARAMETER_VALUE", "invalid transition "+cur+" -> "+next)
 			return
 		}
-		srv.versions[mcpSampleVersion] = next
+		srv.versions[mlflow.MCPSampleVersion] = next
 		f.writeJSON(w, map[string]string{"status": next})
 	case "POST /api/3.0/mlflow/mcp-servers/{mcp}/endpoints":
 		if srv == nil {
@@ -910,11 +911,9 @@ func newSamplesEnv(t *testing.T) *samplesEnv {
 	env.mux.HandleFunc("/mlflow/", env.mlflow.serve)
 	env.srv = newFakeServer(env.mux)
 	t.Cleanup(env.srv.Close)
-	orig := samplesHTTPClient
-	samplesHTTPClient = env.srv.Client()
-	t.Cleanup(func() { samplesHTTPClient = orig })
-	t.Cleanup(func() { InvalidateSamplesStatus(fakeProject) })
-	InvalidateSamplesStatus(fakeProject)
+	t.Cleanup(mlflow.SetSamplesHTTPClientForTest(env.srv.Client()))
+	t.Cleanup(func() { mlflow.InvalidateSamplesStatus(fakeProject) })
+	mlflow.InvalidateSamplesStatus(fakeProject)
 	k8s.putJSON("/api/v1/namespaces/"+fakeProject, `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
 	k8s.putProject(fakeProject)
 	putMLflow(k8s, toolLabelJSON, envkit.ToolFieldManager, "Update", "", `{}`,
@@ -924,7 +923,7 @@ func newSamplesEnv(t *testing.T) *samplesEnv {
 
 func (env *samplesEnv) status(t *testing.T) map[string]typesSample {
 	t.Helper()
-	InvalidateSamplesStatus(fakeProject)
+	mlflow.InvalidateSamplesStatus(fakeProject)
 	st, err := GetMLflowSamplesStatus(env.c, env.user, fakeProject)
 	if err != nil {
 		t.Fatal(err)

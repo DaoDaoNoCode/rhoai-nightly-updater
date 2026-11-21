@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 )
 
 // restServer answers each path with a fixed status and body, and records
@@ -63,7 +64,7 @@ func TestIsK8sNotFoundAndConflict(t *testing.T) {
 		{&K8sError{Status: 409}, false, true},
 		{fmt.Errorf("create: %w", &K8sError{Status: 409}), false, true},
 		{&K8sError{Status: 403}, false, false},
-		{&sampleAPIError{Status: 404}, false, false},
+		{&mlflow.SampleAPIError{Status: 404}, false, false},
 		{errors.New("404"), false, false},
 		{nil, false, false},
 	}

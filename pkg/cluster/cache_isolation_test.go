@@ -61,7 +61,8 @@ func TestResetClusterCachesCoversEveryURLKeyedCache(t *testing.T) {
 		"models_image.go":                 {2, []string{"capacityCache", "planCache"}},
 		"prerequisites.go":                {2, []string{"packageIndexCache"}},
 		"rhoai_namespaces.go":             {1, []string{"NamespacesCache"}},
-		"status.go":                       {5, []string{"stableTargetCache", "consoleURLCache", "dashboardURLCache"}},
+		"status.go":                       {3, []string{"stableTargetCache", "consoleURLCache"}},
+		"dashboard_url_cache.go":          {2, []string{"URLCache"}},
 	}
 	dirs := clusterSourceDirs(t)
 	got := map[string]int{}

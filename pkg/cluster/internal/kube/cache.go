@@ -3,6 +3,8 @@ package kube
 import (
 	"container/list"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"sync"
 	"time"
@@ -201,4 +203,11 @@ func (c *LRU[K, V]) Len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.ll.Len()
+}
+
+// TokenKey is a short hash of a bearer token, to key a per-user cache
+// without keeping the token.
+func TokenKey(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:8])
 }

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -60,10 +61,10 @@ var (
 // listener).
 const serviceCAFile = "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
 
-// modelCallTLSConfig trusts what samplesTLSConfig trusts (system roots, the
+// modelCallTLSConfig trusts what mlflow.SamplesTLSConfig trusts (system roots, the
 // pod's ca.crt with the default ingress CA) and the service CA.
 func modelCallTLSConfig(getenv func(string) string, readFile func(string) ([]byte, error)) *tls.Config {
-	cfg := samplesTLSConfig(getenv, readFile)
+	cfg := mlflow.SamplesTLSConfig(getenv, readFile)
 	if pem, err := readFile(serviceCAFile); err == nil {
 		if cfg.RootCAs == nil {
 			cfg.RootCAs = x509.NewCertPool()
@@ -79,7 +80,7 @@ func modelCallTLSConfig(getenv func(string) string, readFile func(string) ([]byt
 // called). Tests replace it.
 var modelCallHTTPClient = &http.Client{
 	Timeout:       45 * time.Second,
-	CheckRedirect: refuseRedirect,
+	CheckRedirect: mlflow.RefuseRedirect,
 	Transport: &http.Transport{
 		Proxy:               http.ProxyFromEnvironment,
 		TLSClientConfig:     modelCallTLSConfig(os.Getenv, os.ReadFile),

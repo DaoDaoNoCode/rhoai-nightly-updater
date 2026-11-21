@@ -3,8 +3,6 @@ package cluster
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +23,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -108,7 +107,7 @@ var genAIBaseURL = dashdev.DashboardURL
 // genAIHTTPClient sends the gen-ai calls; it trusts the same certificates
 // as the samples' calls to the same gateway, and does not follow redirects
 // either. Tests replace it.
-var genAIHTTPClient = samplesHTTPClient
+var genAIHTTPClient = mlflow.SamplesHTTPClient
 
 // genAIAPI is the dashboard's gen-ai API for one request.
 type genAIAPI struct {
@@ -307,8 +306,8 @@ func (a genAIAPI) call(method, path, ns string, in, out any) error {
 	if err != nil {
 		return fmt.Errorf("read the answer of the dashboard's gen-ai API: %w", err)
 	}
-	if isRedirect(resp.StatusCode) {
-		return &genAIError{Status: resp.StatusCode, Method: method, Path: genAIAPIPrefix + path, Message: redirectMessage(resp)}
+	if mlflow.IsRedirect(resp.StatusCode) {
+		return &genAIError{Status: resp.StatusCode, Method: method, Path: genAIAPIPrefix + path, Message: mlflow.RedirectMessage(resp)}
 	}
 	if resp.StatusCode >= 300 {
 		return parseGenAIError(method, genAIAPIPrefix+path, resp.StatusCode, data)
@@ -799,11 +798,6 @@ var playgroundStatusGen atomic.Int64
 // PurgePlaygroundStatus drops cached playground status (after a change).
 func PurgePlaygroundStatus() { playgroundStatusGen.Add(1) }
 
-func tokenKey(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:8])
-}
-
 // apiProblem explains an error of the gen-ai API for people, with its kind.
 func apiProblem(err error) (string, string) {
 	if errors.Is(err, errGenAINotAllowed) {
@@ -894,7 +888,7 @@ func GetPlaygroundStatus(sa, u *Client, project string) (*types.PlaygroundStatus
 		return nil, authz.ErrNotUserClient
 	}
 	c := u
-	key := fmt.Sprintf("%d|%s|%s", playgroundStatusGen.Load(), tokenKey(c.BearerToken()), project)
+	key := fmt.Sprintf("%d|%s|%s", playgroundStatusGen.Load(), kube.TokenKey(c.BearerToken()), project)
 	if st, ok := playgroundStatusCache.Get(key); ok {
 		return st, nil
 	}
@@ -1011,7 +1005,7 @@ type playgroundFanOut struct {
 var playgroundFanOutCache = kube.NewLRU[string, *playgroundFanOut](16)
 
 func readPlaygroundFanOut(c *Client, api genAIAPI, projects []string, records map[string]playgroundRecord) *playgroundFanOut {
-	key := fmt.Sprintf("%d|%s", playgroundStatusGen.Load(), tokenKey(api.token))
+	key := fmt.Sprintf("%d|%s", playgroundStatusGen.Load(), kube.TokenKey(api.token))
 	if fo, ok := playgroundFanOutCache.Get(key); ok {
 		return fo
 	}

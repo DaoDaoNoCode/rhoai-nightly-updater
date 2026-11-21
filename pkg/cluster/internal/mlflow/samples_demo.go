@@ -1,4 +1,4 @@
-package cluster
+package mlflow
 
 import (
 	"sort"
@@ -50,8 +50,8 @@ import (
 // 4.0.0 changes run with the signed-in user's token, so a Remove calling
 // demo/delete is possible; what demo/delete removes has not been checked.
 const (
-	demoExperiment       = "MLflow Demo"
-	demoVersionTagPrefix = "mlflow.demo.version."
+	DemoExperiment       = "MLflow Demo"
+	DemoVersionTagPrefix = "mlflow.demo.version."
 )
 
 // demoRemoveHint tells the user how to remove the demo without the tool.
@@ -61,7 +61,7 @@ const demoRemoveHint = "To remove the demo, delete it in the MLflow UI. This too
 func demoVersionTags(e *mlflowExperiment) map[string]string {
 	out := map[string]string{}
 	for _, t := range e.Tags {
-		if f, ok := strings.CutPrefix(t.Key, demoVersionTagPrefix); ok && f != "" {
+		if f, ok := strings.CutPrefix(t.Key, DemoVersionTagPrefix); ok && f != "" {
 			out[f] = t.Value
 		}
 	}
@@ -90,9 +90,9 @@ func demoResetFeatures(tags map[string]string) []string {
 // restore run only on the experiment the tool created and marked.
 func demoForeignMessage(e *mlflowExperiment) string {
 	if len(demoVersionTags(e)) > 0 {
-		return "Experiment '" + demoExperiment + "' holds MLflow's demo, made in the MLflow UI or by someone else, not by this tool. Regenerating it deletes traces and evaluations in that experiment, whoever logged them, so this tool leaves it alone: regenerate or delete it in the MLflow UI."
+		return "Experiment '" + DemoExperiment + "' holds MLflow's demo, made in the MLflow UI or by someone else, not by this tool. Regenerating it deletes traces and evaluations in that experiment, whoever logged them, so this tool leaves it alone: regenerate or delete it in the MLflow UI."
 	}
-	return foreignMessage("Experiment '"+demoExperiment+"'") + " MLflow's demo generator would delete traces in it."
+	return foreignMessage("Experiment '"+DemoExperiment+"'") + " MLflow's demo generator would delete traces in it."
 }
 
 // demoStatus reads the demo with one named get. Which features a server's
@@ -103,7 +103,7 @@ func demoForeignMessage(e *mlflowExperiment) string {
 // repairs any demo, so it is always offered on the tool's demo. An
 // experiment of the demo's name without the tool's marker is "foreign"
 // (demoForeignMessage).
-func demoStatus(t *mlflowTarget) types.SampleStatus {
+func demoStatus(t *Target) types.SampleStatus {
 	s := demoStatusOfExperiment(t)
 	if s.State == "unknown" || s.State == "foreign" || !t.cr.oldToolResources() {
 		return s
@@ -118,20 +118,20 @@ func demoStatus(t *mlflowTarget) types.SampleStatus {
 }
 
 // demoMemoryRepair is what Add or Regenerate does first on such a CR.
-const demoMemoryRepair = "MLflow CR " + mlflowCRName + ": spec.resources (requests 500m/1Gi, limits 2/2Gi, set by an earlier version of this tool) is removed, so the operator's defaults (limits 4 CPU / 3Gi) apply. MLflow restarts, and the demo is not generated in this run: add it again once MLflow is ready."
+const demoMemoryRepair = "MLflow CR " + CRName + ": spec.resources (requests 500m/1Gi, limits 2/2Gi, set by an earlier version of this tool) is removed, so the operator's defaults (limits 4 CPU / 3Gi) apply. MLflow restarts, and the demo is not generated in this run: add it again once MLflow is ready."
 
 // demoLowMemoryMessage explains the 2Gi limit of an MLflow CR created by an
 // earlier version of this tool (mlflowCR.oldToolResources).
 func demoLowMemoryMessage(managed bool) string {
 	if !managed {
-		return "MLflow's memory limit is 2Gi (spec.resources of MLflow CR " + mlflowCRName + "), and generating the demo runs MLflow out of memory. This tool did not create that MLflow, so it does not change the limit: raise it, or remove spec.resources so the operator's defaults (3Gi) apply."
+		return "MLflow's memory limit is 2Gi (spec.resources of MLflow CR " + CRName + "), and generating the demo runs MLflow out of memory. This tool did not create that MLflow, so it does not change the limit: raise it, or remove spec.resources so the operator's defaults (3Gi) apply."
 	}
-	return "MLflow still has the 2Gi memory limit an earlier version of this tool set, and generating the demo runs MLflow out of memory. Add or Regenerate first removes that limit (spec.resources of MLflow CR " + mlflowCRName + ", so the operator's defaults of 4 CPU / 3Gi apply) and MLflow restarts; then add the demo again once MLflow is ready."
+	return "MLflow still has the 2Gi memory limit an earlier version of this tool set, and generating the demo runs MLflow out of memory. Add or Regenerate first removes that limit (spec.resources of MLflow CR " + CRName + ", so the operator's defaults of 4 CPU / 3Gi apply) and MLflow restarts; then add the demo again once MLflow is ready."
 }
 
-func demoStatusOfExperiment(t *mlflowTarget) types.SampleStatus {
+func demoStatusOfExperiment(t *Target) types.SampleStatus {
 	s := types.SampleStatus{}
-	exp, err := t.experimentByName(demoExperiment)
+	exp, err := t.experimentByName(DemoExperiment)
 	if err != nil {
 		return statusFromError(s, err)
 	}
@@ -147,7 +147,7 @@ func demoStatusOfExperiment(t *mlflowTarget) types.SampleStatus {
 		s.Message = "Removed in MLflow: Add restores the experiment and generates every feature again."
 		return s
 	}
-	s.Link = t.experimentLink(exp.ExperimentID)
+	s.Link = t.ExperimentLink(exp.ExperimentID)
 	s.Actions = []string{"regenerate"}
 	tags := demoVersionTags(exp)
 	reset := demoResetFeatures(tags)

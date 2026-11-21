@@ -1,4 +1,4 @@
-package cluster
+package mlflow
 
 import (
 	"errors"
@@ -41,7 +41,7 @@ type demoGenerateResult struct {
 	FeaturesGenerated []string `json:"features_generated"`
 }
 
-func (t *mlflowTarget) restoreExperiment(e *mlflowExperiment, log func(string)) error {
+func (t *Target) restoreExperiment(e *mlflowExperiment, log func(string)) error {
 	if err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/restore", nil, map[string]any{"experiment_id": e.ExperimentID}, nil); err != nil {
 		return err
 	}
@@ -52,7 +52,7 @@ func (t *mlflowTarget) restoreExperiment(e *mlflowExperiment, log func(string)) 
 
 // resetDemoVersions sets every feature version tag of the (active) demo
 // experiment to "0".
-func (t *mlflowTarget) resetDemoVersions(e *mlflowExperiment, log func(string)) error {
+func (t *Target) resetDemoVersions(e *mlflowExperiment, log func(string)) error {
 	tags := demoVersionTags(e)
 	features := make([]string, 0, len(tags))
 	for f := range tags {
@@ -61,7 +61,7 @@ func (t *mlflowTarget) resetDemoVersions(e *mlflowExperiment, log func(string)) 
 	sort.Strings(features)
 	for _, f := range features {
 		if err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/set-experiment-tag", nil, map[string]any{
-			"experiment_id": e.ExperimentID, "key": demoVersionTagPrefix + f, "value": "0",
+			"experiment_id": e.ExperimentID, "key": DemoVersionTagPrefix + f, "value": "0",
 		}, nil); err != nil {
 			return err
 		}
@@ -75,11 +75,11 @@ func (t *mlflowTarget) resetDemoVersions(e *mlflowExperiment, log func(string)) 
 // errNoDemoGenerator: this MLflow has no demo/generate route.
 var errNoDemoGenerator = errors.New("this MLflow has no demo generator (demo/generate is not available)")
 
-func (t *mlflowTarget) generateDemo(log func(string)) (demoGenerateResult, string, error) {
+func (t *Target) GenerateDemo(log func(string)) (demoGenerateResult, string, error) {
 	log("Generating the demo (this takes about 30 seconds)...")
 	var out demoGenerateResult
 	if err := t.api.sendJSON("POST", "/ajax-api/3.0/mlflow/demo/generate", nil, map[string]any{}, &out); err != nil {
-		if isEndpointMissing(err) {
+		if IsEndpointMissing(err) {
 			return out, "", errNoDemoGenerator
 		}
 		return out, "", err
@@ -93,27 +93,27 @@ func (t *mlflowTarget) generateDemo(log func(string)) (demoGenerateResult, strin
 // createDemoExperiment creates the demo's experiment with the tool's
 // marker, before the generator runs. When someone created one of that name
 // in the meantime, it is used only if it carries the marker.
-func (t *mlflowTarget) createDemoExperiment(log func(string)) (*mlflowExperiment, error) {
-	tags := []mlflowTag{{Key: sampleMarkerKey, Value: SampleGenAIDemo}}
+func (t *Target) createDemoExperiment(log func(string)) (*mlflowExperiment, error) {
+	tags := []mlflowTag{{Key: SampleMarkerKey, Value: SampleGenAIDemo}}
 	var created struct {
 		ExperimentID string `json:"experiment_id"`
 	}
-	err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/create", nil, map[string]any{"name": demoExperiment, "tags": tags}, &created)
-	if isAlreadyExists(err) {
-		exp, err := t.experimentByName(demoExperiment)
+	err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/create", nil, map[string]any{"name": DemoExperiment, "tags": tags}, &created)
+	if IsAlreadyExists(err) {
+		exp, err := t.experimentByName(DemoExperiment)
 		if err != nil {
 			return nil, err
 		}
 		if exp == nil || !experimentMarked(exp, SampleGenAIDemo) {
-			return nil, &sampleRefusal{"Experiment '" + demoExperiment + "' was created by someone else in the meantime; MLflow's demo generator would delete traces in it, so it is left unchanged."}
+			return nil, &sampleRefusal{"Experiment '" + DemoExperiment + "' was created by someone else in the meantime; MLflow's demo generator would delete traces in it, so it is left unchanged."}
 		}
 		return exp, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	log("Created experiment '" + demoExperiment + "' for the demo")
-	return &mlflowExperiment{ExperimentID: created.ExperimentID, Name: demoExperiment, LifecycleStage: "active", Tags: tags}, nil
+	log("Created experiment '" + DemoExperiment + "' for the demo")
+	return &mlflowExperiment{ExperimentID: created.ExperimentID, Name: DemoExperiment, LifecycleStage: "active", Tags: tags}, nil
 }
 
 // dropStaleDemoVersions deletes the version tags still at "0" after a
@@ -122,7 +122,7 @@ func (t *mlflowTarget) createDemoExperiment(log func(string)) (*mlflowExperiment
 // demo/__init__.py:44-46), so a "0" left belongs to a feature this
 // server's generator does not have. Without this the demo would show as
 // partial forever.
-func (t *mlflowTarget) dropStaleDemoVersions(e *mlflowExperiment, zero []string, res demoGenerateResult, log func(string)) error {
+func (t *Target) dropStaleDemoVersions(e *mlflowExperiment, zero []string, res demoGenerateResult, log func(string)) error {
 	var stale []string
 	for _, f := range zero {
 		if res.Status == "exists" || !slices.Contains(res.FeaturesGenerated, f) {
@@ -131,7 +131,7 @@ func (t *mlflowTarget) dropStaleDemoVersions(e *mlflowExperiment, zero []string,
 	}
 	for _, f := range stale {
 		if err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/delete-experiment-tag", nil, map[string]any{
-			"experiment_id": e.ExperimentID, "key": demoVersionTagPrefix + f,
+			"experiment_id": e.ExperimentID, "key": DemoVersionTagPrefix + f,
 		}, nil); err != nil {
 			return err
 		}
@@ -142,11 +142,11 @@ func (t *mlflowTarget) dropStaleDemoVersions(e *mlflowExperiment, zero []string,
 	return nil
 }
 
-func addGenAIDemo(t *mlflowTarget, log func(string)) (string, error) {
+func addGenAIDemo(t *Target, log func(string)) (string, error) {
 	return demoAddOrRegenerate(t, log, false)
 }
 
-func regenerateGenAIDemo(t *mlflowTarget, log func(string)) (string, error) {
+func regenerateGenAIDemo(t *Target, log func(string)) (string, error) {
 	return demoAddOrRegenerate(t, log, true)
 }
 
@@ -158,25 +158,25 @@ var errMLflowRestarting = errors.New("MLflow restarts with the operator's defaul
 // with the old limit (oldToolResources), guarded by resourceVersion, so the
 // operator's defaults apply. The server restarts, so the demo waits for the
 // next Add.
-func (t *mlflowTarget) raiseOldMemoryLimit(log func(string)) error {
+func (t *Target) raiseOldMemoryLimit(log func(string)) error {
 	if err := patchMLflowCR(t.c, t.cr, nil, map[string]any{"resources": nil}); err != nil {
 		if kube.IsK8sConflict(err) {
 			return fmt.Errorf("MLflow changed while its memory limit was being removed; nothing was changed, refresh and retry: %w", err)
 		}
-		return fmt.Errorf("remove the 2Gi memory limit from MLflow CR %s: %w", mlflowCRName, err)
+		return fmt.Errorf("remove the 2Gi memory limit from MLflow CR %s: %w", CRName, err)
 	}
-	log("Removed the 2Gi memory limit (spec.resources) an earlier version of this tool set on MLflow CR " + mlflowCRName)
+	log("Removed the 2Gi memory limit (spec.resources) an earlier version of this tool set on MLflow CR " + CRName)
 	return errMLflowRestarting
 }
 
-func demoAddOrRegenerate(t *mlflowTarget, log func(string), always bool) (string, error) {
+func demoAddOrRegenerate(t *Target, log func(string), always bool) (string, error) {
 	if t.cr.oldToolResources() {
 		if !t.cr.managedByTool() {
 			return "", &sampleRefusal{demoLowMemoryMessage(false)}
 		}
 		return "", t.raiseOldMemoryLimit(log)
 	}
-	exp, err := t.experimentByName(demoExperiment)
+	exp, err := t.experimentByName(DemoExperiment)
 	if err != nil {
 		return "", err
 	}
@@ -210,7 +210,7 @@ func demoAddOrRegenerate(t *mlflowTarget, log func(string), always bool) (string
 		}
 		sort.Strings(zero)
 	}
-	res, msg, err := t.generateDemo(log)
+	res, msg, err := t.GenerateDemo(log)
 	if err != nil {
 		return "", err
 	}

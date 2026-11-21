@@ -1,4 +1,4 @@
-package cluster
+package mlflow
 
 import (
 	"errors"
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
@@ -32,15 +33,15 @@ const (
 	SampleMCPServer = "mcp-server"
 	SampleSkill     = "skill"
 
-	sampleMarkerKey       = "rhoai-nightly-updater.sample"
-	mlflowWorkspaceHeader = "X-MLflow-Workspace"
+	SampleMarkerKey = "rhoai-nightly-updater.sample"
+	WorkspaceHeader = "X-MLflow-Workspace"
 	// mlflowStatusCacheTTL keeps the samples status of a project this long;
 	// any samples operation on the project drops it.
 	mlflowStatusCacheTTL = 15 * time.Second
 )
 
-// mlflowSampleIDs is the order samples are added in (removal: reversed).
-var mlflowSampleIDs = []string{SampleGenAIDemo, SampleTraining, SampleMCPServer, SampleSkill}
+// SampleIDs is the order samples are added in (removal: reversed).
+var SampleIDs = []string{SampleGenAIDemo, SampleTraining, SampleMCPServer, SampleSkill}
 
 var mlflowSampleNames = map[string]string{
 	SampleGenAIDemo: "Agent and prompt demo",
@@ -51,35 +52,35 @@ var mlflowSampleNames = map[string]string{
 
 var mlflowSamplesCache = kube.NewLRU[string, types.MLflowSamplesStatus](64)
 
-// mlflowTarget is MLflow in one project's workspace.
-type mlflowTarget struct {
-	api *sampleAPI
-	ui  string // MLflow's public address, no trailing slash
-	// dashboard is the RHOAI dashboard's https address, when known: links
+// Target is MLflow in one project's workspace.
+type Target struct {
+	api *SampleAPI
+	UI  string // MLflow's public address, no trailing slash
+	// Dashboard is the RHOAI dashboard's https address, when known: links
 	// open its MLflow pages, which keep the dashboard's navigation.
-	dashboard string
-	project   string
+	Dashboard string
+	Project   string
 	// c and cr are the cluster and the MLflow CR the target was read from;
 	// the demo checks the CR's memory limit (oldToolResources).
-	c  *Client
+	c  *kube.Client
 	cr mlflowCR
 }
 
 // link is a page of the MLflow UI in the target's workspace.
-func (t *mlflowTarget) link(route string) string {
-	return t.ui + "/#" + route + "?workspace=" + url.QueryEscape(t.project)
+func (t *Target) link(route string) string {
+	return t.UI + "/#" + route + "?workspace=" + url.QueryEscape(t.Project)
 }
 
-// experimentLink is an experiment's page: the dashboard's
+// ExperimentLink is an experiment's page: the dashboard's
 // (odh-dashboard rhoai-3.6 frontend/src/routes/pipelines/mlflow.ts
 // mlflowExperimentRoute), or MLflow's own UI when the dashboard's address
 // is not known.
-func (t *mlflowTarget) experimentLink(id string) string {
-	if t.dashboard == "" {
+func (t *Target) ExperimentLink(id string) string {
+	if t.Dashboard == "" {
 		return t.link("/experiments/" + id)
 	}
-	q := url.Values{"workspace": {t.project}, "searchFilter": {""}}
-	return t.dashboard + "/develop-train/mlflow/experiments/" + url.PathEscape(id) + "/runs?" + q.Encode()
+	q := url.Values{"workspace": {t.Project}, "searchFilter": {""}}
+	return t.Dashboard + "/develop-train/mlflow/experiments/" + url.PathEscape(id) + "/runs?" + q.Encode()
 }
 
 // mlflowCRReady mirrors getMLflowStatus: the Ready or Available condition.
@@ -95,17 +96,17 @@ func mlflowCRReady(cr mlflowCR) bool {
 // mlflowNoStatusURLReason: the CR reports no https address in status.url.
 const mlflowNoStatusURLReason = "This MLflow reports no https address in its CR (status.url), which sample data needs: it is not supported on this MLflow release. The MLflow link above may still work."
 
-// mlflowSampleTarget returns MLflow for project, or why the samples are
+// SampleTarget returns MLflow for project, or why the samples are
 // unavailable. The address is the CR's status.url, the address the operator
 // reports and odh-dashboard links to (see mlflowCR).
-func mlflowSampleTarget(c *Client, project string) (*mlflowTarget, string, error) {
+func SampleTarget(c *kube.Client, project string) (*Target, string, error) {
 	return mlflowSampleTargetAs(c, project, c.BearerToken())
 }
 
 // mlflowSampleTargetAs is mlflowSampleTarget whose MLflow calls carry
 // token: c finds MLflow, token is who asks it.
-func mlflowSampleTargetAs(c *Client, project, token string) (*mlflowTarget, string, error) {
-	cr, err := getMLflowCR(c)
+func mlflowSampleTargetAs(c *kube.Client, project, token string) (*Target, string, error) {
+	cr, err := ReadCR(c)
 	switch {
 	case kube.IsK8sNotFound(err):
 		return nil, "MLflow is not deployed. Set it up first.", nil
@@ -121,16 +122,16 @@ func mlflowSampleTargetAs(c *Client, project, token string) (*mlflowTarget, stri
 	// data-science gateway report no status.url, and their MLflow was not
 	// checked against these calls. This is the one rule; the page shows its
 	// reason as is.
-	base := mlflowUIURL(cr.Status.URL, "")
+	base := UIURL(cr.Status.URL, "")
 	if base == "" {
 		return nil, mlflowNoStatusURLReason, nil
 	}
-	return &mlflowTarget{
-		api: &sampleAPI{
-			ctx: c.Context(), base: base, token: token, server: "MLflow",
-			headers: map[string]string{mlflowWorkspaceHeader: project},
+	return &Target{
+		api: &SampleAPI{
+			Ctx: c.Context(), Base: base, Token: token, Server: "MLflow",
+			headers: map[string]string{WorkspaceHeader: project},
 		},
-		ui: base, project: project, c: c, cr: cr, dashboard: httpsBase(cachedDashboardURL(c)),
+		UI: base, Project: project, c: c, cr: cr, Dashboard: httpsBase(dashdev.CachedURL(c)),
 	}, "", nil
 }
 
@@ -162,12 +163,12 @@ func (e *mlflowExperiment) active() bool { return e.LifecycleStage == "active" }
 // experimentByName returns the experiment, deleted ones included
 // (GetExperimentByName reads ViewType.ALL: handlers.py:1896-1912,
 // sqlalchemy_store.py:929-950), or nil when there is none.
-func (t *mlflowTarget) experimentByName(name string) (*mlflowExperiment, error) {
+func (t *Target) experimentByName(name string) (*mlflowExperiment, error) {
 	var out struct {
 		Experiment mlflowExperiment `json:"experiment"`
 	}
 	err := t.api.sendJSON("GET", "/api/2.0/mlflow/experiments/get-by-name", url.Values{"experiment_name": {name}}, nil, &out)
-	if isNotFound(err) {
+	if IsNotFound(err) {
 		return nil, nil
 	}
 	if err != nil {
@@ -183,7 +184,7 @@ type sampleRefusal struct{ msg string }
 func (r *sampleRefusal) Error() string { return r.msg }
 
 func foreignMessage(what string) string {
-	return what + " exists but was not created by this tool (it lacks the " + sampleMarkerKey + " tag), so it is left unchanged."
+	return what + " exists but was not created by this tool (it lacks the " + SampleMarkerKey + " tag), so it is left unchanged."
 }
 
 // statusFromError reports a status read that failed.
@@ -198,10 +199,10 @@ func statusFromError(s types.SampleStatus, err error) types.SampleStatus {
 // for the GenAI demo, which the tool may not delete (no demo-delete right,
 // see addGenAIDemo).
 type mlflowSample struct {
-	status     func(t *mlflowTarget) types.SampleStatus
-	add        func(t *mlflowTarget, log func(string)) (string, error)
-	remove     func(t *mlflowTarget, log func(string)) (string, error)
-	regenerate func(t *mlflowTarget, log func(string)) (string, error)
+	status     func(t *Target) types.SampleStatus
+	add        func(t *Target, log func(string)) (string, error)
+	remove     func(t *Target, log func(string)) (string, error)
+	regenerate func(t *Target, log func(string)) (string, error)
 }
 
 // mlflowSamples returns the samples by ID. It is a function, not a
@@ -216,7 +217,7 @@ func mlflowSamples() map[string]mlflowSample {
 	}
 }
 
-// GetMLflowSamplesStatus reports the MLflow samples of project. It makes
+// SamplesStatus reports the MLflow samples of project. It makes
 // only named reads (one per sample, a few for the training sample) and is
 // cached for mlflowStatusCacheTTL per user and project, so it stays out of
 // the main status poll.
@@ -228,7 +229,7 @@ func mlflowSamples() map[string]mlflowSample {
 // projects (ListUserDSProjects), checked before the cache. The
 // ServiceAccount (sa) only finds MLflow: its CR's status.url and the
 // dashboard's address, which are no user data.
-func GetMLflowSamplesStatus(sa, u *Client, project string) (*types.MLflowSamplesStatus, error) {
+func SamplesStatus(sa, u *kube.Client, project string) (*types.MLflowSamplesStatus, error) {
 	ok, err := authz.IsUserDSProject(u, project)
 	if err != nil {
 		return nil, err
@@ -240,7 +241,7 @@ func GetMLflowSamplesStatus(sa, u *Client, project string) (*types.MLflowSamples
 	// The token and the project's invalidation count key the cache: one
 	// user's answer is never another's, and a samples operation on the
 	// project makes every user's cached answer unreachable.
-	key := fmt.Sprintf("%s|%d|%s", tokenKey(u.BearerToken()), gen, project)
+	key := fmt.Sprintf("%s|%d|%s", kube.TokenKey(u.BearerToken()), gen, project)
 	if cached, ok := mlflowSamplesCache.Get(key); ok {
 		return &cached, nil
 	}
@@ -252,11 +253,11 @@ func GetMLflowSamplesStatus(sa, u *Client, project string) (*types.MLflowSamples
 	if t == nil {
 		st.Reason = reason
 	} else {
-		st.Available, st.MLflowURL = true, t.ui
-		st.Samples = make([]types.SampleStatus, len(mlflowSampleIDs))
+		st.Available, st.MLflowURL = true, t.UI
+		st.Samples = make([]types.SampleStatus, len(SampleIDs))
 		samples := mlflowSamples()
 		var wg sync.WaitGroup
-		for i, id := range mlflowSampleIDs {
+		for i, id := range SampleIDs {
 			wg.Go(func() {
 				s := samples[id].status(t)
 				s.ID, s.Name = id, mlflowSampleNames[id]
@@ -305,9 +306,9 @@ func InvalidateSamplesStatus(project string) {
 	mlflowSamplesGen.bump(project)
 }
 
-// ValidateMLflowSamplesRequest checks a request before the operation
+// ValidateSamplesRequest checks a request before the operation
 // starts; it returns the problem, or "".
-func ValidateMLflowSamplesRequest(req types.MLflowSamplesRequest) string {
+func ValidateSamplesRequest(req types.MLflowSamplesRequest) string {
 	switch req.Action {
 	case "add", "remove", "regenerate":
 	default:
@@ -339,12 +340,12 @@ func ValidateMLflowSamplesRequest(req types.MLflowSamplesRequest) string {
 // project.
 var ErrNotDSProject = errors.New("not a Data Science project")
 
-// RunMLflowSamples adds, removes or regenerates the requested samples in
+// RunSamples adds, removes or regenerates the requested samples in
 // one project, one step per sample. A failed sample does not stop the
 // others; the result fails when any did.
-func RunMLflowSamples(c *Client, req types.MLflowSamplesRequest, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
+func RunSamples(c *kube.Client, req types.MLflowSamplesRequest, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	logs := []string{}
-	emit := func(e UpdateStepEvent) {
+	emit := func(e types.UpdateStepEvent) {
 		logs = append(logs, e.Message)
 		if onStep != nil {
 			onStep(e)
@@ -353,15 +354,15 @@ func RunMLflowSamples(c *Client, req types.MLflowSamplesRequest, onStep func(Upd
 	defer InvalidateSamplesStatus(req.Project)
 	activity := fmt.Sprintf("%s %s in %s", req.Action, strings.Join(req.Samples, ","), req.Project)
 	fail := func(step, msg, code string) (*types.OperationResponse, error) {
-		emit(UpdateStepEvent{Step: step, Status: "failed", Message: msg, ErrorCode: code})
+		emit(types.UpdateStepEvent{Step: step, Status: "failed", Message: msg, ErrorCode: code})
 		record.RecordAction(c, "mlflow-samples", activity, false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
-	if problem := ValidateMLflowSamplesRequest(req); problem != "" {
+	if problem := ValidateSamplesRequest(req); problem != "" {
 		return fail("check", problem, "validation")
 	}
 
-	emit(UpdateStepEvent{Step: "check", Status: "running", Message: fmt.Sprintf("Checking MLflow for project '%s'...", req.Project)})
+	emit(types.UpdateStepEvent{Step: "check", Status: "running", Message: fmt.Sprintf("Checking MLflow for project '%s'...", req.Project)})
 	ok, err := envkit.IsDSProject(c, req.Project)
 	if err != nil {
 		return fail("check", fmt.Sprintf("Cannot list the projects: %v", err), kube.ErrorCodeFromK8sErr(err))
@@ -369,20 +370,20 @@ func RunMLflowSamples(c *Client, req types.MLflowSamplesRequest, onStep func(Upd
 	if !ok {
 		return fail("check", fmt.Sprintf("'%s' is not a Data Science project.", req.Project), "validation")
 	}
-	t, reason, err := mlflowSampleTarget(c, req.Project)
+	t, reason, err := SampleTarget(c, req.Project)
 	if err != nil {
 		return fail("check", fmt.Sprintf("Cannot read MLflow: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	if t == nil {
 		return fail("check", reason, "prerequisites")
 	}
-	emit(UpdateStepEvent{Step: "check", Status: "success", Message: "MLflow is ready at " + t.ui})
+	emit(types.UpdateStepEvent{Step: "check", Status: "success", Message: "MLflow is ready at " + t.UI})
 
 	want := map[string]bool{}
 	for _, id := range req.Samples {
 		want[id] = true
 	}
-	order := append([]string{}, mlflowSampleIDs...)
+	order := append([]string{}, SampleIDs...)
 	if req.Action == "remove" {
 		for i, j := 0, len(order)-1; i < j; i, j = i+1, j-1 {
 			order[i], order[j] = order[j], order[i]
@@ -396,19 +397,19 @@ func RunMLflowSamples(c *Client, req types.MLflowSamplesRequest, onStep func(Upd
 			continue
 		}
 		s := samples[id]
-		fn := map[string]func(*mlflowTarget, func(string)) (string, error){"add": s.add, "remove": s.remove, "regenerate": s.regenerate}[req.Action]
+		fn := map[string]func(*Target, func(string)) (string, error){"add": s.add, "remove": s.remove, "regenerate": s.regenerate}[req.Action]
 		name := mlflowSampleNames[id]
 		if fn == nil {
 			failed = append(failed, name)
 			code = kube.FirstNonEmpty(code, "validation")
-			emit(UpdateStepEvent{Step: id, Status: "failed", Message: fmt.Sprintf("%s: %s is not available for this sample.", name, req.Action), ErrorCode: "validation"})
+			emit(types.UpdateStepEvent{Step: id, Status: "failed", Message: fmt.Sprintf("%s: %s is not available for this sample.", name, req.Action), ErrorCode: "validation"})
 			continue
 		}
-		emit(UpdateStepEvent{Step: id, Status: "running", Message: fmt.Sprintf("%s: %s...", name, req.Action)})
-		msg, err := fn(t, func(line string) { emit(UpdateStepEvent{Step: id, Status: "running", Message: line}) })
+		emit(types.UpdateStepEvent{Step: id, Status: "running", Message: fmt.Sprintf("%s: %s...", name, req.Action)})
+		msg, err := fn(t, func(line string) { emit(types.UpdateStepEvent{Step: id, Status: "running", Message: line}) })
 		if err != nil {
 			failed = append(failed, name)
-			stepCode := sampleErrorCode(err)
+			stepCode := SampleErrorCode(err)
 			var refusal *sampleRefusal
 			switch {
 			case errors.As(err, &refusal):
@@ -419,10 +420,10 @@ func RunMLflowSamples(c *Client, req types.MLflowSamplesRequest, onStep func(Upd
 				stepCode = "in_progress"
 			}
 			code = kube.FirstNonEmpty(code, stepCode)
-			emit(UpdateStepEvent{Step: id, Status: "failed", Message: fmt.Sprintf("%s: %v%s", name, err, deniedHint(err, c.ActsAsUser())), ErrorCode: stepCode})
+			emit(types.UpdateStepEvent{Step: id, Status: "failed", Message: fmt.Sprintf("%s: %v%s", name, err, deniedHint(err, c.ActsAsUser())), ErrorCode: stepCode})
 			continue
 		}
-		emit(UpdateStepEvent{Step: id, Status: "success", Message: fmt.Sprintf("%s: %s", name, msg)})
+		emit(types.UpdateStepEvent{Step: id, Status: "success", Message: fmt.Sprintf("%s: %s", name, msg)})
 	}
 	slog.Info("mlflow samples", "action", req.Action, "samples", req.Samples, "project", req.Project, "failed", failed, "user", kube.GetUser(c))
 	if len(failed) > 0 {

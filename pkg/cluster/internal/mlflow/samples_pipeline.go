@@ -1,4 +1,4 @@
-package cluster
+package mlflow
 
 import (
 	"fmt"
@@ -18,14 +18,14 @@ import (
 // there would hand it to whoever can run a pod behind that Service
 // (SECURITY.md). The spec is data only; serving it makes no cluster request.
 const (
-	pipelineSampleName        = "rhoai-nightly-sample"
-	pipelineSampleDescription = "Sample created by rhoai-nightly-updater: a two-step pipeline that writes an artifact and reads it back."
-	// pipelineSampleDefaultImage is UBI 9 minimal, pinned by digest (the
+	PipelineSampleName        = "rhoai-nightly-sample"
+	PipelineSampleDescription = "Sample created by rhoai-nightly-updater: a two-step pipeline that writes an artifact and reads it back."
+	// PipelineSampleDefaultImage is UBI 9 minimal, pinned by digest (the
 	// multi-arch manifest list, amd64/arm64/s390x/ppc64le, read from
 	// registry.access.redhat.com on 2026-11-17). Both steps only need sh,
 	// mkdir, dirname, echo and cat. On a disconnected cluster mirror it or
 	// set SAMPLE_PIPELINE_IMAGE.
-	pipelineSampleDefaultImage = "registry.access.redhat.com/ubi9/ubi-minimal@sha256:baafce2d34783a28b4a472779f304e97e00f9d35c99553bc53b068b14344d9a9"
+	PipelineSampleDefaultImage = "registry.access.redhat.com/ubi9/ubi-minimal@sha256:baafce2d34783a28b4a472779f304e97e00f9d35c99553bc53b068b14344d9a9"
 )
 
 // pipelineSampleImage is the image both steps run: SAMPLE_PIPELINE_IMAGE,
@@ -34,10 +34,10 @@ func pipelineSampleImage() string {
 	if img := strings.TrimSpace(os.Getenv("SAMPLE_PIPELINE_IMAGE")); img != "" {
 		return img
 	}
-	return pipelineSampleDefaultImage
+	return PipelineSampleDefaultImage
 }
 
-// pipelineSampleSpec is the pipeline in KFP's IR (PipelineSpec, schema
+// PipelineIR is the pipeline in KFP's IR (PipelineSpec, schema
 // 2.1.0) with two shell-only container components. The launcher replaces
 // the artifact path placeholders; "sh -c script path" passes the path as
 // $0. Caching is off so every run executes.
@@ -45,7 +45,7 @@ func pipelineSampleImage() string {
 // It is built as data and marshalled, never templated as text: a templated
 // description with ": " in it was invalid YAML, and KFP's upload handler
 // hung on it until the route answered 504 (seen live on 3.6).
-func pipelineSampleSpec(image string) string {
+func PipelineIR(image string) string {
 	artifact := map[string]any{
 		"artifactType": map[string]any{"schemaTitle": "system.Artifact", "schemaVersion": "0.0.1"},
 	}
@@ -70,7 +70,7 @@ func pipelineSampleSpec(image string) string {
 				"{{$.outputs.artifacts['greeting'].path}}"),
 			"exec-read-artifact": container(`echo "Read $0:" && cat "$0"`, "{{$.inputs.artifacts['greeting'].path}}"),
 		}},
-		"pipelineInfo": map[string]any{"name": pipelineSampleName, "description": pipelineSampleDescription},
+		"pipelineInfo": map[string]any{"name": PipelineSampleName, "description": PipelineSampleDescription},
 		"root": map[string]any{"dag": map[string]any{"tasks": map[string]any{
 			"write-artifact": map[string]any{
 				"cachingOptions": map[string]any{},
@@ -104,7 +104,7 @@ func pipelineSampleSpec(image string) string {
 func PipelineSampleSpec() types.PipelineSampleSpec {
 	image := pipelineSampleImage()
 	return types.PipelineSampleSpec{
-		Name: pipelineSampleName, FileName: pipelineSampleName + ".yaml",
-		Description: pipelineSampleDescription, Image: image, YAML: pipelineSampleSpec(image),
+		Name: PipelineSampleName, FileName: PipelineSampleName + ".yaml",
+		Description: PipelineSampleDescription, Image: image, YAML: PipelineIR(image),
 	}
 }

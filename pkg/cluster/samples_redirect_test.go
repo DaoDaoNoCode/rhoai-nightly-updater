@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 )
 
 // The samples' and the playground's client sends the app's ServiceAccount
@@ -14,7 +16,7 @@ import (
 // the tool called (a same-host redirect would carry the Authorization
 // header, also to plain http). A 3xx is an error that says so.
 func TestSamplesHTTPClient_DoesNotFollowRedirects(t *testing.T) {
-	if samplesHTTPClient.CheckRedirect == nil || genAIHTTPClient.CheckRedirect == nil {
+	if mlflow.SamplesHTTPClient.CheckRedirect == nil || genAIHTTPClient.CheckRedirect == nil {
 		t.Fatal("the samples and gen-ai clients must refuse redirects")
 	}
 	var followed atomic.Int32
@@ -27,14 +29,15 @@ func TestSamplesHTTPClient_DoesNotFollowRedirects(t *testing.T) {
 		http.Redirect(w, r, "/next", http.StatusFound)
 	}))
 	t.Cleanup(srv.Close)
-	client := &http.Client{Transport: srv.Client().Transport, CheckRedirect: samplesHTTPClient.CheckRedirect}
-	origSamples, origGenAI := samplesHTTPClient, genAIHTTPClient
-	samplesHTTPClient, genAIHTTPClient = client, client
-	t.Cleanup(func() { samplesHTTPClient, genAIHTTPClient = origSamples, origGenAI })
+	client := &http.Client{Transport: srv.Client().Transport, CheckRedirect: mlflow.SamplesHTTPClient.CheckRedirect}
+	origGenAI := genAIHTTPClient
+	genAIHTTPClient = client
+	t.Cleanup(mlflow.SetSamplesHTTPClientForTest(client))
+	t.Cleanup(func() { genAIHTTPClient = origGenAI })
 
 	const token = "sa-token-secret"
-	a := &sampleAPI{ctx: context.Background(), base: srv.URL, token: token, server: "MLflow"}
-	err := a.send(http.MethodGet, "/api/2.0/mlflow/experiments/search", nil, "", nil, nil)
+	a := &mlflow.SampleAPI{Ctx: context.Background(), Base: srv.URL, Token: token, Server: "MLflow"}
+	err := a.Send(http.MethodGet, "/api/2.0/mlflow/experiments/search", nil, "", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "redirect") || !strings.Contains(err.Error(), "does not follow") || strings.Contains(err.Error(), token) {
 		t.Fatalf("samples: %v", err)
 	}

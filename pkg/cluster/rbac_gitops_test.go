@@ -51,6 +51,7 @@ const (
 	clusterPkg    = modulePath + "/pkg/cluster"
 	kubePkg       = clusterPkg + "/internal/kube"
 	registryPkg   = clusterPkg + "/internal/registry"
+	mlflowPkg     = clusterPkg + "/internal/mlflow"
 	apiPkg        = modulePath + "/pkg/api"
 	rbacGitOpsRel = "../../deploy/rbac-gitops.yaml"
 )

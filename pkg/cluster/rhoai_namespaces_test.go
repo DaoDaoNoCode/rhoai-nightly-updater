@@ -7,6 +7,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -70,7 +71,7 @@ func TestMLflowStatusNamespaceIsDiscovered(t *testing.T) {
 	f, c := newResourceFake(t)
 	f.putJSON(dsciV2List+"/default-dsci", `{"metadata":{"name":"default-dsci"},"spec":{"applicationsNamespace":"`+fixtureAppsNS+`"}}`)
 	putMLflow(f, toolLabelJSON, envkit.ToolFieldManager, "Apply", "", `{}`, `{"conditions":[{"type":"Ready","status":"True"}]}`)
-	st := getMLflowStatus(c)
+	st := mlflow.Status(c)
 	if st.Namespace != fixtureAppsNS {
 		t.Fatalf("namespace %q, want %q", st.Namespace, fixtureAppsNS)
 	}
@@ -78,7 +79,7 @@ func TestMLflowStatusNamespaceIsDiscovered(t *testing.T) {
 	f2, c2 := newResourceFake(t)
 	f2.fail["GET "+dsciV2List] = 403
 	putMLflow(f2, toolLabelJSON, envkit.ToolFieldManager, "Apply", "", `{}`, `{"conditions":[{"type":"Ready","status":"True"}]}`)
-	st = getMLflowStatus(c2)
+	st = mlflow.Status(c2)
 	if st.Namespace != "" || !st.Deployed || !strings.Contains(st.Message, "namespace it runs in is unknown") {
 		t.Fatalf("state %+v", st)
 	}

@@ -1,4 +1,4 @@
-package cluster
+package mlflow
 
 import (
 	"bytes"
@@ -41,7 +41,7 @@ import (
 // (samples_pipeline.go). Checked live on RHOAI 3.6: a ServiceAccount token
 // reaches MLflow through the gateway, which answers 403 without the rights.
 
-// samplesTLSConfig trusts the system roots (publicly signed gateway
+// SamplesTLSConfig trusts the system roots (publicly signed gateway
 // certificates, as on ROSA), the pod's ca.crt, and
 // KUBE_CA_FILE when set. On OpenShift ca.crt also holds the default ingress
 // CA: kube-controller-manager's root-ca-file is the serviceaccount-ca bundle
@@ -51,7 +51,7 @@ import (
 // targetconfigcontroller.go:802-811). So the gateway's default certificate
 // verifies in the pod. Verification is skipped only with DEV_MODE and
 // DEV_INSECURE_TLS, as for the API server (client.go apiServerTLSConfig).
-func samplesTLSConfig(getenv func(string) string, readFile func(string) ([]byte, error)) *tls.Config {
+func SamplesTLSConfig(getenv func(string) string, readFile func(string) ([]byte, error)) *tls.Config {
 	pool, err := x509.SystemCertPool()
 	if err != nil || pool == nil {
 		pool = x509.NewCertPool()
@@ -71,19 +71,19 @@ func samplesTLSConfig(getenv func(string) string, readFile func(string) ([]byte,
 	return cfg
 }
 
-// samplesHTTPClient sends the MLflow requests. The demo generator
+// SamplesHTTPClient sends the MLflow requests. The demo generator
 // took 27 s live, so a request may take up to two minutes; the operation's
 // own deadline still applies through the request context. Tests replace it.
 // It never follows a redirect: the request carries the app's token, which
 // Go's client would resend on a same-host redirect (also to plain http), so
 // a 3xx answer is returned as it is and reported as an error
 // (redirectError).
-var samplesHTTPClient = &http.Client{
+var SamplesHTTPClient = &http.Client{
 	Timeout:       2 * time.Minute,
-	CheckRedirect: refuseRedirect,
+	CheckRedirect: RefuseRedirect,
 	Transport: &http.Transport{
 		Proxy:               http.ProxyFromEnvironment,
-		TLSClientConfig:     samplesTLSConfig(os.Getenv, os.ReadFile),
+		TLSClientConfig:     SamplesTLSConfig(os.Getenv, os.ReadFile),
 		ForceAttemptHTTP2:   true,
 		MaxIdleConnsPerHost: 4,
 		IdleConnTimeout:     90 * time.Second,
@@ -92,17 +92,17 @@ var samplesHTTPClient = &http.Client{
 	},
 }
 
-// refuseRedirect makes the client return a 3xx answer instead of following
+// RefuseRedirect makes the client return a 3xx answer instead of following
 // it (as fetchConfigLabels' client in image_labels.go, which strips the
 // token instead).
-func refuseRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+func RefuseRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 // isRedirect: a 3xx answer, which the clients above do not follow.
-func isRedirect(status int) bool { return status >= 300 && status < 400 }
+func IsRedirect(status int) bool { return status >= 300 && status < 400 }
 
-// redirectMessage says, in words, that a 3xx was not followed, and where it
+// RedirectMessage says, in words, that a 3xx was not followed, and where it
 // pointed (shortened; the Location holds no token).
-func redirectMessage(resp *http.Response) string {
+func RedirectMessage(resp *http.Response) string {
 	loc := resp.Header.Get("Location")
 	if len(loc) > 200 {
 		loc = loc[:200] + "..."
@@ -113,21 +113,21 @@ func redirectMessage(resp *http.Response) string {
 	return fmt.Sprintf("a redirect to %s, which this tool does not follow (its token is sent only to the address it called). Check the address the cluster reports for this server", loc)
 }
 
-// sampleAPI is one server the samples call: its base URL, the bearer token
+// SampleAPI is one server the samples call: its base URL, the bearer token
 // and fixed headers (the MLflow workspace).
-type sampleAPI struct {
-	ctx     context.Context
-	base    string
-	token   string
+type SampleAPI struct {
+	Ctx     context.Context
+	Base    string
+	Token   string
 	headers map[string]string
-	server  string // "MLflow", for messages
+	Server  string // "MLflow", for messages
 }
 
-// sampleAPIError is a non-2xx answer. Code is MLflow's error_code
+// SampleAPIError is a non-2xx answer. Code is MLflow's error_code
 // (RESOURCE_DOES_NOT_EXIST, PERMISSION_DENIED, ENDPOINT_NOT_FOUND, ...) or
 // empty; Message is the server's message, shortened. Neither carries the
 // token, which is only ever sent in the Authorization header.
-type sampleAPIError struct {
+type SampleAPIError struct {
 	Status  int
 	Code    string
 	Message string
@@ -136,7 +136,7 @@ type sampleAPIError struct {
 	fastAPINotFound bool
 }
 
-func (e *sampleAPIError) Error() string {
+func (e *SampleAPIError) Error() string {
 	msg := e.Message
 	if msg == "" {
 		msg = http.StatusText(e.Status)
@@ -147,8 +147,8 @@ func (e *sampleAPIError) Error() string {
 	return fmt.Sprintf("%s answered %d: %s", e.server, e.Status, msg)
 }
 
-func asSampleAPIError(err error) (*sampleAPIError, bool) {
-	var e *sampleAPIError
+func asSampleAPIError(err error) (*SampleAPIError, bool) {
+	var e *SampleAPIError
 	ok := errors.As(err, &e)
 	return e, ok
 }
@@ -159,7 +159,7 @@ func asSampleAPIError(err error) (*sampleAPIError, bool) {
 // the server does not know (isEndpointMissing), or a 404 without MLflow's
 // error body, such as the gateway's while MLflow restarts, which says
 // nothing about the object.
-func isNotFound(err error) bool {
+func IsNotFound(err error) bool {
 	e, ok := asSampleAPIError(err)
 	return ok && e.Status == http.StatusNotFound && e.Code == "RESOURCE_DOES_NOT_EXIST"
 }
@@ -170,27 +170,27 @@ func isNotFound(err error) bool {
 // 700-714), and FastAPI's own {"detail":"Not Found"} for a route it does
 // not have. A 404 with any other body (an empty one from the gateway
 // during a redeploy) is neither, so it stays an error.
-func isEndpointMissing(err error) bool {
+func IsEndpointMissing(err error) bool {
 	e, ok := asSampleAPIError(err)
 	return ok && e.Status == http.StatusNotFound && (e.Code == "ENDPOINT_NOT_FOUND" || e.fastAPINotFound)
 }
 
 // isAlreadyExists: MLflow's RESOURCE_ALREADY_EXISTS, or HTTP 409.
-func isAlreadyExists(err error) bool {
+func IsAlreadyExists(err error) bool {
 	e, ok := asSampleAPIError(err)
 	return ok && (e.Code == "RESOURCE_ALREADY_EXISTS" || e.Status == http.StatusConflict)
 }
 
 // isDenied: the server refused the token (401) or the access review (403).
-func isDenied(err error) bool {
+func IsDenied(err error) bool {
 	e, ok := asSampleAPIError(err)
 	return ok && (e.Status == http.StatusUnauthorized || e.Status == http.StatusForbidden)
 }
 
-// sampleErrorCode maps a samples call error to an operation errorCode.
-func sampleErrorCode(err error) string {
+// SampleErrorCode maps a samples call error to an operation errorCode.
+func SampleErrorCode(err error) string {
 	switch {
-	case isDenied(err):
+	case IsDenied(err):
 		return "forbidden"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timeout"
@@ -205,7 +205,7 @@ func sampleErrorCode(err error) string {
 // reviews of the caller's token: the signed-in user's own for a change
 // (asUser), the ServiceAccount's for the status.
 func deniedHint(err error, asUser bool) string {
-	if !isDenied(err) {
+	if !IsDenied(err) {
 		return ""
 	}
 	if asUser {
@@ -218,19 +218,19 @@ func deniedHint(err error, asUser bool) string {
 // made with the signed-in user's own token (GetMLflowSamplesStatus): the
 // user may not see it, nothing for an admin to re-apply.
 func deniedReadHint(err error) string {
-	if !isDenied(err) {
+	if !IsDenied(err) {
 		return ""
 	}
 	return " MLflow refused your own OpenShift permissions for this read: you cannot see this in the project's MLflow workspace, or your sign-in expired (log out and log in again)."
 }
 
-const maxSampleErrorMessage = 300
+const MaxSampleErrorMessage = 300
 
-// parseSampleAPIError reads an error body: MLflow's {"error_code","message"},
+// ParseSampleAPIError reads an error body: MLflow's {"error_code","message"},
 // grpc-gateway's {"code","message"} (KFP), FastAPI's {"detail"}, or text
 // (kube-rbac-proxy answers "Forbidden (user=..., verb=..., ...)").
-func parseSampleAPIError(server string, status int, body []byte) *sampleAPIError {
-	e := &sampleAPIError{Status: status, server: server}
+func ParseSampleAPIError(server string, status int, body []byte) *SampleAPIError {
+	e := &SampleAPIError{Status: status, server: server}
 	var parsed struct {
 		ErrorCode string          `json:"error_code"`
 		Message   string          `json:"message"`
@@ -252,16 +252,16 @@ func parseSampleAPIError(server string, status int, body []byte) *sampleAPIError
 	} else {
 		e.Message = strings.TrimSpace(string(body))
 	}
-	if len(e.Message) > maxSampleErrorMessage {
-		e.Message = e.Message[:maxSampleErrorMessage] + "..."
+	if len(e.Message) > MaxSampleErrorMessage {
+		e.Message = e.Message[:MaxSampleErrorMessage] + "..."
 	}
 	return e
 }
 
-// send makes one request. body is sent as is with contentType; out, when
+// Send makes one request. body is sent as is with contentType; out, when
 // not nil, receives the JSON answer.
-func (a *sampleAPI) send(method, path string, query url.Values, contentType string, body []byte, out any) error {
-	u := a.base + path
+func (a *SampleAPI) Send(method, path string, query url.Values, contentType string, body []byte, out any) error {
+	u := a.Base + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
@@ -269,11 +269,11 @@ func (a *sampleAPI) send(method, path string, query url.Values, contentType stri
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
-	req, err := http.NewRequestWithContext(a.ctx, method, u, reader)
+	req, err := http.NewRequestWithContext(a.Ctx, method, u, reader)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+a.token)
+	req.Header.Set("Authorization", "Bearer "+a.Token)
 	req.Header.Set("Accept", "application/json")
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
@@ -281,38 +281,38 @@ func (a *sampleAPI) send(method, path string, query url.Values, contentType stri
 	for k, v := range a.headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := samplesHTTPClient.Do(req)
+	resp, err := SamplesHTTPClient.Do(req)
 	if err != nil {
 		// url.Error repeats the URL, which holds no secret.
-		return fmt.Errorf("cannot reach %s: %w", a.server, err)
+		return fmt.Errorf("cannot reach %s: %w", a.Server, err)
 	}
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, kube.MaxResponseBody))
 	if err != nil {
-		return fmt.Errorf("read the answer of %s: %w", a.server, err)
+		return fmt.Errorf("read the answer of %s: %w", a.Server, err)
 	}
-	if isRedirect(resp.StatusCode) {
-		return &sampleAPIError{Status: resp.StatusCode, server: a.server, Message: redirectMessage(resp)}
+	if IsRedirect(resp.StatusCode) {
+		return &SampleAPIError{Status: resp.StatusCode, server: a.Server, Message: RedirectMessage(resp)}
 	}
 	if resp.StatusCode >= 300 {
-		return parseSampleAPIError(a.server, resp.StatusCode, respBody)
+		return ParseSampleAPIError(a.Server, resp.StatusCode, respBody)
 	}
 	if out != nil && len(bytes.TrimSpace(respBody)) > 0 {
 		if err := json.Unmarshal(respBody, out); err != nil {
-			return fmt.Errorf("parse the answer of %s to %s %s: %w", a.server, method, path, err)
+			return fmt.Errorf("parse the answer of %s to %s %s: %w", a.Server, method, path, err)
 		}
 	}
 	return nil
 }
 
 // sendJSON sends in as JSON (nil sends no body).
-func (a *sampleAPI) sendJSON(method, path string, query url.Values, in, out any) error {
+func (a *SampleAPI) sendJSON(method, path string, query url.Values, in, out any) error {
 	if in == nil {
-		return a.send(method, path, query, "", nil, out)
+		return a.Send(method, path, query, "", nil, out)
 	}
 	data, err := json.Marshal(in)
 	if err != nil {
 		return err
 	}
-	return a.send(method, path, query, "application/json", data, out)
+	return a.Send(method, path, query, "application/json", data, out)
 }

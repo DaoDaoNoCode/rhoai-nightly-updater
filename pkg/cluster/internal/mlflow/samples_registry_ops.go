@@ -1,4 +1,4 @@
-package cluster
+package mlflow
 
 import (
 	"encoding/json"
@@ -20,7 +20,7 @@ import (
 
 const (
 	mcpSampleTitle       = "DeepWiki (sample)"
-	mcpSampleDescription = "Sample MCP server added by rhoai-nightly-updater: DeepWiki's public, no-authentication server for questions about public GitHub repositories."
+	MCPSampleDescription = "Sample MCP server added by rhoai-nightly-updater: DeepWiki's public, no-authentication server for questions about public GitHub repositories."
 )
 
 // mcpSampleTools are the tools DeepWiki's server lists (tools/list,
@@ -42,7 +42,7 @@ var errNoMCPRegistry = errors.New("this MLflow has no MCP Server Registry")
 // blocks deletion, sqlalchemy_mixin.py:249-267), so nothing unmarked stays
 // behind. The playground lists a registry server only when it is active
 // and has an access endpoint (odh-dashboard mcp_helpers.go:139-147).
-func addMCP(t *mlflowTarget, log func(string)) (string, error) {
+func addMCP(t *Target, log func(string)) (string, error) {
 	var srv mcpServer
 	found, supported, err := t.registryEntry(mcpServerPath(""), &srv)
 	switch {
@@ -50,14 +50,14 @@ func addMCP(t *mlflowTarget, log func(string)) (string, error) {
 		return "", err
 	case !supported:
 		return "", errNoMCPRegistry
-	case found && srv.Tags[sampleMarkerKey] != SampleMCPServer:
-		return "", &sampleRefusal{foreignMessage("MCP server '" + mcpSampleName + "'")}
+	case found && srv.Tags[SampleMarkerKey] != SampleMCPServer:
+		return "", &sampleRefusal{foreignMessage("MCP server '" + MCPSampleName + "'")}
 	}
 
 	if !found {
 		created, err := t.createMCPVersion("draft")
-		if isAlreadyExists(err) {
-			return "", &sampleRefusal{"MCP server '" + mcpSampleName + "' was created by someone else in the meantime, so it is left unchanged."}
+		if IsAlreadyExists(err) {
+			return "", &sampleRefusal{"MCP server '" + MCPSampleName + "' was created by someone else in the meantime, so it is left unchanged."}
 		}
 		if err != nil {
 			return "", err
@@ -66,20 +66,20 @@ func addMCP(t *mlflowTarget, log func(string)) (string, error) {
 		// this version: then the version went into their server, and the tag
 		// below would claim it. Only a server holding just this version, made
 		// by the same caller, is the tool's.
-		if err := t.confirmNewParent("MCP server '"+mcpSampleName+"'", mcpServerPath(""), mcpServerPath("/versions"), "mcp_server_versions", mcpSampleVersion, created.CreatedBy); err != nil {
-			if delErr := t.api.sendJSON("DELETE", mcpServerPath("/versions/"+url.PathEscape(mcpSampleVersion)), nil, nil, nil); delErr != nil {
-				return "", fmt.Errorf("%w; the version this tool added could not be deleted again (%w): delete version %s of MCP server %s in MLflow", err, delErr, mcpSampleVersion, mcpSampleName)
+		if err := t.confirmNewParent("MCP server '"+MCPSampleName+"'", mcpServerPath(""), mcpServerPath("/versions"), "mcp_server_versions", MCPSampleVersion, created.CreatedBy); err != nil {
+			if delErr := t.api.sendJSON("DELETE", mcpServerPath("/versions/"+url.PathEscape(MCPSampleVersion)), nil, nil, nil); delErr != nil {
+				return "", fmt.Errorf("%w; the version this tool added could not be deleted again (%w): delete version %s of MCP server %s in MLflow", err, delErr, MCPSampleVersion, MCPSampleName)
 			}
 			return "", err
 		}
-		if err := t.api.sendJSON("POST", mcpServerPath("/tags"), nil, map[string]string{"key": sampleMarkerKey, "value": SampleMCPServer}, nil); err != nil {
+		if err := t.api.sendJSON("POST", mcpServerPath("/tags"), nil, map[string]string{"key": SampleMarkerKey, "value": SampleMCPServer}, nil); err != nil {
 			if delErr := t.api.sendJSON("DELETE", mcpServerPath(""), nil, nil, nil); delErr != nil {
-				return "", fmt.Errorf("%w; the new draft server could not be deleted again (%w): delete MCP server %s in MLflow", err, delErr, mcpSampleName)
+				return "", fmt.Errorf("%w; the new draft server could not be deleted again (%w): delete MCP server %s in MLflow", err, delErr, MCPSampleName)
 			}
 			return "", err
 		}
-		log("Registered MCP server '" + mcpSampleName + "' (version " + mcpSampleVersion + ")")
-		if err := t.api.sendJSON("PATCH", mcpServerPath(""), nil, map[string]string{"display_name": mcpSampleTitle, "description": mcpSampleDescription}, nil); err != nil {
+		log("Registered MCP server '" + MCPSampleName + "' (version " + MCPSampleVersion + ")")
+		if err := t.api.sendJSON("PATCH", mcpServerPath(""), nil, map[string]string{"display_name": mcpSampleTitle, "description": MCPSampleDescription}, nil); err != nil {
 			return "", err
 		}
 	}
@@ -87,9 +87,9 @@ func addMCP(t *mlflowTarget, log func(string)) (string, error) {
 	var ver struct {
 		Status string `json:"status"`
 	}
-	err = t.api.sendJSON("GET", mcpServerPath("/versions/"+mcpSampleVersion), nil, nil, &ver)
+	err = t.api.sendJSON("GET", mcpServerPath("/versions/"+MCPSampleVersion), nil, nil, &ver)
 	switch {
-	case isNotFound(err):
+	case IsNotFound(err):
 		if _, err := t.createMCPVersion("active"); err != nil {
 			return "", err
 		}
@@ -98,13 +98,13 @@ func addMCP(t *mlflowTarget, log func(string)) (string, error) {
 	case ver.Status != "active":
 		// draft -> active and deprecated -> active are allowed transitions
 		// (entities/mcp_server.py:26-30).
-		if err := t.api.sendJSON("PATCH", mcpServerPath("/versions/"+mcpSampleVersion), nil, map[string]string{"status": "active"}, nil); err != nil {
+		if err := t.api.sendJSON("PATCH", mcpServerPath("/versions/"+MCPSampleVersion), nil, map[string]string{"status": "active"}, nil); err != nil {
 			return "", err
 		}
 	}
 	if !found || len(srv.AccessEndpoints) == 0 {
 		if err := t.api.sendJSON("POST", mcpServerPath("/endpoints"), nil, map[string]string{
-			"server_version": mcpSampleVersion, "url": mcpSampleURL, "transport_type": mcpSampleTransport,
+			"server_version": MCPSampleVersion, "url": mcpSampleURL, "transport_type": mcpSampleTransport,
 		}, nil); err != nil {
 			return "", err
 		}
@@ -129,7 +129,7 @@ func (v registryVersion) id() string { return strings.Trim(string(v.Version), `"
 // rules_base.py:1355-1358, rules_skill_registry.py:80-82), and its
 // created_by is the version's. Otherwise someone created the parent in
 // between, and it is theirs.
-func (t *mlflowTarget) confirmNewParent(what, parentPath, versionsPath, listKey, version string, creator *string) error {
+func (t *Target) confirmNewParent(what, parentPath, versionsPath, listKey, version string, creator *string) error {
 	var parent struct {
 		CreatedBy *string `json:"created_by"`
 	}
@@ -151,11 +151,11 @@ func (t *mlflowTarget) confirmNewParent(what, parentPath, versionsPath, listKey,
 	return nil
 }
 
-func (t *mlflowTarget) createMCPVersion(status string) (registryVersion, error) {
+func (t *Target) createMCPVersion(status string) (registryVersion, error) {
 	var out registryVersion
 	err := t.api.sendJSON("POST", mcpServerPath("/versions"), nil, map[string]any{
 		"server_json": map[string]any{
-			"name": mcpSampleName, "version": mcpSampleVersion, "title": mcpSampleTitle, "description": mcpSampleDescription,
+			"name": MCPSampleName, "version": MCPSampleVersion, "title": mcpSampleTitle, "description": MCPSampleDescription,
 			"remotes":    []map[string]string{{"type": mcpSampleTransport, "url": mcpSampleURL}},
 			"websiteUrl": "https://docs.devin.ai/work-with-devin/deepwiki-mcp",
 		},
@@ -168,7 +168,7 @@ func (t *mlflowTarget) createMCPVersion(status string) (registryVersion, error) 
 // removeMCP deprecates the active version, then deletes the server (a hard
 // delete, refused while a version is active: sqlalchemy_mixin.py:249-267,
 // 520-568). active -> deprecated is an allowed transition.
-func removeMCP(t *mlflowTarget, log func(string)) (string, error) {
+func removeMCP(t *Target, log func(string)) (string, error) {
 	var srv mcpServer
 	found, supported, err := t.registryEntry(mcpServerPath(""), &srv)
 	switch {
@@ -176,26 +176,26 @@ func removeMCP(t *mlflowTarget, log func(string)) (string, error) {
 		return "", err
 	case !supported || !found:
 		return "nothing to remove", nil
-	case srv.Tags[sampleMarkerKey] != SampleMCPServer:
-		return "", &sampleRefusal{foreignMessage("MCP server '" + mcpSampleName + "'")}
+	case srv.Tags[SampleMarkerKey] != SampleMCPServer:
+		return "", &sampleRefusal{foreignMessage("MCP server '" + MCPSampleName + "'")}
 	}
 	var ver struct {
 		Status string `json:"status"`
 	}
-	err = t.api.sendJSON("GET", mcpServerPath("/versions/"+mcpSampleVersion), nil, nil, &ver)
-	if err != nil && !isNotFound(err) {
+	err = t.api.sendJSON("GET", mcpServerPath("/versions/"+MCPSampleVersion), nil, nil, &ver)
+	if err != nil && !IsNotFound(err) {
 		return "", err
 	}
 	if err == nil && ver.Status == "active" {
-		if err := t.api.sendJSON("PATCH", mcpServerPath("/versions/"+mcpSampleVersion), nil, map[string]string{"status": "deprecated"}, nil); err != nil {
+		if err := t.api.sendJSON("PATCH", mcpServerPath("/versions/"+MCPSampleVersion), nil, map[string]string{"status": "deprecated"}, nil); err != nil {
 			return "", err
 		}
-		log("Deprecated version " + mcpSampleVersion)
+		log("Deprecated version " + MCPSampleVersion)
 	}
-	if err := t.api.sendJSON("DELETE", mcpServerPath(""), nil, nil, nil); err != nil && !isNotFound(err) {
+	if err := t.api.sendJSON("DELETE", mcpServerPath(""), nil, nil, nil); err != nil && !IsNotFound(err) {
 		return "", err
 	}
-	log("Deleted MCP server '" + mcpSampleName + "'")
+	log("Deleted MCP server '" + MCPSampleName + "'")
 	return "removed", nil
 }
 
@@ -204,7 +204,7 @@ var errNoSkillRegistry = errors.New("this MLflow has no Skill Registry")
 // addSkill registers the sample skill from its pinned Git source (metadata
 // only; the server does not fetch it) and marks it. As for MCP, a skill
 // whose tag could not be set is deleted again.
-func addSkill(t *mlflowTarget, log func(string)) (string, error) {
+func addSkill(t *Target, log func(string)) (string, error) {
 	var sk skill
 	found, supported, err := t.registryEntry(skillPath(""), &sk)
 	switch {
@@ -212,40 +212,40 @@ func addSkill(t *mlflowTarget, log func(string)) (string, error) {
 		return "", err
 	case !supported:
 		return "", errNoSkillRegistry
-	case found && sk.Tags[sampleMarkerKey] != SampleSkill:
-		return "", &sampleRefusal{foreignMessage("Skill '" + skillSampleName + "'")}
+	case found && sk.Tags[SampleMarkerKey] != SampleSkill:
+		return "", &sampleRefusal{foreignMessage("Skill '" + SkillSampleName + "'")}
 	case found && sk.LatestVersion != nil:
 		return "already present", nil
 	}
 	var created registryVersion
 	if err := t.api.sendJSON("POST", skillPath("/versions"), nil, map[string]string{
-		"name": skillSampleName, "source": skillSampleSource, "source_type": "git",
-		"ref": skillSampleRef, "subpath": skillSampleSubpath, "status": "active",
+		"name": SkillSampleName, "source": skillSampleSource, "source_type": "git",
+		"ref": SkillSampleRef, "subpath": SkillSampleSubpath, "status": "active",
 	}, &created); err != nil {
 		return "", err
 	}
 	if !found {
 		// As for MCP: a skill someone created since the read is theirs.
-		if err := t.confirmNewParent("skill '"+skillSampleName+"'", skillPath(""), skillPath("/versions"), "skill_versions", created.id(), created.CreatedBy); err != nil {
+		if err := t.confirmNewParent("skill '"+SkillSampleName+"'", skillPath(""), skillPath("/versions"), "skill_versions", created.id(), created.CreatedBy); err != nil {
 			if delErr := t.api.sendJSON("DELETE", skillPath("/versions/"+url.PathEscape(created.id())), nil, nil, nil); delErr != nil {
-				return "", fmt.Errorf("%w; the version this tool added could not be deleted again (%w): delete version %s of skill %s in MLflow", err, delErr, created.id(), skillSampleName)
+				return "", fmt.Errorf("%w; the version this tool added could not be deleted again (%w): delete version %s of skill %s in MLflow", err, delErr, created.id(), SkillSampleName)
 			}
 			return "", err
 		}
-		if err := t.api.sendJSON("POST", skillPath("/tags"), nil, map[string]string{"key": sampleMarkerKey, "value": SampleSkill}, nil); err != nil {
+		if err := t.api.sendJSON("POST", skillPath("/tags"), nil, map[string]string{"key": SampleMarkerKey, "value": SampleSkill}, nil); err != nil {
 			if delErr := t.api.sendJSON("DELETE", skillPath(""), nil, nil, nil); delErr != nil {
-				return "", fmt.Errorf("%w; the new skill could not be deleted again (%w): delete skill %s in MLflow", err, delErr, skillSampleName)
+				return "", fmt.Errorf("%w; the new skill could not be deleted again (%w): delete skill %s in MLflow", err, delErr, SkillSampleName)
 			}
 			return "", err
 		}
 	}
-	log("Registered skill '" + skillSampleName + "' from " + skillSampleSource + " (" + skillSampleSubpath + ")")
+	log("Registered skill '" + SkillSampleName + "' from " + skillSampleSource + " (" + SkillSampleSubpath + ")")
 	return "added", nil
 }
 
 // removeSkill deletes the skill: a hard delete with its versions and owned
 // artifacts (server/skill_registry/deletion.py:13-37).
-func removeSkill(t *mlflowTarget, log func(string)) (string, error) {
+func removeSkill(t *Target, log func(string)) (string, error) {
 	var sk skill
 	found, supported, err := t.registryEntry(skillPath(""), &sk)
 	switch {
@@ -253,12 +253,12 @@ func removeSkill(t *mlflowTarget, log func(string)) (string, error) {
 		return "", err
 	case !supported || !found:
 		return "nothing to remove", nil
-	case sk.Tags[sampleMarkerKey] != SampleSkill:
-		return "", &sampleRefusal{foreignMessage("Skill '" + skillSampleName + "'")}
+	case sk.Tags[SampleMarkerKey] != SampleSkill:
+		return "", &sampleRefusal{foreignMessage("Skill '" + SkillSampleName + "'")}
 	}
-	if err := t.api.sendJSON("DELETE", skillPath(""), nil, nil, nil); err != nil && !isNotFound(err) {
+	if err := t.api.sendJSON("DELETE", skillPath(""), nil, nil, nil); err != nil && !IsNotFound(err) {
 		return "", err
 	}
-	log("Deleted skill '" + skillSampleName + "'")
+	log("Deleted skill '" + SkillSampleName + "'")
 	return "removed", nil
 }

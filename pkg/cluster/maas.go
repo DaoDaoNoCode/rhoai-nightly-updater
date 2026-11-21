@@ -15,6 +15,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
@@ -1727,7 +1728,7 @@ func toolOwned(meta kube.ObjectMeta) bool {
 
 // dashboardURLOrEmpty is the dashboard's address, or "".
 func dashboardURLOrEmpty(c *Client) string {
-	return cachedDashboardURL(c)
+	return dashdev.CachedURL(c)
 }
 
 // maasModelRefObject is a MaaS custom resource as read.
