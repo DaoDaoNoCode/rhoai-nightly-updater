@@ -261,7 +261,7 @@ Requires prior `docker login` or `podman login` to the registry. To test your bu
 GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release tags (`vX.Y.Z`, and pre-releases `vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`; other tags run nothing):
 
 - **test** stage, all must pass, no lint exceptions:
-  - `go` (`make ci-go`): gofmt, `go mod verify`, `go vet`, the race tests (`scripts/test-go.sh`: `go test -race -count=1` over every package, with `pkg/cluster` split into one process per CPU, at most 4), govulncheck;
+  - `go` (`make ci-go`): gofmt, `go mod verify`, `go vet`, the race tests (`scripts/test-go.sh`: `go test -race -count=1` over every package, with `pkg/cluster` split into one process per CPU, at most 4), govulncheck. GitHub's `go` job runs the same target;
   - `golangci-lint`;
   - `checks` (`make -k ci-checks`): the frontend's typecheck, ESLint and `npm audit`; `make docs-check`; shellcheck 0.11.0 on `scripts/*.sh`, `dev.sh`, `docs/tools/*.sh` and `pkg/cluster/node_pull_secret.sh` (as bash: it is a pasted command, so it carries no shell directive; `make shellcheck`). GitHub runs the same in its `frontend-checks` and `docs` jobs, with the shellcheck release tarball checked against `SHELLCHECK_SHA256`;
   - `frontend-test` (tests) and `frontend-build` (production build), in parallel with `checks`, each after its own `npm ci` from one npm cache;
