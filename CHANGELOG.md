@@ -111,7 +111,10 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 - Internal, frontend only: ESLint reads the TypeScript types and checks
   promises (none left unhandled, none passed where nothing waits for them),
   `await` of non-promises, switch exhaustiveness and object-to-string
-  conversions. No change in what the app does.
+  conversions. The Environment page's component (`QuickResourceCreator`,
+  1,011 lines) is split into its URL state, status reads, run actions and
+  their requests (`frontend/src/components/environment/`). No change in
+  what the app does.
 
 ### Fixed
 
