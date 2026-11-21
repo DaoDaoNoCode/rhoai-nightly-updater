@@ -1292,7 +1292,7 @@ func writeChecked(c *Client, v *dscView, plan func(v *dscView) (*dscPlanned, *ty
 			return nil, nil, res
 		case attempt == dscWriteAttempts:
 			return nil, nil, &types.OperationResponse{Success: false, ErrorCode: "conflict", Logs: res.Logs,
-				Message: fmt.Sprintf("DataScienceCluster %s changed each time the change was sent (%d attempts; the operator writes its status, or someone else is editing it), so the API server's refusal may be that change or a refusal of its own. Its last answer: %s Nothing was changed. Try again.", name, attempt, res.Message)}
+				Message: fmt.Sprintf("DataScienceCluster %s changed each time the change was sent (%d attempts; the operator writes its status, or someone else is editing it), so the API server's refusal may be that change or a refusal of its own. Its last answer: %s Nothing was changed. Try again.", name, attempt, strings.TrimSuffix(res.Message, " Nothing was changed."))}
 		}
 		slog.Info("dsc changed since it was checked; checking again", "dsc", name, "attempt", attempt, "from", v.meta.ResourceVersion, "to", next.meta.ResourceVersion)
 		v = next

@@ -266,7 +266,7 @@ func TestDSCWriteKeepsTheRefusalWhenTheStatusMovesMeanwhile(t *testing.T) {
 			f.failMessage["PATCH "+dscV3Path] = invalid
 			onRealPatch(f, -1, statusWrite(f))
 			res := change(t, c)
-			if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, invalid) || !strings.Contains(res.Message, "Nothing was changed") {
+			if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, invalid) || strings.Count(res.Message, "Nothing was changed") != 1 {
 				t.Fatalf("result = %+v", res)
 			}
 			if _, real := patchesTo(f); len(real) != dscWriteAttempts {
