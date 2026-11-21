@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
@@ -348,9 +349,7 @@ func TestUpdateStream_CatalogImagePullFailsFast(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 	f.verifyState = "TRANSIENT_FAILURE"
 	f.catalogPods = `{"items":[{"status":{"containerStatuses":[{"state":{"waiting":{"reason":"ImagePullBackOff","message":"Back-off pulling image: unauthorized: access to the requested resource is not authorized"}}}]}}]}`
-	old := CatalogReadyTimeout
-	CatalogReadyTimeout = 10 * time.Second
-	t.Cleanup(func() { CatalogReadyTimeout = old })
+	t.Cleanup(catalog.SetReadyTimeoutForTest(10 * time.Second))
 	start := kube.Clock().Now()
 	result, err := UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != "catalog_image_pull" || !strings.Contains(result.Message, "unauthorized") {
@@ -369,7 +368,7 @@ func TestUpdateStream_CatalogImagePullFailsFast(t *testing.T) {
 // A01-13: verification catalogs carry labels so leftovers can be removed.
 func TestPreflightLabelsVerificationCatalog(t *testing.T) {
 	f := newFakeOLM(t)
-	if _, err := preflightReinstallCatalog(f.client(context.Background()), testNightlyImage, ""); err != nil {
+	if _, err := catalog.PreflightReinstall(f.client(context.Background()), testNightlyImage, ""); err != nil {
 		t.Fatal(err)
 	}
 	f.mu.Lock()
@@ -377,7 +376,7 @@ func TestPreflightLabelsVerificationCatalog(t *testing.T) {
 	for _, r := range f.requests {
 		if r.Method == http.MethodPatch && strings.Contains(r.Path, "-verify-") {
 			labels, _ := r.Body["metadata"].(map[string]any)["labels"].(map[string]any)
-			if labels[catalogPurposeLabel] != verificationCatalogRole || labels[managedByLabel] != managedByValue {
+			if labels[catalog.PurposeLabel] != catalog.VerificationRole || labels[catalog.ManagedByLabel] != catalog.ManagedByValue {
 				t.Fatalf("labels = %v", labels)
 			}
 			return

@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 )
 
 func verificationCatalogServer(t *testing.T, state, channels string) *Client {
@@ -39,7 +41,7 @@ func TestPreflightReinstallCatalog_ExplainsFailure(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := preflightReinstallCatalog(verificationCatalogServer(t, tc.state, channels), image, tc.override)
+			_, err := catalog.PreflightReinstall(verificationCatalogServer(t, tc.state, channels), image, tc.override)
 			if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "<nil>") {
 				t.Fatalf("error = %v, want it to contain %q", err, tc.want)
 			}
@@ -49,7 +51,7 @@ func TestPreflightReinstallCatalog_ExplainsFailure(t *testing.T) {
 
 func TestPreflightReinstallCatalog_ReturnsOverride(t *testing.T) {
 	channels := `[{"name":"fast","currentCSV":"rhods-operator.3.5.0"}]`
-	ch, err := preflightReinstallCatalog(verificationCatalogServer(t, "READY", channels), "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5", "fast")
+	ch, err := catalog.PreflightReinstall(verificationCatalogServer(t, "READY", channels), "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5", "fast")
 	if err != nil || ch.Channel != "fast" || ch.HeadCSV != "rhods-operator.3.5.0" {
 		t.Fatalf("got %q, %v", ch, err)
 	}

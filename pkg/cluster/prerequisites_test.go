@@ -67,7 +67,7 @@ const (
 	lwsExamples         = `[{"apiVersion":"operator.openshift.io/v1","kind":"LeaderWorkerSetOperator","metadata":{"name":"cluster"},"spec":{"managementState":"Managed"}}]`
 )
 
-func pkgManifest(name, catalog, provider, channel, csv, display, suggestedNS string, modes []string, examples string, monitoring bool) map[string]any {
+func pkgManifest(name, catalogSrc, provider, channel, csv, display, suggestedNS string, modes []string, examples string, monitoring bool) map[string]any {
 	var installModes []map[string]any
 	for _, m := range []string{"OwnNamespace", "SingleNamespace", "MultiNamespace", "AllNamespaces"} {
 		installModes = append(installModes, map[string]any{"type": m, "supported": slices.Contains(modes, m)})
@@ -80,9 +80,9 @@ func pkgManifest(name, catalog, provider, channel, csv, display, suggestedNS str
 		ann["operatorframework.io/cluster-monitoring"] = "true"
 	}
 	return map[string]any{
-		"metadata": map[string]any{"name": name, "labels": map[string]string{"catalog": catalog, "provider": provider}},
+		"metadata": map[string]any{"name": name, "labels": map[string]string{"catalog": catalogSrc, "provider": provider}},
 		"status": map[string]any{
-			"catalogSource": catalog, "catalogSourceNamespace": "openshift-marketplace", "defaultChannel": channel,
+			"catalogSource": catalogSrc, "catalogSourceNamespace": "openshift-marketplace", "defaultChannel": channel,
 			"provider": map[string]string{"name": provider},
 			"channels": []any{
 				map[string]any{"name": "older", "currentCSV": "old.v0", "currentCSVDesc": map[string]any{"displayName": "Old"}},

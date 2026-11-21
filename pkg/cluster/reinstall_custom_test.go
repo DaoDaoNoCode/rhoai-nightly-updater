@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -58,7 +59,7 @@ func TestCustomReinstallPinsOldBuildAndSelectsOlderChannel(t *testing.T) {
 					io.WriteString(w, `{}`)
 				case r.URL.Path == subPath:
 					// Starting on stable must not short-circuit a custom reinstall.
-					io.WriteString(w, `{"spec":{"source":"`+getStableSource()+`","channel":"stable-3.6"},"status":{"currentCSV":"rhods-operator.3.6.0","installedCSV":"rhods-operator.3.6.0","installPlanRef":{"name":"old-build-install"}}}`)
+					io.WriteString(w, `{"spec":{"source":"`+catalog.StableSource()+`","channel":"stable-3.6"},"status":{"currentCSV":"rhods-operator.3.6.0","installedCSV":"rhods-operator.3.6.0","installPlanRef":{"name":"old-build-install"}}}`)
 				case r.URL.Path == csPath:
 					io.WriteString(w, `{"spec":{"image":"`+image+`"},"status":{"connectionState":{"lastObservedState":"READY"}}}`)
 				case strings.Contains(r.URL.Path, "/clusterserviceversions/"):

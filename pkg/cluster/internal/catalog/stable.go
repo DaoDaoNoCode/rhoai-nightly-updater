@@ -1,4 +1,4 @@
-package cluster
+package catalog
 
 import (
 	"fmt"
@@ -12,13 +12,13 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
-type stableTarget struct {
+type StableTarget struct {
 	Source  string
 	Channel string
 	Version string
 	// HeadCSV is the channel head's CSV name (what OLM installs).
 	HeadCSV string
-	// OwnedCRDs: see catalogTarget.OwnedCRDs.
+	// OwnedCRDs: see Target.OwnedCRDs.
 	OwnedCRDs map[string][]string
 	Pinned    bool
 }
@@ -71,11 +71,11 @@ func stableChannelVersion(channel stablePackageChannel) (registry.Tag, string, b
 	return parsed, version, ok && parsed.EA == -1 && channel.CurrentCSV != ""
 }
 
-// resolveStableTarget reads the same catalog metadata used by OperatorHub.
+// ResolveStableTarget reads the same catalog metadata used by OperatorHub.
 // Never query a PackageManifest by name alone: several catalogs can publish
 // rhods-operator, and a nightly catalog must not determine the stable target.
-func resolveStableTarget(c *Client) (stableTarget, error) {
-	target := stableTarget{Source: getStableSource()}
+func ResolveStableTarget(c *kube.Client) (StableTarget, error) {
+	target := StableTarget{Source: StableSource()}
 	path := rhoai.NamespacedPath("packages.operators.coreos.com/v1", "packagemanifests", rhoai.CatalogNS, "") +
 		"?labelSelector=" + url.QueryEscape("catalog="+target.Source) +
 		"&fieldSelector=" + url.QueryEscape("metadata.name="+rhoai.SubName)
@@ -145,4 +145,11 @@ func resolveStableTarget(c *Client) (stableTarget, error) {
 		return target, fmt.Errorf("configured STABLE_CHANNEL %q is missing or has no GA release in catalog %q", override, target.Source)
 	}
 	return target, fmt.Errorf("no RHOAI GA release found in catalog %q; check that the catalog is ready and contains rhods-operator", target.Source)
+}
+
+func StableSource() string {
+	if v := os.Getenv("STABLE_SOURCE"); v != "" {
+		return v
+	}
+	return "redhat-operators"
 }

@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
@@ -18,128 +19,17 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// extractTargetVersion parses the target major.minor from an FBC image tag.
-// e.g., "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5@sha256:..." → (3, 5, true)
-func extractTargetVersion(imageRef string) (int, int, bool) {
-	// Extract the tag portion: "rhoai-3.5" from the full image ref
-	ref := imageRef
-	if atIdx := strings.Index(ref, "@"); atIdx >= 0 {
-		ref = ref[:atIdx]
-	}
-	colonIdx := strings.LastIndex(ref, ":")
-	if colonIdx < 0 {
-		return 0, 0, false
-	}
-	tag := ref[colonIdx+1:]
-
-	var major, minor int
-	n, _ := fmt.Sscanf(tag, "rhoai-%d.%d", &major, &minor)
-	if n == 2 {
-		return major, minor, true
-	}
-	return 0, 0, false
-}
-
 // detectNightlyChannel queries the nightly catalog's packagemanifest and picks
 // the best channel for the given FBC image. It filters channels to the target
 // major.minor (extracted from the image tag), excludes lifecycle channels
 // (eus-*, support-required-upgrade-*), and picks the highest version with a
 // deterministic tiebreaker: stable-M.x > stable-M.N > beta > fast > other.
 func detectNightlyChannel(c *Client, imageRef string) (string, error) {
-	channels, err := catalogChannels(c, rhoai.CatalogName)
+	channels, err := catalog.Channels(c, rhoai.CatalogName)
 	if err != nil {
 		return "", err
 	}
-	return detectBestChannel(channels, imageRef)
-}
-
-func detectBestChannel(channels []any, imageRef string) (string, error) {
-	if len(channels) == 0 {
-		slog.Warn("detectNightlyChannel: no channels found in packagemanifest")
-		return "", nil
-	}
-
-	targetMajor, targetMinor, hasTarget := extractTargetVersion(imageRef)
-	targetRelease, hasRelease := registry.ParseTag(registry.TagFromRef(imageRef))
-	if hasTarget {
-		slog.Info("detectNightlyChannel: filtering to target version", "major", targetMajor, "minor", targetMinor, "image", imageRef)
-	}
-
-	bestChannel := ""
-	var bestParsed *registry.Tag
-	for _, ch := range channels {
-		channel, _ := ch.(map[string]any)
-		name, _ := channel["name"].(string)
-		csv, _ := channel["currentCSV"].(string)
-
-		// Skip lifecycle channels that aren't for nightly dev use
-		if strings.HasPrefix(name, "eus-") || strings.HasPrefix(name, "support-required-upgrade") {
-			continue
-		}
-
-		parsed, ok := registry.ParseCSVVersion(csv)
-		if !ok {
-			slog.Debug("skipping channel with unparseable CSV", "channel", name, "csv", csv)
-			continue
-		}
-
-		// If we know the target version, only consider channels with matching major.minor
-		if hasTarget && (parsed.Major != targetMajor || parsed.Minor != targetMinor) {
-			continue
-		}
-
-		if hasRelease && parsed.EA != targetRelease.EA {
-			continue
-		}
-
-		cmp := 0
-		if bestParsed != nil {
-			cmp = registry.CompareTags(parsed, *bestParsed)
-		}
-
-		if bestParsed == nil || cmp > 0 || (cmp == 0 && channelPriority(name, parsed.EA) > channelPriority(bestChannel, bestParsed.EA)) {
-			bestParsed = &parsed
-			bestChannel = name
-		}
-	}
-
-	if bestChannel == "" {
-		slog.Warn("detectNightlyChannel: no matching channels found", "targetMajor", targetMajor, "targetMinor", targetMinor)
-	} else {
-		slog.Info("detected nightly channel", "channel", bestChannel, "csv", bestParsed.Raw)
-	}
-
-	return bestChannel, nil
-}
-
-// channelPriority returns a numeric priority for tiebreaking when two channels
-// have the same version. Higher = preferred.
-//
-// For GA releases (ea < 0): stable-M.x > stable-M.N > beta > everything else.
-// For EA releases (ea >= 0): beta > stable-M.x > stable-M.N > everything else.
-func channelPriority(name string, ea int) int {
-	isEA := ea >= 0
-	switch {
-	case name == "beta":
-		if isEA {
-			return 40
-		}
-		return 20
-	case strings.HasPrefix(name, "stable-") && strings.HasSuffix(name, ".x"):
-		if isEA {
-			return 30
-		}
-		return 40
-	case strings.HasPrefix(name, "stable-"):
-		if isEA {
-			return 25
-		}
-		return 35
-	case strings.HasPrefix(name, "fast"):
-		return 10
-	default:
-		return 0
-	}
+	return catalog.BestChannel(channels, imageRef)
 }
 
 // channelExistsInCatalog checks whether the given channel name exists in the
@@ -147,7 +37,7 @@ func channelPriority(name string, ea int) int {
 // found, (false, nil) if the catalog has no such channel, and (false, err) on
 // transient API / parse failures.
 func channelExistsInCatalog(c *Client, channel string) (bool, error) {
-	channels, err := catalogChannels(c, rhoai.CatalogName)
+	channels, err := catalog.Channels(c, rhoai.CatalogName)
 	if err != nil {
 		return false, err
 	}
@@ -163,37 +53,13 @@ func channelExistsInCatalog(c *Client, channel string) (bool, error) {
 // Timing constants used by multi-step operations. Package-level vars so tests
 // can override them with shorter durations to avoid real-time waits.
 var (
-	CatalogReadyTimeout            = 120 * time.Second
-	CatalogPollInterval            = 5 * time.Second
-	InstallPlanPollTimeout         = 60 * time.Second
-	InstallPlanPollInterval        = 5 * time.Second
-	PropagationWait                = 10 * time.Second
-	RefreshCleanupWait             = 5 * time.Second
-	SubRetryBackoffs               = []time.Duration{2 * time.Second, 4 * time.Second}
-	ChannelRetryDelay              = 8 * time.Second
-	PackageManifestPropagationWait = 30 * time.Second
+	InstallPlanPollTimeout  = 60 * time.Second
+	InstallPlanPollInterval = 5 * time.Second
+	PropagationWait         = 10 * time.Second
+	RefreshCleanupWait      = 5 * time.Second
+	SubRetryBackoffs        = []time.Duration{2 * time.Second, 4 * time.Second}
+	ChannelRetryDelay       = 8 * time.Second
 )
-
-// buildCatalogSourceSpec returns the nightly CatalogSource for an FBC image.
-func buildCatalogSourceSpec(image string) map[string]any {
-	return map[string]any{
-		"apiVersion": "operators.coreos.com/v1alpha1",
-		"kind":       "CatalogSource",
-		"metadata": map[string]any{
-			"name":      rhoai.CatalogName,
-			"namespace": rhoai.CatalogNS,
-		},
-		"spec": map[string]any{
-			"sourceType":  "grpc",
-			"image":       image,
-			"displayName": "RHOAI Development Catalog",
-			"publisher":   "RHOAI DevOps",
-			"grpcPodConfig": map[string]any{
-				"securityContextConfig": "restricted",
-			},
-		},
-	}
-}
 
 // UpdateStepEvent represents a single step in the update pipeline
 // (types.UpdateStepEvent, so the packages under pkg/cluster share it).
@@ -206,10 +72,10 @@ type UpdateStepEvent = types.UpdateStepEvent
 // is the context error if the operation is canceled, or a
 // *catalogImagePullError when the catalog pod cannot pull image.
 func waitForNightlyCatalogReady(c *Client, image string, emit func(UpdateStepEvent), logs *[]string) (bool, error) {
-	deadline := kube.Clock().Now().Add(CatalogReadyTimeout)
-	pull := pullFailureWatch{advice: rhoai.NodePullAdvice}
+	deadline := kube.Clock().Now().Add(catalog.ReadyTimeout)
+	pull := catalog.PullFailureWatch{Advice: rhoai.NodePullAdvice}
 	for kube.Clock().Now().Before(deadline) {
-		if err := kube.Clock().Sleep(c.Context(), CatalogPollInterval); err != nil {
+		if err := kube.Clock().Sleep(c.Context(), catalog.PollInterval); err != nil {
 			return false, err
 		}
 
@@ -223,7 +89,7 @@ func waitForNightlyCatalogReady(c *Client, image string, emit func(UpdateStepEve
 		if cs.State == "READY" {
 			return true, nil
 		}
-		if err := pull.check(c, rhoai.CatalogName, image); err != nil {
+		if err := pull.Check(c, rhoai.CatalogName, image); err != nil {
 			return false, err
 		}
 	}
@@ -236,7 +102,7 @@ func waitForNightlyCatalogReady(c *Client, image string, emit func(UpdateStepEve
 // caller proceeds; the context error is returned if the operation is canceled.
 func waitForNightlyPackageManifest(c *Client, image string, logs *[]string) error {
 	start := kube.Clock().Now()
-	for kube.Clock().Since(start) < PackageManifestPropagationWait {
+	for kube.Clock().Since(start) < catalog.PackageManifestPropagationWait {
 		if err := c.Context().Err(); err != nil {
 			return err
 		}
@@ -248,7 +114,7 @@ func waitForNightlyPackageManifest(c *Client, image string, logs *[]string) erro
 			return err
 		}
 	}
-	*logs = append(*logs, fmt.Sprintf("Warning: PackageManifest not ready after %s, proceeding with detection", PackageManifestPropagationWait))
+	*logs = append(*logs, fmt.Sprintf("Warning: PackageManifest not ready after %s, proceeding with detection", catalog.PackageManifestPropagationWait))
 	return nil
 }
 
@@ -490,7 +356,7 @@ type updateChecks struct {
 	currentCSV      types.CSVInfo
 	gitOps          argo.OperatorGitOps
 	channelOverride string
-	target          catalogTarget
+	target          catalog.Target
 	captured        *operatorRecovery
 }
 
@@ -572,7 +438,7 @@ func updateVerifyTarget(c *Client, image string, chk *updateChecks, logs *[]stri
 	// catalog or removing any installed resources. The channel head it
 	// reports is the bundle OLM will install, so the downgrade check uses it.
 	emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Verifying the selected catalog image..."})
-	target, preflightErr := preflightReinstallCatalog(c, image, channelOverride)
+	target, preflightErr := catalog.PreflightReinstall(c, image, channelOverride)
 	if preflightErr != nil {
 		if c.Context().Err() != nil {
 			return &types.OperationResponse{Success: false, Message: "Operation stopped while verifying the catalog image", Logs: *logs}, c.Context().Err()
@@ -581,7 +447,7 @@ func updateVerifyTarget(c *Client, image string, chk *updateChecks, logs *[]stri
 		if channelOverride != "" {
 			hint = fmt.Sprintf(" Argo CD application %q sets the Subscription's channel %s in Git, so Update keeps it: pick a build that has that channel, or change it in Git.", gitOps.SubscriptionApp, channelOverride)
 		}
-		if isCatalogImagePullError(preflightErr) {
+		if catalog.IsImagePullError(preflightErr) {
 			return fail("Replacement catalog validation failed: "+preflightErr.Error()+". Nothing was changed.", "catalog_image_pull")
 		}
 		return fail("Replacement catalog validation failed: "+preflightErr.Error()+". Nothing was changed."+hint, "validation")
@@ -650,7 +516,7 @@ func updateApplyCatalog(c *Client, image string, recovery *operatorRecovery, log
 	if _, deleteErr := c.DeleteIfExists(csPath); deleteErr != nil {
 		return fail("Cannot replace nightly catalog: "+deleteErr.Error(), kube.ErrorCodeFromK8sErr(deleteErr))
 	}
-	if _, _, err := c.Apply(csPath, buildCatalogSourceSpec(image)); err != nil {
+	if _, _, err := c.Apply(csPath, catalog.SourceSpec(image)); err != nil {
 		return fail(fmt.Sprintf("Failed to apply CatalogSource: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	*logs = append(*logs, "OK: CatalogSource applied")
@@ -781,7 +647,7 @@ func readCSVMetaRetrying(c *Client, csv string) (meta kube.ObjectMeta, found boo
 
 // verifyUpdateInstall is Update's last step: it waits for OLM to install
 // target's head CSV and builds the result.
-func verifyUpdateInstall(c *Client, target catalogTarget, recovery *operatorRecovery, logs *[]string, emit func(UpdateStepEvent)) (*types.OperationResponse, error) {
+func verifyUpdateInstall(c *Client, target catalog.Target, recovery *operatorRecovery, logs *[]string, emit func(UpdateStepEvent)) (*types.OperationResponse, error) {
 	// --- Step 8: verify_installplan (wait for OLM's result) ---
 	emit(UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Waiting for OLM to install the operator..."})
 	*logs = append(*logs, "Waiting for OLM to install the operator...")
@@ -807,7 +673,7 @@ func verifyUpdateInstall(c *Client, target catalogTarget, recovery *operatorReco
 			*logs = append(*logs, "Warning: "+note)
 			outcome.note = strings.TrimSpace(outcome.note + " " + note)
 		default:
-			if got := buildFingerprint(meta.Annotations["containerImage"], meta.Annotations["createdAt"]); got != target.Fingerprint {
+			if got := catalog.BuildFingerprint(meta.Annotations["containerImage"], meta.Annotations["createdAt"]); got != target.Fingerprint {
 				recovery.keepNewInstall = true // a Succeeded operator is not torn down
 				what := fmt.Sprintf("operator image %s, built %s", kube.NonEmpty(meta.Annotations["containerImage"], "unknown"), kube.NonEmpty(meta.Annotations["createdAt"], "unknown"))
 				if got == "" {
@@ -835,12 +701,12 @@ func verifyUpdateInstall(c *Client, target catalogTarget, recovery *operatorReco
 // operation's context ended.
 func catalogWaitFailure(ready bool, err error) (msg, code string, stopErr error) {
 	switch {
-	case err != nil && isCatalogImagePullError(err):
+	case err != nil && catalog.IsImagePullError(err):
 		return err.Error(), "catalog_image_pull", nil
 	case err != nil:
 		return "Operation stopped while waiting for the CatalogSource", "", err
 	case !ready:
-		return fmt.Sprintf("CatalogSource did not reach READY state within %s", CatalogReadyTimeout), "timeout", nil
+		return fmt.Sprintf("CatalogSource did not reach READY state within %s", catalog.ReadyTimeout), "timeout", nil
 	}
 	return "", "", nil
 }
@@ -973,7 +839,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 	}
 	// Server-side dry run: attempt CatalogSource apply with ?dryRun=All
 	// (not under Argo CD: the catalog is never written then).
-	catalogSpec := buildCatalogSourceSpec(image)
+	catalogSpec := catalog.SourceSpec(image)
 	csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	var csDryErr error
 	if !gitOps.Active() {
@@ -1061,7 +927,7 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 	var recovery *operatorRecovery
 	rs := &reinstallChecks{
 		recordActivity:  true,
-		stableSource:    getStableSource(),
+		stableSource:    catalog.StableSource(),
 		activityTarget:  image,
 		isNightly:       targetType == "nightly" || targetType == "custom",
 		channelOverride: channelOverride,
@@ -1198,13 +1064,13 @@ func reinstallResolveTarget(c *Client, targetType, image string, rs *reinstallCh
 	var targetCRDs map[string][]string
 	if isNightly {
 		emit(UpdateStepEvent{Step: "validate_target", Status: "running", Message: "Verifying the selected catalog image..."})
-		target, err := preflightReinstallCatalog(c, image, channelOverride)
+		target, err := catalog.PreflightReinstall(c, image, channelOverride)
 		if err != nil {
 			if c.Context().Err() != nil {
 				return &types.OperationResponse{Success: false, Message: "Operation stopped while verifying the catalog image; the current operator was not removed", Logs: *logs}, c.Context().Err()
 			}
 			code := "validation"
-			if isCatalogImagePullError(err) {
+			if catalog.IsImagePullError(err) {
 				code = "catalog_image_pull"
 			}
 			return fail("Replacement catalog validation failed; current operator was not removed: "+err.Error(), code)
@@ -1229,7 +1095,7 @@ func reinstallResolveTarget(c *Client, targetType, image string, rs *reinstallCh
 		if sub.State == "Not Installed" {
 			*logs = append(*logs, "No operator Subscription exists; installing creates one for the stable channel")
 		}
-		target, discoveryErr := resolveStableTarget(c)
+		target, discoveryErr := catalog.ResolveStableTarget(c)
 		if discoveryErr != nil {
 			return fail(fmt.Sprintf("Cannot determine the GA release to install: %v", discoveryErr), "validation")
 		}
@@ -1491,7 +1357,7 @@ func reinstallNightlySteps(c *Client, image, channel, approveCSV string, recover
 	emit(UpdateStepEvent{Step: "create_catalog_source", Status: "running", Message: "Creating CatalogSource with nightly image..."})
 	csApplyPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	recovery.noteCatalogChanged()
-	if _, _, err := c.Apply(csApplyPath, buildCatalogSourceSpec(image)); err != nil {
+	if _, _, err := c.Apply(csApplyPath, catalog.SourceSpec(image)); err != nil {
 		return fail(fmt.Sprintf("Failed to create nightly CatalogSource: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	logs = append(logs, "OK: CatalogSource created with nightly image")
@@ -1716,7 +1582,7 @@ func recordRefreshActivity(c *Client, csvName string, success bool, reason strin
 }
 
 func recordReinstallActivity(c *Client, targetType, image string, success bool, reason string) {
-	detail := fmt.Sprintf("to latest GA from %s", getStableSource())
+	detail := fmt.Sprintf("to latest GA from %s", catalog.StableSource())
 	if targetType == "stable" && image != "" {
 		detail = "to " + image
 	} else if targetType == "nightly" || targetType == "custom" {
@@ -1974,7 +1840,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 // rhods-operator package in a catalog: the CSV a new Subscription without
 // startingCSV installs.
 func channelHeadCSV(c *Client, source, channel string) (string, error) {
-	channels, err := catalogChannels(c, source)
+	channels, err := catalog.Channels(c, source)
 	if err != nil {
 		return "", err
 	}

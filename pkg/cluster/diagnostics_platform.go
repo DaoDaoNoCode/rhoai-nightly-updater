@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -376,7 +377,7 @@ func channelHeadBehind(c *Client, sub subscriptionState) *Problem {
 	if !ok {
 		return nil
 	}
-	channels, err := catalogChannels(c, sub.Source)
+	channels, err := catalog.Channels(c, sub.Source)
 	if err != nil {
 		return nil
 	}

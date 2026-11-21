@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -158,7 +159,7 @@ func pendingInstallPlan(c *Client) (name, phase string, err error) {
 //
 // pullAdvice words a catalog image pull failure for the profile
 // (pullFailureWatch.advice).
-func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV types.CSVInfo, g argo.OperatorGitOps,
+func updateUnderGitOps(c *Client, image string, target catalog.Target, currentCSV types.CSVInfo, g argo.OperatorGitOps,
 	recovery *operatorRecovery, logs *[]string, emit func(UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error),
 	policy func(newSub, restoreSub map[string]any) string, pullAdvice func(*Client) string,
 ) (*types.OperationResponse, error) {
@@ -180,12 +181,12 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	switch {
 	case errors.As(err, &changed):
 		return fail("Update stopped: "+changed.Error()+". The operator was not changed.", kube.ErrorCodeGitOpsManaged)
-	case err != nil && isCatalogImagePullError(err):
+	case err != nil && catalog.IsImagePullError(err):
 		return fail(err.Error(), "catalog_image_pull")
 	case err != nil:
 		return stopped("Operation stopped while waiting for the CatalogSource")
 	case !serving:
-		return fail(fmt.Sprintf("The catalog did not serve %s on channel %s within %s. The operator was not changed.", target.HeadCSV, target.Channel, CatalogReadyTimeout+PackageManifestPropagationWait), "timeout")
+		return fail(fmt.Sprintf("The catalog did not serve %s on channel %s within %s. The operator was not changed.", target.HeadCSV, target.Channel, catalog.ReadyTimeout+catalog.PackageManifestPropagationWait), "timeout")
 	}
 	*logs = append(*logs, fmt.Sprintf("OK: The catalog serves %s on channel %s", target.HeadCSV, target.Channel))
 	emit(UpdateStepEvent{Step: "wait_catalog_ready", Status: "success", Message: "CatalogSource serves the build"})

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -137,7 +138,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 			return &types.OperationResponse{Success: false, Message: "Operation stopped while waiting for the catalog", Logs: logs}, c.Context().Err()
 		case errors.As(preflightErr, &changed):
 			return fail("Update stopped: "+changed.Error()+". Nothing was changed.", kube.ErrorCodeGitOpsManaged)
-		case isCatalogImagePullError(preflightErr):
+		case catalog.IsImagePullError(preflightErr):
 			return fail(preflightErr.Error()+". Nothing was changed.", "catalog_image_pull")
 		}
 		hint := ""
@@ -351,15 +352,15 @@ func checkOperatorNamespaceAndGroup(c *Client) (ok, problem, errorCode string) {
 // itself, so then another build than the one read here is installed, and
 // verifyUpdateInstall reports install_mismatch (the operator is kept) when
 // the installed CSV's build annotations differ.
-func liveCatalogTarget(c *Client, image, override, changedBy string, emit func(UpdateStepEvent), logs *[]string) (catalogTarget, error) {
-	deadline := kube.Clock().Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
-	pull := pullFailureWatch{advice: rhoai.GitOpsProfilePullAdvice}
+func liveCatalogTarget(c *Client, image, override, changedBy string, emit func(UpdateStepEvent), logs *[]string) (catalog.Target, error) {
+	deadline := kube.Clock().Now().Add(catalog.ReadyTimeout + catalog.PackageManifestPropagationWait)
+	pull := catalog.PullFailureWatch{Advice: rhoai.GitOpsProfilePullAdvice}
 	last := ""
 	for {
 		target, problem, changedTo := liveCatalogTargetOnce(c, image, override)
 		switch {
 		case changedTo != "":
-			return catalogTarget{}, &errCatalogImageChanged{by: changedBy, image: changedTo}
+			return catalog.Target{}, &errCatalogImageChanged{by: changedBy, image: changedTo}
 		case problem == "":
 			return target, nil
 		}
@@ -368,14 +369,14 @@ func liveCatalogTarget(c *Client, image, override, changedBy string, emit func(U
 			*logs = append(*logs, "  "+problem)
 			emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Catalog: " + problem})
 		}
-		if err := pull.check(c, rhoai.CatalogName, image); err != nil {
-			return catalogTarget{}, err
+		if err := pull.Check(c, rhoai.CatalogName, image); err != nil {
+			return catalog.Target{}, err
 		}
 		if !kube.Clock().Now().Before(deadline) {
-			return catalogTarget{}, errors.New(problem)
+			return catalog.Target{}, errors.New(problem)
 		}
-		if err := kube.Clock().Sleep(c.Context(), CatalogPollInterval); err != nil {
-			return catalogTarget{}, err
+		if err := kube.Clock().Sleep(c.Context(), catalog.PollInterval); err != nil {
+			return catalog.Target{}, err
 		}
 	}
 }
@@ -383,45 +384,45 @@ func liveCatalogTarget(c *Client, image, override, changedBy string, emit func(U
 // liveCatalogTargetOnce is one poll of liveCatalogTarget: the target when
 // the catalog serves image now, else why not (problem), or the catalog's
 // other image (changedTo). The gitops dry run reads it once.
-func liveCatalogTargetOnce(c *Client, image, override string) (target catalogTarget, problem, changedTo string) {
+func liveCatalogTargetOnce(c *Client, image, override string) (target catalog.Target, problem, changedTo string) {
 	cs, err := rhoai.GetCatalogSource(c)
 	switch {
 	case err != nil:
-		return catalogTarget{}, "cannot read the CatalogSource: " + err.Error(), ""
+		return catalog.Target{}, "cannot read the CatalogSource: " + err.Error(), ""
 	case !cs.Exists:
-		return catalogTarget{}, "CatalogSource " + rhoai.CatalogName + " does not exist", ""
+		return catalog.Target{}, "CatalogSource " + rhoai.CatalogName + " does not exist", ""
 	case cs.Image != image:
-		return catalogTarget{}, "the CatalogSource image is " + cs.Image, cs.Image
+		return catalog.Target{}, "the CatalogSource image is " + cs.Image, cs.Image
 	case cs.State != "READY":
-		return catalogTarget{}, "catalog state " + kube.NonEmpty(cs.State, "unknown"), ""
+		return catalog.Target{}, "catalog state " + kube.NonEmpty(cs.State, "unknown"), ""
 	}
 	ready, stale, ok := readCatalogPods(c, image)
 	switch {
 	case !ok:
-		return catalogTarget{}, "cannot read the catalog pods", ""
+		return catalog.Target{}, "cannot read the catalog pods", ""
 	case !ready || stale > 0:
-		return catalogTarget{}, "OLM is replacing the catalog pod", ""
+		return catalog.Target{}, "OLM is replacing the catalog pod", ""
 	}
-	channels, err := catalogChannels(c, rhoai.CatalogName)
+	channels, err := catalog.Channels(c, rhoai.CatalogName)
 	switch {
 	case err != nil:
-		return catalogTarget{}, err.Error(), ""
+		return catalog.Target{}, err.Error(), ""
 	case len(channels) == 0:
-		return catalogTarget{}, "the catalog does not list the " + rhoai.SubName + " package yet", ""
+		return catalog.Target{}, "the catalog does not list the " + rhoai.SubName + " package yet", ""
 	}
 	channel := override
 	if channel == "" {
-		channel, err = detectBestChannel(channels, image)
+		channel, err = catalog.BestChannel(channels, image)
 	}
-	entry := findChannel(channels, channel)
+	entry := catalog.FindChannel(channels, channel)
 	head, _ := entry["currentCSV"].(string)
 	switch {
 	case err != nil:
-		return catalogTarget{}, err.Error(), ""
+		return catalog.Target{}, err.Error(), ""
 	case entry == nil:
-		return catalogTarget{}, fmt.Sprintf("channel %q is not in the catalog (available: %s)", channel, strings.Join(channelNames(channels), ", ")), ""
+		return catalog.Target{}, fmt.Sprintf("channel %q is not in the catalog (available: %s)", channel, strings.Join(catalog.ChannelNames(channels), ", ")), ""
 	case head == "":
-		return catalogTarget{}, fmt.Sprintf("channel %q has no head", channel), ""
+		return catalog.Target{}, fmt.Sprintf("channel %q has no head", channel), ""
 	}
-	return catalogTarget{Channel: channel, HeadCSV: head, OwnedCRDs: ownedCRDVersions(entry), Fingerprint: headFingerprint(entry)}, "", ""
+	return catalog.Target{Channel: channel, HeadCSV: head, OwnedCRDs: catalog.OwnedCRDVersions(entry), Fingerprint: catalog.HeadFingerprint(entry)}, "", ""
 }

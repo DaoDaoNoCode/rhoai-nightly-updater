@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -218,7 +219,7 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 		if source == rhoai.CatalogName && f.mainChannels != nil {
 			channels = *f.mainChannels
 		}
-		if source == getStableSource() && f.stableChans != "" {
+		if source == catalog.StableSource() && f.stableChans != "" {
 			channels = f.stableChans
 		}
 		_, _ = fmt.Fprintf(w, `{"items":[{"metadata":{"name":%q},"status":{"packageName":%q,"catalogSource":%q,"catalogSourceNamespace":%q,"defaultChannel":"stable-3.x","channels":%s}}]}`, rhoai.SubName, rhoai.SubName, source, rhoai.CatalogNS, channels)

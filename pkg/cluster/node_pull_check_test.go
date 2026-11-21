@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -22,7 +23,7 @@ func verificationCatalogWrites(t *testing.T, f *fakeOLM) {
 	var applied, deleted string
 	for _, w := range f.writes() {
 		method, path, _ := strings.Cut(w, " ")
-		if !strings.Contains(path, "/namespaces/"+rhoai.CatalogNS+"/catalogsources/"+verificationCatalogPrefix()) {
+		if !strings.Contains(path, "/namespaces/"+rhoai.CatalogNS+"/catalogsources/"+catalog.VerificationPrefix()) {
 			t.Fatalf("the check wrote something else than its verification catalog: %v", f.writes())
 		}
 		switch method {
@@ -53,7 +54,7 @@ func TestCheckNodePull_ImagePulled(t *testing.T) {
 		if r.Method == http.MethodPatch {
 			meta, _ := r.Body["metadata"].(map[string]any)
 			labels, _ := meta["labels"].(map[string]any)
-			if labels[catalogPurposeLabel] != verificationCatalogRole {
+			if labels[catalog.PurposeLabel] != catalog.VerificationRole {
 				t.Fatalf("labels %v", labels)
 			}
 		}
@@ -123,14 +124,14 @@ func TestCheckNodePull_NoAnswer(t *testing.T) {
 // put the stop at that point, so each case takes its own path in every run.
 func TestCheckNodePull_StoppedRemovesTheCatalog(t *testing.T) {
 	isStateRead := func(r *http.Request) bool {
-		return r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/catalogsources/"+verificationCatalogPrefix())
+		return r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/catalogsources/"+catalog.VerificationPrefix())
 	}
 	stateReads := func(f *fakeOLM) int {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		n := 0
 		for _, r := range f.requests {
-			if r.Method == http.MethodGet && strings.Contains(r.Path, "/catalogsources/"+verificationCatalogPrefix()) {
+			if r.Method == http.MethodGet && strings.Contains(r.Path, "/catalogsources/"+catalog.VerificationPrefix()) {
 				n++
 			}
 		}

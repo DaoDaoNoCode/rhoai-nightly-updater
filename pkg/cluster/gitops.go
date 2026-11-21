@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/url"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -19,12 +20,12 @@ func readCatalogServes(c *Client, sub types.SubscriptionInfo, cs types.CatalogSo
 	if sub.Channel == "" || sub.Source != rhoai.CatalogName || !cs.Exists {
 		return nil
 	}
-	channels, err := catalogChannels(c, rhoai.CatalogName)
+	channels, err := catalog.Channels(c, rhoai.CatalogName)
 	if err != nil {
 		slog.Warn("catalog head: reading the PackageManifest failed", "error", err)
 		return nil
 	}
-	entry := findChannel(channels, sub.Channel)
+	entry := catalog.FindChannel(channels, sub.Channel)
 	if entry == nil {
 		return nil
 	}
@@ -58,8 +59,8 @@ func readCatalogServes(c *Client, sub types.SubscriptionInfo, cs types.CatalogSo
 		slog.Warn("catalog head: reading the installed CSV failed", "csv", csv.Name, "error", err)
 		return s
 	}
-	headPrint := buildFingerprint(s.OperatorImage, s.Built)
-	installedPrint := buildFingerprint(meta.Annotations["containerImage"], meta.Annotations["createdAt"])
+	headPrint := catalog.BuildFingerprint(s.OperatorImage, s.Built)
+	installedPrint := catalog.BuildFingerprint(meta.Annotations["containerImage"], meta.Annotations["createdAt"])
 	if found && headPrint != "" && installedPrint != "" {
 		installed := headPrint == installedPrint
 		s.Installed = &installed
@@ -89,12 +90,12 @@ type catalogServing struct {
 }
 
 // servesTarget reports whether the catalog serves the verified build.
-func (s catalogServing) servesTarget(image string, target catalogTarget) bool {
+func (s catalogServing) servesTarget(image string, target catalog.Target) bool {
 	return s.image == image && s.state == "READY" && s.podReady && s.stalePods == 0 &&
 		s.head == target.HeadCSV && (target.Fingerprint == "" || s.fingerprint == target.Fingerprint)
 }
 
-func (s catalogServing) describe(target catalogTarget) string {
+func (s catalogServing) describe(target catalog.Target) string {
 	switch {
 	case !s.podReady || s.stalePods > 0:
 		return "OLM is replacing the catalog pod"
@@ -168,16 +169,16 @@ func readCatalogPods(c *Client, image string) (ready bool, stale int, ok bool) {
 // readCatalogServing reads the CatalogSource, its registry pods and its
 // PackageManifest entry for target's channel. Read errors leave fields
 // empty; the caller keeps polling.
-func readCatalogServing(c *Client, image string, target catalogTarget) catalogServing {
+func readCatalogServing(c *Client, image string, target catalog.Target) catalogServing {
 	var s catalogServing
 	if cs, err := rhoai.GetCatalogSource(c); err == nil {
 		s.image, s.state = cs.Image, cs.State
 	}
 	s.podReady, s.stalePods, _ = readCatalogPods(c, image)
-	if channels, err := catalogChannels(c, rhoai.CatalogName); err == nil {
-		if entry := findChannel(channels, target.Channel); entry != nil {
+	if channels, err := catalog.Channels(c, rhoai.CatalogName); err == nil {
+		if entry := catalog.FindChannel(channels, target.Channel); entry != nil {
 			s.head, _ = entry["currentCSV"].(string)
-			s.fingerprint = headFingerprint(entry)
+			s.fingerprint = catalog.HeadFingerprint(entry)
 		}
 	}
 	return s
@@ -192,12 +193,12 @@ func readCatalogServing(c *Client, image string, target catalogTarget) catalogSe
 // error, a *catalogImagePullError, or an *errCatalogImageChanged (by
 // changedBy) when the image changed meanwhile. pullAdvice words the pull
 // error (pullFailureWatch.advice).
-func waitForCatalogServing(c *Client, image string, target catalogTarget, changedBy string, emit func(UpdateStepEvent), logs *[]string, pullAdvice func(*Client) string) (bool, error) {
-	deadline := kube.Clock().Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
-	pull := pullFailureWatch{advice: pullAdvice}
+func waitForCatalogServing(c *Client, image string, target catalog.Target, changedBy string, emit func(UpdateStepEvent), logs *[]string, pullAdvice func(*Client) string) (bool, error) {
+	deadline := kube.Clock().Now().Add(catalog.ReadyTimeout + catalog.PackageManifestPropagationWait)
+	pull := catalog.PullFailureWatch{Advice: pullAdvice}
 	last := ""
 	for kube.Clock().Now().Before(deadline) {
-		if err := kube.Clock().Sleep(c.Context(), CatalogPollInterval); err != nil {
+		if err := kube.Clock().Sleep(c.Context(), catalog.PollInterval); err != nil {
 			return false, err
 		}
 		s := readCatalogServing(c, image, target)
@@ -212,7 +213,7 @@ func waitForCatalogServing(c *Client, image string, target catalogTarget, change
 			*logs = append(*logs, "  "+msg)
 			emit(UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "CatalogSource: " + msg})
 		}
-		if err := pull.check(c, rhoai.CatalogName, image); err != nil {
+		if err := pull.Check(c, rhoai.CatalogName, image); err != nil {
 			return false, err
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -39,7 +40,7 @@ func CheckNodePull(c *Client, image string) (*types.OperationResponse, error) {
 		return &types.OperationResponse{Success: false, Message: msg + " Nothing was changed.", Logs: []string{}, ErrorCode: "validation"}, nil
 	}
 	logs := []string{"Image: " + image}
-	name, path, remove, err := createVerificationCatalog(c, image)
+	name, path, remove, err := catalog.CreateVerification(c, image)
 	if err != nil {
 		return &types.OperationResponse{
 			Success:   false,
@@ -51,11 +52,11 @@ func CheckNodePull(c *Client, image string) (*types.OperationResponse, error) {
 	defer remove()
 	logs = append(logs, "Created the temporary CatalogSource "+rhoai.CatalogNS+"/"+name)
 
-	deadline := kube.Clock().Now().Add(CatalogReadyTimeout)
-	pull := pullFailureWatch{advice: rhoai.NodePullAdvice}
+	deadline := kube.Clock().Now().Add(catalog.ReadyTimeout)
+	pull := catalog.PullFailureWatch{Advice: rhoai.NodePullAdvice}
 	last := ""
 	for kube.Clock().Now().Before(deadline) {
-		state, err := verificationCatalogState(c, path)
+		state, err := catalog.VerificationState(c, path)
 		switch {
 		case err != nil:
 			last = err.Error()
@@ -69,17 +70,17 @@ func CheckNodePull(c *Client, image string) (*types.OperationResponse, error) {
 			}, nil
 		default:
 			last = "catalog state is " + state
-			if pullErr := pull.check(c, name, image); pullErr != nil {
+			if pullErr := pull.Check(c, name, image); pullErr != nil {
 				// "The catalog image ... cannot be pulled (...). <advice>."
 				text := pullErr.Error()
 				msg := strings.ToUpper(text[:1]) + text[1:] + "."
 				return &types.OperationResponse{Success: false, Message: msg, Logs: append(logs, msg), ErrorCode: "catalog_image_pull"}, nil
 			}
 		}
-		if err := kube.Clock().Sleep(c.Context(), CatalogPollInterval); err != nil {
+		if err := kube.Clock().Sleep(c.Context(), catalog.PollInterval); err != nil {
 			return &types.OperationResponse{Success: false, Message: "The check was stopped", Logs: logs}, err
 		}
 	}
-	msg := fmt.Sprintf("The check found no answer within %s (%s): the image may still be downloading. Try again in a minute.", CatalogReadyTimeout, last)
+	msg := fmt.Sprintf("The check found no answer within %s (%s): the image may still be downloading. Try again in a minute.", catalog.ReadyTimeout, last)
 	return &types.OperationResponse{Success: false, Message: msg, Logs: append(logs, msg), ErrorCode: "timeout"}, nil
 }

@@ -930,12 +930,12 @@ func nodePullSecretHealth(c *Client, controlPlane string) checkOutput {
 			check: CheckResult{Name: "Pull secret", Status: "pass", Detail: "additional-pull-secret is valid, and the nodes can pull from quay.io/rhoai: the nightly catalog runs its quay.io/rhoai image"},
 		}
 	}
-	catalog := "no nightly catalog runs yet that would show it"
+	catalogSrc := "no nightly catalog runs yet that would show it"
 	switch {
 	case csErr != nil:
-		catalog = "the nightly catalog could not be read: " + csErr.Error()
+		catalogSrc = "the nightly catalog could not be read: " + csErr.Error()
 	case cs.Exists:
-		catalog = fmt.Sprintf("CatalogSource %s is %s on %s", rhoai.CatalogName, cs.State, cs.Image)
+		catalogSrc = fmt.Sprintf("CatalogSource %s is %s on %s", rhoai.CatalogName, cs.State, cs.Image)
 	}
 	topology := "Infrastructure cluster: controlPlaneTopology is not External (self-managed)"
 	title := "The nodes may not have the quay.io/rhoai credentials"
@@ -961,7 +961,7 @@ func nodePullSecretHealth(c *Client, controlPlane string) checkOutput {
 			Title:    title,
 			Description: description + "The updater's ServiceAccount has no access to openshift-config/pull-secret, which holds every registry credential of the cluster, so this check cannot tell whether the quay.io/rhoai entry is there. " +
 				"Without it, Update stops at the catalog check with ErrImagePull and changes nothing.",
-			Evidence:     []string{topology, catalog},
+			Evidence:     []string{topology, catalogSrc},
 			Fix:          fix,
 			LearnMore:    "The nodes pick up the change within a few minutes, without a reboot; oc get mcp shows UPDATED True for every pool when they all have it.",
 			TechnicalCmd: rhoai.NodePullSecretCommand,

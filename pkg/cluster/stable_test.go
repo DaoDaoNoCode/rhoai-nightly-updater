@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -62,7 +63,7 @@ func TestStableTargetDiscovery(t *testing.T) {
 				rhoai.NamespacedPath("packages.operators.coreos.com/v1", "packagemanifests", rhoai.CatalogNS, ""): {body: stableManifestJSON("redhat-operators", tt.defaultChannel, tt.channels)},
 			})
 			defer cleanup()
-			target, err := resolveStableTarget(client)
+			target, err := catalog.ResolveStableTarget(client)
 			if (err != nil) != tt.wantError || target.Channel != tt.wantChannel || target.Version != tt.wantVersion || target.Pinned != (tt.override != "" && !tt.wantError) {
 				t.Fatalf("target=%+v error=%v", target, err)
 			}
@@ -95,7 +96,7 @@ func TestStableDiscoveryScopesCatalogAndRefreshes(t *testing.T) {
 	c := newTestClient(testClientOptions{BaseURL: server.URL, HTTPClient: server.Client(), Ctx: context.Background()})
 	for _, currentVersion := range []string{"3.5.0", "3.7.0"} {
 		version = currentVersion
-		target, err := resolveStableTarget(c)
+		target, err := catalog.ResolveStableTarget(c)
 		if err != nil || target.Source != "mirrored-operators" || target.Version != currentVersion {
 			t.Fatalf("target=%+v error=%v", target, err)
 		}
@@ -153,7 +154,7 @@ func TestStableDiscoveryRejectsUnavailableOrUnverifiedCatalog(t *testing.T) {
 				rhoai.NamespacedPath("packages.operators.coreos.com/v1", "packagemanifests", rhoai.CatalogNS, ""): tt.response,
 			})
 			defer cleanup()
-			target, err := resolveStableTarget(c)
+			target, err := catalog.ResolveStableTarget(c)
 			if err == nil || target.Channel != "" {
 				t.Fatalf("unverified target accepted: %+v error=%v", target, err)
 			}

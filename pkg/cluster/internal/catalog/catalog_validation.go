@@ -1,11 +1,9 @@
-package cluster
+package catalog
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"net/url"
 	"slices"
 	"sort"
@@ -20,7 +18,7 @@ import (
 
 // Always scope and verify catalog identity: the stable and nightly catalogs
 // both publish rhods-operator, so a by-name lookup is ambiguous.
-func catalogChannels(c *Client, source string) ([]any, error) {
+func Channels(c *kube.Client, source string) ([]any, error) {
 	path := rhoai.NamespacedPath("packages.operators.coreos.com/v1", "packagemanifests", rhoai.CatalogNS, "") +
 		"?labelSelector=" + url.QueryEscape("catalog="+source) + "&fieldSelector=" + url.QueryEscape("metadata.name="+rhoai.SubName)
 	var items []struct {
@@ -51,28 +49,28 @@ func catalogChannels(c *Client, source string) ([]any, error) {
 // Labels on the temporary verification catalogs, so leftovers from a crashed
 // or killed operation can be found and removed later.
 const (
-	managedByLabel          = "app.kubernetes.io/managed-by"
-	managedByValue          = "rhoai-nightly-updater"
-	catalogPurposeLabel     = "rhoai-nightly-updater/purpose"
-	verificationCatalogRole = "catalog-verification"
+	ManagedByLabel   = "app.kubernetes.io/managed-by"
+	ManagedByValue   = "rhoai-nightly-updater"
+	PurposeLabel     = "rhoai-nightly-updater/purpose"
+	VerificationRole = "catalog-verification"
 )
 
 var (
-	// StaleVerificationCatalogAge is how old a verification catalog must be
+	// StaleVerificationAge is how old a verification catalog must be
 	// before another operation removes it. A preflight takes at most
-	// CatalogReadyTimeout+PackageManifestPropagationWait (2.5 minutes).
-	StaleVerificationCatalogAge = 15 * time.Minute
-	// CatalogImagePullGrace is how long a catalog pod may keep failing to
+	// ReadyTimeout+PackageManifestPropagationWait (2.5 minutes).
+	StaleVerificationAge = 15 * time.Minute
+	// ImagePullGrace is how long a catalog pod may keep failing to
 	// pull its image before the operation stops. Kubelet retries pulls with
 	// a back-off, so a single ErrImagePull right after a pull secret change
 	// is not fatal.
-	CatalogImagePullGrace = 30 * time.Second
+	ImagePullGrace = 30 * time.Second
 )
 
-// catalogTarget is what the verified catalog would install: the channel and
+// Target is what the verified catalog would install: the channel and
 // that channel's head CSV, which OLM installs for a new Subscription without
 // startingCSV.
-type catalogTarget struct {
+type Target struct {
 	Channel string
 	HeadCSV string
 	// OwnedCRDs maps each CRD the head CSV owns to the versions it lists
@@ -84,30 +82,30 @@ type catalogTarget struct {
 	Fingerprint string
 }
 
-// headFingerprint identifies the build of a PackageManifest channel's head
+// HeadFingerprint identifies the build of a PackageManifest channel's head
 // CSV: its operator image and creation time (currentCSVDesc annotations
 // containerImage and createdAt). Two nightly builds of the same version have
 // the same CSV name but differ here. "" when neither annotation is set.
-func headFingerprint(entry map[string]any) string {
+func HeadFingerprint(entry map[string]any) string {
 	desc, _ := entry["currentCSVDesc"].(map[string]any)
 	ann, _ := desc["annotations"].(map[string]any)
 	image, _ := ann["containerImage"].(string)
 	created, _ := ann["createdAt"].(string)
-	return buildFingerprint(image, created)
+	return BuildFingerprint(image, created)
 }
 
-// buildFingerprint is headFingerprint for a CSV's containerImage and
+// BuildFingerprint is headFingerprint for a CSV's containerImage and
 // createdAt annotations; "" when neither is set.
-func buildFingerprint(image, created string) string {
+func BuildFingerprint(image, created string) string {
 	if image == "" && created == "" {
 		return ""
 	}
 	return image + " " + created
 }
 
-// ownedCRDVersions reads currentCSVDesc.customresourcedefinitions.owned of
+// OwnedCRDVersions reads currentCSVDesc.customresourcedefinitions.owned of
 // a PackageManifest channel entry.
-func ownedCRDVersions(entry map[string]any) map[string][]string {
+func OwnedCRDVersions(entry map[string]any) map[string][]string {
 	desc, _ := entry["currentCSVDesc"].(map[string]any)
 	crds, _ := desc["customresourcedefinitions"].(map[string]any)
 	owned, _ := crds["owned"].([]any)
@@ -126,7 +124,7 @@ func ownedCRDVersions(entry map[string]any) map[string][]string {
 	return out
 }
 
-func verificationCatalogPrefix() string {
+func VerificationPrefix() string {
 	name := strings.TrimRight(rhoai.CatalogName, "-")
 	if len(name) > 35 {
 		name = name[:35]
@@ -137,56 +135,56 @@ func verificationCatalogPrefix() string {
 // A fresh temporary CatalogSource verifies the supplied image (including old
 // pinned builds) before uninstall. Its unique identity avoids stale package
 // metadata from the previous nightly build. No unrelated tag is resolved.
-func preflightReinstallCatalog(c *Client, image, override string) (catalogTarget, error) {
-	name, path, remove, err := createVerificationCatalog(c, image)
+func PreflightReinstall(c *kube.Client, image, override string) (Target, error) {
+	name, path, remove, err := CreateVerification(c, image)
 	if err != nil {
-		return catalogTarget{}, err
+		return Target{}, err
 	}
 	defer remove()
-	deadline := kube.Clock().Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
+	deadline := kube.Clock().Now().Add(ReadyTimeout + PackageManifestPropagationWait)
 	lastProblem := "the catalog has not reported its state yet"
-	pull := pullFailureWatch{advice: rhoai.NodePullAdvice}
+	pull := PullFailureWatch{Advice: rhoai.NodePullAdvice}
 	for kube.Clock().Now().Before(deadline) {
-		state, err := verificationCatalogState(c, path)
+		state, err := VerificationState(c, path)
 		if err != nil {
 			lastProblem = err.Error()
 		} else if state != "READY" {
 			lastProblem = "catalog state is " + state
-			if pullErr := pull.check(c, name, image); pullErr != nil {
-				return catalogTarget{}, pullErr
+			if pullErr := pull.Check(c, name, image); pullErr != nil {
+				return Target{}, pullErr
 			}
-		} else if channels, channelErr := catalogChannels(c, name); channelErr != nil {
+		} else if channels, channelErr := Channels(c, name); channelErr != nil {
 			lastProblem = channelErr.Error()
 		} else if len(channels) == 0 {
 			lastProblem = "the catalog does not list the " + rhoai.SubName + " package yet"
 		} else if override != "" {
-			if entry := findChannel(channels, override); entry != nil {
+			if entry := FindChannel(channels, override); entry != nil {
 				head, _ := entry["currentCSV"].(string)
-				return catalogTarget{Channel: override, HeadCSV: head, OwnedCRDs: ownedCRDVersions(entry), Fingerprint: headFingerprint(entry)}, nil
+				return Target{Channel: override, HeadCSV: head, OwnedCRDs: OwnedCRDVersions(entry), Fingerprint: HeadFingerprint(entry)}, nil
 			}
-			lastProblem = fmt.Sprintf("channel %q is not in the catalog (available: %s)", override, strings.Join(channelNames(channels), ", "))
-		} else if ch, err := detectBestChannel(channels, image); err != nil {
+			lastProblem = fmt.Sprintf("channel %q is not in the catalog (available: %s)", override, strings.Join(ChannelNames(channels), ", "))
+		} else if ch, err := BestChannel(channels, image); err != nil {
 			lastProblem = err.Error()
 		} else if ch != "" {
-			entry := findChannel(channels, ch)
+			entry := FindChannel(channels, ch)
 			head, _ := entry["currentCSV"].(string)
-			return catalogTarget{Channel: ch, HeadCSV: head, OwnedCRDs: ownedCRDVersions(entry), Fingerprint: headFingerprint(entry)}, nil
+			return Target{Channel: ch, HeadCSV: head, OwnedCRDs: OwnedCRDVersions(entry), Fingerprint: HeadFingerprint(entry)}, nil
 		} else {
-			lastProblem = fmt.Sprintf("no channel matches the image's release (available: %s)", strings.Join(channelNames(channels), ", "))
+			lastProblem = fmt.Sprintf("no channel matches the image's release (available: %s)", strings.Join(ChannelNames(channels), ", "))
 		}
-		if err := kube.Clock().Sleep(c.Context(), CatalogPollInterval); err != nil {
-			return catalogTarget{}, err
+		if err := kube.Clock().Sleep(c.Context(), PollInterval); err != nil {
+			return Target{}, err
 		}
 	}
-	return catalogTarget{}, fmt.Errorf("selected image did not publish a ready RHOAI catalog with a matching channel: %s", lastProblem)
+	return Target{}, fmt.Errorf("selected image did not publish a ready RHOAI catalog with a matching channel: %s", lastProblem)
 }
 
-// createVerificationCatalog creates a temporary CatalogSource for image,
+// CreateVerification creates a temporary CatalogSource for image,
 // labelled so that a leftover is found and removed later, after removing
 // stale ones. remove deletes it (also after the operation's context ended).
-func createVerificationCatalog(c *Client, image string) (name, path string, remove func(), err error) {
+func CreateVerification(c *kube.Client, image string) (name, path string, remove func(), err error) {
 	cleanupStaleVerificationCatalogs(c)
-	name = verificationCatalogPrefix() + strconv.FormatInt(time.Now().UnixNano(), 36)
+	name = VerificationPrefix() + strconv.FormatInt(time.Now().UnixNano(), 36)
 	path = rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, name)
 	remove = func() {
 		ctx, cancel := record.PostOperationContext(c, 30*time.Second)
@@ -195,10 +193,10 @@ func createVerificationCatalog(c *Client, image string) (name, path string, remo
 			slog.Warn("failed to delete verification CatalogSource; the next operation removes it", "name", name, "error", err)
 		}
 	}
-	spec := buildCatalogSourceSpec(image)
+	spec := SourceSpec(image)
 	meta := spec["metadata"].(map[string]any)
 	meta["name"] = name
-	meta["labels"] = map[string]any{managedByLabel: managedByValue, catalogPurposeLabel: verificationCatalogRole}
+	meta["labels"] = map[string]any{ManagedByLabel: ManagedByValue, PurposeLabel: VerificationRole}
 	if _, _, err := c.Apply(path, spec); err != nil {
 		// The apply may have created it before failing.
 		remove()
@@ -207,9 +205,9 @@ func createVerificationCatalog(c *Client, image string) (name, path string, remo
 	return name, path, remove, nil
 }
 
-// verificationCatalogState reads a verification catalog's
+// VerificationState reads a verification catalog's
 // status.connectionState.lastObservedState ("unknown" while it has none).
-func verificationCatalogState(c *Client, path string) (string, error) {
+func VerificationState(c *kube.Client, path string) (string, error) {
 	var cs struct {
 		Status struct {
 			Connection struct {
@@ -229,8 +227,8 @@ func verificationCatalogState(c *Client, path string) (string, error) {
 	return cs.Status.Connection.State, nil
 }
 
-// findChannel returns the PackageManifest channel entry with the given name.
-func findChannel(channels []any, name string) map[string]any {
+// FindChannel returns the PackageManifest channel entry with the given name.
+func FindChannel(channels []any, name string) map[string]any {
 	for _, entry := range channels {
 		ch, _ := entry.(map[string]any)
 		if ch["name"] == name {
@@ -244,7 +242,7 @@ func findChannel(channels []any, name string) map[string]any {
 // by an operation that was killed before its deferred cleanup ran. Unlabelled
 // catalogs from older versions are recognised by their generated name. Young
 // catalogs may belong to a running preflight and are kept.
-func cleanupStaleVerificationCatalogs(c *Client) {
+func cleanupStaleVerificationCatalogs(c *kube.Client) {
 	var items []struct {
 		Metadata struct {
 			Name              string            `json:"name"`
@@ -262,11 +260,11 @@ func cleanupStaleVerificationCatalogs(c *Client) {
 	}
 	for _, item := range items {
 		m := item.Metadata
-		if m.Labels[catalogPurposeLabel] != verificationCatalogRole && !strings.HasPrefix(m.Name, verificationCatalogPrefix()) {
+		if m.Labels[PurposeLabel] != VerificationRole && !strings.HasPrefix(m.Name, VerificationPrefix()) {
 			continue
 		}
 		created, err := time.Parse(time.RFC3339, m.CreationTimestamp)
-		if err != nil || time.Since(created) < StaleVerificationCatalogAge {
+		if err != nil || time.Since(created) < StaleVerificationAge {
 			continue
 		}
 		path := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, m.Name)
@@ -278,15 +276,15 @@ func cleanupStaleVerificationCatalogs(c *Client) {
 	}
 }
 
-// catalogImagePullError reports that a catalog pod cannot pull its image.
-type catalogImagePullError struct {
+// ImagePullError reports that a catalog pod cannot pull its image.
+type ImagePullError struct {
 	image  string
 	detail string
 	// advice says which pull secret to check (pullFailureWatch.advice).
 	advice string
 }
 
-func (e *catalogImagePullError) Error() string {
+func (e *ImagePullError) Error() string {
 	advice := e.advice
 	if advice == "" {
 		advice = "Check that the nodes' pull secret has access to quay.io/rhoai and that the image exists"
@@ -294,38 +292,38 @@ func (e *catalogImagePullError) Error() string {
 	return fmt.Sprintf("the catalog image %s cannot be pulled (%s). %s", e.image, e.detail, advice)
 }
 
-func isCatalogImagePullError(err error) bool {
-	var pullErr *catalogImagePullError
+func IsImagePullError(err error) bool {
+	var pullErr *ImagePullError
 	return errors.As(err, &pullErr)
 }
 
-// pullFailureWatch tracks how long a catalog pod has been failing to pull.
-type pullFailureWatch struct {
-	since time.Time
+// PullFailureWatch tracks how long a catalog pod has been failing to pull.
+type PullFailureWatch struct {
+	Since time.Time
 	// advice, when set, words what the error tells the user to check:
 	// nodePullAdvice in the full profile (it depends on the control plane),
 	// gitOpsProfilePullAdvice in the gitops profile. A function value, so
 	// the gitops profile, which passes its own, never reaches the control
 	// plane read (deploy/rbac-gitops.yaml does not grant it).
-	advice func(*Client) string
+	Advice func(*kube.Client) string
 }
 
-// check reads the pod OLM runs for the CatalogSource (label
+// Check reads the pod OLM runs for the CatalogSource (label
 // olm.catalogSource=<name>) and returns an error once its image pull has
-// failed for CatalogImagePullGrace, or at once for an invalid image name.
-func (w *pullFailureWatch) check(c *Client, source, image string) error {
+// failed for ImagePullGrace, or at once for an invalid image name.
+func (w *PullFailureWatch) Check(c *kube.Client, source, image string) error {
 	reason, detail := catalogPodPullFailure(c, source)
 	if reason == "" {
-		w.since = time.Time{}
+		w.Since = time.Time{}
 		return nil
 	}
-	if w.since.IsZero() {
-		w.since = kube.Clock().Now()
+	if w.Since.IsZero() {
+		w.Since = kube.Clock().Now()
 	}
-	if reason == "InvalidImageName" || kube.Clock().Since(w.since) >= CatalogImagePullGrace {
-		err := &catalogImagePullError{image: image, detail: detail}
-		if w.advice != nil {
-			err.advice = w.advice(c)
+	if reason == "InvalidImageName" || kube.Clock().Since(w.Since) >= ImagePullGrace {
+		err := &ImagePullError{image: image, detail: detail}
+		if w.Advice != nil {
+			err.advice = w.Advice(c)
 		}
 		return err
 	}
@@ -342,7 +340,7 @@ var imagePullFailureReasons = map[string]bool{
 // catalogPodPullFailure returns the waiting reason and kubelet message of a
 // catalog pod container that cannot pull its image. Lookup errors are
 // ignored: the caller keeps polling the CatalogSource state.
-func catalogPodPullFailure(c *Client, source string) (string, string) {
+func catalogPodPullFailure(c *kube.Client, source string) (string, string) {
 	path := rhoai.NamespacedPath("v1", "pods", rhoai.CatalogNS, "") + "?labelSelector=" + url.QueryEscape("olm.catalogSource="+source)
 	var items []struct {
 		Status struct {
@@ -376,8 +374,8 @@ type containerWaitStatus struct {
 	} `json:"state"`
 }
 
-// channelNames lists the channel names of a PackageManifest, sorted.
-func channelNames(channels []any) []string {
+// ChannelNames lists the channel names of a PackageManifest, sorted.
+func ChannelNames(channels []any) []string {
 	var names []string
 	for _, entry := range channels {
 		ch, _ := entry.(map[string]any)
@@ -387,46 +385,4 @@ func channelNames(channels []any) []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-// spaced returns " "+s, or "" for an empty s.
-func spaced(s string) string {
-	if s == "" {
-		return ""
-	}
-	return " " + s
-}
-
-// storedVersionConflicts compares the CRD versions the target bundle lists
-// with the live CRDs' status.storedVersions. OLM fails an InstallPlan whose
-// CRD drops a version still listed in storedVersions ("risk of data loss",
-// operator-lifecycle-manager lib/crd/storage.go; RHOAI operator notes §1.4),
-// which a downgrade can hit (live: DSC and DSCI store v2, which 2.x bundles
-// lack). Only the operator's own CRDs (OLM package label) are read; CRDs
-// the target does not list are skipped.
-func storedVersionConflicts(c *Client, owned map[string][]string) ([]string, error) {
-	body, _, err := c.Do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil, url.Values{"labelSelector": {rhoaiCRDSelectors[0]}})
-	if err != nil {
-		return nil, fmt.Errorf("list the operator's CRDs: %w", err)
-	}
-	var list struct {
-		Items []conversionCRD `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse CRDs: %w", err)
-	}
-	var out []string
-	for _, crd := range list.Items {
-		versions, listed := owned[crd.Metadata.Name]
-		if !listed {
-			continue
-		}
-		for _, stored := range crd.Status.StoredVersions {
-			if !slices.Contains(versions, stored) {
-				out = append(out, fmt.Sprintf("CRD %s stores objects as %s, which the target lists only as %s", crd.Metadata.Name, stored, strings.Join(versions, ", ")))
-			}
-		}
-	}
-	sort.Strings(out)
-	return out, nil
 }

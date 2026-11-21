@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -313,7 +314,7 @@ func TestUpdateUnderGitOps_WaitsForTheNewBuild(t *testing.T) {
 }
 
 func TestCatalogServing(t *testing.T) {
-	target := catalogTarget{Channel: "beta", HeadCSV: gitOpsCSV, Fingerprint: "op@sha256:new t1"}
+	target := catalog.Target{Channel: "beta", HeadCSV: gitOpsCSV, Fingerprint: "op@sha256:new t1"}
 	ok := catalogServing{image: "img:new", state: "READY", podReady: true, head: gitOpsCSV, fingerprint: "op@sha256:new t1"}
 	if !ok.servesTarget("img:new", target) {
 		t.Fatal("a ready catalog serving the build was not accepted")

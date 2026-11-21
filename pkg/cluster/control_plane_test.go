@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -283,7 +284,7 @@ func TestLiveCatalogTarget_GitOpsProfilePullAdvice(t *testing.T) {
 	f.catalogPods = `{"items":[{"status":{"containerStatuses":[{"state":{"waiting":{"reason":"ImagePullBackOff","message":"unauthorized"}}}]}}]}`
 	var logs []string
 	_, err := liveCatalogTarget(f.client(context.Background()), testNightlyImage, "", "Argo CD application rhoai", func(UpdateStepEvent) {}, &logs)
-	if !isCatalogImagePullError(err) {
+	if !catalog.IsImagePullError(err) {
 		t.Fatalf("err %v", err)
 	}
 	if msg := err.Error(); !strings.Contains(msg, "which Git or ACM manage here") || strings.Contains(msg, "Setup step 1") || strings.Contains(msg, "the command under Pull secret") {

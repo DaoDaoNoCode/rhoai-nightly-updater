@@ -12,18 +12,12 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
-
-func getStableSource() string {
-	if v := os.Getenv("STABLE_SOURCE"); v != "" {
-		return v
-	}
-	return "redhat-operators"
-}
 
 // statusRegistryReads are the reads of GetStatus that the gitops profile
 // leaves out: the pull secret (a Secret, checked with Quay), the newest
@@ -70,7 +64,7 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 	user, server := getClusterInfo(c)
 	status.Cluster = types.ClusterInfo{Server: server, User: user}
 
-	status.StableSource = getStableSource()
+	status.StableSource = catalog.StableSource()
 
 	var wg sync.WaitGroup
 	var quayAuth string
@@ -299,16 +293,16 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 // Operations resolve the target uncached.
 const stableTargetCacheTTL = 5 * time.Minute
 
-var stableTargetCache = kube.NewLRU[string, stableTarget](8)
+var stableTargetCache = kube.NewLRU[string, catalog.StableTarget](8)
 
 // cachedStableTarget is resolveStableTarget for status polling. Only
 // successful lookups are cached, so a discovery error is retried next poll.
-func cachedStableTarget(c *Client) (stableTarget, error) {
-	key := c.BaseURL() + "|" + getStableSource() + "|" + strings.TrimSpace(os.Getenv("STABLE_CHANNEL"))
+func cachedStableTarget(c *Client) (catalog.StableTarget, error) {
+	key := c.BaseURL() + "|" + catalog.StableSource() + "|" + strings.TrimSpace(os.Getenv("STABLE_CHANNEL"))
 	if target, ok := stableTargetCache.Get(key); ok {
 		return target, nil
 	}
-	target, err := resolveStableTarget(c)
+	target, err := catalog.ResolveStableTarget(c)
 	if err == nil {
 		stableTargetCache.Add(key, target, stableTargetCacheTTL)
 	}
@@ -411,16 +405,16 @@ func getClusterVersion(c *Client) (string, error) {
 // is read once per poll), and an ACM policy that
 // enforces the catalog when no Argo CD application manages it. A nil
 // metadata is an object the status did not find.
-func gitOpsManagers(c *Client, status *types.StatusResponse, sub, catalog, dsc *kube.ObjectMeta) {
+func gitOpsManagers(c *Client, status *types.StatusResponse, sub, catalogSrc, dsc *kube.ObjectMeta) {
 	argoCD := argo.NewCheck(c)
 	if sub != nil {
 		t := argoCD.Object(sub.Annotations, sub.Labels, argo.SubscriptionObject)
 		status.Subscription.ManagedBy, status.Subscription.ArgoCD = t.ManagedBy(), t.Info()
 	}
-	if catalog != nil {
-		t := argoCD.Object(catalog.Annotations, catalog.Labels, argo.CatalogObject)
+	if catalogSrc != nil {
+		t := argoCD.Object(catalogSrc.Annotations, catalogSrc.Labels, argo.CatalogObject)
 		status.CatalogSource.ManagedBy, status.CatalogSource.ArgoCD = t.ManagedBy(), t.Info()
-		status.CatalogSource.ManagedByACM = t.ManagedBy() == "" && argo.ACMEnforcesSpec(*catalog)
+		status.CatalogSource.ManagedByACM = t.ManagedBy() == "" && argo.ACMEnforcesSpec(*catalogSrc)
 	}
 	if dsc != nil {
 		t := argoCD.Object(dsc.Annotations, dsc.Labels, argo.DSCObject(dsc.Name))
