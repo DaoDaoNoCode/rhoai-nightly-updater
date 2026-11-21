@@ -26,9 +26,9 @@ func SetRecordPruneActivityForTest(record func(*kube.Client, types.ActivityEntry
 // SetModelReadyTimeoutForTest sets how long a model setup waits for Ready.
 func SetModelReadyTimeoutForTest(d time.Duration) (restore func()) {
 	mustBeTest("SetModelReadyTimeoutForTest")
-	prev := ModelReadyTimeout
-	ModelReadyTimeout = d
-	return func() { ModelReadyTimeout = prev }
+	prev := modelReadyTimeout
+	modelReadyTimeout = d
+	return func() { modelReadyTimeout = prev }
 }
 
 // SetModelCallHTTPClientForTest makes client send the model test calls.

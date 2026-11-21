@@ -105,19 +105,19 @@ const (
 )
 
 var (
-	// MaaSDatabaseTimeout bounds the wait for the database to run.
-	MaaSDatabaseTimeout = 5 * time.Minute
-	// MaaSGatewayTimeout bounds the wait for Programmed (setup-gateway.sh: 120 s).
-	MaaSGatewayTimeout = 2 * time.Minute
-	// MaaSPlatformTimeout bounds the wait for maas-api and the tenant
+	// maasDatabaseTimeout bounds the wait for the database to run.
+	maasDatabaseTimeout = 5 * time.Minute
+	// maasGatewayTimeout bounds the wait for Programmed (setup-gateway.sh: 120 s).
+	maasGatewayTimeout = 2 * time.Minute
+	// maasPlatformTimeout bounds the wait for maas-api and the tenant
 	// (maas-setup.md waits 300 s).
-	MaaSPlatformTimeout = 5 * time.Minute
-	// MaaSPublishTimeout bounds the wait for a published model to be Ready.
-	MaaSPublishTimeout = 5 * time.Minute
-	// MaaSRouteTimeout bounds the wait for KServe to move the model's
+	maasPlatformTimeout = 5 * time.Minute
+	// maasPublishTimeout bounds the wait for a published model to be Ready.
+	maasPublishTimeout = 5 * time.Minute
+	// maasRouteTimeout bounds the wait for KServe to move the model's
 	// HTTPRoute after its gateway refs change (live: about 6 s).
-	MaaSRouteTimeout  = 2 * time.Minute
-	MaaSDeleteTimeout = 2 * time.Minute
+	maasRouteTimeout  = 2 * time.Minute
+	maasDeleteTimeout = 2 * time.Minute
 )
 
 // authorinoGroup is the Authorino operator's API group (the Authorino CR).

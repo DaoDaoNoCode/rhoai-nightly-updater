@@ -600,7 +600,7 @@ func (m *Run) teardownDSC(t *maasTeardown) (*types.OperationResponse, error) {
 			if err := patchModelsAsAService(c, prev); err != nil {
 				return m.Fail("dsc", fmt.Sprintf("Failed to restore modelsAsAService: %v. Nothing else was deleted.", err), kube.ErrorCodeFromK8sErr(err), "dsc patch failed")
 			}
-			gone, _ := kube.WaitForGone(c, MaaSDeleteTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+			gone, _ := kube.WaitForGone(c, maasDeleteTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 				return deploymentAvailable(cc, infra, "maas-api") == "missing", nil
 			})
 			if !gone {
@@ -657,7 +657,7 @@ func (m *Run) teardownDelete(step, infra string, o maasTeardownObj) (bool, *type
 		res, _ := m.Fail(step, fmt.Sprintf("Failed to delete %s: %v. Remove again to retry.", maasDesc(o.kind, infra), err), MaaSWriteCode(err), "delete failed")
 		return false, res
 	}
-	if gone, _ := kube.WaitForDeletion(c, path, MaaSDeleteTimeout, envkit.PollInterval); !gone {
+	if gone, _ := kube.WaitForDeletion(c, path, maasDeleteTimeout, envkit.PollInterval); !gone {
 		m.Logs = append(m.Logs, maasDesc(o.kind, infra)+" is still being deleted")
 	}
 	return true, nil
@@ -1217,7 +1217,7 @@ func (m *Run) publishWaitReady(pl *maasPublish) (*types.OperationResponse, error
 	c, project, name := m.Client, pl.project, pl.name
 	m.Step("ready", "running", "Waiting for MaaS to accept the model...")
 	last := ""
-	ready, err := kube.WaitForGone(c, MaaSPublishTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+	ready, err := kube.WaitForGone(c, maasPublishTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		r, _, err := readMaaSModelRef(cc, project, name)
 		if err != nil {
 			return false, err
@@ -1235,7 +1235,7 @@ func (m *Run) publishWaitReady(pl *maasPublish) (*types.OperationResponse, error
 		return m.Fail("ready", fmt.Sprintf("Stopped waiting: %v. The model is published; the MaaS tab shows its state.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "wait failed")
 	}
 	if !ready {
-		m.Step("ready", "success", fmt.Sprintf("Not ready after %s (%s). The MaaS tab shows its state.", ClockText(MaaSPublishTimeout), last))
+		m.Step("ready", "success", fmt.Sprintf("Not ready after %s (%s). The MaaS tab shows its state.", ClockText(maasPublishTimeout), last))
 		return m.Done(fmt.Sprintf("%s in %s is published and still being accepted.", name, project))
 	}
 	m.Step("ready", "success", "MaaS lists the model.")
@@ -1388,7 +1388,7 @@ func (m *Run) unpublishAccess(u *maasUnpublish) (*types.OperationResponse, error
 			if _, err := kube.DeleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 				return m.Fail("maas", fmt.Sprintf("Failed to delete %s: %v.", w.desc, err), MaaSWriteCode(err), "delete failed")
 			}
-			_, _ = kube.WaitForDeletion(c, path, MaaSDeleteTimeout, envkit.PollInterval)
+			_, _ = kube.WaitForDeletion(c, path, maasDeleteTimeout, envkit.PollInterval)
 			m.Logs = append(m.Logs, "OK: "+w.desc+" deleted")
 			continue
 		}
@@ -1426,7 +1426,7 @@ func (m *Run) unpublishModelRef(u *maasUnpublish) (*types.OperationResponse, err
 				m.Logs = append(m.Logs, fmt.Sprintf("maas-controller cannot finish deleting MaaSModelRef %s/%s (%s), so this tool removed the finalizer %s from its own reference. Policies maas-controller generated for the model may be left in %s: oc get authpolicy,tokenratelimitpolicy -n %s -l maas.opendatahub.io/model=%s,app.kubernetes.io/managed-by=maas-controller", project, name, why, MaaSModelFinalizer, project, project, name))
 			}
 		}
-		if gone, err := kube.WaitForDeletion(c, path, MaaSDeleteTimeout, envkit.PollInterval); err != nil || !gone {
+		if gone, err := kube.WaitForDeletion(c, path, maasDeleteTimeout, envkit.PollInterval); err != nil || !gone {
 			return m.Fail("maas", fmt.Sprintf("MaaSModelRef %s/%s is still being deleted (maas-controller removes its finalizer; it must be running). Unpublish again to check.", project, name), "in_progress", "ref still deleting")
 		}
 	}

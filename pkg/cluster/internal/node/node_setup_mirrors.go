@@ -66,9 +66,9 @@ func (r MirrorRule) hasRealMirror() bool {
 }
 
 // redirectsToQuay: the rule serves pulls of IDMSSource by digest from
-// MirrorTarget, which is what the image mirror of this setup is for.
+// mirrorTarget, which is what the image mirror of this setup is for.
 func (r MirrorRule) redirectsToQuay() bool {
-	return r.digest() && r.Source == rhoai.IDMSSource && slices.Contains(r.Mirrors, MirrorTarget)
+	return r.digest() && r.Source == rhoai.IDMSSource && slices.Contains(r.Mirrors, mirrorTarget)
 }
 
 // ScopeIsNestedInsideScope is runtime-utils registries.go
@@ -259,7 +259,7 @@ func policyConflictRefusal(conflicts []MirrorRule) string {
 		names[i] = r.ref()
 	}
 	return fmt.Sprintf("%s sets mirrorSourcePolicy %s for %s. ImageDigestMirrorSet %s would leave it at the default, AllowContactingSource, and the Machine Config Operator refuses the cluster's whole mirror configuration while two objects set different policies for one source, so no mirror change would reach the nodes. So it is not created. Nothing was changed. "+
-		"To use %s, the cluster's administrator adds it to the mirrors of an ImageDigestMirrorSet entry for %s that has the same mirrorSourcePolicy (the entry there, if it is an ImageDigestMirrorSet's).", strings.Join(names, ", "), conflicts[0].Policy, rhoai.IDMSSource, MirrorName, MirrorTarget, rhoai.IDMSSource)
+		"To use %s, the cluster's administrator adds it to the mirrors of an ImageDigestMirrorSet entry for %s that has the same mirrorSourcePolicy (the entry there, if it is an ImageDigestMirrorSet's).", strings.Join(names, ", "), conflicts[0].Policy, rhoai.IDMSSource, MirrorName, mirrorTarget, rhoai.IDMSSource)
 }
 
 // ParentScopeRefusal explains why the mirror is not created over parents:
@@ -280,7 +280,7 @@ func ParentScopeRefusal(parents []MirrorRule) string {
 	fmt.Fprintf(&b, "The nodes use only the mirrors of the most specific source that matches an image, and the Machine Config Operator copies a mirror to a namespace inside its source only while that namespace has no mirror of its own. "+
 		"Creating ImageDigestMirrorSet %s, a mirror for exactly %s, would take those pulls away from that mirror:", MirrorName, rhoai.IDMSSource)
 	if digest {
-		fmt.Fprintf(&b, " pulls by digest would go to %s, then to registry.redhat.io itself", MirrorTarget)
+		fmt.Fprintf(&b, " pulls by digest would go to %s, then to registry.redhat.io itself", mirrorTarget)
 	}
 	if digest && tag {
 		b.WriteString(";")
@@ -300,7 +300,7 @@ func ParentScopeRefusal(parents []MirrorRule) string {
 
 // mirrorRemoveImpactFor words what the nodes do when the setup's IDMS is
 // deleted and remaining stays, and how to undo it. others are the
-// remaining objects that redirect IDMSSource to MirrorTarget.
+// remaining objects that redirect IDMSSource to mirrorTarget.
 func mirrorRemoveImpactFor(remaining []MirrorRule, others []string) (impact, undo string) {
 	undo = "Create the image mirror again (one click, no drain)."
 	if len(others) > 0 {
@@ -347,7 +347,7 @@ func (r MirrorRule) mirrorPaths() []string {
 // manualEntryHint words the entry the administrator would add to r's
 // object, in that object's own field: its mirror's path for IDMSSource
 // first, so the nodes keep using it, and for a digest object
-// MirrorTarget after it, which also sets up the image mirror (this item
+// mirrorTarget after it, which also sets up the image mirror (this item
 // then counts it as done). An ImageTagMirrorSet's entry keeps its tag
 // mirror; the image mirror can then be created here.
 func manualEntryHint(r MirrorRule) string {
@@ -355,7 +355,7 @@ func manualEntryHint(r MirrorRule) string {
 	mirrors := r.mirrorPaths()
 	after := "then Create the image mirror works here"
 	if r.digest() {
-		mirrors = append(mirrors, MirrorTarget)
+		mirrors = append(mirrors, mirrorTarget)
 		after = "that also sets up the image mirror"
 	}
 	return fmt.Sprintf("in %s of %s: source %s, mirrors %s (%s)", field, r.ref(), rhoai.IDMSSource, strings.Join(mirrors, ", "), after)

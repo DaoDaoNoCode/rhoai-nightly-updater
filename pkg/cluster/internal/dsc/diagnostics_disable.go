@@ -24,8 +24,8 @@ import (
 // (RHOAI operator notes D1, D7, D8). So the tool only removes a component
 // whose finalizer owner is up, and refuses one it cannot check.
 
-// RefusedComponents are never disabled by the tool, with the reason shown.
-var RefusedComponents = map[string]string{
+// refusedComponents are never disabled by the tool, with the reason shown.
+var refusedComponents = map[string]string{
 	"dashboard": "Removing the dashboard deletes the Dashboard CR, whose finalizer only the dashboard module's operator removes. If Dashboard Dev has paused " +
 		"that operator, the deletion hangs. Change it in the OpenShift console after reverting Dashboard Dev.",
 	"mlflowoperator": "The MLflowOperator CR cannot be deleted while any MLflow CR exists (its finalizer waits for them), so removing this " +
@@ -85,11 +85,11 @@ func moduleCR(c *kube.Client, discover func() (rhoai.ComponentAPI, error), compo
 	return m.Name, m.Finalizers, m.DeletionTimestamp != "", true, false, nil
 }
 
-// RemovalChecker evaluates the preconditions for setting components to
+// removalChecker evaluates the preconditions for setting components to
 // Removed. It caches the component API, the installed operator's
 // Deployments, the RHOAI conversion CRDs and the Services behind them, so a
 // change that removes several components reads them once.
-type RemovalChecker struct {
+type removalChecker struct {
 	c           *kube.Client
 	api         func() (rhoai.ComponentAPI, error)
 	operators   *components.ModuleOperatorFinder
@@ -107,14 +107,14 @@ type RemovalChecker struct {
 }
 
 // NewRemovalChecker returns a checker for one change, reading as c.
-func NewRemovalChecker(c *kube.Client) *RemovalChecker {
+func NewRemovalChecker(c *kube.Client) *removalChecker {
 	api := components.CachedComponentAPI(c)
-	return &RemovalChecker{c: c, api: api, operators: components.NewModuleOperatorFinder(c, api), svcOwner: map[string]string{}, svcOwnerErr: map[string]error{}}
+	return &removalChecker{c: c, api: api, operators: components.NewModuleOperatorFinder(c, api), svcOwner: map[string]string{}, svcOwnerErr: map[string]error{}}
 }
 
 // platformOperatorBlocker says why the RHOAI operator cannot apply a
 // change now ("" when it can), read once per checker.
-func (rc *RemovalChecker) platformOperatorBlocker() string {
+func (rc *removalChecker) platformOperatorBlocker() string {
 	if !rc.opLoaded {
 		rc.opLoaded = true
 		rc.opBlocker = OperatorDeploymentsBlocker(rc.c)
@@ -151,8 +151,8 @@ func OperatorDeploymentsBlocker(c *kube.Client) string {
 // now. Removing a component deletes its module CR; once the CR is gone the
 // platform deletes the module operator and the Services it serves (RHOAI
 // operator notes §2.3), but never the CRDs (CRDs get no owner references).
-func (rc *RemovalChecker) blockers(component string) []string {
-	if reason, refused := RefusedComponents[component]; refused {
+func (rc *removalChecker) blockers(component string) []string {
+	if reason, refused := refusedComponents[component]; refused {
 		return []string{reason}
 	}
 	blockers := rc.ModuleBlockers(component)
@@ -170,7 +170,7 @@ func (rc *RemovalChecker) blockers(component string) []string {
 // conversion webhook only fails while the module is down: the CRDs whose
 // webhook it serves are returned (the plan lists them), not blockers. A
 // module the reset leaves Removed gets blockers instead.
-func (rc *RemovalChecker) TeardownBlockers(component string) (blockers, conversionCRDs []string) {
+func (rc *removalChecker) TeardownBlockers(component string) (blockers, conversionCRDs []string) {
 	blockers = rc.ModuleBlockers(component)
 	crds, err := rc.conversionCRDsOf(component)
 	if err != nil {
@@ -197,7 +197,7 @@ func UnknownOperatorBlocker() string {
 // moduleOperatorBlocker returns the operator of the module CR crName, or
 // why it cannot be checked: a read error (named) or an operator the finder
 // cannot identify (the unknown-operator wording) blocks, fail closed.
-func (rc *RemovalChecker) moduleOperatorBlocker(component, crName string) (*components.ModuleOperator, string) {
+func (rc *removalChecker) moduleOperatorBlocker(component, crName string) (*components.ModuleOperator, string) {
 	op, _, err := rc.operators.Find(component, crName)
 	switch {
 	case err != nil:
@@ -213,7 +213,7 @@ func (rc *RemovalChecker) moduleOperatorBlocker(component, crName string) (*comp
 // deleted, so only the operators that act on the change must run, and the
 // module CR must not be deleting already. Read errors and modules the tool
 // cannot check block.
-func (rc *RemovalChecker) PartBlockers(component string) []string {
+func (rc *removalChecker) PartBlockers(component string) []string {
 	c := rc.c
 	var blockers []string
 	if why := rc.platformOperatorBlocker(); why != "" {
@@ -243,7 +243,7 @@ func (rc *RemovalChecker) PartBlockers(component string) []string {
 
 // ModuleBlockers are the preconditions about the module CR and the
 // operators that remove it.
-func (rc *RemovalChecker) ModuleBlockers(component string) []string {
+func (rc *removalChecker) ModuleBlockers(component string) []string {
 	c := rc.c
 	var blockers []string
 	if why := rc.platformOperatorBlocker(); why != "" {
@@ -297,7 +297,7 @@ func (rc *RemovalChecker) ModuleBlockers(component string) []string {
 // profile never acts with the user's token. Without that client, or when
 // a list fails, it refuses (fail closed): the tool never takes "could not
 // list" for "none".
-func (rc *RemovalChecker) ConversionBlocker(component string) string {
+func (rc *removalChecker) ConversionBlocker(component string) string {
 	crds, convErr := rc.conversionCRDsServedBy(component)
 	switch {
 	case convErr != nil:
@@ -490,7 +490,7 @@ func (o conversionObjects) sentence(crd components.ConversionCRD) string {
 
 // conversionCRDsOf returns the names of the CRDs conversionCRDsServedBy
 // returns.
-func (rc *RemovalChecker) conversionCRDsOf(component string) ([]string, error) {
+func (rc *removalChecker) conversionCRDsOf(component string) ([]string, error) {
 	crds, err := rc.conversionCRDsServedBy(component)
 	if err != nil {
 		return nil, err
@@ -510,7 +510,7 @@ func (rc *RemovalChecker) conversionCRDsOf(component string) ([]string, error) {
 // TrustyAI/default-trustyai), or, for a Service that is already gone, its
 // name contains the component name (mcp-lifecycle-operator-webhook-service
 // for mcplifecycleoperator), the same match the stale-conversion check uses.
-func (rc *RemovalChecker) conversionCRDsServedBy(component string) ([]components.ConversionCRD, error) {
+func (rc *removalChecker) conversionCRDsServedBy(component string) ([]components.ConversionCRD, error) {
 	if !rc.convLoaded {
 		rc.convLoaded = true
 		crds, err := components.ListRHOAIConversionCRDs(rc.c)
@@ -543,7 +543,7 @@ func (rc *RemovalChecker) conversionCRDsServedBy(component string) ([]components
 
 // serviceComponent returns the component that owns a Service ("" when it
 // does not exist or names none).
-func (rc *RemovalChecker) serviceComponent(ref string) (string, error) {
+func (rc *removalChecker) serviceComponent(ref string) (string, error) {
 	if owner, ok := rc.svcOwner[ref]; ok {
 		return owner, rc.svcOwnerErr[ref]
 	}

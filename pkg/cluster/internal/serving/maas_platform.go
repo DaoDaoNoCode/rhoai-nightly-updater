@@ -21,9 +21,9 @@ import (
 // gateway policies an earlier, tier-based MaaS left behind.
 
 var (
-	// MaaSKuadrantTimeout bounds the wait for the Kuadrant CR to be Ready
+	// maasKuadrantTimeout bounds the wait for the Kuadrant CR to be Ready
 	// and for its Authorino to appear.
-	MaaSKuadrantTimeout = 5 * time.Minute
+	maasKuadrantTimeout = 5 * time.Minute
 )
 
 // --- the Kuadrant CR ------------------------------------------------------------------

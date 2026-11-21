@@ -126,19 +126,19 @@ func gatewayNamespaceList(names ...[]string) []string {
 var errGatewayChanged = errors.New("the gateway changed since it was read")
 
 var (
-	// InferenceGatewayReadyTimeout bounds the wait for Programmed=True and
+	// inferenceGatewayReadyTimeout bounds the wait for Programmed=True and
 	// an address (about 20 s live, with an AWS load balancer).
-	InferenceGatewayReadyTimeout = 2 * time.Minute
-	// InferenceGatewayDNSTimeout bounds the wait for the external hostname's
+	inferenceGatewayReadyTimeout = 2 * time.Minute
+	// inferenceGatewayDNSTimeout bounds the wait for the external hostname's
 	// DNSRecord to be published.
-	InferenceGatewayDNSTimeout = 2 * time.Minute
-	// InferenceGatewayDeleteTimeout bounds the wait for the Gateway to go.
-	InferenceGatewayDeleteTimeout = time.Minute
-	InferenceGatewayPoll          = 5 * time.Second
-	// InferenceGatewayRoutesTimeout bounds the wait, after models were
+	inferenceGatewayDNSTimeout = 2 * time.Minute
+	// inferenceGatewayDeleteTimeout bounds the wait for the Gateway to go.
+	inferenceGatewayDeleteTimeout = time.Minute
+	inferenceGatewayPoll          = 5 * time.Second
+	// inferenceGatewayRoutesTimeout bounds the wait, after models were
 	// deleted in the same operation, for the gateway controller to stop
 	// counting their routes (it updates attachedRoutes asynchronously).
-	InferenceGatewayRoutesTimeout = time.Minute
+	inferenceGatewayRoutesTimeout = time.Minute
 )
 
 // inferenceGatewayInternalHost is the in-cluster name of the Gateway's
@@ -1247,7 +1247,7 @@ func applyInferenceGateway(c *kube.Client, plan *gatewayPlan, dryRun bool, logf 
 // pending, for the message when the wait ends without the gateway ready.
 func waitInferenceGateway(c *kube.Client, host string, progress func(string)) (ready bool, dns string, problem string, pending string, err error) {
 	last := ""
-	ready, err = kube.WaitForGone(c, InferenceGatewayReadyTimeout, InferenceGatewayPoll, func(cc *kube.Client) (bool, error) {
+	ready, err = kube.WaitForGone(c, inferenceGatewayReadyTimeout, inferenceGatewayPoll, func(cc *kube.Client) (bool, error) {
 		gw, found, err := readInferenceGateway(cc)
 		if err != nil || !found {
 			return false, err
@@ -1282,7 +1282,7 @@ func waitInferenceGateway(c *kube.Client, host string, progress func(string)) (r
 		return ready && problem == "", "", problem, pending, err
 	}
 	progress("Programmed; waiting for " + host + " to be published in DNS...")
-	published, werr := kube.WaitForGone(c, InferenceGatewayDNSTimeout, InferenceGatewayPoll, func(cc *kube.Client) (bool, error) {
+	published, werr := kube.WaitForGone(c, inferenceGatewayDNSTimeout, inferenceGatewayPoll, func(cc *kube.Client) (bool, error) {
 		return dnsPublished(cc, host) == "published", nil
 	})
 	if werr != nil {
@@ -1349,7 +1349,7 @@ func TeardownInferenceGateway(c *kube.Client, modelsJustDeleted bool) (*types.Op
 		if err == nil && found && current.AttachedRoutes() > 0 && modelsJustDeleted {
 			// The controller updates the count after the routes go.
 			logs = append(logs, "Waiting for the gateway controller to stop counting the deleted models' routes...")
-			_, err = kube.WaitForGone(c, InferenceGatewayRoutesTimeout, InferenceGatewayPoll, func(cc *kube.Client) (bool, error) {
+			_, err = kube.WaitForGone(c, inferenceGatewayRoutesTimeout, inferenceGatewayPoll, func(cc *kube.Client) (bool, error) {
 				g, ok, err := readInferenceGateway(cc)
 				if err == nil {
 					current, found = g, ok
@@ -1409,7 +1409,7 @@ func TeardownInferenceGateway(c *kube.Client, modelsJustDeleted bool) (*types.Op
 		if kind == "Gateway" {
 			// The class and options go after the Gateway, so its
 			// controller removes the load balancer first.
-			gone, werr := kube.WaitForDeletion(c, path, InferenceGatewayDeleteTimeout, InferenceGatewayPoll)
+			gone, werr := kube.WaitForDeletion(c, path, inferenceGatewayDeleteTimeout, inferenceGatewayPoll)
 			if werr == nil && !gone {
 				logs = append(logs, "The Gateway is still being deleted")
 			}

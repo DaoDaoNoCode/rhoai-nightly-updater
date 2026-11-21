@@ -262,7 +262,7 @@ func readModelRoute(c *kube.Client, project, name string) ([]string, bool, error
 	return parents, true, nil
 }
 
-// waitForModelRoute waits, up to MaaSRouteTimeout, until KServe has moved
+// waitForModelRoute waits, up to maasRouteTimeout, until KServe has moved
 // the HTTPRoute of the tool's model name in project: onto the MaaS gateway alone with the model
 // Ready at its generation (published), or off the MaaS gateway (not). It
 // returns "" or, in words, what is still not so.
@@ -270,7 +270,7 @@ func waitForModelRoute(c *kube.Client, project, name string, published bool) (st
 	maas := inferenceGatewayNamespace + "/" + MaaSGatewayName
 	route := fmt.Sprintf("HTTPRoute %s/%s-kserve-route", project, name)
 	why, stop := "", false
-	done, err := kube.WaitForGone(c, MaaSRouteTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+	done, err := kube.WaitForGone(c, maasRouteTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		parents, found, err := readModelRoute(cc, project, name)
 		if err != nil {
 			return false, err
@@ -316,7 +316,7 @@ func waitForModelRoute(c *kube.Client, project, name string, published bool) (st
 	case stop:
 		return why, nil
 	case !done:
-		return fmt.Sprintf("%s after %s", why, ClockText(MaaSRouteTimeout)), nil
+		return fmt.Sprintf("%s after %s", why, ClockText(maasRouteTimeout)), nil
 	}
 	return "", nil
 }

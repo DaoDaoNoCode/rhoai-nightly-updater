@@ -55,15 +55,15 @@ const (
 )
 
 var (
-	// StaleVerificationAge is how old a verification catalog must be
+	// staleVerificationAge is how old a verification catalog must be
 	// before another operation removes it. A preflight takes at most
 	// ReadyTimeout+PackageManifestPropagationWait (2.5 minutes).
-	StaleVerificationAge = 15 * time.Minute
-	// ImagePullGrace is how long a catalog pod may keep failing to
+	staleVerificationAge = 15 * time.Minute
+	// imagePullGrace is how long a catalog pod may keep failing to
 	// pull its image before the operation stops. Kubelet retries pulls with
 	// a back-off, so a single ErrImagePull right after a pull secret change
 	// is not fatal.
-	ImagePullGrace = 30 * time.Second
+	imagePullGrace = 30 * time.Second
 )
 
 // Target is what the verified catalog would install: the channel and
@@ -263,7 +263,7 @@ func cleanupStaleVerificationCatalogs(c *kube.Client) {
 			continue
 		}
 		created, err := time.Parse(time.RFC3339, m.CreationTimestamp)
-		if err != nil || time.Since(created) < StaleVerificationAge {
+		if err != nil || time.Since(created) < staleVerificationAge {
 			continue
 		}
 		path := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, m.Name)
@@ -275,15 +275,15 @@ func cleanupStaleVerificationCatalogs(c *kube.Client) {
 	}
 }
 
-// ImagePullError reports that a catalog pod cannot pull its image.
-type ImagePullError struct {
+// catalogImagePullError reports that a catalog pod cannot pull its image.
+type catalogImagePullError struct {
 	image  string
 	detail string
 	// advice says which pull secret to check (pullFailureWatch.advice).
 	advice string
 }
 
-func (e *ImagePullError) Error() string {
+func (e *catalogImagePullError) Error() string {
 	advice := e.advice
 	if advice == "" {
 		advice = "Check that the nodes' pull secret has access to quay.io/rhoai and that the image exists"
@@ -292,7 +292,7 @@ func (e *ImagePullError) Error() string {
 }
 
 func IsImagePullError(err error) bool {
-	var pullErr *ImagePullError
+	var pullErr *catalogImagePullError
 	return errors.As(err, &pullErr)
 }
 
@@ -309,7 +309,7 @@ type PullFailureWatch struct {
 
 // Check reads the pod OLM runs for the CatalogSource (label
 // olm.catalogSource=<name>) and returns an error once its image pull has
-// failed for ImagePullGrace, or at once for an invalid image name.
+// failed for imagePullGrace, or at once for an invalid image name.
 func (w *PullFailureWatch) Check(c *kube.Client, source, image string) error {
 	reason, detail := catalogPodPullFailure(c, source)
 	if reason == "" {
@@ -319,8 +319,8 @@ func (w *PullFailureWatch) Check(c *kube.Client, source, image string) error {
 	if w.Since.IsZero() {
 		w.Since = kube.Clock().Now()
 	}
-	if reason == "InvalidImageName" || kube.Clock().Since(w.Since) >= ImagePullGrace {
-		err := &ImagePullError{image: image, detail: detail}
+	if reason == "InvalidImageName" || kube.Clock().Since(w.Since) >= imagePullGrace {
+		err := &catalogImagePullError{image: image, detail: detail}
 		if w.Advice != nil {
 			err.advice = w.Advice(c)
 		}

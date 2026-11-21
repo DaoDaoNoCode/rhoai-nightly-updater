@@ -116,10 +116,10 @@ type Deployment struct {
 	} `json:"status"`
 }
 
-// Session is saved as JSON in SessionAnnotation on the
+// dashboardDevSession is saved as JSON in SessionAnnotation on the
 // dashboard-operator Deployment in the same patch that pauses it, so the
 // original replica count and the session survive updater restarts.
-type Session struct {
+type dashboardDevSession struct {
 	OperatorUID     string                 `json:"operatorUID"`
 	Replicas        int                    `json:"replicas"`
 	Mode            string                 `json:"mode"`
@@ -327,12 +327,12 @@ func DeploymentReady(d Deployment) bool {
 	return replicas > 0 && d.Status.ObservedGeneration >= d.Metadata.Generation && d.Status.UpdatedReplicas == replicas && d.Status.ReadyReplicas == replicas && d.Status.Replicas == replicas
 }
 
-func SessionOf(operator *Deployment) (*Session, error) {
+func SessionOf(operator *Deployment) (*dashboardDevSession, error) {
 	raw := operator.Metadata.Annotations[SessionAnnotation]
 	if raw == "" {
 		return nil, nil
 	}
-	var s Session
+	var s dashboardDevSession
 	if err := json.Unmarshal([]byte(raw), &s); err != nil {
 		return nil, fmt.Errorf("invalid Dashboard Dev recovery annotation: %w", err)
 	}
@@ -381,7 +381,7 @@ func dashboardOperatorEnv(operator *Deployment) map[string]string {
 // replica count (framework MergeDeployments: "the live value always wins" for
 // spec.replicas), so a paused operator stays paused while its image and
 // RELATED_IMAGE_* values move to the new release.
-func dashboardStaleReasons(session *Session, operator *Deployment) []string {
+func dashboardStaleReasons(session *dashboardDevSession, operator *Deployment) []string {
 	var reasons []string
 	current := operator.Metadata.Annotations[PlatformVersionAnnotation]
 	if session.ReleaseVersion != "" && current != "" && current != session.ReleaseVersion {
@@ -821,7 +821,7 @@ func dashboardLabelsMatch(selector, labels map[string]string) bool {
 // patchDashboardOperator sets the replica count, the session annotation (nil
 // removes it) and the last-action record in one merge patch. uid and
 // resourceVersion make it fail with a conflict instead of acting on a stale read.
-func patchDashboardOperator(c *kube.Client, operator *Deployment, replicas int, session *Session, action *types.DashboardDevAction) error {
+func patchDashboardOperator(c *kube.Client, operator *Deployment, replicas int, session *dashboardDevSession, action *types.DashboardDevAction) error {
 	var annotation any
 	if session != nil {
 		raw, err := json.Marshal(session)
@@ -999,7 +999,7 @@ func dashboardFlavorLabel(flavor string) string {
 // has none for it: the image saved when the session started, unless RHOAI was
 // updated since (its default changed) or the workload was replaced, in which
 // case the operator's current default, which is also what Revert converges to.
-func dashboardBaselineImage(session *Session, image types.DashboardDevImage) string {
+func dashboardBaselineImage(session *dashboardDevSession, image types.DashboardDevImage) string {
 	for _, b := range session.Baseline {
 		if b.Deployment == image.Deployment && b.Container == image.Container && b.UID == image.WorkloadUID && b.DefaultImage == image.DefaultImage && b.Image != "" {
 			return b.Image
@@ -1042,7 +1042,7 @@ func DeployBuild(c *kube.Client, mode string, pr int, flavor string) (*types.Ope
 		if replicas <= 0 {
 			return fail(opName+" is already paused outside Dashboard Dev. Click Revert to default to resume it before starting a test session.", "prerequisites")
 		}
-		session = &Session{OperatorUID: operator.Metadata.UID, Replicas: replicas, StartedAt: now, StartedBy: user}
+		session = &dashboardDevSession{OperatorUID: operator.Metadata.UID, Replicas: replicas, StartedAt: now, StartedBy: user}
 	}
 	// Pausing while a Dashboard CR deletion is pending would block that
 	// deletion on the finalizer only the dashboard operator removes (D1).

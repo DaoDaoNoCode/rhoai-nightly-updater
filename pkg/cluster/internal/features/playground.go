@@ -79,18 +79,18 @@ const genAIAPIPrefix = "/gen-ai/api/v1"
 // Waits of a playground operation, bounded and on the clock (tests shorten
 // nothing: the clock is fake).
 var (
-	// PlaygroundInstallRetryTimeout bounds retrying an install the
+	// playgroundInstallRetryTimeout bounds retrying an install the
 	// dashboard answers 409: the previous playground's database is still
 	// being removed.
-	PlaygroundInstallRetryTimeout = 3 * time.Minute
-	PlaygroundInstallRetryPoll    = 10 * time.Second
-	// PlaygroundReadyTimeout bounds the wait for the playground to report
+	playgroundInstallRetryTimeout = 3 * time.Minute
+	playgroundInstallRetryPoll    = 10 * time.Second
+	// playgroundReadyTimeout bounds the wait for the playground to report
 	// Ready (60-100 s live, more on the first pull of its image).
-	PlaygroundReadyTimeout = 6 * time.Minute
-	PlaygroundPoll         = 5 * time.Second
-	// PlaygroundDeleteTimeout bounds the wait until the dashboard no
+	playgroundReadyTimeout = 6 * time.Minute
+	playgroundPoll         = 5 * time.Second
+	// playgroundDeleteTimeout bounds the wait until the dashboard no
 	// longer reports the playground.
-	PlaygroundDeleteTimeout = 3 * time.Minute
+	playgroundDeleteTimeout = 3 * time.Minute
 )
 
 // playgroundStatusMaxProjects bounds the projects a status reads (one
@@ -1380,7 +1380,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 		p.step("install", "running", fmt.Sprintf("Asking the dashboard to set up the playground in %s...", p.project))
 		// Each attempt runs to its end; the retries stop at the bound.
 		var installErr error
-		deadline := kube.Clock().Now().Add(PlaygroundInstallRetryTimeout)
+		deadline := kube.Clock().Now().Add(playgroundInstallRetryTimeout)
 		said := false
 		for {
 			installErr = p.api.Call(http.MethodPost, "/lsd/install", p.project, body, nil)
@@ -1389,9 +1389,9 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 			}
 			if !said {
 				said = true
-				p.step("install", "running", fmt.Sprintf("The previous playground's database in %s is still being removed; trying again every %s (up to %s)...", p.project, PlaygroundInstallRetryPoll, serving.ClockText(PlaygroundInstallRetryTimeout)))
+				p.step("install", "running", fmt.Sprintf("The previous playground's database in %s is still being removed; trying again every %s (up to %s)...", p.project, playgroundInstallRetryPoll, serving.ClockText(playgroundInstallRetryTimeout)))
 			}
-			if err := kube.Clock().Sleep(p.c.Context(), PlaygroundInstallRetryPoll); err != nil {
+			if err := kube.Clock().Sleep(p.c.Context(), playgroundInstallRetryPoll); err != nil {
 				installErr = err
 				break
 			}
@@ -1399,7 +1399,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 		if installErr != nil {
 			if genAIStatus(installErr) == http.StatusConflict {
 				p.forgetIfAbsent()
-				return p.fail("install", fmt.Sprintf("The previous playground's database in %s was still being removed after %s, so the dashboard did not set up a new one. Set up again once it is gone.", p.project, serving.ClockText(PlaygroundInstallRetryTimeout)), "in_progress", "still removing")
+				return p.fail("install", fmt.Sprintf("The previous playground's database in %s was still being removed after %s, so the dashboard did not set up a new one. Set up again once it is gone.", p.project, serving.ClockText(playgroundInstallRetryTimeout)), "in_progress", "still removing")
 			}
 			p.forgetIfAbsent()
 			return p.installError(installErr)
@@ -1427,7 +1427,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 	p.step("ready", "running", "Waiting until the playground is ready (typically 1 to 2 minutes)...")
 	var last, problem string
 	var srv *GenAIServer
-	ready, err := kube.WaitForGone(p.c, PlaygroundReadyTimeout, PlaygroundPoll, func(cc *kube.Client) (bool, error) {
+	ready, err := kube.WaitForGone(p.c, playgroundReadyTimeout, playgroundPoll, func(cc *kube.Client) (bool, error) {
 		s, err := p.api.with(cc.Context()).playgroundStatus(p.project)
 		if err != nil {
 			return false, err
@@ -1455,7 +1455,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 	case problem != "":
 		return p.fail("ready", "The dashboard set up the playground, but "+problem, "not_ready", "not ready")
 	case !ready:
-		return p.fail("ready", fmt.Sprintf("The playground in %s is not ready after %s (phase %s). It may still start: the tab shows its state.", p.project, serving.ClockText(PlaygroundReadyTimeout), kube.FirstNonEmpty(srvPhase(srv), "unknown")), "timeout", "timeout")
+		return p.fail("ready", fmt.Sprintf("The playground in %s is not ready after %s (phase %s). It may still start: the tab shows its state.", p.project, serving.ClockText(playgroundReadyTimeout), kube.FirstNonEmpty(srvPhase(srv), "unknown")), "timeout", "timeout")
 	}
 	p.step("ready", "success", fmt.Sprintf("The playground in %s is ready.", p.project))
 	p.record("project="+p.project, true)
@@ -1516,7 +1516,7 @@ func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 	}
 	p.step("delete", "success", fmt.Sprintf("The dashboard is deleting the playground in %s.", p.project))
 	p.step("gone", "running", "Waiting until the playground is gone...")
-	gone, err := kube.WaitForGone(p.c, PlaygroundDeleteTimeout, PlaygroundPoll, func(cc *kube.Client) (bool, error) {
+	gone, err := kube.WaitForGone(p.c, playgroundDeleteTimeout, playgroundPoll, func(cc *kube.Client) (bool, error) {
 		s, err := p.api.with(cc.Context()).playgroundStatus(p.project)
 		return err == nil && s == nil, err
 	})
@@ -1524,7 +1524,7 @@ func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 		return p.failAPI("gone", err, "wait failed")
 	}
 	if !gone {
-		return p.fail("gone", fmt.Sprintf("The playground in %s is still being deleted after %s. Delete again to check.", p.project, serving.ClockText(PlaygroundDeleteTimeout)), "in_progress", "still deleting")
+		return p.fail("gone", fmt.Sprintf("The playground in %s is still being deleted after %s. Delete again to check.", p.project, serving.ClockText(playgroundDeleteTimeout)), "in_progress", "still deleting")
 	}
 	if err := setPlaygroundRecord(p.c, p.project, nil); err != nil {
 		return p.fail("gone", fmt.Sprintf("The playground in %s is deleted, but this tool's record of it cannot be cleared: %v.%s", p.project, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "record")

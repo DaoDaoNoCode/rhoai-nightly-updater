@@ -23,9 +23,9 @@ func SetResolvePRImageForTest(resolve func(ctx context.Context, pr int) (string,
 // SetDeleteTimingForTest sets the MLflow deletion wait and its poll.
 func SetDeleteTimingForTest(timeout, poll time.Duration) (restore func()) {
 	mustBeTest("SetDeleteTimingForTest")
-	prevTimeout, prevPoll := DeleteTimeout, DeletePoll
-	DeleteTimeout, DeletePoll = timeout, poll
-	return func() { DeleteTimeout, DeletePoll = prevTimeout, prevPoll }
+	prevTimeout, prevPoll := deleteTimeout, deletePoll
+	deleteTimeout, deletePoll = timeout, poll
+	return func() { deleteTimeout, deletePoll = prevTimeout, prevPoll }
 }
 
 // SetSamplesHTTPClientForTest makes client send the samples' requests.

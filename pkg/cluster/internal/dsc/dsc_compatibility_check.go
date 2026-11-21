@@ -109,7 +109,7 @@ func defaultsErrorMessage(read rhoai.DSCRead, err error) string {
 // removalGuard checks removal preconditions per management path, each
 // module once.
 type removalGuard struct {
-	rc     *RemovalChecker
+	rc     *removalChecker
 	byName map[string][]string
 }
 

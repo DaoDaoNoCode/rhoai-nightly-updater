@@ -44,13 +44,13 @@ import (
 // The hard reset's waits. Tests shorten them; every wait runs on clk.
 var (
 	HardResetDeleteTimeout = 10 * time.Minute
-	HardResetReadyTimeout  = 3 * time.Minute
-	HardResetPollInterval  = 5 * time.Second
+	hardResetReadyTimeout  = 3 * time.Minute
+	hardResetPollInterval  = 5 * time.Second
 )
 
 // platformName returns the platform the operator reports: the DSC's
 // status.release.name, else the DSCInitialization's.
-func (v *View) platformName(c *kube.Client) string {
+func (v *dscView) platformName(c *kube.Client) string {
 	release, _ := v.status()["release"].(map[string]any)
 	if name, _ := release["name"].(string); name != "" {
 		return name
@@ -89,7 +89,7 @@ func managedPlatformRefusal(platform string) string {
 // default's, with the toggles kept), the old DSC's name and the values of
 // its protected fields (the workbench and AI Hub namespaces), where the
 // default has the object that holds them.
-func (v *View) NewDefaultObject(comps map[string]any) map[string]any {
+func (v *dscView) NewDefaultObject(comps map[string]any) map[string]any {
 	spec, _ := kube.NormalizeJSON(v.defaults).(map[string]any)
 	if comps, _ = kube.NormalizeJSON(comps).(map[string]any); len(comps) > 0 {
 		spec["components"] = comps
@@ -119,7 +119,7 @@ func (v *View) NewDefaultObject(comps map[string]any) map[string]any {
 
 // planHardReset plans the hard reset; keep keeps the components the user
 // turned on (ResetTarget).
-func (v *View) planHardReset(c *kube.Client, keep bool) *dscPlanned {
+func (v *dscView) planHardReset(c *kube.Client, keep bool) *dscPlanned {
 	p := v.newPlan("hard-reset")
 	p.plan.KeepEnabled = keep
 	if msg, code := v.readOnlyReason(); msg != "" {
@@ -168,7 +168,7 @@ func (v *View) planHardReset(c *kube.Client, keep bool) *dscPlanned {
 // installed CRD's defaults fill in (components.ApplySchemaDefaults). The plan shows
 // and compares this object; the create sends obj and the API server fills
 // in the same values.
-func (v *View) asCreated(obj map[string]any) map[string]any {
+func (v *dscView) asCreated(obj map[string]any) map[string]any {
 	out, _ := kube.NormalizeJSON(obj).(map[string]any)
 	if spec, ok := out["spec"].(map[string]any); ok {
 		components.ApplySchemaDefaults(spec, v.spec)
@@ -385,7 +385,7 @@ func readDSCWaitState(c *kube.Client, path string) (dscWaitState, error) {
 	if err := json.Unmarshal(body, &obj); err != nil {
 		return dscWaitState{}, err
 	}
-	v := &View{obj: obj}
+	v := &dscView{obj: obj}
 	var meta kube.ObjectMeta
 	if raw, err := json.Marshal(obj["metadata"]); err == nil {
 		_ = json.Unmarshal(raw, &meta)
@@ -411,7 +411,7 @@ func stopCause(ctx context.Context) string {
 // when that is not done in time, a DSC with another UID appears, or the
 // operation is stopped; nil once it is done. Every failure carries the
 // planned object (yamlText) and the way to finish the reset.
-func waitDSCGone(c *kube.Client, path string, v *View, ops []HardResetOperator, r *hardResetRun, yamlText string) *types.OperationResponse {
+func waitDSCGone(c *kube.Client, path string, v *dscView, ops []HardResetOperator, r *hardResetRun, yamlText string) *types.OperationResponse {
 	deadline := kube.Clock().Now().Add(HardResetDeleteTimeout)
 	last := ""
 	var st dscWaitState
@@ -464,7 +464,7 @@ func waitDSCGone(c *kube.Client, path string, v *View, ops []HardResetOperator, 
 		if !kube.Clock().Now().Before(deadline) {
 			break
 		}
-		if err := kube.Clock().Sleep(c.Context(), HardResetPollInterval); err != nil {
+		if err := kube.Clock().Sleep(c.Context(), hardResetPollInterval); err != nil {
 			return interrupted()
 		}
 	}
@@ -502,9 +502,9 @@ func modulesNote(st dscWaitState) string {
 }
 
 // waitDSCReady polls the new DSC until its Ready condition is True, and
-// words what is still provisioning when HardResetReadyTimeout passes.
+// words what is still provisioning when hardResetReadyTimeout passes.
 func waitDSCReady(c *kube.Client, path string, r *hardResetRun) string {
-	deadline := kube.Clock().Now().Add(HardResetReadyTimeout)
+	deadline := kube.Clock().Now().Add(hardResetReadyTimeout)
 	last := ""
 	var st dscWaitState
 	for {
@@ -522,11 +522,11 @@ func waitDSCReady(c *kube.Client, path string, r *hardResetRun) string {
 		if !kube.Clock().Now().Before(deadline) {
 			break
 		}
-		if kube.Clock().Sleep(c.Context(), HardResetPollInterval) != nil {
+		if kube.Clock().Sleep(c.Context(), hardResetPollInterval) != nil {
 			break
 		}
 	}
-	msg := fmt.Sprintf("The DataScienceCluster was reset to the release default. It is not Ready yet after %s: %s. The operator keeps provisioning; this page shows each component as it comes up.", HardResetReadyTimeout, kube.NonEmpty(last, "no status reported yet"))
+	msg := fmt.Sprintf("The DataScienceCluster was reset to the release default. It is not Ready yet after %s: %s. The operator keeps provisioning; this page shows each component as it comes up.", hardResetReadyTimeout, kube.NonEmpty(last, "no status reported yet"))
 	r.step("wait_ready", "success", msg)
 	return msg
 }

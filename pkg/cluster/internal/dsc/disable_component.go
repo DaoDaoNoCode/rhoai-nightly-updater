@@ -33,7 +33,7 @@ func DisableComponent(c *kube.Client, compName string) (*types.OperationResponse
 	case v.argoApp != "":
 		return &types.OperationResponse{Success: false, Message: argo.GitOpsRefusal("The DataScienceCluster", v.argoApp, "removing "+compName) + fmt.Sprintf(" Set %s to Removed in Git.", compName), ErrorCode: kube.ErrorCodeGitOpsManaged}, nil
 	}
-	if reason, refused := RefusedComponents[compName]; refused {
+	if reason, refused := refusedComponents[compName]; refused {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("The tool does not remove %s. %s", compName, reason), ErrorCode: "validation"}, nil
 	}
 	if t, ok := v.byKey[compName]; v.crdErr == nil && (!ok || !t.Toggle) {

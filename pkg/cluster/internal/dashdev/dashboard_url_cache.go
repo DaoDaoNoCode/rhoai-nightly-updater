@@ -24,13 +24,13 @@ var (
 	URLErrorTTL     = 15 * time.Second
 )
 
-// CachedURL is ReadComponentURL's answer, cached per API server in
+// CachedURL is readComponentURL's answer, cached per API server in
 // URLCache.
 func CachedURL(c *kube.Client) string {
 	if u, ok := URLCache.Get(c.BaseURL()); ok {
 		return u
 	}
-	u, err := ReadComponentURL(c)
+	u, err := readComponentURL(c)
 	ttl := dashboardURLTTL
 	if err != nil {
 		slog.Debug("cannot read the dashboard URL", "error", err)

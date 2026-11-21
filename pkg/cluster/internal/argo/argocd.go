@@ -137,12 +137,12 @@ func (t Tracking) UnconfirmedNote() string {
 	return fmt.Sprintf(" (The tool could not confirm this with Argo CD: %s. It treats the object as managed until it can.)", t.Reason)
 }
 
-// Check asks Argo CD about objects. It reads each answer once
+// argoCheck asks Argo CD about objects. It reads each answer once
 // (discovery, the Applications, each remote sign), so one status poll or one
 // operation check asks once for all its objects; status reads also share
 // the list of Applications across polls (readArgoApplications). Not safe
 // for concurrent use.
-type Check struct {
+type argoCheck struct {
 	c        *kube.Client
 	served   *argoRead[bool]
 	apps     *argoRead[[]argoApp]
@@ -157,8 +157,8 @@ type argoRead[T any] struct {
 	err   string
 }
 
-func NewCheck(c *kube.Client) *Check {
-	return &Check{c: c, bindings: map[string]argoRead[string]{}}
+func NewCheck(c *kube.Client) *argoCheck {
+	return &argoCheck{c: c, bindings: map[string]argoRead[string]{}}
 }
 
 // TrackingOf asks Argo CD about one decoded object (a Subscription, the
@@ -168,7 +168,7 @@ func TrackingOf(c *kube.Client, obj map[string]any, group, kind string) Tracking
 	return NewCheck(c).objectOf(obj, group, kind)
 }
 
-func (a *Check) objectOf(obj map[string]any, group, kind string) Tracking {
+func (a *argoCheck) objectOf(obj map[string]any, group, kind string) Tracking {
 	meta, _ := obj["metadata"].(map[string]any)
 	name, _ := meta["name"].(string)
 	ns, _ := meta["namespace"].(string)
@@ -218,7 +218,7 @@ func (m argoMarks) name() string {
 
 // Object asks Argo CD about object o, which carries these annotations and
 // labels.
-func (a *Check) Object(annotations, labels map[string]string, o Object) Tracking {
+func (a *argoCheck) Object(annotations, labels map[string]string, o Object) Tracking {
 	marks := argoMarksOf(annotations, labels, o)
 	t := Tracking{App: marks.name()}
 	unconfirmed := func(reason string) Tracking {
@@ -311,7 +311,7 @@ func (a *Check) Object(annotations, labels map[string]string, o Object) Tracking
 // every authenticated user, system:discovery): 404 when the group version
 // is not served. argoproj.io is also Argo Rollouts' and Argo Workflows'
 // group, so the applications resource must be in it.
-func (a *Check) applicationsServed() argoRead[bool] {
+func (a *argoCheck) applicationsServed() argoRead[bool] {
 	if a.served != nil {
 		return *a.served
 	}
@@ -433,7 +433,7 @@ func (ap argoApp) notCompared() string {
 }
 
 // applications lists every Argo CD Application on the cluster.
-func (a *Check) applications() argoRead[[]argoApp] {
+func (a *argoCheck) applications() argoRead[[]argoApp] {
 	if a.apps != nil {
 		return *a.apps
 	}
@@ -534,7 +534,7 @@ const (
 
 // remoteArgoCD says why an Argo CD on another cluster may manage o (value),
 // or why that could not be read (err); both "" when there is no sign of one.
-func (a *Check) remoteArgoCD(o Object) argoRead[string] {
+func (a *argoCheck) remoteArgoCD(o Object) argoRead[string] {
 	if r := a.remoteCluster(); r.err != "" || r.value != "" {
 		return r
 	}
@@ -559,7 +559,7 @@ func (a *Check) remoteArgoCD(o Object) argoRead[string] {
 
 // remoteCluster reads the cluster-wide signs: ACM's AppliedManifestWork
 // API, and ClusterRoleBinding argocd-manager-role-binding.
-func (a *Check) remoteCluster() argoRead[string] {
+func (a *argoCheck) remoteCluster() argoRead[string] {
 	if a.remote != nil {
 		return *a.remote
 	}
@@ -602,7 +602,7 @@ func (a *Check) remoteCluster() argoRead[string] {
 
 // managerRoleBinding reads RoleBinding argocd-manager-role-binding in ns,
 // which `argocd cluster add --namespace` makes.
-func (a *Check) managerRoleBinding(ns string) argoRead[string] {
+func (a *argoCheck) managerRoleBinding(ns string) argoRead[string] {
 	if r, ok := a.bindings[ns]; ok {
 		return r
 	}
@@ -621,7 +621,7 @@ func (a *Check) managerRoleBinding(ns string) argoRead[string] {
 
 // applicationsNamespace is RHOAI's applications namespace, "" when RHOAI
 // has none (no DSCInitialization), or why it could not be read.
-func (a *Check) applicationsNamespace() argoRead[string] {
+func (a *argoCheck) applicationsNamespace() argoRead[string] {
 	if a.appsNS != nil {
 		return *a.appsNS
 	}

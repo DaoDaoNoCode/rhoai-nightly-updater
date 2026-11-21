@@ -47,12 +47,12 @@ import (
 // the model is reported instead.
 
 var (
-	// ModelCallRetryWindow bounds how long a check keeps retrying answers
+	// modelCallRetryWindow bounds how long a check keeps retrying answers
 	// that can be transient right after a model became Ready: the gateway
 	// has not loaded the route yet (404 without a body, 503), a new
 	// hostname is not in DNS yet, a connection fails.
-	ModelCallRetryWindow = 90 * time.Second
-	ModelCallPoll        = 5 * time.Second
+	modelCallRetryWindow = 90 * time.Second
+	modelCallPoll        = 5 * time.Second
 )
 
 // serviceCAFile is the service CA OpenShift mounts in every pod: it signs
@@ -390,12 +390,12 @@ func callFailureWords(what string, check types.ModelCallCheck) string {
 }
 
 // runModelCall calls the model, retrying transient answers for up to
-// ModelCallRetryWindow.
+// modelCallRetryWindow.
 func runModelCall(c *kube.Client, base, served, typ, token string, internal bool, progress func(string)) types.ModelCallCheck {
 	target, body := modelCallRequest(base, served, typ)
 	var last types.ModelCallCheck
 	attempt := 0
-	_, err := kube.WaitForGone(c, ModelCallRetryWindow, ModelCallPoll, func(cc *kube.Client) (bool, error) {
+	_, err := kube.WaitForGone(c, modelCallRetryWindow, modelCallPoll, func(cc *kube.Client) (bool, error) {
 		attempt++
 		status, data, err := callModelOnce(cc.Context(), target, body, token)
 		if err != nil && cc.Context().Err() != nil && c.Context().Err() == nil {

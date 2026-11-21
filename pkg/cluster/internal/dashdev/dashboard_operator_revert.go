@@ -67,7 +67,7 @@ func RevertOperatorTo(c *kube.Client, target Target) (*types.OperationResponse, 
 		}
 		// Keep a valid session while workload annotations still need cleanup
 		// so the page keeps offering Revert. A corrupt one is dropped.
-		var keep *Session
+		var keep *dashboardDevSession
 		if len(failures) > 0 {
 			keep = session
 		}

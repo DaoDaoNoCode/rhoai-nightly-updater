@@ -13,8 +13,8 @@ import (
 // two phases have separate budgets so slow CSV deletions cannot starve the
 // re-apply of the previous catalog and Subscription (the part that brings
 // the operator back): removing the attempt's Subscription and CSVs gets
-// restoreCSVBudget in total (each CSV wait is also capped by
-// CSVDeletionTimeout), and the re-apply always gets restoreApplyTimeout.
+// restoreCSVBudget in total (each CSV wait is also capped by operator's
+// csvDeletionTimeout), and the re-apply always gets restoreApplyTimeout.
 // RecoveryTimeout is their sum: the longest a restore runs after the
 // operation stopped (see ShutdownDrainTimeout).
 var (

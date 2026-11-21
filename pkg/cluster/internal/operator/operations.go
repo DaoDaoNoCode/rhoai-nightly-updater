@@ -56,12 +56,11 @@ func ChannelExistsInCatalog(c *kube.Client, channel string) (bool, error) {
 // Timing constants used by multi-step operations. Package-level vars so tests
 // can override them with shorter durations to avoid real-time waits.
 var (
-	InstallPlanPollTimeout  = 60 * time.Second
 	InstallPlanPollInterval = 5 * time.Second
-	PropagationWait         = 10 * time.Second
-	RefreshCleanupWait      = 5 * time.Second
+	propagationWait         = 10 * time.Second
+	refreshCleanupWait      = 5 * time.Second
 	SubRetryBackoffs        = []time.Duration{2 * time.Second, 4 * time.Second}
-	ChannelRetryDelay       = 8 * time.Second
+	channelRetryDelay       = 8 * time.Second
 )
 
 // WaitForNightlyCatalogReady polls the nightly CatalogSource until it reports
@@ -560,7 +559,7 @@ func updateDetectChannel(c *kube.Client, image string, channel *string, logs *[]
 		}
 		slog.Warn("detectNightlyChannel failed", "attempt", attempt, "error", detectErr)
 		if attempt < 3 {
-			if err := kube.Clock().Sleep(c.Context(), ChannelRetryDelay); err != nil {
+			if err := kube.Clock().Sleep(c.Context(), channelRetryDelay); err != nil {
 				return &types.OperationResponse{Success: false, Message: "Operation stopped while detecting the channel", Logs: *logs}, err
 			}
 		}
@@ -602,7 +601,7 @@ func updateDeleteCSV(c *kube.Client, currentCSV types.CSVInfo, recovery *Recover
 		if gone {
 			*logs = append(*logs, "OK: CSV "+currentCSV.Name+" deleted")
 		} else {
-			*logs = append(*logs, fmt.Sprintf("Warning: CSV %s is still being deleted after %s; continuing", currentCSV.Name, CSVDeletionTimeout))
+			*logs = append(*logs, fmt.Sprintf("Warning: CSV %s is still being deleted after %s; continuing", currentCSV.Name, csvDeletionTimeout))
 		}
 	}
 	emit(types.UpdateStepEvent{Step: "delete_csv", Status: "success", Message: "Old CSV and InstallPlan deleted"})
@@ -1273,7 +1272,7 @@ func reinstallRemoveOperator(c *kube.Client, csv types.CSVInfo, recovery *Recove
 		if gone {
 			*logs = append(*logs, "OK: CSV "+csv.Name+" deleted")
 		} else {
-			*logs = append(*logs, fmt.Sprintf("Warning: CSV %s is still being deleted after %s; continuing", csv.Name, CSVDeletionTimeout))
+			*logs = append(*logs, fmt.Sprintf("Warning: CSV %s is still being deleted after %s; continuing", csv.Name, csvDeletionTimeout))
 		}
 		emit(types.UpdateStepEvent{Step: "delete_csv", Status: "success", Message: "CSV removed: " + csv.Name})
 	} else {
@@ -1317,10 +1316,10 @@ func reinstallCleanUp(c *kube.Client, logs *[]string, emit func(types.UpdateStep
 
 	// --- Step 8: wait_propagation ---
 	emit(types.UpdateStepEvent{Step: "wait_propagation", Status: "running", Message: "Waiting for cleanup to propagate..."})
-	if err := kube.Clock().Sleep(c.Context(), PropagationWait); err != nil {
+	if err := kube.Clock().Sleep(c.Context(), propagationWait); err != nil {
 		return &types.OperationResponse{Success: false, Message: "Operation cancelled during cleanup wait.", Logs: *logs}, err
 	}
-	*logs = append(*logs, fmt.Sprintf("OK: waited %s for cleanup propagation", PropagationWait))
+	*logs = append(*logs, fmt.Sprintf("OK: waited %s for cleanup propagation", propagationWait))
 	emit(types.UpdateStepEvent{Step: "wait_propagation", Status: "success", Message: "Cleanup propagated"})
 	return nil, nil
 }
@@ -1782,10 +1781,10 @@ func RefreshStreamWithOptions(c *kube.Client, opts OperationOptions, emit func(t
 		if gone {
 			logs = append(logs, "OK: CSV deleted")
 		} else {
-			logs = append(logs, fmt.Sprintf("Warning: CSV %s is still being deleted after %s; continuing", csv.Name, CSVDeletionTimeout))
+			logs = append(logs, fmt.Sprintf("Warning: CSV %s is still being deleted after %s; continuing", csv.Name, csvDeletionTimeout))
 		}
 	}
-	if err := kube.Clock().Sleep(c.Context(), RefreshCleanupWait); err != nil {
+	if err := kube.Clock().Sleep(c.Context(), refreshCleanupWait); err != nil {
 		return &types.OperationResponse{Success: false, Message: "Operation cancelled during cleanup wait.", Logs: logs}, err
 	}
 	emit(types.UpdateStepEvent{Step: "wait_cleanup", Status: "success", Message: "Cleanup propagated"})

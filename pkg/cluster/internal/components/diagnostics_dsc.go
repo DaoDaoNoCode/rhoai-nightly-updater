@@ -472,7 +472,7 @@ func (a *dscAnalysis) conditionCauses(cc *ClassifiedCondition, titles map[string
 			}
 		}
 		for _, id := range cc.ApplyIDs {
-			if strings.HasPrefix(id, LeftoverIDPrefix) {
+			if strings.HasPrefix(id, leftoverIDPrefix) {
 				add(fmt.Sprintf("an object left over from an earlier release (see the %q check)", LeftoversCheckName), id)
 				continue
 			}

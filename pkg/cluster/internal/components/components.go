@@ -411,8 +411,8 @@ func PodMatchesDeployment(c *kube.Client, pod types.PodInfo, dep types.Deploymen
 // poll in that window share one lookup.
 var replicaSetOwnerCache = kube.NewLRU[string, string](512)
 
-// ReplicaSetOwnerTTL is how long a ReplicaSet's controller is cached.
-var ReplicaSetOwnerTTL = time.Minute
+// replicaSetOwnerTTL is how long a ReplicaSet's controller is cached.
+var replicaSetOwnerTTL = time.Minute
 
 // replicaSetController returns the UID of the Deployment that controls the
 // ReplicaSet name (uid) in namespace, or "" when none does or it is gone.
@@ -453,7 +453,7 @@ func replicaSetController(c *kube.Client, namespace, name, uid string) (string, 
 			}
 		}
 	}
-	replicaSetOwnerCache.Add(key, owner, ReplicaSetOwnerTTL)
+	replicaSetOwnerCache.Add(key, owner, replicaSetOwnerTTL)
 	return owner, nil
 }
 

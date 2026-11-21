@@ -151,7 +151,7 @@ func (m *Run) waitAccessActive(doneMsg string, withAuth bool) (*types.OperationR
 	c := m.Client
 	m.Step("ready", "running", "Waiting for MaaS to apply it...")
 	last := ""
-	ready, err := kube.WaitForGone(c, MaaSPublishTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+	ready, err := kube.WaitForGone(c, maasPublishTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		s := maasPhase(cc, maasAccessPath(c, "MaaSSubscription"))
 		a := "Active"
 		if withAuth {
@@ -168,7 +168,7 @@ func (m *Run) waitAccessActive(doneMsg string, withAuth bool) (*types.OperationR
 		return m.Fail("ready", fmt.Sprintf("Stopped waiting: %v. The change is written; the MaaS tab shows its state.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "wait failed")
 	}
 	if !ready {
-		m.Step("ready", "success", fmt.Sprintf("Not active after %s (%s). The MaaS tab shows its state.", ClockText(MaaSPublishTimeout), last))
+		m.Step("ready", "success", fmt.Sprintf("Not active after %s (%s). The MaaS tab shows its state.", ClockText(maasPublishTimeout), last))
 		return m.Done(doneMsg + " MaaS is still applying it.")
 	}
 	m.Step("ready", "success", "MaaS applies it.")

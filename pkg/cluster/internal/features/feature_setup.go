@@ -131,9 +131,9 @@ func featureSetupOf(id string) (featureSetup, bool) {
 }
 
 var (
-	// PrerequisiteReadyTimeout bounds the wait for a component turned on
+	// prerequisiteReadyTimeout bounds the wait for a component turned on
 	// to report Ready, and for KServe to see the operators installed.
-	PrerequisiteReadyTimeout = 10 * time.Minute
+	prerequisiteReadyTimeout = 10 * time.Minute
 )
 
 // --- record (snapshot ConfigMap key "prerequisites") ---------------------------------
@@ -143,10 +143,10 @@ const (
 	prereqRecordManager = "rhoai-nightly-updater-prerequisites-record"
 )
 
-// PrereqRecord is what setup changed that the cluster cannot tell: the
+// prereqRecord is what setup changed that the cluster cannot tell: the
 // components it turned on, with their value before, and the operators it
 // installed (which stay: other features share them).
-type PrereqRecord struct {
+type prereqRecord struct {
 	Components map[string]prereqComponent `json:"components,omitempty"`
 	Shared     map[string]string          `json:"shared,omitempty"`
 	At         string                     `json:"at,omitempty"`
@@ -159,8 +159,8 @@ type prereqComponent struct {
 }
 
 // ReadPrereqRecord reads what the feature setups recorded (empty when nothing).
-func ReadPrereqRecord(c *kube.Client) (PrereqRecord, error) {
-	var rec PrereqRecord
+func ReadPrereqRecord(c *kube.Client) (prereqRecord, error) {
+	var rec prereqRecord
 	raw, err := record.ReadSnapshotKey(c, prereqRecordKey)
 	if err != nil {
 		return rec, fmt.Errorf("read this tool's record of the prerequisites it set up: %w", err)
@@ -173,7 +173,7 @@ func ReadPrereqRecord(c *kube.Client) (PrereqRecord, error) {
 	return rec, nil
 }
 
-func writePrereqRecord(c *kube.Client, rec PrereqRecord) error {
+func writePrereqRecord(c *kube.Client, rec prereqRecord) error {
 	rec.At, rec.By = kube.NowRFC3339(), kube.GetUser(c)
 	data, err := json.Marshal(rec)
 	if err != nil {
@@ -277,7 +277,7 @@ type operatorPlan struct {
 // problems that do not block are in the parts.
 type featurePlan struct {
 	fs                featureSetup
-	rec               PrereqRecord
+	rec               prereqRecord
 	dsc               rhoai.DSCRead
 	dscName, argoApp  string // argoApp: argo.managedBy
 	argo              argo.Tracking
@@ -297,7 +297,7 @@ func (p *featurePlan) refuse(msg, code string) {
 
 // clusterReads are the reads every feature's plan shares.
 type clusterReads struct {
-	rec    PrereqRecord
+	rec    prereqRecord
 	recErr error
 	dsc    rhoai.DSCRead
 	dscErr error
@@ -771,7 +771,7 @@ func componentKeys(cps []componentPlan) []string {
 
 // ensureOperator installs o when it is missing, or waits for the install
 // OLM is doing, on the operator's own step.
-func ensureOperator(m *serving.Run, rec *PrereqRecord, o operatorPlan) (*types.OperationResponse, error) {
+func ensureOperator(m *serving.Run, rec *prereqRecord, o operatorPlan) (*types.OperationResponse, error) {
 	op := o.op
 	switch {
 	case o.install != nil:
@@ -808,7 +808,7 @@ func ensureOperator(m *serving.Run, rec *PrereqRecord, o operatorPlan) (*types.O
 // Connectivity Link serves its API (step "kuadrant"), in the namespace
 // Connectivity Link runs in, as the MaaS setup does. It stays after Clean
 // up: Connectivity Link's policies are shared.
-func ensureKuadrant(m *serving.Run, rec *PrereqRecord) (*types.OperationResponse, error) {
+func ensureKuadrant(m *serving.Run, rec *prereqRecord) (*types.OperationResponse, error) {
 	c := m.Client
 	k, err := serving.ReadKuadrant(c)
 	if err != nil {
@@ -860,7 +860,7 @@ func waitPrerequisitesReady(m *serving.Run, p *featurePlan) (*types.OperationRes
 	m.Step("ready", "running", fmt.Sprintf("Waiting for RHOAI's operator to report %s ready (usually 1 to 3 minutes)...", kube.JoinTitles(componentKeys(p.components))))
 	last := ""
 	var dsc rhoai.DSCRead
-	done, err := kube.WaitForGone(c, PrerequisiteReadyTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+	done, err := kube.WaitForGone(c, prerequisiteReadyTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		r, err := rhoai.ReadFirstDSC(cc)
 		if err != nil {
 			return false, err
@@ -905,7 +905,7 @@ func waitPrerequisitesReady(m *serving.Run, p *featurePlan) (*types.OperationRes
 			if strings.Contains(last, "KServe does not see") {
 				hint = " KServe checks its operators again only from time to time: the Diagnostics page offers to restart its operator when it still reports an installed operator missing."
 			}
-			return m.Fail("ready", fmt.Sprintf("Not ready after %s (%s). What was set up stays; the tab shows each part.%s", serving.ClockText(PrerequisiteReadyTimeout), last, hint), "not_ready", "not ready")
+			return m.Fail("ready", fmt.Sprintf("Not ready after %s (%s). What was set up stays; the tab shows each part.%s", serving.ClockText(prerequisiteReadyTimeout), last, hint), "not_ready", "not ready")
 		}
 		m.Step("ready", "success", fmt.Sprintf("RHOAI's operator does not report %s's readiness; continuing.", kube.JoinTitles(componentKeys(p.components))))
 	} else {
@@ -953,7 +953,7 @@ type restoreVerdict struct {
 // manager still owns it (nobody changed it since: DSCComponentOwned),
 // Argo CD does not manage the DataScienceCluster, and nothing on the
 // cluster uses it (a list that fails refuses).
-func restoreCheck(c *kube.Client, rec PrereqRecord, dscRead rhoai.DSCRead, key string) restoreVerdict {
+func restoreCheck(c *kube.Client, rec prereqRecord, dscRead rhoai.DSCRead, key string) restoreVerdict {
 	rc, ok := rec.Components[key]
 	if !ok {
 		return restoreVerdict{kept: key + " (this tool did not turn it on)"}

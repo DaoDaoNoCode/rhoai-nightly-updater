@@ -290,7 +290,7 @@ func (m *Run) setupKuadrant(rec *MaaSRecord, kq *kuadrantState, kVersion, kuadra
 		m.Logs = append(m.Logs, "OK: Kuadrant "+kuadrantNS+"/kuadrant created")
 	}
 	m.Step("kuadrant", "running", "Waiting for Kuadrant to be Ready (it starts Authorino and Limitador)...")
-	ready, err := kube.WaitForGone(c, MaaSKuadrantTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+	ready, err := kube.WaitForGone(c, maasKuadrantTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		k, err := ReadKuadrant(cc)
 		if err == nil && k.Found {
 			*kq = k
@@ -301,7 +301,7 @@ func (m *Run) setupKuadrant(rec *MaaSRecord, kq *kuadrantState, kVersion, kuadra
 	case err != nil:
 		return m.Fail("kuadrant", fmt.Sprintf("Stopped waiting for Kuadrant: %v.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "kuadrant wait failed")
 	case !ready:
-		m.Step("kuadrant", "success", fmt.Sprintf("Kuadrant is not Ready after %s (%s); continuing.", ClockText(MaaSKuadrantTimeout), kube.FirstNonEmpty(kq.Message, "no message")))
+		m.Step("kuadrant", "success", fmt.Sprintf("Kuadrant is not Ready after %s (%s); continuing.", ClockText(maasKuadrantTimeout), kube.FirstNonEmpty(kq.Message, "no message")))
 	default:
 		m.Step("kuadrant", "success", "Kuadrant "+kq.Namespace+"/kuadrant is Ready.")
 	}
@@ -412,8 +412,8 @@ func (m *Run) setupGateway(gwPlan *maasGatewayPlan, foreign bool) (*types.Operat
 	if msg, code := m.applyGateway(gwPlan, false); msg != "" {
 		return m.Fail("gateway", msg, code, "gateway apply failed")
 	}
-	m.Step("gateway", "running", "Waiting for the gateway to be programmed (up to "+ClockText(MaaSGatewayTimeout)+")...")
-	programmed, err := kube.WaitForGone(c, MaaSGatewayTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+	m.Step("gateway", "running", "Waiting for the gateway to be programmed (up to "+ClockText(maasGatewayTimeout)+")...")
+	programmed, err := kube.WaitForGone(c, maasGatewayTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		gw, err := readMaaSGateway(cc)
 		return gw.programmed && gw.address != "", err
 	})
@@ -421,9 +421,9 @@ func (m *Run) setupGateway(gwPlan *maasGatewayPlan, foreign bool) (*types.Operat
 	case err != nil:
 		return m.Fail("gateway", fmt.Sprintf("Stopped waiting for the gateway: %v. It was created.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "gateway wait failed")
 	case !programmed:
-		m.Step("gateway", "success", fmt.Sprintf("Created; not programmed after %s. It may still come up; the MaaS tab shows its state.", ClockText(MaaSGatewayTimeout)))
+		m.Step("gateway", "success", fmt.Sprintf("Created; not programmed after %s. It may still come up; the MaaS tab shows its state.", ClockText(maasGatewayTimeout)))
 	default:
-		published, _ := kube.WaitForGone(c, InferenceGatewayDNSTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) { return dnsPublished(cc, gwPlan.host) == "published", nil })
+		published, _ := kube.WaitForGone(c, inferenceGatewayDNSTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) { return dnsPublished(cc, gwPlan.host) == "published", nil })
 		if published {
 			m.Step("gateway", "success", fmt.Sprintf("Programmed; https://%s is published in DNS.", gwPlan.host))
 		} else {
@@ -451,7 +451,7 @@ func (m *Run) applyAuthorinoTLS(rec *MaaSRecord, ns, step string) (*types.Operat
 	m.Step(step, "running", "Configuring Authorino TLS in "+ns+" as the docs' setup-authorino-tls.sh does...")
 	var changes []string
 	var lastErr error
-	done, err := kube.WaitForGone(c, MaaSKuadrantTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+	done, err := kube.WaitForGone(c, maasKuadrantTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		ch, err := configureAuthorinoTLS(cc, ns, false)
 		changes = append(changes, ch...)
 		lastErr = err
@@ -473,7 +473,7 @@ func (m *Run) applyAuthorinoTLS(rec *MaaSRecord, ns, step string) (*types.Operat
 	case err != nil:
 		return m.Fail(step, fmt.Sprintf("Failed to configure Authorino TLS in %s: %v. Run it again to retry; the MaaS tab shows the docs' commands too.%s", ns, err, kube.TemplateHint(err)), MaaSWriteCode(err), "authorino tls failed")
 	case !done:
-		return m.Fail(step, fmt.Sprintf("Authorino in %s is not there after %s (%v). Run it again once Kuadrant is Ready.", ns, ClockText(MaaSKuadrantTimeout), lastErr), "not_ready", "authorino missing")
+		return m.Fail(step, fmt.Sprintf("Authorino in %s is not there after %s (%v). Run it again once Kuadrant is Ready.", ns, ClockText(maasKuadrantTimeout), lastErr), "not_ready", "authorino missing")
 	}
 	if len(changes) == 0 {
 		m.Step(step, "success", "Authorino in "+ns+" already serves TLS and trusts the service CA.")
@@ -498,7 +498,7 @@ func (m *Run) waitPlatformReady(infra string) (*types.OperationResponse, error) 
 	c := m.Client
 	m.Step("ready", "running", "Waiting for the operator: maas-api, the default tenant, and the gateway's authentication (usually 2 to 3 minutes)...")
 	last := ""
-	ready, err := kube.WaitForGone(c, MaaSPlatformTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+	ready, err := kube.WaitForGone(c, maasPlatformTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		api := deploymentAvailable(cc, infra, "maas-api")
 		ai, _ := readyCondition(cc, rhoai.NamespacedPath(MaaSAPI(c), "aitenants", "ai-tenants", "models-as-a-service"))
 		auth := MaaSGatewayAuth(cc)
@@ -513,7 +513,7 @@ func (m *Run) waitPlatformReady(infra string) (*types.OperationResponse, error) 
 		return m.Fail("ready", fmt.Sprintf("Stopped waiting: %v. Setup itself is done; the MaaS tab shows the platform's state.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "ready wait failed")
 	}
 	if !ready {
-		m.Step("ready", "success", fmt.Sprintf("Still starting after %s (%s). The MaaS tab shows each part.", ClockText(MaaSPlatformTimeout), last))
+		m.Step("ready", "success", fmt.Sprintf("Still starting after %s (%s). The MaaS tab shows each part.", ClockText(maasPlatformTimeout), last))
 		return m.Done("The MaaS platform is set up and still starting.")
 	}
 	m.Step("ready", "success", "maas-api is available, the tenant is ready, and the gateway checks every request.")

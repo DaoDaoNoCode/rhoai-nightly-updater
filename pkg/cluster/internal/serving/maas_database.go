@@ -1157,7 +1157,7 @@ func (m *Run) makeDatabase(rec *MaaSRecord, p *MaaSDBPlan, maasOn, switching boo
 			return m.Fail("database", fmt.Sprintf("Failed to apply %s: %v.", maasDesc("Cluster", ns), err), MaaSWriteCode(err), "db apply failed")
 		}
 		m.Step("database", "running", "Waiting for the database to start (usually 1 to 2 minutes)...")
-		ready, err := kube.WaitForGone(c, MaaSDatabaseTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+		ready, err := kube.WaitForGone(c, maasDatabaseTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 			_, _, ok, _, err := readMaaSDBCluster(cc, ns)
 			return ok, err
 		})
@@ -1165,7 +1165,7 @@ func (m *Run) makeDatabase(rec *MaaSRecord, p *MaaSDBPlan, maasOn, switching boo
 			return m.Fail("database", fmt.Sprintf("Stopped waiting for the database: %v. It was created; run it again to continue.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "db wait failed")
 		}
 		if !ready {
-			return m.Fail("database", fmt.Sprintf("The database is not running after %s, and maas-api needs it before MaaS is turned on. Run it again to continue; the MaaS tab shows its state.", ClockText(MaaSDatabaseTimeout)), "not_ready", "db not ready")
+			return m.Fail("database", fmt.Sprintf("The database is not running after %s, and maas-api needs it before MaaS is turned on. Run it again to continue; the MaaS tab shows its state.", ClockText(maasDatabaseTimeout)), "not_ready", "db not ready")
 		}
 	}
 	return m.writeDBConfig(rec, p, st, maasOn, switching)
@@ -1237,7 +1237,7 @@ func (m *Run) deleteDBObjects(step, ns, dbKind string, rec *MaaSRecord) ([]strin
 			res, _ := m.Fail(step, fmt.Sprintf("Failed to delete %s: %v. Run it again to retry.", maasDesc(k, ns), err), MaaSWriteCode(err), "delete failed")
 			return deleted, res
 		}
-		if gone, _ := kube.WaitForDeletion(c, path, MaaSDeleteTimeout, envkit.PollInterval); !gone {
+		if gone, _ := kube.WaitForDeletion(c, path, maasDeleteTimeout, envkit.PollInterval); !gone {
 			m.Logs = append(m.Logs, maasDesc(k, ns)+" is still being deleted")
 		}
 		deleted = append(deleted, maasDesc(k, ns))

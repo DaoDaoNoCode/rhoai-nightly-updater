@@ -488,7 +488,7 @@ func (r *Recovery) AttemptCSVsToRemove(c *kube.Client) ([]rhoaiCSV, error) {
 }
 
 // deleteCSVByUIDAndWait deletes the CSV with the given UID and waits, up to
-// CSVDeletionTimeout, until no CSV with that UID exists (OLM's csv-cleanup
+// csvDeletionTimeout, until no CSV with that UID exists (OLM's csv-cleanup
 // finalizer removes the webhooks and cluster RBAC first; a new CSV with the
 // same name cannot be created until then). A CSV with the same
 // name but another UID is never deleted (errReplacedMeanwhile).
@@ -504,7 +504,7 @@ func deleteCSVByUIDAndWait(c *kube.Client, csv rhoaiCSV) (gone bool, err error) 
 			return false, err
 		}
 	}
-	deadline := kube.Clock().Now().Add(CSVDeletionTimeout)
+	deadline := kube.Clock().Now().Add(csvDeletionTimeout)
 	for {
 		meta, found, err := kube.ReadObjectMeta(c, path)
 		if err != nil {

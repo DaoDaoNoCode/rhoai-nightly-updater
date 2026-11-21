@@ -74,16 +74,16 @@ var (
 	// MigrateCopyTimeout bounds how long one run waits for the copy Job;
 	// the rest of the 15-minute request deadline is for setup and the
 	// pipeline servers, and a server is moved only while a whole
-	// MigrateRepointTimeout wait still fits (repoint). A copy still running
+	// migrateRepointTimeout wait still fits (repoint). A copy still running
 	// then is picked up by the next Migrate run. Tests shorten these.
 	MigrateCopyTimeout = 8 * time.Minute
-	MigratePoll        = 3 * time.Second
-	// MigrateRepointTimeout bounds the wait for one pipeline server's
+	migratePoll        = 3 * time.Second
+	// migrateRepointTimeout bounds the wait for one pipeline server's
 	// ObjectStoreAvailable condition after it was repointed.
-	MigrateRepointTimeout = 2 * time.Minute
+	migrateRepointTimeout = 2 * time.Minute
 	// removeAfterCopyReserve is the part of the operation's deadline the
 	// removal keeps for what follows its final copy: the deletions (a few
-	// API calls each) and the PVC wait (S3DeleteTimeout, one minute).
+	// API calls each) and the PVC wait (s3DeleteTimeout, one minute).
 	removeAfterCopyReserve = 2 * time.Minute
 )
 
@@ -673,7 +673,7 @@ func (m *migrateRun) copyAndVerify(legacy *Legacy, dspas []DSPA, oldKeys S3Keys,
 					return fail(fmt.Sprintf("Cannot delete the Job %s/%s of an earlier run: %v.%s", S3Namespace, MigrateJobName, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "old job delete failed")
 				}
 			}
-			gone, err := kube.WaitForDeletion(c, MigrateJobPath(), S3DeleteTimeout, S3DeletePoll)
+			gone, err := kube.WaitForDeletion(c, MigrateJobPath(), s3DeleteTimeout, s3DeletePoll)
 			if err != nil || !gone {
 				return fail(fmt.Sprintf("Job %s/%s of an earlier run is still being deleted; retry in a minute.", S3Namespace, MigrateJobName), "in_progress", "old job lingering")
 			}
@@ -918,7 +918,7 @@ func waitMigrateJob(c *kube.Client, job migrateJobInfo, timeout time.Duration) (
 				return job, issue, errS3CannotStart
 			}
 		}
-		if kube.Clock().Sleep(ctx, MigratePoll) != nil {
+		if kube.Clock().Sleep(ctx, migratePoll) != nil {
 			if c.Context().Err() != nil {
 				return job, envkit.PodIssue{}, c.Context().Err()
 			}
@@ -1157,11 +1157,11 @@ func (m *migrateRun) repoint(legacy *Legacy, dspas []DSPA, keys S3Keys, owned fu
 		}
 		// The operation's deadline (15 minutes, pkg/api/auth_handlers.go) can
 		// come before the last wait ends: setup, a copy wait of
-		// MigrateCopyTimeout and a MigrateRepointTimeout wait per server.
+		// MigrateCopyTimeout and a migrateRepointTimeout wait per server.
 		// A server is moved only when its whole wait fits, so a run never
 		// ends with one moved but not yet checked.
-		if deadline, ok := c.Context().Deadline(); ok && kube.Clock().Until(deadline) < MigrateRepointTimeout {
-			return failed(fmt.Sprintf("Not enough time is left in this run to move pipeline server %s and wait until it reaches the new storage (up to %s). Already moved: %s. The old storage is kept; run Migrate storage again to continue.", name, MigrateRepointTimeout, done), "in_progress", "out of time")
+		if deadline, ok := c.Context().Deadline(); ok && kube.Clock().Until(deadline) < migrateRepointTimeout {
+			return failed(fmt.Sprintf("Not enough time is left in this run to move pipeline server %s and wait until it reaches the new storage (up to %s). Already moved: %s. The old storage is kept; run Migrate storage again to continue.", name, migrateRepointTimeout, done), "in_progress", "out of time")
 		}
 		m.step("repoint", "running", fmt.Sprintf("Moving pipeline server %s...", name))
 		if msg, code, err := writeSecrets(p, false); err != nil {
@@ -1217,12 +1217,12 @@ func objectStoreText(d DSPA) string {
 	return fmt.Sprintf("ObjectStoreAvailable is %s: %s", d.ObjectStore.Status, kube.FirstNonEmpty(kube.TruncateText(d.ObjectStore.Message, 300), d.ObjectStore.Reason))
 }
 
-// waitObjectStore waits, bounded by MigrateRepointTimeout, until DSPO
+// waitObjectStore waits, bounded by migrateRepointTimeout, until DSPO
 // reports ObjectStoreAvailable=True for generation (or a later one). A False
 // condition does not end the wait: DSPO requeues and checks again, for
 // example while the new Service's address propagates.
 func waitObjectStore(c *kube.Client, project, name string, generation int64) (DSPA, error) {
-	ctx, cancel := kube.Clock().WithTimeout(c.Context(), MigrateRepointTimeout)
+	ctx, cancel := kube.Clock().WithTimeout(c.Context(), migrateRepointTimeout)
 	defer cancel()
 	cc := c.WithContext(ctx)
 	last := DSPA{Meta: kube.ObjectMeta{Generation: generation}}
@@ -1240,11 +1240,11 @@ func waitObjectStore(c *kube.Client, project, name string, generation int64) (DS
 			}
 			last = d
 		}
-		if kube.Clock().Sleep(ctx, MigratePoll) != nil {
+		if kube.Clock().Sleep(ctx, migratePoll) != nil {
 			if c.Context().Err() != nil {
 				return last, c.Context().Err()
 			}
-			return last, fmt.Errorf("after %s %s", MigrateRepointTimeout, objectStoreText(last))
+			return last, fmt.Errorf("after %s %s", migrateRepointTimeout, objectStoreText(last))
 		}
 	}
 }
@@ -1468,7 +1468,7 @@ func (m *migrateRun) removeOldStorage(legacy *Legacy, dspas []DSPA, deleteNamesp
 			return m.fail("remove", fmt.Sprintf("The old storage's server was deleted, but whether its PVCs are gone cannot be checked: %v. Run Remove old storage again to continue.%s", err, kube.TemplateHint(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "in_progress"), "PVC wait failed")
 		}
 		if len(remaining) > 0 {
-			return m.fail("remove", fmt.Sprintf("The old storage's server was deleted, but PVC %s %s still terminating after %s. Run Remove old storage again to continue.", strings.Join(remaining, ", "), kube.Verb(len(remaining), "is", "are"), S3DeleteTimeout), "in_progress", "PVCs terminating")
+			return m.fail("remove", fmt.Sprintf("The old storage's server was deleted, but PVC %s %s still terminating after %s. Run Remove old storage again to continue.", strings.Join(remaining, ", "), kube.Verb(len(remaining), "is", "are"), s3DeleteTimeout), "in_progress", "PVCs terminating")
 		}
 	}
 	deleteAll(legacyRemovalPhases.afterServer)

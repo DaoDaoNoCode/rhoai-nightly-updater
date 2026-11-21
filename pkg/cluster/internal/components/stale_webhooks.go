@@ -405,7 +405,7 @@ type moduleState struct {
 // rhoaiInstallInFlight reads the RHOAI CSVs; it returns the CSV and phase of
 // an install or upgrade in flight, or "".
 func rhoaiInstallInFlight(c *kube.Client) (string, error) {
-	csvs, err := ListOperatorCSVs(c)
+	csvs, err := listOperatorCSVs(c)
 	if kube.IsK8sNotFound(err) {
 		return "", nil
 	}
@@ -817,8 +817,8 @@ func ListRHOAIConversionCRDs(c *kube.Client) ([]ConversionCRD, error) {
 	return items, nil
 }
 
-// OperatorCSV is a CSV of the rhods-operator package in SubNS.
-type OperatorCSV struct {
+// operatorCSV is a CSV of the rhods-operator package in SubNS.
+type operatorCSV struct {
 	Name    string
 	Version string
 	Phase   string
@@ -826,7 +826,7 @@ type OperatorCSV struct {
 	Message string
 }
 
-func ListOperatorCSVs(c *kube.Client) ([]OperatorCSV, error) {
+func listOperatorCSVs(c *kube.Client) ([]operatorCSV, error) {
 	var items []struct {
 		Metadata struct {
 			Name string `json:"name"`
@@ -843,12 +843,12 @@ func ListOperatorCSVs(c *kube.Client) ([]OperatorCSV, error) {
 	if err := c.ListInto(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""), &items); err != nil {
 		return nil, err
 	}
-	var out []OperatorCSV
+	var out []operatorCSV
 	for _, it := range items {
 		if !strings.HasPrefix(it.Metadata.Name, rhoai.SubName+".") {
 			continue
 		}
-		out = append(out, OperatorCSV{Name: it.Metadata.Name, Version: it.Spec.Version, Phase: it.Status.Phase, Reason: it.Status.Reason, Message: it.Status.Message})
+		out = append(out, operatorCSV{Name: it.Metadata.Name, Version: it.Spec.Version, Phase: it.Status.Phase, Reason: it.Status.Reason, Message: it.Status.Message})
 	}
 	return out, nil
 }

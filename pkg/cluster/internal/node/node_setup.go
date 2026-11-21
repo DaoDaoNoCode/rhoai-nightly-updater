@@ -102,8 +102,8 @@ const (
 	// our docs (docs/QUICKSTART.md) and rosa-dev use on self-managed
 	// clusters.
 	MirrorName = "rhoai-quay-mirror"
-	// MirrorTarget is where nightly images are published.
-	MirrorTarget = "quay.io/rhoai"
+	// mirrorTarget is where nightly images are published.
+	mirrorTarget = "quay.io/rhoai"
 
 	clusterPullSecretNS   = "openshift-config"
 	clusterPullSecretName = "pull-secret"
@@ -286,7 +286,7 @@ func mirrorObject() map[string]any {
 			"labels": map[string]any{"app.kubernetes.io/managed-by": "rhoai-nightly-updater"},
 		},
 		"spec": map[string]any{
-			"imageDigestMirrors": []any{map[string]any{"source": rhoai.IDMSSource, "mirrors": []any{MirrorTarget}}},
+			"imageDigestMirrors": []any{map[string]any{"source": rhoai.IDMSSource, "mirrors": []any{mirrorTarget}}},
 		},
 	}
 }
@@ -317,7 +317,7 @@ func (m idmsItem) isSetupMirror() bool {
 		return false
 	}
 	e := m.Spec.ImageDigestMirrors[0]
-	return e.Source == rhoai.IDMSSource && len(e.Mirrors) == 1 && e.Mirrors[0] == MirrorTarget &&
+	return e.Source == rhoai.IDMSSource && len(e.Mirrors) == 1 && e.Mirrors[0] == mirrorTarget &&
 		(e.MirrorSourcePolicy == "" || e.MirrorSourcePolicy == "AllowContactingSource")
 }
 
@@ -349,7 +349,7 @@ func prepareMirrorCreate(c *kube.Client, w *nodeSetupWork) {
 	}
 	for _, r := range rules {
 		if r.redirectsToQuay() {
-			w.nothing(fmt.Sprintf("%s already redirects %s to %s, so the mirror is set up.", r.ref(), rhoai.IDMSSource, MirrorTarget))
+			w.nothing(fmt.Sprintf("%s already redirects %s to %s, so the mirror is set up.", r.ref(), rhoai.IDMSSource, mirrorTarget))
 			return
 		}
 	}
@@ -363,7 +363,7 @@ func prepareMirrorCreate(c *kube.Client, w *nodeSetupWork) {
 	}
 	for _, m := range items {
 		if m.Metadata.Name == MirrorName {
-			w.refuse("foreign", fmt.Sprintf("An ImageDigestMirrorSet named %s already exists and does not redirect %s to %s. It is someone else's mirror configuration, so it is not changed; look at it with oc get imagedigestmirrorset %s -o yaml.", MirrorName, rhoai.IDMSSource, MirrorTarget, MirrorName))
+			w.refuse("foreign", fmt.Sprintf("An ImageDigestMirrorSet named %s already exists and does not redirect %s to %s. It is someone else's mirror configuration, so it is not changed; look at it with oc get imagedigestmirrorset %s -o yaml.", MirrorName, rhoai.IDMSSource, mirrorTarget, MirrorName))
 			return
 		}
 	}
@@ -373,16 +373,16 @@ func prepareMirrorCreate(c *kube.Client, w *nodeSetupWork) {
 		return err
 	}
 	w.plan.Ready = true
-	w.plan.State = fmt.Sprintf("No ImageDigestMirrorSet or ImageContentSourcePolicy redirects %s to %s.", rhoai.IDMSSource, MirrorTarget)
+	w.plan.State = fmt.Sprintf("No ImageDigestMirrorSet or ImageContentSourcePolicy redirects %s to %s.", rhoai.IDMSSource, mirrorTarget)
 	for _, r := range rules {
 		// The same source mapped elsewhere: the mirrors of every IDMS and
 		// ICSP with one source are merged (types_image_digest_mirror_set.go
 		// :56-59; registries.go mergedDigestMirrorSets).
 		if r.digest() && r.Source == rhoai.IDMSSource && r.hasRealMirror() {
-			w.plan.State += fmt.Sprintf(" %s maps it to %s: OpenShift merges the mirrors of every object with the same source, so that mirror stays in use next to %s.", r.ref(), strings.Join(r.Mirrors, ", "), MirrorTarget)
+			w.plan.State += fmt.Sprintf(" %s maps it to %s: OpenShift merges the mirrors of every object with the same source, so that mirror stays in use next to %s.", r.ref(), strings.Join(r.Mirrors, ", "), mirrorTarget)
 		}
 	}
-	w.plan.Changes = []string{fmt.Sprintf("Create ImageDigestMirrorSet %s (cluster-wide): pulls of %s images by digest go to %s.", MirrorName, rhoai.IDMSSource, MirrorTarget)}
+	w.plan.Changes = []string{fmt.Sprintf("Create ImageDigestMirrorSet %s (cluster-wide): pulls of %s images by digest go to %s.", MirrorName, rhoai.IDMSSource, mirrorTarget)}
 	w.plan.NodeImpact = mirrorCreateImpact
 	w.plan.Undo = "Remove the image mirror (the same item offers it once it exists), or oc delete imagedigestmirrorset " + MirrorName + ". Removing it drains the nodes, " + poolPace + "."
 	w.done = "Created ImageDigestMirrorSet " + MirrorName + "."
@@ -428,10 +428,10 @@ func prepareMirrorRemove(c *kube.Client, w *nodeSetupWork) {
 		w.refuse("foreign", fmt.Sprintf("The mirror of %s is %s, which this setup did not create, so it is not deleted here. If you mean to remove it: oc delete %s", rhoai.IDMSSource, others[0], strings.ToLower(others[0])))
 		return
 	case ours == nil:
-		w.nothing(fmt.Sprintf("No ImageDigestMirrorSet or ImageContentSourcePolicy redirects %s to %s.", rhoai.IDMSSource, MirrorTarget))
+		w.nothing(fmt.Sprintf("No ImageDigestMirrorSet or ImageContentSourcePolicy redirects %s to %s.", rhoai.IDMSSource, mirrorTarget))
 		return
 	case !ours.isSetupMirror():
-		w.refuse("foreign", fmt.Sprintf("ImageDigestMirrorSet %s holds more than this setup's mirror (%s to %s), so it is someone's own mirror configuration and is not deleted. Look at it with oc get imagedigestmirrorset %s -o yaml.", MirrorName, rhoai.IDMSSource, MirrorTarget, MirrorName))
+		w.refuse("foreign", fmt.Sprintf("ImageDigestMirrorSet %s holds more than this setup's mirror (%s to %s), so it is someone's own mirror configuration and is not deleted. Look at it with oc get imagedigestmirrorset %s -o yaml.", MirrorName, rhoai.IDMSSource, mirrorTarget, MirrorName))
 		return
 	}
 	opts, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "DeleteOptions",
@@ -442,7 +442,7 @@ func prepareMirrorRemove(c *kube.Client, w *nodeSetupWork) {
 	}
 	w.plan.Ready = true
 	w.plan.UID, w.plan.ResourceVersion = ours.Metadata.UID, ours.Metadata.ResourceVersion
-	w.plan.State = fmt.Sprintf("ImageDigestMirrorSet %s redirects %s to %s.", MirrorName, rhoai.IDMSSource, MirrorTarget)
+	w.plan.State = fmt.Sprintf("ImageDigestMirrorSet %s redirects %s to %s.", MirrorName, rhoai.IDMSSource, mirrorTarget)
 	w.plan.Changes = []string{fmt.Sprintf("Delete ImageDigestMirrorSet %s (cluster-wide).", MirrorName)}
 	w.plan.NodeImpact, w.plan.Undo = mirrorRemoveImpactFor(remaining, others)
 	w.done = "Deleted ImageDigestMirrorSet " + MirrorName + "."

@@ -97,13 +97,13 @@ func ListKindCRs(c *kube.Client, k rhoai.ComponentKind) ([]ModuleCRItem, error) 
 	return items, nil
 }
 
-// StuckCRAge is how long a component CR must have been deleting
+// stuckCRAge is how long a component CR must have been deleting
 // before its finalizers may be removed.
-var StuckCRAge = 10 * time.Minute
+var stuckCRAge = 10 * time.Minute
 
 // CleanupStuckCRs removes the finalizers of a module CR (in either
 // module API group) only when nothing else can: the CR has been deleting for
-// StuckCRAge and the module operator that owns its finalizer is
+// stuckCRAge and the module operator that owns its finalizer is
 // gone (finalizerOwner: its ServiceAccount is known from RBAC, and no
 // Deployment and no running Pod runs as it; module operators are owned by
 // the Platform, not by the CSV, so they keep running while rhods-operator is
@@ -157,7 +157,7 @@ func CleanupStuckCRs(c *kube.Client) (int, []string) {
 			}
 			id := resource + "/" + m.Name
 			since, err := time.Parse(time.RFC3339, *m.DeletionTimestamp)
-			if err != nil || time.Since(since) < StuckCRAge {
+			if err != nil || time.Since(since) < stuckCRAge {
 				warnings = append(warnings, fmt.Sprintf("%s is being deleted; its finalizers were left for its operator", id))
 				continue
 			}

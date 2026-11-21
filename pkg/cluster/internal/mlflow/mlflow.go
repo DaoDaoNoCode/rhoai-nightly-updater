@@ -37,11 +37,11 @@ const (
 )
 
 var (
-	// DeleteTimeout bounds how long teardown waits for the CR to go.
+	// deleteTimeout bounds how long teardown waits for the CR to go.
 	// The MLflow CR has no finalizer (mlflow-operator rhoai-3.6), so this
 	// normally returns at once.
-	DeleteTimeout = 15 * time.Second
-	DeletePoll    = time.Second
+	deleteTimeout = 15 * time.Second
+	deletePoll    = time.Second
 
 	mlflowPRTagPattern = regexp.MustCompile(`:odh-pr-(\d+)(?:@|$)`)
 
@@ -419,7 +419,7 @@ func Teardown(c *kube.Client) (*types.OperationResponse, error) {
 	slog.Info("mlflow teardown", "user", kube.GetUser(c))
 	record.Action(c, "teardown-mlflow", "MLflow CR deleted", true)
 
-	gone, waitErr := kube.WaitForDeletion(c, crPath, DeleteTimeout, DeletePoll)
+	gone, waitErr := kube.WaitForDeletion(c, crPath, deleteTimeout, deletePoll)
 	if waitErr != nil {
 		return &types.OperationResponse{
 			Success: false, Message: fmt.Sprintf("MLflow deletion was requested, but whether the CR is gone cannot be checked: %v.%s", waitErr, dataNote),
@@ -432,7 +432,7 @@ func Teardown(c *kube.Client) (*types.OperationResponse, error) {
 			note = mlflowFinalizerNote(latest)
 		}
 		return &types.OperationResponse{
-			Success: false, Message: fmt.Sprintf("MLflow deletion was requested but the CR still exists after %s.%s Re-run teardown to check again.%s", DeleteTimeout, note, dataNote),
+			Success: false, Message: fmt.Sprintf("MLflow deletion was requested but the CR still exists after %s.%s Re-run teardown to check again.%s", deleteTimeout, note, dataNote),
 			Logs: logs, ErrorCode: "in_progress",
 		}, nil
 	}

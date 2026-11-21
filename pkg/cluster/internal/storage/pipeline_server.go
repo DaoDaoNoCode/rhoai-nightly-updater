@@ -67,10 +67,10 @@ const (
 )
 
 var (
-	// PipelineServerDeleteTimeout bounds how long teardown waits for the
+	// pipelineServerDeleteTimeout bounds how long teardown waits for the
 	// DSPA finalizer to complete. Tests shorten it.
-	PipelineServerDeleteTimeout = 60 * time.Second
-	PipelineServerDeletePoll    = 2 * time.Second
+	pipelineServerDeleteTimeout = 60 * time.Second
+	pipelineServerDeletePoll    = 2 * time.Second
 
 	ErrDSPACRDMissing = errors.New("the DataSciencePipelinesApplication CRD is not installed")
 )
@@ -740,7 +740,7 @@ func TeardownPipelineServer(c *kube.Client, project string) (*types.OperationRes
 	// secret behind with no pipeline server left to show a Tear down button.
 	secretNote := deleteDSPASecret(c, project, target, all, &logs) + deleteConnection(c, project, &logs)
 
-	gone, waitErr := kube.WaitForDeletion(c, dspaPath, PipelineServerDeleteTimeout, PipelineServerDeletePoll)
+	gone, waitErr := kube.WaitForDeletion(c, dspaPath, pipelineServerDeleteTimeout, pipelineServerDeletePoll)
 	if waitErr != nil {
 		record.Action(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (cannot confirm deletion: %v)", project, waitErr), false)
 		return &types.OperationResponse{
@@ -754,7 +754,7 @@ func TeardownPipelineServer(c *kube.Client, project string) (*types.OperationRes
 		record.Action(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (still terminating)", project), false)
 		return &types.OperationResponse{
 			Success:   false,
-			Message:   fmt.Sprintf("Deletion of pipeline server %s was requested, but it is still terminating after %s (waiting for the data-science-pipelines operator to finish cleanup). The status shows it until it is gone.%s", target.Meta.Name, PipelineServerDeleteTimeout, secretNote),
+			Message:   fmt.Sprintf("Deletion of pipeline server %s was requested, but it is still terminating after %s (waiting for the data-science-pipelines operator to finish cleanup). The status shows it until it is gone.%s", target.Meta.Name, pipelineServerDeleteTimeout, secretNote),
 			Logs:      logs,
 			ErrorCode: "in_progress",
 		}, nil

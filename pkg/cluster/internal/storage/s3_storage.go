@@ -84,11 +84,11 @@ var (
 	// S3ReadyTimeout bounds how long setup waits for the SeaweedFS pod. It
 	// stays below the frontend's 120s request timeout. Tests shorten it.
 	S3ReadyTimeout = 90 * time.Second
-	S3ReadyPoll    = 3 * time.Second
-	// S3DeleteTimeout bounds how long teardown waits for the data PVCs to
+	s3ReadyPoll    = 3 * time.Second
+	// s3DeleteTimeout bounds how long teardown waits for the data PVCs to
 	// disappear before reporting that deletion is still in progress.
-	S3DeleteTimeout = 60 * time.Second
-	S3DeletePoll    = 2 * time.Second
+	s3DeleteTimeout = 60 * time.Second
+	s3DeletePoll    = 2 * time.Second
 
 	// s3BucketCreator creates the pipelines bucket; tests replace it
 	// because the in-cluster S3 endpoint is unreachable from unit tests.
@@ -1352,7 +1352,7 @@ func WaitS3Ready(c *kube.Client, image string) (envkit.PodIssue, error) {
 		} else if !kube.IsK8sNotFound(err) && !kube.IsNetworkError(err) {
 			return last, err
 		}
-		if kube.Clock().Sleep(ctx, S3ReadyPoll) != nil {
+		if kube.Clock().Sleep(ctx, s3ReadyPoll) != nil {
 			return expired()
 		}
 	}
@@ -1472,7 +1472,7 @@ func (d *storageDeletion) deleteOwnedObject(c *kube.Client, namespace, kind, nam
 	}
 }
 
-// WaitPVCsGone waits, bounded by S3DeleteTimeout, until none of the PVCs is
+// WaitPVCsGone waits, bounded by s3DeleteTimeout, until none of the PVCs is
 // left. It returns the names still present on timeout: those of the last
 // listing that succeeded (the one at the deadline fails with the expired
 // context, and must not read as "none left").
@@ -1483,7 +1483,7 @@ func WaitPVCsGone(c *kube.Client, uids map[string]string) ([]string, error) {
 	}
 	var remaining []string
 	listed := false
-	gone, err := kube.WaitForGone(c, S3DeleteTimeout, S3DeletePoll, func(cc *kube.Client) (bool, error) {
+	gone, err := kube.WaitForGone(c, s3DeleteTimeout, s3DeletePoll, func(cc *kube.Client) (bool, error) {
 		var left []string
 		for _, ns := range []string{S3Namespace, LegacyNamespace} {
 			if !namespaces[ns] {
@@ -1506,7 +1506,7 @@ func WaitPVCsGone(c *kube.Client, uids map[string]string) ([]string, error) {
 	case gone || err != nil:
 		return nil, err
 	case !listed:
-		return nil, fmt.Errorf("the PVCs could not be listed within %s", S3DeleteTimeout)
+		return nil, fmt.Errorf("the PVCs could not be listed within %s", s3DeleteTimeout)
 	}
 	return remaining, nil
 }
@@ -1696,7 +1696,7 @@ func TeardownS3(c *kube.Client, opts types.S3TeardownRequest) (*types.OperationR
 		if len(remaining) > 0 {
 			logs = append(logs, fmt.Sprintf("PVC %s still terminating", strings.Join(remaining, ", ")))
 			return &types.OperationResponse{
-				Success: false, Message: fmt.Sprintf("The S3 storage objects were deleted, but PVC %s %s still terminating after %s; re-run teardown to check again.%s%s%s", strings.Join(remaining, ", "), kube.Verb(len(remaining), "is", "are"), S3DeleteTimeout, dataNote, keptNote, nsHint),
+				Success: false, Message: fmt.Sprintf("The S3 storage objects were deleted, but PVC %s %s still terminating after %s; re-run teardown to check again.%s%s%s", strings.Join(remaining, ", "), kube.Verb(len(remaining), "is", "are"), s3DeleteTimeout, dataNote, keptNote, nsHint),
 				Logs: logs, ErrorCode: "in_progress",
 			}, nil
 		}

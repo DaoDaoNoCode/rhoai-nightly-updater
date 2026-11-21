@@ -259,7 +259,7 @@ func UpdateUnderGitOps(c *kube.Client, image string, target catalog.Target, curr
 		case gone:
 			*logs = append(*logs, "OK: CSV "+currentCSV.Name+" deleted")
 		default:
-			*logs = append(*logs, fmt.Sprintf("Warning: CSV %s is still being deleted after %s; continuing", currentCSV.Name, CSVDeletionTimeout))
+			*logs = append(*logs, fmt.Sprintf("Warning: CSV %s is still being deleted after %s; continuing", currentCSV.Name, csvDeletionTimeout))
 		}
 	}
 	emit(types.UpdateStepEvent{Step: "delete_csv", Status: "success", Message: "Old CSV and InstallPlan deleted"})

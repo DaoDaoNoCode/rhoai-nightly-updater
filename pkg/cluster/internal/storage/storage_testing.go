@@ -15,10 +15,10 @@ import (
 // deletion wait and poll.
 func SetS3TimingsForTest(readyTimeout, readyPoll, deleteTimeout, deletePoll time.Duration) (restore func()) {
 	mustBeTest("SetS3TimingsForTest")
-	prevReady, prevReadyPoll, prevDelete, prevDeletePoll := S3ReadyTimeout, S3ReadyPoll, S3DeleteTimeout, S3DeletePoll
-	S3ReadyTimeout, S3ReadyPoll, S3DeleteTimeout, S3DeletePoll = readyTimeout, readyPoll, deleteTimeout, deletePoll
+	prevReady, prevReadyPoll, prevDelete, prevDeletePoll := S3ReadyTimeout, s3ReadyPoll, s3DeleteTimeout, s3DeletePoll
+	S3ReadyTimeout, s3ReadyPoll, s3DeleteTimeout, s3DeletePoll = readyTimeout, readyPoll, deleteTimeout, deletePoll
 	return func() {
-		S3ReadyTimeout, S3ReadyPoll, S3DeleteTimeout, S3DeletePoll = prevReady, prevReadyPoll, prevDelete, prevDeletePoll
+		S3ReadyTimeout, s3ReadyPoll, s3DeleteTimeout, s3DeletePoll = prevReady, prevReadyPoll, prevDelete, prevDeletePoll
 	}
 }
 
@@ -50,17 +50,17 @@ func SetBucketRetryDelayForTest(d time.Duration) (restore func()) {
 // wait for a moved pipeline server.
 func SetMigrateTimingsForTest(copyTimeout, poll, repointTimeout time.Duration) (restore func()) {
 	mustBeTest("SetMigrateTimingsForTest")
-	prevCopy, prevPoll, prevRepoint := MigrateCopyTimeout, MigratePoll, MigrateRepointTimeout
-	MigrateCopyTimeout, MigratePoll, MigrateRepointTimeout = copyTimeout, poll, repointTimeout
-	return func() { MigrateCopyTimeout, MigratePoll, MigrateRepointTimeout = prevCopy, prevPoll, prevRepoint }
+	prevCopy, prevPoll, prevRepoint := MigrateCopyTimeout, migratePoll, migrateRepointTimeout
+	MigrateCopyTimeout, migratePoll, migrateRepointTimeout = copyTimeout, poll, repointTimeout
+	return func() { MigrateCopyTimeout, migratePoll, migrateRepointTimeout = prevCopy, prevPoll, prevRepoint }
 }
 
 // SetMigrateRepointTimeoutForTest sets the wait for a moved pipeline server.
 func SetMigrateRepointTimeoutForTest(d time.Duration) (restore func()) {
 	mustBeTest("SetMigrateRepointTimeoutForTest")
-	prev := MigrateRepointTimeout
-	MigrateRepointTimeout = d
-	return func() { MigrateRepointTimeout = prev }
+	prev := migrateRepointTimeout
+	migrateRepointTimeout = d
+	return func() { migrateRepointTimeout = prev }
 }
 
 // SetRemoveAfterCopyReserveForTest sets the time the final copy leaves for
@@ -76,9 +76,9 @@ func SetRemoveAfterCopyReserveForTest(d time.Duration) (restore func()) {
 // wait and its poll.
 func SetPipelineServerDeleteTimingForTest(timeout, poll time.Duration) (restore func()) {
 	mustBeTest("SetPipelineServerDeleteTimingForTest")
-	prevTimeout, prevPoll := PipelineServerDeleteTimeout, PipelineServerDeletePoll
-	PipelineServerDeleteTimeout, PipelineServerDeletePoll = timeout, poll
-	return func() { PipelineServerDeleteTimeout, PipelineServerDeletePoll = prevTimeout, prevPoll }
+	prevTimeout, prevPoll := pipelineServerDeleteTimeout, pipelineServerDeletePoll
+	pipelineServerDeleteTimeout, pipelineServerDeletePoll = timeout, poll
+	return func() { pipelineServerDeleteTimeout, pipelineServerDeletePoll = prevTimeout, prevPoll }
 }
 
 // mustBeTest panics unless the program is a test binary.

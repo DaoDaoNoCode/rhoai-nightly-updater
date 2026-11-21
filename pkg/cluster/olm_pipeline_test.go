@@ -48,7 +48,7 @@ func TestUpdateStream_WaitsForOLMOutcome(t *testing.T) {
 			onSubscribe: func(f *fakeOLM, _ map[string]any) {
 				f.sub["status"] = map[string]any{"conditions": []any{cond("BundleUnpackFailed", "BundleUnpackFailed", "DeadlineExceeded")}}
 			}},
-		// The pull keeps failing past BundlePullFailureGrace, poll after
+		// The pull keeps failing past bundlePullFailureGrace, poll after
 		// poll; unhealthy catalogs are only noted, a condition that is not
 		// True is not read.
 		{name: "bundle image pull failing", wantCode: "bundle_image_pull", wantRestore: true, wantInMsg: "cannot pull the operator bundle image: unpack job: image pull failed",

@@ -13,7 +13,7 @@ func UseTestTimings() {
 	ReadyTimeout = 100 * time.Millisecond
 	PollInterval = 10 * time.Millisecond
 	PackageManifestPropagationWait = 10 * time.Millisecond
-	ImagePullGrace = 30 * time.Millisecond
+	imagePullGrace = 30 * time.Millisecond
 }
 
 // SetReadyTimeoutForTest makes d how long a CatalogSource gets to become

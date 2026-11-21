@@ -49,15 +49,15 @@ const (
 )
 
 var (
-	// ModelReadyTimeout bounds the wait for a new model: 188 s measured
+	// modelReadyTimeout bounds the wait for a new model: 188 s measured
 	// cold on m5.4xlarge (image pull, model download, vLLM start). The
 	// workload's own startupProbe gives up after 10 minutes.
-	ModelReadyTimeout = 10 * time.Minute
-	ModelPoll         = 5 * time.Second
-	// ModelDeleteTimeout bounds the wait for KServe's finalizer, which
+	modelReadyTimeout = 10 * time.Minute
+	modelPoll         = 5 * time.Second
+	// modelDeleteTimeout bounds the wait for KServe's finalizer, which
 	// deletes the model's Deployment, Service and HTTPRoute.
-	ModelDeleteTimeout = 2 * time.Minute
-	ModelDeletePoll    = 2 * time.Second
+	modelDeleteTimeout = 2 * time.Minute
+	modelDeletePoll    = 2 * time.Second
 )
 
 var ErrLLMISvcAPIMissing = errors.New("the LLMInferenceService API (serving.kserve.io) is not installed")
@@ -1192,7 +1192,7 @@ func (m *modelsRun) setupGateway(req types.ModelsRequest, s *modelsSetup) (*type
 			if pending != "" {
 				why = " The gateway controller says: " + kube.TruncateText(pending, 300) + "."
 			}
-			m.step("gateway-ready", "success", fmt.Sprintf("Created, but not programmed after %s. It may still come up; the Models tab shows its state.%s", ClockText(InferenceGatewayReadyTimeout), why))
+			m.step("gateway-ready", "success", fmt.Sprintf("Created, but not programmed after %s. It may still come up; the Models tab shows its state.%s", ClockText(inferenceGatewayReadyTimeout), why))
 		case dns == "published":
 			m.step("gateway-ready", "success", fmt.Sprintf("Ready: https://%s is published in DNS.", gw.host))
 		default:
@@ -1236,7 +1236,7 @@ func (m *modelsRun) setupModelApply(s *modelsSetup) (*types.OperationResponse, e
 func (m *modelsRun) setupModelReady(s *modelsSetup) (*types.OperationResponse, error) {
 	c, mp := m.c, s.mp
 	m.step("model-ready", "running", "Waiting for the model to start (typically 3 to 5 minutes the first time)...")
-	timeout := ModelReadyTimeout
+	timeout := modelReadyTimeout
 	if dl, ok := c.Context().Deadline(); ok {
 		if left := kube.Clock().Until(dl) - 30*time.Second; left < timeout {
 			timeout = left
@@ -1517,7 +1517,7 @@ func TeardownModels(c *kube.Client, project string, names ...string) (*types.Ope
 				return fail(fmt.Sprintf("Failed to delete LLMInferenceService %s/%s: %v.%s", project, entry.Name, err, kube.TemplateHint(err)), code, "delete failed")
 			}
 		}
-		gone, err := kube.WaitForDeletion(c, path, ModelDeleteTimeout, ModelDeletePoll)
+		gone, err := kube.WaitForDeletion(c, path, modelDeleteTimeout, modelDeletePoll)
 		if err != nil {
 			return fail(fmt.Sprintf("The model %s/%s is being deleted, but whether it is gone cannot be checked: %v.", project, entry.Name, err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "in_progress"), "wait failed")
 		}
@@ -1526,7 +1526,7 @@ func TeardownModels(c *kube.Client, project string, names ...string) (*types.Ope
 			if latest, ok, err := ReadToolModel(c, project, entry.Name); err == nil && ok && len(latest.Metadata.Finalizers) > 0 {
 				note = fmt.Sprintf(" It waits on %s %s, which KServe's LLMInferenceService controller removes once it has deleted the model's Deployment, Service and route; that controller must be running.", kube.Verb(len(latest.Metadata.Finalizers), "finalizer", "finalizers"), strings.Join(latest.Metadata.Finalizers, ", "))
 			}
-			return fail(fmt.Sprintf("The model %s/%s is still being deleted after %s.%s Delete again to check.", project, entry.Name, ClockText(ModelDeleteTimeout), note), "in_progress", "still deleting")
+			return fail(fmt.Sprintf("The model %s/%s is still being deleted after %s.%s Delete again to check.", project, entry.Name, ClockText(modelDeleteTimeout), note), "in_progress", "still deleting")
 		}
 		deleted = append(deleted, entry.Name)
 		forget = append(forget, ModelRecordKey(project, entry.Name))
@@ -1882,7 +1882,7 @@ func waitModelReady(c *kube.Client, project, name string, presetImage, workloadO
 			progress(msg)
 		}
 	}
-	ready, err := kube.WaitForGone(c, timeout, ModelPoll, func(cc *kube.Client) (bool, error) {
+	ready, err := kube.WaitForGone(c, timeout, modelPoll, func(cc *kube.Client) (bool, error) {
 		model, found, err := ReadToolModel(cc, project, name)
 		if err != nil {
 			return false, err

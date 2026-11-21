@@ -43,8 +43,8 @@ const ComponentsManager = "rhoai-nightly-updater-components"
 // leader_election_init.go: only when cfg.Platform == ManagedRhoai).
 const SelfManagedPlatform = "OpenShift AI Self-Managed"
 
-// View is one read of everything the DSC manager needs.
-type View struct {
+// dscView is one read of everything the DSC manager needs.
+type dscView struct {
 	state      string
 	count      int
 	obj        map[string]any
@@ -93,12 +93,12 @@ func helmManagerOf(meta kube.ObjectMeta) string {
 
 // ReadView reads the DataScienceCluster (the first, as the Components
 // page shows it), the CRD and the release default.
-func ReadView(c *kube.Client) (*View, error) {
+func ReadView(c *kube.Client) (*dscView, error) {
 	r, err := rhoai.ListServed(c, rhoai.DSCGroup, rhoai.DSCListFmt, nil, rhoai.DSCFallbackVersions)
 	if err != nil {
 		return nil, fmt.Errorf("fetching DSC list: %w", err)
 	}
-	v := &View{state: rhoai.DSCStateNoCRD, byKey: map[string]components.DSCToggle{}}
+	v := &dscView{state: rhoai.DSCStateNoCRD, byKey: map[string]components.DSCToggle{}}
 	if r.Version == "" {
 		return v, nil
 	}
@@ -146,7 +146,7 @@ func ReadView(c *kube.Client) (*View, error) {
 // the installed CSV's alm-examples in the version the DSC is read at. The
 // GitHub sample is not used: only what the installed bundle ships is the
 // release default.
-func (v *View) readDefaults(c *kube.Client) {
+func (v *dscView) readDefaults(c *kube.Client) {
 	op, err := components.ReadInstalledOperator(c)
 	if err != nil {
 		v.defaultsErr = "Cannot read the installed operator: " + err.Error()
@@ -178,19 +178,19 @@ func (v *View) readDefaults(c *kube.Client) {
 }
 
 // components is the DataScienceCluster's spec.components (nil when unset).
-func (v *View) components() map[string]any {
+func (v *dscView) components() map[string]any {
 	spec, _ := v.obj["spec"].(map[string]any)
 	comps, _ := spec["components"].(map[string]any)
 	return comps
 }
 
 // DefaultComponents is the release default's spec.components (nil when none).
-func (v *View) DefaultComponents() map[string]any {
+func (v *dscView) DefaultComponents() map[string]any {
 	comps, _ := v.defaults["components"].(map[string]any)
 	return comps
 }
 
-func (v *View) status() map[string]any {
+func (v *dscView) status() map[string]any {
 	s, _ := v.obj["status"].(map[string]any)
 	return s
 }
@@ -201,7 +201,7 @@ func (v *View) status() map[string]any {
 // modules/aipipelines handler.go starts argoWorkflowsControllers Managed,
 // the schema's default), else Removed (components.NormalizeManagementState
 // of "").
-func (v *View) stateOf(comps map[string]any, path []string) (string, bool) {
+func (v *dscView) stateOf(comps map[string]any, path []string) (string, bool) {
 	if s, ok := components.LookupState(comps, path); ok && s != "" {
 		return s, true
 	}
@@ -216,7 +216,7 @@ func (v *View) stateOf(comps map[string]any, path []string) (string, bool) {
 // it enabled) and every toggle above it is Managed (a sub-component is
 // deployed through its parent's module; rhods-operator 3.6
 // modules/aigateway/handler.go).
-func (v *View) deployed(components map[string]any, path []string) bool {
+func (v *dscView) deployed(components map[string]any, path []string) bool {
 	s, _ := v.stateOf(components, path)
 	if s != "Managed" && s != "Unmanaged" {
 		return false
@@ -233,7 +233,7 @@ func (v *View) deployed(components map[string]any, path []string) bool {
 
 // componentEnabled reports whether a top-level component's module runs: its
 // own state, or for a group without one (dashboard, data) any part.
-func (v *View) componentEnabled(components map[string]any, top components.DSCToggle) bool {
+func (v *dscView) componentEnabled(components map[string]any, top components.DSCToggle) bool {
 	if top.Toggle {
 		return v.deployed(components, top.Path)
 	}
@@ -246,7 +246,7 @@ func (v *View) componentEnabled(components map[string]any, top components.DSCTog
 }
 
 // descendants returns the toggles below t.
-func (v *View) descendants(t components.DSCToggle) []components.DSCToggle {
+func (v *dscView) descendants(t components.DSCToggle) []components.DSCToggle {
 	prefix := t.Key() + "."
 	var out []components.DSCToggle
 	for _, d := range v.tree {
@@ -271,7 +271,7 @@ func conditionFor(conds []types.DSCConditionView, name string) *types.DSCConditi
 	return nil
 }
 
-func (v *View) conditions() []types.DSCConditionView {
+func (v *dscView) conditions() []types.DSCConditionView {
 	raw, _ := v.status()["conditions"].([]any)
 	var out []types.DSCConditionView
 	for _, c := range raw {
@@ -290,7 +290,7 @@ func (v *View) conditions() []types.DSCConditionView {
 
 // readOnlyReason says why the page must not change this DSC now, with an
 // error code; "" when it may.
-func (v *View) readOnlyReason() (string, string) {
+func (v *dscView) readOnlyReason() (string, string) {
 	switch {
 	case v.state != rhoai.DSCStatePresent:
 		return "There is no DataScienceCluster.", "prerequisites"
@@ -331,7 +331,7 @@ func Manager(c *kube.Client) (*types.DSCManager, error) {
 	return m, nil
 }
 
-func (v *View) model() *types.DSCManager {
+func (v *dscView) model() *types.DSCManager {
 	out := &types.DSCManager{State: v.state, Exists: v.state == rhoai.DSCStatePresent, DSCCount: v.count, Nodes: []types.DSCNode{}, Mismatches: []types.DSCMismatch{}, Conditions: []types.DSCConditionView{}}
 	if !out.Exists {
 		return out
@@ -408,7 +408,7 @@ func (v *View) model() *types.DSCManager {
 
 // comparison says what the comparison with the release default covered,
 // and which components the CRD, the release default and the DSC list.
-func (v *View) comparison() types.DSCComparison {
+func (v *dscView) comparison() types.DSCComparison {
 	out := types.DSCComparison{
 		DefaultsRead:      v.defaults != nil,
 		SchemaRead:        v.spec != nil,
@@ -476,7 +476,7 @@ func withUnknownNodes(nodes []types.DSCNode, mismatches []types.DSCMismatch) []t
 // mismatches returns the differences from the release default that are
 // real problems. Values the API server's defaulting fills in and values a
 // user chose are not among them.
-func (v *View) mismatches() []types.DSCMismatch {
+func (v *dscView) mismatches() []types.DSCMismatch {
 	out := []types.DSCMismatch{}
 	comps, defComps := v.components(), v.DefaultComponents()
 	for _, t := range v.tree {
@@ -541,7 +541,7 @@ type dscPlanned struct {
 	sets []components.DSCAssign
 }
 
-func (v *View) newPlan(action string) *dscPlanned {
+func (v *dscView) newPlan(action string) *dscPlanned {
 	return &dscPlanned{plan: &types.DSCPlan{Action: action, Name: v.name, UID: v.uid, APIVersion: v.apiVersion, Changes: []types.DSCChange{}}}
 }
 
@@ -557,7 +557,7 @@ func ComponentsPath(path ...string) []string {
 
 // finish applies the patch to a copy to list the changes, checks the
 // removals it causes and binds the plan to its patch.
-func (v *View) finish(c *kube.Client, p *dscPlanned, teardown bool) *dscPlanned {
+func (v *dscView) finish(c *kube.Client, p *dscPlanned, teardown bool) *dscPlanned {
 	if len(p.ops) == 0 {
 		return p.refuse("The DataScienceCluster already matches. Nothing to change.", "nothing_to_do")
 	}
@@ -586,13 +586,13 @@ func planToken(parts ...any) string {
 // DataScienceCluster holds once stored. Changes are listed between such
 // copies, so a field the API server defaults is no change when a value
 // leaves it out.
-func (v *View) defaultedComponents(comps map[string]any) map[string]any {
+func (v *dscView) defaultedComponents(comps map[string]any) map[string]any {
 	return components.WithSchemaDefaults(comps, components.SchemaChild(v.spec, "components"))
 }
 
 // protectedFields returns the protected fields (components.DSCProtectedFields) the
 // DataScienceCluster sets, sorted: a reset keeps their value.
-func (v *View) protectedFields() []string {
+func (v *dscView) protectedFields() []string {
 	var out []string
 	for f := range v.protected {
 		if _, ok := components.LookupPath(v.components(), strings.Split(f, ".")); ok {
@@ -605,7 +605,7 @@ func (v *View) protectedFields() []string {
 
 // changesBetween lists every managementState that changes, or whose
 // deployment changes through a parent, and every other field that changes.
-func (v *View) changesBetween(before, after map[string]any) []types.DSCChange {
+func (v *dscView) changesBetween(before, after map[string]any) []types.DSCChange {
 	out := []types.DSCChange{}
 	for _, t := range v.tree {
 		if !t.Toggle {
@@ -681,7 +681,7 @@ func FieldText(v any) string {
 
 // orphanWarnings names sub-components that stay Managed but deploy nothing
 // after the change, because a parent stops being Managed.
-func (v *View) orphanWarnings(before, after map[string]any) []string {
+func (v *dscView) orphanWarnings(before, after map[string]any) []string {
 	var out []string
 	for _, t := range v.tree {
 		if !t.Toggle || len(t.Path) < 2 {
@@ -700,7 +700,7 @@ var UsersCheckedComponents = map[string]bool{"aipipelines": true, "datasciencepi
 
 // modulesOf returns the modules (components.GuardModule) a top-level component runs in
 // comps, in tree order: its own, and those of its deployed parts.
-func (v *View) modulesOf(comps map[string]any, top components.DSCToggle) []string {
+func (v *dscView) modulesOf(comps map[string]any, top components.DSCToggle) []string {
 	var out []string
 	seen := map[string]bool{}
 	add := func(m string) {
@@ -726,11 +726,11 @@ func (v *View) modulesOf(comps map[string]any, top components.DSCToggle) []strin
 // sub-component whose module stays gets PartBlockers. Read errors block
 // (fail closed). teardown is the hard reset, which deletes every module
 // and creates after: a module after deploys again gets the teardown rules
-// (the standing refusals of RefusedComponents do not apply, and what only
+// (the standing refusals of refusedComponents do not apply, and what only
 // stops working while the components are down is a warning); a module
 // after leaves Removed gets the rules of removing it, and what still uses
 // it blocks.
-func (v *View) removalBlocks(c *kube.Client, before, after map[string]any, teardown bool) removalCheck {
+func (v *dscView) removalBlocks(c *kube.Client, before, after map[string]any, teardown bool) removalCheck {
 	rc := NewRemovalChecker(c)
 	var blocks []types.DSCRemovalBlock
 	var out removalCheck
@@ -862,7 +862,7 @@ func PlanChange(c *kube.Client, action, path, to string, withParent, keepEnabled
 	return nil, fmt.Errorf("unknown action %q", action)
 }
 
-func (v *View) planToggle(c *kube.Client, path, to string, withParent bool) *dscPlanned {
+func (v *dscView) planToggle(c *kube.Client, path, to string, withParent bool) *dscPlanned {
 	p := v.newPlan("toggle")
 	if msg, code := v.readOnlyReason(); msg != "" {
 		return p.refuse(msg, code)
@@ -918,7 +918,7 @@ func (v *View) planToggle(c *kube.Client, path, to string, withParent bool) *dsc
 	return v.finish(c, p, false)
 }
 
-func (v *View) planFix(c *kube.Client) *dscPlanned {
+func (v *dscView) planFix(c *kube.Client) *dscPlanned {
 	p := v.newPlan("fix")
 	if msg, code := v.readOnlyReason(); msg != "" {
 		return p.refuse(msg, code)
@@ -975,7 +975,7 @@ func fieldPathKeys(path string) []string {
 // what differs, keeping protected fields (components.DSCProtectedFields) and values
 // the API server's defaulting would put back anyway, and with keep the
 // components the user turned on (ResetTarget).
-func (v *View) planSoftReset(c *kube.Client, keep bool) *dscPlanned {
+func (v *dscView) planSoftReset(c *kube.Client, keep bool) *dscPlanned {
 	p := v.newPlan("soft-reset")
 	p.plan.KeepEnabled = keep
 	if msg, code := v.readOnlyReason(); msg != "" {
@@ -1004,7 +1004,7 @@ func (v *View) planSoftReset(c *kube.Client, keep bool) *dscPlanned {
 // Unmanaged, where the CRD allows it) in the DataScienceCluster and
 // deployed, while the release default leaves them off (Removed, or unset
 // without a CRD default that enables them).
-func (v *View) turnedOn() []components.DSCToggle {
+func (v *dscView) turnedOn() []components.DSCToggle {
 	if v.defaults == nil {
 		return nil
 	}
@@ -1031,7 +1031,7 @@ func (v *View) turnedOn() []components.DSCToggle {
 // toggles above it Managed (it is deployed only through them). It fills
 // in the plan's TurnedOn (always, so the dialog can offer the option) and
 // Kept (with keep).
-func (v *View) ResetTarget(plan *types.DSCPlan, keep bool) map[string]any {
+func (v *dscView) ResetTarget(plan *types.DSCPlan, keep bool) map[string]any {
 	target, _ := kube.NormalizeJSON(v.DefaultComponents()).(map[string]any)
 	if target == nil {
 		target = map[string]any{}
@@ -1090,7 +1090,7 @@ func setStateIn(components map[string]any, path []string, state string) {
 }
 
 // resetDiff collects the sets and removals that turn live into target.
-func (v *View) resetDiff(schema, live, target map[string]any, path []string, sets *[]components.DSCAssign, removes *[][]string) {
+func (v *dscView) resetDiff(schema, live, target map[string]any, path []string, sets *[]components.DSCAssign, removes *[][]string) {
 	keys := map[string]bool{}
 	for k := range live {
 		keys[k] = true
@@ -1136,7 +1136,7 @@ func (v *View) resetDiff(schema, live, target map[string]any, path []string, set
 }
 
 // keepsProtectedBelow reports whether a live object holds a protected field.
-func (v *View) keepsProtectedBelow(path []string, obj map[string]any) bool {
+func (v *dscView) keepsProtectedBelow(path []string, obj map[string]any) bool {
 	prefix := strings.Join(path, ".") + "."
 	for f := range v.protected {
 		if after, ok := strings.CutPrefix(f, prefix); ok {
@@ -1219,7 +1219,7 @@ func patchDSCFields(c *kube.Client, path string, ops []kube.JSONPatchOp, dryRun 
 // not at all). A read without a uid or resourceVersion (an API server
 // always sets both) is refused before anything is sent: the patch could
 // not be bound to it.
-func (v *View) write(c *kube.Client, p *dscPlanned) (res *types.OperationResponse, rejected bool) {
+func (v *dscView) write(c *kube.Client, p *dscPlanned) (res *types.OperationResponse, rejected bool) {
 	if v.uid == "" || v.meta.ResourceVersion == "" {
 		return &types.OperationResponse{Success: false, ErrorCode: "internal",
 			Message: fmt.Sprintf("DataScienceCluster %s was read without a uid or resourceVersion, so the change cannot be limited to the object that was checked. Nothing was changed.", v.name)}, false
@@ -1261,7 +1261,7 @@ func (v *View) write(c *kube.Client, p *dscPlanned) (res *types.OperationRespons
 // A plan that refuses, or a read that fails, ends the change with nothing
 // changed. It returns the read and the plan that were written, or the
 // result that ended the change.
-func writeChecked(c *kube.Client, v *View, plan func(v *View) (*dscPlanned, *types.OperationResponse)) (*View, *dscPlanned, *types.OperationResponse) {
+func writeChecked(c *kube.Client, v *dscView, plan func(v *dscView) (*dscPlanned, *types.OperationResponse)) (*dscView, *dscPlanned, *types.OperationResponse) {
 	uid, name := v.uid, v.name
 	for attempt := 1; ; attempt++ {
 		p, res := plan(v)
@@ -1342,8 +1342,8 @@ func SetManagementState(c *kube.Client, req types.DSCToggleRequest) (*types.Oper
 // token of the plan the user reviewed, which must match the plan computed
 // now (Diagnostics' disable-component fix has its own confirmation and no
 // plan).
-func (v *View) setManagementState(c *kube.Client, req types.DSCToggleRequest, activity string, reviewed bool) *types.OperationResponse {
-	v, p, res := writeChecked(c, v, func(v *View) (*dscPlanned, *types.OperationResponse) {
+func (v *dscView) setManagementState(c *kube.Client, req types.DSCToggleRequest, activity string, reviewed bool) *types.OperationResponse {
+	v, p, res := writeChecked(c, v, func(v *dscView) (*dscPlanned, *types.OperationResponse) {
 		return v.checkToggle(c, req, reviewed)
 	})
 	if res != nil {
@@ -1362,7 +1362,7 @@ func (v *View) setManagementState(c *kube.Client, req types.DSCToggleRequest, ac
 // checkToggle checks a toggle request against the read v and plans it:
 // the DSC and the field are still what the request saw, the plan's checks
 // pass and, when reviewed, it is the plan the user reviewed.
-func (v *View) checkToggle(c *kube.Client, req types.DSCToggleRequest, reviewed bool) (*dscPlanned, *types.OperationResponse) {
+func (v *dscView) checkToggle(c *kube.Client, req types.DSCToggleRequest, reviewed bool) (*dscPlanned, *types.OperationResponse) {
 	if v.state == rhoai.DSCStatePresent && req.Name != "" && req.Name != v.name {
 		return nil, &types.OperationResponse{Success: false, ErrorCode: "conflict", Message: fmt.Sprintf("The DataScienceCluster is %s now, not %s. Reload the page. Nothing was changed.", v.name, req.Name)}
 	}
@@ -1390,19 +1390,19 @@ func runPlanned(c *kube.Client, req types.DSCPlanRequest, action, activity strin
 	if err != nil {
 		return nil, err
 	}
-	var planned func(v *View) *dscPlanned
+	var planned func(v *dscView) *dscPlanned
 	switch action {
 	case "fix":
-		planned = func(v *View) *dscPlanned { return v.planFix(c) }
+		planned = func(v *dscView) *dscPlanned { return v.planFix(c) }
 	case "soft-reset":
 		if req.KeepEnabled == nil {
 			return keepEnabledMissing(), nil
 		}
-		planned = func(v *View) *dscPlanned { return v.planSoftReset(c, *req.KeepEnabled) }
+		planned = func(v *dscView) *dscPlanned { return v.planSoftReset(c, *req.KeepEnabled) }
 	default:
 		return nil, fmt.Errorf("unknown action %q", action)
 	}
-	v, p, res := writeChecked(c, v, func(v *View) (*dscPlanned, *types.OperationResponse) {
+	v, p, res := writeChecked(c, v, func(v *dscView) (*dscPlanned, *types.OperationResponse) {
 		p := planned(v)
 		if p.plan.Refusal != "" || len(p.plan.Blocked) > 0 {
 			return nil, refusedResult(p.plan)

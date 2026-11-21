@@ -42,15 +42,15 @@ func DashboardURL(c *kube.Client) string {
 // Dashboard component CRs, or "" (no CRD, no CR, no URL, or the list is
 // refused).
 func dashboardURLFromComponent(c *kube.Client) string {
-	u, _ := ReadComponentURL(c)
+	u, _ := readComponentURL(c)
 	return u
 }
 
-// ReadComponentURL is dashboardURLFromComponent with the read
+// readComponentURL is dashboardURLFromComponent with the read
 // error: "" and nil mean the cluster has no such URL (no CRD served, no CR,
 // or none reports an https status.url); an error means it could not be
 // read.
-func ReadComponentURL(c *kube.Client) (string, error) {
+func readComponentURL(c *kube.Client) (string, error) {
 	r, err := rhoai.ListServed(c, rhoai.ComponentAPIGroup, "/apis/components.platform.opendatahub.io/%s/dashboards", nil, []string{"v1alpha1"})
 	if err != nil || r.Version == "" {
 		return "", err

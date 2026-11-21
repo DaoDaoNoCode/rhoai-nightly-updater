@@ -18,12 +18,12 @@ import (
 // with what to check. A registry that does not have the image (manifest
 // unknown) still fails at once: waiting cannot help.
 var (
-	// ModelImagePullGrace is how long a failing pull is waited on.
-	ModelImagePullGrace = 2 * time.Minute
+	// modelImagePullGrace is how long a failing pull is waited on.
+	modelImagePullGrace = 2 * time.Minute
 	// ModelImagePullGraceYoungNode is the window on a node that joined less
-	// than ModelYoungNodeAge ago.
+	// than modelYoungNodeAge ago.
 	ModelImagePullGraceYoungNode = 8 * time.Minute
-	ModelYoungNodeAge            = 15 * time.Minute
+	modelYoungNodeAge            = 15 * time.Minute
 )
 
 // modelPullGrace is the window for a pull failing on node, and a note on
@@ -32,12 +32,12 @@ var (
 // selector, no get rule).
 func modelPullGrace(c *kube.Client, node string) (time.Duration, string) {
 	if node == "" {
-		return ModelImagePullGrace, ""
+		return modelImagePullGrace, ""
 	}
 	q := url.Values{"fieldSelector": {"metadata.name=" + node}}
 	body, _, err := c.Get("/api/v1/nodes?" + q.Encode())
 	if err != nil {
-		return ModelImagePullGrace, ""
+		return modelImagePullGrace, ""
 	}
 	var list struct {
 		Items []struct {
@@ -45,15 +45,15 @@ func modelPullGrace(c *kube.Client, node string) (time.Duration, string) {
 		} `json:"items"`
 	}
 	if json.Unmarshal(body, &list) != nil || len(list.Items) != 1 {
-		return ModelImagePullGrace, ""
+		return modelImagePullGrace, ""
 	}
 	created, err := time.Parse(time.RFC3339, list.Items[0].Metadata.CreationTimestamp)
 	if err != nil {
-		return ModelImagePullGrace, ""
+		return modelImagePullGrace, ""
 	}
 	age := kube.Clock().Now().Sub(created)
-	if age < 0 || age >= ModelYoungNodeAge {
-		return ModelImagePullGrace, ""
+	if age < 0 || age >= modelYoungNodeAge {
+		return modelImagePullGrace, ""
 	}
 	return ModelImagePullGraceYoungNode, fmt.Sprintf(" Node %s joined the cluster %s ago: a new node can get its pull credentials a few minutes after it joins.", node, minutesText(age))
 }
