@@ -1,4 +1,4 @@
-package cluster
+package authz
 
 import (
 	"context"
@@ -127,7 +127,7 @@ func ReadSessionToken(ctx context.Context, userToken string) (*SessionToken, err
 	body, _, err := userClient.Get("/apis/oauth.openshift.io/v1/useroauthaccesstokens/" + name)
 	// Only a 404 about this very object says the sign-in is gone; a 404
 	// without details (the resource type is not served) says nothing.
-	var ke *K8sError
+	var ke *kube.K8sError
 	if errors.As(err, &ke) && ke.Status == 404 && ke.DetailsKind == "useroauthaccesstokens" && ke.DetailsName == name {
 		return nil, ErrSessionTokenGone
 	}
