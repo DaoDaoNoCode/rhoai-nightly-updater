@@ -968,12 +968,41 @@ sdkVersion: kfp-2.13.0
 
 // --- Versions and the update check ---------------------------------------------
 
+// The updater the docs show is the release they describe, read from the
+// repository so no image keeps an old version: the version of CHANGELOG.md's
+// top section ("## [5.0.0] - unreleased" -> v5.0.0, skipping
+// "## [Unreleased]" as scripts/release.sh changelog_top does) and the
+// TEMPLATE_REVISION of deploy/template.yaml. Not Chart.yaml's appVersion:
+// during pre-releases it names one (v5.0.0-alpha.2), which the images
+// would keep after the release.
+const repoRoot = join(here, "..", "..", "..");
+
+function docsVersion() {
+  for (const line of readFileSync(join(repoRoot, "CHANGELOG.md"), "utf8").split("\n")) {
+    const m = line.match(/^## \[([^\]]+)\]/);
+    if (!m || m[1].toLowerCase() === "unreleased") continue;
+    if (!/^\d+\.\d+\.\d+$/.test(m[1])) throw new Error(`CHANGELOG.md: the top section's version "${m[1]}" is not X.Y.Z`);
+    return `v${m[1]}`;
+  }
+  throw new Error("CHANGELOG.md has no \"## [X.Y.Z]\" section");
+}
+
+function templateRevision() {
+  const m = readFileSync(join(repoRoot, "deploy", "template.yaml"), "utf8").match(/name: TEMPLATE_REVISION\s*\n\s*value: *"?([^"\s]+)"?/);
+  if (!m) throw new Error("deploy/template.yaml has no TEMPLATE_REVISION");
+  return m[1];
+}
+
+export const DOCS_VERSION = docsVersion();
+export const TEMPLATE_REVISION = templateRevision();
+
+// Built a day before the screenshots' NOW, like every other time here.
 export const versionInfo = (overrides = {}) => ({
-  version: "v4.0.0", commit: hex("v4.0.0", 40), buildDate: "2026-11-19T09:00:00Z", goVersion: "go1.25.1",
-  templateRevision: "7", expectedTemplateRevision: "7", templateOutdated: false, ...overrides,
+  version: DOCS_VERSION, commit: hex(DOCS_VERSION, 40), buildDate: ago(60 * 24), goVersion: "go1.25.1",
+  templateRevision: TEMPLATE_REVISION, expectedTemplateRevision: TEMPLATE_REVISION, templateOutdated: false, ...overrides,
 });
 
-export const noUpdate = { current: "v4.0.0", latest: "v4.0.0", updateAvailable: false, majorUpgrade: false };
+export const noUpdate = { current: DOCS_VERSION, latest: DOCS_VERSION, updateAvailable: false, majorUpgrade: false };
 
 // --- Diagnostics -----------------------------------------------------------------
 

@@ -559,9 +559,8 @@ scenarios.user = (w) => {
   w.status = F.updateAvailableStatus();
   w.role = "user";
   w.canMutate = false;
-  // These views exist from 5.0.0 on, so the masthead and the summary name it.
-  w.version = F.versionInfo({ version: "v5.0.0", commit: F.hex("v5.0.0", 40), buildDate: "2026-11-20T09:00:00Z", templateRevision: "8", expectedTemplateRevision: "8" });
-  w.updateCheck = { current: "v5.0.0", latest: "v5.0.0", updateAvailable: false, majorUpgrade: false };
+  // The masthead and the summary name the release the docs describe
+  // (F.DOCS_VERSION, baseWorld's version and update check).
   w.userProjects = ["dev-project", "llm-eval"];
   w.samples.mlflow["dev-project"] = F.mlflowSamples("dev-project", { "genai-demo": "present", training: "present" });
 };

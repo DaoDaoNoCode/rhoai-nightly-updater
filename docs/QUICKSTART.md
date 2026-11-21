@@ -90,9 +90,9 @@ Open the printed URL, or use the grid icon in the OpenShift console (Red Hat App
 oc get route rhoai-nightly-updater -n rhoai-nightly-updater -o jsonpath='https://{.spec.host}{"\n"}'
 ```
 
-<img src="images/masthead-version.png" alt="The masthead: the release v4.0.0, the appearance button, Help, Applications and the user menu" width="380">
+<img src="images/masthead-version.png" alt="The masthead: the release, the appearance button, Help, Applications and the user menu" width="380">
 
-**What you should see:** the **Status** page. The masthead shows (1) the release you installed (`v4.0.0` in the picture), then the appearance button (color scheme and contrast), **Help** (`?`), the application menu and your user name. A fresh cluster shows **One-time cluster setup** first.
+**What you should see:** the **Status** page. The masthead shows (1) the release you installed, then the appearance button (color scheme and contrast), **Help** (`?`), the application menu and your user name. A fresh cluster shows **One-time cluster setup** first.
 
 **Your teammates** open the same URL. Since 5.0.0 whoever RHOAI lets in can sign in: by default every OpenShift user, since RHOAI grants `get` on `auths.services.platform.opendatahub.io` to the allowed groups of its Auth CR (`oc get auths.services.platform.opendatahub.io auth -o jsonpath='{.spec.allowedGroups}'`). Narrow those groups to narrow who signs in (it narrows the RHOAI dashboard too). Until RHOAI is installed ([step 4](#4-install-rhoai)) only cluster-admins sign in. Cluster-admins see every page. Everyone else sees a short Status page, Build Explorer and the Environment page for their own projects, read with their own permissions, and changes nothing ([README: Not a cluster-admin?](../README.md#not-a-cluster-admin-what-you-see)):
 

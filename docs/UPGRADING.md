@@ -98,12 +98,12 @@ flowchart TD
 
 ### In the app
 
-<img src="images/masthead-version.png" alt="The masthead shows the release v4.0.0" width="380">
+<img src="images/masthead-version.png" alt="The masthead shows the running release" width="380">
 
-1. The masthead shows the running release, for example `v4.0.0`. Builds of
+1. The masthead shows the running release (`vX.Y.Z`). Builds of
    `main` or of a commit show no version here.
 
-<img src="images/help-about.png" alt="The Help dialog, About this installation: Updater build v4.0.0 with its commit and build date" width="760">
+<img src="images/help-about.png" alt="The Help dialog, About this installation: Updater build, the release with its commit and build date" width="760">
 
 1. **Help** (`?`) → **About this installation** → **Updater build**: the
    release, its commit and its build date.
@@ -129,7 +129,7 @@ If the Deployment was created from an older template than the running image
 expects (typically an install on `:latest` that pulled a newer image), every
 page shows this notice for admins. Upgrade as in sections 3 to 5:
 
-<img src="images/banner-template-outdated.png" alt="Notice for admins: this updater's deployment is out of date, template revision 3 where 5 is expected" width="760">
+<img src="images/banner-template-outdated.png" alt="Notice for admins: this updater's deployment is out of date, created from an older template revision than the build expects" width="760">
 
 Dismissing the release notice hides it until an even newer release.
 
