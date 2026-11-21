@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -212,7 +213,7 @@ func TestValidateMaaSConnectionURL(t *testing.T) {
 		"postgresql://u:p#ss@db/maas":                      "has a #",
 		"postgresql://u:p@db/" + strings.Repeat("a", 2100): "longer than 2048",
 	} {
-		got := validateMaaSConnectionURL(raw)
+		got := serving.ValidateMaaSConnectionURL(raw)
 		if want == "" && got != "" || want != "" && !strings.Contains(got, want) {
 			t.Errorf("%q: %q, want %q", raw, got, want)
 		}
@@ -226,7 +227,7 @@ func TestValidateMaaSConnectionURL(t *testing.T) {
 		{Kind: "rds"}:  "the database must be external, development or cnpg",
 		{Kind: "cnpg"}: "",
 	} {
-		if got := validateMaaSDatabaseRequest(d); got != want {
+		if got := serving.ValidateMaaSDatabaseRequest(d); got != want {
 			t.Errorf("%s: %q, want %q", d.Kind, got, want)
 		}
 	}
@@ -244,9 +245,9 @@ func TestRedactURL_EveryForm(t *testing.T) {
 			t.Errorf("%q: %q", leak, got)
 		}
 	}
-	dev := maasPOCConnectionURL("pw")
+	dev := serving.MaaSPOCConnectionURL("pw")
 	for _, leak := range []string{dev, base64.StdEncoding.EncodeToString([]byte(dev)), "%70%77", "pw", base64.StdEncoding.EncodeToString([]byte("pw"))} {
-		if got := (&maasDBPlan{password: "pw"}).redact("x " + leak + " y"); got != "x [redacted] y" {
+		if got := (&serving.MaaSDBPlan{Password: "pw"}).Redact("x " + leak + " y"); got != "x [redacted] y" {
 			t.Errorf("dev %q: %q", leak, got)
 		}
 	}
@@ -260,7 +261,7 @@ func TestRedactURL_EveryForm(t *testing.T) {
 
 // The development database is setup-database.sh's objects, field for field.
 func TestMaaSPOCObjects_AreTheDocsScript(t *testing.T) {
-	d := maasPOCDeploymentObject("ns", "img", "uid-7")
+	d := serving.MaaSPOCDeploymentObject("ns", "img", "uid-7")
 	raw, _ := json.Marshal(d)
 	for _, want := range []string{`"replicas":1`, `"matchLabels":{"app":"postgres"}`, `"template":{"metadata":{"annotations":{"rhoai-nightly-updater/postgres-creds-uid":"uid-7"},"labels":{"app":"postgres"}}`,
 		`{"name":"POSTGRESQL_USER","valueFrom":{"secretKeyRef":{"key":"POSTGRES_USER","name":"postgres-creds"}}}`,
@@ -277,15 +278,15 @@ func TestMaaSPOCObjects_AreTheDocsScript(t *testing.T) {
 	if strings.Contains(string(raw), "securityContext") {
 		t.Error("the script sets no security context")
 	}
-	svc, _ := json.Marshal(maasPOCServiceObject("ns"))
+	svc, _ := json.Marshal(serving.MaaSPOCServiceObject("ns"))
 	if !strings.Contains(string(svc), `"ports":[{"port":5432,"targetPort":5432}]`) || !strings.Contains(string(svc), `"selector":{"app":"postgres"}`) {
 		t.Errorf("Service: %s", svc)
 	}
-	if got := maasPOCConnectionURL("aB/"); got != "postgresql://maas:%61%42%2f@postgres:5432/maas?sslmode=disable" {
+	if got := serving.MaaSPOCConnectionURL("aB/"); got != "postgresql://maas:%61%42%2f@postgres:5432/maas?sslmode=disable" {
 		t.Errorf("URL %q: every byte percent-encoded, as od -tx1 does", got)
 	}
 	for range 20 {
-		p, err := newMaaSPOCPassword()
+		p, err := serving.NewMaaSPOCPassword()
 		if err != nil || len(p) != 32 || strings.ContainsAny(p, "/+=") {
 			t.Fatalf("password %q %v", p, err)
 		}
@@ -340,7 +341,7 @@ func TestMaaSDatabase_DevelopmentSetupStatusSwitchAndRemove(t *testing.T) {
 	}
 	creds := ensureMap(mc.f.get(tPOCCreds), "data")
 	pw, _ := base64.StdEncoding.DecodeString(creds["POSTGRES_PASSWORD"].(string))
-	if got := secretURL(t, mc); got != maasPOCConnectionURL(string(pw)) {
+	if got := secretURL(t, mc); got != serving.MaaSPOCConnectionURL(string(pw)) {
 		t.Fatalf("maas-db-config %q", got)
 	}
 	noLeak(t, mc, string(pw), res, events)
@@ -487,7 +488,7 @@ func credsRequests(mc *modelsCluster) []string {
 
 func podCredsAnnotation(mc *modelsCluster) string {
 	tmpl := ensureMap(ensureMap(ensureMap(mc.f.get(tPOCDeploy), "spec"), "template"), "metadata")
-	v, _ := ensureMap(tmpl, "annotations")[maasPOCCredsAnnotation].(string)
+	v, _ := ensureMap(tmpl, "annotations")[serving.MaaSPOCCredsAnnotation].(string)
 	return v
 }
 
@@ -526,7 +527,7 @@ func TestMaaSDatabase_PostgresCredsIsOnlyCreatedAndDeletedByUID(t *testing.T) {
 	uid2 := ensureMap(mc.f.get(tPOCCreds), "metadata")["uid"].(string)
 	creds := ensureMap(mc.f.get(tPOCCreds), "data")
 	pw, _ := base64.StdEncoding.DecodeString(creds["POSTGRES_PASSWORD"].(string))
-	if uid2 == uid || readRecord(t, mc.c).POCCredsUID != uid2 || podCredsAnnotation(mc) != uid2 || secretURL(t, mc) != maasPOCConnectionURL(string(pw)) {
+	if uid2 == uid || readRecord(t, mc.c).POCCredsUID != uid2 || podCredsAnnotation(mc) != uid2 || secretURL(t, mc) != serving.MaaSPOCConnectionURL(string(pw)) {
 		t.Fatalf("recreate: uid %s -> %s, record %+v", uid, uid2, readRecord(t, mc.c))
 	}
 	if r := credsRequests(mc); len(r) != 0 {
@@ -572,7 +573,7 @@ func TestMaaSDatabase_UnrecordedPostgresCredsIsForeign(t *testing.T) {
 	}
 	rec := readRecord(t, mc.c)
 	rec.POCCredsUID = ""
-	if err := writeMaaSRecord(mc.c, rec); err != nil {
+	if err := serving.WriteMaaSRecord(mc.c, rec); err != nil {
 		t.Fatal(err)
 	}
 	res, _ = runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"})
@@ -589,7 +590,7 @@ func TestMaaSDatabase_DevelopmentNotAvailableTimesOut(t *testing.T) {
 	plain := mc.f.onGet
 	dev := types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "development"}}
 	res, events := runMaaSOp(t, mc.c, dev)
-	if res.Success || res.ErrorCode != "not_ready" || !strings.Contains(res.Message, "not available after "+clockText(MaaSDevDatabaseTimeout)) {
+	if res.Success || res.ErrorCode != "not_ready" || !strings.Contains(res.Message, "not available after "+serving.ClockText(serving.MaaSDevDatabaseTimeout)) {
 		t.Fatalf("setup with a pod that never runs: %+v", res)
 	}
 	if got := finalSteps(events); !strings.HasSuffix(got, "database=failed") {
@@ -630,7 +631,7 @@ func TestMaaSPOCRestartWarning(t *testing.T) {
 				running = `{"running":{"startedAt":"` + tc.apiStarted + `"}}`
 			}
 			f.putJSON(pods+"maas-api-xyz", `{"status":{"containerStatuses":[{"state":`+running+`}]}}`)
-			got := maasPOCRestartWarning(c, "redhat-ai-gateway-infra")
+			got := serving.MaaSPOCRestartWarning(c, "redhat-ai-gateway-infra")
 			if (got != "") != tc.want {
 				t.Fatalf("warning %q, want one: %v", got, tc.want)
 			}
@@ -641,7 +642,7 @@ func TestMaaSPOCRestartWarning(t *testing.T) {
 	}
 	f, c := newResourceFake(t)
 	f.fail["GET /api/v1/namespaces/redhat-ai-gateway-infra/pods"] = 403
-	if got := maasPOCRestartWarning(c, "redhat-ai-gateway-infra"); got != "" {
+	if got := serving.MaaSPOCRestartWarning(c, "redhat-ai-gateway-infra"); got != "" {
 		t.Errorf("unreadable pods: %q", got)
 	}
 }
@@ -761,7 +762,7 @@ func TestMaaSDatabase_YoursIsRecordedAfterItsSecret(t *testing.T) {
 		t.Fatalf("record %+v", rec)
 	}
 	rec.Database = ""
-	if err := writeMaaSRecord(mc.c, rec); err != nil {
+	if err := serving.WriteMaaSRecord(mc.c, rec); err != nil {
 		t.Fatal(err)
 	}
 	if st, _ := GetMaaSStatus(mc.c); st.Database.Current != "external" {
@@ -795,7 +796,7 @@ func TestMaaSDatabase_EarlierBuildsCNPGIsAdoptedAsCNPG(t *testing.T) {
 	}
 	rec := readRecord(t, mc.c)
 	rec.Database = ""
-	if err := writeMaaSRecord(mc.c, rec); err != nil {
+	if err := serving.WriteMaaSRecord(mc.c, rec); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := GetMaaSStatus(mc.c)
@@ -811,5 +812,5 @@ func toolOwnedFake(obj map[string]any) bool {
 	raw, _ := json.Marshal(obj["metadata"])
 	var meta kube.ObjectMeta
 	_ = json.Unmarshal(raw, &meta)
-	return toolOwned(meta)
+	return serving.ToolOwned(meta)
 }

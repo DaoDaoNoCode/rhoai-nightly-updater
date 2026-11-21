@@ -87,3 +87,11 @@ func SnippetURL(s string) bool {
 func UnsafeAddressWarning(what string) string {
 	return "The " + what + " the cluster reports is not a plain https address, so this tool does not show it or put it in commands."
 }
+
+// JoinTitles joins "a", "b" and "c" as "a, b and c".
+func JoinTitles(titles []string) string {
+	if len(titles) <= 1 {
+		return strings.Join(titles, "")
+	}
+	return strings.Join(titles[:len(titles)-1], ", ") + " and " + titles[len(titles)-1]
+}

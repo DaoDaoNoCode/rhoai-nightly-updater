@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"encoding/json"
@@ -22,7 +22,7 @@ import (
 // model is published.
 const (
 	genAIAssetLabel        = "opendatahub.io/genai-asset"
-	genAIUseCaseAnnotation = "opendatahub.io/genai-use-case"
+	GenAIUseCaseAnnotation = "opendatahub.io/genai-use-case"
 )
 
 // maasGenAI is what a published model had before publishing.
@@ -36,22 +36,22 @@ type maasGenAI struct {
 func genAIOf(meta kube.ObjectMeta) maasGenAI {
 	var g maasGenAI
 	g.Asset, g.HadAsset = meta.Labels[genAIAssetLabel]
-	g.UseCase, g.HadUseCase = meta.Annotations[genAIUseCaseAnnotation]
+	g.UseCase, g.HadUseCase = meta.Annotations[GenAIUseCaseAnnotation]
 	return g
 }
 
-func (r *maasRecord) setGenAI(project, model string, g maasGenAI) {
+func (r *MaaSRecord) setGenAI(project, model string, g maasGenAI) {
 	if r.GenAI == nil {
 		r.GenAI = map[string]maasGenAI{}
 	}
-	r.GenAI[maasPub{project, model}.key()] = g
+	r.GenAI[MaaSPub{project, model}.Key()] = g
 }
 
 // patchModelGenAI merge-patches the tool's model's genai label and
 // annotation (nil removes) with its resourceVersion as a precondition, as
 // field manager rhoai-nightly-updater-maas.
-func patchModelGenAI(c *Client, project, name, rv string, labels, annotations map[string]any) error {
-	path, _ := toolModelPath(project, name)
+func patchModelGenAI(c *kube.Client, project, name, rv string, labels, annotations map[string]any) error {
+	path, _ := ToolModelPath(project, name)
 	meta := map[string]any{"resourceVersion": rv}
 	if len(labels) > 0 {
 		meta["labels"] = labels
@@ -66,8 +66,8 @@ func patchModelGenAI(c *Client, project, name, rv string, labels, annotations ma
 
 // stripModelGenAI removes the genai label and annotation from the tool's
 // model (nothing when it has neither).
-func stripModelGenAI(c *Client, project, name string) error {
-	model, found, err := readToolModel(c, project, name)
+func stripModelGenAI(c *kube.Client, project, name string) error {
+	model, found, err := ReadToolModel(c, project, name)
 	if err != nil || !found {
 		return err
 	}
@@ -75,8 +75,8 @@ func stripModelGenAI(c *Client, project, name string) error {
 	if _, ok := model.Metadata.Labels[genAIAssetLabel]; ok {
 		labels[genAIAssetLabel] = nil
 	}
-	if _, ok := model.Metadata.Annotations[genAIUseCaseAnnotation]; ok {
-		annotations[genAIUseCaseAnnotation] = nil
+	if _, ok := model.Metadata.Annotations[GenAIUseCaseAnnotation]; ok {
+		annotations[GenAIUseCaseAnnotation] = nil
 	}
 	if len(labels)+len(annotations) == 0 {
 		return nil
@@ -89,8 +89,8 @@ func stripModelGenAI(c *Client, project, name string) error {
 
 // restoreModelGenAI puts back what publish removed, where it is still
 // absent.
-func restoreModelGenAI(c *Client, project, name string, g maasGenAI) error {
-	model, found, err := readToolModel(c, project, name)
+func restoreModelGenAI(c *kube.Client, project, name string, g maasGenAI) error {
+	model, found, err := ReadToolModel(c, project, name)
 	if err != nil || !found {
 		return err
 	}
@@ -98,8 +98,8 @@ func restoreModelGenAI(c *Client, project, name string, g maasGenAI) error {
 	if _, ok := model.Metadata.Labels[genAIAssetLabel]; g.HadAsset && !ok {
 		labels[genAIAssetLabel] = g.Asset
 	}
-	if _, ok := model.Metadata.Annotations[genAIUseCaseAnnotation]; g.HadUseCase && !ok {
-		annotations[genAIUseCaseAnnotation] = g.UseCase
+	if _, ok := model.Metadata.Annotations[GenAIUseCaseAnnotation]; g.HadUseCase && !ok {
+		annotations[GenAIUseCaseAnnotation] = g.UseCase
 	}
 	if len(labels)+len(annotations) == 0 {
 		return nil

@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"encoding/json"
@@ -31,18 +31,18 @@ import (
 //
 // The user accepted this for such a model: no profile is created for it.
 const (
-	hardwareProfileNameAnnotation      = "opendatahub.io/hardware-profile-name"
-	hardwareProfileNamespaceAnnotation = "opendatahub.io/hardware-profile-namespace"
-	hardwareProfileVersionAnnotation   = "opendatahub.io/hardware-profile-resource-version"
+	HardwareProfileNameAnnotation      = "opendatahub.io/hardware-profile-name"
+	HardwareProfileNamespaceAnnotation = "opendatahub.io/hardware-profile-namespace"
+	HardwareProfileVersionAnnotation   = "opendatahub.io/hardware-profile-resource-version"
 	hardwareProfileDisabledAnnotation  = "opendatahub.io/disabled"
 )
 
-// hardwareProfile is the profile a model is recorded under; zero when none.
-type hardwareProfile struct {
+// HardwareProfile is the profile a model is recorded under; zero when none.
+type HardwareProfile struct {
 	Name, Namespace, ResourceVersion string
 }
 
-type hardwareProfileObject struct {
+type HardwareProfileObject struct {
 	Metadata kube.ObjectMeta `json:"metadata"`
 	Spec     struct {
 		Identifiers []struct {
@@ -87,7 +87,7 @@ const hardwareProfileVisibilityAnnotation = "opendatahub.io/dashboard-feature-vi
 // ignores values it does not know; this check counts them, so such a
 // profile is skipped (the model then records another one, or none): the
 // safe side.
-func (p hardwareProfileObject) visibleForModelServing() bool {
+func (p HardwareProfileObject) visibleForModelServing() bool {
 	raw, ok := p.Metadata.Annotations[hardwareProfileVisibilityAnnotation]
 	if !ok {
 		return true
@@ -99,11 +99,11 @@ func (p hardwareProfileObject) visibleForModelServing() bool {
 	return slices.Contains(in, "model-serving")
 }
 
-// fits says why the profile cannot hold the model, or "" when it can: it
+// Fits says why the profile cannot hold the model, or "" when it can: it
 // must be enabled, describe only CPU and memory (no accelerator), add no
 // scheduling (the tool would have to apply it as the wizard does), and its
 // ranges must contain the model's requests and limits.
-func (p hardwareProfileObject) fits(entry catalogModel) string {
+func (p HardwareProfileObject) Fits(entry CatalogModel) string {
 	if p.Metadata.Annotations[hardwareProfileDisabledAnnotation] == "true" {
 		return "disabled"
 	}
@@ -121,10 +121,10 @@ func (p hardwareProfileObject) fits(entry catalogModel) string {
 			return "it is for " + id.Identifier
 		}
 		seen[id.Identifier] = true
-		lo, okLo := parseQuantity(quantityString(id.MinCount))
-		hi, okHi := parseQuantity(quantityString(id.MaxCount))
+		lo, okLo := ParseQuantity(quantityString(id.MinCount))
+		hi, okHi := ParseQuantity(quantityString(id.MaxCount))
 		for _, v := range values {
-			n, _ := parseQuantity(v)
+			n, _ := ParseQuantity(v)
 			if (okLo && n < lo) || (okHi && n > hi) {
 				return fmt.Sprintf("%s %s is outside %s-%s", id.Identifier, v, quantityString(id.MinCount), kube.FirstNonEmpty(quantityString(id.MaxCount), "any"))
 			}
@@ -140,29 +140,29 @@ func (p hardwareProfileObject) fits(entry catalogModel) string {
 // profile by name that fits the model (see fits). It returns the profile,
 // or a zero profile and why none was used; a read error is a reason too:
 // the profile is a label in the dashboard, never a reason to stop.
-func pickHardwareProfile(c *Client, entry catalogModel) (hardwareProfile, string) {
+func pickHardwareProfile(c *kube.Client, entry CatalogModel) (HardwareProfile, string) {
 	ns, err := rhoai.AppsNamespace(c)
 	if err != nil {
-		return hardwareProfile{}, fmt.Sprintf("the dashboard's namespace is not known (%v)", err)
+		return HardwareProfile{}, fmt.Sprintf("the dashboard's namespace is not known (%v)", err)
 	}
-	var items []hardwareProfileObject
+	var items []HardwareProfileObject
 	if err := c.ListInto(rhoai.NamespacedPath("infrastructure.opendatahub.io/v1", "hardwareprofiles", ns, ""), &items); err != nil {
 		if kube.IsDecodeError(err) {
-			return hardwareProfile{}, "the hardware profiles cannot be parsed"
+			return HardwareProfile{}, "the hardware profiles cannot be parsed"
 		}
-		return hardwareProfile{}, fmt.Sprintf("the hardware profiles in %s cannot be read (%v)", ns, err)
+		return HardwareProfile{}, fmt.Sprintf("the hardware profiles in %s cannot be read (%v)", ns, err)
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Metadata.Name < items[j].Metadata.Name })
 	var why []string
 	for _, p := range items {
-		reason := p.fits(entry)
+		reason := p.Fits(entry)
 		if reason == "" {
-			return hardwareProfile{Name: p.Metadata.Name, Namespace: ns, ResourceVersion: p.Metadata.ResourceVersion}, ""
+			return HardwareProfile{Name: p.Metadata.Name, Namespace: ns, ResourceVersion: p.Metadata.ResourceVersion}, ""
 		}
 		why = append(why, p.Metadata.Name+": "+reason)
 	}
 	if len(why) == 0 {
-		return hardwareProfile{}, "the cluster has no hardware profiles"
+		return HardwareProfile{}, "the cluster has no hardware profiles"
 	}
-	return hardwareProfile{}, fmt.Sprintf("no hardware profile allows %s CPUs and %s-%s of memory (%s)", entry.CPU, entry.MemoryRequest, entry.Memory, strings.Join(why, "; "))
+	return HardwareProfile{}, fmt.Sprintf("no hardware profile allows %s CPUs and %s-%s of memory (%s)", entry.CPU, entry.MemoryRequest, entry.Memory, strings.Join(why, "; "))
 }

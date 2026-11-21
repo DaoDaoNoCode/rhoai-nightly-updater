@@ -3,6 +3,8 @@ package cluster
 import (
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 )
 
 // A channel name comes from a catalog's PackageManifest, which the cluster
@@ -12,8 +14,8 @@ import (
 func TestMaaSCommands_QuoteTheCatalogChannel(t *testing.T) {
 	evil := "stable\nEOF\ntouch /tmp/pwned\ncat <<'EOF'"
 	for name, cmd := range map[string]string{
-		"rhcl": rhclInstallCommands(evil),
-		"cnpg": cnpgInstallCommands(evil),
+		"rhcl": serving.RHCLInstallCommands(evil),
+		"cnpg": serving.CNPGInstallCommands(evil),
 	} {
 		if strings.Contains(cmd, "\ntouch /tmp/pwned") || strings.Count(cmd, "\nEOF") != 1 {
 			t.Errorf("%s: the channel breaks out of the heredoc:\n%s", name, cmd)
@@ -22,13 +24,13 @@ func TestMaaSCommands_QuoteTheCatalogChannel(t *testing.T) {
 			t.Errorf("%s: channel not a quoted scalar:\n%s", name, cmd)
 		}
 	}
-	if got, want := rhclChannelCommand("kuadrant-system", "kuadrant-operator", "x'$(id)"), `oc patch subscription kuadrant-operator -n kuadrant-system --type=merge -p '{"spec":{"channel":"x'\''$(id)"}}'`; got != want {
+	if got, want := serving.RHCLChannelCommand("kuadrant-system", "kuadrant-operator", "x'$(id)"), `oc patch subscription kuadrant-operator -n kuadrant-system --type=merge -p '{"spec":{"channel":"x'\''$(id)"}}'`; got != want {
 		t.Errorf("channel patch\n got %s\nwant %s", got, want)
 	}
-	if got := rhclChannelCommand("kuadrant-system", "kuadrant-operator", "stable-1.5"); got != `oc patch subscription kuadrant-operator -n kuadrant-system --type=merge -p '{"spec":{"channel":"stable-1.5"}}'` {
+	if got := serving.RHCLChannelCommand("kuadrant-system", "kuadrant-operator", "stable-1.5"); got != `oc patch subscription kuadrant-operator -n kuadrant-system --type=merge -p '{"spec":{"channel":"stable-1.5"}}'` {
 		t.Errorf("plain channel: %s", got)
 	}
-	if got := commentText("# to a\nrm -rf /"); strings.Contains(got, "\n") {
+	if got := serving.CommentText("# to a\nrm -rf /"); strings.Contains(got, "\n") {
 		t.Errorf("comment keeps a newline: %q", got)
 	}
 }

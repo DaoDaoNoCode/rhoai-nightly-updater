@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -50,7 +51,7 @@ func TestModelsSetup_MakesTheDashboardsTokenAuthentication(t *testing.T) {
 	if strings.Contains(jsonOf(mc.f.get(tTokenSA)), "opendatahub.io/dashboard") {
 		t.Error("the dashboard's ServiceAccount has no dashboard label")
 	}
-	if ann := jsonOf(mc.f.get(testModelPath)["metadata"]); strings.Contains(ann, enableAuthAnnot) {
+	if ann := jsonOf(mc.f.get(testModelPath)["metadata"]); strings.Contains(ann, serving.EnableAuthAnnot) {
 		t.Errorf("enable-auth set: %s", ann)
 	}
 	secretUID := mc.f.get(tTokenSecret)["metadata"].(map[string]any)["uid"].(string)
@@ -96,7 +97,7 @@ func TestModelsSetup_AddsTheTokenToAnEarlierModel(t *testing.T) {
 	e := rec["proj/qwen25-05b-instruct"]
 	e.TokenSecretUID = ""
 	rec["proj/qwen25-05b-instruct"] = e
-	if err := writeModelsRecord(mc.c, rec); err != nil {
+	if err := serving.WriteModelsRecord(mc.c, rec); err != nil {
 		t.Fatal(err)
 	}
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj"}); !res.Success {
@@ -135,7 +136,7 @@ func TestModelsTeardown_LeavesTokenObjectsThatAreNotTheModels(t *testing.T) {
 	}
 	deleteFakeObject(mc, tTokenRole)
 	mc.f.putJSON(tTokenRole, `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}}}`)
-	if res, _ := TeardownModels(mc.c, "proj"); !res.Success {
+	if res, _ := serving.TeardownModels(mc.c, "proj"); !res.Success {
 		t.Fatalf("teardown: %+v", res)
 	}
 	if !mc.f.has(tTokenRole) {

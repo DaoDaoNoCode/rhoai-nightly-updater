@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"encoding/json"
@@ -59,9 +59,9 @@ import (
 const (
 	tokenDisplayName  = "default-name"
 	dashboardLabel    = "opendatahub.io/dashboard"
-	enableAuthAnnot   = "security.opendatahub.io/enable-auth"
+	EnableAuthAnnot   = "security.opendatahub.io/enable-auth"
 	saNameAnnotation  = "kubernetes.io/service-account.name"
-	tokenSecretType   = "kubernetes.io/service-account-token"
+	TokenSecretType   = "kubernetes.io/service-account-token"
 	rbacAPIVersion    = "rbac.authorization.k8s.io/v1"
 	placeholderUID    = "00000000-0000-0000-0000-000000000000"
 	tokenPartSA       = "ServiceAccount"
@@ -215,7 +215,7 @@ func tokenObject(kind, project, model, modelUID string) map[string]any {
 		obj["roleRef"] = map[string]any{"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": tokenRoleName(model)}
 		obj["subjects"] = []any{map[string]any{"kind": "ServiceAccount", "name": tokenSAName(model)}}
 	default:
-		obj["apiVersion"], obj["kind"], obj["type"] = "v1", "Secret", tokenSecretType
+		obj["apiVersion"], obj["kind"], obj["type"] = "v1", "Secret", TokenSecretType
 		meta["annotations"] = map[string]any{saNameAnnotation: tokenSAName(model), "openshift.io/display-name": tokenDisplayName}
 	}
 	return obj
@@ -232,7 +232,7 @@ type tokenPlan struct {
 // name). A server-side dry-run delete checks the UID precondition and
 // deletes nothing (Kubernetes API concepts, "Dry-run"; apiserver
 // DryRunnableStorage.Delete checks preconditions on a dry run).
-func probeWithUID(c *Client, path, uid string) (string, error) {
+func probeWithUID(c *kube.Client, path, uid string) (string, error) {
 	body, _ := json.Marshal(map[string]any{
 		"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": map[string]any{"uid": uid},
 	})
@@ -252,7 +252,7 @@ func probeWithUID(c *Client, path, uid string) (string, error) {
 // and RoleBinding must be the model's (modelUID; none for a new model), the
 // Secret the recorded one. Any other object of those names stops the
 // setup. It returns a refusal, or "".
-func planModelToken(c *Client, project, model, modelUID, secretUID string) (tokenPlan, string, string) {
+func planModelToken(c *kube.Client, project, model, modelUID, secretUID string) (tokenPlan, string, string) {
 	plan := tokenPlan{missing: map[string]bool{}}
 	for _, kind := range tokenParts[:3] {
 		path := tokenObjectPath(kind, project, model)
@@ -293,7 +293,7 @@ func foreignTokenRefusal(kind, project, model string) string {
 // exist yet answers 404 then, which the dashboard's dry run accepts too
 // (auth.ts createRoleBindingIfMissing L145-147). It returns the Secret's
 // UID when it made one, or a failure message and code.
-func applyModelToken(c *Client, project, model, modelUID string, plan tokenPlan, dryRun bool) (string, string, string) {
+func applyModelToken(c *kube.Client, project, model, modelUID string, plan tokenPlan, dryRun bool) (string, string, string) {
 	var query url.Values
 	if dryRun {
 		query = url.Values{"dryRun": {"All"}}
@@ -342,7 +342,7 @@ func applyModelToken(c *Client, project, model, modelUID string, plan tokenPlan,
 // ownerReferences were edited. Only the model's own (ownerReference to
 // modelUID) and the recorded Secret (UID precondition) are deleted; a
 // failure is logged, not fatal, since garbage collection still applies.
-func deleteModelToken(c *Client, project, model, modelUID, secretUID string) []string {
+func deleteModelToken(c *kube.Client, project, model, modelUID, secretUID string) []string {
 	var logs []string
 	for _, kind := range tokenParts[:3] {
 		path := tokenObjectPath(kind, project, model)

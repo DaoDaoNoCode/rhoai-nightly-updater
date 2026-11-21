@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"encoding/json"
@@ -43,7 +43,7 @@ import (
 //
 // One subscription for every model this tool publishes, not one per
 // audience: an API key is bound to one subscription when it is minted, a
-// caller in two of them can hang on Connectivity Link 1.4.x (rhclWarning),
+// caller in two of them can hang on Connectivity Link 1.4.x (RHCLWarning),
 // and two of the tool's own would need priorities of their own below
 // everyone else's (maas_priority.go). Limits are per model; the audience is
 // the subscription's.
@@ -58,74 +58,74 @@ const (
 // maasWindowPattern is the CRD's pattern for a window.
 var maasWindowPattern = regexp.MustCompile(`^[1-9]\d{0,3}(s|m|h)$`)
 
-// maasRate is one tokenRateLimits entry.
-type maasRate struct {
-	limit  int64
-	window string
+// MaaSRate is one tokenRateLimits entry.
+type MaaSRate struct {
+	Limit  int64
+	Window string
 }
 
-// maasLimit is a model's limit: unlimited, or its rates.
-type maasLimit struct {
-	unlimited bool
-	rates     []maasRate
+// MaaSLimit is a model's limit: unlimited, or its rates.
+type MaaSLimit struct {
+	Unlimited bool
+	Rates     []MaaSRate
 }
 
 // maasLimitPresets are the docs' samples.
-var maasLimitPresets = map[string]maasLimit{
-	"free":      {rates: []maasRate{{100, "1m"}}},
-	"premium":   {rates: []maasRate{{100000, "24h"}}},
-	"unlimited": {unlimited: true},
+var maasLimitPresets = map[string]MaaSLimit{
+	"free":      {Rates: []MaaSRate{{100, "1m"}}},
+	"premium":   {Rates: []MaaSRate{{100000, "24h"}}},
+	"unlimited": {Unlimited: true},
 }
 
 // maasFreeSample is the limit of a model published without one (and of
 // every model an earlier build published).
-func maasFreeSample() maasLimit { return maasLimitPresets["free"] }
+func maasFreeSample() MaaSLimit { return maasLimitPresets["free"] }
 
-// parseMaaSLimit checks a requested limit: none is the free sample (what
+// ParseMaaSLimit checks a requested limit: none is the free sample (what
 // Publish did before limits could be chosen). It returns why it is
 // invalid, or "".
-func parseMaaSLimit(l *types.MaaSLimit) (maasLimit, string) {
+func ParseMaaSLimit(l *types.MaaSLimit) (MaaSLimit, string) {
 	if l == nil {
 		return maasFreeSample(), ""
 	}
 	if p, ok := maasLimitPresets[l.Preset]; ok {
 		if l.Unlimited || len(l.Rates) > 0 {
-			return maasLimit{}, fmt.Sprintf("the %s preset takes no rates of its own", l.Preset)
+			return MaaSLimit{}, fmt.Sprintf("the %s preset takes no rates of its own", l.Preset)
 		}
 		return p, ""
 	}
 	if l.Preset != "custom" {
-		return maasLimit{}, "the limit preset must be free, premium, unlimited or custom"
+		return MaaSLimit{}, "the limit preset must be free, premium, unlimited or custom"
 	}
 	if l.Unlimited {
-		return maasLimit{}, "a custom limit has rates; choose the Unlimited preset for no token budget"
+		return MaaSLimit{}, "a custom limit has rates; choose the Unlimited preset for no token budget"
 	}
 	if len(l.Rates) == 0 {
-		return maasLimit{}, "a custom limit needs at least one rate"
+		return MaaSLimit{}, "a custom limit needs at least one rate"
 	}
 	if len(l.Rates) > maasMaxRates {
-		return maasLimit{}, fmt.Sprintf("a custom limit has at most %d rates", maasMaxRates)
+		return MaaSLimit{}, fmt.Sprintf("a custom limit has at most %d rates", maasMaxRates)
 	}
-	out := maasLimit{}
+	out := MaaSLimit{}
 	seen := map[string]bool{}
 	for _, r := range l.Rates {
 		if r.Limit < 1 || r.Limit > maasMaxTokens {
-			return maasLimit{}, "a rate's token limit must be a whole number from 1 to 1,000,000,000 (the MaaSSubscription API's range; for no limit choose Unlimited)"
+			return MaaSLimit{}, "a rate's token limit must be a whole number from 1 to 1,000,000,000 (the MaaSSubscription API's range; for no limit choose Unlimited)"
 		}
 		if !maasWindowPattern.MatchString(r.Window) {
-			return maasLimit{}, "a rate's window must be 1 to 9999 seconds, minutes or hours, written like 30s, 1m or 24h (the MaaSSubscription API has no days)"
+			return MaaSLimit{}, "a rate's window must be 1 to 9999 seconds, minutes or hours, written like 30s, 1m or 24h (the MaaSSubscription API has no days)"
 		}
 		if seen[r.Window] {
-			return maasLimit{}, fmt.Sprintf("the window %s is given twice", r.Window)
+			return MaaSLimit{}, fmt.Sprintf("the window %s is given twice", r.Window)
 		}
 		seen[r.Window] = true
-		out.rates = append(out.rates, maasRate{r.Limit, r.Window})
+		out.Rates = append(out.Rates, MaaSRate{r.Limit, r.Window})
 	}
 	return out, ""
 }
 
-// preset names the docs' sample the limit is, else "custom".
-func (l maasLimit) preset() string {
+// Preset names the docs' sample the limit is, else "custom".
+func (l MaaSLimit) Preset() string {
 	for _, name := range []string{"free", "premium", "unlimited"} {
 		if l.equal(maasLimitPresets[name]) {
 			return name
@@ -134,12 +134,12 @@ func (l maasLimit) preset() string {
 	return "custom"
 }
 
-func (l maasLimit) equal(o maasLimit) bool {
-	if l.unlimited != o.unlimited || len(l.rates) != len(o.rates) {
+func (l MaaSLimit) equal(o MaaSLimit) bool {
+	if l.Unlimited != o.Unlimited || len(l.Rates) != len(o.Rates) {
 		return false
 	}
-	for i := range l.rates {
-		if l.rates[i] != o.rates[i] {
+	for i := range l.Rates {
+		if l.Rates[i] != o.Rates[i] {
 			return false
 		}
 	}
@@ -147,36 +147,36 @@ func (l maasLimit) equal(o maasLimit) bool {
 }
 
 // api is the limit as GET /api/resources/maas reports it.
-func (l maasLimit) api() *types.MaaSLimit {
-	out := &types.MaaSLimit{Preset: l.preset(), Unlimited: l.unlimited}
-	for _, r := range l.rates {
-		out.Rates = append(out.Rates, types.MaaSTokenRate{Limit: r.limit, Window: r.window})
+func (l MaaSLimit) api() *types.MaaSLimit {
+	out := &types.MaaSLimit{Preset: l.Preset(), Unlimited: l.Unlimited}
+	for _, r := range l.Rates {
+		out.Rates = append(out.Rates, types.MaaSTokenRate{Limit: r.Limit, Window: r.Window})
 	}
 	return out
 }
 
-// addTo sets the limit on a modelRefs entry: exactly one of unlimited and
+// AddTo sets the limit on a modelRefs entry: exactly one of unlimited and
 // tokenRateLimits.
-func (l maasLimit) addTo(ref map[string]any) {
-	if l.unlimited {
+func (l MaaSLimit) AddTo(ref map[string]any) {
+	if l.Unlimited {
 		ref["unlimited"] = true
 		return
 	}
 	var rates []any
-	for _, r := range l.rates {
-		rates = append(rates, map[string]any{"limit": r.limit, "window": r.window})
+	for _, r := range l.Rates {
+		rates = append(rates, map[string]any{"limit": r.Limit, "window": r.Window})
 	}
 	ref["tokenRateLimits"] = rates
 }
 
-// maasLimitFromModelRef reads the limit of a modelRefs entry as the
+// MaaSLimitFromModelRef reads the limit of a modelRefs entry as the
 // cluster has it.
-func maasLimitFromModelRef(ref map[string]any) (maasLimit, bool) {
+func MaaSLimitFromModelRef(ref map[string]any) (MaaSLimit, bool) {
 	if u, _ := ref["unlimited"].(bool); u {
-		return maasLimit{unlimited: true}, true
+		return MaaSLimit{Unlimited: true}, true
 	}
 	raw, _ := ref["tokenRateLimits"].([]any)
-	var out maasLimit
+	var out MaaSLimit
 	for _, item := range raw {
 		m, _ := item.(map[string]any)
 		w, _ := m["window"].(string)
@@ -192,22 +192,22 @@ func maasLimitFromModelRef(ref map[string]any) (maasLimit, bool) {
 			n, _ = v.Int64()
 		}
 		if w == "" || n < 1 {
-			return maasLimit{}, false
+			return MaaSLimit{}, false
 		}
-		out.rates = append(out.rates, maasRate{n, w})
+		out.Rates = append(out.Rates, MaaSRate{n, w})
 	}
-	return out, len(out.rates) > 0
+	return out, len(out.Rates) > 0
 }
 
-// text is the limit in words: "100 tokens a minute", "unlimited (usage
+// Text is the limit in words: "100 tokens a minute", "unlimited (usage
 // still metered)".
-func (l maasLimit) text() string {
-	if l.unlimited {
+func (l MaaSLimit) Text() string {
+	if l.Unlimited {
 		return "unlimited (usage still metered)"
 	}
 	var parts []string
-	for _, r := range l.rates {
-		parts = append(parts, fmt.Sprintf("%s %s %s", thousands(r.limit), kube.Verb(int(min(r.limit, 2)), "token", "tokens"), windowText(r.window)))
+	for _, r := range l.Rates {
+		parts = append(parts, fmt.Sprintf("%s %s %s", thousands(r.Limit), kube.Verb(int(min(r.Limit, 2)), "token", "tokens"), windowText(r.Window)))
 	}
 	return joinWords(parts)
 }
@@ -250,32 +250,32 @@ func joinWords(parts []string) string {
 
 // --- the audience ------------------------------------------------------------------
 
-// maasAudience is who may use the published models: every signed-in user
+// MaaSAudience is who may use the published models: every signed-in user
 // (system:authenticated, the docs' sample), or the groups and users named.
-type maasAudience struct {
-	everyone bool
-	groups   []string
-	users    []string
+type MaaSAudience struct {
+	Everyone bool
+	Groups   []string
+	Users    []string
 }
 
-// parseMaaSAudience checks a requested audience: none is everyone (what
+// ParseMaaSAudience checks a requested audience: none is everyone (what
 // Publish did before). Names are trimmed and given once.
-func parseMaaSAudience(a *types.MaaSAudience) (maasAudience, string) {
+func ParseMaaSAudience(a *types.MaaSAudience) (MaaSAudience, string) {
 	if a == nil {
-		return maasAudience{everyone: true}, ""
+		return MaaSAudience{Everyone: true}, ""
 	}
 	groups, users := cleanNames(a.Groups), cleanNames(a.Users)
 	if a.Everyone {
 		if len(groups) > 0 || len(users) > 0 {
-			return maasAudience{}, "Everyone signed in names no groups or users"
+			return MaaSAudience{}, "Everyone signed in names no groups or users"
 		}
-		return maasAudience{everyone: true}, ""
+		return MaaSAudience{Everyone: true}, ""
 	}
 	if len(groups) == 0 && len(users) == 0 {
-		return maasAudience{}, "name at least one group or user, or choose Everyone signed in"
+		return MaaSAudience{}, "name at least one group or user, or choose Everyone signed in"
 	}
 	if len(groups) > maasMaxAudience || len(users) > maasMaxAudience {
-		return maasAudience{}, fmt.Sprintf("name at most %d groups and %d users (the MaaS docs advise groups for people: Subscription Cardinality)", maasMaxAudience, maasMaxAudience)
+		return MaaSAudience{}, fmt.Sprintf("name at most %d groups and %d users (the MaaS docs advise groups for people: Subscription Cardinality)", maasMaxAudience, maasMaxAudience)
 	}
 	// MaaS matches both exactly, as the identity provider sends them
 	// (maas-controller api/maas/v1alpha1: GroupReference.Name "the opaque
@@ -283,21 +283,21 @@ func parseMaaSAudience(a *types.MaaSAudience) (maasAudience, string) {
 	// matched exactly and are not Kubernetes object names"; no CRD
 	// pattern), so an OIDC group like /admins or oidc:ml is valid. Only
 	// what cannot be a name is refused; a group with no OpenShift Group is
-	// a warning (maasGroupProblems).
+	// a warning (MaaSGroupProblems).
 	for _, g := range groups {
 		if g == maasSubjectGroup {
-			return maasAudience{}, "system:authenticated is every signed-in user: choose Everyone signed in"
+			return MaaSAudience{}, "system:authenticated is every signed-in user: choose Everyone signed in"
 		}
 		if why := namePrintable(g); why != "" {
-			return maasAudience{}, fmt.Sprintf("group %q %s", g, why)
+			return MaaSAudience{}, fmt.Sprintf("group %q %s", g, why)
 		}
 	}
 	for _, u := range users {
 		if why := namePrintable(u); why != "" {
-			return maasAudience{}, fmt.Sprintf("user %q %s", u, why)
+			return MaaSAudience{}, fmt.Sprintf("user %q %s", u, why)
 		}
 	}
-	return maasAudience{groups: groups, users: users}, ""
+	return MaaSAudience{Groups: groups, Users: users}, ""
 }
 
 func cleanNames(in []string) []string {
@@ -333,18 +333,18 @@ func openShiftGroupName(n string) bool {
 	return n != "." && n != ".." && n != "~" && !strings.ContainsAny(n, "/%:")
 }
 
-// owner is spec.owner of the subscription, and spec.subjects of the access
+// Owner is spec.owner of the subscription, and spec.subjects of the access
 // policy (same shape).
-func (a maasAudience) owner() map[string]any {
+func (a MaaSAudience) Owner() map[string]any {
 	groups := []any{}
 	users := []any{}
-	if a.everyone {
+	if a.Everyone {
 		groups = append(groups, map[string]any{"name": maasSubjectGroup})
 	}
-	for _, g := range a.groups {
+	for _, g := range a.Groups {
 		groups = append(groups, map[string]any{"name": g})
 	}
-	for _, u := range a.users {
+	for _, u := range a.Users {
 		users = append(users, u)
 	}
 	out := map[string]any{"groups": groups, "users": users}
@@ -354,48 +354,48 @@ func (a maasAudience) owner() map[string]any {
 	return out
 }
 
-// maasAudienceFromOwner reads spec.owner (or spec.subjects) as the
+// MaaSAudienceFromOwner reads spec.owner (or spec.subjects) as the
 // cluster has it; system:authenticated alone is everyone.
-func maasAudienceFromOwner(owner map[string]any) maasAudience {
-	var a maasAudience
+func MaaSAudienceFromOwner(owner map[string]any) MaaSAudience {
+	var a MaaSAudience
 	groups, _ := owner["groups"].([]any)
 	for _, g := range groups {
 		m, _ := g.(map[string]any)
 		if name, _ := m["name"].(string); name != "" {
-			a.groups = append(a.groups, name)
+			a.Groups = append(a.Groups, name)
 		}
 	}
 	users, _ := owner["users"].([]any)
 	for _, u := range users {
 		if name, _ := u.(string); name != "" {
-			a.users = append(a.users, name)
+			a.Users = append(a.Users, name)
 		}
 	}
-	if len(a.groups) == 1 && a.groups[0] == maasSubjectGroup && len(a.users) == 0 {
-		return maasAudience{everyone: true}
+	if len(a.Groups) == 1 && a.Groups[0] == maasSubjectGroup && len(a.Users) == 0 {
+		return MaaSAudience{Everyone: true}
 	}
 	return a
 }
 
 // equal: the same audience, in any order (MaaS matches names, not
 // positions).
-func (a maasAudience) equal(o maasAudience) bool {
+func (a MaaSAudience) Equal(o MaaSAudience) bool {
 	sorted := func(in []string) string {
 		s := append([]string(nil), in...)
 		sort.Strings(s)
 		return strings.Join(s, "\n")
 	}
-	return a.everyone == o.everyone && sorted(a.groups) == sorted(o.groups) && sorted(a.users) == sorted(o.users)
+	return a.Everyone == o.Everyone && sorted(a.Groups) == sorted(o.Groups) && sorted(a.Users) == sorted(o.Users)
 }
 
-func (a maasAudience) api() types.MaaSAudience {
-	return types.MaaSAudience{Everyone: a.everyone, Groups: a.groups, Users: a.users}
+func (a MaaSAudience) api() types.MaaSAudience {
+	return types.MaaSAudience{Everyone: a.Everyone, Groups: a.Groups, Users: a.Users}
 }
 
-// text is the audience in words: "every signed-in user", "groups a, b and
+// Text is the audience in words: "every signed-in user", "groups a, b and
 // user x"; more than three names are counted.
-func (a maasAudience) text() string {
-	if a.everyone {
+func (a MaaSAudience) Text() string {
+	if a.Everyone {
 		return "every signed-in user"
 	}
 	shown := 0
@@ -415,25 +415,25 @@ func (a maasAudience) text() string {
 		return kube.Verb(len(names), singular, plural) + " " + strings.Join(take, ", ")
 	}
 	var parts []string
-	if g := name("group", "groups", a.groups); g != "" {
+	if g := name("group", "groups", a.Groups); g != "" {
 		parts = append(parts, g)
 	}
-	if u := name("user", "users", a.users); u != "" {
+	if u := name("user", "users", a.Users); u != "" {
 		parts = append(parts, u)
 	}
-	if more := len(a.groups) + len(a.users) - shown; more > 0 {
+	if more := len(a.Groups) + len(a.Users) - shown; more > 0 {
 		parts = append(parts, fmt.Sprintf("%d more", more))
 	}
 	return joinWords(parts)
 }
 
-// maasGroupProblems checks that each group exists as an OpenShift Group.
+// MaaSGroupProblems checks that each group exists as an OpenShift Group.
 // A missing one is a warning, not a refusal: with an external identity
 // provider the groups come from the sign-in token and have no Group
 // object. A name that cannot be an OpenShift Group's is not looked up: it
 // has none, and none can be created. One that cannot be read (no
 // permission) is said so.
-func maasGroupProblems(c *Client, groups []string) []types.MaaSGroupProblem {
+func MaaSGroupProblems(c *kube.Client, groups []string) []types.MaaSGroupProblem {
 	var out []types.MaaSGroupProblem
 	missing := func(g string) types.MaaSGroupProblem {
 		return types.MaaSGroupProblem{Name: g, Missing: true, Message: g + " is not a group on this cluster. Nobody is in it unless your identity provider adds it at sign-in."}
@@ -456,14 +456,14 @@ func maasGroupProblems(c *Client, groups []string) []types.MaaSGroupProblem {
 	return out
 }
 
-// CheckMaaSGroups is maasGroupProblems for names typed in a dialog (GET
+// CheckMaaSGroups is MaaSGroupProblems for names typed in a dialog (GET
 // /api/resources/maas/groups): it refuses what Publish would refuse.
-func CheckMaaSGroups(c *Client, names []string) ([]types.MaaSGroupProblem, string) {
-	aud, problem := parseMaaSAudience(&types.MaaSAudience{Groups: names})
+func CheckMaaSGroups(c *kube.Client, names []string) ([]types.MaaSGroupProblem, string) {
+	aud, problem := ParseMaaSAudience(&types.MaaSAudience{Groups: names})
 	if problem != "" {
 		return nil, problem
 	}
-	out := maasGroupProblems(c, aud.groups)
+	out := MaaSGroupProblems(c, aud.Groups)
 	if out == nil {
 		out = []types.MaaSGroupProblem{}
 	}
@@ -486,11 +486,11 @@ func shellQuoteArg(s string) string {
 // audience, and the limit of each model it lists ("<project>/<model>").
 type maasToolSub struct {
 	found, owned bool
-	audience     maasAudience
-	limits       map[string]maasLimit
+	audience     MaaSAudience
+	limits       map[string]MaaSLimit
 }
 
-func readMaaSToolSubscription(c *Client) (maasToolSub, error) {
+func readMaaSToolSubscription(c *kube.Client) (maasToolSub, error) {
 	var sub struct {
 		Metadata kube.ObjectMeta `json:"metadata"`
 		Spec     struct {
@@ -501,19 +501,19 @@ func readMaaSToolSubscription(c *Client) (maasToolSub, error) {
 	exists, err := c.GetIntoOptional(maasAccessPath(c, "MaaSSubscription"), &sub)
 	if err != nil {
 		if kube.IsDecodeError(err) {
-			return maasToolSub{}, fmt.Errorf("parse MaaSSubscription %s: %w", maasSubscriptionName, err)
+			return maasToolSub{}, fmt.Errorf("parse MaaSSubscription %s: %w", MaaSSubscriptionName, err)
 		}
-		return maasToolSub{}, fmt.Errorf("read MaaSSubscription %s/%s: %w", maasTenantNamespace, maasSubscriptionName, err)
+		return maasToolSub{}, fmt.Errorf("read MaaSSubscription %s/%s: %w", MaaSTenantNamespace, MaaSSubscriptionName, err)
 	}
 	if !exists {
-		return maasToolSub{audience: maasAudience{everyone: true}, limits: map[string]maasLimit{}}, nil
+		return maasToolSub{audience: MaaSAudience{Everyone: true}, limits: map[string]MaaSLimit{}}, nil
 	}
-	out := maasToolSub{found: true, owned: toolOwned(sub.Metadata), audience: maasAudienceFromOwner(sub.Spec.Owner), limits: map[string]maasLimit{}}
+	out := maasToolSub{found: true, owned: ToolOwned(sub.Metadata), audience: MaaSAudienceFromOwner(sub.Spec.Owner), limits: map[string]MaaSLimit{}}
 	for _, ref := range sub.Spec.ModelRefs {
 		ns, _ := ref["namespace"].(string)
 		name, _ := ref["name"].(string)
-		if l, ok := maasLimitFromModelRef(ref); ok && ns != "" && name != "" {
-			out.limits[maasPub{ns, name}.key()] = l
+		if l, ok := MaaSLimitFromModelRef(ref); ok && ns != "" && name != "" {
+			out.limits[MaaSPub{ns, name}.Key()] = l
 		}
 	}
 	return out, nil
@@ -522,43 +522,43 @@ func readMaaSToolSubscription(c *Client) (maasToolSub, error) {
 // limitOf is a publication's limit in the subscription; one it does not
 // list yet (an earlier build's, whose entry was the docs' sample) is the
 // free sample.
-func (s maasToolSub) limitOf(p maasPub) maasLimit {
-	if l, ok := s.limits[p.key()]; ok {
+func (s maasToolSub) limitOf(p MaaSPub) MaaSLimit {
+	if l, ok := s.limits[p.Key()]; ok {
 		return l
 	}
 	return maasFreeSample()
 }
 
-// maasSubscriptionDescription is the subscription's openshift.io/description,
+// MaaSSubscriptionDescription is the subscription's openshift.io/description,
 // which the dashboard's API-key dialog shows next to its name: the one
 // limit every model has, or each model's, and who it is for.
-func maasSubscriptionDescription(pubs []maasPub, limits map[string]maasLimit, aud maasAudience) string {
+func MaaSSubscriptionDescription(pubs []MaaSPub, limits map[string]MaaSLimit, aud MaaSAudience) string {
 	byText := map[string]bool{}
 	names := map[string]int{}
 	for _, p := range pubs {
-		byText[limitFor(limits, p).text()] = true
-		names[p.model]++
+		byText[limitFor(limits, p).Text()] = true
+		names[p.Model]++
 	}
 	if len(byText) <= 1 {
 		for text := range byText {
-			return text + " for " + aud.text()
+			return text + " for " + aud.Text()
 		}
-		return "For " + aud.text()
+		return "For " + aud.Text()
 	}
 	var parts []string
 	for _, p := range pubs {
-		entry, _ := catalogEntry(p.model)
-		label := kube.FirstNonEmpty(entry.DisplayName, p.model)
-		if names[p.model] > 1 {
-			label += " in " + p.project
+		entry, _ := CatalogEntry(p.Model)
+		label := kube.FirstNonEmpty(entry.DisplayName, p.Model)
+		if names[p.Model] > 1 {
+			label += " in " + p.Project
 		}
-		parts = append(parts, label+": "+limitFor(limits, p).text())
+		parts = append(parts, label+": "+limitFor(limits, p).Text())
 	}
-	return strings.Join(parts, "; ") + "; for " + aud.text()
+	return strings.Join(parts, "; ") + "; for " + aud.Text()
 }
 
-func limitFor(limits map[string]maasLimit, p maasPub) maasLimit {
-	if l, ok := limits[p.key()]; ok {
+func limitFor(limits map[string]MaaSLimit, p MaaSPub) MaaSLimit {
+	if l, ok := limits[p.Key()]; ok {
 		return l
 	}
 	return maasFreeSample()
@@ -566,52 +566,52 @@ func limitFor(limits map[string]maasLimit, p maasPub) maasLimit {
 
 // maasAccessObjects are this tool's MaaSSubscription and MaaSAuthPolicy for
 // the published models: each model with its limit, both for the audience.
-func maasAccessObjects(c *Client, pubs []maasPub, limits map[string]maasLimit, aud maasAudience, priority int) (map[string]any, map[string]any) {
-	sort.Slice(pubs, func(i, j int) bool { return pubs[i].key() < pubs[j].key() })
+func maasAccessObjects(c *kube.Client, pubs []MaaSPub, limits map[string]MaaSLimit, aud MaaSAudience, priority int) (map[string]any, map[string]any) {
+	sort.Slice(pubs, func(i, j int) bool { return pubs[i].Key() < pubs[j].Key() })
 	var subRefs, authRefs []any
 	for _, p := range pubs {
-		ref := map[string]any{"name": p.model, "namespace": p.project}
-		limitFor(limits, p).addTo(ref)
+		ref := map[string]any{"name": p.Model, "namespace": p.Project}
+		limitFor(limits, p).AddTo(ref)
 		subRefs = append(subRefs, ref)
-		authRefs = append(authRefs, map[string]any{"name": p.model, "namespace": p.project})
+		authRefs = append(authRefs, map[string]any{"name": p.Model, "namespace": p.Project})
 	}
 	who := "Every signed-in user may use this tool's published models"
-	if !aud.everyone {
-		who = "Only " + aud.text() + " may use this tool's published models"
+	if !aud.Everyone {
+		who = "Only " + aud.Text() + " may use this tool's published models"
 	}
 	sub := map[string]any{
-		"apiVersion": maasAPI(c),
+		"apiVersion": MaaSAPI(c),
 		"kind":       "MaaSSubscription",
-		"metadata": map[string]any{"name": "rhoai-nightly-updater-subscription", "namespace": maasTenantNamespace, "labels": envkit.ToolLabels(),
-			"annotations": map[string]any{"openshift.io/display-name": "rhoai-nightly-updater models", "openshift.io/description": maasSubscriptionDescription(pubs, limits, aud)}},
-		"spec": map[string]any{"owner": aud.owner(), "modelRefs": subRefs, "priority": priority},
+		"metadata": map[string]any{"name": "rhoai-nightly-updater-subscription", "namespace": MaaSTenantNamespace, "labels": envkit.ToolLabels(),
+			"annotations": map[string]any{"openshift.io/display-name": "rhoai-nightly-updater models", "openshift.io/description": MaaSSubscriptionDescription(pubs, limits, aud)}},
+		"spec": map[string]any{"owner": aud.Owner(), "modelRefs": subRefs, "priority": priority},
 	}
 	auth := map[string]any{
-		"apiVersion": maasAPI(c),
+		"apiVersion": MaaSAPI(c),
 		"kind":       "MaaSAuthPolicy",
-		"metadata": map[string]any{"name": "rhoai-nightly-updater-access", "namespace": maasTenantNamespace, "labels": envkit.ToolLabels(),
+		"metadata": map[string]any{"name": "rhoai-nightly-updater-access", "namespace": MaaSTenantNamespace, "labels": envkit.ToolLabels(),
 			"annotations": map[string]any{"openshift.io/display-name": "rhoai-nightly-updater models", "openshift.io/description": who}},
-		"spec": map[string]any{"modelRefs": authRefs, "subjects": aud.owner()},
+		"spec": map[string]any{"modelRefs": authRefs, "subjects": aud.Owner()},
 	}
 	return sub, auth
 }
 
-// unlimitedRefusal turns the API server's refusal of an unlimited model
+// UnlimitedRefusal turns the API server's refusal of an unlimited model
 // reference (a MaaSSubscription API without unlimited requires
 // tokenRateLimits) into words.
-func unlimitedRefusal(err error, l maasLimit) string {
-	if l.unlimited && err != nil && strings.Contains(err.Error(), "tokenRateLimits") {
+func UnlimitedRefusal(err error, l MaaSLimit) string {
+	if l.Unlimited && err != nil && strings.Contains(err.Error(), "tokenRateLimits") {
 		return "This cluster's MaaS has no unlimited option (its MaaSSubscription API requires a token limit). Choose a limit instead."
 	}
 	return ""
 }
 
-// maasNoUnlimited: the cluster's MaaSSubscription API, in the version this
+// MaaSNoUnlimited: the cluster's MaaSSubscription API, in the version this
 // tool writes, has no modelRefs[].unlimited (read from its CRD's schema,
 // with the existing list of CRDs, by name). False when that cannot be
-// told: Publish's dry run refuses then (unlimitedRefusal).
-func maasNoUnlimited(c *Client) bool {
-	body, _, err := c.Do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil, url.Values{"fieldSelector": {"metadata.name=maassubscriptions." + maasGroup}})
+// told: Publish's dry run refuses then (UnlimitedRefusal).
+func MaaSNoUnlimited(c *kube.Client) bool {
+	body, _, err := c.Do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil, url.Values{"fieldSelector": {"metadata.name=maassubscriptions." + MaaSGroup}})
 	if err != nil {
 		return false
 	}
@@ -638,7 +638,7 @@ func maasNoUnlimited(c *Client) bool {
 	if json.Unmarshal(body, &list) != nil || len(list.Items) != 1 {
 		return false
 	}
-	version := strings.TrimPrefix(maasAPI(c), maasGroup+"/")
+	version := strings.TrimPrefix(MaaSAPI(c), MaaSGroup+"/")
 	for _, v := range list.Items[0].Spec.Versions {
 		if v.Name != version {
 			continue

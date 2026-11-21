@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -15,7 +16,7 @@ const tUserProject = `{"metadata":{"annotations":{"openshift.io/requester":"mall
 // MaaS gateway admits routes from and where this tool writes its
 // subscription and authorization policy. Setup refuses before any write.
 func TestMaaSSetup_RefusesANamespaceAUserRequested(t *testing.T) {
-	for _, ns := range []string{maasTenantNamespace, "redhat-ai-gateway-infra"} {
+	for _, ns := range []string{serving.MaaSTenantNamespace, "redhat-ai-gateway-infra"} {
 		t.Run(ns, func(t *testing.T) {
 			mc := newMaaSCluster(t)
 			mc.f.putJSON("/api/v1/namespaces/"+ns, tUserProject)
@@ -34,10 +35,10 @@ func TestMaaSSetup_RefusesANamespaceAUserRequested(t *testing.T) {
 // The same check guards publish, which writes into models-as-a-service.
 func TestMaaSPublish_RefusesANamespaceAUserRequested(t *testing.T) {
 	mc := modelReadyForMaaS(t)
-	mc.f.putJSON("/api/v1/namespaces/"+maasTenantNamespace, tUserProject)
+	mc.f.putJSON("/api/v1/namespaces/"+serving.MaaSTenantNamespace, tUserProject)
 	before := len(mc.f.mutations())
 	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"})
-	if res.Success || res.ErrorCode != "not_managed" || !strings.Contains(res.Message, maasTenantNamespace) {
+	if res.Success || res.ErrorCode != "not_managed" || !strings.Contains(res.Message, serving.MaaSTenantNamespace) {
 		t.Fatalf("publish = %+v", res)
 	}
 	if muts := mc.f.mutations()[before:]; len(muts) != 0 {
@@ -49,15 +50,15 @@ func TestMaaSPublish_RefusesANamespaceAUserRequested(t *testing.T) {
 // does not exist yet (RHOAI creates it) or that RHOAI made does not.
 func TestMaaSNamespaceRefusal(t *testing.T) {
 	mc := newMaaSCluster(t)
-	if msg, _ := maasNamespaceRefusal(mc.c, "redhat-ai-gateway-infra"); msg != "" {
+	if msg, _ := serving.MaaSNamespaceRefusal(mc.c, "redhat-ai-gateway-infra"); msg != "" {
 		t.Fatalf("RHOAI's namespaces: %s", msg)
 	}
-	mc.f.putJSON("/api/v1/namespaces/"+maasTenantNamespace, `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"maas-controller"}}}`)
-	if msg, _ := maasNamespaceRefusal(mc.c, "redhat-ai-gateway-infra"); msg != "" {
+	mc.f.putJSON("/api/v1/namespaces/"+serving.MaaSTenantNamespace, `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"maas-controller"}}}`)
+	if msg, _ := serving.MaaSNamespaceRefusal(mc.c, "redhat-ai-gateway-infra"); msg != "" {
 		t.Fatalf("maas-controller's namespace: %s", msg)
 	}
-	mc.f.fail["GET /api/v1/namespaces/"+maasTenantNamespace] = 500
-	if msg, code := maasNamespaceRefusal(mc.c, "redhat-ai-gateway-infra"); msg == "" || code == "" {
+	mc.f.fail["GET /api/v1/namespaces/"+serving.MaaSTenantNamespace] = 500
+	if msg, code := serving.MaaSNamespaceRefusal(mc.c, "redhat-ai-gateway-infra"); msg == "" || code == "" {
 		t.Fatalf("a read error must refuse: %q %q", msg, code)
 	}
 }

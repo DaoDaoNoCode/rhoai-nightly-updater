@@ -8,6 +8,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -16,12 +17,14 @@ var (
 	cleanupPipelineServer = TeardownPipelineServer
 	cleanupStorage        = TeardownS3Storage
 	cleanupMLflow         = TeardownMLflow
-	cleanupModels         = func(c *Client, project string) (*types.OperationResponse, error) { return TeardownModels(c, project) }
-	cleanupGateway        = TeardownInferenceGateway
-	cleanupPlayground     = TeardownPlayground
-	cleanupUnpublish      = UnpublishMaaSModel
-	cleanupMaaSPlatform   = TeardownMaaSPlatform
-	cleanupComponents     = RestoreComponents
+	cleanupModels         = func(c *Client, project string) (*types.OperationResponse, error) {
+		return serving.TeardownModels(c, project)
+	}
+	cleanupGateway      = serving.TeardownInferenceGateway
+	cleanupPlayground   = TeardownPlayground
+	cleanupUnpublish    = serving.UnpublishMaaSModel
+	cleanupMaaSPlatform = serving.TeardownMaaSPlatform
+	cleanupComponents   = RestoreComponents
 )
 
 // CleanupStepID is the step id of each part of a clean-up, as streamed:
@@ -123,7 +126,7 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 	var done []string
 	// Projects of MaaS publications that are gone leave the MaaS gateway
 	// first (maas_prune.go), whatever is selected.
-	logs := releaseGoneMaaSProjects(c)
+	logs := serving.ReleaseGoneMaaSProjects(c)
 	for i, p := range parts {
 		if err := c.Context().Err(); err != nil {
 			return cleanupStopped(c, parts[i:], done, logs, fmt.Sprintf("The clean-up was stopped before %s: %v.", p.title, err), "cancelled"), nil
@@ -146,7 +149,7 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 	recordCleanupActivity(c, strings.Join(done, ", "), true)
 	msg := "Nothing was selected."
 	if len(done) > 0 {
-		msg = "Deleted " + joinTitles(done) + "."
+		msg = "Deleted " + kube.JoinTitles(done) + "."
 	}
 	return &types.OperationResponse{Success: true, Message: msg, Logs: logs}, nil
 }
@@ -156,25 +159,17 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 func cleanupStopped(c *Client, notDone []cleanupPart, done, logs []string, reason, code string) *types.OperationResponse {
 	msg := strings.TrimSpace(reason)
 	if len(done) > 0 {
-		msg += " Deleted before it stopped: " + joinTitles(done) + "."
+		msg += " Deleted before it stopped: " + kube.JoinTitles(done) + "."
 	}
 	if len(notDone) > 0 {
 		titles := make([]string, len(notDone))
 		for i, p := range notDone {
 			titles[i] = p.title
 		}
-		msg += " Not done: " + joinTitles(titles) + "."
+		msg += " Not done: " + kube.JoinTitles(titles) + "."
 	}
 	recordCleanupActivity(c, "stopped: "+reason, false)
 	return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: kube.FirstNonEmpty(code, "partial_failure")}
-}
-
-// joinTitles joins "a", "b" and "c" as "a, b and c".
-func joinTitles(titles []string) string {
-	if len(titles) <= 1 {
-		return strings.Join(titles, "")
-	}
-	return strings.Join(titles[:len(titles)-1], ", ") + " and " + titles[len(titles)-1]
 }
 
 func recordCleanupActivity(c *Client, detail string, success bool) {

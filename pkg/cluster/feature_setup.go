@@ -19,6 +19,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -108,8 +109,8 @@ func featureSetupFor(id, exposure string) featureSetup {
 	if id != "models" {
 		return fs
 	}
-	if exposure == exposureDefault || exposure == exposureGateway {
-		fs.operators = append(append([]envkit.OperatorSpec(nil), fs.operators...), rhclOperator)
+	if exposure == serving.ExposureDefault || exposure == serving.ExposureGateway {
+		fs.operators = append(append([]envkit.OperatorSpec(nil), fs.operators...), serving.RHCLOperator)
 		fs.kuadrant = true
 	}
 	return fs
@@ -118,7 +119,7 @@ func featureSetupFor(id, exposure string) featureSetup {
 var featureSetups = []featureSetup{
 	{id: "pipelines", title: "Pipelines", components: []envkit.FeatureComponent{envkit.PipelinesComponent}},
 	{id: "mlflow", title: "MLflow", components: []envkit.FeatureComponent{envkit.MLflowComponent}},
-	{id: "models", title: "Models", components: []envkit.FeatureComponent{kserveComponent}, operators: []envkit.OperatorSpec{certManagerOperator}, dependency: llmDependenciesCondition},
+	{id: "models", title: "Models", components: []envkit.FeatureComponent{serving.KServeComponent}, operators: []envkit.OperatorSpec{certManagerOperator}, dependency: serving.LLMDependenciesCondition},
 	{id: "playground", title: "Playground", components: []envkit.FeatureComponent{playgroundComponent, dashboardComponent}},
 }
 
@@ -383,7 +384,7 @@ func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
 			p.refuse(argo.GitOpsRefusal("The DataScienceCluster", p.argoApp, "turning on "+strings.Join(turnOn, " and "))+p.argo.UnconfirmedNote(), kube.ErrorCodeGitOpsManaged)
 		}
 		if fs.dependency != "" {
-			p.depStatus, p.depMsg = dscConditionStatus(r.dsc.Object, fs.dependency)
+			p.depStatus, p.depMsg = serving.DSCConditionStatus(r.dsc.Object, fs.dependency)
 		}
 	}
 
@@ -409,21 +410,21 @@ func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
 // up in Connectivity Link's namespace.
 func planKuadrantPart(c *Client, p *featurePlan) types.MaaSPart {
 	pt := types.MaaSPart{ID: "kuadrant", Title: "Connectivity Link instance (Kuadrant)"}
-	k, err := readKuadrant(c)
+	k, err := serving.ReadKuadrant(c)
 	switch {
 	case err != nil:
 		msg := fmt.Sprintf("Cannot read the Kuadrant CR; nothing was changed: %v.%s", err, kube.TemplateHint(err))
 		p.refuse(msg, kube.ErrorCodeFromK8sErr(err))
 		pt.State, pt.Message = "unknown", msg
-	case k.found && k.ready:
-		pt.State, pt.Message, pt.NotManaged = "ready", k.namespace+"/kuadrant is ready", !toolOwned(k.meta)
-		pt.ManagedByTool = toolOwned(k.meta)
-	case k.found:
-		pt.State, pt.Message = "waiting", "Kuadrant "+k.namespace+"/kuadrant is not Ready yet: "+kube.TruncateText(kube.FirstNonEmpty(k.message, "no message"), 300)
+	case k.Found && k.Ready:
+		pt.State, pt.Message, pt.NotManaged = "ready", k.Namespace+"/kuadrant is ready", !serving.ToolOwned(k.Meta)
+		pt.ManagedByTool = serving.ToolOwned(k.Meta)
+	case k.Found:
+		pt.State, pt.Message = "waiting", "Kuadrant "+k.Namespace+"/kuadrant is not Ready yet: "+kube.TruncateText(kube.FirstNonEmpty(k.Message, "no message"), 300)
 	default:
 		pt.State, pt.Message = "missing", "Not created yet. Set up creates it once Connectivity Link serves its API; it starts Authorino, which checks each call's token."
-		pt.Commands = kuadrantCommands(rhclOperator.Namespace)
-		p.plan = append(p.plan, fmt.Sprintf("Create the Kuadrant CR %s/kuadrant (as the MaaS docs do); it stays after Clean up, as other features share it", rhclOperator.Namespace))
+		pt.Commands = serving.KuadrantCommands(serving.RHCLOperator.Namespace)
+		p.plan = append(p.plan, fmt.Sprintf("Create the Kuadrant CR %s/kuadrant (as the MaaS docs do); it stays after Clean up, as other features share it", serving.RHCLOperator.Namespace))
 	}
 	return pt
 }
@@ -448,7 +449,7 @@ func planFeatureOperator(c *Client, p *featurePlan, op envkit.OperatorSpec, r cl
 	opp := operatorPlan{op: op, st: st}
 	_, shared := p.rec.Shared[op.ID]
 	sub := st.Requested
-	opp.byTool = shared && sub != nil && toolOwned(sub.Metadata)
+	opp.byTool = shared && sub != nil && serving.ToolOwned(sub.Metadata)
 	pt.ManagedByTool, pt.NotManaged = opp.byTool, !opp.byTool
 	where := ""
 	if sub != nil {
@@ -501,7 +502,7 @@ func planFeatureOperator(c *Client, p *featurePlan, op envkit.OperatorSpec, r cl
 		if plan.ReusedGroup != "" {
 			reuse = fmt.Sprintf(", using OperatorGroup %s/%s as it is", op.Namespace, plan.ReusedGroup)
 		}
-		p.plan = append(p.plan, fmt.Sprintf("Install %s %s: %sSubscription %s/%s (package %s, channel %s, from %s, automatic updates%s); it stays after Clean up, as other features share it", op.Title, plan.Head, operatorPlanPrefix(plan), op.Namespace, op.SubName, op.Pkg, plan.Channel, op.Source, reuse))
+		p.plan = append(p.plan, fmt.Sprintf("Install %s %s: %sSubscription %s/%s (package %s, channel %s, from %s, automatic updates%s); it stays after Clean up, as other features share it", op.Title, plan.Head, serving.OperatorPlanPrefix(plan), op.Namespace, op.SubName, op.Pkg, plan.Channel, op.Source, reuse))
 	}
 	return opp
 }
@@ -511,11 +512,11 @@ func planFeatureOperator(c *Client, p *featurePlan, op envkit.OperatorSpec, r cl
 func operatorAPIServed(c *Client, op envkit.OperatorSpec) (bool, error) {
 	switch op.API {
 	case certManagerGroup:
-		return groupServed(c, certManagerGroup)
-	case kuadrantGroup:
-		return groupServed(c, kuadrantGroup)
-	case cnpgGroup:
-		return groupServed(c, cnpgGroup)
+		return serving.GroupServed(c, certManagerGroup)
+	case serving.KuadrantGroup:
+		return serving.GroupServed(c, serving.KuadrantGroup)
+	case serving.CNPGGroup:
+		return serving.GroupServed(c, serving.CNPGGroup)
 	}
 	return false, fmt.Errorf("this tool does not know the API of %s", op.Title)
 }
@@ -679,16 +680,16 @@ func ValidatePrerequisitesRequest(req types.PrerequisitesRequest) string {
 // components report Ready, and KServe sees the operators). Only what is
 // missing is done; running it again continues where a failed run stopped.
 func RunPrerequisites(c *Client, req types.PrerequisitesRequest, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
-	m := &maasRun{c: c, emit: onStep, activity: "setup-prerequisites", target: req.Feature + " prerequisites"}
+	m := &serving.Run{Client: c, Emit: onStep, Activity: "setup-prerequisites", Target: req.Feature + " prerequisites"}
 	if problem := ValidatePrerequisitesRequest(req); problem != "" {
-		return m.fail("prerequisites", problem, "validation", "invalid request")
+		return m.Fail("prerequisites", problem, "validation", "invalid request")
 	}
 	fs := featureSetupFor(req.Feature, req.Exposure)
-	m.target = fs.title + " prerequisites"
-	m.step("prerequisites", "running", fmt.Sprintf("Checking what %s needs on the cluster...", fs.title))
+	m.Target = fs.title + " prerequisites"
+	m.Step("prerequisites", "running", fmt.Sprintf("Checking what %s needs on the cluster...", fs.title))
 	p := planFeature(c, fs, readClusterForPrerequisites(c))
 	if p.refusal != "" {
-		return m.fail("prerequisites", p.refusal, kube.FirstNonEmpty(p.code, "prerequisites"), "check failed")
+		return m.Fail("prerequisites", p.refusal, kube.FirstNonEmpty(p.code, "prerequisites"), "check failed")
 	}
 	// Every write as a server-side dry run first.
 	for _, cp := range p.components {
@@ -696,7 +697,7 @@ func RunPrerequisites(c *Client, req types.PrerequisitesRequest, onStep func(Upd
 			continue
 		}
 		if _, err := patchDSCComponent(c, cp.key, "Managed", "", true); err != nil {
-			return m.fail("prerequisites", fmt.Sprintf("The API server rejects setting %s to Managed in the DataScienceCluster: %v. Nothing was changed.%s", cp.key, err, kube.TemplateHint(err)), maasWriteCode(err), "dry run failed")
+			return m.Fail("prerequisites", fmt.Sprintf("The API server rejects setting %s to Managed in the DataScienceCluster: %v. Nothing was changed.%s", cp.key, err, kube.TemplateHint(err)), serving.MaaSWriteCode(err), "dry run failed")
 		}
 	}
 	for _, o := range p.operators {
@@ -704,10 +705,10 @@ func RunPrerequisites(c *Client, req types.PrerequisitesRequest, onStep func(Upd
 			continue
 		}
 		if _, err := envkit.CreateOperatorObjects(c, o.install, true); err != nil {
-			return m.fail("prerequisites", fmt.Sprintf("The API server rejects %s's install: %v. Nothing was changed.%s", o.op.Title, err, kube.TemplateHint(err)), maasWriteCode(err), "dry run failed")
+			return m.Fail("prerequisites", fmt.Sprintf("The API server rejects %s's install: %v. Nothing was changed.%s", o.op.Title, err, kube.TemplateHint(err)), serving.MaaSWriteCode(err), "dry run failed")
 		}
 	}
-	m.step("prerequisites", "success", "Everything Set up changes is checked.")
+	m.Step("prerequisites", "success", "Everything Set up changes is checked.")
 
 	// 1. The components.
 	var on []string
@@ -717,7 +718,7 @@ func RunPrerequisites(c *Client, req types.PrerequisitesRequest, onStep func(Upd
 		}
 	}
 	if len(on) == 0 {
-		m.step("dsc", "success", fmt.Sprintf("%s %s Managed in DataScienceCluster %s.", joinTitles(componentKeys(p.components)), kube.Verb(len(p.components), "is", "are"), p.dscName))
+		m.Step("dsc", "success", fmt.Sprintf("%s %s Managed in DataScienceCluster %s.", kube.JoinTitles(componentKeys(p.components)), kube.Verb(len(p.components), "is", "are"), p.dscName))
 	} else {
 		rec := p.rec
 		if rec.Components == nil {
@@ -728,9 +729,9 @@ func RunPrerequisites(c *Client, req types.PrerequisitesRequest, onStep func(Upd
 				rec.Components[cp.key] = prereqComponent{Previous: cp.state, Feature: fs.id}
 			}
 		}
-		m.step("dsc", "running", fmt.Sprintf("Setting %s to Managed in DataScienceCluster %s (Clean up can turn %s back)...", joinTitles(on), p.dscName, kube.Verb(len(on), "it", "them")))
+		m.Step("dsc", "running", fmt.Sprintf("Setting %s to Managed in DataScienceCluster %s (Clean up can turn %s back)...", kube.JoinTitles(on), p.dscName, kube.Verb(len(on), "it", "them")))
 		if err := writePrereqRecord(c, rec); err != nil {
-			return m.fail("dsc", err.Error()+" The DataScienceCluster was not changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
+			return m.Fail("dsc", err.Error()+" The DataScienceCluster was not changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 		}
 		p.rec = rec
 		for _, cp := range p.components {
@@ -738,11 +739,11 @@ func RunPrerequisites(c *Client, req types.PrerequisitesRequest, onStep func(Upd
 				continue
 			}
 			if _, err := patchDSCComponent(c, cp.key, "Managed", "", false); err != nil {
-				return m.fail("dsc", fmt.Sprintf("Failed to set %s to Managed: %v.%s", cp.key, err, kube.TemplateHint(err)), maasWriteCode(err), "dsc patch failed")
+				return m.Fail("dsc", fmt.Sprintf("Failed to set %s to Managed: %v.%s", cp.key, err, kube.TemplateHint(err)), serving.MaaSWriteCode(err), "dsc patch failed")
 			}
-			m.logs = append(m.logs, fmt.Sprintf("OK: %s Managed (was %s)", cp.key, kube.FirstNonEmpty(cp.state, "not set")))
+			m.Logs = append(m.Logs, fmt.Sprintf("OK: %s Managed (was %s)", cp.key, kube.FirstNonEmpty(cp.state, "not set")))
 		}
-		m.step("dsc", "success", fmt.Sprintf("%s %s Managed; RHOAI's operator deploys %s.", joinTitles(on), kube.Verb(len(on), "is", "are"), kube.Verb(len(on), "it", "them")))
+		m.Step("dsc", "success", fmt.Sprintf("%s %s Managed; RHOAI's operator deploys %s.", kube.JoinTitles(on), kube.Verb(len(on), "is", "are"), kube.Verb(len(on), "it", "them")))
 	}
 
 	// 2. The operators.
@@ -771,35 +772,35 @@ func componentKeys(cps []componentPlan) []string {
 
 // ensureOperator installs o when it is missing, or waits for the install
 // OLM is doing, on the operator's own step.
-func ensureOperator(m *maasRun, rec *prereqRecord, o operatorPlan) (*types.OperationResponse, error) {
+func ensureOperator(m *serving.Run, rec *prereqRecord, o operatorPlan) (*types.OperationResponse, error) {
 	op := o.op
 	switch {
 	case o.install != nil:
-		m.step(op.ID, "running", fmt.Sprintf("Installing %s %s (channel %s) from %s...", op.Title, o.install.Head, o.install.Channel, op.Source))
+		m.Step(op.ID, "running", fmt.Sprintf("Installing %s %s (channel %s) from %s...", op.Title, o.install.Head, o.install.Channel, op.Source))
 		if rec.Shared == nil {
 			rec.Shared = map[string]string{}
 		}
 		rec.Shared[op.ID] = fmt.Sprintf("Subscription %s/%s, channel %s", op.Namespace, op.SubName, o.install.Channel)
-		if err := writePrereqRecord(m.c, *rec); err != nil {
-			return m.fail(op.ID, err.Error()+" Nothing was installed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
+		if err := writePrereqRecord(m.Client, *rec); err != nil {
+			return m.Fail(op.ID, err.Error()+" Nothing was installed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 		}
-		made, err := envkit.CreateOperatorObjects(m.c, o.install, false)
+		made, err := envkit.CreateOperatorObjects(m.Client, o.install, false)
 		for _, d := range made {
-			m.logs = append(m.logs, "OK: "+d+" created")
+			m.Logs = append(m.Logs, "OK: "+d+" created")
 		}
 		if err != nil {
-			return m.fail(op.ID, fmt.Sprintf("Failed to %v. Set up again to continue.", err), maasWriteCode(err), "operator install failed")
+			return m.Fail(op.ID, fmt.Sprintf("Failed to %v. Set up again to continue.", err), serving.MaaSWriteCode(err), "operator install failed")
 		}
-		return m.waitOperator(op.ID, op.Namespace, op.SubName, op.Title)
+		return m.WaitOperator(op.ID, op.Namespace, op.SubName, op.Title)
 	case o.st.Installed() && o.st.Phase == "Succeeded":
-		m.step(op.ID, "success", fmt.Sprintf("%s %s is installed%s.", op.Title, o.st.Version, byWhom(o.byTool)))
+		m.Step(op.ID, "success", fmt.Sprintf("%s %s is installed%s.", op.Title, o.st.Version, serving.ByWhom(o.byTool)))
 	case o.st.Pending() != nil || o.st.Installed():
 		sub := o.st.Requested
 		if sub == nil {
-			m.step(op.ID, "success", fmt.Sprintf("%s %s is being installed in %s.", op.Title, o.st.Version, o.st.CSVNS))
+			m.Step(op.ID, "success", fmt.Sprintf("%s %s is being installed in %s.", op.Title, o.st.Version, o.st.CSVNS))
 			return nil, nil
 		}
-		return m.waitOperator(op.ID, sub.Metadata.Namespace, sub.Metadata.Name, op.Title)
+		return m.WaitOperator(op.ID, sub.Metadata.Namespace, sub.Metadata.Name, op.Title)
 	}
 	return nil, nil
 }
@@ -808,46 +809,46 @@ func ensureOperator(m *maasRun, rec *prereqRecord, o operatorPlan) (*types.Opera
 // Connectivity Link serves its API (step "kuadrant"), in the namespace
 // Connectivity Link runs in, as the MaaS setup does. It stays after Clean
 // up: Connectivity Link's policies are shared.
-func ensureKuadrant(m *maasRun, rec *prereqRecord) (*types.OperationResponse, error) {
-	c := m.c
-	k, err := readKuadrant(c)
+func ensureKuadrant(m *serving.Run, rec *prereqRecord) (*types.OperationResponse, error) {
+	c := m.Client
+	k, err := serving.ReadKuadrant(c)
 	if err != nil {
-		return m.fail("kuadrant", fmt.Sprintf("Cannot read the Kuadrant CR: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "kuadrant read failed")
+		return m.Fail("kuadrant", fmt.Sprintf("Cannot read the Kuadrant CR: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "kuadrant read failed")
 	}
-	if k.found {
-		m.step("kuadrant", "success", fmt.Sprintf("Kuadrant %s/kuadrant exists%s.", k.namespace, byWhom(toolOwned(k.meta))))
+	if k.Found {
+		m.Step("kuadrant", "success", fmt.Sprintf("Kuadrant %s/kuadrant exists%s.", k.Namespace, serving.ByWhom(serving.ToolOwned(k.Meta))))
 		return nil, nil
 	}
-	rhcl, err := envkit.ReadOperator(c, rhclOperator)
+	rhcl, err := envkit.ReadOperator(c, serving.RHCLOperator)
 	if err != nil {
-		return m.fail("kuadrant", fmt.Sprintf("Cannot read the installed operators: %v.", err), kube.ErrorCodeFromK8sErr(err), "csv read failed")
+		return m.Fail("kuadrant", fmt.Sprintf("Cannot read the installed operators: %v.", err), kube.ErrorCodeFromK8sErr(err), "csv read failed")
 	}
-	ns := kube.FirstNonEmpty(rhcl.CSVNS, rhclOperator.Namespace)
-	m.step("kuadrant", "running", "Waiting for Connectivity Link's Kuadrant API...")
+	ns := kube.FirstNonEmpty(rhcl.CSVNS, serving.RHCLOperator.Namespace)
+	m.Step("kuadrant", "running", "Waiting for Connectivity Link's Kuadrant API...")
 	version := ""
 	if _, err := kube.WaitForGone(c, envkit.OperatorTimeout, envkit.PollInterval, func(cc *Client) (bool, error) {
-		v, err := kuadrantServedVersion(cc)
+		v, err := serving.KuadrantServedVersion(cc)
 		version = v
 		return v != "", err
 	}); err != nil || version == "" {
-		return m.fail("kuadrant", fmt.Sprintf("Connectivity Link's Kuadrant API is not served after %s%s. Set up again to continue.", clockText(envkit.OperatorTimeout), errSuffix(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "not_ready"), "kuadrant api missing")
+		return m.Fail("kuadrant", fmt.Sprintf("Connectivity Link's Kuadrant API is not served after %s%s. Set up again to continue.", serving.ClockText(envkit.OperatorTimeout), serving.ErrSuffix(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "not_ready"), "kuadrant api missing")
 	}
 	if rec.Shared == nil {
 		rec.Shared = map[string]string{}
 	}
 	rec.Shared["kuadrant"] = "Kuadrant " + ns + "/kuadrant"
 	if err := writePrereqRecord(c, *rec); err != nil {
-		return m.fail("kuadrant", err.Error()+" Nothing was created.", kube.ErrorCodeFromK8sErr(err), "record write failed")
+		return m.Fail("kuadrant", err.Error()+" Nothing was created.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 	}
-	if err := createKuadrant(c, version, ns, true); err != nil {
-		return m.fail("kuadrant", fmt.Sprintf("The API server rejects the Kuadrant CR %s/kuadrant: %v. Nothing was created.", ns, err), maasWriteCode(err), "kuadrant dry run failed")
+	if err := serving.CreateKuadrant(c, version, ns, true); err != nil {
+		return m.Fail("kuadrant", fmt.Sprintf("The API server rejects the Kuadrant CR %s/kuadrant: %v. Nothing was created.", ns, err), serving.MaaSWriteCode(err), "kuadrant dry run failed")
 	}
-	m.step("kuadrant", "running", fmt.Sprintf("Creating the Kuadrant CR %s/kuadrant...", ns))
-	if err := createKuadrant(c, version, ns, false); err != nil {
-		return m.fail("kuadrant", fmt.Sprintf("Failed to create the Kuadrant CR %s/kuadrant: %v. Set up again to retry.", ns, err), maasWriteCode(err), "kuadrant create failed")
+	m.Step("kuadrant", "running", fmt.Sprintf("Creating the Kuadrant CR %s/kuadrant...", ns))
+	if err := serving.CreateKuadrant(c, version, ns, false); err != nil {
+		return m.Fail("kuadrant", fmt.Sprintf("Failed to create the Kuadrant CR %s/kuadrant: %v. Set up again to retry.", ns, err), serving.MaaSWriteCode(err), "kuadrant create failed")
 	}
-	m.logs = append(m.logs, "OK: Kuadrant "+ns+"/kuadrant created")
-	m.step("kuadrant", "success", fmt.Sprintf("Kuadrant %s/kuadrant created; it starts Authorino, which checks each call's token.", ns))
+	m.Logs = append(m.Logs, "OK: Kuadrant "+ns+"/kuadrant created")
+	m.Step("kuadrant", "success", fmt.Sprintf("Kuadrant %s/kuadrant created; it starts Authorino, which checks each call's token.", ns))
 	return nil, nil
 }
 
@@ -855,9 +856,9 @@ func ensureKuadrant(m *maasRun, rec *prereqRecord) (*types.OperationResponse, er
 // Ready and, for KServe, until its dependency condition no longer names an
 // operator this setup installs. A condition that is never reported is not a
 // failure (an older RHOAI does not report it).
-func waitPrerequisitesReady(m *maasRun, p *featurePlan) (*types.OperationResponse, error) {
-	c := m.c
-	m.step("ready", "running", fmt.Sprintf("Waiting for RHOAI's operator to report %s ready (usually 1 to 3 minutes)...", joinTitles(componentKeys(p.components))))
+func waitPrerequisitesReady(m *serving.Run, p *featurePlan) (*types.OperationResponse, error) {
+	c := m.Client
+	m.Step("ready", "running", fmt.Sprintf("Waiting for RHOAI's operator to report %s ready (usually 1 to 3 minutes)...", kube.JoinTitles(componentKeys(p.components))))
 	last := ""
 	var dsc rhoai.DSCRead
 	done, err := kube.WaitForGone(c, PrerequisiteReadyTimeout, envkit.PollInterval, func(cc *Client) (bool, error) {
@@ -873,7 +874,7 @@ func waitPrerequisitesReady(m *maasRun, p *featurePlan) (*types.OperationRespons
 			}
 		}
 		if p.fs.dependency != "" {
-			s, msg := dscConditionStatus(r.Object, p.fs.dependency)
+			s, msg := serving.DSCConditionStatus(r.Object, p.fs.dependency)
 			if s == "False" {
 				for _, mention := range components.ParseMissingDependencies(msg) {
 					if p.installs(mention) {
@@ -885,12 +886,12 @@ func waitPrerequisitesReady(m *maasRun, p *featurePlan) (*types.OperationRespons
 		msg := strings.Join(waiting, "; ")
 		if msg != last && msg != "" {
 			last = msg
-			m.step("ready", "running", "Waiting: "+msg)
+			m.Step("ready", "running", "Waiting: "+msg)
 		}
 		return len(waiting) == 0, nil
 	})
 	if err != nil {
-		return m.fail("ready", fmt.Sprintf("Stopped waiting: %v. What was set up stays; Set up again to continue.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "ready wait failed")
+		return m.Fail("ready", fmt.Sprintf("Stopped waiting: %v. What was set up stays; Set up again to continue.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "ready wait failed")
 	}
 	if !done {
 		// A component never reported at all is not a failure.
@@ -905,20 +906,20 @@ func waitPrerequisitesReady(m *maasRun, p *featurePlan) (*types.OperationRespons
 			if strings.Contains(last, "KServe does not see") {
 				hint = " KServe checks its operators again only from time to time: the Diagnostics page offers to restart its operator when it still reports an installed operator missing."
 			}
-			return m.fail("ready", fmt.Sprintf("Not ready after %s (%s). What was set up stays; the tab shows each part.%s", clockText(PrerequisiteReadyTimeout), last, hint), "not_ready", "not ready")
+			return m.Fail("ready", fmt.Sprintf("Not ready after %s (%s). What was set up stays; the tab shows each part.%s", serving.ClockText(PrerequisiteReadyTimeout), last, hint), "not_ready", "not ready")
 		}
-		m.step("ready", "success", fmt.Sprintf("RHOAI's operator does not report %s's readiness; continuing.", joinTitles(componentKeys(p.components))))
+		m.Step("ready", "success", fmt.Sprintf("RHOAI's operator does not report %s's readiness; continuing.", kube.JoinTitles(componentKeys(p.components))))
 	} else {
-		m.step("ready", "success", fmt.Sprintf("%s %s ready.", joinTitles(componentKeys(p.components)), kube.Verb(len(p.components), "is", "are")))
+		m.Step("ready", "success", fmt.Sprintf("%s %s ready.", kube.JoinTitles(componentKeys(p.components)), kube.Verb(len(p.components), "is", "are")))
 	}
 	note := ""
 	if p.fs.dependency != "" {
-		if s, msg := dscConditionStatus(dsc.Object, p.fs.dependency); s == "False" {
+		if s, msg := serving.DSCConditionStatus(dsc.Object, p.fs.dependency); s == "False" {
 			note = " KServe still reports missing: " + kube.TruncateText(msg, 300) + "."
 		}
 	}
 	slog.Info("prerequisites set up", "feature", p.fs.id, "user", kube.GetUser(c))
-	return m.done(fmt.Sprintf("What %s needs on the cluster is set up.%s", p.fs.title, note))
+	return m.Done(fmt.Sprintf("What %s needs on the cluster is set up.%s", p.fs.title, note))
 }
 
 // --- turning components back (Clean up) ----------------------------------------------
@@ -970,8 +971,8 @@ func componentUsers(c *Client, key string) ([]string, error) {
 			out = append(out, "MLflow "+cr.Metadata.Name)
 		}
 	case "kserve":
-		models, err := listLLMInferenceServices(c)
-		if err != nil && !errors.Is(err, errLLMISvcAPIMissing) {
+		models, err := serving.ListLLMInferenceServices(c)
+		if err != nil && !errors.Is(err, serving.ErrLLMISvcAPIMissing) {
 			return nil, err
 		}
 		for _, m := range models {
@@ -1062,7 +1063,7 @@ func restoreCheck(c *Client, rec prereqRecord, dsc rhoai.DSCRead, key string) re
 		if len(shown) > 3 {
 			shown = append(append([]string{}, users[:3]...), fmt.Sprintf("%d more", len(users)-3))
 		}
-		return restoreVerdict{kept: fmt.Sprintf("%s (in use: %s)", key, joinTitles(shown))}
+		return restoreVerdict{kept: fmt.Sprintf("%s (in use: %s)", key, kube.JoinTitles(shown))}
 	}
 	return restoreVerdict{restore: true, prev: prev}
 }
@@ -1118,7 +1119,7 @@ func RestoreComponents(c *Client, keys []string) (*types.OperationResponse, erro
 			_ = writePrereqRecord(c, rec)
 		}
 		if len(done) > 0 {
-			msg += " Already turned back: " + joinTitles(done) + "."
+			msg += " Already turned back: " + kube.JoinTitles(done) + "."
 		} else {
 			msg += " Nothing was changed."
 		}
@@ -1175,7 +1176,7 @@ func RestoreComponents(c *Client, keys []string) (*types.OperationResponse, erro
 	}
 	var msg []string
 	if len(done) > 0 {
-		msg = append(msg, joinTitles(done)+", as before setup.")
+		msg = append(msg, kube.JoinTitles(done)+", as before setup.")
 	}
 	if len(kept) > 0 {
 		msg = append(msg, "Kept Managed: "+strings.Join(kept, "; ")+".")

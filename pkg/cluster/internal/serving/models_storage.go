@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"encoding/json"
@@ -30,7 +30,7 @@ import (
 // emptyDir: true unless inferenceservice-config's storageInitializer names
 // a modelVolumeSource (unreadable counts as KServe's default, emptyDir: a
 // request only reserves room).
-func modelVolumeIsEmptyDir(c *Client) bool {
+func modelVolumeIsEmptyDir(c *kube.Client) bool {
 	ns, err := rhoai.AppsNamespace(c)
 	if err != nil {
 		return true
@@ -56,7 +56,7 @@ func modelVolumeIsEmptyDir(c *Client) bool {
 // the model needs (hard minus used), or "". The model's pod is refused
 // then, not left pending, until the quota is raised or other workloads
 // stop. Unreadable quotas are no warning (unknown is not a failure).
-func quotaWarning(c *Client, project string, entry catalogModel, ephemeral bool) string {
+func quotaWarning(c *kube.Client, project string, entry CatalogModel, ephemeral bool) string {
 	var items []struct {
 		Metadata kube.ObjectMeta `json:"metadata"`
 		Status   struct {
@@ -72,9 +72,9 @@ func quotaWarning(c *Client, project string, entry catalogModel, ephemeral bool)
 		"requests.memory": entry.MemoryRequest, "memory": entry.MemoryRequest, "limits.memory": entry.Memory,
 		"pods": "1",
 	}
-	if ephemeral && entry.ephemeralStorage != "" {
-		need["requests.ephemeral-storage"] = entry.ephemeralStorage
-		need["ephemeral-storage"] = entry.ephemeralStorage
+	if ephemeral && entry.EphemeralStorage != "" {
+		need["requests.ephemeral-storage"] = entry.EphemeralStorage
+		need["ephemeral-storage"] = entry.EphemeralStorage
 	}
 	var short []string
 	sort.Slice(items, func(i, j int) bool { return items[i].Metadata.Name < items[j].Metadata.Name })
@@ -89,9 +89,9 @@ func quotaWarning(c *Client, project string, entry catalogModel, ephemeral bool)
 			if !ok {
 				continue
 			}
-			hard, ok1 := parseQuantity(q.Status.Hard[k])
-			used, _ := parseQuantity(q.Status.Used[k])
-			n, ok2 := parseQuantity(want)
+			hard, ok1 := ParseQuantity(q.Status.Hard[k])
+			used, _ := ParseQuantity(q.Status.Used[k])
+			n, ok2 := ParseQuantity(want)
 			if ok1 && ok2 && hard-used < n {
 				short = append(short, fmt.Sprintf("ResourceQuota %s: %s has %s left of %s, the model needs %s", q.Metadata.Name, k, quantityWords(k, hard-used), q.Status.Hard[k], want))
 			}

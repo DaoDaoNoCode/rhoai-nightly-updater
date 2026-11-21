@@ -9,6 +9,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -30,7 +31,7 @@ func maasOnlyModel(t *testing.T) *modelsCluster {
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true}); !res.Success {
 		t.Fatalf("inference gateway setup: %+v", res)
 	}
-	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: exposureMaaS})
+	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: serving.ExposureMaaS})
 	if !res.Success {
 		t.Fatalf("model setup through MaaS only: %+v\n%s", res, finalSteps(events))
 	}
@@ -80,17 +81,17 @@ func firstRequest(mc *modelsCluster, method, part string) int {
 // toolModelItems are the Models tab's rows of proj.
 func toolModelItems(t *testing.T, mc *modelsCluster) []types.ModelState {
 	t.Helper()
-	var models []llmisvcObject
-	if m, found, err := readToolModel(mc.c, "proj", "qwen25-05b-instruct"); err != nil {
+	var models []serving.LLMISvcObject
+	if m, found, err := serving.ReadToolModel(mc.c, "proj", "qwen25-05b-instruct"); err != nil {
 		t.Fatal(err)
 	} else if found {
 		models = append(models, m)
 	}
-	rec, err := readModelsRecord(mc.c)
+	rec, err := serving.ReadModelsRecord(mc.c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return modelItems(mc.c, models, map[string]bool{"proj": true}, rec)
+	return serving.ModelItems(mc.c, models, map[string]bool{"proj": true}, rec)
 }
 
 // Publishing as part of a MaaS-only setup records that the model had no
@@ -100,11 +101,11 @@ func TestMaaSOnlySetup_PublishRecordsNoRoute(t *testing.T) {
 	if rec := rawMaaSRecord(mc); !strings.Contains(rec, `"modelRefs":{"proj/qwen25-05b-instruct":{"noRoute":true}}`) {
 		t.Fatalf("record = %s", rec)
 	}
-	rec, err := readMaaSRecord(mc.c)
+	rec, err := serving.ReadMaaSRecord(mc.c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if refs, ok := rec.modelRefs("proj", "qwen25-05b-instruct"); !ok || !refs.NoRoute || len(refs.Refs) != 0 {
+	if refs, ok := rec.ModelRefsOf("proj", "qwen25-05b-instruct"); !ok || !refs.NoRoute || len(refs.Refs) != 0 {
 		t.Fatalf("recorded = %+v, %v", refs, ok)
 	}
 	// The status says so, on both tabs.
@@ -184,7 +185,7 @@ func TestMaaSOnlySetup_UnpublishRemovesTheRoute(t *testing.T) {
 	if rec := rawMaaSRecord(mc); strings.Contains(rec, "modelRefs") || strings.Contains(rec, `"published"`) {
 		t.Fatalf("record after unpublish = %s", rec)
 	}
-	if items := toolModelItems(t, mc); len(items) != 1 || items[0].Exposure != exposureInternal || items[0].MaaSOnlySetup || items[0].MaaSPublished {
+	if items := toolModelItems(t, mc); len(items) != 1 || items[0].Exposure != serving.ExposureInternal || items[0].MaaSOnlySetup || items[0].MaaSPublished {
 		t.Fatalf("models status = %+v", items)
 	}
 }
@@ -202,11 +203,11 @@ func TestMaaSOnlySetup_UnpublishWithoutConnectivityLinkTurnsTokenAuthOff(t *test
 	if !res.Success {
 		t.Fatalf("unpublish: %+v", res)
 	}
-	model, _, err := readToolModel(mc.c, "proj", "qwen25-05b-instruct")
+	model, _, err := serving.ReadToolModel(mc.c, "proj", "qwen25-05b-instruct")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model.Spec.Router != nil || model.Metadata.Annotations[enableAuthAnnot] != "false" {
+	if model.Spec.Router != nil || model.Metadata.Annotations[serving.EnableAuthAnnot] != "false" {
 		t.Fatalf("model router %+v, annotations %v", model.Spec.Router, model.Metadata.Annotations)
 	}
 	all := ""
@@ -267,10 +268,10 @@ func TestMaaSOnlySetup_UnpublishRefusesWhenSomeoneAddedAGateway(t *testing.T) {
 // check and its write (restoreModelRoute reads them again): no router write.
 func TestMaaSOnlySetup_RestoreRefusesWhenTheRefsChangedMeanwhile(t *testing.T) {
 	mc := maasOnlyModel(t)
-	run := &maasRun{c: mc.c}
+	run := &serving.Run{Client: mc.c}
 	setModelRefs(mc, []any{tMaaSGatewayRef, tTeamGatewayRef})
 	mc.f.requests = nil
-	msg, code := run.restoreModelRoute("proj", "qwen25-05b-instruct", maasModelRefs{NoRoute: true}, true, func(string, string, string) {})
+	msg, code := run.RestoreModelRoute("proj", "qwen25-05b-instruct", serving.MaaSModelRefs{NoRoute: true}, true, func(string, string, string) {})
 	if code != "conflict" || !strings.Contains(msg, "team/team-gateway") {
 		t.Fatalf("restore = %q, %q", msg, code)
 	}
@@ -423,9 +424,9 @@ func TestMaaSUnpublish_OtherRecordsAreUnaffected(t *testing.T) {
 	// An earlier build's record (published, no refs) of a model on the MaaS
 	// gateway alone: back to the default, as before.
 	mc = publishedMaaSCluster(t)
-	rec, _ := readMaaSRecord(mc.c)
+	rec, _ := serving.ReadMaaSRecord(mc.c)
 	rec.ModelRefs = nil
-	if err := writeMaaSRecord(mc.c, rec); err != nil {
+	if err := serving.WriteMaaSRecord(mc.c, rec); err != nil {
 		t.Fatal(err)
 	}
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"}); !res.Success {

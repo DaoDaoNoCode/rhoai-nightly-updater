@@ -26,6 +26,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -370,16 +371,16 @@ func chatModel(capabilities []string, usecase, modelType string) bool {
 // that dimension. Any other embedding model is left as it is; its
 // dimension is not known.
 func markToolEmbeddingModels(c *Client, project string, models []types.PlaygroundModel) {
-	rec, err := readModelsRecord(c)
+	rec, err := serving.ReadModelsRecord(c)
 	if err != nil {
 		return
 	}
 	for i, m := range models {
-		entry, ok := catalogEntry(m.Name)
-		if m.Name == "" || !ok || m.Source != "namespace" || m.Chat || entry.Type != modelTypeEmbedding {
+		entry, ok := serving.CatalogEntry(m.Name)
+		if m.Name == "" || !ok || m.Source != "namespace" || m.Chat || entry.Type != serving.ModelTypeEmbedding {
 			continue
 		}
-		if obj, found, err := readToolModel(c, project, m.Name); err == nil && found && rec.owns(obj.Metadata) {
+		if obj, found, err := serving.ReadToolModel(c, project, m.Name); err == nil && found && rec.Owns(obj.Metadata) {
 			models[i].EmbeddingDimension = entry.EmbeddingDimension
 		}
 	}
@@ -495,7 +496,7 @@ func listMaaSPlaygroundModels(c *Client) []types.PlaygroundModel {
 			ResolvedModelAlias string `json:"resolvedModelAlias"`
 		} `json:"status"`
 	}
-	if err := c.ListInto("/apis/"+maasAPI(c)+"/maasmodelrefs", &items); err != nil {
+	if err := c.ListInto("/apis/"+serving.MaaSAPI(c)+"/maasmodelrefs", &items); err != nil {
 		if kube.IsDecodeError(err) {
 			slog.Debug("cannot parse the MaaS model references", "error", err)
 			return nil
@@ -526,7 +527,7 @@ func listMaaSPlaygroundModels(c *Client) []types.PlaygroundModel {
 		out = append(out, types.PlaygroundModel{
 			Name: name, DisplayName: r.Metadata.Annotations[maasDisplayNameAnnotation], Source: "maas",
 			Status: kube.FirstNonEmpty(r.Status.Phase, "Not ready"), Ready: r.Status.Phase == "Ready",
-			Chat: chatModel(caps, r.Metadata.Annotations[genAIUseCaseAnnotation], ""), Subscriptions: offered,
+			Chat: chatModel(caps, r.Metadata.Annotations[serving.GenAIUseCaseAnnotation], ""), Subscriptions: offered,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -546,7 +547,7 @@ func maasSubscriptionsByModel(c *Client) map[string][]string {
 			} `json:"modelRefs"`
 		} `json:"spec"`
 	}
-	if c.ListInto(rhoai.NamespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""), &items) != nil {
+	if c.ListInto(rhoai.NamespacedPath(serving.MaaSAPI(c), "maassubscriptions", serving.MaaSTenantNamespace, ""), &items) != nil {
 		return out
 	}
 	for _, s := range items {
@@ -1073,8 +1074,6 @@ func sortPlaygrounds(items []types.PlaygroundState) {
 
 // --- the operation -------------------------------------------------------------------
 
-var playgroundProjectRegex = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
-
 // ValidatePlaygroundRequest returns why req cannot run, or "".
 func ValidatePlaygroundRequest(req types.PlaygroundRequest) string {
 	switch req.Action {
@@ -1082,7 +1081,7 @@ func ValidatePlaygroundRequest(req types.PlaygroundRequest) string {
 	default:
 		return "action must be setup or teardown"
 	}
-	if !playgroundProjectRegex.MatchString(req.Project) {
+	if !serving.ProjectNameRegex.MatchString(req.Project) {
 		return "invalid project name"
 	}
 	if req.Action == "teardown" && len(req.Models) > 0 {
@@ -1192,7 +1191,7 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 		res, _ := p.fail("check", msg, code, activity)
 		return nil, nil, res
 	}
-	if _, msg, code := projectNamespace(p.c, p.project); msg != "" {
+	if _, msg, code := serving.ProjectNamespace(p.c, p.project); msg != "" {
 		return stop(strings.Replace(msg, "would not show a model there", "would not offer a playground there", 1), code, "project")
 	}
 	var st types.PlaygroundStatus
@@ -1390,7 +1389,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 			}
 			if !said {
 				said = true
-				p.step("install", "running", fmt.Sprintf("The previous playground's database in %s is still being removed; trying again every %s (up to %s)...", p.project, PlaygroundInstallRetryPoll, clockText(PlaygroundInstallRetryTimeout)))
+				p.step("install", "running", fmt.Sprintf("The previous playground's database in %s is still being removed; trying again every %s (up to %s)...", p.project, PlaygroundInstallRetryPoll, serving.ClockText(PlaygroundInstallRetryTimeout)))
 			}
 			if err := kube.Clock().Sleep(p.c.Context(), PlaygroundInstallRetryPoll); err != nil {
 				installErr = err
@@ -1400,7 +1399,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 		if installErr != nil {
 			if genAIStatus(installErr) == http.StatusConflict {
 				p.forgetIfAbsent()
-				return p.fail("install", fmt.Sprintf("The previous playground's database in %s was still being removed after %s, so the dashboard did not set up a new one. Set up again once it is gone.", p.project, clockText(PlaygroundInstallRetryTimeout)), "in_progress", "still removing")
+				return p.fail("install", fmt.Sprintf("The previous playground's database in %s was still being removed after %s, so the dashboard did not set up a new one. Set up again once it is gone.", p.project, serving.ClockText(PlaygroundInstallRetryTimeout)), "in_progress", "still removing")
 			}
 			p.forgetIfAbsent()
 			return p.installError(installErr)
@@ -1456,7 +1455,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 	case problem != "":
 		return p.fail("ready", "The dashboard set up the playground, but "+problem, "not_ready", "not ready")
 	case !ready:
-		return p.fail("ready", fmt.Sprintf("The playground in %s is not ready after %s (phase %s). It may still start: the tab shows its state.", p.project, clockText(PlaygroundReadyTimeout), kube.FirstNonEmpty(srvPhase(srv), "unknown")), "timeout", "timeout")
+		return p.fail("ready", fmt.Sprintf("The playground in %s is not ready after %s (phase %s). It may still start: the tab shows its state.", p.project, serving.ClockText(PlaygroundReadyTimeout), kube.FirstNonEmpty(srvPhase(srv), "unknown")), "timeout", "timeout")
 	}
 	p.step("ready", "success", fmt.Sprintf("The playground in %s is ready.", p.project))
 	p.record("project="+p.project, true)
@@ -1525,7 +1524,7 @@ func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 		return p.failAPI("gone", err, "wait failed")
 	}
 	if !gone {
-		return p.fail("gone", fmt.Sprintf("The playground in %s is still being deleted after %s. Delete again to check.", p.project, clockText(PlaygroundDeleteTimeout)), "in_progress", "still deleting")
+		return p.fail("gone", fmt.Sprintf("The playground in %s is still being deleted after %s. Delete again to check.", p.project, serving.ClockText(PlaygroundDeleteTimeout)), "in_progress", "still deleting")
 	}
 	if err := setPlaygroundRecord(p.c, p.project, nil); err != nil {
 		return p.fail("gone", fmt.Sprintf("The playground in %s is deleted, but this tool's record of it cannot be cleared: %v.%s", p.project, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "record")

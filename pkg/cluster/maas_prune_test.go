@@ -7,6 +7,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -65,13 +66,13 @@ func TestMaaS_APublishedProjectThatIsGoneLeavesTheGateway(t *testing.T) {
 	// The project cannot be read: kept, nothing written.
 	mc.f.fail["GET /api/v1/namespaces/proj"] = 500
 	mc.f.requests = nil
-	if _, logs, err := pruneGoneMaaSPublications(mc.c); err != nil || len(logs) != 0 {
+	if _, logs, err := serving.PruneGoneMaaSPublications(mc.c); err != nil || len(logs) != 0 {
 		t.Fatalf("an unreadable project: %v, %v", logs, err)
 	}
 	for _, r := range mc.f.mutations() {
 		t.Errorf("written while the project could not be read: %s", r)
 	}
-	if rec, _ := readMaaSRecord(mc.c); len(rec.Published) != 1 || !gatewayAdmits(t, mc) {
+	if rec, _ := serving.ReadMaaSRecord(mc.c); len(rec.Published) != 1 || !gatewayAdmits(t, mc) {
 		t.Fatalf("the publication was dropped: %+v", rec)
 	}
 	delete(mc.f.fail, "GET /api/v1/namespaces/proj")
@@ -86,7 +87,7 @@ func TestMaaS_APublishedProjectThatIsGoneLeavesTheGateway(t *testing.T) {
 	if gatewayAdmits(t, mc) {
 		t.Fatal("the gateway still admits proj")
 	}
-	if rec, _ := readMaaSRecord(mc.c); len(rec.Published) != 0 {
+	if rec, _ := serving.ReadMaaSRecord(mc.c); len(rec.Published) != 0 {
 		t.Fatalf("record = %+v", rec)
 	}
 	if mc.f.has(tMaaSSub) || mc.f.has(tMaaSAuth) {
@@ -127,21 +128,21 @@ func TestMaaS_PruneNarrowsTheGatewayWhenAnotherStepFails(t *testing.T) {
 	mc := publishedCluster(t)
 	dropNamespace(mc, "proj")
 	mc.f.fail["DELETE "+tMaaSSub] = 500
-	changed, _, err := pruneGoneMaaSPublications(mc.c)
+	changed, _, err := serving.PruneGoneMaaSPublications(mc.c)
 	if err == nil || !changed {
 		t.Fatalf("changed %t, err %v", changed, err)
 	}
 	if gatewayAdmits(t, mc) {
 		t.Fatal("the gateway still admits proj")
 	}
-	if rec, _ := readMaaSRecord(mc.c); len(rec.Published) != 1 {
+	if rec, _ := serving.ReadMaaSRecord(mc.c); len(rec.Published) != 1 {
 		t.Fatalf("the record forgot a publication whose subscription is not updated: %+v", rec)
 	}
 	delete(mc.f.fail, "DELETE "+tMaaSSub)
-	if _, _, err := pruneGoneMaaSPublications(mc.c); err != nil {
+	if _, _, err := serving.PruneGoneMaaSPublications(mc.c); err != nil {
 		t.Fatal(err)
 	}
-	if rec, _ := readMaaSRecord(mc.c); len(rec.Published) != 0 || mc.f.has(tMaaSSub) {
+	if rec, _ := serving.ReadMaaSRecord(mc.c); len(rec.Published) != 0 || mc.f.has(tMaaSSub) {
 		t.Fatalf("record %+v, subscription left %t", rec, mc.f.has(tMaaSSub))
 	}
 }
@@ -152,7 +153,7 @@ func TestMaaSStatus_WarnsWhenTheModelsRecordIsUnreadable(t *testing.T) {
 	mc := publishedCluster(t)
 	path := rhoai.NamespacedPath("v1", "configmaps", record.GetActivityNamespace(), record.SnapshotConfigMapName)
 	cm := mc.f.get(path)
-	ensureMap(cm, "data")[modelsRecordKey] = "not json"
+	ensureMap(cm, "data")[serving.ModelsRecordKey] = "not json"
 	mc.f.put(path, cm)
 	st, err := GetMaaSStatus(mc.c)
 	if err != nil {
@@ -161,7 +162,7 @@ func TestMaaSStatus_WarnsWhenTheModelsRecordIsUnreadable(t *testing.T) {
 	if w := maasPart(t, st, "gateway").Warning; !strings.Contains(w, "record of its models cannot be read") {
 		t.Fatalf("warning = %q", w)
 	}
-	if _, _, err := pruneGoneMaaSPublications(mc.c); err != nil || !gatewayAdmits(t, mc) {
+	if _, _, err := serving.PruneGoneMaaSPublications(mc.c); err != nil || !gatewayAdmits(t, mc) {
 		t.Fatalf("the publication was dropped: %v", err)
 	}
 }
@@ -171,9 +172,7 @@ func TestMaaSStatus_WarnsWhenTheModelsRecordIsUnreadable(t *testing.T) {
 func TestMaaS_BackgroundPruneRecordsActivityOnlyOnChange(t *testing.T) {
 	mc := publishedCluster(t)
 	var entries []types.ActivityEntry
-	orig := recordPruneActivity
-	t.Cleanup(func() { recordPruneActivity = orig })
-	recordPruneActivity = func(_ *Client, e types.ActivityEntry) { entries = append(entries, e) }
+	t.Cleanup(serving.SetRecordPruneActivityForTest(func(_ *Client, e types.ActivityEntry) { entries = append(entries, e) }))
 	PruneGoneMaaSPublicationsInBackground(mc.c)
 	if len(entries) != 0 {
 		t.Fatalf("an activity entry was recorded although nothing changed: %+v", entries)
@@ -192,7 +191,7 @@ func TestMaaS_BackgroundPruneRecordsActivityOnlyOnChange(t *testing.T) {
 func TestMaaS_ALivePublicationIsKept(t *testing.T) {
 	mc := publishedCluster(t)
 	mc.f.requests = nil
-	if _, logs, err := pruneGoneMaaSPublications(mc.c); err != nil || len(logs) != 0 {
+	if _, logs, err := serving.PruneGoneMaaSPublications(mc.c); err != nil || len(logs) != 0 {
 		t.Fatalf("got %v, %v", logs, err)
 	}
 	if len(mc.f.mutations()) != 0 || !gatewayAdmits(t, mc) {
@@ -218,7 +217,7 @@ func TestMaaS_PruneKeepsTheOthersLimitsAndAudience(t *testing.T) {
 	k, _ := parseFakePath(strings.Replace(testModelPath, "qwen25-05b-instruct", "smollm2-135m-instruct", 1))
 	ensureMap(mc.f.objects[k], "metadata")["uid"] = "someone-elses-uid"
 	mc.f.mu.Unlock()
-	if changed, _, err := pruneGoneMaaSPublications(mc.c); err != nil || !changed {
+	if changed, _, err := serving.PruneGoneMaaSPublications(mc.c); err != nil || !changed {
 		t.Fatalf("prune: changed %t, %v", changed, err)
 	}
 	spec, _ := subSpec(t, mc)

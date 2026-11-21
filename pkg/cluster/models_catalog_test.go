@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -52,16 +53,16 @@ func TestModelCatalog_TheFourModels(t *testing.T) {
 		{"granite-embedding-125m-english", "hf://ibm-granite/granite-embedding-125m-english:4ab61ffd423be45cd932b21a7c696063d82bf45f", "embedding", "2", "3Gi", "4Gi", "2", "1",
 			"--runner pooling --max-model-len 512", "Embeddings, Semantic search", false, 768},
 	}
-	if len(modelCatalog) != len(want) {
-		t.Fatalf("catalog has %d models", len(modelCatalog))
+	if len(serving.ModelCatalog) != len(want) {
+		t.Fatalf("catalog has %d models", len(serving.ModelCatalog))
 	}
 	pinned := regexp.MustCompile(`^hf://[^/]+/[^/:]+:[0-9a-f]{40}$`)
 	for i, w := range want {
-		m := modelCatalog[i]
+		m := serving.ModelCatalog[i]
 		if m.Name != w.name || m.URI != w.uri || m.Type != w.typ || m.CPU != w.cpu || m.MemoryRequest != w.req || m.Memory != w.limit ||
-			m.threads != w.threads || m.kvCacheGiB != w.kv || m.Args != w.args || m.UseCase != w.useCase ||
+			m.Threads != w.threads || m.KVCacheGiB != w.kv || m.Args != w.args || m.UseCase != w.useCase ||
 			m.ToolCalling != w.tools || m.EmbeddingDimension != w.dim {
-			t.Errorf("entry %d = %+v (threads %s, kv %s)", i, m.CatalogModel, m.threads, m.kvCacheGiB)
+			t.Errorf("entry %d = %+v (threads %s, kv %s)", i, m.CatalogModel, m.Threads, m.KVCacheGiB)
 		}
 		if !pinned.MatchString(m.URI) {
 			t.Errorf("%s is not pinned to a commit: %s", m.Name, m.URI)
@@ -73,7 +74,7 @@ func TestModelCatalog_TheFourModels(t *testing.T) {
 			t.Errorf("%s default = %v", m.Name, m.Default)
 		}
 	}
-	if def, ok := catalogEntry(""); !ok || def.Name != "qwen25-05b-instruct" {
+	if def, ok := serving.CatalogEntry(""); !ok || def.Name != "qwen25-05b-instruct" {
 		t.Errorf("the default is %q", def.Name)
 	}
 	if ValidModelName("llama") || !ValidModelName("qwen3-1-7b") || !ValidModelName("") {
@@ -86,12 +87,12 @@ func TestModelCatalog_TheFourModels(t *testing.T) {
 // (1-4 CPUs, 2-8 GiB), so the dashboard names it for them; Qwen3 (12-14
 // GiB) fits none, and the dashboard shows "No hardware profile".
 func TestModelCatalog_DefaultProfileHoldsAllButQwen3(t *testing.T) {
-	var def hardwareProfileObject
+	var def serving.HardwareProfileObject
 	if err := json.Unmarshal([]byte(hwProfile("default-profile", "4", "8Gi", "")), &def); err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range modelCatalog {
-		why := def.fits(m)
+	for _, m := range serving.ModelCatalog {
+		why := def.Fits(m)
 		if fits := why == ""; fits != (m.Name != "qwen3-1-7b") {
 			t.Errorf("%s (%s CPUs, %s-%s): fits the default profile = %v (%s)", m.Name, m.CPU, m.MemoryRequest, m.Memory, fits, why)
 		}
@@ -101,13 +102,13 @@ func TestModelCatalog_DefaultProfileHoldsAllButQwen3(t *testing.T) {
 // Every catalog model has a path, and nothing else does: the RBAC rules
 // name exactly the catalog (deploy/template.yaml).
 func TestToolModelPath_IsExactlyTheCatalog(t *testing.T) {
-	for _, m := range modelCatalog {
-		if p, ok := toolModelPath("proj", m.Name); !ok || p != testModelsBase+m.Name {
+	for _, m := range serving.ModelCatalog {
+		if p, ok := serving.ToolModelPath("proj", m.Name); !ok || p != testModelsBase+m.Name {
 			t.Errorf("%s: %q %v", m.Name, p, ok)
 		}
 	}
 	for _, name := range []string{"", "other", "qwen25"} {
-		if _, ok := toolModelPath("proj", name); ok {
+		if _, ok := serving.ToolModelPath("proj", name); ok {
 			t.Errorf("%q has a path", name)
 		}
 	}
@@ -118,8 +119,8 @@ func TestToolModelPath_IsExactlyTheCatalog(t *testing.T) {
 // description, and a storage-initializer that skips the repository's files
 // vLLM does not load.
 func TestModelManifest_UsesTheEntrysSettings(t *testing.T) {
-	for _, entry := range modelCatalog {
-		obj := modelManifest("proj", entry, testPresetName, imagePlan{Kind: "preset"}, hardwareProfile{}, false, false, exposurePlan{exposure: exposureDefault})
+	for _, entry := range serving.ModelCatalog {
+		obj := serving.ModelManifest("proj", entry, testPresetName, serving.ImagePlan{Kind: "preset"}, serving.HardwareProfile{}, false, false, serving.ExposurePlan{Exposure: serving.ExposureDefault})
 		meta := obj["metadata"].(map[string]any)
 		if meta["name"] != entry.Name {
 			t.Errorf("%s: name %v", entry.Name, meta["name"])
@@ -140,7 +141,7 @@ func TestModelManifest_UsesTheEntrysSettings(t *testing.T) {
 		tmpl := spec["template"].(map[string]any)
 		main := tmpl["containers"].([]any)[0].(map[string]any)
 		env := envOf(main)
-		if env["OMP_NUM_THREADS"] != entry.threads || env["VLLM_CPU_KVCACHE_SPACE"] != entry.kvCacheGiB || env["VLLM_ADDITIONAL_ARGS"] != entry.Args {
+		if env["OMP_NUM_THREADS"] != entry.Threads || env["VLLM_CPU_KVCACHE_SPACE"] != entry.KVCacheGiB || env["VLLM_ADDITIONAL_ARGS"] != entry.Args {
 			t.Errorf("%s: env %v", entry.Name, env)
 		}
 		res, _ := json.Marshal(main["resources"])
@@ -190,13 +191,13 @@ func TestModelCatalog_Qwen3ArgumentsSurviveThePresetsEval(t *testing.T) {
 		}
 		return strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
 	}
-	entry, _ := catalogEntry("qwen3-1-7b")
+	entry, _ := serving.CatalogEntry("qwen3-1-7b")
 	want := []string{"serve", "--max-model-len", "4096", "--enable-auto-tool-choice", "--tool-call-parser", "hermes", "--reasoning-parser", "qwen3",
 		"--default-chat-template-kwargs", `{"enable_thinking":false}`, "--port", "8000"}
 	if got := eval(entry.Args); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("arguments\n got %q\nwant %q", got, want)
 	}
-	for _, m := range modelCatalog {
+	for _, m := range serving.ModelCatalog {
 		if words, parts := len(eval(m.Args))-3, len(strings.Split(m.Args, " ")); words != parts {
 			t.Errorf("%s: %d shell words but %d space-separated parts, so the dashboard's Edit would split an argument: %s", m.Name, words, parts, m.Args)
 		}
@@ -223,8 +224,8 @@ func TestModelsSetup_TheChosenModel(t *testing.T) {
 	}
 	model := mc.f.get(testModelsBase + "qwen3-1-7b")
 	ann := model["metadata"].(map[string]any)["annotations"].(map[string]any)
-	if ann[hardwareProfileNameAnnotation] != "large" {
-		t.Errorf("hardware profile %v", ann[hardwareProfileNameAnnotation])
+	if ann[serving.HardwareProfileNameAnnotation] != "large" {
+		t.Errorf("hardware profile %v", ann[serving.HardwareProfileNameAnnotation])
 	}
 	main := model["spec"].(map[string]any)["template"].(map[string]any)["containers"].([]any)[0].(map[string]any)
 	if r, _ := json.Marshal(main["resources"]); string(r) != `{"limits":{"cpu":"4","memory":"14Gi"},"requests":{"cpu":"4","ephemeral-storage":"6.2G","memory":"12Gi"}}` {
@@ -274,7 +275,7 @@ func TestModels_SeveralModelsInAProject(t *testing.T) {
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Model: "smollm2-135m-instruct"}); !res.Success {
 		t.Fatalf("setup smollm2 again: %+v", res)
 	}
-	if res, _ := TeardownModels(mc.c, "proj"); !res.Success {
+	if res, _ := serving.TeardownModels(mc.c, "proj"); !res.Success {
 		t.Fatalf("clean-up teardown: %+v", res)
 	}
 	if mc.f.has(testModelPath) || mc.f.has(testModelsBase+"smollm2-135m-instruct") {
@@ -326,7 +327,7 @@ func TestValidateModelsRequest_UnknownModel(t *testing.T) {
 }
 
 // defaultEntry is the catalog model an empty Model sets up.
-func defaultEntry() catalogModel {
-	e, _ := catalogEntry("")
+func defaultEntry() serving.CatalogModel {
+	e, _ := serving.CatalogEntry("")
 	return e
 }

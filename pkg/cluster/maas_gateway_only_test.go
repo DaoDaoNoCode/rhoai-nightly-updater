@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -224,9 +225,9 @@ func TestMaaSPublish_FromAnEarlierBuildsPublicationGoesThroughTheDefaultFirst(t 
 	if got := routeParents(t, mc); got != "maas-default-gateway,openshift-ai-inference" {
 		t.Fatalf("legacy route = %s", got)
 	}
-	rec, _ := readMaaSRecord(mc.c)
+	rec, _ := serving.ReadMaaSRecord(mc.c)
 	rec.Published = []string{"proj"}
-	if err := writeMaaSRecord(mc.c, rec); err != nil {
+	if err := serving.WriteMaaSRecord(mc.c, rec); err != nil {
 		t.Fatal(err)
 	}
 	var mu sync.Mutex
@@ -392,9 +393,9 @@ func TestMaaSUnpublish_RouteThatNeverLeavesMaaSIsPartlyPublished(t *testing.T) {
 // route is on both gateways.
 func TestMaaSStatus_AnEarlierBuildsPublicationIsPartlyPublished(t *testing.T) {
 	mc := publishedMaaSCluster(t)
-	rec, _ := readMaaSRecord(mc.c)
+	rec, _ := serving.ReadMaaSRecord(mc.c)
 	rec.ModelRefs = nil
-	if err := writeMaaSRecord(mc.c, rec); err != nil {
+	if err := serving.WriteMaaSRecord(mc.c, rec); err != nil {
 		t.Fatal(err)
 	}
 	setModelRefs(mc, []any{tMaaSGatewayRef, tInferenceGatewayRef})
@@ -466,13 +467,13 @@ func TestMaaSStatus_SomeoneAddedAGatewayToTheSecondModel(t *testing.T) {
 // commands instead of the direct address, which answers 404 meanwhile.
 func TestModelState_SaysWhenTheModelRoutesThroughMaaS(t *testing.T) {
 	mc := modelReadyForMaaS(t)
-	model, _, _ := readToolModel(mc.c, "proj", "qwen25-05b-instruct")
-	if raw, _ := json.Marshal(modelState(mc.c, model, false, modelsRecord{})); strings.Contains(string(raw), "maasPublished") {
+	model, _, _ := serving.ReadToolModel(mc.c, "proj", "qwen25-05b-instruct")
+	if raw, _ := json.Marshal(serving.ModelState(mc.c, model, false, serving.ModelsRecord{})); strings.Contains(string(raw), "maasPublished") {
 		t.Fatalf("unpublished model state = %s", raw)
 	}
 	setModelRefs(mc, []any{tMaaSGatewayRef})
-	model, _, _ = readToolModel(mc.c, "proj", "qwen25-05b-instruct")
-	if raw, _ := json.Marshal(modelState(mc.c, model, false, modelsRecord{})); !strings.Contains(string(raw), `"maasPublished":true`) {
+	model, _, _ = serving.ReadToolModel(mc.c, "proj", "qwen25-05b-instruct")
+	if raw, _ := json.Marshal(serving.ModelState(mc.c, model, false, serving.ModelsRecord{})); !strings.Contains(string(raw), `"maasPublished":true`) {
 		t.Fatalf("published model state = %s", raw)
 	}
 }

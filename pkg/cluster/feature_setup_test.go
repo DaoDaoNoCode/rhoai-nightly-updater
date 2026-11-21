@@ -11,6 +11,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -113,9 +114,9 @@ func (pc *prereqCluster) kserveChecks() {
 	status := ensureMap(obj, "status")
 	conds, _ := status["conditions"].([]any)
 	if pc.depMissing == "" {
-		status["conditions"] = setFakeCondition(conds, llmDependenciesCondition, "True", "")
+		status["conditions"] = setFakeCondition(conds, serving.LLMDependenciesCondition, "True", "")
 	} else {
-		status["conditions"] = setFakeCondition(conds, llmDependenciesCondition, "False", pc.depMissing)
+		status["conditions"] = setFakeCondition(conds, serving.LLMDependenciesCondition, "False", pc.depMissing)
 	}
 }
 
@@ -508,7 +509,7 @@ func TestOperatorObjects_OwnNamespaceGroup(t *testing.T) {
 	if targets, _ := spec["targetNamespaces"].([]any); len(targets) != 1 || targets[0] != "openshift-lws-operator" {
 		t.Fatalf("group = %v", group)
 	}
-	if p := operatorPlanPrefix(&envkit.OperatorInstallPlan{Op: op, GroupMissing: true}); !strings.Contains(p, "OperatorGroup openshift-lws-operator/leader-worker-set") {
+	if p := serving.OperatorPlanPrefix(&envkit.OperatorInstallPlan{Op: op, GroupMissing: true}); !strings.Contains(p, "OperatorGroup openshift-lws-operator/leader-worker-set") {
 		t.Fatalf("prefix = %q", p)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -12,11 +13,11 @@ import (
 // (pkg/utils/storage.go AddModelMount; StorageInitializerConfig
 // ModelVolumeSource nil).
 func TestModelCatalog_EphemeralStorageIsAboutOneAndAHalfTheDownload(t *testing.T) {
-	for _, m := range modelCatalog {
-		dl, ok1 := parseQuantity(strings.NewReplacer(" GB", "G", " MB", "M").Replace(m.DownloadSize))
-		eph, ok2 := parseQuantity(m.ephemeralStorage)
+	for _, m := range serving.ModelCatalog {
+		dl, ok1 := serving.ParseQuantity(strings.NewReplacer(" GB", "G", " MB", "M").Replace(m.DownloadSize))
+		eph, ok2 := serving.ParseQuantity(m.EphemeralStorage)
 		if !ok1 || !ok2 || eph < 1.4*dl || eph > 1.6*dl {
-			t.Errorf("%s: ephemeral %q for a %s download", m.Name, m.ephemeralStorage, m.DownloadSize)
+			t.Errorf("%s: ephemeral %q for a %s download", m.Name, m.EphemeralStorage, m.DownloadSize)
 		}
 	}
 }
@@ -83,13 +84,13 @@ func TestModelsSetup_WarnsWhenTheProjectQuotaHasNoRoom(t *testing.T) {
 
 // A node without the ephemeral storage the model asks for has no room.
 func TestModelsRoom_CountsEphemeralStorage(t *testing.T) {
-	entry, _ := catalogEntry("qwen3-1-7b")
-	free := map[string]*nodeRoom{"w1": {cpu: 8, mem: 32 << 30, eph: 5e9, ephKnown: true}}
-	if w := roomWarning(entry, free); !strings.Contains(w, "ephemeral storage") {
+	entry, _ := serving.CatalogEntry("qwen3-1-7b")
+	free := map[string]*serving.NodeRoom{"w1": {CPU: 8, Mem: 32 << 30, Eph: 5e9, EphKnown: true}}
+	if w := serving.RoomWarning(entry, free); !strings.Contains(w, "ephemeral storage") {
 		t.Errorf("warning %q", w)
 	}
-	free["w1"].eph = 10e9
-	if w := roomWarning(entry, free); w != "" {
+	free["w1"].Eph = 10e9
+	if w := serving.RoomWarning(entry, free); w != "" {
 		t.Errorf("warning %q", w)
 	}
 }

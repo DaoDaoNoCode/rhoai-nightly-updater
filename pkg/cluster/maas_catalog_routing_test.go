@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -61,9 +62,9 @@ func routeParentsOf(t *testing.T, mc *modelsCluster, name string) string {
 // routes of the three chat models (the ones it publishes), never the
 // embedding model's.
 func TestModelRoutePath_IsEachChatModelsOwnRoute(t *testing.T) {
-	for _, m := range modelCatalog {
-		path, ok := modelRoutePath("proj", m.Name)
-		if m.Type != modelTypeChat {
+	for _, m := range serving.ModelCatalog {
+		path, ok := serving.ModelRoutePath("proj", m.Name)
+		if m.Type != serving.ModelTypeChat {
 			if ok {
 				t.Errorf("%s (not published) has a route path %s", m.Name, path)
 			}
@@ -157,22 +158,22 @@ func TestMaaSUnpublish_SomeoneAddedAGatewayToOneModelOnly(t *testing.T) {
 // and no other model of the project takes them.
 func TestMaaSRecord_AProjectOnlyEntryIsTheDefaultModels(t *testing.T) {
 	mc := publishedMaaSCluster(t)
-	rec, err := readMaaSRecord(mc.c)
+	rec, err := serving.ReadMaaSRecord(mc.c)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec.Published = []string{"proj"}
-	rec.ModelRefs = map[string]maasModelRefs{"proj": {Refs: gatewayRefs{{"name": "team-gateway", "namespace": "team"}}}}
-	if err := writeMaaSRecord(mc.c, rec); err != nil {
+	rec.ModelRefs = map[string]serving.MaaSModelRefs{"proj": {Refs: serving.GatewayRefs{{"name": "team-gateway", "namespace": "team"}}}}
+	if err := serving.WriteMaaSRecord(mc.c, rec); err != nil {
 		t.Fatal(err)
 	}
-	if rec, _ = readMaaSRecord(mc.c); strings.Join(rec.Published, " ") != "proj/qwen25-05b-instruct" {
+	if rec, _ = serving.ReadMaaSRecord(mc.c); strings.Join(rec.Published, " ") != "proj/qwen25-05b-instruct" {
 		t.Fatalf("published = %v", rec.Published)
 	}
-	if refs, ok := rec.modelRefs("proj", "qwen25-05b-instruct"); !ok || refs.Refs.String() != "team/team-gateway" {
+	if refs, ok := rec.ModelRefsOf("proj", "qwen25-05b-instruct"); !ok || refs.Refs.String() != "team/team-gateway" {
 		t.Fatalf("qwen25 refs = %v, %v", refs, ok)
 	}
-	if _, ok := rec.modelRefs("proj", "smollm2-135m-instruct"); ok {
+	if _, ok := rec.ModelRefsOf("proj", "smollm2-135m-instruct"); ok {
 		t.Fatal("smollm2 took the project's refs")
 	}
 	if st, _ := GetMaaSStatus(mc.c); len(st.Items) != 1 || st.Items[0].Partly || st.Items[0].Message != "Published" {

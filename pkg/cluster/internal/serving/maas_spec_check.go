@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"fmt"
@@ -6,51 +6,53 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
-// modelSpecExpectation is what the spec of the tool's model must hold for
+// ModelSpecExpectation is what the spec of the tool's model must hold for
 // publish to offer it to every signed-in user: the catalog entry's
-// manifest (modelManifest), with the preset and the images it may run
+// manifest (ModelManifest), with the preset and the images it may run
 // decided now. Anyone who may edit the project can change the model before
 // a cluster-admin publishes it (another image, model URI, preset, command
 // or environment), so publish compares the content that decides what runs
 // and refuses a difference. Who wrote a field does not matter: KServe's
 // own defaulting (field manager "manager") owns parts of every model's
 // template, so an ownership check would refuse them all (live, RHOAI 3.6).
-type modelSpecExpectation struct {
-	entry  catalogModel
+type ModelSpecExpectation struct {
+	entry  CatalogModel
 	preset string
-	// presetRepo is the preset image's repository: a model on the released
-	// image runs a digest of it (planModelImage).
-	presetRepo string
-	// override is VLLM_CPU_IMAGE, when set.
-	override string
+	// PresetRepo is the preset image's repository: a model on the released
+	// image runs a digest of it (PlanModelImage).
+	PresetRepo string
+	// Override is VLLM_CPU_IMAGE, when set.
+	Override string
 }
 
 // planModelSpecExpectation reads what the expectation needs: the cluster's
 // CPU preset. It returns a refusal, or "".
-func planModelSpecExpectation(c *Client, name string) (modelSpecExpectation, string) {
-	entry, ok := catalogEntry(name)
+func planModelSpecExpectation(c *kube.Client, name string) (ModelSpecExpectation, string) {
+	entry, ok := CatalogEntry(name)
 	if !ok {
-		return modelSpecExpectation{}, fmt.Sprintf("%s is not a model of this tool's catalog.", name)
+		return ModelSpecExpectation{}, fmt.Sprintf("%s is not a model of this tool's catalog.", name)
 	}
 	preset := discoverCPUPreset(c)
 	if preset.problem != "" {
-		return modelSpecExpectation{}, "Cannot tell what the model should run, so it is not published: " + preset.problem
+		return ModelSpecExpectation{}, "Cannot tell what the model should run, so it is not published: " + preset.problem
 	}
-	return modelSpecExpectation{entry: entry, preset: preset.name, presetRepo: imageRepository(preset.image), override: strings.TrimSpace(os.Getenv(vllmImageEnv))}, ""
+	return ModelSpecExpectation{entry: entry, preset: preset.name, PresetRepo: ImageRepository(preset.image), Override: strings.TrimSpace(os.Getenv(VLLMImageEnv))}, ""
 }
 
-// imageAllowed: the main container may run the preset's image (none set),
+// ImageAllowed: the main container may run the preset's image (none set),
 // VLLM_CPU_IMAGE's, or a Red Hat release of the preset's repository pinned
 // by digest (what "Use the newest released Red Hat image" sets).
-func (e modelSpecExpectation) imageAllowed(img string) bool {
+func (e ModelSpecExpectation) ImageAllowed(img string) bool {
 	switch {
 	case img == "":
 		return true
-	case e.override != "" && img == e.override:
+	case e.Override != "" && img == e.Override:
 		return true
-	case strings.HasPrefix(e.presetRepo, redHatRegistry) && strings.HasPrefix(img, e.presetRepo+"@sha256:"):
+	case strings.HasPrefix(e.PresetRepo, redHatRegistry) && strings.HasPrefix(img, e.PresetRepo+"@sha256:"):
 		return true
 	}
 	return false
@@ -63,7 +65,7 @@ var modelSpecTopKeys = map[string]bool{"baseRefs": true, "model": true, "replica
 // differences lists the spec fields that differ from the expectation, by
 // path, sorted. Resources are not compared (KServe defaults some of them,
 // and they change nothing about what runs).
-func (e modelSpecExpectation) differences(spec map[string]any) []string {
+func (e ModelSpecExpectation) differences(spec map[string]any) []string {
 	var out []string
 	add := func(path string) { out = append(out, path) }
 	for k := range spec {
@@ -87,9 +89,9 @@ func (e modelSpecExpectation) differences(spec map[string]any) []string {
 			add("spec.template." + k)
 		}
 	}
-	mainEnv := []envVar{{"OMP_NUM_THREADS", e.entry.threads}, {"VLLM_CPU_KVCACHE_SPACE", e.entry.kvCacheGiB}, {"VLLM_ADDITIONAL_ARGS", e.entry.Args}}
+	mainEnv := []envVar{{"OMP_NUM_THREADS", e.entry.Threads}, {"VLLM_CPU_KVCACHE_SPACE", e.entry.KVCacheGiB}, {"VLLM_ADDITIONAL_ARGS", e.entry.Args}}
 	initEnv := []envVar{{"STORAGE_IGNORE_PATTERNS", storageIgnorePatterns}}
-	out = append(out, containerDifferences("spec.template.containers", tmpl["containers"], "main", mainEnv, e.imageAllowed)...)
+	out = append(out, containerDifferences("spec.template.containers", tmpl["containers"], "main", mainEnv, e.ImageAllowed)...)
 	out = append(out, containerDifferences("spec.template.initContainers", tmpl["initContainers"], "storage-initializer", initEnv, func(img string) bool { return img == "" })...)
 	sort.Strings(out)
 	return out

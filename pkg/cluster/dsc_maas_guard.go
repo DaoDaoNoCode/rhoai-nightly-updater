@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -65,40 +66,34 @@ func (u maasUse) text() string {
 	return strings.Join(parts, "; ")
 }
 
-// setUpByTool: the record says this tool set MaaS up, or published a model,
-// and has not removed it (Clean up MaaS clears each of these as it goes).
-func (r maasRecord) setUpByTool() bool {
-	return r.DSCChanged || r.AIGatewayChanged || len(r.Published) > 0 || r.DBNamespace != "" || r.Database != "" || r.InfraNamespace != "" || r.POCCredsUID != ""
-}
-
 // readMaaSUse reads what uses MaaS with the MaaS tab's readers: this tool's
 // record (snapshot ConfigMap, key maas) and, when the MaaS API is served,
 // the MaaSModelRefs, MaaSSubscriptions and MaaSAuthPolicies at the version
-// discovery reports (listMaaSObjects). Any read that fails is returned,
+// discovery reports (serving.ListMaaSObjects). Any read that fails is returned,
 // a 404 on a list of a served group included.
 func readMaaSUse(c *Client) (maasUse, error) {
 	var u maasUse
-	rec, err := readMaaSRecord(c)
+	rec, err := serving.ReadMaaSRecord(c)
 	if err != nil {
 		return u, err
 	}
-	u.setUp = rec.setUpByTool()
+	u.setUp = rec.SetUpByTool()
 	models := map[string]bool{}
-	for _, p := range rec.pubs() {
-		models[p.key()] = true
+	for _, p := range rec.Pubs() {
+		models[p.Key()] = true
 	}
-	objs, err := listMaaSObjects(c)
+	objs, err := serving.ListMaaSObjects(c)
 	if err != nil {
 		return u, err
 	}
 	for _, o := range objs {
-		name := o.meta.Namespace + "/" + o.meta.Name
-		if o.meta.Terminating() {
+		name := o.Meta.Namespace + "/" + o.Meta.Name
+		if o.Meta.Terminating() {
 			name += " (being deleted)"
 		}
-		switch o.kind {
+		switch o.Kind {
 		case "MaaSModelRef":
-			delete(models, o.meta.Namespace+"/"+o.meta.Name)
+			delete(models, o.Meta.Namespace+"/"+o.Meta.Name)
 			u.models = append(u.models, name)
 		case "MaaSSubscription":
 			u.subscriptions = append(u.subscriptions, name)

@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"encoding/json"
@@ -30,7 +30,7 @@ var (
 // the node's age ("" when it is not young or cannot be read). The node is
 // read by name with the list this app already has on nodes (a field
 // selector, no get rule).
-func modelPullGrace(c *Client, node string) (time.Duration, string) {
+func modelPullGrace(c *kube.Client, node string) (time.Duration, string) {
 	if node == "" {
 		return ModelImagePullGrace, ""
 	}

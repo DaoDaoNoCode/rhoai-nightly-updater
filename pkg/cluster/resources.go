@@ -13,6 +13,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -37,12 +38,12 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		foreignNS   bool
 		dsc         rhoai.DSCRead
 		dscErr      error
-		models      []llmisvcObject
+		models      []serving.LLMISvcObject
 		modelsErr   error
 		status      = &types.ResourcesStatus{}
 	)
 	wg.Add(8)
-	go func() { defer wg.Done(); models, modelsErr = listLLMInferenceServices(c) }()
+	go func() { defer wg.Done(); models, modelsErr = serving.ListLLMInferenceServices(c) }()
 	go func() { defer wg.Done(); projects, projectsErr = envkit.DSProjects(c) }()
 	go func() { defer wg.Done(); dspas, dspasErr = storage.ListDSPAs(c, "") }()
 	go func() { defer wg.Done(); status.MinIO, s3EP, s3EPErr = storage.S3StatusAndEndpoints(c) }()
@@ -81,8 +82,14 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	// catalog's models in the visible projects.
 	var mwg sync.WaitGroup
 	mwg.Add(2)
-	go func() { defer mwg.Done(); status.InferenceGateway = getInferenceGatewayStatus(c, models, modelsErr) }()
-	go func() { defer mwg.Done(); status.Models = getModelsStatus(c, dsc, dscErr, models, modelsErr, visible) }()
+	go func() {
+		defer mwg.Done()
+		status.InferenceGateway = serving.InferenceGatewayStatus(c, models, modelsErr)
+	}()
+	go func() {
+		defer mwg.Done()
+		status.Models = serving.ModelsStatus(c, dsc, dscErr, models, modelsErr, visible)
+	}()
 	mwg.Wait()
 
 	// A record that cannot be read leaves every pipeline server unrecorded

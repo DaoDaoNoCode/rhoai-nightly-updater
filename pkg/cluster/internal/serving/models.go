@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"encoding/json"
@@ -40,9 +40,9 @@ const (
 	cpuPresetSuffix = "config-llm-template-cpu"
 	// The image annotations record which image a model runs when this tool
 	// set one (no annotation: the preset's own).
-	modelImageSourceAnnotation  = "rhoai-nightly-updater/runtime-image-source"
-	modelImageVersionAnnotation = "rhoai-nightly-updater/runtime-image-version"
-	llmDependenciesCondition    = "KserveLLMInferenceServiceDependencies"
+	ModelImageSourceAnnotation  = "rhoai-nightly-updater/runtime-image-source"
+	ModelImageVersionAnnotation = "rhoai-nightly-updater/runtime-image-version"
+	LLMDependenciesCondition    = "KserveLLMInferenceServiceDependencies"
 	// modelPodComponent is the label KServe puts on a model's workload pods
 	// (with app.kubernetes.io/name=<model>); the dashboard selects them so.
 	modelPodComponent = "llminferenceservice-workload"
@@ -60,31 +60,31 @@ var (
 	ModelDeletePoll    = 2 * time.Second
 )
 
-var errLLMISvcAPIMissing = errors.New("the LLMInferenceService API (serving.kserve.io) is not installed")
+var ErrLLMISvcAPIMissing = errors.New("the LLMInferenceService API (serving.kserve.io) is not installed")
 
-// catalogModel is a model the Models feature sets up: what it is, and the
+// CatalogModel is a model the Models feature sets up: what it is, and the
 // resources it needs on CPU. CatalogModel.Args is VLLM_ADDITIONAL_ARGS.
-type catalogModel struct {
+type CatalogModel struct {
 	types.CatalogModel
-	// threads is OMP_NUM_THREADS, the CPU count.
-	threads string
-	// kvCacheGiB is VLLM_CPU_KVCACHE_SPACE: vLLM on CPU reserves this
+	// Threads is OMP_NUM_THREADS, the CPU count.
+	Threads string
+	// KVCacheGiB is VLLM_CPU_KVCACHE_SPACE: vLLM on CPU reserves this
 	// much memory for its KV cache when it starts, whatever the load.
-	kvCacheGiB string
-	// ephemeralStorage is the main container's ephemeral-storage request,
+	KVCacheGiB string
+	// EphemeralStorage is the main container's ephemeral-storage request,
 	// about 1.5 times DownloadSize: with KServe's default model volume the
 	// storage-initializer downloads into an emptyDir on the node's disk
 	// (models_storage.go).
-	ephemeralStorage string
+	EphemeralStorage string
 }
 
 // The catalog's model types.
 const (
-	modelTypeChat      = "chat"
-	modelTypeEmbedding = "embedding"
+	ModelTypeChat      = "chat"
+	ModelTypeEmbedding = "embedding"
 )
 
-// modelCatalog: small models that run on CPU, ungated on Hugging Face,
+// ModelCatalog: small models that run on CPU, ungated on Hugging Face,
 // Apache-2.0, safetensors weights and no custom code, each pinned to a
 // commit in KServe's hf://<org>/<repo>:<revision> form (kserve rhoai-3.6
 // python/storage/kserve_storage/kserve_storage.py _download_hf:
@@ -115,38 +115,38 @@ const (
 //
 // DownloadSize is what the storage-initializer fetches at the pinned
 // commit with storageIgnorePatterns applied (Hugging Face API file sizes).
-var modelCatalog = []catalogModel{
+var ModelCatalog = []CatalogModel{
 	{
 		Name: "smollm2-135m-instruct", DisplayName: "SmolLM2 135M Instruct (CPU)", URI: "hf://HuggingFaceTB/SmolLM2-135M-Instruct:12fd25f77366fa6b3b4b768ec3050bf629380bac",
-		CPU: "2", MemoryRequest: "4Gi", Memory: "5Gi", Type: modelTypeChat, UseCase: "Chat (smoke test)", DownloadSize: "270 MB",
+		CPU: "2", MemoryRequest: "4Gi", Memory: "5Gi", Type: ModelTypeChat, UseCase: "Chat (smoke test)", DownloadSize: "270 MB",
 		Description: "A very small chat model, for checking that model serving works. From Hugging Face (HuggingFaceTB/SmolLM2-135M-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
 		Args:        "--max-model-len 4096",
-		threads:     "2", kvCacheGiB: "1", ephemeralStorage: "400M",
+		Threads:     "2", KVCacheGiB: "1", EphemeralStorage: "400M",
 	},
 	{
 		Name: "qwen25-05b-instruct", DisplayName: "Qwen2.5 0.5B Instruct (CPU)", URI: "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775",
-		CPU: "4", MemoryRequest: "6Gi", Memory: "8Gi", Type: modelTypeChat, UseCase: "Chat", DownloadSize: "1.0 GB", Default: true,
+		CPU: "4", MemoryRequest: "6Gi", Memory: "8Gi", Type: ModelTypeChat, UseCase: "Chat", DownloadSize: "1.0 GB", Default: true,
 		Description: "A small chat model. From Hugging Face (Qwen/Qwen2.5-0.5B-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
 		Args:        "--max-model-len 4096",
-		threads:     "4", kvCacheGiB: "2", ephemeralStorage: "1.5G",
+		Threads:     "4", KVCacheGiB: "2", EphemeralStorage: "1.5G",
 	},
 	{
 		// Thinking is off by default (the user's choice); a request turns
 		// it on with chat_template_kwargs {"enable_thinking": true}.
 		Name: "qwen3-1-7b", DisplayName: "Qwen3 1.7B (CPU, tool calling)", URI: "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
-		CPU: "4", MemoryRequest: "12Gi", Memory: "14Gi", Type: modelTypeChat, ToolCalling: true, UseCase: "Chat, Tool calling, Reasoning", DownloadSize: "4.1 GB",
+		CPU: "4", MemoryRequest: "12Gi", Memory: "14Gi", Type: ModelTypeChat, ToolCalling: true, UseCase: "Chat, Tool calling, Reasoning", DownloadSize: "4.1 GB",
 		Description: "A chat model that can call tools; its reasoning (thinking) is off unless a request turns it on. From Hugging Face (Qwen/Qwen3-1.7B), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
 		Args:        `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'`,
-		threads:     "4", kvCacheGiB: "2", ephemeralStorage: "6.2G",
+		Threads:     "4", KVCacheGiB: "2", EphemeralStorage: "6.2G",
 	},
 	{
 		// A RobertaModel, which vLLM serves as an embedding model with the
 		// pooling runner (vLLM 0.24 removed --task); 512 positions.
 		Name: "granite-embedding-125m-english", DisplayName: "Granite Embedding 125M English (CPU)", URI: "hf://ibm-granite/granite-embedding-125m-english:4ab61ffd423be45cd932b21a7c696063d82bf45f",
-		CPU: "2", MemoryRequest: "3Gi", Memory: "4Gi", Type: modelTypeEmbedding, EmbeddingDimension: 768, UseCase: "Embeddings, Semantic search", DownloadSize: "250 MB",
+		CPU: "2", MemoryRequest: "3Gi", Memory: "4Gi", Type: ModelTypeEmbedding, EmbeddingDimension: 768, UseCase: "Embeddings, Semantic search", DownloadSize: "250 MB",
 		Description: "An English embedding model (768 dimensions) for semantic search. From Hugging Face (ibm-granite/granite-embedding-125m-english), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
 		Args:        "--runner pooling --max-model-len 512",
-		threads:     "2", kvCacheGiB: "1", ephemeralStorage: "375M",
+		Threads:     "2", KVCacheGiB: "1", EphemeralStorage: "375M",
 	},
 }
 
@@ -161,26 +161,26 @@ var modelCatalog = []catalogModel{
 // user-provided env vars into storage-initializer for hf:// URI").
 const storageIgnorePatterns = `["onnx/*","*.onnx","*.bin","*.pt"]`
 
-// catalogEntry is the catalog model of that name; "" is the default.
-func catalogEntry(name string) (catalogModel, bool) {
-	for _, m := range modelCatalog {
+// CatalogEntry is the catalog model of that name; "" is the default.
+func CatalogEntry(name string) (CatalogModel, bool) {
+	for _, m := range ModelCatalog {
 		if m.Name == name || (name == "" && m.Default) {
 			return m, true
 		}
 	}
-	return catalogModel{}, false
+	return CatalogModel{}, false
 }
 
 // ValidModelName reports whether name is a catalog model ("" is the default).
 func ValidModelName(name string) bool {
-	_, ok := catalogEntry(name)
+	_, ok := CatalogEntry(name)
 	return ok
 }
 
-// toolModelPath returns the path of a catalog model in project; only the
+// ToolModelPath returns the path of a catalog model in project; only the
 // catalog's names, written out so the RBAC rules (resourceNames) can be
 // checked against them (rbac_coverage_test.go).
-func toolModelPath(project, name string) (string, bool) {
+func ToolModelPath(project, name string) (string, bool) {
 	switch name {
 	case "smollm2-135m-instruct":
 		return rhoai.NamespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, "smollm2-135m-instruct"), true
@@ -194,7 +194,7 @@ func toolModelPath(project, name string) (string, bool) {
 	return "", false
 }
 
-type llmisvcObject struct {
+type LLMISvcObject struct {
 	Metadata kube.ObjectMeta `json:"metadata"`
 	Spec     struct {
 		Model struct {
@@ -233,7 +233,7 @@ type llmisvcObject struct {
 // default gateway (def) is the inference gateway, or it refers to the
 // inference gateway. With the default unknown, {} counts: teardown then
 // refuses, which is the safe side.
-func (m llmisvcObject) routesThroughInferenceGateway(def kserveGateway) bool {
+func (m LLMISvcObject) routesThroughInferenceGateway(def KServeGateway) bool {
 	if m.Spec.Router == nil || m.Spec.Router.Gateway == nil {
 		return false
 	}
@@ -249,7 +249,7 @@ func (m llmisvcObject) routesThroughInferenceGateway(def kserveGateway) bool {
 	return false
 }
 
-func (m llmisvcObject) mainImage() string {
+func (m LLMISvcObject) mainImage() string {
 	if m.Spec.Template == nil {
 		return ""
 	}
@@ -261,9 +261,9 @@ func (m llmisvcObject) mainImage() string {
 	return ""
 }
 
-func listLLMInferenceServices(c *Client) ([]llmisvcObject, error) {
+func ListLLMInferenceServices(c *kube.Client) ([]LLMISvcObject, error) {
 	var list struct {
-		Items []llmisvcObject `json:"items"`
+		Items []LLMISvcObject `json:"items"`
 	}
 	found, err := c.GetIntoOptional(rhoai.ClusterPath("serving.kserve.io/v1alpha2", "llminferenceservices", ""), &list)
 	if err != nil {
@@ -273,26 +273,26 @@ func listLLMInferenceServices(c *Client) ([]llmisvcObject, error) {
 		return nil, fmt.Errorf("list LLMInferenceServices: %w", err)
 	}
 	if !found {
-		return nil, errLLMISvcAPIMissing
+		return nil, ErrLLMISvcAPIMissing
 	}
 	return list.Items, nil
 }
 
-func readToolModel(c *Client, project, name string) (llmisvcObject, bool, error) {
-	path, ok := toolModelPath(project, name)
+func ReadToolModel(c *kube.Client, project, name string) (LLMISvcObject, bool, error) {
+	path, ok := ToolModelPath(project, name)
 	if !ok {
-		return llmisvcObject{}, false, fmt.Errorf("%s is not a model of this tool's catalog", name)
+		return LLMISvcObject{}, false, fmt.Errorf("%s is not a model of this tool's catalog", name)
 	}
-	var m llmisvcObject
+	var m LLMISvcObject
 	found, err := c.GetIntoOptional(path, &m)
 	if err != nil {
 		if kube.IsDecodeError(err) {
-			return llmisvcObject{}, false, fmt.Errorf("parse LLMInferenceService %s/%s: %w", project, name, err)
+			return LLMISvcObject{}, false, fmt.Errorf("parse LLMInferenceService %s/%s: %w", project, name, err)
 		}
-		return llmisvcObject{}, false, err
+		return LLMISvcObject{}, false, err
 	}
 	if !found {
-		return llmisvcObject{}, false, nil
+		return LLMISvcObject{}, false, nil
 	}
 	return m, true, nil
 }
@@ -301,7 +301,7 @@ func modelPodSelector(name string) string {
 	return "app.kubernetes.io/name=" + name + ",app.kubernetes.io/component=" + modelPodComponent
 }
 
-// manifestUnknown reports an image pull that failed because the registry
+// ManifestUnknown reports an image pull that failed because the registry
 // does not have the image (a nightly build's preset image is not
 // published), as opposed to a credential or network problem. A pull through
 // an image mirror names every source it tried: registry.redhat.io answers
@@ -310,7 +310,7 @@ func modelPodSelector(name string) string {
 // exist and the node only lacks the pull secret (a node that just joined
 // gets it a few minutes later on ROSA HCP, seen live); that is a pull
 // failure to wait on, not a missing image.
-func manifestUnknown(msg string) bool {
+func ManifestUnknown(msg string) bool {
 	m := strings.ToLower(msg)
 	if !strings.Contains(m, "manifest unknown") && !strings.Contains(m, "manifest_unknown") {
 		return false
@@ -325,7 +325,7 @@ func manifestUnknown(msg string) bool {
 
 // manifestUnknownMentioned: some source of the pull answered that the image
 // does not exist, though another may have refused the credentials (which
-// manifestUnknown waits on). Once that pull has failed for the whole grace
+// ManifestUnknown waits on). Once that pull has failed for the whole grace
 // window, the image may be missing after all, so the released image is
 // offered again, worded as a possibility.
 func manifestUnknownMentioned(msg string) bool {
@@ -340,16 +340,16 @@ func olderThan(meta kube.ObjectMeta, d time.Duration) bool {
 	return err == nil && time.Since(t) > d
 }
 
-// modelState reports one model. inspect reads its pods when it is not
+// ModelState reports one model. inspect reads its pods when it is not
 // ready. rec is the tool's record of its models (nil: it could not be
 // read, so no model counts as the tool's).
-func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) types.ModelState {
+func ModelState(c *kube.Client, m LLMISvcObject, inspect bool, rec ModelsRecord) types.ModelState {
 	s := types.ModelState{Deployed: true, Namespace: m.Metadata.Namespace, Name: m.Metadata.Name}
-	s.ManagedByTool = rec.owns(m.Metadata)
-	if s.ManagedByTool && rec[modelRecordKey(m.Metadata.Namespace, m.Metadata.Name)].TokenSecretUID != "" {
+	s.ManagedByTool = rec.Owns(m.Metadata)
+	if s.ManagedByTool && rec[ModelRecordKey(m.Metadata.Namespace, m.Metadata.Name)].TokenSecretUID != "" {
 		s.TokenSecret, s.TokenServiceAccount = tokenSecretName(m.Metadata.Name), tokenSAName(m.Metadata.Name)
 	}
-	s.TokenAuthOff = m.Metadata.Annotations[enableAuthAnnot] == "false"
+	s.TokenAuthOff = m.Metadata.Annotations[EnableAuthAnnot] == "false"
 	s.Terminating = m.Metadata.Terminating()
 	s.DisplayName = m.Metadata.Annotations["openshift.io/display-name"]
 	if m.Status.URL != "" {
@@ -359,12 +359,12 @@ func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) type
 			s.Warning = kube.UnsafeAddressWarning("model address")
 		}
 	}
-	s.MaaSPublished = modelHasMaaSRef(m)
+	s.MaaSPublished = ModelHasMaaSRef(m)
 	s.CurrentImage = m.mainImage()
-	s.ImageKind = kube.FirstNonEmpty(m.Metadata.Annotations[modelImageSourceAnnotation], "preset")
-	s.ImageVersion = m.Metadata.Annotations[modelImageVersionAnnotation]
-	if name := m.Metadata.Annotations[hardwareProfileNameAnnotation]; name != "" {
-		s.HardwareProfile = m.Metadata.Annotations[hardwareProfileNamespaceAnnotation] + "/" + name
+	s.ImageKind = kube.FirstNonEmpty(m.Metadata.Annotations[ModelImageSourceAnnotation], "preset")
+	s.ImageVersion = m.Metadata.Annotations[ModelImageVersionAnnotation]
+	if name := m.Metadata.Annotations[HardwareProfileNameAnnotation]; name != "" {
+		s.HardwareProfile = m.Metadata.Annotations[HardwareProfileNamespaceAnnotation] + "/" + name
 	}
 	switch {
 	case rec == nil:
@@ -400,7 +400,7 @@ func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) type
 			envkit.ApplyPodIssue(&s.ResourceState, issue)
 			if s.ImageKind == "preset" && (issue.Reason == "ErrImagePull" || issue.Reason == "ImagePullBackOff") {
 				switch {
-				case manifestUnknown(issue.Message):
+				case ManifestUnknown(issue.Message):
 					s.PresetImageMissing = true
 					s.TerminalError = true
 				case manifestUnknownMentioned(issue.Message) && olderThan(m.Metadata, ModelImagePullGraceYoungNode):
@@ -413,27 +413,27 @@ func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) type
 	return s
 }
 
-// modelItems are the catalog's models in the visible projects.
-func modelItems(c *Client, models []llmisvcObject, visible map[string]bool, rec modelsRecord) []types.ModelState {
+// ModelItems are the catalog's models in the visible projects.
+func ModelItems(c *kube.Client, models []LLMISvcObject, visible map[string]bool, rec ModelsRecord) []types.ModelState {
 	var out []types.ModelState
 	def, _ := readKServeGateway(c)
 	auth := map[string]string{}
 	// The MaaS record, read once for the first model of this tool: which
 	// models were set up through MaaS only (unreadable: none is said to be).
-	var maas *maasRecord
+	var maas *MaaSRecord
 	maasErr := false
 	for _, m := range models {
 		if !visible[m.Metadata.Namespace] {
 			continue
 		}
-		if _, ok := toolModelPath(m.Metadata.Namespace, m.Metadata.Name); !ok {
+		if _, ok := ToolModelPath(m.Metadata.Namespace, m.Metadata.Name); !ok {
 			continue
 		}
-		s := modelState(c, m, true, rec)
-		addModelRouting(c, &s, m, def, auth)
+		s := ModelState(c, m, true, rec)
+		AddModelRouting(c, &s, m, def, auth)
 		if s.ManagedByTool {
 			if maas == nil {
-				r, err := readMaaSRecord(c)
+				r, err := ReadMaaSRecord(c)
 				if err != nil {
 					slog.Debug("cannot read the MaaS record for the models", "error", err)
 					maasErr = true
@@ -441,7 +441,7 @@ func modelItems(c *Client, models []llmisvcObject, visible map[string]bool, rec 
 				maas = &r
 			}
 			if !maasErr {
-				refs, ok := maas.routeBefore(m.Metadata.Namespace, m.Metadata.Name, modelGatewayRefsOf(m))
+				refs, ok := maas.RouteBefore(m.Metadata.Namespace, m.Metadata.Name, modelGatewayRefsOf(m))
 				s.MaaSOnlySetup = ok && refs.NoRoute
 			}
 		}
@@ -456,8 +456,8 @@ func modelItems(c *Client, models []llmisvcObject, visible map[string]bool, rec 
 	return out
 }
 
-// kserveComponent is the DataScienceCluster component that serves models.
-var kserveComponent = envkit.FeatureComponent{Feature: "Model serving (KServe)", Keys: []string{"kserve"}}
+// KServeComponent is the DataScienceCluster component that serves models.
+var KServeComponent = envkit.FeatureComponent{Feature: "Model serving (KServe)", Keys: []string{"kserve"}}
 
 // llmDependencies reads the DataScienceCluster condition that says whether
 // LLMInferenceService's dependencies are met: "True", "False" or "" (not
@@ -467,7 +467,7 @@ func llmDependencies(dsc map[string]any) (string, string) {
 	conds, _ := status["conditions"].([]any)
 	for _, raw := range conds {
 		cond, _ := raw.(map[string]any)
-		if t, _ := cond["type"].(string); t != llmDependenciesCondition {
+		if t, _ := cond["type"].(string); t != LLMDependenciesCondition {
 			continue
 		}
 		s, _ := cond["status"].(string)
@@ -480,11 +480,11 @@ func llmDependencies(dsc map[string]any) (string, string) {
 	return "", ""
 }
 
-// modelsBlock says why no model can be set up from the DataScienceCluster:
+// ModelsBlock says why no model can be set up from the DataScienceCluster:
 // KServe is not turned on, or its LLMInferenceService dependencies are
 // reported missing. Not reported is not a block.
-func modelsBlock(dsc rhoai.DSCRead) (*types.ComponentBlock, string) {
-	if block := envkit.ComponentBlock(dsc, kserveComponent); block != nil {
+func ModelsBlock(dsc rhoai.DSCRead) (*types.ComponentBlock, string) {
+	if block := envkit.ComponentBlock(dsc, KServeComponent); block != nil {
 		return block, ""
 	}
 	deps, msg := llmDependencies(dsc.Object)
@@ -498,7 +498,7 @@ func modelsBlock(dsc rhoai.DSCRead) (*types.ComponentBlock, string) {
 		meta, _ := dsc.Object["metadata"].(map[string]any)
 		name, _ := meta["name"].(string)
 		return &types.ComponentBlock{Component: "kserve",
-			Reason: fmt.Sprintf("KServe cannot serve LLMInferenceServices yet: DataScienceCluster %s reports %s=False (%s). A cluster-admin installs what it names; the Components page shows the details.", name, llmDependenciesCondition, kube.FirstNonEmpty(msg, "no message"))}, deps
+			Reason: fmt.Sprintf("KServe cannot serve LLMInferenceServices yet: DataScienceCluster %s reports %s=False (%s). A cluster-admin installs what it names; the Components page shows the details.", name, LLMDependenciesCondition, kube.FirstNonEmpty(msg, "no message"))}, deps
 	}
 	return nil, deps
 }
@@ -514,7 +514,7 @@ type cpuPreset struct {
 // followed by config-llm-template-cpu, in the applications namespace, and
 // its main container's image. An unknown applications namespace is a
 // problem: the preset cannot be found then.
-func discoverCPUPreset(c *Client) cpuPreset {
+func discoverCPUPreset(c *kube.Client) cpuPreset {
 	ns, err := rhoai.AppsNamespace(c)
 	if err != nil {
 		return cpuPreset{problem: fmt.Sprintf("Cannot tell which namespace RHOAI's applications (KServe's controller and presets) run in: %v.", err)}
@@ -592,7 +592,7 @@ func discoverCPUPreset(c *Client) cpuPreset {
 	return p
 }
 
-// modelManifest is the LLMInferenceService setup applies.
+// ModelManifest is the LLMInferenceService setup applies.
 //
 // published: the model is published to MaaS, which took it out of Gen AI
 // studio's AI assets (maas_genai.go), so the genai label and annotation
@@ -601,7 +601,7 @@ func discoverCPUPreset(c *Client) cpuPreset {
 // exp is how the model is reached (models_exposure.go): its spec.router,
 // and token authentication turned off for an internal-only model while
 // Connectivity Link is missing.
-func modelManifest(project string, entry catalogModel, preset string, img imagePlan, hw hardwareProfile, published, ephemeral bool, exp exposurePlan) map[string]any {
+func ModelManifest(project string, entry CatalogModel, preset string, img ImagePlan, hw HardwareProfile, published, ephemeral bool, exp ExposurePlan) map[string]any {
 	annotations := map[string]any{
 		// The dashboard's llmd deploy wizard writes these three
 		// (odh-dashboard rhoai-3.6 packages/llmd-serving deploy.ts
@@ -620,8 +620,8 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 	main := map[string]any{
 		"name": "main",
 		"env": []any{
-			map[string]any{"name": "OMP_NUM_THREADS", "value": entry.threads},
-			map[string]any{"name": "VLLM_CPU_KVCACHE_SPACE", "value": entry.kvCacheGiB},
+			map[string]any{"name": "OMP_NUM_THREADS", "value": entry.Threads},
+			map[string]any{"name": "VLLM_CPU_KVCACHE_SPACE", "value": entry.KVCacheGiB},
 			map[string]any{"name": "VLLM_ADDITIONAL_ARGS", "value": entry.Args},
 		},
 		"resources": map[string]any{
@@ -629,24 +629,24 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 			"limits":   map[string]any{"cpu": entry.CPU, "memory": entry.Memory},
 		},
 	}
-	if ephemeral && entry.ephemeralStorage != "" {
+	if ephemeral && entry.EphemeralStorage != "" {
 		// The download's emptyDir is on the node's disk (models_storage.go):
 		// a request, no limit, so the scheduler counts it and nothing is
 		// evicted for it.
-		main["resources"].(map[string]any)["requests"].(map[string]any)["ephemeral-storage"] = entry.ephemeralStorage
+		main["resources"].(map[string]any)["requests"].(map[string]any)["ephemeral-storage"] = entry.EphemeralStorage
 	}
 	if hw.Name != "" {
 		// As the dashboard's deploy wizard records the profile
 		// (applyHardwareProfileConfig): its Deployments page then names it.
-		annotations[hardwareProfileNameAnnotation] = hw.Name
-		annotations[hardwareProfileNamespaceAnnotation] = hw.Namespace
-		annotations[hardwareProfileVersionAnnotation] = hw.ResourceVersion
+		annotations[HardwareProfileNameAnnotation] = hw.Name
+		annotations[HardwareProfileNamespaceAnnotation] = hw.Namespace
+		annotations[HardwareProfileVersionAnnotation] = hw.ResourceVersion
 	}
 	if img.Image != "" {
 		main["image"] = img.Image
-		annotations[modelImageSourceAnnotation] = img.Kind
+		annotations[ModelImageSourceAnnotation] = img.Kind
 		if img.Version != "" {
-			annotations[modelImageVersionAnnotation] = img.Version
+			annotations[ModelImageVersionAnnotation] = img.Version
 		}
 	}
 	labels := map[string]any{
@@ -656,10 +656,10 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 	}
 	if published {
 		delete(labels, genAIAssetLabel)
-		delete(annotations, genAIUseCaseAnnotation)
+		delete(annotations, GenAIUseCaseAnnotation)
 	}
 	if exp.authOff {
-		annotations[enableAuthAnnot] = "false"
+		annotations[EnableAuthAnnot] = "false"
 	}
 	spec := map[string]any{
 		"baseRefs": []any{map[string]any{"name": preset}},
@@ -695,10 +695,10 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 	}
 }
 
-// projectNamespace reads a project for a model: it must exist, not be
+// ProjectNamespace reads a project for a model: it must exist, not be
 // going away, and be a data science project (the dashboard lists models
 // only there). It returns a refusal, or "".
-func projectNamespace(c *Client, project string) (map[string]string, string, string) {
+func ProjectNamespace(c *kube.Client, project string) (map[string]string, string, string) {
 	var ns struct {
 		Metadata kube.ObjectMeta `json:"metadata"`
 		Status   struct {
@@ -726,8 +726,8 @@ func projectNamespace(c *Client, project string) (map[string]string, string, str
 
 // modelsRun is one streamed Models operation.
 type modelsRun struct {
-	c        *Client
-	emit     func(UpdateStepEvent)
+	c        *kube.Client
+	emit     func(types.UpdateStepEvent)
 	logs     []string
 	activity string
 	target   string
@@ -736,7 +736,7 @@ type modelsRun struct {
 func (m *modelsRun) step(id, status, msg string) {
 	m.logs = append(m.logs, msg)
 	if m.emit != nil {
-		m.emit(UpdateStepEvent{Step: id, Status: status, Message: msg})
+		m.emit(types.UpdateStepEvent{Step: id, Status: status, Message: msg})
 	}
 }
 
@@ -744,17 +744,17 @@ func (m *modelsRun) step(id, status, msg string) {
 // publish or unpublish) as this one's step id, without logging them: the
 // inner run's own Logs, appended once it ends, hold them and its other
 // lines. Its failure is not streamed; the caller fails step id with it.
-func (m *modelsRun) innerSteps(id string) func(UpdateStepEvent) {
-	return func(e UpdateStepEvent) {
+func (m *modelsRun) innerSteps(id string) func(types.UpdateStepEvent) {
+	return func(e types.UpdateStepEvent) {
 		if e.Status != "failed" && m.emit != nil {
-			m.emit(UpdateStepEvent{Step: id, Status: "running", Message: e.Message})
+			m.emit(types.UpdateStepEvent{Step: id, Status: "running", Message: e.Message})
 		}
 	}
 }
 
 func (m *modelsRun) fail(id, msg, code, activity string) (*types.OperationResponse, error) {
 	if m.emit != nil {
-		m.emit(UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: code})
+		m.emit(types.UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: code})
 	}
 	m.logs = append(m.logs, msg)
 	slog.Warn("models operation stopped", "step", id, "reason", activity, "user", kube.GetUser(m.c))
@@ -770,7 +770,7 @@ func ValidateModelsRequest(req types.ModelsRequest) string {
 		if req.Project == "" || req.Gateway || req.ReleasedImage || req.Exposure != "" || req.GatewayRef != "" || req.Model != "" {
 			return req.Action + " takes a project only"
 		}
-		if !playgroundProjectRegex.MatchString(req.Project) {
+		if !ProjectNameRegex.MatchString(req.Project) {
 			return "a valid project is required"
 		}
 		return ""
@@ -800,16 +800,16 @@ func ValidateModelsRequest(req types.ModelsRequest) string {
 	if req.Exposure != "" && (req.Action != "setup" || req.Project == "") {
 		return "exposure needs a model setup"
 	}
-	if (req.Exposure == exposureGateway) != (req.GatewayRef != "") {
+	if (req.Exposure == ExposureGateway) != (req.GatewayRef != "") {
 		return "gatewayRef goes with exposure gateway, as namespace/name"
 	}
 	if req.GatewayRef != "" {
 		ns, name, ok := strings.Cut(req.GatewayRef, "/")
-		if !ok || !playgroundProjectRegex.MatchString(ns) || !gatewayNameRegex.MatchString(name) {
+		if !ok || !ProjectNameRegex.MatchString(ns) || !gatewayNameRegex.MatchString(name) {
 			return "gatewayRef must be namespace/name"
 		}
 	}
-	if req.Gateway && req.Exposure != "" && req.Exposure != exposureDefault {
+	if req.Gateway && req.Exposure != "" && req.Exposure != ExposureDefault {
 		return "the inference gateway set up with a model is its default route: set it up on its own for another exposure"
 	}
 	return ""
@@ -823,12 +823,12 @@ func ValidateModelsRequest(req types.ModelsRequest) string {
 // through MaaS only), "model", then "gateway";
 // check "callable". Setup checks everything it writes, and dry-runs every
 // write, before it writes anything.
-func RunModels(c *Client, req types.ModelsRequest, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
+func RunModels(c *kube.Client, req types.ModelsRequest, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	var parts []string
 	if req.Action == "allow" || req.Action == "disallow" {
 		parts = append(parts, fmt.Sprintf("project %s on the inference gateway", req.Project))
 	} else if req.Project != "" {
-		entry, _ := catalogEntry(req.Model)
+		entry, _ := CatalogEntry(req.Model)
 		parts = append(parts, fmt.Sprintf("model %s in %s", kube.FirstNonEmpty(entry.Name, req.Model), req.Project))
 	}
 	if req.Gateway {
@@ -840,7 +840,7 @@ func RunModels(c *Client, req types.ModelsRequest, onStep func(UpdateStepEvent))
 	}
 	// Projects of MaaS publications that are gone leave the MaaS gateway
 	// (maas_prune.go).
-	m.logs = append(m.logs, releaseGoneMaaSProjects(c)...)
+	m.logs = append(m.logs, ReleaseGoneMaaSProjects(c)...)
 	switch req.Action {
 	case "teardown":
 		return m.teardown(req)
@@ -871,20 +871,20 @@ func RunModels(c *Client, req types.ModelsRequest, onStep func(UpdateStepEvent))
 // model, on step "callable".
 func (m *modelsRun) check(req types.ModelsRequest) (*types.OperationResponse, error) {
 	c := m.c
-	entry, _ := catalogEntry(req.Model)
+	entry, _ := CatalogEntry(req.Model)
 	m.step("callable", "running", fmt.Sprintf("Calling %s in %s once...", entry.Name, req.Project))
-	model, found, err := readToolModel(c, req.Project, entry.Name)
+	model, found, err := ReadToolModel(c, req.Project, entry.Name)
 	if err != nil {
 		return m.fail("callable", fmt.Sprintf("Cannot read %s in %s: %v.", entry.Name, req.Project, err), kube.ErrorCodeFromK8sErr(err), "model read failed")
 	}
-	rec, err := readModelsRecord(c)
+	rec, err := ReadModelsRecord(c)
 	if err != nil {
 		return m.fail("callable", err.Error(), kube.ErrorCodeFromK8sErr(err), "record read failed")
 	}
 	switch {
 	case !found:
 		return m.fail("callable", fmt.Sprintf("Project %s has no %s.", req.Project, entry.Name), "validation", "no model")
-	case !rec.owns(model.Metadata):
+	case !rec.Owns(model.Metadata):
 		return m.fail("callable", fmt.Sprintf("%s in %s was not created by this tool, so this tool has no token of the model's own to call it with.", entry.Name, req.Project), "not_managed", "model foreign")
 	}
 	if cond, ok := kube.FindCondition(model.Status.Conditions, "Ready"); !ok || cond.Status != "True" {
@@ -895,7 +895,7 @@ func (m *modelsRun) check(req types.ModelsRequest) (*types.OperationResponse, er
 
 // callable runs the check and reports it on step "callable": a model that
 // does not answer fails the operation (it stays set up).
-func (m *modelsRun) callable(project, name string, rec modelsRecord) (*types.OperationResponse, error) {
+func (m *modelsRun) callable(project, name string, rec ModelsRecord) (*types.OperationResponse, error) {
 	check := checkModelCall(m.c, project, name, rec, func(line string) { m.step("callable", "running", line) })
 	switch {
 	case check.OK:
@@ -916,7 +916,7 @@ func (m *modelsRun) callable(project, name string, rec modelsRecord) (*types.Ope
 func (m *modelsRun) allow(project string) (*types.OperationResponse, error) {
 	c := m.c
 	m.step("check", "running", fmt.Sprintf("Checking the inference gateway and project %s...", project))
-	if _, msg, code := projectNamespace(c, project); msg != "" {
+	if _, msg, code := ProjectNamespace(c, project); msg != "" {
 		return m.fail("check", msg+" Nothing was changed.", code, "project check failed")
 	}
 	gw, found, err := readInferenceGateway(c)
@@ -962,7 +962,7 @@ func (m *modelsRun) allow(project string) (*types.OperationResponse, error) {
 func (m *modelsRun) teardown(req types.ModelsRequest) (*types.OperationResponse, error) {
 	var done []string
 	if req.Project != "" {
-		entry, _ := catalogEntry(req.Model)
+		entry, _ := CatalogEntry(req.Model)
 		if res, err := m.unpublishMaaSOnly(req.Project, entry.Name); res != nil || err != nil {
 			return res, err
 		}
@@ -971,7 +971,7 @@ func (m *modelsRun) teardown(req types.ModelsRequest) (*types.OperationResponse,
 		m.logs = append(m.logs, res.Logs...)
 		if !res.Success {
 			if m.emit != nil {
-				m.emit(UpdateStepEvent{Step: "model", Status: "failed", Message: res.Message, ErrorCode: res.ErrorCode})
+				m.emit(types.UpdateStepEvent{Step: "model", Status: "failed", Message: res.Message, ErrorCode: res.ErrorCode})
 			}
 			return &types.OperationResponse{Success: false, Message: res.Message, Logs: m.logs, ErrorCode: res.ErrorCode}, nil
 		}
@@ -984,7 +984,7 @@ func (m *modelsRun) teardown(req types.ModelsRequest) (*types.OperationResponse,
 		m.logs = append(m.logs, res.Logs...)
 		if !res.Success {
 			if m.emit != nil {
-				m.emit(UpdateStepEvent{Step: "gateway", Status: "failed", Message: res.Message, ErrorCode: res.ErrorCode})
+				m.emit(types.UpdateStepEvent{Step: "gateway", Status: "failed", Message: res.Message, ErrorCode: res.ErrorCode})
 			}
 			msg := res.Message
 			if len(done) > 0 {
@@ -1014,8 +1014,8 @@ func (m *modelsRun) unpublishMaaSOnly(project, name string) (*types.OperationRes
 		return nil, nil
 	}
 	m.step("unpublish", "running", "The model is reached through MaaS only, so it is unpublished first...")
-	pub := &maasRun{c: m.c, activity: "unpublish-maas", target: fmt.Sprintf("model %s in %s", name, project)}
-	pub.emit = m.innerSteps("unpublish")
+	pub := &Run{Client: m.c, Activity: "unpublish-maas", Target: fmt.Sprintf("model %s in %s", name, project)}
+	pub.Emit = m.innerSteps("unpublish")
 	res, err := pub.unpublish(project, name, true)
 	if err != nil {
 		return nil, err
@@ -1030,16 +1030,16 @@ func (m *modelsRun) unpublishMaaSOnly(project, name string) (*types.OperationRes
 
 // modelPlan is what a model setup will write, decided before any write.
 type modelPlan struct {
-	entry    catalogModel
+	entry    CatalogModel
 	project  string
 	preset   string
-	image    imagePlan
-	hardware hardwareProfile
+	image    ImagePlan
+	hardware HardwareProfile
 	obj      map[string]any
 	current  kube.ObjectMeta
 	found    bool
 	// rec is the tool's record of its models, as read by the plan.
-	rec modelsRecord
+	rec ModelsRecord
 	// token is which token-authentication objects are missing (models_token.go).
 	token tokenPlan
 	// ephemeral: the model requests ephemeral storage for its download.
@@ -1048,7 +1048,7 @@ type modelPlan struct {
 	// is published to MaaS already (or routed through its gateway); publish:
 	// the setup publishes it (a model reached through MaaS with no recorded
 	// publication).
-	exp       exposurePlan
+	exp       ExposurePlan
 	published bool
 	publish   bool
 }
@@ -1130,7 +1130,7 @@ func (m *modelsRun) setupCheck(req types.ModelsRequest, s *modelsSetup) (*types.
 				allow = nil // planModel checked that it admits the project
 			}
 		}
-		if warning := modelCapacityWarning(c, mp.entry, mp.project); warning != "" {
+		if warning := ModelCapacityWarning(c, mp.entry, mp.project); warning != "" {
 			notes = append(notes, warning+" It may stay pending until a node is added or other workloads stop; the setup still runs.")
 		}
 		if warning := quotaWarning(c, mp.project, mp.entry, mp.ephemeral); warning != "" {
@@ -1192,7 +1192,7 @@ func (m *modelsRun) setupGateway(req types.ModelsRequest, s *modelsSetup) (*type
 			if pending != "" {
 				why = " The gateway controller says: " + kube.TruncateText(pending, 300) + "."
 			}
-			m.step("gateway-ready", "success", fmt.Sprintf("Created, but not programmed after %s. It may still come up; the Models tab shows its state.%s", clockText(InferenceGatewayReadyTimeout), why))
+			m.step("gateway-ready", "success", fmt.Sprintf("Created, but not programmed after %s. It may still come up; the Models tab shows its state.%s", ClockText(InferenceGatewayReadyTimeout), why))
 		case dns == "published":
 			m.step("gateway-ready", "success", fmt.Sprintf("Ready: https://%s is published in DNS.", gw.host))
 		default:
@@ -1266,9 +1266,9 @@ func (m *modelsRun) setupModelReady(s *modelsSetup) (*types.OperationResponse, e
 	case !res.ready && res.pulling != "":
 		// The wait ended while a failing pull was still in its grace
 		// window: what to check is not lost.
-		return m.fail("model-ready", fmt.Sprintf("Created, but not ready after %s: its image pull is still failing. %s It stays set up; it starts once the pull succeeds.", clockText(timeout), res.pulling), "not_ready", "image pull failing")
+		return m.fail("model-ready", fmt.Sprintf("Created, but not ready after %s: its image pull is still failing. %s It stays set up; it starts once the pull succeeds.", ClockText(timeout), res.pulling), "not_ready", "image pull failing")
 	case !res.ready:
-		m.step("model-ready", "success", fmt.Sprintf("Created, but not ready after %s. It may still start; the Models tab shows its state and the reason if it cannot.", clockText(timeout)))
+		m.step("model-ready", "success", fmt.Sprintf("Created, but not ready after %s. It may still start; the Models tab shows its state and the reason if it cannot.", ClockText(timeout)))
 		m.step("callable", "success", "Not checked: the model is not ready yet. Check again on the Models tab once it is.")
 		s.summary = append(s.summary, fmt.Sprintf("The model in %s is still starting.", mp.project))
 	default:
@@ -1279,7 +1279,7 @@ func (m *modelsRun) setupModelReady(s *modelsSetup) (*types.OperationResponse, e
 		// reached tells whether a caller gets an answer.
 		m.step("callable", "running", "Calling the model once, as a user would...")
 		// The record as written by this setup (the token's UID).
-		rec, err := readModelsRecord(c)
+		rec, err := ReadModelsRecord(c)
 		if err != nil {
 			rec = mp.rec
 		}
@@ -1298,18 +1298,18 @@ func (m *modelsRun) setupModelReady(s *modelsSetup) (*types.OperationResponse, e
 // model of that name, and the image. It returns a refusal, or "".
 func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelPlan, string, string) {
 	c := m.c
-	entry, _ := catalogEntry(req.Model)
-	labels, msg, code := projectNamespace(c, req.Project)
+	entry, _ := CatalogEntry(req.Model)
+	labels, msg, code := ProjectNamespace(c, req.Project)
 	if msg != "" {
 		return nil, msg + " Nothing was changed.", code
 	}
 	if dsc, err := rhoai.ReadFirstDSC(c); err == nil {
-		block, deps := modelsBlock(dsc)
+		block, deps := ModelsBlock(dsc)
 		if block != nil {
 			return nil, block.Reason + " Nothing was changed.", "prerequisites"
 		}
 		if deps == "" {
-			m.step("check", "running", fmt.Sprintf("The DataScienceCluster does not report %s; continuing (unknown is not a failure).", llmDependenciesCondition))
+			m.step("check", "running", fmt.Sprintf("The DataScienceCluster does not report %s; continuing (unknown is not a failure).", LLMDependenciesCondition))
 		}
 	}
 	if v := rhoai.ServedVersions(c, llmisvcGroup, nil); v.Discovered && !slices.Contains(v.Versions, "v1alpha2") {
@@ -1320,15 +1320,15 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 		return nil, preset.problem + " Nothing was changed.", "prerequisites"
 	}
 
-	existing, found, err := readToolModel(c, req.Project, entry.Name)
+	existing, found, err := ReadToolModel(c, req.Project, entry.Name)
 	if err != nil {
 		return nil, fmt.Sprintf("Cannot read LLMInferenceService %s/%s: %v. Nothing was changed.%s", req.Project, entry.Name, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
 	}
-	rec, err := readModelsRecord(c)
+	rec, err := ReadModelsRecord(c)
 	if err != nil {
 		return nil, err.Error() + " Nothing was changed.", kube.ErrorCodeFromK8sErr(err)
 	}
-	if found && !rec.owns(existing.Metadata) {
+	if found && !rec.Owns(existing.Metadata) {
 		return nil, fmt.Sprintf("Project %s already has an LLMInferenceService named %s that this tool did not create. It was left unchanged.", req.Project, entry.Name), "not_managed"
 	}
 	if found && existing.Metadata.Terminating() {
@@ -1338,11 +1338,11 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	if msg != "" {
 		return nil, msg, code
 	}
-	var prev *llmisvcObject
+	var prev *LLMISvcObject
 	if found {
 		prev = &existing
 	}
-	img, err := planModelImage(c, preset.image, req.ReleasedImage, prev, true)
+	img, err := PlanModelImage(c, preset.image, req.ReleasedImage, prev, true)
 	if err != nil {
 		return nil, err.Error() + " Nothing was changed.", "prerequisites"
 	}
@@ -1353,11 +1353,11 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	if found {
 		modelUID = existing.Metadata.UID
 	}
-	tok, msg, code := planModelToken(c, req.Project, entry.Name, modelUID, rec[modelRecordKey(req.Project, entry.Name)].TokenSecretUID)
+	tok, msg, code := planModelToken(c, req.Project, entry.Name, modelUID, rec[ModelRecordKey(req.Project, entry.Name)].TokenSecretUID)
 	if msg != "" {
 		return nil, msg, code
 	}
-	published, publish := false, exp.exposure == exposureMaaS
+	published, publish := false, exp.Exposure == ExposureMaaS
 	if found {
 		if published, err = MaaSPublishedIn(c, req.Project, entry.Name); err != nil {
 			return nil, fmt.Sprintf("Cannot check whether %s in %s is published to MaaS: %v. Nothing was changed.", entry.Name, req.Project, err), kube.ErrorCodeFromK8sErr(err)
@@ -1366,11 +1366,11 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 		// publication is recorded: its publish, part of its setup, stopped
 		// before it recorded one (the model is on the MaaS gateway alone).
 		if publish && published {
-			maasRec, err := readMaaSRecord(c)
+			maasRec, err := ReadMaaSRecord(c)
 			if err != nil {
 				return nil, fmt.Sprintf("Cannot check whether %s in %s is published to MaaS: %v. Nothing was changed.", entry.Name, req.Project, err), kube.ErrorCodeFromK8sErr(err)
 			}
-			publish = !maasRec.published(req.Project, entry.Name)
+			publish = !maasRec.IsPublished(req.Project, entry.Name)
 		}
 	}
 	ephemeral := modelVolumeIsEmptyDir(c)
@@ -1381,22 +1381,22 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 		m.step("check", "running", "Hardware profile: none, because "+why+`. The dashboard's Deployments table then shows "No hardware profile" for the model, and its details "Hardware profile: Unknown"; the model runs as set up.`)
 	}
 	return &modelPlan{entry: entry, project: req.Project, preset: preset.name, image: img, hardware: hw,
-		obj: modelManifest(req.Project, entry, preset.name, img, hw, published, ephemeral, exp), current: existing.Metadata, found: found, rec: rec, token: tok, ephemeral: ephemeral,
+		obj: ModelManifest(req.Project, entry, preset.name, img, hw, published, ephemeral, exp), current: existing.Metadata, found: found, rec: rec, token: tok, ephemeral: ephemeral,
 		exp: exp, published: published, publish: publish}, "", ""
 }
 
 // applyModel writes the model (a server-side dry run when dryRun).
 func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 	c := m.c
-	path, _ := toolModelPath(p.project, p.entry.Name)
+	path, _ := ToolModelPath(p.project, p.entry.Name)
 	createPath := envkit.WithToolFieldManager(rhoai.NamespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", p.project, ""))
 	project, name := p.project, p.entry.Name
 	read := func() (kube.ObjectMeta, bool, error) {
-		obj, found, err := readToolModel(c, project, name)
+		obj, found, err := ReadToolModel(c, project, name)
 		return obj.Metadata, found, err
 	}
 	desc := fmt.Sprintf("LLMInferenceService %s/%s", p.project, p.entry.Name)
-	action, meta, found, err := envkit.EnsureToolObject(c, desc, path, createPath, p.obj, p.current, p.found, read, p.rec.owns, dryRun)
+	action, meta, found, err := envkit.EnsureToolObject(c, desc, path, createPath, p.obj, p.current, p.found, read, p.rec.Owns, dryRun)
 	p.current, p.found = meta, found
 	if err == nil && action == "created" && !dryRun {
 		// Its UID is what makes it the tool's (models_record.go). A model
@@ -1407,7 +1407,7 @@ func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 			}
 			return fmt.Sprintf("%s was created, but this tool could not record it as its own (%v), so it was deleted again. Set up again to retry.", desc, recErr), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(recErr), "internal")
 		}
-		p.rec[modelRecordKey(meta.Namespace, meta.Name)] = recordedModel{UID: meta.UID}
+		p.rec[ModelRecordKey(meta.Namespace, meta.Name)] = RecordedModel{UID: meta.UID}
 	}
 	if err == nil {
 		return "", ""
@@ -1455,7 +1455,7 @@ func (m *modelsRun) applyToken(p *modelPlan) (string, string) {
 // when none is) that this tool created in project, and waits (bounded)
 // until KServe's finalizer has removed them, so the gateway they used can
 // go next. Models of the same name it did not create are left alone.
-func TeardownModels(c *Client, project string, names ...string) (*types.OperationResponse, error) {
+func TeardownModels(c *kube.Client, project string, names ...string) (*types.OperationResponse, error) {
 	logs := []string{}
 	detail := "project=" + project
 	if len(names) > 0 {
@@ -1465,8 +1465,8 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 		record.RecordAction(c, "teardown-model", fmt.Sprintf("%s (%s)", detail, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
-	var entries []catalogModel
-	for _, entry := range modelCatalog {
+	var entries []CatalogModel
+	for _, entry := range ModelCatalog {
 		if len(names) == 0 || slices.Contains(names, entry.Name) {
 			entries = append(entries, entry)
 		}
@@ -1480,7 +1480,7 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 			return fail(fmt.Sprintf("%s in %s is published to Models as a Service. Unpublish it on the MaaS tab first; nothing was deleted.", entry.Name, project), "in_use", "published to maas")
 		}
 	}
-	rec, err := readModelsRecord(c)
+	rec, err := ReadModelsRecord(c)
 	if err != nil {
 		return fail(err.Error()+" Nothing was deleted.", kube.ErrorCodeFromK8sErr(err), "record read failed")
 	}
@@ -1493,21 +1493,21 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 		}
 	}()
 	for _, entry := range entries {
-		model, found, err := readToolModel(c, project, entry.Name)
+		model, found, err := ReadToolModel(c, project, entry.Name)
 		if err != nil {
 			return fail(fmt.Sprintf("Cannot read LLMInferenceService %s/%s; nothing was deleted: %v.%s", project, entry.Name, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "read failed")
 		}
 		if !found {
-			forget = append(forget, modelRecordKey(project, entry.Name))
+			forget = append(forget, ModelRecordKey(project, entry.Name))
 			continue
 		}
-		if !rec.owns(model.Metadata) {
+		if !rec.Owns(model.Metadata) {
 			kept = append(kept, entry.Name)
 			continue
 		}
-		path, _ := toolModelPath(project, entry.Name)
+		path, _ := ToolModelPath(project, entry.Name)
 		if !model.Metadata.Terminating() {
-			logs = append(logs, deleteModelToken(c, project, entry.Name, model.Metadata.UID, rec[modelRecordKey(project, entry.Name)].TokenSecretUID)...)
+			logs = append(logs, deleteModelToken(c, project, entry.Name, model.Metadata.UID, rec[ModelRecordKey(project, entry.Name)].TokenSecretUID)...)
 			logs = append(logs, fmt.Sprintf("Deleting LLMInferenceService %s/%s...", project, entry.Name))
 			if _, err := kube.DeleteWithUID(c, path, model.Metadata.UID); err != nil && !kube.IsK8sNotFound(err) {
 				code := kube.ErrorCodeFromK8sErr(err)
@@ -1523,13 +1523,13 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 		}
 		if !gone {
 			note := ""
-			if latest, ok, err := readToolModel(c, project, entry.Name); err == nil && ok && len(latest.Metadata.Finalizers) > 0 {
+			if latest, ok, err := ReadToolModel(c, project, entry.Name); err == nil && ok && len(latest.Metadata.Finalizers) > 0 {
 				note = fmt.Sprintf(" It waits on %s %s, which KServe's LLMInferenceService controller removes once it has deleted the model's Deployment, Service and route; that controller must be running.", kube.Verb(len(latest.Metadata.Finalizers), "finalizer", "finalizers"), strings.Join(latest.Metadata.Finalizers, ", "))
 			}
-			return fail(fmt.Sprintf("The model %s/%s is still being deleted after %s.%s Delete again to check.", project, entry.Name, clockText(ModelDeleteTimeout), note), "in_progress", "still deleting")
+			return fail(fmt.Sprintf("The model %s/%s is still being deleted after %s.%s Delete again to check.", project, entry.Name, ClockText(ModelDeleteTimeout), note), "in_progress", "still deleting")
 		}
 		deleted = append(deleted, entry.Name)
-		forget = append(forget, modelRecordKey(project, entry.Name))
+		forget = append(forget, ModelRecordKey(project, entry.Name))
 		logs = append(logs, fmt.Sprintf("OK: LLMInferenceService %s/%s deleted", project, entry.Name))
 	}
 	if len(deleted) == 0 && len(kept) > 0 {
@@ -1550,14 +1550,14 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Model %s deleted from %s; KServe removed its Deployment, Service and route. The project stays.%s", strings.Join(deleted, ", "), project, note), Logs: logs}, nil
 }
 
-// clockText is a duration as m:ss.
-func clockText(d time.Duration) string {
+// ClockText is a duration as m:ss.
+func ClockText(d time.Duration) string {
 	s := max(int(d.Round(time.Second)/time.Second), 0)
 	return fmt.Sprintf("%d:%02d", s/60, s%60)
 }
 
-// modelPod is the part of a pod the model wait reads.
-type modelPod struct {
+// ModelPod is the part of a pod the model wait reads.
+type ModelPod struct {
 	Metadata kube.ObjectMeta `json:"metadata"`
 	Spec     struct {
 		NodeName   string               `json:"nodeName"`
@@ -1595,8 +1595,8 @@ type modelContainerStat struct {
 	} `json:"lastState"`
 }
 
-// modelEvent is the part of an event the model wait reads.
-type modelEvent struct {
+// ModelEvent is the part of an event the model wait reads.
+type ModelEvent struct {
 	Reason         string `json:"reason"`
 	Message        string `json:"message"`
 	Type           string `json:"type"`
@@ -1608,20 +1608,20 @@ type modelEvent struct {
 	} `json:"involvedObject"`
 }
 
-func (e modelEvent) when() string { return kube.FirstNonEmpty(e.LastTimestamp, e.EventTime) }
+func (e ModelEvent) when() string { return kube.FirstNonEmpty(e.LastTimestamp, e.EventTime) }
 
 // modelProgress describes where a starting model is, in words, from its
 // pods and their newest event: waiting for a node, pulling, downloading
 // the model, starting vLLM. problem is set when it cannot start without a
-// change (a pull that keeps failing, a crash loop); imageMissing when the
+// change (a pull that keeps failing, a crash loop); ImageMissing when the
 // registry does not have the image.
 type modelProgress struct {
-	message, problem string
-	imageMissing     bool
-	// pullFailure is an image pull that keeps failing for a reason other
+	Message, Problem string
+	ImageMissing     bool
+	// PullFailure is an image pull that keeps failing for a reason other
 	// than a missing image (credentials, network), in words; node is the
 	// pod's node. The wait gives it a grace window (modelPullGrace).
-	pullFailure, node string
+	PullFailure, Node string
 	// mentionsMissing: a source of that pull answered "manifest unknown"
 	// (manifestUnknownMentioned).
 	mentionsMissing bool
@@ -1630,18 +1630,18 @@ type modelProgress struct {
 // readModelProgress reads the progress of the model's pods of the current
 // revision (w.current): a pod of the previous one, still failing or still
 // serving during a change, says nothing about the change.
-func readModelProgress(c *Client, project, name string, w modelWorkload) (modelProgress, error) {
+func readModelProgress(c *kube.Client, project, name string, w modelWorkload) (modelProgress, error) {
 	body, _, err := c.Get(rhoai.NamespacedPath("v1", "pods", project, "") + "?labelSelector=" + url.QueryEscape(modelPodSelector(name)))
 	if err != nil {
 		return modelProgress{}, err
 	}
 	var pods struct {
-		Items []modelPod `json:"items"`
+		Items []ModelPod `json:"items"`
 	}
 	if err := json.Unmarshal(body, &pods); err != nil {
 		return modelProgress{}, fmt.Errorf("parse pod list: %w", err)
 	}
-	var current []modelPod
+	var current []ModelPod
 	names := map[string]bool{}
 	for _, p := range pods.Items {
 		if w.current(p) {
@@ -1649,11 +1649,11 @@ func readModelProgress(c *Client, project, name string, w modelWorkload) (modelP
 			names[p.Metadata.Name] = true
 		}
 	}
-	var newest *modelEvent
+	var newest *ModelEvent
 	if len(names) > 0 {
 		if body, _, err := c.Get(rhoai.NamespacedPath("v1", "events", project, "") + "?fieldSelector=" + url.QueryEscape("involvedObject.kind=Pod")); err == nil {
 			var events struct {
-				Items []modelEvent `json:"items"`
+				Items []ModelEvent `json:"items"`
 			}
 			if json.Unmarshal(body, &events) == nil {
 				for i, e := range events.Items {
@@ -1664,13 +1664,13 @@ func readModelProgress(c *Client, project, name string, w modelWorkload) (modelP
 			}
 		}
 	}
-	return describeModelPods(current, newest), nil
+	return DescribeModelPods(current, newest), nil
 }
 
-// describeModelPods turns pods and their newest event into progress. Every
+// DescribeModelPods turns pods and their newest event into progress. Every
 // live pod is judged: the first problem found is the result, else the
 // first pod's progress.
-func describeModelPods(pods []modelPod, newest *modelEvent) modelProgress {
+func DescribeModelPods(pods []ModelPod, newest *ModelEvent) modelProgress {
 	event := ""
 	if newest != nil && newest.Reason != "" {
 		event = fmt.Sprintf(" (%s: %s)", newest.Reason, kube.TruncateText(newest.Message, 300))
@@ -1680,8 +1680,8 @@ func describeModelPods(pods []modelPod, newest *modelEvent) modelProgress {
 		if p.Metadata.Terminating() {
 			continue
 		}
-		pr := describeModelPod(p, event)
-		if pr.problem != "" {
+		pr := DescribeModelPod(p, event)
+		if pr.Problem != "" {
 			return pr
 		}
 		if first == nil {
@@ -1689,29 +1689,29 @@ func describeModelPods(pods []modelPod, newest *modelEvent) modelProgress {
 		}
 	}
 	if first == nil {
-		return modelProgress{message: "Waiting for KServe to create the model's pod..." + event}
+		return modelProgress{Message: "Waiting for KServe to create the model's pod..." + event}
 	}
 	return *first
 }
 
-// describeModelPod is one live pod's progress; event is its newest event, in words.
-func describeModelPod(p modelPod, event string) modelProgress {
+// DescribeModelPod is one live pod's progress; event is its newest event, in words.
+func DescribeModelPod(p ModelPod, event string) modelProgress {
 	if cond, ok := kube.FindCondition(p.Status.Conditions, "PodScheduled"); ok && cond.Status == "False" {
-		return modelProgress{message: fmt.Sprintf("Waiting for a worker with room for the model: %s", kube.FirstNonEmpty(kube.TruncateText(cond.Message, 300), cond.Reason))}
+		return modelProgress{Message: fmt.Sprintf("Waiting for a worker with room for the model: %s", kube.FirstNonEmpty(kube.TruncateText(cond.Message, 300), cond.Reason))}
 	}
 	check := func(s modelContainerStat, init bool) (modelProgress, bool) {
 		if w := s.State.Waiting; w != nil {
 			switch w.Reason {
 			case "ErrImagePull", "ImagePullBackOff":
-				if manifestUnknown(w.Message) {
-					return modelProgress{problem: fmt.Sprintf("%s: %s", w.Reason, kube.TruncateText(w.Message, 300)), imageMissing: true}, true
+				if ManifestUnknown(w.Message) {
+					return modelProgress{Problem: fmt.Sprintf("%s: %s", w.Reason, kube.TruncateText(w.Message, 300)), ImageMissing: true}, true
 				}
 				// Credentials can reach a new node a few minutes after it
 				// joins (ROSA HCP, seen live): the wait gives it time.
 				return modelProgress{
-					message:         fmt.Sprintf("Pulling the image of %s failed (%s: %s); the node keeps retrying.", s.Name, w.Reason, kube.TruncateText(w.Message, 300)),
-					pullFailure:     fmt.Sprintf("the image of container %s cannot be pulled (%s: %s)", s.Name, w.Reason, kube.TruncateText(w.Message, 300)),
-					node:            p.Spec.NodeName,
+					Message:         fmt.Sprintf("Pulling the image of %s failed (%s: %s); the node keeps retrying.", s.Name, w.Reason, kube.TruncateText(w.Message, 300)),
+					PullFailure:     fmt.Sprintf("the image of container %s cannot be pulled (%s: %s)", s.Name, w.Reason, kube.TruncateText(w.Message, 300)),
+					Node:            p.Spec.NodeName,
 					mentionsMissing: manifestUnknownMentioned(w.Message),
 				}, true
 			case "CrashLoopBackOff":
@@ -1722,18 +1722,18 @@ func describeModelPod(p modelPod, event string) modelProgress {
 						last += " It ran out of memory."
 					}
 				}
-				return modelProgress{problem: fmt.Sprintf("container %s keeps crashing.%s Its logs say why.", s.Name, last)}, true
+				return modelProgress{Problem: fmt.Sprintf("container %s keeps crashing.%s Its logs say why.", s.Name, last)}, true
 			case "CreateContainerConfigError", "CreateContainerError", "InvalidImageName":
-				return modelProgress{problem: fmt.Sprintf("container %s cannot be created (%s: %s).", s.Name, w.Reason, kube.TruncateText(w.Message, 300))}, true
+				return modelProgress{Problem: fmt.Sprintf("container %s cannot be created (%s: %s).", s.Name, w.Reason, kube.TruncateText(w.Message, 300))}, true
 			case "ContainerCreating", "PodInitializing":
 				if init {
 					return modelProgress{}, false
 				}
-				return modelProgress{message: "Pulling the runtime image (several GB; a few minutes the first time on a node)..." + event}, true
+				return modelProgress{Message: "Pulling the runtime image (several GB; a few minutes the first time on a node)..." + event}, true
 			}
 		}
 		if init && s.State.Running != nil {
-			return modelProgress{message: "Downloading the model from Hugging Face (storage-initializer)..." + event}, true
+			return modelProgress{Message: "Downloading the model from Hugging Face (storage-initializer)..." + event}, true
 		}
 		return modelProgress{}, false
 	}
@@ -1753,10 +1753,10 @@ func describeModelPod(p modelPod, event string) modelProgress {
 			if t := s.LastState.Terminated; t != nil && t.Reason == "OOMKilled" {
 				msg = "Restarted after running out of memory (OOMKilled); starting vLLM again..."
 			}
-			return modelProgress{message: msg}
+			return modelProgress{Message: msg}
 		}
 	}
-	return modelProgress{message: "Starting..." + event}
+	return modelProgress{Message: "Starting..." + event}
 }
 
 type modelWait struct {
@@ -1790,7 +1790,7 @@ type modelWorkload struct {
 
 // current says whether a pod is of the current revision: its main image
 // is a current template's. Before the change is observed, no pod is.
-func (w modelWorkload) current(p modelPod) bool {
+func (w modelWorkload) current(p ModelPod) bool {
 	if !w.observed {
 		return false
 	}
@@ -1806,7 +1806,7 @@ func (w modelWorkload) current(p modelPod) bool {
 }
 
 // readModelWorkload reads the model's workload Deployments.
-func readModelWorkload(c *Client, project, name string) (modelWorkload, error) {
+func readModelWorkload(c *kube.Client, project, name string) (modelWorkload, error) {
 	q := url.Values{"labelSelector": {modelPodSelector(name)}}
 	var items []struct {
 		Metadata kube.ObjectMeta `json:"metadata"`
@@ -1860,7 +1860,7 @@ func readModelWorkload(c *Client, project, name string) (modelWorkload, error) {
 // waitModelReady waits (bounded) until the model reports Ready, reporting
 // progress from its conditions, pods and events. A pull of the preset's
 // image that the registry does not have stops the wait at once
-// (imageMissing): retrying cannot help.
+// (ImageMissing): retrying cannot help.
 //
 // workloadOnly: ready once the workload has rolled out, whatever the
 // model's Ready condition says (a model reached through MaaS becomes Ready
@@ -1870,7 +1870,7 @@ func readModelWorkload(c *Client, project, name string) (modelWorkload, error) {
 // An image pull that keeps failing is waited on for modelPullGrace before
 // it fails the wait: a node's pull credentials can arrive minutes after it
 // joins the cluster.
-func waitModelReady(c *Client, project, name string, presetImage, workloadOnly bool, timeout time.Duration, progress func(string)) modelWait {
+func waitModelReady(c *kube.Client, project, name string, presetImage, workloadOnly bool, timeout time.Duration, progress func(string)) modelWait {
 	var res modelWait
 	last := ""
 	var pullSince time.Time
@@ -1882,8 +1882,8 @@ func waitModelReady(c *Client, project, name string, presetImage, workloadOnly b
 			progress(msg)
 		}
 	}
-	ready, err := kube.WaitForGone(c, timeout, ModelPoll, func(cc *Client) (bool, error) {
-		model, found, err := readToolModel(cc, project, name)
+	ready, err := kube.WaitForGone(c, timeout, ModelPoll, func(cc *kube.Client) (bool, error) {
+		model, found, err := ReadToolModel(cc, project, name)
 		if err != nil {
 			return false, err
 		}
@@ -1927,30 +1927,30 @@ func waitModelReady(c *Client, project, name string, presetImage, workloadOnly b
 		if err != nil {
 			return false, err
 		}
-		if pr.problem != "" {
-			res.problem = pr.problem
-			res.imageMissing = pr.imageMissing && presetImage
+		if pr.Problem != "" {
+			res.problem = pr.Problem
+			res.imageMissing = pr.ImageMissing && presetImage
 			return true, nil
 		}
-		if pr.pullFailure != "" {
+		if pr.PullFailure != "" {
 			if pullSince.IsZero() {
 				pullSince = kube.Clock().Now()
-				pullGrace, pullNote = modelPullGrace(cc, pr.node)
+				pullGrace, pullNote = modelPullGrace(cc, pr.Node)
 			}
 			if kube.Clock().Since(pullSince) >= pullGrace {
-				res.problem = fmt.Sprintf("%s, for %s.%s Check that the cluster's pull secret can read it (on ROSA, the additional pull secret), that a mirror covers its registry if the cluster uses one, and that the image exists.", pr.pullFailure, clockText(pullGrace), pullNote)
+				res.problem = fmt.Sprintf("%s, for %s.%s Check that the cluster's pull secret can read it (on ROSA, the additional pull secret), that a mirror covers its registry if the cluster uses one, and that the image exists.", pr.PullFailure, ClockText(pullGrace), pullNote)
 				res.imageMaybeMissing = pr.mentionsMissing && presetImage
 				return true, nil
 			}
-			res.pulling = fmt.Sprintf("%s.%s Check that the cluster's pull secret can read it (on ROSA, the additional pull secret), that a mirror covers its registry if the cluster uses one, and that the image exists.", pr.pullFailure, pullNote)
-			say(fmt.Sprintf("%s%s Waiting up to %s for it to succeed...", pr.message, pullNote, clockText(pullGrace)))
+			res.pulling = fmt.Sprintf("%s.%s Check that the cluster's pull secret can read it (on ROSA, the additional pull secret), that a mirror covers its registry if the cluster uses one, and that the image exists.", pr.PullFailure, pullNote)
+			say(fmt.Sprintf("%s%s Waiting up to %s for it to succeed...", pr.Message, pullNote, ClockText(pullGrace)))
 			return false, nil
 		}
 		pullSince, res.pulling = time.Time{}, ""
 		if ready {
 			say(w.message)
 		} else {
-			say(pr.message)
+			say(pr.Message)
 		}
 		return false, nil
 	})

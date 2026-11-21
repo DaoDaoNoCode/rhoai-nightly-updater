@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"fmt"
@@ -41,7 +41,7 @@ import (
 //     InstallPlan (OLM v0 limitation), re-breaking the gateway". An
 //     existing install is found by its CSV, in any namespace.
 //
-// What this tool installs it records (maasRecord.Operators), and never
+// What this tool installs it records (MaaSRecord.Operators), and never
 // removes: both are shared platform pieces (RHOAI's inference gateway
 // authentication, AuthPolicy openshift-ai-inference-authn, is Kuadrant's).
 
@@ -57,18 +57,18 @@ const rhclDocsMinimum = "1.5"
 const rhclAuthBypassVersion = "1.4.0"
 
 var (
-	rhclOperator = envkit.OperatorSpec{ID: "rhcl", Title: "Red Hat Connectivity Link", Pkg: "rhcl-operator", SubName: "kuadrant-operator", SubNames: []string{"kuadrant-operator", "rhcl-operator"},
+	RHCLOperator = envkit.OperatorSpec{ID: "rhcl", Title: "Red Hat Connectivity Link", Pkg: "rhcl-operator", SubName: "kuadrant-operator", SubNames: []string{"kuadrant-operator", "rhcl-operator"},
 		Namespace: "kuadrant-system", Source: "redhat-operators", Group: "kuadrant-operator-group",
-		API: kuadrantGroup, Controller: kuadrantController, Channel: rhclChannel, Env: rhclDenyOnFailureEnv}
+		API: KuadrantGroup, Controller: KuadrantController, Channel: rhclChannel, Env: rhclDenyOnFailureEnv}
 	cnpgOperator = envkit.OperatorSpec{ID: "cnpg", Title: "CloudNativePG", Pkg: "cloudnative-pg", SubName: "cloudnative-pg", SubNames: []string{"cloudnative-pg"},
 		Namespace: "cnpg-system", Source: "certified-operators", Group: "cloudnative-pg",
-		API: cnpgGroup, Controller: cnpgController}
+		API: CNPGGroup, Controller: CNPGController}
 )
 
-// rhclChannel is Connectivity Link's channel rule (rhclTargetChannel), with
+// rhclChannel is Connectivity Link's channel rule (RHCLTargetChannel), with
 // the refusal when no channel meets the docs' minimum.
 func rhclChannel(p envkit.OperatorPackage) (string, string) {
-	if ch := rhclTargetChannel(p); ch != "" {
+	if ch := RHCLTargetChannel(p); ch != "" {
 		return ch, ""
 	}
 	return "", fmt.Sprintf("No channel of %s in %s has %s or later, which the MaaS docs ask for. Nothing was changed.", "rhcl-operator", "redhat-operators", rhclDocsMinimum)
@@ -130,12 +130,12 @@ func rhclDenyEnvPatch(sub *envkit.OLMSubscription) []any {
 	return out
 }
 
-// rhclTargetChannel is the channel to install or upgrade Connectivity Link
+// RHCLTargetChannel is the channel to install or upgrade Connectivity Link
 // on: of the channels whose head meets the docs' minimum, the one with the
 // lowest head (the docs name stable-1.5 for RHOAI 3.6, not the newest
 // release), the package's default channel first on a tie. "" when no
 // channel does.
-func rhclTargetChannel(p envkit.OperatorPackage) string {
+func RHCLTargetChannel(p envkit.OperatorPackage) string {
 	var best *envkit.PackageChannel
 	for i := range p.Channels {
 		ch := p.Channels[i]
@@ -157,12 +157,12 @@ func rhclTargetChannel(p envkit.OperatorPackage) string {
 	return best.Name
 }
 
-// hopChannel is the channel OLM can upgrade installed on when a switch to
+// HopChannel is the channel OLM can upgrade installed on when a switch to
 // target leaves it there: one that lists the installed CSV and whose head
 // is newer, the newest such head below target's (seen live 2026-11-18: the
 // RHCL catalog's stable-1.5 1.5.0 skips ">=1.4.4 <1.5.0", and 1.4.4 is only
 // in stable-1.4, so 1.4.3 goes through stable-1.4 first). "" when none.
-func hopChannel(p envkit.OperatorPackage, installedCSV, target string) string {
+func HopChannel(p envkit.OperatorPackage, installedCSV, target string) string {
 	installed := envkit.VersionCore(envkit.CSVVersion(installedCSV))
 	targetCh, _ := p.Channel(target)
 	var best *envkit.PackageChannel
@@ -200,7 +200,7 @@ type operatorContainer struct {
 
 // csvContainers reads the containers of a CSV's Deployments (its install
 // strategy), which OLM gives a Subscription's spec.config.resources to.
-func csvContainers(c *Client, ns, name string) ([]operatorContainer, error) {
+func csvContainers(c *kube.Client, ns, name string) ([]operatorContainer, error) {
 	var csv struct {
 		Spec struct {
 			Install struct {
@@ -237,7 +237,7 @@ func csvContainers(c *Client, ns, name string) ([]operatorContainer, error) {
 // oomKilledContainers names the containers of the operator's pods (pods of
 // its CSV's Deployments in its namespace) whose last or current
 // termination was OOMKilled.
-func oomKilledContainers(c *Client, st envkit.OperatorState) ([]string, error) {
+func oomKilledContainers(c *kube.Client, st envkit.OperatorState) ([]string, error) {
 	if !st.Installed() || len(st.Deployments) == 0 {
 		return nil, nil
 	}
@@ -295,8 +295,8 @@ func rhclMemoryResources(containers []operatorContainer) (map[string]any, string
 		return nil, fmt.Sprintf("its CSV runs %d containers, and a Subscription's resources apply to every one of them", len(containers))
 	}
 	res := containers[0].resources
-	limit, _ := parseQuantity(res["limits"]["memory"])
-	want, _ := parseQuantity(rhclMemoryLimit)
+	limit, _ := ParseQuantity(res["limits"]["memory"])
+	want, _ := ParseQuantity(rhclMemoryLimit)
 	if limit >= want {
 		return nil, fmt.Sprintf("its memory limit is already %s", res["limits"]["memory"])
 	}
@@ -321,6 +321,6 @@ func rhclMemoryResources(containers []operatorContainer) (map[string]any, string
 // alike (seen live: openshift-operators/kuadrant-operator-controller-manager,
 // cnpg-system/cnpg-controller-manager).
 const (
-	kuadrantController = "kuadrant-operator-controller-manager"
-	cnpgController     = "cnpg-controller-manager"
+	KuadrantController = "kuadrant-operator-controller-manager"
+	CNPGController     = "cnpg-controller-manager"
 )

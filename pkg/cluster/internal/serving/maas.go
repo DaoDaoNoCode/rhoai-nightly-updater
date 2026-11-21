@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"encoding/base64"
@@ -69,8 +69,8 @@ import (
 // (docs/samples/maas-system/free/maas).
 
 const (
-	maasGroup        = "maas.opendatahub.io"
-	maasGatewayName  = "maas-default-gateway"
+	MaaSGroup        = "maas.opendatahub.io"
+	MaaSGatewayName  = "maas-default-gateway"
 	maasGatewayClass = "openshift-default"
 	maasHostPrefix   = "maas."
 	// The gateway's in-cluster listener: its Service's name
@@ -83,24 +83,24 @@ const (
 	maasDBAppSecret       = "maas-db-app"
 	maasDBConfigSecret    = "maas-db-config"
 	maasDBName            = "maas"
-	maasTenantNamespace   = "models-as-a-service"
+	MaaSTenantNamespace   = "models-as-a-service"
 	maasAITenantNamespace = "ai-tenants"
-	maasAuthPolicyName    = "rhoai-nightly-updater-access"
-	maasSubscriptionName  = "rhoai-nightly-updater-subscription"
+	MaaSAuthPolicyName    = "rhoai-nightly-updater-access"
+	MaaSSubscriptionName  = "rhoai-nightly-updater-subscription"
 	// maasModelManager is the field manager of the gateway ref this tool
 	// adds to its model: removing it reverts exactly that change.
 	maasModelManager = "rhoai-nightly-updater-maas"
 	// maasDSCManager is the field manager of modelsAsAService, so removal
 	// restores it only while nobody has set it since.
 	maasDSCManager = "rhoai-nightly-updater-maas-dsc"
-	// maasModelFinalizer is maas-controller's on a MaaSModelRef
+	// MaaSModelFinalizer is maas-controller's on a MaaSModelRef
 	// (maasmodelref_controller.go).
-	maasModelFinalizer = "maas.opendatahub.io/model-cleanup"
-	maasRecordKey      = "maas"
+	MaaSModelFinalizer = "maas.opendatahub.io/model-cleanup"
+	MaaSRecordKey      = "maas"
 	maasRecordManager  = "rhoai-nightly-updater-maas-record"
 	// The group a published model is offered to, as the docs' sample.
 	maasSubjectGroup = "system:authenticated"
-	cnpgGroup        = "postgresql.cnpg.io"
+	CNPGGroup        = "postgresql.cnpg.io"
 	maasDocsBase     = "https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/content/"
 )
 
@@ -123,22 +123,22 @@ var (
 // authorinoGroup is the Authorino operator's API group (the Authorino CR).
 const authorinoGroup = "operator.authorino.kuadrant.io"
 
-// maasAPI is maas.opendatahub.io at the version the cluster serves (its
+// MaaSAPI is maas.opendatahub.io at the version the cluster serves (its
 // preferred one; v1alpha1, RHOAI 3.6's, when discovery cannot tell), for
 // the MaaS objects' paths and apiVersion.
-func maasAPI(c *Client) string {
-	return maasGroup + "/" + rhoai.ServedVersions(c, maasGroup, []string{"v1alpha1"}).Versions[0]
+func MaaSAPI(c *kube.Client) string {
+	return MaaSGroup + "/" + rhoai.ServedVersions(c, MaaSGroup, []string{"v1alpha1"}).Versions[0]
 }
 
 // --- record (this tool's namespace, snapshot ConfigMap key "maas") ---------------
 
-// maasRecord is what this tool did to the platform that the cluster cannot
+// MaaSRecord is what this tool did to the platform that the cluster cannot
 // tell by itself: whether it set modelsAsAService and what it was before,
 // the models it published ("<project>/<model>"), and each published
-// model's gateway refs before its publication. readMaaSRecord reads an
+// model's gateway refs before its publication. ReadMaaSRecord reads an
 // entry of a project only (in either), written before models were named,
 // as the default model's.
-type maasRecord struct {
+type MaaSRecord struct {
 	DSCChanged               bool     `json:"dscChanged,omitempty"`
 	PreviousModelsAsAService string   `json:"previousModelsAsAService,omitempty"`
 	Published                []string `json:"published,omitempty"`
@@ -146,7 +146,7 @@ type maasRecord struct {
 	// spec.router.gateway.refs as publish read them before routing it
 	// through the MaaS gateway alone; Unpublish writes them back. A
 	// publication by an earlier build has none.
-	ModelRefs map[string]maasModelRefs `json:"modelRefs,omitempty"`
+	ModelRefs map[string]MaaSModelRefs `json:"modelRefs,omitempty"`
 	// GenAI is, by publication, the genai label and annotation publish
 	// removed from the model (maas_genai.go); Unpublish puts them back.
 	GenAI map[string]maasGenAI `json:"genAI,omitempty"`
@@ -181,15 +181,15 @@ type maasRecord struct {
 	By     string            `json:"by,omitempty"`
 }
 
-func (r *maasRecord) setShared(key, what string) {
+func (r *MaaSRecord) setShared(key, what string) {
 	if r.Shared == nil {
 		r.Shared = map[string]string{}
 	}
 	r.Shared[key] = what
 }
 
-func readMaaSRecord(c *Client) (maasRecord, error) {
-	var rec maasRecord
+func ReadMaaSRecord(c *kube.Client) (MaaSRecord, error) {
+	var rec MaaSRecord
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
@@ -203,22 +203,22 @@ func readMaaSRecord(c *Client) (maasRecord, error) {
 	if !found {
 		return rec, nil
 	}
-	if raw := cm.Data[maasRecordKey]; raw != "" {
+	if raw := cm.Data[MaaSRecordKey]; raw != "" {
 		if err := json.Unmarshal([]byte(raw), &rec); err != nil {
 			return rec, fmt.Errorf("parse this tool's MaaS record: %w", err)
 		}
 	}
 	var keys []string
-	for _, p := range rec.pubs() {
-		keys = append(keys, p.key())
+	for _, p := range rec.Pubs() {
+		keys = append(keys, p.Key())
 	}
 	rec.Published = keys
 	if len(rec.ModelRefs) > 0 {
-		def, _ := catalogEntry("")
-		refs := map[string]maasModelRefs{}
+		def, _ := CatalogEntry("")
+		refs := map[string]MaaSModelRefs{}
 		for k, v := range rec.ModelRefs {
 			if !strings.Contains(k, "/") {
-				k = maasPub{k, def.Name}.key()
+				k = MaaSPub{k, def.Name}.Key()
 				if _, named := rec.ModelRefs[k]; named {
 					continue
 				}
@@ -230,81 +230,81 @@ func readMaaSRecord(c *Client) (maasRecord, error) {
 	return rec, nil
 }
 
-// writeMaaSRecord applies the record (operations hold the cluster lock).
-func writeMaaSRecord(c *Client, rec maasRecord) error {
+// WriteMaaSRecord applies the record (operations hold the cluster lock).
+func WriteMaaSRecord(c *kube.Client, rec MaaSRecord) error {
 	rec.At, rec.By = record.NowRFC3339(), kube.GetUser(c)
 	sort.Strings(rec.Published)
 	data, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
-	if err := record.WriteSnapshotKey(c, maasRecordKey, maasRecordManager, string(data)); err != nil {
+	if err := record.WriteSnapshotKey(c, MaaSRecordKey, maasRecordManager, string(data)); err != nil {
 		return fmt.Errorf("record this tool's MaaS changes: %w", err)
 	}
 	return nil
 }
 
-// maasModelRefs are a model's gateway refs as read; none is KServe's
+// MaaSModelRefs are a model's gateway refs as read; none is KServe's
 // default gateway (spec.router.gateway {}). NoRoute: the model had no route
 // before it was published: the Models tab set it up to be reached through
 // MaaS only, and publishing was part of that setup (publishToMaaS), so
 // Unpublish leaves it with no route at all (only inside the cluster), never
 // on a gateway nobody chose.
-type maasModelRefs struct {
-	Refs    gatewayRefs `json:"refs,omitempty"`
+type MaaSModelRefs struct {
+	Refs    GatewayRefs `json:"refs,omitempty"`
 	NoRoute bool        `json:"noRoute,omitempty"`
 }
 
-// maasPub is one publication: a catalog model in a project.
-type maasPub struct{ project, model string }
+// MaaSPub is one publication: a catalog model in a project.
+type MaaSPub struct{ Project, Model string }
 
-func (p maasPub) key() string { return p.project + "/" + p.model }
+func (p MaaSPub) Key() string { return p.Project + "/" + p.Model }
 
-// pubs are the recorded publications; an entry of a project only is the
+// Pubs are the recorded publications; an entry of a project only is the
 // default model's.
-func (r maasRecord) pubs() []maasPub {
-	def, _ := catalogEntry("")
-	var out []maasPub
+func (r MaaSRecord) Pubs() []MaaSPub {
+	def, _ := CatalogEntry("")
+	var out []MaaSPub
 	seen := map[string]bool{}
 	for _, e := range r.Published {
 		project, model, found := strings.Cut(e, "/")
 		if !found {
 			model = def.Name
 		}
-		p := maasPub{project, model}
-		if !seen[p.key()] {
-			seen[p.key()] = true
+		p := MaaSPub{project, model}
+		if !seen[p.Key()] {
+			seen[p.Key()] = true
 			out = append(out, p)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].key() < out[j].key() })
+	sort.Slice(out, func(i, j int) bool { return out[i].Key() < out[j].Key() })
 	return out
 }
 
-func (r maasRecord) published(project, model string) bool {
-	return slices.Contains(r.Published, maasPub{project, model}.key())
+func (r MaaSRecord) IsPublished(project, model string) bool {
+	return slices.Contains(r.Published, MaaSPub{project, model}.Key())
 }
 
-// modelRefs are the refs publish recorded for model in project; none
+// ModelRefsOf are the refs publish recorded for model in project; none
 // recorded for a publication by an earlier build.
-func (r maasRecord) modelRefs(project, model string) (maasModelRefs, bool) {
-	refs, ok := r.ModelRefs[maasPub{project, model}.key()]
+func (r MaaSRecord) ModelRefsOf(project, model string) (MaaSModelRefs, bool) {
+	refs, ok := r.ModelRefs[MaaSPub{project, model}.Key()]
 	return refs, ok
 }
 
-func (r *maasRecord) setModelRefs(project, model string, refs maasModelRefs) {
+func (r *MaaSRecord) setModelRefs(project, model string, refs MaaSModelRefs) {
 	if r.ModelRefs == nil {
-		r.ModelRefs = map[string]maasModelRefs{}
+		r.ModelRefs = map[string]MaaSModelRefs{}
 	}
-	r.ModelRefs[maasPub{project, model}.key()] = refs
+	r.ModelRefs[MaaSPub{project, model}.Key()] = refs
 }
 
-func (r *maasRecord) setPublished(project, model string, on bool) {
-	key := maasPub{project, model}.key()
+func (r *MaaSRecord) SetPublished(project, model string, on bool) {
+	key := MaaSPub{project, model}.Key()
 	var out []string
-	for _, p := range r.pubs() {
-		if p.key() != key {
-			out = append(out, p.key())
+	for _, p := range r.Pubs() {
+		if p.Key() != key {
+			out = append(out, p.Key())
 		}
 	}
 	if on {
@@ -323,13 +323,13 @@ func (r *maasRecord) setPublished(project, model string, on bool) {
 	r.Published = out
 }
 
-// projects are the projects with a recorded publication: the MaaS gateway
+// Projects are the projects with a recorded publication: the MaaS gateway
 // admits routes from them.
-func (r maasRecord) projects() []string {
+func (r MaaSRecord) Projects() []string {
 	var out []string
-	for _, p := range r.pubs() {
-		if !slices.Contains(out, p.project) {
-			out = append(out, p.project)
+	for _, p := range r.Pubs() {
+		if !slices.Contains(out, p.Project) {
+			out = append(out, p.Project)
 		}
 	}
 	return out
@@ -340,7 +340,7 @@ const maasEmbeddingReason = "This tool publishes chat models only. Use the embed
 
 // --- reads ---------------------------------------------------------------------
 
-// maasInfraNamespace is where maas-api runs and maas-db-config goes: the
+// MaaSInfraNamespace is where maas-api runs and maas-db-config goes: the
 // tenant's status.infraNamespace when MaaS runs, else derived from the
 // applications namespace as the docs' scripts do (derive_infra_namespace in
 // scripts/setup-database.sh: redhat-ods-applications ->
@@ -355,9 +355,9 @@ const maasEmbeddingReason = "This tool publishes chat models only. Use the embed
 // other failure to read it (forbidden, a server error, a body that does not
 // parse) is returned: the tenant may name another namespace, and a read
 // failure is never replaced by a default name (rhoai_namespaces.go).
-func maasInfraNamespace(c *Client) (string, error) {
+func MaaSInfraNamespace(c *kube.Client) (string, error) {
 	const what = "the default tenant (MaaSTenantConfig models-as-a-service/default-tenant)"
-	body, _, err := c.Get(rhoai.NamespacedPath(maasAPI(c), "maastenantconfigs", "models-as-a-service", "default-tenant"))
+	body, _, err := c.Get(rhoai.NamespacedPath(MaaSAPI(c), "maastenantconfigs", "models-as-a-service", "default-tenant"))
 	switch {
 	case err == nil:
 		var tc struct {
@@ -390,12 +390,12 @@ func maasInfraNamespace(c *Client) (string, error) {
 }
 
 // maasDBNamespace is where this tool's database is: the recorded
-// namespace, else maasInfraNamespace.
-func maasDBNamespace(c *Client, rec maasRecord) (string, error) {
+// namespace, else MaaSInfraNamespace.
+func maasDBNamespace(c *kube.Client, rec MaaSRecord) (string, error) {
 	if rec.DBNamespace != "" {
 		return rec.DBNamespace, nil
 	}
-	return maasInfraNamespace(c)
+	return MaaSInfraNamespace(c)
 }
 
 // maasDSC is the DataScienceCluster as MaaS needs it.
@@ -410,7 +410,7 @@ type maasDSC struct {
 	argo      argo.Tracking
 }
 
-func readMaaSDSC(c *Client) (maasDSC, error) {
+func readMaaSDSC(c *kube.Client) (maasDSC, error) {
 	r, err := rhoai.ReadFirstDSC(c)
 	if err != nil {
 		return maasDSC{}, err
@@ -429,7 +429,7 @@ func readMaaSDSC(c *Client) (maasDSC, error) {
 	ag, _ := comps["aigateway"].(map[string]any)
 	sub, _ := ag["modelsAsAService"].(map[string]any)
 	d.maas, _ = sub["managementState"].(string)
-	d.ready, d.readyMsg = dscConditionStatus(r.Object, "ModelsAsAServiceReady")
+	d.ready, d.readyMsg = DSCConditionStatus(r.Object, "ModelsAsAServiceReady")
 	// The AIGateway component reports the condition first-hand; the DSC
 	// copies it, and on RHOAI 3.6 kept the copy from before MaaS was turned
 	// back on (live: DSC False/Removed, component True/Ready, maas-api
@@ -444,7 +444,7 @@ func readMaaSDSC(c *Client) (maasDSC, error) {
 // component the operator projects from the DSC (components.platform.
 // opendatahub.io, listed at the version that serves it): "True", "False"
 // or "" when there is none or it cannot be read.
-func aigatewayMaaSReady(c *Client) (string, string) {
+func aigatewayMaaSReady(c *kube.Client) (string, string) {
 	read, err := rhoai.ListServed(c, "components.platform.opendatahub.io", "/apis/components.platform.opendatahub.io/%s/aigateways", nil, []string{"v1alpha1"})
 	if err != nil || read.Body == nil {
 		return "", ""
@@ -465,9 +465,9 @@ func aigatewayMaaSReady(c *Client) (string, string) {
 	return "", ""
 }
 
-// dscConditionStatus reads a DataScienceCluster condition: "True", "False"
+// DSCConditionStatus reads a DataScienceCluster condition: "True", "False"
 // or "" (not reported), with its message.
-func dscConditionStatus(dsc map[string]any, typ string) (string, string) {
+func DSCConditionStatus(dsc map[string]any, typ string) (string, string) {
 	status, _ := dsc["status"].(map[string]any)
 	conds, _ := status["conditions"].([]any)
 	for _, raw := range conds {
@@ -487,17 +487,17 @@ func dscConditionStatus(dsc map[string]any, typ string) (string, string) {
 
 // kuadrantState is the cluster's Kuadrant CR (Red Hat Connectivity Link).
 type kuadrantState struct {
-	found, ready bool
-	namespace    string
-	message      string
-	meta         kube.ObjectMeta
+	Found, Ready bool
+	Namespace    string
+	Message      string
+	Meta         kube.ObjectMeta
 }
 
-func readKuadrant(c *Client) (kuadrantState, error) {
+func ReadKuadrant(c *kube.Client) (kuadrantState, error) {
 	// The group's versions are not the resource's: kuadrant.io serves v1
 	// (AuthPolicy...) first while Kuadrant is only in v1beta1 (RHCL 1.4,
 	// seen live), so list it at each served version until one serves it.
-	read, err := rhoai.ListServed(c, kuadrantGroup, "/apis/kuadrant.io/%s/kuadrants", nil, []string{"v1beta1"})
+	read, err := rhoai.ListServed(c, KuadrantGroup, "/apis/kuadrant.io/%s/kuadrants", nil, []string{"v1beta1"})
 	if err != nil {
 		return kuadrantState{}, err
 	}
@@ -520,10 +520,10 @@ func readKuadrant(c *Client) (kuadrantState, error) {
 		return kuadrantState{}, nil
 	}
 	k := list.Items[0]
-	st := kuadrantState{found: true, namespace: k.Metadata.Namespace, meta: k.Metadata}
+	st := kuadrantState{Found: true, Namespace: k.Metadata.Namespace, Meta: k.Metadata}
 	if cond, ok := kube.FindCondition(k.Status.Conditions, "Ready"); ok {
-		st.ready = cond.Status == "True"
-		st.message = kube.FirstNonEmpty(cond.Message, cond.Reason)
+		st.Ready = cond.Status == "True"
+		st.Message = kube.FirstNonEmpty(cond.Message, cond.Reason)
 	}
 	return st, nil
 }
@@ -534,12 +534,12 @@ func rhclBelowMinimum(version string) bool {
 	return version != "" && kube.CompareVersions(envkit.VersionCore(version), rhclDocsMinimum) < 0
 }
 
-// rhclWarning: the docs ask for RHCL 1.5 or later (prerequisites.md
+// RHCLWarning: the docs ask for RHCL 1.5 or later (prerequisites.md
 // "RHOAI 3.6 — use RHCL v1.5"; 1.4.x can hang callers,
 // Kuadrant/wasm-shim#425), and 1.4.0 bypasses gateway authentication
 // (rhclAuthBypassVersion). Upgrade Connectivity Link (upgradeRHCL) finds
 // OLM's path in the catalog and takes it.
-func rhclWarning(version string) string {
+func RHCLWarning(version string) string {
 	switch {
 	case !rhclBelowMinimum(version):
 		return ""
@@ -592,7 +592,7 @@ func maasDesc(kind, ns string) string {
 	case "GatewayClass":
 		return "GatewayClass " + maasGatewayClass
 	case "Gateway":
-		return "Gateway " + inferenceGatewayNamespace + "/" + maasGatewayName
+		return "Gateway " + inferenceGatewayNamespace + "/" + MaaSGatewayName
 	case "ConfigMap":
 		return "ConfigMap " + inferenceGatewayNamespace + "/" + maasGatewayOptions
 	case "Cluster":
@@ -620,7 +620,7 @@ func maasGatewayClassPath() string {
 
 // maasGatewayState is the MaaS gateway as read.
 type maasGatewayState struct {
-	gw          gatewayObject
+	gw          GatewayObject
 	found       bool
 	owned       bool
 	programmed  bool
@@ -628,7 +628,7 @@ type maasGatewayState struct {
 	acceptedErr string
 }
 
-func readMaaSGateway(c *Client) (maasGatewayState, error) {
+func readMaaSGateway(c *kube.Client) (maasGatewayState, error) {
 	body, exists, err := c.GetOptional(maasObjectPath("Gateway", ""))
 	if err != nil {
 		return maasGatewayState{}, err
@@ -638,7 +638,7 @@ func readMaaSGateway(c *Client) (maasGatewayState, error) {
 	}
 	st := maasGatewayState{found: true}
 	if err := json.Unmarshal(body, &st.gw); err != nil {
-		return st, fmt.Errorf("parse Gateway %s/%s: %w", inferenceGatewayNamespace, maasGatewayName, err)
+		return st, fmt.Errorf("parse Gateway %s/%s: %w", inferenceGatewayNamespace, MaaSGatewayName, err)
 	}
 	st.owned = gatewayOwned(st.gw.Metadata)
 	if cond, ok := kube.FindCondition(st.gw.Status.Conditions, "Accepted"); ok && cond.Status == "False" {
@@ -653,7 +653,7 @@ func readMaaSGateway(c *Client) (maasGatewayState, error) {
 	return st, nil
 }
 
-// maasNamespaceRefusal checks the namespaces maas-default-gateway always
+// MaaSNamespaceRefusal checks the namespaces maas-default-gateway always
 // admits routes from, and where this tool writes its MaaSSubscription and
 // MaaSAuthPolicy: models-as-a-service and the infrastructure namespace.
 // maas-controller adopts a namespace of that name that already exists
@@ -666,8 +666,8 @@ func readMaaSGateway(c *Client) (maasGatewayState, error) {
 // what this tool writes there. Such a namespace is refused, as is one that
 // cannot be read (fail closed); one that does not exist yet is fine (RHOAI
 // creates it). It returns a message and an error code, or "".
-func maasNamespaceRefusal(c *Client, infra string) (string, string) {
-	for _, ns := range []string{maasTenantNamespace, infra} {
+func MaaSNamespaceRefusal(c *kube.Client, infra string) (string, string) {
+	for _, ns := range []string{MaaSTenantNamespace, infra} {
 		meta, found, err := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+ns)
 		if err != nil {
 			return fmt.Sprintf("Cannot read namespace %s, so this tool cannot tell who made it; nothing was changed: %v.%s", ns, err, kube.TemplateHint(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
@@ -689,7 +689,7 @@ func maasNamespaceRefusal(c *Client, infra string) (string, string) {
 // every namespace; the documented name list needs nothing beyond the
 // gateway this tool owns.
 func maasGatewayNamespaces(infraNS string, published []string) []string {
-	out := []string{infraNS, maasTenantNamespace}
+	out := []string{infraNS, MaaSTenantNamespace}
 	for _, p := range published {
 		if !slices.Contains(out, p) {
 			out = append(out, p)
@@ -719,7 +719,7 @@ func maasGatewayObjects(domain, certificate string, namespaces []string) map[str
 	}
 	labels := envkit.ToolLabels()
 	labels["app.kubernetes.io/name"] = "maas"
-	labels["app.kubernetes.io/instance"] = maasGatewayName
+	labels["app.kubernetes.io/instance"] = MaaSGatewayName
 	labels["app.kubernetes.io/component"] = "gateway"
 	labels["opendatahub.io/managed"] = "false"
 	allowed := map[string]any{"namespaces": map[string]any{
@@ -771,7 +771,7 @@ func maasGatewayObjects(domain, certificate string, namespaces []string) map[str
 				},
 				"listeners": []any{
 					listener("https", maasHostPrefix+domain, certificate),
-					listener("https-internal", maasGatewayName+"-"+maasGatewayClass+"."+inferenceGatewayNamespace+".svc.cluster.local", maasGatewayServiceTLS),
+					listener("https-internal", MaaSGatewayName+"-"+maasGatewayClass+"."+inferenceGatewayNamespace+".svc.cluster.local", maasGatewayServiceTLS),
 				},
 			},
 		},
@@ -813,7 +813,7 @@ func maasDBConfigObject(ns, connURL string) map[string]any {
 // secret"), for the cluster's read-write Service, with sslmode=require
 // (maas-setup.md "Connection string format"). The URL holds the password:
 // it is only ever written to the Secret, never logged or returned.
-func maasConnectionURL(c *Client, ns string) (string, error) {
+func maasConnectionURL(c *kube.Client, ns string) (string, error) {
 	var s struct {
 		Data map[string]string `json:"data"`
 	}
@@ -834,7 +834,7 @@ func maasConnectionURL(c *Client, ns string) (string, error) {
 }
 
 // readMaaSDBCluster reads the database: found, owned, ready, a message.
-func readMaaSDBCluster(c *Client, ns string) (kube.ObjectMeta, bool, bool, string, error) {
+func readMaaSDBCluster(c *kube.Client, ns string) (kube.ObjectMeta, bool, bool, string, error) {
 	var cl struct {
 		Metadata kube.ObjectMeta `json:"metadata"`
 		Spec     struct {
@@ -861,7 +861,7 @@ func readMaaSDBCluster(c *Client, ns string) (kube.ObjectMeta, bool, bool, strin
 
 // deploymentAvailable reads a Deployment's Available condition: "True",
 // "False", "missing" or "" (unreadable).
-func deploymentAvailable(c *Client, ns, name string) string {
+func deploymentAvailable(c *kube.Client, ns, name string) string {
 	var d struct {
 		Status struct {
 			Conditions []kube.Condition `json:"conditions"`
@@ -882,7 +882,7 @@ func deploymentAvailable(c *Client, ns, name string) string {
 
 // readyCondition reads an object's Ready condition: "True", "False",
 // "missing" or "" (unreadable or not reported), with its message.
-func readyCondition(c *Client, path string) (string, string) {
+func readyCondition(c *kube.Client, path string) (string, string) {
 	var obj struct {
 		Status struct {
 			Conditions []kube.Condition `json:"conditions"`
@@ -901,12 +901,12 @@ func readyCondition(c *Client, path string) (string, string) {
 	return "", ""
 }
 
-// maasGatewayAuth reads the AuthPolicy maas-controller puts on the MaaS
+// MaaSGatewayAuth reads the AuthPolicy maas-controller puts on the MaaS
 // gateway (maas-gateway-auth on RHOAI 3.6; the docs name others, so it is
 // found by its target and maas-controller's label, never by taking the
 // first policy on the gateway: a tier-era gateway-auth-policy may target
 // it too): "enforced", "not-enforced", "missing" or "" (unreadable).
-func maasGatewayAuth(c *Client) string {
+func MaaSGatewayAuth(c *kube.Client) string {
 	policies, err := maasGatewayPolicies(c)
 	if err != nil {
 		return ""
@@ -923,10 +923,10 @@ func maasGatewayAuth(c *Client) string {
 	return "missing"
 }
 
-// groupServed says whether the API server serves group: its discovery
+// GroupServed says whether the API server serves group: its discovery
 // document answers 404 when no CRD of the group is installed. Any other
 // failure is returned, so callers can refuse rather than guess.
-func groupServed(c *Client, group string) (bool, error) {
+func GroupServed(c *kube.Client, group string) (bool, error) {
 	if v, ok := rhoai.APIVersionsCache.Get(c.BaseURL() + "|" + group); ok && len(v) > 0 {
 		return true, nil
 	}
@@ -940,10 +940,10 @@ func groupServed(c *Client, group string) (bool, error) {
 	return len(rhoai.ParseGroupVersions(body)) > 0, nil
 }
 
-// authorinoTLS checks what scripts/setup-authorino-tls.sh sets on
+// AuthorinoTLS checks what scripts/setup-authorino-tls.sh sets on
 // Kuadrant's Authorino in ns: the Service's serving-cert annotation, the
 // Authorino CR's TLS listener, and the Deployment's trust of the service
-// CA (authorinoTrustsServiceCA). It
+// CA (AuthorinoTrustsServiceCA). It
 // returns "" when all are set (or cannot be read: unknown is not a
 // failure), else what is missing.
 //
@@ -951,7 +951,7 @@ func groupServed(c *Client, group string) (bool, error) {
 // (spec.listener.tls.certSecretRef.name; RHOAI's AI gateway may use
 // another than the script's authorino-server-cert), returned for the
 // commands; the Service must ask service-ca for that one.
-func authorinoTLS(c *Client, ns string) (string, bool, string) {
+func AuthorinoTLS(c *kube.Client, ns string) (string, bool, string) {
 	var missing []string
 	known := true
 	secret := "authorino-server-cert"
@@ -986,7 +986,7 @@ func authorinoTLS(c *Client, ns string) (string, bool, string) {
 		switch {
 		case err != nil:
 			known = false
-		case !found || meta.Annotations[servingCertAnnotation] != secret:
+		case !found || meta.Annotations[CertSecretAnnotation] != secret:
 			missing = append(missing, "the Service's serving certificate")
 		}
 	}
@@ -995,19 +995,19 @@ func authorinoTLS(c *Client, ns string) (string, bool, string) {
 	}
 	if body, _, err := c.Get(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, "authorino")); err != nil {
 		known = false
-	} else if !authorinoTrustsServiceCA(body) {
+	} else if !AuthorinoTrustsServiceCA(body) {
 		missing = append(missing, "trust of the service CA (SSL_CERT_FILE)")
 	}
 	return strings.Join(missing, ", "), known, secret
 }
 
-// authorinoTrustsServiceCA says whether Authorino's Deployment trusts an
+// AuthorinoTrustsServiceCA says whether Authorino's Deployment trusts an
 // added CA bundle, either way it is done: the script's SSL_CERT_FILE or
 // REQUESTS_CA_BUNDLE (it points them at service-ca.crt), or an SSL_CERT_DIR entry
 // that is the mount of a ConfigMap volume, as RHOAI's AI gateway sets it
 // up through the Authorino CR's volumes (live on 3.6: ConfigMap
 // aigrid-service-ca, inject-cabundle, at /etc/ssl/certs/openshift-service-ca).
-func authorinoTrustsServiceCA(deployment []byte) bool {
+func AuthorinoTrustsServiceCA(deployment []byte) bool {
 	var d struct {
 		Spec struct {
 			Template struct {
@@ -1075,13 +1075,13 @@ func authorinoTrustsServiceCA(deployment []byte) bool {
 	return false
 }
 
-// authorinoTLSCommands are scripts/setup-authorino-tls.sh's commands for ns,
+// AuthorinoTLSCommands are scripts/setup-authorino-tls.sh's commands for ns,
 // and deploy.sh's restart of Authorino after them. The Secret's name comes
 // from Authorino's CR (whoever may edit it chooses it) and a cluster-admin
 // pastes these commands into a shell, so a name that is not a Kubernetes
 // object name (DNS-1123 subdomain) gets no commands: why says so. Every
 // substitution is shell-quoted as well.
-func authorinoTLSCommands(ns, secret string) (cmds, why string) {
+func AuthorinoTLSCommands(ns, secret string) (cmds, why string) {
 	if len(ns) > 63 || !components.DNS1123Label.MatchString(ns) {
 		return "", fmt.Sprintf("Connectivity Link's namespace %s is not a valid Kubernetes name", strconv.Quote(kube.TruncateText(ns, 300)))
 	}
@@ -1106,15 +1106,15 @@ oc rollout restart deployment/authorino -n %[1]s`, q, kube.ShellQuote(secret), k
 // GetMaaSStatus reports the MaaS platform part by part, in setup order
 // (the docs' platform setup, then their MaaS setup), what Set up would
 // change now, and this tool's models with their publication.
-func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
-	st := &types.MaaSStatus{Subscription: maasSubscriptionName, DashboardURL: dashboardURLOrEmpty(c)}
-	rec, err := readMaaSRecord(c)
+func GetMaaSStatus(c *kube.Client) (*types.MaaSStatus, error) {
+	st := &types.MaaSStatus{Subscription: MaaSSubscriptionName, DashboardURL: dashboardURLOrEmpty(c)}
+	rec, err := ReadMaaSRecord(c)
 	if err != nil {
 		return nil, err
 	}
 	dsc, dscErr := readMaaSDSC(c)
 	r := &maasStatusRun{c: c, st: st, rec: rec}
-	r.infra, r.infraErr = maasInfraNamespace(c)
+	r.infra, r.infraErr = MaaSInfraNamespace(c)
 	if r.infraErr != nil {
 		r.blockers = append(r.blockers, kube.SentenceStart(r.infraErr.Error())+".")
 	}
@@ -1140,10 +1140,10 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 // maasStatusRun builds GetMaaSStatus's answer: each method reads one part
 // of the platform and appends it, in setup order.
 type maasStatusRun struct {
-	c   *Client
+	c   *kube.Client
 	st  *types.MaaSStatus
-	rec maasRecord
-	// infra is maasInfraNamespace; "" with infraErr when it is not known.
+	rec MaaSRecord
+	// infra is MaaSInfraNamespace; "" with infraErr when it is not known.
 	infra    string
 	infraErr error
 	// blockers are the reasons Set up cannot run, the first one shown.
@@ -1169,15 +1169,15 @@ func (r *maasStatusRun) statusRHCL() (rhcl, cnpg envkit.OperatorState, cnpgReadE
 	}
 	rhclErr, cnpgReadErr := csvErr, csvErr
 	if csvErr == nil {
-		rhcl, rhclErr = envkit.ReadOperatorIn(c, rhclOperator, csvs, subs)
+		rhcl, rhclErr = envkit.ReadOperatorIn(c, RHCLOperator, csvs, subs)
 		cnpg, cnpgReadErr = envkit.ReadOperatorIn(c, cnpgOperator, csvs, subs)
 	}
-	kVersion, kvErr = kuadrantServedVersion(c)
+	kVersion, kvErr = KuadrantServedVersion(c)
 	// Kuadrant's API alone is not an installed operator: its CRDs stay
 	// after an uninstall (envkit.ControllerDeployed).
 	kRuns, kRunsErr := kVersion != "", error(nil)
 	if kvErr == nil && kRuns && !rhcl.Installed() && rhclErr == nil {
-		kRuns, kRunsErr = envkit.ControllerDeployed(c, kuadrantController)
+		kRuns, kRunsErr = envkit.ControllerDeployed(c, KuadrantController)
 	}
 	rhclPart := types.MaaSPart{ID: "rhcl", Title: "Red Hat Connectivity Link", DocURL: maasDocsBase + "install/platform-setup.md#install-gateway-api-controller"}
 	_, rhclByTool := rec.Shared["rhcl"]
@@ -1185,7 +1185,7 @@ func (r *maasStatusRun) statusRHCL() (rhcl, cnpg envkit.OperatorState, cnpgReadE
 	case rhclErr != nil:
 		rhclPart.State, rhclPart.Message = "unknown", "Cannot read the installed operators: "+rhclErr.Error()
 	case rhcl.Installed():
-		rhclPart.ManagedByTool = rhclByTool && rhcl.Sub != nil && toolOwned(rhcl.Sub.Metadata)
+		rhclPart.ManagedByTool = rhclByTool && rhcl.Sub != nil && ToolOwned(rhcl.Sub.Metadata)
 		rhclPart.NotManaged = !rhclPart.ManagedByTool
 		where := "its Subscription is not one of the names the docs use (kuadrant-operator, rhcl-operator)"
 		if rhcl.Sub != nil {
@@ -1193,12 +1193,12 @@ func (r *maasStatusRun) statusRHCL() (rhcl, cnpg envkit.OperatorState, cnpgReadE
 		}
 		switch {
 		case envkit.VersionCore(rhcl.Version) == rhclAuthBypassVersion:
-			rhclPart.State, rhclPart.Message = "problem", fmt.Sprintf("Version %s (%s). ", rhcl.Version, where)+rhclWarning(rhcl.Version)
+			rhclPart.State, rhclPart.Message = "problem", fmt.Sprintf("Version %s (%s). ", rhcl.Version, where)+RHCLWarning(rhcl.Version)
 		case rhcl.Phase != "Succeeded":
 			rhclPart.State, rhclPart.Message = "waiting", fmt.Sprintf("Version %s is being installed (%s; CSV %s)", rhcl.Version, where, kube.FirstNonEmpty(rhcl.Phase, "pending"))
 		default:
 			rhclPart.State, rhclPart.Message = "ready", fmt.Sprintf("Version %s runs (%s)", rhcl.Version, where)
-			rhclPart.Warning = rhclWarning(rhcl.Version)
+			rhclPart.Warning = RHCLWarning(rhcl.Version)
 		}
 		if rhclBelowMinimum(rhcl.Version) {
 			action, cmds := rhclUpgradeOffer(c, rhcl)
@@ -1232,13 +1232,13 @@ func (r *maasStatusRun) statusRHCL() (rhcl, cnpg envkit.OperatorState, cnpgReadE
 		rhclPart.State, rhclPart.Message = "waiting", fmt.Sprintf("Subscription %s/%s exists; OLM is installing it (%s)", p.Metadata.Namespace, p.Metadata.Name, kube.FirstNonEmpty(p.Status.State, "no state yet"))
 	default:
 		rhclPart.State = "missing"
-		if p, msg, _ := envkit.PlanOperatorInstall(c, rhclOperator); msg != "" {
+		if p, msg, _ := envkit.PlanOperatorInstall(c, RHCLOperator); msg != "" {
 			rhclPart.State, rhclPart.Message = "problem", "Not installed, and Set up cannot install it: "+msg
 			r.blockers = append(r.blockers, rhclPart.Message)
 		} else {
 			rhclPart.Message = fmt.Sprintf("Not installed. Set up installs version %s from redhat-operators (channel %s), as the MaaS docs' platform setup does.", p.Head, p.Channel)
-			rhclPart.Commands = rhclInstallCommands(p.Channel)
-			plan(fmt.Sprintf("Install Red Hat Connectivity Link %s: %sSubscription %s/%s (package %s, channel %s, from redhat-operators, with spec.config.env RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny and RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny, as the MaaS docs recommend, so requests are refused rather than let through unlimited while Limitador is unavailable)", p.Head, operatorPlanPrefix(p), rhclOperator.Namespace, rhclOperator.SubName, rhclOperator.Pkg, p.Channel))
+			rhclPart.Commands = RHCLInstallCommands(p.Channel)
+			plan(fmt.Sprintf("Install Red Hat Connectivity Link %s: %sSubscription %s/%s (package %s, channel %s, from redhat-operators, with spec.config.env RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny and RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny, as the MaaS docs recommend, so requests are refused rather than let through unlimited while Limitador is unavailable)", p.Head, OperatorPlanPrefix(p), RHCLOperator.Namespace, RHCLOperator.SubName, RHCLOperator.Pkg, p.Channel))
 		}
 	}
 	part(rhclPart)
@@ -1250,24 +1250,24 @@ func (r *maasStatusRun) statusKuadrant(rhcl envkit.OperatorState) kuadrantState 
 	c, rec, part, plan := r.c, r.rec, r.part, r.plan
 	// The Kuadrant CR (platform-setup.md: "Once the RHCL operator is
 	// ready, create a Kuadrant instance").
-	kq, kErr := readKuadrant(c)
-	kuadrantNS := kube.FirstNonEmpty(kq.namespace, rhcl.CSVNS, rhclOperator.Namespace)
+	kq, kErr := ReadKuadrant(c)
+	kuadrantNS := kube.FirstNonEmpty(kq.Namespace, rhcl.CSVNS, RHCLOperator.Namespace)
 	kPart := types.MaaSPart{ID: "kuadrant", Title: "Connectivity Link instance (Kuadrant)", DocURL: maasDocsBase + "install/platform-setup.md#install-gateway-api-controller"}
 	_, kByTool := rec.Shared["kuadrant"]
 	switch {
 	case kErr != nil:
 		kPart.State, kPart.Message = "unknown", "Cannot read the Kuadrant CR: "+kErr.Error()
-	case !kq.found:
+	case !kq.Found:
 		kPart.State, kPart.Message = "missing", fmt.Sprintf("No Kuadrant CR. Set up creates %s/kuadrant once Connectivity Link runs, as the docs' platform setup does.", kuadrantNS)
-		kPart.Commands = kuadrantCommands(kuadrantNS)
+		kPart.Commands = KuadrantCommands(kuadrantNS)
 		plan(fmt.Sprintf("Create the Kuadrant CR %s/kuadrant", kuadrantNS))
-	case kq.ready:
-		kPart.State, kPart.Message = "ready", kq.namespace+"/kuadrant is ready"
+	case kq.Ready:
+		kPart.State, kPart.Message = "ready", kq.Namespace+"/kuadrant is ready"
 	default:
-		kPart.State, kPart.Message = "waiting", "Kuadrant is not Ready: "+kube.FirstNonEmpty(kq.message, "no message")
+		kPart.State, kPart.Message = "waiting", "Kuadrant is not Ready: "+kube.FirstNonEmpty(kq.Message, "no message")
 	}
-	if kq.found {
-		kPart.ManagedByTool = kByTool && toolOwned(kq.meta)
+	if kq.Found {
+		kPart.ManagedByTool = kByTool && ToolOwned(kq.Meta)
 		kPart.NotManaged = !kPart.ManagedByTool
 	}
 	part(kPart)
@@ -1304,23 +1304,23 @@ func (r *maasStatusRun) statusGateway() {
 		gwPart.State, gwPart.Message = "unknown", "Cannot read the gateway: "+gwErr.Error()
 	case !gw.found:
 		gwPart.State, gwPart.Message = "missing", "Set up creates it with an external load balancer at "+kube.FirstNonEmpty(st.URL, "maas.<apps domain>")
-		plan(fmt.Sprintf("Create Gateway %s/%s with an external load balancer at %s (a cloud cost while it exists), and GatewayClass %s if the cluster has none", inferenceGatewayNamespace, maasGatewayName, kube.FirstNonEmpty(strings.TrimPrefix(st.URL, "https://"), "maas.<apps domain>"), maasGatewayClass))
+		plan(fmt.Sprintf("Create Gateway %s/%s with an external load balancer at %s (a cloud cost while it exists), and GatewayClass %s if the cluster has none", inferenceGatewayNamespace, MaaSGatewayName, kube.FirstNonEmpty(strings.TrimPrefix(st.URL, "https://"), "maas.<apps domain>"), maasGatewayClass))
 	default:
 		gwPart.ManagedByTool, gwPart.NotManaged = gw.owned, !gw.owned
 		switch {
 		case gw.gw.admitsAll() && gw.owned:
 			gwPart.State, gwPart.Message = "problem", "A listener admits routes from every namespace, which this tool never sets: any project could route through MaaS's gateway. Set up writes back the documented list of namespaces."
-			plan(fmt.Sprintf("Gateway %s/%s: admit routes only from the namespaces it lists again (the MaaS docs' setup-gateway.sh)", inferenceGatewayNamespace, maasGatewayName))
+			plan(fmt.Sprintf("Gateway %s/%s: admit routes only from the namespaces it lists again (the MaaS docs' setup-gateway.sh)", inferenceGatewayNamespace, MaaSGatewayName))
 		case gw.gw.admitsAll():
 			gwPart.State = "problem"
 			gwPart.Message = "This gateway, which this tool did not create, admits routes from every namespace, so any project editor could put a route on MaaS's gateway. The MaaS docs' gateway (setup-gateway.sh) lists the namespaces instead. This tool publishes nothing through it until its owner applies the command below; it does not change a gateway it did not create."
 			if r.infraErr == nil {
-				gwPart.Commands = gatewayAllowedRoutesCommand(gw.gw, maasGatewayNamespaces(infra, rec.projects()))
+				gwPart.Commands = gatewayAllowedRoutesCommand(gw.gw, maasGatewayNamespaces(infra, rec.Projects()))
 			}
 		case gw.acceptedErr != "":
 			gwPart.State, gwPart.Message = "problem", "Not accepted: "+kube.TruncateText(gw.acceptedErr, 300)
 		case gw.programmed && gw.address != "":
-			gwPart.State, gwPart.Message = "ready", fmt.Sprintf("%s in %s, programmed at %s", maasGatewayName, inferenceGatewayNamespace, gw.address)
+			gwPart.State, gwPart.Message = "ready", fmt.Sprintf("%s in %s, programmed at %s", MaaSGatewayName, inferenceGatewayNamespace, gw.address)
 		default:
 			gwPart.State, gwPart.Message = "waiting", "Waiting for its load balancer"
 		}
@@ -1338,7 +1338,7 @@ func (r *maasStatusRun) statusGateway() {
 			}
 			warnings = append(warnings, w)
 		}
-		if modelsErr != nil && len(rec.pubs()) > 0 {
+		if modelsErr != nil && len(rec.Pubs()) > 0 {
 			warnings = append(warnings, "This tool's record of its models cannot be read ("+modelsErr.Error()+"), so whether a published model was deleted and made again under its name cannot be checked: such a publication stays on the gateway until the record can be read.")
 		}
 		gwPart.Warning = strings.Join(warnings, " ")
@@ -1354,23 +1354,23 @@ func (r *maasStatusRun) statusAuthorinoTLS(kq kuadrantState) {
 	tlsPart := types.MaaSPart{ID: "authorino-tls", Title: "Authorino TLS", DocURL: maasDocsBase + "configuration-and-management/tls-configuration.md"}
 	_, tlsByTool := rec.Shared["authorino-tls"]
 	tlsPlan := "Configure Authorino TLS as the docs' setup-authorino-tls.sh does: the serving-certificate annotation on Service authorino-authorino-authorization, TLS on the Authorino CR's listener, SSL_CERT_FILE on Deployment authorino, then restart it"
-	if kq.found {
-		missing, known, secret := authorinoTLS(c, kq.namespace)
+	if kq.Found {
+		missing, known, secret := AuthorinoTLS(c, kq.Namespace)
 		switch {
 		case missing != "":
-			cmds, why := authorinoTLSCommands(kq.namespace, secret)
+			cmds, why := AuthorinoTLSCommands(kq.Namespace, secret)
 			if why != "" {
 				tlsPart.State, tlsPart.Message = "problem", "Not configured: "+missing+". "+why+". Without it, API keys are refused."
 				r.blockers = append(r.blockers, tlsPart.Message)
 				break
 			}
 			tlsPart.State = "missing"
-			tlsPart.Message = "Not configured: " + missing + ". Without it, API keys are refused. Set up (or Configure Authorino TLS) applies the docs' setup-authorino-tls.sh steps in " + kq.namespace + "."
+			tlsPart.Message = "Not configured: " + missing + ". Without it, API keys are refused. Set up (or Configure Authorino TLS) applies the docs' setup-authorino-tls.sh steps in " + kq.Namespace + "."
 			tlsPart.Commands = cmds
-			tlsPart.Actions = []types.MaaSAction{authorinoTLSAction(kq.namespace, secret, missing)}
-			plan(tlsPlan + " (in " + kq.namespace + ")")
+			tlsPart.Actions = []types.MaaSAction{authorinoTLSAction(kq.Namespace, secret, missing)}
+			plan(tlsPlan + " (in " + kq.Namespace + ")")
 		case known:
-			tlsPart.State, tlsPart.Message = "ready", "Authorino in "+kq.namespace+" serves TLS and trusts the service CA"
+			tlsPart.State, tlsPart.Message = "ready", "Authorino in "+kq.Namespace+" serves TLS and trusts the service CA"
 			tlsPart.ManagedByTool, tlsPart.NotManaged = tlsByTool, !tlsByTool
 		default:
 			tlsPart.State, tlsPart.Message = "unknown", "Cannot read Authorino's configuration"
@@ -1399,7 +1399,7 @@ func (r *maasStatusRun) statusTierPolicies(kVersion string, kvErr error) {
 		case len(foreign) > 0:
 			polPart.State, polPart.NotManaged = "manual", true
 			polPart.Message = fmt.Sprintf("%s %s on %s and %s not managed by maas-controller. RHOAI's upgrade from the tier-based MaaS leaves its gateway policies in place, and with old and new gateway policies \"Kuadrant behavior is undefined\" (the MaaS docs' upgrade guide), so this tool publishes nothing until they are gone.",
-				strings.Join(policyNames(foreign), ", "), kube.Verb(len(foreign), "is", "are"), maasGatewayName, kube.Verb(len(foreign), "is", "are"))
+				strings.Join(policyNames(foreign), ", "), kube.Verb(len(foreign), "is", "are"), MaaSGatewayName, kube.Verb(len(foreign), "is", "are"))
 			var legacy, other []gatewayPolicy
 			for _, p := range foreign {
 				if legacyTierPolicy(p) {
@@ -1482,9 +1482,9 @@ func (r *maasStatusRun) statusDSC(dsc maasDSC, dscErr error) {
 				apiPart.Message = kube.SentenceStart(r.infraErr.Error())
 			}
 		}
-		ai, aiMsg := readyCondition(c, rhoai.NamespacedPath(maasAPI(c), "aitenants", "ai-tenants", "models-as-a-service"))
-		tc, tcMsg := readyCondition(c, rhoai.NamespacedPath(maasAPI(c), "maastenantconfigs", "models-as-a-service", "default-tenant"))
-		auth := maasGatewayAuth(c)
+		ai, aiMsg := readyCondition(c, rhoai.NamespacedPath(MaaSAPI(c), "aitenants", "ai-tenants", "models-as-a-service"))
+		tc, tcMsg := readyCondition(c, rhoai.NamespacedPath(MaaSAPI(c), "maastenantconfigs", "models-as-a-service", "default-tenant"))
+		auth := MaaSGatewayAuth(c)
 		switch {
 		case ai == "True" && tc == "True" && auth == "enforced":
 			tenantPart.State, tenantPart.Message = "ready", "Tenant models-as-a-service is Ready; the gateway's authentication is enforced"
@@ -1556,33 +1556,33 @@ func (r *maasStatusRun) statusPlatform(dsc maasDSC) {
 func (r *maasStatusRun) statusModels() {
 	c, st := r.c, r.st
 	// This tool's models and their publication.
-	models, err := listLLMInferenceServices(c)
-	if err != nil && !errors.Is(err, errLLMISvcAPIMissing) {
+	models, err := ListLLMInferenceServices(c)
+	if err != nil && !errors.Is(err, ErrLLMISvcAPIMissing) {
 		slog.Debug("cannot list models for MaaS", "error", err)
 	}
-	rec, recErr := readMaaSRecord(c)
-	authPhase := maasPhase(c, rhoai.NamespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access"))
-	subPhase := maasPhase(c, rhoai.NamespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription"))
+	rec, recErr := ReadMaaSRecord(c)
+	authPhase := maasPhase(c, rhoai.NamespacedPath(MaaSAPI(c), "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access"))
+	subPhase := maasPhase(c, rhoai.NamespacedPath(MaaSAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription"))
 	// Who may use the published models, and each one's limit: the
 	// subscription's (one an earlier build wrote reads as the free sample).
-	st.NoUnlimited = maasNoUnlimited(c)
+	st.NoUnlimited = MaaSNoUnlimited(c)
 	toolSub, subErr := readMaaSToolSubscription(c)
 	if subErr != nil {
 		slog.Debug("cannot read this tool's MaaSSubscription", "error", subErr)
 	} else if toolSub.found && toolSub.owned {
 		st.Access = &types.MaaSAudienceState{MaaSAudience: toolSub.audience.api()}
-		if !toolSub.audience.everyone {
-			st.Access.GroupProblems = maasGroupProblems(c, toolSub.audience.groups)
+		if !toolSub.audience.Everyone {
+			st.Access.GroupProblems = MaaSGroupProblems(c, toolSub.audience.Groups)
 		}
 	}
-	owned, ownedErr := readModelsRecord(c)
+	owned, ownedErr := ReadModelsRecord(c)
 	if ownedErr != nil {
 		slog.Debug("cannot read the models record for MaaS", "error", ownedErr)
 	}
 	v := maasModelsView{rec: rec, recErr: recErr, authPhase: authPhase, subPhase: subPhase, toolSub: toolSub, subErr: subErr}
 	for _, m := range models {
-		entry, _ := catalogEntry(m.Metadata.Name)
-		if _, ok := toolModelPath(m.Metadata.Namespace, m.Metadata.Name); !ok || !owned.owns(m.Metadata) {
+		entry, _ := CatalogEntry(m.Metadata.Name)
+		if _, ok := ToolModelPath(m.Metadata.Namespace, m.Metadata.Name); !ok || !owned.Owns(m.Metadata) {
 			continue
 		}
 		st.Items = append(st.Items, r.modelRow(m, entry, v))
@@ -1602,7 +1602,7 @@ func (r *maasStatusRun) statusModels() {
 
 // maasModelsView is what every row of statusModels reads.
 type maasModelsView struct {
-	rec                 maasRecord
+	rec                 MaaSRecord
 	recErr              error
 	authPhase, subPhase string
 	toolSub             maasToolSub
@@ -1610,7 +1610,7 @@ type maasModelsView struct {
 }
 
 // modelRow is the row of one of this tool's models.
-func (r *maasStatusRun) modelRow(m llmisvcObject, entry catalogModel, v maasModelsView) types.MaaSModel {
+func (r *maasStatusRun) modelRow(m LLMISvcObject, entry CatalogModel, v maasModelsView) types.MaaSModel {
 	c, st := r.c, r.st
 	p := &st.Platform
 	rec, recErr, authPhase, subPhase, toolSub, subErr := v.rec, v.recErr, v.authPhase, v.subPhase, v.toolSub, v.subErr
@@ -1620,29 +1620,29 @@ func (r *maasStatusRun) modelRow(m llmisvcObject, entry catalogModel, v maasMode
 	if cond, ok := kube.FindCondition(m.Status.Conditions, "Ready"); ok && cond.Status == "True" {
 		item.ModelReady = true
 	}
-	if entry.Type != modelTypeChat {
+	if entry.Type != ModelTypeChat {
 		item.Message = "Not offered for MaaS"
 		item.SetupBlockedReason = maasEmbeddingReason
 		return item
 	}
 	ref, found, _ := readMaaSModelRef(c, m.Metadata.Namespace, m.Metadata.Name)
-	if found && toolOwned(ref.Metadata) {
+	if found && ToolOwned(ref.Metadata) {
 		item.Published, item.Deployed = true, true
 		item.Phase, item.Endpoint = ref.Status.Phase, ref.Status.Endpoint
 		item.Access, item.Subscription = authPhase, subPhase
 		if subErr == nil && toolSub.found && toolSub.owned {
-			item.Limit = toolSub.limitOf(maasPub{m.Metadata.Namespace, m.Metadata.Name}).api()
+			item.Limit = toolSub.limitOf(MaaSPub{m.Metadata.Namespace, m.Metadata.Name}).api()
 		}
 		item.Ready = item.Phase == "Ready" && authPhase == "Active" && subPhase == "Active"
-		_, recordedRefs := rec.modelRefs(m.Metadata.Namespace, m.Metadata.Name)
+		_, recordedRefs := rec.ModelRefsOf(m.Metadata.Namespace, m.Metadata.Name)
 		switch refs := m.gatewayRefNames(); {
-		case modelHasMaaSRef(m) && len(refs) > 1 && recErr == nil && recordedRefs:
+		case ModelHasMaaSRef(m) && len(refs) > 1 && recErr == nil && recordedRefs:
 			// This build published it MaaS-only (its refs are recorded):
 			// someone added a gateway since, and Unpublish and Publish
 			// refuse until the refs are set (refsChangedRefusal).
 			item.Ready, item.Partly = false, true
 			item.Message = refsAddedStatus(m.Metadata.Namespace, m.Metadata.Name, refs)
-		case modelHasMaaSRef(m) && len(refs) > 1:
+		case ModelHasMaaSRef(m) && len(refs) > 1:
 			// An earlier build kept the other gateways (maas_routing.go):
 			// the rate limit fails every call on them.
 			item.Ready, item.Partly = false, true
@@ -1652,7 +1652,7 @@ func (r *maasStatusRun) modelRow(m llmisvcObject, entry catalogModel, v maasMode
 		default:
 			item.Message = fmt.Sprintf("Published; waiting (model reference %s, access %s, subscription %s)", kube.FirstNonEmpty(item.Phase, "pending"), kube.FirstNonEmpty(authPhase, "pending"), kube.FirstNonEmpty(subPhase, "pending"))
 		}
-	} else if left := maasLeftovers(c, m, recErr == nil && rec.published(m.Metadata.Namespace, m.Metadata.Name)); !found && len(left) > 0 {
+	} else if left := maasLeftovers(c, m, recErr == nil && rec.IsPublished(m.Metadata.Namespace, m.Metadata.Name)); !found && len(left) > 0 {
 		// A publication undone half-way (live: Unpublish deleted the
 		// model reference, then failed on the model): Unpublish again
 		// finishes it, so the tab must still offer it.
@@ -1670,31 +1670,31 @@ func (r *maasStatusRun) modelRow(m llmisvcObject, entry catalogModel, v maasMode
 			item.SetupBlockedReason = kube.FirstNonEmpty(item.SetupBlockedReason, "The model is not ready yet.")
 		}
 	}
-	if recorded, ok := rec.routeBefore(m.Metadata.Namespace, m.Metadata.Name, modelGatewayRefsOf(m)); item.Published && recErr == nil && ok {
+	if recorded, ok := rec.RouteBefore(m.Metadata.Namespace, m.Metadata.Name, modelGatewayRefsOf(m)); item.Published && recErr == nil && ok {
 		item.MaaSOnlySetup = recorded.NoRoute
 	}
 	return item
 }
 
 // goneRows adds a row for each recorded publication whose model is gone.
-func (r *maasStatusRun) goneRows(rec maasRecord) {
+func (r *maasStatusRun) goneRows(rec MaaSRecord) {
 	c, st := r.c, r.st
-	for _, p := range rec.pubs() {
+	for _, p := range rec.Pubs() {
 		shown := false
 		for _, it := range st.Items {
-			shown = shown || (it.Namespace == p.project && it.Name == p.model)
+			shown = shown || (it.Namespace == p.Project && it.Name == p.Model)
 		}
 		if shown {
 			continue
 		}
 		left := []string{"this tool's record of the publication"}
-		if ref, found, _ := readMaaSModelRef(c, p.project, p.model); found && toolOwned(ref.Metadata) {
-			left = append([]string{"MaaSModelRef " + p.model}, left...)
+		if ref, found, _ := readMaaSModelRef(c, p.Project, p.Model); found && ToolOwned(ref.Metadata) {
+			left = append([]string{"MaaSModelRef " + p.Model}, left...)
 		}
 		st.Items = append(st.Items, types.MaaSModel{
-			Namespace: p.project, Name: p.model, ManagedByTool: true, Deployed: true,
-			Message:     "Partly published: no model of this name is in project " + p.project + " any more (it was deleted there, or the project was); " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it.",
-			DisplayName: p.model,
+			Namespace: p.Project, Name: p.Model, ManagedByTool: true, Deployed: true,
+			Message:     "Partly published: no model of this name is in project " + p.Project + " any more (it was deleted there, or the project was); " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it.",
+			DisplayName: p.Model,
 			Published:   true,
 			Partly:      true,
 		})
@@ -1705,14 +1705,14 @@ func (r *maasStatusRun) goneRows(rec maasRecord) {
 // once its MaaSModelRef is gone: the model's route through the MaaS
 // gateway (its refs, or a route KServe has not moved yet, read only for a
 // recorded publication), and this tool's record of the publication.
-func maasLeftovers(c *Client, m llmisvcObject, recorded bool) []string {
+func maasLeftovers(c *kube.Client, m LLMISvcObject, recorded bool) []string {
 	var left []string
-	if modelHasMaaSRef(m) {
-		left = append(left, "the model's route through "+maasGatewayName)
+	if ModelHasMaaSRef(m) {
+		left = append(left, "the model's route through "+MaaSGatewayName)
 	} else if recorded {
 		parents, _, err := readModelRoute(c, m.Metadata.Namespace, m.Metadata.Name)
-		if err == nil && slices.Contains(parents, inferenceGatewayNamespace+"/"+maasGatewayName) {
-			left = append(left, "the model's route through "+maasGatewayName+" (KServe has not moved it yet)")
+		if err == nil && slices.Contains(parents, inferenceGatewayNamespace+"/"+MaaSGatewayName) {
+			left = append(left, "the model's route through "+MaaSGatewayName+" (KServe has not moved it yet)")
 		}
 	}
 	if recorded {
@@ -1721,13 +1721,13 @@ func maasLeftovers(c *Client, m llmisvcObject, recorded bool) []string {
 	return left
 }
 
-// toolOwned: this tool created the object (its label, and a write by it).
-func toolOwned(meta kube.ObjectMeta) bool {
+// ToolOwned: this tool created the object (its label, and a write by it).
+func ToolOwned(meta kube.ObjectMeta) bool {
 	return meta.HasToolLabel() && meta.HasManager(envkit.ToolManagers)
 }
 
 // dashboardURLOrEmpty is the dashboard's address, or "".
-func dashboardURLOrEmpty(c *Client) string {
+func dashboardURLOrEmpty(c *kube.Client) string {
 	return dashdev.CachedURL(c)
 }
 
@@ -1747,21 +1747,21 @@ type maasModelRefObject struct {
 // catalog in project; only those names, written out so the RBAC rules
 // (resourceNames) can be checked against them (rbac_coverage_test.go). An
 // embedding model has none: it is not published.
-func maasModelRefPath(c *Client, project, name string) (string, bool) {
+func maasModelRefPath(c *kube.Client, project, name string) (string, bool) {
 	switch name {
 	case "smollm2-135m-instruct":
-		return rhoai.NamespacedPath(maasAPI(c), "maasmodelrefs", project, "smollm2-135m-instruct"), true
+		return rhoai.NamespacedPath(MaaSAPI(c), "maasmodelrefs", project, "smollm2-135m-instruct"), true
 	case "qwen25-05b-instruct":
-		return rhoai.NamespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen25-05b-instruct"), true
+		return rhoai.NamespacedPath(MaaSAPI(c), "maasmodelrefs", project, "qwen25-05b-instruct"), true
 	case "qwen3-1-7b":
-		return rhoai.NamespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen3-1-7b"), true
+		return rhoai.NamespacedPath(MaaSAPI(c), "maasmodelrefs", project, "qwen3-1-7b"), true
 	}
 	return "", false
 }
 
 // readMaaSModelRef reads the MaaSModelRef of model name in project (none
 // for a model that is not publishable).
-func readMaaSModelRef(c *Client, project, name string) (maasModelRefObject, bool, error) {
+func readMaaSModelRef(c *kube.Client, project, name string) (maasModelRefObject, bool, error) {
 	path, ok := maasModelRefPath(c, project, name)
 	if !ok {
 		return maasModelRefObject{}, false, nil
@@ -1769,7 +1769,7 @@ func readMaaSModelRef(c *Client, project, name string) (maasModelRefObject, bool
 	return readMaaSObject(c, path)
 }
 
-func readMaaSObject(c *Client, path string) (maasModelRefObject, bool, error) {
+func readMaaSObject(c *kube.Client, path string) (maasModelRefObject, bool, error) {
 	var obj maasModelRefObject
 	found, err := c.GetIntoOptional(path, &obj)
 	if err != nil {
@@ -1782,7 +1782,7 @@ func readMaaSObject(c *Client, path string) (maasModelRefObject, bool, error) {
 }
 
 // maasPhase is a MaaS object's status.phase ("" when absent).
-func maasPhase(c *Client, path string) string {
+func maasPhase(c *kube.Client, path string) string {
 	obj, found, err := readMaaSObject(c, path)
 	if err != nil || !found {
 		return ""
@@ -1796,7 +1796,7 @@ func maasPhase(c *Client, path string) string {
 // this tool's record of it, or the model's route through the MaaS gateway.
 // Unpublish removes all three (and the project from the shared
 // subscription, authorization policy and gateway), so the model goes after it.
-func MaaSPublishedIn(c *Client, project, name string) (bool, error) {
+func MaaSPublishedIn(c *kube.Client, project, name string) (bool, error) {
 	refPath, ok := maasModelRefPath(c, project, name)
 	if !ok {
 		return false, nil
@@ -1808,47 +1808,53 @@ func MaaSPublishedIn(c *Client, project, name string) (bool, error) {
 	if found {
 		return true, nil
 	}
-	rec, err := readMaaSRecord(c)
+	rec, err := ReadMaaSRecord(c)
 	if err != nil {
 		return false, err
 	}
-	if rec.published(project, name) {
+	if rec.IsPublished(project, name) {
 		return true, nil
 	}
-	model, found, err := readToolModel(c, project, name)
+	model, found, err := ReadToolModel(c, project, name)
 	if err != nil {
 		return false, err
 	}
-	if !found || !modelHasMaaSRef(model) {
+	if !found || !ModelHasMaaSRef(model) {
 		return false, nil
 	}
 	return ownsModel(c, model.Metadata)
 }
 
 // maasOnlySetup reports whether this tool's model name in project is
-// published and had no route before (maasModelRefs.NoRoute, or a setup
-// through MaaS only whose publish recorded nothing: routeBefore): the
+// published and had no route before (MaaSModelRefs.NoRoute, or a setup
+// through MaaS only whose publish recorded nothing: RouteBefore): the
 // Models tab set it up to be reached through MaaS only, or "Only inside
 // the cluster" and it was published on the MaaS tab. The Models teardown
 // unpublishes such a model itself (Unpublish leaves it with no route, as
 // before); any other published model is unpublished on the MaaS tab.
-func maasOnlySetup(c *Client, project, name string) (bool, error) {
+func maasOnlySetup(c *kube.Client, project, name string) (bool, error) {
 	published, err := MaaSPublishedIn(c, project, name)
 	if err != nil || !published {
 		return false, err
 	}
-	rec, err := readMaaSRecord(c)
+	rec, err := ReadMaaSRecord(c)
 	if err != nil {
 		return false, err
 	}
-	model, found, err := readToolModel(c, project, name)
+	model, found, err := ReadToolModel(c, project, name)
 	if err != nil {
 		return false, err
 	}
-	var current gatewayRefs
+	var current GatewayRefs
 	if found {
 		current = modelGatewayRefsOf(model)
 	}
-	refs, ok := rec.routeBefore(project, name, current)
+	refs, ok := rec.RouteBefore(project, name, current)
 	return ok && refs.NoRoute, nil
+}
+
+// SetUpByTool: the record says this tool set MaaS up, or published a model,
+// and has not removed it (Clean up MaaS clears each of these as it goes).
+func (r MaaSRecord) SetUpByTool() bool {
+	return r.DSCChanged || r.AIGatewayChanged || len(r.Published) > 0 || r.DBNamespace != "" || r.Database != "" || r.InfraNamespace != "" || r.POCCredsUID != ""
 }

@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"encoding/json"
@@ -24,7 +24,7 @@ const maasDocsSamplePriority = 10
 // Priority"): this tool's subscription, which every signed-in user is in,
 // must never take a key meant for someone else's. It also returns the
 // others' names. The API server validates the value (the publish dry run).
-func maasSubscriptionPriority(c *Client) (int, []string, error) {
+func maasSubscriptionPriority(c *kube.Client) (int, []string, error) {
 	var list struct {
 		Items []struct {
 			Metadata kube.ObjectMeta `json:"metadata"`
@@ -33,7 +33,7 @@ func maasSubscriptionPriority(c *Client) (int, []string, error) {
 			} `json:"spec"`
 		} `json:"items"`
 	}
-	found, err := c.GetIntoOptional(rhoai.NamespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""), &list)
+	found, err := c.GetIntoOptional(rhoai.NamespacedPath(MaaSAPI(c), "maassubscriptions", MaaSTenantNamespace, ""), &list)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return 0, nil, fmt.Errorf("parse the MaaSSubscription list: %w", err)
@@ -46,7 +46,7 @@ func maasSubscriptionPriority(c *Client) (int, []string, error) {
 	var others []string
 	lowest := 0
 	for _, it := range list.Items {
-		if toolOwned(it.Metadata) {
+		if ToolOwned(it.Metadata) {
 			continue
 		}
 		if len(others) == 0 || it.Spec.Priority < lowest {
@@ -63,7 +63,7 @@ func maasSubscriptionPriority(c *Client) (int, []string, error) {
 
 // maasOwnSubscriptionPriority is the priority of this tool's subscription
 // as it is (Unpublish keeps it), or the docs' sample's.
-func maasOwnSubscriptionPriority(c *Client) int {
+func maasOwnSubscriptionPriority(c *kube.Client) int {
 	body, _, err := c.Get(maasAccessPath(c, "MaaSSubscription"))
 	if err != nil {
 		return maasDocsSamplePriority

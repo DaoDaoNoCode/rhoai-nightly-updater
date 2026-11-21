@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"fmt"
@@ -26,9 +26,9 @@ func maasSharedPart(id string) bool {
 	return false
 }
 
-// operatorPlanPrefix names the namespace and OperatorGroup an install
+// OperatorPlanPrefix names the namespace and OperatorGroup an install
 // creates, for the setup plan.
-func operatorPlanPrefix(p *envkit.OperatorInstallPlan) string {
+func OperatorPlanPrefix(p *envkit.OperatorInstallPlan) string {
 	var out []string
 	if p.NSMissing {
 		out = append(out, "Namespace "+p.Op.Namespace)
@@ -65,28 +65,28 @@ func rhclUpgradeRefusal(st envkit.OperatorState) string {
 // rhclUpgradeOffer is the Upgrade Connectivity Link action for an install
 // below the docs' minimum, with the commands that do the same by hand; nil
 // when this tool cannot do it (the commands, or the reason, say why).
-func rhclUpgradeOffer(c *Client, st envkit.OperatorState) (*types.MaaSAction, string) {
+func rhclUpgradeOffer(c *kube.Client, st envkit.OperatorState) (*types.MaaSAction, string) {
 	if why := rhclUpgradeRefusal(st); why != "" {
 		if st.Sub == nil {
 			return nil, fmt.Sprintf("# %s\noc get subscriptions -n %s", why, kube.ShellQuote(st.CSVNS))
 		}
 		return nil, "# " + why
 	}
-	pkg, found, err := envkit.ReadOperatorPackage(c, rhclOperator.Pkg, st.Sub.Spec.Source)
+	pkg, found, err := envkit.ReadOperatorPackage(c, RHCLOperator.Pkg, st.Sub.Spec.Source)
 	if err != nil || !found {
 		return nil, ""
 	}
-	target := rhclTargetChannel(pkg)
+	target := RHCLTargetChannel(pkg)
 	if target == "" {
 		return nil, ""
 	}
 	targetCh, _ := pkg.Channel(target)
 	changes := []string{fmt.Sprintf("Subscription %s/%s: channel %s to %s (version %s). OLM upgrades the operator; there is no way back to %s.", st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, kube.FirstNonEmpty(st.Sub.Spec.Channel, "not set"), target, targetCh.Head(), st.Version)}
-	cmds := []string{rhclChannelCommand(st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, target)}
-	if hop := hopChannel(pkg, st.CSV, target); hop != "" && !targetCh.Has(st.CSV) {
+	cmds := []string{RHCLChannelCommand(st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, target)}
+	if hop := HopChannel(pkg, st.CSV, target); hop != "" && !targetCh.Has(st.CSV) {
 		hopCh, _ := pkg.Channel(hop)
 		changes = append(changes, fmt.Sprintf("If OLM has no path from %s straight to %s (it then stays at %s), channel %s first, to %s, then %s.", st.Version, targetCh.Head(), st.Version, hop, hopCh.Head(), target))
-		cmds = []string{commentText("# OLM may have no path from " + st.Version + " straight to " + target + ": go through " + hop + " first"), rhclChannelCommand(st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, hop), commentText("# once " + hopCh.CurrentCSV + " is installed:"), cmds[0]}
+		cmds = []string{CommentText("# OLM may have no path from " + st.Version + " straight to " + target + ": go through " + hop + " first"), RHCLChannelCommand(st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, hop), CommentText("# once " + hopCh.CurrentCSV + " is installed:"), cmds[0]}
 	}
 	changes = append(changes, "Afterwards, Authorino TLS is set up again where an upgrade step recreated Authorino's Service (which removes its certificate).")
 	return &types.MaaSAction{
@@ -99,7 +99,7 @@ func rhclUpgradeOffer(c *Client, st envkit.OperatorState) (*types.MaaSAction, st
 // rhclMemoryOffer is the action that raises the Kuadrant operator's memory
 // limit, offered only once one of its containers is seen OOMKilled (its
 // last or current termination), and a note for the part's warning.
-func rhclMemoryOffer(c *Client, st envkit.OperatorState) (*types.MaaSAction, string) {
+func rhclMemoryOffer(c *kube.Client, st envkit.OperatorState) (*types.MaaSAction, string) {
 	if !st.Installed() {
 		return nil, ""
 	}
@@ -173,7 +173,7 @@ func authorinoTLSAction(ns, secret, missing string) types.MaaSAction {
 		ID: "authorino-tls", Label: "Configure Authorino TLS",
 		Summary: "Applies the steps of the MaaS docs' setup-authorino-tls.sh to Connectivity Link's Authorino in " + ns + " (missing: " + missing + "). Only what is not set yet changes; Authorino restarts. It stays after Clean up: RHOAI's inference gateway uses Authorino too.",
 		Changes: []string{
-			"Service " + ns + "/authorino-authorino-authorization: annotation " + servingCertAnnotation + "=" + secret + " (service-ca makes the certificate)",
+			"Service " + ns + "/authorino-authorino-authorization: annotation " + CertSecretAnnotation + "=" + secret + " (service-ca makes the certificate)",
 			"Authorino " + ns + "/authorino: spec.listener.tls enabled, certSecretRef " + secret,
 			"Deployment " + ns + "/authorino: SSL_CERT_FILE and REQUESTS_CA_BUNDLE at the service CA (" + authorinoServiceCAFile + "), unless it trusts the service CA already; then a rollout restart",
 		},
@@ -184,7 +184,7 @@ func authorinoTLSAction(ns, secret, missing string) types.MaaSAction {
 func tierPoliciesAction(legacy []gatewayPolicy) types.MaaSAction {
 	var changes []string
 	for _, p := range legacy {
-		changes = append(changes, fmt.Sprintf("Deleted: %s %s/%s (targets %s; not managed by maas-controller)", p.Kind, inferenceGatewayNamespace, p.Name, maasGatewayName))
+		changes = append(changes, fmt.Sprintf("Deleted: %s %s/%s (targets %s; not managed by maas-controller)", p.Kind, inferenceGatewayNamespace, p.Name, MaaSGatewayName))
 	}
 	return types.MaaSAction{
 		ID: "remove-tier-policies", Label: "Remove the old tier policies", Danger: true,

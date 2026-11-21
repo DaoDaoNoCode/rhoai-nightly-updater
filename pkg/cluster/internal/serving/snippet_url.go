@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"regexp"
@@ -9,13 +9,13 @@ import (
 // (org/model, model:tag), nothing a shell or JSON treats specially.
 var servedNamePattern = regexp.MustCompile(`^[A-Za-z0-9._/:-]{1,253}$`)
 
-// safeServedName reports whether s, a model's spec.model.name, may be
+// SafeServedName reports whether s, a model's spec.model.name, may be
 // shown, put in the commands users paste into a shell, and sent by the
 // call check. KServe and vLLM accept any string there, and anyone who can
 // edit the model's project chooses it (on any model of a catalog name, not
 // only this tool's); the UI also builds request bodies as JSON and
 // shell-quotes them.
-func safeServedName(s string) bool {
+func SafeServedName(s string) bool {
 	return servedNamePattern.MatchString(s)
 }
 

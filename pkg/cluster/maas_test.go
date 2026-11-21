@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -219,7 +220,7 @@ func TestMaaSSetup_FollowsTheDocumentedOrderAndShapes(t *testing.T) {
 	if !strings.Contains(string(dsc), `"modelsAsAService":{"managementState":"Managed"}`) {
 		t.Fatalf("dsc = %s", dsc)
 	}
-	rec, _ := readMaaSRecord(mc.c)
+	rec, _ := serving.ReadMaaSRecord(mc.c)
 	if !rec.DSCChanged || rec.PreviousModelsAsAService != "Removed" {
 		t.Fatalf("record = %+v", rec)
 	}
@@ -390,7 +391,7 @@ func TestMaaSPublishAndUnpublish(t *testing.T) {
 		t.Fatal("no MaaSModelRef")
 	}
 	// The model cannot be deleted while it is published.
-	if res, _ := TeardownModels(mc.c, "proj"); res.Success || res.ErrorCode != "in_use" {
+	if res, _ := serving.TeardownModels(mc.c, "proj"); res.Success || res.ErrorCode != "in_use" {
 		t.Fatalf("model teardown while published: %+v", res)
 	}
 	res, events = runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"})
@@ -417,7 +418,7 @@ func TestMaaSPublishAndUnpublish(t *testing.T) {
 	if strings.Contains(string(gw), `"proj"`) {
 		t.Fatalf("the gateway still admits proj: %s", gw)
 	}
-	rec, _ := readMaaSRecord(mc.c)
+	rec, _ := serving.ReadMaaSRecord(mc.c)
 	if len(rec.Published) != 0 {
 		t.Fatalf("record = %+v", rec)
 	}
@@ -495,7 +496,7 @@ func TestAuthorinoTrustsServiceCA(t *testing.T) {
 			"containers":[{"volumeMounts":[{"name":"ca","mountPath":"/etc/x"}]}]}}}}`, false},
 		{"nothing", `{"spec":{"template":{"spec":{"containers":[{}]}}}}`, false},
 	} {
-		if got := authorinoTrustsServiceCA([]byte(tc.deployment)); got != tc.want {
+		if got := serving.AuthorinoTrustsServiceCA([]byte(tc.deployment)); got != tc.want {
 			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
 		}
 	}

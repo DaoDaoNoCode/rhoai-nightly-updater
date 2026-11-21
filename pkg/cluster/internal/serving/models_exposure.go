@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"fmt"
@@ -47,15 +47,15 @@ import (
 // MaaS option writes refs [maas-default-gateway] alone
 // (odh-dashboard rhoai-3.6 maasDeploymentTransformer.ts).
 const (
-	exposureDefault  = "default-gateway"
-	exposureMaaS     = "maas"
-	exposureGateway  = "gateway"
-	exposureInternal = "internal"
+	ExposureDefault  = "default-gateway"
+	ExposureMaaS     = "maas"
+	ExposureGateway  = "gateway"
+	ExposureInternal = "internal"
 	// dataScienceGatewayName is the RHOAI operator's gateway for its own
 	// UIs (GatewayConfig default-gateway), never one for models.
 	dataScienceGatewayName = "data-science-gateway"
 	gatewayConfigKind      = "GatewayConfig"
-	odhManagedLabel        = "opendatahub.io/managed"
+	ODHManagedLabel        = "opendatahub.io/managed"
 )
 
 // gatewayNameRegex is a Gateway's name: a DNS subdomain.
@@ -64,7 +64,7 @@ var gatewayNameRegex = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?
 // ValidExposure reports whether e is an exposure a setup request may name.
 func ValidExposure(e string) bool {
 	switch e {
-	case "", exposureDefault, exposureMaaS, exposureGateway, exposureInternal:
+	case "", ExposureDefault, ExposureMaaS, ExposureGateway, ExposureInternal:
 		return true
 	}
 	return false
@@ -72,9 +72,9 @@ func ValidExposure(e string) bool {
 
 // listAllGateways lists the Gateways of every namespace (read-only; the
 // list is the one otherGatewaysOfClass reads).
-func listAllGateways(c *Client) ([]gatewayObject, error) {
+func listAllGateways(c *kube.Client) ([]GatewayObject, error) {
 	var list struct {
-		Items []gatewayObject `json:"items"`
+		Items []GatewayObject `json:"items"`
 	}
 	found, err := c.GetIntoOptional(rhoai.ClusterPath("gateway.networking.k8s.io/v1", "gateways", ""), &list)
 	if err != nil {
@@ -91,21 +91,21 @@ func listAllGateways(c *Client) ([]gatewayObject, error) {
 
 func gatewayKey(ns, name string) string { return ns + "/" + name }
 
-func findGateway(gws []gatewayObject, ns, name string) (gatewayObject, bool) {
+func findGateway(gws []GatewayObject, ns, name string) (GatewayObject, bool) {
 	for _, g := range gws {
 		if g.Metadata.Namespace == ns && g.Metadata.Name == name {
 			return g, true
 		}
 	}
-	return gatewayObject{}, false
+	return GatewayObject{}, false
 }
 
 // gatewayExclusion says why a gateway is never offered for a model's refs
 // ("" when it may be): MaaS's gateway (the MaaS option routes through it,
 // and mixing it with another gateway on one model makes direct calls fail
 // with 500, maas_routing.go), and the operator's gateway for its own UIs.
-func gatewayExclusion(g gatewayObject) string {
-	if g.Metadata.Namespace == inferenceGatewayNamespace && g.Metadata.Name == maasGatewayName {
+func gatewayExclusion(g GatewayObject) string {
+	if g.Metadata.Namespace == inferenceGatewayNamespace && g.Metadata.Name == MaaSGatewayName {
 		return "MaaS's gateway (choose Through MaaS)"
 	}
 	if g.Metadata.Name == dataScienceGatewayName {
@@ -121,7 +121,7 @@ func gatewayExclusion(g gatewayObject) string {
 
 // gatewayProblem says why a gateway cannot carry a model now ("" when it
 // is accepted and programmed).
-func gatewayProblem(g gatewayObject) string {
+func gatewayProblem(g GatewayObject) string {
 	if g.Metadata.Terminating() {
 		return "it is being deleted"
 	}
@@ -140,7 +140,7 @@ func gatewayProblem(g gatewayObject) string {
 
 // gatewayAddress is where a model routed through g answers: its external
 // listener's hostname, then /<project>/<model> (KServe's path), or "".
-func gatewayAddress(g gatewayObject, project, model string) string {
+func gatewayAddress(g GatewayObject, project, model string) string {
 	if host := g.externalHost(); host != "" {
 		return fmt.Sprintf("https://%s/%s/%s", host, project, model)
 	}
@@ -149,7 +149,7 @@ func gatewayAddress(g gatewayObject, project, model string) string {
 
 // internalAddress is the cluster-internal address KServe gives a model
 // without a route (status.addresses).
-// modelInClusterURL is the model's own in-cluster address among those
+// ModelInClusterURL is the model's own in-cluster address among those
 // KServe reports (status.addresses). RHOAI 3.6 lists, for a model on a
 // gateway, the gateway's external and internal routing bases (".../")
 // and the model's paths on each ("/<project>/<model>" and
@@ -158,7 +158,7 @@ func gatewayAddress(g gatewayObject, project, model string) string {
 // which is not the model's (seen live), so the address is chosen by what
 // it points at: an in-cluster address of the model's own path, else the
 // model's own Service; "" when KServe reports neither.
-func modelInClusterURL(m llmisvcObject) string {
+func ModelInClusterURL(m LLMISvcObject) string {
 	ns, name := m.Metadata.Namespace, m.Metadata.Name
 	service := ""
 	for _, a := range m.Status.Addresses {
@@ -183,7 +183,7 @@ func modelInClusterURL(m llmisvcObject) string {
 	return service
 }
 
-// withServicePort completes an in-cluster address that names a Service with
+// WithServicePort completes an in-cluster address that names a Service with
 // no port. KServe reports the model's own Service as "https://<svc>.<ns>.svc
 // .cluster.local" while the Service listens on another port (8000 on RHOAI
 // 3.6, seen live: the address as reported does not connect), so the port is
@@ -191,7 +191,7 @@ func modelInClusterURL(m llmisvcObject) string {
 // only port. An address with a port or a path (a gateway's) is returned as
 // it is. "" when the Service cannot be read or names no https port: no
 // address is better than one that does not connect.
-func withServicePort(c *Client, address string) string {
+func WithServicePort(c *kube.Client, address string) string {
 	u, err := url.Parse(address)
 	if address == "" || err != nil || u.Port() != "" || strings.Trim(u.Path, "/") != "" {
 		return address
@@ -239,7 +239,7 @@ func internalAddress(project, model string) string {
 
 // foreignGatewayAdmitReason says that someone else's gateway does not let
 // project's routes attach, and the step its owner takes.
-func foreignGatewayAdmitReason(g gatewayObject, project string) string {
+func foreignGatewayAdmitReason(g GatewayObject, project string) string {
 	return fmt.Sprintf("Gateway %s, which this tool did not create, does not let routes from project %s attach (its listeners' allowedRoutes), and this tool does not change it. Its owner (a cluster admin) adds %s; for a gateway that lists projects by name, as RHOAI documents it, that is the values array of allowedRoutes.namespaces.selector (%s In [...]).",
 		gatewayKey(g.Metadata.Namespace, g.Metadata.Name), project, project, namespaceNameLabel)
 }
@@ -248,28 +248,28 @@ func foreignGatewayAdmitReason(g gatewayObject, project string) string {
 // Connectivity Link's AuthPolicy API is served (KServe's precondition) and
 // its Kuadrant CR exists (which enforces the policies). It returns a
 // reason when not, in words.
-func authReadiness(c *Client) (bool, string, error) {
-	served, err := groupServed(c, kuadrantGroup)
+func authReadiness(c *kube.Client) (bool, string, error) {
+	served, err := GroupServed(c, KuadrantGroup)
 	if err != nil {
 		return false, "", err
 	}
 	if !served {
 		return false, "Red Hat Connectivity Link (Kuadrant) is not installed. It authenticates the calls on a gateway, and KServe does not start a model with token authentication until its AuthPolicy API exists.", nil
 	}
-	k, err := readKuadrant(c)
+	k, err := ReadKuadrant(c)
 	if err != nil {
 		return false, "", err
 	}
-	if !k.found {
+	if !k.Found {
 		return false, "Red Hat Connectivity Link is installed, but it has no Kuadrant CR, so the gateway's AuthPolicy is not enforced.", nil
 	}
 	return true, "", nil
 }
 
-// exposurePlan is the exposure a model setup writes, decided by the checks
+// ExposurePlan is the exposure a model setup writes, decided by the checks
 // in planExposures.
-type exposurePlan struct {
-	exposure string
+type ExposurePlan struct {
+	Exposure string
 	gwNS     string
 	gwName   string
 	// toolGateway: the gateway is this tool's inference gateway: the
@@ -290,11 +290,11 @@ type exposurePlan struct {
 
 // router is the model's spec.router for the plan (nil: no router, the
 // model is internal only).
-func (e exposurePlan) router() map[string]any {
-	switch e.exposure {
-	case exposureInternal:
+func (e ExposurePlan) router() map[string]any {
+	switch e.Exposure {
+	case ExposureInternal:
 		return nil
-	case exposureMaaS, exposureGateway:
+	case ExposureMaaS, ExposureGateway:
 		return map[string]any{"route": map[string]any{}, "gateway": map[string]any{
 			"refs": []any{map[string]any{"name": e.gwName, "namespace": e.gwNS}},
 		}}
@@ -303,15 +303,15 @@ func (e exposurePlan) router() map[string]any {
 	return map[string]any{"route": map[string]any{}, "gateway": map[string]any{}}
 }
 
-// exposureReads are what the options are computed from.
-type exposureReads struct {
-	project string
+// ExposureReads are what the options are computed from.
+type ExposureReads struct {
+	Project string
 	labels  map[string]string
-	entry   catalogModel
-	def     kserveGateway
+	Entry   CatalogModel
+	def     KServeGateway
 	// defErr: KServe's configuration cannot be read (def is not known).
 	defErr  error
-	gws     []gatewayObject
+	gws     []GatewayObject
 	gwsErr  error
 	auth    bool
 	authWhy string
@@ -319,14 +319,14 @@ type exposureReads struct {
 	// maas is GetMaaSStatus's verdict: "" ready, else why not.
 	maas      string
 	maasURL   string
-	maasKnown bool
-	// maasWho: who may use this tool's published models when it is not
+	MaaSKnown bool
+	// MaaSWho: who may use this tool's published models when it is not
 	// everyone signed in ("" for everyone).
-	maasWho string
+	MaaSWho string
 }
 
-func readExposureInputs(c *Client, project string, labels map[string]string, entry catalogModel, needMaaS bool) exposureReads {
-	r := exposureReads{project: project, labels: labels, entry: entry}
+func readExposureInputs(c *kube.Client, project string, labels map[string]string, entry CatalogModel, needMaaS bool) ExposureReads {
+	r := ExposureReads{Project: project, labels: labels, Entry: entry}
 	// KServe's default gateway is used only when its configuration names
 	// it: an unreadable or unset one is never taken to be a gateway (a
 	// model routed by default could land elsewhere, and its project would
@@ -334,8 +334,8 @@ func readExposureInputs(c *Client, project string, labels map[string]string, ent
 	r.def, r.defErr = readKServeGateway(c)
 	r.gws, r.gwsErr = listAllGateways(c)
 	r.auth, r.authWhy, r.authErr = authReadiness(c)
-	if needMaaS && entry.Type == modelTypeChat {
-		r.maasKnown = true
+	if needMaaS && entry.Type == ModelTypeChat {
+		r.MaaSKnown = true
 		st, err := GetMaaSStatus(c)
 		switch {
 		case err != nil:
@@ -358,8 +358,8 @@ func readExposureInputs(c *Client, project string, labels map[string]string, ent
 		// Publish keeps the audience of this tool's subscription: who can
 		// already use its published models (everyone, when none is).
 		if err == nil && st.Access != nil && !st.Access.Everyone {
-			if aud, problem := parseMaaSAudience(&st.Access.MaaSAudience); problem == "" {
-				r.maasWho = aud.text()
+			if aud, problem := ParseMaaSAudience(&st.Access.MaaSAudience); problem == "" {
+				r.MaaSWho = aud.Text()
 			}
 		}
 	}
@@ -368,32 +368,32 @@ func readExposureInputs(c *Client, project string, labels map[string]string, ent
 
 // gatewayOption evaluates a gateway (KServe's default, or one a model
 // refers to) for the project.
-func (r exposureReads) gatewayOption(opt *types.ModelExposureOption, plan *exposurePlan, g gatewayObject) {
+func (r ExposureReads) gatewayOption(opt *types.ModelExposureOption, plan *ExposurePlan, g GatewayObject) {
 	ns, name := g.Metadata.Namespace, g.Metadata.Name
 	plan.gwNS, plan.gwName = ns, name
-	opt.Address = gatewayAddress(g, r.project, r.entry.Name)
+	opt.Address = gatewayAddress(g, r.Project, r.Entry.Name)
 	if why := gatewayProblem(g); why != "" {
 		opt.Reason = fmt.Sprintf("Gateway %s cannot carry a model now: %s.", gatewayKey(ns, name), why)
 		return
 	}
 	if ns == inferenceGatewayNamespace && name == inferenceGatewayName && gatewayOwned(g.Metadata) {
 		plan.toolGateway = true
-		if g.admits(r.project, r.labels) != "yes" {
-			opt.Changes = append(opt.Changes, fmt.Sprintf("Gateway %s (this tool's): %s is added to the projects it allows. Anyone who can edit %s can then attach routes to this shared gateway.", gatewayKey(ns, name), r.project, r.project))
+		if g.Admits(r.Project, r.labels) != "yes" {
+			opt.Changes = append(opt.Changes, fmt.Sprintf("Gateway %s (this tool's): %s is added to the projects it allows. Anyone who can edit %s can then attach routes to this shared gateway.", gatewayKey(ns, name), r.Project, r.Project))
 		}
 	} else {
-		switch g.admits(r.project, r.labels) {
+		switch g.Admits(r.Project, r.labels) {
 		case "no":
-			opt.Reason = foreignGatewayAdmitReason(g, r.project)
+			opt.Reason = foreignGatewayAdmitReason(g, r.Project)
 			return
 		case "unknown":
-			opt.Warning = fmt.Sprintf("Gateway %s chooses the projects it admits with expressions this tool does not evaluate: if the model does not become ready, check that it admits %s.", gatewayKey(ns, name), r.project)
+			opt.Warning = fmt.Sprintf("Gateway %s chooses the projects it admits with expressions this tool does not evaluate: if the model does not become ready, check that it admits %s.", gatewayKey(ns, name), r.Project)
 		}
 	}
 	switch {
-	case g.Metadata.Labels[odhManagedLabel] == "false":
+	case g.Metadata.Labels[ODHManagedLabel] == "false":
 		plan.authUncertain = true
-		opt.Warning = strings.TrimSpace(opt.Warning + fmt.Sprintf(" Gateway %s is labelled %s=false, so RHOAI does not add its token authentication: whoever owns the gateway decides who may call.", gatewayKey(ns, name), odhManagedLabel))
+		opt.Warning = strings.TrimSpace(opt.Warning + fmt.Sprintf(" Gateway %s is labelled %s=false, so RHOAI does not add its token authentication: whoever owns the gateway decides who may call.", gatewayKey(ns, name), ODHManagedLabel))
 	case ns != inferenceGatewayNamespace:
 		// RHOAI adds its AuthPolicy there too, but this tool reads
 		// AuthPolicies only in openshift-ingress, so it cannot tell.
@@ -408,14 +408,14 @@ func (r exposureReads) gatewayOption(opt *types.ModelExposureOption, plan *expos
 // planExposures computes the options for a model of the catalog in
 // project, and the recommended one. needMaaS reads the MaaS platform (the
 // MaaS option); without it that option is unknown.
-func planExposures(c *Client, project string, labels map[string]string, entry catalogModel, needMaaS bool) (*types.ModelExposures, map[string]exposurePlan) {
+func planExposures(c *kube.Client, project string, labels map[string]string, entry CatalogModel, needMaaS bool) (*types.ModelExposures, map[string]ExposurePlan) {
 	r := readExposureInputs(c, project, labels, entry, needMaaS)
-	return r.options()
+	return r.Options()
 }
 
-func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan) {
-	out := &types.ModelExposures{Project: r.project, Model: r.entry.Name, KServeDefaultGateway: gatewayKey(r.def.Namespace, r.def.Name), AuthReady: r.auth}
-	plans := map[string]exposurePlan{}
+func (r ExposureReads) Options() (*types.ModelExposures, map[string]ExposurePlan) {
+	out := &types.ModelExposures{Project: r.Project, Model: r.Entry.Name, KServeDefaultGateway: gatewayKey(r.def.Namespace, r.def.Name), AuthReady: r.auth}
+	plans := map[string]ExposurePlan{}
 	authWords := r.authWhy
 	if r.authErr != nil {
 		authWords = "Whether Red Hat Connectivity Link is installed cannot be read: " + r.authErr.Error()
@@ -423,9 +423,9 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 
 	// (a) KServe's default gateway.
 	defKey := gatewayKey(r.def.Namespace, r.def.Name)
-	a := types.ModelExposureOption{Key: exposureDefault, Exposure: exposureDefault,
+	a := types.ModelExposureOption{Key: ExposureDefault, Exposure: ExposureDefault,
 		Title: "Through the cluster's default inference gateway"}
-	ap := exposurePlan{exposure: exposureDefault}
+	ap := ExposurePlan{Exposure: ExposureDefault}
 	switch {
 	case r.defErr != nil:
 		a.Reason = fmt.Sprintf("KServe's default gateway cannot be read (%v), so a model cannot be routed through it. Choose another way.", r.defErr)
@@ -443,7 +443,7 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 			a.Reason = fmt.Sprintf("Gateway %s, which KServe's configuration names as its default, does not exist. Its owner creates it, or choose another way.", defKey)
 		}
 	}
-	a.Description = fmt.Sprintf("Reachable from outside the cluster at %s. Each call needs an OpenShift token that can see %s.", kube.FirstNonEmpty(a.Address, "https://inference.<apps domain>/"+r.project+"/"+r.entry.Name), r.project)
+	a.Description = fmt.Sprintf("Reachable from outside the cluster at %s. Each call needs an OpenShift token that can see %s.", kube.FirstNonEmpty(a.Address, "https://inference.<apps domain>/"+r.Project+"/"+r.Entry.Name), r.Project)
 	if a.NeedsAuth {
 		a.Warning = strings.TrimSpace(a.Warning + " " + authWords + " Set up installs it first.")
 	}
@@ -451,17 +451,17 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 	plans[a.Key] = ap
 
 	// (b) MaaS only.
-	b := types.ModelExposureOption{Key: exposureMaaS, Exposure: exposureMaaS, GatewayRef: gatewayKey(inferenceGatewayNamespace, maasGatewayName),
+	b := types.ModelExposureOption{Key: ExposureMaaS, Exposure: ExposureMaaS, GatewayRef: gatewayKey(inferenceGatewayNamespace, MaaSGatewayName),
 		Title:       "Through MaaS only",
 		Description: "Published to Models as a Service: anyone signed in to the cluster can call it with a MaaS API key, within their subscription's token limit. The dashboard's playground lists it as a MaaS model."}
-	if r.maasWho != "" {
-		b.Description = fmt.Sprintf("Published to Models as a Service: the same people as this tool's other published models (%s) can call it with a MaaS API key, within their subscription's token limit. The dashboard's playground lists it as a MaaS model.", r.maasWho)
+	if r.MaaSWho != "" {
+		b.Description = fmt.Sprintf("Published to Models as a Service: the same people as this tool's other published models (%s) can call it with a MaaS API key, within their subscription's token limit. The dashboard's playground lists it as a MaaS model.", r.MaaSWho)
 	}
-	bp := exposurePlan{exposure: exposureMaaS, gwNS: inferenceGatewayNamespace, gwName: maasGatewayName}
+	bp := ExposurePlan{Exposure: ExposureMaaS, gwNS: inferenceGatewayNamespace, gwName: MaaSGatewayName}
 	switch {
-	case r.entry.Type != modelTypeChat:
+	case r.Entry.Type != ModelTypeChat:
 		b.Reason = "Only chat models are published to MaaS."
-	case !r.maasKnown:
+	case !r.MaaSKnown:
 		b.Reason = "Whether MaaS is set up could not be checked yet."
 	case r.maas != "":
 		b.Reason = r.maas
@@ -469,8 +469,8 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 	default:
 		b.Available = true
 		b.Changes = []string{
-			fmt.Sprintf("Gateway %s: admits routes from %s.", gatewayKey(inferenceGatewayNamespace, maasGatewayName), r.project),
-			fmt.Sprintf("Published to MaaS: MaaSModelRef %s in %s, and this tool's subscription and authorization policy list the model.", r.entry.Name, r.project),
+			fmt.Sprintf("Gateway %s: admits routes from %s.", gatewayKey(inferenceGatewayNamespace, MaaSGatewayName), r.Project),
+			fmt.Sprintf("Published to MaaS: MaaSModelRef %s in %s, and this tool's subscription and authorization policy list the model.", r.Entry.Name, r.Project),
 		}
 		if r.maasURL != "" {
 			b.Address = r.maasURL
@@ -487,18 +487,18 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 			if (r.def.Known && ns == r.def.Namespace && name == r.def.Name) || gatewayExclusion(g) != "" || gatewayProblem(g) != "" {
 				continue
 			}
-			key := exposureGateway + ":" + gatewayKey(ns, name)
-			o := types.ModelExposureOption{Key: key, Exposure: exposureGateway, GatewayRef: gatewayKey(ns, name),
+			key := ExposureGateway + ":" + gatewayKey(ns, name)
+			o := types.ModelExposureOption{Key: key, Exposure: ExposureGateway, GatewayRef: gatewayKey(ns, name),
 				Title:       "Through another gateway: " + gatewayKey(ns, name),
 				Description: "Uses a gateway someone else runs; this tool doesn't change it. RHOAI adds token checks."}
-			if g.Metadata.Labels[odhManagedLabel] == "false" {
+			if g.Metadata.Labels[ODHManagedLabel] == "false" {
 				o.Description = "Uses a gateway someone else runs; this tool doesn't change it. RHOAI adds no token checks to it."
 			}
 			if ns == inferenceGatewayNamespace && name == inferenceGatewayName && gatewayOwned(g.Metadata) {
 				o.Title = "Through the inference gateway, by name: " + gatewayKey(ns, name)
-				o.Description = "Names this tool's inference gateway on the model, because KServe's default gateway isn't known. Each call needs an OpenShift token that can see " + r.project + "."
+				o.Description = "Names this tool's inference gateway on the model, because KServe's default gateway isn't known. Each call needs an OpenShift token that can see " + r.Project + "."
 			}
-			op := exposurePlan{exposure: exposureGateway}
+			op := ExposurePlan{Exposure: ExposureGateway}
 			r.gatewayOption(&o, &op, g)
 			if o.NeedsAuth {
 				o.Warning = strings.TrimSpace(o.Warning + " " + authWords + " Set up installs it first.")
@@ -516,13 +516,13 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 	out.Options = append(out.Options, others...)
 
 	// (e) Inside the cluster only.
-	e := types.ModelExposureOption{Key: exposureInternal, Exposure: exposureInternal, Available: true,
+	e := types.ModelExposureOption{Key: ExposureInternal, Exposure: ExposureInternal, Available: true,
 		Title:       "Only inside the cluster",
 		Description: "No outside address. Programs on this cluster (for example a workbench) can call it without a token.",
 		// No Address: the port of the model's Service is known only once
-		// KServe has made it (withServicePort).
+		// KServe has made it (WithServicePort).
 		Warning: "Calls to the in-cluster address are not authenticated: any pod on the cluster whose network can reach the project can use the model."}
-	ep := exposurePlan{exposure: exposureInternal}
+	ep := ExposurePlan{Exposure: ExposureInternal}
 	if internalAuthOff(r.auth, r.authErr) {
 		ep.authOff = true
 		e.Warning += " Red Hat Connectivity Link is not installed, so the model's token authentication is turned off (security.opendatahub.io/enable-auth: \"false\"): with it on, KServe would not start the model until Connectivity Link's AuthPolicy API exists."
@@ -568,20 +568,20 @@ func internalAuthOff(auth bool, authErr error) bool {
 
 // exposureKey is the option key of a request's exposure.
 func exposureKey(exposure, ref string) string {
-	if exposure == exposureGateway {
-		return exposureGateway + ":" + ref
+	if exposure == ExposureGateway {
+		return ExposureGateway + ":" + ref
 	}
 	return exposure
 }
 
 // GetModelExposures reports the ways a catalog model can be reached from a
 // project (GET /api/resources/models/exposures).
-func GetModelExposures(c *Client, project, model string) (*types.ModelExposures, string, string) {
-	entry, ok := catalogEntry(model)
+func GetModelExposures(c *kube.Client, project, model string) (*types.ModelExposures, string, string) {
+	entry, ok := CatalogEntry(model)
 	if !ok {
 		return nil, "unknown model", "validation"
 	}
-	labels, msg, code := projectNamespace(c, project)
+	labels, msg, code := ProjectNamespace(c, project)
 	if msg != "" {
 		return nil, msg, code
 	}
@@ -597,7 +597,7 @@ func onlyConnectivityLinkMissing(msg string) bool {
 		return false
 	}
 	rhcl := map[string]bool{}
-	for _, n := range []string{rhclOperator.Title, rhclOperator.Pkg, rhclOperator.SubName, "Kuadrant", "Connectivity Link"} {
+	for _, n := range []string{RHCLOperator.Title, RHCLOperator.Pkg, RHCLOperator.SubName, "Kuadrant", "Connectivity Link"} {
 		rhcl[components.NormalizeOperatorName(n)] = true
 	}
 	for _, m := range missing {
@@ -620,7 +620,7 @@ func authNeededRefusal(gateway, why string) string {
 // the recommended one. gw is the inference gateway set up in the same
 // request (Gateway with a project): the model takes KServe's default route
 // through it.
-func (m *modelsRun) planModelExposure(req types.ModelsRequest, labels map[string]string, entry catalogModel, gw *gatewayPlan, existing llmisvcObject, found bool) (exposurePlan, string, string) {
+func (m *modelsRun) planModelExposure(req types.ModelsRequest, labels map[string]string, entry CatalogModel, gw *gatewayPlan, existing LLMISvcObject, found bool) (ExposurePlan, string, string) {
 	c := m.c
 	auth := func() (bool, string, string) {
 		ok, why, err := authReadiness(c)
@@ -633,52 +633,52 @@ func (m *modelsRun) planModelExposure(req types.ModelsRequest, labels map[string
 		def, err := readKServeGateway(c)
 		switch {
 		case err != nil:
-			return exposurePlan{}, fmt.Sprintf("KServe's default gateway cannot be read (%v), so the model may not route through the inference gateway this request sets up. Set the inference gateway up on its own, then choose it by name for the model. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err)
+			return ExposurePlan{}, fmt.Sprintf("KServe's default gateway cannot be read (%v), so the model may not route through the inference gateway this request sets up. Set the inference gateway up on its own, then choose it by name for the model. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err)
 		case !def.Known:
-			return exposurePlan{}, "KServe's configuration names no default gateway, so the model would not route through the inference gateway this request sets up. Set the inference gateway up on its own, then choose it by name for the model. Nothing was changed.", "prerequisites"
+			return ExposurePlan{}, "KServe's configuration names no default gateway, so the model would not route through the inference gateway this request sets up. Set the inference gateway up on its own, then choose it by name for the model. Nothing was changed.", "prerequisites"
 		case !def.isInferenceGateway():
-			return exposurePlan{}, fmt.Sprintf("KServe's default gateway is %s, not the inference gateway this request sets up, so the model would not route through it. Set the inference gateway up on its own, then choose 'Through gateway %s' for the model. Nothing was changed.", def, gatewayKey(inferenceGatewayNamespace, inferenceGatewayName)), "prerequisites"
+			return ExposurePlan{}, fmt.Sprintf("KServe's default gateway is %s, not the inference gateway this request sets up, so the model would not route through it. Set the inference gateway up on its own, then choose 'Through gateway %s' for the model. Nothing was changed.", def, gatewayKey(inferenceGatewayNamespace, inferenceGatewayName)), "prerequisites"
 		}
-		if gw.foreign && gw.gateway.admits(req.Project, labels) == "no" {
-			return exposurePlan{}, foreignGatewayRefusal(req.Project), "prerequisites"
+		if gw.foreign && gw.gateway.Admits(req.Project, labels) == "no" {
+			return ExposurePlan{}, foreignGatewayRefusal(req.Project), "prerequisites"
 		}
 		ok, why, code := auth()
 		if code != "" {
-			return exposurePlan{}, why, code
+			return ExposurePlan{}, why, code
 		}
 		if !ok {
-			return exposurePlan{}, authNeededRefusal(gatewayKey(inferenceGatewayNamespace, inferenceGatewayName), why), "prerequisites"
+			return ExposurePlan{}, authNeededRefusal(gatewayKey(inferenceGatewayNamespace, inferenceGatewayName), why), "prerequisites"
 		}
-		return exposurePlan{exposure: exposureDefault, gwNS: inferenceGatewayNamespace, gwName: inferenceGatewayName, toolGateway: !gw.foreign}, "", ""
+		return ExposurePlan{Exposure: ExposureDefault, gwNS: inferenceGatewayNamespace, gwName: inferenceGatewayName, toolGateway: !gw.foreign}, "", ""
 	}
 	want := exposureKey(req.Exposure, req.GatewayRef)
 	if found {
 		def, _ := readKServeGateway(c)
 		cur, curGW := modelExposureOf(existing, def)
 		curKey := cur
-		if cur == exposureGateway {
+		if cur == ExposureGateway {
 			curKey = exposureKey(cur, curGW)
 		}
 		if req.Exposure != "" && want != curKey {
-			return exposurePlan{}, fmt.Sprintf("%s in %s is already set up to be reached %s. To reach it another way, delete it and set it up again with that choice. Nothing was changed.", entry.Name, req.Project, exposureWords(exposurePlanOf(cur, curGW))), "validation"
+			return ExposurePlan{}, fmt.Sprintf("%s in %s is already set up to be reached %s. To reach it another way, delete it and set it up again with that choice. Nothing was changed.", entry.Name, req.Project, exposureWords(exposurePlanOf(cur, curGW))), "validation"
 		}
 		switch cur {
-		case exposureMaaS, exposureGateway:
+		case ExposureMaaS, ExposureGateway:
 			// Routed as it is: its gateway is not checked again.
 			p := exposurePlanOf(cur, curGW)
 			p.toolGateway = curGW == gatewayKey(inferenceGatewayNamespace, inferenceGatewayName)
 			return p, "", ""
-		case exposureInternal:
+		case ExposureInternal:
 			ok, _, code := auth()
 			if code != "" {
-				ok = existing.Metadata.Annotations[enableAuthAnnot] != "false"
+				ok = existing.Metadata.Annotations[EnableAuthAnnot] != "false"
 			}
-			return exposurePlan{exposure: exposureInternal, authOff: !ok}, "", ""
+			return ExposurePlan{Exposure: ExposureInternal, authOff: !ok}, "", ""
 		}
-		want = exposureDefault
+		want = ExposureDefault
 	}
-	r := readExposureInputs(c, req.Project, labels, entry, want == exposureMaaS || want == "")
-	out, plans := r.options()
+	r := readExposureInputs(c, req.Project, labels, entry, want == ExposureMaaS || want == "")
+	out, plans := r.Options()
 	if want == "" {
 		want = out.Default
 		if want == "" {
@@ -686,7 +686,7 @@ func (m *modelsRun) planModelExposure(req types.ModelsRequest, labels map[string
 			if why == "" {
 				why = "No gateway can carry a model from " + req.Project + " now."
 			}
-			return exposurePlan{}, why + " Or choose 'Only inside the cluster'. Nothing was changed.", "prerequisites"
+			return ExposurePlan{}, why + " Or choose 'Only inside the cluster'. Nothing was changed.", "prerequisites"
 		}
 		m.step("check", "running", "How it is reached: "+out.DefaultReason)
 	}
@@ -712,10 +712,10 @@ func (m *modelsRun) planModelExposure(req types.ModelsRequest, labels map[string
 				}
 			}
 		}
-		return exposurePlan{}, why + " Nothing was changed.", "prerequisites"
+		return ExposurePlan{}, why + " Nothing was changed.", "prerequisites"
 	}
 	if !opt.Available {
-		return exposurePlan{}, opt.Reason + " Nothing was changed.", "prerequisites"
+		return ExposurePlan{}, opt.Reason + " Nothing was changed.", "prerequisites"
 	}
 	plan := plans[want]
 	if plan.needsAuth {
@@ -723,7 +723,7 @@ func (m *modelsRun) planModelExposure(req types.ModelsRequest, labels map[string
 		if r.authErr != nil {
 			why = r.authErr.Error() + "."
 		}
-		return exposurePlan{}, authNeededRefusal(gatewayKey(plan.gwNS, plan.gwName), why), "prerequisites"
+		return ExposurePlan{}, authNeededRefusal(gatewayKey(plan.gwNS, plan.gwName), why), "prerequisites"
 	}
 	if opt.Warning != "" {
 		m.step("check", "running", opt.Warning)
@@ -732,21 +732,21 @@ func (m *modelsRun) planModelExposure(req types.ModelsRequest, labels map[string
 }
 
 // exposurePlanOf is the plan of an exposure as read from a model.
-func exposurePlanOf(exposure, gateway string) exposurePlan {
+func exposurePlanOf(exposure, gateway string) ExposurePlan {
 	ns, name, _ := strings.Cut(gateway, "/")
-	return exposurePlan{exposure: exposure, gwNS: ns, gwName: name}
+	return ExposurePlan{Exposure: exposure, gwNS: ns, gwName: name}
 }
 
 // exposureWords says how a model is reached, as part of a sentence
 // ("through gateway openshift-ingress/openshift-ai-inference, KServe's
 // default").
-func exposureWords(e exposurePlan) string {
-	switch e.exposure {
-	case exposureMaaS:
-		return "through MaaS only (gateway " + gatewayKey(inferenceGatewayNamespace, maasGatewayName) + ")"
-	case exposureGateway:
+func exposureWords(e ExposurePlan) string {
+	switch e.Exposure {
+	case ExposureMaaS:
+		return "through MaaS only (gateway " + gatewayKey(inferenceGatewayNamespace, MaaSGatewayName) + ")"
+	case ExposureGateway:
 		return "through gateway " + gatewayKey(e.gwNS, e.gwName)
-	case exposureInternal:
+	case ExposureInternal:
 		if e.authOff {
 			return "only inside the cluster (no route; token authentication off, as Connectivity Link is not installed)"
 		}
@@ -764,8 +764,8 @@ func exposureWords(e exposurePlan) string {
 // policy list it.
 func (m *modelsRun) publishToMaaS(project, name string) (*types.OperationResponse, error) {
 	m.step("publish", "running", "Publishing the model to MaaS (its route is on the MaaS gateway alone)...")
-	pub := &maasRun{c: m.c, activity: "publish-maas", target: fmt.Sprintf("model %s in %s", name, project), newModel: true}
-	pub.emit = m.innerSteps("publish")
+	pub := &Run{Client: m.c, Activity: "publish-maas", Target: fmt.Sprintf("model %s in %s", name, project), newModel: true}
+	pub.Emit = m.innerSteps("publish")
 	// No audience of its own: the subscription keeps who can use the
 	// published models (everyone signed in, when it is the first). The limit
 	// is the Publish dialog's default, the MaaS docs' premium example
@@ -782,29 +782,29 @@ func (m *modelsRun) publishToMaaS(project, name string) (*types.OperationRespons
 	return nil, nil
 }
 
-// addModelRouting adds how a model is reached to its state: the exposure
+// AddModelRouting adds how a model is reached to its state: the exposure
 // and gateway, the authentication on that gateway (auth caches it by
 // gateway), its in-cluster address, the name it serves, and the last
 // "Can it be called?" check.
-func addModelRouting(c *Client, s *types.ModelState, m llmisvcObject, def kserveGateway, auth map[string]string) {
+func AddModelRouting(c *kube.Client, s *types.ModelState, m LLMISvcObject, def KServeGateway, auth map[string]string) {
 	s.Exposure, s.Gateway = modelExposureOf(m, def)
-	if served := kube.FirstNonEmpty(m.Spec.Model.Name, m.Metadata.Name); safeServedName(served) {
+	if served := kube.FirstNonEmpty(m.Spec.Model.Name, m.Metadata.Name); SafeServedName(served) {
 		s.ServedName = served
 	} else {
 		s.ServedNameWithheld = true
 		s.Warning = strings.TrimSpace(s.Warning + " " + unsafeServedNameWarning)
 	}
-	s.InternalURL = withServicePort(c, modelInClusterURL(m))
-	if s.Exposure == exposureInternal {
+	s.InternalURL = WithServicePort(c, ModelInClusterURL(m))
+	if s.Exposure == ExposureInternal {
 		// KServe keeps status.url from a route it has removed (live, RHOAI
 		// 3.6: after a MaaS-only model's unpublish it still named the MaaS
 		// route): a model with no route has no outside address.
 		s.URL = ""
 	}
 	switch s.Exposure {
-	case exposureMaaS:
+	case ExposureMaaS:
 		s.GatewayAuth = "maas"
-	case exposureDefault, exposureGateway:
+	case ExposureDefault, ExposureGateway:
 		if _, done := auth[s.Gateway]; !done {
 			ns, name, _ := strings.Cut(s.Gateway, "/")
 			auth[s.Gateway] = authPolicyStateOf(c, ns, name)
@@ -816,23 +816,25 @@ func addModelRouting(c *Client, s *types.ModelState, m llmisvcObject, def kserve
 
 // modelExposureOf reads how an existing model is reached (ModelState
 // Exposure and Gateway) from its spec.router and KServe's default gateway.
-func modelExposureOf(m llmisvcObject, def kserveGateway) (string, string) {
+func modelExposureOf(m LLMISvcObject, def KServeGateway) (string, string) {
 	r := m.Spec.Router
 	if r == nil || r.Route == nil {
-		return exposureInternal, ""
+		return ExposureInternal, ""
 	}
 	if r.Gateway == nil || len(r.Gateway.Refs) == 0 {
 		if !def.Known {
-			return exposureDefault, gatewayKey(inferenceGatewayNamespace, inferenceGatewayName)
+			return ExposureDefault, gatewayKey(inferenceGatewayNamespace, inferenceGatewayName)
 		}
-		return exposureDefault, def.String()
+		return ExposureDefault, def.String()
 	}
 	ref := r.Gateway.Refs[0]
 	ns := kube.FirstNonEmpty(ref.Namespace, m.Metadata.Namespace)
 	for _, x := range r.Gateway.Refs {
 		if isMaaSGatewayRef(x.Name, kube.FirstNonEmpty(x.Namespace, m.Metadata.Namespace)) {
-			return exposureMaaS, gatewayKey(inferenceGatewayNamespace, maasGatewayName)
+			return ExposureMaaS, gatewayKey(inferenceGatewayNamespace, MaaSGatewayName)
 		}
 	}
-	return exposureGateway, gatewayKey(ns, ref.Name)
+	return ExposureGateway, gatewayKey(ns, ref.Name)
 }
+
+var ProjectNameRegex = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)

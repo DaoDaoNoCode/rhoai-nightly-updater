@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"bytes"
@@ -93,7 +93,7 @@ var modelCallHTTPClient = &http.Client{
 // token of chat, or one tiny embedding.
 func modelCallRequest(base, served, typ string) (string, []byte) {
 	base = strings.TrimRight(base, "/")
-	if typ == modelTypeEmbedding {
+	if typ == ModelTypeEmbedding {
 		body, _ := json.Marshal(map[string]any{"model": served, "input": []string{"hi"}})
 		return base + "/v1/embeddings", body
 	}
@@ -161,9 +161,9 @@ func bodyExcerpt(body []byte) string {
 	return s
 }
 
-// classifyModelCall turns one answer (or the error of a request without
+// ClassifyModelCall turns one answer (or the error of a request without
 // one) into a check. transient: it may change on its own soon.
-func classifyModelCall(status int, body []byte, err error, target, served string, internal bool) (types.ModelCallCheck, bool) {
+func ClassifyModelCall(status int, body []byte, err error, target, served string, internal bool) (types.ModelCallCheck, bool) {
 	out := types.ModelCallCheck{Status: status, URL: target}
 	switch {
 	case err != nil:
@@ -224,7 +224,7 @@ func classifyModelCall(status int, body []byte, err error, target, served string
 // readModelToken reads the model's own token from the Secret this tool
 // made, only when it is the one the tool recorded (UID) and is a
 // ServiceAccount token of the model's ServiceAccount.
-func readModelToken(c *Client, project, model, recordedUID string) (string, error) {
+func readModelToken(c *kube.Client, project, model, recordedUID string) (string, error) {
 	if recordedUID == "" {
 		return "", errors.New("the model has no token of its own yet (set it up again to make it)")
 	}
@@ -239,7 +239,7 @@ func readModelToken(c *Client, project, model, recordedUID string) (string, erro
 		}
 		return "", fmt.Errorf("read the model's token Secret %s/%s: %w", project, tokenSecretName(model), err)
 	}
-	if sec.Metadata.UID != recordedUID || sec.Type != tokenSecretType || sec.Metadata.Annotations[saNameAnnotation] != tokenSAName(model) {
+	if sec.Metadata.UID != recordedUID || sec.Type != TokenSecretType || sec.Metadata.Annotations[saNameAnnotation] != tokenSAName(model) {
 		return "", fmt.Errorf("the Secret %s/%s is not the token this tool made for the model", project, tokenSecretName(model))
 	}
 	token, err := base64.StdEncoding.DecodeString(sec.Data["token"])
@@ -270,11 +270,11 @@ var _ = kube.RegisterCachePurge(func() {
 	callChecks.Unlock()
 })
 
-func callCheckKey(c *Client, project, name string) string {
+func callCheckKey(c *kube.Client, project, name string) string {
 	return c.BaseURL() + "|" + project + "/" + name
 }
 
-func rememberCallCheck(c *Client, project, name, uid string, check types.ModelCallCheck) {
+func rememberCallCheck(c *kube.Client, project, name, uid string, check types.ModelCallCheck) {
 	callChecks.Lock()
 	defer callChecks.Unlock()
 	callChecks.m[callCheckKey(c, project, name)] = struct {
@@ -283,7 +283,7 @@ func rememberCallCheck(c *Client, project, name, uid string, check types.ModelCa
 	}{uid, check}
 }
 
-func lastCallCheck(c *Client, project, name, uid string) *types.ModelCallCheck {
+func lastCallCheck(c *kube.Client, project, name, uid string) *types.ModelCallCheck {
 	callChecks.Lock()
 	defer callChecks.Unlock()
 	r, ok := callChecks.m[callCheckKey(c, project, name)]
@@ -296,9 +296,9 @@ func lastCallCheck(c *Client, project, name, uid string) *types.ModelCallCheck {
 
 // checkModelCall runs the check on the tool's model (read fresh) and
 // remembers it. progress gets each retry, in words.
-func checkModelCall(c *Client, project, name string, rec modelsRecord, progress func(string)) types.ModelCallCheck {
+func checkModelCall(c *kube.Client, project, name string, rec ModelsRecord, progress func(string)) types.ModelCallCheck {
 	now := func() string { return record.NowRFC3339() }
-	model, found, err := readToolModel(c, project, name)
+	model, found, err := ReadToolModel(c, project, name)
 	if err != nil || !found {
 		why := "it does not exist"
 		if err != nil {
@@ -306,15 +306,15 @@ func checkModelCall(c *Client, project, name string, rec modelsRecord, progress 
 		}
 		return types.ModelCallCheck{Result: "not-checked", Message: "Not checked: the model cannot be read (" + why + ").", At: now()}
 	}
-	entry, _ := catalogEntry(name)
+	entry, _ := CatalogEntry(name)
 	served := kube.FirstNonEmpty(model.Spec.Model.Name, name)
 	def, _ := readKServeGateway(c)
 	exposure, gw := modelExposureOf(model, def)
 	var check types.ModelCallCheck
 	switch {
-	case exposure == exposureMaaS:
+	case exposure == ExposureMaaS:
 		check = maasCallCheck(c, project, name)
-	case !safeServedName(served):
+	case !SafeServedName(served):
 		check = types.ModelCallCheck{Result: "not-checked", Message: "Not checked: " + unsafeServedNameWarning}
 	default:
 		check = callModelDirectly(c, model, project, name, served, entry.Type, exposure, gw, rec, progress)
@@ -326,11 +326,11 @@ func checkModelCall(c *Client, project, name string, rec modelsRecord, progress 
 
 // callModelDirectly is the check of a model reached at its own address
 // (inside the cluster, or through a gateway that is not MaaS's).
-func callModelDirectly(c *Client, model llmisvcObject, project, name, served, typ, exposure, gw string, rec modelsRecord, progress func(string)) types.ModelCallCheck {
+func callModelDirectly(c *kube.Client, model LLMISvcObject, project, name, served, typ, exposure, gw string, rec ModelsRecord, progress func(string)) types.ModelCallCheck {
 	var check types.ModelCallCheck
 	switch exposure {
-	case exposureInternal:
-		if target := withServicePort(c, kube.FirstNonEmpty(modelInClusterURL(model), internalAddress(project, name))); target == "" {
+	case ExposureInternal:
+		if target := WithServicePort(c, kube.FirstNonEmpty(ModelInClusterURL(model), internalAddress(project, name))); target == "" {
 			check = types.ModelCallCheck{Result: "not-checked", Message: "Not checked: the model's Service " + name + "-kserve-workload-svc in " + project + " could not be read for its port."}
 		} else {
 			check = runModelCall(c, target, served, typ, "", true, progress)
@@ -342,13 +342,13 @@ func callModelDirectly(c *Client, model llmisvcObject, project, name, served, ty
 		case !kube.SnippetURL(model.Status.URL):
 			check = types.ModelCallCheck{Result: "not-checked", Message: "Not checked: " + kube.UnsafeAddressWarning("model address")}
 		default:
-			token, err := readModelToken(c, project, name, rec[modelRecordKey(project, name)].TokenSecretUID)
+			token, err := readModelToken(c, project, name, rec[ModelRecordKey(project, name)].TokenSecretUID)
 			if err != nil {
 				check = types.ModelCallCheck{Result: "not-checked", Message: "Not checked: " + err.Error() + ". This app calls a model only with the model's own token."}
 				break
 			}
 			check = runModelCall(c, model.Status.URL, served, typ, token, false, progress)
-			if check.Result == "server-error" && gw != "" && exposure == exposureGateway {
+			if check.Result == "server-error" && gw != "" && exposure == ExposureGateway {
 				check.Message += " (through gateway " + gw + ")"
 			}
 			if check.OK {
@@ -365,13 +365,13 @@ func callModelDirectly(c *Client, model llmisvcObject, project, name, served, ty
 // check who calls (no AuthPolicy, one not enforced, or a gateway labelled
 // opendatahub.io/managed=false), and the check fails as "unauthenticated".
 // Any other outcome is said, not counted as a failure.
-func probeWithoutToken(c *Client, ok types.ModelCallCheck, base, served, typ, gw string) types.ModelCallCheck {
+func probeWithoutToken(c *kube.Client, ok types.ModelCallCheck, base, served, typ, gw string) types.ModelCallCheck {
 	target, body := modelCallRequest(base, served, typ)
 	status, _, err := callModelOnce(c.Context(), target, body, "")
 	switch {
 	case err == nil && status >= 200 && status < 300:
 		return types.ModelCallCheck{Result: "unauthenticated", Status: status, URL: target,
-			Message: fmt.Sprintf("The model also answered a request without a token (HTTP %d): gateway %s does not check who calls, so anyone who can reach %s can use the model. Check that RHOAI's AuthPolicy on the gateway is enforced (odh-model-controller and Red Hat Connectivity Link run), and that the gateway is not labelled %s=false.", status, kube.FirstNonEmpty(gw, "the gateway"), base, odhManagedLabel)}
+			Message: fmt.Sprintf("The model also answered a request without a token (HTTP %d): gateway %s does not check who calls, so anyone who can reach %s can use the model. Check that RHOAI's AuthPolicy on the gateway is enforced (odh-model-controller and Red Hat Connectivity Link run), and that the gateway is not labelled %s=false.", status, kube.FirstNonEmpty(gw, "the gateway"), base, ODHManagedLabel)}
 	case err == nil && (status == http.StatusUnauthorized || status == http.StatusForbidden):
 		ok.Message += fmt.Sprintf(" A request without a token was refused (HTTP %d).", status)
 	case err == nil:
@@ -392,18 +392,18 @@ func callFailureWords(what string, check types.ModelCallCheck) string {
 
 // runModelCall calls the model, retrying transient answers for up to
 // ModelCallRetryWindow.
-func runModelCall(c *Client, base, served, typ, token string, internal bool, progress func(string)) types.ModelCallCheck {
+func runModelCall(c *kube.Client, base, served, typ, token string, internal bool, progress func(string)) types.ModelCallCheck {
 	target, body := modelCallRequest(base, served, typ)
 	var last types.ModelCallCheck
 	attempt := 0
-	_, err := kube.WaitForGone(c, ModelCallRetryWindow, ModelCallPoll, func(cc *Client) (bool, error) {
+	_, err := kube.WaitForGone(c, ModelCallRetryWindow, ModelCallPoll, func(cc *kube.Client) (bool, error) {
 		attempt++
 		status, data, err := callModelOnce(cc.Context(), target, body, token)
 		if err != nil && cc.Context().Err() != nil && c.Context().Err() == nil {
 			// The retry window ended during this request.
 			return false, nil
 		}
-		check, transient := classifyModelCall(status, data, err, target, served, internal)
+		check, transient := ClassifyModelCall(status, data, err, target, served, internal)
 		last = check
 		if transient && progress != nil {
 			progress(fmt.Sprintf("Not answering yet (attempt %d): %s Retrying...", attempt, check.Message))
@@ -418,7 +418,7 @@ func runModelCall(c *Client, base, served, typ, token string, internal bool, pro
 
 // maasCallCheck reports MaaS's own readiness of a model reached through
 // MaaS: a call needs a MaaS API key, which this tool does not create.
-func maasCallCheck(c *Client, project, name string) types.ModelCallCheck {
+func maasCallCheck(c *kube.Client, project, name string) types.ModelCallCheck {
 	ref, found, err := readMaaSModelRef(c, project, name)
 	switch {
 	case err != nil:

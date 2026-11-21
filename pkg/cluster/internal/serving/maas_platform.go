@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"encoding/json"
@@ -32,18 +32,18 @@ var (
 // kuadrant, no spec) at the version that serves kuadrants.
 func kuadrantObject(version, ns string) map[string]any {
 	return map[string]any{
-		"apiVersion": kuadrantGroup + "/" + version,
+		"apiVersion": KuadrantGroup + "/" + version,
 		"kind":       "Kuadrant",
 		"metadata":   map[string]any{"name": "kuadrant", "namespace": ns, "labels": envkit.ToolLabels()},
 	}
 }
 
-// kuadrantServedVersion is the version of kuadrant.io that serves
+// KuadrantServedVersion is the version of kuadrant.io that serves
 // kuadrants ("" while none does: Connectivity Link's CRDs are not there).
 // The group's preferred version is not it: RHCL 1.4 serves AuthPolicy in v1
 // and Kuadrant only in v1beta1 (seen live).
-func kuadrantServedVersion(c *Client) (string, error) {
-	read, err := rhoai.ListServed(c, kuadrantGroup, "/apis/kuadrant.io/%s/kuadrants", nil, []string{"v1beta1"})
+func KuadrantServedVersion(c *kube.Client) (string, error) {
+	read, err := rhoai.ListServed(c, KuadrantGroup, "/apis/kuadrant.io/%s/kuadrants", nil, []string{"v1beta1"})
 	if err != nil {
 		return "", err
 	}
@@ -53,9 +53,9 @@ func kuadrantServedVersion(c *Client) (string, error) {
 	return read.Version, nil
 }
 
-// createKuadrant creates the Kuadrant CR in ns (a server-side dry run with
+// CreateKuadrant creates the Kuadrant CR in ns (a server-side dry run with
 // dryRun). One that exists (made meanwhile) is fine.
-func createKuadrant(c *Client, version, ns string, dryRun bool) error {
+func CreateKuadrant(c *kube.Client, version, ns string, dryRun bool) error {
 	data, _ := json.Marshal(kuadrantObject(version, ns))
 	var query url.Values
 	if dryRun {
@@ -94,7 +94,7 @@ func maasInfraNamespacePath(ns string) (string, bool) {
 // ensureNamespace), and MaaS is turned on last, after the database that
 // lives there: without this, setup could never run on a cluster that never
 // had MaaS. The tool's labels mark it as the tool's.
-func createInfraNamespace(c *Client, ns string, dryRun bool) error {
+func createInfraNamespace(c *kube.Client, ns string, dryRun bool) error {
 	if _, ok := maasInfraNamespacePath(ns); !ok {
 		return fmt.Errorf("namespace %s is not one this tool creates", ns)
 	}
@@ -113,7 +113,7 @@ func createInfraNamespace(c *Client, ns string, dryRun bool) error {
 // and a maas-db-config this tool did not write. Removal deletes the
 // namespace only when this finds nothing; a read that fails is returned
 // (fail closed).
-func infraNamespaceLeftovers(c *Client, ns string) ([]string, error) {
+func infraNamespaceLeftovers(c *kube.Client, ns string) ([]string, error) {
 	var out []string
 	for _, l := range []struct{ kind, path string }{
 		{"pod", rhoai.NamespacedPath("v1", "pods", ns, "")},
@@ -137,7 +137,7 @@ func infraNamespaceLeftovers(c *Client, ns string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read Secret %s/%s: %w", ns, maasDBConfigSecret, err)
 	}
-	if found && !toolOwned(meta) {
+	if found && !ToolOwned(meta) {
 		out = append(out, "Secret "+maasDBConfigSecret)
 	}
 	sort.Strings(out)
@@ -170,14 +170,14 @@ const authorinoDefaultSecret = "authorino-server-cert"
 //     <secret>;
 //  3. Deployment authorino: SSL_CERT_FILE and REQUESTS_CA_BUNDLE at the
 //     service CA ("set env"; the CR has no env field), unless it already
-//     trusts the service CA another way (authorinoTrustsServiceCA);
+//     trusts the service CA another way (AuthorinoTrustsServiceCA);
 //  4. then, as the script's closing note and deploy.sh do, a rollout
 //     restart of authorino.
 //
 // The secret is the one the CR names, else the script's. A dry run sends
 // every patch with dryRun=All and restarts nothing. It returns the changes
 // made (none when all was set).
-func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) {
+func configureAuthorinoTLS(c *kube.Client, ns string, dryRun bool) ([]string, error) {
 	read, err := rhoai.GetServed(c, authorinoGroup, "/apis/"+authorinoGroup+"/%s/namespaces/"+ns+"/authorinos/authorino", []string{"v1beta1"})
 	if kube.IsK8sNotFound(err) || (err == nil && read.Body == nil) {
 		return nil, fmt.Errorf("%w: no Authorino authorino in %s", errAuthorinoNotYet, ns)
@@ -217,8 +217,8 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 		return nil, fmt.Errorf("read Service %s/authorino-authorino-authorization: %w", ns, err)
 	case !found:
 		return nil, fmt.Errorf("%w: no Service %s/authorino-authorino-authorization", errAuthorinoNotYet, ns)
-	case svc.Annotations[servingCertAnnotation] != secret:
-		patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{servingCertAnnotation: secret}}})
+	case svc.Annotations[CertSecretAnnotation] != secret:
+		patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{CertSecretAnnotation: secret}}})
 		if _, _, err := c.Do(http.MethodPatch, rhoai.NamespacedPath("v1", "services", ns, "authorino-authorino-authorization"), "application/merge-patch+json", patch, query); err != nil {
 			return changes, fmt.Errorf("annotate Service %s/authorino-authorino-authorization: %w", ns, err)
 		}
@@ -239,7 +239,7 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 	if !exists {
 		return changes, fmt.Errorf("%w: no Deployment %s/authorino", errAuthorinoNotYet, ns)
 	}
-	if !authorinoTrustsServiceCA(body) {
+	if !AuthorinoTrustsServiceCA(body) {
 		var d struct {
 			Spec struct {
 				Template struct {
@@ -320,7 +320,7 @@ func legacyTierPolicy(p gatewayPolicy) bool {
 // RateLimitPolicies in openshift-ingress that target the MaaS gateway, each
 // at the version of kuadrant.io that serves it. A kind that is not served
 // lists nothing; any other failure is returned.
-func maasGatewayPolicies(c *Client) ([]gatewayPolicy, error) {
+func maasGatewayPolicies(c *kube.Client) ([]gatewayPolicy, error) {
 	var out []gatewayPolicy
 	for _, l := range []struct {
 		kind, path string
@@ -330,7 +330,7 @@ func maasGatewayPolicies(c *Client) ([]gatewayPolicy, error) {
 		{"TokenRateLimitPolicy", "/apis/kuadrant.io/%s/namespaces/openshift-ingress/tokenratelimitpolicies", []string{"v1alpha1"}},
 		{"RateLimitPolicy", "/apis/kuadrant.io/%s/namespaces/openshift-ingress/ratelimitpolicies", []string{"v1"}},
 	} {
-		read, err := rhoai.ListServed(c, kuadrantGroup, l.path, nil, l.fallback)
+		read, err := rhoai.ListServed(c, KuadrantGroup, l.path, nil, l.fallback)
 		if err != nil {
 			return nil, fmt.Errorf("list %ss in %s: %w", l.kind, inferenceGatewayNamespace, err)
 		}
@@ -355,7 +355,7 @@ func maasGatewayPolicies(c *Client) ([]gatewayPolicy, error) {
 			return nil, fmt.Errorf("parse the %s list: %w", l.kind, err)
 		}
 		for _, it := range list.Items {
-			if it.Spec.TargetRef.Kind != "Gateway" || it.Spec.TargetRef.Name != maasGatewayName {
+			if it.Spec.TargetRef.Kind != "Gateway" || it.Spec.TargetRef.Name != MaaSGatewayName {
 				continue
 			}
 			p := gatewayPolicy{Kind: l.kind, Name: it.Metadata.Name, UID: it.Metadata.UID, Version: read.Version, Managed: it.Metadata.Labels[kube.ManagedByLabelKey] == maasControllerLabel}
@@ -393,9 +393,9 @@ func policyNames(ps []gatewayPolicy) []string {
 
 // --- commands for a cluster-admin who prefers the CLI ---------------------------------
 
-// rhclInstallCommands are platform-setup.md's RHOAI install of Connectivity
+// RHCLInstallCommands are platform-setup.md's RHOAI install of Connectivity
 // Link and its Kuadrant CR, on channel.
-func rhclInstallCommands(channel string) string {
+func RHCLInstallCommands(channel string) string {
 	return fmt.Sprintf(`oc apply -f - <<'EOF'
 apiVersion: v1
 kind: Namespace
@@ -429,8 +429,8 @@ EOF
 oc wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/kuadrant-operator -n kuadrant-system --timeout=300s`, yamlString(channel))
 }
 
-// kuadrantCommands create the Kuadrant CR as platform-setup.md does.
-func kuadrantCommands(ns string) string {
+// KuadrantCommands create the Kuadrant CR as platform-setup.md does.
+func KuadrantCommands(ns string) string {
 	return fmt.Sprintf(`oc apply -f - <<'EOF'
 apiVersion: kuadrant.io/v1beta1
 kind: Kuadrant
@@ -440,8 +440,8 @@ metadata:
 EOF`, yamlString(ns))
 }
 
-// cnpgInstallCommands install CloudNativePG as this tool does.
-func cnpgInstallCommands(channel string) string {
+// CNPGInstallCommands install CloudNativePG as this tool does.
+func CNPGInstallCommands(channel string) string {
 	return fmt.Sprintf(`oc apply -f - <<'EOF'
 apiVersion: v1
 kind: Namespace
@@ -495,8 +495,8 @@ func rhclDenyEnvCommand(sub *envkit.OLMSubscription) string {
 ]'`
 }
 
-// rhclChannelCommand switches a Subscription's channel.
-func rhclChannelCommand(ns, name, channel string) string {
+// RHCLChannelCommand switches a Subscription's channel.
+func RHCLChannelCommand(ns, name, channel string) string {
 	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"channel": channel}})
 	return fmt.Sprintf("oc patch subscription %s -n %s --type=merge -p %s", kube.ShellQuote(name), kube.ShellQuote(ns), kube.ShellQuote(string(patch)))
 }
@@ -511,9 +511,9 @@ func yamlString(s string) string {
 	return string(b)
 }
 
-// commentText is s for a shown "# ..." comment line: control characters
+// CommentText is s for a shown "# ..." comment line: control characters
 // (a newline would end the comment) become spaces.
-func commentText(s string) string {
+func CommentText(s string) string {
 	return strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return ' '
@@ -542,7 +542,7 @@ func maasDSCCommand(dsc string) string {
 // every namespace to the names the MaaS docs' setup-gateway.sh lists
 // (build_allowed_routes_yaml: kubernetes.io/metadata.name In [...]), one
 // JSON patch operation per listener that admits all.
-func gatewayAllowedRoutesCommand(g gatewayObject, namespaces []string) string {
+func gatewayAllowedRoutesCommand(g GatewayObject, namespaces []string) string {
 	var ops []any
 	values := make([]any, len(namespaces))
 	for i, n := range namespaces {
@@ -560,11 +560,11 @@ func gatewayAllowedRoutesCommand(g gatewayObject, namespaces []string) string {
 		}})
 	}
 	data, _ := json.Marshal(ops)
-	return fmt.Sprintf("oc patch gateway %s -n %s --type=json -p %s", maasGatewayName, inferenceGatewayNamespace, kube.ShellQuote(string(data)))
+	return fmt.Sprintf("oc patch gateway %s -n %s --type=json -p %s", MaaSGatewayName, inferenceGatewayNamespace, kube.ShellQuote(string(data)))
 }
 
 // admitsAll: a listener of the gateway admits routes from every namespace.
-func (g gatewayObject) admitsAll() bool {
+func (g GatewayObject) admitsAll() bool {
 	for _, l := range g.Spec.Listeners {
 		if l.AllowedRoutes != nil && l.AllowedRoutes.Namespaces != nil && l.AllowedRoutes.Namespaces.From == "All" {
 			return true

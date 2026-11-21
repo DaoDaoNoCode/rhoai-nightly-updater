@@ -13,6 +13,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -49,9 +50,9 @@ type modelsCluster struct {
 
 func newModelsCluster(t *testing.T) *modelsCluster {
 	t.Helper()
-	capacityCache.Purge()
-	planCache.Purge()
-	t.Setenv(vllmImageEnv, "")
+	serving.CapacityCache.Purge()
+	serving.PlanCache.Purge()
+	t.Setenv(serving.VLLMImageEnv, "")
 	f, c := newResourceFake(t)
 	mc := &modelsCluster{f: f, c: c, readyAfter: 3}
 	// KServe's workload Deployment for the model, rolled out.
@@ -311,13 +312,11 @@ func TestModelsSetup_DryRunRefusalWritesNothing(t *testing.T) {
 func TestModelsSetup_NightlyClusterUsesTheNewestReleasedImage(t *testing.T) {
 	mc := newModelsCluster(t)
 	mc.f.putJSON(testSubscription, `{"spec":{"source":"`+rhoai.CatalogName+`"}}`)
-	prev := lookupReleasedImage
-	t.Cleanup(func() { lookupReleasedImage = prev })
 	var asked string
-	lookupReleasedImage = func(_ context.Context, repo string) (releasedImage, error) {
+	t.Cleanup(serving.SetLookupReleasedImageForTest(func(_ context.Context, repo string) (serving.ReleasedImage, error) {
 		asked = repo
-		return releasedImage{Ref: "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:5353", Version: "3.5.3"}, nil
-	}
+		return serving.ReleasedImage{Ref: "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:5353", Version: "3.5.3"}, nil
+	}))
 	mc.f.putJSON(testGatewayPath, `{"metadata":{"labels":{}},"spec":{"listeners":[{"allowedRoutes":{"namespaces":{"from":"All"}}}]}}`)
 	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj"})
 	if !res.Success {
@@ -329,7 +328,7 @@ func TestModelsSetup_NightlyClusterUsesTheNewestReleasedImage(t *testing.T) {
 	model := mc.f.get(testModelPath)
 	main := model["spec"].(map[string]any)["template"].(map[string]any)["containers"].([]any)[0].(map[string]any)
 	ann := model["metadata"].(map[string]any)["annotations"].(map[string]any)
-	if main["image"] != "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:5353" || ann[modelImageSourceAnnotation] != "released" || ann[modelImageVersionAnnotation] != "3.5.3" {
+	if main["image"] != "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:5353" || ann[serving.ModelImageSourceAnnotation] != "released" || ann[serving.ModelImageVersionAnnotation] != "3.5.3" {
 		t.Fatalf("image %v, annotations %v", main["image"], ann)
 	}
 
@@ -337,14 +336,14 @@ func TestModelsSetup_NightlyClusterUsesTheNewestReleasedImage(t *testing.T) {
 	mc2 := newModelsCluster(t)
 	mc2.f.putJSON(testSubscription, `{"spec":{"source":"`+rhoai.CatalogName+`"}}`)
 	mc2.f.putJSON("/apis/config.openshift.io/v1/imagedigestmirrorsets/stage", `{"spec":{"imageDigestMirrors":[{"source":"registry.redhat.io/rhaii","mirrors":["registry.stage.redhat.io/rhaii"]}]}}`)
-	plan, err := planModelImage(mc2.c, testPresetImage, false, nil, true)
+	plan, err := serving.PlanModelImage(mc2.c, testPresetImage, false, nil, true)
 	if err != nil || plan.Kind != "preset" || plan.Image != "" {
 		t.Fatalf("mirrored: %+v, %v", plan, err)
 	}
 
 	// VLLM_CPU_IMAGE wins.
-	t.Setenv(vllmImageEnv, "mirror.example.com/vllm-cpu:1")
-	plan, err = planModelImage(mc2.c, testPresetImage, true, nil, true)
+	t.Setenv(serving.VLLMImageEnv, "mirror.example.com/vllm-cpu:1")
+	plan, err = serving.PlanModelImage(mc2.c, testPresetImage, true, nil, true)
 	if err != nil || plan.Kind != "override" || plan.Image != "mirror.example.com/vllm-cpu:1" {
 		t.Fatalf("override: %+v, %v", plan, err)
 	}
@@ -354,8 +353,8 @@ func TestModelsSetup_NightlyClusterUsesTheNewestReleasedImage(t *testing.T) {
 // back to the preset's.
 func TestPlanModelImage_KeepsTheReleasedImageOnRepair(t *testing.T) {
 	mc := newModelsCluster(t)
-	var existing llmisvcObject
-	existing.Metadata.Annotations = map[string]string{modelImageSourceAnnotation: "released", modelImageVersionAnnotation: "3.5.3"}
+	var existing serving.LLMISvcObject
+	existing.Metadata.Annotations = map[string]string{serving.ModelImageSourceAnnotation: "released", serving.ModelImageVersionAnnotation: "3.5.3"}
 	existing.Spec.Template = &struct {
 		Containers []struct {
 			Name  string `json:"name"`
@@ -365,7 +364,7 @@ func TestPlanModelImage_KeepsTheReleasedImageOnRepair(t *testing.T) {
 		Name  string `json:"name"`
 		Image string `json:"image"`
 	}{{Name: "main", Image: "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:5353"}}}
-	plan, err := planModelImage(mc.c, testPresetImage, false, &existing, true)
+	plan, err := serving.PlanModelImage(mc.c, testPresetImage, false, &existing, true)
 	if err != nil || plan.Kind != "released" || plan.Image != "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:5353" || plan.Version != "3.5.3" {
 		t.Fatalf("got %+v, %v", plan, err)
 	}
@@ -373,7 +372,7 @@ func TestPlanModelImage_KeepsTheReleasedImageOnRepair(t *testing.T) {
 	// so setting the model up again restores what the tool decides.
 	for _, img := range []string{"quay.io/someone/vllm@sha256:5353", "registry.redhat.io/rhaii/vllm-cpu-rhel9:latest"} {
 		existing.Spec.Template.Containers[0].Image = img
-		plan, err = planModelImage(mc.c, testPresetImage, false, &existing, true)
+		plan, err = serving.PlanModelImage(mc.c, testPresetImage, false, &existing, true)
 		if err != nil || plan.Image == img {
 			t.Fatalf("%s: got %+v, %v", img, plan, err)
 		}
@@ -435,7 +434,7 @@ func TestModelsSetup_MaybeMissingPresetImageOffersItsFixAfterTheWindow(t *testin
 		t.Fatalf("young model: %+v", m)
 	}
 	obj := mc.f.get(testModelPath)
-	ensureMap(obj, "metadata")["creationTimestamp"] = time.Now().Add(-ModelImagePullGraceYoungNode - time.Minute).UTC().Format(time.RFC3339)
+	ensureMap(obj, "metadata")["creationTimestamp"] = time.Now().Add(-serving.ModelImagePullGraceYoungNode - time.Minute).UTC().Format(time.RFC3339)
 	mc.f.put(testModelPath, obj)
 	st, _ = GetResourcesStatus(mc.c)
 	if m := st.Models.Items[0]; !m.PresetImageMissing || !m.PresetImageUncertain || m.TerminalError != true {
@@ -445,34 +444,34 @@ func TestModelsSetup_MaybeMissingPresetImageOffersItsFixAfterTheWindow(t *testin
 
 // Progress comes from the pod and its newest event, in words.
 func TestDescribeModelPods(t *testing.T) {
-	pod := func(status string) modelPod {
-		var p modelPod
+	pod := func(status string) serving.ModelPod {
+		var p serving.ModelPod
 		if err := json.Unmarshal([]byte(`{"metadata":{"name":"p"},"status":`+status+`}`), &p); err != nil {
 			t.Fatal(err)
 		}
 		return p
 	}
-	ev := &modelEvent{Reason: "Pulling", Message: `Pulling image "registry.redhat.io/rhaii/vllm-cpu-rhel9"`}
+	ev := &serving.ModelEvent{Reason: "Pulling", Message: `Pulling image "registry.redhat.io/rhaii/vllm-cpu-rhel9"`}
 	cases := []struct {
 		name    string
-		pods    []modelPod
-		event   *modelEvent
+		pods    []serving.ModelPod
+		event   *serving.ModelEvent
 		message string
 		problem string
 	}{
 		{"no pod", nil, nil, "Waiting for KServe to create the model's pod...", ""},
-		{"unschedulable", []modelPod{pod(`{"conditions":[{"type":"PodScheduled","status":"False","reason":"Unschedulable","message":"0/3 nodes are available: 3 Insufficient cpu."}]}`)}, nil, "Waiting for a worker with room for the model: 0/3 nodes are available: 3 Insufficient cpu.", ""},
-		{"downloading", []modelPod{pod(`{"initContainerStatuses":[{"name":"storage-initializer","state":{"running":{}}}]}`)}, nil, "Downloading the model from Hugging Face (storage-initializer)...", ""},
-		{"pulling", []modelPod{pod(`{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ContainerCreating"}}}]}`)}, ev, `Pulling the runtime image (several GB; a few minutes the first time on a node)... (Pulling: Pulling image "registry.redhat.io/rhaii/vllm-cpu-rhel9")`, ""},
-		{"starting", []modelPod{pod(`{"containerStatuses":[{"name":"main","ready":false,"state":{"running":{}}}]}`)}, nil, "Starting vLLM and loading the model...", ""},
-		{"oom restart", []modelPod{pod(`{"containerStatuses":[{"name":"main","ready":false,"state":{"running":{}},"lastState":{"terminated":{"reason":"OOMKilled","exitCode":137}}}]}`)}, nil, "Restarted after running out of memory (OOMKilled); starting vLLM again...", ""},
-		{"crash loop", []modelPod{pod(`{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"CrashLoopBackOff"}},"lastState":{"terminated":{"reason":"OOMKilled","exitCode":137}}}]}`)}, nil, "", "container main keeps crashing. Last exit: OOMKilled, code 137. It ran out of memory. Its logs say why."},
+		{"unschedulable", []serving.ModelPod{pod(`{"conditions":[{"type":"PodScheduled","status":"False","reason":"Unschedulable","message":"0/3 nodes are available: 3 Insufficient cpu."}]}`)}, nil, "Waiting for a worker with room for the model: 0/3 nodes are available: 3 Insufficient cpu.", ""},
+		{"downloading", []serving.ModelPod{pod(`{"initContainerStatuses":[{"name":"storage-initializer","state":{"running":{}}}]}`)}, nil, "Downloading the model from Hugging Face (storage-initializer)...", ""},
+		{"pulling", []serving.ModelPod{pod(`{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ContainerCreating"}}}]}`)}, ev, `Pulling the runtime image (several GB; a few minutes the first time on a node)... (Pulling: Pulling image "registry.redhat.io/rhaii/vllm-cpu-rhel9")`, ""},
+		{"starting", []serving.ModelPod{pod(`{"containerStatuses":[{"name":"main","ready":false,"state":{"running":{}}}]}`)}, nil, "Starting vLLM and loading the model...", ""},
+		{"oom restart", []serving.ModelPod{pod(`{"containerStatuses":[{"name":"main","ready":false,"state":{"running":{}},"lastState":{"terminated":{"reason":"OOMKilled","exitCode":137}}}]}`)}, nil, "Restarted after running out of memory (OOMKilled); starting vLLM again...", ""},
+		{"crash loop", []serving.ModelPod{pod(`{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"CrashLoopBackOff"}},"lastState":{"terminated":{"reason":"OOMKilled","exitCode":137}}}]}`)}, nil, "", "container main keeps crashing. Last exit: OOMKilled, code 137. It ran out of memory. Its logs say why."},
 		// A failing pull is waited on (modelPullGrace); the wait fails it.
-		{"pull back-off", []modelPod{pod(`{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ImagePullBackOff","message":"unauthorized"}}}]}`)}, nil, "Pulling the image of main failed (ImagePullBackOff: unauthorized); the node keeps retrying.", ""},
+		{"pull back-off", []serving.ModelPod{pod(`{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ImagePullBackOff","message":"unauthorized"}}}]}`)}, nil, "Pulling the image of main failed (ImagePullBackOff: unauthorized); the node keeps retrying.", ""},
 	}
 	for _, tc := range cases {
-		got := describeModelPods(tc.pods, tc.event)
-		if got.message != tc.message || got.problem != tc.problem {
+		got := serving.DescribeModelPods(tc.pods, tc.event)
+		if got.Message != tc.message || got.Problem != tc.problem {
 			t.Errorf("%s: got %+v", tc.name, got)
 		}
 	}
@@ -525,7 +524,7 @@ func TestGatewayTeardown_RefusesWhileAModelUsesIt(t *testing.T) {
 	}
 	mc.f.putJSON("/apis/serving.kserve.io/v1alpha2/namespaces/team/llminferenceservices/granite", `{"spec":{"router":{"route":{},"gateway":{}}}}`)
 	before := len(mc.f.mutations())
-	res, _ := TeardownInferenceGateway(mc.c, false)
+	res, _ := serving.TeardownInferenceGateway(mc.c, false)
 	if res.Success || res.ErrorCode != "in_use" || !strings.Contains(res.Message, "team/granite") {
 		t.Fatalf("got %+v", res)
 	}
@@ -539,7 +538,7 @@ func TestGatewayTeardown_RefusesWhileAModelUsesIt(t *testing.T) {
 
 	// Models that cannot be listed: fail closed.
 	mc.f.fail["GET /apis/serving.kserve.io/v1alpha2/llminferenceservices"] = 500
-	res, _ = TeardownInferenceGateway(mc.c, false)
+	res, _ = serving.TeardownInferenceGateway(mc.c, false)
 	if res.Success || !strings.Contains(res.Message, "Cannot check which models use the gateway") {
 		t.Fatalf("got %+v", res)
 	}
@@ -564,7 +563,7 @@ func TestGatewayTeardown_RefusesWhileRoutesAreAttached(t *testing.T) {
 		}
 	}
 	before := len(mc.f.mutations())
-	res, _ := TeardownInferenceGateway(mc.c, false)
+	res, _ := serving.TeardownInferenceGateway(mc.c, false)
 	if res.Success || res.ErrorCode != "in_use" || !strings.Contains(res.Message, "1 route is attached to the inference gateway") {
 		t.Fatalf("got %+v", res)
 	}
@@ -577,7 +576,7 @@ func TestGatewayTeardown_RefusesWhileRoutesAreAttached(t *testing.T) {
 	}
 
 	attached = 0
-	if res, _ = TeardownInferenceGateway(mc.c, false); !res.Success || mc.f.has(testGatewayPath) {
+	if res, _ = serving.TeardownInferenceGateway(mc.c, false); !res.Success || mc.f.has(testGatewayPath) {
 		t.Fatalf("got %+v", res)
 	}
 }
@@ -585,7 +584,7 @@ func TestGatewayTeardown_RefusesWhileRoutesAreAttached(t *testing.T) {
 func TestGatewayTeardown_NeverDeletesAForeignGateway(t *testing.T) {
 	mc := newModelsCluster(t)
 	mc.f.putJSON(testGatewayPath, `{"spec":{}}`)
-	res, _ := TeardownInferenceGateway(mc.c, false)
+	res, _ := serving.TeardownInferenceGateway(mc.c, false)
 	if res.Success || res.ErrorCode != "not_managed" || !mc.f.has(testGatewayPath) {
 		t.Fatalf("got %+v", res)
 	}
@@ -596,13 +595,13 @@ func TestTeardownModels_WaitsForTheFinalizerAndNamesIt(t *testing.T) {
 	mc.f.putJSON(testModelPath, `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"},"finalizers":["serving.kserve.io/llmisvc-finalizer"],
 		"managedFields":[{"manager":"rhoai-nightly-updater","operation":"Apply"}]}}`)
 	recordModelFixture(mc.f, testModelPath)
-	res, _ := TeardownModels(mc.c, "proj")
+	res, _ := serving.TeardownModels(mc.c, "proj")
 	if res.Success || res.ErrorCode != "in_progress" || !strings.Contains(res.Message, "serving.kserve.io/llmisvc-finalizer") {
 		t.Fatalf("got %+v", res)
 	}
 	// The controller finishes: the next teardown sees it gone.
 	mc.f.finalizeOnGet = true
-	res, _ = TeardownModels(mc.c, "proj")
+	res, _ = serving.TeardownModels(mc.c, "proj")
 	if !res.Success || mc.f.has(testModelPath) {
 		t.Fatalf("got %+v", res)
 	}
@@ -690,11 +689,11 @@ func TestPickReleasedImage_HighestPublishedVersion(t *testing.T) {
 		{"architecture":"amd64","creation_date":"2026-11-15","repositories":[{"registry":"registry.access.redhat.com","repository":"rhaii/vllm-cpu-rhel9","published":false,
 			"manifest_list_digest":"sha256:360","tags":[{"name":"3.6.0"}]}]},
 		{"architecture":"ppc64le","creation_date":"2026-11-16","repositories":[{"repository":"rhaii/vllm-cpu-rhel9","published":true,"manifest_list_digest":"sha256:999","tags":[{"name":"9.9"}]}]}]}`)
-	img, err := pickReleasedImage(body, "rhaii/vllm-cpu-rhel9")
+	img, err := serving.PickReleasedImage(body, "rhaii/vllm-cpu-rhel9")
 	if err != nil || img.Ref != "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:353" || img.Version != "3.5.3" {
 		t.Fatalf("got %+v, %v", img, err)
 	}
-	if _, err := pickReleasedImage([]byte(`{"data":[]}`), "rhaii/vllm-cpu-rhel9"); err == nil {
+	if _, err := serving.PickReleasedImage([]byte(`{"data":[]}`), "rhaii/vllm-cpu-rhel9"); err == nil {
 		t.Error("no image: want an error")
 	}
 }
@@ -712,17 +711,15 @@ func TestFetchReleasedImage(t *testing.T) {
 		fmt.Fprint(w, `{"data":[{"architecture":"amd64","repositories":[{"repository":"rhaii/vllm-cpu-rhel9","published":true,"manifest_list_digest":"sha256:1","tags":[{"name":"3.4.1"}]}]}]}`)
 	}))
 	t.Cleanup(srv.Close)
-	prev := redHatCatalogURL
-	redHatCatalogURL = srv.URL
-	t.Cleanup(func() { redHatCatalogURL = prev })
-	img, err := fetchReleasedImage(context.Background(), "rhaii/vllm-cpu-rhel9")
+	t.Cleanup(serving.SetRedHatCatalogURLForTest(srv.URL))
+	img, err := serving.FetchReleasedImage(context.Background(), "rhaii/vllm-cpu-rhel9")
 	if err != nil || img.Version != "3.4.1" {
 		t.Fatalf("got %+v, %v", img, err)
 	}
 	if gotPath != "/repositories/registry/registry.access.redhat.com/repository/rhaii/vllm-cpu-rhel9/images" || !strings.Contains(gotQuery, "filter=architecture%3D%3Damd64") {
 		t.Errorf("request %s?%s", gotPath, gotQuery)
 	}
-	if _, err := fetchReleasedImage(context.Background(), "rhaii/missing"); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+	if _, err := serving.FetchReleasedImage(context.Background(), "rhaii/missing"); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Errorf("err: %v", err)
 	}
 }
@@ -739,22 +736,22 @@ func TestMirrorCovers(t *testing.T) {
 		"quay.io":                                 false,
 		"":                                        false,
 	} {
-		if got := mirrorCovers(source, repo); got != want {
+		if got := serving.MirrorCovers(source, repo); got != want {
 			t.Errorf("%q: got %v", source, got)
 		}
 	}
-	if imageRepository("registry.redhat.io/rhaii/vllm-cpu-rhel9:3.4@sha256:1") != repo || imageRepository("localhost:5000/a/b:1") != "localhost:5000/a/b" {
+	if serving.ImageRepository("registry.redhat.io/rhaii/vllm-cpu-rhel9:3.4@sha256:1") != repo || serving.ImageRepository("localhost:5000/a/b:1") != "localhost:5000/a/b" {
 		t.Error("imageRepository")
 	}
 }
 
 func TestParseQuantity(t *testing.T) {
 	for in, want := range map[string]float64{"250m": 0.25, "4": 4, "15500m": 15.5, "12Gi": 12 << 30, "64000Ki": 64000 << 10, "1G": 1e9, "1.5": 1.5} {
-		if got, ok := parseQuantity(in); !ok || got != want {
+		if got, ok := serving.ParseQuantity(in); !ok || got != want {
 			t.Errorf("%s: got %v %v", in, got, ok)
 		}
 	}
-	if _, ok := parseQuantity("x"); ok {
+	if _, ok := serving.ParseQuantity("x"); ok {
 		t.Error("x parsed")
 	}
 }
@@ -766,13 +763,13 @@ func TestModelCapacityWarning(t *testing.T) {
 	mc.f.putJSON("/api/v1/nodes/w1", `{"metadata":{"labels":{"kubernetes.io/arch":"amd64"}},"status":{"allocatable":{"cpu":"15500m","memory":"61Gi"}}}`)
 	mc.f.putJSON("/api/v1/nodes/m1", `{"metadata":{"labels":{"kubernetes.io/arch":"amd64"}},"spec":{"taints":[{"effect":"NoSchedule"}]},"status":{"allocatable":{"cpu":"64","memory":"256Gi"}}}`)
 	mc.f.putJSON("/api/v1/namespaces/a/pods/busy", `{"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"14","memory":"8Gi"}}}]},"status":{"phase":"Running"}}`)
-	w := modelCapacityWarning(mc.c, defaultEntry(), "")
+	w := serving.ModelCapacityWarning(mc.c, defaultEntry(), "")
 	if !strings.Contains(w, "the worker with the most free CPU, w1, has 1.5 CPUs and 53.0 GiB free.") {
 		t.Fatalf("warning: %q", w)
 	}
-	capacityCache.Purge()
+	serving.CapacityCache.Purge()
 	mc.f.putJSON("/api/v1/namespaces/a/pods/busy", `{"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"2","memory":"8Gi"}}}]},"status":{"phase":"Running"}}`)
-	if w := modelCapacityWarning(mc.c, defaultEntry(), ""); w != "" {
+	if w := serving.ModelCapacityWarning(mc.c, defaultEntry(), ""); w != "" {
 		t.Fatalf("warning: %q", w)
 	}
 }
@@ -855,7 +852,7 @@ func TestModelsSetup_GatewayNotProgrammedNamesTheReason(t *testing.T) {
 // gateway, so the tab shows the real one instead of a placeholder.
 func TestInferenceGatewayStatus_PlannedURLBeforeSetup(t *testing.T) {
 	mc := newModelsCluster(t)
-	if got := getInferenceGatewayStatus(mc.c, nil, nil); got.Deployed || got.PlannedURL != "https://inference.apps.example.com" || got.ExternalURL != "" {
+	if got := serving.InferenceGatewayStatus(mc.c, nil, nil); got.Deployed || got.PlannedURL != "https://inference.apps.example.com" || got.ExternalURL != "" {
 		t.Errorf("not set up: deployed=%v planned=%q external=%q", got.Deployed, got.PlannedURL, got.ExternalURL)
 	}
 }
@@ -886,7 +883,7 @@ func TestModelsSetup_RecordsAFittingHardwareProfile(t *testing.T) {
 	}
 	model := mc.f.get("/apis/serving.kserve.io/v1alpha2/namespaces/proj/llminferenceservices/qwen25-05b-instruct")
 	ann := model["metadata"].(map[string]any)["annotations"].(map[string]any)
-	if ann[hardwareProfileNameAnnotation] != "default-profile" || ann[hardwareProfileNamespaceAnnotation] != "redhat-ods-applications" || ann[hardwareProfileVersionAnnotation] != "41" {
+	if ann[serving.HardwareProfileNameAnnotation] != "default-profile" || ann[serving.HardwareProfileNamespaceAnnotation] != "redhat-ods-applications" || ann[serving.HardwareProfileVersionAnnotation] != "41" {
 		t.Errorf("hardware profile annotations: %v", ann)
 	}
 	main := model["spec"].(map[string]any)["template"].(map[string]any)["containers"].([]any)[0].(map[string]any)
@@ -904,7 +901,7 @@ func TestModelsSetup_RecordsAFittingHardwareProfile(t *testing.T) {
 	if !said {
 		t.Error("the run does not name the hardware profile")
 	}
-	st := modelState(mc.c, readModelForTest(t, mc), false, modelsRecord{})
+	st := serving.ModelState(mc.c, readModelForTest(t, mc), false, serving.ModelsRecord{})
 	if st.HardwareProfile != "redhat-ods-applications/default-profile" {
 		t.Errorf("status hardware profile = %q", st.HardwareProfile)
 	}
@@ -919,7 +916,7 @@ func TestModelsSetup_NoFittingHardwareProfileSaysWhy(t *testing.T) {
 		t.Fatalf("setup failed: %+v", res)
 	}
 	model := mc.f.get("/apis/serving.kserve.io/v1alpha2/namespaces/proj/llminferenceservices/qwen25-05b-instruct")
-	if _, set := model["metadata"].(map[string]any)["annotations"].(map[string]any)[hardwareProfileNameAnnotation]; set {
+	if _, set := model["metadata"].(map[string]any)["annotations"].(map[string]any)[serving.HardwareProfileNameAnnotation]; set {
 		t.Error("a profile was recorded although none fits")
 	}
 	for _, e := range events {
@@ -937,9 +934,9 @@ func TestModelsSetup_NoFittingHardwareProfileSaysWhy(t *testing.T) {
 	t.Error("the run does not say why there is no hardware profile")
 }
 
-func readModelForTest(t *testing.T, mc *modelsCluster) llmisvcObject {
+func readModelForTest(t *testing.T, mc *modelsCluster) serving.LLMISvcObject {
 	t.Helper()
-	m, found, err := readToolModel(mc.c, "proj", "qwen25-05b-instruct")
+	m, found, err := serving.ReadToolModel(mc.c, "proj", "qwen25-05b-instruct")
 	if err != nil || !found {
 		t.Fatalf("read model: %v %v", found, err)
 	}
@@ -1122,19 +1119,19 @@ func TestModelsSetup_RolloutStopsOnAFailingNewPod(t *testing.T) {
 
 // Every pod is judged: a problem on the second pod is not hidden by the first.
 func TestDescribeModelPods_ChecksEveryPod(t *testing.T) {
-	var ok, bad modelPod
+	var ok, bad serving.ModelPod
 	_ = json.Unmarshal([]byte(`{"metadata":{"name":"a"},"status":{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ContainerCreating"}}}]}}`), &ok)
 	_ = json.Unmarshal([]byte(`{"metadata":{"name":"b"},"status":{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}}`), &bad)
-	if got := describeModelPods([]modelPod{ok, bad}, nil); !strings.Contains(got.problem, "keeps crashing") {
+	if got := serving.DescribeModelPods([]serving.ModelPod{ok, bad}, nil); !strings.Contains(got.Problem, "keeps crashing") {
 		t.Fatalf("got %+v", got)
 	}
 }
 
 // One route attached to both listeners is one route, not two.
 func TestAttachedRoutes_CountsARouteOnTwoListenersOnce(t *testing.T) {
-	var g gatewayObject
+	var g serving.GatewayObject
 	_ = json.Unmarshal([]byte(`{"status":{"listeners":[{"name":"https-external","attachedRoutes":1},{"name":"https","attachedRoutes":1}]}}`), &g)
-	if n := g.attachedRoutes(); n != 1 {
+	if n := g.AttachedRoutes(); n != 1 {
 		t.Fatalf("attached routes %d", n)
 	}
 }
@@ -1147,7 +1144,7 @@ func TestGatewayTeardown_KeepsTheClassWhileAnotherGatewayUsesIt(t *testing.T) {
 		t.Fatalf("setup: %+v", res)
 	}
 	mc.f.putJSON("/apis/gateway.networking.k8s.io/v1/namespaces/team/gateways/team-gw", `{"metadata":{"name":"team-gw","namespace":"team"},"spec":{"gatewayClassName":"openshift-ai-inference"}}`)
-	res, _ := TeardownInferenceGateway(mc.c, false)
+	res, _ := serving.TeardownInferenceGateway(mc.c, false)
 	if !res.Success || mc.f.has(testGatewayPath) || mc.f.has(testGatewayCM) {
 		t.Fatalf("got %+v", res)
 	}
@@ -1161,7 +1158,7 @@ func TestGatewayTeardown_KeepsTheClassWhileAnotherGatewayUsesIt(t *testing.T) {
 	mc.f.mu.Lock()
 	delete(mc.f.objects, fakeKey{gv: "gateway.networking.k8s.io/v1", ns: "team", plural: "gateways", name: "team-gw"})
 	mc.f.mu.Unlock()
-	if res, _ := TeardownInferenceGateway(mc.c, false); !res.Success || mc.f.has(testGatewayClass) {
+	if res, _ := serving.TeardownInferenceGateway(mc.c, false); !res.Success || mc.f.has(testGatewayClass) {
 		t.Fatalf("second teardown: %+v", res)
 	}
 }
@@ -1239,7 +1236,7 @@ func TestGatewayTeardown_ADefaultRouteElsewhereDoesNotBlock(t *testing.T) {
 	if len(st.InferenceGateway.UsedBy) != 0 || strings.Contains(st.InferenceGateway.Warning, "KServe's default gateway") {
 		t.Errorf("status: %+v", st.InferenceGateway)
 	}
-	if res, _ := TeardownInferenceGateway(mc.c, false); !res.Success {
+	if res, _ := serving.TeardownInferenceGateway(mc.c, false); !res.Success {
 		t.Fatalf("teardown: %+v", res)
 	}
 }
@@ -1251,11 +1248,11 @@ func TestModelCapacityWarning_IgnoresTheModelsOwnPod(t *testing.T) {
 	mc.f.putJSON("/api/v1/nodes/w1", `{"metadata":{"labels":{"kubernetes.io/arch":"amd64"}},"status":{"allocatable":{"cpu":"15500m","memory":"61Gi"}}}`)
 	mc.f.putJSON("/api/v1/namespaces/a/pods/busy", `{"metadata":{"namespace":"a"},"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"10","memory":"8Gi"}}}]},"status":{"phase":"Running"}}`)
 	mc.f.putJSON("/api/v1/namespaces/proj/pods/qwen", `{"metadata":{"namespace":"proj","labels":{"app.kubernetes.io/name":"qwen25-05b-instruct","app.kubernetes.io/component":"llminferenceservice-workload"}},"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"4","memory":"6Gi"}}}]},"status":{"phase":"Running"}}`)
-	if w := modelCapacityWarning(mc.c, defaultEntry(), "proj"); w != "" {
+	if w := serving.ModelCapacityWarning(mc.c, defaultEntry(), "proj"); w != "" {
 		t.Fatalf("its own pod was counted: %q", w)
 	}
 	// In another project the running copy is a real occupant.
-	if w := modelCapacityWarning(mc.c, defaultEntry(), "other"); w == "" {
+	if w := serving.ModelCapacityWarning(mc.c, defaultEntry(), "other"); w == "" {
 		t.Fatal("a copy in another project was not counted")
 	}
 }
@@ -1273,12 +1270,12 @@ func TestModelsSetup_SkipsAProfileNotVisibleForModelServing(t *testing.T) {
 	}
 	model := mc.f.get(testModelPath)
 	ann := model["metadata"].(map[string]any)["annotations"].(map[string]any)
-	if ann[hardwareProfileNameAnnotation] != "b-serving" {
-		t.Errorf("hardware profile %v", ann[hardwareProfileNameAnnotation])
+	if ann[serving.HardwareProfileNameAnnotation] != "b-serving" {
+		t.Errorf("hardware profile %v", ann[serving.HardwareProfileNameAnnotation])
 	}
-	var p hardwareProfileObject
+	var p serving.HardwareProfileObject
 	_ = json.Unmarshal([]byte(hwProfile("x", "8", "32Gi", `,"annotations":{"opendatahub.io/dashboard-feature-visibility":"not json"}`)), &p)
-	if why := p.fits(defaultEntry()); why != "" {
+	if why := p.Fits(defaultEntry()); why != "" {
 		t.Errorf("an unreadable visibility hides the profile (the dashboard shows it): %s", why)
 	}
 }
@@ -1289,11 +1286,9 @@ func TestModelsSetup_SkipsAProfileNotVisibleForModelServing(t *testing.T) {
 func TestModelsSetup_ReleasedImageLookupFailureRefuses(t *testing.T) {
 	mc := newModelsCluster(t)
 	mc.f.putJSON(testSubscription, `{"spec":{"source":"`+rhoai.CatalogName+`"}}`)
-	prev := lookupReleasedImage
-	t.Cleanup(func() { lookupReleasedImage = prev })
-	lookupReleasedImage = func(context.Context, string) (releasedImage, error) {
-		return releasedImage{}, fmt.Errorf("catalog.redhat.com answered 503")
-	}
+	t.Cleanup(serving.SetLookupReleasedImageForTest(func(context.Context, string) (serving.ReleasedImage, error) {
+		return serving.ReleasedImage{}, fmt.Errorf("catalog.redhat.com answered 503")
+	}))
 	before := len(mc.f.mutations())
 	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
 	if res.Success || !strings.Contains(res.Message, "catalog.redhat.com answered 503") || !strings.Contains(res.Message, "Nothing was changed") {

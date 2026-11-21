@@ -13,6 +13,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -75,10 +76,10 @@ func TestBookkeepingUsesTheServiceAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	components.ReadDeploymentSnapshot(c)
-	if _, err := readModelsRecord(c); err != nil {
+	if _, err := serving.ReadModelsRecord(c); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeModelsRecord(c, modelsRecord{}); err != nil {
+	if err := serving.WriteModelsRecord(c, serving.ModelsRecord{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := storage.ReadPipelineRecord(c); err != nil {
@@ -93,10 +94,10 @@ func TestBookkeepingUsesTheServiceAccount(t *testing.T) {
 	if err := writePlaygroundRecords(c, map[string]playgroundRecord{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readMaaSRecord(c); err != nil {
+	if _, err := serving.ReadMaaSRecord(c); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeMaaSRecord(c, maasRecord{}); err != nil {
+	if err := serving.WriteMaaSRecord(c, serving.MaaSRecord{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ReadOperationRecord(c); err != nil {

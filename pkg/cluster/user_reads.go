@@ -11,6 +11,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -47,7 +48,7 @@ func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, erro
 		wg                 sync.WaitGroup
 		dspas              []storage.DSPA
 		dspaErr, modelsErr error
-		models             []llmisvcObject
+		models             []serving.LLMISvcObject
 		isvcErr            error
 	)
 	wg.Go(func() { st.DashboardURL = dashdev.DashboardURL(sa) })
@@ -81,18 +82,18 @@ func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, erro
 	}
 
 	switch {
-	case errors.Is(modelsErr, errLLMISvcAPIMissing):
+	case errors.Is(modelsErr, serving.ErrLLMISvcAPIMissing):
 		st.ModelsProblem, st.ModelsProblemCode = "Model serving is not installed on this cluster: it has no LLMInferenceService API.", types.ProblemNotInstalled
 	case modelsErr != nil:
 		st.Models = nil
 		st.ModelsProblem, st.ModelsProblemCode = userReadProblem("the models", project, modelsErr)
 	default:
-		rec, recErr := readModelsRecord(u)
+		rec, recErr := serving.ReadModelsRecord(u)
 		if recErr != nil {
 			rec = nil
 		}
 		for _, m := range models {
-			st.Models = append(st.Models, modelState(u, m, true, rec))
+			st.Models = append(st.Models, serving.ModelState(u, m, true, rec))
 		}
 	}
 	if isvcErr != nil {
@@ -133,12 +134,12 @@ func userReadProblem(what, project string, err error) (string, string) {
 
 // listProjectLLMInferenceServices lists the LLMInferenceServices of one
 // project with the user's token.
-func listProjectLLMInferenceServices(u *Client, project string) ([]llmisvcObject, error) {
+func listProjectLLMInferenceServices(u *Client, project string) ([]serving.LLMISvcObject, error) {
 	if !u.ActsAsUser() {
 		return nil, authz.ErrNotUserClient
 	}
 	var list struct {
-		Items []llmisvcObject `json:"items"`
+		Items []serving.LLMISvcObject `json:"items"`
 	}
 	found, err := u.GetIntoOptional(rhoai.NamespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, ""), &list)
 	if err != nil {
@@ -148,9 +149,9 @@ func listProjectLLMInferenceServices(u *Client, project string) ([]llmisvcObject
 		return nil, fmt.Errorf("list LLMInferenceServices: %w", err)
 	}
 	if !found {
-		return nil, errLLMISvcAPIMissing
+		return nil, serving.ErrLLMISvcAPIMissing
 	}
-	slices.SortFunc(list.Items, func(a, b llmisvcObject) int { return strings.Compare(a.Metadata.Name, b.Metadata.Name) })
+	slices.SortFunc(list.Items, func(a, b serving.LLMISvcObject) int { return strings.Compare(a.Metadata.Name, b.Metadata.Name) })
 	return list.Items, nil
 }
 

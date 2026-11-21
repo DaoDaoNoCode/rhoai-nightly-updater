@@ -4,6 +4,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -99,5 +100,5 @@ func GetOperationState(c *Client) (*types.OperationMarker, *types.CompletedOpera
 
 // redactURL is redactDBSecrets for one connection URL.
 func redactURL(msg, connURL string) string {
-	return redactDBSecrets(msg, []string{connURL}, nil)
+	return serving.RedactDBSecrets(msg, []string{connURL}, nil)
 }

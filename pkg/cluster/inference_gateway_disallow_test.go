@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -26,7 +27,7 @@ func listedGateway(t *testing.T) *modelsCluster {
 	// ownership to server-side apply (upgradeToolFieldOwnership, a
 	// metadata write of its own): done here, so the tests count only the
 	// list's writes.
-	meta, _, err := readGatewayObject(mc.c, "Gateway")
+	meta, _, err := serving.ReadGatewayObject(mc.c, "Gateway")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +156,7 @@ func TestModelsTeardown_ReleaseChecksAgainAfterAConflict(t *testing.T) {
 		t.Fatalf("teardown: %+v", res)
 	}
 	wantAllowed(t, mc, "late", "openshift-ingress", "proj")
-	if rec, _ := readGatewayProjects(mc.c); strings.Join(rec, ",") != "proj" {
+	if rec, _ := serving.ReadGatewayProjects(mc.c); strings.Join(rec, ",") != "proj" {
 		t.Errorf("record: %v (kept while the project stays listed)", rec)
 	}
 }
@@ -184,14 +185,14 @@ func TestModels_ReleasesDeletedRecordedProjects(t *testing.T) {
 			t.Fatalf("setup: %+v", res)
 		}
 		wantAllowed(t, mc, "openshift-ingress", "team")
-		if rec, _ := readGatewayProjects(mc.c); strings.Join(rec, ",") != "team" {
+		if rec, _ := serving.ReadGatewayProjects(mc.c); strings.Join(rec, ",") != "team" {
 			t.Errorf("record: %v", rec)
 		}
 	})
 
 	t.Run("clean up's models part", func(t *testing.T) {
 		mc := setUp(t)
-		res, err := TeardownModels(mc.c, "team")
+		res, err := serving.TeardownModels(mc.c, "team")
 		if err != nil || !res.Success || !strings.Contains(res.Message, "Project proj no longer exists") {
 			t.Fatalf("teardown: %+v %v", res, err)
 		}

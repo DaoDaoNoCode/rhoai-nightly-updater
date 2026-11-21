@@ -3,6 +3,8 @@ package cluster
 import (
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 )
 
 // The certificate Secret's name comes from Authorino's CR, which whoever
@@ -41,7 +43,7 @@ func TestMaaSStatus_AuthorinoTLSRefusesAnInvalidSecretName(t *testing.T) {
 }
 
 func TestAuthorinoTLSCommands_QuoteEverySubstitution(t *testing.T) {
-	cmds, why := authorinoTLSCommands("kuadrant-system", "aigw-authorino-tls")
+	cmds, why := serving.AuthorinoTLSCommands("kuadrant-system", "aigw-authorino-tls")
 	if why != "" {
 		t.Fatalf("refused a valid name: %s", why)
 	}
@@ -54,10 +56,10 @@ func TestAuthorinoTLSCommands_QuoteEverySubstitution(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, cmds)
 		}
 	}
-	if _, why := authorinoTLSCommands("kuadrant-system", "a;b"); why == "" {
+	if _, why := serving.AuthorinoTLSCommands("kuadrant-system", "a;b"); why == "" {
 		t.Error("an invalid name got commands")
 	}
-	if _, why := authorinoTLSCommands("bad ns", "ok"); why == "" {
+	if _, why := serving.AuthorinoTLSCommands("bad ns", "ok"); why == "" {
 		t.Error("an invalid namespace got commands")
 	}
 }

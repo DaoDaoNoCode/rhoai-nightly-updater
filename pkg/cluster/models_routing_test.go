@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 )
 
 // modelCallSim answers the "Can it be called?" requests of a test, in
@@ -58,15 +60,13 @@ func simulateRouting(t *testing.T, mc *modelsCluster) {
 		if prev != nil {
 			prev(k, obj)
 		}
-		if k.plural == "secrets" && obj["type"] == tokenSecretType {
+		if k.plural == "secrets" && obj["type"] == serving.TokenSecretType {
 			ensureMap(obj, "data")["token"] = base64.StdEncoding.EncodeToString([]byte(testModelToken))
 		}
 	}
 	mc.calls = &modelCallSim{status: 200, body: `{"choices":[{"message":{"content":"Hi"}}]}`}
-	saved := modelCallHTTPClient
-	t.Cleanup(func() { modelCallHTTPClient = saved })
 	sim := mc.calls
-	modelCallHTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	t.Cleanup(serving.SetModelCallHTTPClientForTest(&http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		data, _ := io.ReadAll(r.Body)
 		sim.mu.Lock()
 		defer sim.mu.Unlock()
@@ -88,7 +88,7 @@ func simulateRouting(t *testing.T, mc *modelsCluster) {
 			return nil, a.err
 		}
 		return &http.Response{StatusCode: a.status, Body: io.NopCloser(strings.NewReader(a.body)), Header: http.Header{}, Request: r}, nil
-	})}
+	})}))
 }
 
 // withoutKuadrant takes Connectivity Link off the cluster.

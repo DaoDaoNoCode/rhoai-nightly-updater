@@ -36,6 +36,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"gopkg.in/yaml.v3"
 )
 
@@ -845,9 +846,9 @@ func (r resolver) resolveCall(x *ast.CallExpr) []string {
 		return out
 	case "GetActivityNamespace":
 		return []string{appNSMarker}
-	case "maasAPI":
+	case "MaaSAPI":
 		// maas.opendatahub.io at its served version
-		return []string{maasGroup + "/" + unknownPart}
+		return []string{serving.MaaSGroup + "/" + unknownPart}
 	case "gitOpsAdmissionPolicyName":
 		return []string{gitOpsPolicyNameMarker}
 	case "ComponentListPath":

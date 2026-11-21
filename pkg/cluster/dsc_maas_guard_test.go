@@ -12,6 +12,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -37,14 +38,14 @@ func maasServed(f *resourceFake) {
 }
 
 // putMaaSRecord stores this tool's MaaS record.
-func putMaaSRecord(t *testing.T, f *resourceFake, rec maasRecord) {
+func putMaaSRecord(t *testing.T, f *resourceFake, rec serving.MaaSRecord) {
 	t.Helper()
 	raw, err := json.Marshal(rec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.put(snapshotPath(), map[string]any{"metadata": map[string]any{"name": record.SnapshotConfigMapName, "namespace": record.GetActivityNamespace()},
-		"data": map[string]any{maasRecordKey: string(raw)}})
+		"data": map[string]any{serving.MaaSRecordKey: string(raw)}})
 }
 
 // maasInUseWorld is managerWorld with MaaS in use as on the live cluster.
@@ -54,9 +55,9 @@ func maasInUseWorld(t *testing.T, edit func(dsc map[string]any)) (*resourceFake,
 	maasServed(f)
 	f.put(guardModelRef, map[string]any{"metadata": map[string]any{"name": "qwen25-05b-instruct", "namespace": "proj", "labels": envkit.ToolLabels()},
 		"spec": map[string]any{"modelRef": map[string]any{"kind": "LLMInferenceService", "name": "qwen25-05b-instruct"}}})
-	f.put(guardSubscription, map[string]any{"metadata": map[string]any{"name": maasSubscriptionName, "namespace": maasTenantNamespace, "labels": envkit.ToolLabels()}})
-	f.put(guardAuthPolicy, map[string]any{"metadata": map[string]any{"name": maasAuthPolicyName, "namespace": maasTenantNamespace, "labels": envkit.ToolLabels()}})
-	putMaaSRecord(t, f, maasRecord{DSCChanged: true, PreviousModelsAsAService: "Removed", AIGatewayChanged: true, PreviousAIGateway: "Removed",
+	f.put(guardSubscription, map[string]any{"metadata": map[string]any{"name": serving.MaaSSubscriptionName, "namespace": serving.MaaSTenantNamespace, "labels": envkit.ToolLabels()}})
+	f.put(guardAuthPolicy, map[string]any{"metadata": map[string]any{"name": serving.MaaSAuthPolicyName, "namespace": serving.MaaSTenantNamespace, "labels": envkit.ToolLabels()}})
+	putMaaSRecord(t, f, serving.MaaSRecord{DSCChanged: true, PreviousModelsAsAService: "Removed", AIGatewayChanged: true, PreviousAIGateway: "Removed",
 		Published: []string{"proj/qwen25-05b-instruct"}, DBNamespace: "redhat-ai-gateway-infra", Database: "cnpg"})
 	return f, c
 }
@@ -390,7 +391,7 @@ func TestMaaSGuardBlocksWhenAServedListIsNotFound(t *testing.T) {
 		if b := maasBlock(plan, "aigateway"); b == nil || !strings.Contains(strings.Join(b.Reasons, " "), "cannot tell whether MaaS is in use") {
 			t.Errorf("%s answers 404: %+v", list, plan)
 		}
-		if _, err := foreignMaaSObjects(c); err == nil {
+		if _, err := serving.ForeignMaaSObjects(c); err == nil {
 			t.Errorf("%s answers 404: Clean up MaaS's in-use check found nobody", list)
 		}
 	}
@@ -427,7 +428,7 @@ func TestMaaSGuardWithoutTheMaaSAPI(t *testing.T) {
 func TestMaaSGuardAllowsWhenMaaSIsNotInUse(t *testing.T) {
 	f, c := managerWorld(t, nil)
 	maasServed(f)
-	putMaaSRecord(t, f, maasRecord{Shared: map[string]string{"rhcl": "installed"}}) // shared pieces only: kept by Clean up MaaS
+	putMaaSRecord(t, f, serving.MaaSRecord{Shared: map[string]string{"rhcl": "installed"}}) // shared pieces only: kept by Clean up MaaS
 	for _, path := range []string{"aigateway", "aigateway.modelsAsAService"} {
 		if plan := mustPlan(t, c, "toggle", path, "Removed", false); len(plan.Blocked) != 0 {
 			t.Fatalf("%s: %+v", path, plan.Blocked)
@@ -459,7 +460,7 @@ func TestMaaSGuardSignalsAlone(t *testing.T) {
 		f, c := managerWorld(t, nil)
 		maasServed(f)
 		f.put("/apis/maas.opendatahub.io/v1alpha1/namespaces/team/maasmodelrefs/their-model", map[string]any{
-			"metadata": map[string]any{"name": "their-model", "namespace": "team", "deletionTimestamp": "2026-11-19T10:00:00Z", "finalizers": []any{maasModelFinalizer}}})
+			"metadata": map[string]any{"name": "their-model", "namespace": "team", "deletionTimestamp": "2026-11-19T10:00:00Z", "finalizers": []any{serving.MaaSModelFinalizer}}})
 		plan := mustPlan(t, c, "toggle", "aigateway", "Removed", false)
 		b := maasBlock(plan, "aigateway")
 		if b == nil || !strings.Contains(b.Reasons[len(b.Reasons)-1], "published model team/their-model (being deleted)") {
@@ -468,7 +469,7 @@ func TestMaaSGuardSignalsAlone(t *testing.T) {
 	})
 	t.Run("record only", func(t *testing.T) {
 		f, c := managerWorld(t, nil)
-		putMaaSRecord(t, f, maasRecord{DSCChanged: true, PreviousModelsAsAService: "Removed"})
+		putMaaSRecord(t, f, serving.MaaSRecord{DSCChanged: true, PreviousModelsAsAService: "Removed"})
 		plan := mustPlan(t, c, "toggle", "aigateway.modelsAsAService", "Removed", false)
 		b := maasBlock(plan, "aigateway.modelsAsAService")
 		if b == nil || !strings.Contains(b.Reasons[0], "MaaS is in use (set up by this tool on the MaaS tab)") {
@@ -486,7 +487,7 @@ func TestMaaSGuardPaths(t *testing.T) {
 		setPath(t, dsc, "spec.components.aigateway.modelsAsAService.managementState", "Removed")
 		setPath(t, dsc, "spec.components.aigateway.batchGateway.managementState", "Managed")
 	})
-	putMaaSRecord(t, f, maasRecord{DBNamespace: "redhat-ai-gateway-infra", Database: "cnpg"})
+	putMaaSRecord(t, f, serving.MaaSRecord{DBNamespace: "redhat-ai-gateway-infra", Database: "cnpg"})
 	if b := maasBlock(mustPlan(t, c, "toggle", "aigateway", "Removed", false), "aigateway"); b == nil || !strings.Contains(b.Reasons[len(b.Reasons)-1], "MaaS is in use") {
 		t.Fatalf("aigateway: %+v", b)
 	}

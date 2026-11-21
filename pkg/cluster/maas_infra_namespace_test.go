@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -29,7 +30,7 @@ func TestMaaSInfraNamespace_TenantReadFailureIsNotGuessed(t *testing.T) {
 			f, c := newFakeAPI(t)
 			serveDSCI(f, "opendatahub")
 			f.json("GET", tMaaSTenantConfig, tc.status, tc.body)
-			ns, err := maasInfraNamespace(c)
+			ns, err := serving.MaaSInfraNamespace(c)
 			if err == nil || ns != "" {
 				t.Fatalf("ns=%q err=%v: derived a name although the tenant could not be read", ns, err)
 			}
@@ -56,7 +57,7 @@ func TestMaaSInfraNamespace_DerivedOnlyWithoutAReportedNamespace(t *testing.T) {
 			f, c := newFakeAPI(t)
 			serveDSCI(f, "opendatahub")
 			f.json("GET", tMaaSTenantConfig, tc.status, tc.body)
-			if ns, err := maasInfraNamespace(c); err != nil || ns != tc.want {
+			if ns, err := serving.MaaSInfraNamespace(c); err != nil || ns != tc.want {
 				t.Fatalf("ns=%q err=%v, want %q", ns, err, tc.want)
 			}
 		})

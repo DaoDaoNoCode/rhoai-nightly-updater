@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"encoding/json"
@@ -54,7 +54,7 @@ const (
 	gatewayProjectsManager = "rhoai-nightly-updater-gateway-projects"
 )
 
-func readGatewayProjects(c *Client) ([]string, error) {
+func ReadGatewayProjects(c *kube.Client) ([]string, error) {
 	raw, err := record.ReadSnapshotKey(c, gatewayProjectsKey)
 	if err != nil {
 		return nil, fmt.Errorf("read this tool's record of the projects it added to the inference gateway: %w", err)
@@ -70,7 +70,7 @@ func readGatewayProjects(c *Client) ([]string, error) {
 	return rec.Projects, nil
 }
 
-func writeGatewayProjects(c *Client, projects []string) error {
+func WriteGatewayProjects(c *kube.Client, projects []string) error {
 	sort.Strings(projects)
 	data, _ := json.Marshal(map[string]any{"projects": projects})
 	if err := record.WriteSnapshotKey(c, gatewayProjectsKey, gatewayProjectsManager, string(data)); err != nil {
@@ -82,19 +82,19 @@ func writeGatewayProjects(c *Client, projects []string) error {
 // recordGatewayProject records that this tool adds project to the list,
 // before the Gateway is written: a project that cannot be recorded is not
 // added (it could never be taken off by this tool).
-func recordGatewayProject(c *Client, project string) error {
-	projects, err := readGatewayProjects(c)
+func recordGatewayProject(c *kube.Client, project string) error {
+	projects, err := ReadGatewayProjects(c)
 	if err != nil {
 		return err
 	}
 	if slices.Contains(projects, project) {
 		return nil
 	}
-	return writeGatewayProjects(c, append(projects, project))
+	return WriteGatewayProjects(c, append(projects, project))
 }
 
-func forgetGatewayProject(c *Client, project string) error {
-	projects, err := readGatewayProjects(c)
+func forgetGatewayProject(c *kube.Client, project string) error {
+	projects, err := ReadGatewayProjects(c)
 	if err != nil {
 		return err
 	}
@@ -107,15 +107,15 @@ func forgetGatewayProject(c *Client, project string) error {
 	if len(kept) == len(projects) {
 		return nil
 	}
-	return writeGatewayProjects(c, kept)
+	return WriteGatewayProjects(c, kept)
 }
 
 // gatewayRoutedIn lists the models ("namespace/name", anyone's) in project
 // that route through the inference gateway. An error is returned when the
 // models cannot be listed: the caller keeps the project (fail closed).
-func gatewayRoutedIn(c *Client, gw gatewayObject, project string) ([]string, error) {
-	models, err := listLLMInferenceServices(c)
-	if errors.Is(err, errLLMISvcAPIMissing) {
+func gatewayRoutedIn(c *kube.Client, gw GatewayObject, project string) ([]string, error) {
+	models, err := ListLLMInferenceServices(c)
+	if errors.Is(err, ErrLLMISvcAPIMissing) {
 		return nil, nil
 	}
 	if err != nil {
@@ -138,7 +138,7 @@ func gatewayRoutedIn(c *Client, gw gatewayObject, project string) ([]string, err
 // gateway's list, read-only, and a server-side dry run of the write. It
 // returns the plan; nil when there is nothing to write (no gateway, or
 // project is not on its list); or a refusal and a code.
-func planGatewayRemove(c *Client, project string) (*gatewayPlan, string, string) {
+func planGatewayRemove(c *kube.Client, project string) (*gatewayPlan, string, string) {
 	if project == inferenceGatewayNamespace {
 		return nil, fmt.Sprintf("%s is the gateway's own namespace and always stays on its list.", project), "validation"
 	}
@@ -175,7 +175,7 @@ func planGatewayRemove(c *Client, project string) (*gatewayPlan, string, string)
 
 // removeGatewayProject takes project off this tool's gateway's list, with
 // every check first (step logf). It returns a refusal and a code, or "".
-func removeGatewayProject(c *Client, project string, logf func(string)) (string, string) {
+func removeGatewayProject(c *kube.Client, project string, logf func(string)) (string, string) {
 	plan, msg, code := planGatewayRemove(c, project)
 	if msg != "" || plan == nil {
 		return msg, code
@@ -190,8 +190,8 @@ func removeGatewayProject(c *Client, project string, logf func(string)) (string,
 // model routes through the gateway from it (after its models were deleted).
 // It returns a sentence for the result: what was done, or why the project
 // stays ("" when there is nothing to say).
-func releaseGatewayProject(c *Client, project string) string {
-	recorded, err := readGatewayProjects(c)
+func releaseGatewayProject(c *kube.Client, project string) string {
+	recorded, err := ReadGatewayProjects(c)
 	if err != nil {
 		return fmt.Sprintf(" %s stays on the inference gateway's list: %v. Remove it from the list on the Models tab.", project, err)
 	}
@@ -230,8 +230,8 @@ func releaseGatewayProject(c *Client, project string) string {
 // models' teardown (Models tab, Clean up), which hold the operation lock.
 // A namespace that cannot be read counts as existing. It returns a
 // sentence for the result ("" when there is nothing to say).
-func releaseGoneGatewayProjects(c *Client) string {
-	recorded, err := readGatewayProjects(c)
+func releaseGoneGatewayProjects(c *kube.Client) string {
+	recorded, err := ReadGatewayProjects(c)
 	if err != nil || len(recorded) == 0 {
 		return ""
 	}
@@ -297,12 +297,12 @@ func (m *modelsRun) disallow(project string) (*types.OperationResponse, error) {
 // listedProjectsState fills the status's UnusedProjects (on this tool's
 // gateway's list, no model routes through it from there) and GoneProjects
 // (of those, the ones that no longer exist).
-func listedProjectsState(c *Client, state *types.InferenceGatewayState, gw gatewayObject, models []llmisvcObject, def kserveGateway) {
+func listedProjectsState(c *kube.Client, state *types.InferenceGatewayState, gw GatewayObject, models []LLMISvcObject, def KServeGateway) {
 	listed, shaped := gw.listedNamespaces()
 	if !shaped {
 		return
 	}
-	if recorded, err := readGatewayProjects(c); err == nil {
+	if recorded, err := ReadGatewayProjects(c); err == nil {
 		for _, p := range recorded {
 			if slices.Contains(listed, p) {
 				state.AddedProjects = append(state.AddedProjects, p)

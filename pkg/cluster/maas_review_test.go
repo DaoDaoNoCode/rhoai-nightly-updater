@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -94,7 +95,7 @@ func TestMaaSUnpublish_ModelRefsWriteHasAResourceVersionPrecondition(t *testing.
 func TestMaaSUnpublish_RemovesALeftOverGatewayRef(t *testing.T) {
 	mc := publishedMaaSCluster(t)
 	deleteFakeObject(mc, tMaaSRef)
-	if err := writeMaaSRecord(mc.c, maasRecord{DSCChanged: true, PreviousModelsAsAService: "Removed"}); err != nil {
+	if err := serving.WriteMaaSRecord(mc.c, serving.MaaSRecord{DSCChanged: true, PreviousModelsAsAService: "Removed"}); err != nil {
 		t.Fatal(err)
 	}
 	st, err := GetMaaSStatus(mc.c)
@@ -128,9 +129,9 @@ func TestMaaSPublish_LeavesStaleRecordsOutOfTheSubscription(t *testing.T) {
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
-	rec, _ := readMaaSRecord(mc.c)
+	rec, _ := serving.ReadMaaSRecord(mc.c)
 	rec.Published = []string{"gone"}
-	if err := writeMaaSRecord(mc.c, rec); err != nil {
+	if err := serving.WriteMaaSRecord(mc.c, rec); err != nil {
 		t.Fatal(err)
 	}
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
@@ -154,9 +155,9 @@ func TestMaaSStatus_ShowsARecordedPublicationWithoutItsModel(t *testing.T) {
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
-	rec, _ := readMaaSRecord(mc.c)
+	rec, _ := serving.ReadMaaSRecord(mc.c)
 	rec.Published = []string{"gone"}
-	if err := writeMaaSRecord(mc.c, rec); err != nil {
+	if err := serving.WriteMaaSRecord(mc.c, rec); err != nil {
 		t.Fatal(err)
 	}
 	st, err := GetMaaSStatus(mc.c)
@@ -176,7 +177,7 @@ func TestMaaSStatus_ShowsARecordedPublicationWithoutItsModel(t *testing.T) {
 func TestTeardownModels_RefusesWhileAPublicationIsLeft(t *testing.T) {
 	mc := publishedMaaSCluster(t)
 	deleteFakeObject(mc, tMaaSRef)
-	if res, _ := TeardownModels(mc.c, "proj"); res.Success || res.ErrorCode != "in_use" {
+	if res, _ := serving.TeardownModels(mc.c, "proj"); res.Success || res.ErrorCode != "in_use" {
 		t.Fatalf("model teardown with a recorded publication: %+v", res)
 	}
 	if !mc.f.has(testModelPath) {
@@ -219,7 +220,7 @@ func TestMaaSTeardown_KeepsTheGatewayWhileRoutesAreAttached(t *testing.T) {
 	prev := mc.f.onGet
 	mc.f.onGet = func(k fakeKey, obj map[string]any) {
 		prev(k, obj)
-		if k.plural == "gateways" && k.name == maasGatewayName {
+		if k.plural == "gateways" && k.name == serving.MaaSGatewayName {
 			obj["status"] = map[string]any{"listeners": []any{map[string]any{"name": "https", "attachedRoutes": 1}}}
 		}
 	}
@@ -256,7 +257,7 @@ func TestMaaSTeardown_KeepsADSCValueSomeoneElseSetSinceSetup(t *testing.T) {
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"}); !res.Success || mc.f.has(tMaaSGateway) || mc.f.has(tMaaSDB) {
 		t.Fatalf("teardown after turning MaaS off = %+v", res)
 	}
-	if rec, _ := readMaaSRecord(mc.c); rec.DSCChanged {
+	if rec, _ := serving.ReadMaaSRecord(mc.c); rec.DSCChanged {
 		t.Fatalf("record = %+v", rec)
 	}
 }
@@ -267,12 +268,12 @@ func TestMaaS_UsesTheServedAPIVersions(t *testing.T) {
 	mc := newMaaSCluster(t)
 	mc.f.groups["/apis/maas.opendatahub.io"] = `{"kind":"APIGroup","name":"maas.opendatahub.io","versions":[{"groupVersion":"maas.opendatahub.io/v1","version":"v1"},{"groupVersion":"maas.opendatahub.io/v1alpha1","version":"v1alpha1"}],"preferredVersion":{"groupVersion":"maas.opendatahub.io/v1","version":"v1"}}`
 	mc.f.groups["/apis/operator.authorino.kuadrant.io"] = `{"kind":"APIGroup","name":"operator.authorino.kuadrant.io","versions":[{"groupVersion":"operator.authorino.kuadrant.io/v1","version":"v1"}],"preferredVersion":{"groupVersion":"operator.authorino.kuadrant.io/v1","version":"v1"}}`
-	if got := maasAPI(mc.c); got != "maas.opendatahub.io/v1" {
+	if got := serving.MaaSAPI(mc.c); got != "maas.opendatahub.io/v1" {
 		t.Fatalf("maasAPI = %s", got)
 	}
 	deleteFakeObject(mc, "/apis/operator.authorino.kuadrant.io/v1beta1/namespaces/kuadrant-system/authorinos/authorino")
 	mc.f.putJSON("/apis/operator.authorino.kuadrant.io/v1/namespaces/kuadrant-system/authorinos/authorino", `{"spec":{"listener":{"tls":{"enabled":true,"certSecretRef":{"name":"authorino-server-cert"}}}}}`)
-	if missing, known, _ := authorinoTLS(mc.c, "kuadrant-system"); missing != "" || !known {
+	if missing, known, _ := serving.AuthorinoTLS(mc.c, "kuadrant-system"); missing != "" || !known {
 		t.Fatalf("authorinoTLS = %q, %v", missing, known)
 	}
 }
@@ -300,7 +301,7 @@ func TestMaaSTeardown_UsesTheRecordedDatabaseNamespace(t *testing.T) {
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
-	if rec, _ := readMaaSRecord(mc.c); rec.DBNamespace != "redhat-ai-gateway-infra" {
+	if rec, _ := serving.ReadMaaSRecord(mc.c); rec.DBNamespace != "redhat-ai-gateway-infra" {
 		t.Fatalf("record = %+v", rec)
 	}
 	mc.f.beforeServe = nil
@@ -339,8 +340,8 @@ func TestMaaSSetup_RestartsMaaSAPIWhenTheSecretChangesUnderARunningMaaS(t *testi
 // Finding 5: a listener that selects namespaces with expressions is
 // evaluated (kubernetes.io/metadata.name is on every namespace).
 func TestGatewayAdmits_EvaluatesMatchExpressions(t *testing.T) {
-	gw := func(exprs string) gatewayObject {
-		var g gatewayObject
+	gw := func(exprs string) serving.GatewayObject {
+		var g serving.GatewayObject
 		_ = json.Unmarshal([]byte(`{"metadata":{"namespace":"openshift-ingress"},"spec":{"listeners":[{"name":"https","allowedRoutes":{"namespaces":{"from":"Selector","selector":{"matchExpressions":`+exprs+`}}}}]}}`), &g)
 		return g
 	}
@@ -358,7 +359,7 @@ func TestGatewayAdmits_EvaluatesMatchExpressions(t *testing.T) {
 		{`[{"key":"tier","operator":"DoesNotExist"}]`, "proj", nil, "yes"},
 		{`[{"key":"tier","operator":"Gt","values":["1"]}]`, "proj", nil, "unknown"},
 	} {
-		if got := gw(tc.exprs).admits(tc.ns, tc.labels); got != tc.want {
+		if got := gw(tc.exprs).Admits(tc.ns, tc.labels); got != tc.want {
 			t.Errorf("%s for %s %v: %s, want %s", tc.exprs, tc.ns, tc.labels, got, tc.want)
 		}
 	}

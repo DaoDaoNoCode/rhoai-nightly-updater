@@ -9,6 +9,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 )
 
 // Every feature that named redhat-ods-applications reads the
@@ -119,12 +120,12 @@ func TestSnapshotNamespaces(t *testing.T) {
 func TestMaaSInfraNamespaceUnknownRefuses(t *testing.T) {
 	f, c := newFakeAPI(t)
 	f.status("GET", dsciV2List, 403, "Forbidden")
-	if ns, err := maasInfraNamespace(c); err == nil || ns != "" {
+	if ns, err := serving.MaaSInfraNamespace(c); err == nil || ns != "" {
 		t.Fatalf("ns=%q err=%v", ns, err)
 	}
 	serveDSCI(f, "opendatahub")
 	rhoai.NamespacesCache.Purge()
-	if ns, err := maasInfraNamespace(c); err != nil || ns != "odh-ai-gateway-infra" {
+	if ns, err := serving.MaaSInfraNamespace(c); err != nil || ns != "odh-ai-gateway-infra" {
 		t.Fatalf("ns=%q err=%v", ns, err)
 	}
 }

@@ -58,7 +58,7 @@ func TestResetClusterCachesCoversEveryURLKeyedCache(t *testing.T) {
 		"diagnostics_dsc.go":              {1, []string{"staleSeen"}},
 		"maas.go":                         {1, []string{"APIVersionsCache"}}, // a read
 		"models_call.go":                  {1, []string{"callChecks"}},
-		"models_image.go":                 {2, []string{"capacityCache", "planCache"}},
+		"models_image.go":                 {2, []string{"CapacityCache", "PlanCache"}},
 		"prerequisites.go":                {2, []string{"packageIndexCache"}},
 		"rhoai_namespaces.go":             {1, []string{"NamespacesCache"}},
 		"status.go":                       {3, []string{"stableTargetCache", "consoleURLCache"}},

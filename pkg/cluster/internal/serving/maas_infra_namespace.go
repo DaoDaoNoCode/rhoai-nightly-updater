@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"fmt"
@@ -13,11 +13,11 @@ import (
 // that fails keeps it). It returns why it was kept ("" when deleted or
 // gone); the record keeps the namespace while it stays, so a later Remove
 // tries again. The error is a failed record write.
-func (m *maasRun) deleteInfraNamespace(rec *maasRecord, ns string) (string, error) {
-	c := m.c
+func (m *Run) deleteInfraNamespace(rec *MaaSRecord, ns string) (string, error) {
+	c := m.Client
 	forget := func() error {
 		rec.InfraNamespace = ""
-		return writeMaaSRecord(c, *rec)
+		return WriteMaaSRecord(c, *rec)
 	}
 	path, ok := maasInfraNamespacePath(ns)
 	if !ok {
@@ -29,7 +29,7 @@ func (m *maasRun) deleteInfraNamespace(rec *maasRecord, ns string) (string, erro
 		return fmt.Sprintf("Kept namespace %s, which this tool created: it cannot be read (%v). Remove again to retry.", ns, err), nil
 	case !found:
 		return "", forget()
-	case !toolOwned(meta):
+	case !ToolOwned(meta):
 		return fmt.Sprintf("Kept namespace %s: it no longer carries this tool's label.", ns), forget()
 	case meta.Terminating():
 		return "", forget()
@@ -47,6 +47,6 @@ func (m *maasRun) deleteInfraNamespace(rec *maasRecord, ns string) (string, erro
 	if _, err := kube.DeleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 		return fmt.Sprintf("Kept namespace %s: deleting it failed (%v). Remove again to retry.", ns, err), nil
 	}
-	m.logs = append(m.logs, "OK: Namespace "+ns+" deleted")
+	m.Logs = append(m.Logs, "OK: Namespace "+ns+" deleted")
 	return "", forget()
 }

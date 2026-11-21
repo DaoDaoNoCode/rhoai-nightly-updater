@@ -1,4 +1,4 @@
-package cluster
+package serving
 
 import (
 	"encoding/json"
@@ -26,7 +26,7 @@ import (
 // projects could create one of that name and attach routes to the MaaS
 // gateway (another published model's exact path, or the MaaS API's, and
 // receive what is sent there). So the gone publications are dropped
-// (pruneGoneMaaSPublications) and the gateway's list is written without
+// (PruneGoneMaaSPublications) and the gateway's list is written without
 // their projects: at the start of every MaaS, Models and Clean up
 // operation, which hold the cluster lock, and in the background, at start
 // and every few minutes under the same lock and cross-pod lease
@@ -44,7 +44,7 @@ import (
 // project no longer exists or is being deleted (nothing of the tool's is
 // left to delete there).
 type maasGonePub struct {
-	pub         maasPub
+	pub         MaaSPub
 	why         string
 	projectGone bool
 }
@@ -53,34 +53,34 @@ type maasGonePub struct {
 // gone. A read that fails keeps it. The error is the models record that
 // cannot be read: then a model made again under its name cannot be told
 // from the published one, and only gone projects and absent models count.
-func goneMaaSPublications(c *Client, rec maasRecord) ([]maasGonePub, error) {
-	pubs := rec.pubs()
+func goneMaaSPublications(c *kube.Client, rec MaaSRecord) ([]maasGonePub, error) {
+	pubs := rec.Pubs()
 	if len(pubs) == 0 {
 		return nil, nil
 	}
-	models, modelsErr := readModelsRecord(c)
+	models, modelsErr := ReadModelsRecord(c)
 	var out []maasGonePub
 	for _, p := range pubs {
-		meta, found, err := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+p.project)
+		meta, found, err := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+p.Project)
 		switch {
 		case err != nil:
 			continue
 		case !found:
-			out = append(out, maasGonePub{p, fmt.Sprintf("project %s no longer exists", p.project), true})
+			out = append(out, maasGonePub{p, fmt.Sprintf("project %s no longer exists", p.Project), true})
 			continue
 		case meta.Terminating():
-			out = append(out, maasGonePub{p, fmt.Sprintf("project %s is being deleted", p.project), true})
+			out = append(out, maasGonePub{p, fmt.Sprintf("project %s is being deleted", p.Project), true})
 			continue
 		}
-		model, found, err := readToolModel(c, p.project, p.model)
+		model, found, err := ReadToolModel(c, p.Project, p.Model)
 		switch {
 		case err != nil:
 			continue
 		case !found:
-			out = append(out, maasGonePub{p, fmt.Sprintf("model %s in %s no longer exists", p.model, p.project), false})
+			out = append(out, maasGonePub{p, fmt.Sprintf("model %s in %s no longer exists", p.Model, p.Project), false})
 		case modelsErr == nil:
-			if e, ok := models[modelRecordKey(p.project, p.model)]; ok && e.UID != "" && e.UID != model.Metadata.UID {
-				out = append(out, maasGonePub{p, fmt.Sprintf("model %s in %s is not the one this tool published (it was deleted and made again)", p.model, p.project), false})
+			if e, ok := models[ModelRecordKey(p.Project, p.Model)]; ok && e.UID != "" && e.UID != model.Metadata.UID {
+				out = append(out, maasGonePub{p, fmt.Sprintf("model %s in %s is not the one this tool published (it was deleted and made again)", p.Model, p.Project), false})
 			}
 		}
 	}
@@ -97,7 +97,7 @@ func goneMaaSText(gone []maasGonePub) string {
 	return strings.Join(whys, "; ")
 }
 
-// pruneGoneMaaSPublications drops the publications that are gone, in
+// PruneGoneMaaSPublications drops the publications that are gone, in
 // independent steps, so one that fails does not keep the others from
 // narrowing what is reachable:
 //   - the tool's MaaSModelRef of a gone publication in a project that still
@@ -110,8 +110,8 @@ func goneMaaSText(gone []maasGonePub) string {
 // The record forgets them only when every step succeeded, so the next run
 // tries again what failed. The caller holds the cluster lock. changed says
 // whether anything was written; logs say what; an error says what is left.
-func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err error) {
-	rec, err := readMaaSRecord(c)
+func PruneGoneMaaSPublications(c *kube.Client) (changed bool, logs []string, err error) {
+	rec, err := ReadMaaSRecord(c)
 	if err != nil {
 		return false, nil, err
 	}
@@ -120,7 +120,7 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 		return false, nil, nil
 	}
 	for _, g := range gone {
-		rec.setPublished(g.pub.project, g.pub.model, false)
+		rec.SetPublished(g.pub.Project, g.pub.Model, false)
 	}
 	logs = []string{"Publications that are gone, dropped from MaaS: " + goneMaaSText(gone) + "."}
 	var failed []error
@@ -130,25 +130,25 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 		if g.projectGone {
 			continue
 		}
-		ref, found, err := readMaaSModelRef(c, g.pub.project, g.pub.model)
+		ref, found, err := readMaaSModelRef(c, g.pub.Project, g.pub.Model)
 		if err != nil {
-			failed = append(failed, fmt.Errorf("read MaaSModelRef %s: %w", g.pub.key(), err))
+			failed = append(failed, fmt.Errorf("read MaaSModelRef %s: %w", g.pub.Key(), err))
 			continue
 		}
-		if !found || !toolOwned(ref.Metadata) || ref.Metadata.Terminating() {
+		if !found || !ToolOwned(ref.Metadata) || ref.Metadata.Terminating() {
 			continue
 		}
-		path, _ := maasModelRefPath(c, g.pub.project, g.pub.model)
+		path, _ := maasModelRefPath(c, g.pub.Project, g.pub.Model)
 		if _, err := kube.DeleteWithUID(c, path, ref.Metadata.UID); err != nil && !kube.IsK8sNotFound(err) {
-			failed = append(failed, fmt.Errorf("delete MaaSModelRef %s: %w", g.pub.key(), err))
+			failed = append(failed, fmt.Errorf("delete MaaSModelRef %s: %w", g.pub.Key(), err))
 			continue
 		}
 		changed = true
-		logs = append(logs, "OK: MaaSModelRef "+g.pub.key()+" deleted")
+		logs = append(logs, "OK: MaaSModelRef "+g.pub.Key()+" deleted")
 	}
 
 	// The access policy and the subscription.
-	live, err := maasLivePubs(c, rec, maasPub{}, maasPub{})
+	live, err := maasLivePubs(c, rec, MaaSPub{}, MaaSPub{})
 	var cur maasToolSub
 	if err == nil {
 		// The remaining publications keep their limits and who can use
@@ -158,13 +158,13 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 	if err != nil {
 		failed = append(failed, fmt.Errorf("check the other publications: %w", err))
 	} else {
-		aud := maasAudience{everyone: true}
+		aud := MaaSAudience{Everyone: true}
 		if cur.found {
 			aud = cur.audience
 		}
-		limits := map[string]maasLimit{}
+		limits := map[string]MaaSLimit{}
 		for _, p := range live {
-			limits[p.key()] = cur.limitOf(p)
+			limits[p.Key()] = cur.limitOf(p)
 		}
 		sub, auth := maasAccessObjects(c, live, limits, aud, maasOwnSubscriptionPriority(c))
 		for _, w := range []struct {
@@ -177,7 +177,7 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 				failed = append(failed, fmt.Errorf("read %s: %w", w.kind, err))
 				continue
 			}
-			if !found || !toolOwned(meta) {
+			if !found || !ToolOwned(meta) {
 				continue
 			}
 			if len(live) == 0 {
@@ -190,7 +190,7 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 				continue
 			}
 			read := func() (kube.ObjectMeta, bool, error) { return kube.ReadObjectMeta(c, accessPath) }
-			if err := updateToolObject(c, w.kind, accessPath, w.obj, meta, read, toolOwned); err != nil {
+			if err := updateToolObject(c, w.kind, accessPath, w.obj, meta, read, ToolOwned); err != nil {
 				failed = append(failed, fmt.Errorf("update %s: %w", w.kind, err))
 				continue
 			}
@@ -200,13 +200,13 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 	}
 
 	// The gateway.
-	m := &maasRun{c: c}
+	m := &Run{Client: c}
 	var gwPlan *maasGatewayPlan
 	var msg, code string
-	if infra, err := maasInfraNamespace(c); err != nil {
+	if infra, err := MaaSInfraNamespace(c); err != nil {
 		msg = err.Error()
 	} else {
-		gwPlan, msg, code = planMaaSGateway(c, infra, rec.projects())
+		gwPlan, msg, code = planMaaSGateway(c, infra, rec.Projects())
 	}
 	switch {
 	case msg != "":
@@ -221,12 +221,12 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 			logs = append(logs, "OK: the MaaS gateway admits routes only from the projects still published")
 		}
 	}
-	logs = append(logs, m.logs...)
+	logs = append(logs, m.Logs...)
 
 	if len(failed) > 0 {
 		return changed, logs, errors.Join(failed...)
 	}
-	if err := writeMaaSRecord(c, rec); err != nil {
+	if err := WriteMaaSRecord(c, rec); err != nil {
 		return changed, logs, err
 	}
 	return true, logs, nil
@@ -236,7 +236,7 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 // gateway and its options ConfigMap (when there is one), so the gateway
 // admits routes only from the projects still published. It never creates
 // either: pruning only takes away.
-func narrowMaaSGateway(c *Client, plan *maasGatewayPlan) error {
+func narrowMaaSGateway(c *kube.Client, plan *maasGatewayPlan) error {
 	for _, kind := range []string{"ConfigMap", "Gateway"} {
 		if !plan.found[kind] {
 			continue
@@ -244,7 +244,7 @@ func narrowMaaSGateway(c *Client, plan *maasGatewayPlan) error {
 		path := maasGatewayObjectPath(kind)
 		owned := gatewayOwned
 		if kind == "ConfigMap" {
-			owned = toolOwned
+			owned = ToolOwned
 		}
 		read := func() (kube.ObjectMeta, bool, error) { return kube.ReadObjectMeta(c, path) }
 		if err := updateToolObject(c, maasDesc(kind, ""), path, plan.objects[kind], plan.current[kind], read, owned); err != nil {
@@ -258,7 +258,7 @@ func narrowMaaSGateway(c *Client, plan *maasGatewayPlan) error {
 // ConfigMap (maasObjectPath, for these two kinds only).
 func maasGatewayObjectPath(kind string) string {
 	if kind == "Gateway" {
-		return rhoai.NamespacedPath("gateway.networking.k8s.io/v1", "gateways", inferenceGatewayNamespace, maasGatewayName)
+		return rhoai.NamespacedPath("gateway.networking.k8s.io/v1", "gateways", inferenceGatewayNamespace, MaaSGatewayName)
 	}
 	return rhoai.NamespacedPath("v1", "configmaps", inferenceGatewayNamespace, maasGatewayOptions)
 }
@@ -270,7 +270,7 @@ func maasGatewayObjectPath(kind string) string {
 // create too, which the ServiceAccount does not have. The MaaS prune job
 // runs with the ServiceAccount, so the ServiceAccount needs only patch on
 // the tool's named MaaS objects (deploy/template.yaml).
-func updateToolObject(c *Client, desc, path string, obj map[string]any, current kube.ObjectMeta, read envkit.ToolObjectReader, owned func(kube.ObjectMeta) bool) error {
+func updateToolObject(c *kube.Client, desc, path string, obj map[string]any, current kube.ObjectMeta, read envkit.ToolObjectReader, owned func(kube.ObjectMeta) bool) error {
 	for range 3 {
 		if !owned(current) {
 			return &envkit.ForeignObjectError{Desc: desc}
@@ -312,11 +312,11 @@ func updateToolObject(c *Client, desc, path string, obj map[string]any, current 
 	return fmt.Errorf("%s: %w", desc, envkit.ErrObjectChanged)
 }
 
-// releaseGoneMaaSProjects runs pruneGoneMaaSPublications for an operation
+// ReleaseGoneMaaSProjects runs PruneGoneMaaSPublications for an operation
 // and returns its log lines; a failure is a warning in them (the operation
 // itself goes on, and the next run tries again).
-func releaseGoneMaaSProjects(c *Client) []string {
-	_, logs, err := pruneGoneMaaSPublications(c)
+func ReleaseGoneMaaSProjects(c *kube.Client) []string {
+	_, logs, err := PruneGoneMaaSPublications(c)
 	if err != nil {
 		logs = append(logs, fmt.Sprintf("Warning: the publications that are gone could not all be dropped from MaaS (%v). The MaaS tab names them; the next MaaS, Models or Clean up operation, or the background check, tries again.", err))
 	}
@@ -329,8 +329,8 @@ var recordPruneActivity = record.RecordActivity
 // PruneGoneMaaSPublicationsInBackground is the background run (pkg/api
 // holds the cluster lock and lease around it): it records an activity
 // entry only when it changed something.
-func PruneGoneMaaSPublicationsInBackground(c *Client) {
-	changed, logs, err := pruneGoneMaaSPublications(c)
+func PruneGoneMaaSPublicationsInBackground(c *kube.Client) {
+	changed, logs, err := PruneGoneMaaSPublications(c)
 	if err != nil {
 		slog.Warn("background MaaS check: gone publications not all dropped", "error", err)
 	}
