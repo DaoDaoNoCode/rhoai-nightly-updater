@@ -26,14 +26,13 @@ type fakeRecord struct {
 	releases  []cluster.LeaseOwner
 	completed []*cluster.LeaseOwner
 	writeErr  error
-	failNext  int           // the next lease writes that fail
-	attempts  int           // lease writes asked for, failed ones included
-	attempted chan struct{} // closed and replaced on every attempt
+	failNext  int // the next lease writes that fail
+	attempts  int // lease writes asked for, failed ones included
 }
 
 func installFakeRecord(t *testing.T) *fakeRecord {
 	t.Helper()
-	f := &fakeRecord{attempted: make(chan struct{})}
+	f := &fakeRecord{}
 	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -43,8 +42,6 @@ func installFakeRecord(t *testing.T) *fakeRecord {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.attempts++
-		close(f.attempted)
-		f.attempted = make(chan struct{})
 		if f.writeErr != nil {
 			return nil, f.writeErr
 		}
@@ -89,29 +86,24 @@ func installFakeRecord(t *testing.T) *fakeRecord {
 	return f
 }
 
-// beat moves the fake clock one heartbeat interval on and waits for the
-// renewal it starts (the heartbeat's lease write, which may fail).
+// beat moves the fake clock one heartbeat interval on and waits until the
+// heartbeat handled the tick: it made the renewal (the lease write, which
+// may fail) and decided on its outcome, so it waits for the next tick or
+// has stopped. Waiting for the write alone is not enough: the heartbeat
+// reads the clock after the write (how long renewals have failed), and a
+// next Advance in between made it count one interval too many.
 func (f *fakeRecord) beat(t *testing.T) {
 	t.Helper()
 	f.mu.Lock()
 	n := f.attempts
 	f.mu.Unlock()
 	testClock.Advance(leaseHeartbeatInterval)
-	f.waitAttempts(t, n+1)
-}
-
-// waitAttempts waits until n lease writes were asked for. The timeout only
-// ends a test whose heartbeat stopped.
-func (f *fakeRecord) waitAttempts(t *testing.T, n int) {
-	t.Helper()
-	for {
-		f.mu.Lock()
-		got, ch := f.attempts, f.attempted
-		f.mu.Unlock()
-		if got >= n {
-			return
-		}
-		<-ch // the next lease write (a hang fails at go test's -timeout)
+	testClock.WaitForTicksHandled()
+	f.mu.Lock()
+	got := f.attempts
+	f.mu.Unlock()
+	if got != n+1 {
+		t.Fatalf("the heartbeat made %d lease writes for one tick, want 1", got-n)
 	}
 }
 
@@ -156,7 +148,7 @@ func TestLiveForeignLeaseRefusesWithTheRemoteOperation(t *testing.T) {
 	setupDevMode(t)
 	allowMutations(t)
 	f := installFakeRecord(t)
-	f.setLease(otherPodLease(time.Now().Add(-5 * time.Second)))
+	f.setLease(otherPodLease(clk.Now().Add(-5 * time.Second)))
 	ran := false
 	runUpdateDryRun = func(*cluster.Client, string) (*types.OperationResponse, error) {
 		ran = true
@@ -198,7 +190,7 @@ func TestLiveForeignLeaseRefusesWithTheRemoteOperation(t *testing.T) {
 func TestLeaseHeldElsewhere(t *testing.T) {
 	t.Setenv("HOSTNAME", "updater-new-pod")
 	setDevMode(t, false)
-	now := time.Now()
+	now := clk.Now() // the clock leaseHeldElsewhere compares heartbeats with
 	live := otherPodLease(now.Add(-10 * time.Second))
 	expired := otherPodLease(now.Add(-time.Minute))
 	ownProcess := otherPodLease(now)
@@ -236,7 +228,7 @@ func TestExpiredLeaseIsTakenOver(t *testing.T) {
 	setupDevMode(t)
 	allowMutations(t)
 	f := installFakeRecord(t)
-	f.setLease(otherPodLease(time.Now().Add(-2 * leaseTTL)))
+	f.setLease(otherPodLease(clk.Now().Add(-2 * leaseTTL)))
 	refreshResult(&types.OperationResponse{Success: true, Message: "refreshed"})
 	w := httptest.NewRecorder()
 	HandleRefreshStream(w, postJSON("/api/refresh/stream", "user:bob", "{}"))
@@ -403,10 +395,10 @@ func TestLeaseErrorPolicy(t *testing.T) {
 func TestOperationClassification(t *testing.T) {
 	setupDevMode(t)
 	t.Setenv("HOSTNAME", "updater-new-pod")
-	now := time.Now()
-	recent := now.Add(-time.Minute).UTC().Format(time.RFC3339)
-	live := otherPodLease(now.Add(-5 * time.Second))
-	expired := otherPodLease(now.Add(-2 * leaseTTL))
+	recent := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	beat := clk.Now() // lease heartbeats are on clk (leaseHeldElsewhere)
+	live := otherPodLease(beat.Add(-5 * time.Second))
+	expired := otherPodLease(beat.Add(-2 * leaseTTL))
 	markerOf := func(boot string) *types.OperationMarker {
 		return &types.OperationMarker{ID: "remote-op", Type: "update", Label: "Update to nightly", User: "alice", StartedAt: recent, Pod: "updater-old-pod", BootID: boot}
 	}

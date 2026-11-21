@@ -228,7 +228,7 @@ func TestOperationForAUserNamesNobody(t *testing.T) {
 		return &cluster.OperationRecord{
 			Lease: &types.OperationLease{ID: "op1", BootID: "another-process", Pod: "updater-pod-7", User: "alice",
 				Type: "playground", Label: "Gen AI playground", Target: "setup playground in alice-project",
-				StartedAt: started.Format(time.RFC3339), HeartbeatAt: time.Now().UTC().Format(time.RFC3339)},
+				StartedAt: started.Format(time.RFC3339), HeartbeatAt: clk.Now().UTC().Format(time.RFC3339)},
 			Marker: &types.OperationMarker{Type: "update", Label: "Update to nightly", User: "dave", Pod: "old-pod",
 				StartedAt: time.Now().UTC().Add(-time.Hour).Format(time.RFC3339), BootID: "crashed"},
 			LastCompleted: &types.CompletedOperation{ID: "op0", User: "erin", Target: "erin-project", Label: "x"},

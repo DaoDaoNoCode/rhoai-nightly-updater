@@ -48,7 +48,7 @@ func TestLeaseTakeoverStopsTheOperation(t *testing.T) {
 	started, cause, _ := refreshUntilStopped()
 	done := runRefreshInBackground()
 	<-started
-	f.setLease(otherPodLease(time.Now())) // another pod took the lock over
+	f.setLease(otherPodLease(clk.Now())) // another pod took the lock over
 	f.beat(t)
 	// Blocks until the operation stops: no real-time bound (a hang fails
 	// at go test's -timeout), so a loaded machine cannot fail the test.
@@ -75,7 +75,7 @@ func TestRenewalFailuresStopTheOperationOnlyPastTheThreshold(t *testing.T) {
 
 	// One failure, then renewals succeed again: the operation goes on (a
 	// stopped heartbeat would not make the second renewal).
-	started, cause, release := refreshUntilStopped()
+	started, _, release := refreshUntilStopped()
 	done := runRefreshInBackground()
 	<-started
 	f.mu.Lock()
@@ -83,10 +83,8 @@ func TestRenewalFailuresStopTheOperationOnlyPastTheThreshold(t *testing.T) {
 	f.mu.Unlock()
 	f.beat(t)
 	f.beat(t)
-	select {
-	case err := <-cause:
-		t.Fatalf("a single failed renewal stopped the operation: %v", err)
-	default:
+	if heartbeatStopped() {
+		t.Fatal("a single failed renewal stopped the operation")
 	}
 	close(release)
 	<-done
@@ -94,25 +92,23 @@ func TestRenewalFailuresStopTheOperationOnlyPastTheThreshold(t *testing.T) {
 		t.Fatalf("lastCompleted %+v", last)
 	}
 
-	// Every renewal fails: stopped once leaseTTL-interval has passed.
+	// Every renewal fails: stopped once leaseTTL-interval has passed since
+	// the heartbeat of the last successful write (here the acquire's).
 	mutationLimiter = newRateLimiter()
-	started, cause, _ = refreshUntilStopped()
+	started, cause, _ := refreshUntilStopped()
 	done = runRefreshInBackground()
 	<-started
+	stamped := testClock.Now()
 	f.mu.Lock()
 	f.failNext = 1 << 30
 	f.mu.Unlock()
-	// Failed renewals 10s, 20s and 30s after the last success: the lease
-	// still holds (the fourth renewal proves the heartbeat went on).
+	// Failed renewals 10s, 20s and 30s after it: the lease still holds.
 	for range 3 {
 		f.beat(t)
 	}
-	select {
-	case err := <-cause:
-		t.Fatalf("stopped before the threshold: %v", err)
-	default:
-	}
-	f.beat(t) // 40s >= 35s: lost
+	stepTo(stamped.Add(leaseLossAfter() - time.Second))
+	requireNotStopped(t)
+	stepTo(stamped.Add(leaseLossAfter())) // 35s: lost, without waiting for the renewal due at 40s
 	// Blocks until the operation stops: no real-time bound (a hang fails
 	// at go test's -timeout), so a loaded machine cannot fail the test.
 	if err := <-cause; !errors.Is(err, cluster.ErrOperationLockLost) {
