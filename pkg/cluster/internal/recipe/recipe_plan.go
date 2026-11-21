@@ -56,6 +56,15 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 		p.add("", "%s manages the RHOAI operator on this cluster, so a recipe does not install or change it. Nothing was changed.", gitOpsManager(g))
 	}
 
+	// A pinned build comes from the run record, which the ServiceAccount
+	// can write: it is checked as strictly as a recipe's own build, and
+	// a pinned build that is not the recipe's refuses (fail closed).
+	if pinned != nil {
+		if problem := PinnedBuildProblem(r.Spec.RHOAI.Build, pinned); problem != "" {
+			p.add("spec.rhoai.build", "%s", problem)
+			pinned = nil
+		}
+	}
 	s := State{Recipe: r, Pinned: pinned}
 	resolved := false
 	resolve := func() {
@@ -192,6 +201,43 @@ func resolveBuild(c *kube.Client, b types.RecipeBuild) (*types.RecipePinnedBuild
 		return nil, fmt.Sprintf("Cannot resolve the digest of %s on Quay, so the run could not pin it. Nothing was changed; try again.", got.Image)
 	}
 	return &types.RecipePinnedBuild{Tag: got.Tag, Image: got.Image, Digest: got.Digest}, ""
+}
+
+// PinnedBuildProblem says why pinned is not a build the recipe's build
+// choice b may install, "" when it is: a digest-pinned image of the RHOAI
+// catalog repository (the same rule as a recipe's image), whose digest is
+// the pinned digest, and that is b itself (an image), the line b names (a
+// tag), or a nightly line (latest). The run record that keeps a pinned
+// build for Resume is the updater's own ConfigMap, which a leaked
+// ServiceAccount token could write; this keeps such a write from choosing
+// what the user's Resume installs from anywhere else.
+func PinnedBuildProblem(b types.RecipeBuild, pinned *types.RecipePinnedBuild) string {
+	refuse := func(why string) string {
+		return "The build recorded for this run (" + pinned.Image + ") " + why + ", so it is not installed. Nothing was changed; resume with the build resolved again, or run the recipe again."
+	}
+	if !fbcImage.MatchString(pinned.Image) {
+		return refuse("is not a build of " + registry.FBCImage + " pinned by digest")
+	}
+	_, digest, _ := strings.Cut(pinned.Image, "@")
+	if digest != pinned.Digest {
+		return refuse("does not carry the recorded digest " + pinned.Digest)
+	}
+	tag := registry.TagFromRef(pinned.Image)
+	switch {
+	case b.Image != "":
+		if pinned.Image != b.Image {
+			return refuse("is not the recipe's image " + b.Image)
+		}
+	case b.Tag != "":
+		if tag != b.Tag || pinned.Tag != b.Tag {
+			return refuse("is not of the recipe's line " + b.Tag)
+		}
+	default:
+		if !registry.CleanTagRegex.MatchString(tag) || pinned.Tag != tag {
+			return refuse("is not a nightly line's build")
+		}
+	}
+	return ""
 }
 
 // RecordActivity records an activity entry of a recipe run (action

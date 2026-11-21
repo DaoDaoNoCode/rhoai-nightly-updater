@@ -153,6 +153,9 @@ func runRHOAI(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*type
 	if s.Pinned == nil || s.Pinned.Image == "" {
 		return fail("The recipe's build was not resolved when the run started. Run the recipe again. Nothing was changed.", "prerequisites")
 	}
+	if problem := PinnedBuildProblem(s.Recipe.Spec.RHOAI.Build, s.Pinned); problem != "" {
+		return fail(problem, "validation")
+	}
 	return operator.UpdateStreamWithOptions(c, s.Pinned.Image, operator.OperationOptions{}, emit)
 }
 

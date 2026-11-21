@@ -133,3 +133,26 @@ func TestRecipePlan_ArgoCDAndLaterFeaturesRefuse(t *testing.T) {
 		t.Errorf("Argo CD's management did not refuse: %s", text)
 	}
 }
+
+// A tampered run record cannot choose what Resume installs: a pinned build
+// that is not the recipe's refuses the plan (it is not kept), and the RHOAI
+// step refuses it too.
+func TestRecipePlan_TamperedPinnedBuildRefuses(t *testing.T) {
+	f, c := projectFake(t)
+	evil := &types.RecipePinnedBuild{Tag: "rhoai-3.6", Image: "quay.io/attacker/catalog:rhoai-3.6@sha256:" + strings.Repeat("e", 64), Digest: "sha256:" + strings.Repeat("e", 64)}
+	r, problems := recipe.Validate([]byte(tRecipeBase + `{"rhoai":{"build":"latest"},"dataScienceCluster":{"create":true},"features":{}}}`))
+	if len(problems) > 0 {
+		t.Fatal(problems)
+	}
+	plan, state := recipe.Plan(c, r, evil)
+	if !strings.Contains(problemText(plan), "is not a build of quay.io/rhoai/rhoai-fbc-fragment") || state.Pinned == evil || plan.Pinned == evil {
+		t.Fatalf("problems %s, pinned %+v", problemText(plan), state.Pinned)
+	}
+	res, err := recipeStep(t, r, recipe.StepRHOAI).Run(c, &recipe.State{Recipe: r, Pinned: evil}, func(types.UpdateStepEvent) {})
+	if err != nil || res.Success || res.ErrorCode != "validation" {
+		t.Fatalf("run %+v %v", res, err)
+	}
+	if m := f.mutations(); len(m) != 0 {
+		t.Fatalf("changed %v", m)
+	}
+}
