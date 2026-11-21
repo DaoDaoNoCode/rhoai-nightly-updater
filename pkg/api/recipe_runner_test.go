@@ -706,4 +706,3 @@ func TestRecipeRun_StepMessagesAreBounded(t *testing.T) {
 		t.Errorf("step message of %d bytes recorded", got)
 	}
 }
-
