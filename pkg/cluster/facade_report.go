@@ -8,6 +8,5 @@ type (
 	CheckResult         = report.CheckResult
 	Problem             = report.Problem
 	AckBinding          = report.AckBinding
-	FieldChange         = report.FieldChange
 	DiagnosticsResponse = report.DiagnosticsResponse
 )
