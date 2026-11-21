@@ -156,7 +156,7 @@ Runs Vitest over `frontend/src/**/*.test.ts[x]` in jsdom. No browser needed.
 ### Script and chart tests
 
 ```bash
-make test-scripts      # scripts/test-release.sh, test-install.sh and test-node-pull-secret.sh in parallel (offline, fake oc/curl/crane; the last needs jq; the summary names what was skipped)
+make test-scripts      # scripts/test-release.sh, test-install.sh, test-node-pull-secret.sh and test-test-go.sh in parallel (offline, fake oc/curl/crane; test-node-pull-secret.sh needs jq, test-test-go.sh go; the summary names what was skipped)
 make test-chart        # scripts/test-chart.sh: helm lint and helm template of deploy/chart (offline)
 make check-chart       # only: the chart's copies of deploy/template.yaml and deploy/rbac-gitops.yaml are current
 ```
@@ -267,7 +267,7 @@ GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release t
   - `golangci-lint`;
   - `checks` (`make -k ci-checks`): the frontend's typecheck, ESLint and `npm audit`; `make docs-check`; shellcheck 0.11.0 on `scripts/*.sh`, `dev.sh`, `docs/tools/*.sh` and `pkg/cluster/node_pull_secret.sh` (as bash: it is a pasted command, so it carries no shell directive; `make shellcheck`). GitHub runs the same in its `frontend-checks` and `docs` jobs, with the shellcheck release tarball checked against `SHELLCHECK_SHA256`;
   - `frontend-test` (tests) and `frontend-build` (production build), in parallel with `checks`, each after its own `npm ci` from one npm cache;
-  - `script-tests` (`make -k ci-script-tests`): `scripts/test-release.sh`, `scripts/test-install.sh` and `scripts/test-node-pull-secret.sh` at the same time, then `scripts/test-chart.sh`. The job installs Debian's `jq` 1.7.1 into the Go image and Helm `HELM_VERSION` from get.helm.sh, checked against `HELM_SHA256` (both in `.gitlab-ci.yml` and `.github/workflows/ci.yml`; change them together); the target sets `REQUIRE_JQ=1` and `REQUIRE_HELM=1`, so a missing tool fails instead of skipping tests;
+  - `script-tests` (`make -k ci-script-tests`): `scripts/test-release.sh`, `scripts/test-install.sh`, `scripts/test-node-pull-secret.sh` and `scripts/test-test-go.sh` (`scripts/test-go.sh` on a small module of its own) at the same time, then `scripts/test-chart.sh`. The job installs Debian's `jq` 1.7.1 into the Go image and Helm `HELM_VERSION` from get.helm.sh, checked against `HELM_SHA256` (both in `.gitlab-ci.yml` and `.github/workflows/ci.yml`; change them together); the target sets `REQUIRE_JQ=1` and `REQUIRE_HELM=1`, so a missing tool fails instead of skipping tests;
   - `release-guard` (tags only, `make release-check TAG=vX.Y.Z`): `scripts/release.sh check`, see [Releases](#releases);
   - the docs, chart and script checks share the `checks` and `script-tests` jobs because each job waits about two minutes for its runner VM, and those checks take seconds; `make -k` runs every part and names each one that failed;
   - the Go jobs keep Go's module and build caches (and golangci-lint's) in `.cache/`, one GitLab cache per job keyed on `go.sum`; tag pipelines only read them (main's pipeline of the commit wrote them).

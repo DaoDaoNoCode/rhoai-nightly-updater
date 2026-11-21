@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
@@ -122,6 +123,20 @@ var (
 
 func readRegisteredCaches(t *testing.T) map[string]string {
 	t.Helper()
+	ps := clusterSource(t)
+	byDir := map[string][]*ast.File{}
+	for name, f := range ps.files {
+		dir := filepath.Dir(ps.paths[name])
+		byDir[dir] = append(byDir[dir], f)
+	}
+	return registeredCachesIn(byDir)
+}
+
+// registeredCachesIn is registeredCaches of these packages (files by
+// package directory). A name declared at package level in more than one
+// package maps to "", however each registers (or does not): a URL-keyed
+// cache is listed by name, which must name one variable.
+func registeredCachesIn(byDir map[string][]*ast.File) map[string]string {
 	calls := func(call *ast.CallExpr, name string) bool {
 		fun := call.Fun
 		switch f := fun.(type) {
@@ -139,20 +154,9 @@ func readRegisteredCaches(t *testing.T) map[string]string {
 		return false
 	}
 	out := map[string]string{}
-	set := func(name, how string) {
-		if old, ok := out[name]; ok && old != how {
-			out[name] = ""
-			return
-		}
-		out[name] = how
-	}
-	ps := clusterSource(t)
-	byDir := map[string][]*ast.File{}
-	for name, f := range ps.files {
-		dir := filepath.Dir(ps.paths[name])
-		byDir[dir] = append(byDir[dir], f)
-	}
-	for _, files := range byDir {
+	// declaredIn: the package directories declaring each package-level name.
+	declaredIn := map[string]map[string]bool{}
+	for dir, files := range byDir {
 		declared := map[string]bool{} // this package's package-level vars
 		purged := map[string]bool{}   // names in its registerCachePurge functions
 		for _, f := range files {
@@ -170,9 +174,13 @@ func readRegisteredCaches(t *testing.T) map[string]string {
 							continue
 						}
 						declared[n.Name] = true
+						if declaredIn[n.Name] == nil {
+							declaredIn[n.Name] = map[string]bool{}
+						}
+						declaredIn[n.Name][dir] = true
 						if i < len(vs.Values) {
 							if call, ok := vs.Values[i].(*ast.CallExpr); ok && (calls(call, "newLRU") || calls(call, "NewLRU")) {
-								set(n.Name, "newLRU")
+								out[n.Name] = "newLRU"
 							}
 						}
 					}
@@ -194,9 +202,14 @@ func readRegisteredCaches(t *testing.T) map[string]string {
 			}
 		}
 		for name := range purged {
-			if declared[name] {
-				set(name, "purge")
+			if declared[name] && out[name] == "" {
+				out[name] = "purge"
 			}
+		}
+	}
+	for name, dirs := range declaredIn {
+		if len(dirs) > 1 {
+			out[name] = ""
 		}
 	}
 	return out
@@ -218,6 +231,44 @@ func TestRegisteredCachesSeesEveryKind(t *testing.T) {
 	}
 	if _, ok := reg["packageIndexTTL"]; ok {
 		t.Error("a variable declared next to a registered cache is not a cache")
+	}
+}
+
+// A cache name declared in two packages names no one cache, however each
+// registers; one declaration keeps its kind.
+func TestRegisteredCachesRejectsDuplicateNames(t *testing.T) {
+	fset := token.NewFileSet()
+	parse := func(src string) *ast.File {
+		f, err := parser.ParseFile(fset, "fixture.go", src, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	lru := func(pkg, name string) *ast.File {
+		return parse("package " + pkg + "\nvar " + name + " = newLRU[string, int](8)\n")
+	}
+	purged := func(pkg, name string) *ast.File {
+		return parse("package " + pkg + "\nvar " + name + " = map[string]int{}\nvar _ = registerCachePurge(func() { clear(" + name + ") })\n")
+	}
+	plain := func(pkg, name string) *ast.File {
+		return parse("package " + pkg + "\nvar " + name + " = map[string]int{}\n")
+	}
+	reg := registeredCachesIn(map[string][]*ast.File{
+		"a": {lru("a", "sameLRU"), purged("a", "samePurge"), lru("a", "mixed"), lru("a", "onceLRU"), purged("a", "oncePurge"), plain("a", "halfRegistered")},
+		"b": {lru("b", "sameLRU"), purged("b", "samePurge"), purged("b", "mixed"), lru("b", "halfRegistered")},
+	})
+	for name, want := range map[string]string{
+		"sameLRU":        "",
+		"samePurge":      "",
+		"mixed":          "",
+		"halfRegistered": "",
+		"onceLRU":        "newLRU",
+		"oncePurge":      "purge",
+	} {
+		if got, ok := reg[name]; !ok || got != want {
+			t.Errorf("registeredCachesIn()[%s] = %q (present %v), want %q", name, got, ok, want)
+		}
 	}
 }
 

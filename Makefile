@@ -154,11 +154,11 @@ frontend-lock:  ## Update frontend/package-lock.json with CI's pinned node image
 	$(RUNTIME) run --rm -v "$(CURDIR)/frontend:/w:Z" -w /w "$$NODE_IMAGE" \
 		sh -c 'echo "npm $$(npm --version)"; npm install --package-lock-only --ignore-scripts --no-audit --no-fund'
 
-# The three script tests run at the same time (each in its own temporary
+# The script tests run at the same time (each in its own temporary
 # directory); the summary names anything skipped (test-node-pull-secret.sh
 # without jq, unless REQUIRE_JQ=1).
-test-scripts:  ## Test the release and install scripts (offline, in parallel; the summary names anything skipped)
-	sh scripts/run-parallel.sh 'sh scripts/test-release.sh' 'bash scripts/test-install.sh' 'bash scripts/test-node-pull-secret.sh'
+test-scripts:  ## Test the release, install, node pull secret and test-go scripts (offline, in parallel; the summary names anything skipped)
+	sh scripts/run-parallel.sh 'sh scripts/test-release.sh' 'bash scripts/test-install.sh' 'bash scripts/test-node-pull-secret.sh' 'sh scripts/test-test-go.sh'
 
 test-chart:  ## Lint and render the Helm chart (offline; says SKIP without helm, fails then with REQUIRE_HELM=1)
 	bash scripts/test-chart.sh

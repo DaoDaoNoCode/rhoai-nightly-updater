@@ -8,8 +8,13 @@
 # once; a test's subtests stay with it. `make test-go` and the CI go job run
 # this script.
 #
-# Arguments: test flags for every package, such as -shuffle=on; each is
-# passed to go test as given and to the test binaries as -test.<flag>.
+# Arguments: test flags for every package, such as -shuffle=on or
+# -run=TestX; each is passed to go test as given and to the test binaries
+# as -test.<flag>, one argument each (a value may hold spaces). A value goes
+# in the same argument (-run=TestX, not -run TestX). -run and -skip filter
+# the tests of every package and every part: a part runs its own share by
+# skipping the others' tests, its -skip pattern being theirs plus, as a
+# top-level alternative, the caller's.
 #
 # Environment: GO_TEST_SHARDS, the number of processes for pkg/cluster/...
 # (default: the CPUs, at most 4; 1 runs them in one process).
@@ -24,15 +29,31 @@ shards=${GO_TEST_SHARDS:-$cpus}
 [ "$shards" -le 4 ] || shards=4
 [ "$shards" -ge 1 ] || shards=1
 
+# quote ARG: ARG in single quotes, for eval to give back as one word.
+quote() {
+	printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+# The test binaries' flags, each quoted (eval "set -- $binflags"); the
+# caller's -skip pattern apart, as the parts add theirs to it.
 binflags=""
+skip=""
 for f in "$@"; do
 	case $f in
-	-test.*) binflags="$binflags $f" ;;
-	-*) binflags="$binflags -test.${f#-}" ;;
+	-test.*) b=$f ;;
+	-*) b=-test.${f#-} ;;
 	*)
 		echo "test-go.sh: $f is not a flag" >&2
 		exit 2
 		;;
+	esac
+	case $b in
+	-test.skip=*) skip=${b#-test.skip=} ;;
+	-test.skip | -test.run)
+		echo "test-go.sh: $f needs its pattern in the same argument ($f=<regexp>)" >&2
+		exit 2
+		;;
+	*) binflags="$binflags $(quote "$b")" ;;
 	esac
 done
 
@@ -78,11 +99,27 @@ while [ "$s" -lt "$shards" ]; do
 	(
 		while read -r i pkg dir; do
 			[ -f "$work/shard.$s.$i" ] || continue
-			run="^($(paste -sd'|' "$work/shard.$s.$i"))\$"
+			# This part skips the package's tests dealt to the other parts,
+			# so the caller's -run (a binary takes one) still chooses among
+			# its own. go test splits a -skip pattern at a top-level "|"
+			# into alternatives and skips a test any of them matches
+			# (testing/match.go), so the caller's -skip is one more.
+			pat=""
+			if grep -vxF -f "$work/shard.$s.$i" "$work/$i.tests" >"$work/skip.$s.$i"; then
+				pat="^($(paste -sd'|' "$work/skip.$s.$i"))\$"
+			fi
+			[ -z "$skip" ] || pat="${pat:+$pat|}$skip"
+			# Linux limits one argument to 128 KiB (MAX_ARG_STRLEN).
+			if [ "${#pat}" -gt 120000 ]; then
+				echo "test-go.sh: the -skip pattern of $pkg part $((s + 1)) is ${#pat} bytes, too long for one argument" >"$work/shard.$s.$i.log"
+				echo "2 0" >"$work/shard.$s.$i.rc"
+				continue
+			fi
+			eval "set -- $binflags"
+			[ -z "$pat" ] || set -- "$@" "-test.skip=$pat"
 			start=$(date +%s)
 			rc=0
-			# shellcheck disable=SC2086 # the flags are a list.
-			(cd "$dir" && "$work/$i.test" -test.count=1 -test.timeout=10m $binflags -test.run "$run") >"$work/shard.$s.$i.log" 2>&1 || rc=$?
+			(cd "$dir" && "$work/$i.test" -test.count=1 -test.timeout=10m "$@") >"$work/shard.$s.$i.log" 2>&1 || rc=$?
 			echo "$rc $(($(date +%s) - start))" >"$work/shard.$s.$i.rc"
 		done <"$work/split"
 	) &

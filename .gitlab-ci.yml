@@ -190,8 +190,8 @@ golangci-lint:
 # 104-134 s in the job logs) and the docs, chart and script checks ran for
 # 5-28 s each, so they share jobs: checks (the frontend's typecheck, ESLint
 # and npm audit; the docs' links, anchors and images; shellcheck on every
-# shell script) and script-tests (the release, install and node pull secret
-# script tests, and the Helm chart). Each runs `make -k` on its Makefile
+# shell script) and script-tests (the release, install, node pull secret and
+# test-go.sh script tests, and the Helm chart). Each runs `make -k` on its Makefile
 # target, as `make -k ci-checks` / `make -k ci-script-tests` do locally:
 # every part runs even when an earlier one fails, make names each failing
 # part ("make: *** [Makefile:NN: docs-check] Error 1"), and the job fails at

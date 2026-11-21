@@ -152,12 +152,21 @@ var methodVerbs = map[string][]string{
 	// "get" becomes "get" or "list" depending on the path.
 }
 
-// isRequestSourceFile reports whether a file (by base name) defines the
-// Client request methods (client*.go) or the REST helpers on top of them
-// (rest.go). Their calls take a path parameter, not a path: the scans
-// attribute each request to the helper's call site.
+// requestSourceFiles are the files (by base name) that define the Client
+// request methods and accessors (client.go, client_context.go) and the REST
+// helpers on top of them (rest.go). Their calls take a path parameter, not
+// a path: the scans attribute each request to the helper's call site. Named
+// one by one, so any other file, a client_*.go feature file too, is scanned.
+var requestSourceFiles = map[string]bool{
+	"client.go":         true,
+	"client_context.go": true,
+	"rest.go":           true,
+}
+
+// isRequestSourceFile reports whether a file (by base name) is one of
+// requestSourceFiles.
 func isRequestSourceFile(base string) bool {
-	return strings.HasPrefix(base, "client") || base == "rest.go"
+	return requestSourceFiles[base]
 }
 
 // requestMethods maps the Client request methods (client.go) to the names
@@ -518,6 +527,12 @@ func clientMethodCalls(t *testing.T) map[*ast.SelectorExpr]string {
 	t.Helper()
 	clientCallsOnce.Do(func() {
 		ps := clusterSource(t)
+		for name := range requestSourceFiles {
+			if _, ok := ps.files[name]; !ok {
+				clientCallsErr = fmt.Errorf("requestSourceFiles names %s, which no package under pkg/cluster has: update the list", name)
+				return
+			}
+		}
 		exports := exportData(t)
 		byDir := map[string][]string{}
 		for name := range ps.files {
