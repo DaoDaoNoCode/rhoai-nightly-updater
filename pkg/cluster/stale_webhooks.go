@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // Stale admission webhooks and CRD conversion webhooks: the one
@@ -403,7 +405,7 @@ type moduleState struct {
 // an install or upgrade in flight, or "".
 func rhoaiInstallInFlight(c *Client) (string, error) {
 	csvs, err := listOperatorCSVs(c)
-	if isK8sNotFound(err) {
+	if kube.IsK8sNotFound(err) {
 		return "", nil
 	}
 	if err != nil {
@@ -560,7 +562,7 @@ func listAdmissionConfigs(c *Client) ([]admissionConfig, []string) {
 	for _, wk := range webhookKinds {
 		var items []admissionConfig
 		if err := c.ListInto(clusterPath("admissionregistration.k8s.io/v1", wk.resource, ""), &items); err != nil {
-			if isDecodeError(err) {
+			if kube.IsDecodeError(err) {
 				errs = append(errs, fmt.Sprintf("parse %s: %v", wk.resource, err))
 				continue
 			}
@@ -643,9 +645,9 @@ func deleteStaleWebhookConfigs(c *Client, verdicts []webhookVerdict) webhookDele
 		case err == nil:
 			d.Deleted = append(d.Deleted, v.Config.ref())
 			d.Logs = append(d.Logs, fmt.Sprintf("Deleted %s (Service %s; %s)", v.Config.ref(), v.downText(), v.Reason))
-		case isK8sNotFound(err):
+		case kube.IsK8sNotFound(err):
 			d.Logs = append(d.Logs, fmt.Sprintf("%s was already gone", v.Config.ref()))
-		case isK8sConflict(err):
+		case kube.IsK8sConflict(err):
 			d.Changed = append(d.Changed, v.Config.ref())
 			d.Logs = append(d.Logs, fmt.Sprintf("Kept %s: it changed after it was checked", v.Config.ref()))
 		default:

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -328,7 +329,7 @@ func TestDashboardConflictRetriesAreBounded(t *testing.T) {
 	f.operator.Spec.Replicas = &zero
 	f.conflicts = map[string]int{dashboardDeploymentName: 10}
 	err = patchControlledDashboardImage(c, &f.operator, image, "selected-build")
-	if !IsK8sError(err, http.StatusConflict) || len(f.writes) != 5 {
+	if !kube.IsK8sError(err, http.StatusConflict) || len(f.writes) != 5 {
 		t.Fatalf("err=%v attempts=%v", err, f.writes)
 	}
 }
@@ -491,10 +492,11 @@ func TestDashboardPauseFailurePreservesRecoveryAndPreventsImagePatches(t *testin
 	f, c := newDashboardDevFixture(t)
 	f.operatorPods = true
 	ctx, cancel := context.WithCancel(context.Background())
-	c.ctx = ctx
+	editTestClient(c, func(o *testClientOptions) { o.Ctx = ctx })
 	// Cancel as soon as the first pod check proves the controller still runs.
-	original := c.httpClient.Transport
-	c.httpClient.Transport = dscSampleTransport(func(r *http.Request) (*http.Response, error) {
+	hc := c.TestOptions().HTTPClient
+	original := hc.Transport
+	hc.Transport = dscSampleTransport(func(r *http.Request) (*http.Response, error) {
 		resp, err := original.RoundTrip(r)
 		if strings.HasSuffix(r.URL.Path, "/pods") {
 			cancel()
@@ -506,7 +508,7 @@ func TestDashboardPauseFailurePreservesRecoveryAndPreventsImagePatches(t *testin
 		t.Fatalf("result=%+v err=%v writes=%v", result, err, f.writes)
 	}
 	// Recovery uses a fresh request after the failed/cancelled operation.
-	c.ctx = context.Background()
+	editTestClient(c, func(o *testClientOptions) { o.Ctx = context.Background() })
 	f.operatorPods = false
 	result, err = RevertDashboardImage(c)
 	if err != nil || !result.Success || *f.operator.Spec.Replicas != 2 {

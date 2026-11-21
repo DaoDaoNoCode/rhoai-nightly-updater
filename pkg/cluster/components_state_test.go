@@ -10,6 +10,7 @@ import (
 	"testing"
 	"testing/synctest"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -86,7 +87,7 @@ func TestGetComponents_DSCStates(t *testing.T) {
 			c, _ := componentsAPI(t, nil, tc.v2, tc.v1, almExamplesJSON)
 			resp, err := GetComponents(c, false)
 			if tc.wantErr != 0 {
-				if !IsK8sError(err, tc.wantErr) {
+				if !kube.IsK8sError(err, tc.wantErr) {
 					t.Fatalf("want K8s %d error, got resp=%+v err=%v", tc.wantErr, resp, err)
 				}
 				return

@@ -10,7 +10,7 @@ package cluster
 //     reads, the cluster summary and the registry; pkg/api route_tiers.go),
 //     and the probes;
 //   - the background jobs main starts (the MaaS prune job);
-//   - the updater's own records, reached through c.bookkeeping() from any
+//   - the updater's own records, reached through c.Bookkeeping() from any
 //     path, and the lease and marker that pkg/api writes.
 //
 // Since 5.0.0 the reads of tier user-token (a user's projects, the
@@ -199,12 +199,13 @@ var mutationMachinery = []string{
 var saTokenSources = []string{
 	apiPkg + ".getClusterToken",
 	clusterPkg + ".NewClientWithContext",
+	kubePkg + ".NewClientWithContext",
 }
 
 // No change can act with the ServiceAccount's token: from the handlers
 // built with withMutationAuth, past the wrapper's own bookkeeping, the
 // graph reaches no source of that token. (A change's records still use it,
-// through c.bookkeeping(), which TestOwnConfigMapsAreReachedOnlyThroughBookkeeping
+// through c.Bookkeeping(), which TestOwnConfigMapsAreReachedOnlyThroughBookkeeping
 // limits to the updater's own ConfigMaps.)
 func TestMutationPathsActWithTheUsersToken(t *testing.T) {
 	pg := loadProfileGraph(t)

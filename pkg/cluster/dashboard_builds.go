@@ -1,23 +1,5 @@
 package cluster
 
-// GET /api/dashboard/builds: the commit of every PR or main build a dashboard
-// container runs, how far it is from the branch it tracks, and whether the
-// floating tag it came from points to a newer build.
-//
-// Both flavours are built from upstream opendatahub-io/odh-dashboard main
-// (the RHOAI build is the same commit built by Konflux with
-// BUILD_MODE=RHOAI), so a main build is compared with that repository's main
-// branch and a PR build with the PR's head commit. The commit comes from the
-// running image's labels, read anonymously (quay.io/opendatahub is public).
-//
-// This is not part of GET /api/dashboard/state: that endpoint is polled and
-// must stay fast, while registry and GitHub reads take seconds and GitHub
-// allows an anonymous client 60 requests per hour per egress IP, shared by
-// everyone using the pod. Everything GitHub answers is cached (two SHAs
-// compare the same way forever; a branch head for a few minutes) and a
-// GitHub failure never fails the request: the container's divergence is
-// "unknown" with a reason.
-
 import (
 	"context"
 	"encoding/json"
@@ -30,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -73,14 +56,14 @@ type dashboardTagResolution struct {
 }
 
 var (
-	branchHeadCache    = newLRU[string, branchHead](64)
-	branchHeadFlight   flightGroup[branchHead]
-	divergenceCache    = newLRU[string, divergenceResult](2048)
-	divergenceFlight   flightGroup[divergenceResult]
-	dashboardPRCache   = newLRU[string, prInfo](256)
-	dashboardPRFlight  flightGroup[prInfo]
-	dashboardTagCache  = newLRU[string, dashboardTagResolution](256)
-	dashboardTagFlight flightGroup[dashboardTagResolution]
+	branchHeadCache    = kube.NewLRU[string, branchHead](64)
+	branchHeadFlight   kube.FlightGroup[branchHead]
+	divergenceCache    = kube.NewLRU[string, divergenceResult](2048)
+	divergenceFlight   kube.FlightGroup[divergenceResult]
+	dashboardPRCache   = kube.NewLRU[string, prInfo](256)
+	dashboardPRFlight  kube.FlightGroup[prInfo]
+	dashboardTagCache  = kube.NewLRU[string, dashboardTagResolution](256)
+	dashboardTagFlight kube.FlightGroup[dashboardTagResolution]
 )
 
 // GetDashboardBuilds reads the dashboard state and describes the build of
@@ -162,7 +145,7 @@ func dashboardContainerBuild(ctx context.Context, image types.DashboardDevImage,
 	floatingTag := dashboardFloatingTag(image.Running, image.RunningPR, image.Flavor)
 	registryError := func(what string, err error) types.DashboardContainerBuild {
 		message := what + ": " + err.Error()
-		if isContextError(err) {
+		if kube.IsContextError(err) {
 			message = what + " timed out."
 		}
 		slog.Warn("dashboard builds: registry read failed", "image", truncateText(image.CurrentImage, 80), "error", err)

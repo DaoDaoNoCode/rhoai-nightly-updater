@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // Which Deployment removes a module CR's finalizers, found at run time.
@@ -190,7 +192,7 @@ func (f *moduleOperatorFinder) loadPods() error {
 	f.podsLoaded = true
 	var items []moduleOperatorPod
 	if err := f.c.ListInto(namespacedPath("v1", "pods", f.appNS, ""), &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			f.podsErr = fmt.Errorf("parse Pods in %s: %w", f.appNS, err)
 			return f.podsErr
 		}

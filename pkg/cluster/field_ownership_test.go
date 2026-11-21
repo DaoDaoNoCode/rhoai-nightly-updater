@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 const seaweedfs448 = "ghcr.io/chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d"
@@ -165,7 +167,7 @@ func TestUpgradeToolFieldOwnership(t *testing.T) {
 		stored.ResourceVersion = "4"
 		raw, _ := json.Marshal(map[string]any{"metadata": stored})
 		f.putJSON(path, string(raw))
-		if _, err := upgradeToolFieldOwnership(c, path, cur); !IsK8sError(err, 409) {
+		if _, err := upgradeToolFieldOwnership(c, path, cur); !kube.IsK8sError(err, 409) {
 			t.Fatalf("err = %v, want 409", err)
 		}
 		if ensureMap(f.get(path), "metadata")["resourceVersion"] != "4" {

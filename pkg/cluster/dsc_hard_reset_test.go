@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -221,7 +222,7 @@ func TestHardResetRefusals(t *testing.T) {
 				return
 			}
 			setPath(t, dsc, "metadata.annotations", map[string]any{argoTrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:x/default-dsc"})
-		}, nil, ErrorCodeGitOpsManaged},
+		}, nil, kube.ErrorCodeGitOpsManaged},
 		{"operator down", func(t *testing.T, f *resourceFake, dsc map[string]any) {
 			if f == nil {
 				return

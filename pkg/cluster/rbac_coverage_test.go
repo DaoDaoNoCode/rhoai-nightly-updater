@@ -1344,7 +1344,7 @@ func serviceAccountRequestsIn(t *testing.T, only map[string]bool) ([]rbacRequest
 	return scanRequests(t, only, false)
 }
 
-// bookkeepingRequests are the calls on c.bookkeeping() anywhere in the
+// bookkeepingRequests are the calls on c.Bookkeeping() anywhere in the
 // package: the updater's own records, always written with the
 // ServiceAccount's token, whatever path reaches them.
 func bookkeepingRequests(t *testing.T) []rbacRequest {
@@ -1354,7 +1354,7 @@ func bookkeepingRequests(t *testing.T) []rbacRequest {
 }
 
 // scanRequests scans the functions in only (nil: all) for Client calls,
-// or only the calls on c.bookkeeping() with onlyBookkeeping.
+// or only the calls on c.Bookkeeping() with onlyBookkeeping.
 func scanRequests(t *testing.T, only map[string]bool, onlyBookkeeping bool) ([]rbacRequest, map[string]bool) {
 	t.Helper()
 	p := loadClusterSource(t)
@@ -1400,7 +1400,7 @@ func scanRequests(t *testing.T, only map[string]bool, onlyBookkeeping bool) ([]r
 				if _, known := methodVerbs[method]; !known && method != "get" {
 					return true
 				}
-				if inner, ok := sel.X.(*ast.CallExpr); onlyBookkeeping && (!ok || selectorName(inner.Fun) != "bookkeeping") {
+				if inner, ok := sel.X.(*ast.CallExpr); onlyBookkeeping && (!ok || selectorName(inner.Fun) != "Bookkeeping") {
 					return true
 				}
 				site := fmt.Sprintf("%s:%s", file, fn.Name.Name)

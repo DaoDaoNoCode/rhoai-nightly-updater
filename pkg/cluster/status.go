@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -305,7 +306,7 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 // Operations resolve the target uncached.
 const stableTargetCacheTTL = 5 * time.Minute
 
-var stableTargetCache = newLRU[string, stableTarget](8)
+var stableTargetCache = kube.NewLRU[string, stableTarget](8)
 
 // cachedStableTarget is resolveStableTarget for status polling. Only
 // successful lookups are cached, so a discovery error is retried next poll.
@@ -322,7 +323,7 @@ func cachedStableTarget(c *Client) (stableTarget, error) {
 }
 
 // The console URL of a cluster does not change while the app runs.
-var consoleURLCache = newLRU[string, string](8)
+var consoleURLCache = kube.NewLRU[string, string](8)
 
 func cachedConsoleURL(c *Client) string {
 	if u, ok := consoleURLCache.Get(c.BaseURL()); ok {
@@ -343,7 +344,7 @@ func cachedConsoleURL(c *Client) string {
 // status.url the app launcher shows no dashboard link rather than a guess.
 // A read error is cached only briefly, so a transient failure does not hide
 // the link for the full five minutes.
-var dashboardURLCache = newLRU[string, string](8)
+var dashboardURLCache = kube.NewLRU[string, string](8)
 
 // Dashboard URL cache lifetimes: an answer (a URL or none), and a read
 // error.
@@ -394,7 +395,7 @@ func getClusterInfo(c *Client) (string, string) {
 func getClusterVersion(c *Client) (string, error) {
 	var result map[string]any
 	if err := c.GetInto(clusterPath("config.openshift.io/v1", "clusterversions", "version"), &result); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return "", fmt.Errorf("unmarshal: %w", err)
 		}
 		return "", fmt.Errorf("request failed: %w", err)
@@ -435,7 +436,7 @@ func readSubscription(c *Client) (subscriptionDetails, error) {
 	}
 	exists, err := c.GetIntoOptional(path, &sub)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return subscriptionDetails{}, fmt.Errorf("unmarshal: %w", err)
 		}
 		return subscriptionDetails{}, fmt.Errorf("request failed: %w", err)
@@ -520,7 +521,7 @@ func csvForInstalledName(c *Client, installedName string) (types.CSVInfo, error)
 			if csv.Metadata.Name == installedName {
 				return csv.info(), nil
 			}
-		} else if !isK8sNotFound(err) {
+		} else if !kube.IsK8sNotFound(err) {
 			return types.CSVInfo{}, fmt.Errorf("request failed: %w", err)
 		}
 	}
@@ -530,7 +531,7 @@ func csvForInstalledName(c *Client, installedName string) (types.CSVInfo, error)
 		"?labelSelector=" + url.QueryEscape("!olm.copiedFrom")
 	var items []csvSummary
 	if err := c.ListInto(path, &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return types.CSVInfo{}, fmt.Errorf("unmarshal: %w", err)
 		}
 		return types.CSVInfo{}, fmt.Errorf("request failed: %w", err)
@@ -592,7 +593,7 @@ func readCatalogSource(c *Client) (types.CatalogSourceInfo, *objectMeta, error) 
 	}
 	found, err := c.GetIntoOptional(path, &result)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, fmt.Errorf("unmarshal: %w", err)
 		}
 		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, fmt.Errorf("request failed: %w", err)
@@ -761,7 +762,7 @@ func getInstallPlan(c *Client) (*types.InstallPlanInfo, error) {
 	}
 	found, err := c.GetIntoOptional(path, &result)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("unmarshal: %w", err)
 		}
 		return nil, fmt.Errorf("request failed: %w", err)
@@ -819,7 +820,7 @@ func getCatalogPod(c *Client) (*types.CatalogPodInfo, error) {
 		} `json:"status"`
 	}
 	if err := c.ListInto(path, &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("unmarshal: %w", err)
 		}
 		return nil, fmt.Errorf("request failed: %w", err)
@@ -853,7 +854,7 @@ func getIDMS(c *Client) (types.ImageMirrorInfo, error) {
 		} `json:"spec"`
 	}
 	if err := c.ListInto(path, &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return types.ImageMirrorInfo{Exists: false}, fmt.Errorf("unmarshal: %w", err)
 		}
 		return types.ImageMirrorInfo{Exists: false}, fmt.Errorf("request failed: %w", err)

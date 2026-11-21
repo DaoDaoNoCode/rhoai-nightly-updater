@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -33,7 +34,7 @@ func maasSubscriptionPriority(c *Client) (int, []string, error) {
 	}
 	found, err := c.GetIntoOptional(namespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""), &list)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return 0, nil, fmt.Errorf("parse the MaaSSubscription list: %w", err)
 		}
 		return 0, nil, err

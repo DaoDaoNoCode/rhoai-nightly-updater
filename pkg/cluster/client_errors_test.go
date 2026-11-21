@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // A 403 answered to the ServiceAccount's token (a read, the app's records)
@@ -23,7 +25,7 @@ func TestTemplateHintOnlyForTheServiceAccountsRefusals(t *testing.T) {
 	if h := templateHint(user); h != "" {
 		t.Errorf("hint for the user's 403: %q", h)
 	}
-	if !strings.Contains(user.Error(), UserForbiddenMessage) {
+	if !strings.Contains(user.Error(), kube.UserForbiddenMessage) {
 		t.Errorf("the user's 403 does not say whose permissions refused it: %v", user)
 	}
 	for _, err := range []error{nil, errors.New("x"), &K8sError{Status: 404}, &K8sError{Status: 401}} {
@@ -45,7 +47,7 @@ func TestErrorCodeFromK8sErr(t *testing.T) {
 		{&K8sError{Status: 401, Reason: "Unauthorized"}, "unauthorized"},
 		{fmt.Errorf("patch: %w", &K8sError{Status: 403, User: true}), "forbidden"},
 		{&K8sError{Status: 403}, "forbidden"},
-		{wrapNetworkError(errors.New("connection refused")), "network"},
+		{&NetworkError{Err: errors.New("connection refused")}, "network"},
 		{&K8sError{Status: 500}, ""},
 		{errors.New("x"), ""},
 	} {
@@ -68,7 +70,7 @@ func TestUserTokenRejectedMidOperationIsSignInEnded(t *testing.T) {
 		"POST " + dscListPathV2: {body: `{"kind":"Status","status":"Failure","reason":"Unauthorized","code":401,"message":"Unauthorized"}`, statusCode: 401},
 	})
 	defer cleanup()
-	client.asUser = true
+	editTestClient(client, func(o *testClientOptions) { o.AsUser = true })
 
 	result, err := CreateDefaultDSC(client)
 	if err != nil {
@@ -114,8 +116,8 @@ func TestHTTPStatusForError(t *testing.T) {
 		{"500", &K8sError{Status: 500}, 502, "cluster_unavailable"},
 		{"503", &K8sError{Status: 503}, 502, "cluster_unavailable"},
 		{"409", &K8sError{Status: 409}, 502, "cluster_error"},
-		{"network", wrapNetworkError(errors.New("connection refused")), 502, "network"},
-		{"timeout inside network error", wrapNetworkError(&url.Error{Op: "Get", URL: "x", Err: context.DeadlineExceeded}), 504, "timeout"},
+		{"network", &NetworkError{Err: errors.New("connection refused")}, 502, "network"},
+		{"timeout inside network error", &NetworkError{Err: &url.Error{Op: "Get", URL: "x", Err: context.DeadlineExceeded}}, 504, "timeout"},
 		{"canceled", fmt.Errorf("x: %w", context.Canceled), 503, "canceled"},
 		{"quay rejects credentials", fmt.Errorf("x: %w", &quayAuthError{StatusCode: 401}), 502, "registry_auth"},
 		{"quay outage", &quayAuthError{StatusCode: 503}, 502, "registry_unavailable"},
@@ -123,7 +125,7 @@ func TestHTTPStatusForError(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			code, ec := HTTPStatusForError(tc.err)
+			code, ec := kube.HTTPStatusForError(tc.err)
 			if code != tc.wantCode || ec != tc.wantEC {
 				t.Fatalf("got (%d, %q), want (%d, %q)", code, ec, tc.wantCode, tc.wantEC)
 			}

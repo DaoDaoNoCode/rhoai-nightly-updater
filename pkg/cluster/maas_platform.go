@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // The platform pieces MaaS needs besides its own: the Kuadrant CR,
@@ -57,7 +59,7 @@ func createKuadrant(c *Client, version, ns string, dryRun bool) error {
 		query = url.Values{"dryRun": {"All"}}
 	}
 	_, _, err := c.Do(http.MethodPost, withToolFieldManager("/apis/kuadrant.io/"+version+"/namespaces/"+ns+"/kuadrants"), "application/json", data, query)
-	if isK8sConflict(err) {
+	if kube.IsK8sConflict(err) {
 		return nil
 	}
 	return err
@@ -119,7 +121,7 @@ func infraNamespaceLeftovers(c *Client, ns string) ([]string, error) {
 			Metadata objectMeta `json:"metadata"`
 		}
 		if err := c.ListInto(l.path, &items); err != nil {
-			if isDecodeError(err) {
+			if kube.IsDecodeError(err) {
 				return nil, fmt.Errorf("parse the %s list: %w", l.kind, err)
 			}
 			return nil, fmt.Errorf("list the %ss in %s: %w", l.kind, ns, err)
@@ -174,7 +176,7 @@ const authorinoDefaultSecret = "authorino-server-cert"
 // made (none when all was set).
 func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) {
 	read, err := getServed(c, authorinoGroup, "/apis/"+authorinoGroup+"/%s/namespaces/"+ns+"/authorinos/authorino", []string{"v1beta1"})
-	if isK8sNotFound(err) || (err == nil && read.Body == nil) {
+	if kube.IsK8sNotFound(err) || (err == nil && read.Body == nil) {
 		return nil, fmt.Errorf("%w: no Authorino authorino in %s", errAuthorinoNotYet, ns)
 	}
 	if err != nil {
@@ -265,7 +267,7 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 	}
 	if len(changes) > 0 && !dryRun {
 		patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
-			"annotations": map[string]string{restartAnnotation: clk.Now().UTC().Format(time.RFC3339)},
+			"annotations": map[string]string{restartAnnotation: kube.Clock().Now().UTC().Format(time.RFC3339)},
 		}}}})
 		if _, _, err := c.Do(http.MethodPatch, namespacedPath("apps/v1", "deployments", ns, "authorino"), "application/merge-patch+json", patch, query); err != nil {
 			return changes, fmt.Errorf("restart Deployment %s/authorino: %w", ns, err)

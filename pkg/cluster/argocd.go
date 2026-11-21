@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -454,8 +455,8 @@ func (a *argoCheck) applications() argoRead[[]argoApp] {
 const argoApplicationsTTL = 30 * time.Second
 
 var (
-	argoApplicationsCache  = newLRU[string, []argoApp](16)
-	argoApplicationsFlight flightGroup[[]argoApp]
+	argoApplicationsCache  = kube.NewLRU[string, []argoApp](16)
+	argoApplicationsFlight kube.FlightGroup[[]argoApp]
 )
 
 // readArgoApplications lists every Application: for a status read the list

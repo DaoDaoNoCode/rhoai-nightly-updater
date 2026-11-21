@@ -1,10 +1,5 @@
 package cluster
 
-// Regression tests for the review-round findings on the quick resources:
-// foreign objects appearing between the tool's check and its write, and API
-// calls that stall past an operation's deadline. The S3 storage's are in
-// s3_storage_test.go.
-
 import (
 	"context"
 	"encoding/json"
@@ -15,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // foreignJSON is an object someone else created: no tool label, created
@@ -133,12 +130,12 @@ func stallServer(t *testing.T, status int) *Client {
 func TestWaitForDeletion_DeadlineAndErrors(t *testing.T) {
 	t.Run("stalled API call does not overrun the deadline", func(t *testing.T) {
 		c := stallServer(t, 0)
-		start := clk.Now()
+		start := kube.Clock().Now()
 		gone, err := waitForDeletion(c, "/api/v1/namespaces/minio", 200*time.Millisecond, 10*time.Millisecond)
 		if gone || err != nil {
 			t.Fatalf("gone=%v err=%v, want a plain timeout", gone, err)
 		}
-		if d := clk.Since(start); d != 200*time.Millisecond {
+		if d := kube.Clock().Since(start); d != 200*time.Millisecond {
 			t.Errorf("waited %s, want the 200ms deadline", d)
 		}
 	})
@@ -146,14 +143,14 @@ func TestWaitForDeletion_DeadlineAndErrors(t *testing.T) {
 		t.Run("HTTP "+itoa(status)+" is an error, not still-deleting", func(t *testing.T) {
 			c := stallServer(t, status)
 			gone, err := waitForDeletion(c, "/api/v1/namespaces/minio", time.Second, 10*time.Millisecond)
-			if gone || !IsK8sError(err, status) {
+			if gone || !kube.IsK8sError(err, status) {
 				t.Fatalf("gone=%v err=%v", gone, err)
 			}
 		})
 	}
 	t.Run("caller context cancelled", func(t *testing.T) {
 		c := stallServer(t, 0)
-		ctx, cancel := clk.WithTimeout(context.Background(), 50*time.Millisecond)
+		ctx, cancel := kube.Clock().WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
 		gone, err := waitForDeletion(c.WithContext(ctx), "/x", time.Second, 10*time.Millisecond)
 		if gone || !errors.Is(err, context.DeadlineExceeded) {

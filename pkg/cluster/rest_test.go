@@ -14,6 +14,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // restServer answers each path with a fixed status and body, and records
@@ -66,10 +68,10 @@ func TestIsK8sNotFoundAndConflict(t *testing.T) {
 		{nil, false, false},
 	}
 	for _, tc := range cases {
-		if got := isK8sNotFound(tc.err); got != tc.notFound {
+		if got := kube.IsK8sNotFound(tc.err); got != tc.notFound {
 			t.Errorf("isK8sNotFound(%v) = %v", tc.err, got)
 		}
-		if got := isK8sConflict(tc.err); got != tc.conflicts {
+		if got := kube.IsK8sConflict(tc.err); got != tc.conflicts {
 			t.Errorf("isK8sConflict(%v) = %v", tc.err, got)
 		}
 	}
@@ -88,7 +90,7 @@ func TestGetOptional(t *testing.T) {
 	}
 	wantBody, _, wantErr := c.Get("/no")
 	body, found, err := c.GetOptional("/no")
-	if found || err == nil || err.Error() != wantErr.Error() || !IsK8sError(err, 403) || string(body) != string(wantBody) {
+	if found || err == nil || err.Error() != wantErr.Error() || !kube.IsK8sError(err, 403) || string(body) != string(wantBody) {
 		t.Fatalf("refused read: body=%q found=%v err=%v, want get's %q %v", body, found, err, wantBody, wantErr)
 	}
 	want := []string{"GET /there", "GET /gone", "GET /no", "GET /no"}
@@ -110,12 +112,12 @@ func TestGetInto(t *testing.T) {
 		t.Fatalf("getInto: %+v %v", obj, err)
 	}
 	_, _, wantErr := c.Get("/no")
-	if err := c.GetInto("/no", &obj); err == nil || err.Error() != wantErr.Error() || !IsK8sError(err, 403) || isDecodeError(err) {
+	if err := c.GetInto("/no", &obj); err == nil || err.Error() != wantErr.Error() || !kube.IsK8sError(err, 403) || kube.IsDecodeError(err) {
 		t.Fatalf("refused read: %v, want get's %v", err, wantErr)
 	}
 	wantDecode := json.Unmarshal([]byte(`{"metadata":{"name":1}}`), &obj)
 	err := c.GetInto("/bad", &obj)
-	if err == nil || err.Error() != wantDecode.Error() || !isDecodeError(err) {
+	if err == nil || err.Error() != wantDecode.Error() || !kube.IsDecodeError(err) {
 		t.Fatalf("bad body: %v, want json.Unmarshal's %v", err, wantDecode)
 	}
 	if _, ok := errors.AsType[*json.UnmarshalTypeError](fmt.Errorf("parse: %w", err)); !ok {
@@ -135,7 +137,7 @@ func TestGetInto(t *testing.T) {
 	if found, err := c.GetIntoOptional("/no", &obj); found || err == nil || err.Error() != wantErr.Error() {
 		t.Fatalf("getIntoOptional refused: found=%v err=%v", found, err)
 	}
-	if found, err := c.GetIntoOptional("/bad", &obj); !found || !isDecodeError(err) || err.Error() != wantDecode.Error() {
+	if found, err := c.GetIntoOptional("/bad", &obj); !found || !kube.IsDecodeError(err) || err.Error() != wantDecode.Error() {
 		t.Fatalf("getIntoOptional bad body: found=%v err=%v", found, err)
 	}
 	want := []string{"GET /there", "GET /no", "GET /no", "GET /bad", "GET /gone", "GET /there", "GET /no", "GET /bad"}
@@ -176,7 +178,7 @@ func TestListInto(t *testing.T) {
 		switch {
 		case wantErr == nil && err != nil:
 			t.Errorf("%s: %v", p, err)
-		case wantErr != nil && (err == nil || err.Error() != wantErr.Error() || !isDecodeError(err)):
+		case wantErr != nil && (err == nil || err.Error() != wantErr.Error() || !kube.IsDecodeError(err)):
 			t.Errorf("%s: error %v, want %v", p, err, wantErr)
 		case wantErr == nil && fmt.Sprint(items) != fmt.Sprint(list.Items):
 			t.Errorf("%s: items %v, want %v", p, items, list.Items)
@@ -187,7 +189,7 @@ func TestListInto(t *testing.T) {
 	}
 	_, _, wantErr := c.Get("/no")
 	var items []json.RawMessage
-	if err := c.ListInto("/no", &items); err == nil || err.Error() != wantErr.Error() || isDecodeError(err) {
+	if err := c.ListInto("/no", &items); err == nil || err.Error() != wantErr.Error() || kube.IsDecodeError(err) {
 		t.Fatalf("refused list: %v, want get's %v", err, wantErr)
 	}
 	defer func() {
@@ -208,7 +210,7 @@ func TestPatchJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, wantErr := c.Patch("/no", []byte(`{}`))
-	if err := c.PatchJSON("/no", map[string]any{}); err == nil || err.Error() != wantErr.Error() || !IsK8sError(err, 403) {
+	if err := c.PatchJSON("/no", map[string]any{}); err == nil || err.Error() != wantErr.Error() || !kube.IsK8sError(err, 403) {
 		t.Fatalf("refused patch: %v, want patch's %v", err, wantErr)
 	}
 	bad := map[string]any{"replicas": math.Inf(1)}
@@ -235,7 +237,7 @@ func TestDeleteIfExists(t *testing.T) {
 	}
 	_, wantErr := c.Delete("/no")
 	existed, err := c.DeleteIfExists("/no")
-	if existed || err == nil || err.Error() != wantErr.Error() || !IsK8sError(err, 403) {
+	if existed || err == nil || err.Error() != wantErr.Error() || !kube.IsK8sError(err, 403) {
 		t.Fatalf("refused delete: existed=%v err=%v, want delete's error %v", existed, err, wantErr)
 	}
 	want := []string{"DELETE /there", "DELETE /gone", "DELETE /no", "DELETE /no"}
@@ -244,10 +246,10 @@ func TestDeleteIfExists(t *testing.T) {
 	}
 }
 
-// Every *Client method of rest.go is a REST helper the RBAC scans know
+// Every *Client method of internal/kube/rest.go is a REST helper the RBAC scans know
 // (helperMethods): a new one that is not would hide its requests from them.
 func TestRESTHelpersAreKnownToTheRBACScan(t *testing.T) {
-	f, err := parser.ParseFile(token.NewFileSet(), "rest.go", nil, 0)
+	f, err := parser.ParseFile(token.NewFileSet(), "internal/kube/rest.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

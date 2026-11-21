@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // Verbatim condition messages of the live case (RHOAI 3.6.0, 2026-11-19).
@@ -574,9 +576,9 @@ func TestLeftoverRecreateDeployment(t *testing.T) {
 func TestLeftoverRecreateNotBackInTime(t *testing.T) {
 	w := newLeftoverWorld(t, nil, []string{msgTrustySelector}, storedFalse())
 	w.recreate = false
-	start := clk.Now()
+	start := kube.Clock().Now()
 	res, _ := ApplyFixAcknowledged(w.c, "recreate-leftover:Deployment/redhat-ods-applications/trustyai-service-operator-controller-manager", recreateAck(t, w))
-	if res.Success || res.ErrorCode != "not_recreated" || clk.Since(start) < leftoverRecreateWait {
+	if res.Success || res.ErrorCode != "not_recreated" || kube.Clock().Since(start) < leftoverRecreateWait {
 		t.Fatalf("%+v", res)
 	}
 	// Deleted already: the scan says it waits for the operator.

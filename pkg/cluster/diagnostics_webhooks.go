@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -45,7 +46,7 @@ func probeCRDObjects(c *Client, listPath string) (crdObjects, string) {
 	}
 	body, _, err := c.Do(http.MethodGet, listPath, "", nil, url.Values{"limit": {"1"}})
 	switch {
-	case IsK8sError(err, http.StatusForbidden):
+	case kube.IsK8sError(err, http.StatusForbidden):
 		return crdObjectsUnknown, "this app may not list them"
 	case err != nil && strings.Contains(err.Error(), "conversion webhook"):
 		return crdObjectsPresent, ""
@@ -68,7 +69,7 @@ func probeCRDObjects(c *Client, listPath string) (crdObjects, string) {
 // missing, or has had no ready endpoint for longer than the grace period.
 func findStaleConversions(c *Client) ([]staleConversion, []string, error) {
 	crds, err := listRHOAIConversionCRDs(c)
-	if isK8sNotFound(err) {
+	if kube.IsK8sNotFound(err) {
 		return nil, nil, nil
 	}
 	if err != nil {
@@ -277,7 +278,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 	}
 	if convErr != nil {
 		msg := fmt.Sprintf("CRD conversions not checked: %v", convErr)
-		if IsK8sError(convErr, http.StatusForbidden) {
+		if kube.IsK8sError(convErr, http.StatusForbidden) {
 			msg = "CRD conversions not checked: this app cannot list CRDs (RBAC)"
 		}
 		details = append(details, msg)
@@ -390,7 +391,7 @@ func applyFixDeleteStaleWebhooks(c *Client) (*types.OperationResponse, error) {
 	if len(d.Deleted) > 0 {
 		RecordActivity(c, types.ActivityEntry{
 			Timestamp: nowRFC3339(),
-			User:      getUser(c),
+			User:      kube.GetUser(c),
 			Action:    "fix-delete-stale-webhooks",
 			Detail:    "deleted leftover webhook configurations: " + strings.Join(d.Deleted, ", "),
 			Success:   len(d.Failed) == 0,

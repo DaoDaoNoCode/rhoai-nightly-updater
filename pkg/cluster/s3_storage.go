@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -159,7 +160,7 @@ func readS3Keys(c *Client) (keys s3Keys, found bool, err error) {
 	}
 	exists, err := c.GetIntoOptional(namespacedPath("v1", "secrets", s3Namespace, s3Secret), &secret)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return s3Keys{}, false, fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
 		}
 		return s3Keys{}, false, fmt.Errorf("read Secret %s/%s: %w", s3Namespace, s3Secret, err)
@@ -212,7 +213,7 @@ func S3AdminLogin(c *Client) (login S3Login, err error) {
 	}
 	found, err := c.GetIntoOptional(namespacedPath("v1", "secrets", s3Namespace, s3Secret), &secret)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return S3Login{}, fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
 		}
 		return S3Login{}, fmt.Errorf("read Secret %s/%s: %w", s3Namespace, s3Secret, err)
@@ -312,7 +313,7 @@ func lookupS3Namespace(c *Client) (s3NamespaceInfo, error) {
 	}
 	found, err := c.GetIntoOptional("/api/v1/namespaces/"+s3Namespace, &nsObj)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return s3NamespaceInfo{}, fmt.Errorf("parse namespace %s: %w", s3Namespace, err)
 		}
 		return s3NamespaceInfo{}, fmt.Errorf("read namespace %s: %w", s3Namespace, err)
@@ -354,7 +355,7 @@ func listPVCs(c *Client, namespace string) ([]storagePVC, error) {
 		} `json:"status"`
 	}
 	if err := c.ListInto(namespacedPath("v1", "persistentvolumeclaims", namespace, ""), &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse PVC list: %w", err)
 		}
 		return nil, err
@@ -660,7 +661,7 @@ func s3StatusAndEndpoints(c *Client) (types.ResourceState, s3Endpoints, error) {
 	}
 
 	if deployErr != nil {
-		if isK8sNotFound(deployErr) {
+		if kube.IsK8sNotFound(deployErr) {
 			state.Message = "Namespace exists but the S3 storage is not deployed"
 		} else {
 			state.Message = fmt.Sprintf("Cannot read the SeaweedFS deployment: %v", deployErr)
@@ -1111,7 +1112,7 @@ func (l *opLog) add(line string) {
 // retry names the action that continues a setup that stopped.
 func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.OperationResponse, error) {
 	fail := func(msg, code, activity string) *types.OperationResponse {
-		slog.Warn("s3 storage setup failed", "reason", activity, "user", getUser(c))
+		slog.Warn("s3 storage setup failed", "reason", activity, "user", kube.GetUser(c))
 		recordActivity(c, "setup-s3", fmt.Sprintf("namespace=%s (%s)", s3Namespace, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: log.lines, ErrorCode: code}
 	}
@@ -1139,7 +1140,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 		case err == nil:
 			log.add("OK: Namespace created")
 			ns = s3NamespaceInfo{Exists: true, Managed: true}
-		case isK8sConflict(err):
+		case kube.IsK8sConflict(err):
 			// Created concurrently: decide ownership again.
 			if ns, err = lookupS3Namespace(c); err != nil {
 				return fail(fmt.Sprintf("Cannot check namespace %s: %v.%s", s3Namespace, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace check failed"), nil
@@ -1216,7 +1217,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 				return fail(fmt.Sprintf("%s was created by someone else while setup was running, so it was left unchanged. Already applied: %s. %s", foreignErr.Desc, done, retry.foreignHint()), "not_managed", r.name+" became foreign")
 			}
 			code := errorCodeFromK8sErr(err)
-			if errors.Is(err, errObjectChanged) || isK8sConflict(err) {
+			if errors.Is(err, errObjectChanged) || kube.IsK8sConflict(err) {
 				code = "conflict"
 			}
 			if dryRun {
@@ -1295,7 +1296,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 	log.add(fmt.Sprintf("Creating bucket %s...", s3Bucket))
 	bucketErr := s3BucketCreator(c, s3Bucket)
 	if bucketErr != nil {
-		if clk.Sleep(c.Context(), s3BucketRetryDelay) == nil {
+		if kube.Clock().Sleep(c.Context(), s3BucketRetryDelay) == nil {
 			bucketErr = s3BucketCreator(c, s3Bucket)
 		}
 	}
@@ -1305,7 +1306,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 	}
 	log.add(fmt.Sprintf("OK: Bucket %s created", s3Bucket))
 
-	slog.Info("s3 storage setup complete", "user", getUser(c))
+	slog.Info("s3 storage setup complete", "user", kube.GetUser(c))
 	recordActivity(c, "setup-s3", fmt.Sprintf("namespace=%s bucket=%s", s3Namespace, s3Bucket), true)
 	return &types.OperationResponse{
 		Success: true,
@@ -1326,7 +1327,7 @@ var (
 // request runs under one context bounded by S3ReadyTimeout, so a request
 // that starts just before the deadline cannot overrun it.
 func waitS3Ready(c *Client, image string) (workloadPodIssue, error) {
-	ctx, cancel := clk.WithTimeout(c.Context(), S3ReadyTimeout)
+	ctx, cancel := kube.Clock().WithTimeout(c.Context(), S3ReadyTimeout)
 	defer cancel()
 	cc := c.WithContext(ctx)
 	var last workloadPodIssue
@@ -1359,10 +1360,10 @@ func waitS3Ready(c *Client, image string) (workloadPodIssue, error) {
 					}
 				}
 			}
-		} else if !isK8sNotFound(err) && !IsNetworkError(err) {
+		} else if !kube.IsK8sNotFound(err) && !kube.IsNetworkError(err) {
 			return last, err
 		}
-		if clk.Sleep(ctx, S3ReadyPoll) != nil {
+		if kube.Clock().Sleep(ctx, S3ReadyPoll) != nil {
 			return expired()
 		}
 	}
@@ -1447,7 +1448,7 @@ func (d *storageDeletion) deleteOwnedObject(c *Client, namespace, kind, name str
 	switch {
 	case err != nil:
 		d.failed = append(d.failed, fmt.Sprintf("%s: cannot read it: %v", desc, err))
-		if IsK8sError(err, http.StatusForbidden) {
+		if kube.IsK8sError(err, http.StatusForbidden) {
 			d.forbidden = err
 		}
 		return
@@ -1465,10 +1466,10 @@ func (d *storageDeletion) deleteOwnedObject(c *Client, namespace, kind, name str
 			return
 		}
 		*logs = append(*logs, fmt.Sprintf("Deleting %s...", desc))
-		if _, err := deleteWithUID(c, path, meta.UID); err != nil && !isK8sNotFound(err) {
+		if _, err := deleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 			d.failed = append(d.failed, fmt.Sprintf("%s: %v", desc, err))
 			*logs = append(*logs, fmt.Sprintf("Failed to delete %s: %v", desc, err))
-			if IsK8sError(err, http.StatusForbidden) {
+			if kube.IsK8sError(err, http.StatusForbidden) {
 				d.forbidden = err
 			}
 			return
@@ -1667,7 +1668,7 @@ func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.Operatio
 		if ok, reason := toolNamespaceDeletable(s3Namespace, ns.Meta); !ok {
 			nsNote = " " + reason
 			logs = append(logs, reason)
-		} else if _, err := deleteWithUID(c, "/api/v1/namespaces/"+s3Namespace, ns.Meta.UID); err != nil && !isK8sNotFound(err) {
+		} else if _, err := deleteWithUID(c, "/api/v1/namespaces/"+s3Namespace, ns.Meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 			d.failed = append(d.failed, fmt.Sprintf("namespace %s: %v", s3Namespace, err))
 			d.forbidden = err
 		} else {
@@ -1692,7 +1693,7 @@ func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.Operatio
 		recordActivity(c, "teardown-s3", s3Namespace+" (nothing to remove)", true)
 		return &types.OperationResponse{Success: true, Message: "No S3 storage objects created by this tool remain." + keptNote + nsHint, Logs: logs}, nil
 	}
-	slog.Info("s3 storage teardown", "user", getUser(c), "deleted", strings.Join(d.deleted, ", "))
+	slog.Info("s3 storage teardown", "user", kube.GetUser(c), "deleted", strings.Join(d.deleted, ", "))
 	recordActivity(c, "teardown-s3", s3Namespace+" (objects deleted, namespace kept)", true)
 
 	if len(d.pvcUIDs) > 0 {

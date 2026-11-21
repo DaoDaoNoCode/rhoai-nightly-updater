@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -186,9 +187,9 @@ func readMaaSRecord(c *Client) (maasRecord, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	found, err := c.Bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return rec, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
 		}
 		return rec, fmt.Errorf("read this tool's MaaS record: %w", err)
@@ -225,7 +226,7 @@ func readMaaSRecord(c *Client) (maasRecord, error) {
 
 // writeMaaSRecord applies the record (operations hold the cluster lock).
 func writeMaaSRecord(c *Client, rec maasRecord) error {
-	rec.At, rec.By = nowRFC3339(), getUser(c)
+	rec.At, rec.By = nowRFC3339(), kube.GetUser(c)
 	sort.Strings(rec.Published)
 	data, err := json.Marshal(rec)
 	if err != nil {
@@ -364,7 +365,7 @@ func maasInfraNamespace(c *Client) (string, error) {
 		if tc.Status.InfraNamespace != "" {
 			return tc.Status.InfraNamespace, nil
 		}
-	case isK8sNotFound(err):
+	case kube.IsK8sNotFound(err):
 	default:
 		return "", fmt.Errorf("cannot tell where maas-api and its database go: %s cannot be read (%w)", what, err)
 	}
@@ -811,7 +812,7 @@ func maasConnectionURL(c *Client, ns string) (string, error) {
 		Data map[string]string `json:"data"`
 	}
 	if err := c.GetInto(namespacedPath("v1", "secrets", ns, "maas-db-app"), &s); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return "", errors.New("the database's application Secret cannot be parsed")
 		}
 		return "", fmt.Errorf("read the database's application Secret %s/%s: %w", ns, maasDBAppSecret, err)
@@ -840,7 +841,7 @@ func readMaaSDBCluster(c *Client, ns string) (objectMeta, bool, bool, string, er
 	}
 	found, err := c.GetIntoOptional(maasObjectPath("Cluster", ns), &cl)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return objectMeta{}, true, false, "", err
 		}
 		return objectMeta{}, false, false, "", err
@@ -1793,7 +1794,7 @@ func MaaSPublishedIn(c *Client, project, name string) (bool, error) {
 		return false, nil
 	}
 	_, found, err := readObjectMeta(c, refPath)
-	if err != nil && !isK8sNotFound(err) {
+	if err != nil && !kube.IsK8sNotFound(err) {
 		return false, err
 	}
 	if found {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -30,7 +31,9 @@ func (f *resourceFake) deleteObject(path string) {
 // withUserRead builds it.
 func userClientOf(c *Client, token string) *Client {
 	u := *c
-	u.token, u.asUser, u.bookkeeper, u.signedInUser, u.statusRead = token, true, c, nil, false
+	editTestClient(&u, func(o *testClientOptions) {
+		o.Token, o.AsUser, o.Bookkeeper, o.SignedInUser, o.StatusRead = token, true, c, nil, false
+	})
 	return &u
 }
 
@@ -216,7 +219,7 @@ func TestUserReadForbiddenIsTheUsers(t *testing.T) {
 	k8s, c := newResourceFake(t)
 	k8s.failAs[fakeUserToken+" GET /apis/project.openshift.io/v1/projects"] = 403
 	_, err := ListUserDSProjects(userClientOf(c, fakeUserToken))
-	if code, ec := HTTPStatusForError(err); code != 403 || ec != ErrorCodeForbiddenForUser {
+	if code, ec := kube.HTTPStatusForError(err); code != 403 || ec != kube.ErrorCodeForbiddenForUser {
 		t.Fatalf("got %d %s (%v)", code, ec, err)
 	}
 	if templateHint(err) != "" {

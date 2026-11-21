@@ -211,7 +211,7 @@ func TestRepairPreviewListsConversionObjectsWithTheUsersToken(t *testing.T) {
 		}
 		// The repair runs with the admin's own client and goes through.
 		user := c.SignedInUser()
-		user.signedInUser = nil
+		editTestClient(user, func(o *testClientOptions) { o.SignedInUser = nil })
 		r, err := RepairDSC(user, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v2", nil, []string{"mcplifecycleoperator"})
 		mu.Lock()
 		defer mu.Unlock()

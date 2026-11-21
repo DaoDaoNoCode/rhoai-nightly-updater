@@ -901,7 +901,7 @@ func newSamplesEnv(t *testing.T) *samplesEnv {
 	k8s, c := newResourceFake(t)
 	env := &samplesEnv{k8s: k8s, c: c, mlflow: newMLflowFake(t), mux: http.NewServeMux()}
 	uc := *c
-	uc.token, uc.asUser = samplesUserToken, true
+	editTestClient(&uc, func(o *testClientOptions) { o.Token, o.AsUser = samplesUserToken, true })
 	env.user = &uc
 	// MLflow decides every access review with the template's rules.
 	env.mlflow.allow = templateAllow(t)

@@ -417,7 +417,7 @@ func TestHardResetReadsNamespaceOwnersWithTheSignedInUsersToken(t *testing.T) {
 	// The stream runs with the user's client itself (no ServiceAccount
 	// client behind it) and runs the same guard before the delete.
 	user := c.SignedInUser()
-	user.signedInUser = nil
+	editTestClient(user, func(o *testClientOptions) { o.SignedInUser = nil })
 	res, err := HardResetDSC(user, types.DSCPlanRequest{Name: plan.Name, UID: plan.UID, Token: plan.Token, Confirm: plan.Name, KeepEnabled: new(false)}, func(UpdateStepEvent) {})
 	if err != nil || !res.Success {
 		t.Fatalf("result = %+v, %v", res, err)
@@ -436,7 +436,7 @@ func TestHardResetReadsNamespaceOwnersWithTheSignedInUsersToken(t *testing.T) {
 	ownedNamespace(f2, "acm", ref(amwGV, "AppliedManifestWork", "w", "w-uid"))
 	putOwner(f2, amwPath+"w", "w-uid", nil, dscRef())
 	user2 := c2.SignedInUser()
-	user2.signedInUser = nil
+	editTestClient(user2, func(o *testClientOptions) { o.SignedInUser = nil })
 	res, _ = HardResetDSC(user2, types.DSCPlanRequest{Name: plan.Name, UID: plan.UID, Token: plan.Token, Confirm: plan.Name, KeepEnabled: new(false)}, func(UpdateStepEvent) {})
 	if res.Success || res.ErrorCode != "prerequisites" || !strings.Contains(res.Message, "namespace acm, owned by AppliedManifestWork w") {
 		t.Fatalf("result = %+v", res)

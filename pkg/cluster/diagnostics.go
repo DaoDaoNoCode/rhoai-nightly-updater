@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -408,7 +409,7 @@ func readSubscriptionState(c *Client) (subscriptionState, error) {
 	}
 	found, err := c.GetIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), &sub)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return subscriptionState{}, fmt.Errorf("parse subscription: %w", err)
 		}
 		return subscriptionState{}, err
@@ -701,7 +702,7 @@ type installPlanItem struct {
 func listInstallPlans(c *Client) ([]installPlanItem, error) {
 	var items []installPlanItem
 	if err := c.ListInto(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ""), &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse install plans: %w", err)
 		}
 		return nil, err
@@ -769,7 +770,7 @@ func checkInstallPlanHealth(c *Client) checkOutput {
 
 	plans, err := listInstallPlans(c)
 	if err != nil {
-		if isK8sNotFound(err) {
+		if kube.IsK8sNotFound(err) {
 			return missing()
 		}
 		return checkOutput{check: CheckResult{Name: name, Status: "fail", Detail: fmt.Sprintf("Failed to check install plans: %v", err)}}
@@ -1008,7 +1009,7 @@ func checkNodeCapacity(c *Client) checkOutput {
 		} `json:"status"`
 	}
 	if err := c.ListInto(path, &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			out.check = CheckResult{Name: "Node capacity", Status: "warn", Detail: "Could not parse node list"}
 			return out
 		}
@@ -1137,7 +1138,7 @@ func nothingToDo(msg string, logs []string) *types.OperationResponse {
 func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error) {
 	plans, err := listInstallPlans(c)
 	if err != nil {
-		if isK8sNotFound(err) {
+		if kube.IsK8sNotFound(err) {
 			return nothingToDo("there are no install plans. Nothing was deleted.", nil), nil
 		}
 		return &types.OperationResponse{
@@ -1163,9 +1164,9 @@ func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error
 		case err == nil:
 			deleted = append(deleted, ip.Metadata.Name)
 			logs = append(logs, fmt.Sprintf("Deleted install plan %s (phase Failed)", ip.Metadata.Name))
-		case isK8sNotFound(err):
+		case kube.IsK8sNotFound(err):
 			logs = append(logs, fmt.Sprintf("Install plan %s was already gone", ip.Metadata.Name))
-		case isK8sConflict(err):
+		case kube.IsK8sConflict(err):
 			changed = append(changed, ip.Metadata.Name)
 			logs = append(logs, fmt.Sprintf("Kept install plan %s: it changed after it was checked", ip.Metadata.Name))
 		default:
@@ -1177,7 +1178,7 @@ func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error
 	if len(deleted) > 0 {
 		RecordActivity(c, types.ActivityEntry{
 			Timestamp: nowRFC3339(),
-			User:      getUser(c),
+			User:      kube.GetUser(c),
 			Action:    "fix-delete-stale-installplans",
 			Detail:    "deleted Failed install plans: " + strings.Join(deleted, ", "),
 			Success:   len(failed) == 0,
@@ -1226,7 +1227,7 @@ func applyFixDisableComponent(c *Client, compName string) (*types.OperationRespo
 	case v.state != DSCStatePresent:
 		return &types.OperationResponse{Success: false, Message: "Cannot find the DataScienceCluster: no DataScienceCluster exists", ErrorCode: "prerequisites"}, nil
 	case v.argoApp != "":
-		return &types.OperationResponse{Success: false, Message: gitOpsRefusal("The DataScienceCluster", v.argoApp, "removing "+compName) + fmt.Sprintf(" Set %s to Removed in Git.", compName), ErrorCode: ErrorCodeGitOpsManaged}, nil
+		return &types.OperationResponse{Success: false, Message: gitOpsRefusal("The DataScienceCluster", v.argoApp, "removing "+compName) + fmt.Sprintf(" Set %s to Removed in Git.", compName), ErrorCode: kube.ErrorCodeGitOpsManaged}, nil
 	}
 	if reason, refused := refusedComponents[compName]; refused {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("The tool does not remove %s. %s", compName, reason), ErrorCode: "validation"}, nil

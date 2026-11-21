@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -176,7 +177,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	var changed *errCatalogImageChanged
 	switch {
 	case errors.As(err, &changed):
-		return fail("Update stopped: "+changed.Error()+". The operator was not changed.", ErrorCodeGitOpsManaged)
+		return fail("Update stopped: "+changed.Error()+". The operator was not changed.", kube.ErrorCodeGitOpsManaged)
 	case err != nil && isCatalogImagePullError(err):
 		return fail(err.Error(), "catalog_image_pull")
 	case err != nil:
@@ -193,7 +194,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	if cs, err := getCatalogSource(c); err != nil {
 		return fail("Cannot re-read the CatalogSource: "+err.Error(), errorCodeFromK8sErr(err))
 	} else if cs.Image != image {
-		return fail("Update stopped: "+(&errCatalogImageChanged{by: changedBy, image: cs.Image}).Error()+". The operator was not changed.", ErrorCodeGitOpsManaged)
+		return fail("Update stopped: "+(&errCatalogImageChanged{by: changedBy, image: cs.Image}).Error()+". The operator was not changed.", kube.ErrorCodeGitOpsManaged)
 	}
 	// A managed Subscription's startingCSV pin from Git must be the verified
 	// head; the new Subscription pins that head in any case (below).
@@ -201,7 +202,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 		prevSpec, _ := recovery.subscriptionBase()["spec"].(map[string]any)
 		startingCSV, _ := prevSpec["startingCSV"].(string)
 		if startingCSV != "" && startingCSV != target.HeadCSV {
-			return fail(fmt.Sprintf("The Subscription pins startingCSV %s in Git, but the catalog serves %s on channel %s. Change the pin in Git, or the catalog image, so they agree. Nothing was changed.", startingCSV, target.HeadCSV, target.Channel), ErrorCodeGitOpsManaged)
+			return fail(fmt.Sprintf("The Subscription pins startingCSV %s in Git, but the catalog serves %s on channel %s. Change the pin in Git, or the catalog image, so they agree. Nothing was changed.", startingCSV, target.HeadCSV, target.Channel), kube.ErrorCodeGitOpsManaged)
 		}
 	}
 
@@ -218,11 +219,11 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 		}
 		preview := buildSubscription(base, CatalogName, target.Channel)
 		if msg := policy(preview, recovery.subscription); msg != "" {
-			return fail(msg+" Nothing was changed.", ErrorCodeProfileGitOps)
+			return fail(msg+" Nothing was changed.", kube.ErrorCodeProfileGitOps)
 		}
 		if found {
 			if msg := policy(preview, live); msg != "" {
-				return fail(msg+" Nothing was changed.", ErrorCodeProfileGitOps)
+				return fail(msg+" Nothing was changed.", kube.ErrorCodeProfileGitOps)
 			}
 		}
 	}
@@ -279,7 +280,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 		// are skipped.
 		if msg := policy(buildSubscription(live, CatalogName, target.Channel), live); msg != "" {
 			recovery.keepNewInstall = true
-			return fail("Update stopped before it recreated the Subscription. "+msg+" The old CSV was already deleted and the Subscription was left as Git sets it, so OLM does not install the operator again until the Subscription is fixed in Git (Argo CD then syncs it) or recreated.", ErrorCodeProfileGitOps)
+			return fail("Update stopped before it recreated the Subscription. "+msg+" The old CSV was already deleted and the Subscription was left as Git sets it, so OLM does not install the operator again until the Subscription is fixed in Git (Argo CD then syncs it) or recreated.", kube.ErrorCodeProfileGitOps)
 		}
 	}
 	if found {

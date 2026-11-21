@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -497,7 +498,7 @@ func readMaaSToolSubscription(c *Client) (maasToolSub, error) {
 	}
 	exists, err := c.GetIntoOptional(maasAccessPath(c, "MaaSSubscription"), &sub)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return maasToolSub{}, fmt.Errorf("parse MaaSSubscription %s: %w", maasSubscriptionName, err)
 		}
 		return maasToolSub{}, fmt.Errorf("read MaaSSubscription %s/%s: %w", maasTenantNamespace, maasSubscriptionName, err)

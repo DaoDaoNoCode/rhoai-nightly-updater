@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // The API server's answers on 2026-10-07, RHOAI 3.6 nightly whose operator
@@ -76,12 +78,12 @@ func TestIsConversionWebhookError(t *testing.T) {
 		err  error
 		want bool
 	}{
-		{"429 storage reinitializing (live)", parseK8sError([]byte(liveDSCv3Conversion429), 429), true},
-		{"500 conversion webhook failed (live)", parseK8sError([]byte(liveDSCv3Conversion500), 500), true},
-		{"429 throttled by priority and fairness", parseK8sError([]byte(`{"kind":"Status","status":"Failure","message":"Too many requests, please try again later.","reason":"TooManyRequests","code":429}`), 429), false},
+		{"429 storage reinitializing (live)", kube.ParseK8sError([]byte(liveDSCv3Conversion429), 429), true},
+		{"500 conversion webhook failed (live)", kube.ParseK8sError([]byte(liveDSCv3Conversion500), 500), true},
+		{"429 throttled by priority and fairness", kube.ParseK8sError([]byte(`{"kind":"Status","status":"Failure","message":"Too many requests, please try again later.","reason":"TooManyRequests","code":429}`), 429), false},
 		{"429 without a body", &K8sError{Status: 429}, false},
-		{"500 other", parseK8sError([]byte(`{"kind":"Status","status":"Failure","message":"etcdserver: request timed out","code":500}`), 500), false},
-		{"404", parseK8sError([]byte(k8sNotFound), 404), false},
+		{"500 other", kube.ParseK8sError([]byte(`{"kind":"Status","status":"Failure","message":"etcdserver: request timed out","code":500}`), 500), false},
+		{"404", kube.ParseK8sError([]byte(k8sNotFound), 404), false},
 		{"403 mentioning a conversion webhook", &K8sError{Status: 403, K8sMessage: "conversion webhook"}, false},
 		{"network error", &NetworkError{Err: errors.New("conversion webhook")}, false},
 		{"nil", nil, false},
@@ -92,7 +94,7 @@ func TestIsConversionWebhookError(t *testing.T) {
 			}
 		})
 	}
-	if msg := conversionMessage(parseK8sError([]byte(liveDSCv3Conversion429), 429)); msg != liveDSCv3Message {
+	if msg := conversionMessage(kube.ParseK8sError([]byte(liveDSCv3Conversion429), 429)); msg != liveDSCv3Message {
 		t.Fatalf("message %q", msg)
 	}
 }
@@ -131,7 +133,7 @@ func TestListServedFallsBackOnlyOnConversionErrors(t *testing.T) {
 			tc.v3(f)
 			r, err := listServed(c, dscGroup, dscListFmt, nil, dscFallbackVersions)
 			if tc.wantErr != 0 {
-				if !IsK8sError(err, tc.wantErr) || len(f.requests("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters")) != 0 {
+				if !kube.IsK8sError(err, tc.wantErr) || len(f.requests("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters")) != 0 {
 					t.Fatalf("want %d without falling back, got %+v %v", tc.wantErr, r, err)
 				}
 				return
@@ -156,7 +158,7 @@ func TestListServedFallsBackOnlyOnConversionErrors(t *testing.T) {
 		f.json("GET", "/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters", 429, liveDSCv3Conversion429)
 		f.json("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", 500, liveDSCv3Conversion500)
 		r, err := listServed(c, dscGroup, dscListFmt, nil, dscFallbackVersions)
-		if !IsK8sError(err, 429) || len(r.Skipped) != 2 {
+		if !kube.IsK8sError(err, 429) || len(r.Skipped) != 2 {
 			t.Fatalf("got %+v %v", r, err)
 		}
 	})
@@ -173,7 +175,7 @@ func TestListServedFallsBackOnlyOnConversionErrors(t *testing.T) {
 		f, c := newFakeAPI(t)
 		f.json("GET", "/apis/datasciencecluster.opendatahub.io", 200, dscGroupDoc)
 		_, err := getServed(c, dscGroup, dscListFmt+"/gone", dscFallbackVersions)
-		if !IsK8sError(err, 404) || len(f.requests("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/gone")) != 0 {
+		if !kube.IsK8sError(err, 404) || len(f.requests("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/gone")) != 0 {
 			t.Fatalf("err %v", err)
 		}
 	})

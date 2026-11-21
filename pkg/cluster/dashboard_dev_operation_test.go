@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -122,13 +123,13 @@ func TestRevertDashboardDevForOperation(t *testing.T) {
 		mustDeploy(t, c, "pr", 1, "")
 		// The caller gives up after 50ms, long before the operator's
 		// readiness timeout.
-		ctx, cancel := clk.WithTimeout(context.Background(), 50*time.Millisecond)
+		ctx, cancel := kube.Clock().WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
-		c.ctx = ctx
-		start := clk.Now()
+		editTestClient(c, func(o *testClientOptions) { o.Ctx = ctx })
+		start := kube.Clock().Now()
 		err := RevertDashboardDevForOperation(c)
-		if err == nil || clk.Since(start) != 50*time.Millisecond || *f.operator.Spec.Replicas != 2 {
-			t.Fatalf("err=%v elapsed=%v", err, clk.Since(start))
+		if err == nil || kube.Clock().Since(start) != 50*time.Millisecond || *f.operator.Spec.Replicas != 2 {
+			t.Fatalf("err=%v elapsed=%v", err, kube.Clock().Since(start))
 		}
 	})
 	t.Run("resume-rejected", func(t *testing.T) {

@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // ImageLabels holds the build/commit metadata extracted from a container image's config labels.
@@ -53,10 +55,10 @@ type labelCacheValue struct {
 }
 
 var (
-	labelCache      = newLRU[string, labelCacheValue](labelCacheMax)
-	labelFlight     flightGroup[labelCacheValue]
-	commitDateCache = newLRU[string, string](commitDateCacheMax)
-	commitFlight    flightGroup[string]
+	labelCache      = kube.NewLRU[string, labelCacheValue](labelCacheMax)
+	labelFlight     kube.FlightGroup[labelCacheValue]
+	commitDateCache = kube.NewLRU[string, string](commitDateCacheMax)
+	commitFlight    kube.FlightGroup[string]
 )
 
 // isHTTPSURL reports whether s is an absolute https URL with a host and no

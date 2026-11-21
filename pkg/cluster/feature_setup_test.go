@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -552,7 +553,7 @@ func TestPrerequisites_RefusesAGitOpsManagedDSC(t *testing.T) {
 		t.Fatalf("status = %+v", st)
 	}
 	res, _ := runPrereqs(t, pc.c, "pipelines")
-	if res.Success || res.ErrorCode != ErrorCodeGitOpsManaged {
+	if res.Success || res.ErrorCode != kube.ErrorCodeGitOpsManaged {
 		t.Fatalf("setup: %+v", res)
 	}
 	if muts := pc.f.mutations(); len(muts) != 0 {
@@ -806,7 +807,7 @@ func TestRestoreComponents(t *testing.T) {
 		pc.f.argo = argoManagingAll(argoDSCObject("default-dsc"))
 		n := len(pc.f.mutations())
 		res, _ := RestoreComponents(pc.c, []string{"mlflowoperator"})
-		if res.Success || res.ErrorCode != ErrorCodeGitOpsManaged || len(pc.f.mutations()) != n {
+		if res.Success || res.ErrorCode != kube.ErrorCodeGitOpsManaged || len(pc.f.mutations()) != n {
 			t.Fatalf("restore: %+v", res)
 		}
 	})

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -44,12 +45,12 @@ func goBackground(fn func()) {
 }
 
 var (
-	nightlyStatusCache  = newLRU[string, types.NightlyStatus](64)
-	nightlyStatusFlight flightGroup[types.NightlyStatus]
+	nightlyStatusCache  = kube.NewLRU[string, types.NightlyStatus](64)
+	nightlyStatusFlight kube.FlightGroup[types.NightlyStatus]
 	// dashboardWarmAttempts remembers FBC images whose catalog was recently
 	// read (or failed) in the background, so each poll does not retry.
-	dashboardWarmAttempts = newLRU[string, bool](128)
-	dashboardWarmFlight   flightGroup[bool]
+	dashboardWarmAttempts = kube.NewLRU[string, bool](128)
+	dashboardWarmFlight   kube.FlightGroup[bool]
 )
 
 // nightlyBuildFromImage describes the catalog image configured on the

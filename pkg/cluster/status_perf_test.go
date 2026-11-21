@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -405,7 +406,7 @@ func TestGetNightlyStatus_VeryStaleEntryReportsASlowQuay(t *testing.T) {
 		nightlyStatusFresh, nightlyStatusStaleMax = previousFresh, previousStale
 	})
 
-	ctx, cancel := clk.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := kube.Clock().WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	got := getNightlyStatus(ctx, "a", sub, cs)
 	if got.Error == "" || (got.UpdateAvailable != nil && !*got.UpdateAvailable) {

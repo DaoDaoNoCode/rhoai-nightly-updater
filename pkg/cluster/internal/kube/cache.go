@@ -1,4 +1,4 @@
-package cluster
+package kube
 
 import (
 	"container/list"
@@ -8,10 +8,10 @@ import (
 	"time"
 )
 
-// lruCache is a size-bounded, concurrency-safe LRU map whose entries may also
+// LRU is a size-bounded, concurrency-safe LRU map whose entries may also
 // expire. Adding to a full cache evicts the least recently used entry only,
 // so hot entries survive bursts of new keys.
-type lruCache[K comparable, V any] struct {
+type LRU[K comparable, V any] struct {
 	mu    sync.Mutex
 	max   int
 	ll    *list.List
@@ -26,16 +26,16 @@ type lruEntry[K comparable, V any] struct {
 	expires time.Time // zero: never expires
 }
 
-// newLRU makes an LRU cache and registers it (registerCachePurge).
-func newLRU[K comparable, V any](max int) *lruCache[K, V] {
-	c := &lruCache[K, V]{max: max, ll: list.New(), items: make(map[K]*list.Element), now: time.Now}
-	registerCachePurge(c.Purge)
+// NewLRU makes an LRU cache and registers it (RegisterCachePurge).
+func NewLRU[K comparable, V any](max int) *LRU[K, V] {
+	c := &LRU[K, V]{max: max, ll: list.New(), items: make(map[K]*list.Element), now: time.Now}
+	RegisterCachePurge(c.Purge)
 	return c
 }
 
-// The registry of the package's caches: every LRU (newLRU) and every
+// The registry of the cluster packages' caches: every LRU (NewLRU) and every
 // hand-rolled cache, which registers the function that empties it next to
-// its declaration (var _ = registerCachePurge(...)). Production never
+// its declaration (var _ = kube.RegisterCachePurge(...)). Production never
 // purges; the tests' fake clusters empty them all (resetClusterCaches), as
 // every fake API server is https://127.0.0.1:<port> and the OS reuses ports.
 var cacheRegistry struct {
@@ -43,18 +43,18 @@ var cacheRegistry struct {
 	purges []func()
 }
 
-// registerCachePurge adds a cache's purge function to the registry. Its
+// RegisterCachePurge adds a cache's purge function to the registry. Its
 // result means nothing: it lets a hand-rolled cache register in a
 // package-level declaration next to the cache, without an init function.
-func registerCachePurge(purge func()) struct{} { //nolint:unparam // the result exists only for var _ = registerCachePurge(...)
+func RegisterCachePurge(purge func()) struct{} {
 	cacheRegistry.Lock()
 	defer cacheRegistry.Unlock()
 	cacheRegistry.purges = append(cacheRegistry.purges, purge)
 	return struct{}{}
 }
 
-// purgeAllCaches empties every registered cache.
-func purgeAllCaches() {
+// PurgeAllCaches empties every registered cache.
+func PurgeAllCaches() {
 	cacheRegistry.Lock()
 	purges := append([]func(){}, cacheRegistry.purges...)
 	cacheRegistry.Unlock()
@@ -64,13 +64,13 @@ func purgeAllCaches() {
 }
 
 // Get returns the value for key if present and not expired.
-func (c *lruCache[K, V]) Get(key K) (V, bool) {
+func (c *LRU[K, V]) Get(key K) (V, bool) {
 	v, _, ok := c.GetWithAge(key)
 	return v, ok
 }
 
 // GetWithAge also reports when the entry was stored, for stale-while-revalidate callers.
-func (c *lruCache[K, V]) GetWithAge(key K) (V, time.Time, bool) {
+func (c *LRU[K, V]) GetWithAge(key K) (V, time.Time, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var zero V
@@ -89,7 +89,7 @@ func (c *lruCache[K, V]) GetWithAge(key K) (V, time.Time, bool) {
 }
 
 // Add stores key. ttl <= 0 means the entry only leaves the cache through eviction.
-func (c *lruCache[K, V]) Add(key K, val V, ttl time.Duration) {
+func (c *LRU[K, V]) Add(key K, val V, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.now()
@@ -112,7 +112,7 @@ func (c *lruCache[K, V]) Add(key K, val V, ttl time.Duration) {
 }
 
 // Remove deletes key if present.
-func (c *lruCache[K, V]) Remove(key K) {
+func (c *LRU[K, V]) Remove(key K) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if el, ok := c.items[key]; ok {
@@ -122,18 +122,28 @@ func (c *lruCache[K, V]) Remove(key K) {
 }
 
 // Purge removes every entry.
-func (c *lruCache[K, V]) Purge() {
+func (c *LRU[K, V]) Purge() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.ll.Init()
 	c.items = make(map[K]*list.Element)
 }
 
-// flightGroup collapses concurrent calls for the same key into one, like
+// SetNowForTest makes the cache tell its entries' ages by now and returns
+// the time source it used before. It panics outside a test binary.
+func (c *LRU[K, V]) SetNowForTest(now func() time.Time) (prev func() time.Time) {
+	mustBeTest("SetNowForTest")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	prev, c.now = c.now, now
+	return prev
+}
+
+// FlightGroup collapses concurrent calls for the same key into one, like
 // golang.org/x/sync/singleflight, without adding a dependency. A waiter whose
 // own context ends stops waiting; if the shared call failed only because the
 // leader's context ended, a waiter with a live context runs the call itself.
-type flightGroup[V any] struct {
+type FlightGroup[V any] struct {
 	mu    sync.Mutex
 	calls map[string]*flightCall[V]
 }
@@ -146,7 +156,7 @@ type flightCall[V any] struct {
 
 // Do runs fn once per key at a time and returns its result to every caller.
 // shared reports whether the result came from another caller's run.
-func (g *flightGroup[V]) Do(ctx context.Context, key string, fn func(ctx context.Context) (V, error)) (v V, err error, shared bool) {
+func (g *FlightGroup[V]) Do(ctx context.Context, key string, fn func(ctx context.Context) (V, error)) (v V, err error, shared bool) {
 	for {
 		g.mu.Lock()
 		if g.calls == nil {
@@ -160,7 +170,7 @@ func (g *flightGroup[V]) Do(ctx context.Context, key string, fn func(ctx context
 				var zero V
 				return zero, ctx.Err(), true
 			}
-			if isContextError(call.err) && ctx.Err() == nil {
+			if IsContextError(call.err) && ctx.Err() == nil {
 				continue // the leader gave up; try again with this caller's context
 			}
 			return call.val, call.err, true
@@ -182,6 +192,13 @@ func (g *flightGroup[V]) Do(ctx context.Context, key string, fn func(ctx context
 	}
 }
 
-func isContextError(err error) bool {
+func IsContextError(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// Len returns the number of stored entries, including expired ones not yet removed.
+func (c *LRU[K, V]) Len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ll.Len()
 }

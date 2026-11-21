@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -70,7 +71,7 @@ func TestModelsSetup_ReadyWaitEndingDuringAFailingPullKeepsTheAdvice(t *testing.
 	ModelReadyTimeout = ModelImagePullGraceYoungNode / 2
 	mc := newModelsCluster(t)
 	mc.readyAfter = 0
-	mc.f.putJSON("/api/v1/nodes/node-a", `{"metadata":{"creationTimestamp":"`+clk.Now().Add(-3*time.Minute).UTC().Format(time.RFC3339)+`"}}`)
+	mc.f.putJSON("/api/v1/nodes/node-a", `{"metadata":{"creationTimestamp":"`+kube.Clock().Now().Add(-3*time.Minute).UTC().Format(time.RFC3339)+`"}}`)
 	mc.f.putJSON(testModelPodsPath, `{"metadata":{"labels":{"app.kubernetes.io/name":"qwen25-05b-instruct","app.kubernetes.io/component":"llminferenceservice-workload"}},
 		"spec":{"nodeName":"node-a"},
 		"status":{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ImagePullBackOff","message":"unauthorized: authentication required"}}}]}}`)

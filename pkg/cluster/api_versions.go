@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // API versions of the RHOAI CRDs are discovered, not assumed. RHOAI 3.6
@@ -55,7 +57,7 @@ type apiVersions struct {
 // cached, so a group that appears is picked up on the next read.
 const apiVersionsCacheTTL = 30 * time.Second
 
-var apiVersionsCache = newLRU[string, []string](64)
+var apiVersionsCache = kube.NewLRU[string, []string](64)
 
 // servedVersions reads the API discovery document of group (readable by
 // every authenticated user through system:discovery) and returns its
@@ -210,9 +212,9 @@ func readServed(c *Client, group, pathFmt string, named bool, query url.Values, 
 	for _, version := range versions.Versions {
 		body, _, err := c.Do(http.MethodGet, fmt.Sprintf(pathFmt, version), "", nil, query)
 		switch {
-		case isK8sNotFound(err) && named && versions.Discovered:
+		case kube.IsK8sNotFound(err) && named && versions.Discovered:
 			return out, err // the version is served, so the object does not exist
-		case isK8sNotFound(err):
+		case kube.IsK8sNotFound(err):
 			notFound = err // the version is not served
 			continue
 		case isConversionWebhookError(err):

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -52,7 +53,7 @@ func ListUserDSProjects(u *Client) ([]string, error) {
 		} `json:"status"`
 	}
 	if err := u.ListInto("/apis/project.openshift.io/v1/projects?labelSelector="+url.QueryEscape(dsProjectSelector), &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the project list: %w", err)
 		}
 		return nil, fmt.Errorf("list your data science projects: %w", err)
@@ -169,7 +170,7 @@ func connectionState(u *Client, project string, terminating bool) (string, strin
 // userReadProblem explains a part of a user's read that failed, with its
 // fixed code (types.Problem*).
 func userReadProblem(what, project string, err error) (string, string) {
-	if _, code := HTTPStatusForError(err); code == ErrorCodeForbiddenForUser {
+	if _, code := kube.HTTPStatusForError(err); code == kube.ErrorCodeForbiddenForUser {
 		return fmt.Sprintf("Your OpenShift account may not read %s of project %s.", what, project), types.ProblemForbiddenForUser
 	}
 	return fmt.Sprintf("Cannot read %s of project %s: %v", what, project, err), types.ProblemError
@@ -186,7 +187,7 @@ func listProjectLLMInferenceServices(u *Client, project string) ([]llmisvcObject
 	}
 	found, err := u.GetIntoOptional(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, ""), &list)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse LLMInferenceServices: %w", err)
 		}
 		return nil, fmt.Errorf("list LLMInferenceServices: %w", err)
@@ -216,7 +217,7 @@ func listProjectInferenceServices(u *Client, project string) ([]types.ProjectInf
 	}
 	found, err := u.GetIntoOptional(namespacedPath("serving.kserve.io/v1beta1", "inferenceservices", project, ""), &list)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse InferenceServices: %w", err)
 		}
 		return nil, fmt.Errorf("list InferenceServices: %w", err)

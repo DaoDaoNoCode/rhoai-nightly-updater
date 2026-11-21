@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -82,17 +83,17 @@ func DashboardStateError(err error) (status int, code, message string) {
 	switch {
 	case errors.Is(err, ErrDashboardNotDeployed):
 		return http.StatusNotFound, "dashboard_not_deployed", "failed to get dashboard state: " + err.Error()
-	case IsK8sError(err, http.StatusUnauthorized):
+	case kube.IsK8sError(err, http.StatusUnauthorized):
 		return http.StatusBadGateway, "unauthorized", "Cannot read dashboard state: the Kubernetes API rejected the updater's credentials (HTTP 401)."
-	case IsK8sError(err, http.StatusForbidden):
+	case kube.IsK8sError(err, http.StatusForbidden):
 		return http.StatusForbidden, "forbidden", "Cannot read dashboard state: the updater is not allowed to read the rhods-dashboard Deployment (HTTP 403)."
-	case IsK8sError(err, http.StatusTooManyRequests):
+	case kube.IsK8sError(err, http.StatusTooManyRequests):
 		return http.StatusTooManyRequests, "rate_limited", "Cannot read dashboard state: the Kubernetes API is throttling requests (HTTP 429). Retry shortly."
 	case errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()):
 		return http.StatusGatewayTimeout, "timeout", "Cannot read dashboard state: the Kubernetes API did not respond in time."
-	case IsNetworkError(err):
+	case kube.IsNetworkError(err):
 		return http.StatusServiceUnavailable, "network", "Cannot read dashboard state: the Kubernetes API is unreachable."
-	case IsK8sError(err, 0):
+	case kube.IsK8sError(err, 0):
 		return http.StatusBadGateway, "upstream_error", "Cannot read dashboard state: " + err.Error()
 	default:
 		return http.StatusInternalServerError, "internal", "Cannot read dashboard state: " + err.Error()
@@ -131,7 +132,7 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 	}
 	found, err := c.GetIntoOptional(deployPath, &deploy)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse dashboard deployment: %w", err)
 		}
 		return nil, fmt.Errorf("get dashboard deployment: %w", err)
@@ -390,7 +391,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 	if len(found) == 0 {
 		RecordActivity(c, types.ActivityEntry{
 			Timestamp: nowRFC3339(),
-			User:      getUser(c),
+			User:      kube.GetUser(c),
 			Action:    "deploy-pr",
 			Detail:    fmt.Sprintf("PR #%d (no images found)", prNumber),
 			Success:   false,
@@ -453,7 +454,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 		if err != nil {
 			RecordActivity(c, types.ActivityEntry{
 				Timestamp: nowRFC3339(),
-				User:      getUser(c),
+				User:      kube.GetUser(c),
 				Action:    "deploy-pr",
 				Detail:    fmt.Sprintf("PR #%d (patch failed: %v)", prNumber, err),
 				Success:   false,
@@ -486,12 +487,12 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 	sort.Strings(containerNames)
 	logs = append(logs, fmt.Sprintf("OK: Patched containers: %s", strings.Join(containerNames, ", ")))
 
-	slog.Info("dashboard PR deployed", "pr", prNumber, "containers", len(patched), "user", getUser(c))
+	slog.Info("dashboard PR deployed", "pr", prNumber, "containers", len(patched), "user", kube.GetUser(c))
 
 	sort.Strings(failedModules)
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),
-		User:      getUser(c),
+		User:      kube.GetUser(c),
 		Action:    "deploy-pr",
 		Detail:    fmt.Sprintf("PR #%d (%d/%d containers patched; failed modules: %s)", prNumber, len(patched), targets, strings.Join(failedModules, ", ")),
 		Success:   len(failedModules) == 0,
@@ -541,7 +542,7 @@ func splitLegacyDashboardTargets(c *Client, ns string, images map[string]string,
 		if standalone && moduleContainers[name] {
 			moduleNames, moduleErr := getDeploymentContainerNames(c, ns, name)
 			switch {
-			case isK8sNotFound(moduleErr):
+			case kube.IsK8sNotFound(moduleErr):
 				*logs = append(*logs, fmt.Sprintf("  %s: module not installed; unchanged", name))
 			case moduleErr != nil:
 				*logs = append(*logs, fmt.Sprintf("  %s: cannot read module deployment (%v)", name, moduleErr))
@@ -673,11 +674,11 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 		}
 	}
 
-	slog.Info("dashboard reverted", "containers", totalReverted, "user", getUser(c))
+	slog.Info("dashboard reverted", "containers", totalReverted, "user", kube.GetUser(c))
 
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),
-		User:      getUser(c),
+		User:      kube.GetUser(c),
 		Action:    "revert-dashboard",
 		Detail:    fmt.Sprintf("%d containers restored; failed modules: %s", totalReverted, strings.Join(failedModules, ", ")),
 		Success:   len(failedModules) == 0,
@@ -808,7 +809,7 @@ func getOriginalImages(c *Client) (map[string]string, error) {
 		} `json:"spec"`
 	}
 	if err := c.GetInto(operatorPath, &deploy); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse operator deployment: %w", err)
 		}
 		return nil, fmt.Errorf("get operator deployment: %w", err)
@@ -897,7 +898,7 @@ func getDashboardPods(c *Client, ns, deployment, deploymentUID string, matchLabe
 		} `json:"status"`
 	}
 	if err := c.ListInto(path, &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			slog.Warn("failed to parse dashboard pod list", "error", err)
 			return nil
 		}

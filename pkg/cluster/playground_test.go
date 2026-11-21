@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -202,7 +203,7 @@ func newPlaygroundEnv(t *testing.T) *playgroundEnv {
 	k8s, c := newResourceFake(t)
 	// The ServiceAccount's client, as a read gets it: the gen-ai API is
 	// called with its token.
-	c.token = testGenAIToken
+	editTestClient(c, func(o *testClientOptions) { o.Token = testGenAIToken })
 	g := newGenAIFake(t)
 	g.models["proj"] = testQwenModels
 	srv := newFakeServer(http.HandlerFunc(g.serve))
@@ -223,7 +224,7 @@ func newPlaygroundEnv(t *testing.T) *playgroundEnv {
 	installs := 0
 	g.onInstall = func(ns string) {
 		installs++
-		e.putServer(ns, fmt.Sprintf("uid-installed-%d", installs), clk.Now())
+		e.putServer(ns, fmt.Sprintf("uid-installed-%d", installs), kube.Clock().Now())
 	}
 	return e
 }
@@ -330,7 +331,7 @@ func TestPlayground_SetupWithTheServiceAccountNeverAddsAMaaSModel(t *testing.T) 
 // own token, as a change's client does (NewUserClient).
 func (e *playgroundEnv) userPlaygroundClient(token string) *Client {
 	uc := *e.c
-	uc.token, uc.asUser = token, true
+	editTestClient(&uc, func(o *testClientOptions) { o.Token, o.AsUser = token, true })
 	e.g.userToken = token
 	e.g.maasModels = `{"data":[{"id":"gpt-oss-20b","display_name":"GPT OSS 20B","ready":true,"capabilities":["text-generation"],"subscriptions":[{"name":"team-sub"}]}]}`
 	return &uc
@@ -561,7 +562,7 @@ func TestPlayground_AStaleRecordDoesNotOwnANewPlayground(t *testing.T) {
 		t.Fatalf("setup: %+v", res)
 	}
 	e.g.servers["proj"] = &genAIServer{Name: "lsd-genai-playground", Phase: "Ready"}
-	e.putServer("proj", "uid-made-in-the-dashboard", clk.Now())
+	e.putServer("proj", "uid-made-in-the-dashboard", kube.Clock().Now())
 	PurgePlaygroundStatus()
 	st, err := GetPlaygroundStatus(e.c, e.reader, "proj")
 	if err != nil || len(st.Items) != 1 || st.Items[0].ManagedByTool {
@@ -588,7 +589,7 @@ func TestPlayground_AnInstallAnsweredWithAnExistingServerIsNotOwned(t *testing.T
 			e.g.mu.Lock()
 			if e.g.servers["proj"] == nil {
 				e.g.servers["proj"] = &genAIServer{Name: "lsd-genai-playground", Phase: "Ready"}
-				e.putServer("proj", "uid-someone-else", clk.Now().Add(-time.Minute))
+				e.putServer("proj", "uid-someone-else", kube.Clock().Now().Add(-time.Minute))
 			}
 			e.g.mu.Unlock()
 		}
@@ -748,7 +749,7 @@ func TestPlayground_UnknownOperatorReadinessIsANote(t *testing.T) {
 
 func TestPlayground_NoToken(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	e.c.token = ""
+	editTestClient(e.c, func(o *testClientOptions) { o.Token = "" })
 	res, err := RunPlayground(e.c, setup(), nil)
 	if err != nil || res.Success || res.ErrorCode != "no_token" || len(e.g.auth) != 0 {
 		t.Fatalf("got %+v, %v", res, err)
@@ -807,7 +808,7 @@ func TestPlayground_StatusOfAnAPIThatDiffers(t *testing.T) {
 
 func TestPlayground_StatusWithoutToken(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	e.reader.token = ""
+	editTestClient(e.reader, func(o *testClientOptions) { o.Token = "" })
 	st, err := GetPlaygroundStatus(e.c, e.reader, "")
 	if err != nil || st.APICode != "no_token" || len(e.g.auth) != 0 {
 		t.Fatalf("got %+v, %v", st, err)

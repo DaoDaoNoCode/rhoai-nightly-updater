@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // The object name is the API server's lookup name: "sha256~" and the
@@ -88,14 +90,14 @@ func TestReadSessionToken(t *testing.T) {
 		`{"kind":"Status","status":"Failure","code":404,"reason":"NotFound","details":{"name":"sha256~other","kind":"useroauthaccesstokens"}}`,
 	} {
 		notFound = body
-		if _, err = ReadSessionToken(context.Background(), token); errors.Is(err, ErrSessionTokenGone) || !IsK8sError(err, http.StatusNotFound) {
+		if _, err = ReadSessionToken(context.Background(), token); errors.Is(err, ErrSessionTokenGone) || !kube.IsK8sError(err, http.StatusNotFound) {
 			t.Fatalf("404 %s: %v", body, err)
 		}
 	}
 	notFound = ""
 	status = http.StatusForbidden
 	_, err = ReadSessionToken(context.Background(), token)
-	if !IsK8sError(err, http.StatusForbidden) || errors.Is(err, ErrUnauthenticated) || strings.Contains(err.Error(), "secret-token-value") {
+	if !kube.IsK8sError(err, http.StatusForbidden) || errors.Is(err, ErrUnauthenticated) || strings.Contains(err.Error(), "secret-token-value") {
 		t.Fatalf("403: %v", err)
 	}
 }
@@ -112,27 +114,27 @@ func TestUserTokenErrorsNameTheUser(t *testing.T) {
 		w.WriteHeader(code)
 		fmt.Fprintf(w, `{"kind":"Status","status":"Failure","code":%d,"reason":"r","message":"m"}`, code)
 	})
-	user := NewUserClient(context.Background(), "sha256~user-secret")
-	sa := NewClientWithContext(context.Background(), "sa-secret")
+	user := kube.NewUserClient(context.Background(), "sha256~user-secret")
+	sa := kube.NewClientWithContext(context.Background(), "sa-secret")
 	if !user.ActsAsUser() || sa.ActsAsUser() {
 		t.Fatal("ActsAsUser")
 	}
 	_, _, err := user.Get("/api/v1/namespaces/x")
-	if !strings.Contains(err.Error(), UserTokenRejectedMessage) || strings.Contains(err.Error(), "user-secret") {
+	if !strings.Contains(err.Error(), kube.UserTokenRejectedMessage) || strings.Contains(err.Error(), "user-secret") {
 		t.Fatalf("user 401: %v", err)
 	}
-	if code, ec := HTTPStatusForError(err); code != 401 || ec != "session_expired" {
+	if code, ec := kube.HTTPStatusForError(err); code != 401 || ec != "session_expired" {
 		t.Fatalf("user 401 maps to %d %s", code, ec)
 	}
 	_, _, err = user.Get("/api/v1/namespaces/forbidden")
-	if !strings.Contains(err.Error(), UserForbiddenMessage) {
+	if !strings.Contains(err.Error(), kube.UserForbiddenMessage) {
 		t.Fatalf("user 403: %v", err)
 	}
 	_, _, err = sa.Get("/api/v1/namespaces/x")
 	if strings.Contains(err.Error(), "sign-in") {
 		t.Fatalf("SA 401 named the user's sign-in: %v", err)
 	}
-	if code, ec := HTTPStatusForError(err); code != 401 || ec != "unauthorized" {
+	if code, ec := kube.HTTPStatusForError(err); code != 401 || ec != "unauthorized" {
 		t.Fatalf("SA 401 maps to %d %s", code, ec)
 	}
 }

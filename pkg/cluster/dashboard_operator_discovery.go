@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // Which Deployment Dashboard Dev pauses, found at run time.
@@ -99,7 +101,7 @@ func discoverDashboardTarget(c *Client) (dashboardTarget, error) {
 // Changes always discover again (loadDashboardOperator fresh).
 const dashboardTargetTTL = 30 * time.Second
 
-var dashboardTargetCache = newLRU[string, dashboardTarget](16)
+var dashboardTargetCache = kube.NewLRU[string, dashboardTarget](16)
 
 // cachedDashboardTarget is discoverDashboardTarget for status reads, which
 // the pages poll: the RBAC lists it reads are large. Errors are not cached.

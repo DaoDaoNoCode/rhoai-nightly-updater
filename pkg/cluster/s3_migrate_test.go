@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 const (
@@ -61,9 +63,9 @@ func finishJobAfterReads(f *resourceFake, sim *migrateSim, n int) {
 // the clock (counted from now), then complete.
 func finishJobAfter(f *resourceFake, sim *migrateSim, d time.Duration) {
 	next := f.beforeServe
-	end := clk.Now().Add(d)
+	end := kube.Clock().Now().Add(d)
 	f.beforeServe = func(method, path string) {
-		if method == "GET" && strings.Contains(path, "/jobs/"+migrateJobName) && !clk.Now().Before(end) {
+		if method == "GET" && strings.Contains(path, "/jobs/"+migrateJobName) && !kube.Clock().Now().Before(end) {
 			f.mu.Lock()
 			sim.jobRunning = false
 			f.mu.Unlock()

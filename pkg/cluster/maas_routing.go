@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // The model's gateway refs while it is published: the MaaS gateway alone.
@@ -243,7 +245,7 @@ func readModelRoute(c *Client, project, name string) ([]string, bool, error) {
 	}
 	found, err := c.GetIntoOptional(path, &route)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, false, fmt.Errorf("parse HTTPRoute %s/%s-kserve-route: %w", project, name, err)
 		}
 		return nil, false, err

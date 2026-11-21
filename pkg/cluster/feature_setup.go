@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -166,7 +167,7 @@ func readPrereqRecord(c *Client) (prereqRecord, error) {
 }
 
 func writePrereqRecord(c *Client, rec prereqRecord) error {
-	rec.At, rec.By = nowRFC3339(), getUser(c)
+	rec.At, rec.By = nowRFC3339(), kube.GetUser(c)
 	data, err := json.Marshal(rec)
 	if err != nil {
 		return err
@@ -183,9 +184,9 @@ func readSnapshotKey(c *Client, key string) (string, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	found, err := c.Bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return "", fmt.Errorf("parse the snapshot ConfigMap: %w", err)
 		}
 		return "", err
@@ -207,7 +208,7 @@ func writeSnapshotKey(c *Client, key, manager, value string) error {
 		"data":       map[string]any{key: value},
 	})
 	query := url.Values{"fieldManager": {manager}, "force": {"true"}}
-	_, _, err := c.bookkeeping().Do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query)
+	_, _, err := c.Bookkeeping().Do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query)
 	return err
 }
 
@@ -406,7 +407,7 @@ func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
 			}
 		}
 		if len(turnOn) > 0 && p.argoApp != "" {
-			p.refuse(gitOpsRefusal("The DataScienceCluster", p.argoApp, "turning on "+strings.Join(turnOn, " and "))+p.argo.unconfirmedNote(), ErrorCodeGitOpsManaged)
+			p.refuse(gitOpsRefusal("The DataScienceCluster", p.argoApp, "turning on "+strings.Join(turnOn, " and "))+p.argo.unconfirmedNote(), kube.ErrorCodeGitOpsManaged)
 		}
 		if fs.dependency != "" {
 			p.depStatus, p.depMsg = dscConditionStatus(r.dsc.Object, fs.dependency)
@@ -943,7 +944,7 @@ func (m *maasRun) waitPrerequisitesReady(p *featurePlan) (*types.OperationRespon
 			note = " KServe still reports missing: " + truncateText(msg, 300) + "."
 		}
 	}
-	slog.Info("prerequisites set up", "feature", p.fs.id, "user", getUser(c))
+	slog.Info("prerequisites set up", "feature", p.fs.id, "user", kube.GetUser(c))
 	return m.done(fmt.Sprintf("What %s needs on the cluster is set up.%s", p.fs.title, note))
 }
 
@@ -986,7 +987,7 @@ func componentUsers(c *Client, key string) ([]string, error) {
 		}
 	case "mlflowoperator":
 		cr, err := getMLflowCR(c)
-		if isK8sNotFound(err) {
+		if kube.IsK8sNotFound(err) {
 			return nil, nil
 		}
 		if err != nil {
@@ -1077,7 +1078,7 @@ func restoreCheck(c *Client, rec prereqRecord, dsc dscRead, key string) restoreV
 		return restoreVerdict{drop: true, kept: key + " (changed by someone since this tool's setup)"}
 	}
 	if argo := argoTrackingOf(c, dsc.Object, dscGroup, "DataScienceCluster"); argo.managedBy() != "" {
-		return restoreVerdict{refusal: gitOpsRefusal("The DataScienceCluster", argo.managedBy(), "turning "+key+" back to "+prev) + argo.unconfirmedNote(), code: ErrorCodeGitOpsManaged}
+		return restoreVerdict{refusal: gitOpsRefusal("The DataScienceCluster", argo.managedBy(), "turning "+key+" back to "+prev) + argo.unconfirmedNote(), code: kube.ErrorCodeGitOpsManaged}
 	}
 	users, err := componentUsers(c, key)
 	if err != nil {
@@ -1181,7 +1182,7 @@ func RestoreComponents(c *Client, keys []string) (*types.OperationResponse, erro
 				logs = append(logs, "OK: "+key+" "+v.prev)
 				break
 			}
-			if !isK8sConflict(err) {
+			if !kube.IsK8sConflict(err) {
 				return stop(fmt.Sprintf("Failed to turn %s back to %s: %v.%s", key, v.prev, err, templateHint(err)), errorCodeFromK8sErr(err))
 			}
 			if attempt == 3 {
@@ -1209,6 +1210,6 @@ func RestoreComponents(c *Client, keys []string) (*types.OperationResponse, erro
 	if len(msg) == 0 {
 		msg = append(msg, "No component to turn back.")
 	}
-	slog.Info("components restored", "done", len(done), "kept", len(kept), "user", getUser(c))
+	slog.Info("components restored", "done", len(done), "kept", len(kept), "user", kube.GetUser(c))
 	return &types.OperationResponse{Success: true, Message: strings.Join(msg, " "), Logs: logs}, nil
 }

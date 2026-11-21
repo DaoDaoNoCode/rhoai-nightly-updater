@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -82,7 +83,7 @@ func newNodePullRecord(c *Client, uid, auth string) (nodePullRecord, error) {
 		return nodePullRecord{}, err
 	}
 	s := hex.EncodeToString(salt)
-	return nodePullRecord{SecretUID: uid, Key: quayRHOAIRegistry, Salt: s, AuthSHA256: hashPullAuth(s, auth), At: nowRFC3339(), By: getUser(c)}, nil
+	return nodePullRecord{SecretUID: uid, Key: quayRHOAIRegistry, Salt: s, AuthSHA256: hashPullAuth(s, auth), At: nowRFC3339(), By: kube.GetUser(c)}, nil
 }
 
 // readNodePullRecord reads the record (nil when there is none).

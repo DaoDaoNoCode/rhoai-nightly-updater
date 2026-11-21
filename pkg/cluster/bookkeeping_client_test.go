@@ -122,28 +122,28 @@ func TestBookkeepingUsesTheServiceAccount(t *testing.T) {
 	}
 }
 
-// bookkeeping() hands out the ServiceAccount's client with the caller's
+// Bookkeeping() hands out the ServiceAccount's client with the caller's
 // context and user, and the client itself when none was set.
 func TestBookkeepingClient(t *testing.T) {
 	ctx := t.Context()
 	sa := newTestClient(testClientOptions{Token: "sa-token", Ctx: context.Background()})
 	c := newTestClient(testClientOptions{Token: "user-token", Ctx: ctx, Username: "alice"})
-	if got := c.bookkeeping(); got != c {
+	if got := c.Bookkeeping(); got != c {
 		t.Fatal("without a bookkeeper the client keeps its own records")
 	}
 	c.SetBookkeeping(sa)
-	b := c.WithContext(ctx).bookkeeping()
-	if b.token != "sa-token" || b.ctx != ctx || b.username != "alice" || b.bookkeeper != nil {
-		t.Fatalf("bookkeeping() = token %q ctx %v user %q", b.token, b.ctx == ctx, b.username)
+	b := c.WithContext(ctx).Bookkeeping()
+	if b.BearerToken() != "sa-token" || b.Context() != ctx || b.Username() != "alice" || b.TestOptions().Bookkeeper != nil {
+		t.Fatalf("Bookkeeping() = token %q ctx %v user %q", b.BearerToken(), b.Context() == ctx, b.Username())
 	}
-	if sa.username != "" || sa.ctx == ctx {
-		t.Fatal("bookkeeping() must not change the ServiceAccount client")
+	if sa.Username() != "" || sa.Context() == ctx {
+		t.Fatal("Bookkeeping() must not change the ServiceAccount client")
 	}
 }
 
 // The source rule behind TestBookkeepingUsesTheServiceAccount: every API
 // call on the updater's own ConfigMaps (in its namespace) goes through
-// c.bookkeeping(), and bookkeeping() is used for nothing else, so it cannot
+// c.Bookkeeping(), and Bookkeeping() is used for nothing else, so it cannot
 // carry another write on the ServiceAccount's token. A new record function
 // that calls c.Get on its ConfigMap fails here.
 func TestOwnConfigMapsAreReachedOnlyThroughBookkeeping(t *testing.T) {
@@ -181,7 +181,7 @@ func TestOwnConfigMapsAreReachedOnlyThroughBookkeeping(t *testing.T) {
 					return true
 				}
 				viaBookkeeping := false
-				if inner, ok := sel.X.(*ast.CallExpr); ok && selectorName(inner.Fun) == "bookkeeping" {
+				if inner, ok := sel.X.(*ast.CallExpr); ok && selectorName(inner.Fun) == "Bookkeeping" {
 					viaBookkeeping = true
 				}
 				own := false
@@ -199,9 +199,9 @@ func TestOwnConfigMapsAreReachedOnlyThroughBookkeeping(t *testing.T) {
 				pos := p.fset.Position(call.Pos())
 				switch {
 				case own && !viaBookkeeping:
-					problems = append(problems, fmt.Sprintf("%s:%d %s: the updater's own ConfigMap is not reached through c.bookkeeping()", file, pos.Line, fn.Name.Name))
+					problems = append(problems, fmt.Sprintf("%s:%d %s: the updater's own ConfigMap is not reached through c.Bookkeeping()", file, pos.Line, fn.Name.Name))
 				case viaBookkeeping && !own:
-					problems = append(problems, fmt.Sprintf("%s:%d %s: c.bookkeeping() is only for the updater's own ConfigMaps", file, pos.Line, fn.Name.Name))
+					problems = append(problems, fmt.Sprintf("%s:%d %s: c.Bookkeeping() is only for the updater's own ConfigMaps", file, pos.Line, fn.Name.Name))
 				}
 				return true
 			})

@@ -391,7 +391,7 @@ func TestDSCCheck_StaleModuleIsBackoffOnlyAcrossScans(t *testing.T) {
 	staleSeen.Lock()
 	n := 0
 	for k := range staleSeen.m {
-		if strings.HasPrefix(k, w.c.baseURL+"|") {
+		if strings.HasPrefix(k, w.c.BaseURL()+"|") {
 			n++
 		}
 	}

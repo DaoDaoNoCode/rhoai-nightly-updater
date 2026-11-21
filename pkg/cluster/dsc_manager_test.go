@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -678,11 +679,11 @@ func TestDSCChangesRefusedUnderArgoCDAndACM(t *testing.T) {
 				t.Fatal("no read-only reason")
 			}
 			res, _ := reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed"})
-			if res.Success || res.ErrorCode != ErrorCodeGitOpsManaged {
+			if res.Success || res.ErrorCode != kube.ErrorCodeGitOpsManaged {
 				t.Fatalf("toggle = %+v", res)
 			}
 			for _, action := range []string{"fix", "soft-reset", "hard-reset"} {
-				if p, _ := PlanDSCChange(c, action, "", "", false, false); p.Code != ErrorCodeGitOpsManaged {
+				if p, _ := PlanDSCChange(c, action, "", "", false, false); p.Code != kube.ErrorCodeGitOpsManaged {
 					t.Fatalf("%s plan = %+v", action, p)
 				}
 			}
@@ -726,7 +727,7 @@ func TestDSCManagerConfirmsArgoCDTracking(t *testing.T) {
 			t.Fatalf("manager = %+v", m)
 		}
 		res, _ := reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed"})
-		if res.Success || res.ErrorCode != ErrorCodeGitOpsManaged || len(f.mutations()) != 0 {
+		if res.Success || res.ErrorCode != kube.ErrorCodeGitOpsManaged || len(f.mutations()) != 0 {
 			t.Fatalf("toggle = %+v, writes %v", res, f.mutations())
 		}
 	})

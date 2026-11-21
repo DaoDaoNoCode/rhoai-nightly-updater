@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -218,7 +219,7 @@ func TestUpdateUnderGitOps_InstallsWhatTheCatalogServes(t *testing.T) {
 func TestUpdateUnderGitOps_RefusesAnotherImage(t *testing.T) {
 	f := gitOpsFake(t)
 	result, err := UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged ||
+	if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged ||
 		!strings.Contains(result.Message, "change the image in Git") || !strings.Contains(result.Message, gitOpsImage) || !strings.Contains(result.Message, testArgoApp) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -245,7 +246,7 @@ func TestUpdateUnderGitOps_ImageChangesMeanwhile(t *testing.T) {
 		return false
 	}
 	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged ||
+	if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged ||
 		!strings.Contains(result.Message, "while Update waited") || !strings.Contains(result.Message, testArgoApp) || !strings.Contains(result.Message, "sha256:newer") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -339,7 +340,7 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 		f := gitOpsFake(t)
 		f.sub["spec"].(map[string]any)["source"] = "redhat-operators"
 		result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-		if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "redhat-operators") {
+		if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "redhat-operators") {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
 		if w := f.writes(); len(w) != 0 {
@@ -350,7 +351,7 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 		f := gitOpsFake(t)
 		f.catalog = nil
 		result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-		if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "does not exist") || !strings.Contains(result.Message, "in Git") {
+		if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "does not exist") || !strings.Contains(result.Message, "in Git") {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
 		if w := f.writes(); len(w) != 0 {
@@ -364,7 +365,7 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 		f.sub["status"] = map[string]any{"state": "UpgradePending", "installPlanRef": map[string]any{"name": "install-first"}}
 		f.installPlans["install-first"] = map[string]any{"spec": map[string]any{"clusterServiceVersionNames": []string{gitOpsCSV}}, "status": map[string]any{"phase": "Installing"}}
 		result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-		if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "install-first is Installing") {
+		if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "install-first is Installing") {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
 		if w := f.writes(); len(w) != 0 {
@@ -380,7 +381,7 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 		f := gitOpsFake(t)
 		f.sub["spec"].(map[string]any)["startingCSV"] = "rhods-operator.3.5.0"
 		result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-		if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "pins startingCSV rhods-operator.3.5.0") {
+		if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "pins startingCSV rhods-operator.3.5.0") {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
 		for _, w := range f.writes() {
@@ -434,7 +435,7 @@ func TestUpdateUnderGitOps_ImageChangesBeforeTheDeletions(t *testing.T) {
 		return false
 	}
 	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "sha256:newer") {
+	if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "sha256:newer") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	for _, w := range f.writes() {
@@ -591,7 +592,7 @@ func TestUpdateUnderGitOps_AnotherBuildInstalled(t *testing.T) {
 func TestCreateDSCRefusedUnderGitOps(t *testing.T) {
 	f := gitOpsFake(t)
 	r, err := CreateDefaultDSC(f.client(context.Background()))
-	if err != nil || r.Success || r.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(r.Message, testArgoApp) {
+	if err != nil || r.Success || r.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(r.Message, testArgoApp) {
 		t.Fatalf("result=%+v err=%v", r, err)
 	}
 	if w := f.writes(); len(w) != 0 {
@@ -615,7 +616,7 @@ func TestOperatorOperationsRefusedUnderGitOps(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := gitOpsFake(t)
 			code, msg := run(f.client(context.Background()))
-			if code != ErrorCodeGitOpsManaged || !strings.Contains(msg, testArgoApp) || !strings.Contains(msg, "Nothing was changed") {
+			if code != kube.ErrorCodeGitOpsManaged || !strings.Contains(msg, testArgoApp) || !strings.Contains(msg, "Nothing was changed") {
 				t.Fatalf("code=%q message=%q", code, msg)
 			}
 			if w := f.writes(); len(w) != 0 {
@@ -628,7 +629,7 @@ func TestOperatorOperationsRefusedUnderGitOps(t *testing.T) {
 		delete(f.sub["metadata"].(map[string]any), "annotations")
 		f.argo = argoManagingAllBut(argoSubscriptionObject)
 		r, _ := ReinstallStreamWithOptions(f.client(context.Background()), "stable", "", "", OperationOptions{}, func(UpdateStepEvent) {})
-		if r.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(r.Message, "CatalogSource "+CatalogName) {
+		if r.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(r.Message, "CatalogSource "+CatalogName) {
 			t.Fatalf("result=%+v", r)
 		}
 	})
@@ -652,7 +653,7 @@ func TestUpdateDryRunUnderGitOps(t *testing.T) {
 	if strings.Contains(logs, "Would delete and recreate Subscription") {
 		t.Errorf("dry run describes the plain flow:\n%s", logs)
 	}
-	if result, err := Update(f.client(context.Background()), testNightlyImage, true); err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged {
+	if result, err := Update(f.client(context.Background()), testNightlyImage, true); err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged {
 		t.Fatalf("dry run of another image: result=%+v err=%v", result, err)
 	}
 }
@@ -719,7 +720,7 @@ func TestDSCChangesRefusedUnderGitOps(t *testing.T) {
 		c := dscRepairD3Server(t, `{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"default-dsc","resourceVersion":"42",`+tracked+`},"spec":{"components":{"dashboard":{"managementState":"Managed"}}}}`, &patched, &mu,
 			argoManagingAll(argoGitOpsObjects...))
 		r, err := RepairDSC(c, "default-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v2", nil, []string{})
-		if err != nil || r.Success || r.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(r.Message, testArgoApp) {
+		if err != nil || r.Success || r.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(r.Message, testArgoApp) {
 			t.Fatalf("result = %+v, %v", r, err)
 		}
 		mu.Lock()
@@ -733,7 +734,7 @@ func TestDSCChangesRefusedUnderGitOps(t *testing.T) {
 		argoManagingAll(argoGitOpsObjects...).register(f)
 		serveToggleDSC(f, "v2", `{"metadata":{"name":"default-dsc","uid":"u1","resourceVersion":"7",`+tracked+`},"spec":{"components":{"ray":{"managementState":"Managed"}}}}`, "", "ray")
 		res, err := ApplyFix(c, "disable-component:ray")
-		if err != nil || res.Success || res.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(res.Message, "Set ray to Removed in Git") {
+		if err != nil || res.Success || res.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(res.Message, "Set ray to Removed in Git") {
 			t.Fatalf("result = %+v, %v", res, err)
 		}
 		assertWrites(t, f)

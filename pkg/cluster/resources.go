@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -267,7 +268,7 @@ func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]a
 				current, found = afterWrite(created, current, found, dryRun)
 				return "created", current, found, nil
 			}
-			if !isK8sConflict(postErr) {
+			if !kube.IsK8sConflict(postErr) {
 				return "", current, found, postErr
 			}
 			if current, found, err = read(); err != nil {
@@ -283,7 +284,7 @@ func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]a
 		}
 		upgraded, upErr := upgradeToolFieldOwnership(c, path, current)
 		if upErr != nil {
-			if !isK8sConflict(upErr) {
+			if !kube.IsK8sConflict(upErr) {
 				return "", current, found, fmt.Errorf("upgrade the field ownership of %s to server-side apply: %w", desc, upErr)
 			}
 			if current, found, err = read(); err != nil {
@@ -313,7 +314,7 @@ func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]a
 			current, found = afterWrite(appliedBody, current, found, dryRun)
 			return "updated", current, found, nil
 		}
-		if !isK8sConflict(applyErr) {
+		if !kube.IsK8sConflict(applyErr) {
 			return "", current, found, applyErr
 		}
 		if current, found, err = read(); err != nil {
@@ -477,7 +478,7 @@ func unionFieldsV1(a, b map[string]json.RawMessage) (map[string]json.RawMessage,
 // (false, nil) on timeout and (false, err) on any read error, including
 // 401/403: an unreadable object is not "still being deleted".
 func waitForGone(c *Client, timeout, interval time.Duration, gone func(cc *Client) (bool, error)) (bool, error) {
-	ctx, cancel := clk.WithTimeout(c.Context(), timeout)
+	ctx, cancel := kube.Clock().WithTimeout(c.Context(), timeout)
 	defer cancel()
 	cc := c.WithContext(ctx)
 	for {
@@ -496,7 +497,7 @@ func waitForGone(c *Client, timeout, interval time.Duration, gone func(cc *Clien
 		if err != nil {
 			return false, err
 		}
-		_ = clk.Sleep(ctx, interval) // the deadline is checked after the next poll
+		_ = kube.Clock().Sleep(ctx, interval) // the deadline is checked after the next poll
 	}
 }
 
@@ -504,7 +505,7 @@ func waitForGone(c *Client, timeout, interval time.Duration, gone func(cc *Clien
 func waitForDeletion(c *Client, path string, timeout, interval time.Duration) (bool, error) {
 	return waitForGone(c, timeout, interval, func(cc *Client) (bool, error) {
 		_, _, err := cc.Get(path)
-		if isK8sNotFound(err) {
+		if kube.IsK8sNotFound(err) {
 			return true, nil
 		}
 		return false, err
@@ -554,7 +555,7 @@ func inspectPods(c *Client, namespace, selector, wantImage string) (workloadPodI
 		} `json:"status"`
 	}
 	if err := c.ListInto(namespacedPath("v1", "pods", namespace, "")+"?labelSelector="+url.QueryEscape(selector), &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return workloadPodIssue{}, fmt.Errorf("parse pod list: %w", err)
 		}
 		return workloadPodIssue{}, err
@@ -822,7 +823,7 @@ func GetDSProjects(c *Client) ([]string, error) {
 		} `json:"status"`
 	}
 	if err := c.ListInto(path, &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse namespace list: %w", err)
 		}
 		return nil, fmt.Errorf("list DS projects: %w", err)

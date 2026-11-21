@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // moduleDeletionGrace is how long a module CR may be deleting before
@@ -25,9 +27,9 @@ func checkPlatformModules(c *Client) checkOutput {
 	r, err := listServed(c, platformGroup, platformListFmt, nil, platformFallbackVersions)
 	body := r.Body
 	switch {
-	case isK8sNotFound(err), err == nil && r.Version == "":
+	case kube.IsK8sNotFound(err), err == nil && r.Version == "":
 		details = append(details, "no Platform API (operator older than 3.6 or not installed)")
-	case IsK8sError(err, http.StatusForbidden):
+	case kube.IsK8sError(err, http.StatusForbidden):
 		details = append(details, "Platform not checked: this app cannot read platforms (RBAC)")
 		out.check.Status = "warn"
 	case err != nil:
@@ -126,7 +128,7 @@ func pendingUpgradeAckKeys(c *Client) ([]string, map[string]string, error) {
 		Data map[string]string `json:"data"`
 	}
 	if err := c.GetInto(namespacedPath("v1", "configmaps", SubNS, "odh-upgrade-acks"), &cm); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, nil, fmt.Errorf("parse ConfigMap odh-upgrade-acks: %w", err)
 		}
 		return nil, nil, err
@@ -248,7 +250,7 @@ func checkManagedConfig(c *Client) checkOutput {
 	}
 	for _, ns := range namespaces {
 		body, _, err := c.Do(http.MethodGet, namespacedPath("apps/v1", "deployments", ns, ""), "", nil, url.Values{})
-		if isK8sNotFound(err) {
+		if kube.IsK8sNotFound(err) {
 			continue
 		}
 		if err != nil {

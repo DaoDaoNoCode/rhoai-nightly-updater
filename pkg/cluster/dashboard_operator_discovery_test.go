@@ -301,7 +301,7 @@ func TestDashboardDiscoveryCachedForStatusOnly(t *testing.T) {
 // reported as the legacy flow.
 func TestDashboardStatusRediscoversAGoneOperator(t *testing.T) {
 	f, c := newFakeAPI(t)
-	dashboardTargetCache.Add(c.baseURL, dashboardTarget{Operator: &moduleOperator{Namespace: fixtureAppsNS, Name: "old-name"}, Namespace: fixtureAppsNS}, dashboardTargetTTL)
+	dashboardTargetCache.Add(c.BaseURL(), dashboardTarget{Operator: &moduleOperator{Namespace: fixtureAppsNS, Name: "old-name"}, Namespace: fixtureAppsNS}, dashboardTargetTTL)
 	serveModuleCluster(f)
 	o, err := DashboardOverrideSummary(c)
 	if err != nil || o == nil || o.OperatorName != fixtureOperatorName {
@@ -337,7 +337,7 @@ func TestDiscoverRHOAINamespaces(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) || errors.Is(err, errNoDSCInitialization) != tc.noDSCI || got != (rhoaiNamespaces{}) {
 					t.Fatalf("got %+v, %v; want error %q", got, err, tc.wantErr)
 				}
-				if _, cached := rhoaiNamespacesCache.Get(c.baseURL); cached {
+				if _, cached := rhoaiNamespacesCache.Get(c.BaseURL()); cached {
 					t.Fatal("a failed read was cached")
 				}
 				return

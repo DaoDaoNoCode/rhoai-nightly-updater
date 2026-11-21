@@ -6,6 +6,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 type stableTarget struct {
@@ -88,7 +90,7 @@ func resolveStableTarget(c *Client) (stableTarget, error) {
 		} `json:"status"`
 	}
 	if err := c.ListInto(path, &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return target, fmt.Errorf("parse RHOAI catalog releases: %w", err)
 		}
 		return target, fmt.Errorf("read RHOAI releases from catalog %q: %w", target.Source, err)

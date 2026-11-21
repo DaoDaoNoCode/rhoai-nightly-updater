@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -35,7 +36,7 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 	case dsc.read.Object == nil:
 		return m.fail("check", "This cluster has no DataScienceCluster. A cluster-admin creates one on the Components page. Nothing was changed.", "prerequisites", "no dsc")
 	case needDSC && dsc.argoApp != "":
-		return m.fail("check", gitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning on Models as a Service")+" Set aigateway and aigateway.modelsAsAService to Managed in Git. Nothing was changed."+dsc.argo.unconfirmedNote(), ErrorCodeGitOpsManaged, "dsc gitops")
+		return m.fail("check", gitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning on Models as a Service")+" Set aigateway and aigateway.modelsAsAService to Managed in Git. Nothing was changed."+dsc.argo.unconfirmedNote(), kube.ErrorCodeGitOpsManaged, "dsc gitops")
 	}
 
 	// Connectivity Link and its Kuadrant CR.
@@ -314,9 +315,9 @@ func (m *maasRun) createMaaSInfraNamespace(rec *maasRecord, infra string) (*type
 	if err := writeMaaSRecord(c, *rec); err != nil {
 		return m.fail("database", err.Error(), errorCodeFromK8sErr(err), "record write failed")
 	}
-	if err := createInfraNamespace(c, infra, false); err != nil && !isK8sConflict(err) {
+	if err := createInfraNamespace(c, infra, false); err != nil && !kube.IsK8sConflict(err) {
 		return m.fail("database", fmt.Sprintf("Failed to create namespace %s: %v. Set up again to retry.", infra, err), maasWriteCode(err), "namespace create failed")
-	} else if isK8sConflict(err) {
+	} else if kube.IsK8sConflict(err) {
 		// Made meanwhile (by RHOAI, or someone): it is not this tool's.
 		rec.InfraNamespace = ""
 		if err := writeMaaSRecord(c, *rec); err != nil {

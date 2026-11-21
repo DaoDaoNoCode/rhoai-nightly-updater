@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -21,10 +22,6 @@ import (
 // decides whether Argo CD manages an object: argocd.go asks Argo CD's
 // Applications, and the marks only name the application.
 const argoTrackingAnnotation = "argocd.argoproj.io/tracking-id"
-
-// ErrorCodeGitOpsManaged marks a refusal because Argo CD manages the object
-// the action would change, and would undo the change.
-const ErrorCodeGitOpsManaged = "gitops_managed"
 
 // argoApplication returns the Argo CD application that the tracking
 // annotation among annotations names for the object of this group, kind,
@@ -450,11 +447,11 @@ func readCatalogServing(c *Client, image string, target catalogTarget) catalogSe
 // changedBy) when the image changed meanwhile. pullAdvice words the pull
 // error (pullFailureWatch.advice).
 func waitForCatalogServing(c *Client, image string, target catalogTarget, changedBy string, emit func(UpdateStepEvent), logs *[]string, pullAdvice func(*Client) string) (bool, error) {
-	deadline := clk.Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
+	deadline := kube.Clock().Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
 	pull := pullFailureWatch{advice: pullAdvice}
 	last := ""
-	for clk.Now().Before(deadline) {
-		if err := clk.Sleep(c.Context(), CatalogPollInterval); err != nil {
+	for kube.Clock().Now().Before(deadline) {
+		if err := kube.Clock().Sleep(c.Context(), CatalogPollInterval); err != nil {
 			return false, err
 		}
 		s := readCatalogServing(c, image, target)

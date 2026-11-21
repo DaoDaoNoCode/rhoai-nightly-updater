@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -75,7 +76,7 @@ func listAllGateways(c *Client) ([]gatewayObject, error) {
 	}
 	found, err := c.GetIntoOptional(clusterPath("gateway.networking.k8s.io/v1", "gateways", ""), &list)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the Gateways: %w", err)
 		}
 		return nil, fmt.Errorf("list the Gateways: %w", err)

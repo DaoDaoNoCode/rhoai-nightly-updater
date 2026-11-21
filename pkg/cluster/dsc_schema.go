@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // The DataScienceCluster as its installed CRD defines it. Everything the
@@ -52,7 +54,7 @@ func readDSCCRD(c *Client) (*dscCRD, error) {
 		} `json:"spec"`
 	}
 	if err := c.GetInto(dscCRDPath, &crd); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the DataScienceCluster CRD: %w", err)
 		}
 		return nil, err

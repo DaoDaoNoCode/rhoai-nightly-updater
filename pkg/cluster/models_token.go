@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // Token authentication, made as the dashboard's "Require token
@@ -236,9 +238,9 @@ func probeWithUID(c *Client, path, uid string) (string, error) {
 	switch {
 	case err == nil:
 		return "ours", nil
-	case isK8sNotFound(err):
+	case kube.IsK8sNotFound(err):
 		return "gone", nil
-	case isK8sConflict(err):
+	case kube.IsK8sConflict(err):
 		return "other", nil
 	}
 	return "", err
@@ -311,15 +313,15 @@ func applyModelToken(c *Client, project, model, modelUID string, plan tokenPlan,
 				}
 				secretUID = meta.UID
 			}
-		case dryRun && kind == tokenPartBinding && isK8sNotFound(err) && plan.missing[tokenPartRole]:
+		case dryRun && kind == tokenPartBinding && kube.IsK8sNotFound(err) && plan.missing[tokenPartRole]:
 			// The Role is made first in the real run.
-		case isK8sConflict(err) && kind != tokenPartSecret && !dryRun:
+		case kube.IsK8sConflict(err) && kind != tokenPartSecret && !dryRun:
 			// Made meanwhile: it must be the model's.
 			meta, found, rerr := readObjectMeta(c, tokenObjectPath(kind, project, model))
 			if rerr != nil || !found || !meta.ownedBy(modelUID) {
 				return "", foreignTokenRefusal(kind, project, model), "not_managed"
 			}
-		case isK8sConflict(err):
+		case kube.IsK8sConflict(err):
 			return "", foreignTokenRefusal(kind, project, model), "not_managed"
 		default:
 			verb := "Failed to create"
@@ -346,7 +348,7 @@ func deleteModelToken(c *Client, project, model, modelUID, secretUID string) []s
 		if err != nil || !found || !meta.ownedBy(modelUID) {
 			continue
 		}
-		if _, err := deleteWithUID(c, path, meta.UID); err != nil && !isK8sNotFound(err) {
+		if _, err := deleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 			slog.Warn("cannot delete a model's token object; garbage collection removes it with the model", "kind", kind, "project", project, "model", model, "error", err)
 			continue
 		}
@@ -357,7 +359,7 @@ func deleteModelToken(c *Client, project, model, modelUID, secretUID string) []s
 		switch {
 		case err == nil:
 			logs = append(logs, fmt.Sprintf("OK: Secret %s/%s deleted", project, tokenSecretName(model)))
-		case isK8sNotFound(err), isK8sConflict(err):
+		case kube.IsK8sNotFound(err), kube.IsK8sConflict(err):
 		default:
 			slog.Warn("cannot delete a model's token Secret; garbage collection removes it with the model", "project", project, "model", model, "error", err)
 		}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -70,9 +71,9 @@ func revertDashboardOperatorTo(c *Client, target dashboardTarget) (*types.Operat
 		}
 		now := nowRFC3339()
 		detail := fmt.Sprintf("Resumed %s (%d replicas)", name, replicas)
-		action := &types.DashboardDevAction{Action: "revert", By: getUser(c), At: now, Detail: detail}
+		action := &types.DashboardDevAction{Action: "revert", By: kube.GetUser(c), At: now, Detail: detail}
 		if err := patchDashboardOperator(c, operator, replicas, keep, action); err != nil {
-			if isK8sConflict(err) && attempt < 2 {
+			if kube.IsK8sConflict(err) && attempt < 2 {
 				continue
 			}
 			return fail("Failed to resume "+name+": "+err.Error()+". Retry Revert to default.", errorCodeFromK8sErr(err))
@@ -84,7 +85,7 @@ func revertDashboardOperatorTo(c *Client, target dashboardTarget) (*types.Operat
 			code = "partial_failure"
 		}
 		logs = append(logs, message)
-		RecordActivity(c, types.ActivityEntry{Timestamp: now, User: getUser(c), Action: "revert-dashboard", Detail: message, Success: len(failures) == 0})
+		RecordActivity(c, types.ActivityEntry{Timestamp: now, User: kube.GetUser(c), Action: "revert-dashboard", Detail: message, Success: len(failures) == 0})
 		return &types.OperationResponse{Success: len(failures) == 0, Message: message, ErrorCode: code, Logs: logs}, replicas
 	}
 }
@@ -209,7 +210,7 @@ func RevertDashboardDevForOperation(c *Client) error {
 }
 
 func waitDashboardOperatorReady(c *Client, ns, name string, replicas int) error {
-	ctx, cancel := clk.WithTimeout(c.Context(), dashboardOperatorReadyTimeout)
+	ctx, cancel := kube.Clock().WithTimeout(c.Context(), dashboardOperatorReadyTimeout)
 	defer cancel()
 	reader := c.WithContext(ctx)
 	var last string
@@ -230,7 +231,7 @@ func waitDashboardOperatorReady(c *Client, ns, name string, replicas int) error 
 		default:
 			last = fmt.Sprintf("%d/%d replicas ready", operator.Status.ReadyReplicas, dashboardOperatorReplicas(operator))
 		}
-		if err := clk.Sleep(ctx, dashboardOperatorPollInterval); err != nil {
+		if err := kube.Clock().Sleep(ctx, dashboardOperatorPollInterval); err != nil {
 			return fmt.Errorf("%s did not become ready (%s): %w", name, last, err)
 		}
 	}

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/url"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // A model's image pull that fails is not at once a reason to stop: live
@@ -49,7 +51,7 @@ func modelPullGrace(c *Client, node string) (time.Duration, string) {
 	if err != nil {
 		return ModelImagePullGrace, ""
 	}
-	age := clk.Now().Sub(created)
+	age := kube.Clock().Now().Sub(created)
 	if age < 0 || age >= ModelYoungNodeAge {
 		return ModelImagePullGrace, ""
 	}

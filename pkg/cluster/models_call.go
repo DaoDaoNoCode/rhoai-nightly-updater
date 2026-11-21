@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -231,7 +232,7 @@ func readModelToken(c *Client, project, model, recordedUID string) (string, erro
 		Data     map[string]string `json:"data"`
 	}
 	if err := c.GetInto(tokenSecretPathOf(project, model), &sec); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return "", fmt.Errorf("parse the model's token Secret: %w", err)
 		}
 		return "", fmt.Errorf("read the model's token Secret %s/%s: %w", project, tokenSecretName(model), err)
@@ -259,7 +260,7 @@ var callChecks = struct {
 	check types.ModelCallCheck
 }{}}
 
-var _ = registerCachePurge(func() {
+var _ = kube.RegisterCachePurge(func() {
 	callChecks.Lock()
 	for k := range callChecks.m {
 		delete(callChecks.m, k)

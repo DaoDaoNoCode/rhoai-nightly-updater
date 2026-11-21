@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // succeededCSV is the CSV the simulated OLM reports after installing.
@@ -1801,7 +1803,7 @@ func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
 	defer server.Close()
 
 	// The operation's deadline comes before the catalog's own timeout.
-	ctx, cancel := clk.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := kube.Clock().WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	client := newTestClient(testClientOptions{

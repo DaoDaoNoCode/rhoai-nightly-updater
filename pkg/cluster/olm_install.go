@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -206,16 +207,16 @@ func operatorGroupsUsable(groups []rhoaiOperatorGroup) (ok, problem string) {
 // longer exists. It returns false on timeout and the context error if the
 // operation is canceled.
 func waitForCSVGone(c *Client, name string) (bool, error) {
-	deadline := clk.Now().Add(CSVDeletionTimeout)
+	deadline := kube.Clock().Now().Add(CSVDeletionTimeout)
 	for {
 		_, _, err := c.Get(csvPath(name))
-		if isK8sNotFound(err) {
+		if kube.IsK8sNotFound(err) {
 			return true, nil
 		}
-		if clk.Now().After(deadline) {
+		if kube.Clock().Now().After(deadline) {
 			return false, nil
 		}
-		if err := clk.Sleep(c.Context(), InstallPlanPollInterval); err != nil {
+		if err := kube.Clock().Sleep(c.Context(), InstallPlanPollInterval); err != nil {
 			return false, err
 		}
 	}
@@ -274,7 +275,7 @@ const installDeadlineReserve = 10 * time.Second
 func waitForOperatorInstall(c *Client, emit func(UpdateStepEvent), logs *[]string, recovery *operatorRecovery, expectedCSV string) installOutcome {
 	// waitStart is compared with the cluster's condition times (adminAckNote).
 	waitStart := time.Now()
-	deadline := clk.Now().Add(OperatorInstallTimeout)
+	deadline := kube.Clock().Now().Add(OperatorInstallTimeout)
 	budgetLimited := false
 	if opDeadline, ok := c.Context().Deadline(); ok && opDeadline.Add(-installDeadlineReserve).Before(deadline) {
 		deadline, budgetLimited = opDeadline.Add(-installDeadlineReserve), true
@@ -284,13 +285,13 @@ func waitForOperatorInstall(c *Client, emit func(UpdateStepEvent), logs *[]strin
 	progress, failed, stopped := w.progress, w.failed, w.stopped
 
 	for {
-		if err := clk.Sleep(c.Context(), InstallPlanPollInterval); err != nil {
+		if err := kube.Clock().Sleep(c.Context(), InstallPlanPollInterval); err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				return stopped("timeout", "The operation deadline passed before OLM finished installing the operator")
 			}
 			return stopped("cancelled", "The operation was cancelled before OLM finished installing the operator")
 		}
-		if clk.Now().After(deadline) {
+		if kube.Clock().Now().After(deadline) {
 			if budgetLimited {
 				return stopped("install_timeout", "OLM did not finish installing the operator within the operation's time budget")
 			}
@@ -300,7 +301,7 @@ func waitForOperatorInstall(c *Client, emit func(UpdateStepEvent), logs *[]strin
 		var sub installWaitSubscription
 		found, err := c.GetIntoOptional(subscriptionPath(), &sub)
 		if err != nil {
-			if isDecodeError(err) {
+			if kube.IsDecodeError(err) {
 				continue
 			}
 			slog.Debug("error polling Subscription", "error", err)
@@ -428,9 +429,9 @@ func (w *installWait) subscriptionConditions(sub installWaitSubscription) (resol
 		case "ResolutionFailed":
 			resolutionFailing = true
 			if w.resolutionSince.IsZero() {
-				w.resolutionSince = clk.Now()
+				w.resolutionSince = kube.Clock().Now()
 			}
-			if clk.Since(w.resolutionSince) >= ResolutionFailedGrace {
+			if kube.Clock().Since(w.resolutionSince) >= ResolutionFailedGrace {
 				return false, false, failed("resolution_failed", fmt.Sprintf("OLM cannot resolve %s from %s/%s: %s", SubName, sub.Spec.Source, sub.Spec.Channel, describeCondition(cond))), true
 			}
 			progress("OLM resolution failed, retrying: " + describeCondition(cond))
@@ -438,9 +439,9 @@ func (w *installWait) subscriptionConditions(sub installWaitSubscription) (resol
 			if strings.Contains(strings.ToLower(cond.Message), "pull") {
 				pullFailing = true
 				if w.pullSince.IsZero() {
-					w.pullSince = clk.Now()
+					w.pullSince = kube.Clock().Now()
 				}
-				if clk.Since(w.pullSince) >= BundlePullFailureGrace {
+				if kube.Clock().Since(w.pullSince) >= BundlePullFailureGrace {
 					return false, false, failed("bundle_image_pull", "OLM cannot pull the operator bundle image: "+cond.Message+" Check the image mirror (IDMS) for "+IDMSSource+" and the pull secret."), true
 				}
 				progress("Bundle image pull is failing, OLM keeps retrying: " + cond.Message)
@@ -495,10 +496,10 @@ func (w *installWait) checkCSV(name, installedCSV string, deadline, waitStart ti
 	if phase == "Failed" {
 		w.sawCSVFailed = true
 		if w.csvFailedSince.IsZero() {
-			w.csvFailedSince = clk.Now()
+			w.csvFailedSince = kube.Clock().Now()
 		}
 		detail := describeCondition(olmCondition{Reason: csv.Status.Reason, Message: csv.Status.Message})
-		if clk.Since(w.csvFailedSince) >= CSVFailedGrace {
+		if kube.Clock().Since(w.csvFailedSince) >= CSVFailedGrace {
 			return failed("csv_failed", fmt.Sprintf("CSV %s failed to install: %s", name, detail)), true
 		}
 		progress(fmt.Sprintf("CSV %s: Failed (%s); waiting to see whether OLM retries", name, detail))
@@ -510,12 +511,12 @@ func (w *installWait) checkCSV(name, installedCSV string, deadline, waitStart ti
 	}
 	if phase == "Succeeded" && installedCSV == name {
 		if w.succeededSince.IsZero() {
-			w.succeededSince = clk.Now()
+			w.succeededSince = kube.Clock().Now()
 		}
 		// Stay until the CSV has kept Succeeded for CSVSucceededSettle,
 		// unless the next poll would pass the deadline: a CSV that is
 		// Succeeded then is reported as installed.
-		if clk.Since(w.succeededSince) < CSVSucceededSettle && clk.Now().Add(InstallPlanPollInterval).Before(deadline) {
+		if kube.Clock().Since(w.succeededSince) < CSVSucceededSettle && kube.Clock().Now().Add(InstallPlanPollInterval).Before(deadline) {
 			progress(fmt.Sprintf("CSV %s: Succeeded; confirming that OLM keeps it installed", name))
 			return installOutcome{}, false
 		}
@@ -879,13 +880,13 @@ func readUpgradeGates(c *Client, version string, since time.Time) (gates []upgra
 // with that caveat once the wait ends.
 func adminAckNote(c *Client, csvName string, since time.Time) string {
 	version := strings.TrimPrefix(csvName, SubName+".")
-	end := clk.Now().Add(upgradeGateWait)
+	end := kube.Clock().Now().Add(upgradeGateWait)
 	if d, ok := c.Context().Deadline(); ok && d.Add(-installDeadlineReserve).Before(end) {
 		end = d.Add(-installDeadlineReserve)
 	}
 	// Every read, discovery included, ends with the wait: a slow API server
 	// cannot stretch it.
-	ctx, cancel := clk.WithDeadline(c.Context(), end)
+	ctx, cancel := kube.Clock().WithDeadline(c.Context(), end)
 	defer cancel()
 	c = c.WithContext(ctx)
 	const staleHedge = " It was reported before this install finished, so it may clear once the new operator reconciles."
@@ -910,7 +911,7 @@ func adminAckNote(c *Client, csvName string, since time.Time) string {
 				stale = append(stale, g.String())
 			}
 		}
-		last := !dscFound || !clk.Now().Add(upgradeGatePoll).Before(end)
+		last := !dscFound || !kube.Clock().Now().Add(upgradeGatePoll).Before(end)
 		switch {
 		case len(fresh) > 0:
 			return upgradeGateMessage(fresh, "")
@@ -920,7 +921,7 @@ func adminAckNote(c *Client, csvName string, since time.Time) string {
 			// Nothing more to wait for: no DSC, or the wait is over.
 			return ended()
 		}
-		if clk.Sleep(ctx, upgradeGatePoll) != nil {
+		if kube.Clock().Sleep(ctx, upgradeGatePoll) != nil {
 			return ended()
 		}
 	}
@@ -959,7 +960,7 @@ func foreignSubscriptionRefusal(c *Client) string {
 	}
 	exists, err := c.GetIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ""), &list)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return fmt.Sprintf("Cannot check for other Subscriptions of %s (parse InstallPlans: %v). Nothing was changed.", SubName, err)
 		}
 		return fmt.Sprintf("Cannot check for other Subscriptions of %s in %s (list InstallPlans: %v). Nothing was changed.", SubName, SubNS, err)

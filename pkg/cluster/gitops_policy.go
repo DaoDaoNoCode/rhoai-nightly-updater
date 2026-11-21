@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"gopkg.in/yaml.v3"
 )
 
@@ -372,7 +373,7 @@ func CheckGitOpsAdmissionPolicy(c *Client) error {
 			Spec map[string]any `json:"spec"`
 		}
 		if err := c.GetInto(clusterPath("admissionregistration.k8s.io/v1", o.resource, name), &live); err != nil {
-			if isDecodeError(err) {
+			if kube.IsDecodeError(err) {
 				return fmt.Errorf("parse %s %s: %w", o.kind, name, err)
 			}
 			return fmt.Errorf("read %s %s: %w", o.kind, name, err)

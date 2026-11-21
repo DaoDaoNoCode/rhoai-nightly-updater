@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -448,7 +449,7 @@ func readInferenceGateway(c *Client) (gatewayObject, bool, error) {
 	var gw gatewayObject
 	found, err := c.GetIntoOptional(path, &gw)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return gatewayObject{}, false, fmt.Errorf("parse Gateway %s/%s: %w", inferenceGatewayNamespace, inferenceGatewayName, err)
 		}
 		return gatewayObject{}, false, err
@@ -468,7 +469,7 @@ func clusterAppsDomain(c *Client) (string, error) {
 		} `json:"spec"`
 	}
 	if err := c.GetInto(clusterPath("config.openshift.io/v1", "ingresses", "cluster"), &ing); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return "", fmt.Errorf("parse the cluster's ingress configuration: %w", err)
 		}
 		return "", fmt.Errorf("read the cluster's ingress configuration: %w", err)
@@ -493,7 +494,7 @@ func defaultIngressCertificate(c *Client) (string, error) {
 	}
 	found, err := c.GetIntoOptional(namespacedPath("operator.openshift.io/v1", "ingresscontrollers", "openshift-ingress-operator", "default"), &ic)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return "", fmt.Errorf("parse IngressController %s/default: %w", ingressOperatorNS, err)
 		}
 		return "", fmt.Errorf("read IngressController %s/default: %w", ingressOperatorNS, err)
@@ -602,7 +603,7 @@ func authPolicyStateOf(c *Client, ns, gateway string) string {
 	var err error
 	if ns == inferenceGatewayNamespace && gateway == inferenceGatewayName {
 		body, _, err = c.Get(namespacedPath("kuadrant.io/"+versions.Versions[0], "authpolicies", "openshift-ingress", "openshift-ai-inference-authn"))
-		if isK8sNotFound(err) {
+		if kube.IsK8sNotFound(err) {
 			return "missing"
 		}
 	} else {
@@ -958,7 +959,7 @@ func otherGatewaysOfClass(c *Client) ([]string, error) {
 		} `json:"spec"`
 	}
 	if err := c.ListInto(clusterPath("gateway.networking.k8s.io/v1", "gateways", ""), &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the Gateways: %w", err)
 		}
 		return nil, err
@@ -1228,7 +1229,7 @@ func applyInferenceGateway(c *Client, plan *gatewayPlan, dryRun bool, logf func(
 			switch {
 			case errors.As(err, &foreign):
 				code = "not_managed"
-			case errors.Is(err, errObjectChanged) || errors.Is(err, errGatewayChanged) || isK8sConflict(err):
+			case errors.Is(err, errObjectChanged) || errors.Is(err, errGatewayChanged) || kube.IsK8sConflict(err):
 				code = "conflict"
 			}
 			if dryRun {
@@ -1405,13 +1406,13 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 		}
 		path := gatewayObjectPath(kind)
 		logs = append(logs, fmt.Sprintf("Deleting %s...", gatewayDesc(kind)))
-		if _, err := deleteWithUID(c, path, cur.meta.UID); err != nil && !isK8sNotFound(err) {
+		if _, err := deleteWithUID(c, path, cur.meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 			done := ""
 			if len(deleted) > 0 {
 				done = " Deleted before: " + strings.Join(deleted, ", ") + "."
 			}
 			code := errorCodeFromK8sErr(err)
-			if isK8sConflict(err) {
+			if kube.IsK8sConflict(err) {
 				code = "conflict"
 			}
 			return fail(fmt.Sprintf("Failed to delete %s: %v.%s Delete again to retry.%s", gatewayDesc(kind), err, done, templateHint(err)), code, "delete failed"), nil
@@ -1433,7 +1434,7 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 			slog.Warn("cannot clear the gateway projects record", "error", err)
 		}
 	}
-	slog.Info("inference gateway teardown", "user", getUser(c))
+	slog.Info("inference gateway teardown", "user", kube.GetUser(c))
 	recordActivity(c, "teardown-inference-gateway", strings.Join(deleted, ", "), true)
 	return &types.OperationResponse{
 		Success: true,

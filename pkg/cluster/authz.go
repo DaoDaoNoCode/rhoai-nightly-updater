@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // ErrUnauthenticated means the API server rejected the user's own token
@@ -19,7 +21,7 @@ var ErrUnauthenticated = errors.New("the OpenShift session token was rejected")
 
 // wrapUserTokenError marks a 401 from a request made with the user's token.
 func wrapUserTokenError(op string, err error) error {
-	if IsK8sError(err, 401) {
+	if kube.IsK8sError(err, 401) {
 		return fmt.Errorf("%s: %w: %w", op, ErrUnauthenticated, err)
 	}
 	return fmt.Errorf("%s: %w", op, err)
@@ -31,7 +33,7 @@ func wrapUserTokenError(op string, err error) error {
 // scopes, as oauth-proxy does. Identity and groups come from the token itself.
 // An empty namespace asks about the permission in all namespaces.
 func CheckUserPermissionWithToken(ctx context.Context, userToken, verb, resource, apiGroup, namespace string) (bool, error) {
-	userClient := NewClientWithContext(ctx, userToken)
+	userClient := kube.NewClientWithContext(ctx, userToken)
 	data, err := json.Marshal(map[string]any{
 		"apiVersion": "authorization.openshift.io/v1", "kind": "SubjectAccessReview",
 		"verb": verb, "resource": resource, "resourceAPIGroup": apiGroup,
@@ -121,7 +123,7 @@ func ReadSessionToken(ctx context.Context, userToken string) (*SessionToken, err
 	if err != nil {
 		return nil, err
 	}
-	userClient := NewUserClient(ctx, userToken)
+	userClient := kube.NewUserClient(ctx, userToken)
 	body, _, err := userClient.Get("/apis/oauth.openshift.io/v1/useroauthaccesstokens/" + name)
 	// Only a 404 about this very object says the sign-in is gone; a 404
 	// without details (the resource type is not served) says nothing.
@@ -150,14 +152,14 @@ func ReadSessionToken(ctx context.Context, userToken string) (*SessionToken, err
 // user:info OAuth scope, which oauth-proxy requests by default, and is the
 // same call oauth-proxy's OpenShift provider uses to identify the user.
 func LookupUserWithToken(ctx context.Context, userToken string) (string, error) {
-	userClient := NewClientWithContext(ctx, userToken)
+	userClient := kube.NewClientWithContext(ctx, userToken)
 	var user struct {
 		Metadata struct {
 			Name string `json:"name"`
 		} `json:"metadata"`
 	}
 	if err := userClient.GetInto("/apis/user.openshift.io/v1/users/~", &user); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return "", fmt.Errorf("parse user: %w", err)
 		}
 		return "", wrapUserTokenError("identify user", err)

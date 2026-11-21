@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // "Left over from an earlier release": objects that an older release left
@@ -614,7 +616,7 @@ func installedCSVOwnsCRD(c *Client, crd string) (string, bool, error) {
 		} `json:"spec"`
 	}
 	if err := c.GetInto(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, sub.InstalledCSV), &csv); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return sub.InstalledCSV, false, fmt.Errorf("parse CSV %s: %w", sub.InstalledCSV, err)
 		}
 		return sub.InstalledCSV, false, err
@@ -917,7 +919,7 @@ func readDeploymentForScan(c *Client, kind, namespace, name string) (workloadObj
 
 func decodeWorkload(body []byte, err error) (workloadObject, bool, bool, error) {
 	var w workloadObject
-	if isK8sNotFound(err) {
+	if kube.IsK8sNotFound(err) {
 		return w, false, true, nil
 	}
 	if err != nil {

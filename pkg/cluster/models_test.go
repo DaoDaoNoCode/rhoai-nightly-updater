@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -411,7 +412,7 @@ func TestModelsSetup_MaybeMissingPresetImageOffersItsFixAfterTheWindow(t *testin
 	mc := newModelsCluster(t)
 	mc.readyAfter = 0
 	mixed := `(Mirrors also failed: [quay.io/rhoai/vllm-cpu@sha256:a: unauthorized: access to the requested resource is not authorized]): registry.redhat.io/rhaii/vllm-cpu@sha256:a: reading manifest sha256:a in registry.redhat.io/rhaii/vllm-cpu: manifest unknown`
-	mc.f.putJSON("/api/v1/nodes/node-a", `{"metadata":{"creationTimestamp":"`+clk.Now().Add(-3*time.Hour).UTC().Format(time.RFC3339)+`"}}`)
+	mc.f.putJSON("/api/v1/nodes/node-a", `{"metadata":{"creationTimestamp":"`+kube.Clock().Now().Add(-3*time.Hour).UTC().Format(time.RFC3339)+`"}}`)
 	pod := map[string]any{
 		"metadata": map[string]any{"labels": map[string]any{"app.kubernetes.io/name": "qwen25-05b-instruct", "app.kubernetes.io/component": "llminferenceservice-workload"}},
 		"spec":     map[string]any{"nodeName": "node-a"},

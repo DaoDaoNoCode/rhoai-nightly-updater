@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -436,7 +437,7 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 		return nil, err
 	}
 	if argo := argoTrackingOf(c, dsc, dscGroup, "DataScienceCluster"); argo.managedBy() != "" {
-		return &types.OperationResponse{Success: false, Message: gitOpsRefusal("DataScienceCluster "+name, argo.managedBy(), "this change") + argo.unconfirmedNote(), ErrorCode: ErrorCodeGitOpsManaged}, nil
+		return &types.OperationResponse{Success: false, Message: gitOpsRefusal("DataScienceCluster "+name, argo.managedBy(), "this change") + argo.unconfirmedNote(), ErrorCode: kube.ErrorCodeGitOpsManaged}, nil
 	}
 	oldSpec, _ := dsc["spec"].(map[string]any)
 	apiVersion, _ := dsc["apiVersion"].(string)
@@ -553,6 +554,6 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 	}); err != nil {
 		return nil, err
 	}
-	RecordActivity(c, types.ActivityEntry{Timestamp: nowRFC3339(), User: getUser(c), Action: "repair-dsc", Detail: name + ": " + detail, Success: true})
+	RecordActivity(c, types.ActivityEntry{Timestamp: nowRFC3339(), User: kube.GetUser(c), Action: "repair-dsc", Detail: name + ": " + detail, Success: true})
 	return &types.OperationResponse{Success: true, Message: detail, Logs: []string{detail}}, nil
 }

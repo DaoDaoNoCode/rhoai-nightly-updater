@@ -6,13 +6,9 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
-
-// ErrorCodeProfileGitOps marks a request the gitops profile refuses
-// (docs/GITOPS.md, "Profiles"): the route is off in that profile, or Update
-// would have to take a path that profile does not have.
-const ErrorCodeProfileGitOps = "profile_gitops"
 
 // UpdateStreamGitOpsProfile is Update in the gitops profile, the profile the
 // Helm chart runs on clusters where Argo CD manages RHOAI. It runs only
@@ -68,7 +64,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 		return fail("Cannot check whether Argo CD manages the operator: "+err.Error()+". Nothing was changed.", errorCodeFromK8sErr(err))
 	}
 	if !g.catalogManaged() {
-		return fail(gitOpsProfileUnmanagedCatalog, ErrorCodeProfileGitOps)
+		return fail(gitOpsProfileUnmanagedCatalog, kube.ErrorCodeProfileGitOps)
 	}
 	logs = append(logs, fmt.Sprintf("OK: %s manages CatalogSource %s", sentenceStart(g.catalogManager()), CatalogName))
 
@@ -115,11 +111,11 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 		return fail("Cannot check whether Argo CD manages the operator: "+gitOpsErr.Error()+". Nothing was changed.", errorCodeFromK8sErr(gitOpsErr))
 	}
 	if gitOpsProblem != "" {
-		return fail(gitOpsProblem, ErrorCodeGitOpsManaged)
+		return fail(gitOpsProblem, kube.ErrorCodeGitOpsManaged)
 	}
 	if !gitOps.catalogManaged() {
 		// Argo CD and ACM stopped managing the catalog since the first read.
-		return fail(gitOpsProfileUnmanagedCatalog, ErrorCodeProfileGitOps)
+		return fail(gitOpsProfileUnmanagedCatalog, kube.ErrorCodeProfileGitOps)
 	}
 
 	// No verification catalog: the gitops profile never writes a
@@ -137,7 +133,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 		case c.Context().Err() != nil:
 			return &types.OperationResponse{Success: false, Message: "Operation stopped while waiting for the catalog", Logs: logs}, c.Context().Err()
 		case errors.As(preflightErr, &changed):
-			return fail("Update stopped: "+changed.Error()+". Nothing was changed.", ErrorCodeGitOpsManaged)
+			return fail("Update stopped: "+changed.Error()+". Nothing was changed.", kube.ErrorCodeGitOpsManaged)
 		case isCatalogImagePullError(preflightErr):
 			return fail(preflightErr.Error()+". Nothing was changed.", "catalog_image_pull")
 		}
@@ -166,7 +162,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	// Subscription and, on failure, the previous one (checked again on the
 	// live Subscription right before the first deletion).
 	if msg := gitOpsSubscriptionsProblem(buildSubscription(captured.subscriptionBase(), CatalogName, target.Channel), captured.subscription); msg != "" {
-		return fail(msg+" Nothing was changed.", ErrorCodeProfileGitOps)
+		return fail(msg+" Nothing was changed.", kube.ErrorCodeProfileGitOps)
 	}
 	emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "success", Message: "Prerequisites validated"})
 
@@ -224,7 +220,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 		return fail("Cannot check whether Argo CD manages the operator: "+err.Error(), errorCodeFromK8sErr(err))
 	}
 	if !g.catalogManaged() {
-		return fail(gitOpsProfileUnmanagedCatalog, ErrorCodeProfileGitOps)
+		return fail(gitOpsProfileUnmanagedCatalog, kube.ErrorCodeProfileGitOps)
 	}
 	logs = append(logs, fmt.Sprintf("OK: %s manages CatalogSource %s", sentenceStart(g.catalogManager()), CatalogName))
 	if active, err := DashboardDevActive(c); err == nil && active {
@@ -253,7 +249,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 		return fail("Cannot check whether Argo CD manages the operator: "+err.Error(), errorCodeFromK8sErr(err))
 	}
 	if problem != "" {
-		return fail(problem, ErrorCodeGitOpsManaged)
+		return fail(problem, kube.ErrorCodeGitOpsManaged)
 	}
 	live, found, err := readSubscriptionObject(c)
 	if err != nil {
@@ -261,7 +257,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 	}
 	if found {
 		if msg := gitOpsSubscriptionsProblem(buildSubscription(live, CatalogName, nonEmpty(channelOverride, "unknown")), live); msg != "" {
-			return fail(msg, ErrorCodeProfileGitOps)
+			return fail(msg, kube.ErrorCodeProfileGitOps)
 		}
 		logs = append(logs, "OK: The admission policy allows recreating the Subscription and restoring it")
 	}
@@ -353,7 +349,7 @@ func checkOperatorNamespaceAndGroup(c *Client) (ok, problem, errorCode string) {
 // verifyUpdateInstall reports install_mismatch (the operator is kept) when
 // the installed CSV's build annotations differ.
 func liveCatalogTarget(c *Client, image, override, changedBy string, emit func(UpdateStepEvent), logs *[]string) (catalogTarget, error) {
-	deadline := clk.Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
+	deadline := kube.Clock().Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
 	pull := pullFailureWatch{advice: gitOpsProfilePullAdvice}
 	last := ""
 	for {
@@ -372,10 +368,10 @@ func liveCatalogTarget(c *Client, image, override, changedBy string, emit func(U
 		if err := pull.check(c, CatalogName, image); err != nil {
 			return catalogTarget{}, err
 		}
-		if !clk.Now().Before(deadline) {
+		if !kube.Clock().Now().Before(deadline) {
 			return catalogTarget{}, errors.New(problem)
 		}
-		if err := clk.Sleep(c.Context(), CatalogPollInterval); err != nil {
+		if err := kube.Clock().Sleep(c.Context(), CatalogPollInterval); err != nil {
 			return catalogTarget{}, err
 		}
 	}

@@ -1,4 +1,8 @@
-package cluster
+// Package kube is the Kubernetes API client of the cluster packages: the
+// Client and its transport, the API errors and how a handler reports them,
+// the REST helpers, the clock every wait runs on and the cache registry.
+// It imports no other package of pkg/cluster.
+package kube
 
 import (
 	"bytes"
@@ -17,11 +21,11 @@ import (
 	"time"
 )
 
-// maxResponseBody is the upper limit on K8s API response body reads (50 MB).
-const maxResponseBody = 50 << 20
+// MaxResponseBody is the upper limit on K8s API response body reads (50 MB).
+const MaxResponseBody = 50 << 20
 
-// inClusterCAFile is the service account CA bundle mounted into every pod.
-const inClusterCAFile = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+// InClusterCAFile is the service account CA bundle mounted into every pod.
+const InClusterCAFile = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 
 // sharedTransport is a package-level http.Transport reused by all Client instances.
 // The CA is loaded once at init time; only the bearer token varies per Client.
@@ -74,7 +78,7 @@ func apiServerTLSConfig(getenv func(string) string, readFile func(string) ([]byt
 		tlsConfig.RootCAs = pool
 		return tlsConfig, ""
 	}
-	if pool, err := loadCAPool(readFile, inClusterCAFile); err == nil {
+	if pool, err := loadCAPool(readFile, InClusterCAFile); err == nil {
 		tlsConfig.RootCAs = pool
 		return tlsConfig, ""
 	}
@@ -135,9 +139,9 @@ func (e *K8sError) Error() string {
 	return msg
 }
 
-// parseK8sError tries to parse a Kubernetes Status object from the response body.
+// ParseK8sError tries to parse a Kubernetes Status object from the response body.
 // If parsing fails, it returns a generic error with the status code.
-func parseK8sError(body []byte, statusCode int) error {
+func ParseK8sError(body []byte, statusCode int) error {
 	var status struct {
 		Kind    string `json:"kind"`
 		Status  string `json:"status"`
@@ -253,7 +257,7 @@ func (c *Client) SetBookkeeping(b *Client) {
 // the app's, not the user's: they must be written whatever the user's
 // token may do, and also when it stops working mid-operation. Every
 // request to those ConfigMaps goes through it (TestBookkeepingUsesTheServiceAccount).
-func (c *Client) bookkeeping() *Client {
+func (c *Client) Bookkeeping() *Client {
 	if c.bookkeeper == nil {
 		return c
 	}
@@ -331,15 +335,15 @@ func (c *Client) Do(method, path, contentType string, body []byte, query url.Val
 
 	// One byte more than the limit tells a response over it from one that
 	// fits, which would otherwise come back cut and fail later as JSON.
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBody+1))
 	if err != nil {
 		return nil, resp.StatusCode, err
 	}
-	if len(respBody) > maxResponseBody {
-		return nil, resp.StatusCode, fmt.Errorf("%s %s: the API server's response is larger than %d MiB", method, path, maxResponseBody>>20)
+	if len(respBody) > MaxResponseBody {
+		return nil, resp.StatusCode, fmt.Errorf("%s %s: the API server's response is larger than %d MiB", method, path, MaxResponseBody>>20)
 	}
 	if resp.StatusCode >= 400 {
-		err := parseK8sError(respBody, resp.StatusCode)
+		err := ParseK8sError(respBody, resp.StatusCode)
 		if k, ok := errors.AsType[*K8sError](err); ok {
 			k.User = c.asUser
 		}
@@ -396,34 +400,6 @@ func (c *Client) Delete(path string) (int, error) {
 	return status, err
 }
 
-// namespacedPath builds a K8s API path for a namespaced resource.
-// Example: namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", "ns", "name")
-// returns "/apis/operators.coreos.com/v1alpha1/namespaces/ns/subscriptions/name".
-func namespacedPath(apiGroup, resource, namespace, name string) string {
-	prefix := "/apis"
-	if apiGroup == "v1" {
-		prefix = "/api"
-	}
-	if name == "" {
-		return fmt.Sprintf("%s/%s/namespaces/%s/%s", prefix, apiGroup, namespace, resource)
-	}
-	return fmt.Sprintf("%s/%s/namespaces/%s/%s/%s", prefix, apiGroup, namespace, resource, name)
-}
-
-// clusterPath builds a K8s API path for a cluster-scoped resource.
-// Example: clusterPath("config.openshift.io/v1", "clusterversions", "version")
-// returns "/apis/config.openshift.io/v1/clusterversions/version".
-func clusterPath(apiGroup, resource, name string) string {
-	prefix := "/apis"
-	if apiGroup == "v1" {
-		prefix = "/api"
-	}
-	if name == "" {
-		return fmt.Sprintf("%s/%s/%s", prefix, apiGroup, resource)
-	}
-	return fmt.Sprintf("%s/%s/%s/%s", prefix, apiGroup, resource, name)
-}
-
 // NetworkError wraps a transport-level error (DNS, TLS, connection refused)
 // so callers can identify network failures via errors.As.
 type NetworkError struct {
@@ -450,8 +426,8 @@ func IsNetworkError(err error) bool {
 	return errors.As(err, &netErr)
 }
 
-// getUser returns the authenticated username set on the client.
-func getUser(c *Client) string {
+// GetUser returns the authenticated username set on the client.
+func GetUser(c *Client) string {
 	if c.username != "" {
 		return c.username
 	}
@@ -488,15 +464,23 @@ func (c *Client) GetVersion() (string, error) {
 // "template out of date" hint (templateHint).
 const ErrorCodeForbiddenForUser = "forbidden_for_user"
 
+// registryTokenError is an error of a container registry's token endpoint
+// (the Quay token request's quayAuthError): CredentialsRejected tells
+// rejected credentials from an outage.
+type registryTokenError interface {
+	error
+	CredentialsRejected() bool
+}
+
 // HTTPStatusForError maps a cluster read error to the HTTP status and
 // errorCode a handler returns, so the UI can tell missing permissions,
 // throttling and outages apart instead of seeing a generic 500.
 func HTTPStatusForError(err error) (int, string) {
 	var k8sErr *K8sError
-	var quayErr *quayAuthError
+	var regErr registryTokenError
 	switch {
-	case errors.As(err, &quayErr):
-		if isQuayCredentialRejection(err) {
+	case errors.As(err, &regErr):
+		if regErr.CredentialsRejected() {
 			return http.StatusBadGateway, "registry_auth"
 		}
 		return http.StatusBadGateway, "registry_unavailable"

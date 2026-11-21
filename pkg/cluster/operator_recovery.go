@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -133,7 +134,7 @@ func operationLockLost(c *Client) bool {
 // (the activity log), which are written even after the lock was lost.
 func bookkeepingContext(c *Client, timeout time.Duration) (context.Context, context.CancelFunc) {
 	parent := context.Background()
-	end := clk.Now().Add(timeout)
+	end := kube.Clock().Now().Add(timeout)
 	if c != nil && c.Context() != nil {
 		parent = context.WithoutCancel(c.Context())
 		if d, ok := c.Context().Deadline(); ok {
@@ -142,7 +143,7 @@ func bookkeepingContext(c *Client, timeout time.Duration) (context.Context, cont
 			}
 		}
 	}
-	return clk.WithDeadline(parent, end)
+	return kube.Clock().WithDeadline(parent, end)
 }
 
 // operatorRecovery holds the desired state captured before an operation and
@@ -273,7 +274,7 @@ func captureOperatorRecovery(c *Client) (*operatorRecovery, error) {
 		var obj map[string]any
 		found, err := c.GetIntoOptional(resource.path, &obj)
 		if err != nil {
-			if isDecodeError(err) {
+			if kube.IsDecodeError(err) {
 				return nil, err
 			}
 			return nil, fmt.Errorf("capture operator recovery state: %w", err)
@@ -624,15 +625,15 @@ func deleteCSVByUIDAndWait(c *Client, csv rhoaiCSV) (gone bool, err error) {
 	path := csvPath(csv.Name)
 	if _, err := deleteWithUID(c, path, csv.UID); err != nil {
 		switch {
-		case isK8sNotFound(err):
+		case kube.IsK8sNotFound(err):
 			return true, nil
-		case isK8sConflict(err):
+		case kube.IsK8sConflict(err):
 			return false, errReplacedMeanwhile
 		default:
 			return false, err
 		}
 	}
-	deadline := clk.Now().Add(CSVDeletionTimeout)
+	deadline := kube.Clock().Now().Add(CSVDeletionTimeout)
 	for {
 		meta, found, err := readObjectMeta(c, path)
 		if err != nil {
@@ -641,10 +642,10 @@ func deleteCSVByUIDAndWait(c *Client, csv rhoaiCSV) (gone bool, err error) {
 		if !found || meta.UID != csv.UID {
 			return true, nil
 		}
-		if clk.Now().After(deadline) {
+		if kube.Clock().Now().After(deadline) {
 			return false, nil
 		}
-		if err := clk.Sleep(c.Context(), InstallPlanPollInterval); err != nil {
+		if err := kube.Clock().Sleep(c.Context(), InstallPlanPollInterval); err != nil {
 			return false, err
 		}
 	}
@@ -707,9 +708,9 @@ func deleteSubscriptionWithUID(c *Client, uid string) error {
 	}
 	if _, err := deleteWithUID(c, subscriptionPath(), uid); err != nil {
 		switch {
-		case isK8sNotFound(err):
+		case kube.IsK8sNotFound(err):
 			return nil
-		case isK8sConflict(err):
+		case kube.IsK8sConflict(err):
 			return errReplacedMeanwhile
 		default:
 			return err

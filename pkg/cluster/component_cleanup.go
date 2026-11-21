@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // The module CRs are in two API groups. RHOAI 3.6 serves most modules (and
@@ -150,7 +152,7 @@ func listModuleCRsIn(c *Client, api componentAPI, module string) ([]moduleCRItem
 func listKindCRs(c *Client, k componentKind) ([]moduleCRItem, error) {
 	var items []moduleCRItem
 	if err := c.ListInto(k.listPath(), &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse %s: %w", k.crd(), err)
 		}
 		return nil, fmt.Errorf("list %s: %w", k.crd(), err)
@@ -287,7 +289,7 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 			} `json:"metadata"`
 		}
 		if err := c.ListInto(listPath, &items); err != nil {
-			if isDecodeError(err) {
+			if kube.IsDecodeError(err) {
 				warnings = append(warnings, fmt.Sprintf("parse %s: %v", resource, err))
 				continue
 			}
@@ -331,7 +333,7 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 				"uid": m.UID, "resourceVersion": m.ResourceVersion, "finalizers": []string{},
 			}}); err != nil {
 				switch {
-				case isK8sConflict(err), isK8sNotFound(err), IsK8sError(err, 422):
+				case kube.IsK8sConflict(err), kube.IsK8sNotFound(err), kube.IsK8sError(err, 422):
 					warnings = append(warnings, fmt.Sprintf("%s changed or was replaced after it was checked; its finalizers were left untouched", id))
 				default:
 					warnings = append(warnings, fmt.Sprintf("remove finalizers from %s: %v", id, err))

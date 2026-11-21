@@ -6,25 +6,21 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/clock/clocktest"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // fakeCacheClock makes c tell its entries' ages by a fresh fake clock for
 // the test, so the test moves the cache past a lifetime with Advance. The
 // cache is emptied, since entries stored by the wall clock would not
 // compare with the fake time.
-func fakeCacheClock[K comparable, V any](t *testing.T, c *lruCache[K, V]) *clocktest.Fake {
+func fakeCacheClock[K comparable, V any](t *testing.T, c *kube.LRU[K, V]) *clocktest.Fake {
 	t.Helper()
 	f := clocktest.NewFake()
 	c.Purge()
-	c.mu.Lock()
-	prev := c.now
-	c.now = f.Now
-	c.mu.Unlock()
+	prev := c.SetNowForTest(f.Now)
 	t.Cleanup(func() {
 		c.Purge()
-		c.mu.Lock()
-		c.now = prev
-		c.mu.Unlock()
+		c.SetNowForTest(prev)
 	})
 	return f
 }
@@ -39,7 +35,7 @@ type slowTransport struct {
 }
 
 func (s slowTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if err := clk.Sleep(r.Context(), s.latency); err != nil {
+	if err := kube.Clock().Sleep(r.Context(), s.latency); err != nil {
 		return nil, err
 	}
 	return s.base.RoundTrip(r)
@@ -48,12 +44,12 @@ func (s slowTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 // withLatency makes every request of c take latency on clk.
 func withLatency(c *Client, latency time.Duration) *Client {
 	cp := *c
-	hc := *c.httpClient
+	hc := *c.TestOptions().HTTPClient
 	base := hc.Transport
 	if base == nil {
 		base = http.DefaultTransport
 	}
 	hc.Transport = slowTransport{base: base, latency: latency}
-	cp.httpClient = &hc
+	editTestClient(&cp, func(o *testClientOptions) { o.HTTPClient = &hc })
 	return &cp
 }

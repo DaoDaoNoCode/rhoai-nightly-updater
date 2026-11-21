@@ -48,6 +48,7 @@ import (
 const (
 	modulePath    = "github.com/juntwang/rhoai-nightly-updater"
 	clusterPkg    = modulePath + "/pkg/cluster"
+	kubePkg       = clusterPkg + "/internal/kube"
 	apiPkg        = modulePath + "/pkg/api"
 	rbacGitOpsRel = "../../deploy/rbac-gitops.yaml"
 )

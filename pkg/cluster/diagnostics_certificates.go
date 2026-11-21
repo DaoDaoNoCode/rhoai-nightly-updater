@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // Certificates that cert-manager never issued.
@@ -241,7 +243,7 @@ func checkCertificates(c *Client) checkOutput {
 		}
 		found, err := c.GetIntoOptional(namespacedPath("cert-manager.io/v1", "certificates", ns, ""), &list)
 		if err != nil {
-			if isDecodeError(err) {
+			if kube.IsDecodeError(err) {
 				errs = append(errs, fmt.Sprintf("parse certificates in %s: %v", ns, err))
 				continue
 			}

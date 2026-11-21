@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -356,7 +357,7 @@ func parseQuantity(s string) (float64, bool) {
 
 // capacityCache keeps the capacity check for a minute: it lists every
 // pod of the cluster.
-var capacityCache = newLRU[string, string](16)
+var capacityCache = kube.NewLRU[string, string](16)
 
 const capacityCacheTTL = time.Minute
 
@@ -561,7 +562,7 @@ func memoryWords(q string) string {
 
 // planCache keeps the status's image plan for a minute (it reads the
 // Subscription and the mirror sets).
-var planCache = newLRU[string, imagePlan](8)
+var planCache = kube.NewLRU[string, imagePlan](8)
 
 // getModelsStatus reports what a model setup needs and the catalog's
 // models in the visible projects. Unknowns stay empty, never a block.

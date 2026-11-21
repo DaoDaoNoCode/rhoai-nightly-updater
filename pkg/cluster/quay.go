@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -226,10 +227,16 @@ func (e *quayAuthError) Error() string {
 	return fmt.Sprintf("quay auth returned %d: %s", e.StatusCode, e.Body)
 }
 
+// CredentialsRejected reports whether Quay refused the credentials (401 or
+// 403), not answered with an outage (HTTPStatusForError).
+func (e *quayAuthError) CredentialsRejected() bool {
+	return e.StatusCode == http.StatusUnauthorized || e.StatusCode == http.StatusForbidden
+}
+
 // isQuayCredentialRejection reports whether err means Quay refused the credentials.
 func isQuayCredentialRejection(err error) bool {
 	var authErr *quayAuthError
-	return errors.As(err, &authErr) && (authErr.StatusCode == http.StatusUnauthorized || authErr.StatusCode == http.StatusForbidden)
+	return errors.As(err, &authErr) && authErr.CredentialsRejected()
 }
 
 func getQuayBearerToken(ctx context.Context, httpClient *http.Client, basicAuth string) (string, error) {
@@ -280,8 +287,8 @@ func fetchQuayToken(ctx context.Context, httpClient *http.Client, basicAuth stri
 }
 
 var (
-	quayTokenCache  = newLRU[string, string](1024)
-	quayTokenFlight flightGroup[string]
+	quayTokenCache  = kube.NewLRU[string, string](1024)
+	quayTokenFlight kube.FlightGroup[string]
 )
 
 // quayTokenBatch bounds the scopes of one token. The token lists every
@@ -430,8 +437,8 @@ func getTagDigest(ctx context.Context, httpClient *http.Client, bearerToken, tag
 // Nightly tags such as rhoai-3.6 are re-pushed with every build, so a tag's
 // digest is reused for at most the caller's maxAge.
 var (
-	tagDigestCache  = newLRU[string, string](512)
-	tagDigestFlight flightGroup[string]
+	tagDigestCache  = kube.NewLRU[string, string](512)
+	tagDigestFlight kube.FlightGroup[string]
 )
 
 // cachedTagDigest resolves tag to its current digest, reusing a lookup no
@@ -601,7 +608,7 @@ func probeTag(ctx context.Context, httpClient *http.Client, bearerToken, tag str
 	var lastErr error
 	for attempt := range 2 {
 		if attempt > 0 {
-			if err := clk.Sleep(ctx, 500*time.Millisecond); err != nil {
+			if err := kube.Clock().Sleep(ctx, 500*time.Millisecond); err != nil {
 				return false, err
 			}
 		}

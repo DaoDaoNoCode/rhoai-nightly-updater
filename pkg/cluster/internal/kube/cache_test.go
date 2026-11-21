@@ -1,4 +1,4 @@
-package cluster
+package kube
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 )
 
 func TestLRUEvictsLeastRecentlyUsedOnly(t *testing.T) {
-	c := newLRU[string, int](3)
+	c := NewLRU[string, int](3)
 	c.Add("a", 1, 0)
 	c.Add("b", 2, 0)
 	c.Add("c", 3, 0)
@@ -47,7 +47,7 @@ func TestLRUEvictsLeastRecentlyUsedOnly(t *testing.T) {
 
 func TestLRUExpiry(t *testing.T) {
 	now := time.Unix(1000, 0)
-	c := newLRU[string, string](10)
+	c := NewLRU[string, string](10)
 	c.now = func() time.Time { return now }
 	c.Add("ttl", "x", time.Minute)
 	c.Add("forever", "y", 0)
@@ -66,7 +66,7 @@ func TestLRUExpiry(t *testing.T) {
 }
 
 func TestLRUConcurrentUse(t *testing.T) {
-	c := newLRU[int, int](50)
+	c := NewLRU[int, int](50)
 	var wg sync.WaitGroup
 	for g := range 8 {
 		wg.Add(1)
@@ -89,7 +89,7 @@ func TestFlightGroupCollapsesConcurrentCalls(t *testing.T) {
 }
 
 func flightGroupCollapsesConcurrentCalls(t *testing.T) {
-	var g flightGroup[int]
+	var g FlightGroup[int]
 	var calls atomic.Int32
 	release := make(chan struct{})
 	var wg sync.WaitGroup
@@ -132,7 +132,7 @@ func TestFlightGroupWaiterRetriesWhenLeaderCanceled(t *testing.T) {
 }
 
 func flightGroupWaiterRetriesWhenLeaderCanceled(t *testing.T) {
-	var g flightGroup[string]
+	var g FlightGroup[string]
 	leaderCtx, cancelLeader := context.WithCancel(context.Background())
 	started := make(chan struct{})
 	leaderDone := make(chan error, 1)
@@ -168,7 +168,7 @@ func TestFlightGroupWaiterHonorsOwnContext(t *testing.T) {
 }
 
 func flightGroupWaiterHonorsOwnContext(t *testing.T) {
-	var g flightGroup[int]
+	var g FlightGroup[int]
 	block := make(chan struct{})
 	defer close(block)
 	go func() {

@@ -6,6 +6,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // The annotations the dashboard's deploy wizard writes for the hardware
@@ -144,7 +146,7 @@ func pickHardwareProfile(c *Client, entry catalogModel) (hardwareProfile, string
 	}
 	var items []hardwareProfileObject
 	if err := c.ListInto(namespacedPath("infrastructure.opendatahub.io/v1", "hardwareprofiles", ns, ""), &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return hardwareProfile{}, "the hardware profiles cannot be parsed"
 		}
 		return hardwareProfile{}, fmt.Sprintf("the hardware profiles in %s cannot be read (%v)", ns, err)

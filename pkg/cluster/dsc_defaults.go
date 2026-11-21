@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"gopkg.in/yaml.v3"
 )
 
@@ -144,7 +145,7 @@ func getInstalledOperator(c *Client) (*installedOperator, error) {
 			}
 			return op, nil
 		}
-	} else if !isK8sNotFound(err) {
+	} else if !kube.IsK8sNotFound(err) {
 		return nil, err
 	}
 	csv, err := getCSV(c)

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -579,7 +580,7 @@ func podMatchesDeployment(c *Client, pod types.PodInfo, dep types.DeploymentInfo
 // controller changes only on adoption or release, so a short TTL bounds how
 // long a change goes unseen, while the pods of one ReplicaSet and every
 // poll in that window share one lookup.
-var replicaSetOwnerCache = newLRU[string, string](512)
+var replicaSetOwnerCache = kube.NewLRU[string, string](512)
 
 // ReplicaSetOwnerTTL is how long a ReplicaSet's controller is cached.
 var ReplicaSetOwnerTTL = time.Minute
@@ -708,7 +709,7 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 		// Argo CD only: an Argo CD application that installs the operator
 		// (the odh-gitops chart) renders the DSC too. An ACM policy that
 		// enforces the catalog says nothing about the DSC.
-		return &types.OperationResponse{Success: false, ErrorCode: ErrorCodeGitOpsManaged, Logs: logs,
+		return &types.OperationResponse{Success: false, ErrorCode: kube.ErrorCodeGitOpsManaged, Logs: logs,
 			Message: fmt.Sprintf("Argo CD application %q manages the RHOAI operator here and creates the DataScienceCluster from Git; one made by hand would be adopted and overwritten on its next sync. Define the DataScienceCluster in Git instead. Nothing was changed.", app)}, nil
 	}
 	switch read.State {
@@ -742,7 +743,7 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Failed to encode DSC: %v", err), Logs: logs, ErrorCode: "internal"}, nil
 	}
 	_, _, createErr := c.Post("/apis/"+apiVersion+"/datascienceclusters?fieldManager=rhoai-nightly-updater", body)
-	if isK8sConflict(createErr) {
+	if kube.IsK8sConflict(createErr) {
 		logs = append(logs, "DataScienceCluster already exists (created concurrently)")
 		return &types.OperationResponse{Success: true, Message: "DataScienceCluster already exists", Logs: logs}, nil
 	}
@@ -760,13 +761,13 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 	// Step 3: Record activity
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),
-		User:      getUser(c),
+		User:      kube.GetUser(c),
 		Action:    "create-dsc",
 		Detail:    "default-dsc with default components",
 		Success:   true,
 	})
 
-	slog.Info("dsc created", "user", getUser(c))
+	slog.Info("dsc created", "user", kube.GetUser(c))
 
 	return &types.OperationResponse{
 		Success: true,
@@ -814,7 +815,7 @@ func getDeployments(c *Client, namespace string) ([]types.DeploymentInfo, error)
 	path := namespacedPath("apps/v1", "deployments", namespace, "")
 	var list deploymentList
 	if err := c.GetInto(path, &list); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parsing deployments: %w", err)
 		}
 		return nil, fmt.Errorf("fetching deployments in %s: %w", namespace, err)

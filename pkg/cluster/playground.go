@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -297,7 +298,7 @@ func (a genAIAPI) call(method, path, ns string, in, out any) error {
 		return fmt.Errorf("cannot reach the dashboard's gen-ai API: %w", err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, kube.MaxResponseBody))
 	if err != nil {
 		return fmt.Errorf("read the answer of the dashboard's gen-ai API: %w", err)
 	}
@@ -491,11 +492,11 @@ func listMaaSPlaygroundModels(c *Client) []types.PlaygroundModel {
 		} `json:"status"`
 	}
 	if err := c.ListInto("/apis/"+maasAPI(c)+"/maasmodelrefs", &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			slog.Debug("cannot parse the MaaS model references", "error", err)
 			return nil
 		}
-		if !isK8sNotFound(err) {
+		if !kube.IsK8sNotFound(err) {
 			slog.Debug("cannot list the MaaS models for the playground", "error", err)
 		}
 		return nil
@@ -592,7 +593,7 @@ func readPlaygroundServer(c *Client, project, name string) (objectMeta, bool, er
 		return objectMeta{}, false, nil
 	}
 	r, err := getServed(c, "ogx.io", "/apis/ogx.io/%s/namespaces/"+project+"/ogxservers/"+playgroundServerName, []string{"v1beta1"})
-	if isK8sNotFound(err) {
+	if kube.IsK8sNotFound(err) {
 		return objectMeta{}, false, nil
 	}
 	if err != nil {
@@ -639,9 +640,9 @@ func readPlaygroundRecords(c *Client) (map[string]playgroundRecord, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	found, err := c.Bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
 		}
 		return nil, fmt.Errorf("read this tool's playground records: %w", err)
@@ -673,7 +674,7 @@ func writePlaygroundRecords(c *Client, records map[string]playgroundRecord) erro
 		"data":       map[string]any{playgroundRecordKey: string(data)},
 	})
 	query := url.Values{"fieldManager": {playgroundRecordManager}, "force": {"true"}}
-	if _, _, err := c.bookkeeping().Do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if _, _, err := c.Bookkeeping().Do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
 		return fmt.Errorf("record this tool's playgrounds: %w", err)
 	}
 	return nil
@@ -701,7 +702,7 @@ func setPlaygroundRecord(c *Client, project string, rec *playgroundRecord) error
 func newPlaygroundRecord(c *Client) *playgroundRecord {
 	// Seconds, as creationTimestamp: a server made in the same second as
 	// the request counts as made after it.
-	return &playgroundRecord{RequestedAt: clk.Now().UTC().Format(time.RFC3339), By: getUser(c)}
+	return &playgroundRecord{RequestedAt: kube.Clock().Now().UTC().Format(time.RFC3339), By: kube.GetUser(c)}
 }
 
 // --- cluster parts (ServiceAccount reads) -------------------------------------------
@@ -753,7 +754,7 @@ func genAIUIState(c *Client) string {
 	}
 	found, err := c.GetIntoOptional(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, genAIUIDeployment), &d)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return ""
 		}
 		slog.Debug("cannot read the gen-ai-ui Deployment", "error", err)
@@ -784,7 +785,7 @@ func playgroundClusterParts(c *Client, st *types.PlaygroundStatus) {
 
 // --- status --------------------------------------------------------------------------
 
-var playgroundStatusCache = newLRU[string, *types.PlaygroundStatus](64)
+var playgroundStatusCache = kube.NewLRU[string, *types.PlaygroundStatus](64)
 
 // playgroundStatusGen is part of every cache key: a change bumps it, so
 // the next status reads afresh.
@@ -1002,7 +1003,7 @@ type playgroundFanOut struct {
 	truncated bool
 }
 
-var playgroundFanOutCache = newLRU[string, *playgroundFanOut](16)
+var playgroundFanOutCache = kube.NewLRU[string, *playgroundFanOut](16)
 
 func readPlaygroundFanOut(c *Client, api genAIAPI, projects []string, records map[string]playgroundRecord) *playgroundFanOut {
 	key := fmt.Sprintf("%d|%s", playgroundStatusGen.Load(), tokenKey(api.token))
@@ -1129,7 +1130,7 @@ func (p *playgroundRun) fail(id, msg, code, activity string) (*types.OperationRe
 		p.emit(UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: code})
 	}
 	p.logs = append(p.logs, msg)
-	slog.Warn("playground operation stopped", "step", id, "reason", activity, "project", p.project, "user", getUser(p.c))
+	slog.Warn("playground operation stopped", "step", id, "reason", activity, "project", p.project, "user", kube.GetUser(p.c))
 	p.record(fmt.Sprintf("project=%s (%s)", p.project, activity), false)
 	return &types.OperationResponse{Success: false, Message: msg, Logs: p.logs, ErrorCode: code}, nil
 }
@@ -1137,7 +1138,7 @@ func (p *playgroundRun) fail(id, msg, code, activity string) (*types.OperationRe
 func (p *playgroundRun) record(detail string, success bool) {
 	RecordActivity(p.c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),
-		User:      getUser(p.c),
+		User:      kube.GetUser(p.c),
 		Action:    p.action + "-playground",
 		Detail:    detail,
 		Success:   success,
@@ -1381,18 +1382,18 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 		p.step("install", "running", fmt.Sprintf("Asking the dashboard to set up the playground in %s...", p.project))
 		// Each attempt runs to its end; the retries stop at the bound.
 		var installErr error
-		deadline := clk.Now().Add(PlaygroundInstallRetryTimeout)
+		deadline := kube.Clock().Now().Add(PlaygroundInstallRetryTimeout)
 		said := false
 		for {
 			installErr = p.api.call(http.MethodPost, "/lsd/install", p.project, body, nil)
-			if genAIStatus(installErr) != http.StatusConflict || !clk.Now().Before(deadline) {
+			if genAIStatus(installErr) != http.StatusConflict || !kube.Clock().Now().Before(deadline) {
 				break
 			}
 			if !said {
 				said = true
 				p.step("install", "running", fmt.Sprintf("The previous playground's database in %s is still being removed; trying again every %s (up to %s)...", p.project, PlaygroundInstallRetryPoll, clockText(PlaygroundInstallRetryTimeout)))
 			}
-			if err := clk.Sleep(p.c.Context(), PlaygroundInstallRetryPoll); err != nil {
+			if err := kube.Clock().Sleep(p.c.Context(), PlaygroundInstallRetryPoll); err != nil {
 				installErr = err
 				break
 			}

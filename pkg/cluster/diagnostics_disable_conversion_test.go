@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -66,7 +67,7 @@ func newConvObjectsWorld(t *testing.T, noUser bool, crds ...string) *convObjects
 	f.json("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", http.StatusOK, `{"items":[`+strings.Join(crds, ",")+`]}`)
 	if !noUser {
 		u := *c
-		u.token, u.asUser = "conversion-user-token", true
+		editTestClient(&u, func(o *testClientOptions) { o.Token, o.AsUser = "conversion-user-token", true })
 		c.SetSignedInUser(&u)
 	}
 	return w
@@ -156,7 +157,7 @@ func TestConversionBlockerFailsClosedWhenTheListFails(t *testing.T) {
 		status           int
 	}{
 		{"forbidden", `{"kind":"Status","status":"Failure","reason":"Forbidden","code":403,"message":"mcpservers.mcp.x-k8s.io is forbidden"}`,
-			"k8s API error 403 (Forbidden): mcpservers.mcp.x-k8s.io is forbidden; " + UserForbiddenMessage, http.StatusForbidden},
+			"k8s API error 403 (Forbidden): mcpservers.mcp.x-k8s.io is forbidden; " + kube.UserForbiddenMessage, http.StatusForbidden},
 		{"conversion webhook down", `{"kind":"Status","status":"Failure","reason":"InternalError","code":500,"message":"conversion webhook for mcp.x-k8s.io/v1alpha1, Kind=MCPServer failed: service \"mcp-lifecycle-operator-webhook-service\" not found"}`,
 			`conversion webhook for mcp.x-k8s.io/v1alpha1, Kind=MCPServer failed: service "mcp-lifecycle-operator-webhook-service" not found`, http.StatusInternalServerError},
 		{"timeout", `{"kind":"Status","status":"Failure","reason":"Timeout","code":504,"message":"the server was unable to return a response in the time allotted"}`,
@@ -420,7 +421,7 @@ func TestConversionWebhookComponentRemovalFollowsItsObjects(t *testing.T) {
 		t.Fatalf("plan blocker %q", why)
 	}
 	user := c.SignedInUser()
-	user.signedInUser = nil
+	editTestClient(user, func(o *testClientOptions) { o.SignedInUser = nil })
 	res, _ := SetDSCManagementState(user, types.DSCToggleRequest{Name: "default-dsc", Path: "sparkoperator", From: "Managed", To: "Removed", UID: plan.UID, Token: plan.Token})
 	if res.Success || res.ErrorCode != "prerequisites" || !strings.Contains(strings.Join(res.Logs, " "), "team-a/pi") {
 		t.Fatalf("change = %+v", res)

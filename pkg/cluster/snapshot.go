@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -66,7 +67,7 @@ func SaveDeploymentSnapshot(c *Client) error {
 		},
 	}
 
-	_, _, err = c.bookkeeping().Apply(cmPath, cm)
+	_, _, err = c.Bookkeeping().Apply(cmPath, cm)
 	if err != nil {
 		return fmt.Errorf("failed to save snapshot: %w", err)
 	}
@@ -78,9 +79,9 @@ func GetDeploymentSnapshot(c *Client) (map[string]string, string) {
 	ns := getActivityNamespace()
 	cmPath := namespacedPath("v1", "configmaps", ns, snapshotConfigMapName)
 
-	body, _, err := c.bookkeeping().Get(cmPath)
+	body, _, err := c.Bookkeeping().Get(cmPath)
 	if err != nil {
-		if !isK8sNotFound(err) {
+		if !kube.IsK8sNotFound(err) {
 			slog.Warn("snapshot: failed to read", "error", err)
 		}
 		return nil, ""
@@ -173,7 +174,7 @@ func saveSubscriptionSnapshot(c *Client, sub map[string]any) error {
 		"data":       map[string]any{subscriptionSnapshotKey: string(data)},
 	})
 	query := url.Values{"fieldManager": {subscriptionSnapshotManager}, "force": {"true"}}
-	if _, _, err := c.bookkeeping().Do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if _, _, err := c.Bookkeeping().Do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
 		return fmt.Errorf("record the operator Subscription: %w", err)
 	}
 	return nil
@@ -185,9 +186,9 @@ func loadSubscriptionSnapshot(c *Client) (*subscriptionSnapshot, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	found, err := c.Bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
 		}
 		return nil, fmt.Errorf("read the recorded operator Subscription: %w", err)

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -105,7 +106,7 @@ func TestGetSummaryNotInstalledAndErrors(t *testing.T) {
 
 	k8s, c := newResourceFake(t)
 	k8s.fail["GET /apis/operators.coreos.com/v1alpha1/namespaces/redhat-ods-operator/subscriptions/rhods-operator"] = 403
-	if _, err := GetSummary(c); err == nil || !IsK8sError(err, 403) {
+	if _, err := GetSummary(c); err == nil || !kube.IsK8sError(err, 403) {
 		t.Fatalf("a refused Subscription read: %v", err)
 	}
 }

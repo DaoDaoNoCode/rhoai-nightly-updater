@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // Where RHOAI runs its applications and its monitoring stack, read from the
@@ -40,7 +42,7 @@ type rhoaiNamespaces struct {
 // up within this time. Only successful reads are cached.
 const rhoaiNamespacesTTL = 30 * time.Second
 
-var rhoaiNamespacesCache = newLRU[string, rhoaiNamespaces](16)
+var rhoaiNamespacesCache = kube.NewLRU[string, rhoaiNamespaces](16)
 
 // discoverRHOAINamespaces returns the DSCInitialization's namespaces,
 // cached per cluster for rhoaiNamespacesTTL. err is errNoDSCInitialization
@@ -64,7 +66,7 @@ func discoverRHOAINamespaces(c *Client) (rhoaiNamespaces, error) {
 	return ns, err
 }
 
-var rhoaiNamespacesFlight flightGroup[rhoaiNamespaces]
+var rhoaiNamespacesFlight kube.FlightGroup[rhoaiNamespaces]
 
 func readRHOAINamespaces(c *Client, key string) (rhoaiNamespaces, error) {
 	dscis, apiFound, err := listFirstServed(c, dsciGroup, "/apis/dscinitialization.opendatahub.io/%s/dscinitializations", "dscinitializations", dsciFallbackVersions)

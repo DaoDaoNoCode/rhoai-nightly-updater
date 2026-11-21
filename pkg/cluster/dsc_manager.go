@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -304,11 +305,11 @@ func (v *dscView) readOnlyReason() (string, string) {
 	case v.count > 1:
 		return fmt.Sprintf("There are %d DataScienceClusters; the operator allows one. Delete the extra ones in the OpenShift console first.", v.count), "prerequisites"
 	case v.argoApp != "":
-		return gitOpsRefusal("DataScienceCluster "+v.name, v.argoApp, "a change made here") + v.argo.unconfirmedNote(), ErrorCodeGitOpsManaged
+		return gitOpsRefusal("DataScienceCluster "+v.name, v.argoApp, "a change made here") + v.argo.unconfirmedNote(), kube.ErrorCodeGitOpsManaged
 	case v.acm:
-		return fmt.Sprintf("DataScienceCluster %s is enforced by %s, which puts back what differs from the policy. Change the policy instead. Nothing was changed.", v.name, acmCatalogManager), ErrorCodeGitOpsManaged
+		return fmt.Sprintf("DataScienceCluster %s is enforced by %s, which puts back what differs from the policy. Change the policy instead. Nothing was changed.", v.name, acmCatalogManager), kube.ErrorCodeGitOpsManaged
 	case v.helm != "":
-		return fmt.Sprintf("DataScienceCluster %s is managed by Helm (release %s): the next helm upgrade would undo a change made here, and a hard reset would replace the object Helm tracks. Change the chart's values instead. Nothing was changed.", v.name, v.helm), ErrorCodeGitOpsManaged
+		return fmt.Sprintf("DataScienceCluster %s is managed by Helm (release %s): the next helm upgrade would undo a change made here, and a hard reset would replace the object Helm tracks. Change the chart's values instead. Nothing was changed.", v.name, v.helm), kube.ErrorCodeGitOpsManaged
 	case v.meta.DeletionTimestamp != "":
 		return fmt.Sprintf("DataScienceCluster %s is being deleted (finalizers: %s). Nothing was changed.", v.name, nonEmpty(strings.Join(v.meta.Finalizers, ", "), "none")), "conflict"
 	case v.crdErr != nil:
@@ -1235,11 +1236,11 @@ func (v *dscView) write(c *Client, p *dscPlanned) (res *types.OperationResponse,
 	}, p.ops...)
 	path := dscObjectPath(v.version, v.name)
 	if _, err := patchDSCFields(c, path, ops, true); err != nil {
-		return dscWriteError(err, true), IsK8sError(err, http.StatusUnprocessableEntity)
+		return dscWriteError(err, true), kube.IsK8sError(err, http.StatusUnprocessableEntity)
 	}
 	body, err := patchDSCFields(c, path, ops, false)
 	if err != nil {
-		return dscWriteError(err, false), IsK8sError(err, http.StatusUnprocessableEntity)
+		return dscWriteError(err, false), kube.IsK8sError(err, http.StatusUnprocessableEntity)
 	}
 	var after map[string]any
 	if err := json.Unmarshal(body, &after); err != nil {
@@ -1356,7 +1357,7 @@ func (v *dscView) setManagementState(c *Client, req types.DSCToggleRequest, acti
 	}
 	detail := v.name + ": " + changeSummary(p.plan.Changes)
 	recordActivity(c, activity, detail, true)
-	slog.Info("dsc management state set", "dsc", v.name, "path", req.Path, "to", req.To, "user", getUser(c))
+	slog.Info("dsc management state set", "dsc", v.name, "path", req.Path, "to", req.To, "user", kube.GetUser(c))
 	msg := "Set " + changeSummary(p.plan.Changes) + "."
 	if len(p.plan.Warnings) > 0 {
 		msg += " " + strings.Join(p.plan.Warnings, " ")
@@ -1426,7 +1427,7 @@ func runPlanned(c *Client, req types.DSCPlanRequest, action, activity string) (*
 		detail += "; kept " + strings.Join(p.plan.Kept, ", ")
 	}
 	recordActivity(c, activity, detail, true)
-	slog.Info("dsc changed", "action", action, "dsc", v.name, "user", getUser(c))
+	slog.Info("dsc changed", "action", action, "dsc", v.name, "user", kube.GetUser(c))
 	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Changed %s.%s", changeSummary(p.plan.Changes), keptText(p.plan.Kept)), Logs: []string{detail}}, nil
 }
 

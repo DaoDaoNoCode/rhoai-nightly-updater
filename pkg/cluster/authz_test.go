@@ -10,6 +10,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // fakeAPIServer points NewClientWithContext at an httptest TLS server.
@@ -20,9 +22,7 @@ func fakeAPIServer(t *testing.T, h http.HandlerFunc) {
 	host, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
 	t.Setenv("KUBERNETES_SERVICE_HOST", host)
 	t.Setenv("KUBERNETES_SERVICE_PORT", port)
-	previous := sharedTransport
-	sharedTransport = srv.Client().Transport.(*http.Transport)
-	t.Cleanup(func() { sharedTransport = previous })
+	t.Cleanup(kube.SetTransportForTest(srv.Client().Transport.(*http.Transport)))
 }
 
 func TestPermissionReviewUsesTokenOwnerFullRBAC(t *testing.T) {

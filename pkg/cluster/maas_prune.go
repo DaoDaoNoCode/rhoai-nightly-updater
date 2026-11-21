@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -135,7 +136,7 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 			continue
 		}
 		path, _ := maasModelRefPath(c, g.pub.project, g.pub.model)
-		if _, err := deleteWithUID(c, path, ref.Metadata.UID); err != nil && !isK8sNotFound(err) {
+		if _, err := deleteWithUID(c, path, ref.Metadata.UID); err != nil && !kube.IsK8sNotFound(err) {
 			failed = append(failed, fmt.Errorf("delete MaaSModelRef %s: %w", g.pub.key(), err))
 			continue
 		}
@@ -177,7 +178,7 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 				continue
 			}
 			if len(live) == 0 {
-				if _, err := deleteWithUID(c, accessPath, meta.UID); err != nil && !isK8sNotFound(err) {
+				if _, err := deleteWithUID(c, accessPath, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 					failed = append(failed, fmt.Errorf("delete %s: %w", w.kind, err))
 					continue
 				}
@@ -294,7 +295,7 @@ func updateToolObject(c *Client, desc, path string, obj map[string]any, current 
 				return nil
 			}
 		}
-		if !isK8sConflict(err) {
+		if !kube.IsK8sConflict(err) {
 			return err
 		}
 		var found bool
@@ -339,7 +340,7 @@ func PruneGoneMaaSPublicationsInBackground(c *Client) {
 	}
 	recordPruneActivity(c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),
-		User:      getUser(c),
+		User:      kube.GetUser(c),
 		Action:    "prune-maas-publications",
 		Detail:    truncateText(detail, 300),
 		Success:   err == nil,

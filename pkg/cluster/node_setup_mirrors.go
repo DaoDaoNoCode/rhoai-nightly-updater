@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // The image mirror objects that the nodes' /etc/containers/registries.conf
@@ -133,7 +135,7 @@ func listICSPRules(c *Client) ([]mirrorRule, error) {
 	}
 	found, err := c.GetIntoOptional(clusterPath("operator.openshift.io/v1alpha1", "imagecontentsourcepolicies", ""), &list)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse ImageContentSourcePolicies: %w", err)
 		}
 		return nil, err
@@ -169,7 +171,7 @@ func listITMSRules(c *Client) ([]mirrorRule, error) {
 	}
 	found, err := c.GetIntoOptional(clusterPath("config.openshift.io/v1", "imagetagmirrorsets", ""), &list)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse ImageTagMirrorSets: %w", err)
 		}
 		return nil, err

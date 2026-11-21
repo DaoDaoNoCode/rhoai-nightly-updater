@@ -15,6 +15,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // The MLflow samples call a server that is not the Kubernetes API: MLflow,
@@ -54,7 +56,7 @@ func samplesTLSConfig(getenv func(string) string, readFile func(string) ([]byte,
 	if err != nil || pool == nil {
 		pool = x509.NewCertPool()
 	}
-	for _, f := range []string{getenv("KUBE_CA_FILE"), inClusterCAFile} {
+	for _, f := range []string{getenv("KUBE_CA_FILE"), kube.InClusterCAFile} {
 		if f == "" {
 			continue
 		}
@@ -285,7 +287,7 @@ func (a *sampleAPI) send(method, path string, query url.Values, contentType stri
 		return fmt.Errorf("cannot reach %s: %w", a.server, err)
 	}
 	defer resp.Body.Close()
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, kube.MaxResponseBody))
 	if err != nil {
 		return fmt.Errorf("read the answer of %s: %w", a.server, err)
 	}

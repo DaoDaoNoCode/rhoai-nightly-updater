@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -195,7 +196,7 @@ func listDSPAs(c *Client, namespace string) ([]dspaInfo, error) {
 	}
 	found, err := c.GetIntoOptional(dspaCollectionPath(namespace), &list)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse pipeline server list: %w", err)
 		}
 		return nil, fmt.Errorf("list pipeline servers: %w", err)
@@ -593,7 +594,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	}
 	logs = append(logs, "The pipeline server will take 1-3 minutes to become ready.")
 
-	slog.Info("pipeline server setup", "project", project, "user", getUser(c))
+	slog.Info("pipeline server setup", "project", project, "user", kube.GetUser(c))
 	recordActivity(c, "setup-pipeline-server", fmt.Sprintf("project=%s dspa=%s", project, dspaName), true)
 
 	return &types.OperationResponse{
@@ -721,9 +722,9 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 			}
 		}
 		logs = append(logs, fmt.Sprintf("Deleting pipeline server %s...", target.Meta.Name))
-		if _, delErr := deleteWithUID(c, dspaPath, target.Meta.UID); delErr != nil && !isK8sNotFound(delErr) {
+		if _, delErr := deleteWithUID(c, dspaPath, target.Meta.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
 			code := errorCodeFromK8sErr(delErr)
-			if isK8sConflict(delErr) {
+			if kube.IsK8sConflict(delErr) {
 				code = "conflict"
 			}
 			return fail(fmt.Sprintf("Failed to delete pipeline server: %v", delErr), code, "DSPA delete failed")
@@ -761,7 +762,7 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 		logs = append(logs, fmt.Sprintf("Warning: this tool's record of the pipeline server could not be cleared: %v", err))
 	}
 
-	slog.Info("pipeline server teardown", "project", project, "dspa", target.Meta.Name, "user", getUser(c))
+	slog.Info("pipeline server teardown", "project", project, "dspa", target.Meta.Name, "user", kube.GetUser(c))
 	recordActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s dspa=%s", project, target.Meta.Name), secretNote == "")
 
 	msg := fmt.Sprintf("Pipeline server removed from %s.", project)
@@ -812,7 +813,7 @@ func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInf
 		return ""
 	}
 	*logs = append(*logs, fmt.Sprintf("Deleting secret %s...", name))
-	if _, err := deleteWithUID(c, path, meta.UID); err != nil && !isK8sNotFound(err) {
+	if _, err := deleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 		*logs = append(*logs, fmt.Sprintf("Warning: failed to delete secret: %v", err))
 		return fmt.Sprintf(" The credentials secret %s could not be deleted: %v. Re-run teardown or delete it manually.", name, err)
 	}
@@ -1101,7 +1102,7 @@ func deleteConnection(c *Client, project string, logs *[]string) string {
 		return ""
 	}
 	*logs = append(*logs, fmt.Sprintf("Deleting dashboard connection %s...", connectionSecretName))
-	if _, err := deleteWithUID(c, path, meta.UID); err != nil && !isK8sNotFound(err) {
+	if _, err := deleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 		*logs = append(*logs, fmt.Sprintf("Warning: failed to delete connection: %v", err))
 		return fmt.Sprintf(" The dashboard connection %s could not be deleted: %v. Re-run teardown or delete it manually.", connectionSecretName, err)
 	}
@@ -1118,7 +1119,7 @@ func pipelineWriteFailure(what, project string, err error) (string, string) {
 		return fmt.Sprintf("A %s was created in %s by someone else while setup was running. It was left unchanged.", what, project), "not_managed"
 	case errors.Is(err, errObjectChanged):
 		return fmt.Sprintf("The %s in %s kept changing while setup was updating it, so it was not changed. Re-run setup.", what, project), "conflict"
-	case isK8sConflict(err):
+	case kube.IsK8sConflict(err):
 		return fmt.Sprintf("The %s in %s changed while setup was updating it, so it was not changed. Re-run setup.", what, project), "conflict"
 	}
 	return fmt.Sprintf("Failed to create or update the %s in %s: %v.", what, project, err), errorCodeFromK8sErr(err)

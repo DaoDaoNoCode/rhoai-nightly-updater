@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -140,7 +141,7 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 		emit(UpdateStepEvent{Step: p.id, Status: "success", Message: res.Message, Detail: time.Since(start).Round(time.Second).String()})
 		done = append(done, p.title)
 	}
-	slog.Info("clean-up", "parts", len(parts), "user", getUser(c))
+	slog.Info("clean-up", "parts", len(parts), "user", kube.GetUser(c))
 	recordCleanupActivity(c, strings.Join(done, ", "), true)
 	msg := "Nothing was selected."
 	if len(done) > 0 {
@@ -178,7 +179,7 @@ func joinTitles(titles []string) string {
 func recordCleanupActivity(c *Client, detail string, success bool) {
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),
-		User:      getUser(c),
+		User:      kube.GetUser(c),
 		Action:    "cleanup",
 		Detail:    detail,
 		Success:   success,

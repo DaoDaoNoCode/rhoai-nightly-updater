@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 	"gopkg.in/yaml.v3"
 )
@@ -22,8 +23,8 @@ import (
 // fbcContentCache holds parsed catalogs of digest-pinned FBC images. The
 // content of a digest never changes, so entries leave only by LRU eviction.
 var (
-	fbcContentCache  = newLRU[string, *types.FBCContentResponse](fbcCacheMaxEntries)
-	fbcContentFlight flightGroup[*types.FBCContentResponse]
+	fbcContentCache  = kube.NewLRU[string, *types.FBCContentResponse](fbcCacheMaxEntries)
+	fbcContentFlight kube.FlightGroup[*types.FBCContentResponse]
 )
 
 const (

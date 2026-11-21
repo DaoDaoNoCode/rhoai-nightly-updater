@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // resetClusterCaches empties the package's caches, among them those keyed
@@ -21,7 +23,7 @@ import (
 // empties every registered cache (cache.go): each LRU registers itself, and
 // each hand-rolled cache registers its purge function.
 func resetClusterCaches() {
-	purgeAllCaches()
+	kube.PurgeAllCaches()
 }
 
 // isolateClusterCaches gives a test's fake cluster empty URL-keyed caches.
@@ -47,6 +49,7 @@ func TestResetClusterCachesCoversEveryURLKeyedCache(t *testing.T) {
 	want := map[string]urlKeyedState{
 		"api_versions.go":                 {1, []string{"apiVersionsCache"}},
 		"argocd.go":                       {1, []string{"argoApplicationsCache"}},
+		"client_testing.go":               {1, nil}, // TestOptions copies the field for a test; no state
 		"components.go":                   {1, []string{"replicaSetOwnerCache"}},
 		"control_plane.go":                {2, []string{"controlPlaneCache"}},
 		"dashboard_operator_discovery.go": {2, []string{"dashboardTargetCache"}},

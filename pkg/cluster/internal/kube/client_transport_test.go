@@ -1,4 +1,4 @@
-package cluster
+package kube
 
 import (
 	"crypto/x509"
@@ -92,13 +92,13 @@ func TestAPIServerTLSConfig(t *testing.T) {
 		wantRoots    string // "custom", "system", "empty"
 		wantWarning  string
 	}{
-		{name: "in-cluster CA", files: map[string][]byte{inClusterCAFile: caPEM}, wantRoots: "custom"},
+		{name: "in-cluster CA", files: map[string][]byte{InClusterCAFile: caPEM}, wantRoots: "custom"},
 		{name: "dev mode uses system roots", env: map[string]string{"DEV_MODE": "true"}, wantRoots: "system"},
 		{name: "GO_TEST no longer disables verification", env: map[string]string{"GO_TEST": "true"}, wantRoots: "system"},
 		{name: "outside cluster without dev mode uses system roots", wantRoots: "system"},
 		{name: "explicit insecure opt-in", env: map[string]string{"DEV_MODE": "true", "DEV_INSECURE_TLS": "true"}, wantInsecure: true, wantRoots: "system", wantWarning: "DISABLED"},
 		{name: "insecure opt-in ignored outside dev mode", env: map[string]string{"DEV_INSECURE_TLS": "true"}, wantRoots: "system"},
-		{name: "insecure opt-in ignored in cluster", env: map[string]string{"DEV_MODE": "true", "DEV_INSECURE_TLS": "true"}, files: map[string][]byte{inClusterCAFile: caPEM}, wantRoots: "custom"},
+		{name: "insecure opt-in ignored in cluster", env: map[string]string{"DEV_MODE": "true", "DEV_INSECURE_TLS": "true"}, files: map[string][]byte{InClusterCAFile: caPEM}, wantRoots: "custom"},
 		{name: "KUBE_CA_FILE", env: map[string]string{"DEV_MODE": "true", "KUBE_CA_FILE": "/tmp/ca.pem"}, files: map[string][]byte{"/tmp/ca.pem": caPEM}, wantRoots: "custom"},
 		{name: "unreadable KUBE_CA_FILE fails closed", env: map[string]string{"DEV_MODE": "true", "DEV_INSECURE_TLS": "true", "KUBE_CA_FILE": "/tmp/missing.pem"}, wantRoots: "empty", wantWarning: "unusable"},
 		{name: "KUBE_CA_FILE without PEM fails closed", env: map[string]string{"KUBE_CA_FILE": "/tmp/bad.pem"}, files: map[string][]byte{"/tmp/bad.pem": []byte("junk")}, wantRoots: "empty", wantWarning: "unusable"},

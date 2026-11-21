@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -123,7 +124,7 @@ func TestHelmManagedDSCIsReadOnly(t *testing.T) {
 		t.Fatalf("read-only reason = %q", m.ReadOnlyReason)
 	}
 	for _, action := range []string{"toggle", "fix", "soft-reset", "hard-reset"} {
-		if plan, _ := PlanDSCChange(c, action, "ray", "Removed", false, false); plan.Code != ErrorCodeGitOpsManaged {
+		if plan, _ := PlanDSCChange(c, action, "ray", "Removed", false, false); plan.Code != kube.ErrorCodeGitOpsManaged {
 			t.Fatalf("%s plan = %+v", action, plan)
 		}
 	}

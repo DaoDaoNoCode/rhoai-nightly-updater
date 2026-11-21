@@ -628,7 +628,7 @@ func TestDashboardInterruptedDeployCanBeRetried(t *testing.T) {
 	}
 	// A restarted updater has a new client and no in-memory state.
 	f.failWorkload = ""
-	restarted := newTestClient(testClientOptions{BaseURL: c.baseURL, HTTPClient: c.httpClient, Ctx: context.Background()})
+	restarted := newTestClient(testClientOptions{BaseURL: c.BaseURL(), HTTPClient: c.TestOptions().HTTPClient, Ctx: context.Background()})
 	restarted.SetUsername("bob")
 	mustDeploy(t, restarted, "pr", 7, "")
 	session, _ := dashboardSession(&f.operator)

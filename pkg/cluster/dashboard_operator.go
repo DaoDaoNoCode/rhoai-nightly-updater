@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -443,7 +444,7 @@ func dashboardExternalPauseWarning(op string) string {
 // A missing CRD means there is nothing to delete.
 func dashboardCRDeleting(c *Client) (bool, error) {
 	r, err := listServed(c, componentAPIGroup, "/apis/components.platform.opendatahub.io/%s/dashboards", nil, []string{"v1alpha1"})
-	if isK8sNotFound(err) || (err == nil && r.Version == "") {
+	if kube.IsK8sNotFound(err) || (err == nil && r.Version == "") {
 		return false, nil
 	}
 	if err != nil {
@@ -733,7 +734,7 @@ func addDashboardRolloutDiagnostics(c *Client, ns string, images []types.Dashboa
 	// One namespace-wide list, only while something is not ready.
 	var items []dashboardPod
 	if err := c.ListInto("/api/v1/namespaces/"+ns+"/pods", &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			slog.Warn("cannot parse dashboard pods for rollout diagnostics", "error", err)
 			return
 		}
@@ -850,7 +851,7 @@ func waitDashboardOperatorStopped(c *Client, operator *dashboardDeployment) erro
 		selector = append(selector, k+"="+v)
 	}
 	sort.Strings(selector)
-	ctx, cancel := clk.WithTimeout(c.Context(), 60*time.Second)
+	ctx, cancel := kube.Clock().WithTimeout(c.Context(), 60*time.Second)
 	defer cancel()
 	reader := c.WithContext(ctx)
 	for {
@@ -877,7 +878,7 @@ func waitDashboardOperatorStopped(c *Client, operator *dashboardDeployment) erro
 		if len(pods.Items) == 0 {
 			return nil
 		}
-		if err := clk.Sleep(ctx, time.Second); err != nil {
+		if err := kube.Clock().Sleep(ctx, time.Second); err != nil {
 			return fmt.Errorf("waiting for %s pods to terminate: %w", name, err)
 		}
 	}
@@ -1031,7 +1032,7 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 		return fail(err.Error()+". Click Revert to default to restore operator management, then deploy again.", "prerequisites")
 	}
 	now := nowRFC3339()
-	user := getUser(c)
+	user := kube.GetUser(c)
 	newSession := session == nil
 	if newSession {
 		replicas := dashboardOperatorReplicas(operator)
@@ -1238,10 +1239,10 @@ func patchControlledDashboardImages(c *Client, operator *dashboardDeployment, pa
 		if err == nil {
 			return nil
 		}
-		if !isK8sConflict(err) || attempt == 4 {
+		if !kube.IsK8sConflict(err) || attempt == 4 {
 			return err
 		}
-		if err := clk.Sleep(c.Context(), time.Duration(attempt+1)*100*time.Millisecond); err != nil {
+		if err := kube.Clock().Sleep(c.Context(), time.Duration(attempt+1)*100*time.Millisecond); err != nil {
 			return err
 		}
 	}
@@ -1266,7 +1267,7 @@ func clearDashboardManagedAnnotations(c *Client, ns, operatorName string) (clear
 			continue
 		}
 		patch := map[string]any{"metadata": map[string]any{"uid": d.Metadata.UID, "annotations": map[string]any{"opendatahub.io/managed": nil}}}
-		if err := c.PatchJSON(namespacedPath("apps/v1", "deployments", ns, d.Metadata.Name), patch); err != nil && !isK8sNotFound(err) {
+		if err := c.PatchJSON(namespacedPath("apps/v1", "deployments", ns, d.Metadata.Name), patch); err != nil && !kube.IsK8sNotFound(err) {
 			failures = append(failures, d.Metadata.Name+": "+err.Error())
 			continue
 		}

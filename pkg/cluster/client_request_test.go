@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 func TestClientRequestsWireFormat(t *testing.T) {
@@ -58,10 +60,10 @@ func TestClientRequestsWireFormat(t *testing.T) {
 	}
 
 	body, status, err := c.Get("/fail")
-	if status != 409 || !IsK8sError(err, 409) || string(body) == "" {
+	if status != 409 || !kube.IsK8sError(err, 409) || string(body) == "" {
 		t.Fatalf("error response: status=%d err=%v body=%q", status, err, body)
 	}
-	if status, err := c.Delete("/fail"); status != 409 || !IsK8sError(err, 409) {
+	if status, err := c.Delete("/fail"); status != 409 || !kube.IsK8sError(err, 409) {
 		t.Fatalf("delete error: status=%d err=%v", status, err)
 	}
 }

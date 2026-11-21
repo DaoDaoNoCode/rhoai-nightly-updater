@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -98,7 +99,7 @@ func getPodsInNamespace(c *Client, namespace string) ([]types.PodInfo, error) {
 		} `json:"status"`
 	}
 	if err := c.ListInto(path, &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("failed to parse response: %w", err)
 		}
 		return nil, fmt.Errorf("API request failed: %w", err)

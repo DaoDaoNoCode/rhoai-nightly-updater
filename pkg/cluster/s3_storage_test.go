@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -411,12 +412,12 @@ func TestSetupS3Storage_StopsEarlyOnImagePullBackOff(t *testing.T) {
 	f, c := newResourceFake(t)
 	notReadyAfterApply(f)
 	putS3Pod(f, "seaweedfs-1", seaweedfsDefaultImage, "ImagePullBackOff", "Back-off pulling image")
-	start := clk.Now()
+	start := kube.Clock().Now()
 	resp, _ := SetupS3Storage(c)
 	if resp.Success || resp.ErrorCode != "not_ready" || !strings.Contains(resp.Message, "ImagePullBackOff") {
 		t.Fatalf("setup = %+v", resp)
 	}
-	if clk.Since(start) >= S3ReadyTimeout {
+	if kube.Clock().Since(start) >= S3ReadyTimeout {
 		t.Error("setup must stop at a terminal pod reason, not wait for the timeout")
 	}
 }
@@ -923,12 +924,12 @@ func TestWaitS3Ready_StalledAPIDoesNotOverrunDeadline(t *testing.T) {
 	fastS3Timings(t)
 	S3ReadyTimeout = 200 * time.Millisecond
 	c := stallServer(t, 0)
-	start := clk.Now()
+	start := kube.Clock().Now()
 	_, err := waitS3Ready(c, seaweedfsDefaultImage)
 	if !errors.Is(err, errS3NotReady) {
 		t.Fatalf("err = %v, want errS3NotReady", err)
 	}
-	if d := clk.Since(start); d != 200*time.Millisecond {
+	if d := kube.Clock().Since(start); d != 200*time.Millisecond {
 		t.Errorf("waited %s, want the 200ms deadline", d)
 	}
 }

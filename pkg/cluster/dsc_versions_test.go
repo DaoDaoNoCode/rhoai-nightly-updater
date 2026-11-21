@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -225,9 +226,9 @@ func TestClientReturns429WithoutWaitingForRetryAfter(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
-	start := clk.Now()
+	start := kube.Clock().Now()
 	_, status, err := c.Get("/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters")
-	if elapsed := clk.Since(start); elapsed != 0 {
+	if elapsed := kube.Clock().Since(start); elapsed != 0 {
 		t.Fatalf("waited %s", elapsed)
 	}
 	if status != 429 || calls != 1 || !isConversionWebhookError(err) {

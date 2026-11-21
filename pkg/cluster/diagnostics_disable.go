@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // Preconditions for setting a DSC component to Removed.
@@ -41,7 +43,7 @@ func deploymentReady(c *Client, namespace, name string) (bool, string) {
 	}
 	found, err := c.GetIntoOptional(namespacedPath("apps/v1", "deployments", namespace, name), &d)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return false, fmt.Sprintf("could not parse Deployment %s/%s", namespace, name)
 		}
 		return false, fmt.Sprintf("could not read Deployment %s/%s: %v", namespace, name, err)
@@ -507,7 +509,7 @@ func (rc *removalChecker) conversionCRDsServedBy(component string) ([]conversion
 	if !rc.convLoaded {
 		rc.convLoaded = true
 		crds, err := listRHOAIConversionCRDs(rc.c)
-		if err != nil && !isK8sNotFound(err) {
+		if err != nil && !kube.IsK8sNotFound(err) {
 			rc.convErr = err
 		}
 		rc.convCRDs = crds

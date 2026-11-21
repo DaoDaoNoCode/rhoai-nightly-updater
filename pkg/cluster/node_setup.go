@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -320,7 +321,7 @@ func (m idmsItem) isSetupMirror() bool {
 func listIDMS(c *Client) ([]idmsItem, error) {
 	var items []idmsItem
 	if err := c.ListInto(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""), &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse ImageDigestMirrorSets: %w", err)
 		}
 		return nil, err
@@ -814,7 +815,7 @@ func planPullRemove(w *nodeSetupWork, ps *clusterPullSecret, rec *nodePullRecord
 
 // refusalCodeFor maps a failed read to a plan's refusal code.
 func refusalCodeFor(err error) string {
-	if IsK8sError(err, http.StatusForbidden) {
+	if kube.IsK8sError(err, http.StatusForbidden) {
 		return "forbidden"
 	}
 	return "unreadable"

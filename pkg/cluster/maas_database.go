@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -279,7 +280,7 @@ func readMaaSDBState(c *Client, rec maasRecord, ns string) (maasDBState, error) 
 	if st.secret, st.secretFound, err = readObjectMeta(c, maasObjectPath("Secret", ns)); err != nil {
 		return st, fmt.Errorf("read Secret %s/%s: %w", ns, maasDBConfigSecret, err)
 	}
-	if st.cluster, st.clusterFound, st.clusterReady, st.clusterPhase, err = readMaaSDBCluster(c, ns); err != nil && !isK8sNotFound(err) {
+	if st.cluster, st.clusterFound, st.clusterReady, st.clusterPhase, err = readMaaSDBCluster(c, ns); err != nil && !kube.IsK8sNotFound(err) {
 		return st, fmt.Errorf("read %s: %w", maasDesc("Cluster", ns), err)
 	}
 	// postgres-creds is not read: this tool may only create it and delete
@@ -434,7 +435,7 @@ func createMaaSPOCCreds(c *Client, ns, password string, dryRun bool) (string, er
 		query = url.Values{"dryRun": {"All"}}
 	}
 	body, _, err := c.Do(http.MethodPost, maasCreatePath("PostgresSecret", ns), "application/json", data, query)
-	if isK8sConflict(err) {
+	if kube.IsK8sConflict(err) {
 		return "", &foreignObjectError{Desc: maasDesc("PostgresSecret", ns)}
 	}
 	if err != nil {
@@ -464,9 +465,9 @@ func deleteMaaSPOCCreds(c *Client, ns, uid string) (bool, string, error) {
 	}
 	_, err := deleteWithUID(c, maasPOCCredsPath(ns), uid)
 	switch {
-	case err == nil || isK8sNotFound(err):
+	case err == nil || kube.IsK8sNotFound(err):
 		return true, "", nil
-	case isK8sConflict(err):
+	case kube.IsK8sConflict(err):
 		return false, maasDesc("PostgresSecret", ns) + " was replaced by one this tool did not create (another UID), so it is kept.", nil
 	}
 	return false, "", err
@@ -1229,7 +1230,7 @@ func (m *maasRun) deleteDBObjects(step, ns, dbKind string, rec *maasRecord) ([]s
 			continue
 		}
 		m.step(step, "running", "Deleting "+maasDesc(k, ns)+"...")
-		if _, err := deleteWithUID(c, path, meta.UID); err != nil && !isK8sNotFound(err) {
+		if _, err := deleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 			res, _ := m.fail(step, fmt.Sprintf("Failed to delete %s: %v. Run it again to retry.", maasDesc(k, ns), err), maasWriteCode(err), "delete failed")
 			return deleted, res
 		}

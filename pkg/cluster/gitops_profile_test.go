@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // The writes the gitops profile's Update may make: the old InstallPlan and
@@ -77,7 +79,7 @@ func TestUpdateGitOpsProfile_RefusesAnUnmanagedCatalog(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := setup()
 			result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-			if err != nil || result.Success || result.ErrorCode != ErrorCodeProfileGitOps || !strings.Contains(result.Message, "Nothing was changed") {
+			if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeProfileGitOps || !strings.Contains(result.Message, "Nothing was changed") {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
 			if w := f.writes(); len(w) != 0 {
@@ -140,7 +142,7 @@ func TestUpdateGitOpsProfile_RefusesADashboardDevSession(t *testing.T) {
 func TestUpdateGitOpsProfile_RefusesAnotherImage(t *testing.T) {
 	f := servesGitOpsPolicy(t, gitOpsFake(t))
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(result.Message, gitOpsImage) {
+	if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, gitOpsImage) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	if w := f.writes(); len(w) != 0 {
@@ -164,7 +166,7 @@ func TestUpdateDryRunGitOpsProfile(t *testing.T) {
 	}
 
 	f = newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
-	if result, _ := UpdateDryRunGitOpsProfile(f.client(context.Background()), gitOpsImage); result.Success || result.ErrorCode != ErrorCodeProfileGitOps {
+	if result, _ := UpdateDryRunGitOpsProfile(f.client(context.Background()), gitOpsImage); result.Success || result.ErrorCode != kube.ErrorCodeProfileGitOps {
 		t.Fatalf("unmanaged catalog: %+v", result)
 	}
 	f = gitOpsFake(t)
@@ -173,7 +175,7 @@ func TestUpdateDryRunGitOpsProfile(t *testing.T) {
 		t.Fatalf("no OperatorGroup: %+v", result)
 	}
 	f = gitOpsFake(t)
-	if result, _ := UpdateDryRunGitOpsProfile(f.client(context.Background()), testNightlyImage); result.Success || result.ErrorCode != ErrorCodeGitOpsManaged {
+	if result, _ := UpdateDryRunGitOpsProfile(f.client(context.Background()), testNightlyImage); result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged {
 		t.Fatalf("another image: %+v", result)
 	}
 	if w := f.writes(); len(w) != 0 {
@@ -247,7 +249,7 @@ func TestUpdateGitOpsProfile_RefusesWhatThePolicyWouldRefuse(t *testing.T) {
 			f := servesGitOpsPolicy(t, gitOpsFake(t))
 			setup(f)
 			result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-			if err != nil || result.Success || result.ErrorCode != ErrorCodeProfileGitOps || !strings.Contains(result.Message, "Nothing was changed") {
+			if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeProfileGitOps || !strings.Contains(result.Message, "Nothing was changed") {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
 			if w := f.writes(); len(w) != 0 {
@@ -290,7 +292,7 @@ func TestUpdateGitOpsProfile_SubscriptionChangesBeforeTheDeletions(t *testing.T)
 		return false
 	}
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != ErrorCodeProfileGitOps || !strings.Contains(result.Message, "Nothing was changed") || !changed {
+	if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeProfileGitOps || !strings.Contains(result.Message, "Nothing was changed") || !changed {
 		t.Fatalf("result=%+v err=%v changed=%v", result, err, changed)
 	}
 	if w := f.writes(); len(w) != 0 {
@@ -310,7 +312,7 @@ func TestUpdateGitOpsProfile_SubscriptionChangesAfterTheCSVDeletion(t *testing.T
 		return false
 	}
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != ErrorCodeProfileGitOps || !strings.Contains(result.Message, "left as Git sets it") {
+	if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeProfileGitOps || !strings.Contains(result.Message, "left as Git sets it") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	for _, w := range f.writes() {
@@ -362,7 +364,7 @@ func TestUpdateGitOpsProfile_PolicyChangesWhileUpdateRuns(t *testing.T) {
 		return false
 	}
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != ErrorCodeProfileGitOps || !strings.Contains(result.Message, "Argo CD may be rolling out") || !strings.Contains(result.Message, "Nothing was changed") || !changed {
+	if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeProfileGitOps || !strings.Contains(result.Message, "Argo CD may be rolling out") || !strings.Contains(result.Message, "Nothing was changed") || !changed {
 		t.Fatalf("result=%+v err=%v changed=%v", result, err, changed)
 	}
 	if w := f.writes(); len(w) != 0 {

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -191,7 +192,7 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 	}
 	found, err := c.GetIntoOptional(namespacedPath("apps/v1", "deployments", namespace, name), &dep)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return a, fmt.Errorf("parse deployment: %w", err)
 		}
 		return a, fmt.Errorf("read deployment: %w", err)
@@ -480,7 +481,7 @@ func patchMaxUnavailable(c *Client, namespace, name string) (rolloutAssessment, 
 	})
 	respBody, _, err := c.StrategicPatch(namespacedPath("apps/v1", "deployments", namespace, name), patch)
 	if err != nil {
-		if isK8sConflict(err) {
+		if kube.IsK8sConflict(err) {
 			return a, false, fmt.Sprintf("%s: the Deployment changed while it was being checked; nothing was patched. Run diagnostics again.", a.target())
 		}
 		return a, false, fmt.Sprintf("%s: patch failed: %v", a.target(), err)
@@ -562,7 +563,7 @@ func assistTargets(c *Client, targets []string, logs []string) (*types.Operation
 	if len(patched) > 0 {
 		RecordActivity(c, types.ActivityEntry{
 			Timestamp: nowRFC3339(),
-			User:      getUser(c),
+			User:      kube.GetUser(c),
 			Action:    "assist-rollout",
 			Detail:    "maxUnavailable=1 on " + strings.Join(patched, ", "),
 			Success:   len(failed) == 0,
@@ -642,7 +643,7 @@ func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.Operation
 	}
 	patch, _ := json.Marshal(patchObj)
 	if _, _, err := c.StrategicPatch(path, patch); err != nil {
-		if isK8sConflict(err) {
+		if kube.IsK8sConflict(err) {
 			return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Deployment %s changed while it was being checked; nothing was changed. Run diagnostics again.", target), ErrorCode: "conflict"}, nil
 		}
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Failed to patch Deployment %s: %v", target, err), ErrorCode: errorCodeFromK8sErr(err)}, nil
@@ -658,7 +659,7 @@ func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.Operation
 	}
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),
-		User:      getUser(c),
+		User:      kube.GetUser(c),
 		Action:    "restore-rollout-strategy",
 		Detail:    msg,
 		Success:   true,

@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
+	"gopkg.in/yaml.v3"
 )
 
 // Hard reset: delete the DataScienceCluster and create the release default
@@ -251,7 +251,7 @@ func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent
 	if _, err := patchDSCFields(c, path, validate, true); err != nil {
 		// A failed test of the UID gets the same bare 422 as a refused
 		// spec (see dsc_manager.go): the DSC read again tells them apart.
-		if IsK8sError(err, http.StatusUnprocessableEntity) {
+		if kube.IsK8sError(err, http.StatusUnprocessableEntity) {
 			if meta, found, rerr := readObjectMeta(c, path); rerr == nil && (!found || meta.UID != v.uid) {
 				return r.fail("check", fmt.Sprintf("DataScienceCluster %s was deleted or created again after it was checked. Nothing was changed. Review the hard reset again.", v.name), "conflict"), nil
 			}
@@ -273,7 +273,7 @@ func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent
 		return r.fail("check", "A hard reset is not possible: "+refusal+". Nothing was changed.", "prerequisites"), nil
 	}
 	rec := &types.DSCHardResetRecord{Name: v.name, OldUID: v.uid, APIVersion: v.apiVersion, Object: string(objJSON), YAML: createYAML,
-		OperatorCSV: v.op.Name, OperatorVersion: v.op.Version, User: getUser(c), StartedAt: clk.Now().UTC().Format(time.RFC3339)}
+		OperatorCSV: v.op.Name, OperatorVersion: v.op.Version, User: kube.GetUser(c), StartedAt: kube.Clock().Now().UTC().Format(time.RFC3339)}
 	for _, o := range ops {
 		rec.ModuleOperators = append(rec.ModuleOperators, o.record())
 	}
@@ -289,7 +289,7 @@ func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent
 	r.step("delete", "running", "Deleting DataScienceCluster "+v.name)
 	if _, _, err := c.Do(http.MethodDelete, path, "application/json", dscDeleteBody(v.uid), nil); err != nil {
 		clearDSCHardResetRecord(c)
-		if isK8sNotFound(err) || isK8sConflict(err) {
+		if kube.IsK8sNotFound(err) || kube.IsK8sConflict(err) {
 			return r.fail("delete", "DataScienceCluster "+v.name+" was deleted or replaced by someone else since the check, so nothing was changed by this reset. Reload the page.", "conflict"), nil
 		}
 		return r.fail("delete", "Deleting the DataScienceCluster failed: "+conversionMessage(err)+". Nothing was changed.", errorCodeFromK8sErr(err)), nil
@@ -315,7 +315,7 @@ func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent
 
 	r.step("wait_ready", "running", "Waiting for the components to be ready")
 	msg := waitDSCReady(c, path, r)
-	slog.Info("dsc hard reset", "dsc", v.name, "user", getUser(c))
+	slog.Info("dsc hard reset", "dsc", v.name, "user", kube.GetUser(c))
 	return &types.OperationResponse{Success: true, Message: msg, Logs: r.logs}, nil
 }
 
@@ -409,7 +409,7 @@ func stopCause(ctx context.Context) string {
 // operation is stopped; nil once it is done. Every failure carries the
 // planned object (yamlText) and the way to finish the reset.
 func waitDSCGone(c *Client, path string, v *dscView, ops []hardResetOperator, r *hardResetRun, yamlText string) *types.OperationResponse {
-	deadline := clk.Now().Add(HardResetDeleteTimeout)
+	deadline := kube.Clock().Now().Add(HardResetDeleteTimeout)
 	last := ""
 	var st dscWaitState
 	var td teardownState
@@ -458,10 +458,10 @@ func waitDSCGone(c *Client, path string, v *dscView, ops []hardResetOperator, r 
 				r.step("wait_deleted", "running", msg)
 			}
 		}
-		if !clk.Now().Before(deadline) {
+		if !kube.Clock().Now().Before(deadline) {
 			break
 		}
-		if err := clk.Sleep(c.Context(), HardResetPollInterval); err != nil {
+		if err := kube.Clock().Sleep(c.Context(), HardResetPollInterval); err != nil {
 			return interrupted()
 		}
 	}
@@ -501,7 +501,7 @@ func modulesNote(st dscWaitState) string {
 // waitDSCReady polls the new DSC until its Ready condition is True, and
 // words what is still provisioning when HardResetReadyTimeout passes.
 func waitDSCReady(c *Client, path string, r *hardResetRun) string {
-	deadline := clk.Now().Add(HardResetReadyTimeout)
+	deadline := kube.Clock().Now().Add(HardResetReadyTimeout)
 	last := ""
 	var st dscWaitState
 	for {
@@ -516,10 +516,10 @@ func waitDSCReady(c *Client, path string, r *hardResetRun) string {
 				r.step("wait_ready", "running", "Still provisioning: "+waiting)
 			}
 		}
-		if !clk.Now().Before(deadline) {
+		if !kube.Clock().Now().Before(deadline) {
 			break
 		}
-		if clk.Sleep(c.Context(), HardResetPollInterval) != nil {
+		if kube.Clock().Sleep(c.Context(), HardResetPollInterval) != nil {
 			break
 		}
 	}
@@ -642,6 +642,6 @@ func FinishDSCHardReset(c *Client, req types.DSCFinishRequest) (*types.Operation
 	}
 	clearDSCHardResetRecord(c)
 	recordActivity(c, "finish-hard-reset-dsc", rec.Name+": the release default of operator "+rec.OperatorVersion+" created (hard reset finished)", true)
-	slog.Info("dsc hard reset finished", "dsc", rec.Name, "user", getUser(c))
+	slog.Info("dsc hard reset finished", "dsc", rec.Name, "user", kube.GetUser(c))
 	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Created DataScienceCluster %s: the hard reset is finished. The operator brings the components up; this page shows each as it comes up.", rec.Name)}, nil
 }

@@ -1,36 +1,5 @@
 package cluster
 
-// "Which nightly contains PR #N?" and "which nightly contains commit X?"
-//
-// Pull requests are opened and merged upstream (opendatahub-io/odh-dashboard,
-// opendatahub-io/data-science-pipelines, ...), while RHOAI images are built
-// from the red-hat-data-services forks: every component image of a nightly
-// carries a git.url label https://github.com/red-hat-data-services/<name> and
-// a commit label (checked 2026-10-29: 165 related images in the rhoai-3.6
-// build, 14 of them from red-hat-data-services/odh-dashboard; about 24 base
-// images have no git.url). The dashboard fork's release branches are updated
-// by merging upstream main ("Merge remote-tracking branch 'upstream/main'
-// into rhoai-3.6"), so upstream SHAs keep their identity in the fork:
-// GET /repos/red-hat-data-services/odh-dashboard/commits/<7-char upstream
-// sha> resolves, compare/<old upstream sha>...<rhoai-3.6 head> is "ahead"
-// (contained) and compare/<today's upstream main head>...<rhoai-3.6 head> is
-// "diverged" (not merged yet). Forks of one GitHub network resolve each
-// other's SHAs (checked 2026-10-30: GET /repos/red-hat-data-services/
-// data-science-pipelines/commits/<upstream merge sha> is 200 and the compare
-// with a fork build commit is "diverged" although the fork never merged it),
-// so a fork that cherry-picks or rebases upstream changes answers "not
-// contained" for a PR it took that way: the cherry-pick has another SHA.
-// A compare 404 only happens for a SHA outside the network, which is
-// reported as unknown ("commit not on GitHub").
-//
-// A build whose image was pushed more than an hour before the PR's merge
-// date (or the commit's date) cannot contain it: its answer comes from the
-// FBC image's build-date label alone, with no catalog or GitHub read.
-//
-// GitHub compare semantics (GET /repos/{owner}/{repo}/compare/{base}...{head}):
-// "ahead" or "identical" means head contains base; "behind" or "diverged"
-// means it does not.
-
 import (
 	"context"
 	"encoding/json"
@@ -45,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -185,17 +155,17 @@ type compareVerdict struct {
 }
 
 var (
-	prCache       = newLRU[string, prInfo](512)
-	prFlight      flightGroup[prInfo]
-	compareCache  = newLRU[string, compareVerdict](4096)
-	compareFlight flightGroup[compareVerdict]
+	prCache       = kube.NewLRU[string, prInfo](512)
+	prFlight      kube.FlightGroup[prInfo]
+	compareCache  = kube.NewLRU[string, compareVerdict](4096)
+	compareFlight kube.FlightGroup[compareVerdict]
 	// commitCache remembers resolved commits for good (a SHA never changes
 	// meaning) and misses for compareNegativeTTL.
-	commitCache  = newLRU[string, commitInfo](1024)
-	commitLookup flightGroup[commitInfo]
+	commitCache  = kube.NewLRU[string, commitInfo](1024)
+	commitLookup kube.FlightGroup[commitInfo]
 	// componentImageCache remembers which related image of a build is the
 	// searched component, so a repeated search does not rescan the labels.
-	componentImageCache = newLRU[string, componentLookup](componentImageCacheMax)
+	componentImageCache = kube.NewLRU[string, componentLookup](componentImageCacheMax)
 )
 
 // githubBackoffUntil returns when GitHub calls may resume (zero when they may now).
@@ -559,7 +529,7 @@ func findBuildsContainingPR(ctx context.Context, basicAuth, repo string, number 
 	case errors.As(err, &limited):
 		noteRateLimit(limited.until)
 	case err != nil:
-		if isContextError(err) {
+		if kube.IsContextError(err) {
 			return nil, err
 		}
 		slog.Warn("PR search: reading the pull request failed", "repo", repo, "pr", number, "error", err)
@@ -604,7 +574,7 @@ func findBuildsContainingCommit(ctx context.Context, basicAuth, repo, sha string
 	case errors.As(err, &limited):
 		noteRateLimit(limited.until)
 	case err != nil:
-		if isContextError(err) {
+		if kube.IsContextError(err) {
 			return nil, err
 		}
 		slog.Warn("commit search: resolving the commit failed", "repo", repo, "commit", sha, "error", err)
@@ -683,7 +653,7 @@ func stableBranchInfo(ctx context.Context, base string, noteRateLimit func(time.
 	if err != nil {
 		if limited, ok := errors.AsType[*githubRateLimitError](err); ok {
 			noteRateLimit(limited.until)
-		} else if !isContextError(err) {
+		} else if !kube.IsContextError(err) {
 			slog.Warn("contains search: reading the stable branch failed", "error", err)
 		}
 		return nil

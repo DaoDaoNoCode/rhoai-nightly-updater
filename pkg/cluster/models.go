@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -263,7 +264,7 @@ func listLLMInferenceServices(c *Client) ([]llmisvcObject, error) {
 	}
 	found, err := c.GetIntoOptional(clusterPath("serving.kserve.io/v1alpha2", "llminferenceservices", ""), &list)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse LLMInferenceServices: %w", err)
 		}
 		return nil, fmt.Errorf("list LLMInferenceServices: %w", err)
@@ -282,7 +283,7 @@ func readToolModel(c *Client, project, name string) (llmisvcObject, bool, error)
 	var m llmisvcObject
 	found, err := c.GetIntoOptional(path, &m)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return llmisvcObject{}, false, fmt.Errorf("parse LLMInferenceService %s/%s: %w", project, name, err)
 		}
 		return llmisvcObject{}, false, err
@@ -703,7 +704,7 @@ func projectNamespace(c *Client, project string) (map[string]string, string, str
 	}
 	found, err := c.GetIntoOptional("/api/v1/namespaces/"+project, &ns)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Sprintf("Cannot parse project %s: %v.", project, err), "internal"
 		}
 		return nil, fmt.Sprintf("Cannot read project %s: %v.", project, err), errorCodeFromK8sErr(err)
@@ -753,7 +754,7 @@ func (m *modelsRun) fail(id, msg, code, activity string) (*types.OperationRespon
 		m.emit(UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: code})
 	}
 	m.logs = append(m.logs, msg)
-	slog.Warn("models operation stopped", "step", id, "reason", activity, "user", getUser(m.c))
+	slog.Warn("models operation stopped", "step", id, "reason", activity, "user", kube.GetUser(m.c))
 	recordActivity(m.c, m.activity, fmt.Sprintf("%s (%s)", m.target, activity), false)
 	return &types.OperationResponse{Success: false, Message: msg, Logs: m.logs, ErrorCode: code}, nil
 }
@@ -950,7 +951,7 @@ func (m *modelsRun) allow(project string) (*types.OperationResponse, error) {
 	}
 	done := fmt.Sprintf("The inference gateway now allows %s; models there attach to it. Projects it allows: %s.", project, strings.Join(written.names, ", "))
 	m.step("gateway", "success", done)
-	slog.Info("models allow", "project", project, "user", getUser(c))
+	slog.Info("models allow", "project", project, "user", kube.GetUser(c))
 	recordActivity(c, m.activity, m.target, true)
 	return &types.OperationResponse{Success: true, Message: done, Logs: m.logs}, nil
 }
@@ -1081,7 +1082,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 			return r, err
 		}
 	}
-	slog.Info("models setup", "target", m.target, "user", getUser(c))
+	slog.Info("models setup", "target", m.target, "user", kube.GetUser(c))
 	recordActivity(c, "setup-models", m.target, true)
 	return &types.OperationResponse{Success: true, Message: strings.Join(s.summary, " "), Logs: m.logs}, nil
 }
@@ -1234,7 +1235,7 @@ func (m *modelsRun) setupModelReady(s *modelsSetup) (*types.OperationResponse, e
 	m.step("model-ready", "running", "Waiting for the model to start (typically 3 to 5 minutes the first time)...")
 	timeout := ModelReadyTimeout
 	if dl, ok := c.Context().Deadline(); ok {
-		if left := clk.Until(dl) - 30*time.Second; left < timeout {
+		if left := kube.Clock().Until(dl) - 30*time.Second; left < timeout {
 			timeout = left
 		}
 	}
@@ -1398,7 +1399,7 @@ func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 		// Its UID is what makes it the tool's (models_record.go). A model
 		// that cannot be recorded would be nobody's: it is deleted again.
 		if recErr := recordModel(c, meta); recErr != nil {
-			if _, delErr := deleteWithUID(c, path, meta.UID); delErr != nil && !isK8sNotFound(delErr) {
+			if _, delErr := deleteWithUID(c, path, meta.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
 				return fmt.Sprintf("%s was created, but this tool could not record it (%v) nor delete it again (%v). Delete it yourself (oc delete llminferenceservice %s -n %s), then set up again.", desc, recErr, delErr, p.entry.Name, p.project), errorCodeFromK8sErr(recErr)
 			}
 			return fmt.Sprintf("%s was created, but this tool could not record it as its own (%v), so it was deleted again. Set up again to retry.", desc, recErr), firstNonEmpty(errorCodeFromK8sErr(recErr), "internal")
@@ -1413,7 +1414,7 @@ func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 	switch {
 	case errors.As(err, &foreign):
 		code = "not_managed"
-	case errors.Is(err, errObjectChanged) || isK8sConflict(err):
+	case errors.Is(err, errObjectChanged) || kube.IsK8sConflict(err):
 		code = "conflict"
 	}
 	if dryRun {
@@ -1439,7 +1440,7 @@ func (m *modelsRun) applyToken(p *modelPlan) (string, string) {
 	}
 	if err := recordTokenSecret(c, p.project, p.entry.Name, secretUID); err != nil {
 		path := tokenSecretPathOf(p.project, p.entry.Name)
-		if _, delErr := deleteWithUID(c, path, secretUID); delErr != nil && !isK8sNotFound(delErr) {
+		if _, delErr := deleteWithUID(c, path, secretUID); delErr != nil && !kube.IsK8sNotFound(delErr) {
 			slog.Warn("cannot delete the unrecorded token Secret; garbage collection removes it with the model", "error", delErr)
 		}
 		return fmt.Sprintf("Secret %s/%s was created, but this tool could not record it (%v), so it was deleted again. Set up again to retry.", p.project, tokenSecretName(p.entry.Name), err), firstNonEmpty(errorCodeFromK8sErr(err), "internal")
@@ -1505,9 +1506,9 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 		if !model.Metadata.terminating() {
 			logs = append(logs, deleteModelToken(c, project, entry.Name, model.Metadata.UID, rec[modelRecordKey(project, entry.Name)].TokenSecretUID)...)
 			logs = append(logs, fmt.Sprintf("Deleting LLMInferenceService %s/%s...", project, entry.Name))
-			if _, err := deleteWithUID(c, path, model.Metadata.UID); err != nil && !isK8sNotFound(err) {
+			if _, err := deleteWithUID(c, path, model.Metadata.UID); err != nil && !kube.IsK8sNotFound(err) {
 				code := errorCodeFromK8sErr(err)
-				if isK8sConflict(err) {
+				if kube.IsK8sConflict(err) {
 					code = "conflict"
 				}
 				return fail(fmt.Sprintf("Failed to delete LLMInferenceService %s/%s: %v.%s", project, entry.Name, err, templateHint(err)), code, "delete failed")
@@ -1822,7 +1823,7 @@ func readModelWorkload(c *Client, project, name string) (modelWorkload, error) {
 		} `json:"status"`
 	}
 	if err := c.ListInto(namespacedPath("apps/v1", "deployments", project, "")+"?"+q.Encode(), &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return modelWorkload{}, fmt.Errorf("parse the model's Deployments: %w", err)
 		}
 		return modelWorkload{}, err
@@ -1930,10 +1931,10 @@ func waitModelReady(c *Client, project, name string, presetImage, workloadOnly b
 		}
 		if pr.pullFailure != "" {
 			if pullSince.IsZero() {
-				pullSince = clk.Now()
+				pullSince = kube.Clock().Now()
 				pullGrace, pullNote = modelPullGrace(cc, pr.node)
 			}
-			if clk.Since(pullSince) >= pullGrace {
+			if kube.Clock().Since(pullSince) >= pullGrace {
 				res.problem = fmt.Sprintf("%s, for %s.%s Check that the cluster's pull secret can read it (on ROSA, the additional pull secret), that a mirror covers its registry if the cluster uses one, and that the image exists.", pr.pullFailure, clockText(pullGrace), pullNote)
 				res.imageMaybeMissing = pr.mentionsMissing && presetImage
 				return true, nil

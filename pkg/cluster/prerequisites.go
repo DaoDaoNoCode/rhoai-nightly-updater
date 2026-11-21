@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // Prerequisite operators named in DataScienceCluster and module conditions.
@@ -281,7 +283,7 @@ var (
 	// dependency, and then at most this often.
 	packageIndexTTL = 15 * time.Minute
 
-	_ = registerCachePurge(func() {
+	_ = kube.RegisterCachePurge(func() {
 		packageIndexMu.Lock()
 		packageIndexCache = map[string]packageIndex{}
 		packageIndexMu.Unlock()
@@ -598,7 +600,7 @@ func operandManagementState(c *Client, e almExample) (string, error) {
 		} `json:"spec"`
 	}
 	if err := c.GetInto("/apis/"+operandAPIGroup+"/"+version+"/"+resource+"/cluster", &obj); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return "", fmt.Errorf("parse %s: %w", e.ref(), err)
 		}
 		return "", err
@@ -617,7 +619,7 @@ func discoverPlural(c *Client, version, kind string) (string, bool, error) {
 	}
 	found, err := c.GetIntoOptional("/apis/"+operandAPIGroup+"/"+version, &list)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return "", false, fmt.Errorf("parse %s/%s discovery: %w", operandAPIGroup, version, err)
 		}
 		return "", false, fmt.Errorf("discover %s/%s: %w", operandAPIGroup, version, err)
@@ -1098,7 +1100,7 @@ func listOperatorGroups(c *Client, namespace string) ([]operatorGroup, error) {
 	}
 	found, err := c.GetIntoOptional(namespacedPath("operators.coreos.com/v1", "operatorgroups", namespace, ""), &list)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse OperatorGroups in %s: %w", namespace, err)
 		}
 		return nil, err

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -162,16 +163,16 @@ func (m *maasRun) waitForChannelHead(ns, name, head string) (bool, subscriptionP
 			return true, nil
 		case p.failed != "":
 			if failedSince.IsZero() {
-				failedSince = clk.Now()
+				failedSince = kube.Clock().Now()
 			}
-			failedLong = clk.Since(failedSince) >= MaaSOperatorResolveGrace
+			failedLong = kube.Clock().Since(failedSince) >= MaaSOperatorResolveGrace
 			return failedLong, nil
 		case p.done:
 			failedSince = time.Time{}
 			if settledSince.IsZero() {
-				settledSince = clk.Now()
+				settledSince = kube.Clock().Now()
 			}
-			return clk.Since(settledSince) >= MaaSOperatorResolveGrace, nil
+			return kube.Clock().Since(settledSince) >= MaaSOperatorResolveGrace, nil
 		}
 		failedSince, settledSince = time.Time{}, time.Time{}
 		return false, nil
@@ -340,7 +341,7 @@ func (m *maasRun) removeTierPolicies() (*types.OperationResponse, error) {
 	for _, p := range legacy {
 		path := legacyTierPolicyPath(p.Kind, p.Version)
 		opts, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": map[string]any{"uid": p.UID}})
-		if _, _, err := c.Do(http.MethodDelete, path, "application/json", opts, url.Values{"dryRun": {"All"}}); err != nil && !isK8sNotFound(err) {
+		if _, _, err := c.Do(http.MethodDelete, path, "application/json", opts, url.Values{"dryRun": {"All"}}); err != nil && !kube.IsK8sNotFound(err) {
 			return m.fail("check", fmt.Sprintf("The API server rejects deleting %s %s: %v. Nothing was deleted.%s", p.Kind, p.Name, err, templateHint(err)), maasWriteCode(err), "dry run failed")
 		}
 	}
@@ -348,7 +349,7 @@ func (m *maasRun) removeTierPolicies() (*types.OperationResponse, error) {
 	m.step("delete", "running", "Deleting the old tier policies...")
 	for _, p := range legacy {
 		path := legacyTierPolicyPath(p.Kind, p.Version)
-		if _, err := deleteWithUID(c, path, p.UID); err != nil && !isK8sNotFound(err) {
+		if _, err := deleteWithUID(c, path, p.UID); err != nil && !kube.IsK8sNotFound(err) {
 			return m.fail("delete", fmt.Sprintf("Failed to delete %s %s: %v. Run it again to retry.", p.Kind, p.Name, err), maasWriteCode(err), "delete failed")
 		}
 		m.logs = append(m.logs, fmt.Sprintf("OK: %s %s/%s deleted", p.Kind, inferenceGatewayNamespace, p.Name))

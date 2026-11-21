@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -100,7 +101,7 @@ func (j deploymentJSON) toOperatorDeployment(via string) operatorDeployment {
 func readOperatorDeployment(c *Client, namespace, name, via string) (*operatorDeployment, error) {
 	var j deploymentJSON
 	if err := c.GetInto(namespacedPath("apps/v1", "deployments", namespace, name), &j); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse Deployment %s/%s: %w", namespace, name, err)
 		}
 		return nil, err
@@ -244,7 +245,7 @@ func serviceSelects(c *Client, namespace, name string, podLabels map[string]stri
 	}
 	found, err := c.GetIntoOptional(namespacedPath("v1", "services", namespace, name), &svc)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return false, fmt.Errorf("parse Service %s/%s: %w", namespace, name, err)
 		}
 		return false, fmt.Errorf("read Service %s/%s: %w", namespace, name, err)
@@ -352,16 +353,16 @@ func applyFixRestartModuleOperator(c *Client, module string) (*types.OperationRe
 	})
 	switch {
 	case err == nil:
-	case isK8sConflict(err) || IsK8sError(err, http.StatusUnprocessableEntity):
+	case kube.IsK8sConflict(err) || kube.IsK8sError(err, http.StatusUnprocessableEntity):
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Deployment %s changed after it was checked, so it was not restarted. Run diagnostics again.", d.ref()), Logs: logs, ErrorCode: "conflict"}, nil
-	case isK8sNotFound(err):
+	case kube.IsK8sNotFound(err):
 		return nothingToDo(fmt.Sprintf("Deployment %s no longer exists. Nothing was restarted.", d.ref()), logs), nil
 	default:
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Could not restart %s: %v.%s", d.ref(), err, templateHint(err)), Logs: logs, ErrorCode: errorCodeFromK8sErr(err)}, nil
 	}
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),
-		User:      getUser(c),
+		User:      kube.GetUser(c),
 		Action:    "fix-restart-module-operator",
 		Detail:    fmt.Sprintf("restarted %s (module %s)", d.ref(), module),
 		Success:   true,

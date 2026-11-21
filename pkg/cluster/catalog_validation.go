@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // Always scope and verify catalog identity: the stable and nightly catalogs
@@ -31,7 +33,7 @@ func catalogChannels(c *Client, source string) ([]any, error) {
 		} `json:"status"`
 	}
 	if err := c.ListInto(path, &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse catalog packages: %w", err)
 		}
 		return nil, fmt.Errorf("catalog %s package lookup: %w", source, err)
@@ -139,10 +141,10 @@ func preflightReinstallCatalog(c *Client, image, override string) (catalogTarget
 		return catalogTarget{}, err
 	}
 	defer remove()
-	deadline := clk.Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
+	deadline := kube.Clock().Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
 	lastProblem := "the catalog has not reported its state yet"
 	pull := pullFailureWatch{advice: nodePullAdvice}
-	for clk.Now().Before(deadline) {
+	for kube.Clock().Now().Before(deadline) {
 		state, err := verificationCatalogState(c, path)
 		if err != nil {
 			lastProblem = err.Error()
@@ -170,7 +172,7 @@ func preflightReinstallCatalog(c *Client, image, override string) (catalogTarget
 		} else {
 			lastProblem = fmt.Sprintf("no channel matches the image's release (available: %s)", strings.Join(channelNames(channels), ", "))
 		}
-		if err := clk.Sleep(c.Context(), CatalogPollInterval); err != nil {
+		if err := kube.Clock().Sleep(c.Context(), CatalogPollInterval); err != nil {
 			return catalogTarget{}, err
 		}
 	}
@@ -214,7 +216,7 @@ func verificationCatalogState(c *Client, path string) (string, error) {
 		} `json:"status"`
 	}
 	if err := c.GetInto(path, &cs); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return "", fmt.Errorf("parse verification catalog: %w", err)
 		}
 		return "", fmt.Errorf("read verification catalog: %w", err)
@@ -249,7 +251,7 @@ func cleanupStaleVerificationCatalogs(c *Client) {
 		} `json:"metadata"`
 	}
 	if err := c.ListInto(namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, ""), &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			slog.Warn("cannot parse CatalogSources to remove stale verification catalogs", "error", err)
 			return
 		}
@@ -316,9 +318,9 @@ func (w *pullFailureWatch) check(c *Client, source, image string) error {
 		return nil
 	}
 	if w.since.IsZero() {
-		w.since = clk.Now()
+		w.since = kube.Clock().Now()
 	}
-	if reason == "InvalidImageName" || clk.Since(w.since) >= CatalogImagePullGrace {
+	if reason == "InvalidImageName" || kube.Clock().Since(w.since) >= CatalogImagePullGrace {
 		err := &catalogImagePullError{image: image, detail: detail}
 		if w.advice != nil {
 			err.advice = w.advice(c)

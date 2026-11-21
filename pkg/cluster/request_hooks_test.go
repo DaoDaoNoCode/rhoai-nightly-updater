@@ -29,13 +29,13 @@ type requestHooks struct {
 // withRequestHooks returns a copy of c whose requests run h.
 func withRequestHooks(c *Client, h requestHooks) *Client {
 	cp := *c
-	hc := *c.httpClient
+	hc := *c.TestOptions().HTTPClient
 	base := hc.Transport
 	if base == nil {
 		base = http.DefaultTransport
 	}
 	hc.Transport = hookTransport{base: base, hooks: h}
-	cp.httpClient = &hc
+	editTestClient(&cp, func(o *testClientOptions) { o.HTTPClient = &hc })
 	return &cp
 }
 

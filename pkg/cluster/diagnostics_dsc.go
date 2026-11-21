@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // DataScienceCluster / DSCInitialization readiness.
@@ -177,7 +179,7 @@ var staleSeen = struct {
 	m map[string]staleObservation
 }{m: map[string]staleObservation{}}
 
-var _ = registerCachePurge(func() {
+var _ = kube.RegisterCachePurge(func() {
 	staleSeen.Lock()
 	staleSeen.m = map[string]staleObservation{}
 	staleSeen.Unlock()

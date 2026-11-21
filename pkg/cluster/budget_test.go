@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // R5-F4/F8: the worst case of one operation (Dashboard Dev revert and every
@@ -82,12 +84,12 @@ func TestInstallWaitEndsBeforeTheOperationDeadline(t *testing.T) {
 	t.Cleanup(func() { OperatorInstallTimeout = old })
 	f := newFakeOLM(t)
 	f.sub = map[string]any{"metadata": map[string]any{"name": SubName}, "spec": map[string]any{}, "status": map[string]any{}}
-	ctx, cancel := clk.WithTimeout(context.Background(), installDeadlineReserve+300*time.Millisecond)
+	ctx, cancel := kube.Clock().WithTimeout(context.Background(), installDeadlineReserve+300*time.Millisecond)
 	defer cancel()
 	var logs []string
-	start := clk.Now()
+	start := kube.Clock().Now()
 	out := waitForOperatorInstall(f.client(ctx), func(UpdateStepEvent) {}, &logs, &operatorRecovery{}, "")
-	if out.errorCode != "install_timeout" || !strings.Contains(out.message, "time budget") || clk.Since(start) > 300*time.Millisecond+InstallPlanPollInterval {
-		t.Fatalf("outcome = %+v after %s", out, clk.Since(start))
+	if out.errorCode != "install_timeout" || !strings.Contains(out.message, "time budget") || kube.Clock().Since(start) > 300*time.Millisecond+InstallPlanPollInterval {
+		t.Fatalf("outcome = %+v after %s", out, kube.Clock().Since(start))
 	}
 }

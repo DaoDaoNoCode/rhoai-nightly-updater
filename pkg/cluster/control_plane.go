@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -73,7 +74,7 @@ func readTopologyHosted(c *Client) (bool, error) {
 		} `json:"status"`
 	}
 	if err := c.GetInto(clusterPath("config.openshift.io/v1", "infrastructures", "cluster"), &infra); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return false, fmt.Errorf("parse Infrastructure cluster: %w", err)
 		}
 		return false, fmt.Errorf("read Infrastructure cluster: %w", err)
@@ -107,7 +108,7 @@ func readRedHatManaged(c *Client) (bool, error) {
 		} `json:"webhooks"`
 	}
 	if err := c.ListInto(clusterPath("admissionregistration.k8s.io/v1", "validatingwebhookconfigurations", ""), &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return false, fmt.Errorf("parse validating webhook configurations: %w", err)
 		}
 		return false, fmt.Errorf("list validating webhook configurations: %w", err)
@@ -124,7 +125,7 @@ func readRedHatManaged(c *Client) (bool, error) {
 
 // The topology of a cluster does not change while the app runs; a read
 // error is not cached, so the next status poll tries again.
-var controlPlaneCache = newLRU[string, string](8)
+var controlPlaneCache = kube.NewLRU[string, string](8)
 
 // cachedControlPlane is readControlPlane, cached per cluster; "" when it
 // cannot be read (unknown).

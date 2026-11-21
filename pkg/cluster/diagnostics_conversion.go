@@ -9,6 +9,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // The "API versions" diagnostics check: a RHOAI CRD that serves several
@@ -187,8 +189,8 @@ func checkConversionFailures(c *Client) checkOutput {
 		}
 		k.probes = append(k.probes, p)
 		switch {
-		case p.Err == nil, isConversionWebhookError(p.Err), isK8sNotFound(p.Err):
-		case IsK8sError(p.Err, http.StatusForbidden):
+		case p.Err == nil, isConversionWebhookError(p.Err), kube.IsK8sNotFound(p.Err):
+		case kube.IsK8sError(p.Err, http.StatusForbidden):
 			forbidden++
 		default:
 			errs = append(errs, fmt.Sprintf("%s?limit=1: %v", p.path(), p.Err))

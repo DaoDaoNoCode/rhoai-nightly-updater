@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -258,10 +259,10 @@ type UpdateStepEvent = types.UpdateStepEvent
 // is the context error if the operation is canceled, or a
 // *catalogImagePullError when the catalog pod cannot pull image.
 func waitForNightlyCatalogReady(c *Client, image string, emit func(UpdateStepEvent), logs *[]string) (bool, error) {
-	deadline := clk.Now().Add(CatalogReadyTimeout)
+	deadline := kube.Clock().Now().Add(CatalogReadyTimeout)
 	pull := pullFailureWatch{advice: nodePullAdvice}
-	for clk.Now().Before(deadline) {
-		if err := clk.Sleep(c.Context(), CatalogPollInterval); err != nil {
+	for kube.Clock().Now().Before(deadline) {
+		if err := kube.Clock().Sleep(c.Context(), CatalogPollInterval); err != nil {
 			return false, err
 		}
 
@@ -287,16 +288,16 @@ func waitForNightlyCatalogReady(c *Client, image string, emit func(UpdateStepEve
 // READY before OLM refreshes its PackageManifest. A timeout is logged and the
 // caller proceeds; the context error is returned if the operation is canceled.
 func waitForNightlyPackageManifest(c *Client, image string, logs *[]string) error {
-	start := clk.Now()
-	for clk.Since(start) < PackageManifestPropagationWait {
+	start := kube.Clock().Now()
+	for kube.Clock().Since(start) < PackageManifestPropagationWait {
 		if err := c.Context().Err(); err != nil {
 			return err
 		}
 		if ch, _ := detectNightlyChannel(c, image); ch != "" {
-			*logs = append(*logs, fmt.Sprintf("OK: PackageManifest ready in %s (channel: %s)", clk.Since(start).Round(time.Second), ch))
+			*logs = append(*logs, fmt.Sprintf("OK: PackageManifest ready in %s (channel: %s)", kube.Clock().Since(start).Round(time.Second), ch))
 			return nil
 		}
-		if err := clk.Sleep(c.Context(), 3*time.Second); err != nil {
+		if err := kube.Clock().Sleep(c.Context(), 3*time.Second); err != nil {
 			return err
 		}
 	}
@@ -329,7 +330,7 @@ func applySubscriptionWithRetry(c *Client, path string, sub map[string]any, reco
 		if !willRetry {
 			break
 		}
-		if err := clk.Sleep(c.Context(), backoff); err != nil {
+		if err := kube.Clock().Sleep(c.Context(), backoff); err != nil {
 			return applyErr, err
 		}
 	}
@@ -338,7 +339,7 @@ func applySubscriptionWithRetry(c *Client, path string, sub map[string]any, reco
 
 // errorCodeFromK8sErr maps a K8s API error to a user-facing error code string.
 func errorCodeFromK8sErr(err error) string {
-	if IsNetworkError(err) {
+	if kube.IsNetworkError(err) {
 		return "network"
 	}
 	var k8sErr *K8sError
@@ -350,10 +351,10 @@ func errorCodeFromK8sErr(err error) string {
 		// runs is refused by the gate with "session_expired".
 		return "sign_in_ended"
 	}
-	if IsK8sError(err, 401) {
+	if kube.IsK8sError(err, 401) {
 		return "unauthorized"
 	}
-	if IsK8sError(err, 403) {
+	if kube.IsK8sError(err, 403) {
 		return "forbidden"
 	}
 	return ""
@@ -631,7 +632,7 @@ func updateCheckCluster(c *Client, image string, opts OperationOptions, chk *upd
 		return fail("Cannot check whether Argo CD manages the operator: "+gitOpsErr.Error()+". Nothing was changed.", errorCodeFromK8sErr(gitOpsErr))
 	}
 	if gitOpsProblem != "" {
-		return fail(gitOpsProblem, ErrorCodeGitOpsManaged)
+		return fail(gitOpsProblem, kube.ErrorCodeGitOpsManaged)
 	}
 	chk.revertDashboard, chk.currentCSV, chk.gitOps, chk.channelOverride = revertDashboard, currentCSV, gitOps, channelOverride
 	return nil, nil
@@ -770,7 +771,7 @@ func updateDetectChannel(c *Client, image string, channel *string, logs *[]strin
 		}
 		slog.Warn("detectNightlyChannel failed", "attempt", attempt, "error", detectErr)
 		if attempt < 3 {
-			if err := clk.Sleep(c.Context(), ChannelRetryDelay); err != nil {
+			if err := kube.Clock().Sleep(c.Context(), ChannelRetryDelay); err != nil {
 				return &types.OperationResponse{Success: false, Message: "Operation stopped while detecting the channel", Logs: *logs}, err
 			}
 		}
@@ -848,7 +849,7 @@ func readCSVMetaRetrying(c *Client, csv string) (meta objectMeta, found bool, er
 		if err == nil || attempt == 2 || c.Context().Err() != nil {
 			return meta, found, err
 		}
-		if clk.Sleep(c.Context(), time.Second) != nil {
+		if kube.Clock().Sleep(c.Context(), time.Second) != nil {
 			return meta, found, err
 		}
 	}
@@ -1021,7 +1022,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 	}
 	if gitOpsProblem != "" {
 		logs = append(logs, "[DRY-RUN] FAILED: "+gitOpsProblem)
-		return &types.OperationResponse{Success: false, Message: gitOpsProblem, Logs: logs, ErrorCode: ErrorCodeGitOpsManaged}, nil
+		return &types.OperationResponse{Success: false, Message: gitOpsProblem, Logs: logs, ErrorCode: kube.ErrorCodeGitOpsManaged}, nil
 	}
 
 	bundle, bundleErr := lookupTargetBundle(c, image)
@@ -1119,7 +1120,7 @@ var lookupTargetBundle = func(c *Client, image string) (string, error) {
 func recordUpdateActivity(c *Client, image string, success bool, reason string) {
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),
-		User:      getUser(c),
+		User:      kube.GetUser(c),
 		Action:    "update",
 		Detail:    image,
 		Success:   success,
@@ -1239,7 +1240,7 @@ func reinstallCheckRequest(c *Client, targetType, image string, opts OperationOp
 		return fail("Cannot check whether Argo CD manages the operator: "+err.Error()+". Nothing was changed.", errorCodeFromK8sErr(err))
 	} else if msg := g.refusal("Install a different build", "the Subscription and the catalog for several minutes"); msg != "" {
 		rs.recordActivity = false
-		return fail(msg+" Update works with Argo CD: it installs the build the catalog serves and keeps the channel Git sets.", ErrorCodeGitOpsManaged)
+		return fail(msg+" Update works with Argo CD: it installs the build the catalog serves and keeps the channel Git sets.", kube.ErrorCodeGitOpsManaged)
 	}
 	refusal, revertDashboard, guardErr := dashboardDevGuard(c, opts, "Install a different build")
 	if guardErr != nil {
@@ -1527,7 +1528,7 @@ func reinstallCleanUp(c *Client, logs *[]string, emit func(UpdateStepEvent)) (*t
 
 	// --- Step 8: wait_propagation ---
 	emit(UpdateStepEvent{Step: "wait_propagation", Status: "running", Message: "Waiting for cleanup to propagate..."})
-	if err := clk.Sleep(c.Context(), PropagationWait); err != nil {
+	if err := kube.Clock().Sleep(c.Context(), PropagationWait); err != nil {
 		return &types.OperationResponse{Success: false, Message: "Operation cancelled during cleanup wait.", Logs: *logs}, err
 	}
 	*logs = append(*logs, fmt.Sprintf("OK: waited %s for cleanup propagation", PropagationWait))
@@ -1723,7 +1724,7 @@ func patchCRDConversionWebhooks(c *Client) (int, []string) {
 		}
 		found, err := c.GetIntoOptional(path, &obj)
 		if err != nil {
-			if isDecodeError(err) {
+			if kube.IsDecodeError(err) {
 				warnings = append(warnings, fmt.Sprintf("parse CRD %s: %v", crd, err))
 				continue
 			}
@@ -1738,7 +1739,7 @@ func patchCRDConversionWebhooks(c *Client) (int, []string) {
 		if conv.Strategy != "Webhook" || svc.Name == "" || svc.Namespace == "" {
 			continue
 		}
-		if _, _, err := c.Get(namespacedPath("v1", "services", svc.Namespace, svc.Name)); !isK8sNotFound(err) {
+		if _, _, err := c.Get(namespacedPath("v1", "services", svc.Namespace, svc.Name)); !kube.IsK8sNotFound(err) {
 			if err != nil {
 				warnings = append(warnings, fmt.Sprintf("check conversion Service of CRD %s: %v", crd, err))
 			}
@@ -1782,7 +1783,7 @@ func rhoaiCSVExists(c *Client) (bool, error) {
 func recordRefreshActivity(c *Client, csvName string, success bool, reason string) {
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),
-		User:      getUser(c),
+		User:      kube.GetUser(c),
 		Action:    "refresh",
 		Detail:    csvName,
 		Success:   success,
@@ -1799,7 +1800,7 @@ func recordReinstallActivity(c *Client, targetType, image string, success bool, 
 	}
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),
-		User:      getUser(c),
+		User:      kube.GetUser(c),
 		Action:    "reinstall",
 		Detail:    detail,
 		Success:   success,
@@ -1835,7 +1836,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 		return fail("Cannot check whether Argo CD manages the operator: "+err.Error()+". Nothing was changed.", errorCodeFromK8sErr(err))
 	} else if msg := g.refusal("Re-deploy", "the Subscription until the old CSV is gone"); msg != "" {
 		recordActivity = false
-		return fail(msg+" To re-deploy the installed build, run Update: it installs the build the catalog serves again.", ErrorCodeGitOpsManaged)
+		return fail(msg+" To re-deploy the installed build, run Update: it installs the build the catalog serves again.", kube.ErrorCodeGitOpsManaged)
 	}
 
 	csv, err := getCSV(c)
@@ -1995,7 +1996,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 			logs = append(logs, fmt.Sprintf("Warning: CSV %s is still being deleted after %s; continuing", csv.Name, CSVDeletionTimeout))
 		}
 	}
-	if err := clk.Sleep(c.Context(), RefreshCleanupWait); err != nil {
+	if err := kube.Clock().Sleep(c.Context(), RefreshCleanupWait); err != nil {
 		return &types.OperationResponse{Success: false, Message: "Operation cancelled during cleanup wait.", Logs: logs}, err
 	}
 	emit(UpdateStepEvent{Step: "wait_cleanup", Status: "success", Message: "Cleanup propagated"})
@@ -2270,7 +2271,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),
-		User:      getUser(c),
+		User:      kube.GetUser(c),
 		Action:    "create-pull-secret",
 		Detail:    "",
 		Success:   true,

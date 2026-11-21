@@ -93,8 +93,8 @@ func TestArgoApplicationsChangeChecksReadFresh(t *testing.T) {
 	fakeCacheClock(t, argoApplicationsCache)
 	f := &fakeArgoCD{served: true, apps: []map[string]any{argoApplicationListing("openshift-gitops")}}
 	status := statusReadClient(t, f)
-	change := newTestClient(testClientOptions{BaseURL: status.baseURL, HTTPClient: status.httpClient, Ctx: status.ctx})
-	user := newTestClient(testClientOptions{BaseURL: status.baseURL, HTTPClient: status.httpClient, Ctx: status.ctx, AsUser: true})
+	change := newTestClient(testClientOptions{BaseURL: status.BaseURL(), HTTPClient: status.TestOptions().HTTPClient, Ctx: status.Context()})
+	user := newTestClient(testClientOptions{BaseURL: status.BaseURL(), HTTPClient: status.TestOptions().HTTPClient, Ctx: status.Context(), AsUser: true})
 
 	if got := dscVerdict(status); got.state != "" {
 		t.Fatalf("status read: %+v", got)
@@ -104,7 +104,7 @@ func TestArgoApplicationsChangeChecksReadFresh(t *testing.T) {
 	setArgoApps(f, argoApplicationListing("openshift-gitops", argoDSCObject("default-dsc")))
 	for _, c := range []*Client{change, user} {
 		if got := dscVerdict(c); got.state != types.ArgoCDManaged || got.managedBy() != testArgoApp {
-			t.Fatalf("change check (as user %v) used the cached list: %+v", c.asUser, got)
+			t.Fatalf("change check (as user %v) used the cached list: %+v", c.ActsAsUser(), got)
 		}
 	}
 	if n := argoLists(f); n != 3 {
@@ -132,7 +132,7 @@ func TestArgoApplicationsErrorsAreNotCached(t *testing.T) {
 	if got.state != types.ArgoCDUnconfirmed || !strings.Contains(got.reason, "listing Argo CD applications failed") {
 		t.Fatalf("failed list: %+v, want unconfirmed with the reason", got)
 	}
-	if _, cached := argoApplicationsCache.Get(c.baseURL); cached {
+	if _, cached := argoApplicationsCache.Get(c.BaseURL()); cached {
 		t.Fatal("the failed list was cached")
 	}
 

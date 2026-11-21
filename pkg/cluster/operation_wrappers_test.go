@@ -84,13 +84,6 @@ func checkDSCCompatibility(c *Client, dsc map[string]any) *types.DSCCompatibilit
 	return checkDSCCompatibilityFor(c, dscRead{Object: dsc, State: DSCStatePresent, Version: version}, op, err, fetchDSCSample)
 }
 
-// Len returns the number of stored entries, including expired ones not yet removed.
-func (c *lruCache[K, V]) Len() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.ll.Len()
-}
-
 // GetOperationState returns the running-operation marker and the last
 // completed operation; either is nil when none is recorded.
 func GetOperationState(c *Client) (*types.OperationMarker, *types.CompletedOperation, error) {

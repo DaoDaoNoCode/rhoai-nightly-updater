@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -216,7 +217,7 @@ func releaseGatewayProject(c *Client, project string) string {
 	if err := forgetGatewayProject(c, project); err != nil {
 		slog.Warn("cannot update the gateway projects record", "error", err)
 	}
-	slog.Info("project taken off the inference gateway's list", "project", project, "user", getUser(c))
+	slog.Info("project taken off the inference gateway's list", "project", project, "user", kube.GetUser(c))
 	return fmt.Sprintf(" %s was taken off the projects the inference gateway allows (this tool had added it, and no model there uses the gateway any more).", project)
 }
 
@@ -245,7 +246,7 @@ func releaseGoneGatewayProjects(c *Client) string {
 		if err := forgetGatewayProject(c, project); err != nil {
 			slog.Warn("cannot update the gateway projects record", "error", err)
 		}
-		slog.Info("deleted project taken off the inference gateway's list", "project", project, "user", getUser(c))
+		slog.Info("deleted project taken off the inference gateway's list", "project", project, "user", kube.GetUser(c))
 		released = append(released, project)
 	}
 	out := ""

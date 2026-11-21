@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // Operators this tool installs from OperatorHub for an Environment feature
@@ -159,7 +161,7 @@ func listSubscriptions(c *Client, ns string) ([]*olmSubscription, error) {
 		Items []json.RawMessage `json:"items"`
 	}
 	if err := c.GetInto(path, &list); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the Subscription list: %w", err)
 		}
 		return nil, fmt.Errorf("list Subscriptions: %w", err)
@@ -349,7 +351,7 @@ func readOperatorPackage(c *Client, pkg, source string) (operatorPackage, bool, 
 		} `json:"status"`
 	}
 	if err := c.ListInto(path, &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return operatorPackage{}, false, fmt.Errorf("parse package %s: %w", pkg, err)
 		}
 		return operatorPackage{}, false, fmt.Errorf("read package %s from catalog %s: %w", pkg, source, err)
@@ -638,9 +640,9 @@ func waitForSubscription(c *Client, ns, name string, progress func(string)) (sub
 		// only one that lasts stops the wait.
 		if p.failed != "" {
 			if failedSince.IsZero() {
-				failedSince = clk.Now()
+				failedSince = kube.Clock().Now()
 			}
-			return clk.Since(failedSince) >= MaaSOperatorResolveGrace, nil
+			return kube.Clock().Since(failedSince) >= MaaSOperatorResolveGrace, nil
 		}
 		failedSince = time.Time{}
 		return false, nil

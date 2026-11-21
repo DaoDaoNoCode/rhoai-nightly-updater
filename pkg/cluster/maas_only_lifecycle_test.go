@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -43,10 +44,10 @@ func maasOnlyModel(t *testing.T) *modelsCluster {
 func routeGone(t *testing.T, mc *modelsCluster) bool {
 	t.Helper()
 	_, _, err := mc.c.Get(tModelRoute)
-	if err != nil && !IsK8sError(err, http.StatusNotFound) {
+	if err != nil && !kube.IsK8sError(err, http.StatusNotFound) {
 		t.Fatalf("read the model's route: %v", err)
 	}
-	return IsK8sError(err, http.StatusNotFound)
+	return kube.IsK8sError(err, http.StatusNotFound)
 }
 
 // requestsTo are the logged requests (method and path) whose path holds part.

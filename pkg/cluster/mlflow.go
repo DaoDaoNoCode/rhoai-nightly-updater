@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -157,7 +158,7 @@ func (m mlflowCR) staleOriginal() bool {
 func getMLflowCR(c *Client) (mlflowCR, error) {
 	var cr mlflowCR
 	if err := c.GetInto(clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), &cr); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return mlflowCR{}, fmt.Errorf("parse MLflow CR: %w", err)
 		}
 		return mlflowCR{}, err
@@ -195,7 +196,7 @@ func getMLflowStatus(c *Client) types.ResourceState {
 	state := types.ResourceState{Namespace: ns}
 
 	cr, err := getMLflowCR(c)
-	if isK8sNotFound(err) {
+	if kube.IsK8sNotFound(err) {
 		state.Message = "Not deployed"
 		return state
 	}
@@ -338,10 +339,10 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 		msg := fmt.Sprintf("Failed to create MLflow CR: %v", err)
 		code := errorCodeFromK8sErr(err)
 		switch {
-		case isK8sNotFound(err):
+		case kube.IsK8sNotFound(err):
 			msg = "The MLflow CRD is not installed. Set the mlflowoperator component to Managed in the DataScienceCluster first."
 			code = "prerequisites"
-		case isK8sConflict(err):
+		case kube.IsK8sConflict(err):
 			msg = "MLflow was created by someone else in the meantime. Refresh the status."
 			code = "conflict"
 		}
@@ -350,7 +351,7 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 	}
 	logs = append(logs, "OK: MLflow CR created")
 
-	slog.Info("mlflow setup", "user", getUser(c))
+	slog.Info("mlflow setup", "user", kube.GetUser(c))
 	detail := "MLflow CR created"
 	if ns, err := mlflowNamespace(c); err == nil {
 		detail += "; the server runs in " + ns
@@ -374,7 +375,7 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 	}
 
 	cr, err := getMLflowCR(c)
-	if isK8sNotFound(err) {
+	if kube.IsK8sNotFound(err) {
 		logs = append(logs, "MLflow CR already absent")
 		return &types.OperationResponse{Success: true, Message: "MLflow is not deployed; nothing to remove.", Logs: logs}, nil
 	}
@@ -398,9 +399,9 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 	}
 	logs = append(logs, "Deleting MLflow CR...")
 	crPath := clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName)
-	if _, delErr := deleteWithUID(c, crPath, cr.Metadata.UID); delErr != nil && !isK8sNotFound(delErr) {
+	if _, delErr := deleteWithUID(c, crPath, cr.Metadata.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
 		code := errorCodeFromK8sErr(delErr)
-		if isK8sConflict(delErr) {
+		if kube.IsK8sConflict(delErr) {
 			code = "conflict"
 		}
 		return fail(fmt.Sprintf("Failed to delete MLflow CR: %v", delErr), code, fmt.Sprintf("CR delete failed: %v", delErr))
@@ -411,7 +412,7 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 	if pvcErr == nil && len(pvcs) > 0 {
 		dataNote = fmt.Sprintf(" %s %v (tracking database, model registry and artifacts) %s garbage-collected with it.", verb(len(pvcs), "PVC", "PVCs"), pvcs, verb(len(pvcs), "is", "are"))
 	}
-	slog.Info("mlflow teardown", "user", getUser(c))
+	slog.Info("mlflow teardown", "user", kube.GetUser(c))
 	recordActivity(c, "teardown-mlflow", "MLflow CR deleted", true)
 
 	gone, waitErr := waitForDeletion(c, crPath, MLflowDeleteTimeout, MLflowDeletePoll)
@@ -471,7 +472,7 @@ func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 	}
 
 	cr, err := getMLflowCR(c)
-	if isK8sNotFound(err) {
+	if kube.IsK8sNotFound(err) {
 		return fail("MLflow is not deployed. Set it up first.", "prerequisites", "not deployed")
 	}
 	if err != nil {
@@ -513,7 +514,7 @@ func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 	if err := patchMLflowCR(c, cr, annotations, imageSpec(image)); err != nil {
 		code := errorCodeFromK8sErr(err)
 		msg := fmt.Sprintf("Failed to patch MLflow CR: %v", err)
-		if isK8sConflict(err) {
+		if kube.IsK8sConflict(err) {
 			code = "conflict"
 			msg = "MLflow changed while the PR was being deployed. Nothing was changed; refresh and retry."
 		}
@@ -521,7 +522,7 @@ func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 	}
 	logs = append(logs, "OK: MLflow CR patched with PR image")
 
-	slog.Info("mlflow PR deployed", "pr", prNumber, "image", image, "user", getUser(c))
+	slog.Info("mlflow PR deployed", "pr", prNumber, "image", image, "user", kube.GetUser(c))
 	recordActivity(c, "deploy-mlflow-pr", fmt.Sprintf("PR #%d (%s)", prNumber, image), true)
 
 	return &types.OperationResponse{
@@ -540,7 +541,7 @@ func RevertMLflowImage(c *Client) (*types.OperationResponse, error) {
 	}
 
 	cr, err := getMLflowCR(c)
-	if isK8sNotFound(err) {
+	if kube.IsK8sNotFound(err) {
 		return fail("MLflow is not deployed.", "prerequisites", "not deployed")
 	}
 	if err != nil {
@@ -573,7 +574,7 @@ func RevertMLflowImage(c *Client) (*types.OperationResponse, error) {
 	if err := patchMLflowCR(c, cr, map[string]any{mlflowOriginalImageAnnotation: nil}, imageSpec(image)); err != nil {
 		code := errorCodeFromK8sErr(err)
 		msg := fmt.Sprintf("Failed to revert MLflow image: %v", err)
-		if isK8sConflict(err) {
+		if kube.IsK8sConflict(err) {
 			code = "conflict"
 			msg = "MLflow changed during the revert. Nothing was changed; refresh and retry."
 		}
@@ -581,7 +582,7 @@ func RevertMLflowImage(c *Client) (*types.OperationResponse, error) {
 	}
 	logs = append(logs, fmt.Sprintf("OK: Image reverted to %s", target))
 
-	slog.Info("mlflow image reverted", "target", target, "user", getUser(c))
+	slog.Info("mlflow image reverted", "target", target, "user", kube.GetUser(c))
 	recordActivity(c, "revert-mlflow", target, true)
 
 	return &types.OperationResponse{

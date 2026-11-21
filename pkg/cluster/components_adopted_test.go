@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -51,7 +52,7 @@ func (s *rsServer) client(t *testing.T) *Client {
 	}))
 	t.Cleanup(srv.Close)
 	old := replicaSetOwnerCache
-	replicaSetOwnerCache = newLRU[string, string](512)
+	replicaSetOwnerCache = kube.NewLRU[string, string](512)
 	t.Cleanup(func() { replicaSetOwnerCache = old })
 	return newTestClient(testClientOptions{BaseURL: srv.URL, Token: "t", HTTPClient: srv.Client(), Ctx: context.Background()})
 }

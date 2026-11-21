@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -347,13 +348,13 @@ func TestUpdateStream_CatalogImagePullFailsFast(t *testing.T) {
 	old := CatalogReadyTimeout
 	CatalogReadyTimeout = 10 * time.Second
 	t.Cleanup(func() { CatalogReadyTimeout = old })
-	start := clk.Now()
+	start := kube.Clock().Now()
 	result, err := UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != "catalog_image_pull" || !strings.Contains(result.Message, "unauthorized") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if clk.Since(start) > 5*time.Second {
-		t.Fatalf("pull failure was not detected early (%s)", clk.Since(start))
+	if kube.Clock().Since(start) > 5*time.Second {
+		t.Fatalf("pull failure was not detected early (%s)", kube.Clock().Since(start))
 	}
 	for _, w := range f.writes() {
 		if !strings.Contains(w, "-verify-") {
@@ -683,10 +684,10 @@ func TestUpgradeGateNoteFromTheDSC(t *testing.T) {
 			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 			f.onSubscribe = olmInstalls("rhods-operator.3.6.0")
 			f.dsc = tc.dsc
-			start := clk.Now()
+			start := kube.Clock().Now()
 			note := adminAckNote(f.client(context.Background()), "rhods-operator.3.6.0", time.Now())
-			if tc.quiet != (note == "") || clk.Since(start) > tc.maxTime {
-				t.Fatalf("note %q after %s", note, clk.Since(start))
+			if tc.quiet != (note == "") || kube.Clock().Since(start) > tc.maxTime {
+				t.Fatalf("note %q after %s", note, kube.Clock().Since(start))
 			}
 			for _, w := range tc.want {
 				if !strings.Contains(note, w) {
@@ -741,11 +742,11 @@ func TestUpgradeGateWaitIsBoundedBySlowReads(t *testing.T) {
 	t.Cleanup(func() { upgradeGateWait, upgradeGatePoll = oldWait, oldPoll })
 	// Every read takes 10s (on the fake clock) unless the client gives up.
 	c := withLatency(stallServer(t, 0), 10*time.Second)
-	start := clk.Now()
+	start := kube.Clock().Now()
 	if note := adminAckNote(c, "rhods-operator.3.6.0", time.Now()); note != "" {
 		t.Fatalf("note %q", note)
 	}
-	if d := clk.Since(start); d != upgradeGateWait {
+	if d := kube.Clock().Since(start); d != upgradeGateWait {
 		t.Fatalf("the wait took %s, want %s", d, upgradeGateWait)
 	}
 }
@@ -901,10 +902,10 @@ func TestRestore_ReapplyRunsAfterTheDeletionBudget(t *testing.T) {
 	f.mu.Unlock()
 	result := &types.OperationResponse{}
 	emit, _ := eventsRecorder()
-	start := clk.Now()
+	start := kube.Clock().Now()
 	r.restore(c, result, emit)
-	if clk.Since(start) > 900*time.Millisecond {
-		t.Fatalf("restore took %s: the CSV waits did not respect the budget", clk.Since(start))
+	if kube.Clock().Since(start) > 900*time.Millisecond {
+		t.Fatalf("restore took %s: the CSV waits did not respect the budget", kube.Clock().Since(start))
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1280,9 +1281,9 @@ func TestWaitRequiresTheCSVToStaySucceeded(t *testing.T) {
 	// phaseOverTime makes the CSV's phase follow the clock from now on:
 	// every request sees phase(time since now), or the phase it had for "".
 	phaseOverTime := func(f *fakeOLM, phase func(elapsed time.Duration) string) {
-		start := clk.Now()
+		start := kube.Clock().Now()
 		f.intercept = func(f *fakeOLM, _ http.ResponseWriter, _ *http.Request) bool {
-			if p := phase(clk.Since(start)); p != "" {
+			if p := phase(kube.Clock().Since(start)); p != "" {
 				f.csvs["rhods-operator.3.6.0"]["status"] = map[string]any{"phase": p, "reason": "NeedsReinstall"}
 			}
 			return false
@@ -1314,14 +1315,14 @@ func TestWaitRequiresTheCSVToStaySucceeded(t *testing.T) {
 			}
 			return ""
 		})
-		start := clk.Now()
+		start := kube.Clock().Now()
 		var logs []string
 		outcome := waitForOperatorInstall(f.client(context.Background()), func(UpdateStepEvent) {}, &logs, &operatorRecovery{}, "")
 		if !outcome.succeeded {
 			t.Fatalf("outcome = %+v", outcome)
 		}
-		if min := pendingUntil + CSVSucceededSettle; clk.Since(start) < min {
-			t.Fatalf("succeeded after %s, before the CSV had settled (%s)", clk.Since(start), min)
+		if min := pendingUntil + CSVSucceededSettle; kube.Clock().Since(start) < min {
+			t.Fatalf("succeeded after %s, before the CSV had settled (%s)", kube.Clock().Since(start), min)
 		}
 	})
 }

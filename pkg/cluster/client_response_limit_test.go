@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // An API response larger than maxResponseBody is an explicit error, not a
@@ -27,8 +29,8 @@ func TestClientRefusesAResponseOverTheLimit(t *testing.T) {
 		size    int
 		refused bool
 	}{
-		{"at the limit", maxResponseBody, false},
-		{"over the limit", maxResponseBody + 1, true},
+		{"at the limit", kube.MaxResponseBody, false},
+		{"over the limit", kube.MaxResponseBody + 1, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := serve(tc.size)

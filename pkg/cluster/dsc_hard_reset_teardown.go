@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // What deleting the DataScienceCluster sets off, read from the source of
@@ -176,7 +178,7 @@ func operatorsLeft(c *Client, ops []hardResetOperator) ([]hardResetOperator, err
 		}
 		found, err := c.GetIntoOptional(namespacedPath("apps/v1", "deployments", o.Namespace, o.Name), &d)
 		if err != nil {
-			if isDecodeError(err) {
+			if kube.IsDecodeError(err) {
 				return nil, fmt.Errorf("parse Deployment %s/%s: %w", o.Namespace, o.Name, err)
 			}
 			return nil, fmt.Errorf("read Deployment %s/%s: %w", o.Namespace, o.Name, err)
@@ -202,7 +204,7 @@ func operatorsLeft(c *Client, ops []hardResetOperator) ([]hardResetOperator, err
 func platformModulesSettled(c *Client) (bool, string, error) {
 	r, err := listServed(c, platformGroup, platformListFmt, nil, platformFallbackVersions)
 	switch {
-	case isK8sNotFound(err), err == nil && r.Version == "":
+	case kube.IsK8sNotFound(err), err == nil && r.Version == "":
 		return true, "no Platform API is served", nil
 	case err != nil:
 		return false, "", fmt.Errorf("read the Platform: %w", err)
@@ -380,7 +382,7 @@ func namespaceOwnerBlocker(c *Client) string {
 		} `json:"metadata"`
 	}
 	if err := u.ListInto("/api/v1/namespaces", &items); err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return "The namespaces could not be read to check that none would be deleted with the DataScienceCluster: " + err.Error() + "."
 		}
 		return "The namespaces could not be listed with your sign-in to check that none would be deleted with the DataScienceCluster: " + strings.TrimSuffix(err.Error(), ".") + "."
@@ -537,7 +539,7 @@ func (r *ownerResolver) read(ref ownerRef, group, version, what string, unknown 
 	}
 	found, err := r.c.GetIntoOptional(apiPath, &obj)
 	if err != nil {
-		if isDecodeError(err) {
+		if kube.IsDecodeError(err) {
 			return unknown("could not be read: " + err.Error())
 		}
 		return unknown("could not be read with your sign-in: " + err.Error())

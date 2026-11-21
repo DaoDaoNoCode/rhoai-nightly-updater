@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -46,7 +47,7 @@ var mlflowSampleNames = map[string]string{
 	SampleSkill:     "Agent skill",
 }
 
-var mlflowSamplesCache = newLRU[string, types.MLflowSamplesStatus](64)
+var mlflowSamplesCache = kube.NewLRU[string, types.MLflowSamplesStatus](64)
 
 // mlflowTarget is MLflow in one project's workspace.
 type mlflowTarget struct {
@@ -104,7 +105,7 @@ func mlflowSampleTarget(c *Client, project string) (*mlflowTarget, string, error
 func mlflowSampleTargetAs(c *Client, project, token string) (*mlflowTarget, string, error) {
 	cr, err := getMLflowCR(c)
 	switch {
-	case isK8sNotFound(err):
+	case kube.IsK8sNotFound(err):
 		return nil, "MLflow is not deployed. Set it up first.", nil
 	case err != nil:
 		return nil, "", fmt.Errorf("read the MLflow CR: %w", err)
@@ -434,7 +435,7 @@ func RunMLflowSamples(c *Client, req types.MLflowSamplesRequest, onStep func(Upd
 		}
 		emit(UpdateStepEvent{Step: id, Status: "success", Message: fmt.Sprintf("%s: %s", name, msg)})
 	}
-	slog.Info("mlflow samples", "action", req.Action, "samples", req.Samples, "project", req.Project, "failed", failed, "user", getUser(c))
+	slog.Info("mlflow samples", "action", req.Action, "samples", req.Samples, "project", req.Project, "failed", failed, "user", kube.GetUser(c))
 	if len(failed) > 0 {
 		recordActivity(c, "mlflow-samples", activity+" (failed: "+strings.Join(failed, ", ")+")", false)
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Failed: %s. See the steps for the reason.", strings.Join(failed, ", ")), Logs: logs, ErrorCode: code}, nil

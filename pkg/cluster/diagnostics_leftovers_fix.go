@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -79,7 +80,7 @@ func leftoverWriteError(err error, what string, dryRun bool) *types.OperationRes
 	if errors.As(err, &k) && k.K8sMessage != "" {
 		msg = k.K8sMessage
 	}
-	if IsK8sError(err, http.StatusConflict) {
+	if kube.IsK8sError(err, http.StatusConflict) {
 		return leftoverChanged(what, msg)
 	}
 	stage := "The API server refused the change"
@@ -105,7 +106,7 @@ func leftoverChanged(what, serverMsg string) *types.OperationResponse {
 // A read that fails leaves the refusal as the API server gave it (nothing
 // was changed either way).
 func (st *storedLeftover) patchError(c *Client, err error, dryRun bool) *types.OperationResponse {
-	if IsK8sError(err, http.StatusUnprocessableEntity) {
+	if kube.IsK8sError(err, http.StatusUnprocessableEntity) {
 		meta, found, rerr := readObjectMeta(c, componentListPath(st.Group, st.Version, st.Resource)+"/"+st.Name)
 		if rerr == nil && (!found || meta.UID != st.UID || meta.ResourceVersion != st.ResourceVersion) {
 			var k *K8sError
@@ -190,7 +191,7 @@ func fixLeftoverStoredFields(c *Client, target string, ack *AckBinding) *types.O
 	logs = append(logs, "Patched "+st.ref()+": "+strings.Join(summary, ", "))
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),
-		User:      getUser(c),
+		User:      kube.GetUser(c),
 		Action:    "fix-leftover-fields",
 		Detail:    fmt.Sprintf("%s: %s", st.ref(), strings.Join(summary, ", ")),
 		Success:   true,
@@ -277,7 +278,7 @@ func fixLeftoverRetryDSC(c *Client, name string) *types.OperationResponse {
 	_, _, rmErr := c.Do(http.MethodPatch, path, "application/merge-patch+json", remove, url.Values{"fieldManager": {leftoverManager}})
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),
-		User:      getUser(c),
+		User:      kube.GetUser(c),
 		Action:    "fix-retry-dsc-reconcile",
 		Detail:    fmt.Sprintf("annotated DataScienceCluster %s to retry %s", name, waiting),
 		Success:   rmErr == nil,
@@ -393,13 +394,13 @@ func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *typ
 	path := workloadPath(kind, ns, name)
 	uid := r.Obj.Metadata.UID
 	if err := deleteWorkload(c, path, uid, r.Obj.Metadata.ResourceVersion, true); err != nil {
-		if IsK8sError(err, http.StatusNotFound) {
+		if kube.IsK8sError(err, http.StatusNotFound) {
 			return nothingToDo(fmt.Sprintf("%s no longer exists. Nothing was deleted.", r.ref()), logs)
 		}
 		return leftoverWriteError(err, r.ref(), true)
 	}
 	if err := deleteWorkload(c, path, uid, r.Obj.Metadata.ResourceVersion, false); err != nil {
-		if IsK8sError(err, http.StatusNotFound) {
+		if kube.IsK8sError(err, http.StatusNotFound) {
 			return nothingToDo(fmt.Sprintf("%s no longer exists. Nothing was deleted.", r.ref()), logs)
 		}
 		return leftoverWriteError(err, r.ref(), false)
@@ -407,7 +408,7 @@ func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *typ
 	logs = append(logs, fmt.Sprintf("Deleted %s (UID %s, propagation Background)", r.ref(), uid))
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),
-		User:      getUser(c),
+		User:      kube.GetUser(c),
 		Action:    "fix-recreate-leftover",
 		Detail:    fmt.Sprintf("deleted %s (selector changed; owned by %s) for its operator to recreate", r.ref(), r.Owner),
 		Success:   true,
@@ -432,7 +433,7 @@ func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *typ
 // waitRecreated polls until the workload exists with a new UID and is
 // ready, or leftoverRecreateWait passes.
 func waitRecreated(c *Client, kind, ns, name, oldUID string) (back, ready bool, err error) {
-	deadline := clk.Now().Add(leftoverRecreateWait)
+	deadline := kube.Clock().Now().Add(leftoverRecreateWait)
 	for {
 		obj, found, _, readErr := readWorkloadAsUser(c, kind, ns, name)
 		if readErr == nil && found && obj.Metadata.UID != oldUID {
@@ -441,10 +442,10 @@ func waitRecreated(c *Client, kind, ns, name, oldUID string) (back, ready bool, 
 				return true, true, nil
 			}
 		}
-		if !clk.Now().Before(deadline) {
+		if !kube.Clock().Now().Before(deadline) {
 			return back, false, nil
 		}
-		if err := clk.Sleep(c.Context(), leftoverRecreatePoll); err != nil {
+		if err := kube.Clock().Sleep(c.Context(), leftoverRecreatePoll); err != nil {
 			return back, false, err
 		}
 	}

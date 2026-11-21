@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -506,7 +507,7 @@ func TestOperatorOperationsWithLeftOverArgoCDTracking(t *testing.T) {
 	}
 	f := gitOpsFake(t)
 	f.argo = &fakeArgoCD{served: true, apps: []map[string]any{argoApplicationListing("openshift-gitops")}}
-	if r := redeploy(f.client(context.Background())); r.ErrorCode == ErrorCodeGitOpsManaged {
+	if r := redeploy(f.client(context.Background())); r.ErrorCode == kube.ErrorCodeGitOpsManaged {
 		t.Fatalf("refused for a left-over annotation: %+v", r)
 	}
 	g, err := readOperatorGitOps(f.client(context.Background()))
@@ -517,7 +518,7 @@ func TestOperatorOperationsWithLeftOverArgoCDTracking(t *testing.T) {
 	f = gitOpsFake(t)
 	f.argo = &fakeArgoCD{fail: map[string]int{argoDiscoveryPath: http.StatusServiceUnavailable}}
 	r := redeploy(f.client(context.Background()))
-	if r.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(r.Message, "could not confirm this with Argo CD") || !strings.Contains(r.Message, "503") {
+	if r.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(r.Message, "could not confirm this with Argo CD") || !strings.Contains(r.Message, "503") {
 		t.Fatalf("unconfirmed: %+v", r)
 	}
 	if w := f.writes(); len(w) != 0 {
@@ -541,7 +542,7 @@ func TestOperatorOperationsUnderLabelTracking(t *testing.T) {
 		labels[argoInstanceLabel] = testArgoApp
 	}
 	r, _ := RefreshOperatorStreamWithOptions(f.client(context.Background()), OperationOptions{}, func(UpdateStepEvent) {})
-	if r.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(r.Message, `Argo CD application "`+testArgoApp+`"`) {
+	if r.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(r.Message, `Argo CD application "`+testArgoApp+`"`) {
 		t.Fatalf("result = %+v", r)
 	}
 	if w := f.writes(); len(w) != 0 {
@@ -558,7 +559,7 @@ func TestUpdateWithLeftOverArgoCDTracking(t *testing.T) {
 	f := gitOpsFake(t)
 	f.argo = &fakeArgoCD{}
 	result, err := Update(f.client(context.Background()), testNightlyImage, true)
-	if err != nil || result.ErrorCode == ErrorCodeGitOpsManaged {
+	if err != nil || result.ErrorCode == kube.ErrorCodeGitOpsManaged {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	if logs := strings.Join(result.Logs, "\n"); !result.Success || strings.Contains(logs, "as Git sets it") || !strings.Contains(logs, "Would delete and recreate Subscription") {

@@ -1,4 +1,4 @@
-package cluster
+package kube
 
 // REST helpers: the request patterns most call sites repeat, on top of the
 // Client request methods (client.go). Each returns exactly the errors its
@@ -15,20 +15,20 @@ import (
 	"reflect"
 )
 
-// isK8sNotFound reports whether err is the API server's 404: the object (or
+// IsK8sNotFound reports whether err is the API server's 404: the object (or
 // the resource type) does not exist. Not the MLflow 404 (isNotFound).
-func isK8sNotFound(err error) bool { return IsK8sError(err, http.StatusNotFound) }
+func IsK8sNotFound(err error) bool { return IsK8sError(err, http.StatusNotFound) }
 
-// isK8sConflict reports whether err is the API server's 409: the object
+// IsK8sConflict reports whether err is the API server's 409: the object
 // already exists (a create) or changed since it was read (an update).
-func isK8sConflict(err error) bool { return IsK8sError(err, http.StatusConflict) }
+func IsK8sConflict(err error) bool { return IsK8sError(err, http.StatusConflict) }
 
 // GetOptional reads path, where a missing object (404) is no error: found
 // is then false, with no body. Any other error is Get's, with its body.
 func (c *Client) GetOptional(path string) (body []byte, found bool, err error) {
 	body, _, err = c.Get(path)
 	if err != nil {
-		if isK8sNotFound(err) {
+		if IsK8sNotFound(err) {
 			return nil, false, nil
 		}
 		return body, false, err
@@ -44,9 +44,9 @@ type decodeError struct{ err error }
 func (e *decodeError) Error() string { return e.err.Error() }
 func (e *decodeError) Unwrap() error { return e.err }
 
-// isDecodeError reports whether err is a decode error of GetInto,
+// IsDecodeError reports whether err is a decode error of GetInto,
 // GetIntoOptional or ListInto, not the request's error.
-func isDecodeError(err error) bool {
+func IsDecodeError(err error) bool {
 	_, ok := errors.AsType[*decodeError](err)
 	return ok
 }
@@ -115,7 +115,7 @@ func (c *Client) PatchJSON(path string, patch any) error {
 // (404) is no error: existed is then false. Other errors are Delete's.
 func (c *Client) DeleteIfExists(path string) (existed bool, err error) {
 	if _, err := c.Delete(path); err != nil {
-		if isK8sNotFound(err) {
+		if IsK8sNotFound(err) {
 			return false, nil
 		}
 		return false, err

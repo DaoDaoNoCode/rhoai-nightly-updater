@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // Pod classification shared by the "Operator pods" and "RHOAI pods" checks
@@ -286,7 +288,7 @@ func latestWarningEvent(c *Client, namespace, podName string) (string, error) {
 	query := url.Values{"fieldSelector": {"involvedObject.kind=Pod,involvedObject.name=" + podName}}
 	body, _, err := c.Do(http.MethodGet, namespacedPath("v1", "events", namespace, ""), "", nil, query)
 	if err != nil {
-		if IsK8sError(err, http.StatusForbidden) {
+		if kube.IsK8sError(err, http.StatusForbidden) {
 			return "", errEventsForbidden
 		}
 		return "", err
@@ -552,7 +554,7 @@ func scanPods(c *Client, namespaces []string, now time.Time) (issues []podIssue,
 	for _, ns := range namespaces {
 		pods, err := listDiagPods(c, ns, "")
 		if err != nil {
-			if isK8sNotFound(err) {
+			if kube.IsK8sNotFound(err) {
 				continue
 			}
 			errs = append(errs, fmt.Sprintf("%s: %v", ns, err))

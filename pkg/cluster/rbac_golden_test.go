@@ -20,7 +20,7 @@ const rbacGoldenFile = "testdata/rbac-requests.golden"
 // The RBAC scanner's view of the package, frozen: every request it derives
 // (verb, API group, resource, namespace and name, with how many times it is
 // derived; no source positions, which change with any edit), the calls on
-// c.bookkeeping(), and the excluded call sites it met. A refactor that moves
+// c.Bookkeeping(), and the excluded call sites it met. A refactor that moves
 // or rewrites API calls without changing what they request (REST helpers,
 // the package split) must leave this file byte for byte the same; a change
 // that does request something else regenerates it with -update, and the
