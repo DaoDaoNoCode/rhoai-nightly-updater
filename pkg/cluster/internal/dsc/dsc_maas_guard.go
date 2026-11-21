@@ -145,7 +145,7 @@ func (rc *RemovalChecker) maasBlocker(path string) string {
 func (v *View) maasBlocks(rc *RemovalChecker, before, after map[string]any, teardown bool) (*types.DSCRemovalBlock, string, []string) {
 	gone, down := "", ""
 	for _, p := range dscMaaSPaths {
-		t, ok := v.ByKey[p]
+		t, ok := v.byKey[p]
 		if !ok || !t.Toggle || !v.deployed(before, t.Path) {
 			continue
 		}

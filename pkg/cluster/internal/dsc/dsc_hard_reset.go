@@ -101,7 +101,7 @@ func (v *View) NewDefaultObject(comps map[string]any) map[string]any {
 	sort.Strings(fields)
 	for _, f := range fields {
 		keys := strings.Split(f, ".")
-		old, ok := components.LookupPath(v.Components(), keys)
+		old, ok := components.LookupPath(v.components(), keys)
 		if !ok {
 			continue
 		}
@@ -110,7 +110,7 @@ func (v *View) NewDefaultObject(comps map[string]any) map[string]any {
 			pm[keys[len(keys)-1]] = old
 		}
 	}
-	meta := map[string]any{"name": v.Name}
+	meta := map[string]any{"name": v.name}
 	if len(v.defaultsLabel) > 0 {
 		meta["labels"] = v.defaultsLabel
 	}
@@ -150,16 +150,16 @@ func (v *View) planHardReset(c *kube.Client, keep bool) *dscPlanned {
 	newComps, _ := newSpec["components"].(map[string]any)
 	createdSpec, _ := created["spec"].(map[string]any)
 	createdComps, _ := createdSpec["components"].(map[string]any)
-	p.plan.Changes = v.changesBetween(v.defaultedComponents(v.Components()), createdComps)
+	p.plan.Changes = v.changesBetween(v.defaultedComponents(v.components()), createdComps)
 	for _, t := range v.tree {
-		if len(t.Path) == 1 && v.componentEnabled(v.Components(), t) {
+		if len(t.Path) == 1 && v.componentEnabled(v.components(), t) {
 			p.plan.TornDown = append(p.plan.TornDown, t.Key())
 		}
-		if t.Toggle && v.deployed(v.Components(), t.Path) && !v.deployed(newComps, t.Path) {
+		if t.Toggle && v.deployed(v.components(), t.Path) && !v.deployed(newComps, t.Path) {
 			p.plan.StayRemoved = append(p.plan.StayRemoved, t.Key())
 		}
 	}
-	v.removalBlocks(c, v.Components(), newComps, true).applyTo(p.plan)
+	v.removalBlocks(c, v.components(), newComps, true).applyTo(p.plan)
 	p.plan.Token = planToken("hard-reset", v.uid, v.apiVersion, created, keep)
 	return p
 }
@@ -235,13 +235,13 @@ func HardReset(c *kube.Client, req types.DSCPlanRequest, emit func(types.UpdateS
 		res.Logs = append(r.logs, res.Logs...)
 		return res, nil
 	}
-	if req.Confirm != v.Name {
-		return r.fail("check", fmt.Sprintf("Type the DataScienceCluster's name, %s, to confirm. Nothing was changed.", v.Name), "validation"), nil
+	if req.Confirm != v.name {
+		return r.fail("check", fmt.Sprintf("Type the DataScienceCluster's name, %s, to confirm. Nothing was changed.", v.name), "validation"), nil
 	}
-	if req.Name != v.Name || req.UID != v.uid || req.Token == "" || req.Token != p.plan.Token {
+	if req.Name != v.name || req.UID != v.uid || req.Token == "" || req.Token != p.plan.Token {
 		return r.fail("check", "The DataScienceCluster or the release default changed since you reviewed the hard reset, so nothing was changed. Review it again.", "conflict"), nil
 	}
-	path := dscObjectPath(v.version, v.Name)
+	path := dscObjectPath(v.version, v.name)
 	if _, _, err := c.Do(http.MethodDelete, path, "application/json", dscDeleteBody(v.uid), url.Values{"dryRun": {"All"}}); err != nil {
 		return r.fail("check", "The API server refused deleting the DataScienceCluster in its dry run: "+rhoai.ConversionMessage(err)+". Nothing was changed.", kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "validation")), nil
 	}
@@ -256,10 +256,10 @@ func HardReset(c *kube.Client, req types.DSCPlanRequest, emit func(types.UpdateS
 		// spec (see dsc_manager.go): the DSC read again tells them apart.
 		if kube.IsK8sError(err, http.StatusUnprocessableEntity) {
 			if meta, found, rerr := kube.ReadObjectMeta(c, path); rerr == nil && (!found || meta.UID != v.uid) {
-				return r.fail("check", fmt.Sprintf("DataScienceCluster %s was deleted or created again after it was checked. Nothing was changed. Review the hard reset again.", v.Name), "conflict"), nil
+				return r.fail("check", fmt.Sprintf("DataScienceCluster %s was deleted or created again after it was checked. Nothing was changed. Review the hard reset again.", v.name), "conflict"), nil
 			}
 		}
-		return r.fail("check", "The API server refused the release default in a dry run against DataScienceCluster "+v.Name+": "+rhoai.ConversionMessage(err)+". Nothing was changed.", kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "validation")), nil
+		return r.fail("check", "The API server refused the release default in a dry run against DataScienceCluster "+v.name+": "+rhoai.ConversionMessage(err)+". Nothing was changed.", kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "validation")), nil
 	}
 	createYAML := p.plan.NewObject
 	objJSON, err := json.Marshal(obj)
@@ -275,7 +275,7 @@ func HardReset(c *kube.Client, req types.DSCPlanRequest, emit func(types.UpdateS
 	if refusal != "" {
 		return r.fail("check", "A hard reset is not possible: "+refusal+". Nothing was changed.", "prerequisites"), nil
 	}
-	rec := &types.DSCHardResetRecord{Name: v.Name, OldUID: v.uid, APIVersion: v.apiVersion, Object: string(objJSON), YAML: createYAML,
+	rec := &types.DSCHardResetRecord{Name: v.name, OldUID: v.uid, APIVersion: v.apiVersion, Object: string(objJSON), YAML: createYAML,
 		OperatorCSV: v.op.Name, OperatorVersion: v.op.Version, User: kube.GetUser(c), StartedAt: kube.Clock().Now().UTC().Format(time.RFC3339)}
 	for _, o := range ops {
 		rec.ModuleOperators = append(rec.ModuleOperators, o.Record())
@@ -287,38 +287,38 @@ func HardReset(c *kube.Client, req types.DSCPlanRequest, emit func(types.UpdateS
 	if len(p.plan.Kept) > 0 {
 		kept = ", keeping " + strings.Join(p.plan.Kept, ", ")
 	}
-	r.step("check", "success", fmt.Sprintf("DataScienceCluster %s can be reset: %d components are torn down and the release default of operator %s is created%s", v.Name, len(p.plan.TornDown), v.op.Version, kept))
+	r.step("check", "success", fmt.Sprintf("DataScienceCluster %s can be reset: %d components are torn down and the release default of operator %s is created%s", v.name, len(p.plan.TornDown), v.op.Version, kept))
 
-	r.step("delete", "running", "Deleting DataScienceCluster "+v.Name)
+	r.step("delete", "running", "Deleting DataScienceCluster "+v.name)
 	if _, _, err := c.Do(http.MethodDelete, path, "application/json", dscDeleteBody(v.uid), nil); err != nil {
 		record.ClearDSCHardResetRecord(c)
 		if kube.IsK8sNotFound(err) || kube.IsK8sConflict(err) {
-			return r.fail("delete", "DataScienceCluster "+v.Name+" was deleted or replaced by someone else since the check, so nothing was changed by this reset. Reload the page.", "conflict"), nil
+			return r.fail("delete", "DataScienceCluster "+v.name+" was deleted or replaced by someone else since the check, so nothing was changed by this reset. Reload the page.", "conflict"), nil
 		}
 		return r.fail("delete", "Deleting the DataScienceCluster failed: "+rhoai.ConversionMessage(err)+". Nothing was changed.", kube.ErrorCodeFromK8sErr(err)), nil
 	}
-	record.RecordAction(c, "hard-reset-dsc", v.Name+": deleted (uid "+v.uid+") for a hard reset", true)
-	r.step("delete", "success", "Deleted DataScienceCluster "+v.Name+" (propagation Background); the operator marks its modules Removed")
+	record.RecordAction(c, "hard-reset-dsc", v.name+": deleted (uid "+v.uid+") for a hard reset", true)
+	r.step("delete", "success", "Deleted DataScienceCluster "+v.name+" (propagation Background); the operator marks its modules Removed")
 
 	r.step("wait_deleted", "running", "Waiting until the DataScienceCluster is gone and the platform has cleaned up its modules")
 	if res := waitDSCGone(c, path, v, ops, r, createYAML); res != nil {
-		record.RecordAction(c, "hard-reset-dsc", v.Name+": "+firstLine(res.Message), false)
+		record.RecordAction(c, "hard-reset-dsc", v.name+": "+firstLine(res.Message), false)
 		return res, nil
 	}
 
-	r.step("create", "running", "Creating the release default DataScienceCluster "+v.Name)
+	r.step("create", "running", "Creating the release default DataScienceCluster "+v.name)
 	if msg, code := createPlannedDSC(c, v.version, obj); msg != "" {
 		res := r.fail("create", "The old DataScienceCluster was deleted, but "+msg+" "+finishHelp(createYAML), code)
-		record.RecordAction(c, "hard-reset-dsc", v.Name+": deleted, creating the release default failed", false)
+		record.RecordAction(c, "hard-reset-dsc", v.name+": deleted, creating the release default failed", false)
 		return res, nil
 	}
 	record.ClearDSCHardResetRecord(c)
-	record.RecordAction(c, "hard-reset-dsc", v.Name+": the release default of operator "+v.op.Version+" created", true)
-	r.step("create", "success", "Created the release default DataScienceCluster "+v.Name)
+	record.RecordAction(c, "hard-reset-dsc", v.name+": the release default of operator "+v.op.Version+" created", true)
+	r.step("create", "success", "Created the release default DataScienceCluster "+v.name)
 
 	r.step("wait_ready", "running", "Waiting for the components to be ready")
 	msg := waitDSCReady(c, path, r)
-	slog.Info("dsc hard reset", "dsc", v.Name, "user", kube.GetUser(c))
+	slog.Info("dsc hard reset", "dsc", v.name, "user", kube.GetUser(c))
 	return &types.OperationResponse{Success: true, Message: msg, Logs: r.logs}, nil
 }
 
@@ -419,7 +419,7 @@ func waitDSCGone(c *kube.Client, path string, v *View, ops []HardResetOperator, 
 	var readErr error
 	gone := false
 	interrupted := func() *types.OperationResponse {
-		return r.fail("wait_deleted", fmt.Sprintf("The reset was stopped (%s) while DataScienceCluster %s and its modules were being removed. Nothing was created. %s", stopCause(c.Context()), v.Name, finishHelp(yamlText)), "interrupted")
+		return r.fail("wait_deleted", fmt.Sprintf("The reset was stopped (%s) while DataScienceCluster %s and its modules were being removed. Nothing was created. %s", stopCause(c.Context()), v.name, finishHelp(yamlText)), "interrupted")
 	}
 	for {
 		if c.Context().Err() != nil {
@@ -430,7 +430,7 @@ func waitDSCGone(c *kube.Client, path string, v *View, ops []HardResetOperator, 
 		if err == nil && !st.found {
 			if !gone {
 				gone = true
-				r.step("wait_deleted", "running", "DataScienceCluster "+v.Name+" is gone")
+				r.step("wait_deleted", "running", "DataScienceCluster "+v.name+" is gone")
 			}
 			td, err = readTeardown(c, v.uid, ops)
 		}
@@ -444,7 +444,7 @@ func waitDSCGone(c *kube.Client, path string, v *View, ops []HardResetOperator, 
 				r.step("wait_deleted", "running", msg)
 			}
 		case !st.found && td.done():
-			r.step("wait_deleted", "success", "DataScienceCluster "+v.Name+" is gone and the platform has cleaned up its modules")
+			r.step("wait_deleted", "success", "DataScienceCluster "+v.name+" is gone and the platform has cleaned up its modules")
 			return nil
 		case !st.found:
 			readErr = nil
@@ -453,7 +453,7 @@ func waitDSCGone(c *kube.Client, path string, v *View, ops []HardResetOperator, 
 				r.step("wait_deleted", "running", msg)
 			}
 		case st.uid != v.uid:
-			return r.fail("wait_deleted", fmt.Sprintf("A new DataScienceCluster %s appeared (UID %s) before this reset created one: someone else, or the operator, created it. This reset creates nothing. Review it on the Components page. The object this reset planned was:\n%s", v.Name, st.uid, yamlText), "conflict")
+			return r.fail("wait_deleted", fmt.Sprintf("A new DataScienceCluster %s appeared (UID %s) before this reset created one: someone else, or the operator, created it. This reset creates nothing. Review it on the Components page. The object this reset planned was:\n%s", v.name, st.uid, yamlText), "conflict")
 		default:
 			readErr = nil
 			if msg := deletionProgress(st); msg != last {
@@ -470,15 +470,15 @@ func waitDSCGone(c *kube.Client, path string, v *View, ops []HardResetOperator, 
 	}
 	if readErr != nil {
 		return r.fail("wait_deleted", fmt.Sprintf("The cluster could not be read for the last poll of %s: %v. Nothing was created. Check the DataScienceCluster with oc get datasciencecluster %s -o yaml and the modules in Diagnostics (Platform modules). %s",
-			HardResetDeleteTimeout, readErr, v.Name, finishHelp(yamlText)), kube.NonEmpty(kube.ErrorCodeFromK8sErr(readErr), "timeout"))
+			HardResetDeleteTimeout, readErr, v.name, finishHelp(yamlText)), kube.NonEmpty(kube.ErrorCodeFromK8sErr(readErr), "timeout"))
 	}
 	if !st.found {
 		return r.fail("wait_deleted", fmt.Sprintf("DataScienceCluster %s is gone, but after %s %s. Nothing was created. %s",
-			v.Name, HardResetDeleteTimeout, td.Stuck(), finishHelp(yamlText)), "timeout")
+			v.name, HardResetDeleteTimeout, td.Stuck(), finishHelp(yamlText)), "timeout")
 	}
 	return r.fail("wait_deleted", fmt.Sprintf("DataScienceCluster %s is still being deleted after %s: finalizer %s remains (%s). The RHOAI operator's DSC finalizer only marks the DSC's modules Removed on the Platform and is removed in the same reconcile, so a finalizer that stays means the operator has not processed the deletion: check that it runs and read its logs (its Deployment, named in the installed CSV, is in namespace %s). Nothing was created. "+
 		"Do not remove the finalizer by hand: the modules would not be marked Removed. %s",
-		v.Name, HardResetDeleteTimeout, kube.NonEmpty(strings.Join(st.finalizers, ", "), "none"), kube.NonEmpty(modulesNote(st), "no module status reported"), rhoai.SubNS, finishHelp(yamlText)), "timeout")
+		v.name, HardResetDeleteTimeout, kube.NonEmpty(strings.Join(st.finalizers, ", "), "none"), kube.NonEmpty(modulesNote(st), "no module status reported"), rhoai.SubNS, finishHelp(yamlText)), "timeout")
 }
 
 // deletionProgress words a poll of the DSC being deleted.
@@ -598,11 +598,11 @@ func FinishHardReset(c *kube.Client, req types.DSCFinishRequest) (*types.Operati
 	if err != nil {
 		return nil, err
 	}
-	switch v.State {
+	switch v.state {
 	case rhoai.DSCStateNoCRD:
 		return refuse("The DataScienceCluster API is not installed now. Nothing was changed.", "prerequisites")
 	case rhoai.DSCStatePresent:
-		return refuse(fmt.Sprintf("DataScienceCluster %s now exists, so there is nothing to finish. Nothing was changed.", v.Name), "conflict")
+		return refuse(fmt.Sprintf("DataScienceCluster %s now exists, so there is nothing to finish. Nothing was changed.", v.name), "conflict")
 	}
 	// The same teardown the reset waits for (dsc_hard_reset_teardown.go).
 	var ops []HardResetOperator
