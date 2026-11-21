@@ -131,7 +131,7 @@ export interface SubscriptionInfo {
 
 /**
  * What the backend learnt from Argo CD about an object: whether an
- * Application lists it in status.resources (pkg/cluster/argocd.go). The
+ * Application lists it in status.resources (pkg/cluster/internal/argo/argocd.go). The
  * tracking annotation or instance label only names the application.
  * - "managed": an Application lists the object among its resources;
  * - "stale": the object's tracking is left over (staleReason), the tool

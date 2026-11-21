@@ -65,7 +65,8 @@ import { useLatestRequest } from "../hooks/useLatestRequest";
 
 /**
  * Container states that do not clear without a change (image, config or
- * crash fix). Mirrors terminalWaitingReasons in pkg/cluster/resources.go.
+ * crash fix). Mirrors terminalWaitingReasons in
+ * pkg/cluster/internal/envkit/workload_pods.go.
  */
 const TERMINAL_WAITING_REASONS = new Set([
   "ImagePullBackOff", "InvalidImageName", "ErrImageNeverPull", "CrashLoopBackOff",

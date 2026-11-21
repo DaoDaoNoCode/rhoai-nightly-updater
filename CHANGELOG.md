@@ -117,6 +117,17 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   pieces (outcome alerts, the Dashboard Dev session alert, Open
   Diagnostics, Go to Status) are one component each. No change in what
   the app does.
+- Internal, backend only: `pkg/cluster` (about 120 files in one package)
+  is split into 20 packages under `pkg/cluster/internal/` (the API client,
+  the records, the registry reads, the components, the operator
+  operations, serving, the DataScienceCluster writes, Diagnostics, ...),
+  each importing only the ones below it; `pkg/cluster` is a facade over
+  them plus the views that combine several (CONTRIBUTING.md, "Backend
+  layout"). No change in what the app does or asks the cluster for: the
+  HTTP handlers are untouched, the RBAC scan's list of requests and the
+  frontend contract fixtures are byte-identical, every test still runs.
+  `scripts/test-go.sh` runs the packages' race test binaries side by side,
+  so the race tests take no longer than before the split.
 - The Environment page's load failure reads "Can't load the environment",
   like every other page's ("Cannot load the environment" before).
 

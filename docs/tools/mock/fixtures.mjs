@@ -173,13 +173,13 @@ export const NODE_PULL_RECORD = { at: "2026-11-18T10:00:00Z", by: "kube:admin", 
 
 /**
  * Create the image mirror's refusal when a corporate mirror serves all of
- * registry.redhat.io (pkg/cluster/node_setup_mirrors.go parentScopeRefusal,
+ * registry.redhat.io (pkg/cluster/internal/node/node_setup_mirrors.go ParentScopeRefusal,
  * its words for ImageDigestMirrorSet corp-mirrors).
  */
 export const MIRROR_PARENT_SCOPE_REFUSAL = "ImageDigestMirrorSet corp-mirrors maps registry.redhat.io to mirror.corp.example/redhat, so pulls of registry.redhat.io/rhoai images by digest go to mirror.corp.example/redhat/rhoai now. The nodes use only the mirrors of the most specific source that matches an image, and the Machine Config Operator copies a mirror to a namespace inside its source only while that namespace has no mirror of its own. Creating ImageDigestMirrorSet rhoai-quay-mirror, a mirror for exactly registry.redhat.io/rhoai, would take those pulls away from that mirror: pulls by digest would go to quay.io/rhoai, then to registry.redhat.io itself. So it is not created. Nothing was changed. To keep that mirror in use, the cluster's administrator adds an entry for registry.redhat.io/rhoai to that object, in spec.imageDigestMirrors of ImageDigestMirrorSet corp-mirrors: source registry.redhat.io/rhoai, mirrors mirror.corp.example/redhat/rhoai, quay.io/rhoai (that also sets up the image mirror). Or whoever runs that mirror makes it carry the nightly images at that path.";
 
 /**
- * What POST /api/setup/nodes/plan answers (pkg/cluster/node_setup.go, its
+ * What POST /api/setup/nodes/plan answers (pkg/cluster/internal/node/node_setup.go, its
  * words): w.nodes holds what the mock cluster has (pullEntry: "none",
  * "same", the entry this tool added with the saved token, or "other",
  * someone else's with another token; the mirror is status.imageMirror).

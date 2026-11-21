@@ -13,7 +13,7 @@ export function isReleaseVersion(version: string | undefined): version is string
 /**
  * The gitops profile does not use additional-pull-secret: it reads no Secret
  * and contacts no registry, and the cluster's own pull secrets (which Git or
- * ACM manage) are used (pkg/cluster/gitops_profile.go,
+ * ACM manage) are used (pkg/cluster/internal/gitops/gitops_profile.go,
  * gitOpsProfileNoPullSecret). The backend does not read it there, so the
  * status says nothing about it.
  */

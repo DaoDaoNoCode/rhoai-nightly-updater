@@ -1,7 +1,7 @@
 import type { ArgoCDTracking, StatusResponse } from "./types";
 
 // The backend asks Argo CD whether an Application lists the object in
-// status.resources (pkg/cluster/argocd.go): managedBy is set for such an
+// status.resources (pkg/cluster/internal/argo/argocd.go): managedBy is set for such an
 // application, and for one Argo CD could not be asked about ("unconfirmed",
 // treated as managed); left-over tracking ("stale") leaves managedBy empty
 // and only shows a note.
@@ -49,8 +49,8 @@ export function argoApplicationLabel(t: ArgoCDTracking): string {
 // Argo CD (OpenShift GitOps) can manage the operator's CatalogSource and
 // Subscription, and the DataScienceCluster. Git is then the source of truth:
 // Argo CD undoes changes to them and recreates them when they are deleted, so
-// the tool limits what it offers (pkg/cluster/gitops.go). The backend refuses
-// the same actions with error code gitops_managed.
+// the tool limits what it offers (pkg/cluster/internal/argo/gitops_guard.go).
+// The backend refuses the same actions with error code gitops_managed.
 
 /** The Argo CD application managing the operator's Subscription or nightly catalog. */
 export function operatorGitOpsApp(status: StatusResponse | null | undefined): string | undefined {
@@ -60,8 +60,9 @@ export function operatorGitOpsApp(status: StatusResponse | null | undefined): st
 // An ACM ConfigurationPolicy can enforce the nightly catalog instead of Argo
 // CD: the backend reports catalogSource.managedByACM when ACM's
 // config-policy-controller owns the catalog's spec and no Argo CD
-// application tracks it (pkg/cluster/gitops.go, acmEnforcesSpec). The tool
-// then treats the catalog as managed, as under Argo CD.
+// application tracks it (pkg/cluster/internal/argo/gitops_guard.go,
+// ACMEnforcesSpec). The tool then treats the catalog as managed, as under
+// Argo CD.
 
 /** The ACM manager of the nightly catalog, as messages name it. */
 export const ACM_CATALOG_MANAGER = "an ACM policy (config-policy-controller)";

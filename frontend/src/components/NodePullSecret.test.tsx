@@ -9,7 +9,7 @@ import { nightlyStatus, renderWithApp, settleApps } from "../test/providers";
 import { jsonBody } from "../test/utils";
 import type { PullSecretInfo, StatusResponse } from "../types";
 
-// The command the backend sends (pkg/cluster/node_pull_secret.sh); the card
+// The command the backend sends (pkg/cluster/internal/rhoai/node_pull_secret.sh); the card
 // shows it as it comes.
 const COMMAND = `printf 'quay.io/rhoai token (the one you saved under Pull secret; base64 user:password, with its = padding): ' && read -rs QUAY_AUTH && echo
 [ -n "$QUAY_AUTH" ] && oc get secret pull-secret -n openshift-config -o json \\

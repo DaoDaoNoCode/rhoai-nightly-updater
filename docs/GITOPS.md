@@ -783,7 +783,7 @@ with `install.sh`.
 | `GET /api/components` | the Components page (read only) |
 | `GET /api/components/dsc` | the Components page's component tree: the DataScienceCluster, its CRD and the installed CSV's `alm-examples` (read only; the plans and every change are refused) |
 | `GET /api/diagnostics` | the Diagnostics page (findings only, no fixes) |
-| `POST /api/update/stream`, `POST /api/update` (dry run) | Update, through `UpdateStreamGitOpsProfile` and `UpdateDryRunGitOpsProfile` (`pkg/cluster/gitops_profile.go`) |
+| `POST /api/update/stream`, `POST /api/update` (dry run) | Update, through `UpdateStreamGitOpsProfile` and `UpdateDryRunGitOpsProfile` (`gitops.UpdateStream` and `UpdateDryRun` in `pkg/cluster/internal/gitops/gitops_profile.go`) |
 | `GET /api/user/permissions` | tells the UI whether the user is a cluster-admin; it makes no ServiceAccount call |
 | `POST /api/pageview` | counts page views in memory for `/metrics`; no cluster call, bounded labels |
 
