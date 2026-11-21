@@ -26,14 +26,13 @@ type fakeRecord struct {
 	releases  []cluster.LeaseOwner
 	completed []*cluster.LeaseOwner
 	writeErr  error
-	failNext  int           // the next lease writes that fail
-	attempts  int           // lease writes asked for, failed ones included
-	attempted chan struct{} // closed and replaced on every attempt
+	failNext  int // the next lease writes that fail
+	attempts  int // lease writes asked for, failed ones included
 }
 
 func installFakeRecord(t *testing.T) *fakeRecord {
 	t.Helper()
-	f := &fakeRecord{attempted: make(chan struct{})}
+	f := &fakeRecord{}
 	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -43,8 +42,6 @@ func installFakeRecord(t *testing.T) *fakeRecord {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.attempts++
-		close(f.attempted)
-		f.attempted = make(chan struct{})
 		if f.writeErr != nil {
 			return nil, f.writeErr
 		}
@@ -89,29 +86,24 @@ func installFakeRecord(t *testing.T) *fakeRecord {
 	return f
 }
 
-// beat moves the fake clock one heartbeat interval on and waits for the
-// renewal it starts (the heartbeat's lease write, which may fail).
+// beat moves the fake clock one heartbeat interval on and waits until the
+// heartbeat handled the tick: it made the renewal (the lease write, which
+// may fail) and decided on its outcome, so it waits for the next tick or
+// has stopped. Waiting for the write alone is not enough: the heartbeat
+// reads the clock after the write (how long renewals have failed), and a
+// next Advance in between made it count one interval too many.
 func (f *fakeRecord) beat(t *testing.T) {
 	t.Helper()
 	f.mu.Lock()
 	n := f.attempts
 	f.mu.Unlock()
 	testClock.Advance(leaseHeartbeatInterval)
-	f.waitAttempts(t, n+1)
-}
-
-// waitAttempts waits until n lease writes were asked for. The timeout only
-// ends a test whose heartbeat stopped.
-func (f *fakeRecord) waitAttempts(t *testing.T, n int) {
-	t.Helper()
-	for {
-		f.mu.Lock()
-		got, ch := f.attempts, f.attempted
-		f.mu.Unlock()
-		if got >= n {
-			return
-		}
-		<-ch // the next lease write (a hang fails at go test's -timeout)
+	testClock.WaitForTicksHandled()
+	f.mu.Lock()
+	got := f.attempts
+	f.mu.Unlock()
+	if got != n+1 {
+		t.Fatalf("the heartbeat made %d lease writes for one tick, want 1", got-n)
 	}
 }
 
