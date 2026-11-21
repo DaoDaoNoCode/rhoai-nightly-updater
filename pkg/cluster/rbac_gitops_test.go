@@ -29,11 +29,9 @@ import (
 	"bytes"
 	"fmt"
 	"go/ast"
-	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -110,8 +108,15 @@ func exportData(t *testing.T) map[string]string {
 // type-checks them as package path.
 func typeCheck(t *testing.T, path, dir string, only ...string) *typedPkg {
 	t.Helper()
-	exports := exportData(t)
 	fset := token.NewFileSet()
+	return typeCheckWith(t, fset, exportImporter(t, fset), path, dir, only...)
+}
+
+// typeCheckWith is typeCheck with the file set and importer given, so that
+// several packages type-checked together decode each imported package's
+// export data once.
+func typeCheckWith(t *testing.T, fset *token.FileSet, imp types.Importer, path, dir string, only ...string) *typedPkg {
+	t.Helper()
 	names := only
 	if len(names) == 0 {
 		matches, err := filepath.Glob(filepath.Join(dir, "*.go"))
@@ -134,13 +139,6 @@ func typeCheck(t *testing.T, path, dir string, only ...string) *typedPkg {
 		tp.files[name] = f
 		files = append(files, f)
 	}
-	imp := importer.ForCompiler(fset, "gc", func(p string) (io.ReadCloser, error) {
-		file, ok := exports[p]
-		if !ok {
-			return nil, fmt.Errorf("no export data for %s", p)
-		}
-		return os.Open(file)
-	})
 	tp.info = &types.Info{
 		Defs:       map[*ast.Ident]types.Object{},
 		Uses:       map[*ast.Ident]types.Object{},
@@ -334,9 +332,11 @@ func loadProfileGraph(t *testing.T) *profileGraph {
 			names = append(names, dir)
 		}
 		sort.Strings(names)
+		fset := token.NewFileSet()
+		imp := exportImporter(t, fset)
 		for _, dir := range names {
 			path := clusterImportPath(dir)
-			tp := typeCheck(t, path, dir)
+			tp := typeCheckWith(t, fset, imp, path, dir)
 			g.addPackage(tp)
 			pkgs = append(pkgs, path)
 			// The positions of this directory's functions.
@@ -350,8 +350,8 @@ func loadProfileGraph(t *testing.T) *profileGraph {
 				}
 			}
 		}
-		g.addPackage(typeCheck(t, apiPkg, "../api"))
-		g.addPackage(typeCheck(t, "main", "../..", "main.go"))
+		g.addPackage(typeCheckWith(t, fset, imp, apiPkg, "../api"))
+		g.addPackage(typeCheckWith(t, fset, imp, "main", "../..", "main.go"))
 		profileGraphVal = &profileGraph{graph: g, clusterPkgs: pkgs, funcPositions: positions}
 	})
 	if profileGraphVal == nil {

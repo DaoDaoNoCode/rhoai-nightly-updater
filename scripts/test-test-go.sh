@@ -103,13 +103,14 @@ TestOther1'
 # run NAME [FLAG...]: runs test-go.sh with each pkg/cluster package in 3
 # parts (a part per test at most: GO_TEST_PART_TESTS=1); $out is its
 # output, $rc its exit status, $ran the tests that ran (sorted, duplicates
-# kept). The caller may set GO_TEST_SHARDS and GO_TEST_JOBS.
+# kept). The caller may set GO_TEST_SHARDS, GO_TEST_JOBS and
+# GO_TEST_PART_TESTS.
 run() {
 	name=$1
 	shift
 	: >"$WORK/ran"
 	rc=0
-	out=$(RAN="$WORK/ran" GO_TEST_SHARDS=${GO_TEST_SHARDS:-3} GO_TEST_PART_TESTS=1 $SH "$REPO/scripts/test-go.sh" "$@" 2>&1) || rc=$?
+	out=$(RAN="$WORK/ran" GO_TEST_SHARDS=${GO_TEST_SHARDS:-3} GO_TEST_PART_TESTS=${GO_TEST_PART_TESTS:-1} $SH "$REPO/scripts/test-go.sh" "$@" 2>&1) || rc=$?
 	ran=$(sort "$WORK/ran")
 }
 
@@ -218,6 +219,28 @@ expect_eq "grep error: exit status" 1 "$rc"
 expect_in "grep error: says why" "cannot work out the tests of example.com/fake/pkg/cluster/a part 1" "$out"
 expect_in "grep error: grep's own message" "grep: cannot read" "$out"
 expect_eq "grep error: only the unsplit package's tests ran" "TestOther1" "$ran"
+
+# With 2 tests a part, pkg/other (1 test) does not split: its binary builds
+# while the parts of pkg/cluster/a and b run, and its job starts after.
+# Every test still runs once.
+GO_TEST_PART_TESTS=2 run "built while parts run"
+expect_eq "built while parts run: exit status" 0 "$rc"
+expect_eq "built while parts run: every test once" "$ALL" "$ran"
+expect_in "built while parts run: the jobs" "3 package(s) with tests, as 5 process(es)" "$out"
+expect_in "built while parts run: its line" "ok  	example.com/fake/pkg/other	" "$out"
+
+# A package among those that build while the parts run that does not
+# build fails the run, with the compiler's error and its name; the parts
+# that were running still finish, every one of their tests once.
+printf 'package other\n\nvar broken string = 1\n' >"$REPO/pkg/other/broken_test.go"
+GO_TEST_PART_TESTS=2 run "broken package built while parts run"
+expect_eq "broken while parts run: exit status" 1 "$rc"
+expect_in "broken while parts run: the compiler's error" "broken_test.go:3" "$out"
+expect_in "broken while parts run: says why" "no test binary for example.com/fake/pkg/other: it did not build" "$out"
+expect_in "broken while parts run: the summary" "FAILED: build pkg/other" "$out"
+expect_eq "broken while parts run: the parts' tests ran once" "$(printf '%s\n' "$ALL" | grep -v TestOther1)" "$ran"
+rm "$REPO/pkg/other/broken_test.go"
+unset GO_TEST_PART_TESTS
 
 # Two packages whose test binaries would share a name are refused.
 mkdir -p "$REPO/pkg/dup/a"
