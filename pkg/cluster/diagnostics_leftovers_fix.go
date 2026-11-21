@@ -76,7 +76,7 @@ func leftoverWriteError(err error, what string, dryRun bool) *types.OperationRes
 	if errors.As(err, &k) && k.K8sMessage != "" {
 		msg = k.K8sMessage
 	}
-	if isK8sConflict(err) || (IsK8sError(err, http.StatusUnprocessableEntity) && (strings.Contains(msg, "testing value") || strings.Contains(msg, "test failed"))) {
+	if IsK8sError(err, http.StatusConflict) || (IsK8sError(err, http.StatusUnprocessableEntity) && (strings.Contains(msg, "testing value") || strings.Contains(msg, "test failed"))) {
 		return leftoverRefused(fmt.Sprintf("%s changed after it was checked, so nothing was changed. Run diagnostics again.", what), "conflict", []string{msg})
 	}
 	stage := "The API server refused the change"
@@ -362,13 +362,13 @@ func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *typ
 	path := workloadPath(kind, ns, name)
 	uid := r.Obj.Metadata.UID
 	if err := deleteWorkload(c, path, uid, r.Obj.Metadata.ResourceVersion, true); err != nil {
-		if isK8sNotFound(err) {
+		if IsK8sError(err, http.StatusNotFound) {
 			return nothingToDo(fmt.Sprintf("%s no longer exists. Nothing was deleted.", r.ref()), logs)
 		}
 		return leftoverWriteError(err, r.ref(), true)
 	}
 	if err := deleteWorkload(c, path, uid, r.Obj.Metadata.ResourceVersion, false); err != nil {
-		if isK8sNotFound(err) {
+		if IsK8sError(err, http.StatusNotFound) {
 			return nothingToDo(fmt.Sprintf("%s no longer exists. Nothing was deleted.", r.ref()), logs)
 		}
 		return leftoverWriteError(err, r.ref(), false)
