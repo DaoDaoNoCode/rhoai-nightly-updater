@@ -13,8 +13,9 @@ import (
 
 const tOperationCM = "/api/v1/namespaces/rhoai-nightly-updater/configmaps/rhoai-nightly-updater-operation"
 
-func tRecipeRun(id, op string) *types.RecipeRun {
-	return &types.RecipeRun{ID: id, OperationID: op, BootID: "boot-1", State: types.RecipeRunRunning,
+// tRecipeRun is an attempt (operation op) of run r1.
+func tRecipeRun(op string) *types.RecipeRun {
+	return &types.RecipeRun{ID: "r1", OperationID: op, BootID: "boot-1", State: types.RecipeRunRunning,
 		Steps: []types.RecipeRunStep{{ID: "rhoai", Title: "RHOAI", Status: types.RecipeStepRunning}}}
 }
 
@@ -35,7 +36,7 @@ func storedRecipeRun(t *testing.T, f *resourceFake) (string, map[string]any) {
 func TestRecipeRunRecord_Bounded(t *testing.T) {
 	t.Setenv("NAMESPACE", "rhoai-nightly-updater")
 	f, c := newResourceFake(t)
-	run := tRecipeRun("r1", "op1")
+	run := tRecipeRun("op1")
 	for i := range 60 {
 		run.Steps = append(run.Steps, types.RecipeRunStep{ID: "s", Status: types.RecipeStepFailed, Message: strings.Repeat("m", 4000+i)})
 	}
@@ -57,7 +58,7 @@ func TestRecipeRunRecord_Bounded(t *testing.T) {
 func TestRecipeRunRecord_RetriesAConflict(t *testing.T) {
 	t.Setenv("NAMESPACE", "rhoai-nightly-updater")
 	f, c := newResourceFake(t)
-	if err := record.SaveRecipeRun(c, tRecipeRun("r1", "op1"), true); err != nil {
+	if err := record.SaveRecipeRun(c, tRecipeRun("op1"), true); err != nil {
 		t.Fatal(err)
 	}
 	interfered := false
@@ -71,7 +72,7 @@ func TestRecipeRunRecord_RetriesAConflict(t *testing.T) {
 			f.mu.Unlock()
 		}
 	}
-	next := tRecipeRun("r1", "op1")
+	next := tRecipeRun("op1")
 	next.Steps[0].Status = types.RecipeStepSuccess
 	if err := record.SaveRecipeRun(c, next, false); err != nil {
 		t.Fatal(err)
@@ -92,20 +93,20 @@ func TestRecipeRunRecord_RetriesAConflict(t *testing.T) {
 func TestRecipeRunRecord_AttemptsAreIsolated(t *testing.T) {
 	t.Setenv("NAMESPACE", "rhoai-nightly-updater")
 	f, c := newResourceFake(t)
-	if err := record.SaveRecipeRun(c, tRecipeRun("r1", "op2"), true); err != nil { // the resumed attempt
+	if err := record.SaveRecipeRun(c, tRecipeRun("op2"), true); err != nil { // the resumed attempt
 		t.Fatal(err)
 	}
-	stale := tRecipeRun("r1", "op1")
+	stale := tRecipeRun("op1")
 	stale.State = types.RecipeRunFailed
 	if err := record.SaveRecipeRun(c, stale, false); !errors.Is(err, record.ErrRecipeRunReplaced) {
 		t.Fatalf("stale attempt's write: %v", err)
 	}
-	otherBoot := tRecipeRun("r1", "op2")
+	otherBoot := tRecipeRun("op2")
 	otherBoot.BootID = "boot-0"
 	if err := record.SaveRecipeRun(c, otherBoot, false); !errors.Is(err, record.ErrRecipeRunReplaced) {
 		t.Fatalf("another process's write: %v", err)
 	}
-	if err := record.SaveRecipeRun(c, tRecipeRun("r1", "op2"), false); err != nil {
+	if err := record.SaveRecipeRun(c, tRecipeRun("op2"), false); err != nil {
 		t.Fatalf("the attempt's own write: %v", err)
 	}
 	raw, _ := storedRecipeRun(t, f)
