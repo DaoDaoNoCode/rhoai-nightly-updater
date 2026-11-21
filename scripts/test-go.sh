@@ -107,50 +107,56 @@ if [ -s "$work/notests" ]; then
 	go build -race $(cat "$work/notests")
 fi
 
-# Each package's binary, and how many parts it runs in: its tests (counted
-# from the source; the parts are dealt from -test.list) per part, at most
-# $shards.
+# Each package's tests. The source gives an upper bound (it also counts
+# TestMain and the tests in files the build excludes). A package whose
+# bound reaches GO_TEST_PART_TESTS may be split: its binary lists its tests
+# (-test.list, in the package's directory as go test runs it; the binaries
+# list at the same time), and that list is the count. Only these list, as
+# a race test binary takes a second or more to start.
 while read -r i pkg dir; do
 	bin="$work/bin/${pkg##*/}.test"
 	[ -x "$bin" ] || {
 		echo "test-go.sh: no test binary for $pkg" >&2
 		exit 1
 	}
-	est=$(cat "$dir"/*_test.go | grep -cE '^func (Test|Example|Fuzz)[^a-z]' || true)
-	parts=$(((est + per - 1) / per))
-	[ "$parts" -le "$shards" ] || parts=$shards
-	[ "$parts" -ge 1 ] || parts=1
-	echo "$i $parts $est" >"$work/plan.$i"
-	printf '%s\n' "$pkg" >"$work/pkg.$i"
-	printf '%s\n' "$dir" >"$work/dir.$i"
-done <"$work/pkgs"
-
-# A split package's tests, from its binary, dealt out in order, one each
-# per part in turn. The binaries list at the same time.
-while read -r i pkg dir; do
-	read -r _ parts _ <"$work/plan.$i"
-	[ "$parts" -gt 1 ] || continue
-	(cd "$dir" && "$work/bin/${pkg##*/}.test" -test.list '.*' >"$work/$i.tests" 2>&1; echo $? >"$work/$i.listrc") </dev/null &
+	awk '/^func (Test|Example|Fuzz)[^a-z]/ { n++ } END { print n + 0 }' "$dir"/*_test.go >"$work/$i.est"
+	if [ "$(cat "$work/$i.est")" -ge "$per" ] && [ "$shards" -gt 1 ]; then
+		(cd "$dir" && "$bin" -test.list '.*' >"$work/$i.tests" 2>"$work/$i.listerr"; echo $? >"$work/$i.listrc") </dev/null &
+	fi
 done <"$work/pkgs"
 wait
+
+# How many parts each package runs in: its listed tests per part, at most
+# $shards, so never more parts than tests; a split package's tests dealt
+# out in order, one each per part in turn.
 while read -r i pkg dir; do
-	read -r _ parts _ <"$work/plan.$i"
-	[ "$parts" -gt 1 ] || continue
-	if [ "$(cat "$work/$i.listrc")" != 0 ] || [ ! -s "$work/$i.tests" ]; then
-		cat "$work/$i.tests" >&2
-		echo "test-go.sh: $pkg lists no tests" >&2
-		exit 1
+	n=$(cat "$work/$i.est")
+	parts=1
+	if [ -f "$work/$i.listrc" ]; then
+		if [ "$(cat "$work/$i.listrc")" != 0 ]; then
+			cat "$work/$i.tests" "$work/$i.listerr" >&2
+			echo "test-go.sh: the test binary of $pkg cannot list its tests" >&2
+			exit 1
+		fi
+		n=$(wc -l <"$work/$i.tests" | tr -d ' ')
+		parts=$(((n + per - 1) / per))
+		[ "$parts" -le "$shards" ] || parts=$shards
+		[ "$parts" -ge 1 ] || parts=1
 	fi
+	echo "$i $parts $n" >"$work/plan.$i"
+	printf '%s\n' "$pkg" >"$work/pkg.$i"
+	printf '%s\n' "$dir" >"$work/dir.$i"
+	[ "$parts" -gt 1 ] || continue
 	awk -v d="$work/part.$i." -v k="$parts" '{ print > (d (NR - 1) % k) }' "$work/$i.tests"
 done <"$work/pkgs"
 
 # The jobs, longest first: "<tests> <index> <part> <parts>" (part 0 of 1:
 # the whole package).
 while read -r i pkg dir; do
-	read -r _ parts est <"$work/plan.$i"
+	read -r _ parts n <"$work/plan.$i"
 	p=0
 	while [ "$p" -lt "$parts" ]; do
-		echo "$((est / parts)) $i $p $parts"
+		echo "$((n / parts)) $i $p $parts"
 		p=$((p + 1))
 	done
 done <"$work/pkgs" | sort -k1,1nr -k2,2n -k3,3n >"$work/jobs"
@@ -158,8 +164,8 @@ done <"$work/pkgs" | sort -k1,1nr -k2,2n -k3,3n >"$work/jobs"
 npkgs=$(wc -l <"$work/pkgs" | tr -d ' ')
 njobs=$(wc -l <"$work/jobs" | tr -d ' ')
 split=$(awk '$4 > 1 && $3 == 0 { print $2 }' "$work/jobs" | while read -r i; do
-	read -r _ parts est <"$work/plan.$i"
-	printf ' %s (%s tests, %s parts)' "$(awk -v i="$i" '$1 == i { print $2 }' "$work/pkgs")" "$est" "$parts"
+	read -r _ parts n <"$work/plan.$i"
+	printf ' %s (%s tests, %s parts)' "$(awk -v i="$i" '$1 == i { print $2 }' "$work/pkgs")" "$n" "$parts"
 done)
 echo "go test -race: $npkgs package(s) with tests, as $njobs process(es), $jobs at a time, on $cpus CPU(s); split:${split:- none}${1+; test flags: $*}"
 
@@ -176,10 +182,21 @@ run_job() {
 		# so the caller's -run (a binary takes one) still chooses among
 		# its own. go test splits a -skip pattern at a top-level "|"
 		# into alternatives and skips a test any of them matches
-		# (testing/match.go), so the caller's -skip is one more.
-		if grep -vxF -f "$work/part.$i.$p" "$work/$i.tests" >"$work/skip.$i.$p"; then
-			pat="^($(paste -sd'|' "$work/skip.$i.$p"))\$"
-		fi
+		# (testing/match.go), so the caller's -skip is one more. grep
+		# exits 1 when no line is left (nothing to skip) and 2 on an
+		# error, which must not read as nothing to skip: the part would
+		# run the whole package.
+		grc=0
+		grep -vxF -f "$work/part.$i.$p" "$work/$i.tests" >"$work/skip.$i.$p" 2>"$log" || grc=$?
+		case $grc in
+		0) pat="^($(paste -sd'|' "$work/skip.$i.$p"))\$" ;;
+		1) ;;
+		*)
+			echo "test-go.sh: cannot work out the tests of $pkg part $((p + 1)) (grep exit status $grc)" >>"$log"
+			echo "2 0" >"$work/job.$i.$p.rc"
+			return
+			;;
+		esac
 	fi
 	[ -z "$skip" ] || pat="${pat:+$pat|}$skip"
 	# Linux limits one argument to 128 KiB (MAX_ARG_STRLEN).

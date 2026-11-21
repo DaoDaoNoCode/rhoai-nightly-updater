@@ -2,7 +2,7 @@
 # shellcheck disable=SC2015,SC2086 # pass never fails; $SH may be "busybox sh"
 # Tests for scripts/test-go.sh, on a small module of its own: two packages
 # under pkg/cluster/ and one other, whose tests record their names when
-# they run. Needs go (with -race); no network.
+# they run, and one without tests. Needs go (with -race); no network.
 #   sh scripts/test-test-go.sh
 set -eu
 
@@ -192,6 +192,32 @@ expect_eq "one at a time: exit status" 1 "$rc"
 expect_in "one at a time: they did not meet" "did not run at the same time" "$out"
 
 unset MEET MEET_DIR MEET_SECONDS GO_TEST_SHARDS GO_TEST_JOBS
+
+# Tests in a file the build excludes are not counted: a package gets no
+# more parts than the tests its binary lists (pkg/cluster/b: 3 tests, 6
+# shards allowed), and every test still runs once.
+printf '//go:build never\n\npackage b\n\nimport "testing"\n\nfunc TestBX1(t *testing.T) {}\nfunc TestBX2(t *testing.T) {}\nfunc TestBX3(t *testing.T) {}\nfunc TestBX4(t *testing.T) {}\nfunc TestBX5(t *testing.T) {}\n' >"$REPO/pkg/cluster/b/excluded_test.go"
+GO_TEST_SHARDS=6 run "excluded tests"
+expect_eq "excluded tests: exit status" 0 "$rc"
+expect_eq "excluded tests: every test once" "$ALL" "$ran"
+expect_in "excluded tests: parts of the listed tests" "example.com/fake/pkg/cluster/b (3 tests, 3 parts)" "$out"
+rm "$REPO/pkg/cluster/b/excluded_test.go"
+unset GO_TEST_SHARDS
+
+# A part whose share of the tests cannot be worked out (grep fails, here a
+# stand-in that fails as on a missing or unreadable file) fails, naming
+# the part, instead of running the whole package; the other packages run.
+mkdir "$WORK/badgrep"
+realgrep=$(command -v grep)
+printf '#!/bin/sh\ncase " $* " in *" -vxF "*) echo "grep: cannot read" >&2; exit 2 ;; esac\nexec %s "$@"\n' "$realgrep" >"$WORK/badgrep/grep"
+chmod +x "$WORK/badgrep/grep"
+oldpath=$PATH
+PATH="$WORK/badgrep:$PATH" run "grep error"
+PATH=$oldpath
+expect_eq "grep error: exit status" 1 "$rc"
+expect_in "grep error: says why" "cannot work out the tests of example.com/fake/pkg/cluster/a part 1" "$out"
+expect_in "grep error: grep's own message" "grep: cannot read" "$out"
+expect_eq "grep error: only the unsplit package's tests ran" "TestOther1" "$ran"
 
 # Two packages whose test binaries would share a name are refused.
 mkdir -p "$REPO/pkg/dup/a"
