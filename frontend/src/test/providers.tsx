@@ -72,6 +72,8 @@ interface RenderedApp {
   pending: Set<Promise<unknown>>;
   /** A read started since the last settled() finished. */
   unsettled: boolean;
+  /** The reads that answered while a waitFor or findBy waited (see renderWithApp). */
+  answeredOutsideAct: Set<string>;
   settled: () => Promise<void>;
 }
 
@@ -87,15 +89,29 @@ export async function settleApps(): Promise<void> {
 }
 
 /**
- * How many apps this test rendered have reads that started after their last
- * settled(), and forget the apps. setup.ts fails such a test: those answers
- * would update the page after the test, outside act, at a moment that
- * depends on the machine's load.
+ * What the apps this test rendered did outside act, and forget the apps.
+ * setup.ts fails such a test (see renderWithApp).
+ *
+ * - unsettled: apps with reads that started after their last settled():
+ *   those answers would update the page after the test.
+ * - answeredOutsideAct: the reads that answered while a waitFor or findBy
+ *   waited.
  */
-export function unsettledApps(): number {
-  const n = renderedApps.filter((a) => a.unsettled).length;
+export function appsOutsideAct(): { unsettled: number; answeredOutsideAct: string[] } {
+  const unsettled = renderedApps.filter((a) => a.unsettled).length;
+  const answeredOutsideAct = [...new Set(renderedApps.flatMap((a) => [...a.answeredOutsideAct]))];
   renderedApps = [];
-  return n;
+  return { unsettled, answeredOutsideAct };
+}
+
+/**
+ * False while Testing Library's waitFor or findBy waits: its asyncWrapper
+ * turns IS_REACT_ACT_ENVIRONMENT off until one timer after the wait ended
+ * (@testing-library/react pure.js), so that React applies updates on its
+ * own scheduler instead of warning about them. setup.ts turns it on.
+ */
+function actEnvironment(): boolean {
+  return (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT === true;
 }
 
 /**
@@ -111,26 +127,42 @@ export function renderPage(ui: React.ReactNode, route = "/", fetchers: AppFetche
  * Renders `ui` inside the app's providers with injected backend reads. As
  * in the app, the status is read only once the permission check said
  * cluster-admin (the default answer).
+ *
+ * The app's reads answer inside act: wait for them with settled() (or
+ * settleApps()) before the test waits on the page with waitFor or findBy,
+ * and resolve a read the test holds open inside act. A read that answers
+ * while a waitFor or findBy waits fails the test (setup.ts): waitFor turns
+ * act's checks off while it waits, React then renders the answer on its
+ * own scheduler, which yields every 5 ms, and the reads that answer starts
+ * (the status once the role is known, the Dashboard Dev state once the
+ * version is) finish before or after the wait ended depending on the
+ * machine's load. After it, their updates are outside act: React warns
+ * "not wrapped in act", in some runs only.
  */
 export function renderWithApp(ui: React.ReactNode, fetchers: AppFetchers = {}, route = "/") {
   // Every app-wide read in flight, so settled() can wait for their answers.
   const pending = new Set<Promise<unknown>>();
-  const app: RenderedApp = { pending, unsettled: false, settled: async () => {} };
+  const app: RenderedApp = { pending, unsettled: false, answeredOutsideAct: new Set(), settled: async () => {} };
   renderedApps.push(app);
-  const track = <T,>(read: (signal?: AbortSignal) => Promise<T>) => (signal?: AbortSignal): Promise<T> => {
+  const track = <T,>(name: string, read: (signal?: AbortSignal) => Promise<T>) => (signal?: AbortSignal): Promise<T> => {
     const p = read(signal);
     app.unsettled = true;
     pending.add(p);
-    const done = () => { pending.delete(p); };
+    const done = () => {
+      pending.delete(p);
+      // The provider's own continuation runs right after this one, in the
+      // same microtask checkpoint: with the same act environment.
+      if (!actEnvironment()) app.answeredOutsideAct.add(name);
+    };
     p.then(done, done);
     return p;
   };
-  const status = track(fetchers.status ?? (async () => nightlyStatus()));
-  const operation = track(fetchers.operation ?? (async () => IDLE_OPERATION));
-  const permissions = track(fetchers.permissions ?? (async () => ADMIN_PERMISSIONS));
-  const version = track(fetchers.version ?? (async () => ({ version: "dev", commit: "unknown", buildDate: "unknown", templateOutdated: false })));
-  const update = track(fetchers.update ?? (async () => ({ updateAvailable: false, majorUpgrade: false })));
-  const dashboard = track(fetchers.dashboard ?? (async () => ({ currentImage: "", isCustomPR: false, managed: true, podStatus: "", podReady: true, containersReady: 1, containersTotal: 1, rolloutPending: false, canAssistRollout: false, override: { active: false, operatorPaused: false, sessionRecorded: false, stale: false, dashboardDeleting: false } } as DashboardState)));
+  const status = track("status", fetchers.status ?? (async () => nightlyStatus()));
+  const operation = track("operation", fetchers.operation ?? (async () => IDLE_OPERATION));
+  const permissions = track("permissions", fetchers.permissions ?? (async () => ADMIN_PERMISSIONS));
+  const version = track("version", fetchers.version ?? (async () => ({ version: "dev", commit: "unknown", buildDate: "unknown", templateOutdated: false })));
+  const update = track("update check", fetchers.update ?? (async () => ({ updateAvailable: false, majorUpgrade: false })));
+  const dashboard = track("Dashboard Dev state", fetchers.dashboard ?? (async () => ({ currentImage: "", isCustomPR: false, managed: true, podStatus: "", podReady: true, containersReady: 1, containersTotal: 1, rolloutPending: false, canAssistRollout: false, override: { active: false, operatorPaused: false, sessionRecorded: false, stale: false, dashboardDeleting: false } } as DashboardState)));
   /**
    * Waits, inside act, until the app-wide reads (permissions, status,
    * operation, version, update check, dashboard state) answered and React

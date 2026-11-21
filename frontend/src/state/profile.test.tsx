@@ -21,16 +21,18 @@ describe("profile (docs/GITOPS.md, Profiles)", () => {
     renderWithApp(<Probe />, { version: () => new Promise((r) => { answer = r; }) });
     expect(probe()).toEqual({ profile: null, gitOps: false });
     answer(version("gitops"));
+    await settleApps();
     await waitFor(() => expect(probe()).toEqual({ profile: "gitops", gitOps: true }));
     await settleApps();
   });
 
   it("is full for an older backend without the field, or without /api/version", async () => {
     renderWithApp(<Probe />, { version: async () => version() });
+    await settleApps();
     await waitFor(() => expect(probe().profile).toBe("full"));
     renderWithApp(<Probe />, { version: async () => { throw new TypeError("Failed to fetch"); } });
-    await waitFor(() => expect(screen.getAllByTestId("probe").map((e) => JSON.parse(e.textContent || "{}").profile)).toEqual(["full", "full"]));
     await settleApps();
+    expect(screen.getAllByTestId("probe").map((e) => JSON.parse(e.textContent || "{}").profile)).toEqual(["full", "full"]);
   });
 
   it("never asks for the Dashboard Dev state in the gitops profile (403 profile_gitops)", async () => {
@@ -38,6 +40,7 @@ describe("profile (docs/GITOPS.md, Profiles)", () => {
     renderWithApp(<Probe />, { version: async () => version("gitops"), dashboard });
     // The profile shows once the version settled; the effects of that render
     // are where the Dashboard Dev state would be asked for.
+    await settleApps();
     await waitFor(() => expect(probe().profile).toBe("gitops"));
     await act(async () => {});
     expect(dashboard).not.toHaveBeenCalled();
@@ -47,6 +50,7 @@ describe("profile (docs/GITOPS.md, Profiles)", () => {
   it("asks for it once the profile is known to be full", async () => {
     const dashboard = vi.fn(async () => ({ override: { active: false } }) as never);
     renderWithApp(<Probe />, { version: async () => version("full"), dashboard });
+    await settleApps();
     await waitFor(() => expect(dashboard).toHaveBeenCalled());
     await settleApps();
   });
@@ -66,6 +70,7 @@ describe("profile (docs/GITOPS.md, Profiles)", () => {
       const fetchVersion = vi.fn(async () => ({ ...version("gitops"), admissionPolicy: state }));
       const PolicyProbe: React.FC = () => <pre data-testid="policy">{gitOpsPolicyProblem(useVersion()) ?? "none"}</pre>;
       renderWithApp(<PolicyProbe />, { version: fetchVersion });
+      await settleApps();
       await waitFor(() => expect(screen.getByTestId("policy").textContent).toBe("The policy is not in place"));
       // Argo CD restored the policy; the server's next check says so.
       state = "enforced";
@@ -83,6 +88,7 @@ describe("profile (docs/GITOPS.md, Profiles)", () => {
     try {
       const fetchVersion = vi.fn(async () => version("full"));
       renderWithApp(<pre />, { version: fetchVersion });
+      await settleApps();
       await waitFor(() => expect(fetchVersion).toHaveBeenCalledTimes(1));
       await act(() => vi.advanceTimersByTimeAsync(3 * GITOPS_POLICY_POLL_MS));
       expect(fetchVersion).toHaveBeenCalledTimes(1);

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { ReconciliationProgress } from "./ReconciliationProgress";
 import { OperationProgress } from "./OperationProgress";
 import { ActivityLog } from "./ActivityLog";
@@ -35,6 +35,7 @@ describe("ReconciliationProgress stuck guidance", () => {
       fix: "Let the rollout replace one old pod at a time", affectedObjects: ["Deployment redhat-ods-applications/foo"],
     }], { success: false, errorCode: "nothing_to_do", message: "Nothing to do: the rollout is no longer blocked", logs: [] });
     renderStuck();
+    await settleApps();
     expect(await screen.findByText("0/3 nodes are available: 3 Insufficient cpu.")).toBeInTheDocument();
     const apply = screen.getByRole("button", { name: /Apply fix/ });
     await waitFor(() => expect(apply).not.toHaveAttribute("aria-disabled", "true"));
@@ -62,14 +63,16 @@ describe("ReconciliationProgress stuck guidance", () => {
       return jsonResponse({});
     }));
     renderStuck();
+    await settleApps();
     const apply = await screen.findByRole("button", { name: /Apply fix/ });
     await waitFor(() => expect(apply).not.toHaveAttribute("aria-disabled", "true"));
     fireEvent.click(apply);
-    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Apply fix" }));
-    const title = await screen.findByText("Cluster busy");
-    expect(title.closest(".pf-v6-c-alert")).toHaveClass("pf-m-warning");
-    await waitFor(() => expect(scans).toBe(2));
+    const dialog = await screen.findByRole("dialog");
+    // The 409 answers at once: apply it, and the operation read it starts, inside act.
+    await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: "Apply fix" })); });
     await settleApps();
+    expect(screen.getByText("Cluster busy").closest(".pf-v6-c-alert")).toHaveClass("pf-m-warning");
+    await waitFor(() => expect(scans).toBe(2));
   });
 
   it("shows guidance-only problems with instructions and no fix button", async () => {
@@ -78,6 +81,7 @@ describe("ReconciliationProgress stuck guidance", () => {
       description: "secret \"odh-observability-webhook-cert\" not found", autoFixable: false, fix: "The operator creates this secret; check the operator logs.",
     }], {});
     renderStuck();
+    await settleApps();
     expect(await screen.findByText(/stuck in ContainerCreating/)).toBeInTheDocument();
     expect(screen.getByText("What to do:")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Apply fix/ })).not.toBeInTheDocument();
@@ -97,6 +101,7 @@ describe("Reconcile completion after a reload", () => {
     // The run succeeded before the reload (the stream said so).
     sessionStorage.setItem("rhoai-reconcile-meta", JSON.stringify({ result: "succeeded", serverId: "op-1" }));
     renderWithApp(<OperationProgress />);
+    await settleApps();
     expect(await screen.findByText("Re-deploy complete")).toBeInTheDocument();
     expect(screen.getByText(/Operator rhods-operator.3.6.0 is Succeeded/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Close/ }));
@@ -106,6 +111,7 @@ describe("Reconcile completion after a reload", () => {
 
   it("does not claim success when the result was never seen, unless the server reports it", async () => {
     const view = renderWithApp(<OperationProgress />);
+    await settleApps();
     expect(await screen.findByText("Re-deploy finished (outcome unknown, see the activity log)")).toBeInTheDocument();
     expect(screen.queryByText("Re-deploy complete")).not.toBeInTheDocument();
     view.unmount();
@@ -117,8 +123,8 @@ describe("Reconcile completion after a reload", () => {
     renderWithApp(<OperationProgress />, {
       operation: async () => ({ inProgress: false, operation: null, lastCompleted: { id: "op-7", type: "refresh", label: "Re-deploy", user: "me", startedAt: "2026-10-05T10:00:00Z", success: true } }),
     });
-    expect(await screen.findByText("Re-deploy complete")).toBeInTheDocument();
     await settleApps();
+    expect(screen.getByText("Re-deploy complete")).toBeInTheDocument();
   });
 });
 

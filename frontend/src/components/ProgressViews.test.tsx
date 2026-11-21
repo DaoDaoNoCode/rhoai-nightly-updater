@@ -25,6 +25,7 @@ describe("View progress: a run of this page whose dialog was closed", () => {
       "POST /api/resources/mlflow/teardown": () => new Promise<Response>((r) => { finish = r; }),
     });
     renderWithApp(<><GlobalBanners /><QuickResourceCreator mutateBlocker={null} /></>, {}, "/test-resources?tab=mlflow");
+    await settleApps();
     fireEvent.click(await screen.findByRole("button", { name: "MLflow server actions" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: /Delete MLflow/ }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
@@ -65,6 +66,7 @@ describe("View progress: a run of this page whose dialog was closed", () => {
       "POST /api/resources/s3/setup": () => new Promise<Response>((r) => { finish = r; }),
     });
     renderWithApp(<><GlobalBanners /><QuickResourceCreator mutateBlocker={null} /></>, {}, "/test-resources?tab=pipelines&project=dev");
+    await settleApps();
     fireEvent.click(await screen.findByRole("button", { name: "Set up Pipelines in dev" }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Set up" }));
     const run = await screen.findByRole("dialog", { name: "Set up Pipelines in dev" });
@@ -88,6 +90,7 @@ describe("View progress: an operation started elsewhere", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let answer: OperationStatusResponse = { inProgress: true, operation: cleanup };
     renderWithApp(<GlobalBanners />, { operation: async () => answer }, "/components");
+    await settleApps();
     const alert = (await screen.findByText(/qa-user is running "Clean up"/)).closest(".pf-v6-c-alert") as HTMLElement;
     // Its page is offered too.
     expect(within(alert).getByRole("button", { name: "Open Environment" })).toBeInTheDocument();
@@ -112,6 +115,7 @@ describe("View progress: an operation started elsewhere", () => {
   it("a streamed operator operation keeps its link to the Status page, where its steps are", async () => {
     const update: ServerOperation = { ...cleanup, id: "op-8", type: "update", label: "Update to nightly", step: "verify_installplan" };
     renderWithApp(<GlobalBanners />, { operation: async () => ({ inProgress: true, operation: update }) }, "/components");
+    await settleApps();
     const alert = (await screen.findByText(/qa-user is running "Update to nightly"/)).closest(".pf-v6-c-alert") as HTMLElement;
     expect(within(alert).getAllByRole("button", { name: "View progress" })).toHaveLength(1);
     fireEvent.click(within(alert).getByRole("button", { name: "View progress" }));

@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, expect, it } from "vitest";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import { OperationProgress } from "./OperationProgress";
 import { useOperation } from "../state/AppState";
 import { renderWithApp } from "../test/providers";
@@ -21,33 +21,30 @@ const Poll: React.FC = () => {
 async function watchBobFinish(lastCompleted?: CompletedOperation) {
   let answer: OperationStatusResponse = { inProgress: true, operation: bobUpdate };
   const { settled } = renderWithApp(<><OperationProgress /><Poll /></>, { operation: async () => answer });
-  expect(await screen.findByText(/Started by bob/)).toBeInTheDocument();
+  await settled();
+  expect(screen.getByText(/Started by bob/)).toBeInTheDocument();
   answer = { inProgress: false, operation: null, lastCompleted };
-  // The poll answers at once: apply it inside act, before the caller waits.
-  await act(async () => { fireEvent.click(screen.getByText("poll")); });
-  return settled;
+  fireEvent.click(screen.getByText("poll"));
+  // The poll's answer, and the status read the ended run starts (AppState's run effect).
+  await settled();
 }
 
 describe("OperationProgress for an operation another user ran", () => {
   it("does not claim success when the server sends no result (older backend)", async () => {
-    const settled = await watchBobFinish(undefined);
-    expect(await screen.findByText("Update finished (outcome unknown, see the activity log)")).toBeInTheDocument();
+    await watchBobFinish(undefined);
+    expect(screen.getByText("Update finished (outcome unknown, see the activity log)")).toBeInTheDocument();
     expect(screen.queryByText("Update complete")).not.toBeInTheDocument();
-    // The ended run reads the status once more (AppState's run effect).
-    await settled();
   });
 
   it("shows the failure and the server's message", async () => {
-    const settled = await watchBobFinish({ id: "op-bob", type: "update", label: "Update to nightly", user: "bob", startedAt: bobUpdate.startedAt, success: false, message: "The new CSV failed; the previous operator was restored." });
-    expect(await screen.findByText("The new CSV failed; the previous operator was restored.")).toBeInTheDocument();
+    await watchBobFinish({ id: "op-bob", type: "update", label: "Update to nightly", user: "bob", startedAt: bobUpdate.startedAt, success: false, message: "The new CSV failed; the previous operator was restored." });
+    expect(screen.getByText("The new CSV failed; the previous operator was restored.")).toBeInTheDocument();
     expect(screen.getByText("Update failed")).toBeInTheDocument();
     expect(screen.queryByText("Update complete")).not.toBeInTheDocument();
-    await settled();
   });
 
   it("shows success when the server reports it", async () => {
-    const settled = await watchBobFinish({ id: "op-bob", type: "update", label: "Update to nightly", user: "bob", startedAt: bobUpdate.startedAt, success: true, message: "Updated" });
-    await waitFor(() => expect(screen.getByText("Update complete")).toBeInTheDocument());
-    await settled();
+    await watchBobFinish({ id: "op-bob", type: "update", label: "Update to nightly", user: "bob", startedAt: bobUpdate.startedAt, success: true, message: "Updated" });
+    expect(screen.getByText("Update complete")).toBeInTheDocument();
   });
 });

@@ -26,8 +26,8 @@ describe("permissions", () => {
     ["network error", async () => { throw new TypeError("Failed to fetch"); }, { status: "unknown", canMutate: false }],
   ])("%s", async (_name, permissions, expected) => {
     renderWithApp(<Probe />, { permissions });
-    await waitFor(() => expect(probe()).toMatchObject(expected));
     await settleApps();
+    expect(probe()).toMatchObject(expected);
   });
 
   it("starts as 'checking' (disabled) until the first answer", async () => {
@@ -63,6 +63,7 @@ describe("session expiry", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("<!DOCTYPE html><html>Log In</html>", { status: 403, headers: { "Content-Type": "text/html" } })));
     // The real permissions call, as after a night with the tab open.
     renderWithApp(<Probe />, { permissions: getUserPermissions });
+    await settleApps();
     await waitFor(() => expect(probe()).toMatchObject({ expired: true, canMutate: false, status: "unknown" }));
     expect(probe().reason).toMatch(/session has expired/);
     await settleApps();
@@ -71,6 +72,7 @@ describe("session expiry", () => {
   it("keeps a JSON 403 a permission answer", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: "Read-only access", errorCode: "forbidden" }, 403)));
     renderWithApp(<Probe />, { permissions: getUserPermissions });
+    await settleApps();
     await waitFor(() => expect(probe()).toMatchObject({ expired: false, status: "denied" }));
     await settleApps();
   });
@@ -87,6 +89,7 @@ describe("Dashboard Dev override", () => {
 
   it("exposes an active session to every page", async () => {
     renderWithApp(<Probe />, { dashboard: async () => ({ override: { active: true, operatorPaused: true, sessionRecorded: true, stale: false, dashboardDeleting: false } }) as never });
+    await settleApps();
     await waitFor(() => expect(probe().override).toBe(true));
     await settleApps();
   });

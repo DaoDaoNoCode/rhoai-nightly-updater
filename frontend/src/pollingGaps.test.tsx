@@ -100,6 +100,7 @@ describe("(c) an older answer never overwrites a newer one", () => {
     const scan = (problems: Problem[]): DiagnosticResult => ({ problems, checks: [{ name: "Catalog health", status: "pass", detail: "ok" }] });
     const { held } = heldAnswers("/api/diagnostics", { "POST /api/diagnostics/fix": { success: true, message: "Deleted.", logs: [] } });
     renderPage(<TroubleshootingPage />, "/diagnostics");
+    await settleApps();
     await waitFor(() => expect(held).toHaveLength(1));
     await act(async () => held[0].resolve(scan([fixable])));
     await screen.findByText(fixable.title);

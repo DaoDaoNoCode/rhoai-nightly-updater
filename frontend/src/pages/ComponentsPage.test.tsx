@@ -34,6 +34,7 @@ describe("ComponentsPage component causes", () => {
     resp.components = [{ name: "trainer", managementState: "Managed", status: "Error", message: "dependency not met: JobSet Operator is not installed.", cause: "Prerequisite operator not installed: JobSet Operator" }];
     stubApi({ "/api/components": resp });
     renderPage();
+    await settleApps();
     expect(await screen.findByText(/Cause: Prerequisite operator not installed: JobSet Operator/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Diagnostics" })).toHaveAttribute("href", "/diagnostics");
     await settleApps();
@@ -48,6 +49,7 @@ describe("ComponentsPage DSC states", () => {
       "POST /api/setup/dsc": { success: true, message: "DataScienceCluster default-dsc created", logs: [] },
     });
     renderPage();
+    await settleApps();
     expect(await screen.findByRole("heading", { name: "No DataScienceCluster yet" })).toBeInTheDocument();
     expect(screen.getByText(/RHOAI operator 3.6.0 is installed \(Succeeded\)/)).toBeInTheDocument();
     expect(screen.queryByText(/not installed/i)).not.toBeInTheDocument();
@@ -66,6 +68,7 @@ describe("ComponentsPage DSC states", () => {
   it("no-crd says RHOAI is not installed and links to the Dashboard", async () => {
     stubApi({ "/api/components": { components: [], deployments: [], dscName: "", dscPhase: "", changedCount: 0, dscExists: false, dscState: "no-crd" } });
     renderPage();
+    await settleApps();
     expect(await screen.findByRole("heading", { name: "RHOAI is not installed" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /install RHOAI/ })).toHaveAttribute("href", "/");
     await settleApps();
@@ -80,9 +83,9 @@ describe("ComponentsPage DSC states", () => {
   ])("HTTP %i %s is an error with Retry, never an empty state", async (status, errorCode, title) => {
     stubApi({ "/api/components": () => jsonResponse({ error: "Could not read components: boom", errorCode }, status) });
     const { settled } = renderPage();
-    expect(await screen.findByText(new RegExp(`^${title}`))).toBeInTheDocument();
-    // The page's error can show before the app's own reads answered: wait for those too.
+    // The page's error can show before the app's own reads answered: wait for those first.
     await settled();
+    expect(await screen.findByText(new RegExp(`^${title}`))).toBeInTheDocument();
     // The raw error is one click away (UX-Global-9).
     fireEvent.click(screen.getByRole("button", { name: "Show the error" }));
     expect(screen.getByText(/Could not read components: boom/)).toBeInTheDocument();
@@ -112,6 +115,7 @@ describe("ComponentsPage Deployments table", () => {
       dep("gen-ai-ui", { gitCommit: sha, gitURL: "javascript:alert(document.cookie)//" }),
     ]) });
     renderPage();
+    await settleApps();
     const table = await screen.findByRole("grid", { name: "Deployments" });
     const links = within(table).getAllByRole("link", { name: `Commit ${sha} on GitHub` });
     expect(links).toHaveLength(1);
@@ -123,6 +127,7 @@ describe("ComponentsPage Deployments table", () => {
   it("shows problems first with their cause, and filters by status and text", async () => {
     stubApi({ "/api/components": present(deployments) });
     renderPage();
+    await settleApps();
     await screen.findByRole("grid", { name: "Deployments" });
     expect(rowNames()).toEqual(["odh-observability", "agent-ops-ui", "gen-ai-ui"]);
     expect(screen.getByText("ContainerCreating for 2d")).toBeInTheDocument();
@@ -153,6 +158,7 @@ describe("ComponentsPage Deployments table", () => {
       dep("gen-ai-ui", { buildDate: "2026-10-01T00:00:00Z" }),
     ]) });
     renderPage();
+    await settleApps();
     const table = await screen.findByRole("grid", { name: "Deployments" });
     const rowOf = (name: string) => {
       const row = within(table).getAllByRole("row").find((r) => r.querySelector('td[data-label="Name"] span')?.textContent === name);
@@ -167,6 +173,7 @@ describe("ComponentsPage Deployments table", () => {
   it("sorts by name when the Name header is clicked", async () => {
     stubApi({ "/api/components": present(deployments) });
     renderPage();
+    await settleApps();
     await screen.findByRole("grid", { name: "Deployments" });
     fireEvent.click(screen.getByRole("button", { name: "Name" }));
     expect(rowNames()).toEqual(["agent-ops-ui", "gen-ai-ui", "odh-observability"]);
@@ -178,6 +185,7 @@ describe("ComponentsPage Deployments table", () => {
   it("an expanded row shows the full image and a keyboard-reachable copy button", async () => {
     stubApi({ "/api/components": present([dep("agent-ops-ui")]) });
     renderPage();
+    await settleApps();
     await screen.findByRole("grid", { name: "Deployments" });
     fireEvent.click(screen.getByRole("button", { name: /agent-ops-ui/ }));
     const image = deployments[0].image;
@@ -199,6 +207,7 @@ describe("ComponentsPage Deployments table", () => {
       "POST /api/assist-rollout": () => jsonResponse({ success: false, message: "Nothing to do: the rollout is no longer blocked.", logs: [], errorCode: "nothing_to_do" }, 422),
     });
     renderPage();
+    await settleApps();
     fireEvent.click(await screen.findByRole("button", { name: "Actions for rhods-dashboard" }));
     await waitFor(() => expect(screen.getByRole("menuitem", { name: "Unblock rollout" })).not.toHaveAttribute("aria-disabled", "true"));
     fireEvent.click(screen.getByRole("menuitem", { name: "Unblock rollout" }));
@@ -218,6 +227,7 @@ describe("ComponentsPage Deployments table", () => {
     ] });
     stubApi({ "/api/components": present([stuck]), "/api/user/permissions": { canMutate: false, user: "viewer" } });
     renderPage();
+    await settleApps();
     fireEvent.click(await screen.findByRole("button", { name: "Actions for x" }));
     await waitFor(() => expect(screen.getByRole("menuitem", { name: "Unblock rollout" })).toHaveAttribute("aria-disabled", "true"));
     // Disabled for the read-only answer, not only while the check runs.
@@ -235,6 +245,7 @@ describe("ComponentsPage and the app-wide lock", () => {
   it("a teammate's running operation disables Create DSC with the reason", async () => {
     stubApi({ "/api/components": { components: [], deployments: [], dscName: "", dscPhase: "", changedCount: 0, dscExists: false, dscState: "no-dsc", operatorVersion: "3.6.0", operatorPhase: "Succeeded" } });
     renderInApp(<ComponentsPage />, "/", { operation: busy });
+    await settleApps();
     const create = await screen.findByRole("button", { name: "Preview and create DataScienceCluster" });
     await waitFor(() => expect(create).toHaveAttribute("aria-disabled", "true"));
     fireEvent.mouseEnter(create);
@@ -248,6 +259,7 @@ describe("ComponentsPage and the app-wide lock", () => {
       "POST /api/components/dsc/repair": () => jsonResponse({ success: false, errorCode: "nothing_to_do", message: "No invalid fields left.", logs: ["checked spec.components.foo"] }, 422),
     });
     renderInApp(<ComponentsPage />);
+    await settleApps();
     const remove = await screen.findByRole("button", { name: "Remove invalid fields" });
     await waitFor(() => expect(remove).not.toHaveAttribute("aria-disabled"));
     fireEvent.click(remove);
@@ -274,6 +286,7 @@ describe("ComponentsPage DSC repair preview", () => {
       "POST /api/components/dsc/repair": { success: true, message: "DSC reset. Components set to Removed: mcplifecycleoperator, trainer", logs: [] },
     });
     renderInApp(<ComponentsPage />);
+    await settleApps();
     const reset = await screen.findByRole("button", { name: "Reset to version defaults" });
     await waitFor(() => expect(reset).not.toHaveAttribute("aria-disabled"));
     fireEvent.click(reset);
@@ -298,6 +311,7 @@ describe("ComponentsPage DSC repair preview", () => {
       "POST /api/components/dsc/repair": { success: true, message: "Reset", logs: [] },
     });
     renderInApp(<ComponentsPage />);
+    await settleApps();
     const reset = await screen.findByRole("button", { name: "Reset to version defaults" });
     await waitFor(() => expect(reset).not.toHaveAttribute("aria-disabled"));
     fireEvent.click(reset);
@@ -323,6 +337,7 @@ describe("ComponentsPage DSC repair preview", () => {
       "POST /api/components/dsc/repair": { success: true, message: "Reset", logs: [] },
     });
     renderInApp(<ComponentsPage />);
+    await settleApps();
     const reset = await screen.findByRole("button", { name: "Reset to version defaults" });
     await waitFor(() => expect(reset).not.toHaveAttribute("aria-disabled"));
     fireEvent.click(reset);
@@ -348,6 +363,7 @@ describe("ComponentsPage DSC repair preview", () => {
       "/api/setup/dsc/preview": { yaml: "kind: DataScienceCluster", apiVersion: "datasciencecluster.opendatahub.io/v3", operatorVersion: "3.7.0", branch: "rhoai-3.7", sourceURL: "" },
     });
     renderInApp(<ComponentsPage />);
+    await settleApps();
     const reset = await screen.findByRole("button", { name: "Reset to version defaults" });
     await waitFor(() => expect(reset).not.toHaveAttribute("aria-disabled"));
     fireEvent.click(reset);
@@ -366,6 +382,7 @@ describe("ComponentsPage DSC repair preview", () => {
       "POST /api/components/dsc/repair": { success: true, message: "Removed invalid DSC fields: spec.components.dashboard.oldField", logs: [] },
     });
     renderInApp(<ComponentsPage />);
+    await settleApps();
     const remove = await screen.findByRole("button", { name: "Remove invalid fields" });
     await waitFor(() => expect(remove).not.toHaveAttribute("aria-disabled"));
     fireEvent.click(remove);
@@ -381,6 +398,7 @@ describe("ComponentsPage DSC repair preview", () => {
       "/api/setup/dsc/preview": { yaml: "kind: DataScienceCluster", apiVersion: "datasciencecluster.opendatahub.io/v3", operatorVersion: "3.6.0", branch: "rhoai-3.6", sourceURL: "" },
     });
     renderInApp(<ComponentsPage />);
+    await settleApps();
     expect(await screen.findByText(/Reset to version defaults is not possible now: it would remove mcplifecycleoperator/)).toBeInTheDocument();
     const reset = screen.getByRole("button", { name: "Reset to version defaults" });
     await waitFor(() => expect(reset).not.toHaveAttribute("aria-disabled"));
@@ -401,6 +419,7 @@ describe("ComponentsPage DSC repair preview", () => {
       "/api/components": { ...present([dep("dashboard")]), dscCompatibility: { ...compat, removalBlocks: [block] } },
     });
     renderInApp(<ComponentsPage />);
+    await settleApps();
     const extra = await screen.findByRole("button", { name: "Remove extra components" });
     await waitFor(() => expect(extra).not.toHaveAttribute("aria-disabled"));
     fireEvent.click(extra);
@@ -415,6 +434,7 @@ describe("ComponentsPage DSC repair preview", () => {
       "/api/components": { ...present([dep("dashboard")]), dscCompatibility: { ...compat, removalBlocks: [{ component: "legacycomponent", reasons: ["Its operator has no ready pod."] }] } },
     });
     renderInApp(<ComponentsPage />);
+    await settleApps();
     expect(await screen.findByText(/Remove extra components is not possible now: legacycomponent/)).toBeInTheDocument();
     const extra = screen.getByRole("button", { name: "Remove extra components" });
     await waitFor(() => expect(extra).not.toHaveAttribute("aria-disabled"));
@@ -445,6 +465,7 @@ describe("ComponentsPage DSC API versions", () => {
   it("says the DSC is shown at an older version and why, with the defaults message instead of a URL", async () => {
     stubApi({ "/api/components": unreadableV3() });
     renderPage();
+    await settleApps();
     expect(await screen.findByText("The DataScienceCluster is shown as v2: the operator cannot convert it to v3")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Diagnostics" })).toHaveAttribute("href", "/diagnostics");
     expect(screen.getByText(/it ships them as v3 only/)).toBeInTheDocument();
@@ -457,6 +478,7 @@ describe("ComponentsPage DSC API versions", () => {
   it("links the console to the version the DSC was read at, and shows unknown component keys as they are", async () => {
     stubApi({ "/api/components": unreadableV3() });
     renderPage();
+    await settleApps();
     const edit = await screen.findByRole("link", { name: "Edit default-dsc in the OpenShift console" });
     expect(edit).toHaveAttribute("href", "https://console.example.com/k8s/cluster/datasciencecluster.opendatahub.io~v2~DataScienceCluster/default-dsc/yaml");
     expect(screen.getByText("someFutureComponent")).toBeInTheDocument();
@@ -466,6 +488,7 @@ describe("ComponentsPage DSC API versions", () => {
   it("uses v3 in the console link when the DSC is read as v3", async () => {
     stubApi({ "/api/components": { ...unreadableV3(), dscAPIVersion: "datasciencecluster.opendatahub.io/v3", dscVersionFallback: undefined, dscCompatibility: undefined } });
     renderPage();
+    await settleApps();
     const edit = await screen.findByRole("link", { name: "Edit default-dsc in the OpenShift console" });
     expect(edit.getAttribute("href")).toContain("datasciencecluster.opendatahub.io~v3~DataScienceCluster");
     expect(screen.queryByText(/is shown as/)).not.toBeInTheDocument();
@@ -479,6 +502,7 @@ describe("ComponentsPage under Argo CD", () => {
       "/api/components": { ...present([dep("dashboard")]), dscCompatibility: { operatorVersion: "3.6.0", branch: "rhoai-3.6", invalidFields: ["spec.components.foo"], missingComponents: [] } },
     });
     renderInApp(<ComponentsPage />, "/", { status: async () => nightlyStatus({ dscManagedBy: "rhai-on-openshift" }) });
+    await settleApps();
     const remove = await screen.findByRole("button", { name: "Remove invalid fields" });
     await waitFor(() => expect(remove).toHaveAttribute("aria-disabled", "true"));
     expect(screen.getByText("Argo CD: rhai-on-openshift")).toBeInTheDocument();

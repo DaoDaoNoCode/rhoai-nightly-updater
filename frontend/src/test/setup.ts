@@ -3,7 +3,7 @@ import { cleanup, configure } from "@testing-library/react";
 import { format } from "node:util";
 import { afterEach, beforeEach, vi } from "vitest";
 import { setDocumentHidden } from "./utils";
-import { unsettledApps } from "./providers";
+import { appsOutsideAct } from "./providers";
 
 // findBy*/waitFor give up after 1s by default: on a loaded machine (a
 // CPU-limited build pod, parallel suites) a page whose stubbed reads
@@ -48,7 +48,7 @@ function blocksInParagraphs(): string[] {
 
 afterEach(() => {
   const nested = blocksInParagraphs();
-  const unsettled = unsettledApps();
+  const { unsettled, answeredOutsideAct } = appsOutsideAct();
   cleanup();
   setDocumentHidden(false, { silent: true });
   const found = reactWarnings;
@@ -59,4 +59,10 @@ afterEach(() => {
   // on their own schedule: a test that ends before they did leaves updates
   // for after it, outside act, and fails or not with the machine's load.
   if (unsettled > 0) throw new Error("The test rendered the app (renderWithApp/renderPage) and ended before its reads settled: end it with await settleApps() (or the render's settled()).");
+  // An answer while waitFor or findBy waited is applied outside act, and
+  // what it starts may land after the wait: a warning in some runs only
+  // (see renderWithApp). This fails such a test in every run.
+  if (answeredOutsideAct.length > 0) {
+    throw new Error(`The app's ${answeredOutsideAct.join(", ")} read answered while a waitFor or findBy waited, outside act: let the app's reads settle first (await settleApps() or the render's settled()), and resolve a read the test holds open inside act.`);
+  }
 });

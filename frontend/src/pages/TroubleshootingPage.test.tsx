@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { TroubleshootingPage, buildDiagnosticReport, problemSummary } from "./TroubleshootingPage";
 import { stubApi, jsonResponse } from "../test/apiStub";
 import { renderPage, settleApps } from "../test/providers";
@@ -59,6 +59,7 @@ describe("Diagnostics", () => {
   it("guidance-only problems show the objects and a copyable command, and no Fix button", async () => {
     stubApi({ "/api/diagnostics": result([guidance, pods]) });
     renderPage(<TroubleshootingPage />);
+    await settleApps();
     const card = (await screen.findByText(guidance.title)).closest(".pf-v6-c-card") as HTMLElement;
     expect(within(card).queryByText("Auto-fix available")).not.toBeInTheDocument();
     expect(within(card).queryByRole("textbox")).not.toBeInTheDocument();
@@ -81,6 +82,7 @@ describe("Diagnostics", () => {
       "POST /api/diagnostics/fix": () => jsonResponse({ success: false, errorCode: "nothing_to_do", message: "Nothing to do: every Service exists.", logs: [] }, 200),
     });
     renderPage(<TroubleshootingPage />);
+    await settleApps();
     await screen.findByText(fixable.title);
     expand(fixable.title);
     // Wait for permissions, then open the dialog.
@@ -103,6 +105,7 @@ describe("Diagnostics", () => {
       "POST /api/diagnostics/fix": () => jsonResponse({ success: false, errorCode: "prerequisites", message: "rhods-operator has no ready pod.", logs: [] }, 422),
     });
     renderPage(<TroubleshootingPage />);
+    await settleApps();
     await screen.findByText(fixable.title);
     expand(fixable.title);
     await fixEnabled();
@@ -116,6 +119,7 @@ describe("Diagnostics", () => {
   it("read-only users get a disabled Fix with the reason", async () => {
     stubApi({ "/api/diagnostics": result([fixable]), "/api/user/permissions": { canMutate: false, user: "v" } });
     renderPage(<TroubleshootingPage />);
+    await settleApps();
     await screen.findByText(fixable.title);
     expand(fixable.title);
     // Disabled for the read-only answer, not only while the check runs.
@@ -132,6 +136,7 @@ describe("Diagnostics", () => {
     renderPage(<TroubleshootingPage />, "/", {
       operation: async () => ({ inProgress: true, operation: { id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: new Date().toISOString() } }),
     });
+    await settleApps();
     await screen.findByText(fixable.title);
     expand(fixable.title);
     const fix = screen.getByRole("button", { name: "Fix" });
@@ -147,6 +152,7 @@ describe("Diagnostics", () => {
       "/api/user/permissions": () => new Response("<html>Log In</html>", { status: 403, headers: { "Content-Type": "text/html" } }),
     });
     renderPage(<TroubleshootingPage />);
+    await settleApps();
     await screen.findByText(fixable.title);
     expand(fixable.title);
     const fix = screen.getByRole("button", { name: "Fix" });
@@ -163,17 +169,22 @@ describe("Diagnostics", () => {
     let answer: OperationStatusResponse = { inProgress: false, operation: null };
     const fetchOperation = vi.fn(async () => answer);
     renderPage(<TroubleshootingPage />, "/", { operation: fetchOperation });
+    await settleApps();
     await screen.findByText(fixable.title);
     expand(fixable.title);
     await waitFor(() => expect(screen.getByRole("button", { name: "Fix" })).not.toHaveAttribute("aria-disabled"));
     const before = fetchOperation.mock.calls.length;
     answer = { inProgress: true, operation: { id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: new Date().toISOString() } };
     fireEvent.click(screen.getByRole("button", { name: "Fix" }));
-    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Fix" }));
-    expect(await screen.findByText("Cluster busy")).toBeInTheDocument();
-    await waitFor(() => expect(fetchOperation.mock.calls.length).toBeGreaterThan(before));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Fix" })).toHaveAttribute("aria-disabled", "true"));
+    const dialog = await screen.findByRole("dialog");
+    // The 409 answers at once: apply it, and the operation read it starts, inside act.
+    await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: "Fix" })); });
     await settleApps();
+    expect(screen.getByText("Cluster busy")).toBeInTheDocument();
+    expect(fetchOperation.mock.calls.length).toBeGreaterThan(before);
+    // The card's own Fix: PatternFly keeps the closed dialog in the DOM for its close animation.
+    const card = screen.getByText(fixable.title).closest(".pf-v6-c-card") as HTMLElement;
+    expect(within(card).getByRole("button", { name: "Fix" })).toHaveAttribute("aria-disabled", "true");
   });
 
   it("the summary counts the listed problems by severity (live: '4 issues' vs 'Problems (6)')", async () => {
@@ -181,6 +192,7 @@ describe("Diagnostics", () => {
     const info2: Problem = { ...guidance, id: "mlflow-unmanaged", severity: "info", title: "mlflow-operator is unmanaged" };
     stubApi({ "/api/diagnostics": result([guidance, pods, fixable, { ...pods, id: "p2", title: "trustyai restarting" }, info, info2]) });
     renderPage(<TroubleshootingPage />);
+    await settleApps();
     expect(await screen.findByText("4 problems need attention · 2 informational")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Need attention (4)" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Informational (2)" })).toBeInTheDocument();
@@ -199,6 +211,7 @@ describe("Diagnostics", () => {
   it("a failed scan is classified and offers Retry", async () => {
     stubApi({ "/api/diagnostics": () => jsonResponse({ error: "context deadline exceeded", errorCode: "timeout" }, 504) });
     renderPage(<TroubleshootingPage />);
+    await settleApps();
     expect(await screen.findByText(/^The request timed out/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
     await settleApps();
@@ -227,6 +240,7 @@ describe("Diagnostics related problems", () => {
   it("links the problems that fix the cause and opens them", async () => {
     stubApi({ "/api/diagnostics": result([dsc, prereq]) });
     renderPage(<TroubleshootingPage />);
+    await settleApps();
     await screen.findByText(dsc.title);
     expand(dsc.title);
     const card = screen.getByText(dsc.title).closest(".pf-v6-c-card") as HTMLElement;
@@ -269,6 +283,7 @@ describe("Diagnostics leftovers from an earlier release", () => {
       "POST /api/diagnostics/fix/acknowledged": () => jsonResponse({ success: true, message: "Changed TrustyAI default-trustyai.", logs: [] }, 200),
     });
     renderPage(<TroubleshootingPage />);
+    await settleApps();
     await screen.findByText(fields.title);
     expand(fields.title);
     const table = screen.getByRole("grid", { name: `Fields of ${fields.title}` });
@@ -293,6 +308,7 @@ describe("Diagnostics leftovers from an earlier release", () => {
   it("an acknowledgement without its binding cannot be sent", async () => {
     stubApi({ "/api/diagnostics": result([{ ...fields, acknowledgeBinding: undefined }]) });
     renderPage(<TroubleshootingPage />);
+    await settleApps();
     await screen.findByText(fields.title);
     expand(fields.title);
     await fixEnabled();
@@ -310,6 +326,7 @@ describe("Diagnostics leftovers from an earlier release", () => {
       "POST /api/diagnostics/fix": () => jsonResponse({ success: false, errorCode: "acknowledgement_required", message: "Changing TrustyAI default-trustyai needs your acknowledgement first.", logs: [] }, 422),
     });
     renderPage(<TroubleshootingPage />);
+    await settleApps();
     await screen.findByText(plain.title);
     expand(plain.title);
     await fixEnabled();
