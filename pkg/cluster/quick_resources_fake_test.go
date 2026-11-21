@@ -80,6 +80,10 @@ type resourceFake struct {
 	// argo answers Argo CD's (and ACM's) reads of argocd.go; nil = the
 	// generic handling.
 	argo *fakeArgoCD
+	// intercept, when set, may answer a request itself (under the lock,
+	// after it was recorded and its injected failures applied): it returns
+	// true when it did.
+	intercept func(w http.ResponseWriter, r *http.Request, body []byte) bool
 }
 
 // fakeCall is one request to resourceFake.
@@ -356,6 +360,9 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 	if f.argo != nil && f.argo.serve(w, r) {
 		return
 	}
+	if f.intercept != nil && f.intercept(w, r, body) {
+		return
+	}
 	// A JSON patch (the field-ownership upgrade) carries no object to quote.
 	if code, ok := f.failEcho[echoKey]; ok && !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json-patch+json") {
 		f.echoed = append(f.echoed, string(body))
@@ -584,12 +591,17 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		if len(body) > 0 {
 			var opts struct {
 				Preconditions struct {
-					UID string `json:"uid"`
+					UID             string `json:"uid"`
+					ResourceVersion string `json:"resourceVersion"`
 				} `json:"preconditions"`
 			}
 			_ = json.Unmarshal(body, &opts)
 			if opts.Preconditions.UID != "" && opts.Preconditions.UID != meta["uid"] {
 				f.status(w, 409, "Precondition failed: UID in precondition does not match")
+				return
+			}
+			if opts.Preconditions.ResourceVersion != "" && opts.Preconditions.ResourceVersion != fmt.Sprint(meta["resourceVersion"]) {
+				f.status(w, 409, "Precondition failed: ResourceVersion in precondition does not match")
 				return
 			}
 		}

@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -34,10 +35,19 @@ func projectFake(t *testing.T) (*resourceFake, *Client) {
 	t.Helper()
 	t.Setenv("NAMESPACE", "rhoai-nightly-updater")
 	f, c := newResourceFake(t)
-	f.beforeRequest = func(r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == tProjectRequest {
-			f.putJSON(tRecipeNS, `{"metadata":{"annotations":{"openshift.io/requester":"alice","openshift.io/display-name":"Recipe dev"}}}`)
+	// The ProjectRequest makes the namespace and answers with its Project
+	// (the same metadata), as openshift-apiserver does.
+	f.intercept = func(w http.ResponseWriter, r *http.Request, _ []byte) bool {
+		if r.Method != http.MethodPost || r.URL.Path != tProjectRequest {
+			return false
 		}
+		f.nextID++
+		ns := map[string]any{"metadata": map[string]any{"name": "recipe-dev", "uid": fmt.Sprintf("ns-uid-%d", f.nextID), "resourceVersion": "1",
+			"labels":      map[string]any{"kubernetes.io/metadata.name": "recipe-dev"},
+			"annotations": map[string]any{"openshift.io/requester": "alice", "openshift.io/display-name": "Recipe dev"}}}
+		f.objects[fakeKey{gv: "v1", plural: "namespaces", name: "recipe-dev"}] = ns
+		f.write(w, 201, map[string]any{"kind": "Project", "apiVersion": "project.openshift.io/v1", "metadata": ns["metadata"]})
+		return true
 	}
 	return f, c
 }
@@ -68,13 +78,16 @@ func TestRecipeProject_CreatedLikeTheDashboardAndRecorded(t *testing.T) {
 		t.Fatalf("project request %+v", calls)
 	}
 	patches := f.callsTo("PATCH", tRecipeNS)
-	if len(patches) != 1 || patches[0].ContentType != "application/merge-patch+json" || patches[0].Query.Get("fieldManager") != "rhoai-nightly-updater" {
+	if len(patches) != 1 || patches[0].ContentType != "application/json-patch+json" || patches[0].Query.Get("fieldManager") != "rhoai-nightly-updater" ||
+		!strings.HasPrefix(patches[0].Body, `[{"op":"test","path":"/metadata/uid","value":"`) {
 		t.Fatalf("label patch %+v", patches)
 	}
 	ns := f.get(tRecipeNS)
 	meta := ns["metadata"].(map[string]any)
 	labels := meta["labels"].(map[string]any)
-	if labels["opendatahub.io/dashboard"] != "true" || labels[kube.ManagedByLabelKey] != kube.ManagedByLabelValue || meta["annotations"].(map[string]any)["rhoai-nightly-updater/recipe"] != "dev" {
+	if labels["opendatahub.io/dashboard"] != "true" || labels[kube.ManagedByLabelKey] != kube.ManagedByLabelValue || labels["kubernetes.io/metadata.name"] != "recipe-dev" ||
+		labels["kueue.openshift.io/managed"] != nil || meta["annotations"].(map[string]any)["rhoai-nightly-updater/recipe"] != "dev" ||
+		meta["annotations"].(map[string]any)["openshift.io/requester"] != "alice" {
 		t.Fatalf("namespace metadata %v", meta)
 	}
 	if s.Project == nil || !s.Project.Owned || s.Project.UID != meta["uid"] {
@@ -207,7 +220,8 @@ func TestRecipeProject_Teardown(t *testing.T) {
 func TestRecipeProject_TeardownGuards(t *testing.T) {
 	for _, tc := range []struct{ name, body, want string }{
 		{"recreated", `{"metadata":{"uid":"new-uid","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}}}`, "made again"},
-		{"label removed", `{"metadata":{"uid":"rec-uid"}}`, "no longer carries"},
+		{"label removed", `{"metadata":{"uid":"rec-uid","annotations":{"rhoai-nightly-updater/recipe":"dev"}}}`, "no longer carries"},
+		{"annotation missing (a tool namespace a forged record names)", `{"metadata":{"uid":"rec-uid","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}}}`, "no longer carries"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := projectFake(t)
@@ -224,7 +238,7 @@ func TestRecipeProject_TeardownGuards(t *testing.T) {
 	// A UID that changes between the check and the delete: the
 	// precondition refuses (DeleteWithUID).
 	f, c := projectFake(t)
-	f.putJSON(tRecipeNS, `{"metadata":{"uid":"rec-uid","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}}}`)
+	f.putJSON(tRecipeNS, `{"metadata":{"uid":"rec-uid","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"},"annotations":{"rhoai-nightly-updater/recipe":"dev"}}}`)
 	if err := record.WriteSnapshotKey(c, "recipeProject", "test", `{"projects":[{"name":"recipe-dev","uid":"rec-uid","recipe":"dev"}]}`); err != nil {
 		t.Fatal(err)
 	}
@@ -236,5 +250,124 @@ func TestRecipeProject_TeardownGuards(t *testing.T) {
 	res, _ := recipe.DeleteProject(c, "recipe-dev", nil)
 	if res.Success || !f.has(tRecipeNS) {
 		t.Fatalf("deleted a swapped namespace: %+v", res)
+	}
+}
+
+// The label patch is bound to the UID the ProjectRequest answered with: a
+// namespace made again under the name between the check and the patch is
+// not labelled (the patch's test operation fails).
+func TestRecipeProject_LabelPatchTestsTheCreatedUID(t *testing.T) {
+	f, c := projectFake(t)
+	f.beforeServe = func(method, path string) {
+		if method == http.MethodPatch && path == tRecipeNS {
+			f.putJSON(tRecipeNS, `{"metadata":{"uid":"someone-else","labels":{"kubernetes.io/metadata.name":"recipe-dev"}}}`)
+		}
+	}
+	res := ensureProject(t, c, &recipe.State{Recipe: tRecipe(t, "create")})
+	if res.Success {
+		t.Fatalf("labelled a replaced namespace: %+v", res)
+	}
+	labels := f.get(tRecipeNS)["metadata"].(map[string]any)["labels"].(map[string]any)
+	if labels[kube.ManagedByLabelKey] != nil || labels["opendatahub.io/dashboard"] != nil {
+		t.Fatalf("the other namespace got the labels: %v", labels)
+	}
+}
+
+// The Kueue label follows the dashboard: set when its OdhDashboardConfig
+// says disableKueue: false, not when true or unset (its default) or when
+// there is none; a config that cannot be read stops before anything is
+// created.
+func TestRecipeProject_KueueLabelFollowsTheDashboard(t *testing.T) {
+	const cfg = "/apis/opendatahub.io/v1alpha/namespaces/redhat-ods-applications/odhdashboardconfigs/odh-dashboard-config"
+	for _, tc := range []struct {
+		name, body string
+		fail       int
+		want       bool
+		ok         bool
+	}{
+		{"kueue on", `{"spec":{"dashboardConfig":{"disableKueue":false}}}`, 0, true, true},
+		{"kueue off", `{"spec":{"dashboardConfig":{"disableKueue":true}}}`, 0, false, true},
+		{"unset: the dashboard's default", `{"spec":{"dashboardConfig":{}}}`, 0, false, true},
+		{"no config", "", 0, false, true},
+		{"unreadable", "", 403, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c := projectFake(t)
+			if tc.body != "" {
+				f.putJSON(cfg, tc.body)
+			}
+			if tc.fail != 0 {
+				f.fail["GET "+cfg] = tc.fail
+			}
+			res := ensureProject(t, c, &recipe.State{Recipe: tRecipe(t, "create")})
+			if res.Success != tc.ok {
+				t.Fatalf("ensure %+v", res)
+			}
+			if !tc.ok {
+				if len(f.callsTo("POST", tProjectRequest)) != 0 {
+					t.Fatal("created the project although the dashboard's settings could not be read")
+				}
+				return
+			}
+			labels := f.get(tRecipeNS)["metadata"].(map[string]any)["labels"].(map[string]any)
+			if (labels["kueue.openshift.io/managed"] == "true") != tc.want {
+				t.Fatalf("labels %v", labels)
+			}
+		})
+	}
+}
+
+// A label or annotation removed between the last check and the delete
+// stops the delete: the resourceVersion read is its precondition.
+func TestRecipeProject_DeleteRequiresTheCheckedVersion(t *testing.T) {
+	f, c := projectFake(t)
+	s := &recipe.State{Recipe: tRecipe(t, "create")}
+	if res := ensureProject(t, c, s); !res.Success {
+		t.Fatal(res.Message)
+	}
+	f.beforeServe = func(method, path string) {
+		if method == http.MethodDelete && path == tRecipeNS {
+			f.mu.Lock()
+			obj := f.objects[fakeKey{gv: "v1", plural: "namespaces", name: "recipe-dev"}]
+			meta := obj["metadata"].(map[string]any)
+			delete(meta["labels"].(map[string]any), kube.ManagedByLabelKey)
+			f.bumpRV(meta)
+			f.mu.Unlock()
+		}
+	}
+	res, _ := recipe.DeleteProject(c, "recipe-dev", nil)
+	if res.Success || !f.has(tRecipeNS) {
+		t.Fatalf("deleted a namespace whose label was removed meanwhile: %+v", res)
+	}
+}
+
+// Protected namespaces fail closed: when the DSCInitialization cannot be
+// read, the project step cannot tell RHOAI's namespaces and refuses, and
+// so does Clean up.
+func TestRecipeProject_UnreadableDSCIRefuses(t *testing.T) {
+	f, c := projectFake(t)
+	f.fail["GET "+dsciV2List] = 500
+	f.fail["GET /apis/dscinitialization.opendatahub.io/v1/dscinitializations"] = 500
+	_, err := recipeStep(t, tRecipe(t, "create"), recipe.StepProject).Check(c, &recipe.State{Recipe: tRecipe(t, "create")})
+	if err == nil || !strings.Contains(err.Error(), "cannot tell whether recipe-dev is a namespace of RHOAI") {
+		t.Fatalf("check err %v", err)
+	}
+	if res := ensureProject(t, c, &recipe.State{Recipe: tRecipe(t, "create")}); res.Success || len(f.callsTo("POST", tProjectRequest)) != 0 {
+		t.Fatalf("ensure %+v", res)
+	}
+	problem, _, err := recipe.ProjectTeardownProblem(c, "recipe-dev", nil)
+	if err == nil && problem == "" {
+		t.Fatal("clean-up allowed without knowing RHOAI's namespaces")
+	}
+}
+
+// A project a run recorded but that is gone now is created again on
+// Resume, not taken for the old one.
+func TestRecipeProject_GoneProjectIsCreatedAgain(t *testing.T) {
+	f, c := projectFake(t)
+	s := &recipe.State{Recipe: tRecipe(t, "create"), Project: &types.RecipeProjectRef{Name: "recipe-dev", UID: "old-uid", Owned: true}}
+	res := ensureProject(t, c, s)
+	if !res.Success || len(f.callsTo("POST", tProjectRequest)) != 1 || s.Project == nil || s.Project.UID == "old-uid" {
+		t.Fatalf("ensure %+v, project %+v", res, s.Project)
 	}
 }

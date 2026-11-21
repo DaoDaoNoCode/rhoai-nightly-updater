@@ -237,11 +237,10 @@ func beginRecipeRun(c *cluster.Client, w http.ResponseWriter, st *recipeStart, r
 		StartedAt: now, State: types.RecipeRunRunning, Recipe: rcp, Pinned: state.Pinned, Project: state.Project,
 	}
 	if prior != nil {
+		// The project is what the plan found now (the record of the
+		// projects recipes created, and the namespace), never the
+		// earlier attempt's: a project that is gone is created again.
 		run.ID, run.StartedAt, run.ResumedAt = prior.ID, prior.StartedAt, now
-		if run.Project == nil {
-			run.Project = prior.Project
-		}
-		state.Project = run.Project
 	}
 	for _, s := range steps {
 		run.Steps = append(run.Steps, types.RecipeRunStep{ID: s.ID, Title: s.Title, Status: types.RecipeStepPending})

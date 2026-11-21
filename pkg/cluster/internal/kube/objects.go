@@ -97,6 +97,20 @@ func DeleteWithUIDPropagation(c *Client, path, uid, policy string) (int, error) 
 	return status, err
 }
 
+// DeleteWithPreconditions is DeleteWithUID that also requires the object's
+// resourceVersion: the delete fails with 409 when the object changed in
+// any way since it was read (Kubernetes DeleteOptions.preconditions).
+func DeleteWithPreconditions(c *Client, path, uid, resourceVersion string) (int, error) {
+	body, _ := json.Marshal(map[string]any{
+		"apiVersion":        "v1",
+		"kind":              "DeleteOptions",
+		"preconditions":     map[string]any{"uid": uid, "resourceVersion": resourceVersion},
+		"propagationPolicy": "Background",
+	})
+	_, status, err := c.Do(http.MethodDelete, path, "application/json", body, nil)
+	return status, err
+}
+
 // WaitForGone polls until gone reports true, an error occurs, or the timeout
 // passes. Every poll runs under one context bounded by the timeout, so a call
 // that starts just before the deadline cannot overrun it. It returns
