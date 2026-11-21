@@ -154,29 +154,52 @@ func (k *leaseKeeper) startHeartbeat(c *cluster.Client, opID string, renewed tim
 	k.cancel, k.done = cancel, done
 	interval, lossAfter := leaseHeartbeatInterval, leaseLossAfter()
 	k.mu.Unlock()
+	// lose runs once: the deadline's watcher and the heartbeat may both
+	// find the lease lost.
+	var lostOnce sync.Once
 	lose := func(why string, attrs ...any) {
-		slog.Error("operation stopped: "+why, append([]any{"operation", opID}, attrs...)...)
-		inflight.update(opID, func(op *Operation) { op.lockLost = true })
-		if cancelOp != nil {
-			cancelOp(cluster.ErrOperationLockLost)
-		}
+		lostOnce.Do(func() {
+			slog.Error("operation stopped: "+why, append([]any{"operation", opID}, attrs...)...)
+			inflight.update(opID, func(op *Operation) { op.lockLost = true })
+			if cancelOp != nil {
+				cancelOp(cluster.ErrOperationLockLost)
+			}
+		})
+	}
+	expired := func(lastHeartbeat time.Time, err error) {
+		lose("the cross-pod operation lock could not be renewed and may have expired", "lastHeartbeat", lastHeartbeat, "error", err)
 	}
 	// The ticker starts here, not in the goroutine, so the first renewal is
 	// due one interval after the lease was taken.
 	hb := clk
 	ticker := hb.NewTicker(interval)
-	// The deadline is on the heartbeat's clock and ends a renewal in
-	// flight too (its write context derives from it): checking only when a
+	// The deadline is on the heartbeat's clock. Checking only when a
 	// renewal returns would stop up to an interval plus a write timeout
-	// late, as late as the instant the lease expires.
-	lost, cancelLost := hb.WithDeadline(ctx, renewed.Add(lossAfter))
+	// late, as late as the instant the lease expires. So the deadline stops
+	// the operation by itself (its watcher), even while a renewal's write
+	// hangs, and it also ends that write (the write's context derives from
+	// it). A deadline replaced after a successful renewal is detached from
+	// its watcher before it is cancelled, so that cancel is not a loss.
+	deadline := func(heartbeat time.Time) (context.Context, func() bool) {
+		lost, cancelLost := hb.WithDeadline(ctx, heartbeat.Add(lossAfter))
+		unwatch := context.AfterFunc(lost, func() {
+			if ctx.Err() == nil { // not the heartbeat's own stop
+				expired(heartbeat, nil)
+			}
+		})
+		// The cancel reports false when the deadline passed first (its
+		// watcher stops the operation).
+		return lost, func() bool {
+			watched := unwatch()
+			cancelLost()
+			return watched
+		}
+	}
+	lost, cancelLost := deadline(renewed)
 	go func() {
 		defer close(done)
 		defer ticker.Stop()
 		defer func() { cancelLost() }()
-		expired := func(err error) {
-			lose("the cross-pod operation lock could not be renewed and may have expired", "lastHeartbeat", renewed, "error", err)
-		}
 		for {
 			select {
 			case <-ctx.Done():
@@ -187,7 +210,7 @@ func (k *leaseKeeper) startHeartbeat(c *cluster.Client, opID string, renewed tim
 				return
 			}
 			if lost.Err() != nil {
-				expired(nil)
+				expired(renewed, nil) // its watcher may be first; lose runs once
 				return
 			}
 			op := inflight.snapshot()
@@ -207,14 +230,16 @@ func (k *leaseKeeper) startHeartbeat(c *cluster.Client, opID string, renewed tim
 			case lost.Err() != nil:
 				// The deadline passed while the renewal ran: fail closed,
 				// also when the write went through.
-				expired(err)
+				expired(renewed, err)
 				return
 			case err != nil:
 				slog.Warn("could not renew the cross-pod operation lock", "operation", opID, "error", err)
 			default:
+				if !cancelLost() {
+					return // the deadline passed just now: its watcher stops the operation
+				}
 				renewed, _ = cluster.LeaseHeartbeat(lease)
-				cancelLost()
-				lost, cancelLost = hb.WithDeadline(ctx, renewed.Add(lossAfter))
+				lost, cancelLost = deadline(renewed)
 			}
 		}
 	}()
