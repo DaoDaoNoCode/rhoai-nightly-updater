@@ -248,8 +248,14 @@ type Operation struct {
 	// bookkeeper writes the operation's lease and marker: always the
 	// ServiceAccount's client, which may outlive the request.
 	bookkeeper *cluster.Client
-	sw         *statusWriter // the response, for the outcome of non-streaming operations
-	begun      bool          // set by beginOperation
+	// freshBookkeeper, when set, makes the bookkeeper again with the
+	// ServiceAccount token as it is now: the lease heartbeat and the
+	// marker clear use it, so an operation that holds the lock for hours
+	// (a recipe run) does not keep writing with the token read at its
+	// start.
+	freshBookkeeper func(ctx context.Context) *cluster.Client
+	sw              *statusWriter // the response, for the outcome of non-streaming operations
+	begun           bool          // set by beginOperation
 	// lockLost: the lease heartbeat stopped the operation because its lease
 	// was lost; its outcome is cluster.LockLostMessage.
 	lockLost bool
@@ -337,7 +343,7 @@ func (t *operationTracker) start(sw *statusWriter) *Operation {
 	now := time.Now().UTC()
 	op := &Operation{
 		ID: newOperationID(), Type: kind[0], Label: kind[1], User: sw.user,
-		StartedAt: now, UpdatedAt: now, Pod: os.Getenv("HOSTNAME"), bookkeeper: sw.bookkeeper, sw: sw,
+		StartedAt: now, UpdatedAt: now, Pod: os.Getenv("HOSTNAME"), bookkeeper: sw.bookkeeper, sw: sw, freshBookkeeper: sw.newBookkeeper,
 	}
 	t.mu.Lock()
 	t.current = op
@@ -392,8 +398,12 @@ func (t *operationTracker) finish() (*types.CompletedOperation, *cluster.Client)
 	if op == nil {
 		return nil, nil
 	}
+	bookkeeper := op.bookkeeper
+	if op.freshBookkeeper != nil {
+		bookkeeper = op.freshBookkeeper(context.Background())
+	}
 	if !op.begun {
-		return nil, op.bookkeeper
+		return nil, bookkeeper
 	}
 	success, message := operationOutcome(op)
 	t.last = &types.CompletedOperation{
@@ -404,7 +414,7 @@ func (t *operationTracker) finish() (*types.CompletedOperation, *cluster.Client)
 		Message:    truncateText(message, maxOperationMessageBytes),
 	}
 	done := *t.last
-	return &done, op.bookkeeper
+	return &done, bookkeeper
 }
 
 // lastCompleted returns a copy of the last completed operation, or nil.
@@ -459,7 +469,7 @@ func (t *operationTracker) snapshot() *Operation {
 		return nil
 	}
 	cp := *t.current
-	cp.bookkeeper, cp.sw = nil, nil
+	cp.bookkeeper, cp.sw, cp.freshBookkeeper = nil, nil, nil
 	return &cp
 }
 

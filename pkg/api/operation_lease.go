@@ -127,7 +127,7 @@ func (k *leaseKeeper) acquire(c *cluster.Client, op *Operation, cancelOp context
 		return holder, err
 	}
 	renewed, _ := cluster.LeaseHeartbeat(lease)
-	k.startHeartbeat(c, op.ID, renewed, cancelOp)
+	k.startHeartbeat(c, op.ID, renewed, cancelOp, op.freshBookkeeper)
 	return nil, nil
 }
 
@@ -151,7 +151,10 @@ func leaseLossAfter() time.Duration {
 // operation with cluster.ErrOperationLockLost: its context ends, and no
 // cleanup or restore runs (cluster.postOperationContext), because the other
 // pod may be changing the same objects. A single failed renewal does not.
-func (k *leaseKeeper) startHeartbeat(c *cluster.Client, opID string, renewed time.Time, cancelOp context.CancelCauseFunc) {
+//
+// fresh, when not nil, makes the client of each renewal with the
+// ServiceAccount token as it is then (it rotates); otherwise c is used.
+func (k *leaseKeeper) startHeartbeat(c *cluster.Client, opID string, renewed time.Time, cancelOp context.CancelCauseFunc, fresh func(context.Context) *cluster.Client) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	k.mu.Lock()
@@ -224,7 +227,11 @@ func (k *leaseKeeper) startHeartbeat(c *cluster.Client, opID string, renewed tim
 			}
 			wctx, wcancel := context.WithTimeout(lost, leaseWriteTimeout)
 			lease := leaseFor(op, hb.Now())
-			holder, err := writeOperationLease(c.WithContext(wctx), lease, leaseHeldElsewhere)
+			wc := c.WithContext(wctx)
+			if fresh != nil {
+				wc = fresh(wctx)
+			}
+			holder, err := writeOperationLease(wc, lease, leaseHeldElsewhere)
 			wcancel()
 			switch {
 			case ctx.Err() != nil:

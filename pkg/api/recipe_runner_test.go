@@ -141,7 +141,7 @@ func installRecipeFake(t *testing.T) (*recipeFake, *fakeRecord) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.saves++
-		if !replace && f.record != nil && f.record.ID != run.ID {
+		if !replace && f.record != nil && (f.record.ID != run.ID || f.record.OperationID != run.OperationID) {
 			return cluster.ErrRecipeRunReplaced
 		}
 		f.record = copyRecipeRun(run)
@@ -651,13 +651,20 @@ func TestRecipePlan_ReadOnly(t *testing.T) {
 // pod.
 func TestRecipeRunStatus_InterruptedAndRemote(t *testing.T) {
 	f, rec := installRecipeFake(t)
-	f.record = &types.RecipeRun{ID: "r1", BootID: "other-boot", State: types.RecipeRunRunning, Steps: []types.RecipeRunStep{{ID: "rhoai", Status: types.RecipeStepRunning}}}
+	f.record = &types.RecipeRun{ID: "r1", OperationID: "remote-op", BootID: "other-boot", State: types.RecipeRunRunning, Steps: []types.RecipeRunStep{{ID: "rhoai", Status: types.RecipeStepRunning}}}
 	if st := recipeRunStatus(nil); !st.Interrupted || st.Running || st.Run.ID != "r1" {
 		t.Errorf("no live lease: %+v", st)
 	}
 	rec.setLease(otherPodLease(clk.Now()))
 	if st := recipeRunStatus(nil); st.Interrupted || !st.Running || !st.Remote || st.Pod != "updater-old-pod" || st.Step == nil {
 		t.Errorf("live lease of its process: %+v", st)
+	}
+	// The same process running another operation is not this run.
+	other := otherPodLease(clk.Now())
+	other.ID = "another-op"
+	rec.setLease(other)
+	if st := recipeRunStatus(nil); !st.Interrupted || st.Running {
+		t.Errorf("a live lease of another operation of its process: %+v", st)
 	}
 	f.record.State = types.RecipeRunFailed
 	rec.setLease(nil)
@@ -704,5 +711,159 @@ func TestRecipeRun_StepMessagesAreBounded(t *testing.T) {
 	waitDone(t, done)
 	if got := len(f.saved().Steps[0].Message); got > maxOperationMessageBytes {
 		t.Errorf("step message of %d bytes recorded", got)
+	}
+}
+
+// A drain that starts while the runner passes the gate or writes the
+// transition (after its first drain check) still stops the run before the
+// step: no step starts its deadline after the drain began.
+func TestRecipeRun_DrainDuringTheGateStopsBeforeTheStep(t *testing.T) {
+	f, rec := installRecipeFake(t)
+	s1, s2 := f.addStep("one"), f.addStep("two")
+	close(s1.release)
+	checks := 0
+	mutationPermission = func(context.Context, string) (bool, error) {
+		checks++
+		if checks == 3 { // the wrapper, the gate before step one, then before step two
+			mutations.startDrain()
+		}
+		return true, nil
+	}
+	_, done := startRun(t)
+	waitDone(t, done)
+	run := f.saved()
+	if run.State != types.RecipeRunStopped || run.ErrorCode != "restart" || s2.ran || len(s2.clients) != 0 || stepStatuses(run) != "one=success two=pending" {
+		t.Errorf("record %+v (%s), step two ran %v", run, stepStatuses(run), s2.ran)
+	}
+	assertReleased(t, rec)
+	mutations.mu.Lock()
+	mutations.draining = false
+	mutations.mu.Unlock()
+}
+
+// Each step's context ends OperationDeadline after the step starts at the
+// latest: the budget a draining pod waits for (ShutdownDrainTimeout covers
+// one operation); the run's last record write is shorter than the marker
+// clear it runs beside.
+func TestRecipeRun_StepBudgetFitsTheDrain(t *testing.T) {
+	f, _ := installRecipeFake(t)
+	s1 := f.addStep("one")
+	var began time.Time
+	s1.onRun = func() { began = time.Now() }
+	close(s1.release)
+	_, done := startRun(t)
+	waitDone(t, done)
+	dl, ok := s1.clients[0].Context().Deadline()
+	if !ok || dl.Sub(began) > cluster.OperationDeadline || cluster.OperationDeadline-dl.Sub(began) > time.Minute {
+		t.Errorf("step deadline %v, %v after the step began; want OperationDeadline %v", dl, dl.Sub(began), cluster.OperationDeadline)
+	}
+	if recipeRecordTimeout > cluster.MarkerClearTimeout || cluster.ShutdownDrainTimeout() < cluster.OperationDeadline+cluster.RecoveryTimeout+cluster.MarkerClearTimeout {
+		t.Errorf("record write %v, drain %v", recipeRecordTimeout, cluster.ShutdownDrainTimeout())
+	}
+}
+
+// A run admitted as soon as the previous run frees the lock, while that
+// run's bookkeeping still runs, stays running: the old run's end does not
+// mark it idle, and Stop reaches it.
+func TestRecipeRun_EndingRunDoesNotIdleTheNextOne(t *testing.T) {
+	f, rec := installRecipeFake(t)
+	s1 := f.addStep("one")
+	close(s1.release)
+	finalSave := make(chan struct{})
+	released := make(chan struct{})
+	origSave := saveRecipeRun
+	saveRecipeRun = func(c *cluster.Client, run *types.RecipeRun, replace bool) error {
+		if run.State != types.RecipeRunRunning && run.OperationID != "" {
+			f.mu.Lock()
+			first := len(f.steps) == 1
+			f.mu.Unlock()
+			if first {
+				<-finalSave // the first run's last write waits
+			}
+		}
+		return origSave(c, run, replace)
+	}
+	origComplete := saveCompletedOperation
+	saveCompletedOperation = func(c *cluster.Client, done *types.CompletedOperation, owner *cluster.LeaseOwner) error {
+		err := origComplete(c, done, owner)
+		select {
+		case released <- struct{}{}:
+		default:
+		}
+		return err
+	}
+	_ = rec
+	_, done1 := startRun(t)
+	<-released // the first run released the lock; its last write still waits
+	f.mu.Lock()
+	f.steps = nil
+	f.mu.Unlock()
+	b1 := f.addStep("b1")
+	mutationLimiter = newRateLimiter()
+	_, done2 := startRun(t)
+	waitStarted(t, b1)
+	close(finalSave)
+	waitDone(t, done1)
+	if st := recipes.status(); st == nil || !st.Running {
+		t.Fatalf("the second run is not running after the first ended: %+v", st)
+	}
+	w := httptest.NewRecorder()
+	HandleRecipeStop(w, postJSON(t, "/api/recipes/stop", "user:admin", "{}"))
+	if w.Code != http.StatusOK {
+		t.Errorf("stop of the second run: %d %s", w.Code, w.Body.String())
+	}
+	close(b1.release)
+	waitDone(t, done2)
+}
+
+// A panic before the runner owns the lock (here in the plan) gives the
+// lock, the lease and the mutation slot back.
+func TestRecipeRun_PanicBeforeHandoffFreesTheLock(t *testing.T) {
+	captureLog(t)
+	f, rec := installRecipeFake(t)
+	f.addStep("one")
+	planRecipe = func(*cluster.Client, types.EnvironmentRecipe, *types.RecipePinnedBuild) (*types.RecipePlan, cluster.RecipeState) {
+		panic("plan bug")
+	}
+	w := httptest.NewRecorder()
+	HandleRecipeRun(w, postJSON(t, "/api/recipes/run", "user:admin", `{"recipe":`+testRecipe+`}`))
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("answer %d %s", w.Code, w.Body.String())
+	}
+	assertReleased(t, rec)
+	leases.mu.Lock()
+	beating := leases.done != nil
+	leases.mu.Unlock()
+	if beating {
+		t.Error("the lease heartbeat still runs")
+	}
+}
+
+// The lease heartbeat renews with the ServiceAccount token as it is at
+// each renewal, not the one read when the run started.
+func TestRecipeRun_LeaseRenewalsUseAFreshToken(t *testing.T) {
+	f, rec := installRecipeFake(t)
+	s1 := f.addStep("one")
+	var mu sync.Mutex
+	var tokens []string
+	orig := writeOperationLease
+	writeOperationLease = func(c *cluster.Client, l *types.OperationLease, held func(*types.OperationLease) bool) (*types.OperationLease, error) {
+		mu.Lock()
+		tokens = append(tokens, c.TestOptions().Token)
+		mu.Unlock()
+		return orig(c, l, held)
+	}
+	_, done := startRun(t)
+	waitStarted(t, s1)
+	cachedTokenMu.Lock()
+	cachedTokenValue = "sa-token-rotated"
+	cachedTokenMu.Unlock()
+	rec.beat(t)
+	close(s1.release)
+	waitDone(t, done)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(tokens) < 2 || tokens[0] != "sa-token" || tokens[len(tokens)-1] != "sa-token-rotated" {
+		t.Errorf("lease writes with tokens %v", tokens)
 	}
 }

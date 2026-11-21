@@ -163,6 +163,9 @@ type recipeStart struct {
 	cancelRun context.CancelCauseFunc
 	op        *Operation
 	sw        *statusWriter
+	// slot: the run's own mutation slot is taken; handedOff: the runner
+	// owns the lock, the lease and the slot; ended: abandon ran.
+	slot, handedOff, ended bool
 }
 
 // lockRecipeRunner takes the cluster lock and the lease for a recipe run,
@@ -178,6 +181,7 @@ func lockRecipeRunner(w http.ResponseWriter, r *http.Request) (*recipeStart, boo
 	st := &recipeStart{runCtx: runCtx, cancelRun: cancelRun, sw: sw}
 	refusal := acquireRunnerLock(func() *Operation {
 		st.op = inflight.startBackground("recipe", "Environment recipe", sw.user, sw.newBookkeeper(runCtx))
+		inflight.update(st.op.ID, func(o *Operation) { o.freshBookkeeper = sw.newBookkeeper })
 		sw.opID = st.op.ID
 		return st.op
 	}, cancelRun)
@@ -191,6 +195,13 @@ func lockRecipeRunner(w http.ResponseWriter, r *http.Request) (*recipeStart, boo
 
 // abandon gives back the lock of a run that did not begin.
 func (st *recipeStart) abandon() {
+	if st.ended || st.handedOff {
+		return
+	}
+	st.ended = true
+	if st.slot {
+		mutations.end()
+	}
 	releaseClusterMutationLock()
 	st.cancelRun(nil)
 }
@@ -237,11 +248,10 @@ func beginRecipeRun(c *cluster.Client, w http.ResponseWriter, st *recipeStart, r
 		StartedAt: now, State: types.RecipeRunRunning, Recipe: rcp, Pinned: state.Pinned, Project: state.Project,
 	}
 	if prior != nil {
+		// The project is what the plan found now (the record of the
+		// projects recipes created, and the namespace), never the
+		// earlier attempt's: a project that is gone is created again.
 		run.ID, run.StartedAt, run.ResumedAt = prior.ID, prior.StartedAt, now
-		if run.Project == nil {
-			run.Project = prior.Project
-		}
-		state.Project = run.Project
 	}
 	for _, s := range steps {
 		run.Steps = append(run.Steps, types.RecipeRunStep{ID: s.ID, Title: s.Title, Status: types.RecipeStepPending})
@@ -254,11 +264,11 @@ func beginRecipeRun(c *cluster.Client, w http.ResponseWriter, st *recipeStart, r
 		writeError(w, "The updater is restarting. No changes were made; retry once it is back.", http.StatusServiceUnavailable, "shutting_down")
 		return
 	}
+	st.slot = true
 	ctx, cancel := context.WithTimeout(st.runCtx, recipeRecordTimeout)
 	err := saveRecipeRun(st.sw.newBookkeeper(ctx), run, true)
 	cancel()
 	if err != nil {
-		mutations.end()
 		st.abandon()
 		slog.Warn("recipe run refused: its record cannot be written", "error", err)
 		writeError(w, "Cannot record the recipe run in the updater's operation ConfigMap ("+err.Error()+"). Nothing was changed; try again.", http.StatusServiceUnavailable, "record_unavailable")
@@ -280,6 +290,7 @@ func beginRecipeRun(c *cluster.Client, w http.ResponseWriter, st *recipeStart, r
 		verb = "Resumed"
 	}
 	slog.Info("recipe run", "verb", verb, "run", run.ID, "recipe", rcp.Metadata.Name, "steps", len(steps), "user", st.sw.user)
+	st.handedOff = true
 	go x.execute()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -344,6 +355,15 @@ func (x *recipeExec) loop() (end recipeEnd) {
 		}
 		current = i
 		x.stepStarted(i, step)
+		// The gate and the transition write took time: a drain that began
+		// meanwhile must not get a whole new step. Nothing that waits lies
+		// between this check and the step's deadline (runStep's first
+		// line), so a step that starts ends by the drain's start plus
+		// OperationDeadline.
+		if mutations.isDraining() {
+			x.stepEnded(i, types.RecipeStepPending, "", "")
+			return recipeEnd{types.RecipeRunStopped, fmt.Sprintf("Stopped before %s: the updater is restarting. Resume continues with it once it is back.", step.Title), "restart"}
+		}
 		status, msg, code := x.runStep(step)
 		x.stepEnded(i, status, msg, code)
 		if errors.Is(context.Cause(x.runCtx), cluster.ErrOperationLockLost) {
@@ -460,6 +480,9 @@ func (x *recipeExec) stepEnded(i int, status, msg, code string) {
 		s := &run.Steps[i]
 		s.Status, s.Message, s.ErrorCode = status, truncateText(msg, maxOperationMessageBytes), code
 		s.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+		if status == types.RecipeStepPending {
+			s.StartedAt, s.FinishedAt = "", ""
+		}
 		if x.state.Project != nil {
 			p := *x.state.Project
 			run.Project = &p
@@ -509,19 +532,25 @@ func (x *recipeExec) finish(end recipeEnd) {
 	var wg sync.WaitGroup
 	wg.Go(func() { x.save(run) })
 	wg.Go(func() { x.activity("recipe", end.state+": "+end.reason, end.state == types.RecipeRunSucceeded) })
+	// Not running any more before the lock is free: a run started as soon
+	// as it is (also while this one's bookkeeping still runs) owns the
+	// runner's state from then on, and nothing below touches it.
+	recipes.mu.Lock()
+	if recipes.opID == x.opID {
+		recipes.running = false
+	}
+	recipes.mu.Unlock()
 	releaseClusterMutationLock()
 	wg.Wait()
-	recipes.mu.Lock()
-	recipes.running = false
-	recipes.mu.Unlock()
 	mutations.end()
 	close(x.done)
 }
 
 // recipeRunStatus is GET /api/recipes/run: this process's run while it
 // runs, otherwise the record. A record that says running is another
-// process's: running there while that process holds a live lease,
-// otherwise interrupted.
+// process's: running there while that process holds a live lease of the
+// run's own operation (its boot ID and operation ID), otherwise
+// interrupted.
 func recipeRunStatus(c *cluster.Client) types.RecipeRunStatus {
 	local := recipes.status()
 	if local != nil && local.Running {
@@ -546,7 +575,7 @@ func recipeRunStatus(c *cluster.Client) types.RecipeRunStatus {
 	if run.State != types.RecipeRunRunning {
 		return st
 	}
-	if rec, err := readOperationState(c); err == nil && rec != nil && leaseHeldElsewhere(rec.Lease) && rec.Lease.BootID == run.BootID {
+	if rec, err := readOperationState(c); err == nil && rec != nil && leaseHeldElsewhere(rec.Lease) && rec.Lease.BootID == run.BootID && rec.Lease.ID == run.OperationID {
 		st.Running, st.Remote, st.Pod = true, true, rec.Lease.Pod
 		if rec.Lease.Step != "" {
 			st.Step = &types.UpdateStepEvent{Step: rec.Lease.Step, Status: rec.Lease.StepStatus, Message: rec.Lease.Message}

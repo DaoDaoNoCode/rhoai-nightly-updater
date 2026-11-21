@@ -44,6 +44,9 @@ const statusReadFailed = "Cannot read MLflow status: "
 //   - an error wrapping ErrNotReady, with the last message, after
 //     ReadyTimeout; a CR that cannot be read (Status reports it as its
 //     message) is read again until then;
+//   - the read's own error at once when the API server refuses it (401,
+//     403: the sign-in ended, or the user may not read MLflow), which
+//     waiting cannot change;
 //   - the client context's error when that ends first.
 //
 // Every request runs under one context bounded by the timeout, so a request
@@ -54,7 +57,10 @@ func WaitReady(c *kube.Client) (types.ResourceState, error) {
 	cc := c.WithContext(ctx)
 	last := types.ResourceState{Message: "not read yet"}
 	for {
-		state := Status(cc)
+		state, readErr := ReadStatus(cc)
+		if kube.IsK8sError(readErr, 401) || kube.IsK8sError(readErr, 403) {
+			return state, fmt.Errorf("read MLflow: %w", readErr)
+		}
 		if ctx.Err() != nil {
 			if err := c.Context().Err(); err != nil {
 				return last, err
