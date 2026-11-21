@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -280,14 +281,10 @@ func TestRegisteredCachesRejectsDuplicateNames(t *testing.T) {
 // under the same URL (a reused port).
 func TestFakeClusterStartsWithEmptyURLKeyedCaches(t *testing.T) {
 	const earlier = "https://127.0.0.1:1"
-	packageIndexMu.Lock()
-	packageIndexCache[earlier] = packageIndex{}
-	packageIndexMu.Unlock()
+	components.SeedPackageIndexForTest(earlier)
 	rhoai.APIVersionsCache.Add(earlier+"|kuadrant.io", []string{"v1"}, 0)
 	newFakeAPI(t)
-	packageIndexMu.Lock()
-	n := len(packageIndexCache)
-	packageIndexMu.Unlock()
+	n := components.PackageIndexLenForTest()
 	if _, ok := rhoai.APIVersionsCache.Get(earlier + "|kuadrant.io"); ok || n != 0 {
 		t.Fatalf("a new fake cluster still sees an earlier one's caches: package index %d entries, api versions cached %v", n, ok)
 	}

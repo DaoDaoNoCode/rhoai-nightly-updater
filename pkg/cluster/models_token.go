@@ -257,7 +257,7 @@ func planModelToken(c *Client, project, model, modelUID, secretUID string) (toke
 		path := tokenObjectPath(kind, project, model)
 		meta, found, err := kube.ReadObjectMeta(c, path)
 		if err != nil {
-			return plan, fmt.Sprintf("Cannot read %s %s/%s: %v. Nothing was changed.%s", kind, project, tokenObjectName(kind, model), err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
+			return plan, fmt.Sprintf("Cannot read %s %s/%s: %v. Nothing was changed.%s", kind, project, tokenObjectName(kind, model), err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 		if !found {
 			plan.missing[kind] = true
@@ -271,7 +271,7 @@ func planModelToken(c *Client, project, model, modelUID, secretUID string) (toke
 	if secretUID != "" {
 		state, err := probeWithUID(c, tokenSecretPathOf(project, model), secretUID)
 		if err != nil {
-			return plan, fmt.Sprintf("Cannot check Secret %s/%s: %v. Nothing was changed.%s", project, tokenSecretName(model), err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
+			return plan, fmt.Sprintf("Cannot check Secret %s/%s: %v. Nothing was changed.%s", project, tokenSecretName(model), err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 		if state == "other" {
 			return plan, foreignTokenRefusal(tokenPartSecret, project, model), "not_managed"
@@ -329,7 +329,7 @@ func applyModelToken(c *Client, project, model, modelUID string, plan tokenPlan,
 			if dryRun {
 				verb = "The API server rejects"
 			}
-			return "", fmt.Sprintf("%s %s: %v.%s", verb, desc, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
+			return "", fmt.Sprintf("%s %s: %v.%s", verb, desc, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 	}
 	return secretUID, "", ""

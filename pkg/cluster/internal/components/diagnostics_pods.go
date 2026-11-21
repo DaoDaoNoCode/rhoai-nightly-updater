@@ -1,4 +1,4 @@
-package cluster
+package components
 
 import (
 	"encoding/json"
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/report"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -41,25 +42,25 @@ const (
 	maxEventLookups = 10
 )
 
-type podIssueKind string
+type PodIssueKind string
 
 const (
-	issueUnschedulable   podIssueKind = "unschedulable"
-	issueNotScheduled    podIssueKind = "not-scheduled"
-	issueStuckCreating   podIssueKind = "stuck-creating"
-	issueCrashLoop       podIssueKind = "crashloop"
-	issueRestarting      podIssueKind = "restarting"
-	issueImagePull       podIssueKind = "image-pull"
-	issueContainerConfig podIssueKind = "container-config"
+	IssueUnschedulable   PodIssueKind = "unschedulable"
+	IssueNotScheduled    PodIssueKind = "not-scheduled"
+	IssueStuckCreating   PodIssueKind = "stuck-creating"
+	IssueCrashLoop       PodIssueKind = "crashloop"
+	IssueRestarting      PodIssueKind = "restarting"
+	IssueImagePull       PodIssueKind = "image-pull"
+	IssueContainerConfig PodIssueKind = "container-config"
 )
 
-// podIssue is one pod's most important problem.
-type podIssue struct {
+// PodIssue is one pod's most important problem.
+type PodIssue struct {
 	Namespace string
 	Pod       string
 	Owner     string // Deployment name for ReplicaSet pods, else the owner or pod name
 	OwnerKind string // "Deployment", the owner's kind, or "Pod"
-	Kind      podIssueKind
+	Kind      PodIssueKind
 	Container string
 	Reason    string // Kubernetes reason, e.g. ImagePullBackOff, FailedMount
 	Message   string // detail from the status or event
@@ -85,7 +86,7 @@ type diagTerminated struct {
 	FinishedAt string `json:"finishedAt"`
 }
 
-type diagContainerStatus struct {
+type ContainerStatus struct {
 	Name         string             `json:"name"`
 	Ready        bool               `json:"ready"`
 	RestartCount int                `json:"restartCount"`
@@ -95,7 +96,7 @@ type diagContainerStatus struct {
 	} `json:"lastState"`
 }
 
-type diagPod struct {
+type Pod struct {
 	Metadata struct {
 		Name              string            `json:"name"`
 		Namespace         string            `json:"namespace"`
@@ -119,13 +120,13 @@ type diagPod struct {
 			Message            string `json:"message"`
 			LastTransitionTime string `json:"lastTransitionTime"`
 		} `json:"conditions"`
-		InitContainerStatuses []diagContainerStatus `json:"initContainerStatuses"`
-		ContainerStatuses     []diagContainerStatus `json:"containerStatuses"`
+		InitContainerStatuses []ContainerStatus `json:"initContainerStatuses"`
+		ContainerStatuses     []ContainerStatus `json:"containerStatuses"`
 	} `json:"status"`
 }
 
-// listDiagPods lists pods in namespace, optionally filtered by a label selector.
-func listDiagPods(c *Client, namespace, labelSelector string) ([]diagPod, error) {
+// ListPods lists pods in namespace, optionally filtered by a label selector.
+func ListPods(c *kube.Client, namespace, labelSelector string) ([]Pod, error) {
 	var query url.Values
 	if labelSelector != "" {
 		query = url.Values{"labelSelector": {labelSelector}}
@@ -135,7 +136,7 @@ func listDiagPods(c *Client, namespace, labelSelector string) ([]diagPod, error)
 		return nil, err
 	}
 	var list struct {
-		Items []diagPod `json:"items"`
+		Items []Pod `json:"items"`
 	}
 	if err := json.Unmarshal(body, &list); err != nil {
 		return nil, fmt.Errorf("parse pods in %s: %w", namespace, err)
@@ -143,7 +144,7 @@ func listDiagPods(c *Client, namespace, labelSelector string) ([]diagPod, error)
 	return list.Items, nil
 }
 
-func parseK8sTime(s string) (time.Time, bool) {
+func ParseK8sTime(s string) (time.Time, bool) {
 	if s == "" {
 		return time.Time{}, false
 	}
@@ -151,9 +152,9 @@ func parseK8sTime(s string) (time.Time, bool) {
 	return t, err == nil
 }
 
-// podOwner returns the workload that owns the pod. ReplicaSet pods map to
+// PodOwner returns the workload that owns the pod. ReplicaSet pods map to
 // their Deployment: the ReplicaSet name is "<deployment>-<pod-template-hash>".
-func podOwner(p diagPod) (string, string) {
+func PodOwner(p Pod) (string, string) {
 	for _, ref := range p.Metadata.OwnerReferences {
 		if ref.Controller != nil && !*ref.Controller {
 			continue
@@ -178,23 +179,23 @@ var (
 	}
 )
 
-// classifyPod returns the pod's most important problem, or nil when the pod
+// ClassifyPod returns the pod's most important problem, or nil when the pod
 // is healthy, finished, terminating, or still inside the grace period.
-func classifyPod(p diagPod, now time.Time) *podIssue {
+func ClassifyPod(p Pod, now time.Time) *PodIssue {
 	if p.Metadata.DeletionTimestamp != "" || p.Status.Phase == "Succeeded" || p.Status.Phase == "Failed" {
 		return nil
 	}
-	created, _ := parseK8sTime(p.Metadata.CreationTimestamp)
-	owner, ownerKind := podOwner(p)
-	issue := func(kind podIssueKind, container, reason, message string, restarts int) *podIssue {
-		return &podIssue{
+	created, _ := ParseK8sTime(p.Metadata.CreationTimestamp)
+	owner, ownerKind := PodOwner(p)
+	issue := func(kind PodIssueKind, container, reason, message string, restarts int) *PodIssue {
+		return &PodIssue{
 			Namespace: p.Metadata.Namespace, Pod: p.Metadata.Name, Owner: owner, OwnerKind: ownerKind,
 			Kind: kind, Container: container, Reason: reason, Message: strings.TrimSpace(message),
 			Restarts: restarts, Age: now.Sub(created),
 		}
 	}
 
-	statuses := append(append([]diagContainerStatus{}, p.Status.InitContainerStatuses...), p.Status.ContainerStatuses...)
+	statuses := append(append([]ContainerStatus{}, p.Status.InitContainerStatuses...), p.Status.ContainerStatuses...)
 
 	// Hard container errors are reported immediately: they do not resolve on
 	// their own within a rollout.
@@ -205,11 +206,11 @@ func classifyPod(p diagPod, now time.Time) *podIssue {
 		}
 		switch {
 		case w.Reason == "CrashLoopBackOff":
-			return issue(issueCrashLoop, cs.Name, w.Reason, describeTermination(cs.LastState.Terminated, w.Message), cs.RestartCount)
+			return issue(IssueCrashLoop, cs.Name, w.Reason, describeTermination(cs.LastState.Terminated, w.Message), cs.RestartCount)
 		case imagePullReasons[w.Reason]:
-			return issue(issueImagePull, cs.Name, w.Reason, w.Message, cs.RestartCount)
+			return issue(IssueImagePull, cs.Name, w.Reason, w.Message, cs.RestartCount)
 		case containerConfigReasons[w.Reason]:
-			return issue(issueContainerConfig, cs.Name, w.Reason, w.Message, cs.RestartCount)
+			return issue(IssueContainerConfig, cs.Name, w.Reason, w.Message, cs.RestartCount)
 		}
 	}
 
@@ -219,8 +220,8 @@ func classifyPod(p diagPod, now time.Time) *podIssue {
 		if cs.RestartCount < restartThreshold || last == nil {
 			continue
 		}
-		if finished, ok := parseK8sTime(last.FinishedAt); ok && now.Sub(finished) <= restartWindow {
-			return issue(issueRestarting, cs.Name, last.Reason, describeTermination(last, ""), cs.RestartCount)
+		if finished, ok := ParseK8sTime(last.FinishedAt); ok && now.Sub(finished) <= restartWindow {
+			return issue(IssueRestarting, cs.Name, last.Reason, describeTermination(last, ""), cs.RestartCount)
 		}
 	}
 
@@ -238,16 +239,16 @@ func classifyPod(p diagPod, now time.Time) *podIssue {
 			break
 		}
 		if cond.Reason == "Unschedulable" {
-			return issue(issueUnschedulable, "", cond.Reason, cond.Message, 0)
+			return issue(IssueUnschedulable, "", cond.Reason, cond.Message, 0)
 		}
 		msg := cond.Message
 		if msg == "" {
 			msg = fmt.Sprintf("PodScheduled=False (%s)", cond.Reason)
 		}
-		return issue(issueNotScheduled, "", cond.Reason, msg, 0)
+		return issue(IssueNotScheduled, "", cond.Reason, msg, 0)
 	}
 	if !scheduled {
-		return issue(issueNotScheduled, "", "", "The scheduler has not placed this pod on a node yet.", 0)
+		return issue(IssueNotScheduled, "", "", "The scheduler has not placed this pod on a node yet.", 0)
 	}
 
 	// Scheduled but containers have not started (ContainerCreating,
@@ -259,7 +260,7 @@ func classifyPod(p diagPod, now time.Time) *podIssue {
 			break
 		}
 	}
-	return issue(issueStuckCreating, "", reason, "", 0)
+	return issue(IssueStuckCreating, "", reason, "", 0)
 }
 
 func describeTermination(t *diagTerminated, fallback string) string {
@@ -276,9 +277,9 @@ func describeTermination(t *diagTerminated, fallback string) string {
 // errEventsForbidden marks an events lookup refused by RBAC.
 var errEventsForbidden = errors.New("events are not readable")
 
-// latestWarningEvent returns "Reason: message" of the newest Warning event for
+// LatestWarningEvent returns "Reason: message" of the newest Warning event for
 // a pod, or "" when there is none.
-func latestWarningEvent(c *Client, namespace, podName string) (string, error) {
+func LatestWarningEvent(c *kube.Client, namespace, podName string) (string, error) {
 	query := url.Values{"fieldSelector": {"involvedObject.kind=Pod,involvedObject.name=" + podName}}
 	body, _, err := c.Do(http.MethodGet, rhoai.NamespacedPath("v1", "events", namespace, ""), "", nil, query)
 	if err != nil {
@@ -317,7 +318,7 @@ func latestWarningEvent(c *Client, namespace, podName string) (string, error) {
 		// eventTime is a MicroTime (fractional seconds); time.Parse with
 		// RFC3339 accepts those too.
 		for _, s := range candidates {
-			if t, ok := parseK8sTime(s); ok {
+			if t, ok := ParseK8sTime(s); ok {
 				when = t
 				break
 			}
@@ -335,16 +336,16 @@ func latestWarningEvent(c *Client, namespace, podName string) (string, error) {
 var missingObjectPattern = regexp.MustCompile(`(secret|configmap|persistentvolumeclaim|serviceaccount) "([^"]+)" not found`)
 
 // shortCause condenses a pod issue into the phrase used in problem titles.
-func shortCause(is podIssue) string {
+func shortCause(is PodIssue) string {
 	if m := missingObjectPattern.FindStringSubmatch(strings.ToLower(is.Message)); m != nil {
 		// Keep the original casing of the object name.
 		idx := strings.Index(strings.ToLower(is.Message), m[0])
 		return is.Message[idx : idx+len(m[0])]
 	}
 	switch is.Kind {
-	case issueUnschedulable:
+	case IssueUnschedulable:
 		return kube.TruncateText(is.Message, 160)
-	case issueImagePull, issueContainerConfig:
+	case IssueImagePull, IssueContainerConfig:
 		return is.Reason
 	}
 	return ""
@@ -352,10 +353,10 @@ func shortCause(is podIssue) string {
 
 // enrichStuckPods fills in the Warning event that explains pods stuck in
 // ContainerCreating. At most maxEventLookups pods are queried.
-func enrichStuckPods(c *Client, issues []podIssue) {
+func enrichStuckPods(c *kube.Client, issues []PodIssue) {
 	looked := 0
 	for i := range issues {
-		if issues[i].Kind != issueStuckCreating {
+		if issues[i].Kind != IssueStuckCreating {
 			continue
 		}
 		if looked >= maxEventLookups {
@@ -363,7 +364,7 @@ func enrichStuckPods(c *Client, issues []podIssue) {
 			continue
 		}
 		looked++
-		ev, err := latestWarningEvent(c, issues[i].Namespace, issues[i].Pod)
+		ev, err := LatestWarningEvent(c, issues[i].Namespace, issues[i].Pod)
 		switch {
 		case errors.Is(err, errEventsForbidden):
 			issues[i].Message = fmt.Sprintf("Containers have not started (%s). This app cannot read events (RBAC), so the cause is unknown here; run `oc describe pod %s -n %s`.", issues[i].Reason, issues[i].Pod, issues[i].Namespace)
@@ -383,11 +384,11 @@ func enrichStuckPods(c *Client, issues []podIssue) {
 // podIssueGroup is the set of pods of one workload that share a problem kind.
 type podIssueGroup struct {
 	Namespace, Owner, OwnerKind string
-	Kind                        podIssueKind
-	Issues                      []podIssue
+	Kind                        PodIssueKind
+	Issues                      []PodIssue
 }
 
-func groupPodIssues(issues []podIssue) []podIssueGroup {
+func GroupPodIssues(issues []PodIssue) []podIssueGroup {
 	index := map[string]int{}
 	var groups []podIssueGroup
 	for _, is := range issues {
@@ -415,7 +416,7 @@ func groupPodIssues(issues []podIssue) []podIssueGroup {
 	return groups
 }
 
-func formatDuration(d time.Duration) string {
+func FormatDuration(d time.Duration) string {
 	switch {
 	case d >= 48*time.Hour:
 		return fmt.Sprintf("%dd", int(d.Hours()/24))
@@ -428,9 +429,9 @@ func formatDuration(d time.Duration) string {
 	}
 }
 
-// podGroupProblem turns a group of pod issues into a diagnostics problem.
+// PodGroupProblem turns a group of pod issues into a diagnostics problem.
 // critical marks groups in the operator namespace.
-func podGroupProblem(c *Client, g podIssueGroup, critical bool) Problem {
+func PodGroupProblem(c *kube.Client, g podIssueGroup, critical bool) report.Problem {
 	first := g.Issues[0]
 	n := len(g.Issues)
 	podWord := "pod"
@@ -455,7 +456,7 @@ func podGroupProblem(c *Client, g podIssueGroup, critical bool) Problem {
 		if is.Restarts > 0 {
 			line += fmt.Sprintf(", %d restarts", is.Restarts)
 		}
-		line += fmt.Sprintf(", age %s", formatDuration(is.Age))
+		line += fmt.Sprintf(", age %s", FormatDuration(is.Age))
 		if is.Message != "" {
 			line += ": " + kube.TruncateText(is.Message, 400)
 		}
@@ -475,7 +476,7 @@ func podGroupProblem(c *Client, g podIssueGroup, critical bool) Problem {
 	}
 	describeCmd := fmt.Sprintf("oc describe pod %s -n %s", first.Pod, first.Namespace)
 
-	p := Problem{
+	p := report.Problem{
 		ID:              fmt.Sprintf("pod-%s-%s-%s", g.Kind, g.Namespace, g.Owner),
 		Severity:        severity,
 		Evidence:        evidence,
@@ -484,40 +485,40 @@ func podGroupProblem(c *Client, g podIssueGroup, critical bool) Problem {
 	}
 
 	switch g.Kind {
-	case issueStuckCreating:
+	case IssueStuckCreating:
 		p.Title = withCause(fmt.Sprintf("%s: %d %s stuck in %s", g.Owner, n, podWord, kube.NonEmpty(stuckState(g.Issues), "ContainerCreating")))
-		p.Description = fmt.Sprintf("The %s %s scheduled on a node, but the containers have not started for %s. This is not a capacity problem: the kubelet is waiting for something the pod needs.", podWord, isAre(n), formatDuration(first.Age))
+		p.Description = fmt.Sprintf("The %s %s scheduled on a node, but the containers have not started for %s. This is not a capacity problem: the kubelet is waiting for something the pod needs.", podWord, isAre(n), FormatDuration(first.Age))
 		if strings.Contains(strings.ToLower(first.Reason+first.Message), "failedmount") || missingObjectPattern.MatchString(strings.ToLower(first.Message)) {
 			p.Fix = "The pod mounts an object that does not exist yet (see the message). The pod starts on its own once the object exists. Check which component should create it in the operator logs and on the Components page."
 		} else {
 			p.Fix = "Read the pod events for the cause."
 		}
-	case issueUnschedulable:
+	case IssueUnschedulable:
 		p.Title = withCause(fmt.Sprintf("%s: %d %s cannot be scheduled", g.Owner, n, podWord))
 		p.Description = "The scheduler reports that no node can run the pod. The message lists the reason for each node (for example Insufficient cpu or memory, taints, or node selectors)."
 		p.Fix = "Free capacity on the nodes or add nodes. If a rollout is waiting for old pods to release resources, the tool can offer to unblock it."
 		if g.OwnerKind == "Deployment" {
-			attachRolloutAssist(c, &p, g.Namespace, g.Owner)
+			AttachRolloutAssist(c, &p, g.Namespace, g.Owner)
 		}
-	case issueNotScheduled:
+	case IssueNotScheduled:
 		p.Title = fmt.Sprintf("%s: %d %s waiting for the scheduler", g.Owner, n, podWord)
 		p.Description = "The pod has not been placed on a node yet and the scheduler has not reported it as unschedulable."
 		p.Fix = "Wait a minute and re-scan. If it persists, check the pod's scheduling gates and the scheduler."
-	case issueCrashLoop:
+	case IssueCrashLoop:
 		p.Title = fmt.Sprintf("%s is crash-looping (%d restarts)", g.Owner, maxRestarts)
 		p.Description = fmt.Sprintf("Container %s keeps exiting and Kubernetes is backing off before restarting it.", first.Container)
 		p.Fix = "Read the logs of the previous run of the container (command below). A crash right after an update usually means the build is broken or a dependency is missing."
 		p.TechnicalCmd = fmt.Sprintf("oc logs -n %s %s -c %s --previous --tail=50", first.Namespace, first.Pod, first.Container)
-	case issueRestarting:
+	case IssueRestarting:
 		p.Title = fmt.Sprintf("%s keeps restarting (%d restarts)", g.Owner, maxRestarts)
 		p.Description = fmt.Sprintf("Container %s is running now but restarted recently and has restarted %d times in total.", first.Container, maxRestarts)
 		p.Fix = "Read the logs of the previous run of the container (command below)."
 		p.TechnicalCmd = fmt.Sprintf("oc logs -n %s %s -c %s --previous --tail=50", first.Namespace, first.Pod, first.Container)
-	case issueImagePull:
+	case IssueImagePull:
 		p.Title = fmt.Sprintf("%s cannot pull its image (%s)", g.Owner, first.Reason)
 		p.Description = "The node cannot pull the container image. The message below is the registry's answer."
 		p.Fix = "Check the pull secret and the image mirror (IDMS) in Setup. After changing them, nodes need 2-3 minutes to pick them up."
-	case issueContainerConfig:
+	case IssueContainerConfig:
 		p.Title = withCause(fmt.Sprintf("%s cannot start its container", g.Owner))
 		p.Description = fmt.Sprintf("Kubernetes cannot create container %s (%s).", first.Container, first.Reason)
 		p.Fix = "Create the missing object, or check what the container configuration references (see the message)."
@@ -525,7 +526,7 @@ func podGroupProblem(c *Client, g podIssueGroup, critical bool) Problem {
 	return p
 }
 
-func stuckState(issues []podIssue) string {
+func stuckState(issues []PodIssue) string {
 	for _, is := range issues {
 		if is.Reason == "ContainerCreating" || is.Reason == "PodInitializing" {
 			return is.Reason
@@ -541,12 +542,12 @@ func isAre(n int) string {
 	return "are"
 }
 
-// scanPods lists pods in the given namespaces and returns their problems.
+// ScanPods lists pods in the given namespaces and returns their problems.
 // Namespaces that do not exist are skipped. The returned counts report how
 // many pods and namespaces were inspected.
-func scanPods(c *Client, namespaces []string, now time.Time) (issues []podIssue, podCount int, scanned []string, errs []string) {
+func ScanPods(c *kube.Client, namespaces []string, now time.Time) (issues []PodIssue, podCount int, scanned []string, errs []string) {
 	for _, ns := range namespaces {
-		pods, err := listDiagPods(c, ns, "")
+		pods, err := ListPods(c, ns, "")
 		if err != nil {
 			if kube.IsK8sNotFound(err) {
 				continue
@@ -560,7 +561,7 @@ func scanPods(c *Client, namespaces []string, now time.Time) (issues []podIssue,
 			if p.Metadata.Namespace == "" {
 				p.Metadata.Namespace = ns
 			}
-			if is := classifyPod(p, now); is != nil {
+			if is := ClassifyPod(p, now); is != nil {
 				issues = append(issues, *is)
 			}
 		}

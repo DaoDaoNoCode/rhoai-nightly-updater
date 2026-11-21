@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -225,7 +226,7 @@ func versionCore(v string) string {
 // excluded) and its Subscriptions. A read that fails is an error: callers
 // refuse rather than guess.
 func readOperator(c *Client, op operatorSpec) (operatorState, error) {
-	csvs, err := listClusterCSVs(c)
+	csvs, err := components.ListClusterCSVs(c)
 	if err != nil {
 		return operatorState{}, err
 	}
@@ -238,10 +239,10 @@ func readOperator(c *Client, op operatorSpec) (operatorState, error) {
 
 // readOperatorIn is readOperator with the cluster's CSVs and Subscriptions
 // already listed.
-func readOperatorIn(c *Client, op operatorSpec, csvs []clusterCSV, subs []*olmSubscription) (operatorState, error) {
+func readOperatorIn(c *Client, op operatorSpec, csvs []components.ClusterCSV, subs []*olmSubscription) (operatorState, error) {
 	var st operatorState
 	for _, csv := range csvs {
-		if !slices.Contains(csv.packages(), op.pkg) && csvBaseName(csv.Name) != op.pkg {
+		if !slices.Contains(csv.Packages(), op.pkg) && components.CSVBaseName(csv.Name) != op.pkg {
 			continue
 		}
 		v := csvVersion(csv.Name)
@@ -388,7 +389,7 @@ func planOperatorInstall(c *Client, op operatorSpec) (*operatorInstallPlan, stri
 	pkg, found, err := readOperatorPackage(c, op.pkg, op.source)
 	switch {
 	case err != nil:
-		return nil, fmt.Sprintf("Cannot read the %s package from catalog %s, so this tool cannot tell which channel to install; nothing was changed: %v.%s", op.title, op.source, err, templateHint(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
+		return nil, fmt.Sprintf("Cannot read the %s package from catalog %s, so this tool cannot tell which channel to install; nothing was changed: %v.%s", op.title, op.source, err, kube.TemplateHint(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
 	case !found:
 		return nil, fmt.Sprintf("Catalog %s in %s does not offer package %s, so %s cannot be installed from it. A cluster-admin checks the catalog (oc get packagemanifests -n %s -l catalog=%s). Nothing was changed.", op.source, rhoai.CatalogNS, op.pkg, op.title, rhoai.CatalogNS, op.source), "prerequisites"
 	}
@@ -421,7 +422,7 @@ func planOperatorInstall(c *Client, op operatorSpec) (*operatorInstallPlan, stri
 
 	_, nsFound, err := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+op.namespace)
 	if err != nil {
-		return nil, fmt.Sprintf("Cannot read namespace %s; nothing was changed: %v.%s", op.namespace, err, templateHint(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
+		return nil, fmt.Sprintf("Cannot read namespace %s; nothing was changed: %v.%s", op.namespace, err, kube.TemplateHint(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
 	}
 	plan.nsMissing = !nsFound
 	if !nsFound {
@@ -436,7 +437,7 @@ func planOperatorInstall(c *Client, op operatorSpec) (*operatorInstallPlan, stri
 	}
 	groups, err := readOperatorGroups(c, op.namespace)
 	if err != nil {
-		return nil, fmt.Sprintf("Cannot read the OperatorGroups in %s; nothing was changed: %v.%s", op.namespace, err, templateHint(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
+		return nil, fmt.Sprintf("Cannot read the OperatorGroups in %s; nothing was changed: %v.%s", op.namespace, err, kube.TemplateHint(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
 	}
 	switch {
 	case len(groups) > 1:
@@ -456,7 +457,7 @@ func planOperatorInstall(c *Client, op operatorSpec) (*operatorInstallPlan, stri
 	// modes in the catalog, only the mode this tool would create is
 	// accepted.
 	g := groups[0]
-	mode := g.installMode(op.namespace)
+	mode := g.InstallMode(op.namespace)
 	want := "AllNamespaces"
 	if op.ownNamespace {
 		want = "OwnNamespace"
@@ -476,7 +477,7 @@ func planOperatorInstall(c *Client, op operatorSpec) (*operatorInstallPlan, stri
 	return plan, "", ""
 }
 
-type operatorGroups []operatorGroup
+type operatorGroups []components.OperatorGroup
 
 func (gs operatorGroups) names() []string {
 	var out []string

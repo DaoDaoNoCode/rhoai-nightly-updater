@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -120,7 +121,7 @@ func TestDiscoverDashboardTarget(t *testing.T) {
 			}
 			got := ""
 			if target.Operator != nil {
-				got = target.Operator.ref()
+				got = target.Operator.Ref()
 			}
 			if got != tc.operator || !strings.Contains(target.Legacy, tc.legacy) || (tc.legacy == "") != (target.Legacy == "") || target.Namespace != tc.ns {
 				t.Fatalf("target=%+v (operator %q), want operator %q legacy %q namespace %q", target, got, tc.operator, tc.legacy, tc.ns)
@@ -303,7 +304,7 @@ func TestDashboardDiscoveryCachedForStatusOnly(t *testing.T) {
 // reported as the legacy flow.
 func TestDashboardStatusRediscoversAGoneOperator(t *testing.T) {
 	f, c := newFakeAPI(t)
-	dashboardTargetCache.Add(c.BaseURL(), dashboardTarget{Operator: &moduleOperator{Namespace: fixtureAppsNS, Name: "old-name"}, Namespace: fixtureAppsNS}, dashboardTargetTTL)
+	dashboardTargetCache.Add(c.BaseURL(), dashboardTarget{Operator: &components.ModuleOperator{Namespace: fixtureAppsNS, Name: "old-name"}, Namespace: fixtureAppsNS}, dashboardTargetTTL)
 	serveModuleCluster(f)
 	o, err := DashboardOverrideSummary(c)
 	if err != nil || o == nil || o.OperatorName != fixtureOperatorName {

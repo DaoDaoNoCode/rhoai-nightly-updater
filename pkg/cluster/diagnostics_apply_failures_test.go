@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -21,28 +22,28 @@ const (
 )
 
 func TestParseApplyFailures(t *testing.T) {
-	got := parseApplyFailures(msgImmutableSelector)
-	if len(got) != 1 || got[0].Class != applyImmutable || got[0].Namespace != "redhat-ods-applications" || got[0].Name != "kuberay-operator" ||
+	got := components.ParseApplyFailures(msgImmutableSelector)
+	if len(got) != 1 || got[0].Class != components.ApplyImmutable || got[0].Namespace != "redhat-ods-applications" || got[0].Name != "kuberay-operator" ||
 		got[0].GroupVersion != "apps/v1" || got[0].Kind != "Deployment" || strings.Join(got[0].Fields, ",") != "spec.selector" {
 		t.Fatalf("immutable: %+v", got)
 	}
-	got = parseApplyFailures(msgTwoControllers)
-	if len(got) != 1 || got[0].Class != applyControllerOwner || got[0].Kind != "ServiceMonitor" || got[0].group() != "monitoring.coreos.com" ||
+	got = components.ParseApplyFailures(msgTwoControllers)
+	if len(got) != 1 || got[0].Class != components.ApplyControllerOwner || got[0].Kind != "ServiceMonitor" || got[0].Group() != "monitoring.coreos.com" ||
 		got[0].Owners != "Platform/default and AIHub/default-aihub" {
 		t.Fatalf("controller owners: %+v", got)
 	}
-	got = parseApplyFailures(msgSchemaMismatch)
-	if len(got) != 1 || got[0].Class != applySchemaMismatch || got[0].Namespace != "" || got[0].Name != "default-trustyai" || got[0].Kind != "TrustyAI" ||
+	got = components.ParseApplyFailures(msgSchemaMismatch)
+	if len(got) != 1 || got[0].Class != components.ApplySchemaMismatch || got[0].Namespace != "" || got[0].Name != "default-trustyai" || got[0].Kind != "TrustyAI" ||
 		strings.Join(got[0].Fields, ",") != ".spec.eval.lmeval.permitCodeExecution: expected boolean, got &{deny}" {
 		t.Fatalf("schema: %+v", got)
 	}
-	got = parseApplyFailures(msgTypedPatch)
-	if len(got) != 1 || got[0].Class != applySchemaMismatch || !strings.HasPrefix(got[0].Fields[0], ".spec.eval.lmeval.permitOnline: expected string, got ") {
+	got = components.ParseApplyFailures(msgTypedPatch)
+	if len(got) != 1 || got[0].Class != components.ApplySchemaMismatch || !strings.HasPrefix(got[0].Fields[0], ".spec.eval.lmeval.permitOnline: expected string, got ") {
 		t.Fatalf("typed patch: %+v", got)
 	}
 	// Two failures in one message are both found, each with its own error.
-	got = parseApplyFailures("Some modules failed: " + msgImmutableSelector + "; " + msgTwoControllers)
-	if len(got) != 2 || got[0].Class != applyImmutable || got[1].Class != applyControllerOwner || strings.Contains(got[0].Detail, "ServiceMonitor") {
+	got = components.ParseApplyFailures("Some modules failed: " + msgImmutableSelector + "; " + msgTwoControllers)
+	if len(got) != 2 || got[0].Class != components.ApplyImmutable || got[1].Class != components.ApplyControllerOwner || strings.Contains(got[0].Detail, "ServiceMonitor") {
 		t.Fatalf("two: %+v", got)
 	}
 
@@ -54,7 +55,7 @@ func TestParseApplyFailures(t *testing.T) {
 		`failure deploying resource ns/x: apply failed apps/v1, Kind=Deployment: Internal error occurred: failed calling webhook`,
 		`Deployment "x" is invalid: spec.selector: Invalid value: {}: field is immutable`, // not an apply failure report
 	} {
-		if got := parseApplyFailures(msg); len(got) != 0 {
+		if got := components.ParseApplyFailures(msg); len(got) != 0 {
 			t.Errorf("%q: %+v", msg, got)
 		}
 	}
@@ -80,7 +81,7 @@ func TestParseApplyFailuresRejectsMalformedObjects(t *testing.T) {
 		{"redhat-ods-applications", strings.Repeat("a", 254), "apps/v1", "Deployment"},
 	} {
 		msg := fmt.Sprintf(tmpl, tc[0], tc[1], tc[2], tc[3])
-		if got := parseApplyFailures(msg); len(got) != 0 {
+		if got := components.ParseApplyFailures(msg); len(got) != 0 {
 			t.Errorf("%v accepted: %+v", tc, got)
 		}
 	}
@@ -89,14 +90,14 @@ func TestParseApplyFailuresRejectsMalformedObjects(t *testing.T) {
 		`failure deploying resource ns/a b: apply failed apps/v1, Kind=Deployment: field is immutable`,
 		"failure deploying resource ns/a\nb: apply failed apps/v1, Kind=Deployment: field is immutable",
 	} {
-		for _, f := range parseApplyFailures(msg) {
+		for _, f := range components.ParseApplyFailures(msg) {
 			if strings.ContainsAny(f.Name, " \n") {
 				t.Errorf("%q: %+v", msg, f)
 			}
 		}
 	}
 	// A valid cluster-scoped and a valid core object still parse.
-	if got := parseApplyFailures(fmt.Sprintf(tmpl, "", "a.b-c", "v1", "Service")); len(got) != 1 {
+	if got := components.ParseApplyFailures(fmt.Sprintf(tmpl, "", "a.b-c", "v1", "Service")); len(got) != 1 {
 		t.Errorf("core object rejected: %+v", got)
 	}
 }

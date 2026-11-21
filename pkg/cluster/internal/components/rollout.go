@@ -1,4 +1,4 @@
-package cluster
+package components
 
 import (
 	"encoding/json"
@@ -15,16 +15,17 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/report"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// rolloutNamespaces are the only namespaces assist-rollout may patch: the
+// RolloutNamespaces are the only namespaces assist-rollout may patch: the
 // operator's (SubNS) and the applications namespace, as the
 // DSCInitialization names it. err is set when the applications namespace
 // is not known (no DSCInitialization, or a read error); the list then holds
 // the operator namespace only, so nothing is ever allowed by a guess.
-func rolloutNamespaces(c *Client) ([]string, error) {
+func RolloutNamespaces(c *kube.Client) ([]string, error) {
 	appNS, err := rhoai.AppsNamespace(c)
 	if err != nil {
 		return []string{rhoai.SubNS}, err
@@ -71,7 +72,7 @@ func rolloutNamespaces(c *Client) ([]string, error) {
 // fight it). Otherwise nothing resets the value, so the patch records the
 // original value in an annotation and diagnostics offers to restore it once
 // the rollout has finished.
-const assistRolloutAnnotation = "rhoai-nightly-updater.opendatahub.io/assist-rollout"
+const AssistRolloutAnnotation = "rhoai-nightly-updater.opendatahub.io/assist-rollout"
 
 type assistRecord struct {
 	MaxUnavailable any    `json:"maxUnavailable"` // original value; nil = unset (defaults to 25%)
@@ -169,7 +170,7 @@ func labelSelectorString(matchLabels map[string]string) string {
 // ownerReference UID, because several RHOAI Deployments share selector
 // labels such as control-plane=controller-manager) and the new ReplicaSet's
 // pods, and decides whether a maxUnavailable=1 patch would unblock it.
-func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, error) {
+func assessRolloutBlock(c *kube.Client, namespace, name string) (rolloutAssessment, error) {
 	a := rolloutAssessment{Namespace: namespace, Deployment: name}
 
 	var dep struct {
@@ -321,7 +322,7 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 	if newest.hash != "" {
 		podSelector = "pod-template-hash=" + newest.hash
 	}
-	pods, err := listDiagPods(c, namespace, podSelector)
+	pods, err := ListPods(c, namespace, podSelector)
 	if err != nil {
 		return a, fmt.Errorf("list pods: %w", err)
 	}
@@ -338,9 +339,9 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 		for _, cond := range p.Status.Conditions {
 			if cond.Type == "PodScheduled" && cond.Status == "False" && cond.Reason == "Unschedulable" {
 				// Allowed when at least one node rejected the pod only for
-				// lack of cpu, memory or pod slots (see resourceOnlyNodes);
+				// lack of cpu, memory or pod slots (see ResourceOnlyNodes);
 				// taints or selectors on other nodes do not matter.
-				if nodes, other := resourceOnlyNodes(cond.Message); nodes == 0 {
+				if nodes, other := ResourceOnlyNodes(cond.Message); nodes == 0 {
 					return notApplicable(a, fmt.Sprintf("pod %s is Unschedulable, but no node rejected it only for lack of cpu, memory or pod slots, so stopping an old pod does not help (%s)", p.Metadata.Name, strings.Join(other, "; "))), nil
 				}
 				a.PendingPods = append(a.PendingPods, p.Metadata.Name)
@@ -362,7 +363,7 @@ var schedulerFitPrefix = regexp.MustCompile(`^0/\d+ nodes are available: `)
 // resources that stopping a pod gives back; the group is the node count.
 var resourceFitReason = regexp.MustCompile(`^(\d+) (Insufficient cpu|Insufficient memory|Too many pods)$`)
 
-// resourceOnlyNodes reads the scheduler's FitError message
+// ResourceOnlyNodes reads the scheduler's FitError message
 // ("0/X nodes are available: <PreFilterMsg>. <FilterMsg>. <PostFilterMsg>.",
 // FitError.Error in kubernetes pkg/scheduler/framework/types.go). It returns
 // how many nodes rejected the pod only for cpu, memory or pod count, and the
@@ -381,7 +382,7 @@ var resourceFitReason = regexp.MustCompile(`^(\d+) (Insufficient cpu|Insufficien
 // kinds can count the same node (NodeResourcesFit reports every short
 // resource), so the count is the largest one, not the sum. A PreFilter
 // message (no histogram) or an unparsable one gives 0.
-func resourceOnlyNodes(msg string) (int, []string) {
+func ResourceOnlyNodes(msg string) (int, []string) {
 	msg = strings.TrimSpace(msg)
 	loc := schedulerFitPrefix.FindStringIndex(msg)
 	if loc == nil {
@@ -420,13 +421,13 @@ func assistConfirmMessage(a rolloutAssessment) string {
 		"Kubernetes then stops one of the %d old pod(s) so that the pod(s) %s, which at least one eligible node rejects only for lack of cpu, memory or pod slots, can use its resources. "+
 		"One replica is unavailable during the switch; at least %d stay available. No pods are deleted by the tool.\n\n"+
 		"The original value is saved in the annotation %s. Nothing resets it automatically; once the rollout has finished, Diagnostics offers to restore it.",
-		a.target(), a.MaxUnavailable, a.Replicas, a.OldReadyPods, strings.Join(a.PendingPods, ", "), a.Replicas-1, assistRolloutAnnotation)
+		a.target(), a.MaxUnavailable, a.Replicas, a.OldReadyPods, strings.Join(a.PendingPods, ", "), a.Replicas-1, AssistRolloutAnnotation)
 }
 
-// attachRolloutAssist offers the assist-rollout fix on an Unschedulable
+// AttachRolloutAssist offers the assist-rollout fix on an Unschedulable
 // problem only when the precondition holds right now.
-func attachRolloutAssist(c *Client, p *Problem, namespace, deployment string) {
-	if ok, _ := isRolloutNamespace(c, namespace); !ok {
+func AttachRolloutAssist(c *kube.Client, p *report.Problem, namespace, deployment string) {
+	if ok, _ := IsRolloutNamespace(c, namespace); !ok {
 		return
 	}
 	a, err := assessRolloutBlock(c, namespace, deployment)
@@ -445,11 +446,11 @@ func attachRolloutAssist(c *Client, p *Problem, namespace, deployment string) {
 	p.AffectedObjects = append([]string{"Deployment " + a.target()}, p.AffectedObjects...)
 }
 
-// isRolloutNamespace reports whether assist-rollout may patch Deployments
+// IsRolloutNamespace reports whether assist-rollout may patch Deployments
 // in ns. why explains a refusal (fail closed when the applications
 // namespace is not known).
-func isRolloutNamespace(c *Client, ns string) (ok bool, why string) {
-	allowed, err := rolloutNamespaces(c)
+func IsRolloutNamespace(c *kube.Client, ns string) (ok bool, why string) {
+	allowed, err := RolloutNamespaces(c)
 	if slices.Contains(allowed, ns) {
 		return true, ""
 	}
@@ -463,7 +464,7 @@ var dns1123Name = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`)
 
 // patchMaxUnavailable re-checks the precondition and sets maxUnavailable=1,
 // guarded by the resourceVersion that was assessed.
-func patchMaxUnavailable(c *Client, namespace, name string) (rolloutAssessment, bool, string) {
+func patchMaxUnavailable(c *kube.Client, namespace, name string) (rolloutAssessment, bool, string) {
 	a, err := assessRolloutBlock(c, namespace, name)
 	if err != nil {
 		return a, false, fmt.Sprintf("%s/%s: could not check the rollout: %v", namespace, name, err)
@@ -475,7 +476,7 @@ func patchMaxUnavailable(c *Client, namespace, name string) (rolloutAssessment, 
 	patch, _ := json.Marshal(map[string]any{
 		"metadata": map[string]any{
 			"resourceVersion": a.ResourceVersion,
-			"annotations":     map[string]any{assistRolloutAnnotation: string(record)},
+			"annotations":     map[string]any{AssistRolloutAnnotation: string(record)},
 		},
 		"spec": map[string]any{
 			"strategy": map[string]any{"rollingUpdate": map[string]any{"maxUnavailable": 1}},
@@ -507,15 +508,15 @@ func patchMaxUnavailable(c *Client, namespace, name string) (rolloutAssessment, 
 
 // AssistRollout unblocks every Deployment in the RHOAI namespaces whose
 // rollout is blocked by Unschedulable new pods and a zero maxUnavailable.
-func AssistRollout(c *Client) (*types.OperationResponse, error) {
+func AssistRollout(c *kube.Client) (*types.OperationResponse, error) {
 	var targets []string
 	var logs []string
-	namespaces, nsErr := rolloutNamespaces(c)
+	namespaces, nsErr := RolloutNamespaces(c)
 	if nsErr != nil {
 		logs = append(logs, fmt.Sprintf("Warning: the applications namespace is not known, so only %s is checked: %v", rhoai.SubNS, nsErr))
 	}
 	for _, ns := range namespaces {
-		deps, err := getDeployments(c, ns)
+		deps, err := Deployments(c, ns)
 		if err != nil {
 			logs = append(logs, fmt.Sprintf("Warning: could not list deployments in %s: %v", ns, err))
 			continue
@@ -532,8 +533,8 @@ func AssistRollout(c *Client) (*types.OperationResponse, error) {
 }
 
 // AssistRolloutFor unblocks one Deployment, if its rollout is blocked.
-func AssistRolloutFor(c *Client, namespace, name string) (*types.OperationResponse, error) {
-	ok, why := isRolloutNamespace(c, namespace)
+func AssistRolloutFor(c *kube.Client, namespace, name string) (*types.OperationResponse, error) {
+	ok, why := IsRolloutNamespace(c, namespace)
 	if !ok || !dns1123Name.MatchString(name) || len(name) > 253 {
 		return &types.OperationResponse{
 			Success:   false,
@@ -544,7 +545,7 @@ func AssistRolloutFor(c *Client, namespace, name string) (*types.OperationRespon
 	return assistTargets(c, []string{namespace + "/" + name}, nil)
 }
 
-func assistTargets(c *Client, targets []string, logs []string) (*types.OperationResponse, error) {
+func assistTargets(c *kube.Client, targets []string, logs []string) (*types.OperationResponse, error) {
 	var patched, failed, failures []string
 	for _, t := range targets {
 		ns, name, _ := strings.Cut(t, "/")
@@ -598,8 +599,8 @@ func assistTargets(c *Client, targets []string, logs []string) (*types.Operation
 
 // RestoreRolloutStrategy puts back the maxUnavailable value that
 // assist-rollout saved in its annotation, once the rollout has finished.
-func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.OperationResponse, error) {
-	if ok, why := isRolloutNamespace(c, namespace); !ok || !dns1123Name.MatchString(name) {
+func RestoreRolloutStrategy(c *kube.Client, namespace, name string) (*types.OperationResponse, error) {
+	if ok, why := IsRolloutNamespace(c, namespace); !ok || !dns1123Name.MatchString(name) {
 		return &types.OperationResponse{Success: false, Message: kube.FirstNonEmpty(why, "Unknown Deployment."), ErrorCode: "validation"}, nil
 	}
 	target := namespace + "/" + name
@@ -609,26 +610,26 @@ func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.Operation
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read Deployment %s: %v", target, err), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
 	if !found {
-		return nothingToDo(fmt.Sprintf("Deployment %s no longer exists. Nothing was changed.", target), nil), nil
+		return NothingToDo(fmt.Sprintf("Deployment %s no longer exists. Nothing was changed.", target), nil), nil
 	}
 	dep, err := parseRolloutDeployment(body)
 	if err != nil {
 		return &types.OperationResponse{Success: false, Message: err.Error()}, nil
 	}
-	raw := dep.Metadata.Annotations[assistRolloutAnnotation]
+	raw := dep.Metadata.Annotations[AssistRolloutAnnotation]
 	if raw == "" {
-		return nothingToDo(fmt.Sprintf("Deployment %s has no saved rollout strategy. Nothing was changed.", target), nil), nil
+		return NothingToDo(fmt.Sprintf("Deployment %s has no saved rollout strategy. Nothing was changed.", target), nil), nil
 	}
-	if !dep.rolloutComplete() {
+	if !dep.RolloutComplete() {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("The rollout of %s has not finished yet; restoring now could block it again. Nothing was changed.", target), ErrorCode: "prerequisites"}, nil
 	}
 	var rec assistRecord
 	if err := json.Unmarshal([]byte(raw), &rec); err != nil {
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("The saved value on %s is not readable (%v); remove the annotation %s by hand.", target, err, assistRolloutAnnotation)}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("The saved value on %s is not readable (%v); remove the annotation %s by hand.", target, err, AssistRolloutAnnotation)}, nil
 	}
 
 	spec := map[string]any{}
-	current := dep.currentMaxUnavailable()
+	current := dep.CurrentMaxUnavailable()
 	restoring := current == "1"
 	if restoring {
 		// A strategic-merge null removes the field, so the API default (25%) applies again.
@@ -637,7 +638,7 @@ func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.Operation
 	patchObj := map[string]any{
 		"metadata": map[string]any{
 			"resourceVersion": dep.Metadata.ResourceVersion,
-			"annotations":     map[string]any{assistRolloutAnnotation: nil},
+			"annotations":     map[string]any{AssistRolloutAnnotation: nil},
 		},
 	}
 	if len(spec) > 0 {
@@ -669,7 +670,7 @@ func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.Operation
 	return &types.OperationResponse{Success: true, Message: msg}, nil
 }
 
-type rolloutDeployment struct {
+type RolloutDeployment struct {
 	Metadata struct {
 		Name            string            `json:"name"`
 		Namespace       string            `json:"namespace"`
@@ -693,15 +694,15 @@ type rolloutDeployment struct {
 	} `json:"status"`
 }
 
-func parseRolloutDeployment(body []byte) (rolloutDeployment, error) {
-	var d rolloutDeployment
+func parseRolloutDeployment(body []byte) (RolloutDeployment, error) {
+	var d RolloutDeployment
 	if err := json.Unmarshal(body, &d); err != nil {
 		return d, fmt.Errorf("parse deployment: %w", err)
 	}
 	return d, nil
 }
 
-func (d rolloutDeployment) rolloutComplete() bool {
+func (d RolloutDeployment) RolloutComplete() bool {
 	replicas := 1
 	if d.Spec.Replicas != nil {
 		replicas = *d.Spec.Replicas
@@ -710,7 +711,7 @@ func (d rolloutDeployment) rolloutComplete() bool {
 		d.Status.ReadyReplicas == replicas && d.Status.Replicas == replicas
 }
 
-func (d rolloutDeployment) currentMaxUnavailable() string {
+func (d RolloutDeployment) CurrentMaxUnavailable() string {
 	if d.Spec.Strategy.RollingUpdate == nil || d.Spec.Strategy.RollingUpdate.MaxUnavailable == nil {
 		return ""
 	}

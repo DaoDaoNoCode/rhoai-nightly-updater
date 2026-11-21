@@ -461,7 +461,7 @@ func (c *Client) GetVersion() (string, error) {
 // ErrorCodeForbiddenForUser is the errorCode of a read the signed-in
 // user's own token was refused (pkg/api withUserRead): the user may not
 // see this. The UI shows "not yours to see", not the ServiceAccount's
-// "template out of date" hint (templateHint).
+// "template out of date" hint (TemplateHint).
 const ErrorCodeForbiddenForUser = "forbidden_for_user"
 
 // registryTokenError is an error of a container registry's token endpoint

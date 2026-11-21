@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -331,7 +332,7 @@ type clusterReads struct {
 	recErr error
 	dsc    rhoai.DSCRead
 	dscErr error
-	csvs   []clusterCSV
+	csvs   []components.ClusterCSV
 	subs   []*olmSubscription
 	olmErr error
 }
@@ -340,7 +341,7 @@ func readClusterForPrerequisites(c *Client) clusterReads {
 	var r clusterReads
 	r.rec, r.recErr = readPrereqRecord(c)
 	r.dsc, r.dscErr = rhoai.ReadFirstDSC(c)
-	r.csvs, r.olmErr = listClusterCSVs(c)
+	r.csvs, r.olmErr = components.ListClusterCSVs(c)
 	if r.olmErr == nil {
 		r.subs, r.olmErr = listSubscriptions(c, "")
 	}
@@ -359,7 +360,7 @@ func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
 	// The components.
 	switch {
 	case r.dscErr != nil:
-		msg := fmt.Sprintf("Cannot read the DataScienceCluster; nothing was changed: %v.%s", r.dscErr, templateHint(r.dscErr))
+		msg := fmt.Sprintf("Cannot read the DataScienceCluster; nothing was changed: %v.%s", r.dscErr, kube.TemplateHint(r.dscErr))
 		p.refuse(msg, kube.ErrorCodeFromK8sErr(r.dscErr))
 		for _, fc := range fs.components {
 			part(types.MaaSPart{ID: "dsc-" + fc.keys[0], Title: componentTitle(fc, fc.keys[0]), State: "unknown", Message: msg})
@@ -442,7 +443,7 @@ func planKuadrantPart(c *Client, p *featurePlan) types.MaaSPart {
 	k, err := readKuadrant(c)
 	switch {
 	case err != nil:
-		msg := fmt.Sprintf("Cannot read the Kuadrant CR; nothing was changed: %v.%s", err, templateHint(err))
+		msg := fmt.Sprintf("Cannot read the Kuadrant CR; nothing was changed: %v.%s", err, kube.TemplateHint(err))
 		p.refuse(msg, kube.ErrorCodeFromK8sErr(err))
 		pt.State, pt.Message = "unknown", msg
 	case k.found && k.ready:
@@ -463,14 +464,14 @@ func planFeatureOperator(c *Client, p *featurePlan, op operatorSpec, r clusterRe
 	pt := types.MaaSPart{ID: op.id, Title: op.title}
 	defer func() { p.parts = append(p.parts, pt) }()
 	if r.olmErr != nil {
-		msg := fmt.Sprintf("Cannot read the installed operators, so this tool cannot tell whether %s is installed; nothing was changed: %v.%s", op.title, r.olmErr, templateHint(r.olmErr))
+		msg := fmt.Sprintf("Cannot read the installed operators, so this tool cannot tell whether %s is installed; nothing was changed: %v.%s", op.title, r.olmErr, kube.TemplateHint(r.olmErr))
 		p.refuse(msg, kube.ErrorCodeFromK8sErr(r.olmErr))
 		pt.State, pt.Message = "unknown", msg
 		return operatorPlan{op: op}
 	}
 	st, err := readOperatorIn(c, op, r.csvs, r.subs)
 	if err != nil {
-		msg := fmt.Sprintf("Cannot read %s's Subscription; nothing was changed: %v.%s", op.title, err, templateHint(err))
+		msg := fmt.Sprintf("Cannot read %s's Subscription; nothing was changed: %v.%s", op.title, err, kube.TemplateHint(err))
 		p.refuse(msg, kube.ErrorCodeFromK8sErr(err))
 		pt.State, pt.Message = "unknown", msg
 		return operatorPlan{op: op}
@@ -505,7 +506,7 @@ func planFeatureOperator(c *Client, p *featurePlan, op operatorSpec, r clusterRe
 				served, err = controllerDeployed(c, op.controller)
 			}
 			if err != nil {
-				msg := fmt.Sprintf("Cannot tell whether %s runs; nothing was changed: %v.%s", op.title, err, templateHint(err))
+				msg := fmt.Sprintf("Cannot tell whether %s runs; nothing was changed: %v.%s", op.title, err, kube.TemplateHint(err))
 				p.refuse(msg, kube.ErrorCodeFromK8sErr(err))
 				pt.State, pt.Message = "unknown", msg
 				return opp
@@ -553,7 +554,7 @@ func operatorAPIServed(c *Client, op operatorSpec) (bool, error) {
 // dependencyPart is KServe's own view of its operators.
 func dependencyPart(p *featurePlan) types.MaaSPart {
 	pt := types.MaaSPart{ID: "dependencies", Title: "KServe's dependency check"}
-	missing := parseMissingDependencies(p.depMsg)
+	missing := components.ParseMissingDependencies(p.depMsg)
 	var others []string
 	for _, m := range missing {
 		if !p.installs(m) {
@@ -581,10 +582,10 @@ func dependencyPart(p *featurePlan) types.MaaSPart {
 
 // installs: the plan installs (or has) the operator a condition names.
 func (p *featurePlan) installs(mention string) bool {
-	key := normalizeOperatorName(mention)
+	key := components.NormalizeOperatorName(mention)
 	for _, o := range p.operators {
 		for _, n := range []string{o.op.pkg, o.op.title, o.op.id} {
-			if normalizeOperatorName(n) == key {
+			if components.NormalizeOperatorName(n) == key {
 				return true
 			}
 		}
@@ -726,7 +727,7 @@ func RunPrerequisites(c *Client, req types.PrerequisitesRequest, onStep func(Upd
 			continue
 		}
 		if _, err := patchDSCComponent(c, cp.key, "Managed", "", true); err != nil {
-			return m.fail("prerequisites", fmt.Sprintf("The API server rejects setting %s to Managed in the DataScienceCluster: %v. Nothing was changed.%s", cp.key, err, templateHint(err)), maasWriteCode(err), "dry run failed")
+			return m.fail("prerequisites", fmt.Sprintf("The API server rejects setting %s to Managed in the DataScienceCluster: %v. Nothing was changed.%s", cp.key, err, kube.TemplateHint(err)), maasWriteCode(err), "dry run failed")
 		}
 	}
 	for _, o := range p.operators {
@@ -734,7 +735,7 @@ func RunPrerequisites(c *Client, req types.PrerequisitesRequest, onStep func(Upd
 			continue
 		}
 		if _, err := createOperatorObjects(c, o.install, true); err != nil {
-			return m.fail("prerequisites", fmt.Sprintf("The API server rejects %s's install: %v. Nothing was changed.%s", o.op.title, err, templateHint(err)), maasWriteCode(err), "dry run failed")
+			return m.fail("prerequisites", fmt.Sprintf("The API server rejects %s's install: %v. Nothing was changed.%s", o.op.title, err, kube.TemplateHint(err)), maasWriteCode(err), "dry run failed")
 		}
 	}
 	m.step("prerequisites", "success", "Everything Set up changes is checked.")
@@ -768,7 +769,7 @@ func RunPrerequisites(c *Client, req types.PrerequisitesRequest, onStep func(Upd
 				continue
 			}
 			if _, err := patchDSCComponent(c, cp.key, "Managed", "", false); err != nil {
-				return m.fail("dsc", fmt.Sprintf("Failed to set %s to Managed: %v.%s", cp.key, err, templateHint(err)), maasWriteCode(err), "dsc patch failed")
+				return m.fail("dsc", fmt.Sprintf("Failed to set %s to Managed: %v.%s", cp.key, err, kube.TemplateHint(err)), maasWriteCode(err), "dsc patch failed")
 			}
 			m.logs = append(m.logs, fmt.Sprintf("OK: %s Managed (was %s)", cp.key, kube.FirstNonEmpty(cp.state, "not set")))
 		}
@@ -842,7 +843,7 @@ func (m *maasRun) ensureKuadrant(rec *prereqRecord) (*types.OperationResponse, e
 	c := m.c
 	k, err := readKuadrant(c)
 	if err != nil {
-		return m.fail("kuadrant", fmt.Sprintf("Cannot read the Kuadrant CR: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "kuadrant read failed")
+		return m.fail("kuadrant", fmt.Sprintf("Cannot read the Kuadrant CR: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "kuadrant read failed")
 	}
 	if k.found {
 		m.step("kuadrant", "success", fmt.Sprintf("Kuadrant %s/kuadrant exists%s.", k.namespace, byWhom(toolOwned(k.meta))))
@@ -905,7 +906,7 @@ func (m *maasRun) waitPrerequisitesReady(p *featurePlan) (*types.OperationRespon
 		if p.fs.dependency != "" {
 			s, msg := dscConditionStatus(r.Object, p.fs.dependency)
 			if s == "False" {
-				for _, mention := range parseMissingDependencies(msg) {
+				for _, mention := range components.ParseMissingDependencies(msg) {
 					if p.installs(mention) {
 						waiting = append(waiting, fmt.Sprintf("KServe does not see %s yet", mention))
 					}
@@ -1085,7 +1086,7 @@ func restoreCheck(c *Client, rec prereqRecord, dsc rhoai.DSCRead, key string) re
 	}
 	users, err := componentUsers(c, key)
 	if err != nil {
-		return restoreVerdict{refusal: fmt.Sprintf("Cannot tell whether anything still uses %s, so it stays Managed: %v.%s", key, err, templateHint(err)), code: kube.ErrorCodeFromK8sErr(err)}
+		return restoreVerdict{refusal: fmt.Sprintf("Cannot tell whether anything still uses %s, so it stays Managed: %v.%s", key, err, kube.TemplateHint(err)), code: kube.ErrorCodeFromK8sErr(err)}
 	}
 	if len(users) > 0 {
 		shown := users
@@ -1115,7 +1116,7 @@ func RestoreComponents(c *Client, keys []string) (*types.OperationResponse, erro
 	}
 	dsc, err := rhoai.ReadFirstDSC(c)
 	if err != nil {
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read the DataScienceCluster; nothing was changed: %v.%s", err, templateHint(err)), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read the DataScienceCluster; nothing was changed: %v.%s", err, kube.TemplateHint(err)), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
 	var todo []string
 	var kept, logs, done []string
@@ -1186,14 +1187,14 @@ func RestoreComponents(c *Client, keys []string) (*types.OperationResponse, erro
 				break
 			}
 			if !kube.IsK8sConflict(err) {
-				return stop(fmt.Sprintf("Failed to turn %s back to %s: %v.%s", key, v.prev, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err))
+				return stop(fmt.Sprintf("Failed to turn %s back to %s: %v.%s", key, v.prev, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err))
 			}
 			if attempt == 3 {
 				return stop(fmt.Sprintf("The DataScienceCluster kept changing while %s was turned back (someone else is editing it), so it stays Managed. Clean up again later.", key), "conflict")
 			}
 			logs = append(logs, "The DataScienceCluster changed since it was read; reading it again and checking again.")
 			if dsc, err = rhoai.ReadFirstDSC(c); err != nil {
-				return stop(fmt.Sprintf("The DataScienceCluster changed since it was read, and it cannot be read again, so %s stays Managed: %v.%s", key, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err))
+				return stop(fmt.Sprintf("The DataScienceCluster changed since it was read, and it cannot be read again, so %s stays Managed: %v.%s", key, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err))
 			}
 			reads++
 		}

@@ -520,7 +520,7 @@ func discoverCPUPreset(c *Client) cpuPreset {
 	}
 	body, exists, err := c.GetOptional(rhoai.NamespacedPath("apps/v1", "deployments", ns, "llmisvc-controller-manager"))
 	if err != nil {
-		return cpuPreset{problem: fmt.Sprintf("Cannot read Deployment %s/%s: %v.%s", ns, llmisvcControllerName, err, templateHint(err))}
+		return cpuPreset{problem: fmt.Sprintf("Cannot read Deployment %s/%s: %v.%s", ns, llmisvcControllerName, err, kube.TemplateHint(err))}
 	}
 	if !exists {
 		return cpuPreset{problem: fmt.Sprintf("KServe's LLMInferenceService controller (Deployment %s in %s) is not there: LLM serving is not installed.", llmisvcControllerName, ns)}
@@ -556,7 +556,7 @@ func discoverCPUPreset(c *Client) cpuPreset {
 	name := prefix + cpuPresetSuffix
 	body, exists, err = c.GetOptional(rhoai.NamespacedPath("serving.kserve.io/v1alpha2", "llminferenceserviceconfigs", ns, name))
 	if err != nil {
-		return cpuPreset{name: name, problem: fmt.Sprintf("Cannot read the CPU preset %s/%s: %v.%s", ns, name, err, templateHint(err))}
+		return cpuPreset{name: name, problem: fmt.Sprintf("Cannot read the CPU preset %s/%s: %v.%s", ns, name, err, kube.TemplateHint(err))}
 	}
 	if !exists {
 		return cpuPreset{name: name, problem: fmt.Sprintf("This RHOAI release has no CPU preset: LLMInferenceServiceConfig %s does not exist in %s.", name, ns)}
@@ -921,7 +921,7 @@ func (m *modelsRun) allow(project string) (*types.OperationResponse, error) {
 	gw, found, err := readInferenceGateway(c)
 	switch {
 	case err != nil:
-		return m.fail("check", fmt.Sprintf("Cannot read the inference gateway: %v. Nothing was changed.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "gateway read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read the inference gateway: %v. Nothing was changed.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "gateway read failed")
 	case !found:
 		return m.fail("check", "The inference gateway is not set up. Setting up a model sets it up, with the model's project on its list. Nothing was changed.", "prerequisites", "no gateway")
 	case !gatewayOwned(gw.Metadata):
@@ -1321,7 +1321,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 
 	existing, found, err := readToolModel(c, req.Project, entry.Name)
 	if err != nil {
-		return nil, fmt.Sprintf("Cannot read LLMInferenceService %s/%s: %v. Nothing was changed.%s", req.Project, entry.Name, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
+		return nil, fmt.Sprintf("Cannot read LLMInferenceService %s/%s: %v. Nothing was changed.%s", req.Project, entry.Name, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
 	}
 	rec, err := readModelsRecord(c)
 	if err != nil {
@@ -1420,9 +1420,9 @@ func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 		code = "conflict"
 	}
 	if dryRun {
-		return fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", desc, err, templateHint(err)), code
+		return fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", desc, err, kube.TemplateHint(err)), code
 	}
-	return fmt.Sprintf("Failed to apply %s: %v. Set up again to retry.%s", desc, err, templateHint(err)), code
+	return fmt.Sprintf("Failed to apply %s: %v. Set up again to retry.%s", desc, err, kube.TemplateHint(err)), code
 }
 
 // applyToken makes the model's missing token objects, owned by it, and
@@ -1494,7 +1494,7 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 	for _, entry := range entries {
 		model, found, err := readToolModel(c, project, entry.Name)
 		if err != nil {
-			return fail(fmt.Sprintf("Cannot read LLMInferenceService %s/%s; nothing was deleted: %v.%s", project, entry.Name, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "read failed")
+			return fail(fmt.Sprintf("Cannot read LLMInferenceService %s/%s; nothing was deleted: %v.%s", project, entry.Name, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "read failed")
 		}
 		if !found {
 			forget = append(forget, modelRecordKey(project, entry.Name))
@@ -1513,7 +1513,7 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 				if kube.IsK8sConflict(err) {
 					code = "conflict"
 				}
-				return fail(fmt.Sprintf("Failed to delete LLMInferenceService %s/%s: %v.%s", project, entry.Name, err, templateHint(err)), code, "delete failed")
+				return fail(fmt.Sprintf("Failed to delete LLMInferenceService %s/%s: %v.%s", project, entry.Name, err, kube.TemplateHint(err)), code, "delete failed")
 			}
 		}
 		gone, err := kube.WaitForDeletion(c, path, ModelDeleteTimeout, ModelDeletePoll)

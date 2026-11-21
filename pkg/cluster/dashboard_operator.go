@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
@@ -665,11 +666,11 @@ func populateDashboardDevStateWithOperator(c *Client, state *types.DashboardStat
 
 type dashboardPod struct {
 	Metadata struct {
-		Name              string            `json:"name"`
-		Labels            map[string]string `json:"labels"`
-		OwnerReferences   []ownerRef        `json:"ownerReferences"`
-		CreationTimestamp string            `json:"creationTimestamp"`
-		DeletionTimestamp string            `json:"deletionTimestamp"`
+		Name              string                `json:"name"`
+		Labels            map[string]string     `json:"labels"`
+		OwnerReferences   []components.OwnerRef `json:"ownerReferences"`
+		CreationTimestamp string                `json:"creationTimestamp"`
+		DeletionTimestamp string                `json:"deletionTimestamp"`
 	} `json:"metadata"`
 	Spec struct {
 		Containers []struct {
@@ -758,7 +759,7 @@ func addDashboardRolloutDiagnostics(c *Client, ns string, images []types.Dashboa
 			if pod.Metadata.DeletionTimestamp != "" || !dashboardLabelsMatch(d.Spec.Selector.MatchLabels, pod.Metadata.Labels) {
 				continue
 			}
-			if !ownedByDeployment(c, ns, images[i].Deployment, d.Metadata.UID, pod.Metadata.Labels, controllerOf(pod.Metadata.OwnerReferences)) {
+			if !components.OwnedByDeployment(c, ns, images[i].Deployment, d.Metadata.UID, pod.Metadata.Labels, components.ControllerOf(pod.Metadata.OwnerReferences)) {
 				continue
 			}
 			score := 0

@@ -125,15 +125,15 @@ func (st *storedLeftover) patchError(c *Client, err error, dryRun bool) *types.O
 
 func fixLeftoverStoredFields(c *Client, target string, ack *AckBinding) *types.OperationResponse {
 	kind, name, ok := strings.Cut(target, "/")
-	if !ok || !kindPattern.MatchString(kind) || !dns1123Subdomain.MatchString(name) {
+	if !ok || !components.KindPattern.MatchString(kind) || !components.DNS1123Subdomain.MatchString(name) {
 		return leftoverRefused(fixLeftoverFields+" needs <Kind>/<name>", "validation", nil)
 	}
-	s := scanApplyReporters(c, allApplyFailures)
+	s := components.ScanApplyReporters(c, components.AllApplyFailures)
 	// The module CR is in one of the module API groups; a kind reported in
 	// both is ambiguous and refused.
-	var rf *reportedApplyFailure
+	var rf *components.ReportedApplyFailure
 	for _, group := range rhoai.ModuleAPIGroups {
-		if found := leftoverObject(s, group, kind, "", name, applyStoredType); found != nil {
+		if found := leftoverObject(s, group, kind, "", name, components.ApplyStoredType); found != nil {
 			if rf != nil {
 				return leftoverRefused(fmt.Sprintf("%s %s is reported in more than one API group (%s), so the tool cannot tell which object to change. Nothing was changed.", kind, name, strings.Join(rhoai.ModuleAPIGroups, ", ")), "prerequisites", nil)
 			}
@@ -141,10 +141,10 @@ func fixLeftoverStoredFields(c *Client, target string, ack *AckBinding) *types.O
 		}
 	}
 	if rf == nil {
-		if len(s.errs) > 0 {
-			return leftoverRefused(fmt.Sprintf("Could not read what the operator reports (%s). Nothing was changed.", strings.Join(s.errs, "; ")), "prerequisites", nil)
+		if len(s.Errs) > 0 {
+			return leftoverRefused(fmt.Sprintf("Could not read what the operator reports (%s). Nothing was changed.", strings.Join(s.Errs, "; ")), "prerequisites", nil)
 		}
-		return nothingToDo(fmt.Sprintf("no CR reports a stored field type error about %s %s any more. Nothing was changed.", kind, name), nil)
+		return components.NothingToDo(fmt.Sprintf("no CR reports a stored field type error about %s %s any more. Nothing was changed.", kind, name), nil)
 	}
 	st := analyzeStored(c, s, rf)
 	logs := []string{"Reported by " + reportersText(rf)}
@@ -156,7 +156,7 @@ func fixLeftoverStoredFields(c *Client, target string, ack *AckBinding) *types.O
 	}
 	changes := st.changes()
 	if len(changes) == 0 {
-		return nothingToDo(fmt.Sprintf("every field the error names already matches the installed CRD. If %s still reports the error after a minute, use Retry now on its problem. Nothing was changed.", reportersText(rf)), logs)
+		return components.NothingToDo(fmt.Sprintf("every field the error names already matches the installed CRD. If %s still reports the error after a minute, use Retry now on its problem. Nothing was changed.", reportersText(rf)), logs)
 	}
 	if st.needsReview() {
 		if ack == nil {
@@ -237,17 +237,17 @@ func patchLeftoverObject(c *Client, path string, ops []kube.JSONPatchOp, dryRun 
 // adding and removing an annotation, when it still reports a stored-type
 // error whose fields are all valid now.
 func fixLeftoverRetryDSC(c *Client, name string) *types.OperationResponse {
-	if !dns1123Subdomain.MatchString(name) {
+	if !components.DNS1123Subdomain.MatchString(name) {
 		return leftoverRefused(fixLeftoverRetry+" needs the DataScienceCluster's name", "validation", nil)
 	}
-	s := scanApplyReporters(c, allApplyFailures)
+	s := components.ScanApplyReporters(c, components.AllApplyFailures)
 	var uid, waiting string
-	for _, rf := range s.found {
-		if !rf.leftover() || !rf.has(applyStoredType) {
+	for _, rf := range s.Found {
+		if !rf.Leftover() || !rf.Has(components.ApplyStoredType) {
 			continue
 		}
 		reported := false
-		for _, r := range rf.reporters {
+		for _, r := range rf.Reporters {
 			if r.Kind == "DataScienceCluster" && r.Name == name {
 				reported, uid = true, r.UID
 			}
@@ -262,7 +262,7 @@ func fixLeftoverRetryDSC(c *Client, name string) *types.OperationResponse {
 		}
 	}
 	if waiting == "" {
-		return nothingToDo(fmt.Sprintf("DataScienceCluster %s reports no stored field error that is already fixed. Nothing was changed.", name), nil)
+		return components.NothingToDo(fmt.Sprintf("DataScienceCluster %s reports no stored field error that is already fixed. Nothing was changed.", name), nil)
 	}
 	path, err := rhoai.DataScienceClusterPath(c)
 	if err != nil {
@@ -342,17 +342,17 @@ func deleteWorkload(c *Client, path, uid, resourceVersion string, dryRun bool) e
 
 func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *types.OperationResponse {
 	parts := strings.Split(target, "/")
-	if len(parts) != 3 || workloadPath(parts[0], "x", "x") == "" || !dns1123Label.MatchString(parts[1]) || !dns1123Subdomain.MatchString(parts[2]) {
+	if len(parts) != 3 || workloadPath(parts[0], "x", "x") == "" || !components.DNS1123Label.MatchString(parts[1]) || !components.DNS1123Subdomain.MatchString(parts[2]) {
 		return leftoverRefused(fixLeftoverRecreate+" needs <Deployment|StatefulSet|DaemonSet|Job>/<namespace>/<name>", "validation", nil)
 	}
 	kind, ns, name := parts[0], parts[1], parts[2]
-	s := scanApplyReporters(c, allApplyFailures)
-	rf := leftoverObject(s, leftoverWorkloads[kind], kind, ns, name, applyImmutable)
+	s := components.ScanApplyReporters(c, components.AllApplyFailures)
+	rf := leftoverObject(s, components.LeftoverWorkloads[kind], kind, ns, name, components.ApplyImmutable)
 	if rf == nil {
-		if len(s.errs) > 0 {
-			return leftoverRefused(fmt.Sprintf("Could not read what the operator reports (%s). Nothing was deleted.", strings.Join(s.errs, "; ")), "prerequisites", nil)
+		if len(s.Errs) > 0 {
+			return leftoverRefused(fmt.Sprintf("Could not read what the operator reports (%s). Nothing was deleted.", strings.Join(s.Errs, "; ")), "prerequisites", nil)
 		}
-		return nothingToDo(fmt.Sprintf("no CR reports that the selector of %s %s/%s changed any more. Nothing was deleted.", kind, ns, name), nil)
+		return components.NothingToDo(fmt.Sprintf("no CR reports that the selector of %s %s/%s changed any more. Nothing was deleted.", kind, ns, name), nil)
 	}
 	appNS := rhoai.ApplicationsNamespace(c)
 	r := analyzeRecreate(c, rf, appNS, readWorkloadAsUser, componentUsers)
@@ -361,7 +361,7 @@ func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *typ
 	case len(r.Blockers) > 0:
 		return leftoverRefused(fmt.Sprintf("Not deleting %s: %s. Nothing was deleted.", r.ref(), strings.Join(r.Blockers, "; ")), "prerequisites", logs)
 	case !r.Found:
-		return nothingToDo(fmt.Sprintf("%s no longer exists; the operator creates it on its next reconcile. Nothing was deleted.", r.ref()), logs)
+		return components.NothingToDo(fmt.Sprintf("%s no longer exists; the operator creates it on its next reconcile. Nothing was deleted.", r.ref()), logs)
 	case len(r.ackReasons()) > 0 && ack == nil:
 		return needsAcknowledgement("Deleting "+r.ref(), r.ackReasons())
 	case len(r.ackReasons()) > 0 && kind == "Deployment":
@@ -390,7 +390,7 @@ func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *typ
 		}
 		if len(unseen) > 0 {
 			return leftoverRefused(fmt.Sprintf("Reading %s with your token found what the scan could not show, and your acknowledgement does not cover it: %s. Nothing was deleted. Check it, then delete it yourself with: %s",
-				r.ref(), strings.Join(unseen, "; "), rf.ocCommand("delete")), "conflict", logs)
+				r.ref(), strings.Join(unseen, "; "), rf.OCCommand("delete")), "conflict", logs)
 		}
 	}
 	logs = append(logs, fmt.Sprintf("%s is owned by %s; %s creates it again", r.ref(), r.Owner, r.Recreator))
@@ -398,13 +398,13 @@ func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *typ
 	uid := r.Obj.Metadata.UID
 	if err := deleteWorkload(c, path, uid, r.Obj.Metadata.ResourceVersion, true); err != nil {
 		if kube.IsK8sError(err, http.StatusNotFound) {
-			return nothingToDo(fmt.Sprintf("%s no longer exists. Nothing was deleted.", r.ref()), logs)
+			return components.NothingToDo(fmt.Sprintf("%s no longer exists. Nothing was deleted.", r.ref()), logs)
 		}
 		return leftoverWriteError(err, r.ref(), true)
 	}
 	if err := deleteWorkload(c, path, uid, r.Obj.Metadata.ResourceVersion, false); err != nil {
 		if kube.IsK8sError(err, http.StatusNotFound) {
-			return nothingToDo(fmt.Sprintf("%s no longer exists. Nothing was deleted.", r.ref()), logs)
+			return components.NothingToDo(fmt.Sprintf("%s no longer exists. Nothing was deleted.", r.ref()), logs)
 		}
 		return leftoverWriteError(err, r.ref(), false)
 	}
@@ -427,10 +427,10 @@ func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *typ
 			Message: fmt.Sprintf("Recreated %s: %s created it again with the current selector and its pods are ready. Re-scan to check that %s is ready.", r.ref(), r.Recreator, r.Owner)}
 	case back:
 		return &types.OperationResponse{Success: true, Logs: append(logs, "It is back, its pods are not ready yet"),
-			Message: fmt.Sprintf("Deleted %s; %s created it again, but its pods were not ready within %s. Re-scan in a few minutes; the RHOAI pods check shows a pod that does not start.", r.ref(), r.Recreator, formatDuration(leftoverRecreateWait))}
+			Message: fmt.Sprintf("Deleted %s; %s created it again, but its pods were not ready within %s. Re-scan in a few minutes; the RHOAI pods check shows a pod that does not start.", r.ref(), r.Recreator, components.FormatDuration(leftoverRecreateWait))}
 	}
 	return &types.OperationResponse{Success: false, ErrorCode: "not_recreated", Logs: append(logs, "Not back yet"),
-		Message: fmt.Sprintf("Deleted %s, but %s has not created it again within %s. It may still be backing off: re-scan in a few minutes, and if it stays missing restart %s.", r.ref(), r.Recreator, formatDuration(leftoverRecreateWait), r.Recreator)}
+		Message: fmt.Sprintf("Deleted %s, but %s has not created it again within %s. It may still be backing off: re-scan in a few minutes, and if it stays missing restart %s.", r.ref(), r.Recreator, components.FormatDuration(leftoverRecreateWait), r.Recreator)}
 }
 
 // waitRecreated polls until the workload exists with a new UID and is

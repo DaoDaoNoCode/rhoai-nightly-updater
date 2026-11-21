@@ -206,3 +206,22 @@ func (m ObjectMeta) OwnedBy(uid string) bool {
 	}
 	return false
 }
+
+// DeleteExact deletes an object only if it still has the UID and
+// resourceVersion that were inspected (DeleteOptions preconditions).
+func DeleteExact(c *Client, path, uid, resourceVersion string) error {
+	opts := map[string]any{"apiVersion": "v1", "kind": "DeleteOptions"}
+	pre := map[string]string{}
+	if uid != "" {
+		pre["uid"] = uid
+	}
+	if resourceVersion != "" {
+		pre["resourceVersion"] = resourceVersion
+	}
+	if len(pre) > 0 {
+		opts["preconditions"] = pre
+	}
+	body, _ := json.Marshal(opts)
+	_, _, err := c.Do(http.MethodDelete, path, "application/json", body, nil)
+	return err
+}

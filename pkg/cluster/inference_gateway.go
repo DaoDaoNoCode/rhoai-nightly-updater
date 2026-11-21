@@ -1034,7 +1034,7 @@ func planInferenceGateway(c *Client, add []string) (*gatewayPlan, string, string
 func planInferenceGatewayList(c *Client, add, remove []string) (*gatewayPlan, string, string) {
 	gw, found, err := readInferenceGateway(c)
 	if err != nil {
-		return nil, fmt.Sprintf("Cannot read Gateway %s/%s; nothing was changed: %v.%s", inferenceGatewayNamespace, inferenceGatewayName, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
+		return nil, fmt.Sprintf("Cannot read Gateway %s/%s; nothing was changed: %v.%s", inferenceGatewayNamespace, inferenceGatewayName, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
 	}
 	if found && !gatewayOwned(gw.Metadata) {
 		return &gatewayPlan{foreign: true, gateway: gw}, "", ""
@@ -1048,7 +1048,7 @@ func planInferenceGatewayList(c *Client, add, remove []string) (*gatewayPlan, st
 		}
 		users, err := gatewayRoutedIn(c, gw, project)
 		if err != nil {
-			return nil, fmt.Sprintf("Cannot check which models in %s use the inference gateway, so it stays on its list: %v.%s", project, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
+			return nil, fmt.Sprintf("Cannot check which models in %s use the inference gateway, so it stays on its list: %v.%s", project, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 		if len(users) > 0 {
 			return nil, fmt.Sprintf("%s stays on the inference gateway's list: %s %s through it.", project, strings.Join(users, ", "), kube.Verb(len(users), "routes", "route")), "in_use"
@@ -1060,7 +1060,7 @@ func planInferenceGatewayList(c *Client, add, remove []string) (*gatewayPlan, st
 	if found && !shaped {
 		models, err := listLLMInferenceServices(c)
 		if err != nil && !errors.Is(err, errLLMISvcAPIMissing) {
-			return nil, fmt.Sprintf("Cannot check which models use the inference gateway, so its list of allowed projects was not written (that could cut a model off); nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
+			return nil, fmt.Sprintf("Cannot check which models use the inference gateway, so its list of allowed projects was not written (that could cut a model off); nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 		// Only this tool's own models (by its record): anyone may make an
 		// LLMInferenceService that points at the gateway, and listing its
@@ -1068,7 +1068,7 @@ func planInferenceGatewayList(c *Client, add, remove []string) (*gatewayPlan, st
 		// shared gateway. The others are Allow candidates in the status.
 		rec, err := readModelsRecord(c)
 		if err != nil {
-			return nil, fmt.Sprintf("Cannot read this tool's record of its models, so the inference gateway's list of allowed projects was not written (that could cut one of its models off); nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
+			return nil, fmt.Sprintf("Cannot read this tool's record of its models, so the inference gateway's list of allowed projects was not written (that could cut one of its models off); nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 		var ours []llmisvcObject
 		for _, m := range models {
@@ -1099,7 +1099,7 @@ func planInferenceGatewayList(c *Client, add, remove []string) (*gatewayPlan, st
 			meta, ok, err = readGatewayObject(c, kind)
 		}
 		if err != nil {
-			return nil, fmt.Sprintf("Cannot read %s; nothing was changed: %v.%s", gatewayDesc(kind), err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
+			return nil, fmt.Sprintf("Cannot read %s; nothing was changed: %v.%s", gatewayDesc(kind), err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 		plan.current[kind], plan.found[kind] = meta, ok
 		if !ok || gatewayOwned(meta) {
@@ -1124,11 +1124,11 @@ func planInferenceGatewayList(c *Client, add, remove []string) (*gatewayPlan, st
 	}
 	domain, err := clusterAppsDomain(c)
 	if err != nil {
-		return nil, fmt.Sprintf("Cannot find the cluster's apps domain for the gateway's hostname; nothing was changed: %v.%s", err, templateHint(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "prerequisites")
+		return nil, fmt.Sprintf("Cannot find the cluster's apps domain for the gateway's hostname; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "prerequisites")
 	}
 	cert, err := defaultIngressCertificate(c)
 	if err != nil {
-		return nil, fmt.Sprintf("Cannot find the cluster's default ingress certificate; nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
+		return nil, fmt.Sprintf("Cannot find the cluster's default ingress certificate; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
 	}
 	plan.objects = inferenceGatewayObjects(domain, cert, plan.names)
 	plan.host = inferenceHostPrefix + domain
@@ -1219,13 +1219,13 @@ func applyInferenceGateway(c *Client, plan *gatewayPlan, dryRun bool, logf func(
 				code = "conflict"
 			}
 			if dryRun {
-				return fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", gatewayDesc(kind), err, templateHint(err)), code, false
+				return fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", gatewayDesc(kind), err, kube.TemplateHint(err)), code, false
 			}
 			done := "nothing"
 			if len(applied) > 0 {
 				done = strings.Join(applied, ", ")
 			}
-			return fmt.Sprintf("Failed to apply %s: %v. Already applied: %s. Set up again to retry, or delete the gateway to remove it.%s", gatewayDesc(kind), err, done, templateHint(err)), code, false
+			return fmt.Sprintf("Failed to apply %s: %v. Already applied: %s. Set up again to retry, or delete the gateway to remove it.%s", gatewayDesc(kind), err, done, kube.TemplateHint(err)), code, false
 		}
 		if !dryRun {
 			applied = append(applied, gatewayDesc(kind))
@@ -1314,7 +1314,7 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 	for _, kind := range gatewayKinds {
 		meta, found, err := readGatewayObject(c, kind)
 		if err != nil {
-			return fail(fmt.Sprintf("Cannot read %s; nothing was deleted: %v.%s", gatewayDesc(kind), err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "read failed"), nil
+			return fail(fmt.Sprintf("Cannot read %s; nothing was deleted: %v.%s", gatewayDesc(kind), err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "read failed"), nil
 		}
 		objs[kind] = current{meta, found}
 		if found && gatewayOwned(meta) {
@@ -1332,7 +1332,7 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 	// models cannot be listed.
 	models, err := listLLMInferenceServices(c)
 	if err != nil && !errors.Is(err, errLLMISvcAPIMissing) {
-		return fail(fmt.Sprintf("Cannot check which models use the gateway, so it was not deleted: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "model list failed"), nil
+		return fail(fmt.Sprintf("Cannot check which models use the gateway, so it was not deleted: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "model list failed"), nil
 	}
 	// A model on the default route uses this gateway unless KServe's
 	// default is known to be another one (unreadable counts as this one).
@@ -1357,7 +1357,7 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 			})
 		}
 		if err != nil {
-			return fail(fmt.Sprintf("Cannot read the gateway's attached routes, so it was not deleted: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "gateway read failed"), nil
+			return fail(fmt.Sprintf("Cannot read the gateway's attached routes, so it was not deleted: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "gateway read failed"), nil
 		}
 		if found && current.attachedRoutes() > 0 {
 			return fail(attachedRoutesReason(current.attachedRoutes())+" Nothing was deleted.", "in_use", "routes attached"), nil
@@ -1401,7 +1401,7 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 			if kube.IsK8sConflict(err) {
 				code = "conflict"
 			}
-			return fail(fmt.Sprintf("Failed to delete %s: %v.%s Delete again to retry.%s", gatewayDesc(kind), err, done, templateHint(err)), code, "delete failed"), nil
+			return fail(fmt.Sprintf("Failed to delete %s: %v.%s Delete again to retry.%s", gatewayDesc(kind), err, done, kube.TemplateHint(err)), code, "delete failed"), nil
 		}
 		deleted = append(deleted, gatewayDesc(kind))
 		logs = append(logs, fmt.Sprintf("OK: %s deleted", gatewayDesc(kind)))

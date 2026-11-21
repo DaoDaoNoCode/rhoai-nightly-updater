@@ -75,7 +75,7 @@ func moduleCR(c *Client, discover func() (rhoai.ComponentAPI, error), component 
 			return "", nil, false, false, true, nil
 		}
 	}
-	items, err := listModuleCRs(c, discover, component)
+	items, err := components.ListModuleCRs(c, discover, component)
 	if err != nil || len(items) == 0 {
 		return "", nil, false, false, false, err
 	}
@@ -90,11 +90,11 @@ func moduleCR(c *Client, discover func() (rhoai.ComponentAPI, error), component 
 type removalChecker struct {
 	c           *Client
 	api         func() (rhoai.ComponentAPI, error)
-	operators   *moduleOperatorFinder
+	operators   *components.ModuleOperatorFinder
 	opLoaded    bool
 	opBlocker   string
 	convLoaded  bool
-	convCRDs    []conversionCRD
+	convCRDs    []components.ConversionCRD
 	convErr     error
 	svcOwner    map[string]string
 	svcOwnerErr map[string]error
@@ -105,8 +105,8 @@ type removalChecker struct {
 }
 
 func newRemovalChecker(c *Client) *removalChecker {
-	api := cachedComponentAPI(c)
-	return &removalChecker{c: c, api: api, operators: newModuleOperatorFinder(c, api), svcOwner: map[string]string{}, svcOwnerErr: map[string]error{}}
+	api := components.CachedComponentAPI(c)
+	return &removalChecker{c: c, api: api, operators: components.NewModuleOperatorFinder(c, api), svcOwner: map[string]string{}, svcOwnerErr: map[string]error{}}
 }
 
 // platformOperatorBlocker says why the RHOAI operator cannot apply a
@@ -184,7 +184,7 @@ func unknownModuleBlocker(component string) string {
 }
 
 // unknownOperatorBlocker words a module CR whose operator the tool cannot
-// identify (moduleOperatorFinder): it cannot check that the operator runs
+// identify (components.ModuleOperatorFinder): it cannot check that the operator runs
 // (to remove the CR's finalizers and clean up its operands), so it refuses
 // (fail closed) rather than skip the check.
 func unknownOperatorBlocker() string {
@@ -194,8 +194,8 @@ func unknownOperatorBlocker() string {
 // moduleOperatorBlocker returns the operator of the module CR crName, or
 // why it cannot be checked: a read error (named) or an operator the finder
 // cannot identify (the unknown-operator wording) blocks, fail closed.
-func (rc *removalChecker) moduleOperatorBlocker(component, crName string) (*moduleOperator, string) {
-	op, _, err := rc.operators.find(component, crName)
+func (rc *removalChecker) moduleOperatorBlocker(component, crName string) (*components.ModuleOperator, string) {
+	op, _, err := rc.operators.Find(component, crName)
 	switch {
 	case err != nil:
 		return nil, fmt.Sprintf("could not identify its operator (%v), so the tool can't confirm it is running to clean up and won't remove it", err)
@@ -231,7 +231,7 @@ func (rc *removalChecker) partBlockers(component string) []string {
 			blockers = append(blockers, why)
 		case !op.RHOAI: // the RHOAI operator is checked above
 			if ok, why := deploymentReady(c, op.Namespace, op.Name); !ok {
-				blockers = append(blockers, fmt.Sprintf("its operator %s cleans up the sub-component, but %s; fix that operator first", op.ref(), why))
+				blockers = append(blockers, fmt.Sprintf("its operator %s cleans up the sub-component, but %s; fix that operator first", op.Ref(), why))
 			}
 		}
 	}
@@ -271,7 +271,7 @@ func (rc *removalChecker) moduleBlockers(component string) []string {
 				if len(finalizers) > 0 {
 					what = fmt.Sprintf("module CR (finalizer %s) and its operands", strings.Join(finalizers, ", "))
 				}
-				blockers = append(blockers, fmt.Sprintf("its operator %s removes the finalizers of the %s, but %s; fix that operator first or the removal hangs", op.ref(), what, why))
+				blockers = append(blockers, fmt.Sprintf("its operator %s removes the finalizers of the %s, but %s; fix that operator first or the removal hangs", op.Ref(), what, why))
 			}
 		}
 	}
@@ -361,7 +361,7 @@ type conversionObjects struct {
 // listConversionObjects lists the first page of a CRD's objects in every
 // namespace with the client u (the signed-in user's).
 //
-// It lists at the CRD's storage version when that is served (listPath): the
+// It lists at the CRD's storage version when that is served (components.ConversionCRD.ObjectsPath): the
 // API server sends to the conversion webhook only the objects not already
 // at the requested version (k8s.io/apiextensions-apiserver
 // pkg/apiserver/conversion/webhook_converter.go getObjectsToConvert), so
@@ -397,8 +397,8 @@ type conversionObjects struct {
 // leaves nothing to check a kind against, so a kind then refuses. The kind
 // is only checked when the answer has one: an API server always sets it on
 // a list, so its absence is not taken for a different kind.
-func listConversionObjects(u *Client, crd conversionCRD) (conversionObjects, error) {
-	path := crd.listPath()
+func listConversionObjects(u *Client, crd components.ConversionCRD) (conversionObjects, error) {
+	path := crd.ObjectsPath()
 	if path == "" {
 		return conversionObjects{}, fmt.Errorf("the CRD serves no version the tool could list it at")
 	}
@@ -425,7 +425,7 @@ func listConversionObjects(u *Client, crd conversionCRD) (conversionObjects, err
 		return conversionObjects{}, fmt.Errorf("could not parse the list: %w", err)
 	}
 	if list.Kind != "" {
-		switch want := crd.listKind(); {
+		switch want := crd.ListKind(); {
 		case want == "":
 			return conversionObjects{}, fmt.Errorf("the CRD names no list kind to check the API server's answer (a %s) against", list.Kind)
 		case list.Kind != want:
@@ -453,7 +453,7 @@ func listConversionObjects(u *Client, crd conversionCRD) (conversionObjects, err
 
 // sentence words the objects found for the refusal: how many, the first
 // few, and how to delete them.
-func (o conversionObjects) sentence(crd conversionCRD) string {
+func (o conversionObjects) sentence(crd components.ConversionCRD) string {
 	n := len(o.names)
 	crdName := crd.Metadata.Name
 	count := kube.CountNoun(n, "object", "objects") + " of " + crdName + " " + kube.Verb(n, "exists", "exist")
@@ -507,10 +507,10 @@ func (rc *removalChecker) conversionCRDsOf(component string) ([]string, error) {
 // TrustyAI/default-trustyai), or, for a Service that is already gone, its
 // name contains the component name (mcp-lifecycle-operator-webhook-service
 // for mcplifecycleoperator), the same match the stale-conversion check uses.
-func (rc *removalChecker) conversionCRDsServedBy(component string) ([]conversionCRD, error) {
+func (rc *removalChecker) conversionCRDsServedBy(component string) ([]components.ConversionCRD, error) {
 	if !rc.convLoaded {
 		rc.convLoaded = true
-		crds, err := listRHOAIConversionCRDs(rc.c)
+		crds, err := components.ListRHOAIConversionCRDs(rc.c)
 		if err != nil && !kube.IsK8sNotFound(err) {
 			rc.convErr = err
 		}
@@ -519,9 +519,9 @@ func (rc *removalChecker) conversionCRDsServedBy(component string) ([]conversion
 	if rc.convErr != nil {
 		return nil, rc.convErr
 	}
-	var out []conversionCRD
+	var out []components.ConversionCRD
 	for _, crd := range rc.convCRDs {
-		ref := crd.conversionService()
+		ref := crd.ConversionService()
 		if ref == "" {
 			continue
 		}
@@ -566,7 +566,7 @@ func (rc *removalChecker) serviceComponent(ref string) (string, error) {
 			break
 		}
 		for _, o := range svc.Metadata.OwnerReferences {
-			if isModuleAPIVersion(o.APIVersion) {
+			if components.IsModuleAPIVersion(o.APIVersion) {
 				owner = strings.ToLower(o.Kind)
 			}
 		}

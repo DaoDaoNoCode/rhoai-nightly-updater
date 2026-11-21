@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 )
 
 // Live, after `oc delete jobsetoperator cluster` (RHOAI 3.6, 2026-10-06).
@@ -13,15 +15,15 @@ const msgTrainerOperand = "dependency not met: JobSetOperator CR with name 'clus
 func TestParseMissingOperands(t *testing.T) {
 	for _, tt := range []struct {
 		msg  string
-		want []operandMention
+		want []components.OperandMention
 	}{
-		{msgTrainerOperand, []operandMention{{"JobSetOperator", "cluster"}}},
-		{"Please create the LeaderWorkerSetOperator CR", []operandMention{{"LeaderWorkerSetOperator", ""}}},
-		{`Foo custom resource "main" does not exist`, []operandMention{{"Foo", "main"}}},
+		{msgTrainerOperand, []components.OperandMention{{Kind: "JobSetOperator", Name: "cluster"}}},
+		{"Please create the LeaderWorkerSetOperator CR", []components.OperandMention{{Kind: "LeaderWorkerSetOperator", Name: ""}}},
+		{`Foo custom resource "main" does not exist`, []components.OperandMention{{Kind: "Foo", Name: "main"}}},
 		{msgTrainerJobSet, nil},
 		{"the CR was not found", nil},
 	} {
-		got := parseMissingOperands(tt.msg)
+		got := components.ParseMissingOperands(tt.msg)
 		if len(got) != len(tt.want) {
 			t.Errorf("parseMissingOperands(%q) = %v, want %v", tt.msg, got, tt.want)
 			continue
@@ -32,7 +34,7 @@ func TestParseMissingOperands(t *testing.T) {
 			}
 		}
 	}
-	if deps := parseMissingDependencies(msgTrainerOperand); len(deps) != 0 {
+	if deps := components.ParseMissingDependencies(msgTrainerOperand); len(deps) != 0 {
 		t.Fatalf("the operand message is not an operator name: %v", deps)
 	}
 }
@@ -83,7 +85,7 @@ func TestDSCCheck_ModulesReadyRollupLinksModuleCauses(t *testing.T) {
 		t.Fatalf("dsc-not-ready = %s / %v", ev, dsc.RelatedProblems)
 	}
 
-	if got := parseNotReadyModules("Some components are not ready: kserve, Ray and trainer"); strings.Join(got, ",") != "kserve,ray,trainer" {
+	if got := components.ParseNotReadyModules("Some components are not ready: kserve, Ray and trainer"); strings.Join(got, ",") != "kserve,ray,trainer" {
 		t.Fatalf("parseNotReadyModules = %v", got)
 	}
 }

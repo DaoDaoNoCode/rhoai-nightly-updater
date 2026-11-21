@@ -1360,7 +1360,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 		// Recorded before the install, so a playground whose install
 		// outlives this process is still known as this tool's.
 		if err := setPlaygroundRecord(p.c, p.project, newPlaygroundRecord(p.c)); err != nil {
-			return p.fail("install", fmt.Sprintf("Cannot record the request in this tool's namespace; nothing was set up: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "record")
+			return p.fail("install", fmt.Sprintf("Cannot record the request in this tool's namespace; nothing was set up: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "record")
 		}
 		body := map[string]any{"enable_guardrails": false, "enable_tracing": false, "vector_stores": []any{}}
 		// model_type and embedding_dimension per model: odh-dashboard
@@ -1531,7 +1531,7 @@ func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 		return p.fail("gone", fmt.Sprintf("The playground in %s is still being deleted after %s. Delete again to check.", p.project, clockText(PlaygroundDeleteTimeout)), "in_progress", "still deleting")
 	}
 	if err := setPlaygroundRecord(p.c, p.project, nil); err != nil {
-		return p.fail("gone", fmt.Sprintf("The playground in %s is deleted, but this tool's record of it cannot be cleared: %v.%s", p.project, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "record")
+		return p.fail("gone", fmt.Sprintf("The playground in %s is deleted, but this tool's record of it cannot be cleared: %v.%s", p.project, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "record")
 	}
 	p.step("gone", "success", fmt.Sprintf("The playground in %s is gone.", p.project))
 	p.record("project="+p.project, true)

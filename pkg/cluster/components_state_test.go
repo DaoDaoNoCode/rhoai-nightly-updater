@@ -186,17 +186,17 @@ func TestGetComponents_UsesCachedLabelsWithoutQuay(t *testing.T) {
 }
 
 func TestMainContainerImage(t *testing.T) {
-	cs := []deploymentContainer{{"kube-rbac-proxy", "proxy"}, {"core-bff", "bff"}, {"rhods-dashboard", "dash"}}
-	if got := mainContainerImage("rhods-dashboard", cs); got != "dash" {
+	cs := []components.DeploymentContainer{{Name: "kube-rbac-proxy", Image: "proxy"}, {Name: "core-bff", Image: "bff"}, {Name: "rhods-dashboard", Image: "dash"}}
+	if got := components.MainContainerImage("rhods-dashboard", cs); got != "dash" {
 		t.Fatalf("named container: %q", got)
 	}
-	if got := mainContainerImage("other", cs); got != "bff" {
+	if got := components.MainContainerImage("other", cs); got != "bff" {
 		t.Fatalf("first non-sidecar: %q", got)
 	}
-	if got := mainContainerImage("x", []deploymentContainer{{"kube-rbac-proxy", "proxy"}}); got != "proxy" {
+	if got := components.MainContainerImage("x", []components.DeploymentContainer{{Name: "kube-rbac-proxy", Image: "proxy"}}); got != "proxy" {
 		t.Fatalf("only a sidecar: %q", got)
 	}
-	if got := mainContainerImage("x", nil); got != "" {
+	if got := components.MainContainerImage("x", nil); got != "" {
 		t.Fatalf("no containers: %q", got)
 	}
 }
@@ -226,7 +226,7 @@ func TestLabelImageRef(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := labelImageRef(tc.dep); got != tc.want {
+			if got := components.LabelImageRef(tc.dep); got != tc.want {
 				t.Fatalf("labelImageRef = %q, want %q", got, tc.want)
 			}
 		})

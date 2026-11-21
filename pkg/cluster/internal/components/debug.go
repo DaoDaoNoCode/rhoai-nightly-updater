@@ -1,4 +1,4 @@
-package cluster
+package components
 
 import (
 	"fmt"
@@ -12,12 +12,12 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// GetDebugInfo collects pod details from RHOAI-related namespaces for debugging.
+// DebugInfo collects pod details from RHOAI-related namespaces for debugging.
 // The three namespaces are read in parallel. If some namespace queries fail,
 // partial data is returned with warnings. If all fail, an error is returned.
 // The applications namespace is the DSCInitialization's; when it cannot be
 // read, its pods are missing and a warning says why.
-func GetDebugInfo(c *Client) (*types.DebugResponse, error) {
+func DebugInfo(c *kube.Client) (*types.DebugResponse, error) {
 	appNS, appNSErr := rhoai.AppsNamespace(c)
 	namespaces := []string{rhoai.SubNS, appNS, rhoai.CatalogNS}
 	pods := make([][]types.PodInfo, len(namespaces))
@@ -29,7 +29,7 @@ func GetDebugInfo(c *Client) (*types.DebugResponse, error) {
 			continue
 		}
 		wg.Go(func() {
-			pods[i], errs[i] = getPodsInNamespace(c, ns)
+			pods[i], errs[i] = PodsInNamespace(c, ns)
 		})
 	}
 	wg.Wait()
@@ -57,7 +57,7 @@ func GetDebugInfo(c *Client) (*types.DebugResponse, error) {
 	return resp, nil
 }
 
-func getPodsInNamespace(c *Client, namespace string) ([]types.PodInfo, error) {
+func PodsInNamespace(c *kube.Client, namespace string) ([]types.PodInfo, error) {
 	path := rhoai.NamespacedPath("v1", "pods", namespace, "")
 	var items []struct {
 		Metadata struct {
@@ -65,7 +65,7 @@ func getPodsInNamespace(c *Client, namespace string) ([]types.PodInfo, error) {
 			Namespace         string            `json:"namespace"`
 			CreationTimestamp string            `json:"creationTimestamp"`
 			Labels            map[string]string `json:"labels"`
-			OwnerReferences   []ownerRef        `json:"ownerReferences"`
+			OwnerReferences   []OwnerRef        `json:"ownerReferences"`
 		} `json:"metadata"`
 		Spec struct {
 			NodeName   string `json:"nodeName"`
@@ -166,7 +166,7 @@ func getPodsInNamespace(c *Client, namespace string) ([]types.PodInfo, error) {
 		pod.Age = formatAge(item.Metadata.CreationTimestamp)
 		pod.Labels = item.Metadata.Labels
 		pod.PodTemplateHash = item.Metadata.Labels["pod-template-hash"]
-		owner := controllerOf(item.Metadata.OwnerReferences)
+		owner := ControllerOf(item.Metadata.OwnerReferences)
 		pod.OwnerKind, pod.OwnerName, pod.OwnerUID = owner.Kind, owner.Name, owner.UID
 
 		// Extract scheduling failure reason from pod conditions

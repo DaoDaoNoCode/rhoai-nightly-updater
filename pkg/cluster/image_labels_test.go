@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 )
 
@@ -196,7 +197,7 @@ func TestBuildImageRegistryPrefix(t *testing.T) {
 		if got := registry.IsRHOAIImage(tc.ref); got != tc.rhoai {
 			t.Errorf("isRHOAIImage(%q) = %v, want %v", tc.ref, got, tc.rhoai)
 		}
-		if got := isBuildImage(tc.ref); got != tc.build {
+		if got := components.IsBuildImage(tc.ref); got != tc.build {
 			t.Errorf("isBuildImage(%q) = %v, want %v", tc.ref, got, tc.build)
 		}
 	}

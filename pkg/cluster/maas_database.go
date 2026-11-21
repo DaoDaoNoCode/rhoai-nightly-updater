@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -605,7 +606,7 @@ func maasPOCRestartWarning(c *Client, ns string) string {
 		}
 		switch {
 		case p.Metadata.Labels["app"] == "postgres":
-			if t, ok := parseK8sTime(p.Metadata.CreationTimestamp); ok && t.After(dbCreated) {
+			if t, ok := components.ParseK8sTime(p.Metadata.CreationTimestamp); ok && t.After(dbCreated) {
 				dbCreated = t
 			}
 		case strings.HasPrefix(p.Metadata.Name, "maas-api-"):
@@ -613,7 +614,7 @@ func maasPOCRestartWarning(c *Client, ns string) string {
 				if cs.State.Running == nil {
 					continue
 				}
-				if t, ok := parseK8sTime(cs.State.Running.StartedAt); ok && (apiStarted.IsZero() || t.Before(apiStarted)) {
+				if t, ok := components.ParseK8sTime(cs.State.Running.StartedAt); ok && (apiStarted.IsZero() || t.Before(apiStarted)) {
 					apiStarted = t
 				}
 			}
@@ -875,7 +876,7 @@ func planMaaSDatabase(c *Client, rec maasRecord, ns string, nsFound bool, req *t
 	p := &maasDBPlan{nsFrom: nsFound, state: maasDBState{ns: ns, poc: map[string]kube.ObjectMeta{}}}
 	var err error
 	if p.state, err = readMaaSDBState(c, rec, ns); err != nil {
-		return nil, fmt.Sprintf("Cannot read the database; nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
+		return nil, fmt.Sprintf("Cannot read the database; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
 	}
 	cur := p.state.kind
 	switch {
@@ -930,7 +931,7 @@ func (p *maasDBPlan) planCNPG(c *Client) (string, string) {
 	}
 	if served {
 		if served, err = controllerDeployed(c, cnpgController); err != nil {
-			return fmt.Sprintf("Cannot tell whether CloudNativePG's operator runs; nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
+			return fmt.Sprintf("Cannot tell whether CloudNativePG's operator runs; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 	}
 	p.cnpgServed = served
@@ -1330,7 +1331,7 @@ func (m *maasRun) changeDatabase(req *types.MaaSDatabaseRequest) (*types.Operati
 		return m.fail("check", fmt.Sprintf("Cannot read namespace %s, where the database is; nothing was changed%s.", ns, errSuffix(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "prerequisites"), "namespace read failed")
 	}
 	if others, err := foreignMaaSObjects(c); err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot check whether others use MaaS, so the database was not changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "maas list failed")
+		return m.fail("check", fmt.Sprintf("Cannot check whether others use MaaS, so the database was not changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "maas list failed")
 	} else if len(others) > 0 {
 		return m.fail("check", fmt.Sprintf("Others use this MaaS platform: %s. Changing the database would lose their API keys too, so it was not changed.", strings.Join(others, ", ")), "in_use", "maas in use")
 	}
@@ -1343,7 +1344,7 @@ func (m *maasRun) changeDatabase(req *types.MaaSDatabaseRequest) (*types.Operati
 		return m.fail("check", why+" Set up finishes it; Change database runs only from a database that runs. Nothing was changed.", "not_ready", "database not ready")
 	}
 	if what, err := p.dryRun(c); err != nil {
-		return m.fail("check", p.redact(fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", what, err, templateHint(err))), maasWriteCode(err), "dry run failed")
+		return m.fail("check", p.redact(fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", what, err, kube.TemplateHint(err))), maasWriteCode(err), "dry run failed")
 	}
 	m.step("check", "success", fmt.Sprintf("MaaS can switch from %s to %s.", maasDBKindText(old), maasDBKindText(p.target)))
 	if r, err := m.ensureCNPG(&rec, p); r != nil || err != nil {

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -569,7 +570,7 @@ func TestDashboardRevertReportsFailures(t *testing.T) {
 		}))
 		defer srv.Close()
 		c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
-		result, _ := revertDashboardOperatorTo(c, dashboardTarget{Operator: &moduleOperator{Namespace: fixtureAppsNS, Name: fixtureOperatorName}})
+		result, _ := revertDashboardOperatorTo(c, dashboardTarget{Operator: &components.ModuleOperator{Namespace: fixtureAppsNS, Name: fixtureOperatorName}})
 		var err error
 		if err != nil || result.Success || result.ErrorCode != "forbidden" {
 			t.Fatalf("result=%+v err=%v", result, err)

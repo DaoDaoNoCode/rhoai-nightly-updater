@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
@@ -798,14 +799,6 @@ func (g upgradeGate) String() string {
 	return fmt.Sprintf("%s %s=%s (%s): %s", g.where, g.cond.Type, g.cond.Status, g.cond.Reason, kube.TruncateText(g.cond.Message, 300))
 }
 
-// isUpgradeGateCondition: reason AdminAckRequired, or a message about
-// upgrade gates (rhods-operator docs/upgrade-ordering.md "Admin ack gates";
-// a 3.5 operator over newer resources reports "failed to resolve upgrade
-// gate version" on the DSC Ready condition).
-func isUpgradeGateCondition(cond rhoai.DSCCondition) bool {
-	return cond.Reason == "AdminAckRequired" || strings.Contains(strings.ToLower(cond.Message), "upgrade gate")
-}
-
 // readUpgradeGates returns the gate conditions of the DataScienceCluster
 // and of the Platform "default" (RHOAI 3.6 and later). reported is true
 // once the DSC reports version as its release (the new operator has
@@ -834,11 +827,11 @@ func readUpgradeGates(c *Client, version string, since time.Time) (gates []upgra
 	}
 	collect := func(where string, obj statusObject) {
 		for _, cond := range obj.Status.Conditions {
-			if !isUpgradeGateCondition(cond.DSCCondition) {
+			if !components.IsUpgradeGateCondition(cond.DSCCondition) {
 				continue
 			}
 			fresh := reported
-			if t, ok := parseK8sTime(cond.LastTransitionTime); ok && !t.Before(since.Add(-upgradeGateSkew)) {
+			if t, ok := components.ParseK8sTime(cond.LastTransitionTime); ok && !t.Before(since.Add(-upgradeGateSkew)) {
 				fresh = true
 			}
 			gates = append(gates, upgradeGate{where: where + " " + obj.Metadata.Name, cond: cond.DSCCondition, fresh: fresh})

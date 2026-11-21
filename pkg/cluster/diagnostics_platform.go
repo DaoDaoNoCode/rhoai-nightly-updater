@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -52,8 +53,8 @@ func checkPlatformModules(c *Client) checkOutput {
 				case "AdminAckRequired":
 					out.check.Status = "fail"
 					evidence := []string{fmt.Sprintf("Platform %s: ProvisioningProgress=False (AdminAckRequired): %s", pl.Metadata.Name, kube.TruncateText(cond.Message, 400))}
-					keys, values, keysErr := pendingUpgradeAckKeys(c)
-					cmd := upgradeAckCommand("<key>")
+					keys, values, keysErr := components.PendingUpgradeAckKeys(c)
+					cmd := components.UpgradeAckCommand("<key>")
 					fix := "Read what the gate is about, then acknowledge it in the OpenShift console or with the command below (replace <key>)."
 					switch {
 					case keysErr != nil:
@@ -62,7 +63,7 @@ func checkPlatformModules(c *Client) checkOutput {
 						var cmds []string
 						for _, k := range keys {
 							evidence = append(evidence, fmt.Sprintf("Not acknowledged: %s=%q", k, values[k]))
-							cmds = append(cmds, upgradeAckCommand(k))
+							cmds = append(cmds, components.UpgradeAckCommand(k))
 						}
 						cmd = strings.Join(cmds, "\n")
 						fix = fmt.Sprintf("Read what each gate is about (the operator's release notes name it), then acknowledge %s with the commands below.", kube.Verb(len(keys), "it", "them"))
@@ -111,7 +112,7 @@ func checkPlatformModules(c *Client) checkOutput {
 			out.check.Status = "warn"
 		}
 	}
-	operators := newModuleOperatorFinder(c, nil)
+	operators := components.NewModuleOperatorFinder(c, nil)
 	for _, m := range stuck {
 		out.check.Status = "fail"
 		out.problems = append(out.problems, stuckModuleProblem(c, operators, m))
@@ -121,35 +122,6 @@ func checkPlatformModules(c *Client) checkOutput {
 	}
 	out.check.Detail = strings.Join(append(moduleDetails, details...), "; ")
 	return out
-}
-
-// pendingUpgradeAckKeys returns the keys of odh-upgrade-acks whose value is
-// not "true", sorted. The Platform and DataScienceCluster gate problems
-// turn each into its own acknowledgement command.
-func pendingUpgradeAckKeys(c *Client) ([]string, map[string]string, error) {
-	var cm struct {
-		Data map[string]string `json:"data"`
-	}
-	if err := c.GetInto(rhoai.NamespacedPath("v1", "configmaps", rhoai.SubNS, "odh-upgrade-acks"), &cm); err != nil {
-		if kube.IsDecodeError(err) {
-			return nil, nil, fmt.Errorf("parse ConfigMap odh-upgrade-acks: %w", err)
-		}
-		return nil, nil, err
-	}
-	var keys []string
-	for k, v := range cm.Data {
-		if v != "true" {
-			keys = append(keys, k)
-		}
-	}
-	sort.Strings(keys)
-	return keys, cm.Data, nil
-}
-
-// upgradeAckCommand acknowledges one upgrade gate.
-func upgradeAckCommand(key string) string {
-	patch, _ := json.Marshal(map[string]any{"data": map[string]string{key: "true"}})
-	return kube.ShellCommand("oc", "patch", "configmap", "odh-upgrade-acks", "-n", rhoai.SubNS, "--type", "merge", "-p", string(patch))
 }
 
 type stuckModule struct {
@@ -167,12 +139,12 @@ func stuckModuleCRs(c *Client, now time.Time) ([]stuckModule, error) {
 		return nil, err
 	}
 	type listResult struct {
-		items []moduleCRItem
+		items []components.ModuleCRItem
 		err   error
 	}
 	results := make([]listResult, len(api.Kinds))
-	parallelFor(len(api.Kinds), 6, func(i int) {
-		results[i].items, results[i].err = listKindCRs(c, api.Kinds[i])
+	kube.ParallelFor(len(api.Kinds), 6, func(i int) {
+		results[i].items, results[i].err = components.ListKindCRs(c, api.Kinds[i])
 	})
 	var out []stuckModule
 	var errs []string
@@ -182,7 +154,7 @@ func stuckModuleCRs(c *Client, now time.Time) ([]stuckModule, error) {
 			continue
 		}
 		for _, it := range results[i].items {
-			t, ok := parseK8sTime(it.Metadata.DeletionTimestamp)
+			t, ok := components.ParseK8sTime(it.Metadata.DeletionTimestamp)
 			if !ok || now.Sub(t) < moduleDeletionGrace {
 				continue
 			}
@@ -196,10 +168,10 @@ func stuckModuleCRs(c *Client, now time.Time) ([]stuckModule, error) {
 	return out, nil
 }
 
-func stuckModuleProblem(c *Client, operators *moduleOperatorFinder, m stuckModule) Problem {
-	evidence := []string{fmt.Sprintf("%s %s has been deleting for %s; finalizers: %s", m.Module, m.Name, formatDuration(m.Since), kube.NonEmpty(strings.Join(m.Finalizers, ", "), "none"))}
+func stuckModuleProblem(c *Client, operators *components.ModuleOperatorFinder, m stuckModule) Problem {
+	evidence := []string{fmt.Sprintf("%s %s has been deleting for %s; finalizers: %s", m.Module, m.Name, components.FormatDuration(m.Since), kube.NonEmpty(strings.Join(m.Finalizers, ", "), "none"))}
 	fix := "The finalizer is removed by the module's operator; make sure it is running and read its logs."
-	op, why, err := operators.find(m.Module, m.Name)
+	op, why, err := operators.Find(m.Module, m.Name)
 	switch {
 	case err != nil:
 		evidence = append(evidence, fmt.Sprintf("Operator: could not identify it: %v", err))
@@ -208,11 +180,11 @@ func stuckModuleProblem(c *Client, operators *moduleOperatorFinder, m stuckModul
 	default:
 		ok, why := deploymentReady(c, op.Namespace, op.Name)
 		if ok {
-			evidence = append(evidence, fmt.Sprintf("Operator %s is running (%s)", op.ref(), op.Via))
+			evidence = append(evidence, fmt.Sprintf("Operator %s is running (%s)", op.Ref(), op.Via))
 			fix = fmt.Sprintf("The operator %s is running; read its logs for why it does not finish the cleanup.", op.Name)
 		} else {
 			evidence = append(evidence, fmt.Sprintf("Operator (%s): %s", op.Via, why))
-			fix = fmt.Sprintf("Start %s again; it removes the finalizer.", op.ref())
+			fix = fmt.Sprintf("Start %s again; it removes the finalizer.", op.Ref())
 		}
 	}
 	switch m.Module {
@@ -246,7 +218,7 @@ func checkManagedConfig(c *Client) checkOutput {
 	release := installed.Version
 	var details []string
 	count := 0
-	namespaces, nsErr := rolloutNamespaces(c)
+	namespaces, nsErr := components.RolloutNamespaces(c)
 	if nsErr != nil && !errors.Is(nsErr, rhoai.ErrNoDSCInitialization) {
 		details = append(details, fmt.Sprintf("could not tell the applications namespace, so its Deployments were not checked: %v", nsErr))
 		out.check.Status = "warn"
@@ -262,7 +234,7 @@ func checkManagedConfig(c *Client) checkOutput {
 			continue
 		}
 		var list struct {
-			Items []rolloutDeployment `json:"items"`
+			Items []components.RolloutDeployment `json:"items"`
 		}
 		if err := json.Unmarshal(body, &list); err != nil {
 			continue
@@ -308,20 +280,20 @@ func checkManagedConfig(c *Client) checkOutput {
 					Fix:             "Check the RHOAI operator logs and the DataScienceCluster result.",
 				})
 			}
-			if raw := ann[assistRolloutAnnotation]; raw != "" {
+			if raw := ann[components.AssistRolloutAnnotation]; raw != "" {
 				p := Problem{
 					ID:              "rollout-strategy-patched-" + d.Metadata.Name,
 					Severity:        "info",
 					Title:           fmt.Sprintf("%s still has the rollout strategy set by assist-rollout", d.Metadata.Name),
 					Description:     "assist-rollout set maxUnavailable=1 to unblock a rollout and saved the original value. Nothing resets it automatically.",
-					Evidence:        []string{fmt.Sprintf("Deployment %s: maxUnavailable=%s, saved: %s", target, kube.NonEmpty(d.currentMaxUnavailable(), "unset"), raw)},
+					Evidence:        []string{fmt.Sprintf("Deployment %s: maxUnavailable=%s, saved: %s", target, kube.NonEmpty(d.CurrentMaxUnavailable(), "unset"), raw)},
 					AffectedObjects: []string{"Deployment " + target},
 				}
-				if d.rolloutComplete() {
+				if d.RolloutComplete() {
 					p.Fix = "The rollout has finished; restore the original value."
 					p.AutoFixable = true
 					p.AutoFixAction = "restore-rollout-strategy:" + target
-					p.ConfirmMessage = fmt.Sprintf("This patches Deployment %s: restores spec.strategy.rollingUpdate.maxUnavailable to the saved value (if it is still 1) and removes the annotation %s. No pods restart.", target, assistRolloutAnnotation)
+					p.ConfirmMessage = fmt.Sprintf("This patches Deployment %s: restores spec.strategy.rollingUpdate.maxUnavailable to the saved value (if it is still 1) and removes the annotation %s. No pods restart.", target, components.AssistRolloutAnnotation)
 				} else {
 					p.Fix = "Wait until the rollout has finished, then re-scan to restore the original value."
 				}

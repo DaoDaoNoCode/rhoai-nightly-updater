@@ -36,7 +36,7 @@ func (m *maasRun) upgradeRHCL() (*types.OperationResponse, error) {
 	}
 	st, err := readOperator(c, rhclOperator)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read the installed operators; nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "csv read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read the installed operators; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "csv read failed")
 	}
 	if st.installed() && !rhclBelowMinimum(st.version) {
 		m.step("check", "success", fmt.Sprintf("Connectivity Link %s is installed, which meets the docs' minimum (%s).", st.version, rhclDocsMinimum))
@@ -47,7 +47,7 @@ func (m *maasRun) upgradeRHCL() (*types.OperationResponse, error) {
 	}
 	pkg, found, err := readOperatorPackage(c, rhclOperator.pkg, st.sub.Spec.Source)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read the catalog's channels; nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "package read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read the catalog's channels; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "package read failed")
 	}
 	if !found {
 		return m.fail("check", fmt.Sprintf("Catalog %s does not offer %s. Nothing was changed.", st.sub.Spec.Source, rhclOperator.pkg), "prerequisites", "package missing")
@@ -58,7 +58,7 @@ func (m *maasRun) upgradeRHCL() (*types.OperationResponse, error) {
 	}
 	targetCh, _ := pkg.channel(target)
 	if err := patchSubscription(c, st.sub, map[string]any{"channel": target}, true); err != nil {
-		return m.fail("check", fmt.Sprintf("The API server rejects the channel change of Subscription %s/%s: %v. Nothing was changed.%s", st.sub.Metadata.Namespace, st.sub.Metadata.Name, err, templateHint(err)), maasWriteCode(err), "dry run failed")
+		return m.fail("check", fmt.Sprintf("The API server rejects the channel change of Subscription %s/%s: %v. Nothing was changed.%s", st.sub.Metadata.Namespace, st.sub.Metadata.Name, err, kube.TemplateHint(err)), maasWriteCode(err), "dry run failed")
 	}
 	ns, name := st.sub.Metadata.Namespace, st.sub.Metadata.Name
 	m.step("check", "success", fmt.Sprintf("Upgrading from %s (channel %s) to channel %s (%s).", st.version, kube.FirstNonEmpty(st.sub.Spec.Channel, "not set"), target, targetCh.head()))
@@ -309,7 +309,7 @@ func (m *maasRun) authorinoTLSOnly() (*types.OperationResponse, error) {
 		return m.fail("check", "There is no Kuadrant CR, so there is no Authorino to configure. Set up creates it. Nothing was changed.", "prerequisites", "no kuadrant")
 	}
 	if _, err := configureAuthorinoTLS(c, kq.namespace, true); err != nil {
-		return m.fail("check", fmt.Sprintf("Authorino TLS cannot be configured: %v. Nothing was changed.%s", err, templateHint(err)), maasWriteCode(err), "dry run failed")
+		return m.fail("check", fmt.Sprintf("Authorino TLS cannot be configured: %v. Nothing was changed.%s", err, kube.TemplateHint(err)), maasWriteCode(err), "dry run failed")
 	}
 	m.step("check", "success", "Authorino "+kq.namespace+"/authorino can be configured.")
 	if r, err := m.applyAuthorinoTLS(&rec, kq.namespace, "authorino-tls"); r != nil || err != nil {
@@ -327,7 +327,7 @@ func (m *maasRun) removeTierPolicies() (*types.OperationResponse, error) {
 	m.step("check", "running", "Listing the policies on the MaaS gateway...")
 	policies, err := maasGatewayPolicies(c)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot list the policies on %s; nothing was deleted: %v.%s", maasGatewayName, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "policy list failed")
+		return m.fail("check", fmt.Sprintf("Cannot list the policies on %s; nothing was deleted: %v.%s", maasGatewayName, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "policy list failed")
 	}
 	var legacy []gatewayPolicy
 	for _, p := range policies {
@@ -343,7 +343,7 @@ func (m *maasRun) removeTierPolicies() (*types.OperationResponse, error) {
 		path := legacyTierPolicyPath(p.Kind, p.Version)
 		opts, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": map[string]any{"uid": p.UID}})
 		if _, _, err := c.Do(http.MethodDelete, path, "application/json", opts, url.Values{"dryRun": {"All"}}); err != nil && !kube.IsK8sNotFound(err) {
-			return m.fail("check", fmt.Sprintf("The API server rejects deleting %s %s: %v. Nothing was deleted.%s", p.Kind, p.Name, err, templateHint(err)), maasWriteCode(err), "dry run failed")
+			return m.fail("check", fmt.Sprintf("The API server rejects deleting %s %s: %v. Nothing was deleted.%s", p.Kind, p.Name, err, kube.TemplateHint(err)), maasWriteCode(err), "dry run failed")
 		}
 	}
 	m.step("check", "success", "To delete: "+strings.Join(policyNames(legacy), ", ")+".")

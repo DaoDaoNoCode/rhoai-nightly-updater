@@ -865,10 +865,10 @@ func getDashboardPods(c *Client, ns, deployment, deploymentUID string, matchLabe
 	path := fmt.Sprintf("/api/v1/namespaces/%s/pods?labelSelector=%s", ns, url.QueryEscape(selector))
 	var items []struct {
 		Metadata struct {
-			Name            string            `json:"name"`
-			Namespace       string            `json:"namespace"`
-			Labels          map[string]string `json:"labels"`
-			OwnerReferences []ownerRef        `json:"ownerReferences"`
+			Name            string                `json:"name"`
+			Namespace       string                `json:"namespace"`
+			Labels          map[string]string     `json:"labels"`
+			OwnerReferences []components.OwnerRef `json:"ownerReferences"`
 		} `json:"metadata"`
 		Spec struct {
 			NodeName   string `json:"nodeName"`
@@ -913,7 +913,7 @@ func getDashboardPods(c *Client, ns, deployment, deploymentUID string, matchLabe
 	var pods []types.PodInfo
 	for _, item := range items {
 		// Only the Deployment's own pods: its selector may also match others.
-		if !ownedByDeployment(c, ns, deployment, deploymentUID, item.Metadata.Labels, controllerOf(item.Metadata.OwnerReferences)) {
+		if !components.OwnedByDeployment(c, ns, deployment, deploymentUID, item.Metadata.Labels, components.ControllerOf(item.Metadata.OwnerReferences)) {
 			continue
 		}
 		pod := types.PodInfo{

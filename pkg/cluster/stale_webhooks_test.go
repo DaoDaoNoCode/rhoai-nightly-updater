@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -92,8 +93,8 @@ func serveWebhooks(f *fakeAPI, configs []whFixture, csvPhase string, liveService
 	f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1", http.StatusOK, `{"resources":[`+strings.Join(resources, ",")+`]}`)
 }
 
-func verdictsByName(scan webhookScan) map[string]webhookVerdict {
-	out := map[string]webhookVerdict{}
+func verdictsByName(scan components.WebhookScan) map[string]components.WebhookVerdict {
+	out := map[string]components.WebhookVerdict{}
 	for _, v := range scan.Verdicts {
 		out[v.Config.Metadata.Name] = v
 	}
@@ -138,7 +139,7 @@ func TestStaleWebhookScan_AppliesEveryRule(t *testing.T) {
 	serveWebhooks(f, configs, "Succeeded", []string{ops, apps + "odh-model-controller-webhook-service"}, map[string]bool{"Kserve": true, "Ray": false, "Workbenches": false})
 	f.status("GET", svcPath("redhat-ods-applications", "error-service"), http.StatusInternalServerError, "InternalError")
 
-	scan := scanStaleWebhooks(c)
+	scan := components.ScanStaleWebhooks(c)
 	got := verdictsByName(scan)
 	var deletable, guidance []string
 	for name, v := range got {
@@ -179,7 +180,7 @@ func TestStaleWebhookScan_NothingDuringAnInstall(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			f, c := newFakeAPI(t)
 			serveWebhooks(f, []whFixture{{name: "x.opendatahub.io-gone", labels: olmOwned("rhods-operator.3.5.0"), services: []string{rhoai.SubNS + "/gone"}}}, phase, nil, nil)
-			scan := scanStaleWebhooks(c)
+			scan := components.ScanStaleWebhooks(c)
 			if len(scan.Verdicts) != 0 || !strings.Contains(scan.Upgrading, phase) {
 				t.Fatalf("scan = %+v", scan)
 			}
@@ -193,7 +194,7 @@ func TestStaleWebhookScan_CSVListErrorMakesNothingDeletable(t *testing.T) {
 	f, c := newFakeAPI(t)
 	serveWebhooks(f, []whFixture{{name: "x.opendatahub.io-gone", labels: olmOwned("rhods-operator.3.5.0"), services: []string{rhoai.SubNS + "/gone"}}}, "Succeeded", nil, nil)
 	f.status("GET", csvBase, http.StatusForbidden, "Forbidden")
-	scan := scanStaleWebhooks(c)
+	scan := components.ScanStaleWebhooks(c)
 	if len(scan.Verdicts) != 1 || scan.Verdicts[0].Deletable || !strings.Contains(scan.Verdicts[0].Reason, "could not check whether an operator install is in progress") {
 		t.Fatalf("scan = %+v", scan)
 	}
@@ -205,7 +206,7 @@ func TestStaleWebhookScan_DeletingCSVCountsAsGone(t *testing.T) {
 	f, c := newFakeAPI(t)
 	serveWebhooks(f, []whFixture{{name: "dsci.opendatahub.io-a", labels: olmOwned("rhods-operator.3.6.0"), services: []string{rhoai.SubNS + "/rhods-operator-service"}}}, "Succeeded", nil, nil)
 	f.json("GET", csvBase+"/rhods-operator.3.6.0", http.StatusOK, `{"metadata":{"name":"rhods-operator.3.6.0","deletionTimestamp":"2026-10-05T10:00:00Z"}}`)
-	scan := scanStaleWebhooks(c)
+	scan := components.ScanStaleWebhooks(c)
 	if len(scan.Verdicts) != 1 || !scan.Verdicts[0].Deletable {
 		t.Fatalf("scan = %+v", scan)
 	}
@@ -216,7 +217,7 @@ func TestStaleWebhookScan_NewConfigIsNotDeletable(t *testing.T) {
 	f, c := newFakeAPI(t)
 	recent := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
 	serveWebhooks(f, []whFixture{{name: "x.opendatahub.io-gone", labels: olmOwned("rhods-operator.3.5.0"), services: []string{rhoai.SubNS + "/gone"}, created: recent}}, "Succeeded", nil, nil)
-	scan := scanStaleWebhooks(c)
+	scan := components.ScanStaleWebhooks(c)
 	if len(scan.Verdicts) != 1 || scan.Verdicts[0].Deletable || !strings.Contains(scan.Verdicts[0].Reason, "created less than") {
 		t.Fatalf("scan = %+v", scan)
 	}
@@ -226,29 +227,27 @@ func TestServiceHealth(t *testing.T) {
 	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 	old := now.Add(-time.Hour).Format(time.RFC3339)
 	recent := now.Add(-time.Minute).Format(time.RFC3339)
-	oldWebhookNow := webhookNow
-	webhookNow = func() time.Time { return now }
-	t.Cleanup(func() { webhookNow = oldWebhookNow })
+	t.Cleanup(components.SetWebhookNowForTest(func() time.Time { return now }))
 	svc := `{"metadata":{"creationTimestamp":"` + old + `"},"spec":{"selector":{"app":"x"}}}`
 	for _, tc := range []struct {
 		name    string
 		service string // "" = NotFound
 		slices  string // "" = list fails
 		grace   time.Duration
-		want    serviceState
+		want    components.ServiceState
 		exists  bool
 	}{
-		{name: "not found", want: serviceMissing},
-		{name: "ready endpoint", service: svc, slices: `{"items":[{"endpoints":[{"conditions":{"ready":true}}]}]}`, grace: 5 * time.Minute, want: serviceServing, exists: true},
-		{name: "nil ready means ready", service: svc, slices: `{"items":[{"endpoints":[{"conditions":{}}]}]}`, grace: 5 * time.Minute, want: serviceServing, exists: true},
-		{name: "not ready for an hour", service: svc, slices: `{"items":[{"metadata":{"creationTimestamp":"` + old + `"},"endpoints":[{"conditions":{"ready":false}}]}]}`, grace: 5 * time.Minute, want: serviceNoEndpoints, exists: true},
-		{name: "no slices for an hour", service: svc, slices: `{"items":[]}`, grace: 5 * time.Minute, want: serviceNoEndpoints, exists: true},
-		{name: "endpoints changed a minute ago (restart)", service: svc, slices: `{"items":[{"metadata":{"creationTimestamp":"` + old + `","annotations":{"endpoints.kubernetes.io/last-change-trigger-time":"` + recent + `"}},"endpoints":[{"conditions":{"ready":false}}]}]}`, grace: 5 * time.Minute, want: serviceServing, exists: true},
-		{name: "managedFields updated a minute ago", service: svc, slices: `{"items":[{"metadata":{"creationTimestamp":"` + old + `","managedFields":[{"time":"` + recent + `"}]},"endpoints":[]}]}`, grace: 5 * time.Minute, want: serviceServing, exists: true},
-		{name: "no grace: down at once", service: svc, slices: `{"items":[{"metadata":{"managedFields":[{"time":"` + recent + `"}]},"endpoints":[{"conditions":{"ready":false}}]}]}`, want: serviceNoEndpoints, exists: true},
-		{name: "unknown age within grace", service: `{"spec":{"selector":{"app":"x"}}}`, slices: `{"items":[]}`, grace: 5 * time.Minute, want: serviceServing, exists: true},
-		{name: "ExternalName", service: `{"spec":{"type":"ExternalName"}}`, grace: 5 * time.Minute, want: serviceServing, exists: true},
-		{name: "endpoints unreadable", service: svc, want: serviceUnknown, exists: true},
+		{name: "not found", want: components.ServiceMissing},
+		{name: "ready endpoint", service: svc, slices: `{"items":[{"endpoints":[{"conditions":{"ready":true}}]}]}`, grace: 5 * time.Minute, want: components.ServiceServing, exists: true},
+		{name: "nil ready means ready", service: svc, slices: `{"items":[{"endpoints":[{"conditions":{}}]}]}`, grace: 5 * time.Minute, want: components.ServiceServing, exists: true},
+		{name: "not ready for an hour", service: svc, slices: `{"items":[{"metadata":{"creationTimestamp":"` + old + `"},"endpoints":[{"conditions":{"ready":false}}]}]}`, grace: 5 * time.Minute, want: components.ServiceNoEndpoints, exists: true},
+		{name: "no slices for an hour", service: svc, slices: `{"items":[]}`, grace: 5 * time.Minute, want: components.ServiceNoEndpoints, exists: true},
+		{name: "endpoints changed a minute ago (restart)", service: svc, slices: `{"items":[{"metadata":{"creationTimestamp":"` + old + `","annotations":{"endpoints.kubernetes.io/last-change-trigger-time":"` + recent + `"}},"endpoints":[{"conditions":{"ready":false}}]}]}`, grace: 5 * time.Minute, want: components.ServiceServing, exists: true},
+		{name: "managedFields updated a minute ago", service: svc, slices: `{"items":[{"metadata":{"creationTimestamp":"` + old + `","managedFields":[{"time":"` + recent + `"}]},"endpoints":[]}]}`, grace: 5 * time.Minute, want: components.ServiceServing, exists: true},
+		{name: "no grace: down at once", service: svc, slices: `{"items":[{"metadata":{"managedFields":[{"time":"` + recent + `"}]},"endpoints":[{"conditions":{"ready":false}}]}]}`, want: components.ServiceNoEndpoints, exists: true},
+		{name: "unknown age within grace", service: `{"spec":{"selector":{"app":"x"}}}`, slices: `{"items":[]}`, grace: 5 * time.Minute, want: components.ServiceServing, exists: true},
+		{name: "ExternalName", service: `{"spec":{"type":"ExternalName"}}`, grace: 5 * time.Minute, want: components.ServiceServing, exists: true},
+		{name: "endpoints unreadable", service: svc, want: components.ServiceUnknown, exists: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newFakeAPI(t)
@@ -265,8 +264,8 @@ func TestServiceHealth(t *testing.T) {
 			} else {
 				f.status("GET", fmt.Sprintf(epsPathFmt, "ns"), http.StatusForbidden, "Forbidden")
 			}
-			h := checkServiceHealth(c, "ns/svc", tc.grace)
-			if h.state != tc.want || h.exists != tc.exists {
+			h := components.CheckServiceHealth(c, "ns/svc", tc.grace)
+			if h.State != tc.want || h.Exists != tc.exists {
 				t.Fatalf("health = %+v, want state %v exists %v", h, tc.want, tc.exists)
 			}
 		})
@@ -281,7 +280,7 @@ func TestStaleWebhookScan_UnreadableEndpointsKeepTheConfig(t *testing.T) {
 	serveWebhooks(f, []whFixture{{name: "x.opendatahub.io-a", labels: olmOwned("rhods-operator.3.5.0"), services: []string{rhoai.SubNS + "/svc"}}}, "Succeeded", nil, nil)
 	f.json("GET", svcPath(rhoai.SubNS, "svc"), http.StatusOK, `{"spec":{"selector":{"app":"x"}}}`)
 	f.status("GET", fmt.Sprintf(epsPathFmt, rhoai.SubNS), http.StatusForbidden, "Forbidden")
-	scan := scanStaleWebhooks(c)
+	scan := components.ScanStaleWebhooks(c)
 	if len(scan.Verdicts) != 0 || len(scan.Errors) != 1 || !strings.Contains(scan.Errors[0], "list endpoints of Service "+rhoai.SubNS+"/svc") {
 		t.Fatalf("scan = %+v", scan)
 	}
@@ -346,7 +345,7 @@ func TestIsRHOAIWebhook(t *testing.T) {
 		{"legacy.opendatahub.io", nil, true},
 		{"kuberay-mutating-webhook-configuration", nil, false},
 	} {
-		if got := isRHOAIWebhook(tc.name, tc.labels); got != tc.want {
+		if got := components.IsRHOAIWebhook(tc.name, tc.labels); got != tc.want {
 			t.Errorf("isRHOAIWebhook(%q, %v) = %v, want %v", tc.name, tc.labels, got, tc.want)
 		}
 	}
@@ -357,9 +356,7 @@ func TestIsRHOAIWebhook(t *testing.T) {
 // as information with the real owner, never offered for deletion.
 func TestStaleWebhookCheck_PlatformWebhookWithIgnoreIsInfo(t *testing.T) {
 	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
-	oldNow := webhookNow
-	webhookNow = func() time.Time { return now }
-	t.Cleanup(func() { webhookNow = oldNow })
+	t.Cleanup(components.SetWebhookNowForTest(func() time.Time { return now }))
 	f, c := newFakeAPI(t)
 	serveWebhooks(f, []whFixture{{name: "odh-observability-webhook", kind: "m", labels: map[string]string{"platform.opendatahub.io/part-of": "platform"},
 		services: []string{"redhat-ods-applications/odh-observability-webhook"}, ignore: true}}, "Succeeded", nil, nil)
@@ -391,7 +388,7 @@ func TestStaleWebhookScan_URLBackedHookKeepsTheConfig(t *testing.T) {
 		{name: "service-only.opendatahub.io-a", labels: olmOwned("rhods-operator.3.5.0"), services: []string{gone}},
 	}, "Succeeded", nil, nil)
 	f.json("DELETE", vwcPath+"/service-only.opendatahub.io-a", http.StatusOK, `{}`)
-	scan := scanStaleWebhooks(c)
+	scan := components.ScanStaleWebhooks(c)
 	got := verdictsByName(scan)
 	if _, ok := got["mixed-url.opendatahub.io-a"]; ok {
 		t.Fatalf("a config with a URL-backed webhook must not be stale: %+v", got["mixed-url.opendatahub.io-a"])
@@ -402,7 +399,7 @@ func TestStaleWebhookScan_URLBackedHookKeepsTheConfig(t *testing.T) {
 	if v, ok := got["service-only.opendatahub.io-a"]; !ok || !v.Deletable {
 		t.Fatalf("control: the Service-only config should be deletable: %+v", got)
 	}
-	d := deleteStaleWebhookConfigs(c, scan.Verdicts)
+	d := components.DeleteStaleWebhookConfigs(c, scan.Verdicts)
 	if len(d.Deleted) != 1 || d.Deleted[0] != "ValidatingWebhookConfiguration service-only.opendatahub.io-a" {
 		t.Fatalf("deleted = %v", d.Deleted)
 	}
@@ -416,7 +413,7 @@ func TestStaleWebhookScan_UnknownModuleIsNeverDeletable(t *testing.T) {
 	t.Run("unmapped part-of", func(t *testing.T) {
 		f, c := newFakeAPI(t)
 		serveWebhooks(f, []whFixture{cfg}, "Succeeded", nil, map[string]bool{"Ray": false})
-		v, ok := verdictsByName(scanStaleWebhooks(c))["mystery-webhook"]
+		v, ok := verdictsByName(components.ScanStaleWebhooks(c))["mystery-webhook"]
 		if !ok || v.Deletable || !strings.Contains(v.Reason, "cannot tell whether module notamodule is installed") {
 			t.Fatalf("verdict = %+v", v)
 		}
@@ -427,7 +424,7 @@ func TestStaleWebhookScan_UnknownModuleIsNeverDeletable(t *testing.T) {
 		ray.labels = map[string]string{"platform.opendatahub.io/part-of": "ray"}
 		serveWebhooks(f, []whFixture{ray}, "Succeeded", nil, nil)
 		f.status("GET", "/apis/components.platform.opendatahub.io", http.StatusNotFound, "NotFound")
-		v, ok := verdictsByName(scanStaleWebhooks(c))["mystery-webhook"]
+		v, ok := verdictsByName(components.ScanStaleWebhooks(c))["mystery-webhook"]
 		if !ok || v.Deletable {
 			t.Fatalf("verdict = %+v", v)
 		}

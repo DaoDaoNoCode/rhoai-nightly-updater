@@ -21,17 +21,17 @@ import (
 func TestTemplateHintOnlyForTheServiceAccountsRefusals(t *testing.T) {
 	sa := fmt.Errorf("read: %w", &K8sError{Status: 403, Reason: "Forbidden"})
 	user := fmt.Errorf("patch: %w", &K8sError{Status: 403, Reason: "Forbidden", User: true})
-	if templateHint(sa) == "" {
+	if kube.TemplateHint(sa) == "" {
 		t.Error("no hint for the ServiceAccount's 403")
 	}
-	if h := templateHint(user); h != "" {
+	if h := kube.TemplateHint(user); h != "" {
 		t.Errorf("hint for the user's 403: %q", h)
 	}
 	if !strings.Contains(user.Error(), kube.UserForbiddenMessage) {
 		t.Errorf("the user's 403 does not say whose permissions refused it: %v", user)
 	}
 	for _, err := range []error{nil, errors.New("x"), &K8sError{Status: 404}, &K8sError{Status: 401}} {
-		if h := templateHint(err); h != "" {
+		if h := kube.TemplateHint(err); h != "" {
 			t.Errorf("%v: hint %q", err, h)
 		}
 	}

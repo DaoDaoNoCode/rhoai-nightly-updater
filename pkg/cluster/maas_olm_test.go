@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -398,7 +399,7 @@ func TestMaaSSetup_FreshClusterDoesEveryStep(t *testing.T) {
 		t.Fatalf("service = %v", svc)
 	}
 	dep, _ := json.Marshal(mc.f.get("/apis/apps/v1/namespaces/kuadrant-system/deployments/authorino"))
-	if !strings.Contains(string(dep), `"SSL_CERT_FILE"`) || !strings.Contains(string(dep), restartAnnotation) {
+	if !strings.Contains(string(dep), `"SSL_CERT_FILE"`) || !strings.Contains(string(dep), components.RestartAnnotation) {
 		t.Fatalf("authorino deployment = %s", dep)
 	}
 	ag := mc.f.get(tMaaSDSC)["spec"].(map[string]any)["components"].(map[string]any)["aigateway"].(map[string]any)

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -217,13 +218,13 @@ func TestModuleOperatorFinderLive36(t *testing.T) {
 	serveLive36Kinds(f)
 	serveLive36ModuleOperators(f)
 	serveInstalledOperatorOwningKueue(f)
-	finder := newModuleOperatorFinder(c, nil)
+	finder := components.NewModuleOperatorFinder(c, nil)
 	for _, o := range live36Operators {
 		cr := "default-" + o.Module
 		if o.Module == "mcplifecycleoperator" {
 			cr = "default"
 		}
-		op, why, err := finder.find(o.Module, cr)
+		op, why, err := finder.Find(o.Module, cr)
 		if err != nil || op == nil || op.Namespace != liveAppsNS || op.Name != o.Deployment || op.RHOAI {
 			t.Errorf("%s: op %+v, why %q, err %v", o.Module, op, why, err)
 			continue
@@ -232,13 +233,13 @@ func TestModuleOperatorFinderLive36(t *testing.T) {
 			t.Errorf("%s via %q", o.Module, op.Via)
 		}
 	}
-	op, why, err := finder.find("kueue", "default-kueue")
-	if err != nil || op == nil || !op.RHOAI || op.ref() != rhoai.SubNS+"/rhods-operator" || !strings.Contains(op.Via, "owns CRD kueues.components.platform.opendatahub.io") {
+	op, why, err := finder.Find("kueue", "default-kueue")
+	if err != nil || op == nil || !op.RHOAI || op.Ref() != rhoai.SubNS+"/rhods-operator" || !strings.Contains(op.Via, "owns CRD kueues.components.platform.opendatahub.io") {
 		t.Fatalf("kueue: %+v %q %v", op, why, err)
 	}
 	// A kind nothing in the namespace may update, and that the CSV does not
 	// own, is unknown.
-	if op, why, err := finder.find("newmodule", "default"); op != nil || err != nil || !strings.Contains(why, "does not own CRD newmodules") {
+	if op, why, err := finder.Find("newmodule", "default"); op != nil || err != nil || !strings.Contains(why, "does not own CRD newmodules") {
 		t.Fatalf("newmodule: %+v %q %v", op, why, err)
 	}
 	for _, p := range []string{"/apis/rbac.authorization.k8s.io/v1/clusterroles", "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings", "/apis/apps/v1/namespaces/" + liveAppsNS + "/deployments"} {
@@ -310,7 +311,7 @@ func TestModuleOperatorFinderUnknown(t *testing.T) {
 			w := newLive36ModuleOperatorWorld()
 			tc.edit(w)
 			w.serve(f)
-			op, why, err := newModuleOperatorFinder(c, nil).find(tc.module, tc.cr)
+			op, why, err := components.NewModuleOperatorFinder(c, nil).Find(tc.module, tc.cr)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -367,7 +368,7 @@ func TestModuleOperatorFinderFailsClosed(t *testing.T) {
 			if !f.routed(dsciV2List) {
 				f.json("GET", dsciV2List, 200, `{"items":[{"metadata":{"name":"default-dsci"},"spec":{"applicationsNamespace":"`+liveAppsNS+`"}}]}`)
 			}
-			if _, _, err := newModuleOperatorFinder(c, nil).find("aigateway", "default-aigateway"); err == nil || !strings.Contains(err.Error(), tc.want) {
+			if _, _, err := components.NewModuleOperatorFinder(c, nil).Find("aigateway", "default-aigateway"); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v", err)
 			}
 			got := strings.Join(newRemovalChecker(c).moduleBlockers("aigateway"), "; ")
@@ -426,13 +427,13 @@ func TestStuckModuleNamesDiscoveredOperator(t *testing.T) {
 	serveLive36ModuleOperators(f)
 	serveInstalledOperator(f)
 	f.json("GET", "/apis/apps/v1/namespaces/"+liveAppsNS+"/deployments/ai-gateway-operator", http.StatusOK, `{"status":{"readyReplicas":0}}`)
-	p := stuckModuleProblem(c, newModuleOperatorFinder(c, nil), stuckModule{Module: "aigateway", Name: "default-aigateway", Finalizers: []string{"platform.opendatahub.io/finalizer"}})
+	p := stuckModuleProblem(c, components.NewModuleOperatorFinder(c, nil), stuckModule{Module: "aigateway", Name: "default-aigateway", Finalizers: []string{"platform.opendatahub.io/finalizer"}})
 	ev := strings.Join(p.Evidence, "\n")
 	if !strings.Contains(ev, "owned by Platform default; its ServiceAccount ai-gateway-operator may update aigateways and aigateways/finalizers") ||
 		!strings.Contains(ev, "has no ready pod") || p.Fix != "Start redhat-ods-applications/ai-gateway-operator again; it removes the finalizer." {
 		t.Fatalf("%+v", p)
 	}
-	q := stuckModuleProblem(c, newModuleOperatorFinder(c, nil), stuckModule{Module: "newmodule", Name: "default"})
+	q := stuckModuleProblem(c, components.NewModuleOperatorFinder(c, nil), stuckModule{Module: "newmodule", Name: "default"})
 	if !strings.Contains(strings.Join(q.Evidence, "\n"), "Operator: not identified") {
 		t.Fatalf("%+v", q)
 	}
@@ -474,12 +475,12 @@ func TestDatabaseServiceModuleInTheServicesGroup(t *testing.T) {
 	w := newLive36ModuleOperatorWorld()
 	serveDatabaseService(f, w, true)
 	w.serve(f)
-	finder := newModuleOperatorFinder(c, nil)
-	op, why, err := finder.find("databaseservice", "default-databaseservice")
+	finder := components.NewModuleOperatorFinder(c, nil)
+	op, why, err := finder.Find("databaseservice", "default-databaseservice")
 	if err != nil || op == nil || op.Name != "databaseservice-operator" || !strings.Contains(op.Via, "databaseservices/finalizers") {
 		t.Fatalf("databaseservice: %+v %q %v", op, why, err)
 	}
-	if op, why, err := finder.find("auth", "auth"); op != nil || err != nil || !strings.Contains(why, "does not own CRD auths.services.platform.opendatahub.io") {
+	if op, why, err := finder.Find("auth", "auth"); op != nil || err != nil || !strings.Contains(why, "does not own CRD auths.services.platform.opendatahub.io") {
 		t.Fatalf("auth: %+v %q %v", op, why, err)
 	}
 	// A rule for the same resource in the components group grants nothing.
@@ -504,7 +505,7 @@ func TestDatabaseServiceModuleInTheServicesGroup(t *testing.T) {
 	if p := stuckModuleProblem(c, finder, stuck[0]); p.TechnicalCmd != "oc get databaseservices.services.platform.opendatahub.io default-databaseservice -o yaml" {
 		t.Fatalf("cmd %q", p.TechnicalCmd)
 	}
-	_, warnings := cleanupStuckComponentCRs(c)
+	_, warnings := components.CleanupStuckCRs(c)
 	cleanupWarnings(t, warnings, "databaseservices/default-databaseservice has been deleting since "+old+", but its operator redhat-ods-applications/databaseservice-operator still exists")
 	assertWrites(t, f)
 }
@@ -523,7 +524,7 @@ func TestModuleOperatorRBACIsMatchedInTheKindsGroup(t *testing.T) {
 		}
 	}
 	w.serve(f)
-	if op, why, err := newModuleOperatorFinder(c, nil).find("databaseservice", "default-databaseservice"); op != nil || err != nil || !strings.Contains(why, "no ServiceAccount in redhat-ods-applications may update databaseservices") {
+	if op, why, err := components.NewModuleOperatorFinder(c, nil).Find("databaseservice", "default-databaseservice"); op != nil || err != nil || !strings.Contains(why, "no ServiceAccount in redhat-ods-applications may update databaseservices") {
 		t.Fatalf("%+v %q %v", op, why, err)
 	}
 }
@@ -558,15 +559,15 @@ func TestFinalizerOwnerCountsPods(t *testing.T) {
 				f.status("GET", "/api/v1/namespaces/"+liveAppsNS+"/pods", http.StatusForbidden, "Forbidden")
 			}
 			w.serve(f)
-			owner, err := newModuleOperatorFinder(c, nil).finalizerOwner("trustyai", "default-trustyai")
+			owner, err := components.NewModuleOperatorFinder(c, nil).FinalizerOwner("trustyai", "default-trustyai")
 			if tc.podsErr {
 				if err == nil || !strings.Contains(err.Error(), "list Pods in redhat-ods-applications") {
 					t.Fatalf("err = %v", err)
 				}
 				return
 			}
-			if err != nil || owner.gone() != tc.wantGone || !slices.Equal(owner.Pods, tc.wantPods) {
-				t.Fatalf("owner %+v gone=%v err %v", owner, owner.gone(), err)
+			if err != nil || owner.Gone() != tc.wantGone || !slices.Equal(owner.Pods, tc.wantPods) {
+				t.Fatalf("owner %+v gone=%v err %v", owner, owner.Gone(), err)
 			}
 		})
 	}

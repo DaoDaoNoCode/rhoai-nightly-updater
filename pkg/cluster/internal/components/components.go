@@ -1,9 +1,8 @@
-package cluster
+package components
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -11,11 +10,9 @@ import (
 	"net/url"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
@@ -23,129 +20,8 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// GetComponents returns DSC component statuses and deployment information.
-// A cluster without a DSC (or without the DSC CRD) is a normal state, reported
-// through DSCExists/DSCState rather than an error. Labels already in the cache
-// are always added; includeLabels also fetches missing ones from Quay (slower).
-func GetComponents(c *Client, includeLabels bool) (*types.ComponentsResponse, error) {
-	return getComponents(c, componentRegistryReads{labels: fetchImageLabelsForDeployments, dscSample: components.FetchDSCSample}, includeLabels)
-}
-
-// componentRegistryReads are the reads of GetComponents that the gitops
-// profile leaves out: the images' OCI labels (from Quay, and commit dates
-// from GitHub) and the GitHub DSC sample. nil fields are skipped.
-type componentRegistryReads struct {
-	labels    func(c *Client, deployments []types.DeploymentInfo, fetch bool)
-	dscSample components.DSCSampleFetcher
-}
-
-// GetComponentsGitOps is GetComponents in the gitops profile, which
-// contacts no host but the API server (docs/GITOPS.md, section 11): no
-// image labels (ImageLabelsOff), and the DSC defaults from the installed
-// CSV's alm-examples only. The operator build comes from the installed CSV
-// as in both profiles (OperatorImage, OperatorBuilt).
-func GetComponentsGitOps(c *Client) (*types.ComponentsResponse, error) {
-	return getComponents(c, componentRegistryReads{}, false)
-}
-
-func getComponents(c *Client, reads componentRegistryReads, includeLabels bool) (*types.ComponentsResponse, error) {
-	resp := &types.ComponentsResponse{Components: []types.ComponentInfo{}, ImageLabelsOff: reads.labels == nil}
-
-	// Every read below is independent of the DSC, so they run while it is read.
-	var wg sync.WaitGroup
-	run := func(fn func()) {
-		wg.Go(func() {
-			fn()
-		})
-	}
-	var (
-		appDeps, opDeps    []types.DeploymentInfo
-		appErr, opDepsErr  error
-		appPods, opPods    []types.PodInfo
-		snapshot           map[string]string
-		snapshotTime       string
-		installedOp        *components.InstalledOperator
-		installedOpErr     error
-		installedOpReadyCh = make(chan struct{})
-	)
-	// The applications namespace is the DSCInitialization's; unknown, its
-	// Deployments are left out and the response says why.
-	resp.OperatorNamespace = rhoai.SubNS
-	var appNS string
-	var appNSErr error
-	run(func() {
-		if appNS, appNSErr = rhoai.AppsNamespace(c); appNSErr != nil {
-			appErr = appNSErr
-			return
-		}
-		var inner sync.WaitGroup
-		inner.Go(func() { appDeps, appErr = getDeployments(c, appNS) })
-		inner.Go(func() { appPods, _ = getPodsInNamespace(c, appNS) })
-		inner.Wait()
-	})
-	run(func() { opDeps, opDepsErr = getDeployments(c, rhoai.SubNS) })
-	run(func() { opPods, _ = getPodsInNamespace(c, rhoai.SubNS) })
-	run(func() { resp.ConsoleURL = cachedConsoleURL(c) })
-	run(func() { snapshot, snapshotTime = GetDeploymentSnapshot(c) })
-	run(func() {
-		defer close(installedOpReadyCh)
-		installedOp, installedOpErr = components.ReadInstalledOperator(c)
-	})
-
-	read, err := rhoai.ReadFirstDSC(c)
-	if err != nil {
-		wg.Wait()
-		return nil, err
-	}
-	resp.DSCState = read.State
-	resp.DSCExists = read.Object != nil
-	if read.Object != nil {
-		resp.DSCAPIVersion, _ = read.Object["apiVersion"].(string)
-		resp.DSCVersionFallback = read.VersionFallback()
-		<-installedOpReadyCh
-		resp.DSCCompatibility = checkDSCCompatibilityFor(c, read, installedOp, installedOpErr, reads.dscSample)
-		addDSCComponents(resp, read.Object)
-	}
-	wg.Wait()
-
-	if installedOp != nil {
-		resp.OperatorVersion = installedOp.Version
-		resp.OperatorPhase = installedOp.Phase
-		resp.OperatorImage = installedOp.ContainerImage
-		resp.OperatorBuilt = installedOp.CreatedAt
-	}
-	if appErr == nil {
-		resp.Deployments = append(resp.Deployments, appDeps...)
-	}
-	if opDepsErr == nil {
-		resp.Deployments = append(resp.Deployments, opDeps...)
-	}
-	if resp.Deployments == nil {
-		resp.Deployments = []types.DeploymentInfo{}
-	}
-	switch {
-	case appNSErr == nil:
-		resp.ApplicationsNamespace = appNS
-		matchPodsToDeployments(c, appPods, appNS, resp.Deployments)
-	case !errors.Is(appNSErr, rhoai.ErrNoDSCInitialization): // none yet is not an error
-		resp.ApplicationsNamespaceError = appNSErr.Error()
-	}
-	matchPodsToDeployments(c, opPods, rhoai.SubNS, resp.Deployments)
-
-	// Compare against last snapshot to detect changes
-	if snapshot != nil {
-		resp.SnapshotTime = snapshotTime
-		resp.ChangedCount = CompareDeployments(resp.Deployments, snapshot)
-	}
-
-	if reads.labels != nil {
-		reads.labels(c, resp.Deployments, includeLabels)
-	}
-	return resp, nil
-}
-
-// addDSCComponents fills the DSC fields and the component list from the DSC.
-func addDSCComponents(resp *types.ComponentsResponse, dsc map[string]any) {
+// AddDSCComponents fills the DSC fields and the component list from the DSC.
+func AddDSCComponents(resp *types.ComponentsResponse, dsc map[string]any) {
 	meta, _ := dsc["metadata"].(map[string]any)
 	resp.DSCName, _ = meta["name"].(string)
 
@@ -315,15 +191,15 @@ func groupManagementState(comp map[string]any) string {
 	return ""
 }
 
-// fetchImageLabelsForDeployments populates GitCommit/GitURL/CommitDate/BuildDate/Version
+// FetchImageLabels populates GitCommit/GitURL/CommitDate/BuildDate/Version
 // on each deployment from its image's OCI config labels. Cached labels are
 // always used; fetch also reads missing ones from Quay with one pull-secret
 // read for the whole batch.
-func fetchImageLabelsForDeployments(c *Client, deployments []types.DeploymentInfo, fetch bool) {
+func FetchImageLabels(c *kube.Client, deployments []types.DeploymentInfo, fetch bool) {
 	var refs []string
 	lookup := make([]string, len(deployments))
 	for i, dep := range deployments {
-		if ref := labelImageRef(dep); ref != "" {
+		if ref := LabelImageRef(dep); ref != "" {
 			lookup[i] = ref
 			deployments[i].LabelImage = ref
 			refs = append(refs, ref)
@@ -365,7 +241,7 @@ func fetchImageLabelsForDeployments(c *Client, deployments []types.DeploymentInf
 	}
 }
 
-type deploymentContainer struct {
+type DeploymentContainer struct {
 	Name  string `json:"name"`
 	Image string `json:"image"`
 }
@@ -373,11 +249,11 @@ type deploymentContainer struct {
 // sidecarContainers are never the container a Deployment is about.
 var sidecarContainers = map[string]bool{"kube-rbac-proxy": true, "oauth-proxy": true, "kube-auth-proxy": true, "ca-bundle-watcher": true}
 
-// mainContainerImage is the image a Deployment is about: the container named
+// MainContainerImage is the image a Deployment is about: the container named
 // like the Deployment (rhods-dashboard lists kube-rbac-proxy and core-bff
 // before rhods-dashboard), else the first container that is not a known
 // sidecar, else the first container.
-func mainContainerImage(name string, containers []deploymentContainer) string {
+func MainContainerImage(name string, containers []DeploymentContainer) string {
 	for _, c := range containers {
 		if c.Name == name {
 			return c.Image
@@ -394,7 +270,7 @@ func mainContainerImage(name string, containers []deploymentContainer) string {
 	return ""
 }
 
-// labelImageRef is the digest-pinned reference whose labels describe dep's
+// LabelImageRef is the digest-pinned reference whose labels describe dep's
 // image: the Deployment's own image when it is pinned, else the image ID of
 // a ready pod that runs that very reference (a Deployment that names a
 // floating tag, such as the MLflow server's quay.io/opendatahub/mlflow:odh-stable,
@@ -402,8 +278,8 @@ func mainContainerImage(name string, containers []deploymentContainer) string {
 // another reference and is skipped, whatever its position in the list).
 // Empty for images that are not RHOAI or ODH builds (a UBI nginx has no
 // commit to show) and for a floating tag without a ready pod.
-func labelImageRef(dep types.DeploymentInfo) string {
-	if dep.Image == "" || !isBuildImage(dep.Image) {
+func LabelImageRef(dep types.DeploymentInfo) string {
+	if dep.Image == "" || !IsBuildImage(dep.Image) {
 		return ""
 	}
 	if _, _, ok := registry.RepoAndDigest(dep.Image); ok {
@@ -424,10 +300,10 @@ func labelImageRef(dep types.DeploymentInfo) string {
 	return ""
 }
 
-// isBuildImage reports whether an image is built from an RHOAI or ODH
+// IsBuildImage reports whether an image is built from an RHOAI or ODH
 // repository, so its labels carry a commit: registry.redhat.io/rhoai (and
 // its quay.io mirror) or quay.io/opendatahub.
-func isBuildImage(imageRef string) bool {
+func IsBuildImage(imageRef string) bool {
 	return registry.IsRHOAIImage(imageRef) || strings.HasPrefix(strings.TrimPrefix(imageRef, "docker-pullable://"), "quay.io/opendatahub/")
 }
 
@@ -446,22 +322,22 @@ func imageRepoOf(ref string) string {
 	return ref[slash+1:]
 }
 
-func matchPodsToDeployments(c *Client, pods []types.PodInfo, namespace string, deployments []types.DeploymentInfo) {
+func MatchPodsToDeployments(c *kube.Client, pods []types.PodInfo, namespace string, deployments []types.DeploymentInfo) {
 	for i := range deployments {
 		if deployments[i].Namespace != namespace {
 			continue
 		}
 		for _, pod := range pods {
-			if podMatchesDeployment(c, pod, deployments[i]) {
+			if PodMatchesDeployment(c, pod, deployments[i]) {
 				deployments[i].Pods = append(deployments[i].Pods, pod)
 			}
 		}
 	}
 }
 
-// ownerRef is the part of metadata.ownerReferences pod matching (and the
+// OwnerRef is the part of metadata.ownerReferences pod matching (and the
 // hard reset's owner checks) read.
-type ownerRef struct {
+type OwnerRef struct {
 	APIVersion string `json:"apiVersion"`
 	Kind       string `json:"kind"`
 	Name       string `json:"name"`
@@ -469,10 +345,10 @@ type ownerRef struct {
 	Controller *bool  `json:"controller"`
 }
 
-// controllerOf returns the controlling owner reference (controller: true),
+// ControllerOf returns the controlling owner reference (controller: true),
 // or the first reference when none is marked.
-func controllerOf(refs []ownerRef) ownerRef {
-	var first ownerRef
+func ControllerOf(refs []OwnerRef) OwnerRef {
+	var first OwnerRef
 	for i, ref := range refs {
 		if ref.Controller != nil && *ref.Controller {
 			return ref
@@ -484,7 +360,7 @@ func controllerOf(refs []ownerRef) ownerRef {
 	return first
 }
 
-// ownedByDeployment reports whether a pod belongs to the Deployment
+// OwnedByDeployment reports whether a pod belongs to the Deployment
 // (deploymentUID, in namespace), given its labels and its controlling owner.
 //
 // The fast path needs no API call: the Deployment controller names each
@@ -501,7 +377,7 @@ func controllerOf(refs []ownerRef) ownerRef {
 // (trustyai-operator-module-controller-manager selects only
 // control-plane=controller-manager, which many operators' pods carry).
 // When the ReplicaSet cannot be read, the pod is not matched (fail closed).
-func ownedByDeployment(c *Client, namespace, deployment, deploymentUID string, podLabels map[string]string, owner ownerRef) bool {
+func OwnedByDeployment(c *kube.Client, namespace, deployment, deploymentUID string, podLabels map[string]string, owner OwnerRef) bool {
 	if owner.Kind != "ReplicaSet" {
 		return false
 	}
@@ -519,15 +395,15 @@ func ownedByDeployment(c *Client, namespace, deployment, deploymentUID string, p
 	return controller == deploymentUID
 }
 
-// podMatchesDeployment reports whether a pod belongs to a Deployment: the
+// PodMatchesDeployment reports whether a pod belongs to a Deployment: the
 // selector matches and the pod's controlling ReplicaSet is the Deployment's.
-func podMatchesDeployment(c *Client, pod types.PodInfo, dep types.DeploymentInfo) bool {
+func PodMatchesDeployment(c *kube.Client, pod types.PodInfo, dep types.DeploymentInfo) bool {
 	for k, v := range dep.MatchLabels {
 		if pod.Labels[k] != v {
 			return false
 		}
 	}
-	return ownedByDeployment(c, dep.Namespace, dep.Name, dep.UID, pod.Labels, ownerRef{Kind: pod.OwnerKind, Name: pod.OwnerName, UID: pod.OwnerUID})
+	return OwnedByDeployment(c, dep.Namespace, dep.Name, dep.UID, pod.Labels, OwnerRef{Kind: pod.OwnerKind, Name: pod.OwnerName, UID: pod.OwnerUID})
 }
 
 // replicaSetOwnerCache maps a ReplicaSet (cluster and UID) to the UID of its
@@ -547,7 +423,7 @@ var ReplicaSetOwnerTTL = time.Minute
 // metadata.name field selector, which every resource type supports
 // (Kubernetes docs, Field Selectors), and checks the UID, so a ReplicaSet
 // recreated under the same name is not mistaken for the pod's.
-func replicaSetController(c *Client, namespace, name, uid string) (string, error) {
+func replicaSetController(c *kube.Client, namespace, name, uid string) (string, error) {
 	key := c.BaseURL() + "/" + uid
 	if owner, ok := replicaSetOwnerCache.Get(key); ok {
 		return owner, nil
@@ -561,7 +437,7 @@ func replicaSetController(c *Client, namespace, name, uid string) (string, error
 		Items []struct {
 			Metadata struct {
 				UID             string     `json:"uid"`
-				OwnerReferences []ownerRef `json:"ownerReferences"`
+				OwnerReferences []OwnerRef `json:"ownerReferences"`
 			} `json:"metadata"`
 		} `json:"items"`
 	}
@@ -589,7 +465,7 @@ func enrichComponentFix(comp *types.ComponentInfo, reason string) {
 	if comp.Status == "Available" || comp.Status == "Removed" {
 		return
 	}
-	comp.Cause = componentCause(rhoai.DSCCondition{Reason: reason, Message: comp.Message})
+	comp.Cause = CauseOf(rhoai.DSCCondition{Reason: reason, Message: comp.Message})
 
 	// Operator says "deprecated, please set it to Removed" — offer the button.
 	// (A MaaS gateway "fix" used to be offered here for a "missing required
@@ -603,22 +479,22 @@ func enrichComponentFix(comp *types.ComponentInfo, reason string) {
 	}
 }
 
-// componentCause is a short cause for a not-ready component's condition,
+// CauseOf is a short cause for a not-ready component's condition,
 // classified from its message like the DataScienceCluster diagnostics do
 // (without their cluster lookups); "" when it is not classified.
-func componentCause(cond rhoai.DSCCondition) string {
+func CauseOf(cond rhoai.DSCCondition) string {
 	lower := strings.ToLower(cond.Message)
 	switch {
-	case isUpgradeGateCondition(cond):
+	case IsUpgradeGateCondition(cond):
 		return "An upgrade gate holds provisioning"
-	case len(parseMissingDependencies(cond.Message)) > 0:
-		deps := parseMissingDependencies(cond.Message)
+	case len(ParseMissingDependencies(cond.Message)) > 0:
+		deps := ParseMissingDependencies(cond.Message)
 		return fmt.Sprintf("Prerequisite %s not installed: %s", kube.Verb(len(deps), "operator", "operators"), strings.Join(deps, ", "))
 	case strings.Contains(lower, "observedgeneration < generation") || strings.Contains(lower, "status is stale"):
 		return "Its module operator has not reconciled the current spec yet"
-	case len(parseApplyFailures(cond.Message)) > 0:
-		for _, f := range parseApplyFailures(cond.Message) {
-			if f.leftover() {
+	case len(ParseApplyFailures(cond.Message)) > 0:
+		for _, f := range ParseApplyFailures(cond.Message) {
+			if f.Leftover() {
 				return "An object is left over from an earlier release"
 			}
 		}
@@ -644,7 +520,7 @@ type conditionInfo struct {
 // overwrite its fields. A create that loses the race gets 409 AlreadyExists,
 // and the operator's validating webhook rejects a second DSC under another
 // name ("Only one instance of DataScienceCluster object is allowed").
-func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
+func CreateDefaultDSC(c *kube.Client) (*types.OperationResponse, error) {
 	logs := []string{}
 
 	// Step 1: Check if a DSC already exists
@@ -686,7 +562,7 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 
 	// Step 2: Use the sample shipped with the installed operator version.
 	logs = append(logs, "Creating default DataScienceCluster...")
-	defaults, fetchErr := components.FetchDefaultDSCSpec(c, "")
+	defaults, fetchErr := FetchDefaultDSCSpec(c, "")
 	if fetchErr != nil {
 		return &types.OperationResponse{Success: false, Message: "Failed to fetch version-matched DSC defaults: " + fetchErr.Error(), Logs: logs, ErrorCode: kube.NonEmpty(kube.ErrorCodeFromK8sErr(fetchErr), "prerequisites")}, nil
 	}
@@ -747,7 +623,7 @@ type deploymentList struct {
 			} `json:"selector"`
 			Template struct {
 				Spec struct {
-					Containers []deploymentContainer `json:"containers"`
+					Containers []DeploymentContainer `json:"containers"`
 				} `json:"spec"`
 			} `json:"template"`
 		} `json:"spec"`
@@ -766,7 +642,7 @@ type deploymentList struct {
 	} `json:"items"`
 }
 
-func getDeployments(c *Client, namespace string) ([]types.DeploymentInfo, error) {
+func Deployments(c *kube.Client, namespace string) ([]types.DeploymentInfo, error) {
 	path := rhoai.NamespacedPath("apps/v1", "deployments", namespace, "")
 	var list deploymentList
 	if err := c.GetInto(path, &list); err != nil {
@@ -794,7 +670,7 @@ func getDeployments(c *Client, namespace string) ([]types.DeploymentInfo, error)
 			}
 		}
 
-		image := mainContainerImage(item.Metadata.Name, item.Spec.Template.Spec.Containers)
+		image := MainContainerImage(item.Metadata.Name, item.Spec.Template.Spec.Containers)
 
 		deps = append(deps, types.DeploymentInfo{
 			Name:                item.Metadata.Name,
@@ -813,4 +689,8 @@ func getDeployments(c *Client, namespace string) ([]types.DeploymentInfo, error)
 	}
 
 	return deps, nil
+}
+
+func NothingToDo(msg string, logs []string) *types.OperationResponse {
+	return &types.OperationResponse{Success: false, Message: "Nothing to do: " + msg, Logs: logs, ErrorCode: "nothing_to_do"}
 }

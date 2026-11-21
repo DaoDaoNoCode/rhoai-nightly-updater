@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 )
 
 // TestWriteDocsFixtures writes the Diagnostics answers that the docs mock
@@ -105,7 +107,7 @@ func TestWriteDocsFixtures(t *testing.T) {
 	// the test, which no real cluster has).
 	ac, _ := applyFailuresWorld(t)
 	apply := checkApplyFailures(ac)
-	apply.check.Name = applyFailuresCheckName
+	apply.check.Name = components.ApplyFailuresCheckName
 	kept := apply.problems[:0]
 	for _, p := range apply.problems {
 		if !strings.Contains(p.ID, "new-operator") {
@@ -129,7 +131,7 @@ func TestWriteDocsFixtures(t *testing.T) {
 		"status":{"phase":"Running","containerStatuses":[{"name":"manager","restartCount":1061,"state":{"waiting":{"reason":"CrashLoopBackOff"}},"lastState":{"terminated":{"reason":"Error","exitCode":1,"message":"`+msgInformer+`"}}}]}}]}`)
 	lw.f.json("GET", "/api/v1/namespaces", 200, `{"items":[]}`)
 	leftovers := checkLeftovers(lw.c)
-	leftovers.check.Name = leftoversCheckName
+	leftovers.check.Name = components.LeftoversCheckName
 	pods := checkRHOAIPods(lw.c)
 	pods.check.Name = "RHOAI pods"
 	write("leftovers", leftovers, pods)

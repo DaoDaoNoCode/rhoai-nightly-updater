@@ -44,7 +44,7 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 	// Connectivity Link and its Kuadrant CR.
 	rhcl, err := readOperator(c, rhclOperator)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read the installed operators, so this tool cannot tell whether Connectivity Link is installed; nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "csv read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read the installed operators, so this tool cannot tell whether Connectivity Link is installed; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "csv read failed")
 	}
 	kVersion, err := kuadrantServedVersion(c)
 	if err != nil {
@@ -55,7 +55,7 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 	kRuns := kVersion != ""
 	if kRuns && !rhcl.installed() {
 		if kRuns, err = controllerDeployed(c, kuadrantController); err != nil {
-			return m.fail("check", fmt.Sprintf("Cannot tell whether Kuadrant's operator runs; nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "controller read failed")
+			return m.fail("check", fmt.Sprintf("Cannot tell whether Kuadrant's operator runs; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "controller read failed")
 		}
 	}
 	var rhclPlan *operatorInstallPlan
@@ -82,7 +82,7 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 	}
 	_, infraFound, err := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+infra)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read namespace %s; nothing was changed: %v.%s", infra, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read namespace %s; nothing was changed: %v.%s", infra, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace read failed")
 	}
 	if _, ours := maasInfraNamespacePath(infra); !infraFound && !ours {
 		return m.fail("check", fmt.Sprintf("Namespace %s, where maas-api and its database go, does not exist, and this tool creates only the AI gateway's own infrastructure namespaces. A cluster-admin creates it. Nothing was changed.", infra), "prerequisites", "no infra namespace")
@@ -180,7 +180,7 @@ func (m *maasRun) setupDryRuns(k maasSetupChecks) (*types.OperationResponse, err
 	rhclPlan, kq, kVersion, kuadrantNS, infra, infraFound := k.rhclPlan, k.kq, k.kVersion, k.kuadrantNS, k.infra, k.infraFound
 	dbPlan, gwPlan, foreignGW, needDSC := k.dbPlan, k.gwPlan, k.foreignGW, k.needDSC
 	dry := func(what string, err error) (*types.OperationResponse, error) {
-		return m.fail("check", fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", what, err, templateHint(err)), maasWriteCode(err), "dry run failed")
+		return m.fail("check", fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", what, err, kube.TemplateHint(err)), maasWriteCode(err), "dry run failed")
 	}
 	if rhclPlan != nil {
 		if _, err := createOperatorObjects(c, rhclPlan, true); err != nil {
@@ -193,7 +193,7 @@ func (m *maasRun) setupDryRuns(k maasSetupChecks) (*types.OperationResponse, err
 		// namespace, and the API server refuses the dry run there (seen live).
 		_, kNSFound, err := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+kuadrantNS)
 		if err != nil {
-			return m.fail("check", fmt.Sprintf("Cannot read namespace %s; nothing was changed: %v.%s", kuadrantNS, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace read failed")
+			return m.fail("check", fmt.Sprintf("Cannot read namespace %s; nothing was changed: %v.%s", kuadrantNS, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace read failed")
 		}
 		if kNSFound {
 			if err := createKuadrant(c, kVersion, kuadrantNS, true); err != nil {
@@ -207,7 +207,7 @@ func (m *maasRun) setupDryRuns(k maasSetupChecks) (*types.OperationResponse, err
 		}
 	}
 	if what, err := dbPlan.dryRun(c); err != nil {
-		return m.fail("check", dbPlan.redact(fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", what, err, templateHint(err))), maasWriteCode(err), "dry run failed")
+		return m.fail("check", dbPlan.redact(fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", what, err, kube.TemplateHint(err))), maasWriteCode(err), "dry run failed")
 	}
 	if !foreignGW {
 		if msg, code := m.applyGateway(gwPlan, true); msg != "" {
@@ -470,7 +470,7 @@ func (m *maasRun) applyAuthorinoTLS(rec *maasRecord, ns, step string) (*types.Op
 	}
 	switch {
 	case err != nil:
-		return m.fail(step, fmt.Sprintf("Failed to configure Authorino TLS in %s: %v. Run it again to retry; the MaaS tab shows the docs' commands too.%s", ns, err, templateHint(err)), maasWriteCode(err), "authorino tls failed")
+		return m.fail(step, fmt.Sprintf("Failed to configure Authorino TLS in %s: %v. Run it again to retry; the MaaS tab shows the docs' commands too.%s", ns, err, kube.TemplateHint(err)), maasWriteCode(err), "authorino tls failed")
 	case !done:
 		return m.fail(step, fmt.Sprintf("Authorino in %s is not there after %s (%v). Run it again once Kuadrant is Ready.", ns, clockText(MaaSKuadrantTimeout), lastErr), "not_ready", "authorino missing")
 	}

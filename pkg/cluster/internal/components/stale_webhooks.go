@@ -1,4 +1,4 @@
-package cluster
+package components
 
 import (
 	"encoding/json"
@@ -23,7 +23,7 @@ import (
 // A webhook configuration is stale only when ALL of these hold:
 //  1. Not one of its webhooks can be served: every webhook calls a Service
 //     (clientConfig.service), and every such Service is NotFound, or exists
-//     but has had no ready endpoint for longer than staleServiceGrace (a
+//     but has had no ready endpoint for longer than StaleServiceGrace (a
 //     restarting pod is not staleness). Deleting a configuration removes all
 //     of its webhooks, so one webhook that may still serve keeps it: a
 //     serving Service, a Service that cannot be checked, and any webhook
@@ -51,7 +51,7 @@ import (
 //     nothing is evaluated (and so nothing is reported or deleted): Services
 //     and configs come and go as part of the normal upgrade. If the CSV list
 //     cannot be read, nothing is deletable.
-//  4. The configuration itself is older than staleServiceGrace, so a
+//  4. The configuration itself is older than StaleServiceGrace, so a
 //     producer that is creating it together with its Service is not raced.
 //
 // Name matching (opendatahub/rhods) only selects which configurations are
@@ -80,65 +80,65 @@ import (
 // namespace deletion (operator-lifecycle-manager olm/operator.go, quoted in
 // notes §3.3, D3).
 
-// staleServiceGrace is how long a Service must have had no ready endpoint,
+// StaleServiceGrace is how long a Service must have had no ready endpoint,
 // and how old a webhook configuration must be, before it counts as stale.
-var staleServiceGrace = 5 * time.Minute
+var StaleServiceGrace = 5 * time.Minute
 
 // webhookNow is the clock for grace periods (tests replace it).
 var webhookNow = time.Now
 
-type serviceState int
+type ServiceState int
 
 const (
-	// serviceServing: a ready endpoint exists, or the Service cannot be
+	// ServiceServing: a ready endpoint exists, or the Service cannot be
 	// proven down (no selector, ExternalName, endpoints changed within the
 	// grace period).
-	serviceServing serviceState = iota
-	// serviceMissing: the Service is NotFound.
-	serviceMissing
-	// serviceNoEndpoints: the Service exists but has had no ready endpoint
+	ServiceServing ServiceState = iota
+	// ServiceMissing: the Service is NotFound.
+	ServiceMissing
+	// ServiceNoEndpoints: the Service exists but has had no ready endpoint
 	// for at least the grace period.
-	serviceNoEndpoints
-	// serviceUnknown: a lookup failed; callers must not treat it as down.
-	serviceUnknown
+	ServiceNoEndpoints
+	// ServiceUnknown: a lookup failed; callers must not treat it as down.
+	ServiceUnknown
 )
 
 type serviceHealth struct {
-	state serviceState
-	// exists is true when the Service was read; with serviceUnknown it
+	State ServiceState
+	// Exists is true when the Service was read; with ServiceUnknown it
 	// means only its endpoints could not be checked.
-	exists bool
-	err    error
+	Exists bool
+	Err    error
 }
 
 func (h serviceHealth) down() bool {
-	return h.state == serviceMissing || h.state == serviceNoEndpoints
+	return h.State == ServiceMissing || h.State == ServiceNoEndpoints
 }
 
-// describe renders a down Service for evidence and messages.
-func (h serviceHealth) describe(ref string) string {
-	switch h.state {
-	case serviceMissing:
+// Describe renders a down Service for evidence and messages.
+func (h serviceHealth) Describe(ref string) string {
+	switch h.State {
+	case ServiceMissing:
 		return ref + " not found"
-	case serviceNoEndpoints:
+	case ServiceNoEndpoints:
 		return ref + " has no ready endpoints"
-	case serviceUnknown:
-		return fmt.Sprintf("%s could not be checked (%v)", ref, h.err)
+	case ServiceUnknown:
+		return fmt.Sprintf("%s could not be checked (%v)", ref, h.Err)
 	}
 	return ref + " is serving"
 }
 
-// checkServiceHealth reads one Service and, when it exists, its
+// CheckServiceHealth reads one Service and, when it exists, its
 // EndpointSlices. grace 0 counts a Service without ready endpoints as down
 // at once (the namespace guard).
-func checkServiceHealth(c *Client, ref string, grace time.Duration) serviceHealth {
+func CheckServiceHealth(c *kube.Client, ref string, grace time.Duration) serviceHealth {
 	ns, name, _ := strings.Cut(ref, "/")
 	body, found, err := c.GetOptional(rhoai.NamespacedPath("v1", "services", ns, name))
 	if err != nil {
-		return serviceHealth{state: serviceUnknown, err: err}
+		return serviceHealth{State: ServiceUnknown, Err: err}
 	}
 	if !found {
-		return serviceHealth{state: serviceMissing}
+		return serviceHealth{State: ServiceMissing}
 	}
 	var svc struct {
 		Metadata struct {
@@ -149,16 +149,16 @@ func checkServiceHealth(c *Client, ref string, grace time.Duration) serviceHealt
 		} `json:"spec"`
 	}
 	if err := json.Unmarshal(body, &svc); err != nil {
-		return serviceHealth{state: serviceUnknown, err: fmt.Errorf("parse Service %s: %w", ref, err)}
+		return serviceHealth{State: ServiceUnknown, Err: fmt.Errorf("parse Service %s: %w", ref, err)}
 	}
 	// An ExternalName Service is resolved through DNS; the tool cannot
 	// prove it does not serve.
 	if svc.Spec.Type == "ExternalName" {
-		return serviceHealth{state: serviceServing, exists: true}
+		return serviceHealth{State: ServiceServing, Exists: true}
 	}
 	body, _, err = c.Get(rhoai.NamespacedPath("discovery.k8s.io/v1", "endpointslices", ns, "") + "?labelSelector=" + url.QueryEscape("kubernetes.io/service-name="+name))
 	if err != nil {
-		return serviceHealth{state: serviceUnknown, exists: true, err: fmt.Errorf("list endpoints of Service %s: %w", ref, err)}
+		return serviceHealth{State: ServiceUnknown, Exists: true, Err: fmt.Errorf("list endpoints of Service %s: %w", ref, err)}
 	}
 	var slices struct {
 		Items []struct {
@@ -178,17 +178,17 @@ func checkServiceHealth(c *Client, ref string, grace time.Duration) serviceHealt
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(body, &slices); err != nil {
-		return serviceHealth{state: serviceUnknown, exists: true, err: fmt.Errorf("parse endpoints of Service %s: %w", ref, err)}
+		return serviceHealth{State: ServiceUnknown, Exists: true, Err: fmt.Errorf("parse endpoints of Service %s: %w", ref, err)}
 	}
 	// The last time the endpoints changed: the newest of the Service and
 	// slice creation times, the EndpointSlice controller's
 	// endpoints.kubernetes.io/last-change-trigger-time annotation and the
 	// slices' managedFields update times (live on OCP 4.22).
-	last, _ := parseK8sTime(svc.Metadata.CreationTimestamp)
+	last, _ := ParseK8sTime(svc.Metadata.CreationTimestamp)
 	for _, s := range slices.Items {
 		for _, ep := range s.Endpoints {
 			if ep.Conditions.Ready == nil || *ep.Conditions.Ready {
-				return serviceHealth{state: serviceServing, exists: true}
+				return serviceHealth{State: ServiceServing, Exists: true}
 			}
 		}
 		times := []string{s.Metadata.CreationTimestamp, s.Metadata.Annotations["endpoints.kubernetes.io/last-change-trigger-time"]}
@@ -196,26 +196,26 @@ func checkServiceHealth(c *Client, ref string, grace time.Duration) serviceHealt
 			times = append(times, mf.Time)
 		}
 		for _, ts := range times {
-			if t, ok := parseK8sTime(ts); ok && t.After(last) {
+			if t, ok := ParseK8sTime(ts); ok && t.After(last) {
 				last = t
 			}
 		}
 	}
 	if grace > 0 && (last.IsZero() || webhookNow().Sub(last) < grace) {
 		// Too recent (or of unknown age) to tell a restart from an outage.
-		return serviceHealth{state: serviceServing, exists: true}
+		return serviceHealth{State: ServiceServing, Exists: true}
 	}
-	return serviceHealth{state: serviceNoEndpoints, exists: true}
+	return serviceHealth{State: ServiceNoEndpoints, Exists: true}
 }
 
 // serviceHealthCache checks each Service once per evaluation, concurrently.
 type serviceHealthCache struct {
-	c       *Client
+	c       *kube.Client
 	grace   time.Duration
 	results map[string]serviceHealth
 }
 
-func newServiceHealthCache(c *Client, grace time.Duration) *serviceHealthCache {
+func NewServiceHealthCache(c *kube.Client, grace time.Duration) *serviceHealthCache {
 	return &serviceHealthCache{c: c, grace: grace, results: map[string]serviceHealth{}}
 }
 
@@ -228,7 +228,7 @@ func (s *serviceHealthCache) prefetch(refs []string) {
 		}
 	}
 	out := make([]serviceHealth, len(todo))
-	parallelFor(len(todo), 8, func(i int) { out[i] = checkServiceHealth(s.c, todo[i], s.grace) })
+	kube.ParallelFor(len(todo), 8, func(i int) { out[i] = CheckServiceHealth(s.c, todo[i], s.grace) })
 	for i, ref := range todo {
 		s.results[ref] = out[i]
 	}
@@ -238,14 +238,14 @@ func (s *serviceHealthCache) lookup(ref string) serviceHealth {
 	if h, ok := s.results[ref]; ok {
 		return h
 	}
-	h := checkServiceHealth(s.c, ref, s.grace)
+	h := CheckServiceHealth(s.c, ref, s.grace)
 	s.results[ref] = h
 	return h
 }
 
 // --- Admission webhook configurations ---
 
-type admissionConfig struct {
+type AdmissionConfig struct {
 	Kind     string `json:"-"`
 	Resource string `json:"-"`
 	Metadata struct {
@@ -274,17 +274,17 @@ type admissionConfig struct {
 	} `json:"webhooks"`
 }
 
-func (a admissionConfig) ref() string { return a.Kind + " " + a.Metadata.Name }
+func (a AdmissionConfig) Ref() string { return a.Kind + " " + a.Metadata.Name }
 
 // isRHOAI selects the configurations to evaluate: OLM-installed for the
 // RHOAI CSV, applied by the platform for a module, owned by an RHOAI object,
 // or carrying an RHOAI name without any OLM owner (older installs).
-func (a admissionConfig) isRHOAI() bool {
+func (a AdmissionConfig) isRHOAI() bool {
 	labels := map[string]any{}
 	for k, v := range a.Metadata.Labels {
 		labels[k] = v
 	}
-	if isRHOAIWebhook(a.Metadata.Name, labels) || a.Metadata.Labels["platform.opendatahub.io/part-of"] != "" {
+	if IsRHOAIWebhook(a.Metadata.Name, labels) || a.Metadata.Labels["platform.opendatahub.io/part-of"] != "" {
 		return true
 	}
 	for _, o := range a.Metadata.OwnerReferences {
@@ -298,7 +298,7 @@ func (a admissionConfig) isRHOAI() bool {
 // unverifiableHooks names the webhooks that do not call an in-cluster
 // Service (clientConfig.url, or an incomplete service reference). The tool
 // cannot prove those are down, so their configuration is never stale.
-func (a admissionConfig) unverifiableHooks() []string {
+func (a AdmissionConfig) unverifiableHooks() []string {
 	var out []string
 	for _, wh := range a.Webhooks {
 		if svc := wh.ClientConfig.Service; svc == nil || svc.Name == "" || svc.Namespace == "" {
@@ -308,7 +308,7 @@ func (a admissionConfig) unverifiableHooks() []string {
 	return out
 }
 
-func (a admissionConfig) services() []string {
+func (a AdmissionConfig) services() []string {
 	var out []string
 	for _, wh := range a.Webhooks {
 		if svc := wh.ClientConfig.Service; svc != nil && svc.Name != "" && svc.Namespace != "" {
@@ -322,9 +322,9 @@ func (a admissionConfig) services() []string {
 	return out
 }
 
-// blocking reports whether any webhook rejects requests when it cannot be
+// Blocking reports whether any webhook rejects requests when it cannot be
 // called.
-func (a admissionConfig) blocking() bool {
+func (a AdmissionConfig) Blocking() bool {
 	for _, wh := range a.Webhooks {
 		// admissionregistration/v1 defaults failurePolicy to Fail.
 		if wh.FailurePolicy == nil || *wh.FailurePolicy == "Fail" {
@@ -334,11 +334,11 @@ func (a admissionConfig) blocking() bool {
 	return false
 }
 
-// isRHOAIWebhook reports whether a webhook configuration was installed by OLM
+// IsRHOAIWebhook reports whether a webhook configuration was installed by OLM
 // for the RHOAI operator CSV, or carries an RHOAI name without any OLM owner
 // label (a leftover from older installs). It only selects candidates; the
 // staleness rules above decide.
-func isRHOAIWebhook(name string, labels map[string]any) bool {
+func IsRHOAIWebhook(name string, labels map[string]any) bool {
 	if rhoaiOLMOwner(labels) != "" {
 		return true
 	}
@@ -361,20 +361,20 @@ func rhoaiOLMOwner(labels map[string]any) string {
 	return owner
 }
 
-// webhookVerdict describes a configuration none of whose webhooks can be
+// WebhookVerdict describes a configuration none of whose webhooks can be
 // served.
-type webhookVerdict struct {
-	Config    admissionConfig
+type WebhookVerdict struct {
+	Config    AdmissionConfig
 	Down      []string // every referenced Service, each described as down
 	Deletable bool
 	Reason    string // why it is (not) safe to delete
 }
 
-func (v webhookVerdict) downText() string { return strings.Join(v.Down, ", ") }
+func (v WebhookVerdict) DownText() string { return strings.Join(v.Down, ", ") }
 
-// webhookScan is one evaluation of the RHOAI webhook configurations.
-type webhookScan struct {
-	Verdicts []webhookVerdict
+// WebhookScan is one evaluation of the RHOAI webhook configurations.
+type WebhookScan struct {
+	Verdicts []WebhookVerdict
 	// Upgrading names the CSV install in flight; nothing was evaluated.
 	Upgrading string
 	Errors    []string
@@ -382,7 +382,7 @@ type webhookScan struct {
 
 // webhookEnv caches the lookups shared by all configurations of one scan.
 type webhookEnv struct {
-	c            *Client
+	c            *kube.Client
 	health       *serviceHealthCache
 	csvs         map[string]csvPresence
 	modules      map[string]moduleState
@@ -404,8 +404,8 @@ type moduleState struct {
 
 // rhoaiInstallInFlight reads the RHOAI CSVs; it returns the CSV and phase of
 // an install or upgrade in flight, or "".
-func rhoaiInstallInFlight(c *Client) (string, error) {
-	csvs, err := listOperatorCSVs(c)
+func rhoaiInstallInFlight(c *kube.Client) (string, error) {
+	csvs, err := ListOperatorCSVs(c)
 	if kube.IsK8sNotFound(err) {
 		return "", nil
 	}
@@ -465,12 +465,12 @@ func (e *webhookEnv) moduleCRExists(module string) moduleState {
 // its platform.opendatahub.io/part-of label, or the kind of its owning
 // module CR (either module API group, component_cleanup.go). "" when there
 // is none.
-func configModule(cfg admissionConfig) string {
+func configModule(cfg AdmissionConfig) string {
 	if m := cfg.Metadata.Labels["platform.opendatahub.io/part-of"]; m != "" && m != "platform" {
 		return m
 	}
 	for _, o := range cfg.Metadata.OwnerReferences {
-		if isModuleAPIVersion(o.APIVersion) {
+		if IsModuleAPIVersion(o.APIVersion) {
 			return strings.ToLower(o.Kind)
 		}
 	}
@@ -479,7 +479,7 @@ func configModule(cfg admissionConfig) string {
 
 // platformConfig reports whether the platform itself (rhods-operator's
 // Platform controller) applies the configuration.
-func platformConfig(cfg admissionConfig) bool {
+func platformConfig(cfg AdmissionConfig) bool {
 	if cfg.Metadata.Labels["platform.opendatahub.io/part-of"] == "platform" {
 		return true
 	}
@@ -493,7 +493,7 @@ func platformConfig(cfg admissionConfig) bool {
 
 // evaluate returns nil when the configuration can still be served, or when
 // any of its webhooks cannot be proven down (URL-backed hooks).
-func (e *webhookEnv) evaluate(cfg admissionConfig) *webhookVerdict {
+func (e *webhookEnv) evaluate(cfg AdmissionConfig) *WebhookVerdict {
 	svcs := cfg.services()
 	if len(svcs) == 0 || len(cfg.unverifiableHooks()) > 0 {
 		return nil
@@ -504,16 +504,16 @@ func (e *webhookEnv) evaluate(cfg admissionConfig) *webhookVerdict {
 		if !h.down() {
 			return nil
 		}
-		down = append(down, h.describe(s))
+		down = append(down, h.Describe(s))
 	}
-	v := &webhookVerdict{Config: cfg, Down: down}
+	v := &WebhookVerdict{Config: cfg, Down: down}
 	labels := cfg.Metadata.Labels
-	created, _ := parseK8sTime(cfg.Metadata.CreationTimestamp)
+	created, _ := ParseK8sTime(cfg.Metadata.CreationTimestamp)
 	switch {
 	case e.installCheckErr != nil:
 		v.Reason = fmt.Sprintf("the tool could not check whether an operator install is in progress: %v", e.installCheckErr)
-	case !created.IsZero() && webhookNow().Sub(created) < staleServiceGrace:
-		v.Reason = "it was created less than " + formatDuration(staleServiceGrace) + " ago, so its owner may still be setting it up"
+	case !created.IsZero() && webhookNow().Sub(created) < StaleServiceGrace:
+		v.Reason = "it was created less than " + FormatDuration(StaleServiceGrace) + " ago, so its owner may still be setting it up"
 	case labels["olm.owner"] != "":
 		owner := labels["olm.owner"]
 		if rhoaiOLMOwner(map[string]any{"olm.owner": owner, "olm.owner.namespace": labels["olm.owner.namespace"]}) == "" {
@@ -557,11 +557,11 @@ var webhookKinds = []struct{ kind, resource string }{
 	{"MutatingWebhookConfiguration", "mutatingwebhookconfigurations"},
 }
 
-func listAdmissionConfigs(c *Client) ([]admissionConfig, []string) {
-	var out []admissionConfig
+func ListAdmissionConfigs(c *kube.Client) ([]AdmissionConfig, []string) {
+	var out []AdmissionConfig
 	var errs []string
 	for _, wk := range webhookKinds {
-		var items []admissionConfig
+		var items []AdmissionConfig
 		if err := c.ListInto(rhoai.ClusterPath("admissionregistration.k8s.io/v1", wk.resource, ""), &items); err != nil {
 			if kube.IsDecodeError(err) {
 				errs = append(errs, fmt.Sprintf("parse %s: %v", wk.resource, err))
@@ -580,23 +580,23 @@ func listAdmissionConfigs(c *Client) ([]admissionConfig, []string) {
 	return out, errs
 }
 
-// scanStaleWebhooks evaluates every RHOAI webhook configuration with the
+// ScanStaleWebhooks evaluates every RHOAI webhook configuration with the
 // rules at the top of this file.
-func scanStaleWebhooks(c *Client) webhookScan {
-	var scan webhookScan
+func ScanStaleWebhooks(c *kube.Client) WebhookScan {
+	var scan WebhookScan
 	upgrading, installErr := rhoaiInstallInFlight(c)
 	if upgrading != "" {
 		scan.Upgrading = upgrading
 		return scan
 	}
-	configs, errs := listAdmissionConfigs(c)
+	configs, errs := ListAdmissionConfigs(c)
 	scan.Errors = errs
 	env := &webhookEnv{
 		c:               c,
-		health:          newServiceHealthCache(c, staleServiceGrace),
+		health:          NewServiceHealthCache(c, StaleServiceGrace),
 		csvs:            map[string]csvPresence{},
 		modules:         map[string]moduleState{},
-		componentAPI:    cachedComponentAPI(c),
+		componentAPI:    CachedComponentAPI(c),
 		installCheckErr: installErr,
 	}
 	var refs []string
@@ -608,8 +608,8 @@ func scanStaleWebhooks(c *Client) webhookScan {
 	// configuration (it is never deletable), and is reported so the check
 	// says it could not verify it instead of passing.
 	for _, ref := range refs {
-		if h := env.health.lookup(ref); h.state == serviceUnknown && !slices.Contains(scan.Errors, h.describe(ref)) {
-			scan.Errors = append(scan.Errors, h.describe(ref))
+		if h := env.health.lookup(ref); h.State == ServiceUnknown && !slices.Contains(scan.Errors, h.Describe(ref)) {
+			scan.Errors = append(scan.Errors, h.Describe(ref))
 		}
 	}
 	for _, cfg := range configs {
@@ -620,20 +620,20 @@ func scanStaleWebhooks(c *Client) webhookScan {
 	return scan
 }
 
-// webhookDeletion is the outcome of deleteStaleWebhookConfigs.
+// webhookDeletion is the outcome of DeleteStaleWebhookConfigs.
 type webhookDeletion struct {
 	Deleted, Changed, Failed []string // config refs
 	Logs                     []string
 }
 
-// deleteStaleWebhookConfigs deletes the deletable verdicts, each only if it
+// DeleteStaleWebhookConfigs deletes the deletable verdicts, each only if it
 // still has the uid and resourceVersion that were evaluated, and logs why
 // every other one was kept.
-func deleteStaleWebhookConfigs(c *Client, verdicts []webhookVerdict) webhookDeletion {
+func DeleteStaleWebhookConfigs(c *kube.Client, verdicts []WebhookVerdict) webhookDeletion {
 	var d webhookDeletion
 	for _, v := range verdicts {
 		if !v.Deletable {
-			d.Logs = append(d.Logs, fmt.Sprintf("Kept %s: %s", v.Config.ref(), v.Reason))
+			d.Logs = append(d.Logs, fmt.Sprintf("Kept %s: %s", v.Config.Ref(), v.Reason))
 			continue
 		}
 		resource := "validatingwebhookconfigurations"
@@ -641,19 +641,19 @@ func deleteStaleWebhookConfigs(c *Client, verdicts []webhookVerdict) webhookDele
 			resource = "mutatingwebhookconfigurations"
 		}
 		path := rhoai.ClusterPath("admissionregistration.k8s.io/v1", resource, v.Config.Metadata.Name)
-		err := deleteExact(c, path, v.Config.Metadata.UID, v.Config.Metadata.ResourceVersion)
+		err := kube.DeleteExact(c, path, v.Config.Metadata.UID, v.Config.Metadata.ResourceVersion)
 		switch {
 		case err == nil:
-			d.Deleted = append(d.Deleted, v.Config.ref())
-			d.Logs = append(d.Logs, fmt.Sprintf("Deleted %s (Service %s; %s)", v.Config.ref(), v.downText(), v.Reason))
+			d.Deleted = append(d.Deleted, v.Config.Ref())
+			d.Logs = append(d.Logs, fmt.Sprintf("Deleted %s (Service %s; %s)", v.Config.Ref(), v.DownText(), v.Reason))
 		case kube.IsK8sNotFound(err):
-			d.Logs = append(d.Logs, fmt.Sprintf("%s was already gone", v.Config.ref()))
+			d.Logs = append(d.Logs, fmt.Sprintf("%s was already gone", v.Config.Ref()))
 		case kube.IsK8sConflict(err):
-			d.Changed = append(d.Changed, v.Config.ref())
-			d.Logs = append(d.Logs, fmt.Sprintf("Kept %s: it changed after it was checked", v.Config.ref()))
+			d.Changed = append(d.Changed, v.Config.Ref())
+			d.Logs = append(d.Logs, fmt.Sprintf("Kept %s: it changed after it was checked", v.Config.Ref()))
 		default:
-			d.Failed = append(d.Failed, v.Config.ref())
-			d.Logs = append(d.Logs, fmt.Sprintf("Error: could not delete %s: %v", v.Config.ref(), err))
+			d.Failed = append(d.Failed, v.Config.Ref())
+			d.Logs = append(d.Logs, fmt.Sprintf("Error: could not delete %s: %v", v.Config.Ref(), err))
 		}
 	}
 	return d
@@ -661,7 +661,7 @@ func deleteStaleWebhookConfigs(c *Client, verdicts []webhookVerdict) webhookDele
 
 // --- CRD conversion webhooks ---
 
-type conversionCRD struct {
+type ConversionCRD struct {
 	Metadata struct {
 		Name string `json:"name"`
 	} `json:"metadata"`
@@ -698,14 +698,14 @@ type conversionCRD struct {
 	} `json:"status"`
 }
 
-// listKind is the kind the API server gives a list of the CRD's objects
+// ListKind is the kind the API server gives a list of the CRD's objects
 // ("" when the CRD names none): status.acceptedNames.listKind, which
 // apiextensions-apiserver pkg/apiserver/customresource_handler.go serves
 // the list as (it refuses to serve a CRD whose accepted listKind is
 // empty), else spec.names.listKind, else spec.names.kind + "List", the
 // default (apiextensions/v1 CustomResourceDefinitionNames.ListKind:
 // "Defaults to `kind`List"; v1/defaults.go).
-func (crd conversionCRD) listKind() string {
+func (crd ConversionCRD) ListKind() string {
 	switch {
 	case crd.Status.AcceptedNames.ListKind != "":
 		return crd.Status.AcceptedNames.ListKind
@@ -717,9 +717,9 @@ func (crd conversionCRD) listKind() string {
 	return ""
 }
 
-// conversionService returns "ns/name" of the CRD's conversion webhook
+// ConversionService returns "ns/name" of the CRD's conversion webhook
 // Service, or "" when the CRD does not convert through a Service.
-func (crd conversionCRD) conversionService() string {
+func (crd ConversionCRD) ConversionService() string {
 	conv := crd.Spec.Conversion
 	if conv == nil || conv.Strategy != "Webhook" || conv.Webhook == nil || conv.Webhook.ClientConfig.Service == nil {
 		return ""
@@ -731,11 +731,11 @@ func (crd conversionCRD) conversionService() string {
 	return svc.Namespace + "/" + svc.Name
 }
 
-// listPath is the path listing the CRD's objects in every namespace, at
+// ObjectsPath is the path listing the CRD's objects in every namespace, at
 // its storage version when served (an object stored at the version read
 // needs no conversion), else at the first served version; "" when the
 // CRD serves none.
-func (crd conversionCRD) listPath() string {
+func (crd ConversionCRD) ObjectsPath() string {
 	version := ""
 	for _, v := range crd.Spec.Versions {
 		if v.Served && (version == "" || v.Storage) {
@@ -748,35 +748,35 @@ func (crd conversionCRD) listPath() string {
 	return "/apis/" + crd.Spec.Group + "/" + version + "/" + crd.Spec.Names.Plural
 }
 
-type deadConversion struct {
+type DeadConversion struct {
 	CRD            string
 	Service        string // ns/name
 	Health         serviceHealth
 	StoredVersions []string
-	ListPath       string // conversionCRD.listPath
+	ListPath       string // ConversionCRD.ObjectsPath
 }
 
-// deadConversions returns the CRDs whose conversion Service is down. A
+// DeadConversions returns the CRDs whose conversion Service is down. A
 // Service that cannot be checked is returned in unknown (with its error).
-func deadConversions(crds []conversionCRD, health *serviceHealthCache) (dead []deadConversion, unknown []deadConversion) {
+func DeadConversions(crds []ConversionCRD, health *serviceHealthCache) (dead []DeadConversion, unknown []DeadConversion) {
 	var refs []string
 	for _, crd := range crds {
-		if ref := crd.conversionService(); ref != "" {
+		if ref := crd.ConversionService(); ref != "" {
 			refs = append(refs, ref)
 		}
 	}
 	health.prefetch(refs)
 	for _, crd := range crds {
-		ref := crd.conversionService()
+		ref := crd.ConversionService()
 		if ref == "" {
 			continue
 		}
 		h := health.lookup(ref)
-		d := deadConversion{CRD: crd.Metadata.Name, Service: ref, Health: h, StoredVersions: crd.Status.StoredVersions, ListPath: crd.listPath()}
+		d := DeadConversion{CRD: crd.Metadata.Name, Service: ref, Health: h, StoredVersions: crd.Status.StoredVersions, ListPath: crd.ObjectsPath()}
 		switch {
 		case h.down():
 			dead = append(dead, d)
-		case h.state == serviceUnknown:
+		case h.State == ServiceUnknown:
 			unknown = append(unknown, d)
 		}
 	}
@@ -784,25 +784,25 @@ func deadConversions(crds []conversionCRD, health *serviceHealthCache) (dead []d
 	return dead, unknown
 }
 
-// rhoaiCRDSelectors select the CRDs RHOAI installs: the operator's own
+// RHOAICRDSelectors select the CRDs RHOAI installs: the operator's own
 // (OLM package label, e.g. DSC and DSCI) and those the platform applies for
 // modules. Listing all CRDs would download every schema (13 MB live).
-var rhoaiCRDSelectors = []string{
+var RHOAICRDSelectors = []string{
 	"operators.coreos.com/" + rhoai.SubName + "." + rhoai.SubNS,
 	"platform.opendatahub.io/part-of",
 }
 
-// listRHOAIConversionCRDs lists the RHOAI CRDs (diagnostics).
-func listRHOAIConversionCRDs(c *Client) ([]conversionCRD, error) {
-	var items []conversionCRD
+// ListRHOAIConversionCRDs lists the RHOAI CRDs (diagnostics).
+func ListRHOAIConversionCRDs(c *kube.Client) ([]ConversionCRD, error) {
+	var items []ConversionCRD
 	seen := map[string]bool{}
-	for _, sel := range rhoaiCRDSelectors {
+	for _, sel := range RHOAICRDSelectors {
 		body, _, err := c.Do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil, url.Values{"labelSelector": {sel}})
 		if err != nil {
 			return nil, err
 		}
 		var list struct {
-			Items []conversionCRD `json:"items"`
+			Items []ConversionCRD `json:"items"`
 		}
 		if err := json.Unmarshal(body, &list); err != nil {
 			return nil, fmt.Errorf("parse CRDs: %w", err)
@@ -815,4 +815,40 @@ func listRHOAIConversionCRDs(c *Client) ([]conversionCRD, error) {
 		}
 	}
 	return items, nil
+}
+
+// OperatorCSV is a CSV of the rhods-operator package in SubNS.
+type OperatorCSV struct {
+	Name    string
+	Version string
+	Phase   string
+	Reason  string
+	Message string
+}
+
+func ListOperatorCSVs(c *kube.Client) ([]OperatorCSV, error) {
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Spec struct {
+			Version string `json:"version"`
+		} `json:"spec"`
+		Status struct {
+			Phase   string `json:"phase"`
+			Reason  string `json:"reason"`
+			Message string `json:"message"`
+		} `json:"status"`
+	}
+	if err := c.ListInto(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""), &items); err != nil {
+		return nil, err
+	}
+	var out []OperatorCSV
+	for _, it := range items {
+		if !strings.HasPrefix(it.Metadata.Name, rhoai.SubName+".") {
+			continue
+		}
+		out = append(out, OperatorCSV{Name: it.Metadata.Name, Version: it.Spec.Version, Phase: it.Status.Phase, Reason: it.Status.Reason, Message: it.Status.Message})
+	}
+	return out, nil
 }

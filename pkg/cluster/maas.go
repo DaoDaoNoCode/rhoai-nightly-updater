@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -667,7 +668,7 @@ func maasNamespaceRefusal(c *Client, infra string) (string, string) {
 	for _, ns := range []string{maasTenantNamespace, infra} {
 		meta, found, err := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+ns)
 		if err != nil {
-			return fmt.Sprintf("Cannot read namespace %s, so this tool cannot tell who made it; nothing was changed: %v.%s", ns, err, templateHint(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
+			return fmt.Sprintf("Cannot read namespace %s, so this tool cannot tell who made it; nothing was changed: %v.%s", ns, err, kube.TemplateHint(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
 		}
 		if !found {
 			continue
@@ -1079,10 +1080,10 @@ func authorinoTrustsServiceCA(deployment []byte) bool {
 // object name (DNS-1123 subdomain) gets no commands: why says so. Every
 // substitution is shell-quoted as well.
 func authorinoTLSCommands(ns, secret string) (cmds, why string) {
-	if len(ns) > 63 || !dns1123Label.MatchString(ns) {
+	if len(ns) > 63 || !components.DNS1123Label.MatchString(ns) {
 		return "", fmt.Sprintf("Connectivity Link's namespace %s is not a valid Kubernetes name", strconv.Quote(kube.TruncateText(ns, 300)))
 	}
-	if len(secret) > 253 || !dns1123Subdomain.MatchString(secret) {
+	if len(secret) > 253 || !components.DNS1123Subdomain.MatchString(secret) {
 		return "", fmt.Sprintf("Authorino's CR names its certificate Secret %s (spec.listener.tls.certSecretRef.name), which is not a valid Kubernetes name, so no commands are shown. A cluster-admin checks Authorino authorino in %s", strconv.Quote(kube.TruncateText(secret, 300)), ns)
 	}
 	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"listener": map[string]any{"tls": map[string]any{
@@ -1159,7 +1160,7 @@ func (r *maasStatusRun) statusRHCL() (rhcl, cnpg operatorState, cnpgReadErr erro
 	c, rec, part, plan := r.c, r.rec, r.part, r.plan
 	// Red Hat Connectivity Link (platform-setup.md "Install Gateway API
 	// Controller", RHOAI tab).
-	csvs, csvErr := listClusterCSVs(c)
+	csvs, csvErr := components.ListClusterCSVs(c)
 	var subs []*olmSubscription
 	if csvErr == nil {
 		subs, csvErr = listSubscriptions(c, "")

@@ -1,4 +1,4 @@
-package cluster
+package components
 
 import (
 	"encoding/json"
@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -60,8 +59,8 @@ import (
 // with the permissions but no Deployment running as it) is unknown, and
 // callers refuse (fail closed).
 
-// moduleOperator is the Deployment that removes a module CR's finalizers.
-type moduleOperator struct {
+// ModuleOperator is the Deployment that removes a module CR's finalizers.
+type ModuleOperator struct {
 	Namespace, Name string
 	// RHOAI: the RHOAI operator itself (the installed CSV owns the CRD).
 	RHOAI bool
@@ -72,7 +71,7 @@ type moduleOperator struct {
 	Owner string
 }
 
-func (o moduleOperator) ref() string { return o.Namespace + "/" + o.Name }
+func (o ModuleOperator) Ref() string { return o.Namespace + "/" + o.Name }
 
 // clusterRoleRule is one PolicyRule of a ClusterRole.
 type clusterRoleRule struct {
@@ -130,13 +129,13 @@ func (d moduleOperatorDeployment) platformOwner() string {
 	return ""
 }
 
-// moduleOperatorFinder finds module operators. It reads the
+// ModuleOperatorFinder finds module operators. It reads the
 // DSCInitialization, the ClusterRoles and ClusterRoleBindings, the
 // applications namespace's Deployments and (only when needed) the installed
 // CSV once, so a scan or a change reads them once however many modules it
 // checks.
-type moduleOperatorFinder struct {
-	c   *Client
+type ModuleOperatorFinder struct {
+	c   *kube.Client
 	api func() (rhoai.ComponentAPI, error)
 
 	mu          sync.Mutex
@@ -147,7 +146,7 @@ type moduleOperatorFinder struct {
 	bindings    []rbacBinding
 	deployments []moduleOperatorDeployment
 	csvLoaded   bool
-	csv         *components.InstalledOperator
+	csv         *InstalledOperator
 	csvErr      error
 	// The applications namespace's Pods, read only by finalizerOwner.
 	podsLoaded bool
@@ -187,7 +186,7 @@ func (p moduleOperatorPod) mayRun() bool {
 
 // loadPods lists the applications namespace's Pods once. f.mu must be held
 // and load must have succeeded.
-func (f *moduleOperatorFinder) loadPods() error {
+func (f *ModuleOperatorFinder) loadPods() error {
 	if f.podsLoaded {
 		return f.podsErr
 	}
@@ -205,14 +204,14 @@ func (f *moduleOperatorFinder) loadPods() error {
 	return nil
 }
 
-func newModuleOperatorFinder(c *Client, api func() (rhoai.ComponentAPI, error)) *moduleOperatorFinder {
+func NewModuleOperatorFinder(c *kube.Client, api func() (rhoai.ComponentAPI, error)) *ModuleOperatorFinder {
 	if api == nil {
-		api = cachedComponentAPI(c)
+		api = CachedComponentAPI(c)
 	}
-	return &moduleOperatorFinder{c: c, api: api}
+	return &ModuleOperatorFinder{c: c, api: api}
 }
 
-func (f *moduleOperatorFinder) load() error {
+func (f *ModuleOperatorFinder) load() error {
 	if !f.loaded {
 		f.loaded = true
 		f.loadErr = f.read()
@@ -220,7 +219,7 @@ func (f *moduleOperatorFinder) load() error {
 	return f.loadErr
 }
 
-func (f *moduleOperatorFinder) read() error {
+func (f *ModuleOperatorFinder) read() error {
 	appNS, err := rhoai.AppsNamespace(f.c)
 	if err != nil {
 		return err
@@ -273,19 +272,19 @@ func (f *moduleOperatorFinder) read() error {
 	return nil
 }
 
-func (f *moduleOperatorFinder) installedCSV() (*components.InstalledOperator, error) {
+func (f *ModuleOperatorFinder) installedCSV() (*InstalledOperator, error) {
 	if !f.csvLoaded {
 		f.csvLoaded = true
-		f.csv, f.csvErr = components.ReadInstalledOperator(f.c)
+		f.csv, f.csvErr = ReadInstalledOperator(f.c)
 	}
 	return f.csv, f.csvErr
 }
 
-// find returns the operator that removes the finalizers of the module's CR
+// Find returns the operator that removes the finalizers of the module's CR
 // named crName ("" when the name is not known; rules limited to names then
 // count). op is nil when it is unknown, and why says why. err is a read
 // error: callers refuse as for an unknown operator.
-func (f *moduleOperatorFinder) find(module, crName string) (op *moduleOperator, why string, err error) {
+func (f *ModuleOperatorFinder) Find(module, crName string) (op *ModuleOperator, why string, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	kind, why, err := f.moduleResource(module)
@@ -320,7 +319,7 @@ func (f *moduleOperatorFinder) find(module, crName string) (op *moduleOperator, 
 				f.appNS, strings.Join(holders, ", "), plural, plural, sub, kube.Verb(len(holders), "it", "them")), nil
 		case 1:
 			d := best[0]
-			return &moduleOperator{Namespace: f.appNS, Name: d.Metadata.Name, Owner: d.platformOwner(),
+			return &ModuleOperator{Namespace: f.appNS, Name: d.Metadata.Name, Owner: d.platformOwner(),
 				Via: fmt.Sprintf("owned by %s; its ServiceAccount %s may update %s and %s/%s", d.platformOwner(), d.serviceAccount(), plural, plural, sub)}, "", nil
 		default:
 			var names []string
@@ -342,14 +341,14 @@ func (f *moduleOperatorFinder) find(module, crName string) (op *moduleOperator, 
 	if len(csv.Deployments) != 1 {
 		return nil, fmt.Sprintf("the installed CSV %s owns CRD %s but installs %d Deployments", csv.Name, crd, len(csv.Deployments)), nil
 	}
-	return &moduleOperator{Namespace: rhoai.SubNS, Name: csv.Deployments[0], RHOAI: true,
+	return &ModuleOperator{Namespace: rhoai.SubNS, Name: csv.Deployments[0], RHOAI: true,
 		Via: fmt.Sprintf("the RHOAI operator: the installed CSV %s owns CRD %s", csv.Name, crd)}, "", nil
 }
 
 // moduleResource returns the cluster-scoped module kind named after module
 // (in either module API group), with the RBAC and Deployments loaded; why
 // says why the tool cannot identify its operator. f.mu must be held.
-func (f *moduleOperatorFinder) moduleResource(module string) (kind rhoai.ComponentKind, why string, err error) {
+func (f *ModuleOperatorFinder) moduleResource(module string) (kind rhoai.ComponentKind, why string, err error) {
 	api, err := f.api()
 	if err != nil {
 		return rhoai.ComponentKind{}, "", err
@@ -369,7 +368,7 @@ func (f *moduleOperatorFinder) moduleResource(module string) (kind rhoai.Compone
 }
 
 // finalizerOwner is what decides whether a stuck module CR's finalizers may
-// be removed (cleanupStuckComponentCRs): the operator that removes them,
+// be removed (CleanupStuckCRs): the operator that removes them,
 // identified as in find, and whether anything that may be it still exists.
 //
 // When the operator's Deployment is gone, find cannot name it, but its
@@ -402,7 +401,7 @@ type finalizerOwner struct {
 }
 
 // gone: the operator is identified and nothing that may be it exists.
-func (o finalizerOwner) gone() bool {
+func (o finalizerOwner) Gone() bool {
 	return o.Unknown == "" && len(o.ServiceAccounts) > 0 && len(o.Deployments) == 0 && len(o.Pods) == 0
 }
 
@@ -416,12 +415,12 @@ func (o finalizerOwner) stillThere() string {
 	return strings.Join(out, ", ")
 }
 
-// finalizerOwner returns the finalizerOwner of the module's CR crName. A
+// FinalizerOwner returns the finalizerOwner of the module's CR crName. A
 // kind no ServiceAccount of the applications namespace may update is
 // unknown here even when the RHOAI operator reconciles it (Kueue): that
 // operator is never gone for good, a reinstall brings it back. err is a
 // read error: callers refuse as for an unknown operator.
-func (f *moduleOperatorFinder) finalizerOwner(module, crName string) (finalizerOwner, error) {
+func (f *ModuleOperatorFinder) FinalizerOwner(module, crName string) (finalizerOwner, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	kind, why, err := f.moduleResource(module)
@@ -474,7 +473,7 @@ func (f *moduleOperatorFinder) finalizerOwner(module, crName string) (finalizerO
 // fewest wildcards its grant needs (bestRuleScore). Group subjects are not
 // followed: a binding to every ServiceAccount (system:serviceaccounts,
 // system:authenticated) would make any Deployment look like the operator.
-func (f *moduleOperatorFinder) serviceAccountScores(group, plural, sub, crName string) map[string]int {
+func (f *ModuleOperatorFinder) serviceAccountScores(group, plural, sub, crName string) map[string]int {
 	out := map[string]int{}
 	for _, b := range f.bindings {
 		if b.RoleRef.Kind != "ClusterRole" {

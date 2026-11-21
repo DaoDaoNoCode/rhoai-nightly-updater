@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 )
 
 const platformsPath = "/apis/config.opendatahub.io/v1alpha1/platforms"
@@ -100,7 +102,7 @@ func TestManagedConfig_ReportsUnmanagedAndLeftovers(t *testing.T) {
 		{"metadata":{"name":"kserve-old","annotations":{"platform.opendatahub.io/version":"3.5.1","platform.opendatahub.io/type":"OpenShift AI Self-Managed","platform.opendatahub.io/instance.name":"default"}},"spec":{"replicas":1},"status":{"replicas":1,"updatedReplicas":1,"readyReplicas":1}},
 		{"metadata":{"name":"mcp-lifecycle-operator-controller-manager","ownerReferences":[{"apiVersion":"components.platform.opendatahub.io/v1alpha1","kind":"MCPLifecycleOperator","name":"default","controller":true}],
 		 "annotations":{"platform.opendatahub.io/version":"0.0.1","platform.opendatahub.io/type":"OpenDataHub","platform.opendatahub.io/instance.name":"default"}},"spec":{"replicas":1},"status":{"replicas":1,"updatedReplicas":1,"readyReplicas":1}},
-		{"metadata":{"name":"odh-observability","generation":2,"annotations":{"`+assistRolloutAnnotation+`":"{\"maxUnavailable\":\"25%\"}"}},
+		{"metadata":{"name":"odh-observability","generation":2,"annotations":{"`+components.AssistRolloutAnnotation+`":"{\"maxUnavailable\":\"25%\"}"}},
 		 "spec":{"replicas":1,"strategy":{"rollingUpdate":{"maxUnavailable":1}}},"status":{"observedGeneration":2,"replicas":1,"updatedReplicas":1,"readyReplicas":1}}]}`)
 	f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-operator/deployments", http.StatusOK, `{"items":[]}`)
 

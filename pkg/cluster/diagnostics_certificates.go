@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -74,7 +75,7 @@ func certManagerRunning(c *Client) (running bool, seen string, err error) {
 			return false, "", err
 		}
 		var list struct {
-			Items []deploymentJSON `json:"items"`
+			Items []components.DeploymentJSON `json:"items"`
 		}
 		if err := json.Unmarshal(body, &list); err != nil {
 			return false, "", fmt.Errorf("parse deployments: %w", err)
@@ -103,30 +104,30 @@ func certManagerRunning(c *Client) (running bool, seen string, err error) {
 // when its controller does not run: its own Deployments (from the CSV's
 // install strategy) and its operand's managementState, with the commands
 // that bring the controller back.
-func certManagerOperatorState(c *Client, d *dependency) (evidence, cmds []string) {
+func certManagerOperatorState(c *Client, d *components.Dependency) (evidence, cmds []string) {
 	for _, name := range d.CSV.Deployments {
-		od, err := readOperatorDeployment(c, d.CSV.Namespace, name, "")
+		od, err := components.ReadOperatorDeployment(c, d.CSV.Namespace, name, "")
 		if err != nil {
 			evidence = append(evidence, fmt.Sprintf("Operator Deployment %s/%s: %v", d.CSV.Namespace, name, err))
 			continue
 		}
-		line := fmt.Sprintf("Operator Deployment %s: %d of %d available", od.ref(), od.Available, od.Replicas)
+		line := fmt.Sprintf("Operator Deployment %s: %d of %d available", od.Ref(), od.Available, od.Replicas)
 		if od.Replicas == 0 {
 			line += " (scaled to 0, so nothing restores the controller)"
 			cmds = append(cmds, kube.ShellCommand("oc", "scale", "deployment/"+od.Name, "-n", od.Namespace, "--replicas=1"))
 		}
 		evidence = append(evidence, line)
 	}
-	if d.Operand != nil && d.OperandSt == operandPresent {
-		state, err := operandManagementState(c, *d.Operand)
+	if d.Operand != nil && d.OperandSt == components.OperandPresent {
+		state, err := components.OperandManagementState(c, *d.Operand)
 		switch {
 		case err != nil:
-			evidence = append(evidence, fmt.Sprintf("%s: could not read managementState: %v%s", d.Operand.ref(), err, templateHint(err)))
+			evidence = append(evidence, fmt.Sprintf("%s: could not read managementState: %v%s", d.Operand.Ref(), err, kube.TemplateHint(err)))
 		case state != "" && state != "Managed":
-			evidence = append(evidence, fmt.Sprintf("%s has managementState %s, so the operator does not run cert-manager", d.Operand.ref(), state))
-			cmds = append(cmds, kube.ShellCommand("oc", "patch", d.Operand.resourceArg(), d.Operand.objName(), "--type", "merge", "-p", `{"spec":{"managementState":"Managed"}}`))
+			evidence = append(evidence, fmt.Sprintf("%s has managementState %s, so the operator does not run cert-manager", d.Operand.Ref(), state))
+			cmds = append(cmds, kube.ShellCommand("oc", "patch", d.Operand.ResourceArg(), d.Operand.ObjName(), "--type", "merge", "-p", `{"spec":{"managementState":"Managed"}}`))
 		default:
-			evidence = append(evidence, fmt.Sprintf("%s has managementState %s", d.Operand.ref(), kube.NonEmpty(state, "unset")))
+			evidence = append(evidence, fmt.Sprintf("%s has managementState %s", d.Operand.Ref(), kube.NonEmpty(state, "unset")))
 		}
 	}
 	return evidence, cmds
@@ -145,9 +146,9 @@ type certPod struct {
 		} `json:"volumes"`
 	} `json:"spec"`
 	Status struct {
-		Phase                 string                `json:"phase"`
-		InitContainerStatuses []diagContainerStatus `json:"initContainerStatuses"`
-		ContainerStatuses     []diagContainerStatus `json:"containerStatuses"`
+		Phase                 string                       `json:"phase"`
+		InitContainerStatuses []components.ContainerStatus `json:"initContainerStatuses"`
+		ContainerStatuses     []components.ContainerStatus `json:"containerStatuses"`
 	} `json:"status"`
 }
 
@@ -206,13 +207,13 @@ func podsBlockedOnSecret(c *Client, l *podLister, namespace, secret string) (blo
 		}
 		ref := fmt.Sprintf("Pod %s/%s", namespace, p.Metadata.Name)
 		named := false
-		for _, cs := range append(append([]diagContainerStatus{}, p.Status.InitContainerStatuses...), p.Status.ContainerStatuses...) {
+		for _, cs := range append(append([]components.ContainerStatus{}, p.Status.InitContainerStatuses...), p.Status.ContainerStatuses...) {
 			if w := cs.State.Waiting; w != nil && strings.Contains(w.Message, needle) {
 				named = true
 			}
 		}
 		if !named {
-			ev, evErr := latestWarningEvent(c, namespace, p.Metadata.Name)
+			ev, evErr := components.LatestWarningEvent(c, namespace, p.Metadata.Name)
 			named = evErr == nil && strings.HasPrefix(ev, "FailedMount:") && strings.Contains(ev, needle)
 		}
 		if named {
@@ -248,7 +249,7 @@ func checkCertificates(c *Client) checkOutput {
 				errs = append(errs, fmt.Sprintf("parse certificates in %s: %v", ns, err))
 				continue
 			}
-			errs = append(errs, fmt.Sprintf("%s: %v%s", ns, err, templateHint(err)))
+			errs = append(errs, fmt.Sprintf("%s: %v%s", ns, err, kube.TemplateHint(err)))
 			continue
 		}
 		if !found {
@@ -292,7 +293,7 @@ func checkCertificates(c *Client) checkOutput {
 			pending = append(pending, ci)
 			continue
 		}
-		if created, ok := parseK8sTime(ci.Metadata.CreationTimestamp); ok && now.Sub(created) < certificateGrace {
+		if created, ok := components.ParseK8sTime(ci.Metadata.CreationTimestamp); ok && now.Sub(created) < certificateGrace {
 			continue
 		}
 		pending = append(pending, ci)
@@ -300,26 +301,26 @@ func checkCertificates(c *Client) checkOutput {
 
 	if len(pending) > 0 {
 		running, controller, runErr := certManagerRunning(c)
-		var configs []admissionConfig
+		var configs []components.AdmissionConfig
 		var cfgErrs []string
-		configs, cfgErrs = listAdmissionConfigs(c)
-		var dep *dependency
+		configs, cfgErrs = components.ListAdmissionConfigs(c)
+		var dep *components.Dependency
 		if runErr == nil && !running {
-			dep = &dependency{Mention: "cert-manager", Key: normalizeOperatorName("cert-manager")}
-			resolveDependencies(c, []*dependency{dep})
+			dep = &components.Dependency{Mention: "cert-manager", Key: components.NormalizeOperatorName("cert-manager")}
+			components.ResolveDependencies(c, []*components.Dependency{dep})
 		}
 		for _, ci := range pending {
 			p := certificateProblem(c, ci, certificateCause{running: running, controller: controller, runErr: runErr, dep: dep}, configs, mounts[ci.ref()])
 			out.problems = append(out.problems, p)
 		}
-		if dep != nil && dep.problemID() != "" {
+		if dep != nil && dep.ProblemID() != "" {
 			var refs []string
 			for _, ci := range pending {
 				refs = append(refs, "Certificate "+ci.ref())
 			}
 			dep.NeededBy = []string{"Not issued without a running cert-manager: " + strings.Join(refs, ", ")}
 			dep.NeededImpact = "RHOAI Certificates are not issued without it, so the pods that mount their Secrets do not start and the webhooks they serve reject requests."
-			out.problems = append(out.problems, prerequisiteProblem(c, dep))
+			out.problems = append(out.problems, components.PrerequisiteProblem(c, dep))
 		}
 		if len(cfgErrs) > 0 {
 			errs = append(errs, "webhook configurations: "+strings.Join(cfgErrs, "; "))
@@ -351,17 +352,17 @@ type certificateCause struct {
 	running    bool
 	controller string
 	runErr     error
-	dep        *dependency
+	dep        *components.Dependency
 }
 
-func certificateProblem(c *Client, ci certificateItem, cause certificateCause, configs []admissionConfig, mounts secretMounts) Problem {
+func certificateProblem(c *Client, ci certificateItem, cause certificateCause, configs []components.AdmissionConfig, mounts secretMounts) Problem {
 	rc := ci.readyCondition()
 	staleReady := rc != nil && rc.Status == "True" && len(mounts.blocked) > 0
 	evidence := []string{}
 	if rc == nil {
 		evidence = append(evidence, fmt.Sprintf("Certificate %s (Secret %s) has no Ready condition", ci.ref(), kube.NonEmpty(ci.Spec.SecretName, "unset")))
 	} else {
-		evidence = append(evidence, fmt.Sprintf("Certificate %s (Secret %s): %s", ci.ref(), kube.NonEmpty(ci.Spec.SecretName, "unset"), conditionLine(*rc)))
+		evidence = append(evidence, fmt.Sprintf("Certificate %s (Secret %s): %s", ci.ref(), kube.NonEmpty(ci.Spec.SecretName, "unset"), components.ConditionLine(*rc)))
 	}
 	p := Problem{
 		ID:              "certificate-not-ready-" + ci.Metadata.Namespace + "-" + ci.Metadata.Name,
@@ -384,7 +385,7 @@ func certificateProblem(c *Client, ci certificateItem, cause certificateCause, c
 		p.Fix = "Fix what the Certificate's Ready condition names (for example a missing Issuer); cert-manager retries on its own."
 	case cause.runErr != nil:
 		p.Title = subject
-		evidence = append(evidence, fmt.Sprintf("Could not check whether cert-manager runs: %v%s", cause.runErr, templateHint(cause.runErr)))
+		evidence = append(evidence, fmt.Sprintf("Could not check whether cert-manager runs: %v%s", cause.runErr, kube.TemplateHint(cause.runErr)))
 		p.Fix = "Check that cert-manager is installed and its pods run (oc get pods -A -l app.kubernetes.io/name=cert-manager), then read the Certificate's events."
 	case !cause.running:
 		p.Title = subject + ": cert-manager is not installed or not running"
@@ -395,23 +396,23 @@ func certificateProblem(c *Client, ci certificateItem, cause certificateCause, c
 		evidence = append(evidence, line)
 		d := cause.dep
 		switch {
-		case d != nil && d.problemID() == "":
+		case d != nil && d.ProblemID() == "":
 			p.Title = subject + ": cert-manager is installed but its controller is not running"
-			evidence = append(evidence, fmt.Sprintf("%s is installed (CSV %s/%s Succeeded)", d.displayName(), d.CSV.Namespace, d.CSV.Name))
+			evidence = append(evidence, fmt.Sprintf("%s is installed (CSV %s/%s Succeeded)", d.DisplayName(), d.CSV.Namespace, d.CSV.Name))
 			opEvidence, cmds := certManagerOperatorState(c, d)
 			evidence = append(evidence, opEvidence...)
 			if len(cmds) > 0 {
-				p.Fix = fmt.Sprintf("Bring the %s back (commands below); it then restarts the cert-manager controller, which issues the Secret again, and the pods start on their own.", d.displayName())
+				p.Fix = fmt.Sprintf("Bring the %s back (commands below); it then restarts the cert-manager controller, which issues the Secret again, and the pods start on their own.", d.DisplayName())
 				p.TechnicalCmd = strings.Join(cmds, "\n")
 			} else {
-				p.Fix = fmt.Sprintf("%s runs and manages cert-manager, but the controller has no available pod: read the controller's pods and events (command below).", d.displayName())
+				p.Fix = fmt.Sprintf("%s runs and manages cert-manager, but the controller has no available pod: read the controller's pods and events (command below).", d.DisplayName())
 				p.TechnicalCmd = "oc get deployments,pods -A -l app.kubernetes.io/name=cert-manager"
 			}
 		case d == nil:
 			p.Fix = "Install cert-manager (cert-manager Operator for Red Hat OpenShift); it then issues the Certificate and the pods start."
-		case d.problemID() != "":
-			p.RelatedProblems = []string{d.problemID()}
-			p.Fix = fmt.Sprintf("Install or finish %s (see the related problem for the exact commands); cert-manager then issues the Certificate and the pods start on their own.", d.displayName())
+		case d.ProblemID() != "":
+			p.RelatedProblems = []string{d.ProblemID()}
+			p.Fix = fmt.Sprintf("Install or finish %s (see the related problem for the exact commands); cert-manager then issues the Certificate and the pods start on their own.", d.DisplayName())
 		}
 	default:
 		p.Title = subject
@@ -435,7 +436,7 @@ func certificateProblem(c *Client, ci certificateItem, cause certificateCause, c
 	var hooks []string
 	for _, cfg := range configs {
 		if cfg.Metadata.Annotations[injectCAAnnotation] == ci.ref() {
-			hooks = append(hooks, cfg.ref())
+			hooks = append(hooks, cfg.Ref())
 		}
 	}
 	sort.Strings(hooks)
@@ -489,7 +490,7 @@ func linkProblems(problems []Problem) []Problem {
 		}
 		for j := range problems {
 			pj := &problems[j]
-			crash := strings.HasPrefix(pj.ID, "pod-"+string(issueCrashLoop)+"-") || strings.HasPrefix(pj.ID, "pod-"+string(issueRestarting)+"-")
+			crash := strings.HasPrefix(pj.ID, "pod-"+string(components.IssueCrashLoop)+"-") || strings.HasPrefix(pj.ID, "pod-"+string(components.IssueRestarting)+"-")
 			if i == j || !crash || len(pj.AffectedObjects) == 0 {
 				continue
 			}
@@ -519,7 +520,7 @@ func linkProblems(problems []Problem) []Problem {
 			pj := &problems[j]
 			// Only the pod problems a missing Secret causes are folded: pods
 			// stuck creating or unable to create a container.
-			podSymptom := strings.HasPrefix(pj.ID, "pod-"+string(issueStuckCreating)+"-") || strings.HasPrefix(pj.ID, "pod-"+string(issueContainerConfig)+"-")
+			podSymptom := strings.HasPrefix(pj.ID, "pod-"+string(components.IssueStuckCreating)+"-") || strings.HasPrefix(pj.ID, "pod-"+string(components.IssueContainerConfig)+"-")
 			if !podSymptom && pj.ID != "webhook-service-missing" {
 				continue
 			}

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -330,7 +331,7 @@ func TestMaaSSetup_RestartsMaaSAPIWhenTheSecretChangesUnderARunningMaaS(t *testi
 		t.Fatalf("maas-api not restarted: %v", mc.f.mutations())
 	}
 	tmpl, _ := json.Marshal(mc.f.get("/apis/apps/v1/namespaces/redhat-ai-gateway-infra/deployments/maas-api")["spec"])
-	if !strings.Contains(string(tmpl), restartAnnotation) {
+	if !strings.Contains(string(tmpl), components.RestartAnnotation) {
 		t.Fatalf("maas-api spec = %s", tmpl)
 	}
 }

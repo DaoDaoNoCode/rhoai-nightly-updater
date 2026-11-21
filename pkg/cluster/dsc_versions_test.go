@@ -204,7 +204,7 @@ func TestAddDSCComponents_GroupedV3Components(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp := &types.ComponentsResponse{}
-	addDSCComponents(resp, dsc)
+	components.AddDSCComponents(resp, dsc)
 	got := map[string]string{}
 	for _, comp := range resp.Components {
 		got[comp.Name] = comp.ManagementState + "/" + comp.Status

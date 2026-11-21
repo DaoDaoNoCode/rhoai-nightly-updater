@@ -133,7 +133,7 @@ func probeConversions(c *Client) (probes []conversionProbe, groups int, errs []s
 	}
 	resources := make([][]conversionProbe, len(gvs))
 	discoveryErrs := make([]error, len(gvs))
-	parallelFor(len(gvs), conversionProbeParallelism, func(i int) {
+	kube.ParallelFor(len(gvs), conversionProbeParallelism, func(i int) {
 		resources[i], discoveryErrs[i] = listableResources(c, gvs[i].group, gvs[i].version)
 	})
 	for i, gv := range gvs {
@@ -146,7 +146,7 @@ func probeConversions(c *Client) (probes []conversionProbe, groups int, errs []s
 			probes = append(probes, p)
 		}
 	}
-	parallelFor(len(probes), conversionProbeParallelism, func(i int) {
+	kube.ParallelFor(len(probes), conversionProbeParallelism, func(i int) {
 		body, err := getDiscovered(c, probes[i].path(), url.Values{"limit": {"1"}})
 		if err != nil {
 			probes[i].Err = err

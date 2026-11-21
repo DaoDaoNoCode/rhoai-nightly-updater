@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"sync"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -20,7 +20,7 @@ import (
 // file only turns its verdicts into problems and fix results.
 
 type staleConversion struct {
-	deadConversion
+	components.DeadConversion
 	Module      string // DSC component the Service name points to, if any
 	ModuleState string
 	Objects     crdObjects
@@ -70,7 +70,7 @@ func probeCRDObjects(c *Client, listPath string) (crdObjects, string) {
 // findStaleConversions reports RHOAI CRDs whose conversion webhook Service is
 // missing, or has had no ready endpoint for longer than the grace period.
 func findStaleConversions(c *Client) ([]staleConversion, []string, error) {
-	crds, err := listRHOAIConversionCRDs(c)
+	crds, err := components.ListRHOAIConversionCRDs(c)
 	if kube.IsK8sNotFound(err) {
 		return nil, nil, nil
 	}
@@ -81,9 +81,9 @@ func findStaleConversions(c *Client) ([]staleConversion, []string, error) {
 	// runs in the operator, applications or monitoring namespace.
 	rhoaiNS, nsErr := rhoaiPodNamespaces(c)
 	rhoaiNS = append(rhoaiNS, rhoai.SubNS)
-	var candidates []conversionCRD
+	var candidates []components.ConversionCRD
 	for _, crd := range crds {
-		ref := crd.conversionService()
+		ref := crd.ConversionService()
 		if ref == "" {
 			continue
 		}
@@ -92,13 +92,13 @@ func findStaleConversions(c *Client) ([]staleConversion, []string, error) {
 		}
 		candidates = append(candidates, crd)
 	}
-	dead, unknown := deadConversions(candidates, newServiceHealthCache(c, staleServiceGrace))
+	dead, unknown := components.DeadConversions(candidates, components.NewServiceHealthCache(c, components.StaleServiceGrace))
 	var errs []string
 	if nsErr != nil {
 		errs = append(errs, fmt.Sprintf("the applications and monitoring namespaces are not known, so CRDs whose conversion Service runs there may be missing: %v", nsErr))
 	}
 	for _, u := range unknown {
-		errs = append(errs, fmt.Sprintf("conversion Service of CRD %s: %v", u.CRD, u.Health.err))
+		errs = append(errs, fmt.Sprintf("conversion Service of CRD %s: %v", u.CRD, u.Health.Err))
 	}
 	if len(dead) == 0 {
 		return nil, errs, nil
@@ -106,7 +106,7 @@ func findStaleConversions(c *Client) ([]staleConversion, []string, error) {
 	components := readDSCComponents(c)
 	out := make([]staleConversion, 0, len(dead))
 	for _, d := range dead {
-		sc := staleConversion{deadConversion: d}
+		sc := staleConversion{DeadConversion: d}
 		_, svcName, _ := strings.Cut(d.Service, "/")
 		normalized := strings.ReplaceAll(svcName, "-", "")
 		for name, state := range components {
@@ -116,7 +116,7 @@ func findStaleConversions(c *Client) ([]staleConversion, []string, error) {
 		}
 		out = append(out, sc)
 	}
-	parallelFor(len(out), 6, func(i int) {
+	kube.ParallelFor(len(out), 6, func(i int) {
 		out[i].Objects, out[i].ObjectsUnread = probeCRDObjects(c, out[i].ListPath)
 	})
 	return out, errs, nil
@@ -157,10 +157,10 @@ func checkStaleWebhooks(c *Client) checkOutput {
 		defer close(convDone)
 		conversions, convErrs, convErr = findStaleConversions(c)
 	}()
-	scan := scanStaleWebhooks(c)
+	scan := components.ScanStaleWebhooks(c)
 	<-convDone
 
-	var deletable, guidance []webhookVerdict
+	var deletable, guidance []components.WebhookVerdict
 	for _, v := range scan.Verdicts {
 		if v.Deletable {
 			deletable = append(deletable, v)
@@ -173,12 +173,12 @@ func checkStaleWebhooks(c *Client) checkOutput {
 		severity := "warning"
 		var evidence, affected, lines []string
 		for _, v := range deletable {
-			if v.Config.blocking() {
+			if v.Config.Blocking() {
 				severity = "critical"
 			}
-			evidence = append(evidence, fmt.Sprintf("%s: Service %s; %s", v.Config.ref(), v.downText(), v.Reason))
-			affected = append(affected, v.Config.ref())
-			lines = append(lines, fmt.Sprintf("- %s (Service %s; %s)", v.Config.ref(), v.downText(), v.Reason))
+			evidence = append(evidence, fmt.Sprintf("%s: Service %s; %s", v.Config.Ref(), v.DownText(), v.Reason))
+			affected = append(affected, v.Config.Ref())
+			lines = append(lines, fmt.Sprintf("- %s (Service %s; %s)", v.Config.Ref(), v.DownText(), v.Reason))
 		}
 		out.problems = append(out.problems, Problem{
 			ID:       "stale-webhooks",
@@ -205,15 +205,15 @@ func checkStaleWebhooks(c *Client) checkOutput {
 		severity := "info"
 		var evidence, affected []string
 		for _, v := range guidance {
-			if v.Config.blocking() {
+			if v.Config.Blocking() {
 				severity = "critical"
 			}
 			policy := "failurePolicy Fail: matching requests are rejected"
-			if !v.Config.blocking() {
+			if !v.Config.Blocking() {
 				policy = "failurePolicy Ignore: requests are not blocked, but the webhook has no effect"
 			}
-			evidence = append(evidence, fmt.Sprintf("%s: Service %s (%s); not deleted automatically because %s", v.Config.ref(), v.downText(), policy, v.Reason))
-			affected = append(affected, v.Config.ref())
+			evidence = append(evidence, fmt.Sprintf("%s: Service %s (%s); not deleted automatically because %s", v.Config.Ref(), v.DownText(), policy, v.Reason))
+			affected = append(affected, v.Config.Ref())
 		}
 		out.problems = append(out.problems, Problem{
 			ID:       "webhook-service-missing",
@@ -231,7 +231,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 	if len(conversions) > 0 {
 		var evidence, affected []string
 		for _, sc := range conversions {
-			line := fmt.Sprintf("CRD %s: conversion Service %s (storedVersions %s)", sc.CRD, sc.Health.describe(sc.Service), strings.Join(sc.StoredVersions, ", "))
+			line := fmt.Sprintf("CRD %s: conversion Service %s (storedVersions %s)", sc.CRD, sc.Health.Describe(sc.Service), strings.Join(sc.StoredVersions, ", "))
 			if sc.Module != "" {
 				line += fmt.Sprintf("; the Service belongs to DSC component %s, which is %s", sc.Module, kube.NonEmpty(sc.ModuleState, "not set"))
 			}
@@ -357,34 +357,15 @@ func staleConversionFix(conversions []staleConversion) (fix, technicalCmd string
 	return strings.Join(parts, " "), technicalCmd
 }
 
-// deleteExact deletes an object only if it still has the UID and
-// resourceVersion that were inspected (DeleteOptions preconditions).
-func deleteExact(c *Client, path, uid, resourceVersion string) error {
-	opts := map[string]any{"apiVersion": "v1", "kind": "DeleteOptions"}
-	pre := map[string]string{}
-	if uid != "" {
-		pre["uid"] = uid
-	}
-	if resourceVersion != "" {
-		pre["resourceVersion"] = resourceVersion
-	}
-	if len(pre) > 0 {
-		opts["preconditions"] = pre
-	}
-	body, _ := json.Marshal(opts)
-	_, _, err := c.Do(http.MethodDelete, path, "application/json", body, nil)
-	return err
-}
-
 // applyFixDeleteStaleWebhooks re-evaluates every RHOAI webhook configuration
 // and deletes only the deletable stale ones, each guarded by its UID and
 // resourceVersion, so a configuration that changed since the check is kept.
 func applyFixDeleteStaleWebhooks(c *Client) (*types.OperationResponse, error) {
-	scan := scanStaleWebhooks(c)
+	scan := components.ScanStaleWebhooks(c)
 	if scan.Upgrading != "" {
-		return nothingToDo("an operator install is in progress ("+scan.Upgrading+"); OLM and the operator recreate webhooks when it finishes. Nothing was deleted.", nil), nil
+		return components.NothingToDo("an operator install is in progress ("+scan.Upgrading+"); OLM and the operator recreate webhooks when it finishes. Nothing was deleted.", nil), nil
 	}
-	d := deleteStaleWebhookConfigs(c, scan.Verdicts)
+	d := components.DeleteStaleWebhookConfigs(c, scan.Verdicts)
 	logs := d.Logs
 	for _, e := range scan.Errors {
 		logs = append(logs, "Warning: "+e)
@@ -407,7 +388,7 @@ func applyFixDeleteStaleWebhooks(c *Client) (*types.OperationResponse, error) {
 		if len(scan.Errors) > 0 {
 			return &types.OperationResponse{Success: false, Message: "Could not check webhooks: " + strings.Join(scan.Errors, "; "), Logs: logs}, nil
 		}
-		return nothingToDo("no leftover webhook configuration was found (a Service is back, its owner still exists, or an upgrade is in progress). Nothing was deleted.", logs), nil
+		return components.NothingToDo("no leftover webhook configuration was found (a Service is back, its owner still exists, or an upgrade is in progress). Nothing was deleted.", logs), nil
 	case len(d.Deleted) == 0:
 		return &types.OperationResponse{Success: false, Message: "Could not delete " + strings.Join(d.Failed, ", "), Logs: logs}, nil
 	case len(d.Failed) > 0:
@@ -423,56 +404,4 @@ func applyFixDeleteStaleWebhooks(c *Client) (*types.OperationResponse, error) {
 		Message: fmt.Sprintf("Deleted %s: %s.", kube.CountNoun(len(d.Deleted), "leftover webhook configuration", "leftover webhook configurations"), strings.Join(d.Deleted, ", ")),
 		Logs:    logs,
 	}, nil
-}
-
-// operatorCSV is a CSV of the rhods-operator package in SubNS.
-type operatorCSV struct {
-	Name    string
-	Version string
-	Phase   string
-	Reason  string
-	Message string
-}
-
-func listOperatorCSVs(c *Client) ([]operatorCSV, error) {
-	var items []struct {
-		Metadata struct {
-			Name string `json:"name"`
-		} `json:"metadata"`
-		Spec struct {
-			Version string `json:"version"`
-		} `json:"spec"`
-		Status struct {
-			Phase   string `json:"phase"`
-			Reason  string `json:"reason"`
-			Message string `json:"message"`
-		} `json:"status"`
-	}
-	if err := c.ListInto(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""), &items); err != nil {
-		return nil, err
-	}
-	var out []operatorCSV
-	for _, it := range items {
-		if !strings.HasPrefix(it.Metadata.Name, rhoai.SubName+".") {
-			continue
-		}
-		out = append(out, operatorCSV{Name: it.Metadata.Name, Version: it.Spec.Version, Phase: it.Status.Phase, Reason: it.Status.Reason, Message: it.Status.Message})
-	}
-	return out, nil
-}
-
-// parallelFor runs fn(0..n-1) with at most limit calls at a time.
-func parallelFor(n, limit int, fn func(i int)) {
-	sem := make(chan struct{}, limit)
-	var wg sync.WaitGroup
-	for i := range n {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(i int) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			fn(i)
-		}(i)
-	}
-	wg.Wait()
 }

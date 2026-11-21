@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -60,7 +61,7 @@ func GetSummary(c *Client) (*types.Summary, error) {
 		s.DSC.Exists = true
 		s.DSC.Ready = dscReady(dsc.Object)
 		var comps types.ComponentsResponse
-		addDSCComponents(&comps, dsc.Object)
+		components.AddDSCComponents(&comps, dsc.Object)
 		for _, comp := range comps.Components {
 			s.DSC.Components = append(s.DSC.Components, types.SummaryComponent{
 				Name: comp.Name, ManagementState: comp.ManagementState, Ready: comp.Status == "Available",

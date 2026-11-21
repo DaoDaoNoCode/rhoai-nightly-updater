@@ -223,7 +223,7 @@ func TestUserReadForbiddenIsTheUsers(t *testing.T) {
 	if code, ec := kube.HTTPStatusForError(err); code != 403 || ec != kube.ErrorCodeForbiddenForUser {
 		t.Fatalf("got %d %s (%v)", code, ec, err)
 	}
-	if templateHint(err) != "" {
-		t.Fatalf("template hint on the user's refusal: %q", templateHint(err))
+	if kube.TemplateHint(err) != "" {
+		t.Fatalf("template hint on the user's refusal: %q", kube.TemplateHint(err))
 	}
 }

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -51,9 +51,7 @@ func (s *rsServer) client(t *testing.T) *Client {
 		_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
 	}))
 	t.Cleanup(srv.Close)
-	old := replicaSetOwnerCache
-	replicaSetOwnerCache = kube.NewLRU[string, string](512)
-	t.Cleanup(func() { replicaSetOwnerCache = old })
+	t.Cleanup(components.UseFreshReplicaSetOwnerCacheForTest())
 	return newTestClient(testClientOptions{BaseURL: srv.URL, Token: "t", HTTPClient: srv.Client(), Ctx: context.Background()})
 }
 
@@ -97,7 +95,7 @@ func TestOwnedByDeployment_AdoptedReplicaSet(t *testing.T) {
 		{"a ReplicaSet recreated under the same name (other UID)", adoptedPod("handmade-rs-old", "handmade-rs", "rs-gone", cmLabels), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := podMatchesDeployment(c, tc.pod, dep); got != tc.want {
+			if got := components.PodMatchesDeployment(c, tc.pod, dep); got != tc.want {
 				t.Errorf("podMatchesDeployment = %v, want %v", got, tc.want)
 			}
 		})
@@ -119,7 +117,7 @@ func TestOwnedByDeployment_LookupFailureFailsClosed(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(old) })
 
-	if podMatchesDeployment(c, adoptedPod("handmade-rs-abcde", "handmade-rs", "rs-adopted", cmLabels), trustyDeployment()) {
+	if components.PodMatchesDeployment(c, adoptedPod("handmade-rs-abcde", "handmade-rs", "rs-adopted", cmLabels), trustyDeployment()) {
 		t.Fatal("a pod whose ReplicaSet cannot be read was matched")
 	}
 	if log := buf.String(); !strings.Contains(log, "level=DEBUG") || !strings.Contains(log, "replicaset=handmade-rs") {
@@ -130,7 +128,7 @@ func TestOwnedByDeployment_LookupFailureFailsClosed(t *testing.T) {
 	s.fail = false
 	s.sets = []map[string]any{replicaSet("handmade-rs", "rs-adopted", "dep-trusty")}
 	s.mu.Unlock()
-	if !podMatchesDeployment(c, adoptedPod("handmade-rs-abcde", "handmade-rs", "rs-adopted", cmLabels), trustyDeployment()) {
+	if !components.PodMatchesDeployment(c, adoptedPod("handmade-rs-abcde", "handmade-rs", "rs-adopted", cmLabels), trustyDeployment()) {
 		t.Error("the pod is not matched once its ReplicaSet can be read")
 	}
 }
@@ -155,7 +153,7 @@ func TestMatchPodsToDeployments_LookupCost(t *testing.T) {
 
 	refresh := func() []types.PodInfo {
 		deps := []types.DeploymentInfo{trustyDeployment()}
-		matchPodsToDeployments(c, pods, "ns", deps)
+		components.MatchPodsToDeployments(c, pods, "ns", deps)
 		return deps[0].Pods
 	}
 	if got := refresh(); len(got) != 1 || got[0].Name != "trustyai-operator-module-controller-manager-b57d5b597-x" {

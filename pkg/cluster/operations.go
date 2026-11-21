@@ -12,6 +12,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
@@ -485,7 +486,7 @@ func updateVerifyTarget(c *Client, image string, chk *updateChecks, logs *[]stri
 // save_snapshot step; a snapshot that cannot be saved does not stop them.
 func saveSnapshotStep(c *Client, logs *[]string, emit func(UpdateStepEvent)) {
 	emit(UpdateStepEvent{Step: "save_snapshot", Status: "running", Message: "Saving deployment snapshot..."})
-	if snapErr := SaveDeploymentSnapshot(c); snapErr != nil {
+	if snapErr := components.SaveDeploymentSnapshot(c); snapErr != nil {
 		slog.Warn("failed to save deployment snapshot", "error", snapErr)
 		*logs = append(*logs, fmt.Sprintf("Warning: failed to save deployment snapshot: %v", snapErr))
 		emit(UpdateStepEvent{Step: "save_snapshot", Status: "success", Message: "Snapshot save failed (non-fatal)", Detail: snapErr.Error()})
@@ -1297,7 +1298,7 @@ func reinstallCleanUp(c *Client, logs *[]string, emit func(UpdateStepEvent)) (*t
 	// --- Step 6b: cleanup_stale_component_crs ---
 	// After EA↔GA transitions, component CRs can get stuck with finalizers
 	// during deletion. Remove finalizers to unblock (K8s finalizer docs pattern).
-	unstuckCount, componentWarnings := cleanupStuckComponentCRs(c)
+	unstuckCount, componentWarnings := components.CleanupStuckCRs(c)
 	if unstuckCount > 0 {
 		*logs = append(*logs, fmt.Sprintf("Unblocked %s by removing finalizers", kube.CountNoun(unstuckCount, "stuck component CR", "stuck component CRs")))
 	}
@@ -1453,12 +1454,12 @@ func createSubscriptionAndWait(c *Client, source, channel, kind, approveCSV stri
 // Subscription and CSV are gone. It never fails the reinstall: a
 // configuration that cannot be checked or deleted is kept and logged.
 func cleanupStaleWebhooksForReinstall(c *Client, logs *[]string) int {
-	scan := scanStaleWebhooks(c)
+	scan := components.ScanStaleWebhooks(c)
 	if scan.Upgrading != "" {
 		*logs = append(*logs, "Webhook cleanup skipped: an operator install is in progress ("+scan.Upgrading+")")
 		return 0
 	}
-	d := deleteStaleWebhookConfigs(c, scan.Verdicts)
+	d := components.DeleteStaleWebhookConfigs(c, scan.Verdicts)
 	*logs = append(*logs, fmt.Sprintf("Removed %d stale webhook configurations", len(d.Deleted)))
 	for _, l := range d.Logs {
 		*logs = append(*logs, "  "+l)
@@ -1680,7 +1681,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 
 	// --- Step 2: save_snapshot ---
 	emit(UpdateStepEvent{Step: "save_snapshot", Status: "running", Message: "Saving deployment snapshot..."})
-	if snapErr := SaveDeploymentSnapshot(c); snapErr != nil {
+	if snapErr := components.SaveDeploymentSnapshot(c); snapErr != nil {
 		slog.Warn("failed to save deployment snapshot", "error", snapErr)
 		logs = append(logs, fmt.Sprintf("Warning: failed to save deployment snapshot: %v", snapErr))
 		emit(UpdateStepEvent{Step: "save_snapshot", Status: "success", Message: "Snapshot save failed (non-fatal)", Detail: snapErr.Error()})

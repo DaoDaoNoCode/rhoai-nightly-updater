@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -72,7 +73,7 @@ func TestBookkeepingUsesTheServiceAccount(t *testing.T) {
 	if _, err := record.LoadSubscriptionSnapshot(c); err != nil {
 		t.Fatal(err)
 	}
-	GetDeploymentSnapshot(c)
+	components.ReadDeploymentSnapshot(c)
 	if _, err := readModelsRecord(c); err != nil {
 		t.Fatal(err)
 	}

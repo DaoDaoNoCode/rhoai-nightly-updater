@@ -1,4 +1,4 @@
-package cluster
+package components
 
 import (
 	"fmt"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/report"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -29,15 +30,15 @@ import (
 // Deployment is available and no failurePolicy Fail webhook would go
 // unserved during the restart.
 
-// moduleStaleAfter is how long scans must keep seeing a module CR lag
+// ModuleStaleAfter is how long scans must keep seeing a module CR lag
 // behind the same generation before its operator is said to be stuck
 // (staleSeen in diagnostics_dsc.go).
-var moduleStaleAfter = 5 * time.Minute
+var ModuleStaleAfter = 5 * time.Minute
 
-const restartAnnotation = "kubectl.kubernetes.io/restartedAt"
+const RestartAnnotation = "kubectl.kubernetes.io/restartedAt"
 
-// operatorDeployment is a module operator's Deployment.
-type operatorDeployment struct {
+// OperatorDeployment is a module operator's Deployment.
+type OperatorDeployment struct {
 	Namespace, Name, UID, ResourceVersion string
 	Strategy                              string // RollingUpdate (default) or Recreate
 	Replicas, Available                   int
@@ -48,9 +49,9 @@ type operatorDeployment struct {
 	Via                                   string // how it was found
 }
 
-func (d operatorDeployment) ref() string { return d.Namespace + "/" + d.Name }
+func (d OperatorDeployment) Ref() string { return d.Namespace + "/" + d.Name }
 
-type deploymentJSON struct {
+type DeploymentJSON struct {
 	Metadata struct {
 		Name            string            `json:"name"`
 		Namespace       string            `json:"namespace"`
@@ -81,8 +82,8 @@ type deploymentJSON struct {
 	} `json:"status"`
 }
 
-func (j deploymentJSON) toOperatorDeployment(via string) operatorDeployment {
-	d := operatorDeployment{
+func (j DeploymentJSON) toOperatorDeployment(via string) OperatorDeployment {
+	d := OperatorDeployment{
 		Namespace: j.Metadata.Namespace, Name: j.Metadata.Name, UID: j.Metadata.UID, ResourceVersion: j.Metadata.ResourceVersion,
 		Strategy: kube.NonEmpty(j.Spec.Strategy.Type, "RollingUpdate"), Replicas: 1, Available: j.Status.AvailableReplicas,
 		TemplateLabels: j.Spec.Template.Metadata.Labels, PartOf: j.Metadata.Labels["platform.opendatahub.io/part-of"], Via: via,
@@ -100,8 +101,8 @@ func (j deploymentJSON) toOperatorDeployment(via string) operatorDeployment {
 	return d
 }
 
-func readOperatorDeployment(c *Client, namespace, name, via string) (*operatorDeployment, error) {
-	var j deploymentJSON
+func ReadOperatorDeployment(c *kube.Client, namespace, name, via string) (*OperatorDeployment, error) {
+	var j DeploymentJSON
 	if err := c.GetInto(rhoai.NamespacedPath("apps/v1", "deployments", namespace, name), &j); err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse Deployment %s/%s: %w", namespace, name, err)
@@ -115,12 +116,12 @@ func readOperatorDeployment(c *Client, namespace, name, via string) (*operatorDe
 	return &d, nil
 }
 
-// maxUnavailablePods is the number of pods a rolling update may take down,
+// MaxUnavailablePods is the number of pods a rolling update may take down,
 // as the Deployment controller computes it (pkg/controller/deployment/util
 // ResolveFenceposts): maxSurge rounds up, maxUnavailable rounds down
 // (defaults 25%), and when both resolve to 0, maxUnavailable becomes 1. ok
 // is false when a value does not parse, so the caller assumes the worst.
-func (d operatorDeployment) maxUnavailablePods() (int, bool) {
+func (d OperatorDeployment) MaxUnavailablePods() (int, bool) {
 	surge, _, err1 := resolveIntOrPercent(d.MaxSurge, d.Replicas, true)
 	unavailable, _, err2 := resolveIntOrPercent(d.MaxUnavailable, d.Replicas, false)
 	if surge == 0 && unavailable == 0 {
@@ -129,21 +130,21 @@ func (d operatorDeployment) maxUnavailablePods() (int, bool) {
 	return unavailable, err1 == nil && err2 == nil
 }
 
-// findModuleOperator returns the Deployment that runs a module's operator
-// (moduleOperatorFinder: the Platform-owned Deployment whose ServiceAccount
+// FindModuleOperator returns the Deployment that runs a module's operator
+// (ModuleOperatorFinder: the Platform-owned Deployment whose ServiceAccount
 // may update the module CR's finalizers, or the RHOAI operator for a kind
 // its CSV owns), or why it is not known.
-func findModuleOperator(c *Client, operators *moduleOperatorFinder, module string) (*operatorDeployment, string) {
-	op, why, err := operators.find(module, "")
+func FindModuleOperator(c *kube.Client, operators *ModuleOperatorFinder, module string) (*OperatorDeployment, string) {
+	op, why, err := operators.Find(module, "")
 	switch {
 	case err != nil:
 		return nil, fmt.Sprintf("could not identify it: %v", err)
 	case op == nil:
 		return nil, why
 	}
-	d, err := readOperatorDeployment(c, op.Namespace, op.Name, op.Via)
+	d, err := ReadOperatorDeployment(c, op.Namespace, op.Name, op.Via)
 	if err != nil {
-		return nil, fmt.Sprintf("could not read Deployment %s: %v", op.ref(), err)
+		return nil, fmt.Sprintf("could not read Deployment %s: %v", op.Ref(), err)
 	}
 	return d, ""
 }
@@ -157,21 +158,21 @@ type restartAssessment struct {
 	Reason string   // why not, when !OK
 }
 
-// assessRestart checks that a rolling restart keeps the module operator,
+// AssessRestart checks that a rolling restart keeps the module operator,
 // and any failurePolicy Fail webhook it serves, available.
-func assessRestart(c *Client, d operatorDeployment) restartAssessment {
+func AssessRestart(c *kube.Client, d OperatorDeployment) restartAssessment {
 	if d.Namespace == rhoai.SubNS && d.Name == rhoai.SubName {
 		return restartAssessment{Reason: "it is the RHOAI operator, whose Deployment belongs to its CSV (OLM reverts template edits); delete its pod instead"}
 	}
 	if d.Replicas < 1 || d.Available < 1 {
-		return restartAssessment{Reason: fmt.Sprintf("Deployment %s has no available pod (%d of %d), so a restart does not make it retry; see the RHOAI pods result for why it is down", d.ref(), d.Available, d.Replicas)}
+		return restartAssessment{Reason: fmt.Sprintf("Deployment %s has no available pod (%d of %d), so a restart does not make it retry; see the RHOAI pods result for why it is down", d.Ref(), d.Available, d.Replicas)}
 	}
-	hooks, err := webhooksServedBy(c, d)
+	hooks, err := WebhooksServedBy(c, d)
 	if err != nil {
-		return restartAssessment{Reason: fmt.Sprintf("could not check which webhooks %s serves (%v), so the effect of a restart is unknown", d.ref(), err)}
+		return restartAssessment{Reason: fmt.Sprintf("could not check which webhooks %s serves (%v), so the effect of a restart is unknown", d.Ref(), err)}
 	}
 	a := restartAssessment{Hooks: hooks}
-	unavailable, parsed := d.maxUnavailablePods()
+	unavailable, parsed := d.MaxUnavailablePods()
 	gap := d.Strategy == "Recreate" || !parsed || unavailable >= d.Available
 	switch {
 	case len(hooks) > 0 && gap:
@@ -188,7 +189,7 @@ func assessRestart(c *Client, d operatorDeployment) restartAssessment {
 	return a
 }
 
-func (d operatorDeployment) strategyText() string {
+func (d OperatorDeployment) strategyText() string {
 	if d.Strategy == "Recreate" {
 		return "Recreate"
 	}
@@ -198,15 +199,15 @@ func (d operatorDeployment) strategyText() string {
 		}
 		return fmt.Sprint(v)
 	}
-	unavailable, _ := d.maxUnavailablePods()
+	unavailable, _ := d.MaxUnavailablePods()
 	return fmt.Sprintf("RollingUpdate with maxSurge %s and maxUnavailable %s for %s (up to %d unavailable)",
 		show(d.MaxSurge), show(d.MaxUnavailable), kube.CountNoun(d.Replicas, "replica", "replicas"), unavailable)
 }
 
-// webhooksServedBy lists the failurePolicy Fail webhooks whose Service
+// WebhooksServedBy lists the failurePolicy Fail webhooks whose Service
 // selects the Deployment's pods.
-func webhooksServedBy(c *Client, d operatorDeployment) ([]string, error) {
-	configs, errs := listAdmissionConfigs(c)
+func WebhooksServedBy(c *kube.Client, d OperatorDeployment) ([]string, error) {
+	configs, errs := ListAdmissionConfigs(c)
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("%s", strings.Join(errs, "; "))
 	}
@@ -228,7 +229,7 @@ func webhooksServedBy(c *Client, d operatorDeployment) ([]string, error) {
 				selects[svc.Name] = sel
 			}
 			if sel {
-				ref := fmt.Sprintf("%s (%s)", wh.Name, cfg.ref())
+				ref := fmt.Sprintf("%s (%s)", wh.Name, cfg.Ref())
 				if !slices.Contains(out, ref) {
 					out = append(out, ref)
 				}
@@ -239,7 +240,7 @@ func webhooksServedBy(c *Client, d operatorDeployment) ([]string, error) {
 	return out, nil
 }
 
-func serviceSelects(c *Client, namespace, name string, podLabels map[string]string) (bool, error) {
+func serviceSelects(c *kube.Client, namespace, name string, podLabels map[string]string) (bool, error) {
 	var svc struct {
 		Spec struct {
 			Selector map[string]string `json:"selector"`
@@ -272,19 +273,19 @@ type moduleBackoff struct {
 	Module     string
 	Reasons    []string
 	Blocking   bool
-	Deployment *operatorDeployment
+	Deployment *OperatorDeployment
 	FindErr    string
 	Restart    restartAssessment
 }
 
 func (b *moduleBackoff) problemID() string { return "module-operator-backoff-" + b.Module }
 
-func (b *moduleBackoff) problem() Problem {
+func (b *moduleBackoff) Problem() report.Problem {
 	severity := "info"
 	if b.Blocking {
 		severity = "warning"
 	}
-	p := Problem{
+	p := report.Problem{
 		ID:       b.problemID(),
 		Severity: severity,
 		Title:    fmt.Sprintf("The %s module operator has not retried yet", b.Module),
@@ -299,8 +300,8 @@ func (b *moduleBackoff) problem() Problem {
 		return p
 	}
 	d := b.Deployment
-	p.Evidence = append(p.Evidence, fmt.Sprintf("Operator Deployment %s (%s): %d of %d pods available, strategy %s", d.ref(), d.Via, d.Available, d.Replicas, d.strategyText()))
-	p.AffectedObjects = []string{"Deployment " + d.ref()}
+	p.Evidence = append(p.Evidence, fmt.Sprintf("Operator Deployment %s (%s): %d of %d pods available, strategy %s", d.Ref(), d.Via, d.Available, d.Replicas, d.strategyText()))
+	p.AffectedObjects = []string{"Deployment " + d.Ref()}
 	if d.Namespace == rhoai.SubNS && d.Name == rhoai.SubName {
 		p.Fix = "Delete the RHOAI operator pod; its Deployment recreates it and it reconciles at once. Or wait for its next retry."
 		p.TechnicalCmd = kube.ShellCommand("oc", "delete", "pod", "-n", rhoai.SubNS, "-l", "name="+rhoai.SubName)
@@ -308,27 +309,27 @@ func (b *moduleBackoff) problem() Problem {
 	}
 	p.TechnicalCmd = kube.ShellCommand("oc", "rollout", "restart", "deployment/"+d.Name, "-n", d.Namespace)
 	if !b.Restart.OK {
-		p.Fix = fmt.Sprintf("Restart %s (command below) or wait for its next retry. The tool does not restart it: %s.", d.ref(), b.Restart.Reason)
+		p.Fix = fmt.Sprintf("Restart %s (command below) or wait for its next retry. The tool does not restart it: %s.", d.Ref(), b.Restart.Reason)
 		return p
 	}
-	p.Fix = fmt.Sprintf("Restart %s. %s", d.ref(), b.Restart.Note)
+	p.Fix = fmt.Sprintf("Restart %s. %s", d.Ref(), b.Restart.Note)
 	p.AutoFixable = true
 	p.AutoFixAction = "restart-module-operator:" + b.Module
 	p.ConfirmMessage = fmt.Sprintf("This patches Deployment %s: it sets the pod-template annotation %s to the current time, which is what oc rollout restart does. %s\n\n"+
 		"Right before patching, the tool checks again that the %s module still reports the problem, that a pod is available, and that the Deployment is unchanged since that check (UID and resourceVersion).",
-		d.ref(), restartAnnotation, b.Restart.Note, b.Module)
+		d.Ref(), RestartAnnotation, b.Restart.Note, b.Module)
 	return p
 }
 
-// applyFixRestartModuleOperator restarts a module operator after checking
+// ApplyFixRestartModuleOperator restarts a module operator after checking
 // again that the module still waits on a retry.
-func applyFixRestartModuleOperator(c *Client, module string) (*types.OperationResponse, error) {
-	if module == "" || !dns1123Label.MatchString(module) {
+func ApplyFixRestartModuleOperator(c *kube.Client, module string) (*types.OperationResponse, error) {
+	if module == "" || !DNS1123Label.MatchString(module) {
 		return &types.OperationResponse{Success: false, Message: "restart-module-operator needs a module name", ErrorCode: "validation"}, nil
 	}
 	a, err := analyzeCurrentDSC(c, time.Now())
 	if err != nil {
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read the DataScienceCluster: %v. Nothing was restarted.%s", err, templateHint(err)), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read the DataScienceCluster: %v. Nothing was restarted.%s", err, kube.TemplateHint(err)), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
 	var b *moduleBackoff
 	for _, cand := range a.Backoffs {
@@ -337,7 +338,7 @@ func applyFixRestartModuleOperator(c *Client, module string) (*types.OperationRe
 		}
 	}
 	if b == nil {
-		return nothingToDo(fmt.Sprintf("the %s module no longer reports a state its operator has not retried. Nothing was restarted.", module), nil), nil
+		return NothingToDo(fmt.Sprintf("the %s module no longer reports a state its operator has not retried. Nothing was restarted.", module), nil), nil
 	}
 	logs := append([]string{}, b.Reasons...)
 	if b.Deployment == nil {
@@ -345,33 +346,33 @@ func applyFixRestartModuleOperator(c *Client, module string) (*types.OperationRe
 	}
 	d := b.Deployment
 	if !b.Restart.OK {
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Not restarting %s: %s. Nothing was changed.", d.ref(), b.Restart.Reason), Logs: logs, ErrorCode: "prerequisites"}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Not restarting %s: %s. Nothing was changed.", d.Ref(), b.Restart.Reason), Logs: logs, ErrorCode: "prerequisites"}, nil
 	}
 	err = c.PatchJSON(rhoai.NamespacedPath("apps/v1", "deployments", d.Namespace, d.Name), map[string]any{
 		"metadata": map[string]any{"uid": d.UID, "resourceVersion": d.ResourceVersion},
 		"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
-			"annotations": map[string]string{restartAnnotation: record.NowRFC3339()},
+			"annotations": map[string]string{RestartAnnotation: record.NowRFC3339()},
 		}}},
 	})
 	switch {
 	case err == nil:
 	case kube.IsK8sConflict(err) || kube.IsK8sError(err, http.StatusUnprocessableEntity):
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Deployment %s changed after it was checked, so it was not restarted. Run diagnostics again.", d.ref()), Logs: logs, ErrorCode: "conflict"}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Deployment %s changed after it was checked, so it was not restarted. Run diagnostics again.", d.Ref()), Logs: logs, ErrorCode: "conflict"}, nil
 	case kube.IsK8sNotFound(err):
-		return nothingToDo(fmt.Sprintf("Deployment %s no longer exists. Nothing was restarted.", d.ref()), logs), nil
+		return NothingToDo(fmt.Sprintf("Deployment %s no longer exists. Nothing was restarted.", d.Ref()), logs), nil
 	default:
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Could not restart %s: %v.%s", d.ref(), err, templateHint(err)), Logs: logs, ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Could not restart %s: %v.%s", d.Ref(), err, kube.TemplateHint(err)), Logs: logs, ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
 	record.RecordActivity(c, types.ActivityEntry{
 		Timestamp: record.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "fix-restart-module-operator",
-		Detail:    fmt.Sprintf("restarted %s (module %s)", d.ref(), module),
+		Detail:    fmt.Sprintf("restarted %s (module %s)", d.Ref(), module),
 		Success:   true,
 	})
 	return &types.OperationResponse{
 		Success: true,
-		Message: fmt.Sprintf("Restarted %s. The %s operator reconciles when its new pod starts; re-scan in a minute or two.", d.ref(), module),
-		Logs:    append(logs, "Patched the pod template annotation "+restartAnnotation),
+		Message: fmt.Sprintf("Restarted %s. The %s operator reconciles when its new pod starts; re-scan in a minute or two.", d.Ref(), module),
+		Logs:    append(logs, "Patched the pod template annotation "+RestartAnnotation),
 	}, nil
 }

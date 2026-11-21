@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -591,16 +592,16 @@ func GetModelExposures(c *Client, project, model string) (*types.ModelExposures,
 // onlyConnectivityLinkMissing: KServe's dependency condition names Red Hat
 // Connectivity Link (Kuadrant) as missing, and nothing else.
 func onlyConnectivityLinkMissing(msg string) bool {
-	missing := parseMissingDependencies(msg)
+	missing := components.ParseMissingDependencies(msg)
 	if len(missing) == 0 {
 		return false
 	}
 	rhcl := map[string]bool{}
 	for _, n := range []string{rhclOperator.title, rhclOperator.pkg, rhclOperator.subName, "Kuadrant", "Connectivity Link"} {
-		rhcl[normalizeOperatorName(n)] = true
+		rhcl[components.NormalizeOperatorName(n)] = true
 	}
 	for _, m := range missing {
-		if !rhcl[normalizeOperatorName(m)] {
+		if !rhcl[components.NormalizeOperatorName(m)] {
 			return false
 		}
 	}
@@ -624,7 +625,7 @@ func (m *modelsRun) planModelExposure(req types.ModelsRequest, labels map[string
 	auth := func() (bool, string, string) {
 		ok, why, err := authReadiness(c)
 		if err != nil {
-			return false, fmt.Sprintf("Cannot tell whether Red Hat Connectivity Link is set up, which authenticates the model's calls; nothing was changed: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
+			return false, fmt.Sprintf("Cannot tell whether Red Hat Connectivity Link is set up, which authenticates the model's calls; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 		return ok, why, ""
 	}

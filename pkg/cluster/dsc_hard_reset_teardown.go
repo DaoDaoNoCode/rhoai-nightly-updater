@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -105,7 +106,7 @@ func moduleCRsOwnedBy(c *Client, uid string) ([]ownedModuleCR, error) {
 		if k.Namespaced {
 			continue // module CRs are cluster-scoped; a DSC cannot own namespaced objects
 		}
-		items, err := listKindCRs(c, k)
+		items, err := components.ListKindCRs(c, k)
 		if err != nil {
 			return nil, err
 		}
@@ -131,12 +132,12 @@ func hardResetOperators(c *Client, dscUID string) ([]hardResetOperator, string, 
 	if err != nil {
 		return nil, "", err
 	}
-	finder := newModuleOperatorFinder(c, nil)
+	finder := components.NewModuleOperatorFinder(c, nil)
 	var out []hardResetOperator
 	seen := map[string]bool{}
 	var refusals []string
 	for _, cr := range owned {
-		op, why, err := finder.find(cr.Kind.Module(), cr.Name)
+		op, why, err := finder.Find(cr.Kind.Module(), cr.Name)
 		switch {
 		case err != nil:
 			return nil, "", fmt.Errorf("identify the operator of %s %s: %w", cr.Kind.Kind, cr.Name, err)
@@ -146,22 +147,22 @@ func hardResetOperators(c *Client, dscUID string) ([]hardResetOperator, string, 
 		case op.RHOAI:
 			continue
 		case strings.HasPrefix(op.Owner, "DataScienceCluster "):
-			refusals = append(refusals, fmt.Sprintf("%s %s: its operator %s is owned by the DataScienceCluster, so deleting the DSC would garbage-collect it while %s still needs it to remove its finalizer", cr.Kind.Kind, cr.Name, op.ref(), cr.Name))
+			refusals = append(refusals, fmt.Sprintf("%s %s: its operator %s is owned by the DataScienceCluster, so deleting the DSC would garbage-collect it while %s still needs it to remove its finalizer", cr.Kind.Kind, cr.Name, op.Ref(), cr.Name))
 			continue
 		}
-		if seen[op.ref()] {
+		if seen[op.Ref()] {
 			continue
 		}
-		seen[op.ref()] = true
+		seen[op.Ref()] = true
 		body, _, err := c.Get(rhoai.NamespacedPath("apps/v1", "deployments", op.Namespace, op.Name))
 		if err != nil {
-			return nil, "", fmt.Errorf("read Deployment %s: %w", op.ref(), err)
+			return nil, "", fmt.Errorf("read Deployment %s: %w", op.Ref(), err)
 		}
 		var d struct {
 			Metadata kube.ObjectMeta `json:"metadata"`
 		}
 		if err := json.Unmarshal(body, &d); err != nil || d.Metadata.UID == "" {
-			return nil, "", fmt.Errorf("read Deployment %s: no uid", op.ref())
+			return nil, "", fmt.Errorf("read Deployment %s: no uid", op.Ref())
 		}
 		out = append(out, hardResetOperator{Module: cr.Kind.Module(), Namespace: op.Namespace, Name: op.Name, UID: d.Metadata.UID})
 	}
@@ -378,8 +379,8 @@ func namespaceOwnerBlocker(c *Client) string {
 	}
 	var items []struct {
 		Metadata struct {
-			Name            string     `json:"name"`
-			OwnerReferences []ownerRef `json:"ownerReferences"`
+			Name            string                `json:"name"`
+			OwnerReferences []components.OwnerRef `json:"ownerReferences"`
 		} `json:"metadata"`
 	}
 	if err := u.ListInto("/api/v1/namespaces", &items); err != nil {
@@ -465,7 +466,7 @@ type ownerVerdict struct {
 // when one of them keeps it (the collector's "at least one solid owner"),
 // else leading to RHOAI when one does, else unknown when one cannot be
 // told, else not solid (all gone or being deleted).
-func (r *ownerResolver) owners(refs []ownerRef, depth int, path map[string]bool) ownerVerdict {
+func (r *ownerResolver) owners(refs []components.OwnerRef, depth int, path map[string]bool) ownerVerdict {
 	var rhoai, unknown *ownerVerdict
 	for _, ref := range refs {
 		v := r.owner(ref, depth, path)
@@ -493,7 +494,7 @@ func (r *ownerResolver) owners(refs []ownerRef, depth int, path map[string]bool)
 
 // owner is the verdict of one owner reference; path holds the UIDs of the
 // owners being followed, to tell a loop.
-func (r *ownerResolver) owner(ref ownerRef, depth int, path map[string]bool) ownerVerdict {
+func (r *ownerResolver) owner(ref components.OwnerRef, depth int, path map[string]bool) ownerVerdict {
 	group, version, found := strings.Cut(ref.APIVersion, "/")
 	if !found {
 		group, version = "", ref.APIVersion
@@ -526,16 +527,16 @@ func (r *ownerResolver) owner(ref ownerRef, depth int, path map[string]bool) own
 }
 
 // read reads the owner ref and decides from it and its own owners.
-func (r *ownerResolver) read(ref ownerRef, group, version, what string, unknown func(string) ownerVerdict, depth int, path map[string]bool) ownerVerdict {
+func (r *ownerResolver) read(ref components.OwnerRef, group, version, what string, unknown func(string) ownerVerdict, depth int, path map[string]bool) ownerVerdict {
 	apiPath, why := r.path(group, version, ref.Kind, ref.Name)
 	if why != "" {
 		return unknown("cannot be looked up: " + why)
 	}
 	var obj struct {
 		Metadata struct {
-			UID               string     `json:"uid"`
-			DeletionTimestamp string     `json:"deletionTimestamp"`
-			OwnerReferences   []ownerRef `json:"ownerReferences"`
+			UID               string                `json:"uid"`
+			DeletionTimestamp string                `json:"deletionTimestamp"`
+			OwnerReferences   []components.OwnerRef `json:"ownerReferences"`
 		} `json:"metadata"`
 	}
 	found, err := r.c.GetIntoOptional(apiPath, &obj)

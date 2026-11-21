@@ -1,4 +1,4 @@
-package cluster
+package components
 
 import (
 	"encoding/json"
@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/report"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -39,7 +40,7 @@ import (
 // is restarted to reconcile at once. The schema case needs judgement. All
 // three are guidance only: the tool deletes nothing.
 
-const applyFailuresCheckName = "Objects the operator cannot update"
+const ApplyFailuresCheckName = "Objects the operator cannot update"
 
 var applyFailurePattern = regexp.MustCompile(`failure deploying resource ([^\s/:]*)/([^\s/:]+): apply failed ([^\s,]+), Kind=([A-Za-z0-9]+):`)
 
@@ -48,18 +49,18 @@ var applyFailurePattern = regexp.MustCompile(`failure deploying resource ([^\s/:
 // ignored (Kubernetes object-name rules:
 // https://kubernetes.io/docs/concepts/overview/working-with-objects/names/).
 var (
-	dns1123Subdomain = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
-	dns1123Label     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
-	kindPattern      = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*$`)
+	DNS1123Subdomain = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
+	DNS1123Label     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	KindPattern      = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*$`)
 	groupVersion     = regexp.MustCompile(`^[a-z0-9.-]+/[a-z0-9]+$|^v[0-9a-z]+$`)
 )
 
 // validObject reports whether the parsed object follows the Kubernetes
 // naming rules (an empty namespace is a cluster-scoped object).
-func (f applyFailure) validObject() bool {
-	return len(f.Name) <= 253 && dns1123Subdomain.MatchString(f.Name) &&
-		(f.Namespace == "" || (len(f.Namespace) <= 63 && dns1123Label.MatchString(f.Namespace))) &&
-		kindPattern.MatchString(f.Kind) && groupVersion.MatchString(f.GroupVersion)
+func (f ApplyFailure) validObject() bool {
+	return len(f.Name) <= 253 && DNS1123Subdomain.MatchString(f.Name) &&
+		(f.Namespace == "" || (len(f.Namespace) <= 63 && DNS1123Label.MatchString(f.Namespace))) &&
+		KindPattern.MatchString(f.Kind) && groupVersion.MatchString(f.GroupVersion)
 }
 
 var (
@@ -68,13 +69,13 @@ var (
 	typedFieldPattern    = regexp.MustCompile(`(\.[\w.\[\]"=-]+): expected ([A-Za-z]+), got (&\{[^}]*\}|[^\s,;)]+)`)
 )
 
-type applyFailureClass string
+type ApplyFailureClass string
 
 const (
-	applyImmutable       applyFailureClass = "immutable"
-	applyControllerOwner applyFailureClass = "controller-owner"
-	applySchemaMismatch  applyFailureClass = "schema-mismatch"
-	// applyStoredType: the API server could not convert the stored object
+	ApplyImmutable       ApplyFailureClass = "immutable"
+	ApplyControllerOwner ApplyFailureClass = "controller-owner"
+	ApplySchemaMismatch  ApplyFailureClass = "schema-mismatch"
+	// ApplyStoredType: the API server could not convert the stored object
 	// to the CRD's schema for server-side apply ("failed to create manager
 	// for existing fields: failed to convert new object (...) to smd typed:
 	// errors: <path>: expected <type>, got ..."), live on RHOAI 3.6 after
@@ -84,71 +85,71 @@ const (
 	// skipnonapplied.go:75-91; how an object loses them:
 	// fieldmanager.go:145-164). The "Left over from an earlier release"
 	// check handles it (diagnostics_leftovers.go).
-	applyStoredType applyFailureClass = "stored-type"
+	ApplyStoredType ApplyFailureClass = "stored-type"
 )
 
-// leftoverWorkloads are the kinds whose spec.selector is immutable, by API
+// LeftoverWorkloads are the kinds whose spec.selector is immutable, by API
 // group: the "Left over from an earlier release" check recreates them.
-var leftoverWorkloads = map[string]string{"Deployment": "apps", "StatefulSet": "apps", "DaemonSet": "apps", "Job": "batch"}
+var LeftoverWorkloads = map[string]string{"Deployment": "apps", "StatefulSet": "apps", "DaemonSet": "apps", "Job": "batch"}
 
-// leftover reports whether the "Left over from an earlier release" check
+// Leftover reports whether the "Left over from an earlier release" check
 // handles the failure: a stored object of an older schema, or a workload
 // whose spec.selector changed. checkApplyFailures leaves those out.
-func (f applyFailure) leftover() bool {
+func (f ApplyFailure) Leftover() bool {
 	switch f.Class {
-	case applyStoredType:
+	case ApplyStoredType:
 		return true
-	case applyImmutable:
+	case ApplyImmutable:
 		return f.selectorChanged()
 	}
 	return false
 }
 
 // selectorChanged: an immutable spec.selector of a workload kind.
-func (f applyFailure) selectorChanged() bool {
-	group, ok := leftoverWorkloads[f.Kind]
-	return ok && f.group() == group && slices.Contains(f.Fields, "spec.selector")
+func (f ApplyFailure) selectorChanged() bool {
+	group, ok := LeftoverWorkloads[f.Kind]
+	return ok && f.Group() == group && slices.Contains(f.Fields, "spec.selector")
 }
 
-// leftover decides per object: the "Left over from an earlier release"
+// Leftover decides per object: the "Left over from an earlier release"
 // check takes an object only when every failure reported for it is one it
 // fixes (stored field types alone, or an immutable spec.selector alone).
 // An object with other failures stays one problem here (one problem per
 // object), with guidance.
-func (rf *reportedApplyFailure) leftover() bool {
+func (rf *ReportedApplyFailure) Leftover() bool {
 	if len(rf.classes) != 1 {
 		return false
 	}
 	switch rf.classes[0] {
-	case applyStoredType:
+	case ApplyStoredType:
 		return true
-	case applyImmutable:
-		fields := rf.fields[applyImmutable]
+	case ApplyImmutable:
+		fields := rf.Fields[ApplyImmutable]
 		return rf.selectorChanged() && len(fields) == 1 && fields[0] == "spec.selector"
 	}
 	return false
 }
 
-// allApplyFailures keeps every failure.
-func allApplyFailures(applyFailure) bool { return true }
+// AllApplyFailures keeps every failure.
+func AllApplyFailures(ApplyFailure) bool { return true }
 
-// applyFailure is one object an operator could not apply.
-type applyFailure struct {
+// ApplyFailure is one object an operator could not apply.
+type ApplyFailure struct {
 	Namespace, Name, GroupVersion, Kind string
-	Class                               applyFailureClass
+	Class                               ApplyFailureClass
 	Detail                              string   // the API error
 	Fields                              []string // immutable fields, or "<path>: expected <type>, got <value>"
-	Owners                              string   // the controller owners, for applyControllerOwner
+	Owners                              string   // the controller owners, for ApplyControllerOwner
 }
 
-func (f applyFailure) group() string {
+func (f ApplyFailure) Group() string {
 	if g, _, ok := strings.Cut(f.GroupVersion, "/"); ok {
 		return g
 	}
 	return "" // core API ("v1")
 }
 
-func (f applyFailure) object() string {
+func (f ApplyFailure) Object() string {
 	if f.Namespace == "" {
 		return f.Kind + " " + f.Name
 	}
@@ -156,16 +157,16 @@ func (f applyFailure) object() string {
 }
 
 // resourceArg is the kind as oc accepts it, qualified by its group.
-func (f applyFailure) resourceArg() string {
-	if g := f.group(); g != "" {
+func (f ApplyFailure) resourceArg() string {
+	if g := f.Group(); g != "" {
 		return strings.ToLower(f.Kind) + "." + g
 	}
 	return strings.ToLower(f.Kind)
 }
 
-// ocCommand is "oc <verb> <kind.group> <name> [-n <ns>] <extra...>",
+// OCCommand is "oc <verb> <kind.group> <name> [-n <ns>] <extra...>",
 // every argument shell-quoted.
-func (f applyFailure) ocCommand(verb string, extra ...string) string {
+func (f ApplyFailure) OCCommand(verb string, extra ...string) string {
 	words := []string{"oc", verb, f.resourceArg(), f.Name}
 	if f.Namespace != "" {
 		words = append(words, "-n", f.Namespace)
@@ -173,38 +174,38 @@ func (f applyFailure) ocCommand(verb string, extra ...string) string {
 	return kube.ShellCommand(append(words, extra...)...)
 }
 
-// problemID is the ID of the problem reported for the object.
-func (f applyFailure) problemID() string {
+// ProblemID is the ID of the problem reported for the object.
+func (f ApplyFailure) ProblemID() string {
 	switch {
-	case f.Class == applyStoredType:
-		return leftoverFieldsID(f.Kind, f.Name)
-	case f.leftover():
-		return leftoverRecreateID(f.Kind, f.Namespace, f.Name)
+	case f.Class == ApplyStoredType:
+		return LeftoverFieldsID(f.Kind, f.Name)
+	case f.Leftover():
+		return LeftoverRecreateID(f.Kind, f.Namespace, f.Name)
 	}
 	return f.genericProblemID()
 }
 
 // genericProblemID is the ID of this check's problem for the object.
-func (f applyFailure) genericProblemID() string {
+func (f ApplyFailure) genericProblemID() string {
 	return "operator-apply-failed-" + strings.ToLower(strings.Join([]string{f.Kind, f.Namespace, f.Name}, "-"))
 }
 
 // key identifies the object (not the failure): one problem per object.
-func (f applyFailure) key() string {
-	return strings.Join([]string{f.group(), f.Kind, f.Namespace, f.Name}, "|")
+func (f ApplyFailure) key() string {
+	return strings.Join([]string{f.Group(), f.Kind, f.Namespace, f.Name}, "|")
 }
 
-// parseApplyFailures finds the classified apply failures in a condition
+// ParseApplyFailures finds the classified apply failures in a condition
 // message. Failures of another kind are left out.
-func parseApplyFailures(msg string) []applyFailure {
+func ParseApplyFailures(msg string) []ApplyFailure {
 	locs := applyFailurePattern.FindAllStringSubmatchIndex(msg, -1)
-	var out []applyFailure
+	var out []ApplyFailure
 	for i, loc := range locs {
 		end := len(msg)
 		if i+1 < len(locs) {
 			end = locs[i+1][0]
 		}
-		f := applyFailure{
+		f := ApplyFailure{
 			Namespace: msg[loc[2]:loc[3]], Name: msg[loc[4]:loc[5]], GroupVersion: msg[loc[6]:loc[7]], Kind: msg[loc[8]:loc[9]],
 			Detail: strings.TrimSpace(msg[loc[1]:end]),
 		}
@@ -213,19 +214,19 @@ func parseApplyFailures(msg string) []applyFailure {
 		}
 		switch {
 		case strings.Contains(f.Detail, "Only one reference can have Controller set to true"):
-			f.Class = applyControllerOwner
+			f.Class = ApplyControllerOwner
 			if m := controllerOwnerFound.FindStringSubmatch(f.Detail); m != nil {
 				f.Owners = strings.TrimRight(strings.TrimSpace(m[1]), ".")
 			}
 		case strings.Contains(f.Detail, "field is immutable"):
-			f.Class = applyImmutable
+			f.Class = ApplyImmutable
 			for _, m := range invalidFieldPattern.FindAllStringSubmatch(f.Detail, -1) {
 				if !slices.Contains(f.Fields, m[1]) {
 					f.Fields = append(f.Fields, m[1])
 				}
 			}
 		case strings.Contains(f.Detail, "to smd typed") && strings.Contains(f.Detail, "expected "):
-			f.Class = applyStoredType
+			f.Class = ApplyStoredType
 			for _, m := range typedFieldPattern.FindAllStringSubmatch(f.Detail, -1) {
 				field := fmt.Sprintf("%s: expected %s, got %s", m[1], m[2], m[3])
 				if !slices.Contains(f.Fields, field) {
@@ -236,7 +237,7 @@ func parseApplyFailures(msg string) []applyFailure {
 				continue
 			}
 		case strings.Contains(f.Detail, "failed to create typed") && strings.Contains(f.Detail, "expected "):
-			f.Class = applySchemaMismatch
+			f.Class = ApplySchemaMismatch
 			for _, m := range typedFieldPattern.FindAllStringSubmatch(f.Detail, -1) {
 				field := fmt.Sprintf("%s: expected %s, got %s", m[1], m[2], m[3])
 				if !slices.Contains(f.Fields, field) {
@@ -251,131 +252,131 @@ func parseApplyFailures(msg string) []applyFailure {
 	return out
 }
 
-// applyReporter is a CR whose conditions report apply failures.
-type applyReporter struct {
+// ApplyReporter is a CR whose conditions report apply failures.
+type ApplyReporter struct {
 	Kind, Name, UID string
 	// Module is the lower-case kind of a components.platform.opendatahub.io
 	// CR, "" for the DataScienceCluster and the Platform.
 	Module   string
 	NotReady bool // its Ready condition is False
-	rank     int  // module CR 2, Platform 1, DSC 0: the most specific reports first
+	Rank     int  // module CR 2, Platform 1, DSC 0: the most specific reports first
 }
 
-func (r applyReporter) String() string { return r.Kind + " " + r.Name }
+func (r ApplyReporter) String() string { return r.Kind + " " + r.Name }
 
-// reportedApplyFailure is one object with every failure reported for it
+// ReportedApplyFailure is one object with every failure reported for it
 // and every CR that reports one.
-type reportedApplyFailure struct {
-	applyFailure // the object (the first failure parsed)
-	classes      []applyFailureClass
-	fields       map[applyFailureClass][]string
+type ReportedApplyFailure struct {
+	ApplyFailure // the object (the first failure parsed)
+	classes      []ApplyFailureClass
+	Fields       map[ApplyFailureClass][]string
 	owners       string
-	details      []string
-	reporters    []applyReporter
+	Details      []string
+	Reporters    []ApplyReporter
 }
 
-func (rf *reportedApplyFailure) add(f applyFailure) {
-	if !rf.has(f.Class) {
+func (rf *ReportedApplyFailure) add(f ApplyFailure) {
+	if !rf.Has(f.Class) {
 		rf.classes = append(rf.classes, f.Class)
 	}
 	for _, field := range f.Fields {
-		if !slices.Contains(rf.fields[f.Class], field) {
-			rf.fields[f.Class] = append(rf.fields[f.Class], field)
+		if !slices.Contains(rf.Fields[f.Class], field) {
+			rf.Fields[f.Class] = append(rf.Fields[f.Class], field)
 		}
 	}
 	if rf.owners == "" {
 		rf.owners = f.Owners
 	}
-	if !slices.Contains(rf.details, f.Detail) {
-		rf.details = append(rf.details, f.Detail)
+	if !slices.Contains(rf.Details, f.Detail) {
+		rf.Details = append(rf.Details, f.Detail)
 	}
 }
 
-func (rf *reportedApplyFailure) has(class applyFailureClass) bool {
+func (rf *ReportedApplyFailure) Has(class ApplyFailureClass) bool {
 	return slices.Contains(rf.classes, class)
 }
 
 // collectApplyFailures scans the conditions of one CR for the failures
 // keep accepts.
-func collectApplyFailures(found map[string]*reportedApplyFailure, r applyReporter, conds []rhoai.DSCCondition, keep func(applyFailure) bool) {
+func collectApplyFailures(found map[string]*ReportedApplyFailure, r ApplyReporter, conds []rhoai.DSCCondition, keep func(ApplyFailure) bool) {
 	for _, cond := range conds {
 		if cond.Type == "Ready" && cond.Status == "False" {
 			r.NotReady = true
 		}
 	}
 	for _, cond := range conds {
-		for _, f := range parseApplyFailures(cond.Message) {
+		for _, f := range ParseApplyFailures(cond.Message) {
 			if !keep(f) {
 				continue
 			}
 			k := f.key()
 			if found[k] == nil {
-				found[k] = &reportedApplyFailure{applyFailure: f, fields: map[applyFailureClass][]string{}}
+				found[k] = &ReportedApplyFailure{ApplyFailure: f, Fields: map[ApplyFailureClass][]string{}}
 			}
 			rf := found[k]
 			rf.add(f)
 			dup := false
-			for _, existing := range rf.reporters {
+			for _, existing := range rf.Reporters {
 				dup = dup || existing.String() == r.String()
 			}
 			if !dup {
-				rf.reporters = append(rf.reporters, r)
+				rf.Reporters = append(rf.Reporters, r)
 			}
 		}
 	}
 }
 
-// reporterScan is what scanApplyReporters read: the failures it kept, the
+// ReporterScan is what ScanApplyReporters read: the failures it kept, the
 // component API, the DataScienceClusters and the module CRs (each also as
-// the raw object, by moduleScanKey and name).
-type reporterScan struct {
-	api     rhoai.ComponentAPI
-	found   map[string]*reportedApplyFailure
+// the raw object, by ModuleScanKey and name).
+type ReporterScan struct {
+	API     rhoai.ComponentAPI
+	Found   map[string]*ReportedApplyFailure
 	dscs    []rhoai.DSCObject
-	modules map[string]map[string]map[string]any
-	scanned int
-	errs    []string
+	Modules map[string]map[string]map[string]any
+	Scanned int
+	Errs    []string
 }
 
-// moduleScanKey keys reporterScan.modules: a kind in its API group.
-func moduleScanKey(group, kind string) string { return group + "|" + kind }
+// ModuleScanKey keys ReporterScan.Modules: a kind in its API group.
+func ModuleScanKey(group, kind string) string { return group + "|" + kind }
 
-// scanApplyReporters reads the conditions of the DataScienceCluster, the
+// ScanApplyReporters reads the conditions of the DataScienceCluster, the
 // Platform and every module CR (whatever kinds this operator version
 // serves) and collects the apply failures keep accepts.
-func scanApplyReporters(c *Client, keep func(applyFailure) bool) reporterScan {
-	s := reporterScan{found: map[string]*reportedApplyFailure{}, modules: map[string]map[string]map[string]any{}}
+func ScanApplyReporters(c *kube.Client, keep func(ApplyFailure) bool) ReporterScan {
+	s := ReporterScan{Found: map[string]*ReportedApplyFailure{}, Modules: map[string]map[string]map[string]any{}}
 
 	dscs, _, err := rhoai.ListFirstServed(c, rhoai.DSCGroup, rhoai.DSCListFmt, "datascienceclusters", rhoai.DSCFallbackVersions)
 	if err != nil {
-		s.errs = append(s.errs, fmt.Sprintf("DataScienceCluster: %v", err))
+		s.Errs = append(s.Errs, fmt.Sprintf("DataScienceCluster: %v", err))
 	}
 	s.dscs = dscs
 	for _, d := range dscs {
-		s.scanned++
-		collectApplyFailures(s.found, applyReporter{Kind: "DataScienceCluster", Name: d.Metadata.Name, UID: d.Metadata.UID}, d.Status.Conditions, keep)
+		s.Scanned++
+		collectApplyFailures(s.Found, ApplyReporter{Kind: "DataScienceCluster", Name: d.Metadata.Name, UID: d.Metadata.UID}, d.Status.Conditions, keep)
 	}
 
 	platforms, _, err := rhoai.ListFirstServed(c, rhoai.PlatformGroup, rhoai.PlatformListFmt, "platforms", rhoai.PlatformFallbackVersions)
 	if err != nil {
-		s.errs = append(s.errs, fmt.Sprintf("Platform: %v", err))
+		s.Errs = append(s.Errs, fmt.Sprintf("Platform: %v", err))
 	}
 	for _, p := range platforms {
-		s.scanned++
-		collectApplyFailures(s.found, applyReporter{Kind: "Platform", Name: p.Metadata.Name, UID: p.Metadata.UID, rank: 1}, p.Status.Conditions, keep)
+		s.Scanned++
+		collectApplyFailures(s.Found, ApplyReporter{Kind: "Platform", Name: p.Metadata.Name, UID: p.Metadata.UID, Rank: 1}, p.Status.Conditions, keep)
 	}
 
 	api, err := rhoai.DiscoverComponentAPI(c)
 	if err != nil {
-		s.errs = append(s.errs, err.Error())
+		s.Errs = append(s.Errs, err.Error())
 	}
-	s.api = api
+	s.API = api
 	type moduleList struct {
 		items []json.RawMessage
 		err   error
 	}
 	lists := make([]moduleList, len(api.Kinds))
-	parallelFor(len(api.Kinds), 6, func(i int) {
+	kube.ParallelFor(len(api.Kinds), 6, func(i int) {
 		body, _, err := c.Get(api.Kinds[i].ListPath())
 		if err != nil {
 			lists[i].err = fmt.Errorf("list %s: %w", api.Kinds[i].CRD(), err)
@@ -389,68 +390,35 @@ func scanApplyReporters(c *Client, keep func(applyFailure) bool) reporterScan {
 	})
 	for i, k := range api.Kinds {
 		if lists[i].err != nil {
-			s.errs = append(s.errs, lists[i].err.Error())
+			s.Errs = append(s.Errs, lists[i].err.Error())
 			continue
 		}
-		key := moduleScanKey(k.Group, k.Kind)
+		key := ModuleScanKey(k.Group, k.Kind)
 		for _, raw := range lists[i].items {
 			var it rhoai.DSCObject
 			var obj map[string]any
 			if json.Unmarshal(raw, &it) != nil || json.Unmarshal(raw, &obj) != nil {
 				continue
 			}
-			s.scanned++
-			if s.modules[key] == nil {
-				s.modules[key] = map[string]map[string]any{}
+			s.Scanned++
+			if s.Modules[key] == nil {
+				s.Modules[key] = map[string]map[string]any{}
 			}
-			s.modules[key][it.Metadata.Name] = obj
-			collectApplyFailures(s.found, applyReporter{Kind: k.Kind, Name: it.Metadata.Name, UID: it.Metadata.UID, Module: strings.ToLower(k.Kind), rank: 2}, it.Status.Conditions, keep)
+			s.Modules[key][it.Metadata.Name] = obj
+			collectApplyFailures(s.Found, ApplyReporter{Kind: k.Kind, Name: it.Metadata.Name, UID: it.Metadata.UID, Module: strings.ToLower(k.Kind), Rank: 2}, it.Status.Conditions, keep)
 		}
 	}
 	return s
 }
 
-func checkApplyFailures(c *Client) checkOutput {
-	out := checkOutput{check: CheckResult{Name: applyFailuresCheckName, Status: "pass"}}
-	s := scanApplyReporters(c, allApplyFailures)
-	found, api, errs, scanned := s.found, s.api, s.errs, s.scanned
-
-	keys := make([]string, 0, len(found))
-	for k, rf := range found {
-		if !rf.leftover() {
-			keys = append(keys, k)
-		}
-	}
-	sort.Strings(keys)
-	operators := newModuleOperatorFinder(c, nil)
-	for _, k := range keys {
-		out.problems = append(out.problems, applyFailureProblem(c, api, operators, found[k]))
-	}
-
-	switch {
-	case len(out.problems) > 0:
-		out.check.Status = "fail"
-		out.check.Detail = fmt.Sprintf("%s the operator cannot update", kube.CountNoun(len(out.problems), "object", "objects"))
-	case len(errs) > 0:
-		out.check.Status = "warn"
-		out.check.Detail = "No apply failures in the CRs that could be read"
-	default:
-		out.check.Detail = fmt.Sprintf("No apply failures reported (%s checked)", kube.CountNoun(scanned, "CR", "CRs"))
-	}
-	if len(errs) > 0 {
-		out.check.Detail += "; could not read: " + strings.Join(errs, "; ")
-	}
-	return out
-}
-
 // restartGuidance names the operator that reconciles the reporting CR and
-// how to restart it, from the module's operator (moduleOperatorFinder); ""
+// how to restart it, from the module's operator (ModuleOperatorFinder); ""
 // command when the operator is not known.
-func restartGuidance(operators *moduleOperatorFinder, r applyReporter) (who, cmd string) {
+func restartGuidance(operators *ModuleOperatorFinder, r ApplyReporter) (who, cmd string) {
 	ns, name := rhoai.SubNS, rhoai.SubName // the DataScienceCluster and the Platform
 	rhoai := true
 	if r.Module != "" {
-		op, _, err := operators.find(r.Module, r.Name)
+		op, _, err := operators.Find(r.Module, r.Name)
 		if err != nil || op == nil {
 			return fmt.Sprintf("the operator that reconciles %s", r), ""
 		}
@@ -465,26 +433,26 @@ func restartGuidance(operators *moduleOperatorFinder, r applyReporter) (who, cmd
 	return fmt.Sprintf("%s/%s", ns, name), kube.ShellCommand("oc", "rollout", "restart", "deployment/"+name, "-n", ns)
 }
 
-func applyFailureProblem(c *Client, api rhoai.ComponentAPI, operators *moduleOperatorFinder, rf *reportedApplyFailure) Problem {
-	sort.SliceStable(rf.reporters, func(i, j int) bool { return rf.reporters[i].rank > rf.reporters[j].rank })
-	reporter := rf.reporters[0]
+func ApplyFailureProblem(c *kube.Client, api rhoai.ComponentAPI, operators *ModuleOperatorFinder, rf *ReportedApplyFailure) report.Problem {
+	sort.SliceStable(rf.Reporters, func(i, j int) bool { return rf.Reporters[i].Rank > rf.Reporters[j].Rank })
+	reporter := rf.Reporters[0]
 	severity := "warning"
 	var names []string
-	for _, r := range rf.reporters {
+	for _, r := range rf.Reporters {
 		names = append(names, r.String())
 		if r.NotReady {
 			severity = "critical"
 		}
 	}
-	f := rf.applyFailure
+	f := rf.ApplyFailure
 	evidence := []string{fmt.Sprintf("Reported by %s", strings.Join(names, ", "))}
-	for _, d := range rf.details {
-		evidence = append(evidence, fmt.Sprintf("Failure deploying %s (%s): %s", f.object(), f.GroupVersion, kube.TruncateText(d, 500)))
+	for _, d := range rf.Details {
+		evidence = append(evidence, fmt.Sprintf("Failure deploying %s (%s): %s", f.Object(), f.GroupVersion, kube.TruncateText(d, 500)))
 	}
-	p := Problem{
+	p := report.Problem{
 		ID:              f.genericProblemID(),
 		Severity:        severity,
-		AffectedObjects: []string{f.object()},
+		AffectedObjects: []string{f.Object()},
 		AutoFixable:     false,
 	}
 	who, restart := restartGuidance(operators, reporter)
@@ -492,39 +460,39 @@ func applyFailureProblem(c *Client, api rhoai.ComponentAPI, operators *moduleOpe
 
 	// A schema mismatch first: re-applying the CRD comes before anything
 	// that makes the operator write the object again.
-	if rf.has(applySchemaMismatch) {
+	if rf.Has(ApplySchemaMismatch) {
 		crd := crdNameFor(api, f)
 		titles = append(titles, "does not match its CRD's schema")
 		descriptions = append(descriptions, "The live CRD and the object disagree on the type of a field, so the operator cannot update the object. "+
 			"This usually follows a downgrade or a round trip to an older version: OLM applies every CRD of the bundle it installs, so an older bundle replaces a same-named CRD, "+
 			"and a CRD the newer version no longer ships keeps the older schema after going back.")
-		for _, field := range rf.fields[applySchemaMismatch] {
+		for _, field := range rf.Fields[ApplySchemaMismatch] {
 			evidence = append(evidence, "Field "+field)
 		}
 		if crd != "" {
 			evidence = append(evidence, crdWriterEvidence(c, crd)...)
 			p.AffectedObjects = append(p.AffectedObjects, "CustomResourceDefinition "+crd)
 		}
-		crdRef := kube.NonEmpty(crd, fmt.Sprintf("the CRD of %s in group %s", f.Kind, f.group()))
+		crdRef := kube.NonEmpty(crd, fmt.Sprintf("the CRD of %s in group %s", f.Kind, f.Group()))
 		fixes = append(fixes, fmt.Sprintf("Re-apply %s from the installed operator version's bundle, then correct the listed fields of %s to the type that CRD expects. "+
-			"The right value needs judgement, so there is no automatic fix.", crdRef, f.object()))
-		cmds = append(cmds, f.ocCommand("get", "-o", "yaml"))
+			"The right value needs judgement, so there is no automatic fix.", crdRef, f.Object()))
+		cmds = append(cmds, f.OCCommand("get", "-o", "yaml"))
 		if crd != "" {
 			cmds = append(cmds, kube.ShellCommand("oc", "get", "crd", crd, "-o", "jsonpath={.metadata.managedFields}"))
-		} else if g := f.group(); g != "" {
+		} else if g := f.Group(); g != "" {
 			cmds = append(cmds, kube.ShellCommand("oc", "api-resources", "--api-group="+g))
 		}
 	}
-	recreate := rf.has(applyImmutable) || rf.has(applyControllerOwner)
-	if rf.has(applyImmutable) {
-		fields := kube.NonEmpty(strings.Join(rf.fields[applyImmutable], ", "), "a field")
+	recreate := rf.Has(ApplyImmutable) || rf.Has(ApplyControllerOwner)
+	if rf.Has(ApplyImmutable) {
+		fields := kube.NonEmpty(strings.Join(rf.Fields[ApplyImmutable], ", "), "a field")
 		titles = append(titles, fmt.Sprintf("must be recreated: %s cannot be changed", fields))
 		descriptions = append(descriptions, fmt.Sprintf("The operator cannot apply its version of %s because %s is immutable; an older version created the object with a different value. "+
-			"The operator keeps failing until the object is deleted.", f.object(), fields))
+			"The operator keeps failing until the object is deleted.", f.Object(), fields))
 	}
-	if rf.has(applyControllerOwner) {
+	if rf.Has(ApplyControllerOwner) {
 		titles = append(titles, "has two controller owners")
-		descriptions = append(descriptions, fmt.Sprintf("Ownership of %s moved between operator versions, and the object still carries the old controller reference, so the operator that owns it now cannot update it.", f.object()))
+		descriptions = append(descriptions, fmt.Sprintf("Ownership of %s moved between operator versions, and the object still carries the old controller reference, so the operator that owns it now cannot update it.", f.Object()))
 		if rf.owners != "" {
 			evidence = append(evidence, "Controller references: "+rf.owners)
 		}
@@ -538,15 +506,15 @@ func applyFailureProblem(c *Client, api rhoai.ComponentAPI, operators *moduleOpe
 		if f.Kind == "Deployment" || f.Kind == "StatefulSet" || f.Kind == "DaemonSet" {
 			impact = fmt.Sprintf("Its pods stop until the operator recreates it; for a controller %s that is safe, because the operator recreates it with the current spec.", f.Kind)
 		}
-		fixes = append(fixes, fmt.Sprintf("Delete %s, then %s; the operator recreates it with the current spec and owner. %s", f.object(), restartStep, impact))
-		cmds = append(cmds, f.ocCommand("delete"))
+		fixes = append(fixes, fmt.Sprintf("Delete %s, then %s; the operator recreates it with the current spec and owner. %s", f.Object(), restartStep, impact))
+		cmds = append(cmds, f.OCCommand("delete"))
 	} else {
 		fixes = append(fixes, "Afterwards "+restartStep+".")
 	}
 	if restart != "" {
 		cmds = append(cmds, restart)
 	}
-	p.Title = fmt.Sprintf("%s %s", f.object(), strings.Join(titles, "; it also "))
+	p.Title = fmt.Sprintf("%s %s", f.Object(), strings.Join(titles, "; it also "))
 	p.Description = strings.Join(descriptions, " ")
 	p.Fix = strings.Join(fixes, " ")
 	p.Evidence = evidence
@@ -557,8 +525,8 @@ func applyFailureProblem(c *Client, api rhoai.ComponentAPI, operators *moduleOpe
 // crdNameFor returns the CRD of the failing object's kind when the tool
 // knows its plural: the discovered module kinds and the DSC, DSCI and
 // Platform. "" otherwise.
-func crdNameFor(api rhoai.ComponentAPI, f applyFailure) string {
-	group := f.group()
+func crdNameFor(api rhoai.ComponentAPI, f ApplyFailure) string {
+	group := f.Group()
 	if k, ok := api.KindOf(group, f.Kind); ok {
 		return k.CRD()
 	}
@@ -573,7 +541,7 @@ func crdNameFor(api rhoai.ComponentAPI, f applyFailure) string {
 // crdWriterEvidence says who last wrote the CRD's spec.versions, from its
 // managedFields. The ServiceAccount may list CRDs but get only two by name,
 // so it lists with a name field selector.
-func crdWriterEvidence(c *Client, crd string) []string {
+func crdWriterEvidence(c *kube.Client, crd string) []string {
 	body, _, err := c.Do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil,
 		url.Values{"fieldSelector": {"metadata.name=" + crd}})
 	if err != nil {

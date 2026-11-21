@@ -1,4 +1,4 @@
-package cluster
+package components
 
 import (
 	"encoding/json"
@@ -18,20 +18,20 @@ type deploymentSnapshot struct {
 }
 
 // SaveDeploymentSnapshot captures the current deployment image digests into a ConfigMap.
-func SaveDeploymentSnapshot(c *Client) error {
+func SaveDeploymentSnapshot(c *kube.Client) error {
 	// No DSCInitialization: RHOAI has no applications yet, so only the
 	// operator's Deployments are recorded.
 	var appDeps []types.DeploymentInfo
 	appNS, err := rhoai.AppsNamespace(c)
 	switch {
 	case err == nil:
-		if appDeps, err = getDeployments(c, appNS); err != nil {
+		if appDeps, err = Deployments(c, appNS); err != nil {
 			return fmt.Errorf("failed to get app deployments: %w", err)
 		}
 	case !errors.Is(err, rhoai.ErrNoDSCInitialization):
 		return fmt.Errorf("failed to get app deployments: %w", err)
 	}
-	opDeps, err := getDeployments(c, rhoai.SubNS)
+	opDeps, err := Deployments(c, rhoai.SubNS)
 	if err != nil {
 		return fmt.Errorf("failed to get operator deployments: %w", err)
 	}
@@ -72,8 +72,8 @@ func SaveDeploymentSnapshot(c *Client) error {
 	return nil
 }
 
-// GetDeploymentSnapshot reads the last saved snapshot from the ConfigMap.
-func GetDeploymentSnapshot(c *Client) (map[string]string, string) {
+// ReadDeploymentSnapshot reads the last saved snapshot from the ConfigMap.
+func ReadDeploymentSnapshot(c *kube.Client) (map[string]string, string) {
 	ns := record.GetActivityNamespace()
 	cmPath := rhoai.NamespacedPath("v1", "configmaps", ns, record.SnapshotConfigMapName)
 

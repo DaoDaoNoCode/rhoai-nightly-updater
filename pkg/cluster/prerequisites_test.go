@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 )
 
 // Condition messages verbatim from a live RHOAI 3.6 nightly on OCP 4.22
@@ -32,7 +34,7 @@ func TestParseMissingDependencies_LiveMessages(t *testing.T) {
 		{"Foo and Bar Operator are not installed", []string{"Foo", "Bar Operator"}},
 	}
 	for _, tt := range tests {
-		if got := parseMissingDependencies(tt.msg); strings.Join(got, "|") != strings.Join(tt.want, "|") {
+		if got := components.ParseMissingDependencies(tt.msg); strings.Join(got, "|") != strings.Join(tt.want, "|") {
 			t.Errorf("parseMissingDependencies(%q) = %q, want %q", tt.msg, got, tt.want)
 		}
 	}
@@ -53,7 +55,7 @@ func TestNormalizeOperatorName(t *testing.T) {
 		{"LWS", "leaderworkerset"},
 		{"Red Hat Connectivity Link", "connectivitylink"},
 	} {
-		if got := normalizeOperatorName(tt.in); got != tt.want {
+		if got := components.NormalizeOperatorName(tt.in); got != tt.want {
 			t.Errorf("normalizeOperatorName(%q) = %q, want %q", tt.in, got, tt.want)
 		}
 	}
@@ -108,10 +110,10 @@ func liveCatalog() []map[string]any {
 	}
 }
 
-func catalogPackages(t *testing.T, items []map[string]any) []catalogPackage {
+func catalogPackages(t *testing.T, items []map[string]any) []components.CatalogPackage {
 	t.Helper()
 	body, _ := json.Marshal(map[string]any{"items": items})
-	pkgs, err := parsePackageManifests(body)
+	pkgs, err := components.ParsePackageManifests(body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,47 +122,47 @@ func catalogPackages(t *testing.T, items []map[string]any) []catalogPackage {
 
 func TestMatchPackages_PrefersRedHatOverCommunity(t *testing.T) {
 	pkgs := catalogPackages(t, liveCatalog())
-	got := matchPackages(pkgs, normalizeOperatorName("cert-manager operator"))
+	got := components.MatchPackages(pkgs, components.NormalizeOperatorName("cert-manager operator"))
 	if len(got) != 2 || got[0].Name != "openshift-cert-manager-operator" || got[1].Name != "cert-manager" {
 		t.Fatalf("matches = %+v", got)
 	}
-	if m := matchPackages(pkgs, normalizeOperatorName("JobSet Operator")); len(m) != 1 || m[0].Name != "job-set" || m[0].DefaultChannel != "stable-v1.0" || m[0].CurrentCSV != "jobset-operator.v1.0.1" {
+	if m := components.MatchPackages(pkgs, components.NormalizeOperatorName("JobSet Operator")); len(m) != 1 || m[0].Name != "job-set" || m[0].DefaultChannel != "stable-v1.0" || m[0].CurrentCSV != "jobset-operator.v1.0.1" {
 		t.Fatalf("job-set = %+v", m)
 	}
-	if m := matchPackages(pkgs, "nosuchoperator"); len(m) != 0 {
+	if m := components.MatchPackages(pkgs, "nosuchoperator"); len(m) != 0 {
 		t.Fatalf("unexpected match %+v", m)
 	}
 }
 
 func TestSingletonFor(t *testing.T) {
 	pkgs := catalogPackages(t, liveCatalog())
-	byName := map[string]catalogPackage{}
+	byName := map[string]components.CatalogPackage{}
 	for _, p := range pkgs {
 		byName[p.Name] = p
 	}
 	// cert-manager ships two singletons; the one named like the operator is
 	// its operand (TrustManager is a separate feature).
-	if s := byName["openshift-cert-manager-operator"].singletonFor("certmanager"); s == nil || s.Kind != "CertManager" {
+	if s := byName["openshift-cert-manager-operator"].SingletonFor("certmanager"); s == nil || s.Kind != "CertManager" {
 		t.Fatalf("cert-manager singleton = %+v", s)
 	}
-	if s := byName["job-set"].singletonFor("jobset"); s == nil || s.Kind != "JobSetOperator" || s.APIVersion != "operator.openshift.io/v1" {
+	if s := byName["job-set"].SingletonFor("jobset"); s == nil || s.Kind != "JobSetOperator" || s.APIVersion != "operator.openshift.io/v1" {
 		t.Fatalf("job-set singleton = %+v", s)
 	}
-	if s := byName["cert-manager"].singletonFor("certmanager"); s != nil {
+	if s := byName["cert-manager"].SingletonFor("certmanager"); s != nil {
 		t.Fatalf("community cert-manager has no singleton, got %+v", s)
 	}
 }
 
 func TestPlanInstall(t *testing.T) {
 	pkgs := catalogPackages(t, liveCatalog())
-	byName := map[string]catalogPackage{}
+	byName := map[string]components.CatalogPackage{}
 	for _, p := range pkgs {
 		byName[p.Name] = p
 	}
 	t.Run("OwnNamespace with operand (job-set)", func(t *testing.T) {
 		_, c := newFakeAPI(t)
 		p := byName["job-set"]
-		plan, err := planInstall(c, p, p.singletonFor("jobset"))
+		plan, err := components.PlanInstall(c, p, p.SingletonFor("jobset"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -173,52 +175,52 @@ func TestPlanInstall(t *testing.T) {
 			"oc get jobsetoperator.operator.openshift.io/cluster >/dev/null 2>&1 || oc create -f - <<'EOF'\n{\n  \"apiVersion\": \"operator.openshift.io/v1\",\n  \"kind\": \"JobSetOperator\"",
 			`"managementState": "Managed"`,
 		} {
-			if !strings.Contains(plan.script, want) {
-				t.Errorf("script lacks %q:\n%s", want, plan.script)
+			if !strings.Contains(plan.Script, want) {
+				t.Errorf("script lacks %q:\n%s", want, plan.Script)
 			}
 		}
-		if !strings.HasSuffix(plan.script, "\nEOF") {
-			t.Errorf("script does not end its here-document:\n%s", plan.script)
+		if !strings.HasSuffix(plan.Script, "\nEOF") {
+			t.Errorf("script does not end its here-document:\n%s", plan.Script)
 		}
 	})
 	t.Run("OwnNamespace preferred over AllNamespaces (cert-manager)", func(t *testing.T) {
 		_, c := newFakeAPI(t)
 		p := byName["openshift-cert-manager-operator"]
-		plan, err := planInstall(c, p, p.singletonFor("certmanager"))
+		plan, err := components.PlanInstall(c, p, p.SingletonFor("certmanager"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(plan.script, "  name: cert-manager-operator\n---") || !strings.Contains(plan.script, "targetNamespaces:\n  - cert-manager-operator") ||
-			!strings.Contains(plan.script, "oc get certmanager.operator.openshift.io/cluster") || strings.Contains(plan.script, "TrustManager") ||
-			strings.Contains(plan.script, "cluster-monitoring") {
-			t.Fatalf("script:\n%s", plan.script)
+		if !strings.Contains(plan.Script, "  name: cert-manager-operator\n---") || !strings.Contains(plan.Script, "targetNamespaces:\n  - cert-manager-operator") ||
+			!strings.Contains(plan.Script, "oc get certmanager.operator.openshift.io/cluster") || strings.Contains(plan.Script, "TrustManager") ||
+			strings.Contains(plan.Script, "cluster-monitoring") {
+			t.Fatalf("script:\n%s", plan.Script)
 		}
-		if !strings.Contains(strings.Join(plan.notes, " "), "some operators create it themselves") {
-			t.Fatalf("notes = %q", plan.notes)
+		if !strings.Contains(strings.Join(plan.Notes, " "), "some operators create it themselves") {
+			t.Fatalf("notes = %q", plan.Notes)
 		}
 	})
 	t.Run("AllNamespaces only goes to openshift-operators without an OperatorGroup", func(t *testing.T) {
 		f, c := newFakeAPI(t)
 		f.json("GET", "/apis/operators.coreos.com/v1/namespaces/openshift-operators/operatorgroups", 200, `{"items":[{"metadata":{"name":"global-operators"},"spec":{}}]}`)
-		plan, err := planInstall(c, byName["cert-manager"], nil)
+		plan, err := components.PlanInstall(c, byName["cert-manager"], nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(plan.script, "OperatorGroup") || strings.Contains(plan.script, "kind: Namespace") || !strings.Contains(plan.script, "namespace: openshift-operators") ||
-			!strings.Contains(plan.script, "source: community-operators") {
-			t.Fatalf("script:\n%s", plan.script)
+		if strings.Contains(plan.Script, "OperatorGroup") || strings.Contains(plan.Script, "kind: Namespace") || !strings.Contains(plan.Script, "namespace: openshift-operators") ||
+			!strings.Contains(plan.Script, "source: community-operators") {
+			t.Fatalf("script:\n%s", plan.Script)
 		}
 	})
 	t.Run("an existing OperatorGroup is reused", func(t *testing.T) {
 		f, c := newFakeAPI(t)
 		f.json("GET", "/apis/operators.coreos.com/v1/namespaces/openshift-lws-operator/operatorgroups", 200, `{"items":[{"metadata":{"name":"lws-og"},"spec":{"targetNamespaces":["openshift-lws-operator"]}}]}`)
 		p := byName["leader-worker-set"]
-		plan, err := planInstall(c, p, p.singletonFor("leaderworkerset"))
+		plan, err := components.PlanInstall(c, p, p.SingletonFor("leaderworkerset"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(plan.script, "kind: OperatorGroup") || !strings.Contains(strings.Join(plan.notes, " "), "already has OperatorGroup lws-og (install mode OwnNamespace") {
-			t.Fatalf("script:\n%s\nnotes: %q", plan.script, plan.notes)
+		if strings.Contains(plan.Script, "kind: OperatorGroup") || !strings.Contains(strings.Join(plan.Notes, " "), "already has OperatorGroup lws-og (install mode OwnNamespace") {
+			t.Fatalf("script:\n%s\nnotes: %q", plan.Script, plan.Notes)
 		}
 	})
 	t.Run("an existing OperatorGroup with an unsupported mode is refused", func(t *testing.T) {
@@ -231,7 +233,7 @@ func TestPlanInstall(t *testing.T) {
 			f, c := newFakeAPI(t)
 			f.json("GET", "/apis/operators.coreos.com/v1/namespaces/openshift-lws-operator/operatorgroups", 200, `{"items":`+ogs+`}`)
 			p := byName["leader-worker-set"]
-			_, err := planInstall(c, p, p.singletonFor("leaderworkerset"))
+			_, err := components.PlanInstall(c, p, p.SingletonFor("leaderworkerset"))
 			if err == nil {
 				t.Errorf("%s: expected a refusal", name)
 				continue
@@ -241,14 +243,14 @@ func TestPlanInstall(t *testing.T) {
 		// openshift-operators whose OperatorGroup does not watch all namespaces.
 		f, c := newFakeAPI(t)
 		f.json("GET", "/apis/operators.coreos.com/v1/namespaces/openshift-operators/operatorgroups", 200, `{"items":[{"metadata":{"name":"own"},"spec":{"targetNamespaces":["openshift-operators"]}}]}`)
-		if _, err := planInstall(c, byName["cert-manager"], nil); err == nil || !strings.Contains(err.Error(), "install mode OwnNamespace") {
+		if _, err := components.PlanInstall(c, byName["cert-manager"], nil); err == nil || !strings.Contains(err.Error(), "install mode OwnNamespace") {
 			t.Fatalf("err = %v", err)
 		}
 	})
 	t.Run("openshift-operators without an OperatorGroup gets one for all namespaces", func(t *testing.T) {
 		_, c := newFakeAPI(t)
-		plan, err := planInstall(c, byName["cert-manager"], nil)
-		if err != nil || !strings.Contains(plan.script, "kind: OperatorGroup\nmetadata:\n  name: global-operators\n  namespace: openshift-operators\nspec: {}") {
+		plan, err := components.PlanInstall(c, byName["cert-manager"], nil)
+		if err != nil || !strings.Contains(plan.Script, "kind: OperatorGroup\nmetadata:\n  name: global-operators\n  namespace: openshift-operators\nspec: {}") {
 			t.Fatalf("plan = %+v, %v", plan, err)
 		}
 	})
@@ -256,7 +258,7 @@ func TestPlanInstall(t *testing.T) {
 		_, c := newFakeAPI(t)
 		p := byName["job-set"]
 		p.InstallModes = []string{"SingleNamespace"}
-		if _, err := planInstall(c, p, nil); err == nil || !strings.Contains(err.Error(), "SingleNamespace") {
+		if _, err := components.PlanInstall(c, p, nil); err == nil || !strings.Contains(err.Error(), "SingleNamespace") {
 			t.Fatalf("err = %v", err)
 		}
 	})
@@ -264,17 +266,17 @@ func TestPlanInstall(t *testing.T) {
 		_, c := newFakeAPI(t)
 		p := byName["job-set"]
 		p.DefaultChannel = "stable; rm -rf /"
-		if _, err := planInstall(c, p, nil); err == nil {
+		if _, err := components.PlanInstall(c, p, nil); err == nil {
 			t.Fatal("expected an error")
 		}
 	})
 }
 
 func TestOperandCommand_RefusesUnexpectedKinds(t *testing.T) {
-	if _, err := operandCommand(almExample{APIVersion: "operator.openshift.io/v1", Kind: "Bad Kind"}); err == nil {
+	if _, err := components.OperandCommand(components.ALMExample{APIVersion: "operator.openshift.io/v1", Kind: "Bad Kind"}); err == nil {
 		t.Fatal("expected an error for a kind with a space")
 	}
-	cmd, err := operandCommand(almExample{APIVersion: "operator.openshift.io/v1", Kind: "JobSetOperator", Spec: json.RawMessage(`{"a":"EOF"}`)})
+	cmd, err := components.OperandCommand(components.ALMExample{APIVersion: "operator.openshift.io/v1", Kind: "JobSetOperator", Spec: json.RawMessage(`{"a":"EOF"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,18 +291,18 @@ func TestOperandCommand_RefusesUnexpectedKinds(t *testing.T) {
 
 func TestFindInstalledCSV(t *testing.T) {
 	pkgs := catalogPackages(t, liveCatalog())
-	jobset := matchPackages(pkgs, "jobset")[0]
-	csvs := []clusterCSV{
+	jobset := components.MatchPackages(pkgs, "jobset")[0]
+	csvs := []components.ClusterCSV{
 		{Name: "jobset-operator.v1.0.0", Namespace: "openshift-jobset-operator", Phase: "Failed"},
 		{Name: "jobset-operator.v1.0.1", Namespace: "openshift-jobset-operator", Phase: "Succeeded", Labels: map[string]string{"operators.coreos.com/job-set.openshift-jobset-operator": ""}},
 		{Name: "other.v1", Namespace: "x", Phase: "Succeeded"},
 	}
-	if got := findInstalledCSV(csvs, &jobset, "jobset"); got == nil || got.Name != "jobset-operator.v1.0.1" {
+	if got := components.FindInstalledCSV(csvs, &jobset, "jobset"); got == nil || got.Name != "jobset-operator.v1.0.1" {
 		t.Fatalf("got %+v", got)
 	}
 	// Without a catalog match, the CSV's display name decides.
-	csvs = []clusterCSV{{Name: "lws.v1", Namespace: "ns", DisplayName: "Leader Worker Set Operator", Phase: "Succeeded"}}
-	if got := findInstalledCSV(csvs, nil, "leaderworkerset"); got == nil {
+	csvs = []components.ClusterCSV{{Name: "lws.v1", Namespace: "ns", DisplayName: "Leader Worker Set Operator", Phase: "Succeeded"}}
+	if got := components.FindInstalledCSV(csvs, nil, "leaderworkerset"); got == nil {
 		t.Fatal("not found by display name")
 	}
 }

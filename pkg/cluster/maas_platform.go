@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -200,7 +201,7 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 		return nil, fmt.Errorf("parse Authorino %s/authorino: %w", ns, err)
 	}
 	secret := kube.FirstNonEmpty(cr.Spec.Listener.TLS.CertSecretRef.Name, authorinoDefaultSecret)
-	if len(secret) > 253 || !dns1123Subdomain.MatchString(secret) {
+	if len(secret) > 253 || !components.DNS1123Subdomain.MatchString(secret) {
 		return nil, fmt.Errorf("authorino's CR names its certificate Secret %q, which is not a valid Kubernetes name", kube.TruncateText(secret, 300))
 	}
 	query := url.Values{"fieldManager": {toolFieldManager}}
@@ -268,7 +269,7 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 	}
 	if len(changes) > 0 && !dryRun {
 		patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
-			"annotations": map[string]string{restartAnnotation: kube.Clock().Now().UTC().Format(time.RFC3339)},
+			"annotations": map[string]string{components.RestartAnnotation: kube.Clock().Now().UTC().Format(time.RFC3339)},
 		}}}})
 		if _, _, err := c.Do(http.MethodPatch, rhoai.NamespacedPath("apps/v1", "deployments", ns, "authorino"), "application/merge-patch+json", patch, query); err != nil {
 			return changes, fmt.Errorf("restart Deployment %s/authorino: %w", ns, err)

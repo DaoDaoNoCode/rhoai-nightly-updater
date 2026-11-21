@@ -74,9 +74,6 @@ import (
 // AnnotationChangedPredicate), which the live recovery used.
 
 const (
-	leftoversCheckName = "Left over from an earlier release"
-	leftoverIDPrefix   = "leftover-"
-
 	fixLeftoverFields   = "fix-leftover-fields:" // <Kind>/<name>
 	fixLeftoverRecreate = "recreate-leftover:"   // <Kind>/<namespace>/<name>
 	fixLeftoverRetry    = "retry-dsc-reconcile:" // <DataScienceCluster name>
@@ -91,21 +88,13 @@ var (
 	leftoverRecreatePoll = 5 * time.Second
 )
 
-func leftoverFieldsID(kind, name string) string {
-	return leftoverIDPrefix + "fields-" + strings.ToLower(kind+"-"+name)
-}
-
-func leftoverRecreateID(kind, namespace, name string) string {
-	return leftoverIDPrefix + "recreate-" + strings.ToLower(kind+"-"+namespace+"-"+name)
-}
-
 // leftoverObject returns the object's reported failures when the
 // leftovers check handles it (rf.leftover) with the class want, else nil.
 // Every failure of the object is collected first, so an object with other
 // failures too is never taken.
-func leftoverObject(s reporterScan, group, kind, namespace, name string, want applyFailureClass) *reportedApplyFailure {
-	rf := s.found[strings.Join([]string{group, kind, namespace, name}, "|")]
-	if rf == nil || !rf.leftover() || !rf.has(want) {
+func leftoverObject(s components.ReporterScan, group, kind, namespace, name string, want components.ApplyFailureClass) *components.ReportedApplyFailure {
+	rf := s.Found[strings.Join([]string{group, kind, namespace, name}, "|")]
+	if rf == nil || !rf.Leftover() || !rf.Has(want) {
 		return nil
 	}
 	return rf
@@ -124,32 +113,32 @@ func checkLeftovers(c *Client) checkOutput { return leftoversCheck(c, componentU
 func checkLeftoversGitOps(c *Client) checkOutput { return leftoversCheck(c, nil) }
 
 func leftoversCheck(c *Client, users usersReader) checkOutput {
-	out := checkOutput{check: CheckResult{Name: leftoversCheckName, Status: "pass"}}
-	s := scanApplyReporters(c, allApplyFailures)
+	out := checkOutput{check: CheckResult{Name: components.LeftoversCheckName, Status: "pass"}}
+	s := components.ScanApplyReporters(c, components.AllApplyFailures)
 	appNS := rhoai.ApplicationsNamespace(c)
-	keys := make([]string, 0, len(s.found))
-	for k, rf := range s.found {
-		if rf.leftover() {
+	keys := make([]string, 0, len(s.Found))
+	for k, rf := range s.Found {
+		if rf.Leftover() {
 			keys = append(keys, k)
 		}
 	}
 	// Stored field types first: the module operator cannot run until they
 	// are fixed, and it is what recreates a workload.
 	sort.Slice(keys, func(i, j int) bool {
-		si, sj := s.found[keys[i]].has(applyStoredType), s.found[keys[j]].has(applyStoredType)
+		si, sj := s.Found[keys[i]].Has(components.ApplyStoredType), s.Found[keys[j]].Has(components.ApplyStoredType)
 		if si != sj {
 			return si
 		}
 		return keys[i] < keys[j]
 	})
 	for _, k := range keys {
-		rf := s.found[k]
+		rf := s.Found[k]
 		switch {
-		case rf.has(applyStoredType):
+		case rf.Has(components.ApplyStoredType):
 			st := analyzeStored(c, s, rf)
 			st.Crash = moduleOperatorCrash(c, st, time.Now())
 			out.problems = append(out.problems, st.problem())
-		case rf.has(applyImmutable):
+		case rf.Has(components.ApplyImmutable):
 			r := analyzeRecreate(c, rf, appNS, readDeploymentForScan, users)
 			out.problems = append(out.problems, r.problem())
 		}
@@ -158,14 +147,14 @@ func leftoversCheck(c *Client, users usersReader) checkOutput {
 	case len(out.problems) > 0:
 		out.check.Status = "fail"
 		out.check.Detail = fmt.Sprintf("%s left over from an earlier release", kube.CountNoun(len(out.problems), "object", "objects"))
-	case len(s.errs) > 0:
+	case len(s.Errs) > 0:
 		out.check.Status = "warn"
 		out.check.Detail = "Nothing left over in the CRs that could be read"
 	default:
-		out.check.Detail = fmt.Sprintf("No stored field of an older type and no changed selector reported (%s checked)", kube.CountNoun(s.scanned, "CR", "CRs"))
+		out.check.Detail = fmt.Sprintf("No stored field of an older type and no changed selector reported (%s checked)", kube.CountNoun(s.Scanned, "CR", "CRs"))
 	}
-	if len(s.errs) > 0 {
-		out.check.Detail += "; could not read: " + strings.Join(s.errs, "; ")
+	if len(s.Errs) > 0 {
+		out.check.Detail += "; could not read: " + strings.Join(s.Errs, "; ")
 	}
 	return out
 }
@@ -358,7 +347,7 @@ func (lf *leftoverField) decide(obj map[string]any, root map[string]any) {
 
 // storedLeftover is a module CR whose stored fields have older types.
 type storedLeftover struct {
-	rf                                        *reportedApplyFailure
+	rf                                        *components.ReportedApplyFailure
 	Kind, Name, Group, Version, Resource, CRD string
 	UID, ResourceVersion                      string
 	Fields                                    []*leftoverField
@@ -393,24 +382,24 @@ func (st *storedLeftover) needsReview() bool {
 
 // analyzeStored reads the object and its CRD for a stored-type failure.
 // Every read error leaves a Blocker (fail closed).
-func analyzeStored(c *Client, s reporterScan, rf *reportedApplyFailure) *storedLeftover {
-	f := rf.applyFailure
+func analyzeStored(c *Client, s components.ReporterScan, rf *components.ReportedApplyFailure) *storedLeftover {
+	f := rf.ApplyFailure
 	st := &storedLeftover{rf: rf, Kind: f.Kind, Name: f.Name}
 	_, st.Version, _ = strings.Cut(f.GroupVersion, "/")
-	for _, r := range rf.reporters {
+	for _, r := range rf.Reporters {
 		st.notReady = st.notReady || r.NotReady
 	}
-	for _, raw := range rf.fields[applyStoredType] {
+	for _, raw := range rf.Fields[components.ApplyStoredType] {
 		if m := reportedField.FindStringSubmatch(raw); m != nil {
 			st.Fields = append(st.Fields, &leftoverField{Path: m[1], Expected: m[2]})
 		}
 	}
-	st.Group = f.group()
-	if !isModuleAPIGroup(st.Group) {
+	st.Group = f.Group()
+	if !components.IsModuleAPIGroup(st.Group) {
 		st.Blocker = fmt.Sprintf("the tool changes only module CRs (%s), and this is a %s", strings.Join(rhoai.ModuleAPIGroups, ", "), f.GroupVersion)
 		return st
 	}
-	k, ok := s.api.KindOf(st.Group, f.Kind)
+	k, ok := s.API.KindOf(st.Group, f.Kind)
 	if !ok {
 		st.Blocker = fmt.Sprintf("%s does not serve the kind %s, so the tool cannot read the object", st.Group, f.Kind)
 		return st
@@ -418,7 +407,7 @@ func analyzeStored(c *Client, s reporterScan, rf *reportedApplyFailure) *storedL
 	st.Resource = k.Resource
 	st.CRD = k.CRD()
 
-	obj := s.modules[moduleScanKey(st.Group, f.Kind)][f.Name]
+	obj := s.Modules[components.ModuleScanKey(st.Group, f.Kind)][f.Name]
 	if st.Version != k.Version || obj == nil {
 		var err error
 		obj, err = listModuleObject(c, st.Group, st.Version, st.Resource, f.Name)
@@ -665,7 +654,7 @@ func moduleOperatorCrash(c *Client, st *storedLeftover, now time.Time) *leftover
 	if st.Resource == "" {
 		return nil
 	}
-	d, _ := findModuleOperator(c, newModuleOperatorFinder(c, nil), strings.ToLower(st.Kind))
+	d, _ := components.FindModuleOperator(c, components.NewModuleOperatorFinder(c, nil), strings.ToLower(st.Kind))
 	if d == nil || len(d.TemplateLabels) == 0 {
 		return nil
 	}
@@ -674,7 +663,7 @@ func moduleOperatorCrash(c *Client, st *storedLeftover, now time.Time) *leftover
 		sel = append(sel, k+"="+v)
 	}
 	sort.Strings(sel)
-	pods, err := listDiagPods(c, d.Namespace, strings.Join(sel, ","))
+	pods, err := components.ListPods(c, d.Namespace, strings.Join(sel, ","))
 	if err != nil {
 		return nil
 	}
@@ -684,12 +673,12 @@ func moduleOperatorCrash(c *Client, st *storedLeftover, now time.Time) *leftover
 		if p.Metadata.Namespace == "" {
 			p.Metadata.Namespace = d.Namespace
 		}
-		is := classifyPod(p, now)
-		if is == nil || (is.Kind != issueCrashLoop && is.Kind != issueRestarting) {
+		is := components.ClassifyPod(p, now)
+		if is == nil || (is.Kind != components.IssueCrashLoop && is.Kind != components.IssueRestarting) {
 			continue
 		}
 		if crash == nil {
-			crash = &leftoverCrash{Deployment: d.ref()}
+			crash = &leftoverCrash{Deployment: d.Ref()}
 		}
 		crash.Pods = append(crash.Pods, "Pod "+is.Namespace+"/"+is.Pod)
 		if is.Restarts > crash.Restarts {
@@ -734,10 +723,10 @@ func fieldJSON(v any) string {
 
 // reportersText names the CRs that report the failure, the most specific
 // first.
-func reportersText(rf *reportedApplyFailure) string {
-	sort.SliceStable(rf.reporters, func(i, j int) bool { return rf.reporters[i].rank > rf.reporters[j].rank })
+func reportersText(rf *components.ReportedApplyFailure) string {
+	sort.SliceStable(rf.Reporters, func(i, j int) bool { return rf.Reporters[i].Rank > rf.Reporters[j].Rank })
 	var names []string
-	for _, r := range rf.reporters {
+	for _, r := range rf.Reporters {
 		names = append(names, r.String())
 	}
 	return strings.Join(names, ", ")
@@ -751,7 +740,7 @@ func (st *storedLeftover) problem() Problem {
 	}
 	reporters := reportersText(rf)
 	evidence := []string{"Reported by " + reporters}
-	for _, d := range rf.details {
+	for _, d := range rf.Details {
 		evidence = append(evidence, "Operator error: "+kube.TruncateText(d, 500))
 	}
 	for _, lf := range st.Fields {
@@ -773,7 +762,7 @@ func (st *storedLeftover) problem() Problem {
 		evidence = append(evidence, st.CRDNote)
 	}
 	p := Problem{
-		ID:              leftoverFieldsID(st.Kind, st.Name),
+		ID:              components.LeftoverFieldsID(st.Kind, st.Name),
 		Severity:        severity,
 		AffectedObjects: []string{st.ref()},
 		FieldChanges:    st.fieldChanges(),
@@ -807,7 +796,7 @@ func (st *storedLeftover) problem() Problem {
 		p.Description = fmt.Sprintf("Every field the error names now matches the installed CRD, but %s still shows the error from its last attempt. The operator retries when an object it watches changes, usually within seconds.", reporters)
 		p.FieldChanges = st.fieldChanges()
 		p.Fix = "Re-scan in a minute. If the error stays, retry the reconcile."
-		for _, r := range rf.reporters {
+		for _, r := range rf.Reporters {
 			if r.Kind == "DataScienceCluster" {
 				p.Fix = fmt.Sprintf("Re-scan in a minute. If the error stays, Retry now: it adds the annotation %s to DataScienceCluster %s and removes it again, which makes the operator reconcile it at once. It changes nothing else.", leftoverRetryAnno, r.Name)
 				p.AutoFixable = true
@@ -935,7 +924,7 @@ func decodeWorkload(body []byte, err error) (workloadObject, bool, bool, error) 
 
 // recreateLeftover is a workload whose selector changed.
 type recreateLeftover struct {
-	rf                 *reportedApplyFailure
+	rf                 *components.ReportedApplyFailure
 	AppNS              string
 	Read, Found        bool
 	Obj                workloadObject
@@ -947,17 +936,17 @@ type recreateLeftover struct {
 	notReady           bool
 }
 
-func (r *recreateLeftover) ref() string { return r.rf.object() }
+func (r *recreateLeftover) ref() string { return r.rf.Object() }
 
 // analyzeRecreate checks a changed-selector workload: it must exist, be
 // in the RHOAI applications namespace, have as its controller owner a CR
 // that reports the failure (so that CR's operator applies it again), and
 // that operator must be running. What goes down meanwhile, and what the
 // tool cannot check, needs an acknowledgement.
-func analyzeRecreate(c *Client, rf *reportedApplyFailure, appNS string, read workloadReader, users usersReader) *recreateLeftover {
-	f := rf.applyFailure
+func analyzeRecreate(c *Client, rf *components.ReportedApplyFailure, appNS string, read workloadReader, users usersReader) *recreateLeftover {
+	f := rf.ApplyFailure
 	r := &recreateLeftover{rf: rf, AppNS: appNS}
-	for _, rep := range rf.reporters {
+	for _, rep := range rf.Reporters {
 		r.notReady = r.notReady || rep.NotReady
 	}
 	switch {
@@ -985,7 +974,7 @@ func analyzeRecreate(c *Client, rf *reportedApplyFailure, appNS string, read wor
 
 	// The controller owner must be a CR that reports the failure: that
 	// CR's operator applies the object, so it creates it again.
-	var owner *applyReporter
+	var owner *components.ApplyReporter
 	ownerText := "no controller owner"
 	for _, o := range obj.Metadata.OwnerReferences {
 		if o.Controller == nil || !*o.Controller {
@@ -993,13 +982,13 @@ func analyzeRecreate(c *Client, rf *reportedApplyFailure, appNS string, read wor
 		}
 		ownerText = fmt.Sprintf("controller owner %s %s (%s)", o.Kind, o.Name, o.APIVersion)
 		group, _, _ := strings.Cut(o.APIVersion, "/")
-		if !isModuleAPIGroup(group) && (group != rhoai.DSCGroup || o.Kind != "DataScienceCluster") {
+		if !components.IsModuleAPIGroup(group) && (group != rhoai.DSCGroup || o.Kind != "DataScienceCluster") {
 			continue
 		}
-		for i := range rf.reporters {
-			rep := rf.reporters[i]
+		for i := range rf.Reporters {
+			rep := rf.Reporters[i]
 			if rep.Kind == o.Kind && rep.Name == o.Name && rep.UID != "" && rep.UID == o.UID {
-				owner = &rf.reporters[i]
+				owner = &rf.Reporters[i]
 			}
 		}
 	}
@@ -1018,16 +1007,16 @@ func analyzeRecreate(c *Client, rf *reportedApplyFailure, appNS string, read wor
 			r.Recreator = "the RHOAI operator"
 		}
 	} else {
-		d, why := findModuleOperator(c, newModuleOperatorFinder(c, nil), r.Module)
+		d, why := components.FindModuleOperator(c, components.NewModuleOperatorFinder(c, nil), r.Module)
 		switch {
 		case d == nil:
 			r.Blockers = append(r.Blockers, fmt.Sprintf("the tool cannot tell which Deployment runs the %s module operator that would create it again (%s)", r.Module, why))
 		case d.Namespace == f.Namespace && d.Name == f.Name && f.Kind == "Deployment":
 			r.Blockers = append(r.Blockers, "it is the module operator that would create it again")
 		case d.Available < 1:
-			r.Blockers = append(r.Blockers, fmt.Sprintf("the %s module operator %s, which creates it again, has no available pod; fix that first", r.Module, d.ref()))
+			r.Blockers = append(r.Blockers, fmt.Sprintf("the %s module operator %s, which creates it again, has no available pod; fix that first", r.Module, d.Ref()))
 		default:
-			r.Recreator = fmt.Sprintf("the %s module operator %s", r.Module, d.ref())
+			r.Recreator = fmt.Sprintf("the %s module operator %s", r.Module, d.Ref())
 		}
 	}
 
@@ -1049,7 +1038,7 @@ func analyzeRecreate(c *Client, rf *reportedApplyFailure, appNS string, read wor
 		r.AckReasons = append(r.AckReasons, fmt.Sprintf("the tool cannot tell whether %s is in use: it has no reader for that component's resources", kube.NonEmpty(r.Module, r.Owner)))
 	}
 	if labels := obj.Spec.Template.Metadata.Labels; len(labels) > 0 {
-		hooks, err := webhooksServedBy(c, operatorDeployment{Namespace: f.Namespace, Name: f.Name, TemplateLabels: labels})
+		hooks, err := components.WebhooksServedBy(c, components.OperatorDeployment{Namespace: f.Namespace, Name: f.Name, TemplateLabels: labels})
 		switch {
 		case err != nil:
 			r.AckReasons = append(r.AckReasons, fmt.Sprintf("the tool could not check which webhooks its pods serve (%v)", err))
@@ -1062,24 +1051,24 @@ func analyzeRecreate(c *Client, rf *reportedApplyFailure, appNS string, read wor
 }
 
 func (r *recreateLeftover) problem() Problem {
-	rf, f := r.rf, r.rf.applyFailure
+	rf, f := r.rf, r.rf.ApplyFailure
 	severity := "warning"
 	if r.notReady {
 		severity = "critical"
 	}
 	reporters := reportersText(rf)
 	evidence := []string{"Reported by " + reporters}
-	for _, d := range rf.details {
+	for _, d := range rf.Details {
 		evidence = append(evidence, "Operator error: "+kube.TruncateText(d, 500))
 	}
 	p := Problem{
-		ID:              leftoverRecreateID(f.Kind, f.Namespace, f.Name),
+		ID:              components.LeftoverRecreateID(f.Kind, f.Namespace, f.Name),
 		Severity:        severity,
 		Title:           fmt.Sprintf("%s must be recreated: its selector changed", r.ref()),
 		AffectedObjects: []string{r.ref()},
 		Description: fmt.Sprintf("An earlier release created %s with another spec.selector. Kubernetes does not allow changing a selector, so the operator cannot apply the current version and %s stays not ready. "+
 			"Deleting it lets the operator create it again with the current spec.", r.ref(), reporters),
-		TechnicalCmd: f.ocCommand("delete"),
+		TechnicalCmd: f.OCCommand("delete"),
 	}
 	switch {
 	case !r.Read && len(r.Blockers) == 0:
@@ -1102,7 +1091,7 @@ func (r *recreateLeftover) problem() Problem {
 		p.Fix = fmt.Sprintf("No automatic fix: %s. Check it yourself, then delete %s with the command below; the operator that owns it creates it again.", strings.Join(r.Blockers, "; "), r.ref())
 		return p
 	}
-	p.Fix = fmt.Sprintf("Delete %s so that the operator creates it again with the current selector. The tool deletes it with your token, only if it is unchanged since it was checked, and then waits up to %s for it to come back ready.", r.ref(), formatDuration(leftoverRecreateWait))
+	p.Fix = fmt.Sprintf("Delete %s so that the operator creates it again with the current selector. The tool deletes it with your token, only if it is unchanged since it was checked, and then waits up to %s for it to come back ready.", r.ref(), components.FormatDuration(leftoverRecreateWait))
 	p.AutoFixable = true
 	p.AutoFixAction = fixLeftoverRecreate + f.Kind + "/" + f.Namespace + "/" + f.Name
 	p.ConfirmMessage = fmt.Sprintf("This deletes %s (propagation Background), after a server-side dry run, and only if its UID and resourceVersion are unchanged. %s", r.ref(), strings.Join(r.Warnings, " "))

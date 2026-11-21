@@ -145,7 +145,7 @@ func planGatewayRemove(c *Client, project string) (*gatewayPlan, string, string)
 	gw, found, err := readInferenceGateway(c)
 	switch {
 	case err != nil:
-		return nil, fmt.Sprintf("Cannot read the inference gateway, so %s stays on its list: %v.%s", project, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
+		return nil, fmt.Sprintf("Cannot read the inference gateway, so %s stays on its list: %v.%s", project, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
 	case !found:
 		return nil, "", ""
 	case !gatewayOwned(gw.Metadata):

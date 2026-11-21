@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -40,7 +41,7 @@ import (
 // dashboardTarget is where Dashboard Dev acts.
 type dashboardTarget struct {
 	// Operator is the dashboard module's operator; nil on the legacy flow.
-	Operator *moduleOperator
+	Operator *components.ModuleOperator
 	// Legacy says why the cluster has no dashboard module ("" when it has).
 	Legacy string
 	// Namespace is the applications namespace, where the dashboard runs; ""
@@ -80,7 +81,7 @@ func discoverDashboardTarget(c *Client) (dashboardTarget, error) {
 		legacy = "no Dashboard kind is served in " + rhoai.ComponentAPIGroup
 	}
 	if legacy == "" {
-		op, why, err := newModuleOperatorFinder(c, func() (rhoai.ComponentAPI, error) { return api, nil }).find("dashboard", "")
+		op, why, err := components.NewModuleOperatorFinder(c, func() (rhoai.ComponentAPI, error) { return api, nil }).Find("dashboard", "")
 		switch {
 		case err != nil:
 			return dashboardTarget{}, &dashboardOperatorError{err: err}
@@ -162,7 +163,7 @@ func loadDashboardOperator(c *Client, fresh bool) (dashboardTarget, *dashboardDe
 		if !fresh {
 			return loadDashboardOperator(c, true)
 		}
-		return t, nil, &dashboardOperatorError{why: fmt.Sprintf("Deployment %s was identified but no longer exists; the RHOAI platform recreates it, retry then", t.Operator.ref())}
+		return t, nil, &dashboardOperatorError{why: fmt.Sprintf("Deployment %s was identified but no longer exists; the RHOAI platform recreates it, retry then", t.Operator.Ref())}
 	}
 	return t, d, nil
 }

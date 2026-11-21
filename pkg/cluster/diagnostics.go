@@ -58,8 +58,8 @@ var diagnosticChecks = []diagnosticCheck{
 	{"RHOAI pods", checkRHOAIPods},
 	{"Certificates", checkCertificates},
 	{"Platform modules", checkPlatformModules},
-	{applyFailuresCheckName, checkApplyFailures},
-	{leftoversCheckName, checkLeftovers},
+	{components.ApplyFailuresCheckName, checkApplyFailures},
+	{components.LeftoversCheckName, checkLeftovers},
 	{"Operator-managed config", checkManagedConfig},
 }
 
@@ -83,8 +83,8 @@ var gitOpsDiagnosticChecks = []diagnosticCheck{
 	{"RHOAI pods", checkRHOAIPods},
 	{"Certificates", checkCertificates},
 	{"Platform modules", checkPlatformModules},
-	{applyFailuresCheckName, checkApplyFailures},
-	{leftoversCheckName, checkLeftoversGitOps},
+	{components.ApplyFailuresCheckName, checkApplyFailures},
+	{components.LeftoversCheckName, checkLeftoversGitOps},
 	{"Operator-managed config", checkManagedConfig},
 	{secretAccessCheckName, checkServiceAccountSecretAccess},
 }
@@ -278,7 +278,7 @@ func rhoaiPodNamespaces(c *Client) ([]string, error) {
 
 func checkOperatorPods(c *Client) checkOutput {
 	const name = "Operator pods"
-	issues, podCount, scanned, errs := scanPods(c, []string{rhoai.SubNS}, time.Now())
+	issues, podCount, scanned, errs := components.ScanPods(c, []string{rhoai.SubNS}, time.Now())
 	if len(errs) > 0 {
 		return checkOutput{check: CheckResult{Name: name, Status: "warn", Detail: "Could not list operator pods: " + strings.Join(errs, "; ")}}
 	}
@@ -320,7 +320,7 @@ func checkRHOAIPods(c *Client) checkOutput {
 		}
 	}
 
-	issues, podCount, scanned, errs := scanPods(c, namespaces, time.Now())
+	issues, podCount, scanned, errs := components.ScanPods(c, namespaces, time.Now())
 	out := podIssuesOutput(c, name, issues, podCount, scanned, false)
 	if len(errs) > 0 {
 		if out.check.Status == "pass" {
@@ -343,7 +343,7 @@ func checkRHOAIPods(c *Client) checkOutput {
 	return out
 }
 
-func podIssuesOutput(c *Client, name string, issues []podIssue, podCount int, scanned []string, critical bool) checkOutput {
+func podIssuesOutput(c *Client, name string, issues []components.PodIssue, podCount int, scanned []string, critical bool) checkOutput {
 	if len(issues) == 0 {
 		return checkOutput{check: CheckResult{Name: name, Status: "pass",
 			Detail: fmt.Sprintf("%s healthy in %s", kube.CountNoun(podCount, "pod", "pods"), strings.Join(scanned, ", "))}}
@@ -351,11 +351,11 @@ func podIssuesOutput(c *Client, name string, issues []podIssue, podCount int, sc
 	out := checkOutput{}
 	var summaries []string
 	failing := false
-	for _, g := range groupPodIssues(issues) {
-		p := podGroupProblem(c, g, critical)
+	for _, g := range components.GroupPodIssues(issues) {
+		p := components.PodGroupProblem(c, g, critical)
 		out.problems = append(out.problems, p)
 		summaries = append(summaries, p.Title)
-		if g.Kind != issueUnschedulable && g.Kind != issueNotScheduled {
+		if g.Kind != components.IssueUnschedulable && g.Kind != components.IssueNotScheduled {
 			failing = true
 		}
 	}
@@ -430,9 +430,9 @@ func readSubscriptionState(c *Client) (subscriptionState, error) {
 	if sub.Status.InstallPlanRef != nil {
 		s.InstallPlan = sub.Status.InstallPlanRef.Name
 	}
-	if t, ok := parseK8sTime(sub.Status.LastUpdated); ok {
+	if t, ok := components.ParseK8sTime(sub.Status.LastUpdated); ok {
 		s.Changed = t
-	} else if t, ok := parseK8sTime(sub.Metadata.CreationTimestamp); ok {
+	} else if t, ok := components.ParseK8sTime(sub.Metadata.CreationTimestamp); ok {
 		s.Changed = t
 	}
 	return s, nil
@@ -504,7 +504,7 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 			continue
 		}
 		if !fc.terminal {
-			if t, ok := parseK8sTime(cond.LastTransitionTime); ok && now.Sub(t) < operatorStuckAfter {
+			if t, ok := components.ParseK8sTime(cond.LastTransitionTime); ok && now.Sub(t) < operatorStuckAfter {
 				continue
 			}
 		}
@@ -527,7 +527,7 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 		out.problems = append(out.problems, *p)
 	}
 
-	age := formatDuration(now.Sub(sub.Changed))
+	age := components.FormatDuration(now.Sub(sub.Changed))
 	switch sub.State {
 	case "AtLatestKnown":
 		if out.check.Detail == "" {
@@ -551,7 +551,7 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 			ID:           "subscription-upgrade-pending",
 			Severity:     "warning",
 			Title:        fmt.Sprintf("The operator upgrade has been pending for %s", age),
-			Description:  fmt.Sprintf("OLM created InstallPlan %s for %s but has not finished it. UpgradePending is normal for a few minutes during every update; after %s it usually means the InstallPlan or the new CSV is stuck.", kube.NonEmpty(sub.InstallPlan, "(none)"), kube.NonEmpty(sub.CurrentCSV, "the new version"), formatDuration(operatorStuckAfter)),
+			Description:  fmt.Sprintf("OLM created InstallPlan %s for %s but has not finished it. UpgradePending is normal for a few minutes during every update; after %s it usually means the InstallPlan or the new CSV is stuck.", kube.NonEmpty(sub.InstallPlan, "(none)"), kube.NonEmpty(sub.CurrentCSV, "the new version"), components.FormatDuration(operatorStuckAfter)),
 			Evidence:     []string{fmt.Sprintf("Subscription state UpgradePending since %s, InstallPlan %s, currentCSV %s", sub.Changed.UTC().Format(time.RFC3339), kube.NonEmpty(sub.InstallPlan, "-"), kube.NonEmpty(sub.CurrentCSV, "-"))},
 			Fix:          "Check the Install plan and Operator installed results below for the cause. " + recoveryGuidance,
 			TechnicalCmd: "oc get subscription " + rhoai.SubName + " -n " + rhoai.SubNS + " -o jsonpath='{.status}'",
@@ -625,7 +625,7 @@ func checkCSVHealth(c *Client) checkOutput {
 			ID:          "csv-not-found",
 			Severity:    "critical",
 			Title:       "Operator not installed (no CSV found)",
-			Description: fmt.Sprintf("A Subscription exists (source: %s, channel: %s, state: %q) but OLM has not created a ClusterServiceVersion for %s.", sub.Source, sub.Channel, sub.State, formatDuration(time.Since(sub.Changed))),
+			Description: fmt.Sprintf("A Subscription exists (source: %s, channel: %s, state: %q) but OLM has not created a ClusterServiceVersion for %s.", sub.Source, sub.Channel, sub.State, components.FormatDuration(time.Since(sub.Changed))),
 			Fix:         "Check the Subscription health and Install plan results for the cause. " + recoveryGuidance,
 			LearnMore: "The operator CSV is created by OLM after the InstallPlan completes. If the CSV doesn't appear, check:\n\n" +
 				"1. Is the Subscription pointing to the correct catalog?\n" +
@@ -1107,7 +1107,7 @@ func applyFix(c *Client, problemID string, ack *AckBinding) (*types.OperationRes
 		return AssistRollout(c)
 	}
 	if module, ok := strings.CutPrefix(problemID, "restart-module-operator:"); ok {
-		return applyFixRestartModuleOperator(c, module)
+		return components.ApplyFixRestartModuleOperator(c, module)
 	}
 	if msg, ok := removedFixes[problemID]; ok {
 		return &types.OperationResponse{Success: false, Message: msg, ErrorCode: "validation"}, nil
@@ -1124,7 +1124,7 @@ func applyFix(c *Client, problemID string, ack *AckBinding) (*types.OperationRes
 		if !found {
 			return &types.OperationResponse{Success: false, Message: "restore-rollout-strategy needs <namespace>/<deployment>", ErrorCode: "validation"}, nil
 		}
-		return RestoreRolloutStrategy(c, ns, name)
+		return components.RestoreRolloutStrategy(c, ns, name)
 	}
 	if compName, ok := strings.CutPrefix(problemID, "disable-component:"); ok {
 		return applyFixDisableComponent(c, compName)
@@ -1136,15 +1136,11 @@ func applyFix(c *Client, problemID string, ack *AckBinding) (*types.OperationRes
 	}, nil
 }
 
-func nothingToDo(msg string, logs []string) *types.OperationResponse {
-	return &types.OperationResponse{Success: false, Message: "Nothing to do: " + msg, Logs: logs, ErrorCode: "nothing_to_do"}
-}
-
 func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error) {
 	plans, err := listInstallPlans(c)
 	if err != nil {
 		if kube.IsK8sNotFound(err) {
-			return nothingToDo("there are no install plans. Nothing was deleted.", nil), nil
+			return components.NothingToDo("there are no install plans. Nothing was deleted.", nil), nil
 		}
 		return &types.OperationResponse{
 			Success:   false,
@@ -1164,7 +1160,7 @@ func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error
 			continue
 		}
 		path := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, ip.Metadata.Name)
-		err := deleteExact(c, path, ip.Metadata.UID, ip.Metadata.ResourceVersion)
+		err := kube.DeleteExact(c, path, ip.Metadata.UID, ip.Metadata.ResourceVersion)
 		switch {
 		case err == nil:
 			deleted = append(deleted, ip.Metadata.Name)
@@ -1194,7 +1190,7 @@ func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error
 	case len(deleted) == 0 && len(failed) == 0 && len(changed) > 0:
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("%s %s changed after %s checked, so nothing was deleted. Run diagnostics again.", kube.Verb(len(changed), "Install plan", "Install plans"), strings.Join(changed, ", "), kube.Verb(len(changed), "it was", "they were")), Logs: logs, ErrorCode: "conflict"}, nil
 	case len(deleted) == 0 && len(failed) == 0:
-		return nothingToDo("no failed install plan can be deleted safely (see the log). Nothing was deleted.", logs), nil
+		return components.NothingToDo("no failed install plan can be deleted safely (see the log). Nothing was deleted.", logs), nil
 	case len(failed) > 0 && len(deleted) == 0:
 		return &types.OperationResponse{Success: false, Message: "Could not delete the failed install plans: " + strings.Join(failed, ", "), Logs: logs}, nil
 	case len(failed) > 0:
@@ -1243,10 +1239,10 @@ func applyFixDisableComponent(c *Client, compName string) (*types.OperationRespo
 	}
 	state, present := components.LookupState(v.components(), strings.Split(compName, "."))
 	if !present {
-		return nothingToDo(fmt.Sprintf("the DataScienceCluster has no %s component. Nothing was changed.", compName), nil), nil
+		return components.NothingToDo(fmt.Sprintf("the DataScienceCluster has no %s component. Nothing was changed.", compName), nil), nil
 	}
 	if state == "Removed" {
-		return nothingToDo(fmt.Sprintf("%s is already Removed. Nothing was changed.", compName), nil), nil
+		return components.NothingToDo(fmt.Sprintf("%s is already Removed. Nothing was changed.", compName), nil), nil
 	}
 	res := v.setManagementState(c, types.DSCToggleRequest{Name: v.name, Path: compName, From: state, To: "Removed"}, "disable-component", false)
 	if res.Success {

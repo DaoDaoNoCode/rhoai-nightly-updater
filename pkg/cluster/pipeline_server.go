@@ -443,7 +443,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	logs = append(logs, "Reading S3 storage credentials...")
 	keys, found, err := readS3Keys(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Failed to read the S3 storage credentials: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "S3 secret read failed")
+		return fail(fmt.Sprintf("Failed to read the S3 storage credentials: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "S3 secret read failed")
 	}
 	if !found || keys.AccessKey == "" || keys.SecretKey == "" {
 		return fail(fmt.Sprintf("The S3 credentials are empty. Check that Secret %s in namespace %s has the keys %s and %s, or repair the S3 storage.", s3Secret, s3Namespace, s3AccessKeyField, s3SecretKeyField), "prerequisites", "S3 credentials empty")

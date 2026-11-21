@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -198,7 +199,7 @@ func (w *leftoverWorld) serveCRDManagers(managers []string, schema map[string]an
 func (w *leftoverWorld) scan() checkOutput {
 	w.t.Helper()
 	out := checkLeftovers(w.c)
-	out.check.Name = leftoversCheckName
+	out.check.Name = components.LeftoversCheckName
 	return out
 }
 
@@ -240,25 +241,25 @@ func scannedWithBinding(t *testing.T, w *leftoverWorld) Problem {
 }
 
 func TestParseStoredTypeFailure(t *testing.T) {
-	got := parseApplyFailures(msgStoredTypes)
-	if len(got) != 1 || got[0].Class != applyStoredType || got[0].Kind != "TrustyAI" || got[0].Name != "default-trustyai" || got[0].Namespace != "" ||
+	got := components.ParseApplyFailures(msgStoredTypes)
+	if len(got) != 1 || got[0].Class != components.ApplyStoredType || got[0].Kind != "TrustyAI" || got[0].Name != "default-trustyai" || got[0].Namespace != "" ||
 		strings.Join(got[0].Fields, "|") != ".spec.eval.lmeval.permitOnline: expected string, got &value.valueUnstructured{Value:false}|.spec.eval.lmeval.permitCodeExecution: expected string, got &value.valueUnstructured{Value:false}" {
 		t.Fatalf("%+v", got)
 	}
-	if !got[0].leftover() || got[0].problemID() != "leftover-fields-trustyai-default-trustyai" {
-		t.Errorf("leftover %v, id %s", got[0].leftover(), got[0].problemID())
+	if !got[0].Leftover() || got[0].ProblemID() != "leftover-fields-trustyai-default-trustyai" {
+		t.Errorf("leftover %v, id %s", got[0].Leftover(), got[0].ProblemID())
 	}
-	sel := parseApplyFailures(msgTrustySelector)
-	if len(sel) != 1 || !sel[0].leftover() || sel[0].problemID() != "leftover-recreate-deployment-redhat-ods-applications-trustyai-service-operator-controller-manager" {
+	sel := components.ParseApplyFailures(msgTrustySelector)
+	if len(sel) != 1 || !sel[0].Leftover() || sel[0].ProblemID() != "leftover-recreate-deployment-redhat-ods-applications-trustyai-service-operator-controller-manager" {
 		t.Fatalf("%+v", sel)
 	}
 	// The live condition explains the component in the Components table.
-	if got := componentCause(rhoai.DSCCondition{Message: msgStoredTypes}); got != "An object is left over from an earlier release" {
+	if got := components.CauseOf(rhoai.DSCCondition{Message: msgStoredTypes}); got != "An object is left over from an earlier release" {
 		t.Errorf("component cause %q", got)
 	}
 	// The DataScienceCluster problem links to this check's problem.
-	cc := &classifiedCondition{Cond: rhoai.DSCCondition{Type: "ProvisioningSucceeded", Status: "False", Message: msgStoredTypes}}
-	cc.classify(map[string]*dependency{}, &[]*dependency{})
+	cc := &components.ClassifiedCondition{Cond: rhoai.DSCCondition{Type: "ProvisioningSucceeded", Status: "False", Message: msgStoredTypes}}
+	cc.Classify(map[string]*components.Dependency{}, &[]*components.Dependency{})
 	if strings.Join(cc.ApplyIDs, ",") != "leftover-fields-trustyai-default-trustyai" {
 		t.Errorf("DSC links %v", cc.ApplyIDs)
 	}
@@ -312,7 +313,7 @@ func TestLeftoverStoredFieldsScan(t *testing.T) {
 	}
 	// The apply-failures check leaves the object to this check.
 	if apply := checkApplyFailures(w.c); len(apply.problems) != 0 {
-		t.Errorf("also reported by %s: %+v", applyFailuresCheckName, apply.problems)
+		t.Errorf("also reported by %s: %+v", components.ApplyFailuresCheckName, apply.problems)
 	}
 }
 
@@ -666,9 +667,9 @@ func TestLeftoverRecreateUsers(t *testing.T) {
 	users := func(list []string, err error) usersReader {
 		return func(*Client, string) ([]string, error) { return list, err }
 	}
-	rf := func(w *leftoverWorld) *reportedApplyFailure {
-		s := scanApplyReporters(w.c, allApplyFailures)
-		r := leftoverObject(s, "apps", "Deployment", "redhat-ods-applications", "trustyai-service-operator-controller-manager", applyImmutable)
+	rf := func(w *leftoverWorld) *components.ReportedApplyFailure {
+		s := components.ScanApplyReporters(w.c, components.AllApplyFailures)
+		r := leftoverObject(s, "apps", "Deployment", "redhat-ods-applications", "trustyai-service-operator-controller-manager", components.ApplyImmutable)
 		if r == nil {
 			t.Fatal("not found")
 		}

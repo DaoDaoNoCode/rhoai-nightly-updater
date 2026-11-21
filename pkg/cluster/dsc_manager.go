@@ -365,7 +365,7 @@ func (v *dscView) model() *types.DSCManager {
 		}
 	}
 	for _, cd := range conds {
-		if isUpgradeGateCondition(rhoai.DSCCondition{Type: cd.Type, Status: cd.Status, Reason: cd.Reason, Message: cd.Message}) && cd.Status != "True" {
+		if components.IsUpgradeGateCondition(rhoai.DSCCondition{Type: cd.Type, Status: cd.Status, Reason: cd.Reason, Message: cd.Message}) && cd.Status != "True" {
 			out.UpgradeGates = append(out.UpgradeGates, fmt.Sprintf("%s (%s): %s", cd.Type, cd.Reason, kube.TruncateText(cd.Message, 300)))
 		}
 	}

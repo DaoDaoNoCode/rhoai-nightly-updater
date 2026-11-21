@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 )
 
 const (
@@ -108,7 +110,7 @@ func TestAssistRolloutFor_PatchesWithPreconditionAndRecordsOriginal(t *testing.T
 	if err := json.Unmarshal([]byte(body), &patch); err != nil || patch.Metadata.ResourceVersion != "100" {
 		t.Fatalf("patch = %s", body)
 	}
-	if !strings.Contains(patch.Metadata.Annotations[assistRolloutAnnotation], `"maxUnavailable":"25%"`) {
+	if !strings.Contains(patch.Metadata.Annotations[components.AssistRolloutAnnotation], `"maxUnavailable":"25%"`) {
 		t.Fatalf("original not recorded: %s", body)
 	}
 	if strings.Contains(body, "DELETE") || len(f.requests("DELETE", podsPath+"/rhods-operator-new-abc")) != 0 {
@@ -227,7 +229,7 @@ func TestAssistRollout_ProblemOffersFixOnlyWhenApplicable(t *testing.T) {
 	f, c := newFakeAPI(t)
 	defaultRollout().install(f)
 	p := Problem{}
-	attachRolloutAssist(c, &p, rolloutNS, "rhods-operator")
+	components.AttachRolloutAssist(c, &p, rolloutNS, "rhods-operator")
 	if !p.AutoFixable || p.AutoFixAction != "assist-rollout:redhat-ods-operator/rhods-operator" ||
 		!strings.Contains(p.ConfirmMessage, "rhods-operator-new-abc") || !strings.Contains(p.ConfirmMessage, "25% -> 1") {
 		t.Fatalf("problem = %+v", p)
@@ -238,7 +240,7 @@ func TestAssistRollout_ProblemOffersFixOnlyWhenApplicable(t *testing.T) {
 	fx.replicas = 4
 	fx.install(f2)
 	p2 := Problem{}
-	attachRolloutAssist(c2, &p2, rolloutNS, "rhods-operator")
+	components.AttachRolloutAssist(c2, &p2, rolloutNS, "rhods-operator")
 	if p2.AutoFixable {
 		t.Fatalf("problem = %+v", p2)
 	}
@@ -251,7 +253,7 @@ func restoreDeployment(maxUnavailable any, note string, complete bool) map[strin
 	}
 	ann := map[string]string{}
 	if note != "" {
-		ann[assistRolloutAnnotation] = note
+		ann[components.AssistRolloutAnnotation] = note
 	}
 	ru := map[string]any{}
 	if maxUnavailable != nil {
@@ -275,7 +277,7 @@ func TestRestoreRolloutStrategy(t *testing.T) {
 	}{
 		{"restores the original", restoreDeployment(1, note, true), `"maxUnavailable":"25%"`, true, ""},
 		{"rollout still running", restoreDeployment(1, note, false), "", false, "prerequisites"},
-		{"owner changed it: only the note is removed", restoreDeployment("10%", note, true), `"annotations":{"` + assistRolloutAnnotation + `":null}`, true, ""},
+		{"owner changed it: only the note is removed", restoreDeployment("10%", note, true), `"annotations":{"` + components.AssistRolloutAnnotation + `":null}`, true, ""},
 		{"no note", restoreDeployment(1, "", true), "", false, "nothing_to_do"},
 		{"original unset is removed again", restoreDeployment(1, `{"maxUnavailable":null}`, true), `"maxUnavailable":null`, true, ""},
 	}
@@ -329,7 +331,7 @@ func TestResourceOnlyNodes(t *testing.T) {
 		{"", 0, "[the scheduler gave no reason]"},
 	}
 	for _, tt := range tests {
-		nodes, other := resourceOnlyNodes(tt.msg)
+		nodes, other := components.ResourceOnlyNodes(tt.msg)
 		if nodes != tt.wantNodes || fmt.Sprint(other) != tt.wantOther {
 			t.Errorf("%q: got %d %s, want %d %s", tt.msg, nodes, other, tt.wantNodes, tt.wantOther)
 		}

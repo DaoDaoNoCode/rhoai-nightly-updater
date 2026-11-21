@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -247,12 +248,12 @@ func planMaaSGateway(c *Client, infraNS string, published []string) (*maasGatewa
 	plan := &maasGatewayPlan{current: map[string]kube.ObjectMeta{}, found: map[string]bool{}}
 	meta, ok, err := kube.ReadObjectMeta(c, maasObjectPath("Gateway", ""))
 	if err != nil {
-		return nil, fmt.Sprintf("Cannot read %s; nothing was changed: %v.%s", maasDesc("Gateway", ""), err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
+		return nil, fmt.Sprintf("Cannot read %s; nothing was changed: %v.%s", maasDesc("Gateway", ""), err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
 	}
 	plan.current["Gateway"], plan.found["Gateway"] = meta, ok
 	cm, cmOK, err := kube.ReadObjectMeta(c, maasObjectPath("ConfigMap", ""))
 	if err != nil {
-		return nil, fmt.Sprintf("Cannot read %s; nothing was changed: %v.%s", maasDesc("ConfigMap", ""), err, templateHint(err)), kube.ErrorCodeFromK8sErr(err)
+		return nil, fmt.Sprintf("Cannot read %s; nothing was changed: %v.%s", maasDesc("ConfigMap", ""), err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
 	}
 	plan.current["ConfigMap"], plan.found["ConfigMap"] = cm, cmOK
 	if ok && meta.Terminating() {
@@ -307,7 +308,7 @@ func (m *maasRun) applyGateway(plan *maasGatewayPlan, dryRun bool) (string, stri
 			query = url.Values{"dryRun": {"All"}}
 		}
 		if _, _, err := m.c.Do(http.MethodPost, withToolFieldManager(rhoai.ClusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "")), "application/json", data, query); err != nil && !kube.IsK8sConflict(err) {
-			return fmt.Sprintf("Failed to create GatewayClass %s: %v.%s", maasGatewayClass, err, templateHint(err)), maasWriteCode(err)
+			return fmt.Sprintf("Failed to create GatewayClass %s: %v.%s", maasGatewayClass, err, kube.TemplateHint(err)), maasWriteCode(err)
 		}
 		if !dryRun {
 			plan.classMissing = false
@@ -325,9 +326,9 @@ func (m *maasRun) applyGateway(plan *maasGatewayPlan, dryRun bool) (string, stri
 		plan.current[kind], plan.found[kind] = meta, found
 		if err != nil {
 			if dryRun {
-				return fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", maasDesc(kind, ""), err, templateHint(err)), maasWriteCode(err)
+				return fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", maasDesc(kind, ""), err, kube.TemplateHint(err)), maasWriteCode(err)
 			}
-			return fmt.Sprintf("Failed to apply %s: %v.%s", maasDesc(kind, ""), err, templateHint(err)), maasWriteCode(err)
+			return fmt.Sprintf("Failed to apply %s: %v.%s", maasDesc(kind, ""), err, kube.TemplateHint(err)), maasWriteCode(err)
 		}
 		if !dryRun {
 			m.logs = append(m.logs, fmt.Sprintf("OK: %s %s", maasDesc(kind, ""), action))
@@ -454,7 +455,7 @@ func maasControllerGone(c *Client) string {
 // missing Deployment needs nothing: the operator starts it with the Secret.
 func restartMaaSAPI(c *Client, ns string) (bool, error) {
 	err := c.PatchJSON(rhoai.NamespacedPath("apps/v1", "deployments", ns, "maas-api"), map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
-		"annotations": map[string]string{restartAnnotation: kube.Clock().Now().UTC().Format(time.RFC3339)},
+		"annotations": map[string]string{components.RestartAnnotation: kube.Clock().Now().UTC().Format(time.RFC3339)},
 	}}}})
 	if kube.IsK8sNotFound(err) {
 		return false, nil
@@ -557,7 +558,7 @@ func (m *maasRun) teardownCheck(t *maasTeardown) (*types.OperationResponse, erro
 	// policies stop working without the platform (and turning MaaS off
 	// takes maas-api and their keys away).
 	if others, err := foreignMaaSObjects(c); err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot check whether others use MaaS, so nothing was deleted: %v.%s", err, templateHint(err)), kube.ErrorCodeFromK8sErr(err), "maas list failed")
+		return m.fail("check", fmt.Sprintf("Cannot check whether others use MaaS, so nothing was deleted: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "maas list failed")
 	} else if len(others) > 0 {
 		return m.fail("check", fmt.Sprintf("Others use this MaaS platform: %s. Removing it would break them. They unpublish and remove theirs first. Nothing was deleted.", strings.Join(others, ", ")), "in_use", "maas in use")
 	}

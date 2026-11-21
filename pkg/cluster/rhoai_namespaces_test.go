@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -43,19 +44,19 @@ func TestDebugInfoUsesTheDiscoveredNamespace(t *testing.T) {
 func TestRolloutNamespacesAreDiscovered(t *testing.T) {
 	f, c := newFakeAPI(t)
 	serveDSCI(f, fixtureAppsNS)
-	if ok, why := isRolloutNamespace(c, fixtureAppsNS); !ok {
+	if ok, why := components.IsRolloutNamespace(c, fixtureAppsNS); !ok {
 		t.Fatalf("custom applications namespace refused: %s", why)
 	}
-	if ok, _ := isRolloutNamespace(c, "redhat-ods-applications"); ok {
+	if ok, _ := components.IsRolloutNamespace(c, "redhat-ods-applications"); ok {
 		t.Fatal("the default name is allowed on a cluster that does not use it")
 	}
 
 	f2, c2 := newFakeAPI(t)
 	f2.status("GET", dsciV2List, 500, "InternalError")
-	if ok, why := isRolloutNamespace(c2, "redhat-ods-applications"); ok || !strings.Contains(why, "cannot be told") {
+	if ok, why := components.IsRolloutNamespace(c2, "redhat-ods-applications"); ok || !strings.Contains(why, "cannot be told") {
 		t.Fatalf("ok=%v why=%q", ok, why)
 	}
-	if ok, _ := isRolloutNamespace(c2, rhoai.SubNS); !ok {
+	if ok, _ := components.IsRolloutNamespace(c2, rhoai.SubNS); !ok {
 		t.Fatal("the operator namespace needs no discovery")
 	}
 	r, err := AssistRolloutFor(c2, "redhat-ods-applications", "x")
@@ -107,7 +108,7 @@ func TestRHOAIPodNamespacesAreDiscovered(t *testing.T) {
 func TestSnapshotNamespaces(t *testing.T) {
 	f, c := newFakeAPI(t)
 	f.status("GET", dsciV2List, 500, "InternalError")
-	if err := SaveDeploymentSnapshot(c); err == nil {
+	if err := components.SaveDeploymentSnapshot(c); err == nil {
 		t.Fatal("snapshot saved without the applications namespace")
 	}
 }

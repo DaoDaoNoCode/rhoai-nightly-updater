@@ -1,4 +1,4 @@
-package cluster
+package components
 
 import (
 	"errors"
@@ -13,19 +13,19 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
-// isModuleAPIGroup reports whether group is one of moduleAPIGroups.
-func isModuleAPIGroup(group string) bool { return slices.Contains(rhoai.ModuleAPIGroups, group) }
+// IsModuleAPIGroup reports whether group is one of moduleAPIGroups.
+func IsModuleAPIGroup(group string) bool { return slices.Contains(rhoai.ModuleAPIGroups, group) }
 
-// isModuleAPIVersion reports whether an apiVersion ("<group>/<version>") is
+// IsModuleAPIVersion reports whether an apiVersion ("<group>/<version>") is
 // in a module API group.
-func isModuleAPIVersion(apiVersion string) bool {
+func IsModuleAPIVersion(apiVersion string) bool {
 	group, _, _ := strings.Cut(apiVersion, "/")
-	return isModuleAPIGroup(group)
+	return IsModuleAPIGroup(group)
 }
 
-// cachedComponentAPI returns a function that discovers the component API on
+// CachedComponentAPI returns a function that discovers the component API on
 // first use and then returns the same result.
-func cachedComponentAPI(c *Client) func() (rhoai.ComponentAPI, error) {
+func CachedComponentAPI(c *kube.Client) func() (rhoai.ComponentAPI, error) {
 	var once sync.Once
 	var api rhoai.ComponentAPI
 	var err error
@@ -44,7 +44,7 @@ var errModuleKindUnknown = errors.New("no served " + strings.Join(rhoai.ModuleAP
 // exists. A module whose kind is not served returns errModuleKindUnknown:
 // "no CR" cannot be told apart from "unknown producer" then, so callers
 // must not treat it as removed. Discovery and list errors are returned.
-func moduleCRPresent(c *Client, discover func() (rhoai.ComponentAPI, error), module string) (bool, error) {
+func moduleCRPresent(c *kube.Client, discover func() (rhoai.ComponentAPI, error), module string) (bool, error) {
 	api, err := discover()
 	if err != nil {
 		return false, err
@@ -52,23 +52,23 @@ func moduleCRPresent(c *Client, discover func() (rhoai.ComponentAPI, error), mod
 	if _, ok := api.KindForModule(module); !ok {
 		return false, fmt.Errorf("module %q: %w", module, errModuleKindUnknown)
 	}
-	items, err := listModuleCRs(c, discover, module)
+	items, err := ListModuleCRs(c, discover, module)
 	return len(items) > 0, err
 }
 
-// moduleCRItem is the metadata of a module CR.
-type moduleCRItem struct {
+// ModuleCRItem is the metadata of a module CR.
+type ModuleCRItem struct {
 	Metadata struct {
 		Name              string     `json:"name"`
 		UID               string     `json:"uid"`
 		Finalizers        []string   `json:"finalizers"`
 		DeletionTimestamp string     `json:"deletionTimestamp"`
-		OwnerReferences   []ownerRef `json:"ownerReferences"`
+		OwnerReferences   []OwnerRef `json:"ownerReferences"`
 	} `json:"metadata"`
 }
 
-// listModuleCRs lists the CRs of one module (lower-case kind).
-func listModuleCRs(c *Client, discover func() (rhoai.ComponentAPI, error), module string) ([]moduleCRItem, error) {
+// ListModuleCRs lists the CRs of one module (lower-case kind).
+func ListModuleCRs(c *kube.Client, discover func() (rhoai.ComponentAPI, error), module string) ([]ModuleCRItem, error) {
 	api, err := discover()
 	if err != nil {
 		return nil, err
@@ -76,18 +76,18 @@ func listModuleCRs(c *Client, discover func() (rhoai.ComponentAPI, error), modul
 	return listModuleCRsIn(c, api, module)
 }
 
-// listModuleCRsIn is listModuleCRs with the API already discovered.
-func listModuleCRsIn(c *Client, api rhoai.ComponentAPI, module string) ([]moduleCRItem, error) {
+// listModuleCRsIn is ListModuleCRs with the API already discovered.
+func listModuleCRsIn(c *kube.Client, api rhoai.ComponentAPI, module string) ([]ModuleCRItem, error) {
 	k, ok := api.KindForModule(module)
 	if !ok {
 		return nil, nil
 	}
-	return listKindCRs(c, k)
+	return ListKindCRs(c, k)
 }
 
-// listKindCRs lists the CRs of one module kind.
-func listKindCRs(c *Client, k rhoai.ComponentKind) ([]moduleCRItem, error) {
-	var items []moduleCRItem
+// ListKindCRs lists the CRs of one module kind.
+func ListKindCRs(c *kube.Client, k rhoai.ComponentKind) ([]ModuleCRItem, error) {
+	var items []ModuleCRItem
 	if err := c.ListInto(k.ListPath(), &items); err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse %s: %w", k.CRD(), err)
@@ -97,13 +97,13 @@ func listKindCRs(c *Client, k rhoai.ComponentKind) ([]moduleCRItem, error) {
 	return items, nil
 }
 
-// StuckComponentCRAge is how long a component CR must have been deleting
+// StuckCRAge is how long a component CR must have been deleting
 // before its finalizers may be removed.
-var StuckComponentCRAge = 10 * time.Minute
+var StuckCRAge = 10 * time.Minute
 
-// cleanupStuckComponentCRs removes the finalizers of a module CR (in either
+// CleanupStuckCRs removes the finalizers of a module CR (in either
 // module API group) only when nothing else can: the CR has been deleting for
-// StuckComponentCRAge and the module operator that owns its finalizer is
+// StuckCRAge and the module operator that owns its finalizer is
 // gone (finalizerOwner: its ServiceAccount is known from RBAC, and no
 // Deployment and no running Pod runs as it; module operators are owned by
 // the Platform, not by the CSV, so they keep running while rhods-operator is
@@ -118,12 +118,12 @@ var StuckComponentCRAge = 10 * time.Minute
 // stuck deletion:
 // https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/
 // It returns the number of CRs unblocked and the problems or skips to log.
-func cleanupStuckComponentCRs(c *Client) (int, []string) {
+func CleanupStuckCRs(c *kube.Client) (int, []string) {
 	api, err := rhoai.DiscoverComponentAPI(c)
 	if err != nil {
 		return 0, []string{err.Error()}
 	}
-	operators := newModuleOperatorFinder(c, func() (rhoai.ComponentAPI, error) { return api, nil })
+	operators := NewModuleOperatorFinder(c, func() (rhoai.ComponentAPI, error) { return api, nil })
 	unstuck := 0
 	var warnings []string
 	for _, kind := range api.Kinds {
@@ -157,11 +157,11 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 			}
 			id := resource + "/" + m.Name
 			since, err := time.Parse(time.RFC3339, *m.DeletionTimestamp)
-			if err != nil || time.Since(since) < StuckComponentCRAge {
+			if err != nil || time.Since(since) < StuckCRAge {
 				warnings = append(warnings, fmt.Sprintf("%s is being deleted; its finalizers were left for its operator", id))
 				continue
 			}
-			owner, err := operators.finalizerOwner(kind.Module(), m.Name)
+			owner, err := operators.FinalizerOwner(kind.Module(), m.Name)
 			switch {
 			case err != nil:
 				warnings = append(warnings, fmt.Sprintf("cannot identify the operator that owns the finalizers of %s: %v; left untouched", id, err))
@@ -169,7 +169,7 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 			case owner.Unknown != "":
 				warnings = append(warnings, fmt.Sprintf("%s has been deleting since %s, but the operator that owns its finalizers %v is unknown (%s); left untouched", id, *m.DeletionTimestamp, m.Finalizers, owner.Unknown))
 				continue
-			case !owner.gone():
+			case !owner.Gone():
 				warnings = append(warnings, fmt.Sprintf("%s has been deleting since %s, but its operator %s still exists and will finish the deletion; left untouched", id, *m.DeletionTimestamp, owner.stillThere()))
 				continue
 			}
