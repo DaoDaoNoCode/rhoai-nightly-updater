@@ -74,4 +74,21 @@ describe("renderWithApp's injected reads", () => {
     await settled();
     expect(screen.getByTestId("server").textContent).toBe("newer");
   });
+
+  it("keep the newer answer when an older read ignores its abort and answers last", async () => {
+    // Unlike fetch, these reads answer whether or not their signal aborted.
+    const calls: Array<{ signal?: AbortSignal; resolve: (v: StatusResponse) => void }> = [];
+    const read = (signal?: AbortSignal) => new Promise<StatusResponse>((resolve) => { calls.push({ signal, resolve }); });
+    const server = (name: string) => nightlyStatus({ cluster: { server: name, version: "4.22.8", user: "me" } });
+    const { settled } = renderWithApp(<Probe />, { status: read });
+    await waitFor(() => expect(calls).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "refresh" }));
+    expect(calls).toHaveLength(2);
+    expect(calls[0].signal?.aborted).toBe(true);
+    await act(async () => calls[1].resolve(server("newer")));
+    expect(screen.getByTestId("server").textContent).toBe("newer");
+    await act(async () => calls[0].resolve(server("older")));
+    await settled();
+    expect(screen.getByTestId("server").textContent).toBe("newer");
+  });
 });
