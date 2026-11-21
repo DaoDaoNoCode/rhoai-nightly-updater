@@ -109,7 +109,7 @@ func TestRecipeProject_CreatedLikeTheDashboardAndRecorded(t *testing.T) {
 func TestRecipeProject_Refusals(t *testing.T) {
 	for _, tc := range []struct {
 		name, ns, body, want string
-		record           bool
+		record               bool
 	}{
 		{"foreign", "recipe-dev", `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}}}`, "was not created by a recipe", false},
 		{"recorded but recreated", "recipe-dev", `{"metadata":{"uid":"other-uid"}}`, "was not created by a recipe", true},
