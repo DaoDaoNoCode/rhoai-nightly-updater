@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
 )
 
 // Live, after `oc delete jobsetoperator cluster` (RHOAI 3.6, 2026-10-06).
@@ -49,7 +50,7 @@ func liveOperandConds() []dcond {
 func TestDSCCheck_OperandMessage_InstalledOperatorMissingOperand(t *testing.T) {
 	w := newDSCWorld(t, liveOperandConds())
 	w.installedCSV(time.Hour)
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	byID := problemsByID(out)
 	p, ok := byID["prerequisite-operand-job-set"]
 	if !ok || p.AutoFixable || p.Title != "Job Set Operator is installed, but its JobSetOperator/cluster does not exist" ||
@@ -78,7 +79,7 @@ func TestDSCCheck_ModulesReadyRollupLinksModuleCauses(t *testing.T) {
 	conds := append(liveOperandConds(), dcond{"type": "ModulesReady", "status": "False", "reason": "NotReady", "message": "Some modules are not ready: trainer"})
 	w := newDSCWorld(t, conds)
 	w.installedCSV(time.Hour)
-	dsc := problemsByID(checkDataScienceCluster(w.c))["dsc-not-ready"]
+	dsc := problemsByID(diagnostics.CheckDataScienceCluster(w.c))["dsc-not-ready"]
 	ev := strings.Join(dsc.Evidence, "\n")
 	if !strings.Contains(ev, "ModulesReady=False (NotReady): Some modules are not ready: trainer → cause: module trainer: Job Set Operator is installed, but JobSetOperator/cluster does not exist") ||
 		strings.Contains(ev, "cause not classified") || !slices.Contains(dsc.RelatedProblems, "prerequisite-operand-job-set") {
@@ -94,7 +95,7 @@ func TestDSCCheck_OperandMessage_OperandBackOffersRestart(t *testing.T) {
 	w := newDSCWorld(t, liveOperandConds())
 	w.installedCSV(time.Hour)
 	w.f.json("GET", jobSetOperandPath, 200, `{"metadata":{"name":"cluster"}}`)
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	b, ok := problemsByID(out)["module-operator-backoff-trainer"]
 	if !ok || !b.AutoFixable || !strings.Contains(strings.Join(b.Evidence, "\n"), "still reports JobSetOperator/cluster as missing") {
 		t.Fatalf("problems = %v, backoff = %+v", ids(out), b)
@@ -109,7 +110,7 @@ func TestDSCCheck_OperandMessage_OperatorNotInstalled(t *testing.T) {
 		"owned": []any{map[string]string{"name": "jobsetoperators.operator.openshift.io", "kind": "JobSetOperator", "version": "v1"}},
 	}
 	w.f.obj(packageManifestsPath, map[string]any{"items": cat})
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	p, ok := problemsByID(out)["prerequisite-missing-job-set"]
 	if !ok || !strings.Contains(p.TechnicalCmd, "name: job-set") || !strings.Contains(p.TechnicalCmd, "oc get jobsetoperator.operator.openshift.io/cluster") {
 		t.Fatalf("problems = %v, p = %+v", ids(out), p)
@@ -120,7 +121,7 @@ func TestDSCCheck_OperandMessage_OperatorNotInstalled(t *testing.T) {
 		{"type": "Ready", "status": "False", "reason": "Error", "message": "Some modules are not ready: trainer"},
 		{"type": "TrainerReady", "status": "False", "reason": "Error", "message": "dependency not met: NoSuchThing CR with name 'cluster' not found."},
 	})
-	out = checkDataScienceCluster(w2.c)
+	out = diagnostics.CheckDataScienceCluster(w2.c)
 	p, ok = problemsByID(out)["prerequisite-missing-operand-nosuchthing"]
 	if !ok || !strings.Contains(p.Title, "No installed operator provides NoSuchThing") || !strings.Contains(p.TechnicalCmd, "grep -w NoSuchThing") {
 		t.Fatalf("problems = %v, p = %+v", ids(out), p)

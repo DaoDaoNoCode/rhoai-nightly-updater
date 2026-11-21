@@ -1,4 +1,4 @@
-package cluster
+package diagnostics
 
 import (
 	"encoding/json"
@@ -13,6 +13,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/report"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -26,7 +27,7 @@ import (
 
 // applyLeftoverFix runs a leftover fix; handled is false for other IDs. ack
 // is what the user acknowledged (nil without an acknowledgement).
-func applyLeftoverFix(c *Client, id string, ack *AckBinding) (*types.OperationResponse, bool) {
+func applyLeftoverFix(c *kube.Client, id string, ack *report.AckBinding) (*types.OperationResponse, bool) {
 	if target, ok := strings.CutPrefix(id, fixLeftoverFields); ok {
 		return fixLeftoverStoredFields(c, target, ack), true
 	}
@@ -53,7 +54,7 @@ func needsAcknowledgement(what string, reasons []string) *types.OperationRespons
 // would act on now (want, computed from a fresh read): the object's UID or
 // resourceVersion changed, or the acknowledgement statement differs (its
 // hash). nil when they match.
-func ackMismatch(what string, got AckBinding, want *AckBinding, logs []string) *types.OperationResponse {
+func ackMismatch(what string, got report.AckBinding, want *report.AckBinding, logs []string) *types.OperationResponse {
 	if want == nil {
 		return leftoverRefused(fmt.Sprintf("%s: the tool cannot bind your acknowledgement to the object now. Nothing was changed. Run diagnostics again.", what), "conflict", logs)
 	}
@@ -79,7 +80,7 @@ func ackMismatch(what string, got AckBinding, want *AckBinding, logs []string) *
 // the stored-fields fix tells it apart by reading the object again
 // (storedLeftover.patchError).
 func leftoverWriteError(err error, what string, dryRun bool) *types.OperationResponse {
-	var k *K8sError
+	var k *kube.K8sError
 	msg := err.Error()
 	if errors.As(err, &k) && k.K8sMessage != "" {
 		msg = k.K8sMessage
@@ -109,11 +110,11 @@ func leftoverChanged(what, serverMsg string) *types.OperationResponse {
 // check; otherwise the 422 is the API server's own refusal, shown as is.
 // A read that fails leaves the refusal as the API server gave it (nothing
 // was changed either way).
-func (st *storedLeftover) patchError(c *Client, err error, dryRun bool) *types.OperationResponse {
+func (st *storedLeftover) patchError(c *kube.Client, err error, dryRun bool) *types.OperationResponse {
 	if kube.IsK8sError(err, http.StatusUnprocessableEntity) {
 		meta, found, rerr := kube.ReadObjectMeta(c, rhoai.ComponentListPath(st.Group, st.Version, st.Resource)+"/"+st.Name)
 		if rerr == nil && (!found || meta.UID != st.UID || meta.ResourceVersion != st.ResourceVersion) {
-			var k *K8sError
+			var k *kube.K8sError
 			msg := err.Error()
 			if errors.As(err, &k) && k.K8sMessage != "" {
 				msg = k.K8sMessage
@@ -124,7 +125,7 @@ func (st *storedLeftover) patchError(c *Client, err error, dryRun bool) *types.O
 	return leftoverWriteError(err, st.ref(), dryRun)
 }
 
-func fixLeftoverStoredFields(c *Client, target string, ack *AckBinding) *types.OperationResponse {
+func fixLeftoverStoredFields(c *kube.Client, target string, ack *report.AckBinding) *types.OperationResponse {
 	kind, name, ok := strings.Cut(target, "/")
 	if !ok || !components.KindPattern.MatchString(kind) || !components.DNS1123Subdomain.MatchString(name) {
 		return leftoverRefused(fixLeftoverFields+" needs <Kind>/<name>", "validation", nil)
@@ -134,7 +135,7 @@ func fixLeftoverStoredFields(c *Client, target string, ack *AckBinding) *types.O
 	// both is ambiguous and refused.
 	var rf *components.ReportedApplyFailure
 	for _, group := range rhoai.ModuleAPIGroups {
-		if found := leftoverObject(s, group, kind, "", name, components.ApplyStoredType); found != nil {
+		if found := LeftoverObject(s, group, kind, "", name, components.ApplyStoredType); found != nil {
 			if rf != nil {
 				return leftoverRefused(fmt.Sprintf("%s %s is reported in more than one API group (%s), so the tool cannot tell which object to change. Nothing was changed.", kind, name, strings.Join(rhoai.ModuleAPIGroups, ", ")), "prerequisites", nil)
 			}
@@ -219,7 +220,7 @@ func fixLeftoverStoredFields(c *Client, target string, ack *AckBinding) *types.O
 
 // patchLeftoverObject sends a JSON Patch with fieldValidation=Strict, as a
 // server-side dry run when dryRun is set.
-func patchLeftoverObject(c *Client, path string, ops []kube.JSONPatchOp, dryRun bool) ([]byte, error) {
+func patchLeftoverObject(c *kube.Client, path string, ops []kube.JSONPatchOp, dryRun bool) ([]byte, error) {
 	body, err := json.Marshal(ops)
 	if err != nil {
 		return nil, err
@@ -237,7 +238,7 @@ func patchLeftoverObject(c *Client, path string, ops []kube.JSONPatchOp, dryRun 
 // fixLeftoverRetryDSC makes the DataScienceCluster reconcile at once by
 // adding and removing an annotation, when it still reports a stored-type
 // error whose fields are all valid now.
-func fixLeftoverRetryDSC(c *Client, name string) *types.OperationResponse {
+func fixLeftoverRetryDSC(c *kube.Client, name string) *types.OperationResponse {
 	if !components.DNS1123Subdomain.MatchString(name) {
 		return leftoverRefused(fixLeftoverRetry+" needs the DataScienceCluster's name", "validation", nil)
 	}
@@ -273,12 +274,12 @@ func fixLeftoverRetryDSC(c *Client, name string) *types.OperationResponse {
 		return leftoverRefused(fmt.Sprintf("DataScienceCluster %s is not the cluster's DataScienceCluster. Nothing was changed.", name), "validation", nil)
 	}
 	stamp := record.NowRFC3339()
-	add, _ := json.Marshal(map[string]any{"metadata": map[string]any{"uid": uid, "annotations": map[string]any{leftoverRetryAnno: stamp}}})
+	add, _ := json.Marshal(map[string]any{"metadata": map[string]any{"uid": uid, "annotations": map[string]any{LeftoverRetryAnno: stamp}}})
 	if _, _, err := c.Do(http.MethodPatch, path, "application/merge-patch+json", add, url.Values{"fieldManager": {leftoverManager}}); err != nil {
 		return leftoverWriteError(err, "DataScienceCluster "+name, false)
 	}
-	logs := []string{fmt.Sprintf("Added the annotation %s=%s to DataScienceCluster %s", leftoverRetryAnno, stamp, name)}
-	remove, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{leftoverRetryAnno: nil}}})
+	logs := []string{fmt.Sprintf("Added the annotation %s=%s to DataScienceCluster %s", LeftoverRetryAnno, stamp, name)}
+	remove, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{LeftoverRetryAnno: nil}}})
 	_, _, rmErr := c.Do(http.MethodPatch, path, "application/merge-patch+json", remove, url.Values{"fieldManager": {leftoverManager}})
 	record.RecordActivity(c, types.ActivityEntry{
 		Timestamp: record.NowRFC3339(),
@@ -289,7 +290,7 @@ func fixLeftoverRetryDSC(c *Client, name string) *types.OperationResponse {
 	})
 	if rmErr != nil {
 		return &types.OperationResponse{Success: false, ErrorCode: "partial_failure", Logs: append(logs, "Error: "+rmErr.Error()),
-			Message: fmt.Sprintf("The operator was asked to retry, but the annotation could not be removed again (%v). Remove it with: %s", rmErr, kube.ShellCommand("oc", "annotate", "datasciencecluster", name, leftoverRetryAnno+"-"))}
+			Message: fmt.Sprintf("The operator was asked to retry, but the annotation could not be removed again (%v). Remove it with: %s", rmErr, kube.ShellCommand("oc", "annotate", "datasciencecluster", name, LeftoverRetryAnno+"-"))}
 	}
 	return &types.OperationResponse{
 		Success: true,
@@ -317,7 +318,7 @@ func workloadPath(kind, namespace, name string) string {
 
 // readWorkloadAsUser reads any workload kind (the fix runs with the user's
 // token).
-func readWorkloadAsUser(c *Client, kind, namespace, name string) (workloadObject, bool, bool, error) {
+func readWorkloadAsUser(c *kube.Client, kind, namespace, name string) (workloadObject, bool, bool, error) {
 	path := workloadPath(kind, namespace, name)
 	if path == "" {
 		return workloadObject{}, false, false, nil
@@ -328,7 +329,7 @@ func readWorkloadAsUser(c *Client, kind, namespace, name string) (workloadObject
 
 // deleteWorkload deletes with UID and resourceVersion preconditions and
 // background propagation, as a server-side dry run when dryRun is set.
-func deleteWorkload(c *Client, path, uid, resourceVersion string, dryRun bool) error {
+func deleteWorkload(c *kube.Client, path, uid, resourceVersion string, dryRun bool) error {
 	opts, _ := json.Marshal(map[string]any{
 		"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Background",
 		"preconditions": map[string]string{"uid": uid, "resourceVersion": resourceVersion},
@@ -341,14 +342,14 @@ func deleteWorkload(c *Client, path, uid, resourceVersion string, dryRun bool) e
 	return err
 }
 
-func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *types.OperationResponse {
+func fixLeftoverRecreateWorkload(c *kube.Client, target string, ack *report.AckBinding) *types.OperationResponse {
 	parts := strings.Split(target, "/")
 	if len(parts) != 3 || workloadPath(parts[0], "x", "x") == "" || !components.DNS1123Label.MatchString(parts[1]) || !components.DNS1123Subdomain.MatchString(parts[2]) {
 		return leftoverRefused(fixLeftoverRecreate+" needs <Deployment|StatefulSet|DaemonSet|Job>/<namespace>/<name>", "validation", nil)
 	}
 	kind, ns, name := parts[0], parts[1], parts[2]
 	s := components.ScanApplyReporters(c, components.AllApplyFailures)
-	rf := leftoverObject(s, components.LeftoverWorkloads[kind], kind, ns, name, components.ApplyImmutable)
+	rf := LeftoverObject(s, components.LeftoverWorkloads[kind], kind, ns, name, components.ApplyImmutable)
 	if rf == nil {
 		if len(s.Errs) > 0 {
 			return leftoverRefused(fmt.Sprintf("Could not read what the operator reports (%s). Nothing was deleted.", strings.Join(s.Errs, "; ")), "prerequisites", nil)
@@ -356,7 +357,7 @@ func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *typ
 		return components.NothingToDo(fmt.Sprintf("no CR reports that the selector of %s %s/%s changed any more. Nothing was deleted.", kind, ns, name), nil)
 	}
 	appNS := rhoai.ApplicationsNamespace(c)
-	r := analyzeRecreate(c, rf, appNS, readWorkloadAsUser, dsc.ComponentUsers)
+	r := AnalyzeRecreate(c, rf, appNS, readWorkloadAsUser, dsc.ComponentUsers)
 	logs := append([]string{"Reported by " + reportersText(rf)}, r.Warnings...)
 	switch {
 	case len(r.Blockers) > 0:
@@ -372,13 +373,13 @@ func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *typ
 			return res
 		}
 	case len(r.ackReasons()) > 0:
-		// The scan cannot read this kind (readDeploymentForScan), so the
+		// The scan cannot read this kind (ReadDeploymentForScan), so the
 		// user reviewed it unread: their acknowledgement binds to the
 		// reasons the scan showed, which are worked out again here the way
 		// the scan does. What reading it with the user's token finds
 		// beyond them (for example the webhooks its pods serve) was never
 		// acknowledged, so it refuses.
-		scan := analyzeRecreate(c, rf, appNS, readDeploymentForScan, dsc.ComponentUsers)
+		scan := AnalyzeRecreate(c, rf, appNS, ReadDeploymentForScan, dsc.ComponentUsers)
 		if res := ackMismatch(r.ref(), *ack, scan.problem().AcknowledgeBinding, logs); res != nil {
 			return res
 		}
@@ -418,7 +419,7 @@ func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *typ
 		Success:   true,
 	})
 
-	back, ready, waitErr := waitRecreated(c, kind, ns, name, uid)
+	back, ready, waitErr := WaitRecreated(c, kind, ns, name, uid)
 	switch {
 	case waitErr != nil:
 		return &types.OperationResponse{Success: true, Logs: append(logs, "Stopped waiting: "+waitErr.Error()),
@@ -428,16 +429,16 @@ func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *typ
 			Message: fmt.Sprintf("Recreated %s: %s created it again with the current selector and its pods are ready. Re-scan to check that %s is ready.", r.ref(), r.Recreator, r.Owner)}
 	case back:
 		return &types.OperationResponse{Success: true, Logs: append(logs, "It is back, its pods are not ready yet"),
-			Message: fmt.Sprintf("Deleted %s; %s created it again, but its pods were not ready within %s. Re-scan in a few minutes; the RHOAI pods check shows a pod that does not start.", r.ref(), r.Recreator, components.FormatDuration(leftoverRecreateWait))}
+			Message: fmt.Sprintf("Deleted %s; %s created it again, but its pods were not ready within %s. Re-scan in a few minutes; the RHOAI pods check shows a pod that does not start.", r.ref(), r.Recreator, components.FormatDuration(LeftoverRecreateWait))}
 	}
 	return &types.OperationResponse{Success: false, ErrorCode: "not_recreated", Logs: append(logs, "Not back yet"),
-		Message: fmt.Sprintf("Deleted %s, but %s has not created it again within %s. It may still be backing off: re-scan in a few minutes, and if it stays missing restart %s.", r.ref(), r.Recreator, components.FormatDuration(leftoverRecreateWait), r.Recreator)}
+		Message: fmt.Sprintf("Deleted %s, but %s has not created it again within %s. It may still be backing off: re-scan in a few minutes, and if it stays missing restart %s.", r.ref(), r.Recreator, components.FormatDuration(LeftoverRecreateWait), r.Recreator)}
 }
 
-// waitRecreated polls until the workload exists with a new UID and is
-// ready, or leftoverRecreateWait passes.
-func waitRecreated(c *Client, kind, ns, name, oldUID string) (back, ready bool, err error) {
-	deadline := kube.Clock().Now().Add(leftoverRecreateWait)
+// WaitRecreated polls until the workload exists with a new UID and is
+// ready, or LeftoverRecreateWait passes.
+func WaitRecreated(c *kube.Client, kind, ns, name, oldUID string) (back, ready bool, err error) {
+	deadline := kube.Clock().Now().Add(LeftoverRecreateWait)
 	for {
 		obj, found, _, readErr := readWorkloadAsUser(c, kind, ns, name)
 		if readErr == nil && found && obj.Metadata.UID != oldUID {

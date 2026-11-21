@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -61,15 +62,15 @@ func TestConversionCheck_ReportsOneProblemPerKind(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := conversionWorld(t, tc.status, tc.body)
-			out := checkConversionFailures(c)
+			out := diagnostics.CheckConversionFailures(c)
 			assertWrites(t, f)
-			if out.check.Status != "fail" || len(out.problems) != 2 {
-				t.Fatalf("check %+v problems %d", out.check, len(out.problems))
+			if out.Check.Status != "fail" || len(out.Problems) != 2 {
+				t.Fatalf("check %+v problems %d", out.Check, len(out.Problems))
 			}
-			resp := &DiagnosticsResponse{Problems: out.problems}
+			resp := &DiagnosticsResponse{Problems: out.Problems}
 			dsc := findProblem(resp, "conversion-failed-datascienceclusters.datasciencecluster.opendatahub.io")
 			if dsc == nil {
-				t.Fatalf("problems %+v", out.problems)
+				t.Fatalf("problems %+v", out.Problems)
 			}
 			if dsc.Severity != "critical" ||
 				dsc.Title != "The operator cannot convert DataScienceCluster to v3" {
@@ -99,8 +100,8 @@ func TestConversionCheck_ReportsOneProblemPerKind(t *testing.T) {
 			if p := findProblem(resp, "conversion-failed-platforms.config.opendatahub.io"); p == nil || p.Title != "The operator cannot convert Platform to v1alpha2" || !strings.Contains(strings.Join(p.Evidence, "\n"), "v1alpha1/platforms?limit=1: OK") {
 				t.Fatalf("platform problem %+v", p)
 			}
-			if !strings.Contains(out.check.Detail, "Platform v1alpha2, DataScienceCluster v3") || !strings.Contains(out.check.Detail, "2 reads not checked") {
-				t.Fatalf("detail %q", out.check.Detail)
+			if !strings.Contains(out.Check.Detail, "Platform v1alpha2, DataScienceCluster v3") || !strings.Contains(out.Check.Detail, "2 reads not checked") {
+				t.Fatalf("detail %q", out.Check.Detail)
 			}
 			// Discovery and ?limit=1 lists only; single-version groups are not probed.
 			for _, r := range f.reqs {
@@ -124,11 +125,11 @@ func TestConversionCheck_CountsOnlyVersionsThatReturnedAnObject(t *testing.T) {
 	f, c := conversionWorld(t, 200, oneDSC)
 	f.json("GET", "/apis/config.opendatahub.io/v1alpha2/platforms", 200, `{"items":[]}`)
 	f.json("GET", "/apis/config.opendatahub.io/v1alpha1/platforms", 200, `{"items":[]}`)
-	out := checkConversionFailures(c)
+	out := diagnostics.CheckConversionFailures(c)
 	want := "Every served version of 1 resource in 3 multi-version RHOAI API groups converts its first object (a sample); " +
 		"1 resource without objects, nothing to convert; 2 reads not checked (this app may not list them)"
-	if out.check.Status != "pass" || len(out.problems) != 0 || out.check.Detail != want {
-		t.Fatalf("%+v %+v", out.check, out.problems)
+	if out.Check.Status != "pass" || len(out.Problems) != 0 || out.Check.Detail != want {
+		t.Fatalf("%+v %+v", out.Check, out.Problems)
 	}
 }
 
@@ -138,10 +139,10 @@ func TestConversionCheck_NothingVerifiedWarns(t *testing.T) {
 		f.json("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", 200, `{"items":[]}`)
 		f.json("GET", "/apis/config.opendatahub.io/v1alpha2/platforms", 200, `{"items":[]}`)
 		f.json("GET", "/apis/config.opendatahub.io/v1alpha1/platforms", 200, `{"items":[]}`)
-		out := checkConversionFailures(c)
-		if out.check.Status != "warn" || len(out.problems) != 0 || !strings.HasPrefix(out.check.Detail, "Could not verify any conversion") ||
-			!strings.Contains(out.check.Detail, "2 resources without objects") {
-			t.Fatalf("%+v", out.check)
+		out := diagnostics.CheckConversionFailures(c)
+		if out.Check.Status != "warn" || len(out.Problems) != 0 || !strings.HasPrefix(out.Check.Detail, "Could not verify any conversion") ||
+			!strings.Contains(out.Check.Detail, "2 resources without objects") {
+			t.Fatalf("%+v", out.Check)
 		}
 	})
 	t.Run("every list forbidden", func(t *testing.T) {
@@ -149,24 +150,24 @@ func TestConversionCheck_NothingVerifiedWarns(t *testing.T) {
 		f.status("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", 403, "Forbidden")
 		f.status("GET", "/apis/config.opendatahub.io/v1alpha2/platforms", 403, "Forbidden")
 		f.status("GET", "/apis/config.opendatahub.io/v1alpha1/platforms", 403, "Forbidden")
-		out := checkConversionFailures(c)
-		if out.check.Status != "warn" || len(out.problems) != 0 || !strings.HasPrefix(out.check.Detail, "Could not verify any conversion") ||
-			!strings.Contains(out.check.Detail, "6 reads not checked") || strings.Contains(out.check.Detail, "converts") {
-			t.Fatalf("%+v", out.check)
+		out := diagnostics.CheckConversionFailures(c)
+		if out.Check.Status != "warn" || len(out.Problems) != 0 || !strings.HasPrefix(out.Check.Detail, "Could not verify any conversion") ||
+			!strings.Contains(out.Check.Detail, "6 reads not checked") || strings.Contains(out.Check.Detail, "converts") {
+			t.Fatalf("%+v", out.Check)
 		}
 	})
 }
 
 func TestConversionCheck_OtherErrorsWarn(t *testing.T) {
 	_, c := conversionWorld(t, 503, `{"kind":"Status","status":"Failure","message":"etcd unavailable","code":503}`)
-	out := checkConversionFailures(c)
-	if out.check.Status != "fail" || len(out.problems) != 1 || !strings.Contains(out.check.Detail, "could not verify") {
-		t.Fatalf("%+v %d", out.check, len(out.problems))
+	out := diagnostics.CheckConversionFailures(c)
+	if out.Check.Status != "fail" || len(out.Problems) != 1 || !strings.Contains(out.Check.Detail, "could not verify") {
+		t.Fatalf("%+v %d", out.Check, len(out.Problems))
 	}
 
 	f, c := newFakeAPI(t)
 	f.status("GET", "/apis", http.StatusServiceUnavailable, "ServiceUnavailable")
-	if out := checkConversionFailures(c); out.check.Status != "warn" || len(out.problems) != 0 {
+	if out := diagnostics.CheckConversionFailures(c); out.Check.Status != "warn" || len(out.Problems) != 0 {
 		t.Fatalf("%+v", out)
 	}
 }
@@ -175,7 +176,7 @@ func TestConversionCheck_OtherErrorsWarn(t *testing.T) {
 // and the DataScienceCluster check still reads the DSC (at v2).
 func TestConversionCheck_InFullReport(t *testing.T) {
 	_, c := conversionWorld(t, 429, liveDSCv3Conversion429)
-	resp, err := DiagnoseCluster(c)
+	resp, err := diagnostics.DiagnoseCluster(c)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-package cluster
+package diagnostics
 
 import (
 	"encoding/json"
@@ -15,6 +15,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/report"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -22,9 +23,9 @@ import (
 // diagnostics reports it.
 var moduleDeletionGrace = 5 * time.Minute
 
-func checkPlatformModules(c *Client) checkOutput {
+func CheckPlatformModules(c *kube.Client) CheckOutput {
 	const name = "Platform modules"
-	out := checkOutput{check: CheckResult{Name: name, Status: "pass"}}
+	out := CheckOutput{Check: report.CheckResult{Name: name, Status: "pass"}}
 	var details []string
 
 	// Platform provisioning gates (rhods-operator rhoai-3.6
@@ -36,10 +37,10 @@ func checkPlatformModules(c *Client) checkOutput {
 		details = append(details, "no Platform API (operator older than 3.6 or not installed)")
 	case kube.IsK8sError(err, http.StatusForbidden):
 		details = append(details, "Platform not checked: this app cannot read platforms (RBAC)")
-		out.check.Status = "warn"
+		out.Check.Status = "warn"
 	case err != nil:
 		details = append(details, fmt.Sprintf("could not read the Platform: %v", err))
-		out.check.Status = "warn"
+		out.Check.Status = "warn"
 	default:
 		var list struct {
 			Items []rhoai.DSCObject `json:"items"`
@@ -52,7 +53,7 @@ func checkPlatformModules(c *Client) checkOutput {
 				}
 				switch cond.Reason {
 				case "AdminAckRequired":
-					out.check.Status = "fail"
+					out.Check.Status = "fail"
 					evidence := []string{fmt.Sprintf("Platform %s: ProvisioningProgress=False (AdminAckRequired): %s", pl.Metadata.Name, kube.TruncateText(cond.Message, 400))}
 					keys, values, keysErr := components.PendingUpgradeAckKeys(c)
 					cmd := components.UpgradeAckCommand("<key>")
@@ -69,7 +70,7 @@ func checkPlatformModules(c *Client) checkOutput {
 						cmd = strings.Join(cmds, "\n")
 						fix = fmt.Sprintf("Read what each gate is about (the operator's release notes name it), then acknowledge %s with the commands below.", kube.Verb(len(keys), "it", "them"))
 					}
-					out.problems = append(out.problems, Problem{
+					out.Problems = append(out.Problems, report.Problem{
 						ID:              "platform-admin-ack-required",
 						Severity:        "critical",
 						Title:           "The operator waits for an administrator to acknowledge an upgrade step",
@@ -80,10 +81,10 @@ func checkPlatformModules(c *Client) checkOutput {
 						TechnicalCmd:    cmd,
 					})
 				case "RunlevelTimeoutExceeded":
-					if out.check.Status == "pass" {
-						out.check.Status = "warn"
+					if out.Check.Status == "pass" {
+						out.Check.Status = "warn"
 					}
-					out.problems = append(out.problems, Problem{
+					out.Problems = append(out.Problems, report.Problem{
 						ID:          "platform-runlevel-timeout",
 						Severity:    "warning",
 						Title:       "Some modules were provisioned before the modules they wait for became ready",
@@ -106,26 +107,26 @@ func checkPlatformModules(c *Client) checkOutput {
 
 	// What this check is about (modules stuck in deletion) comes first.
 	var moduleDetails []string
-	stuck, err := stuckModuleCRs(c, time.Now())
+	stuck, err := StuckModuleCRs(c, time.Now())
 	if err != nil {
 		moduleDetails = append(moduleDetails, fmt.Sprintf("Module CRs not checked: %v", err))
-		if out.check.Status == "pass" {
-			out.check.Status = "warn"
+		if out.Check.Status == "pass" {
+			out.Check.Status = "warn"
 		}
 	}
 	operators := components.NewModuleOperatorFinder(c, nil)
 	for _, m := range stuck {
-		out.check.Status = "fail"
-		out.problems = append(out.problems, stuckModuleProblem(c, operators, m))
+		out.Check.Status = "fail"
+		out.Problems = append(out.Problems, StuckModuleProblem(c, operators, m))
 	}
 	if len(stuck) == 0 && err == nil {
 		moduleDetails = append(moduleDetails, "No module is stuck in deletion")
 	}
-	out.check.Detail = strings.Join(append(moduleDetails, details...), "; ")
+	out.Check.Detail = strings.Join(append(moduleDetails, details...), "; ")
 	return out
 }
 
-type stuckModule struct {
+type StuckModule struct {
 	Module     string
 	Name       string
 	Finalizers []string
@@ -134,7 +135,7 @@ type stuckModule struct {
 	CRD string
 }
 
-func stuckModuleCRs(c *Client, now time.Time) ([]stuckModule, error) {
+func StuckModuleCRs(c *kube.Client, now time.Time) ([]StuckModule, error) {
 	api, err := rhoai.DiscoverComponentAPI(c)
 	if err != nil {
 		return nil, err
@@ -147,7 +148,7 @@ func stuckModuleCRs(c *Client, now time.Time) ([]stuckModule, error) {
 	kube.ParallelFor(len(api.Kinds), 6, func(i int) {
 		results[i].items, results[i].err = components.ListKindCRs(c, api.Kinds[i])
 	})
-	var out []stuckModule
+	var out []StuckModule
 	var errs []string
 	for i, k := range api.Kinds {
 		if results[i].err != nil {
@@ -159,7 +160,7 @@ func stuckModuleCRs(c *Client, now time.Time) ([]stuckModule, error) {
 			if !ok || now.Sub(t) < moduleDeletionGrace {
 				continue
 			}
-			out = append(out, stuckModule{Module: k.Module(), Name: it.Metadata.Name, Finalizers: it.Metadata.Finalizers, Since: now.Sub(t), CRD: k.CRD()})
+			out = append(out, StuckModule{Module: k.Module(), Name: it.Metadata.Name, Finalizers: it.Metadata.Finalizers, Since: now.Sub(t), CRD: k.CRD()})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Module < out[j].Module })
@@ -169,7 +170,7 @@ func stuckModuleCRs(c *Client, now time.Time) ([]stuckModule, error) {
 	return out, nil
 }
 
-func stuckModuleProblem(c *Client, operators *components.ModuleOperatorFinder, m stuckModule) Problem {
+func StuckModuleProblem(c *kube.Client, operators *components.ModuleOperatorFinder, m StuckModule) report.Problem {
 	evidence := []string{fmt.Sprintf("%s %s has been deleting for %s; finalizers: %s", m.Module, m.Name, components.FormatDuration(m.Since), kube.NonEmpty(strings.Join(m.Finalizers, ", "), "none"))}
 	fix := "The finalizer is removed by the module's operator; make sure it is running and read its logs."
 	op, why, err := operators.Find(m.Module, m.Name)
@@ -200,7 +201,7 @@ func stuckModuleProblem(c *Client, operators *components.ModuleOperatorFinder, m
 	case "aipipelines":
 		fix = "Delete the pipeline servers (DSPAs) first; their finalizers need the pipelines operator. " + fix
 	}
-	return Problem{
+	return report.Problem{
 		ID:              "module-stuck-deleting-" + m.Module,
 		Severity:        "critical",
 		Title:           fmt.Sprintf("Module %s is stuck in deletion", m.Module),
@@ -212,9 +213,9 @@ func stuckModuleProblem(c *Client, operators *components.ModuleOperatorFinder, m
 	}
 }
 
-func checkManagedConfig(c *Client) checkOutput {
+func CheckManagedConfig(c *kube.Client) CheckOutput {
 	const name = "Operator-managed config"
-	out := checkOutput{check: CheckResult{Name: name, Status: "pass"}}
+	out := CheckOutput{Check: report.CheckResult{Name: name, Status: "pass"}}
 	installed := dscRelease(c)
 	release := installed.Version
 	var details []string
@@ -222,7 +223,7 @@ func checkManagedConfig(c *Client) checkOutput {
 	namespaces, nsErr := components.RolloutNamespaces(c)
 	if nsErr != nil && !errors.Is(nsErr, rhoai.ErrNoDSCInitialization) {
 		details = append(details, fmt.Sprintf("could not tell the applications namespace, so its Deployments were not checked: %v", nsErr))
-		out.check.Status = "warn"
+		out.Check.Status = "warn"
 	}
 	for _, ns := range namespaces {
 		body, _, err := c.Do(http.MethodGet, rhoai.NamespacedPath("apps/v1", "deployments", ns, ""), "", nil, url.Values{})
@@ -231,7 +232,7 @@ func checkManagedConfig(c *Client) checkOutput {
 		}
 		if err != nil {
 			details = append(details, fmt.Sprintf("could not list deployments in %s: %v", ns, err))
-			out.check.Status = "warn"
+			out.Check.Status = "warn"
 			continue
 		}
 		var list struct {
@@ -245,12 +246,12 @@ func checkManagedConfig(c *Client) checkOutput {
 			target := ns + "/" + d.Metadata.Name
 			ann := d.Metadata.Annotations
 			if ann["opendatahub.io/managed"] == "false" {
-				out.check.Status = "fail"
+				out.Check.Status = "fail"
 				evidence := []string{fmt.Sprintf("Deployment %s has opendatahub.io/managed=false", target)}
 				if v := ann["platform.opendatahub.io/version"]; v != "" {
 					evidence = append(evidence, fmt.Sprintf("It was last applied for version %s; the platform is at %s", v, kube.NonEmpty(release, "unknown")))
 				}
-				out.problems = append(out.problems, Problem{
+				out.Problems = append(out.Problems, report.Problem{
 					ID:       "deployment-unmanaged-" + d.Metadata.Name,
 					Severity: "warning",
 					Title:    fmt.Sprintf("%s is excluded from operator management", d.Metadata.Name),
@@ -271,7 +272,7 @@ func checkManagedConfig(c *Client) checkOutput {
 				// (owner MCPLifecycleOperator "default") on an OpenShift AI
 				// Self-Managed 3.6.0 cluster. A type other than the installed
 				// release's name is not the platform's version to compare.
-				out.problems = append(out.problems, Problem{
+				out.Problems = append(out.Problems, report.Problem{
 					ID:              "deployment-version-drift-" + d.Metadata.Name,
 					Severity:        "info",
 					Title:           fmt.Sprintf("%s was last applied for version %s", d.Metadata.Name, v),
@@ -282,7 +283,7 @@ func checkManagedConfig(c *Client) checkOutput {
 				})
 			}
 			if raw := ann[components.AssistRolloutAnnotation]; raw != "" {
-				p := Problem{
+				p := report.Problem{
 					ID:              "rollout-strategy-patched-" + d.Metadata.Name,
 					Severity:        "info",
 					Title:           fmt.Sprintf("%s still has the rollout strategy set by assist-rollout", d.Metadata.Name),
@@ -298,16 +299,16 @@ func checkManagedConfig(c *Client) checkOutput {
 				} else {
 					p.Fix = "Wait until the rollout has finished, then re-scan to restore the original value."
 				}
-				out.problems = append(out.problems, p)
+				out.Problems = append(out.Problems, p)
 			}
 		}
 	}
-	if out.check.Status == "pass" {
+	if out.Check.Status == "pass" {
 		details = append([]string{fmt.Sprintf("%s under operator management", kube.CountNoun(count, "deployment", "deployments"))}, details...)
-	} else if len(out.problems) > 0 {
-		details = append([]string{kube.CountNoun(len(out.problems), "finding", "findings")}, details...)
+	} else if len(out.Problems) > 0 {
+		details = append([]string{kube.CountNoun(len(out.Problems), "finding", "findings")}, details...)
 	}
-	out.check.Detail = strings.Join(details, "; ")
+	out.Check.Detail = strings.Join(details, "; ")
 	return out
 }
 
@@ -321,7 +322,7 @@ type platformRelease struct {
 
 // dscRelease reads the DataScienceCluster's status.release; empty fields
 // when there is no DataScienceCluster or it cannot be read.
-func dscRelease(c *Client) platformRelease {
+func dscRelease(c *kube.Client) platformRelease {
 	path, err := rhoai.DataScienceClusterPath(c)
 	if err != nil {
 		return platformRelease{}
@@ -339,10 +340,10 @@ func dscRelease(c *Client) platformRelease {
 	return dsc.Status.Release
 }
 
-// channelHeadBehind reports when the Subscription's channel head is older
+// ChannelHeadBehind reports when the Subscription's channel head is older
 // than the installed CSV. OLM never downgrades (it follows replaces, skips
 // and skipRange forward), so such a channel can only fail to resolve.
-func channelHeadBehind(c *Client, sub subscriptionState) *Problem {
+func ChannelHeadBehind(c *kube.Client, sub SubscriptionState) *report.Problem {
 	if !sub.Exists || sub.Source == "" || sub.Channel == "" || sub.InstalledCSV == "" {
 		return nil
 	}
@@ -364,7 +365,7 @@ func channelHeadBehind(c *Client, sub subscriptionState) *Problem {
 		if !ok || registry.CompareTags(parsed, installed) >= 0 {
 			return nil
 		}
-		return &Problem{
+		return &report.Problem{
 			ID:          "subscription-channel-behind",
 			Severity:    "warning",
 			Title:       fmt.Sprintf("Channel %s offers %s, older than the installed %s", sub.Channel, head, sub.InstalledCSV),

@@ -1,4 +1,4 @@
-package cluster
+package diagnostics
 
 import (
 	"fmt"
@@ -8,17 +8,18 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/report"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
-func checkDataScienceCluster(c *Client) checkOutput {
+func CheckDataScienceCluster(c *kube.Client) CheckOutput {
 	const name = "DataScienceCluster"
-	out := checkOutput{check: CheckResult{Name: name, Status: "pass"}}
+	out := CheckOutput{Check: report.CheckResult{Name: name, Status: "pass"}}
 	details := []string{}
 	// warn lowers a pass to warn; fail is kept.
 	warn := func(detail string) {
-		if out.check.Status == "pass" {
-			out.check.Status = "warn"
+		if out.Check.Status == "pass" {
+			out.Check.Status = "warn"
 		}
 		details = append(details, detail)
 	}
@@ -26,11 +27,11 @@ func checkDataScienceCluster(c *Client) checkOutput {
 	// The DSCI is read first: a DSCI in Error often explains why no DSC
 	// components deploy, so it is reported whatever the DSC state is.
 	dscis, dsciAPI, dsciErr := rhoai.ListFirstServed(c, rhoai.DSCIGroup, "/apis/dscinitialization.opendatahub.io/%s/dscinitializations", "dscinitializations", rhoai.DSCIFallbackVersions)
-	var dsciProblem *Problem
+	var dsciProblem *report.Problem
 	if dsciErr == nil && dsciAPI && len(dscis) > 0 {
 		dsci := dscis[0]
 		if dsci.Status.Phase == "Error" {
-			dsciProblem = &Problem{
+			dsciProblem = &report.Problem{
 				ID:              "dsci-error",
 				Severity:        "warning",
 				Title:           fmt.Sprintf("DSCInitialization %s is in phase Error", dsci.Metadata.Name),
@@ -51,7 +52,7 @@ func checkDataScienceCluster(c *Client) checkOutput {
 		details = append(details, "No DataScienceCluster API (operator not installed yet)")
 	case len(dscs) == 0:
 		warn("No DataScienceCluster exists")
-		out.problems = append(out.problems, Problem{
+		out.Problems = append(out.Problems, report.Problem{
 			ID:          "dsc-missing",
 			Severity:    "info",
 			Title:       "No DataScienceCluster exists",
@@ -62,7 +63,7 @@ func checkDataScienceCluster(c *Client) checkOutput {
 		dsc := dscs[0]
 		a := components.AnalyzeDSC(c, dsc, time.Now())
 		titles := map[string]string{}
-		var causeProblems []Problem
+		var causeProblems []report.Problem
 		for _, d := range a.Deps {
 			if d.ProblemID() == "" {
 				continue
@@ -99,17 +100,17 @@ func checkDataScienceCluster(c *Client) checkOutput {
 				details = append(details, "optional prerequisites not installed: "+strings.Join(optional, ", "))
 			}
 		default:
-			out.check.Status = "fail"
+			out.Check.Status = "fail"
 			p, failing := a.NotReadyProblem(dsc, titles, dsciProblem)
 			details = append(details, fmt.Sprintf("%s is not ready (%s)", dsc.Metadata.Name, kube.CountNoun(failing, "failing condition", "failing conditions")))
-			out.problems = append(out.problems, p)
+			out.Problems = append(out.Problems, p)
 		}
 		for _, p := range causeProblems {
-			if p.Severity != "info" && out.check.Status == "pass" {
-				out.check.Status = "warn"
+			if p.Severity != "info" && out.Check.Status == "pass" {
+				out.Check.Status = "warn"
 			}
 		}
-		out.problems = append(out.problems, causeProblems...)
+		out.Problems = append(out.Problems, causeProblems...)
 		if a.ModulesErr != nil {
 			warn(fmt.Sprintf("module CRs not fully checked: %v", a.ModulesErr))
 		}
@@ -122,18 +123,18 @@ func checkDataScienceCluster(c *Client) checkOutput {
 		details = append(details, "no DSCInitialization")
 	default:
 		if dsciProblem != nil {
-			out.check.Status = "fail"
-			out.problems = append(out.problems, *dsciProblem)
+			out.Check.Status = "fail"
+			out.Problems = append(out.Problems, *dsciProblem)
 		}
 		details = append(details, fmt.Sprintf("DSCInitialization %s phase %s", dscis[0].Metadata.Name, kube.NonEmpty(dscis[0].Status.Phase, "unknown")))
 	}
 
-	out.check.Detail = strings.Join(details, "; ")
+	out.Check.Detail = strings.Join(details, "; ")
 	return out
 }
 
-func checkApplyFailures(c *Client) checkOutput {
-	out := checkOutput{check: CheckResult{Name: components.ApplyFailuresCheckName, Status: "pass"}}
+func CheckApplyFailures(c *kube.Client) CheckOutput {
+	out := CheckOutput{Check: report.CheckResult{Name: components.ApplyFailuresCheckName, Status: "pass"}}
 	s := components.ScanApplyReporters(c, components.AllApplyFailures)
 	found, api, errs, scanned := s.Found, s.API, s.Errs, s.Scanned
 
@@ -146,21 +147,21 @@ func checkApplyFailures(c *Client) checkOutput {
 	sort.Strings(keys)
 	operators := components.NewModuleOperatorFinder(c, nil)
 	for _, k := range keys {
-		out.problems = append(out.problems, components.ApplyFailureProblem(c, api, operators, found[k]))
+		out.Problems = append(out.Problems, components.ApplyFailureProblem(c, api, operators, found[k]))
 	}
 
 	switch {
-	case len(out.problems) > 0:
-		out.check.Status = "fail"
-		out.check.Detail = fmt.Sprintf("%s the operator cannot update", kube.CountNoun(len(out.problems), "object", "objects"))
+	case len(out.Problems) > 0:
+		out.Check.Status = "fail"
+		out.Check.Detail = fmt.Sprintf("%s the operator cannot update", kube.CountNoun(len(out.Problems), "object", "objects"))
 	case len(errs) > 0:
-		out.check.Status = "warn"
-		out.check.Detail = "No apply failures in the CRs that could be read"
+		out.Check.Status = "warn"
+		out.Check.Detail = "No apply failures in the CRs that could be read"
 	default:
-		out.check.Detail = fmt.Sprintf("No apply failures reported (%s checked)", kube.CountNoun(scanned, "CR", "CRs"))
+		out.Check.Detail = fmt.Sprintf("No apply failures reported (%s checked)", kube.CountNoun(scanned, "CR", "CRs"))
 	}
 	if len(errs) > 0 {
-		out.check.Detail += "; could not read: " + strings.Join(errs, "; ")
+		out.Check.Detail += "; could not read: " + strings.Join(errs, "; ")
 	}
 	return out
 }

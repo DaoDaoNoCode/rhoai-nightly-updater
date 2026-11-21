@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -97,17 +98,17 @@ func (w *dscWorld) trainerCR(conds []dcond, generation, observed int) {
 	}}})
 }
 
-func problemsByID(out checkOutput) map[string]Problem {
+func problemsByID(out diagnostics.CheckOutput) map[string]Problem {
 	m := map[string]Problem{}
-	for _, p := range out.problems {
+	for _, p := range out.Problems {
 		m[p.ID] = p
 	}
 	return m
 }
 
-func ids(out checkOutput) []string {
+func ids(out diagnostics.CheckOutput) []string {
 	var s []string
-	for _, p := range out.problems {
+	for _, p := range out.Problems {
 		s = append(s, p.ID)
 	}
 	return s
@@ -126,17 +127,17 @@ func liveMissingPrereqs() []dcond {
 
 func TestDSCCheck_MissingPrerequisitesGetCommandsAndClassification(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs())
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	byID := problemsByID(out)
-	if out.check.Status != "fail" {
-		t.Fatalf("check = %+v", out.check)
+	if out.Check.Status != "fail" {
+		t.Fatalf("check = %+v", out.Check)
 	}
 	for _, id := range []string{"dsc-not-ready", "prerequisite-missing-job-set", "prerequisite-missing-openshift-cert-manager-operator", "prerequisite-missing-leader-worker-set"} {
 		if _, ok := byID[id]; !ok {
 			t.Fatalf("missing %s in %v", id, ids(out))
 		}
 	}
-	if len(out.problems) != 4 {
+	if len(out.Problems) != 4 {
 		t.Fatalf("problems = %v", ids(out))
 	}
 
@@ -187,7 +188,7 @@ func TestDSCCheck_MissingPrerequisiteUnderGitOps(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs())
 	w.f.obj(rhoai.SubscriptionPath(), map[string]any{"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS, "annotations": trackingID("Subscription", rhoai.SubNS, rhoai.SubName)}})
 	w.f.obj(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName), map[string]any{"metadata": map[string]any{"name": rhoai.CatalogName, "namespace": rhoai.CatalogNS, "annotations": trackingID("CatalogSource", rhoai.CatalogNS, rhoai.CatalogName)}})
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	js, ok := problemsByID(out)["prerequisite-missing-job-set"]
 	if !ok {
 		t.Fatalf("problems = %v", ids(out))
@@ -204,18 +205,18 @@ func TestDSCCheck_ReadyWithOptionalPrerequisiteOnly(t *testing.T) {
 		{"type": "Ready", "status": "True"},
 		{"type": "KserveLLMInferenceServiceWideEPDependencies", "status": "False", "reason": "PreConditionFailed", "severity": "Info", "message": "LeaderWorkerSet not installed"},
 	})
-	out := checkDataScienceCluster(w.c)
-	if out.check.Status != "pass" || strings.Join(ids(out), ",") != "prerequisite-missing-leader-worker-set" ||
-		!strings.Contains(out.check.Detail, "optional prerequisites not installed: Leader Worker Set Operator") {
-		t.Fatalf("out = %+v %v", out.check, ids(out))
+	out := diagnostics.CheckDataScienceCluster(w.c)
+	if out.Check.Status != "pass" || strings.Join(ids(out), ",") != "prerequisite-missing-leader-worker-set" ||
+		!strings.Contains(out.Check.Detail, "optional prerequisites not installed: Leader Worker Set Operator") {
+		t.Fatalf("out = %+v %v", out.Check, ids(out))
 	}
 }
 
 func TestDSCCheck_HealthyClusterReadsNoCatalog(t *testing.T) {
 	w := newDSCWorld(t, []dcond{{"type": "Ready", "status": "True"}, {"type": "TrainerReady", "status": "True"}})
-	out := checkDataScienceCluster(w.c)
-	if out.check.Status != "pass" || len(out.problems) != 0 {
-		t.Fatalf("out = %+v %v", out.check, ids(out))
+	out := diagnostics.CheckDataScienceCluster(w.c)
+	if out.Check.Status != "pass" || len(out.Problems) != 0 {
+		t.Fatalf("out = %+v %v", out.Check, ids(out))
 	}
 	if n := len(w.f.requests("GET", packageManifestsPath)); n != 0 {
 		t.Fatalf("listed package manifests %d times on a healthy cluster", n)
@@ -225,7 +226,7 @@ func TestDSCCheck_HealthyClusterReadsNoCatalog(t *testing.T) {
 func TestDSCCheck_InstalledButOperandMissing(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs()[:2])
 	w.installedCSV(time.Hour)
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	byID := problemsByID(out)
 	p, ok := byID["prerequisite-operand-job-set"]
 	if !ok || p.AutoFixable || !strings.Contains(p.Title, "its JobSetOperator/cluster does not exist") ||
@@ -245,7 +246,7 @@ func TestDSCCheck_SatisfiedDependencyOffersRestart(t *testing.T) {
 	w.installedCSV(time.Hour)
 	w.f.json("GET", jobSetOperandPath, 200, `{"metadata":{"name":"cluster"}}`)
 	w.trainerCR([]dcond{{"type": "Ready", "status": "False", "reason": "Error", "message": msgTrainerJobSet, "lastTransitionTime": ago(time.Hour)}}, 3, 3)
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	byID := problemsByID(out)
 	b, ok := byID["module-operator-backoff-trainer"]
 	if !ok || !b.AutoFixable || b.AutoFixAction != "restart-module-operator:trainer" || b.Severity != "warning" ||
@@ -281,7 +282,7 @@ func TestDSCCheck_OperandFromInstalledCSVPackage(t *testing.T) {
 		{"type": "KserveLLMInferenceServiceDependencies", "status": "False", "reason": "PreConditionFailed", "message": msgCertManager},
 	})
 	w.installedCSVs(csvItem("cert-manager.v1.16.5", "openshift-operators", "cert-manager", "Succeeded", time.Hour, "cert-manager", `[]`, nil))
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	for _, id := range ids(out) {
 		if strings.HasPrefix(id, "prerequisite-") {
 			t.Fatalf("installed community cert-manager reported as %s", id)
@@ -295,7 +296,7 @@ func TestDSCCheck_OperandFromInstalledCSVPackage(t *testing.T) {
 	w2 := newDSCWorld(t, liveMissingPrereqs()[:2])
 	w2.installedCSVs(csvItem("jobset-operator.v0.9.0", "openshift-jobset-operator", "Job Set Operator", "Succeeded", time.Hour, "job-set",
 		`[{"apiVersion":"operator.openshift.io/v1","kind":"JobSetOperator","metadata":{"name":"cluster"},"spec":{"managementState":"Managed","logLevel":"Debug"}}]`, nil))
-	p := problemsByID(checkDataScienceCluster(w2.c))["prerequisite-operand-job-set"]
+	p := problemsByID(diagnostics.CheckDataScienceCluster(w2.c))["prerequisite-operand-job-set"]
 	if !strings.Contains(p.TechnicalCmd, `"logLevel": "Debug"`) {
 		t.Fatalf("operand command = %s", p.TechnicalCmd)
 	}
@@ -305,7 +306,7 @@ func TestDSCCheck_JustInstalledDependencyIsNotBackoff(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs()[:2])
 	w.installedCSV(30 * time.Second)
 	w.f.json("GET", jobSetOperandPath, 200, `{}`)
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	if _, ok := problemsByID(out)["module-operator-backoff-trainer"]; ok {
 		t.Fatalf("problems = %v", ids(out))
 	}
@@ -318,7 +319,7 @@ func TestDSCCheck_OperandForbiddenSaysMakeUpgrade(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs()[:2])
 	w.installedCSV(time.Hour)
 	w.f.status("GET", jobSetOperandPath, http.StatusForbidden, "Forbidden")
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	byID := problemsByID(out)
 	// An operand the tool cannot read does not authorize a restart.
 	if _, ok := byID["module-operator-backoff-trainer"]; ok {
@@ -355,7 +356,7 @@ func TestDSCCheck_StaleModuleIsBackoffOnlyAcrossScans(t *testing.T) {
 	ray(4)
 	w.f.obj("/apis/apps/v1/namespaces/redhat-ods-applications/deployments/ray-module-operator-controller-manager", operatorDeploymentJSON("ray-module-operator-controller-manager", "RollingUpdate", 1))
 	backoff := func() (Problem, bool) {
-		p, ok := problemsByID(checkDataScienceCluster(w.c))["module-operator-backoff-ray"]
+		p, ok := problemsByID(diagnostics.CheckDataScienceCluster(w.c))["module-operator-backoff-ray"]
 		return p, ok
 	}
 
@@ -566,7 +567,7 @@ func TestDSCCheck_UpgradeGates(t *testing.T) {
 		{"type": "ModulesReady", "status": "False", "reason": "AdminAckRequired", "message": msgGateAck},
 	})
 	w.f.json("GET", "/api/v1/namespaces/redhat-ods-operator/configmaps/odh-upgrade-acks", 200, `{"data":{"kserve-v2":"false","old":"true"}}`)
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	byID := problemsByID(out)
 	g, ok := byID[components.DSCGateProblemID]
 	if !ok || g.Severity != "critical" || g.AutoFixable {
@@ -589,7 +590,7 @@ func TestDSCCheck_UnclassifiedKeepsGenericFix(t *testing.T) {
 		{"type": "Ready", "status": "False", "reason": "Error", "message": "Some components are not ready"},
 		{"type": "WorkbenchesReady", "status": "False", "reason": "Error", "message": "something unexpected"},
 	})
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	dsc := problemsByID(out)["dsc-not-ready"]
 	if !strings.Contains(strings.Join(dsc.Evidence, "\n"), "WorkbenchesReady=False (Error): something unexpected → cause not classified") ||
 		!strings.Contains(dsc.Fix, "For WorkbenchesReady, which the tool does not classify") || len(dsc.RelatedProblems) != 0 {
@@ -600,7 +601,7 @@ func TestDSCCheck_UnclassifiedKeepsGenericFix(t *testing.T) {
 func TestDSCCheck_CatalogUnreadableStillReports(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs()[:2])
 	w.f.status("GET", packageManifestsPath, http.StatusForbidden, "Forbidden")
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	p, ok := problemsByID(out)["prerequisite-missing-jobset"]
 	if !ok || !strings.Contains(strings.Join(p.Evidence, "\n"), "Could not read the catalogs") || !strings.Contains(p.Fix, "OperatorHub") {
 		t.Fatalf("problems = %v, p = %+v", ids(out), p)

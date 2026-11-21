@@ -1,4 +1,4 @@
-package cluster
+package diagnostics
 
 import (
 	"encoding/json"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/report"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -27,7 +28,7 @@ import (
 // condition, cert-manager's CRDs were left from a manual install but no
 // controller ran, and diagnostics showed the pods and a webhook without
 // endpoints as two unrelated problems. This check reports the Certificate
-// as the root cause and folds those symptoms into it (linkProblems).
+// as the root cause and folds those symptoms into it (LinkProblems).
 
 // certificateGrace is how long cert-manager may take to issue a new
 // Certificate before it is reported.
@@ -66,7 +67,7 @@ func (ci certificateItem) readyCondition() *rhoai.DSCCondition {
 // (app.kubernetes.io/name=cert-manager or app=cert-manager; the cainjector
 // and webhook Deployments carry other names or a component label other
 // than controller). seen lists the controllers found, with their pods.
-func certManagerRunning(c *Client) (running bool, seen string, err error) {
+func certManagerRunning(c *kube.Client) (running bool, seen string, err error) {
 	var found []string
 	byRef := map[string]bool{}
 	for _, sel := range []string{"app.kubernetes.io/name=cert-manager", "app=cert-manager"} {
@@ -104,7 +105,7 @@ func certManagerRunning(c *Client) (running bool, seen string, err error) {
 // when its controller does not run: its own Deployments (from the CSV's
 // install strategy) and its operand's managementState, with the commands
 // that bring the controller back.
-func certManagerOperatorState(c *Client, d *components.Dependency) (evidence, cmds []string) {
+func certManagerOperatorState(c *kube.Client, d *components.Dependency) (evidence, cmds []string) {
 	for _, name := range d.CSV.Deployments {
 		od, err := components.ReadOperatorDeployment(c, d.CSV.Namespace, name, "")
 		if err != nil {
@@ -163,7 +164,7 @@ func (p certPod) mounts(secret string) bool {
 
 // podLister lists the pods of each namespace once per check.
 type podLister struct {
-	c    *Client
+	c    *kube.Client
 	pods map[string][]certPod
 	errs map[string]error
 }
@@ -195,7 +196,7 @@ func (l *podLister) list(namespace string) ([]certPod, error) {
 // env reference), or a FailedMount Warning event that names it. Pods that
 // mount the Secret but fail for another reason are returned in other, so
 // their own problems stay.
-func podsBlockedOnSecret(c *Client, l *podLister, namespace, secret string) (blocked, other []string, err error) {
+func podsBlockedOnSecret(c *kube.Client, l *podLister, namespace, secret string) (blocked, other []string, err error) {
 	pods, err := l.list(namespace)
 	if err != nil {
 		return nil, nil, err
@@ -227,10 +228,10 @@ func podsBlockedOnSecret(c *Client, l *podLister, namespace, secret string) (blo
 	return blocked, other, nil
 }
 
-func checkCertificates(c *Client) checkOutput {
+func CheckCertificates(c *kube.Client) CheckOutput {
 	const name = "Certificates"
-	out := checkOutput{check: CheckResult{Name: name, Status: "pass"}}
-	rhoaiNS, nsErr := rhoaiPodNamespaces(c)
+	out := CheckOutput{Check: report.CheckResult{Name: name, Status: "pass"}}
+	rhoaiNS, nsErr := RHOAIPodNamespaces(c)
 	namespaces := append([]string{rhoai.SubNS}, rhoaiNS...)
 	now := time.Now()
 	var certs []certificateItem
@@ -264,7 +265,7 @@ func checkCertificates(c *Client) checkOutput {
 		}
 	}
 	if !served {
-		out.check.Detail = "The cert-manager API is not installed, so no Certificates exist"
+		out.Check.Detail = "The cert-manager API is not installed, so no Certificates exist"
 		return out
 	}
 
@@ -311,7 +312,7 @@ func checkCertificates(c *Client) checkOutput {
 		}
 		for _, ci := range pending {
 			p := certificateProblem(c, ci, certificateCause{running: running, controller: controller, runErr: runErr, dep: dep}, configs, mounts[ci.ref()])
-			out.problems = append(out.problems, p)
+			out.Problems = append(out.Problems, p)
 		}
 		if dep != nil && dep.ProblemID() != "" {
 			var refs []string
@@ -320,24 +321,24 @@ func checkCertificates(c *Client) checkOutput {
 			}
 			dep.NeededBy = []string{"Not issued without a running cert-manager: " + strings.Join(refs, ", ")}
 			dep.NeededImpact = "RHOAI Certificates are not issued without it, so the pods that mount their Secrets do not start and the webhooks they serve reject requests."
-			out.problems = append(out.problems, components.PrerequisiteProblem(c, dep))
+			out.Problems = append(out.Problems, components.PrerequisiteProblem(c, dep))
 		}
 		if len(cfgErrs) > 0 {
 			errs = append(errs, "webhook configurations: "+strings.Join(cfgErrs, "; "))
 		}
-		out.check.Status = "fail"
-		out.check.Detail = fmt.Sprintf("%s not issued", kube.CountNoun(len(pending), "Certificate", "Certificates"))
+		out.Check.Status = "fail"
+		out.Check.Detail = fmt.Sprintf("%s not issued", kube.CountNoun(len(pending), "Certificate", "Certificates"))
 		if stale > 0 {
-			out.check.Detail += fmt.Sprintf(" (%d %s Ready, but %s Secret is missing: stale)", stale, kube.Verb(stale, "reports", "report"), kube.Verb(stale, "its", "their"))
+			out.Check.Detail += fmt.Sprintf(" (%d %s Ready, but %s Secret is missing: stale)", stale, kube.Verb(stale, "reports", "report"), kube.Verb(stale, "its", "their"))
 		}
 	} else {
-		out.check.Detail = fmt.Sprintf("%s Ready in %s", kube.CountNoun(ready, "Certificate", "Certificates"), strings.Join(namespaces, ", "))
+		out.Check.Detail = fmt.Sprintf("%s Ready in %s", kube.CountNoun(ready, "Certificate", "Certificates"), strings.Join(namespaces, ", "))
 	}
 	if len(errs) > 0 {
-		if out.check.Status == "pass" {
-			out.check.Status = "warn"
+		if out.Check.Status == "pass" {
+			out.Check.Status = "warn"
 		}
-		out.check.Detail += "; could not read: " + strings.Join(errs, "; ")
+		out.Check.Detail += "; could not read: " + strings.Join(errs, "; ")
 	}
 	return out
 }
@@ -355,7 +356,7 @@ type certificateCause struct {
 	dep        *components.Dependency
 }
 
-func certificateProblem(c *Client, ci certificateItem, cause certificateCause, configs []components.AdmissionConfig, mounts secretMounts) Problem {
+func certificateProblem(c *kube.Client, ci certificateItem, cause certificateCause, configs []components.AdmissionConfig, mounts secretMounts) report.Problem {
 	rc := ci.readyCondition()
 	staleReady := rc != nil && rc.Status == "True" && len(mounts.blocked) > 0
 	evidence := []string{}
@@ -364,7 +365,7 @@ func certificateProblem(c *Client, ci certificateItem, cause certificateCause, c
 	} else {
 		evidence = append(evidence, fmt.Sprintf("Certificate %s (Secret %s): %s", ci.ref(), kube.NonEmpty(ci.Spec.SecretName, "unset"), components.ConditionLine(*rc)))
 	}
-	p := Problem{
+	p := report.Problem{
 		ID:              "certificate-not-ready-" + ci.Metadata.Namespace + "-" + ci.Metadata.Name,
 		Severity:        "warning",
 		AffectedObjects: []string{"Certificate " + ci.ref()},
@@ -453,9 +454,9 @@ func certificateProblem(c *Client, ci certificateItem, cause certificateCause, c
 
 var severityRank = map[string]int{"critical": 0, "warning": 1, "info": 2}
 
-// mergeProblem adds src's findings to dst (same ID, reported by two
+// MergeProblem adds src's findings to dst (same ID, reported by two
 // checks).
-func mergeProblem(dst *Problem, src Problem) {
+func MergeProblem(dst *report.Problem, src report.Problem) {
 	for _, e := range src.Evidence {
 		if !slices.Contains(dst.Evidence, e) {
 			dst.Evidence = append(dst.Evidence, e)
@@ -477,10 +478,10 @@ func mergeProblem(dst *Problem, src Problem) {
 	}
 }
 
-// linkProblems folds symptoms into the problem that explains them (pod
+// LinkProblems folds symptoms into the problem that explains them (pod
 // problems whose pods it covers, and covered entries of the webhook
 // guidance problem), and keeps only related IDs that are in the report.
-func linkProblems(problems []Problem) []Problem {
+func LinkProblems(problems []report.Problem) []report.Problem {
 	// A crash-looping or restarting workload whose pods a problem explains
 	// keeps its own problem (the pods are really down) and links to the
 	// cause.
@@ -543,7 +544,7 @@ func linkProblems(problems []Problem) []Problem {
 		}
 	}
 	ids := map[string]bool{}
-	out := make([]Problem, 0, len(problems))
+	out := make([]report.Problem, 0, len(problems))
 	for i, p := range problems {
 		if !drop[i] {
 			out = append(out, p)

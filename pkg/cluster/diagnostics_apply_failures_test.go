@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -136,12 +137,12 @@ func applyFailureCR(name string, ready string, msgs ...string) map[string]any {
 func TestCheckApplyFailures(t *testing.T) {
 	c, crdLookups := applyFailuresWorld(t)
 
-	out := checkApplyFailures(c.WithContext(context.Background()))
-	if out.check.Status != "fail" || len(out.problems) != 4 {
-		t.Fatalf("check %+v, %d problems: %+v", out.check, len(out.problems), out.problems)
+	out := diagnostics.CheckApplyFailures(c.WithContext(context.Background()))
+	if out.Check.Status != "fail" || len(out.Problems) != 4 {
+		t.Fatalf("check %+v, %d problems: %+v", out.Check, len(out.Problems), out.Problems)
 	}
 	byID := map[string]Problem{}
-	for _, p := range out.problems {
+	for _, p := range out.Problems {
 		byID[p.ID] = p
 		if p.AutoFixable || p.Fix == "" || p.TechnicalCmd == "" || len(p.AffectedObjects) == 0 || len(p.Evidence) == 0 {
 			t.Errorf("incomplete problem %+v", p)
@@ -248,11 +249,11 @@ func TestApplyFailuresOneProblemPerObject(t *testing.T) {
 	f.obj("/apis/config.opendatahub.io/v1alpha1/platforms", map[string]any{
 		"items": []any{applyFailureCR("default", "False", immutable2)},
 	})
-	out := checkApplyFailures(c.WithContext(context.Background()))
-	if len(out.problems) != 1 {
-		t.Fatalf("%d problems: %+v", len(out.problems), out.problems)
+	out := diagnostics.CheckApplyFailures(c.WithContext(context.Background()))
+	if len(out.Problems) != 1 {
+		t.Fatalf("%d problems: %+v", len(out.Problems), out.Problems)
 	}
-	p := out.problems[0]
+	p := out.Problems[0]
 	ev := strings.Join(p.Evidence, "\n")
 	if p.ID != "operator-apply-failed-deployment-redhat-ods-applications-shared" || p.Severity != "critical" ||
 		!strings.Contains(p.Title, "must be recreated: spec.template.metadata.labels, spec.selector cannot be changed") || !strings.Contains(p.Title, "two controller owners") ||
@@ -267,13 +268,13 @@ func TestCheckApplyFailuresHealthyAndUnreadable(t *testing.T) {
 	f.obj("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", map[string]any{
 		"items": []any{applyFailureCR("default-dsc", "False", "Some modules are not ready: trainer")},
 	})
-	out := checkApplyFailures(c.WithContext(context.Background()))
-	if out.check.Status != "pass" || len(out.problems) != 0 || !strings.Contains(out.check.Detail, "1 CR checked") {
-		t.Fatalf("healthy: %+v %+v", out.check, out.problems)
+	out := diagnostics.CheckApplyFailures(c.WithContext(context.Background()))
+	if out.Check.Status != "pass" || len(out.Problems) != 0 || !strings.Contains(out.Check.Detail, "1 CR checked") {
+		t.Fatalf("healthy: %+v %+v", out.Check, out.Problems)
 	}
 	f.status("GET", "/apis/config.opendatahub.io/v1alpha1/platforms", 403, "Forbidden")
-	if out := checkApplyFailures(c.WithContext(context.Background())); out.check.Status != "warn" || !strings.Contains(out.check.Detail, "Platform") {
-		t.Fatalf("unreadable: %+v", out.check)
+	if out := diagnostics.CheckApplyFailures(c.WithContext(context.Background())); out.Check.Status != "warn" || !strings.Contains(out.Check.Detail, "Platform") {
+		t.Fatalf("unreadable: %+v", out.Check)
 	}
 }
 

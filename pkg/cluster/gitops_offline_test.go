@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/gitops"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
@@ -160,18 +161,18 @@ func TestInstalledOperatorBuild(t *testing.T) {
 // the same order, then the Secret-access check, and no Secret read.
 func TestGitOpsDiagnosticChecks(t *testing.T) {
 	var want []string
-	for _, chk := range diagnosticChecks {
-		if chk.name == secretAccessCheckName {
+	for _, chk := range diagnostics.Checks {
+		if chk.Name == diagnostics.SecretAccessCheckName {
 			t.Fatal("the full profile reads the pull secret; the Secret-access check is the gitops profile's only")
 		}
-		if chk.name != "Pull secret" {
-			want = append(want, chk.name)
+		if chk.Name != "Pull secret" {
+			want = append(want, chk.Name)
 		}
 	}
-	want = append(want, secretAccessCheckName)
+	want = append(want, diagnostics.SecretAccessCheckName)
 	var got []string
-	for _, chk := range gitOpsDiagnosticChecks {
-		got = append(got, chk.name)
+	for _, chk := range diagnostics.GitOpsChecks {
+		got = append(got, chk.Name)
 	}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("gitOpsDiagnosticChecks = %v, want diagnosticChecks without the pull secret: %v", got, want)

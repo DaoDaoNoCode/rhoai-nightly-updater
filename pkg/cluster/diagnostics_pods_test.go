@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -273,8 +274,8 @@ func TestOperatorPods_CrashLoopIsCritical(t *testing.T) {
 		waiting("manager", "CrashLoopBackOff", "", 12), lastTerminated("Error", 2, time.Minute))
 	pod["metadata"].(map[string]any)["creationTimestamp"] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
 	f.obj("/api/v1/namespaces/"+rhoai.SubNS+"/pods", map[string]any{"items": []any{pod}})
-	out := checkOperatorPods(c)
-	if len(out.problems) != 1 || out.problems[0].Severity != "critical" || out.problems[0].AutoFixable {
+	out := diagnostics.CheckOperatorPods(c)
+	if len(out.Problems) != 1 || out.Problems[0].Severity != "critical" || out.Problems[0].AutoFixable {
 		t.Fatalf("out = %+v", out)
 	}
 }

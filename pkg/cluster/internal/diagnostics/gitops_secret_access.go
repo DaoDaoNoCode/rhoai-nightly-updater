@@ -1,21 +1,23 @@
-package cluster
+package diagnostics
 
 import (
 	"encoding/json"
 	"fmt"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/report"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
-// secretAccessCheckName is the gitops profile's Diagnostics check that the
+// SecretAccessCheckName is the gitops profile's Diagnostics check that the
 // ServiceAccount cannot read Secrets. The profile never reads one
 // (docs/GITOPS.md, section 11), but RBAC left by an earlier install can
 // still grant it: install.sh's Template gives Role <APP_NAME>-<NAMESPACE> in
 // kube-system get and patch on additional-pull-secret, which the chart
 // empties on its first sync (deploy/rbac-gitops.yaml), and any other
 // binding an administrator added stays.
-const secretAccessCheckName = "ServiceAccount Secret access"
+const SecretAccessCheckName = "ServiceAccount Secret access"
 
 // secretAccessProbes are the questions asked: reading any Secret, cluster
 // wide or by list, and the pull secret install.sh granted.
@@ -32,7 +34,7 @@ var secretAccessProbes = []struct{ verb, namespace, name, where string }{
 // (plugin/pkg/auth/authorizer/rbac/bootstrappolicy/policy.go, basicUserRules
 // and the system:basic-user ClusterRoleBinding), so the check needs no RBAC
 // of its own.
-func canI(c *Client, verb, namespace, name string) (bool, error) {
+func canI(c *kube.Client, verb, namespace, name string) (bool, error) {
 	body, _ := json.Marshal(map[string]any{
 		"apiVersion": "authorization.k8s.io/v1",
 		"kind":       "SelfSubjectAccessReview",
@@ -55,26 +57,26 @@ func canI(c *Client, verb, namespace, name string) (bool, error) {
 	return review.Status.Allowed, nil
 }
 
-// checkServiceAccountSecretAccess reports when the ServiceAccount can still
+// CheckServiceAccountSecretAccess reports when the ServiceAccount can still
 // read Secrets, which the gitops profile never needs.
-func checkServiceAccountSecretAccess(c *Client) checkOutput {
+func CheckServiceAccountSecretAccess(c *kube.Client) CheckOutput {
 	var allowed []string
 	for _, p := range secretAccessProbes {
 		ok, err := canI(c, p.verb, p.namespace, p.name)
 		if err != nil {
-			return checkOutput{check: CheckResult{Name: secretAccessCheckName, Status: "warn", Detail: fmt.Sprintf("Could not check: %v", err)}}
+			return CheckOutput{Check: report.CheckResult{Name: SecretAccessCheckName, Status: "warn", Detail: fmt.Sprintf("Could not check: %v", err)}}
 		}
 		if ok {
 			allowed = append(allowed, p.where)
 		}
 	}
 	if len(allowed) == 0 {
-		return checkOutput{check: CheckResult{Name: secretAccessCheckName, Status: "pass", Detail: "The updater's ServiceAccount cannot read Secrets"}}
+		return CheckOutput{Check: report.CheckResult{Name: SecretAccessCheckName, Status: "pass", Detail: "The updater's ServiceAccount cannot read Secrets"}}
 	}
 	detail := "The updater's ServiceAccount can read " + strings.Join(allowed, "; ")
-	return checkOutput{
-		check: CheckResult{Name: secretAccessCheckName, Status: "fail", Detail: detail},
-		problems: []Problem{{
+	return CheckOutput{
+		Check: report.CheckResult{Name: SecretAccessCheckName, Status: "fail", Detail: detail},
+		Problems: []report.Problem{{
 			ID:          "gitops-secret-access",
 			Severity:    "warning",
 			Title:       "The updater's ServiceAccount can still read Secrets",

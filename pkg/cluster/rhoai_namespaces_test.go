@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -91,7 +92,7 @@ func TestMLflowStatusNamespaceIsDiscovered(t *testing.T) {
 func TestRHOAIPodNamespacesAreDiscovered(t *testing.T) {
 	f, c := newFakeAPI(t)
 	f.json("GET", dsciV2List, 200, `{"items":[{"metadata":{"name":"d"},"spec":{"applicationsNamespace":"apps-x","monitoring":{"namespace":"mon-x"}}}]}`)
-	got, err := rhoaiPodNamespaces(c)
+	got, err := diagnostics.RHOAIPodNamespaces(c)
 	if err != nil || !slices.Equal(got, []string{"apps-x", "mon-x"}) {
 		t.Fatalf("got %v, %v", got, err)
 	}
@@ -99,9 +100,9 @@ func TestRHOAIPodNamespacesAreDiscovered(t *testing.T) {
 	f2, c2 := newFakeAPI(t)
 	f2.status("GET", dsciV2List, 403, "Forbidden")
 	f2.json("GET", "/api/v1/namespaces", 200, `{"items":[]}`)
-	out := checkRHOAIPods(c2)
-	if out.check.Status != "warn" || !strings.Contains(out.check.Detail, "could not tell the applications and monitoring namespaces") {
-		t.Fatalf("check %+v", out.check)
+	out := diagnostics.CheckRHOAIPods(c2)
+	if out.Check.Status != "warn" || !strings.Contains(out.Check.Detail, "could not tell the applications and monitoring namespaces") {
+		t.Fatalf("check %+v", out.Check)
 	}
 }
 

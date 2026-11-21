@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
 )
 
 const dsciV2List = "/apis/dscinitialization.opendatahub.io/v2/dscinitializations"
@@ -58,20 +60,20 @@ func TestDataScienceClusterCheck(t *testing.T) {
 			default:
 				f.json("GET", dsciV2List, http.StatusOK, tt.dsci)
 			}
-			out := checkDataScienceCluster(c)
-			if out.check.Status != tt.wantStatus {
-				t.Fatalf("check = %+v", out.check)
+			out := diagnostics.CheckDataScienceCluster(c)
+			if out.Check.Status != tt.wantStatus {
+				t.Fatalf("check = %+v", out.Check)
 			}
 			var ids []string
 			var text []string
-			for _, p := range out.problems {
+			for _, p := range out.Problems {
 				ids = append(ids, p.ID)
 				text = append(text, p.Evidence...)
 			}
 			if strings.Join(ids, ",") != strings.Join(tt.wantIDs, ",") {
 				t.Fatalf("problems = %v", ids)
 			}
-			all := out.check.Detail + "\n" + strings.Join(text, "\n")
+			all := out.Check.Detail + "\n" + strings.Join(text, "\n")
 			if tt.wantIn != "" && !strings.Contains(all, tt.wantIn) {
 				t.Fatalf("missing %q in %s", tt.wantIn, all)
 			}
@@ -91,8 +93,8 @@ func TestRHOAIPodsCheck_NamespaceDiscoveryErrorWarns(t *testing.T) {
 		f.json("GET", "/api/v1/namespaces/"+ns+"/pods", http.StatusOK, `{"items":[]}`)
 	}
 	f.status("GET", "/api/v1/namespaces", http.StatusForbidden, "Forbidden")
-	out := checkRHOAIPods(c)
-	if out.check.Status != "warn" || !strings.Contains(out.check.Detail, "could not verify the platform module namespaces") {
-		t.Fatalf("check = %+v", out.check)
+	out := diagnostics.CheckRHOAIPods(c)
+	if out.Check.Status != "warn" || !strings.Contains(out.Check.Detail, "could not verify the platform module namespaces") {
+		t.Fatalf("check = %+v", out.Check)
 	}
 }

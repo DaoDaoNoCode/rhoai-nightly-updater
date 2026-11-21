@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -55,10 +56,10 @@ func certWorld(t *testing.T) (*fakeAPI, *Client) {
 
 func TestCertificatesCheck_CertManagerMissing(t *testing.T) {
 	f, c := certWorld(t)
-	out := checkCertificates(c)
+	out := diagnostics.CheckCertificates(c)
 	byID := problemsByID(out)
-	if out.check.Status != "fail" || len(out.problems) != 2 {
-		t.Fatalf("out = %+v %v", out.check, ids(out))
+	if out.Check.Status != "fail" || len(out.Problems) != 2 {
+		t.Fatalf("out = %+v %v", out.Check, ids(out))
 	}
 	p := byID["certificate-not-ready-redhat-ods-applications-odh-observability-webhook-cert"]
 	if !strings.Contains(p.Title, "cert-manager is not installed or not running") ||
@@ -84,7 +85,7 @@ func TestCertificatesCheck_OnlyPodsBlockedOnThisSecret(t *testing.T) {
 		{"metadata":{"name":"env-ref"},"spec":{"volumes":[{"secret":{"secretName":"odh-observability-webhook-cert"}}]},"status":{"phase":"Pending",
 			"containerStatuses":[{"name":"c","state":{"waiting":{"reason":"CreateContainerConfigError","message":"secret \"odh-observability-webhook-cert\" not found"}}}]}},
 		{"metadata":{"name":"other-secret"},"spec":{"volumes":[{"secret":{"secretName":"something-else"}}]},"status":{"phase":"Pending"}}]}`)
-	out := checkCertificates(c)
+	out := diagnostics.CheckCertificates(c)
 	p := problemsByID(out)["certificate-not-ready-redhat-ods-applications-odh-observability-webhook-cert"]
 	if got := strings.Join(p.Covers, ","); got != "Pod redhat-ods-applications/env-ref,Pod redhat-ods-applications/odh-observability-abc,ValidatingWebhookConfiguration odh-observability-webhook" {
 		t.Fatalf("covers = %s", got)
@@ -98,7 +99,7 @@ func TestCertificatesCheck_OnlyPodsBlockedOnThisSecret(t *testing.T) {
 		map[string]any{"metadata": map[string]string{"name": "b", "namespace": "redhat-ods-applications", "creationTimestamp": ago(time.Hour)}, "spec": map[string]string{"secretName": "s2"}},
 	}})
 	before := len(f.requests("GET", "/api/v1/namespaces/redhat-ods-applications/pods"))
-	checkCertificates(c)
+	diagnostics.CheckCertificates(c)
 	if n := len(f.requests("GET", "/api/v1/namespaces/redhat-ods-applications/pods")) - before; n != 1 {
 		t.Fatalf("pods listed %d times for one namespace", n)
 	}
@@ -112,9 +113,9 @@ func TestCertificatesCheck_OwnFailingCondition(t *testing.T) {
 		"spec":     map[string]string{"secretName": "s1"},
 		"status":   map[string]any{"conditions": []dcond{{"type": "Ready", "status": "False", "reason": "IssuerNotFound", "message": "issuer odh-ca not found"}}},
 	}}})
-	out := checkCertificates(c)
-	if len(out.problems) != 1 || !strings.Contains(out.problems[0].Title, "issuer odh-ca not found") || len(out.problems[0].RelatedProblems) != 0 {
-		t.Fatalf("problems = %+v", out.problems)
+	out := diagnostics.CheckCertificates(c)
+	if len(out.Problems) != 1 || !strings.Contains(out.Problems[0].Title, "issuer odh-ca not found") || len(out.Problems[0].RelatedProblems) != 0 {
+		t.Fatalf("problems = %+v", out.Problems)
 	}
 	if n := len(f.requests("GET", packageManifestsPath)); n != 0 {
 		t.Fatal("the catalog was read although cert-manager runs")
@@ -123,19 +124,19 @@ func TestCertificatesCheck_OwnFailingCondition(t *testing.T) {
 
 func TestCertificatesCheck_NoAPIAndYoungCertificates(t *testing.T) {
 	_, c := newFakeAPI(t)
-	if out := checkCertificates(c); out.check.Status != "pass" || !strings.Contains(out.check.Detail, "cert-manager API is not installed") {
-		t.Fatalf("out = %+v", out.check)
+	if out := diagnostics.CheckCertificates(c); out.Check.Status != "pass" || !strings.Contains(out.Check.Detail, "cert-manager API is not installed") {
+		t.Fatalf("out = %+v", out.Check)
 	}
 	f, c := certWorld(t)
 	f.obj(appCertsPath, map[string]any{"items": []any{map[string]any{
 		"metadata": map[string]string{"name": "new", "namespace": "redhat-ods-applications", "creationTimestamp": ago(10 * time.Second)},
 	}}})
-	if out := checkCertificates(c); out.check.Status != "pass" || len(out.problems) != 0 {
-		t.Fatalf("out = %+v %v", out.check, ids(out))
+	if out := diagnostics.CheckCertificates(c); out.Check.Status != "pass" || len(out.Problems) != 0 {
+		t.Fatalf("out = %+v %v", out.Check, ids(out))
 	}
 	f.status("GET", appCertsPath, http.StatusForbidden, "Forbidden")
-	if out := checkCertificates(c); out.check.Status != "warn" || !strings.Contains(out.check.Detail, "make upgrade") {
-		t.Fatalf("out = %+v", out.check)
+	if out := diagnostics.CheckCertificates(c); out.Check.Status != "warn" || !strings.Contains(out.Check.Detail, "make upgrade") {
+		t.Fatalf("out = %+v", out.Check)
 	}
 }
 
@@ -151,7 +152,7 @@ func TestLinkProblems_FoldsSymptomsIntoRootCause(t *testing.T) {
 		{ID: "pod-crashloop-ns-p", Title: "p1 crash-looping", AffectedObjects: []string{"Pod ns/p1"}},
 		{ID: "webhook-service-missing", Title: "2 webhooks", AffectedObjects: []string{"ValidatingWebhookConfiguration hook-a", "MutatingWebhookConfiguration hook-b"}},
 	}
-	out := linkProblems(problems)
+	out := diagnostics.LinkProblems(problems)
 	var got []string
 	for _, p := range out {
 		got = append(got, p.ID)
@@ -172,7 +173,7 @@ func TestLinkProblems_FoldsSymptomsIntoRootCause(t *testing.T) {
 	}
 
 	// Fully covered webhook guidance is folded too.
-	out = linkProblems([]Problem{root, {ID: "webhook-service-missing", Title: "1 webhook", AffectedObjects: []string{"ValidatingWebhookConfiguration hook-a"}}})
+	out = diagnostics.LinkProblems([]Problem{root, {ID: "webhook-service-missing", Title: "1 webhook", AffectedObjects: []string{"ValidatingWebhookConfiguration hook-a"}}})
 	if len(out) != 1 || !slices.Contains(out[0].Evidence, "Also explains: 1 webhook") {
 		t.Fatalf("out = %+v", out)
 	}
@@ -269,10 +270,10 @@ func staleCertWorld(t *testing.T, managementState string) (*fakeAPI, *Client) {
 
 func TestCertificatesCheck_StaleReadyWithControllerDown(t *testing.T) {
 	f, c := staleCertWorld(t, "Managed")
-	out := checkCertificates(c)
+	out := diagnostics.CheckCertificates(c)
 	p, ok := problemsByID(out)["certificate-not-ready-redhat-ods-applications-odh-observability-webhook-cert"]
-	if !ok || out.check.Status != "fail" || !strings.Contains(out.check.Detail, "stale") {
-		t.Fatalf("out = %+v %v", out.check, ids(out))
+	if !ok || out.Check.Status != "fail" || !strings.Contains(out.Check.Detail, "stale") {
+		t.Fatalf("out = %+v %v", out.Check, ids(out))
 	}
 	ev := strings.Join(p.Evidence, "\n")
 	for _, want := range []string{
@@ -299,7 +300,7 @@ func TestCertificatesCheck_StaleReadyWithControllerDown(t *testing.T) {
 
 func TestCertificatesCheck_UnmanagedOperandGetsPatchCommand(t *testing.T) {
 	_, c := staleCertWorld(t, "Unmanaged")
-	p := problemsByID(checkCertificates(c))["certificate-not-ready-redhat-ods-applications-odh-observability-webhook-cert"]
+	p := problemsByID(diagnostics.CheckCertificates(c))["certificate-not-ready-redhat-ods-applications-odh-observability-webhook-cert"]
 	if !strings.Contains(p.TechnicalCmd, `oc patch certmanager.operator.openshift.io cluster --type merge -p '{"spec":{"managementState":"Managed"}}'`) {
 		t.Fatalf("cmd = %s", p.TechnicalCmd)
 	}
@@ -329,15 +330,15 @@ func TestCertificatesCheck_ReadyWithSecretIsReady(t *testing.T) {
 	f, c := staleCertWorld(t, "Managed")
 	f.json("GET", "/api/v1/namespaces/redhat-ods-applications/pods", 200, `{"items":[{"metadata":{"name":"odh-observability-abc"},
 		"spec":{"volumes":[{"secret":{"secretName":"odh-observability-webhook-cert"}}]},"status":{"phase":"Running"}}]}`)
-	out := checkCertificates(c)
-	if out.check.Status != "pass" || len(out.problems) != 0 || !strings.Contains(out.check.Detail, "1 Certificate Ready") {
-		t.Fatalf("out = %+v %v", out.check, ids(out))
+	out := diagnostics.CheckCertificates(c)
+	if out.Check.Status != "pass" || len(out.Problems) != 0 || !strings.Contains(out.Check.Detail, "1 Certificate Ready") {
+		t.Fatalf("out = %+v %v", out.Check, ids(out))
 	}
 }
 
 func TestMergeProblem(t *testing.T) {
 	dst := Problem{ID: "p", Severity: "info", Evidence: []string{"a"}, Mergeable: true}
-	mergeProblem(&dst, Problem{ID: "p", Severity: "warning", Evidence: []string{"a", "b"}, AffectedObjects: []string{"X y"}, RelatedProblems: []string{"r"}})
+	diagnostics.MergeProblem(&dst, Problem{ID: "p", Severity: "warning", Evidence: []string{"a", "b"}, AffectedObjects: []string{"X y"}, RelatedProblems: []string{"r"}})
 	if dst.Severity != "warning" || strings.Join(dst.Evidence, ",") != "a,b" || len(dst.AffectedObjects) != 1 || len(dst.RelatedProblems) != 1 {
 		t.Fatalf("dst = %+v", dst)
 	}

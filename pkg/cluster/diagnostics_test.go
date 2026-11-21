@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -215,8 +216,8 @@ func TestDiagnostics_AllHealthy(t *testing.T) {
 		}
 	}
 
-	if len(resp.Checks) != len(diagnosticChecks) {
-		t.Errorf("expected %d checks, got %d", len(diagnosticChecks), len(resp.Checks))
+	if len(resp.Checks) != len(diagnostics.Checks) {
+		t.Errorf("expected %d checks, got %d", len(diagnostics.Checks), len(resp.Checks))
 		for _, ch := range resp.Checks {
 			t.Logf("  check: %s = %s (%s)", ch.Name, ch.Status, ch.Detail)
 		}

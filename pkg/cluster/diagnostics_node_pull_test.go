@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -41,20 +42,20 @@ func TestDiagnostics_PullSecretNodesPerTopology(t *testing.T) {
 			}
 			c, cleanup := newMockClient(responses)
 			defer cleanup()
-			out := checkPullSecretHealth(c)
-			if out.check.Status != tc.want {
-				t.Fatalf("check %+v, want %s", out.check, tc.want)
+			out := diagnostics.CheckPullSecretHealth(c)
+			if out.Check.Status != tc.want {
+				t.Fatalf("check %+v, want %s", out.Check, tc.want)
 			}
 			if tc.want == "pass" {
-				if len(out.problems) != 0 {
-					t.Fatalf("problems %+v", out.problems)
+				if len(out.Problems) != 0 {
+					t.Fatalf("problems %+v", out.Problems)
 				}
 				return
 			}
-			if len(out.problems) != 1 {
-				t.Fatalf("problems %+v", out.problems)
+			if len(out.Problems) != 1 {
+				t.Fatalf("problems %+v", out.Problems)
 			}
-			p := out.problems[0]
+			p := out.Problems[0]
 			if p.ID != "node-pull-secret-unchecked" || p.Severity != "warning" || !strings.Contains(p.Title, tc.wantTitle) ||
 				p.TechnicalCmd != rhoai.NodePullSecretCommand || !strings.Contains(p.Description, "openshift-config/pull-secret") ||
 				!strings.Contains(p.Fix, "Check that the nodes can pull") || !strings.Contains(strings.Join(p.Evidence, "\n"), tc.evidence) {

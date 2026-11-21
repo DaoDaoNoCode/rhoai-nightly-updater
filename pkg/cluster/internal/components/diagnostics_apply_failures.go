@@ -94,7 +94,7 @@ var LeftoverWorkloads = map[string]string{"Deployment": "apps", "StatefulSet": "
 
 // Leftover reports whether the "Left over from an earlier release" check
 // handles the failure: a stored object of an older schema, or a workload
-// whose spec.selector changed. checkApplyFailures leaves those out.
+// whose spec.selector changed. diagnostics.CheckApplyFailures leaves those out.
 func (f ApplyFailure) Leftover() bool {
 	switch f.Class {
 	case ApplyStoredType:

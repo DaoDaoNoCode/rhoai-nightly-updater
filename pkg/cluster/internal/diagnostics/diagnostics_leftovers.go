@@ -1,4 +1,4 @@
-package cluster
+package diagnostics
 
 import (
 	"encoding/json"
@@ -14,6 +14,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/report"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -78,22 +79,22 @@ const (
 	fixLeftoverFields   = "fix-leftover-fields:" // <Kind>/<name>
 	fixLeftoverRecreate = "recreate-leftover:"   // <Kind>/<namespace>/<name>
 	fixLeftoverRetry    = "retry-dsc-reconcile:" // <DataScienceCluster name>
-	leftoverRetryAnno   = "rhoai-nightly-updater.opendatahub.io/retry"
+	LeftoverRetryAnno   = "rhoai-nightly-updater.opendatahub.io/retry"
 	leftoverManager     = "rhoai-nightly-updater-diagnostics"
 )
 
 var (
-	// leftoverRecreateWait bounds how long a recreate fix waits for the
+	// LeftoverRecreateWait bounds how long a recreate fix waits for the
 	// operator to create the workload again and for its pods to be ready.
-	leftoverRecreateWait = 2 * time.Minute
+	LeftoverRecreateWait = 2 * time.Minute
 	leftoverRecreatePoll = 5 * time.Second
 )
 
-// leftoverObject returns the object's reported failures when the
+// LeftoverObject returns the object's reported failures when the
 // leftovers check handles it (rf.leftover) with the class want, else nil.
 // Every failure of the object is collected first, so an object with other
 // failures too is never taken.
-func leftoverObject(s components.ReporterScan, group, kind, namespace, name string, want components.ApplyFailureClass) *components.ReportedApplyFailure {
+func LeftoverObject(s components.ReporterScan, group, kind, namespace, name string, want components.ApplyFailureClass) *components.ReportedApplyFailure {
 	rf := s.Found[strings.Join([]string{group, kind, namespace, name}, "|")]
 	if rf == nil || !rf.Leftover() || !rf.Has(want) {
 		return nil
@@ -101,20 +102,20 @@ func leftoverObject(s components.ReporterScan, group, kind, namespace, name stri
 	return rf
 }
 
-// usersReader lists what still uses a component (dsc.ComponentUsers); nil when
+// UsersReader lists what still uses a component (dsc.ComponentUsers); nil when
 // the caller cannot read that.
-type usersReader func(c *Client, component string) ([]string, error)
+type UsersReader func(c *kube.Client, component string) ([]string, error)
 
-// checkLeftovers is the "Left over from an earlier release" check.
-func checkLeftovers(c *Client) checkOutput { return leftoversCheck(c, dsc.ComponentUsers) }
+// CheckLeftovers is the "Left over from an earlier release" check.
+func CheckLeftovers(c *kube.Client) CheckOutput { return leftoversCheck(c, dsc.ComponentUsers) }
 
-// checkLeftoversGitOps is checkLeftovers in the gitops profile, whose
+// CheckLeftoversGitOps is CheckLeftovers in the gitops profile, whose
 // ServiceAccount does not read the resources that tell what uses a
 // component (deploy/rbac-gitops.yaml); fixes are off there anyway.
-func checkLeftoversGitOps(c *Client) checkOutput { return leftoversCheck(c, nil) }
+func CheckLeftoversGitOps(c *kube.Client) CheckOutput { return leftoversCheck(c, nil) }
 
-func leftoversCheck(c *Client, users usersReader) checkOutput {
-	out := checkOutput{check: CheckResult{Name: components.LeftoversCheckName, Status: "pass"}}
+func leftoversCheck(c *kube.Client, users UsersReader) CheckOutput {
+	out := CheckOutput{Check: report.CheckResult{Name: components.LeftoversCheckName, Status: "pass"}}
 	s := components.ScanApplyReporters(c, components.AllApplyFailures)
 	appNS := rhoai.ApplicationsNamespace(c)
 	keys := make([]string, 0, len(s.Found))
@@ -138,24 +139,24 @@ func leftoversCheck(c *Client, users usersReader) checkOutput {
 		case rf.Has(components.ApplyStoredType):
 			st := analyzeStored(c, s, rf)
 			st.Crash = moduleOperatorCrash(c, st, time.Now())
-			out.problems = append(out.problems, st.problem())
+			out.Problems = append(out.Problems, st.problem())
 		case rf.Has(components.ApplyImmutable):
-			r := analyzeRecreate(c, rf, appNS, readDeploymentForScan, users)
-			out.problems = append(out.problems, r.problem())
+			r := AnalyzeRecreate(c, rf, appNS, ReadDeploymentForScan, users)
+			out.Problems = append(out.Problems, r.problem())
 		}
 	}
 	switch {
-	case len(out.problems) > 0:
-		out.check.Status = "fail"
-		out.check.Detail = fmt.Sprintf("%s left over from an earlier release", kube.CountNoun(len(out.problems), "object", "objects"))
+	case len(out.Problems) > 0:
+		out.Check.Status = "fail"
+		out.Check.Detail = fmt.Sprintf("%s left over from an earlier release", kube.CountNoun(len(out.Problems), "object", "objects"))
 	case len(s.Errs) > 0:
-		out.check.Status = "warn"
-		out.check.Detail = "Nothing left over in the CRs that could be read"
+		out.Check.Status = "warn"
+		out.Check.Detail = "Nothing left over in the CRs that could be read"
 	default:
-		out.check.Detail = fmt.Sprintf("No stored field of an older type and no changed selector reported (%s checked)", kube.CountNoun(s.Scanned, "CR", "CRs"))
+		out.Check.Detail = fmt.Sprintf("No stored field of an older type and no changed selector reported (%s checked)", kube.CountNoun(s.Scanned, "CR", "CRs"))
 	}
 	if len(s.Errs) > 0 {
-		out.check.Detail += "; could not read: " + strings.Join(s.Errs, "; ")
+		out.Check.Detail += "; could not read: " + strings.Join(s.Errs, "; ")
 	}
 	return out
 }
@@ -383,7 +384,7 @@ func (st *storedLeftover) needsReview() bool {
 
 // analyzeStored reads the object and its CRD for a stored-type failure.
 // Every read error leaves a Blocker (fail closed).
-func analyzeStored(c *Client, s components.ReporterScan, rf *components.ReportedApplyFailure) *storedLeftover {
+func analyzeStored(c *kube.Client, s components.ReporterScan, rf *components.ReportedApplyFailure) *storedLeftover {
 	f := rf.ApplyFailure
 	st := &storedLeftover{rf: rf, Kind: f.Kind, Name: f.Name}
 	_, st.Version, _ = strings.Cut(f.GroupVersion, "/")
@@ -460,7 +461,7 @@ func analyzeStored(c *Client, s components.ReporterScan, rf *components.Reported
 
 // listModuleObject finds a module CR by listing its resource (the
 // ServiceAccount may list, not get, module CRs). nil when it does not exist.
-func listModuleObject(c *Client, group, version, resource, name string) (map[string]any, error) {
+func listModuleObject(c *kube.Client, group, version, resource, name string) (map[string]any, error) {
 	body, _, err := c.Do(http.MethodGet, rhoai.ComponentListPath(group, version, resource), "", nil,
 		url.Values{"fieldSelector": {"metadata.name=" + name}})
 	if err != nil {
@@ -483,7 +484,7 @@ func listModuleObject(c *Client, group, version, resource, name string) (map[str
 // readCRDByName lists the CRDs with a name field selector: the
 // ServiceAccount may list CRDs but get only one by name. An error when the
 // CRD does not exist.
-func readCRDByName(c *Client, name string) (map[string]any, error) {
+func readCRDByName(c *kube.Client, name string) (map[string]any, error) {
 	body, _, err := c.Do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil,
 		url.Values{"fieldSelector": {"metadata.name=" + name}})
 	if err != nil {
@@ -519,7 +520,7 @@ func crdSchema(crd map[string]any, version string) map[string]any {
 	return nil
 }
 
-// platformCRDManager is the field manager the RHOAI operator writes the
+// PlatformCRDManager is the field manager the RHOAI operator writes the
 // module CRDs with: its deploy action applies every CRD it renders with
 // client.FieldOwner(resources.PlatformFieldOwner) (odh-platform-utilities
 // framework v0.3.1 controller/actions/deploy/action_deploy.go:389-396,
@@ -528,7 +529,7 @@ func crdSchema(crd map[string]any, version string) map[string]any {
 // deploy action (pkg/controller/actions/deploy/action_deploy.go aliases it;
 // pkg/resources/resources.go:15 re-exports PlatformFieldOwner) in the
 // Platform controller that applies the module charts and manifests.
-const platformCRDManager = "platform.opendatahub.io"
+const PlatformCRDManager = "platform.opendatahub.io"
 
 // crdCurrent decides whether the installed CRD, not the object, is the
 // current shape. A downgrade or a round trip can leave a CRD at an older
@@ -537,13 +538,13 @@ const platformCRDManager = "platform.opendatahub.io"
 //   - (a) the installed CSV owns it (spec.customresourcedefinitions.owned):
 //     it is part of the installed operator's bundle, which OLM installs, or
 //   - (b) its spec.versions was last written (managedFields, the newest
-//     entry that owns f:spec.f:versions) by platformCRDManager, the RHOAI
+//     entry that owns f:spec.f:versions) by PlatformCRDManager, the RHOAI
 //     operator's own field manager.
 //
 // Anything else (another or no manager, two managers with the same newest
 // time, anything that cannot be read) means the tool cannot tell that the
 // CRD is the newer side, and it refuses (fail closed).
-func crdCurrent(c *Client, crd map[string]any, name string) (bool, string) {
+func crdCurrent(c *kube.Client, crd map[string]any, name string) (bool, string) {
 	csv, owned, csvErr := installedCSVOwnsCRD(c, name)
 	if csvErr == nil && owned {
 		return true, fmt.Sprintf("CRD %s is part of the installed operator's bundle (the installed CSV %s owns it)", name, csv)
@@ -582,15 +583,15 @@ func crdCurrent(c *Client, crd map[string]any, name string) (bool, string) {
 		return false, fmt.Sprintf("the tool can't tell that CRD %s is the newer side: %s, and its managedFields do not say who wrote its schema", name, csvNote)
 	case len(names) > 1:
 		return false, fmt.Sprintf("the tool can't tell that CRD %s is the newer side: %s, and its schema was last written by %s at the same time (%s)", name, csvNote, strings.Join(names, " and "), kube.NonEmpty(when, "an unknown time"))
-	case names[0] != platformCRDManager:
-		return false, fmt.Sprintf("the tool can't tell that CRD %s is the newer side: %s, and its schema was last written by %s at %s, not by the RHOAI operator (field manager %s)", name, csvNote, kube.NonEmpty(names[0], "(no name)"), kube.NonEmpty(when, "an unknown time"), platformCRDManager)
+	case names[0] != PlatformCRDManager:
+		return false, fmt.Sprintf("the tool can't tell that CRD %s is the newer side: %s, and its schema was last written by %s at %s, not by the RHOAI operator (field manager %s)", name, csvNote, kube.NonEmpty(names[0], "(no name)"), kube.NonEmpty(when, "an unknown time"), PlatformCRDManager)
 	}
-	return true, fmt.Sprintf("CRD %s's schema was last written by the RHOAI operator (field manager %s) at %s", name, platformCRDManager, kube.NonEmpty(when, "an unknown time"))
+	return true, fmt.Sprintf("CRD %s's schema was last written by the RHOAI operator (field manager %s) at %s", name, PlatformCRDManager, kube.NonEmpty(when, "an unknown time"))
 }
 
 // installedCSVOwnsCRD reports whether the installed RHOAI CSV lists the CRD
 // among its owned CRDs.
-func installedCSVOwnsCRD(c *Client, crd string) (string, bool, error) {
+func installedCSVOwnsCRD(c *kube.Client, crd string) (string, bool, error) {
 	sub, err := readSubscriptionState(c)
 	if err != nil {
 		return "", false, err
@@ -651,7 +652,7 @@ type leftoverCrash struct {
 // Confirmed when a pod's last exit message says it could not sync the
 // informer of the leftover's kind (only there when the container writes
 // its log as the termination message; the pod log itself is not read).
-func moduleOperatorCrash(c *Client, st *storedLeftover, now time.Time) *leftoverCrash {
+func moduleOperatorCrash(c *kube.Client, st *storedLeftover, now time.Time) *leftoverCrash {
 	if st.Resource == "" {
 		return nil
 	}
@@ -694,10 +695,10 @@ func moduleOperatorCrash(c *Client, st *storedLeftover, now time.Time) *leftover
 	return crash
 }
 
-func (st *storedLeftover) fieldChanges() []FieldChange {
-	var out []FieldChange
+func (st *storedLeftover) fieldChanges() []report.FieldChange {
+	var out []report.FieldChange
 	for _, lf := range st.Fields {
-		fc := FieldChange{Object: st.ref(), Field: lf.Path, Change: kube.NonEmpty(lf.Change, "none"), Note: lf.Why, Review: lf.Review}
+		fc := report.FieldChange{Object: st.ref(), Field: lf.Path, Change: kube.NonEmpty(lf.Change, "none"), Note: lf.Why, Review: lf.Review}
 		if lf.Present {
 			fc.Now = fieldJSON(lf.Value)
 		}
@@ -733,7 +734,7 @@ func reportersText(rf *components.ReportedApplyFailure) string {
 	return strings.Join(names, ", ")
 }
 
-func (st *storedLeftover) problem() Problem {
+func (st *storedLeftover) problem() report.Problem {
 	rf := st.rf
 	severity := "warning"
 	if st.notReady {
@@ -762,7 +763,7 @@ func (st *storedLeftover) problem() Problem {
 	if st.CRDNote != "" {
 		evidence = append(evidence, st.CRDNote)
 	}
-	p := Problem{
+	p := report.Problem{
 		ID:              components.LeftoverFieldsID(st.Kind, st.Name),
 		Severity:        severity,
 		AffectedObjects: []string{st.ref()},
@@ -799,12 +800,12 @@ func (st *storedLeftover) problem() Problem {
 		p.Fix = "Re-scan in a minute. If the error stays, retry the reconcile."
 		for _, r := range rf.Reporters {
 			if r.Kind == "DataScienceCluster" {
-				p.Fix = fmt.Sprintf("Re-scan in a minute. If the error stays, Retry now: it adds the annotation %s to DataScienceCluster %s and removes it again, which makes the operator reconcile it at once. It changes nothing else.", leftoverRetryAnno, r.Name)
+				p.Fix = fmt.Sprintf("Re-scan in a minute. If the error stays, Retry now: it adds the annotation %s to DataScienceCluster %s and removes it again, which makes the operator reconcile it at once. It changes nothing else.", LeftoverRetryAnno, r.Name)
 				p.AutoFixable = true
 				p.AutoFixAction = fixLeftoverRetry + r.Name
 				p.AffectedObjects = []string{"DataScienceCluster " + r.Name}
-				p.ConfirmMessage = fmt.Sprintf("This adds the annotation %s to DataScienceCluster %s and removes it again. The operator reconciles the DataScienceCluster when its annotations change; nothing else changes.", leftoverRetryAnno, r.Name)
-				p.TechnicalCmd = kube.ShellCommand("oc", "annotate", "datasciencecluster", r.Name, leftoverRetryAnno+"=now") + "; " + kube.ShellCommand("oc", "annotate", "datasciencecluster", r.Name, leftoverRetryAnno+"-")
+				p.ConfirmMessage = fmt.Sprintf("This adds the annotation %s to DataScienceCluster %s and removes it again. The operator reconciles the DataScienceCluster when its annotations change; nothing else changes.", LeftoverRetryAnno, r.Name)
+				p.TechnicalCmd = kube.ShellCommand("oc", "annotate", "datasciencecluster", r.Name, LeftoverRetryAnno+"=now") + "; " + kube.ShellCommand("oc", "annotate", "datasciencecluster", r.Name, LeftoverRetryAnno+"-")
 				break
 			}
 		}
@@ -835,7 +836,7 @@ func (st *storedLeftover) problem() Problem {
 				}
 			}
 			p.Acknowledge = fmt.Sprintf("I checked what these fields mean, and the new values (which may not mean the same as the old ones) are right for this cluster: %s.", strings.Join(review, ", "))
-			p.AcknowledgeBinding = newAckBinding(st.UID, st.ResourceVersion, p.Acknowledge)
+			p.AcknowledgeBinding = NewAckBinding(st.UID, st.ResourceVersion, p.Acknowledge)
 		}
 		raw, _ := json.Marshal(st.patchOps())
 		p.TechnicalCmd = kube.ShellCommand("oc", "patch", strings.ToLower(st.Kind)+"."+st.Group, st.Name, "--type=json", "-p", string(raw))
@@ -896,12 +897,12 @@ func (w workloadObject) ready(kind string) bool {
 
 // workloadReader reads a workload; found=false when it does not exist.
 // read=false when this reader cannot read the kind.
-type workloadReader func(c *Client, kind, namespace, name string) (obj workloadObject, found, read bool, err error)
+type workloadReader func(c *kube.Client, kind, namespace, name string) (obj workloadObject, found, read bool, err error)
 
-// readDeploymentForScan reads Deployments only: the ServiceAccount reads no
+// ReadDeploymentForScan reads Deployments only: the ServiceAccount reads no
 // other workload kind, so the scan leaves those to the fix, which reads
 // them with the user's token.
-func readDeploymentForScan(c *Client, kind, namespace, name string) (workloadObject, bool, bool, error) {
+func ReadDeploymentForScan(c *kube.Client, kind, namespace, name string) (workloadObject, bool, bool, error) {
 	if kind != "Deployment" {
 		return workloadObject{}, false, false, nil
 	}
@@ -939,12 +940,12 @@ type recreateLeftover struct {
 
 func (r *recreateLeftover) ref() string { return r.rf.Object() }
 
-// analyzeRecreate checks a changed-selector workload: it must exist, be
+// AnalyzeRecreate checks a changed-selector workload: it must exist, be
 // in the RHOAI applications namespace, have as its controller owner a CR
 // that reports the failure (so that CR's operator applies it again), and
 // that operator must be running. What goes down meanwhile, and what the
 // tool cannot check, needs an acknowledgement.
-func analyzeRecreate(c *Client, rf *components.ReportedApplyFailure, appNS string, read workloadReader, users usersReader) *recreateLeftover {
+func AnalyzeRecreate(c *kube.Client, rf *components.ReportedApplyFailure, appNS string, read workloadReader, users UsersReader) *recreateLeftover {
 	f := rf.ApplyFailure
 	r := &recreateLeftover{rf: rf, AppNS: appNS}
 	for _, rep := range rf.Reporters {
@@ -1051,7 +1052,7 @@ func analyzeRecreate(c *Client, rf *components.ReportedApplyFailure, appNS strin
 	return r
 }
 
-func (r *recreateLeftover) problem() Problem {
+func (r *recreateLeftover) problem() report.Problem {
 	rf, f := r.rf, r.rf.ApplyFailure
 	severity := "warning"
 	if r.notReady {
@@ -1062,7 +1063,7 @@ func (r *recreateLeftover) problem() Problem {
 	for _, d := range rf.Details {
 		evidence = append(evidence, "Operator error: "+kube.TruncateText(d, 500))
 	}
-	p := Problem{
+	p := report.Problem{
 		ID:              components.LeftoverRecreateID(f.Kind, f.Namespace, f.Name),
 		Severity:        severity,
 		Title:           fmt.Sprintf("%s must be recreated: its selector changed", r.ref()),
@@ -1092,7 +1093,7 @@ func (r *recreateLeftover) problem() Problem {
 		p.Fix = fmt.Sprintf("No automatic fix: %s. Check it yourself, then delete %s with the command below; the operator that owns it creates it again.", strings.Join(r.Blockers, "; "), r.ref())
 		return p
 	}
-	p.Fix = fmt.Sprintf("Delete %s so that the operator creates it again with the current selector. The tool deletes it with your token, only if it is unchanged since it was checked, and then waits up to %s for it to come back ready.", r.ref(), components.FormatDuration(leftoverRecreateWait))
+	p.Fix = fmt.Sprintf("Delete %s so that the operator creates it again with the current selector. The tool deletes it with your token, only if it is unchanged since it was checked, and then waits up to %s for it to come back ready.", r.ref(), components.FormatDuration(LeftoverRecreateWait))
 	p.AutoFixable = true
 	p.AutoFixAction = fixLeftoverRecreate + f.Kind + "/" + f.Namespace + "/" + f.Name
 	p.ConfirmMessage = fmt.Sprintf("This deletes %s (propagation Background), after a server-side dry run, and only if its UID and resourceVersion are unchanged. %s", r.ref(), strings.Join(r.Warnings, " "))
@@ -1100,7 +1101,7 @@ func (r *recreateLeftover) problem() Problem {
 		p.Acknowledge = fmt.Sprintf("I accept that %s is down until the operator creates it again: %s.", r.ref(), strings.Join(reasons, "; "))
 		// The object as this scan read it; an object it could not read
 		// binds empty (the statement says so).
-		p.AcknowledgeBinding = newAckBinding(r.Obj.Metadata.UID, r.Obj.Metadata.ResourceVersion, p.Acknowledge)
+		p.AcknowledgeBinding = NewAckBinding(r.Obj.Metadata.UID, r.Obj.Metadata.ResourceVersion, p.Acknowledge)
 	}
 	return p
 }

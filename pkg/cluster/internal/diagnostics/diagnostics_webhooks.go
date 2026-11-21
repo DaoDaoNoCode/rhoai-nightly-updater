@@ -1,4 +1,4 @@
-package cluster
+package diagnostics
 
 import (
 	"encoding/json"
@@ -11,6 +11,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/report"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -42,7 +43,7 @@ const (
 // conversion webhook down; a list that fails on the conversion webhook
 // proves an object exists (only objects are converted). This app may lack
 // the right to list the kind (403): then it cannot tell.
-func probeCRDObjects(c *Client, listPath string) (crdObjects, string) {
+func probeCRDObjects(c *kube.Client, listPath string) (crdObjects, string) {
 	if listPath == "" {
 		return crdObjectsUnknown, "the CRD serves no version"
 	}
@@ -69,7 +70,7 @@ func probeCRDObjects(c *Client, listPath string) (crdObjects, string) {
 
 // findStaleConversions reports RHOAI CRDs whose conversion webhook Service is
 // missing, or has had no ready endpoint for longer than the grace period.
-func findStaleConversions(c *Client) ([]staleConversion, []string, error) {
+func findStaleConversions(c *kube.Client) ([]staleConversion, []string, error) {
 	crds, err := components.ListRHOAIConversionCRDs(c)
 	if kube.IsK8sNotFound(err) {
 		return nil, nil, nil
@@ -79,7 +80,7 @@ func findStaleConversions(c *Client) ([]staleConversion, []string, error) {
 	}
 	// RHOAI's: a CRD of an opendatahub.io API group, or one whose Service
 	// runs in the operator, applications or monitoring namespace.
-	rhoaiNS, nsErr := rhoaiPodNamespaces(c)
+	rhoaiNS, nsErr := RHOAIPodNamespaces(c)
 	rhoaiNS = append(rhoaiNS, rhoai.SubNS)
 	var candidates []components.ConversionCRD
 	for _, crd := range crds {
@@ -124,7 +125,7 @@ func findStaleConversions(c *Client) ([]staleConversion, []string, error) {
 
 // readDSCComponents returns spec.components managementState by component
 // name, or nil when there is no DataScienceCluster.
-func readDSCComponents(c *Client) map[string]string {
+func readDSCComponents(c *kube.Client) map[string]string {
 	path, err := rhoai.DataScienceClusterPath(c)
 	if err != nil {
 		return nil
@@ -146,9 +147,9 @@ func readDSCComponents(c *Client) map[string]string {
 	return out
 }
 
-func checkStaleWebhooks(c *Client) checkOutput {
+func CheckStaleWebhooks(c *kube.Client) CheckOutput {
 	const name = "Stale webhooks"
-	out := checkOutput{check: CheckResult{Name: name, Status: "pass"}}
+	out := CheckOutput{Check: report.CheckResult{Name: name, Status: "pass"}}
 	var conversions []staleConversion
 	var convErrs []string
 	var convErr error
@@ -180,7 +181,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 			affected = append(affected, v.Config.Ref())
 			lines = append(lines, fmt.Sprintf("- %s (Service %s; %s)", v.Config.Ref(), v.DownText(), v.Reason))
 		}
-		out.problems = append(out.problems, Problem{
+		out.Problems = append(out.Problems, report.Problem{
 			ID:       "stale-webhooks",
 			Severity: severity,
 			Title:    fmt.Sprintf("%s %s to a Service that cannot serve %s", kube.CountNoun(len(deletable), "leftover RHOAI webhook configuration", "leftover RHOAI webhook configurations"), kube.Verb(len(deletable), "points", "point"), kube.Verb(len(deletable), "it", "them")),
@@ -215,7 +216,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 			evidence = append(evidence, fmt.Sprintf("%s: Service %s (%s); not deleted automatically because %s", v.Config.Ref(), v.DownText(), policy, v.Reason))
 			affected = append(affected, v.Config.Ref())
 		}
-		out.problems = append(out.problems, Problem{
+		out.Problems = append(out.Problems, report.Problem{
 			ID:       "webhook-service-missing",
 			Severity: severity,
 			Title:    fmt.Sprintf("%s %s a Service that cannot serve %s", kube.CountNoun(len(guidance), "RHOAI webhook configuration", "RHOAI webhook configurations"), kube.Verb(len(guidance), "calls", "call"), kube.Verb(len(guidance), "it", "them")),
@@ -247,7 +248,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 			affected = append(affected, "CustomResourceDefinition "+sc.CRD)
 		}
 		fix, technicalCmd := staleConversionFix(conversions)
-		out.problems = append(out.problems, Problem{
+		out.Problems = append(out.Problems, report.Problem{
 			ID:       "stale-crd-conversion",
 			Severity: "critical",
 			Title:    fmt.Sprintf("%s %s a conversion webhook whose Service cannot serve", kube.CountNoun(len(conversions), "CRD", "CRDs"), kube.Verb(len(conversions), "uses", "use")),
@@ -266,7 +267,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 	case len(scan.Verdicts) == 0 && len(conversions) == 0:
 		details = append(details, "No RHOAI webhook or CRD conversion points to a Service that cannot serve it")
 	default:
-		out.check.Status = "fail"
+		out.Check.Status = "fail"
 		details = append(details, fmt.Sprintf("%s and %s point to a Service that cannot serve them", kube.CountNoun(len(scan.Verdicts), "webhook configuration", "webhook configurations"), kube.CountNoun(len(conversions), "CRD conversion", "CRD conversions")))
 	}
 	if scan.Upgrading != "" {
@@ -274,8 +275,8 @@ func checkStaleWebhooks(c *Client) checkOutput {
 	}
 	if errs := append(append([]string{}, scan.Errors...), convErrs...); len(errs) > 0 {
 		details = append(details, "could not verify: "+strings.Join(errs, "; "))
-		if out.check.Status == "pass" {
-			out.check.Status = "warn"
+		if out.Check.Status == "pass" {
+			out.Check.Status = "warn"
 		}
 	}
 	if convErr != nil {
@@ -284,11 +285,11 @@ func checkStaleWebhooks(c *Client) checkOutput {
 			msg = "CRD conversions not checked: this app cannot list CRDs (RBAC)"
 		}
 		details = append(details, msg)
-		if out.check.Status == "pass" {
-			out.check.Status = "warn"
+		if out.Check.Status == "pass" {
+			out.Check.Status = "warn"
 		}
 	}
-	out.check.Detail = strings.Join(details, "; ")
+	out.Check.Detail = strings.Join(details, "; ")
 	return out
 }
 
@@ -360,7 +361,7 @@ func staleConversionFix(conversions []staleConversion) (fix, technicalCmd string
 // applyFixDeleteStaleWebhooks re-evaluates every RHOAI webhook configuration
 // and deletes only the deletable stale ones, each guarded by its UID and
 // resourceVersion, so a configuration that changed since the check is kept.
-func applyFixDeleteStaleWebhooks(c *Client) (*types.OperationResponse, error) {
+func applyFixDeleteStaleWebhooks(c *kube.Client) (*types.OperationResponse, error) {
 	scan := components.ScanStaleWebhooks(c)
 	if scan.Upgrading != "" {
 		return components.NothingToDo("an operator install is in progress ("+scan.Upgrading+"); OLM and the operator recreate webhooks when it finishes. Nothing was deleted.", nil), nil

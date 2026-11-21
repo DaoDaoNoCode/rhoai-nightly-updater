@@ -1,4 +1,4 @@
-package cluster
+package diagnostics
 
 import (
 	"encoding/json"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/report"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -59,14 +60,14 @@ func (p conversionProbe) path() string {
 // reads are best effort: the app's RBAC grants the RHOAI resources it
 // uses, other resources answer 403 and are skipped. The RBAC coverage test
 // lists this function in rbacBestEffortCalls.
-func getDiscovered(c *Client, path string, query url.Values) ([]byte, error) {
+func getDiscovered(c *kube.Client, path string, query url.Values) ([]byte, error) {
 	body, _, err := c.Do(http.MethodGet, path, "", nil, query)
 	return body, err
 }
 
 // multiVersionRHOAIGroups returns the *.opendatahub.io API groups that serve
 // more than one version.
-func multiVersionRHOAIGroups(c *Client) ([]rhoai.APIGroupDoc, error) {
+func multiVersionRHOAIGroups(c *kube.Client) ([]rhoai.APIGroupDoc, error) {
 	body, err := getDiscovered(c, "/apis", nil)
 	if err != nil {
 		return nil, err
@@ -89,7 +90,7 @@ func multiVersionRHOAIGroups(c *Client) ([]rhoai.APIGroupDoc, error) {
 
 // listableResources returns the resources of group/version that can be
 // listed (no subresources).
-func listableResources(c *Client, group, version string) ([]conversionProbe, error) {
+func listableResources(c *kube.Client, group, version string) ([]conversionProbe, error) {
 	body, err := getDiscovered(c, "/apis/"+group+"/"+version, nil)
 	if err != nil {
 		return nil, err
@@ -116,7 +117,7 @@ func listableResources(c *Client, group, version string) ([]conversionProbe, err
 
 // probeConversions lists every resource of every multi-version RHOAI group
 // at each served version.
-func probeConversions(c *Client) (probes []conversionProbe, groups int, errs []string, err error) {
+func probeConversions(c *kube.Client) (probes []conversionProbe, groups int, errs []string, err error) {
 	gs, err := multiVersionRHOAIGroups(c)
 	if err != nil {
 		return nil, 0, nil, err
@@ -164,12 +165,12 @@ func probeConversions(c *Client) (probes []conversionProbe, groups int, errs []s
 	return probes, len(gs), errs, nil
 }
 
-func checkConversionFailures(c *Client) checkOutput {
-	out := checkOutput{check: CheckResult{Name: conversionCheckName, Status: "pass"}}
+func CheckConversionFailures(c *kube.Client) CheckOutput {
+	out := CheckOutput{Check: report.CheckResult{Name: conversionCheckName, Status: "pass"}}
 	probes, groups, errs, err := probeConversions(c)
 	if err != nil {
-		out.check.Status = "warn"
-		out.check.Detail = fmt.Sprintf("could not read API discovery: %v", err)
+		out.Check.Status = "warn"
+		out.Check.Detail = fmt.Sprintf("could not read API discovery: %v", err)
 		return out
 	}
 
@@ -237,18 +238,18 @@ func checkConversionFailures(c *Client) checkOutput {
 			}
 		}
 		failedKinds = append(failedKinds, fmt.Sprintf("%s %s", k.kind, joinVersions(failed)))
-		out.problems = append(out.problems, conversionProblem(k.group, k.resource, k.kind, failed, working, operator))
+		out.Problems = append(out.Problems, conversionProblem(k.group, k.resource, k.kind, failed, working, operator))
 	}
 
 	var details []string
 	switch {
-	case len(out.problems) > 0:
-		out.check.Status = "fail"
+	case len(out.Problems) > 0:
+		out.Check.Status = "fail"
 		details = append(details, fmt.Sprintf("The operator's conversion webhook fails for %s", strings.Join(failedKinds, ", ")))
 	case groups == 0:
 		details = append(details, "No RHOAI API group serves more than one version")
 	case verifiedKinds == 0:
-		out.check.Status = "warn"
+		out.Check.Status = "warn"
 		details = append(details, fmt.Sprintf("Could not verify any conversion: no resource of the %s returned an object at every served version",
 			kube.CountNoun(groups, "multi-version RHOAI API group", "multi-version RHOAI API groups")))
 	default:
@@ -263,11 +264,11 @@ func checkConversionFailures(c *Client) checkOutput {
 	}
 	if len(errs) > 0 {
 		details = append(details, "could not verify: "+strings.Join(errs, "; "))
-		if out.check.Status == "pass" {
-			out.check.Status = "warn"
+		if out.Check.Status == "pass" {
+			out.Check.Status = "warn"
 		}
 	}
-	out.check.Detail = strings.Join(details, "; ")
+	out.Check.Detail = strings.Join(details, "; ")
 	return out
 }
 
@@ -281,7 +282,7 @@ func joinVersions(probes []conversionProbe) string {
 
 // conversionProblem reports one kind whose objects the operator's
 // conversion webhook cannot convert to the failed versions.
-func conversionProblem(group, resource, kind string, failed, working []conversionProbe, op *components.InstalledOperator) Problem {
+func conversionProblem(group, resource, kind string, failed, working []conversionProbe, op *components.InstalledOperator) report.Problem {
 	crd := resource + "." + group
 	failedVersions := joinVersions(failed)
 	evidence := []string{}
@@ -330,7 +331,7 @@ func conversionProblem(group, resource, kind string, failed, working []conversio
 	}
 	cmds = append(cmds, fmt.Sprintf("oc logs -n %s deploy/%s | grep conversion-webhook", ns, deployment))
 
-	return Problem{
+	return report.Problem{
 		ID:              "conversion-failed-" + crd,
 		Severity:        "critical",
 		Title:           fmt.Sprintf("The operator cannot convert %s to %s", kind, failedVersions),
@@ -347,7 +348,7 @@ func conversionProblem(group, resource, kind string, failed, working []conversio
 }
 
 func k8sStatus(err error) int {
-	if k, ok := errors.AsType[*K8sError](err); ok {
+	if k, ok := errors.AsType[*kube.K8sError](err); ok {
 		return k.Status
 	}
 	return 0

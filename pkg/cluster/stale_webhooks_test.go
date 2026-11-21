@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -285,9 +286,9 @@ func TestStaleWebhookScan_UnreadableEndpointsKeepTheConfig(t *testing.T) {
 	if len(scan.Verdicts) != 0 || len(scan.Errors) != 1 || !strings.Contains(scan.Errors[0], "list endpoints of Service "+rhoai.SubNS+"/svc") {
 		t.Fatalf("scan = %+v", scan)
 	}
-	out := checkStaleWebhooks(c)
-	if out.check.Status != "warn" || !strings.Contains(out.check.Detail, "could not verify") {
-		t.Fatalf("check = %+v", out.check)
+	out := diagnostics.CheckStaleWebhooks(c)
+	if out.Check.Status != "warn" || !strings.Contains(out.Check.Detail, "could not verify") {
+		t.Fatalf("check = %+v", out.Check)
 	}
 	assertWrites(t, f)
 }
@@ -363,11 +364,11 @@ func TestStaleWebhookCheck_PlatformWebhookWithIgnoreIsInfo(t *testing.T) {
 		services: []string{"redhat-ods-applications/odh-observability-webhook"}, ignore: true}}, "Succeeded", nil, nil)
 	f.json("GET", svcPath("redhat-ods-applications", "odh-observability-webhook"), http.StatusOK, `{"metadata":{"creationTimestamp":"2026-10-03T00:00:00Z"},"spec":{"selector":{"app":"odh-observability"}}}`)
 	f.json("GET", fmt.Sprintf(epsPathFmt, "redhat-ods-applications"), http.StatusOK, `{"items":[{"metadata":{"creationTimestamp":"2026-10-03T00:00:00Z"},"endpoints":[{"conditions":{"ready":false}}]}]}`)
-	out := checkStaleWebhooks(c)
-	if len(out.problems) != 1 {
-		t.Fatalf("problems = %+v", out.problems)
+	out := diagnostics.CheckStaleWebhooks(c)
+	if len(out.Problems) != 1 {
+		t.Fatalf("problems = %+v", out.Problems)
 	}
-	p := out.problems[0]
+	p := out.Problems[0]
 	ev := strings.Join(p.Evidence, "\n")
 	if p.ID != "webhook-service-missing" || p.Severity != "info" || p.AutoFixable || !strings.Contains(ev, "has no ready endpoints") ||
 		!strings.Contains(ev, "failurePolicy Ignore") || !strings.Contains(ev, "for the whole platform") {

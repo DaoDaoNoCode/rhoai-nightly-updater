@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -428,13 +429,13 @@ func TestStuckModuleNamesDiscoveredOperator(t *testing.T) {
 	serveLive36ModuleOperators(f)
 	serveInstalledOperator(f)
 	f.json("GET", "/apis/apps/v1/namespaces/"+liveAppsNS+"/deployments/ai-gateway-operator", http.StatusOK, `{"status":{"readyReplicas":0}}`)
-	p := stuckModuleProblem(c, components.NewModuleOperatorFinder(c, nil), stuckModule{Module: "aigateway", Name: "default-aigateway", Finalizers: []string{"platform.opendatahub.io/finalizer"}})
+	p := diagnostics.StuckModuleProblem(c, components.NewModuleOperatorFinder(c, nil), diagnostics.StuckModule{Module: "aigateway", Name: "default-aigateway", Finalizers: []string{"platform.opendatahub.io/finalizer"}})
 	ev := strings.Join(p.Evidence, "\n")
 	if !strings.Contains(ev, "owned by Platform default; its ServiceAccount ai-gateway-operator may update aigateways and aigateways/finalizers") ||
 		!strings.Contains(ev, "has no ready pod") || p.Fix != "Start redhat-ods-applications/ai-gateway-operator again; it removes the finalizer." {
 		t.Fatalf("%+v", p)
 	}
-	q := stuckModuleProblem(c, components.NewModuleOperatorFinder(c, nil), stuckModule{Module: "newmodule", Name: "default"})
+	q := diagnostics.StuckModuleProblem(c, components.NewModuleOperatorFinder(c, nil), diagnostics.StuckModule{Module: "newmodule", Name: "default"})
 	if !strings.Contains(strings.Join(q.Evidence, "\n"), "Operator: not identified") {
 		t.Fatalf("%+v", q)
 	}
@@ -499,11 +500,11 @@ func TestDatabaseServiceModuleInTheServicesGroup(t *testing.T) {
 	f.obj(componentsV1+"kueues", map[string]any{"items": []any{}})
 	f.obj(componentsV1+"newmodules", map[string]any{"items": []any{}})
 	f.obj(servicesV1+"auths", map[string]any{"items": []any{}})
-	stuck, err := stuckModuleCRs(c, time.Now())
+	stuck, err := diagnostics.StuckModuleCRs(c, time.Now())
 	if err != nil || len(stuck) != 1 || stuck[0].Module != "databaseservice" || stuck[0].CRD != "databaseservices.services.platform.opendatahub.io" {
 		t.Fatalf("stuck %+v %v", stuck, err)
 	}
-	if p := stuckModuleProblem(c, finder, stuck[0]); p.TechnicalCmd != "oc get databaseservices.services.platform.opendatahub.io default-databaseservice -o yaml" {
+	if p := diagnostics.StuckModuleProblem(c, finder, stuck[0]); p.TechnicalCmd != "oc get databaseservices.services.platform.opendatahub.io default-databaseservice -o yaml" {
 		t.Fatalf("cmd %q", p.TechnicalCmd)
 	}
 	_, warnings := components.CleanupStuckCRs(c)
