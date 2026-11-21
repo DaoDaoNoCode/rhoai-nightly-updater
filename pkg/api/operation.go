@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -56,35 +57,85 @@ func releaseClusterMutationLock() {
 // operation (also one that runs in another updater pod). When it returns
 // true the caller must defer releaseClusterMutationLock.
 func lockCluster(w http.ResponseWriter) bool {
-	if !acquireClusterMutationLock() {
+	sw, ok := w.(*statusWriter)
+	var cancelOp context.CancelCauseFunc
+	if ok {
+		cancelOp = sw.cancelOp
+	}
+	refusal := acquireRunnerLock(func() *Operation {
+		if !ok {
+			return nil
+		}
+		op := inflight.start(sw)
+		sw.opID = op.ID
+		return op
+	}, cancelOp)
+	switch {
+	case refusal == nil:
+		return true
+	case refusal.busy:
 		writeClusterBusy(w, inflight.snapshot(), "")
 		return false
-	}
-	sw, ok := w.(*statusWriter)
-	if !ok {
-		return true
-	}
-	op := inflight.start(sw)
-	sw.opID = op.ID
-	if sw.bookkeeper == nil {
-		return true
-	}
-	holder, err := leases.acquire(sw.bookkeeper, op, sw.cancelOp)
-	if holder == nil && err == nil {
-		return true
-	}
-	// Refused: forget the operation (it never began) and free the local lock.
-	inflight.finish()
-	clusterMutationInProgress.Store(false)
-	if holder != nil {
+	case refusal.holder != nil:
+		holder := refusal.holder
 		slog.Info("operation refused: another updater pod runs one", "holder", holder.ID, "holderPod", holder.Pod, "type", holder.Type)
 		writeClusterBusy(w, remoteOperation(holder), "")
 		return false
 	}
-	slog.Warn("operation refused: the cross-pod operation lock could not be read or written", "error", err)
+	slog.Warn("operation refused: the cross-pod operation lock could not be read or written", "error", refusal.err)
 	w.Header().Set("Retry-After", strconv.Itoa(int(lockUnavailableRetryAfter.Seconds())))
 	writeError(w, lockUnavailableMessage, http.StatusServiceUnavailable, "lock_unavailable")
 	return false
+}
+
+// lockRefusal is why acquireRunnerLock did not take the lock. Exactly one
+// of these is set.
+type lockRefusal struct {
+	// busy: another operation of this process holds the local lock.
+	busy bool
+	// holder is the live lease of another updater process that holds the
+	// cross-pod lock.
+	holder *types.OperationLease
+	// err kept the lease from being read or written (fail closed: without
+	// the lease the updater cannot tell whether another pod changes the
+	// cluster).
+	err error
+}
+
+// acquireRunnerLock takes the local lock, then records the operation start
+// returns as the one holding it, then takes the cross-pod lease for that
+// operation with its bookkeeper (the ServiceAccount's client). It is the
+// one way to take the lock: lockCluster for a request, and a holder that
+// runs without one or outlives it (the background MaaS check).
+//
+// cancelOp is what the lease heartbeat calls with
+// cluster.ErrOperationLockLost when the lease is lost: the request's cancel
+// for a handler, the holder's own for a holder that outlives the handler.
+//
+// start runs only once the local lock is held. It may return nil (nothing
+// to track, as for a response that is not a statusWriter in tests), and the
+// operation may have no bookkeeper (no ServiceAccount token): then no lease
+// is taken, as before.
+//
+// It returns nil when the lock is held; the caller must then call
+// releaseClusterMutationLock when it ends, which completes the marker of a
+// begun operation and releases the lease. On a refusal nothing is held: the
+// operation is forgotten (it never began) and the local lock is free again.
+func acquireRunnerLock(start func() *Operation, cancelOp context.CancelCauseFunc) *lockRefusal {
+	if !acquireClusterMutationLock() {
+		return &lockRefusal{busy: true}
+	}
+	op := start()
+	if op == nil || op.bookkeeper == nil {
+		return nil
+	}
+	holder, err := leases.acquire(op.bookkeeper, op, cancelOp)
+	if holder == nil && err == nil {
+		return nil
+	}
+	inflight.finish()
+	clusterMutationInProgress.Store(false)
+	return &lockRefusal{holder: holder, err: err}
 }
 
 // The refusal when the lease cannot be read or written (fail closed).

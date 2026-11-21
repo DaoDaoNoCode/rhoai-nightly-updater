@@ -73,22 +73,24 @@ func runMaaSPruneOnce(ctx context.Context) bool {
 		return false
 	}
 	defer mutations.end()
-	if !acquireClusterMutationLock() {
-		slog.Debug("background MaaS check skipped: another operation runs")
-		return false
-	}
 	opCtx, cancelOp := context.WithCancelCause(ctx)
 	defer cancelOp(nil)
-	runCtx, cancel := maasPruneClock.WithTimeout(opCtx, maasPruneTimeout)
-	defer cancel()
-	c := cluster.NewClientWithContext(runCtx, token)
-	c.SetUsername(maasPruneUser)
-	op := inflight.startBackground("prune-maas-publications", "Drop MaaS publications that are gone", maasPruneUser, c)
-	holder, err := leases.acquire(c, op, cancelOp)
-	if holder != nil || err != nil {
-		inflight.finish()
-		clusterMutationInProgress.Store(false)
-		slog.Debug("background MaaS check skipped: the cross-pod lock is held or unavailable", "error", err)
+	var c *cluster.Client
+	var cancel context.CancelFunc = func() {}
+	defer func() { cancel() }()
+	refusal := acquireRunnerLock(func() *Operation {
+		var runCtx context.Context
+		runCtx, cancel = maasPruneClock.WithTimeout(opCtx, maasPruneTimeout)
+		c = cluster.NewClientWithContext(runCtx, token)
+		c.SetUsername(maasPruneUser)
+		return inflight.startBackground("prune-maas-publications", "Drop MaaS publications that are gone", maasPruneUser, c)
+	}, cancelOp)
+	if refusal != nil {
+		if refusal.busy {
+			slog.Debug("background MaaS check skipped: another operation runs")
+		} else {
+			slog.Debug("background MaaS check skipped: the cross-pod lock is held or unavailable", "error", refusal.err)
+		}
 		return false
 	}
 	defer releaseClusterMutationLock()
