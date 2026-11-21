@@ -113,8 +113,12 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   `await` of non-promises, switch exhaustiveness and object-to-string
   conversions. The Environment page's component (`QuickResourceCreator`,
   1,011 lines) is split into its URL state, status reads, run actions and
-  their requests (`frontend/src/components/environment/`). No change in
-  what the app does.
+  their requests (`frontend/src/components/environment/`), and repeated UI
+  pieces (outcome alerts, the Dashboard Dev session alert, Open
+  Diagnostics, Go to Status) are one component each. No change in what
+  the app does.
+- The Environment page's load failure reads "Can't load the environment",
+  like every other page's ("Cannot load the environment" before).
 
 ### Fixed
 

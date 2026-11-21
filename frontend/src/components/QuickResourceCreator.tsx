@@ -294,7 +294,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
           )}
           {!resStatus && tab !== "maas" ? (
             <StackItem>
-              {resError ? <PageErrorState inSection={false} error={resError} title="Cannot load the environment" onRetry={checkAgain} />
+              {resError ? <PageErrorState inSection={false} error={resError} title="Can't load the environment" onRetry={checkAgain} />
                 : tab === "overview" ? overview
                   : <FeatureLoading title={TAB_TITLES[tab]} purpose={FEATURE_PURPOSE[tab]} parts={TAB_PARTS[tab]} />}
             </StackItem>
