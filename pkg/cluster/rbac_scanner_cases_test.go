@@ -234,11 +234,11 @@ func sprintf(c *kube.Client) {
 // H4: a facade's pure forward (returning or not) stands for the facade's
 // own calls. A facade that nothing calls directly (used only as a function
 // value, in the scanned source or outside it, or not at all) keeps an
-// unknown alternative, as an ordinary adapter without call sites does;
-// pkg/api's direct calls add nothing, as before the split when pkg/api
-// called the function itself. A function that is not an exported pure
-// forward of the facade (reordered arguments, a constant, a variadic
-// forward, a method, an unexported adapter) is an ordinary caller.
+// unknown alternative, as an ordinary adapter without call sites does, and
+// so does one pkg/api calls (TestRBACScanUnlistedCallersWidenTheParameter).
+// A function that is not an exported pure forward of the facade (reordered
+// arguments, a constant, a variadic forward, a method, an unexported
+// adapter) is an ordinary caller.
 func TestRBACScanFacadeKeepsCallersItCannotList(t *testing.T) {
 	inner := `package fixinner
 
@@ -332,8 +332,8 @@ func handle(c *cluster.Client, ns string) error {
 		{"ByValue", []string{unknownPart, "fixed"}},
 		{"ByOutsideValue", []string{unknownPart, "fixed"}},
 		{"Uncalled", []string{unknownPart, "fixed"}},
-		{"ByOutsideCall", []string{"fixed"}},
-		{"Pruned", []string{"fixed", "via-pruned"}},
+		{"ByOutsideCall", []string{unknownPart, "fixed"}},
+		{"Pruned", []string{unknownPart, "fixed", "via-pruned"}},
 		{"Swapped", []string{"fixed", "via-swapped"}},
 		{"Constant", []string{"fixed", "pinned"}},
 		{"Variadic", []string{"fixed", "via-variadic"}},
@@ -344,6 +344,194 @@ func handle(c *cluster.Client, ns string) error {
 			t.Errorf("fixinner.%s's ns = %q, want %q", tc.fn, got, tc.want)
 		}
 	}
+}
+
+// A parameter can take a value from a caller the scan cannot list: pkg/api
+// and main (not scanned), or a use of a facade as a function value. Such a
+// caller widens the parameter to a value only known at run time, also when
+// the function has callers the scan does list; it is never dropped. A
+// facade's pure forward stands for the facade's callers, so the inner
+// function inherits the facade's unlisted callers. A function of pkg/cluster
+// that is no facade gets the same unknown from pkg/api's calls.
+func TestRBACScanUnlistedCallersWidenTheParameter(t *testing.T) {
+	inner := `package fixinner
+
+import kube "` + fixKubePkg + `"
+
+func ByAPICall(c *kube.Client, ns string) error         { return nil }
+func ByAPIValue(c *kube.Client, ns string) error        { return nil }
+func ByClusterValue(c *kube.Client, ns string) error    { return nil }
+func ByPackageLevelVar(c *kube.Client, ns string) error { return nil }
+func Listed(c *kube.Client, ns string) error            { return nil }
+`
+	facade := `package cluster
+
+import (
+	"` + fixInnerPkg + `"
+	kube "` + fixKubePkg + `"
+)
+
+type Client = kube.Client
+
+func ByAPICall(c *Client, ns string) error { return fixinner.ByAPICall(c, ns) }
+
+func ByAPIValue(c *Client, ns string) error { return fixinner.ByAPIValue(c, ns) }
+
+func ByClusterValue(c *Client, ns string) error { return fixinner.ByClusterValue(c, ns) }
+
+func ByPackageLevelVar(c *Client, ns string) error { return fixinner.ByPackageLevelVar(c, ns) }
+
+func Listed(c *Client, ns string) error { return fixinner.Listed(c, ns) }
+
+func NotAFacade(c *Client, ns string) error {
+	_, _, err := c.Get("/api/v1/namespaces/" + ns + "/secrets/not-a-facade")
+	return err
+}
+
+var teardowns = []func(*Client, string) error{ByPackageLevelVar}
+
+func cleanup() func(*Client, string) error { return ByClusterValue }
+
+func callers(c *Client) {
+	_ = ByAPICall(c, "via-facade")
+	_ = ByAPIValue(c, "via-facade")
+	_ = ByClusterValue(c, "via-facade")
+	_ = ByPackageLevelVar(c, "via-facade")
+	_ = Listed(c, "via-facade")
+	_ = NotAFacade(c, "via-cluster")
+}
+`
+	api := `package api
+
+import "` + clusterPkg + `"
+
+var routes = map[string]func(*cluster.Client, string) error{"v": cluster.ByAPIValue}
+
+func handle(c *cluster.Client, project string) error {
+	_ = cluster.NotAFacade(c, project)
+	return cluster.ByAPICall(c, project)
+}
+`
+	p := loadFixture(t, fixKube(nil), fixturePkg{path: fixInnerPkg, files: map[string]string{"inner.go": inner}},
+		fixturePkg{path: clusterPkg, files: map[string]string{"facade.go": facade}},
+		fixturePkg{path: apiPkg, files: map[string]string{"api.go": api}, outside: true})
+	for _, tc := range []struct {
+		pkg, fn string
+		want    []string
+	}{
+		{fixInnerPkg, "ByAPICall", []string{unknownPart, "via-facade"}},
+		{fixInnerPkg, "ByAPIValue", []string{unknownPart, "via-facade"}},
+		{fixInnerPkg, "ByClusterValue", []string{unknownPart, "via-facade"}},
+		{fixInnerPkg, "ByPackageLevelVar", []string{unknownPart, "via-facade"}},
+		{fixInnerPkg, "Listed", []string{"via-facade"}},
+		{clusterPkg, "NotAFacade", []string{unknownPart, "via-cluster"}},
+	} {
+		if got := paramValues(t, p, tc.pkg, tc.fn, "ns"); !slices.Equal(got, tc.want) {
+			t.Errorf("%s's ns = %q, want %q", tc.fn, got, tc.want)
+		}
+	}
+	keys, problems := fixtureScan(t, p)
+	checkKeys(t, keys, []string{"get /secrets ns=* name=not-a-facade", "get /secrets ns=via-cluster name=not-a-facade"}, nil)
+	checkProblems(t, problems, "facade.go", facade)
+}
+
+// Any function used as a function value (stored, returned, passed along,
+// in a package-level declaration, with or without type arguments) is called
+// through that value with arguments the scan cannot see, so its parameters
+// keep a value only known at run time next to those of its direct callers.
+// So does a function a package-level declaration calls: its call sites are
+// those of functions only. A call, in parentheses or with type arguments,
+// is no value.
+func TestRBACScanFuncValuesWidenTheParameter(t *testing.T) {
+	inner := `package fixinner
+
+import kube "` + fixKubePkg + `"
+
+func Fetch(c *kube.Client, ns string) {
+	_, _, _ = c.Get("/api/v1/namespaces/" + ns + "/secrets/fv-inner")
+}
+`
+	src := `package fixapp
+
+import (
+	"` + fixInnerPkg + `"
+	kube "` + fixKubePkg + `"
+)
+
+func run(c *kube.Client, f func(*kube.Client, string)) { f(c, "dynamic") }
+
+func passed(c *kube.Client, ns string) {
+	_, _, _ = c.Get("/api/v1/namespaces/" + ns + "/secrets/fv-passed")
+}
+
+func stored(c *kube.Client, ns string) {
+	_, _, _ = c.Get("/api/v1/namespaces/" + ns + "/secrets/fv-stored")
+}
+
+func tabled(c *kube.Client, ns string) {
+	_, _, _ = c.Get("/api/v1/namespaces/" + ns + "/secrets/fv-tabled")
+}
+
+var table = map[string]func(*kube.Client, string){"t": tabled}
+
+func generic[T any](c *kube.Client, ns string, _ T) {
+	_, _, _ = c.Get("/api/v1/namespaces/" + ns + "/secrets/fv-generic")
+}
+
+func atInit(ns string) string {
+	_ = ns
+	return "x"
+}
+
+var initialised = atInit("pkg-level")
+
+func direct(c *kube.Client, ns string) {
+	_, _, _ = c.Get("/api/v1/namespaces/" + ns + "/secrets/fv-direct")
+}
+
+func callers(c *kube.Client) {
+	passed(c, "direct")
+	run(c, passed)
+	stored(c, "direct")
+	hook := stored
+	_ = hook
+	tabled(c, "direct")
+	generic(c, "direct", 1)
+	_ = generic[string]
+	fixinner.Fetch(c, "direct")
+	run(c, fixinner.Fetch)
+	_ = atInit("direct")
+	direct(c, "direct")
+	(direct)(c, "in-parens")
+	generic[int](c, "explicit", 1)
+}
+`
+	p := loadFixture(t, fixKube(nil), fixturePkg{path: fixInnerPkg, files: map[string]string{"inner.go": inner}},
+		fixturePkg{path: fixAppPkg, files: map[string]string{"fv.go": src}})
+	for _, tc := range []struct {
+		pkg, fn string
+		want    []string
+	}{
+		{fixAppPkg, "passed", []string{unknownPart, "direct"}},
+		{fixAppPkg, "stored", []string{unknownPart, "direct"}},
+		{fixAppPkg, "tabled", []string{unknownPart, "direct"}},
+		{fixAppPkg, "generic", []string{unknownPart, "direct", "explicit"}},
+		{fixInnerPkg, "Fetch", []string{unknownPart, "direct"}},
+		{fixAppPkg, "atInit", []string{unknownPart, "direct"}},
+		{fixAppPkg, "direct", []string{"direct", "in-parens"}},
+	} {
+		if got := paramValues(t, p, tc.pkg, tc.fn, "ns"); !slices.Equal(got, tc.want) {
+			t.Errorf("%s's ns = %q, want %q", tc.fn, got, tc.want)
+		}
+	}
+	keys, problems := fixtureScan(t, p)
+	checkKeys(t, keys, []string{
+		"get /secrets ns=* name=fv-passed",
+		"get /secrets ns=direct name=fv-passed",
+		"get /secrets ns=* name=fv-inner",
+		"get /secrets ns=direct name=fv-direct",
+	}, []string{"get /secrets ns=* name=fv-direct"})
+	checkProblems(t, problems, "fv.go", src)
 }
 
 // M1: a Client request method used as a function value (a method value,

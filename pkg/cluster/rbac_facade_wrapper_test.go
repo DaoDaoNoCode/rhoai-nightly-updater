@@ -6,10 +6,11 @@ import (
 )
 
 // A parameter of a function in a package under pkg/cluster is resolved at
-// its call sites as before the split: a facade wrapper that only forwards
-// its parameters adds no caller of its own (pkg/api's calls of it are not
-// in the scanned source), a wrapper's own callers are followed, and a facade
-// function that passes anything else is a caller like any other.
+// its call sites: a facade wrapper that only forwards its parameters adds
+// no caller of its own, its callers are followed instead, and pkg/api's
+// calls of it (not in the scanned source) keep a value only known at run
+// time; a facade function that passes anything else is a caller like any
+// other.
 func TestRBACParamThroughFacadeWrapper(t *testing.T) {
 	innerPkg := clusterPkg + "/internal/inner"
 	facade := `package cluster
@@ -50,8 +51,8 @@ func pinned(c *cluster.Client) error { return cluster.Pinned(c) }
 	p := loadFixture(t, fixKube(nil), fixturePkg{path: innerPkg, files: map[string]string{"inner.go": inner}},
 		fixturePkg{path: clusterPkg, files: map[string]string{"facade.go": facade}},
 		fixturePkg{path: apiPkg, files: map[string]string{"api.go": api}, outside: true})
-	if got, want := paramValues(t, p, innerPkg, "Teardown", "project"), []string{"from-inner", "pinned"}; !slices.Equal(got, want) {
-		t.Errorf("inner.Teardown's project = %q, want %q (the forwarding facade.Teardown adds no caller)", got, want)
+	if got, want := paramValues(t, p, innerPkg, "Teardown", "project"), []string{unknownPart, "from-inner", "pinned"}; !slices.Equal(got, want) {
+		t.Errorf("inner.Teardown's project = %q, want %q (the forwarding facade.Teardown adds pkg/api's unknown caller, no value of its own)", got, want)
 	}
 	if got, want := paramValues(t, p, innerPkg, "Other", "ns"), []string{"from-facade"}; !slices.Equal(got, want) {
 		t.Errorf("inner.Other's ns = %q, want %q (facade.Wrapped's callers)", got, want)
