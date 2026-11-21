@@ -83,6 +83,10 @@ package_with_tests() {
 package_with_tests pkg/cluster/a a yes TestA1 TestA2 TestA3 TestA4
 package_with_tests pkg/cluster/b b no TestB1 TestB2 TestB3
 package_with_tests pkg/other other no TestOther1
+# A package without tests, named as a package with tests (pkg/cluster/a):
+# it is compiled, but gives no test binary to collide with a.test.
+mkdir -p "$REPO/pkg/lib/a"
+printf 'package a\n\nfunc Lib() int { return 1 }\n' >"$REPO/pkg/lib/a/a.go"
 gofmt -l "$REPO" | grep . && fail "the generated tests are not gofmt-clean" || pass
 
 ALL='TestA1
@@ -196,6 +200,17 @@ run "same binary name"
 expect_eq "same binary name: exit status" 1 "$rc"
 expect_in "same binary name: says so" "several packages with tests end in: a" "$out"
 rm -r "$REPO/pkg/dup"
+
+# A package without tests that does not compile fails the run, as it
+# fails go test ./..., though nothing imports it; no test runs.
+mkdir -p "$REPO/pkg/broken"
+printf 'package broken\n\nfunc F() int { return "not an int" }\n' >"$REPO/pkg/broken/broken.go"
+run "broken package without tests"
+expect_eq "broken package without tests: exit status" 1 "$rc"
+expect_in "broken package without tests: names it" "example.com/fake/pkg/broken" "$out"
+expect_in "broken package without tests: the compiler's error" "broken.go:3" "$out"
+expect_eq "broken package without tests: no test ran" "" "$ran"
+rm -r "$REPO/pkg/broken"
 
 # Not flags, and patterns in a separate argument, are refused.
 run "not a flag" -run TestA1

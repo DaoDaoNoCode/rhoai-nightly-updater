@@ -9,7 +9,9 @@
 # it. `make test-go` and the CI go job run this script.
 #
 # The race test binaries of every package with tests are built at once
-# (go test -c, which builds in parallel), then run as jobs, at most
+# (go test -c, which builds in parallel), and every package without tests
+# is compiled (go build), so a package that does not build fails the run
+# as it fails go test ./.... The binaries then run as jobs, at most
 # GO_TEST_JOBS at a time, the longest first: each part of a split package,
 # and each other package whole. A package is split only when it has at
 # least GO_TEST_PART_TESTS tests: a part then holds about that many, and
@@ -74,9 +76,12 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 module=$(go list -m)
 
-# The packages with tests: "<index> <import path> <dir>".
-go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}} {{.Dir}}{{end}}' ./... |
-	awk 'NF { print NR, $0 }' >"$work/pkgs"
+# Every package, "<T or N> <import path> <dir>" (T: it has tests); then
+# the packages with tests, "<index> <import path> <dir>", and those
+# without, "<import path>".
+go list -f '{{if or .TestGoFiles .XTestGoFiles}}T{{else}}N{{end}} {{.ImportPath}} {{.Dir}}' ./... >"$work/all"
+awk '$1 == "T" { sub(/^T /, ""); print ++n, $0 }' "$work/all" >"$work/pkgs"
+awk '$1 == "N" { print $2 }' "$work/all" >"$work/notests"
 [ -s "$work/pkgs" ] || {
 	echo "test-go.sh: no package has tests" >&2
 	exit 1
@@ -93,6 +98,14 @@ dup=$(awk '{ n = split($2, p, "/"); print p[n] }' "$work/pkgs" | sort | uniq -d)
 mkdir "$work/bin"
 # shellcheck disable=SC2046 # the packages are a list
 go test -race -c -o "$work/bin/" $(awk '{ print $2 }' "$work/pkgs")
+# The packages without tests are compiled too, as go test ./... does: one
+# that does not build fails the run even when nothing imports it. Not by
+# go test -c, which refuses two packages ending in the same name though
+# only one of them gives a test binary.
+if [ -s "$work/notests" ]; then
+	# shellcheck disable=SC2046 # the packages are a list
+	go build -race $(cat "$work/notests")
+fi
 
 # Each package's binary, and how many parts it runs in: its tests (counted
 # from the source; the parts are dealt from -test.list) per part, at most
