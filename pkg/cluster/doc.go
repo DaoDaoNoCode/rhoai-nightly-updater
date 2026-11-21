@@ -32,8 +32,10 @@
 //	features, diagnostics   feature setups and the playground; the
 //	                        diagnostics runner, its checks and fixes
 //
-// No internal package imports pkg/cluster. Most tests stay in this package
-// (they share its fake clusters) and reach the internal packages directly;
-// the static tests (rbac_coverage_test.go, rbac_gitops_test.go,
-// cache_isolation_test.go) read every package under pkg/cluster.
+// No internal package imports pkg/cluster. layers_test.go checks both rules
+// against its own copy of this list, and that this list and CONTRIBUTING.md
+// agree with it. Most tests stay in this package (they share its fake
+// clusters) and reach the internal packages directly; the static tests
+// (rbac_coverage_test.go, rbac_gitops_test.go, cache_isolation_test.go,
+// layers_test.go) read every package under pkg/cluster.
 package cluster
