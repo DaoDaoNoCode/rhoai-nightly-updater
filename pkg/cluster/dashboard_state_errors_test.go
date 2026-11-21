@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 )
 
 // legacyAnnotationServer simulates a cluster without dashboard-operator whose
@@ -84,7 +86,7 @@ func TestLegacyRevertRestoresOriginalManagedAnnotation(t *testing.T) {
 		{name: "user-set-false-is-preserved", initial: map[string]string{"opendatahub.io/managed": "false"}, deploys: 2, want: "false", wantSet: true},
 		// Without a record the original is unknown: left unchanged.
 		{name: "revert-without-deploy-record", initial: map[string]string{"opendatahub.io/managed": "false"}, deploys: 0, want: "false", wantSet: true},
-		{name: "corrupt-record", initial: map[string]string{"opendatahub.io/managed": "false", legacyOriginalManagedAnnotation: "{not json"}, deploys: 0, want: "false", wantSet: true},
+		{name: "corrupt-record", initial: map[string]string{"opendatahub.io/managed": "false", dashdev.LegacyOriginalManagedAnnotation: "{not json"}, deploys: 0, want: "false", wantSet: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			allPRImagesPublished(t)
@@ -107,7 +109,7 @@ func TestLegacyRevertRestoresOriginalManagedAnnotation(t *testing.T) {
 			if set != tc.wantSet || value != tc.want {
 				t.Fatalf("managed after revert = %q (set=%v), want %q (set=%v)", value, set, tc.want, tc.wantSet)
 			}
-			if _, ok := got[legacyOriginalManagedAnnotation]; ok {
+			if _, ok := got[dashdev.LegacyOriginalManagedAnnotation]; ok {
 				t.Fatal("revert left the saved original")
 			}
 		})
@@ -184,7 +186,7 @@ func TestDashboardStateErrorMapping(t *testing.T) {
 		defer srv.Close()
 		c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 		_, err := GetDashboardState(c)
-		if status, code, _ := DashboardStateError(err); status != http.StatusInternalServerError || code != "internal" || errors.Is(err, ErrDashboardNotDeployed) {
+		if status, code, _ := DashboardStateError(err); status != http.StatusInternalServerError || code != "internal" || errors.Is(err, dashdev.ErrNotDeployed) {
 			t.Fatalf("err=%v status=%d code=%q", err, status, code)
 		}
 	})

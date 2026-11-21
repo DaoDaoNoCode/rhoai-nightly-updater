@@ -336,7 +336,7 @@ func pipelineServerState(d dspaInfo, dashboardURL string) types.ResourceState {
 			state.UIRoute = dashboardURL + "/develop-train/pipelines/definitions/" + d.Meta.Namespace
 		}
 		switch {
-		case snippetURL(d.APIURL):
+		case kube.SnippetURL(d.APIURL):
 			state.APIRoute = d.APIURL
 		case d.APIURL != "":
 			state.Warning = unsafeAddressWarning("pipeline server's API address")

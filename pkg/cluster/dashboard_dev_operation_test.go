@@ -7,15 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 func shortDashboardOperatorWait(t *testing.T) {
 	t.Helper()
-	timeout, interval := dashboardOperatorReadyTimeout, dashboardOperatorPollInterval
-	dashboardOperatorReadyTimeout, dashboardOperatorPollInterval = 300*time.Millisecond, 10*time.Millisecond
-	t.Cleanup(func() { dashboardOperatorReadyTimeout, dashboardOperatorPollInterval = timeout, interval })
+	t.Cleanup(dashdev.SetOperatorTimingForTest(300*time.Millisecond, 10*time.Millisecond))
 }
 
 func TestDashboardDevActive(t *testing.T) {
@@ -34,7 +33,7 @@ func TestDashboardDevActive(t *testing.T) {
 			f.operator.Spec.Replicas = &zero
 		}, true},
 		{"corrupt-annotation-on-running-operator", func(t *testing.T, f *dashboardDevFixture, c *Client) {
-			f.operator.Metadata.Annotations[dashboardDevAnnotation] = "{"
+			f.operator.Metadata.Annotations[dashdev.SessionAnnotation] = "{"
 		}, true},
 		{"unmanaged-dashboard-workload", func(t *testing.T, f *dashboardDevFixture, c *Client) {
 			d := f.workloads["notebooks-ui"]
@@ -51,7 +50,7 @@ func TestDashboardDevActive(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newDashboardDevFixture(t)
 			tc.setup(t, f, c)
-			active, err := DashboardDevActive(c)
+			active, err := dashdev.Active(c)
 			if err != nil || active != tc.active {
 				t.Fatalf("active=%v err=%v", active, err)
 			}
@@ -62,7 +61,7 @@ func TestDashboardDevActive(t *testing.T) {
 func TestRevertDashboardDevForOperation(t *testing.T) {
 	t.Run("inactive-is-a-no-op", func(t *testing.T) {
 		f, c := newDashboardDevFixture(t)
-		if err := RevertDashboardDevForOperation(c); err != nil || len(f.writes) != 0 {
+		if err := dashdev.RevertForOperation(c); err != nil || len(f.writes) != 0 {
 			t.Fatalf("err=%v writes=%v", err, f.writes)
 		}
 	})
@@ -72,15 +71,15 @@ func TestRevertDashboardDevForOperation(t *testing.T) {
 		f.readyOnResume = true
 		mockDashboardTags(t, allFixtureTags("odh-pr-1")...)
 		mustDeploy(t, c, "pr", 1, "")
-		if err := RevertDashboardDevForOperation(c); err != nil {
+		if err := dashdev.RevertForOperation(c); err != nil {
 			t.Fatal(err)
 		}
-		if *f.operator.Spec.Replicas != 2 || f.operator.Metadata.Annotations[dashboardDevAnnotation] != "" {
+		if *f.operator.Spec.Replicas != 2 || f.operator.Metadata.Annotations[dashdev.SessionAnnotation] != "" {
 			t.Fatalf("replicas=%d annotations=%v", *f.operator.Spec.Replicas, f.operator.Metadata.Annotations)
 		}
 		// Idempotent: nothing is left to do.
 		writes := len(f.writes)
-		if err := RevertDashboardDevForOperation(c); err != nil || len(f.writes) != writes {
+		if err := dashdev.RevertForOperation(c); err != nil || len(f.writes) != writes {
 			t.Fatalf("second call err=%v writes=%v", err, f.writes[writes:])
 		}
 	})
@@ -100,7 +99,7 @@ func TestRevertDashboardDevForOperation(t *testing.T) {
 		if state.Override == nil || !state.Override.DashboardDeleting {
 			t.Fatalf("state override=%+v", state.Override)
 		}
-		if err := RevertDashboardDevForOperation(c); err != nil || *f.operator.Spec.Replicas != 2 {
+		if err := dashdev.RevertForOperation(c); err != nil || *f.operator.Spec.Replicas != 2 {
 			t.Fatalf("err=%v replicas=%d", err, *f.operator.Spec.Replicas)
 		}
 		if override, _ := DashboardOverrideSummary(c); override.DashboardDeleting {
@@ -112,7 +111,7 @@ func TestRevertDashboardDevForOperation(t *testing.T) {
 		f, c := newDashboardDevFixture(t)
 		mockDashboardTags(t, allFixtureTags("odh-pr-1")...)
 		mustDeploy(t, c, "pr", 1, "")
-		err := RevertDashboardDevForOperation(c)
+		err := dashdev.RevertForOperation(c)
 		if err == nil || !strings.Contains(err.Error(), "did not become ready") || *f.operator.Spec.Replicas != 2 {
 			t.Fatalf("err=%v replicas=%d", err, *f.operator.Spec.Replicas)
 		}
@@ -127,7 +126,7 @@ func TestRevertDashboardDevForOperation(t *testing.T) {
 		defer cancel()
 		editTestClient(c, func(o *testClientOptions) { o.Ctx = ctx })
 		start := kube.Clock().Now()
-		err := RevertDashboardDevForOperation(c)
+		err := dashdev.RevertForOperation(c)
 		if err == nil || kube.Clock().Since(start) != 50*time.Millisecond || *f.operator.Spec.Replicas != 2 {
 			t.Fatalf("err=%v elapsed=%v", err, kube.Clock().Since(start))
 		}
@@ -138,7 +137,7 @@ func TestRevertDashboardDevForOperation(t *testing.T) {
 		mockDashboardTags(t, allFixtureTags("odh-pr-1")...)
 		mustDeploy(t, c, "pr", 1, "")
 		f.failOperatorPatch = http.StatusForbidden
-		if err := RevertDashboardDevForOperation(c); err == nil || *f.operator.Spec.Replicas != 0 {
+		if err := dashdev.RevertForOperation(c); err == nil || *f.operator.Spec.Replicas != 0 {
 			t.Fatalf("err=%v", err)
 		}
 	})
@@ -148,7 +147,7 @@ func TestRevertDashboardDevForOperation(t *testing.T) {
 		if result, err := DeployPRImage(c, 42); err != nil || !result.Success {
 			t.Fatalf("deploy=%+v err=%v", result, err)
 		}
-		if err := RevertDashboardDevForOperation(c); err != nil {
+		if err := dashdev.RevertForOperation(c); err != nil {
 			t.Fatal(err)
 		}
 		if _, ok := annotations()["opendatahub.io/managed"]; ok {
@@ -161,7 +160,7 @@ func TestDashboardDeployRefusesWhileDashboardDeleting(t *testing.T) {
 	f, c := newDashboardDevFixture(t)
 	f.dashboardDeleting = true
 	mockDashboardTags(t, allFixtureTags("odh-pr-1")...)
-	result, err := deployDashboardBuild(c, "pr", 1, "")
+	result, err := dashdev.DeployBuild(c, "pr", 1, "")
 	if err != nil || result.Success || result.ErrorCode != "prerequisites" || len(f.writes) != 0 {
 		t.Fatalf("result=%+v err=%v writes=%v", result, err, f.writes)
 	}
@@ -170,10 +169,10 @@ func TestDashboardDeployRefusesWhileDashboardDeleting(t *testing.T) {
 func TestDashboardOverrideWarnings(t *testing.T) {
 	t.Run("stale-warns-about-runlevel-delay", func(t *testing.T) {
 		f, c := newDashboardDevFixture(t)
-		f.operator.Metadata.Annotations[platformVersionAnnotation] = "3.6.0"
+		f.operator.Metadata.Annotations[dashdev.PlatformVersionAnnotation] = "3.6.0"
 		mockDashboardTags(t, allFixtureTags("odh-pr-1")...)
 		mustDeploy(t, c, "pr", 1, "")
-		f.operator.Metadata.Annotations[platformVersionAnnotation] = "3.6.1"
+		f.operator.Metadata.Annotations[dashdev.PlatformVersionAnnotation] = "3.6.1"
 		override, _ := DashboardOverrideSummary(c)
 		if !override.Stale || len(override.Warnings) != 1 || !strings.Contains(override.Warnings[0], "10 minutes") {
 			t.Fatalf("override=%+v", override)

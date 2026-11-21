@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -276,7 +277,7 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 		// A dashboard module whose operator is dashboardOp.
 		_, _ = io.WriteString(w, dashboardModuleDiscoveryRoutes(fixtureAppsNS)[p])
 	case f.dashboardOp != "" && p == "/apis/apps/v1/namespaces/"+fixtureAppsNS+"/deployments":
-		var op dashboardDeployment
+		var op dashdev.Deployment
 		_ = json.Unmarshal([]byte(f.dashboardOp), &op)
 		op.Metadata.Name = fixtureOperatorName
 		writeJSON(w, map[string]any{"items": []any{dashboardModuleOperatorListItem(op)}})

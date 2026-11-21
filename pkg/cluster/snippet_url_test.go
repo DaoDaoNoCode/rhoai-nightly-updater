@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // Addresses read from the cluster go into commands users paste into a
@@ -26,7 +28,7 @@ func TestSnippetURL(t *testing.T) {
 		"https://":                                                    false,
 		"":                                                            false,
 	} {
-		if got := snippetURL(s); got != want {
+		if got := kube.SnippetURL(s); got != want {
 			t.Errorf("snippetURL(%q) = %v, want %v", s, got, want)
 		}
 	}

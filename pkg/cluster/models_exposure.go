@@ -162,7 +162,7 @@ func modelInClusterURL(m llmisvcObject) string {
 	ns, name := m.Metadata.Namespace, m.Metadata.Name
 	service := ""
 	for _, a := range m.Status.Addresses {
-		if !snippetURL(a.URL) {
+		if !kube.SnippetURL(a.URL) {
 			continue
 		}
 		u, err := url.Parse(a.URL)

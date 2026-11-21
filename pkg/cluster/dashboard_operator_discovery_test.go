@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -21,7 +22,7 @@ func (f *fakeAPI) allRequests() []fakeReq {
 }
 
 func rhodsDashboardItem(annotations map[string]any) map[string]any {
-	return map[string]any{"metadata": map[string]any{"name": dashboardDeploymentName, "uid": "dash-uid", "annotations": annotations,
+	return map[string]any{"metadata": map[string]any{"name": dashdev.DeploymentName, "uid": "dash-uid", "annotations": annotations,
 		"ownerReferences": []any{map[string]any{"apiVersion": rhoai.ComponentAPIGroup + "/v1alpha1", "kind": "Dashboard", "name": "default-dashboard", "uid": "dash-owner", "controller": true}}},
 		"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"serviceAccountName": "rhods-dashboard", "containers": []any{map[string]any{"name": "rhods-dashboard", "image": "release-host"}}}}}}
 }
@@ -42,7 +43,7 @@ func serveInTreeDashboardCluster(f *fakeAPI, dashboardAnnotations map[string]any
 		rule(componentsGroup, []string{"dashboards"}, []string{"update"}), rule(componentsGroup, []string{"dashboards/finalizers"}, []string{"update"})}}}})
 	f.obj("/apis/rbac.authorization.k8s.io/v1/clusterrolebindings", map[string]any{"items": []any{crb("rhods-operator.3.4.0-x", "rhods-operator.3.4.0-x", saSubject(rhoai.SubNS, "redhat-ods-operator-controller-manager"))}})
 	f.obj("/apis/apps/v1/namespaces/redhat-ods-applications/deployments", map[string]any{"items": []any{rhodsDashboardItem(dashboardAnnotations)}})
-	f.obj(rhoai.NamespacedPath("apps/v1", "deployments", "redhat-ods-applications", dashboardDeploymentName), rhodsDashboardItem(dashboardAnnotations))
+	f.obj(rhoai.NamespacedPath("apps/v1", "deployments", "redhat-ods-applications", dashdev.DeploymentName), rhodsDashboardItem(dashboardAnnotations))
 	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.4.0"}}`)
 	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.4.0"), 200,
 		`{"metadata":{"name":"rhods-operator.3.4.0"},"spec":{"version":"3.4.0","customresourcedefinitions":{"owned":[{"name":"dashboards.components.platform.opendatahub.io"}]},"install":{"spec":{"deployments":[{"name":"rhods-operator"}]}}},"status":{"phase":"Succeeded"}}`)
@@ -90,7 +91,7 @@ func TestDiscoverDashboardTarget(t *testing.T) {
 		}, errContain: "no Deployment owned by the Platform runs as"},
 		{name: "two Deployments run as the operator's ServiceAccount", setup: func(f *fakeAPI) {
 			serveModuleCluster(f)
-			var a, b dashboardDeployment
+			var a, b dashdev.Deployment
 			a.Metadata.Name, a.Metadata.UID = "dm-a", "a"
 			b.Metadata.Name, b.Metadata.UID = "dm-b", "b"
 			f.obj("/apis/apps/v1/namespaces/"+fixtureAppsNS+"/deployments", map[string]any{"items": []any{
@@ -105,9 +106,9 @@ func TestDiscoverDashboardTarget(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newFakeAPI(t)
 			tc.setup(f)
-			target, err := discoverDashboardTarget(c)
+			target, err := dashdev.DiscoverTarget(c)
 			if tc.errContain != "" {
-				var opErr *dashboardOperatorError
+				var opErr *dashdev.OperatorError
 				if err == nil || !errors.As(err, &opErr) || !strings.Contains(err.Error(), tc.errContain) {
 					t.Fatalf("target=%+v err=%v, want a dashboardOperatorError with %q", target, err, tc.errContain)
 				}
@@ -159,17 +160,17 @@ func TestDashboardDevRefusesWhenTheOperatorIsUnknown(t *testing.T) {
 			if r, err := DeployDashboardMainWithFlavor(c, ""); err != nil || r.Success {
 				t.Fatalf("main = %+v, %v", r, err)
 			}
-			if _, err := DashboardDevActive(c); err == nil {
+			if _, err := dashdev.Active(c); err == nil {
 				t.Fatal("DashboardDevActive: no error for an unknown operator")
 			}
-			if err := RevertDashboardDevForOperation(c); err == nil {
+			if err := dashdev.RevertForOperation(c); err == nil {
 				t.Fatal("RevertDashboardDevForOperation: no error for an unknown operator")
 			}
 			if w := f.writes(); len(w) != 0 {
 				t.Fatalf("writes: %v", w)
 			}
 			for _, r := range f.allRequests() {
-				if strings.HasSuffix(r.Path, "/deployments/"+dashboardDeploymentName) || strings.HasSuffix(r.Path, "/deployments/rhods-operator") {
+				if strings.HasSuffix(r.Path, "/deployments/"+dashdev.DeploymentName) || strings.HasSuffix(r.Path, "/deployments/rhods-operator") {
 					t.Fatalf("the legacy flow read %s", r.Path)
 				}
 			}
@@ -184,7 +185,7 @@ func TestDashboardDevActiveLegacySelection(t *testing.T) {
 		return func(f *fakeAPI) {
 			serveDSCI(f, "old-apps")
 			if dashboard != "" {
-				f.json("GET", rhoai.NamespacedPath("apps/v1", "deployments", "old-apps", dashboardDeploymentName), 200, dashboard)
+				f.json("GET", rhoai.NamespacedPath("apps/v1", "deployments", "old-apps", dashdev.DeploymentName), 200, dashboard)
 			}
 		}
 	}
@@ -208,7 +209,7 @@ func TestDashboardDevActiveLegacySelection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newFakeAPI(t)
 			tc.setup(f)
-			active, err := DashboardDevActive(c)
+			active, err := dashdev.Active(c)
 			if err != nil || active != tc.active {
 				t.Fatalf("active=%v err=%v", active, err)
 			}
@@ -220,17 +221,17 @@ func TestDashboardDevActiveLegacySelection(t *testing.T) {
 // Deployment the installed CSV installs, not from a fixed name.
 func TestLegacyRevertReadsTheCSVsOperatorDeployment(t *testing.T) {
 	f, c := newFakeAPI(t)
-	serveInTreeDashboardCluster(f, map[string]any{"opendatahub.io/managed": "false", legacyOriginalManagedAnnotation: `{"present":false}`})
+	serveInTreeDashboardCluster(f, map[string]any{"opendatahub.io/managed": "false", dashdev.LegacyOriginalManagedAnnotation: `{"present":false}`})
 	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.4.0"), 200,
 		`{"metadata":{"name":"rhods-operator.3.4.0"},"spec":{"version":"3.4.0","customresourcedefinitions":{"owned":[{"name":"dashboards.components.platform.opendatahub.io"}]},"install":{"spec":{"deployments":[{"name":"renamed-operator"}]}}}}`)
 	f.json("GET", rhoai.NamespacedPath("apps/v1", "deployments", rhoai.SubNS, "renamed-operator"), 200,
 		`{"spec":{"template":{"spec":{"containers":[{"env":[{"name":"RELATED_IMAGE_ODH_DASHBOARD_IMAGE","value":"release-host"}]}]}}}}`)
-	f.json("PATCH", rhoai.NamespacedPath("apps/v1", "deployments", "redhat-ods-applications", dashboardDeploymentName), 200, `{}`)
+	f.json("PATCH", rhoai.NamespacedPath("apps/v1", "deployments", "redhat-ods-applications", dashdev.DeploymentName), 200, `{}`)
 	r, err := RevertDashboardImage(c)
 	if err != nil || !r.Success {
 		t.Fatalf("revert = %+v, %v", r, err)
 	}
-	if w := f.writes(); !slices.Equal(w, []string{"PATCH " + rhoai.NamespacedPath("apps/v1", "deployments", "redhat-ods-applications", dashboardDeploymentName)}) {
+	if w := f.writes(); !slices.Equal(w, []string{"PATCH " + rhoai.NamespacedPath("apps/v1", "deployments", "redhat-ods-applications", dashdev.DeploymentName)}) {
 		t.Fatalf("writes = %v", w)
 	}
 }
@@ -241,7 +242,7 @@ func TestDashboardDevPauseRevertRoundTripOnTheDiscoveredOperator(t *testing.T) {
 	f, c := newDashboardDevFixture(t)
 	mockDashboardTags(t, allFixtureTags("odh-pr-1")...)
 	result := mustDeploy(t, c, "pr", 1, "")
-	if *f.operator.Spec.Replicas != 0 || f.operator.Metadata.Annotations[dashboardDevAnnotation] == "" {
+	if *f.operator.Spec.Replicas != 0 || f.operator.Metadata.Annotations[dashdev.SessionAnnotation] == "" {
 		t.Fatalf("not paused: replicas=%d annotations=%v", *f.operator.Spec.Replicas, f.operator.Metadata.Annotations)
 	}
 	if !strings.Contains(result.Message, fixtureOperatorName+" is paused") || !slices.Contains(result.Logs, "Dashboard Dev recovery information saved; "+fixtureOperatorName+" scaled to 0.") {
@@ -259,7 +260,7 @@ func TestDashboardDevPauseRevertRoundTripOnTheDiscoveredOperator(t *testing.T) {
 	if err != nil || !revert.Success || !strings.Contains(revert.Message, fixtureOperatorName+" restored to 2 replicas") {
 		t.Fatalf("revert = %+v, %v", revert, err)
 	}
-	if *f.operator.Spec.Replicas != 2 || f.operator.Metadata.Annotations[dashboardDevAnnotation] != "" {
+	if *f.operator.Spec.Replicas != 2 || f.operator.Metadata.Annotations[dashdev.SessionAnnotation] != "" {
 		t.Fatalf("not resumed: replicas=%d annotations=%v", *f.operator.Spec.Replicas, f.operator.Metadata.Annotations)
 	}
 	for _, p := range f.patchPaths {
@@ -292,7 +293,7 @@ func TestDashboardDiscoveryCachedForStatusOnly(t *testing.T) {
 	if n := roleReads(); n != 1 {
 		t.Fatalf("three status reads listed ClusterRoles %d times, want 1", n)
 	}
-	if _, err := DashboardDevActive(c); err != nil {
+	if _, err := dashdev.Active(c); err != nil {
 		t.Fatal(err)
 	}
 	if n := roleReads(); n != 2 {
@@ -304,7 +305,7 @@ func TestDashboardDiscoveryCachedForStatusOnly(t *testing.T) {
 // reported as the legacy flow.
 func TestDashboardStatusRediscoversAGoneOperator(t *testing.T) {
 	f, c := newFakeAPI(t)
-	dashboardTargetCache.Add(c.BaseURL(), dashboardTarget{Operator: &components.ModuleOperator{Namespace: fixtureAppsNS, Name: "old-name"}, Namespace: fixtureAppsNS}, dashboardTargetTTL)
+	dashdev.TargetCache.Add(c.BaseURL(), dashdev.Target{Operator: &components.ModuleOperator{Namespace: fixtureAppsNS, Name: "old-name"}, Namespace: fixtureAppsNS}, dashdev.TargetTTL)
 	serveModuleCluster(f)
 	o, err := DashboardOverrideSummary(c)
 	if err != nil || o == nil || o.OperatorName != fixtureOperatorName {

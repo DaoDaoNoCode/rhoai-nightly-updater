@@ -2,6 +2,8 @@ package cluster
 
 import (
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 )
 
 const (
@@ -49,7 +51,7 @@ func TestDashboardBaseURL(t *testing.T) {
 			f, c := newResourceFake(t)
 			f.putJSON(dsciV2List+"/default-dsci", `{"metadata":{"name":"default-dsci"},"spec":{"applicationsNamespace":"redhat-ods-applications"}}`)
 			tc.setup(f)
-			if got := dashboardBaseURL(c); got != tc.want {
+			if got := dashdev.DashboardURL(c); got != tc.want {
 				t.Errorf("dashboardBaseURL = %q, want %q", got, tc.want)
 			}
 		})

@@ -1,4 +1,4 @@
-package cluster
+package dashdev
 
 import (
 	"encoding/json"
@@ -38,8 +38,8 @@ import (
 // refuses: following the legacy flow on a cluster with a dashboard module
 // would patch workloads the module operator resets.
 
-// dashboardTarget is where Dashboard Dev acts.
-type dashboardTarget struct {
+// Target is where Dashboard Dev acts.
+type Target struct {
 	// Operator is the dashboard module's operator; nil on the legacy flow.
 	Operator *components.ModuleOperator
 	// Legacy says why the cluster has no dashboard module ("" when it has).
@@ -49,14 +49,14 @@ type dashboardTarget struct {
 	Namespace string
 }
 
-// dashboardOperatorError: the dashboard module's operator cannot be
+// OperatorError: the dashboard module's operator cannot be
 // identified. Callers refuse to change anything.
-type dashboardOperatorError struct {
+type OperatorError struct {
 	why string
 	err error
 }
 
-func (e *dashboardOperatorError) Error() string {
+func (e *OperatorError) Error() string {
 	reason := e.why
 	if e.err != nil {
 		reason = e.err.Error()
@@ -64,14 +64,14 @@ func (e *dashboardOperatorError) Error() string {
 	return "cannot identify the dashboard module's operator Deployment: " + reason
 }
 
-func (e *dashboardOperatorError) Unwrap() error { return e.err }
+func (e *OperatorError) Unwrap() error { return e.err }
 
-// discoverDashboardTarget identifies the dashboard module's operator, or
+// DiscoverTarget identifies the dashboard module's operator, or
 // that the cluster has none (see above). It always reads the cluster.
-func discoverDashboardTarget(c *Client) (dashboardTarget, error) {
+func DiscoverTarget(c *kube.Client) (Target, error) {
 	api, err := rhoai.DiscoverComponentAPI(c)
 	if err != nil {
-		return dashboardTarget{}, &dashboardOperatorError{err: err}
+		return Target{}, &OperatorError{err: err}
 	}
 	legacy := ""
 	switch _, served := api.KindOf(rhoai.ComponentAPIGroup, "Dashboard"); {
@@ -84,44 +84,44 @@ func discoverDashboardTarget(c *Client) (dashboardTarget, error) {
 		op, why, err := components.NewModuleOperatorFinder(c, func() (rhoai.ComponentAPI, error) { return api, nil }).Find("dashboard", "")
 		switch {
 		case err != nil:
-			return dashboardTarget{}, &dashboardOperatorError{err: err}
+			return Target{}, &OperatorError{err: err}
 		case op == nil:
-			return dashboardTarget{}, &dashboardOperatorError{why: why}
+			return Target{}, &OperatorError{why: why}
 		case !op.RHOAI:
-			return dashboardTarget{Operator: op, Namespace: op.Namespace}, nil
+			return Target{Operator: op, Namespace: op.Namespace}, nil
 		}
 		legacy = "the RHOAI operator reconciles Dashboard itself (" + op.Via + ")"
 	}
 	ns, err := rhoai.AppsNamespace(c)
 	if err != nil && !errors.Is(err, rhoai.ErrNoDSCInitialization) {
-		return dashboardTarget{}, &dashboardOperatorError{err: err}
+		return Target{}, &OperatorError{err: err}
 	}
-	return dashboardTarget{Legacy: legacy, Namespace: ns}, nil
+	return Target{Legacy: legacy, Namespace: ns}, nil
 }
 
-// dashboardTargetTTL bounds how long a status read reuses a discovery.
-// Changes always discover again (loadDashboardOperator fresh).
-const dashboardTargetTTL = 30 * time.Second
+// TargetTTL bounds how long a status read reuses a discovery.
+// Changes always discover again (LoadOperator fresh).
+const TargetTTL = 30 * time.Second
 
-var dashboardTargetCache = kube.NewLRU[string, dashboardTarget](16)
+var TargetCache = kube.NewLRU[string, Target](16)
 
-// cachedDashboardTarget is discoverDashboardTarget for status reads, which
+// cachedDashboardTarget is DiscoverTarget for status reads, which
 // the pages poll: the RBAC lists it reads are large. Errors are not cached.
-func cachedDashboardTarget(c *Client) (dashboardTarget, error) {
+func cachedDashboardTarget(c *kube.Client) (Target, error) {
 	key := c.BaseURL()
-	if t, ok := dashboardTargetCache.Get(key); ok {
+	if t, ok := TargetCache.Get(key); ok {
 		return t, nil
 	}
-	t, err := discoverDashboardTarget(c)
+	t, err := DiscoverTarget(c)
 	if err == nil {
-		dashboardTargetCache.Add(key, t, dashboardTargetTTL)
+		TargetCache.Add(key, t, TargetTTL)
 	}
 	return t, err
 }
 
 // readDashboardOperatorAt reads the operator Deployment ns/name; nil when
 // it does not exist.
-func readDashboardOperatorAt(c *Client, ns, name string) (*dashboardDeployment, error) {
+func readDashboardOperatorAt(c *kube.Client, ns, name string) (*Deployment, error) {
 	body, status, err := c.Get(rhoai.NamespacedPath("apps/v1", "deployments", ns, name))
 	if status == http.StatusNotFound {
 		return nil, nil
@@ -129,7 +129,7 @@ func readDashboardOperatorAt(c *Client, ns, name string) (*dashboardDeployment, 
 	if err != nil {
 		return nil, err
 	}
-	var d dashboardDeployment
+	var d Deployment
 	if err := json.Unmarshal(body, &d); err != nil {
 		return nil, err
 	}
@@ -141,14 +141,14 @@ func readDashboardOperatorAt(c *Client, ns, name string) (*dashboardDeployment, 
 	return &d, nil
 }
 
-// loadDashboardOperator discovers where Dashboard Dev acts and reads the
+// LoadOperator discovers where Dashboard Dev acts and reads the
 // operator Deployment. On the legacy flow operator is nil and err is nil.
 // fresh: discover again (every change); otherwise a status read may reuse
 // a recent discovery, and discovers again when its Deployment is gone.
-func loadDashboardOperator(c *Client, fresh bool) (dashboardTarget, *dashboardDeployment, error) {
+func LoadOperator(c *kube.Client, fresh bool) (Target, *Deployment, error) {
 	discover := cachedDashboardTarget
 	if fresh {
-		discover = discoverDashboardTarget
+		discover = DiscoverTarget
 	}
 	t, err := discover(c)
 	if err != nil || t.Operator == nil {
@@ -159,11 +159,11 @@ func loadDashboardOperator(c *Client, fresh bool) (dashboardTarget, *dashboardDe
 		return t, nil, err
 	}
 	if d == nil {
-		dashboardTargetCache.Remove(c.BaseURL())
+		TargetCache.Remove(c.BaseURL())
 		if !fresh {
-			return loadDashboardOperator(c, true)
+			return LoadOperator(c, true)
 		}
-		return t, nil, &dashboardOperatorError{why: fmt.Sprintf("Deployment %s was identified but no longer exists; the RHOAI platform recreates it, retry then", t.Operator.Ref())}
+		return t, nil, &OperatorError{why: fmt.Sprintf("Deployment %s was identified but no longer exists; the RHOAI platform recreates it, retry then", t.Operator.Ref())}
 	}
 	return t, d, nil
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -130,7 +131,7 @@ func TestUpdateGitOpsProfile_RefusesAMissingOperatorGroup(t *testing.T) {
 // Deployments, which the profile cannot do.
 func TestUpdateGitOpsProfile_RefusesADashboardDevSession(t *testing.T) {
 	f := servesGitOpsPolicy(t, gitOpsFake(t))
-	f.dashboardOp = `{"metadata":{"uid":"u1","annotations":{"` + dashboardDevAnnotation + `":"{}"}},"spec":{"replicas":0}}`
+	f.dashboardOp = `{"metadata":{"uid":"u1","annotations":{"` + dashdev.SessionAnnotation + `":"{}"}},"spec":{"replicas":0}}`
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != errorCodeDashboardDevActive || !strings.Contains(result.Message, "full profile") || !strings.Contains(result.Message, "scale Deployment "+fixtureAppsNS+"/"+fixtureOperatorName+" back up") {
 		t.Fatalf("result=%+v err=%v", result, err)

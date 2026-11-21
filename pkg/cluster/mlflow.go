@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -50,7 +51,7 @@ var (
 	// (cri-o internal/storage/image_test.go "with tag and digest"). Tests
 	// replace it.
 	resolveMLflowPRImage = func(ctx context.Context, pr int) (string, bool, error) {
-		return resolveDashboardBuild(ctx, mlflowImageRepo, fmt.Sprintf("odh-pr-%d", pr))
+		return dashdev.ResolveBuild(ctx, mlflowImageRepo, fmt.Sprintf("odh-pr-%d", pr))
 	}
 )
 
@@ -82,15 +83,15 @@ type mlflowCR struct {
 // https URL, else the Route named "mlflow" (releases before the gateway).
 //
 // The address goes into the client settings users paste into a shell, so
-// only a plain https address (snippetURL) is used.
+// only a plain https address (kube.SnippetURL) is used.
 func mlflowUIURL(statusURL, routeHost string) string {
 	if u, err := url.Parse(strings.TrimSpace(statusURL)); err == nil && u.Scheme == "https" && u.Host != "" {
-		if s := strings.TrimRight(u.String(), "/"); snippetURL(s) {
+		if s := strings.TrimRight(u.String(), "/"); kube.SnippetURL(s) {
 			return s
 		}
 		return ""
 	}
-	if routeHost != "" && snippetURL("https://"+routeHost) {
+	if routeHost != "" && kube.SnippetURL("https://"+routeHost) {
 		return "https://" + routeHost
 	}
 	return ""
@@ -256,7 +257,7 @@ func getMLflowStatus(c *Client) types.ResourceState {
 		defer wg.Done()
 		// The Route only matters on releases whose CR reports no URL.
 		if mlflowUIURL(cr.Status.URL, "") == "" {
-			host = routeHost(c, ns, "mlflow")
+			host = rhoai.RouteHost(c, ns, "mlflow")
 		}
 	}()
 	go func() {

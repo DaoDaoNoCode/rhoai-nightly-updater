@@ -13,6 +13,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/node"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
@@ -473,7 +474,7 @@ func updateVerifyTarget(c *Client, image string, chk *updateChecks, logs *[]stri
 	}
 	if revertDashboard {
 		emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Ending the Dashboard Dev session..."})
-		if err := RevertDashboardDevForOperation(c); err != nil {
+		if err := dashdev.RevertForOperation(c); err != nil {
 			return fail("Could not end the Dashboard Dev session, so the update was not started: "+err.Error(), errorCodeDashboardDevActive)
 		}
 		*logs = append(*logs, "OK: Dashboard Dev session ended; the dashboard operator is running again")
@@ -725,7 +726,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 	// --- Dry-run path: read-only checks plus server-side dry-run applies ---
 	logs := []string{}
 
-	if active, err := DashboardDevActive(c); err == nil && active {
+	if active, err := dashdev.Active(c); err == nil && active {
 		logs = append(logs, "[DRY-RUN] WARNING: A Dashboard Dev session is active. Update refuses to run unless it is asked to end the session first (revertDashboardDev).")
 	} else if note := dashboardPRNote(c); note != "" {
 		logs = append(logs, "[DRY-RUN] "+note)
@@ -1219,7 +1220,7 @@ func reinstallCaptureRecovery(c *Client, rs *reinstallChecks, logs *[]string, em
 	}
 	if revertDashboard {
 		emit(UpdateStepEvent{Step: "validate_target", Status: "running", Message: "Ending the Dashboard Dev session..."})
-		if err := RevertDashboardDevForOperation(c); err != nil {
+		if err := dashdev.RevertForOperation(c); err != nil {
 			return fail("Could not end the Dashboard Dev session, so the install was not started: "+err.Error(), errorCodeDashboardDevActive)
 		}
 		*logs = append(*logs, "OK: Dashboard Dev session ended; the dashboard operator is running again")
@@ -1742,7 +1743,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 		logs = append(logs, fmt.Sprintf("OK: channel %s still installs %s", sub.Channel, target))
 	}
 	if revertDashboard {
-		if err := RevertDashboardDevForOperation(c); err != nil {
+		if err := dashdev.RevertForOperation(c); err != nil {
 			return fail("Could not end the Dashboard Dev session, so the refresh was not started: "+err.Error(), errorCodeDashboardDevActive)
 		}
 		logs = append(logs, "OK: Dashboard Dev session ended; the dashboard operator is running again")

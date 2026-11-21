@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 )
@@ -170,9 +171,9 @@ func installFakeRegistry(t *testing.T, f *fakeRegistry) {
 
 func resetRegistryCaches() {
 	registry.ResetCachesForTest()
-	divergenceCache.Purge()
-	dashboardPRCache.Purge()
-	dashboardTagCache.Purge()
+	dashdev.DivergenceCache.Purge()
+	dashdev.PRCache.Purge()
+	dashdev.TagCache.Purge()
 }
 
 func digestOf(n int) string { return fmt.Sprintf("sha256:%064d", n) }

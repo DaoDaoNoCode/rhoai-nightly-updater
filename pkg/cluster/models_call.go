@@ -338,7 +338,7 @@ func callModelDirectly(c *Client, model llmisvcObject, project, name, served, ty
 		switch {
 		case model.Status.URL == "":
 			check = types.ModelCallCheck{Result: "not-checked", Message: "Not checked: KServe reports no address for the model yet."}
-		case !snippetURL(model.Status.URL):
+		case !kube.SnippetURL(model.Status.URL):
 			check = types.ModelCallCheck{Result: "not-checked", Message: "Not checked: " + unsafeAddressWarning("model address")}
 		default:
 			token, err := readModelToken(c, project, name, rec[modelRecordKey(project, name)].TokenSecretUID)

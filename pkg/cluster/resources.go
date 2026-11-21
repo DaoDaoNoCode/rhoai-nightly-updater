@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -467,7 +468,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	go func() { defer wg.Done(); status.MinIO, s3EP, s3EPErr = s3StatusAndEndpoints(c) }()
 	go func() { defer wg.Done(); legacy, foreignNS, legacyErr = readLegacyStorageOwner(c) }()
 	go func() { defer wg.Done(); status.MLflow = getMLflowStatus(c) }()
-	go func() { defer wg.Done(); dashURL = dashboardBaseURL(c) }()
+	go func() { defer wg.Done(); dashURL = dashdev.DashboardURL(c) }()
 	go func() { defer wg.Done(); dsc, dscErr = rhoai.ReadFirstDSC(c) }()
 	wg.Wait()
 	if projectsErr != nil {
@@ -584,19 +585,6 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		}
 	}
 	return status, nil
-}
-
-// routeHost returns a route's host, or "" when it cannot be read.
-func routeHost(c *Client, namespace, name string) string {
-	var route struct {
-		Spec struct {
-			Host string `json:"host"`
-		} `json:"spec"`
-	}
-	if c.GetInto(rhoai.NamespacedPath("route.openshift.io/v1", "routes", namespace, name), &route) != nil {
-		return ""
-	}
-	return route.Spec.Host
 }
 
 // GetDSProjects returns namespaces with the opendatahub.io/dashboard label.

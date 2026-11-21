@@ -1,4 +1,4 @@
-package cluster
+package dashdev
 
 import (
 	"errors"
@@ -13,16 +13,16 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// revertDashboardOperatorTo returns the dashboard to operator management
+// RevertOperatorTo returns the dashboard to operator management
 // from any state: with or without a session, with a corrupt session, after
 // RHOAI was updated, and after a partial deploy. Resuming the operator is
 // enough: the dashboard module's operator applies its manifests with
 // server-side apply and ForceOwnership (odh-platform-utilities pkg/deploy),
 // which takes the image fields back and rolls every workload to the
 // installed release. Repeating it is safe. target names the operator
-// (discoverDashboardTarget). It also returns the replica count it resumed
+// (DiscoverTarget). It also returns the replica count it resumed
 // the operator to (0 when it could not resume it).
-func revertDashboardOperatorTo(c *Client, target dashboardTarget) (*types.OperationResponse, int) {
+func RevertOperatorTo(c *kube.Client, target Target) (*types.OperationResponse, int) {
 	dashboardDevMu.Lock()
 	defer dashboardDevMu.Unlock()
 	var logs []string
@@ -47,7 +47,7 @@ func revertDashboardOperatorTo(c *Client, target dashboardTarget) (*types.Operat
 		if operator == nil {
 			return fail("Deployment "+ns+"/"+name+" not found. The RHOAI platform recreates it with its default replica count; retry Revert to default once it exists.", "prerequisites")
 		}
-		session, sessionErr := dashboardSession(operator)
+		session, sessionErr := SessionOf(operator)
 		replicas := dashboardOperatorReplicas(operator)
 		switch {
 		case session != nil:
@@ -57,7 +57,7 @@ func revertDashboardOperatorTo(c *Client, target dashboardTarget) (*types.Operat
 			if sessionErr != nil {
 				reason = sessionErr.Error()
 			}
-			replicas = dashboardOperatorDefaultReplicas
+			replicas = OperatorDefaultReplicas
 			logs = append(logs, fmt.Sprintf("Original replica count unknown (%s); resuming with the chart default of %d.", reason, replicas))
 		}
 		if session != nil {
@@ -67,7 +67,7 @@ func revertDashboardOperatorTo(c *Client, target dashboardTarget) (*types.Operat
 		}
 		// Keep a valid session while workload annotations still need cleanup
 		// so the page keeps offering Revert. A corrupt one is dropped.
-		var keep *dashboardDevSession
+		var keep *Session
 		if len(failures) > 0 {
 			keep = session
 		}
@@ -92,7 +92,7 @@ func revertDashboardOperatorTo(c *Client, target dashboardTarget) (*types.Operat
 	}
 }
 
-// DashboardDevActive reports whether the dashboard is overridden: the
+// Active reports whether the dashboard is overridden: the
 // dashboard module's operator is paused (by Dashboard Dev or otherwise), a
 // session or a corrupt session annotation exists, or a Dashboard-owned
 // workload carries opendatahub.io/managed. On a cluster without a
@@ -101,15 +101,15 @@ func revertDashboardOperatorTo(c *Client, target dashboardTarget) (*types.Operat
 // rhods-dashboard. Without a DSCInitialization there is no dashboard, so
 // nothing is active. When the operator cannot be identified it returns an
 // error: callers refuse rather than assume either flow.
-func DashboardDevActive(c *Client) (bool, error) {
-	active, _, err := dashboardDevActive(c)
+func Active(c *kube.Client) (bool, error) {
+	active, _, err := ActiveOperator(c)
 	return active, err
 }
 
-// dashboardDevActive is DashboardDevActive; operator is the dashboard
+// ActiveOperator is Active; operator is the dashboard
 // module's operator Deployment (namespace/name, "" on the legacy flow).
-func dashboardDevActive(c *Client) (active bool, operator string, err error) {
-	target, op, err := loadDashboardOperator(c, true)
+func ActiveOperator(c *kube.Client) (active bool, operator string, err error) {
+	target, op, err := LoadOperator(c, true)
 	if errors.Is(err, rhoai.ErrNoDSCInitialization) {
 		return false, "", nil
 	}
@@ -124,7 +124,7 @@ func dashboardDevActive(c *Client) (active bool, operator string, err error) {
 		return active, "", err
 	}
 	if dashboardOverrideFromOperator(op).Active {
-		return true, op.ref(), nil
+		return true, op.Ref(), nil
 	}
 	items, err := listDashboardNamespaceDeployments(c, op.Metadata.Namespace)
 	if err != nil {
@@ -132,36 +132,36 @@ func dashboardDevActive(c *Client) (active bool, operator string, err error) {
 	}
 	for _, d := range items {
 		if _, ok := d.Metadata.Annotations["opendatahub.io/managed"]; ok && d.Metadata.UID != op.Metadata.UID && dashboardOwner(d) != "" {
-			return true, op.ref(), nil
+			return true, op.Ref(), nil
 		}
 	}
-	return false, op.ref(), nil
+	return false, op.Ref(), nil
 }
 
-// pausedOperatorText names what a Dashboard Dev session pauses, for
+// PausedOperatorText names what a Dashboard Dev session pauses, for
 // messages: "Deployment ns/name is paused", or the legacy flow's patch.
-func pausedOperatorText(operator string) string {
+func PausedOperatorText(operator string) string {
 	if operator == "" {
-		return dashboardDeploymentName + " runs a PR build without operator management"
+		return DeploymentName + " runs a PR build without operator management"
 	}
 	return "Deployment " + operator + " is paused"
 }
 
-func legacyDashboardDevActive(c *Client, ns string) (bool, error) {
-	var d dashboardDeployment
-	found, err := c.GetIntoOptional(rhoai.NamespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName), &d)
+func legacyDashboardDevActive(c *kube.Client, ns string) (bool, error) {
+	var d Deployment
+	found, err := c.GetIntoOptional(rhoai.NamespacedPath("apps/v1", "deployments", ns, DeploymentName), &d)
 	if err != nil {
 		return false, err
 	}
 	if !found {
 		return false, nil
 	}
-	if _, saved := d.Metadata.Annotations[legacyOriginalManagedAnnotation]; saved || d.Metadata.Annotations["opendatahub.io/managed"] == "false" {
+	if _, saved := d.Metadata.Annotations[LegacyOriginalManagedAnnotation]; saved || d.Metadata.Annotations["opendatahub.io/managed"] == "false" {
 		return true, nil
 	}
 	for _, ct := range d.Spec.Template.Spec.Containers {
-		if repo, ok := prContainerRepos[ct.Name]; ok {
-			if kind, _, _ := parseDashboardBuild(repo, ct.Image); kind != "" {
+		if repo, ok := PRContainerRepos[ct.Name]; ok {
+			if kind, _, _ := ParseBuild(repo, ct.Image); kind != "" {
 				return true, nil
 			}
 		}
@@ -169,33 +169,33 @@ func legacyDashboardDevActive(c *Client, ns string) (bool, error) {
 	return false, nil
 }
 
-// Bounds for RevertDashboardDevForOperation; variables so tests can shorten them.
+// Bounds for RevertForOperation; variables so tests can shorten them.
 var (
 	dashboardOperatorReadyTimeout = 3 * time.Minute
 	dashboardOperatorPollInterval = 2 * time.Second
 )
 
-// RevertDashboardDevForOperation returns the dashboard to operator management
+// RevertForOperation returns the dashboard to operator management
 // before an operation that needs a working dashboard operator (RHOAI update,
 // reinstall, refresh, dashboard removal, uninstall): with the operator paused,
 // a Dashboard CR deletion never completes and RHOAI updates do not reach the
 // dashboard. It does nothing when no override is active, otherwise reverts and
 // waits, bounded by dashboardOperatorReadyTimeout and the client's context,
 // until the operator is scaled up and Ready. Safe to repeat from any state.
-func RevertDashboardDevForOperation(c *Client) error {
-	active, err := DashboardDevActive(c)
+func RevertForOperation(c *kube.Client) error {
+	active, err := Active(c)
 	if err != nil {
 		return fmt.Errorf("check Dashboard Dev state: %w", err)
 	}
 	if !active {
 		return nil
 	}
-	target, err := discoverDashboardTarget(c)
+	target, err := DiscoverTarget(c)
 	if err != nil {
 		return err
 	}
 	if target.Operator == nil {
-		result, err := RevertDashboardImage(c)
+		result, err := Revert(c)
 		if err != nil {
 			return fmt.Errorf("revert legacy dashboard override: %w", err)
 		}
@@ -204,14 +204,14 @@ func RevertDashboardDevForOperation(c *Client) error {
 		}
 		return nil
 	}
-	result, replicas := revertDashboardOperatorTo(c, target)
+	result, replicas := RevertOperatorTo(c, target)
 	if !result.Success {
 		return fmt.Errorf("revert Dashboard Dev: %s", result.Message)
 	}
 	return waitDashboardOperatorReady(c, target.Operator.Namespace, target.Operator.Name, replicas)
 }
 
-func waitDashboardOperatorReady(c *Client, ns, name string, replicas int) error {
+func waitDashboardOperatorReady(c *kube.Client, ns, name string, replicas int) error {
 	ctx, cancel := kube.Clock().WithTimeout(c.Context(), dashboardOperatorReadyTimeout)
 	defer cancel()
 	reader := c.WithContext(ctx)
@@ -225,7 +225,7 @@ func waitDashboardOperatorReady(c *Client, ns, name string, replicas int) error 
 			last = "Deployment " + ns + "/" + name + " not found"
 		case dashboardOperatorReplicas(operator) == 0:
 			return fmt.Errorf("%s was paused again while waiting for it to resume", name)
-		case dashboardDeploymentReady(*operator):
+		case DeploymentReady(*operator):
 			if got := dashboardOperatorReplicas(operator); got != replicas {
 				slog.Info("dashboard operator ready with a different replica count than restored", "deployment", ns+"/"+name, "restored", replicas, "current", got)
 			}

@@ -9,6 +9,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/node"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
@@ -74,7 +75,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	}
 	logs = append(logs, fmt.Sprintf("OK: %s manages CatalogSource %s", kube.SentenceStart(g.CatalogManager()), rhoai.CatalogName))
 
-	active, operator, err := dashboardDevActive(c)
+	active, operator, err := dashdev.ActiveOperator(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Cannot check for a Dashboard Dev session: %v. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err))
 	}
@@ -83,7 +84,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 		if operator != "" {
 			end += ", or scale Deployment " + operator + " back up"
 		}
-		return fail("A Dashboard Dev session is active ("+pausedOperatorText(operator)+"), and Update would keep the dashboard paused under the new operator. "+
+		return fail("A Dashboard Dev session is active ("+dashdev.PausedOperatorText(operator)+"), and Update would keep the dashboard paused under the new operator. "+
 			"The gitops profile cannot end the session: "+end+". Nothing was changed.", errorCodeDashboardDevActive)
 	}
 
@@ -229,7 +230,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 		return fail(gitOpsProfileUnmanagedCatalog, kube.ErrorCodeProfileGitOps)
 	}
 	logs = append(logs, fmt.Sprintf("OK: %s manages CatalogSource %s", kube.SentenceStart(g.CatalogManager()), rhoai.CatalogName))
-	if active, err := DashboardDevActive(c); err == nil && active {
+	if active, err := dashdev.Active(c); err == nil && active {
 		logs = append(logs, "[DRY-RUN] WARNING: A Dashboard Dev session is active. Update refuses to run while it is (the gitops profile cannot end it).")
 	}
 	logs = append(logs, gitOpsProfileNoPullSecret)

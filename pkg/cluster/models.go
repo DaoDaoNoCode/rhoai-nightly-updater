@@ -352,7 +352,7 @@ func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) type
 	s.Terminating = m.Metadata.Terminating()
 	s.DisplayName = m.Metadata.Annotations["openshift.io/display-name"]
 	if m.Status.URL != "" {
-		if snippetURL(m.Status.URL) {
+		if kube.SnippetURL(m.Status.URL) {
 			s.URL = m.Status.URL
 		} else {
 			s.Warning = unsafeAddressWarning("model address")

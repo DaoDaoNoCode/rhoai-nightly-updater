@@ -13,6 +13,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/node"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
@@ -345,7 +346,7 @@ func cachedDashboardURL(c *Client) string {
 	if u, ok := dashboardURLCache.Get(c.BaseURL()); ok {
 		return u
 	}
-	u, err := readDashboardURLFromComponent(c)
+	u, err := dashdev.ReadComponentURL(c)
 	ttl := dashboardURLTTL
 	if err != nil {
 		slog.Debug("cannot read the dashboard URL", "error", err)

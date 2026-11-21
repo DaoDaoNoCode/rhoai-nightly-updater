@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 )
 
 func TestGetDashboardState_NoPR(t *testing.T) {
@@ -233,12 +235,12 @@ func TestPRContainerRepos_Entries(t *testing.T) {
 		"core-bff",
 	}
 	for _, name := range expectedContainers {
-		if _, ok := prContainerRepos[name]; !ok {
+		if _, ok := dashdev.PRContainerRepos[name]; !ok {
 			t.Errorf("prContainerRepos missing container %q", name)
 		}
 	}
-	if len(prContainerRepos) != len(expectedContainers) {
-		t.Errorf("expected %d entries in prContainerRepos, got %d", len(expectedContainers), len(prContainerRepos))
+	if len(dashdev.PRContainerRepos) != len(expectedContainers) {
+		t.Errorf("expected %d entries in prContainerRepos, got %d", len(expectedContainers), len(dashdev.PRContainerRepos))
 	}
 }
 
@@ -357,13 +359,13 @@ func TestGetDashboardState_RolloutPending(t *testing.T) {
 }
 
 func TestContainerEnvVarMap_MatchesPRContainerRepos(t *testing.T) {
-	for name := range prContainerRepos {
-		if _, ok := containerEnvVarMap[name]; !ok {
+	for name := range dashdev.PRContainerRepos {
+		if _, ok := dashdev.ContainerEnvVars[name]; !ok {
 			t.Errorf("containerEnvVarMap missing entry for container %q (present in prContainerRepos)", name)
 		}
 	}
-	for name := range containerEnvVarMap {
-		if _, ok := prContainerRepos[name]; !ok {
+	for name := range dashdev.ContainerEnvVars {
+		if _, ok := dashdev.PRContainerRepos[name]; !ok {
 			t.Errorf("prContainerRepos missing entry for container %q (present in containerEnvVarMap)", name)
 		}
 	}
@@ -646,7 +648,7 @@ func TestGetDashboardPods_URLEncodesLabelSelector(t *testing.T) {
 		"deployment":                "rhods-dashboard",
 	}
 
-	getDashboardPods(client, "redhat-ods-applications", dashboardDeploymentName, "", labels)
+	dashdev.Pods(client, "redhat-ods-applications", dashdev.DeploymentName, "", labels)
 
 	if capturedRawQuery == "" {
 		t.Fatal("expected pods request to be made, but no query was captured")
@@ -699,7 +701,7 @@ func TestIsStandaloneMode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isStandaloneMode(tt.containers)
+			got := dashdev.IsStandaloneMode(tt.containers)
 			if got != tt.want {
 				t.Errorf("isStandaloneMode(%v) = %v, want %v", tt.containers, got, tt.want)
 			}
@@ -948,12 +950,12 @@ func TestModuleContainers_MatchesModuleRegistry(t *testing.T) {
 		"agent-ops-ui",
 	}
 	for _, name := range expectedModules {
-		if !moduleContainers[name] {
+		if !dashdev.ModuleContainers[name] {
 			t.Errorf("moduleContainers missing %q", name)
 		}
 	}
-	if len(moduleContainers) != len(expectedModules) {
-		t.Errorf("expected %d entries in moduleContainers, got %d", len(expectedModules), len(moduleContainers))
+	if len(dashdev.ModuleContainers) != len(expectedModules) {
+		t.Errorf("expected %d entries in moduleContainers, got %d", len(expectedModules), len(dashdev.ModuleContainers))
 	}
 }
 
@@ -961,7 +963,7 @@ func TestModuleContainers_MatchesModuleRegistry(t *testing.T) {
 // a pod-template-hash label and its ReplicaSet "<deployment>-<hash>" as the
 // controlling owner (the hash is the pod's name, unique per fixture).
 func ownedByReplicaSets(podList map[string]any) map[string]any {
-	deployment := dashboardDeploymentName
+	deployment := dashdev.DeploymentName
 	for _, item := range podList["items"].([]any) {
 		meta := item.(map[string]any)["metadata"].(map[string]any)
 		name := meta["name"].(string)

@@ -1,4 +1,4 @@
-package cluster
+package dashdev
 
 // GET /api/dashboard/builds: the commit of every PR or main build a dashboard
 // container runs, how far it is from the branch it tracks, and whether the
@@ -43,13 +43,13 @@ const (
 	dashboardFloatingTagTTL = time.Minute
 )
 
-// dashboardPRHeadTTL is how long an open or closed PR's head is reused;
+// PRHeadTTL is how long an open or closed PR's head is reused;
 // merged PRs are kept for good. (A var for tests.)
-var dashboardPRHeadTTL = 5 * time.Minute
+var PRHeadTTL = 5 * time.Minute
 
-// dashboardBuildContainerTimeout bounds one container's registry and GitHub
+// BuildContainerTimeout bounds one container's registry and GitHub
 // reads; a variable so tests can shorten it.
-var dashboardBuildContainerTimeout = 10 * time.Second
+var BuildContainerTimeout = 10 * time.Second
 
 // divergenceResult is how a build commit relates to a base commit.
 type divergenceResult struct {
@@ -66,32 +66,32 @@ type dashboardTagResolution struct {
 }
 
 var (
-	divergenceCache    = kube.NewLRU[string, divergenceResult](2048)
+	DivergenceCache    = kube.NewLRU[string, divergenceResult](2048)
 	divergenceFlight   kube.FlightGroup[divergenceResult]
-	dashboardPRCache   = kube.NewLRU[string, registry.PullRequest](256)
+	PRCache            = kube.NewLRU[string, registry.PullRequest](256)
 	dashboardPRFlight  kube.FlightGroup[registry.PullRequest]
-	dashboardTagCache  = kube.NewLRU[string, dashboardTagResolution](256)
+	TagCache           = kube.NewLRU[string, dashboardTagResolution](256)
 	dashboardTagFlight kube.FlightGroup[dashboardTagResolution]
 )
 
-// GetDashboardBuilds reads the dashboard state and describes the build of
+// Builds reads the dashboard state and describes the build of
 // every container that runs a PR or main build. Errors are those of
-// GetDashboardState (DashboardStateError maps them).
-func GetDashboardBuilds(c *Client) (*types.DashboardBuildsResponse, error) {
-	state, err := GetDashboardState(c)
+// State (StateError maps them).
+func Builds(c *kube.Client) (*types.DashboardBuildsResponse, error) {
+	state, err := State(c)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(c.Context(), dashboardBuildsTimeout)
 	defer cancel()
-	return dashboardBuilds(ctx, state.DevImages), nil
+	return BuildsOf(ctx, state.DevImages), nil
 }
 
-// dashboardBuilds describes the PR and main builds among images, in their
+// BuildsOf describes the PR and main builds among images, in their
 // order. Containers are checked concurrently, each within
-// dashboardBuildContainerTimeout, so one slow registry read does not hold
+// BuildContainerTimeout, so one slow registry read does not hold
 // up the others.
-func dashboardBuilds(ctx context.Context, images []types.DashboardDevImage) *types.DashboardBuildsResponse {
+func BuildsOf(ctx context.Context, images []types.DashboardDevImage) *types.DashboardBuildsResponse {
 	resp := &types.DashboardBuildsResponse{Builds: []types.DashboardContainerBuild{}}
 	var selected []types.DashboardDevImage
 	for _, image := range images {
@@ -125,7 +125,7 @@ func dashboardBuilds(ctx context.Context, images []types.DashboardDevImage) *typ
 				resp.Builds[i].Reason, resp.Builds[i].Message = "registry_error", "The request timed out before this container was checked."
 				return
 			}
-			containerCtx, cancel := context.WithTimeout(ctx, dashboardBuildContainerTimeout)
+			containerCtx, cancel := context.WithTimeout(ctx, BuildContainerTimeout)
 			defer cancel()
 			resp.Builds[i] = dashboardContainerBuild(containerCtx, image, noteRateLimit)
 		})
@@ -141,7 +141,7 @@ func dashboardBuildOf(image types.DashboardDevImage) types.DashboardContainerBui
 // dashboardFloatingTag is the tag a build of this kind and flavour is deployed
 // from: odh-stable or odh-pr-N for the RHOAI build, main or pr-N for the ODH build.
 func dashboardFloatingTag(running string, pr int, flavor string) string {
-	return dashboardBuildTags(running, pr, flavor)[0]
+	return BuildTags(running, pr, flavor)[0]
 }
 
 // dashboardContainerBuild describes one container's build: its commit from
@@ -188,7 +188,7 @@ func dashboardContainerBuild(ctx context.Context, image types.DashboardDevImage,
 		switch githubRepo, ok := registry.GitHubRepoFromURL(labels.GitURL); {
 		case !registry.CommitSHAPattern.MatchString(commit):
 			out.Reason, out.Message = "no_commit_label", "The image has no commit label."
-			if image.Running == "pr" && image.Flavor == DashboardFlavorODH {
+			if image.Running == "pr" && image.Flavor == FlavorODH {
 				// OpenShift CI leaves vcs-ref empty on PR builds (not on main builds).
 				out.Message = "ODH PR builds carry no commit label, so the commit cannot be shown; the RHOAI build of the PR has one."
 			}
@@ -203,7 +203,7 @@ func dashboardContainerBuild(ctx context.Context, image types.DashboardDevImage,
 			// every commit of it, lives in the upstream repository.
 			gitURL := labels.GitURL
 			if image.Running == "pr" {
-				githubRepo = DefaultPRSearchRepo
+				githubRepo = registry.DefaultPRSearchRepo
 				gitURL = "https://github.com/" + githubRepo
 			}
 			out.Commit, out.BuildDate, out.Repo = commit, labels.BuildDate, githubRepo
@@ -248,23 +248,23 @@ func dashboardContainerBuild(ctx context.Context, image types.DashboardDevImage,
 	return out
 }
 
-// resolveDashboardBuildCached is resolveDashboardBuild with the answer kept
+// resolveDashboardBuildCached is ResolveBuild with the answer kept
 // for dashboardFloatingTagTTL and concurrent lookups shared.
 func resolveDashboardBuildCached(ctx context.Context, repo, tag string) (dashboardTagResolution, error) {
 	key := repo + ":" + tag
-	if v, ok := dashboardTagCache.Get(key); ok {
+	if v, ok := TagCache.Get(key); ok {
 		return v, nil
 	}
 	v, err, _ := dashboardTagFlight.Do(ctx, key, func(ctx context.Context) (dashboardTagResolution, error) {
-		if v, ok := dashboardTagCache.Get(key); ok {
+		if v, ok := TagCache.Get(key); ok {
 			return v, nil
 		}
-		image, found, err := resolveDashboardBuild(ctx, repo, tag)
+		image, found, err := ResolveBuild(ctx, repo, tag)
 		if err != nil {
 			return dashboardTagResolution{}, err
 		}
 		v := dashboardTagResolution{image: image, found: found}
-		dashboardTagCache.Add(key, v, dashboardFloatingTagTTL)
+		TagCache.Add(key, v, dashboardFloatingTagTTL)
 		return v, nil
 	})
 	return v, err
@@ -337,26 +337,26 @@ func dashboardGitHubFailed(err error, noteRateLimit func(time.Time), d *types.Da
 }
 
 // lookupPRHead reads a pull request for its head commit and state. Open and
-// closed PRs are reused for dashboardPRHeadTTL (a closed PR can be reopened
+// closed PRs are reused for PRHeadTTL (a closed PR can be reopened
 // and pushed to); merged ones for good.
 func lookupPRHead(ctx context.Context, repo string, number int) (registry.PullRequest, error) {
 	key := fmt.Sprintf("%s#%d", repo, number)
-	if info, ok := dashboardPRCache.Get(key); ok {
+	if info, ok := PRCache.Get(key); ok {
 		return info, nil
 	}
 	info, err, _ := dashboardPRFlight.Do(ctx, key, func(ctx context.Context) (registry.PullRequest, error) {
-		if info, ok := dashboardPRCache.Get(key); ok {
+		if info, ok := PRCache.Get(key); ok {
 			return info, nil
 		}
 		info, err := registry.FetchPullRequest(ctx, repo, number)
 		if err != nil {
 			return registry.PullRequest{}, err
 		}
-		ttl := dashboardPRHeadTTL
+		ttl := PRHeadTTL
 		if !info.NotFound && info.Merged {
 			ttl = 0
 		}
-		dashboardPRCache.Add(key, info, ttl)
+		PRCache.Add(key, info, ttl)
 		return info, nil
 	})
 	return info, err
@@ -369,11 +369,11 @@ func lookupPRHead(ctx context.Context, repo string, number int) (registry.PullRe
 // commit GitHub does not know is remembered for compareNegativeTTL.
 func compareDivergence(ctx context.Context, repo, base, head string) (divergenceResult, error) {
 	key := repo + "|" + base + "|" + head
-	if v, ok := divergenceCache.Get(key); ok {
+	if v, ok := DivergenceCache.Get(key); ok {
 		return v, nil
 	}
 	v, err, _ := divergenceFlight.Do(ctx, key, func(ctx context.Context) (divergenceResult, error) {
-		if v, ok := divergenceCache.Get(key); ok {
+		if v, ok := DivergenceCache.Get(key); ok {
 			return v, nil
 		}
 		// Page 2 of one commit per page carries the status and the counts
@@ -390,7 +390,7 @@ func compareDivergence(ctx context.Context, repo, base, head string) (divergence
 		switch {
 		case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusUnprocessableEntity:
 			v := divergenceResult{notFound: true, checkedAt: time.Now()}
-			divergenceCache.Add(key, v, registry.CompareNegativeTTL)
+			DivergenceCache.Add(key, v, registry.CompareNegativeTTL)
 			return v, nil
 		case resp.StatusCode != http.StatusOK:
 			return divergenceResult{}, fmt.Errorf("GitHub compare returned %d", resp.StatusCode)
@@ -414,7 +414,7 @@ func compareDivergence(ctx context.Context, repo, base, head string) (divergence
 		default:
 			return divergenceResult{}, fmt.Errorf("unexpected compare status %q", cmp.Status)
 		}
-		divergenceCache.Add(key, v, 0)
+		DivergenceCache.Add(key, v, 0)
 		return v, nil
 	})
 	return v, err

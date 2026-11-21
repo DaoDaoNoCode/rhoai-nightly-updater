@@ -1117,7 +1117,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		r.blockers = append(r.blockers, kube.SentenceStart(r.infraErr.Error())+".")
 	}
 	domain, _ := clusterAppsDomain(c)
-	if u := "https://" + maasHostPrefix + domain; domain != "" && snippetURL(u) {
+	if u := "https://" + maasHostPrefix + domain; domain != "" && kube.SnippetURL(u) {
 		st.URL = u
 	}
 	rhcl, cnpg, cnpgReadErr, kVersion, kvErr := r.statusRHCL()
@@ -1323,7 +1323,7 @@ func (r *maasStatusRun) statusGateway() {
 			gwPart.State, gwPart.Message = "waiting", "Waiting for its load balancer"
 		}
 		if !gw.owned {
-			if h := gw.gw.externalHost(); h != "" && snippetURL("https://"+h) {
+			if h := gw.gw.externalHost(); h != "" && kube.SnippetURL("https://"+h) {
 				st.URL = "https://" + h
 			}
 		}

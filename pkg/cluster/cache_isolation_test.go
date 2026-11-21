@@ -54,7 +54,7 @@ func TestResetClusterCachesCoversEveryURLKeyedCache(t *testing.T) {
 		"client_testing.go":               {1, nil}, // TestOptions copies the field for a test; no state
 		"components.go":                   {1, []string{"replicaSetOwnerCache"}},
 		"control_plane.go":                {2, []string{"ControlPlaneCache"}},
-		"dashboard_operator_discovery.go": {2, []string{"dashboardTargetCache"}},
+		"dashboard_operator_discovery.go": {2, []string{"TargetCache"}},
 		"diagnostics_dsc.go":              {1, []string{"staleSeen"}},
 		"maas.go":                         {1, []string{"APIVersionsCache"}}, // a read
 		"models_call.go":                  {1, []string{"callChecks"}},

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -56,7 +57,7 @@ func dashboardModuleDiscoveryRoutes(appsNS string) map[string]string {
 
 // dashboardModuleOperatorListItem is operator as the Deployment list shows
 // it: owned by Platform/default and running as sa.
-func dashboardModuleOperatorListItem(operator dashboardDeployment) map[string]any {
+func dashboardModuleOperatorListItem(operator dashdev.Deployment) map[string]any {
 	raw, _ := json.Marshal(operator)
 	var item map[string]any
 	_ = json.Unmarshal(raw, &item)
@@ -88,7 +89,7 @@ func serveDashboardModule(f *fakeAPI, appsNS, name, body string, others ...map[s
 	for path, b := range dashboardModuleDiscoveryRoutes(appsNS) {
 		f.json("GET", path, 200, b)
 	}
-	var op dashboardDeployment
+	var op dashdev.Deployment
 	_ = json.Unmarshal([]byte(body), &op)
 	op.Metadata.Name = name
 	if op.Metadata.UID == "" {

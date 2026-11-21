@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -96,7 +97,7 @@ func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, erro
 		models             []llmisvcObject
 		isvcErr            error
 	)
-	wg.Go(func() { st.DashboardURL = dashboardBaseURL(sa) })
+	wg.Go(func() { st.DashboardURL = dashdev.DashboardURL(sa) })
 	wg.Go(func() { dspas, dspaErr = listDSPAs(u, project) })
 	wg.Go(func() { models, modelsErr = listProjectLLMInferenceServices(u, project) })
 	wg.Go(func() { st.InferenceServices, isvcErr = listProjectInferenceServices(u, project) })
@@ -228,7 +229,7 @@ func listProjectInferenceServices(u *Client, project string) ([]types.ProjectInf
 	}
 	for _, it := range list.Items {
 		s := types.ProjectInferenceService{Name: it.Metadata.Name, Terminating: it.Metadata.Terminating()}
-		if snippetURL(it.Status.URL) {
+		if kube.SnippetURL(it.Status.URL) {
 			s.URL = it.Status.URL
 		}
 		if cond, ok := kube.FindCondition(it.Status.Conditions, "Ready"); ok && cond.Status == "True" {

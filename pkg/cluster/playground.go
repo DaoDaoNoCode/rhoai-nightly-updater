@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -100,7 +101,7 @@ const (
 )
 
 // genAIBaseURL is the dashboard's address ("" when unknown). Tests replace it.
-var genAIBaseURL = dashboardBaseURL
+var genAIBaseURL = dashdev.DashboardURL
 
 // genAIHTTPClient sends the gen-ai calls; it trusts the same certificates
 // as the samples' calls to the same gateway, and does not follow redirects

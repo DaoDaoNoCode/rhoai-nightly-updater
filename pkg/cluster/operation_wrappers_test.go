@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -67,16 +68,16 @@ func DeployPRImage(c *Client, prNumber int) (*types.OperationResponse, error) {
 }
 
 func DeployDashboardMain(c *Client) (*types.OperationResponse, error) {
-	return deployDashboardBuild(c, "main", 0, "")
+	return dashdev.DeployBuild(c, "main", 0, "")
 }
 
 func populateDashboardDevState(c *Client, state *types.DashboardState) {
-	target, operator, err := loadDashboardOperator(c, false)
-	populateDashboardDevStateWithOperator(c, state, target, operator, err)
+	target, operator, err := dashdev.LoadOperator(c, false)
+	dashdev.PopulateStateWithOperator(c, state, target, operator, err)
 }
 
-func patchControlledDashboardImage(c *Client, operator *dashboardDeployment, image types.DashboardDevImage, target string) error {
-	return patchControlledDashboardImages(c, operator, []dashboardImagePatch{{Image: image, Target: target}})
+func patchControlledDashboardImage(c *Client, operator *dashdev.Deployment, image types.DashboardDevImage, target string) error {
+	return dashdev.PatchControlledImages(c, operator, []dashdev.ImagePatch{{Image: image, Target: target}})
 }
 
 func checkDSCCompatibility(c *Client, dsc map[string]any) *types.DSCCompatibility {

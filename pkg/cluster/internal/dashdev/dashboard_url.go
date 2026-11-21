@@ -1,4 +1,4 @@
-package cluster
+package dashdev
 
 import (
 	"encoding/json"
@@ -6,10 +6,11 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
-// dashboardBaseURL returns the RHOAI dashboard's address for links, as
+// DashboardURL returns the RHOAI dashboard's address for links, as
 // "https://host" (any path kept, no trailing slash), or "" when it is
 // unknown.
 //
@@ -23,7 +24,7 @@ import (
 // name; releases from before the gateway have no status.url (or no CR), and
 // then the Route's host is used. No release is named: the CR either reports
 // a URL or it does not. Only an https URL is used.
-func dashboardBaseURL(c *Client) string {
+func DashboardURL(c *kube.Client) string {
 	if u := dashboardURLFromComponent(c); u != "" {
 		return u
 	}
@@ -31,7 +32,7 @@ func dashboardBaseURL(c *Client) string {
 	if err != nil {
 		return "" // the Route's namespace is unknown, and so is the address
 	}
-	if host := routeHost(c, ns, "rhods-dashboard"); host != "" && snippetURL("https://"+host) {
+	if host := rhoai.RouteHost(c, ns, "rhods-dashboard"); host != "" && kube.SnippetURL("https://"+host) {
 		return "https://" + host
 	}
 	return ""
@@ -40,16 +41,16 @@ func dashboardBaseURL(c *Client) string {
 // dashboardURLFromComponent returns the first usable status.url of the
 // Dashboard component CRs, or "" (no CRD, no CR, no URL, or the list is
 // refused).
-func dashboardURLFromComponent(c *Client) string {
-	u, _ := readDashboardURLFromComponent(c)
+func dashboardURLFromComponent(c *kube.Client) string {
+	u, _ := ReadComponentURL(c)
 	return u
 }
 
-// readDashboardURLFromComponent is dashboardURLFromComponent with the read
+// ReadComponentURL is dashboardURLFromComponent with the read
 // error: "" and nil mean the cluster has no such URL (no CRD served, no CR,
 // or none reports an https status.url); an error means it could not be
 // read.
-func readDashboardURLFromComponent(c *Client) (string, error) {
+func ReadComponentURL(c *kube.Client) (string, error) {
 	r, err := rhoai.ListServed(c, rhoai.ComponentAPIGroup, "/apis/components.platform.opendatahub.io/%s/dashboards", nil, []string{"v1alpha1"})
 	if err != nil || r.Version == "" {
 		return "", err
@@ -81,8 +82,8 @@ func httpsBaseURL(raw string) string {
 		return ""
 	}
 	// It goes into the Playground tab's command too: a plain https
-	// address only (snippetURL).
-	if s := strings.TrimSuffix(raw, "/"); snippetURL(s) {
+	// address only (kube.SnippetURL).
+	if s := strings.TrimSuffix(raw, "/"); kube.SnippetURL(s) {
 		return s
 	}
 	return ""

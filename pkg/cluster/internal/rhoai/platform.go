@@ -441,3 +441,16 @@ func (s csvSummary) info() types.CSVInfo {
 func SubscriptionPath() string {
 	return NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
 }
+
+// RouteHost returns a route's host, or "" when it cannot be read.
+func RouteHost(c *kube.Client, namespace, name string) string {
+	var route struct {
+		Spec struct {
+			Host string `json:"host"`
+		} `json:"spec"`
+	}
+	if c.GetInto(NamespacedPath("route.openshift.io/v1", "routes", namespace, name), &route) != nil {
+		return ""
+	}
+	return route.Spec.Host
+}

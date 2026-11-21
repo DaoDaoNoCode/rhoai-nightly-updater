@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 )
 
@@ -28,7 +29,7 @@ func legacyDashboardServer(t *testing.T, deployments map[string][]string) (*Clie
 		const prefix = "/apis/apps/v1/namespaces/redhat-ods-applications/deployments/"
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/deployments/rhods-operator") {
 			var env []map[string]string
-			for container, name := range containerEnvVarMap {
+			for container, name := range dashdev.ContainerEnvVars {
 				env = append(env, map[string]string{"name": name, "value": "release-" + container})
 			}
 			b, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{"env": env}}}}}})

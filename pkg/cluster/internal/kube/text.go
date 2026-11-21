@@ -3,6 +3,7 @@ package kube
 // Text helpers for the messages users read.
 
 import (
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -61,4 +62,23 @@ func SentenceStart(s string) string {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// snippetURLPattern is a plain https URL: a host name, an optional port and
+// a path of unreserved characters and percent escapes. No query, fragment,
+// user info, quote, space, $, backtick, ;, &, | or other character a shell
+// treats specially.
+var snippetURLPattern = regexp.MustCompile(`^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~%/-]*)?$`)
+
+// SnippetURL reports whether s, an address read from the cluster (a
+// model's status.url, a pipeline server's API address, the MaaS address),
+// may be shown in commands users paste into a shell. Whoever can write the
+// object's status (or the cluster's ingress domain) chooses it; the UI
+// shell-quotes it as well.
+func SnippetURL(s string) bool {
+	if !snippetURLPattern.MatchString(s) {
+		return false
+	}
+	u, err := url.Parse(s)
+	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil
 }

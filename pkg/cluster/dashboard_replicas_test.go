@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 )
 
 // dashboardStateWith reads the dashboard state of a rhods-dashboard
@@ -76,19 +78,19 @@ func TestDeploymentChecksKeepTheirQuestions(t *testing.T) {
 	}
 
 	two := 2
-	var d dashboardDeployment
+	var d dashdev.Deployment
 	d.Spec.Replicas = &two
 	d.Metadata.Generation, d.Status.ObservedGeneration = 3, 3
 	d.Status.Replicas, d.Status.UpdatedReplicas, d.Status.ReadyReplicas = 2, 2, 2
-	if !dashboardDeploymentReady(d) {
+	if !dashdev.DeploymentReady(d) {
 		t.Error("2 of 2 updated and ready is not ready")
 	}
 	d.Status.ReadyReplicas = 1
-	if dashboardDeploymentReady(d) {
+	if dashdev.DeploymentReady(d) {
 		t.Error("1 of 2 ready is ready")
 	}
 	d.Status.ReadyReplicas, d.Status.ObservedGeneration = 2, 2
-	if dashboardDeploymentReady(d) {
+	if dashdev.DeploymentReady(d) {
 		t.Error("a template the controller has not seen is ready")
 	}
 

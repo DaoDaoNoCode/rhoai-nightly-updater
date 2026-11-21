@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
@@ -469,7 +470,7 @@ func TestOperationsRefuseActiveDashboardDev(t *testing.T) {
 	for _, op := range []string{"update", "reinstall", "refresh"} {
 		t.Run(op, func(t *testing.T) {
 			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
-			f.dashboardOp = `{"metadata":{"uid":"u1","annotations":{"` + dashboardDevAnnotation + `":"{}"}},"spec":{"replicas":0}}`
+			f.dashboardOp = `{"metadata":{"uid":"u1","annotations":{"` + dashdev.SessionAnnotation + `":"{}"}},"spec":{"replicas":0}}`
 			c := f.client(context.Background())
 			var code string
 			switch op {
@@ -1035,7 +1036,7 @@ func TestOperationsRefuseBeforeEndingDashboardDev(t *testing.T) {
 	for _, op := range []string{"update", "reinstall", "refresh"} {
 		t.Run(op, func(t *testing.T) {
 			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
-			f.dashboardOp = `{"metadata":{"uid":"u1","annotations":{"` + dashboardDevAnnotation + `":"{}"}},"spec":{"replicas":0}}`
+			f.dashboardOp = `{"metadata":{"uid":"u1","annotations":{"` + dashdev.SessionAnnotation + `":"{}"}},"spec":{"replicas":0}}`
 			f.installPlans["install-gitops"] = map[string]any{
 				"metadata": map[string]any{"ownerReferences": []any{map[string]any{"kind": "Subscription", "name": "rhoai-gitops"}}},
 				"spec":     map[string]any{"clusterServiceVersionNames": []string{"rhods-operator.3.6.0"}},
@@ -1146,7 +1147,7 @@ func TestOperationsEndDashboardDevBeforeTheFirstChange(t *testing.T) {
 		t.Run(op, func(t *testing.T) {
 			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 			f.onSubscribe = olmInstalls("rhods-operator.3.6.0")
-			f.dashboardOp = `{"metadata":{"uid":"u1","annotations":{"` + dashboardDevAnnotation + `":"{}"}},"spec":{"replicas":0}}`
+			f.dashboardOp = `{"metadata":{"uid":"u1","annotations":{"` + dashdev.SessionAnnotation + `":"{}"}},"spec":{"replicas":0}}`
 			// Ending the session resumes dashboard-operator.
 			f.intercept = func(f *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
 				if r.Method != http.MethodGet && r.URL.Path == dashboardOpPath {
