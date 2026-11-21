@@ -272,6 +272,29 @@ func TestPendingTicksWithoutAReaderLoop(t *testing.T) {
 	}
 }
 
+// A Stop that comes after advance chose a due tick but before its callback
+// ran (advance releases the lock in between) delivers nothing: a stopped
+// ticker holds no pending tick, so WaitForTicksHandled cannot wait for a
+// reader that is gone.
+func TestStopBetweenChoosingAndDeliveringATick(t *testing.T) {
+	f := NewFake()
+	tk := f.NewTicker(time.Second)
+	f.beforeFire = func() {
+		f.beforeFire = nil // advance runs one callback here, the tick's
+		tk.Stop()
+	}
+	f.Advance(time.Second)
+	if f.PendingTicks() != 0 {
+		t.Fatalf("pending %d after a stopped ticker's tick", f.PendingTicks())
+	}
+	select {
+	case <-tk.C():
+		t.Fatal("a stopped ticker delivered a tick")
+	default:
+	}
+	f.WaitForTicksHandled()
+}
+
 func TestRealClock(t *testing.T) {
 	c := clock.Real
 	ctx, cancel := context.WithCancel(context.Background())
