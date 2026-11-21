@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -66,6 +67,12 @@ func newLeftoverWorld(t *testing.T, dscMsgs []string, crMsgs []string, lmeval ma
 		"status":   map[string]any{"conditions": conds(crReady, crMsgs)}}
 	f.handle("GET", dscV2List, func(*http.Request, []byte) (int, string) { return 200, w.list(w.dsc) })
 	f.handle("GET", trustyList, func(*http.Request, []byte) (int, string) { return 200, w.list(w.cr) })
+	f.handle("GET", trustyList+"/default-trustyai", func(*http.Request, []byte) (int, string) {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		b, _ := json.Marshal(w.cr)
+		return 200, string(b)
+	})
 	f.handle("PATCH", trustyList+"/default-trustyai", w.patchCR)
 	f.handle("PATCH", dscV2List+"/default-dsc", func(*http.Request, []byte) (int, string) { return 200, w.list(w.dsc) })
 	f.json("GET", dsciV2List, 200, `{"items":[{"metadata":{"name":"default-dsci"},"spec":{"applicationsNamespace":"redhat-ods-applications"}}]}`)
@@ -128,10 +135,14 @@ func (w *leftoverWorld) patchCR(r *http.Request, body []byte) (int, string) {
 		return 400, `{"kind":"Status","code":400}`
 	}
 	next, err := applyJSONPatch(w.cr, ops)
+	if _, ok := errors.AsType[*errJSONPatchTest](err); ok {
+		return 422, apiServerPatchTestFailed
+	}
 	if err != nil {
 		return 422, `{"kind":"Status","status":"Failure","code":422,"message":"` + err.Error() + `"}`
 	}
 	if r.URL.Query().Get("dryRun") != "All" {
+		bumpResourceVersion(next)
 		w.cr = next
 	}
 	b, _ := json.Marshal(next)
@@ -476,16 +487,18 @@ func TestLeftoverStoredFieldsCRDNotCurrent(t *testing.T) {
 	}
 }
 
-// The API server refuses: a dry-run failure changes nothing, a failed
-// JSON Patch test (the object changed since the check) and a 409 are
-// conflicts.
+// The API server refuses: a dry-run failure changes nothing, a 409 is a
+// conflict. A bare 422 (the API server's whole answer to a failed JSON
+// Patch test) on an object whose uid and resourceVersion did not move is
+// the server's refusal, shown as is; a failed test on an object that moved
+// is a conflict (below).
 func TestLeftoverStoredFieldsWriteRefusals(t *testing.T) {
 	for _, tc := range []struct {
 		name, dryBody, code string
 		dryStatus           int
 	}{
 		{"invalid", `{"kind":"Status","status":"Failure","code":422,"reason":"Invalid","message":"TrustyAI.components.platform.opendatahub.io \"default-trustyai\" is invalid: spec.x: Invalid value"}`, "validation", 422},
-		{"test failed", `{"kind":"Status","status":"Failure","code":422,"message":"the server rejected our request due to an error in our request: testing value /spec/eval/lmeval/permitOnline failed: test failed"}`, "conflict", 422},
+		{"bare 422, object unchanged", apiServerPatchTestFailed, "validation", 422},
 		{"conflict", `{"kind":"Status","status":"Failure","code":409,"reason":"Conflict","message":"Operation cannot be fulfilled"}`, "conflict", 409},
 		{"forbidden", `{"kind":"Status","status":"Failure","code":403,"reason":"Forbidden","message":"trustyais is forbidden"}`, "forbidden", 403},
 	} {
@@ -505,6 +518,7 @@ func TestLeftoverStoredFieldsWriteRefusals(t *testing.T) {
 	w.f.handle("PATCH", trustyList+"/default-trustyai", func(r *http.Request, body []byte) (int, string) {
 		w.mu.Lock()
 		w.cr["spec"].(map[string]any)["eval"].(map[string]any)["lmeval"].(map[string]any)["permitOnline"] = true
+		bumpResourceVersion(w.cr)
 		w.mu.Unlock()
 		return w.patchCR(r, body)
 	})

@@ -124,7 +124,18 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   its plan) before the next patch, at most 3 patches and only on the same
   DSC (uid); a check that now fails stops it, and a read that fails says
   that nothing was changed. This was the unmerged October fix for the
-  disable-component fix, carried over to the rework.
+  disable-component fix, carried over to the rework. The API server
+  answers a failed `test` with a bare 422 ("the server rejected our
+  request due to an error in our request", no cause; kube-apiserver
+  `applyJSPatch`), so the tool reads the DSC again after a 422 to tell
+  them apart: a moved resourceVersion is checked again as above, an
+  unchanged one is the API server's own refusal (a validation rule, the
+  operator's webhook), shown as before. Diagnostics' stored field types
+  fix now tells a changed object from a refusal the same way (it
+  reported a changed object as "The API server refused the change"),
+  and the hard reset says the DSC was deleted or created again instead
+  of "refused the release default" when the uid test of its dry run
+  fails.
 
 - **IPv6 clusters.** The API server address was built as
   `https://<KUBERNETES_SERVICE_HOST>:<port>`, which is not a valid URL when

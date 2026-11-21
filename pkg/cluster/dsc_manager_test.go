@@ -530,6 +530,7 @@ func TestToggleRefusesWhenTheFieldChangedMeanwhile(t *testing.T) {
 				f.mu.Lock()
 				k, _ := parseFakePath(dscV3Path)
 				setPath(t, f.objects[k], "spec.components.ray.managementState", "Removed")
+				f.bumpRV(ensureMap(f.objects[k], "metadata"))
 				f.mu.Unlock()
 			})
 		}

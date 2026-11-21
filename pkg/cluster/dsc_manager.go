@@ -1155,19 +1155,23 @@ func (v *dscView) keepsProtectedBelow(path []string, obj map[string]any) bool {
 
 // --- writes ------------------------------------------------------------------
 
-// isPatchTestFailure says whether the API server refused a JSON Patch
-// because one of its "test" operations failed (422, "testing value <path>
-// failed: test failed"; k8s.io/apiserver endpoints/handlers/patch.go
-// applies the patch with gopkg.in/evanphx/json-patch): the object is not
-// what the patch was built on, and nothing was changed.
-func isPatchTestFailure(err error) bool {
-	var k *K8sError
-	return errors.As(err, &k) && k.Status == http.StatusUnprocessableEntity && (strings.Contains(k.K8sMessage, "testing value") || strings.Contains(k.K8sMessage, "test failed"))
-}
+// A failed JSON Patch "test" cannot be told from the API server's answer:
+// k8s.io/apiserver pkg/endpoints/handlers/patch.go applyJSPatch returns
+// errors.NewGenericServerResponse(422, "", schema.GroupResource{}, "",
+// err.Error(), 0, false), and with isUnexpectedResponse false the
+// json-patch message is dropped. The whole answer (live on OpenShift's
+// kube-apiserver, 2026-11-20) is a Status of reason Invalid with message
+// "the server rejected our request due to an error in our request", no
+// cause and no path, the same as other 422 refusals give in part. A patch
+// whose tests bind it to an object's uid and resourceVersion therefore
+// reads the object again after a 422: when either moved, a test failed
+// (the object is not what was checked; nothing was changed); when neither
+// did, no test can have failed (they test values of that very version),
+// so the 422 is the API server's own refusal (a validation rule, a
+// webhook).
 
 // dscWriteError turns the API server's refusal of a patch into a result,
-// verbatim (validation rules, webhooks). A failed test is not shown: write
-// reports it as stale, and writeChecked checks again.
+// verbatim (validation rules, webhooks).
 func dscWriteError(err error, dryRun bool) *types.OperationResponse {
 	var k *K8sError
 	what := "The API server refused the change"
@@ -1214,12 +1218,13 @@ func patchDSCFields(c *Client, path string, ops []jsonPatchOp, dryRun bool) ([]b
 // checked on: the patch tests its uid and resourceVersion first (the
 // version of the read every check was made on), then the plan's own tests
 // and changes. A dry run, then the patch, then a check that the API server
-// kept every value set. stale: a test failed, so the DSC is no longer what
-// was checked and nothing was changed (a JSON Patch applies whole or not
-// at all); writeChecked then reads it again and checks again. A read
-// without a uid or resourceVersion (an API server always sets both) is
-// refused before anything is sent: the patch could not be bound to it.
-func (v *dscView) write(c *Client, p *dscPlanned) (res *types.OperationResponse, stale bool) {
+// kept every value set. rejected: the API server answered 422, which a
+// failed test also gets (see above), so writeChecked reads the DSC again
+// to tell; nothing was changed either way (a JSON Patch applies whole or
+// not at all). A read without a uid or resourceVersion (an API server
+// always sets both) is refused before anything is sent: the patch could
+// not be bound to it.
+func (v *dscView) write(c *Client, p *dscPlanned) (res *types.OperationResponse, rejected bool) {
 	if v.uid == "" || v.meta.ResourceVersion == "" {
 		return &types.OperationResponse{Success: false, ErrorCode: "internal",
 			Message: fmt.Sprintf("DataScienceCluster %s was read without a uid or resourceVersion, so the change cannot be limited to the object that was checked. Nothing was changed.", v.name)}, false
@@ -1230,11 +1235,11 @@ func (v *dscView) write(c *Client, p *dscPlanned) (res *types.OperationResponse,
 	}, p.ops...)
 	path := dscObjectPath(v.version, v.name)
 	if _, err := patchDSCFields(c, path, ops, true); err != nil {
-		return dscWriteError(err, true), isPatchTestFailure(err)
+		return dscWriteError(err, true), IsK8sError(err, http.StatusUnprocessableEntity)
 	}
 	body, err := patchDSCFields(c, path, ops, false)
 	if err != nil {
-		return dscWriteError(err, false), isPatchTestFailure(err)
+		return dscWriteError(err, false), IsK8sError(err, http.StatusUnprocessableEntity)
 	}
 	var after map[string]any
 	if err := json.Unmarshal(body, &after); err != nil {
@@ -1250,14 +1255,17 @@ func (v *dscView) write(c *Client, p *dscPlanned) (res *types.OperationResponse,
 }
 
 // writeChecked plans a change on the read v and writes it (write). When
-// the patch finds the DataScienceCluster changed since that read, nothing
-// was changed: the DSC is read again and plan runs again on the new read,
-// with every check of the change (the removal preconditions, which are
-// about other objects than the DSC; the reviewed plan's token), before the
-// next patch. At most dscWriteAttempts patches, and only while it is the
-// same DSC (uid). A plan that refuses, or a read that fails, ends the
-// change with nothing changed. It returns the read and the plan that were
-// written, or the result that ended the change.
+// the API server refuses the patch with 422, the DSC is read again: a
+// different uid (or none) ends the change (deleted or created again); the
+// same resourceVersion means the refusal is the API server's own, shown as
+// it is; a newer resourceVersion means a test failed on a DSC that moved
+// since the read (the operator's status writes move it too), so plan runs
+// again on the new read, with every check of the change (the removal
+// preconditions, which are about other objects than the DSC; the reviewed
+// plan's token), before the next patch. At most dscWriteAttempts patches.
+// A plan that refuses, or a read that fails, ends the change with nothing
+// changed. It returns the read and the plan that were written, or the
+// result that ended the change.
 func writeChecked(c *Client, v *dscView, plan func(v *dscView) (*dscPlanned, *types.OperationResponse)) (*dscView, *dscPlanned, *types.OperationResponse) {
 	uid, name := v.uid, v.name
 	for attempt := 1; ; attempt++ {
@@ -1265,26 +1273,28 @@ func writeChecked(c *Client, v *dscView, plan func(v *dscView) (*dscPlanned, *ty
 		if res != nil {
 			return nil, nil, res
 		}
-		res, stale := v.write(c, p)
+		res, rejected := v.write(c, p)
 		switch {
 		case res == nil:
 			return v, p, nil
-		case !stale:
+		case !rejected:
+			return nil, nil, res
+		}
+		next, err := readDSCView(c)
+		switch {
+		case err != nil:
+			return nil, nil, &types.OperationResponse{Success: false, ErrorCode: errorCodeFromK8sErr(err), Logs: res.Logs,
+				Message: fmt.Sprintf("The API server refused the change to DataScienceCluster %s, and it could not be read again to tell whether it changed since it was checked: %v. Nothing was changed.", name, err)}
+		case next.state != DSCStatePresent || next.uid != uid:
+			return nil, nil, &types.OperationResponse{Success: false, ErrorCode: "conflict",
+				Message: fmt.Sprintf("DataScienceCluster %s was deleted or created again after the change was checked. Nothing was changed. Reload the page and review the change again.", name)}
+		case next.meta.ResourceVersion == v.meta.ResourceVersion:
 			return nil, nil, res
 		case attempt == dscWriteAttempts:
 			return nil, nil, &types.OperationResponse{Success: false, ErrorCode: "conflict", Logs: res.Logs,
 				Message: fmt.Sprintf("DataScienceCluster %s kept changing while the change was checked (%d attempts; the operator writes its status, or someone else is editing it). Nothing was changed. Try again.", name, attempt)}
 		}
-		slog.Info("dsc changed since it was checked; reading it again", "dsc", name, "attempt", attempt)
-		next, err := readDSCView(c)
-		switch {
-		case err != nil:
-			return nil, nil, &types.OperationResponse{Success: false, ErrorCode: errorCodeFromK8sErr(err),
-				Message: fmt.Sprintf("DataScienceCluster %s changed after the change was checked, and it could not be read again: %v. Nothing was changed.", name, err)}
-		case next.state != DSCStatePresent || next.uid != uid:
-			return nil, nil, &types.OperationResponse{Success: false, ErrorCode: "conflict",
-				Message: fmt.Sprintf("DataScienceCluster %s was deleted or created again after the change was checked. Nothing was changed. Reload the page and review the change again.", name)}
-		}
+		slog.Info("dsc changed since it was checked; checking again", "dsc", name, "attempt", attempt, "from", v.meta.ResourceVersion, "to", next.meta.ResourceVersion)
 		v = next
 	}
 }

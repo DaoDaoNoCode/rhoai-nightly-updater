@@ -69,15 +69,18 @@ func ackMismatch(what string, got AckBinding, want *AckBinding, logs []string) *
 }
 
 // leftoverWriteError words the API server's refusal of a leftover change:
-// a failed JSON Patch test or a precondition is a change since the check.
+// a failed precondition (409) is a change since the check. A failed JSON
+// Patch test gets a bare 422 that names no test (see dsc_manager.go), so
+// the stored-fields fix tells it apart by reading the object again
+// (storedLeftover.patchError).
 func leftoverWriteError(err error, what string, dryRun bool) *types.OperationResponse {
 	var k *K8sError
 	msg := err.Error()
 	if errors.As(err, &k) && k.K8sMessage != "" {
 		msg = k.K8sMessage
 	}
-	if IsK8sError(err, http.StatusConflict) || (IsK8sError(err, http.StatusUnprocessableEntity) && (strings.Contains(msg, "testing value") || strings.Contains(msg, "test failed"))) {
-		return leftoverRefused(fmt.Sprintf("%s changed after it was checked, so nothing was changed. Run diagnostics again.", what), "conflict", []string{msg})
+	if IsK8sError(err, http.StatusConflict) {
+		return leftoverChanged(what, msg)
 	}
 	stage := "The API server refused the change"
 	if dryRun {
@@ -86,7 +89,35 @@ func leftoverWriteError(err error, what string, dryRun bool) *types.OperationRes
 	return leftoverRefused(fmt.Sprintf("%s: %s. Nothing was changed.", stage, msg), nonEmpty(errorCodeFromK8sErr(err), "validation"), []string{msg})
 }
 
+// leftoverChanged refuses a leftover change because the object changed
+// after it was checked.
+func leftoverChanged(what, serverMsg string) *types.OperationResponse {
+	return leftoverRefused(fmt.Sprintf("%s changed after it was checked, so nothing was changed. Run diagnostics again.", what), "conflict", []string{serverMsg})
+}
+
 // --- Stored field types ------------------------------------------------------
+
+// patchError words the API server's refusal of the fix's JSON Patch, which
+// tests the object's uid and resourceVersion (patchOps). After a 422 the
+// object is read again: when it is gone, or its uid or resourceVersion is
+// not the one the patch tested, a test failed because it changed since the
+// check; otherwise the 422 is the API server's own refusal, shown as is.
+// A read that fails leaves the refusal as the API server gave it (nothing
+// was changed either way).
+func (st *storedLeftover) patchError(c *Client, err error, dryRun bool) *types.OperationResponse {
+	if IsK8sError(err, http.StatusUnprocessableEntity) {
+		meta, found, rerr := readObjectMeta(c, componentListPath(st.Group, st.Version, st.Resource)+"/"+st.Name)
+		if rerr == nil && (!found || meta.UID != st.UID || meta.ResourceVersion != st.ResourceVersion) {
+			var k *K8sError
+			msg := err.Error()
+			if errors.As(err, &k) && k.K8sMessage != "" {
+				msg = k.K8sMessage
+			}
+			return leftoverChanged(st.ref(), msg)
+		}
+	}
+	return leftoverWriteError(err, st.ref(), dryRun)
+}
 
 func fixLeftoverStoredFields(c *Client, target string, ack *AckBinding) *types.OperationResponse {
 	kind, name, ok := strings.Cut(target, "/")
@@ -141,12 +172,12 @@ func fixLeftoverStoredFields(c *Client, target string, ack *AckBinding) *types.O
 	ops := st.patchOps()
 	path := componentListPath(st.Group, st.Version, st.Resource) + "/" + st.Name
 	if _, err := patchLeftoverObject(c, path, ops, true); err != nil {
-		return leftoverWriteError(err, st.ref(), true)
+		return st.patchError(c, err, true)
 	}
 	logs = append(logs, "The API server's dry run accepted the change")
 	body, err := patchLeftoverObject(c, path, ops, false)
 	if err != nil {
-		return leftoverWriteError(err, st.ref(), false)
+		return st.patchError(c, err, false)
 	}
 	var summary []string
 	for _, lf := range changes {

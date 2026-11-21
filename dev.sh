@@ -44,6 +44,19 @@ fi
 
 SERVER=$(oc whoami --show-server)
 echo -e "${GREEN}Cluster:${NC} $SERVER"
+# The backend reads the API server's address from KUBERNETES_SERVICE_HOST
+# and _PORT, which the kubelet sets in a pod: a bare IP (an IPv6 address
+# without brackets; the backend adds them) or name, and a port. Split the
+# server URL the same way: https://[fd00::1]:6443 gives fd00::1 and 6443,
+# https://api.example.com gives api.example.com and 443.
+API_HOSTPORT=${SERVER#https://}
+API_HOSTPORT=${API_HOSTPORT%%/*}
+case "$API_HOSTPORT" in
+  \[*\]:*) API_HOST=${API_HOSTPORT%%]:*}; API_HOST=${API_HOST#[}; API_PORT=${API_HOSTPORT##*]:} ;;
+  \[*\])   API_HOST=${API_HOSTPORT#[}; API_HOST=${API_HOST%]}; API_PORT=443 ;;
+  *:*)     API_HOST=${API_HOSTPORT%:*}; API_PORT=${API_HOSTPORT##*:} ;;
+  *)       API_HOST=$API_HOSTPORT; API_PORT=443 ;;
+esac
 echo -e "${GREEN}User:${NC}    $(oc whoami)"
 
 # The backend verifies the API server's certificate as oc does. ROSA and OSD
@@ -139,8 +152,8 @@ PF_PID=$!
 
 # Start Go backend in background
 echo -e "${CYAN}Starting Go backend on :8080...${NC}"
-KUBERNETES_SERVICE_HOST=$(echo "$SERVER" | sed 's|https://||' | cut -d: -f1) \
-KUBERNETES_SERVICE_PORT=$(echo "$SERVER" | sed 's|https://||' | cut -d: -f2) \
+KUBERNETES_SERVICE_HOST="$API_HOST" \
+KUBERNETES_SERVICE_PORT="$API_PORT" \
 DEV_TOKEN="$TOKEN" \
 DEV_USER="$(oc whoami)" \
 DEV_MODE=true \
