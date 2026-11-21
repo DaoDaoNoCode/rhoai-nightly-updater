@@ -378,19 +378,21 @@ type conversionObjects struct {
 // (possible only for filtered lists, which this one is not) is not taken
 // for "none".
 //
-// Only a list is taken for "none": an answer without "items", with
-// "items": null, or of a kind that is not a list fails, so the check
-// refuses. Every list carries "items" (the API conventions, "Lists and
-// Simple kinds": "All lists use the required items field to contain the
-// array of objects they return. Any kind that has the items field must be
-// a list kind"; k8s.io/apimachinery pkg/apis/meta/v1/types.go List and
-// unstructured/unstructured_list.go UnstructuredList declare `json:"items"`
-// without omitempty, and unstructured/helpers.go doEncode, which encodes
-// a custom resource list, writes it as [] when there are none), and a
-// list's kind ends in "List" (decodeToList trims that suffix to name the
-// items' kind). The kind is only checked when the answer has one: an
-// API server always sets it on a list, so its absence is not taken for a
-// different kind.
+// Only a list of the CRD's objects is taken for "none": an answer without
+// "items", with "items": null, or of another kind than the CRD's list kind
+// fails, so the check refuses. Every list carries "items" (the API
+// conventions, "Lists and Simple kinds": "All lists use the required items
+// field to contain the array of objects they return. Any kind that has the
+// items field must be a list kind"; k8s.io/apimachinery
+// pkg/apis/meta/v1/types.go List and unstructured/unstructured_list.go
+// UnstructuredList declare `json:"items"` without omitempty, and
+// unstructured/helpers.go doEncode, which encodes a custom resource list,
+// writes it as [] when there are none). The list's kind is the CRD's own
+// (listKind: status.acceptedNames.listKind, which a CRD may set to any
+// name, "<Kind>List" being only the default); a CRD that names none
+// leaves nothing to check a kind against, so a kind then refuses. The kind
+// is only checked when the answer has one: an API server always sets it on
+// a list, so its absence is not taken for a different kind.
 func listConversionObjects(u *Client, crd conversionCRD) (conversionObjects, error) {
 	path := crd.listPath()
 	if path == "" {
@@ -418,8 +420,13 @@ func listConversionObjects(u *Client, crd conversionCRD) (conversionObjects, err
 	if err := json.Unmarshal(body, &list); err != nil {
 		return conversionObjects{}, fmt.Errorf("could not parse the list: %w", err)
 	}
-	if list.Kind != "" && !strings.HasSuffix(list.Kind, "List") {
-		return conversionObjects{}, fmt.Errorf("the API server's answer is a %s, not a list", list.Kind)
+	if list.Kind != "" {
+		switch want := crd.listKind(); {
+		case want == "":
+			return conversionObjects{}, fmt.Errorf("the CRD names no list kind to check the API server's answer (a %s) against", list.Kind)
+		case list.Kind != want:
+			return conversionObjects{}, fmt.Errorf("the API server's answer is a %s, not a list of %s (%s)", list.Kind, crd.Metadata.Name, want)
+		}
 	}
 	if list.Items == nil {
 		return conversionObjects{}, fmt.Errorf("the API server's answer has no items, so it is not a list")
