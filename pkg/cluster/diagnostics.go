@@ -470,13 +470,6 @@ type subscriptionState struct {
 }
 
 func readSubscriptionState(c *Client) (subscriptionState, error) {
-	body, found, err := c.getOptional(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName))
-	if err != nil {
-		return subscriptionState{}, err
-	}
-	if !found {
-		return subscriptionState{}, nil
-	}
 	var sub struct {
 		Metadata struct {
 			CreationTimestamp string `json:"creationTimestamp"`
@@ -502,8 +495,15 @@ func readSubscriptionState(c *Client) (subscriptionState, error) {
 			} `json:"conditions"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &sub); err != nil {
-		return subscriptionState{}, fmt.Errorf("parse subscription: %w", err)
+	found, err := c.getIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), &sub)
+	if err != nil {
+		if isDecodeError(err) {
+			return subscriptionState{}, fmt.Errorf("parse subscription: %w", err)
+		}
+		return subscriptionState{}, err
+	}
+	if !found {
+		return subscriptionState{}, nil
 	}
 	s := subscriptionState{
 		Exists: true, Source: sub.Spec.Source, Channel: sub.Spec.Channel, State: sub.Status.State,

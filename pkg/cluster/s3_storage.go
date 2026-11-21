@@ -154,18 +154,18 @@ type s3Keys struct {
 // readS3Keys reads the keys stored in the storage's Secret. found is false
 // when the Secret does not exist.
 func readS3Keys(c *Client) (keys s3Keys, found bool, err error) {
-	body, exists, err := c.getOptional(namespacedPath("v1", "secrets", s3Namespace, s3Secret))
+	var secret struct {
+		Data map[string]string `json:"data"`
+	}
+	exists, err := c.getIntoOptional(namespacedPath("v1", "secrets", s3Namespace, s3Secret), &secret)
 	if err != nil {
+		if isDecodeError(err) {
+			return s3Keys{}, false, fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
+		}
 		return s3Keys{}, false, fmt.Errorf("read Secret %s/%s: %w", s3Namespace, s3Secret, err)
 	}
 	if !exists {
 		return s3Keys{}, false, nil
-	}
-	var secret struct {
-		Data map[string]string `json:"data"`
-	}
-	if err := json.Unmarshal(body, &secret); err != nil {
-		return s3Keys{}, false, fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
 	}
 	return s3Keys{
 		AccessKey: decodeBase64Field(secret.Data[s3AccessKeyField]), SecretKey: decodeBase64Field(secret.Data[s3SecretKeyField]),
@@ -206,19 +206,19 @@ func S3AdminLogin(c *Client) (login S3Login, err error) {
 	case !ns.Managed:
 		return unavailable(fmt.Sprintf("Namespace %s was not created by this tool, so it does not read the password there.", s3Namespace))
 	}
-	body, found, err := c.getOptional(namespacedPath("v1", "secrets", s3Namespace, s3Secret))
-	if err != nil {
-		return S3Login{}, fmt.Errorf("read Secret %s/%s: %w", s3Namespace, s3Secret, err)
-	}
-	if !found {
-		return unavailable(fmt.Sprintf("Secret %s does not exist in namespace %s. Repair re-creates it.", s3Secret, s3Namespace))
-	}
 	var secret struct {
 		Metadata objectMeta        `json:"metadata"`
 		Data     map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &secret); err != nil {
-		return S3Login{}, fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
+	found, err := c.getIntoOptional(namespacedPath("v1", "secrets", s3Namespace, s3Secret), &secret)
+	if err != nil {
+		if isDecodeError(err) {
+			return S3Login{}, fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
+		}
+		return S3Login{}, fmt.Errorf("read Secret %s/%s: %w", s3Namespace, s3Secret, err)
+	}
+	if !found {
+		return unavailable(fmt.Sprintf("Secret %s does not exist in namespace %s. Repair re-creates it.", s3Secret, s3Namespace))
 	}
 	if !storageObjectOwned(secret.Metadata) {
 		return unavailable(fmt.Sprintf("Secret %s in namespace %s was not created by this tool, so it does not read it.", s3Secret, s3Namespace))
@@ -304,21 +304,21 @@ func (n s3NamespaceInfo) terminating() bool {
 
 // lookupS3Namespace reads the storage namespace.
 func lookupS3Namespace(c *Client) (s3NamespaceInfo, error) {
-	body, found, err := c.getOptional("/api/v1/namespaces/" + s3Namespace)
-	if err != nil {
-		return s3NamespaceInfo{}, fmt.Errorf("read namespace %s: %w", s3Namespace, err)
-	}
-	if !found {
-		return s3NamespaceInfo{}, nil
-	}
 	var nsObj struct {
 		Metadata objectMeta `json:"metadata"`
 		Status   struct {
 			Phase string `json:"phase"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &nsObj); err != nil {
-		return s3NamespaceInfo{}, fmt.Errorf("parse namespace %s: %w", s3Namespace, err)
+	found, err := c.getIntoOptional("/api/v1/namespaces/"+s3Namespace, &nsObj)
+	if err != nil {
+		if isDecodeError(err) {
+			return s3NamespaceInfo{}, fmt.Errorf("parse namespace %s: %w", s3Namespace, err)
+		}
+		return s3NamespaceInfo{}, fmt.Errorf("read namespace %s: %w", s3Namespace, err)
+	}
+	if !found {
+		return s3NamespaceInfo{}, nil
 	}
 	return s3NamespaceInfo{Exists: true, Meta: nsObj.Metadata, Phase: nsObj.Status.Phase, Managed: nsObj.Metadata.hasToolLabel()}, nil
 }
@@ -1746,10 +1746,6 @@ func s3OtherObjects(pvcs []storagePVC, pvcErr error, deploys []objectMeta, deplo
 // NamespaceFinalizersRemaining conditions) for a namespace that is
 // terminating (deleted by someone else), or "".
 func namespaceDeletionDetail(c *Client, namespace string) string {
-	body, _, err := c.get("/api/v1/namespaces/" + namespace)
-	if err != nil {
-		return ""
-	}
 	var ns struct {
 		Status struct {
 			Conditions []struct {
@@ -1759,7 +1755,7 @@ func namespaceDeletionDetail(c *Client, namespace string) string {
 			} `json:"conditions"`
 		} `json:"status"`
 	}
-	if json.Unmarshal(body, &ns) != nil {
+	if c.getInto("/api/v1/namespaces/"+namespace, &ns) != nil {
 		return ""
 	}
 	var details []string

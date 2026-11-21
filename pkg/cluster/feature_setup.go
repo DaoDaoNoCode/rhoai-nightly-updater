@@ -180,18 +180,18 @@ func writePrereqRecord(c *Client, rec prereqRecord) error {
 // readSnapshotKey reads one key of this tool's snapshot ConfigMap ("" when
 // it or the ConfigMap is missing).
 func readSnapshotKey(c *Client, key string) (string, error) {
-	body, found, err := c.bookkeeping().getOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
+	var cm struct {
+		Data map[string]string `json:"data"`
+	}
+	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
 	if err != nil {
+		if isDecodeError(err) {
+			return "", fmt.Errorf("parse the snapshot ConfigMap: %w", err)
+		}
 		return "", err
 	}
 	if !found {
 		return "", nil
-	}
-	var cm struct {
-		Data map[string]string `json:"data"`
-	}
-	if err := json.Unmarshal(body, &cm); err != nil {
-		return "", fmt.Errorf("parse the snapshot ConfigMap: %w", err)
 	}
 	return cm.Data[key], nil
 }

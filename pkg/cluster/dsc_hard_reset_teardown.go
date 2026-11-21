@@ -171,18 +171,18 @@ func hardResetOperators(c *Client, dscUID string) ([]hardResetOperator, string, 
 func operatorsLeft(c *Client, ops []hardResetOperator) ([]hardResetOperator, error) {
 	var left []hardResetOperator
 	for _, o := range ops {
-		body, found, err := c.getOptional(namespacedPath("apps/v1", "deployments", o.Namespace, o.Name))
+		var d struct {
+			Metadata objectMeta `json:"metadata"`
+		}
+		found, err := c.getIntoOptional(namespacedPath("apps/v1", "deployments", o.Namespace, o.Name), &d)
 		if err != nil {
+			if isDecodeError(err) {
+				return nil, fmt.Errorf("parse Deployment %s/%s: %w", o.Namespace, o.Name, err)
+			}
 			return nil, fmt.Errorf("read Deployment %s/%s: %w", o.Namespace, o.Name, err)
 		}
 		if !found {
 			continue
-		}
-		var d struct {
-			Metadata objectMeta `json:"metadata"`
-		}
-		if err := json.Unmarshal(body, &d); err != nil {
-			return nil, fmt.Errorf("parse Deployment %s/%s: %w", o.Namespace, o.Name, err)
 		}
 		if d.Metadata.UID == o.UID {
 			left = append(left, o)
@@ -528,13 +528,6 @@ func (r *ownerResolver) read(ref ownerRef, group, version, what string, unknown 
 	if why != "" {
 		return unknown("cannot be looked up: " + why)
 	}
-	body, found, err := r.c.getOptional(apiPath)
-	if err != nil {
-		return unknown("could not be read with your sign-in: " + err.Error())
-	}
-	if !found {
-		return ownerVerdict{fate: ownerNotSolid} // dangling (K :431-437)
-	}
 	var obj struct {
 		Metadata struct {
 			UID               string     `json:"uid"`
@@ -542,8 +535,15 @@ func (r *ownerResolver) read(ref ownerRef, group, version, what string, unknown 
 			OwnerReferences   []ownerRef `json:"ownerReferences"`
 		} `json:"metadata"`
 	}
-	if err := json.Unmarshal(body, &obj); err != nil {
-		return unknown("could not be read: " + err.Error())
+	found, err := r.c.getIntoOptional(apiPath, &obj)
+	if err != nil {
+		if isDecodeError(err) {
+			return unknown("could not be read: " + err.Error())
+		}
+		return unknown("could not be read with your sign-in: " + err.Error())
+	}
+	if !found {
+		return ownerVerdict{fate: ownerNotSolid} // dangling (K :431-437)
 	}
 	m := obj.Metadata
 	switch {
@@ -584,14 +584,10 @@ func (r *ownerResolver) path(group, version, kind, name string) (string, string)
 	}
 	resources, ok := r.docs[gv]
 	if !ok {
-		body, _, err := r.c.get(gv)
-		if err != nil {
-			return "", "API discovery of " + strings.TrimPrefix(gv, "/") + ": " + err.Error()
-		}
 		var doc struct {
 			Resources []apiResource `json:"resources"`
 		}
-		if err := json.Unmarshal(body, &doc); err != nil {
+		if err := r.c.getInto(gv, &doc); err != nil {
 			return "", "API discovery of " + strings.TrimPrefix(gv, "/") + ": " + err.Error()
 		}
 		resources = doc.Resources

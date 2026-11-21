@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -182,18 +181,18 @@ func listProjectLLMInferenceServices(u *Client, project string) ([]llmisvcObject
 	if !u.asUser {
 		return nil, errNotUserClient
 	}
-	body, found, err := u.getOptional(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, ""))
+	var list struct {
+		Items []llmisvcObject `json:"items"`
+	}
+	found, err := u.getIntoOptional(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, ""), &list)
 	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse LLMInferenceServices: %w", err)
+		}
 		return nil, fmt.Errorf("list LLMInferenceServices: %w", err)
 	}
 	if !found {
 		return nil, errLLMISvcAPIMissing
-	}
-	var list struct {
-		Items []llmisvcObject `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse LLMInferenceServices: %w", err)
 	}
 	slices.SortFunc(list.Items, func(a, b llmisvcObject) int { return strings.Compare(a.Metadata.Name, b.Metadata.Name) })
 	return list.Items, nil
@@ -206,13 +205,6 @@ func listProjectInferenceServices(u *Client, project string) ([]types.ProjectInf
 		return nil, errNotUserClient
 	}
 	out := []types.ProjectInferenceService{}
-	body, found, err := u.getOptional(namespacedPath("serving.kserve.io/v1beta1", "inferenceservices", project, ""))
-	if err != nil {
-		return nil, fmt.Errorf("list InferenceServices: %w", err)
-	}
-	if !found {
-		return out, nil
-	}
 	var list struct {
 		Items []struct {
 			Metadata objectMeta `json:"metadata"`
@@ -222,8 +214,15 @@ func listProjectInferenceServices(u *Client, project string) ([]types.ProjectInf
 			} `json:"status"`
 		} `json:"items"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse InferenceServices: %w", err)
+	found, err := u.getIntoOptional(namespacedPath("serving.kserve.io/v1beta1", "inferenceservices", project, ""), &list)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse InferenceServices: %w", err)
+		}
+		return nil, fmt.Errorf("list InferenceServices: %w", err)
+	}
+	if !found {
+		return out, nil
 	}
 	for _, it := range list.Items {
 		s := types.ProjectInferenceService{Name: it.Metadata.Name, Terminating: it.Metadata.terminating()}

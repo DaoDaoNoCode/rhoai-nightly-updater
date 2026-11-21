@@ -799,16 +799,12 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 
 // routeHost returns a route's host, or "" when it cannot be read.
 func routeHost(c *Client, namespace, name string) string {
-	body, _, err := c.get(namespacedPath("route.openshift.io/v1", "routes", namespace, name))
-	if err != nil {
-		return ""
-	}
 	var route struct {
 		Spec struct {
 			Host string `json:"host"`
 		} `json:"spec"`
 	}
-	if json.Unmarshal(body, &route) != nil {
+	if c.getInto(namespacedPath("route.openshift.io/v1", "routes", namespace, name), &route) != nil {
 		return ""
 	}
 	return route.Spec.Host

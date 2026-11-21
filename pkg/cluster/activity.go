@@ -351,17 +351,16 @@ func GetActivity(c *Client) ([]types.ActivityEntry, error) {
 	ns := getActivityNamespace()
 	cmPath := namespacedPath("v1", "configmaps", ns, activityConfigMapName)
 
-	body, found, err := c.bookkeeping().getOptional(cmPath)
+	var cm map[string]any
+	found, err := c.bookkeeping().getIntoOptional(cmPath, &cm)
 	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse activity configmap: %w", err)
+		}
 		return nil, fmt.Errorf("get activity configmap: %w", err)
 	}
 	if !found {
 		return []types.ActivityEntry{}, nil
-	}
-
-	var cm map[string]any
-	if err := json.Unmarshal(body, &cm); err != nil {
-		return nil, fmt.Errorf("parse activity configmap: %w", err)
 	}
 
 	data, _ := cm["data"].(map[string]any)

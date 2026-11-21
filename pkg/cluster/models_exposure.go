@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -71,18 +70,18 @@ func ValidExposure(e string) bool {
 // listAllGateways lists the Gateways of every namespace (read-only; the
 // list is the one otherGatewaysOfClass reads).
 func listAllGateways(c *Client) ([]gatewayObject, error) {
-	body, found, err := c.getOptional(clusterPath("gateway.networking.k8s.io/v1", "gateways", ""))
+	var list struct {
+		Items []gatewayObject `json:"items"`
+	}
+	found, err := c.getIntoOptional(clusterPath("gateway.networking.k8s.io/v1", "gateways", ""), &list)
 	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse the Gateways: %w", err)
+		}
 		return nil, fmt.Errorf("list the Gateways: %w", err)
 	}
 	if !found {
 		return nil, nil
-	}
-	var list struct {
-		Items []gatewayObject `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse the Gateways: %w", err)
 	}
 	return list.Items, nil
 }
@@ -199,10 +198,6 @@ func withServicePort(c *Client, address string) string {
 	if len(labels) != 3 || labels[2] != "svc" {
 		return address
 	}
-	body, _, err := c.get(namespacedPath("v1", "services", labels[1], labels[0]))
-	if err != nil {
-		return ""
-	}
 	var svc struct {
 		Spec struct {
 			Ports []struct {
@@ -212,7 +207,7 @@ func withServicePort(c *Client, address string) string {
 			} `json:"ports"`
 		} `json:"spec"`
 	}
-	if json.Unmarshal(body, &svc) != nil {
+	if c.getInto(namespacedPath("v1", "services", labels[1], labels[0]), &svc) != nil {
 		return ""
 	}
 	port := 0

@@ -59,18 +59,18 @@ func clearDSCHardResetRecord(c *Client) {
 // readDSCHardResetRecord returns the recorded hard reset, nil when there is
 // none. A record that cannot be parsed is an error: it is never guessed at.
 func readDSCHardResetRecord(c *Client) (*types.DSCHardResetRecord, error) {
-	body, found, err := c.bookkeeping().getOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
+	var cm struct {
+		Data map[string]string `json:"data"`
+	}
+	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName), &cm)
 	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse operation record: %w", err)
+		}
 		return nil, fmt.Errorf("get operation record: %w", err)
 	}
 	if !found {
 		return nil, nil
-	}
-	var cm struct {
-		Data map[string]string `json:"data"`
-	}
-	if err := json.Unmarshal(body, &cm); err != nil {
-		return nil, fmt.Errorf("parse operation record: %w", err)
 	}
 	raw := cm.Data[dscHardResetKey]
 	if raw == "" {
@@ -100,21 +100,21 @@ type OperationRecord struct {
 // an empty record. An unreadable value is logged and ignored rather than
 // hiding the others.
 func ReadOperationRecord(c *Client) (*OperationRecord, error) {
-	body, found, err := c.bookkeeping().getOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
-	if err != nil {
-		return nil, fmt.Errorf("get operation record: %w", err)
-	}
-	if !found {
-		return &OperationRecord{}, nil
-	}
 	var cm struct {
 		Metadata struct {
 			ResourceVersion string `json:"resourceVersion"`
 		} `json:"metadata"`
 		Data map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &cm); err != nil {
-		return nil, fmt.Errorf("parse operation record: %w", err)
+	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName), &cm)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse operation record: %w", err)
+		}
+		return nil, fmt.Errorf("get operation record: %w", err)
+	}
+	if !found {
+		return &OperationRecord{}, nil
 	}
 	return &OperationRecord{
 		Marker:          decodeRecordValue[types.OperationMarker](cm.Data, operationKey),

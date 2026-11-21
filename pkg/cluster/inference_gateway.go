@@ -445,16 +445,16 @@ func readGatewayObject(c *Client, kind string) (objectMeta, bool, error) {
 
 func readInferenceGateway(c *Client) (gatewayObject, bool, error) {
 	path := gatewayObjectPath("Gateway")
-	body, found, err := c.getOptional(path)
+	var gw gatewayObject
+	found, err := c.getIntoOptional(path, &gw)
 	if err != nil {
+		if isDecodeError(err) {
+			return gatewayObject{}, false, fmt.Errorf("parse Gateway %s/%s: %w", inferenceGatewayNamespace, inferenceGatewayName, err)
+		}
 		return gatewayObject{}, false, err
 	}
 	if !found {
 		return gatewayObject{}, false, nil
-	}
-	var gw gatewayObject
-	if err := json.Unmarshal(body, &gw); err != nil {
-		return gatewayObject{}, false, fmt.Errorf("parse Gateway %s/%s: %w", inferenceGatewayNamespace, inferenceGatewayName, err)
 	}
 	return gw, true, nil
 }
@@ -462,17 +462,16 @@ func readInferenceGateway(c *Client) (gatewayObject, bool, error) {
 // clusterAppsDomain is the cluster's apps domain (ingresses.config.openshift.io
 // cluster, spec.domain), under which the external hostname is made.
 func clusterAppsDomain(c *Client) (string, error) {
-	body, _, err := c.get(clusterPath("config.openshift.io/v1", "ingresses", "cluster"))
-	if err != nil {
-		return "", fmt.Errorf("read the cluster's ingress configuration: %w", err)
-	}
 	var ing struct {
 		Spec struct {
 			Domain string `json:"domain"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &ing); err != nil {
-		return "", fmt.Errorf("parse the cluster's ingress configuration: %w", err)
+	if err := c.getInto(clusterPath("config.openshift.io/v1", "ingresses", "cluster"), &ing); err != nil {
+		if isDecodeError(err) {
+			return "", fmt.Errorf("parse the cluster's ingress configuration: %w", err)
+		}
+		return "", fmt.Errorf("read the cluster's ingress configuration: %w", err)
 	}
 	if ing.Spec.Domain == "" {
 		return "", errors.New("the cluster's ingress configuration names no apps domain")
@@ -485,13 +484,6 @@ func clusterAppsDomain(c *Client) (string, error) {
 // spec.defaultCertificate.name, else the one the ingress operator
 // generates. The Gateway references it; its content is never read.
 func defaultIngressCertificate(c *Client) (string, error) {
-	body, found, err := c.getOptional(namespacedPath("operator.openshift.io/v1", "ingresscontrollers", "openshift-ingress-operator", "default"))
-	if err != nil {
-		return "", fmt.Errorf("read IngressController %s/default: %w", ingressOperatorNS, err)
-	}
-	if !found {
-		return defaultRouterCert, nil
-	}
 	var ic struct {
 		Spec struct {
 			DefaultCertificate *struct {
@@ -499,8 +491,15 @@ func defaultIngressCertificate(c *Client) (string, error) {
 			} `json:"defaultCertificate"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &ic); err != nil {
-		return "", fmt.Errorf("parse IngressController %s/default: %w", ingressOperatorNS, err)
+	found, err := c.getIntoOptional(namespacedPath("operator.openshift.io/v1", "ingresscontrollers", "openshift-ingress-operator", "default"), &ic)
+	if err != nil {
+		if isDecodeError(err) {
+			return "", fmt.Errorf("parse IngressController %s/default: %w", ingressOperatorNS, err)
+		}
+		return "", fmt.Errorf("read IngressController %s/default: %w", ingressOperatorNS, err)
+	}
+	if !found {
+		return defaultRouterCert, nil
 	}
 	if ic.Spec.DefaultCertificate != nil && ic.Spec.DefaultCertificate.Name != "" {
 		return ic.Spec.DefaultCertificate.Name, nil
@@ -570,16 +569,12 @@ func inferenceGatewayObjects(domain, certificate string, namespaces []string) ma
 // openshift-ai-inference, when it exists.
 func gatewayClassController(c *Client) (string, error) {
 	path := gatewayObjectPath("GatewayClass")
-	body, _, err := c.get(path)
-	if err != nil {
-		return "", err
-	}
 	var gc struct {
 		Spec struct {
 			ControllerName string `json:"controllerName"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &gc); err != nil {
+	if err := c.getInto(path, &gc); err != nil {
 		return "", err
 	}
 	return gc.Spec.ControllerName, nil

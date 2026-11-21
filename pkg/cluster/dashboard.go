@@ -109,14 +109,6 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 		return nil, fmt.Errorf("find the dashboard: %w", err)
 	}
 	deployPath := namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName)
-	body, found, err := c.getOptional(deployPath)
-	if err != nil {
-		return nil, fmt.Errorf("get dashboard deployment: %w", err)
-	}
-	if !found {
-		return nil, fmt.Errorf("%w (no %s Deployment in %s)", ErrDashboardNotDeployed, dashboardDeploymentName, ns)
-	}
-
 	var deploy struct {
 		Metadata struct {
 			UID         string            `json:"uid"`
@@ -137,8 +129,15 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 			} `json:"template"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &deploy); err != nil {
-		return nil, fmt.Errorf("parse dashboard deployment: %w", err)
+	found, err := c.getIntoOptional(deployPath, &deploy)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse dashboard deployment: %w", err)
+		}
+		return nil, fmt.Errorf("get dashboard deployment: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("%w (no %s Deployment in %s)", ErrDashboardNotDeployed, dashboardDeploymentName, ns)
 	}
 
 	state := &types.DashboardState{Namespace: ns}
@@ -708,16 +707,12 @@ type legacyManagedRecord struct {
 }
 
 func getDeploymentAnnotations(c *Client, ns, name string) (map[string]string, error) {
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", ns, name))
-	if err != nil {
-		return nil, err
-	}
 	var d struct {
 		Metadata struct {
 			Annotations map[string]string `json:"annotations"`
 		} `json:"metadata"`
 	}
-	if err := json.Unmarshal(body, &d); err != nil {
+	if err := c.getInto(namespacedPath("apps/v1", "deployments", ns, name), &d); err != nil {
 		return nil, err
 	}
 	return d.Metadata.Annotations, nil
@@ -798,11 +793,6 @@ func getOriginalImages(c *Client) (map[string]string, error) {
 		return nil, fmt.Errorf("the installed CSV %s installs %d Deployments, so which one holds the dashboard images is unknown", csv.Name, len(csv.Deployments))
 	}
 	operatorPath := namespacedPath("apps/v1", "deployments", SubNS, csv.Deployments[0])
-	body, _, err := c.get(operatorPath)
-	if err != nil {
-		return nil, fmt.Errorf("get operator deployment: %w", err)
-	}
-
 	var deploy struct {
 		Spec struct {
 			Template struct {
@@ -817,8 +807,11 @@ func getOriginalImages(c *Client) (map[string]string, error) {
 			} `json:"template"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &deploy); err != nil {
-		return nil, fmt.Errorf("parse operator deployment: %w", err)
+	if err := c.getInto(operatorPath, &deploy); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse operator deployment: %w", err)
+		}
+		return nil, fmt.Errorf("get operator deployment: %w", err)
 	}
 
 	// Build env var lookup
@@ -1003,10 +996,6 @@ func isStandaloneMode(containers []string) bool {
 // getDeploymentContainerNames returns the list of container names in a deployment.
 func getDeploymentContainerNames(c *Client, namespace, deployName string) ([]string, error) {
 	path := namespacedPath("apps/v1", "deployments", namespace, deployName)
-	body, _, err := c.get(path)
-	if err != nil {
-		return nil, err
-	}
 	var deploy struct {
 		Spec struct {
 			Template struct {
@@ -1018,7 +1007,7 @@ func getDeploymentContainerNames(c *Client, namespace, deployName string) ([]str
 			} `json:"template"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &deploy); err != nil {
+	if err := c.getInto(path, &deploy); err != nil {
 		return nil, err
 	}
 	var names []string

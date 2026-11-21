@@ -169,13 +169,6 @@ func labelSelectorString(matchLabels map[string]string) string {
 func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, error) {
 	a := rolloutAssessment{Namespace: namespace, Deployment: name}
 
-	body, found, err := c.getOptional(namespacedPath("apps/v1", "deployments", namespace, name))
-	if err != nil {
-		return a, fmt.Errorf("read deployment: %w", err)
-	}
-	if !found {
-		return notApplicable(a, "the Deployment no longer exists"), nil
-	}
 	var dep struct {
 		Metadata struct {
 			UID             string                   `json:"uid"`
@@ -196,8 +189,15 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 			} `json:"strategy"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &dep); err != nil {
-		return a, fmt.Errorf("parse deployment: %w", err)
+	found, err := c.getIntoOptional(namespacedPath("apps/v1", "deployments", namespace, name), &dep)
+	if err != nil {
+		if isDecodeError(err) {
+			return a, fmt.Errorf("parse deployment: %w", err)
+		}
+		return a, fmt.Errorf("read deployment: %w", err)
+	}
+	if !found {
+		return notApplicable(a, "the Deployment no longer exists"), nil
 	}
 	a.ResourceVersion = dep.Metadata.ResourceVersion
 	a.Replicas = 1

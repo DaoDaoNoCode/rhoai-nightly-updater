@@ -155,13 +155,12 @@ func (m mlflowCR) staleOriginal() bool {
 }
 
 func getMLflowCR(c *Client) (mlflowCR, error) {
-	body, _, err := c.get(clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName))
-	if err != nil {
-		return mlflowCR{}, err
-	}
 	var cr mlflowCR
-	if err := json.Unmarshal(body, &cr); err != nil {
-		return mlflowCR{}, fmt.Errorf("parse MLflow CR: %w", err)
+	if err := c.getInto(clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), &cr); err != nil {
+		if isDecodeError(err) {
+			return mlflowCR{}, fmt.Errorf("parse MLflow CR: %w", err)
+		}
+		return mlflowCR{}, err
 	}
 	return cr, nil
 }

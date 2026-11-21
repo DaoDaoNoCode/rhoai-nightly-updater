@@ -1712,14 +1712,6 @@ func patchCRDConversionWebhooks(c *Client) (int, []string) {
 	var warnings []string
 	for _, crd := range crds {
 		path := clusterPath("apiextensions.k8s.io/v1", "customresourcedefinitions", crd)
-		body, found, err := c.getOptional(path)
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("read CRD %s: %v", crd, err))
-			continue
-		}
-		if !found {
-			continue
-		}
 		var obj struct {
 			Spec struct {
 				Conversion struct {
@@ -1735,8 +1727,16 @@ func patchCRDConversionWebhooks(c *Client) (int, []string) {
 				} `json:"conversion"`
 			} `json:"spec"`
 		}
-		if err := json.Unmarshal(body, &obj); err != nil {
-			warnings = append(warnings, fmt.Sprintf("parse CRD %s: %v", crd, err))
+		found, err := c.getIntoOptional(path, &obj)
+		if err != nil {
+			if isDecodeError(err) {
+				warnings = append(warnings, fmt.Sprintf("parse CRD %s: %v", crd, err))
+				continue
+			}
+			warnings = append(warnings, fmt.Sprintf("read CRD %s: %v", crd, err))
+			continue
+		}
+		if !found {
 			continue
 		}
 		conv := obj.Spec.Conversion
@@ -1762,13 +1762,6 @@ func patchCRDConversionWebhooks(c *Client) (int, []string) {
 // rhoaiCSVExists reports whether any (non-copied) RHOAI CSV is in the
 // operator namespace.
 func rhoaiCSVExists(c *Client) (bool, error) {
-	body, found, err := c.getOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""))
-	if err != nil {
-		return false, err
-	}
-	if !found {
-		return false, nil
-	}
 	var list struct {
 		Items []struct {
 			Metadata struct {
@@ -1777,8 +1770,12 @@ func rhoaiCSVExists(c *Client) (bool, error) {
 			} `json:"metadata"`
 		} `json:"items"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
+	found, err := c.getIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""), &list)
+	if err != nil {
 		return false, err
+	}
+	if !found {
+		return false, nil
 	}
 	for _, item := range list.Items {
 		if strings.HasPrefix(item.Metadata.Name, SubName+".") && item.Metadata.Labels["olm.copiedFrom"] == "" {

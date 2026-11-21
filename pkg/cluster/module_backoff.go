@@ -99,13 +99,12 @@ func (j deploymentJSON) toOperatorDeployment(via string) operatorDeployment {
 }
 
 func readOperatorDeployment(c *Client, namespace, name, via string) (*operatorDeployment, error) {
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", namespace, name))
-	if err != nil {
-		return nil, err
-	}
 	var j deploymentJSON
-	if err := json.Unmarshal(body, &j); err != nil {
-		return nil, fmt.Errorf("parse Deployment %s/%s: %w", namespace, name, err)
+	if err := c.getInto(namespacedPath("apps/v1", "deployments", namespace, name), &j); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse Deployment %s/%s: %w", namespace, name, err)
+		}
+		return nil, err
 	}
 	if j.Metadata.Namespace == "" {
 		j.Metadata.Namespace = namespace
@@ -239,20 +238,20 @@ func webhooksServedBy(c *Client, d operatorDeployment) ([]string, error) {
 }
 
 func serviceSelects(c *Client, namespace, name string, podLabels map[string]string) (bool, error) {
-	body, found, err := c.getOptional(namespacedPath("v1", "services", namespace, name))
-	if err != nil {
-		return false, fmt.Errorf("read Service %s/%s: %w", namespace, name, err)
-	}
-	if !found {
-		return false, nil
-	}
 	var svc struct {
 		Spec struct {
 			Selector map[string]string `json:"selector"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &svc); err != nil {
-		return false, fmt.Errorf("parse Service %s/%s: %w", namespace, name, err)
+	found, err := c.getIntoOptional(namespacedPath("v1", "services", namespace, name), &svc)
+	if err != nil {
+		if isDecodeError(err) {
+			return false, fmt.Errorf("parse Service %s/%s: %w", namespace, name, err)
+		}
+		return false, fmt.Errorf("read Service %s/%s: %w", namespace, name, err)
+	}
+	if !found {
+		return false, nil
 	}
 	if len(svc.Spec.Selector) == 0 {
 		return false, nil

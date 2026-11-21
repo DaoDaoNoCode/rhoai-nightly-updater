@@ -67,18 +67,18 @@ func ownsModel(c *Client, meta objectMeta) (bool, error) {
 
 // readModelsRecord reads the record (empty when nothing is recorded).
 func readModelsRecord(c *Client) (modelsRecord, error) {
-	body, found, err := c.bookkeeping().getOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
+	var cm struct {
+		Data map[string]string `json:"data"`
+	}
+	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
 	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
+		}
 		return nil, fmt.Errorf("read this tool's record of its models: %w", err)
 	}
 	if !found {
 		return modelsRecord{}, nil
-	}
-	var cm struct {
-		Data map[string]string `json:"data"`
-	}
-	if err := json.Unmarshal(body, &cm); err != nil {
-		return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
 	}
 	rec := modelsRecord{}
 	if raw := cm.Data[modelsRecordKey]; raw != "" {

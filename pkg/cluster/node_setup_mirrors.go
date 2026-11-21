@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -119,13 +118,6 @@ func idmsRules(items []idmsItem) []mirrorRule {
 // (spec.repositoryDigestMirrors). A 404 for the collection means the API
 // is not served, so no such object exists; any other failure is an error.
 func listICSPRules(c *Client) ([]mirrorRule, error) {
-	body, found, err := c.getOptional(clusterPath("operator.openshift.io/v1alpha1", "imagecontentsourcepolicies", ""))
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, nil
-	}
 	var list struct {
 		Items []struct {
 			Metadata struct {
@@ -139,8 +131,15 @@ func listICSPRules(c *Client) ([]mirrorRule, error) {
 			} `json:"spec"`
 		} `json:"items"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse ImageContentSourcePolicies: %w", err)
+	found, err := c.getIntoOptional(clusterPath("operator.openshift.io/v1alpha1", "imagecontentsourcepolicies", ""), &list)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse ImageContentSourcePolicies: %w", err)
+		}
+		return nil, err
+	}
+	if !found {
+		return nil, nil
 	}
 	var out []mirrorRule
 	for _, p := range list.Items {
@@ -154,13 +153,6 @@ func listICSPRules(c *Client) ([]mirrorRule, error) {
 // listITMSRules lists the ImageTagMirrorSets' rules (spec.imageTagMirrors),
 // with the same 404 handling as listICSPRules.
 func listITMSRules(c *Client) ([]mirrorRule, error) {
-	body, found, err := c.getOptional(clusterPath("config.openshift.io/v1", "imagetagmirrorsets", ""))
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, nil
-	}
 	var list struct {
 		Items []struct {
 			Metadata struct {
@@ -175,8 +167,15 @@ func listITMSRules(c *Client) ([]mirrorRule, error) {
 			} `json:"spec"`
 		} `json:"items"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse ImageTagMirrorSets: %w", err)
+	found, err := c.getIntoOptional(clusterPath("config.openshift.io/v1", "imagetagmirrorsets", ""), &list)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse ImageTagMirrorSets: %w", err)
+		}
+		return nil, err
+	}
+	if !found {
+		return nil, nil
 	}
 	var out []mirrorRule
 	for _, s := range list.Items {

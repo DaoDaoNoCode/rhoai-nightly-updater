@@ -2,7 +2,6 @@ package cluster
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -271,16 +270,16 @@ func captureOperatorRecovery(c *Client) (*operatorRecovery, error) {
 		{subscriptionPath(), &r.subscription},
 		{namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName), &r.catalog},
 	} {
-		body, found, err := c.getOptional(resource.path)
+		var obj map[string]any
+		found, err := c.getIntoOptional(resource.path, &obj)
 		if err != nil {
+			if isDecodeError(err) {
+				return nil, err
+			}
 			return nil, fmt.Errorf("capture operator recovery state: %w", err)
 		}
 		if !found {
 			continue
-		}
-		var obj map[string]any
-		if err := json.Unmarshal(body, &obj); err != nil {
-			return nil, err
 		}
 		if obj["spec"] != nil {
 			*resource.target = obj
@@ -522,13 +521,6 @@ type rhoaiCSV struct {
 // listRHOAICSVs lists the RHOAI CSVs (rhods-operator.*, not copied) in the
 // operator namespace. A missing namespace is an empty list.
 func listRHOAICSVs(c *Client) ([]rhoaiCSV, error) {
-	body, found, err := c.getOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""))
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, nil
-	}
 	var list struct {
 		Items []struct {
 			Metadata struct {
@@ -538,8 +530,12 @@ func listRHOAICSVs(c *Client) ([]rhoaiCSV, error) {
 			} `json:"metadata"`
 		} `json:"items"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
+	found, err := c.getIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""), &list)
+	if err != nil {
 		return nil, err
+	}
+	if !found {
+		return nil, nil
 	}
 	var out []rhoaiCSV
 	for _, item := range list.Items {
@@ -601,20 +597,17 @@ func (r *operatorRecovery) attemptCSVsToRemove(c *Client) ([]rhoaiCSV, error) {
 	// Fall back to the CSVs the attempt was seen installing and the ones it
 	// deleted, read one by one for their UIDs.
 	for _, name := range append(append([]string{}, r.attemptCSVs...), r.removedCSVs...) {
-		body, found, getErr := c.getOptional(csvPath(name))
-		if getErr != nil {
-			return out, err
-		}
-		if !found {
-			continue
-		}
 		var obj struct {
 			Metadata struct {
 				UID string `json:"uid"`
 			} `json:"metadata"`
 		}
-		if json.Unmarshal(body, &obj) != nil {
+		found, getErr := c.getIntoOptional(csvPath(name), &obj)
+		if getErr != nil {
 			return out, err
+		}
+		if !found {
+			continue
 		}
 		add(rhoaiCSV{Name: name, UID: obj.Metadata.UID})
 	}

@@ -151,17 +151,16 @@ func ReadSessionToken(ctx context.Context, userToken string) (*SessionToken, err
 // same call oauth-proxy's OpenShift provider uses to identify the user.
 func LookupUserWithToken(ctx context.Context, userToken string) (string, error) {
 	userClient := NewClientWithContext(ctx, userToken)
-	body, _, err := userClient.get("/apis/user.openshift.io/v1/users/~")
-	if err != nil {
-		return "", wrapUserTokenError("identify user", err)
-	}
 	var user struct {
 		Metadata struct {
 			Name string `json:"name"`
 		} `json:"metadata"`
 	}
-	if err := json.Unmarshal(body, &user); err != nil {
-		return "", fmt.Errorf("parse user: %w", err)
+	if err := userClient.getInto("/apis/user.openshift.io/v1/users/~", &user); err != nil {
+		if isDecodeError(err) {
+			return "", fmt.Errorf("parse user: %w", err)
+		}
+		return "", wrapUserTokenError("identify user", err)
 	}
 	if user.Metadata.Name == "" {
 		return "", fmt.Errorf("identify user: the API returned no user name")

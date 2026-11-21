@@ -604,10 +604,6 @@ func installedCSVOwnsCRD(c *Client, crd string) (string, bool, error) {
 	if sub.InstalledCSV == "" {
 		return "", false, fmt.Errorf("the Subscription names no installed CSV")
 	}
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, sub.InstalledCSV))
-	if err != nil {
-		return sub.InstalledCSV, false, err
-	}
 	var csv struct {
 		Spec struct {
 			CRDs struct {
@@ -617,8 +613,11 @@ func installedCSVOwnsCRD(c *Client, crd string) (string, bool, error) {
 			} `json:"customresourcedefinitions"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &csv); err != nil {
-		return sub.InstalledCSV, false, fmt.Errorf("parse CSV %s: %w", sub.InstalledCSV, err)
+	if err := c.getInto(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, sub.InstalledCSV), &csv); err != nil {
+		if isDecodeError(err) {
+			return sub.InstalledCSV, false, fmt.Errorf("parse CSV %s: %w", sub.InstalledCSV, err)
+		}
+		return sub.InstalledCSV, false, err
 	}
 	for _, o := range csv.Spec.CRDs.Owned {
 		if o.Name == crd {

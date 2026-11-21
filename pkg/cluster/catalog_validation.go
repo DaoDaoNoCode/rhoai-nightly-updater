@@ -206,10 +206,6 @@ func createVerificationCatalog(c *Client, image string) (name, path string, remo
 // verificationCatalogState reads a verification catalog's
 // status.connectionState.lastObservedState ("unknown" while it has none).
 func verificationCatalogState(c *Client, path string) (string, error) {
-	body, _, err := c.get(path)
-	if err != nil {
-		return "", fmt.Errorf("read verification catalog: %w", err)
-	}
 	var cs struct {
 		Status struct {
 			Connection struct {
@@ -217,8 +213,11 @@ func verificationCatalogState(c *Client, path string) (string, error) {
 			} `json:"connectionState"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &cs); err != nil {
-		return "", fmt.Errorf("parse verification catalog: %w", err)
+	if err := c.getInto(path, &cs); err != nil {
+		if isDecodeError(err) {
+			return "", fmt.Errorf("parse verification catalog: %w", err)
+		}
+		return "", fmt.Errorf("read verification catalog: %w", err)
 	}
 	if cs.Status.Connection.State == "" {
 		return "unknown", nil

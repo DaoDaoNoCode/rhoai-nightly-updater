@@ -423,15 +423,14 @@ func (m *migrateRun) fail(id, msg, code, activity string) (*types.OperationRespo
 // readLegacyKeys reads the old storage's keys from minio-secret.
 func readLegacyKeys(c *Client) (s3Keys, error) {
 	path, _ := legacyGetPath("Secret", legacySecret)
-	body, _, err := c.get(path)
-	if err != nil {
-		return s3Keys{}, fmt.Errorf("read Secret %s/%s: %w", legacyNamespace, legacySecret, err)
-	}
 	var secret struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &secret); err != nil {
-		return s3Keys{}, fmt.Errorf("parse Secret %s/%s: %w", legacyNamespace, legacySecret, err)
+	if err := c.getInto(path, &secret); err != nil {
+		if isDecodeError(err) {
+			return s3Keys{}, fmt.Errorf("parse Secret %s/%s: %w", legacyNamespace, legacySecret, err)
+		}
+		return s3Keys{}, fmt.Errorf("read Secret %s/%s: %w", legacyNamespace, legacySecret, err)
 	}
 	keys := s3Keys{AccessKey: decodeBase64Field(secret.Data[legacyAccessKeyField]), SecretKey: decodeBase64Field(secret.Data[legacySecretKeyField])}
 	if keys.AccessKey == "" || keys.SecretKey == "" {

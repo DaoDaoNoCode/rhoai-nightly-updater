@@ -162,13 +162,6 @@ func dspaCollectionPath(namespace string) string {
 // listDSPAs lists pipeline servers in namespace, or cluster-wide when
 // namespace is "". A missing CRD returns errDSPACRDMissing.
 func listDSPAs(c *Client, namespace string) ([]dspaInfo, error) {
-	body, found, err := c.getOptional(dspaCollectionPath(namespace))
-	if err != nil {
-		return nil, fmt.Errorf("list pipeline servers: %w", err)
-	}
-	if !found {
-		return nil, errDSPACRDMissing
-	}
 	var list struct {
 		Items []struct {
 			Metadata objectMeta `json:"metadata"`
@@ -200,8 +193,15 @@ func listDSPAs(c *Client, namespace string) ([]dspaInfo, error) {
 			} `json:"status"`
 		} `json:"items"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse pipeline server list: %w", err)
+	found, err := c.getIntoOptional(dspaCollectionPath(namespace), &list)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse pipeline server list: %w", err)
+		}
+		return nil, fmt.Errorf("list pipeline servers: %w", err)
+	}
+	if !found {
+		return nil, errDSPACRDMissing
 	}
 	out := make([]dspaInfo, 0, len(list.Items))
 	for _, item := range list.Items {

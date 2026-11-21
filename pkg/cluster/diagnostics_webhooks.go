@@ -126,10 +126,6 @@ func readDSCComponents(c *Client) map[string]string {
 	if err != nil {
 		return nil
 	}
-	body, _, err := c.get(path)
-	if err != nil {
-		return nil
-	}
 	var dsc struct {
 		Spec struct {
 			Components map[string]struct {
@@ -137,7 +133,7 @@ func readDSCComponents(c *Client) map[string]string {
 			} `json:"components"`
 		} `json:"spec"`
 	}
-	if json.Unmarshal(body, &dsc) != nil {
+	if c.getInto(path, &dsc) != nil {
 		return nil
 	}
 	out := map[string]string{}

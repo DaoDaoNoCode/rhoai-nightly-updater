@@ -392,13 +392,12 @@ func getClusterInfo(c *Client) (string, string) {
 }
 
 func getClusterVersion(c *Client) (string, error) {
-	body, _, err := c.get(clusterPath("config.openshift.io/v1", "clusterversions", "version"))
-	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
-	}
 	var result map[string]any
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("unmarshal: %w", err)
+	if err := c.getInto(clusterPath("config.openshift.io/v1", "clusterversions", "version"), &result); err != nil {
+		if isDecodeError(err) {
+			return "", fmt.Errorf("unmarshal: %w", err)
+		}
+		return "", fmt.Errorf("request failed: %w", err)
 	}
 	statusMap, _ := result["status"].(map[string]any)
 	if statusMap == nil {
@@ -423,13 +422,6 @@ type subscriptionDetails struct {
 
 func readSubscription(c *Client) (subscriptionDetails, error) {
 	path := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
-	body, exists, err := c.getOptional(path)
-	if err != nil {
-		return subscriptionDetails{}, fmt.Errorf("request failed: %w", err)
-	}
-	if !exists {
-		return subscriptionDetails{info: types.SubscriptionInfo{State: "Not Installed", Namespace: SubNS}}, nil
-	}
 	var sub struct {
 		Metadata objectMeta `json:"metadata"`
 		Spec     struct {
@@ -441,8 +433,15 @@ func readSubscription(c *Client) (subscriptionDetails, error) {
 			InstalledCSV string  `json:"installedCSV"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &sub); err != nil {
-		return subscriptionDetails{}, fmt.Errorf("unmarshal: %w", err)
+	exists, err := c.getIntoOptional(path, &sub)
+	if err != nil {
+		if isDecodeError(err) {
+			return subscriptionDetails{}, fmt.Errorf("unmarshal: %w", err)
+		}
+		return subscriptionDetails{}, fmt.Errorf("request failed: %w", err)
+	}
+	if !exists {
+		return subscriptionDetails{info: types.SubscriptionInfo{State: "Not Installed", Namespace: SubNS}}, nil
 	}
 	state := "Unknown"
 	installed := ""
@@ -580,14 +579,6 @@ func getCatalogSource(c *Client) (types.CatalogSourceInfo, error) {
 
 func readCatalogSource(c *Client) (types.CatalogSourceInfo, *objectMeta, error) {
 	path := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
-	body, found, err := c.getOptional(path)
-	if err != nil {
-		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, fmt.Errorf("request failed: %w", err)
-	}
-	if !found {
-		// expected when the CatalogSource does not exist yet
-		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, nil
-	}
 	var result struct {
 		Metadata objectMeta `json:"metadata"`
 		Spec     struct {
@@ -599,8 +590,16 @@ func readCatalogSource(c *Client) (types.CatalogSourceInfo, *objectMeta, error) 
 			} `json:"connectionState"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, fmt.Errorf("unmarshal: %w", err)
+	found, err := c.getIntoOptional(path, &result)
+	if err != nil {
+		if isDecodeError(err) {
+			return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, fmt.Errorf("unmarshal: %w", err)
+		}
+		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, fmt.Errorf("request failed: %w", err)
+	}
+	if !found {
+		// expected when the CatalogSource does not exist yet
+		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, nil
 	}
 
 	state := "Unknown"
@@ -730,16 +729,12 @@ func readPullSecret(c *Client) (types.PullSecretInfo, string, error) {
 }
 
 func getConsoleURL(c *Client) string {
-	body, _, err := c.get(clusterPath("config.openshift.io/v1", "consoles", "cluster"))
-	if err != nil {
-		return ""
-	}
 	var result struct {
 		Status struct {
 			ConsoleURL string `json:"consoleURL"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := c.getInto(clusterPath("config.openshift.io/v1", "consoles", "cluster"), &result); err != nil {
 		return ""
 	}
 	return result.Status.ConsoleURL
@@ -749,13 +744,6 @@ func getConsoleURL(c *Client) string {
 // whose clusterServiceVersionNames include "rhods-operator".
 func getInstallPlan(c *Client) (*types.InstallPlanInfo, error) {
 	path := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, "")
-	body, found, err := c.getOptional(path)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	if !found {
-		return nil, nil
-	}
 	var result struct {
 		Items []struct {
 			Metadata struct {
@@ -771,8 +759,15 @@ func getInstallPlan(c *Client) (*types.InstallPlanInfo, error) {
 			} `json:"status"`
 		} `json:"items"`
 	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("unmarshal: %w", err)
+	found, err := c.getIntoOptional(path, &result)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("unmarshal: %w", err)
+		}
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	if !found {
+		return nil, nil
 	}
 
 	var latest *types.InstallPlanInfo

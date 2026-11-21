@@ -38,10 +38,6 @@ type dscCRD struct {
 // readDSCCRD reads the installed DataScienceCluster CRD (get on the CRD
 // by name, which both profiles grant).
 func readDSCCRD(c *Client) (*dscCRD, error) {
-	body, _, err := c.get(dscCRDPath)
-	if err != nil {
-		return nil, err
-	}
 	var crd struct {
 		Spec struct {
 			Versions []struct {
@@ -55,8 +51,11 @@ func readDSCCRD(c *Client) (*dscCRD, error) {
 			} `json:"versions"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &crd); err != nil {
-		return nil, fmt.Errorf("parse the DataScienceCluster CRD: %w", err)
+	if err := c.getInto(dscCRDPath, &crd); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse the DataScienceCluster CRD: %w", err)
+		}
+		return nil, err
 	}
 	out := &dscCRD{}
 	for _, v := range crd.Spec.Versions {

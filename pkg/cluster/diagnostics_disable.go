@@ -31,13 +31,6 @@ var refusedComponents = map[string]string{
 }
 
 func deploymentReady(c *Client, namespace, name string) (bool, string) {
-	body, found, err := c.getOptional(namespacedPath("apps/v1", "deployments", namespace, name))
-	if err != nil {
-		return false, fmt.Sprintf("could not read Deployment %s/%s: %v", namespace, name, err)
-	}
-	if !found {
-		return false, fmt.Sprintf("Deployment %s/%s does not exist", namespace, name)
-	}
 	var d struct {
 		Spec struct {
 			Replicas *int `json:"replicas"`
@@ -46,8 +39,15 @@ func deploymentReady(c *Client, namespace, name string) (bool, string) {
 			ReadyReplicas int `json:"readyReplicas"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &d); err != nil {
-		return false, fmt.Sprintf("could not parse Deployment %s/%s", namespace, name)
+	found, err := c.getIntoOptional(namespacedPath("apps/v1", "deployments", namespace, name), &d)
+	if err != nil {
+		if isDecodeError(err) {
+			return false, fmt.Sprintf("could not parse Deployment %s/%s", namespace, name)
+		}
+		return false, fmt.Sprintf("could not read Deployment %s/%s: %v", namespace, name, err)
+	}
+	if !found {
+		return false, fmt.Sprintf("Deployment %s/%s does not exist", namespace, name)
 	}
 	if d.Status.ReadyReplicas < 1 {
 		return false, fmt.Sprintf("Deployment %s/%s has no ready pod", namespace, name)

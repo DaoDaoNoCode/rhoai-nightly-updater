@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -146,16 +145,13 @@ func pausedOperatorText(operator string) string {
 }
 
 func legacyDashboardDevActive(c *Client, ns string) (bool, error) {
-	body, found, err := c.getOptional(namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName))
+	var d dashboardDeployment
+	found, err := c.getIntoOptional(namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName), &d)
 	if err != nil {
 		return false, err
 	}
 	if !found {
 		return false, nil
-	}
-	var d dashboardDeployment
-	if err := json.Unmarshal(body, &d); err != nil {
-		return false, err
 	}
 	if _, saved := d.Metadata.Annotations[legacyOriginalManagedAnnotation]; saved || d.Metadata.Annotations["opendatahub.io/managed"] == "false" {
 		return true, nil

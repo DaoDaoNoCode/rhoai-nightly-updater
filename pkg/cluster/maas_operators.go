@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 
@@ -199,10 +198,6 @@ type operatorContainer struct {
 // csvContainers reads the containers of a CSV's Deployments (its install
 // strategy), which OLM gives a Subscription's spec.config.resources to.
 func csvContainers(c *Client, ns, name string) ([]operatorContainer, error) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name))
-	if err != nil {
-		return nil, err
-	}
 	var csv struct {
 		Spec struct {
 			Install struct {
@@ -224,7 +219,7 @@ func csvContainers(c *Client, ns, name string) ([]operatorContainer, error) {
 			} `json:"install"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &csv); err != nil {
+	if err := c.getInto(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name), &csv); err != nil {
 		return nil, err
 	}
 	var out []operatorContainer

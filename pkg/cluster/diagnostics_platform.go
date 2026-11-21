@@ -122,15 +122,14 @@ func checkPlatformModules(c *Client) checkOutput {
 // not "true", sorted. The Platform and DataScienceCluster gate problems
 // turn each into its own acknowledgement command.
 func pendingUpgradeAckKeys(c *Client) ([]string, map[string]string, error) {
-	body, _, err := c.get(namespacedPath("v1", "configmaps", SubNS, "odh-upgrade-acks"))
-	if err != nil {
-		return nil, nil, err
-	}
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &cm); err != nil {
-		return nil, nil, fmt.Errorf("parse ConfigMap odh-upgrade-acks: %w", err)
+	if err := c.getInto(namespacedPath("v1", "configmaps", SubNS, "odh-upgrade-acks"), &cm); err != nil {
+		if isDecodeError(err) {
+			return nil, nil, fmt.Errorf("parse ConfigMap odh-upgrade-acks: %w", err)
+		}
+		return nil, nil, err
 	}
 	var keys []string
 	for k, v := range cm.Data {

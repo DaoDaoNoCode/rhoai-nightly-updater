@@ -636,18 +636,18 @@ func playgroundOwnership(c *Client, project string, rec playgroundRecord, has bo
 // readPlaygroundRecords returns the recorded projects (none when nothing is
 // recorded).
 func readPlaygroundRecords(c *Client) (map[string]playgroundRecord, error) {
-	body, found, err := c.bookkeeping().getOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
+	var cm struct {
+		Data map[string]string `json:"data"`
+	}
+	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
 	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
+		}
 		return nil, fmt.Errorf("read this tool's playground records: %w", err)
 	}
 	if !found {
 		return map[string]playgroundRecord{}, nil
-	}
-	var cm struct {
-		Data map[string]string `json:"data"`
-	}
-	if err := json.Unmarshal(body, &cm); err != nil {
-		return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
 	}
 	out := map[string]playgroundRecord{}
 	if raw := cm.Data[playgroundRecordKey]; raw != "" {
@@ -746,21 +746,21 @@ func genAIUIState(c *Client) string {
 		slog.Debug("cannot tell where the gen-ai-ui Deployment runs", "error", err)
 		return ""
 	}
-	body, found, err := c.getOptional(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, genAIUIDeployment))
-	if err != nil {
-		slog.Debug("cannot read the gen-ai-ui Deployment", "error", err)
-		return ""
-	}
-	if !found {
-		return "missing"
-	}
 	var d struct {
 		Status struct {
 			Conditions []k8sCondition `json:"conditions"`
 		} `json:"status"`
 	}
-	if json.Unmarshal(body, &d) != nil {
+	found, err := c.getIntoOptional(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, genAIUIDeployment), &d)
+	if err != nil {
+		if isDecodeError(err) {
+			return ""
+		}
+		slog.Debug("cannot read the gen-ai-ui Deployment", "error", err)
 		return ""
+	}
+	if !found {
+		return "missing"
 	}
 	if cond, ok := findCondition(d.Status.Conditions, "Available"); ok {
 		if cond.Status == "True" {

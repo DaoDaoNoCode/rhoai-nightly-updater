@@ -13,10 +13,6 @@ import (
 )
 
 func dscSpecSchema(c *Client, apiVersion string) (map[string]any, error) {
-	body, _, err := c.get("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io")
-	if err != nil {
-		return nil, err
-	}
 	var crd struct {
 		Spec struct {
 			Versions []struct {
@@ -28,7 +24,7 @@ func dscSpecSchema(c *Client, apiVersion string) (map[string]any, error) {
 			} `json:"versions"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &crd); err != nil {
+	if err := c.getInto("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io", &crd); err != nil {
 		return nil, err
 	}
 	version := strings.TrimPrefix(apiVersion, "datasciencecluster.opendatahub.io/")

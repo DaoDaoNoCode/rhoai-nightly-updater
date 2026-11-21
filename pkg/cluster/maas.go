@@ -183,18 +183,18 @@ func (r *maasRecord) setShared(key, what string) {
 
 func readMaaSRecord(c *Client) (maasRecord, error) {
 	var rec maasRecord
-	body, found, err := c.bookkeeping().getOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
+	var cm struct {
+		Data map[string]string `json:"data"`
+	}
+	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
 	if err != nil {
+		if isDecodeError(err) {
+			return rec, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
+		}
 		return rec, fmt.Errorf("read this tool's MaaS record: %w", err)
 	}
 	if !found {
 		return rec, nil
-	}
-	var cm struct {
-		Data map[string]string `json:"data"`
-	}
-	if err := json.Unmarshal(body, &cm); err != nil {
-		return rec, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
 	}
 	if raw := cm.Data[maasRecordKey]; raw != "" {
 		if err := json.Unmarshal([]byte(raw), &rec); err != nil {
@@ -807,15 +807,14 @@ func maasDBConfigObject(ns, connURL string) map[string]any {
 // (maas-setup.md "Connection string format"). The URL holds the password:
 // it is only ever written to the Secret, never logged or returned.
 func maasConnectionURL(c *Client, ns string) (string, error) {
-	body, _, err := c.get(namespacedPath("v1", "secrets", ns, "maas-db-app"))
-	if err != nil {
-		return "", fmt.Errorf("read the database's application Secret %s/%s: %w", ns, maasDBAppSecret, err)
-	}
 	var s struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &s); err != nil {
-		return "", errors.New("the database's application Secret cannot be parsed")
+	if err := c.getInto(namespacedPath("v1", "secrets", ns, "maas-db-app"), &s); err != nil {
+		if isDecodeError(err) {
+			return "", errors.New("the database's application Secret cannot be parsed")
+		}
+		return "", fmt.Errorf("read the database's application Secret %s/%s: %w", ns, maasDBAppSecret, err)
 	}
 	user, err1 := base64.StdEncoding.DecodeString(s.Data["username"])
 	pass, err2 := base64.StdEncoding.DecodeString(s.Data["password"])
@@ -829,13 +828,6 @@ func maasConnectionURL(c *Client, ns string) (string, error) {
 
 // readMaaSDBCluster reads the database: found, owned, ready, a message.
 func readMaaSDBCluster(c *Client, ns string) (objectMeta, bool, bool, string, error) {
-	body, found, err := c.getOptional(maasObjectPath("Cluster", ns))
-	if err != nil {
-		return objectMeta{}, false, false, "", err
-	}
-	if !found {
-		return objectMeta{}, false, false, "", nil
-	}
 	var cl struct {
 		Metadata objectMeta `json:"metadata"`
 		Spec     struct {
@@ -846,8 +838,15 @@ func readMaaSDBCluster(c *Client, ns string) (objectMeta, bool, bool, string, er
 			ReadyInstances int    `json:"readyInstances"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &cl); err != nil {
-		return objectMeta{}, true, false, "", err
+	found, err := c.getIntoOptional(maasObjectPath("Cluster", ns), &cl)
+	if err != nil {
+		if isDecodeError(err) {
+			return objectMeta{}, true, false, "", err
+		}
+		return objectMeta{}, false, false, "", err
+	}
+	if !found {
+		return objectMeta{}, false, false, "", nil
 	}
 	ready := cl.Status.ReadyInstances >= 1 && cl.Status.ReadyInstances >= cl.Spec.Instances
 	return cl.Metadata, true, ready, firstNonEmpty(cl.Status.Phase, "Starting"), nil
@@ -856,20 +855,17 @@ func readMaaSDBCluster(c *Client, ns string) (objectMeta, bool, bool, string, er
 // deploymentAvailable reads a Deployment's Available condition: "True",
 // "False", "missing" or "" (unreadable).
 func deploymentAvailable(c *Client, ns, name string) string {
-	body, found, err := c.getOptional(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, name))
-	if err != nil {
-		return ""
-	}
-	if !found {
-		return "missing"
-	}
 	var d struct {
 		Status struct {
 			Conditions []k8sCondition `json:"conditions"`
 		} `json:"status"`
 	}
-	if json.Unmarshal(body, &d) != nil {
+	found, err := c.getIntoOptional(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, name), &d)
+	if err != nil {
 		return ""
+	}
+	if !found {
+		return "missing"
 	}
 	if cond, ok := findCondition(d.Status.Conditions, "Available"); ok {
 		return cond.Status
@@ -880,20 +876,17 @@ func deploymentAvailable(c *Client, ns, name string) string {
 // readyCondition reads an object's Ready condition: "True", "False",
 // "missing" or "" (unreadable or not reported), with its message.
 func readyCondition(c *Client, path string) (string, string) {
-	body, found, err := c.getOptional(path)
-	if err != nil {
-		return "", ""
-	}
-	if !found {
-		return "missing", ""
-	}
 	var obj struct {
 		Status struct {
 			Conditions []k8sCondition `json:"conditions"`
 		} `json:"status"`
 	}
-	if json.Unmarshal(body, &obj) != nil {
+	found, err := c.getIntoOptional(path, &obj)
+	if err != nil {
 		return "", ""
+	}
+	if !found {
+		return "missing", ""
 	}
 	if cond, ok := findCondition(obj.Status.Conditions, "Ready"); ok {
 		return cond.Status, firstNonEmpty(cond.Message, cond.Reason)
@@ -1769,15 +1762,12 @@ func readMaaSModelRef(c *Client, project, name string) (maasModelRefObject, bool
 
 func readMaaSObject(c *Client, path string) (maasModelRefObject, bool, error) {
 	var obj maasModelRefObject
-	body, found, err := c.getOptional(path)
+	found, err := c.getIntoOptional(path, &obj)
 	if err != nil {
 		return obj, false, err
 	}
 	if !found {
 		return obj, false, nil
-	}
-	if err := json.Unmarshal(body, &obj); err != nil {
-		return obj, false, err
 	}
 	return obj, true, nil
 }

@@ -297,17 +297,17 @@ func waitForOperatorInstall(c *Client, emit func(UpdateStepEvent), logs *[]strin
 			return stopped("install_timeout", fmt.Sprintf("OLM did not finish installing the operator within %s", OperatorInstallTimeout))
 		}
 
-		body, found, err := c.getOptional(subscriptionPath())
+		var sub installWaitSubscription
+		found, err := c.getIntoOptional(subscriptionPath(), &sub)
 		if err != nil {
+			if isDecodeError(err) {
+				continue
+			}
 			slog.Debug("error polling Subscription", "error", err)
 			continue
 		}
 		if !found {
 			return failed("olm_install_failed", "The Subscription was deleted while OLM was installing the operator; another user or tool may have changed it.")
-		}
-		var sub installWaitSubscription
-		if json.Unmarshal(body, &sub) != nil {
-			continue
 		}
 
 		resolutionFailing, pullFailing, outcome, done := w.subscriptionConditions(sub)
@@ -466,16 +466,6 @@ func (w *installWait) subscriptionConditions(sub installWaitSubscription) (resol
 // CSVSucceededSettle, else done is false and the wait goes on.
 func (w *installWait) checkCSV(name, installedCSV string, deadline, waitStart time.Time) (installOutcome, bool) {
 	c, progress, failed, logs, ipName := w.c, w.progress, w.failed, w.logs, w.ipName
-	csvBody, found, err := c.getOptional(csvPath(name))
-	if err != nil {
-		return installOutcome{}, false
-	}
-	if !found {
-		if ipName != "" {
-			progress(fmt.Sprintf("InstallPlan %s: waiting for OLM to create CSV %s", ipName, name))
-		}
-		return installOutcome{}, false
-	}
 	var csv struct {
 		Metadata struct {
 			DeletionTimestamp *string `json:"deletionTimestamp"`
@@ -486,7 +476,14 @@ func (w *installWait) checkCSV(name, installedCSV string, deadline, waitStart ti
 			Message string `json:"message"`
 		} `json:"status"`
 	}
-	if json.Unmarshal(csvBody, &csv) != nil {
+	found, err := c.getIntoOptional(csvPath(name), &csv)
+	if err != nil {
+		return installOutcome{}, false
+	}
+	if !found {
+		if ipName != "" {
+			progress(fmt.Sprintf("InstallPlan %s: waiting for OLM to create CSV %s", ipName, name))
+		}
 		return installOutcome{}, false
 	}
 	if csv.Metadata.DeletionTimestamp != nil {
@@ -946,13 +943,6 @@ func upgradeGateMessage(gates []string, hedge string) string {
 // install-wpkpm is owned by Subscription/rhods-operator). It returns "" when
 // there is none; a failed lookup refuses, since nothing was changed yet.
 func foreignSubscriptionRefusal(c *Client) string {
-	body, exists, err := c.getOptional(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ""))
-	if err != nil {
-		return fmt.Sprintf("Cannot check for other Subscriptions of %s in %s (list InstallPlans: %v). Nothing was changed.", SubName, SubNS, err)
-	}
-	if !exists {
-		return ""
-	}
 	var list struct {
 		Items []struct {
 			Metadata struct {
@@ -967,8 +957,15 @@ func foreignSubscriptionRefusal(c *Client) string {
 			} `json:"spec"`
 		} `json:"items"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return fmt.Sprintf("Cannot check for other Subscriptions of %s (parse InstallPlans: %v). Nothing was changed.", SubName, err)
+	exists, err := c.getIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ""), &list)
+	if err != nil {
+		if isDecodeError(err) {
+			return fmt.Sprintf("Cannot check for other Subscriptions of %s (parse InstallPlans: %v). Nothing was changed.", SubName, err)
+		}
+		return fmt.Sprintf("Cannot check for other Subscriptions of %s in %s (list InstallPlans: %v). Nothing was changed.", SubName, SubNS, err)
+	}
+	if !exists {
+		return ""
 	}
 	var found []string
 	for _, ip := range list.Items {

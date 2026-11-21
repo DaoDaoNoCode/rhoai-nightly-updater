@@ -1210,12 +1210,8 @@ func patchControlledDashboardImages(c *Client, operator *dashboardDeployment, pa
 		if current == nil || current.Metadata.UID != operator.Metadata.UID || current.Spec.Replicas == nil || *current.Spec.Replicas != 0 {
 			return fmt.Errorf("%s is no longer paused", operator.Metadata.Name)
 		}
-		body, _, err := c.get(path)
-		if err != nil {
-			return err
-		}
 		var d dashboardDeployment
-		if err := json.Unmarshal(body, &d); err != nil {
+		if err := c.getInto(path, &d); err != nil {
 			return err
 		}
 		var containers []map[string]string

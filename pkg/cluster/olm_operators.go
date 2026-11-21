@@ -155,15 +155,14 @@ func listSubscriptions(c *Client, ns string) ([]*olmSubscription, error) {
 	if ns != "" {
 		path = namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", ns, "")
 	}
-	body, _, err := c.get(path)
-	if err != nil {
-		return nil, fmt.Errorf("list Subscriptions: %w", err)
-	}
 	var list struct {
 		Items []json.RawMessage `json:"items"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse the Subscription list: %w", err)
+	if err := c.getInto(path, &list); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse the Subscription list: %w", err)
+		}
+		return nil, fmt.Errorf("list Subscriptions: %w", err)
 	}
 	out := make([]*olmSubscription, 0, len(list.Items))
 	for _, raw := range list.Items {
@@ -484,14 +483,10 @@ func (gs operatorGroups) names() []string {
 }
 
 func readOperatorGroups(c *Client, ns string) (operatorGroups, error) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1", "operatorgroups", ns, ""))
-	if err != nil {
-		return nil, err
-	}
 	var list struct {
 		Items operatorGroups `json:"items"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
+	if err := c.getInto(namespacedPath("operators.coreos.com/v1", "operatorgroups", ns, ""), &list); err != nil {
 		return nil, err
 	}
 	return list.Items, nil
@@ -562,21 +557,18 @@ func createOperatorObjects(c *Client, plan *operatorInstallPlan, dryRun bool) ([
 
 // csvPhase reads a CSV's phase and message ("" when it does not exist yet).
 func csvPhase(c *Client, ns, name string) (string, string, error) {
-	body, found, err := c.getOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name))
-	if err != nil {
-		return "", "", err
-	}
-	if !found {
-		return "", "", nil
-	}
 	var csv struct {
 		Status struct {
 			Phase   string `json:"phase"`
 			Message string `json:"message"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &csv); err != nil {
+	found, err := c.getIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name), &csv)
+	if err != nil {
 		return "", "", err
+	}
+	if !found {
+		return "", "", nil
 	}
 	return csv.Status.Phase, csv.Status.Message, nil
 }

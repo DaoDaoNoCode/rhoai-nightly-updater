@@ -258,18 +258,18 @@ func (m llmisvcObject) mainImage() string {
 }
 
 func listLLMInferenceServices(c *Client) ([]llmisvcObject, error) {
-	body, found, err := c.getOptional(clusterPath("serving.kserve.io/v1alpha2", "llminferenceservices", ""))
+	var list struct {
+		Items []llmisvcObject `json:"items"`
+	}
+	found, err := c.getIntoOptional(clusterPath("serving.kserve.io/v1alpha2", "llminferenceservices", ""), &list)
 	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parse LLMInferenceServices: %w", err)
+		}
 		return nil, fmt.Errorf("list LLMInferenceServices: %w", err)
 	}
 	if !found {
 		return nil, errLLMISvcAPIMissing
-	}
-	var list struct {
-		Items []llmisvcObject `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse LLMInferenceServices: %w", err)
 	}
 	return list.Items, nil
 }
@@ -279,16 +279,16 @@ func readToolModel(c *Client, project, name string) (llmisvcObject, bool, error)
 	if !ok {
 		return llmisvcObject{}, false, fmt.Errorf("%s is not a model of this tool's catalog", name)
 	}
-	body, found, err := c.getOptional(path)
+	var m llmisvcObject
+	found, err := c.getIntoOptional(path, &m)
 	if err != nil {
+		if isDecodeError(err) {
+			return llmisvcObject{}, false, fmt.Errorf("parse LLMInferenceService %s/%s: %w", project, name, err)
+		}
 		return llmisvcObject{}, false, err
 	}
 	if !found {
 		return llmisvcObject{}, false, nil
-	}
-	var m llmisvcObject
-	if err := json.Unmarshal(body, &m); err != nil {
-		return llmisvcObject{}, false, fmt.Errorf("parse LLMInferenceService %s/%s: %w", project, name, err)
 	}
 	return m, true, nil
 }
@@ -695,21 +695,21 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 // going away, and be a data science project (the dashboard lists models
 // only there). It returns a refusal, or "".
 func projectNamespace(c *Client, project string) (map[string]string, string, string) {
-	body, found, err := c.getOptional("/api/v1/namespaces/" + project)
-	if err != nil {
-		return nil, fmt.Sprintf("Cannot read project %s: %v.", project, err), errorCodeFromK8sErr(err)
-	}
-	if !found {
-		return nil, fmt.Sprintf("Project %s does not exist. Choose a data science project, or create one in the dashboard.", project), "validation"
-	}
 	var ns struct {
 		Metadata objectMeta `json:"metadata"`
 		Status   struct {
 			Phase string `json:"phase"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &ns); err != nil {
-		return nil, fmt.Sprintf("Cannot parse project %s: %v.", project, err), "internal"
+	found, err := c.getIntoOptional("/api/v1/namespaces/"+project, &ns)
+	if err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Sprintf("Cannot parse project %s: %v.", project, err), "internal"
+		}
+		return nil, fmt.Sprintf("Cannot read project %s: %v.", project, err), errorCodeFromK8sErr(err)
+	}
+	if !found {
+		return nil, fmt.Sprintf("Project %s does not exist. Choose a data science project, or create one in the dashboard.", project), "validation"
 	}
 	if ns.Metadata.terminating() || ns.Status.Phase == "Terminating" {
 		return nil, fmt.Sprintf("Project %s is being deleted.", project), "terminating"

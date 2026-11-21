@@ -812,14 +812,12 @@ type deploymentList struct {
 
 func getDeployments(c *Client, namespace string) ([]types.DeploymentInfo, error) {
 	path := namespacedPath("apps/v1", "deployments", namespace, "")
-	body, _, err := c.get(path)
-	if err != nil {
-		return nil, fmt.Errorf("fetching deployments in %s: %w", namespace, err)
-	}
-
 	var list deploymentList
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parsing deployments: %w", err)
+	if err := c.getInto(path, &list); err != nil {
+		if isDecodeError(err) {
+			return nil, fmt.Errorf("parsing deployments: %w", err)
+		}
+		return nil, fmt.Errorf("fetching deployments in %s: %w", namespace, err)
 	}
 
 	var deps []types.DeploymentInfo
