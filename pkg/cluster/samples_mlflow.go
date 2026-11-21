@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
@@ -228,7 +229,7 @@ func mlflowSamples() map[string]mlflowSample {
 // ServiceAccount (sa) only finds MLflow: its CR's status.url and the
 // dashboard's address, which are no user data.
 func GetMLflowSamplesStatus(sa, u *Client, project string) (*types.MLflowSamplesStatus, error) {
-	ok, err := isUserDSProject(u, project)
+	ok, err := authz.IsUserDSProject(u, project)
 	if err != nil {
 		return nil, err
 	}

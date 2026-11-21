@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -890,7 +891,7 @@ func playgroundItem(project string, srv *genAIServer, requested bool) types.Play
 // user's projects are used. Cached per token.
 func GetPlaygroundStatus(sa, u *Client, project string) (*types.PlaygroundStatus, error) {
 	if !u.ActsAsUser() {
-		return nil, errNotUserClient
+		return nil, authz.ErrNotUserClient
 	}
 	c := u
 	key := fmt.Sprintf("%d|%s|%s", playgroundStatusGen.Load(), tokenKey(c.BearerToken()), project)

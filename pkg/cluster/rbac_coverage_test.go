@@ -80,7 +80,7 @@ var rbacCallsNotUsingTheSAToken = map[string]string{
 // getServed...) stay in the ServiceAccount's scan: the scan cannot tell
 // their callers' tokens apart, so it over-approximates.
 var rbacUserTokenReads = map[string]string{
-	"user_reads.go:ListUserDSProjects":              "the user's data science projects, through the projects API",
+	"user_projects.go:ListUserDSProjects":           "the user's data science projects, through the projects API",
 	"user_reads.go:listProjectLLMInferenceServices": "the LLMInferenceServices of one of the user's projects",
 	"user_reads.go:listProjectInferenceServices":    "the InferenceServices of one of the user's projects",
 }

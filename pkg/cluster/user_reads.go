@@ -3,11 +3,11 @@ package cluster
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"slices"
 	"strings"
 	"sync"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -17,58 +17,10 @@ import (
 // Reads made with the signed-in user's own token (pkg/api withUserRead,
 // tier user-token): the API server, and the platform APIs the token is
 // sent to, decide what the user sees. Each function here refuses a client
-// that does not carry the user's token (errNotUserClient), so a read that
+// that does not carry the user's token (authz.ErrNotUserClient), so a read that
 // is meant to be the user's never runs with the ServiceAccount's RBAC.
 // pkg/cluster/rbac_coverage_test.go lists them in rbacUserTokenReads: the
 // template does not grant what they read.
-
-// errNotUserClient: a read that must be made with the user's own token got
-// another client.
-var errNotUserClient = errors.New("this read must be made with the signed-in user's own token")
-
-// dsProjectSelector selects RHOAI's data science projects (the label the
-// dashboard sets), for namespaces and projects alike.
-const dsProjectSelector = "opendatahub.io/dashboard=true"
-
-// ListUserDSProjects lists the data science projects the signed-in user
-// may see, with their own token: the OpenShift projects API
-// (project.openshift.io/v1 projects) with the label selector of
-// envkit.DSProjects. The API lists the namespaces whose "get namespaces" the
-// user's RBAC allows, applies the label selector, and keeps those the
-// token's scopes allow (openshift/openshift-apiserver release-4.17
-// 6ea968b: pkg/project/apiserver/registry/project/proxy/proxy.go:91-102,
-// pkg/project/auth/cache.go:478-518, the review of pkg/project/auth/
-// reviewer.go:49-56). Listing projects is granted to every authenticated
-// user by OpenShift's basic-user ClusterRole (openshift-apiserver
-// pkg/bootstrappolicy/policy.go:461, bound to system:authenticated at
-// :766). A cluster-admin sees every project.
-func ListUserDSProjects(u *Client) ([]string, error) {
-	if !u.ActsAsUser() {
-		return nil, errNotUserClient
-	}
-	var items []struct {
-		Metadata struct {
-			Name string `json:"name"`
-		} `json:"metadata"`
-		Status struct {
-			Phase string `json:"phase"`
-		} `json:"status"`
-	}
-	if err := u.ListInto("/apis/project.openshift.io/v1/projects?labelSelector="+url.QueryEscape(dsProjectSelector), &items); err != nil {
-		if kube.IsDecodeError(err) {
-			return nil, fmt.Errorf("parse the project list: %w", err)
-		}
-		return nil, fmt.Errorf("list your data science projects: %w", err)
-	}
-	projects := []string{}
-	for _, p := range items {
-		if p.Status.Phase != "Terminating" {
-			projects = append(projects, p.Metadata.Name)
-		}
-	}
-	slices.Sort(projects)
-	return projects, nil
-}
 
 // GetProjectStatus is the Environment status of one of the signed-in
 // user's data science projects (GET /api/resources/status?project= for a
@@ -80,9 +32,9 @@ func ListUserDSProjects(u *Client) ([]string, error) {
 // read says so in its Problem field; the others are still shown.
 func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, error) {
 	if !u.ActsAsUser() {
-		return nil, errNotUserClient
+		return nil, authz.ErrNotUserClient
 	}
-	ok, err := isUserDSProject(u, project)
+	ok, err := authz.IsUserDSProject(u, project)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +134,7 @@ func userReadProblem(what, project string, err error) (string, string) {
 // project with the user's token.
 func listProjectLLMInferenceServices(u *Client, project string) ([]llmisvcObject, error) {
 	if !u.ActsAsUser() {
-		return nil, errNotUserClient
+		return nil, authz.ErrNotUserClient
 	}
 	var list struct {
 		Items []llmisvcObject `json:"items"`
@@ -205,7 +157,7 @@ func listProjectLLMInferenceServices(u *Client, project string) ([]llmisvcObject
 // project with the user's token. A cluster without the API has none.
 func listProjectInferenceServices(u *Client, project string) ([]types.ProjectInferenceService, error) {
 	if !u.ActsAsUser() {
-		return nil, errNotUserClient
+		return nil, authz.ErrNotUserClient
 	}
 	out := []types.ProjectInferenceService{}
 	var list struct {
@@ -290,14 +242,4 @@ func PlaygroundStatusForUser(st *types.PlaygroundStatus) *types.PlaygroundStatus
 		out.GenAIUI = ""
 	}
 	return &out
-}
-
-// isUserDSProject reports whether project is one of the signed-in user's
-// data science projects (ListUserDSProjects).
-func isUserDSProject(u *Client, project string) (bool, error) {
-	projects, err := ListUserDSProjects(u)
-	if err != nil {
-		return false, err
-	}
-	return slices.Contains(projects, project), nil
 }

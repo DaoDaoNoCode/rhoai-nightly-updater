@@ -34,3 +34,8 @@ func ReadSessionToken(ctx context.Context, userToken string) (*SessionToken, err
 func LookupUserWithToken(ctx context.Context, userToken string) (string, error) {
 	return authz.LookupUserWithToken(ctx, userToken)
 }
+
+// ListUserDSProjects is authz.ListUserDSProjects.
+func ListUserDSProjects(u *Client) ([]string, error) {
+	return authz.ListUserDSProjects(u)
+}

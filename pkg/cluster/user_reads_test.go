@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -69,16 +70,16 @@ func TestListUserDSProjects(t *testing.T) {
 // Refused with the ServiceAccount's client, before any request.
 func TestUserReadsRefuseTheServiceAccount(t *testing.T) {
 	k8s, c := newResourceFake(t)
-	if _, err := ListUserDSProjects(c); !errors.Is(err, errNotUserClient) {
+	if _, err := ListUserDSProjects(c); !errors.Is(err, authz.ErrNotUserClient) {
 		t.Fatalf("got %v", err)
 	}
-	if _, err := GetProjectStatus(c, c, "p"); !errors.Is(err, errNotUserClient) {
+	if _, err := GetProjectStatus(c, c, "p"); !errors.Is(err, authz.ErrNotUserClient) {
 		t.Fatalf("project status: %v", err)
 	}
-	if _, err := GetPlaygroundStatus(c, c, ""); !errors.Is(err, errNotUserClient) {
+	if _, err := GetPlaygroundStatus(c, c, ""); !errors.Is(err, authz.ErrNotUserClient) {
 		t.Fatalf("playground status: %v", err)
 	}
-	if _, err := GetMLflowSamplesStatus(c, c, "p"); !errors.Is(err, errNotUserClient) {
+	if _, err := GetMLflowSamplesStatus(c, c, "p"); !errors.Is(err, authz.ErrNotUserClient) {
 		t.Fatalf("samples status: %v", err)
 	}
 	if len(k8s.calls) != 0 {
