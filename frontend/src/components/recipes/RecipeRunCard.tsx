@@ -101,6 +101,7 @@ export const RecipeRunCard: React.FC<{
   const [reresolve, setReresolve] = useState(false);
 
   const current = run.steps.find((s) => s.status === "running") ?? null;
+  const failed = run.steps.find((s) => s.status === "failed") ?? null;
   const next = resumeStep(run);
   const name = run.recipe.metadata.name;
 
@@ -116,7 +117,8 @@ export const RecipeRunCard: React.FC<{
       // An interrupted run's record: the step that was running when its updater pod stopped.
       message = "Was running when the updater stopped.";
     }
-    states[s.id] = { status: s.status === "running" && !live ? "failed" : s.status, message };
+    // A step found already set up is set up: drawn as done, its message says so.
+    states[s.id] = { status: s.status === "running" && !live ? "failed" : s.status === "skipped" ? "success" : s.status, message };
   }
 
   const stop = async () => {
@@ -171,14 +173,13 @@ export const RecipeRunCard: React.FC<{
         </Alert>
       );
       break;
-    case "failed": {
-      const failed = run.steps.find((s) => s.status === "failed");
+    case "failed":
+      // The failed step's own message: the title already names the step.
       outcome = (
-        <OutcomeAlert result={{ success: false, message: run.stopReason || failed?.message || "The run failed.", errorCode: run.errorCode, logs: null }}
+        <OutcomeAlert result={{ success: false, message: failed?.message || run.stopReason || "The run failed.", errorCode: run.errorCode, logs: null }}
           failedTitle={failed ? `Step ${stepNumber(run, failed)} failed: ${failed.title}` : "The run failed"} />
       );
       break;
-    }
     case "sign-in":
       outcome = (
         <Alert variant="warning" isInline component="p" isLiveRegion title="Sign in again, then Resume"
@@ -241,7 +242,7 @@ export const RecipeRunCard: React.FC<{
           )}
           <StackItem>
             <StepProgress idPrefix="recipe-run" aria-label={`Recipe ${name}: steps`} steps={run.steps} states={states} running={live}
-              shownElsewhere={phase === "failed" ? run.stopReason : undefined} />
+              shownElsewhere={phase === "failed" ? failed?.message || run.stopReason : undefined} />
           </StackItem>
           {outcome && <StackItem>{outcome}</StackItem>}
           {!live && next && phase !== "succeeded" && <StackItem><Content component="p">{continuesAt}</Content></StackItem>}

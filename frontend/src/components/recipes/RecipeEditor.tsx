@@ -5,13 +5,13 @@ import {
   CardBody,
   CardHeader,
   CardTitle,
-  Content,
   Form,
   FormGroup,
   FormSection,
   Grid,
   GridItem,
   Radio,
+  Stack,
   Switch,
   TextInput,
   Title,
@@ -84,9 +84,9 @@ export const RecipeEditor: React.FC<{
 
   return (
     <Form onSubmit={(e) => { e.preventDefault(); review(); }} aria-label="Recipe">
-      <FormGroup label="Recipe name" fieldId="recipe-name" isRequired>
+      <FormGroup label="Recipe name" fieldId="recipe-name" isRequired style={{ maxWidth: "32rem" }}>
         <TextInput id="recipe-name" value={form.name} onChange={(_e, v) => set("name", v)} onBlur={() => touch("name")}
-          validated={shown("name") ? "error" : "default"} aria-describedby="recipe-name-helper" style={{ maxWidth: "24rem" }} />
+          validated={shown("name") ? "error" : "default"} aria-describedby="recipe-name-helper" />
         <FieldHelperText id="recipe-name-helper" variant={shown("name") ? "error" : "default"}>
           {shown("name") ?? "Teammates see it in the notice while the recipe runs."}
         </FieldHelperText>
@@ -154,6 +154,7 @@ export const RecipeEditor: React.FC<{
                 onChange={() => set("project", "create")} description="A data science project the recipe owns: Clean up deletes it."
                 body={form.project === "create" && (
                   <NestedFields>
+                    <Stack hasGutter>
                     <FormGroup label="Name" fieldId="recipe-project-name" isRequired>
                       <TextInput id="recipe-project-name" value={form.newProject} onChange={(_e, v) => set("newProject", v)} onBlur={() => touch("newProject")}
                         validated={shown("newProject") ? "error" : "default"} aria-describedby="recipe-project-name-helper" />
@@ -164,6 +165,7 @@ export const RecipeEditor: React.FC<{
                     <FormGroup label="Display name" fieldId="recipe-project-display">
                       <TextInput id="recipe-project-display" value={form.displayName} onChange={(_e, v) => set("displayName", v)} />
                     </FormGroup>
+                    </Stack>
                   </NestedFields>
                 )} />
               <Radio id="recipe-project-existing" name="recipe-project" label="Use one of my data science projects" isChecked={form.project === "existing"}
@@ -203,10 +205,10 @@ export const RecipeEditor: React.FC<{
                   An MLflow server for the cluster. Turns on its DataScienceCluster component if it is off.
                 </FieldHelperText>
               </FormGroup>
-              <Content component="p" className="pf-v6-u-text-color-subtle">
+              <FieldHelperText>
                 Models, the playground, Models as a Service and Dashboard Dev come to recipes in a later version. Set them up on the
                 Environment and Dashboard Dev pages after the run.
-              </Content>
+              </FieldHelperText>
             </FormSection>
           </LayerCard>
         </GridItem>

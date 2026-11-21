@@ -526,6 +526,38 @@ async function mlflowSamplesStream(req, res) {
   return sampleStream(req, res, "mlflow-samples", "MLflow samples", events, apply, `Samples ${verb} in project '${project}'.`);
 }
 
+/**
+ * Environment recipes (pkg/api recipe_handlers.go): the plan, and a run
+ * that starts at its first step and moves one step on per
+ * POST /__docs/advance (the poll shows each), as the runner records it.
+ */
+async function recipeRoute(req, res, key) {
+  const { recipe } = await body(req);
+  const installed = !!world.status?.csv?.phase && world.status.csv.phase !== "Not Found";
+  if (key === "POST /api/recipes/plan") return json(res, 200, F.recipePlan(recipe ?? F.recipe(), installed));
+  if (key === "POST /api/recipes/stop") {
+    if (!world.recipeRun.running) return json(res, 409, { error: "No recipe runs in this updater process. Nothing was changed.", errorCode: "not_running" });
+    world.recipeRun = { ...world.recipeRun, stopRequested: true };
+    return json(res, 200, { stopRequested: true });
+  }
+  // run and resume: the run begins at the first step that is not set up.
+  const prior = world.recipeRun.run;
+  const done = key === "POST /api/recipes/resume" && prior ? prior.steps.filter((s) => s.status === "success" || s.status === "skipped").length : installed ? 1 : 0;
+  const titles = ["RHOAI", "DataScienceCluster", "Project recipe-dev", "What Pipelines needs", "S3 storage", "Pipeline server", "What MLflow needs", "MLflow"];
+  const advance = (n) => {
+    if (n >= 8) {
+      world.recipeRun = { run: { ...F.recipeRun({ done: 8, current: "", state: "succeeded", stopReason: "Every step of dev is set up." }) }, running: false };
+      world.operation = { inProgress: false, operation: null };
+      return;
+    }
+    world.recipeRun = { run: F.recipeRun({ done: n }), running: true, pod: world.recipeRun.run?.pod, step: { step: "", status: "running", message: `Checking ${titles[n]}...` } };
+    world.operation = { inProgress: true, operation: { id: "op-recipe", type: "recipe", label: "Environment recipe", user: F.USER, target: `dev: step ${n + 1} of 8 (${titles[n]})`, startedAt: new Date(F.NOW).toISOString(), updatedAt: new Date(F.NOW).toISOString() } };
+    nextStep().then(() => advance(n + 1));
+  };
+  advance(done);
+  return json(res, 202, { runId: "run-7c1e" });
+}
+
 const routes = {
   "GET /api/status": () => reads["GET /api/status"](world),
   "GET /api/operation": () => reads["GET /api/operation"](world),
@@ -557,6 +589,7 @@ const routes = {
   // Made up, like every value here.
   "GET /api/resources/s3/admin-password": () => ({ user: "admin", accessKey: "docs-mock-access-key", secretKey: "docs-mock-secret-key", password: "docs-mock-admin-password" }),
   "GET /api/activity": () => reads["GET /api/activity"](world),
+  "GET /api/recipes/run": () => reads["GET /api/recipes/run"](world),
   "GET /api/test-pull-secret": () => ({ success: true, message: "The pull secret can pull from quay.io/rhoai.", logs: [] }),
   "GET /api/verify-nodes": () => ({ success: true, message: "All 3 nodes have the pull secret and the image mirror.", logs: [] }),
   "POST /api/setup/node-pull-check": () => F.nodePullCheck(F.latestNightly().image, !world.nodePullFails),
@@ -580,7 +613,7 @@ const GITOPS_PROFILE_ROUTES = new Set([
 const ADMIN_ONLY_READS = [
   "/api/status", "/api/activity", "/api/components", "/api/debug", "/api/dashboard/", "/api/diagnostics", "/api/setup/dsc/preview",
   "/api/test-pull-secret", "/api/verify-nodes", "/api/latest-nightly", "/api/nightly-tags", "/api/resources/maas",
-  "/api/resources/prerequisites", "/api/resources/models/exposures", "/api/resources/s3/admin-password",
+  "/api/resources/prerequisites", "/api/resources/models/exposures", "/api/resources/s3/admin-password", "/api/recipes/",
 ];
 
 /**
@@ -655,6 +688,7 @@ async function api(req, res, u) {
     return json(res, 200, F.nodeSetupPlan(world, action, replaceExisting));
   }
   if (key === "POST /api/setup/nodes/stream") return nodeSetupStream(req, res);
+  if (key.startsWith("POST /api/recipes/")) return recipeRoute(req, res, key);
   if (key === "POST /api/update/stream") return updateStream(req, res);
   if (key === "POST /api/resources/s3/setup") return mutation(res, "setup-s3", "Set up S3 storage", minioSetup);
   if (key === "POST /api/resources/s3/migrate/stream") return migrateStream(req, res);

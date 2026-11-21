@@ -101,7 +101,7 @@ describe("Recipes page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review and run" }));
     await settle();
     const dialog = screen.getByRole("dialog", { name: "Run recipe dev?" });
-    expect(within(dialog).getByText(/The run takes usually 13 minutes, up to 52 minutes\./)).toBeInTheDocument();
+    expect(within(dialog).getByText(/The run usually takes 13 minutes, at most 52 minutes\./)).toBeInTheDocument();
     expect(dialog).toHaveTextContent("It installs rhoai-3.6 build aaaaaaaaaaaa, and keeps it if you resume.");
     expect(dialog).toHaveTextContent("Teammates cannot change this cluster until the run ends.");
     const plan = within(dialog).getByRole("list", { name: "Steps of this operation" });
@@ -251,7 +251,8 @@ describe("Recipes page", () => {
     await settleApps();
     await settle();
     expect(screen.getByText("Step 6 of 8 failed: Pipeline server")).toBeInTheDocument();
-    expect(screen.getByText("Step 6 of 8 (Pipeline server) failed: The pipeline server did not become ready in 10 minutes.")).toBeInTheDocument();
+    // The step's message once, in the alert under the steps.
+    expect(screen.getAllByText("The pipeline server did not become ready in 10 minutes.")).toHaveLength(1);
     expect(screen.getByText("Resume continues at step 6 of 8, Pipeline server; what is set up stays.")).toBeInTheDocument();
     // The editor starts from the run's recipe.
     expect(screen.getByRole("heading", { level: 2, name: "Run a recipe again" })).toBeInTheDocument();

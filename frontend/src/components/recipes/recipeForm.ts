@@ -139,6 +139,11 @@ export function formatDuration(seconds: number): string {
   return `${h} ${h === 1 ? "hour" : "hours"}${m ? ` ${m} ${m === 1 ? "minute" : "minutes"}` : ""}`;
 }
 
+/** "The run usually takes 10 minutes, at most 53 minutes." */
+export function runTakes(typicalSeconds: number, maxSeconds: number): string {
+  return `The run usually takes ${formatDuration(typicalSeconds)}, at most ${formatDuration(maxSeconds)}.`;
+}
+
 /** "usually 7 minutes, up to 15 minutes". */
 export function usually(typicalSeconds: number, maxSeconds: number): string {
   return `usually ${formatDuration(typicalSeconds)}, up to ${formatDuration(maxSeconds)}`;

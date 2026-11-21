@@ -25,6 +25,8 @@ export function baseWorld() {
     maas: F.maasWorld("none"),
     // Sample states by project; a project not named has none of the samples.
     samples: { mlflow: {} },
+    // The last environment recipe run (GET /api/recipes/run).
+    recipeRun: { run: null, running: false },
     // gated: update steps and mutations wait for /__docs/advance and /__docs/release.
     gated: false,
   };
@@ -574,6 +576,28 @@ scenarios["user-update-running"] = (w) => {
 // Deployment is not running (the backend's prerequisites refusal).
 scenarios["diag-leftovers-refused"] = (w) => { scenarios["diag-leftovers"](w); w.leftoverRefusal = true; };
 
+// Environment recipes (the Recipes page): no run yet on a cluster with
+// RHOAI and no DataScienceCluster (new, and its review), a run at step 5
+// (POST /__docs/advance moves it on), one that failed at the pipeline
+// server, and one whose updater pod went away.
+const RECIPE_OPERATION = (w, step, title) => {
+  w.operation = { inProgress: true, operation: { id: "op-recipe", type: "recipe", label: "Environment recipe", user: F.USER, target: `dev: step ${step} of 8 (${title})`, startedAt: F.ago(12), updatedAt: F.ago(0.1) } };
+};
+scenarios["recipe-new"] = (w) => { scenarios["no-dsc"](w); w.resources = { minio: F.s3States.none, mlflow: F.mlflowStates.none, pipelineServers: [] }; };
+scenarios["recipe-review"] = (w) => { scenarios["recipe-new"](w); };
+scenarios["recipe-running"] = (w) => {
+  w.recipeRun = { run: F.recipeRun({ done: 4 }), running: true, pod: "rhoai-nightly-updater-6f7b8c9d5-x2k4p", step: { step: "s3", status: "running", message: "Waiting for SeaweedFS to start (1/1 pods starting)" } };
+  RECIPE_OPERATION(w, 5, "S3 storage");
+};
+scenarios["recipe-failed"] = (w) => {
+  const why = "The pipeline server did not become ready in 10 minutes: pod ds-pipeline-dspa-6c9f7d8b5-k8w2n is in ImagePullBackOff (registry.redhat.io/rhoai/odh-ml-pipelines-api-server-v2-rhel9).";
+  w.recipeRun = { run: F.recipeRun({ done: 5, current: "failed", message: why, state: "failed", errorCode: "timeout", stopReason: `Step 6 of 8 (Pipeline server) failed: ${why}` }), running: false };
+};
+scenarios["recipe-interrupted"] = (w) => {
+  w.recipeRun = { run: F.recipeRun({ done: 3, pod: "rhoai-nightly-updater-6f7b8c9d5-q9m3z" }), running: false, interrupted: true };
+  w.operation = { inProgress: false, operation: null, interrupted: { type: "recipe", label: "Environment recipe", user: F.USER, target: "dev: step 4 of 8 (What Pipelines needs)", startedAt: F.ago(14), pod: "rhoai-nightly-updater-6f7b8c9d5-q9m3z", id: "op-recipe", bootId: "b-4e2a" } };
+};
+
 // The reads every page makes, as the server answers them; the frontend's
 // types check these (frontend/src/test/docsMockFixtures.test.ts).
 /** A nightly build as the summary names it (pkg/types SummaryBuild): tag and build date, no image. */
@@ -621,4 +645,5 @@ export const reads = {
   "GET /api/resources/projects": (w) => ({ projects: w.projects ?? F.projects }),
   "GET /api/resources/maas": (w) => w.maas,
   "GET /api/activity": (w) => w.status.activity ?? [],
+  "GET /api/recipes/run": (w) => w.recipeRun,
 };

@@ -1710,3 +1710,72 @@ export function dscPlan(m, action, path, to, withParent, keepEnabled = false) {
 
 // The blocker for a module CR whose operator the tool does not know (pkg/cluster unknownOperatorBlocker).
 const DSC_UNKNOWN_OPERATOR = "can't confirm its operator is running to clean up, so the tool won't remove it. Check in the OpenShift console, then change it there";
+
+// --- Environment recipes (pkg/types recipe.go: RecipePlan, RecipeRunStatus) ---------
+
+/** The recipe the docs show: the MVP features in a project the recipe creates. */
+export const recipe = () => ({
+  apiVersion: "rhoai-nightly-updater/v1alpha1", kind: "EnvironmentRecipe", metadata: { name: "dev" },
+  spec: {
+    rhoai: { build: "latest", ifInstalled: "keep" }, dataScienceCluster: { create: true },
+    project: { mode: "create", name: "recipe-dev", displayName: "Recipe dev" },
+    features: { pipelines: { enabled: true }, mlflow: { enabled: true }, models: { enabled: false }, playground: { enabled: false }, maas: { enabled: false } },
+    dashboardDev: { deploy: "none", flavor: "rhoai" },
+  },
+});
+
+/** The runner's steps of that recipe (pkg/cluster internal/recipe Steps), with their usual and longest times in seconds. */
+const RECIPE_STEPS = [
+  ["rhoai", "RHOAI", 420, 900], ["dsc", "DataScienceCluster", 60, 420], ["project", "Project recipe-dev", 10, 60],
+  ["pipelines-prereq", "What Pipelines needs", 120, 600], ["s3", "S3 storage", 60, 300], ["pipeline-server", "Pipeline server", 120, 600],
+  ["mlflow-prereq", "What MLflow needs", 120, 600], ["mlflow", "MLflow", 120, 600],
+];
+
+export const recipePinned = () => ({ tag: "rhoai-3.6", image: LATEST_IMAGE, digest: digest(latestBuild.seed) });
+
+/** POST /api/recipes/plan on a cluster with RHOAI and nothing else: RHOAI is kept, the DSC and later steps are checked when the run gets there. */
+export function recipePlan(rcp = recipe(), installed = true) {
+  const steps = RECIPE_STEPS.map(([id, title, typicalSeconds, maxSeconds], i) => {
+    if (id === "rhoai" && installed) return { id, title, action: "skip", reason: "RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).", typicalSeconds, maxSeconds };
+    if (i <= 2) return { id, title, action: "run", typicalSeconds, maxSeconds };
+    return { id, title, action: "later", reason: "Checked when the run gets here: it depends on a step before it.", typicalSeconds, maxSeconds };
+  });
+  const counted = steps.filter((s) => s.action !== "skip");
+  return {
+    recipe: rcp, steps, problems: [], pinned: recipePinned(),
+    typicalSeconds: counted.reduce((n, s) => n + s.typicalSeconds, 0), maxSeconds: counted.reduce((n, s) => n + s.maxSeconds, 0),
+  };
+}
+
+/**
+ * A run record: the first `done` steps set up (RHOAI kept), step `done`
+ * with `current` (and its message), the rest pending. Times count back
+ * from NOW: each finished step took a few minutes.
+ */
+export function recipeRun({ done = 0, current = "running", message = "", state = "running", stopReason = "", errorCode = "", pod = "rhoai-nightly-updater-6f7b8c9d5-x2k4p" } = {}) {
+  const start = 2 + done * 2.5;
+  const steps = RECIPE_STEPS.map(([id, title], i) => {
+    if (i < done) {
+      return id === "rhoai"
+        ? { id, title, status: "skipped", message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).", startedAt: ago(start), finishedAt: ago(start) }
+        : { id, title, status: "success", message: RECIPE_DONE[id], startedAt: ago(start - i * 2.5), finishedAt: ago(start - (i + 1) * 2.5) };
+    }
+    if (i === done && current) return { id, title, status: current, ...(message ? { message } : {}), ...(current === "failed" ? { errorCode: "timeout", finishedAt: ago(0.5) } : {}), startedAt: ago(1.2) };
+    return { id, title, status: "pending" };
+  });
+  return {
+    id: "run-7c1e", operationId: "op-recipe", bootId: "b-4e2a", pod, user: USER, startedAt: ago(start),
+    ...(state !== "running" ? { finishedAt: ago(0.5) } : {}), state, ...(stopReason ? { stopReason } : {}), ...(errorCode ? { errorCode } : {}),
+    recipe: recipe(), pinned: recipePinned(), project: { name: "recipe-dev", uid: "5d1c0a3e-9b7f-4c2e-8a61-2f0d9e4b7c13", owned: true }, steps,
+  };
+}
+
+const RECIPE_DONE = {
+  dsc: "DataScienceCluster default-dsc created with the release's default components.",
+  project: "Created project recipe-dev.",
+  "pipelines-prereq": "Turned on aipipelines in the DataScienceCluster; it is ready.",
+  s3: "S3 storage (SeaweedFS) deployed with bucket 'pipelines'.",
+  "pipeline-server": "The pipeline server in recipe-dev is ready.",
+  "mlflow-prereq": "Turned on mlflowoperator in the DataScienceCluster; it is ready.",
+  mlflow: "MLflow is ready.",
+};

@@ -6,7 +6,7 @@ import type { PipelineStepDef } from "../../operationSteps";
 import type { ApiError } from "../../services/api";
 import type { RecipePlan, RecipePlanStep, RecipeProblem } from "../../types";
 import { shortDigest } from "../../build";
-import { usually } from "./recipeForm";
+import { runTakes, usually } from "./recipeForm";
 
 /** The problems a refusal carries (pkg/api writeRecipeRefusal), and its plan. */
 export function refusalOf(e: ApiError | null): { problems: RecipeProblem[]; plan: RecipePlan | null } {
@@ -32,7 +32,7 @@ function stepDef(step: RecipePlanStep): PipelineStepDef {
     case "blocked":
       return { id: step.id, label: step.title, variant: "danger", description: `Blocked: ${step.reason ?? "the run would stop here."}` };
     case "later":
-      return { id: step.id, label: step.title, description: `Checked when the run gets there, as it depends on a step before it. If needed, ${time}.` };
+      return { id: step.id, label: step.title, description: `Checked when the run gets there; if it runs, ${time}.` };
     default:
       return { id: step.id, label: step.title, description: `Runs: ${time}.` };
   }
@@ -85,7 +85,7 @@ export const RecipeReviewModal: React.FC<{
             <Content component="p">
               {runs.length === 0
                 ? "Everything in this recipe is set up already: the run checks each step and changes nothing."
-                : <>The run takes {usually(shownPlan.typicalSeconds, shownPlan.maxSeconds)}.
+                : <>{runTakes(shownPlan.typicalSeconds, shownPlan.maxSeconds)}
                   {installs && <> It installs {installs.tag ? `${installs.tag} ` : ""}build <code>{shortDigest(installs.digest)}</code>, and keeps it if you resume.</>}</>}
             </Content>
           </StackItem>

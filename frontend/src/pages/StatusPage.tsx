@@ -274,10 +274,6 @@ export const StatusPage: React.FC = () => {
       {/* --- One-time setup comes first while it is incomplete: nothing else works without it --- */}
       {status && setupFirst && <PageSection>{setupCard(false)}</PageSection>}
 
-      {/* --- RHOAI or the DSC is missing: a recipe sets up the rest in one run (full profile only) --- */}
-      {status && !gitOpsProfile && (!installed || status.dscExists === false) && (
-        <PageSection><RecipeEntryCard setupDone={prerequisitesMet} /></PageSection>
-      )}
 
       {/* --- Installed vs latest, with the primary action --- */}
       {status && (
@@ -378,6 +374,11 @@ export const StatusPage: React.FC = () => {
             </ModalFooter>
           </Modal>
         </PageSection>
+      )}
+
+      {/* --- RHOAI or the DSC is missing: a recipe sets up the rest in one run (full profile only) --- */}
+      {status && !gitOpsProfile && (!installed || status.dscExists === false) && (
+        <PageSection><RecipeEntryCard setupDone={prerequisitesMet} /></PageSection>
       )}
 
       {status && (
