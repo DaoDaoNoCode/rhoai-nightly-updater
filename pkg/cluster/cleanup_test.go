@@ -160,3 +160,64 @@ func TestCleanUp_NothingLeftSucceeds(t *testing.T) {
 		t.Fatalf("got %+v, %v", res, err)
 	}
 }
+
+// fakeRecipeProjectTeardown replaces the recipe project's check and part;
+// problem is the check's refusal ("" allows).
+func fakeRecipeProjectTeardown(t *testing.T, ran *[]string, problem string) {
+	t.Helper()
+	pr, cp, co := recipeProjectProblem, cleanupProject, cleanupComponents
+	t.Cleanup(func() { recipeProjectProblem, cleanupProject, cleanupComponents = pr, cp, co })
+	recipeProjectProblem = func(_ *Client, name string, confirmed []string) (string, string, error) {
+		if problem != "" {
+			return problem, "confirm_project_contents", nil
+		}
+		return "", "", nil
+	}
+	cleanupProject = func(_ *Client, name string, confirmed []string) (*types.OperationResponse, error) {
+		*ran = append(*ran, CleanupStepID("recipe-project", name)+":"+strings.Join(confirmed, "|"))
+		return &types.OperationResponse{Success: true, Message: "Deleted project " + name + "."}, nil
+	}
+	cleanupComponents = func(*Client, []string) (*types.OperationResponse, error) {
+		*ran = append(*ran, "components")
+		return &types.OperationResponse{Success: true, Message: "Components restored."}, nil
+	}
+}
+
+// A recipe project goes after the parts that live in it (here the
+// pipeline server, playground and model in it) and before the components,
+// with the confirmations of the request.
+func TestCleanUp_RecipeProjectAfterItsPartsBeforeTheComponents(t *testing.T) {
+	ran := fakeTeardowns(t, nil)
+	fakeRecipeProjectTeardown(t, ran, "")
+	_, c := newResourceFake(t)
+	res, err := CleanUp(c.SignedInUser(), types.CleanupRequest{
+		PipelineServers: []string{"recipe-dev"}, Storage: true, MLflow: true, Playgrounds: []string{"recipe-dev"}, Models: []string{"recipe-dev"},
+		RecipeProject: "recipe-dev", ConfirmProjectContents: []string{"Notebook wb"}, Components: []string{"aipipelines"},
+	}, nil)
+	if err != nil || !res.Success {
+		t.Fatalf("got %+v, %v", res, err)
+	}
+	want := "pipeline-server:recipe-dev storage mlflow playground:recipe-dev model:recipe-dev recipe-project:recipe-dev:Notebook wb components"
+	if got := strings.Join(*ran, " "); got != want {
+		t.Fatalf("order\n got %s\nwant %s", got, want)
+	}
+}
+
+// A recipe project that would be refused refuses the whole clean-up
+// before any part runs: nothing is deleted.
+func TestCleanUp_RecipeProjectRefusalDeletesNothing(t *testing.T) {
+	ran := fakeTeardowns(t, nil)
+	fakeRecipeProjectTeardown(t, ran, "Project recipe-dev still holds what this tool did not create: Notebook wb.")
+	f, c := newResourceFake(t)
+	var events []UpdateStepEvent
+	res, err := CleanUp(c, types.CleanupRequest{PipelineServers: []string{"recipe-dev"}, RecipeProject: "recipe-dev"}, func(e UpdateStepEvent) { events = append(events, e) })
+	if err != nil || res.Success || res.ErrorCode != "confirm_project_contents" || !strings.Contains(res.Message, "Nothing was deleted") {
+		t.Fatalf("got %+v, %v", res, err)
+	}
+	if len(*ran) != 0 || len(f.mutations()) != 0 {
+		t.Fatalf("ran %v, changed %v", *ran, f.mutations())
+	}
+	if len(events) != 1 || events[0].Step != "recipe-project:recipe-dev" || events[0].Status != "failed" {
+		t.Fatalf("events %+v", events)
+	}
+}

@@ -248,21 +248,20 @@ func EnsureProject(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (
 		uid = s.Project.UID // created before; only its labels are missing
 	} else {
 		emit(types.UpdateStepEvent{Step: StepProject, Status: "running", Message: fmt.Sprintf("Creating project %s...", name)})
-		created, err := requestProject(c, name, p.DisplayName, s.Recipe.Metadata.Description)
+		err := requestProject(c, name, p.DisplayName, s.Recipe.Metadata.Description)
 		if kube.IsK8sConflict(err) {
 			return fail(foreignProjectMessage(name), "prerequisites")
 		}
 		if err != nil {
 			return fail(fmt.Sprintf("Creating project %s failed: %v. Nothing was changed.", name, err), kube.ErrorCodeOr(err, "prerequisites"))
 		}
-		uid = created.UID
-		if uid == "" {
-			meta, found, err := kube.ReadObjectMeta(c, namespacePath(name))
-			if err != nil || !found {
-				return fail(fmt.Sprintf("Project %s was created, but its namespace cannot be read (%v); it is not recorded as the recipe's, so Clean up will not delete it. Delete it in the console, then run the recipe again.", name, err), kube.ErrorCodeOr(err, "prerequisites"))
-			}
-			uid = meta.UID
+		// The namespace's own UID, read back: what Clean up's
+		// precondition compares.
+		meta, found, err := kube.ReadObjectMeta(c, namespacePath(name))
+		if err != nil || !found {
+			return fail(fmt.Sprintf("Project %s was created, but its namespace cannot be read (%v); it is not recorded as the recipe's, so Clean up will not delete it. Delete it in the console, then run the recipe again.", name, err), kube.ErrorCodeOr(err, "prerequisites"))
 		}
+		uid = meta.UID
 		rec, err := readProjectRecord(c)
 		if err == nil {
 			err = writeProjectRecord(c, rec.with(types.RecipeOwnedProject{Name: name, UID: uid, Recipe: s.Recipe.Metadata.Name, CreatedAt: kube.NowRFC3339()}))
@@ -287,8 +286,8 @@ func projectName(p *types.RecipeProject) string {
 }
 
 // requestProject creates a project through a ProjectRequest (what `oc
-// new-project` and the dashboard do), and returns its metadata.
-func requestProject(c *kube.Client, name, displayName, description string) (kube.ObjectMeta, error) {
+// new-project` and the dashboard do).
+func requestProject(c *kube.Client, name, displayName, description string) error {
 	obj := map[string]any{
 		"apiVersion": "project.openshift.io/v1",
 		"kind":       "ProjectRequest",
@@ -302,13 +301,10 @@ func requestProject(c *kube.Client, name, displayName, description string) (kube
 	}
 	data, err := json.Marshal(obj)
 	if err != nil {
-		return kube.ObjectMeta{}, err
+		return err
 	}
-	body, _, err := c.Post(rhoai.ClusterPath("project.openshift.io/v1", "projectrequests", ""), data)
-	if err != nil {
-		return kube.ObjectMeta{}, err
-	}
-	return kube.ParseObjectMeta(body)
+	_, _, err = c.Post(rhoai.ClusterPath("project.openshift.io/v1", "projectrequests", ""), data)
+	return err
 }
 
 // labelProject merge-patches the dashboard's and the tool's labels and the
