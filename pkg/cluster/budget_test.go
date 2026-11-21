@@ -39,6 +39,16 @@ func TestShutdownBudgetFitsTerminationGracePeriod(t *testing.T) {
 	if !strings.Contains(read("../api/auth_handlers.go"), "context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Minute)") || OperationDeadline != 15*time.Minute {
 		t.Fatal("the operation deadline in pkg/api/auth_handlers.go no longer matches OperationDeadline")
 	}
+	// A recipe run gives each step the same budget as one operation, and
+	// its last record write runs beside the marker clear and is shorter,
+	// so a draining pod's running step still fits the drain.
+	runner := read("../api/recipe_runner.go")
+	if !strings.Contains(runner, "context.WithTimeout(x.runCtx, cluster.OperationDeadline)") {
+		t.Fatal("pkg/api/recipe_runner.go no longer gives each recipe step cluster.OperationDeadline")
+	}
+	if !strings.Contains(runner, "const recipeRecordTimeout = 5 * time.Second") || 5*time.Second > MarkerClearTimeout {
+		t.Fatal("pkg/api/recipe_runner.go's record write is not bounded within the marker clear")
+	}
 	mainSrc := read("../../main.go")
 	for _, want := range []string{
 		"drainTimeout := cluster.ShutdownDrainTimeout()",
