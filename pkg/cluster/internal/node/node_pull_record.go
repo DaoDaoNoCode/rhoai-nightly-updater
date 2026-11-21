@@ -85,7 +85,7 @@ func NewPullRecord(c *kube.Client, uid, auth string) (PullRecord, error) {
 		return PullRecord{}, err
 	}
 	s := hex.EncodeToString(salt)
-	return PullRecord{SecretUID: uid, Key: registry.QuayRHOAI, Salt: s, AuthSHA256: HashPullAuth(s, auth), At: record.NowRFC3339(), By: kube.GetUser(c)}, nil
+	return PullRecord{SecretUID: uid, Key: registry.QuayRHOAI, Salt: s, AuthSHA256: HashPullAuth(s, auth), At: kube.NowRFC3339(), By: kube.GetUser(c)}, nil
 }
 
 // ReadPullRecord reads the record (nil when there is none).

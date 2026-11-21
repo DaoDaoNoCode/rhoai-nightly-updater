@@ -195,7 +195,7 @@ func fixLeftoverStoredFields(c *kube.Client, target string, ack *report.AckBindi
 	}
 	logs = append(logs, "Patched "+st.ref()+": "+strings.Join(summary, ", "))
 	record.RecordActivity(c, types.ActivityEntry{
-		Timestamp: record.NowRFC3339(),
+		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "fix-leftover-fields",
 		Detail:    fmt.Sprintf("%s: %s", st.ref(), strings.Join(summary, ", ")),
@@ -273,7 +273,7 @@ func fixLeftoverRetryDSC(c *kube.Client, name string) *types.OperationResponse {
 	if !strings.HasSuffix(path, "/"+name) {
 		return leftoverRefused(fmt.Sprintf("DataScienceCluster %s is not the cluster's DataScienceCluster. Nothing was changed.", name), "validation", nil)
 	}
-	stamp := record.NowRFC3339()
+	stamp := kube.NowRFC3339()
 	add, _ := json.Marshal(map[string]any{"metadata": map[string]any{"uid": uid, "annotations": map[string]any{LeftoverRetryAnno: stamp}}})
 	if _, _, err := c.Do(http.MethodPatch, path, "application/merge-patch+json", add, url.Values{"fieldManager": {leftoverManager}}); err != nil {
 		return leftoverWriteError(err, "DataScienceCluster "+name, false)
@@ -282,7 +282,7 @@ func fixLeftoverRetryDSC(c *kube.Client, name string) *types.OperationResponse {
 	remove, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{LeftoverRetryAnno: nil}}})
 	_, _, rmErr := c.Do(http.MethodPatch, path, "application/merge-patch+json", remove, url.Values{"fieldManager": {leftoverManager}})
 	record.RecordActivity(c, types.ActivityEntry{
-		Timestamp: record.NowRFC3339(),
+		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "fix-retry-dsc-reconcile",
 		Detail:    fmt.Sprintf("annotated DataScienceCluster %s to retry %s", name, waiting),
@@ -412,7 +412,7 @@ func fixLeftoverRecreateWorkload(c *kube.Client, target string, ack *report.AckB
 	}
 	logs = append(logs, fmt.Sprintf("Deleted %s (UID %s, propagation Background)", r.ref(), uid))
 	record.RecordActivity(c, types.ActivityEntry{
-		Timestamp: record.NowRFC3339(),
+		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "fix-recreate-leftover",
 		Detail:    fmt.Sprintf("deleted %s (selector changed; owned by %s) for its operator to recreate", r.ref(), r.Owner),

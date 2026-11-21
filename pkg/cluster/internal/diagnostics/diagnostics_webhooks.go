@@ -374,7 +374,7 @@ func applyFixDeleteStaleWebhooks(c *kube.Client) (*types.OperationResponse, erro
 
 	if len(d.Deleted) > 0 {
 		record.RecordActivity(c, types.ActivityEntry{
-			Timestamp: record.NowRFC3339(),
+			Timestamp: kube.NowRFC3339(),
 			User:      kube.GetUser(c),
 			Action:    "fix-delete-stale-webhooks",
 			Detail:    "deleted leftover webhook configurations: " + strings.Join(d.Deleted, ", "),

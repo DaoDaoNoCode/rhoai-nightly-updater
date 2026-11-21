@@ -121,7 +121,7 @@ func recordModel(c *kube.Client, meta kube.ObjectMeta) error {
 	if err != nil {
 		return err
 	}
-	rec[ModelRecordKey(meta.Namespace, meta.Name)] = RecordedModel{UID: meta.UID, At: record.NowRFC3339(), By: kube.GetUser(c)}
+	rec[ModelRecordKey(meta.Namespace, meta.Name)] = RecordedModel{UID: meta.UID, At: kube.NowRFC3339(), By: kube.GetUser(c)}
 	return WriteModelsRecord(c, rec)
 }
 

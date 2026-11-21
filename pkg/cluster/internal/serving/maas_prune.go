@@ -342,7 +342,7 @@ func PruneGoneMaaSPublicationsInBackground(c *kube.Client) {
 		detail += " Not finished: " + err.Error()
 	}
 	recordPruneActivity(c, types.ActivityEntry{
-		Timestamp: record.NowRFC3339(),
+		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "prune-maas-publications",
 		Detail:    kube.TruncateText(detail, 300),

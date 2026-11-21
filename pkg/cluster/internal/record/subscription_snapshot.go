@@ -44,7 +44,7 @@ func SaveSubscriptionSnapshot(c *kube.Client, sub map[string]any) error {
 	}
 	status, _ := sub["status"].(map[string]any)
 	installed, _ := status["installedCSV"].(string)
-	data, err := json.Marshal(SubscriptionSnapshot{RecordedAt: NowRFC3339(), Spec: spec, InstalledCSV: installed})
+	data, err := json.Marshal(SubscriptionSnapshot{RecordedAt: kube.NowRFC3339(), Spec: spec, InstalledCSV: installed})
 	if err != nil {
 		return err
 	}

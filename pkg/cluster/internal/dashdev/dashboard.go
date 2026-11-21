@@ -394,7 +394,7 @@ func DeployPR(c *kube.Client, prNumber int, flavor string) (*types.OperationResp
 	}
 	if len(found) == 0 {
 		record.RecordActivity(c, types.ActivityEntry{
-			Timestamp: record.NowRFC3339(),
+			Timestamp: kube.NowRFC3339(),
 			User:      kube.GetUser(c),
 			Action:    "deploy-pr",
 			Detail:    fmt.Sprintf("PR #%d (no images found)", prNumber),
@@ -457,7 +457,7 @@ func DeployPR(c *kube.Client, prNumber int, flavor string) (*types.OperationResp
 		_, _, err = c.StrategicPatch(deployPath, patchData)
 		if err != nil {
 			record.RecordActivity(c, types.ActivityEntry{
-				Timestamp: record.NowRFC3339(),
+				Timestamp: kube.NowRFC3339(),
 				User:      kube.GetUser(c),
 				Action:    "deploy-pr",
 				Detail:    fmt.Sprintf("PR #%d (patch failed: %v)", prNumber, err),
@@ -495,7 +495,7 @@ func DeployPR(c *kube.Client, prNumber int, flavor string) (*types.OperationResp
 
 	sort.Strings(failedModules)
 	record.RecordActivity(c, types.ActivityEntry{
-		Timestamp: record.NowRFC3339(),
+		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "deploy-pr",
 		Detail:    fmt.Sprintf("PR #%d (%d/%d containers patched; failed modules: %s)", prNumber, len(patched), targets, strings.Join(failedModules, ", ")),
@@ -681,7 +681,7 @@ func Revert(c *kube.Client) (*types.OperationResponse, error) {
 	slog.Info("dashboard reverted", "containers", totalReverted, "user", kube.GetUser(c))
 
 	record.RecordActivity(c, types.ActivityEntry{
-		Timestamp: record.NowRFC3339(),
+		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "revert-dashboard",
 		Detail:    fmt.Sprintf("%d containers restored; failed modules: %s", totalReverted, strings.Join(failedModules, ", ")),

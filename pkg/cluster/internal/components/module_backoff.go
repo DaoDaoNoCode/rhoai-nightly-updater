@@ -351,7 +351,7 @@ func ApplyFixRestartModuleOperator(c *kube.Client, module string) (*types.Operat
 	err = c.PatchJSON(rhoai.NamespacedPath("apps/v1", "deployments", d.Namespace, d.Name), map[string]any{
 		"metadata": map[string]any{"uid": d.UID, "resourceVersion": d.ResourceVersion},
 		"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
-			"annotations": map[string]string{RestartAnnotation: record.NowRFC3339()},
+			"annotations": map[string]string{RestartAnnotation: kube.NowRFC3339()},
 		}}},
 	})
 	switch {
@@ -364,7 +364,7 @@ func ApplyFixRestartModuleOperator(c *kube.Client, module string) (*types.Operat
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Could not restart %s: %v.%s", d.Ref(), err, kube.TemplateHint(err)), Logs: logs, ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
 	record.RecordActivity(c, types.ActivityEntry{
-		Timestamp: record.NowRFC3339(),
+		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "fix-restart-module-operator",
 		Detail:    fmt.Sprintf("restarted %s (module %s)", d.Ref(), module),

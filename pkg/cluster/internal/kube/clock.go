@@ -1,6 +1,10 @@
 package kube
 
-import "github.com/juntwang/rhoai-nightly-updater/pkg/clock"
+import (
+	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/clock"
+)
 
 // clk is the time source of every wait in the cluster packages (polls, retry
 // backoffs, grace periods) and of the deadlines that bound them. The tests
@@ -21,4 +25,11 @@ func SetClockForTest(c clock.Clock) (restore func()) {
 	prev := clk
 	clk = c
 	return func() { clk = prev }
+}
+
+// NowRFC3339 is the wall-clock time in UTC as RFC 3339, the form of every
+// timestamp the cluster packages record (activity entries, records,
+// annotations). Recorded times come from the time package, not clk.
+func NowRFC3339() string {
+	return time.Now().UTC().Format(time.RFC3339)
 }

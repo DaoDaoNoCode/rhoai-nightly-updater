@@ -232,7 +232,7 @@ func ReadMaaSRecord(c *kube.Client) (MaaSRecord, error) {
 
 // WriteMaaSRecord applies the record (operations hold the cluster lock).
 func WriteMaaSRecord(c *kube.Client, rec MaaSRecord) error {
-	rec.At, rec.By = record.NowRFC3339(), kube.GetUser(c)
+	rec.At, rec.By = kube.NowRFC3339(), kube.GetUser(c)
 	sort.Strings(rec.Published)
 	data, err := json.Marshal(rec)
 	if err != nil {

@@ -1034,7 +1034,7 @@ func DeployBuild(c *kube.Client, mode string, pr int, flavor string) (*types.Ope
 	if err != nil {
 		return fail(err.Error()+". Click Revert to default to restore operator management, then deploy again.", "prerequisites")
 	}
-	now := record.NowRFC3339()
+	now := kube.NowRFC3339()
 	user := kube.GetUser(c)
 	newSession := session == nil
 	if newSession {

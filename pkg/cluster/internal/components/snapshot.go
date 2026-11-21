@@ -42,7 +42,7 @@ func SaveDeploymentSnapshot(c *kube.Client) error {
 	}
 
 	snap := deploymentSnapshot{
-		Timestamp: record.NowRFC3339(),
+		Timestamp: kube.NowRFC3339(),
 		Images:    images,
 	}
 

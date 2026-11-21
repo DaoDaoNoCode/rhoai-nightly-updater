@@ -102,7 +102,7 @@ func recordPipelineServer(c *kube.Client, meta kube.ObjectMeta) error {
 	if err != nil {
 		return err
 	}
-	rec[meta.Namespace+"/"+meta.Name] = RecordedPipelineServer{UID: meta.UID, At: record.NowRFC3339(), By: kube.GetUser(c)}
+	rec[meta.Namespace+"/"+meta.Name] = RecordedPipelineServer{UID: meta.UID, At: kube.NowRFC3339(), By: kube.GetUser(c)}
 	return WritePipelineRecord(c, rec)
 }
 

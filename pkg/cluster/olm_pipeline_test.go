@@ -376,7 +376,7 @@ func TestPreflightLabelsVerificationCatalog(t *testing.T) {
 	for _, r := range f.requests {
 		if r.Method == http.MethodPatch && strings.Contains(r.Path, "-verify-") {
 			labels, _ := r.Body["metadata"].(map[string]any)["labels"].(map[string]any)
-			if labels[catalog.PurposeLabel] != catalog.VerificationRole || labels[catalog.ManagedByLabel] != catalog.ManagedByValue {
+			if labels[catalog.PurposeLabel] != catalog.VerificationRole || labels[kube.ManagedByLabelKey] != kube.ManagedByLabelValue {
 				t.Fatalf("labels = %v", labels)
 			}
 			return

@@ -71,7 +71,7 @@ func RevertOperatorTo(c *kube.Client, target Target) (*types.OperationResponse, 
 		if len(failures) > 0 {
 			keep = session
 		}
-		now := record.NowRFC3339()
+		now := kube.NowRFC3339()
 		detail := fmt.Sprintf("Resumed %s (%d replicas)", name, replicas)
 		action := &types.DashboardDevAction{Action: "revert", By: kube.GetUser(c), At: now, Detail: detail}
 		if err := patchDashboardOperator(c, operator, replicas, keep, action); err != nil {

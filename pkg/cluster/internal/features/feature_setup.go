@@ -174,7 +174,7 @@ func ReadPrereqRecord(c *kube.Client) (PrereqRecord, error) {
 }
 
 func writePrereqRecord(c *kube.Client, rec PrereqRecord) error {
-	rec.At, rec.By = record.NowRFC3339(), kube.GetUser(c)
+	rec.At, rec.By = kube.NowRFC3339(), kube.GetUser(c)
 	data, err := json.Marshal(rec)
 	if err != nil {
 		return err

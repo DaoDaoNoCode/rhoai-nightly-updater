@@ -19,7 +19,6 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -297,7 +296,7 @@ func lastCallCheck(c *kube.Client, project, name, uid string) *types.ModelCallCh
 // checkModelCall runs the check on the tool's model (read fresh) and
 // remembers it. progress gets each retry, in words.
 func checkModelCall(c *kube.Client, project, name string, rec ModelsRecord, progress func(string)) types.ModelCallCheck {
-	now := func() string { return record.NowRFC3339() }
+	now := func() string { return kube.NowRFC3339() }
 	model, found, err := ReadToolModel(c, project, name)
 	if err != nil || !found {
 		why := "it does not exist"

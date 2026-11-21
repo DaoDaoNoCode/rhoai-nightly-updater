@@ -46,11 +46,10 @@ func Channels(c *kube.Client, source string) ([]any, error) {
 	return nil, nil
 }
 
-// Labels on the temporary verification catalogs, so leftovers from a crashed
-// or killed operation can be found and removed later.
+// Labels on the temporary verification catalogs (with kube.ManagedByLabelKey),
+// so leftovers from a crashed or killed operation can be found and removed
+// later.
 const (
-	ManagedByLabel   = "app.kubernetes.io/managed-by"
-	ManagedByValue   = "rhoai-nightly-updater"
 	PurposeLabel     = "rhoai-nightly-updater/purpose"
 	VerificationRole = "catalog-verification"
 )
@@ -196,7 +195,7 @@ func CreateVerification(c *kube.Client, image string) (name, path string, remove
 	spec := SourceSpec(image)
 	meta := spec["metadata"].(map[string]any)
 	meta["name"] = name
-	meta["labels"] = map[string]any{ManagedByLabel: ManagedByValue, PurposeLabel: VerificationRole}
+	meta["labels"] = map[string]any{kube.ManagedByLabelKey: kube.ManagedByLabelValue, PurposeLabel: VerificationRole}
 	if _, _, err := c.Apply(path, spec); err != nil {
 		// The apply may have created it before failing.
 		remove()

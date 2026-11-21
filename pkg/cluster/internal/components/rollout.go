@@ -472,7 +472,7 @@ func patchMaxUnavailable(c *kube.Client, namespace, name string) (rolloutAssessm
 	if !a.Applicable {
 		return a, false, ""
 	}
-	record, _ := json.Marshal(assistRecord{MaxUnavailable: a.OriginalMaxUnavailable, PatchedAt: record.NowRFC3339()})
+	record, _ := json.Marshal(assistRecord{MaxUnavailable: a.OriginalMaxUnavailable, PatchedAt: kube.NowRFC3339()})
 	patch, _ := json.Marshal(map[string]any{
 		"metadata": map[string]any{
 			"resourceVersion": a.ResourceVersion,
@@ -565,7 +565,7 @@ func assistTargets(c *kube.Client, targets []string, logs []string) (*types.Oper
 
 	if len(patched) > 0 {
 		record.RecordActivity(c, types.ActivityEntry{
-			Timestamp: record.NowRFC3339(),
+			Timestamp: kube.NowRFC3339(),
 			User:      kube.GetUser(c),
 			Action:    "assist-rollout",
 			Detail:    "maxUnavailable=1 on " + strings.Join(patched, ", "),
@@ -661,7 +661,7 @@ func RestoreRolloutStrategy(c *kube.Client, namespace, name string) (*types.Oper
 		msg = fmt.Sprintf("maxUnavailable on %s is already %s (changed by its owner), so it was left as is; the saved note was removed.", target, kube.NonEmpty(current, "unset"))
 	}
 	record.RecordActivity(c, types.ActivityEntry{
-		Timestamp: record.NowRFC3339(),
+		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "restore-rollout-strategy",
 		Detail:    msg,

@@ -207,6 +207,6 @@ func Repair(c *kube.Client, name, mode, expectedOperatorVersion, expectedAPIVers
 	}); err != nil {
 		return nil, err
 	}
-	record.RecordActivity(c, types.ActivityEntry{Timestamp: record.NowRFC3339(), User: kube.GetUser(c), Action: "repair-dsc", Detail: name + ": " + detail, Success: true})
+	record.RecordActivity(c, types.ActivityEntry{Timestamp: kube.NowRFC3339(), User: kube.GetUser(c), Action: "repair-dsc", Detail: name + ": " + detail, Success: true})
 	return &types.OperationResponse{Success: true, Message: detail, Logs: []string{detail}}, nil
 }

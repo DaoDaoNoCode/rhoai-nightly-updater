@@ -18,9 +18,8 @@
 //	                        the diagnostics report types
 //	rhoai, authz            the product's namespaces, API versions and
 //	                        platform readers; the user-token checks
-//	record, argo            the updater's own records; the Argo CD and ACM
-//	                        guard
-//	registry                Quay, FBC and GitHub reads
+//	record, argo, registry  the updater's own records; the Argo CD and ACM
+//	                        guard; Quay, FBC and GitHub reads
 //	catalog, components     catalog verification and the stable target; the
 //	                        DSC model and the component health readers
 //	dashdev, envkit, node   Dashboard Dev; ownership and operator installs;

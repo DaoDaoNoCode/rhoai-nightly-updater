@@ -7,7 +7,6 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -225,19 +224,12 @@ func RecordActivity(c *kube.Client, entry types.ActivityEntry) {
 // RecordAction records an action of the signed-in user, stamped now.
 func RecordAction(c *kube.Client, action, detail string, success bool) {
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: NowRFC3339(),
+		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    action,
 		Detail:    detail,
 		Success:   success,
 	})
-}
-
-// NowRFC3339 is the wall-clock time in UTC as RFC 3339, the form of every
-// timestamp this package records (activity entries, records, annotations).
-// Recorded times come from the time package, not clk (see clock.go).
-func NowRFC3339() string {
-	return time.Now().UTC().Format(time.RFC3339)
 }
 
 func recordActivityWithClient(c *kube.Client, entry types.ActivityEntry) {

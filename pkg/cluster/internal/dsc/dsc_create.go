@@ -93,7 +93,7 @@ func CreateDefault(c *kube.Client) (*types.OperationResponse, error) {
 
 	// Step 3: Record activity
 	record.RecordActivity(c, types.ActivityEntry{
-		Timestamp: record.NowRFC3339(),
+		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "create-dsc",
 		Detail:    "default-dsc with default components",
