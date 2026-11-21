@@ -1,0 +1,206 @@
+package types
+
+import (
+	"encoding/json"
+	jsonv2 "encoding/json/v2"
+	"fmt"
+)
+
+// Environment recipes, schema v1alpha1: a declarative description of a dev
+// cluster (an RHOAI build, the DataScienceCluster, a project and the
+// Environment features) that the updater sets up in one run. It is
+// release-agnostic: no component keys, CSV names, channels or DSC API
+// versions; the runner discovers those as the Environment page does. It
+// holds no secrets: the one-time cluster setup (pull secret, image mirror)
+// stays manual, and MaaS's external database (its URL holds a password) is
+// refused. Files are YAML or JSON; the backend reads both strictly
+// (pkg/cluster internal/recipe Validate), so every field has a json and a
+// yaml tag of the same name.
+
+// EnvironmentRecipe is a whole recipe.
+type EnvironmentRecipe struct {
+	// APIVersion is "rhoai-nightly-updater/v1alpha1".
+	APIVersion string `json:"apiVersion" yaml:"apiVersion"`
+	// Kind is "EnvironmentRecipe".
+	Kind     string         `json:"kind" yaml:"kind"`
+	Metadata RecipeMetadata `json:"metadata" yaml:"metadata"`
+	Spec     RecipeSpec     `json:"spec" yaml:"spec"`
+}
+
+// RecipeMetadata names a recipe.
+type RecipeMetadata struct {
+	// Name is a DNS-1123 label of at most 63 characters.
+	Name string `json:"name" yaml:"name"`
+	// Description is at most 256 characters.
+	Description string `json:"description,omitempty" yaml:"description"`
+}
+
+// RecipeSpec is what a recipe sets up, in the runner's fixed order.
+type RecipeSpec struct {
+	RHOAI              RecipeRHOAI              `json:"rhoai" yaml:"rhoai"`
+	DataScienceCluster RecipeDataScienceCluster `json:"dataScienceCluster" yaml:"dataScienceCluster"`
+	// Project is the project the features use; nil when none needs one.
+	Project      *RecipeProject     `json:"project,omitempty" yaml:"project"`
+	Features     RecipeFeatures     `json:"features" yaml:"features"`
+	DashboardDev RecipeDashboardDev `json:"dashboardDev" yaml:"dashboardDev"`
+}
+
+// RecipeRHOAI is the RHOAI operator build.
+type RecipeRHOAI struct {
+	Build RecipeBuild `json:"build" yaml:"build"`
+	// IfInstalled is "keep" (an installed operator stays as it is; the
+	// default) or "update" (it is updated to Build).
+	IfInstalled string `json:"ifInstalled,omitempty" yaml:"ifInstalled"`
+}
+
+// RecipeBuild is the RHOAI build: "latest" (the newest nightly), {tag:
+// "rhoai-3.6"} (the newest nightly of a line) or {image:
+// "quay.io/rhoai/rhoai-fbc-fragment@sha256:..."} (one catalog image).
+// Exactly one is set.
+type RecipeBuild struct {
+	Latest bool   `json:"-" yaml:"-"`
+	Tag    string `json:"tag,omitempty" yaml:"tag"`
+	Image  string `json:"image,omitempty" yaml:"image"`
+}
+
+// recipeBuildLatest is RecipeBuild's string form.
+const recipeBuildLatest = "latest"
+
+// recipeBuildObject is RecipeBuild's object form.
+type recipeBuildObject struct {
+	Tag   string `json:"tag,omitempty" yaml:"tag"`
+	Image string `json:"image,omitempty" yaml:"image"`
+}
+
+func recipeBuildString(s string) (RecipeBuild, error) {
+	if s != recipeBuildLatest {
+		return RecipeBuild{}, fmt.Errorf("build %q: use latest, {tag: ...} or {image: ...}", s)
+	}
+	return RecipeBuild{Latest: true}, nil
+}
+
+// UnmarshalJSON reads "latest" or an object with tag or image, refusing
+// any other member (names match exactly).
+func (b *RecipeBuild) UnmarshalJSON(data []byte) error {
+	var s string
+	if jsonv2.Unmarshal(data, &s) == nil {
+		build, err := recipeBuildString(s)
+		*b = build
+		return err
+	}
+	var obj recipeBuildObject
+	if err := jsonv2.Unmarshal(data, &obj, jsonv2.RejectUnknownMembers(true)); err != nil {
+		return fmt.Errorf("build: use latest, {tag: ...} or {image: ...}: %w", err)
+	}
+	*b = RecipeBuild{Tag: obj.Tag, Image: obj.Image}
+	return nil
+}
+
+// MarshalJSON writes "latest" or the object form.
+func (b RecipeBuild) MarshalJSON() ([]byte, error) {
+	if b.Latest {
+		return json.Marshal(recipeBuildLatest)
+	}
+	return json.Marshal(recipeBuildObject{Tag: b.Tag, Image: b.Image})
+}
+
+// UnmarshalYAML reads "latest" or a mapping with tag or image. The decoder
+// that calls it applies its own settings to unmarshal, so a decoder with
+// KnownFields refuses other keys here too.
+func (b *RecipeBuild) UnmarshalYAML(unmarshal func(any) error) error {
+	var s string
+	if unmarshal(&s) == nil {
+		build, err := recipeBuildString(s)
+		*b = build
+		return err
+	}
+	var obj recipeBuildObject
+	if err := unmarshal(&obj); err != nil {
+		return fmt.Errorf("build: use latest, {tag: ...} or {image: ...}: %w", err)
+	}
+	*b = RecipeBuild{Tag: obj.Tag, Image: obj.Image}
+	return nil
+}
+
+// RecipeDataScienceCluster is the DataScienceCluster.
+type RecipeDataScienceCluster struct {
+	// Create: create the installed release's default DataScienceCluster
+	// when there is none. The recipe names no components.
+	Create bool `json:"create" yaml:"create"`
+}
+
+// RecipeProject is the project the features use.
+type RecipeProject struct {
+	// Mode is "create" (the recipe creates the project, owns it and
+	// removes it in Clean up) or "existing" (a data science project the
+	// user already has; the recipe owns nothing of it).
+	Mode string `json:"mode" yaml:"mode"`
+	// Name is a DNS-1123 label of at most 63 characters.
+	Name string `json:"name" yaml:"name"`
+	// DisplayName is the project's display name (mode create), at most
+	// 256 characters.
+	DisplayName string `json:"displayName,omitempty" yaml:"displayName"`
+}
+
+// RecipeFeatures are the Environment features the recipe sets up. A
+// feature that is off is left as it is.
+type RecipeFeatures struct {
+	// Pipelines: S3 storage and a pipeline server in the project.
+	Pipelines  RecipeFeature `json:"pipelines" yaml:"pipelines"`
+	MLflow     RecipeMLflow  `json:"mlflow" yaml:"mlflow"`
+	Models     RecipeModels  `json:"models" yaml:"models"`
+	Playground RecipeFeature `json:"playground" yaml:"playground"`
+	MaaS       RecipeMaaS    `json:"maas" yaml:"maas"`
+}
+
+// RecipeFeature is a feature without options.
+type RecipeFeature struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
+}
+
+// RecipeMLflow is MLflow.
+type RecipeMLflow struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
+	// Samples: also run the MLflow samples in the project.
+	Samples bool `json:"samples,omitempty" yaml:"samples"`
+}
+
+// RecipeModels is a model of the tool's catalog in the project.
+type RecipeModels struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
+	// Model is a model name of the tool's catalog; "" is its default.
+	Model string `json:"model,omitempty" yaml:"model"`
+	// Exposure is "default-gateway", "maas" or "internal"; "" takes the
+	// recommended way, resolved when the step runs.
+	Exposure string `json:"exposure,omitempty" yaml:"exposure"`
+	// ReleasedImage: serve with the released runtime image.
+	ReleasedImage bool `json:"releasedImage,omitempty" yaml:"releasedImage"`
+}
+
+// RecipeMaaS is Models as a Service.
+type RecipeMaaS struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
+	// Database is "development" (the default) or "cnpg". "external" is
+	// refused: its connection URL holds a password.
+	Database string `json:"database,omitempty" yaml:"database"`
+	// Publish: publish the project's model through MaaS.
+	Publish bool `json:"publish,omitempty" yaml:"publish"`
+}
+
+// RecipeDashboardDev is a Dashboard Dev build, deployed last.
+type RecipeDashboardDev struct {
+	// Deploy is "none" (the default), "main" or "pr".
+	Deploy string `json:"deploy,omitempty" yaml:"deploy"`
+	// PR is the odh-dashboard pull request, with Deploy "pr" only.
+	PR int `json:"pr,omitempty" yaml:"pr"`
+	// Flavor is "rhoai" (the default) or "odh".
+	Flavor string `json:"flavor,omitempty" yaml:"flavor"`
+}
+
+// RecipeProblem is one reason a recipe is refused.
+type RecipeProblem struct {
+	// Field is the recipe field, as a path ("spec.project.name"); "" for
+	// the source as a whole.
+	Field   string `json:"field,omitempty"`
+	Message string `json:"message"`
+}

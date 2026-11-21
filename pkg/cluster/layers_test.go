@@ -25,7 +25,7 @@ var clusterLayers = [][]string{
 	{"mlflow", "storage", "operator"},
 	{"serving", "gitops"},
 	{"dsc"},
-	{"features", "diagnostics"},
+	{"features", "diagnostics", "recipe"},
 }
 
 // layerViolations checks the imports of the internal packages (package path

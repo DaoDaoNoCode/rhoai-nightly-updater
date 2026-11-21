@@ -29,8 +29,9 @@
 //	serving, gitops         models, the inference gateway and MaaS; the gitops
 //	                        profile's update and admission-policy check
 //	dsc                     the DataScienceCluster's writes and their guards
-//	features, diagnostics   feature setups and the playground; the
-//	                        diagnostics runner, its checks and fixes
+//	features, diagnostics,  feature setups and the playground; the
+//	recipe                  diagnostics runner, its checks and fixes;
+//	                        environment recipes: their schema checks
 //
 // No internal package imports pkg/cluster. layers_test.go checks both rules
 // against its own copy of this list, and that this list and CONTRIBUTING.md
