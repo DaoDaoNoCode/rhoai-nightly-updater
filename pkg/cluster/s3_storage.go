@@ -728,8 +728,8 @@ func s3StatusAndEndpoints(c *Client) (types.ResourceState, s3Endpoints, error) {
 		return state, endpoints, endpointsErr
 	}
 	state.Message = fmt.Sprintf("%d/%d ready", deploy.Status.ReadyReplicas, deploy.Status.Replicas)
-	if issue, err := inspectPods(c, s3Namespace, s3AppSelector, ""); err == nil {
-		applyPodIssue(&state, issue)
+	if issue, err := envkit.InspectPods(c, s3Namespace, s3AppSelector, ""); err == nil {
+		envkit.ApplyPodIssue(&state, issue)
 	}
 	return state, endpoints, endpointsErr
 }
@@ -1315,12 +1315,12 @@ var (
 // and errS3NotReady on timeout, with the last observed pod issue. Every
 // request runs under one context bounded by S3ReadyTimeout, so a request
 // that starts just before the deadline cannot overrun it.
-func waitS3Ready(c *Client, image string) (workloadPodIssue, error) {
+func waitS3Ready(c *Client, image string) (envkit.PodIssue, error) {
 	ctx, cancel := kube.Clock().WithTimeout(c.Context(), S3ReadyTimeout)
 	defer cancel()
 	cc := c.WithContext(ctx)
-	var last workloadPodIssue
-	expired := func() (workloadPodIssue, error) {
+	var last envkit.PodIssue
+	expired := func() (envkit.PodIssue, error) {
 		if c.Context().Err() != nil {
 			return last, c.Context().Err()
 		}
@@ -1335,13 +1335,13 @@ func waitS3Ready(c *Client, image string) (workloadPodIssue, error) {
 			var deploy s3DeploymentSpec
 			if json.Unmarshal(body, &deploy) == nil {
 				if deploy.rolledOut() {
-					return workloadPodIssue{}, nil
+					return envkit.PodIssue{}, nil
 				}
 				// Only judge pods once the controller has seen the new
 				// template, and only pods running the image just applied, so
 				// an old pod from an earlier setup is not mistaken for this one.
 				if deploy.Status.ObservedGeneration >= deploy.Metadata.Generation {
-					if issue, perr := inspectPods(cc, s3Namespace, s3AppSelector, image); perr == nil && issue.Reason != "" {
+					if issue, perr := envkit.InspectPods(cc, s3Namespace, s3AppSelector, image); perr == nil && issue.Reason != "" {
 						last = issue
 						if issue.Terminal {
 							return issue, errS3CannotStart

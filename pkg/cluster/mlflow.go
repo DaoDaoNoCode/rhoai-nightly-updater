@@ -250,7 +250,7 @@ func getMLflowStatus(c *Client) types.ResourceState {
 	var (
 		wg    sync.WaitGroup
 		host  string
-		issue workloadPodIssue
+		issue envkit.PodIssue
 		pvcs  []string
 	)
 	wg.Add(3)
@@ -264,7 +264,7 @@ func getMLflowStatus(c *Client) types.ResourceState {
 	go func() {
 		defer wg.Done()
 		if !state.Ready && !state.Terminating {
-			issue, _ = inspectPods(c, ns, mlflowPodSelector, "")
+			issue, _ = envkit.InspectPods(c, ns, mlflowPodSelector, "")
 		}
 	}()
 	go func() {
@@ -275,7 +275,7 @@ func getMLflowStatus(c *Client) types.ResourceState {
 	}()
 	wg.Wait()
 	state.UIRoute = mlflowUIURL(cr.Status.URL, host)
-	applyPodIssue(&state, issue)
+	envkit.ApplyPodIssue(&state, issue)
 	state.DataPVCs = pvcs
 	return state
 }

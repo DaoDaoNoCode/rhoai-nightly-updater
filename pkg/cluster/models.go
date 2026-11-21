@@ -396,8 +396,8 @@ func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) type
 		s.HealthUnknown = true
 	}
 	if inspect {
-		if issue, err := inspectPods(c, m.Metadata.Namespace, modelPodSelector(m.Metadata.Name), ""); err == nil {
-			applyPodIssue(&s.ResourceState, issue)
+		if issue, err := envkit.InspectPods(c, m.Metadata.Namespace, modelPodSelector(m.Metadata.Name), ""); err == nil {
+			envkit.ApplyPodIssue(&s.ResourceState, issue)
 			if s.ImageKind == "preset" && (issue.Reason == "ErrImagePull" || issue.Reason == "ImagePullBackOff") {
 				switch {
 				case manifestUnknown(issue.Message):

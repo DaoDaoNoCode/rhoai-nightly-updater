@@ -905,36 +905,36 @@ func readMigrateJob(c *Client) (migrateJobInfo, bool, error) {
 // finished. It returns errS3CannotStart as soon as its pod reports a
 // terminal waiting reason (ImagePullBackOff, ...), and errS3NotReady on
 // timeout.
-func waitMigrateJob(c *Client, job migrateJobInfo, timeout time.Duration) (migrateJobInfo, workloadPodIssue, error) {
+func waitMigrateJob(c *Client, job migrateJobInfo, timeout time.Duration) (migrateJobInfo, envkit.PodIssue, error) {
 	ctx, cancel := kube.Clock().WithTimeout(c.Context(), timeout)
 	defer cancel()
 	cc := c.WithContext(ctx)
 	for {
 		if job.finished() {
-			return job, workloadPodIssue{}, nil
+			return job, envkit.PodIssue{}, nil
 		}
 		if sel := job.selector(); sel != "" {
-			if issue, err := inspectPods(cc, s3Namespace, sel, rcloneImage()); err == nil && issue.Terminal {
+			if issue, err := envkit.InspectPods(cc, s3Namespace, sel, rcloneImage()); err == nil && issue.Terminal {
 				return job, issue, errS3CannotStart
 			}
 		}
 		if kube.Clock().Sleep(ctx, MigratePoll) != nil {
 			if c.Context().Err() != nil {
-				return job, workloadPodIssue{}, c.Context().Err()
+				return job, envkit.PodIssue{}, c.Context().Err()
 			}
-			return job, workloadPodIssue{}, errS3NotReady
+			return job, envkit.PodIssue{}, errS3NotReady
 		}
 		next, found, err := readMigrateJob(cc)
 		switch {
 		case ctx.Err() != nil:
 			continue
 		case err != nil && !kube.IsNetworkError(err):
-			return job, workloadPodIssue{}, err
+			return job, envkit.PodIssue{}, err
 		case err == nil && !found:
-			return job, workloadPodIssue{}, fmt.Errorf("the copy Job %s/%s disappeared while the copy was running", s3Namespace, migrateJobName)
+			return job, envkit.PodIssue{}, fmt.Errorf("the copy Job %s/%s disappeared while the copy was running", s3Namespace, migrateJobName)
 		case err == nil:
 			if next.Meta.UID != job.Meta.UID {
-				return job, workloadPodIssue{}, fmt.Errorf("the copy Job %s/%s was replaced while the copy was running", s3Namespace, migrateJobName)
+				return job, envkit.PodIssue{}, fmt.Errorf("the copy Job %s/%s was replaced while the copy was running", s3Namespace, migrateJobName)
 			}
 			job = next
 		}
