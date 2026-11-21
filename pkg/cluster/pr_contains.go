@@ -1,5 +1,36 @@
 package cluster
 
+// "Which nightly contains PR #N?" and "which nightly contains commit X?"
+//
+// Pull requests are opened and merged upstream (opendatahub-io/odh-dashboard,
+// opendatahub-io/data-science-pipelines, ...), while RHOAI images are built
+// from the red-hat-data-services forks: every component image of a nightly
+// carries a git.url label https://github.com/red-hat-data-services/<name> and
+// a commit label (checked 2026-10-29: 165 related images in the rhoai-3.6
+// build, 14 of them from red-hat-data-services/odh-dashboard; about 24 base
+// images have no git.url). The dashboard fork's release branches are updated
+// by merging upstream main ("Merge remote-tracking branch 'upstream/main'
+// into rhoai-3.6"), so upstream SHAs keep their identity in the fork:
+// GET /repos/red-hat-data-services/odh-dashboard/commits/<7-char upstream
+// sha> resolves, compare/<old upstream sha>...<rhoai-3.6 head> is "ahead"
+// (contained) and compare/<today's upstream main head>...<rhoai-3.6 head> is
+// "diverged" (not merged yet). Forks of one GitHub network resolve each
+// other's SHAs (checked 2026-10-30: GET /repos/red-hat-data-services/
+// data-science-pipelines/commits/<upstream merge sha> is 200 and the compare
+// with a fork build commit is "diverged" although the fork never merged it),
+// so a fork that cherry-picks or rebases upstream changes answers "not
+// contained" for a PR it took that way: the cherry-pick has another SHA.
+// A compare 404 only happens for a SHA outside the network, which is
+// reported as unknown ("commit not on GitHub").
+//
+// A build whose image was pushed more than an hour before the PR's merge
+// date (or the commit's date) cannot contain it: its answer comes from the
+// FBC image's build-date label alone, with no catalog or GitHub read.
+//
+// GitHub compare semantics (GET /repos/{owner}/{repo}/compare/{base}...{head}):
+// "ahead" or "identical" means head contains base; "behind" or "diverged"
+// means it does not.
+
 import (
 	"context"
 	"encoding/json"

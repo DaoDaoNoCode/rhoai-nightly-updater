@@ -1,5 +1,10 @@
 package cluster
 
+// Regression tests for the review-round findings on the quick resources:
+// foreign objects appearing between the tool's check and its write, and API
+// calls that stall past an operation's deadline. The S3 storage's are in
+// s3_storage_test.go.
+
 import (
 	"context"
 	"encoding/json"

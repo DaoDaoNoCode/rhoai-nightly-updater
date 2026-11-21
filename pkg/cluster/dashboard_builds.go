@@ -1,5 +1,23 @@
 package cluster
 
+// GET /api/dashboard/builds: the commit of every PR or main build a dashboard
+// container runs, how far it is from the branch it tracks, and whether the
+// floating tag it came from points to a newer build.
+//
+// Both flavours are built from upstream opendatahub-io/odh-dashboard main
+// (the RHOAI build is the same commit built by Konflux with
+// BUILD_MODE=RHOAI), so a main build is compared with that repository's main
+// branch and a PR build with the PR's head commit. The commit comes from the
+// running image's labels, read anonymously (quay.io/opendatahub is public).
+//
+// This is not part of GET /api/dashboard/state: that endpoint is polled and
+// must stay fast, while registry and GitHub reads take seconds and GitHub
+// allows an anonymous client 60 requests per hour per egress IP, shared by
+// everyone using the pod. Everything GitHub answers is cached (two SHAs
+// compare the same way forever; a branch head for a few minutes) and a
+// GitHub failure never fails the request: the container's divergence is
+// "unknown" with a reason.
+
 import (
 	"context"
 	"encoding/json"

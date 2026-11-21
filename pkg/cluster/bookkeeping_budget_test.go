@@ -1,5 +1,8 @@
 package cluster
 
+// R6-5 / R7-L5: the bookkeeping after an operation is bounded by real
+// deadlines, not only by the budget arithmetic in budget_test.go.
+
 import (
 	"context"
 	"net/http"
