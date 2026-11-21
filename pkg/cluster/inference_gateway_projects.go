@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -235,7 +236,7 @@ func releaseGoneGatewayProjects(c *Client) string {
 	}
 	var released, kept []string
 	for _, project := range recorded {
-		if _, exists, err := kube.ReadObjectMeta(c, clusterPath("v1", "namespaces", project)); err != nil || exists {
+		if _, exists, err := kube.ReadObjectMeta(c, rhoai.ClusterPath("v1", "namespaces", project)); err != nil || exists {
 			continue
 		}
 		if msg, _ := removeGatewayProject(c, project, func(string) {}); msg != "" {
@@ -319,7 +320,7 @@ func listedProjectsState(c *Client, state *types.InferenceGatewayState, gw gatew
 		}
 		seen[ns] = true
 		state.UnusedProjects = append(state.UnusedProjects, ns)
-		if _, found, err := kube.ReadObjectMeta(c, clusterPath("v1", "namespaces", ns)); err == nil && !found {
+		if _, found, err := kube.ReadObjectMeta(c, rhoai.ClusterPath("v1", "namespaces", ns)); err == nil && !found {
 			state.GoneProjects = append(state.GoneProjects, ns)
 		}
 	}

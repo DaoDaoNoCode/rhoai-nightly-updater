@@ -14,13 +14,14 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Always scope and verify catalog identity: the stable and nightly catalogs
 // both publish rhods-operator, so a by-name lookup is ambiguous.
 func catalogChannels(c *Client, source string) ([]any, error) {
-	path := namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, "") +
-		"?labelSelector=" + url.QueryEscape("catalog="+source) + "&fieldSelector=" + url.QueryEscape("metadata.name="+SubName)
+	path := rhoai.NamespacedPath("packages.operators.coreos.com/v1", "packagemanifests", rhoai.CatalogNS, "") +
+		"?labelSelector=" + url.QueryEscape("catalog="+source) + "&fieldSelector=" + url.QueryEscape("metadata.name="+rhoai.SubName)
 	var items []struct {
 		Metadata struct {
 			Name string `json:"name"`
@@ -39,7 +40,7 @@ func catalogChannels(c *Client, source string) ([]any, error) {
 		return nil, fmt.Errorf("catalog %s package lookup: %w", source, err)
 	}
 	for _, item := range items {
-		if item.Metadata.Name == SubName && item.Status.PackageName == SubName && item.Status.Source == source && item.Status.Namespace == CatalogNS {
+		if item.Metadata.Name == rhoai.SubName && item.Status.PackageName == rhoai.SubName && item.Status.Source == source && item.Status.Namespace == rhoai.CatalogNS {
 			return item.Status.Channels, nil
 		}
 	}
@@ -125,7 +126,7 @@ func ownedCRDVersions(entry map[string]any) map[string][]string {
 }
 
 func verificationCatalogPrefix() string {
-	name := strings.TrimRight(CatalogName, "-")
+	name := strings.TrimRight(rhoai.CatalogName, "-")
 	if len(name) > 35 {
 		name = name[:35]
 	}
@@ -143,7 +144,7 @@ func preflightReinstallCatalog(c *Client, image, override string) (catalogTarget
 	defer remove()
 	deadline := kube.Clock().Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
 	lastProblem := "the catalog has not reported its state yet"
-	pull := pullFailureWatch{advice: nodePullAdvice}
+	pull := pullFailureWatch{advice: rhoai.NodePullAdvice}
 	for kube.Clock().Now().Before(deadline) {
 		state, err := verificationCatalogState(c, path)
 		if err != nil {
@@ -156,7 +157,7 @@ func preflightReinstallCatalog(c *Client, image, override string) (catalogTarget
 		} else if channels, channelErr := catalogChannels(c, name); channelErr != nil {
 			lastProblem = channelErr.Error()
 		} else if len(channels) == 0 {
-			lastProblem = "the catalog does not list the " + SubName + " package yet"
+			lastProblem = "the catalog does not list the " + rhoai.SubName + " package yet"
 		} else if override != "" {
 			if entry := findChannel(channels, override); entry != nil {
 				head, _ := entry["currentCSV"].(string)
@@ -185,7 +186,7 @@ func preflightReinstallCatalog(c *Client, image, override string) (catalogTarget
 func createVerificationCatalog(c *Client, image string) (name, path string, remove func(), err error) {
 	cleanupStaleVerificationCatalogs(c)
 	name = verificationCatalogPrefix() + strconv.FormatInt(time.Now().UnixNano(), 36)
-	path = namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, name)
+	path = rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, name)
 	remove = func() {
 		ctx, cancel := postOperationContext(c, 30*time.Second)
 		defer cancel()
@@ -250,7 +251,7 @@ func cleanupStaleVerificationCatalogs(c *Client) {
 			CreationTimestamp string            `json:"creationTimestamp"`
 		} `json:"metadata"`
 	}
-	if err := c.ListInto(namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, ""), &items); err != nil {
+	if err := c.ListInto(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, ""), &items); err != nil {
 		if kube.IsDecodeError(err) {
 			slog.Warn("cannot parse CatalogSources to remove stale verification catalogs", "error", err)
 			return
@@ -267,7 +268,7 @@ func cleanupStaleVerificationCatalogs(c *Client) {
 		if err != nil || time.Since(created) < StaleVerificationCatalogAge {
 			continue
 		}
-		path := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, m.Name)
+		path := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, m.Name)
 		if _, err := c.DeleteIfExists(path); err != nil {
 			slog.Warn("failed to delete stale verification CatalogSource", "name", m.Name, "error", err)
 			continue
@@ -341,7 +342,7 @@ var imagePullFailureReasons = map[string]bool{
 // catalog pod container that cannot pull its image. Lookup errors are
 // ignored: the caller keeps polling the CatalogSource state.
 func catalogPodPullFailure(c *Client, source string) (string, string) {
-	path := namespacedPath("v1", "pods", CatalogNS, "") + "?labelSelector=" + url.QueryEscape("olm.catalogSource="+source)
+	path := rhoai.NamespacedPath("v1", "pods", rhoai.CatalogNS, "") + "?labelSelector=" + url.QueryEscape("olm.catalogSource="+source)
 	var items []struct {
 		Status struct {
 			InitContainerStatuses []containerWaitStatus `json:"initContainerStatuses"`

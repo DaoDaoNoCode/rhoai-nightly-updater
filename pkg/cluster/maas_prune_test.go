@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -148,7 +149,7 @@ func TestMaaS_PruneNarrowsTheGatewayWhenAnotherStepFails(t *testing.T) {
 // from the published one, so the status says so; the publication stays.
 func TestMaaSStatus_WarnsWhenTheModelsRecordIsUnreadable(t *testing.T) {
 	mc := publishedCluster(t)
-	path := namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)
+	path := rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)
 	cm := mc.f.get(path)
 	ensureMap(cm, "data")[modelsRecordKey] = "not json"
 	mc.f.put(path, cm)

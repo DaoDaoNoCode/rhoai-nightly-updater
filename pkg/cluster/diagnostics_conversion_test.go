@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // conversionWorld is the API of the live RHOAI 3.6 nightly of 2026-10-07:
@@ -14,8 +16,8 @@ import (
 // dashboard.opendatahub.io serves one version and is not probed.
 func conversionWorld(t *testing.T, dsc3Status int, dsc3Body string) (*fakeAPI, *Client) {
 	t.Helper()
-	apiVersionsCache.Purge()
-	t.Cleanup(apiVersionsCache.Purge)
+	rhoai.APIVersionsCache.Purge()
+	t.Cleanup(rhoai.APIVersionsCache.Purge)
 	f, c := newFakeAPI(t)
 	f.json("GET", "/apis", 200, `{"kind":"APIGroupList","apiVersion":"v1","groups":[
 		{"name":"dashboard.opendatahub.io","versions":[{"groupVersion":"dashboard.opendatahub.io/v1","version":"v1"}],"preferredVersion":{"groupVersion":"dashboard.opendatahub.io/v1","version":"v1"}},
@@ -42,8 +44,8 @@ func conversionWorld(t *testing.T, dsc3Status int, dsc3Body string) (*fakeAPI, *
 	f.json("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", 200, `{"apiVersion":"datasciencecluster.opendatahub.io/v2","items":[{"metadata":{"name":"default-dsc"}}]}`)
 	f.json("GET", "/apis/config.opendatahub.io/v1alpha2/platforms", 500, livePlatformConversion)
 	f.json("GET", "/apis/config.opendatahub.io/v1alpha1/platforms", 200, `{"items":[{"metadata":{"name":"default"}}]}`)
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), 200,
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), 200,
 		`{"metadata":{"name":"rhods-operator.3.6.0"},"spec":{"version":"3.6.0","install":{"spec":{"deployments":[{"name":"rhods-operator"}]}}},"status":{"phase":"Succeeded"}}`)
 	return f, c
 }

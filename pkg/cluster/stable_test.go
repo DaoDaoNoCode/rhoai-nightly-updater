@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 func stableCatalogMock(source, channel, version string) mockResponse {
@@ -20,9 +22,9 @@ func stableCatalogMock(source, channel, version string) mockResponse {
 func stableManifestJSON(source, defaultChannel string, channels []map[string]any) string {
 	body, _ := json.Marshal(map[string]any{
 		"items": []any{map[string]any{
-			"metadata": map[string]string{"name": SubName},
+			"metadata": map[string]string{"name": rhoai.SubName},
 			"status": map[string]any{
-				"packageName": SubName, "catalogSource": source, "catalogSourceNamespace": CatalogNS,
+				"packageName": rhoai.SubName, "catalogSource": source, "catalogSourceNamespace": rhoai.CatalogNS,
 				"defaultChannel": defaultChannel, "channels": channels,
 			},
 		}},
@@ -57,7 +59,7 @@ func TestStableTargetDiscovery(t *testing.T) {
 			t.Setenv("STABLE_SOURCE", "redhat-operators")
 			t.Setenv("STABLE_CHANNEL", tt.override)
 			client, cleanup := newMockClient(map[string]mockResponse{
-				namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, ""): {body: stableManifestJSON("redhat-operators", tt.defaultChannel, tt.channels)},
+				rhoai.NamespacedPath("packages.operators.coreos.com/v1", "packagemanifests", rhoai.CatalogNS, ""): {body: stableManifestJSON("redhat-operators", tt.defaultChannel, tt.channels)},
 			})
 			defer cleanup()
 			target, err := resolveStableTarget(client)
@@ -79,13 +81,13 @@ func TestStableDiscoveryScopesCatalogAndRefreshes(t *testing.T) {
 		if r.URL.Query().Get("labelSelector") != "catalog=mirrored-operators" {
 			t.Errorf("unscoped package query: %s", r.URL.String())
 		}
-		if r.URL.Query().Get("fieldSelector") != "metadata.name="+SubName {
+		if r.URL.Query().Get("fieldSelector") != "metadata.name="+rhoai.SubName {
 			t.Errorf("package name filter missing: %s", r.URL.String())
 		}
 		// Include a newer nightly package despite the selector, to verify source identity.
 		var stable, nightly map[string]any
 		json.Unmarshal([]byte(stableCatalogMock("mirrored-operators", "stable", version).body), &stable)
-		json.Unmarshal([]byte(stableCatalogMock(CatalogName, "stable", "99.0.0").body), &nightly)
+		json.Unmarshal([]byte(stableCatalogMock(rhoai.CatalogName, "stable", "99.0.0").body), &nightly)
 		stable["items"] = append(nightly["items"].([]any), stable["items"].([]any)...)
 		json.NewEncoder(w).Encode(stable)
 	}))
@@ -111,7 +113,7 @@ func TestStableDiscoveryFailureDoesNotRemoveOperator(t *testing.T) {
 			deletes++
 		}
 		switch {
-		case strings.HasSuffix(r.URL.Path, "/subscriptions/"+SubName):
+		case strings.HasSuffix(r.URL.Path, "/subscriptions/"+rhoai.SubName):
 			io.WriteString(w, `{"spec":{"source":"rhoai-catalog-dev","channel":"beta"}}`)
 		case strings.HasSuffix(r.URL.Path, "/packagemanifests"):
 			io.WriteString(w, `{"items":[]}`)
@@ -142,13 +144,13 @@ func TestStableDiscoveryRejectsUnavailableOrUnverifiedCatalog(t *testing.T) {
 	}{
 		{"forbidden", mockResponse{statusCode: http.StatusForbidden, body: `{"message":"forbidden","code":403}`}},
 		{"invalid JSON", mockResponse{body: `invalid`}},
-		{"wrong source", stableCatalogMock(CatalogName, "stable", "99.0.0")},
-		{"wrong namespace", mockResponse{body: strings.ReplaceAll(valid, CatalogNS, "other-marketplace")}},
+		{"wrong source", stableCatalogMock(rhoai.CatalogName, "stable", "99.0.0")},
+		{"wrong namespace", mockResponse{body: strings.ReplaceAll(valid, rhoai.CatalogNS, "other-marketplace")}},
 		{"missing source identity", mockResponse{body: strings.ReplaceAll(valid, `"catalogSource":"redhat-operators",`, "")}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c, cleanup := newMockClient(map[string]mockResponse{
-				namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, ""): tt.response,
+				rhoai.NamespacedPath("packages.operators.coreos.com/v1", "packagemanifests", rhoai.CatalogNS, ""): tt.response,
 			})
 			defer cleanup()
 			target, err := resolveStableTarget(c)
@@ -162,7 +164,7 @@ func TestStableDiscoveryRejectsUnavailableOrUnverifiedCatalog(t *testing.T) {
 func TestStableReinstallMovesOlderChannelToLatestGA(t *testing.T) {
 	t.Setenv("STABLE_SOURCE", "redhat-operators")
 	t.Setenv("STABLE_CHANNEL", "")
-	subPath := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
+	subPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName)
 	var appliedChannel string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if dashboardOperatorAbsent(w, r) {

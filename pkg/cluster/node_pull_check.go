@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -48,10 +49,10 @@ func CheckNodePull(c *Client, image string) (*types.OperationResponse, error) {
 		}, nil
 	}
 	defer remove()
-	logs = append(logs, "Created the temporary CatalogSource "+CatalogNS+"/"+name)
+	logs = append(logs, "Created the temporary CatalogSource "+rhoai.CatalogNS+"/"+name)
 
 	deadline := kube.Clock().Now().Add(CatalogReadyTimeout)
-	pull := pullFailureWatch{advice: nodePullAdvice}
+	pull := pullFailureWatch{advice: rhoai.NodePullAdvice}
 	last := ""
 	for kube.Clock().Now().Before(deadline) {
 		state, err := verificationCatalogState(c, path)

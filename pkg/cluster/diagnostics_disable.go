@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Preconditions for setting a DSC component to Removed.
@@ -41,7 +42,7 @@ func deploymentReady(c *Client, namespace, name string) (bool, string) {
 			ReadyReplicas int `json:"readyReplicas"`
 		} `json:"status"`
 	}
-	found, err := c.GetIntoOptional(namespacedPath("apps/v1", "deployments", namespace, name), &d)
+	found, err := c.GetIntoOptional(rhoai.NamespacedPath("apps/v1", "deployments", namespace, name), &d)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return false, fmt.Sprintf("could not parse Deployment %s/%s", namespace, name)
@@ -63,13 +64,13 @@ func deploymentReady(c *Client, namespace, name string) (bool, string) {
 // kindUnknown: a module API group is served, but none of its kinds (in
 // either module group) is named after the module, so the tool cannot tell
 // which CR (if any) serves the module.
-func moduleCR(c *Client, discover func() (componentAPI, error), component string) (name string, finalizers []string, deleting, found, kindUnknown bool, err error) {
+func moduleCR(c *Client, discover func() (rhoai.ComponentAPI, error), component string) (name string, finalizers []string, deleting, found, kindUnknown bool, err error) {
 	api, err := discover()
 	if err != nil {
 		return "", nil, false, false, false, err
 	}
-	if api.served() {
-		if _, ok := api.kindForModule(component); !ok {
+	if api.Served() {
+		if _, ok := api.KindForModule(component); !ok {
 			return "", nil, false, false, true, nil
 		}
 	}
@@ -87,7 +88,7 @@ func moduleCR(c *Client, discover func() (componentAPI, error), component string
 // change that removes several components reads them once.
 type removalChecker struct {
 	c           *Client
-	api         func() (componentAPI, error)
+	api         func() (rhoai.ComponentAPI, error)
 	operators   *moduleOperatorFinder
 	opLoaded    bool
 	opBlocker   string
@@ -132,7 +133,7 @@ func operatorDeploymentsBlocker(c *Client) string {
 	}
 	var why []string
 	for _, d := range op.Deployments {
-		if ok, msg := deploymentReady(c, SubNS, d); !ok {
+		if ok, msg := deploymentReady(c, rhoai.SubNS, d); !ok {
 			why = append(why, msg)
 		}
 	}
@@ -178,7 +179,7 @@ func (rc *removalChecker) teardownBlockers(component string) (blockers, conversi
 // component API is named after it, so the tool cannot tell which CR serves
 // it nor which operator cleans it up.
 func unknownModuleBlocker(component string) string {
-	return fmt.Sprintf("can't tell which module serves it (no %s kind is named after %s), so the tool can't confirm an operator is running to clean up and won't remove it. Check in the OpenShift console, then change it there", strings.Join(moduleAPIGroups, " or "), component)
+	return fmt.Sprintf("can't tell which module serves it (no %s kind is named after %s), so the tool can't confirm an operator is running to clean up and won't remove it. Check in the OpenShift console, then change it there", strings.Join(rhoai.ModuleAPIGroups, " or "), component)
 }
 
 // unknownOperatorBlocker words a module CR whose operator the tool cannot
@@ -544,7 +545,7 @@ func (rc *removalChecker) serviceComponent(ref string) (string, error) {
 	}
 	ns, name, _ := strings.Cut(ref, "/")
 	owner := ""
-	body, found, err := rc.c.GetOptional(namespacedPath("v1", "services", ns, name))
+	body, found, err := rc.c.GetOptional(rhoai.NamespacedPath("v1", "services", ns, name))
 	switch {
 	case err != nil:
 		err = fmt.Errorf("read Service %s: %w", ref, err)

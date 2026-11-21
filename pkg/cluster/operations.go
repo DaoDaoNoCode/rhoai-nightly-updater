@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -98,7 +99,7 @@ func extractTargetVersion(imageRef string) (int, int, bool) {
 // (eus-*, support-required-upgrade-*), and picks the highest version with a
 // deterministic tiebreaker: stable-M.x > stable-M.N > beta > fast > other.
 func detectNightlyChannel(c *Client, imageRef string) (string, error) {
-	channels, err := catalogChannels(c, CatalogName)
+	channels, err := catalogChannels(c, rhoai.CatalogName)
 	if err != nil {
 		return "", err
 	}
@@ -199,7 +200,7 @@ func channelPriority(name string, ea int) int {
 // found, (false, nil) if the catalog has no such channel, and (false, err) on
 // transient API / parse failures.
 func channelExistsInCatalog(c *Client, channel string) (bool, error) {
-	channels, err := catalogChannels(c, CatalogName)
+	channels, err := catalogChannels(c, rhoai.CatalogName)
 	if err != nil {
 		return false, err
 	}
@@ -232,8 +233,8 @@ func buildCatalogSourceSpec(image string) map[string]any {
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "CatalogSource",
 		"metadata": map[string]any{
-			"name":      CatalogName,
-			"namespace": CatalogNS,
+			"name":      rhoai.CatalogName,
+			"namespace": rhoai.CatalogNS,
 		},
 		"spec": map[string]any{
 			"sourceType":  "grpc",
@@ -259,13 +260,13 @@ type UpdateStepEvent = types.UpdateStepEvent
 // *catalogImagePullError when the catalog pod cannot pull image.
 func waitForNightlyCatalogReady(c *Client, image string, emit func(UpdateStepEvent), logs *[]string) (bool, error) {
 	deadline := kube.Clock().Now().Add(CatalogReadyTimeout)
-	pull := pullFailureWatch{advice: nodePullAdvice}
+	pull := pullFailureWatch{advice: rhoai.NodePullAdvice}
 	for kube.Clock().Now().Before(deadline) {
 		if err := kube.Clock().Sleep(c.Context(), CatalogPollInterval); err != nil {
 			return false, err
 		}
 
-		cs, err := getCatalogSource(c)
+		cs, err := rhoai.GetCatalogSource(c)
 		if err != nil {
 			slog.Warn("error polling CatalogSource state", "error", err)
 			continue
@@ -275,7 +276,7 @@ func waitForNightlyCatalogReady(c *Client, image string, emit func(UpdateStepEve
 		if cs.State == "READY" {
 			return true, nil
 		}
-		if err := pull.check(c, CatalogName, image); err != nil {
+		if err := pull.check(c, rhoai.CatalogName, image); err != nil {
 			return false, err
 		}
 	}
@@ -501,7 +502,7 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 	}
 
 	if gitOps.active() {
-		return updateUnderGitOps(c, image, target, currentCSV, gitOps, recovery, &logs, emit, fail, nil, nodePullAdvice)
+		return updateUnderGitOps(c, image, target, currentCSV, gitOps, recovery, &logs, emit, fail, nil, rhoai.NodePullAdvice)
 	}
 
 	// --- Step 3: apply_catalog_source ---
@@ -527,7 +528,7 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 
 	// --- Step 7: apply_subscription ---
 	emit(UpdateStepEvent{Step: "apply_subscription", Status: "running", Message: "Creating Subscription..."})
-	newSub := buildSubscription(recovery.subscriptionBase(), CatalogName, nightlyChannel)
+	newSub := buildSubscription(recovery.subscriptionBase(), rhoai.CatalogName, nightlyChannel)
 	recovery.subscriptionChanged = true
 	if r, err := applyUpdateSubscription(c, newSub, nightlyChannel, recovery, &logs, emit, fail); r != nil || err != nil {
 		return r, err
@@ -588,7 +589,7 @@ func updateCheckCluster(c *Client, image string, opts OperationOptions, chk *upd
 		return fail(fmt.Sprintf("Failed to check IDMS: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	if !idms.Exists {
-		return fail(fmt.Sprintf("No IDMS found mirroring %s. Run the one-time setup first.", IDMSSource), "prerequisites")
+		return fail(fmt.Sprintf("No IDMS found mirroring %s. Run the one-time setup first.", rhoai.IDMSSource), "prerequisites")
 	}
 	*logs = append(*logs, fmt.Sprintf("OK: IDMS exists (%s)", idms.Name))
 
@@ -598,7 +599,7 @@ func updateCheckCluster(c *Client, image string, opts OperationOptions, chk *upd
 		return fail(ogProblem, ogCode)
 	}
 
-	currentCSV, csvCheckErr := getCSV(c)
+	currentCSV, csvCheckErr := rhoai.GetCSV(c)
 	if csvCheckErr != nil {
 		return fail("Cannot identify installed CSV: "+csvCheckErr.Error(), kube.ErrorCodeOr(csvCheckErr, "prerequisites"))
 	}
@@ -694,8 +695,8 @@ func updateApplyCatalog(c *Client, image string, recovery *operatorRecovery, log
 		*logs = append(*logs, "OK: Subscription removed while the catalog is replaced (the operator keeps running)")
 	}
 
-	*logs = append(*logs, fmt.Sprintf("Applying CatalogSource %s...", CatalogName))
-	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
+	*logs = append(*logs, fmt.Sprintf("Applying CatalogSource %s...", rhoai.CatalogName))
+	csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	recovery.noteCatalogChanged()
 	// Recreate this source so READY and PackageManifest cannot describe its
 	// previous image. The verified temporary catalog remains separate.
@@ -771,7 +772,7 @@ func updateDeleteCSV(c *Client, currentCSV types.CSVInfo, recovery *operatorReco
 	// fresh CSV; a same-version build is not an upgrade OLM would perform.
 	emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting old CSV and InstallPlan..."})
 	if ipName := recovery.installPlanName(); ipName != "" {
-		ipPath := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ipName)
+		ipPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, ipName)
 		if _, err := c.DeleteIfExists(ipPath); err != nil {
 			return fail("Cannot delete old InstallPlan: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 		}
@@ -949,7 +950,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 	if !idms.Exists {
 		return &types.OperationResponse{
 			Success:   false,
-			Message:   fmt.Sprintf("No IDMS found mirroring %s. Run the one-time setup first.", IDMSSource),
+			Message:   fmt.Sprintf("No IDMS found mirroring %s. Run the one-time setup first.", rhoai.IDMSSource),
 			Logs:      logs,
 			ErrorCode: "prerequisites",
 		}, nil
@@ -986,7 +987,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 
 	// Downgrade check: the same rule as the real update. The bundle comes
 	// from the FBC image itself because a dry run creates no catalog.
-	dryRunCSV, dryRunCSVErr := getCSV(c)
+	dryRunCSV, dryRunCSVErr := rhoai.GetCSV(c)
 	if dryRunCSVErr != nil {
 		return &types.OperationResponse{Success: false, Message: "Cannot identify installed CSV: " + dryRunCSVErr.Error(), Logs: logs, ErrorCode: kube.NonEmpty(kube.ErrorCodeFromK8sErr(dryRunCSVErr), "prerequisites")}, nil
 	}
@@ -1014,7 +1015,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 		return &types.OperationResponse{Success: false, Message: blocked, Logs: logs, ErrorCode: "validation"}, nil
 	}
 
-	cs, err := getCatalogSource(c)
+	cs, err := rhoai.GetCatalogSource(c)
 	if err != nil {
 		return &types.OperationResponse{
 			Success:   false,
@@ -1026,7 +1027,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 	// Server-side dry run: attempt CatalogSource apply with ?dryRun=All
 	// (not under Argo CD: the catalog is never written then).
 	catalogSpec := buildCatalogSourceSpec(image)
-	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
+	csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	var csDryErr error
 	if !gitOps.active() {
 		_, _, csDryErr = c.DryRunApply(csPath, catalogSpec)
@@ -1047,10 +1048,10 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 	} else if cs.Exists {
 		logs = append(logs, "OK: CatalogSource apply validated (would update image)")
 	} else {
-		logs = append(logs, fmt.Sprintf("OK: CatalogSource apply validated (would create %s)", CatalogName))
+		logs = append(logs, fmt.Sprintf("OK: CatalogSource apply validated (would create %s)", rhoai.CatalogName))
 	}
 
-	sub, err := getSubscription(c)
+	sub, err := rhoai.GetSubscription(c)
 	if err != nil {
 		return &types.OperationResponse{
 			Success:   false,
@@ -1067,9 +1068,9 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 		}
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would leave the CatalogSource as %s sets it and wait until the catalog serves the build. Then, after the old CSV is gone, would delete and at once recreate the Subscription with channel %s, keeping its config, approval mode and Argo CD tracking", gitOps.catalogSpecFrom(), channel))
 	case sub.State == "Not Installed" || sub.Source == "":
-		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create Subscription pointing to %s", CatalogName))
+		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create Subscription pointing to %s", rhoai.CatalogName))
 	default:
-		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would delete and recreate Subscription (%s/%s -> %s), keeping its config and approval mode", sub.Source, sub.Channel, CatalogName))
+		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would delete and recreate Subscription (%s/%s -> %s), keeping its config and approval mode", sub.Source, sub.Channel, rhoai.CatalogName))
 	}
 	if dryRunCSV.Name != "" {
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would delete CSV %s so OLM installs the selected build", dryRunCSV.Name))
@@ -1268,7 +1269,7 @@ func reinstallResolveTarget(c *Client, targetType, image string, rs *reinstallCh
 		*logs = append(*logs, fmt.Sprintf("Replacement catalog verified before cleanup (channel: %s, head: %s)", target.Channel, target.HeadCSV))
 	}
 
-	sub, err := getSubscription(c)
+	sub, err := rhoai.GetSubscription(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Failed to get subscription: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
@@ -1287,13 +1288,13 @@ func reinstallResolveTarget(c *Client, targetType, image string, rs *reinstallCh
 		}
 		stableSource, stableChannel = target.Source, target.Channel
 		rs.activityTarget = stableSource + "/" + stableChannel
-		targetCSV = SubName + "." + target.Version
+		targetCSV = rhoai.SubName + "." + target.Version
 		approveCSV = kube.NonEmpty(target.HeadCSV, targetCSV)
 		targetCRDs = target.OwnedCRDs
 		*logs = append(*logs, fmt.Sprintf("Catalog target: %s / %s (GA %s)", stableSource, stableChannel, target.Version))
 	}
 
-	csv, csvErr := getCSV(c)
+	csv, csvErr := rhoai.GetCSV(c)
 	if csvErr != nil {
 		return fail("Cannot identify installed CSV: "+csvErr.Error(), kube.ErrorCodeOr(csvErr, "prerequisites"))
 	}
@@ -1302,7 +1303,7 @@ func reinstallResolveTarget(c *Client, targetType, image string, rs *reinstallCh
 	// healthy and current. A Failed, Pending or outdated install on the same
 	// channel is reinstalled; Refresh is not offered on stable.
 	if !isNightly && sub.Source == stableSource && sub.Channel == stableChannel {
-		if csv.Phase == "Succeeded" && (csv.Version == "" || csv.Version == strings.TrimPrefix(targetCSV, SubName+".")) {
+		if csv.Phase == "Succeeded" && (csv.Version == "" || csv.Version == strings.TrimPrefix(targetCSV, rhoai.SubName+".")) {
 			rs.recordActivity = false
 			msg := "Already on the GA release. Nothing to install."
 			*logs = append(*logs, fmt.Sprintf("Subscription is already %s / %s and %s is Succeeded", stableSource, stableChannel, csv.Name))
@@ -1310,7 +1311,7 @@ func reinstallResolveTarget(c *Client, targetType, image string, rs *reinstallCh
 			return &types.OperationResponse{Success: true, Message: msg, Logs: *logs}, nil
 		}
 		*logs = append(*logs, fmt.Sprintf("Already subscribed to %s / %s, but the operator is not a healthy %s (CSV %q, phase %s); installing it again",
-			stableSource, stableChannel, strings.TrimPrefix(targetCSV, SubName+"."), csv.Name, csv.Phase))
+			stableSource, stableChannel, strings.TrimPrefix(targetCSV, rhoai.SubName+"."), csv.Name, csv.Phase))
 	}
 
 	ogLogs, ogProblem, ogCode := ensureOperatorNamespaceAndGroup(c, false)
@@ -1419,7 +1420,7 @@ func reinstallCaptureRecovery(c *Client, rs *reinstallChecks, logs *[]string, em
 func reinstallRemoveOperator(c *Client, csv types.CSVInfo, recovery *operatorRecovery, logs *[]string, emit func(UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error)) (*types.OperationResponse, error) {
 	// --- Step 3: delete_catalog_source ---
 	emit(UpdateStepEvent{Step: "delete_catalog_source", Status: "running", Message: "Removing nightly CatalogSource..."})
-	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
+	csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	switch existed, delErr := c.DeleteIfExists(csPath); {
 	case delErr != nil:
 		return fail("Cannot remove nightly CatalogSource: "+delErr.Error(), kube.ErrorCodeFromK8sErr(delErr))
@@ -1541,7 +1542,7 @@ func reinstallNightlySteps(c *Client, image, channel, approveCSV string, recover
 
 	// --- Step 9: create_catalog_source ---
 	emit(UpdateStepEvent{Step: "create_catalog_source", Status: "running", Message: "Creating CatalogSource with nightly image..."})
-	csApplyPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
+	csApplyPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	recovery.noteCatalogChanged()
 	if _, _, err := c.Apply(csApplyPath, buildCatalogSourceSpec(image)); err != nil {
 		return fail(fmt.Sprintf("Failed to create nightly CatalogSource: %v", err), kube.ErrorCodeFromK8sErr(err))
@@ -1581,7 +1582,7 @@ func reinstallNightlySteps(c *Client, image, channel, approveCSV string, recover
 
 	// --- Step 12: create_subscription ---
 	emit(UpdateStepEvent{Step: "create_subscription", Status: "running", Message: "Creating Subscription to nightly catalog..."})
-	return createSubscriptionAndWait(c, CatalogName, channel, "nightly", approveCSV, recovery, logs, emit)
+	return createSubscriptionAndWait(c, rhoai.CatalogName, channel, "nightly", approveCSV, recovery, logs, emit)
 }
 
 // reinstallStableSteps handles the stable-specific portion of ReinstallStream:
@@ -1682,7 +1683,7 @@ func patchCRDConversionWebhooks(c *Client) (int, []string) {
 	count := 0
 	var warnings []string
 	for _, crd := range crds {
-		path := clusterPath("apiextensions.k8s.io/v1", "customresourcedefinitions", crd)
+		path := rhoai.ClusterPath("apiextensions.k8s.io/v1", "customresourcedefinitions", crd)
 		var obj struct {
 			Spec struct {
 				Conversion struct {
@@ -1715,7 +1716,7 @@ func patchCRDConversionWebhooks(c *Client) (int, []string) {
 		if conv.Strategy != "Webhook" || svc.Name == "" || svc.Namespace == "" {
 			continue
 		}
-		if _, _, err := c.Get(namespacedPath("v1", "services", svc.Namespace, svc.Name)); !kube.IsK8sNotFound(err) {
+		if _, _, err := c.Get(rhoai.NamespacedPath("v1", "services", svc.Namespace, svc.Name)); !kube.IsK8sNotFound(err) {
 			if err != nil {
 				warnings = append(warnings, fmt.Sprintf("check conversion Service of CRD %s: %v", crd, err))
 			}
@@ -1741,7 +1742,7 @@ func rhoaiCSVExists(c *Client) (bool, error) {
 			} `json:"metadata"`
 		} `json:"items"`
 	}
-	found, err := c.GetIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""), &list)
+	found, err := c.GetIntoOptional(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""), &list)
 	if err != nil {
 		return false, err
 	}
@@ -1749,7 +1750,7 @@ func rhoaiCSVExists(c *Client) (bool, error) {
 		return false, nil
 	}
 	for _, item := range list.Items {
-		if strings.HasPrefix(item.Metadata.Name, SubName+".") && item.Metadata.Labels["olm.copiedFrom"] == "" {
+		if strings.HasPrefix(item.Metadata.Name, rhoai.SubName+".") && item.Metadata.Labels["olm.copiedFrom"] == "" {
 			return true, nil
 		}
 	}
@@ -1815,11 +1816,11 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 		return fail(msg+" To re-deploy the installed build, run Update: it installs the build the catalog serves again.", kube.ErrorCodeGitOpsManaged)
 	}
 
-	csv, err := getCSV(c)
+	csv, err := rhoai.GetCSV(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Failed to look up CSV: %v", err), kube.ErrorCodeOr(err, "prerequisites"))
 	}
-	sub, err := getSubscription(c)
+	sub, err := rhoai.GetSubscription(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Failed to get Subscription: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
@@ -1840,7 +1841,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 		case !subMissing:
 			recordActivity = false
 			msg := "No RHOAI operator CSV found. The operator may still be installing -- check the status and try again once the CSV appears."
-			logs = append(logs, "No CSV with displayName 'Red Hat OpenShift AI' found in the "+SubNS+" namespace.")
+			logs = append(logs, "No CSV with displayName 'Red Hat OpenShift AI' found in the "+rhoai.SubNS+" namespace.")
 			emit(UpdateStepEvent{Step: "verify_csv", Status: "success", Message: msg})
 			return &types.OperationResponse{Success: true, Message: msg, Logs: logs}, nil
 		case recorded == nil || recorded.InstalledCSV == "":
@@ -2108,7 +2109,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 
 	// Check if secret already exists. Its other registry credentials must be
 	// preserved: only the quay.io/rhoai entry is replaced.
-	secretPath := namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret")
+	secretPath := rhoai.NamespacedPath("v1", "secrets", "kube-system", "additional-pull-secret")
 	existingBody, secretExists, getErr := c.GetOptional(secretPath)
 	if getErr != nil {
 		return &types.OperationResponse{
@@ -2202,7 +2203,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 		logs = append(logs, "OK: Pull secret updated")
 	} else {
 		logs = append(logs, "Creating new pull secret...")
-		secretsPath := namespacedPath("v1", "secrets", "kube-system", "")
+		secretsPath := rhoai.NamespacedPath("v1", "secrets", "kube-system", "")
 		data, marshalErr := json.Marshal(secret)
 		if marshalErr != nil {
 			return nil, fmt.Errorf("marshal secret: %w", marshalErr)

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -84,7 +85,7 @@ func pruneUnknownDSCFields(value any, schema map[string]any, path string, invali
 // checkDSCCompatibilityFor compares a DSC with the installed schema and the
 // defaults of the already-read installed operator, in the API version the
 // DSC was read at.
-func checkDSCCompatibilityFor(c *Client, read dscRead, op *installedOperator, opErr error, fetchSample dscSampleFetcher) *types.DSCCompatibility {
+func checkDSCCompatibilityFor(c *Client, read rhoai.DSCRead, op *installedOperator, opErr error, fetchSample dscSampleFetcher) *types.DSCCompatibility {
 	dsc := read.Object
 	result := &types.DSCCompatibility{InvalidFields: []string{}, MissingComponents: []string{}, ExtraComponents: []string{}}
 	apiVersion, _ := dsc["apiVersion"].(string)
@@ -99,7 +100,7 @@ func checkDSCCompatibilityFor(c *Client, read dscRead, op *installedOperator, op
 		result.DefaultsError = "Unable to load version-matched defaults: " + opErr.Error()
 		return result
 	}
-	defaults, err := defaultDSCSpecFrom(c.Context(), op, servedVersions(c, dscGroup, dscFallbackVersions), read.Version, fetchSample)
+	defaults, err := defaultDSCSpecFrom(c.Context(), op, rhoai.ServedVersions(c, rhoai.DSCGroup, rhoai.DSCFallbackVersions), read.Version, fetchSample)
 	if err != nil {
 		result.DefaultsError = defaultsErrorMessage(read, err)
 		return result
@@ -155,13 +156,13 @@ func checkDSCCompatibilityFor(c *Client, read dscRead, op *installedOperator, op
 // defaultsErrorMessage explains why the DSC has no defaults to compare
 // with. A missing version is spelled out with the reason the DSC was read
 // at that version, instead of a sample URL that returned 404.
-func defaultsErrorMessage(read dscRead, err error) string {
+func defaultsErrorMessage(read rhoai.DSCRead, err error) string {
 	var missing *missingDefaultsError
 	if !errors.As(err, &missing) {
 		return "Unable to load version-matched defaults: " + err.Error()
 	}
 	var b strings.Builder
-	fallback := read.versionFallback()
+	fallback := read.VersionFallback()
 	if fallback != nil {
 		fmt.Fprintf(&b, "This DataScienceCluster can only be read as %s: reading it as %s fails because the operator's conversion webhook cannot convert it. ", fallback.Used, fallback.Version)
 	}
@@ -183,7 +184,7 @@ func defaultsErrorMessage(read dscRead, err error) string {
 // both. v2 and v1 are compared per component, as before.
 func dscNestsComponents(apiVersion string) bool {
 	version, ok := dscAPIVersion(apiVersion)
-	return ok && compareAPIVersions(version, "v2") < 0
+	return ok && rhoai.CompareAPIVersions(version, "v2") < 0
 }
 
 // managementPaths returns the managementState of every management path of
@@ -390,7 +391,7 @@ func errDSCVersionChanged(previewed, now string) error {
 		return fmt.Errorf("this page did not say which DataScienceCluster API version it previewed (it was loaded before an update of this app); refresh and review the changes again. Nothing was changed")
 	}
 	return fmt.Errorf("the DataScienceCluster's API version changed since the preview (previewed %s, now %s); refresh and review the changes again. Nothing was changed",
-		strings.TrimPrefix(previewed, dscGroup+"/"), kube.NonEmpty(now, "not readable"))
+		strings.TrimPrefix(previewed, rhoai.DSCGroup+"/"), kube.NonEmpty(now, "not readable"))
 }
 
 // errResetRemovalsChanged: a reset would now remove other management paths
@@ -424,11 +425,11 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 	}
 	// Read the named resource again so the repair is computed from fresh
 	// values and schema, at the version the Components page reads it at.
-	read, err := getServed(c, dscGroup, "/apis/datasciencecluster.opendatahub.io/%s/datascienceclusters/"+name, dscFallbackVersions)
-	if err != nil && !isConversionWebhookError(err) {
+	read, err := rhoai.GetServed(c, rhoai.DSCGroup, "/apis/datasciencecluster.opendatahub.io/%s/datascienceclusters/"+name, rhoai.DSCFallbackVersions)
+	if err != nil && !rhoai.IsConversionWebhookError(err) {
 		return nil, err
 	}
-	if current := dscGroup + "/" + read.Version; err != nil || current != expectedAPIVersion {
+	if current := rhoai.DSCGroup + "/" + read.Version; err != nil || current != expectedAPIVersion {
 		return nil, errDSCVersionChanged(expectedAPIVersion, read.Version)
 	}
 	path := fmt.Sprintf("/apis/datasciencecluster.opendatahub.io/%s/datascienceclusters/", read.Version) + name
@@ -436,7 +437,7 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 	if err := json.Unmarshal(read.Body, &dsc); err != nil {
 		return nil, err
 	}
-	if argo := argoTrackingOf(c, dsc, dscGroup, "DataScienceCluster"); argo.managedBy() != "" {
+	if argo := argoTrackingOf(c, dsc, rhoai.DSCGroup, "DataScienceCluster"); argo.managedBy() != "" {
 		return &types.OperationResponse{Success: false, Message: gitOpsRefusal("DataScienceCluster "+name, argo.managedBy(), "this change") + argo.unconfirmedNote(), ErrorCode: kube.ErrorCodeGitOpsManaged}, nil
 	}
 	oldSpec, _ := dsc["spec"].(map[string]any)

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -102,14 +103,14 @@ func DashboardStateError(err error) (status int, code, message string) {
 
 // GetDashboardState returns the current state of the rhods-dashboard deployment.
 func GetDashboardState(c *Client) (*types.DashboardState, error) {
-	ns, err := appsNamespace(c)
-	if errors.Is(err, errNoDSCInitialization) {
+	ns, err := rhoai.AppsNamespace(c)
+	if errors.Is(err, rhoai.ErrNoDSCInitialization) {
 		return nil, fmt.Errorf("%w (no DSCInitialization, so RHOAI has no applications namespace)", ErrDashboardNotDeployed)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("find the dashboard: %w", err)
 	}
-	deployPath := namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName)
+	deployPath := rhoai.NamespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName)
 	var deploy struct {
 		Metadata struct {
 			UID         string            `json:"uid"`
@@ -323,7 +324,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 	}
 	ns := target.Namespace
 	if ns == "" {
-		return &types.OperationResponse{Success: false, Message: sentenceStart(errNoDSCInitialization.Error()) + ". No changes were made.", ErrorCode: "prerequisites"}, nil
+		return &types.OperationResponse{Success: false, Message: sentenceStart(rhoai.ErrNoDSCInitialization.Error()) + ". No changes were made.", ErrorCode: "prerequisites"}, nil
 	}
 	logs := []string{"This cluster has no dashboard module (" + target.Legacy + "); the legacy flow patches " + dashboardDeploymentName + " in " + ns + "."}
 	if flavor == DashboardFlavorRHOAI {
@@ -449,7 +450,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 		if err != nil {
 			return nil, fmt.Errorf("marshal patch: %w", err)
 		}
-		deployPath := namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName)
+		deployPath := rhoai.NamespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName)
 		_, _, err = c.StrategicPatch(deployPath, patchData)
 		if err != nil {
 			RecordActivity(c, types.ActivityEntry{
@@ -578,7 +579,7 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	}
 	ns := target.Namespace
 	if ns == "" {
-		return &types.OperationResponse{Success: false, Message: sentenceStart(errNoDSCInitialization.Error()) + ", so there is no dashboard to revert. No changes were made.", ErrorCode: "prerequisites"}, nil
+		return &types.OperationResponse{Success: false, Message: sentenceStart(rhoai.ErrNoDSCInitialization.Error()) + ", so there is no dashboard to revert. No changes were made.", ErrorCode: "prerequisites"}, nil
 	}
 	logs := []string{"This cluster has no dashboard module (" + target.Legacy + "); reverting the legacy flow's changes to " + dashboardDeploymentName + " in " + ns + "."}
 
@@ -617,7 +618,7 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 		})
 	}
 
-	deployPath := namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName)
+	deployPath := rhoai.NamespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName)
 	restored, managedNote, err := legacyRevertAnnotations(c, ns)
 	if err != nil {
 		return &types.OperationResponse{
@@ -713,7 +714,7 @@ func getDeploymentAnnotations(c *Client, ns, name string) (map[string]string, er
 			Annotations map[string]string `json:"annotations"`
 		} `json:"metadata"`
 	}
-	if err := c.GetInto(namespacedPath("apps/v1", "deployments", ns, name), &d); err != nil {
+	if err := c.GetInto(rhoai.NamespacedPath("apps/v1", "deployments", ns, name), &d); err != nil {
 		return nil, err
 	}
 	return d.Metadata.Annotations, nil
@@ -793,7 +794,7 @@ func getOriginalImages(c *Client) (map[string]string, error) {
 	if len(csv.Deployments) != 1 {
 		return nil, fmt.Errorf("the installed CSV %s installs %d Deployments, so which one holds the dashboard images is unknown", csv.Name, len(csv.Deployments))
 	}
-	operatorPath := namespacedPath("apps/v1", "deployments", SubNS, csv.Deployments[0])
+	operatorPath := rhoai.NamespacedPath("apps/v1", "deployments", rhoai.SubNS, csv.Deployments[0])
 	var deploy struct {
 		Spec struct {
 			Template struct {
@@ -996,7 +997,7 @@ func isStandaloneMode(containers []string) bool {
 
 // getDeploymentContainerNames returns the list of container names in a deployment.
 func getDeploymentContainerNames(c *Client, namespace, deployName string) ([]string, error) {
-	path := namespacedPath("apps/v1", "deployments", namespace, deployName)
+	path := rhoai.NamespacedPath("apps/v1", "deployments", namespace, deployName)
 	var deploy struct {
 		Spec struct {
 			Template struct {
@@ -1021,7 +1022,7 @@ func getDeploymentContainerNames(c *Client, namespace, deployName string) ([]str
 // getStandaloneModuleImage reads a standalone module deployment and returns
 // its container image. Returns empty string if the deployment doesn't exist.
 func getStandaloneModuleImage(c *Client, ns, containerName string) string {
-	path := namespacedPath("apps/v1", "deployments", ns, containerName)
+	path := rhoai.NamespacedPath("apps/v1", "deployments", ns, containerName)
 	body, statusCode, err := c.Get(path)
 	if err != nil || statusCode == 404 {
 		return ""
@@ -1065,7 +1066,7 @@ func patchStandaloneModule(c *Client, ns, containerName, image string) error {
 	if err != nil {
 		return fmt.Errorf("marshal module patch: %w", err)
 	}
-	path := namespacedPath("apps/v1", "deployments", ns, containerName)
+	path := rhoai.NamespacedPath("apps/v1", "deployments", ns, containerName)
 	_, _, err = c.StrategicPatch(path, patchData)
 	return err
 }

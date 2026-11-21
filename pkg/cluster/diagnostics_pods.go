@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Pod classification shared by the "Operator pods" and "RHOAI pods" checks
@@ -129,7 +130,7 @@ func listDiagPods(c *Client, namespace, labelSelector string) ([]diagPod, error)
 	if labelSelector != "" {
 		query = url.Values{"labelSelector": {labelSelector}}
 	}
-	body, _, err := c.Do(http.MethodGet, namespacedPath("v1", "pods", namespace, ""), "", nil, query)
+	body, _, err := c.Do(http.MethodGet, rhoai.NamespacedPath("v1", "pods", namespace, ""), "", nil, query)
 	if err != nil {
 		return nil, err
 	}
@@ -279,7 +280,7 @@ var errEventsForbidden = errors.New("events are not readable")
 // a pod, or "" when there is none.
 func latestWarningEvent(c *Client, namespace, podName string) (string, error) {
 	query := url.Values{"fieldSelector": {"involvedObject.kind=Pod,involvedObject.name=" + podName}}
-	body, _, err := c.Do(http.MethodGet, namespacedPath("v1", "events", namespace, ""), "", nil, query)
+	body, _, err := c.Do(http.MethodGet, rhoai.NamespacedPath("v1", "events", namespace, ""), "", nil, query)
 	if err != nil {
 		if kube.IsK8sError(err, http.StatusForbidden) {
 			return "", errEventsForbidden

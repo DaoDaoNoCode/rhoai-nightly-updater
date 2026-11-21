@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // putForgedDSPA is a project editor's own pipeline server in project evil,
@@ -97,7 +99,7 @@ func TestMigrate_AnUnreadableRecordStopsBeforeAnyWrite(t *testing.T) {
 	f, c := newResourceFake(t)
 	putMigrationCase(f)
 	simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
-	f.fail["GET "+namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)] = http.StatusInternalServerError
+	f.fail["GET "+rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)] = http.StatusInternalServerError
 	f.requests = nil
 	ok, msg, _, _ := runMigrate(t, c, MigrateOptions{ConfirmProjects: []string{"juntao-test"}})
 	if ok || !strings.Contains(msg, "nothing was changed") {

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 var testNow = time.Date(2026, 10, 5, 22, 0, 0, 0, time.UTC)
@@ -266,10 +268,10 @@ func TestRHOAIPods_EventsForbiddenSaysSo(t *testing.T) {
 
 func TestOperatorPods_CrashLoopIsCritical(t *testing.T) {
 	f, c := newFakeAPI(t)
-	pod := makePod(SubNS, "rhods-operator", "75bd6cd964", "abcde", time.Hour,
+	pod := makePod(rhoai.SubNS, "rhods-operator", "75bd6cd964", "abcde", time.Hour,
 		waiting("manager", "CrashLoopBackOff", "", 12), lastTerminated("Error", 2, time.Minute))
 	pod["metadata"].(map[string]any)["creationTimestamp"] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
-	f.obj("/api/v1/namespaces/"+SubNS+"/pods", map[string]any{"items": []any{pod}})
+	f.obj("/api/v1/namespaces/"+rhoai.SubNS+"/pods", map[string]any{"items": []any{pod}})
 	out := checkOperatorPods(c)
 	if len(out.problems) != 1 || out.problems[0].Severity != "critical" || out.problems[0].AutoFixable {
 		t.Fatalf("out = %+v", out)

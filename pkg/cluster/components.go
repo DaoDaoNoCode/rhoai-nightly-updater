@@ -15,58 +15,9 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
-
-// DSCState values reported by GetComponents.
-const (
-	DSCStatePresent = "present"
-	DSCStateNoDSC   = "no-dsc" // CRD installed, no DataScienceCluster yet
-	DSCStateNoCRD   = "no-crd" // operator not installed, or its CRDs not created yet
-)
-
-// dscRead is the first DataScienceCluster as read.
-type dscRead struct {
-	Object map[string]any // nil without a DSC
-	State  string         // DSCStatePresent, DSCStateNoDSC or DSCStateNoCRD
-	// Version is the API version it was read at ("v3"); Skipped are the
-	// newer served versions that failed with a conversion webhook error.
-	Version string
-	Skipped []versionFailure
-}
-
-// readFirstDSC returns the first DataScienceCluster, read at the newest
-// served version that works (servedVersions; v2 then v1 when discovery is
-// unavailable), and the DSC state.
-func readFirstDSC(c *Client) (dscRead, error) {
-	r, err := listServed(c, dscGroup, dscListFmt, nil, dscFallbackVersions)
-	if err != nil {
-		return dscRead{}, fmt.Errorf("fetching DSC list: %w", err)
-	}
-	if r.Version == "" {
-		return dscRead{State: DSCStateNoCRD}, nil
-	}
-	var list struct {
-		Items []map[string]any `json:"items"`
-	}
-	if err := json.Unmarshal(r.Body, &list); err != nil {
-		return dscRead{}, fmt.Errorf("parsing DSC list: %w", err)
-	}
-	out := dscRead{State: DSCStateNoDSC, Version: r.Version, Skipped: r.Skipped}
-	if len(list.Items) > 0 {
-		out.Object, out.State = list.Items[0], DSCStatePresent
-	}
-	return out, nil
-}
-
-// versionFallback reports a DSC read at an older version than the
-// preferred one, or nil.
-func (r dscRead) versionFallback() *types.DSCVersionFallback {
-	if len(r.Skipped) == 0 || r.Version == "" {
-		return nil
-	}
-	return &types.DSCVersionFallback{Version: r.Skipped[0].Version, Used: r.Version, Message: r.Skipped[0].Message}
-}
 
 // GetComponents returns DSC component statuses and deployment information.
 // A cluster without a DSC (or without the DSC CRD) is a normal state, reported
@@ -115,11 +66,11 @@ func getComponents(c *Client, reads componentRegistryReads, includeLabels bool) 
 	)
 	// The applications namespace is the DSCInitialization's; unknown, its
 	// Deployments are left out and the response says why.
-	resp.OperatorNamespace = SubNS
+	resp.OperatorNamespace = rhoai.SubNS
 	var appNS string
 	var appNSErr error
 	run(func() {
-		if appNS, appNSErr = appsNamespace(c); appNSErr != nil {
+		if appNS, appNSErr = rhoai.AppsNamespace(c); appNSErr != nil {
 			appErr = appNSErr
 			return
 		}
@@ -128,8 +79,8 @@ func getComponents(c *Client, reads componentRegistryReads, includeLabels bool) 
 		inner.Go(func() { appPods, _ = getPodsInNamespace(c, appNS) })
 		inner.Wait()
 	})
-	run(func() { opDeps, opDepsErr = getDeployments(c, SubNS) })
-	run(func() { opPods, _ = getPodsInNamespace(c, SubNS) })
+	run(func() { opDeps, opDepsErr = getDeployments(c, rhoai.SubNS) })
+	run(func() { opPods, _ = getPodsInNamespace(c, rhoai.SubNS) })
 	run(func() { resp.ConsoleURL = cachedConsoleURL(c) })
 	run(func() { snapshot, snapshotTime = GetDeploymentSnapshot(c) })
 	run(func() {
@@ -137,7 +88,7 @@ func getComponents(c *Client, reads componentRegistryReads, includeLabels bool) 
 		installedOp, installedOpErr = getInstalledOperator(c)
 	})
 
-	read, err := readFirstDSC(c)
+	read, err := rhoai.ReadFirstDSC(c)
 	if err != nil {
 		wg.Wait()
 		return nil, err
@@ -146,7 +97,7 @@ func getComponents(c *Client, reads componentRegistryReads, includeLabels bool) 
 	resp.DSCExists = read.Object != nil
 	if read.Object != nil {
 		resp.DSCAPIVersion, _ = read.Object["apiVersion"].(string)
-		resp.DSCVersionFallback = read.versionFallback()
+		resp.DSCVersionFallback = read.VersionFallback()
 		<-installedOpReadyCh
 		resp.DSCCompatibility = checkDSCCompatibilityFor(c, read, installedOp, installedOpErr, reads.dscSample)
 		addDSCComponents(resp, read.Object)
@@ -172,10 +123,10 @@ func getComponents(c *Client, reads componentRegistryReads, includeLabels bool) 
 	case appNSErr == nil:
 		resp.ApplicationsNamespace = appNS
 		matchPodsToDeployments(c, appPods, appNS, resp.Deployments)
-	case !errors.Is(appNSErr, errNoDSCInitialization): // none yet is not an error
+	case !errors.Is(appNSErr, rhoai.ErrNoDSCInitialization): // none yet is not an error
 		resp.ApplicationsNamespaceError = appNSErr.Error()
 	}
-	matchPodsToDeployments(c, opPods, SubNS, resp.Deployments)
+	matchPodsToDeployments(c, opPods, rhoai.SubNS, resp.Deployments)
 
 	// Compare against last snapshot to detect changes
 	if snapshot != nil {
@@ -598,7 +549,7 @@ func replicaSetController(c *Client, namespace, name, uid string) (string, error
 		return owner, nil
 	}
 	q := url.Values{"fieldSelector": {"metadata.name=" + name}}
-	body, _, err := c.Do(http.MethodGet, namespacedPath("apps/v1", "replicasets", namespace, ""), "", nil, q)
+	body, _, err := c.Do(http.MethodGet, rhoai.NamespacedPath("apps/v1", "replicasets", namespace, ""), "", nil, q)
 	if err != nil {
 		return "", err
 	}
@@ -634,7 +585,7 @@ func enrichComponentFix(comp *types.ComponentInfo, reason string) {
 	if comp.Status == "Available" || comp.Status == "Removed" {
 		return
 	}
-	comp.Cause = componentCause(dscCondition{Reason: reason, Message: comp.Message})
+	comp.Cause = componentCause(rhoai.DSCCondition{Reason: reason, Message: comp.Message})
 
 	// Operator says "deprecated, please set it to Removed" — offer the button.
 	// (A MaaS gateway "fix" used to be offered here for a "missing required
@@ -651,7 +602,7 @@ func enrichComponentFix(comp *types.ComponentInfo, reason string) {
 // componentCause is a short cause for a not-ready component's condition,
 // classified from its message like the DataScienceCluster diagnostics do
 // (without their cluster lookups); "" when it is not classified.
-func componentCause(cond dscCondition) string {
+func componentCause(cond rhoai.DSCCondition) string {
 	lower := strings.ToLower(cond.Message)
 	switch {
 	case isUpgradeGateCondition(cond):
@@ -694,7 +645,7 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 
 	// Step 1: Check if a DSC already exists
 	logs = append(logs, "Checking for existing DataScienceCluster...")
-	read, err := readFirstDSC(c)
+	read, err := rhoai.ReadFirstDSC(c)
 	if err != nil {
 		return &types.OperationResponse{
 			Success:   false,
@@ -713,14 +664,14 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 			Message: fmt.Sprintf("Argo CD application %q manages the RHOAI operator here and creates the DataScienceCluster from Git; one made by hand would be adopted and overwritten on its next sync. Define the DataScienceCluster in Git instead. Nothing was changed.", app)}, nil
 	}
 	switch read.State {
-	case DSCStateNoCRD:
+	case rhoai.DSCStateNoCRD:
 		return &types.OperationResponse{
 			Success:   false,
 			Message:   "DataScienceCluster CRD not found. Install the RHOAI operator first.",
 			Logs:      logs,
 			ErrorCode: "prerequisites",
 		}, nil
-	case DSCStatePresent:
+	case rhoai.DSCStatePresent:
 		logs = append(logs, "DataScienceCluster already exists")
 		return &types.OperationResponse{
 			Success: true,
@@ -812,7 +763,7 @@ type deploymentList struct {
 }
 
 func getDeployments(c *Client, namespace string) ([]types.DeploymentInfo, error) {
-	path := namespacedPath("apps/v1", "deployments", namespace, "")
+	path := rhoai.NamespacedPath("apps/v1", "deployments", namespace, "")
 	var list deploymentList
 	if err := c.GetInto(path, &list); err != nil {
 		if kube.IsDecodeError(err) {

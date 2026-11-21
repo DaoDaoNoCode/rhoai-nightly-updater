@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 const (
@@ -144,7 +146,7 @@ func TestStaleWebhookCheck_ServingWebhooksDuringUpgradeAreNotStale(t *testing.T)
 	f, c := newFakeAPI(t)
 	setupWebhookFixtures(f)
 	f.json("GET", svcPath("redhat-ods-operator", "rhods-operator-service"), http.StatusOK, `{"kind":"Service"}`)
-	f.obj("/apis/operators.coreos.com/v1alpha1/namespaces/"+SubNS+"/clusterserviceversions", map[string]any{
+	f.obj("/apis/operators.coreos.com/v1alpha1/namespaces/"+rhoai.SubNS+"/clusterserviceversions", map[string]any{
 		"items": []any{map[string]any{"metadata": map[string]any{"name": "rhods-operator.3.6.0"}, "spec": map[string]any{"version": "3.6.0"}, "status": map[string]any{"phase": "Installing"}}},
 	})
 	out := checkStaleWebhooks(c)

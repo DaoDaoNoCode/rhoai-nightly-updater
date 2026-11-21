@@ -10,6 +10,7 @@ import (
 
 	"cel.dev/cel-go/cel"
 	"cel.dev/cel-go/ext"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"gopkg.in/yaml.v3"
 )
 
@@ -282,8 +283,8 @@ func servesGitOpsPolicy(t *testing.T, f *fakeOLM) *fakeOLM {
 	useGitOpsPolicy(t)
 	policy, binding := livePolicy(t)
 	f.admission = map[string]map[string]any{
-		clusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicies", testGitOpsPolicyName):       policy,
-		clusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicybindings", testGitOpsPolicyName): binding,
+		rhoai.ClusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicies", testGitOpsPolicyName):       policy,
+		rhoai.ClusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicybindings", testGitOpsPolicyName): binding,
 	}
 	return f
 }
@@ -322,8 +323,8 @@ func TestCheckGitOpsAdmissionPolicy(t *testing.T) {
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
 			f := servesGitOpsPolicy(t, newFakeOLM(t))
-			pPath := clusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicies", testGitOpsPolicyName)
-			bPath := clusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicybindings", testGitOpsPolicyName)
+			pPath := rhoai.ClusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicies", testGitOpsPolicyName)
+			bPath := rhoai.ClusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicybindings", testGitOpsPolicyName)
 			tc.change(f.admission[pPath], f.admission[bPath])
 			for _, p := range []string{pPath, bPath} {
 				if f.admission[p]["gone"] != nil {
@@ -382,7 +383,7 @@ func TestExpectedGitOpsAdmission(t *testing.T) {
 	if strings.Contains(text, "${") {
 		t.Fatalf("unsubstituted parameter in %s", text)
 	}
-	for _, want := range []string{"'A,B'.split(',')", "system:serviceaccount:ns1:rhoai-nightly-updater", "sourceNamespace == '" + CatalogNS + "'", "request.namespace == '" + SubNS + "'"} {
+	for _, want := range []string{"'A,B'.split(',')", "system:serviceaccount:ns1:rhoai-nightly-updater", "sourceNamespace == '" + rhoai.CatalogNS + "'", "request.namespace == '" + rhoai.SubNS + "'"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("rendered policy lacks %q", want)
 		}

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -247,28 +248,28 @@ func prepareNodeSetup(c *Client, req types.NodeSetupRequest) (*nodeSetupWork, er
 // (:937). Only the topology tells them apart (TestNodeSetupHostedCheckComesFirst).
 func nodeSetupPlatform(c *Client, action string) (cp, refusal, code string) {
 	mirror := action == NodeSetupMirrorCreate || action == NodeSetupMirrorRemove
-	hosted, err := readTopologyHosted(c)
+	hosted, err := rhoai.ReadTopologyHosted(c)
 	if err != nil {
 		return "", "The updater cannot read whether this cluster has a hosted control plane (" + err.Error() + "). On a hosted control plane this would not reach the nodes, so it is not done. Nothing was changed; use the instructions instead.", "unknown_topology"
 	}
 	if hosted {
 		if mirror {
-			return ControlPlaneHosted, "This cluster has a hosted control plane (ROSA HCP): its image mirror is configured through OpenShift Cluster Manager with rosa create image-mirror, not with an object in the cluster. Nothing was changed.", "hosted"
+			return rhoai.ControlPlaneHosted, "This cluster has a hosted control plane (ROSA HCP): its image mirror is configured through OpenShift Cluster Manager with rosa create image-mirror, not with an object in the cluster. Nothing was changed.", "hosted"
 		}
-		return ControlPlaneHosted, "This cluster has a hosted control plane (ROSA HCP): its nodes get kube-system/additional-pull-secret, which the Pull secret item sets. HyperShift merges it with the cluster's own pull secret for the nodes of AWS and Azure node pools that replace their nodes on an update (not in-place ones); where both have a quay.io/rhoai entry, the cluster's own wins. Nothing was changed.", "hosted"
+		return rhoai.ControlPlaneHosted, "This cluster has a hosted control plane (ROSA HCP): its nodes get kube-system/additional-pull-secret, which the Pull secret item sets. HyperShift merges it with the cluster's own pull secret for the nodes of AWS and Azure node pools that replace their nodes on an update (not in-place ones); where both have a quay.io/rhoai entry, the cluster's own wins. Nothing was changed.", "hosted"
 	}
-	managed, err := readRedHatManaged(c)
+	managed, err := rhoai.ReadRedHatManaged(c)
 	switch {
 	case err != nil && !mirror:
 		return "", "The updater cannot list the validating webhook configurations (" + err.Error() + "), so it cannot tell whether Red Hat runs this cluster (ROSA Classic or OpenShift Dedicated), where it does not change the cluster pull secret. Nothing was changed. The command under Do it yourself instead does it, if you choose to.", "unknown_platform"
 	case err != nil:
 		return "", "", ""
 	case managed && !mirror:
-		return ControlPlaneManaged, "Red Hat runs this cluster (ROSA Classic or OpenShift Dedicated). Red Hat creates its cluster pull secret, and the documentation of these services has no procedure for changing it, so the updater does not change it. The command under Do it yourself instead does it, if you choose to. Nothing was changed.", "managed"
+		return rhoai.ControlPlaneManaged, "Red Hat runs this cluster (ROSA Classic or OpenShift Dedicated). Red Hat creates its cluster pull secret, and the documentation of these services has no procedure for changing it, so the updater does not change it. The command under Do it yourself instead does it, if you choose to. Nothing was changed.", "managed"
 	case managed:
-		return ControlPlaneManaged, "", ""
+		return rhoai.ControlPlaneManaged, "", ""
 	}
-	return ControlPlaneSelfManaged, "", ""
+	return rhoai.ControlPlaneSelfManaged, "", ""
 }
 
 // mirrorObject is the ImageDigestMirrorSet the setup creates, as OpenShift
@@ -283,7 +284,7 @@ func mirrorObject() map[string]any {
 			"labels": map[string]any{"app.kubernetes.io/managed-by": "rhoai-nightly-updater"},
 		},
 		"spec": map[string]any{
-			"imageDigestMirrors": []any{map[string]any{"source": IDMSSource, "mirrors": []any{MirrorTarget}}},
+			"imageDigestMirrors": []any{map[string]any{"source": rhoai.IDMSSource, "mirrors": []any{MirrorTarget}}},
 		},
 	}
 }
@@ -314,13 +315,13 @@ func (m idmsItem) isSetupMirror() bool {
 		return false
 	}
 	e := m.Spec.ImageDigestMirrors[0]
-	return e.Source == IDMSSource && len(e.Mirrors) == 1 && e.Mirrors[0] == MirrorTarget &&
+	return e.Source == rhoai.IDMSSource && len(e.Mirrors) == 1 && e.Mirrors[0] == MirrorTarget &&
 		(e.MirrorSourcePolicy == "" || e.MirrorSourcePolicy == "AllowContactingSource")
 }
 
 func listIDMS(c *Client) ([]idmsItem, error) {
 	var items []idmsItem
-	if err := c.ListInto(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""), &items); err != nil {
+	if err := c.ListInto(rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""), &items); err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse ImageDigestMirrorSets: %w", err)
 		}
@@ -346,7 +347,7 @@ func prepareMirrorCreate(c *Client, w *nodeSetupWork) {
 	}
 	for _, r := range rules {
 		if r.redirectsToQuay() {
-			w.nothing(fmt.Sprintf("%s already redirects %s to %s, so the mirror is set up.", r.ref(), IDMSSource, MirrorTarget))
+			w.nothing(fmt.Sprintf("%s already redirects %s to %s, so the mirror is set up.", r.ref(), rhoai.IDMSSource, MirrorTarget))
 			return
 		}
 	}
@@ -360,31 +361,31 @@ func prepareMirrorCreate(c *Client, w *nodeSetupWork) {
 	}
 	for _, m := range items {
 		if m.Metadata.Name == MirrorName {
-			w.refuse("foreign", fmt.Sprintf("An ImageDigestMirrorSet named %s already exists and does not redirect %s to %s. It is someone else's mirror configuration, so it is not changed; look at it with oc get imagedigestmirrorset %s -o yaml.", MirrorName, IDMSSource, MirrorTarget, MirrorName))
+			w.refuse("foreign", fmt.Sprintf("An ImageDigestMirrorSet named %s already exists and does not redirect %s to %s. It is someone else's mirror configuration, so it is not changed; look at it with oc get imagedigestmirrorset %s -o yaml.", MirrorName, rhoai.IDMSSource, MirrorTarget, MirrorName))
 			return
 		}
 	}
 	body, _ := json.Marshal(mirrorObject())
 	w.write = func(c *Client, query url.Values) error {
-		_, _, err := c.Do(http.MethodPost, clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""), "application/json", body, query)
+		_, _, err := c.Do(http.MethodPost, rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""), "application/json", body, query)
 		return err
 	}
 	w.plan.Ready = true
-	w.plan.State = fmt.Sprintf("No ImageDigestMirrorSet or ImageContentSourcePolicy redirects %s to %s.", IDMSSource, MirrorTarget)
+	w.plan.State = fmt.Sprintf("No ImageDigestMirrorSet or ImageContentSourcePolicy redirects %s to %s.", rhoai.IDMSSource, MirrorTarget)
 	for _, r := range rules {
 		// The same source mapped elsewhere: the mirrors of every IDMS and
 		// ICSP with one source are merged (types_image_digest_mirror_set.go
 		// :56-59; registries.go mergedDigestMirrorSets).
-		if r.digest() && r.Source == IDMSSource && r.hasRealMirror() {
+		if r.digest() && r.Source == rhoai.IDMSSource && r.hasRealMirror() {
 			w.plan.State += fmt.Sprintf(" %s maps it to %s: OpenShift merges the mirrors of every object with the same source, so that mirror stays in use next to %s.", r.ref(), strings.Join(r.Mirrors, ", "), MirrorTarget)
 		}
 	}
-	w.plan.Changes = []string{fmt.Sprintf("Create ImageDigestMirrorSet %s (cluster-wide): pulls of %s images by digest go to %s.", MirrorName, IDMSSource, MirrorTarget)}
+	w.plan.Changes = []string{fmt.Sprintf("Create ImageDigestMirrorSet %s (cluster-wide): pulls of %s images by digest go to %s.", MirrorName, rhoai.IDMSSource, MirrorTarget)}
 	w.plan.NodeImpact = mirrorCreateImpact
 	w.plan.Undo = "Remove the image mirror (the same item offers it once it exists), or oc delete imagedigestmirrorset " + MirrorName + ". Removing it drains the nodes, " + poolPace + "."
 	w.done = "Created ImageDigestMirrorSet " + MirrorName + "."
 	w.verify = func(c *Client) error {
-		_, _, err := c.Get(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName))
+		_, _, err := c.Get(rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName))
 		return err
 	}
 }
@@ -422,29 +423,29 @@ func prepareMirrorRemove(c *Client, w *nodeSetupWork) {
 	sort.Strings(others)
 	switch {
 	case ours == nil && len(others) > 0:
-		w.refuse("foreign", fmt.Sprintf("The mirror of %s is %s, which this setup did not create, so it is not deleted here. If you mean to remove it: oc delete %s", IDMSSource, others[0], strings.ToLower(others[0])))
+		w.refuse("foreign", fmt.Sprintf("The mirror of %s is %s, which this setup did not create, so it is not deleted here. If you mean to remove it: oc delete %s", rhoai.IDMSSource, others[0], strings.ToLower(others[0])))
 		return
 	case ours == nil:
-		w.nothing(fmt.Sprintf("No ImageDigestMirrorSet or ImageContentSourcePolicy redirects %s to %s.", IDMSSource, MirrorTarget))
+		w.nothing(fmt.Sprintf("No ImageDigestMirrorSet or ImageContentSourcePolicy redirects %s to %s.", rhoai.IDMSSource, MirrorTarget))
 		return
 	case !ours.isSetupMirror():
-		w.refuse("foreign", fmt.Sprintf("ImageDigestMirrorSet %s holds more than this setup's mirror (%s to %s), so it is someone's own mirror configuration and is not deleted. Look at it with oc get imagedigestmirrorset %s -o yaml.", MirrorName, IDMSSource, MirrorTarget, MirrorName))
+		w.refuse("foreign", fmt.Sprintf("ImageDigestMirrorSet %s holds more than this setup's mirror (%s to %s), so it is someone's own mirror configuration and is not deleted. Look at it with oc get imagedigestmirrorset %s -o yaml.", MirrorName, rhoai.IDMSSource, MirrorTarget, MirrorName))
 		return
 	}
 	opts, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "DeleteOptions",
 		"preconditions": map[string]any{"uid": ours.Metadata.UID, "resourceVersion": ours.Metadata.ResourceVersion}})
 	w.write = func(c *Client, query url.Values) error {
-		_, _, err := c.Do(http.MethodDelete, clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName), "application/json", opts, query)
+		_, _, err := c.Do(http.MethodDelete, rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName), "application/json", opts, query)
 		return err
 	}
 	w.plan.Ready = true
 	w.plan.UID, w.plan.ResourceVersion = ours.Metadata.UID, ours.Metadata.ResourceVersion
-	w.plan.State = fmt.Sprintf("ImageDigestMirrorSet %s redirects %s to %s.", MirrorName, IDMSSource, MirrorTarget)
+	w.plan.State = fmt.Sprintf("ImageDigestMirrorSet %s redirects %s to %s.", MirrorName, rhoai.IDMSSource, MirrorTarget)
 	w.plan.Changes = []string{fmt.Sprintf("Delete ImageDigestMirrorSet %s (cluster-wide).", MirrorName)}
 	w.plan.NodeImpact, w.plan.Undo = mirrorRemoveImpactFor(remaining, others)
 	w.done = "Deleted ImageDigestMirrorSet " + MirrorName + "."
 	w.verify = func(c *Client) error {
-		_, found, err := c.GetOptional(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName))
+		_, found, err := c.GetOptional(rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName))
 		if err != nil {
 			return err
 		}
@@ -460,7 +461,7 @@ func prepareMirrorRemove(c *Client, w *nodeSetupWork) {
 // and its Quay lookups use), padded as CRI-O needs it; "" with the reason
 // when there is none.
 func updaterQuayToken(c *Client) (string, string, string) {
-	body, found, err := c.GetOptional(namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret"))
+	body, found, err := c.GetOptional(rhoai.NamespacedPath("v1", "secrets", "kube-system", "additional-pull-secret"))
 	if err != nil {
 		return "", refusalCodeFor(err), "Cannot read the updater's token in kube-system/additional-pull-secret: " + err.Error() + ". Nothing was changed."
 	}
@@ -510,7 +511,7 @@ type clusterPullSecret struct {
 // readClusterPullSecret reads openshift-config/pull-secret and refuses
 // (code, message) unless it is safe to change only one entry of it.
 func readClusterPullSecret(c *Client) (*clusterPullSecret, []string, string, string) {
-	body, _, err := c.Get(namespacedPath("v1", "secrets", clusterPullSecretNS, clusterPullSecretName))
+	body, _, err := c.Get(rhoai.NamespacedPath("v1", "secrets", clusterPullSecretNS, clusterPullSecretName))
 	if err != nil {
 		return nil, nil, refusalCodeFor(err), "Cannot read " + clusterPullSecretRef + ": " + err.Error() + ". Nothing was changed in it."
 	}
@@ -654,7 +655,7 @@ func preparePullSecret(c *Client, w *nodeSetupWork, add, replaceExisting bool) {
 		"data":     map[string]any{".dockerconfigjson": encoded},
 	})
 	w.write = func(c *Client, query url.Values) error {
-		_, _, err := c.Do(http.MethodPatch, namespacedPath("v1", "secrets", clusterPullSecretNS, clusterPullSecretName), "application/merge-patch+json", patch, query)
+		_, _, err := c.Do(http.MethodPatch, rhoai.NamespacedPath("v1", "secrets", clusterPullSecretNS, clusterPullSecretName), "application/merge-patch+json", patch, query)
 		return err
 	}
 	w.plan.Ready = true
@@ -890,7 +891,7 @@ func stuckMachineConfigPools(c *Client) []string {
 			} `json:"conditions"`
 		} `json:"status"`
 	}
-	if c.ListInto(clusterPath("machineconfiguration.openshift.io/v1", "machineconfigpools", ""), &items) != nil {
+	if c.ListInto(rhoai.ClusterPath("machineconfiguration.openshift.io/v1", "machineconfigpools", ""), &items) != nil {
 		return nil
 	}
 	var out []string

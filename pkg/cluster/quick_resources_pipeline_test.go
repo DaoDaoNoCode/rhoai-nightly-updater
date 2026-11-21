@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 func dspaPath(ns, name string) string {
@@ -247,7 +248,7 @@ func putDSPACRD(f *resourceFake, managedEnabled, mlflow bool) {
 	if mlflow {
 		spec += `,"mlflow":{"type":"object","properties":{"integrationMode":{"type":"string","enum":["AUTODETECT","DISABLED"]},"injectUserEnvVars":{"type":"boolean"}}}`
 	}
-	f.putJSON(clusterPath("apiextensions.k8s.io/v1", "customresourcedefinitions", dspaCRDName),
+	f.putJSON(rhoai.ClusterPath("apiextensions.k8s.io/v1", "customresourcedefinitions", dspaCRDName),
 		`{"spec":{"versions":[{"name":"v1","served":true,"storage":true,"schema":{"openAPIV3Schema":{"type":"object","properties":{"spec":{"type":"object","properties":{`+spec+`}}}}}}]}}`)
 }
 

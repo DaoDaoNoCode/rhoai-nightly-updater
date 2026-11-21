@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 func specOf(t *testing.T, components string) map[string]any {
@@ -99,8 +101,8 @@ func TestGuardModule(t *testing.T) {
 // CR with a finalizer whose operator has no Deployment.
 func v3RepairWorld(t *testing.T, defaults string) (*fakeAPI, *Client) {
 	t.Helper()
-	apiVersionsCache.Purge()
-	t.Cleanup(apiVersionsCache.Purge)
+	rhoai.APIVersionsCache.Purge()
+	t.Cleanup(rhoai.APIVersionsCache.Purge)
 	f, c := newFakeAPI(t)
 	serveLive36ModuleOperators(f)
 	f.json("GET", "/apis/datasciencecluster.opendatahub.io", 200, dscGroupDoc)
@@ -120,9 +122,9 @@ func v3RepairWorld(t *testing.T, defaults string) (*fakeAPI, *Client) {
 		"apiVersion": "datasciencecluster.opendatahub.io/v3", "kind": "DataScienceCluster", "metadata": map[string]any{"name": "default-dsc"},
 		"spec": json.RawMessage(`{"components":` + defaults + `}`),
 	}})
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), 200, installedCSVBody(string(alm)))
-	f.json("GET", namespacedPath("apps/v1", "deployments", SubNS, "rhods-operator"), 200, `{"status":{"readyReplicas":1}}`)
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), 200, installedCSVBody(string(alm)))
+	f.json("GET", rhoai.NamespacedPath("apps/v1", "deployments", rhoai.SubNS, "rhods-operator"), 200, `{"status":{"readyReplicas":1}}`)
 	f.json("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", 200, `{"items":[]}`)
 	serveComponentGroup(f)
 	f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1", 200,

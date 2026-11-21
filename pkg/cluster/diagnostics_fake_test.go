@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // fakeAPI is a strict Kubernetes API fake for diagnostics tests. Routes are
@@ -69,7 +70,7 @@ func newFakeAPI(t *testing.T) (*fakeAPI, *Client) {
 	}))
 	t.Cleanup(srv.Close)
 	// A new server may reuse an earlier test's address, which keys the cache.
-	controlPlaneCache.Purge()
+	rhoai.ControlPlaneCache.Purge()
 	return f, newTestClient(testClientOptions{BaseURL: srv.URL, Token: "test", HTTPClient: srv.Client(), Ctx: context.Background()})
 }
 
@@ -274,8 +275,8 @@ func (f *fakeAPI) realWrites() []string {
 // serveInstalledOperator serves the Subscription and the installed CSV,
 // which names the operator's Deployment (rhods-operator).
 func serveInstalledOperator(f *fakeAPI) {
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), 200,
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), 200,
 		`{"metadata":{"name":"rhods-operator.3.6.0"},"spec":{"version":"3.6.0","install":{"spec":{"deployments":[{"name":"rhods-operator"}]}}},"status":{"phase":"Succeeded"}}`)
 }
 

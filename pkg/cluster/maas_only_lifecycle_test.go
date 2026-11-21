@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -196,7 +197,7 @@ func TestMaaSOnlySetup_UnpublishWithoutConnectivityLinkTurnsTokenAuthOff(t *test
 	mc.f.mu.Lock()
 	delete(mc.f.groups, "/apis/kuadrant.io")
 	mc.f.mu.Unlock()
-	apiVersionsCache.Purge()
+	rhoai.APIVersionsCache.Purge()
 	res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"})
 	if !res.Success {
 		t.Fatalf("unpublish: %+v", res)

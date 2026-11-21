@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Certificates that cert-manager never issued.
@@ -43,13 +44,13 @@ type certificateItem struct {
 		SecretName string `json:"secretName"`
 	} `json:"spec"`
 	Status struct {
-		Conditions []dscCondition `json:"conditions"`
+		Conditions []rhoai.DSCCondition `json:"conditions"`
 	} `json:"status"`
 }
 
 func (ci certificateItem) ref() string { return ci.Metadata.Namespace + "/" + ci.Metadata.Name }
 
-func (ci certificateItem) readyCondition() *dscCondition {
+func (ci certificateItem) readyCondition() *rhoai.DSCCondition {
 	for i := range ci.Status.Conditions {
 		if ci.Status.Conditions[i].Type == "Ready" {
 			return &ci.Status.Conditions[i]
@@ -112,7 +113,7 @@ func certManagerOperatorState(c *Client, d *dependency) (evidence, cmds []string
 		line := fmt.Sprintf("Operator Deployment %s: %d of %d available", od.ref(), od.Available, od.Replicas)
 		if od.Replicas == 0 {
 			line += " (scaled to 0, so nothing restores the controller)"
-			cmds = append(cmds, shellCommand("oc", "scale", "deployment/"+od.Name, "-n", od.Namespace, "--replicas=1"))
+			cmds = append(cmds, kube.ShellCommand("oc", "scale", "deployment/"+od.Name, "-n", od.Namespace, "--replicas=1"))
 		}
 		evidence = append(evidence, line)
 	}
@@ -123,7 +124,7 @@ func certManagerOperatorState(c *Client, d *dependency) (evidence, cmds []string
 			evidence = append(evidence, fmt.Sprintf("%s: could not read managementState: %v%s", d.Operand.ref(), err, templateHint(err)))
 		case state != "" && state != "Managed":
 			evidence = append(evidence, fmt.Sprintf("%s has managementState %s, so the operator does not run cert-manager", d.Operand.ref(), state))
-			cmds = append(cmds, shellCommand("oc", "patch", d.Operand.resourceArg(), d.Operand.objName(), "--type", "merge", "-p", `{"spec":{"managementState":"Managed"}}`))
+			cmds = append(cmds, kube.ShellCommand("oc", "patch", d.Operand.resourceArg(), d.Operand.objName(), "--type", "merge", "-p", `{"spec":{"managementState":"Managed"}}`))
 		default:
 			evidence = append(evidence, fmt.Sprintf("%s has managementState %s", d.Operand.ref(), kube.NonEmpty(state, "unset")))
 		}
@@ -170,7 +171,7 @@ func (l *podLister) list(namespace string) ([]certPod, error) {
 	if pods, ok := l.pods[namespace]; ok || l.errs[namespace] != nil {
 		return pods, l.errs[namespace]
 	}
-	body, _, err := l.c.Get(namespacedPath("v1", "pods", namespace, ""))
+	body, _, err := l.c.Get(rhoai.NamespacedPath("v1", "pods", namespace, ""))
 	var list struct {
 		Items []certPod `json:"items"`
 	}
@@ -229,7 +230,7 @@ func checkCertificates(c *Client) checkOutput {
 	const name = "Certificates"
 	out := checkOutput{check: CheckResult{Name: name, Status: "pass"}}
 	rhoaiNS, nsErr := rhoaiPodNamespaces(c)
-	namespaces := append([]string{SubNS}, rhoaiNS...)
+	namespaces := append([]string{rhoai.SubNS}, rhoaiNS...)
 	now := time.Now()
 	var certs []certificateItem
 	var errs []string
@@ -241,7 +242,7 @@ func checkCertificates(c *Client) checkOutput {
 		var list struct {
 			Items []certificateItem `json:"items"`
 		}
-		found, err := c.GetIntoOptional(namespacedPath("cert-manager.io/v1", "certificates", ns, ""), &list)
+		found, err := c.GetIntoOptional(rhoai.NamespacedPath("cert-manager.io/v1", "certificates", ns, ""), &list)
 		if err != nil {
 			if kube.IsDecodeError(err) {
 				errs = append(errs, fmt.Sprintf("parse certificates in %s: %v", ns, err))
@@ -368,7 +369,7 @@ func certificateProblem(c *Client, ci certificateItem, cause certificateCause, c
 		AffectedObjects: []string{"Certificate " + ci.ref()},
 		Description: fmt.Sprintf("cert-manager issues Secret %s from this Certificate. Until it does, pods that mount the Secret stay in ContainerCreating, "+
 			"and webhooks whose CA it injects (%s) have no serving certificate. Those symptoms are listed here instead of as separate problems.", kube.NonEmpty(ci.Spec.SecretName, "(unset)"), injectCAAnnotation),
-		TechnicalCmd: shellCommand("oc", "describe", "certificate.cert-manager.io", ci.Metadata.Name, "-n", ci.Metadata.Namespace),
+		TechnicalCmd: kube.ShellCommand("oc", "describe", "certificate.cert-manager.io", ci.Metadata.Name, "-n", ci.Metadata.Namespace),
 	}
 	subject := fmt.Sprintf("Certificate %s is not issued", ci.ref())
 	if staleReady {

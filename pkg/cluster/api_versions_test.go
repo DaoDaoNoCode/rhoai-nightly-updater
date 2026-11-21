@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // The API server's answers on 2026-10-07, RHOAI 3.6 nightly whose operator
@@ -24,7 +25,7 @@ const dscGroupDoc = `{"kind":"APIGroup","apiVersion":"v1","name":"datascienceclu
 
 func TestCompareAPIVersionsOrdersLikeKubernetes(t *testing.T) {
 	got := []string{"v1alpha1", "foo", "v1", "v2", "v1beta1", "v11alpha2", "v3", "v1alpha2", "v10", "v3beta1", "v1beta2", "bar"}
-	sortAPIVersions(got)
+	rhoai.SortAPIVersions(got)
 	want := []string{"v10", "v3", "v2", "v1", "v3beta1", "v1beta2", "v1beta1", "v11alpha2", "v1alpha2", "v1alpha1", "bar", "foo"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v\nwant %v", got, want)
@@ -32,42 +33,42 @@ func TestCompareAPIVersionsOrdersLikeKubernetes(t *testing.T) {
 }
 
 func TestServedVersionsPreferredFirstThenNewest(t *testing.T) {
-	apiVersionsCache.Purge()
-	t.Cleanup(apiVersionsCache.Purge)
+	rhoai.APIVersionsCache.Purge()
+	t.Cleanup(rhoai.APIVersionsCache.Purge)
 	f, c := newFakeAPI(t)
 	f.json("GET", "/apis/datasciencecluster.opendatahub.io", 200,
 		`{"name":"datasciencecluster.opendatahub.io","versions":[{"version":"v1"},{"version":"v2"},{"version":"v3"}],"preferredVersion":{"version":"v2"}}`)
 	f.json("GET", "/apis/config.opendatahub.io", 200,
 		`{"name":"config.opendatahub.io","versions":[{"version":"v1alpha1"},{"version":"v1alpha2"}],"preferredVersion":{"version":"v1alpha2"}}`)
-	if got := servedVersions(c, dscGroup, dscFallbackVersions); !got.Discovered || !reflect.DeepEqual(got.Versions, []string{"v2", "v3", "v1"}) {
+	if got := rhoai.ServedVersions(c, rhoai.DSCGroup, rhoai.DSCFallbackVersions); !got.Discovered || !reflect.DeepEqual(got.Versions, []string{"v2", "v3", "v1"}) {
 		t.Fatalf("dsc %+v", got)
 	}
-	if got := servedVersions(c, platformGroup, platformFallbackVersions); !reflect.DeepEqual(got.Versions, []string{"v1alpha2", "v1alpha1"}) {
+	if got := rhoai.ServedVersions(c, rhoai.PlatformGroup, rhoai.PlatformFallbackVersions); !reflect.DeepEqual(got.Versions, []string{"v1alpha2", "v1alpha1"}) {
 		t.Fatalf("platform %+v", got)
 	}
 	// Cached: no second discovery read.
-	servedVersions(c, dscGroup, dscFallbackVersions)
+	rhoai.ServedVersions(c, rhoai.DSCGroup, rhoai.DSCFallbackVersions)
 	if n := len(f.requests("GET", "/apis/datasciencecluster.opendatahub.io")); n != 1 {
 		t.Fatalf("discovery reads: %d", n)
 	}
 }
 
 func TestServedVersionsFallsBackWithoutDiscovery(t *testing.T) {
-	apiVersionsCache.Purge()
-	t.Cleanup(apiVersionsCache.Purge)
+	rhoai.APIVersionsCache.Purge()
+	t.Cleanup(rhoai.APIVersionsCache.Purge)
 	f, c := newFakeAPI(t)
 	// Group not served (no CRD yet): the old order, not cached.
-	if got := servedVersions(c, dscGroup, dscFallbackVersions); got.Discovered || !reflect.DeepEqual(got.Versions, []string{"v2", "v1"}) {
+	if got := rhoai.ServedVersions(c, rhoai.DSCGroup, rhoai.DSCFallbackVersions); got.Discovered || !reflect.DeepEqual(got.Versions, []string{"v2", "v1"}) {
 		t.Fatalf("absent group %+v", got)
 	}
 	// Discovery failing for another reason: the old order too.
 	f.status("GET", "/apis/datasciencecluster.opendatahub.io", 503, "ServiceUnavailable")
-	if got := servedVersions(c, dscGroup, dscFallbackVersions); got.Discovered || !reflect.DeepEqual(got.Versions, []string{"v2", "v1"}) {
+	if got := rhoai.ServedVersions(c, rhoai.DSCGroup, rhoai.DSCFallbackVersions); got.Discovered || !reflect.DeepEqual(got.Versions, []string{"v2", "v1"}) {
 		t.Fatalf("failed discovery %+v", got)
 	}
 	// Once the group appears it is used right away.
 	f.json("GET", "/apis/datasciencecluster.opendatahub.io", 200, dscGroupDoc)
-	if got := servedVersions(c, dscGroup, dscFallbackVersions); !got.Discovered || !reflect.DeepEqual(got.Versions, []string{"v3", "v2"}) {
+	if got := rhoai.ServedVersions(c, rhoai.DSCGroup, rhoai.DSCFallbackVersions); !got.Discovered || !reflect.DeepEqual(got.Versions, []string{"v3", "v2"}) {
 		t.Fatalf("after install %+v", got)
 	}
 }
@@ -89,12 +90,12 @@ func TestIsConversionWebhookError(t *testing.T) {
 		{"nil", nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isConversionWebhookError(tc.err); got != tc.want {
+			if got := rhoai.IsConversionWebhookError(tc.err); got != tc.want {
 				t.Fatalf("got %v", got)
 			}
 		})
 	}
-	if msg := conversionMessage(kube.ParseK8sError([]byte(liveDSCv3Conversion429), 429)); msg != liveDSCv3Message {
+	if msg := rhoai.ConversionMessage(kube.ParseK8sError([]byte(liveDSCv3Conversion429), 429)); msg != liveDSCv3Message {
 		t.Fatalf("message %q", msg)
 	}
 }
@@ -125,13 +126,13 @@ func TestListServedFallsBackOnlyOnConversionErrors(t *testing.T) {
 		}, "", nil, 429},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			apiVersionsCache.Purge()
-			t.Cleanup(apiVersionsCache.Purge)
+			rhoai.APIVersionsCache.Purge()
+			t.Cleanup(rhoai.APIVersionsCache.Purge)
 			f, c := newFakeAPI(t)
 			f.json("GET", "/apis/datasciencecluster.opendatahub.io", 200, dscGroupDoc)
 			f.json("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", 200, items)
 			tc.v3(f)
-			r, err := listServed(c, dscGroup, dscListFmt, nil, dscFallbackVersions)
+			r, err := rhoai.ListServed(c, rhoai.DSCGroup, rhoai.DSCListFmt, nil, rhoai.DSCFallbackVersions)
 			if tc.wantErr != 0 {
 				if !kube.IsK8sError(err, tc.wantErr) || len(f.requests("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters")) != 0 {
 					t.Fatalf("want %d without falling back, got %+v %v", tc.wantErr, r, err)
@@ -152,29 +153,29 @@ func TestListServedFallsBackOnlyOnConversionErrors(t *testing.T) {
 	}
 
 	t.Run("every version fails to convert: the first error", func(t *testing.T) {
-		apiVersionsCache.Purge()
+		rhoai.APIVersionsCache.Purge()
 		f, c := newFakeAPI(t)
 		f.json("GET", "/apis/datasciencecluster.opendatahub.io", 200, dscGroupDoc)
 		f.json("GET", "/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters", 429, liveDSCv3Conversion429)
 		f.json("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", 500, liveDSCv3Conversion500)
-		r, err := listServed(c, dscGroup, dscListFmt, nil, dscFallbackVersions)
+		r, err := rhoai.ListServed(c, rhoai.DSCGroup, rhoai.DSCListFmt, nil, rhoai.DSCFallbackVersions)
 		if !kube.IsK8sError(err, 429) || len(r.Skipped) != 2 {
 			t.Fatalf("got %+v %v", r, err)
 		}
 	})
 	t.Run("no version served: no API, no error", func(t *testing.T) {
-		apiVersionsCache.Purge()
+		rhoai.APIVersionsCache.Purge()
 		_, c := newFakeAPI(t)
-		r, err := listServed(c, dscGroup, dscListFmt, nil, dscFallbackVersions)
+		r, err := rhoai.ListServed(c, rhoai.DSCGroup, rhoai.DSCListFmt, nil, rhoai.DSCFallbackVersions)
 		if err != nil || r.Version != "" {
 			t.Fatalf("got %+v %v", r, err)
 		}
 	})
 	t.Run("named object missing at a served version is a 404", func(t *testing.T) {
-		apiVersionsCache.Purge()
+		rhoai.APIVersionsCache.Purge()
 		f, c := newFakeAPI(t)
 		f.json("GET", "/apis/datasciencecluster.opendatahub.io", 200, dscGroupDoc)
-		_, err := getServed(c, dscGroup, dscListFmt+"/gone", dscFallbackVersions)
+		_, err := rhoai.GetServed(c, rhoai.DSCGroup, rhoai.DSCListFmt+"/gone", rhoai.DSCFallbackVersions)
 		if !kube.IsK8sError(err, 404) || len(f.requests("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/gone")) != 0 {
 			t.Fatalf("err %v", err)
 		}
@@ -182,7 +183,7 @@ func TestListServedFallsBackOnlyOnConversionErrors(t *testing.T) {
 }
 
 func TestGroupDocOrderedVersions(t *testing.T) {
-	g := apiGroupDoc{PreferredVersion: struct {
+	g := rhoai.APIGroupDoc{PreferredVersion: struct {
 		Version string `json:"version"`
 	}{Version: "v1beta1"}}
 	for _, v := range []string{"v1alpha1", "v1", "v1beta1", "v2"} {
@@ -190,12 +191,12 @@ func TestGroupDocOrderedVersions(t *testing.T) {
 			Version string `json:"version"`
 		}{v})
 	}
-	got := g.orderedVersions()
+	got := g.OrderedVersions()
 	if !reflect.DeepEqual(got, []string{"v1beta1", "v2", "v1", "v1alpha1"}) {
 		t.Fatal(got)
 	}
 	rest := append([]string{}, got[1:]...)
-	if !sort.SliceIsSorted(rest, func(i, j int) bool { return compareAPIVersions(rest[i], rest[j]) < 0 }) {
+	if !sort.SliceIsSorted(rest, func(i, j int) bool { return rhoai.CompareAPIVersions(rest[i], rest[j]) < 0 }) {
 		t.Fatal("rest not newest first")
 	}
 }

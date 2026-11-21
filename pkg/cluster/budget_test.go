@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // R5-F4/F8: the worst case of one operation (Dashboard Dev revert and every
@@ -83,7 +84,7 @@ func TestInstallWaitEndsBeforeTheOperationDeadline(t *testing.T) {
 	OperatorInstallTimeout = time.Minute
 	t.Cleanup(func() { OperatorInstallTimeout = old })
 	f := newFakeOLM(t)
-	f.sub = map[string]any{"metadata": map[string]any{"name": SubName}, "spec": map[string]any{}, "status": map[string]any{}}
+	f.sub = map[string]any{"metadata": map[string]any{"name": rhoai.SubName}, "spec": map[string]any{}, "status": map[string]any{}}
 	ctx, cancel := kube.Clock().WithTimeout(context.Background(), installDeadlineReserve+300*time.Millisecond)
 	defer cancel()
 	var logs []string

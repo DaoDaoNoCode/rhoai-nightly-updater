@@ -9,6 +9,7 @@ import (
 	"net/url"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -24,16 +25,16 @@ func SaveDeploymentSnapshot(c *Client) error {
 	// No DSCInitialization: RHOAI has no applications yet, so only the
 	// operator's Deployments are recorded.
 	var appDeps []types.DeploymentInfo
-	appNS, err := appsNamespace(c)
+	appNS, err := rhoai.AppsNamespace(c)
 	switch {
 	case err == nil:
 		if appDeps, err = getDeployments(c, appNS); err != nil {
 			return fmt.Errorf("failed to get app deployments: %w", err)
 		}
-	case !errors.Is(err, errNoDSCInitialization):
+	case !errors.Is(err, rhoai.ErrNoDSCInitialization):
 		return fmt.Errorf("failed to get app deployments: %w", err)
 	}
-	opDeps, err := getDeployments(c, SubNS)
+	opDeps, err := getDeployments(c, rhoai.SubNS)
 	if err != nil {
 		return fmt.Errorf("failed to get operator deployments: %w", err)
 	}
@@ -54,7 +55,7 @@ func SaveDeploymentSnapshot(c *Client) error {
 	}
 
 	ns := getActivityNamespace()
-	cmPath := namespacedPath("v1", "configmaps", ns, snapshotConfigMapName)
+	cmPath := rhoai.NamespacedPath("v1", "configmaps", ns, snapshotConfigMapName)
 	cm := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
@@ -77,7 +78,7 @@ func SaveDeploymentSnapshot(c *Client) error {
 // GetDeploymentSnapshot reads the last saved snapshot from the ConfigMap.
 func GetDeploymentSnapshot(c *Client) (map[string]string, string) {
 	ns := getActivityNamespace()
-	cmPath := namespacedPath("v1", "configmaps", ns, snapshotConfigMapName)
+	cmPath := rhoai.NamespacedPath("v1", "configmaps", ns, snapshotConfigMapName)
 
 	body, _, err := c.Bookkeeping().Get(cmPath)
 	if err != nil {
@@ -174,7 +175,7 @@ func saveSubscriptionSnapshot(c *Client, sub map[string]any) error {
 		"data":       map[string]any{subscriptionSnapshotKey: string(data)},
 	})
 	query := url.Values{"fieldManager": {subscriptionSnapshotManager}, "force": {"true"}}
-	if _, _, err := c.Bookkeeping().Do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if _, _, err := c.Bookkeeping().Do(http.MethodPatch, rhoai.NamespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
 		return fmt.Errorf("record the operator Subscription: %w", err)
 	}
 	return nil
@@ -186,7 +187,7 @@ func loadSubscriptionSnapshot(c *Client) (*subscriptionSnapshot, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.Bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)

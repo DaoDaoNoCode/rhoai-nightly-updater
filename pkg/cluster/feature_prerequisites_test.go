@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 const dscPath = "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc"
@@ -19,16 +21,16 @@ func putManagedDSC(f *resourceFake) {
 }
 
 func TestComponentBlock(t *testing.T) {
-	dsc := func(obj string) dscRead {
+	dsc := func(obj string) rhoai.DSCRead {
 		var m map[string]any
 		if err := json.Unmarshal([]byte(obj), &m); err != nil {
 			t.Fatal(err)
 		}
-		return dscRead{Object: m, State: DSCStatePresent, Version: "v2"}
+		return rhoai.DSCRead{Object: m, State: rhoai.DSCStatePresent, Version: "v2"}
 	}
 	cases := []struct {
 		name string
-		read dscRead
+		read rhoai.DSCRead
 		fc   featureComponent
 		// want is a part of the reason, or "" for no block.
 		want, state, component string
@@ -46,8 +48,8 @@ func TestComponentBlock(t *testing.T) {
 		{"no state", dsc(`{"metadata":{"name":"d"},"spec":{"components":{"mlflowoperator":{}}}}`), mlflowComponent, "is not set", "", "mlflowoperator"},
 		// A DataScienceCluster that does not name the component cannot tell.
 		{"not named", dsc(`{"spec":{"components":{"dashboard":{"managementState":"Managed"}}}}`), mlflowComponent, "", "", ""},
-		{"no DSC", dscRead{State: DSCStateNoDSC, Version: "v2"}, pipelinesComponent, "this cluster has no DataScienceCluster", "", "aipipelines"},
-		{"no DSC API", dscRead{State: DSCStateNoCRD}, mlflowComponent, "RHOAI is not installed", "", "mlflowoperator"},
+		{"no DSC", rhoai.DSCRead{State: rhoai.DSCStateNoDSC, Version: "v2"}, pipelinesComponent, "this cluster has no DataScienceCluster", "", "aipipelines"},
+		{"no DSC API", rhoai.DSCRead{State: rhoai.DSCStateNoCRD}, mlflowComponent, "RHOAI is not installed", "", "mlflowoperator"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

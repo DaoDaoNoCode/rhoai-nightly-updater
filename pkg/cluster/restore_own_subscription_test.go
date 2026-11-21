@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -89,7 +90,7 @@ func TestRestoreDeletesOnlyTheAttemptsSubscription(t *testing.T) {
 	f.mu.Lock()
 	f.sub = nil // the operation deleted the previous one
 	f.mu.Unlock()
-	if applyErr, _ := applySubscriptionWithRetry(c, subscriptionPath(), buildSubscription(r.subscriptionBase(), CatalogName, "stable-3.x"), r, nil); applyErr != nil {
+	if applyErr, _ := applySubscriptionWithRetry(c, subscriptionPath(), buildSubscription(r.subscriptionBase(), rhoai.CatalogName, "stable-3.x"), r, nil); applyErr != nil {
 		t.Fatal(applyErr)
 	}
 	f.mu.Lock()

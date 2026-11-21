@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 const appCertsPath = "/apis/cert-manager.io/v1/namespaces/redhat-ods-applications/certificates"
@@ -17,7 +19,7 @@ func certWorld(t *testing.T) (*fakeAPI, *Client) {
 	t.Helper()
 	f, c := newFakeAPI(t)
 	serveDSCI(f, "redhat-ods-applications")
-	for _, ns := range []string{SubNS, "redhat-ods-applications"} {
+	for _, ns := range []string{rhoai.SubNS, "redhat-ods-applications"} {
 		f.json("GET", "/apis/cert-manager.io/v1/namespaces/"+ns+"/certificates", 200, `{"items":[]}`)
 	}
 	f.obj(appCertsPath, map[string]any{"items": []any{

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"gopkg.in/yaml.v3"
 )
 
@@ -75,7 +76,7 @@ func TestCheckServiceAccountSecretAccess(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, c := newFakeAPI(t)
-			f.handle("POST", clusterPath("authorization.k8s.io/v1", "selfsubjectaccessreviews", ""), func(_ *http.Request, body []byte) (int, string) {
+			f.handle("POST", rhoai.ClusterPath("authorization.k8s.io/v1", "selfsubjectaccessreviews", ""), func(_ *http.Request, body []byte) (int, string) {
 				var review struct {
 					Kind string `json:"kind"`
 					Spec struct {
@@ -109,7 +110,7 @@ func TestCheckServiceAccountSecretAccess(t *testing.T) {
 		})
 	}
 	f, c := newFakeAPI(t)
-	f.status("POST", clusterPath("authorization.k8s.io/v1", "selfsubjectaccessreviews", ""), http.StatusServiceUnavailable, "ServiceUnavailable")
+	f.status("POST", rhoai.ClusterPath("authorization.k8s.io/v1", "selfsubjectaccessreviews", ""), http.StatusServiceUnavailable, "ServiceUnavailable")
 	if out := checkServiceAccountSecretAccess(c); out.check.Status != "warn" || len(out.problems) != 0 {
 		t.Fatalf("API error: %+v", out)
 	}

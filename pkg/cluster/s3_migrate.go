@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -161,7 +162,7 @@ const finalCopyAnnotation = "rhoai-nightly-updater/final-copy"
 // migrationCopied reports whether Migrate storage has finished a verified
 // copy into the new storage.
 func migrationCopied(c *Client) (bool, error) {
-	meta, found, err := kube.ReadObjectMeta(c, namespacedPath("v1", "secrets", s3Namespace, s3Secret))
+	meta, found, err := kube.ReadObjectMeta(c, rhoai.NamespacedPath("v1", "secrets", s3Namespace, s3Secret))
 	if err != nil || !found {
 		return false, err
 	}
@@ -171,7 +172,7 @@ func migrationCopied(c *Client) (bool, error) {
 // recordMigrationCopied sets migrationCopiedAnnotation (a merge patch of
 // one annotation: setup's server-side apply owns the rest of the Secret).
 func recordMigrationCopied(c *Client) error {
-	return c.PatchJSON(namespacedPath("v1", "secrets", s3Namespace, s3Secret), map[string]any{"metadata": map[string]any{"annotations": map[string]string{migrationCopiedAnnotation: kube.Clock().Now().UTC().Format(time.RFC3339)}}})
+	return c.PatchJSON(rhoai.NamespacedPath("v1", "secrets", s3Namespace, s3Secret), map[string]any{"metadata": map[string]any{"annotations": map[string]string{migrationCopiedAnnotation: kube.Clock().Now().UTC().Format(time.RFC3339)}}})
 }
 
 // rcloneImage returns the copy Job's image, overridable with RCLONE_IMAGE
@@ -210,11 +211,11 @@ func rcloneProvider(server string) string {
 }
 
 func migrateJobPath() string {
-	return namespacedPath("batch/v1", "jobs", s3Namespace, migrateJobName)
+	return rhoai.NamespacedPath("batch/v1", "jobs", s3Namespace, migrateJobName)
 }
 
 func migrateJobCreatePath() string {
-	return withToolFieldManager(namespacedPath("batch/v1", "jobs", s3Namespace, ""))
+	return withToolFieldManager(rhoai.NamespacedPath("batch/v1", "jobs", s3Namespace, ""))
 }
 
 // migrateJob is the copy Job. The "old" remote reads the old storage's keys
@@ -738,7 +739,7 @@ func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, oldK
 
 // migrateSourcePath is the copy Job's Secret with the old storage's keys.
 func migrateSourcePath() string {
-	return namespacedPath("v1", "secrets", "seaweedfs", "seaweedfs-migrate-source")
+	return rhoai.NamespacedPath("v1", "secrets", "seaweedfs", "seaweedfs-migrate-source")
 }
 
 // writeMigrateSource writes the copy Job's Secret with the old storage's
@@ -763,7 +764,7 @@ func writeMigrateSource(c *Client, keys s3Keys) error {
 		"metadata":   map[string]any{"name": migrateSourceSecret, "namespace": s3Namespace, "labels": toolLabels()},
 		"stringData": map[string]any{s3AccessKeyField: keys.AccessKey, s3SecretKeyField: keys.SecretKey},
 	})
-	_, _, err = c.Post(withToolFieldManager(namespacedPath("v1", "secrets", s3Namespace, "")), data)
+	_, _, err = c.Post(withToolFieldManager(rhoai.NamespacedPath("v1", "secrets", s3Namespace, "")), data)
 	return err
 }
 
@@ -945,7 +946,7 @@ func readMigrateResult(c *Client, job migrateJobInfo) (copyResult, error) {
 	if sel == "" {
 		return copyResult{}, fmt.Errorf("the Job has no pod selector")
 	}
-	body, _, err := c.Get(namespacedPath("v1", "pods", s3Namespace, "") + "?labelSelector=" + url.QueryEscape(sel))
+	body, _, err := c.Get(rhoai.NamespacedPath("v1", "pods", s3Namespace, "") + "?labelSelector=" + url.QueryEscape(sel))
 	if err != nil {
 		return copyResult{}, fmt.Errorf("list its pods: %w", err)
 	}
@@ -1110,7 +1111,7 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 	// message and code for the one that failed.
 	writeSecrets := func(p *plan, dryRun bool) (string, string, error) {
 		for _, s := range p.secrets {
-			if _, err := writeProjectSecret(s, projectSecretPath(p.d.Meta.Namespace, s.name), withToolFieldManager(namespacedPath("v1", "secrets", p.d.Meta.Namespace, "")), dryRun); err != nil {
+			if _, err := writeProjectSecret(s, projectSecretPath(p.d.Meta.Namespace, s.name), withToolFieldManager(rhoai.NamespacedPath("v1", "secrets", p.d.Meta.Namespace, "")), dryRun); err != nil {
 				msg, code := pipelineWriteFailure(fmt.Sprintf("secret %s", s.name), p.d.Meta.Namespace, err)
 				return msg, code, err
 			}

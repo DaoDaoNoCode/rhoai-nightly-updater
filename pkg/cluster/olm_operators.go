@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Operators this tool installs from OperatorHub for an Environment feature
@@ -69,11 +70,11 @@ type operatorSpec struct {
 func operatorSubscriptionPath(ns, name string) (string, bool) {
 	switch name {
 	case "kuadrant-operator":
-		return namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", ns, "kuadrant-operator"), true
+		return rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", ns, "kuadrant-operator"), true
 	case "rhcl-operator":
-		return namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", ns, "rhcl-operator"), true
+		return rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", ns, "rhcl-operator"), true
 	case "cloudnative-pg":
-		return namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", ns, "cloudnative-pg"), true
+		return rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", ns, "cloudnative-pg"), true
 	}
 	return "", false
 }
@@ -153,9 +154,9 @@ func readOperatorSubscription(c *Client, ns, name string) (*olmSubscription, err
 // listSubscriptions lists the Subscriptions of namespace ns, or of every
 // namespace when ns is "".
 func listSubscriptions(c *Client, ns string) ([]*olmSubscription, error) {
-	path := clusterPath("operators.coreos.com/v1alpha1", "subscriptions", "")
+	path := rhoai.ClusterPath("operators.coreos.com/v1alpha1", "subscriptions", "")
 	if ns != "" {
-		path = namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", ns, "")
+		path = rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", ns, "")
 	}
 	var list struct {
 		Items []json.RawMessage `json:"items"`
@@ -338,7 +339,7 @@ func (p operatorPackage) channel(name string) (packageChannel, bool) {
 // scoped to that catalog: several catalogs may publish a package of the
 // same name. found is false when the catalog does not offer it.
 func readOperatorPackage(c *Client, pkg, source string) (operatorPackage, bool, error) {
-	path := namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, "") +
+	path := rhoai.NamespacedPath("packages.operators.coreos.com/v1", "packagemanifests", rhoai.CatalogNS, "") +
 		"?labelSelector=" + url.QueryEscape("catalog="+source) + "&fieldSelector=" + url.QueryEscape("metadata.name="+pkg)
 	var items []struct {
 		Metadata kube.ObjectMeta `json:"metadata"`
@@ -357,7 +358,7 @@ func readOperatorPackage(c *Client, pkg, source string) (operatorPackage, bool, 
 		return operatorPackage{}, false, fmt.Errorf("read package %s from catalog %s: %w", pkg, source, err)
 	}
 	for _, it := range items {
-		if it.Metadata.Name == pkg && kube.FirstNonEmpty(it.Status.PackageName, pkg) == pkg && it.Status.CatalogSource == source && kube.FirstNonEmpty(it.Status.CatalogSourceNamespace, CatalogNS) == CatalogNS {
+		if it.Metadata.Name == pkg && kube.FirstNonEmpty(it.Status.PackageName, pkg) == pkg && it.Status.CatalogSource == source && kube.FirstNonEmpty(it.Status.CatalogSourceNamespace, rhoai.CatalogNS) == rhoai.CatalogNS {
 			return operatorPackage{defaultChannel: it.Status.DefaultChannel, channels: it.Status.Channels}, true, nil
 		}
 	}
@@ -388,7 +389,7 @@ func planOperatorInstall(c *Client, op operatorSpec) (*operatorInstallPlan, stri
 	case err != nil:
 		return nil, fmt.Sprintf("Cannot read the %s package from catalog %s, so this tool cannot tell which channel to install; nothing was changed: %v.%s", op.title, op.source, err, templateHint(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
 	case !found:
-		return nil, fmt.Sprintf("Catalog %s in %s does not offer package %s, so %s cannot be installed from it. A cluster-admin checks the catalog (oc get packagemanifests -n %s -l catalog=%s). Nothing was changed.", op.source, CatalogNS, op.pkg, op.title, CatalogNS, op.source), "prerequisites"
+		return nil, fmt.Sprintf("Catalog %s in %s does not offer package %s, so %s cannot be installed from it. A cluster-admin checks the catalog (oc get packagemanifests -n %s -l catalog=%s). Nothing was changed.", op.source, rhoai.CatalogNS, op.pkg, op.title, rhoai.CatalogNS, op.source), "prerequisites"
 	}
 	if op.channel != nil {
 		var refusal string
@@ -488,7 +489,7 @@ func readOperatorGroups(c *Client, ns string) (operatorGroups, error) {
 	var list struct {
 		Items operatorGroups `json:"items"`
 	}
-	if err := c.GetInto(namespacedPath("operators.coreos.com/v1", "operatorgroups", ns, ""), &list); err != nil {
+	if err := c.GetInto(rhoai.NamespacedPath("operators.coreos.com/v1", "operatorgroups", ns, ""), &list); err != nil {
 		return nil, err
 	}
 	return list.Items, nil
@@ -508,7 +509,7 @@ func operatorObjects(op operatorSpec, channel string) (ns, group, sub map[string
 		"metadata":   map[string]any{"name": op.subName, "namespace": op.namespace, "labels": toolLabels()},
 		"spec": map[string]any{
 			"channel": channel, "installPlanApproval": "Automatic", "name": op.pkg,
-			"source": op.source, "sourceNamespace": CatalogNS,
+			"source": op.source, "sourceNamespace": rhoai.CatalogNS,
 		},
 	}
 	if len(op.env) > 0 {
@@ -544,13 +545,13 @@ func createOperatorObjects(c *Client, plan *operatorInstallPlan, dryRun bool) ([
 	}
 	if plan.groupMissing {
 		data, _ := json.Marshal(group)
-		if _, _, err := c.Do(http.MethodPost, withToolFieldManager(namespacedPath("operators.coreos.com/v1", "operatorgroups", plan.op.namespace, "")), "application/json", data, query); err != nil {
+		if _, _, err := c.Do(http.MethodPost, withToolFieldManager(rhoai.NamespacedPath("operators.coreos.com/v1", "operatorgroups", plan.op.namespace, "")), "application/json", data, query); err != nil {
 			return made, fmt.Errorf("create OperatorGroup %s/%s: %w", plan.op.namespace, plan.op.group, err)
 		}
 		made = append(made, "OperatorGroup "+plan.op.namespace+"/"+plan.op.group)
 	}
 	data, _ := json.Marshal(sub)
-	if _, _, err := c.Do(http.MethodPost, withToolFieldManager(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", plan.op.namespace, "")), "application/json", data, query); err != nil {
+	if _, _, err := c.Do(http.MethodPost, withToolFieldManager(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", plan.op.namespace, "")), "application/json", data, query); err != nil {
 		return made, fmt.Errorf("create Subscription %s/%s: %w", plan.op.namespace, plan.op.subName, err)
 	}
 	made = append(made, "Subscription "+plan.op.namespace+"/"+plan.op.subName)
@@ -565,7 +566,7 @@ func csvPhase(c *Client, ns, name string) (string, string, error) {
 			Message string `json:"message"`
 		} `json:"status"`
 	}
-	found, err := c.GetIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name), &csv)
+	found, err := c.GetIntoOptional(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name), &csv)
 	if err != nil {
 		return "", "", err
 	}

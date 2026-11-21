@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // noOutsideHosts makes every request through the registry and GitHub
@@ -143,8 +145,8 @@ func TestGetComponentsGitOps(t *testing.T) {
 // The operator build comes from the installed CSV's annotations.
 func TestInstalledOperatorBuild(t *testing.T) {
 	f, c := newFakeAPI(t)
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), 200,
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), 200,
 		`{"metadata":{"annotations":{"containerImage":"registry.redhat.io/rhoai/odh-rhel9-operator@sha256:abc","createdAt":"2026-10-08T04:00:00Z"}},"spec":{"version":"3.6.0"},"status":{"phase":"Succeeded"}}`)
 	op, err := getInstalledOperator(c)
 	if err != nil || op.ContainerImage != "registry.redhat.io/rhoai/odh-rhel9-operator@sha256:abc" || op.CreatedAt != "2026-10-08T04:00:00Z" {

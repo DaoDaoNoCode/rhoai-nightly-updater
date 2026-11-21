@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"gopkg.in/yaml.v3"
 )
 
@@ -54,13 +55,13 @@ func subscriptionEnvAllowlist() []string {
 // operator's Deployment), each entry only name and value, the name in
 // allowedEnv.
 func gitOpsSubscriptionProblem(namespace, name string, spec map[string]any, allowedEnv []string) string {
-	if namespace != SubNS || name != SubName {
-		return fmt.Sprintf("the gitops profile may only write Subscription %s in %s, not %s in %s", SubName, SubNS, name, namespace)
+	if namespace != rhoai.SubNS || name != rhoai.SubName {
+		return fmt.Sprintf("the gitops profile may only write Subscription %s in %s, not %s in %s", rhoai.SubName, rhoai.SubNS, name, namespace)
 	}
 	if spec == nil {
 		return "the Subscription has no spec"
 	}
-	for field, want := range map[string]string{"name": SubName, "source": CatalogName, "sourceNamespace": CatalogNS} {
+	for field, want := range map[string]string{"name": rhoai.SubName, "source": rhoai.CatalogName, "sourceNamespace": rhoai.CatalogNS} {
 		if got, _ := spec[field].(string); got != want {
 			return fmt.Sprintf("its spec.%s is %q, and the gitops profile may only write a Subscription with %s %q", field, kube.NonEmpty(got, "unset"), field, want)
 		}
@@ -138,11 +139,11 @@ func subscriptionSpec(obj map[string]any) map[string]any {
 // (nil when there is none). It returns the refusal, or "".
 func gitOpsSubscriptionsProblem(newSub, restoreSub map[string]any) string {
 	allowed := subscriptionEnvAllowlist()
-	if why := gitOpsSubscriptionProblem(SubNS, SubName, subscriptionSpec(newSub), allowed); why != "" {
+	if why := gitOpsSubscriptionProblem(rhoai.SubNS, rhoai.SubName, subscriptionSpec(newSub), allowed); why != "" {
 		return "The Subscription Update would create could not be written in the gitops profile: " + why + ". " + gitOpsPolicyFix
 	}
 	if restoreSub != nil {
-		if why := gitOpsSubscriptionProblem(SubNS, SubName, subscriptionSpec(restoreSub), allowed); why != "" {
+		if why := gitOpsSubscriptionProblem(rhoai.SubNS, rhoai.SubName, subscriptionSpec(restoreSub), allowed); why != "" {
 			return "The current Subscription could not be restored after a failure in the gitops profile: " + why + ". " + gitOpsPolicyFix
 		}
 	}
@@ -204,8 +205,8 @@ func expectedGitOpsAdmission(name string) (policy, binding map[string]any, err e
 	}
 	values["NAMESPACE"] = ns
 	values["APP_NAME"] = app
-	values["OPERATOR_NAMESPACE"] = SubNS
-	values["MARKETPLACE_NAMESPACE"] = CatalogNS
+	values["OPERATOR_NAMESPACE"] = rhoai.SubNS
+	values["MARKETPLACE_NAMESPACE"] = rhoai.CatalogNS
 	values["SUBSCRIPTION_ENV_ALLOWLIST"] = strings.Join(subscriptionEnvAllowlist(), ",")
 	for _, o := range tmpl.Objects {
 		kind, _ := o["kind"].(string)
@@ -372,7 +373,7 @@ func CheckGitOpsAdmissionPolicy(c *Client) error {
 		var live struct {
 			Spec map[string]any `json:"spec"`
 		}
-		if err := c.GetInto(clusterPath("admissionregistration.k8s.io/v1", o.resource, name), &live); err != nil {
+		if err := c.GetInto(rhoai.ClusterPath("admissionregistration.k8s.io/v1", o.resource, name), &live); err != nil {
 			if kube.IsDecodeError(err) {
 				return fmt.Errorf("parse %s %s: %w", o.kind, name, err)
 			}

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // --- getClusterVersion tests ---
@@ -194,7 +196,7 @@ func TestGetClusterVersion_InvalidJSON(t *testing.T) {
 func TestGetCatalogSource_404ReturnsNotExists(t *testing.T) {
 	csPath := fmt.Sprintf(
 		"/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s",
-		CatalogNS, CatalogName,
+		rhoai.CatalogNS, rhoai.CatalogName,
 	)
 	client, cleanup := newMockClient(map[string]mockResponse{
 		csPath: {
@@ -204,22 +206,22 @@ func TestGetCatalogSource_404ReturnsNotExists(t *testing.T) {
 	})
 	defer cleanup()
 
-	cs, err := getCatalogSource(client)
+	cs, err := rhoai.GetCatalogSource(client)
 	if err != nil {
 		t.Fatalf("404 should not produce an error, got: %v", err)
 	}
 	if cs.Exists {
 		t.Error("expected Exists to be false for 404")
 	}
-	if cs.Name != CatalogName {
-		t.Errorf("expected Name %q, got %q", CatalogName, cs.Name)
+	if cs.Name != rhoai.CatalogName {
+		t.Errorf("expected Name %q, got %q", rhoai.CatalogName, cs.Name)
 	}
 }
 
 func TestGetCatalogSource_NonNotFoundErrorPropagates(t *testing.T) {
 	csPath := fmt.Sprintf(
 		"/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s",
-		CatalogNS, CatalogName,
+		rhoai.CatalogNS, rhoai.CatalogName,
 	)
 	client, cleanup := newMockClient(map[string]mockResponse{
 		csPath: {
@@ -229,7 +231,7 @@ func TestGetCatalogSource_NonNotFoundErrorPropagates(t *testing.T) {
 	})
 	defer cleanup()
 
-	cs, err := getCatalogSource(client)
+	cs, err := rhoai.GetCatalogSource(client)
 	if err == nil {
 		t.Fatal("expected error for 403 response")
 	}
@@ -242,7 +244,7 @@ func TestGetCatalogSource_ExistsWithState(t *testing.T) {
 	csBody := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "CatalogSource",
-		"metadata":   map[string]any{"name": CatalogName},
+		"metadata":   map[string]any{"name": rhoai.CatalogName},
 		"spec": map[string]any{
 			"image": "quay.io/rhoai/rhoai-fbc-fragment:nightly-4.16-20240101",
 		},
@@ -256,7 +258,7 @@ func TestGetCatalogSource_ExistsWithState(t *testing.T) {
 
 	csPath := fmt.Sprintf(
 		"/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s",
-		CatalogNS, CatalogName,
+		rhoai.CatalogNS, rhoai.CatalogName,
 	)
 	client, cleanup := newMockClient(map[string]mockResponse{
 		csPath: {
@@ -265,7 +267,7 @@ func TestGetCatalogSource_ExistsWithState(t *testing.T) {
 	})
 	defer cleanup()
 
-	cs, err := getCatalogSource(client)
+	cs, err := rhoai.GetCatalogSource(client)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -284,7 +286,7 @@ func TestGetCatalogSource_ExistsMissingStatus(t *testing.T) {
 	csBody := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "CatalogSource",
-		"metadata":   map[string]any{"name": CatalogName},
+		"metadata":   map[string]any{"name": rhoai.CatalogName},
 		"spec": map[string]any{
 			"image": "quay.io/rhoai/rhoai-fbc-fragment:nightly-4.16-20240101",
 		},
@@ -293,7 +295,7 @@ func TestGetCatalogSource_ExistsMissingStatus(t *testing.T) {
 
 	csPath := fmt.Sprintf(
 		"/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s",
-		CatalogNS, CatalogName,
+		rhoai.CatalogNS, rhoai.CatalogName,
 	)
 	client, cleanup := newMockClient(map[string]mockResponse{
 		csPath: {
@@ -302,7 +304,7 @@ func TestGetCatalogSource_ExistsMissingStatus(t *testing.T) {
 	})
 	defer cleanup()
 
-	cs, err := getCatalogSource(client)
+	cs, err := rhoai.GetCatalogSource(client)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -323,7 +325,7 @@ func TestGetInstallPlan_ReturnsCorrectData(t *testing.T) {
 			map[string]any{
 				"metadata": map[string]any{
 					"name":              "install-plan-xyz789",
-					"namespace":         SubNS,
+					"namespace":         rhoai.SubNS,
 					"creationTimestamp": "2026-01-01T00:00:00Z",
 				},
 				"spec": map[string]any{
@@ -336,7 +338,7 @@ func TestGetInstallPlan_ReturnsCorrectData(t *testing.T) {
 	}
 	ipListJSON, _ := json.Marshal(ipListResponse)
 
-	ipListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/installplans", SubNS)
+	ipListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/installplans", rhoai.SubNS)
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		ipListPath: {body: string(ipListJSON)},
@@ -368,7 +370,7 @@ func TestGetInstallPlan_NoRhodsPlans(t *testing.T) {
 			map[string]any{
 				"metadata": map[string]any{
 					"name":              "install-plan-other",
-					"namespace":         SubNS,
+					"namespace":         rhoai.SubNS,
 					"creationTimestamp": "2026-01-01T00:00:00Z",
 				},
 				"spec": map[string]any{
@@ -381,7 +383,7 @@ func TestGetInstallPlan_NoRhodsPlans(t *testing.T) {
 	}
 	ipListJSON, _ := json.Marshal(ipListResponse)
 
-	ipListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/installplans", SubNS)
+	ipListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/installplans", rhoai.SubNS)
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		ipListPath: {body: string(ipListJSON)},
@@ -404,7 +406,7 @@ func TestGetInstallPlan_ListEmpty(t *testing.T) {
 	}
 	ipListJSON, _ := json.Marshal(ipListResponse)
 
-	ipListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/installplans", SubNS)
+	ipListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/installplans", rhoai.SubNS)
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		ipListPath: {body: string(ipListJSON)},
@@ -422,7 +424,7 @@ func TestGetInstallPlan_ListEmpty(t *testing.T) {
 
 func TestGetInstallPlan_APIError(t *testing.T) {
 	// API returns 500 on the installplans list path
-	ipListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/installplans", SubNS)
+	ipListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/installplans", rhoai.SubNS)
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		ipListPath: {
@@ -447,7 +449,7 @@ func TestGetCatalogPod_ReturnsCorrectData(t *testing.T) {
 			map[string]any{
 				"metadata": map[string]any{
 					"name":      "rhoai-catalog-dev-abc123",
-					"namespace": CatalogNS,
+					"namespace": rhoai.CatalogNS,
 				},
 				"status": map[string]any{
 					"phase": "Running",
@@ -464,7 +466,7 @@ func TestGetCatalogPod_ReturnsCorrectData(t *testing.T) {
 	}
 	podListJSON, _ := json.Marshal(podList)
 
-	podsPath := fmt.Sprintf("/api/v1/namespaces/%s/pods", CatalogNS)
+	podsPath := fmt.Sprintf("/api/v1/namespaces/%s/pods", rhoai.CatalogNS)
 	client, cleanup := newMockClient(map[string]mockResponse{
 		podsPath: {body: string(podListJSON)},
 	})
@@ -495,7 +497,7 @@ func TestGetCatalogPod_NoPods(t *testing.T) {
 	podList := map[string]any{"items": []any{}}
 	podListJSON, _ := json.Marshal(podList)
 
-	podsPath := fmt.Sprintf("/api/v1/namespaces/%s/pods", CatalogNS)
+	podsPath := fmt.Sprintf("/api/v1/namespaces/%s/pods", rhoai.CatalogNS)
 	client, cleanup := newMockClient(map[string]mockResponse{
 		podsPath: {body: string(podListJSON)},
 	})
@@ -516,7 +518,7 @@ func TestGetCatalogPod_PodNotReady(t *testing.T) {
 			map[string]any{
 				"metadata": map[string]any{
 					"name":      "rhoai-catalog-dev-pending",
-					"namespace": CatalogNS,
+					"namespace": rhoai.CatalogNS,
 				},
 				"status": map[string]any{
 					"phase": "Pending",
@@ -533,7 +535,7 @@ func TestGetCatalogPod_PodNotReady(t *testing.T) {
 	}
 	podListJSON, _ := json.Marshal(podList)
 
-	podsPath := fmt.Sprintf("/api/v1/namespaces/%s/pods", CatalogNS)
+	podsPath := fmt.Sprintf("/api/v1/namespaces/%s/pods", rhoai.CatalogNS)
 	client, cleanup := newMockClient(map[string]mockResponse{
 		podsPath: {body: string(podListJSON)},
 	})
@@ -562,8 +564,8 @@ func TestGetStatus_IncludesInstallPlanAndCatalogPod(t *testing.T) {
 	// Build all required mock responses for GetStatus
 	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]any{"name": SubName, "namespace": SubNS},
-		"spec":     map[string]any{"source": CatalogName, "channel": "fast"},
+		"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS},
+		"spec":     map[string]any{"source": rhoai.CatalogName, "channel": "fast"},
 		"status": map[string]any{
 			"state": "AtLatestKnown",
 		},
@@ -576,7 +578,7 @@ func TestGetStatus_IncludesInstallPlanAndCatalogPod(t *testing.T) {
 			map[string]any{
 				"metadata": map[string]any{
 					"name":              "install-plan-status-test",
-					"namespace":         SubNS,
+					"namespace":         rhoai.SubNS,
 					"creationTimestamp": "2026-01-01T00:00:00Z",
 				},
 				"spec": map[string]any{
@@ -592,7 +594,7 @@ func TestGetStatus_IncludesInstallPlanAndCatalogPod(t *testing.T) {
 	podList := map[string]any{
 		"items": []any{
 			map[string]any{
-				"metadata": map[string]any{"name": "rhoai-catalog-dev-pod1", "namespace": CatalogNS},
+				"metadata": map[string]any{"name": "rhoai-catalog-dev-pod1", "namespace": rhoai.CatalogNS},
 				"status": map[string]any{
 					"phase": "Running",
 					"containerStatuses": []any{
@@ -617,7 +619,7 @@ func TestGetStatus_IncludesInstallPlanAndCatalogPod(t *testing.T) {
 
 	csBody := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
-		"metadata": map[string]any{"name": CatalogName},
+		"metadata": map[string]any{"name": rhoai.CatalogName},
 		"spec":     map[string]any{"image": "quay.io/rhoai/test:latest"},
 		"status":   map[string]any{"connectionState": map[string]any{"lastObservedState": "READY"}},
 	}
@@ -635,17 +637,17 @@ func TestGetStatus_IncludesInstallPlanAndCatalogPod(t *testing.T) {
 	activityData := map[string]any{"data": map[string]any{}}
 	activityJSON, _ := json.Marshal(activityData)
 
-	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
-	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", SubNS)
-	csPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s", CatalogNS, CatalogName)
+	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", rhoai.SubNS, rhoai.SubName)
+	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", rhoai.SubNS)
+	csPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s", rhoai.CatalogNS, rhoai.CatalogName)
 	pullSecretPath := "/api/v1/namespaces/kube-system/secrets/additional-pull-secret"
 	idmsPath := "/apis/config.openshift.io/v1/imagedigestmirrorsets"
-	ipListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/installplans", SubNS)
-	catalogPodsPath := fmt.Sprintf("/api/v1/namespaces/%s/pods", CatalogNS)
-	activityPath := fmt.Sprintf("/api/v1/namespaces/%s/configmaps/rhoai-updater-activity", SubNS)
+	ipListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/installplans", rhoai.SubNS)
+	catalogPodsPath := fmt.Sprintf("/api/v1/namespaces/%s/pods", rhoai.CatalogNS)
+	activityPath := fmt.Sprintf("/api/v1/namespaces/%s/configmaps/rhoai-updater-activity", rhoai.SubNS)
 
 	client, cleanup := newMockClient(map[string]mockResponse{
-		namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, ""): stableCatalogMock("redhat-operators", "stable-3.5", "3.5.0"),
+		rhoai.NamespacedPath("packages.operators.coreos.com/v1", "packagemanifests", rhoai.CatalogNS, ""): stableCatalogMock("redhat-operators", "stable-3.5", "3.5.0"),
 		subPath:         {body: string(subJSON)},
 		csvListPath:     {body: string(csvJSON)},
 		csPath:          {body: string(csJSON)},

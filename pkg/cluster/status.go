@@ -13,16 +13,8 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
-)
-
-// K8s resource names and namespaces used throughout RHOAI operations.
-const (
-	CatalogName = "rhoai-catalog-dev"
-	CatalogNS   = "openshift-marketplace"
-	SubName     = "rhods-operator"
-	SubNS       = "redhat-ods-operator"
-	IDMSSource  = "registry.redhat.io/rhoai"
 )
 
 func getStableSource() string {
@@ -46,7 +38,7 @@ type statusRegistryReads struct {
 // GetStatus aggregates cluster, operator, and RHOAI status into a single response.
 // All K8s API calls run in parallel since none depend on each other.
 func GetStatus(c *Client) (*types.StatusResponse, error) {
-	return getStatus(c, statusRegistryReads{pullSecret: readPullSecret, nightly: getNightlyStatus, controlPlane: cachedControlPlane})
+	return getStatus(c, statusRegistryReads{pullSecret: readPullSecret, nightly: getNightlyStatus, controlPlane: rhoai.CachedControlPlane})
 }
 
 // GetStatusGitOps is GetStatus in the gitops profile, which reads no Secret
@@ -63,7 +55,7 @@ func GetStatusGitOps(c *Client) (*types.StatusResponse, error) {
 // catalog image's tag and digest. Latest stays empty: in the gitops profile
 // Git or an ACM policy picks the build.
 func gitOpsNightlyStatus(sub types.SubscriptionInfo, cs types.CatalogSourceInfo) *types.NightlyStatus {
-	if !cs.Exists || cs.Image == "" || sub.Source != CatalogName {
+	if !cs.Exists || cs.Image == "" || sub.Source != rhoai.CatalogName {
 		return nil
 	}
 	return &types.NightlyStatus{Installed: nightlyBuildFromImage(cs.Image)}
@@ -120,19 +112,19 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 	// The Subscription names the installed CSV, so the CSV is read by name
 	// after it instead of listing every CSV in the namespace.
 	run(func() {
-		sub, err := readSubscription(c)
+		sub, err := rhoai.ReadSubscription(c)
 		if err != nil {
 			addErr(fmt.Sprintf("subscription: %v", err))
 			addErr(fmt.Sprintf("csv: %v", err))
 			return
 		}
 		mu.Lock()
-		status.Subscription = sub.info
-		if sub.found {
-			subMeta = &sub.meta
+		status.Subscription = sub.Info
+		if sub.Found {
+			subMeta = &sub.Meta
 		}
 		mu.Unlock()
-		if csv, err := csvForInstalledName(c, sub.installedCSV); err != nil {
+		if csv, err := rhoai.CSVForInstalledName(c, sub.InstalledCSV); err != nil {
 			addErr(fmt.Sprintf("csv: %v", err))
 		} else {
 			mu.Lock()
@@ -142,7 +134,7 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 	})
 
 	run(func() {
-		if cs, meta, err := readCatalogSource(c); err != nil {
+		if cs, meta, err := rhoai.ReadCatalogSource(c); err != nil {
 			addErr(fmt.Sprintf("catalogsource: %v", err))
 		} else {
 			mu.Lock()
@@ -273,7 +265,7 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 	// nodes have the credentials.
 	if reads.controlPlane != nil {
 		status.Cluster.ControlPlane = controlPlane
-		status.PullSecret.Nodes = nodePullInfo(controlPlane, status.CatalogSource)
+		status.PullSecret.Nodes = rhoai.NodePullInfo(controlPlane, status.CatalogSource)
 		if status.PullSecret.Nodes != nil {
 			status.PullSecret.Nodes.AddedByTool = nodePullRecordInfo(nodeRecord, quayAuth)
 		}
@@ -394,7 +386,7 @@ func getClusterInfo(c *Client) (string, string) {
 
 func getClusterVersion(c *Client) (string, error) {
 	var result map[string]any
-	if err := c.GetInto(clusterPath("config.openshift.io/v1", "clusterversions", "version"), &result); err != nil {
+	if err := c.GetInto(rhoai.ClusterPath("config.openshift.io/v1", "clusterversions", "version"), &result); err != nil {
 		if kube.IsDecodeError(err) {
 			return "", fmt.Errorf("unmarshal: %w", err)
 		}
@@ -410,210 +402,6 @@ func getClusterVersion(c *Client) (string, error) {
 	}
 	version, _ := desired["version"].(string)
 	return version, nil
-}
-
-// subscriptionDetails is the RHOAI Subscription as read by status checks.
-// info.ManagedBy is not set: gitOpsManagers sets it from meta.
-type subscriptionDetails struct {
-	info         types.SubscriptionInfo
-	installedCSV string
-	found        bool
-	meta         kube.ObjectMeta
-}
-
-func readSubscription(c *Client) (subscriptionDetails, error) {
-	path := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
-	var sub struct {
-		Metadata kube.ObjectMeta `json:"metadata"`
-		Spec     struct {
-			Source  string `json:"source"`
-			Channel string `json:"channel"`
-		} `json:"spec"`
-		Status *struct {
-			State        *string `json:"state"`
-			InstalledCSV string  `json:"installedCSV"`
-		} `json:"status"`
-	}
-	exists, err := c.GetIntoOptional(path, &sub)
-	if err != nil {
-		if kube.IsDecodeError(err) {
-			return subscriptionDetails{}, fmt.Errorf("unmarshal: %w", err)
-		}
-		return subscriptionDetails{}, fmt.Errorf("request failed: %w", err)
-	}
-	if !exists {
-		return subscriptionDetails{info: types.SubscriptionInfo{State: "Not Installed", Namespace: SubNS}}, nil
-	}
-	state := "Unknown"
-	installed := ""
-	if sub.Status != nil {
-		if sub.Status.State != nil {
-			state = *sub.Status.State
-		}
-		installed = sub.Status.InstalledCSV
-	}
-	return subscriptionDetails{
-		info: types.SubscriptionInfo{
-			Namespace: SubNS,
-			Name:      SubName,
-			Source:    sub.Spec.Source,
-			Channel:   sub.Spec.Channel,
-			State:     state,
-		},
-		installedCSV: installed,
-		found:        true,
-		meta:         sub.Metadata,
-	}, nil
-}
-
-func getSubscription(c *Client) (types.SubscriptionInfo, error) {
-	sub, err := readSubscription(c)
-	return sub.info, err
-}
-
-// csvSummary is the part of a ClusterServiceVersion the status checks read.
-type csvSummary struct {
-	Metadata struct {
-		Name string `json:"name"`
-	} `json:"metadata"`
-	Spec struct {
-		Version     string `json:"version"`
-		DisplayName string `json:"displayName"`
-	} `json:"spec"`
-	Status struct {
-		Phase *string `json:"phase"`
-	} `json:"status"`
-}
-
-func (s csvSummary) info() types.CSVInfo {
-	phase := "Unknown"
-	if s.Status.Phase != nil {
-		phase = *s.Status.Phase
-	}
-	return types.CSVInfo{Name: s.Metadata.Name, Version: s.Spec.Version, Phase: phase}
-}
-
-func getCSV(c *Client) (types.CSVInfo, error) {
-	// Prefer the Subscription's installed CSV when multiple versions coexist
-	// during OLM reconciliation. List order is not installation identity.
-	sub, err := readSubscription(c)
-	if err != nil {
-		return types.CSVInfo{}, err
-	}
-	return csvForInstalledName(c, sub.installedCSV)
-}
-
-// csvForInstalledName returns the RHOAI CSV. When the Subscription names its
-// installed CSV, that CSV is read by name (~225 KB instead of a ~475 KB list on
-// a cluster with copied CSVs). The list is only read when there is no name or
-// the named CSV is missing, so a stale Subscription reference is still
-// detected below.
-func csvForInstalledName(c *Client, installedName string) (types.CSVInfo, error) {
-	if installedName != "" {
-		body, _, err := c.Get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, installedName))
-		if err == nil {
-			var csv csvSummary
-			if err := json.Unmarshal(body, &csv); err != nil {
-				return types.CSVInfo{}, fmt.Errorf("unmarshal: %w", err)
-			}
-			// Lifecycle cleanup acts on this identity, so only trust an
-			// object that really is the named CSV; otherwise use the list.
-			if csv.Metadata.Name == installedName {
-				return csv.info(), nil
-			}
-		} else if !kube.IsK8sNotFound(err) {
-			return types.CSVInfo{}, fmt.Errorf("request failed: %w", err)
-		}
-	}
-	// OLM labels the CSVs it copies into this namespace from operators
-	// installed elsewhere with olm.copiedFrom; they are never the RHOAI CSV.
-	path := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "") +
-		"?labelSelector=" + url.QueryEscape("!olm.copiedFrom")
-	var items []csvSummary
-	if err := c.ListInto(path, &items); err != nil {
-		if kube.IsDecodeError(err) {
-			return types.CSVInfo{}, fmt.Errorf("unmarshal: %w", err)
-		}
-		return types.CSVInfo{}, fmt.Errorf("request failed: %w", err)
-	}
-
-	// Primary: match by displayName (most specific)
-	// Fallback: match by name prefix "rhods-operator." (resilient to branding changes)
-	var fallback *types.CSVInfo
-	for _, item := range items {
-		info := item.info()
-		name, displayName := item.Metadata.Name, item.Spec.DisplayName
-		if installedName != "" {
-			if name == installedName {
-				return info, nil
-			}
-			if fallback == nil && (displayName == "Red Hat OpenShift AI" || strings.HasPrefix(name, "rhods-operator.")) {
-				fallback = &info
-			}
-			continue
-		}
-		if displayName == "Red Hat OpenShift AI" {
-			return info, nil
-		}
-		if fallback == nil && strings.HasPrefix(name, "rhods-operator.") {
-			fallback = &info
-		}
-	}
-	if fallback != nil {
-		if installedName != "" {
-			// A stale Subscription reference is not proof that the operator is
-			// absent. Stop lifecycle cleanup rather than guessing which CSV to delete.
-			return types.CSVInfo{}, fmt.Errorf("subscription references missing CSV %q, but RHOAI CSV %q still exists; wait for OLM reconciliation or resolve the stale Subscription reference before retrying", installedName, fallback.Name)
-		}
-		return *fallback, nil
-	}
-	return types.CSVInfo{Phase: "Not Found"}, nil
-}
-
-// getCatalogSource reads the nightly CatalogSource. Who manages it
-// (ManagedBy, ManagedByACM) is not set: gitOpsManagers sets it from the
-// metadata readCatalogSource returns.
-func getCatalogSource(c *Client) (types.CatalogSourceInfo, error) {
-	cs, _, err := readCatalogSource(c)
-	return cs, err
-}
-
-func readCatalogSource(c *Client) (types.CatalogSourceInfo, *kube.ObjectMeta, error) {
-	path := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
-	var result struct {
-		Metadata kube.ObjectMeta `json:"metadata"`
-		Spec     struct {
-			Image string `json:"image"`
-		} `json:"spec"`
-		Status struct {
-			ConnectionState struct {
-				LastObservedState *string `json:"lastObservedState"`
-			} `json:"connectionState"`
-		} `json:"status"`
-	}
-	found, err := c.GetIntoOptional(path, &result)
-	if err != nil {
-		if kube.IsDecodeError(err) {
-			return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, fmt.Errorf("unmarshal: %w", err)
-		}
-		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, fmt.Errorf("request failed: %w", err)
-	}
-	if !found {
-		// expected when the CatalogSource does not exist yet
-		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, nil
-	}
-
-	state := "Unknown"
-	if s := result.Status.ConnectionState.LastObservedState; s != nil {
-		state = *s
-	}
-
-	return types.CatalogSourceInfo{
-		Exists: true,
-		Name:   CatalogName,
-		Image:  result.Spec.Image,
-		State:  state,
-	}, &result.Metadata, nil
 }
 
 // gitOpsManagers sets on status who manages the operator Subscription, the
@@ -694,7 +482,7 @@ func getPullSecret(c *Client) (types.PullSecretInfo, error) {
 // readPullSecret validates the pull secret and also returns the quay.io/rhoai
 // credential it holds, so status polling does not read the Secret twice.
 func readPullSecret(c *Client) (types.PullSecretInfo, string, error) {
-	path := namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret")
+	path := rhoai.NamespacedPath("v1", "secrets", "kube-system", "additional-pull-secret")
 	body, exists, err := c.GetOptional(path)
 	if err != nil {
 		return types.PullSecretInfo{Exists: false}, "", err
@@ -735,7 +523,7 @@ func getConsoleURL(c *Client) string {
 			ConsoleURL string `json:"consoleURL"`
 		} `json:"status"`
 	}
-	if err := c.GetInto(clusterPath("config.openshift.io/v1", "consoles", "cluster"), &result); err != nil {
+	if err := c.GetInto(rhoai.ClusterPath("config.openshift.io/v1", "consoles", "cluster"), &result); err != nil {
 		return ""
 	}
 	return result.Status.ConsoleURL
@@ -744,7 +532,7 @@ func getConsoleURL(c *Client) string {
 // getInstallPlan lists InstallPlans in SubNS and returns the latest one
 // whose clusterServiceVersionNames include "rhods-operator".
 func getInstallPlan(c *Client) (*types.InstallPlanInfo, error) {
-	path := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, "")
+	path := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, "")
 	var result struct {
 		Items []struct {
 			Metadata struct {
@@ -806,7 +594,7 @@ func getInstallPlan(c *Client) (*types.InstallPlanInfo, error) {
 
 // getCatalogPod finds the pod backing the rhoai-catalog-dev CatalogSource.
 func getCatalogPod(c *Client) (*types.CatalogPodInfo, error) {
-	path := namespacedPath("v1", "pods", CatalogNS, "") + "?labelSelector=olm.catalogSource%3D" + CatalogName
+	path := rhoai.NamespacedPath("v1", "pods", rhoai.CatalogNS, "") + "?labelSelector=olm.catalogSource%3D" + rhoai.CatalogName
 	var items []struct {
 		Metadata struct {
 			Name string `json:"name"`
@@ -842,7 +630,7 @@ func getCatalogPod(c *Client) (*types.CatalogPodInfo, error) {
 }
 
 func getIDMS(c *Client) (types.ImageMirrorInfo, error) {
-	path := clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", "")
+	path := rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", "")
 	var items []struct {
 		Metadata struct {
 			Name string `json:"name"`
@@ -861,7 +649,7 @@ func getIDMS(c *Client) (types.ImageMirrorInfo, error) {
 	}
 	for _, item := range items {
 		for _, mirror := range item.Spec.ImageDigestMirrors {
-			if mirror.Source == IDMSSource {
+			if mirror.Source == rhoai.IDMSSource {
 				return types.ImageMirrorInfo{Exists: true, Kind: mirrorKindIDMS, Name: item.Metadata.Name, Source: mirror.Source}, nil
 			}
 		}
@@ -875,7 +663,7 @@ func getIDMS(c *Client) (types.ImageMirrorInfo, error) {
 		return types.ImageMirrorInfo{Exists: false}, fmt.Errorf("list ImageContentSourcePolicies: %w", err)
 	}
 	for _, r := range icsp {
-		if r.Source == IDMSSource {
+		if r.Source == rhoai.IDMSSource {
 			return types.ImageMirrorInfo{Exists: true, Kind: mirrorKindICSP, Name: r.Name, Source: r.Source}, nil
 		}
 	}
@@ -887,7 +675,7 @@ func getIDMS(c *Client) (types.ImageMirrorInfo, error) {
 // there is none. No served version (CRD not installed) is not an error.
 func checkDSCExists(c *Client) (*kube.ObjectMeta, error) {
 	// limit=1: only existence matters, not the (large) objects.
-	r, err := listServed(c, dscGroup, dscListFmt, url.Values{"limit": {"1"}}, dscFallbackVersions)
+	r, err := rhoai.ListServed(c, rhoai.DSCGroup, rhoai.DSCListFmt, url.Values{"limit": {"1"}}, rhoai.DSCFallbackVersions)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}

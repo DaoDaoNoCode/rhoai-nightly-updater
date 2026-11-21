@@ -191,7 +191,7 @@ build-frontend: frontend-deps  ## Production build of the frontend (frontend/dis
 # take comments at the prompt), so shellcheck is told the shell.
 shellcheck:  ## shellcheck every shell script (CI: shellcheck 0.11.0)
 	shellcheck scripts/*.sh dev.sh docs/tools/*.sh
-	shellcheck --shell=bash pkg/cluster/node_pull_secret.sh
+	shellcheck --shell=bash pkg/cluster/internal/rhoai/node_pull_secret.sh
 
 release-check:  ## The tag pipeline's release guard for TAG=vX.Y.Z (CHANGELOG, chart version, template revision)
 	@test -n "$(TAG)" || { echo "Usage: make release-check TAG=vX.Y.Z"; exit 1; }

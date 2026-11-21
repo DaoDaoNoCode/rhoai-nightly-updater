@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -239,7 +240,7 @@ func TestHardResetRefusals(t *testing.T) {
 			if f == nil {
 				return
 			}
-			f.put(clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), map[string]any{})
+			f.put(rhoai.ClusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), map[string]any{})
 		}, nil, "prerequisites"},
 		{"name not typed", nil, func(r *types.DSCPlanRequest) { r.Confirm = "default" }, "validation"},
 		{"stale plan", nil, func(r *types.DSCPlanRequest) { r.Token = strings.Repeat("a", 24) }, "conflict"},

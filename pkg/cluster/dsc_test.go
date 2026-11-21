@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // TestCreateDefaultDSC_AlreadyExists verifies that CreateDefaultDSC returns success
@@ -84,7 +86,7 @@ func TestCreateDefaultDSC_CreatesSuccessfully(t *testing.T) {
 
 	// The actual implementation uses c.Apply() which internally uses PATCH with SSA params
 	client, records, cleanup := newRecordingMockClient(map[string]mockResponse{
-		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""): csvListMock("3.6.0"),
+		rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""): csvListMock("3.6.0"),
 		dscListPathV2: {body: string(emptyListJSON)},
 		dscListPathV1: {body: string(emptyListJSON)},
 		dscApplyPath:  {body: string(applyResponseJSON)},
@@ -168,7 +170,7 @@ func TestCreateDefaultDSC_ApplyFailure(t *testing.T) {
 	dscApplyPath := "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc"
 
 	client, _, cleanup := newRecordingMockClient(map[string]mockResponse{
-		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""): csvListMock("3.6.0"),
+		rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""): csvListMock("3.6.0"),
 		"GET " + dscListPathV2:  {body: string(emptyListJSON)},
 		dscListPathV1:           {body: string(emptyListJSON)},
 		"POST " + dscListPathV2: {body: errorResponse, statusCode: 500},
@@ -199,8 +201,8 @@ func TestGetStatus_IncludesDSCExists(t *testing.T) {
 	// Build all required mock responses for GetStatus
 	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec":     map[string]any{"source": CatalogName, "channel": "fast"},
+		"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS, "uid": "uid-sub"},
+		"spec":     map[string]any{"source": rhoai.CatalogName, "channel": "fast"},
 		"status": map[string]any{
 			"state": "AtLatestKnown",
 		},
@@ -225,7 +227,7 @@ func TestGetStatus_IncludesDSCExists(t *testing.T) {
 			map[string]any{
 				"metadata": map[string]any{
 					"name":              "install-plan-test",
-					"namespace":         SubNS,
+					"namespace":         rhoai.SubNS,
 					"creationTimestamp": "2026-01-01T00:00:00Z",
 				},
 				"spec": map[string]any{
@@ -241,7 +243,7 @@ func TestGetStatus_IncludesDSCExists(t *testing.T) {
 	podList := map[string]any{
 		"items": []any{
 			map[string]any{
-				"metadata": map[string]any{"name": "rhoai-catalog-dev-pod1", "namespace": CatalogNS},
+				"metadata": map[string]any{"name": "rhoai-catalog-dev-pod1", "namespace": rhoai.CatalogNS},
 				"status": map[string]any{
 					"phase": "Running",
 					"containerStatuses": []any{
@@ -266,7 +268,7 @@ func TestGetStatus_IncludesDSCExists(t *testing.T) {
 
 	csBody := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
-		"metadata": map[string]any{"name": CatalogName},
+		"metadata": map[string]any{"name": rhoai.CatalogName},
 		"spec":     map[string]any{"image": "quay.io/rhoai/test:latest"},
 		"status":   map[string]any{"connectionState": map[string]any{"lastObservedState": "READY"}},
 	}
@@ -284,14 +286,14 @@ func TestGetStatus_IncludesDSCExists(t *testing.T) {
 	activityData := map[string]any{"data": map[string]any{}}
 	activityJSON, _ := json.Marshal(activityData)
 
-	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
-	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", SubNS)
-	csPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s", CatalogNS, CatalogName)
+	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", rhoai.SubNS, rhoai.SubName)
+	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", rhoai.SubNS)
+	csPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s", rhoai.CatalogNS, rhoai.CatalogName)
 	pullSecretPath := "/api/v1/namespaces/kube-system/secrets/additional-pull-secret"
 	idmsPath := "/apis/config.openshift.io/v1/imagedigestmirrorsets"
-	ipListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/installplans", SubNS)
-	catalogPodsPath := fmt.Sprintf("/api/v1/namespaces/%s/pods", CatalogNS)
-	activityPath := fmt.Sprintf("/api/v1/namespaces/%s/configmaps/rhoai-updater-activity", SubNS)
+	ipListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/installplans", rhoai.SubNS)
+	catalogPodsPath := fmt.Sprintf("/api/v1/namespaces/%s/pods", rhoai.CatalogNS)
+	activityPath := fmt.Sprintf("/api/v1/namespaces/%s/configmaps/rhoai-updater-activity", rhoai.SubNS)
 	dscListPathV2 := "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters"
 	dscListPathV1 := "/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters"
 
@@ -325,8 +327,8 @@ func TestGetStatus_DSCNotExists(t *testing.T) {
 	// Build minimal mock responses for GetStatus
 	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec":     map[string]any{"source": CatalogName, "channel": "fast"},
+		"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS, "uid": "uid-sub"},
+		"spec":     map[string]any{"source": rhoai.CatalogName, "channel": "fast"},
 		"status": map[string]any{
 			"state": "AtLatestKnown",
 		},
@@ -358,7 +360,7 @@ func TestGetStatus_DSCNotExists(t *testing.T) {
 
 	csBody := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
-		"metadata": map[string]any{"name": CatalogName},
+		"metadata": map[string]any{"name": rhoai.CatalogName},
 		"spec":     map[string]any{"image": "quay.io/rhoai/test:latest"},
 		"status":   map[string]any{"connectionState": map[string]any{"lastObservedState": "READY"}},
 	}
@@ -376,14 +378,14 @@ func TestGetStatus_DSCNotExists(t *testing.T) {
 	activityData := map[string]any{"data": map[string]any{}}
 	activityJSON, _ := json.Marshal(activityData)
 
-	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
-	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", SubNS)
-	csPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s", CatalogNS, CatalogName)
+	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", rhoai.SubNS, rhoai.SubName)
+	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", rhoai.SubNS)
+	csPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s", rhoai.CatalogNS, rhoai.CatalogName)
 	pullSecretPath := "/api/v1/namespaces/kube-system/secrets/additional-pull-secret"
 	idmsPath := "/apis/config.openshift.io/v1/imagedigestmirrorsets"
-	ipListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/installplans", SubNS)
-	catalogPodsPath := fmt.Sprintf("/api/v1/namespaces/%s/pods", CatalogNS)
-	activityPath := fmt.Sprintf("/api/v1/namespaces/%s/configmaps/rhoai-updater-activity", SubNS)
+	ipListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/installplans", rhoai.SubNS)
+	catalogPodsPath := fmt.Sprintf("/api/v1/namespaces/%s/pods", rhoai.CatalogNS)
+	activityPath := fmt.Sprintf("/api/v1/namespaces/%s/configmaps/rhoai-updater-activity", rhoai.SubNS)
 	dscListPathV2 := "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters"
 	dscListPathV1 := "/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters"
 
@@ -418,8 +420,8 @@ func TestGetStatus_DSCCRDNotInstalled(t *testing.T) {
 	// Build minimal mock responses for GetStatus
 	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec":     map[string]any{"source": CatalogName, "channel": "fast"},
+		"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS, "uid": "uid-sub"},
+		"spec":     map[string]any{"source": rhoai.CatalogName, "channel": "fast"},
 		"status": map[string]any{
 			"state": "AtLatestKnown",
 		},
@@ -448,7 +450,7 @@ func TestGetStatus_DSCCRDNotInstalled(t *testing.T) {
 
 	csBody := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
-		"metadata": map[string]any{"name": CatalogName},
+		"metadata": map[string]any{"name": rhoai.CatalogName},
 		"spec":     map[string]any{"image": "quay.io/rhoai/test:latest"},
 		"status":   map[string]any{"connectionState": map[string]any{"lastObservedState": "READY"}},
 	}
@@ -466,14 +468,14 @@ func TestGetStatus_DSCCRDNotInstalled(t *testing.T) {
 	activityData := map[string]any{"data": map[string]any{}}
 	activityJSON, _ := json.Marshal(activityData)
 
-	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
-	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", SubNS)
-	csPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s", CatalogNS, CatalogName)
+	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", rhoai.SubNS, rhoai.SubName)
+	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", rhoai.SubNS)
+	csPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s", rhoai.CatalogNS, rhoai.CatalogName)
 	pullSecretPath := "/api/v1/namespaces/kube-system/secrets/additional-pull-secret"
 	idmsPath := "/apis/config.openshift.io/v1/imagedigestmirrorsets"
-	ipListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/installplans", SubNS)
-	catalogPodsPath := fmt.Sprintf("/api/v1/namespaces/%s/pods", CatalogNS)
-	activityPath := fmt.Sprintf("/api/v1/namespaces/%s/configmaps/rhoai-updater-activity", SubNS)
+	ipListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/installplans", rhoai.SubNS)
+	catalogPodsPath := fmt.Sprintf("/api/v1/namespaces/%s/pods", rhoai.CatalogNS)
+	activityPath := fmt.Sprintf("/api/v1/namespaces/%s/configmaps/rhoai-updater-activity", rhoai.SubNS)
 	dscListPathV2 := "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters"
 	dscListPathV1 := "/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters"
 

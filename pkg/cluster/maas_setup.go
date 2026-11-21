@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -497,7 +498,7 @@ func (m *maasRun) waitPlatformReady(infra string) (*types.OperationResponse, err
 	last := ""
 	ready, err := kube.WaitForGone(c, MaaSPlatformTimeout, MaaSPoll, func(cc *Client) (bool, error) {
 		api := deploymentAvailable(cc, infra, "maas-api")
-		ai, _ := readyCondition(cc, namespacedPath(maasAPI(c), "aitenants", "ai-tenants", "models-as-a-service"))
+		ai, _ := readyCondition(cc, rhoai.NamespacedPath(maasAPI(c), "aitenants", "ai-tenants", "models-as-a-service"))
 		auth := maasGatewayAuth(cc)
 		msg := fmt.Sprintf("maas-api: %s; tenant: %s; gateway authentication: %s", map[string]string{"True": "available", "False": "starting", "missing": "not created yet"}[api], kube.FirstNonEmpty(map[string]string{"True": "ready", "False": "not ready", "missing": "not created yet"}[ai], "unknown"), kube.FirstNonEmpty(auth, "unknown"))
 		if msg != last {
@@ -525,7 +526,7 @@ func (m *maasRun) waitPlatformReady(infra string) (*types.OperationResponse, err
 // api/components/v1alpha1/aigateway_types.go), are not MaaS's and stay as
 // they are.
 func patchMaaSDSC(c *Client, aigateway, maas string, dryRun bool) error {
-	path, err := dataScienceClusterPath(c)
+	path, err := rhoai.DataScienceClusterPath(c)
 	if err != nil {
 		return err
 	}

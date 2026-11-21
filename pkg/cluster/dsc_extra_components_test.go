@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Model an upgrade whose CRD still accepts component names absent from its sample.
@@ -35,7 +37,7 @@ func TestDSCCompatibilityReportsCRDAcceptedExtraComponents(t *testing.T) {
 	mockDSCSamples(t, func(*http.Request) (int, string) { return 200, testDSCSample })
 	c, cleanup := newMockClient(map[string]mockResponse{
 		"/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io": {body: dscCRDWithLegacyComponents(t)},
-		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""):                            csvListMock("3.6.0"),
+		rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""):                csvListMock("3.6.0"),
 	})
 	defer cleanup()
 	var dsc map[string]any

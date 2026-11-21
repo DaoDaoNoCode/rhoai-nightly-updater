@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // DataScienceCluster / DSCInitialization readiness.
@@ -38,60 +39,10 @@ import (
 // KserveLLMInferenceServiceWideEPDependencies (severity Info) still said
 // "LeaderWorkerSet not installed".
 
-type dscCondition struct {
-	Type               string `json:"type"`
-	Status             string `json:"status"`
-	Reason             string `json:"reason"`
-	Message            string `json:"message"`
-	Severity           string `json:"severity"`
-	LastTransitionTime string `json:"lastTransitionTime"`
-}
-
-type dscObject struct {
-	APIVersion string `json:"apiVersion"`
-	Metadata   struct {
-		Name       string `json:"name"`
-		UID        string `json:"uid"`
-		Generation int64  `json:"generation"`
-	} `json:"metadata"`
-	Spec struct {
-		ApplicationsNamespace string `json:"applicationsNamespace"` // DSCInitialization
-		Monitoring            struct {
-			Namespace string `json:"namespace"` // DSCInitialization
-		} `json:"monitoring"`
-	} `json:"spec"`
-	Status struct {
-		Phase              string         `json:"phase"`
-		ObservedGeneration int64          `json:"observedGeneration"`
-		Conditions         []dscCondition `json:"conditions"`
-	} `json:"status"`
-}
-
-// listFirstServed lists a collection of group at the newest served version
-// that works (listServed) and returns the items. pathFmt is the collection
-// path with %s for the version. apiFound is false when no version is
-// served (no CRD).
-func listFirstServed(c *Client, group, pathFmt, resource string, fallback []string) (items []dscObject, apiFound bool, err error) {
-	r, err := listServed(c, group, pathFmt, nil, fallback)
-	if err != nil {
-		return nil, true, err
-	}
-	if r.Version == "" {
-		return nil, false, nil
-	}
-	var list struct {
-		Items []dscObject `json:"items"`
-	}
-	if err := json.Unmarshal(r.Body, &list); err != nil {
-		return nil, true, fmt.Errorf("parse %s: %w", resource, err)
-	}
-	return list.Items, true, nil
-}
-
 // conditionFailing: a non-Info condition that is not True (Degraded, the
 // one negative-polarity condition, when True). The roll-ups Ready and
 // Progressing are not counted.
-func conditionFailing(cond dscCondition) bool {
+func conditionFailing(cond rhoai.DSCCondition) bool {
 	if cond.Type == "Ready" || cond.Type == "Progressing" || strings.EqualFold(cond.Severity, "Info") {
 		return false
 	}
@@ -101,7 +52,7 @@ func conditionFailing(cond dscCondition) bool {
 	return cond.Status != "True"
 }
 
-func conditionLine(cond dscCondition) string {
+func conditionLine(cond rhoai.DSCCondition) string {
 	line := fmt.Sprintf("%s=%s", cond.Type, cond.Status)
 	if cond.Reason != "" {
 		line += fmt.Sprintf(" (%s)", cond.Reason)
@@ -114,7 +65,7 @@ func conditionLine(cond dscCondition) string {
 
 // failingConditions returns the failing conditions as lines. Duplicate
 // messages are reported once.
-func failingConditions(conds []dscCondition) []string {
+func failingConditions(conds []rhoai.DSCCondition) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, cond := range conds {
@@ -136,7 +87,7 @@ func failingConditions(conds []dscCondition) []string {
 type classifiedCondition struct {
 	Source     string // "DataScienceCluster default-dsc", "Trainer default-trainer"
 	Module     string // lower-case module kind, "" when not about one module
-	Cond       dscCondition
+	Cond       rhoai.DSCCondition
 	Blocking   bool // counts for Ready (severity not Info)
 	Deps       []*dependency
 	Gate       bool
@@ -164,7 +115,7 @@ func conditionModule(condType string, kinds []string) string {
 // moduleObject is a module CR with its lower-case kind.
 type moduleObject struct {
 	Kind, Module string
-	Obj          dscObject
+	Obj          rhoai.DSCObject
 }
 
 // staleSeen remembers, per module CR, the generation its operator lagged
@@ -212,20 +163,20 @@ func (m moduleObject) staleFor(c *Client, now time.Time) (time.Duration, bool) {
 	return 0, false
 }
 
-func listModuleObjects(c *Client, api componentAPI) ([]moduleObject, error) {
+func listModuleObjects(c *Client, api rhoai.ComponentAPI) ([]moduleObject, error) {
 	type result struct {
-		items []dscObject
+		items []rhoai.DSCObject
 		err   error
 	}
 	results := make([]result, len(api.Kinds))
 	parallelFor(len(api.Kinds), 6, func(i int) {
-		body, _, err := c.Get(api.Kinds[i].listPath())
+		body, _, err := c.Get(api.Kinds[i].ListPath())
 		if err != nil {
 			results[i].err = fmt.Errorf("list %s: %w", api.Kinds[i].Resource, err)
 			return
 		}
 		var list struct {
-			Items []dscObject `json:"items"`
+			Items []rhoai.DSCObject `json:"items"`
 		}
 		if err := json.Unmarshal(body, &list); err != nil {
 			results[i].err = fmt.Errorf("parse %s: %w", api.Kinds[i].Resource, err)
@@ -252,7 +203,7 @@ func listModuleObjects(c *Client, api componentAPI) ([]moduleObject, error) {
 // dscAnalysis is the classified state of the DataScienceCluster.
 type dscAnalysis struct {
 	Name       string
-	Ready      *dscCondition
+	Ready      *rhoai.DSCCondition
 	DSCConds   []*classifiedCondition // the DSC's failing conditions, and Info ones naming a dependency
 	ModConds   []*classifiedCondition // module CR conditions with a classified cause
 	Deps       []*dependency
@@ -329,10 +280,10 @@ func (cc *classifiedCondition) classify(deps map[string]*dependency, order *[]*d
 // analyzeDSC classifies the DSC's conditions and those of the module CRs,
 // resolves the prerequisites they name, and finds module operators in
 // back-off. appNS is the DSCInitialization's applications namespace.
-func analyzeDSC(c *Client, dsc dscObject, now time.Time) *dscAnalysis {
+func analyzeDSC(c *Client, dsc rhoai.DSCObject, now time.Time) *dscAnalysis {
 	a := &dscAnalysis{Name: dsc.Metadata.Name}
 	deps := map[string]*dependency{}
-	api, apiErr := discoverComponentAPI(c)
+	api, apiErr := rhoai.DiscoverComponentAPI(c)
 	a.APIErr = apiErr
 	var kinds []string
 	for _, k := range api.Kinds {
@@ -366,7 +317,7 @@ func analyzeDSC(c *Client, dsc dscObject, now time.Time) *dscAnalysis {
 	}
 
 	var modules []moduleObject
-	if api.served() {
+	if api.Served() {
 		modules, a.ModulesErr = listModuleObjects(c, api)
 	}
 	staleModules := map[string]string{}
@@ -461,7 +412,7 @@ func joinMentions(deps []*dependency) string {
 // analyzeCurrentDSC reads the DataScienceCluster and DSCInitialization and
 // analyses them (the restart fix checks again with it).
 func analyzeCurrentDSC(c *Client, now time.Time) (*dscAnalysis, error) {
-	dscs, apiFound, err := listFirstServed(c, dscGroup, dscListFmt, "datascienceclusters", dscFallbackVersions)
+	dscs, apiFound, err := rhoai.ListFirstServed(c, rhoai.DSCGroup, rhoai.DSCListFmt, "datascienceclusters", rhoai.DSCFallbackVersions)
 	if err != nil {
 		return nil, err
 	}
@@ -614,7 +565,7 @@ func gateProblem(c *Client, gates []*classifiedCondition) Problem {
 		ID:              dscGateProblemID,
 		Severity:        "critical",
 		Title:           "The DataScienceCluster waits on an upgrade gate",
-		AffectedObjects: []string{"ConfigMap " + SubNS + "/odh-upgrade-acks"},
+		AffectedObjects: []string{"ConfigMap " + rhoai.SubNS + "/odh-upgrade-acks"},
 	}
 	var desc, fixes []string
 	if ack {
@@ -622,13 +573,13 @@ func gateProblem(c *Client, gates []*classifiedCondition) Problem {
 		desc = append(desc, "Before provisioning a new version, the operator checks upgrade gates. An unacknowledged gate blocks provisioning until an administrator sets its key to \"true\" in ConfigMap odh-upgrade-acks. This is a deliberate manual step, not a bug.")
 		switch {
 		case err != nil:
-			evidence = append(evidence, fmt.Sprintf("ConfigMap %s/odh-upgrade-acks: %v%s", SubNS, err, templateHint(err)))
+			evidence = append(evidence, fmt.Sprintf("ConfigMap %s/odh-upgrade-acks: %v%s", rhoai.SubNS, err, templateHint(err)))
 			fixes = append(fixes, "Read what the gate is about, then set its key to \"true\" in ConfigMap odh-upgrade-acks (replace <key> in the command).")
 			p.TechnicalCmd = upgradeAckCommand("<key>")
 		case len(keys) == 0:
 			evidence = append(evidence, "ConfigMap odh-upgrade-acks has no key that is not \"true\"")
 			fixes = append(fixes, "No key is waiting in odh-upgrade-acks; read the ConfigMap and the operator logs for the gate's name.")
-			p.TechnicalCmd = shellCommand("oc", "get", "configmap", "odh-upgrade-acks", "-n", SubNS, "-o", "yaml")
+			p.TechnicalCmd = kube.ShellCommand("oc", "get", "configmap", "odh-upgrade-acks", "-n", rhoai.SubNS, "-o", "yaml")
 		default:
 			var cmds []string
 			for _, k := range keys {
@@ -643,7 +594,7 @@ func gateProblem(c *Client, gates []*classifiedCondition) Problem {
 		desc = append(desc, "The operator cannot work out which release the gates are for. That happens when an older operator runs over resources a newer version created (a downgrade, or an install of an older build); acknowledging does not help.")
 		fixes = append(fixes, "Install the operator version that created these resources, or a newer one (Update on the Status page).")
 		if p.TechnicalCmd == "" {
-			p.TechnicalCmd = shellCommand("oc", "get", "datasciencecluster", "-o", "jsonpath={.items[0].status.release.version}")
+			p.TechnicalCmd = kube.ShellCommand("oc", "get", "datasciencecluster", "-o", "jsonpath={.items[0].status.release.version}")
 		}
 	}
 	p.Description = strings.Join(desc, " ")
@@ -666,7 +617,7 @@ func checkDataScienceCluster(c *Client) checkOutput {
 
 	// The DSCI is read first: a DSCI in Error often explains why no DSC
 	// components deploy, so it is reported whatever the DSC state is.
-	dscis, dsciAPI, dsciErr := listFirstServed(c, dsciGroup, "/apis/dscinitialization.opendatahub.io/%s/dscinitializations", "dscinitializations", dsciFallbackVersions)
+	dscis, dsciAPI, dsciErr := rhoai.ListFirstServed(c, rhoai.DSCIGroup, "/apis/dscinitialization.opendatahub.io/%s/dscinitializations", "dscinitializations", rhoai.DSCIFallbackVersions)
 	var dsciProblem *Problem
 	if dsciErr == nil && dsciAPI && len(dscis) > 0 {
 		dsci := dscis[0]
@@ -684,7 +635,7 @@ func checkDataScienceCluster(c *Client) checkOutput {
 		}
 	}
 
-	dscs, apiFound, err := listFirstServed(c, dscGroup, dscListFmt, "datascienceclusters", dscFallbackVersions)
+	dscs, apiFound, err := rhoai.ListFirstServed(c, rhoai.DSCGroup, rhoai.DSCListFmt, "datascienceclusters", rhoai.DSCFallbackVersions)
 	switch {
 	case err != nil:
 		warn(fmt.Sprintf("could not verify the DataScienceCluster: %v", err))
@@ -776,13 +727,13 @@ func checkDataScienceCluster(c *Client) checkOutput {
 // notReadyProblem lists each failing DSC condition with its classified
 // cause and links the problems that fix them. It returns the number of
 // failing conditions.
-func (a *dscAnalysis) notReadyProblem(dsc dscObject, titles map[string]string, dsciProblem *Problem) (Problem, int) {
+func (a *dscAnalysis) notReadyProblem(dsc rhoai.DSCObject, titles map[string]string, dsciProblem *Problem) (Problem, int) {
 	ready := a.Ready
 	evidence := []string{fmt.Sprintf("DataScienceCluster %s: Ready=%s (%s): %s", dsc.Metadata.Name, ready.Status, ready.Reason, kube.TruncateText(ready.Message, 400))}
 	var related, unclassified, fixes []string
 	failing := 0
 	seen := map[string]bool{}
-	conds := append([]dscCondition{}, dsc.Status.Conditions...)
+	conds := append([]rhoai.DSCCondition{}, dsc.Status.Conditions...)
 	sort.SliceStable(conds, func(i, j int) bool { return conds[i].Type < conds[j].Type })
 	for _, cond := range conds {
 		var cc *classifiedCondition

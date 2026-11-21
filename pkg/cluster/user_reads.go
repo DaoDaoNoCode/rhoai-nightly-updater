@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -154,7 +155,7 @@ func connectionState(u *Client, project string, terminating bool) (string, strin
 	if terminating {
 		return "", ""
 	}
-	meta, found, err := kube.ReadObjectMeta(u, namespacedPath("v1", "secrets", project, connectionSecretName))
+	meta, found, err := kube.ReadObjectMeta(u, rhoai.NamespacedPath("v1", "secrets", project, connectionSecretName))
 	switch {
 	case err != nil:
 		msg, _ := userReadProblem("the connection", project, err)
@@ -185,7 +186,7 @@ func listProjectLLMInferenceServices(u *Client, project string) ([]llmisvcObject
 	var list struct {
 		Items []llmisvcObject `json:"items"`
 	}
-	found, err := u.GetIntoOptional(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, ""), &list)
+	found, err := u.GetIntoOptional(rhoai.NamespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, ""), &list)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse LLMInferenceServices: %w", err)
@@ -215,7 +216,7 @@ func listProjectInferenceServices(u *Client, project string) ([]types.ProjectInf
 			} `json:"status"`
 		} `json:"items"`
 	}
-	found, err := u.GetIntoOptional(namespacedPath("serving.kserve.io/v1beta1", "inferenceservices", project, ""), &list)
+	found, err := u.GetIntoOptional(rhoai.NamespacedPath("serving.kserve.io/v1beta1", "inferenceservices", project, ""), &list)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse InferenceServices: %w", err)

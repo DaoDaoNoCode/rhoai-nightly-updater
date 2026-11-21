@@ -14,6 +14,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -25,7 +26,7 @@ func pullSecretCountingClient(t *testing.T) (*Client, *atomic.Int32) {
 	var reads atomic.Int32
 	// In memory, so the client also works in a synctest bubble.
 	api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret") {
+		if r.URL.Path != rhoai.NamespacedPath("v1", "secrets", "kube-system", "additional-pull-secret") {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`))
 			return

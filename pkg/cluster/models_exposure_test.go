@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -361,8 +362,8 @@ func TestModelsSetup_PullFailureThatRecovers(t *testing.T) {
 // Kuadrant reported missing alone does not block models (internal-only
 // works without it); anything else missing still does.
 func TestModelsBlock_ConnectivityLinkAloneIsNoBlock(t *testing.T) {
-	dsc := func(msg string) dscRead {
-		return dscRead{Object: map[string]any{"metadata": map[string]any{"name": "default-dsc"}, "spec": map[string]any{"components": map[string]any{"kserve": map[string]any{"managementState": "Managed"}}},
+	dsc := func(msg string) rhoai.DSCRead {
+		return rhoai.DSCRead{Object: map[string]any{"metadata": map[string]any{"name": "default-dsc"}, "spec": map[string]any{"components": map[string]any{"kserve": map[string]any{"managementState": "Managed"}}},
 			"status": map[string]any{"conditions": []any{map[string]any{"type": llmDependenciesCondition, "status": "False", "message": msg}}}}}
 	}
 	if b, deps := modelsBlock(dsc("Red Hat Connectivity Link is not installed")); b != nil || deps != "False" {

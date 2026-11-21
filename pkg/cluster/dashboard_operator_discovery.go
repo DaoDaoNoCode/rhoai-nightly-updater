@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Which Deployment Dashboard Dev pauses, found at run time.
@@ -67,19 +68,19 @@ func (e *dashboardOperatorError) Unwrap() error { return e.err }
 // discoverDashboardTarget identifies the dashboard module's operator, or
 // that the cluster has none (see above). It always reads the cluster.
 func discoverDashboardTarget(c *Client) (dashboardTarget, error) {
-	api, err := discoverComponentAPI(c)
+	api, err := rhoai.DiscoverComponentAPI(c)
 	if err != nil {
 		return dashboardTarget{}, &dashboardOperatorError{err: err}
 	}
 	legacy := ""
-	switch _, served := api.kindOf(componentAPIGroup, "Dashboard"); {
-	case api.Groups[componentAPIGroup] == "":
-		legacy = "the " + componentAPIGroup + " API is not served"
+	switch _, served := api.KindOf(rhoai.ComponentAPIGroup, "Dashboard"); {
+	case api.Groups[rhoai.ComponentAPIGroup] == "":
+		legacy = "the " + rhoai.ComponentAPIGroup + " API is not served"
 	case !served:
-		legacy = "no Dashboard kind is served in " + componentAPIGroup
+		legacy = "no Dashboard kind is served in " + rhoai.ComponentAPIGroup
 	}
 	if legacy == "" {
-		op, why, err := newModuleOperatorFinder(c, func() (componentAPI, error) { return api, nil }).find("dashboard", "")
+		op, why, err := newModuleOperatorFinder(c, func() (rhoai.ComponentAPI, error) { return api, nil }).find("dashboard", "")
 		switch {
 		case err != nil:
 			return dashboardTarget{}, &dashboardOperatorError{err: err}
@@ -90,8 +91,8 @@ func discoverDashboardTarget(c *Client) (dashboardTarget, error) {
 		}
 		legacy = "the RHOAI operator reconciles Dashboard itself (" + op.Via + ")"
 	}
-	ns, err := appsNamespace(c)
-	if err != nil && !errors.Is(err, errNoDSCInitialization) {
+	ns, err := rhoai.AppsNamespace(c)
+	if err != nil && !errors.Is(err, rhoai.ErrNoDSCInitialization) {
 		return dashboardTarget{}, &dashboardOperatorError{err: err}
 	}
 	return dashboardTarget{Legacy: legacy, Namespace: ns}, nil
@@ -120,7 +121,7 @@ func cachedDashboardTarget(c *Client) (dashboardTarget, error) {
 // readDashboardOperatorAt reads the operator Deployment ns/name; nil when
 // it does not exist.
 func readDashboardOperatorAt(c *Client, ns, name string) (*dashboardDeployment, error) {
-	body, status, err := c.Get(namespacedPath("apps/v1", "deployments", ns, name))
+	body, status, err := c.Get(rhoai.NamespacedPath("apps/v1", "deployments", ns, name))
 	if status == http.StatusNotFound {
 		return nil, nil
 	}

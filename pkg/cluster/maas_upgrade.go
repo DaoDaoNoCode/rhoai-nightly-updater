@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -103,7 +104,7 @@ func (m *maasRun) upgradeRHCL() (*types.OperationResponse, error) {
 		// channel.
 		hop := hopChannel(pkg, p.installedCSV, target)
 		if want != target || hop == "" {
-			return m.fail("upgrade", fmt.Sprintf("OLM stays at %s on channel %s and the catalog lists no channel that leads on from it. A cluster-admin checks the upgrade path (oc get packagemanifest %s -n %s -o yaml). Subscription %s/%s is on channel %s.", p.installedCSV, want, rhclOperator.pkg, CatalogNS, ns, name, want), "not_ready", "no upgrade path")
+			return m.fail("upgrade", fmt.Sprintf("OLM stays at %s on channel %s and the catalog lists no channel that leads on from it. A cluster-admin checks the upgrade path (oc get packagemanifest %s -n %s -o yaml). Subscription %s/%s is on channel %s.", p.installedCSV, want, rhclOperator.pkg, rhoai.CatalogNS, ns, name, want), "not_ready", "no upgrade path")
 		}
 		m.step("upgrade", "running", fmt.Sprintf("OLM has no path from %s straight to %s; going through channel %s first.", p.installedCSV, targetCh.CurrentCSV, hop))
 		hopped, want = hop, hop

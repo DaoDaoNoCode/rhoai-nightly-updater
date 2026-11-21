@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // The model's gateway refs while it is published: the MaaS gateway alone.
@@ -221,11 +222,11 @@ func writeModelGatewayRefs(c *Client, project, name, rv string, refs gatewayRefs
 func modelRoutePath(project, name string) (string, bool) {
 	switch name {
 	case "smollm2-135m-instruct":
-		return namespacedPath("gateway.networking.k8s.io/v1", "httproutes", project, "smollm2-135m-instruct-kserve-route"), true
+		return rhoai.NamespacedPath("gateway.networking.k8s.io/v1", "httproutes", project, "smollm2-135m-instruct-kserve-route"), true
 	case "qwen25-05b-instruct":
-		return namespacedPath("gateway.networking.k8s.io/v1", "httproutes", project, "qwen25-05b-instruct-kserve-route"), true
+		return rhoai.NamespacedPath("gateway.networking.k8s.io/v1", "httproutes", project, "qwen25-05b-instruct-kserve-route"), true
 	case "qwen3-1-7b":
-		return namespacedPath("gateway.networking.k8s.io/v1", "httproutes", project, "qwen3-1-7b-kserve-route"), true
+		return rhoai.NamespacedPath("gateway.networking.k8s.io/v1", "httproutes", project, "qwen3-1-7b-kserve-route"), true
 	}
 	return "", false
 }

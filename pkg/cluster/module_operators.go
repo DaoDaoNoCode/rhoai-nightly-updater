@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Which Deployment removes a module CR's finalizers, found at run time.
@@ -135,7 +136,7 @@ func (d moduleOperatorDeployment) platformOwner() string {
 // checks.
 type moduleOperatorFinder struct {
 	c   *Client
-	api func() (componentAPI, error)
+	api func() (rhoai.ComponentAPI, error)
 
 	mu          sync.Mutex
 	loaded      bool
@@ -191,7 +192,7 @@ func (f *moduleOperatorFinder) loadPods() error {
 	}
 	f.podsLoaded = true
 	var items []moduleOperatorPod
-	if err := f.c.ListInto(namespacedPath("v1", "pods", f.appNS, ""), &items); err != nil {
+	if err := f.c.ListInto(rhoai.NamespacedPath("v1", "pods", f.appNS, ""), &items); err != nil {
 		if kube.IsDecodeError(err) {
 			f.podsErr = fmt.Errorf("parse Pods in %s: %w", f.appNS, err)
 			return f.podsErr
@@ -203,7 +204,7 @@ func (f *moduleOperatorFinder) loadPods() error {
 	return nil
 }
 
-func newModuleOperatorFinder(c *Client, api func() (componentAPI, error)) *moduleOperatorFinder {
+func newModuleOperatorFinder(c *Client, api func() (rhoai.ComponentAPI, error)) *moduleOperatorFinder {
 	if api == nil {
 		api = cachedComponentAPI(c)
 	}
@@ -219,13 +220,13 @@ func (f *moduleOperatorFinder) load() error {
 }
 
 func (f *moduleOperatorFinder) read() error {
-	appNS, err := appsNamespace(f.c)
+	appNS, err := rhoai.AppsNamespace(f.c)
 	if err != nil {
 		return err
 	}
 	f.appNS = appNS
 
-	body, _, err := f.c.Get(clusterPath("rbac.authorization.k8s.io/v1", "clusterroles", ""))
+	body, _, err := f.c.Get(rhoai.ClusterPath("rbac.authorization.k8s.io/v1", "clusterroles", ""))
 	if err != nil {
 		return fmt.Errorf("list ClusterRoles: %w", err)
 	}
@@ -245,7 +246,7 @@ func (f *moduleOperatorFinder) read() error {
 		f.roles[r.Metadata.Name] = r.Rules
 	}
 
-	body, _, err = f.c.Get(clusterPath("rbac.authorization.k8s.io/v1", "clusterrolebindings", ""))
+	body, _, err = f.c.Get(rhoai.ClusterPath("rbac.authorization.k8s.io/v1", "clusterrolebindings", ""))
 	if err != nil {
 		return fmt.Errorf("list ClusterRoleBindings: %w", err)
 	}
@@ -257,7 +258,7 @@ func (f *moduleOperatorFinder) read() error {
 	}
 	f.bindings = bindings.Items
 
-	body, _, err = f.c.Get(namespacedPath("apps/v1", "deployments", f.appNS, ""))
+	body, _, err = f.c.Get(rhoai.NamespacedPath("apps/v1", "deployments", f.appNS, ""))
 	if err != nil {
 		return fmt.Errorf("list Deployments in %s: %w", f.appNS, err)
 	}
@@ -333,35 +334,35 @@ func (f *moduleOperatorFinder) find(module, crName string) (op *moduleOperator, 
 	if err != nil {
 		return nil, "", fmt.Errorf("read the installed RHOAI CSV: %w", err)
 	}
-	crd := kind.crd()
+	crd := kind.CRD()
 	if !slices.Contains(csv.OwnedCRDs, crd) {
 		return nil, fmt.Sprintf("no ServiceAccount in %s may update %s and %s/finalizers, and the installed CSV %s does not own CRD %s", f.appNS, plural, plural, csv.Name, crd), nil
 	}
 	if len(csv.Deployments) != 1 {
 		return nil, fmt.Sprintf("the installed CSV %s owns CRD %s but installs %d Deployments", csv.Name, crd, len(csv.Deployments)), nil
 	}
-	return &moduleOperator{Namespace: SubNS, Name: csv.Deployments[0], RHOAI: true,
+	return &moduleOperator{Namespace: rhoai.SubNS, Name: csv.Deployments[0], RHOAI: true,
 		Via: fmt.Sprintf("the RHOAI operator: the installed CSV %s owns CRD %s", csv.Name, crd)}, "", nil
 }
 
 // moduleResource returns the cluster-scoped module kind named after module
 // (in either module API group), with the RBAC and Deployments loaded; why
 // says why the tool cannot identify its operator. f.mu must be held.
-func (f *moduleOperatorFinder) moduleResource(module string) (kind componentKind, why string, err error) {
+func (f *moduleOperatorFinder) moduleResource(module string) (kind rhoai.ComponentKind, why string, err error) {
 	api, err := f.api()
 	if err != nil {
-		return componentKind{}, "", err
+		return rhoai.ComponentKind{}, "", err
 	}
-	kind, ok := api.kindForModule(module)
+	kind, ok := api.KindForModule(module)
 	switch {
 	case !ok:
-		return componentKind{}, fmt.Sprintf("no %s kind is named after %s (or more than one)", strings.Join(moduleAPIGroups, " or "), module), nil
+		return rhoai.ComponentKind{}, fmt.Sprintf("no %s kind is named after %s (or more than one)", strings.Join(rhoai.ModuleAPIGroups, " or "), module), nil
 	case kind.Namespaced:
 		// RoleBindings could grant a namespaced kind; they are not read.
-		return componentKind{}, fmt.Sprintf("%s is namespaced; the tool identifies the operators of cluster-scoped module kinds only", kind.Kind), nil
+		return rhoai.ComponentKind{}, fmt.Sprintf("%s is namespaced; the tool identifies the operators of cluster-scoped module kinds only", kind.Kind), nil
 	}
 	if err := f.load(); err != nil {
-		return componentKind{}, "", err
+		return rhoai.ComponentKind{}, "", err
 	}
 	return kind, "", nil
 }

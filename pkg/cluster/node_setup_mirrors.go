@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // The image mirror objects that the nodes' /etc/containers/registries.conf
@@ -66,7 +67,7 @@ func (r mirrorRule) hasRealMirror() bool {
 // redirectsToQuay: the rule serves pulls of IDMSSource by digest from
 // MirrorTarget, which is what the image mirror of this setup is for.
 func (r mirrorRule) redirectsToQuay() bool {
-	return r.digest() && r.Source == IDMSSource && slices.Contains(r.Mirrors, MirrorTarget)
+	return r.digest() && r.Source == rhoai.IDMSSource && slices.Contains(r.Mirrors, MirrorTarget)
 }
 
 // scopeIsNestedInsideScope is runtime-utils registries.go
@@ -99,10 +100,10 @@ func scopeIsNestedInsideScope(subScope, superScope string) bool {
 // mirror.local/redhat/product/repo).
 func (r mirrorRule) pathFor(m string) string {
 	if strings.HasPrefix(r.Source, "*.") {
-		host, _, _ := strings.Cut(IDMSSource, "/")
-		return m + IDMSSource[len(host):]
+		host, _, _ := strings.Cut(rhoai.IDMSSource, "/")
+		return m + rhoai.IDMSSource[len(host):]
 	}
-	return m + IDMSSource[len(r.Source):]
+	return m + rhoai.IDMSSource[len(r.Source):]
 }
 
 // idmsRules are the rules of the ImageDigestMirrorSets listed.
@@ -133,7 +134,7 @@ func listICSPRules(c *Client) ([]mirrorRule, error) {
 			} `json:"spec"`
 		} `json:"items"`
 	}
-	found, err := c.GetIntoOptional(clusterPath("operator.openshift.io/v1alpha1", "imagecontentsourcepolicies", ""), &list)
+	found, err := c.GetIntoOptional(rhoai.ClusterPath("operator.openshift.io/v1alpha1", "imagecontentsourcepolicies", ""), &list)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse ImageContentSourcePolicies: %w", err)
@@ -169,7 +170,7 @@ func listITMSRules(c *Client) ([]mirrorRule, error) {
 			} `json:"spec"`
 		} `json:"items"`
 	}
-	found, err := c.GetIntoOptional(clusterPath("config.openshift.io/v1", "imagetagmirrorsets", ""), &list)
+	found, err := c.GetIntoOptional(rhoai.ClusterPath("config.openshift.io/v1", "imagetagmirrorsets", ""), &list)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse ImageTagMirrorSets: %w", err)
@@ -220,10 +221,10 @@ func parentScopeRules(rules []mirrorRule) []mirrorRule {
 		if !r.hasRealMirror() {
 			continue
 		}
-		if r.Source == IDMSSource {
+		if r.Source == rhoai.IDMSSource {
 			return nil
 		}
-		if scopeIsNestedInsideScope(IDMSSource, r.Source) {
+		if scopeIsNestedInsideScope(rhoai.IDMSSource, r.Source) {
 			parents = append(parents, r)
 		}
 	}
@@ -243,7 +244,7 @@ func parentScopeRules(rules []mirrorRule) []mirrorRule {
 func policyConflictRules(rules []mirrorRule) []mirrorRule {
 	var out []mirrorRule
 	for _, r := range rules {
-		if r.Source == IDMSSource && r.Policy != "" && r.Policy != "AllowContactingSource" {
+		if r.Source == rhoai.IDMSSource && r.Policy != "" && r.Policy != "AllowContactingSource" {
 			out = append(out, r)
 		}
 	}
@@ -257,7 +258,7 @@ func policyConflictRefusal(conflicts []mirrorRule) string {
 		names[i] = r.ref()
 	}
 	return fmt.Sprintf("%s sets mirrorSourcePolicy %s for %s. ImageDigestMirrorSet %s would leave it at the default, AllowContactingSource, and the Machine Config Operator refuses the cluster's whole mirror configuration while two objects set different policies for one source, so no mirror change would reach the nodes. So it is not created. Nothing was changed. "+
-		"To use %s, the cluster's administrator adds it to the mirrors of an ImageDigestMirrorSet entry for %s that has the same mirrorSourcePolicy (the entry there, if it is an ImageDigestMirrorSet's).", strings.Join(names, ", "), conflicts[0].Policy, IDMSSource, MirrorName, MirrorTarget, IDMSSource)
+		"To use %s, the cluster's administrator adds it to the mirrors of an ImageDigestMirrorSet entry for %s that has the same mirrorSourcePolicy (the entry there, if it is an ImageDigestMirrorSet's).", strings.Join(names, ", "), conflicts[0].Policy, rhoai.IDMSSource, MirrorName, MirrorTarget, rhoai.IDMSSource)
 }
 
 // parentScopeRefusal explains why the mirror is not created over parents:
@@ -273,10 +274,10 @@ func parentScopeRefusal(parents []mirrorRule) string {
 		} else {
 			pulls, tag = "by tag", true
 		}
-		fmt.Fprintf(&b, "%s maps %s to %s, so pulls of %s images %s go to %s now. ", r.ref(), r.Source, strings.Join(r.Mirrors, ", "), IDMSSource, pulls, strings.Join(r.mirrorPaths(), ", "))
+		fmt.Fprintf(&b, "%s maps %s to %s, so pulls of %s images %s go to %s now. ", r.ref(), r.Source, strings.Join(r.Mirrors, ", "), rhoai.IDMSSource, pulls, strings.Join(r.mirrorPaths(), ", "))
 	}
 	fmt.Fprintf(&b, "The nodes use only the mirrors of the most specific source that matches an image, and the Machine Config Operator copies a mirror to a namespace inside its source only while that namespace has no mirror of its own. "+
-		"Creating ImageDigestMirrorSet %s, a mirror for exactly %s, would take those pulls away from that mirror:", MirrorName, IDMSSource)
+		"Creating ImageDigestMirrorSet %s, a mirror for exactly %s, would take those pulls away from that mirror:", MirrorName, rhoai.IDMSSource)
 	if digest {
 		fmt.Fprintf(&b, " pulls by digest would go to %s, then to registry.redhat.io itself", MirrorTarget)
 	}
@@ -286,7 +287,7 @@ func parentScopeRefusal(parents []mirrorRule) string {
 	if tag {
 		b.WriteString(" pulls by tag would go to registry.redhat.io itself")
 	}
-	b.WriteString(". So it is not created. Nothing was changed. To keep that mirror in use, the cluster's administrator adds an entry for " + IDMSSource + " to that object, ")
+	b.WriteString(". So it is not created. Nothing was changed. To keep that mirror in use, the cluster's administrator adds an entry for " + rhoai.IDMSSource + " to that object, ")
 	hints := make([]string, len(parents))
 	for i, r := range parents {
 		hints[i] = manualEntryHint(r)
@@ -308,7 +309,7 @@ func mirrorRemoveImpactFor(remaining []mirrorRule, others []string) (impact, und
 	// those of a parent scope do again (registries.go:331-345).
 	var same []string
 	for _, r := range remaining {
-		if r.Source == IDMSSource && r.hasRealMirror() && r.digest() {
+		if r.Source == rhoai.IDMSSource && r.hasRealMirror() && r.digest() {
 			same = append(same, fmt.Sprintf("%s maps it to %s", r.ref(), strings.Join(r.Mirrors, ", ")))
 		}
 	}
@@ -356,5 +357,5 @@ func manualEntryHint(r mirrorRule) string {
 		mirrors = append(mirrors, MirrorTarget)
 		after = "that also sets up the image mirror"
 	}
-	return fmt.Sprintf("in %s of %s: source %s, mirrors %s (%s)", field, r.ref(), IDMSSource, strings.Join(mirrors, ", "), after)
+	return fmt.Sprintf("in %s of %s: source %s, mirrors %s (%s)", field, r.ref(), rhoai.IDMSSource, strings.Join(mirrors, ", "), after)
 }

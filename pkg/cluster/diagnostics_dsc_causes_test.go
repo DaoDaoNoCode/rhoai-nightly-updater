@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 const (
@@ -182,8 +184,8 @@ func TestDSCCheck_MissingPrerequisitesGetCommandsAndClassification(t *testing.T)
 // the commands stay for reference.
 func TestDSCCheck_MissingPrerequisiteUnderGitOps(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs())
-	w.f.obj(subscriptionPath(), map[string]any{"metadata": map[string]any{"name": SubName, "namespace": SubNS, "annotations": trackingID("Subscription", SubNS, SubName)}})
-	w.f.obj(namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName), map[string]any{"metadata": map[string]any{"name": CatalogName, "namespace": CatalogNS, "annotations": trackingID("CatalogSource", CatalogNS, CatalogName)}})
+	w.f.obj(subscriptionPath(), map[string]any{"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS, "annotations": trackingID("Subscription", rhoai.SubNS, rhoai.SubName)}})
+	w.f.obj(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName), map[string]any{"metadata": map[string]any{"name": rhoai.CatalogName, "namespace": rhoai.CatalogNS, "annotations": trackingID("CatalogSource", rhoai.CatalogNS, rhoai.CatalogName)}})
 	out := checkDataScienceCluster(w.c)
 	js, ok := problemsByID(out)["prerequisite-missing-job-set"]
 	if !ok {
@@ -618,14 +620,14 @@ func TestDSCCheck_CatalogUnreadableStillReports(t *testing.T) {
 
 func TestComponentCause(t *testing.T) {
 	for _, tt := range []struct {
-		cond dscCondition
+		cond rhoai.DSCCondition
 		want string
 	}{
-		{dscCondition{Message: msgTrainerJobSet}, "Prerequisite operator not installed: JobSet Operator"},
-		{dscCondition{Message: msgWideEP}, "Prerequisite operators not installed: LeaderWorkerSet, cert-manager operator"},
-		{dscCondition{Reason: "AdminAckRequired", Message: msgGateAck}, "An upgrade gate holds provisioning"},
-		{dscCondition{Message: msgRayStale}, "Its module operator has not reconciled the current spec yet"},
-		{dscCondition{Message: "boom"}, ""},
+		{rhoai.DSCCondition{Message: msgTrainerJobSet}, "Prerequisite operator not installed: JobSet Operator"},
+		{rhoai.DSCCondition{Message: msgWideEP}, "Prerequisite operators not installed: LeaderWorkerSet, cert-manager operator"},
+		{rhoai.DSCCondition{Reason: "AdminAckRequired", Message: msgGateAck}, "An upgrade gate holds provisioning"},
+		{rhoai.DSCCondition{Message: msgRayStale}, "Its module operator has not reconciled the current spec yet"},
+		{rhoai.DSCCondition{Message: "boom"}, ""},
 	} {
 		if got := componentCause(tt.cond); got != tt.want {
 			t.Errorf("componentCause(%q) = %q, want %q", tt.cond.Message, got, tt.want)

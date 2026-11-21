@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -35,7 +36,7 @@ func serveModules(f *resourceFake) {
 	defer f.mu.Unlock()
 	f.groups = map[string]string{
 		"/apis/datasciencecluster.opendatahub.io":           dscGroupDoc,
-		"/apis/" + componentAPIGroup:                        `{"kind":"APIGroup","name":"components.platform.opendatahub.io","preferredVersion":{"groupVersion":"components.platform.opendatahub.io/v1alpha1","version":"v1alpha1"}}`,
+		"/apis/" + rhoai.ComponentAPIGroup:                  `{"kind":"APIGroup","name":"components.platform.opendatahub.io","preferredVersion":{"groupVersion":"components.platform.opendatahub.io/v1alpha1","version":"v1alpha1"}}`,
 		"/apis/components.platform.opendatahub.io/v1alpha1": `{"resources":[{"name":"kueues","kind":"Kueue","verbs":["list","get","patch"]}]}`,
 	}
 }
@@ -164,9 +165,9 @@ func TestHardResetRefusesAModuleCRWithAnUnknownOperator(t *testing.T) {
 	}
 	// The installed CSV owns the Kueue CRD: the RHOAI operator reconciles
 	// it, and there is no module operator to wait for.
-	csv := f.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"))
+	csv := f.get(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"))
 	ensureMap(csv, "spec")["customresourcedefinitions"] = map[string]any{"owned": []any{map[string]any{"name": "kueues.components.platform.opendatahub.io"}}}
-	f.put(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), csv)
+	f.put(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), csv)
 	if ops, refusal, err := hardResetOperators(c, liveDSCUID); err != nil || len(ops) != 0 || refusal != "" {
 		t.Fatalf("ops %+v, refusal %q, err %v", ops, refusal, err)
 	}

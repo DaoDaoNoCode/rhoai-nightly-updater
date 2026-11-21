@@ -35,6 +35,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"gopkg.in/yaml.v3"
 )
 
@@ -741,8 +742,8 @@ func (r resolver) resolve(e ast.Expr) []string {
 
 func (r resolver) resolveCall(x *ast.CallExpr) []string {
 	if fun, ok := x.Fun.(*ast.SelectorExpr); ok {
-		if fun.Sel.Name == "listPath" && len(x.Args) == 0 {
-			// componentKind.listPath: a discovered module kind.
+		if fun.Sel.Name == "ListPath" && len(x.Args) == 0 {
+			// rhoai.ComponentKind.ListPath: a discovered module kind.
 			return moduleKindPaths()
 		}
 		if pkg, ok := fun.X.(*ast.Ident); ok && pkg.Name == "fmt" && fun.Sel.Name == "Sprintf" && len(x.Args) > 0 {
@@ -774,17 +775,17 @@ func (r resolver) resolveCall(x *ast.CallExpr) []string {
 		return []string{unknownPart}
 	}
 	switch callee.name {
-	case "namespacedPath", "clusterPath":
+	case "NamespacedPath", "ClusterPath":
 		var args [][]string
 		for _, a := range x.Args {
 			args = append(args, r.resolve(a))
 		}
 		var out []string
 		for _, combo := range combos(args) {
-			if callee.name == "namespacedPath" {
-				out = append(out, namespacedPath(combo[0], combo[1], combo[2], combo[3]))
+			if callee.name == "NamespacedPath" {
+				out = append(out, rhoai.NamespacedPath(combo[0], combo[1], combo[2], combo[3]))
 			} else {
-				out = append(out, clusterPath(combo[0], combo[1], combo[2]))
+				out = append(out, rhoai.ClusterPath(combo[0], combo[1], combo[2]))
 			}
 		}
 		return out
@@ -795,7 +796,7 @@ func (r resolver) resolveCall(x *ast.CallExpr) []string {
 		return []string{maasGroup + "/" + unknownPart}
 	case "gitOpsAdmissionPolicyName":
 		return []string{gitOpsPolicyNameMarker}
-	case "componentListPath":
+	case "ComponentListPath":
 		// A discovered kind of one of the module API groups.
 		return moduleKindPaths()
 	}
@@ -806,10 +807,10 @@ func (r resolver) resolveCall(x *ast.CallExpr) []string {
 }
 
 // moduleKindPaths are the collections of a discovered kind in each module
-// API group (component_cleanup.go), at a discovered version.
+// API group (internal/rhoai platform.go), at a discovered version.
 func moduleKindPaths() []string {
 	var out []string
-	for _, g := range moduleAPIGroups {
+	for _, g := range rhoai.ModuleAPIGroups {
 		out = append(out, "/apis/"+g+"/"+unknownPart+"/"+unknownPart)
 	}
 	return out

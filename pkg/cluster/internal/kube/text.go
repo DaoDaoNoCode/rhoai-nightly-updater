@@ -3,6 +3,7 @@ package kube
 // Text helpers for the messages users read.
 
 import (
+	"regexp"
 	"strings"
 )
 
@@ -32,4 +33,24 @@ func NonEmpty(s, fallback string) string {
 		return fallback
 	}
 	return s
+}
+
+// ShellQuote quotes s for a POSIX shell unless it only has characters that
+// need no quoting.
+func ShellQuote(s string) string {
+	if s != "" && safeShellWord.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+var safeShellWord = regexp.MustCompile(`^[A-Za-z0-9._/:=@%+,-]+$`)
+
+// ShellCommand joins words into a command line, quoting each.
+func ShellCommand(words ...string) string {
+	quoted := make([]string, len(words))
+	for i, w := range words {
+		quoted[i] = ShellQuote(w)
+	}
+	return strings.Join(quoted, " ")
 }

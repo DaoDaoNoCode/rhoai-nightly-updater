@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // moduleDeletionGrace is how long a module CR may be deleting before
@@ -24,7 +25,7 @@ func checkPlatformModules(c *Client) checkOutput {
 
 	// Platform provisioning gates (rhods-operator rhoai-3.6
 	// docs/upgrade-ordering.md "Admin ack gates", pkg/controller/provision).
-	r, err := listServed(c, platformGroup, platformListFmt, nil, platformFallbackVersions)
+	r, err := rhoai.ListServed(c, rhoai.PlatformGroup, rhoai.PlatformListFmt, nil, rhoai.PlatformFallbackVersions)
 	body := r.Body
 	switch {
 	case kube.IsK8sNotFound(err), err == nil && r.Version == "":
@@ -37,7 +38,7 @@ func checkPlatformModules(c *Client) checkOutput {
 		out.check.Status = "warn"
 	default:
 		var list struct {
-			Items []dscObject `json:"items"`
+			Items []rhoai.DSCObject `json:"items"`
 		}
 		if json.Unmarshal(body, &list) == nil && len(list.Items) > 0 {
 			pl := list.Items[0]
@@ -54,7 +55,7 @@ func checkPlatformModules(c *Client) checkOutput {
 					fix := "Read what the gate is about, then acknowledge it in the OpenShift console or with the command below (replace <key>)."
 					switch {
 					case keysErr != nil:
-						evidence = append(evidence, fmt.Sprintf("ConfigMap %s/odh-upgrade-acks: %v", SubNS, keysErr))
+						evidence = append(evidence, fmt.Sprintf("ConfigMap %s/odh-upgrade-acks: %v", rhoai.SubNS, keysErr))
 					case len(keys) > 0:
 						var cmds []string
 						for _, k := range keys {
@@ -70,7 +71,7 @@ func checkPlatformModules(c *Client) checkOutput {
 						Title:           "The operator waits for an administrator to acknowledge an upgrade step",
 						Description:     "Before provisioning a new version, the operator checks upgrade gates. An unacknowledged gate blocks all component provisioning until an administrator sets its key to \"true\" in ConfigMap odh-upgrade-acks. This is a deliberate manual step, not a bug.",
 						Evidence:        evidence,
-						AffectedObjects: []string{"ConfigMap " + SubNS + "/odh-upgrade-acks"},
+						AffectedObjects: []string{"ConfigMap " + rhoai.SubNS + "/odh-upgrade-acks"},
 						Fix:             fix,
 						TechnicalCmd:    cmd,
 					})
@@ -127,7 +128,7 @@ func pendingUpgradeAckKeys(c *Client) ([]string, map[string]string, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := c.GetInto(namespacedPath("v1", "configmaps", SubNS, "odh-upgrade-acks"), &cm); err != nil {
+	if err := c.GetInto(rhoai.NamespacedPath("v1", "configmaps", rhoai.SubNS, "odh-upgrade-acks"), &cm); err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, nil, fmt.Errorf("parse ConfigMap odh-upgrade-acks: %w", err)
 		}
@@ -146,7 +147,7 @@ func pendingUpgradeAckKeys(c *Client) ([]string, map[string]string, error) {
 // upgradeAckCommand acknowledges one upgrade gate.
 func upgradeAckCommand(key string) string {
 	patch, _ := json.Marshal(map[string]any{"data": map[string]string{key: "true"}})
-	return shellCommand("oc", "patch", "configmap", "odh-upgrade-acks", "-n", SubNS, "--type", "merge", "-p", string(patch))
+	return kube.ShellCommand("oc", "patch", "configmap", "odh-upgrade-acks", "-n", rhoai.SubNS, "--type", "merge", "-p", string(patch))
 }
 
 type stuckModule struct {
@@ -159,7 +160,7 @@ type stuckModule struct {
 }
 
 func stuckModuleCRs(c *Client, now time.Time) ([]stuckModule, error) {
-	api, err := discoverComponentAPI(c)
+	api, err := rhoai.DiscoverComponentAPI(c)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +184,7 @@ func stuckModuleCRs(c *Client, now time.Time) ([]stuckModule, error) {
 			if !ok || now.Sub(t) < moduleDeletionGrace {
 				continue
 			}
-			out = append(out, stuckModule{Module: k.module(), Name: it.Metadata.Name, Finalizers: it.Metadata.Finalizers, Since: now.Sub(t), CRD: k.crd()})
+			out = append(out, stuckModule{Module: k.Module(), Name: it.Metadata.Name, Finalizers: it.Metadata.Finalizers, Since: now.Sub(t), CRD: k.CRD()})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Module < out[j].Module })
@@ -232,7 +233,7 @@ func stuckModuleProblem(c *Client, operators *moduleOperatorFinder, m stuckModul
 		Evidence:        evidence,
 		AffectedObjects: []string{fmt.Sprintf("%s %s", m.Module, m.Name)},
 		Fix:             fix,
-		TechnicalCmd:    shellCommand("oc", "get", kube.NonEmpty(m.CRD, m.Module+"s."+componentAPIGroup), m.Name, "-o", "yaml"),
+		TechnicalCmd:    kube.ShellCommand("oc", "get", kube.NonEmpty(m.CRD, m.Module+"s."+rhoai.ComponentAPIGroup), m.Name, "-o", "yaml"),
 	}
 }
 
@@ -244,12 +245,12 @@ func checkManagedConfig(c *Client) checkOutput {
 	var details []string
 	count := 0
 	namespaces, nsErr := rolloutNamespaces(c)
-	if nsErr != nil && !errors.Is(nsErr, errNoDSCInitialization) {
+	if nsErr != nil && !errors.Is(nsErr, rhoai.ErrNoDSCInitialization) {
 		details = append(details, fmt.Sprintf("could not tell the applications namespace, so its Deployments were not checked: %v", nsErr))
 		out.check.Status = "warn"
 	}
 	for _, ns := range namespaces {
-		body, _, err := c.Do(http.MethodGet, namespacedPath("apps/v1", "deployments", ns, ""), "", nil, url.Values{})
+		body, _, err := c.Do(http.MethodGet, rhoai.NamespacedPath("apps/v1", "deployments", ns, ""), "", nil, url.Values{})
 		if kube.IsK8sNotFound(err) {
 			continue
 		}
@@ -346,7 +347,7 @@ type platformRelease struct {
 // dscRelease reads the DataScienceCluster's status.release; empty fields
 // when there is no DataScienceCluster or it cannot be read.
 func dscRelease(c *Client) platformRelease {
-	path, err := dataScienceClusterPath(c)
+	path, err := rhoai.DataScienceClusterPath(c)
 	if err != nil {
 		return platformRelease{}
 	}

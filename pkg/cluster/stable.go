@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 type stableTarget struct {
@@ -61,7 +62,7 @@ func productionChannel(name string) bool {
 func stableChannelVersion(channel stablePackageChannel) (parsedTag, string, bool) {
 	version := channel.CurrentCSVDesc.Version
 	if version == "" {
-		version = strings.TrimPrefix(channel.CurrentCSV, SubName+".")
+		version = strings.TrimPrefix(channel.CurrentCSV, rhoai.SubName+".")
 	}
 	version = strings.TrimPrefix(version, "v")
 	parsed, ok := parseTag("rhoai-" + strings.SplitN(version, "+", 2)[0])
@@ -74,9 +75,9 @@ func stableChannelVersion(channel stablePackageChannel) (parsedTag, string, bool
 // rhods-operator, and a nightly catalog must not determine the stable target.
 func resolveStableTarget(c *Client) (stableTarget, error) {
 	target := stableTarget{Source: getStableSource()}
-	path := namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, "") +
+	path := rhoai.NamespacedPath("packages.operators.coreos.com/v1", "packagemanifests", rhoai.CatalogNS, "") +
 		"?labelSelector=" + url.QueryEscape("catalog="+target.Source) +
-		"&fieldSelector=" + url.QueryEscape("metadata.name="+SubName)
+		"&fieldSelector=" + url.QueryEscape("metadata.name="+rhoai.SubName)
 	var items []struct {
 		Metadata struct {
 			Name string `json:"name"`
@@ -97,8 +98,8 @@ func resolveStableTarget(c *Client) (stableTarget, error) {
 	}
 	override := strings.TrimSpace(os.Getenv("STABLE_CHANNEL"))
 	for _, item := range items {
-		if item.Metadata.Name != SubName || item.Status.PackageName != SubName ||
-			item.Status.CatalogSource != target.Source || item.Status.CatalogSourceNamespace != CatalogNS {
+		if item.Metadata.Name != rhoai.SubName || item.Status.PackageName != rhoai.SubName ||
+			item.Status.CatalogSource != target.Source || item.Status.CatalogSourceNamespace != rhoai.CatalogNS {
 			continue
 		}
 		var best parsedTag

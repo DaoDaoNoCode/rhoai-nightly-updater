@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Tests for the one stale-webhook implementation (stale_webhooks.go). The
@@ -54,7 +56,7 @@ func (w whFixture) object() map[string]any {
 }
 
 func olmOwned(csv string) map[string]string {
-	return map[string]string{"olm.owner": csv, "olm.owner.namespace": SubNS, "olm.owner.kind": "ClusterServiceVersion"}
+	return map[string]string{"olm.owner": csv, "olm.owner.namespace": rhoai.SubNS, "olm.owner.kind": "ClusterServiceVersion"}
 }
 
 // serveWebhooks registers the configs, the CSV list, live Services (with a
@@ -112,9 +114,9 @@ func TestStaleWebhookScan_AppliesEveryRule(t *testing.T) {
 		// rule 1 keeps it (B1 deleted it on the CSV rule alone).
 		{name: "dscinitialization-v1-validator.opendatahub.io-old", labels: olmOwned("rhods-operator.3.5.0"), services: []string{ops}},
 		// Old CSV gone and its Service gone: deletable.
-		{name: "dscinitialization-v1-validator.opendatahub.io-gone", labels: olmOwned("rhods-operator.3.5.0"), services: []string{SubNS + "/old-operator-service"}},
+		{name: "dscinitialization-v1-validator.opendatahub.io-gone", labels: olmOwned("rhods-operator.3.5.0"), services: []string{rhoai.SubNS + "/old-operator-service"}},
 		// CSV exists, Service gone: OLM heals it, guidance only (D2).
-		{name: "dscinitialization-v2-validator.opendatahub.io-x", labels: olmOwned("rhods-operator.3.6.0"), services: []string{SubNS + "/gone-operator-service"}},
+		{name: "dscinitialization-v2-validator.opendatahub.io-x", labels: olmOwned("rhods-operator.3.6.0"), services: []string{rhoai.SubNS + "/gone-operator-service"}},
 		// Module webhook whose module is installed: guidance only.
 		{name: "inferenceservice.serving.kserve.io", labels: map[string]string{"platform.opendatahub.io/part-of": "kserve"}, owner: "Kserve", services: []string{apps + "gone-kserve-service"}},
 		// Module removed (no CR) and Service gone: deletable.
@@ -128,7 +130,7 @@ func TestStaleWebhookScan_AppliesEveryRule(t *testing.T) {
 		// RHOAI name, no owner: reported, never deleted.
 		{name: "legacy.opendatahub.io", services: []string{apps + "gone-legacy"}},
 		// One of two Services still serves: not stale.
-		{name: "mixed.opendatahub.io", labels: olmOwned("rhods-operator.3.5.0"), services: []string{SubNS + "/gone", apps + "odh-model-controller-webhook-service"}},
+		{name: "mixed.opendatahub.io", labels: olmOwned("rhods-operator.3.5.0"), services: []string{rhoai.SubNS + "/gone", apps + "odh-model-controller-webhook-service"}},
 		// Lookup error: not stale, reported as an error.
 		{name: "broken-lookup.opendatahub.io", services: []string{apps + "error-service"}},
 	}
@@ -176,7 +178,7 @@ func TestStaleWebhookScan_NothingDuringAnInstall(t *testing.T) {
 	for _, phase := range []string{"Pending", "InstallReady", "Installing", "Replacing"} {
 		t.Run(phase, func(t *testing.T) {
 			f, c := newFakeAPI(t)
-			serveWebhooks(f, []whFixture{{name: "x.opendatahub.io-gone", labels: olmOwned("rhods-operator.3.5.0"), services: []string{SubNS + "/gone"}}}, phase, nil, nil)
+			serveWebhooks(f, []whFixture{{name: "x.opendatahub.io-gone", labels: olmOwned("rhods-operator.3.5.0"), services: []string{rhoai.SubNS + "/gone"}}}, phase, nil, nil)
 			scan := scanStaleWebhooks(c)
 			if len(scan.Verdicts) != 0 || !strings.Contains(scan.Upgrading, phase) {
 				t.Fatalf("scan = %+v", scan)
@@ -189,7 +191,7 @@ func TestStaleWebhookScan_NothingDuringAnInstall(t *testing.T) {
 // delete nothing.
 func TestStaleWebhookScan_CSVListErrorMakesNothingDeletable(t *testing.T) {
 	f, c := newFakeAPI(t)
-	serveWebhooks(f, []whFixture{{name: "x.opendatahub.io-gone", labels: olmOwned("rhods-operator.3.5.0"), services: []string{SubNS + "/gone"}}}, "Succeeded", nil, nil)
+	serveWebhooks(f, []whFixture{{name: "x.opendatahub.io-gone", labels: olmOwned("rhods-operator.3.5.0"), services: []string{rhoai.SubNS + "/gone"}}}, "Succeeded", nil, nil)
 	f.status("GET", csvBase, http.StatusForbidden, "Forbidden")
 	scan := scanStaleWebhooks(c)
 	if len(scan.Verdicts) != 1 || scan.Verdicts[0].Deletable || !strings.Contains(scan.Verdicts[0].Reason, "could not check whether an operator install is in progress") {
@@ -201,7 +203,7 @@ func TestStaleWebhookScan_CSVListErrorMakesNothingDeletable(t *testing.T) {
 // orphaned (Reinstall cleans up while its own CSV deletion finishes).
 func TestStaleWebhookScan_DeletingCSVCountsAsGone(t *testing.T) {
 	f, c := newFakeAPI(t)
-	serveWebhooks(f, []whFixture{{name: "dsci.opendatahub.io-a", labels: olmOwned("rhods-operator.3.6.0"), services: []string{SubNS + "/rhods-operator-service"}}}, "Succeeded", nil, nil)
+	serveWebhooks(f, []whFixture{{name: "dsci.opendatahub.io-a", labels: olmOwned("rhods-operator.3.6.0"), services: []string{rhoai.SubNS + "/rhods-operator-service"}}}, "Succeeded", nil, nil)
 	f.json("GET", csvBase+"/rhods-operator.3.6.0", http.StatusOK, `{"metadata":{"name":"rhods-operator.3.6.0","deletionTimestamp":"2026-10-05T10:00:00Z"}}`)
 	scan := scanStaleWebhooks(c)
 	if len(scan.Verdicts) != 1 || !scan.Verdicts[0].Deletable {
@@ -213,7 +215,7 @@ func TestStaleWebhookScan_DeletingCSVCountsAsGone(t *testing.T) {
 func TestStaleWebhookScan_NewConfigIsNotDeletable(t *testing.T) {
 	f, c := newFakeAPI(t)
 	recent := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
-	serveWebhooks(f, []whFixture{{name: "x.opendatahub.io-gone", labels: olmOwned("rhods-operator.3.5.0"), services: []string{SubNS + "/gone"}, created: recent}}, "Succeeded", nil, nil)
+	serveWebhooks(f, []whFixture{{name: "x.opendatahub.io-gone", labels: olmOwned("rhods-operator.3.5.0"), services: []string{rhoai.SubNS + "/gone"}, created: recent}}, "Succeeded", nil, nil)
 	scan := scanStaleWebhooks(c)
 	if len(scan.Verdicts) != 1 || scan.Verdicts[0].Deletable || !strings.Contains(scan.Verdicts[0].Reason, "created less than") {
 		t.Fatalf("scan = %+v", scan)
@@ -276,11 +278,11 @@ func TestServiceHealth(t *testing.T) {
 // says it could not verify the webhook instead of passing (R1-6).
 func TestStaleWebhookScan_UnreadableEndpointsKeepTheConfig(t *testing.T) {
 	f, c := newFakeAPI(t)
-	serveWebhooks(f, []whFixture{{name: "x.opendatahub.io-a", labels: olmOwned("rhods-operator.3.5.0"), services: []string{SubNS + "/svc"}}}, "Succeeded", nil, nil)
-	f.json("GET", svcPath(SubNS, "svc"), http.StatusOK, `{"spec":{"selector":{"app":"x"}}}`)
-	f.status("GET", fmt.Sprintf(epsPathFmt, SubNS), http.StatusForbidden, "Forbidden")
+	serveWebhooks(f, []whFixture{{name: "x.opendatahub.io-a", labels: olmOwned("rhods-operator.3.5.0"), services: []string{rhoai.SubNS + "/svc"}}}, "Succeeded", nil, nil)
+	f.json("GET", svcPath(rhoai.SubNS, "svc"), http.StatusOK, `{"spec":{"selector":{"app":"x"}}}`)
+	f.status("GET", fmt.Sprintf(epsPathFmt, rhoai.SubNS), http.StatusForbidden, "Forbidden")
 	scan := scanStaleWebhooks(c)
-	if len(scan.Verdicts) != 0 || len(scan.Errors) != 1 || !strings.Contains(scan.Errors[0], "list endpoints of Service "+SubNS+"/svc") {
+	if len(scan.Verdicts) != 0 || len(scan.Errors) != 1 || !strings.Contains(scan.Errors[0], "list endpoints of Service "+rhoai.SubNS+"/svc") {
 		t.Fatalf("scan = %+v", scan)
 	}
 	out := checkStaleWebhooks(c)
@@ -295,7 +297,7 @@ func TestStaleWebhookScan_UnreadableEndpointsKeepTheConfig(t *testing.T) {
 func TestReinstallWebhookCleanup_DeletesOnlyStaleConfigsWithPreconditions(t *testing.T) {
 	f, c := newFakeAPI(t)
 	serveWebhooks(f, []whFixture{
-		{name: "dsci.opendatahub.io-gone", labels: olmOwned("rhods-operator.3.5.0"), services: []string{SubNS + "/old-operator-service"}},
+		{name: "dsci.opendatahub.io-gone", labels: olmOwned("rhods-operator.3.5.0"), services: []string{rhoai.SubNS + "/old-operator-service"}},
 		{name: "legacy.opendatahub.io", services: []string{"redhat-ods-applications/gone-legacy"}},
 		{name: "kuberay-mutating-webhook-configuration", kind: "m", labels: map[string]string{"platform.opendatahub.io/part-of": "ray"}, services: []string{"redhat-ods-applications/kuberay-webhook-service"}},
 	}, "Succeeded", nil, map[string]bool{"Ray": false})
@@ -322,7 +324,7 @@ func TestReinstallWebhookCleanup_DeletesOnlyStaleConfigsWithPreconditions(t *tes
 
 func TestReinstallWebhookCleanup_SkippedDuringAnInstall(t *testing.T) {
 	f, c := newFakeAPI(t)
-	serveWebhooks(f, []whFixture{{name: "dsci.opendatahub.io-gone", labels: olmOwned("rhods-operator.3.5.0"), services: []string{SubNS + "/gone"}}}, "Installing", nil, nil)
+	serveWebhooks(f, []whFixture{{name: "dsci.opendatahub.io-gone", labels: olmOwned("rhods-operator.3.5.0"), services: []string{rhoai.SubNS + "/gone"}}}, "Installing", nil, nil)
 	var logs []string
 	if removed := cleanupStaleWebhooksForReinstall(c, &logs); removed != 0 || !strings.Contains(strings.Join(logs, "\n"), "install is in progress") {
 		t.Fatalf("removed=%d logs=%v", removed, logs)
@@ -336,7 +338,7 @@ func TestIsRHOAIWebhook(t *testing.T) {
 		labels map[string]any
 		want   bool
 	}{
-		{"datasciencecluster-v2-validator.opendatahub.io-x", map[string]any{"olm.owner": "rhods-operator.3.6.0", "olm.owner.namespace": SubNS}, true},
+		{"datasciencecluster-v2-validator.opendatahub.io-x", map[string]any{"olm.owner": "rhods-operator.3.6.0", "olm.owner.namespace": rhoai.SubNS}, true},
 		{"anything", map[string]any{"olm.owner": "rhods-operator.3.6.0"}, true},
 		{"x.opendatahub.io", map[string]any{"olm.owner": "rhods-operator.3.6.0", "olm.owner.namespace": "elsewhere"}, false},
 		{"x.opendatahub.io", map[string]any{"olm.owner": "authorino-operator.v1"}, false},
@@ -381,7 +383,7 @@ func TestStaleWebhookCheck_PlatformWebhookWithIgnoreIsInfo(t *testing.T) {
 // configuration would remove it too (R1-1). The same configuration without
 // the URL hook is deletable, so the URL hook is what keeps it.
 func TestStaleWebhookScan_URLBackedHookKeepsTheConfig(t *testing.T) {
-	gone := SubNS + "/old-operator-service"
+	gone := rhoai.SubNS + "/old-operator-service"
 	f, c := newFakeAPI(t)
 	serveWebhooks(f, []whFixture{
 		{name: "mixed-url.opendatahub.io-a", labels: olmOwned("rhods-operator.3.5.0"), services: []string{gone}, urls: []string{"https://validator.example.com/validate"}},

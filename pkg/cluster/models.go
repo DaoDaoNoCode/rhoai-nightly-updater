@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -180,13 +181,13 @@ func ValidModelName(name string) bool {
 func toolModelPath(project, name string) (string, bool) {
 	switch name {
 	case "smollm2-135m-instruct":
-		return namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, "smollm2-135m-instruct"), true
+		return rhoai.NamespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, "smollm2-135m-instruct"), true
 	case "qwen25-05b-instruct":
-		return namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, "qwen25-05b-instruct"), true
+		return rhoai.NamespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, "qwen25-05b-instruct"), true
 	case "qwen3-1-7b":
-		return namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, "qwen3-1-7b"), true
+		return rhoai.NamespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, "qwen3-1-7b"), true
 	case "granite-embedding-125m-english":
-		return namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, "granite-embedding-125m-english"), true
+		return rhoai.NamespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, "granite-embedding-125m-english"), true
 	}
 	return "", false
 }
@@ -262,7 +263,7 @@ func listLLMInferenceServices(c *Client) ([]llmisvcObject, error) {
 	var list struct {
 		Items []llmisvcObject `json:"items"`
 	}
-	found, err := c.GetIntoOptional(clusterPath("serving.kserve.io/v1alpha2", "llminferenceservices", ""), &list)
+	found, err := c.GetIntoOptional(rhoai.ClusterPath("serving.kserve.io/v1alpha2", "llminferenceservices", ""), &list)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse LLMInferenceServices: %w", err)
@@ -480,7 +481,7 @@ func llmDependencies(dsc map[string]any) (string, string) {
 // modelsBlock says why no model can be set up from the DataScienceCluster:
 // KServe is not turned on, or its LLMInferenceService dependencies are
 // reported missing. Not reported is not a block.
-func modelsBlock(dsc dscRead) (*types.ComponentBlock, string) {
+func modelsBlock(dsc rhoai.DSCRead) (*types.ComponentBlock, string) {
 	if block := componentBlock(dsc, kserveComponent); block != nil {
 		return block, ""
 	}
@@ -512,11 +513,11 @@ type cpuPreset struct {
 // its main container's image. An unknown applications namespace is a
 // problem: the preset cannot be found then.
 func discoverCPUPreset(c *Client) cpuPreset {
-	ns, err := appsNamespace(c)
+	ns, err := rhoai.AppsNamespace(c)
 	if err != nil {
 		return cpuPreset{problem: fmt.Sprintf("Cannot tell which namespace RHOAI's applications (KServe's controller and presets) run in: %v.", err)}
 	}
-	body, exists, err := c.GetOptional(namespacedPath("apps/v1", "deployments", ns, "llmisvc-controller-manager"))
+	body, exists, err := c.GetOptional(rhoai.NamespacedPath("apps/v1", "deployments", ns, "llmisvc-controller-manager"))
 	if err != nil {
 		return cpuPreset{problem: fmt.Sprintf("Cannot read Deployment %s/%s: %v.%s", ns, llmisvcControllerName, err, templateHint(err))}
 	}
@@ -552,7 +553,7 @@ func discoverCPUPreset(c *Client) cpuPreset {
 		return cpuPreset{problem: fmt.Sprintf("Deployment %s/%s sets no %s, so the CPU preset's name is unknown on this release.", ns, llmisvcControllerName, llmisvcConfigPrefixEnv)}
 	}
 	name := prefix + cpuPresetSuffix
-	body, exists, err = c.GetOptional(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceserviceconfigs", ns, name))
+	body, exists, err = c.GetOptional(rhoai.NamespacedPath("serving.kserve.io/v1alpha2", "llminferenceserviceconfigs", ns, name))
 	if err != nil {
 		return cpuPreset{name: name, problem: fmt.Sprintf("Cannot read the CPU preset %s/%s: %v.%s", ns, name, err, templateHint(err))}
 	}
@@ -1300,7 +1301,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	if msg != "" {
 		return nil, msg + " Nothing was changed.", code
 	}
-	if dsc, err := readFirstDSC(c); err == nil {
+	if dsc, err := rhoai.ReadFirstDSC(c); err == nil {
 		block, deps := modelsBlock(dsc)
 		if block != nil {
 			return nil, block.Reason + " Nothing was changed.", "prerequisites"
@@ -1309,7 +1310,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 			m.step("check", "running", fmt.Sprintf("The DataScienceCluster does not report %s; continuing (unknown is not a failure).", llmDependenciesCondition))
 		}
 	}
-	if v := servedVersions(c, llmisvcGroup, nil); v.Discovered && !slices.Contains(v.Versions, "v1alpha2") {
+	if v := rhoai.ServedVersions(c, llmisvcGroup, nil); v.Discovered && !slices.Contains(v.Versions, "v1alpha2") {
 		return nil, fmt.Sprintf("This cluster's KServe does not serve LLMInferenceService %s (served: %s), which is the shape this tool writes. Nothing was changed.", llmisvcAPIVersion, strings.Join(v.Versions, ", ")), "prerequisites"
 	}
 	preset := discoverCPUPreset(c)
@@ -1386,7 +1387,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 	c := m.c
 	path, _ := toolModelPath(p.project, p.entry.Name)
-	createPath := withToolFieldManager(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", p.project, ""))
+	createPath := withToolFieldManager(rhoai.NamespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", p.project, ""))
 	project, name := p.project, p.entry.Name
 	read := func() (kube.ObjectMeta, bool, error) {
 		obj, found, err := readToolModel(c, project, name)
@@ -1628,7 +1629,7 @@ type modelProgress struct {
 // revision (w.current): a pod of the previous one, still failing or still
 // serving during a change, says nothing about the change.
 func readModelProgress(c *Client, project, name string, w modelWorkload) (modelProgress, error) {
-	body, _, err := c.Get(namespacedPath("v1", "pods", project, "") + "?labelSelector=" + url.QueryEscape(modelPodSelector(name)))
+	body, _, err := c.Get(rhoai.NamespacedPath("v1", "pods", project, "") + "?labelSelector=" + url.QueryEscape(modelPodSelector(name)))
 	if err != nil {
 		return modelProgress{}, err
 	}
@@ -1648,7 +1649,7 @@ func readModelProgress(c *Client, project, name string, w modelWorkload) (modelP
 	}
 	var newest *modelEvent
 	if len(names) > 0 {
-		if body, _, err := c.Get(namespacedPath("v1", "events", project, "") + "?fieldSelector=" + url.QueryEscape("involvedObject.kind=Pod")); err == nil {
+		if body, _, err := c.Get(rhoai.NamespacedPath("v1", "events", project, "") + "?fieldSelector=" + url.QueryEscape("involvedObject.kind=Pod")); err == nil {
 			var events struct {
 				Items []modelEvent `json:"items"`
 			}
@@ -1822,7 +1823,7 @@ func readModelWorkload(c *Client, project, name string) (modelWorkload, error) {
 			AvailableReplicas  int32 `json:"availableReplicas"`
 		} `json:"status"`
 	}
-	if err := c.ListInto(namespacedPath("apps/v1", "deployments", project, "")+"?"+q.Encode(), &items); err != nil {
+	if err := c.ListInto(rhoai.NamespacedPath("apps/v1", "deployments", project, "")+"?"+q.Encode(), &items); err != nil {
 		if kube.IsDecodeError(err) {
 			return modelWorkload{}, fmt.Errorf("parse the model's Deployments: %w", err)
 		}

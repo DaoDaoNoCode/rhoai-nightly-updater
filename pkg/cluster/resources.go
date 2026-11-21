@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -360,7 +361,7 @@ func inspectPods(c *Client, namespace, selector, wantImage string) (workloadPodI
 			ContainerStatuses     []containerStatus `json:"containerStatuses"`
 		} `json:"status"`
 	}
-	if err := c.ListInto(namespacedPath("v1", "pods", namespace, "")+"?labelSelector="+url.QueryEscape(selector), &items); err != nil {
+	if err := c.ListInto(rhoai.NamespacedPath("v1", "pods", namespace, "")+"?labelSelector="+url.QueryEscape(selector), &items); err != nil {
 		if kube.IsDecodeError(err) {
 			return workloadPodIssue{}, fmt.Errorf("parse pod list: %w", err)
 		}
@@ -453,7 +454,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		legacy      *legacyStorage
 		legacyErr   error
 		foreignNS   bool
-		dsc         dscRead
+		dsc         rhoai.DSCRead
 		dscErr      error
 		models      []llmisvcObject
 		modelsErr   error
@@ -467,7 +468,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	go func() { defer wg.Done(); legacy, foreignNS, legacyErr = readLegacyStorageOwner(c) }()
 	go func() { defer wg.Done(); status.MLflow = getMLflowStatus(c) }()
 	go func() { defer wg.Done(); dashURL = dashboardBaseURL(c) }()
-	go func() { defer wg.Done(); dsc, dscErr = readFirstDSC(c) }()
+	go func() { defer wg.Done(); dsc, dscErr = rhoai.ReadFirstDSC(c) }()
 	wg.Wait()
 	if projectsErr != nil {
 		return nil, projectsErr
@@ -592,7 +593,7 @@ func routeHost(c *Client, namespace, name string) string {
 			Host string `json:"host"`
 		} `json:"spec"`
 	}
-	if c.GetInto(namespacedPath("route.openshift.io/v1", "routes", namespace, name), &route) != nil {
+	if c.GetInto(rhoai.NamespacedPath("route.openshift.io/v1", "routes", namespace, name), &route) != nil {
 		return ""
 	}
 	return route.Spec.Host

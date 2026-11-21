@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // dashboardBaseURL returns the RHOAI dashboard's address for links, as
@@ -25,7 +27,7 @@ func dashboardBaseURL(c *Client) string {
 	if u := dashboardURLFromComponent(c); u != "" {
 		return u
 	}
-	ns, err := appsNamespace(c)
+	ns, err := rhoai.AppsNamespace(c)
 	if err != nil {
 		return "" // the Route's namespace is unknown, and so is the address
 	}
@@ -48,7 +50,7 @@ func dashboardURLFromComponent(c *Client) string {
 // or none reports an https status.url); an error means it could not be
 // read.
 func readDashboardURLFromComponent(c *Client) (string, error) {
-	r, err := listServed(c, componentAPIGroup, "/apis/components.platform.opendatahub.io/%s/dashboards", nil, []string{"v1alpha1"})
+	r, err := rhoai.ListServed(c, rhoai.ComponentAPIGroup, "/apis/components.platform.opendatahub.io/%s/dashboards", nil, []string{"v1alpha1"})
 	if err != nil || r.Version == "" {
 		return "", err
 	}

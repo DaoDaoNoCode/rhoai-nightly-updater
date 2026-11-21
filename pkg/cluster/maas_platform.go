@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // The platform pieces MaaS needs besides its own: the Kuadrant CR,
@@ -40,7 +41,7 @@ func kuadrantObject(version, ns string) map[string]any {
 // The group's preferred version is not it: RHCL 1.4 serves AuthPolicy in v1
 // and Kuadrant only in v1beta1 (seen live).
 func kuadrantServedVersion(c *Client) (string, error) {
-	read, err := listServed(c, kuadrantGroup, "/apis/kuadrant.io/%s/kuadrants", nil, []string{"v1beta1"})
+	read, err := rhoai.ListServed(c, kuadrantGroup, "/apis/kuadrant.io/%s/kuadrants", nil, []string{"v1beta1"})
 	if err != nil {
 		return "", err
 	}
@@ -113,9 +114,9 @@ func createInfraNamespace(c *Client, ns string, dryRun bool) error {
 func infraNamespaceLeftovers(c *Client, ns string) ([]string, error) {
 	var out []string
 	for _, l := range []struct{ kind, path string }{
-		{"pod", namespacedPath("v1", "pods", ns, "")},
-		{"Deployment", namespacedPath("apps/v1", "deployments", ns, "")},
-		{"PersistentVolumeClaim", namespacedPath("v1", "persistentvolumeclaims", ns, "")},
+		{"pod", rhoai.NamespacedPath("v1", "pods", ns, "")},
+		{"Deployment", rhoai.NamespacedPath("apps/v1", "deployments", ns, "")},
+		{"PersistentVolumeClaim", rhoai.NamespacedPath("v1", "persistentvolumeclaims", ns, "")},
 	} {
 		var items []struct {
 			Metadata kube.ObjectMeta `json:"metadata"`
@@ -175,7 +176,7 @@ const authorinoDefaultSecret = "authorino-server-cert"
 // every patch with dryRun=All and restarts nothing. It returns the changes
 // made (none when all was set).
 func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) {
-	read, err := getServed(c, authorinoGroup, "/apis/"+authorinoGroup+"/%s/namespaces/"+ns+"/authorinos/authorino", []string{"v1beta1"})
+	read, err := rhoai.GetServed(c, authorinoGroup, "/apis/"+authorinoGroup+"/%s/namespaces/"+ns+"/authorinos/authorino", []string{"v1beta1"})
 	if kube.IsK8sNotFound(err) || (err == nil && read.Body == nil) {
 		return nil, fmt.Errorf("%w: no Authorino authorino in %s", errAuthorinoNotYet, ns)
 	}
@@ -207,7 +208,7 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 		query.Set("dryRun", "All")
 	}
 	var changes []string
-	svcPath := namespacedPath("v1", "services", ns, "authorino-authorino-authorization")
+	svcPath := rhoai.NamespacedPath("v1", "services", ns, "authorino-authorino-authorization")
 	svc, found, err := kube.ReadObjectMeta(c, svcPath)
 	switch {
 	case err != nil:
@@ -216,7 +217,7 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 		return nil, fmt.Errorf("%w: no Service %s/authorino-authorino-authorization", errAuthorinoNotYet, ns)
 	case svc.Annotations[servingCertAnnotation] != secret:
 		patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{servingCertAnnotation: secret}}})
-		if _, _, err := c.Do(http.MethodPatch, namespacedPath("v1", "services", ns, "authorino-authorino-authorization"), "application/merge-patch+json", patch, query); err != nil {
+		if _, _, err := c.Do(http.MethodPatch, rhoai.NamespacedPath("v1", "services", ns, "authorino-authorino-authorization"), "application/merge-patch+json", patch, query); err != nil {
 			return changes, fmt.Errorf("annotate Service %s/authorino-authorino-authorization: %w", ns, err)
 		}
 		changes = append(changes, fmt.Sprintf("Service authorino-authorino-authorization asks service-ca for Secret %s", secret))
@@ -229,7 +230,7 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 		}
 		changes = append(changes, "Authorino's listener serves TLS with "+secret)
 	}
-	body, exists, err := c.GetOptional(namespacedPath("apps/v1", "deployments", ns, "authorino"))
+	body, exists, err := c.GetOptional(rhoai.NamespacedPath("apps/v1", "deployments", ns, "authorino"))
 	if err != nil {
 		return changes, fmt.Errorf("read Deployment %s/authorino: %w", ns, err)
 	}
@@ -260,7 +261,7 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 			return changes, fmt.Errorf("deployment %s/authorino has no containers", ns)
 		}
 		patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": containers}}}})
-		if _, _, err := c.Do(http.MethodPatch, namespacedPath("apps/v1", "deployments", ns, "authorino"), "application/strategic-merge-patch+json", patch, query); err != nil {
+		if _, _, err := c.Do(http.MethodPatch, rhoai.NamespacedPath("apps/v1", "deployments", ns, "authorino"), "application/strategic-merge-patch+json", patch, query); err != nil {
 			return changes, fmt.Errorf("set SSL_CERT_FILE on Deployment %s/authorino: %w", ns, err)
 		}
 		changes = append(changes, "Authorino trusts the service CA (SSL_CERT_FILE and REQUESTS_CA_BUNDLE)")
@@ -269,7 +270,7 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 		patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
 			"annotations": map[string]string{restartAnnotation: kube.Clock().Now().UTC().Format(time.RFC3339)},
 		}}}})
-		if _, _, err := c.Do(http.MethodPatch, namespacedPath("apps/v1", "deployments", ns, "authorino"), "application/merge-patch+json", patch, query); err != nil {
+		if _, _, err := c.Do(http.MethodPatch, rhoai.NamespacedPath("apps/v1", "deployments", ns, "authorino"), "application/merge-patch+json", patch, query); err != nil {
 			return changes, fmt.Errorf("restart Deployment %s/authorino: %w", ns, err)
 		}
 		changes = append(changes, "Authorino restarted to use it")
@@ -327,7 +328,7 @@ func maasGatewayPolicies(c *Client) ([]gatewayPolicy, error) {
 		{"TokenRateLimitPolicy", "/apis/kuadrant.io/%s/namespaces/openshift-ingress/tokenratelimitpolicies", []string{"v1alpha1"}},
 		{"RateLimitPolicy", "/apis/kuadrant.io/%s/namespaces/openshift-ingress/ratelimitpolicies", []string{"v1"}},
 	} {
-		read, err := listServed(c, kuadrantGroup, l.path, nil, l.fallback)
+		read, err := rhoai.ListServed(c, kuadrantGroup, l.path, nil, l.fallback)
 		if err != nil {
 			return nil, fmt.Errorf("list %ss in %s: %w", l.kind, inferenceGatewayNamespace, err)
 		}
@@ -469,7 +470,7 @@ EOF`, yamlString(channel))
 // deny-on-failure env to a Subscription, in the form that fits its shape
 // (the docs give one with spec.config, and one without).
 func rhclDenyEnvCommand(sub *olmSubscription) string {
-	ref := fmt.Sprintf("oc patch subscription %s -n %s --type='json' -p=", shellQuote(sub.Metadata.Name), shellQuote(sub.Metadata.Namespace))
+	ref := fmt.Sprintf("oc patch subscription %s -n %s --type='json' -p=", kube.ShellQuote(sub.Metadata.Name), kube.ShellQuote(sub.Metadata.Namespace))
 	if _, hasEnv := sub.Spec.Config["env"]; hasEnv {
 		return ref + `'[
   {"op":"add","path":"/spec/config/env/-","value":{"name":"RATELIMIT_CHECK_SERVICE_FAILURE_MODE","value":"deny"}},
@@ -495,7 +496,7 @@ func rhclDenyEnvCommand(sub *olmSubscription) string {
 // rhclChannelCommand switches a Subscription's channel.
 func rhclChannelCommand(ns, name, channel string) string {
 	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"channel": channel}})
-	return fmt.Sprintf("oc patch subscription %s -n %s --type=merge -p %s", shellQuote(name), shellQuote(ns), shellQuote(string(patch)))
+	return fmt.Sprintf("oc patch subscription %s -n %s --type=merge -p %s", kube.ShellQuote(name), kube.ShellQuote(ns), kube.ShellQuote(string(patch)))
 }
 
 // yamlString is s as a YAML scalar for a shown heredoc: a JSON string,
@@ -524,7 +525,7 @@ func commentText(s string) string {
 func legacyPolicyCommands(ps []gatewayPolicy) string {
 	var lines []string
 	for _, p := range ps {
-		lines = append(lines, fmt.Sprintf("oc delete %s %s -n %s", strings.ToLower(p.Kind), shellQuote(p.Name), inferenceGatewayNamespace))
+		lines = append(lines, fmt.Sprintf("oc delete %s %s -n %s", strings.ToLower(p.Kind), kube.ShellQuote(p.Name), inferenceGatewayNamespace))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -532,7 +533,7 @@ func legacyPolicyCommands(ps []gatewayPolicy) string {
 // maasDSCCommand turns on the AI gateway and MaaS in the DataScienceCluster
 // (maas-setup.md "Configure DataScienceCluster").
 func maasDSCCommand(dsc string) string {
-	return fmt.Sprintf(`oc patch datasciencecluster %s --type=merge -p '{"spec":{"components":{"aigateway":{"managementState":"Managed","modelsAsAService":{"managementState":"Managed"}}}}}'`, shellQuote(kube.FirstNonEmpty(dsc, "default-dsc")))
+	return fmt.Sprintf(`oc patch datasciencecluster %s --type=merge -p '{"spec":{"components":{"aigateway":{"managementState":"Managed","modelsAsAService":{"managementState":"Managed"}}}}}'`, kube.ShellQuote(kube.FirstNonEmpty(dsc, "default-dsc")))
 }
 
 // gatewayAllowedRoutesCommand narrows a gateway someone else made from
@@ -557,7 +558,7 @@ func gatewayAllowedRoutesCommand(g gatewayObject, namespaces []string) string {
 		}})
 	}
 	data, _ := json.Marshal(ops)
-	return fmt.Sprintf("oc patch gateway %s -n %s --type=json -p %s", maasGatewayName, inferenceGatewayNamespace, shellQuote(string(data)))
+	return fmt.Sprintf("oc patch gateway %s -n %s --type=json -p %s", maasGatewayName, inferenceGatewayNamespace, kube.ShellQuote(string(data)))
 }
 
 // admitsAll: a listener of the gateway admits routes from every namespace.

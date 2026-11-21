@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Where a model's download lands. KServe rhoai-3.6 (red-hat-data-services/
@@ -30,11 +31,11 @@ import (
 // a modelVolumeSource (unreadable counts as KServe's default, emptyDir: a
 // request only reserves room).
 func modelVolumeIsEmptyDir(c *Client) bool {
-	ns, err := appsNamespace(c)
+	ns, err := rhoai.AppsNamespace(c)
 	if err != nil {
 		return true
 	}
-	body, _, err := c.Get(namespacedPath("v1", "configmaps", ns, kserveConfigMap))
+	body, _, err := c.Get(rhoai.NamespacedPath("v1", "configmaps", ns, kserveConfigMap))
 	if err != nil {
 		return true
 	}
@@ -63,7 +64,7 @@ func quotaWarning(c *Client, project string, entry catalogModel, ephemeral bool)
 			Used map[string]string `json:"used"`
 		} `json:"status"`
 	}
-	if c.ListInto(namespacedPath("v1", "resourcequotas", project, ""), &items) != nil {
+	if c.ListInto(rhoai.NamespacedPath("v1", "resourcequotas", project, ""), &items) != nil {
 		return ""
 	}
 	need := map[string]string{

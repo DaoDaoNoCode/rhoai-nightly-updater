@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -66,21 +67,21 @@ var legacyStorageObjects = []struct{ kind, name string }{
 func legacyGetPath(kind, name string) (string, bool) {
 	switch {
 	case kind == "Secret" && name == legacySecret:
-		return namespacedPath("v1", "secrets", legacyNamespace, legacySecret), true
+		return rhoai.NamespacedPath("v1", "secrets", legacyNamespace, legacySecret), true
 	case kind == "Deployment" && name == s3Deployment:
-		return namespacedPath("apps/v1", "deployments", legacyNamespace, s3Deployment), true
+		return rhoai.NamespacedPath("apps/v1", "deployments", legacyNamespace, s3Deployment), true
 	case kind == "Deployment" && name == legacyMinIODeployment:
-		return namespacedPath("apps/v1", "deployments", legacyNamespace, legacyMinIODeployment), true
+		return rhoai.NamespacedPath("apps/v1", "deployments", legacyNamespace, legacyMinIODeployment), true
 	case kind == "Service" && name == legacyService:
-		return namespacedPath("v1", "services", legacyNamespace, legacyService), true
+		return rhoai.NamespacedPath("v1", "services", legacyNamespace, legacyService), true
 	case kind == "NetworkPolicy" && name == s3NetworkPolicy:
-		return namespacedPath("networking.k8s.io/v1", "networkpolicies", legacyNamespace, s3NetworkPolicy), true
+		return rhoai.NamespacedPath("networking.k8s.io/v1", "networkpolicies", legacyNamespace, s3NetworkPolicy), true
 	case kind == "NetworkPolicy" && name == legacyMinIONetworkPolicy:
-		return namespacedPath("networking.k8s.io/v1", "networkpolicies", legacyNamespace, legacyMinIONetworkPolicy), true
+		return rhoai.NamespacedPath("networking.k8s.io/v1", "networkpolicies", legacyNamespace, legacyMinIONetworkPolicy), true
 	case kind == "Route" && name == legacyUIRoute:
-		return namespacedPath("route.openshift.io/v1", "routes", legacyNamespace, legacyUIRoute), true
+		return rhoai.NamespacedPath("route.openshift.io/v1", "routes", legacyNamespace, legacyUIRoute), true
 	case kind == "Route" && name == legacyAPIRoute:
-		return namespacedPath("route.openshift.io/v1", "routes", legacyNamespace, legacyAPIRoute), true
+		return rhoai.NamespacedPath("route.openshift.io/v1", "routes", legacyNamespace, legacyAPIRoute), true
 	}
 	return "", false
 }
@@ -90,25 +91,25 @@ func legacyGetPath(kind, name string) (string, bool) {
 func legacyDeletePath(kind, name string) (string, bool) {
 	switch {
 	case kind == "PersistentVolumeClaim" && name == legacySeaweedFSPVC:
-		return namespacedPath("v1", "persistentvolumeclaims", legacyNamespace, legacySeaweedFSPVC), true
+		return rhoai.NamespacedPath("v1", "persistentvolumeclaims", legacyNamespace, legacySeaweedFSPVC), true
 	case kind == "PersistentVolumeClaim" && name == legacyMinIOPVC:
-		return namespacedPath("v1", "persistentvolumeclaims", legacyNamespace, legacyMinIOPVC), true
+		return rhoai.NamespacedPath("v1", "persistentvolumeclaims", legacyNamespace, legacyMinIOPVC), true
 	case kind == "Secret" && name == legacySecret:
-		return namespacedPath("v1", "secrets", legacyNamespace, legacySecret), true
+		return rhoai.NamespacedPath("v1", "secrets", legacyNamespace, legacySecret), true
 	case kind == "Deployment" && name == s3Deployment:
-		return namespacedPath("apps/v1", "deployments", legacyNamespace, s3Deployment), true
+		return rhoai.NamespacedPath("apps/v1", "deployments", legacyNamespace, s3Deployment), true
 	case kind == "Deployment" && name == legacyMinIODeployment:
-		return namespacedPath("apps/v1", "deployments", legacyNamespace, legacyMinIODeployment), true
+		return rhoai.NamespacedPath("apps/v1", "deployments", legacyNamespace, legacyMinIODeployment), true
 	case kind == "Service" && name == legacyService:
-		return namespacedPath("v1", "services", legacyNamespace, legacyService), true
+		return rhoai.NamespacedPath("v1", "services", legacyNamespace, legacyService), true
 	case kind == "NetworkPolicy" && name == s3NetworkPolicy:
-		return namespacedPath("networking.k8s.io/v1", "networkpolicies", legacyNamespace, s3NetworkPolicy), true
+		return rhoai.NamespacedPath("networking.k8s.io/v1", "networkpolicies", legacyNamespace, s3NetworkPolicy), true
 	case kind == "NetworkPolicy" && name == legacyMinIONetworkPolicy:
-		return namespacedPath("networking.k8s.io/v1", "networkpolicies", legacyNamespace, legacyMinIONetworkPolicy), true
+		return rhoai.NamespacedPath("networking.k8s.io/v1", "networkpolicies", legacyNamespace, legacyMinIONetworkPolicy), true
 	case kind == "Route" && name == legacyUIRoute:
-		return namespacedPath("route.openshift.io/v1", "routes", legacyNamespace, legacyUIRoute), true
+		return rhoai.NamespacedPath("route.openshift.io/v1", "routes", legacyNamespace, legacyUIRoute), true
 	case kind == "Route" && name == legacyAPIRoute:
-		return namespacedPath("route.openshift.io/v1", "routes", legacyNamespace, legacyAPIRoute), true
+		return rhoai.NamespacedPath("route.openshift.io/v1", "routes", legacyNamespace, legacyAPIRoute), true
 	}
 	return "", false
 }
@@ -328,7 +329,7 @@ func listDeploymentMetas(c *Client, namespace string) ([]kube.ObjectMeta, error)
 	var items []struct {
 		Metadata kube.ObjectMeta `json:"metadata"`
 	}
-	if err := c.ListInto(namespacedPath("apps/v1", "deployments", namespace, ""), &items); err != nil {
+	if err := c.ListInto(rhoai.NamespacedPath("apps/v1", "deployments", namespace, ""), &items); err != nil {
 		return nil, err
 	}
 	out := make([]kube.ObjectMeta, 0, len(items))

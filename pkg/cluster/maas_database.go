@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -452,7 +453,7 @@ func createMaaSPOCCreds(c *Client, ns, password string, dryRun bool) (string, er
 // it: this tool never reads or changes that Secret (maasObjectPath does
 // not name it, so the RBAC coverage test sees the delete alone).
 func maasPOCCredsPath(ns string) string {
-	return namespacedPath("v1", "secrets", ns, maasPOCCreds)
+	return rhoai.NamespacedPath("v1", "secrets", ns, maasPOCCreds)
 }
 
 // deleteMaaSPOCCreds deletes the postgres-creds this tool created: only the
@@ -532,7 +533,7 @@ func maasPOCPassword(c *Client, st maasDBState) (string, bool, error) {
 // postgresql_16_image of the RHOAI operator's CSV, else its fallback
 // image. It says which.
 func maasPOCImage(c *Client) (string, string) {
-	body, _, err := c.Get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""))
+	body, _, err := c.Get(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""))
 	if err == nil {
 		var list struct {
 			Items []struct {
@@ -554,7 +555,7 @@ func maasPOCImage(c *Client) (string, string) {
 		if json.Unmarshal(body, &list) == nil {
 			found := ""
 			for _, it := range list.Items {
-				if !strings.HasPrefix(it.Metadata.Name, SubName+".") || it.Metadata.Labels["olm.copiedFrom"] != "" {
+				if !strings.HasPrefix(it.Metadata.Name, rhoai.SubName+".") || it.Metadata.Labels["olm.copiedFrom"] != "" {
 					continue
 				}
 				for _, ri := range it.Spec.RelatedImages {
@@ -594,7 +595,7 @@ func maasPOCRestartWarning(c *Client, ns string) string {
 			} `json:"containerStatuses"`
 		} `json:"status"`
 	}
-	if c.ListInto(namespacedPath("v1", "pods", ns, ""), &items) != nil {
+	if c.ListInto(rhoai.NamespacedPath("v1", "pods", ns, ""), &items) != nil {
 		return ""
 	}
 	var dbCreated, apiStarted time.Time

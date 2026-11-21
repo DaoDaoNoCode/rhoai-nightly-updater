@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Stale admission webhooks and CRD conversion webhooks: the one
@@ -132,7 +133,7 @@ func (h serviceHealth) describe(ref string) string {
 // at once (the namespace guard).
 func checkServiceHealth(c *Client, ref string, grace time.Duration) serviceHealth {
 	ns, name, _ := strings.Cut(ref, "/")
-	body, found, err := c.GetOptional(namespacedPath("v1", "services", ns, name))
+	body, found, err := c.GetOptional(rhoai.NamespacedPath("v1", "services", ns, name))
 	if err != nil {
 		return serviceHealth{state: serviceUnknown, err: err}
 	}
@@ -155,7 +156,7 @@ func checkServiceHealth(c *Client, ref string, grace time.Duration) serviceHealt
 	if svc.Spec.Type == "ExternalName" {
 		return serviceHealth{state: serviceServing, exists: true}
 	}
-	body, _, err = c.Get(namespacedPath("discovery.k8s.io/v1", "endpointslices", ns, "") + "?labelSelector=" + url.QueryEscape("kubernetes.io/service-name="+name))
+	body, _, err = c.Get(rhoai.NamespacedPath("discovery.k8s.io/v1", "endpointslices", ns, "") + "?labelSelector=" + url.QueryEscape("kubernetes.io/service-name="+name))
 	if err != nil {
 		return serviceHealth{state: serviceUnknown, exists: true, err: fmt.Errorf("list endpoints of Service %s: %w", ref, err)}
 	}
@@ -351,10 +352,10 @@ func isRHOAIWebhook(name string, labels map[string]any) bool {
 // rhoaiOLMOwner returns the RHOAI CSV named in the olm.owner label, or "".
 func rhoaiOLMOwner(labels map[string]any) string {
 	owner, _ := labels["olm.owner"].(string)
-	if owner != SubName && !strings.HasPrefix(owner, SubName+".") {
+	if owner != rhoai.SubName && !strings.HasPrefix(owner, rhoai.SubName+".") {
 		return ""
 	}
-	if ns, _ := labels["olm.owner.namespace"].(string); ns != "" && ns != SubNS {
+	if ns, _ := labels["olm.owner.namespace"].(string); ns != "" && ns != rhoai.SubNS {
 		return ""
 	}
 	return owner
@@ -385,7 +386,7 @@ type webhookEnv struct {
 	health       *serviceHealthCache
 	csvs         map[string]csvPresence
 	modules      map[string]moduleState
-	componentAPI func() (componentAPI, error)
+	componentAPI func() (rhoai.ComponentAPI, error)
 	// installCheckErr is set when the CSV list could not be read, so it is
 	// unknown whether an install is in flight.
 	installCheckErr error
@@ -428,7 +429,7 @@ func (e *webhookEnv) csvPresent(ns, name string) csvPresence {
 		return p
 	}
 	var p csvPresence
-	body, found, err := e.c.GetOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name))
+	body, found, err := e.c.GetOptional(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name))
 	switch {
 	case err != nil:
 		p.err = err
@@ -519,7 +520,7 @@ func (e *webhookEnv) evaluate(cfg admissionConfig) *webhookVerdict {
 			v.Reason = fmt.Sprintf("it belongs to another operator's CSV (%s)", owner)
 			break
 		}
-		p := e.csvPresent(kube.NonEmpty(labels["olm.owner.namespace"], SubNS), owner)
+		p := e.csvPresent(kube.NonEmpty(labels["olm.owner.namespace"], rhoai.SubNS), owner)
 		switch {
 		case p.err != nil:
 			v.Reason = fmt.Sprintf("could not check its CSV %s: %v", owner, p.err)
@@ -561,7 +562,7 @@ func listAdmissionConfigs(c *Client) ([]admissionConfig, []string) {
 	var errs []string
 	for _, wk := range webhookKinds {
 		var items []admissionConfig
-		if err := c.ListInto(clusterPath("admissionregistration.k8s.io/v1", wk.resource, ""), &items); err != nil {
+		if err := c.ListInto(rhoai.ClusterPath("admissionregistration.k8s.io/v1", wk.resource, ""), &items); err != nil {
 			if kube.IsDecodeError(err) {
 				errs = append(errs, fmt.Sprintf("parse %s: %v", wk.resource, err))
 				continue
@@ -639,7 +640,7 @@ func deleteStaleWebhookConfigs(c *Client, verdicts []webhookVerdict) webhookDele
 		if v.Config.Kind == "MutatingWebhookConfiguration" {
 			resource = "mutatingwebhookconfigurations"
 		}
-		path := clusterPath("admissionregistration.k8s.io/v1", resource, v.Config.Metadata.Name)
+		path := rhoai.ClusterPath("admissionregistration.k8s.io/v1", resource, v.Config.Metadata.Name)
 		err := deleteExact(c, path, v.Config.Metadata.UID, v.Config.Metadata.ResourceVersion)
 		switch {
 		case err == nil:
@@ -787,7 +788,7 @@ func deadConversions(crds []conversionCRD, health *serviceHealthCache) (dead []d
 // (OLM package label, e.g. DSC and DSCI) and those the platform applies for
 // modules. Listing all CRDs would download every schema (13 MB live).
 var rhoaiCRDSelectors = []string{
-	"operators.coreos.com/" + SubName + "." + SubNS,
+	"operators.coreos.com/" + rhoai.SubName + "." + rhoai.SubNS,
 	"platform.opendatahub.io/part-of",
 }
 

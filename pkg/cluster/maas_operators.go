@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // The operators MaaS needs, installed from OperatorHub the way the MaaS
@@ -220,7 +221,7 @@ func csvContainers(c *Client, ns, name string) ([]operatorContainer, error) {
 			} `json:"install"`
 		} `json:"spec"`
 	}
-	if err := c.GetInto(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name), &csv); err != nil {
+	if err := c.GetInto(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name), &csv); err != nil {
 		return nil, err
 	}
 	var out []operatorContainer
@@ -258,7 +259,7 @@ func oomKilledContainers(c *Client, st operatorState) ([]string, error) {
 			} `json:"containerStatuses"`
 		} `json:"status"`
 	}
-	if err := c.ListInto(namespacedPath("v1", "pods", st.csvNS, ""), &items); err != nil {
+	if err := c.ListInto(rhoai.NamespacedPath("v1", "pods", st.csvNS, ""), &items); err != nil {
 		return nil, err
 	}
 	var out []string

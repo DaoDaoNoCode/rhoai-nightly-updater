@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -180,7 +181,7 @@ func runCheck(c *Client, chk diagnosticCheck) checkOutput {
 // --- Health check functions ---
 
 func checkCatalogHealth(c *Client) checkOutput {
-	cs, err := getCatalogSource(c)
+	cs, err := rhoai.GetCatalogSource(c)
 	if err != nil {
 		return checkOutput{
 			check: CheckResult{Name: "Catalog health", Status: "fail", Detail: fmt.Sprintf("Failed to check catalog: %v", err)},
@@ -227,7 +228,7 @@ func checkCatalogHealth(c *Client) checkOutput {
 					"**Diagnosis commands:**\n" +
 					"`oc logs -n openshift-marketplace -l olm.catalogSource=rhoai-catalog-dev`\n" +
 					"`oc get pods -n openshift-marketplace -l olm.catalogSource=rhoai-catalog-dev`",
-				TechnicalCmd: "oc get catalogsource " + CatalogName + " -n " + CatalogNS + " -o jsonpath='{.status.connectionState}'",
+				TechnicalCmd: "oc get catalogsource " + rhoai.CatalogName + " -n " + rhoai.CatalogNS + " -o jsonpath='{.status.connectionState}'",
 			}},
 		}
 	case "CONNECTING":
@@ -257,8 +258,8 @@ func checkCatalogHealth(c *Client) checkOutput {
 // none and no error (RHOAI has none yet); a read error is returned, so the
 // check cannot pass without them.
 func rhoaiPodNamespaces(c *Client) ([]string, error) {
-	ns, err := discoverRHOAINamespaces(c)
-	if errors.Is(err, errNoDSCInitialization) {
+	ns, err := rhoai.DiscoverNamespaces(c)
+	if errors.Is(err, rhoai.ErrNoDSCInitialization) {
 		return nil, nil
 	}
 	if err != nil {
@@ -273,7 +274,7 @@ func rhoaiPodNamespaces(c *Client) ([]string, error) {
 
 func checkOperatorPods(c *Client) checkOutput {
 	const name = "Operator pods"
-	issues, podCount, scanned, errs := scanPods(c, []string{SubNS}, time.Now())
+	issues, podCount, scanned, errs := scanPods(c, []string{rhoai.SubNS}, time.Now())
 	if len(errs) > 0 {
 		return checkOutput{check: CheckResult{Name: name, Status: "warn", Detail: "Could not list operator pods: " + strings.Join(errs, "; ")}}
 	}
@@ -293,7 +294,7 @@ func checkRHOAIPods(c *Client) checkOutput {
 	// A failed lookup is reported: the module namespaces could hold
 	// unhealthy pods, so the check cannot pass without them.
 	var nsErr error
-	body, _, err := c.Do(http.MethodGet, clusterPath("v1", "namespaces", ""), "", nil,
+	body, _, err := c.Do(http.MethodGet, rhoai.ClusterPath("v1", "namespaces", ""), "", nil,
 		url.Values{"labelSelector": {"platform.opendatahub.io/part-of"}})
 	if err != nil {
 		nsErr = err
@@ -309,7 +310,7 @@ func checkRHOAIPods(c *Client) checkOutput {
 			nsErr = fmt.Errorf("parse namespace list: %w", err)
 		}
 		for _, item := range list.Items {
-			if item.Metadata.Name != SubNS && !slices.Contains(namespaces, item.Metadata.Name) {
+			if item.Metadata.Name != rhoai.SubNS && !slices.Contains(namespaces, item.Metadata.Name) {
 				namespaces = append(namespaces, item.Metadata.Name)
 			}
 		}
@@ -407,7 +408,7 @@ func readSubscriptionState(c *Client) (subscriptionState, error) {
 			} `json:"conditions"`
 		} `json:"status"`
 	}
-	found, err := c.GetIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), &sub)
+	found, err := c.GetIntoOptional(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), &sub)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return subscriptionState{}, fmt.Errorf("parse subscription: %w", err)
@@ -458,14 +459,14 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 		return out
 	}
 	if !sub.Exists {
-		csv, csvErr := getCSV(c)
+		csv, csvErr := rhoai.GetCSV(c)
 		if csvErr == nil && csv.Name != "" && csv.Phase != "Not Found" {
 			out.check = CheckResult{Name: name, Status: "fail", Detail: fmt.Sprintf("No Subscription, but %s is installed", csv.Name)}
 			out.problems = append(out.problems, Problem{
 				ID:          "subscription-missing",
 				Severity:    "warning",
 				Title:       "The operator has no Subscription",
-				Description: fmt.Sprintf("%s is installed, but the %s Subscription does not exist, so OLM will not update or repair the operator. This happens when an update or an install of a different build stopped part-way.", csv.Name, SubName),
+				Description: fmt.Sprintf("%s is installed, but the %s Subscription does not exist, so OLM will not update or repair the operator. This happens when an update or an install of a different build stopped part-way.", csv.Name, rhoai.SubName),
 				Fix:         "Use Update on the Status page to install a nightly; it recreates the Subscription. Install a different build (Recovery on the Status page) also works.",
 			})
 			return out
@@ -508,10 +509,10 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 			ID:           "subscription-" + strings.ToLower(cond.Type),
 			Severity:     fc.severity,
 			Title:        fmt.Sprintf("OLM reports %s for the operator Subscription", cond.Type),
-			Description:  fmt.Sprintf("Subscription %s (source %s, channel %s) has condition %s=True.", SubName, sub.Source, sub.Channel, cond.Type),
+			Description:  fmt.Sprintf("Subscription %s (source %s, channel %s) has condition %s=True.", rhoai.SubName, sub.Source, sub.Channel, cond.Type),
 			Evidence:     []string{fmt.Sprintf("%s (%s): %s", cond.Type, cond.Reason, kube.TruncateText(cond.Message, 600))},
 			Fix:          subscriptionConditionFix(cond.Type),
-			TechnicalCmd: "oc get subscription " + SubName + " -n " + SubNS + " -o jsonpath='{.status.conditions}'",
+			TechnicalCmd: "oc get subscription " + rhoai.SubName + " -n " + rhoai.SubNS + " -o jsonpath='{.status.conditions}'",
 		})
 	}
 
@@ -549,7 +550,7 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 			Description:  fmt.Sprintf("OLM created InstallPlan %s for %s but has not finished it. UpgradePending is normal for a few minutes during every update; after %s it usually means the InstallPlan or the new CSV is stuck.", kube.NonEmpty(sub.InstallPlan, "(none)"), kube.NonEmpty(sub.CurrentCSV, "the new version"), formatDuration(operatorStuckAfter)),
 			Evidence:     []string{fmt.Sprintf("Subscription state UpgradePending since %s, InstallPlan %s, currentCSV %s", sub.Changed.UTC().Format(time.RFC3339), kube.NonEmpty(sub.InstallPlan, "-"), kube.NonEmpty(sub.CurrentCSV, "-"))},
 			Fix:          "Check the Install plan and Operator installed results below for the cause. " + recoveryGuidance,
-			TechnicalCmd: "oc get subscription " + SubName + " -n " + SubNS + " -o jsonpath='{.status}'",
+			TechnicalCmd: "oc get subscription " + rhoai.SubName + " -n " + rhoai.SubNS + " -o jsonpath='{.status}'",
 		})
 	case "Failed":
 		out.check = CheckResult{Name: name, Status: "fail", Detail: "Subscription state Failed"}
@@ -559,7 +560,7 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 			Title:        "The operator Subscription is Failed",
 			Description:  fmt.Sprintf("OLM marked the Subscription Failed because the InstallPlan or CSV for %s failed.", kube.NonEmpty(sub.CurrentCSV, "the target version")),
 			Fix:          recoveryGuidance,
-			TechnicalCmd: "oc describe subscription " + SubName + " -n " + SubNS,
+			TechnicalCmd: "oc describe subscription " + rhoai.SubName + " -n " + rhoai.SubNS,
 		})
 	default: // "" or no status yet
 		if !sub.settled(now) {
@@ -579,7 +580,7 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 			Fix:         "Check the Catalog health result and that the channel exists in the catalog. " + recoveryGuidance,
 			LearnMore: "**Channel mismatch:** The subscription channel may not exist in the nightly catalog. " +
 				"Check available channels: `oc get packagemanifest rhods-operator -o jsonpath='{.status.channels[*].name}'`",
-			TechnicalCmd: "oc get subscription " + SubName + " -n " + SubNS + " -o jsonpath='{.status}'",
+			TechnicalCmd: "oc get subscription " + rhoai.SubName + " -n " + rhoai.SubNS + " -o jsonpath='{.status}'",
 		})
 	}
 	return out
@@ -599,7 +600,7 @@ func checkCSVHealth(c *Client) checkOutput {
 	const name = "Operator installed"
 	out := checkOutput{check: CheckResult{Name: name, Status: "pass", Detail: "CSV present and Succeeded"}}
 
-	csv, err := getCSV(c)
+	csv, err := rhoai.GetCSV(c)
 	if err != nil {
 		out.check = CheckResult{Name: name, Status: "warn", Detail: "Could not query CSV"}
 		return out
@@ -626,7 +627,7 @@ func checkCSVHealth(c *Client) checkOutput {
 				"1. Is the Subscription pointing to the correct catalog?\n" +
 				"2. Is the InstallPlan created and approved?\n" +
 				"3. Are there dependency resolution errors? Check subscription conditions.",
-			TechnicalCmd: "oc get csv -n " + SubNS,
+			TechnicalCmd: "oc get csv -n " + rhoai.SubNS,
 		})
 		return out
 	}
@@ -636,7 +637,7 @@ func checkCSVHealth(c *Client) checkOutput {
 		out.check.Detail = fmt.Sprintf("%s (%s)", csv.Name, csv.Phase)
 	case "Failed":
 		evidence := []string{fmt.Sprintf("Operator: %s, Phase: Failed", csv.Name)}
-		body, _, getErr := c.Get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, csv.Name))
+		body, _, getErr := c.Get(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, csv.Name))
 		if getErr == nil {
 			var full struct {
 				Status struct {
@@ -657,7 +658,7 @@ func checkCSVHealth(c *Client) checkOutput {
 			Evidence:     evidence,
 			Fix:          recoveryGuidance,
 			LearnMore:    "OLM documentation, \"Opting into UnsafeFailForward upgrades\": to recover from a failed CSV, the existing CSV is deleted so that a new InstallPlan can be generated.",
-			TechnicalCmd: fmt.Sprintf("oc describe csv %s -n %s", csv.Name, SubNS),
+			TechnicalCmd: fmt.Sprintf("oc describe csv %s -n %s", csv.Name, rhoai.SubNS),
 		})
 	case "Installing":
 		out.check = CheckResult{Name: name, Status: "warn", Detail: fmt.Sprintf("Operator is being installed (%s)", csv.Name)}
@@ -701,7 +702,7 @@ type installPlanItem struct {
 
 func listInstallPlans(c *Client) ([]installPlanItem, error) {
 	var items []installPlanItem
-	if err := c.ListInto(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ""), &items); err != nil {
+	if err := c.ListInto(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, ""), &items); err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse install plans: %w", err)
 		}
@@ -761,9 +762,9 @@ func checkInstallPlanHealth(c *Client) checkOutput {
 				Severity:     "warning",
 				Title:        "OLM hasn't created an install plan",
 				Description:  "A subscription exists but no install plan has been created. OLM may be unable to resolve the subscription or the catalog may not be ready.",
-				Evidence:     []string{fmt.Sprintf("No install plans found in namespace '%s'", SubNS)},
+				Evidence:     []string{fmt.Sprintf("No install plans found in namespace '%s'", rhoai.SubNS)},
 				Fix:          "Check the Catalog health and Subscription health results. " + recoveryGuidance,
-				TechnicalCmd: fmt.Sprintf("oc get installplans -n %s", SubNS),
+				TechnicalCmd: fmt.Sprintf("oc get installplans -n %s", rhoai.SubNS),
 			}},
 		}
 	}
@@ -800,7 +801,7 @@ func checkInstallPlanHealth(c *Client) checkOutput {
 			ok, why := installPlanDeletable(ip, sub)
 			if ok {
 				deletable = append(deletable, fmt.Sprintf("%s (%s)", ip.Metadata.Name, why))
-				affected = append(affected, fmt.Sprintf("InstallPlan %s/%s", SubNS, ip.Metadata.Name))
+				affected = append(affected, fmt.Sprintf("InstallPlan %s/%s", rhoai.SubNS, ip.Metadata.Name))
 			} else {
 				kept = append(kept, fmt.Sprintf("%s: %s", ip.Metadata.Name, why))
 			}
@@ -822,7 +823,7 @@ func checkInstallPlanHealth(c *Client) checkOutput {
 			Evidence:     evidence,
 			Fix:          "Update to a newer nightly or use Refresh operator. If the same build fails again, the build itself is broken.",
 			LearnMore:    "OLM documentation, \"Opting into UnsafeFailForward upgrades\": to recover from a failed InstallPlan, the user deletes it and a new InstallPlan is generated.",
-			TechnicalCmd: fmt.Sprintf("oc describe installplan %s -n %s", latest.Metadata.Name, SubNS),
+			TechnicalCmd: fmt.Sprintf("oc describe installplan %s -n %s", latest.Metadata.Name, rhoai.SubNS),
 		}
 		if len(deletable) > 0 {
 			p.Fix = "Delete the failed install plans so that OLM resolves the Subscription again and creates a new one. If the same build fails again, update to a newer nightly."
@@ -830,7 +831,7 @@ func checkInstallPlanHealth(c *Client) checkOutput {
 			p.AutoFixAction = "delete-stale-installplans"
 			p.AffectedObjects = affected
 			p.ConfirmMessage = fmt.Sprintf("This deletes these install plans in %s:\n- %s\n\nPlans in any other phase are kept, and each plan is checked again and deleted only if it is unchanged. "+
-				"If the catalog still offers the same build, OLM's new plan may fail the same way.", SubNS, strings.Join(deletable, "\n- "))
+				"If the catalog still offers the same build, OLM's new plan may fail the same way.", rhoai.SubNS, strings.Join(deletable, "\n- "))
 		}
 		return checkOutput{
 			check:    CheckResult{Name: name, Status: "fail", Detail: fmt.Sprintf("Install plan failed: %s", latest.Metadata.Name)},
@@ -845,7 +846,7 @@ func checkInstallPlanHealth(c *Client) checkOutput {
 				Title:        "An install plan is waiting for manual approval",
 				Description:  fmt.Sprintf("The Subscription uses Manual approval, so OLM waits until install plan %s (%s) is approved.", latest.Metadata.Name, strings.Join(latest.Spec.ClusterServiceVersionNames, ", ")),
 				Fix:          "Approve the install plan in the OpenShift console (Operators > Installed Operators) if you want this version.",
-				TechnicalCmd: fmt.Sprintf("oc patch installplan %s -n %s --type merge -p '{\"spec\":{\"approved\":true}}'", latest.Metadata.Name, SubNS),
+				TechnicalCmd: fmt.Sprintf("oc patch installplan %s -n %s --type merge -p '{\"spec\":{\"approved\":true}}'", latest.Metadata.Name, rhoai.SubNS),
 			}},
 		}
 	case "Installing":
@@ -904,7 +905,7 @@ func checkPullSecretHealth(c *Client) checkOutput {
 		}
 	}
 
-	return nodePullSecretHealth(c, cachedControlPlane(c))
+	return nodePullSecretHealth(c, rhoai.CachedControlPlane(c))
 }
 
 // nodePullSecretHealth is the "Pull secret" check once additional-pull-secret
@@ -915,13 +916,13 @@ func checkPullSecretHealth(c *Client) checkOutput {
 // (NodePullSecretCommand). An unknown topology is treated as possibly
 // self-managed.
 func nodePullSecretHealth(c *Client, controlPlane string) checkOutput {
-	if controlPlane == ControlPlaneHosted {
+	if controlPlane == rhoai.ControlPlaneHosted {
 		return checkOutput{
 			check: CheckResult{Name: "Pull secret", Status: "pass", Detail: "Pull secret is configured and valid"},
 		}
 	}
-	cs, csErr := getCatalogSource(c)
-	if csErr == nil && catalogPulledFromQuay(cs) {
+	cs, csErr := rhoai.GetCatalogSource(c)
+	if csErr == nil && rhoai.CatalogPulledFromQuay(cs) {
 		return checkOutput{
 			check: CheckResult{Name: "Pull secret", Status: "pass", Detail: "additional-pull-secret is valid, and the nodes can pull from quay.io/rhoai: the nightly catalog runs its quay.io/rhoai image"},
 		}
@@ -931,7 +932,7 @@ func nodePullSecretHealth(c *Client, controlPlane string) checkOutput {
 	case csErr != nil:
 		catalog = "the nightly catalog could not be read: " + csErr.Error()
 	case cs.Exists:
-		catalog = fmt.Sprintf("CatalogSource %s is %s on %s", CatalogName, cs.State, cs.Image)
+		catalog = fmt.Sprintf("CatalogSource %s is %s on %s", rhoai.CatalogName, cs.State, cs.Image)
 	}
 	topology := "Infrastructure cluster: controlPlaneTopology is not External (self-managed)"
 	title := "The nodes may not have the quay.io/rhoai credentials"
@@ -939,8 +940,8 @@ func nodePullSecretHealth(c *Client, controlPlane string) checkOutput {
 	fix := "Click Add to the nodes' pull secret under Pull secret in the cluster setup on the Status page: it copies the token saved there into openshift-config/pull-secret with your own permissions. Or a cluster-admin runs the command below in bash or zsh (jq 1.6 or later): it asks for the quay.io/rhoai token from the setup and adds only that entry. " +
 		"Then click Check that the nodes can pull there."
 	switch controlPlane {
-	case ControlPlaneSelfManaged:
-	case ControlPlaneManaged:
+	case rhoai.ControlPlaneSelfManaged:
+	case rhoai.ControlPlaneManaged:
 		topology = "Infrastructure cluster: controlPlaneTopology is not External, and Red Hat SRE's managed-cluster webhooks (*.managed.openshift.io) are installed (ROSA Classic or OpenShift Dedicated)"
 		description = "Red Hat runs this cluster: its nodes pull with the cluster pull secret, openshift-config/pull-secret, not with kube-system/additional-pull-secret, which the updater uses for its own Quay lookups. Red Hat creates that secret and documents no procedure for changing it on these services, so the updater does not change it. "
 		fix = "If you choose to, a cluster-admin runs the command below in bash or zsh (jq 1.6 or later): it asks for the quay.io/rhoai token from the setup and adds only that entry. Then click Check that the nodes can pull under Pull secret in the cluster setup on the Status page."
@@ -960,7 +961,7 @@ func nodePullSecretHealth(c *Client, controlPlane string) checkOutput {
 			Evidence:     []string{topology, catalog},
 			Fix:          fix,
 			LearnMore:    "The nodes pick up the change within a few minutes, without a reboot; oc get mcp shows UPDATED True for every pool when they all have it.",
-			TechnicalCmd: NodePullSecretCommand,
+			TechnicalCmd: rhoai.NodePullSecretCommand,
 		}},
 	}
 }
@@ -981,7 +982,7 @@ func checkImageMirror(c *Client) checkOutput {
 				Severity:    "warning",
 				Title:       "Image mirror is not configured",
 				Description: "The image mirror redirects image pulls from the production registry (registry.redhat.io) to the nightly registry (quay.io/rhoai). Without it, the cluster will try to pull from the wrong location.",
-				Evidence:    []string{fmt.Sprintf("No image mirror found for source '%s'", IDMSSource)},
+				Evidence:    []string{fmt.Sprintf("No image mirror found for source '%s'", rhoai.IDMSSource)},
 				Fix:         "Configure the image mirror in the Setup tab. This is required for nightly builds to work.",
 				LearnMore:   "The ImageDigestMirrorSet (IDMS) tells the cluster to redirect image pulls from registry.redhat.io/rhoai to quay.io/rhoai, so nightly images are pulled from the correct location.",
 			}},
@@ -996,7 +997,7 @@ func checkImageMirror(c *Client) checkOutput {
 func checkNodeCapacity(c *Client) checkOutput {
 	out := checkOutput{check: CheckResult{Name: "Node capacity", Status: "pass", Detail: "All nodes healthy"}}
 
-	path := clusterPath("v1", "nodes", "")
+	path := rhoai.ClusterPath("v1", "nodes", "")
 	var items []struct {
 		Metadata struct {
 			Name string `json:"name"`
@@ -1158,7 +1159,7 @@ func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error
 			logs = append(logs, fmt.Sprintf("Kept install plan %s: %s", ip.Metadata.Name, why))
 			continue
 		}
-		path := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ip.Metadata.Name)
+		path := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, ip.Metadata.Name)
 		err := deleteExact(c, path, ip.Metadata.UID, ip.Metadata.ResourceVersion)
 		switch {
 		case err == nil:
@@ -1222,9 +1223,9 @@ func applyFixDisableComponent(c *Client, compName string) (*types.OperationRespo
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot find the DataScienceCluster: %v", err), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
 	switch {
-	case v.state == DSCStateNoCRD:
+	case v.state == rhoai.DSCStateNoCRD:
 		return &types.OperationResponse{Success: false, Message: "Cannot find the DataScienceCluster: the DataScienceCluster API is not installed", ErrorCode: "prerequisites"}, nil
-	case v.state != DSCStatePresent:
+	case v.state != rhoai.DSCStatePresent:
 		return &types.OperationResponse{Success: false, Message: "Cannot find the DataScienceCluster: no DataScienceCluster exists", ErrorCode: "prerequisites"}, nil
 	case v.argoApp != "":
 		return &types.OperationResponse{Success: false, Message: gitOpsRefusal("The DataScienceCluster", v.argoApp, "removing "+compName) + fmt.Sprintf(" Set %s to Removed in Git.", compName), ErrorCode: kube.ErrorCodeGitOpsManaged}, nil
@@ -1248,23 +1249,4 @@ func applyFixDisableComponent(c *Client, compName string) (*types.OperationRespo
 		res.Message = fmt.Sprintf("Set %s to Removed (was %s). The operator will clean up the component.", compName, kube.NonEmpty(state, "unset"))
 	}
 	return res, nil
-}
-
-// dataScienceClusterPath returns the API path of the cluster's
-// DataScienceCluster (the same one the Components page shows), at the
-// version it is read at there (readFirstDSC).
-func dataScienceClusterPath(c *Client) (string, error) {
-	read, err := readFirstDSC(c)
-	if err != nil {
-		return "", err
-	}
-	if read.State == DSCStateNoCRD {
-		return "", fmt.Errorf("the DataScienceCluster API is not installed")
-	}
-	meta, _ := read.Object["metadata"].(map[string]any)
-	name, _ := meta["name"].(string)
-	if name == "" {
-		return "", fmt.Errorf("no DataScienceCluster exists")
-	}
-	return fmt.Sprintf(dscListFmt, read.Version) + "/" + name, nil
 }

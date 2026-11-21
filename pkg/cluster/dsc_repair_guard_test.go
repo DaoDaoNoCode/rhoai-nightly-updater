@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // repairGuardMock answers the removal preconditions with a healthy
@@ -21,7 +23,7 @@ func repairGuardMock(w http.ResponseWriter, r *http.Request) bool {
 	case strings.HasSuffix(r.URL.Path, "/clusterserviceversions/rhods-operator.test"):
 		// The installed CSV names the operator's Deployment.
 		_, _ = io.WriteString(w, `{"metadata":{"name":"rhods-operator.test"},"spec":{"version":"3.6.0","install":{"spec":{"deployments":[{"name":"rhods-operator"}]}}}}`)
-	case r.URL.Path == "/apis/"+componentAPIGroup || r.URL.Path == "/apis/"+servicesAPIGroup:
+	case r.URL.Path == "/apis/"+rhoai.ComponentAPIGroup || r.URL.Path == "/apis/"+rhoai.ServicesAPIGroup:
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(w, `{"kind":"Status","code":404}`)
 	case r.URL.Path == "/apis/apiextensions.k8s.io/v1/customresourcedefinitions":

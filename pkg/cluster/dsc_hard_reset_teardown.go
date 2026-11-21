@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // What deleting the DataScienceCluster sets off, read from the source of
@@ -78,7 +79,7 @@ func parseHardResetOperator(s string) (hardResetOperator, bool) {
 
 // ownedModuleCR is an object of a module kind owned by the old DSC.
 type ownedModuleCR struct {
-	Kind       componentKind
+	Kind       rhoai.ComponentKind
 	Name       string
 	Finalizers []string
 	Deleting   string
@@ -95,7 +96,7 @@ func (o ownedModuleCR) text() string {
 // moduleCRsOwnedBy lists the objects of every module kind (both module API
 // groups) that have an ownerReference to uid.
 func moduleCRsOwnedBy(c *Client, uid string) ([]ownedModuleCR, error) {
-	api, err := discoverComponentAPI(c)
+	api, err := rhoai.DiscoverComponentAPI(c)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +136,7 @@ func hardResetOperators(c *Client, dscUID string) ([]hardResetOperator, string, 
 	seen := map[string]bool{}
 	var refusals []string
 	for _, cr := range owned {
-		op, why, err := finder.find(cr.Kind.module(), cr.Name)
+		op, why, err := finder.find(cr.Kind.Module(), cr.Name)
 		switch {
 		case err != nil:
 			return nil, "", fmt.Errorf("identify the operator of %s %s: %w", cr.Kind.Kind, cr.Name, err)
@@ -152,7 +153,7 @@ func hardResetOperators(c *Client, dscUID string) ([]hardResetOperator, string, 
 			continue
 		}
 		seen[op.ref()] = true
-		body, _, err := c.Get(namespacedPath("apps/v1", "deployments", op.Namespace, op.Name))
+		body, _, err := c.Get(rhoai.NamespacedPath("apps/v1", "deployments", op.Namespace, op.Name))
 		if err != nil {
 			return nil, "", fmt.Errorf("read Deployment %s: %w", op.ref(), err)
 		}
@@ -162,7 +163,7 @@ func hardResetOperators(c *Client, dscUID string) ([]hardResetOperator, string, 
 		if err := json.Unmarshal(body, &d); err != nil || d.Metadata.UID == "" {
 			return nil, "", fmt.Errorf("read Deployment %s: no uid", op.ref())
 		}
-		out = append(out, hardResetOperator{Module: cr.Kind.module(), Namespace: op.Namespace, Name: op.Name, UID: d.Metadata.UID})
+		out = append(out, hardResetOperator{Module: cr.Kind.Module(), Namespace: op.Namespace, Name: op.Name, UID: d.Metadata.UID})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].record() < out[j].record() })
 	return out, strings.Join(refusals, "; "), nil
@@ -176,7 +177,7 @@ func operatorsLeft(c *Client, ops []hardResetOperator) ([]hardResetOperator, err
 		var d struct {
 			Metadata kube.ObjectMeta `json:"metadata"`
 		}
-		found, err := c.GetIntoOptional(namespacedPath("apps/v1", "deployments", o.Namespace, o.Name), &d)
+		found, err := c.GetIntoOptional(rhoai.NamespacedPath("apps/v1", "deployments", o.Namespace, o.Name), &d)
 		if err != nil {
 			if kube.IsDecodeError(err) {
 				return nil, fmt.Errorf("parse Deployment %s/%s: %w", o.Namespace, o.Name, err)
@@ -202,7 +203,7 @@ func operatorsLeft(c *Client, ops []hardResetOperator) ([]hardResetOperator, err
 // settled (its finalizer waitForModuleCRDeletion holds it while module CRs
 // exist, R modules_controller_actions.go:343-391).
 func platformModulesSettled(c *Client) (bool, string, error) {
-	r, err := listServed(c, platformGroup, platformListFmt, nil, platformFallbackVersions)
+	r, err := rhoai.ListServed(c, rhoai.PlatformGroup, rhoai.PlatformListFmt, nil, rhoai.PlatformFallbackVersions)
 	switch {
 	case kube.IsK8sNotFound(err), err == nil && r.Version == "":
 		return true, "no Platform API is served", nil
@@ -214,7 +215,7 @@ func platformModulesSettled(c *Client) (bool, string, error) {
 			Metadata kube.ObjectMeta `json:"metadata"`
 			Status   struct {
 				Conditions []struct {
-					dscCondition
+					rhoai.DSCCondition
 					ObservedGeneration int64 `json:"observedGeneration"`
 				} `json:"conditions"`
 			} `json:"status"`
@@ -230,14 +231,14 @@ func platformModulesSettled(c *Client) (bool, string, error) {
 		if p.Metadata.DeletionTimestamp != "" {
 			return false, fmt.Sprintf("Platform default is being deleted (finalizers %s)", kube.NonEmpty(strings.Join(p.Metadata.Finalizers, ", "), "none")), nil
 		}
-		var provisioned, modules *dscCondition
+		var provisioned, modules *rhoai.DSCCondition
 		var observed int64
 		for i := range p.Status.Conditions {
 			switch cd := &p.Status.Conditions[i]; cd.Type {
 			case "ProvisioningSucceeded":
-				provisioned, observed = &cd.dscCondition, cd.ObservedGeneration
+				provisioned, observed = &cd.DSCCondition, cd.ObservedGeneration
 			case "ModulesReady":
-				modules = &cd.dscCondition
+				modules = &cd.DSCCondition
 			}
 		}
 		switch {

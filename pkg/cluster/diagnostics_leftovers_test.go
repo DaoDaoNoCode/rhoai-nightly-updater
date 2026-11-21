@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Verbatim condition messages of the live case (RHOAI 3.6.0, 2026-11-19).
@@ -252,11 +253,11 @@ func TestParseStoredTypeFailure(t *testing.T) {
 		t.Fatalf("%+v", sel)
 	}
 	// The live condition explains the component in the Components table.
-	if got := componentCause(dscCondition{Message: msgStoredTypes}); got != "An object is left over from an earlier release" {
+	if got := componentCause(rhoai.DSCCondition{Message: msgStoredTypes}); got != "An object is left over from an earlier release" {
 		t.Errorf("component cause %q", got)
 	}
 	// The DataScienceCluster problem links to this check's problem.
-	cc := &classifiedCondition{Cond: dscCondition{Type: "ProvisioningSucceeded", Status: "False", Message: msgStoredTypes}}
+	cc := &classifiedCondition{Cond: rhoai.DSCCondition{Type: "ProvisioningSucceeded", Status: "False", Message: msgStoredTypes}}
 	cc.classify(map[string]*dependency{}, &[]*dependency{})
 	if strings.Join(cc.ApplyIDs, ",") != "leftover-fields-trustyai-default-trustyai" {
 		t.Errorf("DSC links %v", cc.ApplyIDs)
@@ -481,8 +482,8 @@ func TestLeftoverStoredFieldsCRDNotCurrent(t *testing.T) {
 	// The installed CSV owns it: current, whoever wrote it last.
 	w := newLeftoverWorld(t, []string{msgStoredTypes}, nil, storedFalse())
 	w.serveCRD("kubectl-edit", lmevalSchema(true))
-	w.f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
-	w.f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), 200,
+	w.f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
+	w.f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), 200,
 		`{"spec":{"customresourcedefinitions":{"owned":[{"name":"`+trustyCRD+`"}]}}}`)
 	if p := onlyProblem(t, w.scan()); !p.AutoFixable || !strings.Contains(strings.Join(p.Evidence, "\n"), "the installed CSV rhods-operator.3.6.0 owns it") {
 		t.Errorf("owned CRD: %+v", p)

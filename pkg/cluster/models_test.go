@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -309,7 +310,7 @@ func TestModelsSetup_DryRunRefusalWritesNothing(t *testing.T) {
 // newest released image is used, pinned by digest, its version recorded.
 func TestModelsSetup_NightlyClusterUsesTheNewestReleasedImage(t *testing.T) {
 	mc := newModelsCluster(t)
-	mc.f.putJSON(testSubscription, `{"spec":{"source":"`+CatalogName+`"}}`)
+	mc.f.putJSON(testSubscription, `{"spec":{"source":"`+rhoai.CatalogName+`"}}`)
 	prev := lookupReleasedImage
 	t.Cleanup(func() { lookupReleasedImage = prev })
 	var asked string
@@ -334,7 +335,7 @@ func TestModelsSetup_NightlyClusterUsesTheNewestReleasedImage(t *testing.T) {
 
 	// With a mirror for registry.redhat.io/rhaii the preset's image is pulled.
 	mc2 := newModelsCluster(t)
-	mc2.f.putJSON(testSubscription, `{"spec":{"source":"`+CatalogName+`"}}`)
+	mc2.f.putJSON(testSubscription, `{"spec":{"source":"`+rhoai.CatalogName+`"}}`)
 	mc2.f.putJSON("/apis/config.openshift.io/v1/imagedigestmirrorsets/stage", `{"spec":{"imageDigestMirrors":[{"source":"registry.redhat.io/rhaii","mirrors":["registry.stage.redhat.io/rhaii"]}]}}`)
 	plan, err := planModelImage(mc2.c, testPresetImage, false, nil, true)
 	if err != nil || plan.Kind != "preset" || plan.Image != "" {
@@ -1287,7 +1288,7 @@ func TestModelsSetup_SkipsAProfileNotVisibleForModelServing(t *testing.T) {
 // quietly using the preset's image.
 func TestModelsSetup_ReleasedImageLookupFailureRefuses(t *testing.T) {
 	mc := newModelsCluster(t)
-	mc.f.putJSON(testSubscription, `{"spec":{"source":"`+CatalogName+`"}}`)
+	mc.f.putJSON(testSubscription, `{"spec":{"source":"`+rhoai.CatalogName+`"}}`)
 	prev := lookupReleasedImage
 	t.Cleanup(func() { lookupReleasedImage = prev })
 	lookupReleasedImage = func(context.Context, string) (releasedImage, error) {

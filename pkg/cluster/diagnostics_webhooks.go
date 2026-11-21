@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -78,7 +79,7 @@ func findStaleConversions(c *Client) ([]staleConversion, []string, error) {
 	// RHOAI's: a CRD of an opendatahub.io API group, or one whose Service
 	// runs in the operator, applications or monitoring namespace.
 	rhoaiNS, nsErr := rhoaiPodNamespaces(c)
-	rhoaiNS = append(rhoaiNS, SubNS)
+	rhoaiNS = append(rhoaiNS, rhoai.SubNS)
 	var candidates []conversionCRD
 	for _, crd := range crds {
 		ref := crd.conversionService()
@@ -123,7 +124,7 @@ func findStaleConversions(c *Client) ([]staleConversion, []string, error) {
 // readDSCComponents returns spec.components managementState by component
 // name, or nil when there is no DataScienceCluster.
 func readDSCComponents(c *Client) map[string]string {
-	path, err := dataScienceClusterPath(c)
+	path, err := rhoai.DataScienceClusterPath(c)
 	if err != nil {
 		return nil
 	}
@@ -222,7 +223,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 			Evidence:        evidence,
 			AffectedObjects: affected,
 			Fix:             "Get the owner running again: check the Operator pods and RHOAI pods results and the operator logs. During an operator upgrade, wait for it to finish.",
-			TechnicalCmd:    podsCommand(c),
+			TechnicalCmd:    rhoai.PodsCommand(c),
 		})
 	}
 
@@ -446,12 +447,12 @@ func listOperatorCSVs(c *Client) ([]operatorCSV, error) {
 			Message string `json:"message"`
 		} `json:"status"`
 	}
-	if err := c.ListInto(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""), &items); err != nil {
+	if err := c.ListInto(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""), &items); err != nil {
 		return nil, err
 	}
 	var out []operatorCSV
 	for _, it := range items {
-		if !strings.HasPrefix(it.Metadata.Name, SubName+".") {
+		if !strings.HasPrefix(it.Metadata.Name, rhoai.SubName+".") {
 			continue
 		}
 		out = append(out, operatorCSV{Name: it.Metadata.Name, Version: it.Spec.Version, Phase: it.Status.Phase, Reason: it.Status.Reason, Message: it.Status.Message})

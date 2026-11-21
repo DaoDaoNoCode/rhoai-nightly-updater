@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -100,7 +101,7 @@ func (j deploymentJSON) toOperatorDeployment(via string) operatorDeployment {
 
 func readOperatorDeployment(c *Client, namespace, name, via string) (*operatorDeployment, error) {
 	var j deploymentJSON
-	if err := c.GetInto(namespacedPath("apps/v1", "deployments", namespace, name), &j); err != nil {
+	if err := c.GetInto(rhoai.NamespacedPath("apps/v1", "deployments", namespace, name), &j); err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse Deployment %s/%s: %w", namespace, name, err)
 		}
@@ -158,7 +159,7 @@ type restartAssessment struct {
 // assessRestart checks that a rolling restart keeps the module operator,
 // and any failurePolicy Fail webhook it serves, available.
 func assessRestart(c *Client, d operatorDeployment) restartAssessment {
-	if d.Namespace == SubNS && d.Name == SubName {
+	if d.Namespace == rhoai.SubNS && d.Name == rhoai.SubName {
 		return restartAssessment{Reason: "it is the RHOAI operator, whose Deployment belongs to its CSV (OLM reverts template edits); delete its pod instead"}
 	}
 	if d.Replicas < 1 || d.Available < 1 {
@@ -243,7 +244,7 @@ func serviceSelects(c *Client, namespace, name string, podLabels map[string]stri
 			Selector map[string]string `json:"selector"`
 		} `json:"spec"`
 	}
-	found, err := c.GetIntoOptional(namespacedPath("v1", "services", namespace, name), &svc)
+	found, err := c.GetIntoOptional(rhoai.NamespacedPath("v1", "services", namespace, name), &svc)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return false, fmt.Errorf("parse Service %s/%s: %w", namespace, name, err)
@@ -299,12 +300,12 @@ func (b *moduleBackoff) problem() Problem {
 	d := b.Deployment
 	p.Evidence = append(p.Evidence, fmt.Sprintf("Operator Deployment %s (%s): %d of %d pods available, strategy %s", d.ref(), d.Via, d.Available, d.Replicas, d.strategyText()))
 	p.AffectedObjects = []string{"Deployment " + d.ref()}
-	if d.Namespace == SubNS && d.Name == SubName {
+	if d.Namespace == rhoai.SubNS && d.Name == rhoai.SubName {
 		p.Fix = "Delete the RHOAI operator pod; its Deployment recreates it and it reconciles at once. Or wait for its next retry."
-		p.TechnicalCmd = shellCommand("oc", "delete", "pod", "-n", SubNS, "-l", "name="+SubName)
+		p.TechnicalCmd = kube.ShellCommand("oc", "delete", "pod", "-n", rhoai.SubNS, "-l", "name="+rhoai.SubName)
 		return p
 	}
-	p.TechnicalCmd = shellCommand("oc", "rollout", "restart", "deployment/"+d.Name, "-n", d.Namespace)
+	p.TechnicalCmd = kube.ShellCommand("oc", "rollout", "restart", "deployment/"+d.Name, "-n", d.Namespace)
 	if !b.Restart.OK {
 		p.Fix = fmt.Sprintf("Restart %s (command below) or wait for its next retry. The tool does not restart it: %s.", d.ref(), b.Restart.Reason)
 		return p
@@ -345,7 +346,7 @@ func applyFixRestartModuleOperator(c *Client, module string) (*types.OperationRe
 	if !b.Restart.OK {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Not restarting %s: %s. Nothing was changed.", d.ref(), b.Restart.Reason), Logs: logs, ErrorCode: "prerequisites"}, nil
 	}
-	err = c.PatchJSON(namespacedPath("apps/v1", "deployments", d.Namespace, d.Name), map[string]any{
+	err = c.PatchJSON(rhoai.NamespacedPath("apps/v1", "deployments", d.Namespace, d.Name), map[string]any{
 		"metadata": map[string]any{"uid": d.UID, "resourceVersion": d.ResourceVersion},
 		"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
 			"annotations": map[string]string{restartAnnotation: nowRFC3339()},

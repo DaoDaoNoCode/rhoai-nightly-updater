@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // The dashboard module's operator as the live 3.6 cluster runs it, under
@@ -19,7 +21,7 @@ func (f *fakeAPI) allRequests() []fakeReq {
 
 func rhodsDashboardItem(annotations map[string]any) map[string]any {
 	return map[string]any{"metadata": map[string]any{"name": dashboardDeploymentName, "uid": "dash-uid", "annotations": annotations,
-		"ownerReferences": []any{map[string]any{"apiVersion": componentAPIGroup + "/v1alpha1", "kind": "Dashboard", "name": "default-dashboard", "uid": "dash-owner", "controller": true}}},
+		"ownerReferences": []any{map[string]any{"apiVersion": rhoai.ComponentAPIGroup + "/v1alpha1", "kind": "Dashboard", "name": "default-dashboard", "uid": "dash-owner", "controller": true}}},
 		"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"serviceAccountName": "rhods-dashboard", "containers": []any{map[string]any{"name": "rhods-dashboard", "image": "release-host"}}}}}}
 }
 
@@ -33,15 +35,15 @@ func serveModuleCluster(f *fakeAPI) {
 // finalizers, and its installed CSV owns the Dashboard CRD.
 func serveInTreeDashboardCluster(f *fakeAPI, dashboardAnnotations map[string]any) {
 	serveComponentGroup(f)
-	f.json("GET", "/apis/"+componentAPIGroup+"/v1alpha1", 200, `{"resources":[{"name":"dashboards","kind":"Dashboard","verbs":["get","list","update"]}]}`)
+	f.json("GET", "/apis/"+rhoai.ComponentAPIGroup+"/v1alpha1", 200, `{"resources":[{"name":"dashboards","kind":"Dashboard","verbs":["get","list","update"]}]}`)
 	serveDSCI(f, "redhat-ods-applications")
 	f.obj("/apis/rbac.authorization.k8s.io/v1/clusterroles", map[string]any{"items": []any{map[string]any{"metadata": map[string]any{"name": "rhods-operator.3.4.0-x"}, "rules": []any{
 		rule(componentsGroup, []string{"dashboards"}, []string{"update"}), rule(componentsGroup, []string{"dashboards/finalizers"}, []string{"update"})}}}})
-	f.obj("/apis/rbac.authorization.k8s.io/v1/clusterrolebindings", map[string]any{"items": []any{crb("rhods-operator.3.4.0-x", "rhods-operator.3.4.0-x", saSubject(SubNS, "redhat-ods-operator-controller-manager"))}})
+	f.obj("/apis/rbac.authorization.k8s.io/v1/clusterrolebindings", map[string]any{"items": []any{crb("rhods-operator.3.4.0-x", "rhods-operator.3.4.0-x", saSubject(rhoai.SubNS, "redhat-ods-operator-controller-manager"))}})
 	f.obj("/apis/apps/v1/namespaces/redhat-ods-applications/deployments", map[string]any{"items": []any{rhodsDashboardItem(dashboardAnnotations)}})
-	f.obj(namespacedPath("apps/v1", "deployments", "redhat-ods-applications", dashboardDeploymentName), rhodsDashboardItem(dashboardAnnotations))
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.4.0"}}`)
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.4.0"), 200,
+	f.obj(rhoai.NamespacedPath("apps/v1", "deployments", "redhat-ods-applications", dashboardDeploymentName), rhodsDashboardItem(dashboardAnnotations))
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.4.0"}}`)
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.4.0"), 200,
 		`{"metadata":{"name":"rhods-operator.3.4.0"},"spec":{"version":"3.4.0","customresourcedefinitions":{"owned":[{"name":"dashboards.components.platform.opendatahub.io"}]},"install":{"spec":{"deployments":[{"name":"rhods-operator"}]}}},"status":{"phase":"Succeeded"}}`)
 }
 
@@ -64,11 +66,11 @@ func TestDiscoverDashboardTarget(t *testing.T) {
 		{name: "component API not served", setup: func(f *fakeAPI) { serveDSCI(f, "old-apps") }, legacy: "API is not served", ns: "old-apps"},
 		{name: "no Dashboard kind served", setup: func(f *fakeAPI) {
 			serveComponentGroup(f)
-			f.json("GET", "/apis/"+componentAPIGroup+"/v1alpha1", 200, `{"resources":[{"name":"rays","kind":"Ray"}]}`)
+			f.json("GET", "/apis/"+rhoai.ComponentAPIGroup+"/v1alpha1", 200, `{"resources":[{"name":"rays","kind":"Ray"}]}`)
 			serveDSCI(f, "old-apps")
 		}, legacy: "no Dashboard kind", ns: "old-apps"},
 		{name: "nothing installed: legacy without a namespace", setup: func(f *fakeAPI) {}, legacy: "API is not served"},
-		{name: "component API unreadable", setup: func(f *fakeAPI) { f.status("GET", "/apis/"+componentAPIGroup, 503, "ServiceUnavailable") }, errContain: "503"},
+		{name: "component API unreadable", setup: func(f *fakeAPI) { f.status("GET", "/apis/"+rhoai.ComponentAPIGroup, 503, "ServiceUnavailable") }, errContain: "503"},
 		{name: "ClusterRoles unreadable", setup: func(f *fakeAPI) {
 			serveModuleCluster(f)
 			f.status("GET", "/apis/rbac.authorization.k8s.io/v1/clusterroles", 403, "Forbidden")
@@ -95,7 +97,7 @@ func TestDiscoverDashboardTarget(t *testing.T) {
 		}, errContain: "several Deployments"},
 		{name: "Dashboard served, nobody may update it, CSV does not own it", setup: func(f *fakeAPI) {
 			serveInTreeDashboardCluster(f, nil)
-			f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.4.0"), 200,
+			f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.4.0"), 200,
 				`{"metadata":{"name":"rhods-operator.3.4.0"},"spec":{"version":"3.4.0","install":{"spec":{"deployments":[{"name":"rhods-operator"}]}}}}`)
 		}, errContain: "does not own CRD"},
 	} {
@@ -108,7 +110,7 @@ func TestDiscoverDashboardTarget(t *testing.T) {
 				if err == nil || !errors.As(err, &opErr) || !strings.Contains(err.Error(), tc.errContain) {
 					t.Fatalf("target=%+v err=%v, want a dashboardOperatorError with %q", target, err, tc.errContain)
 				}
-				if errors.Is(err, errNoDSCInitialization) != tc.noDSCI {
+				if errors.Is(err, rhoai.ErrNoDSCInitialization) != tc.noDSCI {
 					t.Fatalf("err=%v: errNoDSCInitialization=%v, want %v", err, !tc.noDSCI, tc.noDSCI)
 				}
 				return
@@ -132,7 +134,7 @@ func TestDiscoverDashboardTarget(t *testing.T) {
 // images are never read for a legacy patch.
 func TestDashboardDevRefusesWhenTheOperatorIsUnknown(t *testing.T) {
 	unknown := map[string]func(f *fakeAPI){
-		"component API unreadable": func(f *fakeAPI) { f.status("GET", "/apis/"+componentAPIGroup, 503, "ServiceUnavailable") },
+		"component API unreadable": func(f *fakeAPI) { f.status("GET", "/apis/"+rhoai.ComponentAPIGroup, 503, "ServiceUnavailable") },
 		"operator Deployment gone": func(f *fakeAPI) {
 			serveModuleCluster(f)
 			f.obj("/apis/apps/v1/namespaces/"+fixtureAppsNS+"/deployments", map[string]any{"items": []any{rhodsDashboardItem(map[string]any{"opendatahub.io/managed": "false"})}})
@@ -181,7 +183,7 @@ func TestDashboardDevActiveLegacySelection(t *testing.T) {
 		return func(f *fakeAPI) {
 			serveDSCI(f, "old-apps")
 			if dashboard != "" {
-				f.json("GET", namespacedPath("apps/v1", "deployments", "old-apps", dashboardDeploymentName), 200, dashboard)
+				f.json("GET", rhoai.NamespacedPath("apps/v1", "deployments", "old-apps", dashboardDeploymentName), 200, dashboard)
 			}
 		}
 	}
@@ -218,16 +220,16 @@ func TestDashboardDevActiveLegacySelection(t *testing.T) {
 func TestLegacyRevertReadsTheCSVsOperatorDeployment(t *testing.T) {
 	f, c := newFakeAPI(t)
 	serveInTreeDashboardCluster(f, map[string]any{"opendatahub.io/managed": "false", legacyOriginalManagedAnnotation: `{"present":false}`})
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.4.0"), 200,
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.4.0"), 200,
 		`{"metadata":{"name":"rhods-operator.3.4.0"},"spec":{"version":"3.4.0","customresourcedefinitions":{"owned":[{"name":"dashboards.components.platform.opendatahub.io"}]},"install":{"spec":{"deployments":[{"name":"renamed-operator"}]}}}}`)
-	f.json("GET", namespacedPath("apps/v1", "deployments", SubNS, "renamed-operator"), 200,
+	f.json("GET", rhoai.NamespacedPath("apps/v1", "deployments", rhoai.SubNS, "renamed-operator"), 200,
 		`{"spec":{"template":{"spec":{"containers":[{"env":[{"name":"RELATED_IMAGE_ODH_DASHBOARD_IMAGE","value":"release-host"}]}]}}}}`)
-	f.json("PATCH", namespacedPath("apps/v1", "deployments", "redhat-ods-applications", dashboardDeploymentName), 200, `{}`)
+	f.json("PATCH", rhoai.NamespacedPath("apps/v1", "deployments", "redhat-ods-applications", dashboardDeploymentName), 200, `{}`)
 	r, err := RevertDashboardImage(c)
 	if err != nil || !r.Success {
 		t.Fatalf("revert = %+v, %v", r, err)
 	}
-	if w := f.writes(); !slices.Equal(w, []string{"PATCH " + namespacedPath("apps/v1", "deployments", "redhat-ods-applications", dashboardDeploymentName)}) {
+	if w := f.writes(); !slices.Equal(w, []string{"PATCH " + rhoai.NamespacedPath("apps/v1", "deployments", "redhat-ods-applications", dashboardDeploymentName)}) {
 		t.Fatalf("writes = %v", w)
 	}
 }
@@ -244,7 +246,7 @@ func TestDashboardDevPauseRevertRoundTripOnTheDiscoveredOperator(t *testing.T) {
 	if !strings.Contains(result.Message, fixtureOperatorName+" is paused") || !slices.Contains(result.Logs, "Dashboard Dev recovery information saved; "+fixtureOperatorName+" scaled to 0.") {
 		t.Fatalf("deploy result does not name the operator: %+v", result)
 	}
-	wantPath := namespacedPath("apps/v1", "deployments", fixtureAppsNS, fixtureOperatorName)
+	wantPath := rhoai.NamespacedPath("apps/v1", "deployments", fixtureAppsNS, fixtureOperatorName)
 	if !slices.Contains(f.patchPaths, wantPath) {
 		t.Fatalf("operator patches went to %v, want %s", f.patchPaths, wantPath)
 	}
@@ -314,30 +316,30 @@ func TestDiscoverRHOAINamespaces(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		setup   func(f *fakeAPI)
-		want    rhoaiNamespaces
+		want    rhoai.Namespaces
 		wantErr string
 		noDSCI  bool
 	}{
 		{"applications and monitoring", func(f *fakeAPI) {
 			f.json("GET", dsciV2List, 200, `{"items":[{"metadata":{"name":"d"},"spec":{"applicationsNamespace":"apps-x","monitoring":{"namespace":"mon-x"}}}]}`)
-		}, rhoaiNamespaces{Applications: "apps-x", Monitoring: "mon-x"}, "", false},
-		{"no DSCInitialization API", func(f *fakeAPI) {}, rhoaiNamespaces{}, "no DSCInitialization exists", true},
-		{"none created", func(f *fakeAPI) { f.json("GET", dsciV2List, 200, `{"items":[]}`) }, rhoaiNamespaces{}, "no DSCInitialization exists", true},
+		}, rhoai.Namespaces{Applications: "apps-x", Monitoring: "mon-x"}, "", false},
+		{"no DSCInitialization API", func(f *fakeAPI) {}, rhoai.Namespaces{}, "no DSCInitialization exists", true},
+		{"none created", func(f *fakeAPI) { f.json("GET", dsciV2List, 200, `{"items":[]}`) }, rhoai.Namespaces{}, "no DSCInitialization exists", true},
 		{"two", func(f *fakeAPI) {
 			f.json("GET", dsciV2List, 200, `{"items":[{"spec":{"applicationsNamespace":"a"}},{"spec":{"applicationsNamespace":"b"}}]}`)
-		}, rhoaiNamespaces{}, "2 DSCInitializations", false},
-		{"no namespace named", func(f *fakeAPI) { f.json("GET", dsciV2List, 200, `{"items":[{"metadata":{"name":"d"},"spec":{}}]}`) }, rhoaiNamespaces{}, "names no applications namespace", false},
-		{"read refused", func(f *fakeAPI) { f.status("GET", dsciV2List, 403, "Forbidden") }, rhoaiNamespaces{}, "403", false},
+		}, rhoai.Namespaces{}, "2 DSCInitializations", false},
+		{"no namespace named", func(f *fakeAPI) { f.json("GET", dsciV2List, 200, `{"items":[{"metadata":{"name":"d"},"spec":{}}]}`) }, rhoai.Namespaces{}, "names no applications namespace", false},
+		{"read refused", func(f *fakeAPI) { f.status("GET", dsciV2List, 403, "Forbidden") }, rhoai.Namespaces{}, "403", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newFakeAPI(t)
 			tc.setup(f)
-			got, err := discoverRHOAINamespaces(c)
+			got, err := rhoai.DiscoverNamespaces(c)
 			if tc.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.wantErr) || errors.Is(err, errNoDSCInitialization) != tc.noDSCI || got != (rhoaiNamespaces{}) {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) || errors.Is(err, rhoai.ErrNoDSCInitialization) != tc.noDSCI || got != (rhoai.Namespaces{}) {
 					t.Fatalf("got %+v, %v; want error %q", got, err, tc.wantErr)
 				}
-				if _, cached := rhoaiNamespacesCache.Get(c.BaseURL()); cached {
+				if _, cached := rhoai.NamespacesCache.Get(c.BaseURL()); cached {
 					t.Fatal("a failed read was cached")
 				}
 				return
@@ -346,7 +348,7 @@ func TestDiscoverRHOAINamespaces(t *testing.T) {
 				t.Fatalf("got %+v, %v", got, err)
 			}
 			before := f.requestCount()
-			if again, err := discoverRHOAINamespaces(c); err != nil || again != tc.want || f.requestCount() != before {
+			if again, err := rhoai.DiscoverNamespaces(c); err != nil || again != tc.want || f.requestCount() != before {
 				t.Fatalf("second read %+v, %v, %d requests (want the cache)", again, err, f.requestCount()-before)
 			}
 		})

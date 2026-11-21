@@ -42,6 +42,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"gopkg.in/yaml.v3"
 )
 
@@ -544,8 +545,8 @@ func TestGitOpsTemplateParameters(t *testing.T) {
 	for _, p := range tmpl.Parameters {
 		seen[p.Name] = true
 		if p.Name == "OPERATOR_NAMESPACE" {
-			if p.Value != SubNS {
-				t.Errorf("OPERATOR_NAMESPACE defaults to %q, but the code uses %q", p.Value, SubNS)
+			if p.Value != rhoai.SubNS {
+				t.Errorf("OPERATOR_NAMESPACE defaults to %q, but the code uses %q", p.Value, rhoai.SubNS)
 			}
 			if _, clash := defaults[p.Name]; clash {
 				t.Error("deploy/template.yaml has OPERATOR_NAMESPACE too; keep one definition")
@@ -565,8 +566,8 @@ func TestGitOpsTemplateParameters(t *testing.T) {
 			t.Errorf("parameter %s is missing", name)
 		}
 	}
-	if defaults["MARKETPLACE_NAMESPACE"] != CatalogNS {
-		t.Errorf("MARKETPLACE_NAMESPACE defaults to %q, but the code uses %q", defaults["MARKETPLACE_NAMESPACE"], CatalogNS)
+	if defaults["MARKETPLACE_NAMESPACE"] != rhoai.CatalogNS {
+		t.Errorf("MARKETPLACE_NAMESPACE defaults to %q, but the code uses %q", defaults["MARKETPLACE_NAMESPACE"], rhoai.CatalogNS)
 	}
 	// `oc process` drops literal namespaces (TestTemplateNamespacesAreParameters).
 	for _, o := range tmpl.Objects {
@@ -626,13 +627,13 @@ func TestGitOpsAdmissionPolicyMatchesTheCode(t *testing.T) {
 	}
 	all := strings.Join(exprs, "\n") + fmt.Sprint(spec["variables"])
 	for _, want := range []string{
-		"request.name == '" + SubName + "'",
-		"object.spec.name == '" + SubName + "'",
-		"object.spec.source == '" + CatalogName + "'",
+		"request.name == '" + rhoai.SubName + "'",
+		"object.spec.name == '" + rhoai.SubName + "'",
+		"object.spec.source == '" + rhoai.CatalogName + "'",
 		"object.spec.sourceNamespace == '${MARKETPLACE_NAMESPACE}'",
 		"request.namespace == '${OPERATOR_NAMESPACE}'",
 		"'${SUBSCRIPTION_ENV_ALLOWLIST}'.split(',')",
-		"startsWith('" + SubName + ".')",
+		"startsWith('" + rhoai.SubName + ".')",
 		"request.resource.resource != 'operatorgroups'",
 		"request.resource.resource != 'catalogsources'",
 	} {

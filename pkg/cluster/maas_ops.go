@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -303,7 +304,7 @@ func (m *maasRun) applyGateway(plan *maasGatewayPlan, dryRun bool) (string, stri
 		if dryRun {
 			query = url.Values{"dryRun": {"All"}}
 		}
-		if _, _, err := m.c.Do(http.MethodPost, withToolFieldManager(clusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "")), "application/json", data, query); err != nil && !kube.IsK8sConflict(err) {
+		if _, _, err := m.c.Do(http.MethodPost, withToolFieldManager(rhoai.ClusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "")), "application/json", data, query); err != nil && !kube.IsK8sConflict(err) {
 			return fmt.Sprintf("Failed to create GatewayClass %s: %v.%s", maasGatewayClass, err, templateHint(err)), maasWriteCode(err)
 		}
 		if !dryRun {
@@ -337,7 +338,7 @@ func (m *maasRun) applyGateway(plan *maasGatewayPlan, dryRun bool) (string, stri
 // field manager rhoai-nightly-updater-maas-dsc: the API server then tells
 // whether the value is still the tool's (dscMaaSOwned).
 func patchModelsAsAService(c *Client, state string) error {
-	path, err := dataScienceClusterPath(c)
+	path, err := rhoai.DataScienceClusterPath(c)
 	if err != nil {
 		return err
 	}
@@ -390,7 +391,7 @@ func servedMaaSAPI(c *Client) (string, bool, error) {
 	if err != nil || !served {
 		return "", served, err
 	}
-	v := servedVersions(c, maasGroup, nil)
+	v := rhoai.ServedVersions(c, maasGroup, nil)
 	if !v.Discovered || len(v.Versions) == 0 {
 		return "", true, fmt.Errorf("read the versions of the API group %s: discovery did not answer", maasGroup)
 	}
@@ -413,8 +414,8 @@ func listMaaSObjects(c *Client) ([]maasObject, error) {
 	var out []maasObject
 	for _, l := range []struct{ kind, path string }{
 		{"MaaSModelRef", "/apis/" + api + "/maasmodelrefs"},
-		{"MaaSSubscription", namespacedPath(api, "maassubscriptions", maasTenantNamespace, "")},
-		{"MaaSAuthPolicy", namespacedPath(api, "maasauthpolicies", maasTenantNamespace, "")},
+		{"MaaSSubscription", rhoai.NamespacedPath(api, "maassubscriptions", maasTenantNamespace, "")},
+		{"MaaSAuthPolicy", rhoai.NamespacedPath(api, "maasauthpolicies", maasTenantNamespace, "")},
 	} {
 		var items []struct {
 			Metadata kube.ObjectMeta `json:"metadata"`
@@ -440,7 +441,7 @@ func maasControllerGone(c *Client) string {
 	if dsc, err := readMaaSDSC(c); err == nil && dsc.read.Object != nil && dsc.maas != "Managed" {
 		return "MaaS is " + kube.FirstNonEmpty(dsc.maas, "not set") + " in the DataScienceCluster"
 	}
-	if ns, err := appsNamespace(c); err == nil && deploymentAvailable(c, ns, "maas-controller") == "missing" {
+	if ns, err := rhoai.AppsNamespace(c); err == nil && deploymentAvailable(c, ns, "maas-controller") == "missing" {
 		return "Deployment " + ns + "/maas-controller does not exist"
 	}
 	return ""
@@ -450,7 +451,7 @@ func maasControllerGone(c *Client) string {
 // a changed maas-db-config (maas-setup.md "Restarting maas-api"). A
 // missing Deployment needs nothing: the operator starts it with the Secret.
 func restartMaaSAPI(c *Client, ns string) (bool, error) {
-	err := c.PatchJSON(namespacedPath("apps/v1", "deployments", ns, "maas-api"), map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
+	err := c.PatchJSON(rhoai.NamespacedPath("apps/v1", "deployments", ns, "maas-api"), map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
 		"annotations": map[string]string{restartAnnotation: kube.Clock().Now().UTC().Format(time.RFC3339)},
 	}}}})
 	if kube.IsK8sNotFound(err) {
@@ -779,16 +780,16 @@ func maasModelRefObjectFor(c *Client, project, name, displayName, description, m
 
 func maasAccessPath(c *Client, kind string) string {
 	if kind == "MaaSSubscription" {
-		return namespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription")
+		return rhoai.NamespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription")
 	}
-	return namespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access")
+	return rhoai.NamespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access")
 }
 
 func maasAccessCreatePath(c *Client, kind string) string {
 	if kind == "MaaSSubscription" {
-		return withToolFieldManager(namespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", ""))
+		return withToolFieldManager(rhoai.NamespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", ""))
 	}
-	return withToolFieldManager(namespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", ""))
+	return withToolFieldManager(rhoai.NamespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", ""))
 }
 
 // applyMaaSObject creates or updates one of the tool's MaaS objects.
@@ -1136,7 +1137,7 @@ func (m *maasRun) publishDryRuns(pl *maasPublish) (*types.OperationResponse, err
 		desc, path, create string
 		obj                map[string]any
 	}{
-		{"MaaSModelRef " + project + "/" + name, refPath, withToolFieldManager(namespacedPath(maasAPI(c), "maasmodelrefs", project, "")), refObj},
+		{"MaaSModelRef " + project + "/" + name, refPath, withToolFieldManager(rhoai.NamespacedPath(maasAPI(c), "maasmodelrefs", project, "")), refObj},
 		{"MaaSSubscription " + maasSubscriptionName, maasAccessPath(c, "MaaSSubscription"), maasAccessCreatePath(c, "MaaSSubscription"), sub},
 		{"MaaSAuthPolicy " + maasAuthPolicyName, maasAccessPath(c, "MaaSAuthPolicy"), maasAccessCreatePath(c, "MaaSAuthPolicy"), auth},
 	} {
@@ -1194,7 +1195,7 @@ func (m *maasRun) publishMaaSObjects(pl *maasPublish) (*types.OperationResponse,
 		desc, path, create string
 		obj                map[string]any
 	}{
-		{"MaaSModelRef " + project + "/" + name, refPath, withToolFieldManager(namespacedPath(maasAPI(c), "maasmodelrefs", project, "")), refObj},
+		{"MaaSModelRef " + project + "/" + name, refPath, withToolFieldManager(rhoai.NamespacedPath(maasAPI(c), "maasmodelrefs", project, "")), refObj},
 		{"MaaSSubscription " + maasSubscriptionName, maasAccessPath(c, "MaaSSubscription"), maasAccessCreatePath(c, "MaaSSubscription"), sub},
 		{"MaaSAuthPolicy " + maasAuthPolicyName, maasAccessPath(c, "MaaSAuthPolicy"), maasAccessCreatePath(c, "MaaSAuthPolicy"), auth},
 	} {

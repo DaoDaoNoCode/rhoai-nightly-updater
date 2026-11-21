@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -108,7 +109,7 @@ func DashboardDevActive(c *Client) (bool, error) {
 // module's operator Deployment (namespace/name, "" on the legacy flow).
 func dashboardDevActive(c *Client) (active bool, operator string, err error) {
 	target, op, err := loadDashboardOperator(c, true)
-	if errors.Is(err, errNoDSCInitialization) {
+	if errors.Is(err, rhoai.ErrNoDSCInitialization) {
 		return false, "", nil
 	}
 	if err != nil {
@@ -147,7 +148,7 @@ func pausedOperatorText(operator string) string {
 
 func legacyDashboardDevActive(c *Client, ns string) (bool, error) {
 	var d dashboardDeployment
-	found, err := c.GetIntoOptional(namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName), &d)
+	found, err := c.GetIntoOptional(rhoai.NamespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName), &d)
 	if err != nil {
 		return false, err
 	}

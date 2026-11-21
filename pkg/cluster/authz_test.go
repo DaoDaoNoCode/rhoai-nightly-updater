@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // fakeAPIServer points NewClientWithContext at an httptest TLS server.
@@ -53,13 +54,13 @@ func TestPermissionReviewUsesTokenOwnerFullRBAC(t *testing.T) {
 				if review["user"] != nil || review["groups"] != nil {
 					t.Error("caller must not choose review identity")
 				}
-				if review["resource"] != "subscriptions" || review["verb"] != "update" || review["namespace"] != SubNS {
+				if review["resource"] != "subscriptions" || review["verb"] != "update" || review["namespace"] != rhoai.SubNS {
 					t.Error(review)
 				}
 				w.WriteHeader(tc.status)
 				io.WriteString(w, tc.body)
 			})
-			allowed, err := CheckUserPermissionWithToken(context.Background(), "scoped-user-token", "update", "subscriptions", "operators.coreos.com", SubNS)
+			allowed, err := CheckUserPermissionWithToken(context.Background(), "scoped-user-token", "update", "subscriptions", "operators.coreos.com", rhoai.SubNS)
 			if allowed != tc.allowed || (err != nil) != tc.wantError {
 				t.Fatalf("allowed=%v err=%v", allowed, err)
 			}

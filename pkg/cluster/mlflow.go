@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -157,7 +158,7 @@ func (m mlflowCR) staleOriginal() bool {
 
 func getMLflowCR(c *Client) (mlflowCR, error) {
 	var cr mlflowCR
-	if err := c.GetInto(clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), &cr); err != nil {
+	if err := c.GetInto(rhoai.ClusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), &cr); err != nil {
 		if kube.IsDecodeError(err) {
 			return mlflowCR{}, fmt.Errorf("parse MLflow CR: %w", err)
 		}
@@ -170,7 +171,7 @@ func getMLflowCR(c *Client) (mlflowCR, error) {
 // applications namespace (mlflow-operator internal/config/config.go,
 // APPLICATIONS_NAMESPACE, which the platform sets to the DSCInitialization's).
 func mlflowNamespace(c *Client) (string, error) {
-	return appsNamespace(c)
+	return rhoai.AppsNamespace(c)
 }
 
 // mlflowOwnedPVCs lists PVCs in the MLflow namespace ns whose owner is the
@@ -179,7 +180,7 @@ func mlflowOwnedPVCs(c *Client, ns, uid string) ([]string, error) {
 	var items []struct {
 		Metadata kube.ObjectMeta `json:"metadata"`
 	}
-	if err := c.ListInto(namespacedPath("v1", "persistentvolumeclaims", ns, ""), &items); err != nil {
+	if err := c.ListInto(rhoai.NamespacedPath("v1", "persistentvolumeclaims", ns, ""), &items); err != nil {
 		return nil, err
 	}
 	var names []string
@@ -335,7 +336,7 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 	// Create, never apply: the CR is a singleton, and a forced apply would
 	// take over one that someone created a moment ago.
 	data, _ := json.Marshal(mlflowCR)
-	if _, _, err := c.Post(withToolFieldManager(clusterPath(mlflowAPIGroup, "mlflows", "")), data); err != nil {
+	if _, _, err := c.Post(withToolFieldManager(rhoai.ClusterPath(mlflowAPIGroup, "mlflows", "")), data); err != nil {
 		msg := fmt.Sprintf("Failed to create MLflow CR: %v", err)
 		code := kube.ErrorCodeFromK8sErr(err)
 		switch {
@@ -398,7 +399,7 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 		pvcs, pvcErr = mlflowOwnedPVCs(c, ns, cr.Metadata.UID)
 	}
 	logs = append(logs, "Deleting MLflow CR...")
-	crPath := clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName)
+	crPath := rhoai.ClusterPath(mlflowAPIGroup, "mlflows", mlflowCRName)
 	if _, delErr := kube.DeleteWithUID(c, crPath, cr.Metadata.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
 		code := kube.ErrorCodeFromK8sErr(delErr)
 		if kube.IsK8sConflict(delErr) {
@@ -447,7 +448,7 @@ func patchMLflowCR(c *Client, cr mlflowCR, annotations, spec map[string]any) err
 	if spec != nil {
 		body["spec"] = spec
 	}
-	return c.PatchJSON(clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), body)
+	return c.PatchJSON(rhoai.ClusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), body)
 }
 
 // imageSpec is the spec patch that sets spec.image.image (nil removes it).

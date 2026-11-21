@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -135,7 +136,7 @@ func TestUpdateStream_OrderAndSingleSubscriptionApply(t *testing.T) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	subPath := subscriptionPath()
-	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
+	csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	idx := map[string]int{}
 	for i, w := range f.writes() {
 		if _, seen := idx[w]; !seen {
@@ -203,7 +204,7 @@ func TestOperationsPreserveSubscriptionSettings(t *testing.T) {
 			}
 			approved := false
 			for _, w := range f.writes() {
-				approved = approved || w == "PATCH "+namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, "install-new")
+				approved = approved || w == "PATCH "+rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, "install-new")
 			}
 			if !approved {
 				t.Fatalf("InstallPlan was not approved: %v", f.writes())
@@ -394,7 +395,7 @@ func TestEnsureOperatorNamespaceAndGroup(t *testing.T) {
 	}{
 		{"global group", []any{map[string]any{"metadata": map[string]any{"name": "og"}, "spec": map[string]any{}}}, "", false},
 		{"two groups", []any{map[string]any{"metadata": map[string]any{"name": "a"}}, map[string]any{"metadata": map[string]any{"name": "b"}}}, "TooManyOperatorGroups", false},
-		{"own namespace group", []any{map[string]any{"metadata": map[string]any{"name": "og"}, "spec": map[string]any{"targetNamespaces": []any{SubNS}}}}, "AllNamespaces", false},
+		{"own namespace group", []any{map[string]any{"metadata": map[string]any{"name": "og"}, "spec": map[string]any{"targetNamespaces": []any{rhoai.SubNS}}}}, "AllNamespaces", false},
 		{"missing", nil, "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -442,8 +443,8 @@ func TestReinstallStableTargets(t *testing.T) {
 	}{
 		{name: "healthy stable", installed: "rhods-operator.3.5.1", phase: "Succeeded", source: "redhat-operators", wantSuccess: true, wantMsg: "Already on the GA release"},
 		{name: "failed stable is reinstalled", installed: "rhods-operator.3.5.1", phase: "Failed", source: "redhat-operators", wantSuccess: true, wantMsg: "is installed", wantWrites: true},
-		{name: "nightly to older GA refused", installed: "rhods-operator.3.6.0", phase: "Succeeded", source: CatalogName, wantCode: errorCodeDowngrade, wantMsg: "older than the installed"},
-		{name: "nightly to older GA confirmed", installed: "rhods-operator.3.6.0", phase: "Succeeded", source: CatalogName, allow: true, wantSuccess: true, wantMsg: "is installed", wantWrites: true},
+		{name: "nightly to older GA refused", installed: "rhods-operator.3.6.0", phase: "Succeeded", source: rhoai.CatalogName, wantCode: errorCodeDowngrade, wantMsg: "older than the installed"},
+		{name: "nightly to older GA confirmed", installed: "rhods-operator.3.6.0", phase: "Succeeded", source: rhoai.CatalogName, allow: true, wantSuccess: true, wantMsg: "is installed", wantWrites: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeOLM(t).installed(tc.installed, map[string]any{"source": tc.source})
@@ -570,7 +571,7 @@ func TestAdminAckReported(t *testing.T) {
 // Subscription apply, so each case takes its own path in every run.
 func TestLostLockSkipsTheRestore(t *testing.T) {
 	isSubscriptionApply := func(r *http.Request) bool {
-		return r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/subscriptions/"+SubName)
+		return r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/subscriptions/"+rhoai.SubName)
 	}
 	for _, tc := range []struct {
 		name string
@@ -945,7 +946,7 @@ func TestManualApproval_OnlyTheConfirmedCSV(t *testing.T) {
 				t.Fatalf("result = %+v", r)
 			}
 			for _, w := range f.writes() {
-				if w == "PATCH "+namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, "install-new") {
+				if w == "PATCH "+rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, "install-new") {
 					t.Fatalf("approved an InstallPlan for a CSV that was not confirmed: %v", f.writes())
 				}
 			}
@@ -990,7 +991,7 @@ func TestRefresh_AfterACrashUsesTheRecordedSubscription(t *testing.T) {
 		t.Fatalf("result = %+v, %v", r, err)
 	}
 	applies := f.subscriptionApplies()
-	if spec := applies[0]; spec["source"] != CatalogName || spec["channel"] != "stable-3.x" || fmt.Sprint(spec["config"]) != fmt.Sprint(config) {
+	if spec := applies[0]; spec["source"] != rhoai.CatalogName || spec["channel"] != "stable-3.x" || fmt.Sprint(spec["config"]) != fmt.Sprint(config) {
 		t.Fatalf("recreated Subscription = %v", spec)
 	}
 }
@@ -1082,7 +1083,7 @@ func TestReinstall_ActivityRecord(t *testing.T) {
 		return out
 	}
 	t.Run("stable", func(t *testing.T) {
-		f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"source": CatalogName})
+		f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"source": rhoai.CatalogName})
 		f.stableChans = `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.6.1","currentCSVDesc":{"version":"3.6.1"}}]`
 		f.onSubscribe = olmInstalls("rhods-operator.3.6.1")
 		r, err := Reinstall(f.client(context.Background()), "stable", "", "")
@@ -1140,7 +1141,7 @@ func TestOperations_UnreadableCSVsCarryTheRequestsCode(t *testing.T) {
 // refuse, every operation ends the session after its checks and before its
 // first change to OLM's objects, then runs to the end.
 func TestOperationsEndDashboardDevBeforeTheFirstChange(t *testing.T) {
-	dashboardOpPath := namespacedPath("apps/v1", "deployments", fixtureAppsNS, fixtureOperatorName)
+	dashboardOpPath := rhoai.NamespacedPath("apps/v1", "deployments", fixtureAppsNS, fixtureOperatorName)
 	for _, op := range []string{"update", "reinstall", "refresh"} {
 		t.Run(op, func(t *testing.T) {
 			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
@@ -1246,7 +1247,7 @@ func TestReinstallDowngrade_StoredVersionsCheck(t *testing.T) {
 			wantSuccess: true, wantInMsg: "is installed", wantInLogs: "stored versions of the live CRDs were not checked"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"source": CatalogName})
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"source": rhoai.CatalogName})
 			desc := `"version":"3.5.1"`
 			if tc.owned != "" {
 				desc += `,"customresourcedefinitions":{"owned":` + tc.owned + `}`

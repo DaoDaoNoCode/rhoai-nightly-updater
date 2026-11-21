@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -216,7 +217,7 @@ func TestGetIDMSCountsAnImageContentSourcePolicy(t *testing.T) {
 		f, c := newResourceFake(t)
 		f.putJSON(nsICSPList+"/legacy", `{"spec":{"repositoryDigestMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["quay.io/rhoai"]}]}}`)
 		got, err := getIDMS(c)
-		if err != nil || !got.Exists || got.Kind != mirrorKindICSP || got.Name != "legacy" || got.Source != IDMSSource {
+		if err != nil || !got.Exists || got.Kind != mirrorKindICSP || got.Name != "legacy" || got.Source != rhoai.IDMSSource {
 			t.Fatalf("got %+v, %v", got, err)
 		}
 	})

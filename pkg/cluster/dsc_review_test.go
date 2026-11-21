@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -184,7 +185,7 @@ func operatorRemovesDSCAt(f *resourceFake, path string, n int, then func()) {
 
 func hardResetRecordOf(t *testing.T, f *resourceFake) string {
 	t.Helper()
-	cm := f.get(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
+	cm := f.get(rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
 	if cm == nil {
 		return ""
 	}
@@ -238,7 +239,7 @@ func TestHardResetValidatesTheNewSpecBeforeTheDelete(t *testing.T) {
 
 func TestHardResetWithoutReleaseDefaultIsRefusedBeforeTheDelete(t *testing.T) {
 	f, c := managerWorld(t, nil)
-	csv := f.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"))
+	csv := f.get(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"))
 	ensureMap(csv, "metadata")["annotations"] = map[string]any{"alm-examples": "[]"}
 	res, _ := runHardReset(t, c, nil)
 	if res.Success || res.ErrorCode != "prerequisites" || !strings.Contains(res.Message, "release default") {
@@ -480,8 +481,8 @@ func TestRemovalChecksFailClosedOnModulesTheToolCannotCheck(t *testing.T) {
 	}
 	// The CSV names no Deployment: blocked, not assumed.
 	f2, c2 := newFakeAPI(t)
-	f2.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
-	f2.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), 200, `{"metadata":{"name":"rhods-operator.3.6.0"},"spec":{"version":"3.6.0"}}`)
+	f2.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
+	f2.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), 200, `{"metadata":{"name":"rhods-operator.3.6.0"},"spec":{"version":"3.6.0"}}`)
 	f2.json("GET", "/apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator", http.StatusOK, `{"status":{"readyReplicas":1}}`)
 	if why := operatorDeploymentsBlocker(c2); !strings.Contains(why, "lists no Deployment") {
 		t.Fatalf("no deployment = %q", why)

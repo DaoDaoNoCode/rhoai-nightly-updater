@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Prerequisite operators named in DataScienceCluster and module conditions.
@@ -297,7 +298,7 @@ func loadPackageIndex(c *Client) ([]catalogPackage, error) {
 	if idx, ok := packageIndexCache[c.BaseURL()]; ok && time.Since(idx.at) < packageIndexTTL {
 		return idx.packages, nil
 	}
-	body, _, err := c.Get(namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, ""))
+	body, _, err := c.Get(rhoai.NamespacedPath("packages.operators.coreos.com/v1", "packagemanifests", rhoai.CatalogNS, ""))
 	if err != nil {
 		return nil, fmt.Errorf("list package manifests: %w", err)
 	}
@@ -354,7 +355,7 @@ func parsePackageManifests(body []byte) ([]catalogPackage, error) {
 			p.Catalog = it.Metadata.Labels["catalog"]
 		}
 		if p.CatalogNamespace == "" {
-			p.CatalogNamespace = kube.NonEmpty(it.Metadata.Labels["catalog-namespace"], CatalogNS)
+			p.CatalogNamespace = kube.NonEmpty(it.Metadata.Labels["catalog-namespace"], rhoai.CatalogNS)
 		}
 		if p.Provider == "" {
 			p.Provider = it.Metadata.Labels["provider"]
@@ -453,7 +454,7 @@ func (csv clusterCSV) matchNames() []string {
 func listClusterCSVs(c *Client) ([]clusterCSV, error) {
 	// OLM copies the CSV of an AllNamespaces operator into every namespace
 	// and labels the copies olm.copiedFrom.
-	body, _, err := c.Do(http.MethodGet, clusterPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ""), "", nil,
+	body, _, err := c.Do(http.MethodGet, rhoai.ClusterPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ""), "", nil,
 		url.Values{"labelSelector": {"!olm.copiedFrom"}})
 	if err != nil {
 		return nil, fmt.Errorf("list CSVs: %w", err)
@@ -903,18 +904,18 @@ func prerequisiteProblem(c *Client, d *dependency) Problem {
 		p.Description = fmt.Sprintf("OLM has an install of %s, but its CSV is not Succeeded, so modules treat it as missing. %s", name, impact)
 		p.AffectedObjects = []string{fmt.Sprintf("ClusterServiceVersion %s/%s", csv.Namespace, csv.Name)}
 		fixes = append(fixes, "Read the CSV's status message (command below). Installing usually finishes within minutes; a Failed CSV needs its cause fixed, after which OLM retries.")
-		p.TechnicalCmd = shellCommand("oc", "get", "csv", csv.Name, "-n", csv.Namespace, "-o", "jsonpath={.status.phase}: {.status.reason}: {.status.message}")
+		p.TechnicalCmd = kube.ShellCommand("oc", "get", "csv", csv.Name, "-n", csv.Namespace, "-o", "jsonpath={.status.phase}: {.status.reason}: {.status.message}")
 	case d.OperandKind != "" && d.Package == nil && d.CSV == nil:
 		p.Title = fmt.Sprintf("No installed operator provides %s, which a module needs", d.OperandKind)
 		p.Description = fmt.Sprintf("A module reports %s missing. No installed CSV owns the %s kind, and no package in this cluster's catalogs does. %s", d.Mention, d.OperandKind, impact)
 		fixes = append(fixes, fmt.Sprintf("Install the operator that provides %s (the module's message names its purpose), then create %s.", d.OperandKind, d.Mention))
-		p.TechnicalCmd = "oc get crd -o custom-columns=NAME:.metadata.name,KIND:.spec.names.kind | grep -w " + shellQuote(d.OperandKind)
+		p.TechnicalCmd = "oc get crd -o custom-columns=NAME:.metadata.name,KIND:.spec.names.kind | grep -w " + kube.ShellQuote(d.OperandKind)
 	case d.Package == nil:
 		p.Title = fmt.Sprintf("Prerequisite operator %q is not installed", d.Mention)
 		p.Description = fmt.Sprintf("%q is not installed, and no package in this cluster's catalogs matches that name. %s", d.Mention, impact)
 		fixes = append(fixes, fmt.Sprintf("Find the operator in the OpenShift console (Ecosystem or Operators > OperatorHub, search %q) and install it; prefer a Red Hat provided package. If the catalogs of this cluster are restricted (disconnected install), mirror the operator first.", d.Mention))
-		p.TechnicalCmd = shellCommand("oc", "get", "packagemanifests", "-n", CatalogNS, "-o", "custom-columns=NAME:.metadata.name,CATALOG:.status.catalogSource,DISPLAY:.status.channels[0].currentCSVDesc.displayName") +
-			" | grep -i " + shellQuote(firstWord(d.Mention))
+		p.TechnicalCmd = kube.ShellCommand("oc", "get", "packagemanifests", "-n", rhoai.CatalogNS, "-o", "custom-columns=NAME:.metadata.name,CATALOG:.status.catalogSource,DISPLAY:.status.channels[0].currentCSVDesc.displayName") +
+			" | grep -i " + kube.ShellQuote(firstWord(d.Mention))
 	default:
 		pkg := d.Package
 		p.Title = fmt.Sprintf("Prerequisite operator %s is not installed", name)
@@ -1028,7 +1029,7 @@ func planInstall(c *Client, p catalogPackage, operand *almExample) (prerequisite
 		p.Name, ns, p.DefaultChannel, p.Name, p.Catalog, p.CatalogNamespace))
 	lines := []string{
 		"oc apply -f - <<'EOF'\n" + strings.Join(objects, "\n---\n") + "\nEOF",
-		shellCommand("oc", "wait", "subscription/"+p.Name, "-n", ns, "--for=jsonpath={.status.state}=AtLatestKnown", "--timeout=10m"),
+		kube.ShellCommand("oc", "wait", "subscription/"+p.Name, "-n", ns, "--for=jsonpath={.status.state}=AtLatestKnown", "--timeout=10m"),
 		"oc wait csv/\"$(oc get subscription/" + p.Name + " -n " + ns + " -o jsonpath='{.status.installedCSV}')\" -n " + ns + " --for=jsonpath='{.status.phase}'=Succeeded --timeout=10m",
 	}
 	plan.notes = append(plan.notes, fmt.Sprintf("The Subscription follows the default channel %s of %s with automatic updates; the two oc wait lines return once the operator is installed.", p.DefaultChannel, p.Catalog))
@@ -1059,7 +1060,7 @@ func operandCommand(e almExample) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return shellCommand("oc", "get", e.resourceArg()+"/"+e.objName()) + " >/dev/null 2>&1 || oc create -f - <<'EOF'\n" + string(data) + "\nEOF", nil
+	return kube.ShellCommand("oc", "get", e.resourceArg()+"/"+e.objName()) + " >/dev/null 2>&1 || oc create -f - <<'EOF'\n" + string(data) + "\nEOF", nil
 }
 
 // operatorGroup is the part of an OperatorGroup that decides the install
@@ -1098,7 +1099,7 @@ func listOperatorGroups(c *Client, namespace string) ([]operatorGroup, error) {
 	var list struct {
 		Items []operatorGroup `json:"items"`
 	}
-	found, err := c.GetIntoOptional(namespacedPath("operators.coreos.com/v1", "operatorgroups", namespace, ""), &list)
+	found, err := c.GetIntoOptional(rhoai.NamespacedPath("operators.coreos.com/v1", "operatorgroups", namespace, ""), &list)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse OperatorGroups in %s: %w", namespace, err)

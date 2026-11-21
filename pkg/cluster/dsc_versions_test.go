@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -30,7 +31,7 @@ spec:
 `
 )
 
-var discoveredV3V2 = apiVersions{Versions: []string{"v3", "v2"}, Discovered: true}
+var discoveredV3V2 = rhoai.APIVersions{Versions: []string{"v3", "v2"}, Discovered: true}
 
 func TestDSCDefaults_AcceptsV3ALMExample(t *testing.T) {
 	mockDSCSamples(t, func(*http.Request) (int, string) {
@@ -38,7 +39,7 @@ func TestDSCDefaults_AcceptsV3ALMExample(t *testing.T) {
 		return 500, ""
 	})
 	op := &installedOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0", ALMExamples: almExamplesV3}
-	for _, versions := range []apiVersions{discoveredV3V2, {Versions: dscFallbackVersions}} {
+	for _, versions := range []rhoai.APIVersions{discoveredV3V2, {Versions: rhoai.DSCFallbackVersions}} {
 		d, err := defaultDSCSpecFor(context.Background(), op, versions, "")
 		if err != nil || d.Source != "csv" || d.APIVersion != "v3" || d.Spec["apiVersion"] != "datasciencecluster.opendatahub.io/v3" {
 			t.Fatalf("versions %+v: %+v %v", versions, d, err)
@@ -115,8 +116,8 @@ func TestDSCDefaults_NeverAnotherVersion(t *testing.T) {
 // whose alm-examples have only the v3 example.
 func dscV3BrokenAPI(t *testing.T) (*fakeAPI, *Client) {
 	t.Helper()
-	apiVersionsCache.Purge()
-	t.Cleanup(apiVersionsCache.Purge)
+	rhoai.APIVersionsCache.Purge()
+	t.Cleanup(rhoai.APIVersionsCache.Purge)
 	consoleURLCache.Purge()
 	t.Cleanup(consoleURLCache.Purge)
 	f, c := newFakeAPI(t)
@@ -124,8 +125,8 @@ func dscV3BrokenAPI(t *testing.T) (*fakeAPI, *Client) {
 	f.json("GET", "/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters", 429, liveDSCv3Conversion429)
 	f.json("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", 200, liveDSCv2)
 	f.json("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io", 200, testDSCCRD())
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), 200, installedCSVBody(almExamplesV3))
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), 200, installedCSVBody(almExamplesV3))
 	return f, c
 }
 
@@ -142,7 +143,7 @@ func TestGetComponents_V3UnreadableComparesNothingAndSaysWhy(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertWrites(t, f)
-	if resp.DSCState != DSCStatePresent || resp.DSCAPIVersion != "datasciencecluster.opendatahub.io/v2" || len(resp.Components) != 3 {
+	if resp.DSCState != rhoai.DSCStatePresent || resp.DSCAPIVersion != "datasciencecluster.opendatahub.io/v2" || len(resp.Components) != 3 {
 		t.Fatalf("resp %+v", resp)
 	}
 	fb := resp.DSCVersionFallback
@@ -231,7 +232,7 @@ func TestClientReturns429WithoutWaitingForRetryAfter(t *testing.T) {
 	if elapsed := kube.Clock().Since(start); elapsed != 0 {
 		t.Fatalf("waited %s", elapsed)
 	}
-	if status != 429 || calls != 1 || !isConversionWebhookError(err) {
+	if status != 429 || calls != 1 || !rhoai.IsConversionWebhookError(err) {
 		t.Fatalf("status %d calls %d err %v", status, calls, err)
 	}
 }

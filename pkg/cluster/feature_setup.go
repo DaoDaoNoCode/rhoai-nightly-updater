@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -184,7 +185,7 @@ func readSnapshotKey(c *Client, key string) (string, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.Bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return "", fmt.Errorf("parse the snapshot ConfigMap: %w", err)
@@ -208,7 +209,7 @@ func writeSnapshotKey(c *Client, key, manager, value string) error {
 		"data":       map[string]any{key: value},
 	})
 	query := url.Values{"fieldManager": {manager}, "force": {"true"}}
-	_, _, err := c.Bookkeeping().Do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query)
+	_, _, err := c.Bookkeeping().Do(http.MethodPatch, rhoai.NamespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query)
 	return err
 }
 
@@ -229,7 +230,7 @@ func dscComponentManager(key string) string {
 // DataScienceCluster changed since it was read. It returns the object the
 // API server answered with.
 func patchDSCComponent(c *Client, key, state, resourceVersion string, dryRun bool) (map[string]any, error) {
-	path, err := dataScienceClusterPath(c)
+	path, err := rhoai.DataScienceClusterPath(c)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +267,7 @@ func dscComponentOwned(dsc map[string]any, key string) bool {
 
 // dscComponentCommand is the change from a terminal.
 func dscComponentCommand(dsc, key, state string) string {
-	return fmt.Sprintf(`oc patch datasciencecluster %s --type=merge -p '{"spec":{"components":{"%s":{"managementState":"%s"}}}}'`, shellQuote(kube.FirstNonEmpty(dsc, "default-dsc")), key, state)
+	return fmt.Sprintf(`oc patch datasciencecluster %s --type=merge -p '{"spec":{"components":{"%s":{"managementState":"%s"}}}}'`, kube.ShellQuote(kube.FirstNonEmpty(dsc, "default-dsc")), key, state)
 }
 
 // componentTitle names a component for people.
@@ -305,7 +306,7 @@ type operatorPlan struct {
 type featurePlan struct {
 	fs                featureSetup
 	rec               prereqRecord
-	dsc               dscRead
+	dsc               rhoai.DSCRead
 	dscName, argoApp  string // argoApp: argo.managedBy
 	argo              argoTracking
 	components        []componentPlan
@@ -326,7 +327,7 @@ func (p *featurePlan) refuse(msg, code string) {
 type clusterReads struct {
 	rec    prereqRecord
 	recErr error
-	dsc    dscRead
+	dsc    rhoai.DSCRead
 	dscErr error
 	csvs   []clusterCSV
 	subs   []*olmSubscription
@@ -336,7 +337,7 @@ type clusterReads struct {
 func readClusterForPrerequisites(c *Client) clusterReads {
 	var r clusterReads
 	r.rec, r.recErr = readPrereqRecord(c)
-	r.dsc, r.dscErr = readFirstDSC(c)
+	r.dsc, r.dscErr = rhoai.ReadFirstDSC(c)
 	r.csvs, r.olmErr = listClusterCSVs(c)
 	if r.olmErr == nil {
 		r.subs, r.olmErr = listSubscriptions(c, "")
@@ -361,7 +362,7 @@ func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
 		for _, fc := range fs.components {
 			part(types.MaaSPart{ID: "dsc-" + fc.keys[0], Title: componentTitle(fc, fc.keys[0]), State: "unknown", Message: msg})
 		}
-	case r.dsc.State == DSCStateNoCRD:
+	case r.dsc.State == rhoai.DSCStateNoCRD:
 		p.refuse("RHOAI is not installed on this cluster (it has no DataScienceCluster API). A cluster-admin installs it on the Status page. Nothing was changed.", "prerequisites")
 	case r.dsc.Object == nil:
 		p.refuse("This cluster has no DataScienceCluster. A cluster-admin creates one on the Components page. Nothing was changed.", "prerequisites")
@@ -369,7 +370,7 @@ func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
 	if r.dscErr == nil && r.dsc.Object != nil {
 		meta, _ := r.dsc.Object["metadata"].(map[string]any)
 		p.dscName, _ = meta["name"].(string)
-		p.argo = argoTrackingOf(c, r.dsc.Object, dscGroup, "DataScienceCluster")
+		p.argo = argoTrackingOf(c, r.dsc.Object, rhoai.DSCGroup, "DataScienceCluster")
 		p.argoApp = p.argo.managedBy()
 		for _, fc := range fs.components {
 			key := fc.keyIn(r.dsc)
@@ -886,9 +887,9 @@ func (m *maasRun) waitPrerequisitesReady(p *featurePlan) (*types.OperationRespon
 	c := m.c
 	m.step("ready", "running", fmt.Sprintf("Waiting for RHOAI's operator to report %s ready (usually 1 to 3 minutes)...", joinTitles(componentKeys(p.components))))
 	last := ""
-	var dsc dscRead
+	var dsc rhoai.DSCRead
 	done, err := kube.WaitForGone(c, PrerequisiteReadyTimeout, MaaSPoll, func(cc *Client) (bool, error) {
-		r, err := readFirstDSC(cc)
+		r, err := rhoai.ReadFirstDSC(cc)
 		if err != nil {
 			return false, err
 		}
@@ -1004,7 +1005,7 @@ func componentUsers(c *Client, key string) ([]string, error) {
 		for _, m := range models {
 			live(m.Metadata, "LLMInferenceService")
 		}
-		body, found, err := c.GetOptional(clusterPath("serving.kserve.io/v1beta1", "inferenceservices", ""))
+		body, found, err := c.GetOptional(rhoai.ClusterPath("serving.kserve.io/v1beta1", "inferenceservices", ""))
 		if err != nil {
 			return nil, fmt.Errorf("list InferenceServices: %w", err)
 		}
@@ -1023,7 +1024,7 @@ func componentUsers(c *Client, key string) ([]string, error) {
 		}
 	case "ogx", "llamastackoperator", "dashboard":
 		// The playground's servers (the dashboard serves their gen-ai API).
-		read, err := listServed(c, "ogx.io", "/apis/ogx.io/%s/ogxservers", nil, []string{"v1beta1"})
+		read, err := rhoai.ListServed(c, "ogx.io", "/apis/ogx.io/%s/ogxservers", nil, []string{"v1beta1"})
 		if err != nil {
 			return nil, fmt.Errorf("list OGXServers: %w", err)
 		}
@@ -1064,7 +1065,7 @@ type restoreVerdict struct {
 // manager still owns it (nobody changed it since: dscComponentOwned),
 // Argo CD does not manage the DataScienceCluster, and nothing on the
 // cluster uses it (a list that fails refuses).
-func restoreCheck(c *Client, rec prereqRecord, dsc dscRead, key string) restoreVerdict {
+func restoreCheck(c *Client, rec prereqRecord, dsc rhoai.DSCRead, key string) restoreVerdict {
 	rc, ok := rec.Components[key]
 	if !ok {
 		return restoreVerdict{kept: key + " (this tool did not turn it on)"}
@@ -1077,7 +1078,7 @@ func restoreCheck(c *Client, rec prereqRecord, dsc dscRead, key string) restoreV
 	case !dscComponentOwned(dsc.Object, key):
 		return restoreVerdict{drop: true, kept: key + " (changed by someone since this tool's setup)"}
 	}
-	if argo := argoTrackingOf(c, dsc.Object, dscGroup, "DataScienceCluster"); argo.managedBy() != "" {
+	if argo := argoTrackingOf(c, dsc.Object, rhoai.DSCGroup, "DataScienceCluster"); argo.managedBy() != "" {
 		return restoreVerdict{refusal: gitOpsRefusal("The DataScienceCluster", argo.managedBy(), "turning "+key+" back to "+prev) + argo.unconfirmedNote(), code: kube.ErrorCodeGitOpsManaged}
 	}
 	users, err := componentUsers(c, key)
@@ -1110,7 +1111,7 @@ func RestoreComponents(c *Client, keys []string) (*types.OperationResponse, erro
 	if err != nil {
 		return &types.OperationResponse{Success: false, Message: err.Error() + " Nothing was changed.", ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
-	dsc, err := readFirstDSC(c)
+	dsc, err := rhoai.ReadFirstDSC(c)
 	if err != nil {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read the DataScienceCluster; nothing was changed: %v.%s", err, templateHint(err)), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
@@ -1189,7 +1190,7 @@ func RestoreComponents(c *Client, keys []string) (*types.OperationResponse, erro
 				return stop(fmt.Sprintf("The DataScienceCluster kept changing while %s was turned back (someone else is editing it), so it stays Managed. Clean up again later.", key), "conflict")
 			}
 			logs = append(logs, "The DataScienceCluster changed since it was read; reading it again and checking again.")
-			if dsc, err = readFirstDSC(c); err != nil {
+			if dsc, err = rhoai.ReadFirstDSC(c); err != nil {
 				return stop(fmt.Sprintf("The DataScienceCluster changed since it was read, and it cannot be read again, so %s stays Managed: %v.%s", key, err, templateHint(err)), kube.ErrorCodeFromK8sErr(err))
 			}
 			reads++

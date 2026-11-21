@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // nodeCheckImage is a nightly catalog image by tag, as the check takes it
@@ -20,7 +22,7 @@ func verificationCatalogWrites(t *testing.T, f *fakeOLM) {
 	var applied, deleted string
 	for _, w := range f.writes() {
 		method, path, _ := strings.Cut(w, " ")
-		if !strings.Contains(path, "/namespaces/"+CatalogNS+"/catalogsources/"+verificationCatalogPrefix()) {
+		if !strings.Contains(path, "/namespaces/"+rhoai.CatalogNS+"/catalogsources/"+verificationCatalogPrefix()) {
 			t.Fatalf("the check wrote something else than its verification catalog: %v", f.writes())
 		}
 		switch method {

@@ -11,6 +11,7 @@ import (
 	"testing/synctest"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -35,15 +36,15 @@ func componentsAPI(t *testing.T, gate *callGate, dscV2, dscV1 mockResponse, almE
 	t.Helper()
 	var requests atomic.Int32
 	routes := map[string]mockResponse{
-		"/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters":                                                dscV2,
-		"/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters":                                                dscV1,
-		namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName):                                {body: `{"spec":{"source":"rhoai-catalog-dev"},"status":{"installedCSV":"rhods-operator.3.6.0"}}`},
-		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"):        {body: installedCSVBody(almExamples)},
-		"/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io": {body: testDSCCRD()},
-		namespacedPath("apps/v1", "deployments", fixtureAppsNS, ""):                                                     {body: `{"items":[{"metadata":{"name":"rhods-dashboard"},"spec":{"replicas":2,"selector":{"matchLabels":{"app":"rhods-dashboard"}},"template":{"spec":{"containers":[{"image":"registry.redhat.io/rhoai/odh-dashboard-rhel9@sha256:` + strings.Repeat("1", 64) + `"}]}}},"status":{"readyReplicas":2,"availableReplicas":2,"updatedReplicas":2}}]}`},
-		namespacedPath("apps/v1", "deployments", "redhat-ods-operator", ""):                                             {body: `{"items":[{"metadata":{"name":"rhods-operator"},"spec":{"selector":{"matchLabels":{"name":"rhods-operator"}},"template":{"spec":{"containers":[{"image":"registry.redhat.io/rhoai/odh-rhel9-operator@sha256:` + strings.Repeat("2", 64) + `"}]}}},"status":{"readyReplicas":0,"unavailableReplicas":1,"conditions":[{"type":"Progressing","status":"False","reason":"ProgressDeadlineExceeded","message":"timed out"}]}}]}`},
-		namespacedPath("v1", "pods", fixtureAppsNS, ""):                                                                 {body: `{"items":[{"metadata":{"name":"rhods-dashboard-abc-1","labels":{"app":"rhods-dashboard","pod-template-hash":"abc"},"ownerReferences":[{"kind":"ReplicaSet","name":"rhods-dashboard-abc","controller":true}]},"status":{"phase":"Running","containerStatuses":[{"name":"c","ready":true}]}}]}`},
-		"/apis/config.openshift.io/v1/consoles/cluster":                                                                 {body: `{"status":{"consoleURL":"https://console"}}`},
+		"/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters":                                                     dscV2,
+		"/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters":                                                     dscV1,
+		rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName):                   {body: `{"spec":{"source":"rhoai-catalog-dev"},"status":{"installedCSV":"rhods-operator.3.6.0"}}`},
+		rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"): {body: installedCSVBody(almExamples)},
+		"/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io":      {body: testDSCCRD()},
+		rhoai.NamespacedPath("apps/v1", "deployments", fixtureAppsNS, ""):                                                    {body: `{"items":[{"metadata":{"name":"rhods-dashboard"},"spec":{"replicas":2,"selector":{"matchLabels":{"app":"rhods-dashboard"}},"template":{"spec":{"containers":[{"image":"registry.redhat.io/rhoai/odh-dashboard-rhel9@sha256:` + strings.Repeat("1", 64) + `"}]}}},"status":{"readyReplicas":2,"availableReplicas":2,"updatedReplicas":2}}]}`},
+		rhoai.NamespacedPath("apps/v1", "deployments", "redhat-ods-operator", ""):                                            {body: `{"items":[{"metadata":{"name":"rhods-operator"},"spec":{"selector":{"matchLabels":{"name":"rhods-operator"}},"template":{"spec":{"containers":[{"image":"registry.redhat.io/rhoai/odh-rhel9-operator@sha256:` + strings.Repeat("2", 64) + `"}]}}},"status":{"readyReplicas":0,"unavailableReplicas":1,"conditions":[{"type":"Progressing","status":"False","reason":"ProgressDeadlineExceeded","message":"timed out"}]}}]}`},
+		rhoai.NamespacedPath("v1", "pods", fixtureAppsNS, ""):                                                                {body: `{"items":[{"metadata":{"name":"rhods-dashboard-abc-1","labels":{"app":"rhods-dashboard","pod-template-hash":"abc"},"ownerReferences":[{"kind":"ReplicaSet","name":"rhods-dashboard-abc","controller":true}]},"status":{"phase":"Running","containerStatuses":[{"name":"c","ready":true}]}}]}`},
+		"/apis/config.openshift.io/v1/consoles/cluster":                                                                      {body: `{"status":{"consoleURL":"https://console"}}`},
 		dsciV2List: {body: `{"items":[{"metadata":{"name":"default-dsci"},"spec":{"applicationsNamespace":"` + fixtureAppsNS + `"}}]}`},
 	}
 	api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -75,11 +76,11 @@ func TestGetComponents_DSCStates(t *testing.T) {
 		wantState string
 		wantErr   int // K8s status expected in the error
 	}{
-		{"operator installed, no DSC yet", mockResponse{body: `{"items":[]}`}, mockResponse{body: `{"items":[]}`}, DSCStateNoDSC, 0},
-		{"no CRD", notFoundResp, notFoundResp, DSCStateNoCRD, 0},
+		{"operator installed, no DSC yet", mockResponse{body: `{"items":[]}`}, mockResponse{body: `{"items":[]}`}, rhoai.DSCStateNoDSC, 0},
+		{"no CRD", notFoundResp, notFoundResp, rhoai.DSCStateNoCRD, 0},
 		{"forbidden is an error, not a missing DSC", mockResponse{statusCode: 403, body: `{"kind":"Status","status":"Failure","reason":"Forbidden","code":403}`}, notFoundResp, "", 403},
 		{"API throttled", mockResponse{statusCode: 429, body: `{}`}, mockResponse{statusCode: 429, body: `{}`}, "", 429},
-		{"DSC present", mockResponse{body: `{"items":[{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"default-dsc"},"spec":{"components":{"dashboard":{"managementState":"Managed"},"aipipelines":{"managementState":"Removed"}}},"status":{"phase":"Ready","conditions":[{"type":"DashboardReady","status":"True"}]}}]}`}, notFoundResp, DSCStatePresent, 0},
+		{"DSC present", mockResponse{body: `{"items":[{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"default-dsc"},"spec":{"components":{"dashboard":{"managementState":"Managed"},"aipipelines":{"managementState":"Removed"}}},"status":{"phase":"Ready","conditions":[{"type":"DashboardReady","status":"True"}]}}]}`}, notFoundResp, rhoai.DSCStatePresent, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -95,7 +96,7 @@ func TestGetComponents_DSCStates(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if resp.DSCState != tc.wantState || resp.DSCExists != (tc.wantState == DSCStatePresent) {
+			if resp.DSCState != tc.wantState || resp.DSCExists != (tc.wantState == rhoai.DSCStatePresent) {
 				t.Fatalf("state %q exists %v", resp.DSCState, resp.DSCExists)
 			}
 			if resp.OperatorVersion != "3.6.0" || resp.OperatorPhase != "Succeeded" {
@@ -104,7 +105,7 @@ func TestGetComponents_DSCStates(t *testing.T) {
 			if len(resp.Deployments) != 2 || resp.Components == nil {
 				t.Fatalf("deployments %d components %v", len(resp.Deployments), resp.Components)
 			}
-			if tc.wantState == DSCStatePresent {
+			if tc.wantState == rhoai.DSCStatePresent {
 				if resp.DSCName != "default-dsc" || resp.DSCPhase != "Ready" || len(resp.Components) != 2 ||
 					resp.Components[0].Name != "aipipelines" || resp.Components[1].Status != "Available" {
 					t.Fatalf("components %+v", resp)
@@ -249,7 +250,7 @@ func TestDefaultDSCFromALMExamples(t *testing.T) {
 			var github int
 			mockDSCSamples(t, func(*http.Request) (int, string) { github++; return 200, testDSCSample })
 			t.Setenv("DSC_SAMPLE_REF", tc.override)
-			defaults, err := defaultDSCSpecFor(context.Background(), &installedOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0", ALMExamples: tc.alm}, apiVersions{Versions: dscFallbackVersions}, "")
+			defaults, err := defaultDSCSpecFor(context.Background(), &installedOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0", ALMExamples: tc.alm}, rhoai.APIVersions{Versions: rhoai.DSCFallbackVersions}, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -270,7 +271,7 @@ func TestDefaultDSCFromALMExamples(t *testing.T) {
 				}
 				// Callers get their own copy.
 				comps["dashboard"] = nil
-				again, _ := defaultDSCSpecFor(context.Background(), &installedOperator{Version: "3.6.0", ALMExamples: tc.alm}, apiVersions{Versions: dscFallbackVersions}, "")
+				again, _ := defaultDSCSpecFor(context.Background(), &installedOperator{Version: "3.6.0", ALMExamples: tc.alm}, rhoai.APIVersions{Versions: rhoai.DSCFallbackVersions}, "")
 				if again.Spec["spec"].(map[string]any)["components"].(map[string]any)["dashboard"] == nil {
 					t.Fatal("shared mutable defaults")
 				}
@@ -303,8 +304,8 @@ func TestCreateDefaultDSC_UsesInstalledCSVExampleAndToleratesRace(t *testing.T) 
 					409: `{"kind":"Status","status":"Failure","reason":"AlreadyExists","code":409}`,
 					403: `{"kind":"Status","status":"Failure","reason":"Forbidden","message":"admission webhook denied the request","code":403}`,
 				}[tc.postStatus]},
-				namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName):                         {body: `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`},
-				namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"): {body: installedCSVBody(almExamplesJSON)},
+				rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName):                   {body: `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`},
+				rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"): {body: installedCSVBody(almExamplesJSON)},
 			})
 			defer cleanup()
 			result, err := CreateDefaultDSC(c)

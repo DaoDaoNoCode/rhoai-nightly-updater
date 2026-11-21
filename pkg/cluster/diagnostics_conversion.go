@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // The "API versions" diagnostics check: a RHOAI CRD that serves several
@@ -64,20 +65,20 @@ func getDiscovered(c *Client, path string, query url.Values) ([]byte, error) {
 
 // multiVersionRHOAIGroups returns the *.opendatahub.io API groups that serve
 // more than one version.
-func multiVersionRHOAIGroups(c *Client) ([]apiGroupDoc, error) {
+func multiVersionRHOAIGroups(c *Client) ([]rhoai.APIGroupDoc, error) {
 	body, err := getDiscovered(c, "/apis", nil)
 	if err != nil {
 		return nil, err
 	}
 	var list struct {
-		Groups []apiGroupDoc `json:"groups"`
+		Groups []rhoai.APIGroupDoc `json:"groups"`
 	}
 	if err := json.Unmarshal(body, &list); err != nil {
 		return nil, fmt.Errorf("parse API group list: %w", err)
 	}
-	var out []apiGroupDoc
+	var out []rhoai.APIGroupDoc
 	for _, g := range list.Groups {
-		if strings.HasSuffix(g.Name, ".opendatahub.io") && len(g.orderedVersions()) > 1 {
+		if strings.HasSuffix(g.Name, ".opendatahub.io") && len(g.OrderedVersions()) > 1 {
 			out = append(out, g)
 		}
 	}
@@ -125,7 +126,7 @@ func probeConversions(c *Client) (probes []conversionProbe, groups int, errs []s
 	}
 	var gvs []groupVersion
 	for _, g := range gs {
-		for i, v := range g.orderedVersions() {
+		for i, v := range g.OrderedVersions() {
 			gvs = append(gvs, groupVersion{g.Name, v, i == 0 && g.PreferredVersion.Version != ""})
 		}
 	}
@@ -189,7 +190,7 @@ func checkConversionFailures(c *Client) checkOutput {
 		}
 		k.probes = append(k.probes, p)
 		switch {
-		case p.Err == nil, isConversionWebhookError(p.Err), kube.IsK8sNotFound(p.Err):
+		case p.Err == nil, rhoai.IsConversionWebhookError(p.Err), kube.IsK8sNotFound(p.Err):
 		case kube.IsK8sError(p.Err, http.StatusForbidden):
 			forbidden++
 		default:
@@ -221,7 +222,7 @@ func checkConversionFailures(c *Client) checkOutput {
 			switch {
 			case p.Err == nil:
 				working = append(working, p)
-			case isConversionWebhookError(p.Err):
+			case rhoai.IsConversionWebhookError(p.Err):
 				failed = append(failed, p)
 			}
 		}
@@ -284,7 +285,7 @@ func conversionProblem(group, resource, kind string, failed, working []conversio
 	failedVersions := joinVersions(failed)
 	evidence := []string{}
 	for _, p := range failed {
-		evidence = append(evidence, fmt.Sprintf("GET %s?limit=1: HTTP %d: %s", p.path(), k8sStatus(p.Err), kube.TruncateText(conversionMessage(p.Err), 400)))
+		evidence = append(evidence, fmt.Sprintf("GET %s?limit=1: HTTP %d: %s", p.path(), k8sStatus(p.Err), kube.TruncateText(rhoai.ConversionMessage(p.Err), 400)))
 	}
 	for _, p := range working {
 		evidence = append(evidence, fmt.Sprintf("GET %s?limit=1: OK", p.path()))
@@ -303,7 +304,7 @@ func conversionProblem(group, resource, kind string, failed, working []conversio
 	}
 	unregistered := false
 	for _, p := range failed {
-		if strings.Contains(conversionMessage(p.Err), "is registered for version") {
+		if strings.Contains(rhoai.ConversionMessage(p.Err), "is registered for version") {
 			unregistered = true
 		}
 	}
@@ -314,7 +315,7 @@ func conversionProblem(group, resource, kind string, failed, working []conversio
 		description.WriteString(" Likely cause (an inference): the operator's conversion webhook does not support this conversion or is failing.")
 	}
 
-	ns := SubNS
+	ns := rhoai.SubNS
 	deployment := "<operator deployment>"
 	if len(op.Deployments) > 0 {
 		deployment = op.Deployments[0]

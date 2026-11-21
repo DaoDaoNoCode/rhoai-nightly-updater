@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -255,9 +256,9 @@ func narrowMaaSGateway(c *Client, plan *maasGatewayPlan) error {
 // ConfigMap (maasObjectPath, for these two kinds only).
 func maasGatewayObjectPath(kind string) string {
 	if kind == "Gateway" {
-		return namespacedPath("gateway.networking.k8s.io/v1", "gateways", inferenceGatewayNamespace, maasGatewayName)
+		return rhoai.NamespacedPath("gateway.networking.k8s.io/v1", "gateways", inferenceGatewayNamespace, maasGatewayName)
 	}
-	return namespacedPath("v1", "configmaps", inferenceGatewayNamespace, maasGatewayOptions)
+	return rhoai.NamespacedPath("v1", "configmaps", inferenceGatewayNamespace, maasGatewayOptions)
 }
 
 // updateToolObject is the update half of ensureToolObject, for an object

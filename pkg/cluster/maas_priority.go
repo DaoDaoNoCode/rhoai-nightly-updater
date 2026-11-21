@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -32,7 +33,7 @@ func maasSubscriptionPriority(c *Client) (int, []string, error) {
 			} `json:"spec"`
 		} `json:"items"`
 	}
-	found, err := c.GetIntoOptional(namespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""), &list)
+	found, err := c.GetIntoOptional(rhoai.NamespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""), &list)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return 0, nil, fmt.Errorf("parse the MaaSSubscription list: %w", err)

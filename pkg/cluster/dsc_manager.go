@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -90,11 +91,11 @@ func helmManagerOf(meta kube.ObjectMeta) string {
 // readDSCView reads the DataScienceCluster (the first, as the Components
 // page shows it), the CRD and the release default.
 func readDSCView(c *Client) (*dscView, error) {
-	r, err := listServed(c, dscGroup, dscListFmt, nil, dscFallbackVersions)
+	r, err := rhoai.ListServed(c, rhoai.DSCGroup, rhoai.DSCListFmt, nil, rhoai.DSCFallbackVersions)
 	if err != nil {
 		return nil, fmt.Errorf("fetching DSC list: %w", err)
 	}
-	v := &dscView{state: DSCStateNoCRD, byKey: map[string]dscToggle{}}
+	v := &dscView{state: rhoai.DSCStateNoCRD, byKey: map[string]dscToggle{}}
 	if r.Version == "" {
 		return v, nil
 	}
@@ -104,20 +105,20 @@ func readDSCView(c *Client) (*dscView, error) {
 	if err := json.Unmarshal(r.Body, &list); err != nil {
 		return nil, fmt.Errorf("parsing DSC list: %w", err)
 	}
-	v.version, v.count, v.state = r.Version, len(list.Items), DSCStateNoDSC
+	v.version, v.count, v.state = r.Version, len(list.Items), rhoai.DSCStateNoDSC
 	if v.count == 0 {
 		return v, nil
 	}
-	v.state, v.obj = DSCStatePresent, list.Items[0]
+	v.state, v.obj = rhoai.DSCStatePresent, list.Items[0]
 	if raw, err := json.Marshal(v.obj["metadata"]); err == nil {
 		_ = json.Unmarshal(raw, &v.meta)
 	}
 	v.name, v.uid = v.meta.Name, v.meta.UID
 	v.apiVersion, _ = v.obj["apiVersion"].(string)
 	if v.apiVersion == "" {
-		v.apiVersion = dscGroup + "/" + v.version
+		v.apiVersion = rhoai.DSCGroup + "/" + v.version
 	}
-	v.argo = argoTrackingOf(c, v.obj, dscGroup, "DataScienceCluster")
+	v.argo = argoTrackingOf(c, v.obj, rhoai.DSCGroup, "DataScienceCluster")
 	v.argoApp = v.argo.managedBy()
 	v.acm = v.argoApp == "" && acmEnforcesSpec(v.meta)
 	v.helm = helmManagerOf(v.meta)
@@ -286,7 +287,7 @@ func (v *dscView) conditions() []types.DSCConditionView {
 // error code; "" when it may.
 func (v *dscView) readOnlyReason() (string, string) {
 	switch {
-	case v.state != DSCStatePresent:
+	case v.state != rhoai.DSCStatePresent:
 		return "There is no DataScienceCluster.", "prerequisites"
 	case v.count > 1:
 		return fmt.Sprintf("There are %d DataScienceClusters; the operator allows one. Delete the extra ones in the OpenShift console first.", v.count), "prerequisites"
@@ -315,7 +316,7 @@ func GetDSCManager(c *Client) (*types.DSCManager, error) {
 	m := v.model()
 	// A hard reset that deleted the DSC and did not create its
 	// replacement is offered to finish while no DSC exists.
-	if v.state == DSCStateNoDSC {
+	if v.state == rhoai.DSCStateNoDSC {
 		pending, err := pendingHardReset(c)
 		if err != nil {
 			m.PendingHardResetError = "Cannot read the recorded hard reset: " + err.Error()
@@ -326,7 +327,7 @@ func GetDSCManager(c *Client) (*types.DSCManager, error) {
 }
 
 func (v *dscView) model() *types.DSCManager {
-	out := &types.DSCManager{State: v.state, Exists: v.state == DSCStatePresent, DSCCount: v.count, Nodes: []types.DSCNode{}, Mismatches: []types.DSCMismatch{}, Conditions: []types.DSCConditionView{}}
+	out := &types.DSCManager{State: v.state, Exists: v.state == rhoai.DSCStatePresent, DSCCount: v.count, Nodes: []types.DSCNode{}, Mismatches: []types.DSCMismatch{}, Conditions: []types.DSCConditionView{}}
 	if !out.Exists {
 		return out
 	}
@@ -361,7 +362,7 @@ func (v *dscView) model() *types.DSCManager {
 		}
 	}
 	for _, cd := range conds {
-		if isUpgradeGateCondition(dscCondition{Type: cd.Type, Status: cd.Status, Reason: cd.Reason, Message: cd.Message}) && cd.Status != "True" {
+		if isUpgradeGateCondition(rhoai.DSCCondition{Type: cd.Type, Status: cd.Status, Reason: cd.Reason, Message: cd.Message}) && cd.Status != "True" {
 			out.UpgradeGates = append(out.UpgradeGates, fmt.Sprintf("%s (%s): %s", cd.Type, cd.Reason, kube.TruncateText(cd.Message, 300)))
 		}
 	}
@@ -1182,7 +1183,7 @@ const dscWriteAttempts = 3
 // dscObjectPath is the API path of the DSC name at version ("v3"). A
 // package function, so the RBAC coverage test resolves it.
 func dscObjectPath(version, name string) string {
-	return fmt.Sprintf(dscListFmt, version) + "/" + name
+	return fmt.Sprintf(rhoai.DSCListFmt, version) + "/" + name
 }
 
 // patchDSCFields sends a JSON Patch to the DataScienceCluster with the
@@ -1272,7 +1273,7 @@ func writeChecked(c *Client, v *dscView, plan func(v *dscView) (*dscPlanned, *ty
 		case err != nil:
 			return nil, nil, &types.OperationResponse{Success: false, ErrorCode: kube.ErrorCodeFromK8sErr(err), Logs: res.Logs,
 				Message: fmt.Sprintf("The API server refused the change to DataScienceCluster %s, and it could not be read again to tell whether it changed since it was checked: %v. Nothing was changed.", name, err)}
-		case next.state != DSCStatePresent || next.uid != uid:
+		case next.state != rhoai.DSCStatePresent || next.uid != uid:
 			return nil, nil, &types.OperationResponse{Success: false, ErrorCode: "conflict",
 				Message: fmt.Sprintf("DataScienceCluster %s was deleted or created again after the change was checked. Nothing was changed. Reload the page and review the change again.", name)}
 		case next.meta.ResourceVersion == v.meta.ResourceVersion:
@@ -1355,10 +1356,10 @@ func (v *dscView) setManagementState(c *Client, req types.DSCToggleRequest, acti
 // the DSC and the field are still what the request saw, the plan's checks
 // pass and, when reviewed, it is the plan the user reviewed.
 func (v *dscView) checkToggle(c *Client, req types.DSCToggleRequest, reviewed bool) (*dscPlanned, *types.OperationResponse) {
-	if v.state == DSCStatePresent && req.Name != "" && req.Name != v.name {
+	if v.state == rhoai.DSCStatePresent && req.Name != "" && req.Name != v.name {
 		return nil, &types.OperationResponse{Success: false, ErrorCode: "conflict", Message: fmt.Sprintf("The DataScienceCluster is %s now, not %s. Reload the page. Nothing was changed.", v.name, req.Name)}
 	}
-	if t, ok := v.byKey[req.Path]; ok && t.Toggle && v.state == DSCStatePresent {
+	if t, ok := v.byKey[req.Path]; ok && t.Toggle && v.state == rhoai.DSCStatePresent {
 		if cur, _ := lookupState(v.components(), t.Path); cur != req.From {
 			return nil, &types.OperationResponse{Success: false, ErrorCode: "conflict",
 				Message: fmt.Sprintf("%s changed since you looked: it is %s now, not %s. Reload the page and try again. Nothing was changed.", req.Path, kube.NonEmpty(cur, "not set"), kube.NonEmpty(req.From, "not set"))}

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -107,7 +108,7 @@ func leftoverChanged(what, serverMsg string) *types.OperationResponse {
 // was changed either way).
 func (st *storedLeftover) patchError(c *Client, err error, dryRun bool) *types.OperationResponse {
 	if kube.IsK8sError(err, http.StatusUnprocessableEntity) {
-		meta, found, rerr := kube.ReadObjectMeta(c, componentListPath(st.Group, st.Version, st.Resource)+"/"+st.Name)
+		meta, found, rerr := kube.ReadObjectMeta(c, rhoai.ComponentListPath(st.Group, st.Version, st.Resource)+"/"+st.Name)
 		if rerr == nil && (!found || meta.UID != st.UID || meta.ResourceVersion != st.ResourceVersion) {
 			var k *K8sError
 			msg := err.Error()
@@ -129,10 +130,10 @@ func fixLeftoverStoredFields(c *Client, target string, ack *AckBinding) *types.O
 	// The module CR is in one of the module API groups; a kind reported in
 	// both is ambiguous and refused.
 	var rf *reportedApplyFailure
-	for _, group := range moduleAPIGroups {
+	for _, group := range rhoai.ModuleAPIGroups {
 		if found := leftoverObject(s, group, kind, "", name, applyStoredType); found != nil {
 			if rf != nil {
-				return leftoverRefused(fmt.Sprintf("%s %s is reported in more than one API group (%s), so the tool cannot tell which object to change. Nothing was changed.", kind, name, strings.Join(moduleAPIGroups, ", ")), "prerequisites", nil)
+				return leftoverRefused(fmt.Sprintf("%s %s is reported in more than one API group (%s), so the tool cannot tell which object to change. Nothing was changed.", kind, name, strings.Join(rhoai.ModuleAPIGroups, ", ")), "prerequisites", nil)
 			}
 			rf = found
 		}
@@ -171,7 +172,7 @@ func fixLeftoverStoredFields(c *Client, target string, ack *AckBinding) *types.O
 	}
 
 	ops := st.patchOps()
-	path := componentListPath(st.Group, st.Version, st.Resource) + "/" + st.Name
+	path := rhoai.ComponentListPath(st.Group, st.Version, st.Resource) + "/" + st.Name
 	if _, err := patchLeftoverObject(c, path, ops, true); err != nil {
 		return st.patchError(c, err, true)
 	}
@@ -261,7 +262,7 @@ func fixLeftoverRetryDSC(c *Client, name string) *types.OperationResponse {
 	if waiting == "" {
 		return nothingToDo(fmt.Sprintf("DataScienceCluster %s reports no stored field error that is already fixed. Nothing was changed.", name), nil)
 	}
-	path, err := dataScienceClusterPath(c)
+	path, err := rhoai.DataScienceClusterPath(c)
 	if err != nil {
 		return leftoverRefused(fmt.Sprintf("Cannot find the DataScienceCluster: %v. Nothing was changed.", err), kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "prerequisites"), nil)
 	}
@@ -285,7 +286,7 @@ func fixLeftoverRetryDSC(c *Client, name string) *types.OperationResponse {
 	})
 	if rmErr != nil {
 		return &types.OperationResponse{Success: false, ErrorCode: "partial_failure", Logs: append(logs, "Error: "+rmErr.Error()),
-			Message: fmt.Sprintf("The operator was asked to retry, but the annotation could not be removed again (%v). Remove it with: %s", rmErr, shellCommand("oc", "annotate", "datasciencecluster", name, leftoverRetryAnno+"-"))}
+			Message: fmt.Sprintf("The operator was asked to retry, but the annotation could not be removed again (%v). Remove it with: %s", rmErr, kube.ShellCommand("oc", "annotate", "datasciencecluster", name, leftoverRetryAnno+"-"))}
 	}
 	return &types.OperationResponse{
 		Success: true,
@@ -300,13 +301,13 @@ func fixLeftoverRetryDSC(c *Client, name string) *types.OperationResponse {
 func workloadPath(kind, namespace, name string) string {
 	switch kind {
 	case "Deployment":
-		return namespacedPath("apps/v1", "deployments", namespace, name)
+		return rhoai.NamespacedPath("apps/v1", "deployments", namespace, name)
 	case "StatefulSet":
-		return namespacedPath("apps/v1", "statefulsets", namespace, name)
+		return rhoai.NamespacedPath("apps/v1", "statefulsets", namespace, name)
 	case "DaemonSet":
-		return namespacedPath("apps/v1", "daemonsets", namespace, name)
+		return rhoai.NamespacedPath("apps/v1", "daemonsets", namespace, name)
 	case "Job":
-		return namespacedPath("batch/v1", "jobs", namespace, name)
+		return rhoai.NamespacedPath("batch/v1", "jobs", namespace, name)
 	}
 	return ""
 }
@@ -351,7 +352,7 @@ func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *typ
 		}
 		return nothingToDo(fmt.Sprintf("no CR reports that the selector of %s %s/%s changed any more. Nothing was deleted.", kind, ns, name), nil)
 	}
-	appNS := applicationsNamespace(c)
+	appNS := rhoai.ApplicationsNamespace(c)
 	r := analyzeRecreate(c, rf, appNS, readWorkloadAsUser, componentUsers)
 	logs := append([]string{"Reported by " + reportersText(rf)}, r.Warnings...)
 	switch {

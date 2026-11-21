@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -74,7 +75,7 @@ func listAllGateways(c *Client) ([]gatewayObject, error) {
 	var list struct {
 		Items []gatewayObject `json:"items"`
 	}
-	found, err := c.GetIntoOptional(clusterPath("gateway.networking.k8s.io/v1", "gateways", ""), &list)
+	found, err := c.GetIntoOptional(rhoai.ClusterPath("gateway.networking.k8s.io/v1", "gateways", ""), &list)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the Gateways: %w", err)
@@ -208,7 +209,7 @@ func withServicePort(c *Client, address string) string {
 			} `json:"ports"`
 		} `json:"spec"`
 	}
-	if c.GetInto(namespacedPath("v1", "services", labels[1], labels[0]), &svc) != nil {
+	if c.GetInto(rhoai.NamespacedPath("v1", "services", labels[1], labels[0]), &svc) != nil {
 		return ""
 	}
 	port := 0

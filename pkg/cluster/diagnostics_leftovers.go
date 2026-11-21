@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // "Left over from an earlier release": objects that an older release left
@@ -124,7 +125,7 @@ func checkLeftoversGitOps(c *Client) checkOutput { return leftoversCheck(c, nil)
 func leftoversCheck(c *Client, users usersReader) checkOutput {
 	out := checkOutput{check: CheckResult{Name: leftoversCheckName, Status: "pass"}}
 	s := scanApplyReporters(c, allApplyFailures)
-	appNS := applicationsNamespace(c)
+	appNS := rhoai.ApplicationsNamespace(c)
 	keys := make([]string, 0, len(s.found))
 	for k, rf := range s.found {
 		if rf.leftover() {
@@ -405,16 +406,16 @@ func analyzeStored(c *Client, s reporterScan, rf *reportedApplyFailure) *storedL
 	}
 	st.Group = f.group()
 	if !isModuleAPIGroup(st.Group) {
-		st.Blocker = fmt.Sprintf("the tool changes only module CRs (%s), and this is a %s", strings.Join(moduleAPIGroups, ", "), f.GroupVersion)
+		st.Blocker = fmt.Sprintf("the tool changes only module CRs (%s), and this is a %s", strings.Join(rhoai.ModuleAPIGroups, ", "), f.GroupVersion)
 		return st
 	}
-	k, ok := s.api.kindOf(st.Group, f.Kind)
+	k, ok := s.api.KindOf(st.Group, f.Kind)
 	if !ok {
 		st.Blocker = fmt.Sprintf("%s does not serve the kind %s, so the tool cannot read the object", st.Group, f.Kind)
 		return st
 	}
 	st.Resource = k.Resource
-	st.CRD = k.crd()
+	st.CRD = k.CRD()
 
 	obj := s.modules[moduleScanKey(st.Group, f.Kind)][f.Name]
 	if st.Version != k.Version || obj == nil {
@@ -469,7 +470,7 @@ func analyzeStored(c *Client, s reporterScan, rf *reportedApplyFailure) *storedL
 // listModuleObject finds a module CR by listing its resource (the
 // ServiceAccount may list, not get, module CRs). nil when it does not exist.
 func listModuleObject(c *Client, group, version, resource, name string) (map[string]any, error) {
-	body, _, err := c.Do(http.MethodGet, componentListPath(group, version, resource), "", nil,
+	body, _, err := c.Do(http.MethodGet, rhoai.ComponentListPath(group, version, resource), "", nil,
 		url.Values{"fieldSelector": {"metadata.name=" + name}})
 	if err != nil {
 		return nil, err
@@ -615,7 +616,7 @@ func installedCSVOwnsCRD(c *Client, crd string) (string, bool, error) {
 			} `json:"customresourcedefinitions"`
 		} `json:"spec"`
 	}
-	if err := c.GetInto(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, sub.InstalledCSV), &csv); err != nil {
+	if err := c.GetInto(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, sub.InstalledCSV), &csv); err != nil {
 		if kube.IsDecodeError(err) {
 			return sub.InstalledCSV, false, fmt.Errorf("parse CSV %s: %w", sub.InstalledCSV, err)
 		}
@@ -775,7 +776,7 @@ func (st *storedLeftover) problem() Problem {
 		Severity:        severity,
 		AffectedObjects: []string{st.ref()},
 		FieldChanges:    st.fieldChanges(),
-		TechnicalCmd:    shellCommand("oc", "get", strings.ToLower(st.Kind)+"."+st.Group, st.Name, "-o", "yaml"),
+		TechnicalCmd:    kube.ShellCommand("oc", "get", strings.ToLower(st.Kind)+"."+st.Group, st.Name, "-o", "yaml"),
 	}
 	description := fmt.Sprintf("The operator cannot apply %s: the stored object has field values of a type an earlier release used, and the installed CRD now expects another type. "+
 		"Kubernetes keeps a stored object as it was written, so the upgrade did not change it, and server-side apply cannot convert it. Until it matches, %s stays not ready.", st.ref(), reporters)
@@ -812,7 +813,7 @@ func (st *storedLeftover) problem() Problem {
 				p.AutoFixAction = fixLeftoverRetry + r.Name
 				p.AffectedObjects = []string{"DataScienceCluster " + r.Name}
 				p.ConfirmMessage = fmt.Sprintf("This adds the annotation %s to DataScienceCluster %s and removes it again. The operator reconciles the DataScienceCluster when its annotations change; nothing else changes.", leftoverRetryAnno, r.Name)
-				p.TechnicalCmd = shellCommand("oc", "annotate", "datasciencecluster", r.Name, leftoverRetryAnno+"=now") + "; " + shellCommand("oc", "annotate", "datasciencecluster", r.Name, leftoverRetryAnno+"-")
+				p.TechnicalCmd = kube.ShellCommand("oc", "annotate", "datasciencecluster", r.Name, leftoverRetryAnno+"=now") + "; " + kube.ShellCommand("oc", "annotate", "datasciencecluster", r.Name, leftoverRetryAnno+"-")
 				break
 			}
 		}
@@ -846,7 +847,7 @@ func (st *storedLeftover) problem() Problem {
 			p.AcknowledgeBinding = newAckBinding(st.UID, st.ResourceVersion, p.Acknowledge)
 		}
 		raw, _ := json.Marshal(st.patchOps())
-		p.TechnicalCmd = shellCommand("oc", "patch", strings.ToLower(st.Kind)+"."+st.Group, st.Name, "--type=json", "-p", string(raw))
+		p.TechnicalCmd = kube.ShellCommand("oc", "patch", strings.ToLower(st.Kind)+"."+st.Group, st.Name, "--type=json", "-p", string(raw))
 	}
 	return p
 }
@@ -913,7 +914,7 @@ func readDeploymentForScan(c *Client, kind, namespace, name string) (workloadObj
 	if kind != "Deployment" {
 		return workloadObject{}, false, false, nil
 	}
-	body, _, err := c.Get(namespacedPath("apps/v1", "deployments", namespace, name))
+	body, _, err := c.Get(rhoai.NamespacedPath("apps/v1", "deployments", namespace, name))
 	return decodeWorkload(body, err)
 }
 
@@ -991,7 +992,7 @@ func analyzeRecreate(c *Client, rf *reportedApplyFailure, appNS string, read wor
 		}
 		ownerText = fmt.Sprintf("controller owner %s %s (%s)", o.Kind, o.Name, o.APIVersion)
 		group, _, _ := strings.Cut(o.APIVersion, "/")
-		if !isModuleAPIGroup(group) && (group != dscGroup || o.Kind != "DataScienceCluster") {
+		if !isModuleAPIGroup(group) && (group != rhoai.DSCGroup || o.Kind != "DataScienceCluster") {
 			continue
 		}
 		for i := range rf.reporters {

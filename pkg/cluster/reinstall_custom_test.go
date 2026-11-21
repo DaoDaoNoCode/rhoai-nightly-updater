@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 func TestCustomReinstallPinsOldBuildAndSelectsOlderChannel(t *testing.T) {
@@ -15,8 +17,8 @@ func TestCustomReinstallPinsOldBuildAndSelectsOlderChannel(t *testing.T) {
 		t.Run(tc.target+" override="+tc.override, func(t *testing.T) {
 			override := tc.override
 			image := "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.3@sha256:" + strings.Repeat("a", 64)
-			csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
-			subPath := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
+			csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
+			subPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName)
 			var appliedImage, appliedChannel string
 			var deletedCSV bool
 			// A moved tag must not be consulted for custom reinstall.
@@ -32,7 +34,7 @@ func TestCustomReinstallPinsOldBuildAndSelectsOlderChannel(t *testing.T) {
 				}
 				w.Header().Set("Content-Type", "application/json")
 				switch {
-				case strings.Contains(r.URL.Path, "/catalogsources/"+CatalogName+"-verify-"):
+				case strings.Contains(r.URL.Path, "/catalogsources/"+rhoai.CatalogName+"-verify-"):
 					io.WriteString(w, `{"status":{"connectionState":{"lastObservedState":"READY"}}}`)
 				case r.Method == "PATCH" && r.URL.Path == csPath:
 					var body struct {
@@ -65,7 +67,7 @@ func TestCustomReinstallPinsOldBuildAndSelectsOlderChannel(t *testing.T) {
 				case strings.HasSuffix(r.URL.Path, "/clusterserviceversions"):
 					io.WriteString(w, csvListMock("3.6.0").body)
 				case strings.HasSuffix(r.URL.Path, "/packagemanifests"):
-					io.WriteString(w, `{"items":[{"metadata":{"name":"rhods-operator"},"status":{"packageName":"rhods-operator","catalogSource":"`+strings.TrimPrefix(r.URL.Query().Get("labelSelector"), "catalog=")+`","catalogSourceNamespace":"`+CatalogNS+`","channels":[{"name":"stable-3.6","currentCSV":"rhods-operator.v3.6.0"},{"name":"stable-3.3","currentCSV":"rhods-operator.v3.3.0"},{"name":"beta","currentCSV":"rhods-operator.v3.3.0-ea.1"}]}}]}`)
+					io.WriteString(w, `{"items":[{"metadata":{"name":"rhods-operator"},"status":{"packageName":"rhods-operator","catalogSource":"`+strings.TrimPrefix(r.URL.Query().Get("labelSelector"), "catalog=")+`","catalogSourceNamespace":"`+rhoai.CatalogNS+`","channels":[{"name":"stable-3.6","currentCSV":"rhods-operator.v3.6.0"},{"name":"stable-3.3","currentCSV":"rhods-operator.v3.3.0"},{"name":"beta","currentCSV":"rhods-operator.v3.3.0-ea.1"}]}}]}`)
 				default:
 					io.WriteString(w, `{"items":[]}`)
 				}

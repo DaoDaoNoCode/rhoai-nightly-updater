@@ -1,4 +1,4 @@
-package cluster
+package rhoai
 
 import (
 	"encoding/json"
@@ -28,24 +28,24 @@ import (
 // that they did.
 
 const (
-	dscGroup      = "datasciencecluster.opendatahub.io"
-	dsciGroup     = "dscinitialization.opendatahub.io"
-	platformGroup = "config.opendatahub.io"
+	DSCGroup      = "datasciencecluster.opendatahub.io"
+	DSCIGroup     = "dscinitialization.opendatahub.io"
+	PlatformGroup = "config.opendatahub.io"
 	// The collections, %s for the version.
-	dscListFmt      = "/apis/datasciencecluster.opendatahub.io/%s/datascienceclusters"
-	platformListFmt = "/apis/config.opendatahub.io/%s/platforms"
+	DSCListFmt      = "/apis/datasciencecluster.opendatahub.io/%s/datascienceclusters"
+	PlatformListFmt = "/apis/config.opendatahub.io/%s/platforms"
 )
 
 // The versions read before discovery, used when discovery fails or the
 // group is not served yet, so older clusters behave as before.
 var (
-	dscFallbackVersions      = []string{"v2", "v1"}
-	dsciFallbackVersions     = []string{"v2", "v1"}
-	platformFallbackVersions = []string{"v1alpha1"}
+	DSCFallbackVersions      = []string{"v2", "v1"}
+	DSCIFallbackVersions     = []string{"v2", "v1"}
+	PlatformFallbackVersions = []string{"v1alpha1"}
 )
 
-// apiVersions is the order in which a group's versions are tried.
-type apiVersions struct {
+// APIVersions is the order in which a group's versions are tried.
+type APIVersions struct {
 	Versions []string // preferred first, then newest first
 	// Discovered is false when Versions is the fallback (discovery failed
 	// or the group is not served).
@@ -57,9 +57,9 @@ type apiVersions struct {
 // cached, so a group that appears is picked up on the next read.
 const apiVersionsCacheTTL = 30 * time.Second
 
-var apiVersionsCache = kube.NewLRU[string, []string](64)
+var APIVersionsCache = kube.NewLRU[string, []string](64)
 
-// servedVersions reads the API discovery document of group (readable by
+// ServedVersions reads the API discovery document of group (readable by
 // every authenticated user through system:discovery) and returns its
 // served versions, the preferred one first and the others newest first.
 //
@@ -67,28 +67,28 @@ var apiVersionsCache = kube.NewLRU[string, []string](64)
 // the signed-in user's token (a change's, or a user's read) reads
 // discovery afresh and caches nothing, so a per-cluster cache is never
 // fed by a user's token.
-func servedVersions(c *Client, group string, fallback []string) apiVersions {
+func ServedVersions(c *kube.Client, group string, fallback []string) APIVersions {
 	key := c.BaseURL() + "|" + group
-	if v, ok := apiVersionsCache.Get(key); ok && !c.ActsAsUser() {
-		return apiVersions{Versions: v, Discovered: true}
+	if v, ok := APIVersionsCache.Get(key); ok && !c.ActsAsUser() {
+		return APIVersions{Versions: v, Discovered: true}
 	}
 	body, _, err := c.Get("/apis/" + group)
 	if err != nil {
-		return apiVersions{Versions: fallback}
+		return APIVersions{Versions: fallback}
 	}
-	versions := parseGroupVersions(body)
+	versions := ParseGroupVersions(body)
 	if len(versions) == 0 {
-		return apiVersions{Versions: fallback}
+		return APIVersions{Versions: fallback}
 	}
 	if !c.ActsAsUser() {
-		apiVersionsCache.Add(key, versions, apiVersionsCacheTTL)
+		APIVersionsCache.Add(key, versions, apiVersionsCacheTTL)
 	}
-	return apiVersions{Versions: versions, Discovered: true}
+	return APIVersions{Versions: versions, Discovered: true}
 }
 
-// apiGroupDoc is an APIGroup discovery document (also the items of an
+// APIGroupDoc is an APIGroup discovery document (also the items of an
 // APIGroupList).
-type apiGroupDoc struct {
+type APIGroupDoc struct {
 	Name     string `json:"name"`
 	Versions []struct {
 		Version string `json:"version"`
@@ -98,40 +98,40 @@ type apiGroupDoc struct {
 	} `json:"preferredVersion"`
 }
 
-// orderedVersions returns the group's versions, preferred first, then the
+// OrderedVersions returns the group's versions, preferred first, then the
 // others newest first.
-func (g apiGroupDoc) orderedVersions() []string {
+func (g APIGroupDoc) OrderedVersions() []string {
 	var rest []string
 	for _, v := range g.Versions {
 		if v.Version != "" && v.Version != g.PreferredVersion.Version && !slices.Contains(rest, v.Version) {
 			rest = append(rest, v.Version)
 		}
 	}
-	sortAPIVersions(rest)
+	SortAPIVersions(rest)
 	if g.PreferredVersion.Version == "" {
 		return rest
 	}
 	return append([]string{g.PreferredVersion.Version}, rest...)
 }
 
-func parseGroupVersions(body []byte) []string {
-	var g apiGroupDoc
+func ParseGroupVersions(body []byte) []string {
+	var g APIGroupDoc
 	if json.Unmarshal(body, &g) != nil {
 		return nil
 	}
-	return g.orderedVersions()
+	return g.OrderedVersions()
 }
 
-var kubeVersionPattern = regexp.MustCompile(`^v([1-9][0-9]*)(?:(alpha|beta)([1-9][0-9]*))?$`)
+var KubeVersionPattern = regexp.MustCompile(`^v([1-9][0-9]*)(?:(alpha|beta)([1-9][0-9]*))?$`)
 
-// compareAPIVersions orders API version names the way the API server
+// CompareAPIVersions orders API version names the way the API server
 // orders a group's versions (k8s.io/apimachinery/pkg/version
 // CompareKubeAwareVersionStrings): GA before beta before alpha, then the
 // higher major, then the higher minor; names that are not Kubernetes
 // versions come last, alphabetically. It returns a negative number when a
 // comes first (is newer).
-func compareAPIVersions(a, b string) int {
-	ma, mb := kubeVersionPattern.FindStringSubmatch(a), kubeVersionPattern.FindStringSubmatch(b)
+func CompareAPIVersions(a, b string) int {
+	ma, mb := KubeVersionPattern.FindStringSubmatch(a), KubeVersionPattern.FindStringSubmatch(b)
 	switch {
 	case ma == nil && mb == nil:
 		return strings.Compare(a, b)
@@ -155,17 +155,17 @@ func atoiOr0(s string) int {
 	return n
 }
 
-func sortAPIVersions(versions []string) {
-	sort.SliceStable(versions, func(i, j int) bool { return compareAPIVersions(versions[i], versions[j]) < 0 })
+func SortAPIVersions(versions []string) {
+	sort.SliceStable(versions, func(i, j int) bool { return CompareAPIVersions(versions[i], versions[j]) < 0 })
 }
 
-// isConversionWebhookError reports whether err is the API server failing to
+// IsConversionWebhookError reports whether err is the API server failing to
 // convert stored objects through a CRD's conversion webhook: HTTP 500
 // "conversion webhook for <kind> failed: ..." on a direct read, or HTTP 429
 // "storage is (re)initializing: ... conversion webhook ..." while the watch
 // cache cannot list them (it never initializes, so retrying does not help).
-func isConversionWebhookError(err error) bool {
-	var k *K8sError
+func IsConversionWebhookError(err error) bool {
+	var k *kube.K8sError
 	if !errors.As(err, &k) || (k.Status != http.StatusInternalServerError && k.Status != http.StatusTooManyRequests) {
 		return false
 	}
@@ -188,27 +188,27 @@ type servedRead struct {
 	Skipped []versionFailure
 }
 
-// listServed lists a collection at each served version of group in turn.
+// ListServed lists a collection at each served version of group in turn.
 // pathFmt is the collection path with %s for the version. A version that
 // is not served (404) or whose objects cannot be converted is skipped; any
 // other error is returned. With no version served the result has Version
 // "" and no error. When every served version fails to convert, the first
 // conversion error is returned.
-func listServed(c *Client, group, pathFmt string, query url.Values, fallback []string) (servedRead, error) {
+func ListServed(c *kube.Client, group, pathFmt string, query url.Values, fallback []string) (servedRead, error) {
 	return readServed(c, group, pathFmt, false, query, fallback)
 }
 
-// getServed reads one object like listServed; pathFmt includes its name. A
+// GetServed reads one object like listServed; pathFmt includes its name. A
 // 404 at a discovered served version means the object does not exist and
 // is returned.
-func getServed(c *Client, group, pathFmt string, fallback []string) (servedRead, error) {
+func GetServed(c *kube.Client, group, pathFmt string, fallback []string) (servedRead, error) {
 	return readServed(c, group, pathFmt, true, nil, fallback)
 }
 
-func readServed(c *Client, group, pathFmt string, named bool, query url.Values, fallback []string) (servedRead, error) {
+func readServed(c *kube.Client, group, pathFmt string, named bool, query url.Values, fallback []string) (servedRead, error) {
 	var out servedRead
 	var conversionErr, notFound error
-	versions := servedVersions(c, group, fallback)
+	versions := ServedVersions(c, group, fallback)
 	for _, version := range versions.Versions {
 		body, _, err := c.Do(http.MethodGet, fmt.Sprintf(pathFmt, version), "", nil, query)
 		switch {
@@ -217,8 +217,8 @@ func readServed(c *Client, group, pathFmt string, named bool, query url.Values, 
 		case kube.IsK8sNotFound(err):
 			notFound = err // the version is not served
 			continue
-		case isConversionWebhookError(err):
-			out.Skipped = append(out.Skipped, versionFailure{Version: version, Message: conversionMessage(err)})
+		case IsConversionWebhookError(err):
+			out.Skipped = append(out.Skipped, versionFailure{Version: version, Message: ConversionMessage(err)})
 			if conversionErr == nil {
 				conversionErr = err
 			}
@@ -238,10 +238,60 @@ func readServed(c *Client, group, pathFmt string, named bool, query url.Values, 
 	return out, nil
 }
 
-func conversionMessage(err error) string {
-	var k *K8sError
+func ConversionMessage(err error) string {
+	var k *kube.K8sError
 	if errors.As(err, &k) && k.K8sMessage != "" {
 		return k.K8sMessage
 	}
 	return err.Error()
+}
+
+// ListFirstServed lists a collection of group at the newest served version
+// that works (listServed) and returns the items. pathFmt is the collection
+// path with %s for the version. apiFound is false when no version is
+// served (no CRD).
+func ListFirstServed(c *kube.Client, group, pathFmt, resource string, fallback []string) (items []DSCObject, apiFound bool, err error) {
+	r, err := ListServed(c, group, pathFmt, nil, fallback)
+	if err != nil {
+		return nil, true, err
+	}
+	if r.Version == "" {
+		return nil, false, nil
+	}
+	var list struct {
+		Items []DSCObject `json:"items"`
+	}
+	if err := json.Unmarshal(r.Body, &list); err != nil {
+		return nil, true, fmt.Errorf("parse %s: %w", resource, err)
+	}
+	return list.Items, true, nil
+}
+
+type DSCObject struct {
+	APIVersion string `json:"apiVersion"`
+	Metadata   struct {
+		Name       string `json:"name"`
+		UID        string `json:"uid"`
+		Generation int64  `json:"generation"`
+	} `json:"metadata"`
+	Spec struct {
+		ApplicationsNamespace string `json:"applicationsNamespace"` // DSCInitialization
+		Monitoring            struct {
+			Namespace string `json:"namespace"` // DSCInitialization
+		} `json:"monitoring"`
+	} `json:"spec"`
+	Status struct {
+		Phase              string         `json:"phase"`
+		ObservedGeneration int64          `json:"observedGeneration"`
+		Conditions         []DSCCondition `json:"conditions"`
+	} `json:"status"`
+}
+
+type DSCCondition struct {
+	Type               string `json:"type"`
+	Status             string `json:"status"`
+	Reason             string `json:"reason"`
+	Message            string `json:"message"`
+	Severity           string `json:"severity"`
+	LastTransitionTime string `json:"lastTransitionTime"`
 }

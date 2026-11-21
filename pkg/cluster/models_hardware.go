@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // The annotations the dashboard's deploy wizard writes for the hardware
@@ -140,12 +141,12 @@ func (p hardwareProfileObject) fits(entry catalogModel) string {
 // or a zero profile and why none was used; a read error is a reason too:
 // the profile is a label in the dashboard, never a reason to stop.
 func pickHardwareProfile(c *Client, entry catalogModel) (hardwareProfile, string) {
-	ns, err := appsNamespace(c)
+	ns, err := rhoai.AppsNamespace(c)
 	if err != nil {
 		return hardwareProfile{}, fmt.Sprintf("the dashboard's namespace is not known (%v)", err)
 	}
 	var items []hardwareProfileObject
-	if err := c.ListInto(namespacedPath("infrastructure.opendatahub.io/v1", "hardwareprofiles", ns, ""), &items); err != nil {
+	if err := c.ListInto(rhoai.NamespacedPath("infrastructure.opendatahub.io/v1", "hardwareprofiles", ns, ""), &items); err != nil {
 		if kube.IsDecodeError(err) {
 			return hardwareProfile{}, "the hardware profiles cannot be parsed"
 		}

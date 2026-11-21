@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // The writes the gitops profile's Update may make: the old InstallPlan and
@@ -15,9 +16,9 @@ import (
 func gitOpsProfileWriteAllowed(w string) bool {
 	method, path, _ := strings.Cut(w, " ")
 	switch {
-	case strings.HasPrefix(path, namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, "")) && method == http.MethodDelete:
+	case strings.HasPrefix(path, rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, "")) && method == http.MethodDelete:
 		return true
-	case strings.HasPrefix(path, namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "")) && method == http.MethodDelete:
+	case strings.HasPrefix(path, rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "")) && method == http.MethodDelete:
 		return true
 	case path == subscriptionPath() && (method == http.MethodPatch || method == http.MethodDelete):
 		return true
@@ -98,11 +99,11 @@ func TestUpdateGitOpsProfile_RefusesAMissingOperatorGroup(t *testing.T) {
 			f.operatorGrps = append(f.operatorGrps, map[string]any{"metadata": map[string]any{"name": "other"}, "spec": map[string]any{}})
 		},
 		"not global": func(f *fakeOLM) {
-			f.operatorGrps = []any{map[string]any{"metadata": map[string]any{"name": "rhods-operator"}, "spec": map[string]any{"targetNamespaces": []any{SubNS}}}}
+			f.operatorGrps = []any{map[string]any{"metadata": map[string]any{"name": "rhods-operator"}, "spec": map[string]any{"targetNamespaces": []any{rhoai.SubNS}}}}
 		},
 		"no namespace": func(f *fakeOLM) {
 			f.intercept = func(_ *fakeOLM, w http.ResponseWriter, r *http.Request) bool {
-				if r.URL.Path == "/api/v1/namespaces/"+SubNS {
+				if r.URL.Path == "/api/v1/namespaces/"+rhoai.SubNS {
 					notFound(w)
 					return true
 				}
@@ -358,7 +359,7 @@ func TestUpdateGitOpsProfile_PolicyChangesWhileUpdateRuns(t *testing.T) {
 	f.intercept = func(f *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
 		if !changed && r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/installplans") {
 			changed = true
-			p := f.admission[clusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicies", testGitOpsPolicyName)]
+			p := f.admission[rhoai.ClusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicies", testGitOpsPolicyName)]
 			p["spec"].(map[string]any)["variables"] = []any{map[string]any{"name": "allowedEnv", "expression": "'OTHER'.split(',')"}}
 		}
 		return false

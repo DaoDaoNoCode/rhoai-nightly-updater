@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -246,7 +247,7 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 	if len(entry.Detail) > maxActivityDetail {
 		entry.Detail = entry.Detail[:maxActivityDetail] + "…"
 	}
-	cmPath := namespacedPath("v1", "configmaps", ns, activityConfigMapName)
+	cmPath := rhoai.NamespacedPath("v1", "configmaps", ns, activityConfigMapName)
 
 	for attempt := range maxConflictRetries {
 		if attempt > 0 {
@@ -323,7 +324,7 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 
 		if isNew {
 			// Create with POST for new ConfigMaps
-			cmListPath := namespacedPath("v1", "configmaps", ns, "")
+			cmListPath := rhoai.NamespacedPath("v1", "configmaps", ns, "")
 			_, _, err = c.Bookkeeping().Post(cmListPath, cmData)
 		} else {
 			// Update with PUT for existing ConfigMaps (carries resourceVersion)
@@ -350,7 +351,7 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 // GetActivity retrieves the activity log from the ConfigMap.
 func GetActivity(c *Client) ([]types.ActivityEntry, error) {
 	ns := getActivityNamespace()
-	cmPath := namespacedPath("v1", "configmaps", ns, activityConfigMapName)
+	cmPath := rhoai.NamespacedPath("v1", "configmaps", ns, activityConfigMapName)
 
 	var cm map[string]any
 	found, err := c.Bookkeeping().GetIntoOptional(cmPath, &cm)

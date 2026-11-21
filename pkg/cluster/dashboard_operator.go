@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -236,7 +237,7 @@ func dashboardOwner(d dashboardDeployment) string {
 
 func listDashboardNamespaceDeployments(c *Client, ns string) ([]dashboardDeployment, error) {
 	var items []dashboardDeployment
-	if err := c.ListInto(namespacedPath("apps/v1", "deployments", ns, ""), &items); err != nil {
+	if err := c.ListInto(rhoai.NamespacedPath("apps/v1", "deployments", ns, ""), &items); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -443,7 +444,7 @@ func dashboardExternalPauseWarning(op string) string {
 // dashboardCRDeleting reports whether any Dashboard CR has a deletionTimestamp.
 // A missing CRD means there is nothing to delete.
 func dashboardCRDeleting(c *Client) (bool, error) {
-	r, err := listServed(c, componentAPIGroup, "/apis/components.platform.opendatahub.io/%s/dashboards", nil, []string{"v1alpha1"})
+	r, err := rhoai.ListServed(c, rhoai.ComponentAPIGroup, "/apis/components.platform.opendatahub.io/%s/dashboards", nil, []string{"v1alpha1"})
 	if kube.IsK8sNotFound(err) || (err == nil && r.Version == "") {
 		return false, nil
 	}
@@ -835,7 +836,7 @@ func patchDashboardOperator(c *Client, operator *dashboardDeployment, replicas i
 		}
 		annotations[dashboardDevLastActionAnnotation] = string(raw)
 	}
-	return c.PatchJSON(namespacedPath("apps/v1", "deployments", operator.Metadata.Namespace, operator.Metadata.Name), map[string]any{
+	return c.PatchJSON(rhoai.NamespacedPath("apps/v1", "deployments", operator.Metadata.Namespace, operator.Metadata.Name), map[string]any{
 		"metadata": map[string]any{"uid": operator.Metadata.UID, "resourceVersion": operator.Metadata.ResourceVersion, "annotations": annotations},
 		"spec":     map[string]any{"replicas": replicas},
 	})
@@ -1196,7 +1197,7 @@ func patchControlledDashboardImages(c *Client, operator *dashboardDeployment, pa
 	}
 	image := patches[0].Image
 	ns := operator.Metadata.Namespace
-	path := namespacedPath("apps/v1", "deployments", ns, image.Deployment)
+	path := rhoai.NamespacedPath("apps/v1", "deployments", ns, image.Deployment)
 	for attempt := range 5 {
 		current, err := readDashboardOperatorAt(c, ns, operator.Metadata.Name)
 		if err != nil {
@@ -1267,7 +1268,7 @@ func clearDashboardManagedAnnotations(c *Client, ns, operatorName string) (clear
 			continue
 		}
 		patch := map[string]any{"metadata": map[string]any{"uid": d.Metadata.UID, "annotations": map[string]any{"opendatahub.io/managed": nil}}}
-		if err := c.PatchJSON(namespacedPath("apps/v1", "deployments", ns, d.Metadata.Name), patch); err != nil && !kube.IsK8sNotFound(err) {
+		if err := c.PatchJSON(rhoai.NamespacedPath("apps/v1", "deployments", ns, d.Metadata.Name), patch); err != nil && !kube.IsK8sNotFound(err) {
 			failures = append(failures, d.Metadata.Name+": "+err.Error())
 			continue
 		}

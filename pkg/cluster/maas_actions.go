@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -53,8 +54,8 @@ func rhclUpgradeRefusal(st operatorState) string {
 		return gitOpsRefusal("Subscription "+st.sub.Metadata.Namespace+"/"+st.sub.Metadata.Name, st.sub.argoApp, "changing its channel") + " Change the channel in Git."
 	case st.sub.Spec.InstallPlanApproval == "Manual":
 		return fmt.Sprintf("Subscription %s/%s approves InstallPlans by hand (Manual), and this tool does not approve someone else's plans. A cluster-admin switches its channel and approves the plans.", st.sub.Metadata.Namespace, st.sub.Metadata.Name)
-	case kube.FirstNonEmpty(st.sub.Spec.SourceNamespace, CatalogNS) != CatalogNS:
-		return fmt.Sprintf("Subscription %s/%s uses catalog %s/%s, outside %s, which this tool does not read.", st.sub.Metadata.Namespace, st.sub.Metadata.Name, st.sub.Spec.SourceNamespace, st.sub.Spec.Source, CatalogNS)
+	case kube.FirstNonEmpty(st.sub.Spec.SourceNamespace, rhoai.CatalogNS) != rhoai.CatalogNS:
+		return fmt.Sprintf("Subscription %s/%s uses catalog %s/%s, outside %s, which this tool does not read.", st.sub.Metadata.Namespace, st.sub.Metadata.Name, st.sub.Spec.SourceNamespace, st.sub.Spec.Source, rhoai.CatalogNS)
 	}
 	return ""
 }
@@ -65,7 +66,7 @@ func rhclUpgradeRefusal(st operatorState) string {
 func rhclUpgradeOffer(c *Client, st operatorState) (*types.MaaSAction, string) {
 	if why := rhclUpgradeRefusal(st); why != "" {
 		if st.sub == nil {
-			return nil, fmt.Sprintf("# %s\noc get subscriptions -n %s", why, shellQuote(st.csvNS))
+			return nil, fmt.Sprintf("# %s\noc get subscriptions -n %s", why, kube.ShellQuote(st.csvNS))
 		}
 		return nil, "# " + why
 	}

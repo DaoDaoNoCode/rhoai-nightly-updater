@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -81,7 +82,7 @@ func checkDSCCompatibility(c *Client, dsc map[string]any) *types.DSCCompatibilit
 	op, err := getInstalledOperator(c)
 	apiVersion, _ := dsc["apiVersion"].(string)
 	version, _ := dscAPIVersion(apiVersion)
-	return checkDSCCompatibilityFor(c, dscRead{Object: dsc, State: DSCStatePresent, Version: version}, op, err, fetchDSCSample)
+	return checkDSCCompatibilityFor(c, rhoai.DSCRead{Object: dsc, State: rhoai.DSCStatePresent, Version: version}, op, err, fetchDSCSample)
 }
 
 // GetOperationState returns the running-operation marker and the last

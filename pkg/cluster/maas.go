@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -121,7 +122,7 @@ const authorinoGroup = "operator.authorino.kuadrant.io"
 // preferred one; v1alpha1, RHOAI 3.6's, when discovery cannot tell), for
 // the MaaS objects' paths and apiVersion.
 func maasAPI(c *Client) string {
-	return maasGroup + "/" + servedVersions(c, maasGroup, []string{"v1alpha1"}).Versions[0]
+	return maasGroup + "/" + rhoai.ServedVersions(c, maasGroup, []string{"v1alpha1"}).Versions[0]
 }
 
 // --- record (this tool's namespace, snapshot ConfigMap key "maas") ---------------
@@ -187,7 +188,7 @@ func readMaaSRecord(c *Client) (maasRecord, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.Bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return rec, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
@@ -351,7 +352,7 @@ const maasEmbeddingReason = "This tool publishes chat models only. Use the embed
 // failure is never replaced by a default name (rhoai_namespaces.go).
 func maasInfraNamespace(c *Client) (string, error) {
 	const what = "the default tenant (MaaSTenantConfig models-as-a-service/default-tenant)"
-	body, _, err := c.Get(namespacedPath(maasAPI(c), "maastenantconfigs", "models-as-a-service", "default-tenant"))
+	body, _, err := c.Get(rhoai.NamespacedPath(maasAPI(c), "maastenantconfigs", "models-as-a-service", "default-tenant"))
 	switch {
 	case err == nil:
 		var tc struct {
@@ -369,7 +370,7 @@ func maasInfraNamespace(c *Client) (string, error) {
 	default:
 		return "", fmt.Errorf("cannot tell where maas-api and its database go: %s cannot be read (%w)", what, err)
 	}
-	apps, err := appsNamespace(c)
+	apps, err := rhoai.AppsNamespace(c)
 	if err != nil {
 		return "", fmt.Errorf("cannot tell where maas-api and its database go: the default tenant reports no infrastructure namespace, and the applications namespace it is derived from is not known (%w)", err)
 	}
@@ -394,7 +395,7 @@ func maasDBNamespace(c *Client, rec maasRecord) (string, error) {
 
 // maasDSC is the DataScienceCluster as MaaS needs it.
 type maasDSC struct {
-	read      dscRead
+	read      rhoai.DSCRead
 	name      string
 	aigateway string // managementState, "" when not named
 	maas      string // aigateway.modelsAsAService.managementState
@@ -405,7 +406,7 @@ type maasDSC struct {
 }
 
 func readMaaSDSC(c *Client) (maasDSC, error) {
-	r, err := readFirstDSC(c)
+	r, err := rhoai.ReadFirstDSC(c)
 	if err != nil {
 		return maasDSC{}, err
 	}
@@ -415,7 +416,7 @@ func readMaaSDSC(c *Client) (maasDSC, error) {
 	}
 	meta, _ := r.Object["metadata"].(map[string]any)
 	d.name, _ = meta["name"].(string)
-	d.argo = argoTrackingOf(c, r.Object, dscGroup, "DataScienceCluster")
+	d.argo = argoTrackingOf(c, r.Object, rhoai.DSCGroup, "DataScienceCluster")
 	d.argoApp = d.argo.managedBy()
 	d.aigateway, _ = componentManagement(r.Object, "aigateway")
 	spec, _ := r.Object["spec"].(map[string]any)
@@ -439,7 +440,7 @@ func readMaaSDSC(c *Client) (maasDSC, error) {
 // opendatahub.io, listed at the version that serves it): "True", "False"
 // or "" when there is none or it cannot be read.
 func aigatewayMaaSReady(c *Client) (string, string) {
-	read, err := listServed(c, "components.platform.opendatahub.io", "/apis/components.platform.opendatahub.io/%s/aigateways", nil, []string{"v1alpha1"})
+	read, err := rhoai.ListServed(c, "components.platform.opendatahub.io", "/apis/components.platform.opendatahub.io/%s/aigateways", nil, []string{"v1alpha1"})
 	if err != nil || read.Body == nil {
 		return "", ""
 	}
@@ -491,7 +492,7 @@ func readKuadrant(c *Client) (kuadrantState, error) {
 	// The group's versions are not the resource's: kuadrant.io serves v1
 	// (AuthPolicy...) first while Kuadrant is only in v1beta1 (RHCL 1.4,
 	// seen live), so list it at each served version until one serves it.
-	read, err := listServed(c, kuadrantGroup, "/apis/kuadrant.io/%s/kuadrants", nil, []string{"v1beta1"})
+	read, err := rhoai.ListServed(c, kuadrantGroup, "/apis/kuadrant.io/%s/kuadrants", nil, []string{"v1beta1"})
 	if err != nil {
 		return kuadrantState{}, err
 	}
@@ -548,17 +549,17 @@ func rhclWarning(version string) string {
 func maasObjectPath(kind, ns string) string {
 	switch kind {
 	case "Gateway":
-		return namespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", "maas-default-gateway")
+		return rhoai.NamespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", "maas-default-gateway")
 	case "ConfigMap":
-		return namespacedPath("v1", "configmaps", "openshift-ingress", "maas-gateway-options")
+		return rhoai.NamespacedPath("v1", "configmaps", "openshift-ingress", "maas-gateway-options")
 	case "Cluster":
-		return namespacedPath("postgresql.cnpg.io/v1", "clusters", ns, "maas-db")
+		return rhoai.NamespacedPath("postgresql.cnpg.io/v1", "clusters", ns, "maas-db")
 	case "Secret":
-		return namespacedPath("v1", "secrets", ns, "maas-db-config")
+		return rhoai.NamespacedPath("v1", "secrets", ns, "maas-db-config")
 	case "PostgresDeployment":
-		return namespacedPath("apps/v1", "deployments", ns, "postgres")
+		return rhoai.NamespacedPath("apps/v1", "deployments", ns, "postgres")
 	case "PostgresService":
-		return namespacedPath("v1", "services", ns, "postgres")
+		return rhoai.NamespacedPath("v1", "services", ns, "postgres")
 	}
 	return ""
 }
@@ -566,17 +567,17 @@ func maasObjectPath(kind, ns string) string {
 func maasCreatePath(kind, ns string) string {
 	switch kind {
 	case "Gateway":
-		return withToolFieldManager(namespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", ""))
+		return withToolFieldManager(rhoai.NamespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", ""))
 	case "ConfigMap":
-		return withToolFieldManager(namespacedPath("v1", "configmaps", "openshift-ingress", ""))
+		return withToolFieldManager(rhoai.NamespacedPath("v1", "configmaps", "openshift-ingress", ""))
 	case "Cluster":
-		return withToolFieldManager(namespacedPath("postgresql.cnpg.io/v1", "clusters", ns, ""))
+		return withToolFieldManager(rhoai.NamespacedPath("postgresql.cnpg.io/v1", "clusters", ns, ""))
 	case "Secret", "PostgresSecret":
-		return withToolFieldManager(namespacedPath("v1", "secrets", ns, ""))
+		return withToolFieldManager(rhoai.NamespacedPath("v1", "secrets", ns, ""))
 	case "PostgresDeployment":
-		return withToolFieldManager(namespacedPath("apps/v1", "deployments", ns, ""))
+		return withToolFieldManager(rhoai.NamespacedPath("apps/v1", "deployments", ns, ""))
 	case "PostgresService":
-		return withToolFieldManager(namespacedPath("v1", "services", ns, ""))
+		return withToolFieldManager(rhoai.NamespacedPath("v1", "services", ns, ""))
 	}
 	return ""
 }
@@ -609,7 +610,7 @@ func maasDesc(kind, ns string) string {
 // changes or deletes it, also when it created it: other gateways may use
 // it, and a class alone costs nothing.
 func maasGatewayClassPath() string {
-	return clusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "openshift-default")
+	return rhoai.ClusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "openshift-default")
 }
 
 // maasGatewayState is the MaaS gateway as read.
@@ -811,7 +812,7 @@ func maasConnectionURL(c *Client, ns string) (string, error) {
 	var s struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := c.GetInto(namespacedPath("v1", "secrets", ns, "maas-db-app"), &s); err != nil {
+	if err := c.GetInto(rhoai.NamespacedPath("v1", "secrets", ns, "maas-db-app"), &s); err != nil {
 		if kube.IsDecodeError(err) {
 			return "", errors.New("the database's application Secret cannot be parsed")
 		}
@@ -921,7 +922,7 @@ func maasGatewayAuth(c *Client) string {
 // document answers 404 when no CRD of the group is installed. Any other
 // failure is returned, so callers can refuse rather than guess.
 func groupServed(c *Client, group string) (bool, error) {
-	if v, ok := apiVersionsCache.Get(c.BaseURL() + "|" + group); ok && len(v) > 0 {
+	if v, ok := rhoai.APIVersionsCache.Get(c.BaseURL() + "|" + group); ok && len(v) > 0 {
 		return true, nil
 	}
 	body, found, err := c.GetOptional("/apis/" + group)
@@ -931,7 +932,7 @@ func groupServed(c *Client, group string) (bool, error) {
 	if !found {
 		return false, nil
 	}
-	return len(parseGroupVersions(body)) > 0, nil
+	return len(rhoai.ParseGroupVersions(body)) > 0, nil
 }
 
 // authorinoTLS checks what scripts/setup-authorino-tls.sh sets on
@@ -952,7 +953,7 @@ func authorinoTLS(c *Client, ns string) (string, bool, string) {
 	tlsOK := false
 	// The CR at the version its group serves (v1beta1 when discovery cannot
 	// tell).
-	read, err := getServed(c, authorinoGroup, "/apis/"+authorinoGroup+"/%s/namespaces/"+ns+"/authorinos/authorino", []string{"v1beta1"})
+	read, err := rhoai.GetServed(c, authorinoGroup, "/apis/"+authorinoGroup+"/%s/namespaces/"+ns+"/authorinos/authorino", []string{"v1beta1"})
 	if body := read.Body; err != nil || body == nil {
 		known = false
 	} else {
@@ -1084,7 +1085,7 @@ func authorinoTLSCommands(ns, secret string) (cmds, why string) {
 	}
 	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"listener": map[string]any{"tls": map[string]any{
 		"enabled": true, "certSecretRef": map[string]any{"name": secret}}}}})
-	q := shellQuote(ns)
+	q := kube.ShellQuote(ns)
 	return fmt.Sprintf(`oc annotate service authorino-authorino-authorization -n %[1]s \
   service.beta.openshift.io/serving-cert-secret-name=%[2]s --overwrite
 oc patch authorino authorino -n %[1]s --type=merge \
@@ -1092,7 +1093,7 @@ oc patch authorino authorino -n %[1]s --type=merge \
 oc -n %[1]s set env deployment/authorino \
   SSL_CERT_FILE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt \
   REQUESTS_CA_BUNDLE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
-oc rollout restart deployment/authorino -n %[1]s`, q, shellQuote(secret), shellQuote(string(patch))), ""
+oc rollout restart deployment/authorino -n %[1]s`, q, kube.ShellQuote(secret), kube.ShellQuote(string(patch))), ""
 }
 
 // --- status --------------------------------------------------------------------
@@ -1476,8 +1477,8 @@ func (r *maasStatusRun) statusDSC(dsc maasDSC, dscErr error) {
 				apiPart.Message = sentenceStart(r.infraErr.Error())
 			}
 		}
-		ai, aiMsg := readyCondition(c, namespacedPath(maasAPI(c), "aitenants", "ai-tenants", "models-as-a-service"))
-		tc, tcMsg := readyCondition(c, namespacedPath(maasAPI(c), "maastenantconfigs", "models-as-a-service", "default-tenant"))
+		ai, aiMsg := readyCondition(c, rhoai.NamespacedPath(maasAPI(c), "aitenants", "ai-tenants", "models-as-a-service"))
+		tc, tcMsg := readyCondition(c, rhoai.NamespacedPath(maasAPI(c), "maastenantconfigs", "models-as-a-service", "default-tenant"))
 		auth := maasGatewayAuth(c)
 		switch {
 		case ai == "True" && tc == "True" && auth == "enforced":
@@ -1555,8 +1556,8 @@ func (r *maasStatusRun) statusModels() {
 		slog.Debug("cannot list models for MaaS", "error", err)
 	}
 	rec, recErr := readMaaSRecord(c)
-	authPhase := maasPhase(c, namespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access"))
-	subPhase := maasPhase(c, namespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription"))
+	authPhase := maasPhase(c, rhoai.NamespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access"))
+	subPhase := maasPhase(c, rhoai.NamespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription"))
 	// Who may use the published models, and each one's limit: the
 	// subscription's (one an earlier build wrote reads as the free sample).
 	st.NoUnlimited = maasNoUnlimited(c)
@@ -1744,11 +1745,11 @@ type maasModelRefObject struct {
 func maasModelRefPath(c *Client, project, name string) (string, bool) {
 	switch name {
 	case "smollm2-135m-instruct":
-		return namespacedPath(maasAPI(c), "maasmodelrefs", project, "smollm2-135m-instruct"), true
+		return rhoai.NamespacedPath(maasAPI(c), "maasmodelrefs", project, "smollm2-135m-instruct"), true
 	case "qwen25-05b-instruct":
-		return namespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen25-05b-instruct"), true
+		return rhoai.NamespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen25-05b-instruct"), true
 	case "qwen3-1-7b":
-		return namespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen3-1-7b"), true
+		return rhoai.NamespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen3-1-7b"), true
 	}
 	return "", false
 }

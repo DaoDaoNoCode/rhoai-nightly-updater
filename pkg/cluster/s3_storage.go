@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -158,7 +159,7 @@ func readS3Keys(c *Client) (keys s3Keys, found bool, err error) {
 	var secret struct {
 		Data map[string]string `json:"data"`
 	}
-	exists, err := c.GetIntoOptional(namespacedPath("v1", "secrets", s3Namespace, s3Secret), &secret)
+	exists, err := c.GetIntoOptional(rhoai.NamespacedPath("v1", "secrets", s3Namespace, s3Secret), &secret)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return s3Keys{}, false, fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
@@ -211,7 +212,7 @@ func S3AdminLogin(c *Client) (login S3Login, err error) {
 		Metadata kube.ObjectMeta   `json:"metadata"`
 		Data     map[string]string `json:"data"`
 	}
-	found, err := c.GetIntoOptional(namespacedPath("v1", "secrets", s3Namespace, s3Secret), &secret)
+	found, err := c.GetIntoOptional(rhoai.NamespacedPath("v1", "secrets", s3Namespace, s3Secret), &secret)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return S3Login{}, fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
@@ -354,7 +355,7 @@ func listPVCs(c *Client, namespace string) ([]storagePVC, error) {
 			Capacity map[string]string `json:"capacity"`
 		} `json:"status"`
 	}
-	if err := c.ListInto(namespacedPath("v1", "persistentvolumeclaims", namespace, ""), &items); err != nil {
+	if err := c.ListInto(rhoai.NamespacedPath("v1", "persistentvolumeclaims", namespace, ""), &items); err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse PVC list: %w", err)
 		}
@@ -493,7 +494,7 @@ type serviceSpec struct {
 // readService reads a Service; found is false when it does not exist. Any
 // other read or parse error is returned.
 func readService(c *Client, namespace, name string) (serviceSpec, error) {
-	body, exists, err := c.GetOptional(namespacedPath("v1", "services", namespace, name))
+	body, exists, err := c.GetOptional(rhoai.NamespacedPath("v1", "services", namespace, name))
 	switch {
 	case err != nil:
 		return serviceSpec{}, fmt.Errorf("read Service %s: %w", name, err)
@@ -625,7 +626,7 @@ func s3StatusAndEndpoints(c *Client) (types.ResourceState, s3Endpoints, error) {
 	wg.Add(4)
 	go func() {
 		defer wg.Done()
-		deployBody, _, deployErr = c.Get(namespacedPath("apps/v1", "deployments", s3Namespace, s3Deployment))
+		deployBody, _, deployErr = c.Get(rhoai.NamespacedPath("apps/v1", "deployments", s3Namespace, s3Deployment))
 	}()
 	go func() {
 		defer wg.Done()
@@ -739,17 +740,17 @@ func s3ApplyPath(obj map[string]any) (string, bool) {
 	name, _ := meta["name"].(string)
 	switch kind, _ := obj["kind"].(string); {
 	case kind == "PersistentVolumeClaim" && name == s3PVC:
-		return namespacedPath("v1", "persistentvolumeclaims", s3Namespace, s3PVC), true
+		return rhoai.NamespacedPath("v1", "persistentvolumeclaims", s3Namespace, s3PVC), true
 	case kind == "Secret" && name == s3Secret:
-		return namespacedPath("v1", "secrets", s3Namespace, s3Secret), true
+		return rhoai.NamespacedPath("v1", "secrets", s3Namespace, s3Secret), true
 	case kind == "Deployment" && name == s3Deployment:
-		return namespacedPath("apps/v1", "deployments", s3Namespace, s3Deployment), true
+		return rhoai.NamespacedPath("apps/v1", "deployments", s3Namespace, s3Deployment), true
 	case kind == "Service" && name == s3Service:
-		return namespacedPath("v1", "services", s3Namespace, s3Service), true
+		return rhoai.NamespacedPath("v1", "services", s3Namespace, s3Service), true
 	case kind == "NetworkPolicy" && name == s3NetworkPolicy:
-		return namespacedPath("networking.k8s.io/v1", "networkpolicies", s3Namespace, s3NetworkPolicy), true
+		return rhoai.NamespacedPath("networking.k8s.io/v1", "networkpolicies", s3Namespace, s3NetworkPolicy), true
 	case kind == "Route" && name == s3AdminRoute:
-		return namespacedPath("route.openshift.io/v1", "routes", s3Namespace, s3AdminRoute), true
+		return rhoai.NamespacedPath("route.openshift.io/v1", "routes", s3Namespace, s3AdminRoute), true
 	}
 	return "", false
 }
@@ -759,17 +760,17 @@ func s3ApplyPath(obj map[string]any) (string, bool) {
 func s3CreatePath(kind string) (string, bool) {
 	switch kind {
 	case "PersistentVolumeClaim":
-		return withToolFieldManager(namespacedPath("v1", "persistentvolumeclaims", s3Namespace, "")), true
+		return withToolFieldManager(rhoai.NamespacedPath("v1", "persistentvolumeclaims", s3Namespace, "")), true
 	case "Secret":
-		return withToolFieldManager(namespacedPath("v1", "secrets", s3Namespace, "")), true
+		return withToolFieldManager(rhoai.NamespacedPath("v1", "secrets", s3Namespace, "")), true
 	case "Deployment":
-		return withToolFieldManager(namespacedPath("apps/v1", "deployments", s3Namespace, "")), true
+		return withToolFieldManager(rhoai.NamespacedPath("apps/v1", "deployments", s3Namespace, "")), true
 	case "Service":
-		return withToolFieldManager(namespacedPath("v1", "services", s3Namespace, "")), true
+		return withToolFieldManager(rhoai.NamespacedPath("v1", "services", s3Namespace, "")), true
 	case "NetworkPolicy":
-		return withToolFieldManager(namespacedPath("networking.k8s.io/v1", "networkpolicies", s3Namespace, "")), true
+		return withToolFieldManager(rhoai.NamespacedPath("networking.k8s.io/v1", "networkpolicies", s3Namespace, "")), true
 	case "Route":
-		return withToolFieldManager(namespacedPath("route.openshift.io/v1", "routes", s3Namespace, "")), true
+		return withToolFieldManager(rhoai.NamespacedPath("route.openshift.io/v1", "routes", s3Namespace, "")), true
 	}
 	return "", false
 }
@@ -779,17 +780,17 @@ func s3CreatePath(kind string) (string, bool) {
 func s3GetPath(kind, name string) (string, bool) {
 	switch {
 	case kind == "Job" && name == migrateJobName:
-		return namespacedPath("batch/v1", "jobs", s3Namespace, migrateJobName), true
+		return rhoai.NamespacedPath("batch/v1", "jobs", s3Namespace, migrateJobName), true
 	case kind == "Secret" && name == s3Secret:
-		return namespacedPath("v1", "secrets", s3Namespace, s3Secret), true
+		return rhoai.NamespacedPath("v1", "secrets", s3Namespace, s3Secret), true
 	case kind == "Deployment" && name == s3Deployment:
-		return namespacedPath("apps/v1", "deployments", s3Namespace, s3Deployment), true
+		return rhoai.NamespacedPath("apps/v1", "deployments", s3Namespace, s3Deployment), true
 	case kind == "Service" && name == s3Service:
-		return namespacedPath("v1", "services", s3Namespace, s3Service), true
+		return rhoai.NamespacedPath("v1", "services", s3Namespace, s3Service), true
 	case kind == "NetworkPolicy" && name == s3NetworkPolicy:
-		return namespacedPath("networking.k8s.io/v1", "networkpolicies", s3Namespace, s3NetworkPolicy), true
+		return rhoai.NamespacedPath("networking.k8s.io/v1", "networkpolicies", s3Namespace, s3NetworkPolicy), true
 	case kind == "Route" && name == s3AdminRoute:
-		return namespacedPath("route.openshift.io/v1", "routes", s3Namespace, s3AdminRoute), true
+		return rhoai.NamespacedPath("route.openshift.io/v1", "routes", s3Namespace, s3AdminRoute), true
 	}
 	return "", false
 }
@@ -798,19 +799,19 @@ func s3GetPath(kind, name string) (string, bool) {
 func s3DeletePath(kind, name string) (string, bool) {
 	switch {
 	case kind == "Job" && name == migrateJobName:
-		return namespacedPath("batch/v1", "jobs", s3Namespace, migrateJobName), true
+		return rhoai.NamespacedPath("batch/v1", "jobs", s3Namespace, migrateJobName), true
 	case kind == "PersistentVolumeClaim" && name == s3PVC:
-		return namespacedPath("v1", "persistentvolumeclaims", s3Namespace, s3PVC), true
+		return rhoai.NamespacedPath("v1", "persistentvolumeclaims", s3Namespace, s3PVC), true
 	case kind == "Secret" && name == s3Secret:
-		return namespacedPath("v1", "secrets", s3Namespace, s3Secret), true
+		return rhoai.NamespacedPath("v1", "secrets", s3Namespace, s3Secret), true
 	case kind == "Deployment" && name == s3Deployment:
-		return namespacedPath("apps/v1", "deployments", s3Namespace, s3Deployment), true
+		return rhoai.NamespacedPath("apps/v1", "deployments", s3Namespace, s3Deployment), true
 	case kind == "Service" && name == s3Service:
-		return namespacedPath("v1", "services", s3Namespace, s3Service), true
+		return rhoai.NamespacedPath("v1", "services", s3Namespace, s3Service), true
 	case kind == "NetworkPolicy" && name == s3NetworkPolicy:
-		return namespacedPath("networking.k8s.io/v1", "networkpolicies", s3Namespace, s3NetworkPolicy), true
+		return rhoai.NamespacedPath("networking.k8s.io/v1", "networkpolicies", s3Namespace, s3NetworkPolicy), true
 	case kind == "Route" && name == s3AdminRoute:
-		return namespacedPath("route.openshift.io/v1", "routes", s3Namespace, s3AdminRoute), true
+		return rhoai.NamespacedPath("route.openshift.io/v1", "routes", s3Namespace, s3AdminRoute), true
 	}
 	return "", false
 }
@@ -1338,7 +1339,7 @@ func waitS3Ready(c *Client, image string) (workloadPodIssue, error) {
 		return last, errS3NotReady
 	}
 	for {
-		body, _, err := cc.Get(namespacedPath("apps/v1", "deployments", s3Namespace, s3Deployment))
+		body, _, err := cc.Get(rhoai.NamespacedPath("apps/v1", "deployments", s3Namespace, s3Deployment))
 		if ctx.Err() != nil {
 			return expired()
 		}

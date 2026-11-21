@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // A 403 answered to the ServiceAccount's token (a read, the app's records)
@@ -64,7 +65,7 @@ func TestUserTokenRejectedMidOperationIsSignInEnded(t *testing.T) {
 	dscListPathV2 := "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters"
 	dscListPathV1 := "/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters"
 	client, _, cleanup := newRecordingMockClient(map[string]mockResponse{
-		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""): csvListMock("3.6.0"),
+		rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""): csvListMock("3.6.0"),
 		"GET " + dscListPathV2:  {body: `{"items":[]}`},
 		dscListPathV1:           {body: `{"items":[]}`},
 		"POST " + dscListPathV2: {body: `{"kind":"Status","status":"Failure","reason":"Unauthorized","code":401,"message":"Unauthorized"}`, statusCode: 401},
@@ -86,13 +87,13 @@ func TestUserTokenRejectedMidOperationIsSignInEnded(t *testing.T) {
 // that is not a cluster request keeps "prerequisites".
 func TestFailedReadKeepsItsErrorCode(t *testing.T) {
 	f, c := newFakeAPI(t)
-	f.status("GET", "/apis/"+componentAPIGroup, http.StatusForbidden, "Forbidden")
+	f.status("GET", "/apis/"+rhoai.ComponentAPIGroup, http.StatusForbidden, "Forbidden")
 	res, err := RevertDashboardImage(c)
 	if err != nil || res.Success || res.ErrorCode != "forbidden" {
 		t.Fatalf("result %+v, err %v", res, err)
 	}
 	f.mu.Lock()
-	delete(f.routes, "GET /apis/"+componentAPIGroup)
+	delete(f.routes, "GET /apis/"+rhoai.ComponentAPIGroup)
 	f.mu.Unlock()
 	serveDashboardModule(f, fixtureAppsNS, fixtureOperatorName, `{"metadata":{}}`)
 	res, err = RevertDashboardImage(c)

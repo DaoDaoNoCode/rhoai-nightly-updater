@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -19,7 +20,7 @@ func argoClient(t *testing.T, f *fakeArgoCD) *Client {
 
 // subTracked is the Subscription's annotations with a tracking id naming app.
 func subTracked(app string) map[string]string {
-	return map[string]string{argoTrackingAnnotation: app + ":operators.coreos.com/Subscription:" + SubNS + "/" + SubName}
+	return map[string]string{argoTrackingAnnotation: app + ":operators.coreos.com/Subscription:" + rhoai.SubNS + "/" + rhoai.SubName}
 }
 
 // subLabelled is the Subscription's labels under label tracking (OpenShift
@@ -75,12 +76,12 @@ func TestArgoTrackingVerdicts(t *testing.T) {
 			state: types.ArgoCDUnconfirmed, reason: "ClusterRoleBinding argocd-manager-role-binding",
 		},
 		"argo cd not installed, argocd cluster add --namespace registered the operator's namespace": {
-			argo:  &fakeArgoCD{managerRoleBindings: []string{SubNS}},
-			state: types.ArgoCDUnconfirmed, reason: "RoleBinding argocd-manager-role-binding in namespace " + SubNS,
+			argo:  &fakeArgoCD{managerRoleBindings: []string{rhoai.SubNS}},
+			state: types.ArgoCDUnconfirmed, reason: "RoleBinding argocd-manager-role-binding in namespace " + rhoai.SubNS,
 		},
 		"argo cd not installed, argocd cluster add --namespace registered the catalog's namespace": {
-			argo:  &fakeArgoCD{managerRoleBindings: []string{CatalogNS}},
-			state: types.ArgoCDUnconfirmed, reason: "RoleBinding argocd-manager-role-binding in namespace " + CatalogNS,
+			argo:  &fakeArgoCD{managerRoleBindings: []string{rhoai.CatalogNS}},
+			state: types.ArgoCDUnconfirmed, reason: "RoleBinding argocd-manager-role-binding in namespace " + rhoai.CatalogNS,
 		},
 		"argo cd not installed, argocd cluster add --namespace registered another namespace": {
 			argo:  &fakeArgoCD{managerRoleBindings: []string{"team-x"}},
@@ -95,8 +96,8 @@ func TestArgoTrackingVerdicts(t *testing.T) {
 			state: types.ArgoCDUnconfirmed, reason: "403",
 		},
 		"argo cd not installed, the RoleBinding read is forbidden": {
-			argo:  &fakeArgoCD{fail: map[string]int{managerRoleBindingPath(SubNS): http.StatusForbidden}},
-			state: types.ArgoCDUnconfirmed, reason: "manages namespace " + SubNS + " could not be read",
+			argo:  &fakeArgoCD{fail: map[string]int{managerRoleBindingPath(rhoai.SubNS): http.StatusForbidden}},
+			state: types.ArgoCDUnconfirmed, reason: "manages namespace " + rhoai.SubNS + " could not be read",
 		},
 		"application gone": {
 			argo:  &fakeArgoCD{served: true},
@@ -120,12 +121,12 @@ func TestArgoTrackingVerdicts(t *testing.T) {
 		},
 		"application lists it in another namespace": {
 			argo: &fakeArgoCD{served: true, apps: []map[string]any{compared("openshift-gitops",
-				argoObject{group: "operators.coreos.com", kind: "Subscription", namespace: "other", name: SubName})}},
+				argoObject{group: "operators.coreos.com", kind: "Subscription", namespace: "other", name: rhoai.SubName})}},
 			state: types.ArgoCDStale, staleReason: types.ArgoCDNotAmongResources, namespace: "openshift-gitops",
 		},
 		"application lists another group's object of that kind and name": {
 			argo: &fakeArgoCD{served: true, apps: []map[string]any{compared("openshift-gitops",
-				argoObject{group: "example.com", kind: "Subscription", namespace: SubNS, name: SubName})}},
+				argoObject{group: "example.com", kind: "Subscription", namespace: rhoai.SubNS, name: rhoai.SubName})}},
 			state: types.ArgoCDStale, staleReason: types.ArgoCDNotAmongResources, namespace: "openshift-gitops",
 		},
 		"application not compared yet": {
@@ -227,8 +228,8 @@ func TestArgoTrackingLabelTracking(t *testing.T) {
 			state: types.ArgoCDUnconfirmed, app: testArgoApp, reason: "Argo CD is not installed on this cluster, but an ACM hub", reported: true,
 		},
 		"Argo CD not installed, argocd cluster add --namespace on the operator's namespace: not confirmed": {
-			argo:  &fakeArgoCD{managerRoleBindings: []string{SubNS}},
-			state: types.ArgoCDUnconfirmed, app: testArgoApp, reason: "RoleBinding argocd-manager-role-binding in namespace " + SubNS, reported: true,
+			argo:  &fakeArgoCD{managerRoleBindings: []string{rhoai.SubNS}},
+			state: types.ArgoCDUnconfirmed, app: testArgoApp, reason: "RoleBinding argocd-manager-role-binding in namespace " + rhoai.SubNS, reported: true,
 		},
 		"Argo CD not installed, no remote sign: not reported (Helm sets the label too)": {
 			argo: &fakeArgoCD{},
@@ -332,8 +333,8 @@ func TestArgoTrackingCopiedAnnotation(t *testing.T) {
 		return &fakeArgoCD{served: true, apps: []map[string]any{app}}
 	}
 	for _, copied := range []string{
-		testArgoApp + ":operators.coreos.com/CatalogSource:" + CatalogNS + "/" + CatalogName,
-		testArgoApp + ":example.com/Subscription:" + SubNS + "/" + SubName,
+		testArgoApp + ":operators.coreos.com/CatalogSource:" + rhoai.CatalogNS + "/" + rhoai.CatalogName,
+		testArgoApp + ":example.com/Subscription:" + rhoai.SubNS + "/" + rhoai.SubName,
 	} {
 		ann := map[string]string{argoTrackingAnnotation: copied}
 		if got := newArgoCheck(argoClient(t, listing(""))).object(ann, nil, argoSubscriptionObject); got.managedBy() != "" || got.info() != nil {
@@ -415,19 +416,19 @@ func TestArgoTrackingClusterScopedDSC(t *testing.T) {
 	dsc := map[string]any{"metadata": map[string]any{"name": "default-dsc", "annotations": map[string]any{
 		argoTrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:redhat-ods-applications/default-dsc"}}}
 	f := argoManagingAll(argoDSCObject("default-dsc"))
-	if got := argoTrackingOf(argoClient(t, f), dsc, dscGroup, "DataScienceCluster"); got.state != types.ArgoCDManaged {
+	if got := argoTrackingOf(argoClient(t, f), dsc, rhoai.DSCGroup, "DataScienceCluster"); got.state != types.ArgoCDManaged {
 		t.Fatalf("verdict = %+v", got)
 	}
 	f = argoManagingAll(argoDSCObject("other-dsc"))
-	if got := argoTrackingOf(argoClient(t, f), dsc, dscGroup, "DataScienceCluster"); got.state != types.ArgoCDStale || got.staleReason != types.ArgoCDNotAmongResources {
+	if got := argoTrackingOf(argoClient(t, f), dsc, rhoai.DSCGroup, "DataScienceCluster"); got.state != types.ArgoCDStale || got.staleReason != types.ArgoCDNotAmongResources {
 		t.Fatalf("another DSC listed: %+v", got)
 	}
 	untracked := map[string]any{"metadata": map[string]any{"name": "default-dsc"}}
-	if got := argoTrackingOf(argoClient(t, f), untracked, dscGroup, "DataScienceCluster"); got.app != "" || got.managedBy() != "" || got.info() != nil {
+	if got := argoTrackingOf(argoClient(t, f), untracked, rhoai.DSCGroup, "DataScienceCluster"); got.app != "" || got.managedBy() != "" || got.info() != nil {
 		t.Fatalf("untracked, not listed: %+v", got)
 	}
 	labelled := map[string]any{"metadata": map[string]any{"name": "default-dsc", "labels": map[string]any{argoInstanceLabel: testArgoApp}}}
-	if got := argoTrackingOf(argoClient(t, argoManagingAll(argoDSCObject("default-dsc"))), labelled, dscGroup, "DataScienceCluster"); got.state != types.ArgoCDManaged || got.managedBy() != testArgoApp {
+	if got := argoTrackingOf(argoClient(t, argoManagingAll(argoDSCObject("default-dsc"))), labelled, rhoai.DSCGroup, "DataScienceCluster"); got.state != types.ArgoCDManaged || got.managedBy() != testArgoApp {
 		t.Fatalf("label tracking: %+v", got)
 	}
 }
@@ -438,7 +439,7 @@ func TestArgoTrackingReadsOncePerCheck(t *testing.T) {
 	f := &fakeArgoCD{}
 	argo := newArgoCheck(argoClient(t, f))
 	dsc := map[string]string{argoTrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:x/default-dsc"}
-	cat := map[string]string{argoTrackingAnnotation: testArgoApp + ":operators.coreos.com/CatalogSource:" + CatalogNS + "/" + CatalogName}
+	cat := map[string]string{argoTrackingAnnotation: testArgoApp + ":operators.coreos.com/CatalogSource:" + rhoai.CatalogNS + "/" + rhoai.CatalogName}
 	for _, got := range []argoTracking{
 		argo.object(subTracked(testArgoApp), nil, argoSubscriptionObject),
 		argo.object(cat, nil, argoCatalogObject),
@@ -449,7 +450,7 @@ func TestArgoTrackingReadsOncePerCheck(t *testing.T) {
 		}
 	}
 	want := []string{argoDiscoveryPath, acmWorkAPI, "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings?fieldSelector=metadata.name%3D" + argoCDManagerBinding,
-		managerRoleBindingPath(SubNS), managerRoleBindingPath(CatalogNS)}
+		managerRoleBindingPath(rhoai.SubNS), managerRoleBindingPath(rhoai.CatalogNS)}
 	if reqs := f.requested(); strings.Join(reqs, " ") != strings.Join(want, " ") {
 		t.Fatalf("requests = %v, want %v", reqs, want)
 	}

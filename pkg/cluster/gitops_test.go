@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -38,11 +39,11 @@ func gitOpsFake(t *testing.T) *fakeOLM {
 		"channel": gitOpsChannel,
 		"config":  map[string]any{"env": []any{map[string]any{"name": "DISABLE_DSC_CONFIG", "value": "true"}}},
 	})
-	subAnn := trackingID("Subscription", SubNS, SubName)
+	subAnn := trackingID("Subscription", rhoai.SubNS, rhoai.SubName)
 	subAnn[lastAppliedAnnotation] = `{"kind":"Subscription","spec":{"channel":"beta"}}`
 	f.sub["metadata"].(map[string]any)["annotations"] = subAnn
 	f.sub["metadata"].(map[string]any)["labels"] = map[string]any{"helm.sh/chart": "rhai-on-openshift-chart-3.4.0", "app.kubernetes.io/managed-by": "Helm"}
-	f.catalog["metadata"] = map[string]any{"annotations": trackingID("CatalogSource", CatalogNS, CatalogName)}
+	f.catalog["metadata"] = map[string]any{"annotations": trackingID("CatalogSource", rhoai.CatalogNS, rhoai.CatalogName)}
 	f.catalog["spec"].(map[string]any)["displayName"] = "Red Hat OpenShift AI (nightly)"
 	f.gitOpsPods = true
 	f.channels = `[{"name":"beta","currentCSV":"` + gitOpsCSV + `","currentCSVDesc":{"annotations":{"containerImage":"` + gitOpsOperatorImage + `","createdAt":"` + gitOpsBuilt + `"}}},` +
@@ -66,7 +67,7 @@ func indexOf(list []string, want string) int {
 
 func TestArgoApplication(t *testing.T) {
 	sub := func(id string) string {
-		return argoApplication(map[string]string{argoTrackingAnnotation: id}, "operators.coreos.com", "Subscription", SubNS, SubName)
+		return argoApplication(map[string]string{argoTrackingAnnotation: id}, "operators.coreos.com", "Subscription", rhoai.SubNS, rhoai.SubName)
 	}
 	for id, want := range map[string]string{
 		"rhai-on-openshift:operators.coreos.com/Subscription:redhat-ods-operator/rhods-operator": "rhai-on-openshift",
@@ -87,12 +88,12 @@ func TestArgoApplication(t *testing.T) {
 			t.Errorf("argoApplication(%q) = %q, want %q", id, got, want)
 		}
 	}
-	if got := argoApplication(map[string]string{"app.kubernetes.io/instance": "rhai-on-openshift"}, "operators.coreos.com", "Subscription", SubNS, SubName); got != "" {
+	if got := argoApplication(map[string]string{"app.kubernetes.io/instance": "rhai-on-openshift"}, "operators.coreos.com", "Subscription", rhoai.SubNS, rhoai.SubName); got != "" {
 		t.Errorf("the instance label is not a tracking annotation, got %q", got)
 	}
 	// A cluster-scoped object carries the application's destination
 	// namespace in the id; only group, kind and name are checked.
-	if got := argoApplication(map[string]string{argoTrackingAnnotation: "rhai-on-openshift:datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"}, dscGroup, "DataScienceCluster", "", "default-dsc"); got != testArgoApp {
+	if got := argoApplication(map[string]string{argoTrackingAnnotation: "rhai-on-openshift:datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"}, rhoai.DSCGroup, "DataScienceCluster", "", "default-dsc"); got != testArgoApp {
 		t.Errorf("cluster-scoped DSC: got %q", got)
 	}
 }
@@ -165,7 +166,7 @@ func TestUpdateUnderGitOps_InstallsWhatTheCatalogServes(t *testing.T) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 
-	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
+	csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	subPath := subscriptionPath()
 	var writes []string
 	for _, w := range f.writes() {
@@ -178,7 +179,7 @@ func TestUpdateUnderGitOps_InstallsWhatTheCatalogServes(t *testing.T) {
 			t.Fatalf("the Argo CD managed catalog was written: %v", writes)
 		}
 	}
-	order := []string{"DELETE " + namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, "install-old"),
+	order := []string{"DELETE " + rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, "install-old"),
 		"DELETE " + csvPath(gitOpsCSV), "DELETE " + subPath, "PATCH " + subPath}
 	for i := 1; i < len(order); i++ {
 		a, b := indexOf(writes, order[i-1]), indexOf(writes, order[i])
@@ -234,7 +235,7 @@ func TestUpdateUnderGitOps_ImageChangesMeanwhile(t *testing.T) {
 	f := gitOpsFake(t)
 	stale := strings.Replace(f.channels, "sha256:new", "sha256:older", 1)
 	f.mainChannels = &stale // the catalog pod has not caught up yet
-	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
+	csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	reads := 0
 	f.intercept = func(f *fakeOLM, w http.ResponseWriter, r *http.Request) bool {
 		if r.Method == http.MethodGet && r.URL.Path == csPath {
@@ -273,7 +274,7 @@ func TestUpdateUnderGitOps_RestoreKeepsTracking(t *testing.T) {
 	if !strings.Contains(result.Message, "OLM installs the build the catalog serves again") || strings.Contains(result.Message, "previous operator version") {
 		t.Fatalf("restore message under GitOps: %q", result.Message)
 	}
-	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
+	csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	for _, w := range f.writes() {
 		if strings.HasSuffix(w, " "+csPath) {
 			t.Fatalf("the catalog was written: %v", f.writes())
@@ -429,7 +430,7 @@ func TestUpdateUnderGitOps_ImageChangesBeforeTheDeletions(t *testing.T) {
 	f.intercept = func(f *fakeOLM, w http.ResponseWriter, r *http.Request) bool {
 		// The catalog's PackageManifest is read last in each wait poll: the
 		// image changes right after the poll that accepted the catalog.
-		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/packagemanifests") && strings.Contains(r.URL.Query().Get("labelSelector"), CatalogName) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/packagemanifests") && strings.Contains(r.URL.Query().Get("labelSelector"), rhoai.CatalogName) {
 			f.catalog["spec"].(map[string]any)["image"] = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:newer"
 		}
 		return false
@@ -629,7 +630,7 @@ func TestOperatorOperationsRefusedUnderGitOps(t *testing.T) {
 		delete(f.sub["metadata"].(map[string]any), "annotations")
 		f.argo = argoManagingAllBut(argoSubscriptionObject)
 		r, _ := ReinstallStreamWithOptions(f.client(context.Background()), "stable", "", "", OperationOptions{}, func(UpdateStepEvent) {})
-		if r.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(r.Message, "CatalogSource "+CatalogName) {
+		if r.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(r.Message, "CatalogSource "+rhoai.CatalogName) {
 			t.Fatalf("result=%+v", r)
 		}
 	})
@@ -663,7 +664,7 @@ func TestUpdateDryRunUnderGitOps(t *testing.T) {
 func TestStatusReportsWhatTheCatalogServes(t *testing.T) {
 	f := gitOpsFake(t)
 	c := f.client(context.Background())
-	sub := types.SubscriptionInfo{Source: CatalogName, Channel: gitOpsChannel}
+	sub := types.SubscriptionInfo{Source: rhoai.CatalogName, Channel: gitOpsChannel}
 	cs := types.CatalogSourceInfo{Exists: true, Image: gitOpsImage}
 	csv := types.CSVInfo{Name: gitOpsCSV, Phase: "Succeeded"}
 	annotate := func(image, created string) {
@@ -689,7 +690,7 @@ func TestStatusReportsWhatTheCatalogServes(t *testing.T) {
 	if s := readCatalogServes(c, sub, cs, types.CSVInfo{Phase: "Not Found"}); s == nil || s.Installed != nil {
 		t.Fatalf("nothing installed: %+v", s)
 	}
-	if s := readCatalogServes(c, types.SubscriptionInfo{Source: CatalogName, Channel: "fast"}, cs, csv); s != nil {
+	if s := readCatalogServes(c, types.SubscriptionInfo{Source: rhoai.CatalogName, Channel: "fast"}, cs, csv); s != nil {
 		t.Fatalf("channel not in the catalog: %+v", s)
 	}
 	if s := readCatalogServes(c, types.SubscriptionInfo{Source: "redhat-operators", Channel: "stable-3.x"}, cs, csv); s != nil {
@@ -745,18 +746,18 @@ func TestDSCChangesRefusedUnderGitOps(t *testing.T) {
 // and sets who manages them (gitOpsManagers).
 func statusManagersOf(t *testing.T, c *Client) *types.StatusResponse {
 	t.Helper()
-	sub, err := readSubscription(c)
+	sub, err := rhoai.ReadSubscription(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cs, csMeta, err := readCatalogSource(c)
+	cs, csMeta, err := rhoai.ReadCatalogSource(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	status := &types.StatusResponse{Subscription: sub.info, CatalogSource: cs}
+	status := &types.StatusResponse{Subscription: sub.Info, CatalogSource: cs}
 	var subMeta *kube.ObjectMeta
-	if sub.found {
-		subMeta = &sub.meta
+	if sub.Found {
+		subMeta = &sub.Meta
 	}
 	gitOpsManagers(c, status, subMeta, csMeta, nil)
 	return status
@@ -791,7 +792,7 @@ func TestStatusReportsArgoCDApplications(t *testing.T) {
 	}
 	// Readers outside the status do not claim a manager from the
 	// annotation alone.
-	if sub, _ := readSubscription(c); sub.info.ManagedBy != "" {
-		t.Fatalf("readSubscription set managedBy %q", sub.info.ManagedBy)
+	if sub, _ := rhoai.ReadSubscription(c); sub.Info.ManagedBy != "" {
+		t.Fatalf("readSubscription set managedBy %q", sub.Info.ManagedBy)
 	}
 }

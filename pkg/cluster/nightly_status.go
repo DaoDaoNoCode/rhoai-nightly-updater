@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -84,7 +85,7 @@ func isNightlyStreamImage(image string) bool {
 // CatalogSource image (an update) is always checked against Quay right away,
 // so the result never hides the effect of an update.
 func getNightlyStatus(ctx context.Context, basicAuth string, sub types.SubscriptionInfo, cs types.CatalogSourceInfo) *types.NightlyStatus {
-	if !cs.Exists || cs.Image == "" || sub.Source != CatalogName {
+	if !cs.Exists || cs.Image == "" || sub.Source != rhoai.CatalogName {
 		return nil
 	}
 	installed := nightlyBuildFromImage(cs.Image)

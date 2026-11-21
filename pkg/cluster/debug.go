@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -17,8 +18,8 @@ import (
 // The applications namespace is the DSCInitialization's; when it cannot be
 // read, its pods are missing and a warning says why.
 func GetDebugInfo(c *Client) (*types.DebugResponse, error) {
-	appNS, appNSErr := appsNamespace(c)
-	namespaces := []string{SubNS, appNS, CatalogNS}
+	appNS, appNSErr := rhoai.AppsNamespace(c)
+	namespaces := []string{rhoai.SubNS, appNS, rhoai.CatalogNS}
 	pods := make([][]types.PodInfo, len(namespaces))
 	errs := make([]error, len(namespaces))
 	var wg sync.WaitGroup
@@ -57,7 +58,7 @@ func GetDebugInfo(c *Client) (*types.DebugResponse, error) {
 }
 
 func getPodsInNamespace(c *Client, namespace string) ([]types.PodInfo, error) {
-	path := namespacedPath("v1", "pods", namespace, "")
+	path := rhoai.NamespacedPath("v1", "pods", namespace, "")
 	var items []struct {
 		Metadata struct {
 			Name              string            `json:"name"`

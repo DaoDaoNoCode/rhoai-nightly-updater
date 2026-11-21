@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 const (
@@ -155,7 +156,7 @@ func recordDSPAs(f *resourceFake, keys ...string) {
 		uid, _ := ensureMap(f.get(dspaPath(ns, name)), "metadata")["uid"].(string)
 		rec[k] = recordedPipelineServer{UID: uid}
 	}
-	path := namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)
+	path := rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)
 	cm := f.get(path)
 	if cm == nil {
 		cm = map[string]any{}

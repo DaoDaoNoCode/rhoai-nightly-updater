@@ -1,4 +1,4 @@
-package cluster
+package rhoai
 
 import (
 	"context"
@@ -27,10 +27,10 @@ import (
 // served, or none was created). This is definite, not a read failure:
 // RHOAI has no applications namespace on this cluster yet (not installed,
 // still installing, or uninstalled).
-var errNoDSCInitialization = errors.New("no DSCInitialization exists, so RHOAI has no applications namespace on this cluster")
+var ErrNoDSCInitialization = errors.New("no DSCInitialization exists, so RHOAI has no applications namespace on this cluster")
 
-// rhoaiNamespaces are the namespaces the DSCInitialization names.
-type rhoaiNamespaces struct {
+// Namespaces are the namespaces the DSCInitialization names.
+type Namespaces struct {
 	Applications string
 	// Monitoring is "" when the DSCInitialization names none.
 	Monitoring string
@@ -42,14 +42,14 @@ type rhoaiNamespaces struct {
 // up within this time. Only successful reads are cached.
 const rhoaiNamespacesTTL = 30 * time.Second
 
-var rhoaiNamespacesCache = kube.NewLRU[string, rhoaiNamespaces](16)
+var NamespacesCache = kube.NewLRU[string, Namespaces](16)
 
-// discoverRHOAINamespaces returns the DSCInitialization's namespaces,
+// DiscoverNamespaces returns the DSCInitialization's namespaces,
 // cached per cluster for rhoaiNamespacesTTL. err is errNoDSCInitialization
 // when none exists, or a read error; callers must not guess a name then.
-func discoverRHOAINamespaces(c *Client) (rhoaiNamespaces, error) {
+func DiscoverNamespaces(c *kube.Client) (Namespaces, error) {
 	key := c.BaseURL()
-	if ns, ok := rhoaiNamespacesCache.Get(key); ok {
+	if ns, ok := NamespacesCache.Get(key); ok {
 		return ns, nil
 	}
 	// Status reads ask from several goroutines at once: one read serves them.
@@ -57,8 +57,8 @@ func discoverRHOAINamespaces(c *Client) (rhoaiNamespaces, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ns, err, _ := rhoaiNamespacesFlight.Do(ctx, key, func(context.Context) (rhoaiNamespaces, error) {
-		if ns, ok := rhoaiNamespacesCache.Get(key); ok {
+	ns, err, _ := rhoaiNamespacesFlight.Do(ctx, key, func(context.Context) (Namespaces, error) {
+		if ns, ok := NamespacesCache.Get(key); ok {
 			return ns, nil
 		}
 		return readRHOAINamespaces(c, key)
@@ -66,48 +66,48 @@ func discoverRHOAINamespaces(c *Client) (rhoaiNamespaces, error) {
 	return ns, err
 }
 
-var rhoaiNamespacesFlight kube.FlightGroup[rhoaiNamespaces]
+var rhoaiNamespacesFlight kube.FlightGroup[Namespaces]
 
-func readRHOAINamespaces(c *Client, key string) (rhoaiNamespaces, error) {
-	dscis, apiFound, err := listFirstServed(c, dsciGroup, "/apis/dscinitialization.opendatahub.io/%s/dscinitializations", "dscinitializations", dsciFallbackVersions)
+func readRHOAINamespaces(c *kube.Client, key string) (Namespaces, error) {
+	dscis, apiFound, err := ListFirstServed(c, DSCIGroup, "/apis/dscinitialization.opendatahub.io/%s/dscinitializations", "dscinitializations", DSCIFallbackVersions)
 	switch {
 	case err != nil:
-		return rhoaiNamespaces{}, fmt.Errorf("read the DSCInitialization for the RHOAI namespaces: %w", err)
+		return Namespaces{}, fmt.Errorf("read the DSCInitialization for the RHOAI namespaces: %w", err)
 	case !apiFound || len(dscis) == 0:
-		return rhoaiNamespaces{}, errNoDSCInitialization
+		return Namespaces{}, ErrNoDSCInitialization
 	case len(dscis) > 1:
-		return rhoaiNamespaces{}, fmt.Errorf("%d DSCInitializations exist, so which namespaces RHOAI uses is ambiguous", len(dscis))
+		return Namespaces{}, fmt.Errorf("%d DSCInitializations exist, so which namespaces RHOAI uses is ambiguous", len(dscis))
 	case dscis[0].Spec.ApplicationsNamespace == "":
-		return rhoaiNamespaces{}, fmt.Errorf("DSCInitialization %s names no applications namespace", dscis[0].Metadata.Name)
+		return Namespaces{}, fmt.Errorf("DSCInitialization %s names no applications namespace", dscis[0].Metadata.Name)
 	}
-	ns := rhoaiNamespaces{Applications: dscis[0].Spec.ApplicationsNamespace, Monitoring: dscis[0].Spec.Monitoring.Namespace}
-	rhoaiNamespacesCache.Add(key, ns, rhoaiNamespacesTTL)
+	ns := Namespaces{Applications: dscis[0].Spec.ApplicationsNamespace, Monitoring: dscis[0].Spec.Monitoring.Namespace}
+	NamespacesCache.Add(key, ns, rhoaiNamespacesTTL)
 	return ns, nil
 }
 
-// appsNamespace is RHOAI's applications namespace (see
+// AppsNamespace is RHOAI's applications namespace (see
 // discoverRHOAINamespaces for the errors).
-func appsNamespace(c *Client) (string, error) {
-	ns, err := discoverRHOAINamespaces(c)
+func AppsNamespace(c *kube.Client) (string, error) {
+	ns, err := DiscoverNamespaces(c)
 	return ns.Applications, err
 }
 
-// applicationsNamespace is appsNamespace, "" when it is not known.
-func applicationsNamespace(c *Client) string {
-	ns, _ := appsNamespace(c)
+// ApplicationsNamespace is appsNamespace, "" when it is not known.
+func ApplicationsNamespace(c *kube.Client) string {
+	ns, _ := AppsNamespace(c)
 	return ns
 }
 
 // appsNamespaceOrPlaceholder is the applications namespace for a command a
 // person runs, or <applications-namespace> when it is not known.
-func appsNamespaceOrPlaceholder(c *Client) string {
-	if ns, err := appsNamespace(c); err == nil {
+func appsNamespaceOrPlaceholder(c *kube.Client) string {
+	if ns, err := AppsNamespace(c); err == nil {
 		return ns
 	}
 	return "<applications-namespace>"
 }
 
-// podsCommand lists the pods of the operator and applications namespaces.
-func podsCommand(c *Client) string {
-	return shellCommand("oc", "get", "pods", "-n", SubNS) + "; " + shellCommand("oc", "get", "pods", "-n", appsNamespaceOrPlaceholder(c))
+// PodsCommand lists the pods of the operator and applications namespaces.
+func PodsCommand(c *kube.Client) string {
+	return kube.ShellCommand("oc", "get", "pods", "-n", SubNS) + "; " + kube.ShellCommand("oc", "get", "pods", "-n", appsNamespaceOrPlaceholder(c))
 }

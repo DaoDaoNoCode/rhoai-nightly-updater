@@ -7,13 +7,15 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 func buildHealthyCatalogSource() string {
 	cs := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "CatalogSource",
-		"metadata":   map[string]any{"name": CatalogName, "namespace": CatalogNS},
+		"metadata":   map[string]any{"name": rhoai.CatalogName, "namespace": rhoai.CatalogNS},
 		"spec":       map[string]any{"image": "quay.io/rhoai/rhoai-fbc-fragment:nightly-20260101"},
 		"status": map[string]any{
 			"connectionState": map[string]any{"lastObservedState": "READY"},
@@ -41,8 +43,8 @@ func buildHealthySubscription() string {
 	sub := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "Subscription",
-		"metadata":   map[string]any{"name": SubName, "namespace": SubNS},
-		"spec":       map[string]any{"source": CatalogName, "channel": "fast"},
+		"metadata":   map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS},
+		"spec":       map[string]any{"source": rhoai.CatalogName, "channel": "fast"},
 		"status":     map[string]any{"state": "AtLatestKnown"},
 	}
 	b, _ := json.Marshal(sub)
@@ -78,7 +80,7 @@ func buildIDMSList() string {
 				"metadata": map[string]any{"name": "rhoai-mirror"},
 				"spec": map[string]any{
 					"imageDigestMirrors": []any{
-						map[string]any{"source": IDMSSource},
+						map[string]any{"source": rhoai.IDMSSource},
 					},
 				},
 			},
@@ -120,7 +122,7 @@ func buildEmptyList() string {
 func buildHealthyPodList() string {
 	list := map[string]any{"items": []any{
 		map[string]any{
-			"metadata": map[string]any{"name": "rhods-operator-abc123", "namespace": SubNS, "creationTimestamp": "2026-07-01T00:00:00Z"},
+			"metadata": map[string]any{"name": "rhods-operator-abc123", "namespace": rhoai.SubNS, "creationTimestamp": "2026-07-01T00:00:00Z"},
 			"status": map[string]any{
 				"phase": "Running",
 				"containerStatuses": []any{
@@ -162,14 +164,14 @@ func buildNodeList(count int) string {
 
 func diagnosticPaths() map[string]string {
 	return map[string]string{
-		"catalogSource": fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s", CatalogNS, CatalogName),
-		"csvList":       fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", SubNS),
-		"subscription":  fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName),
+		"catalogSource": fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s", rhoai.CatalogNS, rhoai.CatalogName),
+		"csvList":       fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", rhoai.SubNS),
+		"subscription":  fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", rhoai.SubNS, rhoai.SubName),
 		"pullSecret":    "/api/v1/namespaces/kube-system/secrets/additional-pull-secret",
 		"idms":          "/apis/config.openshift.io/v1/imagedigestmirrorsets",
 		"vwh":           "/apis/admissionregistration.k8s.io/v1/validatingwebhookconfigurations",
 		"mwh":           "/apis/admissionregistration.k8s.io/v1/mutatingwebhookconfigurations",
-		"installPlans":  fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/installplans", SubNS),
+		"installPlans":  fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/installplans", rhoai.SubNS),
 		"nodes":         "/api/v1/nodes",
 		"opPods":        "/api/v1/namespaces/redhat-ods-operator/pods",
 		"appPods":       "/api/v1/namespaces/redhat-ods-applications/pods",
@@ -234,7 +236,7 @@ func TestDiagnostics_CatalogSourceFailing(t *testing.T) {
 	failingCS := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "CatalogSource",
-		"metadata":   map[string]any{"name": CatalogName, "namespace": CatalogNS},
+		"metadata":   map[string]any{"name": rhoai.CatalogName, "namespace": rhoai.CatalogNS},
 		"spec":       map[string]any{"image": "quay.io/rhoai/rhoai-fbc-fragment:bad"},
 		"status": map[string]any{
 			"connectionState": map[string]any{"lastObservedState": "TRANSIENT_FAILURE"},

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -65,7 +66,7 @@ func TestACMEnforcesSpec(t *testing.T) {
 	// Argo CD wins when both manage the catalog.
 	f := gitOpsFake(t)
 	meta := acmCatalogMetadata(acmPolicyManager)
-	meta["annotations"] = trackingID("CatalogSource", CatalogNS, CatalogName)
+	meta["annotations"] = trackingID("CatalogSource", rhoai.CatalogNS, rhoai.CatalogName)
 	f.catalog["metadata"] = meta
 	g, err := readOperatorGitOps(f.client(context.Background()))
 	if err != nil || g.catalogApp != testArgoApp || g.catalogACM || !strings.Contains(g.catalogManager(), testArgoApp) {
@@ -107,7 +108,7 @@ func TestUpdateGitOpsProfile_ACMOnly(t *testing.T) {
 	f.argo = argoManagingAllBut(argoCatalogObject, argoSubscriptionObject)
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged ||
-		!strings.Contains(result.Message, "An "+acmManagerText+" sets the image of CatalogSource "+CatalogName) || strings.Contains(result.Message, "Argo CD") {
+		!strings.Contains(result.Message, "An "+acmManagerText+" sets the image of CatalogSource "+rhoai.CatalogName) || strings.Contains(result.Message, "Argo CD") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	if w := f.writes(); len(w) != 0 {
@@ -185,7 +186,7 @@ func TestUpdateFullProfile_ACMManagedCatalog(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := acmFake(t)
 			setup(f)
-			csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
+			csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 			result, err := UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 			if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, gitOpsImage) {
 				t.Fatalf("another image: result=%+v err=%v", result, err)
@@ -232,7 +233,7 @@ func TestOperatorOperationsRefusedUnderACM(t *testing.T) {
 	delete(f.sub["metadata"].(map[string]any), "annotations")
 	f.argo = argoManagingAllBut(argoCatalogObject, argoSubscriptionObject)
 	r, _ := ReinstallStreamWithOptions(f.client(context.Background()), "stable", "", "", OperationOptions{}, func(UpdateStepEvent) {})
-	if r.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(r.Message, "CatalogSource "+CatalogName+" is managed by an "+acmManagerText) ||
+	if r.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(r.Message, "CatalogSource "+rhoai.CatalogName+" is managed by an "+acmManagerText) ||
 		strings.Contains(r.Message, "Argo CD would") || !strings.Contains(r.Message, "Nothing was changed") {
 		t.Fatalf("reinstall: %+v", r)
 	}
@@ -270,7 +271,7 @@ func TestStatusReportsACMManagedCatalog(t *testing.T) {
 		t.Fatalf("another manager counted as ACM: %+v", cs)
 	}
 	meta := acmCatalogMetadata(acmPolicyManager)
-	meta["annotations"] = trackingID("CatalogSource", CatalogNS, CatalogName)
+	meta["annotations"] = trackingID("CatalogSource", rhoai.CatalogNS, rhoai.CatalogName)
 	f.catalog["metadata"] = meta
 	f.argo = argoManagingAll(argoGitOpsObjects...)
 	if cs := statusManagersOf(t, c).CatalogSource; cs.ManagedByACM || cs.ManagedBy != testArgoApp {

@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Verbatim condition messages from RHOAI 3.6 (E2).
@@ -112,11 +115,11 @@ func TestShellQuote(t *testing.T) {
 		"":                            "''",
 		"jsonpath={.metadata.labels}": "'jsonpath={.metadata.labels}'",
 	} {
-		if got := shellQuote(in); got != want {
+		if got := kube.ShellQuote(in); got != want {
 			t.Errorf("shellQuote(%q) = %s, want %s", in, got, want)
 		}
 	}
-	if got := shellCommand("oc", "delete", "x;id"); got != "oc delete 'x;id'" {
+	if got := kube.ShellCommand("oc", "delete", "x;id"); got != "oc delete 'x;id'" {
 		t.Errorf("shellCommand = %s", got)
 	}
 }
@@ -206,7 +209,7 @@ func checkApplyFailureProblems(t *testing.T, byID map[string]Problem, crdLookups
 
 	owner := byID["operator-apply-failed-servicemonitor-redhat-ods-applications-aihub-controller-manager-metrics-monitor"]
 	if owner.Severity != "warning" || !strings.Contains(owner.TechnicalCmd, "oc delete servicemonitor.monitoring.coreos.com aihub-controller-manager-metrics-monitor -n redhat-ods-applications") ||
-		!strings.Contains(owner.TechnicalCmd, "oc delete pod -n "+SubNS+" -l name="+SubName) || !strings.Contains(strings.Join(owner.Evidence, "\n"), "Platform/default and AIHub/default-aihub") {
+		!strings.Contains(owner.TechnicalCmd, "oc delete pod -n "+rhoai.SubNS+" -l name="+rhoai.SubName) || !strings.Contains(strings.Join(owner.Evidence, "\n"), "Platform/default and AIHub/default-aihub") {
 		t.Errorf("controller owner: %+v", owner)
 	}
 

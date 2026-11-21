@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // secretAccessCheckName is the gitops profile's Diagnostics check that the
@@ -38,7 +40,7 @@ func canI(c *Client, verb, namespace, name string) (bool, error) {
 			"group": "", "resource": "secrets", "verb": verb, "namespace": namespace, "name": name,
 		}},
 	})
-	resp, _, err := c.Post(clusterPath("authorization.k8s.io/v1", "selfsubjectaccessreviews", ""), body)
+	resp, _, err := c.Post(rhoai.ClusterPath("authorization.k8s.io/v1", "selfsubjectaccessreviews", ""), body)
 	if err != nil {
 		return false, err
 	}

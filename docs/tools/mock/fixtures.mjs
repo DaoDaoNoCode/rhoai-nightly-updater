@@ -148,12 +148,12 @@ export function readyToInstallStatus() {
 
 /**
  * The command a self-managed cluster's setup shows: the backend's own file
- * (pkg/cluster/node_pull_secret.sh, embedded as NodePullSecretCommand).
+ * (pkg/cluster/internal/rhoai/node_pull_secret.sh, embedded as NodePullSecretCommand).
  */
-export const NODE_PULL_SECRET_COMMAND = readFileSync(join(here, "../../../pkg/cluster/node_pull_secret.sh"), "utf8").trim();
+export const NODE_PULL_SECRET_COMMAND = readFileSync(join(here, "../../../pkg/cluster/internal/rhoai/node_pull_secret.sh"), "utf8").trim();
 
-/** Its removal (pkg/cluster/node_pull_secret_remove.sh, NodePullSecretRemoveCommand). */
-export const NODE_PULL_SECRET_REMOVE_COMMAND = readFileSync(join(here, "../../../pkg/cluster/node_pull_secret_remove.sh"), "utf8").trim();
+/** Its removal (pkg/cluster/internal/rhoai/node_pull_secret_remove.sh, NodePullSecretRemoveCommand). */
+export const NODE_PULL_SECRET_REMOVE_COMMAND = readFileSync(join(here, "../../../pkg/cluster/internal/rhoai/node_pull_secret_remove.sh"), "utf8").trim();
 
 /**
  * A self-managed cluster (controlPlane "self-managed"), a Red Hat-managed

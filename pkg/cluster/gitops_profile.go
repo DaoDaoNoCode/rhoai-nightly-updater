@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -66,7 +67,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	if !g.catalogManaged() {
 		return fail(gitOpsProfileUnmanagedCatalog, kube.ErrorCodeProfileGitOps)
 	}
-	logs = append(logs, fmt.Sprintf("OK: %s manages CatalogSource %s", sentenceStart(g.catalogManager()), CatalogName))
+	logs = append(logs, fmt.Sprintf("OK: %s manages CatalogSource %s", sentenceStart(g.catalogManager()), rhoai.CatalogName))
 
 	active, operator, err := dashboardDevActive(c)
 	if err != nil {
@@ -91,7 +92,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 		return fail(fmt.Sprintf("Failed to check IDMS: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	if !idms.Exists {
-		return fail(fmt.Sprintf("No IDMS found mirroring %s. Create it first (docs/QUICKSTART.md). Nothing was changed.", IDMSSource), "prerequisites")
+		return fail(fmt.Sprintf("No IDMS found mirroring %s. Create it first (docs/QUICKSTART.md). Nothing was changed.", rhoai.IDMSSource), "prerequisites")
 	}
 	logs = append(logs, fmt.Sprintf("OK: IDMS exists (%s)", idms.Name))
 
@@ -101,7 +102,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	}
 	logs = append(logs, ogLog)
 
-	currentCSV, csvCheckErr := getCSV(c)
+	currentCSV, csvCheckErr := rhoai.GetCSV(c)
 	if csvCheckErr != nil {
 		return fail("Cannot identify installed CSV: "+csvCheckErr.Error(), kube.ErrorCodeOr(csvCheckErr, "prerequisites"))
 	}
@@ -161,7 +162,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	// The admission policy must allow what Update writes back: the new
 	// Subscription and, on failure, the previous one (checked again on the
 	// live Subscription right before the first deletion).
-	if msg := gitOpsSubscriptionsProblem(buildSubscription(captured.subscriptionBase(), CatalogName, target.Channel), captured.subscription); msg != "" {
+	if msg := gitOpsSubscriptionsProblem(buildSubscription(captured.subscriptionBase(), rhoai.CatalogName, target.Channel), captured.subscription); msg != "" {
 		return fail(msg+" Nothing was changed.", kube.ErrorCodeProfileGitOps)
 	}
 	emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "success", Message: "Prerequisites validated"})
@@ -181,7 +182,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	if note := captured.recordedNote(); note != "" {
 		logs = append(logs, note)
 	}
-	return updateUnderGitOps(c, image, target, currentCSV, gitOps, recovery, &logs, emit, fail, gitOpsWriteProblem(c), gitOpsProfilePullAdvice)
+	return updateUnderGitOps(c, image, target, currentCSV, gitOps, recovery, &logs, emit, fail, gitOpsWriteProblem(c), rhoai.GitOpsProfilePullAdvice)
 }
 
 // gitOpsWriteProblem is Update's check before each deletion in the gitops
@@ -222,7 +223,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 	if !g.catalogManaged() {
 		return fail(gitOpsProfileUnmanagedCatalog, kube.ErrorCodeProfileGitOps)
 	}
-	logs = append(logs, fmt.Sprintf("OK: %s manages CatalogSource %s", sentenceStart(g.catalogManager()), CatalogName))
+	logs = append(logs, fmt.Sprintf("OK: %s manages CatalogSource %s", sentenceStart(g.catalogManager()), rhoai.CatalogName))
 	if active, err := DashboardDevActive(c); err == nil && active {
 		logs = append(logs, "[DRY-RUN] WARNING: A Dashboard Dev session is active. Update refuses to run while it is (the gitops profile cannot end it).")
 	}
@@ -232,7 +233,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 		return fail(fmt.Sprintf("Failed to check IDMS: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	if !idms.Exists {
-		return fail(fmt.Sprintf("No IDMS found mirroring %s. Create it first (docs/QUICKSTART.md).", IDMSSource), "prerequisites")
+		return fail(fmt.Sprintf("No IDMS found mirroring %s. Create it first (docs/QUICKSTART.md).", rhoai.IDMSSource), "prerequisites")
 	}
 	logs = append(logs, fmt.Sprintf("OK: IDMS exists (%s)", idms.Name))
 	ogLog, ogProblem, ogCode := checkOperatorNamespaceAndGroup(c)
@@ -240,7 +241,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 		return fail(ogProblem, ogCode)
 	}
 	logs = append(logs, ogLog)
-	currentCSV, err := getCSV(c)
+	currentCSV, err := rhoai.GetCSV(c)
 	if err != nil {
 		return fail("Cannot identify installed CSV: "+err.Error(), kube.ErrorCodeOr(err, "prerequisites"))
 	}
@@ -256,7 +257,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 		return fail("Cannot read the Subscription: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 	}
 	if found {
-		if msg := gitOpsSubscriptionsProblem(buildSubscription(live, CatalogName, kube.NonEmpty(channelOverride, "unknown")), live); msg != "" {
+		if msg := gitOpsSubscriptionsProblem(buildSubscription(live, rhoai.CatalogName, kube.NonEmpty(channelOverride, "unknown")), live); msg != "" {
 			return fail(msg, kube.ErrorCodeProfileGitOps)
 		}
 		logs = append(logs, "OK: The admission policy allows recreating the Subscription and restoring it")
@@ -293,7 +294,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 // gitOpsProfileUnmanagedCatalog is the refusal when neither Argo CD nor an
 // ACM policy manages the nightly catalog: Update would then replace the
 // catalog itself, which the gitops profile never does.
-const gitOpsProfileUnmanagedCatalog = "This updater runs the gitops profile, which only installs the build that CatalogSource " + CatalogName +
+const gitOpsProfileUnmanagedCatalog = "This updater runs the gitops profile, which only installs the build that CatalogSource " + rhoai.CatalogName +
 	" serves when Argo CD or an ACM policy manages that catalog, and neither does here (no Argo CD application lists it, and " +
 	acmPolicyManager + " does not own its spec). Manage the catalog with Argo CD or an ACM policy, or deploy the updater with the full profile. Nothing was changed."
 
@@ -321,9 +322,9 @@ func checkOperatorNamespaceAndGroup(c *Client) (ok, problem, errorCode string) {
 	case problem != "":
 		return "", problem, errorCode
 	case nsMissing:
-		return "", fmt.Sprintf("Namespace %s does not exist. The gitops profile does not create it: define it, with its OperatorGroup, in Git. Nothing was changed.", SubNS), "prerequisites"
+		return "", fmt.Sprintf("Namespace %s does not exist. The gitops profile does not create it: define it, with its OperatorGroup, in Git. Nothing was changed.", rhoai.SubNS), "prerequisites"
 	case len(groups) == 0:
-		return "", fmt.Sprintf("Namespace %s has no OperatorGroup. The gitops profile does not create one: define a global OperatorGroup in Git. Nothing was changed.", SubNS), "prerequisites"
+		return "", fmt.Sprintf("Namespace %s has no OperatorGroup. The gitops profile does not create one: define a global OperatorGroup in Git. Nothing was changed.", rhoai.SubNS), "prerequisites"
 	}
 	ok, problem = operatorGroupsUsable(groups)
 	if problem != "" {
@@ -350,7 +351,7 @@ func checkOperatorNamespaceAndGroup(c *Client) (ok, problem, errorCode string) {
 // the installed CSV's build annotations differ.
 func liveCatalogTarget(c *Client, image, override, changedBy string, emit func(UpdateStepEvent), logs *[]string) (catalogTarget, error) {
 	deadline := kube.Clock().Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
-	pull := pullFailureWatch{advice: gitOpsProfilePullAdvice}
+	pull := pullFailureWatch{advice: rhoai.GitOpsProfilePullAdvice}
 	last := ""
 	for {
 		target, problem, changedTo := liveCatalogTargetOnce(c, image, override)
@@ -365,7 +366,7 @@ func liveCatalogTarget(c *Client, image, override, changedBy string, emit func(U
 			*logs = append(*logs, "  "+problem)
 			emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Catalog: " + problem})
 		}
-		if err := pull.check(c, CatalogName, image); err != nil {
+		if err := pull.check(c, rhoai.CatalogName, image); err != nil {
 			return catalogTarget{}, err
 		}
 		if !kube.Clock().Now().Before(deadline) {
@@ -381,12 +382,12 @@ func liveCatalogTarget(c *Client, image, override, changedBy string, emit func(U
 // the catalog serves image now, else why not (problem), or the catalog's
 // other image (changedTo). The gitops dry run reads it once.
 func liveCatalogTargetOnce(c *Client, image, override string) (target catalogTarget, problem, changedTo string) {
-	cs, err := getCatalogSource(c)
+	cs, err := rhoai.GetCatalogSource(c)
 	switch {
 	case err != nil:
 		return catalogTarget{}, "cannot read the CatalogSource: " + err.Error(), ""
 	case !cs.Exists:
-		return catalogTarget{}, "CatalogSource " + CatalogName + " does not exist", ""
+		return catalogTarget{}, "CatalogSource " + rhoai.CatalogName + " does not exist", ""
 	case cs.Image != image:
 		return catalogTarget{}, "the CatalogSource image is " + cs.Image, cs.Image
 	case cs.State != "READY":
@@ -399,12 +400,12 @@ func liveCatalogTargetOnce(c *Client, image, override string) (target catalogTar
 	case !ready || stale > 0:
 		return catalogTarget{}, "OLM is replacing the catalog pod", ""
 	}
-	channels, err := catalogChannels(c, CatalogName)
+	channels, err := catalogChannels(c, rhoai.CatalogName)
 	switch {
 	case err != nil:
 		return catalogTarget{}, err.Error(), ""
 	case len(channels) == 0:
-		return catalogTarget{}, "the catalog does not list the " + SubName + " package yet", ""
+		return catalogTarget{}, "the catalog does not list the " + rhoai.SubName + " package yet", ""
 	}
 	channel := override
 	if channel == "" {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -87,12 +88,12 @@ type argoObject struct {
 }
 
 var (
-	argoSubscriptionObject = argoObject{group: "operators.coreos.com", kind: "Subscription", namespace: SubNS, name: SubName}
-	argoCatalogObject      = argoObject{group: "operators.coreos.com", kind: "CatalogSource", namespace: CatalogNS, name: CatalogName}
+	argoSubscriptionObject = argoObject{group: "operators.coreos.com", kind: "Subscription", namespace: rhoai.SubNS, name: rhoai.SubName}
+	argoCatalogObject      = argoObject{group: "operators.coreos.com", kind: "CatalogSource", namespace: rhoai.CatalogNS, name: rhoai.CatalogName}
 )
 
 func argoDSCObject(name string) argoObject {
-	return argoObject{group: dscGroup, kind: "DataScienceCluster", name: name, clusterScoped: true}
+	return argoObject{group: rhoai.DSCGroup, kind: "DataScienceCluster", name: name, clusterScoped: true}
 }
 
 // argoTracking is the verdict on one object.
@@ -537,7 +538,7 @@ func (a *argoCheck) remoteArgoCD(o argoObject) argoRead[string] {
 	if r := a.remoteCluster(); r.err != "" || r.value != "" {
 		return r
 	}
-	namespaces := []string{SubNS, CatalogNS}
+	namespaces := []string{rhoai.SubNS, rhoai.CatalogNS}
 	appsNS := a.applicationsNamespace()
 	if appsNS.err != "" {
 		return argoRead[string]{err: "whether an Argo CD on another cluster manages RHOAI's applications namespace could not be read: " + appsNS.err}
@@ -581,7 +582,7 @@ func (a *argoCheck) remoteCluster() argoRead[string] {
 			return r
 		}
 	}
-	body, _, err = a.c.Get(clusterPath("rbac.authorization.k8s.io/v1", "clusterrolebindings", "") + "?fieldSelector=" + url.QueryEscape(argoCDManagerFieldPath))
+	body, _, err = a.c.Get(rhoai.ClusterPath("rbac.authorization.k8s.io/v1", "clusterrolebindings", "") + "?fieldSelector=" + url.QueryEscape(argoCDManagerFieldPath))
 	if err != nil {
 		r.err = fmt.Sprintf("whether an Argo CD on another cluster manages this one could not be read: %v", err)
 		return r
@@ -606,7 +607,7 @@ func (a *argoCheck) managerRoleBinding(ns string) argoRead[string] {
 		return r
 	}
 	var r argoRead[string]
-	_, found, err := a.c.GetOptional(namespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", ns, argoCDManagerBinding))
+	_, found, err := a.c.GetOptional(rhoai.NamespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", ns, argoCDManagerBinding))
 	switch {
 	case err != nil:
 		r.err = fmt.Sprintf("whether an Argo CD on another cluster manages namespace %s could not be read: %v", ns, err)
@@ -625,11 +626,11 @@ func (a *argoCheck) applicationsNamespace() argoRead[string] {
 		return *a.appsNS
 	}
 	var r argoRead[string]
-	ns, err := appsNamespace(a.c)
+	ns, err := rhoai.AppsNamespace(a.c)
 	switch {
 	case err == nil:
 		r.value = ns
-	case !errors.Is(err, errNoDSCInitialization):
+	case !errors.Is(err, rhoai.ErrNoDSCInitialization):
 		r.err = err.Error()
 	}
 	a.appsNS = &r

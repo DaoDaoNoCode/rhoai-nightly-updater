@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // resetClusterCaches empties the package's caches, among them those keyed
@@ -47,18 +48,18 @@ type urlKeyedState struct {
 // one needs its cache registered; then update this list.
 func TestResetClusterCachesCoversEveryURLKeyedCache(t *testing.T) {
 	want := map[string]urlKeyedState{
-		"api_versions.go":                 {1, []string{"apiVersionsCache"}},
+		"api_versions.go":                 {1, []string{"APIVersionsCache"}},
 		"argocd.go":                       {1, []string{"argoApplicationsCache"}},
 		"client_testing.go":               {1, nil}, // TestOptions copies the field for a test; no state
 		"components.go":                   {1, []string{"replicaSetOwnerCache"}},
-		"control_plane.go":                {2, []string{"controlPlaneCache"}},
+		"control_plane.go":                {2, []string{"ControlPlaneCache"}},
 		"dashboard_operator_discovery.go": {2, []string{"dashboardTargetCache"}},
 		"diagnostics_dsc.go":              {1, []string{"staleSeen"}},
-		"maas.go":                         {1, []string{"apiVersionsCache"}}, // a read
+		"maas.go":                         {1, []string{"APIVersionsCache"}}, // a read
 		"models_call.go":                  {1, []string{"callChecks"}},
 		"models_image.go":                 {2, []string{"capacityCache", "planCache"}},
 		"prerequisites.go":                {2, []string{"packageIndexCache"}},
-		"rhoai_namespaces.go":             {1, []string{"rhoaiNamespacesCache"}},
+		"rhoai_namespaces.go":             {1, []string{"NamespacesCache"}},
 		"status.go":                       {5, []string{"stableTargetCache", "consoleURLCache", "dashboardURLCache"}},
 	}
 	dirs := clusterSourceDirs(t)
@@ -223,7 +224,7 @@ func registeredCachesIn(byDir map[string][]*ast.File) map[string]string {
 func TestRegisteredCachesSeesEveryKind(t *testing.T) {
 	reg := registeredCaches(t)
 	for name, want := range map[string]string{
-		"apiVersionsCache":  "newLRU",
+		"APIVersionsCache":  "newLRU",
 		"packageIndexCache": "purge",
 		"staleSeen":         "purge",
 		"callChecks":        "purge",
@@ -282,12 +283,12 @@ func TestFakeClusterStartsWithEmptyURLKeyedCaches(t *testing.T) {
 	packageIndexMu.Lock()
 	packageIndexCache[earlier] = packageIndex{}
 	packageIndexMu.Unlock()
-	apiVersionsCache.Add(earlier+"|kuadrant.io", []string{"v1"}, 0)
+	rhoai.APIVersionsCache.Add(earlier+"|kuadrant.io", []string{"v1"}, 0)
 	newFakeAPI(t)
 	packageIndexMu.Lock()
 	n := len(packageIndexCache)
 	packageIndexMu.Unlock()
-	if _, ok := apiVersionsCache.Get(earlier + "|kuadrant.io"); ok || n != 0 {
+	if _, ok := rhoai.APIVersionsCache.Get(earlier + "|kuadrant.io"); ok || n != 0 {
 		t.Fatalf("a new fake cluster still sees an earlier one's caches: package index %d entries, api versions cached %v", n, ok)
 	}
 }

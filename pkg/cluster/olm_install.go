@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -61,11 +62,11 @@ var (
 )
 
 func subscriptionPath() string {
-	return namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
+	return rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName)
 }
 
 func csvPath(name string) string {
-	return namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, name)
+	return rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, name)
 }
 
 // buildSubscription returns the Subscription for source/channel. Settings the
@@ -78,17 +79,17 @@ func buildSubscription(previous map[string]any, source, channel string) map[stri
 		maps.Copy(spec, prevSpec)
 	}
 	delete(spec, "startingCSV")
-	spec["name"] = SubName
+	spec["name"] = rhoai.SubName
 	spec["channel"] = channel
 	spec["source"] = source
-	spec["sourceNamespace"] = CatalogNS
+	spec["sourceNamespace"] = rhoai.CatalogNS
 	if approval, _ := spec["installPlanApproval"].(string); approval != "Manual" {
 		spec["installPlanApproval"] = "Automatic"
 	}
 	return map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "Subscription",
-		"metadata":   map[string]any{"name": SubName, "namespace": SubNS},
+		"metadata":   map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS},
 		"spec":       spec,
 	}
 }
@@ -101,21 +102,21 @@ func buildSubscription(previous map[string]any, source, channel string) map[stri
 // namespace or OperatorGroup is created; an existing unusable one is reported
 // and left alone. With dryRun nothing is created.
 func ensureOperatorNamespaceAndGroup(c *Client, dryRun bool) (logs []string, problem string, errorCode string) {
-	nsPath := "/api/v1/namespaces/" + SubNS
+	nsPath := "/api/v1/namespaces/" + rhoai.SubNS
 	nsMissing, groups, problem, errorCode := readOperatorNamespaceAndGroups(c)
 	if problem != "" {
 		return logs, problem, errorCode
 	}
 	switch {
 	case nsMissing && dryRun:
-		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create namespace %s", SubNS))
+		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create namespace %s", rhoai.SubNS))
 	case nsMissing:
-		slog.Info("creating operator namespace", "namespace", SubNS)
-		ns := map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": SubNS}}
+		slog.Info("creating operator namespace", "namespace", rhoai.SubNS)
+		ns := map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": rhoai.SubNS}}
 		if _, _, err := c.Apply(nsPath, ns); err != nil {
-			return logs, fmt.Sprintf("Failed to create namespace %s: %v", SubNS, err), kube.ErrorCodeFromK8sErr(err)
+			return logs, fmt.Sprintf("Failed to create namespace %s: %v", rhoai.SubNS, err), kube.ErrorCodeFromK8sErr(err)
 		}
-		logs = append(logs, fmt.Sprintf("OK: Created namespace %s", SubNS))
+		logs = append(logs, fmt.Sprintf("OK: Created namespace %s", rhoai.SubNS))
 	}
 
 	switch {
@@ -126,19 +127,19 @@ func ensureOperatorNamespaceAndGroup(c *Client, dryRun bool) (logs []string, pro
 		}
 		logs = append(logs, ok)
 	case dryRun:
-		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create OperatorGroup in %s", SubNS))
+		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create OperatorGroup in %s", rhoai.SubNS))
 	default:
-		slog.Info("creating OperatorGroup", "namespace", SubNS)
+		slog.Info("creating OperatorGroup", "namespace", rhoai.SubNS)
 		og := map[string]any{
 			"apiVersion": "operators.coreos.com/v1",
 			"kind":       "OperatorGroup",
-			"metadata":   map[string]any{"name": "rhods-operator", "namespace": SubNS},
+			"metadata":   map[string]any{"name": "rhods-operator", "namespace": rhoai.SubNS},
 			"spec":       map[string]any{},
 		}
-		if _, _, err := c.Apply(namespacedPath("operators.coreos.com/v1", "operatorgroups", SubNS, "rhods-operator"), og); err != nil {
-			return logs, fmt.Sprintf("Failed to create OperatorGroup in %s: %v", SubNS, err), kube.ErrorCodeFromK8sErr(err)
+		if _, _, err := c.Apply(rhoai.NamespacedPath("operators.coreos.com/v1", "operatorgroups", rhoai.SubNS, "rhods-operator"), og); err != nil {
+			return logs, fmt.Sprintf("Failed to create OperatorGroup in %s: %v", rhoai.SubNS, err), kube.ErrorCodeFromK8sErr(err)
 		}
-		logs = append(logs, fmt.Sprintf("OK: Created OperatorGroup in %s", SubNS))
+		logs = append(logs, fmt.Sprintf("OK: Created OperatorGroup in %s", rhoai.SubNS))
 	}
 	return logs, "", ""
 }
@@ -158,27 +159,27 @@ type rhoaiOperatorGroup struct {
 // and its OperatorGroups (none when the namespace is missing). It only
 // reads; problem is set when either could not be read.
 func readOperatorNamespaceAndGroups(c *Client) (nsMissing bool, groups []rhoaiOperatorGroup, problem string, errorCode string) {
-	_, found, err := c.GetOptional("/api/v1/namespaces/" + SubNS)
+	_, found, err := c.GetOptional("/api/v1/namespaces/" + rhoai.SubNS)
 	switch {
 	case err != nil:
-		return false, nil, fmt.Sprintf("Failed to check namespace %s: %v", SubNS, err), kube.ErrorCodeFromK8sErr(err)
+		return false, nil, fmt.Sprintf("Failed to check namespace %s: %v", rhoai.SubNS, err), kube.ErrorCodeFromK8sErr(err)
 	case !found:
 		return true, nil, "", ""
 	}
-	body, found, err := c.GetOptional(namespacedPath("operators.coreos.com/v1", "operatorgroups", SubNS, ""))
+	body, found, err := c.GetOptional(rhoai.NamespacedPath("operators.coreos.com/v1", "operatorgroups", rhoai.SubNS, ""))
 	if err != nil {
-		return false, nil, fmt.Sprintf("Failed to check OperatorGroups in %s: %v", SubNS, err), kube.ErrorCodeFromK8sErr(err)
+		return false, nil, fmt.Sprintf("Failed to check OperatorGroups in %s: %v", rhoai.SubNS, err), kube.ErrorCodeFromK8sErr(err)
 	}
 	if found {
 		var list struct {
 			Items json.RawMessage `json:"items"`
 		}
 		if err := json.Unmarshal(body, &list); err != nil {
-			return false, nil, fmt.Sprintf("Failed to parse OperatorGroups in %s: %v", SubNS, err), "validation"
+			return false, nil, fmt.Sprintf("Failed to parse OperatorGroups in %s: %v", rhoai.SubNS, err), "validation"
 		}
 		if len(list.Items) > 0 {
 			if err := json.Unmarshal(list.Items, &groups); err != nil {
-				return false, nil, fmt.Sprintf("Failed to parse OperatorGroups in %s: %v", SubNS, err), "validation"
+				return false, nil, fmt.Sprintf("Failed to parse OperatorGroups in %s: %v", rhoai.SubNS, err), "validation"
 			}
 		}
 	}
@@ -194,13 +195,13 @@ func operatorGroupsUsable(groups []rhoaiOperatorGroup) (ok, problem string) {
 		for _, g := range groups {
 			names = append(names, g.Metadata.Name)
 		}
-		return "", fmt.Sprintf("Namespace %s has %d OperatorGroups (%s). OLM fails the RHOAI CSV with TooManyOperatorGroups; delete all but one global OperatorGroup and retry. Nothing was changed.", SubNS, len(groups), strings.Join(names, ", "))
+		return "", fmt.Sprintf("Namespace %s has %d OperatorGroups (%s). OLM fails the RHOAI CSV with TooManyOperatorGroups; delete all but one global OperatorGroup and retry. Nothing was changed.", rhoai.SubNS, len(groups), strings.Join(names, ", "))
 	}
 	g := groups[0]
 	if len(g.Spec.TargetNamespaces) > 0 || g.Spec.Selector != nil {
-		return "", fmt.Sprintf("OperatorGroup %s in %s targets specific namespaces, but RHOAI supports only the AllNamespaces install mode. Remove spec.targetNamespaces and spec.selector from it and retry. Nothing was changed.", g.Metadata.Name, SubNS)
+		return "", fmt.Sprintf("OperatorGroup %s in %s targets specific namespaces, but RHOAI supports only the AllNamespaces install mode. Remove spec.targetNamespaces and spec.selector from it and retry. Nothing was changed.", g.Metadata.Name, rhoai.SubNS)
 	}
-	return fmt.Sprintf("OK: OperatorGroup %s exists in %s", g.Metadata.Name, SubNS), ""
+	return fmt.Sprintf("OK: OperatorGroup %s exists in %s", g.Metadata.Name, rhoai.SubNS), ""
 }
 
 // waitForCSVGone waits, up to CSVDeletionTimeout, until a deleted CSV no
@@ -432,7 +433,7 @@ func (w *installWait) subscriptionConditions(sub installWaitSubscription) (resol
 				w.resolutionSince = kube.Clock().Now()
 			}
 			if kube.Clock().Since(w.resolutionSince) >= ResolutionFailedGrace {
-				return false, false, failed("resolution_failed", fmt.Sprintf("OLM cannot resolve %s from %s/%s: %s", SubName, sub.Spec.Source, sub.Spec.Channel, describeCondition(cond))), true
+				return false, false, failed("resolution_failed", fmt.Sprintf("OLM cannot resolve %s from %s/%s: %s", rhoai.SubName, sub.Spec.Source, sub.Spec.Channel, describeCondition(cond))), true
 			}
 			progress("OLM resolution failed, retrying: " + describeCondition(cond))
 		case "BundleUnpacking":
@@ -442,7 +443,7 @@ func (w *installWait) subscriptionConditions(sub installWaitSubscription) (resol
 					w.pullSince = kube.Clock().Now()
 				}
 				if kube.Clock().Since(w.pullSince) >= BundlePullFailureGrace {
-					return false, false, failed("bundle_image_pull", "OLM cannot pull the operator bundle image: "+cond.Message+" Check the image mirror (IDMS) for "+IDMSSource+" and the pull secret."), true
+					return false, false, failed("bundle_image_pull", "OLM cannot pull the operator bundle image: "+cond.Message+" Check the image mirror (IDMS) for "+rhoai.IDMSSource+" and the pull secret."), true
 				}
 				progress("Bundle image pull is failing, OLM keeps retrying: " + cond.Message)
 			}
@@ -545,7 +546,7 @@ func parenthesize(s string) string {
 // with a failed outcome when the plan failed or needs an approval this tool
 // must not give: it approves only a plan that installs exactly expectedCSV.
 func checkInstallPlan(c *Client, name, expectedCSV string, approved map[string]bool, logs *[]string, progress func(string)) (installOutcome, bool) {
-	path := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, name)
+	path := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, name)
 	body, _, err := c.Get(path)
 	if err != nil {
 		return installOutcome{}, false
@@ -633,7 +634,7 @@ const (
 // "<package>.<version>" naming convention is the fallback.
 func installedCSVVersion(installed types.CSVInfo) (parsedTag, bool) {
 	if installed.Version != "" {
-		if v, ok := parseCSVVersion(SubName + "." + installed.Version); ok {
+		if v, ok := parseCSVVersion(rhoai.SubName + "." + installed.Version); ok {
 			return v, true
 		}
 	}
@@ -791,7 +792,7 @@ const upgradeGateSkew = 30 * time.Second
 // gate.
 type upgradeGate struct {
 	where string // "Platform default", "DataScienceCluster default-dsc"
-	cond  dscCondition
+	cond  rhoai.DSCCondition
 	fresh bool // reported by the newly installed operator
 }
 
@@ -803,7 +804,7 @@ func (g upgradeGate) String() string {
 // upgrade gates (rhods-operator docs/upgrade-ordering.md "Admin ack gates";
 // a 3.5 operator over newer resources reports "failed to resolve upgrade
 // gate version" on the DSC Ready condition).
-func isUpgradeGateCondition(cond dscCondition) bool {
+func isUpgradeGateCondition(cond rhoai.DSCCondition) bool {
 	return cond.Reason == "AdminAckRequired" || strings.Contains(strings.ToLower(cond.Message), "upgrade gate")
 }
 
@@ -825,7 +826,7 @@ func readUpgradeGates(c *Client, version string, since time.Time) (gates []upgra
 		} `json:"metadata"`
 		Status struct {
 			Conditions []struct {
-				dscCondition
+				rhoai.DSCCondition
 				LastTransitionTime string `json:"lastTransitionTime"`
 			} `json:"conditions"`
 			Release struct {
@@ -835,18 +836,18 @@ func readUpgradeGates(c *Client, version string, since time.Time) (gates []upgra
 	}
 	collect := func(where string, obj statusObject) {
 		for _, cond := range obj.Status.Conditions {
-			if !isUpgradeGateCondition(cond.dscCondition) {
+			if !isUpgradeGateCondition(cond.DSCCondition) {
 				continue
 			}
 			fresh := reported
 			if t, ok := parseK8sTime(cond.LastTransitionTime); ok && !t.Before(since.Add(-upgradeGateSkew)) {
 				fresh = true
 			}
-			gates = append(gates, upgradeGate{where: where + " " + obj.Metadata.Name, cond: cond.dscCondition, fresh: fresh})
+			gates = append(gates, upgradeGate{where: where + " " + obj.Metadata.Name, cond: cond.DSCCondition, fresh: fresh})
 		}
 	}
 	var dsc statusObject
-	if path, err := dataScienceClusterPath(c); err == nil {
+	if path, err := rhoai.DataScienceClusterPath(c); err == nil {
 		if body, _, err := c.Get(path); err == nil && json.Unmarshal(body, &dsc) == nil {
 			dscFound = true
 			reported = version != "" && dsc.Status.Release.Version == version
@@ -855,7 +856,7 @@ func readUpgradeGates(c *Client, version string, since time.Time) (gates []upgra
 	if dscFound {
 		collect("DataScienceCluster", dsc)
 	}
-	if r, err := getServed(c, platformGroup, "/apis/config.opendatahub.io/%s/platforms/default", platformFallbackVersions); err == nil {
+	if r, err := rhoai.GetServed(c, rhoai.PlatformGroup, "/apis/config.opendatahub.io/%s/platforms/default", rhoai.PlatformFallbackVersions); err == nil {
 		var pl statusObject
 		if json.Unmarshal(r.Body, &pl) == nil {
 			collect("Platform", pl)
@@ -872,7 +873,7 @@ func readUpgradeGates(c *Client, version string, since time.Time) (gates []upgra
 // wait began. A gate that may date from before the install is reported
 // with that caveat once the wait ends.
 func adminAckNote(c *Client, csvName string, since time.Time) string {
-	version := strings.TrimPrefix(csvName, SubName+".")
+	version := strings.TrimPrefix(csvName, rhoai.SubName+".")
 	end := kube.Clock().Now().Add(upgradeGateWait)
 	if d, ok := c.Context().Deadline(); ok && d.Add(-installDeadlineReserve).Before(end) {
 		end = d.Add(-installDeadlineReserve)
@@ -922,8 +923,8 @@ func adminAckNote(c *Client, csvName string, since time.Time) string {
 
 func upgradeGateMessage(gates []string, hedge string) string {
 	return "The operator is installed, but it does not provision components while an upgrade gate holds it: " + strings.Join(gates, "; ") + "." + hedge +
-		" Read what the gate is about: an admin acknowledgement is given by setting its key to \"true\" in ConfigMap odh-upgrade-acks in " + SubNS +
-		" (oc get configmap odh-upgrade-acks -n " + SubNS + " shows them); a gate the operator cannot resolve usually means it is older than the resources it found. Check the Components page."
+		" Read what the gate is about: an admin acknowledgement is given by setting its key to \"true\" in ConfigMap odh-upgrade-acks in " + rhoai.SubNS +
+		" (oc get configmap odh-upgrade-acks -n " + rhoai.SubNS + " shows them); a gate the operator cannot resolve usually means it is older than the resources it found. Check the Components page."
 }
 
 // foreignSubscriptionRefusal reports another Subscription for the
@@ -951,27 +952,27 @@ func foreignSubscriptionRefusal(c *Client) string {
 			} `json:"spec"`
 		} `json:"items"`
 	}
-	exists, err := c.GetIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ""), &list)
+	exists, err := c.GetIntoOptional(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, ""), &list)
 	if err != nil {
 		if kube.IsDecodeError(err) {
-			return fmt.Sprintf("Cannot check for other Subscriptions of %s (parse InstallPlans: %v). Nothing was changed.", SubName, err)
+			return fmt.Sprintf("Cannot check for other Subscriptions of %s (parse InstallPlans: %v). Nothing was changed.", rhoai.SubName, err)
 		}
-		return fmt.Sprintf("Cannot check for other Subscriptions of %s in %s (list InstallPlans: %v). Nothing was changed.", SubName, SubNS, err)
+		return fmt.Sprintf("Cannot check for other Subscriptions of %s in %s (list InstallPlans: %v). Nothing was changed.", rhoai.SubName, rhoai.SubNS, err)
 	}
 	if !exists {
 		return ""
 	}
 	var found []string
 	for _, ip := range list.Items {
-		rhoai := false
+		forRHOAI := false
 		for _, csv := range ip.Spec.CSVNames {
-			rhoai = rhoai || strings.HasPrefix(csv, SubName+".")
+			forRHOAI = forRHOAI || strings.HasPrefix(csv, rhoai.SubName+".")
 		}
-		if !rhoai {
+		if !forRHOAI {
 			continue
 		}
 		for _, o := range ip.Metadata.OwnerReferences {
-			if o.Kind == "Subscription" && o.Name != SubName && !slices.Contains(found, o.Name) {
+			if o.Kind == "Subscription" && o.Name != rhoai.SubName && !slices.Contains(found, o.Name) {
 				found = append(found, o.Name)
 			}
 		}
@@ -981,5 +982,5 @@ func foreignSubscriptionRefusal(c *Client) string {
 	}
 	return fmt.Sprintf("Another Subscription (%s) in %s installs the %s package. The tool manages only the Subscription named %s; creating it next to another one makes OLM fail to resolve, and the other one would reinstall the operator. "+
 		"Nothing was changed. If the operator is managed elsewhere (for example by GitOps), make changes there, or delete that Subscription first.",
-		strings.Join(found, ", "), SubNS, SubName, SubName)
+		strings.Join(found, ", "), rhoai.SubNS, rhoai.SubName, rhoai.SubName)
 }

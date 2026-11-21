@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -19,25 +20,25 @@ import (
 func GetSummary(c *Client) (*types.Summary, error) {
 	var (
 		wg       sync.WaitGroup
-		sub      subscriptionDetails
+		sub      rhoai.SubscriptionDetails
 		subErr   error
 		csv      types.CSVInfo
 		csvErr   error
 		cs       types.CatalogSourceInfo
 		csErr    error
 		quayAuth string
-		dsc      dscRead
+		dsc      rhoai.DSCRead
 		dscErr   error
 	)
 	wg.Go(func() {
-		if sub, subErr = readSubscription(c); subErr == nil && sub.found {
-			csv, csvErr = csvForInstalledName(c, sub.installedCSV)
+		if sub, subErr = rhoai.ReadSubscription(c); subErr == nil && sub.Found {
+			csv, csvErr = rhoai.CSVForInstalledName(c, sub.InstalledCSV)
 		}
 	})
-	wg.Go(func() { cs, _, csErr = readCatalogSource(c) })
+	wg.Go(func() { cs, _, csErr = rhoai.ReadCatalogSource(c) })
 	// The credential only: whether the Secret is valid is not reported.
 	wg.Go(func() { _, quayAuth, _ = readPullSecret(c) })
-	wg.Go(func() { dsc, dscErr = readFirstDSC(c) })
+	wg.Go(func() { dsc, dscErr = rhoai.ReadFirstDSC(c) })
 	wg.Wait()
 	switch {
 	case subErr != nil:
@@ -49,11 +50,11 @@ func GetSummary(c *Client) (*types.Summary, error) {
 	}
 
 	s := &types.Summary{DSC: types.SummaryDSC{Components: []types.SummaryComponent{}}}
-	s.RHOAI.Installed = sub.found
-	if sub.found {
-		s.RHOAI.Channel, s.RHOAI.Version, s.RHOAI.Phase = sub.info.Channel, csv.Version, csv.Phase
+	s.RHOAI.Installed = sub.Found
+	if sub.Found {
+		s.RHOAI.Channel, s.RHOAI.Version, s.RHOAI.Phase = sub.Info.Channel, csv.Version, csv.Phase
 	}
-	s.Nightly = summaryNightly(csErr, func() *types.NightlyStatus { return getNightlyStatus(c.Context(), quayAuth, sub.info, cs) })
+	s.Nightly = summaryNightly(csErr, func() *types.NightlyStatus { return getNightlyStatus(c.Context(), quayAuth, sub.Info, cs) })
 	if dsc.Object != nil {
 		s.DSC.Exists = true
 		s.DSC.Ready = dscReady(dsc.Object)

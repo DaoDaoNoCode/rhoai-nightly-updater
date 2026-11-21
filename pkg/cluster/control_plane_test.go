@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -34,12 +35,12 @@ const wantNodePullSecretCommand = `printf 'quay.io/rhoai token (the one you save
 unset QUAY_AUTH`
 
 func TestNodePullSecretCommandIsExactlyTheScript(t *testing.T) {
-	if NodePullSecretCommand != wantNodePullSecretCommand {
-		t.Fatalf("command changed:\n%s\nwant:\n%s", NodePullSecretCommand, wantNodePullSecretCommand)
+	if rhoai.NodePullSecretCommand != wantNodePullSecretCommand {
+		t.Fatalf("command changed:\n%s\nwant:\n%s", rhoai.NodePullSecretCommand, wantNodePullSecretCommand)
 	}
 	// The token never appears as an argument (ps shows arguments) and
 	// nothing runs without one.
-	if strings.Contains(NodePullSecretCommand, "--arg") || !strings.Contains(NodePullSecretCommand, `[ -n "$QUAY_AUTH" ] &&`) {
+	if strings.Contains(rhoai.NodePullSecretCommand, "--arg") || !strings.Contains(rhoai.NodePullSecretCommand, `[ -n "$QUAY_AUTH" ] &&`) {
 		t.Fatal("the token must reach jq through its environment, and only when it is set")
 	}
 }
@@ -52,12 +53,12 @@ func TestReadControlPlane(t *testing.T) {
 		want     string
 		wantOK   bool
 	}{
-		{"hosted control plane", mockResponse{body: `{"status":{"controlPlaneTopology":"External","infrastructureTopology":"HighlyAvailable"}}`}, noWebhooks, ControlPlaneHosted, true},
-		{"highly available", mockResponse{body: `{"status":{"controlPlaneTopology":"HighlyAvailable"}}`}, noWebhooks, ControlPlaneSelfManaged, true},
-		{"single node", mockResponse{body: `{"status":{"controlPlaneTopology":"SingleReplica"}}`}, noWebhooks, ControlPlaneSelfManaged, true},
-		{"other webhooks only", mockResponse{body: `{"status":{"controlPlaneTopology":"HighlyAvailable"}}`}, otherWebhooks, ControlPlaneSelfManaged, true},
-		{"Red Hat-managed classic", mockResponse{body: `{"status":{"controlPlaneTopology":"HighlyAvailable"}}`}, managedWebhooks, ControlPlaneManaged, true},
-		{"hosted with SRE webhooks", mockResponse{body: `{"status":{"controlPlaneTopology":"External"}}`}, managedWebhooks, ControlPlaneHosted, true},
+		{"hosted control plane", mockResponse{body: `{"status":{"controlPlaneTopology":"External","infrastructureTopology":"HighlyAvailable"}}`}, noWebhooks, rhoai.ControlPlaneHosted, true},
+		{"highly available", mockResponse{body: `{"status":{"controlPlaneTopology":"HighlyAvailable"}}`}, noWebhooks, rhoai.ControlPlaneSelfManaged, true},
+		{"single node", mockResponse{body: `{"status":{"controlPlaneTopology":"SingleReplica"}}`}, noWebhooks, rhoai.ControlPlaneSelfManaged, true},
+		{"other webhooks only", mockResponse{body: `{"status":{"controlPlaneTopology":"HighlyAvailable"}}`}, otherWebhooks, rhoai.ControlPlaneSelfManaged, true},
+		{"Red Hat-managed classic", mockResponse{body: `{"status":{"controlPlaneTopology":"HighlyAvailable"}}`}, managedWebhooks, rhoai.ControlPlaneManaged, true},
+		{"hosted with SRE webhooks", mockResponse{body: `{"status":{"controlPlaneTopology":"External"}}`}, managedWebhooks, rhoai.ControlPlaneHosted, true},
 		{"webhooks unreadable", mockResponse{body: `{"status":{"controlPlaneTopology":"HighlyAvailable"}}`}, mockResponse{statusCode: 403, body: `{"kind":"Status","code":403,"reason":"Forbidden"}`}, "", false},
 		{"no topology field", mockResponse{body: `{"status":{}}`}, noWebhooks, "", false},
 		{"forbidden", mockResponse{statusCode: 403, body: `{"kind":"Status","code":403,"reason":"Forbidden"}`}, noWebhooks, "", false},
@@ -66,11 +67,11 @@ func TestReadControlPlane(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c, cleanup := newMockClient(map[string]mockResponse{infrastructurePath: tc.resp, webhookConfigsPath: tc.webhooks})
 			defer cleanup()
-			got, err := readControlPlane(c)
+			got, err := rhoai.ReadControlPlane(c)
 			if got != tc.want || (err == nil) != tc.wantOK {
 				t.Fatalf("got %q, %v; want %q (ok %v)", got, err, tc.want, tc.wantOK)
 			}
-			if cached := cachedControlPlane(c); cached != tc.want {
+			if cached := rhoai.CachedControlPlane(c); cached != tc.want {
 				t.Fatalf("cached %q, want %q", cached, tc.want)
 			}
 		})
@@ -81,7 +82,7 @@ func TestReadControlPlane(t *testing.T) {
 func TestCachedControlPlaneCachesOnlyAnswers(t *testing.T) {
 	a := &statusAPI{csvList: `{"items":[]}`, failPath: map[string]int{infrastructurePath: 503}}
 	c := newStatusAPI(t, a)
-	if cp := cachedControlPlane(c); cp != "" {
+	if cp := rhoai.CachedControlPlane(c); cp != "" {
 		t.Fatalf("unreadable topology = %q, want unknown", cp)
 	}
 	a.mu.Lock()
@@ -89,7 +90,7 @@ func TestCachedControlPlaneCachesOnlyAnswers(t *testing.T) {
 	a.infra = "SingleReplica"
 	a.mu.Unlock()
 	for i := range 3 {
-		if cp := cachedControlPlane(c); cp != ControlPlaneSelfManaged {
+		if cp := rhoai.CachedControlPlane(c); cp != rhoai.ControlPlaneSelfManaged {
 			t.Fatalf("poll %d: %q", i, cp)
 		}
 	}
@@ -110,14 +111,14 @@ func TestGetStatus_NodePullSecretPerTopology(t *testing.T) {
 		wantNodes bool
 		wantPull  bool
 	}{
-		{"hosted control plane", "External", "", "", ControlPlaneHosted, false, false},
-		{"self-managed, highly available", "HighlyAvailable", "", "", ControlPlaneSelfManaged, true, false},
-		{"self-managed, single node", "SingleReplica", "", "", ControlPlaneSelfManaged, true, false},
-		{"Red Hat-managed classic", "HighlyAvailable", managedWebhooks.body, "", ControlPlaneManaged, true, false},
+		{"hosted control plane", "External", "", "", rhoai.ControlPlaneHosted, false, false},
+		{"self-managed, highly available", "HighlyAvailable", "", "", rhoai.ControlPlaneSelfManaged, true, false},
+		{"self-managed, single node", "SingleReplica", "", "", rhoai.ControlPlaneSelfManaged, true, false},
+		{"Red Hat-managed classic", "HighlyAvailable", managedWebhooks.body, "", rhoai.ControlPlaneManaged, true, false},
 		{"unreadable", "", "", "", "", true, false},
-		{"self-managed with a READY nightly catalog", "HighlyAvailable", "", "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:abc", ControlPlaneSelfManaged, true, true},
+		{"self-managed with a READY nightly catalog", "HighlyAvailable", "", "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:abc", rhoai.ControlPlaneSelfManaged, true, true},
 		{"unreadable with a READY nightly catalog", "", "", "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:abc", "", true, true},
-		{"self-managed, catalog from another registry", "HighlyAvailable", "", "registry.example.com/fbc:1", ControlPlaneSelfManaged, true, false},
+		{"self-managed, catalog from another registry", "HighlyAvailable", "", "registry.example.com/fbc:1", rhoai.ControlPlaneSelfManaged, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			installFakeRegistry(t, newFakeRegistry())
@@ -136,7 +137,7 @@ func TestGetStatus_NodePullSecretPerTopology(t *testing.T) {
 			if (nodes != nil) != tc.wantNodes {
 				t.Fatalf("nodes %+v, want set %v", nodes, tc.wantNodes)
 			}
-			if nodes != nil && (nodes.Command != NodePullSecretCommand || nodes.RemoveCommand != NodePullSecretRemoveCommand || nodes.Pulled != tc.wantPull) {
+			if nodes != nil && (nodes.Command != rhoai.NodePullSecretCommand || nodes.RemoveCommand != rhoai.NodePullSecretRemoveCommand || nodes.Pulled != tc.wantPull) {
 				t.Fatalf("nodes %+v, want the command and pulled %v", nodes, tc.wantPull)
 			}
 			// An unknown topology is not an error the status reports.
@@ -175,7 +176,7 @@ func TestGetStatus_NodePullRecord(t *testing.T) {
 		cm, _ := json.Marshal(map[string]any{"data": map[string]string{nodePullRecordKey: string(raw)}})
 		return string(cm)
 	}
-	snapshotPath := namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)
+	snapshotPath := rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)
 	for _, tc := range []struct {
 		name     string
 		topology string
@@ -227,7 +228,7 @@ func TestCatalogPulledFromQuay(t *testing.T) {
 		{types.CatalogSourceInfo{Exists: true, State: "READY", Image: "quay.io/rhoai-other/x@sha256:a"}, false},
 		{types.CatalogSourceInfo{Exists: false, State: "READY", Image: "quay.io/rhoai/x"}, false},
 	} {
-		if got := catalogPulledFromQuay(tc.cs); got != tc.want {
+		if got := rhoai.CatalogPulledFromQuay(tc.cs); got != tc.want {
 			t.Errorf("%+v: %v, want %v", tc.cs, got, tc.want)
 		}
 	}

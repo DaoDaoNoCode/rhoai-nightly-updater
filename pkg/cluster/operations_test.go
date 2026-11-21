@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // succeededCSV is the CSV the simulated OLM reports after installing.
@@ -53,7 +54,7 @@ func newMockClient(responses map[string]mockResponse) (*Client, func()) {
 		Ctx:        context.Background(),
 	})
 	// A new server may reuse an earlier test's address, which keys the cache.
-	controlPlaneCache.Purge()
+	rhoai.ControlPlaneCache.Purge()
 
 	return client, func() { server.Close(); resetClusterCaches() }
 }
@@ -175,7 +176,7 @@ func TestRollback_AlreadyOnStable(t *testing.T) {
 	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "Subscription",
-		"metadata":   map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
+		"metadata":   map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS, "uid": "uid-sub"},
 		"spec": map[string]any{
 			"source":  stableSource,
 			"channel": stableChannel,
@@ -186,14 +187,14 @@ func TestRollback_AlreadyOnStable(t *testing.T) {
 	}
 	subJSON, _ := json.Marshal(subResponse)
 
-	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
+	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", rhoai.SubNS, rhoai.SubName)
 	client, cleanup := newMockClient(map[string]mockResponse{
-		namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, ""): stableCatalogMock(stableSource, stableChannel, "3.5.0"),
+		rhoai.NamespacedPath("packages.operators.coreos.com/v1", "packagemanifests", rhoai.CatalogNS, ""): stableCatalogMock(stableSource, stableChannel, "3.5.0"),
 		subPath: {
 			body:       string(subJSON),
 			statusCode: 200,
 		},
-		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""): {body: `{"items":[` + succeededCSV + `]}`},
+		rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""): {body: `{"items":[` + succeededCSV + `]}`},
 	})
 	defer cleanup()
 
@@ -231,7 +232,7 @@ func newRecordingMockClient(responses map[string]mockResponse) (*Client, *[]requ
 		records = append(records, requestRecord{Method: r.Method, Path: r.URL.Path})
 		mu.Unlock()
 
-		if strings.Contains(r.URL.Path, "/catalogsources/"+CatalogName+"-verify-") {
+		if strings.Contains(r.URL.Path, "/catalogsources/"+rhoai.CatalogName+"-verify-") {
 			if r.Method == "GET" {
 				fmt.Fprint(w, `{"status":{"connectionState":{"lastObservedState":"READY"}}}`)
 			} else {
@@ -258,7 +259,7 @@ func newRecordingMockClient(responses map[string]mockResponse) (*Client, *[]requ
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.statusCode)
 		if strings.HasSuffix(r.URL.Path, "/packagemanifests") && strings.Contains(r.URL.Query().Get("labelSelector"), "-verify-") {
-			resp.body = strings.ReplaceAll(resp.body, `"catalogSource":"`+CatalogName+`"`, `"catalogSource":"`+strings.TrimPrefix(r.URL.Query().Get("labelSelector"), "catalog=")+`"`)
+			resp.body = strings.ReplaceAll(resp.body, `"catalogSource":"`+rhoai.CatalogName+`"`, `"catalogSource":"`+strings.TrimPrefix(r.URL.Query().Get("labelSelector"), "catalog=")+`"`)
 		}
 		w.Write([]byte(resp.body))
 	}))
@@ -443,8 +444,8 @@ func TestCompareTags(t *testing.T) {
 // pkgManifestPaths returns both the label-selector list path and the direct
 // by-name path for packagemanifest mocks.
 func pkgManifestPaths() (listPath, directPath string) {
-	return fmt.Sprintf("/apis/packages.operators.coreos.com/v1/namespaces/%s/packagemanifests", CatalogNS),
-		fmt.Sprintf("/apis/packages.operators.coreos.com/v1/namespaces/%s/packagemanifests/%s", CatalogNS, "rhods-operator")
+	return fmt.Sprintf("/apis/packages.operators.coreos.com/v1/namespaces/%s/packagemanifests", rhoai.CatalogNS),
+		fmt.Sprintf("/apis/packages.operators.coreos.com/v1/namespaces/%s/packagemanifests/%s", rhoai.CatalogNS, "rhods-operator")
 }
 
 // wrapInList wraps a single packagemanifest JSON body into a list response.
@@ -459,9 +460,9 @@ func wrapPkgManifestList(singleBody string) string {
 		status = map[string]any{}
 		obj["status"] = status
 	}
-	status["packageName"] = SubName
-	status["catalogSource"] = CatalogName
-	status["catalogSourceNamespace"] = CatalogNS
+	status["packageName"] = rhoai.SubName
+	status["catalogSource"] = rhoai.CatalogName
+	status["catalogSourceNamespace"] = rhoai.CatalogNS
 	wrapped := map[string]any{"items": []any{obj}}
 	b, _ := json.Marshal(wrapped)
 	return string(b)
@@ -529,7 +530,7 @@ func TestDetectNightlyChannel(t *testing.T) {
 func TestDetectNightlyChannel_APIError(t *testing.T) {
 	// Mock returns 500 for the packagemanifest endpoint
 	pkgPath := fmt.Sprintf("/apis/packages.operators.coreos.com/v1/namespaces/%s/packagemanifests/%s",
-		CatalogNS, "rhods-operator")
+		rhoai.CatalogNS, "rhods-operator")
 	client, cleanup := newMockClient(map[string]mockResponse{
 		pkgPath: {body: `{"kind":"Status","status":"Failure","code":500}`, statusCode: 500},
 	})
@@ -693,7 +694,7 @@ func TestUpdate_FullRefreshFlow(t *testing.T) {
 				"metadata": map[string]any{"name": "rhoai-mirror"},
 				"spec": map[string]any{
 					"imageDigestMirrors": []any{
-						map[string]any{"source": IDMSSource},
+						map[string]any{"source": rhoai.IDMSSource},
 					},
 				},
 			},
@@ -704,7 +705,7 @@ func TestUpdate_FullRefreshFlow(t *testing.T) {
 	// Build CatalogSource response (already exists with old image)
 	csResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
-		"metadata": map[string]any{"name": CatalogName, "namespace": CatalogNS},
+		"metadata": map[string]any{"name": rhoai.CatalogName, "namespace": rhoai.CatalogNS},
 		"spec":     map[string]any{"image": "quay.io/rhoai/rhoai-fbc-fragment:old"},
 		"status": map[string]any{
 			"connectionState": map[string]any{"lastObservedState": "READY"},
@@ -715,8 +716,8 @@ func TestUpdate_FullRefreshFlow(t *testing.T) {
 	// Build Subscription response (points to nightly catalog, with installPlanRef for verify step)
 	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec":     map[string]any{"source": CatalogName, "channel": "fast"},
+		"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS, "uid": "uid-sub"},
+		"spec":     map[string]any{"source": rhoai.CatalogName, "channel": "fast"},
 		"status": map[string]any{
 			"state":        "AtLatestKnown",
 			"currentCSV":   "rhods-operator.v3.5.0",
@@ -772,7 +773,7 @@ func TestUpdate_FullRefreshFlow(t *testing.T) {
 	ogResponse := map[string]any{
 		"items": []any{
 			map[string]any{
-				"metadata": map[string]any{"name": "redhat-ods-operator-og", "namespace": SubNS},
+				"metadata": map[string]any{"name": "redhat-ods-operator-og", "namespace": rhoai.SubNS},
 			},
 		},
 	}
@@ -781,16 +782,16 @@ func TestUpdate_FullRefreshFlow(t *testing.T) {
 	// Path constants
 	pullSecretPath := "/api/v1/namespaces/kube-system/secrets/additional-pull-secret"
 	idmsPath := "/apis/config.openshift.io/v1/imagedigestmirrorsets"
-	csPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s", CatalogNS, CatalogName)
-	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
-	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", SubNS)
-	csvDeletePath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions/%s", SubNS, "rhods-operator.v3.5.0")
+	csPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s", rhoai.CatalogNS, rhoai.CatalogName)
+	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", rhoai.SubNS, rhoai.SubName)
+	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", rhoai.SubNS)
+	csvDeletePath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions/%s", rhoai.SubNS, "rhods-operator.v3.5.0")
 	dashDeployPath := "/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard"
 	dashPodsPath := "/api/v1/namespaces/redhat-ods-applications/pods"
-	pkgManifestPath := fmt.Sprintf("/apis/packages.operators.coreos.com/v1/namespaces/%s/packagemanifests/%s", CatalogNS, "rhods-operator")
+	pkgManifestPath := fmt.Sprintf("/apis/packages.operators.coreos.com/v1/namespaces/%s/packagemanifests/%s", rhoai.CatalogNS, "rhods-operator")
 	appDeployListPath := "/apis/apps/v1/namespaces/redhat-ods-applications/deployments"
 	opDeployListPath := "/apis/apps/v1/namespaces/redhat-ods-operator/deployments"
-	ogPath := fmt.Sprintf("/apis/operators.coreos.com/v1/namespaces/%s/operatorgroups", SubNS)
+	ogPath := fmt.Sprintf("/apis/operators.coreos.com/v1/namespaces/%s/operatorgroups", rhoai.SubNS)
 
 	client, records, cleanup := newRecordingMockClient(map[string]mockResponse{
 		pullSecretPath:         {body: string(secretJSON)},
@@ -803,7 +804,7 @@ func TestUpdate_FullRefreshFlow(t *testing.T) {
 		dashDeployPath:         {body: string(dashDeployJSON)},
 		dashPodsPath:           {body: string(emptyPodList)},
 		pkgManifestPath:        {body: string(pkgManifestJSON)},
-		strings.TrimSuffix(pkgManifestPath, "/"+SubName): {body: wrapPkgManifestList(string(pkgManifestJSON))},
+		strings.TrimSuffix(pkgManifestPath, "/"+rhoai.SubName): {body: wrapPkgManifestList(string(pkgManifestJSON))},
 		appDeployListPath: {body: string(emptyDeployList)},
 		opDeployListPath:  {body: string(emptyDeployList)},
 		ogPath:            {body: string(ogJSON)},
@@ -880,7 +881,7 @@ func TestUpdate_FullRefreshFlow(t *testing.T) {
 // crash may have removed it. The stable target comes from the catalog, so
 // here the failure is the unreadable catalog, not the Subscription.
 func TestReinstall_Subscription404(t *testing.T) {
-	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
+	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", rhoai.SubNS, rhoai.SubName)
 	client, cleanup := newMockClient(map[string]mockResponse{
 		subPath: {
 			body:       `{"kind":"Status","status":"Failure","message":"subscriptions.operators.coreos.com \"rhods-operator\" not found","reason":"NotFound","code":404}`,
@@ -912,7 +913,7 @@ func TestReinstall_StableCSVSucceeded(t *testing.T) {
 	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "Subscription",
-		"metadata":   map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
+		"metadata":   map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS, "uid": "uid-sub"},
 		"spec": map[string]any{
 			"source":  stableSource,
 			"channel": stableChannel,
@@ -933,11 +934,11 @@ func TestReinstall_StableCSVSucceeded(t *testing.T) {
 	}
 	csvJSON, _ := json.Marshal(csvResponse)
 
-	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
-	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", SubNS)
+	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", rhoai.SubNS, rhoai.SubName)
+	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", rhoai.SubNS)
 
 	client, cleanup := newMockClient(map[string]mockResponse{
-		namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, ""): stableCatalogMock(stableSource, stableChannel, "3.5.0"),
+		rhoai.NamespacedPath("packages.operators.coreos.com/v1", "packagemanifests", rhoai.CatalogNS, ""): stableCatalogMock(stableSource, stableChannel, "3.5.0"),
 		subPath:     {body: string(subJSON)},
 		csvListPath: {body: string(csvJSON)},
 	})
@@ -962,9 +963,9 @@ func TestReinstall_NightlyCatalogAndChannel(t *testing.T) {
 	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "Subscription",
-		"metadata":   map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
+		"metadata":   map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS, "uid": "uid-sub"},
 		"spec": map[string]any{
-			"source":  CatalogName,
+			"source":  rhoai.CatalogName,
 			"channel": "fast",
 		},
 		"status": map[string]any{"state": "AtLatestKnown", "currentCSV": "rhods-operator.v3.5.0", "installedCSV": "rhods-operator.v3.5.0"},
@@ -998,10 +999,10 @@ func TestReinstall_NightlyCatalogAndChannel(t *testing.T) {
 	// Empty webhook lists
 	emptyList, _ := json.Marshal(map[string]any{"items": []any{}})
 
-	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
-	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", SubNS)
-	csvDeletePath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions/%s", SubNS, "rhods-operator.v3.5.0")
-	csPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s", CatalogNS, CatalogName)
+	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", rhoai.SubNS, rhoai.SubName)
+	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", rhoai.SubNS)
+	csvDeletePath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions/%s", rhoai.SubNS, "rhods-operator.v3.5.0")
+	csPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s", rhoai.CatalogNS, rhoai.CatalogName)
 	pkgManifestListPath, pkgManifestPath := pkgManifestPaths()
 	vwhPath := "/apis/admissionregistration.k8s.io/v1/validatingwebhookconfigurations"
 	mwhPath := "/apis/admissionregistration.k8s.io/v1/mutatingwebhookconfigurations"
@@ -1013,7 +1014,7 @@ func TestReinstall_NightlyCatalogAndChannel(t *testing.T) {
 	csReadyResponse, _ := json.Marshal(map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "CatalogSource",
-		"metadata":   map[string]any{"name": CatalogName, "namespace": CatalogNS},
+		"metadata":   map[string]any{"name": rhoai.CatalogName, "namespace": rhoai.CatalogNS},
 		"spec":       map[string]any{"image": nightlyImage},
 		"status":     map[string]any{"connectionState": map[string]any{"lastObservedState": "READY"}},
 	})
@@ -1083,9 +1084,9 @@ func TestReinstall_NightlyCatalogAndChannel(t *testing.T) {
 // RefreshOperator tests. Callers can override individual entries before passing
 // the map to newRecordingMockClient.
 func buildRefreshMocks() (map[string]mockResponse, map[string]string) {
-	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", SubNS)
-	csvDeletePath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions/%s", SubNS, "rhods-operator.v3.5.0")
-	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
+	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", rhoai.SubNS)
+	csvDeletePath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions/%s", rhoai.SubNS, "rhods-operator.v3.5.0")
+	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", rhoai.SubNS, rhoai.SubName)
 	appDeployListPath := fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments", "redhat-ods-applications")
 	opDeployListPath := fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments", "redhat-ods-operator")
 
@@ -1102,8 +1103,8 @@ func buildRefreshMocks() (map[string]mockResponse, map[string]string) {
 
 	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec":     map[string]any{"source": CatalogName, "channel": "fast"},
+		"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS, "uid": "uid-sub"},
+		"spec":     map[string]any{"source": rhoai.CatalogName, "channel": "fast"},
 		"status":   map[string]any{"state": "AtLatestKnown", "currentCSV": "rhods-operator.v3.5.0", "installedCSV": "rhods-operator.v3.5.0"},
 	}
 	subJSON, _ := json.Marshal(subResponse)
@@ -1127,7 +1128,7 @@ func buildRefreshMocks() (map[string]mockResponse, map[string]string) {
 		opDeployListPath:       {body: string(emptyDeployList)},
 		// The channel still installs the installed CSV, so Refresh does not
 		// become an upgrade.
-		"/apis/packages.operators.coreos.com/v1/namespaces/" + CatalogNS + "/packagemanifests": {body: `{"items":[{"metadata":{"name":"` + SubName + `"},"status":{"packageName":"` + SubName + `","catalogSource":"` + CatalogName + `","catalogSourceNamespace":"` + CatalogNS + `","channels":[{"name":"fast","currentCSV":"rhods-operator.v3.5.0"}]}}]}`},
+		"/apis/packages.operators.coreos.com/v1/namespaces/" + rhoai.CatalogNS + "/packagemanifests": {body: `{"items":[{"metadata":{"name":"` + rhoai.SubName + `"},"status":{"packageName":"` + rhoai.SubName + `","catalogSource":"` + rhoai.CatalogName + `","catalogSourceNamespace":"` + rhoai.CatalogNS + `","channels":[{"name":"fast","currentCSV":"rhods-operator.v3.5.0"}]}}]}`},
 	}
 
 	return responses, paths
@@ -1205,9 +1206,9 @@ func TestRefreshOperator_Success(t *testing.T) {
 }
 
 func TestRefreshOperator_RetriesSubscriptionCreation(t *testing.T) {
-	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", SubNS)
-	csvDeletePath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions/%s", SubNS, "rhods-operator.v3.5.0")
-	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
+	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", rhoai.SubNS)
+	csvDeletePath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions/%s", rhoai.SubNS, "rhods-operator.v3.5.0")
+	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", rhoai.SubNS, rhoai.SubName)
 	appDeployListPath := fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments", "redhat-ods-applications")
 	opDeployListPath := fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments", "redhat-ods-operator")
 
@@ -1224,8 +1225,8 @@ func TestRefreshOperator_RetriesSubscriptionCreation(t *testing.T) {
 
 	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec":     map[string]any{"source": CatalogName, "channel": "fast"},
+		"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS, "uid": "uid-sub"},
+		"spec":     map[string]any{"source": rhoai.CatalogName, "channel": "fast"},
 		"status":   map[string]any{"state": "AtLatestKnown", "currentCSV": "rhods-operator.v3.5.0", "installedCSV": "rhods-operator.v3.5.0"},
 	}
 	subJSON, _ := json.Marshal(subResponse)
@@ -1273,7 +1274,7 @@ func TestRefreshOperator_RetriesSubscriptionCreation(t *testing.T) {
 			"DELETE " + subPath:        {body: `{"kind":"Status","status":"Success"}`},
 			"GET " + appDeployListPath: {body: string(emptyDeployList)},
 			"GET " + opDeployListPath:  {body: string(emptyDeployList)},
-			"GET /apis/packages.operators.coreos.com/v1/namespaces/" + CatalogNS + "/packagemanifests": {body: `{"items":[{"metadata":{"name":"` + SubName + `"},"status":{"packageName":"` + SubName + `","catalogSource":"` + CatalogName + `","catalogSourceNamespace":"` + CatalogNS + `","channels":[{"name":"fast","currentCSV":"rhods-operator.v3.5.0"}]}}]}`},
+			"GET /apis/packages.operators.coreos.com/v1/namespaces/" + rhoai.CatalogNS + "/packagemanifests": {body: `{"items":[{"metadata":{"name":"` + rhoai.SubName + `"},"status":{"packageName":"` + rhoai.SubName + `","catalogSource":"` + rhoai.CatalogName + `","catalogSourceNamespace":"` + rhoai.CatalogNS + `","channels":[{"name":"fast","currentCSV":"rhods-operator.v3.5.0"}]}}]}`},
 		}
 		resp, ok := responses[key]
 		if !ok {
@@ -1322,7 +1323,7 @@ func TestRefreshOperator_RetriesSubscriptionCreation(t *testing.T) {
 
 func TestRefreshOperator_NoCSV(t *testing.T) {
 	// Return an empty CSV list so getCSV returns csv.Name == ""
-	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", SubNS)
+	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", rhoai.SubNS)
 	emptyCSVResponse := map[string]any{
 		"items": []any{},
 	}
@@ -1453,7 +1454,7 @@ func buildUpdateStreamMocks(testImage string) (map[string]mockResponse, map[stri
 				"metadata": map[string]any{"name": "rhoai-mirror"},
 				"spec": map[string]any{
 					"imageDigestMirrors": []any{
-						map[string]any{"source": IDMSSource},
+						map[string]any{"source": rhoai.IDMSSource},
 					},
 				},
 			},
@@ -1464,7 +1465,7 @@ func buildUpdateStreamMocks(testImage string) (map[string]mockResponse, map[stri
 	// CatalogSource (READY)
 	csResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
-		"metadata": map[string]any{"name": CatalogName, "namespace": CatalogNS},
+		"metadata": map[string]any{"name": rhoai.CatalogName, "namespace": rhoai.CatalogNS},
 		"spec":     map[string]any{"image": testImage},
 		"status": map[string]any{
 			"connectionState": map[string]any{"lastObservedState": "READY"},
@@ -1475,8 +1476,8 @@ func buildUpdateStreamMocks(testImage string) (map[string]mockResponse, map[stri
 	// Subscription (with installPlanRef in status)
 	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec":     map[string]any{"source": CatalogName, "channel": "fast"},
+		"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS, "uid": "uid-sub"},
+		"spec":     map[string]any{"source": rhoai.CatalogName, "channel": "fast"},
 		"status": map[string]any{
 			"state":        "AtLatestKnown",
 			"currentCSV":   "rhods-operator.v3.5.0",
@@ -1533,7 +1534,7 @@ func buildUpdateStreamMocks(testImage string) (map[string]mockResponse, map[stri
 	ogResponse := map[string]any{
 		"items": []any{
 			map[string]any{
-				"metadata": map[string]any{"name": "redhat-ods-operator-og", "namespace": SubNS},
+				"metadata": map[string]any{"name": "redhat-ods-operator-og", "namespace": rhoai.SubNS},
 			},
 		},
 	}
@@ -1542,16 +1543,16 @@ func buildUpdateStreamMocks(testImage string) (map[string]mockResponse, map[stri
 	// Paths
 	pullSecretPath := "/api/v1/namespaces/kube-system/secrets/additional-pull-secret"
 	idmsPath := "/apis/config.openshift.io/v1/imagedigestmirrorsets"
-	csPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s", CatalogNS, CatalogName)
-	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
-	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", SubNS)
-	csvDeletePath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions/%s", SubNS, "rhods-operator.v3.5.0")
+	csPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s", rhoai.CatalogNS, rhoai.CatalogName)
+	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", rhoai.SubNS, rhoai.SubName)
+	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", rhoai.SubNS)
+	csvDeletePath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions/%s", rhoai.SubNS, "rhods-operator.v3.5.0")
 	dashDeployPath := "/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard"
 	dashPodsPath := "/api/v1/namespaces/redhat-ods-applications/pods"
-	pkgManifestPath := fmt.Sprintf("/apis/packages.operators.coreos.com/v1/namespaces/%s/packagemanifests/%s", CatalogNS, "rhods-operator")
+	pkgManifestPath := fmt.Sprintf("/apis/packages.operators.coreos.com/v1/namespaces/%s/packagemanifests/%s", rhoai.CatalogNS, "rhods-operator")
 	appDeployListPath := "/apis/apps/v1/namespaces/redhat-ods-applications/deployments"
 	opDeployListPath := "/apis/apps/v1/namespaces/redhat-ods-operator/deployments"
-	ogPath := fmt.Sprintf("/apis/operators.coreos.com/v1/namespaces/%s/operatorgroups", SubNS)
+	ogPath := fmt.Sprintf("/apis/operators.coreos.com/v1/namespaces/%s/operatorgroups", rhoai.SubNS)
 
 	paths := map[string]string{
 		"pullSecret":    pullSecretPath,
@@ -1579,7 +1580,7 @@ func buildUpdateStreamMocks(testImage string) (map[string]mockResponse, map[stri
 		dashDeployPath:         {body: string(dashDeployJSON)},
 		dashPodsPath:           {body: string(emptyPodList)},
 		pkgManifestPath:        {body: string(pkgManifestJSON)},
-		strings.TrimSuffix(pkgManifestPath, "/"+SubName): {body: wrapPkgManifestList(string(pkgManifestJSON))},
+		strings.TrimSuffix(pkgManifestPath, "/"+rhoai.SubName): {body: wrapPkgManifestList(string(pkgManifestJSON))},
 		appDeployListPath: {body: string(emptyDeployList)},
 		opDeployListPath:  {body: string(emptyDeployList)},
 		ogPath:            {body: string(ogJSON)},
@@ -1695,7 +1696,7 @@ func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
 				"metadata": map[string]any{"name": "rhoai-mirror"},
 				"spec": map[string]any{
 					"imageDigestMirrors": []any{
-						map[string]any{"source": IDMSSource},
+						map[string]any{"source": rhoai.IDMSSource},
 					},
 				},
 			},
@@ -1706,7 +1707,7 @@ func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
 	// CatalogSource that always returns TRANSIENT_FAILURE
 	csResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
-		"metadata": map[string]any{"name": CatalogName, "namespace": CatalogNS},
+		"metadata": map[string]any{"name": rhoai.CatalogName, "namespace": rhoai.CatalogNS},
 		"spec":     map[string]any{"image": testImage},
 		"status": map[string]any{
 			"connectionState": map[string]any{"lastObservedState": "TRANSIENT_FAILURE"},
@@ -1736,7 +1737,7 @@ func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
 	ogResponse := map[string]any{
 		"items": []any{
 			map[string]any{
-				"metadata": map[string]any{"name": "redhat-ods-operator-og", "namespace": SubNS},
+				"metadata": map[string]any{"name": "redhat-ods-operator-og", "namespace": rhoai.SubNS},
 			},
 		},
 	}
@@ -1744,12 +1745,12 @@ func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
 
 	pullSecretPath := "/api/v1/namespaces/kube-system/secrets/additional-pull-secret"
 	idmsPath := "/apis/config.openshift.io/v1/imagedigestmirrorsets"
-	csPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s", CatalogNS, CatalogName)
+	csPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/catalogsources/%s", rhoai.CatalogNS, rhoai.CatalogName)
 	dashDeployPath := "/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard"
 	dashPodsPath := "/api/v1/namespaces/redhat-ods-applications/pods"
 	appDeployListPath := "/apis/apps/v1/namespaces/redhat-ods-applications/deployments"
 	opDeployListPath := "/apis/apps/v1/namespaces/redhat-ods-operator/deployments"
-	ogPath := fmt.Sprintf("/apis/operators.coreos.com/v1/namespaces/%s/operatorgroups", SubNS)
+	ogPath := fmt.Sprintf("/apis/operators.coreos.com/v1/namespaces/%s/operatorgroups", rhoai.SubNS)
 
 	// Use a custom server so we have control over the context
 	var mu sync.Mutex
@@ -1773,13 +1774,13 @@ func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
 		recs = append(recs, requestRecord{Method: r.Method, Path: r.URL.Path})
 		mu.Unlock()
 
-		if strings.Contains(r.URL.Path, "/catalogsources/"+CatalogName+"-verify-") {
+		if strings.Contains(r.URL.Path, "/catalogsources/"+rhoai.CatalogName+"-verify-") {
 			fmt.Fprint(w, `{"status":{"connectionState":{"lastObservedState":"READY"}}}`)
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/packagemanifests") {
 			source := strings.TrimPrefix(r.URL.Query().Get("labelSelector"), "catalog=")
-			fmt.Fprint(w, strings.ReplaceAll(wrapPkgManifestList(`{"status":{"channels":[{"name":"fast","currentCSV":"rhods-operator.v3.5.0"}]}}`), `"catalogSource":"`+CatalogName+`"`, `"catalogSource":"`+source+`"`))
+			fmt.Fprint(w, strings.ReplaceAll(wrapPkgManifestList(`{"status":{"channels":[{"name":"fast","currentCSV":"rhods-operator.v3.5.0"}]}}`), `"catalogSource":"`+rhoai.CatalogName+`"`, `"catalogSource":"`+source+`"`))
 			return
 		}
 		key := r.Method + " " + r.URL.Path
@@ -1863,8 +1864,8 @@ func TestUpdateStream_BackwardCompat(t *testing.T) {
 	// Keep installPlanRef so verify_installplan step completes quickly
 	subResponse := map[string]any{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]any{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
-		"spec":     map[string]any{"source": CatalogName, "channel": "fast"},
+		"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS, "uid": "uid-sub"},
+		"spec":     map[string]any{"source": rhoai.CatalogName, "channel": "fast"},
 		"status": map[string]any{
 			"state":          "AtLatestKnown",
 			"currentCSV":     "rhods-operator.v3.5.0",
@@ -1873,7 +1874,7 @@ func TestUpdateStream_BackwardCompat(t *testing.T) {
 		},
 	}
 	subJSON, _ := json.Marshal(subResponse)
-	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
+	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", rhoai.SubNS, rhoai.SubName)
 	responses[subPath] = mockResponse{body: string(subJSON)}
 
 	client, _, cleanup := newRecordingMockClient(responses)

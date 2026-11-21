@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Token authentication, made as the dashboard's "Require token
@@ -80,13 +81,13 @@ func tokenSecretName(model string) string  { return tokenDisplayName + "-" + tok
 func tokenSAPath(project, model string) (string, bool) {
 	switch model {
 	case "smollm2-135m-instruct":
-		return namespacedPath("v1", "serviceaccounts", project, "smollm2-135m-instruct-sa"), true
+		return rhoai.NamespacedPath("v1", "serviceaccounts", project, "smollm2-135m-instruct-sa"), true
 	case "qwen25-05b-instruct":
-		return namespacedPath("v1", "serviceaccounts", project, "qwen25-05b-instruct-sa"), true
+		return rhoai.NamespacedPath("v1", "serviceaccounts", project, "qwen25-05b-instruct-sa"), true
 	case "qwen3-1-7b":
-		return namespacedPath("v1", "serviceaccounts", project, "qwen3-1-7b-sa"), true
+		return rhoai.NamespacedPath("v1", "serviceaccounts", project, "qwen3-1-7b-sa"), true
 	case "granite-embedding-125m-english":
-		return namespacedPath("v1", "serviceaccounts", project, "granite-embedding-125m-english-sa"), true
+		return rhoai.NamespacedPath("v1", "serviceaccounts", project, "granite-embedding-125m-english-sa"), true
 	}
 	return "", false
 }
@@ -94,13 +95,13 @@ func tokenSAPath(project, model string) (string, bool) {
 func tokenRolePath(project, model string) (string, bool) {
 	switch model {
 	case "smollm2-135m-instruct":
-		return namespacedPath("rbac.authorization.k8s.io/v1", "roles", project, "smollm2-135m-instruct-view-role"), true
+		return rhoai.NamespacedPath("rbac.authorization.k8s.io/v1", "roles", project, "smollm2-135m-instruct-view-role"), true
 	case "qwen25-05b-instruct":
-		return namespacedPath("rbac.authorization.k8s.io/v1", "roles", project, "qwen25-05b-instruct-view-role"), true
+		return rhoai.NamespacedPath("rbac.authorization.k8s.io/v1", "roles", project, "qwen25-05b-instruct-view-role"), true
 	case "qwen3-1-7b":
-		return namespacedPath("rbac.authorization.k8s.io/v1", "roles", project, "qwen3-1-7b-view-role"), true
+		return rhoai.NamespacedPath("rbac.authorization.k8s.io/v1", "roles", project, "qwen3-1-7b-view-role"), true
 	case "granite-embedding-125m-english":
-		return namespacedPath("rbac.authorization.k8s.io/v1", "roles", project, "granite-embedding-125m-english-view-role"), true
+		return rhoai.NamespacedPath("rbac.authorization.k8s.io/v1", "roles", project, "granite-embedding-125m-english-view-role"), true
 	}
 	return "", false
 }
@@ -108,13 +109,13 @@ func tokenRolePath(project, model string) (string, bool) {
 func tokenBindingPath(project, model string) (string, bool) {
 	switch model {
 	case "smollm2-135m-instruct":
-		return namespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", project, "smollm2-135m-instruct-view"), true
+		return rhoai.NamespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", project, "smollm2-135m-instruct-view"), true
 	case "qwen25-05b-instruct":
-		return namespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", project, "qwen25-05b-instruct-view"), true
+		return rhoai.NamespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", project, "qwen25-05b-instruct-view"), true
 	case "qwen3-1-7b":
-		return namespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", project, "qwen3-1-7b-view"), true
+		return rhoai.NamespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", project, "qwen3-1-7b-view"), true
 	case "granite-embedding-125m-english":
-		return namespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", project, "granite-embedding-125m-english-view"), true
+		return rhoai.NamespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", project, "granite-embedding-125m-english-view"), true
 	}
 	return "", false
 }
@@ -122,13 +123,13 @@ func tokenBindingPath(project, model string) (string, bool) {
 func tokenSecretPath(project, model string) (string, bool) {
 	switch model {
 	case "smollm2-135m-instruct":
-		return namespacedPath("v1", "secrets", project, "default-name-smollm2-135m-instruct-sa"), true
+		return rhoai.NamespacedPath("v1", "secrets", project, "default-name-smollm2-135m-instruct-sa"), true
 	case "qwen25-05b-instruct":
-		return namespacedPath("v1", "secrets", project, "default-name-qwen25-05b-instruct-sa"), true
+		return rhoai.NamespacedPath("v1", "secrets", project, "default-name-qwen25-05b-instruct-sa"), true
 	case "qwen3-1-7b":
-		return namespacedPath("v1", "secrets", project, "default-name-qwen3-1-7b-sa"), true
+		return rhoai.NamespacedPath("v1", "secrets", project, "default-name-qwen3-1-7b-sa"), true
 	case "granite-embedding-125m-english":
-		return namespacedPath("v1", "secrets", project, "default-name-granite-embedding-125m-english-sa"), true
+		return rhoai.NamespacedPath("v1", "secrets", project, "default-name-granite-embedding-125m-english-sa"), true
 	}
 	return "", false
 }
@@ -137,13 +138,13 @@ func tokenSecretPath(project, model string) (string, bool) {
 func tokenCreatePath(kind, project string) string {
 	switch kind {
 	case tokenPartSA:
-		return withToolFieldManager(namespacedPath("v1", "serviceaccounts", project, ""))
+		return withToolFieldManager(rhoai.NamespacedPath("v1", "serviceaccounts", project, ""))
 	case tokenPartRole:
-		return withToolFieldManager(namespacedPath("rbac.authorization.k8s.io/v1", "roles", project, ""))
+		return withToolFieldManager(rhoai.NamespacedPath("rbac.authorization.k8s.io/v1", "roles", project, ""))
 	case tokenPartBinding:
-		return withToolFieldManager(namespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", project, ""))
+		return withToolFieldManager(rhoai.NamespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", project, ""))
 	}
-	return withToolFieldManager(namespacedPath("v1", "secrets", project, ""))
+	return withToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, ""))
 }
 
 // tokenObjectPath is the path of the ServiceAccount, Role or RoleBinding;

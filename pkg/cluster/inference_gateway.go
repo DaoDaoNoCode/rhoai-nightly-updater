@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -386,11 +387,11 @@ func gatewayOwned(meta kube.ObjectMeta) bool {
 func gatewayObjectPath(kind string) string {
 	switch kind {
 	case "GatewayClass":
-		return clusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "openshift-ai-inference")
+		return rhoai.ClusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "openshift-ai-inference")
 	case "ConfigMap":
-		return namespacedPath("v1", "configmaps", "openshift-ingress", "openshift-ai-inference-options")
+		return rhoai.NamespacedPath("v1", "configmaps", "openshift-ingress", "openshift-ai-inference-options")
 	case "Gateway":
-		return namespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", "openshift-ai-inference")
+		return rhoai.NamespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", "openshift-ai-inference")
 	}
 	return ""
 }
@@ -400,11 +401,11 @@ func gatewayObjectPath(kind string) string {
 func gatewayCreatePath(kind string) (string, bool) {
 	switch kind {
 	case "GatewayClass":
-		return withToolFieldManager(clusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "")), true
+		return withToolFieldManager(rhoai.ClusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "")), true
 	case "ConfigMap":
-		return withToolFieldManager(namespacedPath("v1", "configmaps", "openshift-ingress", "")), true
+		return withToolFieldManager(rhoai.NamespacedPath("v1", "configmaps", "openshift-ingress", "")), true
 	case "Gateway":
-		return withToolFieldManager(namespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", "")), true
+		return withToolFieldManager(rhoai.NamespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", "")), true
 	}
 	return "", false
 }
@@ -452,7 +453,7 @@ func clusterAppsDomain(c *Client) (string, error) {
 			Domain string `json:"domain"`
 		} `json:"spec"`
 	}
-	if err := c.GetInto(clusterPath("config.openshift.io/v1", "ingresses", "cluster"), &ing); err != nil {
+	if err := c.GetInto(rhoai.ClusterPath("config.openshift.io/v1", "ingresses", "cluster"), &ing); err != nil {
 		if kube.IsDecodeError(err) {
 			return "", fmt.Errorf("parse the cluster's ingress configuration: %w", err)
 		}
@@ -476,7 +477,7 @@ func defaultIngressCertificate(c *Client) (string, error) {
 			} `json:"defaultCertificate"`
 		} `json:"spec"`
 	}
-	found, err := c.GetIntoOptional(namespacedPath("operator.openshift.io/v1", "ingresscontrollers", "openshift-ingress-operator", "default"), &ic)
+	found, err := c.GetIntoOptional(rhoai.NamespacedPath("operator.openshift.io/v1", "ingresscontrollers", "openshift-ingress-operator", "default"), &ic)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return "", fmt.Errorf("parse IngressController %s/default: %w", ingressOperatorNS, err)
@@ -579,14 +580,14 @@ func authPolicyState(c *Client) string {
 // OpenShift's ingress namespace, where this app may list AuthPolicies
 // (read-only). Elsewhere it is unknown.
 func authPolicyStateOf(c *Client, ns, gateway string) string {
-	versions := servedVersions(c, kuadrantGroup, []string{"v1"})
+	versions := rhoai.ServedVersions(c, kuadrantGroup, []string{"v1"})
 	if len(versions.Versions) == 0 {
 		return ""
 	}
 	var body []byte
 	var err error
 	if ns == inferenceGatewayNamespace && gateway == inferenceGatewayName {
-		body, _, err = c.Get(namespacedPath("kuadrant.io/"+versions.Versions[0], "authpolicies", "openshift-ingress", "openshift-ai-inference-authn"))
+		body, _, err = c.Get(rhoai.NamespacedPath("kuadrant.io/"+versions.Versions[0], "authpolicies", "openshift-ingress", "openshift-ai-inference-authn"))
 		if kube.IsK8sNotFound(err) {
 			return "missing"
 		}
@@ -595,7 +596,7 @@ func authPolicyStateOf(c *Client, ns, gateway string) string {
 			return ""
 		}
 		var list []byte
-		list, _, err = c.Get(namespacedPath("kuadrant.io/"+versions.Versions[0], "authpolicies", "openshift-ingress", ""))
+		list, _, err = c.Get(rhoai.NamespacedPath("kuadrant.io/"+versions.Versions[0], "authpolicies", "openshift-ingress", ""))
 		if err == nil {
 			var items struct {
 				Items []json.RawMessage `json:"items"`
@@ -651,7 +652,7 @@ func dnsPublished(c *Client, host string) string {
 			} `json:"zones"`
 		} `json:"status"`
 	}
-	if c.ListInto(namespacedPath("ingress.operator.openshift.io/v1", "dnsrecords", "openshift-ingress", ""), &items) != nil {
+	if c.ListInto(rhoai.NamespacedPath("ingress.operator.openshift.io/v1", "dnsrecords", "openshift-ingress", ""), &items) != nil {
 		return ""
 	}
 	for _, rec := range items {
@@ -695,14 +696,14 @@ func (g kserveGateway) isInferenceGateway() bool {
 // readKServeGateway reads KServe's default gateway. A missing ConfigMap or
 // key is unknown, not an error; err is set when it cannot be read.
 func readKServeGateway(c *Client) (kserveGateway, error) {
-	ns, err := appsNamespace(c)
-	if errors.Is(err, errNoDSCInitialization) {
+	ns, err := rhoai.AppsNamespace(c)
+	if errors.Is(err, rhoai.ErrNoDSCInitialization) {
 		return kserveGateway{}, nil // no RHOAI, so no ConfigMap: unknown, as when it is missing
 	}
 	if err != nil {
 		return kserveGateway{}, fmt.Errorf("find ConfigMap %s: %w", kserveConfigMap, err)
 	}
-	body, found, err := c.GetOptional(namespacedPath("v1", "configmaps", ns, kserveConfigMap))
+	body, found, err := c.GetOptional(rhoai.NamespacedPath("v1", "configmaps", ns, kserveConfigMap))
 	if err != nil {
 		return kserveGateway{}, fmt.Errorf("read ConfigMap %s/%s: %w", ns, kserveConfigMap, err)
 	}
@@ -799,7 +800,7 @@ func notAllowedModels(c *Client, models []llmisvcObject, def kserveGateway, gw g
 			var labels map[string]string
 			readable := true
 			if !byName {
-				meta, ok, err := kube.ReadObjectMeta(c, clusterPath("v1", "namespaces", ns))
+				meta, ok, err := kube.ReadObjectMeta(c, rhoai.ClusterPath("v1", "namespaces", ns))
 				readable = err == nil && ok
 				labels = meta.Labels
 			}
@@ -942,7 +943,7 @@ func otherGatewaysOfClass(c *Client) ([]string, error) {
 			GatewayClassName string `json:"gatewayClassName"`
 		} `json:"spec"`
 	}
-	if err := c.ListInto(clusterPath("gateway.networking.k8s.io/v1", "gateways", ""), &items); err != nil {
+	if err := c.ListInto(rhoai.ClusterPath("gateway.networking.k8s.io/v1", "gateways", ""), &items); err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the Gateways: %w", err)
 		}
@@ -967,7 +968,7 @@ func attachedRoutesReason(n int) string {
 // gatewayServiceWarning checks that the gateway's Service has the name the
 // "https" listener's hostname assumes ("" when it does, or cannot be read).
 func gatewayServiceWarning(c *Client) string {
-	body, found, err := c.GetOptional(namespacedPath("v1", "services", "openshift-ingress", "openshift-ai-inference-openshift-ai-inference"))
+	body, found, err := c.GetOptional(rhoai.NamespacedPath("v1", "services", "openshift-ingress", "openshift-ai-inference-openshift-ai-inference"))
 	missing := fmt.Sprintf("The gateway's Service is not named %s, so the in-cluster listener (%s) does not match it and callers inside the cluster (the dashboard's playground) may be refused. Report this with the output of `oc get svc -n %s -l %s=%s`.", inferenceGatewayService, inferenceGatewayInternalHost, inferenceGatewayNamespace, gatewayNameLabel, inferenceGatewayName)
 	if err != nil {
 		return ""

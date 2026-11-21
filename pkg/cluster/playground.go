@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -542,7 +543,7 @@ func maasSubscriptionsByModel(c *Client) map[string][]string {
 			} `json:"modelRefs"`
 		} `json:"spec"`
 	}
-	if c.ListInto(namespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""), &items) != nil {
+	if c.ListInto(rhoai.NamespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""), &items) != nil {
 		return out
 	}
 	for _, s := range items {
@@ -592,7 +593,7 @@ func readPlaygroundServer(c *Client, project, name string) (kube.ObjectMeta, boo
 	if name != playgroundServerName {
 		return kube.ObjectMeta{}, false, nil
 	}
-	r, err := getServed(c, "ogx.io", "/apis/ogx.io/%s/namespaces/"+project+"/ogxservers/"+playgroundServerName, []string{"v1beta1"})
+	r, err := rhoai.GetServed(c, "ogx.io", "/apis/ogx.io/%s/namespaces/"+project+"/ogxservers/"+playgroundServerName, []string{"v1beta1"})
 	if kube.IsK8sNotFound(err) {
 		return kube.ObjectMeta{}, false, nil
 	}
@@ -640,7 +641,7 @@ func readPlaygroundRecords(c *Client) (map[string]playgroundRecord, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.Bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
@@ -674,7 +675,7 @@ func writePlaygroundRecords(c *Client, records map[string]playgroundRecord) erro
 		"data":       map[string]any{playgroundRecordKey: string(data)},
 	})
 	query := url.Values{"fieldManager": {playgroundRecordManager}, "force": {"true"}}
-	if _, _, err := c.Bookkeeping().Do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if _, _, err := c.Bookkeeping().Do(http.MethodPatch, rhoai.NamespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
 		return fmt.Errorf("record this tool's playgrounds: %w", err)
 	}
 	return nil
@@ -742,7 +743,7 @@ const genAIUIDeployment = "gen-ai-ui"
 // genAIUIState reads Deployment gen-ai-ui: "available", "unavailable",
 // "missing", or "" when it cannot be read.
 func genAIUIState(c *Client) string {
-	ns, err := appsNamespace(c)
+	ns, err := rhoai.AppsNamespace(c)
 	if err != nil {
 		slog.Debug("cannot tell where the gen-ai-ui Deployment runs", "error", err)
 		return ""
@@ -774,7 +775,7 @@ func genAIUIState(c *Client) string {
 
 // playgroundClusterParts fills what the ServiceAccount reads.
 func playgroundClusterParts(c *Client, st *types.PlaygroundStatus) {
-	if dsc, err := readFirstDSC(c); err == nil {
+	if dsc, err := rhoai.ReadFirstDSC(c); err == nil {
 		st.Blocked = componentBlock(dsc, playgroundComponent)
 		st.OperatorReady, st.OperatorMessage = componentReadyCondition(dsc.Object, playgroundComponent.keys)
 	} else {

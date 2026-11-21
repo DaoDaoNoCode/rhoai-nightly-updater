@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // live36Operator is one module operator as the RHOAI 3.6 platform applies
@@ -78,7 +80,7 @@ func rule(groups, resources, verbs []string, names ...string) map[string]any {
 	return r
 }
 
-var componentsGroup = []string{componentAPIGroup}
+var componentsGroup = []string{rhoai.ComponentAPIGroup}
 
 func platformDeployment(name, sa, ownerAPIVersion, ownerKind, ownerName string) map[string]any {
 	meta := map[string]any{"name": name, "namespace": liveAppsNS, "labels": map[string]any{"platform.opendatahub.io/part-of": "platform", "app.kubernetes.io/name": name}}
@@ -121,7 +123,7 @@ func newLive36ModuleOperatorWorld() *moduleOperatorWorld {
 		map[string]any{"metadata": map[string]any{"name": "odh-observability"}, "rules": []any{rule([]string{"monitoring.coreos.com"}, []string{"*"}, []string{"*"})}},
 	)
 	w.bindings = append(w.bindings,
-		crb("rhods-operator.3.6.0-6kq8d", "rhods-operator.3.6.0-6kq8d", saSubject(SubNS, "redhat-ods-operator-controller-manager")),
+		crb("rhods-operator.3.6.0-6kq8d", "rhods-operator.3.6.0-6kq8d", saSubject(rhoai.SubNS, "redhat-ods-operator-controller-manager")),
 		crb("cluster-admin", "cluster-admin", map[string]any{"kind": "Group", "name": "system:masters"}, saSubject("openshift-monitoring", "cluster-monitoring-operator")),
 		crb("odh-observability", "odh-observability", saSubject(liveAppsNS, "odh-observability")),
 	)
@@ -144,9 +146,9 @@ func newLive36ModuleOperatorWorld() *moduleOperatorWorld {
 	w.deployments = append(w.deployments,
 		platformDeployment("odh-observability", "odh-observability", "config.opendatahub.io/v1alpha1", "Platform", "default"),
 		// Operands: owned by their module CR.
-		platformDeployment("trustyai-service-operator-controller-manager", "trustyai-service-operator-controller-manager", componentAPIGroup+"/v1alpha1", "TrustyAI", "default-trustyai"),
-		platformDeployment("kuberay-operator", "kuberay-operator", componentAPIGroup+"/v1alpha1", "Ray", "default-ray"),
-		platformDeployment("rhods-dashboard", "rhods-dashboard", componentAPIGroup+"/v1alpha1", "Dashboard", "default-dashboard"),
+		platformDeployment("trustyai-service-operator-controller-manager", "trustyai-service-operator-controller-manager", rhoai.ComponentAPIGroup+"/v1alpha1", "TrustyAI", "default-trustyai"),
+		platformDeployment("kuberay-operator", "kuberay-operator", rhoai.ComponentAPIGroup+"/v1alpha1", "Ray", "default-ray"),
+		platformDeployment("rhods-dashboard", "rhods-dashboard", rhoai.ComponentAPIGroup+"/v1alpha1", "Dashboard", "default-dashboard"),
 	)
 	return w
 }
@@ -202,8 +204,8 @@ func serveLive36Kinds(f *fakeAPI) {
 // serveInstalledOperatorOwningKueue serves the installed 3.6 CSV, which owns
 // the Kueue CRD (the bundle ships it; config/rhoai/manifests/bases).
 func serveInstalledOperatorOwningKueue(f *fakeAPI) {
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), 200,
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), 200,
 		`{"metadata":{"name":"rhods-operator.3.6.0"},"spec":{"version":"3.6.0","customresourcedefinitions":{"owned":[{"name":"datascienceclusters.datasciencecluster.opendatahub.io"},{"name":"kueues.components.platform.opendatahub.io"}]},"install":{"spec":{"deployments":[{"name":"rhods-operator"}]}}},"status":{"phase":"Succeeded"}}`)
 }
 
@@ -231,7 +233,7 @@ func TestModuleOperatorFinderLive36(t *testing.T) {
 		}
 	}
 	op, why, err := finder.find("kueue", "default-kueue")
-	if err != nil || op == nil || !op.RHOAI || op.ref() != SubNS+"/rhods-operator" || !strings.Contains(op.Via, "owns CRD kueues.components.platform.opendatahub.io") {
+	if err != nil || op == nil || !op.RHOAI || op.ref() != rhoai.SubNS+"/rhods-operator" || !strings.Contains(op.Via, "owns CRD kueues.components.platform.opendatahub.io") {
 		t.Fatalf("kueue: %+v %q %v", op, why, err)
 	}
 	// A kind nothing in the namespace may update, and that the CSV does not
@@ -263,7 +265,7 @@ func TestModuleOperatorFinderUnknown(t *testing.T) {
 			func(w *moduleOperatorWorld) {
 				o := liveOperator("mcplifecycleoperator")
 				w.dropDeployment(o.Deployment)
-				w.deployments = append(w.deployments, platformDeployment(o.Deployment, o.ServiceAccount, componentAPIGroup+"/v1alpha1", "MCPLifecycleOperator", "default"))
+				w.deployments = append(w.deployments, platformDeployment(o.Deployment, o.ServiceAccount, rhoai.ComponentAPIGroup+"/v1alpha1", "MCPLifecycleOperator", "default"))
 			}},
 		{"cluster-admin Deployment does not stand in for a gone operator", "trustyai", "default-trustyai", "no Deployment owned by the Platform runs as it", "",
 			func(w *moduleOperatorWorld) {
@@ -444,13 +446,13 @@ func TestStuckModuleNamesDiscoveredOperator(t *testing.T) {
 const servicesV1 = "/apis/services.platform.opendatahub.io/v1alpha1/"
 
 func serveDatabaseService(f *fakeAPI, w *moduleOperatorWorld, deployment bool) {
-	f.json("GET", "/apis/"+servicesAPIGroup, 200, `{"kind":"APIGroup","name":"services.platform.opendatahub.io","preferredVersion":{"groupVersion":"services.platform.opendatahub.io/v1alpha1","version":"v1alpha1"}}`)
+	f.json("GET", "/apis/"+rhoai.ServicesAPIGroup, 200, `{"kind":"APIGroup","name":"services.platform.opendatahub.io","preferredVersion":{"groupVersion":"services.platform.opendatahub.io/v1alpha1","version":"v1alpha1"}}`)
 	f.obj("/apis/services.platform.opendatahub.io/v1alpha1", map[string]any{"resources": []any{
 		map[string]any{"name": "databaseservices", "kind": "DatabaseService", "verbs": []string{"get", "list", "patch", "update"}},
 		map[string]any{"name": "databaseservices/status", "kind": "DatabaseService", "verbs": []string{"get", "patch", "update"}},
 		map[string]any{"name": "auths", "kind": "Auth", "verbs": []string{"get", "list", "patch", "update"}},
 	}})
-	sg := []string{servicesAPIGroup}
+	sg := []string{rhoai.ServicesAPIGroup}
 	w.roles = append(w.roles, map[string]any{"metadata": map[string]any{"name": "databaseservice-manager-role"}, "rules": []any{
 		rule(sg, []string{"databaseservices"}, []string{"get", "list", "update", "watch"}),
 		rule(sg, []string{"databaseservices/finalizers"}, []string{"update"}),

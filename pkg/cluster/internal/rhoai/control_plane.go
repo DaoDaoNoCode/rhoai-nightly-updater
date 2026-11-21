@@ -1,4 +1,4 @@
-package cluster
+package rhoai
 
 import (
 	_ "embed"
@@ -35,7 +35,7 @@ const (
 	ControlPlaneSelfManaged = "self-managed"
 )
 
-// readControlPlane reads Infrastructure "cluster" (config.openshift.io/v1)
+// ReadControlPlane reads Infrastructure "cluster" (config.openshift.io/v1)
 // and, unless the control plane is hosted, the validating webhook
 // configurations, and returns ControlPlaneHosted, ControlPlaneManaged or
 // ControlPlaneSelfManaged. A failed read, or a missing
@@ -47,15 +47,15 @@ const (
 // build/resources.go:1022-1078 packages every HypershiftEnabled webhook for
 // hosted clusters), so the webhooks alone would call a hosted cluster
 // managed (TestNodeSetupHostedCheckComesFirst).
-func readControlPlane(c *Client) (string, error) {
-	hosted, err := readTopologyHosted(c)
+func ReadControlPlane(c *kube.Client) (string, error) {
+	hosted, err := ReadTopologyHosted(c)
 	if err != nil {
 		return "", err
 	}
 	if hosted {
 		return ControlPlaneHosted, nil
 	}
-	managed, err := readRedHatManaged(c)
+	managed, err := ReadRedHatManaged(c)
 	if err != nil {
 		return "", err
 	}
@@ -65,15 +65,15 @@ func readControlPlane(c *Client) (string, error) {
 	return ControlPlaneSelfManaged, nil
 }
 
-// readTopologyHosted reads Infrastructure "cluster": whether its
+// ReadTopologyHosted reads Infrastructure "cluster": whether its
 // status.controlPlaneTopology is External (a hosted control plane).
-func readTopologyHosted(c *Client) (bool, error) {
+func ReadTopologyHosted(c *kube.Client) (bool, error) {
 	var infra struct {
 		Status struct {
 			ControlPlaneTopology string `json:"controlPlaneTopology"`
 		} `json:"status"`
 	}
-	if err := c.GetInto(clusterPath("config.openshift.io/v1", "infrastructures", "cluster"), &infra); err != nil {
+	if err := c.GetInto(ClusterPath("config.openshift.io/v1", "infrastructures", "cluster"), &infra); err != nil {
 		if kube.IsDecodeError(err) {
 			return false, fmt.Errorf("parse Infrastructure cluster: %w", err)
 		}
@@ -98,16 +98,16 @@ func readTopologyHosted(c *Client) (bool, error) {
 // registry.redhat.io/rhoai.
 const redHatManagedWebhookSuffix = ".managed.openshift.io"
 
-// readRedHatManaged lists the ValidatingWebhookConfigurations (the
+// ReadRedHatManaged lists the ValidatingWebhookConfigurations (the
 // ServiceAccount's existing list rule, also used by the stale-webhook
 // check): whether one holds a Red Hat SRE webhook.
-func readRedHatManaged(c *Client) (bool, error) {
+func ReadRedHatManaged(c *kube.Client) (bool, error) {
 	var items []struct {
 		Webhooks []struct {
 			Name string `json:"name"`
 		} `json:"webhooks"`
 	}
-	if err := c.ListInto(clusterPath("admissionregistration.k8s.io/v1", "validatingwebhookconfigurations", ""), &items); err != nil {
+	if err := c.ListInto(ClusterPath("admissionregistration.k8s.io/v1", "validatingwebhookconfigurations", ""), &items); err != nil {
 		if kube.IsDecodeError(err) {
 			return false, fmt.Errorf("parse validating webhook configurations: %w", err)
 		}
@@ -125,19 +125,19 @@ func readRedHatManaged(c *Client) (bool, error) {
 
 // The topology of a cluster does not change while the app runs; a read
 // error is not cached, so the next status poll tries again.
-var controlPlaneCache = kube.NewLRU[string, string](8)
+var ControlPlaneCache = kube.NewLRU[string, string](8)
 
-// cachedControlPlane is readControlPlane, cached per cluster; "" when it
+// CachedControlPlane is readControlPlane, cached per cluster; "" when it
 // cannot be read (unknown).
-func cachedControlPlane(c *Client) string {
-	if cp, ok := controlPlaneCache.Get(c.BaseURL()); ok {
+func CachedControlPlane(c *kube.Client) string {
+	if cp, ok := ControlPlaneCache.Get(c.BaseURL()); ok {
 		return cp
 	}
-	cp, err := readControlPlane(c)
+	cp, err := ReadControlPlane(c)
 	if err != nil {
 		return ""
 	}
-	controlPlaneCache.Add(c.BaseURL(), cp, time.Hour)
+	ControlPlaneCache.Add(c.BaseURL(), cp, time.Hour)
 	return cp
 }
 
@@ -194,28 +194,28 @@ var nodePullSecretRemoveScript string
 // final newline.
 var NodePullSecretRemoveCommand = strings.TrimSpace(nodePullSecretRemoveScript)
 
-// nodePullInfo is the nodes' side of the pull secret for a cluster whose
+// NodePullInfo is the nodes' side of the pull secret for a cluster whose
 // nodes may not use additional-pull-secret (controlPlane is
 // ControlPlaneSelfManaged, ControlPlaneManaged or "" for unknown); nil on
 // a hosted control plane. cs is the nightly CatalogSource.
-func nodePullInfo(controlPlane string, cs types.CatalogSourceInfo) *types.NodePullSecretInfo {
+func NodePullInfo(controlPlane string, cs types.CatalogSourceInfo) *types.NodePullSecretInfo {
 	if controlPlane == ControlPlaneHosted {
 		return nil
 	}
-	return &types.NodePullSecretInfo{Command: NodePullSecretCommand, RemoveCommand: NodePullSecretRemoveCommand, Pulled: catalogPulledFromQuay(cs)}
+	return &types.NodePullSecretInfo{Command: NodePullSecretCommand, RemoveCommand: NodePullSecretRemoveCommand, Pulled: CatalogPulledFromQuay(cs)}
 }
 
 // catalogPulledFromQuay: the nightly CatalogSource is READY on a
 // quay.io/rhoai image, so a node has pulled from quay.io/rhoai with the
 // nodes' own pull secret (its registry pod runs that image).
-func catalogPulledFromQuay(cs types.CatalogSourceInfo) bool {
+func CatalogPulledFromQuay(cs types.CatalogSourceInfo) bool {
 	return cs.Exists && cs.State == "READY" && strings.HasPrefix(cs.Image, "quay.io/rhoai/")
 }
 
-// nodePullAdvice is what a catalog image pull failure tells the user to
+// NodePullAdvice is what a catalog image pull failure tells the user to
 // check, for the cluster's control plane.
-func nodePullAdvice(c *Client) string {
-	return nodePullAdviceFor(cachedControlPlane(c))
+func NodePullAdvice(c *kube.Client) string {
+	return nodePullAdviceFor(CachedControlPlane(c))
 }
 
 // The cluster setup's pull secret item, where the command is.
@@ -237,8 +237,8 @@ func nodePullAdviceFor(controlPlane string) string {
 	}
 }
 
-// gitOpsProfilePullAdvice is the gitops profile's: it does not set up or
+// GitOpsProfilePullAdvice is the gitops profile's: it does not set up or
 // read pull secrets (gitOpsProfileNoPullSecret).
-func gitOpsProfilePullAdvice(*Client) string {
+func GitOpsProfilePullAdvice(*kube.Client) string {
 	return "Check that the cluster's pull secrets, which Git or ACM manage here, have access to quay.io/rhoai (the nodes pull with openshift-config/pull-secret, and on a hosted control plane also with kube-system/additional-pull-secret) and that the image exists"
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -117,7 +118,7 @@ func TestMirrorCreateOnSelfManaged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !plan.Ready || plan.ControlPlane != ControlPlaneSelfManaged || len(plan.Changes) != 1 || !strings.Contains(plan.NodeImpact, "without draining or rebooting") || !strings.Contains(plan.Undo, "oc delete imagedigestmirrorset rhoai-quay-mirror") {
+	if !plan.Ready || plan.ControlPlane != rhoai.ControlPlaneSelfManaged || len(plan.Changes) != 1 || !strings.Contains(plan.NodeImpact, "without draining or rebooting") || !strings.Contains(plan.Undo, "oc delete imagedigestmirrorset rhoai-quay-mirror") {
 		t.Fatalf("plan %+v", plan)
 	}
 	if w := writes(f); len(w) != 0 {
@@ -220,15 +221,15 @@ func TestNodeSetupPerPlatform(t *testing.T) {
 		wantCode string // "" = ready
 		wantCP   string
 	}{
-		{"hosted: mirror", "External", false, NodeSetupMirrorCreate, "hosted", ControlPlaneHosted},
-		{"hosted: pull secret", "External", false, NodeSetupPullAdd, "hosted", ControlPlaneHosted},
-		{"hosted with SRE webhooks", "External", true, NodeSetupMirrorCreate, "hosted", ControlPlaneHosted},
+		{"hosted: mirror", "External", false, NodeSetupMirrorCreate, "hosted", rhoai.ControlPlaneHosted},
+		{"hosted: pull secret", "External", false, NodeSetupPullAdd, "hosted", rhoai.ControlPlaneHosted},
+		{"hosted with SRE webhooks", "External", true, NodeSetupMirrorCreate, "hosted", rhoai.ControlPlaneHosted},
 		{"topology unreadable: mirror", "", false, NodeSetupMirrorCreate, "unknown_topology", ""},
 		{"topology unreadable: pull secret removal", "", false, NodeSetupPullRemove, "unknown_topology", ""},
-		{"managed classic: mirror allowed", "HighlyAvailable", true, NodeSetupMirrorCreate, "", ControlPlaneManaged},
-		{"managed classic: pull secret refused", "HighlyAvailable", true, NodeSetupPullAdd, "managed", ControlPlaneManaged},
-		{"managed classic: pull secret removal refused", "HighlyAvailable", true, NodeSetupPullRemove, "managed", ControlPlaneManaged},
-		{"single node", "SingleReplica", false, NodeSetupPullAdd, "", ControlPlaneSelfManaged},
+		{"managed classic: mirror allowed", "HighlyAvailable", true, NodeSetupMirrorCreate, "", rhoai.ControlPlaneManaged},
+		{"managed classic: pull secret refused", "HighlyAvailable", true, NodeSetupPullAdd, "managed", rhoai.ControlPlaneManaged},
+		{"managed classic: pull secret removal refused", "HighlyAvailable", true, NodeSetupPullRemove, "managed", rhoai.ControlPlaneManaged},
+		{"single node", "SingleReplica", false, NodeSetupPullAdd, "", rhoai.ControlPlaneSelfManaged},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := nodeSetupFake(t, tc.topology, tc.managed)
@@ -268,7 +269,7 @@ func TestNodeSetupHostedCheckComesFirst(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if plan.ControlPlane != ControlPlaneHosted || plan.RefusalCode != "hosted" {
+			if plan.ControlPlane != rhoai.ControlPlaneHosted || plan.RefusalCode != "hosted" {
 				t.Fatalf("plan %+v", plan)
 			}
 			if n := len(f.callsTo(http.MethodGet, webhookConfigsPath)); n != 0 {
@@ -281,7 +282,7 @@ func TestNodeSetupHostedCheckComesFirst(t *testing.T) {
 	}
 	t.Run("the status's control plane", func(t *testing.T) {
 		f, c := nodeSetupFake(t, "External", true)
-		if cp, err := readControlPlane(c); err != nil || cp != ControlPlaneHosted {
+		if cp, err := rhoai.ReadControlPlane(c); err != nil || cp != rhoai.ControlPlaneHosted {
 			t.Fatalf("readControlPlane = %q, %v", cp, err)
 		}
 		if n := len(f.callsTo(http.MethodGet, webhookConfigsPath)); n != 0 {

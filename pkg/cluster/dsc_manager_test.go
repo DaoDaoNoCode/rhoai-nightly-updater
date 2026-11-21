@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -57,8 +58,8 @@ func managerWorld(t *testing.T, edit func(dsc map[string]any)) (*resourceFake, *
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.put(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), map[string]any{"status": map[string]any{"installedCSV": "rhods-operator.3.6.0"}})
-	f.put(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), map[string]any{
+	f.put(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), map[string]any{"status": map[string]any{"installedCSV": "rhods-operator.3.6.0"}})
+	f.put(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), map[string]any{
 		"metadata": map[string]any{"annotations": map[string]any{"alm-examples": string(alm)}},
 		"spec": map[string]any{"version": "3.6.0", "install": map[string]any{"spec": map[string]any{
 			"deployments": []any{map[string]any{"name": "rhods-operator"}}}}},
@@ -437,7 +438,7 @@ func TestDSCManagerComparisonWithoutAReleaseDefault(t *testing.T) {
 	f, c := managerWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.dashboard.standard", nil)
 	})
-	csv := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0")
+	csv := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0")
 	obj := f.get(csv)
 	setPath(t, obj, "metadata.annotations.alm-examples", "[]")
 	f.put(csv, obj)
@@ -885,7 +886,7 @@ func TestBuildJSONPatchGroupsMissingObjects(t *testing.T) {
 func TestHardResetDeleteRule(t *testing.T) {
 	has := func(path string) bool {
 		for _, g := range templateGrantsFrom(t, path) {
-			if slices.Contains(g.rule.APIGroups, dscGroup) && slices.Contains(g.rule.Resources, "datascienceclusters") && slices.Contains(g.rule.Verbs, "delete") {
+			if slices.Contains(g.rule.APIGroups, rhoai.DSCGroup) && slices.Contains(g.rule.Resources, "datascienceclusters") && slices.Contains(g.rule.Verbs, "delete") {
 				return true
 			}
 		}

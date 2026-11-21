@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -26,7 +27,7 @@ type featureComponent struct {
 
 // keyIn is the key the component is written with in the DataScienceCluster
 // as read: the one it names, else the read version's own.
-func (fc featureComponent) keyIn(r dscRead) string {
+func (fc featureComponent) keyIn(r rhoai.DSCRead) string {
 	for _, key := range fc.keys {
 		if _, found := componentManagement(r.Object, key); found {
 			return key
@@ -74,12 +75,12 @@ func componentManagement(dsc map[string]any, key string) (state string, found bo
 // pipeline server or MLflow then creates a CR that never starts. A
 // DataScienceCluster that does not name the component cannot tell, so
 // nothing is blocked.
-func componentBlock(r dscRead, fc featureComponent) *types.ComponentBlock {
+func componentBlock(r rhoai.DSCRead, fc featureComponent) *types.ComponentBlock {
 	switch r.State {
-	case DSCStateNoCRD:
+	case rhoai.DSCStateNoCRD:
 		return &types.ComponentBlock{Component: fc.keys[0],
 			Reason: fmt.Sprintf("%s is not available: RHOAI is not installed on this cluster (it has no DataScienceCluster API). A cluster-admin installs it on the Status page.", fc.feature)}
-	case DSCStateNoDSC:
+	case rhoai.DSCStateNoDSC:
 		return &types.ComponentBlock{Component: fc.keys[0],
 			Reason: fmt.Sprintf("%s is not turned on: this cluster has no DataScienceCluster. A cluster-admin creates one on the Components page.", fc.feature)}
 	}
@@ -108,7 +109,7 @@ func componentBlock(r dscRead, fc featureComponent) *types.ComponentBlock {
 // that cannot be read blocks nothing: the setup's own checks (the CRD)
 // still apply.
 func setupComponentBlock(c *Client, fc featureComponent) *types.ComponentBlock {
-	r, err := readFirstDSC(c)
+	r, err := rhoai.ReadFirstDSC(c)
 	if err != nil {
 		slog.Debug("cannot read the DataScienceCluster for a setup check", "feature", fc.feature, "error", err)
 		return nil

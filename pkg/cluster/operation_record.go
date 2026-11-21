@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -63,7 +64,7 @@ func readDSCHardResetRecord(c *Client) (*types.DSCHardResetRecord, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.Bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName), &cm)
+	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName), &cm)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse operation record: %w", err)
@@ -107,7 +108,7 @@ func ReadOperationRecord(c *Client) (*OperationRecord, error) {
 		} `json:"metadata"`
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.Bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName), &cm)
+	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName), &cm)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse operation record: %w", err)
@@ -156,7 +157,7 @@ func SaveOperationMarker(c *Client, marker *types.OperationMarker) error {
 		"metadata":   map[string]any{"name": operationConfigMapName, "namespace": ns},
 		"data":       map[string]any{operationKey: value},
 	}
-	if _, _, err := c.Bookkeeping().Apply(namespacedPath("v1", "configmaps", ns, operationConfigMapName), cm); err != nil {
+	if _, _, err := c.Bookkeeping().Apply(rhoai.NamespacedPath("v1", "configmaps", ns, operationConfigMapName), cm); err != nil {
 		return fmt.Errorf("save operation marker: %w", err)
 	}
 	return nil
@@ -266,7 +267,7 @@ func writeOperationRecord(c *Client, rec *OperationRecord, data map[string]strin
 		if err != nil {
 			return err
 		}
-		_, _, err = c.Bookkeeping().Post(namespacedPath("v1", "configmaps", ns, ""), cm)
+		_, _, err = c.Bookkeeping().Post(rhoai.NamespacedPath("v1", "configmaps", ns, ""), cm)
 		return err
 	}
 	return patchOperationRecord(c, rec.resourceVersion, data)
@@ -283,7 +284,7 @@ func patchOperationRecord(c *Client, resourceVersion string, data map[string]str
 		body["metadata"] = map[string]any{"resourceVersion": resourceVersion}
 	}
 	ns := getActivityNamespace()
-	err := c.Bookkeeping().PatchJSON(namespacedPath("v1", "configmaps", ns, operationConfigMapName), body)
+	err := c.Bookkeeping().PatchJSON(rhoai.NamespacedPath("v1", "configmaps", ns, operationConfigMapName), body)
 	if resourceVersion == "" && kube.IsK8sNotFound(err) {
 		return writeOperationRecord(c, &OperationRecord{}, data)
 	}

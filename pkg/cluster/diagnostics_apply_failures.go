@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // "Objects the operator cannot update": leftovers of an upgrade, downgrade
@@ -59,26 +60,6 @@ func (f applyFailure) validObject() bool {
 	return len(f.Name) <= 253 && dns1123Subdomain.MatchString(f.Name) &&
 		(f.Namespace == "" || (len(f.Namespace) <= 63 && dns1123Label.MatchString(f.Namespace))) &&
 		kindPattern.MatchString(f.Kind) && groupVersion.MatchString(f.GroupVersion)
-}
-
-// shellQuote quotes s for a POSIX shell unless it only has characters that
-// need no quoting.
-func shellQuote(s string) string {
-	if s != "" && safeShellWord.MatchString(s) {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-var safeShellWord = regexp.MustCompile(`^[A-Za-z0-9._/:=@%+,-]+$`)
-
-// shellCommand joins words into a command line, quoting each.
-func shellCommand(words ...string) string {
-	quoted := make([]string, len(words))
-	for i, w := range words {
-		quoted[i] = shellQuote(w)
-	}
-	return strings.Join(quoted, " ")
 }
 
 var (
@@ -189,7 +170,7 @@ func (f applyFailure) ocCommand(verb string, extra ...string) string {
 	if f.Namespace != "" {
 		words = append(words, "-n", f.Namespace)
 	}
-	return shellCommand(append(words, extra...)...)
+	return kube.ShellCommand(append(words, extra...)...)
 }
 
 // problemID is the ID of the problem reported for the object.
@@ -316,7 +297,7 @@ func (rf *reportedApplyFailure) has(class applyFailureClass) bool {
 
 // collectApplyFailures scans the conditions of one CR for the failures
 // keep accepts.
-func collectApplyFailures(found map[string]*reportedApplyFailure, r applyReporter, conds []dscCondition, keep func(applyFailure) bool) {
+func collectApplyFailures(found map[string]*reportedApplyFailure, r applyReporter, conds []rhoai.DSCCondition, keep func(applyFailure) bool) {
 	for _, cond := range conds {
 		if cond.Type == "Ready" && cond.Status == "False" {
 			r.NotReady = true
@@ -348,9 +329,9 @@ func collectApplyFailures(found map[string]*reportedApplyFailure, r applyReporte
 // component API, the DataScienceClusters and the module CRs (each also as
 // the raw object, by moduleScanKey and name).
 type reporterScan struct {
-	api     componentAPI
+	api     rhoai.ComponentAPI
 	found   map[string]*reportedApplyFailure
-	dscs    []dscObject
+	dscs    []rhoai.DSCObject
 	modules map[string]map[string]map[string]any
 	scanned int
 	errs    []string
@@ -365,7 +346,7 @@ func moduleScanKey(group, kind string) string { return group + "|" + kind }
 func scanApplyReporters(c *Client, keep func(applyFailure) bool) reporterScan {
 	s := reporterScan{found: map[string]*reportedApplyFailure{}, modules: map[string]map[string]map[string]any{}}
 
-	dscs, _, err := listFirstServed(c, dscGroup, dscListFmt, "datascienceclusters", dscFallbackVersions)
+	dscs, _, err := rhoai.ListFirstServed(c, rhoai.DSCGroup, rhoai.DSCListFmt, "datascienceclusters", rhoai.DSCFallbackVersions)
 	if err != nil {
 		s.errs = append(s.errs, fmt.Sprintf("DataScienceCluster: %v", err))
 	}
@@ -375,7 +356,7 @@ func scanApplyReporters(c *Client, keep func(applyFailure) bool) reporterScan {
 		collectApplyFailures(s.found, applyReporter{Kind: "DataScienceCluster", Name: d.Metadata.Name, UID: d.Metadata.UID}, d.Status.Conditions, keep)
 	}
 
-	platforms, _, err := listFirstServed(c, platformGroup, platformListFmt, "platforms", platformFallbackVersions)
+	platforms, _, err := rhoai.ListFirstServed(c, rhoai.PlatformGroup, rhoai.PlatformListFmt, "platforms", rhoai.PlatformFallbackVersions)
 	if err != nil {
 		s.errs = append(s.errs, fmt.Sprintf("Platform: %v", err))
 	}
@@ -384,7 +365,7 @@ func scanApplyReporters(c *Client, keep func(applyFailure) bool) reporterScan {
 		collectApplyFailures(s.found, applyReporter{Kind: "Platform", Name: p.Metadata.Name, UID: p.Metadata.UID, rank: 1}, p.Status.Conditions, keep)
 	}
 
-	api, err := discoverComponentAPI(c)
+	api, err := rhoai.DiscoverComponentAPI(c)
 	if err != nil {
 		s.errs = append(s.errs, err.Error())
 	}
@@ -395,9 +376,9 @@ func scanApplyReporters(c *Client, keep func(applyFailure) bool) reporterScan {
 	}
 	lists := make([]moduleList, len(api.Kinds))
 	parallelFor(len(api.Kinds), 6, func(i int) {
-		body, _, err := c.Get(api.Kinds[i].listPath())
+		body, _, err := c.Get(api.Kinds[i].ListPath())
 		if err != nil {
-			lists[i].err = fmt.Errorf("list %s: %w", api.Kinds[i].crd(), err)
+			lists[i].err = fmt.Errorf("list %s: %w", api.Kinds[i].CRD(), err)
 			return
 		}
 		var list struct {
@@ -413,7 +394,7 @@ func scanApplyReporters(c *Client, keep func(applyFailure) bool) reporterScan {
 		}
 		key := moduleScanKey(k.Group, k.Kind)
 		for _, raw := range lists[i].items {
-			var it dscObject
+			var it rhoai.DSCObject
 			var obj map[string]any
 			if json.Unmarshal(raw, &it) != nil || json.Unmarshal(raw, &obj) != nil {
 				continue
@@ -466,7 +447,7 @@ func checkApplyFailures(c *Client) checkOutput {
 // how to restart it, from the module's operator (moduleOperatorFinder); ""
 // command when the operator is not known.
 func restartGuidance(operators *moduleOperatorFinder, r applyReporter) (who, cmd string) {
-	ns, name := SubNS, SubName // the DataScienceCluster and the Platform
+	ns, name := rhoai.SubNS, rhoai.SubName // the DataScienceCluster and the Platform
 	rhoai := true
 	if r.Module != "" {
 		op, _, err := operators.find(r.Module, r.Name)
@@ -479,12 +460,12 @@ func restartGuidance(operators *moduleOperatorFinder, r applyReporter) (who, cmd
 		// The RHOAI operator's Deployment belongs to its CSV (OLM reverts
 		// edits to it), so its pod is deleted instead of a rollout restart.
 		return fmt.Sprintf("the RHOAI operator (%s/%s)", ns, name),
-			shellCommand("oc", "delete", "pod", "-n", ns, "-l", "name="+name)
+			kube.ShellCommand("oc", "delete", "pod", "-n", ns, "-l", "name="+name)
 	}
-	return fmt.Sprintf("%s/%s", ns, name), shellCommand("oc", "rollout", "restart", "deployment/"+name, "-n", ns)
+	return fmt.Sprintf("%s/%s", ns, name), kube.ShellCommand("oc", "rollout", "restart", "deployment/"+name, "-n", ns)
 }
 
-func applyFailureProblem(c *Client, api componentAPI, operators *moduleOperatorFinder, rf *reportedApplyFailure) Problem {
+func applyFailureProblem(c *Client, api rhoai.ComponentAPI, operators *moduleOperatorFinder, rf *reportedApplyFailure) Problem {
 	sort.SliceStable(rf.reporters, func(i, j int) bool { return rf.reporters[i].rank > rf.reporters[j].rank })
 	reporter := rf.reporters[0]
 	severity := "warning"
@@ -529,9 +510,9 @@ func applyFailureProblem(c *Client, api componentAPI, operators *moduleOperatorF
 			"The right value needs judgement, so there is no automatic fix.", crdRef, f.object()))
 		cmds = append(cmds, f.ocCommand("get", "-o", "yaml"))
 		if crd != "" {
-			cmds = append(cmds, shellCommand("oc", "get", "crd", crd, "-o", "jsonpath={.metadata.managedFields}"))
+			cmds = append(cmds, kube.ShellCommand("oc", "get", "crd", crd, "-o", "jsonpath={.metadata.managedFields}"))
 		} else if g := f.group(); g != "" {
-			cmds = append(cmds, shellCommand("oc", "api-resources", "--api-group="+g))
+			cmds = append(cmds, kube.ShellCommand("oc", "api-resources", "--api-group="+g))
 		}
 	}
 	recreate := rf.has(applyImmutable) || rf.has(applyControllerOwner)
@@ -576,10 +557,10 @@ func applyFailureProblem(c *Client, api componentAPI, operators *moduleOperatorF
 // crdNameFor returns the CRD of the failing object's kind when the tool
 // knows its plural: the discovered module kinds and the DSC, DSCI and
 // Platform. "" otherwise.
-func crdNameFor(api componentAPI, f applyFailure) string {
+func crdNameFor(api rhoai.ComponentAPI, f applyFailure) string {
 	group := f.group()
-	if k, ok := api.kindOf(group, f.Kind); ok {
-		return k.crd()
+	if k, ok := api.KindOf(group, f.Kind); ok {
+		return k.CRD()
 	}
 	known := map[string]string{
 		"datasciencecluster.opendatahub.io/DataScienceCluster": "datascienceclusters.datasciencecluster.opendatahub.io",

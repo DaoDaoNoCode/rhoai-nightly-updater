@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -23,11 +24,11 @@ import (
 // is not known (no DSCInitialization, or a read error); the list then holds
 // the operator namespace only, so nothing is ever allowed by a guess.
 func rolloutNamespaces(c *Client) ([]string, error) {
-	appNS, err := appsNamespace(c)
+	appNS, err := rhoai.AppsNamespace(c)
 	if err != nil {
-		return []string{SubNS}, err
+		return []string{rhoai.SubNS}, err
 	}
-	return []string{SubNS, appNS}, nil
+	return []string{rhoai.SubNS, appNS}, nil
 }
 
 // Assist-rollout unblocks exactly one situation: a RollingUpdate Deployment
@@ -190,7 +191,7 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 			} `json:"strategy"`
 		} `json:"spec"`
 	}
-	found, err := c.GetIntoOptional(namespacedPath("apps/v1", "deployments", namespace, name), &dep)
+	found, err := c.GetIntoOptional(rhoai.NamespacedPath("apps/v1", "deployments", namespace, name), &dep)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return a, fmt.Errorf("parse deployment: %w", err)
@@ -238,7 +239,7 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 	if len(dep.Spec.Selector.MatchLabels) > 0 {
 		rsQuery = url.Values{"labelSelector": {labelSelectorString(dep.Spec.Selector.MatchLabels)}}
 	}
-	rsBody, _, err := c.Do(http.MethodGet, namespacedPath("apps/v1", "replicasets", namespace, ""), "", nil, rsQuery)
+	rsBody, _, err := c.Do(http.MethodGet, rhoai.NamespacedPath("apps/v1", "replicasets", namespace, ""), "", nil, rsQuery)
 	if err != nil {
 		return a, fmt.Errorf("list replicasets: %w", err)
 	}
@@ -452,7 +453,7 @@ func isRolloutNamespace(c *Client, ns string) (ok bool, why string) {
 		return true, ""
 	}
 	if err != nil {
-		return false, fmt.Sprintf("Assist rollout only works on Deployments in %s or the applications namespace, and whether %s is the applications namespace cannot be told: %v.", SubNS, ns, err)
+		return false, fmt.Sprintf("Assist rollout only works on Deployments in %s or the applications namespace, and whether %s is the applications namespace cannot be told: %v.", rhoai.SubNS, ns, err)
 	}
 	return false, fmt.Sprintf("Assist rollout only works on Deployments in %s.", strings.Join(allowed, " or "))
 }
@@ -479,7 +480,7 @@ func patchMaxUnavailable(c *Client, namespace, name string) (rolloutAssessment, 
 			"strategy": map[string]any{"rollingUpdate": map[string]any{"maxUnavailable": 1}},
 		},
 	})
-	respBody, _, err := c.StrategicPatch(namespacedPath("apps/v1", "deployments", namespace, name), patch)
+	respBody, _, err := c.StrategicPatch(rhoai.NamespacedPath("apps/v1", "deployments", namespace, name), patch)
 	if err != nil {
 		if kube.IsK8sConflict(err) {
 			return a, false, fmt.Sprintf("%s: the Deployment changed while it was being checked; nothing was patched. Run diagnostics again.", a.target())
@@ -510,7 +511,7 @@ func AssistRollout(c *Client) (*types.OperationResponse, error) {
 	var logs []string
 	namespaces, nsErr := rolloutNamespaces(c)
 	if nsErr != nil {
-		logs = append(logs, fmt.Sprintf("Warning: the applications namespace is not known, so only %s is checked: %v", SubNS, nsErr))
+		logs = append(logs, fmt.Sprintf("Warning: the applications namespace is not known, so only %s is checked: %v", rhoai.SubNS, nsErr))
 	}
 	for _, ns := range namespaces {
 		deps, err := getDeployments(c, ns)
@@ -601,7 +602,7 @@ func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.Operation
 		return &types.OperationResponse{Success: false, Message: kube.FirstNonEmpty(why, "Unknown Deployment."), ErrorCode: "validation"}, nil
 	}
 	target := namespace + "/" + name
-	path := namespacedPath("apps/v1", "deployments", namespace, name)
+	path := rhoai.NamespacedPath("apps/v1", "deployments", namespace, name)
 	body, found, err := c.GetOptional(path)
 	if err != nil {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read Deployment %s: %v", target, err), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil

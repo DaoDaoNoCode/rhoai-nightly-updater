@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -441,7 +442,7 @@ func maasGroupProblems(c *Client, groups []string) []types.MaaSGroupProblem {
 			out = append(out, missing(g))
 			continue
 		}
-		_, found, err := kube.ReadObjectMeta(c, clusterPath("user.openshift.io/v1", "groups", url.PathEscape(g)))
+		_, found, err := kube.ReadObjectMeta(c, rhoai.ClusterPath("user.openshift.io/v1", "groups", url.PathEscape(g)))
 		switch {
 		case err != nil:
 			out = append(out, types.MaaSGroupProblem{Name: g, Message: fmt.Sprintf("Cannot check whether group %s exists (%v). Check it with oc get group %s.", g, err, shellQuoteArg(g))})

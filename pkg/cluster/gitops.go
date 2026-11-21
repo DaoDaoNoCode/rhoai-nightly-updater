@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -228,7 +229,7 @@ func readOperatorGitOps(c *Client) (operatorGitOps, error) {
 		app       *string
 		isCatalog bool
 	}{
-		{namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName), argoCatalogObject, &g.catalogArgo, &g.catalogApp, true},
+		{rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName), argoCatalogObject, &g.catalogArgo, &g.catalogApp, true},
 		{subscriptionPath(), argoSubscriptionObject, &g.subscriptionArgo, &g.subscriptionApp, false},
 	} {
 		meta, found, err := kube.ReadObjectMeta(c, r.path)
@@ -252,7 +253,7 @@ func readOperatorGitOps(c *Client) (operatorGitOps, error) {
 func (g operatorGitOps) refusal(operation, deletes string) string {
 	object, app, note := "The operator Subscription", g.subscriptionApp, g.subscriptionArgo.unconfirmedNote()
 	if app == "" {
-		object, app, note = "CatalogSource "+CatalogName, g.catalogApp, g.catalogArgo.unconfirmedNote()
+		object, app, note = "CatalogSource "+rhoai.CatalogName, g.catalogApp, g.catalogArgo.unconfirmedNote()
 	}
 	if app == "" && g.catalogACM {
 		return fmt.Sprintf("%s is managed by %s, which puts back what differs from the policy. %s deletes %s, so %s is not available here. Nothing was changed.",
@@ -270,10 +271,10 @@ func (g operatorGitOps) refusal(operation, deletes string) string {
 // when the Subscription has no channel or the catalog does not list it; read
 // errors are logged, not returned, because the rest of the status stands.
 func readCatalogServes(c *Client, sub types.SubscriptionInfo, cs types.CatalogSourceInfo, csv types.CSVInfo) *types.CatalogServes {
-	if sub.Channel == "" || sub.Source != CatalogName || !cs.Exists {
+	if sub.Channel == "" || sub.Source != rhoai.CatalogName || !cs.Exists {
 		return nil
 	}
-	channels, err := catalogChannels(c, CatalogName)
+	channels, err := catalogChannels(c, rhoai.CatalogName)
 	if err != nil {
 		slog.Warn("catalog head: reading the PackageManifest failed", "error", err)
 		return nil
@@ -307,7 +308,7 @@ func readCatalogServes(c *Client, sub types.SubscriptionInfo, cs types.CatalogSo
 		s.Installed = new(bool)
 		return s
 	}
-	meta, found, err := kube.ReadObjectMeta(c, namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, csv.Name))
+	meta, found, err := kube.ReadObjectMeta(c, rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, csv.Name))
 	if err != nil {
 		slog.Warn("catalog head: reading the installed CSV failed", "csv", csv.Name, "error", err)
 		return s
@@ -365,7 +366,7 @@ func (s catalogServing) describe(target catalogTarget) string {
 // runs image and is Ready, and how many run another image and are not
 // terminating. ok is false when the list could not be read.
 func readCatalogPods(c *Client, image string) (ready bool, stale int, ok bool) {
-	path := namespacedPath("v1", "pods", CatalogNS, "") + "?labelSelector=" + url.QueryEscape("olm.catalogSource="+CatalogName)
+	path := rhoai.NamespacedPath("v1", "pods", rhoai.CatalogNS, "") + "?labelSelector=" + url.QueryEscape("olm.catalogSource="+rhoai.CatalogName)
 	body, _, err := c.Get(path)
 	if err != nil {
 		return false, 0, false
@@ -424,11 +425,11 @@ func readCatalogPods(c *Client, image string) (ready bool, stale int, ok bool) {
 // empty; the caller keeps polling.
 func readCatalogServing(c *Client, image string, target catalogTarget) catalogServing {
 	var s catalogServing
-	if cs, err := getCatalogSource(c); err == nil {
+	if cs, err := rhoai.GetCatalogSource(c); err == nil {
 		s.image, s.state = cs.Image, cs.State
 	}
 	s.podReady, s.stalePods, _ = readCatalogPods(c, image)
-	if channels, err := catalogChannels(c, CatalogName); err == nil {
+	if channels, err := catalogChannels(c, rhoai.CatalogName); err == nil {
 		if entry := findChannel(channels, target.Channel); entry != nil {
 			s.head, _ = entry["currentCSV"].(string)
 			s.fingerprint = headFingerprint(entry)
@@ -466,7 +467,7 @@ func waitForCatalogServing(c *Client, image string, target catalogTarget, change
 			*logs = append(*logs, "  "+msg)
 			emit(UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "CatalogSource: " + msg})
 		}
-		if err := pull.check(c, CatalogName, image); err != nil {
+		if err := pull.check(c, rhoai.CatalogName, image); err != nil {
 			return false, err
 		}
 	}

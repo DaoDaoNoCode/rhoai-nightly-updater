@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Every feature that named redhat-ods-applications reads the
@@ -13,9 +15,9 @@ import (
 func TestDebugInfoUsesTheDiscoveredNamespace(t *testing.T) {
 	f, c := newFakeAPI(t)
 	serveDSCI(f, fixtureAppsNS)
-	f.json("GET", "/api/v1/namespaces/"+SubNS+"/pods", 200, `{"items":[]}`)
+	f.json("GET", "/api/v1/namespaces/"+rhoai.SubNS+"/pods", 200, `{"items":[]}`)
 	f.json("GET", "/api/v1/namespaces/"+fixtureAppsNS+"/pods", 200, `{"items":[{"metadata":{"name":"app-pod","namespace":"`+fixtureAppsNS+`"}}]}`)
-	f.json("GET", "/api/v1/namespaces/"+CatalogNS+"/pods", 200, `{"items":[]}`)
+	f.json("GET", "/api/v1/namespaces/"+rhoai.CatalogNS+"/pods", 200, `{"items":[]}`)
 	resp, err := GetDebugInfo(c)
 	if err != nil || len(resp.ApplicationPods) != 1 || len(resp.Warnings) != 0 {
 		t.Fatalf("resp=%+v err=%v", resp, err)
@@ -23,8 +25,8 @@ func TestDebugInfoUsesTheDiscoveredNamespace(t *testing.T) {
 
 	f2, c2 := newFakeAPI(t)
 	f2.status("GET", dsciV2List, 403, "Forbidden")
-	f2.json("GET", "/api/v1/namespaces/"+SubNS+"/pods", 200, `{"items":[]}`)
-	f2.json("GET", "/api/v1/namespaces/"+CatalogNS+"/pods", 200, `{"items":[]}`)
+	f2.json("GET", "/api/v1/namespaces/"+rhoai.SubNS+"/pods", 200, `{"items":[]}`)
+	f2.json("GET", "/api/v1/namespaces/"+rhoai.CatalogNS+"/pods", 200, `{"items":[]}`)
 	resp, err = GetDebugInfo(c2)
 	if err != nil || len(resp.Warnings) != 1 || !strings.Contains(resp.Warnings[0], "the applications namespace") {
 		t.Fatalf("resp=%+v err=%v", resp, err)
@@ -53,7 +55,7 @@ func TestRolloutNamespacesAreDiscovered(t *testing.T) {
 	if ok, why := isRolloutNamespace(c2, "redhat-ods-applications"); ok || !strings.Contains(why, "cannot be told") {
 		t.Fatalf("ok=%v why=%q", ok, why)
 	}
-	if ok, _ := isRolloutNamespace(c2, SubNS); !ok {
+	if ok, _ := isRolloutNamespace(c2, rhoai.SubNS); !ok {
 		t.Fatal("the operator namespace needs no discovery")
 	}
 	r, err := AssistRolloutFor(c2, "redhat-ods-applications", "x")
@@ -118,7 +120,7 @@ func TestMaaSInfraNamespaceUnknownRefuses(t *testing.T) {
 		t.Fatalf("ns=%q err=%v", ns, err)
 	}
 	serveDSCI(f, "opendatahub")
-	rhoaiNamespacesCache.Purge()
+	rhoai.NamespacesCache.Purge()
 	if ns, err := maasInfraNamespace(c); err != nil || ns != "odh-ai-gateway-infra" {
 		t.Fatalf("ns=%q err=%v", ns, err)
 	}

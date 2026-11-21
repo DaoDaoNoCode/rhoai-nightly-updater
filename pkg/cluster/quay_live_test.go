@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Explicit opt-in: reads the current cluster pull secret in memory and makes
@@ -25,7 +27,7 @@ func TestReleaseDiscoveryLiveQuay(t *testing.T) {
 		t.Fatalf("read pull secret: %v", err)
 	}
 	c, cleanup := newMockClient(map[string]mockResponse{
-		namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret"): {body: string(secret)},
+		rhoai.NamespacedPath("v1", "secrets", "kube-system", "additional-pull-secret"): {body: string(secret)},
 	})
 	defer cleanup()
 	var calls atomic.Int32

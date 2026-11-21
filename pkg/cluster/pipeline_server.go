@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -135,9 +136,9 @@ func (d dspaInfo) hasFinalizer() bool {
 func toolDSPAPath(project, name string) (string, bool) {
 	switch name {
 	case dspaName:
-		return namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, dspaName), true
+		return rhoai.NamespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, dspaName), true
 	case previousDSPAName:
-		return namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, previousDSPAName), true
+		return rhoai.NamespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, previousDSPAName), true
 	}
 	return "", false
 }
@@ -146,18 +147,18 @@ func toolDSPAPath(project, name string) (string, bool) {
 func toolDSPASecretPath(project, name string) (string, bool) {
 	switch name {
 	case dspaSecretName:
-		return namespacedPath("v1", "secrets", project, dspaSecretName), true
+		return rhoai.NamespacedPath("v1", "secrets", project, dspaSecretName), true
 	case legacyDSPASecretName:
-		return namespacedPath("v1", "secrets", project, legacyDSPASecretName), true
+		return rhoai.NamespacedPath("v1", "secrets", project, legacyDSPASecretName), true
 	}
 	return "", false
 }
 
 func dspaCollectionPath(namespace string) string {
 	if namespace == "" {
-		return clusterPath(dspaAPIGroup, "datasciencepipelinesapplications", "")
+		return rhoai.ClusterPath(dspaAPIGroup, "datasciencepipelinesapplications", "")
 	}
-	return namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", namespace, "")
+	return rhoai.NamespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", namespace, "")
 }
 
 // listDSPAs lists pipeline servers in namespace, or cluster-wide when
@@ -247,7 +248,7 @@ type routeSpec struct {
 // readRoute reads a Route; found is false when the Route (or the Route API)
 // does not exist. Any other read or parse error is returned.
 func readRoute(c *Client, namespace, name string) (routeSpec, error) {
-	body, exists, err := c.GetOptional(namespacedPath("route.openshift.io/v1", "routes", namespace, name))
+	body, exists, err := c.GetOptional(rhoai.NamespacedPath("route.openshift.io/v1", "routes", namespace, name))
 	switch {
 	case err != nil:
 		return routeSpec{}, fmt.Errorf("read Route %s: %w", name, err)
@@ -512,7 +513,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 		},
 		"spec": spec,
 	}
-	dspaPath := namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, dspaName)
+	dspaPath := rhoai.NamespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, dspaName)
 	readDSPA := func() (kube.ObjectMeta, bool, error) {
 		body, present, getErr := c.GetOptional(dspaPath)
 		if getErr != nil {
@@ -530,14 +531,14 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	// server the API server rejects leaves no secret behind.
 	writeDSPA := func(dryRun bool) (string, error) {
 		action, meta, found, err := ensureToolObject(c, fmt.Sprintf("DataSciencePipelinesApplication %s/%s", project, dspaName), dspaPath,
-			withToolFieldManager(namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, ""))+"&fieldValidation=Strict",
+			withToolFieldManager(rhoai.NamespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, ""))+"&fieldValidation=Strict",
 			dspa, dspaMeta, dspaFound, readDSPA, kube.ObjectMeta.HasToolLabel, dryRun)
 		dspaMeta, dspaFound = meta, found
 		return action, err
 	}
 	logs = append(logs, "Checking the secrets and the pipeline server with the API server (dry run)...")
 	for _, s := range secrets {
-		if _, err := writeProjectSecret(s, projectSecretPath(project, s.name), withToolFieldManager(namespacedPath("v1", "secrets", project, "")), true); err != nil {
+		if _, err := writeProjectSecret(s, projectSecretPath(project, s.name), withToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, "")), true); err != nil {
 			msg, code := pipelineWriteFailure(fmt.Sprintf("secret %s", s.name), project, err)
 			return fail(msg+" Nothing was changed.", code, s.what+" dry run failed")
 		}
@@ -550,7 +551,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 		return replacePipelineServer(c, project, old, logs)
 	}
 	for _, s := range secrets {
-		action, err := writeProjectSecret(s, projectSecretPath(project, s.name), withToolFieldManager(namespacedPath("v1", "secrets", project, "")), false)
+		action, err := writeProjectSecret(s, projectSecretPath(project, s.name), withToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, "")), false)
 		if err != nil {
 			msg, code := pipelineWriteFailure(fmt.Sprintf("secret %s", s.name), project, err)
 			return fail(msg, code, s.what+" write failed")
@@ -582,7 +583,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 		for _, s := range secrets {
 			logs = append(logs, fmt.Sprintf("Making pipeline server %s the owner of secret %s...", dspaName, s.name))
 			setDSPAOwner(s.obj, dspaName, dspaMeta.UID)
-			if _, err := writeProjectSecret(s, projectSecretPath(project, s.name), withToolFieldManager(namespacedPath("v1", "secrets", project, "")), false); err != nil {
+			if _, err := writeProjectSecret(s, projectSecretPath(project, s.name), withToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, "")), false); err != nil {
 				recordActivity(c, "setup-pipeline-server", fmt.Sprintf("project=%s (%s owner not set: %v)", project, s.what, err), false)
 				return &types.OperationResponse{
 					Success: false, ErrorCode: "partial_failure", Logs: logs,
@@ -641,7 +642,7 @@ func replacePipelineServer(c *Client, project string, old *dspaInfo, logs []stri
 // dspoRunning reports whether a data-science-pipelines-operator replica is
 // ready, so a DSPA finalizer will be processed.
 func dspoRunning(c *Client) (bool, error) {
-	ns, err := appsNamespace(c)
+	ns, err := rhoai.AppsNamespace(c)
 	if err != nil {
 		return false, err
 	}
@@ -650,7 +651,7 @@ func dspoRunning(c *Client) (bool, error) {
 			ReadyReplicas int `json:"readyReplicas"`
 		} `json:"status"`
 	}
-	if err := c.ListInto(namespacedPath("apps/v1", "deployments", ns, "")+"?labelSelector="+url.QueryEscape(dspoSelector), &items); err != nil {
+	if err := c.ListInto(rhoai.NamespacedPath("apps/v1", "deployments", ns, "")+"?labelSelector="+url.QueryEscape(dspoSelector), &items); err != nil {
 		return false, err
 	}
 	for _, d := range items {
@@ -915,9 +916,9 @@ type projectSecret struct {
 // statically). The read and write helpers take it as an argument.
 func projectSecretPath(project, name string) string {
 	if name == connectionSecretName {
-		return namespacedPath("v1", "secrets", project, connectionSecretName)
+		return rhoai.NamespacedPath("v1", "secrets", project, connectionSecretName)
 	}
-	return namespacedPath("v1", "secrets", project, dspaSecretName)
+	return rhoai.NamespacedPath("v1", "secrets", project, dspaSecretName)
 }
 
 func readProjectSecret(s *projectSecret, path string) error {
@@ -1068,7 +1069,7 @@ func GetResourcesStatusFor(c *Client, project string) (*types.ResourcesStatus, e
 		if ps.Namespace != project || ps.Terminating {
 			continue
 		}
-		meta, found, err := kube.ReadObjectMeta(c, namespacedPath("v1", "secrets", project, connectionSecretName))
+		meta, found, err := kube.ReadObjectMeta(c, rhoai.NamespacedPath("v1", "secrets", project, connectionSecretName))
 		switch {
 		case err != nil:
 			ps.ConnectionState, ps.ConnectionMessage = ConnectionUnreadable, err.Error()
@@ -1089,7 +1090,7 @@ func GetResourcesStatusFor(c *Client, project string) (*types.ResourcesStatus, e
 // setup left without an owner. It returns a note for the response when it
 // had to be left behind on an error.
 func deleteConnection(c *Client, project string, logs *[]string) string {
-	path := namespacedPath("v1", "secrets", project, connectionSecretName)
+	path := rhoai.NamespacedPath("v1", "secrets", project, connectionSecretName)
 	meta, found, err := kube.ReadObjectMeta(c, path)
 	switch {
 	case err != nil:

@@ -3,13 +3,15 @@ package cluster
 import (
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // pendingInstallPlan is the check that keeps Update from deleting a
 // Subscription OLM is still installing. An answer it cannot read is an
 // error (Update then refuses), never "nothing pending".
 func TestPendingInstallPlan(t *testing.T) {
-	ipPath := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, "install-abc")
+	ipPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, "install-abc")
 	const sub = `{"status":{"installPlanRef":{"name":"install-abc"}}}`
 	for _, tc := range []struct {
 		name, sub, ip       string

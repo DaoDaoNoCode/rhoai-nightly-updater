@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -136,7 +137,7 @@ func TestRestore_ObjectsReplacedMeanwhileAreNotDeleted(t *testing.T) {
 		r.subscriptionChanged = true
 		f.mu.Lock()
 		f.intercept = func(f *fakeOLM, _ http.ResponseWriter, req *http.Request) bool {
-			if req.Method == http.MethodDelete && strings.HasSuffix(req.URL.Path, "/subscriptions/"+SubName) {
+			if req.Method == http.MethodDelete && strings.HasSuffix(req.URL.Path, "/subscriptions/"+rhoai.SubName) {
 				f.sub["metadata"].(map[string]any)["uid"] = "admin-sub"
 				f.sub["spec"].(map[string]any)["channel"] = "admin-channel"
 			}

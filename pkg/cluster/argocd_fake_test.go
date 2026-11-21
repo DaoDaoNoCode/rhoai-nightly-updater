@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // fakeArgoCD answers what argocd.go reads: Argo CD's discovery document and
@@ -184,7 +186,7 @@ func (f *fakeArgoCD) handler() http.Handler {
 // their query).
 func (f *fakeArgoCD) register(api *fakeAPI) {
 	paths := []string{argoDiscoveryPath, argoDiscoveryPath + "/applications", acmWorkAPI, "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings"}
-	for _, ns := range append([]string{SubNS, CatalogNS, "redhat-ods-applications"}, f.managerRoleBindings...) {
+	for _, ns := range append([]string{rhoai.SubNS, rhoai.CatalogNS, "redhat-ods-applications"}, f.managerRoleBindings...) {
 		paths = append(paths, managerRoleBindingPath(ns))
 	}
 	for _, p := range paths {

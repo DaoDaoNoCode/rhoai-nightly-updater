@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -115,8 +116,8 @@ func imageMirrored(c *Client, repo string) (bool, error) {
 		} `json:"items"`
 	}
 	for _, path := range []string{
-		clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""),
-		clusterPath("config.openshift.io/v1", "imagetagmirrorsets", ""),
+		rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""),
+		rhoai.ClusterPath("config.openshift.io/v1", "imagetagmirrorsets", ""),
 	} {
 		var sets mirrorSets
 		found, err := c.GetIntoOptional(path, &sets)
@@ -269,11 +270,11 @@ func pickReleasedImage(body []byte, repository string) (releasedImage, error) {
 // catalog (the Subscription's source), whose presets name images that are
 // not published yet.
 func clusterIsNightly(c *Client) (bool, error) {
-	sub, err := readSubscription(c)
+	sub, err := rhoai.ReadSubscription(c)
 	if err != nil {
 		return false, err
 	}
-	return sub.info.Source == CatalogName, nil
+	return sub.Info.Source == rhoai.CatalogName, nil
 }
 
 // planModelImage decides the model's image (see the top of this file).
@@ -566,7 +567,7 @@ var planCache = kube.NewLRU[string, imagePlan](8)
 
 // getModelsStatus reports what a model setup needs and the catalog's
 // models in the visible projects. Unknowns stay empty, never a block.
-func getModelsStatus(c *Client, dsc dscRead, dscErr error, models []llmisvcObject, modelsErr error, visible map[string]bool) types.ModelsStatus {
+func getModelsStatus(c *Client, dsc rhoai.DSCRead, dscErr error, models []llmisvcObject, modelsErr error, visible map[string]bool) types.ModelsStatus {
 	st := types.ModelsStatus{}
 	for _, m := range modelCatalog {
 		st.Catalog = append(st.Catalog, m.CatalogModel)

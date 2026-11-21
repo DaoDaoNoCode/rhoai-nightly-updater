@@ -46,6 +46,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -508,8 +509,8 @@ func buildLister(c *Client, basicAuth string, images []string) func(context.Cont
 func defaultPRBuilds(ctx context.Context, c *Client, basicAuth string) ([]prBuild, error) {
 	var builds []prBuild
 	installedDigest := ""
-	if sub, err := getSubscription(c); err == nil && sub.Source == CatalogName {
-		if cs, err := getCatalogSource(c); err == nil && cs.Exists && isNightlyStreamImage(cs.Image) {
+	if sub, err := rhoai.GetSubscription(c); err == nil && sub.Source == rhoai.CatalogName {
+		if cs, err := rhoai.GetCatalogSource(c); err == nil && cs.Exists && isNightlyStreamImage(cs.Image) {
 			if _, digest, ok := extractRepoAndDigest(cs.Image); ok {
 				installedDigest = digest
 				builds = append(builds, prBuild{image: cs.Image, installed: true})

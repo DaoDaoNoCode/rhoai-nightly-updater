@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -210,10 +211,10 @@ func (r *operatorRecovery) noteCatalogChanged() {
 // restoreNightlyCatalog re-applies the catalog captured before the
 // operation, or deletes the one it created. It returns the failures.
 func (r *operatorRecovery) restoreNightlyCatalog(c *Client) []string {
-	catalogPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
+	catalogPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	if r.catalog != nil {
 		obj := map[string]any{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
-			"metadata": map[string]any{"name": CatalogName, "namespace": CatalogNS}, "spec": r.catalog["spec"]}
+			"metadata": map[string]any{"name": rhoai.CatalogName, "namespace": rhoai.CatalogNS}, "spec": r.catalog["spec"]}
 		if _, _, err := c.Apply(catalogPath, obj); err != nil {
 			return []string{"CatalogSource: " + err.Error()}
 		}
@@ -269,7 +270,7 @@ func captureOperatorRecovery(c *Client) (*operatorRecovery, error) {
 		target *map[string]any
 	}{
 		{subscriptionPath(), &r.subscription},
-		{namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName), &r.catalog},
+		{rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName), &r.catalog},
 	} {
 		var obj map[string]any
 		found, err := c.GetIntoOptional(resource.path, &obj)
@@ -452,7 +453,7 @@ func (r *operatorRecovery) reapplySubscription(c *Client) []string {
 		spec = pinned
 	}
 	obj := map[string]any{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]any{"name": SubName, "namespace": SubNS}, "spec": spec}
+		"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS}, "spec": spec}
 	keepArgoTracking(r.subscription, obj)
 	if _, _, err := c.Apply(subscriptionPath(), obj); err != nil {
 		failures = append(failures, "Subscription: "+err.Error())
@@ -510,7 +511,7 @@ func stillDeletingNote(names []string) string {
 	return fmt.Sprintf("CSV %s from the failed attempt is still being deleted (OLM removes its webhooks and cluster RBAC first). "+
 		"OLM cannot install a CSV with the same name until it is gone. Check it with: oc get csv -n %s %s. "+
 		"If it stays, look at its finalizers and the OLM operator logs before retrying.",
-		strings.Join(names, ", "), SubNS, strings.Join(names, " "))
+		strings.Join(names, ", "), rhoai.SubNS, strings.Join(names, " "))
 }
 
 // rhoaiCSV is the identity of a non-copied RHOAI CSV in the operator
@@ -531,7 +532,7 @@ func listRHOAICSVs(c *Client) ([]rhoaiCSV, error) {
 			} `json:"metadata"`
 		} `json:"items"`
 	}
-	found, err := c.GetIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""), &list)
+	found, err := c.GetIntoOptional(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""), &list)
 	if err != nil {
 		return nil, err
 	}
@@ -540,7 +541,7 @@ func listRHOAICSVs(c *Client) ([]rhoaiCSV, error) {
 	}
 	var out []rhoaiCSV
 	for _, item := range list.Items {
-		if strings.HasPrefix(item.Metadata.Name, SubName+".") && item.Metadata.Labels["olm.copiedFrom"] == "" {
+		if strings.HasPrefix(item.Metadata.Name, rhoai.SubName+".") && item.Metadata.Labels["olm.copiedFrom"] == "" {
 			out = append(out, rhoaiCSV{Name: item.Metadata.Name, UID: item.Metadata.UID})
 		}
 	}

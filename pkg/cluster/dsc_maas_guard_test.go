@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -24,7 +25,7 @@ const (
 )
 
 func snapshotPath() string {
-	return namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)
+	return rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)
 }
 
 // maasServed makes the fake serve the MaaS API (no objects yet).
