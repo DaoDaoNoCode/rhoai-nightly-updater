@@ -75,7 +75,7 @@ func loadFixture(t *testing.T, pkgs ...fixturePkg) *sourcePkg {
 		}
 	}
 	counts := map[symID]int{}
-	countCalls(outside, ts.uses, counts)
+	countRefs(outside, ts.uses, counts)
 	return newSourcePkg(fset, scanned, pkgOf, ts, counts)
 }
 

@@ -292,9 +292,10 @@ type sourcePkg struct {
 	selections map[*ast.SelectorExpr]*types.Selection
 	// clientCalls are the selectors that name a Client method (by type).
 	clientCalls map[*ast.SelectorExpr]clientCall
-	// outsideCalls counts the direct calls of the functions of pkg/cluster
-	// from the packages the scan does not read (pkg/api, main).
-	outsideCalls map[symID]int
+	// outsideRefs counts the references (calls and function values) to the
+	// functions of pkg/cluster from the packages the scan does not read
+	// (pkg/api, main).
+	outsideRefs map[symID]int
 	// only, when set, limits the scan to these functions (funcPos keys):
 	// their API calls, and the call sites a parameter is resolved from.
 	only map[string]bool
@@ -305,6 +306,9 @@ type sourcePkg struct {
 	identMemo  map[identKey][]string
 	resultMemo map[resultKey][]string
 	callers    map[symID][]callSite // by callee; built on first use
+	// unlisted are the functions used where the scan lists no call site
+	// (unlistedCallers); built on first use.
+	unlisted map[symID]bool
 }
 
 // identKey and resultKey keep the depth, so a memo answers exactly what the
@@ -453,20 +457,19 @@ func funcCalls(node ast.Node, ref func(*ast.Ident) (symID, bool)) func(yield fun
 
 // paramCallSitesOf is callSitesOf for resolving a parameter of id; unknown
 // reports that the parameter can also take a value only known at run time,
-// from callers that cannot be listed.
+// from callers that cannot be listed (unlistedCallers). Such a caller widens
+// the parameter even when id has callers the scan does list: their values
+// are kept, never replaced by the unknown, and never kept alone.
 //
 // A call from a facade declaration (facadeForward) stands for the facade's
-// own calls, so it is replaced by the facade's call sites in the scan.
-// pkg/api's direct calls of the facade add nothing, as before the split,
-// when pkg/api called the function itself and the scan never read pkg/api
-// (step 13b: TeardownPipelineServer, called by replacePipelineServer and,
-// through the facade, by pkg/api). A facade that nothing calls directly
-// (used only as a function value, in the scanned source or in pkg/api, or
-// not at all) keeps an unknown alternative, as an ordinary adapter without
-// call sites would. Uses as a function value of a function that also has
-// direct callers are not followed, for a facade as for any function, as
-// before the split.
+// own calls, so it is replaced by the facade's call sites in the scan, and
+// the facade's unlisted callers are id's: pkg/api's calls and uses of the
+// facade as a function value (TeardownPipelineServer: called by pkg/api
+// with a request's project and stored by cleanup.go as a function value). A
+// facade that nothing calls directly keeps an unknown alternative too, as
+// an ordinary adapter without call sites would.
 func (p *sourcePkg) paramCallSitesOf(id symID) (sites []callSite, unknown bool) {
+	unknown = p.unlistedCallers(id)
 	for _, cs := range p.callSitesOf(id) {
 		if id.pkg == clusterPkg || !p.facadeForward(cs.caller, cs.call) {
 			sites = append(sites, cs)
@@ -475,11 +478,74 @@ func (p *sourcePkg) paramCallSitesOf(id symID) (sites []callSite, unknown bool) 
 		w := symID{clusterPkg, cs.caller.Name.Name}
 		calls := p.callSitesOf(w)
 		sites = append(sites, calls...)
-		if len(calls)+p.outsideCalls[w] == 0 {
+		if len(calls) == 0 || p.unlistedCallers(w) {
 			unknown = true
 		}
 	}
 	return sites, unknown
+}
+
+// unlistedCallers reports whether the package function id is used where
+// the scan lists no call site, so that it is called with arguments the scan
+// cannot see: by pkg/api or main (outsideRefs, calls and function values),
+// as a function value in a scanned function (stored, returned, passed
+// along, with or without type arguments), or in a package-level
+// declaration (a function value in a table, or a call in an initializer).
+// Uses in the functions the scan leaves out (only) count as little as
+// their calls do.
+func (p *sourcePkg) unlistedCallers(id symID) bool {
+	if p.unlisted == nil {
+		p.unlisted = map[symID]bool{}
+		for _, name := range slices.Sorted(maps.Keys(p.files)) {
+			for _, decl := range p.files[name].Decls {
+				fn, isFunc := decl.(*ast.FuncDecl)
+				if !isFunc {
+					for ref := range funcRefs(decl, p.funcRef, false) {
+						p.unlisted[ref] = true
+					}
+					continue
+				}
+				if fn.Body == nil || !p.scans(fn) {
+					continue
+				}
+				for ref := range funcRefs(fn.Body, p.funcRef, true) {
+					p.unlisted[ref] = true
+				}
+			}
+		}
+	}
+	return p.unlisted[id] || p.outsideRefs[id] > 0
+}
+
+// funcRefs yields each reference in node to a function that ref resolves:
+// with valuesOnly, only the uses as a function value, not the function of a
+// call (funcIdent: in parentheses or with type arguments).
+func funcRefs(node ast.Node, ref func(*ast.Ident) (symID, bool), valuesOnly bool) func(yield func(symID) bool) {
+	return func(yield func(symID) bool) {
+		called := map[*ast.Ident]bool{}
+		if valuesOnly {
+			ast.Inspect(node, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					if id := funcIdent(call.Fun); id != nil {
+						called[id] = true
+					}
+				}
+				return true
+			})
+		}
+		ok := true
+		ast.Inspect(node, func(n ast.Node) bool {
+			if !ok {
+				return false
+			}
+			if id, isIdent := n.(*ast.Ident); isIdent && !called[id] {
+				if sym, isFunc := ref(id); isFunc {
+					ok = yield(sym)
+				}
+			}
+			return true
+		})
+	}
 }
 
 // facadeForward reports whether fn is a facade declaration that only
@@ -875,19 +941,20 @@ func funcRefIn(uses map[*ast.Ident]types.Object, id *ast.Ident) (symID, bool) {
 	return symID{fn.Pkg().Path(), fn.Name()}, true
 }
 
-// countCalls adds the calls in files of package functions to counts.
-func countCalls(files []*ast.File, uses map[*ast.Ident]types.Object, counts map[symID]int) {
+// countRefs adds the references in files to package functions (calls and
+// function values) to counts.
+func countRefs(files []*ast.File, uses map[*ast.Ident]types.Object, counts map[symID]int) {
 	ref := func(id *ast.Ident) (symID, bool) { return funcRefIn(uses, id) }
 	for _, f := range files {
-		for id := range funcCalls(f, ref) {
+		for id := range funcRefs(f, ref, false) {
 			counts[id]++
 		}
 	}
 }
 
-// outsideCalls counts the direct calls of pkg/api and main.go of the
-// functions of pkg/cluster, once per test binary.
-func outsideCalls(t *testing.T) map[symID]int {
+// outsideRefs counts the references of pkg/api and main.go (calls and
+// function values) to the functions of pkg/cluster, once per test binary.
+func outsideRefs(t *testing.T) map[symID]int {
 	t.Helper()
 	outsideOnce.Do(func() {
 		counts := map[symID]int{}
@@ -896,12 +963,12 @@ func outsideCalls(t *testing.T) map[symID]int {
 			for _, name := range slices.Sorted(maps.Keys(tp.files)) {
 				files = append(files, tp.files[name])
 			}
-			countCalls(files, tp.info.Uses, counts)
+			countRefs(files, tp.info.Uses, counts)
 		}
 		outsideVal = counts
 	})
 	if outsideVal == nil {
-		t.Fatal("the calls of pkg/api and main.go could not be counted")
+		t.Fatal("the references of pkg/api and main.go could not be counted")
 	}
 	return outsideVal
 }
@@ -950,7 +1017,7 @@ func loadClusterSource(t *testing.T) *sourcePkg {
 	for name := range ps.files {
 		pkgOf[name] = clusterImportPath(filepath.Dir(ps.paths[name]))
 	}
-	p := newSourcePkg(ps.fset, ps.files, pkgOf, clusterTypes(t), outsideCalls(t))
+	p := newSourcePkg(ps.fset, ps.files, pkgOf, clusterTypes(t), outsideRefs(t))
 	if err := p.checkPathHelpers(); err != nil {
 		t.Fatal(err)
 	}
@@ -958,14 +1025,14 @@ func loadClusterSource(t *testing.T) *sourcePkg {
 }
 
 // newSourcePkg indexes files (by base name; pkgOf is each one's package
-// import path) for one scan; outsideCalls counts the direct calls of their
+// import path) for one scan; outsideRefs counts the references to their
 // functions from packages the scan does not read.
-func newSourcePkg(fset *token.FileSet, files map[string]*ast.File, pkgOf map[string]string, ts *typedSource, outsideCalls map[symID]int) *sourcePkg {
+func newSourcePkg(fset *token.FileSet, files map[string]*ast.File, pkgOf map[string]string, ts *typedSource, outsideRefs map[symID]int) *sourcePkg {
 	p := &sourcePkg{fset: fset, files: map[string]*ast.File{}, pkgOf: map[string]string{},
 		consts: map[symID]string{}, lits: map[symID]*ast.CompositeLit{}, funcs: map[symID]*ast.FuncDecl{}, fileOf: map[*ast.FuncDecl]string{},
 		methods: map[symID]*ast.FuncDecl{}, uses: ts.uses, defs: ts.defs, selections: ts.selections, clientCalls: ts.clientCalls,
-		outsideCalls: outsideCalls,
-		identMemo:    map[identKey][]string{}, resultMemo: map[resultKey][]string{}}
+		outsideRefs: outsideRefs,
+		identMemo:   map[identKey][]string{}, resultMemo: map[resultKey][]string{}}
 	for _, name := range slices.Sorted(maps.Keys(files)) {
 		f := files[name]
 		pkg := pkgOf[name]
