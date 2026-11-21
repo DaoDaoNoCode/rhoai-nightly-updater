@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
@@ -185,7 +186,7 @@ func TestPlaygroundStatusForUserHasNoServiceAccountText(t *testing.T) {
 		e.k8s.deleteObject("/apis/project.openshift.io/v1/projects/proj")
 		e.k8s.deleteObject("/apis/project.openshift.io/v1/projects/other")
 		e.k8s.putJSON("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc", dsc)
-		PurgePlaygroundStatus()
+		features.PurgePlaygroundStatus()
 		full, err := GetPlaygroundStatus(e.c, e.reader, "")
 		if err != nil {
 			t.Fatal(err)

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
@@ -88,10 +89,10 @@ func TestBookkeepingUsesTheServiceAccount(t *testing.T) {
 	if err := storage.WritePipelineRecord(c, storage.PipelineRecord{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readPlaygroundRecords(c); err != nil {
+	if _, err := features.ReadPlaygroundRecords(c); err != nil {
 		t.Fatal(err)
 	}
-	if err := writePlaygroundRecords(c, map[string]playgroundRecord{}); err != nil {
+	if err := features.WritePlaygroundRecords(c, map[string]features.PlaygroundRecord{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := serving.ReadMaaSRecord(c); err != nil {

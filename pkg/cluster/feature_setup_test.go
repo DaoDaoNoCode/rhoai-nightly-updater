@@ -10,6 +10,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -307,7 +308,7 @@ func TestPrerequisites_FreshClusterPerFeature(t *testing.T) {
 				}
 			}
 			// Each component's patch names only it, under its own manager.
-			rec, err := readPrereqRecord(pc.c)
+			rec, err := features.ReadPrereqRecord(pc.c)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -351,7 +352,7 @@ func TestPrerequisites_CertManagerObjects(t *testing.T) {
 	if ensureMap(sub, "metadata")["labels"] == nil {
 		t.Fatal("the subscription carries no tool label")
 	}
-	rec, _ := readPrereqRecord(pc.c)
+	rec, _ := features.ReadPrereqRecord(pc.c)
 	if rec.Shared["cert-manager"] == "" {
 		t.Fatalf("record = %+v", rec)
 	}
@@ -654,7 +655,7 @@ func TestRestoreComponents(t *testing.T) {
 		pc := setUp(t, "models")
 		pc.f.putJSON("/apis/serving.kserve.io/v1alpha2/namespaces/p/llminferenceservices/gone", `{"metadata":{"deletionTimestamp":"2026-11-18T00:00:00Z"}}`)
 		n := len(pc.f.mutations())
-		res, err := RestoreComponents(pc.c, []string{"kserve"})
+		res, err := features.RestoreComponents(pc.c, []string{"kserve"})
 		if err != nil || !res.Success || !strings.Contains(res.Message, "kserve is Removed again") {
 			t.Fatalf("restore: %+v %v", res, err)
 		}
@@ -666,7 +667,7 @@ func TestRestoreComponents(t *testing.T) {
 				t.Fatalf("restore wrote %s (operators stay)", m)
 			}
 		}
-		if rec, _ := readPrereqRecord(pc.c); len(rec.Components) != 0 || rec.Shared["cert-manager"] == "" {
+		if rec, _ := features.ReadPrereqRecord(pc.c); len(rec.Components) != 0 || rec.Shared["cert-manager"] == "" {
 			t.Fatalf("record = %+v", rec)
 		}
 		if st := prereqStatus(t, pc.c, "models"); len(st.Restorable) != 0 {
@@ -679,7 +680,7 @@ func TestRestoreComponents(t *testing.T) {
 		someoneSets(t, pc, "aipipelines", "Removed")
 		someoneSets(t, pc, "aipipelines", "Managed")
 		n := len(pc.f.mutations())
-		res, _ := RestoreComponents(pc.c, []string{"aipipelines"})
+		res, _ := features.RestoreComponents(pc.c, []string{"aipipelines"})
 		if !res.Success || !strings.Contains(res.Message, "Kept Managed: aipipelines (changed by someone since") {
 			t.Fatalf("restore: %+v", res)
 		}
@@ -694,17 +695,17 @@ func TestRestoreComponents(t *testing.T) {
 		// someone relies on.
 		pc := setUp(t, "pipelines")
 		someoneSets(t, pc, "aipipelines", "Managed")
-		if !dscComponentOwned(pc.f.get(tDSC), "aipipelines") {
+		if !features.DSCComponentOwned(pc.f.get(tDSC), "aipipelines") {
 			t.Fatal("a same-value update took the field")
 		}
 		pc.f.putJSON("/apis/datasciencepipelinesapplications.opendatahub.io/v1/namespaces/team/datasciencepipelinesapplications/theirs", `{}`)
-		res, _ := RestoreComponents(pc.c, []string{"aipipelines"})
+		res, _ := features.RestoreComponents(pc.c, []string{"aipipelines"})
 		if !res.Success || !strings.Contains(res.Message, "in use: pipeline server team/theirs") || componentState(pc.f, "aipipelines") != "Managed" {
 			t.Fatalf("restore: %+v", res)
 		}
 		k, _ := parseFakePath("/apis/datasciencepipelinesapplications.opendatahub.io/v1/namespaces/team/datasciencepipelinesapplications/theirs")
 		delete(pc.f.objects, k)
-		if res, _ := RestoreComponents(pc.c, []string{"aipipelines"}); !res.Success || componentState(pc.f, "aipipelines") != "Removed" {
+		if res, _ := features.RestoreComponents(pc.c, []string{"aipipelines"}); !res.Success || componentState(pc.f, "aipipelines") != "Removed" {
 			t.Fatalf("restore once unused: %+v", res)
 		}
 	})
@@ -720,7 +721,7 @@ func TestRestoreComponents(t *testing.T) {
 				}
 			}
 		}
-		res, _ := RestoreComponents(pc.c, []string{"aipipelines"})
+		res, _ := features.RestoreComponents(pc.c, []string{"aipipelines"})
 		if !res.Success || componentState(pc.f, "aipipelines") != "Removed" || writes != 2 {
 			t.Fatalf("restore: %+v (writes %d)", res, writes)
 		}
@@ -758,7 +759,7 @@ func TestRestoreComponents(t *testing.T) {
 						change(pc)
 					}
 				}
-				res, _ := RestoreComponents(pc.c, []string{"ogx", "dashboard"})
+				res, _ := features.RestoreComponents(pc.c, []string{"ogx", "dashboard"})
 				if !changed {
 					t.Fatal("no write was attempted")
 				}
@@ -786,7 +787,7 @@ func TestRestoreComponents(t *testing.T) {
 	t.Run("in use", func(t *testing.T) {
 		pc := setUp(t, "pipelines")
 		pc.f.putJSON("/apis/datasciencepipelinesapplications.opendatahub.io/v1/namespaces/team/datasciencepipelinesapplications/theirs", `{}`)
-		res, _ := RestoreComponents(pc.c, []string{"aipipelines"})
+		res, _ := features.RestoreComponents(pc.c, []string{"aipipelines"})
 		if !res.Success || !strings.Contains(res.Message, "in use: pipeline server team/theirs") || componentState(pc.f, "aipipelines") != "Managed" {
 			t.Fatalf("restore: %+v", res)
 		}
@@ -799,7 +800,7 @@ func TestRestoreComponents(t *testing.T) {
 		pc := setUp(t, "playground")
 		pc.f.fail["GET /apis/ogx.io/v1beta1/ogxservers"] = 403
 		n := len(pc.f.mutations())
-		res, _ := RestoreComponents(pc.c, []string{"ogx", "dashboard"})
+		res, _ := features.RestoreComponents(pc.c, []string{"ogx", "dashboard"})
 		if res.Success || len(pc.f.mutations()) != n {
 			t.Fatalf("restore: %+v, wrote %v", res, pc.f.mutations()[n:])
 		}
@@ -809,14 +810,14 @@ func TestRestoreComponents(t *testing.T) {
 		ensureMap(pc.f.get(tDSC), "metadata")["annotations"] = map[string]any{argo.TrackingAnnotation: "rhoai:datasciencecluster.opendatahub.io/DataScienceCluster:/default-dsc"}
 		pc.f.argo = argoManagingAll(argo.DSCObject("default-dsc"))
 		n := len(pc.f.mutations())
-		res, _ := RestoreComponents(pc.c, []string{"mlflowoperator"})
+		res, _ := features.RestoreComponents(pc.c, []string{"mlflowoperator"})
 		if res.Success || res.ErrorCode != kube.ErrorCodeGitOpsManaged || len(pc.f.mutations()) != n {
 			t.Fatalf("restore: %+v", res)
 		}
 	})
 	t.Run("not turned on by this tool", func(t *testing.T) {
 		pc := newPrereqCluster(t)
-		res, _ := RestoreComponents(pc.c, []string{"kserve"})
+		res, _ := features.RestoreComponents(pc.c, []string{"kserve"})
 		if !res.Success || len(pc.f.mutations()) != 0 || !strings.Contains(res.Message, "this tool did not turn it on") {
 			t.Fatalf("restore: %+v", res)
 		}

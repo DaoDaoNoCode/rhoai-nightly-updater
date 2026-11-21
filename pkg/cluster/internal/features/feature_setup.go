@@ -1,4 +1,4 @@
-package cluster
+package features
 
 import (
 	"encoding/json"
@@ -143,10 +143,10 @@ const (
 	prereqRecordManager = "rhoai-nightly-updater-prerequisites-record"
 )
 
-// prereqRecord is what setup changed that the cluster cannot tell: the
+// PrereqRecord is what setup changed that the cluster cannot tell: the
 // components it turned on, with their value before, and the operators it
 // installed (which stay: other features share them).
-type prereqRecord struct {
+type PrereqRecord struct {
 	Components map[string]prereqComponent `json:"components,omitempty"`
 	Shared     map[string]string          `json:"shared,omitempty"`
 	At         string                     `json:"at,omitempty"`
@@ -158,8 +158,9 @@ type prereqComponent struct {
 	Feature  string `json:"feature"`
 }
 
-func readPrereqRecord(c *Client) (prereqRecord, error) {
-	var rec prereqRecord
+// ReadPrereqRecord reads what the feature setups recorded (empty when nothing).
+func ReadPrereqRecord(c *kube.Client) (PrereqRecord, error) {
+	var rec PrereqRecord
 	raw, err := record.ReadSnapshotKey(c, prereqRecordKey)
 	if err != nil {
 		return rec, fmt.Errorf("read this tool's record of the prerequisites it set up: %w", err)
@@ -172,7 +173,7 @@ func readPrereqRecord(c *Client) (prereqRecord, error) {
 	return rec, nil
 }
 
-func writePrereqRecord(c *Client, rec prereqRecord) error {
+func writePrereqRecord(c *kube.Client, rec PrereqRecord) error {
 	rec.At, rec.By = record.NowRFC3339(), kube.GetUser(c)
 	data, err := json.Marshal(rec)
 	if err != nil {
@@ -188,7 +189,7 @@ func writePrereqRecord(c *Client, rec prereqRecord) error {
 
 // dscComponentManager is the field manager of a component's managementState
 // this tool sets: the API server then tells whether the value is still the
-// tool's (dscComponentOwned). One per component, so turning one back never
+// tool's (DSCComponentOwned). One per component, so turning one back never
 // touches the ownership of another.
 func dscComponentManager(key string) string {
 	return "rhoai-nightly-updater-dsc-" + key
@@ -200,7 +201,7 @@ func dscComponentManager(key string) string {
 // With a resourceVersion, the API server refuses the patch (409) when the
 // DataScienceCluster changed since it was read. It returns the object the
 // API server answered with.
-func patchDSCComponent(c *Client, key, state, resourceVersion string, dryRun bool) (map[string]any, error) {
+func patchDSCComponent(c *kube.Client, key, state, resourceVersion string, dryRun bool) (map[string]any, error) {
 	path, err := rhoai.DataScienceClusterPath(c)
 	if err != nil {
 		return nil, err
@@ -223,13 +224,13 @@ func patchDSCComponent(c *Client, key, state, resourceVersion string, dryRun boo
 	return obj, nil
 }
 
-// dscComponentOwned: this tool's field manager of the component still owns
+// DSCComponentOwned: this tool's field manager of the component still owns
 // its managementState. The API server moves a field to another manager only
 // when that manager changes its value (an update to the same value, or an
 // apply of it, leaves it owned, or shared): so this tells whether someone
 // changed the component since this tool's setup, not whether someone set
 // it to Managed again.
-func dscComponentOwned(dsc map[string]any, key string) bool {
+func DSCComponentOwned(dsc map[string]any, key string) bool {
 	raw, _ := json.Marshal(dsc["metadata"])
 	var meta kube.ObjectMeta
 	_ = json.Unmarshal(raw, &meta)
@@ -276,7 +277,7 @@ type operatorPlan struct {
 // problems that do not block are in the parts.
 type featurePlan struct {
 	fs                featureSetup
-	rec               prereqRecord
+	rec               PrereqRecord
 	dsc               rhoai.DSCRead
 	dscName, argoApp  string // argoApp: argo.managedBy
 	argo              argo.Tracking
@@ -296,7 +297,7 @@ func (p *featurePlan) refuse(msg, code string) {
 
 // clusterReads are the reads every feature's plan shares.
 type clusterReads struct {
-	rec    prereqRecord
+	rec    PrereqRecord
 	recErr error
 	dsc    rhoai.DSCRead
 	dscErr error
@@ -305,9 +306,9 @@ type clusterReads struct {
 	olmErr error
 }
 
-func readClusterForPrerequisites(c *Client) clusterReads {
+func readClusterForPrerequisites(c *kube.Client) clusterReads {
 	var r clusterReads
-	r.rec, r.recErr = readPrereqRecord(c)
+	r.rec, r.recErr = ReadPrereqRecord(c)
 	r.dsc, r.dscErr = rhoai.ReadFirstDSC(c)
 	r.csvs, r.olmErr = components.ListClusterCSVs(c)
 	if r.olmErr == nil {
@@ -318,7 +319,7 @@ func readClusterForPrerequisites(c *Client) clusterReads {
 
 // planFeature reads what fs needs and decides what setup does: only what
 // is missing. A read that fails refuses the setup (fail closed).
-func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
+func planFeature(c *kube.Client, fs featureSetup, r clusterReads) *featurePlan {
 	p := &featurePlan{fs: fs, rec: r.rec, dsc: r.dsc}
 	part := func(pt types.MaaSPart) { p.parts = append(p.parts, pt) }
 	if r.recErr != nil {
@@ -346,7 +347,7 @@ func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
 		for _, fc := range fs.components {
 			key := fc.KeyIn(r.dsc)
 			state, _ := envkit.ComponentManagement(r.dsc.Object, key)
-			cp := componentPlan{fc: fc, key: key, state: state, turnOn: state != "Managed", owned: dscComponentOwned(r.dsc.Object, key)}
+			cp := componentPlan{fc: fc, key: key, state: state, turnOn: state != "Managed", owned: DSCComponentOwned(r.dsc.Object, key)}
 			cp.ready, cp.msg = componentReadyCondition(r.dsc.Object, []string{key})
 			if rc, ok := r.rec.Components[key]; ok {
 				cp.recorded, cp.recordedPrior = true, rc.Previous
@@ -406,7 +407,7 @@ func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
 
 // planKuadrantPart reads the Kuadrant CR; a missing one is created by Set
 // up in Connectivity Link's namespace.
-func planKuadrantPart(c *Client, p *featurePlan) types.MaaSPart {
+func planKuadrantPart(c *kube.Client, p *featurePlan) types.MaaSPart {
 	pt := types.MaaSPart{ID: "kuadrant", Title: "Connectivity Link instance (Kuadrant)"}
 	k, err := serving.ReadKuadrant(c)
 	switch {
@@ -428,7 +429,7 @@ func planKuadrantPart(c *Client, p *featurePlan) types.MaaSPart {
 }
 
 // planFeatureOperator reads op and decides what setup does about it.
-func planFeatureOperator(c *Client, p *featurePlan, op envkit.OperatorSpec, r clusterReads) operatorPlan {
+func planFeatureOperator(c *kube.Client, p *featurePlan, op envkit.OperatorSpec, r clusterReads) operatorPlan {
 	pt := types.MaaSPart{ID: op.ID, Title: op.Title}
 	defer func() { p.parts = append(p.parts, pt) }()
 	if r.olmErr != nil {
@@ -507,7 +508,7 @@ func planFeatureOperator(c *Client, p *featurePlan, op envkit.OperatorSpec, r cl
 
 // operatorAPIServed says whether op's API group is served (each group
 // named, so the RBAC coverage test resolves the discovery path).
-func operatorAPIServed(c *Client, op envkit.OperatorSpec) (bool, error) {
+func operatorAPIServed(c *kube.Client, op envkit.OperatorSpec) (bool, error) {
 	switch op.API {
 	case certManagerGroup:
 		return serving.GroupServed(c, certManagerGroup)
@@ -648,7 +649,7 @@ func (p *featurePlan) status() types.FeaturePrerequisites {
 // GetPrerequisitesStatusFor reads what every feature needs on the cluster,
 // with Models planned for how its model is reached (featureSetupFor; "" is
 // the default).
-func GetPrerequisitesStatusFor(c *Client, modelsExposure string) (*types.PrerequisitesStatus, error) {
+func GetPrerequisitesStatusFor(c *kube.Client, modelsExposure string) (*types.PrerequisitesStatus, error) {
 	r := readClusterForPrerequisites(c)
 	out := &types.PrerequisitesStatus{Features: map[string]types.FeaturePrerequisites{}, ModelsExposure: modelsExposure}
 	for _, base := range featureSetups {
@@ -665,7 +666,7 @@ func ValidatePrerequisitesRequest(req types.PrerequisitesRequest) string {
 	if _, ok := featureSetupOf(req.Feature); !ok {
 		return "feature must be pipelines, mlflow, models or playground"
 	}
-	if req.Exposure != "" && (req.Feature != "models" || !ValidExposure(req.Exposure)) {
+	if req.Exposure != "" && (req.Feature != "models" || !serving.ValidExposure(req.Exposure)) {
 		return "exposure is how a model is reached (models only): default-gateway, maas, gateway or internal"
 	}
 	return ""
@@ -677,7 +678,7 @@ func ValidatePrerequisitesRequest(req types.PrerequisitesRequest) string {
 // components), one step per operator ("cert-manager"), and "ready" (the
 // components report Ready, and KServe sees the operators). Only what is
 // missing is done; running it again continues where a failed run stopped.
-func RunPrerequisites(c *Client, req types.PrerequisitesRequest, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
+func RunPrerequisites(c *kube.Client, req types.PrerequisitesRequest, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	m := &serving.Run{Client: c, Emit: onStep, Activity: "setup-prerequisites", Target: req.Feature + " prerequisites"}
 	if problem := ValidatePrerequisitesRequest(req); problem != "" {
 		return m.Fail("prerequisites", problem, "validation", "invalid request")
@@ -770,7 +771,7 @@ func componentKeys(cps []componentPlan) []string {
 
 // ensureOperator installs o when it is missing, or waits for the install
 // OLM is doing, on the operator's own step.
-func ensureOperator(m *serving.Run, rec *prereqRecord, o operatorPlan) (*types.OperationResponse, error) {
+func ensureOperator(m *serving.Run, rec *PrereqRecord, o operatorPlan) (*types.OperationResponse, error) {
 	op := o.op
 	switch {
 	case o.install != nil:
@@ -807,7 +808,7 @@ func ensureOperator(m *serving.Run, rec *prereqRecord, o operatorPlan) (*types.O
 // Connectivity Link serves its API (step "kuadrant"), in the namespace
 // Connectivity Link runs in, as the MaaS setup does. It stays after Clean
 // up: Connectivity Link's policies are shared.
-func ensureKuadrant(m *serving.Run, rec *prereqRecord) (*types.OperationResponse, error) {
+func ensureKuadrant(m *serving.Run, rec *PrereqRecord) (*types.OperationResponse, error) {
 	c := m.Client
 	k, err := serving.ReadKuadrant(c)
 	if err != nil {
@@ -824,7 +825,7 @@ func ensureKuadrant(m *serving.Run, rec *prereqRecord) (*types.OperationResponse
 	ns := kube.FirstNonEmpty(rhcl.CSVNS, serving.RHCLOperator.Namespace)
 	m.Step("kuadrant", "running", "Waiting for Connectivity Link's Kuadrant API...")
 	version := ""
-	if _, err := kube.WaitForGone(c, envkit.OperatorTimeout, envkit.PollInterval, func(cc *Client) (bool, error) {
+	if _, err := kube.WaitForGone(c, envkit.OperatorTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		v, err := serving.KuadrantServedVersion(cc)
 		version = v
 		return v != "", err
@@ -859,7 +860,7 @@ func waitPrerequisitesReady(m *serving.Run, p *featurePlan) (*types.OperationRes
 	m.Step("ready", "running", fmt.Sprintf("Waiting for RHOAI's operator to report %s ready (usually 1 to 3 minutes)...", kube.JoinTitles(componentKeys(p.components))))
 	last := ""
 	var dsc rhoai.DSCRead
-	done, err := kube.WaitForGone(c, PrerequisiteReadyTimeout, envkit.PollInterval, func(cc *Client) (bool, error) {
+	done, err := kube.WaitForGone(c, PrerequisiteReadyTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		r, err := rhoai.ReadFirstDSC(cc)
 		if err != nil {
 			return false, err
@@ -949,10 +950,10 @@ type restoreVerdict struct {
 
 // restoreCheck runs every check of turning key back, on dscRead: the record
 // says this tool turned it on, it is still Managed, this tool's field
-// manager still owns it (nobody changed it since: dscComponentOwned),
+// manager still owns it (nobody changed it since: DSCComponentOwned),
 // Argo CD does not manage the DataScienceCluster, and nothing on the
 // cluster uses it (a list that fails refuses).
-func restoreCheck(c *Client, rec prereqRecord, dscRead rhoai.DSCRead, key string) restoreVerdict {
+func restoreCheck(c *kube.Client, rec PrereqRecord, dscRead rhoai.DSCRead, key string) restoreVerdict {
 	rc, ok := rec.Components[key]
 	if !ok {
 		return restoreVerdict{kept: key + " (this tool did not turn it on)"}
@@ -962,7 +963,7 @@ func restoreCheck(c *Client, rec prereqRecord, dscRead rhoai.DSCRead, key string
 	switch {
 	case dscRead.Object == nil || state != "Managed":
 		return restoreVerdict{drop: true, log: key + " is " + kube.FirstNonEmpty(state, "not set") + " already"}
-	case !dscComponentOwned(dscRead.Object, key):
+	case !DSCComponentOwned(dscRead.Object, key):
 		return restoreVerdict{drop: true, kept: key + " (changed by someone since this tool's setup)"}
 	}
 	if argoCD := argo.TrackingOf(c, dscRead.Object, rhoai.DSCGroup, "DataScienceCluster"); argoCD.ManagedBy() != "" {
@@ -993,8 +994,8 @@ func restoreCheck(c *Client, rec prereqRecord, dscRead rhoai.DSCRead, key string
 // Managed again without changing it does not take the field from this
 // tool's manager (the API server moves a field only when its value
 // changes), so then the in-use check is what keeps a component in use on.
-func RestoreComponents(c *Client, keys []string) (*types.OperationResponse, error) {
-	rec, err := readPrereqRecord(c)
+func RestoreComponents(c *kube.Client, keys []string) (*types.OperationResponse, error) {
+	rec, err := ReadPrereqRecord(c)
 	if err != nil {
 		return &types.OperationResponse{Success: false, Message: err.Error() + " Nothing was changed.", ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}

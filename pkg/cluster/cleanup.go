@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
@@ -21,10 +22,10 @@ var (
 		return serving.TeardownModels(c, project)
 	}
 	cleanupGateway      = serving.TeardownInferenceGateway
-	cleanupPlayground   = TeardownPlayground
+	cleanupPlayground   = features.TeardownPlayground
 	cleanupUnpublish    = serving.UnpublishMaaSModel
 	cleanupMaaSPlatform = serving.TeardownMaaSPlatform
-	cleanupComponents   = RestoreComponents
+	cleanupComponents   = features.RestoreComponents
 )
 
 // CleanupStepID is the step id of each part of a clean-up, as streamed:

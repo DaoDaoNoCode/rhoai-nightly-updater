@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 )
 
@@ -16,7 +17,7 @@ import (
 // the tool called (a same-host redirect would carry the Authorization
 // header, also to plain http). A 3xx is an error that says so.
 func TestSamplesHTTPClient_DoesNotFollowRedirects(t *testing.T) {
-	if mlflow.SamplesHTTPClient.CheckRedirect == nil || genAIHTTPClient.CheckRedirect == nil {
+	if mlflow.SamplesHTTPClient.CheckRedirect == nil || features.GenAIHTTPClientForTest().CheckRedirect == nil {
 		t.Fatal("the samples and gen-ai clients must refuse redirects")
 	}
 	var followed atomic.Int32
@@ -30,10 +31,9 @@ func TestSamplesHTTPClient_DoesNotFollowRedirects(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	client := &http.Client{Transport: srv.Client().Transport, CheckRedirect: mlflow.SamplesHTTPClient.CheckRedirect}
-	origGenAI := genAIHTTPClient
-	genAIHTTPClient = client
+	restoreGenAI := features.SetGenAIHTTPClientForTest(client)
 	t.Cleanup(mlflow.SetSamplesHTTPClientForTest(client))
-	t.Cleanup(func() { genAIHTTPClient = origGenAI })
+	t.Cleanup(restoreGenAI)
 
 	const token = "sa-token-secret"
 	a := &mlflow.SampleAPI{Ctx: context.Background(), Base: srv.URL, Token: token, Server: "MLflow"}
@@ -41,8 +41,8 @@ func TestSamplesHTTPClient_DoesNotFollowRedirects(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "redirect") || !strings.Contains(err.Error(), "does not follow") || strings.Contains(err.Error(), token) {
 		t.Fatalf("samples: %v", err)
 	}
-	g := genAIAPI{ctx: context.Background(), base: srv.URL, token: token}
-	err = g.call(http.MethodGet, "/lsd/status", "proj", nil, nil)
+	g := features.GenAIAPI{Ctx: context.Background(), Base: srv.URL, Token: token}
+	err = g.Call(http.MethodGet, "/lsd/status", "proj", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "redirect") || !strings.Contains(err.Error(), "does not follow") || strings.Contains(err.Error(), token) {
 		t.Fatalf("gen-ai: %v", err)
 	}

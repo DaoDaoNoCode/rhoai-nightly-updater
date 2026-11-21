@@ -1,4 +1,4 @@
-package cluster
+package features
 
 import (
 	"bytes"
@@ -110,18 +110,18 @@ var genAIBaseURL = dashdev.DashboardURL
 // either. Tests replace it.
 var genAIHTTPClient = mlflow.SamplesHTTPClient
 
-// genAIAPI is the dashboard's gen-ai API for one request.
-type genAIAPI struct {
-	ctx   context.Context
-	base  string
-	token string
-	// asUser: token is the signed-in user's own (a change's client), not
+// GenAIAPI is the dashboard's gen-ai API for one request.
+type GenAIAPI struct {
+	Ctx   context.Context
+	Base  string
+	Token string
+	// AsUser: token is the signed-in user's own (a change's client), not
 	// the ServiceAccount's; it allows genAIUserCallAllowed.
-	asUser bool
+	AsUser bool
 }
 
-func (a genAIAPI) with(ctx context.Context) genAIAPI {
-	a.ctx = ctx
+func (a GenAIAPI) with(ctx context.Context) GenAIAPI {
+	a.Ctx = ctx
 	return a
 }
 
@@ -184,9 +184,9 @@ func parseGenAIError(method, path string, status int, body []byte) *genAIError {
 	return e
 }
 
-// errGenAINotAllowed: a gen-ai call the tool refuses to make with the
+// ErrGenAINotAllowed: a gen-ai call the tool refuses to make with the
 // ServiceAccount's token.
-var errGenAINotAllowed = errors.New("this tool does not make this call to the dashboard's gen-ai API: it could send the updater's ServiceAccount token on to the Models as a Service gateway")
+var ErrGenAINotAllowed = errors.New("this tool does not make this call to the dashboard's gen-ai API: it could send the updater's ServiceAccount token on to the Models as a Service gateway")
 
 // genAICallAllowed is the only gen-ai calls the tool makes (see the
 // comment at the top), none of which reaches Models as a Service:
@@ -270,16 +270,16 @@ func genAIUserCallAllowed(method, path string, in any) bool {
 	return genAICallAllowed(method, path, in)
 }
 
-// call makes one request to path (below /gen-ai/api/v1) in namespace ns.
-func (a genAIAPI) call(method, path, ns string, in, out any) error {
+// Call makes one request to path (below /gen-ai/api/v1) in namespace ns.
+func (a GenAIAPI) Call(method, path, ns string, in, out any) error {
 	allowed := genAICallAllowed
-	if a.asUser {
+	if a.AsUser {
 		allowed = genAIUserCallAllowed
 	}
 	if !allowed(method, path, in) {
-		return errGenAINotAllowed
+		return ErrGenAINotAllowed
 	}
-	u := a.base + genAIAPIPrefix + path + "?" + url.Values{"namespace": {ns}}.Encode()
+	u := a.Base + genAIAPIPrefix + path + "?" + url.Values{"namespace": {ns}}.Encode()
 	var body io.Reader
 	if in != nil {
 		data, err := json.Marshal(in)
@@ -288,11 +288,11 @@ func (a genAIAPI) call(method, path, ns string, in, out any) error {
 		}
 		body = bytes.NewReader(data)
 	}
-	req, err := http.NewRequestWithContext(a.ctx, method, u, body)
+	req, err := http.NewRequestWithContext(a.Ctx, method, u, body)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+a.token)
+	req.Header.Set("Authorization", "Bearer "+a.Token)
 	req.Header.Set("Accept", "application/json")
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -321,8 +321,8 @@ func (a genAIAPI) call(method, path, ns string, in, out any) error {
 	return nil
 }
 
-// genAIServer is the playground as lsd/status reports it.
-type genAIServer struct {
+// GenAIServer is the playground as lsd/status reports it.
+type GenAIServer struct {
 	Name  string `json:"name"`
 	Phase string `json:"phase"`
 }
@@ -332,11 +332,11 @@ type genAIServer struct {
 // GetOGXServerStatus); a 404 is a route or API that is not there
 // (LlamaStackDistributionStatusHandler answers it for NotFound), so it is
 // an error, never absence.
-func (a genAIAPI) playgroundStatus(ns string) (*genAIServer, error) {
+func (a GenAIAPI) playgroundStatus(ns string) (*GenAIServer, error) {
 	var out struct {
-		Data *genAIServer `json:"data"`
+		Data *GenAIServer `json:"data"`
 	}
-	if err := a.call(http.MethodGet, "/lsd/status", ns, nil, &out); err != nil {
+	if err := a.Call(http.MethodGet, "/lsd/status", ns, nil, &out); err != nil {
 		return nil, err
 	}
 	return out.Data, nil
@@ -370,7 +370,7 @@ func chatModel(capabilities []string, usecase, modelType string) bool {
 // write by it): the playground can then use them as embedding models of
 // that dimension. Any other embedding model is left as it is; its
 // dimension is not known.
-func markToolEmbeddingModels(c *Client, project string, models []types.PlaygroundModel) {
+func markToolEmbeddingModels(c *kube.Client, project string, models []types.PlaygroundModel) {
 	rec, err := serving.ReadModelsRecord(c)
 	if err != nil {
 		return
@@ -410,11 +410,11 @@ type maasModel struct {
 // caller's token through maas-default-gateway, where an editor of a
 // published project can attach a route; a Set up with project models only
 // must not send it there.
-func (a genAIAPI) listProjectModels(ns string, withMaaS bool) ([]types.PlaygroundModel, error) {
+func (a GenAIAPI) listProjectModels(ns string, withMaaS bool) ([]types.PlaygroundModel, error) {
 	var own struct {
 		Data []namespaceModel `json:"data"`
 	}
-	if err := a.call(http.MethodGet, "/aaa/models", ns, nil, &own); err != nil {
+	if err := a.Call(http.MethodGet, "/aaa/models", ns, nil, &own); err != nil {
 		return nil, err
 	}
 	var out []types.PlaygroundModel
@@ -428,11 +428,11 @@ func (a genAIAPI) listProjectModels(ns string, withMaaS bool) ([]types.Playgroun
 			Ready: m.Status == "Running", Chat: chatModel(m.Capabilities, m.Usecase, m.ModelType),
 		})
 	}
-	if a.asUser && withMaaS {
+	if a.AsUser && withMaaS {
 		var maas struct {
 			Data []maasModel `json:"data"`
 		}
-		if err := a.call(http.MethodGet, "/maas/models", ns, nil, &maas); err != nil {
+		if err := a.Call(http.MethodGet, "/maas/models", ns, nil, &maas); err != nil {
 			slog.Debug("no Models as a Service for the playground", "project", ns, "error", err)
 		}
 		for _, m := range maas.Data {
@@ -482,7 +482,7 @@ const (
 // MaaS API decides for them (in the dashboard, with their own login). Any
 // error, an API that is not served included, is no models: MaaS is
 // optional.
-func listMaaSPlaygroundModels(c *Client) []types.PlaygroundModel {
+func listMaaSPlaygroundModels(c *kube.Client) []types.PlaygroundModel {
 	var items []struct {
 		Metadata kube.ObjectMeta `json:"metadata"`
 		Spec     struct {
@@ -536,7 +536,7 @@ func listMaaSPlaygroundModels(c *Client) []types.PlaygroundModel {
 
 // maasSubscriptionsByModel names, by MaaSModelRef ("<namespace>/<name>"),
 // the MaaSSubscriptions that offer it (none when they cannot be read).
-func maasSubscriptionsByModel(c *Client) map[string][]string {
+func maasSubscriptionsByModel(c *kube.Client) map[string][]string {
 	out := map[string][]string{}
 	var items []struct {
 		Metadata kube.ObjectMeta `json:"metadata"`
@@ -576,11 +576,11 @@ const (
 	playgroundRecordManager = "rhoai-nightly-updater-playgrounds"
 )
 
-// playgroundRecord is one project's entry. UID is the OGXServer the
+// PlaygroundRecord is one project's entry. UID is the OGXServer the
 // dashboard made for the request; until it is known (an install in
 // flight), a server created at or after RequestedAt is taken as the one
 // requested.
-type playgroundRecord struct {
+type PlaygroundRecord struct {
 	RequestedAt string `json:"requestedAt"`
 	By          string `json:"by,omitempty"`
 	UID         string `json:"uid,omitempty"`
@@ -593,7 +593,7 @@ const playgroundServerName = "lsd-genai-playground"
 
 // readPlaygroundServer reads the playground's OGXServer (the
 // ServiceAccount's own read, at a served version of ogx.io).
-func readPlaygroundServer(c *Client, project, name string) (kube.ObjectMeta, bool, error) {
+func readPlaygroundServer(c *kube.Client, project, name string) (kube.ObjectMeta, bool, error) {
 	if name != playgroundServerName {
 		return kube.ObjectMeta{}, false, nil
 	}
@@ -620,7 +620,7 @@ func readPlaygroundServer(c *Client, project, name string) (kube.ObjectMeta, boo
 // else (the playground was deleted and made again in Gen AI studio, the
 // project was recreated, or the install found someone else's server) is
 // stale: owned is false.
-func playgroundOwnership(c *Client, project string, rec playgroundRecord, has bool, srv *genAIServer) (owned bool, uid string, err error) {
+func playgroundOwnership(c *kube.Client, project string, rec PlaygroundRecord, has bool, srv *GenAIServer) (owned bool, uid string, err error) {
 	if !has || srv == nil {
 		return false, "", nil
 	}
@@ -639,9 +639,9 @@ func playgroundOwnership(c *Client, project string, rec playgroundRecord, has bo
 	return true, meta.UID, nil
 }
 
-// readPlaygroundRecords returns the recorded projects (none when nothing is
+// ReadPlaygroundRecords returns the recorded projects (none when nothing is
 // recorded).
-func readPlaygroundRecords(c *Client) (map[string]playgroundRecord, error) {
+func ReadPlaygroundRecords(c *kube.Client) (map[string]PlaygroundRecord, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
@@ -653,9 +653,9 @@ func readPlaygroundRecords(c *Client) (map[string]playgroundRecord, error) {
 		return nil, fmt.Errorf("read this tool's playground records: %w", err)
 	}
 	if !found {
-		return map[string]playgroundRecord{}, nil
+		return map[string]PlaygroundRecord{}, nil
 	}
-	out := map[string]playgroundRecord{}
+	out := map[string]PlaygroundRecord{}
 	if raw := cm.Data[playgroundRecordKey]; raw != "" {
 		if err := json.Unmarshal([]byte(raw), &out); err != nil {
 			return nil, fmt.Errorf("parse this tool's playground records: %w", err)
@@ -664,9 +664,9 @@ func readPlaygroundRecords(c *Client) (map[string]playgroundRecord, error) {
 	return out, nil
 }
 
-// writePlaygroundRecords applies the whole record (operations hold the
+// WritePlaygroundRecords applies the whole record (operations hold the
 // cluster lock, so read-change-write does not race another writer).
-func writePlaygroundRecords(c *Client, records map[string]playgroundRecord) error {
+func WritePlaygroundRecords(c *kube.Client, records map[string]PlaygroundRecord) error {
 	data, err := json.Marshal(records)
 	if err != nil {
 		return err
@@ -686,8 +686,8 @@ func writePlaygroundRecords(c *Client, records map[string]playgroundRecord) erro
 }
 
 // setPlaygroundRecord records project's entry (nil drops it).
-func setPlaygroundRecord(c *Client, project string, rec *playgroundRecord) error {
-	records, err := readPlaygroundRecords(c)
+func setPlaygroundRecord(c *kube.Client, project string, rec *PlaygroundRecord) error {
+	records, err := ReadPlaygroundRecords(c)
 	if err != nil {
 		return err
 	}
@@ -700,14 +700,14 @@ func setPlaygroundRecord(c *Client, project string, rec *playgroundRecord) error
 	default:
 		records[project] = *rec
 	}
-	return writePlaygroundRecords(c, records)
+	return WritePlaygroundRecords(c, records)
 }
 
 // newPlaygroundRecord is the entry of a request made now.
-func newPlaygroundRecord(c *Client) *playgroundRecord {
+func newPlaygroundRecord(c *kube.Client) *PlaygroundRecord {
 	// Seconds, as creationTimestamp: a server made in the same second as
 	// the request counts as made after it.
-	return &playgroundRecord{RequestedAt: kube.Clock().Now().UTC().Format(time.RFC3339), By: kube.GetUser(c)}
+	return &PlaygroundRecord{RequestedAt: kube.Clock().Now().UTC().Format(time.RFC3339), By: kube.GetUser(c)}
 }
 
 // --- cluster parts (ServiceAccount reads) -------------------------------------------
@@ -746,7 +746,7 @@ const genAIUIDeployment = "gen-ai-ui"
 
 // genAIUIState reads Deployment gen-ai-ui: "available", "unavailable",
 // "missing", or "" when it cannot be read.
-func genAIUIState(c *Client) string {
+func genAIUIState(c *kube.Client) string {
 	ns, err := rhoai.AppsNamespace(c)
 	if err != nil {
 		slog.Debug("cannot tell where the gen-ai-ui Deployment runs", "error", err)
@@ -778,7 +778,7 @@ func genAIUIState(c *Client) string {
 }
 
 // playgroundClusterParts fills what the ServiceAccount reads.
-func playgroundClusterParts(c *Client, st *types.PlaygroundStatus) {
+func playgroundClusterParts(c *kube.Client, st *types.PlaygroundStatus) {
 	if dsc, err := rhoai.ReadFirstDSC(c); err == nil {
 		st.Blocked = envkit.ComponentBlock(dsc, playgroundComponent)
 		st.OperatorReady, st.OperatorMessage = componentReadyCondition(dsc.Object, playgroundComponent.Keys)
@@ -801,7 +801,7 @@ func PurgePlaygroundStatus() { playgroundStatusGen.Add(1) }
 
 // apiProblem explains an error of the gen-ai API for people, with its kind.
 func apiProblem(err error) (string, string) {
-	if errors.Is(err, errGenAINotAllowed) {
+	if errors.Is(err, ErrGenAINotAllowed) {
 		return "Nothing was sent: " + err.Error() + ".", "validation"
 	}
 	if e, ok := asGenAIError(err); ok {
@@ -816,31 +816,31 @@ func apiProblem(err error) (string, string) {
 	return fmt.Sprintf("The dashboard's gen-ai API cannot be reached: %v.", err), "unreachable"
 }
 
-// playgroundAPI is the API for a request, or why it cannot be used. It
+// PlaygroundAPI is the API for a request, or why it cannot be used. It
 // calls with the client's own token: the user's for a change's client
 // (NewUserClient), which allows genAIUserCallAllowed, the ServiceAccount's
 // otherwise, which allows only genAICallAllowed.
-func playgroundAPI(c *Client) (genAIAPI, string, string) {
+func PlaygroundAPI(c *kube.Client) (GenAIAPI, string, string) {
 	return playgroundAPIAs(c, c)
 }
 
-// playgroundAPIAs is playgroundAPI that finds the dashboard with find (the
+// playgroundAPIAs is PlaygroundAPI that finds the dashboard with find (the
 // ServiceAccount's client of a user's read: the Dashboard CR and its
 // Route are no user data) and calls it with as's token.
-func playgroundAPIAs(find, as *Client) (genAIAPI, string, string) {
+func playgroundAPIAs(find, as *kube.Client) (GenAIAPI, string, string) {
 	if as.BearerToken() == "" {
-		return genAIAPI{}, "No token is available to call the dashboard's gen-ai API with.", "no_token"
+		return GenAIAPI{}, "No token is available to call the dashboard's gen-ai API with.", "no_token"
 	}
 	base := genAIBaseURL(find)
 	if base == "" {
-		return genAIAPI{}, "The RHOAI dashboard's address is unknown (no Dashboard component reports one), so its gen-ai API cannot be called.", "no_dashboard"
+		return GenAIAPI{}, "The RHOAI dashboard's address is unknown (no Dashboard component reports one), so its gen-ai API cannot be called.", "no_dashboard"
 	}
-	return genAIAPI{ctx: as.Context(), base: base, token: as.BearerToken(), asUser: as.ActsAsUser()}, "", ""
+	return GenAIAPI{Ctx: as.Context(), Base: base, Token: as.BearerToken(), AsUser: as.ActsAsUser()}, "", ""
 }
 
 // playgroundItem is a playground (srv, nil for none) in a project as the
 // page shows it.
-func playgroundItem(project string, srv *genAIServer, requested bool) types.PlaygroundState {
+func playgroundItem(project string, srv *GenAIServer, requested bool) types.PlaygroundState {
 	s := types.PlaygroundState{Requested: requested,
 		Namespace:     project,
 		ManagedByTool: requested}
@@ -884,7 +884,7 @@ func playgroundItem(project string, srv *genAIServer, requested bool) types.Play
 // playground's operator and the gen-ai backend run, and this tool's
 // record of the playgrounds it set up (u's bookkeeping), of which only the
 // user's projects are used. Cached per token.
-func GetPlaygroundStatus(sa, u *Client, project string) (*types.PlaygroundStatus, error) {
+func GetPlaygroundStatus(sa, u *kube.Client, project string) (*types.PlaygroundStatus, error) {
 	if !u.ActsAsUser() {
 		return nil, authz.ErrNotUserClient
 	}
@@ -894,20 +894,20 @@ func GetPlaygroundStatus(sa, u *Client, project string) (*types.PlaygroundStatus
 		return st, nil
 	}
 	st := &types.PlaygroundStatus{Project: project}
-	projects, err := ListUserDSProjects(c)
+	projects, err := authz.ListUserDSProjects(c)
 	if err != nil {
 		return nil, err
 	}
 	if project != "" && !slices.Contains(projects, project) {
-		return nil, fmt.Errorf("%w: '%s' is not one of your data science projects", ErrNotDSProject, project)
+		return nil, fmt.Errorf("%w: '%s' is not one of your data science projects", mlflow.ErrNotDSProject, project)
 	}
-	allRecords, err := readPlaygroundRecords(c)
+	allRecords, err := ReadPlaygroundRecords(c)
 	if err != nil {
 		return nil, err
 	}
 	// Only the user's projects: the record names every project the tool
 	// set a playground up in.
-	records := map[string]playgroundRecord{}
+	records := map[string]PlaygroundRecord{}
 	for p, rec := range allRecords {
 		if slices.Contains(projects, p) {
 			records[p] = rec
@@ -980,7 +980,7 @@ func GetPlaygroundStatus(sa, u *Client, project string) (*types.PlaygroundStatus
 		if !seen[p] && slices.Contains(fo.projects, p) {
 			if _, read := fo.servers[p]; !read {
 				// Its state could not be read: unknown, not absent.
-				item := playgroundItem(p, &genAIServer{}, true)
+				item := playgroundItem(p, &GenAIServer{}, true)
 				item.Message = "Its state could not be read from the dashboard"
 				st.Items = append(st.Items, item)
 			}
@@ -997,7 +997,7 @@ func GetPlaygroundStatus(sa, u *Client, project string) (*types.PlaygroundStatus
 // selection reads only that project's models.
 type playgroundFanOut struct {
 	projects  []string                // the projects read
-	servers   map[string]*genAIServer // read without error (nil: none)
+	servers   map[string]*GenAIServer // read without error (nil: none)
 	owned     map[string]bool
 	errs      map[string]error
 	truncated bool
@@ -1005,12 +1005,12 @@ type playgroundFanOut struct {
 
 var playgroundFanOutCache = kube.NewLRU[string, *playgroundFanOut](16)
 
-func readPlaygroundFanOut(c *Client, api genAIAPI, projects []string, records map[string]playgroundRecord) *playgroundFanOut {
-	key := fmt.Sprintf("%d|%s", playgroundStatusGen.Load(), kube.TokenKey(api.token))
+func readPlaygroundFanOut(c *kube.Client, api GenAIAPI, projects []string, records map[string]PlaygroundRecord) *playgroundFanOut {
+	key := fmt.Sprintf("%d|%s", playgroundStatusGen.Load(), kube.TokenKey(api.Token))
 	if fo, ok := playgroundFanOutCache.Get(key); ok {
 		return fo
 	}
-	fo := &playgroundFanOut{servers: map[string]*genAIServer{}, owned: map[string]bool{}, errs: map[string]error{}}
+	fo := &playgroundFanOut{servers: map[string]*GenAIServer{}, owned: map[string]bool{}, errs: map[string]error{}}
 	fo.projects = projects
 	if len(projects) > playgroundStatusMaxProjects {
 		fo.projects, fo.truncated = projects[:playgroundStatusMaxProjects], true
@@ -1038,8 +1038,8 @@ func readPlaygroundFanOut(c *Client, api genAIAPI, projects []string, records ma
 }
 
 // with is a copy of fo that also has project.
-func (fo *playgroundFanOut) with(c *Client, api genAIAPI, project string, records map[string]playgroundRecord) *playgroundFanOut {
-	cp := &playgroundFanOut{projects: append(append([]string{}, fo.projects...), project), servers: map[string]*genAIServer{}, owned: map[string]bool{}, errs: map[string]error{}, truncated: fo.truncated}
+func (fo *playgroundFanOut) with(c *kube.Client, api GenAIAPI, project string, records map[string]PlaygroundRecord) *playgroundFanOut {
+	cp := &playgroundFanOut{projects: append(append([]string{}, fo.projects...), project), servers: map[string]*GenAIServer{}, owned: map[string]bool{}, errs: map[string]error{}, truncated: fo.truncated}
 	maps.Copy(cp.servers, fo.servers)
 	maps.Copy(cp.owned, fo.owned)
 	maps.Copy(cp.errs, fo.errs)
@@ -1055,7 +1055,7 @@ func (fo *playgroundFanOut) with(c *Client, api genAIAPI, project string, record
 // readProjectPlayground reads a project's playground and whether it is
 // this tool's (read only: the record is brought up to date by the next
 // operation, which holds the lock).
-func readProjectPlayground(c *Client, api genAIAPI, project string, records map[string]playgroundRecord) (*genAIServer, bool, error) {
+func readProjectPlayground(c *kube.Client, api GenAIAPI, project string, records map[string]PlaygroundRecord) (*GenAIServer, bool, error) {
 	srv, err := api.playgroundStatus(project)
 	if err != nil {
 		return nil, false, err
@@ -1108,9 +1108,9 @@ func ValidatePlaygroundRequest(req types.PlaygroundRequest) string {
 
 // playgroundRun is one streamed playground operation.
 type playgroundRun struct {
-	c       *Client
-	api     genAIAPI
-	emit    func(UpdateStepEvent)
+	c       *kube.Client
+	api     GenAIAPI
+	emit    func(types.UpdateStepEvent)
 	logs    []string
 	project string
 	action  string
@@ -1119,13 +1119,13 @@ type playgroundRun struct {
 func (p *playgroundRun) step(id, status, msg string) {
 	p.logs = append(p.logs, msg)
 	if p.emit != nil {
-		p.emit(UpdateStepEvent{Step: id, Status: status, Message: msg})
+		p.emit(types.UpdateStepEvent{Step: id, Status: status, Message: msg})
 	}
 }
 
 func (p *playgroundRun) fail(id, msg, code, activity string) (*types.OperationResponse, error) {
 	if p.emit != nil {
-		p.emit(UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: code})
+		p.emit(types.UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: code})
 	}
 	p.logs = append(p.logs, msg)
 	slog.Warn("playground operation stopped", "step", id, "reason", activity, "project", p.project, "user", kube.GetUser(p.c))
@@ -1147,7 +1147,7 @@ func (p *playgroundRun) record(detail string, success bool) {
 // through the dashboard's gen-ai API, as one operation with streamed
 // steps: setup "check", "install", "ready"; teardown "delete", "gone".
 // The gen-ai API is called with the client's token (the user's own).
-func RunPlayground(c *Client, req types.PlaygroundRequest, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
+func RunPlayground(c *kube.Client, req types.PlaygroundRequest, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	defer PurgePlaygroundStatus()
 	p := &playgroundRun{c: c, emit: onStep, project: req.Project, action: req.Action}
 	first := "check"
@@ -1157,7 +1157,7 @@ func RunPlayground(c *Client, req types.PlaygroundRequest, onStep func(UpdateSte
 	if problem := ValidatePlaygroundRequest(req); problem != "" {
 		return p.fail(first, problem, "validation", "invalid request")
 	}
-	api, problem, code := playgroundAPI(c)
+	api, problem, code := PlaygroundAPI(c)
 	if problem != "" {
 		return p.fail(first, problem, code, code)
 	}
@@ -1170,7 +1170,7 @@ func RunPlayground(c *Client, req types.PlaygroundRequest, onStep func(UpdateSte
 
 // TeardownPlayground deletes the playground this tool requested in project
 // (Clean up).
-func TeardownPlayground(c *Client, project string) (*types.OperationResponse, error) {
+func TeardownPlayground(c *kube.Client, project string) (*types.OperationResponse, error) {
 	return RunPlayground(c, types.PlaygroundRequest{Action: "teardown", Project: project}, nil)
 }
 
@@ -1186,8 +1186,8 @@ func (p *playgroundRun) failAPI(id string, err error, activity string) (*types.O
 // checkPlayground is the setup's first step: everything the dashboard's
 // install needs, checked before anything is written. It returns the
 // models to install.
-func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]types.PlaygroundModel, *genAIServer, *types.OperationResponse) {
-	stop := func(msg, code, activity string) ([]types.PlaygroundModel, *genAIServer, *types.OperationResponse) {
+func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]types.PlaygroundModel, *GenAIServer, *types.OperationResponse) {
+	stop := func(msg, code, activity string) ([]types.PlaygroundModel, *GenAIServer, *types.OperationResponse) {
 		res, _ := p.fail("check", msg, code, activity)
 		return nil, nil, res
 	}
@@ -1305,8 +1305,8 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 // requested in the project. Operations hold the cluster lock, so it also
 // brings the record up to date: a stale one is dropped, and the server's
 // UID is filled in when it was not known yet.
-func (p *playgroundRun) owned(srv *genAIServer) (bool, error) {
-	records, err := readPlaygroundRecords(p.c)
+func (p *playgroundRun) owned(srv *GenAIServer) (bool, error) {
+	records, err := ReadPlaygroundRecords(p.c)
 	if err != nil {
 		return false, err
 	}
@@ -1383,7 +1383,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 		deadline := kube.Clock().Now().Add(PlaygroundInstallRetryTimeout)
 		said := false
 		for {
-			installErr = p.api.call(http.MethodPost, "/lsd/install", p.project, body, nil)
+			installErr = p.api.Call(http.MethodPost, "/lsd/install", p.project, body, nil)
 			if genAIStatus(installErr) != http.StatusConflict || !kube.Clock().Now().Before(deadline) {
 				break
 			}
@@ -1426,8 +1426,8 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 	}
 	p.step("ready", "running", "Waiting until the playground is ready (typically 1 to 2 minutes)...")
 	var last, problem string
-	var srv *genAIServer
-	ready, err := kube.WaitForGone(p.c, PlaygroundReadyTimeout, PlaygroundPoll, func(cc *Client) (bool, error) {
+	var srv *GenAIServer
+	ready, err := kube.WaitForGone(p.c, PlaygroundReadyTimeout, PlaygroundPoll, func(cc *kube.Client) (bool, error) {
 		s, err := p.api.with(cc.Context()).playgroundStatus(p.project)
 		if err != nil {
 			return false, err
@@ -1462,7 +1462,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("The playground in %s is ready. Open it in the dashboard's Gen AI studio.", p.project), Logs: p.logs}, nil
 }
 
-func srvPhase(s *genAIServer) string {
+func srvPhase(s *GenAIServer) string {
 	if s == nil {
 		return ""
 	}
@@ -1480,7 +1480,7 @@ func (p *playgroundRun) forgetIfAbsent() {
 }
 
 func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
-	records, err := readPlaygroundRecords(p.c)
+	records, err := ReadPlaygroundRecords(p.c)
 	if err != nil {
 		return p.fail("delete", fmt.Sprintf("Cannot read this tool's records; nothing was deleted: %v.", err), kube.ErrorCodeFromK8sErr(err), "records")
 	}
@@ -1510,13 +1510,13 @@ func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 	}
 	if srv.Phase != "Terminating" {
 		p.step("delete", "running", fmt.Sprintf("Asking the dashboard to delete the playground %s in %s...", srv.Name, p.project))
-		if err := p.api.call(http.MethodDelete, "/lsd/delete", p.project, map[string]string{"name": srv.Name}, nil); err != nil {
+		if err := p.api.Call(http.MethodDelete, "/lsd/delete", p.project, map[string]string{"name": srv.Name}, nil); err != nil {
 			return p.failAPI("delete", err, "delete failed")
 		}
 	}
 	p.step("delete", "success", fmt.Sprintf("The dashboard is deleting the playground in %s.", p.project))
 	p.step("gone", "running", "Waiting until the playground is gone...")
-	gone, err := kube.WaitForGone(p.c, PlaygroundDeleteTimeout, PlaygroundPoll, func(cc *Client) (bool, error) {
+	gone, err := kube.WaitForGone(p.c, PlaygroundDeleteTimeout, PlaygroundPoll, func(cc *kube.Client) (bool, error) {
 		s, err := p.api.with(cc.Context()).playgroundStatus(p.project)
 		return err == nil && s == nil, err
 	})
