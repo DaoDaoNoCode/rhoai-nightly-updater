@@ -24,6 +24,29 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Added
 
+- **Environment recipes (backend, first version).** A recipe
+  (`rhoai-nightly-updater/v1alpha1`, YAML or JSON, no secrets) describes a
+  dev cluster: an RHOAI build (latest, a nightly line or an image; kept or
+  updated when one is installed), the release's default
+  DataScienceCluster, a project (created by the recipe or an existing
+  one), Pipelines and MLflow. `POST /api/recipes/plan` says what a run
+  would do and why it would refuse (one-time setup missing, Argo CD
+  managing the operator, a build that does not resolve, a project that is
+  not the recipe's, a half installed operator, a part this version does
+  not run yet). `POST /api/recipes/run` runs it on the server as one
+  operation that holds the cluster lock until its last step, each step
+  with its own 15-minute budget and the sign-in checked again before it;
+  closing the browser does not stop it, Stop after this step
+  (`POST /api/recipes/stop`) does. `POST /api/recipes/resume` continues a
+  failed, stopped or interrupted run, skipping what is set up and keeping
+  the pinned build. `GET /api/recipes/run` has the run record. All are
+  admin-only and refused in the gitops profile. A project the recipe
+  created is removed by Clean up (`recipeProject`) only with its label,
+  its recorded UID and every leftover confirmed. No new ServiceAccount
+  permission ([SECURITY.md](SECURITY.md#environment-recipes-500),
+  [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#environment-recipes-the-recipe-project-500),
+  [RUNBOOK §5.1](RUNBOOK.md#51-environment-recipe-runs-resume-interrupted-sign-in-again)).
+
 - **Pre-releases.** A version can now be tried out before it is released:
   `make release VERSION=v5.0.0-rc.1` tags a pre-release (`-alpha.N`,
   `-beta.N` or `-rc.N`, numbered from 1), on `main` or on an `integ/*`

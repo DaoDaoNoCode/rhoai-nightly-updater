@@ -28,7 +28,9 @@ import (
 //  1. ends the run as stopped when Stop after this step was asked for, or
 //     when the updater is shutting down (stopped, "restart": the marker is
 //     cleared with that outcome, so the run is not reported interrupted);
-//  2. checks the signed-in user's token again (sessionProblem: not expired
+//  2. passes the mutation wrapper's gate again (statusWriter.gate, which
+//     holds the token of the request that started the run): it checks the
+//     signed-in user's token (sessionProblem: not expired
 //     or revoked, user:full, not expiring before the step's deadline and
 //     its restore) and that they are still a cluster-admin
 //     (mutationPermission); otherwise the run stops with sign_in_again (or

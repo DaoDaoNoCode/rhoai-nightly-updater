@@ -209,6 +209,19 @@ sequenceDiagram
   Note over A: If no renewal of A succeeds for 35 s after its last heartbeat,<br>or one finds another pod's lease, A stops at once (lock_lost),<br>10 s before the lease expires, and does not restore.
 ```
 
+### 5.1 Environment recipe runs: resume, interrupted, sign in again
+
+A recipe run (5.0.0, `POST /api/recipes/run`) is one operation that holds the lock for all its steps, so the banner shows "Environment recipe" with its step for its whole length, and teammates get 409 `cluster_busy`. `GET /api/recipes/run` (admins) has the run record: each step's status, message and times, the pinned build and the project.
+
+- **Failed:** the first step that fails ends the run; what earlier steps set up stays. Fix the cause the step's message names, then **Resume** (`POST /api/recipes/resume` with the run's `runId`). Resume runs every step's check again: what is set up is skipped ("Already set up"), the first step that is not runs. It keeps the build the run pinned (tag and digest), so it does not move to a newer nightly halfway; `reresolveBuild: true` resolves the recipe's build again.
+- **Stopped, `sign_in_again` or `session_expired`:** before each step the run checks your sign-in; it stopped because the token would expire during the next step, or was revoked. Log out and log in again, then Resume. Logging out alone does not stop a run.
+- **Stopped, `forbidden`:** the user who started it is no longer a cluster-admin. A cluster-admin resumes it.
+- **Stopped, `stopped`:** someone used Stop after this step. Resume continues.
+- **Stopped, `restart`:** the updater pod was restarting (SIGTERM); the running step finished, the next did not start. Resume once the new pod is up.
+- **Interrupted:** the record says running, but the process that ran it is gone (SIGKILL, node loss, OOM): `GET /api/recipes/run` answers `interrupted: true`, and `GET /api/operation` the interrupted marker. Nothing resumes by itself (the new pod has no sign-in of yours). Check the Status page first: if the RHOAI step was cut off, the operator may be half installed, and the recipe then refuses ("half installed"); recover it as in [§6](#6-update--install-a-different-build-failed), then Resume.
+- **`lock_lost`:** as for any operation ([§5](#5-operations-busy-stuck-interrupted)): the step stopped without its restore. Check the cluster, then Resume.
+- **The project:** `project.mode: create` refuses a namespace of that name that a recipe did not create, and one being deleted. Clean up deletes the recipe's project (request field `recipeProject`) only when what it holds that the tool did not create is confirmed (`confirm_project_contents` lists it).
+
 ## 6. Update / Install a different build failed
 
 A successful update, for reference: each step turns green, then **Update complete**.

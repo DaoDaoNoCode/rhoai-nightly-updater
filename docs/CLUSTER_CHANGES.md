@@ -248,9 +248,19 @@ One streamed operation, `POST /api/resources/maas/stream` (`setup`, `teardown`, 
 
 Kept by Clean up MaaS, also when this tool installed or created them (shared platform pieces: RHOAI's inference gateway authentication is Kuadrant's): Connectivity Link (its Namespace, OperatorGroup and Subscription), the Kuadrant CR, Authorino's TLS settings, the CloudNativePG Subscription. Also kept: GatewayClass `openshift-default`, the namespaces RHOAI's operator generated (`ai-tenants`, `models-as-a-service`, and `<infra>` when the operator made it) and what the operator made in them (`Config/default`, the AITenant, MaasTenantConfig, maas-api), and every MaaS object someone else made.
 
+### Environment recipes: the recipe project (5.0.0)
+
+A recipe run changes nothing beyond what the steps' own buttons change (Install latest nightly, Create DataScienceCluster, each feature's Set up), except the project of `project.mode: create`.
+
+| Action | Objects |
+|---|---|
+| Run | Namespace `<project>` through a ProjectRequest (`project.openshift.io/v1`, with the recipe's display name and description), with the user's token, as the dashboard's Create project; then a merge patch (field manager `rhoai-nightly-updater`) of the labels `opendatahub.io/dashboard=true` and `app.kubernetes.io/managed-by=rhoai-nightly-updater` and the annotation `rhoai-nightly-updater/recipe=<recipe name>`. Not the Kueue label the dashboard adds when Kueue is on. Its name and UID go into key `recipeProject` of ConfigMap `rhoai-nightly-updater-snapshot`. A namespace of that name that the recipe did not create is refused. Key `recipeRun` of ConfigMap `rhoai-nightly-updater-operation` records the last run |
+| Clean up (`recipeProject`) | After the parts that live in the project and before the components: the namespace, with its recorded UID as the precondition, only while it carries the tool's label, and only when what it holds that the tool did not create is confirmed by name; then its record. OpenShift deletes what the namespace holds |
+| `install.sh uninstall` | Does not delete it (like everything on the Environment page) |
+
 ## 9. What the tool never does
 
-- Delete a namespace, other than `make undeploy` deleting its own, and `seaweedfs` or `minio` when you tick that choice in the storage's deletion, and the AI gateway's infrastructure namespace on Clean up MaaS when the tool created it and nothing else is in it.
+- Delete a namespace, other than `make undeploy` deleting its own, `seaweedfs` or `minio` when you tick that choice in the storage's deletion, the AI gateway's infrastructure namespace on Clean up MaaS when the tool created it and nothing else is in it, and a project an environment recipe created, on Clean up with the guards of §8.
 - Read or list Secrets cluster-wide.
 - Create an IDMS or touch `openshift-config/pull-secret` other than by the four one-click setup actions of §3 that a user confirms (never on a hosted control plane; the pull secret never on ROSA Classic or OSD), or change any registry login in it other than `quay.io/rhoai`.
 - Delete webhook configurations of a live CSV or operand.
