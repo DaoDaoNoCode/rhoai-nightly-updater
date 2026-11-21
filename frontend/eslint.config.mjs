@@ -23,6 +23,26 @@ export default defineConfig(
     },
   },
   {
+    // Rules that need the types (tsconfig.json covers src/, tests included).
+    files: ["src/**/*.{ts,tsx}"],
+    languageOptions: { parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname } },
+    rules: {
+      // A promise nobody awaits or catches. The async handlers here catch
+      // their own errors and show them in state; calling one without waiting
+      // is written `void handler()`, e.g. onClick={() => void handleSave()}.
+      "@typescript-eslint/no-floating-promises": "error",
+      "@typescript-eslint/no-misused-promises": "error",
+      "@typescript-eslint/await-thenable": "error",
+      // A default case covers the members a switch does not name.
+      "@typescript-eslint/switch-exhaustiveness-check": ["error", { considerDefaultExhaustiveForUnions: true }],
+      "@typescript-eslint/no-base-to-string": "error",
+      // Not no-unnecessary-condition: it flags the `?.` and `??` that guard
+      // API fields the types call required but older backends and Go's nil
+      // slices (JSON null) leave out, and indexing (`list[0] ?? null`), which
+      // the types call never undefined without noUncheckedIndexedAccess.
+    },
+  },
+  {
     files: ["**/*.cjs", "*.js"],
     languageOptions: { globals: globals.node, sourceType: "commonjs" },
     rules: { "@typescript-eslint/no-require-imports": "off" },

@@ -119,7 +119,7 @@ export const DSCEmptyState: React.FC<DSCEmptyStateProps> = ({ dscState, operator
             </EmptyStateBody>
             <EmptyStateFooter>
               <EmptyStateActions>
-                <TooltipButton variant="primary" onClick={openPreview} disabledReason={disabledReason} isLoading={creating}>
+                <TooltipButton variant="primary" onClick={() => void openPreview()} disabledReason={disabledReason} isLoading={creating}>
                   Preview and create DataScienceCluster
                 </TooltipButton>
               </EmptyStateActions>
@@ -155,7 +155,7 @@ export const DSCEmptyState: React.FC<DSCEmptyStateProps> = ({ dscState, operator
           </Stack>
         </ModalBody>
         <ModalFooter>
-          <Button variant="primary" onClick={create} isLoading={creating} isDisabled={creating || !preview || !!previewError || !!mutateBlocker}>Create</Button>
+          <Button variant="primary" onClick={() => void create()} isLoading={creating} isDisabled={creating || !preview || !!previewError || !!mutateBlocker}>Create</Button>
           <Button variant="link" onClick={() => setOpen(false)} isDisabled={creating}>Cancel</Button>
         </ModalFooter>
       </Modal>

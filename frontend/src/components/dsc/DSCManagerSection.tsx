@@ -180,7 +180,7 @@ export const DSCManagerSection: React.FC<{
           confirmLabel={pending.confirmLabel}
           confirmVariant={plan?.changes.some((c) => c.effect === "removes") ? "danger" : "primary"}
           confirmDisabled={planBlocked || !!disabledReason}
-          onConfirm={confirmPending}
+          onConfirm={() => void confirmPending()}
           onCancel={() => setPending(null)}
         >
           <Stack hasGutter>

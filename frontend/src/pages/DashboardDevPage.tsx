@@ -526,7 +526,7 @@ export const DashboardDevPage: React.FC = () => {
         changes={confirm === "pr" || confirm === "main" ? deployChanges(confirm) : []}
         confirmLabel={confirm === "pr" ? `Deploy PR #${parsedPR}` : "Deploy latest main"}
         isLoading={running === "pr" || running === "main"}
-        onConfirm={() => confirm && run(confirm)}
+        onConfirm={() => { if (confirm) void run(confirm); }}
         onCancel={() => setConfirm(null)}
       >
         {flavors.length > 1 && !legacy && <Content component="p">Build: <strong>{flavorName(chosenFlavor)}</strong>.</Content>}
@@ -545,7 +545,7 @@ export const DashboardDevPage: React.FC = () => {
         ]}
         confirmLabel="Revert to default"
         isLoading={running === "revert"}
-        onConfirm={() => run("revert")}
+        onConfirm={() => void run("revert")}
         onCancel={() => setConfirm(null)}
       >
         <Content component="p">The dashboard restarts and may be unavailable briefly. Reverting twice is safe.</Content>
@@ -559,7 +559,7 @@ export const DashboardDevPage: React.FC = () => {
         ]}
         confirmLabel="Assist rollout"
         isLoading={running === "assist"}
-        onConfirm={() => run("assist")}
+        onConfirm={() => void run("assist")}
         onCancel={() => setConfirm(null)}
       >
         <Content component="p">

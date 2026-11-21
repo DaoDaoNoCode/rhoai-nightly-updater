@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { NodeSetupDialog } from "./NodeSetupDialog";
 import { ImageMirrorSetup } from "./ImageMirrorSetup";
 import { nightlyStatus, renderWithApp, settleApps } from "../test/providers";
+import { jsonBody } from "../test/utils";
 import type { NodeSetupPlan, StatusResponse } from "../types";
 
 const READY_PLAN: NodeSetupPlan = {
@@ -53,13 +54,13 @@ describe("NodeSetupDialog", () => {
     expect(screen.getByText(/without draining or rebooting them/)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "How to undo it" })).toBeInTheDocument();
     const planCall = fetchMock.mock.calls.find(([u]) => u === "/api/setup/nodes/plan");
-    expect(JSON.parse(String(planCall?.[1]?.body))).toEqual({ action: "pull-secret-add" });
+    expect(jsonBody(planCall?.[1])).toEqual({ action: "pull-secret-add" });
 
     fireEvent.click(screen.getByRole("button", { name: "Add to the nodes' pull secret" }));
     expect(await screen.findByText("Done")).toBeInTheDocument();
     expect(screen.getAllByText(/Added the quay.io\/rhoai entry to openshift-config\/pull-secret/).length).toBeGreaterThan(0);
     const streamCall = fetchMock.mock.calls.find(([u]) => u === "/api/setup/nodes/stream");
-    expect(JSON.parse(String(streamCall?.[1]?.body))).toEqual({ action: "pull-secret-add", resourceVersion: "42" });
+    expect(jsonBody(streamCall?.[1])).toEqual({ action: "pull-secret-add", resourceVersion: "42" });
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     await settleApps();
   });
@@ -107,7 +108,7 @@ describe("NodeSetupDialog", () => {
     };
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url === "/api/setup/nodes/plan") {
-        const body = JSON.parse(String(init?.body));
+        const body = jsonBody(init);
         return new Response(JSON.stringify(body.replaceExisting ? replacing : refused), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       if (url === "/api/setup/nodes/stream") return sse({ step: "operation_complete", status: "success", message: "Replaced." });
@@ -127,12 +128,12 @@ describe("NodeSetupDialog", () => {
     fireEvent.click(ack);
     const confirm = await screen.findByRole("button", { name: "Replace the entry" });
     expect(confirm).toHaveClass("pf-m-danger");
-    const planCalls = fetchMock.mock.calls.filter(([u]) => u === "/api/setup/nodes/plan").map(([, i]) => JSON.parse(String(i?.body)));
+    const planCalls = fetchMock.mock.calls.filter(([u]) => u === "/api/setup/nodes/plan").map(([, i]) => jsonBody(i));
     expect(planCalls).toEqual([{ action: "pull-secret-add" }, { action: "pull-secret-add", replaceExisting: true }]);
     fireEvent.click(confirm);
     expect(await screen.findByText("Done")).toBeInTheDocument();
     const streamCall = fetchMock.mock.calls.find(([u]) => u === "/api/setup/nodes/stream");
-    expect(JSON.parse(String(streamCall?.[1]?.body))).toEqual({ action: "pull-secret-add", resourceVersion: "42", replaceExisting: true });
+    expect(jsonBody(streamCall?.[1])).toEqual({ action: "pull-secret-add", resourceVersion: "42", replaceExisting: true });
     await settleApps();
   });
 

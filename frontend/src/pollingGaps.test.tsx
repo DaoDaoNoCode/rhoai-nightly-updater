@@ -38,7 +38,7 @@ afterEach(() => {
 describe("(c) an older answer never overwrites a newer one", () => {
   it("MaaS: a reload's answer, then the earlier read's", async () => {
     const { held } = heldAnswers("/api/resources/maas");
-    let reload: () => void = () => {};
+    let reload: () => Promise<void> = async () => {};
     const Probe = () => {
       const m = useMaaSStatus(0, false);
       reload = m.reload;
@@ -46,7 +46,8 @@ describe("(c) an older answer never overwrites a newer one", () => {
     };
     render(<Probe />);
     await waitFor(() => expect(held).toHaveLength(1));
-    act(() => { reload(); });
+    // Not awaited: the reload's answer is held until the test resolves it below.
+    act(() => { void reload(); });
     await waitFor(() => expect(held).toHaveLength(2));
     await act(async () => held[1].resolve({ platform: { deployed: true, ready: true }, parts: [], subscription: "newer" }));
     await waitFor(() => expect(screen.getByTestId("maas")).toHaveTextContent("newer"));

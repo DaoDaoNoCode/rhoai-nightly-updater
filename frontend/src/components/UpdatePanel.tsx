@@ -234,7 +234,7 @@ export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, 
                 <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
                   <FlexItem><Content component="small">Just set up the pull secret or image mirror?</Content></FlexItem>
                   <FlexItem>
-                    <Button variant="link" isInline onClick={handleVerifyNodes} isLoading={verifying} isDisabled={verifying}>
+                    <Button variant="link" isInline onClick={() => void handleVerifyNodes()} isLoading={verifying} isDisabled={verifying}>
                       Check that the nodes can pull nightly images
                     </Button>
                   </FlexItem>
@@ -494,7 +494,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
                     variant="control"
                     icon={<SyncAltIcon />}
                     aria-label="Fetch latest"
-                    onClick={handleFetchLatest}
+                    onClick={() => void handleFetchLatest()}
                     isLoading={fetchingLatest}
                     isDisabled={fetchingLatest}
                     disabledReason={!prerequisitesMet ? "Finish the one-time cluster setup first (pull secret and image mirror)." : null}
@@ -554,7 +554,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
             <FlexItem>
               <TooltipButton
                 variant="secondary"
-                onClick={handleDryRun}
+                onClick={() => void handleDryRun()}
                 isLoading={dryRunning}
                 isDisabled={dryRunning}
                 disabledReason={disabledReason}

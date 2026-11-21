@@ -203,7 +203,7 @@ export const ResetModal: React.FC<{
           <Button variant="primary" onClick={onClose} isDisabled={busy}>Close</Button>
         ) : (
           <>
-            <TooltipButton variant={kind === "hard-reset" ? "danger" : "primary"} onClick={confirm} isLoading={busy}
+            <TooltipButton variant={kind === "hard-reset" ? "danger" : "primary"} onClick={() => void confirm()} isLoading={busy}
               isDisabled={busy || blocked || !!disabledReason || (kind === "hard-reset" && typed !== name)} disabledReason={disabledReason}>
               {kind === "hard-reset" ? "Hard reset" : "Reset"}
             </TooltipButton>
@@ -282,7 +282,7 @@ export const FinishHardReset: React.FC<{
           confirmLabel={`Create ${pending.name}`}
           isLoading={busy}
           confirmDisabled={busy || !!disabledReason}
-          onConfirm={finish}
+          onConfirm={() => void finish()}
           onCancel={() => !busy && setConfirming(false)}
         >
           <Content component="p" className="pf-v6-u-text-color-subtle">

@@ -518,7 +518,7 @@ export const DeploymentsTable: React.FC<DeploymentsTableProps> = ({
         ]}
         confirmLabel="Unblock rollout"
         confirmDisabled={!!mutateBlocker}
-        onConfirm={() => unblockTarget && runUnblock(unblockTarget)}
+        onConfirm={() => { if (unblockTarget) void runUnblock(unblockTarget); }}
         onCancel={() => setUnblockTarget(null)}
       >
         <Content component="p">

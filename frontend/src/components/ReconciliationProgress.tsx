@@ -453,7 +453,7 @@ export const ReconciliationProgress: React.FC<ReconciliationProgressProps> = ({
         confirmLabel="Apply fix"
         isLoading={fixLoading}
         confirmDisabled={!!fixDisabledReason}
-        onConfirm={handleFixConfirm}
+        onConfirm={() => void handleFixConfirm()}
         onCancel={() => setFixConfirmProblem(null)}
       >
         {(fixConfirmProblem?.affectedObjects?.length ?? 0) > 0 && (fixConfirmProblem?.confirmMessage || fixConfirmProblem?.fix) && (

@@ -108,6 +108,10 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   `make release-check TAG=vX.Y.Z`. The frontend targets say when
   `frontend/node_modules` is missing (`cd frontend && npm ci`) instead of
   failing on a TypeScript option.
+- Internal, frontend only: ESLint reads the TypeScript types and checks
+  promises (none left unhandled, none passed where nothing waits for them),
+  `await` of non-promises, switch exhaustiveness and object-to-string
+  conversions. No change in what the app does.
 
 ### Fixed
 

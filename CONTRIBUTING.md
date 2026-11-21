@@ -201,6 +201,8 @@ Requires golangci-lint v2 (configuration in `.golangci.yml`), installed from the
 make lint-frontend     # Runs: cd frontend && npm run typecheck && npm run lint (ESLint)
 ```
 
+ESLint reads the TypeScript types for `src/` (`frontend/eslint.config.mjs`): a promise must be awaited, caught or marked `void`. The async handlers catch their own errors and show them, so a button calls one as `onClick={() => void handleSave()}`; a new async handler must do the same (catch, and show or log what fails) before it is called that way.
+
 ## Building
 
 ### Local Build (Containerfile)

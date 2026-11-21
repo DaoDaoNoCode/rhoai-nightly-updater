@@ -131,7 +131,7 @@ export const StatusPage: React.FC = () => {
       setTagsLoading(false);
     }
   }, [prerequisitesMet, installed, profile]);
-  useEffect(() => { loadTags(); }, [loadTags]);
+  useEffect(() => { void loadTags(); }, [loadTags]);
 
   useEffect(() => {
     const nightlyTag = status?.nightly?.installed?.tag;
@@ -328,7 +328,7 @@ export const StatusPage: React.FC = () => {
                   </Content>
                 </StackItem>
                 <StackItem>
-                  <TooltipButton variant="primary" onClick={openDscPreview} isLoading={dscLoading} isDisabled={dscLoading} disabledReason={blocker}>
+                  <TooltipButton variant="primary" onClick={() => void openDscPreview()} isLoading={dscLoading} isDisabled={dscLoading} disabledReason={blocker}>
                     Create DataScienceCluster...
                   </TooltipButton>
                 </StackItem>
@@ -374,7 +374,7 @@ export const StatusPage: React.FC = () => {
             <ModalFooter>
               <TooltipButton
                 variant="primary"
-                onClick={() => { setDscModalOpen(false); handleCreateDSC(); }}
+                onClick={() => { setDscModalOpen(false); void handleCreateDSC(); }}
                 isDisabled={dscLoading || dscPreviewLoading || !dscPreviewYAML || !!dscPreviewError}
                 disabledReason={blocker}
               >

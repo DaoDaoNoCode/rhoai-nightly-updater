@@ -249,7 +249,7 @@ export const BuildExplorerPage: React.FC = () => {
   }, [tagsRequest]);
 
   useEffect(() => {
-    fetchTags();
+    void fetchTags();
     return () => tagsRequest.cancel();
   }, [fetchTags, tagsRequest]);
 
@@ -359,7 +359,7 @@ export const BuildExplorerPage: React.FC = () => {
         description="Nightly builds on Quay: what each one contains, which builds include a commit or PR, and how they differ from the installed build."
         lastRefreshed={lastRefreshed}
         loading={loading}
-        onRefresh={fetchTags}
+        onRefresh={() => void fetchTags()}
         actions={installed && updateAvailable === true && latest ? (
           <Button variant="primary" onClick={() => openCompare({ image: latest.image, label: `Latest ${installed.tag}`, buildDate: latest.buildDate })}>
             Compare with the latest {installed.tag}
@@ -376,8 +376,8 @@ export const BuildExplorerPage: React.FC = () => {
         }
       />
 
-      {error && tags.length > 0 && <LoadErrorAlert error={error} genericTitle="Could not load the nightly builds" onRetry={fetchTags} stale />}
-      {error && tags.length === 0 && <PageErrorState error={error} title="Can't load the nightly builds" onRetry={fetchTags} />}
+      {error && tags.length > 0 && <LoadErrorAlert error={error} genericTitle="Could not load the nightly builds" onRetry={() => void fetchTags()} stale />}
+      {error && tags.length === 0 && <PageErrorState error={error} title="Can't load the nightly builds" onRetry={() => void fetchTags()} />}
       {loading && !tags.length && !error && <PageLoading title="Loading the nightly builds from Quay" />}
 
       {compareTo && installedSide && (

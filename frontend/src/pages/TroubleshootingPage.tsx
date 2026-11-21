@@ -239,7 +239,7 @@ export const TroubleshootingPage: React.FC = () => {
     // The page view is counted once, by the router in App.
     document.title = "Diagnostics — RHOAI Nightly Updater";
     mountedRef.current = true;
-    runScan();
+    void runScan();
     return () => {
       mountedRef.current = false;
     };
@@ -301,7 +301,7 @@ export const TroubleshootingPage: React.FC = () => {
         description="Live health checks of the RHOAI install, with the cause of each problem and how to fix it."
         lastRefreshed={lastScanned}
         loading={scanState === "loading"}
-        onRefresh={runScan}
+        onRefresh={() => void runScan()}
         refreshText="Re-scan"
         actions={data && (
           <ActionListItem>
@@ -322,10 +322,10 @@ export const TroubleshootingPage: React.FC = () => {
       {scanState === "loading" && !data && <PageLoading title="Scanning the cluster health" />}
 
       {scanState === "error" && error && data && (
-        <LoadErrorAlert error={error} genericTitle="The diagnostic scan failed" onRetry={runScan} stale />
+        <LoadErrorAlert error={error} genericTitle="The diagnostic scan failed" onRetry={() => void runScan()} stale />
       )}
       {scanState === "error" && error && !data && (
-        <PageErrorState error={error} title="The diagnostic scan failed" onRetry={runScan} />
+        <PageErrorState error={error} title="The diagnostic scan failed" onRetry={() => void runScan()} />
       )}
 
       {data && (

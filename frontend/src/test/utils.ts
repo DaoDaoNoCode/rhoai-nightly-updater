@@ -10,6 +10,13 @@ export function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
+/** The JSON body a fetch call sent; fails when the body is not a string. */
+export function jsonBody(init: RequestInit | undefined): Record<string, unknown> {
+  const body = init?.body;
+  if (typeof body !== "string") throw new Error(`expected a JSON string body, got ${body === null ? "null" : typeof body}`);
+  return JSON.parse(body) as Record<string, unknown>;
+}
+
 /** A promise whose resolution the test controls. */
 export function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
   let resolve!: (v: T) => void;

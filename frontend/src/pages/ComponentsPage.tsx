@@ -628,7 +628,7 @@ export const ComponentsPage: React.FC = () => {
             <Button variant="primary" onClick={() => setRepairMode(null)}>Close</Button>
           ) : (
             <>
-              <Button variant={repairMode === "reset-defaults" ? "danger" : "primary"} onClick={handleRepairDSC} isLoading={repairLoading} isDisabled={repairLoading || (repairMode === "reset-defaults" && (!defaultsPreview || resetStale))}>Confirm</Button>
+              <Button variant={repairMode === "reset-defaults" ? "danger" : "primary"} onClick={() => void handleRepairDSC()} isLoading={repairLoading} isDisabled={repairLoading || (repairMode === "reset-defaults" && (!defaultsPreview || resetStale))}>Confirm</Button>
               <Button variant="link" onClick={() => setRepairMode(null)} isDisabled={repairLoading}>Cancel</Button>
             </>
           )}
@@ -642,7 +642,7 @@ export const ComponentsPage: React.FC = () => {
         confirmLabel={fixConfirm?.title || "Confirm"}
         isLoading={fixLoading !== null}
         confirmDisabled={!!fixReason}
-        onConfirm={() => fixConfirm && handleComponentFix(fixConfirm.action)}
+        onConfirm={() => { if (fixConfirm) void handleComponentFix(fixConfirm.action); }}
         onCancel={() => setFixConfirm(null)}
       >
         <Content component="p" className="pf-v6-u-text-color-subtle">
