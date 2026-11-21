@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -116,7 +115,7 @@ func newResourceFake(t *testing.T) (*resourceFake, *Client) {
 	t.Helper()
 	isolateClusterCaches(t)
 	f := &resourceFake{t: t, objects: map[fakeKey]map[string]any{}, fail: map[string]int{}, failAs: map[string]int{}, failDryRun: map[string]int{}, failEcho: map[string]int{}, failMessage: map[string]string{}}
-	srv := httptest.NewTLSServer(http.HandlerFunc(f.serve))
+	srv := newFakeServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	c := &Client{baseURL: srv.URL, token: fakeSAToken, httpClient: srv.Client(), ctx: context.Background()}
 	// The signed-in user's own client, as pkg/api withAdminRead attaches it

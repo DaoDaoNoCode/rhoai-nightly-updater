@@ -479,6 +479,8 @@ describe("storage from an earlier version", () => {
     const old = storage.querySelector("dl[aria-label=\"Storage from an earlier version\"]");
     expect(old).toHaveTextContent("SeaweedFS in namespace minio, at minio-service.minio.svc:9000");
     expect(old).toHaveTextContent("seaweedfs-pvc (20Gi), minio-pvc (20Gi). minio-pvc holds MinIO's files from before SeaweedFS and cannot be copied.");
+    // The running pipeline server's sample reads its file: let that read finish here, not after the test.
+    await waitFor(() => expect(screen.queryByText("Loading the sample pipeline")).not.toBeInTheDocument());
   });
 
   it("a new pipeline server waits until Migrate storage has moved the data, even with the new storage up (follow-up 3)", async () => {

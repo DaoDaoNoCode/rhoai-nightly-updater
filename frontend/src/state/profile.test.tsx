@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { act, screen, waitFor } from "@testing-library/react";
 import { useGitOpsProfile, useProfile, useVersion } from "./AppInfo";
 import { GITOPS_POLICY_POLL_MS } from "../constants";
-import { renderWithApp } from "../test/providers";
+import { renderWithApp, settleApps } from "../test/providers";
 import { GITOPS_PROFILE_PAGES, gitOpsPolicyProblem, gitOpsProfileReason, isGitOpsProfile } from "../profile";
 import type { VersionInfo } from "../types";
 
@@ -22,6 +22,7 @@ describe("profile (docs/GITOPS.md, Profiles)", () => {
     expect(probe()).toEqual({ profile: null, gitOps: false });
     answer(version("gitops"));
     await waitFor(() => expect(probe()).toEqual({ profile: "gitops", gitOps: true }));
+    await settleApps();
   });
 
   it("is full for an older backend without the field, or without /api/version", async () => {
@@ -29,6 +30,7 @@ describe("profile (docs/GITOPS.md, Profiles)", () => {
     await waitFor(() => expect(probe().profile).toBe("full"));
     renderWithApp(<Probe />, { version: async () => { throw new TypeError("Failed to fetch"); } });
     await waitFor(() => expect(screen.getAllByTestId("probe").map((e) => JSON.parse(e.textContent || "{}").profile)).toEqual(["full", "full"]));
+    await settleApps();
   });
 
   it("never asks for the Dashboard Dev state in the gitops profile (403 profile_gitops)", async () => {
@@ -39,12 +41,14 @@ describe("profile (docs/GITOPS.md, Profiles)", () => {
     await waitFor(() => expect(probe().profile).toBe("gitops"));
     await act(async () => {});
     expect(dashboard).not.toHaveBeenCalled();
+    await settleApps();
   });
 
   it("asks for it once the profile is known to be full", async () => {
     const dashboard = vi.fn(async () => ({ override: { active: false } }) as never);
     renderWithApp(<Probe />, { version: async () => version("full"), dashboard });
     await waitFor(() => expect(dashboard).toHaveBeenCalled());
+    await settleApps();
   });
 
   it("keeps the pages the backend serves and says why a feature is missing", () => {
@@ -65,11 +69,13 @@ describe("profile (docs/GITOPS.md, Profiles)", () => {
       await waitFor(() => expect(screen.getByTestId("policy").textContent).toBe("The policy is not in place"));
       // Argo CD restored the policy; the server's next check says so.
       state = "enforced";
-      await vi.advanceTimersByTimeAsync(GITOPS_POLICY_POLL_MS);
+      // The polls this fires update the providers: advance inside act.
+      await act(() => vi.advanceTimersByTimeAsync(GITOPS_POLICY_POLL_MS));
       await waitFor(() => expect(screen.getByTestId("policy").textContent).toBe("none"));
     } finally {
       vi.useRealTimers();
     }
+    await settleApps();
   });
 
   it("does not read the version again in the full profile", async () => {
@@ -78,11 +84,12 @@ describe("profile (docs/GITOPS.md, Profiles)", () => {
       const fetchVersion = vi.fn(async () => version("full"));
       renderWithApp(<pre />, { version: fetchVersion });
       await waitFor(() => expect(fetchVersion).toHaveBeenCalledTimes(1));
-      await vi.advanceTimersByTimeAsync(3 * GITOPS_POLICY_POLL_MS);
+      await act(() => vi.advanceTimersByTimeAsync(3 * GITOPS_POLICY_POLL_MS));
       expect(fetchVersion).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
+    await settleApps();
   });
 
   it("turns Update off while the gitops profile's admission policy is missing", () => {

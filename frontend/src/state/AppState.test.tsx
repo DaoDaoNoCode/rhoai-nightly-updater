@@ -311,6 +311,70 @@ describe("background status polls", () => {
     expect(fetchStatus).toHaveBeenCalledTimes(2);
     expect(renders).not.toContain(true);
   });
+
+  // The page says "Updated <time>": a poll that read the same status still
+  // tells the user the status is fresh.
+  it("move the refresh time on every answer, also an unchanged one, and apply a changed one", async () => {
+    let phase = "Succeeded";
+    const fetchStatus = vi.fn(async () => statusWith(phase));
+    const seen: Array<{ refreshed: number | undefined; csv: string | undefined }> = [];
+    const RefreshProbe: React.FC = () => {
+      const { lastRefreshed, status } = useClusterStatus();
+      seen.push({ refreshed: lastRefreshed?.getTime(), csv: status?.csv.phase });
+      return null;
+    };
+    render(
+      <LiveAnnouncerProvider>
+        <MemoryRouter>
+          <AppStateProvider fetchStatus={fetchStatus} fetchOperation={idleOperation}>
+            <RefreshProbe />
+          </AppStateProvider>
+        </MemoryRouter>
+      </LiveAnnouncerProvider>,
+    );
+    await tick();
+    const first = seen[seen.length - 1];
+    expect(first.csv).toBe("Succeeded");
+    await tick(60_000);
+    const second = seen[seen.length - 1];
+    expect(fetchStatus).toHaveBeenCalledTimes(2);
+    expect(second.csv).toBe("Succeeded");
+    expect(second.refreshed).toBeGreaterThan(first.refreshed!);
+    phase = "Installing";
+    await tick(60_000);
+    expect(seen[seen.length - 1].csv).toBe("Installing");
+  });
+});
+
+describe("operation polls", () => {
+  it("apply a changed answer: idle, then a teammate's operation, then idle again", async () => {
+    let answer: OperationStatusResponse = { inProgress: false, operation: null };
+    const fetchOperation = vi.fn(async () => answer);
+    const states: string[] = [];
+    const ServerProbe: React.FC = () => {
+      const { server } = useOperation();
+      states.push(`${server.loaded}:${server.inProgress}:${server.operation?.user ?? "-"}`);
+      return null;
+    };
+    render(
+      <LiveAnnouncerProvider>
+        <MemoryRouter>
+          <AppStateProvider fetchStatus={async () => statusWith("Succeeded")} fetchOperation={fetchOperation}>
+            <ServerProbe />
+          </AppStateProvider>
+        </MemoryRouter>
+      </LiveAnnouncerProvider>,
+    );
+    await tick();
+    expect(states[states.length - 1]).toBe("true:false:-");
+    answer = { inProgress: true, operation: { id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: "2026-10-05T10:00:00Z" } };
+    await tick(15_000);
+    expect(states[states.length - 1]).toBe("true:true:alice");
+    answer = { inProgress: false, operation: null };
+    await tick(3_000);
+    expect(states[states.length - 1]).toBe("true:false:-");
+    expect(fetchOperation).toHaveBeenCalledTimes(3);
+  });
 });
 
 const Clear: React.FC = () => {

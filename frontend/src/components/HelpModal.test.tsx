@@ -2,10 +2,11 @@ import React from "react";
 import { describe, expect, it } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { HelpButton } from "./HelpModal";
-import { ADMIN_PERMISSIONS, USER_PERMISSIONS, nightlyStatus, renderWithApp, type AppFetchers } from "../test/providers";
+import { ADMIN_PERMISSIONS, USER_PERMISSIONS, nightlyStatus, renderWithApp, type AppFetchers, settleApps } from "../test/providers";
 import { useUpdateCheck, useVersion } from "../state/AppInfo";
 import { useRole } from "../state/Permissions";
 import type { UpdateCheck, VersionInfo } from "../types";
+import { deferred } from "../test/utils";
 
 // A release with a newer major out and an outdated template: everything an
 // admin's help dialog can say about upgrading the updater.
@@ -63,6 +64,7 @@ describe("help dialog", () => {
     expect(about.getByText("Newer release")).toBeInTheDocument();
     expect(about.getByText("make upgrade")).toBeInTheDocument();
     expect(about.queryByText("Signed in as")).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("shows a user who is not a cluster-admin only what they can see and do", async () => {
@@ -81,17 +83,23 @@ describe("help dialog", () => {
     expect(about.getByText("dev-user")).toBeInTheDocument();
     expect(about.getByText("Updater build")).toBeInTheDocument();
     for (const words of ADMIN_ONLY) expect(dialog.textContent).not.toMatch(words);
+    await settleApps();
   });
 
   it("shows nothing for cluster-admins while the permission check has not answered", async () => {
-    const dialog = await openHelp({ permissions: () => new Promise(() => {}) }, "checking|v5.0.0|v6.0.0");
+    const answer = deferred<typeof ADMIN_PERMISSIONS>();
+    const dialog = await openHelp({ permissions: () => answer.promise }, "checking|v5.0.0|v6.0.0");
     expect(within(dialog).getByRole("heading", { name: "Build Explorer" })).toBeInTheDocument();
     for (const words of ADMIN_ONLY) expect(dialog.textContent).not.toMatch(words);
+    // The answer comes in the end, so the test does not end with it open.
+    answer.resolve(ADMIN_PERMISSIONS);
+    await settleApps();
   });
 
   it("shows a user's guide when the permission check failed", async () => {
     const dialog = await openHelp({ permissions: async () => { throw new Error("network down"); } }, "user|v5.0.0|v6.0.0");
     expect(within(dialog).getByRole("heading", { name: "While an update runs" })).toBeInTheDocument();
     for (const words of ADMIN_ONLY) expect(dialog.textContent).not.toMatch(words);
+    await settleApps();
   });
 });

@@ -5,7 +5,7 @@ import { describeError } from "./errors";
 import { outcomeTitle, outcomeVariant } from "./outcomes";
 import { ApiError, streamUpdate } from "./services/api";
 import { useOperation } from "./state/AppState";
-import { renderWithApp } from "./test/providers";
+import { renderWithApp, settleApps } from "./test/providers";
 import { jsonResponse } from "./test/utils";
 
 const MESSAGE = "Cannot verify that no other updater pod is running an operation (the operation lock could not be read or written). Nothing was changed; try again.";
@@ -56,5 +56,6 @@ describe("lock_unavailable (the backend fails closed on the cross-pod lock)", ()
     renderWithApp(<Probe />);
     fireEvent.click(screen.getByText("start"));
     await waitFor(() => expect(JSON.parse(screen.getByTestId("probe").textContent || "{}")).toEqual({ running: false, status: "failed", rejected: true, code: "lock_unavailable" }));
+    await settleApps();
   });
 });

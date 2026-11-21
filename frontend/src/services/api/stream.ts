@@ -115,7 +115,7 @@ export function streamSSE(
   fetch(url, fetchOptions)
     .then(async (resp) => {
       if (!resp.ok) {
-        const apiError = reportIfSessionExpired(await parseErrorResponse(resp));
+        const apiError = reportIfSessionExpired(await parseErrorResponse(resp, controller.signal));
         finishDone(false, apiError.message, apiError);
         return;
       }

@@ -2,7 +2,8 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import type { UserPermissions } from "../types";
 import { getUserPermissions, isSessionExpired, onSessionExpired, toApiError, type ApiError } from "../services/api";
 import { PERMISSION_RETRY_MS } from "../constants";
-import { usePolling } from "../hooks/usePolling";
+import { PollingAllowedContext, usePolling } from "../hooks/usePolling";
+import { useLatestRequest } from "../hooks/useLatestRequest";
 
 // ---------------------------------------------------------------------------
 // Permissions and role
@@ -85,7 +86,7 @@ export function useSessionExpired(): boolean {
 
 interface PermissionsProviderProps {
   /** Injected for tests. */
-  fetchPermissions?: () => Promise<UserPermissions>;
+  fetchPermissions?: (signal?: AbortSignal) => Promise<UserPermissions>;
 }
 
 /**
@@ -115,9 +116,12 @@ export const PermissionsProvider: React.FC<React.PropsWithChildren<PermissionsPr
   const permStatusRef = useRef(permStatus);
   permStatusRef.current = permStatus;
 
+  const permRequest = useLatestRequest();
   const checkPermissions = useCallback(async () => {
+    const ticket = permRequest.start();
     try {
-      const p = await fetcher.current();
+      const p = await fetcher.current(ticket.signal);
+      if (!ticket.isLatest()) return;
       setPermStatus(p.canMutate ? "allowed" : "denied");
       setDeniedReason(!p.canMutate && p.reason ? p.reason : null);
       setDeniedCode(!p.canMutate && p.reason ? p.reasonCode ?? null : null);
@@ -125,6 +129,7 @@ export const PermissionsProvider: React.FC<React.PropsWithChildren<PermissionsPr
       setUser(typeof p.user === "string" && p.user ? p.user : null);
       setPermError(null);
     } catch (e) {
+      if (!ticket.isLatest()) return;
       const err = toApiError(e, "Could not check your permissions");
       const expired = isSessionExpired(err);
       // A JSON 403 is an answer (read-only). An expired session (oauth-proxy's
@@ -137,11 +142,13 @@ export const PermissionsProvider: React.FC<React.PropsWithChildren<PermissionsPr
       setPermError(err);
       if (expired) setSessionExpired(true);
     }
-  }, []);
+  }, [permRequest]);
   const permPoller = usePolling(checkPermissions, {
     // Retry soon while unanswered; otherwise re-check rarely (roles change).
     delay: () => (permStatusRef.current === "unknown" ? PERMISSION_RETRY_MS : 10 * 60_000),
     runImmediately: true,
+    // Nothing answers until the user signs in again (a reload).
+    enabled: !sessionExpired,
   });
   const retryPermissions = useCallback(() => {
     setPermStatus("checking");
@@ -164,5 +171,10 @@ export const PermissionsProvider: React.FC<React.PropsWithChildren<PermissionsPr
     sessionExpired,
   }), [permStatus, sessionExpired, deniedReason, deniedCode, permError, retryPermissions, role, user]);
 
-  return <PermissionsContext.Provider value={value}>{children}</PermissionsContext.Provider>;
+  return (
+    <PermissionsContext.Provider value={value}>
+      {/* An expired session stops every poll below. */}
+      <PollingAllowedContext.Provider value={!sessionExpired}>{children}</PollingAllowedContext.Provider>
+    </PermissionsContext.Provider>
+  );
 };

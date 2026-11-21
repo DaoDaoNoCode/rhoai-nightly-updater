@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ActivityLog, activityCategory } from "./ActivityLog";
 import type { ActivityEntry } from "../types";
 
@@ -34,7 +34,7 @@ describe("ActivityLog", () => {
     expect(screen.queryByRole("button", { name: /Activity type/ })).toBeNull();
   });
 
-  it("files quick resources under Environment", () => {
+  it("files quick resources under Environment", async () => {
     expect(activityCategory({ ...refused, action: "teardown-minio", category: undefined })).toBe("test-resources");
     expect(activityCategory({ ...refused, action: "deploy-dashboard-main", category: undefined })).toBe("dashboard-dev");
     render(
@@ -46,5 +46,7 @@ describe("ActivityLog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Activity type: All" }));
     fireEvent.click(screen.getByRole("option", { name: /Environment/ }));
     expect(screen.getByText("S3 storage set up")).toBeTruthy();
+    // The menu closes on PatternFly Popper's hide timer (setTimeout).
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
   });
 });

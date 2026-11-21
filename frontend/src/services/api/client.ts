@@ -87,12 +87,20 @@ export function isApiError(e: unknown): e is ApiError {
  * Build an ApiError from a non-OK response. The backend always answers with
  * {"error", "errorCode"} JSON; proxies and the router may answer with text or HTML.
  */
-export async function parseErrorResponse(resp: Response): Promise<ApiError> {
+export async function parseErrorResponse(resp: Response, signal?: AbortSignal | null): Promise<ApiError> {
   let text = '';
   try {
     text = await resp.text();
-  } catch {
-    // The body is optional for classification.
+  } catch (e) {
+    // A request cancelled while its body arrived (a newer read replaced it,
+    // its page went away, the timeout) is not an answer: fetch errors the
+    // body with the abort reason. Never classify it, least of all as an
+    // expired session (below: a 401/403 without a JSON body).
+    const name = typeof e === 'object' && e !== null ? (e as { name?: unknown }).name : undefined;
+    if (signal?.aborted || name === 'AbortError' || name === 'TimeoutError') {
+      throw signal?.aborted ? toApiError(signal.reason) : toApiError(e);
+    }
+    // Otherwise the body is optional for classification.
   }
   let parsed: unknown;
   try {
@@ -176,17 +184,18 @@ export async function request<T>(path: string, options?: RequestOptions): Promis
     headers['Content-Type'] = 'application/json';
   }
   let resp: Response;
+  const signal = withTimeout(fetchOptions?.signal, 120_000);
   try {
     resp = await fetch(path, {
       ...fetchOptions,
       headers,
-      signal: withTimeout(fetchOptions?.signal, 120_000),
+      signal,
     });
   } catch (e) {
     throw toApiError(e);
   }
   if (!resp.ok && !acceptStatuses?.includes(resp.status)) {
-    throw reportIfSessionExpired(await parseErrorResponse(resp));
+    throw reportIfSessionExpired(await parseErrorResponse(resp, signal));
   }
   const contentType = resp.headers.get('content-type') || '';
   if (!contentType.includes('application/json')) {

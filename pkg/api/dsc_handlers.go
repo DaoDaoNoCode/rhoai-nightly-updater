@@ -20,6 +20,7 @@ var (
 	softResetDSC           = cluster.SoftResetDSC
 	hardResetDSC           = cluster.HardResetDSC
 	finishDSCHardReset     = cluster.FinishDSCHardReset
+	repairDSC              = cluster.RepairDSC
 	dscPathRegex           = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]{0,62}(\.[A-Za-z][A-Za-z0-9]{0,62}){0,7}$`)
 	managementStateRegex   = regexp.MustCompile(`^[A-Za-z]{1,32}$`)
 	dscUIDRegex            = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
@@ -167,25 +168,11 @@ var HandleDSCHardResetStream = withMutationAuth(func(c *cluster.Client, w http.R
 		writeError(w, "Type the DataScienceCluster's name to confirm the hard reset", http.StatusBadRequest, "validation")
 		return
 	}
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("panic in dsc hard reset handler", "error", rec)
-		}
-	}()
-	sseWriter, err := NewSSEWriter(w)
-	if err != nil {
-		writeError(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	defer sseWriter.Close()
-	done := make(chan struct{})
-	defer close(done)
-	go sseHeartbeat(sseWriter, done)
-
 	beginOperation(w, req.Name)
 	slog.Info("mutation", "op", "dsc-hard-reset", "dsc", req.Name, "keepEnabled", *req.KeepEnabled)
-	result, runErr := hardResetDSC(c, req, forwardSteps(sseWriter))
-	sendOperationResult(sseWriter, result, runErr)
+	_, runErr := streamOperation(w, "dsc hard reset", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		return hardResetDSC(c, req, emit)
+	})
 	if runErr != nil {
 		slog.Error("dsc hard reset failed", "error", runErr)
 	}
@@ -233,9 +220,17 @@ var HandleRepairDSC = withMutationAuth(func(c *cluster.Client, w http.ResponseWr
 		return
 	}
 	beginOperation(w, req.Name+" ("+req.Mode+")")
-	result, err := cluster.RepairDSC(c, req.Name, req.Mode, req.ExpectedOperatorVersion, req.ExpectedAPIVersion, req.ExpectedExtraComponents, req.ExpectedResetRemovals)
+	result, err := repairDSC(c, req.Name, req.Mode, req.ExpectedOperatorVersion, req.ExpectedAPIVersion, req.ExpectedExtraComponents, req.ExpectedResetRemovals)
 	if err != nil {
-		writeError(w, err.Error(), http.StatusUnprocessableEntity, "validation")
+		// A failed request keeps its own class (a 409 conflict, the
+		// user's ended sign-in, an unreachable API); every other error
+		// is one of the repair's refusals ("refresh and review again").
+		status, errorCode, known := operationErrorStatus(err)
+		if !known {
+			status, errorCode = http.StatusUnprocessableEntity, "validation"
+		}
+		slog.Error("repair-dsc failed", "error", err, "errorCode", errorCode)
+		writeError(w, err.Error(), status, errorCode)
 		return
 	}
 	writeOperationResult(w, result, "repair-dsc")
@@ -273,7 +268,7 @@ var HandleCreateDSC = withMutationAuth(func(c *cluster.Client, w http.ResponseWr
 	result, err := cluster.CreateDefaultDSC(c)
 	if err != nil {
 		slog.Error("create-dsc failed", "error", err)
-		writeError(w, "failed to create DataScienceCluster", http.StatusInternalServerError)
+		writeOperationError(w, "failed to create DataScienceCluster", err)
 		return
 	}
 	writeOperationResult(w, result, "create-dsc")

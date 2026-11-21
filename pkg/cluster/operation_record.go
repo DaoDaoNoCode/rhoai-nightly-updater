@@ -300,11 +300,18 @@ func LeaseLive(l *types.OperationLease, now time.Time, ttl time.Duration) bool {
 	if l == nil {
 		return false
 	}
-	beat, err := time.Parse(time.RFC3339, l.HeartbeatAt)
+	beat, err := LeaseHeartbeat(l)
 	if err != nil {
 		return false
 	}
 	return now.Sub(beat) < ttl
+}
+
+// LeaseHeartbeat is the heartbeat of a lease as every process reads it
+// (HeartbeatAt, RFC 3339 to the second). The holder counts its own
+// deadline from this same instant, not from when its write returned.
+func LeaseHeartbeat(l *types.OperationLease) (time.Time, error) {
+	return time.Parse(time.RFC3339, l.HeartbeatAt)
 }
 
 // WriteOperationLease records lease as the holder of the cross-pod

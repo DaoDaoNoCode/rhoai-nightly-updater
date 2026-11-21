@@ -4,7 +4,8 @@
 # lints and renders the chart locally; nothing talks to a cluster.
 #   bash scripts/test-chart.sh
 # Needs helm 3.16 or newer. Without helm the copy and version checks still
-# run and the rest is skipped, except in CI (CI is set), where it fails.
+# run and the rest is skipped, except in CI (CI is set) or with REQUIRE_HELM=1,
+# where it fails.
 set -Eeuo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -46,7 +47,7 @@ chart_version=$(chart_field version)
 expect_eq "Chart.yaml appVersion" "v$chart_version" "$(chart_field appVersion)"
 
 if ! command -v helm >/dev/null 2>&1; then
-	if [ -n "${CI:-}" ]; then
+	if [ -n "${CI:-}" ] || [ "${REQUIRE_HELM:-}" = 1 ]; then
 		fail "helm is not installed; CI installs it (HELM_VERSION in .gitlab-ci.yml and .github/workflows/ci.yml)"
 	else
 		printf 'SKIP: helm is not installed, so the chart was not rendered (https://helm.sh/docs/intro/install/).\n' >&2

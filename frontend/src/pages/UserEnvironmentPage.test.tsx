@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useLocation } from "react-router-dom";
 import { UserEnvironmentPage } from "./UserEnvironmentPage";
-import { USER_PERMISSIONS, renderPage } from "../test/providers";
+import { USER_PERMISSIONS, renderPage, settleApps } from "../test/providers";
 import { jsonResponse } from "../test/apiStub";
 import { ADMIN_ONLY_GETS, projectStatus, stubUserApi } from "../test/userFixtures";
 import { contract } from "../test/contract";
@@ -53,6 +53,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
       "GET /api/resources/samples/mlflow?project=dev-project",
     ]));
     expect(api.calls.map((c) => c.replace(/^GET /, "")).filter((c) => ADMIN_ONLY_GETS.some((re) => re.test(c)))).toEqual([]);
+    await settleApps();
   });
 
   it("switches to another project and reads it", async () => {
@@ -64,12 +65,14 @@ describe("Environment for a user who is not a cluster-admin", () => {
     await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent("project=llm-eval"));
     await waitFor(() => expect(api.calls).toContain("GET /api/resources/status?project=llm-eval"));
     expect(await within(part("Models")).findByRole("grid", { name: "Models in llm-eval" })).toBeInTheDocument();
+    await settleApps();
   });
 
   it("opens the project in the address", async () => {
     stubUserApi();
     render("/test-resources?project=llm-eval");
     expect(await screen.findByRole("combobox", { name: "Project" })).toHaveValue("llm-eval");
+    await settleApps();
   });
 
   it("says when the project in the address is not one of theirs", async () => {
@@ -77,6 +80,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
     render("/test-resources?project=someone-elses");
     expect(await screen.findByText("someone-elses is not one of your projects", { exact: false })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Project" })).toHaveValue("dev-project");
+    await settleApps();
   });
 
   it("without projects, says how to get one", async () => {
@@ -85,6 +89,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
     expect(await screen.findByRole("heading", { name: "You have no data science projects" })).toBeInTheDocument();
     expect(screen.getByText(/Create one in the RHOAI dashboard/)).toBeInTheDocument();
     expect(api.calls.filter((c) => c.includes("/api/resources/status"))).toEqual([]);
+    await settleApps();
   });
 
   it("says a cluster-admin sets up what the project does not have", async () => {
@@ -98,6 +103,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
     expect(within(part("Models")).getByText("No models in dev-project. Add one in the RHOAI dashboard, or ask a cluster-admin to set one up here.")).toBeInTheDocument();
     expect(await within(part("Playground")).findByText("No playground in dev-project. Add one in the RHOAI dashboard, or ask a cluster-admin to set one up here.")).toBeInTheDocument();
     expect(await within(part("MLflow sample data")).findByText("MLflow is not set up on this cluster. A cluster-admin sets this up.")).toBeInTheDocument();
+    await settleApps();
   });
 
   it("a part the backend could not read says why: not yours to see, not installed, or the error", async () => {
@@ -119,6 +125,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
     const before = statusReads;
     fireEvent.click(within(models).getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(statusReads).toBe(before + 1));
+    await settleApps();
   });
 
   it("a part the user may not see says so, not Access denied", async () => {
@@ -129,6 +136,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
     expect(screen.queryByText(/Access denied/)).not.toBeInTheDocument();
     expect(screen.queryByText(/make upgrade/)).not.toBeInTheDocument();
     expect(within(part("Playground")).queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("an admin_only answer shows the cluster-admin note", async () => {
@@ -136,6 +144,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
     render();
     expect(await within(await screen.findByRole("region", { name: "MLflow sample data" })).findByText("Only cluster-admins can see this")).toBeInTheDocument();
     expect(screen.queryByText(/Access denied/)).not.toBeInTheDocument();
+    await settleApps();
   });
 
   it("another failure offers Try again and reads again", async () => {
@@ -148,6 +157,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
     fireEvent.click(within(playground).getByRole("button", { name: "Try again" }));
     expect(await within(part("Playground")).findByText("Gen AI playground")).toBeInTheDocument();
     expect(api.calls.filter((c) => c.includes("/api/resources/playground"))).toHaveLength(2);
+    await settleApps();
   });
 
   it("a project list the user may not read says so, without Diagnostics", async () => {
@@ -155,5 +165,6 @@ describe("Environment for a user who is not a cluster-admin", () => {
     render();
     expect(await screen.findByRole("heading", { name: "You cannot see this" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open Diagnostics" })).not.toBeInTheDocument();
+    await settleApps();
   });
 });

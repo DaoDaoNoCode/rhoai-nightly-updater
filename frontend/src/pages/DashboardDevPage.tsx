@@ -61,6 +61,7 @@ import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { formatRelativeTime } from "../utils";
 import { useClusterBusyHandler, useDashboardOverride, useMutationBlocker } from "../state/AppInfo";
 import { dashboardOperatorLabel } from "../components/dashboardOperator";
+import { useLatestRequest } from "../hooks/useLatestRequest";
 
 /**
  * Container states that do not clear without a change (image, config or
@@ -118,7 +119,10 @@ export const DashboardDevPage: React.FC = () => {
   // operation lock (R4b c, N1).
   const blocker = useMutationBlocker();
   const onBusy = useClusterBusyHandler();
-  const { refresh: refreshOverride } = useDashboardOverride();
+  const { refresh: refreshOverride, watch: watchDashboardState, beginRead: beginDashboardRead, report: reportDashboardState } = useDashboardOverride();
+  // This page polls GET /api/dashboard/state more often than the app does:
+  // the app takes this page's answers instead of reading it too.
+  useEffect(() => watchDashboardState(), [watchDashboardState]);
   const [dashState, setDashState] = useState<DashboardState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
@@ -130,7 +134,7 @@ export const DashboardDevPage: React.FC = () => {
   const [confirm, setConfirm] = useState<Action | null>(null);
   const [waitingFor, setWaitingFor] = useState<"main" | "pr" | "revert" | null>(null);
   const [result, setResult] = useState<OperationResponse | null>(null);
-  const stateRequestRef = useRef(0);
+  const stateRequest = useLatestRequest();
   const inFlight = useRef(0);
   const mounted = useRef(true);
   useEffect(() => {
@@ -142,26 +146,29 @@ export const DashboardDevPage: React.FC = () => {
   const validPR = /^\d+$/.test(prNumber) && Number.isSafeInteger(parsedPR) && parsedPR > 0;
 
   const fetchState = useCallback(async (background = false) => {
-    const requestId = ++stateRequestRef.current;
+    const ticket = stateRequest.start();
+    const read = beginDashboardRead();
     inFlight.current++;
     if (!background) setLoading(true);
     try {
-      const s = await getDashboardState();
-      if (!mounted.current || requestId !== stateRequestRef.current) return;
+      const s = await getDashboardState(ticket.signal);
+      if (!ticket.isLatest()) return;
+      reportDashboardState(read, s);
       setDashState(s);
       setError(null);
       setLastRefreshed(new Date());
     } catch (e) {
-      if (!mounted.current || requestId !== stateRequestRef.current) return;
+      if (!ticket.isLatest()) return;
       const err = toApiError(e, "Could not load the dashboard state");
+      reportDashboardState(read, err);
       setError(err);
       // "Not deployed" is a state: drop the old data. Other errors keep it (shown as stale).
       if (isNotDeployed(err)) setDashState(null);
     } finally {
       inFlight.current--;
-      if (mounted.current && requestId === stateRequestRef.current) setLoading(false);
+      if (ticket.isLatest()) setLoading(false);
     }
-  }, []);
+  }, [stateRequest, beginDashboardRead, reportDashboardState]);
 
   useEffect(() => { void fetchState(); }, [fetchState]);
 

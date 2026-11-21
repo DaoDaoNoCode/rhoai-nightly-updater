@@ -21,7 +21,7 @@ var HandleS3StorageSetup = withMutationAuth(func(c *cluster.Client, w http.Respo
 	result, err := cluster.SetupS3Storage(c)
 	if err != nil {
 		slog.Error("setup-s3 failed", "error", err)
-		writeError(w, "S3 storage setup failed", http.StatusInternalServerError)
+		writeOperationError(w, "S3 storage setup failed", err)
 		return
 	}
 	writeOperationResult(w, result, "setup-s3")
@@ -66,12 +66,6 @@ var HandleS3StorageMigrateStream = withMutationAuth(func(c *cluster.Client, w ht
 		return
 	}
 	defer releaseClusterMutationLock()
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("panic in migrate-storage handler", "error", rec)
-		}
-	}()
-
 	var req types.MigrateStorageRequest
 	if !decodeBody(w, r, 4096, &req, true) {
 		return
@@ -97,17 +91,6 @@ var HandleS3StorageMigrateStream = withMutationAuth(func(c *cluster.Client, w ht
 		seen[p] = true
 	}
 
-	sseWriter, err := NewSSEWriter(w)
-	if err != nil {
-		writeError(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	defer sseWriter.Close()
-
-	done := make(chan struct{})
-	defer close(done)
-	go sseHeartbeat(sseWriter, done)
-
 	target := "migrate"
 	if req.RemoveOldStorage {
 		target = "remove old storage"
@@ -118,8 +101,9 @@ var HandleS3StorageMigrateStream = withMutationAuth(func(c *cluster.Client, w ht
 	beginOperation(w, target)
 	slog.Info("mutation", "op", "migrate-storage", "target", target, "confirmProjects", req.ConfirmProjects)
 
-	result, migrateErr := runMigrateStorage(c, cluster.MigrateOptions{RemoveOldStorage: req.RemoveOldStorage, DeleteNamespace: req.DeleteNamespace, ConfirmProjects: req.ConfirmProjects}, forwardSteps(sseWriter))
-	sendOperationResult(sseWriter, result, migrateErr)
+	_, migrateErr := streamOperation(w, "migrate-storage", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		return runMigrateStorage(c, cluster.MigrateOptions{RemoveOldStorage: req.RemoveOldStorage, DeleteNamespace: req.DeleteNamespace, ConfirmProjects: req.ConfirmProjects}, emit)
+	})
 	if migrateErr != nil {
 		slog.Error("migrate-storage failed", "error", migrateErr)
 	}
@@ -141,7 +125,7 @@ var HandleS3StorageTeardown = withMutationAuth(func(c *cluster.Client, w http.Re
 	result, err := cluster.TeardownS3Storage(c, req)
 	if err != nil {
 		slog.Error("teardown-s3 failed", "error", err)
-		writeError(w, "S3 storage teardown failed", http.StatusInternalServerError)
+		writeOperationError(w, "S3 storage teardown failed", err)
 		return
 	}
 	writeOperationResult(w, result, "teardown-s3")
@@ -171,7 +155,7 @@ var HandlePipelineServerSetup = withMutationAuth(func(c *cluster.Client, w http.
 	result, err := setup(c, req.Project)
 	if err != nil {
 		slog.Error("setup-pipeline-server failed", "error", err)
-		writeError(w, "pipeline server setup failed", http.StatusInternalServerError)
+		writeOperationError(w, "pipeline server setup failed", err)
 		return
 	}
 	writeOperationResult(w, result, "setup-pipeline-server")
@@ -197,7 +181,7 @@ var HandlePipelineServerTeardown = withMutationAuth(func(c *cluster.Client, w ht
 	result, err := cluster.TeardownPipelineServer(c, req.Project)
 	if err != nil {
 		slog.Error("teardown-pipeline-server failed", "error", err)
-		writeError(w, "pipeline server teardown failed", http.StatusInternalServerError)
+		writeOperationError(w, "pipeline server teardown failed", err)
 		return
 	}
 	writeOperationResult(w, result, "teardown-pipeline-server")

@@ -20,7 +20,7 @@ var HandleMLflowSetup = withMutationAuth(func(c *cluster.Client, w http.Response
 	result, err := cluster.SetupMLflow(c)
 	if err != nil {
 		slog.Error("setup-mlflow failed", "error", err)
-		writeError(w, "MLflow setup failed", http.StatusInternalServerError)
+		writeOperationError(w, "MLflow setup failed", err)
 		return
 	}
 	writeOperationResult(w, result, "setup-mlflow")
@@ -37,7 +37,7 @@ var HandleMLflowTeardown = withMutationAuth(func(c *cluster.Client, w http.Respo
 	result, err := cluster.TeardownMLflow(c)
 	if err != nil {
 		slog.Error("teardown-mlflow failed", "error", err)
-		writeError(w, "MLflow teardown failed", http.StatusInternalServerError)
+		writeOperationError(w, "MLflow teardown failed", err)
 		return
 	}
 	writeOperationResult(w, result, "teardown-mlflow")
@@ -62,7 +62,7 @@ var HandleMLflowDeployPR = withMutationAuth(func(c *cluster.Client, w http.Respo
 	result, err := cluster.DeployMLflowPR(c, req.PR)
 	if err != nil {
 		slog.Error("deploy-mlflow-pr failed", "error", err)
-		writeError(w, "MLflow PR deploy failed", http.StatusInternalServerError)
+		writeOperationError(w, "MLflow PR deploy failed", err)
 		return
 	}
 	writeOperationResult(w, result, "deploy-mlflow-pr")
@@ -79,7 +79,7 @@ var HandleMLflowRevert = withMutationAuth(func(c *cluster.Client, w http.Respons
 	result, err := cluster.RevertMLflowImage(c)
 	if err != nil {
 		slog.Error("revert-mlflow failed", "error", err)
-		writeError(w, "MLflow revert failed", http.StatusInternalServerError)
+		writeOperationError(w, "MLflow revert failed", err)
 		return
 	}
 	writeOperationResult(w, result, "revert-mlflow")

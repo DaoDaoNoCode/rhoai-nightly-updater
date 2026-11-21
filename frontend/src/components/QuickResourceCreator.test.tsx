@@ -70,10 +70,11 @@ describe("QuickResourceCreator polling", () => {
     const statusCalls = stubResources(() => statusWith({ deployed: true, ready: false, message: "Provisioning" }));
     renderAt("/test-resources?tab=pipelines");
     await tick();
-    setDocumentHidden(true);
+    act(() => setDocumentHidden(true));
     await tick(5 * 60_000);
     expect(statusCalls()).toBe(1);
-    setDocumentHidden(false);
+    // Showing the tab polls at once (a state update): fire it inside act.
+    act(() => setDocumentHidden(false));
     await tick();
     expect(statusCalls()).toBe(2);
   });

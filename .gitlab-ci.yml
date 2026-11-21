@@ -16,8 +16,12 @@
 # :latest never moves to a new major automatically: deployments that still
 # pull :latest stay on their major line until someone upgrades on purpose.
 # Release logic lives in scripts/release.sh (tested by scripts/test-release.sh).
-# Every image job needs the Go and frontend test jobs of its pipeline and
-# builds the Containerfile with RUN_CHECKS=false (see .image-build).
+# build-main and release-build start with the tests; the jobs that publish
+# (publish-main, release-publish, and through them promote-latest and
+# release-notes) need every test job of the pipeline (a tag's: and the
+# release guard) as well as the build: nothing is published unless all of
+# them passed. The image jobs build the Containerfile with RUN_CHECKS=false
+# (see .image-build).
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -68,11 +72,15 @@ variables:
   BUILDAH_IMAGE: quay.io/buildah/stable:v1.46.1@sha256:12132e724a8a5c7e6970c3fced03f3db6c8077d9afa08803df274df4cf3de846
   # The scheduled renovate job (renovate.json5).
   RENOVATE_IMAGE: ghcr.io/renovatebot/renovate:44.254.1@sha256:42f31a79fd1dc7ce0a3e4da42a7e57a80443fd9a3401c5b2631d76bc8b4a40dd
-  # crane (go-containerregistry) moves and reads tags in release jobs; it is
-  # installed with `go install`, which checks the module against the
-  # checksum database, from a Go cache of its own (.crane).
+  # crane (go-containerregistry) moves and reads tags in the publish jobs:
+  # the release tarball of this version for linux/amd64, checked against its
+  # SHA-256 before use (the release's checksums.txt, which GitHub's asset
+  # digest and the release's SLSA provenance, multiple.intoto.jsonl, also
+  # name). Change both together. The runner is amd64: the chart's helm
+  # linux-amd64 binary runs there.
   CRANE_VERSION: v0.22.1
-  # Helm renders the chart in the chart job: the release tarball of this
+  CRANE_SHA256: 0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0
+  # Helm renders the chart in the script-tests job: the release tarball of this
   # version, checked against its SHA-256 (get.helm.sh, also in the release
   # notes) before use. Keep in step with .github/workflows/ci.yml.
   HELM_VERSION: v3.22.1
@@ -81,9 +89,14 @@ variables:
 # Pipeline schedules run the renovate job only (end of this file): the test
 # jobs skip them, and so do the image jobs (a second build of a commit
 # would make publish-main refuse its commit tag).
+# Job timeouts, from the successful jobs of 2026-10-30..11-20 (VM start
+# included): test jobs p90 at most 7.5 min (go 435 s, max 527 s), so 20 min;
+# go test's own 10-minute limit then still ends a hung test with its stack
+# first. Without them a job runs to the project's 60 minutes.
 .test:
   stage: test
   interruptible: true
+  timeout: 20m
   needs: []
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
@@ -97,27 +110,43 @@ variables:
 # hit is what a fresh build would produce, and test results are never
 # reused (-count=1). `go mod verify` checks the restored modules against
 # go.sum. Protected refs (main, release tags) get a cache of their own.
+#
+# The runner uploads the cache again whenever a file in it is newer than the
+# restored archive, and Go touches every build cache entry it uses (at most
+# once an hour, cmd/go/internal/cache markUsed), so every run uploads it:
+# 20-86 s at the end of the go job. A tag pipeline only reads it: its commit
+# went through main (or an integ/* branch) first, whose pipeline wrote the
+# same key (go.sum, protected). Branch pipelines keep writing: a pipeline
+# started by a Developer gets keys with the suffix non_protected, which
+# main never writes (GitLab docs, ci/caching, "Cache key names").
+# GO_CACHE_POLICY must always be set: the runner fails a job whose policy
+# expands to anything but pull, push or pull-push.
 .go-cache:
   variables:
     GOMODCACHE: $CI_PROJECT_DIR/.cache/go-mod
     GOCACHE: $CI_PROJECT_DIR/.cache/go-build
+    GO_CACHE_POLICY: pull-push
   cache:
     key:
       files: [go.sum]
       prefix: $CI_JOB_NAME
     paths: [.cache/go-mod/, .cache/go-build/]
+    policy: $GO_CACHE_POLICY
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: $CI_COMMIT_TAG
+      variables:
+        GO_CACHE_POLICY: pull
+    - when: on_success
 
 go:
   extends: [.test, .go-cache]
   image: $GO_IMAGE
   script:
-    # gofmt -l . without the caches in .cache/ (gofmt walks dot directories).
-    - unformatted=$(find . -path ./.cache -prune -o -type f -name '*.go' ! -name '.*' -exec gofmt -l {} +)
-    - test -z "$unformatted" || { echo "$unformatted"; echo "Run gofmt -w ."; exit 1; }
-    - go mod verify
-    - go vet ./...
-    - go test -race -count=1 ./...
-    - go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+    # gofmt (without the caches in .cache/), go mod verify, go vet, the race
+    # tests (scripts/test-go.sh), govulncheck; `make ci-go` locally.
+    - make ci-go
 
 golangci-lint:
   extends: [.test, .go-cache]
@@ -129,35 +158,55 @@ golangci-lint:
       files: [go.sum]
       prefix: $CI_JOB_NAME
     paths: [.cache/go-mod/, .cache/go-build/, .cache/golangci-lint/]
+    policy: $GO_CACHE_POLICY
   script:
     - go mod verify
     # The tree is lint-clean: every issue fails the pipeline.
     - golangci-lint run ./...
 
-# The frontend checks run as three parallel jobs, each with its own npm ci
-# from one npm cache (keyed on package-lock.json): the tests take longest,
-# and the other checks and the build finish within their time. Only
-# frontend-checks uploads the cache; the others only read it.
+# The frontend's jobs (checks, frontend-test, frontend-build) run in
+# parallel, each with its own npm ci from one npm cache (keyed on
+# package-lock.json): the tests take longest, and the other two finish
+# within their time. Only checks uploads the cache; the others only read
+# it. The key needs its prefix: without one GitLab names it after the file,
+# "0_frontend/package-lock-<sha>" (lib/gitlab/ci/build/cache.rb,
+# cache_prefix), and the runner refuses to restore a key with a "/"
+# ("must not contain '/'", gitlab-runner shells/abstract.go,
+# sanitizeCacheKey), so the cache was uploaded but never read.
 .frontend:
   extends: .test
   image: $NODE_IMAGE
   cache:
     key:
       files: [frontend/package-lock.json]
+      prefix: npm
     paths: [frontend/.npm/]
     policy: pull
   before_script:
     - cd frontend
     - npm ci --cache .npm --prefer-offline
 
-frontend-checks:
+# A job's runner VM takes about two minutes to start (prepare_executor
+# 104-134 s in the job logs) and the docs, chart and script checks ran for
+# 5-28 s each, so they share jobs: checks (the frontend's typecheck, ESLint
+# and npm audit; the docs' links, anchors and images; shellcheck on every
+# shell script) and script-tests (the release, install and node pull secret
+# script tests, and the Helm chart). Each runs `make -k` on its Makefile
+# target, as `make -k ci-checks` / `make -k ci-script-tests` do locally:
+# every part runs even when an earlier one fails, make names each failing
+# part ("make: *** [Makefile:NN: docs-check] Error 1"), and the job fails at
+# the end. Alpine's make 4.4 and shellcheck 0.11.0, with whichever Alpine
+# revision the pinned image's release serves.
+checks:
   extends: .frontend
   cache:
     policy: pull-push
+  before_script:
+    - apk add --no-cache 'make~4.4' 'shellcheck~0.11.0' >/dev/null
+    - shellcheck --version
+    - (cd frontend && npm ci --cache .npm --prefer-offline)
   script:
-    - npm run typecheck
-    - npm run lint
-    - npm audit --omit=dev --audit-level=high
+    - make -k ci-checks
 
 frontend-test:
   extends: .frontend
@@ -169,51 +218,27 @@ frontend-build:
   script:
     - npm run build
 
-release-scripts:
+# The Go image (Debian) has no jq or helm. Debian's jq 1.7.1, with whichever
+# Debian security revision the pinned image's release serves; Helm's release
+# tarball of HELM_VERSION, checked against HELM_SHA256 before use. The
+# target sets REQUIRE_JQ=1 and REQUIRE_HELM=1, so a missing tool fails the
+# job instead of skipping tests. The chart tests (scripts/test-chart.sh):
+# the chart's copies of deploy/template.yaml and deploy/rbac-gitops.yaml,
+# helm lint and helm template.
+script-tests:
   extends: .test
   image: $GO_IMAGE
-  variables:
-    # test-node-pull-secret.sh fails instead of skipping without jq.
-    REQUIRE_JQ: "1"
   script:
-    # The Go image (Debian) has no jq. Debian's jq 1.7.1, with whichever
-    # Debian security revision the pinned image's release serves.
     - apt-get update -qq
     - apt-get install -y -qq --no-install-recommends 'jq=1.7.1-*' >/dev/null
     - jq --version
-    - sh scripts/test-release.sh
-    - bash scripts/test-install.sh
-    - bash scripts/test-node-pull-secret.sh
-
-# The docs' links, anchors and images (make docs-check), and shellcheck on
-# every shell script. node_pull_secret.sh is a command pasted into bash or
-# zsh, not a script: a shell directive in it would be shown on the setup
-# card (and zsh does not take comments at the prompt), so shellcheck is told
-# the shell. Alpine's make 4.4 and shellcheck 0.11.0, with whichever Alpine
-# revision the pinned image's release serves.
-docs:
-  extends: .test
-  image: $NODE_IMAGE
-  script:
-    - apk add --no-cache 'make~4.4' 'shellcheck~0.11.0' >/dev/null
-    - shellcheck --version
-    - make docs-check
-    - shellcheck scripts/*.sh dev.sh docs/tools/*.sh
-    - shellcheck --shell=bash pkg/cluster/node_pull_secret.sh
-
-# The Helm chart for Argo CD (deploy/chart): its copy of the template is
-# deploy/template.yaml, and it lints and renders (scripts/test-chart.sh).
-chart:
-  extends: .test
-  image: $GO_IMAGE
-  script:
     - curl -fsSLo /tmp/helm.tar.gz "https://get.helm.sh/helm-$HELM_VERSION-linux-amd64.tar.gz"
     - echo "$HELM_SHA256  /tmp/helm.tar.gz" | sha256sum -c -
     - tar -xzf /tmp/helm.tar.gz -C /usr/local/bin --strip-components=1 linux-amd64/helm
     - helm version
-    - bash scripts/test-chart.sh
+    - make -k ci-script-tests
 
-# Fails a tag pipeline before anything is built or published: the tag must
+# Fails a tag pipeline before anything is published: the tag must
 # match the top dated section of CHANGELOG.md (a pre-release: the top
 # undated one), and a TEMPLATE_REVISION change since the previous release
 # tag (pre-releases do not count) needs a higher MAJOR version.
@@ -225,16 +250,25 @@ release-guard:
     GIT_DEPTH: "0"
     GIT_FETCH_EXTRA_FLAGS: --prune --quiet --tags
   script:
-    - sh scripts/release.sh check "$CI_COMMIT_TAG" HEAD
+    - make release-check TAG="$CI_COMMIT_TAG"
   rules:
     - if: $CI_COMMIT_TAG
 
 # The image jobs build with RUN_CHECKS=false: the Containerfile then skips
 # its own copy of the checks (frontend typecheck, lint and tests; go vet and
-# go test) but still installs and builds everything. Each image job `needs`
-# the test jobs of this pipeline, which ran those checks (and more: -race,
-# govulncheck, golangci-lint) on this same commit; a failing check stops the
-# pipeline before any image is built. `make build` keeps them on.
+# go test) but still installs and builds everything. build-main and
+# release-build start at once, alongside the test jobs (needs: []), and
+# build only a tarball: the publish jobs `need` the test jobs of this
+# pipeline, which ran those checks (and more: -race, govulncheck,
+# golangci-lint) on this same commit, so a failing check stops the pipeline
+# before anything is pushed (GitLab docs, ci/yaml "needs": a job runs when
+# every job it needs has finished; an empty array starts it with the
+# pipeline). A red pipeline still has built the tarball (an artifact for a
+# day, never pushed). build-main is interruptible like the tests, so a
+# newer push to main still cancels the older pipeline until publish-main
+# starts (auto-cancel stops a pipeline only while every running job is
+# interruptible: ci/yaml "interruptible"). build-branch, which pushes in
+# its own job, still needs the tests. `make build` keeps the checks on.
 #
 # The build is scripts/ci-build-image.sh: buildah, chroot isolation, vfs
 # storage, linux/amd64, no layer cache (each job starts from an empty
@@ -269,16 +303,19 @@ release-guard:
 # Podman --privileged, 2026-11-19). So the build's isolation is not what
 # keeps the push token from it: the environment scope of QUAY_* is (they
 # reach only the quay-publish jobs, .crane below; SECURITY.md).
+# p90 575 s (build-main) and 566 s (release-build), max 691 s.
 .image-build:
   stage: build
   image: $BUILDAH_IMAGE
+  timeout: 30m
 
 # Push to main → an image tarball; publish-main pushes it as the write-once
 # 8-character commit tag (CI_COMMIT_SHORT_SHA) and moves :main. Never
 # :latest: that only moves with releases.
 build-main:
   extends: .image-build
-  needs: [go, golangci-lint, frontend-checks, frontend-test, frontend-build, release-scripts, chart, docs]
+  needs: []
+  interruptible: true
   script:
     - sh scripts/ci-build-image.sh tarball "$CI_COMMIT_SHORT_SHA" image.tar
   artifacts:
@@ -296,7 +333,7 @@ build-main:
 # can push a branch can run this job with code of their own.
 build-branch:
   extends: .image-build
-  needs: [go, golangci-lint, frontend-checks, frontend-test, frontend-build, release-scripts, chart, docs]
+  needs: [go, golangci-lint, checks, frontend-test, frontend-build, script-tests]
   script:
     - sh scripts/ci-build-image.sh branch "$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA"
   rules:
@@ -309,7 +346,7 @@ build-branch:
 # the push cannot interleave with another release job.
 release-build:
   extends: .image-build
-  needs: [go, golangci-lint, frontend-checks, frontend-test, frontend-build, release-scripts, chart, docs, release-guard]
+  needs: []
   script:
     - sh scripts/ci-build-image.sh tarball "$CI_COMMIT_TAG" image.tar
   artifacts:
@@ -324,7 +361,8 @@ release-build:
 release-installer:
   stage: build
   image: $GO_IMAGE
-  needs: [release-scripts, release-guard]
+  timeout: 10m
+  needs: [script-tests, release-guard]
   script:
     - sh scripts/release.sh installer "$CI_COMMIT_TAG" HEAD > install.sh
     - bash -n install.sh
@@ -341,21 +379,22 @@ release-installer:
   rules:
     - if: $CI_COMMIT_TAG
 
+# The crane jobs use no cache and build nothing: a Go cache for `go install`
+# of crane could be written by a pipeline of any branch started by a
+# Maintainer (the same key and protected suffix), and it ran right before
+# `crane auth login` with the push token.
 .crane:
-  extends: .go-cache
   image: $GO_IMAGE
-  # One cache for the three crane jobs, per crane version: go install then
-  # reuses the downloaded module and the compiled packages instead of
-  # fetching and building crane in every job. Only main and release tags
-  # run these jobs, and protected refs have caches of their own.
-  cache:
-    key: crane-$CRANE_VERSION
-    paths: [.cache/go-mod/, .cache/go-build/]
+  timeout: 10m
   # Every job that writes image tags (publish-main, release-publish,
   # promote-latest) holds this one lock, so their "does the tag exist"
   # checks and writes never interleave
-  # (https://docs.gitlab.com/ci/resource_groups/). The group keeps its
-  # earlier name and process mode; set newest_first with the API (it cannot
+  # (https://docs.gitlab.com/ci/resource_groups/). Its process mode is
+  # GitLab's default, unordered (resource groups API, 2026-11-20): waiting
+  # jobs run in no set order. The jobs do not rely on an order: :main moves
+  # only while the job's commit is the tip of main, a release moves :vN and
+  # :latest only to a newer version, and commit and release tags are written
+  # once. A Maintainer can still choose newest_first with the API (it cannot
   # be set in this file):
   #   PUT /projects/:id/resource_groups/publish-latest  process_mode=newest_first
   resource_group: publish-latest
@@ -371,7 +410,10 @@ release-installer:
     name: quay-publish
     action: access
   before_script:
-    - go install github.com/google/go-containerregistry/cmd/crane@$CRANE_VERSION
+    - curl -fsSLo /tmp/crane.tar.gz "https://github.com/google/go-containerregistry/releases/download/$CRANE_VERSION/go-containerregistry_Linux_x86_64.tar.gz"
+    - echo "$CRANE_SHA256  /tmp/crane.tar.gz" | sha256sum -c -
+    - tar -xzf /tmp/crane.tar.gz -C /usr/local/bin crane
+    - crane version
     - printf '%s' "$QUAY_TOKEN" | crane auth login "${IMAGE%%/*}" -u "$QUAY_USER" --password-stdin
 
 # Main: the write-once commit tag (kept when it exists from this commit,
@@ -382,7 +424,7 @@ release-installer:
 publish-main:
   extends: .crane
   stage: publish
-  needs: [build-main]
+  needs: [build-main, go, golangci-lint, checks, frontend-test, frontend-build, script-tests]
   script:
     - IMAGE_TARBALL=image.tar sh scripts/release.sh publish-main
   rules:
@@ -397,7 +439,7 @@ publish-main:
 release-publish:
   extends: .crane
   stage: publish
-  needs: [release-build]
+  needs: [release-build, go, golangci-lint, checks, frontend-test, frontend-build, script-tests, release-guard]
   script:
     - IMAGE_TARBALL=image.tar sh scripts/release.sh publish "$CI_COMMIT_TAG"
   rules:
@@ -411,6 +453,7 @@ release-publish:
 release-notes:
   stage: release
   image: $GO_IMAGE
+  timeout: 10m
   needs: [release-publish, release-installer]
   script:
     - INSTALLER=install.sh sh scripts/release.sh gitlab-release "$CI_COMMIT_TAG"

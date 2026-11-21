@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getPlayground, toApiError } from "../../services/api";
 import { usePolling } from "../../hooks/usePolling";
+import { useLatestRequest } from "../../hooks/useLatestRequest";
 import { RESOURCE_SETTLE_MAX_MS } from "../../constants";
 import type { PlaygroundStatus } from "../../types";
 
@@ -24,21 +25,23 @@ export function usePlaygroundStatus(project: string | null, refreshKey: number, 
   const [data, setData] = useState<PlaygroundStatus | null>(null);
   const [error, setError] = useState<{ project: string | null; message: string } | null>(null);
   const [pollRound, setPollRound] = useState(0);
-  const current = useRef(project);
-  current.current = project;
+  // Only the newest read's answer is shown: another project's, and an
+  // earlier one for the same project, are dropped.
+  const latest = useLatestRequest();
 
   const fetchNow = useCallback(async () => {
     if (!enabled) return;
+    const ticket = latest.start();
     try {
-      const pg = await getPlayground(project);
-      if (current.current === project) {
-        setData(pg);
-        setError(null);
-      }
+      const pg = await getPlayground(project, ticket.signal);
+      if (!ticket.isLatest()) return;
+      setData(pg);
+      setError(null);
     } catch (e) {
-      if (current.current === project) setError({ project, message: toApiError(e, "Cannot read the playground").message });
+      if (!ticket.isLatest()) return;
+      setError({ project, message: toApiError(e, "Cannot read the playground").message });
     }
-  }, [project, enabled]);
+  }, [project, enabled, latest]);
 
   useEffect(() => {
     setPollRound((n) => n + 1);

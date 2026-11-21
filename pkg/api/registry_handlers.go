@@ -17,7 +17,7 @@ var HandleTestPullSecret = withAuth(func(c *cluster.Client, w http.ResponseWrite
 	result, err := cluster.TestPullSecret(c)
 	if err != nil {
 		slog.Error("test-pull-secret failed", "error", err)
-		writeError(w, "test failed", http.StatusInternalServerError)
+		writeReadError(w, "test failed", err)
 		return
 	}
 	writeJSON(w, result, "test-pull-secret")
@@ -44,7 +44,7 @@ var HandleCreatePullSecret = withMutationAuth(func(c *cluster.Client, w http.Res
 	result, err := cluster.CreatePullSecret(c, req.Auth)
 	if err != nil {
 		slog.Error("create-pull-secret failed", "error", err)
-		writeError(w, "create pull secret failed", http.StatusInternalServerError)
+		writeOperationError(w, "create pull secret failed", err)
 		return
 	}
 	writeJSON(w, result, "create-pull-secret")
@@ -116,25 +116,11 @@ var HandleNodeSetupStream = withMutationAuth(func(c *cluster.Client, w http.Resp
 		writeError(w, "Give the resourceVersion of the plan you reviewed", http.StatusBadRequest, "validation")
 		return
 	}
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("panic in node setup handler", "error", rec)
-		}
-	}()
-	sseWriter, err := NewSSEWriter(w)
-	if err != nil {
-		writeError(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	defer sseWriter.Close()
-	done := make(chan struct{})
-	defer close(done)
-	go sseHeartbeat(sseWriter, done)
-
 	beginOperation(w, req.Action)
 	slog.Info("mutation", "op", "node-setup", "action", req.Action)
-	result, runErr := runNodeSetup(c, req, forwardSteps(sseWriter))
-	sendOperationResult(sseWriter, result, runErr)
+	_, runErr := streamOperation(w, "node setup", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		return runNodeSetup(c, req, emit)
+	})
 	if runErr != nil {
 		slog.Error("node setup failed", "action", req.Action, "error", runErr)
 	}
@@ -147,7 +133,7 @@ var HandleVerifyNodes = withAuth(func(c *cluster.Client, w http.ResponseWriter, 
 	result, err := cluster.VerifyNodeReadiness(c)
 	if err != nil {
 		slog.Error("verify-nodes failed", "error", err)
-		writeError(w, "verification failed", http.StatusInternalServerError)
+		writeReadError(w, "verification failed", err)
 		return
 	}
 	writeJSON(w, result, "verify-nodes")
@@ -192,7 +178,7 @@ var HandleNodePullCheck = withMutationAuth(func(c *cluster.Client, w http.Respon
 	result, err := cluster.CheckNodePull(c, req.Image)
 	if err != nil {
 		slog.Error("node-pull-check failed", "error", err)
-		writeError(w, "node pull check failed", http.StatusInternalServerError)
+		writeOperationError(w, "node pull check failed", err)
 		return
 	}
 	writeJSON(w, result, "node-pull-check")

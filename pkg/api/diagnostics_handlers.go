@@ -1,7 +1,6 @@
 package api
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -34,7 +33,7 @@ func diagnosticsHandler(run func(*cluster.Client) (*cluster.DiagnosticsResponse,
 		result, err := run(c)
 		if err != nil {
 			slog.Error("diagnostics failed", "error", err)
-			writeError(w, "diagnostics failed", http.StatusInternalServerError)
+			writeReadError(w, "diagnostics failed", err)
 			return
 		}
 		writeJSON(w, result, "diagnostics")
@@ -60,7 +59,7 @@ var HandleDiagnosticsFix = withMutationAuth(func(c *cluster.Client, w http.Respo
 	result, err := cluster.ApplyFix(c, req.ProblemID)
 	if err != nil {
 		slog.Error("diagnostics-fix failed", "error", err, "problemId", req.ProblemID)
-		writeError(w, fmt.Sprintf("Fix failed: %v", err), http.StatusInternalServerError)
+		writeOperationError(w, "Fix failed", err)
 		return
 	}
 

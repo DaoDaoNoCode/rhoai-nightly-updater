@@ -3,6 +3,7 @@ import { cleanup, configure } from "@testing-library/react";
 import { format } from "node:util";
 import { afterEach, beforeEach, vi } from "vitest";
 import { setDocumentHidden } from "./utils";
+import { unsettledApps } from "./providers";
 
 // findBy*/waitFor give up after 1s by default: on a loaded machine (a
 // CPU-limited build pod, parallel suites) a page whose stubbed reads
@@ -11,6 +12,13 @@ import { setDocumentHidden } from "./utils";
 // so this only bounds a page that never shows it (vitest.config.mts's
 // testTimeout bounds the whole test).
 configure({ asyncUtilTimeout: 10_000 });
+
+// React warns about a state update outside act(...) only when this global is
+// true (react-dom-client's isConcurrentActEnvironment). Testing Library sets
+// it in a global beforeAll, and vitest has no globals here (no
+// `globals: true`), so without this line the warning never fires and an
+// update that lands after a test's assertions goes unnoticed.
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // React's development warnings (a list item without a key, a <div> inside a
 // <p>, an update outside act, ...) are bugs in what the UI renders, not
@@ -40,10 +48,15 @@ function blocksInParagraphs(): string[] {
 
 afterEach(() => {
   const nested = blocksInParagraphs();
+  const unsettled = unsettledApps();
   cleanup();
   setDocumentHidden(false, { silent: true });
   const found = reactWarnings;
   reactWarnings = [];
   if (found.length > 0) throw new Error(`Logged an error (a React warning, or another console.error):\n${found.join("\n\n")}`);
   if (nested.length > 0) throw new Error(`Invalid HTML, a block inside a paragraph:\n${nested.join("\n")}`);
+  // The app's own reads (permissions, status, operation, version...) answer
+  // on their own schedule: a test that ends before they did leaves updates
+  // for after it, outside act, and fails or not with the machine's load.
+  if (unsettled > 0) throw new Error("The test rendered the app (renderWithApp/renderPage) and ended before its reads settled: end it with await settleApps() (or the render's settled()).");
 });

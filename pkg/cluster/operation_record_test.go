@@ -35,7 +35,7 @@ const fakeOperationCMPath = "/api/v1/namespaces/test-ns/configmaps/rhoai-nightly
 func newFakeOperationConfigMap(t *testing.T) (*fakeOperationConfigMap, *Client) {
 	t.Setenv("NAMESPACE", "test-ns")
 	f := &fakeOperationConfigMap{t: t}
-	srv := httptest.NewServer(f)
+	srv := newFakePlainServer(f)
 	t.Cleanup(srv.Close)
 	return f, &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: t.Context()}
 }

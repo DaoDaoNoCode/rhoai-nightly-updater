@@ -3,6 +3,7 @@ package clocktest
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -173,6 +174,125 @@ func TestFakeTicker(t *testing.T) {
 		t.Fatal("tick after Stop")
 	default:
 	}
+}
+
+// A tick stays pending until its reader comes back for the next one, so
+// WaitForTicksHandled returns only after the reader's work on the tick,
+// including what it reads from the clock, is done.
+func TestWaitForTicksHandled(t *testing.T) {
+	f := NewFake()
+	tk := f.NewTicker(10 * time.Second)
+	if f.PendingTicks() != 0 {
+		t.Fatalf("pending before any tick: %d", f.PendingTicks())
+	}
+	f.WaitForTicksHandled() // nothing delivered: returns at once
+
+	var mu sync.Mutex
+	var handledAt []time.Time
+	got, next, quit, done := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		defer tk.Stop()
+		for {
+			select {
+			case <-quit:
+				return
+			case <-tk.C():
+			}
+			got <- struct{}{}
+			<-next
+			mu.Lock()
+			handledAt = append(handledAt, f.Now()) // reads the clock after the tick
+			mu.Unlock()
+		}
+	}()
+
+	f.Advance(10 * time.Second)
+	if f.PendingTicks() != 1 {
+		t.Fatalf("pending after a delivered tick: %d", f.PendingTicks())
+	}
+	<-got // the reader took the tick and is still on it
+	if f.PendingTicks() != 1 {
+		t.Fatalf("pending while the reader handles the tick: %d", f.PendingTicks())
+	}
+	f.Advance(10 * time.Second) // the channel is empty: this tick is held
+	if f.PendingTicks() != 1 {
+		t.Fatalf("pending with a second tick held: %d", f.PendingTicks())
+	}
+	waited := make(chan struct{})
+	go func() {
+		f.WaitForTicksHandled()
+		close(waited)
+	}()
+	next <- struct{}{} // first tick done; the reader takes the held one
+	<-got
+	next <- struct{}{} // second tick done; the reader comes back
+	<-waited
+	mu.Lock()
+	if len(handledAt) != 2 || !handledAt[1].Equal(Epoch.Add(20*time.Second)) {
+		t.Fatalf("WaitForTicksHandled returned before the reader's work: %v", handledAt)
+	}
+	mu.Unlock()
+	if f.PendingTicks() != 0 {
+		t.Fatalf("pending after the reader came back: %d", f.PendingTicks())
+	}
+	close(quit)
+	<-done
+}
+
+// C() with a tick held keeps it pending (the reader is about to take it);
+// Stop clears a tick nobody will handle; a dropped tick adds nothing.
+func TestPendingTicksWithoutAReaderLoop(t *testing.T) {
+	f := NewFake()
+	tk := f.NewTicker(time.Second)
+	f.Advance(time.Second)
+	f.Advance(time.Second) // dropped: the channel still holds the first tick
+	if f.PendingTicks() != 1 {
+		t.Fatalf("pending %d, want 1", f.PendingTicks())
+	}
+	<-tk.C()
+	if f.PendingTicks() != 1 {
+		t.Fatalf("pending after taking the tick %d, want 1 until the reader comes back", f.PendingTicks())
+	}
+	tk.C()
+	if f.PendingTicks() != 0 {
+		t.Fatalf("pending after the reader came back %d", f.PendingTicks())
+	}
+
+	other := f.NewTicker(time.Second)
+	f.Advance(time.Second)
+	if f.PendingTicks() != 2 {
+		t.Fatalf("pending %d, want 2", f.PendingTicks())
+	}
+	other.Stop()
+	tk.Stop()
+	f.WaitForTicksHandled() // stopped tickers hold nothing to handle
+	if f.PendingTicks() != 0 {
+		t.Fatalf("pending after Stop %d", f.PendingTicks())
+	}
+}
+
+// A Stop that comes after advance chose a due tick but before its callback
+// ran (advance releases the lock in between) delivers nothing: a stopped
+// ticker holds no pending tick, so WaitForTicksHandled cannot wait for a
+// reader that is gone.
+func TestStopBetweenChoosingAndDeliveringATick(t *testing.T) {
+	f := NewFake()
+	tk := f.NewTicker(time.Second)
+	f.beforeFire = func() {
+		f.beforeFire = nil // advance runs one callback here, the tick's
+		tk.Stop()
+	}
+	f.Advance(time.Second)
+	if f.PendingTicks() != 0 {
+		t.Fatalf("pending %d after a stopped ticker's tick", f.PendingTicks())
+	}
+	select {
+	case <-tk.C():
+		t.Fatal("a stopped ticker delivered a tick")
+	default:
+	}
+	f.WaitForTicksHandled()
 }
 
 func TestRealClock(t *testing.T) {

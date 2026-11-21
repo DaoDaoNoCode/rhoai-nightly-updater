@@ -114,8 +114,8 @@ export function fetchLatestNightly(signal?: AbortSignal): Promise<LatestNightlyR
   return request('/api/latest-nightly', { signal });
 }
 
-export function fetchNightlyTags(): Promise<NightlyTagsResponse> {
-  return request('/api/nightly-tags');
+export function fetchNightlyTags(signal?: AbortSignal): Promise<NightlyTagsResponse> {
+  return request('/api/nightly-tags', { signal });
 }
 
 export function trackPageView(page: string): void {
@@ -134,8 +134,8 @@ export function trackFeature(action: string): void {
   }).catch(() => {});
 }
 
-export function getUserPermissions(): Promise<UserPermissions> {
-  return request('/api/user/permissions');
+export function getUserPermissions(signal?: AbortSignal): Promise<UserPermissions> {
+  return request('/api/user/permissions', { signal });
 }
 
 /**

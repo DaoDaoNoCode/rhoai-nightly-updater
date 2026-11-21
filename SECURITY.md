@@ -154,7 +154,7 @@ The UI's tests of these answers load JSON that `TestFrontendContract` (pkg/api) 
 
 ### Errors
 
-A 403 answered to the user's own token is `forbidden_for_user` ("your OpenShift account may not see this"), never `forbidden` and never the "re-apply the template / make upgrade" hint (`HTTPStatusForError`, `templateHint`, `deniedReadHint`; `TestUserReadForbiddenIsTheUsers`).
+A 403 answered to the user's own token on a read is `forbidden_for_user` ("your OpenShift account may not see this"), never `forbidden` and never the "re-apply the template / make upgrade" hint (`HTTPStatusForError`, `templateHint`, `deniedReadHint`; `TestUserReadForbiddenIsTheUsers`). A 403 to a change is `forbidden`: the user's RBAC refused the change (`errorCodeFromK8sErr`, `operationErrorStatus`).
 
 ### RBAC
 

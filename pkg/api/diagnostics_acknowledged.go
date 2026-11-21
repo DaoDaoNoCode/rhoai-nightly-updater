@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -52,7 +51,7 @@ var HandleDiagnosticsFixAcknowledged = withMutationAuth(func(c *cluster.Client, 
 	result, err := applyFixAcknowledged(c, req.ProblemID, *req.Binding)
 	if err != nil {
 		slog.Error("diagnostics-fix failed", "error", err, "problemId", req.ProblemID)
-		writeError(w, fmt.Sprintf("Fix failed: %v", err), http.StatusInternalServerError)
+		writeOperationError(w, "Fix failed", err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

@@ -26,6 +26,7 @@ import {
 } from "./maasForms";
 import { getMaaS, toApiError } from "../../services/api";
 import { usePolling } from "../../hooks/usePolling";
+import { useLatestRequest } from "../../hooks/useLatestRequest";
 import { RESOURCE_SETTLE_MAX_MS } from "../../constants";
 import { ImageRef } from "../ImageRef";
 import { type ConfirmSpec, type MaaSPending, type Pending, ExternalLink, WarningAlert } from "./resourceRow";
@@ -43,20 +44,28 @@ export function maasSettling(m: MaaSStatus | null): boolean {
   return !!m && (m.parts.some((p) => p.state === "waiting") || (m.items ?? []).some((i) => i.published && !i.ready && !i.partly));
 }
 
-/** GET /api/resources/maas, read again when refreshKey changes and every few seconds while something settles. */
+/**
+ * GET /api/resources/maas, read again when refreshKey changes and every few
+ * seconds while something settles. Only the newest read's answer is shown.
+ */
 export function useMaaSStatus(refreshKey: number, busy: boolean, enabled = true) {
   const [data, setData] = useState<MaaSStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pollRound, setPollRound] = useState(0);
+  const latest = useLatestRequest();
   const fetchNow = useCallback(async () => {
     if (!enabled) return;
+    const ticket = latest.start();
     try {
-      setData(await getMaaS());
+      const m = await getMaaS(ticket.signal);
+      if (!ticket.isLatest()) return;
+      setData(m);
       setError(null);
     } catch (e) {
+      if (!ticket.isLatest()) return;
       setError(toApiError(e, "Cannot read Models as a Service").message);
     }
-  }, [enabled]);
+  }, [enabled, latest]);
   useEffect(() => {
     setPollRound((n) => n + 1);
     void fetchNow();

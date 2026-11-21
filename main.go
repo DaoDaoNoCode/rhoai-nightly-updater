@@ -93,21 +93,13 @@ func main() {
 	// DEV_MODE must only be reachable from this machine. In-cluster the
 	// template sets BIND_ADDRESS=127.0.0.1 so that only oauth-proxy (same
 	// pod) reaches the API; probes and metrics use METRICS_PORT.
-	bindAddress := os.Getenv("BIND_ADDRESS")
-	if bindAddress == "" && devMode {
-		bindAddress = "127.0.0.1"
+	bindAddress, bindWarning, err := listenAddress(devMode, os.Getenv)
+	if err != nil {
+		slog.Error(err.Error(), "bindAddress", bindAddress)
+		os.Exit(1)
 	}
-	if devMode && !isLoopbackHost(bindAddress) {
-		// Every DEV_MODE request runs with the developer's token and no
-		// mutation gate, and the Host check does not stop a client that
-		// sends Host: 127.0.0.1 itself.
-		if os.Getenv("DEV_ALLOW_REMOTE") != "true" {
-			slog.Error("refusing to serve DEV_MODE on a non-loopback address: anyone who can reach it acts with your cluster token; "+
-				"unset BIND_ADDRESS, or set DEV_ALLOW_REMOTE=true to accept that", "bindAddress", bindAddress)
-			os.Exit(1)
-		}
-		slog.Warn("DEV_ALLOW_REMOTE=true: DEV_MODE serves a non-loopback address; anyone who can reach it acts with your cluster token and no permission check",
-			"bindAddress", bindAddress)
+	if bindWarning != "" {
+		slog.Warn(bindWarning, "bindAddress", bindAddress)
 	}
 
 	srv := &http.Server{
@@ -188,6 +180,28 @@ func main() {
 	}
 	slog.Info("server stopped")
 	os.Exit(exitCode)
+}
+
+// listenAddress is the host the API listens on: BIND_ADDRESS, or
+// 127.0.0.1 in DEV_MODE when it is unset. DEV_MODE on a non-loopback
+// address is refused (an error) unless DEV_ALLOW_REMOTE=true, which
+// returns a warning to log instead.
+func listenAddress(devMode bool, getenv func(string) string) (bindAddress, warning string, err error) {
+	bindAddress = getenv("BIND_ADDRESS")
+	if bindAddress == "" && devMode {
+		bindAddress = "127.0.0.1"
+	}
+	if !devMode || isLoopbackHost(bindAddress) {
+		return bindAddress, "", nil
+	}
+	// Every DEV_MODE request runs with the developer's token and no
+	// mutation gate, and the Host check does not stop a client that
+	// sends Host: 127.0.0.1 itself.
+	if getenv("DEV_ALLOW_REMOTE") != "true" {
+		return bindAddress, "", errors.New("refusing to serve DEV_MODE on a non-loopback address: anyone who can reach it acts with your cluster token; " +
+			"unset BIND_ADDRESS, or set DEV_ALLOW_REMOTE=true to accept that")
+	}
+	return bindAddress, "DEV_ALLOW_REMOTE=true: DEV_MODE serves a non-loopback address; anyone who can reach it acts with your cluster token and no permission check", nil
 }
 
 // isLoopbackHost reports whether a BIND_ADDRESS host only accepts

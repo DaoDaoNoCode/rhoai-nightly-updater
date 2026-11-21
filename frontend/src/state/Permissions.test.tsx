@@ -4,7 +4,7 @@ import { act, screen, waitFor } from "@testing-library/react";
 import { usePermissions, useRole, useSignedInUser } from "./Permissions";
 import { useClusterStatus, useOperation } from "./AppState";
 import { ApiError } from "../services/api";
-import { USER_PERMISSIONS, nightlyStatus, renderWithApp } from "../test/providers";
+import { USER_PERMISSIONS, nightlyStatus, renderWithApp, settleApps } from "../test/providers";
 import { deferred } from "../test/utils";
 import type { UserPermissions } from "../types";
 
@@ -28,6 +28,7 @@ describe("the role", () => {
   ])("%s", async (_name, answer, role) => {
     renderWithApp(<Probe />, { permissions: async () => answer as UserPermissions });
     await waitFor(() => expect(probe().role).toBe(role));
+    await settleApps();
   });
 
   it.each([
@@ -37,6 +38,7 @@ describe("the role", () => {
     renderWithApp(<Probe />, { permissions: async () => { throw err(); } });
     await waitFor(() => expect(probe().perm).not.toBe("checking"));
     expect(probe().role).toBe("user");
+    await settleApps();
   });
 
   it("is 'checking' until the first answer, and the status is not read before it", async () => {
@@ -49,6 +51,7 @@ describe("the role", () => {
     answer.resolve({ canMutate: true, user: "me", role: "admin" });
     await waitFor(() => expect(probe()).toMatchObject({ role: "admin", status: true }));
     expect(status).toHaveBeenCalledTimes(1);
+    await settleApps();
   });
 
   it("a user's tab never reads the status", async () => {
@@ -57,6 +60,7 @@ describe("the role", () => {
     await waitFor(() => expect(probe()).toMatchObject({ role: "user", user: "dev-user", loading: false }));
     await act(async () => {});
     expect(status).not.toHaveBeenCalled();
+    await settleApps();
   });
 });
 
@@ -64,6 +68,7 @@ describe("GET /api/operation for a user", () => {
   it("keeps the label and start of a running operation, no names", async () => {
     renderWithApp(<Probe />, { permissions: async () => USER_PERMISSIONS, operation: async () => ({ running: true, label: "Update to nightly", startedAt: "2026-10-06T14:05:00Z" }) });
     await waitFor(() => expect(probe()).toMatchObject({ inProgress: true, brief: { label: "Update to nightly", startedAt: "2026-10-06T14:05:00Z" } }));
+    await settleApps();
   });
 
   it("is idle when nothing runs", async () => {
@@ -71,5 +76,6 @@ describe("GET /api/operation for a user", () => {
     await waitFor(() => expect(probe().role).toBe("user"));
     await act(async () => {});
     expect(probe()).toMatchObject({ inProgress: false, brief: null });
+    await settleApps();
   });
 });

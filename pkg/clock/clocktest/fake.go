@@ -26,7 +26,13 @@ type Fake struct {
 	auto     bool
 	timers   map[*timer]struct{}
 	sleepers int
-	changed  chan struct{} // closed and replaced when sleepers changes
+	pending  int           // tickers with a tick their reader has not handled
+	changed  chan struct{} // closed and replaced when sleepers or pending changes
+
+	// beforeFire, when set (by this package's tests), runs where advance
+	// has released the lock and is about to run a due timer's callback:
+	// what another goroutine may do in that window.
+	beforeFire func()
 }
 
 type timer struct {
@@ -131,8 +137,45 @@ func (f *Fake) Sleep(ctx context.Context, d time.Duration) error {
 
 func (f *Fake) setSleepersLocked(n int) {
 	f.sleepers = n
+	f.notifyLocked()
+}
+
+// notifyLocked wakes the waiters of WaitForSleepers and WaitForTicksHandled.
+func (f *Fake) notifyLocked() {
 	close(f.changed)
 	f.changed = make(chan struct{})
+}
+
+// PendingTicks returns how many tickers hold a tick that their reader has
+// not handled yet (see WaitForTicksHandled).
+func (f *Fake) PendingTicks() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.pending
+}
+
+// WaitForTicksHandled blocks until the code has handled every tick its
+// tickers delivered: the goroutine that reads each such ticker has come
+// back for the next tick (it called C() again with the channel empty) or
+// stopped the ticker. A test calls it after an Advance that delivered a
+// tick and before it moves the time again, so the code reads the time the
+// tick was meant for. Waiting only for an effect of the tick (a write the
+// code makes) is not enough when the code reads the clock after it.
+//
+// It relies on the reader calling C() each time it waits for a tick, as
+// in `case <-ticker.C():` in a select inside the loop (the Go spec
+// evaluates the channel operands of a select each time it is entered).
+func (f *Fake) WaitForTicksHandled() {
+	for {
+		f.mu.Lock()
+		if f.pending == 0 {
+			f.mu.Unlock()
+			return
+		}
+		ch := f.changed
+		f.mu.Unlock()
+		<-ch
+	}
 }
 
 // advance moves the time to target, firing the timers due by then in time
@@ -170,6 +213,9 @@ func (f *Fake) advance(target time.Time, stop func() bool) {
 			}
 		}
 		f.mu.Unlock()
+		if f.beforeFire != nil {
+			f.beforeFire()
+		}
 		next.fire()
 		if stop != nil && stop() {
 			return
@@ -204,8 +250,19 @@ func (f *Fake) NewTicker(d time.Duration) clock.Ticker {
 	}
 	ft := &fakeTicker{f: f, c: make(chan time.Time, 1)}
 	ft.t = f.addTimer(f.Now().Add(d), d, func() {
+		// The send and the pending mark happen under the lock that C()
+		// takes, so a reader that handles the tick at once cannot come back
+		// for the next one before the tick counts as pending. advance
+		// runs this after releasing the lock: a Stop in between wins, as
+		// time.Ticker.Stop does ("no more ticks will be sent").
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if ft.stopped {
+			return
+		}
 		select {
-		case ft.c <- f.Now():
+		case ft.c <- f.now:
+			ft.setPendingLocked(true)
 		default:
 		}
 	})
@@ -213,13 +270,45 @@ func (f *Fake) NewTicker(d time.Duration) clock.Ticker {
 }
 
 type fakeTicker struct {
-	f *Fake
-	t *timer
-	c chan time.Time
+	f       *Fake
+	t       *timer
+	c       chan time.Time
+	pending bool // a tick was delivered and the reader has not come back for the next one; guarded by f.mu
+	stopped bool // guarded by f.mu
 }
 
-func (t *fakeTicker) C() <-chan time.Time { return t.c }
-func (t *fakeTicker) Stop()               { t.f.removeTimer(t.t) }
+// C returns the tick channel. A call with the channel empty means the
+// reader handled the ticks delivered before and waits for the next one;
+// with a tick held, the reader is about to take it, so it stays pending.
+func (t *fakeTicker) C() <-chan time.Time {
+	t.f.mu.Lock()
+	defer t.f.mu.Unlock()
+	if len(t.c) == 0 {
+		t.setPendingLocked(false)
+	}
+	return t.c
+}
+
+func (t *fakeTicker) Stop() {
+	t.f.mu.Lock()
+	defer t.f.mu.Unlock()
+	t.stopped = true
+	delete(t.f.timers, t.t)
+	t.setPendingLocked(false)
+}
+
+func (t *fakeTicker) setPendingLocked(p bool) {
+	if t.pending == p {
+		return
+	}
+	t.pending = p
+	if p {
+		t.f.pending++
+	} else {
+		t.f.pending--
+	}
+	t.f.notifyLocked()
+}
 
 // WithTimeout implements clock.Clock.
 func (f *Fake) WithTimeout(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {

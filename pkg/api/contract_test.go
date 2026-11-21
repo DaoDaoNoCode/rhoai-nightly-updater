@@ -177,6 +177,6 @@ func stubRunningOperation(t *testing.T, started time.Time) {
 	t.Helper()
 	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) {
 		return &cluster.OperationRecord{Lease: &types.OperationLease{ID: "op1", BootID: "another-process", Pod: "pod-2", User: "alice",
-			Type: "update", Label: "Update to nightly", Target: "rhoai-3.6", StartedAt: started.Format(time.RFC3339), HeartbeatAt: time.Now().UTC().Format(time.RFC3339)}}, nil
+			Type: "update", Label: "Update to nightly", Target: "rhoai-3.6", StartedAt: started.Format(time.RFC3339), HeartbeatAt: clk.Now().UTC().Format(time.RFC3339)}}, nil
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"io"
 	"maps"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
@@ -125,7 +124,7 @@ func olmInstalls(csv string) func(*fakeOLM, map[string]any) {
 }
 
 func (f *fakeOLM) client(ctx context.Context) *Client {
-	srv := httptest.NewServer(http.HandlerFunc(f.serve))
+	srv := newFakePlainServer(http.HandlerFunc(f.serve))
 	f.t.Cleanup(srv.Close)
 	// A new server may reuse an earlier test's address, which keys the cache.
 	controlPlaneCache.Purge()

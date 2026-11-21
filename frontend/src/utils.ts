@@ -87,3 +87,22 @@ export function formatRelativeTime(dateStr: string): string {
     return dateStr;
   }
 }
+
+/**
+ * Deep equality of JSON data (what the API answers): plain objects, arrays,
+ * strings, numbers, booleans and null; an undefined value counts like a
+ * missing key, as in JSON. A poll whose answer equals the last one keeps the
+ * last object, so React sees no change and renders nothing again.
+ */
+export function sameData(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((v, i) => sameData(v, b[i]));
+  const x = a as Record<string, unknown>;
+  const y = b as Record<string, unknown>;
+  for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) {
+    if (!sameData(x[k], y[k])) return false;
+  }
+  return true;
+}

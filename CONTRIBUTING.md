@@ -136,13 +136,14 @@ make test              # Go, frontend, release/install script and chart tests
 ### Go Tests
 
 ```bash
-make test-go           # Runs: go test -race -count=1 ./...
+make test-go           # Runs: scripts/test-go.sh (go test -race -count=1 ./..., pkg/cluster split over the CPUs; GO_TEST_SHARDS=1 for one process)
 ```
 
 **Test patterns:**
 
 - Tests use fast timing constants instead of production timeouts
 - `TestMain` overrides package-level timing constants to run quickly without changing production behavior
+- The shared fake API servers of `pkg/cluster` (`newResourceFake`, `newFakeAPI`, `newMockClient`, ...) are `newFakeServer`/`newFakePlainServer` (`fake_server_test.go`): real net/http servers and clients over an in-memory connection, without TLS or loopback sockets. `CLUSTER_FAKES_LOOPBACK=1 go test ./pkg/cluster` puts them back on `httptest`'s TLS and loopback servers, to compare. Tests of TLS itself keep `httptest.NewTLSServer`
 
 ### Frontend Tests
 
@@ -155,10 +156,12 @@ Runs Vitest over `frontend/src/**/*.test.ts[x]` in jsdom. No browser needed.
 ### Script and chart tests
 
 ```bash
-make test-scripts      # scripts/test-release.sh, test-install.sh and test-node-pull-secret.sh (offline, fake oc/curl/crane; the last needs jq)
+make test-scripts      # scripts/test-release.sh, test-install.sh and test-node-pull-secret.sh in parallel (offline, fake oc/curl/crane; the last needs jq; the summary names what was skipped)
 make test-chart        # scripts/test-chart.sh: helm lint and helm template of deploy/chart (offline)
 make check-chart       # only: the chart's copies of deploy/template.yaml and deploy/rbac-gitops.yaml are current
 ```
+
+What a GitLab test job runs, locally (with your tools; the jobs' versions are in `.gitlab-ci.yml`): `make ci-go`, `make -k ci-checks`, `make -k ci-script-tests` (needs jq and helm), `make lint-go` (golangci-lint), `make test-frontend`, `make build-frontend`, and `make release-check TAG=vX.Y.Z` for a tag's release guard.
 
 The Helm chart (`deploy/chart`, [docs/GITOPS.md](docs/GITOPS.md)) renders copies of `deploy/template.yaml` and `deploy/rbac-gitops.yaml` (the gitops profile's RBAC and admission policy), because Helm reads only files inside the chart. After any change to either run `make chart` and commit the copies with it; `make check-chart`, `make test-chart`, CI and the release guard fail otherwise. A new API route is off in the gitops profile until it is added to `gitOpsRoutes` in `pkg/api/routes.go` (or listed in `gitOpsRefused`; `TestEveryRouteHasAGitOpsProfileDecision` fails for a route in neither); adding it there can widen what the profile reaches, and `pkg/cluster/rbac_gitops_test.go` then names the rules `deploy/rbac-gitops.yaml` must gain. `scripts/test-chart.sh` checks that every Template object renders exactly once with its parameters replaced, that the schema lists exactly the Template's parameters, that unknown keys, missing or tag-only images fail, and that the ConsoleLink hook applies the same object as `install.sh`.
 
@@ -258,15 +261,16 @@ Requires prior `docker login` or `podman login` to the registry. To test your bu
 GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release tags (`vX.Y.Z`, and pre-releases `vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`; other tags run nothing):
 
 - **test** stage, all must pass, no lint exceptions:
-  - `go`: gofmt, `go mod verify`, `go vet`, `go test -race`, govulncheck;
+  - `go` (`make ci-go`): gofmt, `go mod verify`, `go vet`, the race tests (`scripts/test-go.sh`: `go test -race -count=1` over every package, with `pkg/cluster` split into one process per CPU, at most 4), govulncheck;
   - `golangci-lint`;
-  - `frontend-checks` (typecheck, ESLint, `npm audit`), `frontend-test` (tests) and `frontend-build` (production build), in parallel, each after its own `npm ci`;
-  - `release-scripts`: `scripts/test-release.sh`, `scripts/test-install.sh` and `scripts/test-node-pull-secret.sh` (the job installs Debian's `jq` 1.7.1 into the Go image; both CIs set `REQUIRE_JQ=1`, so the test fails instead of skipping without `jq`);
-  - `chart`: `scripts/test-chart.sh` with Helm `HELM_VERSION`, downloaded from get.helm.sh and checked against `HELM_SHA256` (both in `.gitlab-ci.yml` and `.github/workflows/ci.yml`; change them together);
-  - `docs`: `make docs-check` and shellcheck 0.11.0 on `scripts/*.sh`, `dev.sh`, `docs/tools/*.sh` and `pkg/cluster/node_pull_secret.sh` (as bash: it is a pasted command, so it carries no shell directive); GitHub runs the same with the shellcheck release tarball, checked against `SHELLCHECK_SHA256`;
-  - `release-guard` (tags only): `scripts/release.sh check`, see [Releases](#releases);
-  - the Go jobs keep Go's module and build caches (and golangci-lint's) in `.cache/`, one GitLab cache per job keyed on `go.sum`; the crane jobs share one keyed on `CRANE_VERSION`, so `go install` of crane reuses it.
-- **Image jobs** (`build-main`, `build-branch`, `release-build`) `need` every test job of their pipeline and build with `RUN_CHECKS=false`, so the Containerfile does not run those checks a second time.
+  - `checks` (`make -k ci-checks`): the frontend's typecheck, ESLint and `npm audit`; `make docs-check`; shellcheck 0.11.0 on `scripts/*.sh`, `dev.sh`, `docs/tools/*.sh` and `pkg/cluster/node_pull_secret.sh` (as bash: it is a pasted command, so it carries no shell directive; `make shellcheck`). GitHub runs the same in its `frontend-checks` and `docs` jobs, with the shellcheck release tarball checked against `SHELLCHECK_SHA256`;
+  - `frontend-test` (tests) and `frontend-build` (production build), in parallel with `checks`, each after its own `npm ci` from one npm cache;
+  - `script-tests` (`make -k ci-script-tests`): `scripts/test-release.sh`, `scripts/test-install.sh` and `scripts/test-node-pull-secret.sh` at the same time, then `scripts/test-chart.sh`. The job installs Debian's `jq` 1.7.1 into the Go image and Helm `HELM_VERSION` from get.helm.sh, checked against `HELM_SHA256` (both in `.gitlab-ci.yml` and `.github/workflows/ci.yml`; change them together); the target sets `REQUIRE_JQ=1` and `REQUIRE_HELM=1`, so a missing tool fails instead of skipping tests;
+  - `release-guard` (tags only, `make release-check TAG=vX.Y.Z`): `scripts/release.sh check`, see [Releases](#releases);
+  - the docs, chart and script checks share the `checks` and `script-tests` jobs because each job waits about two minutes for its runner VM, and those checks take seconds; `make -k` runs every part and names each one that failed;
+  - the Go jobs keep Go's module and build caches (and golangci-lint's) in `.cache/`, one GitLab cache per job keyed on `go.sum`; tag pipelines only read them (main's pipeline of the commit wrote them).
+  - Job timeouts: 20 minutes for the test jobs, 30 for the image builds, 10 for the crane, installer and release-notes jobs (GitHub: 20 minutes per job, 45 for the release job).
+- **Image jobs**: `build-main` and `release-build` start with the test jobs and only build a tarball; the publish jobs (`publish-main`, `release-publish`) `need` every test job of the pipeline (on a tag also `release-guard`) and the build, so nothing is pushed unless all of them passed. A failed test still leaves that pipeline's tarball as a one-day artifact, never pushed. `build-branch`, which pushes from its own job, still waits for the test jobs. They build with `RUN_CHECKS=false`, so the Containerfile does not run those checks a second time.
 - **main**: `build-main` builds the image to a tarball; `publish-main` pushes it as the write-once `:$CI_COMMIT_SHORT_SHA` (8 characters) and as `:main`, the latter only while the commit is still the tip of `main`. `:main` is always the pipeline's own image. An existing commit tag is kept only when it is that same image, or the release image of the same commit (a tag pipeline that published first: its `:vX.Y.Z` has the same digest); anything else (another commit, an earlier build, a workstation push) stops the job before `:main` moves. Delete such a tag in Quay after checking it, then retry the job. It never touches `:latest`.
 - **Other branches**: the manual `build-branch` job builds the image. It pushes it as `$BRANCH_IMAGE:$CI_COMMIT_REF_SLUG` only when the project has the variables `BRANCH_IMAGE`, `QUAY_BRANCH_USER` and `QUAY_BRANCH_TOKEN` (below); without them it builds and pushes nothing. It never uses `QUAY_USER`/`QUAY_TOKEN`.
 - **Release tags**: `release-build` builds the image (`VERSION=<tag>`) to a tarball; `release-installer` generates `install.sh`; `release-publish` pushes `:vX.Y.Z` and moves `:vN` and `:latest` (every tag-writing job, main or release, holds the one resource group `publish-latest`); `release-notes` creates the GitLab Release. `promote-latest` is manual. A pre-release tag runs the same jobs, but `release-publish` pushes only `:vX.Y.Z-rc.N` (and the commit tag when new), never `:vN` or `:latest`, and there is no `promote-latest` job ([Pre-releases](#pre-releases)).
@@ -462,14 +466,14 @@ path := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", "ns", "
 
 #### 3. Test Patterns
 
-No test waits in real time. Every wait, poll, retry and periodic job takes its time from an injected clock (`clk` in `pkg/cluster` and `pkg/api`, `clock.Real` in production); tests use `pkg/clock/clocktest`: `pkg/cluster`'s `TestMain` installs a fake clock that advances when the code sleeps, and `pkg/api`'s `resetPackageState` gives each test its own fake clock, which the test advances (`testClock.Advance`) and synchronises with the code under test through its fakes (for example `fakeRecord.beat`, which waits for the lease write a heartbeat makes). Do not add `time.Sleep`, polling loops or "it would have run by now" waits to tests; a `time.After` may only end a test that hangs.
+No test waits in real time. Every wait, poll, retry and periodic job takes its time from an injected clock (`clk` in `pkg/cluster` and `pkg/api`, `clock.Real` in production); tests use `pkg/clock/clocktest`: `pkg/cluster`'s `TestMain` installs a fake clock that advances when the code sleeps, and `pkg/api`'s `resetPackageState` gives each test its own fake clock, which the test advances (`testClock.Advance`) and synchronises with the code under test through its fakes (for example `fakeRecord.beat`, which advances one heartbeat interval and waits with `testClock.WaitForTicksHandled` until the heartbeat handled the tick: made its lease write and decided on it; waiting only for the write is not enough when the code reads the clock after it). Do not add `time.Sleep`, polling loops or "it would have run by now" waits to tests; a `time.After` may only end a test that hangs.
 
 #### 4. Errors and operation results
 
 A function that returns `(*types.OperationResponse, error)` uses the two results for different things, never both:
 
 - **`Success: false`, a `Message` and an `ErrorCode`, `error` nil:** the operation ran, if only its checks, and refused or failed in a way the user reads: invalid input (`validation`), something missing (`prerequisites`), a cluster request that failed, partial work (`partial_failure`). The message says what was and was not changed. The code of a failed cluster request comes from the request's own error (`errorCodeFromK8sErr`: `forbidden`, `network`, `sign_in_ended`, ...), with a fallback such as `prerequisites` only when it gives none. Handlers answer 422 with the response (`writeOperationResult`); streams send it as the final event.
-- **A non-nil `error`:** the function could not report an outcome itself: the context ended (cancelled, deadline, `ErrOperationLockLost`) or the caller has to react to that error. Handlers log it and answer a generic 500; streams send its text.
+- **A non-nil `error`:** the function could not report an outcome itself: the context ended (cancelled, deadline, `ErrOperationLockLost`) or the caller has to react to that error. Handlers log it and answer it with `writeOperationError`: the status and errorCode the error carries (`operationErrorStatus`: the reads' `HTTPStatusForError`, with the API server's 409 as `conflict` and the user's 403 as `forbidden`), or a generic 500 `internal` for an error of no known class; streams send its text.
 
 Readers that report a state (`types.ResourceState`, assessments, status parts) put a failed read in the state's message instead of returning an error, so one unreadable part does not hide the others. `nilerr` flags these returns, which is why it is not enabled; the convention is checked in review.
 

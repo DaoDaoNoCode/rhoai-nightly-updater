@@ -34,21 +34,6 @@ var HandleModelsStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 		writeError(w, problem, http.StatusBadRequest, "validation")
 		return
 	}
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("panic in models handler", "error", rec)
-		}
-	}()
-	sseWriter, err := NewSSEWriter(w)
-	if err != nil {
-		writeError(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	defer sseWriter.Close()
-	done := make(chan struct{})
-	defer close(done)
-	go sseHeartbeat(sseWriter, done)
-
 	var parts []string
 	if req.Gateway {
 		parts = append(parts, "inference gateway")
@@ -58,8 +43,9 @@ var HandleModelsStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 	}
 	beginOperation(w, req.Action+" "+strings.Join(parts, ", "))
 	slog.Info("mutation", "op", "models", "action", req.Action, "gateway", req.Gateway, "project", req.Project, "releasedImage", req.ReleasedImage)
-	result, runErr := runModels(c, req, forwardSteps(sseWriter))
-	sendOperationResult(sseWriter, result, runErr)
+	_, runErr := streamOperation(w, "models", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		return runModels(c, req, emit)
+	})
 	if runErr != nil {
 		slog.Error("models failed", "error", runErr)
 	}
