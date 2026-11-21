@@ -81,6 +81,7 @@ export const ADMIN_ONLY_GETS: RegExp[] = [
   /^\/api\/resources\/models\/exposures/,
   /^\/api\/resources\/s3\/admin-password/,
   /^\/api\/resources\/status(?!\?project=)/,
+  /^\/api\/recipes\//,
 ];
 
 /** The reads a user's pages may make, and nothing else. */

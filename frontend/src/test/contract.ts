@@ -1,4 +1,4 @@
-import type { ClusterSummary, MLflowSamplesStatus, PlaygroundStatus, ProjectStatus, UserOperationStatus, UserPermissions } from "../types";
+import type { ClusterSummary, MLflowSamplesStatus, PlaygroundStatus, ProjectStatus, RecipePlan, RecipeRunStatus, UserOperationStatus, UserPermissions } from "../types";
 import summaryJson from "./contract/summary.json";
 import operationUserJson from "./contract/operation-user.json";
 import permissionsUserJson from "./contract/user-permissions-user.json";
@@ -8,6 +8,8 @@ import projectStatusProblemsJson from "./contract/project-status-problems-user.j
 import playgroundJson from "./contract/playground-user.json";
 import playgroundProblemJson from "./contract/playground-problem-user.json";
 import samplesJson from "./contract/samples-mlflow-user.json";
+import recipeRunJson from "./contract/recipe-run-admin.json";
+import recipePlanJson from "./contract/recipe-plan-admin.json";
 
 /*
  * The backend's answers to a user who is not a cluster-admin, as the Go
@@ -44,6 +46,10 @@ export const contract = {
   playground: (project = CONTRACT_PROJECT): PlaygroundStatus => forProject<PlaygroundStatus>(playgroundJson, CONTRACT_PROJECT, project),
   playgroundProblem: (project = CONTRACT_DENIED_PROJECT): PlaygroundStatus => forProject<PlaygroundStatus>(playgroundProblemJson, CONTRACT_DENIED_PROJECT, project),
   mlflowSamples: (project = CONTRACT_PROJECT): MLflowSamplesStatus => forProject<MLflowSamplesStatus>(samplesJson, CONTRACT_PROJECT, project),
+  // A cluster-admin's (recipes are admin-only): GET /api/recipes/run of a
+  // run another updater pod runs, and POST /api/recipes/plan with problems.
+  recipeRun: (): RecipeRunStatus => clone<RecipeRunStatus>(recipeRunJson),
+  recipePlan: (): RecipePlan => clone<RecipePlan>(recipePlanJson),
 };
 
 // Compile-time checks: the generated JSON fits the frontend's types. A
@@ -61,6 +67,8 @@ const typed: {
   playground: Widen<PlaygroundStatus>;
   playgroundProblem: Widen<PlaygroundStatus>;
   samples: Widen<MLflowSamplesStatus>;
+  recipeRun: Widen<RecipeRunStatus>;
+  recipePlan: Widen<RecipePlan>;
 } = {
   summary: summaryJson,
   operation: operationUserJson,
@@ -70,5 +78,7 @@ const typed: {
   playground: playgroundJson,
   playgroundProblem: playgroundProblemJson,
   samples: samplesJson,
+  recipeRun: recipeRunJson,
+  recipePlan: recipePlanJson,
 };
 void typed;

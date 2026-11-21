@@ -71,6 +71,7 @@ const ComponentsPage = lazy(() => import("./pages/ComponentsPage").then((m) => (
 const BuildExplorerPage = lazy(() => import("./pages/BuildExplorerPage").then((m) => ({ default: m.BuildExplorerPage })));
 const DashboardDevPage = lazy(() => import("./pages/DashboardDevPage").then((m) => ({ default: m.DashboardDevPage })));
 const EnvironmentPage = lazy(() => import("./pages/EnvironmentPage").then((m) => ({ default: m.EnvironmentPage })));
+const RecipesPage = lazy(() => import("./pages/RecipesPage").then((m) => ({ default: m.RecipesPage })));
 const TroubleshootingPage = lazy(() => import("./pages/TroubleshootingPage").then((m) => ({ default: m.TroubleshootingPage })));
 // What a user who is not a cluster-admin sees instead (docs/research/per-user-views.md).
 const UserStatusPage = lazy(() => import("./pages/UserStatusPage").then((m) => ({ default: m.UserStatusPage })));
@@ -128,6 +129,7 @@ const PAGE_VIEW_NAMES: Record<string, string> = {
   "/builds": "build_explorer",
   "/dashboard-dev": "dashboard_dev",
   "/test-resources": "test_resources",
+  "/recipes": "recipes",
   "/diagnostics": "diagnostics",
 };
 
@@ -151,6 +153,7 @@ const RoutedPage = React.memo<{ role: ViewRole; gitOpsProfile: boolean }>(({ rol
         <Route path="/dashboard-dev" element={offInProfile("Dashboard Dev", adminOnly(<DashboardDevRoute />))} />
         <Route path="/test-resources" element={offInProfile("The Environment page", byRole(<EnvironmentPage />, <UserEnvironmentPage />))} />
         <Route path="/environment" element={<EnvironmentRoute />} />
+        <Route path="/recipes" element={offInProfile("Recipes", adminOnly(<RecipesPage />))} />
         <Route path="/diagnostics" element={adminOnly(<TroubleshootingPage />)} />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>

@@ -1775,3 +1775,123 @@ export interface PrerequisitesRequest {
   feature: PrerequisiteFeature;
   exposure?: ModelExposureKind;
 }
+
+// --- Environment recipes (match pkg/types recipe.go) ---
+
+/**
+ * The RHOAI build of a recipe: "latest" (the newest nightly), the newest
+ * nightly of a line ({tag}), or one catalog image pinned by digest
+ * ({image}).
+ */
+export type RecipeBuild = "latest" | { tag?: string; image?: string };
+
+/** An environment recipe, schema rhoai-nightly-updater/v1alpha1 (pkg/types EnvironmentRecipe). */
+export interface EnvironmentRecipe {
+  apiVersion: string;
+  kind: string;
+  metadata: { name: string; description?: string };
+  spec: {
+    rhoai: { build: RecipeBuild; ifInstalled?: string };
+    dataScienceCluster: { create: boolean };
+    /** Absent when no feature needs a project. */
+    project?: { mode: string; name: string; displayName?: string };
+    features: {
+      pipelines: { enabled: boolean };
+      mlflow: { enabled: boolean; samples?: boolean };
+      models: { enabled: boolean; model?: string; exposure?: string; releasedImage?: boolean };
+      playground: { enabled: boolean };
+      maas: { enabled: boolean; database?: string; publish?: boolean };
+    };
+    dashboardDev: { deploy?: string; pr?: number; flavor?: string };
+  };
+}
+
+/** One reason a recipe is refused (pkg/types RecipeProblem); field is the recipe path ("spec.project.name"). */
+export interface RecipeProblem {
+  field?: string;
+  message: string;
+}
+
+/** What a planned step would do: run, skip (already set up), blocked (Reason), later (checked when the run gets there). */
+export type RecipePlanAction = "run" | "skip" | "blocked" | "later";
+
+export interface RecipePlanStep {
+  id: string;
+  title: string;
+  action: RecipePlanAction;
+  reason?: string;
+  typicalSeconds: number;
+  maxSeconds: number;
+}
+
+/** The build a run installs, resolved once so a resume keeps it. */
+export interface RecipePinnedBuild {
+  tag?: string;
+  image: string;
+  digest: string;
+}
+
+/** POST /api/recipes/plan: what a run would do; it refuses while problems is not empty. */
+export interface RecipePlan {
+  recipe: EnvironmentRecipe;
+  steps: RecipePlanStep[];
+  problems: RecipeProblem[] | null;
+  pinned?: RecipePinnedBuild;
+  typicalSeconds: number;
+  maxSeconds: number;
+}
+
+export type RecipeRunState = "running" | "succeeded" | "failed" | "stopped";
+export type RecipeStepStatus = "pending" | "running" | "success" | "failed" | "skipped";
+
+export interface RecipeRunStep {
+  id: string;
+  title: string;
+  status: RecipeStepStatus;
+  message?: string;
+  errorCode?: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
+/** The record of the last recipe run (pkg/types RecipeRun). */
+export interface RecipeRun {
+  id: string;
+  operationId: string;
+  bootId: string;
+  pod?: string;
+  user: string;
+  startedAt: string;
+  resumedAt?: string;
+  finishedAt?: string;
+  state: RecipeRunState;
+  /** Why a run that is not running ended. */
+  stopReason?: string;
+  /** sign_in_again, session_expired, forbidden, lock_lost, stopped, restart, timeout, internal, or the failed step's. */
+  errorCode?: string;
+  recipe: EnvironmentRecipe;
+  pinned?: RecipePinnedBuild;
+  /** The run's project; owned when the recipe created it. */
+  project?: { name: string; uid?: string; owned?: boolean };
+  steps: RecipeRunStep[];
+}
+
+/** GET /api/recipes/run. */
+export interface RecipeRunStatus {
+  /** The last run; null when none was recorded. */
+  run: RecipeRun | null;
+  running: boolean;
+  /** Another updater pod (pod) runs it. */
+  remote?: boolean;
+  pod?: string;
+  /** The record says running, but the updater process that ran it is gone: Resume continues it. */
+  interrupted?: boolean;
+  stopRequested?: boolean;
+  /** The running step's latest progress. */
+  step?: { step: string; status: string; message: string; detail?: string; errorCode?: string };
+}
+
+/** The 202 answer of POST /api/recipes/run and /api/recipes/resume. */
+export interface RecipeRunAccepted {
+  runId: string;
+}

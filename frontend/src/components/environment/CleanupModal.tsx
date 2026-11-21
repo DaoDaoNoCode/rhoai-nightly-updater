@@ -67,6 +67,7 @@ export function cleanupSteps(req: CleanupRequest): { id: string; title: string }
     ...(req.models ?? []).map((p) => ({ id: `model:${p}`, title: `Delete the models in ${p}` })),
     ...(req.inferenceGateway ? [{ id: "inference-gateway", title: "Delete the inference gateway" }] : []),
     ...(req.maasPlatform ? [{ id: "maas-platform", title: "Remove the MaaS platform" }] : []),
+    ...(req.recipeProject ? [{ id: `recipe-project:${req.recipeProject}`, title: `Delete project ${req.recipeProject}, which a recipe created` }] : []),
     ...(req.components?.length ? [{ id: "components", title: `Turn ${req.components.join(", ")} back` }] : []),
   ];
 }

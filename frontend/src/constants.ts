@@ -68,6 +68,7 @@ export const NAV_ITEMS = [
   { path: "/builds", label: "Build Explorer" },
   { path: "/dashboard-dev", label: "Dashboard Dev" },
   { path: "/test-resources", label: "Environment" },
+  { path: "/recipes", label: "Recipes" },
   { path: "/diagnostics", label: "Diagnostics" },
 ] as const;
 
@@ -76,7 +77,13 @@ export const NAV_ITEMS = [
  * every other user gets Status (the summary), Build Explorer and
  * Environment (their own projects).
  */
-export const ADMIN_ONLY_PAGES: ReadonlySet<string> = new Set(["/components", "/dashboard-dev", "/diagnostics"]);
+export const ADMIN_ONLY_PAGES: ReadonlySet<string> = new Set(["/components", "/dashboard-dev", "/recipes", "/diagnostics"]);
+
+/**
+ * How often the Recipes page reads the recipe run (GET /api/recipes/run)
+ * while it runs (ms). The run goes on on the server; this only follows it.
+ */
+export const RECIPE_RUN_POLL_MS = 2_000;
 
 /** How often a user's Status page reads the cluster summary (GET /api/summary), in ms. */
 export const SUMMARY_POLL_MS = 60_000;
