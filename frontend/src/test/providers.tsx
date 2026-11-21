@@ -48,13 +48,18 @@ export function nightlyStatus(overrides: Partial<StatusResponse> = {}): StatusRe
 
 export const IDLE_OPERATION: OperationStatusResponse = { inProgress: false, operation: null };
 
+/**
+ * The app-wide reads, as the providers call them: with the AbortSignal of
+ * their request (aborted when a newer read of the same kind starts or the
+ * app unmounts), which renderWithApp passes on.
+ */
 export interface AppFetchers {
-  status?: () => Promise<StatusResponse>;
-  operation?: () => Promise<OperationStatusResponse | UserOperationStatus>;
-  permissions?: () => Promise<UserPermissions>;
-  version?: () => Promise<VersionInfo>;
-  update?: () => Promise<UpdateCheck>;
-  dashboard?: () => Promise<DashboardState>;
+  status?: (signal?: AbortSignal) => Promise<StatusResponse>;
+  operation?: (signal?: AbortSignal) => Promise<OperationStatusResponse | UserOperationStatus>;
+  permissions?: (signal?: AbortSignal) => Promise<UserPermissions>;
+  version?: (signal?: AbortSignal) => Promise<VersionInfo>;
+  update?: (signal?: AbortSignal) => Promise<UpdateCheck>;
+  dashboard?: (signal?: AbortSignal) => Promise<DashboardState>;
 }
 
 /** A cluster-admin's permission answer (the default), from the generated contract (./contract.ts). */
@@ -112,8 +117,8 @@ export function renderWithApp(ui: React.ReactNode, fetchers: AppFetchers = {}, r
   const pending = new Set<Promise<unknown>>();
   const app: RenderedApp = { pending, unsettled: false, settled: async () => {} };
   renderedApps.push(app);
-  const track = <T,>(read: () => Promise<T>) => (): Promise<T> => {
-    const p = read();
+  const track = <T,>(read: (signal?: AbortSignal) => Promise<T>) => (signal?: AbortSignal): Promise<T> => {
+    const p = read(signal);
     app.unsettled = true;
     pending.add(p);
     const done = () => { pending.delete(p); };

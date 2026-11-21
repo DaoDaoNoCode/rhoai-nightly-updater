@@ -668,7 +668,9 @@ type conversionCRD struct {
 	Spec struct {
 		Group string `json:"group"`
 		Names struct {
-			Plural string `json:"plural"`
+			Plural   string `json:"plural"`
+			Kind     string `json:"kind"`
+			ListKind string `json:"listKind"`
 		} `json:"names"`
 		Versions []struct {
 			Name    string `json:"name"`
@@ -690,7 +692,29 @@ type conversionCRD struct {
 	} `json:"spec"`
 	Status struct {
 		StoredVersions []string `json:"storedVersions"`
+		AcceptedNames  struct {
+			ListKind string `json:"listKind"`
+		} `json:"acceptedNames"`
 	} `json:"status"`
+}
+
+// listKind is the kind the API server gives a list of the CRD's objects
+// ("" when the CRD names none): status.acceptedNames.listKind, which
+// apiextensions-apiserver pkg/apiserver/customresource_handler.go serves
+// the list as (it refuses to serve a CRD whose accepted listKind is
+// empty), else spec.names.listKind, else spec.names.kind + "List", the
+// default (apiextensions/v1 CustomResourceDefinitionNames.ListKind:
+// "Defaults to `kind`List"; v1/defaults.go).
+func (crd conversionCRD) listKind() string {
+	switch {
+	case crd.Status.AcceptedNames.ListKind != "":
+		return crd.Status.AcceptedNames.ListKind
+	case crd.Spec.Names.ListKind != "":
+		return crd.Spec.Names.ListKind
+	case crd.Spec.Names.Kind != "":
+		return crd.Spec.Names.Kind + "List"
+	}
+	return ""
 }
 
 // conversionService returns "ns/name" of the CRD's conversion webhook

@@ -99,7 +99,11 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   (`namespace/name`) and gives the `oc delete` command; the removal stays
   refused until none remain. A list that fails (403, a conversion error, a
   timeout) or a request without the user's sign-in still refuses, with the
-  error and the `oc get <crd> -A` command. The Components page's repair
+  error and the `oc get <crd> -A` command. Only a list of the CRD's objects
+  is taken for "none": an answer from the API server that is not one (no
+  `items`, `items: null`, or another kind than the CRD's own list kind,
+  such as a `Status`) refuses the same way, since every Kubernetes list
+  carries `items`. The Components page's repair
   preview (`GET /api/components`, admin-only) now also carries the
   signed-in cluster-admin's own client in the full profile, as the plan
   does, so it runs the same check and no longer blocks a "Reset to

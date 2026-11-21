@@ -22,12 +22,28 @@ const (
 
 // mcpCRDJSON is the live 3.6 shape of the MCPServer CRD: two served
 // versions, v1beta1 the storage version, converted by the Service of the
-// mcplifecycleoperator module (already gone, as live after removal).
+// mcplifecycleoperator module (already gone, as live after removal). Its
+// names are the defaulted ones the API server stores and accepts (kind
+// MCPServer, listKind MCPServerList).
 func mcpCRDJSON(scope string, versions string) string {
-	return `{"metadata":{"name":"` + mcpCRDName + `"},"spec":{"group":"mcp.x-k8s.io","names":{"plural":"mcpservers"},"scope":"` + scope + `",` +
+	const names = `"kind":"MCPServer","listKind":"MCPServerList"`
+	return mcpCRDNamed(scope, versions, names, `{"plural":"mcpservers",`+names+`}`)
+}
+
+// mcpCRDNamed is mcpCRDJSON with names (the JSON members of spec.names
+// besides plural, "" for none) and accepted (status.acceptedNames, "" to
+// leave it out).
+func mcpCRDNamed(scope, versions, names, accepted string) string {
+	if names != "" {
+		names = "," + names
+	}
+	if accepted != "" {
+		accepted = `,"acceptedNames":` + accepted
+	}
+	return `{"metadata":{"name":"` + mcpCRDName + `"},"spec":{"group":"mcp.x-k8s.io","names":{"plural":"mcpservers"` + names + `},"scope":"` + scope + `",` +
 		`"versions":` + versions + `,` +
 		`"conversion":{"strategy":"Webhook","webhook":{"clientConfig":{"service":{"namespace":"redhat-ods-applications","name":"mcp-lifecycle-operator-webhook-service"}}}}},` +
-		`"status":{"storedVersions":["v1alpha1","v1beta1"]}}`
+		`"status":{"storedVersions":["v1alpha1","v1beta1"]` + accepted + `}}`
 }
 
 const mcpVersions = `[{"name":"v1alpha1","served":true,"storage":false},{"name":"v1beta1","served":true,"storage":true}]`
@@ -155,6 +171,101 @@ func TestConversionBlockerFailsClosedWhenTheListFails(t *testing.T) {
 				"The objects of " + mcpCRDName + " could not be listed with your sign-in: ",
 				tc.want,
 				"Check for them with: oc get " + mcpCRDName + " -A.",
+				"The tool cannot tell whether any exist, so it does not remove mcplifecycleoperator.",
+			} {
+				if !strings.Contains(why, want) {
+					t.Fatalf("blocker %q lacks %q", why, want)
+				}
+			}
+		})
+	}
+}
+
+// A 200 answer that is not a list refuses the removal (fail closed): a list
+// always carries "items" (k8s.io/apimachinery pkg/apis/meta/v1 List and
+// unstructured.UnstructuredList, `json:"items"` without omitempty, encoded
+// as [] when empty), so an answer without it, or with null, is not "none".
+// An empty list still allows.
+func TestConversionBlockerFailsClosedWhenTheAnswerIsNotAList(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{"empty object", `{}`, "the API server's answer has no items, so it is not a list"},
+		{"null", `null`, "the API server's answer has no items, so it is not a list"},
+		{"items null", `{"metadata":{},"items":null}`, "the API server's answer has no items, so it is not a list"},
+		{"a Status", `{"kind":"Status","apiVersion":"v1","status":"Success"}`, "the API server's answer is a Status, not a list"},
+		{"a Status with items", `{"kind":"Status","items":[]}`, "the API server's answer is a Status, not a list"},
+		{"items not an array", `{"items":{}}`, "could not parse the list"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newConvObjectsWorld(t, false, mcpCRDJSON("Namespaced", mcpVersions))
+			w.list(mcpStorage, func(*http.Request) (int, string) { return http.StatusOK, tc.body })
+			why := newRemovalChecker(w.c).conversionBlocker("mcplifecycleoperator")
+			for _, want := range []string{
+				"The objects of " + mcpCRDName + " could not be listed with your sign-in: " + tc.want,
+				"Check for them with: oc get " + mcpCRDName + " -A.",
+				"The tool cannot tell whether any exist, so it does not remove mcplifecycleoperator.",
+			} {
+				if !strings.Contains(why, want) {
+					t.Fatalf("blocker %q lacks %q", why, want)
+				}
+			}
+		})
+	}
+	for _, body := range []string{`{"items":[]}`, `{"kind":"MCPServerList","apiVersion":"mcp.x-k8s.io/v1beta1","metadata":{"resourceVersion":"9"},"items":[]}`} {
+		w := newConvObjectsWorld(t, false, mcpCRDJSON("Namespaced", mcpVersions))
+		w.list(mcpStorage, func(*http.Request) (int, string) { return http.StatusOK, body })
+		if why := newRemovalChecker(w.c).conversionBlocker("mcplifecycleoperator"); why != "" {
+			t.Fatalf("%s: blocker %q, want none", body, why)
+		}
+	}
+}
+
+// A list's kind is the CRD's own list kind, which the CRD may name
+// (spec.names.listKind, "Defaults to `kind`List"); the API server serves
+// the list as status.acceptedNames.listKind (apiextensions-apiserver
+// customresource_handler.go). An answer of another kind is refused; one
+// without a kind is judged by its items alone.
+func TestConversionBlockerChecksTheCRDsOwnListKind(t *testing.T) {
+	const collection = `"kind":"MCPServer","listKind":"MCPServerCollection"`
+	for _, tc := range []struct {
+		name, names, accepted, body, want string
+	}{
+		{"own listKind", collection, `{"plural":"mcpservers",` + collection + `}`,
+			`{"kind":"MCPServerCollection","apiVersion":"mcp.x-k8s.io/v1beta1","metadata":{},"items":[]}`, ""},
+		{"own listKind, answer without a kind", collection, `{"plural":"mcpservers",` + collection + `}`, `{"items":[]}`, ""},
+		{"own listKind, the default list kind answered", collection, `{"plural":"mcpservers",` + collection + `}`,
+			`{"kind":"MCPServerList","items":[]}`, "the API server's answer is a MCPServerList, not a list of " + mcpCRDName + " (MCPServerCollection)"},
+		{"own listKind, a Status answered", collection, `{"plural":"mcpservers",` + collection + `}`,
+			`{"kind":"Status","items":[]}`, "the API server's answer is a Status, not a list of " + mcpCRDName + " (MCPServerCollection)"},
+		{"default listKind, another list answered", `"kind":"MCPServer","listKind":"MCPServerList"`, `{"plural":"mcpservers","kind":"MCPServer","listKind":"MCPServerList"}`,
+			`{"kind":"ConfigMapList","items":[]}`, "the API server's answer is a ConfigMapList, not a list of " + mcpCRDName + " (MCPServerList)"},
+		// status.acceptedNames is what the API server serves; spec.names may
+		// name a list kind it has not accepted (yet).
+		{"accepted names win over spec", collection, `{"plural":"mcpservers","kind":"MCPServer","listKind":"MCPServerList"}`,
+			`{"kind":"MCPServerList","items":[]}`, ""},
+		{"accepted names win over spec, spec's answered", collection, `{"plural":"mcpservers","kind":"MCPServer","listKind":"MCPServerList"}`,
+			`{"kind":"MCPServerCollection","items":[]}`, "not a list of " + mcpCRDName + " (MCPServerList)"},
+		{"no accepted names: spec.names.listKind", collection, "", `{"kind":"MCPServerCollection","items":[]}`, ""},
+		{"no listKind anywhere: spec.names.kind + List", `"kind":"MCPServer"`, "", `{"kind":"MCPServerList","items":[]}`, ""},
+		// A CRD that names no kind at all (the API server requires one) gives
+		// nothing to check a kind against: fail closed.
+		{"no names", "", "", `{"kind":"MCPServerList","items":[]}`, "the CRD names no list kind to check the API server's answer (a MCPServerList) against"},
+		{"no names, answer without a kind", "", "", `{"items":[]}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newConvObjectsWorld(t, false, mcpCRDNamed("Namespaced", mcpVersions, tc.names, tc.accepted))
+			w.list(mcpStorage, func(*http.Request) (int, string) { return http.StatusOK, tc.body })
+			why := newRemovalChecker(w.c).conversionBlocker("mcplifecycleoperator")
+			if tc.want == "" {
+				if why != "" {
+					t.Fatalf("blocker %q, want none", why)
+				}
+				return
+			}
+			for _, want := range []string{
+				"could not be listed with your sign-in: ",
+				tc.want,
 				"The tool cannot tell whether any exist, so it does not remove mcplifecycleoperator.",
 			} {
 				if !strings.Contains(why, want) {
