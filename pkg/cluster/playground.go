@@ -645,12 +645,12 @@ func playgroundOwnership(c *Client, project string, rec playgroundRecord, has bo
 // readPlaygroundRecords returns the recorded projects (none when nothing is
 // recorded).
 func readPlaygroundRecords(c *Client) (map[string]playgroundRecord, error) {
-	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
-	if isK8sNotFound(err) {
-		return map[string]playgroundRecord{}, nil
-	}
+	body, found, err := c.bookkeeping().getOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
 	if err != nil {
 		return nil, fmt.Errorf("read this tool's playground records: %w", err)
+	}
+	if !found {
+		return map[string]playgroundRecord{}, nil
 	}
 	var cm struct {
 		Data map[string]string `json:"data"`
@@ -755,13 +755,13 @@ func genAIUIState(c *Client) string {
 		slog.Debug("cannot tell where the gen-ai-ui Deployment runs", "error", err)
 		return ""
 	}
-	body, _, err := c.get(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, genAIUIDeployment))
-	if isK8sNotFound(err) {
-		return "missing"
-	}
+	body, found, err := c.getOptional(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, genAIUIDeployment))
 	if err != nil {
 		slog.Debug("cannot read the gen-ai-ui Deployment", "error", err)
 		return ""
+	}
+	if !found {
+		return "missing"
 	}
 	var d struct {
 		Status struct {

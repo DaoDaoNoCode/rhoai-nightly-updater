@@ -154,12 +154,12 @@ type s3Keys struct {
 // readS3Keys reads the keys stored in the storage's Secret. found is false
 // when the Secret does not exist.
 func readS3Keys(c *Client) (keys s3Keys, found bool, err error) {
-	body, _, err := c.get(namespacedPath("v1", "secrets", s3Namespace, s3Secret))
-	if isK8sNotFound(err) {
-		return s3Keys{}, false, nil
-	}
+	body, exists, err := c.getOptional(namespacedPath("v1", "secrets", s3Namespace, s3Secret))
 	if err != nil {
 		return s3Keys{}, false, fmt.Errorf("read Secret %s/%s: %w", s3Namespace, s3Secret, err)
+	}
+	if !exists {
+		return s3Keys{}, false, nil
 	}
 	var secret struct {
 		Data map[string]string `json:"data"`
@@ -206,12 +206,12 @@ func S3AdminLogin(c *Client) (login S3Login, err error) {
 	case !ns.Managed:
 		return unavailable(fmt.Sprintf("Namespace %s was not created by this tool, so it does not read the password there.", s3Namespace))
 	}
-	body, _, err := c.get(namespacedPath("v1", "secrets", s3Namespace, s3Secret))
-	if isK8sNotFound(err) {
-		return unavailable(fmt.Sprintf("Secret %s does not exist in namespace %s. Repair re-creates it.", s3Secret, s3Namespace))
-	}
+	body, found, err := c.getOptional(namespacedPath("v1", "secrets", s3Namespace, s3Secret))
 	if err != nil {
 		return S3Login{}, fmt.Errorf("read Secret %s/%s: %w", s3Namespace, s3Secret, err)
+	}
+	if !found {
+		return unavailable(fmt.Sprintf("Secret %s does not exist in namespace %s. Repair re-creates it.", s3Secret, s3Namespace))
 	}
 	var secret struct {
 		Metadata objectMeta        `json:"metadata"`
@@ -304,12 +304,12 @@ func (n s3NamespaceInfo) terminating() bool {
 
 // lookupS3Namespace reads the storage namespace.
 func lookupS3Namespace(c *Client) (s3NamespaceInfo, error) {
-	body, _, err := c.get("/api/v1/namespaces/" + s3Namespace)
-	if isK8sNotFound(err) {
-		return s3NamespaceInfo{}, nil
-	}
+	body, found, err := c.getOptional("/api/v1/namespaces/" + s3Namespace)
 	if err != nil {
 		return s3NamespaceInfo{}, fmt.Errorf("read namespace %s: %w", s3Namespace, err)
+	}
+	if !found {
+		return s3NamespaceInfo{}, nil
 	}
 	var nsObj struct {
 		Metadata objectMeta `json:"metadata"`
@@ -495,12 +495,12 @@ type serviceSpec struct {
 // readService reads a Service; found is false when it does not exist. Any
 // other read or parse error is returned.
 func readService(c *Client, namespace, name string) (serviceSpec, error) {
-	body, _, err := c.get(namespacedPath("v1", "services", namespace, name))
+	body, exists, err := c.getOptional(namespacedPath("v1", "services", namespace, name))
 	switch {
-	case isK8sNotFound(err):
-		return serviceSpec{}, nil
 	case err != nil:
 		return serviceSpec{}, fmt.Errorf("read Service %s: %w", name, err)
+	case !exists:
+		return serviceSpec{}, nil
 	}
 	var svc struct {
 		Spec struct {

@@ -119,12 +119,12 @@ func idmsRules(items []idmsItem) []mirrorRule {
 // (spec.repositoryDigestMirrors). A 404 for the collection means the API
 // is not served, so no such object exists; any other failure is an error.
 func listICSPRules(c *Client) ([]mirrorRule, error) {
-	body, _, err := c.get(clusterPath("operator.openshift.io/v1alpha1", "imagecontentsourcepolicies", ""))
-	if isK8sNotFound(err) {
-		return nil, nil
-	}
+	body, found, err := c.getOptional(clusterPath("operator.openshift.io/v1alpha1", "imagecontentsourcepolicies", ""))
 	if err != nil {
 		return nil, err
+	}
+	if !found {
+		return nil, nil
 	}
 	var list struct {
 		Items []struct {
@@ -154,12 +154,12 @@ func listICSPRules(c *Client) ([]mirrorRule, error) {
 // listITMSRules lists the ImageTagMirrorSets' rules (spec.imageTagMirrors),
 // with the same 404 handling as listICSPRules.
 func listITMSRules(c *Client) ([]mirrorRule, error) {
-	body, _, err := c.get(clusterPath("config.openshift.io/v1", "imagetagmirrorsets", ""))
-	if isK8sNotFound(err) {
-		return nil, nil
-	}
+	body, found, err := c.getOptional(clusterPath("config.openshift.io/v1", "imagetagmirrorsets", ""))
 	if err != nil {
 		return nil, err
+	}
+	if !found {
+		return nil, nil
 	}
 	var list struct {
 		Items []struct {

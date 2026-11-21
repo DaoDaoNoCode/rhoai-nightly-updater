@@ -445,12 +445,12 @@ func readGatewayObject(c *Client, kind string) (objectMeta, bool, error) {
 
 func readInferenceGateway(c *Client) (gatewayObject, bool, error) {
 	path := gatewayObjectPath("Gateway")
-	body, _, err := c.get(path)
-	if isK8sNotFound(err) {
-		return gatewayObject{}, false, nil
-	}
+	body, found, err := c.getOptional(path)
 	if err != nil {
 		return gatewayObject{}, false, err
+	}
+	if !found {
+		return gatewayObject{}, false, nil
 	}
 	var gw gatewayObject
 	if err := json.Unmarshal(body, &gw); err != nil {
@@ -485,12 +485,12 @@ func clusterAppsDomain(c *Client) (string, error) {
 // spec.defaultCertificate.name, else the one the ingress operator
 // generates. The Gateway references it; its content is never read.
 func defaultIngressCertificate(c *Client) (string, error) {
-	body, _, err := c.get(namespacedPath("operator.openshift.io/v1", "ingresscontrollers", "openshift-ingress-operator", "default"))
-	if isK8sNotFound(err) {
-		return defaultRouterCert, nil
-	}
+	body, found, err := c.getOptional(namespacedPath("operator.openshift.io/v1", "ingresscontrollers", "openshift-ingress-operator", "default"))
 	if err != nil {
 		return "", fmt.Errorf("read IngressController %s/default: %w", ingressOperatorNS, err)
+	}
+	if !found {
+		return defaultRouterCert, nil
 	}
 	var ic struct {
 		Spec struct {
@@ -728,12 +728,12 @@ func readKServeGateway(c *Client) (kserveGateway, error) {
 	if err != nil {
 		return kserveGateway{}, fmt.Errorf("find ConfigMap %s: %w", kserveConfigMap, err)
 	}
-	body, _, err := c.get(namespacedPath("v1", "configmaps", ns, kserveConfigMap))
-	if isK8sNotFound(err) {
-		return kserveGateway{}, nil
-	}
+	body, found, err := c.getOptional(namespacedPath("v1", "configmaps", ns, kserveConfigMap))
 	if err != nil {
 		return kserveGateway{}, fmt.Errorf("read ConfigMap %s/%s: %w", ns, kserveConfigMap, err)
+	}
+	if !found {
+		return kserveGateway{}, nil
 	}
 	var cm struct {
 		Data map[string]string `json:"data"`
@@ -996,13 +996,13 @@ func attachedRoutesReason(n int) string {
 // gatewayServiceWarning checks that the gateway's Service has the name the
 // "https" listener's hostname assumes ("" when it does, or cannot be read).
 func gatewayServiceWarning(c *Client) string {
-	body, _, err := c.get(namespacedPath("v1", "services", "openshift-ingress", "openshift-ai-inference-openshift-ai-inference"))
+	body, found, err := c.getOptional(namespacedPath("v1", "services", "openshift-ingress", "openshift-ai-inference-openshift-ai-inference"))
 	missing := fmt.Sprintf("The gateway's Service is not named %s, so the in-cluster listener (%s) does not match it and callers inside the cluster (the dashboard's playground) may be refused. Report this with the output of `oc get svc -n %s -l %s=%s`.", inferenceGatewayService, inferenceGatewayInternalHost, inferenceGatewayNamespace, gatewayNameLabel, inferenceGatewayName)
-	if isK8sNotFound(err) {
-		return missing
-	}
 	if err != nil {
 		return ""
+	}
+	if !found {
+		return missing
 	}
 	meta, err := parseObjectMeta(body)
 	if err != nil || meta.Labels[gatewayNameLabel] == inferenceGatewayName {

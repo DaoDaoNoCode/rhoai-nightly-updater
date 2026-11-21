@@ -31,12 +31,12 @@ var refusedComponents = map[string]string{
 }
 
 func deploymentReady(c *Client, namespace, name string) (bool, string) {
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", namespace, name))
-	if isK8sNotFound(err) {
-		return false, fmt.Sprintf("Deployment %s/%s does not exist", namespace, name)
-	}
+	body, found, err := c.getOptional(namespacedPath("apps/v1", "deployments", namespace, name))
 	if err != nil {
 		return false, fmt.Sprintf("could not read Deployment %s/%s: %v", namespace, name, err)
+	}
+	if !found {
+		return false, fmt.Sprintf("Deployment %s/%s does not exist", namespace, name)
 	}
 	var d struct {
 		Spec struct {
@@ -542,12 +542,11 @@ func (rc *removalChecker) serviceComponent(ref string) (string, error) {
 	}
 	ns, name, _ := strings.Cut(ref, "/")
 	owner := ""
-	body, _, err := rc.c.get(namespacedPath("v1", "services", ns, name))
+	body, found, err := rc.c.getOptional(namespacedPath("v1", "services", ns, name))
 	switch {
-	case isK8sNotFound(err):
-		err = nil
 	case err != nil:
 		err = fmt.Errorf("read Service %s: %w", ref, err)
+	case !found:
 	default:
 		var svc struct {
 			Metadata struct {

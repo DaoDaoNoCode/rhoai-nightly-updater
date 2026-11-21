@@ -488,12 +488,12 @@ type maasToolSub struct {
 }
 
 func readMaaSToolSubscription(c *Client) (maasToolSub, error) {
-	body, _, err := c.get(maasAccessPath(c, "MaaSSubscription"))
-	if isK8sNotFound(err) {
-		return maasToolSub{audience: maasAudience{everyone: true}, limits: map[string]maasLimit{}}, nil
-	}
+	body, exists, err := c.getOptional(maasAccessPath(c, "MaaSSubscription"))
 	if err != nil {
 		return maasToolSub{}, fmt.Errorf("read MaaSSubscription %s/%s: %w", maasTenantNamespace, maasSubscriptionName, err)
+	}
+	if !exists {
+		return maasToolSub{audience: maasAudience{everyone: true}, limits: map[string]maasLimit{}}, nil
 	}
 	var sub struct {
 		Metadata objectMeta `json:"metadata"`

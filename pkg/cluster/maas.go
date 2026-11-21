@@ -183,12 +183,12 @@ func (r *maasRecord) setShared(key, what string) {
 
 func readMaaSRecord(c *Client) (maasRecord, error) {
 	var rec maasRecord
-	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
-	if isK8sNotFound(err) {
-		return rec, nil
-	}
+	body, found, err := c.bookkeeping().getOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
 	if err != nil {
 		return rec, fmt.Errorf("read this tool's MaaS record: %w", err)
+	}
+	if !found {
+		return rec, nil
 	}
 	var cm struct {
 		Data map[string]string `json:"data"`
@@ -622,12 +622,12 @@ type maasGatewayState struct {
 }
 
 func readMaaSGateway(c *Client) (maasGatewayState, error) {
-	body, _, err := c.get(maasObjectPath("Gateway", ""))
-	if isK8sNotFound(err) {
-		return maasGatewayState{}, nil
-	}
+	body, exists, err := c.getOptional(maasObjectPath("Gateway", ""))
 	if err != nil {
 		return maasGatewayState{}, err
+	}
+	if !exists {
+		return maasGatewayState{}, nil
 	}
 	st := maasGatewayState{found: true}
 	if err := json.Unmarshal(body, &st.gw); err != nil {
@@ -829,12 +829,12 @@ func maasConnectionURL(c *Client, ns string) (string, error) {
 
 // readMaaSDBCluster reads the database: found, owned, ready, a message.
 func readMaaSDBCluster(c *Client, ns string) (objectMeta, bool, bool, string, error) {
-	body, _, err := c.get(maasObjectPath("Cluster", ns))
-	if isK8sNotFound(err) {
-		return objectMeta{}, false, false, "", nil
-	}
+	body, found, err := c.getOptional(maasObjectPath("Cluster", ns))
 	if err != nil {
 		return objectMeta{}, false, false, "", err
+	}
+	if !found {
+		return objectMeta{}, false, false, "", nil
 	}
 	var cl struct {
 		Metadata objectMeta `json:"metadata"`
@@ -856,12 +856,12 @@ func readMaaSDBCluster(c *Client, ns string) (objectMeta, bool, bool, string, er
 // deploymentAvailable reads a Deployment's Available condition: "True",
 // "False", "missing" or "" (unreadable).
 func deploymentAvailable(c *Client, ns, name string) string {
-	body, _, err := c.get(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, name))
-	if isK8sNotFound(err) {
-		return "missing"
-	}
+	body, found, err := c.getOptional(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, name))
 	if err != nil {
 		return ""
+	}
+	if !found {
+		return "missing"
 	}
 	var d struct {
 		Status struct {
@@ -880,12 +880,12 @@ func deploymentAvailable(c *Client, ns, name string) string {
 // readyCondition reads an object's Ready condition: "True", "False",
 // "missing" or "" (unreadable or not reported), with its message.
 func readyCondition(c *Client, path string) (string, string) {
-	body, _, err := c.get(path)
-	if isK8sNotFound(err) {
-		return "missing", ""
-	}
+	body, found, err := c.getOptional(path)
 	if err != nil {
 		return "", ""
+	}
+	if !found {
+		return "missing", ""
 	}
 	var obj struct {
 		Status struct {
@@ -930,12 +930,12 @@ func groupServed(c *Client, group string) (bool, error) {
 	if v, ok := apiVersionsCache.Get(c.baseURL + "|" + group); ok && len(v) > 0 {
 		return true, nil
 	}
-	body, _, err := c.get("/apis/" + group)
-	if isK8sNotFound(err) {
-		return false, nil
-	}
+	body, found, err := c.getOptional("/apis/" + group)
 	if err != nil {
 		return false, fmt.Errorf("read the API group %s: %w", group, err)
+	}
+	if !found {
+		return false, nil
 	}
 	return len(parseGroupVersions(body)) > 0, nil
 }
@@ -1769,12 +1769,12 @@ func readMaaSModelRef(c *Client, project, name string) (maasModelRefObject, bool
 
 func readMaaSObject(c *Client, path string) (maasModelRefObject, bool, error) {
 	var obj maasModelRefObject
-	body, _, err := c.get(path)
-	if isK8sNotFound(err) {
-		return obj, false, nil
-	}
+	body, found, err := c.getOptional(path)
 	if err != nil {
 		return obj, false, err
+	}
+	if !found {
+		return obj, false, nil
 	}
 	if err := json.Unmarshal(body, &obj); err != nil {
 		return obj, false, err

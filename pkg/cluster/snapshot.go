@@ -182,12 +182,12 @@ func saveSubscriptionSnapshot(c *Client, sub map[string]any) error {
 // loadSubscriptionSnapshot returns the recorded Subscription, or nil when
 // none was recorded.
 func loadSubscriptionSnapshot(c *Client) (*subscriptionSnapshot, error) {
-	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
-	if isK8sNotFound(err) {
-		return nil, nil
-	}
+	body, found, err := c.bookkeeping().getOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
 	if err != nil {
 		return nil, fmt.Errorf("read the recorded operator Subscription: %w", err)
+	}
+	if !found {
+		return nil, nil
 	}
 	var cm struct {
 		Data map[string]string `json:"data"`

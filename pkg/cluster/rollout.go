@@ -169,12 +169,12 @@ func labelSelectorString(matchLabels map[string]string) string {
 func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, error) {
 	a := rolloutAssessment{Namespace: namespace, Deployment: name}
 
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", namespace, name))
+	body, found, err := c.getOptional(namespacedPath("apps/v1", "deployments", namespace, name))
 	if err != nil {
-		if isK8sNotFound(err) {
-			return notApplicable(a, "the Deployment no longer exists"), nil
-		}
 		return a, fmt.Errorf("read deployment: %w", err)
+	}
+	if !found {
+		return notApplicable(a, "the Deployment no longer exists"), nil
 	}
 	var dep struct {
 		Metadata struct {
@@ -601,12 +601,12 @@ func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.Operation
 	}
 	target := namespace + "/" + name
 	path := namespacedPath("apps/v1", "deployments", namespace, name)
-	body, _, err := c.get(path)
-	if isK8sNotFound(err) {
-		return nothingToDo(fmt.Sprintf("Deployment %s no longer exists. Nothing was changed.", target), nil), nil
-	}
+	body, found, err := c.getOptional(path)
 	if err != nil {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read Deployment %s: %v", target, err), ErrorCode: errorCodeFromK8sErr(err)}, nil
+	}
+	if !found {
+		return nothingToDo(fmt.Sprintf("Deployment %s no longer exists. Nothing was changed.", target), nil), nil
 	}
 	dep, err := parseRolloutDeployment(body)
 	if err != nil {

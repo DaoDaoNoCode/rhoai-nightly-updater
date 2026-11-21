@@ -891,12 +891,12 @@ func parseMigrateJob(body []byte) (migrateJobInfo, error) {
 }
 
 func readMigrateJob(c *Client) (migrateJobInfo, bool, error) {
-	body, _, err := c.get(migrateJobPath())
-	if isK8sNotFound(err) {
-		return migrateJobInfo{}, false, nil
-	}
+	body, found, err := c.getOptional(migrateJobPath())
 	if err != nil {
 		return migrateJobInfo{}, false, err
+	}
+	if !found {
+		return migrateJobInfo{}, false, nil
 	}
 	j, err := parseMigrateJob(body)
 	return j, err == nil, err

@@ -264,12 +264,12 @@ func planMaaSGateway(c *Client, infraNS string, published []string) (*maasGatewa
 	}
 	// setup-gateway.sh uses an existing openshift-default as it is; only
 	// OpenShift's own controller's.
-	body, _, err := c.get(maasGatewayClassPath())
+	body, present, err := c.getOptional(maasGatewayClassPath())
 	switch {
-	case isK8sNotFound(err):
-		plan.classMissing = true
 	case err != nil:
 		return nil, fmt.Sprintf("Cannot read GatewayClass %s; nothing was changed: %v.", maasGatewayClass, err), errorCodeFromK8sErr(err)
+	case !present:
+		plan.classMissing = true
 	default:
 		var gc struct {
 			Spec struct {

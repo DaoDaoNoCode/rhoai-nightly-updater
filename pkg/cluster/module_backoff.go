@@ -239,12 +239,12 @@ func webhooksServedBy(c *Client, d operatorDeployment) ([]string, error) {
 }
 
 func serviceSelects(c *Client, namespace, name string, podLabels map[string]string) (bool, error) {
-	body, _, err := c.get(namespacedPath("v1", "services", namespace, name))
-	if isK8sNotFound(err) {
-		return false, nil
-	}
+	body, found, err := c.getOptional(namespacedPath("v1", "services", namespace, name))
 	if err != nil {
 		return false, fmt.Errorf("read Service %s/%s: %w", namespace, name, err)
+	}
+	if !found {
+		return false, nil
 	}
 	var svc struct {
 		Spec struct {

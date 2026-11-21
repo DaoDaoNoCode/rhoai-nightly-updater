@@ -195,12 +195,12 @@ func (a componentAPI) kindOf(group, kind string) (componentKind, bool) {
 func discoverComponentAPI(c *Client) (componentAPI, error) {
 	api := componentAPI{Groups: map[string]string{}}
 	for _, group := range moduleAPIGroups {
-		body, _, err := c.get("/apis/" + group)
-		if isK8sNotFound(err) {
-			continue
-		}
+		body, found, err := c.getOptional("/apis/" + group)
 		if err != nil {
 			return componentAPI{}, fmt.Errorf("discover %s: %w", group, err)
+		}
+		if !found {
+			continue
 		}
 		var doc struct {
 			PreferredVersion struct {

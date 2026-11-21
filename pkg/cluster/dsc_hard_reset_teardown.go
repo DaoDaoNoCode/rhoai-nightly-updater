@@ -171,12 +171,12 @@ func hardResetOperators(c *Client, dscUID string) ([]hardResetOperator, string, 
 func operatorsLeft(c *Client, ops []hardResetOperator) ([]hardResetOperator, error) {
 	var left []hardResetOperator
 	for _, o := range ops {
-		body, _, err := c.get(namespacedPath("apps/v1", "deployments", o.Namespace, o.Name))
-		if isK8sNotFound(err) {
-			continue
-		}
+		body, found, err := c.getOptional(namespacedPath("apps/v1", "deployments", o.Namespace, o.Name))
 		if err != nil {
 			return nil, fmt.Errorf("read Deployment %s/%s: %w", o.Namespace, o.Name, err)
+		}
+		if !found {
+			continue
 		}
 		var d struct {
 			Metadata objectMeta `json:"metadata"`
@@ -531,12 +531,12 @@ func (r *ownerResolver) read(ref ownerRef, group, version, what string, unknown 
 	if why != "" {
 		return unknown("cannot be looked up: " + why)
 	}
-	body, _, err := r.c.get(apiPath)
-	if isK8sNotFound(err) {
-		return ownerVerdict{fate: ownerNotSolid} // dangling (K :431-437)
-	}
+	body, found, err := r.c.getOptional(apiPath)
 	if err != nil {
 		return unknown("could not be read with your sign-in: " + err.Error())
+	}
+	if !found {
+		return ownerVerdict{fate: ownerNotSolid} // dangling (K :431-437)
 	}
 	var obj struct {
 		Metadata struct {

@@ -564,14 +564,14 @@ func readSingletonOperand(c *Client, e almExample) (operandState, error) {
 	if !found {
 		return operandMissing, nil // its CRD is not served
 	}
-	_, _, err = c.get("/apis/" + operandAPIGroup + "/" + version + "/" + resource + "/cluster")
+	_, found, err = c.getOptional("/apis/" + operandAPIGroup + "/" + version + "/" + resource + "/cluster")
 	switch {
-	case err == nil:
-		return operandPresent, nil
-	case isK8sNotFound(err):
+	case err != nil:
+		return operandUnverified, err
+	case !found:
 		return operandMissing, nil
 	default:
-		return operandUnverified, err
+		return operandPresent, nil
 	}
 }
 
@@ -604,12 +604,12 @@ func operandManagementState(c *Client, e almExample) (string, error) {
 // discoverPlural finds the resource of a kind in operandAPIGroup from API
 // discovery (readable by every authenticated user).
 func discoverPlural(c *Client, version, kind string) (string, bool, error) {
-	body, _, err := c.get("/apis/" + operandAPIGroup + "/" + version)
-	if isK8sNotFound(err) {
-		return "", false, nil
-	}
+	body, found, err := c.getOptional("/apis/" + operandAPIGroup + "/" + version)
 	if err != nil {
 		return "", false, fmt.Errorf("discover %s/%s: %w", operandAPIGroup, version, err)
+	}
+	if !found {
+		return "", false, nil
 	}
 	var list struct {
 		Resources []struct {
@@ -1088,12 +1088,12 @@ func (og operatorGroup) installMode(ns string) string {
 // listOperatorGroups returns the OperatorGroups of a namespace (none when
 // it does not exist).
 func listOperatorGroups(c *Client, namespace string) ([]operatorGroup, error) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1", "operatorgroups", namespace, ""))
-	if isK8sNotFound(err) {
-		return nil, nil
-	}
+	body, found, err := c.getOptional(namespacedPath("operators.coreos.com/v1", "operatorgroups", namespace, ""))
 	if err != nil {
 		return nil, err
+	}
+	if !found {
+		return nil, nil
 	}
 	var list struct {
 		Items []operatorGroup `json:"items"`

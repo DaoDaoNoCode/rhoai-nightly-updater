@@ -180,12 +180,12 @@ func writePrereqRecord(c *Client, rec prereqRecord) error {
 // readSnapshotKey reads one key of this tool's snapshot ConfigMap ("" when
 // it or the ConfigMap is missing).
 func readSnapshotKey(c *Client, key string) (string, error) {
-	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
-	if isK8sNotFound(err) {
-		return "", nil
-	}
+	body, found, err := c.bookkeeping().getOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
 	if err != nil {
 		return "", err
+	}
+	if !found {
+		return "", nil
 	}
 	var cm struct {
 		Data map[string]string `json:"data"`
@@ -1003,11 +1003,11 @@ func componentUsers(c *Client, key string) ([]string, error) {
 		for _, m := range models {
 			live(m.Metadata, "LLMInferenceService")
 		}
-		body, _, err := c.get(clusterPath("serving.kserve.io/v1beta1", "inferenceservices", ""))
-		if err != nil && !isK8sNotFound(err) {
+		body, found, err := c.getOptional(clusterPath("serving.kserve.io/v1beta1", "inferenceservices", ""))
+		if err != nil {
 			return nil, fmt.Errorf("list InferenceServices: %w", err)
 		}
-		if err == nil {
+		if found {
 			var list struct {
 				Items []struct {
 					Metadata objectMeta `json:"metadata"`

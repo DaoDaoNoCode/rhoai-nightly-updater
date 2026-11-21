@@ -470,12 +470,12 @@ type subscriptionState struct {
 }
 
 func readSubscriptionState(c *Client) (subscriptionState, error) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName))
+	body, found, err := c.getOptional(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName))
 	if err != nil {
-		if isK8sNotFound(err) {
-			return subscriptionState{}, nil
-		}
 		return subscriptionState{}, err
+	}
+	if !found {
+		return subscriptionState{}, nil
 	}
 	var sub struct {
 		Metadata struct {

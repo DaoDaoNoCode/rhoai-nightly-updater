@@ -233,12 +233,12 @@ func modelRoutePath(project, name string) (string, bool) {
 // made it.
 func readModelRoute(c *Client, project, name string) ([]string, bool, error) {
 	path, _ := modelRoutePath(project, name)
-	body, _, err := c.get(path)
-	if isK8sNotFound(err) {
-		return nil, false, nil
-	}
+	body, found, err := c.getOptional(path)
 	if err != nil {
 		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
 	}
 	var route struct {
 		Spec struct {

@@ -134,12 +134,12 @@ func readOperatorSubscription(c *Client, ns, name string) (*olmSubscription, err
 		}
 		return nil, nil
 	}
-	body, _, err := c.get(path)
-	if isK8sNotFound(err) {
-		return nil, nil
-	}
+	body, found, err := c.getOptional(path)
 	if err != nil {
 		return nil, fmt.Errorf("read Subscription %s/%s: %w", ns, name, err)
+	}
+	if !found {
+		return nil, nil
 	}
 	sub, err := parseSubscription(body)
 	if err != nil {
@@ -565,12 +565,12 @@ func createOperatorObjects(c *Client, plan *operatorInstallPlan, dryRun bool) ([
 
 // csvPhase reads a CSV's phase and message ("" when it does not exist yet).
 func csvPhase(c *Client, ns, name string) (string, string, error) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name))
-	if isK8sNotFound(err) {
-		return "", "", nil
-	}
+	body, found, err := c.getOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name))
 	if err != nil {
 		return "", "", err
+	}
+	if !found {
+		return "", "", nil
 	}
 	var csv struct {
 		Status struct {

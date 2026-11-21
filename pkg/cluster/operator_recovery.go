@@ -271,12 +271,12 @@ func captureOperatorRecovery(c *Client) (*operatorRecovery, error) {
 		{subscriptionPath(), &r.subscription},
 		{namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName), &r.catalog},
 	} {
-		body, _, err := c.get(resource.path)
-		if isK8sNotFound(err) {
-			continue
-		}
+		body, found, err := c.getOptional(resource.path)
 		if err != nil {
 			return nil, fmt.Errorf("capture operator recovery state: %w", err)
+		}
+		if !found {
+			continue
 		}
 		var obj map[string]any
 		if err := json.Unmarshal(body, &obj); err != nil {
@@ -522,12 +522,12 @@ type rhoaiCSV struct {
 // listRHOAICSVs lists the RHOAI CSVs (rhods-operator.*, not copied) in the
 // operator namespace. A missing namespace is an empty list.
 func listRHOAICSVs(c *Client) ([]rhoaiCSV, error) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""))
-	if isK8sNotFound(err) {
-		return nil, nil
-	}
+	body, found, err := c.getOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""))
 	if err != nil {
 		return nil, err
+	}
+	if !found {
+		return nil, nil
 	}
 	var list struct {
 		Items []struct {
@@ -601,12 +601,12 @@ func (r *operatorRecovery) attemptCSVsToRemove(c *Client) ([]rhoaiCSV, error) {
 	// Fall back to the CSVs the attempt was seen installing and the ones it
 	// deleted, read one by one for their UIDs.
 	for _, name := range append(append([]string{}, r.attemptCSVs...), r.removedCSVs...) {
-		body, _, getErr := c.get(csvPath(name))
-		if isK8sNotFound(getErr) {
-			continue
-		}
+		body, found, getErr := c.getOptional(csvPath(name))
 		if getErr != nil {
 			return out, err
+		}
+		if !found {
+			continue
 		}
 		var obj struct {
 			Metadata struct {

@@ -423,12 +423,12 @@ type subscriptionDetails struct {
 
 func readSubscription(c *Client) (subscriptionDetails, error) {
 	path := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
-	body, _, err := c.get(path)
+	body, exists, err := c.getOptional(path)
 	if err != nil {
-		if isK8sNotFound(err) {
-			return subscriptionDetails{info: types.SubscriptionInfo{State: "Not Installed", Namespace: SubNS}}, nil
-		}
 		return subscriptionDetails{}, fmt.Errorf("request failed: %w", err)
+	}
+	if !exists {
+		return subscriptionDetails{info: types.SubscriptionInfo{State: "Not Installed", Namespace: SubNS}}, nil
 	}
 	var sub struct {
 		Metadata objectMeta `json:"metadata"`
@@ -583,13 +583,13 @@ func getCatalogSource(c *Client) (types.CatalogSourceInfo, error) {
 
 func readCatalogSource(c *Client) (types.CatalogSourceInfo, *objectMeta, error) {
 	path := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
-	body, _, err := c.get(path)
+	body, found, err := c.getOptional(path)
 	if err != nil {
-		// 404 is expected when the CatalogSource does not exist yet
-		if isK8sNotFound(err) {
-			return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, nil
-		}
 		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, fmt.Errorf("request failed: %w", err)
+	}
+	if !found {
+		// expected when the CatalogSource does not exist yet
+		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, nil
 	}
 	var result struct {
 		Metadata objectMeta `json:"metadata"`
@@ -698,12 +698,12 @@ func getPullSecret(c *Client) (types.PullSecretInfo, error) {
 // credential it holds, so status polling does not read the Secret twice.
 func readPullSecret(c *Client) (types.PullSecretInfo, string, error) {
 	path := namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret")
-	body, _, err := c.get(path)
+	body, exists, err := c.getOptional(path)
 	if err != nil {
-		if isK8sNotFound(err) {
-			return types.PullSecretInfo{Exists: false, Detail: "Secret not found"}, "", nil
-		}
 		return types.PullSecretInfo{Exists: false}, "", err
+	}
+	if !exists {
+		return types.PullSecretInfo{Exists: false, Detail: "Secret not found"}, "", nil
 	}
 
 	dockerConfig, problem := decodeDockerConfigSecret(body)
@@ -752,12 +752,12 @@ func getConsoleURL(c *Client) string {
 // whose clusterServiceVersionNames include "rhods-operator".
 func getInstallPlan(c *Client) (*types.InstallPlanInfo, error) {
 	path := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, "")
-	body, _, err := c.get(path)
+	body, found, err := c.getOptional(path)
 	if err != nil {
-		if isK8sNotFound(err) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	if !found {
+		return nil, nil
 	}
 	var result struct {
 		Items []struct {

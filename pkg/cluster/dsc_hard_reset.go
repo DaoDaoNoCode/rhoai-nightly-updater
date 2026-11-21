@@ -364,12 +364,12 @@ type dscWaitState struct {
 }
 
 func readDSCWaitState(c *Client, path string) (dscWaitState, error) {
-	body, _, err := c.get(path)
-	if isK8sNotFound(err) {
-		return dscWaitState{}, nil
-	}
+	body, exists, err := c.getOptional(path)
 	if err != nil {
 		return dscWaitState{}, err
+	}
+	if !exists {
+		return dscWaitState{}, nil
 	}
 	var obj map[string]any
 	if err := json.Unmarshal(body, &obj); err != nil {

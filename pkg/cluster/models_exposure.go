@@ -71,12 +71,12 @@ func ValidExposure(e string) bool {
 // listAllGateways lists the Gateways of every namespace (read-only; the
 // list is the one otherGatewaysOfClass reads).
 func listAllGateways(c *Client) ([]gatewayObject, error) {
-	body, _, err := c.get(clusterPath("gateway.networking.k8s.io/v1", "gateways", ""))
-	if isK8sNotFound(err) {
-		return nil, nil
-	}
+	body, found, err := c.getOptional(clusterPath("gateway.networking.k8s.io/v1", "gateways", ""))
 	if err != nil {
 		return nil, fmt.Errorf("list the Gateways: %w", err)
+	}
+	if !found {
+		return nil, nil
 	}
 	var list struct {
 		Items []gatewayObject `json:"items"`

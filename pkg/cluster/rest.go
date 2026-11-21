@@ -18,6 +18,19 @@ func isK8sNotFound(err error) bool { return IsK8sError(err, http.StatusNotFound)
 // already exists (a create) or changed since it was read (an update).
 func isK8sConflict(err error) bool { return IsK8sError(err, http.StatusConflict) }
 
+// getOptional reads path, where a missing object (404) is no error: found
+// is then false, with no body. Any other error is get's, with its body.
+func (c *Client) getOptional(path string) (body []byte, found bool, err error) {
+	body, _, err = c.get(path)
+	if err != nil {
+		if isK8sNotFound(err) {
+			return nil, false, nil
+		}
+		return body, false, err
+	}
+	return body, true, nil
+}
+
 // deleteIfExists deletes the object at path. An object that is already gone
 // (404) is no error: existed is then false. Other errors are delete's.
 func (c *Client) deleteIfExists(path string) (existed bool, err error) {

@@ -162,12 +162,12 @@ func dspaCollectionPath(namespace string) string {
 // listDSPAs lists pipeline servers in namespace, or cluster-wide when
 // namespace is "". A missing CRD returns errDSPACRDMissing.
 func listDSPAs(c *Client, namespace string) ([]dspaInfo, error) {
-	body, _, err := c.get(dspaCollectionPath(namespace))
+	body, found, err := c.getOptional(dspaCollectionPath(namespace))
 	if err != nil {
-		if isK8sNotFound(err) {
-			return nil, errDSPACRDMissing
-		}
 		return nil, fmt.Errorf("list pipeline servers: %w", err)
+	}
+	if !found {
+		return nil, errDSPACRDMissing
 	}
 	var list struct {
 		Items []struct {
@@ -246,12 +246,12 @@ type routeSpec struct {
 // readRoute reads a Route; found is false when the Route (or the Route API)
 // does not exist. Any other read or parse error is returned.
 func readRoute(c *Client, namespace, name string) (routeSpec, error) {
-	body, _, err := c.get(namespacedPath("route.openshift.io/v1", "routes", namespace, name))
+	body, exists, err := c.getOptional(namespacedPath("route.openshift.io/v1", "routes", namespace, name))
 	switch {
-	case isK8sNotFound(err):
-		return routeSpec{}, nil
 	case err != nil:
 		return routeSpec{}, fmt.Errorf("read Route %s: %w", name, err)
+	case !exists:
+		return routeSpec{}, nil
 	}
 	var route struct {
 		Spec struct {
@@ -513,12 +513,12 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	}
 	dspaPath := namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, dspaName)
 	readDSPA := func() (objectMeta, bool, error) {
-		body, _, getErr := c.get(dspaPath)
-		if isK8sNotFound(getErr) {
-			return objectMeta{}, false, nil
-		}
+		body, present, getErr := c.getOptional(dspaPath)
 		if getErr != nil {
 			return objectMeta{}, false, getErr
+		}
+		if !present {
+			return objectMeta{}, false, nil
 		}
 		meta, perr := parseObjectMeta(body)
 		return meta, true, perr
@@ -799,14 +799,14 @@ func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInf
 		*logs = append(*logs, fmt.Sprintf("Kept secret %s: this tool never creates a secret with that name", name))
 		return ""
 	}
-	body, _, err := c.get(path)
-	if isK8sNotFound(err) {
-		*logs = append(*logs, "OK: Secret already absent")
-		return ""
-	}
+	body, found, err := c.getOptional(path)
 	if err != nil {
 		*logs = append(*logs, fmt.Sprintf("Warning: cannot read secret %s: %v", name, err))
 		return fmt.Sprintf(" The credentials secret %s could not be checked and was left in place: %v.", name, err)
+	}
+	if !found {
+		*logs = append(*logs, "OK: Secret already absent")
+		return ""
 	}
 	meta, err := parseObjectMeta(body)
 	if err != nil {

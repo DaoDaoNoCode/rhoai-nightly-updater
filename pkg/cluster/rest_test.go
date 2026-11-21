@@ -72,6 +72,28 @@ func TestIsK8sNotFoundAndConflict(t *testing.T) {
 	}
 }
 
+func TestGetOptional(t *testing.T) {
+	c, s := newRESTClient(t, map[string]restAnswer{
+		"/there": {200, `{"a":1}`},
+		"/no":    {403, forbiddenBody},
+	})
+	if body, found, err := c.getOptional("/there"); !found || err != nil || string(body) != `{"a":1}` {
+		t.Fatalf("existing object: body=%q found=%v err=%v", body, found, err)
+	}
+	if body, found, err := c.getOptional("/gone"); found || err != nil || body != nil {
+		t.Fatalf("missing object: body=%q found=%v err=%v", body, found, err)
+	}
+	wantBody, _, wantErr := c.get("/no")
+	body, found, err := c.getOptional("/no")
+	if found || err == nil || err.Error() != wantErr.Error() || !IsK8sError(err, 403) || string(body) != string(wantBody) {
+		t.Fatalf("refused read: body=%q found=%v err=%v, want get's %q %v", body, found, err, wantBody, wantErr)
+	}
+	want := []string{"GET /there", "GET /gone", "GET /no", "GET /no"}
+	if fmt.Sprint(s.requests) != fmt.Sprint(want) {
+		t.Fatalf("requests %v, want %v", s.requests, want)
+	}
+}
+
 func TestDeleteIfExists(t *testing.T) {
 	c, s := newRESTClient(t, map[string]restAnswer{
 		"/there": {200, `{}`},

@@ -257,12 +257,12 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 		isNew := false
 
 		// Step 1: GET the ConfigMap with its resourceVersion
-		body, _, err := c.bookkeeping().get(cmPath)
+		body, found, err := c.bookkeeping().getOptional(cmPath)
 		if err != nil {
-			if !isK8sNotFound(err) {
-				slog.Warn("failed to get activity configmap", "error", err)
-				return
-			}
+			slog.Warn("failed to get activity configmap", "error", err)
+			return
+		}
+		if !found {
 			// ConfigMap does not exist yet — we will create it
 			isNew = true
 			entries = []types.ActivityEntry{}
@@ -351,12 +351,12 @@ func GetActivity(c *Client) ([]types.ActivityEntry, error) {
 	ns := getActivityNamespace()
 	cmPath := namespacedPath("v1", "configmaps", ns, activityConfigMapName)
 
-	body, _, err := c.bookkeeping().get(cmPath)
+	body, found, err := c.bookkeeping().getOptional(cmPath)
 	if err != nil {
-		if isK8sNotFound(err) {
-			return []types.ActivityEntry{}, nil
-		}
 		return nil, fmt.Errorf("get activity configmap: %w", err)
+	}
+	if !found {
+		return []types.ActivityEntry{}, nil
 	}
 
 	var cm map[string]any

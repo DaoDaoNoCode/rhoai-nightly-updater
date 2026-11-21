@@ -166,12 +166,12 @@ func parseObjectMeta(body []byte) (objectMeta, error) {
 // readObjectMeta reads the metadata of the object at path. found is false on
 // 404; any other error is returned.
 func readObjectMeta(c *Client, path string) (meta objectMeta, found bool, err error) {
-	body, _, err := c.get(path)
-	if isK8sNotFound(err) {
-		return objectMeta{}, false, nil
-	}
+	body, exists, err := c.getOptional(path)
 	if err != nil {
 		return objectMeta{}, false, err
+	}
+	if !exists {
+		return objectMeta{}, false, nil
 	}
 	meta, err = parseObjectMeta(body)
 	return meta, err == nil, err

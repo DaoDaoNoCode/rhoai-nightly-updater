@@ -146,12 +146,12 @@ func pausedOperatorText(operator string) string {
 }
 
 func legacyDashboardDevActive(c *Client, ns string) (bool, error) {
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName))
-	if isK8sNotFound(err) {
-		return false, nil
-	}
+	body, found, err := c.getOptional(namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName))
 	if err != nil {
 		return false, err
+	}
+	if !found {
+		return false, nil
 	}
 	var d dashboardDeployment
 	if err := json.Unmarshal(body, &d); err != nil {

@@ -258,12 +258,12 @@ func (m llmisvcObject) mainImage() string {
 }
 
 func listLLMInferenceServices(c *Client) ([]llmisvcObject, error) {
-	body, _, err := c.get(clusterPath("serving.kserve.io/v1alpha2", "llminferenceservices", ""))
-	if isK8sNotFound(err) {
-		return nil, errLLMISvcAPIMissing
-	}
+	body, found, err := c.getOptional(clusterPath("serving.kserve.io/v1alpha2", "llminferenceservices", ""))
 	if err != nil {
 		return nil, fmt.Errorf("list LLMInferenceServices: %w", err)
+	}
+	if !found {
+		return nil, errLLMISvcAPIMissing
 	}
 	var list struct {
 		Items []llmisvcObject `json:"items"`
@@ -279,12 +279,12 @@ func readToolModel(c *Client, project, name string) (llmisvcObject, bool, error)
 	if !ok {
 		return llmisvcObject{}, false, fmt.Errorf("%s is not a model of this tool's catalog", name)
 	}
-	body, _, err := c.get(path)
-	if isK8sNotFound(err) {
-		return llmisvcObject{}, false, nil
-	}
+	body, found, err := c.getOptional(path)
 	if err != nil {
 		return llmisvcObject{}, false, err
+	}
+	if !found {
+		return llmisvcObject{}, false, nil
 	}
 	var m llmisvcObject
 	if err := json.Unmarshal(body, &m); err != nil {
@@ -515,12 +515,12 @@ func discoverCPUPreset(c *Client) cpuPreset {
 	if err != nil {
 		return cpuPreset{problem: fmt.Sprintf("Cannot tell which namespace RHOAI's applications (KServe's controller and presets) run in: %v.", err)}
 	}
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", ns, "llmisvc-controller-manager"))
-	if isK8sNotFound(err) {
-		return cpuPreset{problem: fmt.Sprintf("KServe's LLMInferenceService controller (Deployment %s in %s) is not there: LLM serving is not installed.", llmisvcControllerName, ns)}
-	}
+	body, exists, err := c.getOptional(namespacedPath("apps/v1", "deployments", ns, "llmisvc-controller-manager"))
 	if err != nil {
 		return cpuPreset{problem: fmt.Sprintf("Cannot read Deployment %s/%s: %v.%s", ns, llmisvcControllerName, err, templateHint(err))}
+	}
+	if !exists {
+		return cpuPreset{problem: fmt.Sprintf("KServe's LLMInferenceService controller (Deployment %s in %s) is not there: LLM serving is not installed.", llmisvcControllerName, ns)}
 	}
 	var dep struct {
 		Spec struct {
@@ -551,12 +551,12 @@ func discoverCPUPreset(c *Client) cpuPreset {
 		return cpuPreset{problem: fmt.Sprintf("Deployment %s/%s sets no %s, so the CPU preset's name is unknown on this release.", ns, llmisvcControllerName, llmisvcConfigPrefixEnv)}
 	}
 	name := prefix + cpuPresetSuffix
-	body, _, err = c.get(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceserviceconfigs", ns, name))
-	if isK8sNotFound(err) {
-		return cpuPreset{name: name, problem: fmt.Sprintf("This RHOAI release has no CPU preset: LLMInferenceServiceConfig %s does not exist in %s.", name, ns)}
-	}
+	body, exists, err = c.getOptional(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceserviceconfigs", ns, name))
 	if err != nil {
 		return cpuPreset{name: name, problem: fmt.Sprintf("Cannot read the CPU preset %s/%s: %v.%s", ns, name, err, templateHint(err))}
+	}
+	if !exists {
+		return cpuPreset{name: name, problem: fmt.Sprintf("This RHOAI release has no CPU preset: LLMInferenceServiceConfig %s does not exist in %s.", name, ns)}
 	}
 	var cfg struct {
 		Spec struct {
@@ -695,12 +695,12 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 // going away, and be a data science project (the dashboard lists models
 // only there). It returns a refusal, or "".
 func projectNamespace(c *Client, project string) (map[string]string, string, string) {
-	body, _, err := c.get("/api/v1/namespaces/" + project)
-	if isK8sNotFound(err) {
-		return nil, fmt.Sprintf("Project %s does not exist. Choose a data science project, or create one in the dashboard.", project), "validation"
-	}
+	body, found, err := c.getOptional("/api/v1/namespaces/" + project)
 	if err != nil {
 		return nil, fmt.Sprintf("Cannot read project %s: %v.", project, err), errorCodeFromK8sErr(err)
+	}
+	if !found {
+		return nil, fmt.Sprintf("Project %s does not exist. Choose a data science project, or create one in the dashboard.", project), "validation"
 	}
 	var ns struct {
 		Metadata objectMeta `json:"metadata"`

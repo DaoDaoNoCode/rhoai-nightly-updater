@@ -59,12 +59,12 @@ func clearDSCHardResetRecord(c *Client) {
 // readDSCHardResetRecord returns the recorded hard reset, nil when there is
 // none. A record that cannot be parsed is an error: it is never guessed at.
 func readDSCHardResetRecord(c *Client) (*types.DSCHardResetRecord, error) {
-	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
-	if isK8sNotFound(err) {
-		return nil, nil
-	}
+	body, found, err := c.bookkeeping().getOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
 	if err != nil {
 		return nil, fmt.Errorf("get operation record: %w", err)
+	}
+	if !found {
+		return nil, nil
 	}
 	var cm struct {
 		Data map[string]string `json:"data"`
@@ -100,12 +100,12 @@ type OperationRecord struct {
 // an empty record. An unreadable value is logged and ignored rather than
 // hiding the others.
 func ReadOperationRecord(c *Client) (*OperationRecord, error) {
-	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
-	if isK8sNotFound(err) {
-		return &OperationRecord{}, nil
-	}
+	body, found, err := c.bookkeeping().getOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
 	if err != nil {
 		return nil, fmt.Errorf("get operation record: %w", err)
+	}
+	if !found {
+		return &OperationRecord{}, nil
 	}
 	var cm struct {
 		Metadata struct {

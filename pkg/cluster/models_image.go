@@ -117,12 +117,12 @@ func imageMirrored(c *Client, repo string) (bool, error) {
 		clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""),
 		clusterPath("config.openshift.io/v1", "imagetagmirrorsets", ""),
 	} {
-		body, _, err := c.get(path)
-		if isK8sNotFound(err) {
-			continue
-		}
+		body, found, err := c.getOptional(path)
 		if err != nil {
 			return false, err
+		}
+		if !found {
+			continue
 		}
 		var sets mirrorSets
 		if err := json.Unmarshal(body, &sets); err != nil {

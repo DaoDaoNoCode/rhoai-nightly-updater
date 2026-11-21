@@ -446,14 +446,14 @@ func prepareMirrorRemove(c *Client, w *nodeSetupWork) {
 	w.plan.NodeImpact, w.plan.Undo = mirrorRemoveImpactFor(remaining, others)
 	w.done = "Deleted ImageDigestMirrorSet " + MirrorName + "."
 	w.verify = func(c *Client) error {
-		_, _, err := c.get(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName))
-		if isK8sNotFound(err) {
-			return nil
+		_, found, err := c.getOptional(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName))
+		if err != nil {
+			return err
 		}
-		if err == nil {
+		if found {
 			return errors.New("it is still there")
 		}
-		return err
+		return nil
 	}
 }
 
@@ -462,12 +462,12 @@ func prepareMirrorRemove(c *Client, w *nodeSetupWork) {
 // and its Quay lookups use), padded as CRI-O needs it; "" with the reason
 // when there is none.
 func updaterQuayToken(c *Client) (string, string, string) {
-	body, _, err := c.get(namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret"))
+	body, found, err := c.getOptional(namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret"))
 	if err != nil {
-		if isK8sNotFound(err) {
-			return "", "no_token", "The updater has no quay.io/rhoai token yet: save it under Pull secret first. Nothing was changed."
-		}
 		return "", refusalCodeFor(err), "Cannot read the updater's token in kube-system/additional-pull-secret: " + err.Error() + ". Nothing was changed."
+	}
+	if !found {
+		return "", "no_token", "The updater has no quay.io/rhoai token yet: save it under Pull secret first. Nothing was changed."
 	}
 	cfg, problem := decodeDockerConfigSecret(body)
 	if problem != "" {

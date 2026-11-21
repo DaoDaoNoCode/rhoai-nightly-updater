@@ -130,12 +130,12 @@ func (h serviceHealth) describe(ref string) string {
 // at once (the namespace guard).
 func checkServiceHealth(c *Client, ref string, grace time.Duration) serviceHealth {
 	ns, name, _ := strings.Cut(ref, "/")
-	body, _, err := c.get(namespacedPath("v1", "services", ns, name))
-	if isK8sNotFound(err) {
-		return serviceHealth{state: serviceMissing}
-	}
+	body, found, err := c.getOptional(namespacedPath("v1", "services", ns, name))
 	if err != nil {
 		return serviceHealth{state: serviceUnknown, err: err}
+	}
+	if !found {
+		return serviceHealth{state: serviceMissing}
 	}
 	var svc struct {
 		Metadata struct {
@@ -426,11 +426,11 @@ func (e *webhookEnv) csvPresent(ns, name string) csvPresence {
 		return p
 	}
 	var p csvPresence
-	body, _, err := e.c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name))
+	body, found, err := e.c.getOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name))
 	switch {
-	case isK8sNotFound(err):
 	case err != nil:
 		p.err = err
+	case !found:
 	default:
 		var csv struct {
 			Metadata struct {

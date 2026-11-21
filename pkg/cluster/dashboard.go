@@ -109,12 +109,12 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 		return nil, fmt.Errorf("find the dashboard: %w", err)
 	}
 	deployPath := namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName)
-	body, _, err := c.get(deployPath)
-	if isK8sNotFound(err) {
-		return nil, fmt.Errorf("%w (no %s Deployment in %s)", ErrDashboardNotDeployed, dashboardDeploymentName, ns)
-	}
+	body, found, err := c.getOptional(deployPath)
 	if err != nil {
 		return nil, fmt.Errorf("get dashboard deployment: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("%w (no %s Deployment in %s)", ErrDashboardNotDeployed, dashboardDeploymentName, ns)
 	}
 
 	var deploy struct {

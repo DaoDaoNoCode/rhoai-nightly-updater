@@ -198,12 +198,12 @@ func readLegacyStorage(c *Client) (*legacyStorage, error) {
 // readLegacyStorageOwner is readLegacyStorage, and also reports a
 // namespace minio this tool did not make (foreign), for the status.
 func readLegacyStorageOwner(c *Client) (*legacyStorage, bool, error) {
-	body, _, err := c.get("/api/v1/namespaces/" + legacyNamespace)
-	if isK8sNotFound(err) {
-		return nil, false, nil
-	}
+	body, exists, err := c.getOptional("/api/v1/namespaces/" + legacyNamespace)
 	if err != nil {
 		return nil, false, fmt.Errorf("read namespace %s: %w", legacyNamespace, err)
+	}
+	if !exists {
+		return nil, false, nil
 	}
 	var nsObj struct {
 		Metadata objectMeta `json:"metadata"`
@@ -242,11 +242,11 @@ func readLegacyStorageOwner(c *Client) (*legacyStorage, bool, error) {
 		go func(i int, kind, name string) {
 			defer wg.Done()
 			path, _ := legacyGetPath(kind, name)
-			b, _, err := c.get(path)
+			b, present, err := c.getOptional(path)
 			switch {
-			case isK8sNotFound(err):
 			case err != nil:
 				results[i].err = err
+			case !present:
 			default:
 				results[i].meta, results[i].err = parseObjectMeta(b)
 				results[i].found, results[i].body = results[i].err == nil, b

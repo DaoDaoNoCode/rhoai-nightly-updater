@@ -230,12 +230,12 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 		}
 		changes = append(changes, "Authorino's listener serves TLS with "+secret)
 	}
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", ns, "authorino"))
-	if isK8sNotFound(err) {
-		return changes, fmt.Errorf("%w: no Deployment %s/authorino", errAuthorinoNotYet, ns)
-	}
+	body, exists, err := c.getOptional(namespacedPath("apps/v1", "deployments", ns, "authorino"))
 	if err != nil {
 		return changes, fmt.Errorf("read Deployment %s/authorino: %w", ns, err)
+	}
+	if !exists {
+		return changes, fmt.Errorf("%w: no Deployment %s/authorino", errAuthorinoNotYet, ns)
 	}
 	if !authorinoTrustsServiceCA(body) {
 		var d struct {

@@ -1712,12 +1712,12 @@ func patchCRDConversionWebhooks(c *Client) (int, []string) {
 	var warnings []string
 	for _, crd := range crds {
 		path := clusterPath("apiextensions.k8s.io/v1", "customresourcedefinitions", crd)
-		body, _, err := c.get(path)
-		if isK8sNotFound(err) {
-			continue
-		}
+		body, found, err := c.getOptional(path)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("read CRD %s: %v", crd, err))
+			continue
+		}
+		if !found {
 			continue
 		}
 		var obj struct {
@@ -1762,12 +1762,12 @@ func patchCRDConversionWebhooks(c *Client) (int, []string) {
 // rhoaiCSVExists reports whether any (non-copied) RHOAI CSV is in the
 // operator namespace.
 func rhoaiCSVExists(c *Client) (bool, error) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""))
-	if isK8sNotFound(err) {
-		return false, nil
-	}
+	body, found, err := c.getOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""))
 	if err != nil {
 		return false, err
+	}
+	if !found {
+		return false, nil
 	}
 	var list struct {
 		Items []struct {
@@ -2141,19 +2141,14 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 	// Check if secret already exists. Its other registry credentials must be
 	// preserved: only the quay.io/rhoai entry is replaced.
 	secretPath := namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret")
-	existingBody, _, getErr := c.get(secretPath)
-	secretExists := true
+	existingBody, secretExists, getErr := c.getOptional(secretPath)
 	if getErr != nil {
-		if isK8sNotFound(getErr) {
-			secretExists = false
-		} else {
-			return &types.OperationResponse{
-				Success:   false,
-				Message:   "Failed to check existing secret: " + redact(getErr),
-				Logs:      logs,
-				ErrorCode: errorCodeFromK8sErr(getErr),
-			}, nil
-		}
+		return &types.OperationResponse{
+			Success:   false,
+			Message:   "Failed to check existing secret: " + redact(getErr),
+			Logs:      logs,
+			ErrorCode: errorCodeFromK8sErr(getErr),
+		}, nil
 	}
 
 	dockerConfig := map[string]any{}

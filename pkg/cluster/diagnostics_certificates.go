@@ -236,14 +236,14 @@ func checkCertificates(c *Client) checkOutput {
 	}
 	served := true
 	for _, ns := range namespaces {
-		body, _, err := c.get(namespacedPath("cert-manager.io/v1", "certificates", ns, ""))
-		if isK8sNotFound(err) {
-			served = false
-			break
-		}
+		body, found, err := c.getOptional(namespacedPath("cert-manager.io/v1", "certificates", ns, ""))
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v%s", ns, err, templateHint(err)))
 			continue
+		}
+		if !found {
+			served = false
+			break
 		}
 		var list struct {
 			Items []certificateItem `json:"items"`
