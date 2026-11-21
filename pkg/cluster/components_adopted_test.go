@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -130,6 +131,43 @@ func TestOwnedByDeployment_LookupFailureFailsClosed(t *testing.T) {
 	s.mu.Unlock()
 	if !components.PodMatchesDeployment(c, adoptedPod("handmade-rs-abcde", "handmade-rs", "rs-adopted", cmLabels), trustyDeployment()) {
 		t.Error("the pod is not matched once its ReplicaSet can be read")
+	}
+}
+
+// UseFreshReplicaSetOwnerCacheForTest empties the declared cache, and
+// empties it again on restore, rather than making a cache per call: a made
+// cache registered its purge function for good, so the registry grew with
+// every call. The lookups always use the one registered cache, so nothing
+// cached under the hook is read after it.
+func TestUseFreshReplicaSetOwnerCacheRegistersNoCache(t *testing.T) {
+	before := kube.RegisteredCachesForTest()
+	s := &rsServer{sets: []map[string]any{replicaSet("handmade-rs", "rs-adopted", "dep-trusty")}}
+	c := s.client(t) // the hook, restored when the test ends
+	lookups := func() int {
+		t.Helper()
+		if !components.PodMatchesDeployment(c, adoptedPod("handmade-rs-abcde", "handmade-rs", "rs-adopted", cmLabels), trustyDeployment()) {
+			t.Fatal("the adopted pod is not matched")
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.calls
+	}
+	if n := lookups(); n != 1 {
+		t.Fatalf("first lookup: %d API calls, want 1", n)
+	}
+	if n := lookups(); n != 1 {
+		t.Fatalf("second lookup: %d API calls, want 1 (cached)", n)
+	}
+	restore := components.UseFreshReplicaSetOwnerCacheForTest()
+	if n := lookups(); n != 2 {
+		t.Errorf("lookup under the hook: %d API calls, want 2 (an empty cache)", n)
+	}
+	restore()
+	if n := lookups(); n != 3 {
+		t.Errorf("lookup after restore: %d API calls, want 3 (nothing cached before or under the hook is kept)", n)
+	}
+	if got := kube.RegisteredCachesForTest(); got != before {
+		t.Errorf("the cache registry holds %d purge functions, %d before the hooks: a hook registered a cache", got, before)
 	}
 }
 

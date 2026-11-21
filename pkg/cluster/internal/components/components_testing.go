@@ -4,8 +4,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // ResetDSCDefaultsCacheForTest empties the cache of fetched DSC samples. It
@@ -61,14 +59,15 @@ func StaleObservationsForTest(prefix string) int {
 	return n
 }
 
-// UseFreshReplicaSetOwnerCacheForTest gives the ReplicaSet owner lookups an
-// empty cache and returns the function that puts the previous one back. It
-// panics outside a test binary.
+// UseFreshReplicaSetOwnerCacheForTest empties the ReplicaSet owner cache and
+// returns the function that empties it again, so a test neither reads nor
+// leaves entries. It empties the declared cache rather than making one: a
+// new LRU would register its purge function for good (NewLRU). It panics
+// outside a test binary.
 func UseFreshReplicaSetOwnerCacheForTest() (restore func()) {
 	mustBeTest("UseFreshReplicaSetOwnerCacheForTest")
-	old := replicaSetOwnerCache
-	replicaSetOwnerCache = kube.NewLRU[string, string](512)
-	return func() { replicaSetOwnerCache = old }
+	replicaSetOwnerCache.Purge()
+	return replicaSetOwnerCache.Purge
 }
 
 // SeedPackageIndexForTest caches an empty package index for the API server
