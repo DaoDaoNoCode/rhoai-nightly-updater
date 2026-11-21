@@ -71,7 +71,7 @@ func TestLeaseLostOneIntervalBeforeExpiryAfterASlowRenewal(t *testing.T) {
 		}
 		return holder, err
 	}
-	started, cause, _ := refreshUntilStopped()
+	started, cause, finish := refreshUntilStoppedHeld()
 	done := runRefreshInBackground(t)
 	<-started
 	start := testClock.Now()
@@ -93,6 +93,10 @@ func TestLeaseLostOneIntervalBeforeExpiryAfterASlowRenewal(t *testing.T) {
 	if err := <-cause; !errors.Is(err, cluster.ErrOperationLockLost) {
 		t.Fatalf("cause %v", err)
 	}
+	// The heartbeat itself stops at the deadline, not the operation's end
+	// (which the scheduler might run first).
+	heartbeatExited(t)
+	close(finish)
 	<-done
 	if !testClock.Now().Equal(stopBy) {
 		t.Fatalf("clock moved to %s", testClock.Now())
@@ -134,7 +138,7 @@ func TestLeaseLostOneIntervalBeforeExpiryDuringAHangingRenewal(t *testing.T) {
 		return holder, err
 	}
 	stamped := testClock.Now()
-	started, cause, _ := refreshUntilStopped()
+	started, cause, finish := refreshUntilStoppedHeld()
 	done := runRefreshInBackground(t)
 	<-started
 	f.mu.Lock()
@@ -155,6 +159,10 @@ func TestLeaseLostOneIntervalBeforeExpiryDuringAHangingRenewal(t *testing.T) {
 	if err := <-cause; !errors.Is(err, cluster.ErrOperationLockLost) {
 		t.Fatalf("cause %v", err)
 	}
+	// The heartbeat itself stops at the deadline, not the operation's end
+	// (which the scheduler might run first).
+	heartbeatExited(t)
+	close(finish)
 	<-done
 	if !testClock.Now().Equal(stopBy) {
 		t.Fatalf("clock moved to %s", testClock.Now())
@@ -266,7 +274,7 @@ func TestLeaseDeadlineFollowsTheHeartbeatTruncatedToTheSecond(t *testing.T) {
 	f := installFakeRecord(t)
 	leaseHeartbeatInterval, leaseTTL = 10*time.Second, 45*time.Second
 	testClock.Advance(700 * time.Millisecond) // every stamp below falls at .7s
-	started, cause, _ := refreshUntilStopped()
+	started, cause, finish := refreshUntilStoppedHeld()
 	done := runRefreshInBackground(t)
 	<-started
 	f.beat(t) // the renewal at 10.7s succeeds: heartbeatAt 10s
@@ -297,6 +305,10 @@ func TestLeaseDeadlineFollowsTheHeartbeatTruncatedToTheSecond(t *testing.T) {
 	if err := <-cause; !errors.Is(err, cluster.ErrOperationLockLost) {
 		t.Fatalf("cause %v", err)
 	}
+	// The heartbeat itself stops at the deadline, not the operation's end
+	// (which the scheduler might run first).
+	heartbeatExited(t)
+	close(finish)
 	<-done
 	if !testClock.Now().Equal(stopBy) {
 		t.Fatalf("clock moved to %s", testClock.Now())

@@ -29,6 +29,38 @@ func refreshUntilStopped() (started chan struct{}, cause chan error, release cha
 	return started, cause, release
 }
 
+// refreshUntilStoppedHeld is refreshUntilStopped whose Refresh, once its
+// context ends, returns only when finish is closed. The operation's end
+// stops the heartbeat (leases.stop); holding it lets a test see the
+// heartbeat stop by itself first (heartbeatExited), whichever goroutine the
+// scheduler runs first.
+func refreshUntilStoppedHeld() (started chan struct{}, cause chan error, finish chan struct{}) {
+	started, cause, finish = make(chan struct{}), make(chan error, 1), make(chan struct{})
+	runRefreshStream = func(c *cluster.Client, _ cluster.OperationOptions, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		emit(cluster.UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Waiting"})
+		close(started)
+		<-c.Context().Done()
+		cause <- context.Cause(c.Context())
+		<-finish
+		return &types.OperationResponse{Success: false, Message: "stopped"}, c.Context().Err()
+	}
+	return started, cause, finish
+}
+
+// heartbeatExited waits until the running heartbeat's goroutine has
+// returned by itself (its done channel). The operation must be held
+// (refreshUntilStoppedHeld): its end would stop the heartbeat instead.
+func heartbeatExited(t testing.TB) {
+	t.Helper()
+	leases.mu.Lock()
+	done := leases.done
+	leases.mu.Unlock()
+	if done == nil {
+		t.Fatal("no heartbeat is running")
+	}
+	<-done
+}
+
 func runRefreshInBackground(t testing.TB) chan struct{} {
 	done := make(chan struct{})
 	go func() {
@@ -95,7 +127,7 @@ func TestRenewalFailuresStopTheOperationOnlyPastTheThreshold(t *testing.T) {
 	// Every renewal fails: stopped once leaseTTL-interval has passed since
 	// the heartbeat of the last successful write (here the acquire's).
 	mutationLimiter = newRateLimiter()
-	started, cause, _ := refreshUntilStopped()
+	started, cause, finish := refreshUntilStoppedHeld()
 	done = runRefreshInBackground(t)
 	<-started
 	stamped := testClock.Now()
@@ -114,6 +146,10 @@ func TestRenewalFailuresStopTheOperationOnlyPastTheThreshold(t *testing.T) {
 	if err := <-cause; !errors.Is(err, cluster.ErrOperationLockLost) {
 		t.Fatalf("cause %v", err)
 	}
+	// The heartbeat itself finds the deadline passed and stops, not the
+	// operation's end (which the scheduler might run first).
+	heartbeatExited(t)
+	close(finish)
 	<-done
 	if last := inflight.lastCompleted(); last == nil || last.Success || last.Message != cluster.LockLostMessage {
 		t.Fatalf("lastCompleted %+v", last)
