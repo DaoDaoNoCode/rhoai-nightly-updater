@@ -394,7 +394,10 @@ func runPipelineServer(c *kube.Client, s *State, emit func(types.UpdateStepEvent
 // checkMLflow: MLflow ready → done (whoever set it up: it is the
 // cluster's one MLflow).
 func checkMLflow(c *kube.Client, _ *State) (Check, error) {
-	st := mlflow.Status(c)
+	st, err := mlflow.ReadStatus(c)
+	if err != nil {
+		return Check{}, fmt.Errorf("read MLflow: %w", err)
+	}
 	if st.Ready {
 		return Check{Done: true, Reason: "MLflow is ready."}, nil
 	}
@@ -408,7 +411,11 @@ func checkMLflow(c *kube.Client, _ *State) (Check, error) {
 // the wait the page makes in the browser.
 func runMLflow(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	var logs []string
-	if !mlflow.Status(c).Deployed {
+	st, err := mlflow.ReadStatus(c)
+	if err != nil {
+		return fail(fmt.Sprintf("Cannot read MLflow: %v. Nothing was changed.", err), kube.ErrorCodeOr(err, "prerequisites"))
+	}
+	if !st.Deployed {
 		emit(types.UpdateStepEvent{Step: StepMLflow, Status: "running", Message: "Setting up MLflow..."})
 		res, err := mlflow.Setup(c)
 		if err != nil || !res.Success {
@@ -425,7 +432,7 @@ func runMLflow(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*typ
 		if errors.Is(err, mlflow.ErrCannotStart) {
 			code = "prerequisites"
 		}
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("MLflow was set up but is not ready: %v. Resume waits again.", err), Logs: logs, ErrorCode: code}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("MLflow was set up but is not ready: %v. Resume waits again.", err), Logs: logs, ErrorCode: kube.ErrorCodeOr(err, code)}, nil
 	}
 	return &types.OperationResponse{Success: true, Message: "MLflow is ready.", Logs: logs}, nil
 }

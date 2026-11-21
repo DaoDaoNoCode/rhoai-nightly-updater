@@ -11,6 +11,8 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 const mlflowAvailable = `{"conditions":[{"type":"Available","status":"True"}]}`
@@ -86,8 +88,10 @@ func TestWaitMLflowReady_StopsAtATerminalState(t *testing.T) {
 	}
 }
 
-// Never ready, or the CR cannot be read (read again each poll): the wait
-// ends after its timeout on the fake clock, with the last message.
+// Never ready, or the CR cannot be read for a reason that may pass (a
+// server error; read again each poll): the wait ends after its timeout on
+// the fake clock, with the last message. A refused read (401, 403) ends
+// it at once (TestWaitMLflowReady_StopsOnARefusedRead).
 func TestWaitMLflowReady_TimesOut(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -97,7 +101,7 @@ func TestWaitMLflowReady_TimesOut(t *testing.T) {
 		{"not available", func(f *resourceFake) { putToolMLflow(f, "", notAvailable) }, "after 30s: MLflow deployment is not ready"},
 		{"unreadable", func(f *resourceFake) {
 			putToolMLflow(f, "", notAvailable)
-			f.fail["GET "+mlflowPath] = http.StatusForbidden
+			f.fail["GET "+mlflowPath] = http.StatusInternalServerError
 		}, "after 30s: Cannot read MLflow status: "},
 	}
 	for _, tc := range cases {
@@ -129,5 +133,41 @@ func TestWaitMLflowReady_ContextEnded(t *testing.T) {
 	cancel()
 	if _, err := mlflow.WaitReady(c.WithContext(ctx)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err %v", err)
+	}
+}
+
+// A read the API server refuses (the user's sign-in ended, or they may
+// not read MLflow) ends the wait at once with that error, which keeps its
+// class: the recipe step reports sign_in_ended or forbidden instead of
+// waiting the whole timeout.
+func TestWaitMLflowReady_StopsOnARefusedRead(t *testing.T) {
+	fastMLflowReadyWait(t)
+	for _, tc := range []struct {
+		status int
+		code   string
+	}{{401, "sign_in_ended"}, {403, "forbidden"}} {
+		f, c := newResourceFake(t)
+		putToolMLflow(f, "", `{}`)
+		u := c.SignedInUser()
+		reads := 0
+		f.beforeServe = func(method, path string) {
+			if method == http.MethodGet && path == mlflowPath {
+				reads++
+			}
+		}
+		f.failAs[fakeUserToken+" GET "+mlflowPath] = tc.status
+		_, err := mlflow.WaitReady(u)
+		var ke *kube.K8sError
+		if !errors.As(err, &ke) || ke.Status != tc.status || reads != 1 {
+			t.Fatalf("%d: err %v after %d reads", tc.status, err, reads)
+		}
+		if got := kube.ErrorCodeFromK8sErr(err); got != tc.code {
+			t.Fatalf("%d: code %q", tc.status, got)
+		}
+		r := tRecipe(t, "create")
+		res, runErr := recipeStep(t, r, recipe.StepMLflow).Run(u, &recipe.State{Recipe: r}, func(types.UpdateStepEvent) {})
+		if runErr != nil || res.Success || res.ErrorCode != tc.code {
+			t.Fatalf("%d: step %+v %v", tc.status, res, runErr)
+		}
 	}
 }
