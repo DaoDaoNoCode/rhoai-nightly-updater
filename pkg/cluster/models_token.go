@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -138,13 +139,13 @@ func tokenSecretPath(project, model string) (string, bool) {
 func tokenCreatePath(kind, project string) string {
 	switch kind {
 	case tokenPartSA:
-		return withToolFieldManager(rhoai.NamespacedPath("v1", "serviceaccounts", project, ""))
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "serviceaccounts", project, ""))
 	case tokenPartRole:
-		return withToolFieldManager(rhoai.NamespacedPath("rbac.authorization.k8s.io/v1", "roles", project, ""))
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath("rbac.authorization.k8s.io/v1", "roles", project, ""))
 	case tokenPartBinding:
-		return withToolFieldManager(rhoai.NamespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", project, ""))
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", project, ""))
 	}
-	return withToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, ""))
+	return envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, ""))
 }
 
 // tokenObjectPath is the path of the ServiceAccount, Role or RoleBinding;
@@ -186,7 +187,7 @@ var tokenParts = []string{tokenPartSA, tokenPartRole, tokenPartBinding, tokenPar
 // tokenObject is one token object as the dashboard writes it, owned by the
 // model (modelUID; a placeholder for a dry run before the model exists).
 func tokenObject(kind, project, model, modelUID string) map[string]any {
-	labels := toolLabels()
+	labels := envkit.ToolLabels()
 	if kind != tokenPartSA {
 		labels[dashboardLabel] = "true"
 	}

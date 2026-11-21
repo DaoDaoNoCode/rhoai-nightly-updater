@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
@@ -98,7 +99,7 @@ func TestSetupPipelineServer_ForeignObjectsBetweenCheckAndWrite(t *testing.T) {
 		putManagedDSC(f)
 		putReadyManagedS3(f)
 		putDSProject(f, "p1")
-		putDSPA(f, "p1", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
+		putDSPA(f, "p1", dspaName, toolLabelJSON, envkit.ToolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
 		f.beforeServe = func(method, path string) {
 			if method == http.MethodPatch && path == dspaPath("p1", dspaName) {
 				f.mu.Lock()
@@ -167,7 +168,7 @@ func TestWaitForDeletion_DeadlineAndErrors(t *testing.T) {
 func TestTeardownPipelineServer_ForbiddenWhileWaitingIsAnError(t *testing.T) {
 	fastPipelineTimings(t)
 	f, c := newResourceFake(t)
-	putDSPA(f, "p1", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, `,"finalizers":["`+dspaFinalizer+`"]`, "")
+	putDSPA(f, "p1", dspaName, toolLabelJSON, envkit.ToolFieldManager, "Apply", s3Host(), dspaSecretName, `,"finalizers":["`+dspaFinalizer+`"]`, "")
 	putDSPO(f, 1)
 	f.beforeServe = func(method, path string) {
 		if method == http.MethodDelete && path == dspaPath("p1", dspaName) {

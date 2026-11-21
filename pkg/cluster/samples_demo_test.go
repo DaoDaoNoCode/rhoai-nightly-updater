@@ -3,6 +3,8 @@ package cluster
 import (
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 )
 
 func demoTagWrites(f *mlflowFake, from int) []string {
@@ -214,7 +216,7 @@ func TestGenAIDemo_OldMemoryLimit(t *testing.T) {
 	const oldSpec = `{"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"2Gi"}}}`
 	t.Run("the tool's CR: Add removes the limit first", func(t *testing.T) {
 		env := newSamplesEnv(t)
-		putMLflow(env.k8s, toolLabelJSON, toolFieldManager, "Update", "", oldSpec, `{"url":"`+env.srv.URL+`/mlflow","conditions":[{"type":"Available","status":"True"}]}`)
+		putMLflow(env.k8s, toolLabelJSON, envkit.ToolFieldManager, "Update", "", oldSpec, `{"url":"`+env.srv.URL+`/mlflow","conditions":[{"type":"Available","status":"True"}]}`)
 		if s := env.status(t)[SampleGenAIDemo]; s.State != "absent" || !strings.Contains(s.Message, "2Gi memory limit") || !strings.Contains(s.Repair, "spec.resources") {
 			t.Errorf("status %+v", s)
 		}

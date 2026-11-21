@@ -33,7 +33,7 @@ const dsProjectSelector = "opendatahub.io/dashboard=true"
 // ListUserDSProjects lists the data science projects the signed-in user
 // may see, with their own token: the OpenShift projects API
 // (project.openshift.io/v1 projects) with the label selector of
-// GetDSProjects. The API lists the namespaces whose "get namespaces" the
+// envkit.DSProjects. The API lists the namespaces whose "get namespaces" the
 // user's RBAC allows, applies the label selector, and keeps those the
 // token's scopes allow (openshift/openshift-apiserver release-4.17
 // 6ea968b: pkg/project/apiserver/registry/project/proxy/proxy.go:91-102,

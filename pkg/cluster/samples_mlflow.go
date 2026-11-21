@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -338,19 +338,6 @@ func ValidateMLflowSamplesRequest(req types.MLflowSamplesRequest) string {
 // project.
 var ErrNotDSProject = errors.New("not a Data Science project")
 
-// isDSProject reports whether project is a Data Science project (the
-// projects the Environment page lists).
-func isDSProject(c *Client, project string) (bool, error) {
-	projects, err := GetDSProjects(c)
-	if err != nil {
-		return false, err
-	}
-	if slices.Contains(projects, project) {
-		return true, nil
-	}
-	return false, nil
-}
-
 // RunMLflowSamples adds, removes or regenerates the requested samples in
 // one project, one step per sample. A failed sample does not stop the
 // others; the result fails when any did.
@@ -374,7 +361,7 @@ func RunMLflowSamples(c *Client, req types.MLflowSamplesRequest, onStep func(Upd
 	}
 
 	emit(UpdateStepEvent{Step: "check", Status: "running", Message: fmt.Sprintf("Checking MLflow for project '%s'...", req.Project)})
-	ok, err := isDSProject(c, req.Project)
+	ok, err := envkit.IsDSProject(c, req.Project)
 	if err != nil {
 		return fail("check", fmt.Sprintf("Cannot list the projects: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}

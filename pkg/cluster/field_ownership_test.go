@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
@@ -31,9 +32,9 @@ func putOlderToolObjects(t *testing.T, f *resourceFake) {
 		var entries []any
 		for _, e := range meta["managedFields"].([]any) {
 			em := e.(map[string]any)
-			if em["manager"] == toolFieldManager {
-				entries = append(entries, map[string]any{"manager": toolFieldManager, "operation": "Update", "apiVersion": em["apiVersion"], "time": meta["creationTimestamp"], "fieldsType": "FieldsV1", "fieldsV1": em["fieldsV1"]})
-				entries = append(entries, map[string]any{"manager": toolFieldManager, "operation": "Apply", "apiVersion": em["apiVersion"], "time": "2026-10-20T10:00:00Z", "fieldsType": "FieldsV1", "fieldsV1": em["fieldsV1"]})
+			if em["manager"] == envkit.ToolFieldManager {
+				entries = append(entries, map[string]any{"manager": envkit.ToolFieldManager, "operation": "Update", "apiVersion": em["apiVersion"], "time": meta["creationTimestamp"], "fieldsType": "FieldsV1", "fieldsV1": em["fieldsV1"]})
+				entries = append(entries, map[string]any{"manager": envkit.ToolFieldManager, "operation": "Apply", "apiVersion": em["apiVersion"], "time": "2026-10-20T10:00:00Z", "fieldsType": "FieldsV1", "fieldsV1": em["fieldsV1"]})
 			}
 		}
 		entries = append(entries, map[string]any{"manager": "kube-controller-manager", "operation": "Update", "apiVersion": "apps/v1", "time": "2026-10-20T10:00:01Z", "fieldsType": "FieldsV1", "subresource": "status", "fieldsV1": map[string]any{"f:status": map[string]any{"f:readyReplicas": map[string]any{}}}})
@@ -82,7 +83,7 @@ func TestSetupS3Storage_RemovesAFieldTheToolNoLongerApplies(t *testing.T) {
 	_ = json.Unmarshal(raw, &entries)
 	var ours, others []string
 	for _, e := range entries {
-		if e.Manager == toolFieldManager {
+		if e.Manager == envkit.ToolFieldManager {
 			ours = append(ours, e.Operation+"/"+e.Subresource)
 		} else {
 			others = append(others, e.Manager+"/"+e.Operation+"/"+e.Subresource)
@@ -110,14 +111,14 @@ func TestUpgradeToolFieldOwnership(t *testing.T) {
 	t.Run("folds Update into Apply and keeps other entries", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		cur := kube.ObjectMeta{ResourceVersion: "7", ManagedFields: []kube.ManagedFieldsEntry{
-			{Manager: toolFieldManager, Operation: "Apply", APIVersion: "apps/v1", Time: "2026-10-20T10:00:00Z", FieldsType: "FieldsV1", FieldsV1: fields("f:replicas")},
+			{Manager: envkit.ToolFieldManager, Operation: "Apply", APIVersion: "apps/v1", Time: "2026-10-20T10:00:00Z", FieldsType: "FieldsV1", FieldsV1: fields("f:replicas")},
 			{Manager: "kubectl-edit", Operation: "Update", APIVersion: "apps/v1", Time: "2026-10-19T10:00:00Z", FieldsType: "FieldsV1", FieldsV1: fields("f:paused")},
-			{Manager: toolFieldManager, Operation: "Update", APIVersion: "apps/v1", Time: "2026-10-01T10:00:00Z", FieldsType: "FieldsV1", FieldsV1: fields("f:strategy", "f:replicas")},
-			{Manager: toolFieldManager, Operation: "Update", APIVersion: "apps/v1", Time: "2026-10-01T10:00:00Z", Subresource: "scale", FieldsType: "FieldsV1", FieldsV1: fields("f:replicas")},
+			{Manager: envkit.ToolFieldManager, Operation: "Update", APIVersion: "apps/v1", Time: "2026-10-01T10:00:00Z", FieldsType: "FieldsV1", FieldsV1: fields("f:strategy", "f:replicas")},
+			{Manager: envkit.ToolFieldManager, Operation: "Update", APIVersion: "apps/v1", Time: "2026-10-01T10:00:00Z", Subresource: "scale", FieldsType: "FieldsV1", FieldsV1: fields("f:replicas")},
 		}}
 		raw, _ := json.Marshal(map[string]any{"metadata": cur})
 		f.putJSON(path, string(raw))
-		got, err := upgradeToolFieldOwnership(c, path, cur)
+		got, err := envkit.UpgradeToolFieldOwnership(c, path, cur)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -136,12 +137,12 @@ func TestUpgradeToolFieldOwnership(t *testing.T) {
 	t.Run("converts a lone Update entry", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		cur := kube.ObjectMeta{ResourceVersion: "3", CreationTimestamp: "2026-10-01T10:00:00Z", ManagedFields: []kube.ManagedFieldsEntry{
-			{Manager: toolFieldManager, Operation: "Update", APIVersion: "v1", Time: "2026-10-01T10:00:00Z", FieldsType: "FieldsV1", FieldsV1: fields("f:ports")},
+			{Manager: envkit.ToolFieldManager, Operation: "Update", APIVersion: "v1", Time: "2026-10-01T10:00:00Z", FieldsType: "FieldsV1", FieldsV1: fields("f:ports")},
 		}}
 		raw, _ := json.Marshal(map[string]any{"metadata": cur})
 		f.putJSON(path, string(raw))
-		got, err := upgradeToolFieldOwnership(c, path, cur)
-		if err != nil || len(got.ManagedFields) != 1 || got.ManagedFields[0].Operation != "Apply" || !got.OwnsFieldPath([]string{toolFieldManager}, "f:spec", "f:ports") {
+		got, err := envkit.UpgradeToolFieldOwnership(c, path, cur)
+		if err != nil || len(got.ManagedFields) != 1 || got.ManagedFields[0].Operation != "Apply" || !got.OwnsFieldPath([]string{envkit.ToolFieldManager}, "f:spec", "f:ports") {
 			t.Fatalf("after = %+v, %v", got, err)
 		}
 	})
@@ -149,10 +150,10 @@ func TestUpgradeToolFieldOwnership(t *testing.T) {
 	t.Run("nothing to do: no request", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		cur := kube.ObjectMeta{ResourceVersion: "3", ManagedFields: []kube.ManagedFieldsEntry{
-			{Manager: toolFieldManager, Operation: "Apply", APIVersion: "v1", FieldsV1: fields("f:ports")},
-			{Manager: legacyPostManager, Operation: "Update", APIVersion: "v1", FieldsV1: fields("f:selector")},
+			{Manager: envkit.ToolFieldManager, Operation: "Apply", APIVersion: "v1", FieldsV1: fields("f:ports")},
+			{Manager: envkit.LegacyPostManager, Operation: "Update", APIVersion: "v1", FieldsV1: fields("f:selector")},
 		}}
-		got, err := upgradeToolFieldOwnership(c, path, cur)
+		got, err := envkit.UpgradeToolFieldOwnership(c, path, cur)
 		if err != nil || got.ResourceVersion != "3" || len(f.requests) != 0 {
 			t.Fatalf("after = %+v, %v, requests %v", got, err, f.requests)
 		}
@@ -161,13 +162,13 @@ func TestUpgradeToolFieldOwnership(t *testing.T) {
 	t.Run("an object changed since it was read is not touched", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		cur := kube.ObjectMeta{ResourceVersion: "3", ManagedFields: []kube.ManagedFieldsEntry{
-			{Manager: toolFieldManager, Operation: "Update", APIVersion: "v1", FieldsV1: fields("f:ports")},
+			{Manager: envkit.ToolFieldManager, Operation: "Update", APIVersion: "v1", FieldsV1: fields("f:ports")},
 		}}
 		stored := cur
 		stored.ResourceVersion = "4"
 		raw, _ := json.Marshal(map[string]any{"metadata": stored})
 		f.putJSON(path, string(raw))
-		if _, err := upgradeToolFieldOwnership(c, path, cur); !kube.IsK8sError(err, 409) {
+		if _, err := envkit.UpgradeToolFieldOwnership(c, path, cur); !kube.IsK8sError(err, 409) {
 			t.Fatalf("err = %v, want 409", err)
 		}
 		if ensureMap(f.get(path), "metadata")["resourceVersion"] != "4" {

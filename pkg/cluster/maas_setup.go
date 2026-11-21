@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -42,7 +43,7 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 	}
 
 	// Connectivity Link and its Kuadrant CR.
-	rhcl, err := readOperator(c, rhclOperator)
+	rhcl, err := envkit.ReadOperator(c, rhclOperator)
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot read the installed operators, so this tool cannot tell whether Connectivity Link is installed; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "csv read failed")
 	}
@@ -53,27 +54,27 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 	// Kuadrant's API served without an rhcl-operator CSV counts as installed
 	// only while its controller runs (CRDs stay after an uninstall).
 	kRuns := kVersion != ""
-	if kRuns && !rhcl.installed() {
-		if kRuns, err = controllerDeployed(c, kuadrantController); err != nil {
+	if kRuns && !rhcl.Installed() {
+		if kRuns, err = envkit.ControllerDeployed(c, kuadrantController); err != nil {
 			return m.fail("check", fmt.Sprintf("Cannot tell whether Kuadrant's operator runs; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "controller read failed")
 		}
 	}
-	var rhclPlan *operatorInstallPlan
-	if !rhcl.installed() && !kRuns && rhcl.pending() == nil {
-		plan, msg, code := planOperatorInstall(c, rhclOperator)
+	var rhclPlan *envkit.OperatorInstallPlan
+	if !rhcl.Installed() && !kRuns && rhcl.Pending() == nil {
+		plan, msg, code := envkit.PlanOperatorInstall(c, rhclOperator)
 		if msg != "" {
 			return m.fail("check", msg, code, "rhcl plan failed")
 		}
 		rhclPlan = plan
 	}
-	if w := rhclWarning(rhcl.version); w != "" {
+	if w := rhclWarning(rhcl.Version); w != "" {
 		m.step("check", "running", w)
 	}
 	kq, err := readKuadrant(c)
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot read the Kuadrant CR; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err), "kuadrant read failed")
 	}
-	kuadrantNS := kube.FirstNonEmpty(kq.namespace, rhcl.csvNS, rhclOperator.namespace)
+	kuadrantNS := kube.FirstNonEmpty(kq.namespace, rhcl.CSVNS, rhclOperator.Namespace)
 
 	// The infrastructure namespace and the database.
 	infra, err := maasInfraNamespace(c)
@@ -161,7 +162,7 @@ func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse
 
 // maasSetupChecks is what setup's check step found, for the dry runs.
 type maasSetupChecks struct {
-	rhclPlan   *operatorInstallPlan
+	rhclPlan   *envkit.OperatorInstallPlan
 	kq         kuadrantState
 	kVersion   string
 	kuadrantNS string
@@ -183,7 +184,7 @@ func (m *maasRun) setupDryRuns(k maasSetupChecks) (*types.OperationResponse, err
 		return m.fail("check", fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", what, err, kube.TemplateHint(err)), maasWriteCode(err), "dry run failed")
 	}
 	if rhclPlan != nil {
-		if _, err := createOperatorObjects(c, rhclPlan, true); err != nil {
+		if _, err := envkit.CreateOperatorObjects(c, rhclPlan, true); err != nil {
 			return dry("Connectivity Link's install", err)
 		}
 	}
@@ -229,16 +230,16 @@ func (m *maasRun) setupDryRuns(k maasSetupChecks) (*types.OperationResponse, err
 
 // setupRHCL is Set up's step 1: install Connectivity Link, or wait for an
 // install in progress. Nil, nil: done.
-func (m *maasRun) setupRHCL(rec *maasRecord, rhcl operatorState, rhclPlan *operatorInstallPlan, kVersion string) (*types.OperationResponse, error) {
+func (m *maasRun) setupRHCL(rec *maasRecord, rhcl envkit.OperatorState, rhclPlan *envkit.OperatorInstallPlan, kVersion string) (*types.OperationResponse, error) {
 	c := m.c
 	switch {
 	case rhclPlan != nil:
-		m.step("rhcl", "running", fmt.Sprintf("Installing Red Hat Connectivity Link %s (channel %s) from redhat-operators...", rhclPlan.head, rhclPlan.channel))
-		rec.setShared("rhcl", fmt.Sprintf("Subscription %s/%s, channel %s", rhclOperator.namespace, rhclOperator.subName, rhclPlan.channel))
+		m.step("rhcl", "running", fmt.Sprintf("Installing Red Hat Connectivity Link %s (channel %s) from redhat-operators...", rhclPlan.Head, rhclPlan.Channel))
+		rec.setShared("rhcl", fmt.Sprintf("Subscription %s/%s, channel %s", rhclOperator.Namespace, rhclOperator.SubName, rhclPlan.Channel))
 		if err := writeMaaSRecord(c, *rec); err != nil {
 			return m.fail("rhcl", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 		}
-		made, err := createOperatorObjects(c, rhclPlan, false)
+		made, err := envkit.CreateOperatorObjects(c, rhclPlan, false)
 		for _, d := range made {
 			m.logs = append(m.logs, "OK: "+d+" created")
 		}
@@ -246,16 +247,16 @@ func (m *maasRun) setupRHCL(rec *maasRecord, rhcl operatorState, rhclPlan *opera
 			return m.fail("rhcl", fmt.Sprintf("Failed to %v. Set up again to continue.", err), maasWriteCode(err), "rhcl install failed")
 		}
 		fallthrough
-	case !rhcl.installed() && kVersion == "" && rhcl.pending() != nil:
-		ns, name := rhclOperator.namespace, rhclOperator.subName
-		if p := rhcl.pending(); p != nil {
+	case !rhcl.Installed() && kVersion == "" && rhcl.Pending() != nil:
+		ns, name := rhclOperator.Namespace, rhclOperator.SubName
+		if p := rhcl.Pending(); p != nil {
 			ns, name = p.Metadata.Namespace, p.Metadata.Name
 		}
-		if r, msg := m.waitOperator("rhcl", ns, name, rhclOperator.title); r != nil {
+		if r, msg := m.waitOperator("rhcl", ns, name, rhclOperator.Title); r != nil {
 			return r, msg
 		}
-	case rhcl.installed():
-		m.step("rhcl", "success", fmt.Sprintf("Red Hat Connectivity Link %s is installed%s.", rhcl.version, byWhom(rec.Shared["rhcl"] != "" && rhcl.sub != nil && toolOwned(rhcl.sub.Metadata))))
+	case rhcl.Installed():
+		m.step("rhcl", "success", fmt.Sprintf("Red Hat Connectivity Link %s is installed%s.", rhcl.Version, byWhom(rec.Shared["rhcl"] != "" && rhcl.Sub != nil && toolOwned(rhcl.Sub.Metadata))))
 	default:
 		m.step("rhcl", "success", "Kuadrant's API is served (installed without an rhcl-operator CSV); MaaS uses it as it is.")
 	}
@@ -271,12 +272,12 @@ func (m *maasRun) setupKuadrant(rec *maasRecord, kq *kuadrantState, kVersion, ku
 	} else {
 		m.step("kuadrant", "running", "Waiting for Connectivity Link's Kuadrant API...")
 		version := kVersion
-		if _, err := kube.WaitForGone(c, MaaSOperatorTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+		if _, err := kube.WaitForGone(c, envkit.OperatorTimeout, envkit.PollInterval, func(cc *Client) (bool, error) {
 			v, err := kuadrantServedVersion(cc)
 			version = v
 			return v != "", err
 		}); err != nil || version == "" {
-			return m.fail("kuadrant", fmt.Sprintf("Connectivity Link's Kuadrant API is not served after %s%s. Set up again to continue; the MaaS tab shows Connectivity Link's state.", clockText(MaaSOperatorTimeout), errSuffix(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "not_ready"), "kuadrant api missing")
+			return m.fail("kuadrant", fmt.Sprintf("Connectivity Link's Kuadrant API is not served after %s%s. Set up again to continue; the MaaS tab shows Connectivity Link's state.", clockText(envkit.OperatorTimeout), errSuffix(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "not_ready"), "kuadrant api missing")
 		}
 		rec.setShared("kuadrant", "Kuadrant "+kuadrantNS+"/kuadrant")
 		if err := writeMaaSRecord(c, *rec); err != nil {
@@ -289,7 +290,7 @@ func (m *maasRun) setupKuadrant(rec *maasRecord, kq *kuadrantState, kVersion, ku
 		m.logs = append(m.logs, "OK: Kuadrant "+kuadrantNS+"/kuadrant created")
 	}
 	m.step("kuadrant", "running", "Waiting for Kuadrant to be Ready (it starts Authorino and Limitador)...")
-	ready, err := kube.WaitForGone(c, MaaSKuadrantTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+	ready, err := kube.WaitForGone(c, MaaSKuadrantTimeout, envkit.PollInterval, func(cc *Client) (bool, error) {
 		k, err := readKuadrant(cc)
 		if err == nil && k.found {
 			*kq = k
@@ -387,16 +388,16 @@ func errSuffix(err error) string {
 // progress on step; it returns a failed response, or nil when installed.
 func (m *maasRun) waitOperator(step, ns, name, title string) (*types.OperationResponse, error) {
 	m.step(step, "running", fmt.Sprintf("Waiting for OLM to install %s (usually 1 to 3 minutes)...", title))
-	p, err := waitForSubscription(m.c, ns, name, func(s string) { m.step(step, "running", s) })
+	p, err := envkit.WaitForSubscription(m.c, ns, name, func(s string) { m.step(step, "running", s) })
 	switch {
 	case err != nil:
 		return m.fail(step, fmt.Sprintf("Stopped waiting for %s: %v. Its Subscription stays; Set up again to continue.", title, err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "operator wait failed")
-	case p.failed != "":
-		return m.fail(step, fmt.Sprintf("%s does not install: %s. Its Subscription %s/%s stays; a cluster-admin checks it (oc describe subscription %s -n %s).", title, p.failed, ns, name, name, ns), "not_ready", "operator install failed")
-	case !p.done:
-		return m.fail(step, fmt.Sprintf("%s is not installed after %s (%s). Set up again to continue once it is.", title, clockText(MaaSOperatorTimeout), kube.FirstNonEmpty(p.text, "no progress")), "not_ready", "operator not ready")
+	case p.Failed != "":
+		return m.fail(step, fmt.Sprintf("%s does not install: %s. Its Subscription %s/%s stays; a cluster-admin checks it (oc describe subscription %s -n %s).", title, p.Failed, ns, name, name, ns), "not_ready", "operator install failed")
+	case !p.Done:
+		return m.fail(step, fmt.Sprintf("%s is not installed after %s (%s). Set up again to continue once it is.", title, clockText(envkit.OperatorTimeout), kube.FirstNonEmpty(p.Text, "no progress")), "not_ready", "operator not ready")
 	}
-	m.step(step, "success", fmt.Sprintf("%s is installed (%s).", title, p.installedCSV))
+	m.step(step, "success", fmt.Sprintf("%s is installed (%s).", title, p.InstalledCSV))
 	return nil, nil
 }
 
@@ -412,7 +413,7 @@ func (m *maasRun) setupGateway(gwPlan *maasGatewayPlan, foreign bool) (*types.Op
 		return m.fail("gateway", msg, code, "gateway apply failed")
 	}
 	m.step("gateway", "running", "Waiting for the gateway to be programmed (up to "+clockText(MaaSGatewayTimeout)+")...")
-	programmed, err := kube.WaitForGone(c, MaaSGatewayTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+	programmed, err := kube.WaitForGone(c, MaaSGatewayTimeout, envkit.PollInterval, func(cc *Client) (bool, error) {
 		gw, err := readMaaSGateway(cc)
 		return gw.programmed && gw.address != "", err
 	})
@@ -422,7 +423,7 @@ func (m *maasRun) setupGateway(gwPlan *maasGatewayPlan, foreign bool) (*types.Op
 	case !programmed:
 		m.step("gateway", "success", fmt.Sprintf("Created; not programmed after %s. It may still come up; the MaaS tab shows its state.", clockText(MaaSGatewayTimeout)))
 	default:
-		published, _ := kube.WaitForGone(c, InferenceGatewayDNSTimeout, MaaSPoll, func(cc *Client) (bool, error) { return dnsPublished(cc, gwPlan.host) == "published", nil })
+		published, _ := kube.WaitForGone(c, InferenceGatewayDNSTimeout, envkit.PollInterval, func(cc *Client) (bool, error) { return dnsPublished(cc, gwPlan.host) == "published", nil })
 		if published {
 			m.step("gateway", "success", fmt.Sprintf("Programmed; https://%s is published in DNS.", gwPlan.host))
 		} else {
@@ -450,7 +451,7 @@ func (m *maasRun) applyAuthorinoTLS(rec *maasRecord, ns, step string) (*types.Op
 	m.step(step, "running", "Configuring Authorino TLS in "+ns+" as the docs' setup-authorino-tls.sh does...")
 	var changes []string
 	var lastErr error
-	done, err := kube.WaitForGone(c, MaaSKuadrantTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+	done, err := kube.WaitForGone(c, MaaSKuadrantTimeout, envkit.PollInterval, func(cc *Client) (bool, error) {
 		ch, err := configureAuthorinoTLS(cc, ns, false)
 		changes = append(changes, ch...)
 		lastErr = err
@@ -497,7 +498,7 @@ func (m *maasRun) waitPlatformReady(infra string) (*types.OperationResponse, err
 	c := m.c
 	m.step("ready", "running", "Waiting for the operator: maas-api, the default tenant, and the gateway's authentication (usually 2 to 3 minutes)...")
 	last := ""
-	ready, err := kube.WaitForGone(c, MaaSPlatformTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+	ready, err := kube.WaitForGone(c, MaaSPlatformTimeout, envkit.PollInterval, func(cc *Client) (bool, error) {
 		api := deploymentAvailable(cc, infra, "maas-api")
 		ai, _ := readyCondition(cc, rhoai.NamespacedPath(maasAPI(c), "aitenants", "ai-tenants", "models-as-a-service"))
 		auth := maasGatewayAuth(cc)

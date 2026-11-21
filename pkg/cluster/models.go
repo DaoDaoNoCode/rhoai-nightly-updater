@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -456,7 +457,7 @@ func modelItems(c *Client, models []llmisvcObject, visible map[string]bool, rec 
 }
 
 // kserveComponent is the DataScienceCluster component that serves models.
-var kserveComponent = featureComponent{feature: "Model serving (KServe)", keys: []string{"kserve"}}
+var kserveComponent = envkit.FeatureComponent{Feature: "Model serving (KServe)", Keys: []string{"kserve"}}
 
 // llmDependencies reads the DataScienceCluster condition that says whether
 // LLMInferenceService's dependencies are met: "True", "False" or "" (not
@@ -483,7 +484,7 @@ func llmDependencies(dsc map[string]any) (string, string) {
 // KServe is not turned on, or its LLMInferenceService dependencies are
 // reported missing. Not reported is not a block.
 func modelsBlock(dsc rhoai.DSCRead) (*types.ComponentBlock, string) {
-	if block := componentBlock(dsc, kserveComponent); block != nil {
+	if block := envkit.ComponentBlock(dsc, kserveComponent); block != nil {
 		return block, ""
 	}
 	deps, msg := llmDependencies(dsc.Object)
@@ -1388,14 +1389,14 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 	c := m.c
 	path, _ := toolModelPath(p.project, p.entry.Name)
-	createPath := withToolFieldManager(rhoai.NamespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", p.project, ""))
+	createPath := envkit.WithToolFieldManager(rhoai.NamespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", p.project, ""))
 	project, name := p.project, p.entry.Name
 	read := func() (kube.ObjectMeta, bool, error) {
 		obj, found, err := readToolModel(c, project, name)
 		return obj.Metadata, found, err
 	}
 	desc := fmt.Sprintf("LLMInferenceService %s/%s", p.project, p.entry.Name)
-	action, meta, found, err := ensureToolObject(c, desc, path, createPath, p.obj, p.current, p.found, read, p.rec.owns, dryRun)
+	action, meta, found, err := envkit.EnsureToolObject(c, desc, path, createPath, p.obj, p.current, p.found, read, p.rec.owns, dryRun)
 	p.current, p.found = meta, found
 	if err == nil && action == "created" && !dryRun {
 		// Its UID is what makes it the tool's (models_record.go). A model
@@ -1412,11 +1413,11 @@ func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 		return "", ""
 	}
 	code := kube.ErrorCodeFromK8sErr(err)
-	var foreign *foreignObjectError
+	var foreign *envkit.ForeignObjectError
 	switch {
 	case errors.As(err, &foreign):
 		code = "not_managed"
-	case errors.Is(err, errObjectChanged) || kube.IsK8sConflict(err):
+	case errors.Is(err, envkit.ErrObjectChanged) || kube.IsK8sConflict(err):
 		code = "conflict"
 	}
 	if dryRun {

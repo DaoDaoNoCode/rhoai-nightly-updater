@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -150,7 +151,7 @@ func (m *maasRun) waitAccessActive(doneMsg string, withAuth bool) (*types.Operat
 	c := m.c
 	m.step("ready", "running", "Waiting for MaaS to apply it...")
 	last := ""
-	ready, err := kube.WaitForGone(c, MaaSPublishTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+	ready, err := kube.WaitForGone(c, MaaSPublishTimeout, envkit.PollInterval, func(cc *Client) (bool, error) {
 		s := maasPhase(cc, maasAccessPath(c, "MaaSSubscription"))
 		a := "Active"
 		if withAuth {

@@ -597,7 +597,7 @@ func onlyConnectivityLinkMissing(msg string) bool {
 		return false
 	}
 	rhcl := map[string]bool{}
-	for _, n := range []string{rhclOperator.title, rhclOperator.pkg, rhclOperator.subName, "Kuadrant", "Connectivity Link"} {
+	for _, n := range []string{rhclOperator.Title, rhclOperator.Pkg, rhclOperator.SubName, "Kuadrant", "Connectivity Link"} {
 		rhcl[components.NormalizeOperatorName(n)] = true
 	}
 	for _, m := range missing {

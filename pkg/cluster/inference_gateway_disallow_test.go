@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -29,7 +30,7 @@ func listedGateway(t *testing.T) *modelsCluster {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := upgradeToolFieldOwnership(mc.c, testGatewayPath, meta); err != nil {
+	if _, err := envkit.UpgradeToolFieldOwnership(mc.c, testGatewayPath, meta); err != nil {
 		t.Fatal(err)
 	}
 	return mc

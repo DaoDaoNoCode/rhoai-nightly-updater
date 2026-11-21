@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -141,8 +142,8 @@ func fastMigrateTimings(t *testing.T) {
 // created (labelled) and one made by hand, all three on the old storage.
 func putMigrationCase(f *resourceFake) {
 	putLegacySeaweedFS(f)
-	putDSPAOn(f, "juntao-test", legacyDSPAName, `{}`, legacyPostManager, legacyDSPASecretName)
-	putDSPAOn(f, "team-a", previousDSPAName, toolLabelJSON, toolFieldManager, dspaSecretName)
+	putDSPAOn(f, "juntao-test", legacyDSPAName, `{}`, envkit.LegacyPostManager, legacyDSPASecretName)
+	putDSPAOn(f, "team-a", previousDSPAName, toolLabelJSON, envkit.ToolFieldManager, dspaSecretName)
 	f.putJSON(secretPath("team-a", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`},"data":{"AWS_ACCESS_KEY_ID":"`+exampleAuth(legacyKeyID)+`","AWS_SECRET_ACCESS_KEY":"`+exampleAuth(legacyKey)+`"}}`)
 	putDSPAOn(f, "hand-made", legacyDSPAName, `{}`, "Mozilla", "my-secret")
 	recordDSPAs(f, "juntao-test/"+legacyDSPAName, "team-a/"+previousDSPAName)
@@ -921,14 +922,14 @@ func TestRemoveOldStorage(t *testing.T) {
 		f, c := newResourceFake(t)
 		putMigrationCase(f)
 		delete(f.objects, fakeKey{gv: dspaAPIGroup, ns: "hand-made", plural: "datasciencepipelinesapplications", name: legacyDSPAName})
-		f.putJSON(secretPath("juntao-test", legacyDSPASecretName), `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(legacyPostManager, "Update")+`}}`)
+		f.putJSON(secretPath("juntao-test", legacyDSPASecretName), `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(envkit.LegacyPostManager, "Update")+`}}`)
 		simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
 		if ok, msg, _, _ := runMigrate(t, c, MigrateOptions{}); !ok {
 			t.Fatal(msg)
 		}
 		return f, c
 	}
-	ownedNS := `{"metadata":{"uid":"ns-uid","labels":` + toolLabelJSON + `,"creationTimestamp":"` + created + `","managedFields":` + managedFieldsJSON(toolFieldManager, "Update") + `},"status":{"phase":"Active"}}`
+	ownedNS := `{"metadata":{"uid":"ns-uid","labels":` + toolLabelJSON + `,"creationTimestamp":"` + created + `","managedFields":` + managedFieldsJSON(envkit.ToolFieldManager, "Update") + `},"status":{"phase":"Active"}}`
 	t.Run("keeps the namespace unless asked", func(t *testing.T) {
 		f, c := migrated(t)
 		f.putJSON(legacyNSPath, ownedNS)
@@ -1018,11 +1019,11 @@ func TestLegacyNamespaceDeletable(t *testing.T) {
 		want   bool
 		reason string
 	}{
-		{"created by this version", kube.ObjectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at(toolFieldManager, "Update", created)}, true, ""},
-		{"labelled later by an earlier version", kube.ObjectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at(legacyPostManager, "Update", "2026-10-06T03:49:35Z")}, true, ""},
+		{"created by this version", kube.ObjectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at(envkit.ToolFieldManager, "Update", created)}, true, ""},
+		{"labelled later by an earlier version", kube.ObjectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at(envkit.LegacyPostManager, "Update", "2026-10-06T03:49:35Z")}, true, ""},
 		{"label only", kube.ObjectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at("kubectl-label", "Update", created)}, false, "show no write by this tool"},
-		{"no label", kube.ObjectMeta{CreationTimestamp: created, ManagedFields: at(toolFieldManager, "Update", created)}, false, "does not carry this tool's label"},
-		{"a subresource write only", kube.ObjectMeta{CreationTimestamp: created, Labels: label, ManagedFields: []kube.ManagedFieldsEntry{{Manager: toolFieldManager, Operation: "Update", Subresource: "status"}}}, false, "show no write by this tool"},
+		{"no label", kube.ObjectMeta{CreationTimestamp: created, ManagedFields: at(envkit.ToolFieldManager, "Update", created)}, false, "does not carry this tool's label"},
+		{"a subresource write only", kube.ObjectMeta{CreationTimestamp: created, Labels: label, ManagedFields: []kube.ManagedFieldsEntry{{Manager: envkit.ToolFieldManager, Operation: "Update", Subresource: "status"}}}, false, "show no write by this tool"},
 	}
 	for _, tc := range cases {
 		got, why := legacyNamespaceDeletable(tc.meta)
@@ -1113,14 +1114,14 @@ func TestManagedByTool_FieldOwnership(t *testing.T) {
 		want bool
 	}{
 		// The live juntao-test/dspa.
-		{"created by an earlier version", dspa(entry(legacyPostManager, "Update", "2026-09-02T22:32:19Z", storage), dspo, annotate), true},
-		{"re-written later by the tool", dspa(entry(legacyPostManager, "Update", "2026-10-20T08:00:00Z", storage), dspo, annotate), true},
-		{"created by server-side apply", dspa(entry(toolFieldManager, "Apply", "2026-11-01T08:00:00Z", storage)), true},
+		{"created by an earlier version", dspa(entry(envkit.LegacyPostManager, "Update", "2026-09-02T22:32:19Z", storage), dspo, annotate), true},
+		{"re-written later by the tool", dspa(entry(envkit.LegacyPostManager, "Update", "2026-10-20T08:00:00Z", storage), dspo, annotate), true},
+		{"created by server-side apply", dspa(entry(envkit.ToolFieldManager, "Apply", "2026-11-01T08:00:00Z", storage)), true},
 		// odh-dashboard: its Node backend sends no User-Agent (empty
 		// manager), its Go BFF forwards the browser's ("Mozilla").
 		{"created by the dashboard's Node backend", dspa(entry("", "Update", "2026-09-02T22:32:19Z", storage), dspo), false},
 		{"created by the dashboard's BFF", dspa(entry("Mozilla", "Update", "2026-09-02T22:32:19Z", storage), dspo), false},
-		{"the tool wrote only metadata", dspa(entry(legacyPostManager, "Update", "2026-09-02T22:32:19Z", `{"f:metadata":{"f:labels":{}}}`), entry("Mozilla", "Update", "2026-09-03T00:00:00Z", storage)), false},
+		{"the tool wrote only metadata", dspa(entry(envkit.LegacyPostManager, "Update", "2026-09-02T22:32:19Z", `{"f:metadata":{"f:labels":{}}}`), entry("Mozilla", "Update", "2026-09-03T00:00:00Z", storage)), false},
 	}
 	for _, tc := range cases {
 		if got := tc.d.managedByTool(); got != tc.want {

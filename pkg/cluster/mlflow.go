@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -109,7 +110,7 @@ func (m mlflowCR) image() string {
 // from the console or dashboard is never claimed, because the MLflow CRD only
 // allows the single name "mlflow" and deleting it garbage-collects mlflow-pvc.
 func (m mlflowCR) managedByTool() bool {
-	return m.Metadata.HasToolLabel() || m.Metadata.OwnsFieldPath([]string{toolFieldManager}, "f:spec")
+	return m.Metadata.HasToolLabel() || m.Metadata.OwnsFieldPath([]string{envkit.ToolFieldManager}, "f:spec")
 }
 
 // oldToolResources: spec.resources is exactly what SetupMLflow set before
@@ -297,7 +298,7 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 	}
 	// A component that is not Managed leaves its CRD behind: the CR would
 	// be created and never start.
-	if block := setupComponentBlock(c, mlflowComponent); block != nil {
+	if block := envkit.SetupComponentBlock(c, envkit.MLflowComponent); block != nil {
 		record.RecordAction(c, "setup-mlflow", "component not managed", false)
 		return &types.OperationResponse{Success: false, Message: block.Reason + " Nothing was changed.", Logs: logs, ErrorCode: "prerequisites"}, nil
 	}
@@ -308,7 +309,7 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 		"kind":       "MLflow",
 		"metadata": map[string]any{
 			"name":   mlflowCRName,
-			"labels": toolLabels(),
+			"labels": envkit.ToolLabels(),
 		},
 		"spec": map[string]any{
 			"replicas": 1,
@@ -338,7 +339,7 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 	// Create, never apply: the CR is a singleton, and a forced apply would
 	// take over one that someone created a moment ago.
 	data, _ := json.Marshal(mlflowCR)
-	if _, _, err := c.Post(withToolFieldManager(rhoai.ClusterPath(mlflowAPIGroup, "mlflows", "")), data); err != nil {
+	if _, _, err := c.Post(envkit.WithToolFieldManager(rhoai.ClusterPath(mlflowAPIGroup, "mlflows", "")), data); err != nil {
 		msg := fmt.Sprintf("Failed to create MLflow CR: %v", err)
 		code := kube.ErrorCodeFromK8sErr(err)
 		switch {

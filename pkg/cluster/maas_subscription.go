@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -581,14 +582,14 @@ func maasAccessObjects(c *Client, pubs []maasPub, limits map[string]maasLimit, a
 	sub := map[string]any{
 		"apiVersion": maasAPI(c),
 		"kind":       "MaaSSubscription",
-		"metadata": map[string]any{"name": "rhoai-nightly-updater-subscription", "namespace": maasTenantNamespace, "labels": toolLabels(),
+		"metadata": map[string]any{"name": "rhoai-nightly-updater-subscription", "namespace": maasTenantNamespace, "labels": envkit.ToolLabels(),
 			"annotations": map[string]any{"openshift.io/display-name": "rhoai-nightly-updater models", "openshift.io/description": maasSubscriptionDescription(pubs, limits, aud)}},
 		"spec": map[string]any{"owner": aud.owner(), "modelRefs": subRefs, "priority": priority},
 	}
 	auth := map[string]any{
 		"apiVersion": maasAPI(c),
 		"kind":       "MaaSAuthPolicy",
-		"metadata": map[string]any{"name": "rhoai-nightly-updater-access", "namespace": maasTenantNamespace, "labels": toolLabels(),
+		"metadata": map[string]any{"name": "rhoai-nightly-updater-access", "namespace": maasTenantNamespace, "labels": envkit.ToolLabels(),
 			"annotations": map[string]any{"openshift.io/display-name": "rhoai-nightly-updater models", "openshift.io/description": who}},
 		"spec": map[string]any{"modelRefs": authRefs, "subjects": aud.owner()},
 	}

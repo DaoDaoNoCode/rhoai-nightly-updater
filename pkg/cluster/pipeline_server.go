@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -111,7 +112,7 @@ type dspaCondition struct {
 // in namespace minio (legacyS3Host) with secret "dashboard-dspa-secret", and
 // set no label (pipeline_server.go:235 at 5051672). odh-dashboard creates
 // its pipeline server with the same names, so the proof is who wrote the
-// object storage: the tool's managers (toolManagers) must own both
+// object storage: the tool's managers (envkit.ToolManagers) must own both
 // spec.objectStorage.externalStorage.host and its s3CredentialsSecret's
 // secretName. A DSPA the dashboard created, or whose storage someone else
 // changed since, is not the tool's.
@@ -123,8 +124,8 @@ func (d dspaInfo) managedByTool() bool {
 	return d.Meta.Name == legacyDSPAName &&
 		d.Host == legacyS3Host() &&
 		d.SecretName == legacyDSPASecretName &&
-		d.Meta.OwnsFieldPath(toolManagers, append(storage, "f:host")...) &&
-		d.Meta.OwnsFieldPath(toolManagers, append(storage, "f:s3CredentialsSecret", "f:secretName")...)
+		d.Meta.OwnsFieldPath(envkit.ToolManagers, append(storage, "f:host")...) &&
+		d.Meta.OwnsFieldPath(envkit.ToolManagers, append(storage, "f:s3CredentialsSecret", "f:secretName")...)
 }
 
 func (d dspaInfo) hasFinalizer() bool {
@@ -386,7 +387,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 
 	// A component that is not Managed leaves its CRD behind: the DSPA
 	// would be created and never start.
-	if block := setupComponentBlock(c, pipelinesComponent); block != nil {
+	if block := envkit.SetupComponentBlock(c, envkit.PipelinesComponent); block != nil {
 		return fail(block.Reason+" Nothing was changed.", "prerequisites", "component not managed")
 	}
 	storage := getS3Status(c)
@@ -396,7 +397,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	// Only a Data Science project gets a pipeline server, as with the
 	// MLflow samples: the project is the user's (made in the dashboard),
 	// and setup never creates or changes it.
-	if ok, err := isDSProject(c, project); err != nil {
+	if ok, err := envkit.IsDSProject(c, project); err != nil {
 		return fail(fmt.Sprintf("Cannot list the projects; nothing was changed: %v", err), kube.ErrorCodeFromK8sErr(err), "project list failed")
 	} else if !ok {
 		return fail(fmt.Sprintf("%s is not a Data Science project. Create it in the RHOAI dashboard first. Nothing was changed.", project), "validation", "not a Data Science project")
@@ -507,7 +508,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 		"metadata": map[string]any{
 			"name":      dspaName,
 			"namespace": project,
-			"labels":    toolLabels(),
+			"labels":    envkit.ToolLabels(),
 			// Which Connection goes with it, for the status: the status
 			// reads only the DSPA list, so it costs no request per project.
 			"annotations": map[string]any{dspaConnectionAnnotation: connectionSecretName},
@@ -531,15 +532,15 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	// Every write is sent as a server-side dry run first, so a pipeline
 	// server the API server rejects leaves no secret behind.
 	writeDSPA := func(dryRun bool) (string, error) {
-		action, meta, found, err := ensureToolObject(c, fmt.Sprintf("DataSciencePipelinesApplication %s/%s", project, dspaName), dspaPath,
-			withToolFieldManager(rhoai.NamespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, ""))+"&fieldValidation=Strict",
+		action, meta, found, err := envkit.EnsureToolObject(c, fmt.Sprintf("DataSciencePipelinesApplication %s/%s", project, dspaName), dspaPath,
+			envkit.WithToolFieldManager(rhoai.NamespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, ""))+"&fieldValidation=Strict",
 			dspa, dspaMeta, dspaFound, readDSPA, kube.ObjectMeta.HasToolLabel, dryRun)
 		dspaMeta, dspaFound = meta, found
 		return action, err
 	}
 	logs = append(logs, "Checking the secrets and the pipeline server with the API server (dry run)...")
 	for _, s := range secrets {
-		if _, err := writeProjectSecret(s, projectSecretPath(project, s.name), withToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, "")), true); err != nil {
+		if _, err := writeProjectSecret(s, projectSecretPath(project, s.name), envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, "")), true); err != nil {
 			msg, code := pipelineWriteFailure(fmt.Sprintf("secret %s", s.name), project, err)
 			return fail(msg+" Nothing was changed.", code, s.what+" dry run failed")
 		}
@@ -552,7 +553,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 		return replacePipelineServer(c, project, old, logs)
 	}
 	for _, s := range secrets {
-		action, err := writeProjectSecret(s, projectSecretPath(project, s.name), withToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, "")), false)
+		action, err := writeProjectSecret(s, projectSecretPath(project, s.name), envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, "")), false)
 		if err != nil {
 			msg, code := pipelineWriteFailure(fmt.Sprintf("secret %s", s.name), project, err)
 			return fail(msg, code, s.what+" write failed")
@@ -584,7 +585,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 		for _, s := range secrets {
 			logs = append(logs, fmt.Sprintf("Making pipeline server %s the owner of secret %s...", dspaName, s.name))
 			setDSPAOwner(s.obj, dspaName, dspaMeta.UID)
-			if _, err := writeProjectSecret(s, projectSecretPath(project, s.name), withToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, "")), false); err != nil {
+			if _, err := writeProjectSecret(s, projectSecretPath(project, s.name), envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, "")), false); err != nil {
 				record.RecordAction(c, "setup-pipeline-server", fmt.Sprintf("project=%s (%s owner not set: %v)", project, s.what, err), false)
 				return &types.OperationResponse{
 					Success: false, ErrorCode: "partial_failure", Logs: logs,
@@ -810,7 +811,7 @@ func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInf
 		return fmt.Sprintf(" The credentials secret %s could not be parsed and was left in place.", name)
 	}
 	// The tool's label, or an earlier version's managers own its keys.
-	if !meta.HasToolLabel() && !meta.OwnsFieldPath(toolManagers, "f:data") && !meta.OwnsFieldPath(toolManagers, "f:stringData") {
+	if !meta.HasToolLabel() && !meta.OwnsFieldPath(envkit.ToolManagers, "f:data") && !meta.OwnsFieldPath(envkit.ToolManagers, "f:stringData") {
 		*logs = append(*logs, fmt.Sprintf("Kept secret %s: it was not created by this tool", name))
 		return ""
 	}
@@ -830,7 +831,7 @@ func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInf
 // rhoai-3.6); without a connection-type annotation the dashboard does not
 // list it as a Connection (connectionTypeUtils.ts isConnection).
 func dspaS3Secret(project string, keys s3Keys) map[string]any {
-	labels := toolLabels()
+	labels := envkit.ToolLabels()
 	labels[dashboardLabelKey] = "true"
 	return map[string]any{
 		"apiVersion": "v1", "kind": "Secret",
@@ -874,7 +875,7 @@ const (
 // endpoint is the in-cluster Service: it works from pods, not from outside
 // the cluster.
 func dashboardS3Connection(project string, keys s3Keys) map[string]any {
-	labels := toolLabels()
+	labels := envkit.ToolLabels()
 	labels[dashboardLabelKey] = "true"
 	labels["opendatahub.io/managed"] = "true"
 	return map[string]any{
@@ -901,7 +902,7 @@ func dashboardS3Connection(project string, keys s3Keys) map[string]any {
 }
 
 // projectSecret is one Secret the tool writes in a pipeline project: read
-// its current metadata, then write it with ensureToolObject.
+// its current metadata, then write it with envkit.EnsureToolObject.
 type projectSecret struct {
 	c             *Client
 	project, name string
@@ -932,7 +933,7 @@ func readProjectSecret(s *projectSecret, path string) error {
 
 func writeProjectSecret(s *projectSecret, path, createPath string, dryRun bool) (string, error) {
 	reader := func() (kube.ObjectMeta, bool, error) { return kube.ReadObjectMeta(s.c, path) }
-	action, meta, found, err := ensureToolObject(s.c, fmt.Sprintf("Secret %s/%s", s.project, s.name), path,
+	action, meta, found, err := envkit.EnsureToolObject(s.c, fmt.Sprintf("Secret %s/%s", s.project, s.name), path,
 		createPath, s.obj, s.meta, s.found, reader, kube.ObjectMeta.HasToolLabel, dryRun)
 	s.meta, s.found = meta, found
 	return action, err
@@ -1112,14 +1113,14 @@ func deleteConnection(c *Client, project string, logs *[]string) string {
 	return ""
 }
 
-// pipelineWriteFailure turns an ensureToolObject error into a message and an
+// pipelineWriteFailure turns an envkit.EnsureToolObject error into a message and an
 // error code.
 func pipelineWriteFailure(what, project string, err error) (string, string) {
-	var foreign *foreignObjectError
+	var foreign *envkit.ForeignObjectError
 	switch {
 	case errors.As(err, &foreign):
 		return fmt.Sprintf("A %s was created in %s by someone else while setup was running. It was left unchanged.", what, project), "not_managed"
-	case errors.Is(err, errObjectChanged):
+	case errors.Is(err, envkit.ErrObjectChanged):
 		return fmt.Sprintf("The %s in %s kept changing while setup was updating it, so it was not changed. Re-run setup.", what, project), "conflict"
 	case kube.IsK8sConflict(err):
 		return fmt.Sprintf("The %s in %s changed while setup was updating it, so it was not changed. Re-run setup.", what, project), "conflict"

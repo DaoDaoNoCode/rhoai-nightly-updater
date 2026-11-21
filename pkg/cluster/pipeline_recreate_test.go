@@ -3,12 +3,14 @@ package cluster
 import (
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 )
 
 // putOldToolServer stores a pipeline server this tool set up under its
 // earlier name, nightly-dspa, with its labelled S3 secret.
 func putOldToolServer(f *resourceFake, ns, extraMeta string) {
-	putDSPA(f, ns, previousDSPAName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, extraMeta,
+	putDSPA(f, ns, previousDSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", s3Host(), dspaSecretName, extraMeta,
 		`{"conditions":[{"type":"APIServerReady","status":"True"},{"type":"Ready","status":"True"}]}`)
 	f.putJSON(secretPath(ns, dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 }
@@ -32,7 +34,7 @@ func TestGetResourcesStatus_FlagsTheEarlierName(t *testing.T) {
 		putDSProject(f, ns)
 	}
 	putOldToolServer(f, "old", "")
-	putDSPA(f, "new", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
+	putDSPA(f, "new", dspaName, toolLabelJSON, envkit.ToolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
 	st, err := GetResourcesStatus(c)
 	if err != nil || len(st.PipelineServers) != 2 {
 		t.Fatalf("st=%+v err=%v", st, err)

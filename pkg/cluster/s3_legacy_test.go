@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -33,14 +34,14 @@ func putLegacySeaweedFS(f *resourceFake) {
 	f.putJSON(legacySvcPath, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":{"selector":{"app":"seaweedfs"},"clusterIP":"172.30.10.20","ports":[{"name":"api","port":9000,"targetPort":8333},{"name":"ui","port":9090,"targetPort":23646}]}}`)
 	f.putJSON(legacyUIRoutePath, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":{"host":"minio-ui-minio.apps.example.com","to":{"kind":"Service","name":"minio-service"},"port":{"targetPort":"ui"}}}`)
 	f.putJSON(legacyS3PVCPath, `{"metadata":{"labels":`+toolLabelJSON+`},"status":{"capacity":{"storage":"20Gi"}}}`)
-	f.putJSON(legacyMinIOPVCPath, `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(toolFieldManager, "Apply")+`},"spec":{"resources":{"requests":{"storage":"10Gi"}}}}`)
+	f.putJSON(legacyMinIOPVCPath, `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(envkit.ToolFieldManager, "Apply")+`},"spec":{"resources":{"requests":{"storage":"10Gi"}}}}`)
 }
 
 // putLegacyMinIO puts the MinIO of a release before 2.1: no labels, every
 // object created by server-side apply, and a minio-api Route.
 func putLegacyMinIO(f *resourceFake) {
-	byApply := `{"creationTimestamp":"` + created + `","managedFields":` + managedFieldsJSON(toolFieldManager, "Apply")
-	f.putJSON(legacyNSPath, `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(legacyPostManager, "Update")+`},"status":{"phase":"Active"}}`)
+	byApply := `{"creationTimestamp":"` + created + `","managedFields":` + managedFieldsJSON(envkit.ToolFieldManager, "Apply")
+	f.putJSON(legacyNSPath, `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(envkit.LegacyPostManager, "Update")+`},"status":{"phase":"Active"}}`)
 	f.putJSON(legacyMinIODeployPath, `{"metadata":`+byApply+`,"generation":1},"spec":{"template":{"spec":{"containers":[{"name":"minio","image":"quay.io/minio/minio:latest"}]}}},"status":{"observedGeneration":1,"replicas":1,"readyReplicas":1,"updatedReplicas":1}}`)
 	f.putJSON(legacySecretPath, `{"metadata":`+byApply+`},"data":{"minio_root_user":"`+exampleAuth("minio")+`","minio_root_password":"`+exampleAuth("minio123")+`"}}`)
 	f.putJSON(legacySvcPath, `{"metadata":`+byApply+`},"spec":{"selector":{"app":"minio"},"clusterIP":"172.30.10.20","ports":[{"name":"api","port":9000,"targetPort":9000}]}}`)
@@ -122,7 +123,7 @@ func TestGetResourcesStatus_ReportsEarlierStorage(t *testing.T) {
 	f, c := newResourceFake(t)
 	putLegacySeaweedFS(f)
 	putDSProject(f, "juntao-test")
-	putDSPA(f, "juntao-test", "dspa", `{}`, legacyPostManager, "Update", legacyS3Host(), legacyDSPASecretName, "", "")
+	putDSPA(f, "juntao-test", "dspa", `{}`, envkit.LegacyPostManager, "Update", legacyS3Host(), legacyDSPASecretName, "", "")
 	st, err := GetResourcesStatus(c)
 	if err != nil {
 		t.Fatal(err)

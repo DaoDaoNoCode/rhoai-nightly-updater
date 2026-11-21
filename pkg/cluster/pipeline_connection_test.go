@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
@@ -90,7 +91,7 @@ func TestSetupPipelineServer_ForeignConnectionNameRefused(t *testing.T) {
 func TestTeardownPipelineServer_DeletesTheConnection(t *testing.T) {
 	fastPipelineTimings(t)
 	f, c := newResourceFake(t)
-	putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
+	putDSPA(f, "proj", dspaName, toolLabelJSON, envkit.ToolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
 	f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 	f.putJSON(secretPath("proj", connectionSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 	resp, _ := TeardownPipelineServer(c, "proj")
@@ -128,8 +129,8 @@ func TestGetResourcesStatusFor_ReadsTheConnection(t *testing.T) {
 			f, c := newResourceFake(t)
 			putDSProject(f, "proj")
 			putDSProject(f, "other")
-			putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, annotated, "")
-			putDSPA(f, "other", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, annotated, "")
+			putDSPA(f, "proj", dspaName, toolLabelJSON, envkit.ToolFieldManager, "Apply", s3Host(), dspaSecretName, annotated, "")
+			putDSPA(f, "other", dspaName, toolLabelJSON, envkit.ToolFieldManager, "Apply", s3Host(), dspaSecretName, annotated, "")
 			tc.setup(f)
 			st, err := GetResourcesStatusFor(c, "proj")
 			if err != nil {
@@ -156,7 +157,7 @@ func TestGetResourcesStatusFor_ReadsTheConnection(t *testing.T) {
 func TestGetResourcesStatusFor_NoSecretReadOutsideTheSelectedServer(t *testing.T) {
 	f, c := newResourceFake(t)
 	putDSProject(f, "proj")
-	putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
+	putDSPA(f, "proj", dspaName, toolLabelJSON, envkit.ToolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
 	for _, project := range []string{"", "elsewhere"} {
 		if _, err := GetResourcesStatusFor(c, project); err != nil {
 			t.Fatal(err)

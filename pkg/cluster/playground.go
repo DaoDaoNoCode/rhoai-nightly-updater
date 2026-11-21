@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -713,7 +714,7 @@ func newPlaygroundRecord(c *Client) *playgroundRecord {
 // playgroundComponent is the DataScienceCluster component that runs the
 // playground's server operator: ogx, called llamastackoperator before the
 // rename. Whichever the DataScienceCluster names is used.
-var playgroundComponent = featureComponent{feature: "The Gen AI playground", keys: []string{"ogx", "llamastackoperator"}}
+var playgroundComponent = envkit.FeatureComponent{Feature: "The Gen AI playground", Keys: []string{"ogx", "llamastackoperator"}}
 
 // componentReadyCondition reads the DataScienceCluster's "<component>Ready"
 // condition (OGXReady, LlamaStackOperatorReady) of the first component key
@@ -778,8 +779,8 @@ func genAIUIState(c *Client) string {
 // playgroundClusterParts fills what the ServiceAccount reads.
 func playgroundClusterParts(c *Client, st *types.PlaygroundStatus) {
 	if dsc, err := rhoai.ReadFirstDSC(c); err == nil {
-		st.Blocked = componentBlock(dsc, playgroundComponent)
-		st.OperatorReady, st.OperatorMessage = componentReadyCondition(dsc.Object, playgroundComponent.keys)
+		st.Blocked = envkit.ComponentBlock(dsc, playgroundComponent)
+		st.OperatorReady, st.OperatorMessage = componentReadyCondition(dsc.Object, playgroundComponent.Keys)
 	} else {
 		slog.Debug("cannot read the DataScienceCluster for the playground", "error", err)
 	}

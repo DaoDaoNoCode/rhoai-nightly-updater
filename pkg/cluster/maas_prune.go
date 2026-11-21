@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -262,22 +263,22 @@ func maasGatewayObjectPath(kind string) string {
 	return rhoai.NamespacedPath("v1", "configmaps", inferenceGatewayNamespace, maasGatewayOptions)
 }
 
-// updateToolObject is the update half of ensureToolObject, for an object
+// updateToolObject is the update half of envkit.EnsureToolObject, for an object
 // that must exist: the same ownership check, field-ownership upgrade and
 // resourceVersion guard, and a server-side apply sent as a plain PATCH. It
 // never creates the object: on one that is gone the API server would check
 // create too, which the ServiceAccount does not have. The MaaS prune job
 // runs with the ServiceAccount, so the ServiceAccount needs only patch on
 // the tool's named MaaS objects (deploy/template.yaml).
-func updateToolObject(c *Client, desc, path string, obj map[string]any, current kube.ObjectMeta, read toolObjectReader, owned func(kube.ObjectMeta) bool) error {
+func updateToolObject(c *Client, desc, path string, obj map[string]any, current kube.ObjectMeta, read envkit.ToolObjectReader, owned func(kube.ObjectMeta) bool) error {
 	for range 3 {
 		if !owned(current) {
-			return &foreignObjectError{Desc: desc}
+			return &envkit.ForeignObjectError{Desc: desc}
 		}
 		if current.Terminating() {
 			return fmt.Errorf("%s is being deleted", desc)
 		}
-		upgraded, err := upgradeToolFieldOwnership(c, path, current)
+		upgraded, err := envkit.UpgradeToolFieldOwnership(c, path, current)
 		if err == nil {
 			current = upgraded
 			guarded := make(map[string]any, len(obj))
@@ -292,7 +293,7 @@ func updateToolObject(c *Client, desc, path string, obj map[string]any, current 
 			if mErr != nil {
 				return mErr
 			}
-			_, _, err = c.Do(http.MethodPatch, path, "application/apply-patch+yaml", data, url.Values{"fieldManager": {toolFieldManager}, "force": {"true"}})
+			_, _, err = c.Do(http.MethodPatch, path, "application/apply-patch+yaml", data, url.Values{"fieldManager": {envkit.ToolFieldManager}, "force": {"true"}})
 			if err == nil {
 				return nil
 			}
@@ -308,7 +309,7 @@ func updateToolObject(c *Client, desc, path string, obj map[string]any, current 
 			return fmt.Errorf("%s is gone", desc)
 		}
 	}
-	return fmt.Errorf("%s: %w", desc, errObjectChanged)
+	return fmt.Errorf("%s: %w", desc, envkit.ErrObjectChanged)
 }
 
 // releaseGoneMaaSProjects runs pruneGoneMaaSPublications for an operation

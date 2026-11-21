@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -24,7 +25,7 @@ func (e *playgroundEnv) putGranite(ours bool) {
 	meta := `{"name":"granite-embedding-125m-english","namespace":"proj"}`
 	if ours {
 		meta = `{"name":"granite-embedding-125m-english","namespace":"proj","labels":{"` + kube.ManagedByLabelKey + `":"` + kube.ManagedByLabelValue + `"},
-			"managedFields":[{"manager":"` + toolFieldManager + `","operation":"Apply"}]}`
+			"managedFields":[{"manager":"` + envkit.ToolFieldManager + `","operation":"Apply"}]}`
 	}
 	e.k8s.putJSON(testGranitePath, `{"metadata":`+meta+`}`)
 	if ours {

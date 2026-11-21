@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -331,7 +332,7 @@ func lookupS3Namespace(c *Client) (s3NamespaceInfo, error) {
 // the tool's field manager owns its content, spec or data (see
 // ownsFieldPath).
 func storageObjectOwned(m kube.ObjectMeta) bool {
-	tool := []string{toolFieldManager}
+	tool := []string{envkit.ToolFieldManager}
 	return m.HasToolLabel() || m.OwnsFieldPath(tool, "f:spec") || m.OwnsFieldPath(tool, "f:data") || m.OwnsFieldPath(tool, "f:stringData")
 }
 
@@ -761,17 +762,17 @@ func s3ApplyPath(obj map[string]any) (string, bool) {
 func s3CreatePath(kind string) (string, bool) {
 	switch kind {
 	case "PersistentVolumeClaim":
-		return withToolFieldManager(rhoai.NamespacedPath("v1", "persistentvolumeclaims", s3Namespace, "")), true
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "persistentvolumeclaims", s3Namespace, "")), true
 	case "Secret":
-		return withToolFieldManager(rhoai.NamespacedPath("v1", "secrets", s3Namespace, "")), true
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "secrets", s3Namespace, "")), true
 	case "Deployment":
-		return withToolFieldManager(rhoai.NamespacedPath("apps/v1", "deployments", s3Namespace, "")), true
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath("apps/v1", "deployments", s3Namespace, "")), true
 	case "Service":
-		return withToolFieldManager(rhoai.NamespacedPath("v1", "services", s3Namespace, "")), true
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "services", s3Namespace, "")), true
 	case "NetworkPolicy":
-		return withToolFieldManager(rhoai.NamespacedPath("networking.k8s.io/v1", "networkpolicies", s3Namespace, "")), true
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath("networking.k8s.io/v1", "networkpolicies", s3Namespace, "")), true
 	case "Route":
-		return withToolFieldManager(rhoai.NamespacedPath("route.openshift.io/v1", "routes", s3Namespace, "")), true
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath("route.openshift.io/v1", "routes", s3Namespace, "")), true
 	}
 	return "", false
 }
@@ -844,7 +845,7 @@ type s3Resource struct {
 // pipeline servers reach it through the Service.
 func s3Resources(keys s3Keys) []s3Resource {
 	meta := func(name string) map[string]any {
-		return map[string]any{"name": name, "namespace": s3Namespace, "labels": toolLabels()}
+		return map[string]any{"name": name, "namespace": s3Namespace, "labels": envkit.ToolLabels()}
 	}
 	secretEnv := func(name, key string) map[string]any {
 		return map[string]any{"name": name, "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": s3Secret, "key": key}}}
@@ -1094,7 +1095,7 @@ func (l *opLog) add(line string) {
 // also repairs a partial setup. It never changes an object it did not
 // create: every object is checked first, absent ones are created with POST,
 // and updates are guarded by the resourceVersion that was checked (see
-// ensureToolObject). Every create and apply is sent as a server-side dry
+// envkit.EnsureToolObject). Every create and apply is sent as a server-side dry
 // run before any is made, so an object the API server rejects changes
 // nothing (the namespace, which the dry runs need, is created before them).
 // retry names the action that continues a setup that stopped.
@@ -1121,9 +1122,9 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 		nsData, _ := json.Marshal(map[string]any{
 			"apiVersion": "v1",
 			"kind":       "Namespace",
-			"metadata":   map[string]any{"name": s3Namespace, "labels": toolLabels()},
+			"metadata":   map[string]any{"name": s3Namespace, "labels": envkit.ToolLabels()},
 		})
-		_, _, err := c.Post(withToolFieldManager("/api/v1/namespaces"), nsData)
+		_, _, err := c.Post(envkit.WithToolFieldManager("/api/v1/namespaces"), nsData)
 		switch {
 		case err == nil:
 			log.add("OK: Namespace created")
@@ -1194,18 +1195,18 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 		cur := existing[key]
 		kind := r.kind
 		read := func() (kube.ObjectMeta, bool, error) { return readS3Object(c, kind, name) }
-		action, meta, found, err := ensureToolObject(c, fmt.Sprintf("%s %s/%s", r.kind, s3Namespace, name), path, createPath, r.obj, cur.meta, cur.found, read, storageObjectOwned, dryRun)
+		action, meta, found, err := envkit.EnsureToolObject(c, fmt.Sprintf("%s %s/%s", r.kind, s3Namespace, name), path, createPath, r.obj, cur.meta, cur.found, read, storageObjectOwned, dryRun)
 		existing[key] = current{meta, found}
 		if err != nil {
 			done := "nothing"
 			if len(applied) > 0 {
 				done = strings.Join(applied, ", ")
 			}
-			if foreignErr, ok := errors.AsType[*foreignObjectError](err); ok {
+			if foreignErr, ok := errors.AsType[*envkit.ForeignObjectError](err); ok {
 				return fail(fmt.Sprintf("%s was created by someone else while setup was running, so it was left unchanged. Already applied: %s. %s", foreignErr.Desc, done, retry.foreignHint()), "not_managed", r.name+" became foreign")
 			}
 			code := kube.ErrorCodeFromK8sErr(err)
-			if errors.Is(err, errObjectChanged) || kube.IsK8sConflict(err) {
+			if errors.Is(err, envkit.ErrObjectChanged) || kube.IsK8sConflict(err) {
 				code = "conflict"
 			}
 			if dryRun {

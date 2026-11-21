@@ -14,6 +14,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -59,11 +60,11 @@ func (m *maasRun) done(msg string) (*types.OperationResponse, error) {
 
 // maasWriteCode turns a write error into a refusal code.
 func maasWriteCode(err error) string {
-	var foreign *foreignObjectError
+	var foreign *envkit.ForeignObjectError
 	switch {
 	case errors.As(err, &foreign):
 		return "not_managed"
-	case errors.Is(err, errObjectChanged) || kube.IsK8sConflict(err):
+	case errors.Is(err, envkit.ErrObjectChanged) || kube.IsK8sConflict(err):
 		return "conflict"
 	}
 	return kube.ErrorCodeFromK8sErr(err)
@@ -307,7 +308,7 @@ func (m *maasRun) applyGateway(plan *maasGatewayPlan, dryRun bool) (string, stri
 		if dryRun {
 			query = url.Values{"dryRun": {"All"}}
 		}
-		if _, _, err := m.c.Do(http.MethodPost, withToolFieldManager(rhoai.ClusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "")), "application/json", data, query); err != nil && !kube.IsK8sConflict(err) {
+		if _, _, err := m.c.Do(http.MethodPost, envkit.WithToolFieldManager(rhoai.ClusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "")), "application/json", data, query); err != nil && !kube.IsK8sConflict(err) {
 			return fmt.Sprintf("Failed to create GatewayClass %s: %v.%s", maasGatewayClass, err, kube.TemplateHint(err)), maasWriteCode(err)
 		}
 		if !dryRun {
@@ -322,7 +323,7 @@ func (m *maasRun) applyGateway(plan *maasGatewayPlan, dryRun bool) (string, stri
 		if kind == "ConfigMap" {
 			owned = toolOwned
 		}
-		action, meta, found, err := ensureToolObject(m.c, maasDesc(kind, ""), maasObjectPath(kind, ""), maasCreatePath(kind, ""), plan.objects[kind], plan.current[kind], plan.found[kind], read, owned, dryRun)
+		action, meta, found, err := envkit.EnsureToolObject(m.c, maasDesc(kind, ""), maasObjectPath(kind, ""), maasCreatePath(kind, ""), plan.objects[kind], plan.current[kind], plan.found[kind], read, owned, dryRun)
 		plan.current[kind], plan.found[kind] = meta, found
 		if err != nil {
 			if dryRun {
@@ -599,7 +600,7 @@ func (m *maasRun) teardownDSC(t *maasTeardown) (*types.OperationResponse, error)
 			if err := patchModelsAsAService(c, prev); err != nil {
 				return m.fail("dsc", fmt.Sprintf("Failed to restore modelsAsAService: %v. Nothing else was deleted.", err), kube.ErrorCodeFromK8sErr(err), "dsc patch failed")
 			}
-			gone, _ := kube.WaitForGone(c, MaaSDeleteTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+			gone, _ := kube.WaitForGone(c, MaaSDeleteTimeout, envkit.PollInterval, func(cc *Client) (bool, error) {
 				return deploymentAvailable(cc, infra, "maas-api") == "missing", nil
 			})
 			if !gone {
@@ -656,7 +657,7 @@ func (m *maasRun) teardownDelete(step, infra string, o maasTeardownObj) (bool, *
 		res, _ := m.fail(step, fmt.Sprintf("Failed to delete %s: %v. Remove again to retry.", maasDesc(o.kind, infra), err), maasWriteCode(err), "delete failed")
 		return false, res
 	}
-	if gone, _ := kube.WaitForDeletion(c, path, MaaSDeleteTimeout, MaaSPoll); !gone {
+	if gone, _ := kube.WaitForDeletion(c, path, MaaSDeleteTimeout, envkit.PollInterval); !gone {
 		m.logs = append(m.logs, maasDesc(o.kind, infra)+" is still being deleted")
 	}
 	return true, nil
@@ -771,7 +772,7 @@ func maasModelRefObjectFor(c *Client, project, name, displayName, description, m
 		"apiVersion": maasAPI(c),
 		"kind":       "MaaSModelRef",
 		"metadata": map[string]any{
-			"name": name, "namespace": project, "labels": toolLabels(),
+			"name": name, "namespace": project, "labels": envkit.ToolLabels(),
 			"annotations": annotations,
 			"ownerReferences": []any{map[string]any{
 				"apiVersion": llmisvcAPIVersion, "kind": "LLMInferenceService", "name": name, "uid": modelUID, "blockOwnerDeletion": false,
@@ -790,9 +791,9 @@ func maasAccessPath(c *Client, kind string) string {
 
 func maasAccessCreatePath(c *Client, kind string) string {
 	if kind == "MaaSSubscription" {
-		return withToolFieldManager(rhoai.NamespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", ""))
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", ""))
 	}
-	return withToolFieldManager(rhoai.NamespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", ""))
+	return envkit.WithToolFieldManager(rhoai.NamespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", ""))
 }
 
 // applyMaaSObject creates or updates one of the tool's MaaS objects.
@@ -802,7 +803,7 @@ func applyMaaSObject(c *Client, desc, path, createPath string, obj map[string]an
 		return err
 	}
 	read := func() (kube.ObjectMeta, bool, error) { return kube.ReadObjectMeta(c, path) }
-	_, _, _, err = ensureToolObject(c, desc, path, createPath, obj, cur, found, read, toolOwned, dryRun)
+	_, _, _, err = envkit.EnsureToolObject(c, desc, path, createPath, obj, cur, found, read, toolOwned, dryRun)
 	return err
 }
 
@@ -933,19 +934,19 @@ func (m *maasRun) publishCheckPlatform(pl *maasPublish, limitReq *types.MaaSLimi
 		return m.fail("check", maasNotReadyReason(st)+" Nothing was changed.", "prerequisites", "platform not ready")
 	}
 	// Connectivity Link's version (fail closed when it cannot be read).
-	rhcl, err := readOperator(c, rhclOperator)
+	rhcl, err := envkit.ReadOperator(c, rhclOperator)
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot read the installed operators, so this tool cannot check Connectivity Link's version; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err), "csv read failed")
 	}
-	if versionCore(rhcl.version) == rhclAuthBypassVersion {
-		return m.fail("check", rhclWarning(rhcl.version)+" Nothing was changed.", "prerequisites", "rhcl auth bypass")
+	if envkit.VersionCore(rhcl.Version) == rhclAuthBypassVersion {
+		return m.fail("check", rhclWarning(rhcl.Version)+" Nothing was changed.", "prerequisites", "rhcl auth bypass")
 	}
 	priority, others, err := maasSubscriptionPriority(c)
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot list the MaaSSubscriptions, so this tool cannot pick a priority below the others'; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err), "subscription list failed")
 	}
-	if len(others) > 0 && rhclBelowMinimum(rhcl.version) {
-		return m.fail("check", fmt.Sprintf("MaaS already has other subscriptions (%s), and with this tool's a signed-in user would have two or more. On Connectivity Link %s such a caller can hang (the MaaS docs ask for %s or later), so this tool does not publish until it is upgraded: Upgrade Connectivity Link on the MaaS tab does it. Nothing was changed.", strings.Join(others, ", "), rhcl.version, rhclDocsMinimum), "prerequisites", "rhcl too old for several subscriptions")
+	if len(others) > 0 && rhclBelowMinimum(rhcl.Version) {
+		return m.fail("check", fmt.Sprintf("MaaS already has other subscriptions (%s), and with this tool's a signed-in user would have two or more. On Connectivity Link %s such a caller can hang (the MaaS docs ask for %s or later), so this tool does not publish until it is upgraded: Upgrade Connectivity Link on the MaaS tab does it. Nothing was changed.", strings.Join(others, ", "), rhcl.Version, rhclDocsMinimum), "prerequisites", "rhcl too old for several subscriptions")
 	}
 	infra, err := maasInfraNamespace(c)
 	if err != nil {
@@ -1140,7 +1141,7 @@ func (m *maasRun) publishDryRuns(pl *maasPublish) (*types.OperationResponse, err
 		desc, path, create string
 		obj                map[string]any
 	}{
-		{"MaaSModelRef " + project + "/" + name, refPath, withToolFieldManager(rhoai.NamespacedPath(maasAPI(c), "maasmodelrefs", project, "")), refObj},
+		{"MaaSModelRef " + project + "/" + name, refPath, envkit.WithToolFieldManager(rhoai.NamespacedPath(maasAPI(c), "maasmodelrefs", project, "")), refObj},
 		{"MaaSSubscription " + maasSubscriptionName, maasAccessPath(c, "MaaSSubscription"), maasAccessCreatePath(c, "MaaSSubscription"), sub},
 		{"MaaSAuthPolicy " + maasAuthPolicyName, maasAccessPath(c, "MaaSAuthPolicy"), maasAccessCreatePath(c, "MaaSAuthPolicy"), auth},
 	} {
@@ -1198,7 +1199,7 @@ func (m *maasRun) publishMaaSObjects(pl *maasPublish) (*types.OperationResponse,
 		desc, path, create string
 		obj                map[string]any
 	}{
-		{"MaaSModelRef " + project + "/" + name, refPath, withToolFieldManager(rhoai.NamespacedPath(maasAPI(c), "maasmodelrefs", project, "")), refObj},
+		{"MaaSModelRef " + project + "/" + name, refPath, envkit.WithToolFieldManager(rhoai.NamespacedPath(maasAPI(c), "maasmodelrefs", project, "")), refObj},
 		{"MaaSSubscription " + maasSubscriptionName, maasAccessPath(c, "MaaSSubscription"), maasAccessCreatePath(c, "MaaSSubscription"), sub},
 		{"MaaSAuthPolicy " + maasAuthPolicyName, maasAccessPath(c, "MaaSAuthPolicy"), maasAccessCreatePath(c, "MaaSAuthPolicy"), auth},
 	} {
@@ -1216,7 +1217,7 @@ func (m *maasRun) publishWaitReady(pl *maasPublish) (*types.OperationResponse, e
 	c, project, name := m.c, pl.project, pl.name
 	m.step("ready", "running", "Waiting for MaaS to accept the model...")
 	last := ""
-	ready, err := kube.WaitForGone(c, MaaSPublishTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+	ready, err := kube.WaitForGone(c, MaaSPublishTimeout, envkit.PollInterval, func(cc *Client) (bool, error) {
 		r, _, err := readMaaSModelRef(cc, project, name)
 		if err != nil {
 			return false, err
@@ -1387,7 +1388,7 @@ func (m *maasRun) unpublishAccess(u *maasUnpublish) (*types.OperationResponse, e
 			if _, err := kube.DeleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 				return m.fail("maas", fmt.Sprintf("Failed to delete %s: %v.", w.desc, err), maasWriteCode(err), "delete failed")
 			}
-			_, _ = kube.WaitForDeletion(c, path, MaaSDeleteTimeout, MaaSPoll)
+			_, _ = kube.WaitForDeletion(c, path, MaaSDeleteTimeout, envkit.PollInterval)
 			m.logs = append(m.logs, "OK: "+w.desc+" deleted")
 			continue
 		}
@@ -1425,7 +1426,7 @@ func (m *maasRun) unpublishModelRef(u *maasUnpublish) (*types.OperationResponse,
 				m.logs = append(m.logs, fmt.Sprintf("maas-controller cannot finish deleting MaaSModelRef %s/%s (%s), so this tool removed the finalizer %s from its own reference. Policies maas-controller generated for the model may be left in %s: oc get authpolicy,tokenratelimitpolicy -n %s -l maas.opendatahub.io/model=%s,app.kubernetes.io/managed-by=maas-controller", project, name, why, maasModelFinalizer, project, project, name))
 			}
 		}
-		if gone, err := kube.WaitForDeletion(c, path, MaaSDeleteTimeout, MaaSPoll); err != nil || !gone {
+		if gone, err := kube.WaitForDeletion(c, path, MaaSDeleteTimeout, envkit.PollInterval); err != nil || !gone {
 			return m.fail("maas", fmt.Sprintf("MaaSModelRef %s/%s is still being deleted (maas-controller removes its finalizer; it must be running). Unpublish again to check.", project, name), "in_progress", "ref still deleting")
 		}
 	}

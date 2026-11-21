@@ -184,26 +184,6 @@ func fetchReleasedImage(ctx context.Context, repository string) (releasedImage, 
 
 var versionTag = regexp.MustCompile(`^\d+(\.\d+){1,3}$`)
 
-func compareVersions(a, b string) int {
-	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
-	for i := 0; i < len(pa) || i < len(pb); i++ {
-		var x, y int
-		if i < len(pa) {
-			x, _ = strconv.Atoi(pa[i])
-		}
-		if i < len(pb) {
-			y, _ = strconv.Atoi(pb[i])
-		}
-		if x != y {
-			if x < y {
-				return -1
-			}
-			return 1
-		}
-	}
-	return len(pa) - len(pb)
-}
-
 // pickReleasedImage chooses, from the catalog's images of repository,
 // the published amd64 image with the highest version tag (a patch release
 // of an older stream can be newer by date than the newest stream's), and
@@ -244,7 +224,7 @@ func pickReleasedImage(body []byte, repository string) (releasedImage, error) {
 			}
 			version := ""
 			for _, t := range r.Tags {
-				if versionTag.MatchString(t.Name) && (version == "" || compareVersions(t.Name, version) > 0) {
+				if versionTag.MatchString(t.Name) && (version == "" || kube.CompareVersions(t.Name, version) > 0) {
 					version = t.Name
 				}
 			}
@@ -253,7 +233,7 @@ func pickReleasedImage(body []byte, repository string) (releasedImage, error) {
 			}
 			cmp := 1
 			if best.Ref != "" {
-				cmp = compareVersions(version, best.Version)
+				cmp = kube.CompareVersions(version, best.Version)
 			}
 			if cmp > 0 || (cmp == 0 && img.CreationDate > bestDate) {
 				best = releasedImage{Ref: redHatRegistry + repository + "@" + digest, Version: version}

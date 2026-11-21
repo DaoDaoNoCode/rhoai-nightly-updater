@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -51,10 +52,10 @@ func maasInUseWorld(t *testing.T, edit func(dsc map[string]any)) (*resourceFake,
 	t.Helper()
 	f, c := managerWorld(t, edit)
 	maasServed(f)
-	f.put(guardModelRef, map[string]any{"metadata": map[string]any{"name": "qwen25-05b-instruct", "namespace": "proj", "labels": toolLabels()},
+	f.put(guardModelRef, map[string]any{"metadata": map[string]any{"name": "qwen25-05b-instruct", "namespace": "proj", "labels": envkit.ToolLabels()},
 		"spec": map[string]any{"modelRef": map[string]any{"kind": "LLMInferenceService", "name": "qwen25-05b-instruct"}}})
-	f.put(guardSubscription, map[string]any{"metadata": map[string]any{"name": maasSubscriptionName, "namespace": maasTenantNamespace, "labels": toolLabels()}})
-	f.put(guardAuthPolicy, map[string]any{"metadata": map[string]any{"name": maasAuthPolicyName, "namespace": maasTenantNamespace, "labels": toolLabels()}})
+	f.put(guardSubscription, map[string]any{"metadata": map[string]any{"name": maasSubscriptionName, "namespace": maasTenantNamespace, "labels": envkit.ToolLabels()}})
+	f.put(guardAuthPolicy, map[string]any{"metadata": map[string]any{"name": maasAuthPolicyName, "namespace": maasTenantNamespace, "labels": envkit.ToolLabels()}})
 	putMaaSRecord(t, f, maasRecord{DSCChanged: true, PreviousModelsAsAService: "Removed", AIGatewayChanged: true, PreviousAIGateway: "Removed",
 		Published: []string{"proj/qwen25-05b-instruct"}, DBNamespace: "redhat-ai-gateway-infra", Database: "cnpg"})
 	return f, c

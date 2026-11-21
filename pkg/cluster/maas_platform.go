@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -33,7 +34,7 @@ func kuadrantObject(version, ns string) map[string]any {
 	return map[string]any{
 		"apiVersion": kuadrantGroup + "/" + version,
 		"kind":       "Kuadrant",
-		"metadata":   map[string]any{"name": "kuadrant", "namespace": ns, "labels": toolLabels()},
+		"metadata":   map[string]any{"name": "kuadrant", "namespace": ns, "labels": envkit.ToolLabels()},
 	}
 }
 
@@ -60,7 +61,7 @@ func createKuadrant(c *Client, version, ns string, dryRun bool) error {
 	if dryRun {
 		query = url.Values{"dryRun": {"All"}}
 	}
-	_, _, err := c.Do(http.MethodPost, withToolFieldManager("/apis/kuadrant.io/"+version+"/namespaces/"+ns+"/kuadrants"), "application/json", data, query)
+	_, _, err := c.Do(http.MethodPost, envkit.WithToolFieldManager("/apis/kuadrant.io/"+version+"/namespaces/"+ns+"/kuadrants"), "application/json", data, query)
 	if kube.IsK8sConflict(err) {
 		return nil
 	}
@@ -97,12 +98,12 @@ func createInfraNamespace(c *Client, ns string, dryRun bool) error {
 	if _, ok := maasInfraNamespacePath(ns); !ok {
 		return fmt.Errorf("namespace %s is not one this tool creates", ns)
 	}
-	data, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": ns, "labels": toolLabels()}})
+	data, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": ns, "labels": envkit.ToolLabels()}})
 	var query url.Values
 	if dryRun {
 		query = url.Values{"dryRun": {"All"}}
 	}
-	_, _, err := c.Do(http.MethodPost, withToolFieldManager("/api/v1/namespaces"), "application/json", data, query)
+	_, _, err := c.Do(http.MethodPost, envkit.WithToolFieldManager("/api/v1/namespaces"), "application/json", data, query)
 	return err
 }
 
@@ -204,7 +205,7 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 	if len(secret) > 253 || !components.DNS1123Subdomain.MatchString(secret) {
 		return nil, fmt.Errorf("authorino's CR names its certificate Secret %q, which is not a valid Kubernetes name", kube.TruncateText(secret, 300))
 	}
-	query := url.Values{"fieldManager": {toolFieldManager}}
+	query := url.Values{"fieldManager": {envkit.ToolFieldManager}}
 	if dryRun {
 		query.Set("dryRun", "All")
 	}
@@ -470,7 +471,7 @@ EOF`, yamlString(channel))
 // rhclDenyEnvCommand is platform-setup.md's patch that adds the
 // deny-on-failure env to a Subscription, in the form that fits its shape
 // (the docs give one with spec.config, and one without).
-func rhclDenyEnvCommand(sub *olmSubscription) string {
+func rhclDenyEnvCommand(sub *envkit.OLMSubscription) string {
 	ref := fmt.Sprintf("oc patch subscription %s -n %s --type='json' -p=", kube.ShellQuote(sub.Metadata.Name), kube.ShellQuote(sub.Metadata.Namespace))
 	if _, hasEnv := sub.Spec.Config["env"]; hasEnv {
 		return ref + `'[

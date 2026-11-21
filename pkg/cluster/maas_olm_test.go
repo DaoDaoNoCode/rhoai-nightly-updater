@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -51,12 +52,12 @@ func cnpgFakePackage() fakePackage {
 }
 
 // rhclCatalog is rhclFakePackage as the code reads it.
-func rhclCatalog() operatorPackage {
-	var out operatorPackage
+func rhclCatalog() envkit.OperatorPackage {
+	var out envkit.OperatorPackage
 	_ = json.Unmarshal([]byte(packageManifestStatus("rhcl-operator", rhclFakePackage())), &struct {
-		DefaultChannel *string           `json:"defaultChannel"`
-		Channels       *[]packageChannel `json:"channels"`
-	}{&out.defaultChannel, &out.channels})
+		DefaultChannel *string                  `json:"defaultChannel"`
+		Channels       *[]envkit.PackageChannel `json:"channels"`
+	}{&out.DefaultChannel, &out.Channels})
 	return out
 }
 
@@ -179,7 +180,7 @@ func (s *fakeOLMSim) stepOne(k fakeKey) {
 		return
 	}
 	installed, _ := status["installedCSV"].(string)
-	from := csvVersion(installed)
+	from := envkit.CSVVersion(installed)
 	to := ""
 	switch {
 	case installed == "":

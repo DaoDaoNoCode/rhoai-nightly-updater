@@ -14,6 +14,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -65,24 +66,24 @@ import (
 // package) is used as it is. cert-manager.io served with a cert-manager
 // Deployment but no CSV is a cert-manager not installed by OLM: KServe does
 // not count it, and a second one would fight it, so setup refuses.
-var certManagerOperator = operatorSpec{id: "cert-manager", title: "cert-manager Operator for Red Hat OpenShift", pkg: "openshift-cert-manager-operator",
-	subName: "openshift-cert-manager-operator", subNames: []string{"openshift-cert-manager-operator"}, namespace: "cert-manager-operator",
-	source: "redhat-operators", group: "cert-manager-operator", api: certManagerGroup, controller: "cert-manager"}
+var certManagerOperator = envkit.OperatorSpec{ID: "cert-manager", Title: "cert-manager Operator for Red Hat OpenShift", Pkg: "openshift-cert-manager-operator",
+	SubName: "openshift-cert-manager-operator", SubNames: []string{"openshift-cert-manager-operator"}, Namespace: "cert-manager-operator",
+	Source: "redhat-operators", Group: "cert-manager-operator", API: certManagerGroup, Controller: "cert-manager"}
 
 const certManagerGroup = "cert-manager.io"
 
 // dashboardComponent is the RHOAI dashboard, whose gen-ai API runs the
 // playground.
-var dashboardComponent = featureComponent{feature: "The RHOAI dashboard", keys: []string{"dashboard"}}
+var dashboardComponent = envkit.FeatureComponent{Feature: "The RHOAI dashboard", Keys: []string{"dashboard"}}
 
 // featureSetup is what a feature needs on the cluster.
 type featureSetup struct {
 	id, title  string
-	components []featureComponent
+	components []envkit.FeatureComponent
 	// operators are installed in this order after the components, each
 	// when no Subscription of its package exists (KServe counts only
 	// those).
-	operators []operatorSpec
+	operators []envkit.OperatorSpec
 	// dependency is the DataScienceCluster condition that names missing
 	// operators (KserveLLMInferenceServiceDependencies), waited on while it
 	// names one of operators ("" none).
@@ -106,17 +107,17 @@ func featureSetupFor(id, exposure string) featureSetup {
 		return fs
 	}
 	if exposure == exposureDefault || exposure == exposureGateway {
-		fs.operators = append(append([]operatorSpec(nil), fs.operators...), rhclOperator)
+		fs.operators = append(append([]envkit.OperatorSpec(nil), fs.operators...), rhclOperator)
 		fs.kuadrant = true
 	}
 	return fs
 }
 
 var featureSetups = []featureSetup{
-	{id: "pipelines", title: "Pipelines", components: []featureComponent{pipelinesComponent}},
-	{id: "mlflow", title: "MLflow", components: []featureComponent{mlflowComponent}},
-	{id: "models", title: "Models", components: []featureComponent{kserveComponent}, operators: []operatorSpec{certManagerOperator}, dependency: llmDependenciesCondition},
-	{id: "playground", title: "Playground", components: []featureComponent{playgroundComponent, dashboardComponent}},
+	{id: "pipelines", title: "Pipelines", components: []envkit.FeatureComponent{envkit.PipelinesComponent}},
+	{id: "mlflow", title: "MLflow", components: []envkit.FeatureComponent{envkit.MLflowComponent}},
+	{id: "models", title: "Models", components: []envkit.FeatureComponent{kserveComponent}, operators: []envkit.OperatorSpec{certManagerOperator}, dependency: llmDependenciesCondition},
+	{id: "playground", title: "Playground", components: []envkit.FeatureComponent{playgroundComponent, dashboardComponent}},
 }
 
 func featureSetupOf(id string) (featureSetup, bool) {
@@ -240,8 +241,8 @@ func dscComponentCommand(dsc, key, state string) string {
 }
 
 // componentTitle names a component for people.
-func componentTitle(fc featureComponent, key string) string {
-	name := strings.TrimPrefix(fc.feature, "The ")
+func componentTitle(fc envkit.FeatureComponent, key string) string {
+	name := strings.TrimPrefix(fc.Feature, "The ")
 	if strings.Contains(name, "(") {
 		return name // "Model serving (KServe)"
 	}
@@ -252,7 +253,7 @@ func componentTitle(fc featureComponent, key string) string {
 
 // componentPlan is a component as read, and whether setup turns it on.
 type componentPlan struct {
-	fc            featureComponent
+	fc            envkit.FeatureComponent
 	key, state    string
 	turnOn        bool
 	ready, msg    string // its <key>Ready condition
@@ -263,9 +264,9 @@ type componentPlan struct {
 
 // operatorPlan is an operator as read, and what setup does about it.
 type operatorPlan struct {
-	op      operatorSpec
-	st      operatorState
-	install *operatorInstallPlan
+	op      envkit.OperatorSpec
+	st      envkit.OperatorState
+	install *envkit.OperatorInstallPlan
 	byTool  bool
 }
 
@@ -299,7 +300,7 @@ type clusterReads struct {
 	dsc    rhoai.DSCRead
 	dscErr error
 	csvs   []components.ClusterCSV
-	subs   []*olmSubscription
+	subs   []*envkit.OLMSubscription
 	olmErr error
 }
 
@@ -309,7 +310,7 @@ func readClusterForPrerequisites(c *Client) clusterReads {
 	r.dsc, r.dscErr = rhoai.ReadFirstDSC(c)
 	r.csvs, r.olmErr = components.ListClusterCSVs(c)
 	if r.olmErr == nil {
-		r.subs, r.olmErr = listSubscriptions(c, "")
+		r.subs, r.olmErr = envkit.ListSubscriptions(c, "")
 	}
 	return r
 }
@@ -329,7 +330,7 @@ func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
 		msg := fmt.Sprintf("Cannot read the DataScienceCluster; nothing was changed: %v.%s", r.dscErr, kube.TemplateHint(r.dscErr))
 		p.refuse(msg, kube.ErrorCodeFromK8sErr(r.dscErr))
 		for _, fc := range fs.components {
-			part(types.MaaSPart{ID: "dsc-" + fc.keys[0], Title: componentTitle(fc, fc.keys[0]), State: "unknown", Message: msg})
+			part(types.MaaSPart{ID: "dsc-" + fc.Keys[0], Title: componentTitle(fc, fc.Keys[0]), State: "unknown", Message: msg})
 		}
 	case r.dsc.State == rhoai.DSCStateNoCRD:
 		p.refuse("RHOAI is not installed on this cluster (it has no DataScienceCluster API). A cluster-admin installs it on the Status page. Nothing was changed.", "prerequisites")
@@ -342,8 +343,8 @@ func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
 		p.argo = argo.TrackingOf(c, r.dsc.Object, rhoai.DSCGroup, "DataScienceCluster")
 		p.argoApp = p.argo.ManagedBy()
 		for _, fc := range fs.components {
-			key := fc.keyIn(r.dsc)
-			state, _ := componentManagement(r.dsc.Object, key)
+			key := fc.KeyIn(r.dsc)
+			state, _ := envkit.ComponentManagement(r.dsc.Object, key)
 			cp := componentPlan{fc: fc, key: key, state: state, turnOn: state != "Managed", owned: dscComponentOwned(r.dsc.Object, key)}
 			cp.ready, cp.msg = componentReadyCondition(r.dsc.Object, []string{key})
 			if rc, ok := r.rec.Components[key]; ok {
@@ -419,32 +420,32 @@ func planKuadrantPart(c *Client, p *featurePlan) types.MaaSPart {
 		pt.State, pt.Message = "waiting", "Kuadrant "+k.namespace+"/kuadrant is not Ready yet: "+kube.TruncateText(kube.FirstNonEmpty(k.message, "no message"), 300)
 	default:
 		pt.State, pt.Message = "missing", "Not created yet. Set up creates it once Connectivity Link serves its API; it starts Authorino, which checks each call's token."
-		pt.Commands = kuadrantCommands(rhclOperator.namespace)
-		p.plan = append(p.plan, fmt.Sprintf("Create the Kuadrant CR %s/kuadrant (as the MaaS docs do); it stays after Clean up, as other features share it", rhclOperator.namespace))
+		pt.Commands = kuadrantCommands(rhclOperator.Namespace)
+		p.plan = append(p.plan, fmt.Sprintf("Create the Kuadrant CR %s/kuadrant (as the MaaS docs do); it stays after Clean up, as other features share it", rhclOperator.Namespace))
 	}
 	return pt
 }
 
 // planFeatureOperator reads op and decides what setup does about it.
-func planFeatureOperator(c *Client, p *featurePlan, op operatorSpec, r clusterReads) operatorPlan {
-	pt := types.MaaSPart{ID: op.id, Title: op.title}
+func planFeatureOperator(c *Client, p *featurePlan, op envkit.OperatorSpec, r clusterReads) operatorPlan {
+	pt := types.MaaSPart{ID: op.ID, Title: op.Title}
 	defer func() { p.parts = append(p.parts, pt) }()
 	if r.olmErr != nil {
-		msg := fmt.Sprintf("Cannot read the installed operators, so this tool cannot tell whether %s is installed; nothing was changed: %v.%s", op.title, r.olmErr, kube.TemplateHint(r.olmErr))
+		msg := fmt.Sprintf("Cannot read the installed operators, so this tool cannot tell whether %s is installed; nothing was changed: %v.%s", op.Title, r.olmErr, kube.TemplateHint(r.olmErr))
 		p.refuse(msg, kube.ErrorCodeFromK8sErr(r.olmErr))
 		pt.State, pt.Message = "unknown", msg
 		return operatorPlan{op: op}
 	}
-	st, err := readOperatorIn(c, op, r.csvs, r.subs)
+	st, err := envkit.ReadOperatorIn(c, op, r.csvs, r.subs)
 	if err != nil {
-		msg := fmt.Sprintf("Cannot read %s's Subscription; nothing was changed: %v.%s", op.title, err, kube.TemplateHint(err))
+		msg := fmt.Sprintf("Cannot read %s's Subscription; nothing was changed: %v.%s", op.Title, err, kube.TemplateHint(err))
 		p.refuse(msg, kube.ErrorCodeFromK8sErr(err))
 		pt.State, pt.Message = "unknown", msg
 		return operatorPlan{op: op}
 	}
 	opp := operatorPlan{op: op, st: st}
-	_, shared := p.rec.Shared[op.id]
-	sub := st.requested
+	_, shared := p.rec.Shared[op.ID]
+	sub := st.Requested
 	opp.byTool = shared && sub != nil && toolOwned(sub.Metadata)
 	pt.ManagedByTool, pt.NotManaged = opp.byTool, !opp.byTool
 	where := ""
@@ -452,39 +453,39 @@ func planFeatureOperator(c *Client, p *featurePlan, op operatorSpec, r clusterRe
 		where = fmt.Sprintf(" (Subscription %s/%s, channel %s)", sub.Metadata.Namespace, sub.Metadata.Name, kube.FirstNonEmpty(sub.Spec.Channel, "not set"))
 	}
 	switch {
-	case st.installed() && st.phase == "Succeeded":
-		pt.State, pt.Message = "ready", fmt.Sprintf("Version %s runs in %s%s", st.version, st.csvNS, where)
+	case st.Installed() && st.Phase == "Succeeded":
+		pt.State, pt.Message = "ready", fmt.Sprintf("Version %s runs in %s%s", st.Version, st.CSVNS, where)
 		if sub == nil {
 			// KServe counts a Subscription of the package, not a CSV.
-			pt.State, pt.Message = "problem", fmt.Sprintf("Version %s runs in %s, but no Subscription of package %s exists, which is what RHOAI's KServe checks for. A cluster-admin recreates its Subscription.", st.version, st.csvNS, op.pkg)
+			pt.State, pt.Message = "problem", fmt.Sprintf("Version %s runs in %s, but no Subscription of package %s exists, which is what RHOAI's KServe checks for. A cluster-admin recreates its Subscription.", st.Version, st.CSVNS, op.Pkg)
 		}
-	case st.installed():
-		pt.State, pt.Message = "waiting", fmt.Sprintf("Version %s is being installed in %s%s (CSV %s)", st.version, st.csvNS, where, kube.FirstNonEmpty(st.phase, "pending"))
-	case st.pending() != nil:
+	case st.Installed():
+		pt.State, pt.Message = "waiting", fmt.Sprintf("Version %s is being installed in %s%s (CSV %s)", st.Version, st.CSVNS, where, kube.FirstNonEmpty(st.Phase, "pending"))
+	case st.Pending() != nil:
 		pt.State, pt.Message = "waiting", fmt.Sprintf("Subscription %s/%s exists; OLM is installing it (%s). Set up waits for it.", sub.Metadata.Namespace, sub.Metadata.Name, kube.FirstNonEmpty(sub.Status.State, "no state yet"))
 	default:
 		// Its API served by a running controller without a CSV: someone
 		// else's install, which KServe does not count and a second one
 		// would fight (a served API alone is CRDs left by an uninstall).
-		if op.api != "" {
+		if op.API != "" {
 			served, err := operatorAPIServed(c, op)
-			if err == nil && served && op.controller != "" {
-				served, err = controllerDeployed(c, op.controller)
+			if err == nil && served && op.Controller != "" {
+				served, err = envkit.ControllerDeployed(c, op.Controller)
 			}
 			if err != nil {
-				msg := fmt.Sprintf("Cannot tell whether %s runs; nothing was changed: %v.%s", op.title, err, kube.TemplateHint(err))
+				msg := fmt.Sprintf("Cannot tell whether %s runs; nothing was changed: %v.%s", op.Title, err, kube.TemplateHint(err))
 				p.refuse(msg, kube.ErrorCodeFromK8sErr(err))
 				pt.State, pt.Message = "unknown", msg
 				return opp
 			}
 			if served {
-				msg := fmt.Sprintf("%s runs on this cluster (its API %s and Deployment %s exist) without being installed from OperatorHub, so RHOAI's KServe does not count it, and installing %s next to it would run two. A cluster-admin replaces it with %s from OperatorHub. Nothing was changed.", strings.TrimSuffix(op.api, ".io"), op.api, op.controller, op.title, op.title)
+				msg := fmt.Sprintf("%s runs on this cluster (its API %s and Deployment %s exist) without being installed from OperatorHub, so RHOAI's KServe does not count it, and installing %s next to it would run two. A cluster-admin replaces it with %s from OperatorHub. Nothing was changed.", strings.TrimSuffix(op.API, ".io"), op.API, op.Controller, op.Title, op.Title)
 				p.refuse(msg, "prerequisites")
 				pt.State, pt.Message, pt.NotManaged = "manual", msg, true
 				return opp
 			}
 		}
-		plan, msg, code := planOperatorInstall(c, op)
+		plan, msg, code := envkit.PlanOperatorInstall(c, op)
 		if msg != "" {
 			p.refuse(msg, code)
 			pt.State, pt.Message = "problem", "Not installed, and Set up cannot install it: "+msg
@@ -492,21 +493,21 @@ func planFeatureOperator(c *Client, p *featurePlan, op operatorSpec, r clusterRe
 		}
 		opp.install = plan
 		pt.ManagedByTool, pt.NotManaged = false, false
-		pt.State, pt.Message = "missing", fmt.Sprintf("Not installed. Set up installs version %s from %s (channel %s).", plan.head, op.source, plan.channel)
+		pt.State, pt.Message = "missing", fmt.Sprintf("Not installed. Set up installs version %s from %s (channel %s).", plan.Head, op.Source, plan.Channel)
 		pt.Commands = operatorInstallCommands(plan)
 		reuse := ""
-		if plan.reusedGroup != "" {
-			reuse = fmt.Sprintf(", using OperatorGroup %s/%s as it is", op.namespace, plan.reusedGroup)
+		if plan.ReusedGroup != "" {
+			reuse = fmt.Sprintf(", using OperatorGroup %s/%s as it is", op.Namespace, plan.ReusedGroup)
 		}
-		p.plan = append(p.plan, fmt.Sprintf("Install %s %s: %sSubscription %s/%s (package %s, channel %s, from %s, automatic updates%s); it stays after Clean up, as other features share it", op.title, plan.head, operatorPlanPrefix(plan), op.namespace, op.subName, op.pkg, plan.channel, op.source, reuse))
+		p.plan = append(p.plan, fmt.Sprintf("Install %s %s: %sSubscription %s/%s (package %s, channel %s, from %s, automatic updates%s); it stays after Clean up, as other features share it", op.Title, plan.Head, operatorPlanPrefix(plan), op.Namespace, op.SubName, op.Pkg, plan.Channel, op.Source, reuse))
 	}
 	return opp
 }
 
 // operatorAPIServed says whether op's API group is served (each group
 // named, so the RBAC coverage test resolves the discovery path).
-func operatorAPIServed(c *Client, op operatorSpec) (bool, error) {
-	switch op.api {
+func operatorAPIServed(c *Client, op envkit.OperatorSpec) (bool, error) {
+	switch op.API {
 	case certManagerGroup:
 		return groupServed(c, certManagerGroup)
 	case kuadrantGroup:
@@ -514,7 +515,7 @@ func operatorAPIServed(c *Client, op operatorSpec) (bool, error) {
 	case cnpgGroup:
 		return groupServed(c, cnpgGroup)
 	}
-	return false, fmt.Errorf("this tool does not know the API of %s", op.title)
+	return false, fmt.Errorf("this tool does not know the API of %s", op.Title)
 }
 
 // dependencyPart is KServe's own view of its operators.
@@ -550,7 +551,7 @@ func dependencyPart(p *featurePlan) types.MaaSPart {
 func (p *featurePlan) installs(mention string) bool {
 	key := components.NormalizeOperatorName(mention)
 	for _, o := range p.operators {
-		for _, n := range []string{o.op.pkg, o.op.title, o.op.id} {
+		for _, n := range []string{o.op.Pkg, o.op.Title, o.op.ID} {
 			if components.NormalizeOperatorName(n) == key {
 				return true
 			}
@@ -560,13 +561,13 @@ func (p *featurePlan) installs(mention string) bool {
 }
 
 // operatorInstallCommands are the plan's objects from a terminal.
-func operatorInstallCommands(p *operatorInstallPlan) string {
-	ns, group, sub := operatorObjects(p.op, p.channel)
+func operatorInstallCommands(p *envkit.OperatorInstallPlan) string {
+	ns, group, sub := envkit.OperatorObjects(p.Op, p.Channel)
 	var objs []map[string]any
-	if p.nsMissing {
+	if p.NSMissing {
 		objs = append(objs, ns)
 	}
-	if p.groupMissing {
+	if p.GroupMissing {
 		objs = append(objs, group)
 	}
 	objs = append(objs, sub)
@@ -577,7 +578,7 @@ func operatorInstallCommands(p *operatorInstallPlan) string {
 		docs = append(docs, yamlish(o, ""))
 	}
 	return "oc apply -f - <<'EOF'\n" + strings.Join(docs, "---\n") + "EOF\n" +
-		fmt.Sprintf("oc wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/%s -n %s --timeout=300s", p.op.subName, p.op.namespace)
+		fmt.Sprintf("oc wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/%s -n %s --timeout=300s", p.Op.SubName, p.Op.Namespace)
 }
 
 // yamlish writes the plain maps, lists and strings of an object as YAML
@@ -700,8 +701,8 @@ func RunPrerequisites(c *Client, req types.PrerequisitesRequest, onStep func(Upd
 		if o.install == nil {
 			continue
 		}
-		if _, err := createOperatorObjects(c, o.install, true); err != nil {
-			return m.fail("prerequisites", fmt.Sprintf("The API server rejects %s's install: %v. Nothing was changed.%s", o.op.title, err, kube.TemplateHint(err)), maasWriteCode(err), "dry run failed")
+		if _, err := envkit.CreateOperatorObjects(c, o.install, true); err != nil {
+			return m.fail("prerequisites", fmt.Sprintf("The API server rejects %s's install: %v. Nothing was changed.%s", o.op.Title, err, kube.TemplateHint(err)), maasWriteCode(err), "dry run failed")
 		}
 	}
 	m.step("prerequisites", "success", "Everything Set up changes is checked.")
@@ -772,31 +773,31 @@ func (m *maasRun) ensureOperator(rec *prereqRecord, o operatorPlan) (*types.Oper
 	op := o.op
 	switch {
 	case o.install != nil:
-		m.step(op.id, "running", fmt.Sprintf("Installing %s %s (channel %s) from %s...", op.title, o.install.head, o.install.channel, op.source))
+		m.step(op.ID, "running", fmt.Sprintf("Installing %s %s (channel %s) from %s...", op.Title, o.install.Head, o.install.Channel, op.Source))
 		if rec.Shared == nil {
 			rec.Shared = map[string]string{}
 		}
-		rec.Shared[op.id] = fmt.Sprintf("Subscription %s/%s, channel %s", op.namespace, op.subName, o.install.channel)
+		rec.Shared[op.ID] = fmt.Sprintf("Subscription %s/%s, channel %s", op.Namespace, op.SubName, o.install.Channel)
 		if err := writePrereqRecord(m.c, *rec); err != nil {
-			return m.fail(op.id, err.Error()+" Nothing was installed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
+			return m.fail(op.ID, err.Error()+" Nothing was installed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 		}
-		made, err := createOperatorObjects(m.c, o.install, false)
+		made, err := envkit.CreateOperatorObjects(m.c, o.install, false)
 		for _, d := range made {
 			m.logs = append(m.logs, "OK: "+d+" created")
 		}
 		if err != nil {
-			return m.fail(op.id, fmt.Sprintf("Failed to %v. Set up again to continue.", err), maasWriteCode(err), "operator install failed")
+			return m.fail(op.ID, fmt.Sprintf("Failed to %v. Set up again to continue.", err), maasWriteCode(err), "operator install failed")
 		}
-		return m.waitOperator(op.id, op.namespace, op.subName, op.title)
-	case o.st.installed() && o.st.phase == "Succeeded":
-		m.step(op.id, "success", fmt.Sprintf("%s %s is installed%s.", op.title, o.st.version, byWhom(o.byTool)))
-	case o.st.pending() != nil || o.st.installed():
-		sub := o.st.requested
+		return m.waitOperator(op.ID, op.Namespace, op.SubName, op.Title)
+	case o.st.Installed() && o.st.Phase == "Succeeded":
+		m.step(op.ID, "success", fmt.Sprintf("%s %s is installed%s.", op.Title, o.st.Version, byWhom(o.byTool)))
+	case o.st.Pending() != nil || o.st.Installed():
+		sub := o.st.Requested
 		if sub == nil {
-			m.step(op.id, "success", fmt.Sprintf("%s %s is being installed in %s.", op.title, o.st.version, o.st.csvNS))
+			m.step(op.ID, "success", fmt.Sprintf("%s %s is being installed in %s.", op.Title, o.st.Version, o.st.CSVNS))
 			return nil, nil
 		}
-		return m.waitOperator(op.id, sub.Metadata.Namespace, sub.Metadata.Name, op.title)
+		return m.waitOperator(op.ID, sub.Metadata.Namespace, sub.Metadata.Name, op.Title)
 	}
 	return nil, nil
 }
@@ -815,19 +816,19 @@ func (m *maasRun) ensureKuadrant(rec *prereqRecord) (*types.OperationResponse, e
 		m.step("kuadrant", "success", fmt.Sprintf("Kuadrant %s/kuadrant exists%s.", k.namespace, byWhom(toolOwned(k.meta))))
 		return nil, nil
 	}
-	rhcl, err := readOperator(c, rhclOperator)
+	rhcl, err := envkit.ReadOperator(c, rhclOperator)
 	if err != nil {
 		return m.fail("kuadrant", fmt.Sprintf("Cannot read the installed operators: %v.", err), kube.ErrorCodeFromK8sErr(err), "csv read failed")
 	}
-	ns := kube.FirstNonEmpty(rhcl.csvNS, rhclOperator.namespace)
+	ns := kube.FirstNonEmpty(rhcl.CSVNS, rhclOperator.Namespace)
 	m.step("kuadrant", "running", "Waiting for Connectivity Link's Kuadrant API...")
 	version := ""
-	if _, err := kube.WaitForGone(c, MaaSOperatorTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+	if _, err := kube.WaitForGone(c, envkit.OperatorTimeout, envkit.PollInterval, func(cc *Client) (bool, error) {
 		v, err := kuadrantServedVersion(cc)
 		version = v
 		return v != "", err
 	}); err != nil || version == "" {
-		return m.fail("kuadrant", fmt.Sprintf("Connectivity Link's Kuadrant API is not served after %s%s. Set up again to continue.", clockText(MaaSOperatorTimeout), errSuffix(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "not_ready"), "kuadrant api missing")
+		return m.fail("kuadrant", fmt.Sprintf("Connectivity Link's Kuadrant API is not served after %s%s. Set up again to continue.", clockText(envkit.OperatorTimeout), errSuffix(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "not_ready"), "kuadrant api missing")
 	}
 	if rec.Shared == nil {
 		rec.Shared = map[string]string{}
@@ -857,7 +858,7 @@ func (m *maasRun) waitPrerequisitesReady(p *featurePlan) (*types.OperationRespon
 	m.step("ready", "running", fmt.Sprintf("Waiting for RHOAI's operator to report %s ready (usually 1 to 3 minutes)...", joinTitles(componentKeys(p.components))))
 	last := ""
 	var dsc rhoai.DSCRead
-	done, err := kube.WaitForGone(c, PrerequisiteReadyTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+	done, err := kube.WaitForGone(c, PrerequisiteReadyTimeout, envkit.PollInterval, func(cc *Client) (bool, error) {
 		r, err := rhoai.ReadFirstDSC(cc)
 		if err != nil {
 			return false, err
@@ -925,7 +926,7 @@ func (m *maasRun) waitPrerequisitesReady(p *featurePlan) (*types.OperationRespon
 func RestorableComponentKey(key string) bool {
 	for _, fs := range featureSetups {
 		for _, fc := range fs.components {
-			if slices.Contains(fc.keys, key) || (fc.v1Key != "" && fc.v1Key == key) {
+			if slices.Contains(fc.Keys, key) || (fc.V1Key != "" && fc.V1Key == key) {
 				return true
 			}
 		}
@@ -1040,7 +1041,7 @@ func restoreCheck(c *Client, rec prereqRecord, dsc rhoai.DSCRead, key string) re
 		return restoreVerdict{kept: key + " (this tool did not turn it on)"}
 	}
 	prev := kube.FirstNonEmpty(rc.Previous, "Removed")
-	state, _ := componentManagement(dsc.Object, key)
+	state, _ := envkit.ComponentManagement(dsc.Object, key)
 	switch {
 	case dsc.Object == nil || state != "Managed":
 		return restoreVerdict{drop: true, log: key + " is " + kube.FirstNonEmpty(state, "not set") + " already"}

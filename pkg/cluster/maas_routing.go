@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -269,7 +270,7 @@ func waitForModelRoute(c *Client, project, name string, published bool) (string,
 	maas := inferenceGatewayNamespace + "/" + maasGatewayName
 	route := fmt.Sprintf("HTTPRoute %s/%s-kserve-route", project, name)
 	why, stop := "", false
-	done, err := kube.WaitForGone(c, MaaSRouteTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+	done, err := kube.WaitForGone(c, MaaSRouteTimeout, envkit.PollInterval, func(cc *Client) (bool, error) {
 		parents, found, err := readModelRoute(cc, project, name)
 		if err != nil {
 			return false, err

@@ -3,6 +3,8 @@ package cluster
 import (
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 )
 
 const pvcProtection = "kubernetes.io/pvc-protection"
@@ -19,7 +21,7 @@ func migratedForRemoval(t *testing.T) (*resourceFake, *Client) {
 	f, c := newResourceFake(t)
 	putMigrationCase(f)
 	delete(f.objects, fakeKey{gv: dspaAPIGroup, ns: "hand-made", plural: "datasciencepipelinesapplications", name: legacyDSPAName})
-	f.putJSON(secretPath("juntao-test", legacyDSPASecretName), `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(legacyPostManager, "Update")+`}}`)
+	f.putJSON(secretPath("juntao-test", legacyDSPASecretName), `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(envkit.LegacyPostManager, "Update")+`}}`)
 	ensureMap(f.get(legacyS3PVCPath), "metadata")["finalizers"] = []any{pvcProtection}
 	simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
 	if ok, msg, _, _ := runMigrate(t, c, MigrateOptions{}); !ok {

@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -337,7 +338,7 @@ func toolDBKind(kind string) bool {
 // --- the development database (scripts/setup-database.sh) ---------------------------
 
 func maasPOCLabels() map[string]any {
-	l := toolLabels()
+	l := envkit.ToolLabels()
 	l["app"] = "postgres"
 	l["purpose"] = "poc"
 	return l
@@ -438,7 +439,7 @@ func createMaaSPOCCreds(c *Client, ns, password string, dryRun bool) (string, er
 	}
 	body, _, err := c.Do(http.MethodPost, maasCreatePath("PostgresSecret", ns), "application/json", data, query)
 	if kube.IsK8sConflict(err) {
-		return "", &foreignObjectError{Desc: maasDesc("PostgresSecret", ns)}
+		return "", &envkit.ForeignObjectError{Desc: maasDesc("PostgresSecret", ns)}
 	}
 	if err != nil {
 		return "", err
@@ -633,32 +634,32 @@ type cnpgReadiness struct {
 	served  bool
 	err     error
 	pending bool
-	plan    *operatorInstallPlan
+	plan    *envkit.OperatorInstallPlan
 	planMsg string
 }
 
-func readCNPGReadiness(c *Client, cnpg operatorState, readErr error) cnpgReadiness {
+func readCNPGReadiness(c *Client, cnpg envkit.OperatorState, readErr error) cnpgReadiness {
 	served, err := groupServed(c, cnpgGroup)
-	if err == nil && served && !cnpg.installed() {
+	if err == nil && served && !cnpg.Installed() {
 		// Its API alone is not an installed operator (CRDs stay after an
 		// uninstall).
-		served, err = controllerDeployed(c, cnpgController)
+		served, err = envkit.ControllerDeployed(c, cnpgController)
 	}
 	r := cnpgReadiness{served: served, err: err}
 	switch {
 	case err != nil || served:
 	case readErr != nil:
 		r.err = readErr
-	case cnpg.installed() || cnpg.pending() != nil:
+	case cnpg.Installed() || cnpg.Pending() != nil:
 		r.pending = true
 	default:
-		r.plan, r.planMsg, _ = planOperatorInstall(c, cnpgOperator)
+		r.plan, r.planMsg, _ = envkit.PlanOperatorInstall(c, cnpgOperator)
 	}
 	return r
 }
 
-func cnpgInstallPlanText(p *operatorInstallPlan) string {
-	return fmt.Sprintf("Install CloudNativePG %s: %sSubscription %s/%s (package %s, channel %s, from certified-operators; in its own namespace, not openshift-operators, where an install can pull an OSSM upgrade that breaks the gateway; it stays after Clean up)", p.head, operatorPlanPrefix(p), cnpgOperator.namespace, cnpgOperator.subName, cnpgOperator.pkg, p.channel)
+func cnpgInstallPlanText(p *envkit.OperatorInstallPlan) string {
+	return fmt.Sprintf("Install CloudNativePG %s: %sSubscription %s/%s (package %s, channel %s, from certified-operators; in its own namespace, not openshift-operators, where an install can pull an OSSM upgrade that breaks the gateway; it stays after Clean up)", p.Head, operatorPlanPrefix(p), cnpgOperator.Namespace, cnpgOperator.SubName, cnpgOperator.Pkg, p.Channel)
 }
 
 // maasDBChoices are the databases Set up (or Change database) can make in
@@ -700,7 +701,7 @@ type maasDBStatus struct {
 
 // maasDatabaseStatus reports the database (and CloudNativePG while it is
 // the database), the choice Set up asks for, and what Set up does about it.
-func maasDatabaseStatus(c *Client, rec maasRecord, infra string, cnpg operatorState, cnpgReadErr error) maasDBStatus {
+func maasDatabaseStatus(c *Client, rec maasRecord, infra string, cnpg envkit.OperatorState, cnpgReadErr error) maasDBStatus {
 	ns := kube.FirstNonEmpty(rec.DBNamespace, infra)
 	out := maasDBStatus{db: &types.MaaSDatabase{Namespace: ns, Default: maasDBDefault}}
 	part := types.MaaSPart{ID: "database", Title: "Database", DocURL: maasDocsBase + "install/maas-setup.md#database-setup"}
@@ -818,18 +819,18 @@ func maasDatabaseStatus(c *Client, rec maasRecord, infra string, cnpg operatorSt
 
 // cnpgStatusPart is the CloudNativePG operator's part, while the database
 // is a CloudNativePG one.
-func cnpgStatusPart(rec maasRecord, cnpg operatorState, cr cnpgReadiness) types.MaaSPart {
+func cnpgStatusPart(rec maasRecord, cnpg envkit.OperatorState, cr cnpgReadiness) types.MaaSPart {
 	p := types.MaaSPart{ID: "cnpg", Title: "CloudNativePG operator", DocURL: maasDocsBase + "install/maas-setup.md#database-setup"}
 	_, byTool := rec.Shared["cnpg"]
 	switch {
 	case cr.err != nil:
 		p.State, p.Message = "unknown", cr.err.Error()
 	case cr.served:
-		p.ManagedByTool = byTool && cnpg.sub != nil && toolOwned(cnpg.sub.Metadata)
+		p.ManagedByTool = byTool && cnpg.Sub != nil && toolOwned(cnpg.Sub.Metadata)
 		p.NotManaged = !p.ManagedByTool
 		p.State, p.Message = "ready", "Its API (postgresql.cnpg.io) is served"
-		if cnpg.installed() {
-			p.Message = fmt.Sprintf("Version %s runs in %s", cnpg.version, cnpg.csvNS)
+		if cnpg.Installed() {
+			p.Message = fmt.Sprintf("Version %s runs in %s", cnpg.Version, cnpg.CSVNS)
 		}
 	case cr.pending:
 		p.ManagedByTool, p.NotManaged = byTool, !byTool
@@ -839,8 +840,8 @@ func cnpgStatusPart(rec maasRecord, cnpg operatorState, cr cnpgReadiness) types.
 	default:
 		p.State = "missing"
 		if cr.plan != nil {
-			p.Message = fmt.Sprintf("Not installed. Set up installs version %s from certified-operators (channel %s) for this tool's database.", cr.plan.head, cr.plan.channel)
-			p.Commands = cnpgInstallCommands(cr.plan.channel)
+			p.Message = fmt.Sprintf("Not installed. Set up installs version %s from certified-operators (channel %s) for this tool's database.", cr.plan.Head, cr.plan.Channel)
+			p.Commands = cnpgInstallCommands(cr.plan.Channel)
 		}
 	}
 	return p
@@ -857,9 +858,9 @@ type maasDBPlan struct {
 	// or "external" that is in place (nothing to do).
 	target     string
 	url        string
-	cnpg       operatorState
+	cnpg       envkit.OperatorState
 	cnpgServed bool
-	cnpgPlan   *operatorInstallPlan
+	cnpgPlan   *envkit.OperatorInstallPlan
 	image      string
 	imageFrom  string
 	password   string
@@ -930,17 +931,17 @@ func (p *maasDBPlan) planCNPG(c *Client) (string, string) {
 		return fmt.Sprintf("Cannot tell whether CloudNativePG is installed; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err)
 	}
 	if served {
-		if served, err = controllerDeployed(c, cnpgController); err != nil {
+		if served, err = envkit.ControllerDeployed(c, cnpgController); err != nil {
 			return fmt.Sprintf("Cannot tell whether CloudNativePG's operator runs; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
 		}
 	}
 	p.cnpgServed = served
 	if !served {
-		if p.cnpg, err = readOperator(c, cnpgOperator); err != nil {
+		if p.cnpg, err = envkit.ReadOperator(c, cnpgOperator); err != nil {
 			return fmt.Sprintf("Cannot read the installed operators; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err)
 		}
-		if !p.cnpg.installed() && p.cnpg.pending() == nil {
-			plan, msg, code := planOperatorInstall(c, cnpgOperator)
+		if !p.cnpg.Installed() && p.cnpg.Pending() == nil {
+			plan, msg, code := envkit.PlanOperatorInstall(c, cnpgOperator)
 			if msg != "" {
 				return msg + " Or choose another database.", code
 			}
@@ -971,7 +972,7 @@ func (p *maasDBPlan) connURL(c *Client) (string, error) {
 func (p *maasDBPlan) dryRun(c *Client) (string, error) {
 	ns := p.state.ns
 	if p.cnpgPlan != nil {
-		if _, err := createOperatorObjects(c, p.cnpgPlan, true); err != nil {
+		if _, err := envkit.CreateOperatorObjects(c, p.cnpgPlan, true); err != nil {
 			return "CloudNativePG's install", err
 		}
 	}
@@ -1019,7 +1020,7 @@ func (p *maasDBPlan) dryRun(c *Client) (string, error) {
 // (only this tool's).
 func ensureMaaSDBObject(c *Client, kind, ns string, obj map[string]any, cur kube.ObjectMeta, found, dryRun bool) (kube.ObjectMeta, error) {
 	read := func() (kube.ObjectMeta, bool, error) { return kube.ReadObjectMeta(c, maasObjectPath(kind, ns)) }
-	_, written, _, err := ensureToolObject(c, maasDesc(kind, ns), maasObjectPath(kind, ns), maasCreatePath(kind, ns), obj, cur, found, read, toolOwned, dryRun)
+	_, written, _, err := envkit.EnsureToolObject(c, maasDesc(kind, ns), maasObjectPath(kind, ns), maasCreatePath(kind, ns), obj, cur, found, read, toolOwned, dryRun)
 	return written, err
 }
 
@@ -1035,31 +1036,31 @@ func (m *maasRun) ensureCNPG(rec *maasRecord, p *maasDBPlan) (*types.OperationRe
 		m.step("cnpg", "success", "CloudNativePG is installed"+byWhom(rec.Shared["cnpg"] != "")+".")
 		return nil, nil
 	}
-	ns, name := cnpgOperator.namespace, cnpgOperator.subName
+	ns, name := cnpgOperator.Namespace, cnpgOperator.SubName
 	if p.cnpgPlan != nil {
-		m.step("cnpg", "running", fmt.Sprintf("Installing CloudNativePG %s (channel %s) from certified-operators...", p.cnpgPlan.head, p.cnpgPlan.channel))
-		rec.setShared("cnpg", fmt.Sprintf("Subscription %s/%s, channel %s", cnpgOperator.namespace, cnpgOperator.subName, p.cnpgPlan.channel))
+		m.step("cnpg", "running", fmt.Sprintf("Installing CloudNativePG %s (channel %s) from certified-operators...", p.cnpgPlan.Head, p.cnpgPlan.Channel))
+		rec.setShared("cnpg", fmt.Sprintf("Subscription %s/%s, channel %s", cnpgOperator.Namespace, cnpgOperator.SubName, p.cnpgPlan.Channel))
 		if err := writeMaaSRecord(c, *rec); err != nil {
 			return m.fail("cnpg", err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
 		}
-		made, err := createOperatorObjects(c, p.cnpgPlan, false)
+		made, err := envkit.CreateOperatorObjects(c, p.cnpgPlan, false)
 		for _, d := range made {
 			m.logs = append(m.logs, "OK: "+d+" created")
 		}
 		if err != nil {
 			return m.fail("cnpg", fmt.Sprintf("Failed to %v. Run it again to continue.", err), maasWriteCode(err), "cnpg install failed")
 		}
-	} else if pend := p.cnpg.pending(); pend != nil {
+	} else if pend := p.cnpg.Pending(); pend != nil {
 		ns, name = pend.Metadata.Namespace, pend.Metadata.Name
 	}
-	if p.cnpgPlan != nil || p.cnpg.pending() != nil {
-		if r, msg := m.waitOperator("cnpg", ns, name, cnpgOperator.title); r != nil {
+	if p.cnpgPlan != nil || p.cnpg.Pending() != nil {
+		if r, msg := m.waitOperator("cnpg", ns, name, cnpgOperator.Title); r != nil {
 			return r, msg
 		}
 	}
-	served, err := kube.WaitForGone(c, MaaSOperatorTimeout, MaaSPoll, func(cc *Client) (bool, error) { return groupServed(cc, cnpgGroup) })
+	served, err := kube.WaitForGone(c, envkit.OperatorTimeout, envkit.PollInterval, func(cc *Client) (bool, error) { return groupServed(cc, cnpgGroup) })
 	if err != nil || !served {
-		return m.fail("cnpg", fmt.Sprintf("CloudNativePG's API (postgresql.cnpg.io) is not served after %s%s. Run it again to continue.", clockText(MaaSOperatorTimeout), errSuffix(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "not_ready"), "cnpg api missing")
+		return m.fail("cnpg", fmt.Sprintf("CloudNativePG's API (postgresql.cnpg.io) is not served after %s%s. Run it again to continue.", clockText(envkit.OperatorTimeout), errSuffix(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "not_ready"), "cnpg api missing")
 	}
 	p.cnpgServed = true
 	m.step("cnpg", "success", "CloudNativePG runs.")
@@ -1138,7 +1139,7 @@ func (m *maasRun) makeDatabase(rec *maasRecord, p *maasDBPlan, maasOn, switching
 			m.logs = append(m.logs, "OK: "+maasDesc(k, ns))
 		}
 		m.step("database", "running", "Waiting for the development database to be available (up to "+clockText(MaaSDevDatabaseTimeout)+", as the script waits)...")
-		ready, err := kube.WaitForGone(c, MaaSDevDatabaseTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+		ready, err := kube.WaitForGone(c, MaaSDevDatabaseTimeout, envkit.PollInterval, func(cc *Client) (bool, error) {
 			return deploymentAvailable(cc, ns, maasPOCName) == "True", nil
 		})
 		if err != nil {
@@ -1156,7 +1157,7 @@ func (m *maasRun) makeDatabase(rec *maasRecord, p *maasDBPlan, maasOn, switching
 			return m.fail("database", fmt.Sprintf("Failed to apply %s: %v.", maasDesc("Cluster", ns), err), maasWriteCode(err), "db apply failed")
 		}
 		m.step("database", "running", "Waiting for the database to start (usually 1 to 2 minutes)...")
-		ready, err := kube.WaitForGone(c, MaaSDatabaseTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+		ready, err := kube.WaitForGone(c, MaaSDatabaseTimeout, envkit.PollInterval, func(cc *Client) (bool, error) {
 			_, _, ok, _, err := readMaaSDBCluster(cc, ns)
 			return ok, err
 		})
@@ -1236,7 +1237,7 @@ func (m *maasRun) deleteDBObjects(step, ns, dbKind string, rec *maasRecord) ([]s
 			res, _ := m.fail(step, fmt.Sprintf("Failed to delete %s: %v. Run it again to retry.", maasDesc(k, ns), err), maasWriteCode(err), "delete failed")
 			return deleted, res
 		}
-		if gone, _ := kube.WaitForDeletion(c, path, MaaSDeleteTimeout, MaaSPoll); !gone {
+		if gone, _ := kube.WaitForDeletion(c, path, MaaSDeleteTimeout, envkit.PollInterval); !gone {
 			m.logs = append(m.logs, maasDesc(k, ns)+" is still being deleted")
 		}
 		deleted = append(deleted, maasDesc(k, ns))

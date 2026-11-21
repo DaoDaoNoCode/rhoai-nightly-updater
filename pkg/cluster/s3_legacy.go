@@ -6,6 +6,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -182,7 +183,7 @@ func legacyNamespaceOurs(meta kube.ObjectMeta) bool {
 	if meta.Annotations[projectRequesterAnnotation] != "" {
 		return false
 	}
-	return meta.HasManager([]string{legacyPostManager})
+	return meta.HasManager([]string{envkit.LegacyPostManager})
 }
 
 // readLegacyStorage reports the storage an earlier version left in

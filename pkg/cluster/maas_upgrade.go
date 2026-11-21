@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -34,34 +35,34 @@ func (m *maasRun) upgradeRHCL() (*types.OperationResponse, error) {
 	if err != nil {
 		return m.fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
 	}
-	st, err := readOperator(c, rhclOperator)
+	st, err := envkit.ReadOperator(c, rhclOperator)
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot read the installed operators; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "csv read failed")
 	}
-	if st.installed() && !rhclBelowMinimum(st.version) {
-		m.step("check", "success", fmt.Sprintf("Connectivity Link %s is installed, which meets the docs' minimum (%s).", st.version, rhclDocsMinimum))
-		return m.done(fmt.Sprintf("Connectivity Link %s needs no upgrade.", st.version))
+	if st.Installed() && !rhclBelowMinimum(st.Version) {
+		m.step("check", "success", fmt.Sprintf("Connectivity Link %s is installed, which meets the docs' minimum (%s).", st.Version, rhclDocsMinimum))
+		return m.done(fmt.Sprintf("Connectivity Link %s needs no upgrade.", st.Version))
 	}
 	if why := rhclUpgradeRefusal(st); why != "" {
 		return m.fail("check", why+" Nothing was changed.", "prerequisites", "upgrade refused")
 	}
-	pkg, found, err := readOperatorPackage(c, rhclOperator.pkg, st.sub.Spec.Source)
+	pkg, found, err := envkit.ReadOperatorPackage(c, rhclOperator.Pkg, st.Sub.Spec.Source)
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot read the catalog's channels; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "package read failed")
 	}
 	if !found {
-		return m.fail("check", fmt.Sprintf("Catalog %s does not offer %s. Nothing was changed.", st.sub.Spec.Source, rhclOperator.pkg), "prerequisites", "package missing")
+		return m.fail("check", fmt.Sprintf("Catalog %s does not offer %s. Nothing was changed.", st.Sub.Spec.Source, rhclOperator.Pkg), "prerequisites", "package missing")
 	}
 	target := rhclTargetChannel(pkg)
 	if target == "" {
-		return m.fail("check", fmt.Sprintf("No channel of %s in catalog %s has %s or later. Nothing was changed.", rhclOperator.pkg, st.sub.Spec.Source, rhclDocsMinimum), "prerequisites", "no target channel")
+		return m.fail("check", fmt.Sprintf("No channel of %s in catalog %s has %s or later. Nothing was changed.", rhclOperator.Pkg, st.Sub.Spec.Source, rhclDocsMinimum), "prerequisites", "no target channel")
 	}
-	targetCh, _ := pkg.channel(target)
-	if err := patchSubscription(c, st.sub, map[string]any{"channel": target}, true); err != nil {
-		return m.fail("check", fmt.Sprintf("The API server rejects the channel change of Subscription %s/%s: %v. Nothing was changed.%s", st.sub.Metadata.Namespace, st.sub.Metadata.Name, err, kube.TemplateHint(err)), maasWriteCode(err), "dry run failed")
+	targetCh, _ := pkg.Channel(target)
+	if err := envkit.PatchSubscription(c, st.Sub, map[string]any{"channel": target}, true); err != nil {
+		return m.fail("check", fmt.Sprintf("The API server rejects the channel change of Subscription %s/%s: %v. Nothing was changed.%s", st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, err, kube.TemplateHint(err)), maasWriteCode(err), "dry run failed")
 	}
-	ns, name := st.sub.Metadata.Namespace, st.sub.Metadata.Name
-	m.step("check", "success", fmt.Sprintf("Upgrading from %s (channel %s) to channel %s (%s).", st.version, kube.FirstNonEmpty(st.sub.Spec.Channel, "not set"), target, targetCh.head()))
+	ns, name := st.Sub.Metadata.Namespace, st.Sub.Metadata.Name
+	m.step("check", "success", fmt.Sprintf("Upgrading from %s (channel %s) to channel %s (%s).", st.Version, kube.FirstNonEmpty(st.Sub.Spec.Channel, "not set"), target, targetCh.Head()))
 
 	want := target
 	hopped := ""
@@ -69,14 +70,14 @@ func (m *maasRun) upgradeRHCL() (*types.OperationResponse, error) {
 		if i >= maasRHCLHops {
 			return m.fail("upgrade", fmt.Sprintf("Stopped after %d channel switches without reaching %s. A cluster-admin checks Subscription %s/%s.", maasRHCLHops, targetCh.CurrentCSV, ns, name), "not_ready", "too many hops")
 		}
-		wantCh, _ := pkg.channel(want)
-		sub, err := readOperatorSubscription(c, ns, name)
+		wantCh, _ := pkg.Channel(want)
+		sub, err := envkit.ReadOperatorSubscription(c, ns, name)
 		if err != nil || sub == nil {
 			return m.fail("upgrade", fmt.Sprintf("Cannot read Subscription %s/%s: %v.", ns, name, err), kube.ErrorCodeFromK8sErr(err), "subscription read failed")
 		}
 		if sub.Spec.Channel != want {
 			m.step("upgrade", "running", fmt.Sprintf("Switching Subscription %s/%s to channel %s...", ns, name, want))
-			if err := patchSubscription(c, sub, map[string]any{"channel": want}, false); err != nil {
+			if err := envkit.PatchSubscription(c, sub, map[string]any{"channel": want}, false); err != nil {
 				return m.fail("upgrade", fmt.Sprintf("Failed to switch Subscription %s/%s to channel %s: %v. Run the upgrade again to retry.", ns, name, want, err), maasWriteCode(err), "channel patch failed")
 			}
 			m.logs = append(m.logs, fmt.Sprintf("OK: Subscription %s/%s channel %s", ns, name, want))
@@ -85,28 +86,28 @@ func (m *maasRun) upgradeRHCL() (*types.OperationResponse, error) {
 		if err != nil {
 			return m.fail("upgrade", fmt.Sprintf("Stopped waiting for OLM: %v. Channel %s is set; run the upgrade again to continue.", err, want), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "upgrade wait failed")
 		}
-		if p.failed != "" {
-			return m.fail("upgrade", fmt.Sprintf("OLM does not upgrade Connectivity Link on channel %s: %s. A cluster-admin checks Subscription %s/%s.", want, p.failed, ns, name), "not_ready", "upgrade failed")
+		if p.Failed != "" {
+			return m.fail("upgrade", fmt.Sprintf("OLM does not upgrade Connectivity Link on channel %s: %s. A cluster-admin checks Subscription %s/%s.", want, p.Failed, ns, name), "not_ready", "upgrade failed")
 		}
 		if reached {
 			if want == target {
-				m.step("upgrade", "success", fmt.Sprintf("Connectivity Link %s is installed (channel %s%s).", csvVersion(p.installedCSV), target, hopNote(hopped)))
+				m.step("upgrade", "success", fmt.Sprintf("Connectivity Link %s is installed (channel %s%s).", envkit.CSVVersion(p.InstalledCSV), target, hopNote(hopped)))
 				break
 			}
-			m.step("upgrade", "running", fmt.Sprintf("%s is installed; switching to channel %s now.", p.installedCSV, target))
+			m.step("upgrade", "running", fmt.Sprintf("%s is installed; switching to channel %s now.", p.InstalledCSV, target))
 			want = target
 			continue
 		}
-		if !p.done {
-			return m.fail("upgrade", fmt.Sprintf("OLM has not finished after %s (%s). Run the upgrade again to continue.", clockText(MaaSOperatorTimeout), kube.FirstNonEmpty(p.text, "no progress")), "not_ready", "upgrade not done")
+		if !p.Done {
+			return m.fail("upgrade", fmt.Sprintf("OLM has not finished after %s (%s). Run the upgrade again to continue.", clockText(envkit.OperatorTimeout), kube.FirstNonEmpty(p.Text, "no progress")), "not_ready", "upgrade not done")
 		}
 		// AtLatestKnown below the head: OLM has no edge from here on this
 		// channel.
-		hop := hopChannel(pkg, p.installedCSV, target)
+		hop := hopChannel(pkg, p.InstalledCSV, target)
 		if want != target || hop == "" {
-			return m.fail("upgrade", fmt.Sprintf("OLM stays at %s on channel %s and the catalog lists no channel that leads on from it. A cluster-admin checks the upgrade path (oc get packagemanifest %s -n %s -o yaml). Subscription %s/%s is on channel %s.", p.installedCSV, want, rhclOperator.pkg, rhoai.CatalogNS, ns, name, want), "not_ready", "no upgrade path")
+			return m.fail("upgrade", fmt.Sprintf("OLM stays at %s on channel %s and the catalog lists no channel that leads on from it. A cluster-admin checks the upgrade path (oc get packagemanifest %s -n %s -o yaml). Subscription %s/%s is on channel %s.", p.InstalledCSV, want, rhclOperator.Pkg, rhoai.CatalogNS, ns, name, want), "not_ready", "no upgrade path")
 		}
-		m.step("upgrade", "running", fmt.Sprintf("OLM has no path from %s straight to %s; going through channel %s first.", p.installedCSV, targetCh.CurrentCSV, hop))
+		m.step("upgrade", "running", fmt.Sprintf("OLM has no path from %s straight to %s; going through channel %s first.", p.InstalledCSV, targetCh.CurrentCSV, hop))
 		hopped, want = hop, hop
 	}
 
@@ -119,7 +120,7 @@ func (m *maasRun) upgradeRHCL() (*types.OperationResponse, error) {
 	}
 
 	m.step("ready", "running", "Checking the operator's pods...")
-	st, err = readOperator(c, rhclOperator)
+	st, err = envkit.ReadOperator(c, rhclOperator)
 	if err != nil {
 		return m.fail("ready", fmt.Sprintf("Cannot read the installed operators: %v. The upgrade itself is done.", err), kube.ErrorCodeFromK8sErr(err), "csv read failed")
 	}
@@ -130,8 +131,8 @@ func (m *maasRun) upgradeRHCL() (*types.OperationResponse, error) {
 			note += " Raise the memory limit on the MaaS tab fixes it."
 		}
 	}
-	m.step("ready", "success", fmt.Sprintf("Connectivity Link %s runs.%s", st.version, note))
-	return m.done(fmt.Sprintf("Connectivity Link is upgraded to %s.%s", st.version, note))
+	m.step("ready", "success", fmt.Sprintf("Connectivity Link %s runs.%s", st.Version, note))
+	return m.done(fmt.Sprintf("Connectivity Link is upgraded to %s.%s", st.Version, note))
 }
 
 func hopNote(hop string) string {
@@ -143,43 +144,43 @@ func hopNote(hop string) string {
 
 // waitForChannelHead waits until OLM has installed head (reached), or the
 // Subscription has stayed settled at another CSV for
-// MaaSOperatorResolveGrace (OLM has no edge to head: AtLatestKnown), or
+// envkit.OperatorResolveGrace (OLM has no edge to head: AtLatestKnown), or
 // failed for that long.
-func (m *maasRun) waitForChannelHead(ns, name, head string) (bool, subscriptionProgress, error) {
-	var last subscriptionProgress
+func (m *maasRun) waitForChannelHead(ns, name, head string) (bool, envkit.SubscriptionProgress, error) {
+	var last envkit.SubscriptionProgress
 	var settledSince, failedSince time.Time
 	reached, failedLong := false, false
-	_, err := kube.WaitForGone(m.c, MaaSOperatorTimeout, MaaSPoll, func(cc *Client) (bool, error) {
-		p, err := readSubscriptionProgress(cc, ns, name)
+	_, err := kube.WaitForGone(m.c, envkit.OperatorTimeout, envkit.PollInterval, func(cc *Client) (bool, error) {
+		p, err := envkit.ReadSubscriptionProgress(cc, ns, name)
 		if err != nil {
 			return false, err
 		}
-		if p.text != last.text {
-			m.step("upgrade", "running", p.text)
+		if p.Text != last.Text {
+			m.step("upgrade", "running", p.Text)
 		}
 		last = p
 		switch {
-		case p.done && p.installedCSV == head:
+		case p.Done && p.InstalledCSV == head:
 			reached = true
 			return true, nil
-		case p.failed != "":
+		case p.Failed != "":
 			if failedSince.IsZero() {
 				failedSince = kube.Clock().Now()
 			}
-			failedLong = kube.Clock().Since(failedSince) >= MaaSOperatorResolveGrace
+			failedLong = kube.Clock().Since(failedSince) >= envkit.OperatorResolveGrace
 			return failedLong, nil
-		case p.done:
+		case p.Done:
 			failedSince = time.Time{}
 			if settledSince.IsZero() {
 				settledSince = kube.Clock().Now()
 			}
-			return kube.Clock().Since(settledSince) >= MaaSOperatorResolveGrace, nil
+			return kube.Clock().Since(settledSince) >= envkit.OperatorResolveGrace, nil
 		}
 		failedSince, settledSince = time.Time{}, time.Time{}
 		return false, nil
 	})
 	if !failedLong {
-		last.failed = "" // a passing resolution failure (a catalog refreshing)
+		last.Failed = "" // a passing resolution failure (a catalog refreshing)
 	}
 	return reached, last, err
 }
@@ -198,7 +199,7 @@ func (m *maasRun) rhclMemory() (*types.OperationResponse, error) {
 	if err != nil {
 		return m.fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
 	}
-	st, err := readOperator(c, rhclOperator)
+	st, err := envkit.ReadOperator(c, rhclOperator)
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot read the installed operators; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err), "csv read failed")
 	}
@@ -212,32 +213,32 @@ func (m *maasRun) rhclMemory() (*types.OperationResponse, error) {
 	if len(killed) == 0 {
 		return m.fail("check", "No container of the Connectivity Link operator was OOMKilled, so its memory limit stays as its CSV sets it. Nothing was changed.", "prerequisites", "not oomkilled")
 	}
-	containers, err := csvContainers(c, st.csvNS, st.csv)
+	containers, err := csvContainers(c, st.CSVNS, st.CSV)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read CSV %s/%s; nothing was changed: %v.", st.csvNS, st.csv, err), kube.ErrorCodeFromK8sErr(err), "csv read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read CSV %s/%s; nothing was changed: %v.", st.CSVNS, st.CSV, err), kube.ErrorCodeFromK8sErr(err), "csv read failed")
 	}
 	resources, why := rhclMemoryResources(containers)
 	if why != "" {
 		return m.fail("check", "This tool does not raise the operator's memory limit: "+why+". Nothing was changed.", "prerequisites", "memory not offered")
 	}
 	spec := map[string]any{"config": map[string]any{"resources": resources}}
-	if err := patchSubscription(c, st.sub, spec, true); err != nil {
-		return m.fail("check", fmt.Sprintf("The API server rejects the change of Subscription %s/%s: %v. Nothing was changed.", st.sub.Metadata.Namespace, st.sub.Metadata.Name, err), maasWriteCode(err), "dry run failed")
+	if err := envkit.PatchSubscription(c, st.Sub, spec, true); err != nil {
+		return m.fail("check", fmt.Sprintf("The API server rejects the change of Subscription %s/%s: %v. Nothing was changed.", st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, err), maasWriteCode(err), "dry run failed")
 	}
 	m.step("check", "success", "OOMKilled: "+strings.Join(killed, ", ")+".")
 
-	m.step("memory", "running", fmt.Sprintf("Setting spec.config.resources on Subscription %s/%s (%s)...", st.sub.Metadata.Namespace, st.sub.Metadata.Name, resourcesText(resources)))
-	rec.setShared("rhcl-memory", fmt.Sprintf("Subscription %s/%s spec.config.resources (memory limit %s)", st.sub.Metadata.Namespace, st.sub.Metadata.Name, rhclMemoryLimit))
+	m.step("memory", "running", fmt.Sprintf("Setting spec.config.resources on Subscription %s/%s (%s)...", st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, resourcesText(resources)))
+	rec.setShared("rhcl-memory", fmt.Sprintf("Subscription %s/%s spec.config.resources (memory limit %s)", st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, rhclMemoryLimit))
 	if err := writeMaaSRecord(c, rec); err != nil {
 		return m.fail("memory", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 	}
-	if err := patchSubscription(c, st.sub, spec, false); err != nil {
-		return m.fail("memory", fmt.Sprintf("Failed to change Subscription %s/%s: %v.", st.sub.Metadata.Namespace, st.sub.Metadata.Name, err), maasWriteCode(err), "subscription patch failed")
+	if err := envkit.PatchSubscription(c, st.Sub, spec, false); err != nil {
+		return m.fail("memory", fmt.Sprintf("Failed to change Subscription %s/%s: %v.", st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, err), maasWriteCode(err), "subscription patch failed")
 	}
 	m.step("memory", "success", "OLM rolls the operator out with a memory limit of "+rhclMemoryLimit+".")
 	m.step("ready", "running", "Waiting for OLM...")
-	p, err := waitForSubscription(c, st.sub.Metadata.Namespace, st.sub.Metadata.Name, func(s string) { m.step("ready", "running", s) })
-	if err != nil || !p.done {
+	p, err := envkit.WaitForSubscription(c, st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, func(s string) { m.step("ready", "running", s) })
+	if err != nil || !p.Done {
 		m.step("ready", "success", "OLM has not reported the operator ready yet; the MaaS tab shows its state.")
 		return m.done("The operator's memory limit is " + rhclMemoryLimit + "; OLM is still rolling it out.")
 	}
@@ -256,34 +257,34 @@ func (m *maasRun) rhclDenyOnFailure() (*types.OperationResponse, error) {
 	if err != nil {
 		return m.fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
 	}
-	st, err := readOperator(c, rhclOperator)
+	st, err := envkit.ReadOperator(c, rhclOperator)
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot read the installed operators; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err), "csv read failed")
 	}
 	if why := rhclUpgradeRefusal(st); why != "" {
 		return m.fail("check", why+" Nothing was changed.", "prerequisites", "env refused")
 	}
-	if len(rhclMissingDenyEnv(st.sub)) == 0 {
+	if len(rhclMissingDenyEnv(st.Sub)) == 0 {
 		m.step("check", "success", "The Subscription already denies traffic when rate limiting fails.")
 		return m.done("Nothing to change: both variables are set to deny.")
 	}
-	spec := map[string]any{"config": map[string]any{"env": rhclDenyEnvPatch(st.sub)}}
-	if err := patchSubscription(c, st.sub, spec, true); err != nil {
-		return m.fail("check", fmt.Sprintf("The API server rejects the change of Subscription %s/%s: %v. Nothing was changed.", st.sub.Metadata.Namespace, st.sub.Metadata.Name, err), maasWriteCode(err), "dry run failed")
+	spec := map[string]any{"config": map[string]any{"env": rhclDenyEnvPatch(st.Sub)}}
+	if err := envkit.PatchSubscription(c, st.Sub, spec, true); err != nil {
+		return m.fail("check", fmt.Sprintf("The API server rejects the change of Subscription %s/%s: %v. Nothing was changed.", st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, err), maasWriteCode(err), "dry run failed")
 	}
-	m.step("check", "success", fmt.Sprintf("Subscription %s/%s can be changed.", st.sub.Metadata.Namespace, st.sub.Metadata.Name))
+	m.step("check", "success", fmt.Sprintf("Subscription %s/%s can be changed.", st.Sub.Metadata.Namespace, st.Sub.Metadata.Name))
 	m.step("env", "running", "Setting RATELIMIT_CHECK_SERVICE_FAILURE_MODE and RATELIMIT_REPORT_SERVICE_FAILURE_MODE to deny...")
-	rec.setShared("rhcl-deny-on-failure", fmt.Sprintf("Subscription %s/%s spec.config.env deny on failure", st.sub.Metadata.Namespace, st.sub.Metadata.Name))
+	rec.setShared("rhcl-deny-on-failure", fmt.Sprintf("Subscription %s/%s spec.config.env deny on failure", st.Sub.Metadata.Namespace, st.Sub.Metadata.Name))
 	if err := writeMaaSRecord(c, rec); err != nil {
 		return m.fail("env", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 	}
-	if err := patchSubscription(c, st.sub, spec, false); err != nil {
-		return m.fail("env", fmt.Sprintf("Failed to change Subscription %s/%s: %v.", st.sub.Metadata.Namespace, st.sub.Metadata.Name, err), maasWriteCode(err), "subscription patch failed")
+	if err := envkit.PatchSubscription(c, st.Sub, spec, false); err != nil {
+		return m.fail("env", fmt.Sprintf("Failed to change Subscription %s/%s: %v.", st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, err), maasWriteCode(err), "subscription patch failed")
 	}
 	m.step("env", "success", "The Subscription denies traffic when rate limiting fails.")
 	m.step("ready", "running", "Waiting for OLM...")
-	p, err := waitForSubscription(c, st.sub.Metadata.Namespace, st.sub.Metadata.Name, func(s string) { m.step("ready", "running", s) })
-	if err != nil || !p.done {
+	p, err := envkit.WaitForSubscription(c, st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, func(s string) { m.step("ready", "running", s) })
+	if err != nil || !p.Done {
 		m.step("ready", "success", "OLM has not reported the operator ready yet; the MaaS tab shows its state.")
 		return m.done("Connectivity Link denies traffic when rate limiting fails; OLM is still rolling it out.")
 	}

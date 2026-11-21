@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -216,7 +217,7 @@ func migrateJobPath() string {
 }
 
 func migrateJobCreatePath() string {
-	return withToolFieldManager(rhoai.NamespacedPath("batch/v1", "jobs", s3Namespace, ""))
+	return envkit.WithToolFieldManager(rhoai.NamespacedPath("batch/v1", "jobs", s3Namespace, ""))
 }
 
 // migrateJob is the copy Job. The "old" remote reads the old storage's keys
@@ -762,10 +763,10 @@ func writeMigrateSource(c *Client, keys s3Keys) error {
 	}
 	data, _ := json.Marshal(map[string]any{
 		"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-		"metadata":   map[string]any{"name": migrateSourceSecret, "namespace": s3Namespace, "labels": toolLabels()},
+		"metadata":   map[string]any{"name": migrateSourceSecret, "namespace": s3Namespace, "labels": envkit.ToolLabels()},
 		"stringData": map[string]any{s3AccessKeyField: keys.AccessKey, s3SecretKeyField: keys.SecretKey},
 	})
-	_, _, err = c.Post(withToolFieldManager(rhoai.NamespacedPath("v1", "secrets", s3Namespace, "")), data)
+	_, _, err = c.Post(envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "secrets", s3Namespace, "")), data)
 	return err
 }
 
@@ -815,7 +816,7 @@ type migrateJobInfo struct {
 // migrateJobMeta is the copy Job's metadata; a removal's final copy carries
 // finalCopyAnnotation.
 func migrateJobMeta(final bool) map[string]any {
-	meta := map[string]any{"name": migrateJobName, "namespace": s3Namespace, "labels": toolLabels()}
+	meta := map[string]any{"name": migrateJobName, "namespace": s3Namespace, "labels": envkit.ToolLabels()}
 	if final {
 		meta["annotations"] = map[string]any{finalCopyAnnotation: "true"}
 	}
@@ -1095,7 +1096,7 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 			}
 		}
 		patch, _ := json.Marshal(map[string]any{
-			"metadata": map[string]any{"resourceVersion": d.Meta.ResourceVersion, "labels": toolLabels(),
+			"metadata": map[string]any{"resourceVersion": d.Meta.ResourceVersion, "labels": envkit.ToolLabels(),
 				"annotations": map[string]any{dspaConnectionAnnotation: connectionSecretName}},
 			"spec": map[string]any{"objectStorage": map[string]any{"externalStorage": map[string]any{
 				"host": s3Host(),
@@ -1112,7 +1113,7 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 	// message and code for the one that failed.
 	writeSecrets := func(p *plan, dryRun bool) (string, string, error) {
 		for _, s := range p.secrets {
-			if _, err := writeProjectSecret(s, projectSecretPath(p.d.Meta.Namespace, s.name), withToolFieldManager(rhoai.NamespacedPath("v1", "secrets", p.d.Meta.Namespace, "")), dryRun); err != nil {
+			if _, err := writeProjectSecret(s, projectSecretPath(p.d.Meta.Namespace, s.name), envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "secrets", p.d.Meta.Namespace, "")), dryRun); err != nil {
 				msg, code := pipelineWriteFailure(fmt.Sprintf("secret %s", s.name), p.d.Meta.Namespace, err)
 				return msg, code, err
 			}
@@ -1120,7 +1121,7 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 		return "", "", nil
 	}
 	patchDSPA := func(p *plan, dryRun bool) ([]byte, error) {
-		q := url.Values{"fieldManager": {toolFieldManager}}
+		q := url.Values{"fieldManager": {envkit.ToolFieldManager}}
 		if dryRun {
 			q.Set("dryRun", "All")
 		}
@@ -1261,7 +1262,7 @@ func toolNamespaceDeletable(name string, meta kube.ObjectMeta) (bool, string) {
 	switch {
 	case !meta.HasToolLabel():
 		return false, fmt.Sprintf("Namespace %s is kept: it does not carry this tool's label (%s=%s).", name, kube.ManagedByLabelKey, kube.ManagedByLabelValue)
-	case !meta.HasManager(toolManagers):
+	case !meta.HasManager(envkit.ToolManagers):
 		return false, fmt.Sprintf("Namespace %s is kept: it carries this tool's label, but its managedFields show no write by this tool.", name)
 	}
 	return true, ""

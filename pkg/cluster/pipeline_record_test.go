@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -14,7 +15,7 @@ import (
 // manager (a client names its own fieldManager), on the old storage. The
 // tool never recorded it.
 func putForgedDSPA(f *resourceFake) {
-	putDSPAOn(f, "evil", dspaName, toolLabelJSON, toolFieldManager, dspaSecretName)
+	putDSPAOn(f, "evil", dspaName, toolLabelJSON, envkit.ToolFieldManager, dspaSecretName)
 }
 
 func noWriteInProject(t *testing.T, f *resourceFake, project string) {

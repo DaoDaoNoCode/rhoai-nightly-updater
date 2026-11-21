@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -147,7 +148,7 @@ func TestSetupS3Storage_FreshClusterUsesTheNewNamesLabelsEverythingAndWaitsForRe
 		}
 	}
 	nsFields := f.get(s3NSPath)["metadata"].(map[string]any)["managedFields"].([]any)
-	if nsFields[0].(map[string]any)["manager"] != toolFieldManager {
+	if nsFields[0].(map[string]any)["manager"] != envkit.ToolFieldManager {
 		t.Errorf("namespace POST did not set fieldManager: %v", nsFields)
 	}
 	// A fresh install never touches, or names, the earlier storage.
@@ -745,7 +746,7 @@ func TestTeardownS3Storage(t *testing.T) {
 // putToolNamespace puts namespace seaweedfs as this tool creates it: the
 // tool label, written by the tool's field manager.
 func putToolNamespace(f *resourceFake) {
-	f.putJSON(s3NSPath, `{"metadata":{"labels":`+toolLabelJSON+`,"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(toolFieldManager, "Apply")+`},"status":{"phase":"Active"}}`)
+	f.putJSON(s3NSPath, `{"metadata":{"labels":`+toolLabelJSON+`,"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(envkit.ToolFieldManager, "Apply")+`},"status":{"phase":"Active"}}`)
 }
 
 // Tear down deletes namespace seaweedfs only when asked, only once every

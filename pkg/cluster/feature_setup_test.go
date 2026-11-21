@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -501,13 +502,13 @@ func TestPrerequisites_OperatorGroupReuse(t *testing.T) {
 // An operator spec for an own-namespace operator (LeaderWorkerSet, JobSet)
 // creates its OperatorGroup for its namespace only.
 func TestOperatorObjects_OwnNamespaceGroup(t *testing.T) {
-	op := operatorSpec{pkg: "leader-worker-set", subName: "leader-worker-set", namespace: "openshift-lws-operator", source: "redhat-operators", group: "leader-worker-set", ownNamespace: true}
-	_, group, _ := operatorObjects(op, "stable-v1.0")
+	op := envkit.OperatorSpec{Pkg: "leader-worker-set", SubName: "leader-worker-set", Namespace: "openshift-lws-operator", Source: "redhat-operators", Group: "leader-worker-set", OwnNamespace: true}
+	_, group, _ := envkit.OperatorObjects(op, "stable-v1.0")
 	spec, _ := group["spec"].(map[string]any)
 	if targets, _ := spec["targetNamespaces"].([]any); len(targets) != 1 || targets[0] != "openshift-lws-operator" {
 		t.Fatalf("group = %v", group)
 	}
-	if p := operatorPlanPrefix(&operatorInstallPlan{op: op, groupMissing: true}); !strings.Contains(p, "OperatorGroup openshift-lws-operator/leader-worker-set") {
+	if p := operatorPlanPrefix(&envkit.OperatorInstallPlan{Op: op, GroupMissing: true}); !strings.Contains(p, "OperatorGroup openshift-lws-operator/leader-worker-set") {
 		t.Fatalf("prefix = %q", p)
 	}
 }

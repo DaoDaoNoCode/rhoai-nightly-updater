@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -56,17 +57,17 @@ const rhclDocsMinimum = "1.5"
 const rhclAuthBypassVersion = "1.4.0"
 
 var (
-	rhclOperator = operatorSpec{id: "rhcl", title: "Red Hat Connectivity Link", pkg: "rhcl-operator", subName: "kuadrant-operator", subNames: []string{"kuadrant-operator", "rhcl-operator"},
-		namespace: "kuadrant-system", source: "redhat-operators", group: "kuadrant-operator-group",
-		api: kuadrantGroup, controller: kuadrantController, channel: rhclChannel, env: rhclDenyOnFailureEnv}
-	cnpgOperator = operatorSpec{id: "cnpg", title: "CloudNativePG", pkg: "cloudnative-pg", subName: "cloudnative-pg", subNames: []string{"cloudnative-pg"},
-		namespace: "cnpg-system", source: "certified-operators", group: "cloudnative-pg",
-		api: cnpgGroup, controller: cnpgController}
+	rhclOperator = envkit.OperatorSpec{ID: "rhcl", Title: "Red Hat Connectivity Link", Pkg: "rhcl-operator", SubName: "kuadrant-operator", SubNames: []string{"kuadrant-operator", "rhcl-operator"},
+		Namespace: "kuadrant-system", Source: "redhat-operators", Group: "kuadrant-operator-group",
+		API: kuadrantGroup, Controller: kuadrantController, Channel: rhclChannel, Env: rhclDenyOnFailureEnv}
+	cnpgOperator = envkit.OperatorSpec{ID: "cnpg", Title: "CloudNativePG", Pkg: "cloudnative-pg", SubName: "cloudnative-pg", SubNames: []string{"cloudnative-pg"},
+		Namespace: "cnpg-system", Source: "certified-operators", Group: "cloudnative-pg",
+		API: cnpgGroup, Controller: cnpgController}
 )
 
 // rhclChannel is Connectivity Link's channel rule (rhclTargetChannel), with
 // the refusal when no channel meets the docs' minimum.
-func rhclChannel(p operatorPackage) (string, string) {
+func rhclChannel(p envkit.OperatorPackage) (string, string) {
 	if ch := rhclTargetChannel(p); ch != "" {
 		return ch, ""
 	}
@@ -85,7 +86,7 @@ var rhclDenyOnFailureEnv = []map[string]any{
 
 // rhclMissingDenyEnv names the deny-on-failure variables a Subscription
 // does not set to deny.
-func rhclMissingDenyEnv(sub *olmSubscription) []string {
+func rhclMissingDenyEnv(sub *envkit.OLMSubscription) []string {
 	have := map[string]string{}
 	env, _ := sub.Spec.Config["env"].([]any)
 	for _, e := range env {
@@ -106,7 +107,7 @@ func rhclMissingDenyEnv(sub *olmSubscription) []string {
 // rhclDenyEnvPatch is the Subscription's spec.config.env with the
 // deny-on-failure variables set and every other entry kept (a merge patch
 // replaces a list whole).
-func rhclDenyEnvPatch(sub *olmSubscription) []any {
+func rhclDenyEnvPatch(sub *envkit.OLMSubscription) []any {
 	var out []any
 	set := map[string]bool{}
 	env, _ := sub.Spec.Config["env"].([]any)
@@ -134,20 +135,20 @@ func rhclDenyEnvPatch(sub *olmSubscription) []any {
 // lowest head (the docs name stable-1.5 for RHOAI 3.6, not the newest
 // release), the package's default channel first on a tie. "" when no
 // channel does.
-func rhclTargetChannel(p operatorPackage) string {
-	var best *packageChannel
-	for i := range p.channels {
-		ch := p.channels[i]
-		if ch.head() == "" || compareVersions(ch.head(), rhclDocsMinimum) < 0 {
+func rhclTargetChannel(p envkit.OperatorPackage) string {
+	var best *envkit.PackageChannel
+	for i := range p.Channels {
+		ch := p.Channels[i]
+		if ch.Head() == "" || kube.CompareVersions(ch.Head(), rhclDocsMinimum) < 0 {
 			continue
 		}
 		if best == nil {
-			best = &p.channels[i]
+			best = &p.Channels[i]
 			continue
 		}
-		switch cmp := compareVersions(ch.head(), best.head()); {
-		case cmp < 0, cmp == 0 && ch.Name == p.defaultChannel, cmp == 0 && best.Name != p.defaultChannel && ch.Name < best.Name:
-			best = &p.channels[i]
+		switch cmp := kube.CompareVersions(ch.Head(), best.Head()); {
+		case cmp < 0, cmp == 0 && ch.Name == p.DefaultChannel, cmp == 0 && best.Name != p.DefaultChannel && ch.Name < best.Name:
+			best = &p.Channels[i]
 		}
 	}
 	if best == nil {
@@ -161,20 +162,20 @@ func rhclTargetChannel(p operatorPackage) string {
 // is newer, the newest such head below target's (seen live 2026-11-18: the
 // RHCL catalog's stable-1.5 1.5.0 skips ">=1.4.4 <1.5.0", and 1.4.4 is only
 // in stable-1.4, so 1.4.3 goes through stable-1.4 first). "" when none.
-func hopChannel(p operatorPackage, installedCSV, target string) string {
-	installed := versionCore(csvVersion(installedCSV))
-	targetCh, _ := p.channel(target)
-	var best *packageChannel
-	for i := range p.channels {
-		ch := p.channels[i]
-		if ch.Name == target || !ch.has(installedCSV) || compareVersions(ch.head(), installed) <= 0 {
+func hopChannel(p envkit.OperatorPackage, installedCSV, target string) string {
+	installed := envkit.VersionCore(envkit.CSVVersion(installedCSV))
+	targetCh, _ := p.Channel(target)
+	var best *envkit.PackageChannel
+	for i := range p.Channels {
+		ch := p.Channels[i]
+		if ch.Name == target || !ch.Has(installedCSV) || kube.CompareVersions(ch.Head(), installed) <= 0 {
 			continue
 		}
-		if targetCh.head() != "" && compareVersions(ch.head(), targetCh.head()) >= 0 {
+		if targetCh.Head() != "" && kube.CompareVersions(ch.Head(), targetCh.Head()) >= 0 {
 			continue
 		}
-		if best == nil || compareVersions(ch.head(), best.head()) > 0 || (compareVersions(ch.head(), best.head()) == 0 && ch.Name < best.Name) {
-			best = &p.channels[i]
+		if best == nil || kube.CompareVersions(ch.Head(), best.Head()) > 0 || (kube.CompareVersions(ch.Head(), best.Head()) == 0 && ch.Name < best.Name) {
+			best = &p.Channels[i]
 		}
 	}
 	if best == nil {
@@ -236,8 +237,8 @@ func csvContainers(c *Client, ns, name string) ([]operatorContainer, error) {
 // oomKilledContainers names the containers of the operator's pods (pods of
 // its CSV's Deployments in its namespace) whose last or current
 // termination was OOMKilled.
-func oomKilledContainers(c *Client, st operatorState) ([]string, error) {
-	if !st.installed() || len(st.deployments) == 0 {
+func oomKilledContainers(c *Client, st envkit.OperatorState) ([]string, error) {
+	if !st.Installed() || len(st.Deployments) == 0 {
 		return nil, nil
 	}
 	var items []struct {
@@ -259,13 +260,13 @@ func oomKilledContainers(c *Client, st operatorState) ([]string, error) {
 			} `json:"containerStatuses"`
 		} `json:"status"`
 	}
-	if err := c.ListInto(rhoai.NamespacedPath("v1", "pods", st.csvNS, ""), &items); err != nil {
+	if err := c.ListInto(rhoai.NamespacedPath("v1", "pods", st.CSVNS, ""), &items); err != nil {
 		return nil, err
 	}
 	var out []string
 	for _, p := range items {
 		ofOperator := false
-		for _, d := range st.deployments {
+		for _, d := range st.Deployments {
 			ofOperator = ofOperator || strings.HasPrefix(p.Metadata.Name, d+"-")
 		}
 		if !ofOperator {

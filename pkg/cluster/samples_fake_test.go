@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -916,7 +917,7 @@ func newSamplesEnv(t *testing.T) *samplesEnv {
 	InvalidateSamplesStatus(fakeProject)
 	k8s.putJSON("/api/v1/namespaces/"+fakeProject, `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
 	k8s.putProject(fakeProject)
-	putMLflow(k8s, toolLabelJSON, toolFieldManager, "Update", "", `{}`,
+	putMLflow(k8s, toolLabelJSON, envkit.ToolFieldManager, "Update", "", `{}`,
 		`{"url":"`+env.srv.URL+`/mlflow","conditions":[{"type":"Available","status":"True"}]}`)
 	return env
 }

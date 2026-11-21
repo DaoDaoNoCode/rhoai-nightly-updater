@@ -3,6 +3,8 @@ package cluster
 import (
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 )
 
 // Below the docs' minimum the warning names the in-tool upgrade, never a
@@ -52,7 +54,7 @@ func TestRHCLChannelPicking(t *testing.T) {
 	if got := hopChannel(pkg, "rhcl-operator.v1.4.4", "stable-1.5"); got != "" {
 		t.Fatalf("hop from 1.4.4 = %q", got)
 	}
-	if got := rhclTargetChannel(operatorPackage{defaultChannel: "stable", channels: pkg.channels[:2]}); got != "" {
+	if got := rhclTargetChannel(envkit.OperatorPackage{DefaultChannel: "stable", Channels: pkg.Channels[:2]}); got != "" {
 		t.Fatalf("target without a 1.5 channel = %q", got)
 	}
 }

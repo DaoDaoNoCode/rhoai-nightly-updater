@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -379,7 +380,7 @@ func matchExpressions(exprs []json.RawMessage, namespace string, labels map[stri
 // gatewayOwned: this tool created the object. It carries the tool label
 // and the tool wrote it; a copied label alone is not enough.
 func gatewayOwned(meta kube.ObjectMeta) bool {
-	return meta.HasToolLabel() && meta.HasManager(toolManagers)
+	return meta.HasToolLabel() && meta.HasManager(envkit.ToolManagers)
 }
 
 // gatewayObjectPath returns the path of an inference gateway object this
@@ -402,11 +403,11 @@ func gatewayObjectPath(kind string) string {
 func gatewayCreatePath(kind string) (string, bool) {
 	switch kind {
 	case "GatewayClass":
-		return withToolFieldManager(rhoai.ClusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "")), true
+		return envkit.WithToolFieldManager(rhoai.ClusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "")), true
 	case "ConfigMap":
-		return withToolFieldManager(rhoai.NamespacedPath("v1", "configmaps", "openshift-ingress", "")), true
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "configmaps", "openshift-ingress", "")), true
 	case "Gateway":
-		return withToolFieldManager(rhoai.NamespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", "")), true
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", "")), true
 	}
 	return "", false
 }
@@ -513,7 +514,7 @@ func inferenceGatewayObjects(domain, certificate string, namespaces []string) ma
 		"GatewayClass": {
 			"apiVersion": gatewayAPIVersion,
 			"kind":       "GatewayClass",
-			"metadata":   map[string]any{"name": "openshift-ai-inference", "labels": toolLabels()},
+			"metadata":   map[string]any{"name": "openshift-ai-inference", "labels": envkit.ToolLabels()},
 			"spec":       map[string]any{"controllerName": gatewayControllerName},
 		},
 		// The gateway controller merges data.service into the Service it
@@ -523,7 +524,7 @@ func inferenceGatewayObjects(domain, certificate string, namespaces []string) ma
 		"ConfigMap": {
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
-			"metadata":   map[string]any{"name": "openshift-ai-inference-options", "namespace": inferenceGatewayNamespace, "labels": toolLabels()},
+			"metadata":   map[string]any{"name": "openshift-ai-inference-options", "namespace": inferenceGatewayNamespace, "labels": envkit.ToolLabels()},
 			"data": map[string]any{
 				"service": "metadata:\n  annotations:\n    " + servingCertAnnotation + ": " + inferenceGatewayServiceTLS + "\n",
 			},
@@ -1204,18 +1205,18 @@ func applyInferenceGateway(c *Client, plan *gatewayPlan, dryRun bool, logf func(
 				return meta, ok, err
 			}
 		}
-		action, meta, found, err := ensureToolObject(c, gatewayDesc(kind), path, createPath, plan.objects[kind], plan.current[kind], plan.found[kind], read, gatewayOwned, dryRun)
+		action, meta, found, err := envkit.EnsureToolObject(c, gatewayDesc(kind), path, createPath, plan.objects[kind], plan.current[kind], plan.found[kind], read, gatewayOwned, dryRun)
 		plan.current[kind], plan.found[kind] = meta, found
 		if err != nil {
 			if errors.Is(err, errGatewayChanged) && !dryRun {
 				return "", "", true
 			}
 			code := kube.ErrorCodeFromK8sErr(err)
-			var foreign *foreignObjectError
+			var foreign *envkit.ForeignObjectError
 			switch {
 			case errors.As(err, &foreign):
 				code = "not_managed"
-			case errors.Is(err, errObjectChanged) || errors.Is(err, errGatewayChanged) || kube.IsK8sConflict(err):
+			case errors.Is(err, envkit.ErrObjectChanged) || errors.Is(err, errGatewayChanged) || kube.IsK8sConflict(err):
 				code = "conflict"
 			}
 			if dryRun {

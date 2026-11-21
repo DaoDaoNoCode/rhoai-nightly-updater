@@ -3,6 +3,8 @@ package cluster
 import (
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 )
 
 // Any user may `oc new-project minio` and put objects there that look like
@@ -13,7 +15,7 @@ import (
 func TestReadLegacyStorage_IgnoresANamespaceTheToolDidNotMake(t *testing.T) {
 	planted := map[string]string{
 		"project request": `{"metadata":{"annotations":{"openshift.io/requester":"mallory"},"managedFields":` + managedFieldsJSON("openshift-apiserver", "Update") + `},"status":{"phase":"Active"}}`,
-		"project request with the earliest manager": `{"metadata":{"annotations":{"openshift.io/requester":"mallory"},"managedFields":` + managedFieldsJSON(legacyPostManager, "Update") + `},"status":{"phase":"Active"}}`,
+		"project request with the earliest manager": `{"metadata":{"annotations":{"openshift.io/requester":"mallory"},"managedFields":` + managedFieldsJSON(envkit.LegacyPostManager, "Update") + `},"status":{"phase":"Active"}}`,
 		"no marker at all":                          `{"metadata":{},"status":{"phase":"Active"}}`,
 	}
 	for name, ns := range planted {

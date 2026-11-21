@@ -15,6 +15,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -115,7 +116,6 @@ var (
 	// HTTPRoute after its gateway refs change (live: about 6 s).
 	MaaSRouteTimeout  = 2 * time.Minute
 	MaaSDeleteTimeout = 2 * time.Minute
-	MaaSPoll          = 5 * time.Second
 )
 
 // authorinoGroup is the Authorino operator's API group (the Authorino CR).
@@ -421,7 +421,7 @@ func readMaaSDSC(c *Client) (maasDSC, error) {
 	d.name, _ = meta["name"].(string)
 	d.argo = argo.TrackingOf(c, r.Object, rhoai.DSCGroup, "DataScienceCluster")
 	d.argoApp = d.argo.ManagedBy()
-	d.aigateway, _ = componentManagement(r.Object, "aigateway")
+	d.aigateway, _ = envkit.ComponentManagement(r.Object, "aigateway")
 	spec, _ := r.Object["spec"].(map[string]any)
 	comps, _ := spec["components"].(map[string]any)
 	ag, _ := comps["aigateway"].(map[string]any)
@@ -529,7 +529,7 @@ func readKuadrant(c *Client) (kuadrantState, error) {
 // rhclBelowMinimum: version is older than the docs' minimum for RHOAI 3.6
 // (false when unknown).
 func rhclBelowMinimum(version string) bool {
-	return version != "" && compareVersions(versionCore(version), rhclDocsMinimum) < 0
+	return version != "" && kube.CompareVersions(envkit.VersionCore(version), rhclDocsMinimum) < 0
 }
 
 // rhclWarning: the docs ask for RHCL 1.5 or later (prerequisites.md
@@ -541,7 +541,7 @@ func rhclWarning(version string) string {
 	switch {
 	case !rhclBelowMinimum(version):
 		return ""
-	case versionCore(version) == rhclAuthBypassVersion:
+	case envkit.VersionCore(version) == rhclAuthBypassVersion:
 		return fmt.Sprintf("Red Hat Connectivity Link %s silently lets requests past the gateway's authentication (the MaaS docs' prerequisites: \"RHCL v1.4.0 contains a Wasm shim bug that silently bypasses gateway authentication\"). This tool publishes nothing until it is upgraded: Upgrade Connectivity Link does it.", version)
 	}
 	return fmt.Sprintf("Red Hat Connectivity Link %s is installed; the MaaS docs ask for %s or later: on 1.4.x a caller with two or more subscriptions can hang. MaaS works for a single subscription meanwhile. Upgrade Connectivity Link takes the upgrade path OLM offers, one channel at a time, and sets up Authorino TLS again afterwards.", version, rhclDocsMinimum)
@@ -570,17 +570,17 @@ func maasObjectPath(kind, ns string) string {
 func maasCreatePath(kind, ns string) string {
 	switch kind {
 	case "Gateway":
-		return withToolFieldManager(rhoai.NamespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", ""))
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", ""))
 	case "ConfigMap":
-		return withToolFieldManager(rhoai.NamespacedPath("v1", "configmaps", "openshift-ingress", ""))
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "configmaps", "openshift-ingress", ""))
 	case "Cluster":
-		return withToolFieldManager(rhoai.NamespacedPath("postgresql.cnpg.io/v1", "clusters", ns, ""))
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath("postgresql.cnpg.io/v1", "clusters", ns, ""))
 	case "Secret", "PostgresSecret":
-		return withToolFieldManager(rhoai.NamespacedPath("v1", "secrets", ns, ""))
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "secrets", ns, ""))
 	case "PostgresDeployment":
-		return withToolFieldManager(rhoai.NamespacedPath("apps/v1", "deployments", ns, ""))
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath("apps/v1", "deployments", ns, ""))
 	case "PostgresService":
-		return withToolFieldManager(rhoai.NamespacedPath("v1", "services", ns, ""))
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "services", ns, ""))
 	}
 	return ""
 }
@@ -715,7 +715,7 @@ func maasGatewayObjects(domain, certificate string, namespaces []string) map[str
 	for i, n := range namespaces {
 		values[i] = n
 	}
-	labels := toolLabels()
+	labels := envkit.ToolLabels()
 	labels["app.kubernetes.io/name"] = "maas"
 	labels["app.kubernetes.io/instance"] = maasGatewayName
 	labels["app.kubernetes.io/component"] = "gateway"
@@ -739,7 +739,7 @@ func maasGatewayObjects(domain, certificate string, namespaces []string) map[str
 		"ConfigMap": {
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
-			"metadata":   map[string]any{"name": maasGatewayOptions, "namespace": inferenceGatewayNamespace, "labels": toolLabels()},
+			"metadata":   map[string]any{"name": maasGatewayOptions, "namespace": inferenceGatewayNamespace, "labels": envkit.ToolLabels()},
 			"data": map[string]any{
 				"service": "metadata:\n  annotations:\n    service.beta.openshift.io/serving-cert-secret-name: " + maasGatewayServiceTLS + "\n",
 			},
@@ -747,7 +747,7 @@ func maasGatewayObjects(domain, certificate string, namespaces []string) map[str
 		"GatewayClass": {
 			"apiVersion": gatewayAPIVersion,
 			"kind":       "GatewayClass",
-			"metadata":   map[string]any{"name": "openshift-default", "labels": toolLabels()},
+			"metadata":   map[string]any{"name": "openshift-default", "labels": envkit.ToolLabels()},
 			"spec":       map[string]any{"controllerName": gatewayControllerName},
 		},
 		"Gateway": {
@@ -783,7 +783,7 @@ func maasDBClusterObject(ns string) map[string]any {
 	return map[string]any{
 		"apiVersion": "postgresql.cnpg.io/v1",
 		"kind":       "Cluster",
-		"metadata":   map[string]any{"name": "maas-db", "namespace": ns, "labels": toolLabels()},
+		"metadata":   map[string]any{"name": "maas-db", "namespace": ns, "labels": envkit.ToolLabels()},
 		"spec": map[string]any{
 			"instances": 1,
 			"storage":   map[string]any{"size": "1Gi"},
@@ -795,7 +795,7 @@ func maasDBClusterObject(ns string) map[string]any {
 // maasDBConfigObject is Secret maas-db-config as setup-database.sh makes it
 // (create_maas_db_config_secret: key DB_CONNECTION_URL, label app=maas-api).
 func maasDBConfigObject(ns, connURL string) map[string]any {
-	labels := toolLabels()
+	labels := envkit.ToolLabels()
 	labels["app"] = "maas-api"
 	return map[string]any{
 		"apiVersion": "v1",
@@ -1156,49 +1156,49 @@ func (r *maasStatusRun) plan(s string)         { r.st.SetupPlan = append(r.st.Se
 
 // statusRHCL is Red Hat Connectivity Link's part. It returns the operators
 // and Kuadrant API the later parts use.
-func (r *maasStatusRun) statusRHCL() (rhcl, cnpg operatorState, cnpgReadErr error, kVersion string, kvErr error) {
+func (r *maasStatusRun) statusRHCL() (rhcl, cnpg envkit.OperatorState, cnpgReadErr error, kVersion string, kvErr error) {
 	c, rec, part, plan := r.c, r.rec, r.part, r.plan
 	// Red Hat Connectivity Link (platform-setup.md "Install Gateway API
 	// Controller", RHOAI tab).
 	csvs, csvErr := components.ListClusterCSVs(c)
-	var subs []*olmSubscription
+	var subs []*envkit.OLMSubscription
 	if csvErr == nil {
-		subs, csvErr = listSubscriptions(c, "")
+		subs, csvErr = envkit.ListSubscriptions(c, "")
 	}
 	rhclErr, cnpgReadErr := csvErr, csvErr
 	if csvErr == nil {
-		rhcl, rhclErr = readOperatorIn(c, rhclOperator, csvs, subs)
-		cnpg, cnpgReadErr = readOperatorIn(c, cnpgOperator, csvs, subs)
+		rhcl, rhclErr = envkit.ReadOperatorIn(c, rhclOperator, csvs, subs)
+		cnpg, cnpgReadErr = envkit.ReadOperatorIn(c, cnpgOperator, csvs, subs)
 	}
 	kVersion, kvErr = kuadrantServedVersion(c)
 	// Kuadrant's API alone is not an installed operator: its CRDs stay
-	// after an uninstall (controllerDeployed).
+	// after an uninstall (envkit.ControllerDeployed).
 	kRuns, kRunsErr := kVersion != "", error(nil)
-	if kvErr == nil && kRuns && !rhcl.installed() && rhclErr == nil {
-		kRuns, kRunsErr = controllerDeployed(c, kuadrantController)
+	if kvErr == nil && kRuns && !rhcl.Installed() && rhclErr == nil {
+		kRuns, kRunsErr = envkit.ControllerDeployed(c, kuadrantController)
 	}
 	rhclPart := types.MaaSPart{ID: "rhcl", Title: "Red Hat Connectivity Link", DocURL: maasDocsBase + "install/platform-setup.md#install-gateway-api-controller"}
 	_, rhclByTool := rec.Shared["rhcl"]
 	switch {
 	case rhclErr != nil:
 		rhclPart.State, rhclPart.Message = "unknown", "Cannot read the installed operators: "+rhclErr.Error()
-	case rhcl.installed():
-		rhclPart.ManagedByTool = rhclByTool && rhcl.sub != nil && toolOwned(rhcl.sub.Metadata)
+	case rhcl.Installed():
+		rhclPart.ManagedByTool = rhclByTool && rhcl.Sub != nil && toolOwned(rhcl.Sub.Metadata)
 		rhclPart.NotManaged = !rhclPart.ManagedByTool
 		where := "its Subscription is not one of the names the docs use (kuadrant-operator, rhcl-operator)"
-		if rhcl.sub != nil {
-			where = fmt.Sprintf("Subscription %s/%s, channel %s", rhcl.sub.Metadata.Namespace, rhcl.sub.Metadata.Name, kube.FirstNonEmpty(rhcl.sub.Spec.Channel, "not set"))
+		if rhcl.Sub != nil {
+			where = fmt.Sprintf("Subscription %s/%s, channel %s", rhcl.Sub.Metadata.Namespace, rhcl.Sub.Metadata.Name, kube.FirstNonEmpty(rhcl.Sub.Spec.Channel, "not set"))
 		}
 		switch {
-		case versionCore(rhcl.version) == rhclAuthBypassVersion:
-			rhclPart.State, rhclPart.Message = "problem", fmt.Sprintf("Version %s (%s). ", rhcl.version, where)+rhclWarning(rhcl.version)
-		case rhcl.phase != "Succeeded":
-			rhclPart.State, rhclPart.Message = "waiting", fmt.Sprintf("Version %s is being installed (%s; CSV %s)", rhcl.version, where, kube.FirstNonEmpty(rhcl.phase, "pending"))
+		case envkit.VersionCore(rhcl.Version) == rhclAuthBypassVersion:
+			rhclPart.State, rhclPart.Message = "problem", fmt.Sprintf("Version %s (%s). ", rhcl.Version, where)+rhclWarning(rhcl.Version)
+		case rhcl.Phase != "Succeeded":
+			rhclPart.State, rhclPart.Message = "waiting", fmt.Sprintf("Version %s is being installed (%s; CSV %s)", rhcl.Version, where, kube.FirstNonEmpty(rhcl.Phase, "pending"))
 		default:
-			rhclPart.State, rhclPart.Message = "ready", fmt.Sprintf("Version %s runs (%s)", rhcl.version, where)
-			rhclPart.Warning = rhclWarning(rhcl.version)
+			rhclPart.State, rhclPart.Message = "ready", fmt.Sprintf("Version %s runs (%s)", rhcl.Version, where)
+			rhclPart.Warning = rhclWarning(rhcl.Version)
 		}
-		if rhclBelowMinimum(rhcl.version) {
+		if rhclBelowMinimum(rhcl.Version) {
 			action, cmds := rhclUpgradeOffer(c, rhcl)
 			if action != nil {
 				rhclPart.Actions = append(rhclPart.Actions, *action)
@@ -1211,7 +1211,7 @@ func (r *maasStatusRun) statusRHCL() (rhcl, cnpg operatorState, cnpgReadErr erro
 			}
 			rhclPart.Warning = strings.TrimSpace(rhclPart.Warning + " " + note)
 			rhclPart.Commands = strings.TrimSpace(rhclPart.Commands + "\n" + cmd)
-			r.denyNote = fmt.Sprintf("Not changed: Subscription %s/%s, which this tool did not create, does not deny traffic when rate limiting fails (the MaaS docs recommend it); the Connectivity Link part offers that change on its own", rhcl.sub.Metadata.Namespace, rhcl.sub.Metadata.Name)
+			r.denyNote = fmt.Sprintf("Not changed: Subscription %s/%s, which this tool did not create, does not deny traffic when rate limiting fails (the MaaS docs recommend it); the Connectivity Link part offers that change on its own", rhcl.Sub.Metadata.Namespace, rhcl.Sub.Metadata.Name)
 		}
 		if action, note := rhclMemoryOffer(c, rhcl); action != nil {
 			rhclPart.Actions = append(rhclPart.Actions, *action)
@@ -1224,19 +1224,19 @@ func (r *maasStatusRun) statusRHCL() (rhcl, cnpg operatorState, cnpgReadErr erro
 	case kvErr == nil && kRuns:
 		rhclPart.State, rhclPart.NotManaged = "ready", true
 		rhclPart.Message = "Kuadrant's API is served without an rhcl-operator CSV (an upstream Kuadrant, or another install); MaaS uses it as it is"
-	case rhcl.pending() != nil:
-		p := rhcl.pending()
+	case rhcl.Pending() != nil:
+		p := rhcl.Pending()
 		rhclPart.ManagedByTool, rhclPart.NotManaged = rhclByTool, !rhclByTool
 		rhclPart.State, rhclPart.Message = "waiting", fmt.Sprintf("Subscription %s/%s exists; OLM is installing it (%s)", p.Metadata.Namespace, p.Metadata.Name, kube.FirstNonEmpty(p.Status.State, "no state yet"))
 	default:
 		rhclPart.State = "missing"
-		if p, msg, _ := planOperatorInstall(c, rhclOperator); msg != "" {
+		if p, msg, _ := envkit.PlanOperatorInstall(c, rhclOperator); msg != "" {
 			rhclPart.State, rhclPart.Message = "problem", "Not installed, and Set up cannot install it: "+msg
 			r.blockers = append(r.blockers, rhclPart.Message)
 		} else {
-			rhclPart.Message = fmt.Sprintf("Not installed. Set up installs version %s from redhat-operators (channel %s), as the MaaS docs' platform setup does.", p.head, p.channel)
-			rhclPart.Commands = rhclInstallCommands(p.channel)
-			plan(fmt.Sprintf("Install Red Hat Connectivity Link %s: %sSubscription %s/%s (package %s, channel %s, from redhat-operators, with spec.config.env RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny and RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny, as the MaaS docs recommend, so requests are refused rather than let through unlimited while Limitador is unavailable)", p.head, operatorPlanPrefix(p), rhclOperator.namespace, rhclOperator.subName, rhclOperator.pkg, p.channel))
+			rhclPart.Message = fmt.Sprintf("Not installed. Set up installs version %s from redhat-operators (channel %s), as the MaaS docs' platform setup does.", p.Head, p.Channel)
+			rhclPart.Commands = rhclInstallCommands(p.Channel)
+			plan(fmt.Sprintf("Install Red Hat Connectivity Link %s: %sSubscription %s/%s (package %s, channel %s, from redhat-operators, with spec.config.env RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny and RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny, as the MaaS docs recommend, so requests are refused rather than let through unlimited while Limitador is unavailable)", p.Head, operatorPlanPrefix(p), rhclOperator.Namespace, rhclOperator.SubName, rhclOperator.Pkg, p.Channel))
 		}
 	}
 	part(rhclPart)
@@ -1244,12 +1244,12 @@ func (r *maasStatusRun) statusRHCL() (rhcl, cnpg operatorState, cnpgReadErr erro
 }
 
 // statusKuadrant is the Kuadrant CR's part.
-func (r *maasStatusRun) statusKuadrant(rhcl operatorState) kuadrantState {
+func (r *maasStatusRun) statusKuadrant(rhcl envkit.OperatorState) kuadrantState {
 	c, rec, part, plan := r.c, r.rec, r.part, r.plan
 	// The Kuadrant CR (platform-setup.md: "Once the RHCL operator is
 	// ready, create a Kuadrant instance").
 	kq, kErr := readKuadrant(c)
-	kuadrantNS := kube.FirstNonEmpty(kq.namespace, rhcl.csvNS, rhclOperator.namespace)
+	kuadrantNS := kube.FirstNonEmpty(kq.namespace, rhcl.CSVNS, rhclOperator.Namespace)
 	kPart := types.MaaSPart{ID: "kuadrant", Title: "Connectivity Link instance (Kuadrant)", DocURL: maasDocsBase + "install/platform-setup.md#install-gateway-api-controller"}
 	_, kByTool := rec.Shared["kuadrant"]
 	switch {
@@ -1273,7 +1273,7 @@ func (r *maasStatusRun) statusKuadrant(rhcl operatorState) kuadrantState {
 }
 
 // statusDatabase is the database's parts (maas_database.go).
-func (r *maasStatusRun) statusDatabase(cnpg operatorState, cnpgReadErr error) {
+func (r *maasStatusRun) statusDatabase(cnpg envkit.OperatorState, cnpgReadErr error) {
 	c, rec, infra, st, part := r.c, r.rec, r.infra, r.st, r.part
 	// The database, as chosen (maas_database.go), and CloudNativePG while
 	// it is the database.
@@ -1721,7 +1721,7 @@ func maasLeftovers(c *Client, m llmisvcObject, recorded bool) []string {
 
 // toolOwned: this tool created the object (its label, and a write by it).
 func toolOwned(meta kube.ObjectMeta) bool {
-	return meta.HasToolLabel() && meta.HasManager(toolManagers)
+	return meta.HasToolLabel() && meta.HasManager(envkit.ToolManagers)
 }
 
 // dashboardURLOrEmpty is the dashboard's address, or "".

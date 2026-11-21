@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -31,29 +32,29 @@ func TestComponentBlock(t *testing.T) {
 	cases := []struct {
 		name string
 		read rhoai.DSCRead
-		fc   featureComponent
+		fc   envkit.FeatureComponent
 		// want is a part of the reason, or "" for no block.
 		want, state, component string
 	}{
-		{"managed", dsc(`{"metadata":{"name":"default-dsc"},"spec":{"components":{"aipipelines":{"managementState":"Managed"}}}}`), pipelinesComponent, "", "", ""},
-		{"removed", dsc(`{"metadata":{"name":"default-dsc"},"spec":{"components":{"aipipelines":{"managementState":"Removed"}}}}`), pipelinesComponent,
+		{"managed", dsc(`{"metadata":{"name":"default-dsc"},"spec":{"components":{"aipipelines":{"managementState":"Managed"}}}}`), envkit.PipelinesComponent, "", "", ""},
+		{"removed", dsc(`{"metadata":{"name":"default-dsc"},"spec":{"components":{"aipipelines":{"managementState":"Removed"}}}}`), envkit.PipelinesComponent,
 			"component aipipelines is Removed in DataScienceCluster default-dsc", "Removed", "aipipelines"},
 		// DataScienceCluster v1 names it datasciencepipelines.
-		{"v1 key", dsc(`{"metadata":{"name":"dsc"},"spec":{"components":{"datasciencepipelines":{"managementState":"Removed"}}}}`), pipelinesComponent,
+		{"v1 key", dsc(`{"metadata":{"name":"dsc"},"spec":{"components":{"datasciencepipelines":{"managementState":"Removed"}}}}`), envkit.PipelinesComponent,
 			"component datasciencepipelines is Removed", "Removed", "datasciencepipelines"},
-		{"v1 key managed", dsc(`{"spec":{"components":{"datasciencepipelines":{"managementState":"Managed"}}}}`), pipelinesComponent, "", "", ""},
+		{"v1 key managed", dsc(`{"spec":{"components":{"datasciencepipelines":{"managementState":"Managed"}}}}`), envkit.PipelinesComponent, "", "", ""},
 		// v3 groups some components; the operator reports their state in status.
-		{"state in status", dsc(`{"metadata":{"name":"d"},"spec":{"components":{"mlflowoperator":{}}},"status":{"components":{"mlflowoperator":{"managementState":"Removed"}}}}`), mlflowComponent,
+		{"state in status", dsc(`{"metadata":{"name":"d"},"spec":{"components":{"mlflowoperator":{}}},"status":{"components":{"mlflowoperator":{"managementState":"Removed"}}}}`), envkit.MLflowComponent,
 			"component mlflowoperator is Removed", "Removed", "mlflowoperator"},
-		{"no state", dsc(`{"metadata":{"name":"d"},"spec":{"components":{"mlflowoperator":{}}}}`), mlflowComponent, "is not set", "", "mlflowoperator"},
+		{"no state", dsc(`{"metadata":{"name":"d"},"spec":{"components":{"mlflowoperator":{}}}}`), envkit.MLflowComponent, "is not set", "", "mlflowoperator"},
 		// A DataScienceCluster that does not name the component cannot tell.
-		{"not named", dsc(`{"spec":{"components":{"dashboard":{"managementState":"Managed"}}}}`), mlflowComponent, "", "", ""},
-		{"no DSC", rhoai.DSCRead{State: rhoai.DSCStateNoDSC, Version: "v2"}, pipelinesComponent, "this cluster has no DataScienceCluster", "", "aipipelines"},
-		{"no DSC API", rhoai.DSCRead{State: rhoai.DSCStateNoCRD}, mlflowComponent, "RHOAI is not installed", "", "mlflowoperator"},
+		{"not named", dsc(`{"spec":{"components":{"dashboard":{"managementState":"Managed"}}}}`), envkit.MLflowComponent, "", "", ""},
+		{"no DSC", rhoai.DSCRead{State: rhoai.DSCStateNoDSC, Version: "v2"}, envkit.PipelinesComponent, "this cluster has no DataScienceCluster", "", "aipipelines"},
+		{"no DSC API", rhoai.DSCRead{State: rhoai.DSCStateNoCRD}, envkit.MLflowComponent, "RHOAI is not installed", "", "mlflowoperator"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := componentBlock(tc.read, tc.fc)
+			got := envkit.ComponentBlock(tc.read, tc.fc)
 			if tc.want == "" {
 				if got != nil {
 					t.Fatalf("want no block, got %+v", got)
@@ -156,8 +157,8 @@ func TestGetResourcesStatus_PipelineServerAPIAddress(t *testing.T) {
 	ready := func(url string) string {
 		return `{"conditions":[{"type":"Ready","status":"True"}],"components":{"apiServer":{"externalUrl":"` + url + `"}}}`
 	}
-	putDSPA(f, "p1", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", ready("https://ds-pipeline-nightly-dspa-p1.apps.example.com"))
-	putDSPA(f, "p2", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", ready("javascript:alert(1)"))
+	putDSPA(f, "p1", dspaName, toolLabelJSON, envkit.ToolFieldManager, "Apply", s3Host(), dspaSecretName, "", ready("https://ds-pipeline-nightly-dspa-p1.apps.example.com"))
+	putDSPA(f, "p2", dspaName, toolLabelJSON, envkit.ToolFieldManager, "Apply", s3Host(), dspaSecretName, "", ready("javascript:alert(1)"))
 	s, err := GetResourcesStatus(c)
 	if err != nil {
 		t.Fatal(err)

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -27,7 +28,7 @@ func TestMLflowSamplesStatus_Unavailable(t *testing.T) {
 			f.putProject(fakeProject)
 			InvalidateSamplesStatus(fakeProject)
 			if tc.deploy {
-				putMLflow(f, toolLabelJSON, toolFieldManager, "Update", "", `{}`, tc.status)
+				putMLflow(f, toolLabelJSON, envkit.ToolFieldManager, "Update", "", `{}`, tc.status)
 			}
 			st, err := GetMLflowSamplesStatus(c, userClientOf(c, samplesUserToken), fakeProject)
 			if err != nil {
@@ -242,7 +243,7 @@ func TestRunMLflowSamples_Refusals(t *testing.T) {
 	if resp.Success || resp.ErrorCode != "validation" || !strings.Contains(resp.Message, "not a Data Science project") {
 		t.Errorf("other project: %+v", resp)
 	}
-	putMLflow(env.k8s, toolLabelJSON, toolFieldManager, "Update", "", `{}`, `{"url":"https://x/mlflow","conditions":[{"type":"Available","status":"False"}]}`)
+	putMLflow(env.k8s, toolLabelJSON, envkit.ToolFieldManager, "Update", "", `{}`, `{"url":"https://x/mlflow","conditions":[{"type":"Available","status":"False"}]}`)
 	resp, _ = RunMLflowSamples(env.user, mlflowRequest("add", SampleTraining), nil)
 	if resp.Success || resp.ErrorCode != "prerequisites" || !strings.Contains(resp.Message, "not ready") {
 		t.Errorf("not ready: %+v", resp)
