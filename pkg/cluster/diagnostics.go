@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -1129,7 +1128,7 @@ func applyFix(c *Client, problemID string, ack *AckBinding) (*types.OperationRes
 		return components.RestoreRolloutStrategy(c, ns, name)
 	}
 	if compName, ok := strings.CutPrefix(problemID, "disable-component:"); ok {
-		return applyFixDisableComponent(c, compName)
+		return dsc.DisableComponent(c, compName)
 	}
 	return &types.OperationResponse{
 		Success:   false,
@@ -1208,47 +1207,4 @@ func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error
 		Message: fmt.Sprintf("Deleted %s: %s. OLM resolves the Subscription again if it was waiting on one of them.", kube.CountNoun(len(deleted), "failed install plan", "failed install plans"), strings.Join(deleted, ", ")),
 		Logs:    logs,
 	}, nil
-}
-
-// applyFixDisableComponent sets a component to Removed (Diagnostics and the
-// Components page's "disable-component:<name>" fix). It is the Components
-// page's toggle (SetDSCManagementState): the component must be a
-// managementState the installed CRD defines, the removal preconditions run
-// first, and the change is a tested JSON Patch of that one field after a
-// server-side dry run.
-func applyFixDisableComponent(c *Client, compName string) (*types.OperationResponse, error) {
-	if compName == "" {
-		return &types.OperationResponse{Success: false, Message: "Component name is required", ErrorCode: "validation"}, nil
-	}
-	v, err := dsc.ReadView(c)
-	if err != nil {
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot find the DataScienceCluster: %v", err), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
-	}
-	switch {
-	case v.State == rhoai.DSCStateNoCRD:
-		return &types.OperationResponse{Success: false, Message: "Cannot find the DataScienceCluster: the DataScienceCluster API is not installed", ErrorCode: "prerequisites"}, nil
-	case v.State != rhoai.DSCStatePresent:
-		return &types.OperationResponse{Success: false, Message: "Cannot find the DataScienceCluster: no DataScienceCluster exists", ErrorCode: "prerequisites"}, nil
-	case v.ArgoApp != "":
-		return &types.OperationResponse{Success: false, Message: argo.GitOpsRefusal("The DataScienceCluster", v.ArgoApp, "removing "+compName) + fmt.Sprintf(" Set %s to Removed in Git.", compName), ErrorCode: kube.ErrorCodeGitOpsManaged}, nil
-	}
-	if reason, refused := dsc.RefusedComponents[compName]; refused {
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("The tool does not remove %s. %s", compName, reason), ErrorCode: "validation"}, nil
-	}
-	if t, ok := v.ByKey[compName]; v.CRDErr == nil && (!ok || !t.Toggle) {
-		return &types.OperationResponse{Success: false, ErrorCode: "validation",
-			Message: fmt.Sprintf("Component %q is not a component the installed DataScienceCluster CRD defines. Use the OpenShift Console to edit the DSC directly.", compName)}, nil
-	}
-	state, present := components.LookupState(v.Components(), strings.Split(compName, "."))
-	if !present {
-		return components.NothingToDo(fmt.Sprintf("the DataScienceCluster has no %s component. Nothing was changed.", compName), nil), nil
-	}
-	if state == "Removed" {
-		return components.NothingToDo(fmt.Sprintf("%s is already Removed. Nothing was changed.", compName), nil), nil
-	}
-	res := v.SetManagementState(c, types.DSCToggleRequest{Name: v.Name, Path: compName, From: state, To: "Removed"}, "disable-component", false)
-	if res.Success {
-		res.Message = fmt.Sprintf("Set %s to Removed (was %s). The operator will clean up the component.", compName, kube.NonEmpty(state, "unset"))
-	}
-	return res, nil
 }

@@ -135,7 +135,7 @@ func TestMaaSGuardBlocksTurningMaaSOff(t *testing.T) {
 // toggle's checks: the guard applies there too.
 func TestMaaSGuardBlocksDisableComponent(t *testing.T) {
 	f, c := maasInUseWorld(t, nil)
-	res, err := applyFixDisableComponent(c, "aigateway")
+	res, err := dsc.DisableComponent(c, "aigateway")
 	if err != nil || res.Success || !strings.Contains(res.Message, "MaaS is in use") {
 		t.Fatalf("disable = %+v, %v", res, err)
 	}
