@@ -36,7 +36,8 @@ import { finishDSCHardReset, getDSCPlan, runDSCPlan, streamDSCHardReset, toApiEr
 import { ConfirmActionModal } from "../ConfirmActionModal";
 import { TooltipButton } from "../TooltipButton";
 import { StepProgress, type StepState } from "../environment/StepProgress";
-import { errorResult, outcomeTitle, outcomeVariant } from "../../outcomes";
+import { errorResult } from "../../outcomes";
+import { OutcomeAlert } from "../OutcomeAlert";
 import { BlockedAlert, PathList, WarningsAlert, changeText, durationText } from "./planText";
 
 type HardStep = { id: string; title: string };
@@ -193,7 +194,7 @@ export const ResetModal: React.FC<{
           )}
           {result && (
             <StackItem>
-              <Alert component="p" isInline isLiveRegion variant={outcomeVariant(result)} title={outcomeTitle(result, "The hard reset stopped")}>{result.success ? undefined : result.message}</Alert>
+              <OutcomeAlert result={result} failedTitle="The hard reset stopped" />
             </StackItem>
           )}
         </Stack>

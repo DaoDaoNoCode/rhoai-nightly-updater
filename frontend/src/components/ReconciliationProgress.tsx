@@ -24,10 +24,10 @@ import { getDiagnostics, fixProblem } from "../services/api";
 import { formatElapsed } from "../utils";
 import { useClusterBusyHandler, useGitOpsProfile, useMutationBlocker } from "../state/AppInfo";
 import { gitOpsProfileReason } from "../profile";
-import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
+import { errorResult } from "../outcomes";
+import { OutcomeAlert } from "./OutcomeAlert";
 import { TooltipButton } from "./TooltipButton";
 import { ConfirmActionModal } from "./ConfirmActionModal";
-import { TechnicalDetails } from "./LongText";
 import { StatusLabel } from "./StatusLabel";
 import { PhaseLabel } from "./StatusCards";
 
@@ -132,11 +132,9 @@ const StuckGuidanceCard: React.FC<StuckGuidanceCardProps> = ({
   // The fix result stays above the re-scanned guidance (N8), so a problem
   // that is gone no longer offers its Fix button.
   const resultAlert = fixResult && (
-    <Alert component="p" variant={outcomeVariant(fixResult)} title={outcomeTitle(fixResult, "The fix could not run")} isInline isLiveRegion>
-      {!fixResult.success && fixResult.message}
+    <OutcomeAlert result={fixResult} failedTitle="The fix could not run" logs>
       {fixResult.errorCode === "conflict" && " The object changed since the diagnosis. Open Diagnostics to scan again."}
-      {fixResult.logs && fixResult.logs.length > 0 && <TechnicalDetails text={fixResult.logs} />}
-    </Alert>
+    </OutcomeAlert>
   );
   const withResult = (body: React.ReactNode) => (resultAlert ? (
     <Stack hasGutter>

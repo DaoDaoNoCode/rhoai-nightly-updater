@@ -35,7 +35,8 @@ import { ExpandableRowContent, Table, Tbody, Td, Th, Thead, Tr, type IAction, ty
 import SearchIcon from "@patternfly/react-icons/dist/esm/icons/search-icon";
 import type { DeploymentInfo, OperationResponse } from "../types";
 import { assistRolloutFor, trackFeature } from "../services/api";
-import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
+import { errorResult } from "../outcomes";
+import { OutcomeAlert } from "./OutcomeAlert";
 import { ConfirmActionModal } from "./ConfirmActionModal";
 import { ImageRef } from "./ImageRef";
 import { InlineItems } from "./InlineItems";
@@ -347,9 +348,7 @@ export const DeploymentsTable: React.FC<DeploymentsTableProps> = ({
                     </div>
                   )}
                   {result && (
-                    <Alert component="p" isInline isPlain isLiveRegion variant={outcomeVariant(result)} title={outcomeTitle(result, "Unblock failed")}>
-                      {result.success ? undefined : result.message}
-                    </Alert>
+                    <OutcomeAlert result={result} failedTitle="Unblock failed" isPlain />
                   )}
                 </Td>
                 <Td dataLabel="Commit" visibility={WIDE_ONLY}>

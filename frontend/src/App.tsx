@@ -51,7 +51,7 @@ import {
 import { trackPageView } from "./services/api";
 import { ErrorBoundary, PageErrorBoundary } from "./components/ErrorBoundary";
 import { HelpButton } from "./components/HelpModal";
-import { AdminOnlyPageState, AdminRequiredState, PageLoading, PermissionsUnknownState, ProfileOffState, SessionExpiredState } from "./components/PageStates";
+import { AdminOnlyPageState, AdminRequiredState, GoToStatusAction, PageLoading, PermissionsUnknownState, ProfileOffState, SessionExpiredState } from "./components/PageStates";
 import { StatusLabel } from "./components/StatusLabel";
 import { ADMIN_ONLY_PAGES, NAV_ITEMS } from "./constants";
 import { LOGO_SRC } from "./logo";
@@ -88,9 +88,7 @@ const NotFoundPage: React.FC = () => {
           The page you&apos;re looking for doesn&apos;t exist or has been moved.
         </EmptyStateBody>
         <EmptyStateFooter>
-          <EmptyStateActions>
-            <Button variant="primary" onClick={() => navigate("/")}>Go to Status</Button>
-          </EmptyStateActions>
+          <GoToStatusAction />
           {admin && (
             <EmptyStateActions>
               <Button variant="link" onClick={() => navigate("/diagnostics")}>Open Diagnostics</Button>

@@ -47,6 +47,7 @@ import {
   maasState,
   pipelinesState,
   unreadableState,
+  noProjectState,
 } from "./environment/featureState";
 import { FeatureLoading, LoadFailed } from "./environment/Loading";
 import { PrerequisitesSection, RECOMMENDED_EXPOSURE, headerWithPrerequisites, prerequisitesConfirm, prerequisitesReason, usePrerequisites } from "./environment/Prerequisites";
@@ -193,17 +194,17 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   // summary, which names a project the picker no longer shows.
   const cleared = (searchParams.has("project") && !project) || !!missingProject;
   const pipelines: FeatureState = cleared
-    ? { status: "unknown", label: "No project chosen", next: { kind: "choose-project" }, project: null }
+    ? noProjectState()
     : pipelinesState(resStatus, project, projectNames, busy);
   const pipelinesSummary = pipelinesState(resStatus, null, projectNames, busy);
   const mlflowNow = mlflowState(resStatus, busy);
   const models: FeatureState = cleared
-    ? { status: "unknown", label: "No project chosen", next: { kind: "choose-project" }, project: null }
+    ? noProjectState()
     : modelsState(resStatus, modelsProject, projectNames, busy, modelsModel);
   const modelsSummary = modelsState(resStatus, null, projectNames, busy);
   const playgroundProject = missingProject ? null : playgroundProjectParam;
   const playgroundNow: FeatureState = cleared
-    ? { status: "unknown", label: "No project chosen", next: { kind: "choose-project" }, project: null }
+    ? noProjectState()
     : !pg && playgroundRead.error ? unreadableState(playgroundProject) : playgroundState(resStatus, pg, playgroundProject, busy);
   // A status that was never read is loading; one that could not be read says so.
   const playgroundSummary = !pg && playgroundRead.error ? unreadableState() : playgroundState(resStatus, pg, null, busy);

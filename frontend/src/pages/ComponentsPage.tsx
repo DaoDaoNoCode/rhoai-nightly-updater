@@ -56,7 +56,8 @@ import { gitOpsProfileReason } from "../profile";
 import { GitOpsProfileNotice } from "../components/GitOpsNotice";
 import { useClusterStatus } from "../state/AppState";
 import { gitOpsCreateDSCReason, gitOpsDSCReason, gitOpsFixReason } from "../gitops";
-import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
+import { errorResult } from "../outcomes";
+import { OutcomeAlert } from "../components/OutcomeAlert";
 
 /** Why the Deployments table has no commits, build dates or versions in the gitops profile. */
 export const IMAGE_LABELS_OFF =
@@ -389,10 +390,7 @@ export const ComponentsPage: React.FC = () => {
             )}
             {repairResult && (
               <StackItem>
-                <Alert component="p" variant={outcomeVariant(repairResult)} title={outcomeTitle(repairResult, "Could not repair the DataScienceCluster")} isInline isLiveRegion>
-                  {repairResult.success ? undefined : repairResult.message}
-                  {(repairResult.logs?.length ?? 0) > 0 && <TechnicalDetails text={repairResult.logs!} />}
-                </Alert>
+                <OutcomeAlert result={repairResult} failedTitle="Could not repair the DataScienceCluster" logs />
               </StackItem>
             )}
           </Stack>
@@ -497,9 +495,7 @@ export const ComponentsPage: React.FC = () => {
                                     </HelperText>
                                   )}
                                   {res && (
-                                    <Alert component="p" isInline isPlain isLiveRegion variant={outcomeVariant(res)} title={outcomeTitle(res, "Fix failed")}>
-                                      {res.success ? undefined : res.message}
-                                    </Alert>
+                                    <OutcomeAlert result={res} failedTitle="Fix failed" isPlain />
                                   )}
                                 </Td>
                                 <Td dataLabel={c.fixAction && c.fixTitle && !res?.success ? "Fix" : undefined} modifier="fitContent">

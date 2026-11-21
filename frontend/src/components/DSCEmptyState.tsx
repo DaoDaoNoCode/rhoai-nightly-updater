@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Link } from "react-router-dom";
+import { linkTo } from "./NavigationActions";
 import {
   Alert,
   Button,
@@ -26,7 +26,8 @@ import {
 import CubesIcon from "@patternfly/react-icons/dist/esm/icons/cubes-icon";
 import type { OperationResponse } from "../types";
 import { createDSC, getDSCPreview, trackFeature, type DSCPreviewResponse } from "../services/api";
-import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
+import { errorResult } from "../outcomes";
+import { OutcomeAlert } from "./OutcomeAlert";
 import { TooltipButton } from "./TooltipButton";
 
 interface DSCEmptyStateProps {
@@ -95,7 +96,7 @@ export const DSCEmptyState: React.FC<DSCEmptyStateProps> = ({ dscState, operator
           {!installing && (
             <EmptyStateFooter>
               <EmptyStateActions>
-                <Button variant="primary" component={(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <Link {...props} to="/" />}>
+                <Button variant="primary" component={linkTo("/")}>
                   Go to Status to install RHOAI
                 </Button>
               </EmptyStateActions>
@@ -124,9 +125,7 @@ export const DSCEmptyState: React.FC<DSCEmptyStateProps> = ({ dscState, operator
                 </TooltipButton>
               </EmptyStateActions>
               {result && (
-                <Alert component="p" isInline isLiveRegion variant={outcomeVariant(result)} title={outcomeTitle(result, "Could not create the DataScienceCluster")}>
-                  {result.success ? undefined : result.message}
-                </Alert>
+                <OutcomeAlert result={result} failedTitle="Could not create the DataScienceCluster" />
               )}
             </EmptyStateFooter>
           </EmptyState>

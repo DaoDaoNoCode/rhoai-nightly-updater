@@ -41,8 +41,8 @@ import { TooltipButton } from "./TooltipButton";
 import { FieldHelperText } from "./FormFields";
 import { StatusLabel, TagLabel } from "./StatusLabel";
 import { StepsPreview } from "./StepsPreview";
-import { REVERT_DASHBOARD_EXPLANATION, describeDashboardSession, type OperatorRequest, type ReinstallTargetType } from "./OperatorActions";
-import { dashboardOperatorLabel } from "./dashboardOperator";
+import { SETUP_FIRST_REASON } from "../utils";
+import { DashboardSessionAlert, type OperatorRequest, type ReinstallTargetType } from "./OperatorActions";
 
 /** pkg/api customFBCImageRegex: only builds of the RHOAI FBC repository, with a tag and/or digest. */
 export const CUSTOM_FBC_IMAGE = /^quay\.io\/rhoai\/rhoai-fbc-fragment(:[a-zA-Z0-9._-]+)?(@sha256:[a-f0-9]{64})?$/;
@@ -124,7 +124,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
     if (targetType === "stable") {
       return status?.stableChannel && !status.stableDiscoveryError ? null : "The stable release could not be found in the cluster catalog.";
     }
-    if (!prerequisitesMet) return "Finish the one-time cluster setup first (pull secret and image mirror).";
+    if (!prerequisitesMet) return SETUP_FIRST_REASON;
     if (targetType === "nightly" && !selectedImage) return "Select a nightly build first.";
     if (targetType === "custom" && !customImageValid) return "Enter a quay.io/rhoai/rhoai-fbc-fragment image with a tag or a digest.";
     if (!channelValid) return "The channel override is not a valid channel name.";
@@ -394,10 +394,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
             )}
             {override?.active && (
               <StackItem>
-                <Alert variant="warning" isInline component="p" title="A Dashboard Dev session is active">
-                  {dashboardOperatorLabel(override?.operatorName)} is paused ({describeDashboardSession(override)}). The reinstall ends that session first.
-                  {" "}{REVERT_DASHBOARD_EXPLANATION}
-                </Alert>
+                <DashboardSessionAlert override={override}>The reinstall ends that session first.</DashboardSessionAlert>
               </StackItem>
             )}
             <StackItem>
