@@ -249,6 +249,13 @@ func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent
 	// test of the UID makes it about this DSC only.
 	validate := []jsonPatchOp{patchOp("test", []string{"metadata", "uid"}, v.uid), patchOp("replace", []string{"spec"}, obj["spec"])}
 	if _, err := patchDSCFields(c, path, validate, true); err != nil {
+		// A failed test of the UID gets the same bare 422 as a refused
+		// spec (see dsc_manager.go): the DSC read again tells them apart.
+		if IsK8sError(err, http.StatusUnprocessableEntity) {
+			if meta, found, rerr := readObjectMeta(c, path); rerr == nil && (!found || meta.UID != v.uid) {
+				return r.fail("check", fmt.Sprintf("DataScienceCluster %s was deleted or created again after it was checked. Nothing was changed. Review the hard reset again.", v.name), "conflict"), nil
+			}
+		}
 		return r.fail("check", "The API server refused the release default in a dry run against DataScienceCluster "+v.name+": "+conversionMessage(err)+". Nothing was changed.", nonEmpty(errorCodeFromK8sErr(err), "validation")), nil
 	}
 	createYAML := p.plan.NewObject

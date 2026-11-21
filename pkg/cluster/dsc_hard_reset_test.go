@@ -147,6 +147,36 @@ func TestHardResetTimesOutWithoutCreating(t *testing.T) {
 	}
 }
 
+// The DSC is deleted and created again between the check and the dry run
+// of the new spec, whose JSON Patch tests the uid: the API server's bare
+// 422 is told apart from a refused spec by reading the DSC again, and
+// nothing is deleted.
+func TestHardResetStopsWhenTheDSCWasRecreated(t *testing.T) {
+	f, c := managerWorld(t, nil)
+	f.beforeRequest = func(r *http.Request) {
+		if r.Method != http.MethodPatch || r.URL.Path != dscV3Path {
+			return
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		k, _ := parseFakePath(dscV3Path)
+		meta := ensureMap(f.objects[k], "metadata")
+		meta["uid"], meta["resourceVersion"] = "recreated-uid", "200000000"
+	}
+	res, _ := runHardReset(t, c, nil)
+	if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "deleted or created again") || !strings.Contains(res.Message, "Nothing was changed") {
+		t.Fatalf("result = %+v", res)
+	}
+	for _, call := range f.callsTo(http.MethodDelete, dscV3Path) {
+		if call.Query.Get("dryRun") != "All" {
+			t.Fatalf("deleted the DSC: %+v", call)
+		}
+	}
+	if ensureMap(f.get(dscV3Path), "metadata")["uid"] != "recreated-uid" {
+		t.Fatal("the recreated DSC is gone")
+	}
+}
+
 func TestHardResetExplainsHowToRecreateWhenCreateFails(t *testing.T) {
 	f, c := managerWorld(t, nil)
 	operatorRemovesDSCAfter(f, 1)

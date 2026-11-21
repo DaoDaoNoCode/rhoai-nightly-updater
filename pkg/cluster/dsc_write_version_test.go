@@ -211,6 +211,48 @@ func TestDSCWriteReReadFailureReportsNothingChanged(t *testing.T) {
 	}
 }
 
+// A 422 while the DSC's uid and resourceVersion did not move is not a
+// failed test (a test fails only on a DSC that moved): it is the API
+// server's refusal (a validation rule, the operator's webhook), shown as
+// it is, without another attempt. Also when the API server's answer is the
+// bare message it gives a failed test (apiServerPatchTestFailed).
+func TestDSCWriteShowsARejectionOfAnUnchangedDSC(t *testing.T) {
+	const invalid = `DataScienceCluster.datasciencecluster.opendatahub.io "default-dsc" is invalid: spec.components.ray: Invalid value: "object": ray cannot be removed while ...`
+	for _, tc := range []struct {
+		name, key, message string
+		dryRun             bool
+		wantIn             string
+	}{
+		{name: "dry run refused", key: "PATCH " + dscV3Path, message: invalid, dryRun: true, wantIn: "The API server refused the change in its dry run: " + invalid},
+		{name: "patch refused", key: "PATCH " + dscV3Path, message: invalid, wantIn: "The API server refused the change: " + invalid},
+		{name: "bare 422", key: "PATCH " + dscV3Path, message: "the server rejected our request due to an error in our request", wantIn: "the server rejected our request due to an error in our request"},
+	} {
+		for name, change := range dscRemoveRay {
+			t.Run(tc.name+"/"+name, func(t *testing.T) {
+				f, c := managerWorld(t, nil)
+				if tc.dryRun {
+					f.failDryRun[tc.key] = http.StatusUnprocessableEntity
+					f.failMessage["DRYRUN "+tc.key] = tc.message
+				} else {
+					f.fail[tc.key] = http.StatusUnprocessableEntity
+					f.failMessage[tc.key] = tc.message
+				}
+				res := change(t, c)
+				if res.Success || res.ErrorCode != "validation" || !strings.Contains(res.Message, tc.wantIn) || !strings.Contains(res.Message, "Nothing was changed") {
+					t.Fatalf("result = %+v", res)
+				}
+				dry, real := patchesTo(f)
+				if tc.dryRun && (len(dry) != 1 || len(real) != 0) || !tc.dryRun && (len(dry) != 1 || len(real) != 1) {
+					t.Fatalf("retried a rejection: dry %d, real %d", len(dry), len(real))
+				}
+				if rayState(f) != "Managed" {
+					t.Fatalf("ray = %q", rayState(f))
+				}
+			})
+		}
+	}
+}
+
 // A DSC that changes before every patch: bounded, then a conflict.
 func TestDSCWriteGivesUpWhenTheDSCKeepsChanging(t *testing.T) {
 	for name, change := range dscRemoveRay {
