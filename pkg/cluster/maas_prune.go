@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -322,7 +323,7 @@ func releaseGoneMaaSProjects(c *Client) []string {
 }
 
 // recordPruneActivity records the background run's entry; tests replace it.
-var recordPruneActivity = RecordActivity
+var recordPruneActivity = record.RecordActivity
 
 // PruneGoneMaaSPublicationsInBackground is the background run (pkg/api
 // holds the cluster lock and lease around it): it records an activity
@@ -340,7 +341,7 @@ func PruneGoneMaaSPublicationsInBackground(c *Client) {
 		detail += " Not finished: " + err.Error()
 	}
 	recordPruneActivity(c, types.ActivityEntry{
-		Timestamp: nowRFC3339(),
+		Timestamp: record.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "prune-maas-publications",
 		Detail:    kube.TruncateText(detail, 300),

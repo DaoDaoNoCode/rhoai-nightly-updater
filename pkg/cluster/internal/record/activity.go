@@ -1,4 +1,4 @@
-package cluster
+package record
 
 import (
 	"encoding/json"
@@ -17,19 +17,19 @@ import (
 const maxConflictRetries = 3
 
 const (
-	activityConfigMapName  = "rhoai-nightly-updater-activity"
-	operationConfigMapName = "rhoai-nightly-updater-operation"
-	// maxActivityEntries is the retention of a category without its own.
-	maxActivityEntries = 20
-	// maxActivityBytes keeps the stored log far below the 1 MiB ConfigMap
+	ActivityConfigMapName  = "rhoai-nightly-updater-activity"
+	OperationConfigMapName = "rhoai-nightly-updater-operation"
+	// MaxActivityEntries is the retention of a category without its own.
+	MaxActivityEntries = 20
+	// MaxActivityBytes keeps the stored log far below the 1 MiB ConfigMap
 	// limit (https://kubernetes.io/docs/concepts/configuration/configmap/).
-	maxActivityBytes  = 256 << 10
-	maxActivityDetail = 1024
+	MaxActivityBytes  = 256 << 10
+	MaxActivityDetail = 1024
 )
 
 // Retention per category, so frequent Dashboard Dev changes do not evict
 // the operator history. At most 50+30+20+20+20+20 = 160 entries are kept.
-var activityRetention = map[string]int{
+var ActivityRetention = map[string]int{
 	"operator":       50,
 	"dashboard-dev":  30,
 	"test-resources": 20,
@@ -37,8 +37,8 @@ var activityRetention = map[string]int{
 	"diagnostics":    20,
 }
 
-// activityActions maps each recorded action to its category and label.
-var activityActions = map[string][2]string{
+// ActivityActions maps each recorded action to its category and label.
+var ActivityActions = map[string][2]string{
 	"update":                        {"operator", "Updated to nightly"},
 	"refresh":                       {"operator", "Operator refreshed"},
 	"reinstall":                     {"operator", "Different build installed"},
@@ -75,9 +75,9 @@ var activityActions = map[string][2]string{
 	"restart-operator":              {"diagnostics", "Operator restarted"},
 }
 
-// activityFailedLabels names a failed or refused action; actions without an
+// ActivityFailedLabels names a failed or refused action; actions without an
 // entry get "<label> (failed)" in the UI.
-var activityFailedLabels = map[string]string{
+var ActivityFailedLabels = map[string]string{
 	"update":                   "Update to nightly failed",
 	"refresh":                  "Operator refresh failed",
 	"reinstall":                "Installing a different build failed",
@@ -118,8 +118,8 @@ func currentActivityAction(action string) string {
 	return action
 }
 
-func activityCategory(action string) string {
-	if a, ok := activityActions[currentActivityAction(action)]; ok {
+func ActivityCategory(action string) string {
+	if a, ok := ActivityActions[currentActivityAction(action)]; ok {
 		return a[0]
 	}
 	return "other"
@@ -148,13 +148,13 @@ func activityBuild(detail string) string {
 	}
 }
 
-// describeActivity fills the read-time fields of an entry.
-func describeActivity(e *types.ActivityEntry) {
+// DescribeActivity fills the read-time fields of an entry.
+func DescribeActivity(e *types.ActivityEntry) {
 	e.Action = currentActivityAction(e.Action)
-	e.Category = activityCategory(e.Action)
-	if l, ok := activityFailedLabels[e.Action]; ok && !e.Success {
+	e.Category = ActivityCategory(e.Action)
+	if l, ok := ActivityFailedLabels[e.Action]; ok && !e.Success {
 		e.Label = l
-	} else if a, ok := activityActions[e.Action]; ok {
+	} else if a, ok := ActivityActions[e.Action]; ok {
 		e.Label = a[1]
 	} else {
 		e.Label = strings.ReplaceAll(e.Action, "-", " ")
@@ -164,16 +164,16 @@ func describeActivity(e *types.ActivityEntry) {
 	}
 }
 
-// trimActivity keeps the newest entries of each category within its
+// TrimActivity keeps the newest entries of each category within its
 // retention and the whole log within maxActivityBytes, preserving order.
-func trimActivity(entries []types.ActivityEntry) []types.ActivityEntry {
+func TrimActivity(entries []types.ActivityEntry) []types.ActivityEntry {
 	counts := map[string]int{}
 	keep := make([]bool, len(entries))
 	for i := len(entries) - 1; i >= 0; i-- {
-		cat := activityCategory(entries[i].Action)
-		limit, ok := activityRetention[cat]
+		cat := ActivityCategory(entries[i].Action)
+		limit, ok := ActivityRetention[cat]
 		if !ok {
-			limit = maxActivityEntries
+			limit = MaxActivityEntries
 		}
 		if counts[cat] < limit {
 			counts[cat]++
@@ -188,7 +188,7 @@ func trimActivity(entries []types.ActivityEntry) []types.ActivityEntry {
 	}
 	for len(out) > 1 {
 		data, err := json.Marshal(out)
-		if err != nil || len(data) <= maxActivityBytes {
+		if err != nil || len(data) <= MaxActivityBytes {
 			break
 		}
 		out = out[1:]
@@ -196,7 +196,7 @@ func trimActivity(entries []types.ActivityEntry) []types.ActivityEntry {
 	return out
 }
 
-func getActivityNamespace() string {
+func GetActivityNamespace() string {
 	if ns := os.Getenv("NAMESPACE"); ns != "" {
 		return ns
 	}
@@ -211,21 +211,21 @@ func getActivityNamespace() string {
 // when multiple replicas attempt concurrent writes. On 409 Conflict the
 // read-modify-write cycle is retried up to maxConflictRetries times.
 // It never returns an error to callers — failures are logged as warnings.
-func RecordActivity(c *Client, entry types.ActivityEntry) {
+func RecordActivity(c *kube.Client, entry types.ActivityEntry) {
 	// Not cancelled with the request (for example an SSE connection drop),
 	// but bounded: activityWriteTimeout for the whole call, retries
 	// included, and never past the operation's shared post-deadline end
 	// (see postOperationContext), so a stalled API server cannot hold a
 	// shutting-down pod past its drain.
-	ctx, cancel := bookkeepingContext(c, activityWriteTimeout)
+	ctx, cancel := BookkeepingContext(c, ActivityWriteTimeout)
 	defer cancel()
 	recordActivityWithClient(c.WithContext(ctx), entry)
 }
 
-// recordActivity records an action of the signed-in user, stamped now.
-func recordActivity(c *Client, action, detail string, success bool) {
+// RecordAction records an action of the signed-in user, stamped now.
+func RecordAction(c *kube.Client, action, detail string, success bool) {
 	RecordActivity(c, types.ActivityEntry{
-		Timestamp: nowRFC3339(),
+		Timestamp: NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    action,
 		Detail:    detail,
@@ -233,21 +233,21 @@ func recordActivity(c *Client, action, detail string, success bool) {
 	})
 }
 
-// nowRFC3339 is the wall-clock time in UTC as RFC 3339, the form of every
+// NowRFC3339 is the wall-clock time in UTC as RFC 3339, the form of every
 // timestamp this package records (activity entries, records, annotations).
 // Recorded times come from the time package, not clk (see clock.go).
-func nowRFC3339() string {
+func NowRFC3339() string {
 	return time.Now().UTC().Format(time.RFC3339)
 }
 
-func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
-	ns := getActivityNamespace()
+func recordActivityWithClient(c *kube.Client, entry types.ActivityEntry) {
+	ns := GetActivityNamespace()
 	// Read-time fields are derived, not stored.
 	entry.Label, entry.Category, entry.Build = "", "", ""
-	if len(entry.Detail) > maxActivityDetail {
-		entry.Detail = entry.Detail[:maxActivityDetail] + "…"
+	if len(entry.Detail) > MaxActivityDetail {
+		entry.Detail = entry.Detail[:MaxActivityDetail] + "…"
 	}
-	cmPath := rhoai.NamespacedPath("v1", "configmaps", ns, activityConfigMapName)
+	cmPath := rhoai.NamespacedPath("v1", "configmaps", ns, ActivityConfigMapName)
 
 	for attempt := range maxConflictRetries {
 		if attempt > 0 {
@@ -290,7 +290,7 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 		}
 
 		// Step 2: Modify the entries; keep the newest per category
-		entries = trimActivity(append(entries, entry))
+		entries = TrimActivity(append(entries, entry))
 
 		entriesJSON, err := json.Marshal(entries)
 		if err != nil {
@@ -300,7 +300,7 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 
 		// Step 3: PUT/Create with resourceVersion for optimistic locking
 		metadata := map[string]any{
-			"name":      activityConfigMapName,
+			"name":      ActivityConfigMapName,
 			"namespace": ns,
 		}
 		if resourceVersion != "" {
@@ -349,9 +349,9 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 }
 
 // GetActivity retrieves the activity log from the ConfigMap.
-func GetActivity(c *Client) ([]types.ActivityEntry, error) {
-	ns := getActivityNamespace()
-	cmPath := rhoai.NamespacedPath("v1", "configmaps", ns, activityConfigMapName)
+func GetActivity(c *kube.Client) ([]types.ActivityEntry, error) {
+	ns := GetActivityNamespace()
+	cmPath := rhoai.NamespacedPath("v1", "configmaps", ns, ActivityConfigMapName)
 
 	var cm map[string]any
 	found, err := c.Bookkeeping().GetIntoOptional(cmPath, &cm)
@@ -376,7 +376,7 @@ func GetActivity(c *Client) ([]types.ActivityEntry, error) {
 		return nil, fmt.Errorf("parse activity entries: %w", err)
 	}
 	for i := range entries {
-		describeActivity(&entries[i])
+		DescribeActivity(&entries[i])
 	}
 
 	return entries, nil

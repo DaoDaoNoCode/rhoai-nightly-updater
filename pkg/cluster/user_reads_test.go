@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -135,7 +136,7 @@ func TestGetProjectStatus(t *testing.T) {
 		t.Errorf("inference services %+v", st.InferenceServices)
 	}
 	for _, call := range k8s.calls {
-		own := strings.HasPrefix(call.Path, "/api/v1/namespaces/"+getActivityNamespace()+"/configmaps/")
+		own := strings.HasPrefix(call.Path, "/api/v1/namespaces/"+record.GetActivityNamespace()+"/configmaps/")
 		if strings.Contains(call.Path, "/namespaces/proj/") && call.Token != fakeUserToken {
 			t.Errorf("%s read with %q, not the user's token", call.Path, call.Token)
 		}

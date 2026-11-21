@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -185,11 +186,11 @@ func operatorRemovesDSCAt(f *resourceFake, path string, n int, then func()) {
 
 func hardResetRecordOf(t *testing.T, f *resourceFake) string {
 	t.Helper()
-	cm := f.get(rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
+	cm := f.get(rhoai.NamespacedPath("v1", "configmaps", record.GetActivityNamespace(), record.OperationConfigMapName))
 	if cm == nil {
 		return ""
 	}
-	v, _ := ensureMap(cm, "data")[dscHardResetKey].(string)
+	v, _ := ensureMap(cm, "data")[record.DSCHardResetKey].(string)
 	return v
 }
 
@@ -365,7 +366,7 @@ func TestFinishHardResetGuards(t *testing.T) {
 	rec := &types.DSCHardResetRecord{Name: "default-dsc", OldUID: "u", APIVersion: "datasciencecluster.opendatahub.io/v3",
 		Object: `{"apiVersion":"datasciencecluster.opendatahub.io/v3","kind":"DataScienceCluster","metadata":{"name":"default-dsc"},"spec":{}}`,
 		YAML:   "kind: DataScienceCluster\n", OperatorCSV: "rhods-operator.3.5.0", StartedAt: "2026-11-19T00:00:00Z"}
-	if err := SaveDSCHardResetRecord(c, rec); err != nil {
+	if err := record.SaveDSCHardResetRecord(c, rec); err != nil {
 		t.Fatal(err)
 	}
 	token := pendingHardResetToken(rec)

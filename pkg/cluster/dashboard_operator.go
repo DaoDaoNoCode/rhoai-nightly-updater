@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -1032,7 +1033,7 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 	if err != nil {
 		return fail(err.Error()+". Click Revert to default to restore operator management, then deploy again.", "prerequisites")
 	}
-	now := nowRFC3339()
+	now := record.NowRFC3339()
 	user := kube.GetUser(c)
 	newSession := session == nil
 	if newSession {
@@ -1174,7 +1175,7 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 		}
 		message = fmt.Sprintf("Partial deployment of %s: %s failed. Retry %s to finish, or Revert to default to resume operator reconciliation.", label, kube.CountNoun(len(failures), "deployment", "deployments"), retry)
 	}
-	RecordActivity(c, types.ActivityEntry{Timestamp: now, User: user, Action: "deploy-dashboard-" + mode, Detail: message, Success: success})
+	record.RecordActivity(c, types.ActivityEntry{Timestamp: now, User: user, Action: "deploy-dashboard-" + mode, Detail: message, Success: success})
 	code := ""
 	if !success {
 		code = "partial_failure"

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -289,7 +290,7 @@ func (m *modelsRun) disallow(project string) (*types.OperationResponse, error) {
 	}
 	done := fmt.Sprintf("The inference gateway no longer allows %s: routes from it no longer attach.", project)
 	m.step("gateway", "success", done)
-	recordActivity(c, m.activity, m.target, true)
+	record.RecordAction(c, m.activity, m.target, true)
 	return &types.OperationResponse{Success: true, Message: done, Logs: m.logs}, nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -177,8 +178,8 @@ func joinTitles(titles []string) string {
 }
 
 func recordCleanupActivity(c *Client, detail string, success bool) {
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: nowRFC3339(),
+	record.RecordActivity(c, types.ActivityEntry{
+		Timestamp: record.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "cleanup",
 		Detail:    detail,

@@ -167,7 +167,7 @@ func TestUpdateUnderGitOps_InstallsWhatTheCatalogServes(t *testing.T) {
 	}
 
 	csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
-	subPath := subscriptionPath()
+	subPath := rhoai.SubscriptionPath()
 	var writes []string
 	for _, w := range f.writes() {
 		if !strings.Contains(w, "-verify-") { // the verification catalog

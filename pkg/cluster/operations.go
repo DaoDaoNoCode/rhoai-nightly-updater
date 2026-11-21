@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -689,7 +690,7 @@ func updateApplyCatalog(c *Client, image string, recovery *operatorRecovery, log
 	emit(UpdateStepEvent{Step: "apply_catalog_source", Status: "running", Message: "Applying CatalogSource..."})
 	if recovery.subscription != nil {
 		recovery.subscriptionChanged = true
-		if _, err := c.DeleteIfExists(subscriptionPath()); err != nil {
+		if _, err := c.DeleteIfExists(rhoai.SubscriptionPath()); err != nil {
 			return fail("Cannot remove the current Subscription: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
 		}
 		*logs = append(*logs, "OK: Subscription removed while the catalog is replaced (the operator keeps running)")
@@ -800,7 +801,7 @@ func updateDeleteCSV(c *Client, currentCSV types.CSVInfo, recovery *operatorReco
 // applyUpdateSubscription is Update's apply_subscription step: it applies sub
 // with retries. It returns a nil response when the Subscription was applied.
 func applyUpdateSubscription(c *Client, sub map[string]any, channel string, recovery *operatorRecovery, logs *[]string, emit func(UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error)) (*types.OperationResponse, error) {
-	subApplyErr, cancelErr := applySubscriptionWithRetry(c, subscriptionPath(), sub, recovery, func(attempt int, err error, willRetry bool, _ time.Duration) {
+	subApplyErr, cancelErr := applySubscriptionWithRetry(c, rhoai.SubscriptionPath(), sub, recovery, func(attempt int, err error, willRetry bool, _ time.Duration) {
 		if willRetry {
 			slog.Warn("failed to apply Subscription, retrying", "attempt", attempt, "error", err)
 			*logs = append(*logs, fmt.Sprintf("  Warning: Subscription apply attempt %d failed: %v — retrying", attempt, err))
@@ -1095,8 +1096,8 @@ var lookupTargetBundle = func(c *Client, image string) (string, error) {
 }
 
 func recordUpdateActivity(c *Client, image string, success bool, reason string) {
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: nowRFC3339(),
+	record.RecordActivity(c, types.ActivityEntry{
+		Timestamp: record.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "update",
 		Detail:    image,
@@ -1435,7 +1436,7 @@ func reinstallRemoveOperator(c *Client, csv types.CSVInfo, recovery *operatorRec
 
 	// --- Step 4: delete_subscription ---
 	emit(UpdateStepEvent{Step: "delete_subscription", Status: "running", Message: "Removing operator Subscription..."})
-	switch existed, delErr := c.DeleteIfExists(subscriptionPath()); {
+	switch existed, delErr := c.DeleteIfExists(rhoai.SubscriptionPath()); {
 	case delErr != nil:
 		return fail(fmt.Sprintf("Failed to delete Subscription: %v", delErr), kube.ErrorCodeFromK8sErr(delErr))
 	case !existed:
@@ -1599,7 +1600,7 @@ func reinstallStableSteps(c *Client, stableSource, stableChannel, approveCSV str
 func createSubscriptionAndWait(c *Client, source, channel, kind, approveCSV string, recovery *operatorRecovery, logs []string, emit func(UpdateStepEvent)) (*types.OperationResponse, error) {
 	newSub := buildSubscription(recovery.subscriptionBase(), source, channel)
 	recovery.subscriptionChanged = true
-	applyErr, cancelErr := applySubscriptionWithRetry(c, subscriptionPath(), newSub, recovery, func(attempt int, err error, willRetry bool, backoff time.Duration) {
+	applyErr, cancelErr := applySubscriptionWithRetry(c, rhoai.SubscriptionPath(), newSub, recovery, func(attempt int, err error, willRetry bool, backoff time.Duration) {
 		if willRetry {
 			slog.Warn("failed to create Subscription, retrying", "target", kind, "attempt", attempt, "error", err, "backoff", backoff)
 			logs = append(logs, fmt.Sprintf("Warning: Subscription creation attempt %d failed: %v -- retrying in %s", attempt, err, backoff))
@@ -1758,8 +1759,8 @@ func rhoaiCSVExists(c *Client) (bool, error) {
 }
 
 func recordRefreshActivity(c *Client, csvName string, success bool, reason string) {
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: nowRFC3339(),
+	record.RecordActivity(c, types.ActivityEntry{
+		Timestamp: record.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "refresh",
 		Detail:    csvName,
@@ -1775,8 +1776,8 @@ func recordReinstallActivity(c *Client, targetType, image string, success bool, 
 	} else if targetType == "nightly" || targetType == "custom" {
 		detail = fmt.Sprintf("to %s %s", targetType, image)
 	}
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: nowRFC3339(),
+	record.RecordActivity(c, types.ActivityEntry{
+		Timestamp: record.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "reinstall",
 		Detail:    detail,
@@ -1829,9 +1830,9 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	// interrupted operation removed the Subscription and CSV, the one
 	// recorded before that operation.
 	target := csv.Name
-	var recorded *subscriptionSnapshot
+	var recorded *record.SubscriptionSnapshot
 	if subMissing {
-		recorded, err = loadSubscriptionSnapshot(c)
+		recorded, err = record.LoadSubscriptionSnapshot(c)
 		if err != nil {
 			return fail(fmt.Sprintf("Failed to read the recorded Subscription: %v", err), kube.ErrorCodeOr(err, "prerequisites"))
 		}
@@ -1940,7 +1941,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	// new InstallPlan as soon as the CSV disappears, and deleting the
 	// Subscription afterwards would garbage-collect that plan mid-install.
 	emit(UpdateStepEvent{Step: "delete_subscription", Status: "running", Message: "Deleting Subscription..."})
-	if _, subDelErr := c.DeleteIfExists(subscriptionPath()); subDelErr != nil {
+	if _, subDelErr := c.DeleteIfExists(rhoai.SubscriptionPath()); subDelErr != nil {
 		return fail(fmt.Sprintf("Failed to delete Subscription: %v", subDelErr), kube.ErrorCodeFromK8sErr(subDelErr))
 	}
 	recovery.subscriptionChanged = true
@@ -1986,7 +1987,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 		newSub["spec"].(map[string]any)["startingCSV"] = target
 		logs = append(logs, fmt.Sprintf("The Subscription uses Manual approval: startingCSV is pinned to %s and only its InstallPlan is approved", target))
 	}
-	applyErr, cancelErr := applySubscriptionWithRetry(c, subscriptionPath(), newSub, recovery, func(attempt int, err error, _ bool, _ time.Duration) {
+	applyErr, cancelErr := applySubscriptionWithRetry(c, rhoai.SubscriptionPath(), newSub, recovery, func(attempt int, err error, _ bool, _ time.Duration) {
 		slog.Warn("Subscription recreation failed", "attempt", attempt, "error", err)
 		logs = append(logs, fmt.Sprintf("  Attempt %d/3 failed: %v", attempt, err))
 	})
@@ -2246,8 +2247,8 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 		logs = append(logs, "OK: Pull secret verified — contains quay.io/rhoai credentials")
 	}
 
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: nowRFC3339(),
+	record.RecordActivity(c, types.ActivityEntry{
+		Timestamp: record.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "create-pull-secret",
 		Detail:    "",

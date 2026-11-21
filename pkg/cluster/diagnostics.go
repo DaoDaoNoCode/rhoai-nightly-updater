@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -1177,8 +1178,8 @@ func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error
 	}
 
 	if len(deleted) > 0 {
-		RecordActivity(c, types.ActivityEntry{
-			Timestamp: nowRFC3339(),
+		record.RecordActivity(c, types.ActivityEntry{
+			Timestamp: record.NowRFC3339(),
 			User:      kube.GetUser(c),
 			Action:    "fix-delete-stale-installplans",
 			Detail:    "deleted Failed install plans: " + strings.Join(deleted, ", "),

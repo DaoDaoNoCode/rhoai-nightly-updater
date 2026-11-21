@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -641,7 +642,7 @@ func readPlaygroundRecords(c *Client) (map[string]playgroundRecord, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", record.GetActivityNamespace(), record.SnapshotConfigMapName), &cm)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
@@ -667,15 +668,15 @@ func writePlaygroundRecords(c *Client, records map[string]playgroundRecord) erro
 	if err != nil {
 		return err
 	}
-	ns := getActivityNamespace()
+	ns := record.GetActivityNamespace()
 	cm, _ := json.Marshal(map[string]any{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
-		"metadata":   map[string]any{"name": snapshotConfigMapName, "namespace": ns},
+		"metadata":   map[string]any{"name": record.SnapshotConfigMapName, "namespace": ns},
 		"data":       map[string]any{playgroundRecordKey: string(data)},
 	})
 	query := url.Values{"fieldManager": {playgroundRecordManager}, "force": {"true"}}
-	if _, _, err := c.Bookkeeping().Do(http.MethodPatch, rhoai.NamespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if _, _, err := c.Bookkeeping().Do(http.MethodPatch, rhoai.NamespacedPath("v1", "configmaps", ns, record.SnapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
 		return fmt.Errorf("record this tool's playgrounds: %w", err)
 	}
 	return nil
@@ -1137,8 +1138,8 @@ func (p *playgroundRun) fail(id, msg, code, activity string) (*types.OperationRe
 }
 
 func (p *playgroundRun) record(detail string, success bool) {
-	RecordActivity(p.c, types.ActivityEntry{
-		Timestamp: nowRFC3339(),
+	record.RecordActivity(p.c, types.ActivityEntry{
+		Timestamp: record.NowRFC3339(),
 		User:      kube.GetUser(p.c),
 		Action:    p.action + "-playground",
 		Detail:    detail,

@@ -5,15 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
-	"net/url"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
-
-const snapshotConfigMapName = "rhoai-nightly-updater-snapshot"
 
 type deploymentSnapshot struct {
 	Timestamp string            `json:"timestamp"`
@@ -45,7 +42,7 @@ func SaveDeploymentSnapshot(c *Client) error {
 	}
 
 	snap := deploymentSnapshot{
-		Timestamp: nowRFC3339(),
+		Timestamp: record.NowRFC3339(),
 		Images:    images,
 	}
 
@@ -54,13 +51,13 @@ func SaveDeploymentSnapshot(c *Client) error {
 		return fmt.Errorf("failed to marshal snapshot: %w", err)
 	}
 
-	ns := getActivityNamespace()
-	cmPath := rhoai.NamespacedPath("v1", "configmaps", ns, snapshotConfigMapName)
+	ns := record.GetActivityNamespace()
+	cmPath := rhoai.NamespacedPath("v1", "configmaps", ns, record.SnapshotConfigMapName)
 	cm := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
 		"metadata": map[string]any{
-			"name":      snapshotConfigMapName,
+			"name":      record.SnapshotConfigMapName,
 			"namespace": ns,
 		},
 		"data": map[string]any{
@@ -77,8 +74,8 @@ func SaveDeploymentSnapshot(c *Client) error {
 
 // GetDeploymentSnapshot reads the last saved snapshot from the ConfigMap.
 func GetDeploymentSnapshot(c *Client) (map[string]string, string) {
-	ns := getActivityNamespace()
-	cmPath := rhoai.NamespacedPath("v1", "configmaps", ns, snapshotConfigMapName)
+	ns := record.GetActivityNamespace()
+	cmPath := rhoai.NamespacedPath("v1", "configmaps", ns, record.SnapshotConfigMapName)
 
 	body, _, err := c.Bookkeeping().Get(cmPath)
 	if err != nil {
@@ -130,104 +127,4 @@ func CompareDeployments(deployments []types.DeploymentInfo, snapshot map[string]
 		}
 	}
 	return changed
-}
-
-// The operator Subscription recorded before each Update, Reinstall and
-// Refresh, and after each successful one, in the snapshot ConfigMap. Those
-// operations delete the Subscription before they recreate it; if the pod
-// is killed in between, the cluster has no Subscription and its source,
-// channel, approval mode and spec.config would be lost. Refresh and
-// Reinstall read the record when no Subscription exists.
-//
-// It is written by server-side apply under its own field manager, so
-// SaveDeploymentSnapshot (manager rhoai-nightly-updater, which applies only
-// data.snapshot) never removes it, and the RBAC is the snapshot ConfigMap's
-// existing patch grant (create when the ConfigMap does not exist yet).
-const (
-	subscriptionSnapshotKey     = "operator-subscription"
-	subscriptionSnapshotManager = "rhoai-nightly-updater-subscription"
-)
-
-type subscriptionSnapshot struct {
-	RecordedAt   string         `json:"recordedAt"`
-	Spec         map[string]any `json:"spec"`
-	InstalledCSV string         `json:"installedCSV,omitempty"`
-}
-
-// saveSubscriptionSnapshot records the spec and installed CSV of sub (a
-// Subscription object).
-func saveSubscriptionSnapshot(c *Client, sub map[string]any) error {
-	spec, _ := sub["spec"].(map[string]any)
-	if spec == nil {
-		return fmt.Errorf("the Subscription has no spec")
-	}
-	status, _ := sub["status"].(map[string]any)
-	installed, _ := status["installedCSV"].(string)
-	data, err := json.Marshal(subscriptionSnapshot{RecordedAt: nowRFC3339(), Spec: spec, InstalledCSV: installed})
-	if err != nil {
-		return err
-	}
-	ns := getActivityNamespace()
-	cm, _ := json.Marshal(map[string]any{
-		"apiVersion": "v1",
-		"kind":       "ConfigMap",
-		"metadata":   map[string]any{"name": snapshotConfigMapName, "namespace": ns},
-		"data":       map[string]any{subscriptionSnapshotKey: string(data)},
-	})
-	query := url.Values{"fieldManager": {subscriptionSnapshotManager}, "force": {"true"}}
-	if _, _, err := c.Bookkeeping().Do(http.MethodPatch, rhoai.NamespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
-		return fmt.Errorf("record the operator Subscription: %w", err)
-	}
-	return nil
-}
-
-// loadSubscriptionSnapshot returns the recorded Subscription, or nil when
-// none was recorded.
-func loadSubscriptionSnapshot(c *Client) (*subscriptionSnapshot, error) {
-	var cm struct {
-		Data map[string]string `json:"data"`
-	}
-	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
-	if err != nil {
-		if kube.IsDecodeError(err) {
-			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
-		}
-		return nil, fmt.Errorf("read the recorded operator Subscription: %w", err)
-	}
-	if !found {
-		return nil, nil
-	}
-	raw := cm.Data[subscriptionSnapshotKey]
-	if raw == "" {
-		return nil, nil
-	}
-	var snap subscriptionSnapshot
-	if err := json.Unmarshal([]byte(raw), &snap); err != nil {
-		return nil, fmt.Errorf("parse the recorded operator Subscription: %w", err)
-	}
-	if snap.Spec == nil {
-		return nil, nil
-	}
-	return &snap, nil
-}
-
-// recordLiveSubscription records the current Subscription after a
-// successful operation, on its own short context (the operation's may have
-// ended; see postOperationContext). Errors are only logged.
-func recordLiveSubscription(c *Client) {
-	ctx, cancel := postOperationContext(c, subscriptionRecordTimeout)
-	defer cancel()
-	c = c.WithContext(ctx)
-	body, _, err := c.Get(subscriptionPath())
-	if err != nil {
-		slog.Warn("could not read the operator Subscription to record it", "error", err)
-		return
-	}
-	var sub map[string]any
-	if err := json.Unmarshal(body, &sub); err != nil {
-		return
-	}
-	if err := saveSubscriptionSnapshot(c, sub); err != nil {
-		slog.Warn("could not record the operator Subscription", "error", err)
-	}
 }

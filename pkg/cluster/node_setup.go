@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -948,7 +949,7 @@ func RunNodeSetup(c *Client, req types.NodeSetupRequest, emit func(UpdateStepEve
 	emit(UpdateStepEvent{Step: "apply", Status: "running", Message: strings.Join(w.plan.Changes, " ")})
 	if err := writeNodeSetup(c, w, false); err != nil {
 		msg := writeRefusal(w, err, false)
-		recordActivity(c, activity, msg, false)
+		record.RecordAction(c, activity, msg, false)
 		return fail("apply", writeRefusalCode(err), msg)
 	}
 	done := w.done
@@ -960,7 +961,7 @@ func RunNodeSetup(c *Client, req types.NodeSetupRequest, emit func(UpdateStepEve
 		}
 	}
 	emit(UpdateStepEvent{Step: "apply", Status: "success", Message: done})
-	recordActivity(c, activity, done, true)
+	record.RecordAction(c, activity, done, true)
 
 	emit(UpdateStepEvent{Step: "verify", Status: "running", Message: "Reading it back"})
 	if err := w.verify(c); err != nil {

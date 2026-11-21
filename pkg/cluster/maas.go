@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -188,7 +189,7 @@ func readMaaSRecord(c *Client) (maasRecord, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", record.GetActivityNamespace(), record.SnapshotConfigMapName), &cm)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return rec, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
@@ -227,7 +228,7 @@ func readMaaSRecord(c *Client) (maasRecord, error) {
 
 // writeMaaSRecord applies the record (operations hold the cluster lock).
 func writeMaaSRecord(c *Client, rec maasRecord) error {
-	rec.At, rec.By = nowRFC3339(), kube.GetUser(c)
+	rec.At, rec.By = record.NowRFC3339(), kube.GetUser(c)
 	sort.Strings(rec.Published)
 	data, err := json.Marshal(rec)
 	if err != nil {

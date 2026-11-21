@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -625,10 +626,10 @@ func TestNodeSetupActionsAreLabelledInTheActivityLog(t *testing.T) {
 		if !ValidNodeSetupAction(action) {
 			t.Errorf("%s is not an action", action)
 		}
-		if a, ok := activityActions[recorded]; !ok || a[0] != "setup" {
+		if a, ok := record.ActivityActions[recorded]; !ok || a[0] != "setup" {
 			t.Errorf("%s: activity %q has no setup label", action, recorded)
 		}
-		if activityFailedLabels[recorded] == "" {
+		if record.ActivityFailedLabels[recorded] == "" {
 			t.Errorf("%s: no failed label", recorded)
 		}
 	}

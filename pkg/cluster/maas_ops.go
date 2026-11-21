@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -44,13 +45,13 @@ func (m *maasRun) fail(id, msg, code, activity string) (*types.OperationResponse
 	}
 	m.logs = append(m.logs, msg)
 	slog.Warn("maas operation stopped", "step", id, "reason", activity, "user", kube.GetUser(m.c))
-	recordActivity(m.c, m.activity, fmt.Sprintf("%s (%s)", m.target, activity), false)
+	record.RecordAction(m.c, m.activity, fmt.Sprintf("%s (%s)", m.target, activity), false)
 	return &types.OperationResponse{Success: false, Message: msg, Logs: m.logs, ErrorCode: code}, nil
 }
 
 func (m *maasRun) done(msg string) (*types.OperationResponse, error) {
 	slog.Info("maas operation", "action", m.activity, "target", m.target, "user", kube.GetUser(m.c))
-	recordActivity(m.c, m.activity, m.target, true)
+	record.RecordAction(m.c, m.activity, m.target, true)
 	return &types.OperationResponse{Success: true, Message: msg, Logs: m.logs}, nil
 }
 

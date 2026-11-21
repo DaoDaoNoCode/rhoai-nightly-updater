@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -57,20 +58,20 @@ func TestShutdownBudgetFitsTerminationGracePeriod(t *testing.T) {
 		t.Fatalf("marker clear %s / flush %s cannot cover a pending retry write plus its own write", MarkerClearTimeout, MarkerFlushTimeout)
 	}
 
-	if RecoveryTimeout != restoreCSVBudget+restoreApplyTimeout {
+	if RecoveryTimeout != record.RestoreCSVBudget+record.RestoreApplyTimeout {
 		t.Fatalf("RecoveryTimeout %s is not the sum of its phases", RecoveryTimeout)
 	}
 	// After the deadline: the restore, then the activity entry and the
 	// Subscription record (all capped together by postOperationContext),
 	// then the marker clear.
-	worst := OperationDeadline + postDeadlineWork() + MarkerClearTimeout
+	worst := OperationDeadline + record.PostDeadlineWork() + MarkerClearTimeout
 	if ShutdownDrainTimeout() < worst {
 		t.Fatalf("drain %s < worst case %s", ShutdownDrainTimeout(), worst)
 	}
 	total := ShutdownDrainTimeout() + MarkerFlushTimeout + HTTPShutdownTimeout
-	if ShutdownMargin < 10*time.Second || total+ShutdownMargin > grace {
+	if record.ShutdownMargin < 10*time.Second || total+record.ShutdownMargin > grace {
 		t.Fatalf("drain %s + marker flush %s + HTTP shutdown %s = %s, plus a %s margin, exceeds terminationGracePeriodSeconds %s",
-			ShutdownDrainTimeout(), MarkerFlushTimeout, HTTPShutdownTimeout, total, ShutdownMargin, grace)
+			ShutdownDrainTimeout(), MarkerFlushTimeout, HTTPShutdownTimeout, total, record.ShutdownMargin, grace)
 	}
 	if installDeadlineReserve <= 0 || installDeadlineReserve >= OperationDeadline {
 		t.Fatalf("installDeadlineReserve = %s", installDeadlineReserve)

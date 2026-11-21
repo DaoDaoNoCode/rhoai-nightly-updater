@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -349,7 +350,7 @@ func applyFixRestartModuleOperator(c *Client, module string) (*types.OperationRe
 	err = c.PatchJSON(rhoai.NamespacedPath("apps/v1", "deployments", d.Namespace, d.Name), map[string]any{
 		"metadata": map[string]any{"uid": d.UID, "resourceVersion": d.ResourceVersion},
 		"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
-			"annotations": map[string]string{restartAnnotation: nowRFC3339()},
+			"annotations": map[string]string{restartAnnotation: record.NowRFC3339()},
 		}}},
 	})
 	switch {
@@ -361,8 +362,8 @@ func applyFixRestartModuleOperator(c *Client, module string) (*types.OperationRe
 	default:
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Could not restart %s: %v.%s", d.ref(), err, templateHint(err)), Logs: logs, ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: nowRFC3339(),
+	record.RecordActivity(c, types.ActivityEntry{
+		Timestamp: record.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "fix-restart-module-operator",
 		Detail:    fmt.Sprintf("restarted %s (module %s)", d.ref(), module),

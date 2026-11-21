@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -80,7 +81,7 @@ func TestCompletedOperationRoundTrip(t *testing.T) {
 	}
 
 	mu.Lock()
-	data[lastCompletedKey] = "{not json"
+	data[record.LastCompletedKey] = "{not json"
 	mu.Unlock()
 	if marker, last, err := GetOperationState(c); err != nil || marker == nil || last != nil {
 		t.Fatalf("unreadable lastCompleted: marker %+v last %+v err %v", marker, last, err)

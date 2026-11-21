@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -297,12 +298,12 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, _ = io.WriteString(w, f.platform)
-	case strings.HasSuffix(p, "/configmaps/"+snapshotConfigMapName) && r.Method == http.MethodPatch && r.URL.Query().Get("fieldManager") == subscriptionSnapshotManager:
+	case strings.HasSuffix(p, "/configmaps/"+record.SnapshotConfigMapName) && r.Method == http.MethodPatch && r.URL.Query().Get("fieldManager") == record.SubscriptionSnapshotManager:
 		data, _ := body["data"].(map[string]any)
-		f.recordedSub, _ = data[subscriptionSnapshotKey].(string)
+		f.recordedSub, _ = data[record.SubscriptionSnapshotKey].(string)
 		_, _ = io.WriteString(w, `{}`)
-	case strings.HasSuffix(p, "/configmaps/"+snapshotConfigMapName) && r.Method == http.MethodGet:
-		writeJSON(w, map[string]any{"data": map[string]any{subscriptionSnapshotKey: f.recordedSub}})
+	case strings.HasSuffix(p, "/configmaps/"+record.SnapshotConfigMapName) && r.Method == http.MethodGet:
+		writeJSON(w, map[string]any{"data": map[string]any{record.SubscriptionSnapshotKey: f.recordedSub}})
 	case strings.Contains(p, "/configmaps/") && r.Method != http.MethodGet:
 		_, _ = io.WriteString(w, `{}`)
 	case p == "/apis/apiextensions.k8s.io/v1/customresourcedefinitions":

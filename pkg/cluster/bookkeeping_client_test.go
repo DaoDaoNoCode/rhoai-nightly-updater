@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -55,7 +56,7 @@ func TestBookkeepingUsesTheServiceAccount(t *testing.T) {
 	srv := rec.server(t)
 	c := userClientWithBookkeeper(srv)
 
-	RecordActivity(c, types.ActivityEntry{Action: "update", User: "alice", Success: true})
+	record.RecordActivity(c, types.ActivityEntry{Action: "update", User: "alice", Success: true})
 	if _, err := GetActivity(c); err != nil {
 		t.Fatal(err)
 	}
@@ -65,10 +66,10 @@ func TestBookkeepingUsesTheServiceAccount(t *testing.T) {
 	if err := writeSnapshotKey(c, "k", "m", "v"); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveSubscriptionSnapshot(c, map[string]any{"spec": map[string]any{"channel": "x"}}); err != nil {
+	if err := record.SaveSubscriptionSnapshot(c, map[string]any{"spec": map[string]any{"channel": "x"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadSubscriptionSnapshot(c); err != nil {
+	if _, err := record.LoadSubscriptionSnapshot(c); err != nil {
 		t.Fatal(err)
 	}
 	GetDeploymentSnapshot(c)

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -1301,7 +1302,7 @@ func waitInferenceGateway(c *Client, host string, progress func(string)) (ready 
 func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) *types.OperationResponse {
-		recordActivity(c, "teardown-inference-gateway", activity, false)
+		record.RecordAction(c, "teardown-inference-gateway", activity, false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}
 	}
 	type current struct {
@@ -1420,7 +1421,7 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 		}
 	}
 	slog.Info("inference gateway teardown", "user", kube.GetUser(c))
-	recordActivity(c, "teardown-inference-gateway", strings.Join(deleted, ", "), true)
+	record.RecordAction(c, "teardown-inference-gateway", strings.Join(deleted, ", "), true)
 	return &types.OperationResponse{
 		Success: true,
 		Message: strings.TrimSpace("Inference gateway deleted: " + joinTitles(deleted) + ". OpenShift removes its load balancer and the ingress operator its DNS record. " + strings.Join(kept, " ")),

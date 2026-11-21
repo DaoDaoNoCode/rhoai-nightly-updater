@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -158,7 +159,7 @@ func modelRefsJSON(t *testing.T, mc *modelsCluster) string {
 
 // rawMaaSRecord is the record as stored (snapshot ConfigMap, key "maas").
 func rawMaaSRecord(mc *modelsCluster) string {
-	cm := mc.f.get("/api/v1/namespaces/" + getActivityNamespace() + "/configmaps/" + snapshotConfigMapName)
+	cm := mc.f.get("/api/v1/namespaces/" + record.GetActivityNamespace() + "/configmaps/" + record.SnapshotConfigMapName)
 	data, _ := cm["data"].(map[string]any)
 	s, _ := data["maas"].(string)
 	return s

@@ -7,6 +7,7 @@ import (
 	"net/url"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -54,7 +55,7 @@ func readPipelineRecord(c *Client) (pipelineRecord, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", record.GetActivityNamespace(), record.SnapshotConfigMapName), &cm)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
@@ -78,15 +79,15 @@ func writePipelineRecord(c *Client, rec pipelineRecord) error {
 	if err != nil {
 		return err
 	}
-	ns := getActivityNamespace()
+	ns := record.GetActivityNamespace()
 	cm, _ := json.Marshal(map[string]any{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
-		"metadata":   map[string]any{"name": snapshotConfigMapName, "namespace": ns},
+		"metadata":   map[string]any{"name": record.SnapshotConfigMapName, "namespace": ns},
 		"data":       map[string]any{pipelineRecordKey: string(data)},
 	})
 	query := url.Values{"fieldManager": {pipelineRecordManager}, "force": {"true"}}
-	if _, _, err := c.Bookkeeping().Do(http.MethodPatch, rhoai.NamespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if _, _, err := c.Bookkeeping().Do(http.MethodPatch, rhoai.NamespacedPath("v1", "configmaps", ns, record.SnapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
 		return fmt.Errorf("record this tool's pipeline servers: %w", err)
 	}
 	return nil
@@ -101,7 +102,7 @@ func recordPipelineServer(c *Client, meta kube.ObjectMeta) error {
 	if err != nil {
 		return err
 	}
-	rec[meta.Namespace+"/"+meta.Name] = recordedPipelineServer{UID: meta.UID, At: nowRFC3339(), By: kube.GetUser(c)}
+	rec[meta.Namespace+"/"+meta.Name] = recordedPipelineServer{UID: meta.UID, At: record.NowRFC3339(), By: kube.GetUser(c)}
 	return writePipelineRecord(c, rec)
 }
 

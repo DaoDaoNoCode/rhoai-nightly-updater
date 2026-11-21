@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -247,7 +248,7 @@ func TestInferenceGateway_ConvertsAPreReleaseGateway(t *testing.T) {
 			}
 			delete(mc.f.fail, "GET /apis/serving.kserve.io/v1alpha2/llminferenceservices")
 			// The tool's record cannot be read: nothing is written either.
-			recPath := "GET /api/v1/namespaces/" + getActivityNamespace() + "/configmaps/" + snapshotConfigMapName
+			recPath := "GET /api/v1/namespaces/" + record.GetActivityNamespace() + "/configmaps/" + record.SnapshotConfigMapName
 			mc.f.fail[recPath] = 500
 			if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "dev"}); res.Success || len(mc.f.mutations()[before:]) != 0 {
 				t.Fatalf("an unreadable record must refuse before any write: %+v %v", res, mc.f.mutations()[before:])

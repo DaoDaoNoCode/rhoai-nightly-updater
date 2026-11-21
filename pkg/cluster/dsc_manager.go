@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -1343,7 +1344,7 @@ func (v *dscView) setManagementState(c *Client, req types.DSCToggleRequest, acti
 		return res
 	}
 	detail := v.name + ": " + changeSummary(p.plan.Changes)
-	recordActivity(c, activity, detail, true)
+	record.RecordAction(c, activity, detail, true)
 	slog.Info("dsc management state set", "dsc", v.name, "path", req.Path, "to", req.To, "user", kube.GetUser(c))
 	msg := "Set " + changeSummary(p.plan.Changes) + "."
 	if len(p.plan.Warnings) > 0 {
@@ -1413,7 +1414,7 @@ func runPlanned(c *Client, req types.DSCPlanRequest, action, activity string) (*
 	if len(p.plan.Kept) > 0 {
 		detail += "; kept " + strings.Join(p.plan.Kept, ", ")
 	}
-	recordActivity(c, activity, detail, true)
+	record.RecordAction(c, activity, detail, true)
 	slog.Info("dsc changed", "action", action, "dsc", v.name, "user", kube.GetUser(c))
 	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Changed %s.%s", changeSummary(p.plan.Changes), keptText(p.plan.Kept)), Logs: []string{detail}}, nil
 }

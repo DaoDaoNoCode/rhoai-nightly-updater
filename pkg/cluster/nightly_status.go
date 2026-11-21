@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -148,7 +149,7 @@ func lookupNightlyStatus(ctx context.Context, basicAuth, key string, installed *
 		Tag:    installed.Tag,
 		Digest: digest,
 	}
-	status.CheckedAt = nowRFC3339()
+	status.CheckedAt = record.NowRFC3339()
 	if installed.Digest != "" {
 		update := installed.Digest != digest
 		status.UpdateAvailable = &update

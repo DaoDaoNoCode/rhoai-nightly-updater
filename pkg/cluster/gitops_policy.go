@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"gopkg.in/yaml.v3"
 )
@@ -184,7 +185,7 @@ func expectedGitOpsAdmission(name string) (policy, binding map[string]any, err e
 	if len(gitOpsPolicyTemplate) == 0 {
 		return nil, nil, fmt.Errorf("this build has no deploy/rbac-gitops.yaml to compare the policy with")
 	}
-	ns := getActivityNamespace()
+	ns := record.GetActivityNamespace()
 	app, ok := strings.CutSuffix(name, "-"+ns+"-gitops")
 	if !ok || app == "" {
 		return nil, nil, fmt.Errorf("%s is %q, not <APP_NAME>-%s-gitops", GitOpsAdmissionPolicyEnv, name, ns)

@@ -85,7 +85,7 @@ func updateGitOpsPlan(c *Client, image string, currentCSV types.CSVInfo, logs *[
 // or when there is none). An answer it cannot parse is an error, so Update
 // refuses rather than delete a Subscription OLM may still be working on.
 func pendingInstallPlan(c *Client) (name, phase string, err error) {
-	body, found, err := c.GetOptional(subscriptionPath())
+	body, found, err := c.GetOptional(rhoai.SubscriptionPath())
 	if err != nil {
 		return "", "", err
 	}
@@ -345,7 +345,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 
 // readSubscriptionObject reads the operator Subscription as a decoded object.
 func readSubscriptionObject(c *Client) (obj map[string]any, found bool, err error) {
-	body, exists, err := c.GetOptional(subscriptionPath())
+	body, exists, err := c.GetOptional(rhoai.SubscriptionPath())
 	if err != nil {
 		return nil, false, err
 	}

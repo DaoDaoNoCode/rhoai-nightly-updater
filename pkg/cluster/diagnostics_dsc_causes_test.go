@@ -184,7 +184,7 @@ func TestDSCCheck_MissingPrerequisitesGetCommandsAndClassification(t *testing.T)
 // the commands stay for reference.
 func TestDSCCheck_MissingPrerequisiteUnderGitOps(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs())
-	w.f.obj(subscriptionPath(), map[string]any{"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS, "annotations": trackingID("Subscription", rhoai.SubNS, rhoai.SubName)}})
+	w.f.obj(rhoai.SubscriptionPath(), map[string]any{"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS, "annotations": trackingID("Subscription", rhoai.SubNS, rhoai.SubName)}})
 	w.f.obj(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName), map[string]any{"metadata": map[string]any{"name": rhoai.CatalogName, "namespace": rhoai.CatalogNS, "annotations": trackingID("CatalogSource", rhoai.CatalogNS, rhoai.CatalogName)}})
 	out := checkDataScienceCluster(w.c)
 	js, ok := problemsByID(out)["prerequisite-missing-job-set"]

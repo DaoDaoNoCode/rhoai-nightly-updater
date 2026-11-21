@@ -437,3 +437,7 @@ func (s csvSummary) info() types.CSVInfo {
 	}
 	return types.CSVInfo{Name: s.Metadata.Name, Version: s.Spec.Version, Phase: phase}
 }
+
+func SubscriptionPath() string {
+	return NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
+}

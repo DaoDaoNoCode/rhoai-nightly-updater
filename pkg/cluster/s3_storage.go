@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -1072,16 +1073,16 @@ func legacyStorageSetupBlock(l *legacyStorage) string {
 func SetupS3Storage(c *Client) (*types.OperationResponse, error) {
 	legacy, err := readLegacyStorage(c)
 	if err != nil {
-		recordActivity(c, "setup-s3", fmt.Sprintf("namespace=%s (earlier storage check failed)", s3Namespace), false)
+		record.RecordAction(c, "setup-s3", fmt.Sprintf("namespace=%s (earlier storage check failed)", s3Namespace), false)
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot check for storage from an earlier version in namespace %s; nothing was changed: %v.%s", legacyNamespace, err, templateHint(err)), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
 	if reason := legacyStorageSetupBlock(legacy); reason != "" {
-		recordActivity(c, "setup-s3", fmt.Sprintf("namespace=%s (earlier storage present)", s3Namespace), false)
+		record.RecordAction(c, "setup-s3", fmt.Sprintf("namespace=%s (earlier storage present)", s3Namespace), false)
 		return &types.OperationResponse{Success: false, Message: reason + " Nothing was changed.", ErrorCode: "prerequisites"}, nil
 	}
 	keys, err := s3Credentials(c)
 	if err != nil {
-		recordActivity(c, "setup-s3", fmt.Sprintf("namespace=%s (credentials)", s3Namespace), false)
+		record.RecordAction(c, "setup-s3", fmt.Sprintf("namespace=%s (credentials)", s3Namespace), false)
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot determine the S3 credentials; nothing was changed: %v.%s", err, templateHint(err)), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
 	return setupS3Storage(c, keys, &opLog{}, s3RetrySetup)
@@ -1114,7 +1115,7 @@ func (l *opLog) add(line string) {
 func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.OperationResponse, error) {
 	fail := func(msg, code, activity string) *types.OperationResponse {
 		slog.Warn("s3 storage setup failed", "reason", activity, "user", kube.GetUser(c))
-		recordActivity(c, "setup-s3", fmt.Sprintf("namespace=%s (%s)", s3Namespace, activity), false)
+		record.RecordAction(c, "setup-s3", fmt.Sprintf("namespace=%s (%s)", s3Namespace, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: log.lines, ErrorCode: code}
 	}
 	// Migrate storage passes the old storage's keys, which have no admin
@@ -1308,7 +1309,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 	log.add(fmt.Sprintf("OK: Bucket %s created", s3Bucket))
 
 	slog.Info("s3 storage setup complete", "user", kube.GetUser(c))
-	recordActivity(c, "setup-s3", fmt.Sprintf("namespace=%s bucket=%s", s3Namespace, s3Bucket), true)
+	record.RecordAction(c, "setup-s3", fmt.Sprintf("namespace=%s bucket=%s", s3Namespace, s3Bucket), true)
 	return &types.OperationResponse{
 		Success: true,
 		Message: fmt.Sprintf("S3 storage (SeaweedFS) deployed with bucket %s; pipeline servers reach it at %s. Sign in to the admin UI as %s; the password (the S3 secret key) and the S3 keys are in Secret %s in namespace %s.", s3Bucket, s3Endpoint(), s3AdminUser, s3Secret, s3Namespace),
@@ -1582,7 +1583,7 @@ func storageUsers(dspas []dspaInfo, addresses ...storageAddress) (live, deleting
 func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		recordActivity(c, "teardown-s3", fmt.Sprintf("%s (%s)", s3Namespace, activity), false)
+		record.RecordAction(c, "teardown-s3", fmt.Sprintf("%s (%s)", s3Namespace, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
@@ -1680,7 +1681,7 @@ func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.Operatio
 	}
 	nsHint := nsNote + s3KeptNamespaceHint(keptNamespaces)
 	if len(d.failed) > 0 {
-		recordActivity(c, "teardown-s3", fmt.Sprintf("%s (failed: %s)", s3Namespace, strings.Join(d.failed, "; ")), false)
+		record.RecordAction(c, "teardown-s3", fmt.Sprintf("%s (failed: %s)", s3Namespace, strings.Join(d.failed, "; ")), false)
 		code := "partial_failure"
 		if len(d.deleted) == 0 {
 			code = "delete_failed"
@@ -1691,11 +1692,11 @@ func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.Operatio
 		}, nil
 	}
 	if len(d.deleted) == 0 && len(d.pvcUIDs) == 0 {
-		recordActivity(c, "teardown-s3", s3Namespace+" (nothing to remove)", true)
+		record.RecordAction(c, "teardown-s3", s3Namespace+" (nothing to remove)", true)
 		return &types.OperationResponse{Success: true, Message: "No S3 storage objects created by this tool remain." + keptNote + nsHint, Logs: logs}, nil
 	}
 	slog.Info("s3 storage teardown", "user", kube.GetUser(c), "deleted", strings.Join(d.deleted, ", "))
-	recordActivity(c, "teardown-s3", s3Namespace+" (objects deleted, namespace kept)", true)
+	record.RecordAction(c, "teardown-s3", s3Namespace+" (objects deleted, namespace kept)", true)
 
 	if len(d.pvcUIDs) > 0 {
 		remaining, err := waitPVCsGone(c, d.pvcUIDs)

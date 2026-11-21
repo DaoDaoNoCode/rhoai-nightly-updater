@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -99,7 +100,7 @@ func TestMigrate_AnUnreadableRecordStopsBeforeAnyWrite(t *testing.T) {
 	f, c := newResourceFake(t)
 	putMigrationCase(f)
 	simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
-	f.fail["GET "+rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)] = http.StatusInternalServerError
+	f.fail["GET "+rhoai.NamespacedPath("v1", "configmaps", record.GetActivityNamespace(), record.SnapshotConfigMapName)] = http.StatusInternalServerError
 	f.requests = nil
 	ok, msg, _, _ := runMigrate(t, c, MigrateOptions{ConfirmProjects: []string{"juntao-test"}})
 	if ok || !strings.Contains(msg, "nothing was changed") {

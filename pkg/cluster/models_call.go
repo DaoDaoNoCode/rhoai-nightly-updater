@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -295,7 +296,7 @@ func lastCallCheck(c *Client, project, name, uid string) *types.ModelCallCheck {
 // checkModelCall runs the check on the tool's model (read fresh) and
 // remembers it. progress gets each retry, in words.
 func checkModelCall(c *Client, project, name string, rec modelsRecord, progress func(string)) types.ModelCallCheck {
-	now := func() string { return nowRFC3339() }
+	now := func() string { return record.NowRFC3339() }
 	model, found, err := readToolModel(c, project, name)
 	if err != nil || !found {
 		why := "it does not exist"

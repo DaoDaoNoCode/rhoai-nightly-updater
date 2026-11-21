@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -172,7 +173,7 @@ func TestRecordActivityConcurrent(t *testing.T) {
 	for i := range numGoroutines {
 		go func(idx int) {
 			defer wg.Done()
-			RecordActivity(client, types.ActivityEntry{
+			record.RecordActivity(client, types.ActivityEntry{
 				Timestamp: fmt.Sprintf("2025-01-01T00:00:%02dZ", idx),
 				User:      fmt.Sprintf("user-%d", idx),
 				Action:    "test",
@@ -314,7 +315,7 @@ func TestRecordActivityExceedsMax(t *testing.T) {
 
 	// Call RecordActivity sequentially to isolate trimming behavior
 	for i := range numEntries {
-		RecordActivity(client, types.ActivityEntry{
+		record.RecordActivity(client, types.ActivityEntry{
 			Timestamp: fmt.Sprintf("2025-01-01T00:00:%02dZ", i%60),
 			User:      fmt.Sprintf("user-%d", i),
 			Action:    "test",
@@ -340,8 +341,8 @@ func TestRecordActivityExceedsMax(t *testing.T) {
 		t.Fatalf("failed to parse entries: %v", err)
 	}
 
-	if len(entries) != maxActivityEntries {
-		t.Fatalf("expected %d entries (maxActivityEntries), got %d", maxActivityEntries, len(entries))
+	if len(entries) != record.MaxActivityEntries {
+		t.Fatalf("expected %d entries (maxActivityEntries), got %d", record.MaxActivityEntries, len(entries))
 	}
 }
 

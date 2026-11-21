@@ -12,13 +12,14 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 type ctxKey struct{}
 
 func TestPostOperationContext(t *testing.T) {
-	work := postDeadlineWork()
+	work := record.PostDeadlineWork()
 	cases := []struct {
 		name        string
 		deadline    time.Duration // relative to now; 0 = no deadline
@@ -43,7 +44,7 @@ func TestPostOperationContext(t *testing.T) {
 				cancel()
 			}
 			c := newTestClient(testClientOptions{Ctx: parent})
-			ctx, cancel := postOperationContext(c, tc.timeout)
+			ctx, cancel := record.PostOperationContext(c, tc.timeout)
 			defer cancel()
 			if ctx.Value(ctxKey{}) != "v" {
 				t.Error("values of the operation's context are lost")
@@ -69,16 +70,14 @@ func TestPostOperationContext(t *testing.T) {
 }
 
 func TestRecordActivity_StalledOrConflictingAPIIsBounded(t *testing.T) {
-	old := activityWriteTimeout
-	activityWriteTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { activityWriteTimeout = old })
+	t.Cleanup(record.SetActivityWriteTimeoutForTest(300 * time.Millisecond))
 
 	t.Run("stalled API server", func(t *testing.T) {
 		c := stallServer(t, 0) // every request takes 5s
 		start := kube.Clock().Now()
-		RecordActivity(c, types.ActivityEntry{Action: "test"})
-		if d := kube.Clock().Since(start); d != activityWriteTimeout {
-			t.Fatalf("RecordActivity took %s with a %s budget", d, activityWriteTimeout)
+		record.RecordActivity(c, types.ActivityEntry{Action: "test"})
+		if d := kube.Clock().Since(start); d != record.ActivityWriteTimeout {
+			t.Fatalf("RecordActivity took %s with a %s budget", d, record.ActivityWriteTimeout)
 		}
 	})
 	t.Run("conflict retries share the budget", func(t *testing.T) {
@@ -97,9 +96,9 @@ func TestRecordActivity_StalledOrConflictingAPIIsBounded(t *testing.T) {
 		// 900ms. Bounded, the GET is answered and the budget ends the PUT.
 		c := withLatency(newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()}), 150*time.Millisecond)
 		start := kube.Clock().Now()
-		RecordActivity(c, types.ActivityEntry{Action: "test"})
-		if d := kube.Clock().Since(start); d != activityWriteTimeout || calls.Load() != 1 {
-			t.Fatalf("RecordActivity took %s (%d calls) with a %s budget", d, calls.Load(), activityWriteTimeout)
+		record.RecordActivity(c, types.ActivityEntry{Action: "test"})
+		if d := kube.Clock().Since(start); d != record.ActivityWriteTimeout || calls.Load() != 1 {
+			t.Fatalf("RecordActivity took %s (%d calls) with a %s budget", d, calls.Load(), record.ActivityWriteTimeout)
 		}
 	})
 	t.Run("after the shared end nothing is written", func(t *testing.T) {
@@ -109,10 +108,10 @@ func TestRecordActivity_StalledOrConflictingAPIIsBounded(t *testing.T) {
 			w.WriteHeader(404)
 		}))
 		t.Cleanup(srv.Close)
-		ctx, cancel := kube.Clock().WithDeadline(context.Background(), kube.Clock().Now().Add(-postDeadlineWork()-time.Second))
+		ctx, cancel := kube.Clock().WithDeadline(context.Background(), kube.Clock().Now().Add(-record.PostDeadlineWork()-time.Second))
 		defer cancel()
 		c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: ctx})
-		RecordActivity(c, types.ActivityEntry{Action: "test"})
+		record.RecordActivity(c, types.ActivityEntry{Action: "test"})
 		if n := calls.Load(); n != 0 {
 			t.Fatalf("%d requests after the operation's shared end", n)
 		}

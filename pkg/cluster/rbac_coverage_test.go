@@ -789,7 +789,7 @@ func (r resolver) resolveCall(x *ast.CallExpr) []string {
 			}
 		}
 		return out
-	case "getActivityNamespace":
+	case "GetActivityNamespace":
 		return []string{appNSMarker}
 	case "maasAPI":
 		// maas.opendatahub.io at its served version

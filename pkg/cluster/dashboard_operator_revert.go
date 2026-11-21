@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -70,7 +71,7 @@ func revertDashboardOperatorTo(c *Client, target dashboardTarget) (*types.Operat
 		if len(failures) > 0 {
 			keep = session
 		}
-		now := nowRFC3339()
+		now := record.NowRFC3339()
 		detail := fmt.Sprintf("Resumed %s (%d replicas)", name, replicas)
 		action := &types.DashboardDevAction{Action: "revert", By: kube.GetUser(c), At: now, Detail: detail}
 		if err := patchDashboardOperator(c, operator, replicas, keep, action); err != nil {
@@ -86,7 +87,7 @@ func revertDashboardOperatorTo(c *Client, target dashboardTarget) (*types.Operat
 			code = "partial_failure"
 		}
 		logs = append(logs, message)
-		RecordActivity(c, types.ActivityEntry{Timestamp: now, User: kube.GetUser(c), Action: "revert-dashboard", Detail: message, Success: len(failures) == 0})
+		record.RecordActivity(c, types.ActivityEntry{Timestamp: now, User: kube.GetUser(c), Action: "revert-dashboard", Detail: message, Success: len(failures) == 0})
 		return &types.OperationResponse{Success: len(failures) == 0, Message: message, ErrorCode: code, Logs: logs}, replicas
 	}
 }

@@ -20,7 +20,7 @@ func gitOpsProfileWriteAllowed(w string) bool {
 		return true
 	case strings.HasPrefix(path, rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "")) && method == http.MethodDelete:
 		return true
-	case path == subscriptionPath() && (method == http.MethodPatch || method == http.MethodDelete):
+	case path == rhoai.SubscriptionPath() && (method == http.MethodPatch || method == http.MethodDelete):
 		return true
 	}
 	return false
@@ -42,7 +42,7 @@ func TestUpdateGitOpsProfile_InstallsWhatTheCatalogServes(t *testing.T) {
 			t.Errorf("the gitops profile wrote %s; writes: %v", w, writes)
 		}
 	}
-	subPath := subscriptionPath()
+	subPath := rhoai.SubscriptionPath()
 	if d, p := indexOf(writes, "DELETE "+subPath), indexOf(writes, "PATCH "+subPath); d < 0 || p != d+1 {
 		t.Fatalf("the Subscription was not deleted and recreated back to back: %v", writes)
 	}
@@ -328,7 +328,7 @@ func TestUpdateGitOpsProfile_SubscriptionChangesAfterTheCSVDeletion(t *testing.T
 // (it would otherwise read the replacement's UID and delete it).
 func TestUpdateGitOpsProfile_SubscriptionReplacedBeforeItsDeletion(t *testing.T) {
 	f := servesGitOpsPolicy(t, gitOpsFake(t))
-	subPath := subscriptionPath()
+	subPath := rhoai.SubscriptionPath()
 	f.intercept = func(f *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
 		if r.Method == http.MethodDelete && r.URL.Path == subPath && f.sub != nil {
 			f.sub["metadata"].(map[string]any)["uid"] = "uid-sub-replacement"

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -60,10 +61,6 @@ var (
 	// runs its csv-cleanup finalizer first).
 	CSVDeletionTimeout = 60 * time.Second
 )
-
-func subscriptionPath() string {
-	return rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName)
-}
 
 func csvPath(name string) string {
 	return rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, name)
@@ -300,7 +297,7 @@ func waitForOperatorInstall(c *Client, emit func(UpdateStepEvent), logs *[]strin
 		}
 
 		var sub installWaitSubscription
-		found, err := c.GetIntoOptional(subscriptionPath(), &sub)
+		found, err := c.GetIntoOptional(rhoai.SubscriptionPath(), &sub)
 		if err != nil {
 			if kube.IsDecodeError(err) {
 				continue
@@ -728,7 +725,7 @@ func (t *stepTracker) send(e UpdateStepEvent) {
 // the message and restore details reach the user), marks the running step
 // failed, restores the previous operator on failure, and records the
 // activity once.
-func (t *stepTracker) finish(c *Client, result **types.OperationResponse, opErr *error, logs []string, recovery *operatorRecovery, record func(ok bool, reason string)) {
+func (t *stepTracker) finish(c *Client, result **types.OperationResponse, opErr *error, logs []string, recovery *operatorRecovery, recordOutcome func(ok bool, reason string)) {
 	if *result == nil {
 		*result = &types.OperationResponse{Success: false, Message: "Operation failed", Logs: logs}
 	}
@@ -747,7 +744,7 @@ func (t *stepTracker) finish(c *Client, result **types.OperationResponse, opErr 
 		}
 		*opErr = nil
 	}
-	if operationLockLost(c) {
+	if record.OperationLockLost(c) {
 		r.Success, r.ErrorCode = false, "lock_lost"
 		if !strings.Contains(r.Message, LockLostMessage) {
 			r.Message = LockLostMessage
@@ -759,15 +756,15 @@ func (t *stepTracker) finish(c *Client, result **types.OperationResponse, opErr 
 	if recovery != nil {
 		recovery.restore(c, r, t.send)
 		if r.Success {
-			recordLiveSubscription(c)
+			record.RecordLiveSubscription(c)
 		}
 	}
-	if record != nil {
+	if recordOutcome != nil {
 		reason := ""
 		if !r.Success {
 			reason = r.Message
 		}
-		record(r.Success, reason)
+		recordOutcome(r.Success, reason)
 	}
 }
 

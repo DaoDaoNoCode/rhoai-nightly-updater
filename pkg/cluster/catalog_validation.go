@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -188,7 +189,7 @@ func createVerificationCatalog(c *Client, image string) (name, path string, remo
 	name = verificationCatalogPrefix() + strconv.FormatInt(time.Now().UnixNano(), 36)
 	path = rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, name)
 	remove = func() {
-		ctx, cancel := postOperationContext(c, 30*time.Second)
+		ctx, cancel := record.PostOperationContext(c, 30*time.Second)
 		defer cancel()
 		if _, err := c.WithContext(ctx).DeleteIfExists(path); err != nil {
 			slog.Warn("failed to delete verification CatalogSource; the next operation removes it", "name", name, "error", err)

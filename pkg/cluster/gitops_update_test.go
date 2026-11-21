@@ -26,7 +26,7 @@ func TestPendingInstallPlan(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newFakeAPI(t)
-			f.json("GET", subscriptionPath(), 200, tc.sub)
+			f.json("GET", rhoai.SubscriptionPath(), 200, tc.sub)
 			if tc.ip != "" {
 				f.json("GET", ipPath, 200, tc.ip)
 			}

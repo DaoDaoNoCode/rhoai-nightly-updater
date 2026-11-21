@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -710,8 +711,8 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 	logs = append(logs, "OK: DataScienceCluster created")
 
 	// Step 3: Record activity
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: nowRFC3339(),
+	record.RecordActivity(c, types.ActivityEntry{
+		Timestamp: record.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "create-dsc",
 		Detail:    "default-dsc with default components",

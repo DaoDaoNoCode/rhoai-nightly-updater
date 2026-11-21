@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -135,7 +136,7 @@ func TestUpdateStream_OrderAndSingleSubscriptionApply(t *testing.T) {
 	if err != nil || !result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	subPath := subscriptionPath()
+	subPath := rhoai.SubscriptionPath()
 	csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	idx := map[string]int{}
 	for i, w := range f.writes() {
@@ -518,7 +519,7 @@ func TestFailuresMarkStepAndKeepLogs(t *testing.T) {
 		subscribed := false
 		f.onSubscribe = func(*fakeOLM, map[string]any) { subscribed = true }
 		f.intercept = func(_ *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
-			if subscribed && r.Method == http.MethodGet && r.URL.Path == subscriptionPath() {
+			if subscribed && r.Method == http.MethodGet && r.URL.Path == rhoai.SubscriptionPath() {
 				cancel()
 			}
 			return false
@@ -631,15 +632,15 @@ func TestLostLockSkipsTheRestore(t *testing.T) {
 				t.Fatalf("restore not reported as skipped: events %+v", events)
 			}
 			// Bookkeeping of the updater itself still happens; cluster cleanup does not.
-			if c := f.client(ctx); !operationLockLost(c) {
+			if c := f.client(ctx); !record.OperationLockLost(c) {
 				t.Fatal("cause not seen")
 			}
-			pctx, pcancel := postOperationContext(f.client(ctx), time.Minute)
+			pctx, pcancel := record.PostOperationContext(f.client(ctx), time.Minute)
 			defer pcancel()
 			if pctx.Err() == nil {
 				t.Fatal("postOperationContext is usable after the lock was lost")
 			}
-			bctx, bcancel := bookkeepingContext(f.client(ctx), time.Minute)
+			bctx, bcancel := record.BookkeepingContext(f.client(ctx), time.Minute)
 			defer bcancel()
 			if bctx.Err() != nil {
 				t.Fatal("bookkeeping context cancelled")
@@ -883,11 +884,10 @@ func TestRestore_CSVDeletionTimeoutIsIncomplete(t *testing.T) {
 // R5-F4: slow CSV deletions use only their own budget; the catalog and
 // Subscription re-apply always runs with a fresh context.
 func TestRestore_ReapplyRunsAfterTheDeletionBudget(t *testing.T) {
-	oldBudget := restoreCSVBudget
-	restoreCSVBudget = 30 * time.Millisecond
+	t.Cleanup(record.SetRestoreCSVBudgetForTest(30 * time.Millisecond))
 	oldDel := CSVDeletionTimeout
 	CSVDeletionTimeout = time.Second
-	t.Cleanup(func() { restoreCSVBudget, CSVDeletionTimeout = oldBudget, oldDel })
+	t.Cleanup(func() { CSVDeletionTimeout = oldDel })
 
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"channel": "fast"})
 	c := f.client(context.Background())
@@ -1076,7 +1076,7 @@ func TestReinstall_ActivityRecord(t *testing.T) {
 		for _, r := range f.requests {
 			// Created by a POST to the collection, then updated by name.
 			body, _ := json.Marshal(r.Body)
-			if r.Method != http.MethodGet && strings.Contains(r.Path, "/configmaps") && strings.Contains(string(body), activityConfigMapName) {
+			if r.Method != http.MethodGet && strings.Contains(r.Path, "/configmaps") && strings.Contains(string(body), record.ActivityConfigMapName) {
 				out = append(out, string(body))
 			}
 		}

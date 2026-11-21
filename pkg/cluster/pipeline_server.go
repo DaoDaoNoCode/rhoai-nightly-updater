@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -379,7 +380,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 		op = "recreate-pipeline-server"
 	}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		recordActivity(c, op, fmt.Sprintf("project=%s (%s)", project, activity), false)
+		record.RecordAction(c, op, fmt.Sprintf("project=%s (%s)", project, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
@@ -584,7 +585,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 			logs = append(logs, fmt.Sprintf("Making pipeline server %s the owner of secret %s...", dspaName, s.name))
 			setDSPAOwner(s.obj, dspaName, dspaMeta.UID)
 			if _, err := writeProjectSecret(s, projectSecretPath(project, s.name), withToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, "")), false); err != nil {
-				recordActivity(c, "setup-pipeline-server", fmt.Sprintf("project=%s (%s owner not set: %v)", project, s.what, err), false)
+				record.RecordAction(c, "setup-pipeline-server", fmt.Sprintf("project=%s (%s owner not set: %v)", project, s.what, err), false)
 				return &types.OperationResponse{
 					Success: false, ErrorCode: "partial_failure", Logs: logs,
 					Message: fmt.Sprintf("Pipeline server created, but secret %s could not be linked to it: %v. Deleting the pipeline server in the RHOAI dashboard would leave the secret behind; Delete pipeline server in this tool removes it too.", s.name, err),
@@ -596,7 +597,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	logs = append(logs, "The pipeline server will take 1-3 minutes to become ready.")
 
 	slog.Info("pipeline server setup", "project", project, "user", kube.GetUser(c))
-	recordActivity(c, "setup-pipeline-server", fmt.Sprintf("project=%s dspa=%s", project, dspaName), true)
+	record.RecordAction(c, "setup-pipeline-server", fmt.Sprintf("project=%s dspa=%s", project, dspaName), true)
 
 	return &types.OperationResponse{
 		Success: true, Message: "Pipeline server created. It will take 1-3 minutes to become ready." + recordNote,
@@ -617,7 +618,7 @@ func replacePipelineServer(c *Client, project string, old *dspaInfo, logs []stri
 	}
 	logs = append(logs, down.Logs...)
 	if !down.Success {
-		recordActivity(c, "recreate-pipeline-server", fmt.Sprintf("project=%s (teardown of %s: %s)", project, old.Meta.Name, down.ErrorCode), false)
+		record.RecordAction(c, "recreate-pipeline-server", fmt.Sprintf("project=%s (teardown of %s: %s)", project, old.Meta.Name, down.ErrorCode), false)
 		msg := down.Message
 		if !strings.Contains(msg, "Nothing was deleted") {
 			msg += fmt.Sprintf(" Pipeline server %s was not created; once %s is gone, use Set up.", dspaName, old.Meta.Name)
@@ -631,10 +632,10 @@ func replacePipelineServer(c *Client, project string, old *dspaInfo, logs []stri
 	up.Logs = append(logs, up.Logs...)
 	if !up.Success {
 		up.Message = fmt.Sprintf("Pipeline server %s was deleted, but %s could not be set up: %s Use Set up to try again.", old.Meta.Name, dspaName, up.Message)
-		recordActivity(c, "recreate-pipeline-server", fmt.Sprintf("project=%s (setup failed)", project), false)
+		record.RecordAction(c, "recreate-pipeline-server", fmt.Sprintf("project=%s (setup failed)", project), false)
 		return up, nil
 	}
-	recordActivity(c, "recreate-pipeline-server", fmt.Sprintf("project=%s %s -> %s", project, old.Meta.Name, dspaName), true)
+	record.RecordAction(c, "recreate-pipeline-server", fmt.Sprintf("project=%s %s -> %s", project, old.Meta.Name, dspaName), true)
 	up.Message = fmt.Sprintf("Pipeline server %s replaced by %s, which workbench pipelines use. It will take 1-3 minutes to become ready.", old.Meta.Name, dspaName)
 	return up, nil
 }
@@ -668,7 +669,7 @@ func dspoRunning(c *Client) (bool, error) {
 func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		recordActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (%s)", project, activity), false)
+		record.RecordAction(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (%s)", project, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
@@ -740,7 +741,7 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 
 	gone, waitErr := kube.WaitForDeletion(c, dspaPath, PipelineServerDeleteTimeout, PipelineServerDeletePoll)
 	if waitErr != nil {
-		recordActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (cannot confirm deletion: %v)", project, waitErr), false)
+		record.RecordAction(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (cannot confirm deletion: %v)", project, waitErr), false)
 		return &types.OperationResponse{
 			Success:   false,
 			Message:   fmt.Sprintf("Deletion of pipeline server %s was requested, but whether it is gone cannot be checked: %v.%s", target.Meta.Name, waitErr, secretNote),
@@ -749,7 +750,7 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 		}, nil
 	}
 	if !gone {
-		recordActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (still terminating)", project), false)
+		record.RecordAction(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (still terminating)", project), false)
 		return &types.OperationResponse{
 			Success:   false,
 			Message:   fmt.Sprintf("Deletion of pipeline server %s was requested, but it is still terminating after %s (waiting for the data-science-pipelines operator to finish cleanup). The status shows it until it is gone.%s", target.Meta.Name, PipelineServerDeleteTimeout, secretNote),
@@ -764,7 +765,7 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 	}
 
 	slog.Info("pipeline server teardown", "project", project, "dspa", target.Meta.Name, "user", kube.GetUser(c))
-	recordActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s dspa=%s", project, target.Meta.Name), secretNote == "")
+	record.RecordAction(c, "teardown-pipeline-server", fmt.Sprintf("project=%s dspa=%s", project, target.Meta.Name), secretNote == "")
 
 	msg := fmt.Sprintf("Pipeline server removed from %s.", project)
 	if !target.ExternalDB {

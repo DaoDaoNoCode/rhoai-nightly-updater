@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -390,8 +391,8 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 		return &types.OperationResponse{Success: false, Message: "Could not verify all PR images on Quay. Retry after the registry issue is resolved; no images were patched.", Logs: logs, ErrorCode: "network"}, nil
 	}
 	if len(found) == 0 {
-		RecordActivity(c, types.ActivityEntry{
-			Timestamp: nowRFC3339(),
+		record.RecordActivity(c, types.ActivityEntry{
+			Timestamp: record.NowRFC3339(),
 			User:      kube.GetUser(c),
 			Action:    "deploy-pr",
 			Detail:    fmt.Sprintf("PR #%d (no images found)", prNumber),
@@ -453,8 +454,8 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 		deployPath := rhoai.NamespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName)
 		_, _, err = c.StrategicPatch(deployPath, patchData)
 		if err != nil {
-			RecordActivity(c, types.ActivityEntry{
-				Timestamp: nowRFC3339(),
+			record.RecordActivity(c, types.ActivityEntry{
+				Timestamp: record.NowRFC3339(),
 				User:      kube.GetUser(c),
 				Action:    "deploy-pr",
 				Detail:    fmt.Sprintf("PR #%d (patch failed: %v)", prNumber, err),
@@ -491,8 +492,8 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 	slog.Info("dashboard PR deployed", "pr", prNumber, "containers", len(patched), "user", kube.GetUser(c))
 
 	sort.Strings(failedModules)
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: nowRFC3339(),
+	record.RecordActivity(c, types.ActivityEntry{
+		Timestamp: record.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "deploy-pr",
 		Detail:    fmt.Sprintf("PR #%d (%d/%d containers patched; failed modules: %s)", prNumber, len(patched), targets, strings.Join(failedModules, ", ")),
@@ -677,8 +678,8 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 
 	slog.Info("dashboard reverted", "containers", totalReverted, "user", kube.GetUser(c))
 
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: nowRFC3339(),
+	record.RecordActivity(c, types.ActivityEntry{
+		Timestamp: record.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "revert-dashboard",
 		Detail:    fmt.Sprintf("%d containers restored; failed modules: %s", totalReverted, strings.Join(failedModules, ", ")),

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 	"gopkg.in/yaml.v3"
@@ -278,7 +279,7 @@ func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent
 	for _, o := range ops {
 		rec.ModuleOperators = append(rec.ModuleOperators, o.record())
 	}
-	if err := SaveDSCHardResetRecord(c, rec); err != nil {
+	if err := record.SaveDSCHardResetRecord(c, rec); err != nil {
 		return r.fail("check", "Cannot record the DataScienceCluster this reset creates, so the reset could not be finished after a failure: "+err.Error()+". Nothing was changed.", kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")), nil
 	}
 	kept := ""
@@ -289,29 +290,29 @@ func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent
 
 	r.step("delete", "running", "Deleting DataScienceCluster "+v.name)
 	if _, _, err := c.Do(http.MethodDelete, path, "application/json", dscDeleteBody(v.uid), nil); err != nil {
-		clearDSCHardResetRecord(c)
+		record.ClearDSCHardResetRecord(c)
 		if kube.IsK8sNotFound(err) || kube.IsK8sConflict(err) {
 			return r.fail("delete", "DataScienceCluster "+v.name+" was deleted or replaced by someone else since the check, so nothing was changed by this reset. Reload the page.", "conflict"), nil
 		}
 		return r.fail("delete", "Deleting the DataScienceCluster failed: "+rhoai.ConversionMessage(err)+". Nothing was changed.", kube.ErrorCodeFromK8sErr(err)), nil
 	}
-	recordActivity(c, "hard-reset-dsc", v.name+": deleted (uid "+v.uid+") for a hard reset", true)
+	record.RecordAction(c, "hard-reset-dsc", v.name+": deleted (uid "+v.uid+") for a hard reset", true)
 	r.step("delete", "success", "Deleted DataScienceCluster "+v.name+" (propagation Background); the operator marks its modules Removed")
 
 	r.step("wait_deleted", "running", "Waiting until the DataScienceCluster is gone and the platform has cleaned up its modules")
 	if res := waitDSCGone(c, path, v, ops, r, createYAML); res != nil {
-		recordActivity(c, "hard-reset-dsc", v.name+": "+firstLine(res.Message), false)
+		record.RecordAction(c, "hard-reset-dsc", v.name+": "+firstLine(res.Message), false)
 		return res, nil
 	}
 
 	r.step("create", "running", "Creating the release default DataScienceCluster "+v.name)
 	if msg, code := createPlannedDSC(c, v.version, obj); msg != "" {
 		res := r.fail("create", "The old DataScienceCluster was deleted, but "+msg+" "+finishHelp(createYAML), code)
-		recordActivity(c, "hard-reset-dsc", v.name+": deleted, creating the release default failed", false)
+		record.RecordAction(c, "hard-reset-dsc", v.name+": deleted, creating the release default failed", false)
 		return res, nil
 	}
-	clearDSCHardResetRecord(c)
-	recordActivity(c, "hard-reset-dsc", v.name+": the release default of operator "+v.op.Version+" created", true)
+	record.ClearDSCHardResetRecord(c)
+	record.RecordAction(c, "hard-reset-dsc", v.name+": the release default of operator "+v.op.Version+" created", true)
 	r.step("create", "success", "Created the release default DataScienceCluster "+v.name)
 
 	r.step("wait_ready", "running", "Waiting for the components to be ready")
@@ -555,7 +556,7 @@ func pendingHardResetToken(rec *types.DSCHardResetRecord) string {
 // pendingHardReset is the recorded hard reset the Components page offers to
 // finish while no DataScienceCluster exists.
 func pendingHardReset(c *Client) (*types.DSCPendingHardReset, error) {
-	rec, err := readDSCHardResetRecord(c)
+	rec, err := record.ReadDSCHardResetRecord(c)
 	if err != nil || rec == nil {
 		return nil, err
 	}
@@ -574,7 +575,7 @@ func FinishDSCHardReset(c *Client, req types.DSCFinishRequest) (*types.Operation
 	refuse := func(msg, code string) (*types.OperationResponse, error) {
 		return &types.OperationResponse{Success: false, Message: msg, ErrorCode: code}, nil
 	}
-	rec, err := readDSCHardResetRecord(c)
+	rec, err := record.ReadDSCHardResetRecord(c)
 	if err != nil {
 		return refuse("Cannot read the recorded hard reset: "+err.Error()+". Nothing was changed.", kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"))
 	}
@@ -641,8 +642,8 @@ func FinishDSCHardReset(c *Client, req types.DSCFinishRequest) (*types.Operation
 	if msg, code := createPlannedDSC(c, version, obj); msg != "" {
 		return refuse("The hard reset is not finished: "+msg, code)
 	}
-	clearDSCHardResetRecord(c)
-	recordActivity(c, "finish-hard-reset-dsc", rec.Name+": the release default of operator "+rec.OperatorVersion+" created (hard reset finished)", true)
+	record.ClearDSCHardResetRecord(c)
+	record.RecordAction(c, "finish-hard-reset-dsc", rec.Name+": the release default of operator "+rec.OperatorVersion+" created (hard reset finished)", true)
 	slog.Info("dsc hard reset finished", "dsc", rec.Name, "user", kube.GetUser(c))
 	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Created DataScienceCluster %s: the hard reset is finished. The operator brings the components up; this page shows each as it comes up.", rec.Name)}, nil
 }

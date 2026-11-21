@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -192,7 +193,7 @@ func recordModelFixture(f *resourceFake, path string) {
 	cmKey, _ := parseFakePath(testSnapshotCM)
 	cm := f.objects[cmKey]
 	if cm == nil {
-		cm = map[string]any{"metadata": map[string]any{"name": snapshotConfigMapName, "namespace": "rhoai-nightly-updater", "uid": "snapshot-uid", "resourceVersion": "1"}}
+		cm = map[string]any{"metadata": map[string]any{"name": record.SnapshotConfigMapName, "namespace": "rhoai-nightly-updater", "uid": "snapshot-uid", "resourceVersion": "1"}}
 		f.objects[cmKey] = cm
 	}
 	data := ensureMap(cm, "data")

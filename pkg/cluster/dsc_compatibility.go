@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -555,6 +556,6 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 	}); err != nil {
 		return nil, err
 	}
-	RecordActivity(c, types.ActivityEntry{Timestamp: nowRFC3339(), User: kube.GetUser(c), Action: "repair-dsc", Detail: name + ": " + detail, Success: true})
+	record.RecordActivity(c, types.ActivityEntry{Timestamp: record.NowRFC3339(), User: kube.GetUser(c), Action: "repair-dsc", Detail: name + ": " + detail, Success: true})
 	return &types.OperationResponse{Success: true, Message: detail, Logs: []string{detail}}, nil
 }

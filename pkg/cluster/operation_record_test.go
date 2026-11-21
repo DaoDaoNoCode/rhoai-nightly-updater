@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -105,7 +106,7 @@ func (f *fakeOperationConfigMap) ServeHTTP(w http.ResponseWriter, r *http.Reques
 func (f *fakeOperationConfigMap) lease() *types.OperationLease {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return decodeRecordValue[types.OperationLease](f.data, leaseKey)
+	return record.DecodeRecordValue[types.OperationLease](f.data, record.LeaseKey)
 }
 
 func (f *fakeOperationConfigMap) get(key string) string {
@@ -160,7 +161,7 @@ func TestWriteOperationLease(t *testing.T) {
 	t.Run("a live lease of another process is returned, not overwritten", func(t *testing.T) {
 		f, c := newFakeOperationConfigMap(t)
 		theirs := testLease("op0", "boot-b", now)
-		f.set(leaseKey, theirs)
+		f.set(record.LeaseKey, theirs)
 		holder, err := WriteOperationLease(c, testLease("op1", "boot-a", now), heldBy("boot-b"))
 		if err != nil || holder == nil || *holder != *theirs {
 			t.Fatalf("holder %+v err %v", holder, err)
@@ -172,8 +173,8 @@ func TestWriteOperationLease(t *testing.T) {
 
 	t.Run("an expired or dead lease is taken over, and other keys are kept", func(t *testing.T) {
 		f, c := newFakeOperationConfigMap(t)
-		f.set(leaseKey, testLease("op0", "boot-dead", now.Add(-time.Hour)))
-		f.set(lastCompletedKey, &types.CompletedOperation{ID: "op0"})
+		f.set(record.LeaseKey, testLease("op0", "boot-dead", now.Add(-time.Hour)))
+		f.set(record.LastCompletedKey, &types.CompletedOperation{ID: "op0"})
 		mine := testLease("op1", "boot-a", now)
 		if holder, err := WriteOperationLease(c, mine, heldBy()); holder != nil || err != nil {
 			t.Fatalf("holder %+v err %v", holder, err)
@@ -181,14 +182,14 @@ func TestWriteOperationLease(t *testing.T) {
 		if got := f.lease(); *got != *mine {
 			t.Fatalf("lease = %+v", got)
 		}
-		if f.get(lastCompletedKey) == "" {
+		if f.get(record.LastCompletedKey) == "" {
 			t.Fatal("lastCompleted lost")
 		}
 	})
 
 	t.Run("a conflicting write is retried from a fresh read", func(t *testing.T) {
 		f, c := newFakeOperationConfigMap(t)
-		f.set(operationKey, &types.OperationMarker{ID: "op0"})
+		f.set(record.OperationKey, &types.OperationMarker{ID: "op0"})
 		conflicts := 1
 		f.beforeWrite = func(f *fakeOperationConfigMap) {
 			if conflicts > 0 {
@@ -214,7 +215,7 @@ func TestWriteOperationLease(t *testing.T) {
 		f.beforeWrite = func(f *fakeOperationConfigMap) {
 			if f.data == nil {
 				raw, _ := json.Marshal(theirs)
-				f.data = map[string]string{leaseKey: string(raw)}
+				f.data = map[string]string{record.LeaseKey: string(raw)}
 				f.rv++
 			}
 		}
@@ -226,7 +227,7 @@ func TestWriteOperationLease(t *testing.T) {
 
 	t.Run("conflicts on every attempt", func(t *testing.T) {
 		f, c := newFakeOperationConfigMap(t)
-		f.set(operationKey, &types.OperationMarker{ID: "op0"})
+		f.set(record.OperationKey, &types.OperationMarker{ID: "op0"})
 		f.beforeWrite = func(f *fakeOperationConfigMap) { f.rv++ }
 		holder, err := WriteOperationLease(c, testLease("op1", "boot-a", now), heldBy())
 		if holder != nil || !errors.Is(err, ErrOperationRecordContended) {
@@ -249,7 +250,7 @@ func TestReleaseOperationLeaseOnlyClearsItsOwn(t *testing.T) {
 	now := time.Now()
 	f, c := newFakeOperationConfigMap(t)
 	theirs := testLease("op0", "boot-b", now)
-	f.set(leaseKey, theirs)
+	f.set(record.LeaseKey, theirs)
 	if err := ReleaseOperationLease(c, LeaseOwner{BootID: "boot-a", ID: "op1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -279,8 +280,8 @@ func TestCompletionReleasesTheLeaseInTheSameWrite(t *testing.T) {
 	owner := &LeaseOwner{BootID: "boot-a", ID: "op1"}
 
 	f, c := newFakeOperationConfigMap(t)
-	f.set(operationKey, &types.OperationMarker{ID: "op1", BootID: "boot-a"})
-	f.set(leaseKey, testLease("op1", "boot-a", now))
+	f.set(record.OperationKey, &types.OperationMarker{ID: "op1", BootID: "boot-a"})
+	f.set(record.LeaseKey, testLease("op1", "boot-a", now))
 	if err := SaveCompletedOperation(c, done, owner); err != nil {
 		t.Fatal(err)
 	}
@@ -297,8 +298,8 @@ func TestCompletionReleasesTheLeaseInTheSameWrite(t *testing.T) {
 	f, c = newFakeOperationConfigMap(t)
 	theirMarker := &types.OperationMarker{ID: "op2", BootID: "boot-b"}
 	theirLease := testLease("op2", "boot-b", now)
-	f.set(operationKey, theirMarker)
-	f.set(leaseKey, theirLease)
+	f.set(record.OperationKey, theirMarker)
+	f.set(record.LeaseKey, theirLease)
 	if err := SaveCompletedOperation(c, done, owner); err != nil {
 		t.Fatal(err)
 	}
@@ -327,9 +328,9 @@ func TestDelayedCompletionKeepsANewerLastCompleted(t *testing.T) {
 	now := time.Now()
 	f, c := newFakeOperationConfigMap(t)
 	newer := &types.CompletedOperation{ID: "op-b", FinishedAt: now.UTC().Format(time.RFC3339), Success: true}
-	f.set(lastCompletedKey, newer)
-	f.set(operationKey, &types.OperationMarker{ID: "op-a", BootID: "boot-a"})
-	f.set(leaseKey, testLease("op-a", "boot-a", now.Add(-time.Minute)))
+	f.set(record.LastCompletedKey, newer)
+	f.set(record.OperationKey, &types.OperationMarker{ID: "op-a", BootID: "boot-a"})
+	f.set(record.LeaseKey, testLease("op-a", "boot-a", now.Add(-time.Minute)))
 	older := &types.CompletedOperation{ID: "op-a", FinishedAt: now.Add(-2 * time.Minute).UTC().Format(time.RFC3339), Success: false}
 	if err := SaveCompletedOperation(c, older, &LeaseOwner{BootID: "boot-a", ID: "op-a"}); err != nil {
 		t.Fatal(err)
@@ -381,10 +382,10 @@ func TestLeaseLive(t *testing.T) {
 
 func TestReadOperationRecordIgnoresUnreadableValues(t *testing.T) {
 	f, c := newFakeOperationConfigMap(t)
-	f.set(lastCompletedKey, &types.CompletedOperation{ID: "op0"})
+	f.set(record.LastCompletedKey, &types.CompletedOperation{ID: "op0"})
 	f.mu.Lock()
-	f.data[leaseKey] = "{not json"
-	f.data[operationKey] = "[]"
+	f.data[record.LeaseKey] = "{not json"
+	f.data[record.OperationKey] = "[]"
 	f.mu.Unlock()
 	rec, err := ReadOperationRecord(c)
 	if err != nil || rec.Lease != nil || rec.Marker != nil || rec.LastCompleted == nil {

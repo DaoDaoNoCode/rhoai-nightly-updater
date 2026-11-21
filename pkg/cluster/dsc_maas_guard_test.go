@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -25,7 +26,7 @@ const (
 )
 
 func snapshotPath() string {
-	return rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)
+	return rhoai.NamespacedPath("v1", "configmaps", record.GetActivityNamespace(), record.SnapshotConfigMapName)
 }
 
 // maasServed makes the fake serve the MaaS API (no objects yet).
@@ -40,7 +41,7 @@ func putMaaSRecord(t *testing.T, f *resourceFake, rec maasRecord) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.put(snapshotPath(), map[string]any{"metadata": map[string]any{"name": snapshotConfigMapName, "namespace": getActivityNamespace()},
+	f.put(snapshotPath(), map[string]any{"metadata": map[string]any{"name": record.SnapshotConfigMapName, "namespace": record.GetActivityNamespace()},
 		"data": map[string]any{maasRecordKey: string(raw)}})
 }
 
@@ -317,7 +318,7 @@ func TestHardResetKeepsWhatTheUserTurnedOn(t *testing.T) {
 		}
 	}
 	// The recorded object (for Finish) was the kept one; cleared once created.
-	if rec, _ := readDSCHardResetRecord(c); rec != nil {
+	if rec, _ := record.ReadDSCHardResetRecord(c); rec != nil {
 		t.Fatalf("record left: %+v", rec)
 	}
 }

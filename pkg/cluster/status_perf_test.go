@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -96,7 +97,7 @@ func (a *statusAPI) handler(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprintf(w, `{"data":{".dockerconfigjson":%q}}`, cfg)
 	case strings.HasSuffix(p, "/datascienceclusters"):
 		_, _ = fmt.Fprint(w, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
-	case strings.HasSuffix(p, "/configmaps/"+snapshotConfigMapName) && a.snapshot != "":
+	case strings.HasSuffix(p, "/configmaps/"+record.SnapshotConfigMapName) && a.snapshot != "":
 		_, _ = fmt.Fprint(w, a.snapshot)
 	case strings.HasSuffix(p, "/configmaps/rhoai-updater-activity"):
 		_, _ = fmt.Fprint(w, `{"data":{}}`)

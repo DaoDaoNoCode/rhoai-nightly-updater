@@ -230,7 +230,7 @@ func readOperatorGitOps(c *Client) (operatorGitOps, error) {
 		isCatalog bool
 	}{
 		{rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName), argoCatalogObject, &g.catalogArgo, &g.catalogApp, true},
-		{subscriptionPath(), argoSubscriptionObject, &g.subscriptionArgo, &g.subscriptionApp, false},
+		{rhoai.SubscriptionPath(), argoSubscriptionObject, &g.subscriptionArgo, &g.subscriptionApp, false},
 	} {
 		meta, found, err := kube.ReadObjectMeta(c, r.path)
 		if err != nil {

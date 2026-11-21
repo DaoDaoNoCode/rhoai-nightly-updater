@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -390,8 +391,8 @@ func applyFixDeleteStaleWebhooks(c *Client) (*types.OperationResponse, error) {
 	}
 
 	if len(d.Deleted) > 0 {
-		RecordActivity(c, types.ActivityEntry{
-			Timestamp: nowRFC3339(),
+		record.RecordActivity(c, types.ActivityEntry{
+			Timestamp: record.NowRFC3339(),
 			User:      kube.GetUser(c),
 			Action:    "fix-delete-stale-webhooks",
 			Detail:    "deleted leftover webhook configurations: " + strings.Join(d.Deleted, ", "),

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -416,7 +417,7 @@ func (m *migrateRun) fail(id, msg, code, activity string) (*types.OperationRespo
 	}
 	m.logs = append(m.logs, msg)
 	slog.Warn("s3 storage migration stopped", "step", id, "reason", activity, "user", kube.GetUser(m.c))
-	recordActivity(m.c, "migrate-storage", fmt.Sprintf("%s (%s)", legacyNamespace, activity), false)
+	record.RecordAction(m.c, "migrate-storage", fmt.Sprintf("%s (%s)", legacyNamespace, activity), false)
 	return &types.OperationResponse{Success: false, Message: msg, Logs: m.logs, ErrorCode: code}, nil
 }
 
@@ -453,7 +454,7 @@ func MigrateS3Storage(c *Client, opts MigrateOptions, onStep func(UpdateStepEven
 	}
 	if legacy == nil {
 		m.step("check", "success", fmt.Sprintf("No storage from an earlier version in namespace %s.", legacyNamespace))
-		recordActivity(c, "migrate-storage", legacyNamespace+" (nothing to do)", true)
+		record.RecordAction(c, "migrate-storage", legacyNamespace+" (nothing to do)", true)
 		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Nothing to do: there is no storage from an earlier version in namespace %s.", legacyNamespace), Logs: m.logs}, nil
 	}
 	if legacy.terminating {
@@ -586,7 +587,7 @@ func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo, confirmed 
 	}
 	msg += fmt.Sprintf(" The old storage in namespace %s is kept: delete it later from the S3 storage's menu, once nothing else uses it.", legacyNamespace)
 	slog.Info("s3 storage migrated", "user", kube.GetUser(m.c), "objects", result.checked())
-	recordActivity(m.c, "migrate-storage", fmt.Sprintf("%s -> %s (%s, %d pipeline servers)", legacyNamespace, s3Namespace, result.summary(), len(repointed)), true)
+	record.RecordAction(m.c, "migrate-storage", fmt.Sprintf("%s -> %s (%s, %d pipeline servers)", legacyNamespace, s3Namespace, result.summary(), len(repointed)), true)
 	return &types.OperationResponse{Success: true, Message: msg, Logs: m.logs}, nil
 }
 
@@ -1494,7 +1495,7 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 	}
 	msg += " " + nsMsg
 	slog.Info("old s3 storage removed", "user", kube.GetUser(c), "deleted", strings.Join(d.deleted, ", "), "resumed", resume)
-	recordActivity(c, "migrate-storage", fmt.Sprintf("%s removed (%s)", legacyNamespace, strings.TrimSuffix(nsMsg, ".")), true)
+	record.RecordAction(c, "migrate-storage", fmt.Sprintf("%s removed (%s)", legacyNamespace, strings.TrimSuffix(nsMsg, ".")), true)
 	return &types.OperationResponse{Success: true, Message: strings.TrimSpace(msg), Logs: m.logs}, nil
 }
 

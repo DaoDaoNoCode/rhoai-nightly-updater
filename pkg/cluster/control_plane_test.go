@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -171,12 +172,12 @@ func TestGetStatus_NodePullRecord(t *testing.T) {
 	t.Setenv("STABLE_SOURCE", "redhat-operators")
 	t.Setenv("STABLE_CHANNEL", "")
 	saved := paddedAuth(exampleAuth("user:pass"))
-	record := func(auth string) string {
+	pullRecord := func(auth string) string {
 		raw, _ := json.Marshal(nodePullRecord{SecretUID: "u", Key: "quay.io/rhoai", Salt: "aa", AuthSHA256: hashPullAuth("aa", auth), At: "2026-11-18T10:00:00Z", By: "admin"})
 		cm, _ := json.Marshal(map[string]any{"data": map[string]string{nodePullRecordKey: string(raw)}})
 		return string(cm)
 	}
-	snapshotPath := rhoai.NamespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)
+	snapshotPath := rhoai.NamespacedPath("v1", "configmaps", record.GetActivityNamespace(), record.SnapshotConfigMapName)
 	for _, tc := range []struct {
 		name     string
 		topology string
@@ -185,9 +186,9 @@ func TestGetStatus_NodePullRecord(t *testing.T) {
 		want     *types.NodePullSecretRecord
 	}{
 		{"no record", "HighlyAvailable", "", false, nil},
-		{"recorded with the saved token", "HighlyAvailable", record(saved), false, &types.NodePullSecretRecord{At: "2026-11-18T10:00:00Z", By: "admin", SameToken: true}},
-		{"recorded with an earlier token", "HighlyAvailable", record(nsOldRHOAI), false, &types.NodePullSecretRecord{At: "2026-11-18T10:00:00Z", By: "admin"}},
-		{"record unreadable: none shown", "HighlyAvailable", record(saved), true, nil},
+		{"recorded with the saved token", "HighlyAvailable", pullRecord(saved), false, &types.NodePullSecretRecord{At: "2026-11-18T10:00:00Z", By: "admin", SameToken: true}},
+		{"recorded with an earlier token", "HighlyAvailable", pullRecord(nsOldRHOAI), false, &types.NodePullSecretRecord{At: "2026-11-18T10:00:00Z", By: "admin"}},
+		{"record unreadable: none shown", "HighlyAvailable", pullRecord(saved), true, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			installFakeRegistry(t, newFakeRegistry())
@@ -208,7 +209,7 @@ func TestGetStatus_NodePullRecord(t *testing.T) {
 		})
 	}
 	t.Run("gitops profile: not read", func(t *testing.T) {
-		a := &statusAPI{csvList: `{"items":[]}`, infra: "HighlyAvailable", snapshot: record(saved)}
+		a := &statusAPI{csvList: `{"items":[]}`, infra: "HighlyAvailable", snapshot: pullRecord(saved)}
 		if _, err := GetStatusGitOps(newStatusAPI(t, a)); err != nil {
 			t.Fatal(err)
 		}

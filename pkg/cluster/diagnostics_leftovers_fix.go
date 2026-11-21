@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -190,8 +191,8 @@ func fixLeftoverStoredFields(c *Client, target string, ack *AckBinding) *types.O
 		}
 	}
 	logs = append(logs, "Patched "+st.ref()+": "+strings.Join(summary, ", "))
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: nowRFC3339(),
+	record.RecordActivity(c, types.ActivityEntry{
+		Timestamp: record.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "fix-leftover-fields",
 		Detail:    fmt.Sprintf("%s: %s", st.ref(), strings.Join(summary, ", ")),
@@ -269,7 +270,7 @@ func fixLeftoverRetryDSC(c *Client, name string) *types.OperationResponse {
 	if !strings.HasSuffix(path, "/"+name) {
 		return leftoverRefused(fmt.Sprintf("DataScienceCluster %s is not the cluster's DataScienceCluster. Nothing was changed.", name), "validation", nil)
 	}
-	stamp := nowRFC3339()
+	stamp := record.NowRFC3339()
 	add, _ := json.Marshal(map[string]any{"metadata": map[string]any{"uid": uid, "annotations": map[string]any{leftoverRetryAnno: stamp}}})
 	if _, _, err := c.Do(http.MethodPatch, path, "application/merge-patch+json", add, url.Values{"fieldManager": {leftoverManager}}); err != nil {
 		return leftoverWriteError(err, "DataScienceCluster "+name, false)
@@ -277,8 +278,8 @@ func fixLeftoverRetryDSC(c *Client, name string) *types.OperationResponse {
 	logs := []string{fmt.Sprintf("Added the annotation %s=%s to DataScienceCluster %s", leftoverRetryAnno, stamp, name)}
 	remove, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{leftoverRetryAnno: nil}}})
 	_, _, rmErr := c.Do(http.MethodPatch, path, "application/merge-patch+json", remove, url.Values{"fieldManager": {leftoverManager}})
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: nowRFC3339(),
+	record.RecordActivity(c, types.ActivityEntry{
+		Timestamp: record.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "fix-retry-dsc-reconcile",
 		Detail:    fmt.Sprintf("annotated DataScienceCluster %s to retry %s", name, waiting),
@@ -407,8 +408,8 @@ func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *typ
 		return leftoverWriteError(err, r.ref(), false)
 	}
 	logs = append(logs, fmt.Sprintf("Deleted %s (UID %s, propagation Background)", r.ref(), uid))
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: nowRFC3339(),
+	record.RecordActivity(c, types.ActivityEntry{
+		Timestamp: record.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "fix-recreate-leftover",
 		Detail:    fmt.Sprintf("deleted %s (selector changed; owned by %s) for its operator to recreate", r.ref(), r.Owner),

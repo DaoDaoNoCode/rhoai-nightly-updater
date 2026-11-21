@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -17,26 +18,26 @@ func TestActivityRetentionPerCategory(t *testing.T) {
 	for i := range 200 { // Dashboard Dev noise after the update
 		entries = append(entries, types.ActivityEntry{Action: "deploy-dashboard-pr", Detail: fmt.Sprintf("PR %d", i)})
 	}
-	got := trimActivity(entries)
+	got := record.TrimActivity(entries)
 	if got[0].Action != "update" {
 		t.Fatal("operator history was evicted by Dashboard Dev entries")
 	}
-	if n := len(got) - 1; n != activityRetention["dashboard-dev"] {
+	if n := len(got) - 1; n != record.ActivityRetention["dashboard-dev"] {
 		t.Fatalf("kept %d dashboard-dev entries", n)
 	}
 	if got[len(got)-1].Detail != "PR 199" {
 		t.Fatal("newest entry not kept")
 	}
 	for range 60 {
-		got = trimActivity(append(got, types.ActivityEntry{Action: "refresh"}))
+		got = record.TrimActivity(append(got, types.ActivityEntry{Action: "refresh"}))
 	}
 	ops := 0
 	for _, e := range got {
-		if activityCategory(e.Action) == "operator" {
+		if record.ActivityCategory(e.Action) == "operator" {
 			ops++
 		}
 	}
-	if ops != activityRetention["operator"] {
+	if ops != record.ActivityRetention["operator"] {
 		t.Fatalf("operator entries %d", ops)
 	}
 }
@@ -44,10 +45,10 @@ func TestActivityRetentionPerCategory(t *testing.T) {
 func TestActivityStaysFarBelowConfigMapLimit(t *testing.T) {
 	var entries []types.ActivityEntry
 	for i := range 1000 {
-		entries = append(entries, types.ActivityEntry{Action: []string{"update", "deploy-pr", "create-dsc", "fix-maas-gateway", "unknown-x"}[i%5], Detail: strings.Repeat("d", maxActivityDetail)})
+		entries = append(entries, types.ActivityEntry{Action: []string{"update", "deploy-pr", "create-dsc", "fix-maas-gateway", "unknown-x"}[i%5], Detail: strings.Repeat("d", record.MaxActivityDetail)})
 	}
-	data, _ := json.Marshal(trimActivity(entries))
-	if len(data) > maxActivityBytes || len(data) > 1<<20/2 {
+	data, _ := json.Marshal(record.TrimActivity(entries))
+	if len(data) > record.MaxActivityBytes || len(data) > 1<<20/2 {
 		t.Fatalf("activity log %d bytes", len(data))
 	}
 }
@@ -66,7 +67,7 @@ func TestDescribeActivity(t *testing.T) {
 		{"brand-new-action", "", "brand new action", "other", ""},
 	} {
 		e := types.ActivityEntry{Action: tc.action, Detail: tc.detail, Success: true}
-		describeActivity(&e)
+		record.DescribeActivity(&e)
 		if e.Label != tc.label || e.Category != tc.category || e.Build != tc.build {
 			t.Errorf("%s %q: label=%q category=%q build=%q", tc.action, tc.detail, e.Label, e.Category, e.Build)
 		}
@@ -80,7 +81,7 @@ func TestEveryRecordedActionIsDescribed(t *testing.T) {
 		"teardown-mlflow", "deploy-mlflow-pr", "revert-mlflow", "create-pull-secret", "create-dsc", "repair-dsc", "assist-rollout",
 		"fix-delete-stale-webhooks", "fix-recreate-subscription", "fix-delete-stale-installplans", "fix-maas-gateway",
 		"disable-component", "restart-operator"} {
-		if _, ok := activityActions[a]; !ok {
+		if _, ok := record.ActivityActions[a]; !ok {
 			t.Errorf("action %q has no label", a)
 		}
 	}
@@ -158,13 +159,13 @@ func TestDescribeActivity_FailedLabelsAndCategories(t *testing.T) {
 	}
 	for _, tc := range cases {
 		e := tc.entry
-		describeActivity(&e)
+		record.DescribeActivity(&e)
 		if e.Label != tc.label || e.Category != tc.catego {
 			t.Errorf("%s success=%v: got %q/%q, want %q/%q", e.Action, e.Success, e.Label, e.Category, tc.label, tc.catego)
 		}
 	}
 	old := types.ActivityEntry{Action: "setup-minio", Success: true}
-	describeActivity(&old)
+	record.DescribeActivity(&old)
 	if old.Action != "setup-s3" {
 		t.Errorf("an old entry's action reads as %q", old.Action)
 	}

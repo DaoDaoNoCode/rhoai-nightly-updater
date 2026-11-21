@@ -1,151 +1,20 @@
 package cluster
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 const restoreStepName = "restore_previous_operator"
-
-// The automatic restore after a failed operation runs on its own contexts,
-// so it also runs when the operation was cancelled or hit its deadline. Its
-// two phases have separate budgets so slow CSV deletions cannot starve the
-// re-apply of the previous catalog and Subscription (the part that brings
-// the operator back): removing the attempt's Subscription and CSVs gets
-// restoreCSVBudget in total (each CSV wait is also capped by
-// CSVDeletionTimeout), and the re-apply always gets restoreApplyTimeout.
-// RecoveryTimeout is their sum: the longest a restore runs after the
-// operation stopped (see ShutdownDrainTimeout).
-var (
-	restoreCSVBudget    = 30 * time.Second
-	restoreApplyTimeout = 30 * time.Second
-	RecoveryTimeout     = restoreCSVBudget + restoreApplyTimeout
-)
-
-// Time budget of one cluster operation, from start to the end of its
-// bookkeeping. The pod's shutdown drain must cover all of it, and
-// terminationGracePeriodSeconds (deploy/template.yaml) must cover the drain,
-// the final marker flush and the HTTP server shutdown with a margin;
-// budget_test.go checks the arithmetic.
-//   - OperationDeadline: the context deadline pkg/api gives every mutation
-//     (withMutationAuth in pkg/api/auth_handlers.go). Every step, including the
-//     Dashboard Dev revert, runs inside it; the install wait ends
-//     installDeadlineReserve before it.
-//   - RecoveryTimeout: the automatic restore after a failure, after the
-//     operation stopped.
-//   - postOperationBookkeeping: the activity entry, recording the
-//     Subscription, and clearing the operation marker (pkg/api).
-//
-// Everything the cluster package does after the operation's deadline (the
-// restore, cleanup and bookkeeping writes) runs on postOperationContext,
-// which ends at the deadline plus postDeadlineWork at the latest, however
-// many writes there are. Only the marker clear (MarkerClearTimeout) follows.
-const (
-	OperationDeadline = 15 * time.Minute
-	// MarkerClearTimeout bounds clearing the operation marker when an
-	// operation ends (pkg/api markerWriter.complete): waiting for a
-	// background retry write that holds the lock (5s), then its own 5s write.
-	MarkerClearTimeout = 10 * time.Second
-	// MarkerFlushTimeout bounds main.go's last marker flush after the drain.
-	MarkerFlushTimeout = 10 * time.Second
-	// HTTPShutdownTimeout bounds main.go's http.Server.Shutdown after the
-	// drain; no mutation is running by then.
-	HTTPShutdownTimeout = 20 * time.Second
-	// ShutdownMargin is kept free below terminationGracePeriodSeconds:
-	// SIGKILL comes exactly at the grace period.
-	ShutdownMargin = 10 * time.Second
-)
-
-// Bounds of the bookkeeping writes. Variables so tests can shorten them.
-var (
-	// activityWriteTimeout bounds one RecordActivity call, its conflict
-	// retries included.
-	activityWriteTimeout = 5 * time.Second
-	// subscriptionRecordTimeout bounds recordLiveSubscription.
-	subscriptionRecordTimeout = 5 * time.Second
-)
-
-// postDeadlineWork is the longest the cluster package works after an
-// operation's deadline: the restore, then the activity entry and the
-// Subscription record.
-func postDeadlineWork() time.Duration {
-	return RecoveryTimeout + activityWriteTimeout + subscriptionRecordTimeout
-}
-
-// postOperationBookkeeping is the bookkeeping that follows the restore.
-func postOperationBookkeeping() time.Duration {
-	return activityWriteTimeout + subscriptionRecordTimeout + MarkerClearTimeout
-}
-
-// ShutdownDrainTimeout is how long a terminating pod waits for running
-// operations: the longest one can still take after SIGTERM.
-func ShutdownDrainTimeout() time.Duration {
-	return OperationDeadline + RecoveryTimeout + postOperationBookkeeping()
-}
-
-// postOperationContext returns a context for work that must still run when
-// the operation's own context has ended (the restore, cleanup and
-// bookkeeping writes). It keeps the values of c's context but not its
-// cancellation, and ends after timeout or at the operation's deadline plus
-// postDeadlineWork, whichever comes first. That shared end keeps all of
-// this work inside ShutdownDrainTimeout however many writes follow the
-// deadline. A context without a deadline gets only timeout.
-//
-// After the operation lost its cross-pod lock (ErrOperationLockLost) the
-// context is already cancelled: another updater pod may be changing the
-// same objects, so no cleanup or restore may run.
-func postOperationContext(c *Client, timeout time.Duration) (context.Context, context.CancelFunc) {
-	ctx, cancel := bookkeepingContext(c, timeout)
-	if operationLockLost(c) {
-		cancel()
-		ctx, cancelCause := context.WithCancelCause(context.Background())
-		cancelCause(ErrOperationLockLost)
-		return ctx, func() {}
-	}
-	return ctx, cancel
-}
-
-// ErrOperationLockLost is the cancellation cause of an operation whose
-// cross-pod lock another updater pod took over, or that could not be
-// renewed for so long that it may have expired (pkg/api operation_lease.go).
-var ErrOperationLockLost = errors.New("the cross-pod operation lock was lost")
-
-// LockLostMessage is the result of an operation stopped by
-// ErrOperationLockLost.
-const LockLostMessage = "Another updater pod took over the lock, so this operation stopped and made no further changes (no automatic restore). " +
-	"Check the cluster state and re-run the operation after the other one finishes."
-
-// operationLockLost reports whether c's operation was stopped because its
-// cross-pod lock was lost.
-func operationLockLost(c *Client) bool {
-	return c != nil && c.Context() != nil && errors.Is(context.Cause(c.Context()), ErrOperationLockLost)
-}
-
-// bookkeepingContext is postOperationContext for the updater's own records
-// (the activity log), which are written even after the lock was lost.
-func bookkeepingContext(c *Client, timeout time.Duration) (context.Context, context.CancelFunc) {
-	parent := context.Background()
-	end := kube.Clock().Now().Add(timeout)
-	if c != nil && c.Context() != nil {
-		parent = context.WithoutCancel(c.Context())
-		if d, ok := c.Context().Deadline(); ok {
-			if hard := d.Add(postDeadlineWork()); hard.Before(end) {
-				end = hard
-			}
-		}
-	}
-	return kube.Clock().WithDeadline(parent, end)
-}
 
 // operatorRecovery holds the desired state captured before an operation and
 // what the operation has changed, so a failure restores exactly that.
@@ -194,7 +63,7 @@ type operatorRecovery struct {
 	// provides the settings for the new Subscription, but the restore never
 	// re-applies it: the restore puts back what existed before this
 	// operation.
-	recorded *subscriptionSnapshot
+	recorded *record.SubscriptionSnapshot
 	// preCSVs maps each RHOAI CSV that existed before the operation to its
 	// UID. A CSV not in it (or with another UID) was created by the attempt,
 	// even when the operation deleted nothing (a first install).
@@ -269,7 +138,7 @@ func captureOperatorRecovery(c *Client) (*operatorRecovery, error) {
 		path   string
 		target *map[string]any
 	}{
-		{subscriptionPath(), &r.subscription},
+		{rhoai.SubscriptionPath(), &r.subscription},
 		{rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName), &r.catalog},
 	} {
 		var obj map[string]any
@@ -290,10 +159,10 @@ func captureOperatorRecovery(c *Client) (*operatorRecovery, error) {
 	if r.subscription != nil {
 		// Recorded so a later operation can recreate it after a crash left
 		// no Subscription. Failing to record it never blocks the operation.
-		if err := saveSubscriptionSnapshot(c, r.subscription); err != nil {
+		if err := record.SaveSubscriptionSnapshot(c, r.subscription); err != nil {
 			slog.Warn("could not record the operator Subscription", "error", err)
 		}
-	} else if rec, err := loadSubscriptionSnapshot(c); err != nil {
+	} else if rec, err := record.LoadSubscriptionSnapshot(c); err != nil {
 		slog.Warn("could not read the recorded operator Subscription", "error", err)
 	} else {
 		r.recorded = rec
@@ -346,7 +215,7 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 	if !operatorTouched && !r.catalogChanged {
 		return
 	}
-	if operationLockLost(c) {
+	if record.OperationLockLost(c) {
 		// Another updater pod holds the lock and may be changing the same
 		// Subscription and catalog: a restore would undo its work.
 		msg := "Automatic operator recovery skipped: " + LockLostMessage
@@ -366,7 +235,7 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 	if operatorTouched {
 		failures, stillDeleting, subReplaced = r.removeAttempt(c, failures, subReplaced)
 	}
-	applyCtx, cancelApply := postOperationContext(c, restoreApplyTimeout)
+	applyCtx, cancelApply := record.PostOperationContext(c, record.RestoreApplyTimeout)
 	defer cancelApply()
 	c = c.WithContext(applyCtx)
 	if r.catalogChanged && r.catalogRestore != nil {
@@ -391,7 +260,7 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 // out to be replaced by someone else (subReplaced: already known).
 func (r *operatorRecovery) removeAttempt(c *Client, failures []string, subReplaced bool) ([]string, []string, bool) {
 	var stillDeleting []string
-	delCtx, cancelDel := postOperationContext(c, restoreCSVBudget)
+	delCtx, cancelDel := record.PostOperationContext(c, record.RestoreCSVBudget)
 	cd := c.WithContext(delCtx)
 	// Delete the Subscription that is there now (the attempt's), guarded
 	// by the UID just read: one an administrator created in the
@@ -455,7 +324,7 @@ func (r *operatorRecovery) reapplySubscription(c *Client) []string {
 	obj := map[string]any{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
 		"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS}, "spec": spec}
 	keepArgoTracking(r.subscription, obj)
-	if _, _, err := c.Apply(subscriptionPath(), obj); err != nil {
+	if _, _, err := c.Apply(rhoai.SubscriptionPath(), obj); err != nil {
 		failures = append(failures, "Subscription: "+err.Error())
 	}
 	return failures
@@ -666,7 +535,7 @@ func (r *operatorRecovery) noteAttemptSubscription(c *Client, applied []byte) {
 		r.attemptSubscriptionUID = meta.UID
 		return
 	}
-	if meta, found, err := kube.ReadObjectMeta(c, subscriptionPath()); err == nil && found {
+	if meta, found, err := kube.ReadObjectMeta(c, rhoai.SubscriptionPath()); err == nil && found {
 		r.attemptSubscriptionUID = meta.UID
 	}
 }
@@ -691,7 +560,7 @@ func (r *operatorRecovery) deleteOwnSubscription(c *Client) error {
 	if uid := r.subscriptionToDelete(); uid != "" {
 		return deleteSubscriptionWithUID(c, uid)
 	}
-	_, found, err := kube.ReadObjectMeta(c, subscriptionPath())
+	_, found, err := kube.ReadObjectMeta(c, rhoai.SubscriptionPath())
 	switch {
 	case err != nil:
 		return err
@@ -707,7 +576,7 @@ func deleteSubscriptionWithUID(c *Client, uid string) error {
 	if uid == "" {
 		return fmt.Errorf("the Subscription has no UID to guard its deletion")
 	}
-	if _, err := kube.DeleteWithUID(c, subscriptionPath(), uid); err != nil {
+	if _, err := kube.DeleteWithUID(c, rhoai.SubscriptionPath(), uid); err != nil {
 		switch {
 		case kube.IsK8sNotFound(err):
 			return nil
